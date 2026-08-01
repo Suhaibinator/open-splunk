@@ -263,7 +263,7 @@ func (*e2eCollectorSessionManager) Disconnect(
 func writeE2EConfig(t *testing.T, addr, stateDir, logGlob, tokenFile string) string {
 	t.Helper()
 	writeFile(t, tokenFile, e2eToken+"\n")
-	writeFile(t, filepath.Join(stateDir, collectorIDFile), e2eCollectorID+"\n")
+	writeE2ECollectorIdentity(t, stateDir)
 	yaml := fmt.Sprintf(`server:
   address: "%s"
   transport: grpc
@@ -309,7 +309,7 @@ func writeInputScopedE2EConfig(
 ) string {
 	t.Helper()
 	writeFile(t, tokenFile, e2eToken+"\n")
-	writeFile(t, filepath.Join(stateDir, collectorIDFile), e2eCollectorID+"\n")
+	writeE2ECollectorIdentity(t, stateDir)
 
 	secondInput := ""
 	if includeSecond {
@@ -352,6 +352,14 @@ inputs:
 	path := filepath.Join(t.TempDir(), "collector.yaml")
 	writeFile(t, path, yaml)
 	return path
+}
+
+func writeE2ECollectorIdentity(t *testing.T, stateDir string) {
+	t.Helper()
+	path := filepath.Join(stateDir, collectorIDFile)
+	if err := os.WriteFile(path, []byte(e2eCollectorID+"\n"), 0o600); err != nil {
+		t.Fatalf("write collector identity %s: %v", path, err)
+	}
 }
 
 // newE2EDaemon loads configPath and constructs a Daemon with fast batching for

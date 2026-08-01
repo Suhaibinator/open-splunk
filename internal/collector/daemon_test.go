@@ -107,6 +107,43 @@ func TestDaemonStateDirectoryHasSingleOwner(t *testing.T) {
 	}
 }
 
+func TestDaemonRejectsStateDirectorySymlinkWithTrailingSeparator(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stateLink := filepath.Join(root, "state-link")
+	if err := os.Symlink(target, stateLink); err != nil {
+		t.Fatal(err)
+	}
+	logDirectory := t.TempDir()
+	tokenPath := filepath.Join(target, "token")
+	cfg := newTestConfig(
+		t,
+		stateLink+string(os.PathSeparator),
+		filepath.Join(logDirectory, "*.log"),
+		tokenPath,
+	)
+
+	if daemon, err := New(
+		cfg,
+		WithLogger(discardLogger()),
+		WithCollectorID("collector-symlink-test"),
+		WithInstanceID("instance-symlink-test"),
+	); err == nil {
+		_ = daemon.closeAll()
+		t.Fatal("New followed a state-directory symlink with a trailing separator")
+	}
+	for _, artifact := range []string{collectorIDFile, checkpointsSubdir, walSubdir, deadLetterFile} {
+		if _, err := os.Lstat(filepath.Join(target, artifact)); !os.IsNotExist(err) {
+			t.Fatalf("state-directory symlink target received %q: %v", artifact, err)
+		}
+	}
+}
+
 // TestDaemonFileToWALWithheldAckKeepsDiscoveryCheckpoint exercises the full
 // local path while the server is unreachable. WAL append is durable, but no
 // terminal server disposition exists, so the checkpoint must remain at its

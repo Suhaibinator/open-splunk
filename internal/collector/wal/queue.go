@@ -187,11 +187,11 @@ func (q *queue) recover() error {
 			return err
 		}
 		// Even records behind the barrier contribute only to the defensive next
-		// sequence calculation. They are never made live again.
-		for _, rec := range res.records {
-			if seq := rec.batch.GetBatchSequence(); seq > maxSeq {
-				maxSeq = seq
-			}
+		// sequence calculation. They are never made live again. Identity is still
+		// validated before recovery mutates anything: a corrupt prefix must not
+		// disguise intact batches owned by a different collector as quarantine.
+		if err := q.observeRecoveredRecords(name, res.records, &maxSeq); err != nil {
+			return err
 		}
 		stopAfterSegment := res.corrupt
 		if res.corrupt {
@@ -207,10 +207,8 @@ func (q *queue) recover() error {
 				if scanErr != nil {
 					return scanErr
 				}
-				for _, record := range successorScan.records {
-					if seq := record.batch.GetBatchSequence(); seq > maxSeq {
-						maxSeq = seq
-					}
+				if err := q.observeRecoveredRecords(successor, successorScan.records, &maxSeq); err != nil {
+					return err
 				}
 			}
 			if err := q.persistRecoveredSequenceFloorLocked(maxSeq); err != nil {
@@ -279,6 +277,26 @@ func (q *queue) recover() error {
 	// Defensive: never hand out a sequence that a recovered record already used.
 	if err := q.persistRecoveredSequenceFloorLocked(maxSeq); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (q *queue) observeRecoveredRecords(
+	segmentName string,
+	records []scannedRecord,
+	maximumSequence *uint64,
+) error {
+	for _, record := range records {
+		recoveredCollectorID := record.batch.GetCollectorId()
+		if recoveredCollectorID != q.opts.CollectorID {
+			return fmt.Errorf(
+				"collector/wal: recovered batch %d in %s has collector identity mismatch: batch %q, configured %q",
+				record.batch.GetBatchSequence(), segmentName, recoveredCollectorID, q.opts.CollectorID,
+			)
+		}
+		if sequence := record.batch.GetBatchSequence(); sequence > *maximumSequence {
+			*maximumSequence = sequence
+		}
 	}
 	return nil
 }

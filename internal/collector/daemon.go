@@ -196,17 +196,17 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
-	stateDir := cfg.State.Directory
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return nil, fmt.Errorf("collector: create state directory %q: %w", stateDir, err)
+	// Clean once before any inspection or mutation. In particular, Lstat on a
+	// symlink with a trailing separator may follow the link on Unix.
+	stateDir := filepath.Clean(cfg.State.Directory)
+	if err := ensureCollectorStateDirectory(stateDir); err != nil {
+		return nil, err
 	}
-	// The state directory holds raw payloads (WAL segments, dead-letter file), so
-	// tighten it to owner-only even if it pre-existed with looser permissions. A
-	// chmod failure is not fatal: log and continue.
-	// #nosec G302 -- directories require execute permission; 0700 is owner-only.
-	if err := os.Chmod(stateDir, 0o700); err != nil {
-		logger.Warn("collector: could not tighten state directory permissions to 0700",
-			"directory", stateDir, "error", err.Error())
+	// The state directory contains raw payloads and security identity. Both the
+	// normal daemon and the bootstrap command fail closed unless the same stable,
+	// owner-only directory can be established.
+	if err := secureCollectorStateDirectory(stateDir); err != nil {
+		return nil, err
 	}
 	// Plaintext transport sends the bearer token in cleartext; warn whenever TLS
 	// is disabled, even for loopback (config.Validate gates non-loopback use).
@@ -221,7 +221,7 @@ func New(cfg *config.Config, opts ...Option) (*Daemon, error) {
 
 	collectorID := o.collectorID
 	if collectorID == "" {
-		id, err := loadOrCreateCollectorID(stateDir)
+		id, err := loadOrCreateCollectorIDLocked(stateDir)
 		if err != nil {
 			_ = stateLock.Close()
 			return nil, err
@@ -499,31 +499,6 @@ func isRealError(err error) bool {
 		return false
 	}
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
-}
-
-// loadOrCreateCollectorID returns a stable collector ID persisted under the
-// state directory, generating and atomically writing one on first use so the ID
-// survives restarts.
-func loadOrCreateCollectorID(stateDir string) (string, error) {
-	path := filepath.Join(stateDir, collectorIDFile)
-	data, err := os.ReadFile(path)
-	if err == nil {
-		if id := strings.TrimSpace(string(data)); id != "" {
-			return id, nil
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("collector: read collector id %q: %w", path, err)
-	}
-	id := uuid.NewString()
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(id+"\n"), 0o600); err != nil {
-		return "", fmt.Errorf("collector: write collector id: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return "", fmt.Errorf("collector: persist collector id: %w", err)
-	}
-	return id, nil
 }
 
 // tokenLoader returns a callback that reads the bearer token from path at dial

@@ -155,6 +155,161 @@ func TestReopenResumesUnacked(t *testing.T) {
 	}
 }
 
+func TestReopenRejectsPendingBatchFromDifferentCollector(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	original := defaultOpts(dir)
+	original.CollectorID = "collector-a"
+	q, err := Open(original)
+	if err != nil {
+		t.Fatalf("Open original queue: %v", err)
+	}
+	appended, err := q.Append(makeEvents("pending"))
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close original queue: %v", err)
+	}
+
+	mismatched := original
+	mismatched.CollectorID = "collector-b"
+	if reopened, err := Open(mismatched); err == nil {
+		_ = reopened.Close()
+		t.Fatal("Open accepted a pending batch owned by a different collector")
+	} else if !strings.Contains(err.Error(), "collector identity mismatch") {
+		t.Fatalf("Open mismatch error = %q, want collector identity mismatch", err)
+	}
+
+	reopened, err := Open(original)
+	if err != nil {
+		t.Fatalf("Open original identity after rejected mismatch: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	batch, err := reopened.NextBatch(ctx)
+	if err != nil {
+		t.Fatalf("NextBatch after rejected mismatch: %v", err)
+	}
+	if batch.GetBatchId() != appended.GetBatchId() || batch.GetCollectorId() != original.CollectorID {
+		t.Fatalf("pending batch changed after rejected mismatch: %+v", batch)
+	}
+}
+
+func TestReopenRejectsAcknowledgedRecordFromDifferentCollector(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	original := defaultOpts(dir)
+	original.CollectorID = "collector-a"
+	q, err := Open(original)
+	if err != nil {
+		t.Fatalf("Open original queue: %v", err)
+	}
+	if _, err := q.Append(makeEvents("acknowledged")); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := q.Ack(1); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close original queue: %v", err)
+	}
+	if segments := listWALFiles(t, dir); len(segments) != 1 {
+		t.Fatalf("acknowledged active segment was unexpectedly reclaimed: %v", segments)
+	}
+
+	mismatched := original
+	mismatched.CollectorID = "collector-b"
+	if reopened, err := Open(mismatched); err == nil {
+		_ = reopened.Close()
+		t.Fatal("Open accepted an acknowledged record owned by a different collector")
+	} else if !strings.Contains(err.Error(), "collector identity mismatch") {
+		t.Fatalf("Open mismatch error = %q, want collector identity mismatch", err)
+	}
+
+	reopened, err := Open(original)
+	if err != nil {
+		t.Fatalf("Open original identity after rejected mismatch: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close reopened original queue: %v", err)
+	}
+}
+
+func TestRecoveryRejectsMismatchedSuccessorBeforeCorruptionQuarantine(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	original := defaultOpts(dir)
+	original.CollectorID = "collector-a"
+	original.SegmentMaxBytes = 1
+	q, err := Open(original)
+	if err != nil {
+		t.Fatalf("Open original queue: %v", err)
+	}
+	for _, eventID := range []string{"corrupt-prefix", "intact-successor"} {
+		if _, err := q.Append(makeEvents(eventID)); err != nil {
+			t.Fatalf("Append %q: %v", eventID, err)
+		}
+	}
+	if err := q.Close(); err != nil {
+		t.Fatalf("Close original queue: %v", err)
+	}
+
+	segments := listWALFiles(t, dir)
+	if len(segments) != 2 {
+		t.Fatalf("live segments = %v, want two", segments)
+	}
+	firstPath := filepath.Join(dir, segments[0])
+	first, err := scanSegment(firstPath)
+	if err != nil {
+		t.Fatalf("scan first segment: %v", err)
+	}
+	if len(first.records) != 1 {
+		t.Fatalf("first segment records = %d, want one", len(first.records))
+	}
+	contents, err := os.ReadFile(firstPath)
+	if err != nil {
+		t.Fatalf("read first segment: %v", err)
+	}
+	contents[first.records[0].payloadOff] ^= 0xff
+	// #nosec G703 -- firstPath comes from listSegments in this private test directory.
+	if err := os.WriteFile(firstPath, contents, 0o600); err != nil {
+		t.Fatalf("corrupt first segment: %v", err)
+	}
+
+	mismatched := original
+	mismatched.CollectorID = "collector-b"
+	if reopened, err := Open(mismatched); err == nil {
+		_ = reopened.Close()
+		t.Fatal("Open accepted a foreign intact successor behind a corrupt segment")
+	} else if !strings.Contains(err.Error(), "collector identity mismatch") {
+		t.Fatalf("Open mismatch error = %q, want collector identity mismatch", err)
+	}
+	if live := listWALFiles(t, dir); len(live) != len(segments) ||
+		live[0] != segments[0] || live[1] != segments[1] {
+		t.Fatalf("mismatch mutated live segments: got %v, want %v", live, segments)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".corrupt") {
+			t.Fatalf("mismatch created quarantine artifact %q", entry.Name())
+		}
+	}
+
+	reopened, err := Open(original)
+	if err != nil {
+		t.Fatalf("Open original identity after rejected mismatch: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	if got := reopened.Stats().QuarantinedSegments; got != 2 {
+		t.Fatalf("original recovery quarantined %d segments, want 2", got)
+	}
+}
+
 func TestSequenceNeverReusedAfterCrash(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

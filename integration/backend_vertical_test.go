@@ -27,6 +27,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/input"
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/loggen"
+	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus"
 	"github.com/gorilla/websocket"
@@ -188,8 +189,21 @@ func TestBackendVertical(t *testing.T) {
 	}
 
 	collectorStateDir := filepath.Join(work, "collector-state")
-	collectorID := "backend-vertical-collector"
-	writeCollectorIdentity(t, collectorStateDir, collectorID)
+	fixtureStart := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+	logPath := filepath.Join(work, "app.log")
+	createEmptyFixture(t, logPath)
+	tokenPath := filepath.Join(work, "collector.token")
+	collectorConfig := filepath.Join(work, "collector.yaml")
+	writePrivateFile(t, collectorConfig, []byte(collectorYAML(collectorAddress, tokenPath, collectorStateDir, logPath)))
+	collectorID := initializeCollectorIdentity(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		collectorConfig,
+		os.Environ(),
+		collectorStateDir,
+	)
 	plaintextToken := createIndexScopedIngestionToken(
 		t,
 		ctx,
@@ -213,13 +227,7 @@ func TestBackendVertical(t *testing.T) {
 		redactionPINSentinel,
 	}
 
-	fixtureStart := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
-	logPath := filepath.Join(work, "app.log")
-	createEmptyFixture(t, logPath)
-	tokenPath := filepath.Join(work, "collector.token")
 	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
-	collectorConfig := filepath.Join(work, "collector.yaml")
-	writePrivateFile(t, collectorConfig, []byte(collectorYAML(collectorAddress, tokenPath, collectorStateDir, logPath)))
 
 	collectorArguments := []string{
 		collectorBinary, "run", "-config", collectorConfig,
@@ -778,23 +786,9 @@ func assertCurrentGradeThisMigration(
 	)
 
 	stateDir := filepath.Join(work, "gradethis-current-state")
-	collectorID := "gradethis-current-migration"
-	writeCollectorIdentity(t, stateDir, collectorID)
-	plaintextToken := createIndexScopedIngestionToken(
-		t,
-		ctx,
-		client,
-		baseURL,
-		administratorToken,
-		"gradethis-current-migration",
-		gradethiscorpus.MigrationIndexName,
-		collectorID,
-	)
-
 	logPath := filepath.Join(work, "gradethis-current.log")
 	createEmptyFixture(t, logPath)
 	tokenPath := filepath.Join(work, "gradethis-current.token")
-	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
 	configPath := filepath.Join(repository, "configs", "examples", "collector.yaml")
 	environment := os.Environ()
 	for name, value := range map[string]string{
@@ -807,6 +801,26 @@ func assertCurrentGradeThisMigration(
 	} {
 		environment = environmentWithValue(environment, name, value)
 	}
+	collectorID := initializeCollectorIdentity(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		configPath,
+		environment,
+		stateDir,
+	)
+	plaintextToken := createIndexScopedIngestionToken(
+		t,
+		ctx,
+		client,
+		baseURL,
+		administratorToken,
+		"gradethis-current-migration",
+		gradethiscorpus.MigrationIndexName,
+		collectorID,
+	)
+	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
 
 	validateCollectorConfiguration(
 		t,
@@ -1548,12 +1562,65 @@ func writePrivateFile(t *testing.T, path string, contents []byte) {
 	}
 }
 
-func writeCollectorIdentity(t *testing.T, stateDir, collectorID string) {
+func initializeCollectorIdentity(
+	t *testing.T,
+	ctx context.Context,
+	repository, collectorBinary, configPath string,
+	environment []string,
+	stateDir string,
+) string {
 	t.Helper()
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		t.Fatal(err)
+	const maximumOutput = 4 << 10
+	command := exec.CommandContext(ctx, collectorBinary, "identity", "-config", configPath)
+	configureProcessGroup(command)
+	command.Dir = repository
+	command.Env = environment
+	output, truncated, err := runCommandWithBoundedOutput(command, maximumOutput)
+	if err != nil {
+		t.Fatalf(
+			"initialize collector identity: %v\n%s",
+			err,
+			formatBoundedCommandOutput(output, truncated, maximumOutput),
+		)
 	}
-	writePrivateFile(t, filepath.Join(stateDir, "collector_id"), []byte(collectorID+"\n"))
+	if truncated {
+		t.Fatalf("collector identity output exceeded %d bytes", maximumOutput)
+	}
+	if strings.Count(output, "\n") != 1 || !strings.HasSuffix(output, "\n") {
+		t.Fatalf("collector identity output = %q, want exactly one ID and newline", output)
+	}
+	collectorID := strings.TrimSuffix(output, "\n")
+	if !protocolid.Valid(collectorID) {
+		t.Fatalf("collector identity output = %q, want canonical protocol ID", output)
+	}
+	if persisted := readCollectorIdentity(t, stateDir); persisted != collectorID {
+		t.Fatalf("persisted collector identity = %q, command returned %q", persisted, collectorID)
+	}
+	return collectorID
+}
+
+func readCollectorIdentity(t *testing.T, stateDir string) string {
+	t.Helper()
+	const maximumEncodedBytes = int(protocolid.MaximumBytes) + 1
+	path := filepath.Join(stateDir, "collector_id")
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open collector identity %q: %v", path, err)
+	}
+	contents, readErr := io.ReadAll(io.LimitReader(file, int64(maximumEncodedBytes+1)))
+	closeErr := file.Close()
+	if readErr != nil || closeErr != nil {
+		t.Fatalf("read collector identity %q: %v", path, errors.Join(readErr, closeErr))
+	}
+	if len(contents) < 2 || len(contents) > maximumEncodedBytes ||
+		contents[len(contents)-1] != '\n' {
+		t.Fatalf("persisted collector identity has invalid encoding: %q", contents)
+	}
+	id := string(contents[:len(contents)-1])
+	if !protocolid.Valid(id) {
+		t.Fatalf("persisted collector identity = %q, want canonical protocol ID", id)
+	}
+	return id
 }
 
 func collectorYAML(address, tokenPath, statePath, logPath string) string {
@@ -1910,8 +1977,9 @@ func assertCrashSafeAcknowledgedCollectorState(
 	assertCollectorCheckpoint(t, stateDir, wantOffset, 1)
 
 	queue, err := wal.Open(wal.Options{
-		Dir:  filepath.Join(stateDir, "wal"),
-		Sync: wal.SyncAlways,
+		Dir:         filepath.Join(stateDir, "wal"),
+		Sync:        wal.SyncAlways,
+		CollectorID: readCollectorIdentity(t, stateDir),
 	})
 	if err != nil {
 		t.Fatalf("reopen crash-safe collector WAL: %v", err)
@@ -2013,8 +2081,9 @@ func assertDurableCollectorState(t *testing.T, stateDir string, wantOffset, want
 	assertCollectorCheckpoint(t, stateDir, wantOffset, wantLine)
 
 	queue, err := wal.Open(wal.Options{
-		Dir:  filepath.Join(stateDir, "wal"),
-		Sync: wal.SyncAlways,
+		Dir:         filepath.Join(stateDir, "wal"),
+		Sync:        wal.SyncAlways,
+		CollectorID: readCollectorIdentity(t, stateDir),
 	})
 	if err != nil {
 		t.Fatalf("reopen collector WAL: %v", err)
@@ -2080,8 +2149,9 @@ func assertPendingCollectorState(t *testing.T, stateDir, logPath string, wantOff
 	}
 
 	queue, err := wal.Open(wal.Options{
-		Dir:  filepath.Join(stateDir, "wal"),
-		Sync: wal.SyncAlways,
+		Dir:         filepath.Join(stateDir, "wal"),
+		Sync:        wal.SyncAlways,
+		CollectorID: readCollectorIdentity(t, stateDir),
 	})
 	if err != nil {
 		t.Fatalf("reopen pending collector WAL: %v", err)

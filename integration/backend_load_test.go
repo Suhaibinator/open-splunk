@@ -324,23 +324,10 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		"Sustained backend load",
 	)
 	collectorStateDir := filepath.Join(work, "collector-state")
-	collectorID := "backend-sustained-load-collector"
-	writeCollectorIdentity(t, collectorStateDir, collectorID)
-	plaintextToken := createBackendLoadToken(
-		t,
-		ctx,
-		httpClient,
-		baseURL,
-		administratorToken,
-		plan.IndexName,
-		collectorID,
-	)
-
 	fixtureStart := time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Millisecond)
 	logPath := filepath.Join(work, "backend-load.ndjson")
 	createEmptyFixture(t, logPath)
 	tokenPath := filepath.Join(work, "collector.token")
-	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
 	collectorConfig := filepath.Join(work, "collector.yaml")
 	writePrivateFile(t, collectorConfig, []byte(backendLoadCollectorYAML(
 		collectorAddress,
@@ -350,6 +337,25 @@ func runBackendSustainedLoad(t *testing.T, plan backendLoadPlan) {
 		plan.IndexName,
 	)))
 	collectorEnvironment := os.Environ()
+	collectorID := initializeCollectorIdentity(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		collectorConfig,
+		collectorEnvironment,
+		collectorStateDir,
+	)
+	plaintextToken := createBackendLoadToken(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		plan.IndexName,
+		collectorID,
+	)
+	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
 	validateBackendLoadCollectorConfiguration(
 		t,
 		ctx,

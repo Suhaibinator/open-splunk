@@ -6,10 +6,16 @@
 //	open-splunk-collector [run] [-config PATH] [-log-level LEVEL]
 //	                                                 start the collector (default)
 //	open-splunk-collector validate [-config PATH]  check the config and exit
+//	open-splunk-collector identity [-config PATH]  initialize and print the stable ID
 //
 // validate loads and validates the configuration, prints a redacted summary
 // (never the bearer token) and the number of files each input's globs currently
 // match, and exits non-zero with the precise error on failure.
+//
+// identity loads and validates the configuration without reading the bearer
+// token, durably initializes the stable collector ID under state.directory, and
+// prints only that ID. It does not open inputs, checkpoints, or the WAL and does
+// not contact the server.
 //
 // run loads the configuration, builds the daemon, and runs until SIGINT or
 // SIGTERM triggers a graceful shutdown.
@@ -57,6 +63,8 @@ func run(args []string) int {
 		return runCollector(args)
 	case "validate":
 		return validateConfig(args)
+	case "identity":
+		return runIdentity(args, os.Stdout, os.Stderr)
 	case "version":
 		if len(args) != 0 {
 			fmt.Fprintln(os.Stderr, "version does not accept arguments")
@@ -75,6 +83,43 @@ func run(args []string) int {
 		usage(os.Stderr)
 		return 2
 	}
+}
+
+// runIdentity initializes and prints the stable collector ID without reading
+// the ingestion token or starting any collector runtime components.
+func runIdentity(args []string, stdout, stderr io.Writer) int {
+	if stdout == nil {
+		return 1
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	fs := flag.NewFlagSet("identity", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := fs.String("config", defaultConfigPath, "path to the collector configuration file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "identity does not accept positional arguments")
+		return 2
+	}
+
+	cfg, err := config.Load(*path)
+	if err != nil {
+		fmt.Fprintf(stderr, "load configuration: %v\n", err)
+		return 1
+	}
+	id, err := collector.InitializeCollectorID(cfg.State.Directory)
+	if err != nil {
+		fmt.Fprintf(stderr, "initialize collector identity: %v\n", err)
+		return 1
+	}
+	if _, err := fmt.Fprintln(stdout, id); err != nil {
+		fmt.Fprintf(stderr, "write collector identity: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func writeBuildIdentity(output io.Writer) error {
@@ -205,6 +250,7 @@ usage:
   open-splunk-collector [run] [-config PATH] [-log-level LEVEL]
                                                    start the collector (default)
   open-splunk-collector validate [-config PATH]    validate configuration and exit
+  open-splunk-collector identity [-config PATH]    initialize and print stable ID
   open-splunk-collector version                    print the compiled build identity
 
 flags:

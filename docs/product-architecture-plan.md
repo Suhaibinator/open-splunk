@@ -438,7 +438,17 @@ The native collector protocol uses the following identity contract:
 - An administrator first obtains the collector's locally persisted stable
   `collector_id`, then creates an ingestion token explicitly bound to that ID.
   The server never trusts first use to choose a binding and never auto-enrolls
-  an unknown identity from `CollectorHello`.
+  an unknown identity from `CollectorHello`. The supported first-start bridge
+  is `open-splunk-collector identity -config PATH`: it validates configuration
+  without reading the not-yet-issued token, durably creates or reads the ID
+  under the final state directory, and prints only that ID. It does not open
+  inputs, checkpoints, or WAL state and does not contact the server. The state
+  path and identity inode must be owned by the collector process, owner-only,
+  non-symlinked, and free of external hard-link aliases; startup fails closed
+  when those invariants or adjacent durable-state continuity do not hold. A
+  filesystem root or the current working directory is never a valid state
+  directory. Linux and macOS implement this filesystem security contract;
+  other targets fail closed rather than silently weakening it.
 - Every newly created native ingestion token requires exactly one canonical,
   bounded `bound_collector_id`. The binding is immutable once set. Several
   tokens may bind to the same collector during credential rotation, so the

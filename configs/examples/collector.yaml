@@ -6,6 +6,13 @@
 #   <dir>/dead-letter.jsonl  events the server permanently rejected
 #   <dir>/collector_id    stable collector id, generated once and reused across restarts
 #
+# Before requesting an ingestion token, run `open-splunk-collector identity
+# -config /etc/open-splunk/collector.yaml` with the final state directory
+# mounted as a real collector-owned directory beneath a trusted parent. The
+# token file may still be absent. Bind the issued token to the printed ID, then
+# store its one-time plaintext value at server.token_file.
+# Never copy or regenerate collector_id independently of the rest of the state.
+#
 # Batching is not configured here: the daemon flushes an accumulating batch to
 # the durable queue when it reaches 500 events, 1 MiB of encoded events, or
 # after 250ms of linger, whichever comes first. When the queue reaches
