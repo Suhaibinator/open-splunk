@@ -323,20 +323,33 @@ type StoreBatchIdentity struct {
 	SourceBatchSHA256 [sha256.Size]byte
 }
 
-// StoredBatchState reports whether an exact source batch has a durable
-// reservation and whether its ClickHouse insert is fully committed.
+// StoreBatchRejection durably records a terminal rejection for an exact
+// collector wire batch. Rejection is the already bounded disposition which
+// must be replayed verbatim for future exact retries.
+type StoreBatchRejection struct {
+	Identity   StoreBatchIdentity
+	ReceivedAt time.Time
+	Rejection  *opensplunkv1.BatchReject
+}
+
+// StoredBatchState reports whether an exact source batch is absent, has a
+// pending ClickHouse outbox, or has a durable accepted or rejected outcome.
 type StoredBatchState uint8
 
 const (
 	StoredBatchNotFound StoredBatchState = iota
 	StoredBatchPending
 	StoredBatchCommitted
+	StoredBatchRejected
 )
 
-// StoreResult is the idempotency contract of EventStore. Accepted plus
-// Duplicate must exactly equal StoreBatch.Events; together with
-// RejectedEvents they must account for OriginalEventCount. A successful return
-// means the promised durability point has been reached.
+// StoreResult is the idempotency contract of EventStore. An accepted result
+// uses the accounting fields: Accepted plus Duplicate must exactly equal
+// StoreBatch.Events and, together with RejectedEvents, account for
+// OriginalEventCount. A terminal rejected result instead sets BatchRejection
+// and leaves every accounting field at its zero value. The two outcomes are
+// mutually exclusive. A successful return means the promised durability point
+// has been reached.
 type StoreResult struct {
 	Accepted            uint32
 	Duplicate           uint32
@@ -344,6 +357,7 @@ type StoreResult struct {
 	CommittedAt         time.Time
 	OriginalEventCount  uint32
 	RejectedEvents      []*opensplunkv1.EventRejection
+	BatchRejection      *opensplunkv1.BatchReject
 }
 
 // EventStore durably stores a normalized batch. Implementations must treat its
@@ -357,11 +371,17 @@ type EventStore interface {
 // The ingestion service uses it before applying mutable policy, which makes a
 // retried acknowledgment identical to the original decision. Implementations
 // must replay only their persisted normalized outbox, never caller-supplied
-// events.
+// events. A batch observed as pending may be abandoned before ResumeBatch
+// acquires it, allowing a concurrent RejectBatch to become the first durable
+// terminal outcome; ResumeBatch may therefore return either an accepted result
+// or a BatchRejection. If no active disposition remains, ResumeBatch must
+// return a StoredBatchGoneError so the caller can restart fresh admission from
+// the original wire batch rather than recreate an outbox from identity alone.
 type RecoverableEventStore interface {
 	EventStore
 	LookupBatch(context.Context, StoreBatchIdentity) (StoredBatchState, StoreResult, error)
 	ResumeBatch(context.Context, StoreBatchIdentity) (StoreResult, error)
+	RejectBatch(context.Context, StoreBatchRejection) (StoreResult, error)
 }
 
 // EventStoreFunc adapts a function to EventStore.
@@ -394,6 +414,28 @@ func (e *TransientStoreError) Unwrap() error {
 }
 
 func (e *TransientStoreError) Temporary() bool { return true }
+
+// StoredBatchGoneError reports that a batch observed as pending no longer had
+// an active disposition when ResumeBatch atomically tried to acquire it. It is
+// not a terminal outcome: ingestion may restart fresh admission from the
+// original wire batch after reapplying current mutable authority and policy.
+type StoredBatchGoneError struct {
+	Err error
+}
+
+func (e *StoredBatchGoneError) Error() string {
+	if e == nil || e.Err == nil {
+		return "stored batch reservation is gone"
+	}
+	return fmt.Sprintf("stored batch reservation is gone: %v", e.Err)
+}
+
+func (e *StoredBatchGoneError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
 
 // DurableIdentityConflictError reports that a durable batch ID or collector
 // sequence was previously bound to different immutable source bytes. It is a

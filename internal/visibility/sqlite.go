@@ -18,6 +18,7 @@ import (
 const (
 	reservationReserved  = "reserved"
 	reservationCommitted = "committed"
+	reservationRejected  = "rejected"
 	reservationAbandoned = "abandoned"
 	phaseUnsent          = "unsent"
 	phaseAmbiguous       = "ambiguous"
@@ -304,8 +305,11 @@ func (sequencer *SQLiteSequencer) finishShutdown(shutdownErr error) {
 	sequencer.lifecycleMu.Unlock()
 }
 
-// Lookup reads an active reservation without acquiring its attempt lease. Both
+// Lookup reads an active disposition without acquiring its attempt lease. Both
 // independently stable identities must resolve to the same immutable digest.
+// Terminal dispositions include their durable replay payload. Pending
+// dispositions return only their stable identity and sequence; Reserve or
+// AcquirePending hydrates the replay payload after it wins the attempt lease.
 func (sequencer *SQLiteSequencer) Lookup(
 	ctx context.Context,
 	batchKey string,
@@ -334,7 +338,7 @@ func (sequencer *SQLiteSequencer) Lookup(
 	if legacy {
 		return Reservation{}, true, ErrConflict
 	}
-	_, matched, err := resolveIdentity(ctx, tx, batchKey, sequenceKey, payloadSHA256)
+	identity, matched, err := resolveIdentity(ctx, tx, batchKey, sequenceKey, payloadSHA256)
 	if err != nil {
 		return Reservation{}, matched, err
 	}
@@ -344,16 +348,40 @@ func (sequencer *SQLiteSequencer) Lookup(
 		}
 		return Reservation{}, false, nil
 	}
-	reservation, err := queryActiveReservationByBatch(ctx, tx, batchKey)
-	if errors.Is(err, sql.ErrNoRows) {
+	activeSequence, activeState, activeErr := queryActiveDisposition(ctx, tx, batchKey)
+	if errors.Is(activeErr, sql.ErrNoRows) {
 		// All attempts for this still-known identity were safely abandoned.
 		if commitErr := tx.Commit(); commitErr != nil {
 			return Reservation{}, false, fmt.Errorf("commit abandoned visibility lookup: %w", commitErr)
 		}
 		return Reservation{}, false, nil
 	}
-	if err != nil {
-		return Reservation{}, false, fmt.Errorf("lookup visibility reservation: %w", err)
+	if activeErr != nil {
+		return Reservation{}, false, fmt.Errorf("lookup visibility reservation: %w", activeErr)
+	}
+	var reservation Reservation
+	switch activeState {
+	case reservationCommitted, reservationRejected:
+		reservation, err = queryReservationBySequence(ctx, tx, activeSequence)
+		if err != nil {
+			return Reservation{}, false, fmt.Errorf("read terminal visibility disposition: %w", err)
+		}
+	case reservationReserved:
+		sequence, decodeErr := decodePositiveSequence(activeSequence)
+		if decodeErr != nil {
+			return Reservation{}, false, fmt.Errorf("decode pending visibility sequence: %w", decodeErr)
+		}
+		reservation = Reservation{
+			BatchKey:      identity.BatchKey,
+			SequenceKey:   identity.SequenceKey,
+			Sequence:      sequence,
+			PayloadSHA256: identity.PayloadSHA256,
+		}
+	default:
+		return Reservation{}, false, fmt.Errorf(
+			"active visibility disposition has invalid state %q",
+			activeState,
+		)
 	}
 	if err := tx.Commit(); err != nil {
 		return Reservation{}, false, fmt.Errorf("commit visibility lookup: %w", err)
@@ -362,8 +390,9 @@ func (sequencer *SQLiteSequencer) Lookup(
 }
 
 // Reserve atomically acquires an existing batch attempt or allocates a new
-// sequence and durable outbox entry. Allocation does not wait for earlier
-// reservations; Cutoff remains the contiguous terminal boundary.
+// sequence and durable outbox entry. ExistingOnly requests never allocate.
+// Allocation does not wait for earlier reservations; Cutoff remains the
+// contiguous terminal boundary.
 func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRequest) (reservation Reservation, resultErr error) {
 	if err := sequencer.beginOperation(); err != nil {
 		return Reservation{}, err
@@ -382,16 +411,20 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		}
 	}()
 
-	indexTime := request.IndexTime.Round(0).UTC()
-	indexTimeMillis := indexTime.UnixMilli()
-	if !time.UnixMilli(indexTimeMillis).UTC().Equal(indexTime.Truncate(time.Millisecond)) {
-		return Reservation{}, fmt.Errorf("%w: index time is outside the persistent timestamp range", ErrInvalidArgument)
-	}
-	metadata := request.Metadata
-	if metadata == nil {
-		// database/sql binds a nil []byte as SQL NULL. The schema deliberately
-		// distinguishes an empty opaque payload from a missing one.
-		metadata = []byte{}
+	var indexTimeMillis int64
+	var metadata []byte
+	if !request.ExistingOnly {
+		indexTime := request.IndexTime.Round(0).UTC()
+		indexTimeMillis = indexTime.UnixMilli()
+		if !time.UnixMilli(indexTimeMillis).UTC().Equal(indexTime.Truncate(time.Millisecond)) {
+			return Reservation{}, fmt.Errorf("%w: index time is outside the persistent timestamp range", ErrInvalidArgument)
+		}
+		metadata = request.Metadata
+		if metadata == nil {
+			// database/sql binds a nil []byte as SQL NULL. The schema deliberately
+			// distinguishes an empty opaque payload from a missing one.
+			metadata = []byte{}
+		}
 	}
 
 	tx, err := sequencer.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -423,7 +456,7 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 	err = tx.QueryRowContext(ctx, `
 		SELECT sequence, state, attempt_id
 		FROM ingest_visibility_reservations
-		WHERE batch_key = ? AND state IN ('reserved', 'committed')`, request.BatchKey).Scan(
+		WHERE batch_key = ? AND state IN ('reserved', 'committed', 'rejected')`, request.BatchKey).Scan(
 		&sequence,
 		&state,
 		&owner,
@@ -432,10 +465,10 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		if !identityExists {
 			return Reservation{}, ErrConflict
 		}
-		if state == reservationCommitted {
+		if state == reservationCommitted || state == reservationRejected {
 			reservation, err = queryReservationBySequence(ctx, tx, sequence)
 			if err != nil {
-				return Reservation{}, fmt.Errorf("read committed visibility reservation: %w", err)
+				return Reservation{}, fmt.Errorf("read terminal visibility reservation: %w", err)
 			}
 			if commitErr := tx.Commit(); commitErr != nil {
 				return Reservation{}, fmt.Errorf("commit visibility reservation lookup: %w", commitErr)
@@ -473,6 +506,9 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return Reservation{}, fmt.Errorf("read visibility reservation: %w", err)
+	}
+	if request.ExistingOnly {
+		return Reservation{}, ErrReservationGone
 	}
 	barrier, err := sequencer.orphanedAmbiguousExists(ctx, tx, 0, 0)
 	if err != nil {
@@ -535,6 +571,176 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 		PayloadSHA256: request.PayloadSHA256,
 		Metadata:      slices.Clone(metadata),
 		Outbox:        slices.Clone(request.Outbox),
+	}, nil
+}
+
+// Reject atomically records a terminal whole-batch rejection or returns the
+// existing active disposition for the same immutable identity. A rejection
+// consumes a visibility sequence so Cutoff can represent one total order, but
+// it never consumes pending capacity, creates an outbox, or acquires an
+// attempt lease. An existing pending disposition returns only its stable
+// identity and sequence; replay payloads remain private to its owning Store.
+func (sequencer *SQLiteSequencer) Reject(
+	ctx context.Context,
+	request RejectRequest,
+) (Reservation, error) {
+	if err := sequencer.beginOperation(); err != nil {
+		return Reservation{}, err
+	}
+	defer sequencer.endOperation()
+	if err := validateRejectRequest(ctx, request); err != nil {
+		return Reservation{}, err
+	}
+
+	indexTime := request.IndexTime.Round(0).UTC()
+	indexTimeMillis := indexTime.UnixMilli()
+	if !time.UnixMilli(indexTimeMillis).UTC().Equal(indexTime.Truncate(time.Millisecond)) {
+		return Reservation{}, fmt.Errorf(
+			"%w: index time is outside the persistent timestamp range",
+			ErrInvalidArgument,
+		)
+	}
+	rejectedAt := request.RejectedAt.Round(0).UTC()
+	rejectedAtMicros := rejectedAt.UnixMicro()
+	if !time.UnixMicro(rejectedAtMicros).UTC().Equal(rejectedAt.Truncate(time.Microsecond)) {
+		return Reservation{}, fmt.Errorf(
+			"%w: rejected time is outside the persistent timestamp range",
+			ErrInvalidArgument,
+		)
+	}
+	metadata := request.Metadata
+	if metadata == nil {
+		metadata = []byte{}
+	}
+
+	tx, err := sequencer.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return Reservation{}, fmt.Errorf("begin visibility rejection: %w", err)
+	}
+	defer rollback(tx)
+	legacy, err := legacyBatchTombstoned(ctx, tx, request.BatchKey)
+	if err != nil {
+		return Reservation{}, err
+	}
+	if legacy {
+		return Reservation{}, ErrConflict
+	}
+
+	identity, identityExists, err := resolveIdentity(
+		ctx,
+		tx,
+		request.BatchKey,
+		request.SequenceKey,
+		request.PayloadSHA256,
+	)
+	if err != nil {
+		return Reservation{}, err
+	}
+
+	activeSequence, activeState, activeErr := queryActiveDisposition(
+		ctx,
+		tx,
+		request.BatchKey,
+	)
+	if activeErr == nil {
+		if !identityExists {
+			return Reservation{}, ErrConflict
+		}
+		var reservation Reservation
+		switch activeState {
+		case reservationCommitted, reservationRejected:
+			reservation, err = queryReservationBySequence(ctx, tx, activeSequence)
+			if err != nil {
+				return Reservation{}, fmt.Errorf("read terminal visibility disposition: %w", err)
+			}
+		case reservationReserved:
+			sequence, decodeErr := decodePositiveSequence(activeSequence)
+			if decodeErr != nil {
+				return Reservation{}, fmt.Errorf("decode pending visibility sequence: %w", decodeErr)
+			}
+			// Reject callers only need the winning pending identity. Avoid loading
+			// or exposing its potentially 16 MiB replay outbox and metadata.
+			reservation = Reservation{
+				BatchKey:      identity.BatchKey,
+				SequenceKey:   identity.SequenceKey,
+				Sequence:      sequence,
+				PayloadSHA256: identity.PayloadSHA256,
+			}
+		default:
+			return Reservation{}, fmt.Errorf(
+				"active visibility disposition has invalid state %q",
+				activeState,
+			)
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Reservation{}, fmt.Errorf("commit visibility rejection lookup: %w", commitErr)
+		}
+		return reservation, nil
+	}
+	if !errors.Is(activeErr, sql.ErrNoRows) {
+		return Reservation{}, fmt.Errorf("read active visibility disposition: %w", activeErr)
+	}
+
+	sequence, err := allocateSequence(ctx, tx)
+	if err != nil {
+		return Reservation{}, err
+	}
+	storedSequence, err := decodePositiveSequence(sequence)
+	if err != nil {
+		return Reservation{}, fmt.Errorf("decode allocated rejection sequence: %w", err)
+	}
+	createdAt := time.Now().UTC().UnixMicro()
+	if !identityExists {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO ingest_batch_identities
+				(batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro)
+			VALUES (?, ?, ?, ?, ?)`,
+			request.BatchKey,
+			request.SequenceKey,
+			request.PayloadSHA256[:],
+			sequence,
+			createdAt,
+		); err != nil {
+			if sqliteConstraint(err) {
+				return Reservation{}, ErrConflict
+			}
+			return Reservation{}, fmt.Errorf("persist rejected ingest batch identity: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO ingest_visibility_reservations
+			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
+			 metadata, outbox, created_at_unix_micro, committed_at_unix_micro)
+		VALUES (?, ?, 'rejected', 'final', '', ?, ?, X'', ?, ?)`,
+		sequence,
+		request.BatchKey,
+		indexTimeMillis,
+		metadata,
+		createdAt,
+		rejectedAtMicros,
+	); err != nil {
+		if sqliteConstraint(err) {
+			return Reservation{}, ErrConflict
+		}
+		return Reservation{}, fmt.Errorf("persist terminal visibility rejection: %w", err)
+	}
+	if err := advanceCutoff(ctx, tx); err != nil {
+		return Reservation{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Reservation{}, fmt.Errorf("commit visibility rejection: %w", err)
+	}
+	return Reservation{
+		BatchKey:      request.BatchKey,
+		SequenceKey:   request.SequenceKey,
+		Sequence:      storedSequence,
+		Rejected:      true,
+		NewlyRejected: true,
+		IndexTime:     time.UnixMilli(indexTimeMillis).UTC(),
+		PayloadSHA256: request.PayloadSHA256,
+		Metadata:      slices.Clone(metadata),
+		Outbox:        []byte{},
+		RejectedAt:    time.UnixMicro(rejectedAtMicros).UTC(),
 	}, nil
 }
 
@@ -744,13 +950,23 @@ func scanReservation(row scanner) (Reservation, error) {
 	}
 	reservation.Sequence = decodedSequence
 	reservation.AlreadyCommitted = state == reservationCommitted
+	reservation.Rejected = state == reservationRejected
 	reservation.MayHaveReachedStorage = phase == phaseAmbiguous || state == reservationCommitted
 	reservation.IndexTime = time.UnixMilli(indexTimeMillis).UTC()
 	copy(reservation.PayloadSHA256[:], digest)
-	reservation.Metadata = slices.Clone(metadata)
-	reservation.Outbox = slices.Clone(outbox)
+	// database/sql Scan into *[]byte already returns caller-owned copies. Keep
+	// those directly so hydrating a maximum-size replay outbox does not copy it
+	// a second time in process memory.
+	reservation.Metadata = metadata
+	reservation.Outbox = outbox
 	if committedAt.Valid {
-		reservation.CommittedAt = time.UnixMicro(committedAt.Int64).UTC()
+		terminalAt := time.UnixMicro(committedAt.Int64).UTC()
+		switch state {
+		case reservationCommitted:
+			reservation.CommittedAt = terminalAt
+		case reservationRejected:
+			reservation.RejectedAt = terminalAt
+		}
 	}
 	return reservation, nil
 }
@@ -765,14 +981,20 @@ func queryReservationBySequence(ctx context.Context, q queryer, sequence int64) 
 		WHERE r.sequence = ?`, sequence))
 }
 
-func queryActiveReservationByBatch(ctx context.Context, q queryer, batchKey string) (Reservation, error) {
-	return scanReservation(q.QueryRowContext(ctx, `
-		SELECT r.sequence, i.batch_key, i.sequence_key, r.state, r.phase,
-		       r.index_time_unix_milli, i.payload_sha256, r.metadata, r.outbox,
-		       r.committed_at_unix_micro
-		FROM ingest_visibility_reservations AS r
-		JOIN ingest_batch_identities AS i ON i.batch_key = r.batch_key
-		WHERE r.batch_key = ? AND r.state IN ('reserved', 'committed')`, batchKey))
+func queryActiveDisposition(
+	ctx context.Context,
+	q queryer,
+	batchKey string,
+) (int64, string, error) {
+	var sequence int64
+	var state string
+	err := q.QueryRowContext(ctx, `
+		SELECT sequence, state
+		FROM ingest_visibility_reservations
+		WHERE batch_key = ? AND state IN ('reserved', 'committed', 'rejected')`,
+		batchKey,
+	).Scan(&sequence, &state)
+	return sequence, state, err
 }
 
 func validateLookup(ctx context.Context, batchKey, sequenceKey string) error {
@@ -795,6 +1017,9 @@ func validateReserveRequest(ctx context.Context, request ReserveRequest) error {
 	if err := validateAttemptID(ctx, request.AttemptID); err != nil {
 		return err
 	}
+	if request.ExistingOnly {
+		return nil
+	}
 	if request.IndexTime.IsZero() {
 		return fmt.Errorf("%w: index time is required", ErrInvalidArgument)
 	}
@@ -803,6 +1028,22 @@ func validateReserveRequest(ctx context.Context, request ReserveRequest) error {
 	}
 	if len(request.Outbox) == 0 || len(request.Outbox) > MaxOutboxBytes {
 		return fmt.Errorf("%w: outbox must contain 1 to %d bytes", ErrInvalidArgument, MaxOutboxBytes)
+	}
+	return nil
+}
+
+func validateRejectRequest(ctx context.Context, request RejectRequest) error {
+	if err := validateLookup(ctx, request.BatchKey, request.SequenceKey); err != nil {
+		return err
+	}
+	if request.IndexTime.IsZero() {
+		return fmt.Errorf("%w: index time is required", ErrInvalidArgument)
+	}
+	if request.RejectedAt.IsZero() {
+		return fmt.Errorf("%w: rejected time is required", ErrInvalidArgument)
+	}
+	if len(request.Metadata) > MaxMetadataBytes {
+		return fmt.Errorf("%w: metadata exceeds %d bytes", ErrInvalidArgument, MaxMetadataBytes)
 	}
 	return nil
 }
@@ -1246,14 +1487,18 @@ func (sequencer *SQLiteSequencer) Cutoff(ctx context.Context) (uint64, error) {
 }
 
 // PruneTerminal advances the explicit idempotency horizon by deleting at most
-// limit terminal rows. Committed rows retain the newest retainSequences
-// committed blocks; abandoned rows use the last-assigned allocation horizon so
-// they cannot grow behind an old pending gap but never age a committed
-// identity. An identity is deleted in the same transaction only after its last
-// reservation is gone.
+// limit terminal rows. Accepted ClickHouse commits and whole-batch rejections
+// have independent horizons, so a rejection flood cannot displace successful
+// blocks from storage's deduplication horizon. The rejected horizon keeps the
+// newest prefix satisfying both its row-count and optional metadata-byte
+// ceilings. Rejections may prune through the last assigned sequence because
+// they have no ClickHouse side effect; commits remain bounded by the contiguous
+// cutoff. Abandoned rows keep using the committed allocation horizon so they
+// cannot grow behind an old pending gap. An identity is deleted in the same
+// transaction only after its last reservation is gone.
 func (sequencer *SQLiteSequencer) PruneTerminal(
 	ctx context.Context,
-	retainSequences uint64,
+	retention TerminalRetention,
 	limit uint32,
 ) (uint32, error) {
 	if err := sequencer.beginOperation(); err != nil {
@@ -1284,36 +1529,35 @@ func (sequencer *SQLiteSequencer) PruneTerminal(
 	}
 	abandonedThreshold := lastAssigned
 	abandonedEligible := true
-	committedThreshold := cutoff
-	committedEligible := retainSequences == 0
-	if retainSequences > math.MaxInt64 {
+	if retention.Committed > math.MaxInt64 {
 		abandonedEligible = false
-		committedEligible = false
-	} else if retainSequences > 0 {
-		retained := int64(retainSequences)
+	} else if retention.Committed > 0 {
+		retained := int64(retention.Committed)
 		if retained >= lastAssigned {
 			abandonedEligible = false
 		} else {
 			abandonedThreshold = lastAssigned - retained
 		}
-		// OFFSET retainSequences selects the (N+1)th newest committed
-		// block. Deleting it and older commits leaves exactly N newer ones.
-		if retained < cutoff {
-			horizonErr := tx.QueryRowContext(ctx, `
-				SELECT sequence
-				FROM ingest_visibility_reservations
-				WHERE state = 'committed' AND sequence <= ?
-				ORDER BY sequence DESC
-				LIMIT 1 OFFSET ?`, cutoff, retained).Scan(&committedThreshold)
-			switch {
-			case horizonErr == nil:
-				committedEligible = true
-			case errors.Is(horizonErr, sql.ErrNoRows):
-				committedEligible = false
-			default:
-				return 0, fmt.Errorf("select terminal visibility prune horizon: %w", horizonErr)
-			}
-		}
+	}
+	committedThreshold, committedEligible, err := terminalPruneHorizon(
+		ctx,
+		tx,
+		reservationCommitted,
+		cutoff,
+		retention.Committed,
+	)
+	if err != nil {
+		return 0, err
+	}
+	rejectedThreshold, rejectedEligible, err := rejectedPruneHorizon(
+		ctx,
+		tx,
+		lastAssigned,
+		retention.Rejected,
+		retention.RejectedMetadataBytes,
+	)
+	if err != nil {
+		return 0, err
 	}
 	result, err := tx.ExecContext(ctx, `
 		DELETE FROM ingest_visibility_reservations
@@ -1322,9 +1566,18 @@ func (sequencer *SQLiteSequencer) PruneTerminal(
 			FROM ingest_visibility_reservations
 			WHERE (state = 'abandoned' AND ? AND sequence <= ?)
 			   OR (state = 'committed' AND ? AND sequence <= ?)
+			   OR (state = 'rejected' AND ? AND sequence <= ?)
 			ORDER BY sequence
 			LIMIT ?
-		)`, abandonedEligible, abandonedThreshold, committedEligible, committedThreshold, limit)
+		)`,
+		abandonedEligible,
+		abandonedThreshold,
+		committedEligible,
+		committedThreshold,
+		rejectedEligible,
+		rejectedThreshold,
+		limit,
+	)
 	if err != nil {
 		return 0, fmt.Errorf("delete terminal visibility reservations: %w", err)
 	}
@@ -1356,6 +1609,115 @@ func (sequencer *SQLiteSequencer) PruneTerminal(
 		return 0, fmt.Errorf("commit terminal visibility prune: %w", err)
 	}
 	return uint32(deleted), nil
+}
+
+func terminalPruneHorizon(
+	ctx context.Context,
+	tx *sql.Tx,
+	state string,
+	throughSequence int64,
+	retained uint64,
+) (int64, bool, error) {
+	if retained == 0 {
+		return throughSequence, true, nil
+	}
+	if throughSequence <= 0 || retained > math.MaxInt64 || retained >= uint64(throughSequence) {
+		return throughSequence, false, nil
+	}
+	var threshold int64
+	err := tx.QueryRowContext(ctx, `
+		SELECT sequence
+		FROM ingest_visibility_reservations
+		WHERE state = ? AND sequence <= ?
+		ORDER BY sequence DESC
+		LIMIT 1 OFFSET ?`, state, throughSequence, int64(retained)).Scan(&threshold)
+	switch {
+	case err == nil:
+		return threshold, true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return throughSequence, false, nil
+	default:
+		return 0, false, fmt.Errorf(
+			"select %s visibility prune horizon: %w",
+			state,
+			err,
+		)
+	}
+}
+
+func rejectedPruneHorizon(
+	ctx context.Context,
+	tx *sql.Tx,
+	throughSequence int64,
+	retained uint64,
+	retainedMetadataBytes uint64,
+) (int64, bool, error) {
+	if retainedMetadataBytes == 0 || retainedMetadataBytes > math.MaxInt64 {
+		return terminalPruneHorizon(
+			ctx,
+			tx,
+			reservationRejected,
+			throughSequence,
+			retained,
+		)
+	}
+	if retained == 0 {
+		return throughSequence, true, nil
+	}
+	if throughSequence <= 0 {
+		return throughSequence, false, nil
+	}
+
+	countBounded := retained <= math.MaxInt64
+	retainedRows := int64(0)
+	candidateLimit := throughSequence
+	if countBounded {
+		retainedRows = int64(retained)
+		if retainedRows < throughSequence {
+			// The first row beyond the count ceiling is sufficient to choose
+			// the deletion horizon, even when the byte ceiling does not bind.
+			candidateLimit = retainedRows + 1
+		}
+	}
+
+	var threshold int64
+	err := tx.QueryRowContext(ctx, `
+		WITH candidates AS MATERIALIZED (
+			SELECT sequence, length(metadata) AS metadata_bytes
+			FROM ingest_visibility_reservations
+				INDEXED BY ingest_visibility_reservations_state_sequence_idx
+			WHERE state = 'rejected' AND sequence <= ?
+			ORDER BY sequence DESC
+			LIMIT ?
+		), prefixes AS (
+			SELECT sequence,
+			       ROW_NUMBER() OVER (ORDER BY sequence DESC) AS retained_rows,
+			       SUM(metadata_bytes) OVER (
+			           ORDER BY sequence DESC
+			           ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+			       ) AS retained_metadata_bytes
+			FROM candidates
+		)
+		SELECT sequence
+		FROM prefixes
+		WHERE (? AND retained_rows > ?)
+		   OR retained_metadata_bytes > ?
+		ORDER BY sequence DESC
+		LIMIT 1`,
+		throughSequence,
+		candidateLimit,
+		countBounded,
+		retainedRows,
+		int64(retainedMetadataBytes),
+	).Scan(&threshold)
+	switch {
+	case err == nil:
+		return threshold, true, nil
+	case errors.Is(err, sql.ErrNoRows):
+		return throughSequence, false, nil
+	default:
+		return 0, false, fmt.Errorf("select rejected visibility prune horizon: %w", err)
+	}
 }
 
 func decodePositiveSequence(value int64) (uint64, error) {

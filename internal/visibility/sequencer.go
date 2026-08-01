@@ -14,6 +14,10 @@ var (
 	ErrInvalidArgument = errors.New("visibility sequencer: invalid argument")
 	// ErrNotFound means no reservation has the supplied sequence.
 	ErrNotFound = errors.New("visibility sequencer: reservation not found")
+	// ErrReservationGone means an existing-only acquisition found no active
+	// disposition. The caller must retry discovery instead of allocating a new
+	// sequence from potentially incomplete replay data.
+	ErrReservationGone = errors.New("visibility sequencer: active reservation is gone")
 	// ErrExhausted means the SQLite signed-integer sequence space is exhausted.
 	ErrExhausted = errors.New("visibility sequencer: sequence space exhausted")
 	// ErrConflict means a stable batch key was reused for different normalized
@@ -56,13 +60,31 @@ const (
 // ReserveRequest carries the deterministic event identity and server-derived
 // metadata needed to reproduce one ClickHouse block after a restart.
 type ReserveRequest struct {
-	BatchKey      string
-	SequenceKey   string
-	AttemptID     string
+	BatchKey    string
+	SequenceKey string
+	AttemptID   string
+	// ExistingOnly makes Reserve an atomic acquire-or-replay operation. It may
+	// return an existing pending, committed, or rejected disposition, but never
+	// allocates a new sequence. IndexTime, Metadata, and Outbox are ignored in
+	// this mode because the durable reservation is their source of truth.
+	ExistingOnly  bool
 	IndexTime     time.Time
 	PayloadSHA256 [32]byte
 	Metadata      []byte
 	Outbox        []byte
+}
+
+// RejectRequest carries the stable event identity and compact server-derived
+// response metadata needed to durably replay one terminal whole-batch
+// rejection. Rejections never create a ClickHouse outbox or acquire an attempt
+// lease.
+type RejectRequest struct {
+	BatchKey      string
+	SequenceKey   string
+	IndexTime     time.Time
+	PayloadSHA256 [32]byte
+	Metadata      []byte
+	RejectedAt    time.Time
 }
 
 // Reservation is the durable sequence assigned to one stable batch key.
@@ -73,6 +95,12 @@ type Reservation struct {
 	SequenceKey      string
 	Sequence         uint64
 	AlreadyCommitted bool
+	// Rejected is true only for a durable terminal whole-batch rejection.
+	Rejected bool
+	// NewlyRejected is true only when this Reject call inserted the terminal
+	// rejection. It is call-scoped rather than persisted, so Lookup, Reserve,
+	// and an exact Reject replay always return false.
+	NewlyRejected bool
 	// PreviouslyReserved is true only when this call reacquired a still-pending
 	// reservation after its previous attempt lease was released or recovered.
 	PreviouslyReserved bool
@@ -85,6 +113,7 @@ type Reservation struct {
 	Metadata              []byte
 	Outbox                []byte
 	CommittedAt           time.Time
+	RejectedAt            time.Time
 }
 
 // PendingUsage reports durable reservations that have not reached a terminal
@@ -94,11 +123,23 @@ type PendingUsage struct {
 	OutboxBytes  uint64
 }
 
+// TerminalRetention independently bounds successful ClickHouse commits and
+// whole-batch rejections. RejectedMetadataBytes optionally applies a second
+// ceiling to the metadata retained by the newest rejected outcomes; zero leaves
+// that ceiling disabled. Rejected outcomes must not displace successful commits
+// from the storage deduplication horizon.
+type TerminalRetention struct {
+	Committed             uint64
+	Rejected              uint64
+	RejectedMetadataBytes uint64
+}
+
 // Sequencer establishes one persistent total order across all Store instances
 // sharing a single-node control database.
 type Sequencer interface {
 	Lookup(context.Context, string, string, [32]byte) (Reservation, bool, error)
 	Reserve(context.Context, ReserveRequest) (Reservation, error)
+	Reject(context.Context, RejectRequest) (Reservation, error)
 	AcquirePending(context.Context, string) (Reservation, bool, error)
 	PendingUsage(context.Context) (PendingUsage, error)
 	MarkSending(context.Context, uint64, string) error
@@ -106,5 +147,5 @@ type Sequencer interface {
 	Release(context.Context, uint64, string) error
 	Abandon(context.Context, uint64, string) error
 	Cutoff(context.Context) (uint64, error)
-	PruneTerminal(context.Context, uint64, uint32) (uint32, error)
+	PruneTerminal(context.Context, TerminalRetention, uint32) (uint32, error)
 }

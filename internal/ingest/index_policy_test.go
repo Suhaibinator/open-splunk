@@ -716,11 +716,7 @@ func TestCollectRefreshesResolvedIndexPolicyAtEveryBatchBoundary(t *testing.T) {
 	}
 	config := testServiceConfig()
 	config.SessionManager = manager
-	var stored []StoreBatch
-	store := EventStoreFunc(func(_ context.Context, batch StoreBatch) (StoreResult, error) {
-		stored = append(stored, batch)
-		return StoreResult{Accepted: uint32(len(batch.Events)), CommittedAt: validationTestNow}, nil
-	})
+	store := &recoverableTestStore{}
 	harness := newServiceHarness(t, config, authorizer, store)
 	stream := harness.stream(t, "Bearer good-token")
 	sendHello(t, stream, 1, 1, 0)
@@ -743,8 +739,9 @@ func TestCollectRefreshesResolvedIndexPolicyAtEveryBatchBoundary(t *testing.T) {
 		reject.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS {
 		t.Fatalf("refreshed policy response = %#v", reject)
 	}
-	if refreshes != 2 || len(stored) != 1 || stored[0].RetentionByIndex["main"] != time.Hour {
-		t.Fatalf("refreshes=%d stored=%#v", refreshes, stored)
+	if refreshes != 2 || store.storeCalls != 1 || store.rejectCalls != 1 ||
+		store.first.RetentionByIndex["main"] != time.Hour {
+		t.Fatalf("refreshes=%d store=%+v", refreshes, store)
 	}
 }
 
@@ -846,6 +843,82 @@ func TestCollectDurableRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestCollectRejectedRetryPrecedesMutableIndexAuthorityFailure(t *testing.T) {
+	t.Parallel()
+
+	initial := Authorization{
+		SubjectID: "token-1", TenantID: "tenant-a", CollectorID: "collector-a",
+		AuthorizedIndexes: []IndexPolicy{{Name: "main", Version: 1, RetentionPeriod: time.Hour}},
+	}
+	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
+		return initial, nil
+	})
+	manager := newTestCollectorSessionManager(authorizer)
+	manager.admitFunc = func(
+		_ context.Context,
+		_ string,
+		request CollectorSessionAdmissionRequest,
+	) (CollectorSessionAdmission, error) {
+		return manager.admissionFor(initial, request), nil
+	}
+	manager.authorizeFunc = func(
+		context.Context,
+		string,
+		collectorfleet.Lease,
+		time.Time,
+	) (Authorization, error) {
+		partial := initial
+		partial.AuthorizedIndexes = nil
+		return partial, ErrNoActiveIndexAuthority
+	}
+	batch := validTestBatch(
+		"collector-a", "batch-rejected-policy-replay", 1, validTestEvent("event-main", "main"),
+	)
+	identity, err := batchFingerprint(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejection := batchRejection(
+		batch,
+		opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE,
+		"original durable policy rejection",
+		"events",
+		"original_policy_limit",
+	)
+	store := &recoverableTestStore{
+		identity: StoreBatchIdentity{
+			TenantID:          initial.TenantID,
+			CollectorID:       initial.CollectorID,
+			BatchID:           batch.GetBatchId(),
+			BatchSequence:     batch.GetBatchSequence(),
+			SourceBatchSHA256: identity.contentHash,
+		},
+		result:      StoreResult{BatchRejection: rejection},
+		storedState: StoredBatchRejected,
+	}
+	config := testServiceConfig()
+	config.SessionManager = manager
+	harness := newServiceHarness(t, config, authorizer, store)
+	stream := harness.stream(t, "Bearer good-token")
+	sendHello(t, stream, 1, 1, 0)
+	_ = recvResponse(t, stream)
+	if err := stream.Send(batchRequest(2, batch)); err != nil {
+		t.Fatal(err)
+	}
+	replayed := recvResponse(t, stream).GetBatchReject()
+	if !proto.Equal(replayed, rejection) {
+		t.Fatalf("replayed rejection = %#v, want %#v", replayed, rejection)
+	}
+	if store.lookupCalls != 1 || store.rejectCalls != 0 || store.storeCalls != 0 {
+		t.Fatalf(
+			"durable calls = lookup:%d reject:%d store:%d, want 1/0/0",
+			store.lookupCalls,
+			store.rejectCalls,
+			store.storeCalls,
+		)
 	}
 }
 

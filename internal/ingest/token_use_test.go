@@ -202,10 +202,9 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 					AuthorizedIndexes: testIndexPolicies("main"),
 				}, nil
 			}),
-			send: func(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient) {
-				t.Helper()
-				sendHello(t, stream, 1, 1, 0)
-			},
+			// Trusted authorization identity validation precedes the first request,
+			// so receive the terminal status without racing an unnecessary hello send.
+			send:     func(*testing.T, opensplunkv1.CollectorIngestService_CollectClient) {},
 			wantCode: codes.Unavailable,
 		},
 	}

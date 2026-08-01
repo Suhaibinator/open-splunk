@@ -29,6 +29,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -154,6 +155,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = queryConnection.Close() })
+	t.Run("terminal rejection writes no ClickHouse block", func(t *testing.T) {
+		testTerminalRejectionAgainstClickHouse(t, ctx, config, queryConnection, indexTime)
+	})
 	t.Run("ambiguous committed insert recovers after server restart", func(t *testing.T) {
 		testAmbiguousCommittedInsertRecovery(t, ctx, config, queryConnection, indexTime)
 	})
@@ -350,6 +354,82 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 			indexTime,
 		)
 	})
+}
+
+func testTerminalRejectionAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	config Config,
+	queryConnection clickhousedriver.Conn,
+	receivedAt time.Time,
+) {
+	t.Helper()
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "terminal-rejection.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = controlDB.Close() })
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sequencer.Close() })
+	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	const batchID = "integration-terminal-reject"
+	rejected := validStoreBatchRejection()
+	rejected.Identity.BatchID = batchID
+	rejected.Identity.BatchSequence = 41
+	rejected.Identity.SourceBatchSHA256 = testSourceBatchDigest(batchID)
+	rejected.ReceivedAt = receivedAt
+	rejected.Rejection.BatchId = batchID
+	rejected.Rejection.BatchSequence = rejected.Identity.BatchSequence
+	result, err := store.RejectBatch(ctx, rejected)
+	if err != nil {
+		t.Fatalf("RejectBatch: %v", err)
+	}
+	if !proto.Equal(result.BatchRejection, rejected.Rejection) {
+		t.Fatalf("RejectBatch result = %#v, want %#v", result.BatchRejection, rejected.Rejection)
+	}
+
+	state, replay, err := store.LookupBatch(ctx, rejected.Identity)
+	if err != nil || state != ingest.StoredBatchRejected ||
+		!proto.Equal(replay.BatchRejection, rejected.Rejection) {
+		t.Fatalf("LookupBatch state=%v result=%#v error=%v", state, replay, err)
+	}
+	event := testStoredEvent("must-not-be-inserted", "main", receivedAt)
+	event.BatchID = batchID
+	event.CollectorID = rejected.Identity.CollectorID
+	competing, err := store.Store(ctx, ingest.StoreBatch{
+		TenantID:          rejected.Identity.TenantID,
+		CollectorID:       rejected.Identity.CollectorID,
+		BatchID:           batchID,
+		BatchSequence:     rejected.Identity.BatchSequence,
+		SourceBatchSHA256: rejected.Identity.SourceBatchSHA256,
+		ReceivedAt:        receivedAt,
+		Events:            []*ingest.StoredEvent{event},
+	})
+	if err != nil || !proto.Equal(competing.BatchRejection, rejected.Rejection) {
+		t.Fatalf("Store after RejectBatch result=%#v error=%v", competing, err)
+	}
+	var rows uint64
+	if err := queryConnection.QueryRow(
+		ctx,
+		"SELECT count() FROM open_splunk.events WHERE batch_id = ?",
+		batchID,
+	).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		t.Fatalf("terminally rejected batch wrote %d ClickHouse rows", rows)
+	}
+	if cutoff, err := store.VisibilityCutoff(ctx); err != nil || cutoff != 1 {
+		t.Fatalf("rejection visibility cutoff = %d, error=%v, want 1", cutoff, err)
+	}
 }
 
 func testIndexDataDeletionMutationAgainstClickHouse(
@@ -955,9 +1035,25 @@ func testAmbiguousCommittedInsertRecovery(
 		sequenceIdentityKey(batch),
 		digest,
 	)
-	if err != nil || !found || pending.AlreadyCommitted || !pending.MayHaveReachedStorage ||
-		pending.Sequence != 1 || len(pending.Outbox) == 0 || !pending.CommittedAt.IsZero() {
+	if err != nil || !found || pending.AlreadyCommitted || pending.MayHaveReachedStorage ||
+		pending.Sequence != 1 || pending.Metadata != nil || pending.Outbox != nil ||
+		!pending.CommittedAt.IsZero() {
 		t.Fatalf("ambiguous reservation before restart = %+v, found=%v, error=%v", pending, found, err)
+	}
+	var pendingPhase string
+	var pendingOutboxBytes int
+	if err := firstControl.SQLDB().QueryRowContext(ctx, `
+		SELECT phase, length(outbox)
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, pending.Sequence).Scan(&pendingPhase, &pendingOutboxBytes); err != nil {
+		t.Fatal(err)
+	}
+	if pendingPhase != "ambiguous" || pendingOutboxBytes == 0 {
+		t.Fatalf(
+			"durable pending replay = phase %q outbox bytes %d, want ambiguous/nonempty",
+			pendingPhase,
+			pendingOutboxBytes,
+		)
 	}
 	if cutoff, cutoffErr := firstStore.VisibilityCutoff(ctx); cutoffErr != nil || cutoff != 0 {
 		t.Fatalf("visibility cutoff before restart = %d, error = %v, want 0", cutoff, cutoffErr)

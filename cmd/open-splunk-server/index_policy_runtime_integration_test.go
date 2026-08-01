@@ -563,10 +563,42 @@ func (store *indexPolicyRuntimeEventStore) LookupBatch(
 	if !ok {
 		return ingest.StoredBatchNotFound, ingest.StoreResult{}, nil
 	}
+	if result.BatchRejection != nil {
+		result.BatchRejection = proto.Clone(result.BatchRejection).(*opensplunkv1.BatchReject)
+		return ingest.StoredBatchRejected, result, nil
+	}
 	result.Duplicate = result.Accepted
 	result.Accepted = 0
 	result.RejectedEvents = indexPolicyRuntimeCloneRejections(result.RejectedEvents)
 	return ingest.StoredBatchCommitted, result, nil
+}
+
+func (store *indexPolicyRuntimeEventStore) RejectBatch(
+	_ context.Context,
+	rejected ingest.StoreBatchRejection,
+) (ingest.StoreResult, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.results == nil {
+		store.results = make(map[ingest.StoreBatchIdentity]ingest.StoreResult)
+	}
+	if existing, ok := store.results[rejected.Identity]; ok {
+		if existing.BatchRejection != nil {
+			existing.BatchRejection = proto.Clone(existing.BatchRejection).(*opensplunkv1.BatchReject)
+		} else {
+			existing.Duplicate = existing.Accepted
+			existing.Accepted = 0
+			existing.RejectedEvents = indexPolicyRuntimeCloneRejections(existing.RejectedEvents)
+		}
+		return existing, nil
+	}
+	result := ingest.StoreResult{
+		BatchRejection: proto.Clone(rejected.Rejection).(*opensplunkv1.BatchReject),
+	}
+	store.results[rejected.Identity] = result
+	return ingest.StoreResult{
+		BatchRejection: proto.Clone(result.BatchRejection).(*opensplunkv1.BatchReject),
+	}, nil
 }
 
 func (*indexPolicyRuntimeEventStore) ResumeBatch(

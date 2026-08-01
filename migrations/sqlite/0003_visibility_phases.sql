@@ -59,7 +59,7 @@ CREATE TABLE ingest_batch_identities (
 CREATE TABLE ingest_visibility_reservations (
     sequence INTEGER PRIMARY KEY NOT NULL CHECK (sequence >= 1),
     batch_key TEXT NOT NULL COLLATE BINARY,
-    state TEXT NOT NULL CHECK (state IN ('reserved', 'committed', 'abandoned')),
+    state TEXT NOT NULL CHECK (state IN ('reserved', 'committed', 'rejected', 'abandoned')),
     phase TEXT NOT NULL CHECK (phase IN ('unsent', 'ambiguous', 'final')),
     attempt_id TEXT NOT NULL DEFAULT '' COLLATE BINARY,
     index_time_unix_milli INTEGER NOT NULL,
@@ -77,6 +77,13 @@ CREATE TABLE ingest_visibility_reservations (
             AND length(outbox) BETWEEN 1 AND 16777216
             AND committed_at_unix_micro IS NULL)
         OR (state = 'committed'
+            AND phase = 'final'
+            AND attempt_id = ''
+            AND length(outbox) = 0
+            AND committed_at_unix_micro IS NOT NULL)
+        -- The column name predates rejected dispositions; for every final
+        -- active outcome it stores that disposition's terminal timestamp.
+        OR (state = 'rejected'
             AND phase = 'final'
             AND attempt_id = ''
             AND length(outbox) = 0
@@ -99,7 +106,7 @@ CREATE INDEX ingest_visibility_reservations_batch_sequence_idx
 
 CREATE UNIQUE INDEX ingest_visibility_reservations_active_batch_idx
     ON ingest_visibility_reservations (batch_key)
-    WHERE state IN ('reserved', 'committed');
+    WHERE state IN ('reserved', 'committed', 'rejected');
 
 CREATE UNIQUE INDEX ingest_visibility_reservations_attempt_idx
     ON ingest_visibility_reservations (attempt_id)

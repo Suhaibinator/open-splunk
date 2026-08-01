@@ -128,6 +128,7 @@ func TestFrozenWritesBlockStoreResumeAndReconciliationBeforeSideEffects(t *testi
 	}
 	store := mustTestStoreWithVisibility(t, connection, retention, sequencer)
 	batch := validStoreBatch()
+	rejected := validStoreBatchRejection()
 	identity := ingest.StoreBatchIdentity{
 		TenantID:          batch.TenantID,
 		CollectorID:       batch.CollectorID,
@@ -154,6 +155,13 @@ func TestFrozenWritesBlockStoreResumeAndReconciliationBeforeSideEffects(t *testi
 					name: "ResumeBatch",
 					call: func(ctx context.Context) error {
 						_, err := store.ResumeBatch(ctx, identity)
+						return err
+					},
+				},
+				{
+					name: "RejectBatch",
+					call: func(ctx context.Context) error {
+						_, err := store.RejectBatch(ctx, rejected)
 						return err
 					},
 				},
@@ -210,6 +218,7 @@ func TestFrozenCallbackContextRejectsReentrantWriters(t *testing.T) {
 		otherSequencer,
 	)
 	batch := validStoreBatch()
+	rejected := validStoreBatchRejection()
 	identity := ingest.StoreBatchIdentity{
 		TenantID:          batch.TenantID,
 		CollectorID:       batch.CollectorID,
@@ -223,6 +232,9 @@ func TestFrozenCallbackContextRejectsReentrantWriters(t *testing.T) {
 		func(ctx context.Context, frozen FrozenWrites) error {
 			if _, err := store.Store(ctx, batch); !errors.Is(err, ErrWriteFreezeReentrant) {
 				t.Fatalf("reentrant Store error = %v, want ErrWriteFreezeReentrant", err)
+			}
+			if _, err := store.RejectBatch(ctx, rejected); !errors.Is(err, ErrWriteFreezeReentrant) {
+				t.Fatalf("reentrant RejectBatch error = %v, want ErrWriteFreezeReentrant", err)
 			}
 			if _, err := store.ResumeBatch(ctx, identity); !errors.Is(err, ErrWriteFreezeReentrant) {
 				t.Fatalf("reentrant ResumeBatch error = %v, want ErrWriteFreezeReentrant", err)
@@ -248,6 +260,12 @@ func TestFrozenCallbackContextRejectsReentrantWriters(t *testing.T) {
 					if _, err := otherStore.Store(innerContext, batch); !errors.Is(err, ErrWriteFreezeReentrant) {
 						t.Fatalf(
 							"inner Store through inner context error = %v, want ErrWriteFreezeReentrant",
+							err,
+						)
+					}
+					if _, err := otherStore.RejectBatch(innerContext, rejected); !errors.Is(err, ErrWriteFreezeReentrant) {
+						t.Fatalf(
+							"inner RejectBatch through inner context error = %v, want ErrWriteFreezeReentrant",
 							err,
 						)
 					}
@@ -531,6 +549,9 @@ func TestCloseCancelsAndWaitsForAdmittedStoreBeforeClosingConnection(t *testing.
 
 	if _, err := store.Store(context.Background(), validStoreBatch()); !errors.Is(err, ErrStoreClosed) {
 		t.Fatalf("Store after Close error = %v, want ErrStoreClosed", err)
+	}
+	if _, err := store.RejectBatch(context.Background(), validStoreBatchRejection()); !errors.Is(err, ErrStoreClosed) {
+		t.Fatalf("RejectBatch after Close error = %v, want ErrStoreClosed", err)
 	}
 	if err := store.ReconcilePending(context.Background()); !errors.Is(err, ErrStoreClosed) {
 		t.Fatalf("ReconcilePending after Close error = %v, want ErrStoreClosed", err)

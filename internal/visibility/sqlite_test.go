@@ -17,6 +17,488 @@ import (
 )
 
 var testCommittedAt = time.Date(2026, time.July, 22, 4, 5, 6, 789123000, time.UTC)
+var testRejectedAt = time.Date(2026, time.July, 22, 4, 5, 7, 123456000, time.UTC)
+
+func TestSQLiteSequencerRejectPersistsTerminalDisposition(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	request := rejectRequest("rejected")
+
+	first, err := sequencer.Reject(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Sequence != 1 || !first.Rejected || !first.NewlyRejected || first.AlreadyCommitted ||
+		first.PreviouslyReserved || first.MayHaveReachedStorage ||
+		len(first.Outbox) != 0 || !first.IndexTime.Equal(request.IndexTime) ||
+		!first.RejectedAt.Equal(request.RejectedAt) || first.CommittedAt != (time.Time{}) ||
+		!slices.Equal(first.Metadata, request.Metadata) {
+		t.Fatalf("Reject() reservation = %+v", first)
+	}
+	assertCutoff(t, sequencer, first.Sequence)
+	usage, err := sequencer.PendingUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage != (PendingUsage{}) {
+		t.Fatalf("PendingUsage() = %+v, want zero", usage)
+	}
+
+	var state, phase, attemptID string
+	var outboxLength int
+	var terminalAt int64
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT state, phase, attempt_id, length(outbox), committed_at_unix_micro
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, first.Sequence).Scan(
+		&state,
+		&phase,
+		&attemptID,
+		&outboxLength,
+		&terminalAt,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if state != reservationRejected || phase != phaseFinal || attemptID != "" ||
+		outboxLength != 0 || terminalAt != request.RejectedAt.UnixMicro() {
+		t.Fatalf(
+			"stored rejection = state %q phase %q attempt %q outbox %d terminal %d",
+			state,
+			phase,
+			attemptID,
+			outboxLength,
+			terminalAt,
+		)
+	}
+
+	lookedUp, found, err := sequencer.Lookup(
+		ctx,
+		request.BatchKey,
+		request.SequenceKey,
+		request.PayloadSHA256,
+	)
+	if err != nil || !found || lookedUp.NewlyRejected || !sameDurableReservation(lookedUp, first) {
+		t.Fatalf("Lookup() = %+v found=%v error=%v, want %+v", lookedUp, found, err, first)
+	}
+
+	changed := request
+	changed.IndexTime = request.IndexTime.Add(time.Hour)
+	changed.Metadata = []byte("changed response")
+	changed.RejectedAt = request.RejectedAt.Add(time.Hour)
+	replayed, err := sequencer.Reject(ctx, changed)
+	if err != nil || replayed.NewlyRejected || !sameDurableReservation(replayed, first) {
+		t.Fatalf("replayed Reject() = %+v error=%v, want %+v", replayed, err, first)
+	}
+	assertCutoff(t, sequencer, first.Sequence)
+}
+
+func TestSQLiteSequencerRejectNormalizesNilMetadataToEmptyBlob(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	request := rejectRequest("rejected-empty-metadata")
+	request.Metadata = nil
+
+	reservation, err := sequencer.Reject(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reservation.Metadata == nil || len(reservation.Metadata) != 0 {
+		t.Fatalf("rejection metadata = %#v, want non-nil empty bytes", reservation.Metadata)
+	}
+	var storageType string
+	var storageLength int
+	if err := db.SQLDB().QueryRowContext(context.Background(), `
+		SELECT typeof(metadata), length(metadata)
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, reservation.Sequence).Scan(&storageType, &storageLength); err != nil {
+		t.Fatal(err)
+	}
+	if storageType != "blob" || storageLength != 0 {
+		t.Fatalf("stored metadata = type %q length %d, want empty blob", storageType, storageLength)
+	}
+}
+
+func TestSQLiteSequencerRejectReturnsExistingActiveDisposition(t *testing.T) {
+	t.Parallel()
+	sequencer, _ := openTestSequencer(t)
+	ctx := context.Background()
+
+	pendingRequest := reserveRequest("pending-before-reject", "pending-owner")
+	pending, err := sequencer.Reserve(ctx, pendingRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingReject := rejectRequest("pending-before-reject")
+	gotPending, err := sequencer.Reject(ctx, pendingReject)
+	if err != nil || gotPending.Sequence != pending.Sequence || gotPending.Rejected ||
+		gotPending.NewlyRejected ||
+		gotPending.AlreadyCommitted || gotPending.BatchKey != pending.BatchKey ||
+		gotPending.SequenceKey != pending.SequenceKey ||
+		gotPending.PayloadSHA256 != pending.PayloadSHA256 ||
+		gotPending.Metadata != nil || gotPending.Outbox != nil {
+		t.Fatalf("Reject() over reserved = %+v error=%v, want %+v", gotPending, err, pending)
+	}
+	if _, err := sequencer.Reserve(
+		ctx,
+		reserveRequest("pending-before-reject", "different-owner"),
+	); !errors.Is(err, ErrAttemptInProgress) {
+		t.Fatalf("pending lease after Reject() error = %v, want ErrAttemptInProgress", err)
+	}
+	markAndCommit(t, sequencer, pending.Sequence, pendingRequest.AttemptID, testCommittedAt)
+
+	committedReject := rejectRequest("pending-before-reject")
+	gotCommitted, err := sequencer.Reject(ctx, committedReject)
+	if err != nil || !gotCommitted.AlreadyCommitted || gotCommitted.Rejected ||
+		gotCommitted.NewlyRejected ||
+		gotCommitted.Sequence != pending.Sequence || !gotCommitted.CommittedAt.Equal(testCommittedAt) {
+		t.Fatalf("Reject() over committed = %+v error=%v", gotCommitted, err)
+	}
+
+	rejectedRequest := rejectRequest("rejected-before-reserve")
+	rejected, err := sequencer.Reject(ctx, rejectedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserveAfterReject := reserveRequest("rejected-before-reserve", "reserve-owner")
+	gotRejected, err := sequencer.Reserve(ctx, reserveAfterReject)
+	if err != nil || gotRejected.NewlyRejected || !sameDurableReservation(gotRejected, rejected) ||
+		!gotRejected.Rejected || gotRejected.AlreadyCommitted {
+		t.Fatalf("Reserve() over rejected = %+v error=%v, want %+v", gotRejected, err, rejected)
+	}
+}
+
+func TestSQLiteSequencerRejectPendingDispositionOmitsReplayPayloads(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	request := reserveRequest("large-pending-before-reject", "large-pending-owner")
+	request.Metadata = make([]byte, MaxMetadataBytes)
+	request.Outbox = make([]byte, MaxOutboxBytes)
+	pending, err := sequencer.Reserve(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	disposition, err := sequencer.Reject(ctx, rejectRequest(request.BatchKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disposition.Sequence != pending.Sequence ||
+		disposition.BatchKey != pending.BatchKey ||
+		disposition.SequenceKey != pending.SequenceKey ||
+		disposition.PayloadSHA256 != pending.PayloadSHA256 ||
+		disposition.AlreadyCommitted || disposition.Rejected || disposition.NewlyRejected ||
+		disposition.Metadata != nil || disposition.Outbox != nil {
+		t.Fatalf("Reject() pending disposition = %+v", disposition)
+	}
+
+	var metadataBytes, outboxBytes int
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT length(metadata), length(outbox)
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, pending.Sequence).Scan(&metadataBytes, &outboxBytes); err != nil {
+		t.Fatal(err)
+	}
+	if metadataBytes != MaxMetadataBytes || outboxBytes != MaxOutboxBytes {
+		t.Fatalf(
+			"durable pending payload sizes = metadata %d outbox %d, want %d/%d",
+			metadataBytes,
+			outboxBytes,
+			MaxMetadataBytes,
+			MaxOutboxBytes,
+		)
+	}
+}
+
+func TestSQLiteSequencerLookupPendingOmitsReplayPayloadsUntilAcquired(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	request := reserveRequest("large-pending-lookup", "large-pending-lookup-owner")
+	request.Metadata = make([]byte, MaxMetadataBytes)
+	request.Metadata[0], request.Metadata[len(request.Metadata)-1] = 0x4d, 0x6d
+	request.Outbox = make([]byte, MaxOutboxBytes)
+	request.Outbox[0], request.Outbox[len(request.Outbox)-1] = 0x4f, 0x6f
+	pending, err := sequencer.Reserve(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.Release(ctx, pending.Sequence, request.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+
+	disposition, found, err := sequencer.Lookup(
+		ctx,
+		request.BatchKey,
+		request.SequenceKey,
+		request.PayloadSHA256,
+	)
+	if err != nil || !found {
+		t.Fatalf("Lookup() found=%v error=%v", found, err)
+	}
+	if disposition.Sequence != pending.Sequence ||
+		disposition.BatchKey != pending.BatchKey ||
+		disposition.SequenceKey != pending.SequenceKey ||
+		disposition.PayloadSHA256 != pending.PayloadSHA256 ||
+		disposition.AlreadyCommitted || disposition.Rejected || disposition.NewlyRejected ||
+		disposition.PreviouslyReserved || disposition.MayHaveReachedStorage ||
+		!disposition.IndexTime.IsZero() || !disposition.CommittedAt.IsZero() ||
+		!disposition.RejectedAt.IsZero() || disposition.Metadata != nil || disposition.Outbox != nil {
+		t.Fatalf("Lookup() pending disposition = %+v", disposition)
+	}
+
+	var metadataBytes, outboxBytes int
+	if err := db.SQLDB().QueryRowContext(ctx, `
+		SELECT length(metadata), length(outbox)
+		FROM ingest_visibility_reservations
+		WHERE sequence = ?`, pending.Sequence).Scan(&metadataBytes, &outboxBytes); err != nil {
+		t.Fatal(err)
+	}
+	if metadataBytes != MaxMetadataBytes || outboxBytes != MaxOutboxBytes {
+		t.Fatalf(
+			"durable pending payload sizes = metadata %d outbox %d, want %d/%d",
+			metadataBytes,
+			outboxBytes,
+			MaxMetadataBytes,
+			MaxOutboxBytes,
+		)
+	}
+
+	reacquired, err := sequencer.Reserve(ctx, ReserveRequest{
+		BatchKey:      disposition.BatchKey,
+		SequenceKey:   disposition.SequenceKey,
+		AttemptID:     "large-pending-lookup-retry",
+		ExistingOnly:  true,
+		PayloadSHA256: disposition.PayloadSHA256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reacquired.Sequence != pending.Sequence || !reacquired.PreviouslyReserved ||
+		!reacquired.IndexTime.Equal(request.IndexTime) ||
+		!slices.Equal(reacquired.Metadata, request.Metadata) ||
+		!slices.Equal(reacquired.Outbox, request.Outbox) {
+		t.Fatalf(
+			"Reserve(ExistingOnly) = sequence %d previous=%v time=%v metadata=%d outbox=%d",
+			reacquired.Sequence,
+			reacquired.PreviouslyReserved,
+			reacquired.IndexTime,
+			len(reacquired.Metadata),
+			len(reacquired.Outbox),
+		)
+	}
+}
+
+func TestSQLiteSequencerExistingOnlyReserveClosesLookupRaces(t *testing.T) {
+	t.Parallel()
+	t.Run("abandoned reservation is not recreated", func(t *testing.T) {
+		t.Parallel()
+		sequencer, db := openTestSequencer(t)
+		ctx := context.Background()
+		request := reserveRequest("existing-only-abandoned", "existing-only-abandon-owner")
+		pending, err := sequencer.Reserve(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lookedUp, found, err := sequencer.Lookup(
+			ctx,
+			request.BatchKey,
+			request.SequenceKey,
+			request.PayloadSHA256,
+		)
+		if err != nil || !found || lookedUp.Sequence != pending.Sequence {
+			t.Fatalf("Lookup() = %+v found=%v error=%v", lookedUp, found, err)
+		}
+		if err := sequencer.Abandon(ctx, pending.Sequence, request.AttemptID); err != nil {
+			t.Fatal(err)
+		}
+		_, err = sequencer.Reserve(ctx, ReserveRequest{
+			BatchKey:      lookedUp.BatchKey,
+			SequenceKey:   lookedUp.SequenceKey,
+			AttemptID:     "existing-only-after-abandon",
+			ExistingOnly:  true,
+			PayloadSHA256: lookedUp.PayloadSHA256,
+		})
+		if !errors.Is(err, ErrReservationGone) {
+			t.Fatalf("Reserve(ExistingOnly) error = %v, want ErrReservationGone", err)
+		}
+		var total, active int
+		if err := db.SQLDB().QueryRowContext(ctx, `
+			SELECT count(*), count(*) FILTER (
+				WHERE state IN ('reserved', 'committed', 'rejected')
+			)
+			FROM ingest_visibility_reservations`).Scan(&total, &active); err != nil {
+			t.Fatal(err)
+		}
+		if total != 1 || active != 0 {
+			t.Fatalf("durable reservations = total %d active %d, want 1/0", total, active)
+		}
+	})
+
+	t.Run("committed winner is replayed", func(t *testing.T) {
+		t.Parallel()
+		sequencer, _ := openTestSequencer(t)
+		ctx := context.Background()
+		request := reserveRequest("existing-only-committed", "existing-only-commit-owner")
+		pending, err := sequencer.Reserve(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lookedUp, found, err := sequencer.Lookup(
+			ctx,
+			request.BatchKey,
+			request.SequenceKey,
+			request.PayloadSHA256,
+		)
+		if err != nil || !found {
+			t.Fatalf("Lookup() found=%v error=%v", found, err)
+		}
+		markAndCommit(t, sequencer, pending.Sequence, request.AttemptID, testCommittedAt)
+		winner, err := sequencer.Reserve(ctx, ReserveRequest{
+			BatchKey:      lookedUp.BatchKey,
+			SequenceKey:   lookedUp.SequenceKey,
+			AttemptID:     "existing-only-after-commit",
+			ExistingOnly:  true,
+			PayloadSHA256: lookedUp.PayloadSHA256,
+		})
+		if err != nil || !winner.AlreadyCommitted || winner.Rejected ||
+			winner.Sequence != pending.Sequence || !winner.CommittedAt.Equal(testCommittedAt) ||
+			!slices.Equal(winner.Metadata, request.Metadata) || len(winner.Outbox) != 0 {
+			t.Fatalf("Reserve(ExistingOnly) committed winner = %+v error=%v", winner, err)
+		}
+	})
+
+	t.Run("rejected winner is replayed", func(t *testing.T) {
+		t.Parallel()
+		sequencer, _ := openTestSequencer(t)
+		ctx := context.Background()
+		request := reserveRequest("existing-only-rejected", "existing-only-reject-owner")
+		pending, err := sequencer.Reserve(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lookedUp, found, err := sequencer.Lookup(
+			ctx,
+			request.BatchKey,
+			request.SequenceKey,
+			request.PayloadSHA256,
+		)
+		if err != nil || !found {
+			t.Fatalf("Lookup() found=%v error=%v", found, err)
+		}
+		if err := sequencer.Abandon(ctx, pending.Sequence, request.AttemptID); err != nil {
+			t.Fatal(err)
+		}
+		rejected, err := sequencer.Reject(ctx, rejectRequest(request.BatchKey))
+		if err != nil {
+			t.Fatal(err)
+		}
+		winner, err := sequencer.Reserve(ctx, ReserveRequest{
+			BatchKey:      lookedUp.BatchKey,
+			SequenceKey:   lookedUp.SequenceKey,
+			AttemptID:     "existing-only-after-reject",
+			ExistingOnly:  true,
+			PayloadSHA256: lookedUp.PayloadSHA256,
+		})
+		if err != nil || winner.NewlyRejected || !winner.Rejected || winner.AlreadyCommitted ||
+			!sameDurableReservation(winner, rejected) {
+			t.Fatalf("Reserve(ExistingOnly) rejected winner = %+v error=%v", winner, err)
+		}
+	})
+}
+
+func TestSQLiteSequencerRejectDoesNotConsumePendingCapacity(t *testing.T) {
+	t.Parallel()
+	sequencer, _ := openTestSequencer(t)
+	ctx := context.Background()
+	for i := range MaxPendingReservations {
+		attemptID := fmt.Sprintf("pending-owner-%d", i)
+		reservation := reserve(t, sequencer, fmt.Sprintf("pending-batch-%d", i), attemptID)
+		if err := sequencer.Release(ctx, reservation.Sequence, attemptID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := sequencer.Reserve(
+		ctx,
+		reserveRequest("over-capacity", "over-capacity"),
+	); !errors.Is(err, ErrPendingCapacity) {
+		t.Fatalf("Reserve() error = %v, want ErrPendingCapacity", err)
+	}
+
+	rejected, err := sequencer.Reject(ctx, rejectRequest("terminal-over-capacity"))
+	if err != nil {
+		t.Fatalf("Reject() at pending capacity: %v", err)
+	}
+	if !rejected.Rejected || rejected.Sequence != MaxPendingReservations+1 {
+		t.Fatalf("Reject() = %+v", rejected)
+	}
+	usage, err := sequencer.PendingUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Reservations != MaxPendingReservations {
+		t.Fatalf("PendingUsage() = %+v, want %d reservations", usage, MaxPendingReservations)
+	}
+	assertCutoff(t, sequencer, 0)
+}
+
+func TestSQLiteSequencerConcurrentRejectConvergesAndConflicts(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+	exact := rejectRequest("concurrent-rejection")
+	start := make(chan struct{})
+	results := make(chan struct {
+		reservation Reservation
+		err         error
+	}, 2)
+	for range 2 {
+		go func() {
+			<-start
+			reservation, err := sequencer.Reject(ctx, exact)
+			results <- struct {
+				reservation Reservation
+				err         error
+			}{reservation: reservation, err: err}
+		}()
+	}
+	close(start)
+	first := <-results
+	second := <-results
+	if first.err != nil || second.err != nil ||
+		!sameDurableReservation(first.reservation, second.reservation) ||
+		!first.reservation.Rejected {
+		t.Fatalf("concurrent exact Reject() = %+v/%v and %+v/%v", first.reservation, first.err, second.reservation, second.err)
+	}
+	newlyRejected := 0
+	if first.reservation.NewlyRejected {
+		newlyRejected++
+	}
+	if second.reservation.NewlyRejected {
+		newlyRejected++
+	}
+	if newlyRejected != 1 {
+		t.Fatalf("concurrent exact Reject() newly inserted count = %d, want 1", newlyRejected)
+	}
+
+	conflict := exact
+	conflict.SequenceKey = "different-sequence"
+	conflict.PayloadSHA256 = sha256.Sum256([]byte("different-payload"))
+	if _, err := sequencer.Reject(ctx, conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting Reject() error = %v, want ErrConflict", err)
+	}
+	var identities, reservations int
+	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM ingest_batch_identities`).Scan(&identities); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM ingest_visibility_reservations`).Scan(&reservations); err != nil {
+		t.Fatal(err)
+	}
+	if identities != 1 || reservations != 1 {
+		t.Fatalf("durable rows = identities %d reservations %d, want 1/1", identities, reservations)
+	}
+}
 
 func TestSQLiteSequencerAdvancesOnlyContiguousTerminalPrefix(t *testing.T) {
 	t.Parallel()
@@ -487,7 +969,7 @@ func TestSQLiteSequencerLegacyTombstonePermanentlyRejectsBatchKey(t *testing.T) 
 	if _, found, err := sequencer.Lookup(ctx, request.BatchKey, request.SequenceKey, request.PayloadSHA256); !found || !errors.Is(err, ErrConflict) {
 		t.Fatalf("Lookup() legacy tombstone found=%v error=%v", found, err)
 	}
-	if _, err := sequencer.PruneTerminal(ctx, 0, 10); err != nil {
+	if _, err := sequencer.PruneTerminal(ctx, TerminalRetention{}, 10); err != nil {
 		t.Fatal(err)
 	}
 	var count int
@@ -985,6 +1467,8 @@ func TestSQLiteSequencerCloseIsIdempotentAndRejectsOperations(t *testing.T) {
 	assertClosed("Lookup", err)
 	_, err = sequencer.Reserve(ctx, request)
 	assertClosed("Reserve", err)
+	_, err = sequencer.Reject(ctx, rejectRequest("closed-rejection"))
+	assertClosed("Reject", err)
 	_, _, err = sequencer.AcquirePending(ctx, request.AttemptID)
 	assertClosed("AcquirePending", err)
 	assertClosed("MarkSending", sequencer.MarkSending(ctx, 1, request.AttemptID))
@@ -993,7 +1477,7 @@ func TestSQLiteSequencerCloseIsIdempotentAndRejectsOperations(t *testing.T) {
 	assertClosed("Abandon", sequencer.Abandon(ctx, 1, request.AttemptID))
 	_, err = sequencer.Cutoff(ctx)
 	assertClosed("Cutoff", err)
-	_, err = sequencer.PruneTerminal(ctx, 0, 1)
+	_, err = sequencer.PruneTerminal(ctx, TerminalRetention{}, 1)
 	assertClosed("PruneTerminal", err)
 }
 
@@ -1274,7 +1758,11 @@ func TestSQLiteSequencerPruneRetainsPendingRecentAndAboveCutoff(t *testing.T) {
 	}
 	assertCutoff(t, sequencer, 2)
 
-	deleted, err := sequencer.PruneTerminal(ctx, 1, 10)
+	deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{Committed: 1, Rejected: 1},
+		10,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1287,7 +1775,7 @@ func TestSQLiteSequencerPruneRetainsPendingRecentAndAboveCutoff(t *testing.T) {
 	assertIdentityPresence(t, db, third.BatchKey, true)
 	assertIdentityPresence(t, db, fourth.BatchKey, true)
 
-	deleted, err = sequencer.PruneTerminal(ctx, 0, 1)
+	deleted, err = sequencer.PruneTerminal(ctx, TerminalRetention{}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1295,6 +1783,296 @@ func TestSQLiteSequencerPruneRetainsPendingRecentAndAboveCutoff(t *testing.T) {
 		t.Fatalf("second PruneTerminal() deleted %d, want 1", deleted)
 	}
 	assertReservationSequences(t, db, []uint64{third.Sequence, fourth.Sequence})
+}
+
+func TestSQLiteSequencerPruneUsesIndependentCommittedAndRejectedHorizons(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+
+	oldCommit := reserve(t, sequencer, "old-commit", "old-commit-owner")
+	markAndCommit(t, sequencer, oldCommit.Sequence, "old-commit-owner", testCommittedAt)
+	oldReject, err := sequencer.Reject(ctx, rejectRequest("old-reject"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	middleCommit := reserve(t, sequencer, "middle-commit", "middle-commit-owner")
+	markAndCommit(
+		t,
+		sequencer,
+		middleCommit.Sequence,
+		"middle-commit-owner",
+		testCommittedAt.Add(time.Second),
+	)
+	middleRejectRequest := rejectRequest("middle-reject")
+	middleRejectRequest.RejectedAt = testRejectedAt.Add(time.Second)
+	middleReject, err := sequencer.Reject(ctx, middleRejectRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recentCommit := reserve(t, sequencer, "recent-commit", "recent-commit-owner")
+	markAndCommit(
+		t,
+		sequencer,
+		recentCommit.Sequence,
+		"recent-commit-owner",
+		testCommittedAt.Add(2*time.Second),
+	)
+	recentRejectRequest := rejectRequest("recent-reject")
+	recentRejectRequest.RejectedAt = testRejectedAt.Add(2 * time.Second)
+	recentReject, err := sequencer.Reject(ctx, recentRejectRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCutoff(t, sequencer, recentReject.Sequence)
+
+	deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{Committed: 2, Rejected: 1},
+		MaxPruneLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 3 {
+		t.Fatalf("PruneTerminal() deleted %d rows, want 3", deleted)
+	}
+	assertReservationSequences(
+		t,
+		db,
+		[]uint64{middleCommit.Sequence, recentCommit.Sequence, recentReject.Sequence},
+	)
+	assertIdentityPresence(t, db, oldCommit.BatchKey, false)
+	assertIdentityPresence(t, db, oldReject.BatchKey, false)
+	assertIdentityPresence(t, db, middleCommit.BatchKey, true)
+	assertIdentityPresence(t, db, middleReject.BatchKey, false)
+	assertIdentityPresence(t, db, recentCommit.BatchKey, true)
+	assertIdentityPresence(t, db, recentReject.BatchKey, true)
+}
+
+func TestSQLiteSequencerPruneRejectedMetadataKeepsExactByteBoundary(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+
+	oldest := rejectWithMetadata(t, sequencer, "byte-boundary-oldest", 4)
+	middle := rejectWithMetadata(t, sequencer, "byte-boundary-middle", 3)
+	newest := rejectWithMetadata(t, sequencer, "byte-boundary-newest", 2)
+	deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{
+			Rejected:              math.MaxUint64,
+			RejectedMetadataBytes: 5,
+		},
+		MaxPruneLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 1 {
+		t.Fatalf("PruneTerminal() deleted %d rows, want 1", deleted)
+	}
+	assertReservationSequences(t, db, []uint64{middle.Sequence, newest.Sequence})
+	assertIdentityPresence(t, db, oldest.BatchKey, false)
+}
+
+func TestSQLiteSequencerPruneRejectedMetadataDropsOversizedNewestOutcome(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+
+	oldest := rejectWithMetadata(t, sequencer, "oversized-byte-oldest", 1)
+	newest := rejectWithMetadata(t, sequencer, "oversized-byte-newest", 6)
+	deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{
+			Rejected:              math.MaxUint64,
+			RejectedMetadataBytes: 5,
+		},
+		MaxPruneLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Fatalf("PruneTerminal() deleted %d rows, want 2", deleted)
+	}
+	assertReservationSequences(t, db, nil)
+	assertIdentityPresence(t, db, oldest.BatchKey, false)
+	assertIdentityPresence(t, db, newest.BatchKey, false)
+}
+
+func TestSQLiteSequencerPruneRejectedUsesTighterCountOrByteCeiling(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name          string
+		retention     TerminalRetention
+		wantRetained  int
+		metadataBytes int
+	}{
+		{
+			name: "count ceiling",
+			retention: TerminalRetention{
+				Rejected:              1,
+				RejectedMetadataBytes: 100,
+			},
+			wantRetained:  1,
+			metadataBytes: 3,
+		},
+		{
+			name: "byte ceiling",
+			retention: TerminalRetention{
+				Rejected:              3,
+				RejectedMetadataBytes: 7,
+			},
+			wantRetained:  2,
+			metadataBytes: 3,
+		},
+		{
+			name: "byte ceiling above SQLite range",
+			retention: TerminalRetention{
+				Rejected:              1,
+				RejectedMetadataBytes: math.MaxUint64,
+			},
+			wantRetained:  1,
+			metadataBytes: 3,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			sequencer, db := openTestSequencer(t)
+			reservations := make([]Reservation, 3)
+			for i := range reservations {
+				reservations[i] = rejectWithMetadata(
+					t,
+					sequencer,
+					fmt.Sprintf("%s-%d", test.name, i),
+					test.metadataBytes,
+				)
+			}
+			deleted, err := sequencer.PruneTerminal(
+				context.Background(),
+				test.retention,
+				MaxPruneLimit,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantDeleted := uint32(len(reservations) - test.wantRetained)
+			if deleted != wantDeleted {
+				t.Fatalf("PruneTerminal() deleted %d rows, want %d", deleted, wantDeleted)
+			}
+			want := make([]uint64, 0, test.wantRetained)
+			for _, reservation := range reservations[len(reservations)-test.wantRetained:] {
+				want = append(want, reservation.Sequence)
+			}
+			assertReservationSequences(t, db, want)
+		})
+	}
+}
+
+func TestSQLiteSequencerPrunesRejectedMetadataBehindPendingGap(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+
+	pendingRequest := reserveRequest("pending-before-byte-limited-rejections", "pending-byte-owner")
+	pending, err := sequencer.Reserve(ctx, pendingRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.Release(ctx, pending.Sequence, pendingRequest.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	rejected := []Reservation{
+		rejectWithMetadata(t, sequencer, "byte-gap-oldest", 2),
+		rejectWithMetadata(t, sequencer, "byte-gap-middle", 3),
+		rejectWithMetadata(t, sequencer, "byte-gap-newest", 4),
+	}
+	assertCutoff(t, sequencer, 0)
+
+	deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{
+			Rejected:              uint64(len(rejected)),
+			RejectedMetadataBytes: 4,
+		},
+		MaxPruneLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Fatalf("PruneTerminal() deleted %d rows, want 2", deleted)
+	}
+	assertReservationSequences(
+		t,
+		db,
+		[]uint64{pending.Sequence, rejected[len(rejected)-1].Sequence},
+	)
+	assertCutoff(t, sequencer, 0)
+
+	retryRequest := pendingRequest
+	retryRequest.AttemptID = "pending-byte-retry"
+	retry, err := sequencer.Reserve(ctx, retryRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markAndCommit(t, sequencer, retry.Sequence, retryRequest.AttemptID, testCommittedAt)
+	assertCutoff(t, sequencer, rejected[len(rejected)-1].Sequence)
+}
+
+func TestSQLiteSequencerPrunesRejectedOutcomesBehindPendingGap(t *testing.T) {
+	t.Parallel()
+	sequencer, db := openTestSequencer(t)
+	ctx := context.Background()
+
+	pendingRequest := reserveRequest("pending-before-rejections", "pending-owner")
+	pending, err := sequencer.Reserve(ctx, pendingRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sequencer.Release(ctx, pending.Sequence, pendingRequest.AttemptID); err != nil {
+		t.Fatal(err)
+	}
+	rejected := make([]Reservation, 4)
+	for i := range rejected {
+		request := rejectRequest(fmt.Sprintf("rejected-behind-gap-%d", i))
+		request.RejectedAt = testRejectedAt.Add(time.Duration(i) * time.Microsecond)
+		rejected[i], err = sequencer.Reject(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertCutoff(t, sequencer, 0)
+
+	deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{Committed: 2, Rejected: 2},
+		MaxPruneLimit,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Fatalf("PruneTerminal() deleted %d rows, want 2", deleted)
+	}
+	assertReservationSequences(
+		t,
+		db,
+		[]uint64{pending.Sequence, rejected[2].Sequence, rejected[3].Sequence},
+	)
+	assertCutoff(t, sequencer, 0)
+
+	retryRequest := pendingRequest
+	retryRequest.AttemptID = "pending-retry"
+	retry, err := sequencer.Reserve(ctx, retryRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markAndCommit(t, sequencer, retry.Sequence, retryRequest.AttemptID, testCommittedAt)
+	assertCutoff(t, sequencer, rejected[len(rejected)-1].Sequence)
 }
 
 func TestSQLiteSequencerPruneKeepsIdentityReferencedByRetry(t *testing.T) {
@@ -1309,7 +2087,7 @@ func TestSQLiteSequencerPruneKeepsIdentityReferencedByRetry(t *testing.T) {
 	if retry.Sequence != first.Sequence+1 {
 		t.Fatalf("retry sequence = %d, want %d", retry.Sequence, first.Sequence+1)
 	}
-	deleted, err := sequencer.PruneTerminal(ctx, 0, 10)
+	deleted, err := sequencer.PruneTerminal(ctx, TerminalRetention{}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1339,7 +2117,11 @@ func TestSQLiteSequencerAbandonedAttemptsDoNotAgeCommittedHorizon(t *testing.T) 
 		}
 		sequences = append(sequences, reservation.Sequence)
 	}
-	deleted, err := sequencer.PruneTerminal(ctx, retainCommitted, MaxPruneLimit)
+	deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{Committed: retainCommitted, Rejected: retainCommitted},
+		MaxPruneLimit,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1369,7 +2151,11 @@ func TestSQLiteSequencerPrunesOldAbandonsBehindPendingGap(t *testing.T) {
 		sequences = append(sequences, reservation.Sequence)
 	}
 	assertCutoff(t, sequencer, 0)
-	deleted, err := sequencer.PruneTerminal(ctx, 2, MaxPruneLimit)
+	deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{Committed: 2, Rejected: 2},
+		MaxPruneLimit,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1398,13 +2184,17 @@ func TestSQLiteSequencerIdentityReusableOnlyAfterExplicitPruneHorizon(t *testing
 	if _, err := sequencer.Reserve(ctx, replacement); !errors.Is(err, ErrConflict) {
 		t.Fatalf("identity reuse before prune error = %v, want ErrConflict", err)
 	}
-	if deleted, err := sequencer.PruneTerminal(ctx, 1, 10); err != nil || deleted != 0 {
+	if deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{Committed: 1, Rejected: 1},
+		10,
+	); err != nil || deleted != 0 {
 		t.Fatalf("retaining PruneTerminal() deleted=%d error=%v", deleted, err)
 	}
 	if _, err := sequencer.Reserve(ctx, replacement); !errors.Is(err, ErrConflict) {
 		t.Fatalf("identity reuse inside horizon error = %v, want ErrConflict", err)
 	}
-	if deleted, err := sequencer.PruneTerminal(ctx, 0, 10); err != nil || deleted != 1 {
+	if deleted, err := sequencer.PruneTerminal(ctx, TerminalRetention{}, 10); err != nil || deleted != 1 {
 		t.Fatalf("horizon PruneTerminal() deleted=%d error=%v", deleted, err)
 	}
 	assertIdentityPresence(t, db, first.BatchKey, false)
@@ -1422,8 +2212,48 @@ func TestSQLiteSequencerPruneRejectsInvalidLimit(t *testing.T) {
 	t.Parallel()
 	sequencer, _ := openTestSequencer(t)
 	for _, limit := range []uint32{0, MaxPruneLimit + 1} {
-		if _, err := sequencer.PruneTerminal(context.Background(), 0, limit); !errors.Is(err, ErrInvalidArgument) {
+		if _, err := sequencer.PruneTerminal(
+			context.Background(),
+			TerminalRetention{},
+			limit,
+		); !errors.Is(err, ErrInvalidArgument) {
 			t.Fatalf("PruneTerminal(limit=%d) error = %v, want ErrInvalidArgument", limit, err)
+		}
+	}
+}
+
+func TestTerminalPruneHorizonSkipsQueryWhenRetentionCoversSequenceRange(t *testing.T) {
+	t.Parallel()
+	_, db := openTestSequencer(t)
+	tx, err := db.SQLDB().BeginTx(
+		context.Background(),
+		&sql.TxOptions{Isolation: sql.LevelSerializable, ReadOnly: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = tx.Rollback()
+	})
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	for _, retained := range []uint64{5, 6} {
+		threshold, eligible, horizonErr := terminalPruneHorizon(
+			canceled,
+			tx,
+			reservationRejected,
+			5,
+			retained,
+		)
+		if horizonErr != nil || threshold != 5 || eligible {
+			t.Fatalf(
+				"terminalPruneHorizon(retained=%d) = (%d, %v, %v), want (5, false, nil)",
+				retained,
+				threshold,
+				eligible,
+				horizonErr,
+			)
 		}
 	}
 }
@@ -1492,9 +2322,28 @@ func TestSQLiteSequencerRejectsInvalidInputsAndExhaustion(t *testing.T) {
 	if _, err := sequencer.Reserve(ctx, emptyOutbox); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("empty outbox error = %v", err)
 	}
+	missingRejectTime := rejectRequest("missing-reject-time")
+	missingRejectTime.RejectedAt = time.Time{}
+	if _, err := sequencer.Reject(ctx, missingRejectTime); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("empty rejected time error = %v", err)
+	}
+	missingRejectIndexTime := rejectRequest("missing-reject-index-time")
+	missingRejectIndexTime.IndexTime = time.Time{}
+	if _, err := sequencer.Reject(ctx, missingRejectIndexTime); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("empty rejected index time error = %v", err)
+	}
+	oversizedRejectMetadata := rejectRequest("oversized-reject-metadata")
+	oversizedRejectMetadata.Metadata = make([]byte, MaxMetadataBytes+1)
+	if _, err := sequencer.Reject(ctx, oversizedRejectMetadata); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("oversized rejected metadata error = %v", err)
+	}
 	//nolint:staticcheck // Deliberately verify that the package rejects a nil context.
 	if _, err := sequencer.Reserve(nil, reserveRequest("batch", "attempt")); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("nil context error = %v", err)
+	}
+	//nolint:staticcheck // Deliberately verify that the package rejects a nil context.
+	if _, err := sequencer.Reject(nil, rejectRequest("batch")); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("nil Reject context error = %v", err)
 	}
 	if _, _, err := sequencer.AcquirePending(ctx, ""); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("empty reconciliation attempt error = %v", err)
@@ -1511,7 +2360,11 @@ func TestSQLiteSequencerRejectsInvalidInputsAndExhaustion(t *testing.T) {
 	if err := sequencer.Abandon(ctx, retainedAbandon.Sequence, "abandon-owner"); err != nil {
 		t.Fatalf("abandon retained reservation: %v", err)
 	}
-	if deleted, err := sequencer.PruneTerminal(ctx, math.MaxUint64, 1); err != nil || deleted != 0 {
+	if deleted, err := sequencer.PruneTerminal(
+		ctx,
+		TerminalRetention{Committed: math.MaxUint64, Rejected: math.MaxUint64},
+		1,
+	); err != nil || deleted != 0 {
 		t.Fatalf("huge retention horizon result = %d, error = %v", deleted, err)
 	}
 	assertReservationSequences(t, db, []uint64{retainedCommit.Sequence, retainedAbandon.Sequence})
@@ -1652,6 +2505,33 @@ func reserveRequest(key, attemptID string) ReserveRequest {
 	}
 }
 
+func rejectRequest(key string) RejectRequest {
+	return RejectRequest{
+		BatchKey:      key,
+		SequenceKey:   "sequence-" + key,
+		IndexTime:     time.Date(2026, time.July, 21, 1, 2, 3, 456000000, time.UTC),
+		PayloadSHA256: sha256.Sum256([]byte(key)),
+		Metadata:      []byte("terminal-rejection-v1"),
+		RejectedAt:    testRejectedAt,
+	}
+}
+
+func rejectWithMetadata(
+	t *testing.T,
+	sequencer *SQLiteSequencer,
+	key string,
+	metadataBytes int,
+) Reservation {
+	t.Helper()
+	request := rejectRequest(key)
+	request.Metadata = make([]byte, metadataBytes)
+	reservation, err := sequencer.Reject(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Reject(%q): %v", key, err)
+	}
+	return reservation
+}
+
 func assertReservationSequences(t *testing.T, db *control.DB, want []uint64) {
 	t.Helper()
 	rows, err := db.SQLDB().QueryContext(context.Background(), `
@@ -1701,4 +2581,22 @@ func assertCutoff(t *testing.T, sequencer *SQLiteSequencer, want uint64) {
 	if got != want {
 		t.Fatalf("cutoff = %d, want %d", got, want)
 	}
+}
+
+// sameDurableReservation deliberately excludes call-scoped outcome flags such
+// as NewlyRejected.
+func sameDurableReservation(first, second Reservation) bool {
+	return first.BatchKey == second.BatchKey &&
+		first.SequenceKey == second.SequenceKey &&
+		first.Sequence == second.Sequence &&
+		first.AlreadyCommitted == second.AlreadyCommitted &&
+		first.Rejected == second.Rejected &&
+		first.PreviouslyReserved == second.PreviouslyReserved &&
+		first.MayHaveReachedStorage == second.MayHaveReachedStorage &&
+		first.IndexTime.Equal(second.IndexTime) &&
+		first.PayloadSHA256 == second.PayloadSHA256 &&
+		slices.Equal(first.Metadata, second.Metadata) &&
+		slices.Equal(first.Outbox, second.Outbox) &&
+		first.CommittedAt.Equal(second.CommittedAt) &&
+		first.RejectedAt.Equal(second.RejectedAt)
 }

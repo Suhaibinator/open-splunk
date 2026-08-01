@@ -38,11 +38,14 @@ import (
 )
 
 const (
-	defaultDatabase           = "open_splunk"
-	defaultTable              = "events"
-	visibilityFinalizeTimeout = 10 * time.Second
-	durableIdempotencyWindow  = 10_000
-	visibilityPruneBatch      = 1_000
+	defaultDatabase                    = "open_splunk"
+	defaultTable                       = "events"
+	visibilityFinalizeTimeout          = 10 * time.Second
+	durableClickHouseIdempotencyWindow = 10_000
+	durableBatchRejectWindow           = 10_000
+	durableBatchRejectMetadataBytes    = 256 << 20
+	durableBatchRejectPruneWakeBytes   = durableBatchRejectMetadataBytes / 4
+	visibilityPruneBatch               = 1_000
 
 	extendedTypeKey  = "\x00open_splunk_type"
 	extendedValueKey = "\x00open_splunk_value"
@@ -254,6 +257,7 @@ type Store struct {
 	closeOnce          sync.Once
 	closeErr           error
 	terminalCount      atomic.Uint64
+	rejectionWakeBytes atomic.Uint64
 }
 
 var _ ingest.EventStore = (*Store)(nil)
@@ -399,10 +403,13 @@ func (s *Store) lookupBatch(
 	if !found {
 		return ingest.StoredBatchNotFound, ingest.StoreResult{}, nil
 	}
-	if prior.AlreadyCommitted {
+	if prior.Rejected || prior.AlreadyCommitted {
 		result, resultErr := resultForReservation(prior, true)
 		if resultErr != nil {
 			return ingest.StoredBatchNotFound, ingest.StoreResult{}, resultErr
+		}
+		if prior.Rejected {
+			return ingest.StoredBatchRejected, result, nil
 		}
 		return ingest.StoredBatchCommitted, result, nil
 	}
@@ -420,6 +427,86 @@ func (s *Store) ResumeBatch(ctx context.Context, identity ingest.StoreBatchIdent
 // outbox and the exact per-source-event acknowledgment disposition.
 func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.StoreResult, error) {
 	return s.store(ctx, batch, false)
+}
+
+// RejectBatch atomically records a terminal whole-batch response in the
+// SQLite visibility ledger. It never prepares or sends a ClickHouse block.
+// If another exact outcome won the identity race, that first durable outcome
+// is returned unchanged.
+func (s *Store) RejectBatch(
+	ctx context.Context,
+	rejected ingest.StoreBatchRejection,
+) (result ingest.StoreResult, resultErr error) {
+	if frozenCallbackActive(ctx, s) {
+		return ingest.StoreResult{}, ErrWriteFreezeReentrant
+	}
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return ingest.StoreResult{}, err
+	}
+	defer finishOperation()
+	if err := s.writeAdmission.enter(operationContext); err != nil {
+		return ingest.StoreResult{}, err
+	}
+	defer s.writeAdmission.leave()
+	return s.rejectBatchAdmitted(operationContext, rejected)
+}
+
+func (s *Store) rejectBatchAdmitted(
+	ctx context.Context,
+	rejected ingest.StoreBatchRejection,
+) (ingest.StoreResult, error) {
+	batch := storeBatchFromIdentity(rejected.Identity)
+	deduplicationKey := deduplicationToken(batch)
+	sequenceKey := sequenceIdentityKey(batch)
+	payloadDigest, err := storePayloadDigest(batch)
+	if err != nil {
+		return ingest.StoreResult{}, err
+	}
+	if rejected.ReceivedAt.IsZero() {
+		return ingest.StoreResult{}, errors.New("store terminal batch rejection: received time is required")
+	}
+	if rejected.Rejection == nil ||
+		rejected.Rejection.GetBatchId() != rejected.Identity.BatchID ||
+		rejected.Rejection.GetBatchSequence() != rejected.Identity.BatchSequence {
+		return ingest.StoreResult{}, errors.New("store terminal batch rejection: response identity does not match source batch")
+	}
+	metadata, err := encodeBatchRejectionMetadata(rejected.Rejection)
+	if err != nil {
+		return ingest.StoreResult{}, err
+	}
+	rejectedAt := s.clock().UTC().Truncate(time.Microsecond)
+	reservation, err := s.visibility.Reject(ctx, visibility.RejectRequest{
+		BatchKey:      deduplicationKey,
+		SequenceKey:   sequenceKey,
+		IndexTime:     rejected.ReceivedAt,
+		PayloadSHA256: payloadDigest,
+		Metadata:      metadata,
+		RejectedAt:    rejectedAt,
+	})
+	if err != nil {
+		// A failed SQLite commit can be outcome-ambiguous: the rejection may
+		// already be terminal even though this caller did not observe it. Wake
+		// maintenance on every ledger error so a later exact replay (which is not
+		// NewlyRejected) cannot leave terminal retention dependent on restart.
+		s.wakeReconciler()
+		return ingest.StoreResult{}, s.visibilityFailure("commit terminal batch rejection", err)
+	}
+	if reservation.NewlyRejected {
+		// #nosec G115 -- len is non-negative and every supported Go int value
+		// is exactly representable as uint64.
+		s.noteTerminalRejection(uint64(len(metadata)))
+	}
+	if reservation.Rejected || reservation.AlreadyCommitted {
+		return resultForReservation(reservation, true)
+	}
+	// A concurrently accepted batch may already own an unresolved ClickHouse
+	// outbox. The first durable outcome wins; let its owner or reconciler finish
+	// and make the collector retry instead of overwriting it with a rejection.
+	return ingest.StoreResult{}, s.visibilityFailure(
+		"wait for existing ClickHouse batch outcome",
+		visibility.ErrAttemptInProgress,
+	)
 }
 
 func (s *Store) store(
@@ -457,64 +544,102 @@ func (s *Store) storeAdmitted(
 	if err != nil {
 		return ingest.StoreResult{}, s.visibilityFailure("lookup ClickHouse visibility reservation", err)
 	}
-	if found && prior.AlreadyCommitted {
+	if found && (prior.AlreadyCommitted || prior.Rejected) {
 		return resultForReservation(prior, true)
-	}
-	if resumeOnly && !found {
-		return ingest.StoreResult{}, errors.New("resume ClickHouse batch: durable reservation not found")
 	}
 
 	metadata := prior.Metadata
 	outbox := prior.Outbox
 	indexTime := prior.IndexTime
-	if !found {
-		if batch.OriginalEventCount == 0 && len(batch.RejectedEvents) == 0 && len(batch.Events) > 0 {
-			// #nosec G115 -- len is non-negative and every supported Go int
-			// value is exactly representable as uint64.
-			if uint64(len(batch.Events)) > math.MaxUint32 {
-				return ingest.StoreResult{}, errors.New("store ClickHouse batch: source event count exceeds uint32")
-			}
-			// #nosec G115 -- the explicit math.MaxUint32 check above proves the conversion safe.
-			batch.OriginalEventCount = uint32(len(batch.Events))
-		}
-		rows, rowsErr := s.rowsForBatch(ctx, batch, nil)
-		if rowsErr != nil {
-			return ingest.StoreResult{}, s.classifyError(rowsErr)
-		}
-		metadata, err = encodeReservationMetadata(rows, batch)
+	// Lookup intentionally does not acquire a lease. A pending row may become
+	// terminal or be safely abandoned before Reserve starts, so observed pending
+	// rows first use the atomic existing-only path and never recreate anything
+	// from the lightweight lookup result. A full Store call can safely make one
+	// fresh reservation fallback from its caller-supplied normalized batch;
+	// identity-only ResumeBatch calls cannot.
+	existingOnly := found || resumeOnly
+	if !found && !resumeOnly {
+		metadata, outbox, indexTime, err = s.freshReservationPayload(ctx, batch)
 		if err != nil {
 			return ingest.StoreResult{}, err
 		}
-		outbox, err = encodeStoreOutbox(batch)
-		if err != nil {
-			return ingest.StoreResult{}, err
-		}
-		indexTime = batch.ReceivedAt
 	}
 	attemptID, err := s.attemptID()
 	if err != nil {
 		return ingest.StoreResult{}, s.classifyError(fmt.Errorf("create ClickHouse visibility attempt: %w", err))
 	}
-	reservation, err := s.visibility.Reserve(ctx, visibility.ReserveRequest{
+	request := visibility.ReserveRequest{
 		BatchKey:      deduplicationKey,
 		SequenceKey:   sequenceKey,
 		AttemptID:     attemptID,
+		ExistingOnly:  existingOnly,
 		IndexTime:     indexTime,
 		PayloadSHA256: payloadDigest,
 		Metadata:      metadata,
 		Outbox:        outbox,
-	})
+	}
+	reservation, err := s.visibility.Reserve(ctx, request)
+	if found && !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
+		// ExistingOnly proves the observed row no longer has an active outcome and
+		// releases the attempted lease before returning. Reuse that attempt ID for
+		// one bounded fresh allocation from the complete normalized Store input.
+		metadata, outbox, indexTime, err = s.freshReservationPayload(ctx, batch)
+		if err != nil {
+			return ingest.StoreResult{}, err
+		}
+		request.ExistingOnly = false
+		request.IndexTime = indexTime
+		request.Metadata = metadata
+		request.Outbox = outbox
+		found = false
+		reservation, err = s.visibility.Reserve(ctx, request)
+	}
 	if err != nil {
 		// A failed SQLite commit can be outcome-ambiguous. Wake the server-owned
 		// reconciler so any reservation that did persist is not dependent on a
 		// collector retry or process restart.
 		s.wakeReconciler()
+		if !resumeOnly && errors.Is(err, visibility.ErrReservationGone) {
+			return ingest.StoreResult{}, &ingest.TransientStoreError{
+				Err:        fmt.Errorf("reserve fresh ClickHouse visibility sequence: %w", err),
+				Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+				RetryAfter: s.retryAfter,
+			}
+		}
 		return ingest.StoreResult{}, s.visibilityFailure("reserve ClickHouse visibility sequence", err)
 	}
-	if reservation.AlreadyCommitted {
+	if reservation.AlreadyCommitted || reservation.Rejected {
 		return resultForReservation(reservation, true)
 	}
 	return s.writeReservation(ctx, reservation, attemptID, found || reservation.PreviouslyReserved || resumeOnly)
+}
+
+func (s *Store) freshReservationPayload(
+	ctx context.Context,
+	batch ingest.StoreBatch,
+) ([]byte, []byte, time.Time, error) {
+	if batch.OriginalEventCount == 0 && len(batch.RejectedEvents) == 0 && len(batch.Events) > 0 {
+		// #nosec G115 -- len is non-negative and every supported Go int value
+		// is exactly representable as uint64.
+		if uint64(len(batch.Events)) > math.MaxUint32 {
+			return nil, nil, time.Time{}, errors.New("store ClickHouse batch: source event count exceeds uint32")
+		}
+		// #nosec G115 -- the explicit math.MaxUint32 check above proves the conversion safe.
+		batch.OriginalEventCount = uint32(len(batch.Events))
+	}
+	rows, err := s.rowsForBatch(ctx, batch, nil)
+	if err != nil {
+		return nil, nil, time.Time{}, s.classifyError(err)
+	}
+	metadata, err := encodeReservationMetadata(rows, batch)
+	if err != nil {
+		return nil, nil, time.Time{}, err
+	}
+	outbox, err := encodeStoreOutbox(batch)
+	if err != nil {
+		return nil, nil, time.Time{}, err
+	}
+	return metadata, outbox, batch.ReceivedAt, nil
 }
 
 func (s *Store) writeReservation(
@@ -657,14 +782,7 @@ func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
 				}
 				return nil
 			}
-			deleted, pruneErr := s.visibility.PruneTerminal(ctx, durableIdempotencyWindow, visibilityPruneBatch)
-			if pruneErr != nil {
-				return s.visibilityFailure("prune terminal ClickHouse visibility records", pruneErr)
-			}
-			if deleted == visibilityPruneBatch {
-				s.wakeReconciler()
-			}
-			return nil
+			return s.pruneTerminal(ctx)
 		}
 		if proveDrained && replayed == visibility.MaxPendingReservations {
 			invariantErr := fmt.Errorf(
@@ -677,10 +795,36 @@ func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
 		if proveDrained {
 			replayed++
 		}
-		if _, err := s.writeReservation(ctx, reservation, attemptID, true); err != nil {
-			return err
+		if _, replayErr := s.writeReservation(ctx, reservation, attemptID, true); replayErr != nil {
+			if proveDrained {
+				return replayErr
+			}
+			// Rejected outcomes are SQLite-only and may keep arriving while a
+			// persistent ClickHouse failure prevents this pending replay. Perform one
+			// bounded prune attempt before returning so terminal metadata retention
+			// continues to make progress. Preserve the replay failure as the primary
+			// error if cleanup also fails.
+			if pruneErr := s.pruneTerminal(ctx); pruneErr != nil {
+				return errors.Join(replayErr, pruneErr)
+			}
+			return replayErr
 		}
 	}
+}
+
+func (s *Store) pruneTerminal(ctx context.Context) error {
+	deleted, err := s.visibility.PruneTerminal(ctx, visibility.TerminalRetention{
+		Committed:             durableClickHouseIdempotencyWindow,
+		Rejected:              durableBatchRejectWindow,
+		RejectedMetadataBytes: durableBatchRejectMetadataBytes,
+	}, visibilityPruneBatch)
+	if err != nil {
+		return s.visibilityFailure("prune terminal ClickHouse visibility records", err)
+	}
+	if deleted == visibilityPruneBatch {
+		s.wakeReconciler()
+	}
+	return nil
 }
 
 func (s *Store) startReconciler() {
@@ -753,6 +897,16 @@ func storeBatchFromIdentity(identity ingest.StoreBatchIdentity) ingest.StoreBatc
 }
 
 func resultForReservation(reservation visibility.Reservation, duplicate bool) (ingest.StoreResult, error) {
+	if reservation.Rejected {
+		if reservation.AlreadyCommitted {
+			return ingest.StoreResult{}, errors.New("visibility reservation has conflicting terminal outcomes")
+		}
+		rejection, err := decodeBatchRejectionMetadata(reservation.Metadata)
+		if err != nil {
+			return ingest.StoreResult{}, fmt.Errorf("decode durable terminal batch rejection: %w", err)
+		}
+		return ingest.StoreResult{BatchRejection: rejection}, nil
+	}
 	metadata, err := decodeReservationMetadata(reservation.Metadata)
 	if err != nil {
 		return ingest.StoreResult{}, fmt.Errorf("decode durable ClickHouse batch outcome: %w", err)
@@ -864,6 +1018,33 @@ func (s *Store) noteTerminalReservation() {
 	}
 }
 
+func (s *Store) noteTerminalRejection(metadataBytes uint64) {
+	s.noteTerminalReservation()
+
+	// Keep scheduling proportional to actual rejection pressure. The row-count
+	// cadence alone could otherwise retain nearly 1 GiB of maximum-size metadata
+	// before reaching its first 1,000-row maintenance wake. Modulo accounting
+	// preserves concurrent increments while the single-slot wake channel safely
+	// coalesces redundant maintenance requests.
+	forceWake := metadataBytes >= durableBatchRejectPruneWakeBytes
+	metadataBytes %= durableBatchRejectPruneWakeBytes
+	for {
+		current := s.rejectionWakeBytes.Load()
+		next := current + metadataBytes
+		crossed := next >= durableBatchRejectPruneWakeBytes
+		if crossed {
+			next -= durableBatchRejectPruneWakeBytes
+		}
+		if !s.rejectionWakeBytes.CompareAndSwap(current, next) {
+			continue
+		}
+		if forceWake || crossed {
+			s.wakeReconciler()
+		}
+		return
+	}
+}
+
 func (s *Store) finalizationFailure(operation string, err error) error {
 	return &ingest.TransientStoreError{
 		Err:        fmt.Errorf("%s: %w", operation, err),
@@ -875,6 +1056,9 @@ func (s *Store) finalizationFailure(operation string, err error) error {
 func (s *Store) visibilityFailure(operation string, err error) error {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
+	}
+	if errors.Is(err, visibility.ErrReservationGone) {
+		return &ingest.StoredBatchGoneError{Err: fmt.Errorf("%s: %w", operation, err)}
 	}
 	if errors.Is(err, visibility.ErrConflict) {
 		return &ingest.DurableIdentityConflictError{Err: fmt.Errorf("%s: %w", operation, err)}

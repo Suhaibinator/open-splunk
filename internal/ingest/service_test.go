@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -568,7 +569,7 @@ func TestCollectRetriesTransientStoreFailureThenAcknowledgesDuplicateOutcome(t *
 	}
 }
 
-func TestCollectRetryMustPreserveExactDurableBatch(t *testing.T) {
+func TestCollectRetriesChangedStreamLocalPendingIdentity(t *testing.T) {
 	storeCalls := 0
 	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
 		storeCalls++
@@ -597,8 +598,9 @@ func TestCollectRetryMustPreserveExactDurableBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := recvResponse(t, stream)
-	if response.GetBatchReject().GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT {
-		t.Fatalf("response = %#v", response)
+	if retry := response.GetRetryBatch(); retry == nil ||
+		retry.GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
+		t.Fatalf("response = %#v, want non-terminal SERVER_BUSY retry", response)
 	}
 	if storeCalls != 1 {
 		t.Fatalf("store calls = %d, want 1", storeCalls)
@@ -704,6 +706,689 @@ func TestProcessBatchCommittedRetryBypassesMutablePolicy(t *testing.T) {
 	}
 	if store.storeCalls != 1 || store.lookupCalls != 2 {
 		t.Fatalf("durable store calls: Store=%d Lookup=%d", store.storeCalls, store.lookupCalls)
+	}
+}
+
+func TestProcessBatchPersistsAndReplaysConfiguredBatchRejection(t *testing.T) {
+	config := testServiceConfig()
+	config.Limits.MaxBatchEvents = 1
+	config = withTestSessionManager(config, staticTestAuthorizer())
+	store := &recoverableTestStore{}
+	service, err := NewService(config, staticTestAuthorizer(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := validTestBatch(
+		"collector-a",
+		"batch-durable-policy-rejection",
+		7,
+		validTestEvent("event-one", "main"),
+		validTestEvent("event-two", "main"),
+	)
+	receivedAt := validationTestNow.Add(3 * time.Second)
+
+	first, err := service.processBatch(
+		context.Background(), batch, testBatchStreamState(service), receivedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejection := first.GetBatchReject(); rejection == nil ||
+		rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS {
+		t.Fatalf("first response = %#v", first)
+	}
+	identity, err := batchFingerprint(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIdentity := StoreBatchIdentity{
+		TenantID:          "tenant-a",
+		CollectorID:       "collector-a",
+		BatchID:           batch.GetBatchId(),
+		BatchSequence:     batch.GetBatchSequence(),
+		SourceBatchSHA256: identity.contentHash,
+	}
+	if store.rejectCalls != 1 || store.storeCalls != 0 ||
+		store.rejection.Identity != wantIdentity ||
+		!store.rejection.ReceivedAt.Equal(receivedAt) ||
+		!proto.Equal(store.rejection.Rejection, first.GetBatchReject()) {
+		t.Fatalf("durable rejection call = %+v, response = %#v", store.rejection, first)
+	}
+	if store.rejection.Rejection != store.result.BatchRejection {
+		t.Fatal("RejectBatch did not receive the exact rejection used as its durable result")
+	}
+
+	// A later process with permissive mutable policy must replay the original
+	// terminal decision instead of revalidating and accepting the same bytes.
+	retryConfig := testServiceConfig()
+	retryConfig = withTestSessionManager(retryConfig, staticTestAuthorizer())
+	retry, err := NewService(retryConfig, staticTestAuthorizer(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := retry.processBatch(
+		context.Background(), batch, testBatchStreamState(retry), receivedAt.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(replayed.GetBatchReject(), first.GetBatchReject()) {
+		t.Fatalf("replayed rejection = %#v, want %#v", replayed, first)
+	}
+	if replayed.GetBatchReject() == store.result.BatchRejection {
+		t.Fatal("replayed response aliases store-owned rejection")
+	}
+	if store.lookupCalls != 2 || store.rejectCalls != 1 || store.storeCalls != 0 {
+		t.Fatalf(
+			"store calls = lookup:%d reject:%d store:%d, want 2/1/0",
+			store.lookupCalls,
+			store.rejectCalls,
+			store.storeCalls,
+		)
+	}
+}
+
+func TestProcessBatchRejectsDurableStateDispositionMismatch(t *testing.T) {
+	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+	batch := validTestBatch(
+		"collector-a", "batch-state-mismatch", 1, validTestEvent("event-one", "main"),
+	)
+	identity, err := batchFingerprint(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durableIdentity := StoreBatchIdentity{
+		TenantID:          "tenant-a",
+		CollectorID:       "collector-a",
+		BatchID:           batch.GetBatchId(),
+		BatchSequence:     batch.GetBatchSequence(),
+		SourceBatchSHA256: identity.contentHash,
+	}
+	tests := []struct {
+		name   string
+		state  StoredBatchState
+		result StoreResult
+	}{
+		{
+			name:  "committed state with rejection",
+			state: StoredBatchCommitted,
+			result: StoreResult{BatchRejection: batchRejection(
+				batch,
+				opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+				"stored rejection",
+				"events",
+				"invalid",
+			)},
+		},
+		{
+			name:   "rejected state with acknowledgment",
+			state:  StoredBatchRejected,
+			result: StoreResult{Accepted: 1, OriginalEventCount: 1, CommittedAt: validationTestNow},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			store := &recoverableTestStore{
+				identity: durableIdentity, result: test.result, storedState: test.state,
+			}
+			service, err := NewService(config, staticTestAuthorizer(), store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, processErr := service.processBatch(
+				context.Background(), batch, testBatchStreamState(service), validationTestNow,
+			)
+			if response != nil || status.Code(processErr) != codes.Internal {
+				t.Fatalf("processBatch = (%#v, %v), want nil/Internal", response, processErr)
+			}
+			if store.lookupCalls != 1 || store.rejectCalls != 0 || store.storeCalls != 0 {
+				t.Fatalf("store calls = lookup:%d reject:%d store:%d", store.lookupCalls, store.rejectCalls, store.storeCalls)
+			}
+		})
+	}
+}
+
+func TestProcessBatchHandlesRejectionWhenPendingBatchResumes(t *testing.T) {
+	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+	batch := validTestBatch(
+		"collector-a", "batch-pending-rejection-transition", 1,
+		validTestEvent("event-one", "main"),
+	)
+	validRejection := batchRejection(
+		batch,
+		opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+		"concurrent rejection won the durable outcome",
+		"events",
+		"invalid",
+	)
+	tests := []struct {
+		name       string
+		result     StoreResult
+		wantReject *opensplunkv1.BatchReject
+		wantCode   codes.Code
+	}{
+		{
+			name:       "valid terminal rejection",
+			result:     StoreResult{BatchRejection: validRejection},
+			wantReject: validRejection,
+		},
+		{
+			name: "malformed terminal rejection",
+			result: StoreResult{BatchRejection: &opensplunkv1.BatchReject{
+				BatchId:       "different-batch",
+				BatchSequence: batch.GetBatchSequence(),
+				Code:          opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS,
+				Message:       "mismatched durable identity",
+			}},
+			wantCode: codes.Internal,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &pendingAuthorityTestStore{result: test.result}
+			service, err := NewService(config, staticTestAuthorizer(), store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, processErr := service.processBatch(
+				context.Background(), batch, testBatchStreamState(service), validationTestNow,
+			)
+			if test.wantReject != nil {
+				if processErr != nil || !proto.Equal(response.GetBatchReject(), test.wantReject) {
+					t.Fatalf("processBatch = (%#v, %v), want rejection %#v", response, processErr, test.wantReject)
+				}
+			} else if response != nil || status.Code(processErr) != test.wantCode {
+				t.Fatalf("processBatch = (%#v, %v), want nil/%v", response, processErr, test.wantCode)
+			}
+			if store.lookupCalls != 1 || store.resumeCalls != 1 ||
+				store.storeCalls != 0 || store.rejectCalls != 0 {
+				t.Fatalf(
+					"store calls = lookup:%d resume:%d store:%d reject:%d",
+					store.lookupCalls,
+					store.resumeCalls,
+					store.storeCalls,
+					store.rejectCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestProcessBatchPendingReservationGoneContinuesFreshInSameCall(t *testing.T) {
+	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+	store := &goneResumeTestStore{resumeErr: storedBatchGoneTestError()}
+	service, err := NewService(config, staticTestAuthorizer(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := testBatchStreamState(service)
+	batch := validTestBatch(
+		"collector-a", "batch-pending-gone-fresh", 1,
+		validTestEvent("event-one", "main"),
+	)
+
+	response, processErr := service.processBatch(
+		context.Background(), batch, state, validationTestNow,
+	)
+	if processErr != nil {
+		t.Fatal(processErr)
+	}
+	if ack := response.GetBatchAck(); ack == nil || ack.GetAcceptedEventCount() != 1 {
+		t.Fatalf("processBatch response = %#v, want one accepted event", response)
+	}
+	if store.lookupCalls != 1 || store.resumeCalls != 1 ||
+		store.storeCalls != 1 || store.rejectCalls != 0 {
+		t.Fatalf(
+			"store calls = lookup:%d resume:%d store:%d reject:%d, want 1/1/1/0",
+			store.lookupCalls,
+			store.resumeCalls,
+			store.storeCalls,
+			store.rejectCalls,
+		)
+	}
+	if !state.hasHighestBatchSequence || state.highestBatchSequence != batch.GetBatchSequence() ||
+		len(state.pendingBatches) != 0 {
+		t.Fatalf("stream state after fresh progress = %+v", state)
+	}
+}
+
+func TestProcessBatchPendingReservationGoneDefersToIndexAuthority(t *testing.T) {
+	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+	store := &goneResumeTestStore{resumeErr: storedBatchGoneTestError()}
+	service, err := NewService(config, staticTestAuthorizer(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := testBatchStreamState(service)
+	batch := validTestBatch(
+		"collector-a", "batch-pending-gone-authority", 1,
+		validTestEvent("event-one", "main"),
+	)
+
+	response, processErr := service.processBatchWithIndexAuthority(
+		context.Background(), batch, state, validationTestNow, ErrNoActiveIndexAuthority,
+	)
+	if response != nil || status.Code(processErr) != codes.Unauthenticated {
+		t.Fatalf("processBatch = (%#v, %v), want nil/Unauthenticated", response, processErr)
+	}
+	if store.lookupCalls != 1 || store.resumeCalls != 1 ||
+		store.storeCalls != 0 || store.rejectCalls != 0 {
+		t.Fatalf(
+			"store calls = lookup:%d resume:%d store:%d reject:%d, want 1/1/0/0",
+			store.lookupCalls,
+			store.resumeCalls,
+			store.storeCalls,
+			store.rejectCalls,
+		)
+	}
+	if state.hasHighestBatchSequence || len(state.pendingBatches) != 0 {
+		t.Fatalf("gone reservation poisoned stream state: %+v", state)
+	}
+}
+
+func TestProcessBatchPendingResumeTransientThenDisappearsContinuesFreshOnRetry(t *testing.T) {
+	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+	store := &goneResumeTestStore{
+		lookupStates: []StoredBatchState{StoredBatchPending, StoredBatchNotFound},
+		resumeErr: &TransientStoreError{
+			Err:        errors.New("pending attempt is still owned"),
+			Reason:     opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			RetryAfter: time.Millisecond,
+		},
+	}
+	service, err := NewService(config, staticTestAuthorizer(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := testBatchStreamState(service)
+	batch := validTestBatch(
+		"collector-a", "batch-pending-transient-then-gone", 1,
+		validTestEvent("event-one", "main"),
+	)
+	firstBoundary := validationTestNow
+	secondBoundary := firstBoundary.Add(time.Minute)
+
+	response, processErr := service.processBatch(
+		context.Background(), batch, state, firstBoundary,
+	)
+	if processErr != nil ||
+		response.GetRetryBatch().GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
+		t.Fatalf("first processBatch = (%#v, %v), want SERVER_BUSY retry", response, processErr)
+	}
+	pending, ok := state.pendingBatches[batch.GetBatchSequence()]
+	if !ok || !pending.receivedAt.Equal(firstBoundary) {
+		t.Fatalf("remembered pending identity = %+v found=%v, want boundary %v", pending, ok, firstBoundary)
+	}
+
+	response, processErr = service.processBatch(
+		context.Background(), batch, state, secondBoundary,
+	)
+	if processErr != nil {
+		t.Fatal(processErr)
+	}
+	if ack := response.GetBatchAck(); ack == nil || ack.GetAcceptedEventCount() != 1 {
+		t.Fatalf("second processBatch response = %#v, want one accepted event", response)
+	}
+	if store.lookupCalls != 2 || store.resumeCalls != 1 ||
+		store.storeCalls != 1 || store.rejectCalls != 0 {
+		t.Fatalf(
+			"store calls = lookup:%d resume:%d store:%d reject:%d, want 2/1/1/0",
+			store.lookupCalls,
+			store.resumeCalls,
+			store.storeCalls,
+			store.rejectCalls,
+		)
+	}
+	if len(store.storedBatches) != 1 || !store.storedBatches[0].ReceivedAt.Equal(firstBoundary) {
+		t.Fatalf("fresh Store batches = %+v, want stable first boundary %v", store.storedBatches, firstBoundary)
+	}
+	if state.highestBatchSequence != batch.GetBatchSequence() || len(state.pendingBatches) != 0 {
+		t.Fatalf("stream state after recovered progress = %+v", state)
+	}
+}
+
+func TestProcessBatchDurablePendingRecoveryBypassesSoftCapacityAndHigherSequence(t *testing.T) {
+	config := testServiceConfig()
+	config.MaxInFlightBatches = 1
+	config = withTestSessionManager(config, staticTestAuthorizer())
+	store := &goneResumeTestStore{
+		lookupStates: []StoredBatchState{StoredBatchPending, StoredBatchNotFound},
+		resumeErr: &TransientStoreError{
+			Err:    errors.New("pending attempt is still owned"),
+			Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+		},
+	}
+	service, err := NewService(config, staticTestAuthorizer(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := testBatchStreamState(service)
+	later := validTestBatch(
+		"collector-a", "batch-later-local-pending", 9,
+		validTestEvent("event-nine", "main"),
+	)
+	laterIdentity, err := batchFingerprint(later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, rejection, atCapacity := recordBatchIdentity(
+		state,
+		later.GetBatchSequence(),
+		laterIdentity,
+		validationTestNow,
+		config.MaxInFlightBatches,
+	); rejection != nil || atCapacity {
+		t.Fatalf("seed later pending identity = rejection %#v capacity=%v", rejection, atCapacity)
+	}
+	target := validTestBatch(
+		"collector-a", "batch-earlier-durable-pending", 7,
+		validTestEvent("event-seven", "main"),
+	)
+	firstBoundary := validationTestNow.Add(time.Second)
+
+	response, processErr := service.processBatch(
+		context.Background(), target, state, firstBoundary,
+	)
+	if processErr != nil || response.GetRetryBatch() == nil {
+		t.Fatalf("first processBatch = (%#v, %v), want retry", response, processErr)
+	}
+	if state.highestBatchSequence != later.GetBatchSequence() || len(state.pendingBatches) != 2 {
+		t.Fatalf("stream state after durable pending proof = %+v, want high-water 9 and two pending", state)
+	}
+	if pending := state.pendingBatches[target.GetBatchSequence()]; !pending.receivedAt.Equal(firstBoundary) {
+		t.Fatalf("earlier durable pending identity = %+v, want boundary %v", pending, firstBoundary)
+	}
+
+	response, processErr = service.processBatch(
+		context.Background(), target, state, firstBoundary.Add(time.Minute),
+	)
+	if processErr != nil || response.GetBatchAck().GetAcceptedEventCount() != 1 {
+		t.Fatalf("second processBatch = (%#v, %v), want accepted progress", response, processErr)
+	}
+	if len(store.storedBatches) != 1 || !store.storedBatches[0].ReceivedAt.Equal(firstBoundary) {
+		t.Fatalf("fresh Store batches = %+v, want stable first boundary %v", store.storedBatches, firstBoundary)
+	}
+	if state.highestBatchSequence != later.GetBatchSequence() || len(state.pendingBatches) != 1 {
+		t.Fatalf("stream state after earlier recovery = %+v, want only later pending identity", state)
+	}
+	if _, ok := state.pendingBatches[later.GetBatchSequence()]; !ok {
+		t.Fatalf("later pending identity was lost: %+v", state.pendingBatches)
+	}
+}
+
+func TestProcessBatchDurablePendingRecoveryHardBoundForcesReconnect(t *testing.T) {
+	tests := []struct {
+		name       string
+		resumeErr  error
+		wantedCode codes.Code
+	}{
+		{
+			name: "transient forces reconnect",
+			resumeErr: &TransientStoreError{
+				Err:    errors.New("pending attempt is still owned"),
+				Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			},
+			wantedCode: codes.Unavailable,
+		},
+		{
+			name:       "canceled remains canceled",
+			resumeErr:  context.Canceled,
+			wantedCode: codes.Canceled,
+		},
+		{
+			name:       "deadline remains deadline",
+			resumeErr:  context.DeadlineExceeded,
+			wantedCode: codes.DeadlineExceeded,
+		},
+		{
+			name: "transient wrapped cancellation remains canceled",
+			resumeErr: &TransientStoreError{
+				Err:    context.Canceled,
+				Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			},
+			wantedCode: codes.Canceled,
+		},
+		{
+			name: "transient wrapped deadline remains deadline",
+			resumeErr: &TransientStoreError{
+				Err:    context.DeadlineExceeded,
+				Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+			},
+			wantedCode: codes.DeadlineExceeded,
+		},
+		{
+			name:       "permanent remains internal",
+			resumeErr:  errors.New("durable pending metadata is corrupt"),
+			wantedCode: codes.Internal,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+			store := &goneResumeTestStore{
+				lookupStates: []StoredBatchState{StoredBatchPending},
+				resumeErr:    test.resumeErr,
+			}
+			service, err := NewService(config, staticTestAuthorizer(), store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := testBatchStreamState(service)
+			for offset := range HardMaxInFlightBatches {
+				sequence := uint64(offset) + 1
+				batch := validTestBatch(
+					"collector-a",
+					fmt.Sprintf("batch-hard-pending-%d", sequence),
+					sequence,
+					validTestEvent(fmt.Sprintf("event-%d", sequence), "main"),
+				)
+				identity, fingerprintErr := batchFingerprint(batch)
+				if fingerprintErr != nil {
+					t.Fatal(fingerprintErr)
+				}
+				if !rememberDurablePendingBatchIdentity(
+					state,
+					sequence,
+					identity,
+					validationTestNow,
+				) {
+					t.Fatalf("failed to seed durable pending identity %d", sequence)
+				}
+			}
+			targetSequence := uint64(HardMaxInFlightBatches) + 1
+			target := validTestBatch(
+				"collector-a", "batch-hard-pending-overflow", targetSequence,
+				validTestEvent("event-overflow", "main"),
+			)
+
+			response, processErr := service.processBatch(
+				context.Background(), target, state, validationTestNow.Add(time.Second),
+			)
+			if response != nil || status.Code(processErr) != test.wantedCode {
+				t.Fatalf(
+					"processBatch = (%#v, %v), want nil/%s",
+					response,
+					processErr,
+					test.wantedCode,
+				)
+			}
+			if len(state.pendingBatches) != int(HardMaxInFlightBatches) ||
+				state.highestBatchSequence != uint64(HardMaxInFlightBatches) {
+				t.Fatalf("hard-bound stream state mutated on overflow: %+v", state)
+			}
+			if store.lookupCalls != 1 || store.resumeCalls != 1 ||
+				store.storeCalls != 0 || store.rejectCalls != 0 {
+				t.Fatalf(
+					"store calls = lookup:%d resume:%d store:%d reject:%d, want 1/1/0/0",
+					store.lookupCalls,
+					store.resumeCalls,
+					store.storeCalls,
+					store.rejectCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestProcessBatchPersistsAllEventsInvalidRejection(t *testing.T) {
+	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
+	store := &recoverableTestStore{}
+	service, err := NewService(config, staticTestAuthorizer(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := validTestBatch(
+		"collector-a",
+		"batch-durable-invalid-rejection",
+		9,
+		validTestEvent("event-forbidden", "forbidden"),
+	)
+	response, err := service.processBatch(
+		context.Background(), batch, testBatchStreamState(service), validationTestNow,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejection := response.GetBatchReject()
+	if rejection == nil ||
+		rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_NO_AUTHORIZED_EVENTS {
+		t.Fatalf("response = %#v", response)
+	}
+	if store.rejectCalls != 1 || store.storeCalls != 0 ||
+		!proto.Equal(store.rejection.Rejection, rejection) {
+		t.Fatalf("store = %+v, response = %#v", store, response)
+	}
+}
+
+func TestProcessBatchFailsClosedWithoutRecoverableRejectionStore(t *testing.T) {
+	config := testServiceConfig()
+	config.Limits.MaxBatchEvents = 1
+	config = withTestSessionManager(config, staticTestAuthorizer())
+	service, err := NewService(config, staticTestAuthorizer(), acceptingStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := validTestBatch(
+		"collector-a",
+		"batch-requires-durable-rejection",
+		1,
+		validTestEvent("event-one", "main"),
+		validTestEvent("event-two", "main"),
+	)
+	response, err := service.processBatch(
+		context.Background(), batch, testBatchStreamState(service), validationTestNow,
+	)
+	if response != nil || status.Code(err) != codes.Internal {
+		t.Fatalf("processBatch = (%#v, %v), want nil/Internal", response, err)
+	}
+}
+
+func TestProcessBatchRejectPersistenceFailurePreservesStorePrecedence(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantRetry   opensplunkv1.RetryBatchReason
+		wantCode    codes.Code
+		wantReject  opensplunkv1.BatchRejectionCode
+		wantPending int
+	}{
+		{
+			name: "transient",
+			err: &TransientStoreError{
+				Err:    errors.New("terminal outcome store unavailable"),
+				Reason: opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+			},
+			wantRetry:   opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE,
+			wantPending: 1,
+		},
+		{name: "canceled", err: context.Canceled, wantCode: codes.Canceled, wantPending: 1},
+		{name: "permanent", err: errors.New("corrupt rejection store"), wantCode: codes.Internal, wantPending: 1},
+		{
+			name:        "durable identity conflict",
+			err:         &DurableIdentityConflictError{Err: errors.New("identity reused")},
+			wantReject:  opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT,
+			wantPending: 0,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			config := testServiceConfig()
+			config.Limits.MaxBatchEvents = 1
+			config = withTestSessionManager(config, staticTestAuthorizer())
+			store := &recoverableTestStore{rejectErr: test.err}
+			service, err := NewService(config, staticTestAuthorizer(), store)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state := testBatchStreamState(service)
+			batch := validTestBatch(
+				"collector-a",
+				"batch-rejection-store-failure",
+				1,
+				validTestEvent("event-one", "main"),
+				validTestEvent("event-two", "main"),
+			)
+			response, processErr := service.processBatch(
+				context.Background(), batch, state, validationTestNow,
+			)
+			switch {
+			case test.wantRetry != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_UNSPECIFIED:
+				if processErr != nil || response.GetRetryBatch().GetReason() != test.wantRetry {
+					t.Fatalf("processBatch = (%#v, %v), want retry %v", response, processErr, test.wantRetry)
+				}
+			case test.wantReject != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_UNSPECIFIED:
+				if processErr != nil || response.GetBatchReject().GetCode() != test.wantReject {
+					t.Fatalf("processBatch = (%#v, %v), want rejection %v", response, processErr, test.wantReject)
+				}
+			default:
+				if response != nil || status.Code(processErr) != test.wantCode {
+					t.Fatalf("processBatch = (%#v, %v), want nil/%v", response, processErr, test.wantCode)
+				}
+			}
+			if store.rejectCalls != 1 || len(state.pendingBatches) != test.wantPending {
+				t.Fatalf(
+					"reject calls = %d, pending = %d, want 1/%d",
+					store.rejectCalls,
+					len(state.pendingBatches),
+					test.wantPending,
+				)
+			}
+		})
+	}
+}
+
+func TestProcessBatchConcurrentAcceptedOutcomeWinsRejectionReservation(t *testing.T) {
+	committedAt := validationTestNow.Add(time.Second)
+	accepted := StoreResult{Duplicate: 2, OriginalEventCount: 2, CommittedAt: committedAt}
+	store := &recoverableTestStore{rejectResult: &accepted}
+	config := testServiceConfig()
+	config.Limits.MaxBatchEvents = 1
+	config = withTestSessionManager(config, staticTestAuthorizer())
+	service, err := NewService(config, staticTestAuthorizer(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := testBatchStreamState(service)
+	batch := validTestBatch(
+		"collector-a",
+		"batch-concurrent-accepted",
+		1,
+		validTestEvent("event-one", "main"),
+		validTestEvent("event-two", "main"),
+	)
+	response, err := service.processBatch(context.Background(), batch, state, validationTestNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack := response.GetBatchAck()
+	if ack == nil || ack.GetDuplicateEventCount() != 2 ||
+		!ack.GetCommittedAt().AsTime().Equal(committedAt) {
+		t.Fatalf("response = %#v, want concurrent accepted acknowledgment", response)
+	}
+	if store.rejectCalls != 1 || len(state.pendingBatches) != 0 {
+		t.Fatalf("reject calls = %d, pending = %d, want 1/0", store.rejectCalls, len(state.pendingBatches))
 	}
 }
 
@@ -844,11 +1529,7 @@ func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 	config := testServiceConfig()
 	config.Redaction.Replacement = strings.Repeat("r", 100)
 	config = withTestSessionManager(config, staticTestAuthorizer())
-	storeCalls := 0
-	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
-		storeCalls++
-		return StoreResult{}, nil
-	})
+	store := &recoverableTestStore{}
 	service, err := NewService(config, staticTestAuthorizer(), store)
 	if err != nil {
 		t.Fatal(err)
@@ -869,17 +1550,13 @@ func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 		rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
 		t.Fatalf("response = %#v, want terminal BATCH_TOO_LARGE", response)
 	}
-	if storeCalls != 0 {
-		t.Fatalf("store calls = %d, want 0", storeCalls)
+	if store.storeCalls != 0 || store.rejectCalls != 1 {
+		t.Fatalf("store calls = %d, reject calls = %d, want 0/1", store.storeCalls, store.rejectCalls)
 	}
 }
 
 func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
-	storeCalls := 0
-	store := EventStoreFunc(func(context.Context, StoreBatch) (StoreResult, error) {
-		storeCalls++
-		return StoreResult{}, nil
-	})
+	store := &recoverableTestStore{}
 	config := withTestSessionManager(testServiceConfig(), staticTestAuthorizer())
 	service, err := NewService(config, staticTestAuthorizer(), store)
 	if err != nil {
@@ -909,8 +1586,8 @@ func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
 		rejection.GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
 		t.Fatalf("response = %#v, want terminal BATCH_TOO_LARGE", response)
 	}
-	if storeCalls != 0 {
-		t.Fatalf("store calls = %d, want 0", storeCalls)
+	if store.storeCalls != 0 || store.rejectCalls != 1 {
+		t.Fatalf("store calls = %d, reject calls = %d, want 0/1", store.storeCalls, store.rejectCalls)
 	}
 }
 
@@ -992,7 +1669,8 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 	t.Run("event count", func(t *testing.T) {
 		cfg := testServiceConfig()
 		cfg.Limits.MaxBatchEvents = 1
-		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), acceptingStore())
+		store := &recoverableTestStore{}
+		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 		stream := harness.stream(t, "Bearer good-token")
 		sendHello(t, stream, 1, 1, 0)
 		_ = recvResponse(t, stream)
@@ -1007,6 +1685,9 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 		if got := recvResponse(t, stream).GetBatchReject().GetCode(); got != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_TOO_MANY_EVENTS {
 			t.Fatalf("batch rejection = %v", got)
 		}
+		if store.rejectCalls != 1 {
+			t.Fatalf("RejectBatch calls = %d, want 1", store.rejectCalls)
+		}
 	})
 
 	t.Run("encoded bytes use actual events rather than trusting declared size", func(t *testing.T) {
@@ -1017,7 +1698,8 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 		cfg := testServiceConfig()
 		cfg.Limits.MaxEventBytes = oneEventBytes
 		cfg.Limits.MaxBatchBytes = allEventBytes - 1
-		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), acceptingStore())
+		store := &recoverableTestStore{}
+		harness := newServiceHarness(t, cfg, staticTestAuthorizer(), store)
 		stream := harness.stream(t, "Bearer good-token")
 		sendHello(t, stream, 1, 1, 0)
 		_ = recvResponse(t, stream)
@@ -1027,6 +1709,9 @@ func TestCollectEnforcesBatchEventCountAndEncodedByteLimits(t *testing.T) {
 		}
 		if got := recvResponse(t, stream).GetBatchReject().GetCode(); got != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_BATCH_TOO_LARGE {
 			t.Fatalf("batch rejection = %v", got)
+		}
+		if store.rejectCalls != 1 {
+			t.Fatalf("RejectBatch calls = %d, want 1", store.rejectCalls)
 		}
 	})
 }
@@ -1081,7 +1766,7 @@ func TestCollectRejectsInconsistentStoreAccountingWithoutAck(t *testing.T) {
 	}
 }
 
-func TestCollectRejectsBatchSequenceConflict(t *testing.T) {
+func TestCollectRetriesStreamLocalBatchSequenceConflict(t *testing.T) {
 	harness := newServiceHarness(t, testServiceConfig(), staticTestAuthorizer(), acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
 	sendHello(t, stream, 1, 1, 0)
@@ -1097,8 +1782,9 @@ func TestCollectRejectsBatchSequenceConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := recvResponse(t, stream)
-	if response.GetBatchReject().GetCode() != opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_SEQUENCE_CONFLICT {
-		t.Fatalf("response = %#v", response)
+	if retry := response.GetRetryBatch(); retry == nil ||
+		retry.GetReason() != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY {
+		t.Fatalf("response = %#v, want non-terminal SERVER_BUSY retry", response)
 	}
 }
 
@@ -1211,11 +1897,16 @@ func acceptingStore() EventStore {
 }
 
 type recoverableTestStore struct {
-	first       StoreBatch
-	identity    StoreBatchIdentity
-	result      StoreResult
-	storeCalls  int
-	lookupCalls int
+	first        StoreBatch
+	rejection    StoreBatchRejection
+	identity     StoreBatchIdentity
+	result       StoreResult
+	rejectResult *StoreResult
+	rejectErr    error
+	storedState  StoredBatchState
+	storeCalls   int
+	lookupCalls  int
+	rejectCalls  int
 }
 
 type pendingAuthorityTestStore struct {
@@ -1223,6 +1914,17 @@ type pendingAuthorityTestStore struct {
 	storeCalls  int
 	lookupCalls int
 	resumeCalls int
+	rejectCalls int
+}
+
+type goneResumeTestStore struct {
+	lookupStates  []StoredBatchState
+	resumeErr     error
+	storedBatches []StoreBatch
+	storeCalls    int
+	lookupCalls   int
+	resumeCalls   int
+	rejectCalls   int
 }
 
 type deferredAuthorityTestStore struct {
@@ -1232,6 +1934,7 @@ type deferredAuthorityTestStore struct {
 	storeCalls  int
 	lookupCalls int
 	resumeCalls int
+	rejectCalls int
 }
 
 func (store *deferredAuthorityTestStore) Store(context.Context, StoreBatch) (StoreResult, error) {
@@ -1255,6 +1958,14 @@ func (store *deferredAuthorityTestStore) ResumeBatch(
 	return StoreResult{}, store.resumeErr
 }
 
+func (store *deferredAuthorityTestStore) RejectBatch(
+	context.Context,
+	StoreBatchRejection,
+) (StoreResult, error) {
+	store.rejectCalls++
+	return StoreResult{}, errors.New("fresh RejectBatch must not run with deferred index authority")
+}
+
 func (store *pendingAuthorityTestStore) Store(context.Context, StoreBatch) (StoreResult, error) {
 	store.storeCalls++
 	return StoreResult{}, errors.New("fresh Store must not run for a pending durable batch")
@@ -1276,6 +1987,59 @@ func (store *pendingAuthorityTestStore) ResumeBatch(
 	return store.result, nil
 }
 
+func (store *pendingAuthorityTestStore) RejectBatch(
+	context.Context,
+	StoreBatchRejection,
+) (StoreResult, error) {
+	store.rejectCalls++
+	return StoreResult{}, errors.New("fresh RejectBatch must not run for a pending durable batch")
+}
+
+func (store *goneResumeTestStore) Store(_ context.Context, batch StoreBatch) (StoreResult, error) {
+	store.storeCalls++
+	store.storedBatches = append(store.storedBatches, batch)
+	return StoreResult{
+		Accepted:           uint32(len(batch.Events)),
+		CommittedAt:        validationTestNow,
+		OriginalEventCount: batch.OriginalEventCount,
+		RejectedEvents:     batch.RejectedEvents,
+	}, nil
+}
+
+func (store *goneResumeTestStore) LookupBatch(
+	context.Context,
+	StoreBatchIdentity,
+) (StoredBatchState, StoreResult, error) {
+	state := StoredBatchPending
+	if store.lookupCalls < len(store.lookupStates) {
+		state = store.lookupStates[store.lookupCalls]
+	}
+	store.lookupCalls++
+	return state, StoreResult{}, nil
+}
+
+func (store *goneResumeTestStore) ResumeBatch(
+	context.Context,
+	StoreBatchIdentity,
+) (StoreResult, error) {
+	store.resumeCalls++
+	return StoreResult{}, store.resumeErr
+}
+
+func (store *goneResumeTestStore) RejectBatch(
+	context.Context,
+	StoreBatchRejection,
+) (StoreResult, error) {
+	store.rejectCalls++
+	return StoreResult{}, errors.New("fresh rejection must not run after a gone accepted reservation")
+}
+
+func storedBatchGoneTestError() error {
+	return &StoredBatchGoneError{
+		Err: errors.New("pending disposition was abandoned before resume"),
+	}
+}
+
 type durableIdentityConflictTestStore struct {
 	conflictOnLookup bool
 }
@@ -1295,6 +2059,10 @@ func (*durableIdentityConflictTestStore) ResumeBatch(context.Context, StoreBatch
 	return StoreResult{}, errors.New("unexpected pending resume")
 }
 
+func (*durableIdentityConflictTestStore) RejectBatch(context.Context, StoreBatchRejection) (StoreResult, error) {
+	return StoreResult{}, &DurableIdentityConflictError{Err: errors.New("identity reused")}
+}
+
 func (store *recoverableTestStore) Store(_ context.Context, batch StoreBatch) (StoreResult, error) {
 	store.storeCalls++
 	store.first = batch
@@ -1310,22 +2078,48 @@ func (store *recoverableTestStore) Store(_ context.Context, batch StoreBatch) (S
 		OriginalEventCount:  batch.OriginalEventCount,
 		RejectedEvents:      batch.RejectedEvents,
 	}
+	store.storedState = StoredBatchCommitted
 	return store.result, nil
 }
 
 func (store *recoverableTestStore) LookupBatch(_ context.Context, identity StoreBatchIdentity) (StoredBatchState, StoreResult, error) {
 	store.lookupCalls++
-	if store.storeCalls == 0 || identity != store.identity {
+	if store.storedState == StoredBatchNotFound || identity != store.identity {
 		return StoredBatchNotFound, StoreResult{}, nil
 	}
 	result := store.result
-	result.Duplicate = result.Accepted
-	result.Accepted = 0
-	return StoredBatchCommitted, result, nil
+	if store.storedState == StoredBatchCommitted {
+		result.Duplicate = result.Accepted
+		result.Accepted = 0
+	}
+	return store.storedState, result, nil
 }
 
 func (*recoverableTestStore) ResumeBatch(context.Context, StoreBatchIdentity) (StoreResult, error) {
 	return StoreResult{}, errors.New("unexpected pending resume")
+}
+
+func (store *recoverableTestStore) RejectBatch(
+	_ context.Context,
+	rejection StoreBatchRejection,
+) (StoreResult, error) {
+	store.rejectCalls++
+	store.rejection = rejection
+	if store.rejectErr != nil {
+		return StoreResult{}, store.rejectErr
+	}
+	store.identity = rejection.Identity
+	if store.rejectResult != nil {
+		store.result = *store.rejectResult
+	} else {
+		store.result = StoreResult{BatchRejection: rejection.Rejection}
+	}
+	if store.result.BatchRejection != nil {
+		store.storedState = StoredBatchRejected
+	} else {
+		store.storedState = StoredBatchCommitted
+	}
+	return store.result, nil
 }
 
 func sendHello(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient, sequence uint64, major, minor uint32) {

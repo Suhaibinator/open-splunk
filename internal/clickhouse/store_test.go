@@ -245,6 +245,151 @@ func TestStorePreservesAmbiguousReservationAndRecognizesCommittedRetry(t *testin
 	}
 }
 
+func TestStoreRebuildsFreshReservationAfterObservedPendingIsAbandoned(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = controlDB.Close() })
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sequencer.Close() })
+
+	stale := validStoreBatch()
+	stale.Events[0].Event.Raw = []byte(`{"message":"stale-normalization"}`)
+	fresh := validStoreBatch()
+	fresh.Events[0].Event.Raw = []byte(`{"message":"fresh-normalization"}`)
+	seedStore := mustTestStoreWithVisibility(
+		t,
+		&fakeStoreConnection{},
+		fixedRetention(time.Hour),
+		sequencer,
+	)
+	rows, err := seedStore.rowsForBatch(ctx, stale, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := encodeReservationMetadata(rows, stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outbox, err := encodeStoreOutbox(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloadDigest, err := storePayloadDigest(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const staleAttemptID = "stale-normalization-owner"
+	pending, err := sequencer.Reserve(ctx, visibility.ReserveRequest{
+		BatchKey:      deduplicationToken(stale),
+		SequenceKey:   sequenceIdentityKey(stale),
+		AttemptID:     staleAttemptID,
+		IndexTime:     stale.ReceivedAt,
+		PayloadSHA256: payloadDigest,
+		Metadata:      metadata,
+		Outbox:        outbox,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tracing := &abandonBeforeExistingReserveSequencer{
+		Sequencer: sequencer,
+		sequence:  pending.Sequence,
+		owner:     staleAttemptID,
+	}
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), tracing)
+	result, err := store.Store(ctx, fresh)
+	if err != nil {
+		t.Fatalf("Store after pending abandonment: %v", err)
+	}
+	if result.Accepted != 1 || result.Duplicate != 0 || result.BatchRejection != nil {
+		t.Fatalf("Store result = %+v, want one newly accepted event", result)
+	}
+	if len(tracing.requests) != 2 {
+		t.Fatalf("Reserve requests = %d, want one acquisition plus one bounded fallback", len(tracing.requests))
+	}
+	acquire, allocate := tracing.requests[0], tracing.requests[1]
+	if !acquire.ExistingOnly || !acquire.IndexTime.IsZero() ||
+		acquire.Metadata != nil || acquire.Outbox != nil {
+		t.Fatalf("first Reserve request = %+v, want identity-only existing acquisition", acquire)
+	}
+	if allocate.ExistingOnly || allocate.AttemptID != acquire.AttemptID ||
+		!allocate.IndexTime.Equal(fresh.ReceivedAt) || len(allocate.Metadata) == 0 || len(allocate.Outbox) == 0 {
+		t.Fatalf("fallback Reserve request = %+v, want full fresh allocation with reused clean attempt", allocate)
+	}
+	replayed, err := decodeStoreOutbox(allocate.Outbox)
+	if err != nil {
+		t.Fatalf("decode fallback outbox: %v", err)
+	}
+	if got := replayed.Events[0].Event.GetRaw(); !slices.Equal(got, fresh.Events[0].Event.GetRaw()) ||
+		slices.Equal(got, stale.Events[0].Event.GetRaw()) {
+		t.Fatalf("fallback outbox raw = %q, want fresh %q and not stale %q", got, fresh.Events[0].Event.GetRaw(), stale.Events[0].Event.GetRaw())
+	}
+	if connection.prepareCalls != 1 || connection.batch.sendCalls != 1 || len(connection.batch.rows) != 1 {
+		t.Fatalf(
+			"ClickHouse work = prepares %d sends %d rows %d, want 1/1/1",
+			connection.prepareCalls,
+			connection.batch.sendCalls,
+			len(connection.batch.rows),
+		)
+	}
+	if got := connection.batch.rows[0][eventVisibilitySequenceColumn]; got != pending.Sequence+1 {
+		t.Fatalf("fresh visibility sequence = %#v, want %d", got, pending.Sequence+1)
+	}
+	var total, abandoned, committed int
+	if err := controlDB.SQLDB().QueryRowContext(ctx, `
+		SELECT count(*),
+		       count(*) FILTER (WHERE state = 'abandoned'),
+		       count(*) FILTER (WHERE state = 'committed')
+		FROM ingest_visibility_reservations`).Scan(&total, &abandoned, &committed); err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || abandoned != 1 || committed != 1 {
+		t.Fatalf("visibility rows = total %d abandoned %d committed %d, want 2/1/1", total, abandoned, committed)
+	}
+}
+
+func TestStoreBoundsRepeatedReservationGoneAsServerBusy(t *testing.T) {
+	t.Parallel()
+	sequencer := &alwaysGoneVisibilitySequencer{
+		fakeVisibilitySequencer: &fakeVisibilitySequencer{
+			reservation:    visibility.Reservation{Sequence: 1},
+			hasReservation: true,
+		},
+	}
+	connection := &fakeStoreConnection{}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+
+	_, err := store.Store(context.Background(), validStoreBatch())
+	assertTransient(
+		t,
+		err,
+		opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_SERVER_BUSY,
+	)
+	var gone *ingest.StoredBatchGoneError
+	if errors.As(err, &gone) {
+		t.Fatalf("ordinary Store leaked StoredBatchGoneError: %v", err)
+	}
+	if !errors.Is(err, visibility.ErrReservationGone) {
+		t.Fatalf("Store error = %v, want preserved ErrReservationGone cause", err)
+	}
+	if len(sequencer.requests) != 2 || !sequencer.requests[0].ExistingOnly ||
+		sequencer.requests[1].ExistingOnly {
+		t.Fatalf("bounded Reserve requests = %+v, want existing-only then one fresh allocation", sequencer.requests)
+	}
+	if connection.prepareCalls != 0 {
+		t.Fatalf("exhausted fallback prepared ClickHouse %d times", connection.prepareCalls)
+	}
+}
+
 func TestServerOwnedReconcilerResolvesGapAndAdvancesCommittedFrontier(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -386,10 +531,11 @@ func TestCloseCancelsAndWaitsForManualReconciliationBeforeClosingConnection(t *t
 		t.Fatalf("seed pending Store error = %v, want transient", err)
 	}
 	gate := &gatedStoreConnection{
-		entered: make(chan struct{}),
-		resume:  make(chan struct{}),
-		exited:  make(chan struct{}),
-		closed:  make(chan struct{}),
+		entered:          make(chan struct{}),
+		resume:           make(chan struct{}),
+		exited:           make(chan struct{}),
+		closed:           make(chan struct{}),
+		closedBeforeExit: make(chan struct{}),
 	}
 	store.connection = gate
 	reconcileDone := make(chan error, 1)
@@ -403,8 +549,6 @@ func TestCloseCancelsAndWaitsForManualReconciliationBeforeClosingConnection(t *t
 	closeDone := make(chan error, 1)
 	go func() { closeDone <- store.Close() }()
 	select {
-	case <-gate.closed:
-		t.Fatal("connection closed before manual reconciliation left ClickHouse")
 	case <-gate.exited:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Close did not cancel manual reconciliation")
@@ -416,6 +560,11 @@ func TestCloseCancelsAndWaitsForManualReconciliationBeforeClosingConnection(t *t
 	case <-gate.closed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("connection did not close after manual reconciliation stopped")
+	}
+	select {
+	case <-gate.closedBeforeExit:
+		t.Fatal("connection closed before manual reconciliation left ClickHouse")
+	default:
 	}
 	if err := <-closeDone; err != nil {
 		t.Fatal(err)
@@ -429,8 +578,143 @@ func TestReconcilePendingPrunesAtClickHouseDeduplicationHorizon(t *testing.T) {
 	if err := store.ReconcilePending(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if sequencer.pruneRetain != durableIdempotencyWindow || sequencer.pruneLimit != visibilityPruneBatch {
-		t.Fatalf("prune policy = retain %d limit %d", sequencer.pruneRetain, sequencer.pruneLimit)
+	wantRetention := visibility.TerminalRetention{
+		Committed:             10_000,
+		Rejected:              10_000,
+		RejectedMetadataBytes: 256 << 20,
+	}
+	if sequencer.pruneRetention != wantRetention || sequencer.pruneLimit != visibilityPruneBatch {
+		t.Fatalf("prune policy = retain %+v limit %d", sequencer.pruneRetention, sequencer.pruneLimit)
+	}
+}
+
+func TestReconcilePendingPrunesAfterReplayFailureWithoutMaskingIt(t *testing.T) {
+	t.Parallel()
+	sequencer := &fakeVisibilitySequencer{
+		reservation: visibility.Reservation{Sequence: 1},
+	}
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	if _, err := store.Store(context.Background(), validStoreBatch()); !isTransient(err) {
+		t.Fatalf("seed pending Store error = %v, want transient", err)
+	}
+	sequencer.reservation.PreviouslyReserved = true
+	sequencer.pruneErr = visibility.ErrPendingCapacity
+	connection.batch = &fakeWriteBatch{}
+	connection.prepareErr = io.ErrUnexpectedEOF
+
+	err := store.ReconcilePending(context.Background())
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !errors.Is(err, visibility.ErrPendingCapacity) {
+		t.Fatalf("ReconcilePending error = %v, want replay and prune causes", err)
+	}
+	var transient *ingest.TransientStoreError
+	if !errors.As(err, &transient) ||
+		transient.Reason != opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_STORAGE_UNAVAILABLE {
+		t.Fatalf("joined retry = %#v, want primary replay classification", transient)
+	}
+	if sequencer.pruneCalls != 1 {
+		t.Fatalf("normal replay failure prune calls = %d, want 1", sequencer.pruneCalls)
+	}
+
+	sequencer.pruneCalls = 0
+	err = store.reconcilePending(context.Background(), true)
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("exclusive replay error = %v, want original replay failure", err)
+	}
+	if sequencer.pruneCalls != 0 {
+		t.Fatalf("exclusive proveDrained pruned %d times", sequencer.pruneCalls)
+	}
+}
+
+func TestReconcilePendingBoundsTerminalPruneDuringPersistentReplayFailure(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = controlDB.Close() })
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sequencer.Close() })
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{sendErr: io.ErrUnexpectedEOF}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	if _, err := store.Store(ctx, validStoreBatch()); !isTransient(err) {
+		t.Fatalf("seed pending Store error = %v, want transient", err)
+	}
+
+	const rejectedRows = durableBatchRejectWindow + visibilityPruneBatch + 1
+	lastSequence := int64(rejectedRows + 1)
+	tx, err := controlDB.SQLDB().BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		WITH RECURSIVE sequences(sequence) AS (
+			SELECT 2
+			UNION ALL
+			SELECT sequence + 1 FROM sequences WHERE sequence < ?
+		)
+		INSERT INTO ingest_batch_identities
+			(batch_key, sequence_key, payload_sha256, first_visibility_seq, created_at_unix_micro)
+		SELECT printf('retention-reject-%d', sequence),
+		       printf('retention-sequence-%d', sequence),
+		       zeroblob(32), sequence, sequence
+		FROM sequences`, lastSequence); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		WITH RECURSIVE sequences(sequence) AS (
+			SELECT 2
+			UNION ALL
+			SELECT sequence + 1 FROM sequences WHERE sequence < ?
+		)
+		INSERT INTO ingest_visibility_reservations
+			(sequence, batch_key, state, phase, attempt_id, index_time_unix_milli,
+			 metadata, outbox, created_at_unix_micro, committed_at_unix_micro)
+		SELECT sequence, printf('retention-reject-%d', sequence),
+		       'rejected', 'final', '', 0, X'', X'', sequence, sequence
+		FROM sequences`, lastSequence); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE ingest_visibility_state SET last_assigned = ? WHERE singleton = 1`,
+		lastSequence,
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	connection.batch = &fakeWriteBatch{}
+	connection.prepareErr = io.ErrUnexpectedEOF
+	err = store.ReconcilePending(ctx)
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !isTransient(err) {
+		t.Fatalf("ReconcilePending error = %v, want primary transient replay failure", err)
+	}
+	var rejected, pending int
+	var pendingAttempt string
+	if err := controlDB.SQLDB().QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE state = 'rejected'),
+		       count(*) FILTER (WHERE state = 'reserved'),
+		       coalesce(max(attempt_id) FILTER (WHERE state = 'reserved'), '')
+		FROM ingest_visibility_reservations`).Scan(&rejected, &pending, &pendingAttempt); err != nil {
+		t.Fatal(err)
+	}
+	if rejected != rejectedRows-visibilityPruneBatch || pending != 1 || pendingAttempt != "" {
+		t.Fatalf(
+			"post-failure ledger = rejected %d pending %d attempt %q, want %d/1/empty",
+			rejected,
+			pending,
+			pendingAttempt,
+			rejectedRows-visibilityPruneBatch,
+		)
 	}
 }
 
@@ -453,6 +737,40 @@ func TestTerminalReservationsScheduleBoundedMaintenance(t *testing.T) {
 	case <-pruned:
 	case <-time.After(5 * time.Second):
 		t.Fatal("terminal reservation threshold did not schedule pruning")
+	}
+}
+
+func TestTerminalRejectionBytesScheduleConcurrentBoundedMaintenance(t *testing.T) {
+	t.Parallel()
+	store := &Store{reconcileWake: make(chan struct{}, 1)}
+
+	const workers = 257
+	metadataBytes := uint64(durableBatchRejectPruneWakeBytes/32 + 1)
+	start := make(chan struct{})
+	done := make(chan struct{}, workers)
+	for range workers {
+		go func() {
+			<-start
+			store.noteTerminalRejection(metadataBytes)
+			done <- struct{}{}
+		}()
+	}
+	close(start)
+	for range workers {
+		<-done
+	}
+
+	wantBytes := (uint64(workers) * metadataBytes) % durableBatchRejectPruneWakeBytes
+	if got := store.rejectionWakeBytes.Load(); got != wantBytes {
+		t.Fatalf("concurrent rejected metadata bytes = %d, want %d", got, wantBytes)
+	}
+	if got := store.terminalCount.Load(); got != workers {
+		t.Fatalf("concurrent terminal count = %d, want %d", got, workers)
+	}
+	select {
+	case <-store.reconcileWake:
+	default:
+		t.Fatal("rejected metadata crossed its byte interval without scheduling maintenance")
 	}
 }
 
@@ -1550,11 +1868,12 @@ func (c *fakeStoreConnection) Close() error {
 }
 
 type gatedStoreConnection struct {
-	entered chan struct{}
-	resume  chan struct{}
-	exited  chan struct{}
-	closed  chan struct{}
-	err     error
+	entered          chan struct{}
+	resume           chan struct{}
+	exited           chan struct{}
+	closed           chan struct{}
+	closedBeforeExit chan struct{}
+	err              error
 }
 
 func (connection *gatedStoreConnection) prepare(ctx context.Context, _ string, _ clickhousedriver.Settings) (writeBatch, error) {
@@ -1600,6 +1919,13 @@ func (row fakeErrorStoreQueryRow) Scan(...any) error {
 
 func (*gatedStoreConnection) Ping(context.Context) error { return nil }
 func (connection *gatedStoreConnection) Close() error {
+	if connection.closedBeforeExit != nil && connection.exited != nil {
+		select {
+		case <-connection.exited:
+		default:
+			close(connection.closedBeforeExit)
+		}
+	}
 	if connection.closed != nil {
 		close(connection.closed)
 	}
@@ -1676,9 +2002,53 @@ type fakeVisibilitySequencer struct {
 	cutoffCalls    int
 	acquireCalls   int
 	pendingCalls   int
-	pruneRetain    uint64
+	pruneRetention visibility.TerminalRetention
 	pruneLimit     uint32
+	pruneDeleted   uint32
+	pruneErr       error
+	pruneCalls     int
 	pruneNotify    chan<- struct{}
+}
+
+type abandonBeforeExistingReserveSequencer struct {
+	visibility.Sequencer
+	sequence  uint64
+	owner     string
+	abandoned bool
+	requests  []visibility.ReserveRequest
+}
+
+func (sequencer *abandonBeforeExistingReserveSequencer) Reserve(
+	ctx context.Context,
+	request visibility.ReserveRequest,
+) (visibility.Reservation, error) {
+	captured := request
+	captured.Metadata = slices.Clone(request.Metadata)
+	captured.Outbox = slices.Clone(request.Outbox)
+	sequencer.requests = append(sequencer.requests, captured)
+	if !sequencer.abandoned {
+		sequencer.abandoned = true
+		if err := sequencer.Abandon(ctx, sequencer.sequence, sequencer.owner); err != nil {
+			return visibility.Reservation{}, err
+		}
+	}
+	return sequencer.Sequencer.Reserve(ctx, request)
+}
+
+type alwaysGoneVisibilitySequencer struct {
+	*fakeVisibilitySequencer
+	requests []visibility.ReserveRequest
+}
+
+func (sequencer *alwaysGoneVisibilitySequencer) Reserve(
+	_ context.Context,
+	request visibility.ReserveRequest,
+) (visibility.Reservation, error) {
+	captured := request
+	captured.Metadata = slices.Clone(request.Metadata)
+	captured.Outbox = slices.Clone(request.Outbox)
+	sequencer.requests = append(sequencer.requests, captured)
+	return visibility.Reservation{}, visibility.ErrReservationGone
 }
 
 func (sequencer *fakeVisibilitySequencer) Lookup(_ context.Context, _, _ string, _ [32]byte) (visibility.Reservation, bool, error) {
@@ -1719,10 +2089,31 @@ func (sequencer *fakeVisibilitySequencer) Reserve(_ context.Context, request vis
 	}
 	return reservation, sequencer.reserveErr
 }
+func (sequencer *fakeVisibilitySequencer) Reject(_ context.Context, request visibility.RejectRequest) (visibility.Reservation, error) {
+	if sequencer.hasReservation {
+		return sequencer.reservation, sequencer.reserveErr
+	}
+	reservation := visibility.Reservation{
+		BatchKey:      request.BatchKey,
+		SequenceKey:   request.SequenceKey,
+		Sequence:      1,
+		Rejected:      true,
+		NewlyRejected: true,
+		IndexTime:     request.IndexTime.UTC().Truncate(time.Millisecond),
+		PayloadSHA256: request.PayloadSHA256,
+		Metadata:      slices.Clone(request.Metadata),
+		RejectedAt:    request.RejectedAt.UTC().Truncate(time.Microsecond),
+	}
+	sequencer.reservation = reservation
+	if sequencer.reserveErr == nil {
+		sequencer.hasReservation = true
+	}
+	return reservation, sequencer.reserveErr
+}
 func (sequencer *fakeVisibilitySequencer) AcquirePending(_ context.Context, _ string) (visibility.Reservation, bool, error) {
 	sequencer.acquireCalls++
 	if sequencer.acquireBlocked || !sequencer.hasReservation ||
-		sequencer.reservation.AlreadyCommitted {
+		sequencer.reservation.AlreadyCommitted || sequencer.reservation.Rejected {
 		return visibility.Reservation{}, false, nil
 	}
 	return sequencer.reservation, true, nil
@@ -1735,7 +2126,7 @@ func (sequencer *fakeVisibilitySequencer) PendingUsage(context.Context) (visibil
 	if sequencer.pendingUsage != nil {
 		return *sequencer.pendingUsage, nil
 	}
-	if !sequencer.hasReservation || sequencer.reservation.AlreadyCommitted {
+	if !sequencer.hasReservation || sequencer.reservation.AlreadyCommitted || sequencer.reservation.Rejected {
 		return visibility.PendingUsage{}, nil
 	}
 	return visibility.PendingUsage{
@@ -1774,13 +2165,14 @@ func (sequencer *fakeVisibilitySequencer) Cutoff(context.Context) (uint64, error
 	sequencer.cutoffCalls++
 	return sequencer.cutoff, sequencer.cutoffErr
 }
-func (sequencer *fakeVisibilitySequencer) PruneTerminal(_ context.Context, retain uint64, limit uint32) (uint32, error) {
-	sequencer.pruneRetain = retain
+func (sequencer *fakeVisibilitySequencer) PruneTerminal(_ context.Context, retention visibility.TerminalRetention, limit uint32) (uint32, error) {
+	sequencer.pruneCalls++
+	sequencer.pruneRetention = retention
 	sequencer.pruneLimit = limit
 	if sequencer.pruneNotify != nil {
 		sequencer.pruneNotify <- struct{}{}
 	}
-	return 0, nil
+	return sequencer.pruneDeleted, sequencer.pruneErr
 }
 func validStoreBatch() ingest.StoreBatch {
 	now := time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC)
