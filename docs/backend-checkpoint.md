@@ -7,7 +7,103 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: durable rejection replay and transactional file reads
+## Latest checkpoint: bounded conditional eventstats counts
+
+Date: 2026-08-01
+
+Committed implementation checkpoint:
+
+- `0c78cb7` — bounded `eventstats count(eval(predicate)) AS output [BY ...]`.
+
+This test-first SPL unit extends the existing bounded `eventstats` contract
+without changing the ClickHouse storage schema or using GORM outside the
+SQLite control plane:
+
+1. The parser accepts one explicit `count(eval(predicate)) AS output`
+   aggregate followed by up to 16 `BY` fields. It shares the established
+   conditional-count grammar and query-wide predicate budget with `stats`,
+   preserves precise source ranges, requires an alias, and exposes the new
+   form through suggestions and the generated frontend completion catalog.
+2. Planning resolves and analyzes predicate dependencies before projection,
+   rejects cyclic or forged aggregate graphs, preserves reserved open-schema
+   fields, and retains row and timeline eligibility because `eventstats`
+   enriches every source event rather than replacing the result set.
+3. ClickHouse compiles the Boolean predicate as a private unsigned measure
+   inside the bounded `eventstats` input and sums through `UInt128` before a
+   checked `UInt64` result. The predicate is never lowered into `WHERE`, so
+   false and null predicates contribute zero without filtering source rows.
+4. Global and grouped execution preserve source cardinality and order.
+   Grouped rows with a missing or null key retain a nullable aggregate output,
+   matching the existing `eventstats` join contract instead of inventing a
+   zero-valued group.
+5. The 10,000-input-row contract remains atomic: 10,000 rows succeed and
+   10,001 fail before publication. Predicates that depend on calculated or
+   extracted fields are fenced in a `MATERIALIZED` CTE whose own input is
+   limited to the 10,001-row sentinel, preventing the optimizer from
+   duplicating work without materializing an unbounded upstream relation.
+6. Repeated comparisons against Dynamic numeric fields share one exact
+   key-and-eligibility projection. Integer values outside the exact `Float64`
+   range retain their existing exact comparison behavior, including through a
+   calculated predicate alias.
+7. Predicate compilation now uses an isolated state while durable projection
+   uses the parent state, removing temporary private-alias restoration. Shared
+   helpers validate and build the conditional measure for both `stats` and
+   `eventstats`, while plan validation proves structure and provenance without
+   duplicating compiler semantics.
+8. Parser, planner, search-inspection, compiler, real ClickHouse, suggestion,
+   and frontend completion-contract tests cover global and grouped counts,
+   nulls, missing keys, overwrite and downstream reuse, calculated and
+   extracted predicates, scope filtering, reserved names, exact Dynamic
+   numbers, the 10,000/10,001 boundary, malformed plans, limits, and
+   cancellation.
+9. Three simplify reviews plus an independent adversarial review drove the
+   bounded materialization fix, exact Dynamic projection sharing, isolated
+   compiler state, shared aggregate construction, structural validator
+   simplification, and a non-tautological alias-boundary regression. The final
+   reviewers reported no remaining concrete correctness, maintainability, or
+   efficiency finding in this unit.
+10. The architecture plan is not complete. Per-index and per-token ingestion
+    quotas, broader SPL compatibility, identity bootstrap, HEC, backup and
+    restore, and later operational phases remain separate work. The external
+    GradeThis collector cutover remains intentionally untouched pending
+    explicit direction.
+
+Validation on implementation commit `0c78cb7`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+go test ./... -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-eventstats-coverage.out ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+```
+
+Every command above passed. The cached v2.12.2 linter reported `0 issues`,
+all 202 frontend tests passed, the digest-pinned ClickHouse suite passed, and
+cleanup found no test-owned ClickHouse container. GitHub Actions run
+`30703581724` was fully green for the implementation checkpoint, including Go
+lint, Backend vertical, race/coverage, the pinned GradeThis corpus, release OCI
+and ARM64 checks, both production builds, and the Linux/macOS canonical asset
+comparison.
+
+## Previous checkpoint: durable rejection replay and transactional file reads
 
 Date: 2026-08-01
 
@@ -11878,7 +11974,8 @@ aggregate contract at a time:
 - decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
   remain separate percentile contracts and are not part of the first bounded
   integer-suffix slice;
-- `eventstats` should follow only after the aggregate library is stable;
+- bounded conditional-count `eventstats` is complete at `0c78cb7`; broader
+  `eventstats` aggregates need their own explicit contracts, while
   `streamstats` remains outside the first release unless scope changes; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
@@ -12061,7 +12158,8 @@ Do not guess those decisions if they materially affect the implementation.
    protocol unit contract are already complete.
 6. For the next scalar or aggregate slice, write an explicit syntax, null,
    multivalue, type, precision, approximation, timezone, and resource contract
-   before implementation. Keep `eventstats` behind a stable aggregate library.
+   before implementation. Extend `eventstats` only through that same bounded
+   aggregate-by-aggregate process.
 7. Preserve chronological event-order/member-order and atomic validation,
    scalar/Dynamic path separation, numeric grammar sharing,
    punctuation/UTF-8/zero/overlong boundaries,
