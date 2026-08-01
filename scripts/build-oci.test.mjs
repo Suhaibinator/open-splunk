@@ -393,9 +393,9 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   assert.match(dockerfile, /\/var\/lib\/open-splunk\/state/);
   assert.match(dockerfile, /\/var\/lib\/open-splunk\/exports/);
   assert.match(dockerfile, /\/var\/lib\/open-splunk-collector/);
-  assert.match(dockerfile, /install -d -m 0555 \/image-layout\/common\/etc/);
+  assert.match(dockerfile, /install -d -o 0 -g 0 -m 0555/);
   assert.equal(
-    (dockerfile.match(/COPY --from=binaries --chown=0:0 \/image-layout\/common\/etc\/ \/etc\//g) ?? [])
+    (dockerfile.match(/^COPY --from=binaries \/image-rootfs\/(?:server|collector)\/ \/$/gm) ?? [])
       .length,
     2,
   );
@@ -434,6 +434,10 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
     dockerfile,
     /test "\$\{SOURCE_DATE_EPOCH\}" = "\$\{OPEN_SPLUNK_SOURCE_DATE_EPOCH\}"/,
   );
+  assert.match(
+    dockerfile,
+    /find \/image-rootfs -exec touch -h -d "@\$\{SOURCE_DATE_EPOCH\}" \{\} \+/,
+  );
   assert.doesNotMatch(dockerfile, /^ADD /m);
 
   const serverTarget = dockerfile.split("FROM scratch AS server")[1]
@@ -445,32 +449,38 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   assert.doesNotMatch(collectorTarget, /open-splunk-server/);
   for (const target of [serverTarget, collectorTarget]) {
     assert.doesNotMatch(target, /^RUN /m);
+    assert.equal(
+      (target.match(/^COPY /gm) ?? []).length,
+      1,
+      "scratch targets must copy a complete, timestamp-normalized rootfs",
+    );
     assert.match(target, /org\.opencontainers\.image\.version/);
     assert.match(target, /org\.opencontainers\.image\.revision/);
     assert.match(target, /org\.opencontainers\.image\.created/);
   }
 });
 
-test("server image seeds secure writable children below named-volume roots", async () => {
+test("images seed secure writable paths in their normalized rootfs trees", async () => {
   const dockerfile = await readFile(path.join(workspace, "Dockerfile"), "utf8");
   const serverTarget = dockerfile.split("FROM scratch AS server")[1]
     .split("FROM scratch AS collector")[0];
+  const collectorTarget = dockerfile.split("FROM scratch AS collector")[1];
 
   assert.match(
     dockerfile,
-    /install -d -m 0700 \\\n+\s*\/image-layout\/server\/state\/private \\\n+\s*\/image-layout\/server\/exports\/private \\/,
+    /install -d -o 65532 -g 65532 -m 0700 \\\n+\s*\/image-rootfs\/server\/var\/lib\/open-splunk\/state\/private \\\n+\s*\/image-rootfs\/server\/var\/lib\/open-splunk\/exports\/private \\\n+\s*\/image-rootfs\/collector\/var\/lib\/open-splunk-collector;/,
   );
   assert.match(
     serverTarget,
-    /^COPY --from=binaries --chown=65532:65532 --chmod=0700 \/image-layout\/server\/state\/ \/var\/lib\/open-splunk\/state\/$/m,
-  );
-  assert.match(
-    serverTarget,
-    /^COPY --from=binaries --chown=65532:65532 --chmod=0700 \/image-layout\/server\/exports\/ \/var\/lib\/open-splunk\/exports\/$/m,
+    /^COPY --from=binaries \/image-rootfs\/server\/ \/$/m,
   );
   assert.match(
     serverTarget,
     /^WORKDIR \/var\/lib\/open-splunk\/state\/private$/m,
+  );
+  assert.match(
+    collectorTarget,
+    /^WORKDIR \/var\/lib\/open-splunk-collector$/m,
   );
 });
 

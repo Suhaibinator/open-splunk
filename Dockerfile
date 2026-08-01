@@ -93,11 +93,7 @@ RUN set -eu; \
       -ldflags "-X ${build_information_package}.applicationVersion=${OPEN_SPLUNK_APPLICATION_VERSION} -X ${build_information_package}.sourceRevision=${OPEN_SPLUNK_SOURCE_REVISION}" \
       -o /artifacts/open-splunk-collector \
       ./cmd/open-splunk-collector; \
-    chmod 0555 /artifacts/open-splunk-server /artifacts/open-splunk-collector; \
-    install -d -m 0700 \
-      /image-layout/server/state/private \
-      /image-layout/server/exports/private \
-      /image-layout/collector
+    chmod 0555 /artifacts/open-splunk-server /artifacts/open-splunk-collector
 RUN set -eu; \
     if [ "${TARGETOS}" = "$(go env GOHOSTOS)" ] && \
        [ "${TARGETARCH}" = "$(go env GOHOSTARCH)" ]; then \
@@ -109,11 +105,45 @@ RUN set -eu; \
       test "${server_identity}" = "${expected}"; \
       test "${collector_identity}" = "${expected}"; \
     fi
-RUN install -d -m 0555 /image-layout/common/etc && \
-    install -m 0444 \
+# Materialize every scratch-root entry before COPY so BuildKit never synthesizes
+# parent directories with wall-clock timestamps in the published layers.
+RUN set -eu; \
+    install -d -o 0 -g 0 -m 0555 \
+      /image-rootfs/server/etc \
+      /image-rootfs/server/usr \
+      /image-rootfs/server/usr/local \
+      /image-rootfs/server/usr/local/bin \
+      /image-rootfs/collector/etc \
+      /image-rootfs/collector/usr \
+      /image-rootfs/collector/usr/local \
+      /image-rootfs/collector/usr/local/bin; \
+    install -d -o 0 -g 0 -m 0755 \
+      /image-rootfs/server/var \
+      /image-rootfs/server/var/lib \
+      /image-rootfs/server/var/lib/open-splunk \
+      /image-rootfs/server/var/lib/open-splunk/state \
+      /image-rootfs/server/var/lib/open-splunk/exports \
+      /image-rootfs/collector/var \
+      /image-rootfs/collector/var/lib; \
+    install -d -o 65532 -g 65532 -m 0700 \
+      /image-rootfs/server/var/lib/open-splunk/state/private \
+      /image-rootfs/server/var/lib/open-splunk/exports/private \
+      /image-rootfs/collector/var/lib/open-splunk-collector; \
+    install -o 0 -g 0 -m 0444 \
       oci/rootfs/etc/passwd \
       oci/rootfs/etc/group \
-      /image-layout/common/etc/
+      /image-rootfs/server/etc/; \
+    install -o 0 -g 0 -m 0444 \
+      oci/rootfs/etc/passwd \
+      oci/rootfs/etc/group \
+      /image-rootfs/collector/etc/; \
+    install -o 0 -g 0 -m 0555 \
+      /artifacts/open-splunk-server \
+      /image-rootfs/server/usr/local/bin/open-splunk-server; \
+    install -o 0 -g 0 -m 0555 \
+      /artifacts/open-splunk-collector \
+      /image-rootfs/collector/usr/local/bin/open-splunk-collector; \
+    find /image-rootfs -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM scratch AS server
 ARG OPEN_SPLUNK_APPLICATION_VERSION
@@ -126,10 +156,7 @@ LABEL org.opencontainers.image.version="${OPEN_SPLUNK_APPLICATION_VERSION}"
 LABEL org.opencontainers.image.revision="${OPEN_SPLUNK_SOURCE_REVISION}"
 LABEL org.opencontainers.image.created="${OPEN_SPLUNK_IMAGE_CREATED}"
 LABEL org.opencontainers.image.licenses="MIT"
-COPY --from=binaries --chown=0:0 /image-layout/common/etc/ /etc/
-COPY --from=binaries --chown=0:0 --chmod=0555 /artifacts/open-splunk-server /usr/local/bin/open-splunk-server
-COPY --from=binaries --chown=65532:65532 --chmod=0700 /image-layout/server/state/ /var/lib/open-splunk/state/
-COPY --from=binaries --chown=65532:65532 --chmod=0700 /image-layout/server/exports/ /var/lib/open-splunk/exports/
+COPY --from=binaries /image-rootfs/server/ /
 USER 65532:65532
 WORKDIR /var/lib/open-splunk/state/private
 EXPOSE 8080 4317
@@ -149,9 +176,7 @@ LABEL org.opencontainers.image.version="${OPEN_SPLUNK_APPLICATION_VERSION}"
 LABEL org.opencontainers.image.revision="${OPEN_SPLUNK_SOURCE_REVISION}"
 LABEL org.opencontainers.image.created="${OPEN_SPLUNK_IMAGE_CREATED}"
 LABEL org.opencontainers.image.licenses="MIT"
-COPY --from=binaries --chown=0:0 /image-layout/common/etc/ /etc/
-COPY --from=binaries --chown=0:0 --chmod=0555 /artifacts/open-splunk-collector /usr/local/bin/open-splunk-collector
-COPY --from=binaries --chown=65532:65532 --chmod=0700 /image-layout/collector/ /var/lib/open-splunk-collector/
+COPY --from=binaries /image-rootfs/collector/ /
 USER 65532:65532
 WORKDIR /var/lib/open-splunk-collector
 STOPSIGNAL SIGTERM
