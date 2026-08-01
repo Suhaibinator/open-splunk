@@ -114,6 +114,23 @@ func validateCollectorStateDirectoryPath(cleanStateDir string) error {
 			cleanStateDir,
 		)
 	}
+	workingDirectoryInfo, err := os.Stat(".")
+	if err != nil {
+		return fmt.Errorf("collector: inspect current working directory: %w", err)
+	}
+	stateDirectoryInfo, err := os.Stat(cleanStateDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("collector: inspect state directory %q: %w", cleanStateDir, err)
+	}
+	if os.SameFile(workingDirectoryInfo, stateDirectoryInfo) {
+		return fmt.Errorf(
+			"collector: state directory %q must be a dedicated child directory, not the current working directory",
+			cleanStateDir,
+		)
+	}
 	return nil
 }
 

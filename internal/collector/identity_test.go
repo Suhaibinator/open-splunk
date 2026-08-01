@@ -80,7 +80,11 @@ func TestInitializeCollectorIDCreatesCanonicalStableOwnerOnlyIdentity(t *testing
 func TestValidateCollectorStateDirectoryPathRejectsFilesystemRootAndCurrentDirectory(t *testing.T) {
 	t.Parallel()
 
-	for _, path := range []string{string(os.PathSeparator), "."} {
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{string(os.PathSeparator), ".", workingDirectory} {
 		if err := validateCollectorStateDirectoryPath(filepath.Clean(path)); err == nil {
 			t.Fatalf("validateCollectorStateDirectoryPath(%q) succeeded", path)
 		}
