@@ -7,7 +7,116 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded numeric eventstats sum
+## Latest checkpoint: bounded numeric eventstats average
+
+Date: 2026-08-01
+
+Committed implementation checkpoint:
+
+- `3f83414` — bounded `eventstats avg(field) AS output [BY ...]`.
+
+This test-first SPL unit adds one explicitly bounded row-preserving numeric
+average without changing the ClickHouse schema or introducing GORM on the
+ClickHouse path:
+
+1. The parser accepts exactly one `avg(<exact unquoted field>) AS <exact
+   output>` followed by zero through 16 distinct exact `BY` fields. Function
+   and keyword spelling is case-insensitive while field spelling remains
+   case-sensitive. Empty, quoted, wildcard, eval, and multiple inputs;
+   `average(...)`; implicit aliases; multiple measures; and unsupported
+   options or aggregate functions fail with source-located diagnostics.
+2. Planning resolves the input before output replacement, records its field
+   dependency, upserts a known output schema in place, and preserves event,
+   timeline, index-authorization, result-shape, and inspection provenance.
+   Structural validators and compiler boundaries reject forged inputs,
+   predicates, percentiles, private outputs, duplicate groups, and unsupported
+   functions.
+3. Numeric behavior deliberately reuses the `stats avg(field)` lowering.
+   Finite numeric scalars and Strings, tagged Decimals, canonical timestamps,
+   and finite immediate multivalue members contribute through one `Float64`
+   array per row. Missing, null, empty, Boolean, binary, object, nonnumeric,
+   nonfinite, and nested values contribute nothing. The denominator is the
+   exact number of eligible immediate numeric members, including duplicates,
+   rather than source-row count; aggregate-produced nonfinite results retain
+   the existing stats behavior.
+4. The published value is nullable `Float64`. A global relation with no
+   numeric member and a complete grouped tuple with no numeric member publish
+   present null. Missing or null `BY` members keep their source row but leave
+   the output logically absent. Field-summary integration pins the resulting
+   present/null/missing distinction.
+5. The existing 10,000-row eventstats fence remains atomic. The compiler
+   materializes at most 10,001 scoped upstream rows once, computes the numeric
+   array once per row, and uses one `avgOrNullArray` aggregate state. Grouped
+   execution uses one bounded `GROUP BY` and one left join; global and grouped
+   forms perform no physical rescan, `ARRAY JOIN`, `groupArray`, row
+   multiplication, per-group query, or Go-side buffering.
+6. Input resolution precedes alias replacement, projected-away inputs remain
+   absent instead of being rebound from storage, and downstream filtering
+   cannot change the mean or conceal an over-limit source. Tenant, index,
+   source, time, visibility, and retention predicates stay below the input
+   fence.
+7. Parser, suggestion, planner, analysis, result-shape, search-inspection,
+   compiler, alias-collision, and real ClickHouse tests cover global and
+   grouped averages; numeric scalar/String/multivalue and tagged-Decimal
+   inputs; member-count denominators; all-ineligible null output; missing/null
+   groups; canonical `_time`; computed `+Inf`; re-aggregation of a fixed
+   multivalue; projected input; scope poison; downstream composition; output
+   presence metadata; and the 10,001-row atomic failure.
+8. The shared completion catalog and frontend contract now advertise numeric
+   average, and the syntax highlighter recognizes `avg(...)` as a function.
+   Adversarial suggestion tests pin field-only completion inside `avg(` and
+   alias-only completion after `avg(field)`, so the unsupported `avg(eval(`
+   form cannot enter scalar-expression suggestions.
+9. Simplify reviews consolidated the sum/average parser, projection,
+   result-shape, compiler descriptor, and real-ClickHouse workflows while
+   retaining average-specific boundaries. Independent correctness and
+   ClickHouse semantic/performance reviews found no remaining concrete issue
+   after fixing parent-test failure attribution and positional fixture
+   expectations. The physical plan retains one scan, one normalization per
+   row, and one average state.
+10. This checkpoint does not claim general `eventstats` or `streamstats`
+    support. Each additional aggregate still needs its own syntax, null,
+    multivalue, precision, and resource contract. The external GradeThis
+    collector cutover remains intentionally untouched pending explicit
+    direction. The architecture audit's recommended next non-SPL unit is the
+    collector identity/enrollment bootstrap described under remaining work.
+
+Validation on implementation commit `3f83414`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code HEAD -- go.mod go.sum
+go test ./... -count=1 -timeout=10m
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-eventstats-avg-final-coverage.out \
+  -timeout=10m ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=10m -p=1
+```
+
+Every command above passed. The cached v2.12.2 linter reported `0 issues`,
+all 202 frontend tests passed, the final exact shuffled race/coverage command
+exited zero, and the digest-pinned ClickHouse suite passed in 59.98 seconds.
+Cleanup found no test-owned `open-splunk` container or named volume. The
+dependency upgrades already committed on `main` remain tidy; this unit made no
+additional `go.mod` or `go.sum` change.
+
+## Previous checkpoint: bounded numeric eventstats sum
 
 Date: 2026-08-01
 
@@ -12061,8 +12170,9 @@ Remaining first-release deployment work is the target GradeThis Compose
 cutover from OTel filelog → direct ClickHouse to Open Splunk Collector →
 Open Splunk server → ClickHouse. Perform that external-repository change in a
 dedicated GradeThis worktree/branch, then rerun acknowledgment, public search,
-and browser acceptance. Do not treat the Open Splunk harness proof as that
-deployment mutation.
+and browser acceptance. This cutover remains intentionally deferred and must
+not start without explicit user direction. Do not treat the Open Splunk
+harness proof as that deployment mutation.
 
 The current preview-to-final resource-release audit pass is complete at
 `961cba2`. Search-job, executor, snapshot, and retained-result ownership were
@@ -12178,9 +12288,10 @@ aggregate contract at a time:
   integer-suffix slice;
 - bounded conditional-count `eventstats` is complete at `0c78cb7`, and bounded
   exact-field numeric `eventstats sum(field) AS output` is complete at
-  `1a94faf`; remaining `eventstats` aggregates need their own explicit
-  contracts, while `streamstats` remains outside the first release unless
-  scope changes; and
+  `1a94faf`; bounded exact-field numeric `eventstats avg(field) AS output` is
+  complete at `3f83414`. Remaining `eventstats` aggregates need their own
+  explicit contracts, while `streamstats` remains outside the first release
+  unless scope changes; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
 
@@ -12211,6 +12322,14 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 ### 4. Continue Phase 3/4 product hardening
 
+- The architecture audit's recommended next non-SPL slice is the first-start
+  collector identity/enrollment bootstrap: turn the existing immutable
+  `bound_collector_id` security contract into a complete operator workflow for
+  discovering the collector's locally persisted stable ID and issuing and
+  delivering a token bound to it. Reuse the existing collector-fleet and token
+  APIs, cover restart/rotation/revocation and capacity boundaries, and keep
+  GORM confined to the SQLite control plane. Re-audit current endpoints before
+  implementation so already-complete identity work is not duplicated.
 - Per-index retention and permissions, index/app administration, collector
   fleet operations, reports/dashboards, HEC compatibility, RBAC, and audit
   search.
@@ -12336,7 +12455,8 @@ Do not guess those decisions if they materially affect the implementation.
    `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
    Bounded argument-free, exact-field, and conditional `eventstats` counts are
    complete through `0c78cb7`; bounded exact-field numeric eventstats sum is
-   complete at `1a94faf`.
+   complete at `1a94faf`, and bounded exact-field numeric eventstats average is
+   complete at `3f83414`.
    Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
    `53b1f55`, and `8e4cf5f`; typed UTF-8 `len`/`length` is complete through
    `64004dc`, `e3a32e2`, and `5aebc70`. Subsequent bounded `substr`,
