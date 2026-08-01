@@ -7,7 +7,107 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded conditional eventstats counts
+## Latest checkpoint: durable token and index ingestion rate limits
+
+Date: 2026-08-01
+
+Committed implementation checkpoint:
+
+- `fbdb99f` — durable per-token and per-index native-ingestion quotas.
+
+This test-first control-plane, ingestion, collector, and storage-boundary unit
+completes the first-release quota contract without putting GORM on the
+ClickHouse path:
+
+1. Indexes and ingestion tokens expose independently optional event/second and
+   uncompressed-byte/second limits through one shared protobuf message. Create,
+   read, list, whole-message update, leaf update, leaf clear, generated Go and
+   TypeScript, and the server admin API all preserve optional-field semantics.
+2. Checked-in SQLite SQL remains the schema authority. Explicit GORM mappings
+   make the index and token control-plane columns and constraints legible;
+   ClickHouse storage remains GORM-free. Fresh authorization re-reads both
+   limits at every protected batch boundary.
+3. Quota charges are derived only from admitted source events and trusted
+   authorization state. Each accepted source event costs one event and its
+   server-computed pre-normalization protobuf size. The token total and every
+   per-index subtotal are one atomic mixed-index decision; rejected events are
+   not charged.
+4. A bounded virtual schedule provides an implicit burst of one legal batch,
+   deterministic token-before-index tie breaking, one-hour advertised retry
+   caps, safe overflow handling, backward-clock behavior, and independent
+   dimension resets when policy changes.
+5. The authoritative SQLite `IMMEDIATE` transaction hydrates durable bucket
+   state, evaluates every scope, and commits bucket updates, an exact-admission
+   marker, immutable batch identity, visibility reservation, and ClickHouse
+   outbox together. Committed, rejected, pending, abandoned, restarted, and
+   concurrent exact replays cannot charge twice.
+6. Maximum-shape admission performs one bounded CTE read and one multi-row
+   upsert instead of one statement per scope. A partial child-key index makes
+   revoked-token cascade pruning efficient. The 1,001-scope persistence and
+   hydration boundary has direct normal and race coverage.
+7. A denial maps to a `RATE_LIMITED` retry followed by an independently
+   sequenced token- or index-quota throttle. One server timestamp defines both
+   `sent_at` and `effective_until`; the collector preserves retry deadlines
+   across reconnects, uses server-relative throttle duration, and rechecks
+   pacing after a blocking WAL dequeue.
+8. Collector waits are deadline- and generation-aware: finite max-in-flight
+   throttles wake at expiry, replacement throttles interrupt old pacing and
+   hard-limit waits, relaxed limits re-evaluate pending batches, and terminal
+   outcomes cancel retained retries. A shutdown-test scheduler race discovered
+   by the full shuffled race gate was also made deterministic without changing
+   production shutdown behavior.
+9. Real ClickHouse coverage proves a durable quota denial writes no block. The
+   Backend vertical workflow now runs `TestStoreAgainstClickHouse`, while the
+   existing pinned integration, browser, deletion, and Compose cases remain
+   green. The admin frontend is generated-contract compatible and preserves
+   stored token limits on unrelated edits; operator-facing quota controls are
+   still a frontend follow-up.
+10. Three simplify/adversarial lenses drove the deadline/generation wakeups,
+    single-clock throttle response, shared hard batch bounds, bulk SQLite
+    statements, child-key index, and shutdown-test synchronization. Final
+    SQLite, collector, and cross-cutting reviews found no remaining P0-P2
+    issue after this handoff was updated.
+11. The architecture plan is not complete. Broader SPL compatibility, identity
+    bootstrap, HEC, backup and restore, deployment hardening, and later phases
+    remain separate work. The external GradeThis collector cutover remains
+    intentionally untouched pending explicit direction.
+
+Validation on implementation commit `fbdb99f`:
+
+```sh
+git diff --check
+make proto
+go mod tidy
+git diff --exit-code HEAD -- go.mod go.sum
+go test ./... -count=1 -timeout=10m
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-quota-coverage.out ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=6m -p=1 -v
+```
+
+Every command above passed. The cached v2.12.2 linter reported `0 issues`,
+all 202 frontend tests passed, the exact full race/coverage command exited
+zero, and the digest-pinned ClickHouse suite passed in 61.51 seconds. Cleanup
+found no test-owned ClickHouse container or named volume. The exact updated
+Backend vertical workflow command also passed locally, including its durable
+quota-denial subtest.
+
+## Previous checkpoint: bounded conditional eventstats counts
 
 Date: 2026-08-01
 
