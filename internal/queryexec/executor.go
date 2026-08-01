@@ -282,8 +282,8 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse fixed timechart result stream: %w", closeErr))
 			}
 			return publishFixedTimechart(executionContext, sink, buffered)
-		case clickhouse.TimechartModeFixedPercentile:
-			buffered, readErr := readFixedPercentileTimechartRows(
+		case clickhouse.TimechartModeFixedValue:
+			buffered, readErr := readFixedValueTimechartRows(
 				executionContext,
 				rows,
 				columns,
@@ -296,9 +296,9 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			closeErr := rows.Close()
 			rowsClosed = true
 			if closeErr != nil {
-				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse fixed percentile timechart result stream: %w", closeErr))
+				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse fixed value timechart result stream: %w", closeErr))
 			}
-			return publishFixedPercentileTimechart(executionContext, sink, buffered)
+			return publishFixedValueTimechart(executionContext, sink, buffered)
 		}
 		buffered, err := readTimechartRows(
 			executionContext,
@@ -483,7 +483,7 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 			output.MaxSeries != 1 || output.MaxLabelBytes != 0 || output.ValueField != "" {
 			return fmt.Errorf("%w: compiled fixed timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
-	case clickhouse.TimechartModeFixedPercentile:
+	case clickhouse.TimechartModeFixedValue:
 		resolvedValueField, valueFieldErr := plan.ResolveField(
 			output.ValueField,
 			spl.Range{},
@@ -492,8 +492,9 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 			query.OutputFields[1] == "" || query.OutputFields[1] == "_time" ||
 			query.OutputFields[1] != output.ValueField || output.MaxSeries != 1 ||
 			output.MaxLabelBytes != 0 || valueFieldErr != nil ||
-			resolvedValueField.Name != output.ValueField {
-			return fmt.Errorf("%w: compiled fixed percentile timechart output contract is invalid", searchjobs.ErrInvalidResult)
+			resolvedValueField.Name != output.ValueField ||
+			!output.ValueKind.Valid() {
+			return fmt.Errorf("%w: compiled fixed value timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
 	case clickhouse.TimechartModeRuntimeWide:
 		if !slices.Equal(query.OutputFields, []string{"_time"}) ||
@@ -618,7 +619,7 @@ func readFixedTimechartRows(
 	return buffered, nil
 }
 
-type bufferedFixedPercentileTimechart struct {
+type bufferedFixedValueTimechart struct {
 	first      time.Time
 	span       time.Duration
 	valueField string
@@ -630,24 +631,24 @@ type nullableFloat64 struct {
 	valid bool
 }
 
-func readFixedPercentileTimechartRows(
+func readFixedValueTimechartRows(
 	ctx context.Context,
 	rows driver.Rows,
 	columns []string,
 	columnTypes []driver.ColumnType,
 	output clickhouse.TimechartOutput,
-) (bufferedFixedPercentileTimechart, error) {
+) (bufferedFixedValueTimechart, error) {
 	if err := ctx.Err(); err != nil {
-		return bufferedFixedPercentileTimechart{}, err
+		return bufferedFixedValueTimechart{}, err
 	}
 	expectedColumns := []string{
 		clickhouse.TimechartOrdinalColumn,
-		clickhouse.TimechartPercentileColumn,
+		clickhouse.TimechartValueColumn,
 		clickhouse.TimechartInputPresentColumn,
 	}
 	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
-		return bufferedFixedPercentileTimechart{}, fmt.Errorf(
-			"%w: ClickHouse fixed percentile timechart columns do not match the compiled output",
+		return bufferedFixedValueTimechart{}, fmt.Errorf(
+			"%w: ClickHouse fixed value timechart columns do not match the compiled output",
 			searchjobs.ErrInvalidResult,
 		)
 	}
@@ -670,8 +671,8 @@ func readFixedPercentileTimechartRows(
 			columnType.Nullable() != expected.nullable ||
 			strings.TrimSpace(columnType.DatabaseTypeName()) != expected.databaseType ||
 			columnType.ScanType() != expected.scanType {
-			return bufferedFixedPercentileTimechart{}, fmt.Errorf(
-				"%w: ClickHouse fixed percentile timechart column %q has an invalid type",
+			return bufferedFixedValueTimechart{}, fmt.Errorf(
+				"%w: ClickHouse fixed value timechart column %q has an invalid type",
 				searchjobs.ErrInvalidResult,
 				expectedColumns[index],
 			)
@@ -680,7 +681,7 @@ func readFixedPercentileTimechartRows(
 
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
 	bucketCapacity := int(output.BucketCount)
-	buffered := bufferedFixedPercentileTimechart{
+	buffered := bufferedFixedValueTimechart{
 		first:      output.FirstBucket,
 		span:       output.Span,
 		valueField: output.ValueField,
@@ -689,11 +690,11 @@ func readFixedPercentileTimechartRows(
 	var upstreamPresent uint8
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
-			return bufferedFixedPercentileTimechart{}, err
+			return bufferedFixedValueTimechart{}, err
 		}
 		if uint64(len(buffered.values)) >= output.BucketCount {
-			return bufferedFixedPercentileTimechart{}, fmt.Errorf(
-				"%w: ClickHouse fixed percentile timechart returned too many buckets",
+			return bufferedFixedValueTimechart{}, fmt.Errorf(
+				"%w: ClickHouse fixed value timechart returned too many buckets",
 				searchjobs.ErrInvalidResult,
 			)
 		}
@@ -701,20 +702,20 @@ func readFixedPercentileTimechartRows(
 		var value *float64
 		var rowUpstreamPresent uint8
 		if err := rows.Scan(&ordinal, &value, &rowUpstreamPresent); err != nil {
-			return bufferedFixedPercentileTimechart{}, classifyQueryError(
+			return bufferedFixedValueTimechart{}, classifyQueryError(
 				ctx,
-				fmt.Errorf("scan ClickHouse fixed percentile timechart result row: %w", err),
+				fmt.Errorf("scan ClickHouse fixed value timechart result row: %w", err),
 			)
 		}
 		if err := ctx.Err(); err != nil {
-			return bufferedFixedPercentileTimechart{}, err
+			return bufferedFixedValueTimechart{}, err
 		}
 		rowIndex := len(buffered.values)
 		if ordinal >= output.BucketCount || ordinal != uint64(rowIndex) ||
 			rowUpstreamPresent > 1 || (rowIndex > 0 && rowUpstreamPresent != upstreamPresent) ||
 			(rowUpstreamPresent == 0 && value != nil) {
-			return bufferedFixedPercentileTimechart{}, fmt.Errorf(
-				"%w: ClickHouse fixed percentile timechart row is invalid",
+			return bufferedFixedValueTimechart{}, fmt.Errorf(
+				"%w: ClickHouse fixed value timechart row is invalid",
 				searchjobs.ErrInvalidResult,
 			)
 		}
@@ -723,8 +724,9 @@ func readFixedPercentileTimechartRows(
 		}
 		bufferedValue := nullableFloat64{}
 		if value != nil {
-			if math.IsNaN(*value) || math.IsInf(*value, 0) {
-				return bufferedFixedPercentileTimechart{}, fmt.Errorf(
+			if output.ValueKind == clickhouse.TimechartValueKindPercentile &&
+				(math.IsNaN(*value) || math.IsInf(*value, 0)) {
+				return bufferedFixedValueTimechart{}, fmt.Errorf(
 					"%w: ClickHouse fixed percentile timechart value is not finite",
 					searchjobs.ErrInvalidResult,
 				)
@@ -734,17 +736,17 @@ func readFixedPercentileTimechartRows(
 		buffered.values = append(buffered.values, bufferedValue)
 	}
 	if err := rows.Err(); err != nil {
-		return bufferedFixedPercentileTimechart{}, classifyQueryError(
+		return bufferedFixedValueTimechart{}, classifyQueryError(
 			ctx,
-			fmt.Errorf("iterate ClickHouse fixed percentile timechart results: %w", err),
+			fmt.Errorf("iterate ClickHouse fixed value timechart results: %w", err),
 		)
 	}
 	if err := ctx.Err(); err != nil {
-		return bufferedFixedPercentileTimechart{}, err
+		return bufferedFixedValueTimechart{}, err
 	}
 	if uint64(len(buffered.values)) != output.BucketCount {
-		return bufferedFixedPercentileTimechart{}, fmt.Errorf(
-			"%w: ClickHouse fixed percentile timechart returned an incomplete bucket sequence",
+		return bufferedFixedValueTimechart{}, fmt.Errorf(
+			"%w: ClickHouse fixed value timechart returned an incomplete bucket sequence",
 			searchjobs.ErrInvalidResult,
 		)
 	}
@@ -977,10 +979,10 @@ func publishFixedTimechart(
 	return ctx.Err()
 }
 
-func publishFixedPercentileTimechart(
+func publishFixedValueTimechart(
 	ctx context.Context,
 	sink searchjobs.ResultSink,
-	buffered bufferedFixedPercentileTimechart,
+	buffered bufferedFixedValueTimechart,
 ) error {
 	if err := ctx.Err(); err != nil {
 		return err

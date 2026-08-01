@@ -315,7 +315,8 @@ func TestReexecutionSourceAdmitsFixedPercentileTimechartSchema(t *testing.T) {
 		sink searchjobs.ResultSink,
 	) error {
 		if query.Timechart == nil ||
-			query.Timechart.Mode != clickhouse.TimechartModeFixedPercentile ||
+			query.Timechart.Mode != clickhouse.TimechartModeFixedValue ||
+			query.Timechart.ValueKind != clickhouse.TimechartValueKindPercentile ||
 			query.Timechart.ValueField != "p95_duration" {
 			t.Fatalf(
 				"re-executed query lost its fixed percentile contract: %#v",
@@ -347,6 +348,83 @@ func TestReexecutionSourceAdmitsFixedPercentileTimechartSchema(t *testing.T) {
 	}
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReexecutionSourceAdmitsFixedSumAndAverageTimechartSchemas(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		spl   string
+		field string
+		kind  clickhouse.TimechartValueKind
+		value float64
+	}{
+		{
+			name: "sum", spl: `index=main | timechart span=5m sum(bytes) AS total_bytes`,
+			field: "total_bytes", kind: clickhouse.TimechartValueKindSum, value: 250.5,
+		},
+		{
+			name: "average", spl: `index=main | timechart span=5m avg(latency) AS mean_latency`,
+			field: "mean_latency", kind: clickhouse.TimechartValueKindAverage, value: 12.75,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			searches, _, access := newReexecutionTestSearches()
+			searches.job.SPL = test.spl
+			schema := searchjobs.Schema{Columns: []searchjobs.Column{
+				{Name: "_time", Kind: searchjobs.ValueKindTime},
+				{Name: test.field, Kind: searchjobs.ValueKindDouble, Nullable: true},
+			}}
+			searches.pin.schema = schema
+			bucket := searches.job.Earliest.Truncate(5 * time.Minute)
+			executor := reexecutionTestExecutor(func(
+				_ context.Context,
+				query clickhouse.CompiledQuery,
+				sink searchjobs.ResultSink,
+			) error {
+				if query.Timechart == nil ||
+					query.Timechart.Mode != clickhouse.TimechartModeFixedValue ||
+					query.Timechart.ValueField != test.field ||
+					query.Timechart.ValueKind != test.kind {
+					t.Fatalf("re-executed query lost its fixed value contract: %#v", query.Timechart)
+				}
+				if err := sink.SetSchema(schema); err != nil {
+					return err
+				}
+				return sink.AddRow([]searchjobs.Value{
+					searchjobs.TimeValue(bucket),
+					searchjobs.DoubleValue(test.value),
+				})
+			})
+			source := newReexecutionTestSource(t, searches, executor, nil)
+			lease, err := source.AcquireResultsFor(
+				context.Background(),
+				access,
+				searches.job.ID,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			row, ok, err := lease.Next(context.Background())
+			if err != nil || !ok || len(row.Values) != len(schema.Columns) {
+				t.Fatalf("Next(fixed value timechart) = (%#v, %t, %v)", row, ok, err)
+			}
+			if value, ok := row.Values[1].Double(); !ok || value != test.value {
+				t.Fatalf("fixed value = %v, %v", value, ok)
+			}
+			if _, ok, err := lease.Next(context.Background()); err != nil || ok {
+				t.Fatalf("terminal Next(fixed value timechart) = ok %t err %v", ok, err)
+			}
+			if err := lease.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -528,9 +606,10 @@ func TestSchemaMatchesCompiledFixedPercentileTimechartRejectsForeignSchemas(t *t
 	compiled := clickhouse.CompiledQuery{
 		OutputFields: []string{"_time", "p95_duration"},
 		Timechart: &clickhouse.TimechartOutput{
-			Mode:       clickhouse.TimechartModeFixedPercentile,
+			Mode:       clickhouse.TimechartModeFixedValue,
 			MaxSeries:  1,
 			ValueField: "p95_duration",
+			ValueKind:  clickhouse.TimechartValueKindPercentile,
 		},
 	}
 	valid := searchjobs.Schema{Columns: []searchjobs.Column{
@@ -619,6 +698,45 @@ func TestSchemaMatchesCompiledFixedPercentileTimechartRejectsForeignSchemas(t *t
 				t.Fatalf("schemaMatchesCompiledQuery admitted %q", test.name)
 			}
 		})
+	}
+}
+
+func TestSchemaMatchesCompiledFixedValueKinds(t *testing.T) {
+	t.Parallel()
+
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "metric", Kind: searchjobs.ValueKindDouble, Nullable: true},
+	}}
+	for _, kind := range []clickhouse.TimechartValueKind{
+		clickhouse.TimechartValueKindSum,
+		clickhouse.TimechartValueKindAverage,
+	} {
+		compiled := clickhouse.CompiledQuery{
+			OutputFields: []string{"_time", "metric"},
+			Timechart: &clickhouse.TimechartOutput{
+				Mode:       clickhouse.TimechartModeFixedValue,
+				MaxSeries:  1,
+				ValueField: "metric",
+				ValueKind:  kind,
+			},
+		}
+		if !schemaMatchesCompiledQuery(schema, compiled) {
+			t.Fatalf("valid fixed value kind %v was rejected", kind)
+		}
+	}
+
+	invalid := clickhouse.CompiledQuery{
+		OutputFields: []string{"_time", "metric"},
+		Timechart: &clickhouse.TimechartOutput{
+			Mode:       clickhouse.TimechartModeFixedValue,
+			MaxSeries:  1,
+			ValueField: "metric",
+			ValueKind:  clickhouse.TimechartValueKind(255),
+		},
+	}
+	if schemaMatchesCompiledQuery(schema, invalid) {
+		t.Fatal("invalid fixed value kind was admitted")
 	}
 }
 

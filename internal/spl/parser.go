@@ -768,17 +768,17 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	if err != nil {
 		return nil, err
 	}
-	if aggregate.Function == AggregateFunctionPercentile {
+	if aggregate.Function != AggregateFunctionCount {
 		if p.isKeyword("BY") {
 			return nil, p.unsupportedTimechartSyntax(
 				p.current(),
-				"percentile timechart does not support a BY split field",
+				"this timechart aggregate does not support a BY split field",
 			)
 		}
 		if !p.atCommandEnd() {
 			return nil, p.unsupportedTimechartSyntax(
 				p.current(),
-				"percentile timechart accepts exactly one aggregate and an optional AS output",
+				"this timechart form accepts exactly one aggregate and an optional AS output",
 			)
 		}
 		return &TimechartCommand{
@@ -833,7 +833,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedTimechartAggregate(
 				function,
-				"timechart requires argument-free count or one pN/percN(field) percentile",
+				"timechart requires argument-free count or one pN/percN(field), sum(field), or avg(field) aggregate",
 			)
 	}
 	functionName := strings.ToLower(function.text)
@@ -846,12 +846,12 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 			AliasRange: function.sourceRange,
 		}, function.sourceRange.End, nil
 	}
-	percentile, supported := parseStatsPercentileSuffix(functionName)
+	spec, supported := timechartFieldAggregateSpecForName(functionName)
 	if !supported {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedTimechartAggregate(
 				function,
-				fmt.Sprintf("timechart aggregate %q is not supported; use argument-free count or pN/percN(field) for integer N from 1 through 99", function.text),
+				fmt.Sprintf("timechart aggregate %q is not supported; use argument-free count or one pN/percN(field), sum(field), or avg(field) aggregate", function.text),
 			)
 	}
 	p.advance()
@@ -859,7 +859,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedTimechartSyntax(
 				function,
-				"timechart percentile requires one exact unquoted field in parentheses",
+				"timechart numeric aggregate requires one exact unquoted field in parentheses",
 			)
 	}
 	input := p.current()
@@ -870,7 +870,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, input.sourceRange.End,
 			p.unsupportedTimechartSyntax(
 				input,
-				"timechart percentile requires one exact unquoted field",
+				"timechart numeric aggregate requires one exact unquoted field",
 			)
 	}
 	p.advance()
@@ -878,16 +878,16 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, input.sourceRange.End,
 			p.unsupportedTimechartSyntax(
 				p.current(),
-				"timechart percentile accepts exactly one field argument",
+				"timechart numeric aggregate accepts exactly one field argument",
 			)
 	}
 	end := p.previous().sourceRange.End
 	aggregate := StatsAggregate{
-		Function:   AggregateFunctionPercentile,
+		Function:   spec.function,
 		Input:      input.text,
 		InputRange: input.sourceRange,
-		Percentile: percentile,
-		Alias:      "perc" + strconv.Itoa(int(percentile)) + "(" + input.text + ")",
+		Percentile: spec.percentile,
+		Alias:      spec.canonicalName + "(" + input.text + ")",
 		Range:      Range{Start: function.sourceRange.Start, End: end},
 		AliasRange: Range{Start: function.sourceRange.Start, End: end},
 	}
@@ -899,7 +899,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 	if alias.kind != tokenWord || p.isKeyword("BY") || strings.Contains(alias.text, "*") {
 		return StatsAggregate{}, end, p.unsupportedTimechartSyntax(
 			alias,
-			"timechart percentile AS requires one exact unquoted output field",
+			"timechart numeric aggregate AS requires one exact unquoted output field",
 		)
 	}
 	aggregate.Alias = alias.text
@@ -908,6 +908,19 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 	aggregate.Range.End = alias.sourceRange.End
 	p.advance()
 	return aggregate, aggregate.Range.End, nil
+}
+
+func timechartFieldAggregateSpecForName(name string) (statsAggregateSpec, bool) {
+	spec, supported := statsAggregateSpecForName(name)
+	if !supported || !spec.requiresInput {
+		return statsAggregateSpec{}, false
+	}
+	switch spec.function {
+	case AggregateFunctionPercentile, AggregateFunctionSum, AggregateFunctionAverage:
+		return spec, true
+	default:
+		return statsAggregateSpec{}, false
+	}
 }
 
 func parseTimechartSpan(tok token) (TimeSpan, error) {

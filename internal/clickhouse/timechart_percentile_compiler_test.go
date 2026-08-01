@@ -22,7 +22,8 @@ func TestCompileTimechartPercentileUsesOneScopedScanAndBoundedMaterializedState(
 		t.Fatalf("public fields = %v, want _time/p95_duration", compiled.OutputFields)
 	}
 	if compiled.Timechart == nil ||
-		compiled.Timechart.Mode != TimechartModeFixedPercentile ||
+		compiled.Timechart.Mode != TimechartModeFixedValue ||
+		compiled.Timechart.ValueKind != TimechartValueKindPercentile ||
 		compiled.Timechart.ValueField != "p95_duration" ||
 		compiled.Timechart.FirstBucket != time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC) ||
 		compiled.Timechart.Span != 5*time.Minute ||
@@ -34,15 +35,15 @@ func TestCompileTimechartPercentileUsesOneScopedScanAndBoundedMaterializedState(
 
 	for _, required := range []string{
 		`"__os_timechart_source" AS (`,
-		`"__os_timechart_percentile_groups" AS MATERIALIZED (`,
+		`"__os_timechart_value_groups" AS MATERIALIZED (`,
 		`AS "__os_tc_measure_values"`,
 		`quantilesGKOrNullArray(100, 0.95)("__os_tc_measure_values")`,
 		`arrayElementOrNull(`,
 		`"__os_timechart_input_presence" AS (SELECT toUInt8(count() > 0)`,
-		`FROM "__os_timechart_percentile_groups"`,
+		`FROM "__os_timechart_value_groups"`,
 		`FROM numbers(?)`,
 		`AS "` + TimechartOrdinalColumn + `"`,
-		`AS "` + TimechartPercentileColumn + `"`,
+		`AS "` + TimechartValueColumn + `"`,
 		`AS "` + TimechartInputPresentColumn + `"`,
 		materializedCTESettingsSQL,
 	} {
@@ -89,7 +90,7 @@ func TestCompileTimechartPercentileRevalidatesForgedMeasureAndOutput(t *testing.
 		{
 			name: "unsupported aggregate",
 			corrupt: func(_ *plan.Query, operator *plan.Timechart) {
-				operator.Measure.Function = plan.AggregateFunctionAverage
+				operator.Measure.Function = plan.AggregateFunctionMinimum
 			},
 			want: "aggregate function is unsupported",
 		},
@@ -135,7 +136,7 @@ func TestCompileTimechartPercentileRevalidatesForgedMeasureAndOutput(t *testing.
 			corrupt: func(query *plan.Query, _ *plan.Timechart) {
 				query.OutputFields[1] = "other"
 			},
-			want: "fixed percentile output contract is invalid",
+			want: "fixed value output contract is invalid",
 		},
 		{
 			name: "dynamic descriptor",
@@ -145,7 +146,7 @@ func TestCompileTimechartPercentileRevalidatesForgedMeasureAndOutput(t *testing.
 					MaxSeries:   12,
 				}
 			},
-			want: "fixed percentile output contract is invalid",
+			want: "fixed value output contract is invalid",
 		},
 		{
 			name: "time output collision",
@@ -153,7 +154,7 @@ func TestCompileTimechartPercentileRevalidatesForgedMeasureAndOutput(t *testing.
 				operator.Measure.Output = "_time"
 				query.OutputFields = []string{"_time", "_time"}
 			},
-			want: "fixed percentile output contract is invalid",
+			want: "fixed value output contract is invalid",
 		},
 	} {
 		test := test

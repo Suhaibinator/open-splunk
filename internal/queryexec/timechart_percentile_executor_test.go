@@ -19,7 +19,7 @@ func TestExecutorBuffersAndPublishesFixedPercentileTimechart(t *testing.T) {
 	t.Parallel()
 
 	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
-	rows := fixedPercentileTimechartRows(
+	rows := fixedValueTimechartRows(
 		[]any{float64(100), nil, float64(350.5)},
 		[]uint8{1, 1, 1},
 	)
@@ -27,7 +27,7 @@ func TestExecutorBuffersAndPublishesFixedPercentileTimechart(t *testing.T) {
 	executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
 	if err := executor.Execute(
 		context.Background(),
-		fixedPercentileTimechartQuery(first, 3, "p95_ms"),
+		fixedValueTimechartQuery(first, 3, "p95_ms", clickhouse.TimechartValueKindPercentile),
 		sink,
 	); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -77,7 +77,7 @@ func TestExecutorDistinguishesEmptyAndAllIneligibleFixedPercentileInput(t *testi
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			rows := fixedPercentileTimechartRows(
+			rows := fixedValueTimechartRows(
 				[]any{nil, nil, nil},
 				[]uint8{test.presence, test.presence, test.presence},
 			)
@@ -85,7 +85,7 @@ func TestExecutorDistinguishesEmptyAndAllIneligibleFixedPercentileInput(t *testi
 			executor := mustExecutor(t, &fakeQueryConnection{rows: rows})
 			if err := executor.Execute(
 				context.Background(),
-				fixedPercentileTimechartQuery(first, 3, "latency_p95"),
+				fixedValueTimechartQuery(first, 3, "latency_p95", clickhouse.TimechartValueKindPercentile),
 				sink,
 			); err != nil {
 				t.Fatalf("Execute: %v", err)
@@ -112,11 +112,11 @@ func TestExecutorAcceptsBoundedDottedFixedPercentileOutput(t *testing.T) {
 
 	valueField := strings.Repeat("a", 200) + "." + strings.Repeat("b", 200)
 	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
-	rows := fixedPercentileTimechartRows([]any{float64(10)}, []uint8{1})
+	rows := fixedValueTimechartRows([]any{float64(10)}, []uint8{1})
 	sink := &fakeSink{}
 	if err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 		context.Background(),
-		fixedPercentileTimechartQuery(first, 1, valueField),
+		fixedValueTimechartQuery(first, 1, valueField, clickhouse.TimechartValueKindPercentile),
 		sink,
 	); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -145,7 +145,7 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 			name: "nonnullable percentile",
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.types[1] = fakeColumnType{
-					name: clickhouse.TimechartPercentileColumn, databaseType: "Float64",
+					name: clickhouse.TimechartValueColumn, databaseType: "Float64",
 					scanType: reflect.TypeOf(float64(0)),
 				}
 			},
@@ -155,7 +155,7 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 			name: "nullable wrapper with scalar scan type",
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.types[1] = fakeColumnType{
-					name: clickhouse.TimechartPercentileColumn, databaseType: "Nullable(Float64)",
+					name: clickhouse.TimechartValueColumn, databaseType: "Nullable(Float64)",
 					scanType: reflect.TypeOf(float64(0)), nullable: true,
 				}
 			},
@@ -193,9 +193,16 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 			queryIssued: true,
 		},
 		{
-			name: "nonfinite percentile",
+			name: "infinite percentile",
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.data[0][1] = math.Inf(1)
+			},
+			queryIssued: true,
+		},
+		{
+			name: "NaN percentile",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.data[0][1] = math.NaN()
 			},
 			queryIssued: true,
 		},
@@ -267,11 +274,11 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			rows := fixedPercentileTimechartRows(
+			rows := fixedValueTimechartRows(
 				[]any{float64(10), nil},
 				[]uint8{1, 1},
 			)
-			query := fixedPercentileTimechartQuery(first, 2, "p95_ms")
+			query := fixedValueTimechartQuery(first, 2, "p95_ms", clickhouse.TimechartValueKindPercentile)
 			test.mutate(rows, &query)
 			connection := &fakeQueryConnection{rows: rows}
 			sink := &fakeSink{}
@@ -304,12 +311,12 @@ func TestExecutorFixedPercentileTimechartStreamFailuresAreAtomic(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			rows := fixedPercentileTimechartRows([]any{float64(10), nil}, []uint8{1, 1})
+			rows := fixedValueTimechartRows([]any{float64(10), nil}, []uint8{1, 1})
 			test.mutate(rows)
 			sink := &fakeSink{}
 			err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 				context.Background(),
-				fixedPercentileTimechartQuery(first, 2, "p95_ms"),
+				fixedValueTimechartQuery(first, 2, "p95_ms", clickhouse.TimechartValueKindPercentile),
 				sink,
 			)
 			if !errors.Is(err, searchjobs.ErrStorageUnavailable) {
@@ -326,13 +333,13 @@ func TestExecutorCancelsFixedPercentileTimechartBeforePublication(t *testing.T) 
 	t.Parallel()
 
 	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
-	rows := fixedPercentileTimechartRows([]any{float64(10), nil}, []uint8{1, 1})
+	rows := fixedValueTimechartRows([]any{float64(10), nil}, []uint8{1, 1})
 	ctx, cancel := context.WithCancel(context.Background())
 	rows.afterScan = cancel
 	sink := &fakeSink{}
 	err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
 		ctx,
-		fixedPercentileTimechartQuery(first, 2, "p95_ms"),
+		fixedValueTimechartQuery(first, 2, "p95_ms", clickhouse.TimechartValueKindPercentile),
 		sink,
 	)
 	if !errors.Is(err, context.Canceled) {
@@ -346,34 +353,36 @@ func TestExecutorCancelsFixedPercentileTimechartBeforePublication(t *testing.T) 
 	}
 }
 
-func fixedPercentileTimechartQuery(
+func fixedValueTimechartQuery(
 	first time.Time,
 	bucketCount uint64,
 	valueField string,
+	valueKind clickhouse.TimechartValueKind,
 ) clickhouse.CompiledQuery {
 	return clickhouse.CompiledQuery{
-		SQL:          "SELECT bounded_fixed_percentile_timechart",
+		SQL:          "SELECT bounded_fixed_value_timechart",
 		OutputFields: []string{"_time", valueField},
 		Timechart: &clickhouse.TimechartOutput{
-			Mode:          clickhouse.TimechartModeFixedPercentile,
+			Mode:          clickhouse.TimechartModeFixedValue,
 			FirstBucket:   first,
 			Span:          5 * time.Minute,
 			BucketCount:   bucketCount,
 			MaxSeries:     1,
 			MaxLabelBytes: 0,
 			ValueField:    valueField,
+			ValueKind:     valueKind,
 		},
 	}
 }
 
-func fixedPercentileTimechartRows(values []any, presence []uint8) *fakeRows {
+func fixedValueTimechartRows(values []any, presence []uint8) *fakeRows {
 	if len(values) != len(presence) {
-		panic("fixed percentile fixture width mismatch")
+		panic("fixed value fixture width mismatch")
 	}
 	rows := &fakeRows{
 		columns: []string{
 			clickhouse.TimechartOrdinalColumn,
-			clickhouse.TimechartPercentileColumn,
+			clickhouse.TimechartValueColumn,
 			clickhouse.TimechartInputPresentColumn,
 		},
 		types: []driver.ColumnType{
@@ -382,7 +391,7 @@ func fixedPercentileTimechartRows(values []any, presence []uint8) *fakeRows {
 				scanType: reflect.TypeOf(uint64(0)),
 			},
 			fakeColumnType{
-				name: clickhouse.TimechartPercentileColumn, databaseType: "Nullable(Float64)",
+				name: clickhouse.TimechartValueColumn, databaseType: "Nullable(Float64)",
 				scanType: reflect.TypeOf((*float64)(nil)), nullable: true,
 			},
 			fakeColumnType{

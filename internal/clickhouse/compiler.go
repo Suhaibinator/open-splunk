@@ -44,11 +44,13 @@ const (
 	// representable.
 	TimechartOrdinalColumn = "__os_timechart_ordinal"
 	TimechartCountColumn   = "__os_timechart_count"
-	// The percentile transport is deliberately distinct from the count
+	// The fixed-value transport is deliberately distinct from the count
 	// transport. Its nullable value and repeated upstream-presence proof let the
 	// executor distinguish a real all-ineligible input (publish a null grid)
-	// from a wholly empty input (publish only the fixed schema).
-	TimechartPercentileColumn   = "__os_timechart_percentile"
+	// from a wholly empty input (publish only the fixed schema). Percentile,
+	// sum, and average share this physical transport while ValueKind retains the
+	// aggregate-specific validation policy.
+	TimechartValueColumn        = "__os_timechart_value"
 	TimechartInputPresentColumn = "__os_timechart_input_present"
 	TimechartNamesColumn        = "__os_timechart_names"
 	TimechartCountsColumn       = "__os_timechart_counts"
@@ -381,10 +383,31 @@ const (
 	// fixtures remain explicit through their bounded series metadata.
 	TimechartModeRuntimeWide TimechartMode = iota
 	TimechartModeFixedCount
-	TimechartModeFixedPercentile
+	TimechartModeFixedValue
 )
 
-// TimechartOutput describes either a bounded fixed-count or runtime-wide
+// TimechartValueKind identifies the semantic policy carried by the shared
+// fixed nullable-Float64 transport. Percentile is the zero value so compiled
+// metadata produced before the transport was generalized remains fail-safe.
+type TimechartValueKind uint8
+
+const (
+	TimechartValueKindPercentile TimechartValueKind = iota
+	TimechartValueKindSum
+	TimechartValueKindAverage
+)
+
+// Valid reports whether kind selects a supported fixed-value validation policy.
+func (kind TimechartValueKind) Valid() bool {
+	switch kind {
+	case TimechartValueKindPercentile, TimechartValueKindSum, TimechartValueKindAverage:
+		return true
+	default:
+		return false
+	}
+}
+
+// TimechartOutput describes a bounded fixed-count, fixed-value, or runtime-wide
 // result contract.
 type TimechartOutput struct {
 	Mode          TimechartMode
@@ -393,10 +416,11 @@ type TimechartOutput struct {
 	BucketCount   uint64
 	MaxSeries     uint16
 	MaxLabelBytes uint16
-	// ValueField is populated only for a fixed percentile. It binds the private
-	// transport to the exact public nullable-Double column validated by the
-	// executor instead of trusting mutable OutputFields alone.
+	// ValueField and ValueKind are populated for a fixed nullable-Double result.
+	// They bind the private transport to the exact public column and aggregate
+	// validation policy instead of trusting mutable OutputFields alone.
 	ValueField string
+	ValueKind  TimechartValueKind
 }
 
 // Compile compiles one plan without mutating it.
@@ -1294,10 +1318,10 @@ func wrapCompiledChronologicalValidation(
 		switch compiled.Timechart.Mode {
 		case TimechartModeFixedCount:
 			resultColumns = []string{TimechartOrdinalColumn, TimechartCountColumn}
-		case TimechartModeFixedPercentile:
+		case TimechartModeFixedValue:
 			resultColumns = []string{
 				TimechartOrdinalColumn,
-				TimechartPercentileColumn,
+				TimechartValueColumn,
 				TimechartInputPresentColumn,
 			}
 		case TimechartModeRuntimeWide:
@@ -2599,12 +2623,12 @@ func compileTimechart(
 		}
 	}
 
-	if operator.Measure.Function == plan.AggregateFunctionPercentile {
+	if valueKind, fixedValue := fixedTimechartValueKind(operator.Measure.Function); fixedValue {
 		if len(outputFields) != 2 || outputFields[0] != "_time" ||
 			outputFields[1] != operator.Measure.Output || outputFields[1] == "_time" ||
 			dynamic != nil {
 			return CompiledQuery{}, errors.New(
-				"compile ClickHouse timechart: fixed percentile output contract is invalid",
+				"compile ClickHouse timechart: fixed value output contract is invalid",
 			)
 		}
 		measureField, measureExists, resolveErr := resolveCompiledField(
@@ -2619,10 +2643,11 @@ func compileTimechart(
 		if measureExists {
 			measureInputSQL, measureArgs = numericArrayInputSQL(measureField)
 		}
-		return compileFixedPercentileTimechart(
+		return compileFixedValueTimechart(
 			relation,
 			args,
 			operator,
+			valueKind,
 			timeField,
 			measureInputSQL,
 			measureArgs,
@@ -2913,38 +2938,68 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 				"compile ClickHouse timechart: percentile must be from 1 through 99",
 			)
 		}
-		if err := validateCanonicalFieldRef(
-			"timechart",
-			"input",
-			measure.Input,
-		); err != nil {
-			return err
-		}
-		if _, err := plan.ResolveField(measure.Output, operator.Range); err != nil {
-			return fmt.Errorf(
-				"compile ClickHouse timechart: invalid output field %q: %w",
-				measure.Output,
-				err,
-			)
-		}
-		if measure.Output == "_time" {
+		return validateFixedTimechartValueMeasure(measure, state, operator.Range)
+	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
+		if operator.Split != nil {
 			return errors.New(
-				"compile ClickHouse timechart: fixed percentile output contract is invalid",
+				"compile ClickHouse timechart: numeric aggregate cannot split by a field",
 			)
 		}
-		if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
-			return &plan.Diagnostic{
-				Code:    "SPL_AMBIGUOUS_TIMECHART_FIELD",
-				Message: "timechart cannot read the event result's reserved fields payload without an exact upstream schema",
-				Range:   measure.Input.Range,
-			}
+		if measure.Percentile != 0 {
+			return errors.New(
+				"compile ClickHouse timechart: numeric aggregate contains percentile metadata",
+			)
 		}
+		return validateFixedTimechartValueMeasure(measure, state, operator.Range)
 	default:
 		return errors.New(
 			"compile ClickHouse timechart: aggregate function is unsupported",
 		)
 	}
 	return nil
+}
+
+func validateFixedTimechartValueMeasure(
+	measure plan.AggregateMeasure,
+	state compileState,
+	sourceRange spl.Range,
+) error {
+	if err := validateCanonicalFieldRef("timechart", "input", measure.Input); err != nil {
+		return err
+	}
+	if _, err := plan.ResolveField(measure.Output, sourceRange); err != nil {
+		return fmt.Errorf(
+			"compile ClickHouse timechart: invalid output field %q: %w",
+			measure.Output,
+			err,
+		)
+	}
+	if measure.Output == "_time" {
+		return errors.New(
+			"compile ClickHouse timechart: fixed value output contract is invalid",
+		)
+	}
+	if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
+		return &plan.Diagnostic{
+			Code:    "SPL_AMBIGUOUS_TIMECHART_FIELD",
+			Message: "timechart cannot read the event result's reserved fields payload without an exact upstream schema",
+			Range:   measure.Input.Range,
+		}
+	}
+	return nil
+}
+
+func fixedTimechartValueKind(function plan.AggregateFunction) (TimechartValueKind, bool) {
+	switch function {
+	case plan.AggregateFunctionPercentile:
+		return TimechartValueKindPercentile, true
+	case plan.AggregateFunctionSum:
+		return TimechartValueKindSum, true
+	case plan.AggregateFunctionAverage:
+		return TimechartValueKindAverage, true
+	default:
+		return TimechartValueKindPercentile, false
+	}
 }
 
 func compileFixedCountTimechart(
@@ -3047,10 +3102,11 @@ func compileFixedCountTimechart(
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
 }
 
-func compileFixedPercentileTimechart(
+func compileFixedValueTimechart(
 	relation compiledRelation,
 	args []any,
 	operator *plan.Timechart,
+	valueKind TimechartValueKind,
 	timeField fieldState,
 	measureInputSQL string,
 	measureArgs []any,
@@ -3061,15 +3117,38 @@ func compileFixedPercentileTimechart(
 ) (CompiledQuery, error) {
 	q := quoteIdentifier
 	source := q("__os_timechart_source")
-	aggregates := q("__os_timechart_percentile_groups")
+	aggregates := q("__os_timechart_value_groups")
 	inputPresence := q("__os_timechart_input_presence")
 	grid := q("__os_timechart_grid")
 	ticks := q("__os_tc_ticks")
 	measureValues := q("__os_tc_measure_values")
 	bucketNumber := q("__os_tc_bucket_number")
-	percentileState := q("__os_tc_percentile_state")
+	measureValue := q("__os_tc_measure_value")
 	upstreamPresent := q("__os_tc_input_present")
 	ordinal := q(TimechartOrdinalColumn)
+
+	var aggregateValueSQL string
+	switch valueKind {
+	case TimechartValueKindPercentile:
+		aggregateValueSQL = "arrayElementOrNull(quantilesGKOrNullArray(100, " +
+			statsPercentileLevelSQL(operator.Measure.Percentile) + ")(" +
+			measureValues + "), 1)"
+	case TimechartValueKindSum, TimechartValueKindAverage:
+		var supported bool
+		aggregateValueSQL, supported = numericArrayAggregateSQL(
+			operator.Measure.Function,
+			measureValues,
+		)
+		if !supported {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse timechart: fixed value function is invalid",
+			)
+		}
+	default:
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse timechart: fixed value kind is invalid",
+		)
+	}
 
 	var sql strings.Builder
 	sql.Grow(len(relation.sql) + len(measureInputSQL) + 2_048)
@@ -3094,12 +3173,10 @@ func compileFixedPercentileTimechart(
 	sql.WriteString(epochFloorBucketNumberSQL(ticks))
 	sql.WriteString(" AS ")
 	sql.WriteString(bucketNumber)
-	sql.WriteString(", quantilesGKOrNullArray(100, ")
-	sql.WriteString(statsPercentileLevelSQL(operator.Measure.Percentile))
-	sql.WriteString(")(")
-	sql.WriteString(measureValues)
-	sql.WriteString(") AS ")
-	sql.WriteString(percentileState)
+	sql.WriteString(", ")
+	sql.WriteString(aggregateValueSQL)
+	sql.WriteString(" AS ")
+	sql.WriteString(measureValue)
 	sql.WriteString(" FROM ")
 	sql.WriteString(source)
 	sql.WriteString(" GROUP BY ")
@@ -3122,12 +3199,12 @@ func compileFixedPercentileTimechart(
 	sql.WriteString(ordinal)
 	sql.WriteString(" AS ")
 	sql.WriteString(ordinal)
-	sql.WriteString(", arrayElementOrNull(")
+	sql.WriteString(", ")
 	sql.WriteString(aggregates)
 	sql.WriteString(".")
-	sql.WriteString(percentileState)
-	sql.WriteString(", 1) AS ")
-	sql.WriteString(q(TimechartPercentileColumn))
+	sql.WriteString(measureValue)
+	sql.WriteString(" AS ")
+	sql.WriteString(q(TimechartValueColumn))
 	sql.WriteString(", ")
 	sql.WriteString(inputPresence)
 	sql.WriteString(".")
@@ -3176,13 +3253,14 @@ func compileFixedPercentileTimechart(
 		Args:         args,
 		OutputFields: slices.Clone(outputFields),
 		Timechart: &TimechartOutput{
-			Mode:          TimechartModeFixedPercentile,
+			Mode:          TimechartModeFixedValue,
 			FirstBucket:   operator.FirstBucket.UTC(),
 			Span:          operator.Span,
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     1,
 			MaxLabelBytes: 0,
 			ValueField:    operator.Measure.Output,
+			ValueKind:     valueKind,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -12359,12 +12437,11 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			if inputErr != nil {
 				return nil, nil, nil, compileState{}, nil, inputErr
 			}
-			countSQL := "sum(length(" + inputAlias + "))"
-			sumSQL := "sum(arraySum(" + inputAlias + "))"
-			nullFloat := "CAST(NULL AS Nullable(Float64))"
-			valueSQL := "if(" + countSQL + " = 0, " + nullFloat + ", toFloat64(" + sumSQL + "))"
-			if measure.Function == plan.AggregateFunctionAverage {
-				valueSQL = "if(" + countSQL + " = 0, " + nullFloat + ", toFloat64(" + sumSQL + ") / toFloat64(" + countSQL + "))"
+			valueSQL, supported := numericArrayAggregateSQL(measure.Function, inputAlias)
+			if !supported {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: numeric array function is invalid",
+				)
 			}
 			projection = append(projection, valueSQL+" AS "+output)
 			measureState.numberType = "Float64"
@@ -12790,6 +12867,17 @@ func statsPercentileLevelSQL(percentile uint8) string {
 		return "0." + strconv.Itoa(int(percentile/10))
 	}
 	return fmt.Sprintf("0.%02d", percentile)
+}
+
+func numericArrayAggregateSQL(function plan.AggregateFunction, inputSQL string) (string, bool) {
+	switch function {
+	case plan.AggregateFunctionSum:
+		return "sumOrNullArray(" + inputSQL + ")", true
+	case plan.AggregateFunctionAverage:
+		return "avgOrNullArray(" + inputSQL + ")", true
+	default:
+		return "", false
+	}
 }
 
 func numericArrayInputSQL(field fieldState) (string, []any) {

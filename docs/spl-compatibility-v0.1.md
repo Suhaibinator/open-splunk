@@ -2382,22 +2382,26 @@ rather than falling back to an approximate or data-dependent bin.
 | timechart span=5m count BY level
 | timechart span=5m p95(duration_ms)
 | timechart span=1h perc50(duration_ms) AS median_ms
+| timechart span=5m sum(bytes) AS total_bytes
+| timechart span=5m avg(duration_ms) AS mean_ms
 ```
 
-The supported aggregate forms are exactly one argument-free `count`, or one
-unsplit integer-suffix percentile. `count` retains its optional `BY` with one
-exact split field and cannot be aliased. A percentile is written
-`pN(field)` or `percN(field)`, where `N` is an integer from 1 through 99 and
-`field` is one exact unquoted field. It accepts an optional exact unquoted
-`AS` output. Without `AS`, both spellings publish the canonical lowercase
-`percN(field)` name; for example, `p095(duration_ms)` publishes
-`perc95(duration_ms)`. Function and clause names are case-insensitive. A
-percentile never accepts `BY`.
+The supported aggregate forms are exactly one argument-free `count`, one
+unsplit `sum(field)` or `avg(field)`, or one unsplit integer-suffix percentile.
+`count` retains its optional `BY` with one exact split field and cannot be
+aliased. Every numeric form accepts one exact unquoted input field and an
+optional exact unquoted `AS` output. A percentile is written `pN(field)` or
+`percN(field)`, where `N` is an integer from 1 through 99. Without `AS`, its
+two spellings publish the canonical lowercase `percN(field)` name; for
+example, `p095(duration_ms)` publishes `perc95(duration_ms)`. `sum` and `avg`
+likewise publish canonical lowercase `sum(field)` and `avg(field)` names when
+`AS` is absent. Function and clause names are case-insensitive. No numeric
+form accepts `BY`.
 
 Every form requires a positive fixed `s`, `m`, or `h` span from one second
 through 24 hours and must be the final pipeline command. Unsplit count has the
-fixed `_time,count` schema. An unsplit percentile has the fixed
-`_time,<percentile-output>` schema. With count `BY`, split values determine the
+fixed `_time,count` schema. An unsplit numeric aggregate has the fixed
+`_time,<aggregate-output>` schema. With count `BY`, split values determine the
 wide output columns at runtime. All are time-series results, but only count
 `BY` has runtime-named columns.
 
@@ -2407,11 +2411,10 @@ before 1970. Partial first and last buckets are retained. For either count
 form, when at least one input event exists, missing buckets are filled with
 zero counts and rows are ordered by `_time` ascending. A completely empty
 input returns zero rows while preserving the known schema: `_time,count`
-without `BY`, the fixed
-`_time,<percentile-output>` schema for a percentile, or `_time` with count
-`BY` because there are no observed runtime series. `timechart` requires the
-unmodified canonical `_time`; removing, replacing, or transforming it is a
-source-located error.
+without `BY`, the fixed `_time,<aggregate-output>` schema for a numeric
+aggregate, or `_time` with count `BY` because there are no observed runtime
+series. `timechart` requires the unmodified canonical `_time`; removing,
+replacing, or transforming it is a source-located error.
 
 Aligned bucket starts are not constrained to ClickHouse's timestamp storage
 range. For example, a supported search beginning at `1900-01-01T00:00:00Z`
@@ -2430,32 +2433,42 @@ with `_` receive Splunk's `VALUE` prefix (`_audit` becomes `VALUE_audit`). An
 upstream projection that removes the split field treats it as missing for all
 retained events.
 
-The percentile input uses the same numeric and immediate-member normalization
-as `stats` numeric aggregates. Finite integers, floats, numeric Strings, tagged
+Every numeric input uses the same normalization and immediate-member rules as
+`stats` numeric aggregates. Finite integers, floats, numeric Strings, tagged
 decimals, and canonical timestamps converted to Unix epoch seconds are
 eligible. Missing, null, empty-String, Boolean, bytes, object, nonnumeric,
 `NaN`, and infinite inputs are ignored. Each finite numeric scalar in a
 top-level runtime or fixed multivalue contributes independently, including
 duplicates; nonnumeric members and nested containers are ignored. Members are
-never expanded into separate event rows.
+never expanded into separate event rows. An upstream projection that removes
+the measure field leaves it missing; the aggregate cannot recover a private
+event value hidden by the projection.
 
-The percentile output is `Nullable(Float64)`. When at least one scoped input
-row exists, the command publishes the complete fixed bucket grid in ascending
-time order; a bucket with no eligible numeric contribution contains null, not
-zero. This distinguishes an empty scoped input, which publishes the schema but
-zero rows, from present input whose percentile field is missing or wholly
-ineligible, which publishes every bucket with null values.
+Every numeric output is `Nullable(Float64)`. When at least one scoped input row
+exists, the command publishes the complete fixed bucket grid in ascending time
+order; a bucket with no eligible numeric contribution contains null, including
+for `sum`, rather than zero. A real sum of zero remains non-null. `avg` weights
+each eligible immediate member independently, so an event carrying three
+eligible multivalue members contributes three values to both its numerator and
+denominator. Non-finite inputs are filtered before aggregation, but a computed
+IEEE `NaN` or positive/negative infinity produced by `sum` or `avg` arithmetic
+is preserved. This distinguishes an empty scoped input, which publishes the
+static schema but zero rows, from present input
+whose measure field is missing or wholly ineligible, which publishes every
+bucket with null values.
 
-The percentile lowering scans the tenant/index/time/snapshot-scoped source
+The fixed numeric lowering scans the tenant/index/time/snapshot-scoped source
 once, computing bucket ticks and normalized numeric-member arrays inline. It
 materializes only the resulting at-most-10,000 bucket groups. The final join
 and global input-presence proof reuse those bounded groups rather than
-materializing or scanning the event relation again. It emits one physical
-`quantilesGKOrNullArray(100, level)` GK state for the single requested level.
-No `ARRAY JOIN` is emitted, no multivalue member multiplies source rows, and no
-second scoped storage scan is performed. The approximation, roughly
+materializing or scanning the event relation again. A percentile emits one
+physical `quantilesGKOrNullArray(100, level)` GK state for its single requested
+level. `sum` and `avg` each consume the same per-row arrays with one native
+nullable aggregate state (`sumOrNullArray` or `avgOrNullArray`) per bucket. No
+`ARRAY JOIN` is emitted, no multivalue member multiplies source rows, and no
+second scoped storage scan is performed. Percentile approximation, roughly
 1%-rank-error accuracy, and resource limits are the same as the `stats`
-percentile contract.
+percentile contract; `sum` and `avg` use ordinary `Float64` arithmetic.
 
 The split form supports string split values plus missing/null. Numeric,
 Boolean, extended, list, and object split values fail the whole command before
@@ -2473,15 +2486,15 @@ execution-limit error; an explicitly configured lower group cap remains
 authoritative.
 
 Retained unsupported forms fail rather than being approximated. These include
-count arguments or aliases; percentile `BY`; wildcard, quoted, missing,
-multiple, or eval-expression percentile inputs; wildcard, quoted, or missing
-percentile aliases after `AS`; multiple aggregates; every other aggregate such
-as `sum`, `avg`, `dc`, `values`, or `count(field)`; suffixes outside 1 through
-99 or with a decimal level; `perc(field, N)`, `upperperc`, and `exactperc`;
-options; malformed, wildcard, quoted, missing, or multiple count split fields;
-and omitted, nonpositive, overflowing, compound, logarithmic, calendar, or
-subsecond spans. Every unsupported form retains a source-located timechart
-diagnostic.
+count arguments or aliases; percentile, `sum`, or `avg` forms with `BY`;
+wildcard, quoted, missing, multiple, or eval-expression numeric inputs;
+wildcard, quoted, or missing numeric aliases after `AS`;
+multiple aggregates; every other aggregate such as `dc`, `values`, or
+`count(field)`; percentile suffixes outside 1 through 99 or with a decimal
+level; `perc(field, N)`, `upperperc`, and `exactperc`; options; malformed,
+wildcard, quoted, missing, or multiple count split fields; and omitted,
+nonpositive, overflowing, compound, logarithmic, calendar, or subsecond spans.
+Every unsupported form retains a source-located timechart diagnostic.
 
 ### `chart`
 

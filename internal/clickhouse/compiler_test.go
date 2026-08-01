@@ -1484,7 +1484,7 @@ func TestCompileTimechartRevalidatesExactGridAndOutputContract(t *testing.T) {
 			{
 				name: "aggregate replaced",
 				corrupt: func(_ *plan.Query, operator *plan.Timechart) {
-					operator.Measure.Function = plan.AggregateFunctionSum
+					operator.Measure.Function = plan.AggregateFunctionMinimum
 				},
 				want: "aggregate function is unsupported",
 			},
@@ -2840,8 +2840,8 @@ func TestCompileStatsSumAndAverageUseBoundedNumericArraysWithoutRowExpansion(t *
 	for _, required := range []string{
 		`dynamicElement("__os_fields"."amount", 'Array(Dynamic)')`,
 		`AS "__os_measure_values_0"`,
-		`sum(length("__os_measure_values_0"))`,
-		`sum(arraySum("__os_measure_values_0"))`,
+		`sumOrNullArray("__os_measure_values_0")`,
+		`avgOrNullArray("__os_measure_values_0")`,
 		`AS "total"`,
 		`AS "mean"`,
 	} {
@@ -3925,14 +3925,15 @@ func TestCompileStatsSumAndAveragePreserveComputedNonFiniteResults(t *testing.T)
 
 	compiled := compileSPL(t, `index=gradethis | stats sum(amount) AS total avg(amount) AS mean`)
 	for _, required := range []string{
-		`if(sum(length("__os_measure_values_0")) = 0, CAST(NULL AS Nullable(Float64)), toFloat64(sum(arraySum("__os_measure_values_0")))) AS "total"`,
-		`if(sum(length("__os_measure_values_0")) = 0, CAST(NULL AS Nullable(Float64)), toFloat64(sum(arraySum("__os_measure_values_0"))) / toFloat64(sum(length("__os_measure_values_0")))) AS "mean"`,
+		`sumOrNullArray("__os_measure_values_0") AS "total"`,
+		`avgOrNullArray("__os_measure_values_0") AS "mean"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("sum/avg SQL missing non-finite-preserving expression %q:\n%s", required, compiled.SQL)
 		}
 	}
-	if strings.Contains(compiled.SQL, `ifNotFinite(toFloat64(sum(arraySum(`) {
+	if strings.Contains(compiled.SQL, `ifNotFinite(sumOrNullArray(`) ||
+		strings.Contains(compiled.SQL, `ifNotFinite(avgOrNullArray(`) {
 		t.Fatalf("computed non-finite sum/avg was converted to null:\n%s", compiled.SQL)
 	}
 }
@@ -3961,7 +3962,9 @@ func TestCompileStatsSumAndAverageSupportTimeDownstreamAndRepeatedAggregation(t 
 	}
 
 	repeated := compileSPL(t, `index=gradethis | stats sum(amount) AS total BY service | stats avg(total) AS mean`)
-	if !slices.Equal(repeated.OutputFields, []string{"mean"}) || strings.Count(repeated.SQL, `sum(arraySum(`) != 2 {
+	if !slices.Equal(repeated.OutputFields, []string{"mean"}) ||
+		strings.Count(repeated.SQL, `sumOrNullArray(`) != 1 ||
+		strings.Count(repeated.SQL, `avgOrNullArray(`) != 1 {
 		t.Fatalf("repeated sum/avg output=%v\nSQL: %s", repeated.OutputFields, repeated.SQL)
 	}
 }

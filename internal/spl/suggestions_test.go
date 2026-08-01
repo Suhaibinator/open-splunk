@@ -603,7 +603,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 			if command.Insertion != "timechart span=5m count" {
 				t.Fatalf("timechart insertion = %q, want static count form", command.Insertion)
 			}
-			if command.Detail != "Chart count or one percentile over fixed time buckets; only count may split BY one field." {
+			if command.Detail != "Chart count, percentile, sum, or average over fixed time buckets; only count may split BY one field." {
 				t.Fatalf("timechart detail = %q, want aggregate/split description", command.Detail)
 			}
 		}

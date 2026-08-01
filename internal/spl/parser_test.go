@@ -1934,7 +1934,7 @@ func TestParseTimechartRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{"log span keeps legacy diagnostic", `index=main | timechart span=2log10 count by level`, "SPL_INVALID_ARGUMENT", "2log10"},
 		{"compound span", `index=main | timechart span=1h30m count by level`, "SPL_INVALID_ARGUMENT", "1h30m"},
 		{"missing aggregate", `index=main | timechart span=5m`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", ""},
-		{"unsupported aggregate", `index=main | timechart span=5m sum(duration) by level`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "sum"},
+		{"unsupported aggregate", `index=main | timechart span=5m min(duration) by level`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "min"},
 		{"count arguments", `index=main | timechart span=5m count() by level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "("},
 		{"missing by", `index=main | timechart span=5m count level`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "level"},
 		{"missing split field", `index=main | timechart span=5m count by`, "SPL_EXPECTED_FIELD", ""},

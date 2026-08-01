@@ -33,7 +33,8 @@ func TestCompileStatsPercentileFamilySharesOneBoundedStatePerInput(t *testing.T)
 		`arrayElementOrNull(` + state + `, 3) AS "p95"`,
 		`arrayElementOrNull(` + state + `, 4) AS "p99"`,
 		`arrayElementOrNull(` + state + `, 1) AS "median_again"`,
-		`sum(arraySum("__os_measure_values_0"))`,
+		`sumOrNullArray("__os_measure_values_0")`,
+		`avgOrNullArray("__os_measure_values_0")`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("percentile SQL missing %q:\n%s", required, compiled.SQL)

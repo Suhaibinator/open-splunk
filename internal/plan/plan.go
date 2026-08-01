@@ -275,9 +275,9 @@ type TimechartSplit struct {
 
 // Timechart transforms rows into one aggregate series over fixed,
 // epoch-aligned UTC buckets. Measure is either row count (optionally paired
-// with Split) or one unsplit percentile. FirstBucket and BucketCount describe
-// the complete fixed range, including partial boundary buckets and continuous
-// gaps.
+// with Split) or one unsplit percentile, sum, or average. FirstBucket and
+// BucketCount describe the complete fixed range, including partial boundary
+// buckets and continuous gaps.
 type Timechart struct {
 	Time        FieldRef
 	Split       *TimechartSplit

@@ -99,7 +99,7 @@ func TestParseTimechartPercentileRejectsUnsupportedShapesAtSource(t *testing.T) 
 		{"out of range low", `index=main | timechart span=5m p0(latency)`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "p0"},
 		{"out of range high", `index=main | timechart span=5m perc100(latency)`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "perc100"},
 		{"fractional suffix", `index=main | timechart span=5m p99.5(latency)`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "p99.5"},
-		{"other aggregate", `index=main | timechart span=5m avg(latency)`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "avg"},
+		{"other aggregate", `index=main | timechart span=5m min(latency)`, "SPL_UNSUPPORTED_TIMECHART_AGGREGATE", "min"},
 		{"second aggregate", `index=main | timechart span=5m p95(latency) p99(latency)`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "p99"},
 		{"quoted alias", `index=main | timechart span=5m p95(latency) AS "p95_latency"`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", `"p95_latency"`},
 		{"wildcard alias", `index=main | timechart span=5m p95(latency) AS p95_*`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "p95_*"},
@@ -139,7 +139,7 @@ func TestTimechartPercentileSuggestionContext(t *testing.T) {
 		{
 			source:        `| timechart span=5m p`,
 			kinds:         []SuggestionKind{SuggestionKindFunction},
-			functionNames: []string{"count", "p50", "p95"},
+			functionNames: []string{"count", "p50", "p95", "sum", "avg"},
 		},
 		{
 			source: `| timechart span=5m p95(`,

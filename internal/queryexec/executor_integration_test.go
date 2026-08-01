@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -208,6 +209,17 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			ctx,
 			connection,
 			executor,
+			timechartBase,
+			timechartIndexTime,
+		)
+	})
+	t.Run("fixed numeric timechart", func(t *testing.T) {
+		queryIntegrationTestFixedNumericTimechart(
+			t,
+			ctx,
+			connection,
+			executor,
+			explainer,
 			timechartBase,
 			timechartIndexTime,
 		)
@@ -2345,33 +2357,9 @@ func queryIntegrationTestFixedPercentileTimechart(
 		t.Fatalf("percentile timechart compiler shape is not one bounded scoped state:\n%s", compiled.SQL)
 	}
 
-	actionRows, err := connection.Query(
-		ctx,
-		"EXPLAIN actions=1 "+compiled.SQL,
-		compiled.Args...,
-	)
-	if err != nil {
-		t.Fatalf("EXPLAIN percentile timechart: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
-	}
-	var actionLines []string
-	for actionRows.Next() {
-		var line string
-		if err := actionRows.Scan(&line); err != nil {
-			_ = actionRows.Close()
-			t.Fatalf("scan percentile timechart EXPLAIN: %v", err)
-		}
-		actionLines = append(actionLines, line)
-	}
-	if err := actionRows.Err(); err != nil {
-		_ = actionRows.Close()
-		t.Fatalf("iterate percentile timechart EXPLAIN: %v", err)
-	}
-	if err := actionRows.Close(); err != nil {
-		t.Fatalf("close percentile timechart EXPLAIN: %v", err)
-	}
-	actions := strings.Join(actionLines, "\n")
+	actions := queryIntegrationExplainActions(t, ctx, connection, compiled)
 	physicalStates := 0
-	for _, line := range actionLines {
+	for _, line := range strings.Split(actions, "\n") {
 		if strings.Contains(line, "Function:") && strings.Contains(line, "quantilesGK") {
 			physicalStates++
 		}
@@ -2504,6 +2492,371 @@ func queryIntegrationTestFixedPercentileTimechart(
 	})
 }
 
+func queryIntegrationTestFixedNumericTimechart(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	executor *Executor,
+	explainer *Explainer,
+	base time.Time,
+	indexTime time.Time,
+) {
+	t.Helper()
+
+	earliest := base.Add(2 * time.Minute)
+	latest := base.Add(18 * time.Minute)
+	type measureCase struct {
+		name              string
+		function          string
+		alias             string
+		physicalAggregate string
+		valueKind         clickhouse.TimechartValueKind
+		first             float64
+	}
+	measures := []measureCase{
+		{
+			name: "sum", function: "sum", alias: "total_metric",
+			physicalAggregate: "sumOrNullArray",
+			valueKind:         clickhouse.TimechartValueKindSum, first: 23.5,
+		},
+		{
+			name: "average", function: "avg", alias: "mean_metric",
+			physicalAggregate: "avgOrNullArray",
+			valueKind:         clickhouse.TimechartValueKindAverage, first: 23.5 / 7,
+		},
+	}
+
+	for _, test := range measures {
+		t.Run(test.name+" normalization gaps scope and physical shape", func(t *testing.T) {
+			source := `index=main source="timechart-numeric" | timechart span=5m ` +
+				test.function + `(metric) AS ` + test.alias
+			compiled := queryIntegrationCompileSearchRange(
+				t,
+				source,
+				indexTime,
+				earliest,
+				latest,
+			)
+			if compiled.Timechart == nil ||
+				compiled.Timechart.Mode != clickhouse.TimechartModeFixedValue ||
+				compiled.Timechart.ValueKind != test.valueKind ||
+				compiled.Timechart.ValueField != test.alias ||
+				compiled.Timechart.BucketCount != 4 ||
+				compiled.Timechart.BucketCount > 10_000 {
+				t.Fatalf("compiled %s timechart contract = %#v", test.name, compiled.Timechart)
+			}
+			upperSQL := strings.ToUpper(compiled.SQL)
+			if strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 ||
+				!strings.Contains(compiled.SQL, `"__os_timechart_value_groups" AS MATERIALIZED (SELECT `) ||
+				strings.Count(compiled.SQL, ` GROUP BY `) != 1 ||
+				strings.Count(compiled.SQL, test.physicalAggregate+"(") != 1 ||
+				strings.Contains(upperSQL, "ARRAY JOIN") {
+				t.Fatalf(
+					"%s timechart is not one bounded materialized bucket aggregation:\n%s",
+					test.name,
+					compiled.SQL,
+				)
+			}
+
+			explained, err := explainer.Explain(ctx, compiled)
+			if err != nil {
+				t.Fatalf("EXPLAIN %s timechart: %v\nSQL: %s\nargs: %#v", test.name, err, compiled.SQL, compiled.Args)
+			}
+			physical := queryIntegrationAssertStructuredExplain(t, explained)
+			if len(physical.Reads) != 1 || queryIntegrationPlanContainsArrayJoin(physical) {
+				t.Fatalf("%s timechart physical plan rescans or expands rows: %#v", test.name, physical)
+			}
+			actions := queryIntegrationExplainActions(t, ctx, connection, compiled)
+			physicalStates := 0
+			for _, line := range strings.Split(actions, "\n") {
+				if strings.Contains(line, "Function:") &&
+					strings.Contains(line, test.physicalAggregate) {
+					physicalStates++
+				}
+			}
+			if physicalStates != 1 || strings.Contains(actions, "ArrayJoin") {
+				t.Fatalf("%s timechart EXPLAIN actions violate the aggregate contract:\n%s", test.name, actions)
+			}
+
+			job, page := queryIntegrationRunSearchRange(
+				t,
+				ctx,
+				executor,
+				indexTime,
+				"queryexec-timechart-numeric-"+test.name,
+				source,
+				earliest,
+				latest,
+			)
+			queryIntegrationAssertFixedValueSchema(t, job, page, test.alias)
+			if len(page.Rows) != 4 {
+				t.Fatalf("%s timechart rows = %d, want 4", test.name, len(page.Rows))
+			}
+			for rowIndex, row := range page.Rows {
+				bucket, ok := row.Values[0].Time()
+				wantBucket := base.Add(time.Duration(rowIndex) * 5 * time.Minute)
+				if !ok || !bucket.Equal(wantBucket) {
+					t.Fatalf("%s row %d bucket = %v, %v, want %v", test.name, rowIndex, bucket, ok, wantBucket)
+				}
+				switch rowIndex {
+				case 0:
+					queryIntegrationAssertDouble(t, row.Values[1], test.first, test.name+" normalized first bucket")
+				case 1:
+					queryIntegrationAssertDouble(t, row.Values[1], 0, test.name+" zero-sum bucket")
+				case 2, 3:
+					if !row.Values[1].IsNull() {
+						t.Fatalf("%s row %d = %#v, want null", test.name, rowIndex, row.Values[1])
+					}
+				}
+			}
+
+			statsJob, statsPage := queryIntegrationRunSearchRange(
+				t,
+				ctx,
+				executor,
+				indexTime,
+				"queryexec-timechart-numeric-stats-"+test.name,
+				`index=main source="timechart-numeric" | bin _time span=5m AS bucket | stats `+
+					test.function+`(metric) AS `+test.alias+` BY bucket | sort bucket`,
+				earliest,
+				latest,
+			)
+			if statsJob.State != searchjobs.StateCompleted {
+				t.Fatalf("%s stats oracle state = %v, failure=%#v", test.name, statsJob.State, statsJob.Failure)
+			}
+			queryIntegrationAssertFixedValueStatsParity(t, page, statsPage, test.alias)
+		})
+	}
+
+	for _, test := range measures {
+		t.Run(test.name+" all-ineligible empty and projected-away inputs", func(t *testing.T) {
+			for _, input := range []struct {
+				name     string
+				source   string
+				wantRows int
+			}{
+				{
+					name: "all ineligible",
+					source: `index=main source="timechart-percentile-ineligible" | timechart span=5m ` +
+						test.function + `(metric) AS ` + test.alias,
+					wantRows: 4,
+				},
+				{
+					name: "empty",
+					source: `index=main source="timechart-numeric-empty" | timechart span=5m ` +
+						test.function + `(metric) AS ` + test.alias,
+					wantRows: 0,
+				},
+				{
+					name: "projected away",
+					source: `index=main source="timechart-numeric" | fields - metric | timechart span=5m ` +
+						test.function + `(metric) AS ` + test.alias,
+					wantRows: 4,
+				},
+			} {
+				t.Run(input.name, func(t *testing.T) {
+					job, page := queryIntegrationRunSearchRange(
+						t,
+						ctx,
+						executor,
+						indexTime,
+						"queryexec-timechart-numeric-"+test.name+"-"+strings.ReplaceAll(input.name, " ", "-"),
+						input.source,
+						earliest,
+						latest,
+					)
+					queryIntegrationAssertFixedValueSchema(t, job, page, test.alias)
+					if len(page.Rows) != input.wantRows {
+						t.Fatalf("%s %s rows = %d, want %d", test.name, input.name, len(page.Rows), input.wantRows)
+					}
+					for rowIndex, row := range page.Rows {
+						if !row.Values[1].IsNull() {
+							t.Fatalf("%s %s row %d = %#v, want null", test.name, input.name, rowIndex, row.Values[1])
+						}
+					}
+				})
+			}
+		})
+	}
+
+	for _, test := range measures {
+		t.Run(test.name+" canonical timestamp matches stats", func(t *testing.T) {
+			alias := "epoch_" + test.name
+			job, page := queryIntegrationRunSearchRange(
+				t,
+				ctx,
+				executor,
+				indexTime,
+				"queryexec-timechart-time-"+test.name,
+				`index=main source="timechart-numeric" | timechart span=5m `+
+					test.function+`(_time) AS `+alias,
+				earliest,
+				latest,
+			)
+			queryIntegrationAssertFixedValueSchema(t, job, page, alias)
+			statsJob, statsPage := queryIntegrationRunSearchRange(
+				t,
+				ctx,
+				executor,
+				indexTime,
+				"queryexec-timechart-time-stats-"+test.name,
+				`index=main source="timechart-numeric" | bin _time span=5m AS bucket | stats `+
+					test.function+`(_time) AS `+alias+` BY bucket | sort bucket`,
+				earliest,
+				latest,
+			)
+			if statsJob.State != searchjobs.StateCompleted {
+				t.Fatalf("%s timestamp stats oracle state = %v, failure=%#v", test.name, statsJob.State, statsJob.Failure)
+			}
+			queryIntegrationAssertFixedValueStatsParity(t, page, statsPage, alias)
+		})
+	}
+
+	for _, test := range measures {
+		t.Run(test.name+" preserves computed nonfinite result", func(t *testing.T) {
+			alias := "overflow_" + test.name
+			job, page := queryIntegrationRunSearchRange(
+				t,
+				ctx,
+				executor,
+				indexTime,
+				"queryexec-timechart-overflow-"+test.name,
+				`index=main source="timechart-numeric-overflow" | timechart span=5m `+
+					test.function+`(metric) AS `+alias,
+				earliest,
+				latest,
+			)
+			queryIntegrationAssertFixedValueSchema(t, job, page, alias)
+			if len(page.Rows) != 4 {
+				t.Fatalf("%s overflow rows = %d, want 4", test.name, len(page.Rows))
+			}
+			value, ok := page.Rows[0].Values[1].Double()
+			if !ok || !math.IsInf(value, 1) {
+				t.Fatalf("%s computed overflow = %v, %v, want +Inf", test.name, value, ok)
+			}
+			for rowIndex := 1; rowIndex < len(page.Rows); rowIndex++ {
+				if !page.Rows[rowIndex].Values[1].IsNull() {
+					t.Fatalf("%s overflow gap %d = %#v, want null", test.name, rowIndex, page.Rows[rowIndex].Values[1])
+				}
+			}
+		})
+	}
+}
+
+func queryIntegrationAssertFixedValueSchema(
+	t *testing.T,
+	job searchjobs.Job,
+	page searchjobs.ResultPage,
+	valueField string,
+) {
+	t.Helper()
+	if job.State != searchjobs.StateCompleted {
+		t.Fatalf("fixed numeric timechart state = %v, failure=%#v", job.State, job.Failure)
+	}
+	if len(page.Schema.Columns) != 2 ||
+		page.Schema.Columns[0] != (searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}) ||
+		page.Schema.Columns[1] != (searchjobs.Column{
+			Name: valueField, Kind: searchjobs.ValueKindDouble, Nullable: true,
+		}) {
+		t.Fatalf("fixed numeric timechart schema = %#v", page.Schema)
+	}
+}
+
+func queryIntegrationAssertFixedValueStatsParity(
+	t *testing.T,
+	timechart searchjobs.ResultPage,
+	stats searchjobs.ResultPage,
+	valueField string,
+) {
+	t.Helper()
+	statsBucket := queryIntegrationColumnIndex(t, stats, "bucket")
+	statsValue := queryIntegrationColumnIndex(t, stats, valueField)
+	byBucket := make(map[int64]searchjobs.Value, len(stats.Rows))
+	for _, row := range stats.Rows {
+		bucket, ok := row.Values[statsBucket].Time()
+		if !ok {
+			t.Fatalf("stats oracle bucket = %#v", row.Values[statsBucket])
+		}
+		byBucket[bucket.UnixNano()] = row.Values[statsValue]
+	}
+	for rowIndex, row := range timechart.Rows {
+		bucket, ok := row.Values[0].Time()
+		if !ok {
+			t.Fatalf("timechart row %d bucket = %#v", rowIndex, row.Values[0])
+		}
+		want, observed := byBucket[bucket.UnixNano()]
+		if !observed {
+			if !row.Values[1].IsNull() {
+				t.Fatalf("timechart gap %v = %#v, want null", bucket, row.Values[1])
+			}
+			continue
+		}
+		delete(byBucket, bucket.UnixNano())
+		if want.IsNull() {
+			if !row.Values[1].IsNull() {
+				t.Fatalf("timechart all-ineligible bucket %v = %#v, want null", bucket, row.Values[1])
+			}
+			continue
+		}
+		wantDouble, wantOK := want.Double()
+		if !wantOK {
+			t.Fatalf("stats oracle bucket %v value = %#v", bucket, want)
+		}
+		queryIntegrationAssertDouble(t, row.Values[1], wantDouble, "timechart/stats parity")
+	}
+	if len(byBucket) != 0 {
+		t.Fatalf("stats oracle contains buckets outside the timechart grid: %#v", byBucket)
+	}
+}
+
+func queryIntegrationAssertDouble(t *testing.T, value searchjobs.Value, want float64, label string) {
+	t.Helper()
+	got, ok := value.Double()
+	if !ok || math.IsNaN(got) || math.IsInf(got, 0) ||
+		math.Abs(got-want) > 1e-12*math.Max(1, math.Abs(want)) {
+		t.Fatalf("%s = %v, %v, want %v", label, got, ok, want)
+	}
+}
+
+func queryIntegrationPlanContainsArrayJoin(plan ExplainPlan) bool {
+	for _, nodeType := range plan.NodeTypes {
+		if strings.Contains(strings.ToLower(nodeType), "arrayjoin") {
+			return true
+		}
+	}
+	return false
+}
+
+func queryIntegrationExplainActions(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	compiled clickhouse.CompiledQuery,
+) string {
+	t.Helper()
+	rows, err := connection.Query(ctx, "EXPLAIN actions=1 "+compiled.SQL, compiled.Args...)
+	if err != nil {
+		t.Fatalf("EXPLAIN actions: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			t.Errorf("close EXPLAIN actions: %v", err)
+		}
+	}()
+	var lines []string
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatalf("scan EXPLAIN actions: %v", err)
+		}
+		lines = append(lines, line)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate EXPLAIN actions: %v", err)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, connection clickhousedriver.Conn) (time.Time, time.Time) {
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
@@ -2613,6 +2966,34 @@ func queryIntegrationInsertTimechartEvents(t *testing.T, ctx context.Context, co
 		fixtureEvent{id: "percentile-ineligible-text", source: "timechart-percentile-ineligible", at: base.Add(6 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic("not-numeric")},
 		fixtureEvent{id: "percentile-ineligible-bool", source: "timechart-percentile-ineligible", at: base.Add(11 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(true)},
 		fixtureEvent{id: "percentile-ineligible-null", source: "timechart-percentile-ineligible", at: base.Add(16 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(nil)},
+	)
+	events = append(events,
+		// The first visible fixed-value bucket contains seven eligible immediate
+		// members: native integer/float, numeric String, tagged Decimal, and a
+		// multivalue whose duplicated 1 contributes twice. Its total is 23.5 and
+		// its member-weighted average is 23.5/7. Large poison values prove that
+		// tenant, index, half-open event time, and visibility scoping happen before
+		// the bounded bucket aggregation.
+		fixtureEvent{id: "numeric-before", source: "timechart-numeric", at: base.Add(2*time.Minute - time.Nanosecond), metricSet: true, metric: clickhousedriver.NewDynamic(float64(9_999))},
+		fixtureEvent{id: "numeric-int", source: "timechart-numeric", at: base.Add(2 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(int64(10))},
+		fixtureEvent{id: "numeric-float", source: "timechart-numeric", at: base.Add(2*time.Minute + 30*time.Second), metricSet: true, metric: clickhousedriver.NewDynamicWithType(float64(2.5), "Float64")},
+		fixtureEvent{id: "numeric-string", source: "timechart-numeric", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic("3.5")},
+		fixtureEvent{id: "numeric-decimal", source: "timechart-numeric", at: base.Add(3*time.Minute + 30*time.Second), metricSet: true, metric: queryIntegrationExtendedValue("decimal/v1", "4.000")},
+		fixtureEvent{id: "numeric-list", source: "timechart-numeric", at: base.Add(4 * time.Minute), metricSet: true, metric: numericList(int64(1), int64(1), "1.5", "not-numeric", nil)},
+		// A real zero must remain distinguishable from the null gap and the
+		// present-but-all-ineligible bucket that follow it.
+		fixtureEvent{id: "numeric-zero-positive", source: "timechart-numeric", at: base.Add(6 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(int64(7))},
+		fixtureEvent{id: "numeric-zero-negative", source: "timechart-numeric", at: base.Add(7 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(int64(-7))},
+		fixtureEvent{id: "numeric-ineligible-missing", source: "timechart-numeric", at: base.Add(15 * time.Minute)},
+		fixtureEvent{id: "numeric-ineligible-text", source: "timechart-numeric", at: base.Add(16 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic("not-numeric")},
+		fixtureEvent{id: "numeric-latest", source: "timechart-numeric", at: base.Add(18 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(float64(9_999))},
+		fixtureEvent{id: "numeric-other-tenant", tenant: "other", source: "timechart-numeric", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(float64(8_888))},
+		fixtureEvent{id: "numeric-other-index", indexName: "other", source: "timechart-numeric", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(float64(7_777))},
+		fixtureEvent{id: "numeric-future-visibility", source: "timechart-numeric", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic(float64(6_666)), visibility: 2},
+		// Every input is finite; only the aggregate arithmetic overflows. Both
+		// sum and avg intentionally preserve ClickHouse's computed +Inf.
+		fixtureEvent{id: "numeric-overflow-a", source: "timechart-numeric-overflow", at: base.Add(2 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic("1.7976931348623157e308")},
+		fixtureEvent{id: "numeric-overflow-b", source: "timechart-numeric-overflow", at: base.Add(3 * time.Minute), metricSet: true, metric: clickhousedriver.NewDynamic("1.7976931348623157e308")},
 	)
 	for index, event := range events {
 		message := "timechart " + event.id

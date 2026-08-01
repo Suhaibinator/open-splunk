@@ -2360,7 +2360,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 		}
 		return nil
 	}
-	if output.Mode == clickhouse.TimechartModeFixedPercentile {
+	if output.Mode == clickhouse.TimechartModeFixedValue {
 		resolvedValueField, valueFieldErr := plan.ResolveField(
 			output.ValueField,
 			spl.Range{},
@@ -2368,10 +2368,11 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 		if output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
 			output.ValueField == "" || output.ValueField == "_time" ||
 			valueFieldErr != nil || resolvedValueField.Name != output.ValueField ||
+			!output.ValueKind.Valid() ||
 			!slices.Equal(expected, []string{"_time", output.ValueField}) ||
 			len(schema.Columns) != 2 {
 			return fmt.Errorf(
-				"%w: fixed percentile timechart schema does not match the compiled output",
+				"%w: fixed value timechart schema does not match the compiled output",
 				ErrInvalidResult,
 			)
 		}
@@ -2383,7 +2384,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 			valueColumn.Kind != ValueKindDouble || !valueColumn.Nullable ||
 			valueColumn.Multivalue {
 			return fmt.Errorf(
-				"%w: fixed percentile timechart schema is invalid",
+				"%w: fixed value timechart schema is invalid",
 				ErrInvalidResult,
 			)
 		}

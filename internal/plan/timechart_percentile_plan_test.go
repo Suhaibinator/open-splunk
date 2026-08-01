@@ -171,7 +171,7 @@ func TestBuildRejectsForgedTimechartAggregateContracts(t *testing.T) {
 			name: "unsupported aggregate",
 			aggregate: func() spl.StatsAggregate {
 				got := validPercentile
-				got.Function = spl.AggregateFunctionAverage
+				got.Function = spl.AggregateFunctionMinimum
 				got.Percentile = 0
 				return got
 			}(),

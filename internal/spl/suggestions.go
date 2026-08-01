@@ -549,7 +549,7 @@ func classifyTimechartSuggestion(context SuggestionContext, tokens []token) Sugg
 		tokens[1].kind == tokenEqual &&
 		tokens[2].kind == tokenWord {
 		context = aggregateSuggestionContext(context)
-		context.FunctionNames = []string{"count", "p50", "p95"}
+		context.FunctionNames = []string{"count", "p50", "p95", "sum", "avg"}
 		return context
 	}
 	if len(tokens) < 4 ||
@@ -571,7 +571,7 @@ func classifyTimechartSuggestion(context SuggestionContext, tokens []token) Sugg
 		context.Keywords = []string{"BY"}
 		return context
 	}
-	if _, percentile := parseStatsPercentileSuffix(strings.ToLower(aggregate[0].text)); !percentile {
+	if _, supported := timechartFieldAggregateSpecForName(aggregate[0].text); !supported {
 		return context
 	}
 	if parenthesisDepth(aggregate) > 0 {

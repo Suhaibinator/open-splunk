@@ -208,7 +208,7 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		if err := analyzer.validateOutputName(operator.Measure.Output, depth+1); err != nil {
 			return err
 		}
-		if operator.Measure.Function == AggregateFunctionPercentile {
+		if operator.Measure.Function != AggregateFunctionCountRows {
 			if err := analyzer.addField(operator.Measure.Input, depth+1); err != nil {
 				return err
 			}

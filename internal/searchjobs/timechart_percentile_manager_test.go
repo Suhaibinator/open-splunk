@@ -14,9 +14,10 @@ func TestValidateTimechartSchemaEnforcesFixedPercentileContract(t *testing.T) {
 	t.Parallel()
 
 	output := clickhouse.TimechartOutput{
-		Mode:       clickhouse.TimechartModeFixedPercentile,
+		Mode:       clickhouse.TimechartModeFixedValue,
 		MaxSeries:  1,
 		ValueField: "p95_ms",
+		ValueKind:  clickhouse.TimechartValueKindPercentile,
 	}
 	valid := Schema{Columns: []Column{
 		{Name: "_time", Kind: ValueKindTime},
@@ -101,7 +102,8 @@ func TestManagerDetachesFixedPercentileTimechartMetadataFromExecutor(t *testing.
 			sink ResultSink,
 		) error {
 			if query.Timechart == nil ||
-				query.Timechart.Mode != clickhouse.TimechartModeFixedPercentile ||
+				query.Timechart.Mode != clickhouse.TimechartModeFixedValue ||
+				query.Timechart.ValueKind != clickhouse.TimechartValueKindPercentile ||
 				query.Timechart.ValueField != "p95_ms" {
 				t.Fatalf("compiled fixed percentile timechart = %#v", query.Timechart)
 			}
