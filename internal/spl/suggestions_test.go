@@ -607,6 +607,21 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 				t.Fatalf("timechart detail = %q, want aggregate/split description", command.Detail)
 			}
 		}
+		if command.Name == "eventstats" {
+			if command.Insertion !=
+				"eventstats count(eval(status>=500)) AS errors BY level" {
+				t.Fatalf(
+					"eventstats insertion = %q, want conditional-count form",
+					command.Insertion,
+				)
+			}
+			if !strings.Contains(command.Detail, "true-only count(eval(predicate))") {
+				t.Fatalf(
+					"eventstats detail = %q, want conditional-count description",
+					command.Detail,
+				)
+			}
+		}
 	}
 	if !slices.Equal(gotCommands, wantCommands) {
 		t.Fatalf("catalog commands = %v, want %v", gotCommands, wantCommands)

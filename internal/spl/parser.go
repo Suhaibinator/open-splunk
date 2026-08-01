@@ -1510,22 +1510,27 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		AliasRange: functionToken.sourceRange,
 	}
 	end := functionToken.sourceRange.End
-	if p.current().kind == tokenLeftParen {
+	if p.startsCountPredicate() {
+		predicate, predicateEnd, predicateErr := p.parseCountPredicate()
+		if predicateErr != nil {
+			return nil, predicateErr
+		}
+		aggregate.Function = AggregateFunctionCountPredicate
+		aggregate.Predicate = predicate
+		end = predicateEnd
+		aggregate.Range.End = end
+		aggregate.Alias = ""
+		aggregate.AliasRange = Range{
+			Start: functionToken.sourceRange.Start,
+			End:   end,
+		}
+	} else if p.current().kind == tokenLeftParen {
 		openParen := p.current()
 		p.advance()
 		if p.current().kind == tokenRightParen {
 			return nil, p.unsupportedEventStatsSyntax(
 				openParen,
 				"eventstats count() is not supported; omit the parentheses for a row count",
-			)
-		}
-		if p.current().kind == tokenWord &&
-			strings.EqualFold(p.current().text, "eval") &&
-			p.index+1 < len(p.tokens) &&
-			p.tokens[p.index+1].kind == tokenLeftParen {
-			return nil, p.unsupportedEventStatsSyntax(
-				openParen,
-				"eventstats count(eval(...)) is not supported",
 			)
 		}
 		input := p.current()
@@ -1576,15 +1581,20 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		end = alias.sourceRange.End
 		p.advance()
 	}
-	if aggregate.Function == AggregateFunctionCountValues &&
+	if (aggregate.Function == AggregateFunctionCountValues ||
+		aggregate.Function == AggregateFunctionCountPredicate) &&
 		!aggregate.ExplicitAlias {
+		form := "count(field)"
+		suggestion := "eventstats count(field) AS occurrences"
+		if aggregate.Function == AggregateFunctionCountPredicate {
+			form = "count(eval(...))"
+			suggestion = "eventstats count(eval(field=value)) AS matches"
+		}
 		return nil, &Diagnostic{
-			Code:    "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
-			Message: "eventstats count(field) requires AS followed by an output field name",
-			Range:   aggregate.Range,
-			Suggestions: []string{
-				"eventstats count(field) AS occurrences",
-			},
+			Code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+			Message:     "eventstats " + form + " requires AS followed by an output field name",
+			Range:       aggregate.Range,
+			Suggestions: []string{suggestion},
 		}
 	}
 
@@ -1605,7 +1615,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedEventStatsSyntax(
 			p.current(),
-			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, optional AS for row count, required AS for count(field), and optional BY", p.current().text),
+			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, optional AS for row count, required AS for count(field) or count(eval(predicate)), and optional BY", p.current().text),
 		)
 	}
 	return &EventStatsCommand{
@@ -1624,6 +1634,7 @@ func (p *parser) unsupportedEventStatsAggregate(tok token, message string) *Diag
 			"eventstats count",
 			"eventstats count AS event_count BY group",
 			"eventstats count(field) AS occurrences BY group",
+			"eventstats count(eval(field=value)) AS matches BY group",
 		},
 	}
 }
@@ -1637,6 +1648,7 @@ func (p *parser) unsupportedEventStatsSyntax(tok token, message string) *Diagnos
 			"eventstats count",
 			"eventstats count AS event_count BY group",
 			"eventstats count(field) AS occurrences BY group",
+			"eventstats count(eval(field=value)) AS matches BY group",
 		},
 	}
 }
@@ -1660,55 +1672,14 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	aggregate.Function = spec.function
 	aggregate.Percentile = spec.percentile
 	aggregate.Alias = spec.canonicalName
-	if functionName == "count" && p.startsStatsCountPredicate() {
-		if !p.match(tokenLeftParen) {
-			return StatsAggregate{}, end, p.errorAtCurrent(
-				"SPL_EXPECTED_LEFT_PAREN",
-				"expected '(' after count",
-			)
-		}
-		p.advance() // The lookahead proved this token is eval.
-		if !p.match(tokenLeftParen) {
-			return StatsAggregate{}, end, p.errorAtCurrent(
-				"SPL_EXPECTED_LEFT_PAREN",
-				"expected '(' after eval",
-			)
-		}
-		if p.current().kind == tokenRightParen {
-			return StatsAggregate{}, end, p.errorAtCurrent(
-				"SPL_EXPECTED_EXPRESSION",
-				"count(eval(...)) requires a Boolean predicate",
-			)
-		}
-		predicate, predicateErr := p.parseWhereExpression()
+	if functionName == "count" && p.startsCountPredicate() {
+		predicate, predicateEnd, predicateErr := p.parseCountPredicate()
 		if predicateErr != nil {
 			return StatsAggregate{}, end, predicateErr
 		}
-		if !p.match(tokenRightParen) {
-			if p.canStartWhereOperand() {
-				return StatsAggregate{}, end, &Diagnostic{
-					Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
-					Message: "count(eval(...)) requires explicit AND or OR between predicates",
-					Range:   p.current().sourceRange,
-					Suggestions: []string{
-						"count(eval(field=value AND other_field=value)) AS matches",
-					},
-				}
-			}
-			return StatsAggregate{}, end, p.errorAtCurrent(
-				"SPL_EXPECTED_RIGHT_PAREN",
-				"expected ')' to close the eval predicate",
-			)
-		}
-		if !p.match(tokenRightParen) {
-			return StatsAggregate{}, end, p.errorAtCurrent(
-				"SPL_EXPECTED_RIGHT_PAREN",
-				"expected ')' to close count(eval(...))",
-			)
-		}
 		aggregate.Function = AggregateFunctionCountPredicate
 		aggregate.Predicate = predicate
-		end = p.previous().sourceRange.End
+		end = predicateEnd
 		aggregate.Range.End = end
 		aggregate.Alias = ""
 		aggregate.AliasRange = Range{Start: functionToken.sourceRange.Start, End: end}
@@ -1769,12 +1740,65 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	return aggregate, end, nil
 }
 
-func (p *parser) startsStatsCountPredicate() bool {
+func (p *parser) startsCountPredicate() bool {
 	return p.current().kind == tokenLeftParen &&
 		p.index+2 < len(p.tokens) &&
 		p.tokens[p.index+1].kind == tokenWord &&
 		strings.EqualFold(p.tokens[p.index+1].text, "eval") &&
 		p.tokens[p.index+2].kind == tokenLeftParen
+}
+
+// parseCountPredicate parses the shared count(eval(<Boolean predicate>))
+// grammar. Both stats and eventstats call this helper so predicate precedence,
+// source ranges, scalar validation, and the query-wide predicate budget cannot
+// drift between the two commands.
+func (p *parser) parseCountPredicate() (WhereExpr, Position, error) {
+	if !p.match(tokenLeftParen) {
+		return nil, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_LEFT_PAREN",
+			"expected '(' after count",
+		)
+	}
+	p.advance() // startsCountPredicate proved this token is eval.
+	if !p.match(tokenLeftParen) {
+		return nil, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_LEFT_PAREN",
+			"expected '(' after eval",
+		)
+	}
+	if p.current().kind == tokenRightParen {
+		return nil, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_EXPRESSION",
+			"count(eval(...)) requires a Boolean predicate",
+		)
+	}
+	predicate, predicateErr := p.parseWhereExpression()
+	if predicateErr != nil {
+		return nil, p.current().sourceRange.End, predicateErr
+	}
+	if !p.match(tokenRightParen) {
+		if p.canStartWhereOperand() {
+			return nil, p.current().sourceRange.End, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+				Message: "count(eval(...)) requires explicit AND or OR between predicates",
+				Range:   p.current().sourceRange,
+				Suggestions: []string{
+					"count(eval(field=value AND other_field=value)) AS matches",
+				},
+			}
+		}
+		return nil, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_RIGHT_PAREN",
+			"expected ')' to close the eval predicate",
+		)
+	}
+	if !p.match(tokenRightParen) {
+		return nil, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_RIGHT_PAREN",
+			"expected ')' to close count(eval(...))",
+		)
+	}
+	return predicate, p.previous().sourceRange.End, nil
 }
 
 type statsAggregateSpec struct {

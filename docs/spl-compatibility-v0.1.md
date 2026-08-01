@@ -1774,11 +1774,12 @@ retained group.
 requires the exact shape
 `count(eval(<where predicate>)) AS <exact unquoted output field>`; both
 function names are case-insensitive. The predicate uses the same
-case-sensitive eval grammar and precedence as `where` and `if`: scalar
-comparisons, direct `isnull`/`isnotnull`, bounded Boolean-valued `if`,
-parentheses, and explicit `NOT`, `AND`, and `OR`. Its atomic predicates share
-the query-wide ceiling of 32, and the measure shares the ordinary 16-measure
-ceiling.
+case-sensitive eval grammar and precedence as `where` and `if`: comparisons
+over supported scalar expressions, supported direct Boolean scalar functions
+such as `isnull`, `isnotnull`, `match`, and `like`, bounded Boolean-valued
+conditionals, parentheses, and explicit `NOT`, `AND`, and `OR`. Its atomic
+predicates share the query-wide ceiling of 32, and the measure shares the
+ordinary 16-measure ceiling.
 
 Each input row contributes one only when the predicate is Boolean true. False
 or null contributes zero. An ordinary comparison involving a missing or null
@@ -1801,9 +1802,9 @@ event data.
 
 The explicit `AS` is required because Splunk's conditional-count guidance
 requires an alias and does not define a stable default expression-derived
-field name. `c(eval(...))`, an omitted alias, `match`, `like`, `XOR`,
-arbitrary scalar truthiness, wildcard count, quoted names, and other eval
-functions remain explicit version 0.1 failures. Splunk supports a broader eval
+field name. `c(eval(...))`, an omitted alias, `XOR`, arbitrary scalar
+truthiness, wildcard count, quoted names, and unsupported eval functions or
+operators remain explicit version 0.1 failures. Splunk supports a broader eval
 expression surface; Open Splunk does not silently reinterpret those forms.
 
 `count(field)` counts immediate, non-null field occurrences without
@@ -2141,18 +2142,22 @@ eventstats count BY host
 eventstats count AS peers BY host source
 eventstats count(status) AS populated
 eventstats count(status) AS populated BY host
+eventstats count(eval(status>=500)) AS errors
+eventstats count(eval(status>=500)) AS errors BY service
 ```
 
 Exactly one `count` is accepted. Argument-free row count uses the default
 output field `count` and may provide one exact output with `AS`. The
 field-occurrence form accepts exactly one unquoted exact field in
 `count(field)` and requires `AS` followed by one exact output field. `BY` may
-contain from one through 16 distinct exact fields. Command and keyword
-spelling is case-insensitive, while field names remain case-sensitive.
-Parenthesized `count()`, `count(eval(...))`, `c(field)`, wildcard or quoted
-input fields, empty or multiple inputs, every non-count function, multiple
-measures, quoted or wildcard output/grouping fields, and command options fail
-with source-located unsupported-syntax or unsupported-aggregate diagnostics.
+contain from one through 16 distinct exact fields. Conditional count accepts
+exactly `count(eval(<where predicate>)) AS <exact output field>` and also
+requires the alias. Command and keyword spelling is case-insensitive, while
+field names remain case-sensitive. Parenthesized `count()`, `c(field)`,
+`c(eval(...))`, wildcard or quoted input fields, empty or multiple inputs,
+every non-count function, multiple measures, quoted or wildcard
+output/grouping fields, and command options fail with source-located
+unsupported-syntax or unsupported-aggregate diagnostics.
 
 Unlike `stats`, `eventstats` does not collapse or generate rows. A global count
 is added to every row in the complete upstream relation; grouped counts are
@@ -2175,6 +2180,25 @@ The complete global or grouped total is a non-null `UInt64` on every row
 eligible for annotation, including zero when no row in that scope contributes
 an occurrence. Projected-away inputs remain missing rather than being
 recovered from hidden event columns.
+
+`eventstats count(eval(predicate))` uses the same predicate grammar and typed
+truth semantics as the `stats` conditional-count form. Each upstream row
+contributes one only when the predicate is Boolean true; false or null
+contributes zero. A missing comparison operand therefore contributes zero,
+while `isnull(missing)` contributes one. The predicate is a measure input and
+never becomes a `WHERE` clause: every scoped row remains visible, participates
+in its `BY` group, and receives the complete count for that scope. A scope with
+no true predicate publishes zero. Projected-away predicate fields stay missing
+instead of being recovered from hidden event columns.
+
+The per-row predicate contribution is bound inside the same bounded,
+materialized input used for row annotation, including the existing singleton
+optimizer fence when a calculated or Dynamic field requires it. The
+contribution is non-null `UInt64`, sums through `UInt128`, and publishes as
+`UInt64`. Repeated comparisons against one unrestricted Dynamic numeric field
+share one per-row exact numeric key and eligibility calculation. Downstream
+filtering cannot change the already-computed total or hide an over-limit
+upstream relation.
 
 A missing or explicit-null `BY` field makes only that row ineligible for a
 group. The row remains in the result, but the eventstats output is logically
@@ -2803,6 +2827,11 @@ the SPL2-style `perc(field, N)` form, `upperperc`, and `exactperc`. Percentile
 eval expressions and wildcard inputs are also outside the current exact-field
 subset. The broader `count` forms listed in the stats section are unsupported
 too.
+
+`eventstats` supports one argument-free `count`, exact-field `count(field) AS
+output`, or conditional `count(eval(predicate)) AS output`, optionally grouped
+by up to 16 exact fields. Other aggregate functions, multiple measures, and
+the broader eval-expression surface remain unsupported for `eventstats`.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

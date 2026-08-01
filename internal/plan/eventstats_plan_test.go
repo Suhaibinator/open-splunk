@@ -311,7 +311,7 @@ func TestBuildEventStatsCountRejectsForgedMetadata(t *testing.T) {
 			},
 		},
 		{
-			name: "unsupported function",
+			name: "predicate count without predicate",
 			aggregate: spl.StatsAggregate{
 				Function:      spl.AggregateFunctionCountPredicate,
 				Alias:         "matches",

@@ -46,6 +46,7 @@ func testEventStatsAgainstClickHouse(
 			"eventstats-1",
 			"eventstats-fixture",
 			typedField("eventstats_group", typedString("500")),
+			typedField("eventstats_ratio", typedUint(9_007_199_254_740_993)),
 			typedField("eventstats_existing", typedString("shadowed")),
 			typedField("eventstats_value", typedString("scalar")),
 			typedField(
@@ -57,6 +58,7 @@ func testEventStatsAgainstClickHouse(
 			"eventstats-2",
 			"eventstats-fixture",
 			typedField("eventstats_group", typedSint(500)),
+			typedField("eventstats_ratio", typedUint(9_007_199_254_740_992)),
 			typedField(
 				"eventstats_value",
 				typedList(
@@ -279,6 +281,54 @@ func testEventStatsAgainstClickHouse(
 		4,
 	)
 	assertIDTotals(
+		"global eventstats count(eval)",
+		compile(
+			base+` | eventstats count(eval(event_id="eventstats-1" OR event_id="eventstats-3")) AS matches | sort event_id | table event_id matches`,
+		),
+		eventstatsIDs,
+		2,
+	)
+	assertIDTotals(
+		"nullable eventstats count(eval)",
+		compile(
+			base+` | eventstats count(eval(if(event_id="eventstats-1", null, if(event_id="eventstats-2", true, false))=true)) AS matches | sort event_id | table event_id matches`,
+		),
+		eventstatsIDs,
+		1,
+	)
+	assertIDTotals(
+		"exact numeric eventstats count(eval)",
+		compile(
+			base+` | eval selected=eventstats_ratio | eventstats count(eval(selected>9007199254740992 AND selected<9007199254740994)) AS matches | sort event_id | table event_id matches`,
+		),
+		eventstatsIDs,
+		1,
+	)
+	assertIDTotals(
+		"projected-away eventstats count(eval)",
+		compile(
+			base+` | fields event_id | eventstats count(eval(isnotnull(eventstats_group))) AS matches | sort event_id | table event_id matches`,
+		),
+		eventstatsIDs,
+		0,
+	)
+	assertIDTotals(
+		"downstream-filtered eventstats count(eval)",
+		compile(
+			base+` | eventstats count(eval(event_id="eventstats-1" OR event_id="eventstats-3")) AS matches | where event_id="eventstats-3" | table event_id matches`,
+		),
+		[]string{"eventstats-3"},
+		2,
+	)
+	assertIDTotals(
+		"calculated predicate eventstats downstream reuse",
+		compile(
+			base+` | eval selected=if(event_id="eventstats-1", "wanted", "other") | eventstats count(eval(selected="wanted")) AS matches | where selected="wanted" | table event_id matches`,
+		),
+		[]string{"eventstats-1"},
+		1,
+	)
+	assertIDTotals(
 		"global eventstats count(nonempty calculated homogeneous array)",
 		compile(
 			base+` event_id="eventstats-1" | eval lowered=lower(eventstats_letters) | eventstats count(lowered) AS occurrences | table event_id occurrences`,
@@ -338,6 +388,58 @@ func testEventStatsAgainstClickHouse(
 	}
 	if !reflect.DeepEqual(groupedGot, groupedWant) {
 		t.Fatalf("grouped eventstats = %#v, want %#v", groupedGot, groupedWant)
+	}
+
+	conditionalGrouped := compile(
+		base + ` | eventstats count(eval(event_id="eventstats-1" OR event_id="eventstats-3")) AS matches BY eventstats_group | sort event_id | table event_id matches`,
+	)
+	conditionalGroupedRows, err := connection.Query(
+		ctx,
+		conditionalGrouped.SQL,
+		conditionalGrouped.Args...,
+	)
+	if err != nil {
+		t.Fatalf(
+			"execute grouped conditional eventstats: %v\nSQL: %s\nargs: %#v",
+			err,
+			conditionalGrouped.SQL,
+			conditionalGrouped.Args,
+		)
+	}
+	type conditionalGroupedResult struct {
+		id      string
+		matches *uint64
+	}
+	var conditionalGroupedGot []conditionalGroupedResult
+	for conditionalGroupedRows.Next() {
+		var row conditionalGroupedResult
+		if scanErr := conditionalGroupedRows.Scan(&row.id, &row.matches); scanErr != nil {
+			_ = conditionalGroupedRows.Close()
+			t.Fatalf("scan grouped conditional eventstats: %v", scanErr)
+		}
+		conditionalGroupedGot = append(conditionalGroupedGot, row)
+	}
+	if rowsErr := conditionalGroupedRows.Err(); rowsErr != nil {
+		_ = conditionalGroupedRows.Close()
+		t.Fatalf("iterate grouped conditional eventstats: %v", rowsErr)
+	}
+	if closeErr := conditionalGroupedRows.Close(); closeErr != nil {
+		t.Fatalf("close grouped conditional eventstats rows: %v", closeErr)
+	}
+	conditionalGroupOne := uint64(1)
+	conditionalGroupedWant := []conditionalGroupedResult{
+		{id: "eventstats-1", matches: &conditionalGroupOne},
+		{id: "eventstats-2", matches: &conditionalGroupOne},
+		{id: "eventstats-3", matches: &conditionalGroupOne},
+		{id: "eventstats-4"},
+		{id: "eventstats-5"},
+	}
+	if !reflect.DeepEqual(conditionalGroupedGot, conditionalGroupedWant) {
+		t.Fatalf(
+			"grouped conditional eventstats = %#v, want %#v",
+			conditionalGroupedGot,
+			conditionalGroupedWant,
+		)
 	}
 
 	type groupedValueResult struct {
@@ -533,11 +635,29 @@ func testEventStatsAgainstClickHouse(
 		1,
 		0,
 	)
+	assertTotals(
+		"count(eval) generated exact row boundary",
+		compileBoundary(
+			`index=eventstats-boundary source="eventstats-boundary" host="in" | eventstats count(eval(host="in")) AS total | head 1 | table total`,
+		),
+		1,
+		MaximumEventStatsInputRows,
+	)
+	assertTotals(
+		"count(eval fenced calculated field) generated exact row boundary",
+		compileBoundary(
+			`index=eventstats-boundary source="eventstats-boundary" host="in" | spath input=_raw output=selected path=value | eventstats count(eval(isnull(selected))) AS total | head 1 | table total`,
+		),
+		1,
+		MaximumEventStatsInputRows,
+	)
 
 	for name, source := range map[string]string{
-		"visible generated overflow":           `index=eventstats-boundary source="eventstats-boundary" | eventstats count AS total | table event_id total`,
-		"downstream-pruned generated overflow": `index=eventstats-boundary source="eventstats-boundary" | eventstats count AS total | search event_id="not-present" | table total`,
-		"zero-occurrence generated overflow":   `index=eventstats-boundary source="eventstats-boundary" | eventstats count(eventstats_missing) AS total | table total`,
+		"visible generated overflow":             `index=eventstats-boundary source="eventstats-boundary" | eventstats count AS total | table event_id total`,
+		"downstream-pruned generated overflow":   `index=eventstats-boundary source="eventstats-boundary" | eventstats count AS total | search event_id="not-present" | table total`,
+		"zero-occurrence generated overflow":     `index=eventstats-boundary source="eventstats-boundary" | eventstats count(eventstats_missing) AS total | table total`,
+		"zero-match conditional overflow":        `index=eventstats-boundary source="eventstats-boundary" | eventstats count(eval(event_id="not-present")) AS total | search event_id="not-present" | table total`,
+		"fenced calculated conditional overflow": `index=eventstats-boundary source="eventstats-boundary" | spath input=_raw output=selected path=value | eventstats count(eval(isnotnull(selected))) AS total | search event_id="not-present" | table total`,
 	} {
 		queryErr := executeCompiledExpectingNoRows(
 			ctx,

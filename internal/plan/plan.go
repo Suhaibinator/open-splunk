@@ -248,10 +248,10 @@ func (op *Aggregate) SourceRange() spl.Range { return op.Range }
 
 // EventAggregate adds one aggregate value to every input row. GroupBy
 // partitions the input when non-empty, while Measure names the single
-// row-count or exact-field occurrence-count output supported by the bounded
-// eventstats compatibility slice. Unlike Aggregate, it preserves row
-// cardinality, event identity, established ordering, and every other visible
-// field.
+// row-count, exact-field occurrence-count, or true-only predicate-count output
+// supported by the bounded eventstats compatibility slice. Unlike Aggregate,
+// it preserves row cardinality, event identity, established ordering, and
+// every other visible field.
 type EventAggregate struct {
 	GroupBy []FieldRef
 	Measure AggregateMeasure

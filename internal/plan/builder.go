@@ -562,13 +562,11 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 			}
 			aggregate := command.Aggregate
-			if aggregate.Predicate != nil ||
-				aggregate.Percentile != 0 ||
-				aggregate.Alias == "" {
+			if aggregate.Alias == "" {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-					Message: "eventstats currently supports exactly one count " +
-						"or count(field) AS output measure",
+					Message: "eventstats currently supports exactly one count, " +
+						"count(field), or count(eval(predicate)) AS output measure",
 					Range: aggregate.Range,
 				}
 			}
@@ -577,6 +575,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			case spl.AggregateFunctionCount:
 				if aggregate.Input != "" ||
 					aggregate.InputRange != (spl.Range{}) ||
+					aggregate.Predicate != nil ||
+					aggregate.Percentile != 0 ||
 					(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
 					return nil, &Diagnostic{
 						Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
@@ -589,6 +589,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			case spl.AggregateFunctionCountValues:
 				if aggregate.Input == "" ||
 					aggregate.InputRange == (spl.Range{}) ||
+					aggregate.Predicate != nil ||
+					aggregate.Percentile != 0 ||
 					!aggregate.ExplicitAlias {
 					return nil, &Diagnostic{
 						Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
@@ -606,11 +608,29 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				measure.Function = AggregateFunctionCountValues
 				measure.Input = input
+			case spl.AggregateFunctionCountPredicate:
+				predicateMeasure, predicateErr := buildCountPredicateMeasure(
+					aggregate,
+					outputSchemaKnown,
+					&expressionBudget,
+					countPredicateMeasureDiagnostics{
+						unsupportedCode: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+						invalidMessage: "eventstats count(eval(...)) requires one " +
+							"predicate, an explicit alias, and no field or percentile metadata",
+						ambiguousCode: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
+						reservedMessage: "eventstats cannot read the event result's " +
+							"reserved fields payload without an exact upstream schema",
+					},
+				)
+				if predicateErr != nil {
+					return nil, predicateErr
+				}
+				measure = predicateMeasure
 			default:
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-					Message: "eventstats currently supports exactly one count " +
-						"or count(field) AS output measure",
+					Message: "eventstats currently supports exactly one count, " +
+						"count(field), or count(eval(predicate)) AS output measure",
 					Range: aggregate.Range,
 				}
 			}
@@ -776,35 +796,21 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 					measure.Function = AggregateFunctionCountRows
 				case spl.AggregateFunctionCountPredicate:
-					if aggregate.Input != "" ||
-						aggregate.InputRange != (spl.Range{}) ||
-						aggregate.Percentile != 0 ||
-						!aggregate.ExplicitAlias ||
-						nilSPLWhereExpression(aggregate.Predicate) {
-						return nil, &Diagnostic{
-							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							Message: "count(eval(...)) requires one predicate, an explicit alias, and no field or percentile metadata",
-							Range:   aggregate.Range,
-						}
-					}
-					predicate, predicateErr := convertWhereExpression(
-						aggregate.Predicate,
+					predicateMeasure, predicateErr := buildCountPredicateMeasure(
+						aggregate,
+						outputSchemaKnown,
 						&expressionBudget,
+						countPredicateMeasureDiagnostics{
+							unsupportedCode: "SPL_UNSUPPORTED_STATS_AGGREGATE",
+							invalidMessage:  "count(eval(...)) requires one predicate, an explicit alias, and no field or percentile metadata",
+							ambiguousCode:   "SPL_AMBIGUOUS_STATS_FIELD",
+							reservedMessage: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+						},
 					)
 					if predicateErr != nil {
 						return nil, predicateErr
 					}
-					if !outputSchemaKnown {
-						if fieldRange, referencesReserved := predicateFieldRange(predicate, "fields"); referencesReserved {
-							return nil, &Diagnostic{
-								Code:    "SPL_AMBIGUOUS_STATS_FIELD",
-								Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-								Range:   fieldRange,
-							}
-						}
-					}
-					measure.Function = AggregateFunctionCountPredicate
-					measure.Predicate = predicate
+					measure = predicateMeasure
 				case spl.AggregateFunctionCountValues:
 					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
 						return nil, &Diagnostic{
@@ -2133,9 +2139,56 @@ func splExpressionComplexityError(message string, sourceRange spl.Range) error {
 	}
 }
 
+type countPredicateMeasureDiagnostics struct {
+	unsupportedCode string
+	invalidMessage  string
+	ambiguousCode   string
+	reservedMessage string
+}
+
+// buildCountPredicateMeasure converts the common count(eval(...)) contract
+// while leaving command-specific diagnostics at the stats/eventstats callers.
+func buildCountPredicateMeasure(
+	aggregate spl.StatsAggregate,
+	outputSchemaKnown bool,
+	budget *splExpressionResourceBudget,
+	diagnostics countPredicateMeasureDiagnostics,
+) (AggregateMeasure, error) {
+	if aggregate.Input != "" ||
+		aggregate.InputRange != (spl.Range{}) ||
+		aggregate.Percentile != 0 ||
+		!aggregate.ExplicitAlias ||
+		nilSPLWhereExpression(aggregate.Predicate) {
+		return AggregateMeasure{}, &Diagnostic{
+			Code:    diagnostics.unsupportedCode,
+			Message: diagnostics.invalidMessage,
+			Range:   aggregate.Range,
+		}
+	}
+	predicate, err := convertWhereExpression(aggregate.Predicate, budget)
+	if err != nil {
+		return AggregateMeasure{}, err
+	}
+	if !outputSchemaKnown {
+		if fieldRange, referencesReserved := predicateFieldRange(predicate, "fields"); referencesReserved {
+			return AggregateMeasure{}, &Diagnostic{
+				Code:    diagnostics.ambiguousCode,
+				Message: diagnostics.reservedMessage,
+				Range:   fieldRange,
+			}
+		}
+	}
+	return AggregateMeasure{
+		Function:  AggregateFunctionCountPredicate,
+		Predicate: predicate,
+		Output:    aggregate.Alias,
+	}, nil
+}
+
 // predicateFieldRange finds the first reference to name in deterministic
-// expression order. Stats uses it to preserve the reserved open-event
-// "fields" payload boundary for predicates just as it does for exact inputs.
+// expression order. Conditional aggregate planning uses it to preserve the
+// reserved open-event "fields" payload boundary just as it does for exact
+// inputs.
 func predicateFieldRange(expression Expression, name string) (spl.Range, bool) {
 	var visitExpression func(Expression) (spl.Range, bool)
 	var visitScalar func(ScalarExpression) (spl.Range, bool)

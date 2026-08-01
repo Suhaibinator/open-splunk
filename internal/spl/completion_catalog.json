@@ -77,8 +77,8 @@
     },
     {
       "name": "eventstats",
-      "insertion": "eventstats count AS event_count BY level",
-      "detail": "Add one argument-free count to every input row globally or within up to 16 exact BY fields while preserving the current result shape."
+      "insertion": "eventstats count(eval(status>=500)) AS errors BY level",
+      "detail": "Add one row count, field-occurrence count, or true-only count(eval(predicate)) to every input row globally or within up to 16 exact BY fields."
     },
     {
       "name": "top",

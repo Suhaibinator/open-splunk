@@ -170,6 +170,14 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 				return err
 			}
 		}
+		if operator.Measure.Predicate != nil {
+			if err := analyzer.visitExpression(
+				operator.Measure.Predicate,
+				depth+1,
+			); err != nil {
+				return err
+			}
+		}
 		for _, field := range operator.GroupBy {
 			if err := analyzer.addField(field, depth+1); err != nil {
 				return err

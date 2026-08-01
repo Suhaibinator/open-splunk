@@ -610,9 +610,10 @@ func (c *StatsCommand) SourceRange() Range { return c.Range }
 
 // EventStatsCommand adds one count aggregate to every input row, either
 // globally or within an exact BY tuple. The bounded compatibility surface
-// accepts either argument-free AggregateFunctionCount or exact-field
-// AggregateFunctionCountValues while retaining the singular aggregate's
-// source locations through StatsAggregate.
+// accepts argument-free AggregateFunctionCount, exact-field
+// AggregateFunctionCountValues, or true-only AggregateFunctionCountPredicate
+// while retaining the singular aggregate's source locations through
+// StatsAggregate.
 type EventStatsCommand struct {
 	Aggregate StatsAggregate
 	GroupBy   []StatsGroupField

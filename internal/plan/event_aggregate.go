@@ -7,27 +7,36 @@ import (
 )
 
 // validEventAggregateContract recognizes the deliberately narrow,
-// row-preserving eventstats count/count(field) plan contract. Consumers that
-// use event provenance metadata must fail closed when handed forged logical
-// operators.
+// row-preserving eventstats count/count(field)/count(eval(predicate)) plan
+// contract. Consumers that use event provenance metadata must fail closed when
+// handed forged logical operators.
 func validEventAggregateContract(operator *EventAggregate) bool {
 	if operator == nil ||
 		len(operator.GroupBy) > spl.MaximumStatsGroupFields ||
-		operator.Measure.Predicate != nil ||
 		operator.Measure.Percentile != 0 ||
 		operator.Measure.Output == "" {
 		return false
 	}
 	switch operator.Measure.Function {
 	case AggregateFunctionCountRows:
-		if operator.Measure.Input.Name != "" ||
+		if operator.Measure.Predicate != nil ||
+			operator.Measure.Input.Name != "" ||
 			operator.Measure.Input.Canonical ||
 			operator.Measure.Input.Path != nil ||
 			operator.Measure.Input.Range != (spl.Range{}) {
 			return false
 		}
 	case AggregateFunctionCountValues:
-		if !validResolvedEventAggregateField(operator.Measure.Input) {
+		if operator.Measure.Predicate != nil ||
+			!validResolvedEventAggregateField(operator.Measure.Input) {
+			return false
+		}
+	case AggregateFunctionCountPredicate:
+		if operator.Measure.Input.Name != "" ||
+			operator.Measure.Input.Canonical ||
+			operator.Measure.Input.Path != nil ||
+			operator.Measure.Input.Range != (spl.Range{}) ||
+			!validEventAggregatePredicate(operator.Measure.Predicate) {
 			return false
 		}
 	default:
@@ -51,6 +60,177 @@ func validEventAggregateContract(operator *EventAggregate) bool {
 		seen[group.Name] = struct{}{}
 	}
 	return true
+}
+
+type eventAggregatePredicateValidator struct {
+	nodes  int
+	active map[any]struct{}
+}
+
+func validEventAggregatePredicate(expression Expression) bool {
+	validator := eventAggregatePredicateValidator{
+		active: make(map[any]struct{}),
+	}
+	return validator.validExpression(expression, 1)
+}
+
+func (validator *eventAggregatePredicateValidator) enter(
+	node any,
+	depth int,
+) bool {
+	if depth > maxConvertedExpressionDepth {
+		return false
+	}
+	if _, cyclic := validator.active[node]; cyclic {
+		return false
+	}
+	validator.nodes++
+	if validator.nodes > maxConvertedExpressionNodes {
+		return false
+	}
+	validator.active[node] = struct{}{}
+	return true
+}
+
+func (validator *eventAggregatePredicateValidator) leave(node any) {
+	delete(validator.active, node)
+}
+
+func (validator *eventAggregatePredicateValidator) validExpression(
+	expression Expression,
+	depth int,
+) bool {
+	if expression == nil || !validator.enter(expression, depth) {
+		return false
+	}
+	defer validator.leave(expression)
+	switch expression := expression.(type) {
+	case *BooleanExpression:
+		return expression != nil &&
+			(expression.Op == BooleanOpAnd || expression.Op == BooleanOpOr) &&
+			validator.validExpression(expression.Left, depth+1) &&
+			validator.validExpression(expression.Right, depth+1)
+	case *NotExpression:
+		return expression != nil &&
+			validator.validExpression(expression.Operand, depth+1)
+	case *EvalComparisonExpression:
+		return expression != nil &&
+			validEventAggregateComparisonOp(expression.Op) &&
+			validator.validScalar(expression.Left, depth+1) &&
+			validator.validScalar(expression.Right, depth+1)
+	case *ScalarPredicateExpression:
+		if expression == nil {
+			return false
+		}
+		return validator.validScalar(expression.Value, depth+1) &&
+			scalarExpressionCanBeDirectPredicate(expression.Value)
+	default:
+		return false
+	}
+}
+
+func (validator *eventAggregatePredicateValidator) validScalar(
+	expression ScalarExpression,
+	depth int,
+) bool {
+	if expression == nil || !validator.enter(expression, depth) {
+		return false
+	}
+	defer validator.leave(expression)
+	switch expression := expression.(type) {
+	case *ScalarFieldExpression:
+		return expression != nil &&
+			validResolvedEventAggregateField(expression.Field)
+	case *ScalarLiteralExpression:
+		return expression != nil &&
+			validEventAggregateLiteralKind(expression.Value.Kind)
+	case *ScalarCallExpression:
+		if expression == nil ||
+			!validEventAggregateScalarFunction(expression.Function) {
+			return false
+		}
+		for _, argument := range expression.Arguments {
+			if !validator.validScalar(argument, depth+1) {
+				return false
+			}
+		}
+		return true
+	case *ScalarIfExpression:
+		return expression != nil &&
+			validator.validExpression(expression.Condition, depth+1) &&
+			validator.validScalar(expression.True, depth+1) &&
+			validator.validScalar(expression.False, depth+1)
+	case *ScalarCaseExpression:
+		if expression == nil {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if !validator.validExpression(branch.Condition, depth+1) ||
+				!validator.validScalar(branch.Value, depth+1) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func validEventAggregateScalarFunction(function ScalarFunction) bool {
+	switch function {
+	case ScalarFunctionToNumber,
+		ScalarFunctionReplace,
+		ScalarFunctionIsNull,
+		ScalarFunctionIsNotNull,
+		ScalarFunctionCoalesce,
+		ScalarFunctionLower,
+		ScalarFunctionUpper,
+		ScalarFunctionLength,
+		ScalarFunctionSubstring,
+		ScalarFunctionToString,
+		ScalarFunctionRound,
+		ScalarFunctionCeil,
+		ScalarFunctionFloor,
+		ScalarFunctionMVCount,
+		ScalarFunctionMatch,
+		ScalarFunctionLike,
+		ScalarFunctionNow,
+		ScalarFunctionStrftime,
+		ScalarFunctionStrptime,
+		ScalarFunctionRelativeTime,
+		ScalarFunctionConcat:
+		return true
+	default:
+		return false
+	}
+}
+
+func validEventAggregateComparisonOp(op ComparisonOp) bool {
+	switch op {
+	case ComparisonOpEqual,
+		ComparisonOpNotEqual,
+		ComparisonOpLess,
+		ComparisonOpLessEqual,
+		ComparisonOpGreater,
+		ComparisonOpGreaterEqual:
+		return true
+	default:
+		return false
+	}
+}
+
+func validEventAggregateLiteralKind(kind ValueKind) bool {
+	switch kind {
+	case ValueKindNull,
+		ValueKindString,
+		ValueKindInt64,
+		ValueKindUint64,
+		ValueKindFloat64,
+		ValueKindBool:
+		return true
+	default:
+		return false
+	}
 }
 
 func validResolvedEventAggregateField(field FieldRef) bool {

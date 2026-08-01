@@ -182,12 +182,6 @@ func TestParseEventStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 			rangeText: "(",
 		},
 		{
-			name:      "conditional count",
-			source:    `index=main | eventstats count(eval(status=500)) AS errors`,
-			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
-			rangeText: "(",
-		},
-		{
 			name:      "other function",
 			source:    "index=main\n| eventstats dc(user)",
 			code:      "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
@@ -392,6 +386,7 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats count",
 				"eventstats count AS event_count BY group",
 				"eventstats count(field) AS occurrences BY group",
+				"eventstats count(eval(field=value)) AS matches BY group",
 			},
 		},
 		{
@@ -403,6 +398,7 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats count",
 				"eventstats count AS event_count BY group",
 				"eventstats count(field) AS occurrences BY group",
+				"eventstats count(eval(field=value)) AS matches BY group",
 			},
 		},
 		{
@@ -524,6 +520,7 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		{source: "| eventstats count A", kind: SuggestionKindKeyword, words: []string{"AS", "BY"}},
 		{source: "| eventstats count(", kind: SuggestionKindField},
 		{source: "| eventstats count(status)", kind: SuggestionKindKeyword, words: []string{"AS"}},
+		{source: "| eventstats count(eval(status=500))", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count AS event_", kind: SuggestionKindField},
 		{source: "| eventstats count AS events B", kind: SuggestionKindKeyword, words: []string{"BY"}},
 		{source: "| eventstats count(status) AS populated B", kind: SuggestionKindKeyword, words: []string{"BY"}},

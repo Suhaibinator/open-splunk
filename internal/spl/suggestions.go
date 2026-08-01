@@ -478,6 +478,9 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 		return context
 	}
 	if parenthesisDepth(tokens) > 0 {
+		if insideStatsEval(tokens) {
+			return scalarSuggestionContext(context, false)
+		}
 		context.Kinds = []SuggestionKind{SuggestionKindField}
 		return context
 	}
@@ -492,7 +495,7 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 		return context
 	}
 	context.Kinds = []SuggestionKind{SuggestionKindKeyword}
-	if eventStatsFieldCountClosed(tokens) &&
+	if eventStatsCountRequiresAlias(tokens) &&
 		topLevelWordIndex(tokens, "AS") < 0 {
 		context.Keywords = []string{"AS"}
 	} else if len(tokens) == 1 {
@@ -503,12 +506,11 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 	return context
 }
 
-func eventStatsFieldCountClosed(tokens []token) bool {
+func eventStatsCountRequiresAlias(tokens []token) bool {
 	return len(tokens) >= 4 &&
 		tokenWordEqual(tokens[0], "count") &&
 		tokens[1].kind == tokenLeftParen &&
-		tokens[2].kind == tokenWord &&
-		tokens[3].kind == tokenRightParen
+		tokens[len(tokens)-1].kind == tokenRightParen
 }
 
 func classifyChartSuggestion(context SuggestionContext, tokens []token) SuggestionContext {

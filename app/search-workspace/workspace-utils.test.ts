@@ -286,12 +286,15 @@ test("stats completion advertises true-only conditional count with an explicit a
   assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
 });
 
-test("eventstats completion advertises the bounded row-count surface", () => {
+test("eventstats completion advertises bounded conditional count", () => {
   const eventstatsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eventstats");
   assert.ok(eventstatsCompletion);
-  assert.equal(eventstatsCompletion.insertion, "eventstats count AS event_count BY level");
-  assert.match(eventstatsCompletion.detail, /argument-free count/i);
-  assert.match(eventstatsCompletion.detail, /preserv/i);
+  assert.equal(
+    eventstatsCompletion.insertion,
+    "eventstats count(eval(status>=500)) AS errors BY level",
+  );
+  assert.match(eventstatsCompletion.detail, /true-only count\(eval\(predicate\)\)/i);
+  assert.match(eventstatsCompletion.detail, /every input row/i);
 
   const commandToken = classifiedTokens("index=main | eventstats count")
     .find((token) => token.text.toLowerCase() === "eventstats");

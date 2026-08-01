@@ -521,47 +521,17 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					aliasSequence,
 				)
 			}
-			exactNumericAliases := make([]string, 0, len(exactNumericFields))
+			exactNumericAliases := make([]string, 0, len(exactNumericFields)*2)
 			if len(exactNumericFields) > 0 {
-				predicateState = cloneCompileState(predicateState)
-				keyColumns := make([]string, 0, len(exactNumericFields))
-				for index, reference := range exactNumericFields {
-					field, ok, resolveErr := resolveCompiledField(
-						reference,
-						predicateState,
-					)
-					if resolveErr != nil {
-						return CompiledQuery{}, resolveErr
-					}
-					if !ok {
-						continue
-					}
-					scalar := compiledScalarFromField(field)
-					keyAlias := quoteIdentifier(fmt.Sprintf(
-						"__os_filter_exact_key_%d_%d",
-						aliasSequence,
-						index+1,
-					))
-					numericAlias := quoteIdentifier(fmt.Sprintf(
-						"__os_filter_exact_numeric_%d_%d",
-						aliasSequence,
-						index+1,
-					))
-					keyColumns = append(
-						keyColumns,
-						exactNumericScalarKeySQL(scalar)+
-							" AS "+keyAlias,
-						"toUInt8("+dynamicNumericValuePredicate(scalar)+
-							") AS "+numericAlias,
-					)
-					field.exactNumericKeySQL = keyAlias
-					field.dynamicNumericEligibleSQL = numericAlias
-					predicateState.visible[reference.Name] = field
-					exactNumericAliases = append(
-						exactNumericAliases,
-						keyAlias,
-						numericAlias,
-					)
+				var keyColumns []string
+				predicateState, keyColumns, exactNumericAliases, err = bindExactNumericPredicateFields(
+					predicateState,
+					exactNumericFields,
+					aliasSequence,
+					"filter",
+				)
+				if err != nil {
+					return CompiledQuery{}, err
 				}
 				relation = relation.selectFrom(
 					"SELECT *, "+strings.Join(keyColumns, ", ")+" FROM ("+
@@ -4367,6 +4337,54 @@ func repeatedExactNumericPredicateFields(
 	return fields
 }
 
+// bindExactNumericPredicateFields replaces repeated Dynamic numeric work with
+// private key/eligibility columns. Callers must project the returned columns
+// in a relational boundary before compiling the predicate with the returned
+// state, and must not retain that predicate-only state as their public output
+// state.
+func bindExactNumericPredicateFields(
+	state compileState,
+	fields []plan.FieldRef,
+	stage int,
+	command string,
+) (compileState, []string, []string, error) {
+	predicateState := cloneCompileState(state)
+	keyColumns := make([]string, 0, len(fields)*2)
+	aliases := make([]string, 0, len(fields)*2)
+	for index, reference := range fields {
+		field, ok, resolveErr := resolveCompiledField(reference, predicateState)
+		if resolveErr != nil {
+			return compileState{}, nil, nil, resolveErr
+		}
+		if !ok {
+			continue
+		}
+		scalar := compiledScalarFromField(field)
+		keyAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_%s_exact_key_%d_%d",
+			command,
+			stage,
+			index+1,
+		))
+		numericAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_%s_exact_numeric_%d_%d",
+			command,
+			stage,
+			index+1,
+		))
+		keyColumns = append(
+			keyColumns,
+			exactNumericScalarKeySQL(scalar)+" AS "+keyAlias,
+			"toUInt8("+dynamicNumericValuePredicate(scalar)+") AS "+numericAlias,
+		)
+		field.exactNumericKeySQL = keyAlias
+		field.dynamicNumericEligibleSQL = numericAlias
+		predicateState.visible[reference.Name] = field
+		aliases = append(aliases, keyAlias, numericAlias)
+	}
+	return predicateState, keyColumns, aliases, nil
+}
+
 func aggregatePredicateMaterializationFields(
 	operator *plan.Aggregate,
 	state compileState,
@@ -4501,6 +4519,31 @@ func bindAggregatePredicateFields(
 		boundState.visible[name] = field
 	}
 	return boundState, bindings, boundColumns
+}
+
+// predicateMaterializedOutputState describes the durable public columns after
+// a predicate fence. Predicate-only singleton and exact-numeric aliases belong
+// to a separate compile state and must never leak into downstream commands.
+func predicateMaterializedOutputState(
+	state compileState,
+	fields []string,
+) compileState {
+	outputState := cloneCompileState(state)
+	for _, name := range fields {
+		field := outputState.visible[name]
+		field.valueSQL = quoteIdentifier(name)
+		field.existsSQL = rewriteExistenceForProjection(field, name)
+		if field.kind == fieldKindDynamic {
+			field.dynamicTypeSQL = "dynamicType(" + quoteIdentifier(name) + ")"
+		}
+		field.materializeForPredicate = false
+		outputState.visible[name] = field
+	}
+	outputState.privateColumns = livePrivateColumns(
+		outputState.privateColumns,
+		outputState.visible,
+	)
+	return outputState
 }
 
 // bindMaterializedPredicateFields builds a predicate state whose selected
@@ -11470,7 +11513,7 @@ func compileEventAggregate(
 	state compileState,
 	stage int,
 ) (compiledRelation, compileState, []any, error) {
-	output, validateErr := validateEventAggregate(operator)
+	output, validateErr := validateEventAggregate(operator, state)
 	if validateErr != nil {
 		return compiledRelation{}, compileState{}, nil, validateErr
 	}
@@ -11486,8 +11529,77 @@ func compileEventAggregate(
 	measure := operator.Measure
 	measureInputSQL := ""
 	var measureInputArgs []any
-	if measure.Function == plan.AggregateFunctionCountValues {
-		if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
+	durableState := state
+	predicateState := state
+	switch measure.Function {
+	case plan.AggregateFunctionCountPredicate:
+		sentinelRows := strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
+		predicateMaterializedFields := predicateMaterializationFields(
+			measure.Predicate,
+			state,
+		)
+		var bindings, predicateColumns []string
+		if len(predicateMaterializedFields) > 0 {
+			predicateState, bindings, predicateColumns = bindAggregatePredicateFields(
+				state,
+				predicateMaterializedFields,
+				stage,
+			)
+			durableState = predicateMaterializedOutputState(
+				state,
+				predicateMaterializedFields,
+			)
+		}
+		exactNumericFields := repeatedExactNumericPredicateFields(
+			measure.Predicate,
+			predicateState,
+		)
+		if len(exactNumericFields) > 0 {
+			var exactColumns []string
+			var bindErr error
+			predicateState, exactColumns, _, bindErr = bindExactNumericPredicateFields(
+				predicateState,
+				exactNumericFields,
+				stage,
+				"eventstats",
+			)
+			if bindErr != nil {
+				return compiledRelation{}, compileState{}, nil, bindErr
+			}
+			predicateColumns = append(predicateColumns, exactColumns...)
+		}
+		if len(predicateColumns) > 0 {
+			materialized := quoteIdentifier(fmt.Sprintf(
+				"__os_eventstats_predicate_input_%d",
+				stage,
+			))
+			alias := quoteIdentifier(fmt.Sprintf("__os_eventstats_predicate_rows_%d", stage))
+			predicateSQL := "SELECT *, " + strings.Join(predicateColumns, ", ") +
+				" FROM (" + relation.sql + ") AS " + alias
+			if len(bindings) > 0 {
+				predicateSQL += " ARRAY JOIN " + strings.Join(bindings, ", ")
+			}
+			predicateSQL += " LIMIT " + sentinelRows
+			relation = relation.selectFrom(
+				"WITH "+materialized+" AS MATERIALIZED ("+predicateSQL+") "+
+					"SELECT * FROM "+materialized+materializedCTESettingsSQL,
+				operator.Range,
+			)
+			if err := validateRelationalDepth(relation.depth, relation.ownerRange); err != nil {
+				return compiledRelation{}, compileState{}, nil, err
+			}
+		}
+		predicateSQL, predicateArgs, compileErr := compileExpression(
+			measure.Predicate,
+			predicateState,
+		)
+		if compileErr != nil {
+			return compiledRelation{}, compileState{}, nil, compileErr
+		}
+		measureInputSQL = "toUInt64(ifNull(" + predicateSQL + ", 0))"
+		measureInputArgs = predicateArgs
+	case plan.AggregateFunctionCountValues:
+		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
 			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
 				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
 				Message: "eventstats cannot read the event result's " +
@@ -11495,7 +11607,7 @@ func compileEventAggregate(
 				Range: measure.Input.Range,
 			}
 		}
-		input, exists, resolveErr := resolveCompiledField(measure.Input, state)
+		input, exists, resolveErr := resolveCompiledField(measure.Input, durableState)
 		if resolveErr != nil {
 			return compiledRelation{}, compileState{}, nil, resolveErr
 		}
@@ -11518,7 +11630,7 @@ func compileEventAggregate(
 			)
 		}
 		seenGroups[group.Name] = struct{}{}
-		if state.eventRows && state.allowDynamic && group.Name == "fields" {
+		if durableState.eventRows && durableState.allowDynamic && group.Name == "fields" {
 			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
 				Code:    "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
 				Message: "eventstats cannot group by the event result's reserved fields payload without an exact upstream schema",
@@ -11526,7 +11638,7 @@ func compileEventAggregate(
 			}
 		}
 
-		scalar, compileErr := compileExactScalarGroup(group, state, "eventstats BY")
+		scalar, compileErr := compileExactScalarGroup(group, durableState, "eventstats BY")
 		if compileErr != nil {
 			return compiledRelation{}, compileState{}, nil, compileErr
 		}
@@ -11536,7 +11648,7 @@ func compileEventAggregate(
 		})
 	}
 
-	next := eventAggregateCompileState(state, output, len(groups) > 0, stage)
+	next := eventAggregateCompileState(durableState, output, len(groups) > 0, stage)
 	inputName := quoteIdentifier(fmt.Sprintf("__os_eventstats_input_%d", stage))
 	totalName := quoteIdentifier(fmt.Sprintf("__os_eventstats_total_%d", stage))
 	inputAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_rows_%d", stage))
@@ -11547,7 +11659,8 @@ func compileEventAggregate(
 
 	inputProjection := []string{"*"}
 	measureAlias := ""
-	if measure.Function == plan.AggregateFunctionCountValues {
+	if measure.Function == plan.AggregateFunctionCountValues ||
+		measure.Function == plan.AggregateFunctionCountPredicate {
 		measureAlias = quoteIdentifier(fmt.Sprintf("__os_eventstats_measure_%d", stage))
 		inputProjection = append(
 			inputProjection,
@@ -11598,7 +11711,8 @@ func compileEventAggregate(
 		boundedEventStatsCountSQL("count()") + " AS " + totalColumn,
 	}
 	valueColumn := totalColumn
-	if measure.Function == plan.AggregateFunctionCountValues && len(groups) == 0 {
+	if (measure.Function == plan.AggregateFunctionCountValues ||
+		measure.Function == plan.AggregateFunctionCountPredicate) && len(groups) == 0 {
 		valueColumn = quoteIdentifier(fmt.Sprintf(
 			"__os_eventstats_value_count_%d",
 			stage,
@@ -11637,7 +11751,8 @@ func compileEventAggregate(
 				UnsupportedStatsByValueMarker + "') = 0, " + validGroup + ")"
 		}
 		groupValueSQL := "toUInt64(count())"
-		if measure.Function == plan.AggregateFunctionCountValues {
+		if measure.Function == plan.AggregateFunctionCountValues ||
+			measure.Function == plan.AggregateFunctionCountPredicate {
 			groupValueSQL = "toUInt64(sum(toUInt128(" + measureAlias + ")))"
 		}
 		definitions = append(
@@ -11656,7 +11771,7 @@ func compileEventAggregate(
 	}
 
 	projection := eventAggregateProjection(
-		state,
+		durableState,
 		next,
 		output.Name,
 		outputValue,
@@ -11674,7 +11789,10 @@ func compileEventAggregate(
 	}, next, prefixArgs, nil
 }
 
-func validateEventAggregate(operator *plan.EventAggregate) (plan.FieldRef, error) {
+func validateEventAggregate(
+	operator *plan.EventAggregate,
+	state compileState,
+) (plan.FieldRef, error) {
 	if operator == nil {
 		return plan.FieldRef{}, errors.New("compile ClickHouse eventstats: operator is missing")
 	}
@@ -11710,9 +11828,19 @@ func validateEventAggregate(operator *plan.EventAggregate) (plan.FieldRef, error
 		); err != nil {
 			return plan.FieldRef{}, err
 		}
+	case plan.AggregateFunctionCountPredicate:
+		if err := validateConditionalCountMeasure(
+			measure,
+			state,
+			"eventstats",
+			"SPL_AMBIGUOUS_EVENTSTATS_FIELD",
+			"eventstats cannot read the event result's reserved fields payload without an exact upstream schema",
+		); err != nil {
+			return plan.FieldRef{}, err
+		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count or count(field) is supported",
+			"compile ClickHouse eventstats: only count, count(field), or count(eval(...)) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -11813,36 +11941,49 @@ func validateAggregatePredicateMeasures(
 			}
 			continue
 		}
-		if measure.Input.Name != "" ||
-			measure.Input.Canonical ||
-			len(measure.Input.Path) != 0 ||
-			measure.Input.Range != (spl.Range{}) ||
-			measure.Percentile != 0 {
-			return errors.New(
-				"compile ClickHouse aggregate: count(eval(...)) contains unsupported field or percentile metadata",
-			)
+		if err := validateConditionalCountMeasure(
+			measure,
+			state,
+			"aggregate",
+			"SPL_AMBIGUOUS_STATS_FIELD",
+			"stats cannot read the event result's reserved fields payload without an exact upstream schema",
+		); err != nil {
+			return err
 		}
-		if nilPlanExpression(measure.Predicate) {
-			return errors.New(
-				"compile ClickHouse aggregate: count(eval(...)) predicate is missing",
-			)
-		}
-		if err := validateIfCondition(measure.Predicate); err != nil {
-			return fmt.Errorf(
-				"compile ClickHouse aggregate: invalid count(eval(...)) predicate: %w",
-				err,
-			)
-		}
-		if state.eventRows && state.allowDynamic {
-			if sourceRange, reserved := predicateFieldSourceRange(
-				measure.Predicate,
-				"fields",
-			); reserved {
-				return &plan.Diagnostic{
-					Code:    "SPL_AMBIGUOUS_STATS_FIELD",
-					Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-					Range:   sourceRange,
-				}
+	}
+	return nil
+}
+
+func validateConditionalCountMeasure(
+	measure plan.AggregateMeasure,
+	state compileState,
+	command, reservedCode, reservedMessage string,
+) error {
+	prefix := "compile ClickHouse " + command + ": "
+	if measure.Input.Name != "" ||
+		measure.Input.Canonical ||
+		measure.Input.Path != nil ||
+		measure.Input.Range != (spl.Range{}) ||
+		measure.Percentile != 0 {
+		return errors.New(
+			prefix + "count(eval(...)) contains unsupported field or percentile metadata",
+		)
+	}
+	if nilPlanExpression(measure.Predicate) {
+		return errors.New(prefix + "count(eval(...)) predicate is missing")
+	}
+	if err := validateIfCondition(measure.Predicate); err != nil {
+		return fmt.Errorf(prefix+"invalid count(eval(...)) predicate: %w", err)
+	}
+	if state.eventRows && state.allowDynamic {
+		if sourceRange, reserved := predicateFieldSourceRange(
+			measure.Predicate,
+			"fields",
+		); reserved {
+			return &plan.Diagnostic{
+				Code:    reservedCode,
+				Message: reservedMessage,
+				Range:   sourceRange,
 			}
 		}
 	}
