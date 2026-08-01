@@ -246,6 +246,25 @@ The first production slice should support file monitoring well:
 
 Container stdout, journald, syslog, Windows Event Log, and Kubernetes inputs are valuable later, but should not dilute the reliability work required for file collection.
 
+Each active file poll must be transactional with respect to an observable file
+generation. The collector captures a bounded private snapshot containing the
+prior contiguous trailing fingerprint guard, the new raw bytes, and any framing
+lookahead; frames it privately; and publishes only after an exact reread proves
+every dependency byte unchanged. Cursor advancement and installation of the
+complete bounded trailing guard occur before publication while one manager-wide
+staged-transaction permit remains held through backpressure, bounding aggregate
+staged memory. Byte mismatch or a short exact read is affirmative rewrite
+evidence and starts a new generation; unrelated I/O or framing failures do not.
+Read windows may grow adaptively to reach a frame boundary but remain
+proportional to the configured event bound, and dense snapshots retain a fixed
+event-count ceiling. A source requires two consecutive complete discovery
+misses before provisional retirement; rediscovery cancels that versioned
+request. Final retirement privately flushes a trailing partial frame, then
+requires one last exact validation and a finite EOF probe before publishing it.
+Writes through a retained descriptor after that finite boundary are outside the
+cross-platform guarantee because portable file APIs cannot prove that no writer
+will append in the future.
+
 ### Processing pipeline
 
 Each input should pass through a small, ordered processor chain:
@@ -315,6 +334,8 @@ message CollectResponse {
 ```
 
 Every `EventBatch` carries a stable batch ID, collector identity, protocol version, and ordered events. The server sends `BatchAck` only after the promised ClickHouse durability point. Retryable failures leave the batch unacknowledged; permanent event validation failures return structured field-level details so the collector can move rejected events to a local dead-letter file instead of blocking its entire queue.
+
+After immutable hard-envelope validation has succeeded and the server has computed the stable batch fingerprint, every permanent whole-batch response must be durably recorded against that identity and replayed exactly before reevaluating mutable policy. Credential and lease authorization and immutable hard-envelope checks remain stronger gates and may still deny a retry. An existing unresolved pending disposition or an identity conflict with one remains retryable until the first durable terminal outcome is known; it must not be converted into a new permanent rejection.
 
 Arbitrary log values need a custom protobuf `oneof` rather than `google.protobuf.Struct`, because `Struct` represents every number as a double and cannot preserve all integer values exactly. The shared contract should model strings, signed and unsigned integers, doubles, booleans, nulls, bytes, lists, and nested objects explicitly.
 

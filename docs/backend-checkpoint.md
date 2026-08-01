@@ -7,7 +7,158 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: transactional per-index native ingestion policies
+## Latest checkpoint: durable rejection replay and transactional file reads
+
+Date: 2026-08-01
+
+Committed implementation checkpoints:
+
+- `2490b71` — durable terminal whole-batch rejection replay.
+- `d98a579` — bounded transactional file-generation reads and retirement.
+
+The first test-first reliability unit closes the lost-response gap for safe,
+post-fingerprint terminal `BatchReject` outcomes:
+
+1. Once an otherwise admissible native batch has passed the immutable hard
+   envelope and acquired its deterministic source fingerprint, permanent
+   whole-batch outcomes are canonicalized and recorded against the exact
+   tenant, collector, batch ID, batch sequence, and payload digest. This covers
+   mutable batch-policy rejection, an all-invalid or all-unauthorized batch,
+   and a normalized outcome that cannot fit the durable replay envelope.
+2. An exact retry resolves the visibility ledger before mutable index policy or
+   event validation and returns the stored `BatchReject` unchanged, including
+   after a process restart or later policy relaxation. Credential and lease
+   checks plus immutable hard-envelope validation remain stronger gates. An
+   unresolved stream-local or durable pending identity remains retryable rather
+   than being converted into a permanent rejection.
+3. Rejections use a versioned, length-delimited, checksummed deterministic
+   protobuf record in the SQLite visibility ledger. Decode rejects corrupt,
+   noncanonical, unknown-field, invalid-UTF-8, invalid-enum, over-count, and
+   oversized outcomes; store and ingest boundaries additionally reject a
+   response whose identity does not match its source batch. One shared ingest
+   validator now enforces the canonical durable response contract without
+   rebuilding the response or using a deep-equality copy on every replay.
+4. Accepted ClickHouse writes and terminal rejections share one immutable
+   identity and are first-writer-wins. A rejection that wins before reserve is
+   returned by the losing store path without preparing or sending a block; a
+   pending accepted reservation cannot be overwritten and instead makes the
+   rejection path retry; an already committed batch continues to replay its
+   acknowledgment. Concurrent exact rejection attempts converge on one stored
+   disposition.
+5. A rejected disposition consumes a visibility sequence so the global cutoff
+   retains a coherent order, but it is born final: it has no ClickHouse rows,
+   no durable outbox, no attempt lease, and no pending-capacity charge. It also
+   does not invoke ClickHouse prepare, send, release, abandon, or finalization
+   paths.
+6. Successful commits and rejections have independent 10,000-row retention
+   horizons. The newest rejected prefix is additionally capped at 256 MiB of
+   encoded metadata, and pruning examines a bounded prefix. Rejections can be
+   pruned behind an unrelated pending gap because they have no ClickHouse side
+   effect; a rejection flood cannot shorten the committed-block storage
+   deduplication window.
+7. Runtime response validation treats durable rejection-only results as a
+   disjoint outcome: acknowledgment counts, commit timestamps, event
+   rejections, and acknowledged-through state must be absent. Returned
+   protobufs are detached from store-owned memory, and impossible
+   committed/rejected/pending state-disposition combinations fail closed.
+8. Added unit and integration cases cover exact replay across a new store
+   owner, mutable-policy changes, all-events-invalid outcomes, accepted versus
+   rejected race orderings, the lookup-to-reserve race, pending-capacity
+   saturation, exact concurrent rejects, independent row and byte pruning,
+   corrupt metadata, invalid response state, write admission/freeze behavior,
+   and zero ClickHouse rows for a terminal rejection.
+9. Adversarial and simplify reviews found and drove fixes for the
+   lookup-to-reserve first-writer race, request-context precedence, ambiguous
+   rejection and prune wakeups, a missing wake at each 64 MiB pruning boundary,
+   bounded retry after a persistent pending-row failure, a pending identity
+   disappearing before reserve, rejection results leaking through a
+   pending-resume acknowledgment path, replayed rejections being counted as
+   newly terminal, duplicated terminal-result and active-reservation handling,
+   and rejection retention that initially lacked its 256 MiB aggregate ceiling.
+
+The second test-first reliability unit makes file framing and retirement
+transactional with respect to observable file generations:
+
+1. Every poll captures a bounded private dependency containing the prior
+   contiguous trailing rewrite guard, the new raw range, and any multiline
+   lookahead. Framing produces private events; an exact reread must prove every
+   dependency byte unchanged before the cursor is installed or an event is
+   published. A mismatch or short exact read burns a new generation, while an
+   unrelated I/O or framing error fails closed without replaying old data.
+2. The staged window starts at 4 KiB and grows only when an artificial boundary
+   cannot make progress, up to a constant multiple of the configured maximum
+   event size. Productive large windows are retained, low-utilization or
+   event-limited windows shrink, and one transaction holds at most 1,024
+   events. Production capture uses one exact read; chunk hooks exist only for
+   deterministic race tests.
+3. A capacity-one manager permit is held across capture, validation, cursor and
+   guard installation, publication, and terminal retirement. This bounds
+   aggregate staged memory even when several tailers are active and the event
+   consumer is backpressured. Permit acquisition is context-cancellable, and
+   file state is refreshed after any wait before snapshotting begins.
+4. The installed rewrite guard remains the complete trailing bounded prefix
+   after a small append by deriving it from the prior validated guard plus the
+   consumed raw bytes. The regression preserves the appended suffix across a
+   same-size copy-truncate replacement and proves that the changed older prefix
+   still resets the generation rather than being silently skipped.
+5. Startup revalidates a resumed prefix before trusting its checkpoint. Rename,
+   deletion, and glob races require two consecutive complete discovery misses
+   before retirement. Retirement is version-cancellable on rediscovery and
+   commits only after a final exact validation plus finite EOF probe; finished
+   map entries are reaped in the same claim pass. Writes through a retained
+   descriptor after that finite boundary are outside the portable guarantee.
+6. Unit tests cover staged-read and validation races, prior-guard mutation,
+   multiline lookahead, short reads, resume races, adaptive windows, event and
+   memory bounds, publication backpressure, append-at-retirement, deletion with
+   a trailing partial frame, and rediscovery without splitting that partial.
+   Normal and race/shuffle collector suites passed, including repeated focused
+   copy-truncate regressions.
+7. Three independent final reviews verified the exact file hashes and reported
+   no remaining P0–P2 finding. The adversarial review first found the small-
+   append guard-shrink defect; the final implementation diff digest was
+   `cf007d0f104550940d484ed6d19997b9b538ee800d0263f58676fe19e1ef0e82`.
+8. The architecture plan is not complete. Per-index quotas and other backend
+   phases remain; SPL still needs broader compatibility beyond the currently
+   documented subset; the HEC facade is deferred; and the external GradeThis
+   Compose collector cutover and end-to-end acceptance path remain separate
+   work.
+
+Validation on implementation commits `2490b71` and `d98a579`:
+
+```sh
+git diff --check
+go mod tidy -diff
+go test ./... -count=1 -timeout=20m
+go test -race -shuffle=on -p=1 ./... -count=1 -timeout=20m
+go test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=10m -v
+```
+
+The exact backend-vertical CI command was also run locally with
+`OPEN_SPLUNK_BACKEND_INTEGRATION=1`, the same digest-pinned ClickHouse image,
+and its server-principal, ClickHouse, query-execution, deletion, ingestion,
+browser recovery/cancellation, and persistent Compose credential-rotation
+cases. Every command above passed; the cached v2.12.2 linter reported
+`0 issues`, all 202 frontend tests passed, and cleanup queries found no
+test-owned container, volume, or network. GitHub Actions run `30698782821` was
+fully green on `2490b71`, including Go lint and Backend vertical.
+
+## Previous checkpoint: transactional per-index native ingestion policies
 
 Date: 2026-07-31
 
