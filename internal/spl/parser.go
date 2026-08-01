@@ -1480,16 +1480,26 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 	}, nil
 }
 
+const eventStatsAcceptedAggregateForms = "count, count(field) AS output, " +
+	"count(eval(predicate)) AS output, or sum(field) AS output"
+
 func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if p.atCommandEnd() {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "eventstats requires count or count(field) AS output")
+		return nil, p.errorAtCurrent(
+			"SPL_EXPECTED_AGGREGATE",
+			"eventstats requires "+eventStatsAcceptedAggregateForms,
+		)
 	}
 
 	functionToken := p.current()
 	if functionToken.kind != tokenWord {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "eventstats requires count or count(field) AS output")
+		return nil, p.errorAtCurrent(
+			"SPL_EXPECTED_AGGREGATE",
+			"eventstats requires "+eventStatsAcceptedAggregateForms,
+		)
 	}
-	if !strings.EqualFold(functionToken.text, "count") {
+	functionName := strings.ToLower(functionToken.text)
+	if functionName != "count" && functionName != "sum" {
 		if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
 			return nil, p.unsupportedEventStatsSyntax(
 				functionToken,
@@ -1498,7 +1508,11 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		}
 		return nil, p.unsupportedEventStatsAggregate(
 			functionToken,
-			fmt.Sprintf("eventstats aggregate %q is not supported; this compatibility slice accepts count or count(field) AS output", functionToken.text),
+			fmt.Sprintf(
+				"eventstats aggregate %q is not supported; this compatibility slice accepts %s",
+				functionToken.text,
+				eventStatsAcceptedAggregateForms,
+			),
 		)
 	}
 	p.advance()
@@ -1510,7 +1524,16 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		AliasRange: functionToken.sourceRange,
 	}
 	end := functionToken.sourceRange.End
-	if p.startsCountPredicate() {
+	if functionName == "sum" {
+		var aggregateErr error
+		aggregate, end, aggregateErr = p.parseEventStatsFieldAggregate(
+			functionToken,
+			AggregateFunctionSum,
+		)
+		if aggregateErr != nil {
+			return nil, aggregateErr
+		}
+	} else if p.startsCountPredicate() {
 		predicate, predicateEnd, predicateErr := p.parseCountPredicate()
 		if predicateErr != nil {
 			return nil, predicateErr
@@ -1525,43 +1548,13 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 			End:   end,
 		}
 	} else if p.current().kind == tokenLeftParen {
-		openParen := p.current()
-		p.advance()
-		if p.current().kind == tokenRightParen {
-			return nil, p.unsupportedEventStatsSyntax(
-				openParen,
-				"eventstats count() is not supported; omit the parentheses for a row count",
-			)
-		}
-		input := p.current()
-		if input.kind != tokenWord {
-			return nil, p.errorAtCurrent(
-				"SPL_EXPECTED_FIELD",
-				"eventstats count(field) requires one exact unquoted input field",
-			)
-		}
-		if strings.Contains(input.text, "*") {
-			return nil, p.unsupportedEventStatsSyntax(
-				input,
-				"wildcard eventstats count fields are not supported",
-			)
-		}
-		aggregate.Function = AggregateFunctionCountValues
-		aggregate.Input = input.text
-		aggregate.InputRange = input.sourceRange
-		p.advance()
-		if !p.match(tokenRightParen) {
-			return nil, p.errorAtCurrent(
-				"SPL_EXPECTED_RIGHT_PAREN",
-				"expected ')' after the eventstats count input field",
-			)
-		}
-		end = p.previous().sourceRange.End
-		aggregate.Range.End = end
-		aggregate.Alias = ""
-		aggregate.AliasRange = Range{
-			Start: functionToken.sourceRange.Start,
-			End:   end,
+		var aggregateErr error
+		aggregate, end, aggregateErr = p.parseEventStatsFieldAggregate(
+			functionToken,
+			AggregateFunctionCountValues,
+		)
+		if aggregateErr != nil {
+			return nil, aggregateErr
 		}
 	}
 
@@ -1582,13 +1575,18 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		p.advance()
 	}
 	if (aggregate.Function == AggregateFunctionCountValues ||
-		aggregate.Function == AggregateFunctionCountPredicate) &&
+		aggregate.Function == AggregateFunctionCountPredicate ||
+		aggregate.Function == AggregateFunctionSum) &&
 		!aggregate.ExplicitAlias {
 		form := "count(field)"
 		suggestion := "eventstats count(field) AS occurrences"
-		if aggregate.Function == AggregateFunctionCountPredicate {
+		switch aggregate.Function {
+		case AggregateFunctionCountPredicate:
 			form = "count(eval(...))"
 			suggestion = "eventstats count(eval(field=value)) AS matches"
+		case AggregateFunctionSum:
+			form = "sum(field)"
+			suggestion = "eventstats sum(field) AS total"
 		}
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
@@ -1615,7 +1613,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedEventStatsSyntax(
 			p.current(),
-			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, optional AS for row count, required AS for count(field) or count(eval(predicate)), and optional BY", p.current().text),
+			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count or sum, optional AS for row count, required AS for field or predicate measures, and optional BY", p.current().text),
 		)
 	}
 	return &EventStatsCommand{
@@ -1623,6 +1621,64 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		GroupBy:   groupBy,
 		Range:     Range{Start: name.sourceRange.Start, End: end},
 	}, nil
+}
+
+func (p *parser) parseEventStatsFieldAggregate(
+	functionToken token,
+	function AggregateFunction,
+) (StatsAggregate, Position, error) {
+	functionName := strings.ToLower(functionToken.text)
+	end := functionToken.sourceRange.End
+	aggregate := StatsAggregate{
+		Function:   function,
+		Range:      functionToken.sourceRange,
+		AliasRange: functionToken.sourceRange,
+	}
+	openParen := p.current()
+	if !p.match(tokenLeftParen) {
+		return StatsAggregate{}, end, p.unsupportedEventStatsSyntax(
+			functionToken,
+			"eventstats "+functionName+
+				" requires one exact field argument in parentheses",
+		)
+	}
+	if function == AggregateFunctionCountValues &&
+		p.current().kind == tokenRightParen {
+		return StatsAggregate{}, end, p.unsupportedEventStatsSyntax(
+			openParen,
+			"eventstats count() is not supported; omit the parentheses for a row count",
+		)
+	}
+	input := p.current()
+	if input.kind != tokenWord {
+		return StatsAggregate{}, end, p.errorAtCurrent(
+			"SPL_EXPECTED_FIELD",
+			"eventstats "+functionName+
+				"(field) requires one exact unquoted input field",
+		)
+	}
+	if strings.Contains(input.text, "*") {
+		return StatsAggregate{}, end, p.unsupportedEventStatsSyntax(
+			input,
+			"wildcard eventstats "+functionName+" fields are not supported",
+		)
+	}
+	aggregate.Input = input.text
+	aggregate.InputRange = input.sourceRange
+	p.advance()
+	if !p.match(tokenRightParen) {
+		return StatsAggregate{}, end, p.errorAtCurrent(
+			"SPL_EXPECTED_RIGHT_PAREN",
+			"expected ')' after the eventstats "+functionName+" input field",
+		)
+	}
+	end = p.previous().sourceRange.End
+	aggregate.Range.End = end
+	aggregate.AliasRange = Range{
+		Start: functionToken.sourceRange.Start,
+		End:   end,
+	}
+	return aggregate, end, nil
 }
 
 func (p *parser) unsupportedEventStatsAggregate(tok token, message string) *Diagnostic {
@@ -1635,6 +1691,7 @@ func (p *parser) unsupportedEventStatsAggregate(tok token, message string) *Diag
 			"eventstats count AS event_count BY group",
 			"eventstats count(field) AS occurrences BY group",
 			"eventstats count(eval(field=value)) AS matches BY group",
+			"eventstats sum(field) AS total BY group",
 		},
 	}
 }
@@ -1649,6 +1706,7 @@ func (p *parser) unsupportedEventStatsSyntax(tok token, message string) *Diagnos
 			"eventstats count AS event_count BY group",
 			"eventstats count(field) AS occurrences BY group",
 			"eventstats count(eval(field=value)) AS matches BY group",
+			"eventstats sum(field) AS total BY group",
 		},
 	}
 }

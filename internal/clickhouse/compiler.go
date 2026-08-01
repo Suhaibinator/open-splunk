@@ -11507,6 +11507,62 @@ type compiledEventStatsGroup struct {
 	keyAlias string
 }
 
+type eventAggregateMeasureSpec struct {
+	function        plan.AggregateFunction
+	materialized    bool
+	numberType      string
+	numericIntegral bool
+	valuePrefix     string
+}
+
+func eventAggregateMeasureSpecFor(
+	function plan.AggregateFunction,
+) (eventAggregateMeasureSpec, error) {
+	spec := eventAggregateMeasureSpec{
+		function:        function,
+		numberType:      "UInt64",
+		numericIntegral: true,
+	}
+	switch function {
+	case plan.AggregateFunctionCountRows:
+		return spec, nil
+	case plan.AggregateFunctionCountValues,
+		plan.AggregateFunctionCountPredicate:
+		spec.materialized = true
+		spec.valuePrefix = "__os_eventstats_value_count_"
+		return spec, nil
+	case plan.AggregateFunctionSum:
+		spec.materialized = true
+		spec.numberType = "Float64"
+		spec.numericIntegral = false
+		spec.valuePrefix = "__os_eventstats_value_sum_"
+		return spec, nil
+	default:
+		return eventAggregateMeasureSpec{}, fmt.Errorf(
+			"compile ClickHouse eventstats: unsupported function %d",
+			function,
+		)
+	}
+}
+
+func (spec eventAggregateMeasureSpec) aggregateSQL(
+	inputSQL string,
+) (string, error) {
+	switch spec.function {
+	case plan.AggregateFunctionCountValues,
+		plan.AggregateFunctionCountPredicate:
+		return "toUInt64(sum(toUInt128(" + inputSQL + ")))", nil
+	case plan.AggregateFunctionSum:
+		if sql, supported := numericArrayAggregateSQL(spec.function, inputSQL); supported {
+			return sql, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"compile ClickHouse eventstats: function %d has no materialized measure",
+		spec.function,
+	)
+}
+
 func compileEventAggregate(
 	relation compiledRelation,
 	operator *plan.EventAggregate,
@@ -11527,6 +11583,10 @@ func compileEventAggregate(
 	}
 
 	measure := operator.Measure
+	measureSpec, specErr := eventAggregateMeasureSpecFor(measure.Function)
+	if specErr != nil {
+		return compiledRelation{}, compileState{}, nil, specErr
+	}
 	measureInputSQL := ""
 	var measureInputArgs []any
 	durableState := state
@@ -11598,7 +11658,7 @@ func compileEventAggregate(
 		}
 		measureInputSQL = "toUInt64(ifNull(" + predicateSQL + ", 0))"
 		measureInputArgs = predicateArgs
-	case plan.AggregateFunctionCountValues:
+	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum:
 		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
 			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
 				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
@@ -11611,9 +11671,17 @@ func compileEventAggregate(
 		if resolveErr != nil {
 			return compiledRelation{}, compileState{}, nil, resolveErr
 		}
-		measureInputSQL = "toUInt64(0)"
-		if exists {
-			measureInputSQL, measureInputArgs = countValueInputSQL(input)
+		switch measure.Function {
+		case plan.AggregateFunctionCountValues:
+			measureInputSQL = "toUInt64(0)"
+			if exists {
+				measureInputSQL, measureInputArgs = countValueInputSQL(input)
+			}
+		case plan.AggregateFunctionSum:
+			measureInputSQL = "CAST([], 'Array(Float64)')"
+			if exists {
+				measureInputSQL, measureInputArgs = numericArrayInputSQL(input)
+			}
 		}
 	}
 
@@ -11648,7 +11716,13 @@ func compileEventAggregate(
 		})
 	}
 
-	next := eventAggregateCompileState(durableState, output, len(groups) > 0, stage)
+	next := eventAggregateCompileState(
+		durableState,
+		output,
+		measureSpec,
+		len(groups) > 0,
+		stage,
+	)
 	inputName := quoteIdentifier(fmt.Sprintf("__os_eventstats_input_%d", stage))
 	totalName := quoteIdentifier(fmt.Sprintf("__os_eventstats_total_%d", stage))
 	inputAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_rows_%d", stage))
@@ -11659,8 +11733,7 @@ func compileEventAggregate(
 
 	inputProjection := []string{"*"}
 	measureAlias := ""
-	if measure.Function == plan.AggregateFunctionCountValues ||
-		measure.Function == plan.AggregateFunctionCountPredicate {
+	if measureSpec.materialized {
 		measureAlias = quoteIdentifier(fmt.Sprintf("__os_eventstats_measure_%d", stage))
 		inputProjection = append(
 			inputProjection,
@@ -11711,15 +11784,15 @@ func compileEventAggregate(
 		boundedEventStatsCountSQL("count()") + " AS " + totalColumn,
 	}
 	valueColumn := totalColumn
-	if (measure.Function == plan.AggregateFunctionCountValues ||
-		measure.Function == plan.AggregateFunctionCountPredicate) && len(groups) == 0 {
-		valueColumn = quoteIdentifier(fmt.Sprintf(
-			"__os_eventstats_value_count_%d",
-			stage,
-		))
+	if measureSpec.materialized && len(groups) == 0 {
+		valueColumn = quoteIdentifier(measureSpec.valuePrefix + strconv.Itoa(stage))
+		aggregateSQL, aggregateErr := measureSpec.aggregateSQL(measureAlias)
+		if aggregateErr != nil {
+			return compiledRelation{}, compileState{}, nil, aggregateErr
+		}
 		totalProjection = append(
 			totalProjection,
-			"toUInt64(sum(toUInt128("+measureAlias+"))) AS "+valueColumn,
+			aggregateSQL+" AS "+valueColumn,
 		)
 	}
 	definitions := []string{
@@ -11751,9 +11824,12 @@ func compileEventAggregate(
 				UnsupportedStatsByValueMarker + "') = 0, " + validGroup + ")"
 		}
 		groupValueSQL := "toUInt64(count())"
-		if measure.Function == plan.AggregateFunctionCountValues ||
-			measure.Function == plan.AggregateFunctionCountPredicate {
-			groupValueSQL = "toUInt64(sum(toUInt128(" + measureAlias + ")))"
+		if measureSpec.materialized {
+			var groupValueErr error
+			groupValueSQL, groupValueErr = measureSpec.aggregateSQL(measureAlias)
+			if groupValueErr != nil {
+				return compiledRelation{}, compileState{}, nil, groupValueErr
+			}
 		}
 		definitions = append(
 			definitions,
@@ -11767,7 +11843,7 @@ func compileEventAggregate(
 		outputExistsSQL = inputAlias + "." + eligibleAlias + " != 0"
 		outputValue = "if(" + outputExistsSQL + ", " +
 			groupCountsAlias + "." + groupCountColumn +
-			", CAST(NULL AS Nullable(UInt64)))"
+			", CAST(NULL AS Nullable(" + measureSpec.numberType + ")))"
 	}
 
 	projection := eventAggregateProjection(
@@ -11815,10 +11891,15 @@ func validateEventAggregate(
 				"compile ClickHouse eventstats: argument-free count contains unsupported metadata",
 			)
 		}
-	case plan.AggregateFunctionCountValues:
+	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum:
+		form := "count(field)"
+		if measure.Function == plan.AggregateFunctionSum {
+			form = "sum(field)"
+		}
 		if measure.Predicate != nil || measure.Percentile != 0 {
-			return plan.FieldRef{}, errors.New(
-				"compile ClickHouse eventstats: count(field) contains unsupported predicate or percentile metadata",
+			return plan.FieldRef{}, fmt.Errorf(
+				"compile ClickHouse eventstats: %s contains unsupported predicate or percentile metadata",
+				form,
 			)
 		}
 		if err := validateCanonicalFieldRef(
@@ -11840,7 +11921,7 @@ func validateEventAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count, count(field), or count(eval(...)) is supported",
+			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), or sum(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -11857,6 +11938,7 @@ func validateEventAggregate(
 func eventAggregateCompileState(
 	state compileState,
 	output plan.FieldRef,
+	measure eventAggregateMeasureSpec,
 	grouped bool,
 	stage int,
 ) compileState {
@@ -11876,8 +11958,8 @@ func eventAggregateCompileState(
 		valueSQL:        quoteIdentifier(output.Name),
 		existsSQL:       existsSQL,
 		kind:            fieldKindNumber,
-		numberType:      "UInt64",
-		numericIntegral: true,
+		numberType:      measure.numberType,
+		numericIntegral: measure.numericIntegral,
 	}
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
 	if grouped {

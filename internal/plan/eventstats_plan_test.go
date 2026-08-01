@@ -502,7 +502,7 @@ func TestAnalyzeEventAggregateReadsGroupsAndCountFieldAndValidatesContract(
 			name: "wrong function",
 			operator: &EventAggregate{
 				Measure: AggregateMeasure{
-					Function: AggregateFunctionSum,
+					Function: AggregateFunctionAverage,
 					Output:   "events",
 				},
 			},
@@ -637,7 +637,7 @@ func TestEventAggregateEligibilityRejectsForgedContracts(t *testing.T) {
 			name: "wrong function",
 			operator: &EventAggregate{
 				Measure: AggregateMeasure{
-					Function: AggregateFunctionSum,
+					Function: AggregateFunctionAverage,
 					Output:   "events",
 				},
 			},

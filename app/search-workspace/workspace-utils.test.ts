@@ -286,7 +286,7 @@ test("stats completion advertises true-only conditional count with an explicit a
   assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
 });
 
-test("eventstats completion advertises bounded conditional count", () => {
+test("eventstats completion advertises bounded conditional count and numeric sum", () => {
   const eventstatsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eventstats");
   assert.ok(eventstatsCompletion);
   assert.equal(
@@ -294,11 +294,16 @@ test("eventstats completion advertises bounded conditional count", () => {
     "eventstats count(eval(status>=500)) AS errors BY level",
   );
   assert.match(eventstatsCompletion.detail, /true-only count\(eval\(predicate\)\)/i);
+  assert.match(eventstatsCompletion.detail, /numeric sum/i);
   assert.match(eventstatsCompletion.detail, /every input row/i);
 
   const commandToken = classifiedTokens("index=main | eventstats count")
     .find((token) => token.text.toLowerCase() === "eventstats");
   assert.deepEqual(commandToken, { className: "spl-command", text: "eventstats" });
+
+  const sumToken = classifiedTokens("index=main | eventstats sum(bytes) AS total")
+    .find((token) => token.text.toLowerCase() === "sum");
+  assert.deepEqual(sumToken, { className: "spl-function", text: "sum" });
 });
 
 test("where completion advertises direct bounded match and like predicates", () => {

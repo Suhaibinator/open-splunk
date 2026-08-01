@@ -478,7 +478,7 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 		return context
 	}
 	if parenthesisDepth(tokens) > 0 {
-		if insideStatsEval(tokens) {
+		if insideEventStatsCountEval(tokens) {
 			return scalarSuggestionContext(context, false)
 		}
 		context.Kinds = []SuggestionKind{SuggestionKindField}
@@ -486,7 +486,7 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 	}
 	if len(tokens) == 0 {
 		context = aggregateSuggestionContext(context)
-		context.FunctionNames = []string{"count"}
+		context.FunctionNames = []string{"count", "sum"}
 		return context
 	}
 	last := tokens[len(tokens)-1]
@@ -495,7 +495,7 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 		return context
 	}
 	context.Kinds = []SuggestionKind{SuggestionKindKeyword}
-	if eventStatsCountRequiresAlias(tokens) &&
+	if eventStatsMeasureRequiresAlias(tokens) &&
 		topLevelWordIndex(tokens, "AS") < 0 {
 		context.Keywords = []string{"AS"}
 	} else if len(tokens) == 1 {
@@ -506,9 +506,19 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 	return context
 }
 
-func eventStatsCountRequiresAlias(tokens []token) bool {
+func insideEventStatsCountEval(tokens []token) bool {
 	return len(tokens) >= 4 &&
 		tokenWordEqual(tokens[0], "count") &&
+		tokens[1].kind == tokenLeftParen &&
+		tokenWordEqual(tokens[2], "eval") &&
+		tokens[3].kind == tokenLeftParen &&
+		insideStatsEval(tokens)
+}
+
+func eventStatsMeasureRequiresAlias(tokens []token) bool {
+	return len(tokens) >= 4 &&
+		(tokenWordEqual(tokens[0], "count") ||
+			tokenWordEqual(tokens[0], "sum")) &&
 		tokens[1].kind == tokenLeftParen &&
 		tokens[len(tokens)-1].kind == tokenRightParen
 }

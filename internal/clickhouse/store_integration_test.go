@@ -2474,6 +2474,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testStatsCountEvalAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testEventStatsSumAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testStatsPercentilesAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsExtremaAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testExactNumericOrderingAgainstClickHouse(t, ctx, store, connection, indexTime)

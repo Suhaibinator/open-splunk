@@ -566,7 +566,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
 					Message: "eventstats currently supports exactly one count, " +
-						"count(field), or count(eval(predicate)) AS output measure",
+						"count(field), count(eval(predicate)), or sum(field) AS output measure",
 					Range: aggregate.Range,
 				}
 			}
@@ -587,27 +587,25 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				measure.Function = AggregateFunctionCountRows
 			case spl.AggregateFunctionCountValues:
-				if aggregate.Input == "" ||
-					aggregate.InputRange == (spl.Range{}) ||
-					aggregate.Predicate != nil ||
-					aggregate.Percentile != 0 ||
-					!aggregate.ExplicitAlias {
-					return nil, &Diagnostic{
-						Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-						Message: "eventstats count(field) requires one exact " +
-							"input field and an explicit alias",
-						Range: aggregate.Range,
-					}
-				}
-				input, inputErr := ResolveField(
-					aggregate.Input,
-					aggregate.InputRange,
+				var inputErr error
+				measure, inputErr = buildEventStatsFieldMeasure(
+					aggregate,
+					AggregateFunctionCountValues,
+					"count(field)",
 				)
 				if inputErr != nil {
 					return nil, inputErr
 				}
-				measure.Function = AggregateFunctionCountValues
-				measure.Input = input
+			case spl.AggregateFunctionSum:
+				var inputErr error
+				measure, inputErr = buildEventStatsFieldMeasure(
+					aggregate,
+					AggregateFunctionSum,
+					"sum(field)",
+				)
+				if inputErr != nil {
+					return nil, inputErr
+				}
 			case spl.AggregateFunctionCountPredicate:
 				predicateMeasure, predicateErr := buildCountPredicateMeasure(
 					aggregate,
@@ -630,7 +628,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
 					Message: "eventstats currently supports exactly one count, " +
-						"count(field), or count(eval(predicate)) AS output measure",
+						"count(field), count(eval(predicate)), or sum(field) AS output measure",
 					Range: aggregate.Range,
 				}
 			}
@@ -2137,6 +2135,34 @@ func splExpressionComplexityError(message string, sourceRange spl.Range) error {
 		Message: message,
 		Range:   sourceRange,
 	}
+}
+
+func buildEventStatsFieldMeasure(
+	aggregate spl.StatsAggregate,
+	function AggregateFunction,
+	form string,
+) (AggregateMeasure, error) {
+	if aggregate.Input == "" ||
+		aggregate.InputRange == (spl.Range{}) ||
+		aggregate.Predicate != nil ||
+		aggregate.Percentile != 0 ||
+		!aggregate.ExplicitAlias {
+		return AggregateMeasure{}, &Diagnostic{
+			Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+			Message: "eventstats " + form + " requires one exact " +
+				"input field and an explicit alias",
+			Range: aggregate.Range,
+		}
+	}
+	input, err := ResolveField(aggregate.Input, aggregate.InputRange)
+	if err != nil {
+		return AggregateMeasure{}, err
+	}
+	return AggregateMeasure{
+		Function: function,
+		Input:    input,
+		Output:   aggregate.Alias,
+	}, nil
 }
 
 type countPredicateMeasureDiagnostics struct {
