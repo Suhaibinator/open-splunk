@@ -1481,7 +1481,7 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 }
 
 const eventStatsAcceptedAggregateForms = "count, count(field) AS output, " +
-	"count(eval(predicate)) AS output, or sum(field) AS output"
+	"count(eval(predicate)) AS output, sum(field) AS output, or avg(field) AS output"
 
 func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if p.atCommandEnd() {
@@ -1499,7 +1499,10 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		)
 	}
 	functionName := strings.ToLower(functionToken.text)
-	if functionName != "count" && functionName != "sum" {
+	numericSpec, numericAggregate := eventStatsNumericAggregateSpecForName(
+		functionName,
+	)
+	if functionName != "count" && !numericAggregate {
 		if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
 			return nil, p.unsupportedEventStatsSyntax(
 				functionToken,
@@ -1524,11 +1527,11 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		AliasRange: functionToken.sourceRange,
 	}
 	end := functionToken.sourceRange.End
-	if functionName == "sum" {
+	if numericAggregate {
 		var aggregateErr error
 		aggregate, end, aggregateErr = p.parseEventStatsFieldAggregate(
 			functionToken,
-			AggregateFunctionSum,
+			numericSpec.function,
 		)
 		if aggregateErr != nil {
 			return nil, aggregateErr
@@ -1576,7 +1579,8 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	}
 	if (aggregate.Function == AggregateFunctionCountValues ||
 		aggregate.Function == AggregateFunctionCountPredicate ||
-		aggregate.Function == AggregateFunctionSum) &&
+		aggregate.Function == AggregateFunctionSum ||
+		aggregate.Function == AggregateFunctionAverage) &&
 		!aggregate.ExplicitAlias {
 		form := "count(field)"
 		suggestion := "eventstats count(field) AS occurrences"
@@ -1587,6 +1591,9 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		case AggregateFunctionSum:
 			form = "sum(field)"
 			suggestion = "eventstats sum(field) AS total"
+		case AggregateFunctionAverage:
+			form = "avg(field)"
+			suggestion = "eventstats avg(field) AS mean"
 		}
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
@@ -1613,7 +1620,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedEventStatsSyntax(
 			p.current(),
-			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count or sum, optional AS for row count, required AS for field or predicate measures, and optional BY", p.current().text),
+			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, sum, or average, optional AS for row count, required AS for field or predicate measures, and optional BY", p.current().text),
 		)
 	}
 	return &EventStatsCommand{
@@ -1692,6 +1699,7 @@ func (p *parser) unsupportedEventStatsAggregate(tok token, message string) *Diag
 			"eventstats count(field) AS occurrences BY group",
 			"eventstats count(eval(field=value)) AS matches BY group",
 			"eventstats sum(field) AS total BY group",
+			"eventstats avg(field) AS mean BY group",
 		},
 	}
 }
@@ -1707,6 +1715,7 @@ func (p *parser) unsupportedEventStatsSyntax(tok token, message string) *Diagnos
 			"eventstats count(field) AS occurrences BY group",
 			"eventstats count(eval(field=value)) AS matches BY group",
 			"eventstats sum(field) AS total BY group",
+			"eventstats avg(field) AS mean BY group",
 		},
 	}
 }
@@ -1908,6 +1917,21 @@ func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 		return statsAggregateSpec{function: AggregateFunctionEarliest, canonicalName: "earliest", requiresInput: true}, true
 	case "latest":
 		return statsAggregateSpec{function: AggregateFunctionLatest, canonicalName: "latest", requiresInput: true}, true
+	default:
+		return statsAggregateSpec{}, false
+	}
+}
+
+func eventStatsNumericAggregateSpecForName(
+	name string,
+) (statsAggregateSpec, bool) {
+	spec, supported := statsAggregateSpecForName(name)
+	if !supported {
+		return statsAggregateSpec{}, false
+	}
+	switch spec.function {
+	case AggregateFunctionSum, AggregateFunctionAverage:
+		return spec, true
 	default:
 		return statsAggregateSpec{}, false
 	}

@@ -78,7 +78,7 @@
     {
       "name": "eventstats",
       "insertion": "eventstats count(eval(status>=500)) AS errors BY level",
-      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), or numeric sum to every input row globally or within up to 16 exact BY fields."
+      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), numeric sum, or numeric average to every input row globally or within up to 16 exact BY fields."
     },
     {
       "name": "top",

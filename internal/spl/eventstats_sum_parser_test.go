@@ -6,13 +6,15 @@ import (
 	"testing"
 )
 
-func TestParseEventStatsSumAcceptsExactFieldAndPreservesSourceRanges(
+func TestParseEventStatsNumericAggregatesAcceptExactFieldAndPreserveSourceRanges(
 	t *testing.T,
 ) {
 	t.Parallel()
 
 	tests := []struct {
 		name          string
+		function      AggregateFunction
+		functionName  string
 		source        string
 		input         string
 		output        string
@@ -21,7 +23,9 @@ func TestParseEventStatsSumAcceptsExactFieldAndPreservesSourceRanges(
 		aggregateText string
 	}{
 		{
-			name:          "global",
+			name:          "sum global",
+			function:      AggregateFunctionSum,
+			functionName:  "sum",
 			source:        `index=main | eventstats sum(bytes) AS total_bytes`,
 			input:         "bytes",
 			output:        "total_bytes",
@@ -29,13 +33,36 @@ func TestParseEventStatsSumAcceptsExactFieldAndPreservesSourceRanges(
 			aggregateText: "sum(bytes) AS total_bytes",
 		},
 		{
-			name:          "grouped case insensitive function and keywords",
+			name:          "sum grouped case insensitive function and keywords",
+			function:      AggregateFunctionSum,
+			functionName:  "sum",
 			source:        "index=main\n| EvEnTsTaTs SuM(http.bytes) aS totalBytes bY Host, source",
 			input:         "http.bytes",
 			output:        "totalBytes",
 			groupNames:    []string{"Host", "source"},
 			commandText:   "EvEnTsTaTs SuM(http.bytes) aS totalBytes bY Host, source",
 			aggregateText: "SuM(http.bytes) aS totalBytes",
+		},
+		{
+			name:          "average global",
+			function:      AggregateFunctionAverage,
+			functionName:  "avg",
+			source:        `index=main | eventstats avg(duration_ms) AS mean_ms`,
+			input:         "duration_ms",
+			output:        "mean_ms",
+			commandText:   "eventstats avg(duration_ms) AS mean_ms",
+			aggregateText: "avg(duration_ms) AS mean_ms",
+		},
+		{
+			name:          "average grouped case insensitive function and keywords",
+			function:      AggregateFunctionAverage,
+			functionName:  "avg",
+			source:        "index=main\n| EvEnTsTaTs AvG(http.duration) aS meanDuration bY Host, source",
+			input:         "http.duration",
+			output:        "meanDuration",
+			groupNames:    []string{"Host", "source"},
+			commandText:   "EvEnTsTaTs AvG(http.duration) aS meanDuration bY Host, source",
+			aggregateText: "AvG(http.duration) aS meanDuration",
 		},
 	}
 	for _, test := range tests {
@@ -55,14 +82,20 @@ func TestParseEventStatsSumAcceptsExactFieldAndPreservesSourceRanges(
 				t.Fatalf("command = %T, want *EventStatsCommand", query.Commands[0])
 			}
 			aggregate := command.Aggregate
-			if aggregate.Function != AggregateFunctionSum ||
+			if aggregate.Function != test.function ||
 				aggregate.Input != test.input ||
 				aggregate.InputRange == (Range{}) ||
 				aggregate.Predicate != nil ||
 				aggregate.Percentile != 0 ||
 				aggregate.Alias != test.output ||
 				!aggregate.ExplicitAlias {
-				t.Fatalf("aggregate = %#v, want sum(%s) AS %s", aggregate, test.input, test.output)
+				t.Fatalf(
+					"aggregate = %#v, want %s(%s) AS %s",
+					aggregate,
+					test.functionName,
+					test.input,
+					test.output,
+				)
 			}
 			if len(command.GroupBy) != len(test.groupNames) {
 				t.Fatalf("group fields = %#v, want %v", command.GroupBy, test.groupNames)
@@ -81,26 +114,49 @@ func TestParseEventStatsSumAcceptsExactFieldAndPreservesSourceRanges(
 	}
 }
 
-func TestParseEventStatsSumRequiresExplicitAlias(t *testing.T) {
+func TestParseEventStatsNumericAggregatesRequireExplicitAlias(t *testing.T) {
 	t.Parallel()
 
-	for _, source := range []string{
-		`index=main | eventstats sum(bytes)`,
-		`index=main | eventstats sum(bytes) BY host`,
+	for _, test := range []struct {
+		name       string
+		function   string
+		input      string
+		suggestion string
+	}{
+		{"sum", "sum", "bytes", "eventstats sum(field) AS total"},
+		{"average", "avg", "duration_ms", "eventstats avg(field) AS mean"},
 	} {
-		_, err := Parse(source)
-		var diagnostic *Diagnostic
-		if !errors.As(err, &diagnostic) {
-			t.Fatalf("Parse(%q) error = %#v, want *Diagnostic", source, err)
-		}
-		if diagnostic.Code != "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX" ||
-			diagnostic.Message != "eventstats sum(field) requires AS followed by an output field name" {
-			t.Fatalf("Parse(%q) diagnostic = %#v", source, diagnostic)
-		}
-		assertSourceRangeText(t, source, diagnostic.Range, "sum(bytes)")
-		if !slices.Contains(diagnostic.Suggestions, "eventstats sum(field) AS total") {
-			t.Fatalf("Parse(%q) suggestions = %v, want sum alias form", source, diagnostic.Suggestions)
-		}
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			for _, suffix := range []string{"", " BY host"} {
+				source := "index=main | eventstats " + test.function + "(" + test.input + ")" + suffix
+				_, err := Parse(source)
+				var diagnostic *Diagnostic
+				if !errors.As(err, &diagnostic) {
+					t.Fatalf("Parse(%q) error = %#v, want *Diagnostic", source, err)
+				}
+				wantMessage := "eventstats " + test.function +
+					"(field) requires AS followed by an output field name"
+				if diagnostic.Code != "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX" ||
+					diagnostic.Message != wantMessage {
+					t.Fatalf("Parse(%q) diagnostic = %#v", source, diagnostic)
+				}
+				assertSourceRangeText(
+					t,
+					source,
+					diagnostic.Range,
+					test.function+"("+test.input+")",
+				)
+				if !slices.Contains(diagnostic.Suggestions, test.suggestion) {
+					t.Fatalf(
+						"Parse(%q) suggestions = %v, want %q",
+						source,
+						diagnostic.Suggestions,
+						test.suggestion,
+					)
+				}
+			}
+		})
 	}
 }
 

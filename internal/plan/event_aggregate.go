@@ -7,9 +7,9 @@ import (
 )
 
 // validEventAggregateContract recognizes the deliberately narrow,
-// row-preserving eventstats count/count(field)/count(eval(predicate))/sum(field)
-// plan contract. Consumers that use event provenance metadata must fail closed
-// when handed forged logical operators.
+// row-preserving eventstats count/count(field)/count(eval(predicate)),
+// sum(field), or avg(field) plan contract. Consumers that use event provenance
+// metadata must fail closed when handed forged logical operators.
 func validEventAggregateContract(operator *EventAggregate) bool {
 	if operator == nil ||
 		len(operator.GroupBy) > spl.MaximumStatsGroupFields ||
@@ -26,7 +26,8 @@ func validEventAggregateContract(operator *EventAggregate) bool {
 			operator.Measure.Input.Range != (spl.Range{}) {
 			return false
 		}
-	case AggregateFunctionCountValues, AggregateFunctionSum:
+	case AggregateFunctionCountValues, AggregateFunctionSum,
+		AggregateFunctionAverage:
 		if operator.Measure.Predicate != nil ||
 			!validResolvedEventAggregateField(operator.Measure.Input) {
 			return false

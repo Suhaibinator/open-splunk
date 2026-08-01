@@ -616,9 +616,10 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 				)
 			}
 			if !strings.Contains(command.Detail, "true-only count(eval(predicate))") ||
-				!strings.Contains(command.Detail, "numeric sum") {
+				!strings.Contains(command.Detail, "numeric sum") ||
+				!strings.Contains(command.Detail, "numeric average") {
 				t.Fatalf(
-					"eventstats detail = %q, want conditional-count and sum description",
+					"eventstats detail = %q, want conditional-count, sum, and average description",
 					command.Detail,
 				)
 			}

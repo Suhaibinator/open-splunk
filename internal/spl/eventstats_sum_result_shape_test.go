@@ -2,18 +2,28 @@ package spl
 
 import "testing"
 
-func TestClassifyResultShapeTreatsEventStatsSumAsRowPreserving(t *testing.T) {
+func TestClassifyResultShapeTreatsEventStatsNumericAggregatesAsRowPreserving(t *testing.T) {
 	t.Parallel()
 
-	query, err := Parse(
-		"index=main | eventstats sum(bytes) AS total_bytes BY level",
-	)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if got := ClassifyResultShape(query); got != (ResultShape{
-		Kind: ResultKindEvents,
-	}) {
-		t.Fatalf("ClassifyResultShape = %#v, want event results", got)
+	for _, test := range []struct {
+		name   string
+		source string
+	}{
+		{"sum", "index=main | eventstats sum(bytes) AS total_bytes BY level"},
+		{"average", "index=main | eventstats avg(duration_ms) AS mean_ms BY service"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if got := ClassifyResultShape(query); got != (ResultShape{
+				Kind: ResultKindEvents,
+			}) {
+				t.Fatalf("ClassifyResultShape = %#v, want event results", got)
+			}
+		})
 	}
 }

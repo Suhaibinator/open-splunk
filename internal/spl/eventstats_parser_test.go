@@ -388,6 +388,7 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats count(field) AS occurrences BY group",
 				"eventstats count(eval(field=value)) AS matches BY group",
 				"eventstats sum(field) AS total BY group",
+				"eventstats avg(field) AS mean BY group",
 			},
 		},
 		{
@@ -401,6 +402,7 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats count(field) AS occurrences BY group",
 				"eventstats count(eval(field=value)) AS matches BY group",
 				"eventstats sum(field) AS total BY group",
+				"eventstats avg(field) AS mean BY group",
 			},
 		},
 		{
@@ -510,10 +512,11 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		t.Fatalf("function class = %q, want aggregate", aggregate.FunctionClass)
 	}
 	candidates := StaticSuggestionCandidates(aggregate)
-	if len(candidates) != 2 ||
+	if len(candidates) != 3 ||
 		candidates[0].Label != "count" ||
-		candidates[1].Label != "sum" {
-		t.Fatalf("aggregate suggestions = %v, want count and sum", candidates)
+		candidates[1].Label != "sum" ||
+		candidates[2].Label != "avg" {
+		t.Fatalf("aggregate suggestions = %v, want count, sum, and avg", candidates)
 	}
 
 	tests := []struct {
@@ -524,9 +527,11 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		{source: "| eventstats count A", kind: SuggestionKindKeyword, words: []string{"AS", "BY"}},
 		{source: "| eventstats count(", kind: SuggestionKindField},
 		{source: "| eventstats sum(eval(", kind: SuggestionKindField},
+		{source: "| eventstats avg(eval(", kind: SuggestionKindField},
 		{source: "| eventstats count(status)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count(eval(status=500))", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats sum(bytes)", kind: SuggestionKindKeyword, words: []string{"AS"}},
+		{source: "| eventstats avg(duration_ms)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count AS event_", kind: SuggestionKindField},
 		{source: "| eventstats count AS events B", kind: SuggestionKindKeyword, words: []string{"BY"}},
 		{source: "| eventstats count(status) AS populated B", kind: SuggestionKindKeyword, words: []string{"BY"}},

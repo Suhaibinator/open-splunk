@@ -486,7 +486,7 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 	}
 	if len(tokens) == 0 {
 		context = aggregateSuggestionContext(context)
-		context.FunctionNames = []string{"count", "sum"}
+		context.FunctionNames = []string{"count", "sum", "avg"}
 		return context
 	}
 	last := tokens[len(tokens)-1]
@@ -518,7 +518,8 @@ func insideEventStatsCountEval(tokens []token) bool {
 func eventStatsMeasureRequiresAlias(tokens []token) bool {
 	return len(tokens) >= 4 &&
 		(tokenWordEqual(tokens[0], "count") ||
-			tokenWordEqual(tokens[0], "sum")) &&
+			tokenWordEqual(tokens[0], "sum") ||
+			tokenWordEqual(tokens[0], "avg")) &&
 		tokens[1].kind == tokenLeftParen &&
 		tokens[len(tokens)-1].kind == tokenRightParen
 }

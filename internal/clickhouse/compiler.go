@@ -11531,11 +11531,15 @@ func eventAggregateMeasureSpecFor(
 		spec.materialized = true
 		spec.valuePrefix = "__os_eventstats_value_count_"
 		return spec, nil
-	case plan.AggregateFunctionSum:
+	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 		spec.materialized = true
 		spec.numberType = "Float64"
 		spec.numericIntegral = false
-		spec.valuePrefix = "__os_eventstats_value_sum_"
+		if function == plan.AggregateFunctionSum {
+			spec.valuePrefix = "__os_eventstats_value_sum_"
+		} else {
+			spec.valuePrefix = "__os_eventstats_value_avg_"
+		}
 		return spec, nil
 	default:
 		return eventAggregateMeasureSpec{}, fmt.Errorf(
@@ -11552,7 +11556,7 @@ func (spec eventAggregateMeasureSpec) aggregateSQL(
 	case plan.AggregateFunctionCountValues,
 		plan.AggregateFunctionCountPredicate:
 		return "toUInt64(sum(toUInt128(" + inputSQL + ")))", nil
-	case plan.AggregateFunctionSum:
+	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 		if sql, supported := numericArrayAggregateSQL(spec.function, inputSQL); supported {
 			return sql, nil
 		}
@@ -11658,7 +11662,8 @@ func compileEventAggregate(
 		}
 		measureInputSQL = "toUInt64(ifNull(" + predicateSQL + ", 0))"
 		measureInputArgs = predicateArgs
-	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum:
+	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
+		plan.AggregateFunctionAverage:
 		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
 			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
 				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
@@ -11677,7 +11682,7 @@ func compileEventAggregate(
 			if exists {
 				measureInputSQL, measureInputArgs = countValueInputSQL(input)
 			}
-		case plan.AggregateFunctionSum:
+		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 			measureInputSQL = "CAST([], 'Array(Float64)')"
 			if exists {
 				measureInputSQL, measureInputArgs = numericArrayInputSQL(input)
@@ -11891,10 +11896,14 @@ func validateEventAggregate(
 				"compile ClickHouse eventstats: argument-free count contains unsupported metadata",
 			)
 		}
-	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum:
+	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
+		plan.AggregateFunctionAverage:
 		form := "count(field)"
-		if measure.Function == plan.AggregateFunctionSum {
+		switch measure.Function {
+		case plan.AggregateFunctionSum:
 			form = "sum(field)"
+		case plan.AggregateFunctionAverage:
+			form = "avg(field)"
 		}
 		if measure.Predicate != nil || measure.Percentile != 0 {
 			return plan.FieldRef{}, fmt.Errorf(
@@ -11921,7 +11930,7 @@ func validateEventAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), or sum(field) is supported",
+			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), sum(field), or avg(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)

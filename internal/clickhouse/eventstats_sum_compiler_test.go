@@ -85,9 +85,9 @@ func TestCompileEventStatsSumRejectsForgedMeasureMetadata(t *testing.T) {
 			},
 		},
 		{
-			name: "average function",
+			name: "unsupported minimum function",
 			mutate: func(operator *plan.EventAggregate) {
-				operator.Measure.Function = plan.AggregateFunctionAverage
+				operator.Measure.Function = plan.AggregateFunctionMinimum
 			},
 		},
 	}

@@ -2147,23 +2147,25 @@ eventstats count(eval(status>=500)) AS errors
 eventstats count(eval(status>=500)) AS errors BY service
 eventstats sum(bytes) AS total_bytes
 eventstats sum(bytes) AS service_bytes BY service
+eventstats avg(duration_ms) AS mean_ms
+eventstats avg(duration_ms) AS service_mean_ms BY service
 ```
 
-Exactly one `count` or `sum` is accepted. Argument-free row count uses the default
-output field `count` and may provide one exact output with `AS`. The
+Exactly one `count`, `sum`, or `avg` is accepted. Argument-free row count uses
+the default output field `count` and may provide one exact output with `AS`. The
 field-occurrence form accepts exactly one unquoted exact field in
 `count(field)` and requires `AS` followed by one exact output field.
 Conditional count accepts exactly
 `count(eval(<where predicate>)) AS <exact output field>` and also requires the
-alias. Numeric sum accepts exactly one unquoted exact field in `sum(field)` and
-likewise requires an explicit exact output alias. `BY` may contain from one
-through 16 distinct exact fields. Command, function, and keyword spelling is
-case-insensitive, while field names remain case-sensitive. Parenthesized
-`count()`, `c(field)`, `c(eval(...))`, `sum(eval(...))`, wildcard or quoted
-input fields, empty or multiple inputs, `avg` and every other aggregate
-function, multiple measures, quoted or wildcard output/grouping fields, and
-command options fail with source-located unsupported-syntax or
-unsupported-aggregate diagnostics.
+alias. Numeric sum and average accept exactly one unquoted exact field in
+`sum(field)` or `avg(field)` and likewise require an explicit exact output
+alias. `BY` may contain from one through 16 distinct exact fields. Command,
+function, and keyword spelling is case-insensitive, while field names remain
+case-sensitive. Parenthesized `count()`, `c(field)`, `c(eval(...))`,
+`sum(eval(...))`, `avg(eval(...))`, wildcard or quoted input fields, empty or
+multiple inputs, every other aggregate function, multiple measures, quoted or
+wildcard output/grouping fields, and command options fail with source-located
+unsupported-syntax or unsupported-aggregate diagnostics.
 
 Unlike `stats`, `eventstats` does not collapse or generate rows. A global count
 is added to every row in the complete upstream relation; grouped counts are
@@ -2206,23 +2208,26 @@ share one per-row exact numeric key and eligibility calculation. Downstream
 filtering cannot change the already-computed total or hide an over-limit
 upstream relation.
 
-`eventstats sum(field)` uses exactly the numeric normalization and immediate
-member semantics of `stats sum(field)`. Finite integers, floats, numeric
-Strings, tagged Decimals, and canonical timestamps contribute as `Float64`;
-each finite top-level multivalue member contributes independently. Missing,
+`eventstats sum(field)` and `eventstats avg(field)` use exactly the numeric
+normalization and immediate-member semantics of their `stats` counterparts.
+Finite integers, floats, numeric Strings, tagged Decimals, and canonical
+timestamps contribute as `Float64`; each finite top-level multivalue member
+contributes independently, including duplicates. Average divides by the
+number of eligible immediate numeric members, not by source-row count, so one
+multivalue row may contribute more than once to its denominator. Missing,
 explicit null, empty String, Boolean, bytes, objects, nonnumeric text, `NaN`,
 infinity, and nested containers contribute nothing. A projected-away input
-stays absent. The result is nullable `Float64`: a complete global or grouped
-scope with no eligible numeric member publishes a present null rather than
-zero, while a real numeric zero remains non-null. A computed `NaN` or infinity
-produced by the aggregate itself is preserved, matching `stats sum`.
+stays absent. Both results are nullable `Float64`: a complete global or
+grouped scope with no eligible numeric member publishes a present null rather
+than zero, while a real numeric zero remains non-null. A computed `NaN` or
+infinity produced by either aggregate itself is preserved, matching `stats`.
 
 The normalized numeric array is calculated once per upstream row inside the
-same bounded materialized input used for row annotation. Global sum uses one
-constant-size aggregate over that relation. Grouped sum uses one bounded
-`GROUP BY` and the same left join as grouped count. It does not use `ARRAY
-JOIN`, multiply rows, rescan physical events, or filter noncontributing rows
-out of their groups.
+same bounded materialized input used for row annotation. Global sum or average
+uses one constant-size aggregate over that relation. Grouped sum or average
+uses one bounded `GROUP BY` and the same left join as grouped count. Neither
+uses `ARRAY JOIN`, multiplies rows, rescans physical events, or filters
+noncontributing rows out of their groups.
 
 A missing or explicit-null `BY` field makes only that row ineligible for a
 group. The row remains in the result, but the eventstats output is logically
@@ -2237,10 +2242,10 @@ The output replaces an existing field of the same name rather than creating a
 duplicate. As with `eval`, replacing a dynamic-schema name closes the public
 raw `fields` convenience payload so an immutable member cannot contradict the
 calculated value. The literal output name `fields` is rejected while the event
-schema is open, and neither `count(fields)` nor `sum(fields)` can read that
-ambiguous payload while the schema is open. The name becomes ordinary data
-after `table` or another transforming command closes the schema. Replacing
-`_time` preserves rows but
+schema is open, and `count(fields)`, `sum(fields)`, and `avg(fields)` cannot
+read that ambiguous payload while the schema is open. The name becomes
+ordinary data after `table` or another transforming command closes the schema.
+Replacing `_time` preserves rows but
 makes timeline analysis ineligible; replacing `index` creates ordinary
 pipeline data and never changes the authorization-constrained physical scan.
 
@@ -2248,10 +2253,11 @@ One eventstats stage accepts at most 10,000 upstream rows. The compiler
 materializes at most 10,001 rows once, uses the additional row only as an
 overflow sentinel, and fails the whole search with an execution-limit error
 above the boundary instead of annotating a prefix. Global count uses one
-constant-size aggregate, and global sum uses one constant-size numeric
-aggregate. Grouped count or sum uses one bounded `GROUP BY` over the
-materialized relation and one left join back to those same rows; neither
-performs a per-group query, row expansion, `groupArray`, or Go-side buffering.
+constant-size aggregate, and global sum or average uses one constant-size
+numeric aggregate. Grouped count, sum, or average uses one bounded `GROUP BY`
+over the materialized relation and one left join back to those same rows;
+none performs a per-group query, row expansion, `groupArray`, or Go-side
+buffering.
 The executor's memory, read, query-size, relational-depth, result, and
 `max_rows_to_group_by` ceilings remain authoritative.
 
@@ -2856,9 +2862,10 @@ too.
 
 `eventstats` supports one argument-free `count`, exact-field `count(field) AS
 output`, conditional `count(eval(predicate)) AS output`, or exact-field
-`sum(field) AS output`, optionally grouped by up to 16 exact fields. Other
-aggregate functions, multiple measures, and the broader eval-expression
-surface remain unsupported for `eventstats`.
+`sum(field) AS output`, or exact-field `avg(field) AS output`, optionally
+grouped by up to 16 exact fields. Other aggregate functions, multiple
+measures, and the broader eval-expression surface remain unsupported for
+`eventstats`.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,
