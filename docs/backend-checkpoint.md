@@ -22,6 +22,12 @@ Committed implementation checkpoint:
 - `3f0a8c9` — portable non-root named-volume initialization and deterministic
   WebSocket shutdown verification after the second pushed release/race run
   exposed Linux volume-root metadata and a buffered-frame test assumption.
+- `e267059` — correct BuildKit automatic target propagation after the third
+  pushed release run proved that ARM64 image metadata could contain amd64 ELF
+  binaries when Dockerfile defaults shadowed `TARGETARCH`.
+- `4236cf0` — exact-epoch complete rootfs materialization after independent
+  no-cache builds exposed wall-clock metadata in otherwise byte-identical
+  scratch layers.
 
 This test-first deployment unit completes the Open Splunk repository side of
 the first-release container foundation:
@@ -46,11 +52,16 @@ the first-release container foundation:
    cross-built ARM64 executables and validates their ELF64 little-endian
    machine identifiers. Its second identity/layer comparison sets
    `OPEN_SPLUNK_OCI_NO_CACHE=1`, so it is an independent cold rebuild rather
-   than a BuildKit cache replay; the launcher rejects every other value. Image
-   locks, tags, rollback, and removal retain canonical Docker Hub references,
-   while read-only `image ls` lookup uses the familiar form required by older
-   Linux daemons. Library and namespaced Hub regressions pin that compatibility
-   boundary.
+   than a BuildKit cache replay; the launcher rejects every other value.
+   BuildKit's automatic target OS/architecture must equal independently
+   derived values from the validated platform, so image metadata and Go ELF
+   target cannot diverge. Each scratch target receives one fully materialized
+   rootfs tree: all paths, modes, owners, and mtimes are fixed before COPY, so
+   cached and independent no-cache builds have identical image config IDs and
+   ordered RootFS diff IDs. Image locks, tags, rollback, and removal retain
+   canonical Docker Hub references, while read-only `image ls` lookup uses the
+   familiar form required by older Linux daemons. Library and namespaced Hub
+   regressions pin that compatibility boundary.
 4. Production Compose now contains ClickHouse, the exact server-image one-shot
    migrator, the network-disabled administrator bootstrap, and the long-lived
    server. It deliberately does not start a collector. Release services use
@@ -104,7 +115,18 @@ the first-release container foundation:
    before hard close. Repair `3f0a8c9` makes the secure child directory an
    actual parent-COPY archive entry and drains already-buffered frames under an
    absolute deadline while requiring a non-timeout terminal read error. Its
-   clean-HEAD release contract passes locally on genuinely fresh volumes.
+   clean-HEAD release contract passes locally on genuinely fresh volumes. Run
+   `30675027151` then passed lint, race/atomic coverage, backend vertical,
+   frontend, protobuf, GradeThis, vulnerability, and the production Compose
+   release step. Its sole failure was the next ARM64 proof: both image configs
+   said ARM64 while the extracted executables were x86-64 ELF machine 62.
+   Repair `e267059` removes defaults that shadowed BuildKit's automatic
+   platform values and adds an independent fail-closed target comparison. A
+   local cold-rebuild replay then caught a second issue before push: COPY had
+   stamped synthesized runtime ancestors with wall-clock time. Repair
+   `4236cf0` constructs and epoch-normalizes complete server and collector
+   rootfs trees, preserving strict raw config/layer reproducibility rather
+   than weakening CI to a content-only comparison.
 10. A race-only one-second SQLite test deadline was widened to exceed the
     driver's five-second busy timeout. The contract remains strict: a retry
     that incorrectly reserves the already-held writer still fails at the
@@ -120,7 +142,11 @@ the first-release container foundation:
     Linux CI repair diff
     `03ff529e35195d88a6b169c9da663cd8c181f02787a49634cc881b85576e83e8`;
     one pass first caught and corrected an ambiguous empty-directory COPY
-    before commit.
+    before commit. Independent platform and layer-metadata reviews reproduced
+    both ARM defects, found no remaining P0-P2 issue in staged ARM diffs
+    `67b7c0b6de5cf268f44d2a060c9f80fd7443d88b8a760b45684e076fc8628c18`
+    and `c710875bd9834d41fadfd4930396c067e74249dea8a3d18ee55c16ec4c4a4708`,
+    and rejected weakening the strict layer contract.
 12. GORM remains limited to SQLite/control-plane code. ClickHouse connections,
     migrations, physical schema validation, ingestion, querying, statistics,
     and deletion continue to use the native ClickHouse driver and SQL.
@@ -130,7 +156,8 @@ the first-release container foundation:
     that external-repository change until explicitly instructed. Additional
     SPL remains a later explicitly selected semantic unit.
 
-Validation on implementation commits `aa1f9fe`, `bf8da4e`, and `3f0a8c9`:
+Validation on implementation commits `aa1f9fe`, `bf8da4e`, `3f0a8c9`,
+`e267059`, and `4236cf0`:
 
 ```sh
 go mod tidy -diff
@@ -168,13 +195,17 @@ OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:
 
 All ordinary Go tests, the exact CI race/atomic-coverage command, tidy, vet,
 build, protobuf generation, cached v2.12.2 full-tree lint, TypeScript checks,
-all 64 release/materializer tests, all 137 frontend runtime tests, and the
+all 65 release/materializer tests, all 137 frontend runtime tests, and the
 production UI build passed. Lint reported `0 issues`. The exact expanded
 backend-vertical command and clean-HEAD release OCI/Compose contract passed
 against the digest-pinned ClickHouse image. On `3f0a8c9`, the fresh-volume
 release contract passed in 161 seconds, including bootstrap, readiness,
-credential rotation, persistence, export, and recreation. Final Docker
-inventory contained no test-owned container, volume, or network.
+credential rotation, persistence, export, and recreation. On `4236cf0`, it
+passed again in 97 seconds after the complete-rootfs change. The exact ARM64
+cached build and two independent no-cache rebuilds produced identical server
+and collector image IDs plus ordered RootFS diff IDs; both extracted binaries
+verified as ELF64 AArch64. Final Docker inventory contained no test-owned
+container, image tag, volume, or network.
 
 Explicit pause point:
 
