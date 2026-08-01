@@ -7,7 +7,109 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: durable token and index ingestion rate limits
+## Latest checkpoint: bounded numeric eventstats sum
+
+Date: 2026-08-01
+
+Committed implementation checkpoint:
+
+- `1a94faf` — bounded `eventstats sum(field) AS output [BY ...]`.
+
+This test-first SPL unit adds one explicitly bounded row-preserving numeric
+aggregate without changing the ClickHouse schema or introducing GORM on the
+ClickHouse path:
+
+1. The parser accepts exactly one `sum(<exact unquoted field>) AS <exact
+   output>` followed by zero through 16 distinct exact `BY` fields. Function
+   and keyword spelling is case-insensitive while field spelling remains
+   case-sensitive. Empty, quoted, wildcard, eval, and multiple inputs;
+   implicit aliases; multiple measures; and unsupported options or aggregate
+   functions fail with source-located diagnostics.
+2. Planning resolves the input before output replacement, records its field
+   dependency, upserts a known output schema in place, and preserves event,
+   timeline, index-authorization, and inspection provenance. Structural
+   validators and compiler boundaries reject forged inputs, predicates,
+   percentiles, private outputs, duplicate groups, and unsupported functions.
+3. Numeric behavior deliberately reuses the `stats sum(field)` lowering.
+   Finite numeric scalars and Strings, tagged Decimals, canonical timestamps,
+   and finite immediate multivalue members contribute through one `Float64`
+   array per row. Missing, null, empty, Boolean, binary, object, nonnumeric,
+   nonfinite, and nested values contribute nothing; aggregate-produced
+   nonfinite results retain the existing stats behavior.
+4. The published value is nullable `Float64`. A global relation with no
+   numeric member and a complete grouped tuple with no numeric member publish
+   present null, never zero. Missing or null `BY` members keep their source row
+   but leave the output logically absent. Field-summary integration pins the
+   resulting present/null/missing distinction.
+5. The existing 10,000-row eventstats fence remains atomic. The compiler
+   materializes at most 10,001 scoped upstream rows once, computes the numeric
+   array once per row, and uses one aggregate state. Grouped execution uses one
+   bounded `GROUP BY` and one left join; global and grouped forms perform no
+   physical rescan, `ARRAY JOIN`, `groupArray`, row multiplication, per-group
+   query, or Go-side buffering.
+6. Input resolution precedes alias replacement, projected-away inputs remain
+   absent instead of being rebound from storage, and downstream filtering
+   cannot change the aggregate or conceal an over-limit source. Tenant,
+   index, source, time, visibility, and retention predicates stay below the
+   input fence.
+7. Parser, suggestion, planner, analysis, result-shape, search-inspection,
+   compiler, alias-collision, and real ClickHouse tests cover global and
+   grouped sums, numeric scalar/String/multivalue and tagged-Decimal inputs,
+   all-ineligible null output, missing/null groups, re-aggregation of a fixed
+   multivalue, projected input, scope poison, downstream composition, output
+   presence metadata, and the 10,001-row atomic failure.
+8. The shared completion catalog and frontend contract now advertise numeric
+   sum, and the syntax highlighter recognizes `sum(...)` as a function. An
+   adversarial review found that `sum(eval(` incorrectly entered scalar
+   autocomplete even though the parser rejects it; the final implementation
+   gates expression suggestions to the exact `count(eval(` form and includes
+   a regression.
+9. Simplify reviews consolidated exact-field parser and planner paths, one
+   compiler measure descriptor, and the existing numeric-array aggregate
+   helper. Independent correctness/security and ClickHouse
+   semantic/performance reviews found no remaining concrete issue after the
+   suggestion fix. The physical plan retains one scan, one normalization per
+   row, and one sum state.
+10. This checkpoint does not claim general `eventstats` or `streamstats`
+    support. Each additional aggregate still needs its own syntax, null,
+    multivalue, precision, and resource contract. The external GradeThis
+    collector cutover remains intentionally untouched pending explicit
+    direction.
+
+Validation on implementation commit `1a94faf`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code HEAD -- go.mod go.sum
+go test ./... -count=1 -timeout=10m
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-eventstats-sum-final-coverage.out \
+  -timeout=10m ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=10m -p=1 -v
+```
+
+Every command above passed. The cached v2.12.2 linter reported `0 issues`,
+all 202 frontend tests passed, the final exact shuffled race/coverage command
+exited zero, and the digest-pinned ClickHouse suite passed in 61.52 seconds.
+Cleanup found no test-owned `open-splunk` container or named volume.
+
+## Previous checkpoint: durable token and index ingestion rate limits
 
 Date: 2026-08-01
 
@@ -12074,9 +12176,11 @@ aggregate contract at a time:
 - decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
   remain separate percentile contracts and are not part of the first bounded
   integer-suffix slice;
-- bounded conditional-count `eventstats` is complete at `0c78cb7`; broader
-  `eventstats` aggregates need their own explicit contracts, while
-  `streamstats` remains outside the first release unless scope changes; and
+- bounded conditional-count `eventstats` is complete at `0c78cb7`, and bounded
+  exact-field numeric `eventstats sum(field) AS output` is complete at
+  `1a94faf`; remaining `eventstats` aggregates need their own explicit
+  contracts, while `streamstats` remains outside the first release unless
+  scope changes; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
 
@@ -12173,7 +12277,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `ab0514e`, `67689e8`, `a03aa33`, `72b1b11`, `347a015`,
+   commits, especially `1a94faf`, `fbdb99f`, `0c78cb7`, `ab0514e`, `67689e8`,
+   `a03aa33`, `72b1b11`, `347a015`,
    `e312ae9`, `9115465`, `2a82932`, `076ff43`, `7eba237`,
    `782da43`, `125b2bc`, `f3fc981`,
    `c84de56`, `f7a06b7`, `8161f2d`, `2a1245c`, `72b7936`, `421ba4d`, `6e18333`,
@@ -12229,6 +12334,9 @@ Do not guess those decisions if they materially affect the implementation.
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
    `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
+   Bounded argument-free, exact-field, and conditional `eventstats` counts are
+   complete through `0c78cb7`; bounded exact-field numeric eventstats sum is
+   complete at `1a94faf`.
    Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
    `53b1f55`, and `8e4cf5f`; typed UTF-8 `len`/`length` is complete through
    `64004dc`, `e3a32e2`, and `5aebc70`. Subsequent bounded `substr`,
