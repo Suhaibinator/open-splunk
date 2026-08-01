@@ -409,6 +409,19 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
       .length,
     2,
   );
+  assert.doesNotMatch(
+    dockerfile,
+    /^ARG (?:BUILDPLATFORM|TARGETOS|TARGETARCH)=/m,
+    "BuildKit automatic platform arguments must not have local defaults",
+  );
+  assert.match(
+    dockerfile,
+    /test "\$\{TARGETOS\}" = "\$\{OPEN_SPLUNK_EXPECTED_TARGETOS\}"/,
+  );
+  assert.match(
+    dockerfile,
+    /test "\$\{TARGETARCH\}" = "\$\{OPEN_SPLUNK_EXPECTED_TARGETARCH\}"/,
+  );
   assert.ok(
     (dockerfile.match(/^ARG SOURCE_DATE_EPOCH(?:=.*)?$/gm) ?? []).length >= 3,
     "Dockerfile must expose Docker/BuildKit's standard reproducibility argument",
@@ -601,6 +614,34 @@ test("OCI cold rebuild bypasses cache for both targets and rejects unsafe values
   assert.equal(buildInvocations.length, 2);
   for (const invocation of buildInvocations) {
     assert.match(invocation, /build --no-cache --file /);
+  }
+});
+
+test("Make propagates the ARM64 target into Docker and the binary contract", async (t) => {
+  const fixture = await ociFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+  const docker = await installDockerShim(fixture);
+
+  const result = runMakeOCI(fixture, revision, docker, {
+    OPEN_SPLUNK_OCI_PLATFORM: "linux/arm64",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const buildInvocations = (await readFile(docker.log, "utf8"))
+    .split("\n")
+    .filter((line) => line.includes("DOCKER_BUILDKIT=1 build "));
+  assert.equal(buildInvocations.length, 2);
+  for (const invocation of buildInvocations) {
+    assert.match(invocation, /--platform linux\/arm64/);
+    assert.match(
+      invocation,
+      /--build-arg OPEN_SPLUNK_EXPECTED_TARGETOS=linux/,
+    );
+    assert.match(
+      invocation,
+      /--build-arg OPEN_SPLUNK_EXPECTED_TARGETARCH=arm64/,
+    );
+    assert.doesNotMatch(invocation, /OPEN_SPLUNK_EXPECTED_TARGETARCH=amd64/);
   }
 });
 

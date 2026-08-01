@@ -49,6 +49,8 @@ if [[ ! "$OCI_PLATFORM" =~ ^linux/(amd64|arm64)$ ]]; then
   echo "error: OCI platform OPEN_SPLUNK_OCI_PLATFORM must be linux/amd64 or linux/arm64" >&2
   exit 1
 fi
+OCI_TARGET_OS="${OCI_PLATFORM%%/*}"
+OCI_TARGET_ARCH="${OCI_PLATFORM##*/}"
 if [[ -n "$OCI_NO_CACHE" && "$OCI_NO_CACHE" != 1 ]]; then
   echo "error: OPEN_SPLUNK_OCI_NO_CACHE must be empty or 1" >&2
   exit 1
@@ -585,6 +587,8 @@ build_target() {
     --build-arg "OPEN_SPLUNK_SOURCE_REVISION=$OPEN_SPLUNK_SOURCE_REVISION"
     --build-arg "OPEN_SPLUNK_IMAGE_CREATED=$IMAGE_CREATED"
     --build-arg "OPEN_SPLUNK_SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
+    --build-arg "OPEN_SPLUNK_EXPECTED_TARGETOS=$OCI_TARGET_OS"
+    --build-arg "OPEN_SPLUNK_EXPECTED_TARGETARCH=$OCI_TARGET_ARCH"
     --build-arg "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
   )
   if [[ "$OCI_NO_CACHE" == 1 ]]; then
