@@ -7,7 +7,93 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: fixed-span percentile timechart
+## Latest checkpoint: fixed-span sum and average timechart
+
+Date: 2026-07-31
+
+Committed implementation checkpoint:
+
+- `08c3b8c` — fixed-span, unsplit `sum(field)` and `avg(field)` timechart
+  support from parser and suggestions through planning, inspection, ClickHouse,
+  execution, result validation, export re-execution, and the compatibility
+  contract.
+
+This test-first SPL unit extends the fixed nullable-value timechart path while
+preserving the existing count and percentile contracts:
+
+1. `timechart span=<fixed s|m|h> sum(field)` and `avg(field)` accept one exact
+   unquoted input and an optional exact unquoted `AS` alias. Without `AS`, the
+   outputs are canonical `sum(field)` and `avg(field)`. `BY`, multiple
+   measures, wildcard/quoted/eval inputs, malformed aliases, noncanonical
+   `_time`, and nonterminal pipelines fail with source-located diagnostics.
+2. Both functions use the same numeric normalization as `stats`: finite
+   numbers, numeric strings, tagged decimals, timestamps in epoch seconds, and
+   every eligible immediate multivalue member contribute. Missing, null,
+   nonnumeric, Boolean, bytes, object, nested-container, NaN, and infinite
+   inputs are ignored. Duplicate multivalue members retain their weight.
+3. The public result is `Nullable(Float64)`. A nonempty scoped input publishes
+   the complete epoch-aligned grid; gaps and all-ineligible buckets are null,
+   including `sum`, while a real zero remains non-null. A wholly empty input
+   publishes the static schema and zero rows. Aggregate-produced IEEE NaN or
+   infinity is preserved for sum/average; percentile retains its stricter
+   finite-output validation.
+4. ClickHouse performs one tenant/index/time/snapshot-scoped storage scan and
+   materializes only the at-most-10,000 bucket groups. Each sum or average uses
+   one native nullable array aggregate state (`sumOrNullArray` or
+   `avgOrNullArray`), without `ARRAY JOIN`, a second event traversal, or Go-side
+   aggregation. The same helper now keeps `stats` and timechart numeric-array
+   lowering identical.
+5. Percentile, sum, and average share one private ordinal/value/presence
+   transport, discriminated by a validated value kind. The executor buffers
+   and validates the complete sequence atomically before publishing; manager
+   schema validation, export re-execution, and inspection retain the exact
+   static contract. GORM remains limited to SQLite/control-plane code.
+6. Unit coverage spans parser ranges and completions, forged AST/logical-plan
+   and compiler metadata, native SQL shape, malformed transport, empty versus
+   all-ineligible input, nonfinite policy, manager detachment, inspection, and
+   export. Digest-pinned ClickHouse coverage proves `stats` parity, typed and
+   multivalue normalization, zero/null distinctions, projection and scope
+   isolation, timestamp handling, overflow preservation, one physical read,
+   one native aggregate state, and no `ArrayJoin`.
+7. Three simplify passes found and fixed duplicated aggregate parsing and
+   validation, duplicated value-kind guards and test fixtures, repeated
+   EXPLAIN handling, and a redundant two-state/two-pass array aggregation.
+   Three final adversarial audits of staged digest
+   `d48ff19c01f4a0332f9dc8774c743b5582b40347bc5c37f5c4d7e28c684e7667`
+   reported no remaining correctness, SQL/stats, transport, reuse, or scaling
+   finding.
+8. The architecture plan is not complete. The external GradeThis collector
+   cutover remains excluded until explicitly requested. Select the next SPL or
+   product phase as a separate bounded unit.
+
+Validation on implementation commit `08c3b8c`:
+
+```sh
+go mod tidy -diff
+go test ./... -count=1
+go test -race -shuffle=on -p=1 ./... -count=1
+go vet ./...
+go build ./...
+
+npm run typecheck
+npm run lint
+npm run test:frontend
+npm run build
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' \
+  -count=1 -timeout=10m -v
+```
+
+The cached linter reported `0 issues`; every command above passed. The pinned
+integration harness removed its test-owned ClickHouse container.
+
+## Previous checkpoint: fixed-span percentile timechart
 
 Date: 2026-07-31
 
