@@ -176,8 +176,8 @@ func TestOpenSecurityStoresKeepsCollectorCredentialsValidAcrossRestart(t *testin
 	}
 	if authentication.TokenID != issued.Token.ID ||
 		authentication.BoundCollectorID != "restart-collector" ||
-		len(authentication.AllowedIndexNames) != 1 ||
-		authentication.AllowedIndexNames[0] != "main" {
+		len(authentication.AuthorizedIndexes) != 1 ||
+		authentication.AuthorizedIndexes[0].Name != "main" {
 		t.Fatalf("authentication after reopen = %+v", authentication)
 	}
 	if err := os.Remove(keyPath); err != nil {

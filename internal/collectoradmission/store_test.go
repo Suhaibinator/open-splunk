@@ -155,7 +155,7 @@ func TestAdmitCommitsFreshCredentialScopeTokenUseAndDurableLease(t *testing.T) {
 	if result.Authentication.TokenID != issued.Token.ID ||
 		result.Authentication.BoundCollectorID != testCollectorID ||
 		!slices.Equal(
-			result.Authentication.AllowedIndexNames,
+			result.Authentication.AuthorizedIndexNames(),
 			[]string{"audit", "main"},
 		) {
 		t.Fatalf("fresh authentication = %#v", result.Authentication)

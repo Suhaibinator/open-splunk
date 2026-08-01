@@ -35,7 +35,7 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 			SubjectID:         "token-safe-id",
 			TenantID:          "tenant-a",
 			CollectorID:       "collector-a",
-			AuthorizedIndexes: []string{"main"},
+			AuthorizedIndexes: testIndexPolicies("main"),
 		}, nil
 	})
 
@@ -57,7 +57,7 @@ func TestCollectRecordsTokenUseOncePerValidStreamAdmission(t *testing.T) {
 			SubjectID:         "token-safe-id",
 			TenantID:          "tenant-a",
 			CollectorID:       "collector-a",
-			AuthorizedIndexes: []string{"main"},
+			AuthorizedIndexes: testIndexPolicies("main"),
 		}
 		callsMu.Lock()
 		calls = append(calls, tokenUseCall{
@@ -199,7 +199,7 @@ func TestCollectDoesNotRecordRejectedStreamAdmission(t *testing.T) {
 				return Authorization{
 					TenantID:          "tenant-a",
 					CollectorID:       "collector-a",
-					AuthorizedIndexes: []string{"main"},
+					AuthorizedIndexes: testIndexPolicies("main"),
 				}, nil
 			}),
 			send: func(t *testing.T, stream opensplunkv1.CollectorIngestService_CollectClient) {

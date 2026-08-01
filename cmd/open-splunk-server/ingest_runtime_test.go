@@ -26,6 +26,7 @@ func TestNormalizeRuntimeOptionsCanonicalizesAndBoundsTenantIdentity(t *testing.
 	for name, candidate := range map[string]options{
 		"nil retention":             {httpAddress: "127.0.0.1:8080", tenantID: "tenant"},
 		"sub-millisecond retention": {httpAddress: "127.0.0.1:8080", tenantID: "tenant", indexRetention: time.Nanosecond},
+		"retention past horizon":    {httpAddress: "127.0.0.1:8080", tenantID: "tenant", indexRetention: 8_000_000_000 * time.Second},
 		"empty tenant":              {httpAddress: "127.0.0.1:8080", tenantID: " \t", indexRetention: time.Hour},
 		"oversized":                 {httpAddress: "127.0.0.1:8080", tenantID: strings.Repeat("t", maximumDurableTenantIDBytes+1), indexRetention: time.Hour},
 		"invalid UTF-8":             {httpAddress: "127.0.0.1:8080", tenantID: string([]byte{0xff}), indexRetention: time.Hour},
@@ -127,9 +128,12 @@ func TestNormalizeRuntimeOptionsRejectsIncompleteHTTPTLSIdentity(t *testing.T) {
 
 func TestCollectorAuthorizerMapsCurrentTokenScopeWithoutAliasing(t *testing.T) {
 	t.Parallel()
-	indexes := []string{"audit", "main"}
+	indexes := []auth.AuthorizedIndexPolicy{
+		runtimeAuthorizedIndexPolicy("audit", 7*24*time.Hour),
+		runtimeAuthorizedIndexPolicy("main", 30*24*time.Hour),
+	}
 	store := fakeCollectorAuthenticationStore{authentication: auth.Authentication{
-		TokenID: "token-id", BoundCollectorID: "collector-id", AllowedIndexNames: indexes,
+		TokenID: "token-id", BoundCollectorID: "collector-id", AuthorizedIndexes: indexes,
 	}}
 	authorization, err := (collectorAuthorizer{store: store, tenantID: "tenant"}).Authorize(context.Background(), "secret")
 	if err != nil {
@@ -139,8 +143,13 @@ func TestCollectorAuthorizerMapsCurrentTokenScopeWithoutAliasing(t *testing.T) {
 		authorization.CollectorID != "collector-id" || len(authorization.AuthorizedIndexes) != 2 {
 		t.Fatalf("authorization = %+v", authorization)
 	}
-	authorization.AuthorizedIndexes[0] = "changed"
-	if indexes[0] != "audit" {
+	if got := authorization.AuthorizedIndexes[0]; got.Name != "audit" ||
+		got.Version != 1 || got.RetentionPeriod != 7*24*time.Hour ||
+		got.DefaultSourcetype != "audit:json" || got.Limits.MaxFieldCount != 17 {
+		t.Fatalf("mapped index policy = %+v", got)
+	}
+	authorization.AuthorizedIndexes[0].Name = "changed"
+	if indexes[0].Name != "audit" {
 		t.Fatal("authorization aliases authentication scope")
 	}
 }
@@ -154,7 +163,9 @@ func TestCollectorAuthorizerRejectsMalformedOrFailedAuthentication(t *testing.T)
 		"store error":    {store: fakeCollectorAuthenticationStore{err: denied}, tenantID: "tenant"},
 		"empty binding": {
 			store: fakeCollectorAuthenticationStore{authentication: auth.Authentication{
-				TokenID: "id", AllowedIndexNames: []string{"main"},
+				TokenID: "id", AuthorizedIndexes: []auth.AuthorizedIndexPolicy{
+					runtimeAuthorizedIndexPolicy("main", time.Hour),
+				},
 			}},
 			tenantID: "tenant",
 		},
@@ -191,7 +202,10 @@ func TestCollectorAuthorizerClassifiesOnlyCredentialFailuresAsUnauthorized(t *te
 func TestCollectorSessionManagerAdmitsAndDetachesFreshAuthority(t *testing.T) {
 	t.Parallel()
 	acceptedAt := time.Date(2026, 7, 28, 12, 34, 56, 123_456_000, time.UTC)
-	indexes := []string{"audit", "main"}
+	indexes := []auth.AuthorizedIndexPolicy{
+		runtimeAuthorizedIndexPolicy("audit", 7*24*time.Hour),
+		runtimeAuthorizedIndexPolicy("main", 30*24*time.Hour),
+	}
 	lease := collectorfleet.Lease{
 		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
 		CollectorID: "collector-a",
@@ -204,7 +218,7 @@ func TestCollectorSessionManagerAdmitsAndDetachesFreshAuthority(t *testing.T) {
 			Authentication: auth.Authentication{
 				TokenID:           "token-safe-id",
 				BoundCollectorID:  "collector-a",
-				AllowedIndexNames: indexes,
+				AuthorizedIndexes: indexes,
 			},
 			Lease: lease,
 		},
@@ -234,8 +248,8 @@ func TestCollectorSessionManagerAdmitsAndDetachesFreshAuthority(t *testing.T) {
 		got.Authorization.CollectorID != "collector-a" {
 		t.Fatalf("admission = %+v", got)
 	}
-	got.Authorization.AuthorizedIndexes[0] = "changed"
-	if indexes[0] != "audit" {
+	got.Authorization.AuthorizedIndexes[0].Name = "changed"
+	if indexes[0].Name != "audit" {
 		t.Fatal("admission authorization aliases persistence result")
 	}
 }
@@ -499,6 +513,13 @@ func TestControlRetentionProviderRequiresOwnedActiveIngestionIndex(t *testing.T)
 	if err != nil || got != period {
 		t.Fatalf("RetentionForIndex = (%v, %v), want (%v, nil)", got, err, period)
 	}
+	catalog.index.Definition.RetentionPeriod = 8_000_000_000 * time.Second
+	provider.catalog = catalog
+	if _, err := provider.RetentionForIndex(context.Background(), "tenant", "main"); err == nil {
+		t.Fatal("retention past the storage horizon succeeded")
+	}
+	catalog.index.Definition.RetentionPeriod = period
+	provider.catalog = catalog
 	if _, err := provider.RetentionForIndex(context.Background(), "other", "main"); err == nil {
 		t.Fatal("cross-tenant retention lookup succeeded")
 	}
@@ -523,6 +544,25 @@ func TestControlRetentionProviderRequiresOwnedActiveIngestionIndex(t *testing.T)
 type fakeCollectorAuthenticationStore struct {
 	authentication auth.Authentication
 	err            error
+}
+
+func runtimeAuthorizedIndexPolicy(
+	name string,
+	retention time.Duration,
+) auth.AuthorizedIndexPolicy {
+	return auth.AuthorizedIndexPolicy{
+		Name:              name,
+		Version:           1,
+		RetentionPeriod:   retention,
+		DefaultSourcetype: name + ":json",
+		Limits: control.IndexLimits{
+			MaxEventBytes:     4096,
+			MaxFieldCount:     17,
+			MaxNestingDepth:   4,
+			MaximumFutureSkew: time.Minute,
+			MaximumEventAge:   24 * time.Hour,
+		},
+	}
 }
 
 func (store fakeCollectorAuthenticationStore) Authenticate(context.Context, string) (auth.Authentication, error) {

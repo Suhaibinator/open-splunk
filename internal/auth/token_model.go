@@ -95,9 +95,18 @@ type collectorTokenAuthenticationRow struct {
 }
 
 type collectorTokenAuthenticationScopeRow struct {
-	Name             string `gorm:"column:name"`
-	State            string `gorm:"column:state"`
-	IngestionEnabled int64  `gorm:"column:ingestion_enabled"`
+	TargetPresent                int64  `gorm:"column:target_present"`
+	Name                         string `gorm:"column:name"`
+	Version                      int64  `gorm:"column:version"`
+	RetentionNanoseconds         int64  `gorm:"column:retention_nanoseconds"`
+	DefaultSourcetype            string `gorm:"column:default_sourcetype"`
+	MaxEventBytes                int64  `gorm:"column:max_event_bytes"`
+	MaxFieldCount                int64  `gorm:"column:max_field_count"`
+	MaxNestingDepth              int64  `gorm:"column:max_nesting_depth"`
+	MaximumFutureSkewNanoseconds int64  `gorm:"column:maximum_future_skew_nanoseconds"`
+	MaximumEventAgeNanoseconds   int64  `gorm:"column:maximum_event_age_nanoseconds"`
+	State                        string `gorm:"column:state"`
+	IngestionEnabled             int64  `gorm:"column:ingestion_enabled"`
 }
 
 type collectorTokenScopeTarget struct {

@@ -12,7 +12,9 @@ import (
 // RevalidateCollectorInTransaction revalidates a bearer credential at
 // checkedAt and resolves its complete current ingestion scope using a
 // caller-owned transaction. It does not record token use and neither commits
-// nor rolls back transaction.
+// nor rolls back transaction. A verified identity may accompany
+// ErrNoActiveIndexAuthority or ErrInvalidIndexAuthority so an exact current
+// lease can recover a durable batch outcome before mutable scope is enforced.
 //
 // Callers must use an active transaction from the same migrated control
 // database and include every other authorization-boundary read in that
@@ -32,15 +34,15 @@ func (store *Store) RevalidateCollectorInTransaction(
 	if err != nil {
 		return Authentication{}, err
 	}
-	authentication, err := store.authenticate(
+	authentication, err := store.authenticateForLease(
 		transaction,
 		plaintext,
 		checkedAt,
 	)
 	if err != nil {
-		return Authentication{}, err
+		return authentication, err
 	}
-	return cloneAuthentication(authentication), nil
+	return authentication, nil
 }
 
 // RevalidateAndRecordCollectorUseInTransaction revalidates a bearer
@@ -58,12 +60,15 @@ func (store *Store) RevalidateAndRecordCollectorUseInTransaction(
 	plaintext string,
 	acceptedAt time.Time,
 ) (Authentication, error) {
-	authentication, err := store.RevalidateCollectorInTransaction(
+	transaction, acceptedAt, err := collectorRevalidationInputs(
 		ctx,
 		transaction,
-		plaintext,
 		acceptedAt,
 	)
+	if err != nil {
+		return Authentication{}, err
+	}
+	authentication, err := store.authenticate(transaction, plaintext, acceptedAt)
 	if err != nil {
 		return Authentication{}, err
 	}
@@ -110,12 +115,4 @@ func collectorRevalidationInputs(
 		)
 	}
 	return transaction.WithContext(ctx), checkedAt, nil
-}
-
-func cloneAuthentication(authentication Authentication) Authentication {
-	authentication.AllowedIndexNames = append(
-		[]string(nil),
-		authentication.AllowedIndexNames...,
-	)
-	return authentication
 }

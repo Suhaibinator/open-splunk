@@ -129,6 +129,7 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		TenantID: "tenant", CollectorID: "collector", BatchID: "native-batch", BatchSequence: 1,
 		SourceBatchSHA256: testSourceBatchDigest("native-batch"),
 		ReceivedAt:        indexTime,
+		RetentionByIndex:  map[string]time.Duration{"main": 31 * 24 * time.Hour},
 		Events:            []*ingest.StoredEvent{event},
 	}
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -238,7 +239,7 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	if !slices.Equal(fieldTypes, wantTypes) || fieldMetadataVersion != 1 {
 		t.Fatalf("field metadata = version %d types %#v, want version 1 types %#v", fieldMetadataVersion, fieldTypes, wantTypes)
 	}
-	if want := indexTime.Truncate(time.Millisecond).Add(30 * 24 * time.Hour); !expiresAt.Equal(want) {
+	if want := indexTime.Truncate(time.Millisecond).Add(31 * 24 * time.Hour); !expiresAt.Equal(want) {
 		t.Fatalf("expires_at = %v, want %v", expiresAt, want)
 	}
 

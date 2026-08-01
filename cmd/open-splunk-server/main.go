@@ -39,7 +39,7 @@ import (
 const (
 	startupTimeout                   = 2 * time.Minute
 	shutdownTimeout                  = 35 * time.Second
-	defaultIndexRetention            = 30 * 24 * time.Hour
+	defaultIndexRetention            = ingest.DefaultIndexRetention
 	defaultOwnerID                   = "single-user"
 	splCompatibility                 = "tier-1-dev"
 	collectorHeartbeatFlushInterval  = time.Second
@@ -457,6 +457,7 @@ func runWithOptions(config options) error {
 		}()
 		ingestConfig.Build = buildMetadata
 		ingestConfig.ServerInstanceID = collectorBootEpoch
+		ingestConfig.DefaultIndexRetention = config.indexRetention
 		ingestConfig.SessionManager = collectorSessionManager{
 			admission:  collectorAdmissions,
 			fleet:      collectorFleet,

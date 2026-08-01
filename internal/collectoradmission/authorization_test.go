@@ -11,6 +11,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
+	"github.com/Suhaibinator/open-splunk/internal/control"
 )
 
 func admitAuthorizationFixture(
@@ -70,6 +71,29 @@ func TestAuthorizeLeaseReturnsFreshScopeWithoutRecordingTokenUse(t *testing.T) {
 	if !slices.Equal(updated.AllowedIndexNames, []string{"audit"}) {
 		t.Fatalf("updated token scope = %v", updated.AllowedIndexNames)
 	}
+	audit, err := fixture.database.GetIndexByName(ctx, "audit")
+	if err != nil {
+		t.Fatalf("GetIndexByName(audit): %v", err)
+	}
+	auditDefinition := audit.Definition
+	auditDefinition.RetentionPeriod = 14 * 24 * time.Hour
+	auditDefinition.DefaultSourcetype = "audit:json"
+	auditDefinition.Limits = control.IndexLimits{
+		MaxEventBytes:     128 << 10,
+		MaxFieldCount:     128,
+		MaxNestingDepth:   8,
+		MaximumFutureSkew: 30 * time.Second,
+		MaximumEventAge:   30 * 24 * time.Hour,
+	}
+	updatedAudit, err := fixture.database.UpdateIndex(
+		ctx,
+		audit.ID,
+		audit.Version,
+		auditDefinition,
+	)
+	if err != nil {
+		t.Fatalf("UpdateIndex(audit policy): %v", err)
+	}
 
 	got, err := fixture.store.AuthorizeLease(
 		ctx,
@@ -82,8 +106,18 @@ func TestAuthorizeLeaseReturnsFreshScopeWithoutRecordingTokenUse(t *testing.T) {
 	}
 	if got.TokenID != issued.Token.ID ||
 		got.BoundCollectorID != testCollectorID ||
-		!slices.Equal(got.AllowedIndexNames, []string{"audit"}) {
+		!slices.Equal(got.AuthorizedIndexNames(), []string{"audit"}) {
 		t.Fatalf("fresh authentication = %#v", got)
+	}
+	wantPolicy := auth.AuthorizedIndexPolicy{
+		Name:              updatedAudit.Definition.Name,
+		Version:           updatedAudit.Version,
+		RetentionPeriod:   updatedAudit.Definition.RetentionPeriod,
+		DefaultSourcetype: updatedAudit.Definition.DefaultSourcetype,
+		Limits:            updatedAudit.Definition.Limits,
+	}
+	if len(got.AuthorizedIndexes) != 1 || got.AuthorizedIndexes[0] != wantPolicy {
+		t.Fatalf("fresh index policy = %#v, want %#v", got.AuthorizedIndexes, wantPolicy)
 	}
 	after, err := fixture.tokens.GetCollectorToken(ctx, issued.Token.ID)
 	if err != nil {
@@ -293,6 +327,117 @@ func TestAuthorizeLeaseFailsClosedAtCredentialAndDurableFences(t *testing.T) {
 			t.Fatalf("cross-tenant error = %v, want ErrLeaseNotCurrent", err)
 		}
 	})
+}
+
+func TestAuthorizeLeaseDefersOnlyMutableIndexAuthorityAfterExactLeaseCheck(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, context.Context, *admissionFixture)
+		want   error
+	}{
+		{
+			name: "no active index",
+			mutate: func(t *testing.T, ctx context.Context, fixture *admissionFixture) {
+				if _, err := fixture.database.SQLDB().ExecContext(ctx, `
+					UPDATE indexes
+					SET ingestion_enabled = 0
+					WHERE name = 'main'`); err != nil {
+					t.Fatalf("disable index: %v", err)
+				}
+			},
+			want: auth.ErrNoActiveIndexAuthority,
+		},
+		{
+			name: "invalid index policy",
+			mutate: func(t *testing.T, ctx context.Context, fixture *admissionFixture) {
+				if _, err := fixture.database.SQLDB().ExecContext(ctx, `
+					UPDATE indexes
+					SET retention_nanoseconds = ?
+					WHERE name = 'main'`, int64(8_000_000_000*time.Second)); err != nil {
+					t.Fatalf("corrupt retention: %v", err)
+				}
+			},
+			want: auth.ErrInvalidIndexAuthority,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := context.Background()
+			fixture := openAdmissionFixture(t, "main")
+			issued := issueToken(t, fixture, "collector", testCollectorID, "main")
+			admitted := admitAuthorizationFixture(t, fixture, issued, "stream-1")
+			test.mutate(t, ctx, &fixture)
+
+			got, err := fixture.store.AuthorizeLease(
+				ctx,
+				issued.Secret.Plaintext(),
+				admitted.Lease,
+				issued.Token.CreatedAt.Add(2*time.Minute),
+			)
+			if !errors.Is(err, test.want) || got.TokenID != issued.Token.ID ||
+				got.BoundCollectorID != testCollectorID || len(got.AuthorizedIndexes) != 0 {
+				t.Fatalf("AuthorizeLease() = (%#v, %v), want verified identity/%v", got, err, test.want)
+			}
+
+			stale := admitted.Lease
+			stale.Generation++
+			got, err = fixture.store.AuthorizeLease(
+				ctx,
+				issued.Secret.Plaintext(),
+				stale,
+				issued.Token.CreatedAt.Add(3*time.Minute),
+			)
+			if !errors.Is(err, ErrLeaseNotCurrent) || got.TokenID != "" {
+				t.Fatalf("stale AuthorizeLease() = (%#v, %v), want zero/ErrLeaseNotCurrent", got, err)
+			}
+		})
+	}
+}
+
+func TestAuthorizeLeaseCredentialAndBindingFencesOverrideDeferredIndexAuthority(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	fixture := openAdmissionFixture(t, "main")
+	issued := issueToken(t, fixture, "collector", testCollectorID, "main")
+	admitted := admitAuthorizationFixture(t, fixture, issued, "stream-1")
+	if _, err := fixture.database.SQLDB().ExecContext(ctx, `
+		UPDATE indexes
+		SET ingestion_enabled = 0
+		WHERE name = 'main'`); err != nil {
+		t.Fatalf("disable index: %v", err)
+	}
+
+	mismatched := admitted.Lease
+	mismatched.CollectorID = "123e4567-e89b-12d3-a456-426614174999"
+	got, err := fixture.store.AuthorizeLease(
+		ctx,
+		issued.Secret.Plaintext(),
+		mismatched,
+		issued.Token.CreatedAt.Add(2*time.Minute),
+	)
+	if !errors.Is(err, auth.ErrUnauthorized) || got.TokenID != "" {
+		t.Fatalf("binding-mismatched AuthorizeLease() = (%#v, %v), want zero/ErrUnauthorized", got, err)
+	}
+
+	if _, err := fixture.tokens.RevokeCollectorToken(ctx, issued.Token.ID, issued.Token.Version); err != nil {
+		t.Fatalf("RevokeCollectorToken(): %v", err)
+	}
+	got, err = fixture.store.AuthorizeLease(
+		ctx,
+		issued.Secret.Plaintext(),
+		admitted.Lease,
+		issued.Token.CreatedAt.Add(3*time.Minute),
+	)
+	if !errors.Is(err, auth.ErrUnauthorized) || got.TokenID != "" {
+		t.Fatalf("revoked AuthorizeLease() = (%#v, %v), want zero/ErrUnauthorized", got, err)
+	}
 }
 
 func TestAuthorizeLeaseFailsClosedOnCorruptDurableLease(t *testing.T) {

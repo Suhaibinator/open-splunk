@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"gorm.io/gorm"
 )
 
@@ -49,6 +50,15 @@ var (
 	// credentials, expired credentials, and forbidden indexes into one safe
 	// externally reportable error.
 	ErrUnauthorized = errors.New("auth: collector authentication or index authorization failed")
+	// ErrNoActiveIndexAuthority is returned with a verified collector identity
+	// only by lease revalidation when none of its bounded index scopes is
+	// currently ingestion-enabled. Callers may use that identity solely to
+	// recover an exact durable batch outcome before rejecting a fresh batch.
+	ErrNoActiveIndexAuthority = errors.New("auth: collector has no active index authority")
+	// ErrInvalidIndexAuthority is returned with a verified collector identity
+	// only by lease revalidation when its bounded index projection is corrupt.
+	// It is never permission to ingest with a partial or stale scope.
+	ErrInvalidIndexAuthority = errors.New("auth: collector index authority is invalid")
 	// ErrInactiveToken means an operation that requires an active collector
 	// credential could not proceed. Accepted-use recording deliberately uses
 	// this one sentinel for missing, disabled, revoked, and expired IDs so the
@@ -149,14 +159,32 @@ type Principal struct {
 	BoundCollectorID string
 }
 
-// Authentication is a safe credential resolution snapshot. AllowedIndexNames
-// includes only currently active, ingestion-enabled indexes and must be
-// refreshed at each security boundary where revocation needs to take effect.
+// AuthorizedIndexPolicy is one current, active, ingestion-enabled index scope
+// resolved in the same control-plane snapshot as its collector credential.
+// Version identifies the exact mutable index generation represented by the
+// remaining policy fields.
+type AuthorizedIndexPolicy = indexpolicy.Policy
+
+// Authentication is a safe credential resolution snapshot. AuthorizedIndexes
+// is the single authoritative index scope and policy projection. It must be
+// refreshed at each security boundary where index or credential changes need
+// to take effect.
 type Authentication struct {
 	TokenID           string
 	TokenName         string
 	BoundCollectorID  string
-	AllowedIndexNames []string
+	AuthorizedIndexes []AuthorizedIndexPolicy
+}
+
+// AuthorizedIndexNames returns a detached name projection in authoritative
+// snapshot order for APIs whose durable format intentionally records only
+// scope names.
+func (authentication Authentication) AuthorizedIndexNames() []string {
+	names := make([]string, len(authentication.AuthorizedIndexes))
+	for index, policy := range authentication.AuthorizedIndexes {
+		names[index] = policy.Name
+	}
+	return names
 }
 
 // Store owns collector credential creation, persistence, revocation, and
@@ -557,6 +585,23 @@ func (store *Store) authenticate(
 	plaintext string,
 	now time.Time,
 ) (Authentication, error) {
+	return store.authenticateWithIndexAuthority(database, plaintext, now, false)
+}
+
+func (store *Store) authenticateForLease(
+	database *gorm.DB,
+	plaintext string,
+	now time.Time,
+) (Authentication, error) {
+	return store.authenticateWithIndexAuthority(database, plaintext, now, true)
+}
+
+func (store *Store) authenticateWithIndexAuthority(
+	database *gorm.DB,
+	plaintext string,
+	now time.Time,
+	deferIndexAuthorityErrors bool,
+) (Authentication, error) {
 	if plaintext == "" {
 		return Authentication{}, ErrUnauthorized
 	}
@@ -595,12 +640,31 @@ func (store *Store) authenticate(
 	if !validCollectorID(row.BoundCollectorID) {
 		return Authentication{}, errors.New("authenticate collector token: invalid bound collector ID in control-plane database")
 	}
+	authentication := Authentication{
+		TokenID:          row.IngestionTokenID,
+		TokenName:        row.Name,
+		BoundCollectorID: row.BoundCollectorID,
+	}
 	var scopes []collectorTokenAuthenticationScopeRow
 	scopeResult := database.
 		Table("ingestion_token_indexes AS scope").
-		Select("target.name", "target.state", "target.ingestion_enabled").
+		Select(
+			"target.index_id IS NOT NULL AS target_present",
+			"COALESCE(target.name, '') AS name",
+			"COALESCE(target.version, 0) AS version",
+			"COALESCE(target.retention_nanoseconds, -1) AS retention_nanoseconds",
+			"COALESCE(target.default_sourcetype, '') AS default_sourcetype",
+			"COALESCE(target.max_event_bytes, -1) AS max_event_bytes",
+			"COALESCE(target.max_field_count, -1) AS max_field_count",
+			"COALESCE(target.max_nesting_depth, -1) AS max_nesting_depth",
+			"COALESCE(target.maximum_future_skew_nanoseconds, -1) AS maximum_future_skew_nanoseconds",
+			"COALESCE(target.maximum_event_age_nanoseconds, -1) AS maximum_event_age_nanoseconds",
+			"COALESCE(target.state, '') AS state",
+			"COALESCE(target.ingestion_enabled, -1) AS ingestion_enabled",
+		).
 		Joins("LEFT JOIN indexes AS target ON target.index_id = scope.index_id").
 		Where("scope.ingestion_token_id = ?", row.IngestionTokenID).
+		Order("target.name").
 		Order("scope.index_id").
 		Limit(maximumTokenScopes + 1).
 		Find(&scopes)
@@ -611,49 +675,88 @@ func (store *Store) authenticate(
 		)
 	}
 	if len(scopes) == 0 {
+		if deferIndexAuthorityErrors {
+			return authentication, ErrInvalidIndexAuthority
+		}
 		return Authentication{}, ErrUnauthorized
 	}
 	if len(scopes) > maximumTokenScopes {
+		if deferIndexAuthorityErrors {
+			return authentication, ErrInvalidIndexAuthority
+		}
 		return Authentication{}, errors.New(
 			"authenticate collector token: scope count exceeds the supported maximum",
 		)
 	}
-	allowedIndexNames := make([]string, 0, len(scopes))
-	for _, scope := range scopes {
-		canonicalName, err := control.NormalizeIndexName(scope.Name)
-		if err != nil ||
-			canonicalName != scope.Name ||
+	authorizedIndexes := make([]AuthorizedIndexPolicy, 0, len(scopes))
+	for scopeIndex, scope := range scopes {
+		if scopeIndex > 0 && scopes[scopeIndex-1].Name >= scope.Name {
+			if deferIndexAuthorityErrors {
+				return authentication, ErrInvalidIndexAuthority
+			}
+			return Authentication{}, errors.New(
+				"authenticate collector token: duplicate scope in control-plane database",
+			)
+		}
+		policy, policyErr := authorizedIndexPolicyFromScope(scope, now)
+		if scope.TargetPresent != 1 || policyErr != nil ||
 			(scope.State != string(control.IndexStateActive) &&
 				scope.State != string(control.IndexStateArchived) &&
 				scope.State != string(control.IndexStateDeleting)) ||
 			(scope.IngestionEnabled != 0 && scope.IngestionEnabled != 1) {
+			if deferIndexAuthorityErrors {
+				return authentication, ErrInvalidIndexAuthority
+			}
 			return Authentication{}, errors.New(
 				"authenticate collector token: invalid scope in control-plane database",
 			)
 		}
 		if scope.State == string(control.IndexStateActive) &&
 			scope.IngestionEnabled == 1 {
-			allowedIndexNames = append(allowedIndexNames, scope.Name)
+			authorizedIndexes = append(authorizedIndexes, policy)
 		}
 	}
-	if len(allowedIndexNames) == 0 {
+	if len(authorizedIndexes) == 0 {
+		if deferIndexAuthorityErrors {
+			return authentication, ErrNoActiveIndexAuthority
+		}
 		return Authentication{}, ErrUnauthorized
 	}
-	sort.Strings(allowedIndexNames)
-	for index := 1; index < len(allowedIndexNames); index++ {
-		if allowedIndexNames[index-1] >= allowedIndexNames[index] {
-			return Authentication{}, errors.New(
-				"authenticate collector token: duplicate scope in control-plane database",
-			)
-		}
-	}
-	authentication := Authentication{
-		TokenID:           row.IngestionTokenID,
-		TokenName:         row.Name,
-		BoundCollectorID:  row.BoundCollectorID,
-		AllowedIndexNames: allowedIndexNames,
-	}
+	authentication.AuthorizedIndexes = authorizedIndexes
 	return authentication, nil
+}
+
+func authorizedIndexPolicyFromScope(
+	scope collectorTokenAuthenticationScopeRow,
+	reference time.Time,
+) (AuthorizedIndexPolicy, error) {
+	if scope.Version < 1 ||
+		scope.MaxEventBytes < 0 ||
+		scope.MaxFieldCount < 0 ||
+		scope.MaxFieldCount > math.MaxUint32 ||
+		scope.MaxNestingDepth < 0 ||
+		scope.MaxNestingDepth > math.MaxUint32 ||
+		scope.MaximumFutureSkewNanoseconds < 0 ||
+		scope.MaximumEventAgeNanoseconds < 0 {
+		return AuthorizedIndexPolicy{}, errors.New("invalid authorized index policy")
+	}
+	policy := AuthorizedIndexPolicy{
+		Name:              scope.Name,
+		Version:           uint64(scope.Version),
+		RetentionPeriod:   time.Duration(scope.RetentionNanoseconds),
+		DefaultSourcetype: scope.DefaultSourcetype,
+		Limits: indexpolicy.Limits{
+			MaxEventBytes:     uint64(scope.MaxEventBytes),
+			MaxFieldCount:     uint32(scope.MaxFieldCount),
+			MaxNestingDepth:   uint32(scope.MaxNestingDepth),
+			MaximumFutureSkew: time.Duration(scope.MaximumFutureSkewNanoseconds),
+			MaximumEventAge:   time.Duration(scope.MaximumEventAgeNanoseconds),
+		},
+	}
+	if err := policy.ValidateStoredAt(reference); err != nil {
+		return AuthorizedIndexPolicy{}, errors.New("invalid authorized index policy")
+	}
+	return policy, nil
 }
 
 func validAuthenticationTokenID(value string) bool {

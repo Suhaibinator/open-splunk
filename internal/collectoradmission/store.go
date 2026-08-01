@@ -107,7 +107,10 @@ func New(
 // A concurrent administrative or credential change that commits before the
 // snapshot is established takes effect for this operation. A change that
 // commits afterward fences the next operation; the already admitted operation
-// may finish.
+// may finish. A verified identity accompanies ErrNoActiveIndexAuthority or
+// ErrInvalidIndexAuthority only after the exact lease check also succeeds, so
+// native ingestion can recover a previously durable batch before applying the
+// mutable index result.
 func (store *Store) AuthorizeLease(
 	ctx context.Context,
 	bearer string,
@@ -142,9 +145,12 @@ func (store *Store) AuthorizeLease(
 		bearer,
 		checkedAt,
 	)
-	if err != nil {
+	deferredIndexAuthority := errors.Is(err, auth.ErrNoActiveIndexAuthority) ||
+		errors.Is(err, auth.ErrInvalidIndexAuthority)
+	if err != nil && !deferredIndexAuthority {
 		return auth.Authentication{}, preferContextCancellation(ctx, err)
 	}
+	indexAuthorityErr := err
 	if authentication.BoundCollectorID != lease.CollectorID {
 		return auth.Authentication{}, auth.ErrUnauthorized
 	}
@@ -166,7 +172,7 @@ func (store *Store) AuthorizeLease(
 		)
 	}
 	finished = true
-	return authentication, nil
+	return authentication, indexAuthorityErr
 }
 
 // Admit atomically revalidates bearer at AcceptedAt, records token use,
@@ -223,7 +229,7 @@ func (store *Store) Admit(
 		ctx,
 		tx,
 		prepared,
-		authentication.AllowedIndexNames,
+		authentication.AuthorizedIndexNames(),
 	)
 	if err != nil {
 		return Result{}, preferContextCancellation(ctx, err)

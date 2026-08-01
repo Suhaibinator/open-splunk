@@ -328,7 +328,7 @@ func TestCollectUsesFreshAdmissionAuthorityAndDetachedExactCleanup(t *testing.T)
 		"collector-a",
 	)
 	fresh := cloneAuthorization(preliminary)
-	fresh.AuthorizedIndexes = []string{"audit"}
+	fresh.AuthorizedIndexes = testIndexPolicies("audit")
 	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
 		return preliminary, nil
 	})
@@ -615,7 +615,7 @@ func TestCollectAuthorizesExactLeaseAndPersistsHeartbeatBeforeBatch(t *testing.T
 		}
 		authorizationCalls.Add(1)
 		result := cloneAuthorization(initial)
-		result.AuthorizedIndexes = []string{"audit"}
+		result.AuthorizedIndexes = testIndexPolicies("audit")
 		return result, nil
 	}
 	var (

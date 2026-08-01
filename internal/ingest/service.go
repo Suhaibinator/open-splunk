@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -29,6 +31,7 @@ import (
 type Config struct {
 	Limits                Limits
 	Redaction             RedactionPolicy
+	DefaultIndexRetention time.Duration
 	ProtocolMajor         uint32
 	ProtocolMinor         uint32
 	ServerInstanceID      string
@@ -48,6 +51,10 @@ type Config struct {
 
 const defaultServerVersion = "development"
 
+// DefaultIndexRetention is the shared deployment default used by the native
+// service and the server CLI when an index keeps the zero inheritance sentinel.
+const DefaultIndexRetention = indexpolicy.DefaultRetention
+
 const maximumTrustedAuthorizationIdentityBytes = 255
 const maximumAuthorizedCollectorIndexes = 256
 
@@ -58,6 +65,7 @@ const collectorSessionCleanupRetryDelay = 10 * time.Millisecond
 func DefaultConfig() Config {
 	return Config{
 		Limits:                DefaultLimits(),
+		DefaultIndexRetention: DefaultIndexRetention,
 		ProtocolMajor:         1,
 		ProtocolMinor:         0,
 		HeartbeatInterval:     15 * time.Second,
@@ -94,6 +102,9 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	}
 	if config.ProtocolMajor == 0 {
 		config.ProtocolMajor = defaults.ProtocolMajor
+	}
+	if config.DefaultIndexRetention == 0 {
+		config.DefaultIndexRetention = defaults.DefaultIndexRetention
 	}
 	if config.ServerInstanceID == "" {
 		config.ServerInstanceID = randomID()
@@ -150,6 +161,13 @@ func NewService(config Config, authorizer Authorizer, store EventStore) (*Servic
 	}
 	if config.DefaultRetryAfter <= 0 {
 		return nil, errors.New("default retry delay must be positive")
+	}
+	if err := indexpolicy.ValidateRetentionAt(
+		config.DefaultIndexRetention,
+		config.Clock().UTC(),
+		false,
+	); err != nil {
+		return nil, fmt.Errorf("default index retention: %w", err)
 	}
 	if config.SessionCleanupTimeout <= 0 {
 		return nil, errors.New("collector session cleanup timeout must be positive")
@@ -230,7 +248,8 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	if err != nil {
 		return err
 	}
-	if err := s.validateRequestEnvelope(request, 1); err != nil {
+	requestBoundaryAt := s.config.Clock().UTC()
+	if err := s.validateRequestEnvelope(request, 1, requestBoundaryAt); err != nil {
 		return err
 	}
 	hello := request.GetHello()
@@ -290,26 +309,24 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	); err != nil {
 		return err
 	}
-	authorization = cloneAuthorization(session.Authorization)
-	authorizedIndexes, indexesValid := normalizedAuthorizedIndexes(
-		authorization.AuthorizedIndexes,
-	)
+	authorization = session.Authorization
 	if len(authorization.AuthorizedIndexes) == 0 {
 		return status.Error(
 			codes.Unauthenticated,
 			"collector authentication is no longer valid",
 		)
 	}
+	resolvedIndexes, indexesValid := s.resolveAuthorizedIndexPolicies(
+		authorization.AuthorizedIndexes,
+		acceptedAt,
+	)
 	if !indexesValid {
 		return status.Error(
 			codes.Unavailable,
 			"collector admission service returned invalid index authority",
 		)
 	}
-	authorizedSet := make(map[string]struct{}, len(authorizedIndexes))
-	for _, index := range authorizedIndexes {
-		authorizedSet[index] = struct{}{}
-	}
+	authorization.AuthorizedIndexes = resolvedIndexes.policies
 
 	lease, err := s.promoteStreamAdmission(admission, session.Lease)
 	if errors.Is(err, errStreamAdmissionSuperseded) {
@@ -340,12 +357,12 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	defer cancelAuthorization()
 
 	state := streamState{
-		collectorID:       hello.GetCollectorId(),
-		instanceID:        hello.GetInstanceId(),
-		protocolMajor:     hello.GetProtocolMajor(),
-		protocolMinor:     hello.GetProtocolMinor(),
-		authorization:     authorization,
-		authorizedIndexes: authorizedSet,
+		collectorID:   hello.GetCollectorId(),
+		instanceID:    hello.GetInstanceId(),
+		protocolMajor: hello.GetProtocolMajor(),
+		protocolMinor: hello.GetProtocolMinor(),
+		authorization: authorization,
+		indexPolicies: resolvedIndexes.byName,
 	}
 	responseSequence := uint64(1)
 	if err := stream.Send(&opensplunkv1.CollectResponse{
@@ -364,7 +381,7 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			MaxBatchEvents:           s.config.Limits.MaxBatchEvents,
 			MaxBatchBytes:            s.config.Limits.MaxBatchBytes,
 			MaxEventBytes:            s.config.Limits.MaxEventBytes,
-			AuthorizedIndexes:        authorizedIndexes,
+			AuthorizedIndexes:        authorizedIndexPolicyNames(resolvedIndexes.policies),
 			AcknowledgmentDurability: opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED,
 		}},
 	}); err != nil {
@@ -390,17 +407,17 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		if err != nil {
 			return err
 		}
-		if err := s.validateRequestEnvelope(request, expectedRequestSequence); err != nil {
+		boundaryAt := s.config.Clock().UTC()
+		if err := s.validateRequestEnvelope(request, expectedRequestSequence, boundaryAt); err != nil {
 			return err
 		}
 		if expectedRequestSequence == math.MaxUint64 {
 			return status.Error(codes.ResourceExhausted, "collector stream sequence exhausted")
 		}
-		boundaryAt := s.config.Clock().UTC()
 		var heartbeatSnapshot *collectorfleet.Heartbeat
 		switch payload := request.GetPayload().(type) {
 		case *opensplunkv1.CollectRequest_Heartbeat:
-			if err := s.validateHeartbeat(payload.Heartbeat, &state); err != nil {
+			if err := s.validateHeartbeat(payload.Heartbeat, &state, boundaryAt); err != nil {
 				return err
 			}
 			snapshot, err := collectorHeartbeatSnapshot(
@@ -413,10 +430,10 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			}
 			heartbeatSnapshot = &snapshot
 		}
-		var authorizationErr error
+		var deferredIndexAuthority, authorizationErr error
 		switch request.GetPayload().(type) {
 		case *opensplunkv1.CollectRequest_Heartbeat, *opensplunkv1.CollectRequest_Batch:
-			authorizationErr = s.refreshLeaseAuthorization(
+			deferredIndexAuthority, authorizationErr = s.refreshLeaseAuthorization(
 				authorizationContext,
 				token,
 				lease.Lease,
@@ -429,6 +446,10 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		}
 		if authorizationErr != nil {
 			return authorizationErr
+		}
+		if _, heartbeat := request.GetPayload().(*opensplunkv1.CollectRequest_Heartbeat); heartbeat &&
+			deferredIndexAuthority != nil {
+			return indexAuthorityRPCError(deferredIndexAuthority)
 		}
 		expectedRequestSequence++
 
@@ -459,7 +480,13 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			}
 			return nil
 		case *opensplunkv1.CollectRequest_Batch:
-			response, err := s.processBatch(stream.Context(), payload.Batch, &state)
+			response, err := s.processBatchWithIndexAuthority(
+				stream.Context(),
+				payload.Batch,
+				&state,
+				boundaryAt,
+				deferredIndexAuthority,
+			)
 			if err != nil {
 				return err
 			}
@@ -773,64 +800,95 @@ func (s *Service) refreshLeaseAuthorization(
 	lease collectorfleet.Lease,
 	checkedAt time.Time,
 	state *streamState,
-) error {
+) (deferredIndexAuthority error, fatalErr error) {
 	authorization, err := s.sessionManager.AuthorizeLease(
 		ctx,
 		token,
 		lease,
 		checkedAt,
 	)
-	if err != nil {
+	deferred := errors.Is(err, ErrNoActiveIndexAuthority) ||
+		errors.Is(err, ErrInvalidIndexAuthority)
+	if err != nil && !deferred {
 		if errors.Is(err, ErrCollectorLeaseNotCurrent) {
-			return supersededStreamRPCError()
+			return nil, supersededStreamRPCError()
 		}
-		return authorizationRPCError(
+		return nil, authorizationRPCError(
 			err,
 			"collector authentication is no longer valid",
 		)
 	}
+	if deferred && authorization.CollectorID == "" {
+		return nil, status.Error(codes.Unavailable, "collector authentication service is unavailable")
+	}
 	if authorization.CollectorID == "" {
-		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
+		return nil, status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
 	}
 	if !validTrustedAuthorizationIdentity(authorization.SubjectID) ||
 		!validTrustedAuthorizationIdentity(authorization.TenantID) ||
 		!validIdentifier(authorization.CollectorID, s.config.Limits.MaxIDBytes) {
-		return status.Error(codes.Unavailable, "collector authentication service is unavailable")
+		return nil, status.Error(codes.Unavailable, "collector authentication service is unavailable")
 	}
 	if authorization.CollectorID != state.collectorID {
-		return status.Error(codes.PermissionDenied, "token is not authorized for this collector_id")
+		return nil, status.Error(codes.PermissionDenied, "token is not authorized for this collector_id")
 	}
 	if authorization.CollectorID != state.authorization.CollectorID {
-		return status.Error(codes.PermissionDenied, "collector identity scope changed during the stream")
+		return nil, status.Error(codes.PermissionDenied, "collector identity scope changed during the stream")
 	}
 	if authorization.TenantID != state.authorization.TenantID {
-		return status.Error(codes.PermissionDenied, "collector tenant scope changed during the stream")
+		return nil, status.Error(codes.PermissionDenied, "collector tenant scope changed during the stream")
 	}
 	if authorization.SubjectID != state.authorization.SubjectID {
-		return status.Error(codes.PermissionDenied, "collector principal changed during the stream")
+		return nil, status.Error(codes.PermissionDenied, "collector principal changed during the stream")
 	}
-	indexes, indexesValid := normalizedAuthorizedIndexes(
-		authorization.AuthorizedIndexes,
-	)
+	if deferred {
+		if len(authorization.AuthorizedIndexes) != 0 {
+			return nil, status.Error(codes.Unavailable, "collector authentication service is unavailable")
+		}
+		return err, nil
+	}
 	if len(authorization.AuthorizedIndexes) == 0 {
-		return status.Error(
-			codes.Unauthenticated,
-			"collector authentication is no longer valid",
-		)
+		return nil, status.Error(codes.Unavailable, "collector authentication service is unavailable")
 	}
+	if slices.Equal(
+		authorization.AuthorizedIndexes,
+		state.authorization.AuthorizedIndexes,
+	) {
+		for _, policy := range authorization.AuthorizedIndexes {
+			if _, policyErr := policy.ResolveRetentionAt(
+				checkedAt,
+				s.config.DefaultIndexRetention,
+			); policyErr != nil {
+				return ErrInvalidIndexAuthority, nil
+			}
+		}
+		return nil, nil
+	}
+	resolvedIndexes, indexesValid := s.resolveAuthorizedIndexPolicies(
+		authorization.AuthorizedIndexes,
+		checkedAt,
+	)
 	if !indexesValid {
+		return ErrInvalidIndexAuthority, nil
+	}
+	authorization.AuthorizedIndexes = resolvedIndexes.policies
+	state.authorization = authorization
+	state.indexPolicies = resolvedIndexes.byName
+	return nil, nil
+}
+
+func indexAuthorityRPCError(err error) error {
+	switch {
+	case errors.Is(err, ErrNoActiveIndexAuthority):
+		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
+	case errors.Is(err, ErrInvalidIndexAuthority):
 		return status.Error(
 			codes.Unavailable,
 			"collector authentication service returned invalid index authority",
 		)
+	default:
+		return status.Error(codes.Unavailable, "collector authentication service is unavailable")
 	}
-	authorizedSet := make(map[string]struct{}, len(indexes))
-	for _, index := range indexes {
-		authorizedSet[index] = struct{}{}
-	}
-	state.authorization = authorization
-	state.authorizedIndexes = authorizedSet
-	return nil
 }
 
 func authorizationRPCError(err error, unauthorizedMessage string) error {
@@ -900,7 +958,11 @@ func heartbeatPersistenceRPCError(err error) error {
 	}
 }
 
-func (s *Service) validateRequestEnvelope(request *opensplunkv1.CollectRequest, expectedSequence uint64) error {
+func (s *Service) validateRequestEnvelope(
+	request *opensplunkv1.CollectRequest,
+	expectedSequence uint64,
+	reference time.Time,
+) error {
 	if request == nil {
 		return status.Error(codes.InvalidArgument, "collector request is required")
 	}
@@ -910,7 +972,7 @@ func (s *Service) validateRequestEnvelope(request *opensplunkv1.CollectRequest, 
 	if request.GetPayload() == nil {
 		return status.Error(codes.InvalidArgument, "collector request payload is required")
 	}
-	if err := s.validator.validateTimestamp(request.GetSentAt(), s.config.Clock()); err != nil {
+	if err := s.validator.validateTimestamp(request.GetSentAt(), reference); err != nil {
 		return status.Error(codes.InvalidArgument, "sent_at is invalid or outside accepted bounds")
 	}
 	return nil
@@ -951,14 +1013,18 @@ func (s *Service) validateHello(hello *opensplunkv1.CollectorHello, authorizatio
 	return nil
 }
 
-func (s *Service) validateHeartbeat(heartbeat *opensplunkv1.CollectorHeartbeat, state *streamState) error {
+func (s *Service) validateHeartbeat(
+	heartbeat *opensplunkv1.CollectorHeartbeat,
+	state *streamState,
+	reference time.Time,
+) error {
 	if heartbeat == nil {
 		return status.Error(codes.InvalidArgument, "heartbeat payload is required")
 	}
 	if heartbeat.GetCollectorId() != state.collectorID || heartbeat.GetInstanceId() != state.instanceID {
 		return status.Error(codes.InvalidArgument, "heartbeat collector identity does not match hello")
 	}
-	if err := s.validator.validateTimestamp(heartbeat.GetObservedAt(), s.config.Clock()); err != nil {
+	if err := s.validator.validateTimestamp(heartbeat.GetObservedAt(), reference); err != nil {
 		return status.Error(codes.InvalidArgument, "heartbeat observed_at is invalid or outside accepted bounds")
 	}
 	if math.IsNaN(heartbeat.GetProcessCpuPercent()) || math.IsInf(heartbeat.GetProcessCpuPercent(), 0) || heartbeat.GetProcessCpuPercent() < 0 {
@@ -968,12 +1034,12 @@ func (s *Service) validateHeartbeat(heartbeat *opensplunkv1.CollectorHeartbeat, 
 }
 
 type streamState struct {
-	collectorID       string
-	instanceID        string
-	protocolMajor     uint32
-	protocolMinor     uint32
-	authorization     Authorization
-	authorizedIndexes map[string]struct{}
+	collectorID   string
+	instanceID    string
+	protocolMajor uint32
+	protocolMinor uint32
+	authorization Authorization
+	indexPolicies map[string]resolvedIndexPolicy
 
 	hasHighestBatchSequence bool
 	highestBatchSequence    uint64
@@ -1003,24 +1069,75 @@ func bearerToken(ctx context.Context) (string, error) {
 	return parts[1], nil
 }
 
-func normalizedAuthorizedIndexes(indexes []string) ([]string, bool) {
-	if len(indexes) > maximumAuthorizedCollectorIndexes {
-		return nil, false
+type resolvedIndexAuthority struct {
+	policies []IndexPolicy
+	byName   map[string]resolvedIndexPolicy
+}
+
+type resolvedIndexPolicy struct {
+	defaultSourcetype string
+	validator         Validator
+	retentionPeriod   time.Duration
+}
+
+func (s *Service) resolveAuthorizedIndexPolicies(
+	policies []IndexPolicy,
+	reference time.Time,
+) (resolvedIndexAuthority, bool) {
+	if len(policies) > maximumAuthorizedCollectorIndexes {
+		return resolvedIndexAuthority{}, false
 	}
-	seen := make(map[string]struct{}, len(indexes))
-	result := make([]string, 0, len(indexes))
-	for _, index := range indexes {
-		if !validIndexName(index) {
-			return nil, false
-		}
-		if _, duplicate := seen[index]; duplicate {
-			continue
-		}
-		seen[index] = struct{}{}
-		result = append(result, index)
+	detached := append([]IndexPolicy(nil), policies...)
+	sort.Slice(detached, func(left, right int) bool {
+		return detached[left].Name < detached[right].Name
+	})
+	result := resolvedIndexAuthority{
+		policies: detached,
+		byName:   make(map[string]resolvedIndexPolicy, len(detached)),
 	}
-	sort.Strings(result)
+	for _, policy := range detached {
+		retention, policyErr := policy.ResolveRetentionAt(
+			reference,
+			s.config.DefaultIndexRetention,
+		)
+		if policyErr != nil {
+			return resolvedIndexAuthority{}, false
+		}
+		if _, duplicate := result.byName[policy.Name]; duplicate {
+			return resolvedIndexAuthority{}, false
+		}
+		effectiveLimits := effectiveIndexLimits(s.config.Limits, policy.Limits)
+		result.byName[policy.Name] = resolvedIndexPolicy{
+			defaultSourcetype: policy.DefaultSourcetype,
+			validator:         s.validator.withLimits(effectiveLimits),
+			retentionPeriod:   retention,
+		}
+	}
 	return result, true
+}
+
+func authorizedIndexPolicyNames(policies []IndexPolicy) []string {
+	names := make([]string, len(policies))
+	for index, policy := range policies {
+		names[index] = policy.Name
+	}
+	return names
+}
+
+func effectiveIndexLimits(global Limits, index IndexLimits) Limits {
+	global.MaxEventBytes = tightenLimit(global.MaxEventBytes, index.MaxEventBytes)
+	global.MaxFields = tightenLimit(global.MaxFields, index.MaxFieldCount)
+	global.MaxNestingDepth = tightenLimit(global.MaxNestingDepth, index.MaxNestingDepth)
+	global.MaxFutureSkew = tightenLimit(global.MaxFutureSkew, index.MaximumFutureSkew)
+	global.MaxEventAge = tightenLimit(global.MaxEventAge, index.MaximumEventAge)
+	return global
+}
+
+func tightenLimit[T ~uint32 | ~uint64 | ~int64](global, index T) T {
+	if index == 0 {
+		return global
+	}
+	return min(global, index)
 }
 
 func randomID() string {

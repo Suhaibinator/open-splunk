@@ -16,13 +16,34 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBatch, state *streamState) (*opensplunkv1.CollectResponse, error) {
+func (s *Service) processBatch(
+	ctx context.Context,
+	batch *opensplunkv1.EventBatch,
+	state *streamState,
+	boundaryAt time.Time,
+) (*opensplunkv1.CollectResponse, error) {
+	return s.processBatchWithIndexAuthority(ctx, batch, state, boundaryAt, nil)
+}
+
+func (s *Service) processBatchWithIndexAuthority(
+	ctx context.Context,
+	batch *opensplunkv1.EventBatch,
+	state *streamState,
+	boundaryAt time.Time,
+	deferredIndexAuthority error,
+) (*opensplunkv1.CollectResponse, error) {
 	if rejection := s.validateBatchHardEnvelope(batch, state); rejection != nil {
+		if deferredIndexAuthority != nil {
+			return nil, indexAuthorityRPCError(deferredIndexAuthority)
+		}
 		return responseWithBatchReject(rejection), nil
 	}
 
 	identity, err := batchFingerprint(batch)
 	if err != nil {
+		if deferredIndexAuthority != nil {
+			return nil, indexAuthorityRPCError(deferredIndexAuthority)
+		}
 		return responseWithBatchReject(batchRejection(
 			batch,
 			opensplunkv1.BatchRejectionCode_BATCH_REJECTION_CODE_PROTOCOL_VIOLATION,
@@ -32,6 +53,9 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 		)), nil
 	}
 	if rejection := pendingBatchIdentityConflict(state, batch.GetBatchSequence(), identity); rejection != nil {
+		if deferredIndexAuthority != nil {
+			return nil, indexAuthorityRPCError(deferredIndexAuthority)
+		}
 		return responseWithBatchReject(rejection), nil
 	}
 	durableIdentity := StoreBatchIdentity{
@@ -44,6 +68,9 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 	if recoverable, ok := s.store.(RecoverableEventStore); ok {
 		storedState, result, lookupErr := recoverable.LookupBatch(ctx, durableIdentity)
 		if lookupErr != nil {
+			if deferredIndexAuthority != nil {
+				return nil, indexAuthorityRPCError(deferredIndexAuthority)
+			}
 			return s.storeFailure(batch, lookupErr)
 		}
 		switch storedState {
@@ -55,6 +82,9 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 			observeBatchSequence(state, batch.GetBatchSequence())
 			result, resumeErr := recoverable.ResumeBatch(ctx, durableIdentity)
 			if resumeErr != nil {
+				if deferredIndexAuthority != nil && isDurableIdentityConflict(resumeErr) {
+					return nil, indexAuthorityRPCError(deferredIndexAuthority)
+				}
 				if isDurableIdentityConflict(resumeErr) {
 					completeBatchIdentity(state, batch.GetBatchSequence(), identity)
 				}
@@ -64,15 +94,21 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 			return s.responseForStoredBatch(batch, result, nil)
 		case StoredBatchNotFound:
 		default:
+			if deferredIndexAuthority != nil {
+				return nil, indexAuthorityRPCError(deferredIndexAuthority)
+			}
 			return nil, status.Error(codes.Internal, "event store returned an invalid durable batch state")
 		}
+	}
+	if deferredIndexAuthority != nil {
+		return nil, indexAuthorityRPCError(deferredIndexAuthority)
 	}
 
 	receivedAt, rejection, atCapacity := recordBatchIdentity(
 		state,
 		batch.GetBatchSequence(),
 		identity,
-		s.config.Clock().UTC(),
+		boundaryAt,
 		s.config.MaxInFlightBatches,
 	)
 	if rejection != nil {
@@ -94,8 +130,23 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 	normalized := make([]*StoredEvent, 0, len(batch.GetEvents()))
 	rejections := make([]*opensplunkv1.EventRejection, 0)
 	seenEventIDs := make(map[string]struct{}, len(batch.GetEvents()))
+	retentionByIndex := make(map[string]time.Duration)
 	for eventIndex, event := range batch.GetEvents() {
+		var policy resolvedIndexPolicy
 		if event != nil {
+			if !validIdentifier(event.GetEventId(), s.config.Limits.MaxIDBytes) {
+				rejections = append(rejections, toProtoRejection(
+					uint32(eventIndex),
+					event.GetEventId(),
+					eventFailure(
+						opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
+						"event_id is empty or has an invalid format",
+						"event_id",
+						"invalid_event_id",
+					),
+				))
+				continue
+			}
 			if _, duplicate := seenEventIDs[event.GetEventId()]; duplicate {
 				rejections = append(rejections, toProtoRejection(uint32(eventIndex), event.GetEventId(), eventFailure(
 					opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_EVENT_ID,
@@ -104,10 +155,46 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 				continue
 			}
 			seenEventIDs[event.GetEventId()] = struct{}{}
+			if !validIndexName(event.GetIndexName()) {
+				rejections = append(rejections, toProtoRejection(
+					uint32(eventIndex),
+					event.GetEventId(),
+					eventFailure(
+						opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_INVALID_INDEX,
+						"index_name is empty or has an invalid format",
+						"index_name",
+						"invalid_index",
+					),
+				))
+				continue
+			}
+			var authorized bool
+			policy, authorized = state.indexPolicies[event.GetIndexName()]
+			if !authorized {
+				rejections = append(rejections, toProtoRejection(
+					uint32(eventIndex),
+					event.GetEventId(),
+					eventFailure(
+						opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
+						"token is not authorized for the requested index",
+						"index_name",
+						"unauthorized_index",
+					),
+				))
+				continue
+			}
+			if policy.retentionPeriod <= 0 {
+				return nil, status.Error(codes.Internal, "resolved index policy is invalid")
+			}
 		}
-		normalizedEvent, eventErr := s.validator.ValidateAndNormalizeEvent(event, EventContext{
+		validator := s.validator
+		if event != nil {
+			validator = &policy.validator
+		}
+		normalizedEvent, eventErr := validator.ValidateAndNormalizeEvent(event, EventContext{
 			ReceivedAt:         receivedAt,
-			TimestampReference: batch.GetCreatedAt().AsTime(),
+			TimestampReference: receivedAt,
+			DefaultSourcetype:  policy.defaultSourcetype,
 			TenantID:           state.authorization.TenantID,
 			CollectorID:        state.collectorID,
 			BatchID:            batch.GetBatchId(),
@@ -120,21 +207,8 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 			rejections = append(rejections, toProtoRejection(uint32(eventIndex), eventID, eventErr))
 			continue
 		}
-		if _, authorized := state.authorizedIndexes[normalizedEvent.Event.GetIndexName()]; !authorized {
-			rejections = append(rejections, &opensplunkv1.EventRejection{
-				EventIndex: uint32(eventIndex),
-				EventId:    normalizedEvent.Event.GetEventId(),
-				Code:       opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_INDEX,
-				Message:    "token is not authorized for the requested index",
-				Violations: []*opensplunkv1.FieldViolation{{
-					FieldPath: "index_name",
-					Code:      "unauthorized_index",
-					Message:   "token is not authorized for the requested index",
-				}},
-			})
-			continue
-		}
 		normalized = append(normalized, normalizedEvent)
+		retentionByIndex[normalizedEvent.Event.GetIndexName()] = policy.retentionPeriod
 	}
 
 	if len(normalized) == 0 {
@@ -171,6 +245,7 @@ func (s *Service) processBatch(ctx context.Context, batch *opensplunkv1.EventBat
 		SourceBatchSHA256:  identity.contentHash,
 		ReceivedAt:         receivedAt,
 		Events:             normalized,
+		RetentionByIndex:   retentionByIndex,
 		RejectedEvents:     rejections,
 	})
 	if err != nil {

@@ -13,8 +13,8 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -52,6 +52,15 @@ type Validator struct {
 
 func NewValidator(limits Limits, policy RedactionPolicy) (*Validator, error) {
 	return newValidator(limits, policy, true, false)
+}
+
+// withLimits returns a detached validator view which shares only immutable
+// redaction lookup tables. Authorization admission constructs these copies
+// once per resolved index policy, never in the per-event path.
+func (v *Validator) withLimits(limits Limits) Validator {
+	cloned := *v
+	cloned.limits = limits
+	return cloned
 }
 
 // NewSupplementalRedactor constructs an exact-name redactor for only the
@@ -443,6 +452,9 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 	}
 
 	cloned := v.RedactEvent(event)
+	if cloned.GetSourcetype() == "" && ctx.DefaultSourcetype != "" {
+		cloned.Sourcetype = ctx.DefaultSourcetype
+	}
 	if !storedFieldNamesFit(cloned.GetFields()) {
 		return nil, eventFailure(
 			opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_EVENT_TOO_LARGE,
@@ -704,8 +716,7 @@ func validIdentifier(value string, maxBytes uint32) bool {
 }
 
 func validIndexName(value string) bool {
-	normalized, err := control.NormalizeIndexName(value)
-	return err == nil && normalized == value
+	return indexpolicy.ValidName(value)
 }
 
 func eventFailure(code opensplunkv1.EventRejectionCode, message, path, violationCode string) *EventError {

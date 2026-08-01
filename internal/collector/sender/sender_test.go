@@ -1663,14 +1663,14 @@ func TestSenderAgainstRealService(t *testing.T) {
 			SubjectID:         "s1",
 			TenantID:          "t1",
 			CollectorID:       "collector-a",
-			AuthorizedIndexes: []string{"main"},
+			AuthorizedIndexes: []ingest.IndexPolicy{{Name: "main", Version: 1}},
 		}, nil
 	})
 	config := realServiceIngestConfig(ingest.Authorization{
 		SubjectID:         "s1",
 		TenantID:          "t1",
 		CollectorID:       "collector-a",
-		AuthorizedIndexes: []string{"main"},
+		AuthorizedIndexes: []ingest.IndexPolicy{{Name: "main", Version: 1}},
 	})
 	svc, err := ingest.NewService(config, authorizer, store)
 	if err != nil {
@@ -1717,14 +1717,14 @@ func TestSenderAgainstRealServicePartialRejectDeadLetters(t *testing.T) {
 			SubjectID:         "s1",
 			TenantID:          "t1",
 			CollectorID:       "collector-a",
-			AuthorizedIndexes: []string{"main"},
+			AuthorizedIndexes: []ingest.IndexPolicy{{Name: "main", Version: 1}},
 		}, nil
 	})
 	config := realServiceIngestConfig(ingest.Authorization{
 		SubjectID:         "s1",
 		TenantID:          "t1",
 		CollectorID:       "collector-a",
-		AuthorizedIndexes: []string{"main"},
+		AuthorizedIndexes: []ingest.IndexPolicy{{Name: "main", Version: 1}},
 	})
 	svc, err := ingest.NewService(config, authorizer, store)
 	if err != nil {

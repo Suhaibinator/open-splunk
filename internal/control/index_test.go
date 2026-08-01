@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 )
 
 func TestIndexLifecycleNormalizesNameAndUsesOptimisticVersions(t *testing.T) {
@@ -592,6 +593,24 @@ func TestIndexValidationAndNotFoundErrors(t *testing.T) {
 	if _, err := db.CreateIndex(ctx, subMillisecond); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("sub-millisecond CreateIndex() error = %v, want ErrInvalidArgument", err)
 	}
+	pastStorageHorizon := enabledIndex("past-storage-horizon")
+	pastStorageHorizon.RetentionPeriod = 8_000_000_000 * time.Second
+	if _, err := db.CreateIndex(ctx, pastStorageHorizon); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("past-horizon CreateIndex() error = %v, want ErrInvalidArgument", err)
+	}
+	for name, limits := range map[string]IndexLimits{
+		"event bytes":   {MaxEventBytes: indexpolicy.HardMaxEventBytes + 1},
+		"field count":   {MaxFieldCount: indexpolicy.HardMaxFieldCount + 1},
+		"nesting depth": {MaxNestingDepth: indexpolicy.HardMaxNestingDepth + 1},
+		"future skew":   {MaximumFutureSkew: indexpolicy.HardMaxFutureSkew + time.Nanosecond},
+		"event age":     {MaximumEventAge: indexpolicy.HardMaxEventAge + time.Nanosecond},
+	} {
+		definition := enabledIndex("over-hard-" + strings.ReplaceAll(name, " ", "-"))
+		definition.Limits = limits
+		if _, err := db.CreateIndex(ctx, definition); !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("%s CreateIndex() error = %v, want ErrInvalidArgument", name, err)
+		}
+	}
 	if _, err := db.GetIndex(ctx, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetIndex(missing) error = %v, want ErrNotFound", err)
 	}
@@ -706,6 +725,29 @@ func TestIndexReadsRejectCorruptRecordsWithoutLeakingFields(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), created.Definition.Description) {
 		t.Fatalf("GetIndex() error disclosed persisted field: %v", err)
+	}
+}
+
+func TestIndexReadsRejectRetentionPastStorageHorizon(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	created, err := db.CreateIndex(ctx, enabledIndex("corrupt-retention"))
+	if err != nil {
+		t.Fatalf("CreateIndex(): %v", err)
+	}
+
+	if _, err := db.SQLDB().ExecContext(ctx, `
+		UPDATE indexes
+		SET retention_nanoseconds = ?
+		WHERE index_id = ?`, int64(8_000_000_000*time.Second), created.ID); err != nil {
+		t.Fatalf("corrupt retention: %v", err)
+	}
+
+	_, err = db.GetIndex(ctx, created.ID)
+	if err == nil || !strings.Contains(err.Error(), "invalid index record in control-plane database") {
+		t.Fatalf("GetIndex() error = %v, want invalid-record error", err)
 	}
 }
 

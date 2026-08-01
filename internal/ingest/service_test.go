@@ -31,7 +31,7 @@ func TestCollectAuthenticatesBearerTokenAndNegotiatesReady(t *testing.T) {
 			SubjectID:         "token-1",
 			TenantID:          "tenant-a",
 			CollectorID:       "collector-a",
-			AuthorizedIndexes: []string{"z-last", "main"},
+			AuthorizedIndexes: testIndexPolicies("z-last", "main"),
 		}, nil
 	})
 	config := testServiceConfig()
@@ -81,7 +81,7 @@ func TestCollectSupportsMaximumControlPlaneIndexNameEndToEnd(t *testing.T) {
 		SubjectID:         "token-maximum-index",
 		TenantID:          "tenant-a",
 		CollectorID:       "collector-a",
-		AuthorizedIndexes: []string{indexName},
+		AuthorizedIndexes: testIndexPolicies(indexName),
 	}
 	authorizer := AuthorizerFunc(func(context.Context, string) (Authorization, error) {
 		return authorization, nil
@@ -347,7 +347,7 @@ func TestCollectEnforcesTokenAndPayloadCollectorIdentity(t *testing.T) {
 			SubjectID:         "token-1",
 			TenantID:          "tenant-a",
 			CollectorID:       "bound-collector",
-			AuthorizedIndexes: []string{"main"},
+			AuthorizedIndexes: testIndexPolicies("main"),
 		}, nil
 	})
 	harness := newServiceHarness(t, testServiceConfig(), authorizer, acceptingStore())
@@ -391,7 +391,7 @@ func TestCollectReauthorizesEveryBatch(t *testing.T) {
 			SubjectID:         "token-1",
 			TenantID:          "tenant-a",
 			CollectorID:       "collector-a",
-			AuthorizedIndexes: []string{"main"},
+			AuthorizedIndexes: testIndexPolicies("main"),
 		}, nil
 	})
 	storeCalls := 0
@@ -475,7 +475,7 @@ func TestCollectLostAckUsesOriginalDispositionAfterAuthorizationExpansion(t *tes
 		}
 		return Authorization{
 			SubjectID: "token-1", TenantID: "tenant-a", CollectorID: "collector-a",
-			AuthorizedIndexes: indexes,
+			AuthorizedIndexes: testIndexPolicies(indexes...),
 		}, nil
 	})
 	store := &recoverableTestStore{}
@@ -662,7 +662,9 @@ func TestProcessBatchCommittedRetryBypassesMutablePolicy(t *testing.T) {
 		validTestEvent("event-one", "main"),
 		validTestEvent("event-two", "main"),
 	)
-	firstResponse, err := first.processBatch(context.Background(), batch, testBatchStreamState())
+	firstResponse, err := first.processBatch(
+		context.Background(), batch, testBatchStreamState(first), first.config.Clock().UTC(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +683,18 @@ func TestProcessBatchCommittedRetryBypassesMutablePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	retryResponse, err := retry.processBatch(context.Background(), batch, testBatchStreamState())
+	retryAuthority, ok := retry.resolveAuthorizedIndexPolicies([]IndexPolicy{{
+		Name: "main", Version: 2, RetentionPeriod: time.Hour,
+		Limits: IndexLimits{MaxEventBytes: 1},
+	}}, retry.config.Clock().UTC())
+	if !ok {
+		t.Fatal("resolve restrictive retry policy")
+	}
+	retryState := testBatchStreamState(retry)
+	retryState.indexPolicies = retryAuthority.byName
+	retryResponse, err := retry.processBatch(
+		context.Background(), batch, retryState, retry.config.Clock().UTC(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -715,19 +728,19 @@ func TestProcessBatchAllowsEarlierPendingRetryAfterLaterSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := testBatchStreamState()
+	state := testBatchStreamState(service)
 	first := validTestBatch("collector-a", "batch-one", 1, validTestEvent("event-one", "main"))
 	second := validTestBatch("collector-a", "batch-two", 2, validTestEvent("event-two", "main"))
 
-	response, err := service.processBatch(context.Background(), first, state)
+	response, err := service.processBatch(context.Background(), first, state, service.config.Clock().UTC())
 	if err != nil || response.GetRetryBatch() == nil {
 		t.Fatalf("first response = (%#v, %v), want RetryBatch", response, err)
 	}
-	response, err = service.processBatch(context.Background(), second, state)
+	response, err = service.processBatch(context.Background(), second, state, service.config.Clock().UTC())
 	if err != nil || response.GetBatchAck() == nil {
 		t.Fatalf("second response = (%#v, %v), want BatchAck", response, err)
 	}
-	response, err = service.processBatch(context.Background(), first, state)
+	response, err = service.processBatch(context.Background(), first, state, service.config.Clock().UTC())
 	if err != nil || response.GetBatchAck() == nil {
 		t.Fatalf("first retry response = (%#v, %v), want BatchAck", response, err)
 	}
@@ -759,15 +772,15 @@ func TestProcessBatchCapacityRetriesWithoutConsumingIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := testBatchStreamState()
+	state := testBatchStreamState(service)
 	first := validTestBatch("collector-a", "batch-one", 1, validTestEvent("event-one", "main"))
 	second := validTestBatch("collector-a", "batch-two", 2, validTestEvent("event-two", "main"))
 
-	response, err := service.processBatch(context.Background(), first, state)
+	response, err := service.processBatch(context.Background(), first, state, service.config.Clock().UTC())
 	if err != nil || response.GetRetryBatch() == nil {
 		t.Fatalf("first response = (%#v, %v), want RetryBatch", response, err)
 	}
-	response, err = service.processBatch(context.Background(), second, state)
+	response, err = service.processBatch(context.Background(), second, state, service.config.Clock().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -782,11 +795,11 @@ func TestProcessBatchCapacityRetriesWithoutConsumingIdentity(t *testing.T) {
 	// Completing the original pending identity frees capacity. Because the
 	// rejected capacity attempt did not consume sequence two, it can be sent
 	// again without a sequence conflict or data loss.
-	response, err = service.processBatch(context.Background(), first, state)
+	response, err = service.processBatch(context.Background(), first, state, service.config.Clock().UTC())
 	if err != nil || response.GetBatchAck() == nil {
 		t.Fatalf("first retry response = (%#v, %v), want BatchAck", response, err)
 	}
-	response, err = service.processBatch(context.Background(), second, state)
+	response, err = service.processBatch(context.Background(), second, state, service.config.Clock().UTC())
 	if err != nil || response.GetBatchAck() == nil {
 		t.Fatalf("second retry response = (%#v, %v), want BatchAck", response, err)
 	}
@@ -808,9 +821,11 @@ func TestProcessBatchMapsDurableIdentityConflictToBatchReject(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			state := testBatchStreamState()
+			state := testBatchStreamState(service)
 			batch := validTestBatch("collector-a", "batch-conflict", 1, validTestEvent("event-one", "main"))
-			response, err := service.processBatch(context.Background(), batch, state)
+			response, err := service.processBatch(
+				context.Background(), batch, state, service.config.Clock().UTC(),
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -844,7 +859,9 @@ func TestProcessBatchTerminallyRejectsExpandedDurableOutbox(t *testing.T) {
 		events[i].Raw = []byte(strings.Repeat("token=x ", 8_000))
 	}
 	batch := validTestBatch("collector-a", "expanded-redaction", 1, events...)
-	response, err := service.processBatch(context.Background(), batch, testBatchStreamState())
+	response, err := service.processBatch(
+		context.Background(), batch, testBatchStreamState(service), service.config.Clock().UTC(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -882,7 +899,9 @@ func TestProcessBatchTerminallyRejectsOversizedDurableOutcome(t *testing.T) {
 	}
 	events = append(events, validTestEvent("accepted", "main"))
 	batch := validTestBatch("collector-a", "expanded-outcome", 1, events...)
-	response, err := service.processBatch(context.Background(), batch, testBatchStreamState())
+	response, err := service.processBatch(
+		context.Background(), batch, testBatchStreamState(service), service.config.Clock().UTC(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1180,7 +1199,7 @@ func staticTestAuthorizer() Authorizer {
 			SubjectID:         "token-1",
 			TenantID:          "tenant-a",
 			CollectorID:       "collector-a",
-			AuthorizedIndexes: []string{"main"},
+			AuthorizedIndexes: testIndexPolicies("main"),
 		}, nil
 	})
 }
@@ -1197,6 +1216,64 @@ type recoverableTestStore struct {
 	result      StoreResult
 	storeCalls  int
 	lookupCalls int
+}
+
+type pendingAuthorityTestStore struct {
+	result      StoreResult
+	storeCalls  int
+	lookupCalls int
+	resumeCalls int
+}
+
+type deferredAuthorityTestStore struct {
+	lookupState StoredBatchState
+	lookupErr   error
+	resumeErr   error
+	storeCalls  int
+	lookupCalls int
+	resumeCalls int
+}
+
+func (store *deferredAuthorityTestStore) Store(context.Context, StoreBatch) (StoreResult, error) {
+	store.storeCalls++
+	return StoreResult{}, errors.New("fresh Store must not run with deferred index authority")
+}
+
+func (store *deferredAuthorityTestStore) LookupBatch(
+	context.Context,
+	StoreBatchIdentity,
+) (StoredBatchState, StoreResult, error) {
+	store.lookupCalls++
+	return store.lookupState, StoreResult{}, store.lookupErr
+}
+
+func (store *deferredAuthorityTestStore) ResumeBatch(
+	context.Context,
+	StoreBatchIdentity,
+) (StoreResult, error) {
+	store.resumeCalls++
+	return StoreResult{}, store.resumeErr
+}
+
+func (store *pendingAuthorityTestStore) Store(context.Context, StoreBatch) (StoreResult, error) {
+	store.storeCalls++
+	return StoreResult{}, errors.New("fresh Store must not run for a pending durable batch")
+}
+
+func (store *pendingAuthorityTestStore) LookupBatch(
+	context.Context,
+	StoreBatchIdentity,
+) (StoredBatchState, StoreResult, error) {
+	store.lookupCalls++
+	return StoredBatchPending, StoreResult{}, nil
+}
+
+func (store *pendingAuthorityTestStore) ResumeBatch(
+	context.Context,
+	StoreBatchIdentity,
+) (StoreResult, error) {
+	store.resumeCalls++
+	return store.result, nil
 }
 
 type durableIdentityConflictTestStore struct {
@@ -1333,14 +1410,27 @@ func equalUint64s(left, right []uint64) bool {
 	return true
 }
 
-func testBatchStreamState() *streamState {
+func testBatchStreamState(service *Service) *streamState {
+	resolved, _ := service.resolveAuthorizedIndexPolicies(
+		testIndexPolicies("main"),
+		service.config.Clock().UTC(),
+	)
 	return &streamState{
 		collectorID:   "collector-a",
 		protocolMajor: 1,
 		protocolMinor: 0,
-		authorization: Authorization{TenantID: "tenant-a"},
-		authorizedIndexes: map[string]struct{}{
-			"main": {},
+		authorization: Authorization{
+			TenantID:          "tenant-a",
+			AuthorizedIndexes: resolved.policies,
 		},
+		indexPolicies: resolved.byName,
 	}
+}
+
+func testIndexPolicies(names ...string) []IndexPolicy {
+	policies := make([]IndexPolicy, len(names))
+	for index, name := range names {
+		policies[index] = IndexPolicy{Name: name, Version: 1}
+	}
+	return policies
 }

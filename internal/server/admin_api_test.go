@@ -1006,24 +1006,6 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "unenforced default sourcetype", path: "/api/v1/indexes/create",
-			request: func() proto.Message {
-				definition := adminTestIndexProto("sourcetype-policy")
-				definition.DefaultSourcetype = stringPointer("go:zap:json")
-				return &opensplunkv1.CreateIndexRequest{Definition: definition}
-			}(),
-			status: http.StatusBadRequest,
-		},
-		{
-			name: "unenforced per-index limits", path: "/api/v1/indexes/create",
-			request: func() proto.Message {
-				definition := adminTestIndexProto("limits-policy")
-				definition.Limits = &opensplunkv1.IndexLimits{MaxEventBytes: uint64Pointer(1024)}
-				return &opensplunkv1.CreateIndexRequest{Definition: definition}
-			}(),
-			status: http.StatusBadRequest,
-		},
-		{
 			name: "sub-millisecond index retention", path: "/api/v1/indexes/create",
 			request: func() proto.Message {
 				definition := adminTestIndexProto("sub-millisecond-retention")

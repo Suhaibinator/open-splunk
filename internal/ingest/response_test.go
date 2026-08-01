@@ -94,7 +94,9 @@ func TestCollectorMismatchBeforeBatchIDValidationStillReturnsBoundedRejection(t 
 		1,
 		validTestEvent("event-a", "main"),
 	)
-	response, err := service.processBatch(context.Background(), batch, testBatchStreamState())
+	response, err := service.processBatch(
+		context.Background(), batch, testBatchStreamState(service), service.config.Clock().UTC(),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

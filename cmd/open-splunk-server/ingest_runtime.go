@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -17,6 +18,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectoradmission"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
@@ -35,11 +37,12 @@ func normalizeRuntimeOptions(config *options) error {
 	if config == nil {
 		return errors.New("server options are required")
 	}
-	if config.indexRetention <= 0 {
-		return errors.New("default index retention must be positive")
-	}
-	if config.indexRetention%time.Millisecond != 0 {
-		return errors.New("default index retention must use whole milliseconds")
+	if err := indexpolicy.ValidateRetentionAt(
+		config.indexRetention,
+		time.Now().UTC(),
+		false,
+	); err != nil {
+		return fmt.Errorf("default index retention: %w", err)
 	}
 	searchHistoryRetention, err := searchhistory.ResolveRetentionPolicy(
 		config.searchHistoryMaximumAge,
@@ -149,14 +152,14 @@ func (authorizer collectorAuthorizer) Authorize(ctx context.Context, token strin
 		return ingest.Authorization{}, err
 	}
 	if authentication.TokenID == "" || authentication.BoundCollectorID == "" ||
-		len(authentication.AllowedIndexNames) == 0 {
+		len(authentication.AuthorizedIndexes) == 0 {
 		return ingest.Authorization{}, ingest.ErrUnauthorized
 	}
 	return ingest.Authorization{
 		SubjectID:         authentication.TokenID,
 		TenantID:          authorizer.tenantID,
 		CollectorID:       authentication.BoundCollectorID,
-		AuthorizedIndexes: append([]string(nil), authentication.AllowedIndexNames...),
+		AuthorizedIndexes: slices.Clone(authentication.AuthorizedIndexes),
 	}, nil
 }
 
@@ -250,7 +253,15 @@ func (manager collectorSessionManager) AuthorizeLease(
 		checkedAt,
 	)
 	if err != nil {
-		return ingest.Authorization{}, mapCollectorSessionError(err)
+		mapped := mapCollectorSessionError(err)
+		if errors.Is(mapped, ingest.ErrNoActiveIndexAuthority) ||
+			errors.Is(mapped, ingest.ErrInvalidIndexAuthority) {
+			return collectorAuthenticationAuthorization(
+				authentication,
+				lease.TenantID,
+			), mapped
+		}
+		return ingest.Authorization{}, mapped
 	}
 	return collectorAuthenticationAuthorization(
 		authentication,
@@ -320,7 +331,7 @@ func collectorAuthenticationAuthorization(
 		SubjectID:         authentication.TokenID,
 		TenantID:          tenantID,
 		CollectorID:       authentication.BoundCollectorID,
-		AuthorizedIndexes: append([]string(nil), authentication.AllowedIndexNames...),
+		AuthorizedIndexes: slices.Clone(authentication.AuthorizedIndexes),
 	}
 }
 
@@ -328,6 +339,10 @@ func mapCollectorSessionError(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, auth.ErrNoActiveIndexAuthority):
+		return ingest.ErrNoActiveIndexAuthority
+	case errors.Is(err, auth.ErrInvalidIndexAuthority):
+		return ingest.ErrInvalidIndexAuthority
 	case errors.Is(err, auth.ErrUnauthorized),
 		errors.Is(err, auth.ErrInactiveToken):
 		return ingest.ErrUnauthorized
@@ -373,8 +388,8 @@ func (provider controlRetentionProvider) RetentionForIndex(ctx context.Context, 
 	if retention == 0 {
 		retention = provider.defaultRetention
 	}
-	if retention <= 0 {
-		return 0, errors.New("resolve index retention: index has no positive retention period")
+	if err := indexpolicy.ValidateRetentionAt(retention, time.Now().UTC(), false); err != nil {
+		return 0, fmt.Errorf("resolve index retention: %w", err)
 	}
 	return retention, nil
 }

@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"gorm.io/gorm"
 )
 
@@ -22,7 +23,7 @@ const (
 	maximumIndexIDBytes          = 128
 	maximumIndexDisplayNameBytes = 255
 	maximumIndexDescriptionBytes = 8 << 10
-	maximumIndexSourcetypeBytes  = 255
+	maximumIndexSourcetypeBytes  = indexpolicy.MaximumDefaultSourcetypeBytes
 )
 
 var errIndexIDCollision = errors.New("control: index ID collision")
@@ -38,13 +39,7 @@ const (
 
 // IndexLimits contains optional per-event validation limits. A zero value
 // means the server-wide default is used.
-type IndexLimits struct {
-	MaxEventBytes     uint64
-	MaxFieldCount     uint32
-	MaxNestingDepth   uint32
-	MaximumFutureSkew time.Duration
-	MaximumEventAge   time.Duration
-}
+type IndexLimits = indexpolicy.Limits
 
 // IndexDefinition contains the mutable configuration of an index except for
 // Name, whose normalized value is immutable after creation.
@@ -94,11 +89,11 @@ func (db *DB) CreateIndex(ctx context.Context, definition IndexDefinition) (Inde
 	if err := ctx.Err(); err != nil {
 		return Index{}, err
 	}
-	definition, err := validateIndexDefinition(definition)
+	now := databaseTime(time.Now())
+	definition, err := validateIndexDefinition(definition, now)
 	if err != nil {
 		return Index{}, err
 	}
-	now := databaseTime(time.Now())
 
 	for attempt := 0; attempt < 3; attempt++ {
 		id, err := randomID("idx_", 16)
@@ -270,7 +265,8 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 	if err := validateExpectedVersion(expectedVersion); err != nil {
 		return Index{}, err
 	}
-	definition, err = validateIndexDefinition(definition)
+	now := databaseTime(time.Now())
+	definition, err = validateIndexDefinition(definition, now)
 	if err != nil {
 		return Index{}, err
 	}
@@ -310,7 +306,6 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 		}
 	}
 
-	now := databaseTime(time.Now())
 	// #nosec G115 -- validateExpectedVersion bounds expectedVersion by math.MaxInt64.
 	expectedVersionDB := int64(expectedVersion)
 	update := tx.Model(&indexRecord{}).
@@ -575,14 +570,7 @@ func indexFromRecord(record indexRecord) (Index, error) {
 			true,
 			true,
 		) != nil ||
-		validateIndexText(
-			record.DefaultSourcetype,
-			maximumIndexSourcetypeBytes,
-			true,
-			false,
-		) != nil ||
-		strings.TrimSpace(record.DefaultSourcetype) !=
-			record.DefaultSourcetype ||
+		!indexpolicy.ValidDefaultSourcetype(record.DefaultSourcetype) ||
 		record.CreatedAtUnixMicro <= 0 ||
 		record.CreatedAtUnixMicro > maximumControlTimestampUnixMicro ||
 		record.UpdatedAtUnixMicro < record.CreatedAtUnixMicro ||
@@ -601,6 +589,27 @@ func indexFromRecord(record indexRecord) (Index, error) {
 		!validIndexState(record.State) {
 		return Index{}, errors.New("invalid index record in control-plane database")
 	}
+	limits := IndexLimits{
+		// #nosec G115 -- the signed database scalar is checked nonnegative above.
+		MaxEventBytes: uint64(record.MaxEventBytes),
+		// #nosec G115 -- the scalar is checked in [0, MaxUint32] above.
+		MaxFieldCount: uint32(record.MaxFieldCount),
+		// #nosec G115 -- the scalar is checked in [0, MaxUint32] above.
+		MaxNestingDepth:   uint32(record.MaxNestingDepth),
+		MaximumFutureSkew: time.Duration(record.MaximumFutureSkewNanoseconds),
+		MaximumEventAge:   time.Duration(record.MaximumEventAgeNanoseconds),
+	}
+	if err := limits.Validate(); err != nil {
+		return Index{}, errors.New("invalid index record in control-plane database")
+	}
+	updatedAt := time.UnixMicro(record.UpdatedAtUnixMicro).UTC()
+	if err := indexpolicy.ValidateRetentionAt(
+		time.Duration(record.RetentionNanoseconds),
+		updatedAt,
+		true,
+	); err != nil {
+		return Index{}, errors.New("invalid index record in control-plane database")
+	}
 	return Index{
 		ID:      record.IndexID,
 		Version: uint64(record.Version),
@@ -612,17 +621,11 @@ func indexFromRecord(record indexRecord) (Index, error) {
 			IngestionEnabled:  record.IngestionEnabled == 1,
 			SearchEnabled:     record.SearchEnabled == 1,
 			DefaultSourcetype: record.DefaultSourcetype,
-			Limits: IndexLimits{
-				MaxEventBytes:     uint64(record.MaxEventBytes),
-				MaxFieldCount:     uint32(record.MaxFieldCount),
-				MaxNestingDepth:   uint32(record.MaxNestingDepth),
-				MaximumFutureSkew: time.Duration(record.MaximumFutureSkewNanoseconds),
-				MaximumEventAge:   time.Duration(record.MaximumEventAgeNanoseconds),
-			},
+			Limits:            limits,
 		},
 		State:     record.State,
 		CreatedAt: time.UnixMicro(record.CreatedAtUnixMicro).UTC(),
-		UpdatedAt: time.UnixMicro(record.UpdatedAtUnixMicro).UTC(),
+		UpdatedAt: updatedAt,
 	}, nil
 }
 
@@ -637,7 +640,10 @@ func indexLookupError(err error) error {
 	}
 }
 
-func validateIndexDefinition(definition IndexDefinition) (IndexDefinition, error) {
+func validateIndexDefinition(
+	definition IndexDefinition,
+	reference time.Time,
+) (IndexDefinition, error) {
 	name, err := NormalizeIndexName(definition.Name)
 	if err != nil {
 		return IndexDefinition{}, err
@@ -664,22 +670,14 @@ func validateIndexDefinition(definition IndexDefinition) (IndexDefinition, error
 	); err != nil {
 		return IndexDefinition{}, err
 	}
-	if err := validateIndexText(
-		definition.DefaultSourcetype,
-		maximumIndexSourcetypeBytes,
-		true,
-		false,
-	); err != nil {
-		return IndexDefinition{}, err
+	if !indexpolicy.ValidDefaultSourcetype(definition.DefaultSourcetype) {
+		return IndexDefinition{}, fmt.Errorf("%w: default sourcetype is invalid", ErrInvalidArgument)
 	}
-	if definition.RetentionPeriod < 0 || definition.Limits.MaximumFutureSkew < 0 || definition.Limits.MaximumEventAge < 0 {
-		return IndexDefinition{}, fmt.Errorf("%w: index durations cannot be negative", ErrInvalidArgument)
+	if err := indexpolicy.ValidateRetentionAt(definition.RetentionPeriod, reference, true); err != nil {
+		return IndexDefinition{}, fmt.Errorf("%w: index retention: %w", ErrInvalidArgument, err)
 	}
-	if definition.RetentionPeriod%time.Millisecond != 0 {
-		return IndexDefinition{}, fmt.Errorf("%w: index retention must use whole milliseconds", ErrInvalidArgument)
-	}
-	if definition.Limits.MaxEventBytes > math.MaxInt64 {
-		return IndexDefinition{}, fmt.Errorf("%w: max event bytes exceeds SQLite integer range", ErrInvalidArgument)
+	if err := definition.Limits.Validate(); err != nil {
+		return IndexDefinition{}, fmt.Errorf("%w: index limits: %w", ErrInvalidArgument, err)
 	}
 	return definition, nil
 }

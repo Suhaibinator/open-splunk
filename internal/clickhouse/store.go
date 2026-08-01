@@ -31,6 +31,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/proto"
@@ -68,8 +69,10 @@ var (
 	eventsInsertSQL = buildEventsInsertSQL(defaultDatabase, defaultTable)
 )
 
-// RetentionProvider resolves the authorized retention policy for one logical
-// index. A Store resolves it once per unique index in a batch; callers should
+// RetentionProvider resolves retention for trusted callers which do not carry
+// an admitted StoreBatch retention snapshot. Native collector ingestion sends
+// its transactional index-policy snapshot with every fresh batch, so that path
+// never re-reads mutable control-plane policy here. Fallback callers must
 // return the final positive duration, including any deployment default.
 type RetentionProvider interface {
 	RetentionForIndex(context.Context, string, string) (time.Duration, error)
@@ -989,7 +992,26 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 		return nil, errors.New("store ClickHouse batch: event count exceeds result range")
 	}
 
+	admittedRetention := batch.RetentionByIndex != nil
+	if admittedRetention {
+		if len(batch.RetentionByIndex) > len(batch.Events) {
+			return nil, errors.New("retention policy snapshot contains more indexes than accepted events")
+		}
+		if len(batch.RetentionByIndex) > int(ingest.HardMaxBatchEvents) {
+			return nil, fmt.Errorf(
+				"retention policy snapshot index count exceeds hard batch event limit %d",
+				ingest.HardMaxBatchEvents,
+			)
+		}
+	}
+
 	retentionByIndex := make(map[string]time.Duration)
+	if admittedRetention {
+		retentionByIndex = make(map[string]time.Duration, len(batch.RetentionByIndex))
+		for index, period := range batch.RetentionByIndex {
+			retentionByIndex[index] = period
+		}
+	}
 	metadataVersion := reservationMetadataVersion
 	if prior != nil {
 		metadata, err := decodeReservationMetadata(prior.Metadata)
@@ -1000,6 +1022,10 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 		metadataVersion = metadata.Version
 	}
 	rows := make([][]any, 0, len(batch.Events))
+	var acceptedIndexes map[string]struct{}
+	if admittedRetention {
+		acceptedIndexes = make(map[string]struct{}, len(retentionByIndex))
+	}
 	for i, stored := range batch.Events {
 		if stored == nil || stored.Event == nil {
 			return nil, fmt.Errorf("store ClickHouse batch: event %d is nil", i)
@@ -1037,8 +1063,8 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 		}
 
 		period, ok := retentionByIndex[event.GetIndexName()]
-		if !ok && prior != nil {
-			return nil, fmt.Errorf("persisted retention policy has no index %q", event.GetIndexName())
+		if !ok && (prior != nil || admittedRetention) {
+			return nil, fmt.Errorf("retention policy snapshot has no index %q", event.GetIndexName())
 		}
 		if !ok {
 			var retentionErr error
@@ -1047,6 +1073,9 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 				return nil, fmt.Errorf("resolve retention for index %q: %w", event.GetIndexName(), retentionErr)
 			}
 			retentionByIndex[event.GetIndexName()] = period
+		}
+		if admittedRetention {
+			acceptedIndexes[event.GetIndexName()] = struct{}{}
 		}
 
 		fields, fieldNames, fieldTypes, conversionErr := convertTypedObject(event.GetFields())
@@ -1097,6 +1126,9 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 			fieldTypes,
 			eventfields.CurrentFieldMetadataVersion,
 		})
+	}
+	if admittedRetention && len(acceptedIndexes) != len(retentionByIndex) {
+		return nil, errors.New("retention policy snapshot contains an unaccepted index")
 	}
 	return rows, nil
 }
@@ -1387,24 +1419,11 @@ func eventStoreMillis(value time.Time) time.Time {
 }
 
 func eventExpiration(indexTime time.Time, retention time.Duration) (time.Time, error) {
-	if retention <= 0 {
-		return time.Time{}, errors.New("duration must be positive")
-	}
-	if retention%time.Millisecond != 0 {
-		return time.Time{}, errors.New("duration must use whole milliseconds")
-	}
 	indexTime = eventStoreMillis(indexTime)
-	// The pinned native client encodes DateTime64 through time.UnixNano even
-	// at millisecond precision. Use the conservative nanosecond-safe range,
-	// which is narrower than ClickHouse's DateTime64(3) server range.
-	if indexTime.Before(MinimumSearchTime()) || indexTime.After(MaximumSearchTime()) {
-		return time.Time{}, errors.New("index time is outside the supported timestamp range")
+	if err := indexpolicy.ValidateRetentionAt(retention, indexTime, false); err != nil {
+		return time.Time{}, err
 	}
-	expiresAt := indexTime.Add(retention)
-	if expiresAt.After(MaximumSearchTime()) {
-		return time.Time{}, errors.New("expiration is outside the supported timestamp range")
-	}
-	return expiresAt, nil
+	return indexTime.Add(retention), nil
 }
 
 func eventExpirationForMetadata(

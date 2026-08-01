@@ -163,7 +163,10 @@ func startIngestServer(t *testing.T, store ingest.EventStore) string {
 
 func startIngestServerForIndexes(t *testing.T, store ingest.EventStore, indexes []string) string {
 	t.Helper()
-	authorizedIndexes := append([]string(nil), indexes...)
+	authorizedIndexes := make([]ingest.IndexPolicy, len(indexes))
+	for index, name := range indexes {
+		authorizedIndexes[index] = ingest.IndexPolicy{Name: name, Version: 1}
+	}
 	authorizer := ingest.AuthorizerFunc(func(_ context.Context, token string) (ingest.Authorization, error) {
 		if token != e2eToken {
 			return ingest.Authorization{}, fmt.Errorf("unexpected token")

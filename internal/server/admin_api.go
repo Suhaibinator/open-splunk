@@ -30,6 +30,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -46,7 +47,6 @@ const (
 	maximumTokenIDBytes           = 128
 	maximumDisplayNameBytes       = 255
 	maximumDescriptionBytes       = 8 << 10
-	maximumSourcetypeBytes        = 255
 	maximumAdminTextFilterBytes   = 255
 	maximumTokenNameBytes         = 255
 	maximumCollectorIDBytes       = 128
@@ -1560,6 +1560,9 @@ func indexDefinitionFromProto(input *opensplunkv1.IndexDefinition) (control.Inde
 	if err != nil {
 		return control.IndexDefinition{}, err
 	}
+	if err := indexpolicy.ValidateRetentionAt(retention, time.Now().UTC(), true); err != nil {
+		return control.IndexDefinition{}, errors.New("index retention period is invalid")
+	}
 	ingestionEnabled, err := accessStateFromProto(input.GetIngestionAccess(), "ingestion access")
 	if err != nil {
 		return control.IndexDefinition{}, err
@@ -1569,11 +1572,8 @@ func indexDefinitionFromProto(input *opensplunkv1.IndexDefinition) (control.Inde
 		return control.IndexDefinition{}, err
 	}
 	defaultSourcetype := strings.TrimSpace(input.GetDefaultSourcetype())
-	if err := validateAdminText(defaultSourcetype, maximumSourcetypeBytes, true, false); err != nil {
+	if !indexpolicy.ValidDefaultSourcetype(defaultSourcetype) {
 		return control.IndexDefinition{}, errors.New("default sourcetype is invalid")
-	}
-	if defaultSourcetype != "" {
-		return control.IndexDefinition{}, errors.New("default sourcetype is not enforced by ingestion and is not supported by this API version")
 	}
 	limits, err := indexLimitsFromProto(input.GetLimits())
 	if err != nil {
@@ -1628,11 +1628,8 @@ func applyIndexUpdate(current control.IndexDefinition, input *opensplunkv1.Index
 			result.SearchEnabled, err = accessStateFromProto(input.GetSearchAccess(), "search access")
 		case "default_sourcetype":
 			result.DefaultSourcetype = strings.TrimSpace(input.GetDefaultSourcetype())
-			if validateAdminText(result.DefaultSourcetype, maximumSourcetypeBytes, true, false) != nil {
+			if !indexpolicy.ValidDefaultSourcetype(result.DefaultSourcetype) {
 				return control.IndexDefinition{}, errors.New("default sourcetype is invalid")
-			}
-			if result.DefaultSourcetype != "" {
-				return control.IndexDefinition{}, errors.New("default sourcetype is not enforced by ingestion and is not supported by this API version")
 			}
 		case "limits":
 			result.Limits, err = indexLimitsFromProto(input.GetLimits())
@@ -1641,47 +1638,41 @@ func applyIndexUpdate(current control.IndexDefinition, input *opensplunkv1.Index
 			if input.GetLimits() != nil {
 				value = input.GetLimits().GetMaxEventBytes()
 			}
-			if value != 0 {
-				err = errors.New("per-index event byte limits are not enforced by ingestion and are not supported by this API version")
-			} else {
-				result.Limits.MaxEventBytes = value
-			}
+			result.Limits.MaxEventBytes = value
 		case "limits.max_field_count":
 			value := uint32(0)
 			if input.GetLimits() != nil {
 				value = input.GetLimits().GetMaxFieldCount()
 			}
-			if value != 0 {
-				err = errors.New("per-index field-count limits are not enforced by ingestion and are not supported by this API version")
-			} else {
-				result.Limits.MaxFieldCount = value
-			}
+			result.Limits.MaxFieldCount = value
 		case "limits.max_nesting_depth":
 			value := uint32(0)
 			if input.GetLimits() != nil {
 				value = input.GetLimits().GetMaxNestingDepth()
 			}
-			if value != 0 {
-				err = errors.New("per-index nesting limits are not enforced by ingestion and are not supported by this API version")
-			} else {
-				result.Limits.MaxNestingDepth = value
-			}
+			result.Limits.MaxNestingDepth = value
 		case "limits.maximum_future_skew":
 			var value *durationpb.Duration
 			if input.GetLimits() != nil {
 				value = input.GetLimits().GetMaximumFutureSkew()
 			}
-			result.Limits.MaximumFutureSkew, err = unsupportedIndexLimitDuration(value, "maximum future skew")
+			result.Limits.MaximumFutureSkew, err = nonnegativeProtoDuration(value, "maximum future skew")
 		case "limits.maximum_event_age":
 			var value *durationpb.Duration
 			if input.GetLimits() != nil {
 				value = input.GetLimits().GetMaximumEventAge()
 			}
-			result.Limits.MaximumEventAge, err = unsupportedIndexLimitDuration(value, "maximum event age")
+			result.Limits.MaximumEventAge, err = nonnegativeProtoDuration(value, "maximum event age")
 		}
 		if err != nil {
 			return control.IndexDefinition{}, err
 		}
+	}
+	if err := validateIndexLimits(result.Limits); err != nil {
+		return control.IndexDefinition{}, err
+	}
+	if err := indexpolicy.ValidateRetentionAt(result.RetentionPeriod, time.Now().UTC(), true); err != nil {
+		return control.IndexDefinition{}, errors.New("index retention period is invalid")
 	}
 	return result, nil
 }
@@ -1690,35 +1681,32 @@ func indexLimitsFromProto(input *opensplunkv1.IndexLimits) (control.IndexLimits,
 	if input == nil {
 		return control.IndexLimits{}, nil
 	}
-	if input.GetMaxEventBytes() != 0 || input.GetMaxFieldCount() != 0 || input.GetMaxNestingDepth() != 0 {
-		return control.IndexLimits{}, errors.New("per-index size, field-count, and nesting limits are not enforced by ingestion and are not supported by this API version")
-	}
-	futureSkew, err := unsupportedIndexLimitDuration(input.GetMaximumFutureSkew(), "maximum future skew")
+	futureSkew, err := nonnegativeProtoDuration(input.GetMaximumFutureSkew(), "maximum future skew")
 	if err != nil {
 		return control.IndexLimits{}, err
 	}
-	eventAge, err := unsupportedIndexLimitDuration(input.GetMaximumEventAge(), "maximum event age")
+	eventAge, err := nonnegativeProtoDuration(input.GetMaximumEventAge(), "maximum event age")
 	if err != nil {
 		return control.IndexLimits{}, err
 	}
-	return control.IndexLimits{
+	limits := control.IndexLimits{
 		MaxEventBytes: input.GetMaxEventBytes(), MaxFieldCount: input.GetMaxFieldCount(),
 		MaxNestingDepth: input.GetMaxNestingDepth(), MaximumFutureSkew: futureSkew, MaximumEventAge: eventAge,
-	}, nil
+	}
+	if err := validateIndexLimits(limits); err != nil {
+		return control.IndexLimits{}, err
+	}
+	return limits, nil
 }
 
-func unsupportedIndexLimitDuration(input *durationpb.Duration, field string) (time.Duration, error) {
-	value, err := nonnegativeProtoDuration(input, field)
-	if err != nil {
-		return 0, err
-	}
-	if value != 0 {
-		return 0, fmt.Errorf("per-index %s is not enforced by ingestion and is not supported by this API version", field)
-	}
-	return 0, nil
+func validateIndexLimits(limits control.IndexLimits) error {
+	return limits.Validate()
 }
 
 func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
+	if err := validateIndexLimits(record.Definition.Limits); err != nil {
+		return nil, errors.New("invalid index record")
+	}
 	normalizedName, nameErr := control.NormalizeIndexName(record.Definition.Name)
 	if record.ID == "" ||
 		strings.TrimSpace(record.ID) != record.ID ||
@@ -1728,9 +1716,8 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 		validateAdminText(record.Definition.DisplayName, maximumDisplayNameBytes, false, false) != nil ||
 		strings.TrimSpace(record.Definition.DisplayName) != record.Definition.DisplayName ||
 		validateAdminText(record.Definition.Description, maximumDescriptionBytes, true, true) != nil ||
-		validateAdminText(record.Definition.DefaultSourcetype, maximumSourcetypeBytes, true, false) != nil ||
-		record.Definition.DefaultSourcetype != "" || record.Definition.RetentionPeriod < 0 ||
-		record.Definition.RetentionPeriod%time.Millisecond != 0 || record.Definition.Limits != (control.IndexLimits{}) ||
+		!indexpolicy.ValidDefaultSourcetype(record.Definition.DefaultSourcetype) ||
+		record.Definition.RetentionPeriod < 0 || record.Definition.RetentionPeriod%time.Millisecond != 0 ||
 		indexStateToProto(record.State) == opensplunkv1.IndexState_INDEX_STATE_UNSPECIFIED ||
 		record.CreatedAt.IsZero() || record.UpdatedAt.Before(record.CreatedAt) {
 		return nil, errors.New("invalid index record")
@@ -1743,6 +1730,13 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := indexpolicy.ValidateRetentionAt(
+		record.Definition.RetentionPeriod,
+		record.UpdatedAt.UTC(),
+		true,
+	); err != nil {
+		return nil, errors.New("invalid index record")
+	}
 	definition := &opensplunkv1.IndexDefinition{
 		Name: record.Definition.Name, DisplayName: record.Definition.DisplayName,
 		IngestionAccess: accessState(record.Definition.IngestionEnabled), SearchAccess: accessState(record.Definition.SearchEnabled),
@@ -1753,10 +1747,39 @@ func indexToProto(record control.Index) (*opensplunkv1.Index, error) {
 	if record.Definition.RetentionPeriod > 0 {
 		definition.RetentionPeriod = durationpb.New(record.Definition.RetentionPeriod)
 	}
+	if record.Definition.DefaultSourcetype != "" {
+		definition.DefaultSourcetype = stringPointer(record.Definition.DefaultSourcetype)
+	}
+	definition.Limits = indexLimitsToProto(record.Definition.Limits)
 	return &opensplunkv1.Index{
 		IndexId: record.ID, Version: record.Version, Definition: definition,
 		State: indexStateToProto(record.State), CreatedAt: created, UpdatedAt: updated,
 	}, nil
+}
+
+func indexLimitsToProto(limits control.IndexLimits) *opensplunkv1.IndexLimits {
+	if limits == (control.IndexLimits{}) {
+		return nil
+	}
+	result := &opensplunkv1.IndexLimits{}
+	if limits.MaxEventBytes != 0 {
+		result.MaxEventBytes = uint64Pointer(limits.MaxEventBytes)
+	}
+	if limits.MaxFieldCount != 0 {
+		value := limits.MaxFieldCount
+		result.MaxFieldCount = &value
+	}
+	if limits.MaxNestingDepth != 0 {
+		value := limits.MaxNestingDepth
+		result.MaxNestingDepth = &value
+	}
+	if limits.MaximumFutureSkew != 0 {
+		result.MaximumFutureSkew = durationpb.New(limits.MaximumFutureSkew)
+	}
+	if limits.MaximumEventAge != 0 {
+		result.MaximumEventAge = durationpb.New(limits.MaximumEventAge)
+	}
+	return result
 }
 
 func tokenDefinitionFromProto(input *opensplunkv1.IngestionTokenDefinition) (auth.UpdateCollectorTokenRequest, error) {

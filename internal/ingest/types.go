@@ -10,6 +10,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
@@ -21,9 +22,9 @@ const (
 	// which exceed the durable ingestion format's assumptions.
 	HardMaxBatchEvents       uint32 = 1_000
 	HardMaxBatchBytes        uint64 = 8 << 20
-	HardMaxEventBytes        uint64 = 1 << 20
-	HardMaxFields            uint32 = eventfields.MaximumStoredFieldsPerEvent
-	HardMaxNestingDepth      uint32 = eventfields.MaximumDynamicPathSegments
+	HardMaxEventBytes        uint64 = indexpolicy.HardMaxEventBytes
+	HardMaxFields            uint32 = indexpolicy.HardMaxFieldCount
+	HardMaxNestingDepth      uint32 = indexpolicy.HardMaxNestingDepth
 	HardMaxFieldNameBytes    uint32 = eventfields.MaximumDynamicPathSegmentBytes
 	HardMaxIDBytes           uint32 = protocolid.MaximumBytes
 	HardMaxInFlightBatches   uint32 = 64
@@ -37,8 +38,8 @@ const (
 	// before gRPC compression. Oversized diagnostic lists are summarized so a
 	// valid permanent rejection can always reach the collector.
 	HardMaxCollectResponseBytes uint64 = 2 << 20
-	HardMaxEventAge                    = 365 * 24 * time.Hour
-	HardMaxFutureSkew                  = 5 * time.Minute
+	HardMaxEventAge                    = indexpolicy.HardMaxEventAge
+	HardMaxFutureSkew                  = indexpolicy.HardMaxFutureSkew
 )
 
 // ErrUnauthorized is returned by Authorizer only for invalid, expired,
@@ -48,6 +49,14 @@ const (
 var ErrUnauthorized = errors.New("ingest: collector credential is unauthorized")
 
 var (
+	// ErrNoActiveIndexAuthority means a freshly revalidated credential and
+	// exact lease have no current ingestion-enabled index. An exact durable
+	// batch lookup may precede this mutable-policy failure.
+	ErrNoActiveIndexAuthority = errors.New("ingest: collector has no active index authority")
+	// ErrInvalidIndexAuthority means a freshly revalidated credential and exact
+	// lease returned a corrupt bounded index projection. It must never admit a
+	// fresh batch or replace the stream's last valid policy snapshot.
+	ErrInvalidIndexAuthority = errors.New("ingest: collector index authority is invalid")
 	// ErrCollectorLeaseNotCurrent means a request no longer owns the exact
 	// enabled durable collector lease which admitted its stream.
 	ErrCollectorLeaseNotCurrent = errors.New("ingest: collector lease is not current")
@@ -150,6 +159,7 @@ type RedactionPolicy struct {
 type EventContext struct {
 	ReceivedAt         time.Time
 	TimestampReference time.Time
+	DefaultSourcetype  string
 	TenantID           string
 	CollectorID        string
 	BatchID            string
@@ -182,6 +192,15 @@ func (e *EventError) Error() string {
 	return e.Code.String()
 }
 
+// IndexLimits contains optional per-event validation limits for one index. A
+// zero value inherits the server-wide limit; a non-zero value can only tighten
+// that limit.
+type IndexLimits = indexpolicy.Limits
+
+// IndexPolicy is the immutable, versioned index-policy snapshot admitted at a
+// collector authorization boundary.
+type IndexPolicy = indexpolicy.Policy
+
 // Authorization is the result of authenticating one ingestion bearer token.
 // The native collector protocol requires a stable SubjectID, TenantID, and
 // CollectorID. An empty CollectorID represents a legacy unbound credential and
@@ -190,11 +209,12 @@ type Authorization struct {
 	SubjectID         string
 	TenantID          string
 	CollectorID       string
-	AuthorizedIndexes []string
+	AuthorizedIndexes []IndexPolicy
 }
 
-// Authorizer authenticates a bearer token and resolves its immutable ingestion
-// scope for the lifetime of a stream.
+// Authorizer performs the preliminary bearer check. CollectorSessionManager
+// returns the authoritative, freshly resolved policy snapshot at admission and
+// every protected stream boundary.
 type Authorizer interface {
 	Authorize(context.Context, string) (Authorization, error)
 }
@@ -208,7 +228,7 @@ func (f AuthorizerFunc) Authorize(ctx context.Context, token string) (Authorizat
 
 func cloneAuthorization(authorization Authorization) Authorization {
 	authorization.AuthorizedIndexes = append(
-		[]string(nil),
+		[]IndexPolicy(nil),
 		authorization.AuthorizedIndexes...,
 	)
 	return authorization
@@ -239,7 +259,10 @@ type CollectorSessionAdmission struct {
 // must read fresh credential and exact lease state from one consistent
 // snapshot. Activate must install that exact already-committed Lease in the
 // bounded process runtime before CollectorReady is sent. Heartbeat and
-// Disconnect must condition every mutation on Lease.
+// Disconnect must condition every mutation on Lease. AuthorizeLease may return
+// a verified nonzero identity with ErrNoActiveIndexAuthority or
+// ErrInvalidIndexAuthority; callers may use it only for exact durable batch
+// recovery and must reject every fresh operation.
 type CollectorSessionManager interface {
 	Admit(
 		context.Context,
@@ -279,6 +302,11 @@ type StoreBatch struct {
 	SourceBatchSHA256 [sha256.Size]byte
 	ReceivedAt        time.Time
 	Events            []*StoredEvent
+	// RetentionByIndex is the detached policy snapshot for exactly the indexes
+	// represented by Events. Every duration is positive. A nonnil map is
+	// authoritative, including when empty; nil is reserved for trusted legacy
+	// callers which explicitly require the Store's live fallback provider.
+	RetentionByIndex map[string]time.Duration
 	// RejectedEvents is the original, terminal disposition for source events
 	// omitted from Events. Durable stores retain it so a lost acknowledgment is
 	// reproduced exactly even if authorization or validation policy changes.

@@ -131,7 +131,7 @@ func TestCollectorTokenLifecycleStoresOnlyKeyedDigest(t *testing.T) {
 	}
 	if authentication.TokenID != issued.Token.ID ||
 		authentication.BoundCollectorID != testCollectorID ||
-		fmt.Sprint(authentication.AllowedIndexNames) != fmt.Sprint([]string{"audit", "main"}) {
+		fmt.Sprint(authentication.AuthorizedIndexNames()) != fmt.Sprint([]string{"audit", "main"}) {
 		t.Fatalf("Authenticate() = %#v", authentication)
 	}
 	if _, authorizeErr := store.Authorize(ctx, plaintext, "unrelated"); !errors.Is(authorizeErr, ErrUnauthorized) {
@@ -241,8 +241,8 @@ func TestAuthenticateRefreshesCurrentActiveScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authenticate(initial): %v", err)
 	}
-	if fmt.Sprint(authentication.AllowedIndexNames) != fmt.Sprint([]string{"first", "second"}) {
-		t.Fatalf("initial scopes = %v", authentication.AllowedIndexNames)
+	if fmt.Sprint(authentication.AuthorizedIndexNames()) != fmt.Sprint([]string{"first", "second"}) {
+		t.Fatalf("initial scopes = %v", authentication.AuthorizedIndexNames())
 	}
 
 	secondDefinition := second.Definition
@@ -254,8 +254,8 @@ func TestAuthenticateRefreshesCurrentActiveScopes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authenticate(partial scope): %v", err)
 	}
-	if fmt.Sprint(authentication.AllowedIndexNames) != fmt.Sprint([]string{"first"}) {
-		t.Fatalf("refreshed scopes = %v, want [first]", authentication.AllowedIndexNames)
+	if fmt.Sprint(authentication.AuthorizedIndexNames()) != fmt.Sprint([]string{"first"}) {
+		t.Fatalf("refreshed scopes = %v, want [first]", authentication.AuthorizedIndexNames())
 	}
 
 	if _, stateErr := db.SetIndexState(ctx, first.ID, first.Version, control.IndexStateArchived); stateErr != nil {

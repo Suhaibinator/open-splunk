@@ -708,7 +708,7 @@ func boundTestAuthorization(subjectID, tenantID, collectorID string) Authorizati
 		SubjectID:         subjectID,
 		TenantID:          tenantID,
 		CollectorID:       collectorID,
-		AuthorizedIndexes: []string{"main"},
+		AuthorizedIndexes: testIndexPolicies("main"),
 	}
 }
 

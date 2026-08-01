@@ -1069,6 +1069,121 @@ func TestStoreRetentionLookupIsCachedPerIndex(t *testing.T) {
 	}
 }
 
+func TestStoreUsesAdmittedRetentionSnapshotWithoutLivePolicyLookup(t *testing.T) {
+	t.Parallel()
+	conn := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	provider := &fakeRetentionProvider{err: errors.New("live retention must not be consulted")}
+	store := mustTestStore(t, conn, provider)
+	base := time.Date(2026, 7, 21, 1, 2, 3, 456789123, time.UTC)
+	_, err := store.Store(context.Background(), ingest.StoreBatch{
+		TenantID: "tenant", CollectorID: "collector", BatchID: "batch", BatchSequence: 7,
+		SourceBatchSHA256: testSourceBatchDigest("batch"),
+		ReceivedAt:        base,
+		RetentionByIndex: map[string]time.Duration{
+			"audit": 30 * 24 * time.Hour,
+			"main":  time.Hour,
+		},
+		Events: []*ingest.StoredEvent{
+			testStoredEvent("one", "main", base),
+			testStoredEvent("two", "audit", base),
+			testStoredEvent("three", "main", base),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	if len(provider.calls) != 0 {
+		t.Fatalf("live retention calls = %v", provider.calls)
+	}
+	wants := []time.Time{
+		base.Truncate(time.Millisecond).Add(time.Hour),
+		base.Truncate(time.Millisecond).Add(30 * 24 * time.Hour),
+		base.Truncate(time.Millisecond).Add(time.Hour),
+	}
+	for index, want := range wants {
+		if got := conn.batch.rows[index][eventExpiresAtColumn]; got != want {
+			t.Errorf("row %d expires_at = %v, want %v", index, got, want)
+		}
+	}
+}
+
+func TestStoreRejectsIncompleteOrExcessAdmittedRetentionSnapshot(t *testing.T) {
+	t.Parallel()
+	base := validStoreBatch()
+	base.RetentionByIndex = map[string]time.Duration{}
+
+	tests := []struct {
+		name      string
+		retention map[string]time.Duration
+	}{
+		{name: "missing accepted index", retention: map[string]time.Duration{}},
+		{name: "unaccepted index", retention: map[string]time.Duration{
+			"main": time.Hour, "other": time.Hour,
+		}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			batch := base
+			batch.RetentionByIndex = test.retention
+			provider := &fakeRetentionProvider{err: errors.New("live retention must not be consulted")}
+			conn := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+			store := mustTestStore(t, conn, provider)
+			if _, err := store.Store(context.Background(), batch); err == nil {
+				t.Fatal("Store succeeded")
+			}
+			if len(provider.calls) != 0 || conn.prepareCalls != 0 {
+				t.Fatalf("side effects: retention=%v prepare=%d", provider.calls, conn.prepareCalls)
+			}
+		})
+	}
+}
+
+func TestRowsForBatchRejectsExcessAdmittedRetentionBeforeEventFieldConversion(t *testing.T) {
+	t.Parallel()
+	batch := validStoreBatch()
+	batch.RetentionByIndex = map[string]time.Duration{
+		"main":  time.Hour,
+		"other": time.Hour,
+	}
+	batch.Events[0].Event.Fields = typedObjectValue(nil)
+	provider := &fakeRetentionProvider{err: errors.New("live retention must not be consulted")}
+	store := &Store{retention: provider}
+
+	if _, err := store.rowsForBatch(context.Background(), batch, nil); err == nil ||
+		!strings.Contains(err.Error(), "more indexes than accepted events") {
+		t.Fatalf("rowsForBatch error = %v, want admitted snapshot cardinality error", err)
+	}
+	if len(provider.calls) != 0 {
+		t.Fatalf("live retention calls = %v", provider.calls)
+	}
+}
+
+func TestRowsForBatchRejectsOversizedAdmittedRetentionBeforeEventFieldConversion(t *testing.T) {
+	t.Parallel()
+	batch := validStoreBatch()
+	count := int(ingest.HardMaxBatchEvents) + 1
+	batch.Events = make([]*ingest.StoredEvent, count)
+	batch.Events[0] = testStoredEvent("event", "main", batch.ReceivedAt)
+	batch.Events[0].Event.Fields = typedObjectValue(nil)
+	batch.RetentionByIndex = make(map[string]time.Duration, count)
+	batch.RetentionByIndex["main"] = time.Hour
+	for index := 1; index < count; index++ {
+		batch.RetentionByIndex[fmt.Sprintf("index-%04d", index)] = time.Hour
+	}
+	provider := &fakeRetentionProvider{err: errors.New("live retention must not be consulted")}
+	store := &Store{retention: provider}
+
+	if _, err := store.rowsForBatch(context.Background(), batch, nil); err == nil ||
+		!strings.Contains(err.Error(), "exceeds hard batch event limit") {
+		t.Fatalf("rowsForBatch error = %v, want admitted snapshot hard-limit error", err)
+	}
+	if len(provider.calls) != 0 {
+		t.Fatalf("live retention calls = %v", provider.calls)
+	}
+}
+
 func TestReservationMetadataBoundsMatchIndexScope(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC)
