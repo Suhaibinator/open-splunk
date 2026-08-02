@@ -3,6 +3,7 @@
 package privatefs
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -18,19 +19,35 @@ func TestValidateNoExtendedACLRejectsLinuxPOSIXACL(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = file.Close() })
 
-	// A POSIX ACL xattr begins with its little-endian version. The kernel
-	// validates the payload before storing it, so an empty ACL header is enough
-	// to exercise descriptor-based discovery without requiring setfacl.
-	aclHeader := []byte{2, 0, 0, 0}
+	// Linux canonicalizes a header-only ACL as "no ACL", so install a complete
+	// non-mode-equivalent access ACL. The mask entry makes the ACL extended and
+	// forces the kernel to retain the xattr instead of folding it into mode bits.
+	posixACL := []byte{
+		2, 0, 0, 0, // POSIX_ACL_XATTR_VERSION
+		1, 0, 6, 0, 0xff, 0xff, 0xff, 0xff, // ACL_USER_OBJ: rw-
+		4, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, // ACL_GROUP_OBJ: ---
+		16, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, // ACL_MASK: ---
+		32, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, // ACL_OTHER: ---
+	}
 	// #nosec G115 -- os.File descriptors are native int descriptors on Linux.
 	err = unix.Fsetxattr(
 		int(file.Fd()),
 		"system.posix_acl_access",
-		aclHeader,
+		posixACL,
 		0,
 	)
-	if err != nil {
+	if errors.Is(err, unix.ENOTSUP) {
 		t.Skipf("filesystem does not permit a POSIX ACL fixture: %v", err)
+	}
+	if err != nil {
+		t.Fatalf("install POSIX ACL fixture: %v", err)
+	}
+	if size, err := unix.Fgetxattr(
+		int(file.Fd()),
+		"system.posix_acl_access",
+		nil,
+	); err != nil || size == 0 {
+		t.Fatalf("POSIX ACL fixture was not retained: size=%d err=%v", size, err)
 	}
 	if err := validateNoExtendedACL(file); err == nil {
 		t.Fatal("validateNoExtendedACL accepted a POSIX ACL xattr")
