@@ -1916,6 +1916,18 @@ var eventStatsFieldAggregateDescriptors = [...]eventStatsFieldAggregateDescripto
 		suggestion: "eventstats max(field) AS maximum",
 	},
 	{
+		name:       "earliest",
+		function:   AggregateFunctionEarliest,
+		form:       "earliest(field)",
+		suggestion: "eventstats earliest(field) AS first_value",
+	},
+	{
+		name:       "latest",
+		function:   AggregateFunctionLatest,
+		form:       "latest(field)",
+		suggestion: "eventstats latest(field) AS last_value",
+	},
+	{
 		name:       "sum",
 		function:   AggregateFunctionSum,
 		form:       "sum(field)",
@@ -2100,10 +2112,14 @@ func supportedStatsAggregateName(name string) bool {
 func (p *parser) parseBoundedAggregateGroupFields(
 	commandName string,
 	article string,
-	rejectWildcards bool,
+	requireExactDistinctFields bool,
 	unsupportedSyntax func(token, string) *Diagnostic,
 ) ([]StatsGroupField, Position, error) {
 	fields := make([]StatsGroupField, 0, 4)
+	var seen map[string]struct{}
+	if requireExactDistinctFields {
+		seen = make(map[string]struct{}, 4)
+	}
 	end := p.current().sourceRange.Start
 	wantField := true
 	for !p.atCommandEnd() {
@@ -2131,10 +2147,16 @@ func (p *parser) parseBoundedAggregateGroupFields(
 				fmt.Sprintf("%s %s aggregate alias must appear before the BY clause", article, commandName),
 			)
 		}
-		if rejectWildcards && strings.Contains(tok.text, "*") {
+		if requireExactDistinctFields && strings.Contains(tok.text, "*") {
 			return nil, end, unsupportedSyntax(
 				tok,
 				fmt.Sprintf("wildcard %s grouping fields are not supported", commandName),
+			)
+		}
+		if _, duplicate := seen[tok.text]; requireExactDistinctFields && duplicate {
+			return nil, end, unsupportedSyntax(
+				tok,
+				fmt.Sprintf("%s grouping field %q is repeated", commandName, tok.text),
 			)
 		}
 		if len(fields) >= MaximumStatsGroupFields {
@@ -2143,6 +2165,9 @@ func (p *parser) parseBoundedAggregateGroupFields(
 				Message: fmt.Sprintf("%s BY contains more than %d grouping fields", commandName, MaximumStatsGroupFields),
 				Range:   tok.sourceRange,
 			}
+		}
+		if requireExactDistinctFields {
+			seen[tok.text] = struct{}{}
 		}
 		fields = append(fields, StatsGroupField{Name: tok.text, Range: tok.sourceRange})
 		end = tok.sourceRange.End

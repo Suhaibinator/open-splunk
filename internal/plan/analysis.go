@@ -94,6 +94,22 @@ func (analyzer *queryAnalyzer) addFields(fields []FieldRef, depth int) error {
 	return nil
 }
 
+func (analyzer *queryAnalyzer) addChronologicalTimeDependency(
+	function AggregateFunction,
+	source FieldRef,
+	depth int,
+) error {
+	if function != AggregateFunctionEarliest &&
+		function != AggregateFunctionLatest {
+		return nil
+	}
+	return analyzer.addField(FieldRef{
+		Name:      "_time",
+		Canonical: true,
+		Range:     source.Range,
+	}, depth)
+}
+
 func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error {
 	if err := analyzer.enter(depth); err != nil {
 		return err
@@ -170,6 +186,13 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 				return err
 			}
 		}
+		if err := analyzer.addChronologicalTimeDependency(
+			operator.Measure.Function,
+			operator.Measure.Input,
+			depth+1,
+		); err != nil {
+			return err
+		}
 		if operator.Measure.Predicate != nil {
 			if err := analyzer.visitExpression(
 				operator.Measure.Predicate,
@@ -198,6 +221,13 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 				if err := analyzer.addField(measure.Input, depth+1); err != nil {
 					return err
 				}
+			}
+			if err := analyzer.addChronologicalTimeDependency(
+				measure.Function,
+				measure.Input,
+				depth+1,
+			); err != nil {
+				return err
 			}
 			if measure.Predicate != nil {
 				if err := analyzer.visitExpression(measure.Predicate, depth+1); err != nil {

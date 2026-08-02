@@ -613,7 +613,8 @@ func (c *StatsCommand) SourceRange() Range { return c.Range }
 // argument-free AggregateFunctionCount, exact-field
 // AggregateFunctionCountValues, true-only AggregateFunctionCountPredicate, or
 // exact-field AggregateFunctionPercentile/AggregateFunctionMinimum/
-// AggregateFunctionMaximum/
+// AggregateFunctionMaximum/AggregateFunctionEarliest/
+// AggregateFunctionLatest/
 // AggregateFunctionSum/AggregateFunctionAverage/
 // AggregateFunctionDistinctCount while retaining the singular aggregate's
 // source locations through StatsAggregate.

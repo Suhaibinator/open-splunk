@@ -65,6 +65,27 @@ func TestParseEventStatsFieldAggregatesAcceptExactFieldAndPreserveSourceRanges(
 			aggregateText: "MaX(http.latency) aS ceilingLatency",
 		},
 		{
+			name:          "earliest global",
+			function:      AggregateFunctionEarliest,
+			functionName:  "earliest",
+			source:        `index=main | eventstats earliest(status) AS first_status`,
+			input:         "status",
+			output:        "first_status",
+			commandText:   "eventstats earliest(status) AS first_status",
+			aggregateText: "earliest(status) AS first_status",
+		},
+		{
+			name:          "latest grouped case insensitive function and keywords",
+			function:      AggregateFunctionLatest,
+			functionName:  "latest",
+			source:        "index=main\n| EvEnTsTaTs LaTeSt(http.status) aS lastStatus bY Host, source",
+			input:         "http.status",
+			output:        "lastStatus",
+			groupNames:    []string{"Host", "source"},
+			commandText:   "EvEnTsTaTs LaTeSt(http.status) aS lastStatus bY Host, source",
+			aggregateText: "LaTeSt(http.status) aS lastStatus",
+		},
+		{
 			name:          "sum global",
 			function:      AggregateFunctionSum,
 			functionName:  "sum",
@@ -167,6 +188,8 @@ func TestParseEventStatsFieldAggregatesRequireExplicitAlias(t *testing.T) {
 	}{
 		{"minimum", "min", "latency_ms", "eventstats min(field) AS minimum"},
 		{"maximum", "max", "latency_ms", "eventstats max(field) AS maximum"},
+		{"earliest", "earliest", "status", "eventstats earliest(field) AS first_value"},
+		{"latest", "latest", "status", "eventstats latest(field) AS last_value"},
 		{"sum", "sum", "bytes", "eventstats sum(field) AS total"},
 		{"average", "avg", "duration_ms", "eventstats avg(field) AS mean"},
 	} {

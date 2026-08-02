@@ -135,6 +135,17 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 			},
 		},
 		{
+			name: "chronological aggregate implicit time dependency",
+			operator: &Aggregate{Measures: []AggregateMeasure{
+				{
+					Function: AggregateFunctionEarliest,
+					Input:    mustResolveEventAggregateField(t, "chronological_input"),
+					Output:   "first",
+				},
+			}},
+			want: []string{"_time", "chronological_input"},
+		},
+		{
 			name: "timechart axes",
 			operator: &Timechart{
 				Time:    mustResolveEventAggregateField(t, "_time"),

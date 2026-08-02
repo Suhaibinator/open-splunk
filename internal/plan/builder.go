@@ -36,7 +36,8 @@ const (
 	maxTimechartSeries                  = 12
 	eventStatsSupportedAggregateMessage = "eventstats currently supports exactly one count, " +
 		"count(field), count(eval(predicate)), pN(field), percN(field), min(field), " +
-		"max(field), sum(field), avg(field), or dc(field) AS output measure"
+		"max(field), earliest(field), latest(field), sum(field), avg(field), or " +
+		"dc(field) AS output measure"
 	// Chart's row axis is runtime data rather than a plan-time constant, so
 	// it carries its own explicit ceiling. Splunk truncates at the
 	// installation-configurable maxresultrows; this backend instead fails
@@ -609,6 +610,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					return nil, inputErr
 				}
 			case spl.AggregateFunctionMinimum, spl.AggregateFunctionMaximum,
+				spl.AggregateFunctionEarliest,
+				spl.AggregateFunctionLatest,
 				spl.AggregateFunctionSum,
 				spl.AggregateFunctionAverage,
 				spl.AggregateFunctionDistinctCount:
@@ -621,6 +624,12 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				case spl.AggregateFunctionMaximum:
 					function = AggregateFunctionMaximum
 					form = "max(field)"
+				case spl.AggregateFunctionEarliest:
+					function = AggregateFunctionEarliest
+					form = "earliest(field)"
+				case spl.AggregateFunctionLatest:
+					function = AggregateFunctionLatest
+					form = "latest(field)"
 				case spl.AggregateFunctionSum:
 					function = AggregateFunctionSum
 					form = "sum(field)"
@@ -663,6 +672,19 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
 					Message: eventStatsSupportedAggregateMessage,
 					Range:   aggregate.Range,
+				}
+			}
+			if (aggregate.Function == spl.AggregateFunctionEarliest ||
+				aggregate.Function == spl.AggregateFunctionLatest) &&
+				!canonicalTimeAvailable {
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_EVENTSTATS_TIME_FIELD",
+					Message: "eventstats earliest and latest require the " +
+						"unmodified canonical _time field",
+					Range: aggregate.Range,
+					Suggestions: []string{
+						"run eventstats earliest or latest before removing, replacing, or transforming _time",
+					},
 				}
 			}
 			if !outputSchemaKnown {

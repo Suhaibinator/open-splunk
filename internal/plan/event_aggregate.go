@@ -8,8 +8,8 @@ import (
 
 // validEventAggregateContract recognizes the deliberately narrow,
 // row-preserving eventstats count/count(field)/count(eval(predicate)),
-// pN/percN(field), min(field), max(field), sum(field), avg(field), or dc(field)
-// plan contract.
+// pN/percN(field), min(field), max(field), earliest(field), latest(field),
+// sum(field), avg(field), or dc(field) plan contract.
 // Consumers that use event provenance metadata must fail closed when handed
 // forged logical operators.
 func validEventAggregateContract(operator *EventAggregate) bool {
@@ -33,6 +33,8 @@ func validEventAggregateContract(operator *EventAggregate) bool {
 		}
 	case AggregateFunctionCountValues, AggregateFunctionMinimum,
 		AggregateFunctionMaximum,
+		AggregateFunctionEarliest,
+		AggregateFunctionLatest,
 		AggregateFunctionSum,
 		AggregateFunctionAverage,
 		AggregateFunctionDistinctCount:

@@ -620,10 +620,12 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 				!strings.Contains(command.Detail, "pN/percN percentile") ||
 				!strings.Contains(command.Detail, "minimum") ||
 				!strings.Contains(command.Detail, "maximum") ||
+				!strings.Contains(command.Detail, "chronologically earliest") ||
+				!strings.Contains(command.Detail, "chronologically latest") ||
 				!strings.Contains(command.Detail, "numeric sum") ||
 				!strings.Contains(command.Detail, "numeric average") {
 				t.Fatalf(
-					"eventstats detail = %q, want conditional-count, exact-distinct, percentile, minimum, maximum, sum, and average description",
+					"eventstats detail = %q, want conditional-count, exact-distinct, percentile, minimum, maximum, chronological, sum, and average description",
 					command.Detail,
 				)
 			}

@@ -449,9 +449,9 @@ func TestAnalyzeEventStatsSumAcceptsResolvedInputAndRejectsForgedMetadata(
 			},
 		},
 		{
-			name: "chronological function remains unsupported",
+			name: "list function remains unsupported",
 			mutate: func(measure *AggregateMeasure) {
-				measure.Function = AggregateFunctionEarliest
+				measure.Function = AggregateFunctionList
 			},
 		},
 	}

@@ -152,15 +152,17 @@ func TestCompileStatsChronologicalMultivalueUsesBoundedRowCandidatesAndFinalVali
 	}
 	earliest := chronologicalAggregateCall(t, compiled.SQL, "argMinOrNullIf(")
 	if !strings.Contains(earliest, `tupleElement("__os_chronological_candidates_0", 1)`) ||
-		!strings.Contains(earliest, `toUInt64(1)`) {
+		!strings.Contains(earliest, `tupleElement("__os_chronological_candidates_0", 5)`) {
 		t.Fatalf("earliest does not select the first eligible row member:\n%s", earliest)
 	}
 	latest := chronologicalAggregateCall(t, compiled.SQL, "argMaxOrNullIf(")
 	if !strings.Contains(latest, `tupleElement("__os_chronological_candidates_0", 2)`) ||
-		!strings.Contains(latest, `toUInt64(tupleElement("__os_chronological_candidates_0", 3))`) {
+		!strings.Contains(latest, `tupleElement("__os_chronological_candidates_0", 6)`) {
 		t.Fatalf("latest does not select the last eligible row member:\n%s", latest)
 	}
-	for _, selector := range []string{"arrayFirst(", "arrayLast(", "arrayCount(", "arrayExists("} {
+	for _, selector := range []string{
+		"arrayFirstIndex(", "arrayLastIndex(", "arrayExists(",
+	} {
 		if !strings.Contains(compiled.SQL, selector) {
 			t.Fatalf("dynamic input is missing bounded selector %q:\n%s", selector, compiled.SQL)
 		}
@@ -231,6 +233,52 @@ func TestCompileStatsChronologicalMultivalueUsesBoundedRowCandidatesAndFinalVali
 		if strings.Count(distinctInputs.SQL, distinctValidation) != 1 {
 			t.Fatalf("distinct inputs did not receive separate validation state %q:\n%s", distinctValidation, distinctInputs.SQL)
 		}
+	}
+}
+
+func TestCompileStatsChronologicalOnlyNormalizesRequestedDirections(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		function  string
+		required  []string
+		forbidden []string
+	}{
+		{
+			name: "earliest", function: "earliest",
+			required: []string{"arrayFirstIndex(", "argMinOrNullIf("},
+			forbidden: []string{
+				"arrayFirst(", "arrayLast(", "arrayLastIndex(", "arrayCount(", "argMaxOrNullIf(",
+			},
+		},
+		{
+			name: "latest", function: "latest",
+			required: []string{"arrayLastIndex(", "argMaxOrNullIf("},
+			forbidden: []string{
+				"arrayLast(", "arrayFirst(", "arrayFirstIndex(", "arrayCount(", "argMinOrNullIf(",
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			compiled := compileSPL(
+				t,
+				`index=gradethis | stats `+test.function+`(payload) AS selected`,
+			)
+			for _, required := range test.required {
+				if !strings.Contains(compiled.SQL, required) {
+					t.Fatalf("%s lowering is missing %q:\n%s", test.name, required, compiled.SQL)
+				}
+			}
+			for _, forbidden := range test.forbidden {
+				if strings.Contains(compiled.SQL, forbidden) {
+					t.Fatalf("%s lowering retained unused %q:\n%s", test.name, forbidden, compiled.SQL)
+				}
+			}
+		})
 	}
 }
 

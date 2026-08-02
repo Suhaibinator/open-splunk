@@ -50,40 +50,16 @@ func testEventStatsMaximumAgainstClickHouse(
 			` | eventstats max(eventstats_min_value) AS high BY eventstats_min_group` +
 			` | where high="z" | sort event_id | table event_id low high`,
 	)
-	type extremaRow struct {
-		id   string
-		low  any
-		high any
-	}
-	rows, err := connection.Query(ctx, stacked.SQL, stacked.Args...)
-	if err != nil {
-		t.Fatalf(
-			"execute stacked eventstats min/max: %v\nSQL: %s\nargs: %#v",
-			err,
-			stacked.SQL,
-			stacked.Args,
-		)
-	}
-	var got []extremaRow
-	for rows.Next() {
-		var id string
-		var low, high chcol.Dynamic
-		if scanErr := rows.Scan(&id, &low, &high); scanErr != nil {
-			_ = rows.Close()
-			t.Fatalf("scan stacked eventstats min/max: %v", scanErr)
-		}
-		got = append(got, extremaRow{id: id, low: low.Any(), high: high.Any()})
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		_ = rows.Close()
-		t.Fatalf("iterate stacked eventstats min/max: %v", rowsErr)
-	}
-	if closeErr := rows.Close(); closeErr != nil {
-		t.Fatalf("close stacked eventstats min/max rows: %v", closeErr)
-	}
-	want := []extremaRow{
-		{id: "eventstats-min-01-int", low: float64(1), high: "z"},
-		{id: "eventstats-min-02-multivalue", low: float64(1), high: "z"},
+	got := collectEventStatsDynamicPairRows(
+		t,
+		ctx,
+		connection,
+		"stacked eventstats min/max",
+		stacked,
+	)
+	want := []eventStatsDynamicPairRow{
+		{id: "eventstats-min-01-int", first: float64(1), second: "z"},
+		{id: "eventstats-min-02-multivalue", first: float64(1), second: "z"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("stacked eventstats min/max = %#v, want %#v", got, want)

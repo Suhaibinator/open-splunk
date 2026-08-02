@@ -742,6 +742,7 @@ func testStatsChronologicalHighCardinalityMultivalue(
 			kind:           fieldKindDynamic,
 		},
 		true,
+		chronologicalDirections{earliest: true, latest: true},
 	)
 	if len(candidateArgs) != 0 || !runtimeValidated {
 		t.Fatalf(
@@ -750,25 +751,37 @@ func testStatsChronologicalHighCardinalityMultivalue(
 			runtimeValidated,
 		)
 	}
-	var firstBytes, lastBytes, eligible, invalid uint64
+	var firstBytes, lastBytes, eligible, invalid, firstOrdinals, lastOrdinals uint64
 	if err := connection.QueryRow(
 		ctx,
 		`SELECT sum(length(tupleElement("__os_candidates", 1))), `+
 			`sum(length(tupleElement("__os_candidates", 2))), `+
 			`sum(tupleElement("__os_candidates", 3)), `+
-			`sum(tupleElement("__os_candidates", 4)) FROM (`+
+			`sum(tupleElement("__os_candidates", 4)), `+
+			`sum(tupleElement("__os_candidates", 5)), `+
+			`sum(tupleElement("__os_candidates", 6)) FROM (`+
 			`SELECT `+candidates+` AS "__os_candidates" FROM `+table+`) `+
 			`SETTINGS max_threads = 1, use_query_cache = 0, max_memory_usage = 1073741824`,
-	).Scan(&firstBytes, &lastBytes, &eligible, &invalid); err != nil {
+	).Scan(
+		&firstBytes,
+		&lastBytes,
+		&eligible,
+		&invalid,
+		&firstOrdinals,
+		&lastOrdinals,
+	); err != nil {
 		t.Fatalf("execute high-cardinality chronological candidates: %v", err)
 	}
-	if firstBytes != 40 || lastBytes != 32 || eligible != 2_000_000 || invalid != 0 {
+	if firstBytes != 40 || lastBytes != 32 || eligible != 8 || invalid != 0 ||
+		firstOrdinals != 8 || lastOrdinals != 2_000_000 {
 		t.Fatalf(
-			"high-cardinality chronological candidates = %d/%d/%d/%d, want 40/32/2000000/0",
+			"high-cardinality chronological candidates = %d/%d/%d/%d/%d/%d, want 40/32/8/0/8/2000000",
 			firstBytes,
 			lastBytes,
 			eligible,
 			invalid,
+			firstOrdinals,
+			lastOrdinals,
 		)
 	}
 }

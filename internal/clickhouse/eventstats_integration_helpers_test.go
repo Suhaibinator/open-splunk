@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
@@ -18,6 +19,53 @@ type eventStatsFieldPresence struct {
 	nulls   uint64
 	missing uint64
 	total   uint64
+}
+
+type eventStatsDynamicPairRow struct {
+	id     string
+	first  any
+	second any
+}
+
+func collectEventStatsDynamicPairRows(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	name string,
+	query CompiledQuery,
+) []eventStatsDynamicPairRow {
+	t.Helper()
+
+	rows, err := connection.Query(ctx, query.SQL, query.Args...)
+	if err != nil {
+		t.Fatalf(
+			"execute %s: %v\nSQL: %s\nargs: %#v",
+			name,
+			err,
+			query.SQL,
+			query.Args,
+		)
+	}
+	var got []eventStatsDynamicPairRow
+	for rows.Next() {
+		var id string
+		var first, second chcol.Dynamic
+		if err := rows.Scan(&id, &first, &second); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan %s: %v", name, err)
+		}
+		got = append(got, eventStatsDynamicPairRow{
+			id: id, first: first.Any(), second: second.Any(),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate %s: %v", name, err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close %s rows: %v", name, err)
+	}
+	return got
 }
 
 func collectEventStatsFieldPresence(

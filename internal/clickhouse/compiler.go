@@ -11860,6 +11860,16 @@ func eventAggregateMeasureSpecFor(
 			spec.valuePrefix = "__os_eventstats_value_max_"
 		}
 		return spec, nil
+	case plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
+		spec.materialized = true
+		spec.numberType = ""
+		spec.numericIntegral = false
+		if measure.Function == plan.AggregateFunctionEarliest {
+			spec.valuePrefix = "__os_eventstats_value_earliest_"
+		} else {
+			spec.valuePrefix = "__os_eventstats_value_latest_"
+		}
+		return spec, nil
 	default:
 		return eventAggregateMeasureSpec{}, fmt.Errorf(
 			"compile ClickHouse eventstats: unsupported function %d",
@@ -12055,7 +12065,8 @@ func compileEventAggregate(
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionPercentile,
 		plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
-		plan.AggregateFunctionMaximum, plan.AggregateFunctionDistinctCount:
+		plan.AggregateFunctionMaximum, plan.AggregateFunctionEarliest,
+		plan.AggregateFunctionLatest, plan.AggregateFunctionDistinctCount:
 		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
 			return compiledRelation{}, compileState{}, nil, nil, &plan.Diagnostic{
 				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
@@ -12217,6 +12228,48 @@ func compileEventAggregate(
 						inputSQL,
 					), nil
 				}
+			}
+		case plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
+			chronologicalFunction := measure.Function
+			candidateSQL, candidateArgs, runtimeValidated, candidateErr :=
+				eventStatsChronologicalCandidateSQL(
+					chronologicalFunction,
+					input,
+					exists,
+				)
+			if candidateErr != nil {
+				return compiledRelation{}, compileState{}, nil, nil, candidateErr
+			}
+			if len(operator.GroupBy) > 0 {
+				rowEligibleSQL := quoteIdentifier(fmt.Sprintf(
+					"__os_eventstats_eligible_%d",
+					stage,
+				)) + " != 0"
+				candidateSQL = "if(" + rowEligibleSQL + ", " + candidateSQL +
+					", " + emptyEventStatsChronologicalCandidateSQL() + ")"
+				measureUsesGroupEligibility = true
+			}
+			measureInputSQL = "tuple(" + candidateSQL + ", " +
+				immutableChronologicalRowKeySQL() + ")"
+			measureInputArgs = candidateArgs
+			measureAggregateSQL = func(inputSQL string) (string, error) {
+				return eventStatsChronologicalAggregateSQL(
+					chronologicalFunction,
+					inputSQL,
+				)
+			}
+			outputState = fieldState{
+				kind:           fieldKindDynamic,
+				dynamicTypeSQL: "dynamicType(" + quoteIdentifier(output.Name) + ")",
+			}
+			if exists {
+				outputState.maxStringBytes = fieldStateStringByteBound(input)
+			}
+			measureNullSQL = "CAST(NULL AS Dynamic)"
+			measurePublishValueSQL = chronologicalPublishedValueSQL
+			measurePublishTypeSQL = chronologicalPublishedTypeSQL
+			if runtimeValidated {
+				measureValidationSQL = eventStatsChronologicalValidationSQL
 			}
 		}
 	}
@@ -12547,6 +12600,20 @@ func validateEventAggregate(
 		)
 	}
 	measure := operator.Measure
+	if measure.Function == plan.AggregateFunctionEarliest ||
+		measure.Function == plan.AggregateFunctionLatest {
+		if !hasCanonicalEventTime(state) {
+			return plan.FieldRef{}, &plan.Diagnostic{
+				Code: "SPL_UNSUPPORTED_EVENTSTATS_TIME_FIELD",
+				Message: "eventstats earliest and latest require event rows " +
+					"with the unmodified canonical _time field",
+				Range: measure.Input.Range,
+				Suggestions: []string{
+					"run eventstats earliest or latest before removing, replacing, or transforming _time",
+				},
+			}
+		}
+	}
 	switch measure.Function {
 	case plan.AggregateFunctionCountRows:
 		if measure.Input.Name != "" ||
@@ -12561,7 +12628,8 @@ func validateEventAggregate(
 		}
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
-		plan.AggregateFunctionMaximum, plan.AggregateFunctionDistinctCount:
+		plan.AggregateFunctionMaximum, plan.AggregateFunctionEarliest,
+		plan.AggregateFunctionLatest, plan.AggregateFunctionDistinctCount:
 		form := "count(field)"
 		switch measure.Function {
 		case plan.AggregateFunctionSum:
@@ -12572,6 +12640,10 @@ func validateEventAggregate(
 			form = "min(field)"
 		case plan.AggregateFunctionMaximum:
 			form = "max(field)"
+		case plan.AggregateFunctionEarliest:
+			form = "earliest(field)"
+		case plan.AggregateFunctionLatest:
+			form = "latest(field)"
 		case plan.AggregateFunctionDistinctCount:
 			form = "dc(field)"
 		}
@@ -12614,7 +12686,7 @@ func validateEventAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), dc(field), min(field), max(field), sum(field), avg(field), or pN/percN(field) is supported",
+			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), dc(field), min(field), max(field), earliest(field), latest(field), sum(field), avg(field), or pN/percN(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -12810,6 +12882,12 @@ func validateAggregateCardinality(operator *plan.Aggregate) error {
 	return nil
 }
 
+func hasCanonicalEventTime(state compileState) bool {
+	timeField, ok := state.visible["_time"]
+	return state.eventRows && ok && timeField.kind == fieldKindTime &&
+		timeField.canonicalTime
+}
+
 func compileAggregate(operator *plan.Aggregate, state compileState) (
 	projection []string,
 	predicates []string,
@@ -12844,8 +12922,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			measure.Function != plan.AggregateFunctionLatest {
 			continue
 		}
-		timeField, ok := state.visible["_time"]
-		if !state.eventRows || !ok || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+		if !hasCanonicalEventTime(state) {
 			return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
 				Code:        "SPL_UNSUPPORTED_STATS_TIME_FIELD",
 				Message:     "earliest and latest require event rows with the unmodified canonical _time field",
@@ -13024,6 +13101,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 	}
 	chronologicalInputs := make(map[string]chronologicalInput)
 	chronologicalResults := make(map[chronologicalResultKey]chronologicalResult)
+	chronologicalInputDirections := make(map[string]chronologicalDirections)
 	chronologicalRowKey := ""
 	exactStringSets := make(map[string]string)
 	distinctCounts := make(map[string]string)
@@ -13037,6 +13115,16 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 	numericArrayConsumers := make(map[string]struct{})
 	percentileLevels := make(map[string][]uint8)
 	for _, measure := range operator.Measures {
+		if measure.Function == plan.AggregateFunctionEarliest ||
+			measure.Function == plan.AggregateFunctionLatest {
+			directions := chronologicalInputDirections[measure.Input.Name]
+			if measure.Function == plan.AggregateFunctionEarliest {
+				directions.earliest = true
+			} else {
+				directions.latest = true
+			}
+			chronologicalInputDirections[measure.Input.Name] = directions
+		}
 		if measure.Function == plan.AggregateFunctionValues {
 			valuesInputs[measure.Input.Name] = struct{}{}
 		}
@@ -13137,14 +13225,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		chronologicalRowKey = quoteIdentifier("__os_chronological_row_key")
 		next.preAggregateColumns = append(
 			next.preAggregateColumns,
-			"tuple("+
-				strings.Join([]string{
-					quoteIdentifier(internalSortTimeColumn),
-					quoteIdentifier(internalSortIDColumn),
-					quoteIdentifier(internalSortVisibilityColumn),
-					quoteIdentifier(internalSortSourceIdentityColumn),
-				}, ", ")+
-				") AS "+chronologicalRowKey,
+			immutableChronologicalRowKeySQL()+" AS "+chronologicalRowKey,
 		)
 		return chronologicalRowKey
 	}
@@ -13158,7 +13239,11 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		}
 		ordinal := len(chronologicalInputs)
 		compiled := chronologicalInput{}
-		candidatesSQL, candidateArgs, runtimeValidated := chronologicalCandidatesSQL(input, exists)
+		candidatesSQL, candidateArgs, runtimeValidated := chronologicalCandidatesSQL(
+			input,
+			exists,
+			chronologicalInputDirections[ref.Name],
+		)
 		compiled.candidatesAlias = quoteIdentifier(fmt.Sprintf(
 			"__os_chronological_candidates_%d",
 			ordinal,
@@ -13534,20 +13619,15 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 					)),
 				}
 				chronologicalResults[resultKey] = result
-				function := "argMinOrNullIf"
-				argument := "tupleElement(" + input.candidatesAlias + ", 1)"
-				key := "tuple(" + rowKey + ", toUInt64(1))"
-				count := "tupleElement(" + input.candidatesAlias + ", 3)"
-				condition := count + " != 0"
-				if measure.Function == plan.AggregateFunctionLatest {
-					function = "argMaxOrNullIf"
-					argument = "tupleElement(" + input.candidatesAlias + ", 2)"
-					if input.multiple {
-						key = "tuple(" + rowKey + ", toUInt64(" + count + "))"
-					}
+				aggregateSQL, aggregateErr := chronologicalAggregateSQL(
+					measure.Function,
+					input.candidatesAlias,
+					rowKey,
+					input.multiple,
+				)
+				if aggregateErr != nil {
+					return nil, nil, nil, compileState{}, nil, aggregateErr
 				}
-				aggregateSQL := function + "(" + argument + ", " + key + ", " +
-					condition + ")"
 				projection = append(
 					projection,
 					aggregateSQL+" AS "+result.winnerAlias,
@@ -13949,13 +14029,239 @@ func eventStatsDistinctCountDynamicMeasureSQL(
 	return dynamicStringArrayStateSQL(field, rowEligibleSQL)
 }
 
+type chronologicalDirections struct {
+	earliest bool
+	latest   bool
+}
+
+func emptyChronologicalCandidatesSQL() string {
+	return "tuple(CAST('' AS String), CAST('' AS String), " +
+		"toUInt8(0), toUInt8(0), toUInt64(0), toUInt64(0))"
+}
+
+func immutableChronologicalRowKeySQL() string {
+	return "tuple(" + strings.Join([]string{
+		quoteIdentifier(internalSortTimeColumn),
+		quoteIdentifier(internalSortIDColumn),
+		quoteIdentifier(internalSortVisibilityColumn),
+		quoteIdentifier(internalSortSourceIdentityColumn),
+	}, ", ") + ")"
+}
+
+func emptyEventStatsChronologicalCandidateSQL() string {
+	return "tuple(CAST('' AS String), toUInt64(0), toUInt8(0), toUInt8(0))"
+}
+
+// eventStatsChronologicalCandidateSQL reduces one event field to the only
+// direction this single-measure eventstats stage consumes: selected lexical
+// value, original one-based member ordinal, eligible bit, and invalid bit.
+// Unlike multi-measure stats, this avoids selecting and retaining the opposite
+// end of every multivalue.
+func eventStatsChronologicalCandidateSQL(
+	function plan.AggregateFunction,
+	field fieldState,
+	exists bool,
+) (string, []any, bool, error) {
+	arrayIndexSelector := "arrayFirstIndex"
+	fixedArrayIndex := "1"
+	switch function {
+	case plan.AggregateFunctionEarliest:
+	case plan.AggregateFunctionLatest:
+		arrayIndexSelector = "arrayLastIndex"
+		fixedArrayIndex = "-1"
+	default:
+		return "", nil, false, fmt.Errorf(
+			"compile ClickHouse eventstats chronological candidate: unsupported function %d",
+			function,
+		)
+	}
+
+	empty := emptyEventStatsChronologicalCandidateSQL()
+	if !exists {
+		return empty, nil, false, nil
+	}
+
+	if field.kind == fieldKindStringArray {
+		values := field.valueSQL
+		var args []any
+		if field.existsSQL != "" && field.existsSQL != "1" {
+			values = "if(" + field.existsSQL + ", " + values +
+				", CAST([], 'Array(String)'))"
+			args = append(args, field.existsArgs...)
+		}
+		count := "toUInt64(length(" + values + "))"
+		ordinal := "toUInt64(1)"
+		if function == plan.AggregateFunctionLatest {
+			ordinal = count
+		}
+		return "tuple(" +
+				"if(" + count + " != 0, arrayElement(" + values + ", " +
+				fixedArrayIndex + "), CAST('' AS String)), " +
+				"if(" + count + " != 0, " + ordinal + ", toUInt64(0)), " +
+				"toUInt8(" + count + " != 0), toUInt8(0))",
+			args,
+			false,
+			nil
+	}
+
+	if field.kind != fieldKindDynamic {
+		value := statsScalarStringOrNullSQL(field)
+		existsSQL := field.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
+		value = "if(" + existsSQL + ", " + value +
+			", CAST(NULL AS Nullable(String)))"
+		present := "isNotNull(" + value + ")"
+		return "tuple(" +
+				"ifNull(" + value + ", CAST('' AS String)), " +
+				"if(" + present + ", toUInt64(1), toUInt64(0)), " +
+				"toUInt8(" + present + "), toUInt8(0))",
+			append([]any(nil), field.existsArgs...),
+			false,
+			nil
+	}
+
+	typeSQL := dynamicTypeExpression(field)
+	scalarSupported, scalarLexical := statsByScalarExpressions(field)
+	element := fieldState{
+		valueSQL:       "element",
+		dynamicTypeSQL: "dynamicType(element)",
+		kind:           fieldKindDynamic,
+	}
+	elementSupported, _ := statsByScalarExpressions(element)
+	elementType := dynamicTypeExpression(element)
+	elementEligible := "(" + elementType + " != 'None' AND " + elementSupported + ")"
+	elementInvalid := "(" + elementType + " != 'None' AND NOT (" + elementSupported + "))"
+	values := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
+	ordinal := "toUInt64(" + arrayIndexSelector + "(element -> " +
+		elementEligible + ", " + values + "))"
+	memberInvalid := "toUInt8(arrayExists(element -> " + elementInvalid +
+		", " + values + "))"
+	selectedElement := fieldState{
+		valueSQL:       "arrayElement(" + values + ", selected_ordinal)",
+		dynamicTypeSQL: "dynamicType(arrayElement(" + values + ", selected_ordinal))",
+		kind:           fieldKindDynamic,
+	}
+	_, selectedLexical := statsByScalarExpressions(selectedElement)
+	selectedState := "arrayElement(arrayMap(" +
+		"(selected_ordinal, member_invalid) -> tuple(" +
+		"if(selected_ordinal != 0, " + selectedLexical + ", CAST('' AS String)), " +
+		"selected_ordinal, toUInt8(selected_ordinal != 0), member_invalid), " +
+		"[" + ordinal + "], [" + memberInvalid + "]), 1)"
+	scalar := "tuple(" + scalarLexical +
+		", toUInt64(1), toUInt8(1), toUInt8(0))"
+	invalid := "tuple(CAST('' AS String), toUInt64(0), toUInt8(0), toUInt8(1))"
+
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	descendantSQL := "0"
+	args := append([]any(nil), field.existsArgs...)
+	if field.descendantSQL != "" {
+		descendantSQL = field.descendantSQL
+		args = append(args, field.descendantArgs...)
+	}
+	value := "multiIf(" +
+		"descendant_present != 0, " + invalid + ", " +
+		"field_present = 0 OR " + typeSQL + " = 'None', " + empty + ", " +
+		typeSQL + " = 'Array(Dynamic)', " + selectedState + ", " +
+		scalarSupported + ", " + scalar + ", " +
+		invalid + ")"
+	return "arrayElement(arrayMap((field_present, descendant_present) -> " + value +
+			", [toUInt8(" + existsSQL + ")], [toUInt8(" + descendantSQL + ")]), 1)",
+		args,
+		true,
+		nil
+}
+
+func eventStatsChronologicalAggregateSQL(
+	function plan.AggregateFunction,
+	inputSQL string,
+) (string, error) {
+	candidate := "tupleElement(" + inputSQL + ", 1)"
+	rowKey := "tupleElement(" + inputSQL + ", 2)"
+	aggregate := "argMinOrNullIf"
+	switch function {
+	case plan.AggregateFunctionEarliest:
+	case plan.AggregateFunctionLatest:
+		aggregate = "argMaxOrNullIf"
+	default:
+		return "", fmt.Errorf(
+			"compile ClickHouse eventstats chronological aggregate: unsupported function %d",
+			function,
+		)
+	}
+	value := "tupleElement(" + candidate + ", 1)"
+	ordinal := "tupleElement(" + candidate + ", 2)"
+	present := "tupleElement(" + candidate + ", 3)"
+	key := "tuple(" + rowKey + ", " + ordinal + ")"
+	return aggregate + "(" + value + ", " + key + ", " + present + " != 0)", nil
+}
+
+func chronologicalAggregateSQL(
+	function plan.AggregateFunction,
+	candidatesSQL string,
+	rowKeySQL string,
+	multiple bool,
+) (string, error) {
+	eligible := "tupleElement(" + candidatesSQL + ", 3)"
+	value := "tupleElement(" + candidatesSQL + ", 1)"
+	ordinal := "toUInt64(1)"
+	aggregate := "argMinOrNullIf"
+	switch function {
+	case plan.AggregateFunctionEarliest:
+		if multiple {
+			ordinal = "tupleElement(" + candidatesSQL + ", 5)"
+		}
+	case plan.AggregateFunctionLatest:
+		value = "tupleElement(" + candidatesSQL + ", 2)"
+		if multiple {
+			ordinal = "tupleElement(" + candidatesSQL + ", 6)"
+		}
+		aggregate = "argMaxOrNullIf"
+	default:
+		return "", fmt.Errorf(
+			"compile ClickHouse chronological aggregate: unsupported function %d",
+			function,
+		)
+	}
+	key := "tuple(" + rowKeySQL + ", " + ordinal + ")"
+	return aggregate + "(" + value + ", " + key + ", " + eligible + " != 0)", nil
+}
+
+func eventStatsChronologicalValidationSQL(inputSQL, _ string) string {
+	return "maxOrDefault(toUInt8(tupleElement(tupleElement(" + inputSQL +
+		", 1), 4)))"
+}
+
+func chronologicalPublishedValueSQL(winnerSQL string) string {
+	return "if(isNull(" + winnerSQL + "), CAST(NULL AS Dynamic), CAST(" +
+		"assumeNotNull(" + winnerSQL + ") AS Dynamic))"
+}
+
+func chronologicalPublishedTypeSQL(winnerSQL string) string {
+	return statsExtremaStoredTypeFromConditionsSQL(
+		"isNull("+winnerSQL+")",
+		"0",
+		"1",
+		"assumeNotNull("+winnerSQL+")",
+	)
+}
+
 // chronologicalCandidatesSQL normalizes one event field to a constant-size
-// tuple: first eligible lexical value, last eligible lexical value, eligible
-// member count, and an unsupported-container bit. Bounded selector passes over
-// Dynamic multivalues avoid retaining either an Array ordering key or a
-// normalized copy of every member.
-func chronologicalCandidatesSQL(field fieldState, exists bool) (string, []any, bool) {
-	empty := "tuple(CAST('' AS String), CAST('' AS String), toUInt64(0), toUInt8(0))"
+// tuple: requested first and/or last eligible lexical value, an eligible bit,
+// unsupported-container bit, and the original one-based requested ordinals.
+// Each requested direction uses one bounded index pass over a Dynamic
+// multivalue; guarded indexed lookup avoids repeating the eligibility pass or
+// retaining either an Array ordering key or normalized member array.
+func chronologicalCandidatesSQL(
+	field fieldState,
+	exists bool,
+	directions chronologicalDirections,
+) (string, []any, bool) {
+	empty := emptyChronologicalCandidatesSQL()
 	if !exists {
 		return empty, nil, false
 	}
@@ -13964,14 +14270,32 @@ func chronologicalCandidatesSQL(field fieldState, exists bool) (string, []any, b
 		values := field.valueSQL
 		var args []any
 		if field.existsSQL != "" && field.existsSQL != "1" {
-			values = "if(" + field.existsSQL + ", " + values + ", CAST([], 'Array(String)'))"
+			values = "if(" + field.existsSQL + ", " + values +
+				", CAST([], 'Array(String)'))"
 			args = append(args, field.existsArgs...)
 		}
 		count := "toUInt64(length(" + values + "))"
-		return "tuple(" +
-				"if(" + count + " != 0, arrayElement(" + values + ", 1), CAST('' AS String)), " +
-				"if(" + count + " != 0, arrayElement(" + values + ", -1), CAST('' AS String)), " +
-				count + ", toUInt8(0))",
+		firstValue := "CAST('' AS String)"
+		firstOrdinal := "toUInt64(0)"
+		if directions.earliest {
+			firstValue = "if(" + count + " != 0, arrayElement(" + values +
+				", 1), CAST('' AS String))"
+			firstOrdinal = "if(" + count + " != 0, toUInt64(1), toUInt64(0))"
+		}
+		lastValue := "CAST('' AS String)"
+		lastOrdinal := "toUInt64(0)"
+		if directions.latest {
+			lastValue = "if(" + count + " != 0, arrayElement(" + values +
+				", -1), CAST('' AS String))"
+			lastOrdinal = count
+		}
+		eligibleOrdinal := firstOrdinal
+		if !directions.earliest {
+			eligibleOrdinal = lastOrdinal
+		}
+		return "tuple(" + firstValue + ", " + lastValue + ", toUInt8(" +
+				eligibleOrdinal + " != 0), toUInt8(0), " + firstOrdinal + ", " +
+				lastOrdinal + ")",
 			args,
 			false
 	}
@@ -13982,11 +14306,23 @@ func chronologicalCandidatesSQL(field fieldState, exists bool) (string, []any, b
 		if existsSQL == "" {
 			existsSQL = "1"
 		}
-		value = "if(" + existsSQL + ", " + value + ", CAST(NULL AS Nullable(String)))"
-		return "tuple(" +
-				"ifNull(" + value + ", CAST('' AS String)), " +
-				"ifNull(" + value + ", CAST('' AS String)), " +
-				"toUInt64(isNotNull(" + value + ")), toUInt8(0))",
+		value = "if(" + existsSQL + ", " + value +
+			", CAST(NULL AS Nullable(String)))"
+		present := "isNotNull(" + value + ")"
+		firstValue := "CAST('' AS String)"
+		firstOrdinal := "toUInt64(0)"
+		if directions.earliest {
+			firstValue = "ifNull(" + value + ", CAST('' AS String))"
+			firstOrdinal = "if(" + present + ", toUInt64(1), toUInt64(0))"
+		}
+		lastValue := "CAST('' AS String)"
+		lastOrdinal := "toUInt64(0)"
+		if directions.latest {
+			lastValue = "ifNull(" + value + ", CAST('' AS String))"
+			lastOrdinal = "if(" + present + ", toUInt64(1), toUInt64(0))"
+		}
+		return "tuple(" + firstValue + ", " + lastValue + ", toUInt8(" +
+				present + "), toUInt8(0), " + firstOrdinal + ", " + lastOrdinal + ")",
 			append([]any(nil), field.existsArgs...),
 			false
 	}
@@ -14003,31 +14339,66 @@ func chronologicalCandidatesSQL(field fieldState, exists bool) (string, []any, b
 	elementEligible := "(" + elementType + " != 'None' AND " + elementSupported + ")"
 	elementInvalid := "(" + elementType + " != 'None' AND NOT (" + elementSupported + "))"
 	values := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
-	first := "arrayFirst(element -> " + elementEligible + ", " + values + ")"
-	last := "arrayLast(element -> " + elementEligible + ", " + values + ")"
-	count := "toUInt64(arrayCount(element -> " + elementEligible + ", " + values + "))"
-	memberInvalid := "toUInt8(arrayExists(element -> " + elementInvalid + ", " + values + "))"
-	firstElement := fieldState{
-		valueSQL:       "first_element",
-		dynamicTypeSQL: "dynamicType(first_element)",
-		kind:           fieldKindDynamic,
+	firstOrdinal := "toUInt64(0)"
+	if directions.earliest {
+		firstOrdinal = "toUInt64(arrayFirstIndex(element -> " + elementEligible +
+			", " + values + "))"
 	}
-	lastElement := fieldState{
-		valueSQL:       "last_element",
-		dynamicTypeSQL: "dynamicType(last_element)",
-		kind:           fieldKindDynamic,
+	lastOrdinal := "toUInt64(0)"
+	if directions.latest {
+		lastOrdinal = "toUInt64(arrayLastIndex(element -> " + elementEligible +
+			", " + values + "))"
 	}
-	_, firstLexical := statsByScalarExpressions(firstElement)
-	_, lastLexical := statsByScalarExpressions(lastElement)
+	memberInvalid := "toUInt8(arrayExists(element -> " + elementInvalid +
+		", " + values + "))"
+	firstLexical := "CAST('' AS String)"
+	if directions.earliest {
+		firstElement := fieldState{
+			valueSQL:       "arrayElement(" + values + ", first_ordinal)",
+			dynamicTypeSQL: "dynamicType(arrayElement(" + values + ", first_ordinal))",
+			kind:           fieldKindDynamic,
+		}
+		_, lexical := statsByScalarExpressions(firstElement)
+		firstLexical = "if(first_ordinal != 0, " + lexical +
+			", CAST('' AS String))"
+	}
+	lastLexical := "CAST('' AS String)"
+	if directions.latest {
+		lastElement := fieldState{
+			valueSQL:       "arrayElement(" + values + ", last_ordinal)",
+			dynamicTypeSQL: "dynamicType(arrayElement(" + values + ", last_ordinal))",
+			kind:           fieldKindDynamic,
+		}
+		_, lexical := statsByScalarExpressions(lastElement)
+		lastLexical = "if(last_ordinal != 0, " + lexical +
+			", CAST('' AS String))"
+	}
+	eligibleOrdinal := "first_ordinal"
+	if !directions.earliest {
+		eligibleOrdinal = "last_ordinal"
+	}
 	selected := "arrayElement(arrayMap(" +
-		"(first_element, last_element, eligible_count, member_invalid) -> tuple(" +
-		"if(eligible_count != 0, " + firstLexical + ", CAST('' AS String)), " +
-		"if(eligible_count != 0, " + lastLexical + ", CAST('' AS String)), " +
-		"eligible_count, member_invalid), " +
-		"[" + first + "], [" + last + "], [" + count + "], [" + memberInvalid + "]), 1)"
-	scalar := "tuple(" + scalarLexical + ", " + scalarLexical +
-		", toUInt64(1), toUInt8(0))"
-	invalid := "tuple(CAST('' AS String), CAST('' AS String), toUInt64(0), toUInt8(1))"
+		"(first_ordinal, last_ordinal, member_invalid) -> tuple(" +
+		firstLexical + ", " + lastLexical + ", toUInt8(" + eligibleOrdinal +
+		" != 0), member_invalid, first_ordinal, last_ordinal), " +
+		"[" + firstOrdinal + "], [" + lastOrdinal + "], [" + memberInvalid + "]), 1)"
+	scalarFirst := "CAST('' AS String)"
+	scalarFirstOrdinal := "toUInt64(0)"
+	if directions.earliest {
+		scalarFirst = scalarLexical
+		scalarFirstOrdinal = "toUInt64(1)"
+	}
+	scalarLast := "CAST('' AS String)"
+	scalarLastOrdinal := "toUInt64(0)"
+	if directions.latest {
+		scalarLast = scalarLexical
+		scalarLastOrdinal = "toUInt64(1)"
+	}
+	scalar := "tuple(" + scalarFirst + ", " + scalarLast +
+		", toUInt8(1), toUInt8(0), " + scalarFirstOrdinal + ", " +
+		scalarLastOrdinal + ")"
+	invalid := "tuple(CAST('' AS String), CAST('' AS String), toUInt8(0), " +
+		"toUInt8(1), toUInt64(0), toUInt64(0))"
 
 	existsSQL := field.existsSQL
 	if existsSQL == "" {
@@ -14522,12 +14893,10 @@ func compileChronologicalResults(
 	projection := []string{"* EXCEPT (" + strings.Join(excluded, ", ") + ")"}
 	publishedTypes := make(map[string]struct{}, len(measures))
 	for _, measure := range measures {
-		nonNullWinner := "assumeNotNull(" + measure.winnerColumn + ")"
-		value := nonNullWinner
 		projection = append(
 			projection,
-			"if(isNull("+measure.winnerColumn+"), CAST(NULL AS Dynamic), CAST("+
-				value+" AS Dynamic)) AS "+measure.outputColumn,
+			chronologicalPublishedValueSQL(measure.winnerColumn)+
+				" AS "+measure.outputColumn,
 		)
 		if _, published := publishedTypes[measure.winnerColumn]; published {
 			continue
@@ -14535,12 +14904,8 @@ func compileChronologicalResults(
 		publishedTypes[measure.winnerColumn] = struct{}{}
 		projection = append(
 			projection,
-			statsExtremaStoredTypeFromConditionsSQL(
-				"isNull("+measure.winnerColumn+")",
-				"0",
-				"1",
-				value,
-			)+" AS "+measure.typeColumn,
+			chronologicalPublishedTypeSQL(measure.winnerColumn)+
+				" AS "+measure.typeColumn,
 		)
 	}
 
