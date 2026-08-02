@@ -7,7 +7,118 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: coordinated deployment recovery
+## Latest checkpoint: bounded chronological eventstats
+
+Date: 2026-08-02
+
+Committed implementation checkpoint:
+
+- `fad0644` — bounded row-preserving `eventstats earliest(field)` and
+  `eventstats latest(field)`.
+
+This test-first SPL unit adds deterministic chronological enrichment without a
+database or public API schema change, a control-plane migration, or GORM on the
+ClickHouse path:
+
+1. The parser accepts exactly one case-insensitive `earliest(field)` or
+   `latest(field)` over an unquoted exact field, requires an explicit exact
+   `AS` output, and permits an optional one-through-16 distinct exact-field
+   `BY` tuple. Wildcard, quoted, eval, multiple-input, multiple-measure, option,
+   missing-alias, repeated-group, and every other aggregate form fail with
+   source-located diagnostics. Suggestions and the completion catalog expose
+   the same bounded grammar.
+2. Planning lowers either form to the singular row-preserving
+   `EventAggregate`. Both builder and defensive compiler require event rows
+   with the visible, unmodified canonical `_time`; removing, replacing,
+   renaming, binning, or transforming it first fails explicitly. Logical plan
+   analysis and Search Inspection now include the implicit `_time` read for
+   chronological `stats` and `eventstats`, so dependency metadata matches the
+   physical ordering requirement.
+3. Winners use the ascending immutable total key of original nanosecond
+   `_time`, event ID, visibility sequence, source identity, and the original
+   one-based multivalue member ordinal. `earliest` selects the minimum key and
+   `latest` the maximum. Upstream sort order cannot affect the result, while
+   `head`, `tail`, filters, and dedup may change it only by changing the
+   survivor set.
+4. Missing values, explicit nulls, empty multivalues, and null members do not
+   participate; an empty String does. Immediate scalar Dynamic members retain
+   canonical lexical spelling and publish as nullable `Mixed`, including
+   String/Bytes distinctions. Generic objects, flattened object parents,
+   nested arrays, and nested objects fail the complete retained command
+   atomically even when a later filter, limit, or projection would hide them.
+5. Global and complete grouped scopes with no eligible member publish a
+   present null. An incomplete `BY` tuple retains its source row with the
+   output logically absent and cannot poison another group. Output replacement,
+   open-schema `fields` ambiguity, timeline eligibility, field analysis, and
+   forged AST/logical/compiler metadata all reuse the existing fail-closed
+   eventstats contracts.
+6. ClickHouse lowering retains one direction-specific constant-size candidate
+   per event: selected lexical value, original ordinal, eligible bit, invalid
+   bit, and immutable row key. Each requested direction performs one bounded
+   index pass and guarded indexed lookup; it never selects or retains the
+   opposite member. Transforming chronological `stats` now likewise computes
+   per-input direction demand, eliminating its prior opposite-direction and
+   `arrayCount` work while preserving shared winners and validation.
+7. Global lowering uses one conditional `argMin` or `argMax`; grouped lowering
+   uses one bounded `GROUP BY` and one left join. It performs no pipeline sort,
+   window, `ARRAY JOIN`, row expansion, `groupArray`, array aggregate
+   combinator, physical-event rescan, or Go-side buffering. The existing
+   materialized validation envelope, one-scan flat CTE graph, fanout budget,
+   and 10,000-row eventstats fence remain intact; the hidden 10,001st row fails
+   the whole search.
+8. Production-digest integration covers global/grouped execution, all-null and
+   incomplete groups, canonical scalar spellings, multivalue first/last
+   members, upstream sort and head survivor semantics, event-ID/visibility/
+   source-identity ties at one and four threads, hidden object/nested poison,
+   and hidden overflow. A separate eight-row, 250,000-member corpus proves
+   constant-size first/last state and transports exact first/last ordinals.
+9. Three frozen-diff reuse/correctness/efficiency passes found and corrected
+   duplicated chronological builders, incomplete implicit `_time` metadata,
+   missing valid-group/tie coverage, false ordinal transport, opposite-direction
+   eventstats work, duplicate eligibility scans, and unconditional dual-state
+   transforming stats work. Final correctness, efficiency, and spec/test
+   re-reviews reported no unresolved actionable defect.
+
+Validation on commit `fad0644`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+CGO_ENABLED=0 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -v -timeout=20m
+```
+
+Every final command passed. The full unit and race/shuffle trees were clean;
+module files remained unchanged; vet and the CGO-disabled build passed; cached
+golangci-lint v2.12.2 reported `0 issues`. Frontend lint, type-check, 65 build-
+transaction tests, 137 frontend tests, and the 11-page static production build
+passed without a tracked change. The final digest-pinned Store/compiler corpus
+passed in 307.66 seconds (308.070-second package result), and every test-owned
+container and volume was removed.
+
+This unit retains GORM solely for the SQLite control plane and the native
+ClickHouse driver for event data. The external GradeThis Compose collector
+cutover remains explicitly deferred. Broader SPL compatibility remains the
+next backend stream, and the overall backend goal remains active.
+
+## Previous checkpoint: coordinated deployment recovery
 
 Date: 2026-08-02
 
