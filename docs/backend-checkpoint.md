@@ -7,7 +7,129 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: deletion-safe index read retirement
+## Latest checkpoint: bounded exact eventstats distinct count
+
+Date: 2026-08-02
+
+Committed implementation checkpoint:
+
+- `96b9cc5` — exact, bounded `eventstats dc(field) AS output [BY ...]`.
+
+This test-first SPL unit adds row-preserving distinct count without changing a
+database schema, applying a control-plane migration, or putting GORM on the
+ClickHouse path:
+
+1. The parser accepts exactly one case-insensitive `dc` call with one unquoted
+   exact field, a required exact `AS` output, and an optional one-through-16
+   exact-field `BY` tuple. It rejects `distinct_count`, eval/wildcard/quoted,
+   empty or multiple inputs, multiple measures, options, and forged metadata
+   with source-located diagnostics. Parser diagnostics and editor function
+   names are derived from the same descriptor table so the advertised grammar
+   cannot drift from the accepted surface.
+2. Planning lowers the command to the existing singular, row-preserving
+   `EventAggregate` with `AggregateFunctionDistinctCount`. Analysis, field
+   analysis, timeline eligibility, reserved open-schema handling, output
+   replacement, and defensive forged-plan checks all understand the measure.
+   Search inspection projects the exact input/group fields and one `UInt64`
+   output without changing the public inspection or search-result schema.
+3. Dynamic scalar and immediate multivalue members use the same shared
+   canonical String normalization as transforming `stats dc`: missing, null,
+   empty multivalue, and null members contribute nothing; an empty String
+   counts; duplicates collapse; normalized numeric/Boolean/extended scalars
+   share their established identities; and generic objects or nested
+   containers poison an eligible scope. The shared normalizer exposes a
+   constant-size invalid bit so `stats` may fail immediately while `eventstats`
+   retains deferred whole-result validation.
+4. Each global or grouped exact state is capped by
+   `groupUniqArrayArray(100001)`: 100,000 values succeed and the sentinel value
+   fails atomically with a measure-neutral exact-distinct execution-limit
+   marker. Event enrichment keeps the existing 10,000-row success boundary and
+   10,001-row sentinel failure. A later projection, filter, sort, or limit
+   cannot hide unsupported input, exact-set overflow, or input-row overflow.
+5. Global lowering uses one materialized bounded input and one exact aggregate.
+   Grouped lowering calculates BY eligibility before Dynamic inspection, so an
+   incomplete key retains its row with a logically absent nullable output and
+   cannot poison or spend work in an aggregate it does not join. Complete keys
+   use one bounded `GROUP BY` and one left join. Stacked stages retain the flat
+   deferred eventstats graph, one physical scan, and the established fanout
+   budget; there is no approximate `uniq`, `ARRAY JOIN`, row expansion,
+   physical rescan, pipeline sort, or Go-side result buffering.
+6. The shared completion catalog now advertises and highlights
+   `eventstats dc(user) AS unique_users BY level`; frontend tests consume that
+   same catalog. The compatibility reference documents syntax, canonical
+   identity, missing/null/container behavior, incomplete groups, both hard
+   bounds, hidden-failure atomicity, and the physical-plan contract. No
+   frontend component or public API transport change is required.
+7. Parser, plan, compiler, inspection, executor-classification, and frontend
+   tests cover global/grouped/projected/stacked forms, reserved fields, forged
+   metadata, exact SQL sentinels, one-scan/no-expansion structure, hidden poison
+   and overflow, diagnostics, suggestions, and highlighting. The production-
+   digest ClickHouse fixture reuses the transforming-stats canonical corpus and
+   the 10,000/10,001 eventstats corpus, then inserts native `JSON`/
+   `Array(Dynamic)` values to prove the 100,000/100,001 exact-set boundary and
+   hidden grouped overflow against the release server.
+8. Independent adversarial review found no implementation defect and required
+   the production-digest exact-set boundary. Three frozen-diff simplify passes
+   covered reuse, maintainability, and efficiency. Their findings drove the
+   shared Dynamic normalizer/scalar classifier, generated parser grammar text,
+   one builder diagnostic constant, measure-neutral private validation and
+   exact-limit names, reused test helpers, and one allocation/round-trip-
+   efficient two-row boundary batch. No unresolved finding remained.
+
+Validation on commit `96b9cc5`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+
+go test ./... -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-eventstats-dc-coverage.out ./... \
+  -count=1
+go vet ./...
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m ./...
+
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=25m -p=1 -v
+```
+
+Every local command passed. The full race/shuffle tree was clean;
+representative coverage was 89.2% for `internal/clickhouse`, 88.0% for
+`internal/spl`, 87.4% for `internal/plan` and `internal/searchinspection`, and
+86.4% for `internal/queryexec`. Cached golangci-lint v2.12.2 reported
+`0 issues`; module files remained unchanged; vet, the Linux cross-build, and
+all frontend gates passed. The complete CI-exact backend matrix passed and
+removed every test-owned container and volume. Its store/compiler corpus,
+including the new boundaries, passed in 291.45 seconds.
+
+GitHub Actions run
+[`30743892730`](https://github.com/Suhaibinator/open-splunk/actions/runs/30743892730)
+was fully green. The previously reported Backend vertical job passed in 20m39s
+and Go lint passed in 1m38s; race/coverage, GradeThis compatibility, release
+OCI, frontend, vulnerability, protobuf, and cross-platform production-binary
+checks also passed.
+
+This unit changes no database or public API schema. It retains GORM solely for
+the SQLite control plane and uses the native ClickHouse driver for event data.
+Broader SPL support, coordinated ClickHouse-native disaster recovery, and the
+explicitly deferred external GradeThis Compose collector cutover remain
+separate work. The overall backend goal remains active.
+
+## Previous checkpoint: deletion-safe index read retirement
 
 Date: 2026-08-01
 
