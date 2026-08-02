@@ -34,7 +34,15 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const storeIntegrationImage = testsupport.DefaultClickHouseImage
+const (
+	storeIntegrationImage            = testsupport.DefaultClickHouseImage
+	storeIntegrationSetupTimeout     = 5 * time.Minute
+	storeIntegrationCompilerTimeout  = 15 * time.Minute
+	storeIntegrationDeletionTimeout  = 2 * time.Minute
+	storeIntegrationCleanupHeadroom  = 30 * time.Second
+	storeIntegrationLifecycleTimeout = storeIntegrationSetupTimeout +
+		storeIntegrationCompilerTimeout + storeIntegrationDeletionTimeout
+)
 
 // TestStoreAgainstClickHouse is opt-in because it starts an ephemeral Docker
 // container and may pull the pinned ClickHouse image.
@@ -45,8 +53,13 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker CLI is unavailable: %v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	lifecycleContext, lifecycleCancel := storeIntegrationLifecycleContext(t)
+	defer lifecycleCancel()
+	ctx, setupCancel := context.WithTimeout(
+		lifecycleContext,
+		storeIntegrationSetupTimeout,
+	)
+	defer setupCancel()
 
 	container := "open-splunk-store-" + integrationRandomHex(t, 6)
 	password := integrationRandomHex(t, 24)
@@ -283,7 +296,28 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	testCompiledQueriesAgainstClickHouse(t, ctx, store, queryConnection, indexTime)
+	setupCancel()
+	if !t.Run("compiled SPL corpus", func(t *testing.T) {
+		compilerContext, compilerCancel := context.WithTimeout(
+			lifecycleContext,
+			storeIntegrationCompilerTimeout,
+		)
+		defer compilerCancel()
+		testCompiledQueriesAgainstClickHouse(
+			t,
+			compilerContext,
+			store,
+			queryConnection,
+			indexTime,
+		)
+	}) {
+		return
+	}
+	ctx, deletionCancel := context.WithTimeout(
+		lifecycleContext,
+		storeIntegrationDeletionTimeout,
+	)
+	defer deletionCancel()
 	t.Run("keep-data index deletion retains physical rows and reserves the name", func(t *testing.T) {
 		index, err := controlDB.CreateIndex(ctx, control.IndexDefinition{
 			Name:             "keep-data",
@@ -358,6 +392,20 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 			indexTime,
 		)
 	})
+}
+
+func storeIntegrationLifecycleContext(
+	t *testing.T,
+) (context.Context, context.CancelFunc) {
+	t.Helper()
+	deadline := time.Now().Add(storeIntegrationLifecycleTimeout)
+	if testDeadline, ok := t.Deadline(); ok {
+		cleanupDeadline := testDeadline.Add(-storeIntegrationCleanupHeadroom)
+		if cleanupDeadline.Before(deadline) {
+			deadline = cleanupDeadline
+		}
+	}
+	return context.WithDeadline(t.Context(), deadline)
 }
 
 func testQuotaDenialAgainstClickHouse(
