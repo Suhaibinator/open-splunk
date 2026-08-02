@@ -7,7 +7,123 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: first-start collector identity bootstrap
+## Latest checkpoint: bounded exact-field eventstats minimum
+
+Date: 2026-08-01
+
+Committed implementation checkpoint:
+
+- `f25db02` — bounded `eventstats min(field) AS output [BY ...]` plus
+  whole-graph execution-amplification accounting.
+
+This test-first SPL unit adds one explicitly bounded row-preserving minimum
+without changing either database schema or putting GORM on the ClickHouse
+path:
+
+1. The parser accepts exactly one `min(<exact unquoted field>) AS <exact
+   output>` followed by zero through 16 distinct exact `BY` fields. Function
+   and keyword spelling is case-insensitive while field spelling remains
+   exact. An alias is mandatory, `max` remains unsupported, and suggestions
+   plus the generated frontend completion catalog expose only the implemented
+   form.
+2. Planning, dependency analysis, result-shape inference, and search
+   inspection preserve the row-enrichment contract through projections and
+   downstream commands. A canonical `FieldRef` with an empty path and one
+   with a nil path are now treated identically at the planner boundary.
+3. Minimum selection reuses the exact mixed-value ordering already pinned for
+   terminal `stats min`: eligible numeric values sort before lexical values;
+   exact Decimal spelling and ordering are preserved; native Number, Bool,
+   Time, and String values retain their type; immediate multivalue members are
+   considered; and unsupported containers are sanitized rather than leaked.
+4. The compiler normalizes each row once into a constant six-field candidate
+   and folds it without `ARRAY JOIN`, `groupArray`, or a Dynamic candidate
+   array. The aggregate is published once through a private alias. Global and
+   grouped forms preserve source cardinality and order; rows with an incomplete
+   group key remain in the result with the aggregate logically absent.
+5. The existing 10,000-input-row limit remains atomic. Hidden poison
+   validation is deferred to one chronological barrier and a dummy `UNION`
+   validation branch, so neither a later projection nor field discovery can
+   conceal an over-limit or invalid source. Conditional-count predicate
+   materialization is hoisted as an explicit prerequisite when it precedes or
+   follows a minimum, preserving dependency and bind-argument order.
+6. Consecutive eventstats stages compile into a flat top-level CTE graph. The
+   earliest physical-scan input is materialized where required by ClickHouse
+   26.3; later stages remain ordinary CTEs instead of recursively duplicating
+   an already-expanded query.
+7. Compilation rejects a graph whose conservative physical leaf-read
+   amplification exceeds 128 in one evaluation. Global and grouped eventstats
+   contribute fanout two and three, respectively; chronological prerequisites
+   contribute one; hidden validation adds its actual consumers; and endpoint
+   fanout accounts for ordinary/timechart (one), chart (two), field summary
+   and suggestions (three), and field catalog (five). Checked saturating
+   arithmetic prevents the budget calculation itself from overflowing.
+8. Boundary tests pin ordinary, chart, timechart, field-summary, suggestion,
+   and field-catalog endpoints; global, grouped, validating-minimum,
+   predicate-fenced, and chronological graphs; both accepted and first-
+   rejected depths; and precise authored ranges on `SPL_QUERY_TOO_COMPLEX`.
+9. Parser, planner, analysis, result-shape, search-inspection, compiler, and
+   real ClickHouse tests cover global and grouped minima, mixed scalar and
+   multivalue values, exact Decimal behavior, missing/null groups, invalid
+   containers, canonical `_time`, projected input, downstream composition,
+   terminal chart/timechart wrapping, hidden scope poison, and atomic
+   10,001-row failure.
+10. Independent correctness, ClickHouse-efficiency, and maintainability
+    reviews drove the flat graph, endpoint-aware budget, predicate-hoist bind
+    ordering, canonical field-reference fix, shared diagnostics, stale helper
+    removal, and documentation corrections. The final reviews found no
+    remaining concrete correctness, efficiency, CI, or stale-comment issue.
+    A larger compiled-measure abstraction was deliberately left for a future
+    multi-aggregate change because it would add churn without changing this
+    bounded contract.
+
+Validation on implementation commit `f25db02`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code HEAD -- go.mod go.sum
+go test ./... -count=1 -timeout=10m
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-eventstats-min-final-coverage.out \
+  -timeout=15m ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/queryexec \
+  ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=25m -p=1 -v
+```
+
+Every command above passed. The final shuffled race run reported 75.0%
+aggregate statement coverage (`internal/clickhouse` 89.2%); cached
+golangci-lint v2.12.2 reported `0 issues`; all 202 frontend tests passed; and
+the exact digest-pinned backend selector passed, including
+`TestStoreAgainstClickHouse` in 246.98 seconds, the ClickHouse package in
+252.403 seconds, `TestBackendVertical` in 10.64 seconds, and the browser
+integration package in 58.927 seconds. A second standalone pinned Store run
+also passed. Cleanup found no test-owned `open-splunk-clickhouse-*` container
+or `open-splunk-compose-test-*` volume. The dependency upgrades are already
+committed at `347a015`; `go mod tidy` made no additional `go.mod` or `go.sum`
+change.
+
+This checkpoint does not claim general `eventstats`, `max`, or `streamstats`
+support. Each further aggregate needs its own syntax, null, multivalue, type,
+precision, and resource contract. The external GradeThis Compose collector
+cutover remains intentionally deferred pending explicit user direction.
+
+## Previous checkpoint: first-start collector identity bootstrap
 
 Date: 2026-08-01
 
@@ -12412,9 +12528,10 @@ aggregate contract at a time:
 - bounded conditional-count `eventstats` is complete at `0c78cb7`, and bounded
   exact-field numeric `eventstats sum(field) AS output` is complete at
   `1a94faf`; bounded exact-field numeric `eventstats avg(field) AS output` is
-  complete at `3f83414`. Remaining `eventstats` aggregates need their own
-  explicit contracts, while `streamstats` remains outside the first release
-  unless scope changes; and
+  complete at `3f83414`; bounded exact-field mixed-type `eventstats min(field)
+  AS output` is complete at `f25db02`. Remaining `eventstats` aggregates need
+  their own explicit contracts, while `streamstats` remains outside the first
+  release unless scope changes; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
 
@@ -12578,7 +12695,8 @@ Do not guess those decisions if they materially affect the implementation.
    Bounded argument-free, exact-field, and conditional `eventstats` counts are
    complete through `0c78cb7`; bounded exact-field numeric eventstats sum is
    complete at `1a94faf`, and bounded exact-field numeric eventstats average is
-   complete at `3f83414`. First-start collector identity bootstrap and real
+   complete at `3f83414`; bounded exact-field mixed-type eventstats minimum is
+   complete at `f25db02`. First-start collector identity bootstrap and real
    absent-token enrollment proof are complete at `75db36f`, with the final
    working-directory inode-alias fence at `ceab244`.
    Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
