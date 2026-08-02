@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/sha256"
 	"errors"
 	"os"
 
@@ -53,7 +52,11 @@ func loadVerifiedMasterKey(ctx context.Context, db *control.DB, path string) ([]
 			return nil, err
 		}
 	}
-	fingerprint := fingerprintMasterKey(key)
+	fingerprint, err := auth.FingerprintServerMasterKey(key)
+	if err != nil {
+		clear(key)
+		return nil, err
+	}
 	if registered && !hmac.Equal(stored, fingerprint[:]) {
 		clear(key)
 		return nil, errors.New("verify server master key: key file does not match this control database")
@@ -63,13 +66,4 @@ func loadVerifiedMasterKey(ctx context.Context, db *control.DB, path string) ([]
 		return nil, err
 	}
 	return key, nil
-}
-
-func fingerprintMasterKey(key []byte) [sha256.Size]byte {
-	hash := sha256.New()
-	_, _ = hash.Write([]byte("open-splunk/server-master-key-fingerprint/v1\x00"))
-	_, _ = hash.Write(key)
-	var result [sha256.Size]byte
-	copy(result[:], hash.Sum(nil))
-	return result
 }

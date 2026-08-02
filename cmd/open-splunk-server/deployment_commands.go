@@ -64,6 +64,12 @@ func runDeploymentSubcommand(arguments []string) (bool, error) {
 		return true, runDeploymentClickHouseMigrationSubcommand(arguments[1:])
 	case "provision-administrator-token":
 		return true, runProvisionAdministratorTokenSubcommand(arguments[1:])
+	case "backup-control-plane":
+		return true, runBackupControlPlaneSubcommand(arguments[1:])
+	case "verify-control-plane-backup":
+		return true, runVerifyControlPlaneBackupSubcommand(arguments[1:])
+	case "restore-control-plane":
+		return true, runRestoreControlPlaneSubcommand(arguments[1:])
 	default:
 		return false, nil
 	}

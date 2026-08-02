@@ -105,6 +105,14 @@ complete; every mutation must fail the release schema validator. The Compose
 integration rejects all previous principal credentials on the persistent
 volume. Cleanup removes every test-owned container, network, volume, and image.
 
+The same release test stops the server, creates and independently verifies an
+offline control-plane recovery bundle in the production scratch image, and
+restores it into a fresh named state volume without network access. It then
+rebinds only the server state volume, proves the ClickHouse container was not
+replaced, authenticates with the restored administrator token, observes the
+pre-backup index catalog, and commits a post-restore mutation. This proves the
+control-plane member only; it does not claim a ClickHouse event-data backup.
+
 ```sh
 OPEN_SPLUNK_OCI_INTEGRATION=1 \
 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \

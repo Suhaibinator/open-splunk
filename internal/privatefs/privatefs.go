@@ -1,0 +1,844 @@
+//go:build darwin || linux
+
+package privatefs
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"math"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"syscall"
+	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
+)
+
+const (
+	// MaximumComponentBytes is the conservative component ceiling used by
+	// private publication formats on both production filesystems.
+	MaximumComponentBytes = 255
+	maximumNameAttempts   = 16
+)
+
+var (
+	ErrClosed              = errors.New("private filesystem directory is closed")
+	ErrDestinationExists   = errors.New("private filesystem destination already exists")
+	ErrUnsupportedPlatform = errors.New("private filesystem operation is unsupported on this platform")
+)
+
+// NameGenerator returns one candidate exact path component. RandomName is the
+// production generator; accepting an injected generator keeps collision and
+// interruption behavior deterministic in tests and higher-level recovery
+// protocols.
+type NameGenerator func() (string, error)
+
+// FilePolicy is the complete metadata and size contract for an opened file.
+// AllowedModes must contain at least one exact permission mode. MaximumSize is
+// inclusive, so callers can explicitly admit an empty file with a zero bound.
+type FilePolicy struct {
+	AllowedModes []fs.FileMode
+	MinimumSize  int64
+	MaximumSize  int64
+}
+
+// Directory is an owner-private 0700 directory pinned by an open descriptor.
+// Its configured path is retained only to prove that the name still resolves
+// to the opened inode; child operations themselves are descriptor-relative.
+type Directory struct {
+	path string
+	file *os.File
+	info os.FileInfo
+}
+
+// ValidateComponent accepts a single canonical, portable ASCII component.
+// Fixed backup member names and randomized staging names therefore cannot gain
+// alternate spellings on case-insensitive or Unicode-normalizing filesystems.
+func ValidateComponent(name string) error {
+	if name == "" || name == "." || name == ".." {
+		return errors.New("private filesystem name must be a non-dot component")
+	}
+	if len(name) > MaximumComponentBytes {
+		return fmt.Errorf(
+			"private filesystem name exceeds %d bytes",
+			MaximumComponentBytes,
+		)
+	}
+	if !utf8.ValidString(name) {
+		return errors.New("private filesystem name must be valid UTF-8")
+	}
+	for index := range len(name) {
+		character := name[index]
+		if (character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '.' || character == '_' || character == '-' {
+			continue
+		}
+		return errors.New(
+			"private filesystem name must contain only ASCII letters, digits, dot, underscore, or hyphen",
+		)
+	}
+	return nil
+}
+
+// RandomName returns a concurrency-safe CSPRNG-backed component generator.
+// The prefix is revalidated together with every complete generated name.
+func RandomName(prefix string) NameGenerator {
+	return func() (string, error) {
+		var randomBytes [16]byte
+		if _, err := rand.Read(randomBytes[:]); err != nil {
+			return "", errors.New("generate private filesystem temporary name: secure randomness unavailable")
+		}
+		name := prefix + hex.EncodeToString(randomBytes[:])
+		clear(randomBytes[:])
+		if err := ValidateComponent(name); err != nil {
+			return "", err
+		}
+		return name, nil
+	}
+}
+
+// OpenDirectory pins an existing absolute owner-private 0700 directory. The
+// final path component may not be a symlink, and the path is rechecked after
+// descriptor and ACL validation.
+func OpenDirectory(path string) (*Directory, error) {
+	if strings.IndexByte(path, 0) >= 0 {
+		return nil, errors.New("open private directory: path contains a NUL byte")
+	}
+	if !filepath.IsAbs(path) {
+		return nil, errors.New("open private directory: path must be absolute")
+	}
+	path = filepath.Clean(path)
+	before, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("open private directory: inspect path: %w", err)
+	}
+	if err := validateOwnedDirectory(before, os.Geteuid()); err != nil {
+		return nil, fmt.Errorf("open private directory: %w", err)
+	}
+
+	// #nosec G304,G703 -- the explicit absolute operator path is opened
+	// read-only, and O_NOFOLLOW rejects a redirected final component.
+	fd, err := unix.Open(
+		path,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open private directory: open path: %w", err)
+	}
+	// #nosec G115 -- unix.Open returned a non-negative native descriptor.
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("open private directory: invalid descriptor")
+	}
+	opened, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private directory: inspect descriptor: %w", err)
+	}
+	if !os.SameFile(before, opened) {
+		_ = file.Close()
+		return nil, errors.New("open private directory: path changed while opening")
+	}
+	if err := validateOwnedDirectory(opened, os.Geteuid()); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private directory: %w", err)
+	}
+	if err := validateNoExtendedACL(file); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private directory: %w", err)
+	}
+	directory := &Directory{path: path, file: file, info: opened}
+	if err := directory.Revalidate(); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return directory, nil
+}
+
+func validateOwnedDirectory(info os.FileInfo, effectiveUID int) error {
+	if info == nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("path must be a real directory")
+	}
+	if info.Mode().Perm() != 0o700 {
+		return errors.New("directory permissions must be exactly 0700")
+	}
+	if hasSpecialMode(info.Mode()) {
+		return errors.New("directory must not have special permission bits")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat == nil {
+		return errors.New("directory ownership is unavailable")
+	}
+	if effectiveUID < 0 || int64(stat.Uid) != int64(effectiveUID) {
+		return errors.New("directory must be owned by the effective user")
+	}
+	return nil
+}
+
+func hasSpecialMode(mode fs.FileMode) bool {
+	return mode&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0
+}
+
+func (directory *Directory) descriptor() (int, error) {
+	if directory == nil || directory.file == nil {
+		return -1, ErrClosed
+	}
+	// #nosec G115 -- os.File descriptors are native int descriptors on the
+	// supported Unix targets.
+	return int(directory.file.Fd()), nil
+}
+
+// Path returns the cleaned absolute path whose identity Revalidate protects.
+func (directory *Directory) Path() string {
+	if directory == nil {
+		return ""
+	}
+	return directory.path
+}
+
+// Close releases the pinned descriptor. It is idempotent.
+func (directory *Directory) Close() error {
+	if directory == nil || directory.file == nil {
+		return nil
+	}
+	file := directory.file
+	directory.file = nil
+	return file.Close()
+}
+
+// Revalidate proves that the configured pathname still resolves to the
+// pinned, owner-private directory. Directory modification times and link
+// counts intentionally are not frozen because child publication changes them.
+func (directory *Directory) Revalidate() error {
+	if directory == nil || directory.file == nil {
+		return ErrClosed
+	}
+	opened, err := directory.file.Stat()
+	if err != nil {
+		return fmt.Errorf("revalidate private directory: inspect descriptor: %w", err)
+	}
+	if !os.SameFile(directory.info, opened) {
+		return errors.New("revalidate private directory: descriptor identity changed")
+	}
+	if err := validateOwnedDirectory(opened, os.Geteuid()); err != nil {
+		return fmt.Errorf("revalidate private directory: %w", err)
+	}
+	if err := validateNoExtendedACL(directory.file); err != nil {
+		return fmt.Errorf("revalidate private directory: %w", err)
+	}
+	current, err := os.Lstat(directory.path)
+	if err != nil {
+		return fmt.Errorf("revalidate private directory: inspect path: %w", err)
+	}
+	if !os.SameFile(opened, current) {
+		return errors.New("revalidate private directory: path no longer names the pinned directory")
+	}
+	if err := validateOwnedDirectory(current, os.Geteuid()); err != nil {
+		return fmt.Errorf("revalidate private directory: %w", err)
+	}
+	return nil
+}
+
+// Sync flushes directory metadata and verifies the pinned name on both sides
+// of the durability boundary.
+func (directory *Directory) Sync() error {
+	if err := directory.Revalidate(); err != nil {
+		return err
+	}
+	if err := directory.file.Sync(); err != nil {
+		return fmt.Errorf("sync private directory: %w", err)
+	}
+	return directory.Revalidate()
+}
+
+// SyncFile flushes a temporary or opened regular file. Callers remain
+// responsible for closing it before publication.
+func SyncFile(file *os.File) error {
+	if file == nil {
+		return errors.New("sync private file: file is missing")
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync private file: %w", err)
+	}
+	return nil
+}
+
+func validateFilePolicy(policy FilePolicy) error {
+	if len(policy.AllowedModes) == 0 {
+		return errors.New("private file policy requires at least one allowed mode")
+	}
+	if policy.MinimumSize < 0 || policy.MaximumSize < policy.MinimumSize {
+		return errors.New("private file policy has an invalid size range")
+	}
+	for _, mode := range policy.AllowedModes {
+		if mode != mode.Perm() || hasSpecialMode(mode) {
+			return errors.New("private file policy contains an invalid mode")
+		}
+	}
+	return nil
+}
+
+func validateOwnedRegularFile(
+	info os.FileInfo,
+	policy FilePolicy,
+	effectiveUID int,
+) error {
+	if err := validateFilePolicy(policy); err != nil {
+		return err
+	}
+	if info == nil || !info.Mode().IsRegular() {
+		return errors.New("private file must be a regular file")
+	}
+	if hasSpecialMode(info.Mode()) {
+		return errors.New("private file must not have special permission bits")
+	}
+	if !slices.Contains(policy.AllowedModes, info.Mode().Perm()) {
+		return errors.New("private file permissions are not allowed")
+	}
+	if info.Size() < policy.MinimumSize || info.Size() > policy.MaximumSize {
+		return errors.New("private file size is outside the allowed range")
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat == nil {
+		return errors.New("private file ownership and link metadata are unavailable")
+	}
+	if effectiveUID < 0 || int64(stat.Uid) != int64(effectiveUID) {
+		return errors.New("private file must be owned by the effective user")
+	}
+	if stat.Nlink != 1 {
+		return errors.New("private file must have exactly one hard link")
+	}
+	return nil
+}
+
+// OpenRegular opens one exact child without following it and validates its
+// current owner, mode, size, link count, and extended ACL.
+func (directory *Directory) OpenRegular(
+	name string,
+	policy FilePolicy,
+) (*os.File, error) {
+	if err := ValidateComponent(name); err != nil {
+		return nil, err
+	}
+	if err := validateFilePolicy(policy); err != nil {
+		return nil, err
+	}
+	if err := directory.Revalidate(); err != nil {
+		return nil, err
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return nil, err
+	}
+	fd, err := unix.Openat(
+		directoryFD,
+		name,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open private file %q: %w", name, err)
+	}
+	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+	file := os.NewFile(uintptr(fd), name)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("open private file %q: invalid descriptor", name)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private file %q: inspect descriptor: %w", name, err)
+	}
+	if err := validateOwnedRegularFile(info, policy, os.Geteuid()); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private file %q: %w", name, err)
+	}
+	if err := validateNoExtendedACL(file); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private file %q: %w", name, err)
+	}
+	if err := sameOpenPath(directoryFD, name, fd); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private file %q: %w", name, err)
+	}
+	stableInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private file %q: reinspect descriptor: %w", name, err)
+	}
+	if err := validateOwnedRegularFile(stableInfo, policy, os.Geteuid()); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private file %q: %w", name, err)
+	}
+	if err := validateNoExtendedACL(file); err != nil {
+		_ = file.Close()
+		return nil, fmt.Errorf("open private file %q: %w", name, err)
+	}
+	if err := directory.Revalidate(); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func sameOpenPath(directoryFD int, name string, openedFD int) error {
+	var opened, current unix.Stat_t
+	if err := unix.Fstat(openedFD, &opened); err != nil {
+		return fmt.Errorf("inspect open descriptor: %w", err)
+	}
+	if err := unix.Fstatat(
+		directoryFD,
+		name,
+		&current,
+		unix.AT_SYMLINK_NOFOLLOW,
+	); err != nil {
+		return fmt.Errorf("reinspect child name: %w", err)
+	}
+	if opened.Dev != current.Dev || opened.Ino != current.Ino {
+		return errors.New("child name changed while opening")
+	}
+	return nil
+}
+
+func nextTemporaryName(generator NameGenerator) (string, error) {
+	if generator == nil {
+		return "", errors.New("private filesystem temporary name generator is required")
+	}
+	name, err := generator()
+	if err != nil {
+		return "", err
+	}
+	if err := ValidateComponent(name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// CreateTemporaryFile exclusively creates one owner-private 0600 regular file
+// relative to the pinned directory. Name collisions are retried without ever
+// inspecting or replacing the colliding object.
+func (directory *Directory) CreateTemporaryFile(
+	generator NameGenerator,
+) (string, *os.File, error) {
+	if err := directory.Revalidate(); err != nil {
+		return "", nil, err
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return "", nil, err
+	}
+	for range maximumNameAttempts {
+		name, nameErr := nextTemporaryName(generator)
+		if nameErr != nil {
+			return "", nil, nameErr
+		}
+		fd, openErr := unix.Openat(
+			directoryFD,
+			name,
+			unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+			0o600,
+		)
+		if errors.Is(openErr, unix.EEXIST) {
+			continue
+		}
+		if openErr != nil {
+			return "", nil, fmt.Errorf("create private temporary file %q: %w", name, openErr)
+		}
+		// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+		file := os.NewFile(uintptr(fd), name)
+		if file == nil {
+			_ = unix.Close(fd)
+			_ = unix.Unlinkat(directoryFD, name, 0)
+			return "", nil, errors.New("create private temporary file: invalid descriptor")
+		}
+		cleanup := func() {
+			_ = file.Close()
+			_ = unix.Unlinkat(directoryFD, name, 0)
+		}
+		if chmodErr := unix.Fchmod(fd, 0o600); chmodErr != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("secure private temporary file %q: %w", name, chmodErr)
+		}
+		info, statErr := file.Stat()
+		if statErr != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("inspect private temporary file %q: %w", name, statErr)
+		}
+		policy := FilePolicy{AllowedModes: []fs.FileMode{0o600}, MaximumSize: 0}
+		if validateErr := validateOwnedRegularFile(info, policy, os.Geteuid()); validateErr != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("inspect private temporary file %q: %w", name, validateErr)
+		}
+		if aclErr := validateNoExtendedACL(file); aclErr != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("inspect private temporary file %q: %w", name, aclErr)
+		}
+		if pathErr := sameOpenPath(directoryFD, name, fd); pathErr != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("inspect private temporary file %q: %w", name, pathErr)
+		}
+		stableInfo, statErr := file.Stat()
+		if statErr != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("reinspect private temporary file %q: %w", name, statErr)
+		}
+		if validateErr := validateOwnedRegularFile(
+			stableInfo,
+			policy,
+			os.Geteuid(),
+		); validateErr != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("reinspect private temporary file %q: %w", name, validateErr)
+		}
+		if stableErr := directory.Revalidate(); stableErr != nil {
+			cleanup()
+			return "", nil, stableErr
+		}
+		return name, file, nil
+	}
+	return "", nil, fmt.Errorf(
+		"create private temporary file: all %d candidate names exist",
+		maximumNameAttempts,
+	)
+}
+
+// CreateTemporaryDirectory exclusively creates and pins one owner-private
+// 0700 child directory.
+func (directory *Directory) CreateTemporaryDirectory(
+	generator NameGenerator,
+) (string, *Directory, error) {
+	if err := directory.Revalidate(); err != nil {
+		return "", nil, err
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return "", nil, err
+	}
+	for range maximumNameAttempts {
+		name, nameErr := nextTemporaryName(generator)
+		if nameErr != nil {
+			return "", nil, nameErr
+		}
+		mkdirErr := unix.Mkdirat(directoryFD, name, 0o700)
+		if errors.Is(mkdirErr, unix.EEXIST) {
+			continue
+		}
+		if mkdirErr != nil {
+			return "", nil, fmt.Errorf("create private temporary directory %q: %w", name, mkdirErr)
+		}
+		child, openErr := directory.openChildDirectory(name, true)
+		if openErr != nil {
+			_ = unix.Unlinkat(directoryFD, name, unix.AT_REMOVEDIR)
+			return "", nil, openErr
+		}
+		if stableErr := directory.Revalidate(); stableErr != nil {
+			_ = child.Close()
+			_ = unix.Unlinkat(directoryFD, name, unix.AT_REMOVEDIR)
+			return "", nil, stableErr
+		}
+		return name, child, nil
+	}
+	return "", nil, fmt.Errorf(
+		"create private temporary directory: all %d candidate names exist",
+		maximumNameAttempts,
+	)
+}
+
+func (directory *Directory) openChildDirectory(
+	name string,
+	secureNewDirectory bool,
+) (*Directory, error) {
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return nil, err
+	}
+	fd, err := unix.Openat(
+		directoryFD,
+		name,
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("open private child directory %q: %w", name, err)
+	}
+	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+	file := os.NewFile(uintptr(fd), name)
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("open private child directory %q: invalid descriptor", name)
+	}
+	cleanup := func() { _ = file.Close() }
+	if secureNewDirectory {
+		if err := unix.Fchmod(fd, 0o700); err != nil {
+			cleanup()
+			return nil, fmt.Errorf("secure private child directory %q: %w", name, err)
+		}
+	}
+	info, err := file.Stat()
+	if err != nil {
+		cleanup()
+		return nil, fmt.Errorf("inspect private child directory %q: %w", name, err)
+	}
+	if err := validateOwnedDirectory(info, os.Geteuid()); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("inspect private child directory %q: %w", name, err)
+	}
+	if err := validateNoExtendedACL(file); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("inspect private child directory %q: %w", name, err)
+	}
+	if err := sameOpenPath(directoryFD, name, fd); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("inspect private child directory %q: %w", name, err)
+	}
+	child := &Directory{
+		path: filepath.Join(directory.path, name),
+		file: file,
+		info: info,
+	}
+	if err := child.Revalidate(); err != nil {
+		cleanup()
+		return nil, err
+	}
+	return child, nil
+}
+
+// List returns sorted exact component names and refuses to examine more than
+// maximum entries. A fresh descriptor prevents prior calls from sharing a
+// directory stream offset.
+func (directory *Directory) List(maximum int) ([]string, error) {
+	if maximum < 0 || maximum == math.MaxInt {
+		return nil, errors.New("list private directory: maximum is outside the valid range")
+	}
+	if err := directory.Revalidate(); err != nil {
+		return nil, err
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return nil, err
+	}
+	fd, err := unix.Openat(
+		directoryFD,
+		".",
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW,
+		0,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list private directory: open stream: %w", err)
+	}
+	// #nosec G115 -- unix.Openat returned a non-negative native descriptor.
+	stream := os.NewFile(uintptr(fd), directory.path)
+	if stream == nil {
+		_ = unix.Close(fd)
+		return nil, errors.New("list private directory: invalid stream descriptor")
+	}
+	entries, readErr := stream.ReadDir(maximum + 1)
+	closeErr := stream.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) {
+		return nil, fmt.Errorf("list private directory: read stream: %w", readErr)
+	}
+	if closeErr != nil {
+		return nil, fmt.Errorf("list private directory: close stream: %w", closeErr)
+	}
+	if len(entries) > maximum {
+		return nil, fmt.Errorf("list private directory: contains more than %d entries", maximum)
+	}
+	names := make([]string, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if err := ValidateComponent(name); err != nil {
+			return nil, fmt.Errorf("list private directory: invalid entry name: %w", err)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, errors.New("list private directory: duplicate entry name")
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	if err := directory.Revalidate(); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
+// RequireEntries verifies the complete exact entry set under one bounded
+// directory scan.
+func (directory *Directory) RequireEntries(
+	expected []string,
+	maximum int,
+) error {
+	if len(expected) > maximum {
+		return errors.New("require private directory entries: expected set exceeds maximum")
+	}
+	want := slices.Clone(expected)
+	for _, name := range want {
+		if err := ValidateComponent(name); err != nil {
+			return err
+		}
+	}
+	slices.Sort(want)
+	for index := 1; index < len(want); index++ {
+		if want[index-1] == want[index] {
+			return errors.New("require private directory entries: duplicate expected name")
+		}
+	}
+	got, err := directory.List(maximum)
+	if err != nil {
+		return err
+	}
+	if !slices.Equal(got, want) {
+		return fmt.Errorf("require private directory entries: got %v, want %v", got, want)
+	}
+	return nil
+}
+
+// Unlink removes one exact non-directory name without following it. It is the
+// narrow cleanup primitive for a temporary file whose descriptor and metadata
+// the caller has already validated.
+func (directory *Directory) Unlink(name string) error {
+	if err := ValidateComponent(name); err != nil {
+		return err
+	}
+	if err := directory.Revalidate(); err != nil {
+		return err
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return err
+	}
+	if err := unix.Unlinkat(directoryFD, name, 0); err != nil {
+		return fmt.Errorf("unlink private child %q: %w", name, err)
+	}
+	return directory.Revalidate()
+}
+
+// RemoveOwnedEmptyDirectory removes one owner-private 0700 stage only after a
+// pinned descriptor proves that it is empty. It never follows a reserved-name
+// symlink or recursively traverses attacker-controlled entries.
+func (directory *Directory) RemoveOwnedEmptyDirectory(name string) error {
+	if err := ValidateComponent(name); err != nil {
+		return err
+	}
+	if err := directory.Revalidate(); err != nil {
+		return err
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return err
+	}
+	child, err := directory.openChildDirectory(name, false)
+	if err != nil {
+		return err
+	}
+	childFD, descriptorErr := child.descriptor()
+	var opened unix.Stat_t
+	if descriptorErr == nil {
+		descriptorErr = unix.Fstat(childFD, &opened)
+	}
+	if descriptorErr == nil {
+		descriptorErr = child.RequireEntries(nil, 0)
+	}
+	if descriptorErr != nil {
+		closeErr := child.Close()
+		return fmt.Errorf(
+			"remove private empty directory %q: %w",
+			name,
+			errors.Join(descriptorErr, closeErr),
+		)
+	}
+	var current unix.Stat_t
+	if err := unix.Fstatat(
+		directoryFD,
+		name,
+		&current,
+		unix.AT_SYMLINK_NOFOLLOW,
+	); err != nil {
+		closeErr := child.Close()
+		return fmt.Errorf(
+			"remove private empty directory %q: reinspect name: %w",
+			name,
+			errors.Join(err, closeErr),
+		)
+	}
+	if opened.Dev != current.Dev || opened.Ino != current.Ino {
+		closeErr := child.Close()
+		return fmt.Errorf(
+			"remove private empty directory %q: %w",
+			name,
+			errors.Join(errors.New("name changed"), closeErr),
+		)
+	}
+	removeErr := unix.Unlinkat(directoryFD, name, unix.AT_REMOVEDIR)
+	closeErr := child.Close()
+	if err := errors.Join(removeErr, closeErr); err != nil {
+		return fmt.Errorf("remove private empty directory %q: %w", name, err)
+	}
+	return directory.Revalidate()
+}
+
+// RenameNoReplace atomically moves one exact child to an exact child of the
+// destination directory and fails if any destination object already exists.
+// Unsupported syscall/filesystem behavior is returned rather than emulated.
+func (directory *Directory) RenameNoReplace(
+	from string,
+	destination *Directory,
+	to string,
+) error {
+	if err := ValidateComponent(from); err != nil {
+		return err
+	}
+	if err := ValidateComponent(to); err != nil {
+		return err
+	}
+	if err := directory.Revalidate(); err != nil {
+		return err
+	}
+	if err := destination.Revalidate(); err != nil {
+		return err
+	}
+	fromFD, err := directory.descriptor()
+	if err != nil {
+		return err
+	}
+	toFD, err := destination.descriptor()
+	if err != nil {
+		return err
+	}
+	renameErr := renameNoReplaceAt(fromFD, from, toFD, to)
+	fromStableErr := directory.Revalidate()
+	var toStableErr error
+	if destination != directory {
+		toStableErr = destination.Revalidate()
+	}
+	if stabilityErr := errors.Join(fromStableErr, toStableErr); stabilityErr != nil {
+		return fmt.Errorf("rename private child: directory stability: %w", stabilityErr)
+	}
+	if renameErr != nil {
+		if errors.Is(renameErr, unix.EEXIST) || errors.Is(renameErr, unix.ENOTEMPTY) {
+			return fmt.Errorf("%w: %s", ErrDestinationExists, to)
+		}
+		if errors.Is(renameErr, unix.ENOSYS) || errors.Is(renameErr, unix.ENOTSUP) ||
+			errors.Is(renameErr, unix.EOPNOTSUPP) || errors.Is(renameErr, unix.EINVAL) {
+			return fmt.Errorf(
+				"%w: no-replace rename: %w",
+				ErrUnsupportedPlatform,
+				renameErr,
+			)
+		}
+		return fmt.Errorf("rename private child without replacement: %w", renameErr)
+	}
+	return nil
+}

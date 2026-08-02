@@ -406,6 +406,22 @@ in [Ingestion rate limits v0.1](ingestion-rate-limits-v0.1.md).
 
 The first deployment is single-user on a trusted network, so end-user authentication and RBAC are not release blockers. Collector ingestion tokens remain necessary: even on a trusted network, they prevent accidental cross-index writes and establish a protocol that can be hardened later. SQLite is sufficient for this single-node control plane and should run in WAL mode with explicit backup and migration tooling. Checked-in SQL migrations remain the sole schema authority, while explicit GORM models make control-plane keys, relationships, constraints, and bounded projections legible in Go. `AutoMigrate` is not used in production. Narrow raw SQL remains appropriate for SQLite transaction modes and conditional compare-and-swap or fencing operations that GORM cannot express safely or efficiently.
 
+The control-plane recovery contract is offline and release-exact. With the
+server stopped, one command creates a new bundle containing a self-contained
+SQLite snapshot, its matching external master key, and its matching
+administrator token; a second command verifies that bundle; and a third
+restores it only into absent paths in one secure fresh directory. Interrupted
+restore is retryable only for an exact database, database-plus-key, or complete
+database-plus-key-plus-token prefix from the same bundle. The bundle explicitly
+excludes ClickHouse and export artifacts and therefore is not a deployment
+backup or a complete disaster-recovery procedure. Its recovery-set ID must be
+recorded with a ClickHouse-native backup taken during the same server-quiescent
+interval, and both members must be restored together. Pairing the SQLite
+visibility ledger with an independently advanced, older, or different
+ClickHouse data set is unsupported: it can hide acknowledged events, reuse
+visibility identities, or revive stale deletion state, and the control-plane
+commands cannot verify that external pairing.
+
 The ingestion-token catalog is deliberately bounded rather than an unbounded
 audit log. The production default and hard structural ceiling both admit at
 most 1,024 physical token records, and the catalog admits at most 16,384 total

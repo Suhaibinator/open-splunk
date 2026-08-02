@@ -285,11 +285,76 @@ docker compose down
 ClickHouse and Open Splunk state and is appropriate only for a disposable
 stack.
 
-Hot-copying the SQLite files is not a supported backup. Until the planned
-backup/restore command exists, stop the server and retain the entire
-`server-state` volume as one unit so the database and master key cannot be
-separated. Back up ClickHouse through ClickHouse-supported tooling rather than
-copying a live data directory.
+Hot-copying the SQLite database, WAL, or sidecar files is not a supported
+backup. Stop the Open Splunk server before creating or restoring a
+control-plane bundle. Use the same `open-splunk-server` release for all three
+operations.
+
+Create a bundle at a destination which does not already exist. Its existing
+parent directory must be owned by the command user with mode `0700`:
+
+```sh
+open-splunk-server backup-control-plane \
+  -control-db /var/lib/open-splunk/state/private/open-splunk.db \
+  -master-key /var/lib/open-splunk/state/private/master.key \
+  -administrator-token-file \
+    /var/lib/open-splunk/state/private/administrator.token \
+  -destination /path/to/new/control-plane-bundle
+```
+
+Successful creation is silent and exits with status zero. Any diagnostic or
+nonzero exit means the destination must not be treated as a usable backup. A
+complete bundle contains a manifest, one self-contained SQLite snapshot, the
+matching master key, and the matching administrator token. It does not contain
+the SQLite WAL or shared-memory sidecar.
+
+Verify the completed bundle as a separate operation before copying or
+restoring it:
+
+```sh
+open-splunk-server verify-control-plane-backup \
+  -source /path/to/new/control-plane-bundle
+```
+
+Restore only into three absent paths in one fresh owner-only directory. In the
+container deployment that directory is owned by UID/GID `65532:65532` with
+mode `0700`; restored files are mode `0600`:
+
+```sh
+open-splunk-server restore-control-plane \
+  -source /path/to/new/control-plane-bundle \
+  -control-db /var/lib/open-splunk/state/private/open-splunk.db \
+  -master-key /var/lib/open-splunk/state/private/master.key \
+  -administrator-token-file \
+    /var/lib/open-splunk/state/private/administrator.token
+```
+
+Do not restore over a current deployment or mix members from different
+bundles. Restore publication has one resumable order: database, master key,
+then administrator token. After an interruption, rerunning the same command
+with the same bundle and targets may resume only when every existing target is
+an exact match and the directory contains a prefix of that order: no members,
+database only, database plus key, or all three members. A mismatched member, a
+key without its database, a token without both predecessors, a SQLite sidecar,
+or an unrelated directory entry fails closed. Do not repair a partial restore
+by copying files manually.
+
+> **Coordinated-recovery warning:** A control-plane bundle is not a deployment
+> backup. It contains neither ClickHouse event data nor export artifacts. The
+> SQLite visibility ledger and the ClickHouse events table form one recovery
+> unit. Create this bundle only while the Open Splunk server is stopped, pair
+> it with a ClickHouse-native backup taken during the same quiescent interval,
+> and restore both members together. Record the bundle manifest's
+> `recovery_set_id` with that ClickHouse backup. Restoring this bundle against
+> an independently advanced, older, or different ClickHouse data set is
+> unsupported and can make acknowledged events invisible, reuse visibility
+> identities, or revive stale deletion state. The control-plane commands
+> cannot verify that external pairing.
+
+Export artifacts are deliberately outside this recovery bundle and may be
+recreated by rerunning their source searches. This procedure establishes only
+the control-plane member of a coordinated recovery set; it does not claim a
+complete disaster-recovery procedure.
 
 ## Collector image
 

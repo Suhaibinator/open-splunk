@@ -32,4 +32,8 @@ var (
 	ErrMigrationDrift = errors.New("control: applied migration differs from embedded migration")
 	// ErrDatabaseTooNew means the database was migrated by a newer binary.
 	ErrDatabaseTooNew = errors.New("control: database schema is newer than this binary")
+	// ErrDatabaseNotCurrent means the database is missing one or more migrations
+	// from the exact migration set supplied by the caller. Read-only backup
+	// tooling must not silently upgrade its source while verifying it.
+	ErrDatabaseNotCurrent = errors.New("control: database schema is not current")
 )

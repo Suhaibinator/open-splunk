@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Suhaibinator/open-splunk/internal/auth"
 )
 
-const masterKeyBytes = 32
+const masterKeyBytes = auth.ServerMasterKeyBytes
 
 func loadOrCreateMasterKey(path string, random io.Reader) ([]byte, error) {
 	absPath, err := resolveMasterKeyPath(path)

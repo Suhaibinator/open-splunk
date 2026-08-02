@@ -245,6 +245,260 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 			t.Fatalf("persisted bootstrap indexes do not contain %q: %+v", name, bootstrap.GetIndexes())
 		}
 	}
+	releaseOCIAssertControlPlaneRecovery(
+		t,
+		ctx,
+		stack,
+		client,
+		administratorToken,
+		[]string{firstIndex, secondIndex},
+		firstStateVolume,
+		recreatedServerID,
+		recreatedClickHouseID,
+		suffix,
+	)
+}
+
+func releaseOCIAssertControlPlaneRecovery(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	client *http.Client,
+	administratorToken string,
+	preBackupIndexes []string,
+	originalStateVolume string,
+	originalServerID string,
+	clickHouseID string,
+	suffix string,
+) {
+	t.Helper()
+	const (
+		stateRoot                = "/var/lib/open-splunk/state"
+		statePrivateDirectory    = stateRoot + "/private"
+		controlDatabasePath      = statePrivateDirectory + "/open-splunk.db"
+		masterKeyPath            = statePrivateDirectory + "/master.key"
+		administratorTokenPath   = statePrivateDirectory + "/administrator.token"
+		backupRoot               = "/var/lib/open-splunk/exports"
+		backupPrivateDirectory   = backupRoot + "/private"
+		controlPlaneBackupSource = backupPrivateDirectory + "/control-plane"
+	)
+
+	stack.mustCompose(
+		t,
+		ctx,
+		"stop server before control-plane backup",
+		"stop",
+		"--timeout",
+		"40",
+		"server",
+	)
+	client.CloseIdleConnections()
+	stoppedServer := releaseOCIInspectContainer(t, ctx, stack, originalServerID)
+	if stoppedServer.State.Status != "exited" {
+		t.Fatalf("server state before control-plane backup = %q, want exited", stoppedServer.State.Status)
+	}
+
+	backupVolume := releaseOCICreateRecoveryVolume(t, ctx, stack, "control-plane-backup")
+	restoredStateVolume := releaseOCICreateRecoveryVolume(t, ctx, stack, "restored-server-state")
+	releaseOCIRunSilentRecoveryCommand(
+		t,
+		ctx,
+		stack,
+		"back up control plane with release image",
+		stack.project+"-control-plane-backup",
+		[]string{
+			"type=volume,source=" + originalStateVolume + ",target=" + stateRoot,
+			"type=volume,source=" + backupVolume + ",target=" + backupRoot,
+		},
+		"backup-control-plane",
+		"-control-db", controlDatabasePath,
+		"-master-key", masterKeyPath,
+		"-administrator-token-file", administratorTokenPath,
+		"-destination", controlPlaneBackupSource,
+	)
+	releaseOCIRunSilentRecoveryCommand(
+		t,
+		ctx,
+		stack,
+		"verify control-plane backup from read-only volume",
+		stack.project+"-control-plane-verify",
+		[]string{
+			"type=volume,source=" + backupVolume + ",target=" + backupRoot + ",readonly",
+		},
+		"verify-control-plane-backup",
+		"-source", controlPlaneBackupSource,
+	)
+	releaseOCIRunSilentRecoveryCommand(
+		t,
+		ctx,
+		stack,
+		"restore control plane into fresh state volume",
+		stack.project+"-control-plane-restore",
+		[]string{
+			"type=volume,source=" + backupVolume + ",target=" + backupRoot + ",readonly",
+			"type=volume,source=" + restoredStateVolume + ",target=" + stateRoot,
+		},
+		"restore-control-plane",
+		"-source", controlPlaneBackupSource,
+		"-control-db", controlDatabasePath,
+		"-master-key", masterKeyPath,
+		"-administrator-token-file", administratorTokenPath,
+	)
+
+	// Rebind only the logical server-state volume. ClickHouse keeps running on
+	// its original persistent volumes throughout the recovery drill.
+	stack.ownedVolumes = append(stack.ownedVolumes, originalStateVolume)
+	overridePath := filepath.Join(filepath.Dir(stack.envFile), "recovery-volume.override.yaml")
+	override := "volumes:\n  server-state:\n    external: true\n    name: " +
+		strconv.Quote(restoredStateVolume) + "\n"
+	if err := os.WriteFile(overridePath, []byte(override), 0o600); err != nil {
+		t.Fatalf("write recovery Compose override: %v", err)
+	}
+	stack.composeOverrides = append(stack.composeOverrides, overridePath)
+	// Start directly from restored state. Running server-bootstrap first could
+	// recreate a missing administrator token and mask an incomplete restore.
+	stack.mustCompose(
+		t,
+		ctx,
+		"restart server on restored state volume",
+		"up",
+		"--detach",
+		"--wait",
+		"--wait-timeout",
+		"240",
+		"--no-build",
+		"--no-deps",
+		"--force-recreate",
+		"server",
+	)
+
+	restoredClickHouseID := stack.serviceContainerID(t, ctx, "clickhouse", false)
+	if restoredClickHouseID != clickHouseID {
+		t.Fatalf(
+			"control-plane recovery replaced ClickHouse container %q with %q",
+			clickHouseID,
+			restoredClickHouseID,
+		)
+	}
+	restoredServerID := stack.serviceContainerID(t, ctx, "server", false)
+	if restoredServerID == originalServerID {
+		t.Fatalf("control-plane recovery retained stopped server container %q", originalServerID)
+	}
+	restoredServer := releaseOCIInspectContainer(t, ctx, stack, restoredServerID)
+	if got := releaseOCIStateVolume(t, restoredServer); got != restoredStateVolume {
+		t.Fatalf("restored server state volume = %q, want %q", got, restoredStateVolume)
+	}
+	releaseOCIAssertContainerHardening(t, restoredServer, "65532:65532", true)
+	releaseOCIAssertContainerHealth(t, restoredServer, "restored server")
+	releaseOCIAssertServerEnvironmentHasNoSecrets(t, stack, restoredServer)
+	restoredHTTPAddress, restoredGRPCAddress := releaseOCIPublishedServerAddresses(t, restoredServer)
+	if restoredHTTPAddress == restoredGRPCAddress {
+		t.Fatalf(
+			"restored release server HTTP and gRPC share host address %q",
+			restoredHTTPAddress,
+		)
+	}
+	restoredClient, restoredBaseURL := releaseOCIHTTPSClient(t, stack, restoredHTTPAddress)
+	releaseOCIAssertHTTPSBoundary(t, ctx, restoredClient, restoredBaseURL, restoredHTTPAddress)
+	status, body, err := releaseOCIProbeHealthEndpoint(ctx, restoredClient, restoredBaseURL+"/readyz")
+	if err != nil || status != http.StatusOK || body != "ok\n" {
+		t.Fatalf(
+			"restored runtime readiness = status %d body %q error %v",
+			status,
+			body,
+			err,
+		)
+	}
+
+	restoredBootstrap := releaseOCIBootstrap(t, ctx, restoredClient, restoredBaseURL)
+	for _, name := range preBackupIndexes {
+		if !slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
+			return index.GetName() == name
+		}) {
+			t.Fatalf("restored bootstrap indexes do not contain %q: %+v", name, restoredBootstrap.GetIndexes())
+		}
+	}
+	postRestoreIndex := "oci-after-control-plane-restore-" + suffix
+	releaseOCICreateIndex(
+		t,
+		ctx,
+		restoredClient,
+		restoredBaseURL,
+		administratorToken,
+		postRestoreIndex,
+	)
+	restoredBootstrap = releaseOCIBootstrap(t, ctx, restoredClient, restoredBaseURL)
+	if !slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
+		return index.GetName() == postRestoreIndex
+	}) {
+		t.Fatalf(
+			"restored bootstrap indexes do not contain post-restore mutation %q: %+v",
+			postRestoreIndex,
+			restoredBootstrap.GetIndexes(),
+		)
+	}
+}
+
+func releaseOCICreateRecoveryVolume(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	purpose string,
+) string {
+	t.Helper()
+	name := stack.project + "-" + purpose
+	stack.ownedVolumes = append(stack.ownedVolumes, name)
+	created := releaseOCIRunDocker(
+		t,
+		ctx,
+		stack,
+		"create "+purpose+" volume",
+		"volume",
+		"create",
+		"--label",
+		"com.open-splunk.integration.project="+stack.project,
+		name,
+	)
+	if created != name {
+		t.Fatalf("created %s volume = %q, want %q", purpose, created, name)
+	}
+	return name
+}
+
+func releaseOCIRunSilentRecoveryCommand(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	operation string,
+	containerName string,
+	mounts []string,
+	arguments ...string,
+) {
+	t.Helper()
+	stack.ownedContainers = append(stack.ownedContainers, containerName)
+	dockerArguments := []string{
+		"run",
+		"--rm",
+		"--name", containerName,
+		"--network", "none",
+		"--read-only",
+		"--user", "65532:65532",
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges:true",
+		"--pids-limit", "64",
+		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532",
+	}
+	for _, mount := range mounts {
+		dockerArguments = append(dockerArguments, "--mount", mount)
+	}
+	dockerArguments = append(dockerArguments, stack.serverImage)
+	dockerArguments = append(dockerArguments, arguments...)
+	if output := releaseOCIRunDocker(t, ctx, stack, operation, dockerArguments...); output != "" {
+		t.Fatalf("%s produced output on success: %q", operation, stack.redact(output))
+	}
+	stack.ownedContainers = slices.DeleteFunc(stack.ownedContainers, func(name string) bool {
+		return name == containerName
+	})
 }
 
 func releaseOCIAssertDefaultClickHouseUserRejected(
@@ -289,15 +543,18 @@ func releaseOCIAssertDefaultClickHouseUserRejected(
 }
 
 type releaseOCIComposeStack struct {
-	project         string
-	repository      string
-	deployDirectory string
-	composeFile     string
-	envFile         string
-	values          map[string]string
-	retainedSecrets []string
-	serverImage     string
-	collectorImage  string
+	project          string
+	repository       string
+	deployDirectory  string
+	composeFile      string
+	composeOverrides []string
+	envFile          string
+	values           map[string]string
+	retainedSecrets  []string
+	serverImage      string
+	collectorImage   string
+	ownedContainers  []string
+	ownedVolumes     []string
 }
 
 func (stack *releaseOCIComposeStack) environment() []string {
@@ -332,6 +589,9 @@ func (stack *releaseOCIComposeStack) composeCommand(
 		stack.deployDirectory,
 		"--file",
 		stack.composeFile,
+	}
+	for _, override := range stack.composeOverrides {
+		composeArguments = append(composeArguments, "--file", override)
 	}
 	composeArguments = append(composeArguments, arguments...)
 	command := exec.CommandContext(ctx, "docker", composeArguments...)
@@ -433,6 +693,57 @@ func (stack *releaseOCIComposeStack) cleanup(t *testing.T) {
 		)
 	}
 	cancel()
+	for _, container := range stack.ownedContainers {
+		containerContext, containerCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		command := exec.CommandContext(
+			containerContext,
+			"docker",
+			"container",
+			"rm",
+			"--force",
+			container,
+		)
+		configureProcessGroup(command)
+		output, truncated, err := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
+		containerCancel()
+		if err != nil && !strings.Contains(strings.ToLower(output), "no such container") {
+			t.Errorf(
+				"remove release OCI test container %q: %v: %s",
+				container,
+				err,
+				formatBoundedCommandOutput(output, truncated, maximumHarnessOutputBytes),
+			)
+		}
+		if truncated {
+			t.Errorf(
+				"remove release OCI test container %q produced excessive output: %s",
+				container,
+				formatBoundedCommandOutput(output, true, maximumHarnessOutputBytes),
+			)
+		}
+	}
+	for _, volume := range stack.ownedVolumes {
+		volumeContext, volumeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		command := exec.CommandContext(volumeContext, "docker", "volume", "rm", "--force", volume)
+		configureProcessGroup(command)
+		output, truncated, err := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
+		volumeCancel()
+		if err != nil && !strings.Contains(strings.ToLower(output), "no such volume") {
+			t.Errorf(
+				"remove release OCI test volume %q: %v: %s",
+				volume,
+				err,
+				formatBoundedCommandOutput(output, truncated, maximumHarnessOutputBytes),
+			)
+		}
+		if truncated {
+			t.Errorf(
+				"remove release OCI test volume %q produced excessive output: %s",
+				volume,
+				formatBoundedCommandOutput(output, true, maximumHarnessOutputBytes),
+			)
+		}
+	}
 	for _, image := range []string{stack.serverImage, stack.collectorImage} {
 		imageContext, imageCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		command := exec.CommandContext(imageContext, "docker", "image", "rm", "--force", image)

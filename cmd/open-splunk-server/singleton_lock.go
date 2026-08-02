@@ -28,6 +28,22 @@ func acquireServerLock(databasePath string) (*serverLock, error) {
 	return acquireServerLockAt(databasePath, hostSingletonLockPath)
 }
 
+func acquireHostServerLock() (*serverLock, error) {
+	return acquireHostServerLockAt(hostSingletonLockPath)
+}
+
+func acquireHostServerLockAt(singletonPath string) (*serverLock, error) {
+	if !filepath.IsAbs(singletonPath) {
+		return nil, errors.New("acquire server lock: host singleton path must be absolute")
+	}
+	path := filepath.Clean(singletonPath)
+	file, err := acquireFileLock(path)
+	if err != nil {
+		return nil, err
+	}
+	return &serverLock{files: []*os.File{file}}, nil
+}
+
 func acquireServerLockAt(databasePath, singletonPath string) (*serverLock, error) {
 	if strings.TrimSpace(databasePath) == "" || databasePath == ":memory:" {
 		return nil, errors.New("acquire server lock: control database must name a persistent file")

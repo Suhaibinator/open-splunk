@@ -20,10 +20,80 @@ const migrationLockRetryWindow = 30 * time.Second
 var migrationFilename = regexp.MustCompile(`^([0-9]{4})_([a-z0-9][a-z0-9_]*)\.sql$`)
 
 type migration struct {
-	version  int
+	version  uint32
 	name     string
 	contents []byte
 	checksum [sha256.Size]byte
+}
+
+// MigrationIdentity identifies one exact, ordered set of SQLite migrations.
+// It can be persisted alongside a backup manifest and compared without
+// depending on the migrations' application timestamps.
+type MigrationIdentity struct {
+	LatestVersion uint32
+	SHA256        [sha256.Size]byte
+}
+
+// VerifyCurrentMigrations verifies that the database migration ledger exactly
+// matches migrationFS. Unlike ApplyMigrations, it never creates the ledger or
+// applies missing migrations, making it safe for read-only backup tooling.
+func (db *DB) VerifyCurrentMigrations(
+	ctx context.Context,
+	migrationFS fs.FS,
+) (MigrationIdentity, error) {
+	if ctx == nil || db == nil || db.sql == nil || migrationFS == nil {
+		return MigrationIdentity{}, fmt.Errorf(
+			"%w: migration context, database, and filesystem are required",
+			ErrInvalidArgument,
+		)
+	}
+	loaded, err := loadMigrations(migrationFS)
+	if err != nil {
+		return MigrationIdentity{}, err
+	}
+	var ledgerCount int
+	if err := db.sql.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM sqlite_schema
+		WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&ledgerCount); err != nil {
+		return MigrationIdentity{}, fmt.Errorf("inspect SQLite migration ledger: %w", err)
+	}
+	if ledgerCount != 1 {
+		return MigrationIdentity{}, fmt.Errorf("%w: migration ledger is missing", ErrDatabaseNotCurrent)
+	}
+	appliedCount, err := verifyMigrationHistory(ctx, db.sql, loaded)
+	if err != nil {
+		return MigrationIdentity{}, err
+	}
+	if appliedCount != loaded[len(loaded)-1].version {
+		return MigrationIdentity{}, fmt.Errorf(
+			"%w: database version %d, required version %d",
+			ErrDatabaseNotCurrent,
+			appliedCount,
+			loaded[len(loaded)-1].version,
+		)
+	}
+
+	return migrationSetIdentity(loaded), nil
+}
+
+func migrationSetIdentity(loaded []migration) MigrationIdentity {
+	hasher := sha256.New()
+	_, _ = hasher.Write([]byte("open-splunk/sqlite-migrations/v1\x00"))
+	for _, item := range loaded {
+		_, _ = hasher.Write([]byte(strconv.FormatUint(uint64(item.version), 10)))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(strconv.Itoa(len(item.name))))
+		_, _ = hasher.Write([]byte{0})
+		_, _ = hasher.Write([]byte(item.name))
+		_, _ = hasher.Write(item.checksum[:])
+	}
+	var digest [sha256.Size]byte
+	copy(digest[:], hasher.Sum(nil))
+	return MigrationIdentity{
+		LatestVersion: loaded[len(loaded)-1].version,
+		SHA256:        digest,
+	}
 }
 
 // ApplyMigrations applies a contiguous, ordered set of SQL migrations. History
@@ -98,22 +168,22 @@ func verifyMigrationHistory(
 	ctx context.Context,
 	db migrationQuerier,
 	loaded []migration,
-) (int, error) {
+) (uint32, error) {
 	rows, err := db.QueryContext(ctx, `SELECT version, name, checksum FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return 0, fmt.Errorf("read SQLite migration history: %w", err)
 	}
 	defer rows.Close()
 
-	expectedVersion := 1
+	expectedVersion := uint32(1)
 	for rows.Next() {
-		var version int
+		var version uint32
 		var name string
 		var checksum []byte
 		if err := rows.Scan(&version, &name, &checksum); err != nil {
 			return 0, fmt.Errorf("scan SQLite migration history: %w", err)
 		}
-		if version > len(loaded) {
+		if version > loaded[len(loaded)-1].version {
 			return 0, fmt.Errorf("%w: database version %d, latest embedded version %d", ErrDatabaseTooNew, version, loaded[len(loaded)-1].version)
 		}
 		if version != expectedVersion {
@@ -163,10 +233,7 @@ func loadMigrations(migrations fs.FS) ([]migration, error) {
 		if matches == nil {
 			return nil, fmt.Errorf("%w: invalid migration filename %q", ErrInvalidArgument, entry.Name())
 		}
-		version, err := strconv.Atoi(matches[1])
-		if err != nil {
-			return nil, fmt.Errorf("%w: parse migration version in %q", ErrInvalidArgument, entry.Name())
-		}
+		version := parseMigrationVersion(matches[1])
 		contents, err := fs.ReadFile(migrations, entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("read SQLite migration %s: %w", entry.Name(), err)
@@ -185,11 +252,20 @@ func loadMigrations(migrations fs.FS) ([]migration, error) {
 		return nil, fmt.Errorf("%w: no SQLite migrations found", ErrInvalidArgument)
 	}
 	sort.Slice(loaded, func(i, j int) bool { return loaded[i].version < loaded[j].version })
-	for i, item := range loaded {
-		wantVersion := i + 1
+	wantVersion := uint32(1)
+	for _, item := range loaded {
 		if item.version != wantVersion {
 			return nil, fmt.Errorf("%w: migration %q has version %04d, want %04d", ErrInvalidArgument, item.name, item.version, wantVersion)
 		}
+		wantVersion++
 	}
 	return loaded, nil
+}
+
+func parseMigrationVersion(value string) uint32 {
+	var version uint32
+	for index := 0; index < len(value); index++ {
+		version = version*10 + uint32(value[index]-'0')
+	}
+	return version
 }

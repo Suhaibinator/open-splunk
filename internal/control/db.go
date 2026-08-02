@@ -73,14 +73,7 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		return closeOnError(err)
 	}
-	orm, err := gorm.Open(gormsqlite.New(gormsqlite.Config{
-		DriverName: "sqlite",
-		Conn:       raw,
-	}), &gorm.Config{
-		DisableAutomaticPing:   true,
-		Logger:                 logger.Discard,
-		SkipDefaultTransaction: true,
-	})
+	orm, err := configureGORM(raw)
 	if err != nil {
 		return closeOnError(fmt.Errorf("configure GORM control plane: %w", err))
 	}
@@ -98,6 +91,78 @@ func Open(ctx context.Context, path string) (*DB, error) {
 	return &DB{sql: raw, orm: orm, fileInfo: fileInfo}, nil
 }
 
+// OpenReadOnly opens an existing control-plane database without creating it,
+// changing its permissions, selecting a journal mode, or applying migrations.
+// It is intended for offline verification and backup tooling. The returned
+// GORM handle shares the same single-connection, query-only pool.
+func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: nil context", ErrInvalidArgument)
+	}
+	if strings.TrimSpace(path) == "" || path == ":memory:" {
+		return nil, fmt.Errorf("%w: SQLite path must name an existing persistent file", ErrInvalidArgument)
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("resolve read-only SQLite path: %w", err)
+	}
+	before, err := os.Lstat(absPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect read-only SQLite control plane: %w", err)
+	}
+	if !before.Mode().IsRegular() {
+		return nil, errors.New("open read-only SQLite control plane: source must be a regular file")
+	}
+
+	raw, err := sql.Open("sqlite", sqliteReadOnlyDSN(absPath))
+	if err != nil {
+		return nil, fmt.Errorf("open read-only SQLite control plane: %w", err)
+	}
+	raw.SetMaxOpenConns(1)
+	raw.SetMaxIdleConns(1)
+	closeOnError := func(openErr error) (*DB, error) {
+		if closeErr := raw.Close(); closeErr != nil {
+			return nil, errors.Join(openErr, fmt.Errorf("close read-only SQLite control plane: %w", closeErr))
+		}
+		return nil, openErr
+	}
+	if err := raw.PingContext(ctx); err != nil {
+		return closeOnError(fmt.Errorf("connect to read-only SQLite control plane: %w", err))
+	}
+	after, err := os.Lstat(absPath)
+	if err != nil {
+		return closeOnError(fmt.Errorf("reinspect read-only SQLite control plane: %w", err))
+	}
+	if !sameReadOnlySQLiteFileState(before, after) {
+		return closeOnError(errors.New("open read-only SQLite control plane: source changed while opening"))
+	}
+	orm, err := configureGORM(raw)
+	if err != nil {
+		return closeOnError(fmt.Errorf("configure read-only GORM control plane: %w", err))
+	}
+	return &DB{sql: raw, orm: orm, fileInfo: after}, nil
+}
+
+func configureGORM(raw *sql.DB) (*gorm.DB, error) {
+	return gorm.Open(gormsqlite.New(gormsqlite.Config{
+		DriverName: "sqlite",
+		Conn:       raw,
+	}), &gorm.Config{
+		DisableAutomaticPing:   true,
+		Logger:                 logger.Discard,
+		SkipDefaultTransaction: true,
+	})
+}
+
+func sameReadOnlySQLiteFileState(left, right os.FileInfo) bool {
+	return left != nil && right != nil &&
+		left.Mode().IsRegular() && right.Mode().IsRegular() &&
+		os.SameFile(left, right) &&
+		left.Mode() == right.Mode() &&
+		left.Size() == right.Size() &&
+		left.ModTime().Equal(right.ModTime())
+}
+
 // secureSQLiteFiles ensures the control database and every SQLite sidecar are
 // accessible only to their owner. The ingestion visibility outbox can contain
 // normalized log payloads, so relying on the process umask is insufficient.
@@ -113,7 +178,7 @@ func secureSQLiteFiles(path string, create bool) error {
 		}
 	}
 
-	for _, candidate := range []string{path, path + "-wal", path + "-shm", path + "-journal"} {
+	for _, candidate := range sqliteFileCandidates(path) {
 		info, err := os.Lstat(candidate)
 		if errors.Is(err, os.ErrNotExist) && candidate != path {
 			continue
@@ -212,6 +277,18 @@ func sqliteDSN(path string) string {
 	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", defaultBusyTimeout.Milliseconds()))
 	query.Add("_pragma", "synchronous(FULL)")
 	query.Set("_txlock", "immediate")
+	query.Set("_dqs", "0")
+	u.RawQuery = query.Encode()
+	return u.String()
+}
+
+func sqliteReadOnlyDSN(path string) string {
+	u := &url.URL{Scheme: "file", Path: path}
+	query := u.Query()
+	query.Set("mode", "ro")
+	query.Add("_pragma", "foreign_keys(1)")
+	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", defaultBusyTimeout.Milliseconds()))
+	query.Add("_pragma", "query_only(1)")
 	query.Set("_dqs", "0")
 	u.RawQuery = query.Encode()
 	return u.String()
