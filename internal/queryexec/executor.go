@@ -1940,7 +1940,7 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.SpathInputLimitMarker, "spath input bytes exceeded the per-row limit"},
 	{clickhouse.ChartRowLimitMarker, "chart row values exceeded the supported limit"},
 	{clickhouse.EventStatsInputLimitMarker, "eventstats input rows exceeded the supported limit"},
-	{clickhouse.UnsupportedStatsDistinctLimitMarker, "stats distinct values exceeded the supported limit"},
+	{clickhouse.ExactDistinctLimitMarker, "exact distinct values exceeded the supported limit"},
 	{clickhouse.StatsValuesBytesLimitMarker, "stats values bytes exceeded the supported limit"},
 	{clickhouse.StatsValuesLimitMarker, "stats values exceeded the supported limit"},
 	{clickhouse.StatsListBytesLimitMarker, "stats list bytes exceeded the supported limit"},

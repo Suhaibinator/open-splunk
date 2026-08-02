@@ -27,13 +27,16 @@ const (
 	// Ingestion permits a leaf below 16 nested objects: 17 path segments of 256
 	// bytes each. Dots and backslashes require one escape byte in SPL, so the
 	// full query spelling can be at most 17*(2*256)+16 separators.
-	maxFieldNameBytes        = eventfields.MaximumNormalizedFieldNameBytes
-	maxFieldPathSegments     = 17
-	maxFieldPathSegmentBytes = 256
-	maxTimechartBuckets      = 10_000
-	maxTimechartSpan         = 24 * time.Hour
-	timechartSeriesLimit     = 10
-	maxTimechartSeries       = 12
+	maxFieldNameBytes                   = eventfields.MaximumNormalizedFieldNameBytes
+	maxFieldPathSegments                = 17
+	maxFieldPathSegmentBytes            = 256
+	maxTimechartBuckets                 = 10_000
+	maxTimechartSpan                    = 24 * time.Hour
+	timechartSeriesLimit                = 10
+	maxTimechartSeries                  = 12
+	eventStatsSupportedAggregateMessage = "eventstats currently supports exactly one count, " +
+		"count(field), count(eval(predicate)), min(field), max(field), sum(field), " +
+		"avg(field), or dc(field) AS output measure"
 	// Chart's row axis is runtime data rather than a plan-time constant, so
 	// it carries its own explicit ceiling. Splunk truncates at the
 	// installation-configurable maxresultrows; this backend instead fails
@@ -564,10 +567,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			aggregate := command.Aggregate
 			if aggregate.Alias == "" {
 				return nil, &Diagnostic{
-					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-					Message: "eventstats currently supports exactly one count, " +
-						"count(field), count(eval(predicate)), min(field), max(field), sum(field), or avg(field) AS output measure",
-					Range: aggregate.Range,
+					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+					Message: eventStatsSupportedAggregateMessage,
+					Range:   aggregate.Range,
 				}
 			}
 			measure := AggregateMeasure{Output: aggregate.Alias}
@@ -598,7 +600,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 			case spl.AggregateFunctionMinimum, spl.AggregateFunctionMaximum,
 				spl.AggregateFunctionSum,
-				spl.AggregateFunctionAverage:
+				spl.AggregateFunctionAverage,
+				spl.AggregateFunctionDistinctCount:
 				var function AggregateFunction
 				var form string
 				switch aggregate.Function {
@@ -614,6 +617,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				case spl.AggregateFunctionAverage:
 					function = AggregateFunctionAverage
 					form = "avg(field)"
+				case spl.AggregateFunctionDistinctCount:
+					function = AggregateFunctionDistinctCount
+					form = "dc(field)"
 				}
 				var inputErr error
 				measure, inputErr = buildEventStatsFieldMeasure(
@@ -644,10 +650,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				measure = predicateMeasure
 			default:
 				return nil, &Diagnostic{
-					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-					Message: "eventstats currently supports exactly one count, " +
-						"count(field), count(eval(predicate)), min(field), max(field), sum(field), or avg(field) AS output measure",
-					Range: aggregate.Range,
+					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+					Message: eventStatsSupportedAggregateMessage,
+					Range:   aggregate.Range,
 				}
 			}
 			if !outputSchemaKnown {

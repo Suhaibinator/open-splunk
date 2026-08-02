@@ -183,9 +183,9 @@ func TestParseEventStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 		},
 		{
 			name:      "other function",
-			source:    "index=main\n| eventstats dc(user)",
+			source:    "index=main\n| eventstats distinct_count(user)",
 			code:      "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-			rangeText: "dc",
+			rangeText: "distinct_count",
 		},
 		{
 			name:      "comma separated second measure",
@@ -391,6 +391,7 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats max(field) AS maximum BY group",
 				"eventstats sum(field) AS total BY group",
 				"eventstats avg(field) AS mean BY group",
+				"eventstats dc(field) AS distinct_values BY group",
 			},
 		},
 		{
@@ -407,6 +408,7 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats max(field) AS maximum BY group",
 				"eventstats sum(field) AS total BY group",
 				"eventstats avg(field) AS mean BY group",
+				"eventstats dc(field) AS distinct_values BY group",
 			},
 		},
 		{
@@ -516,13 +518,14 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		t.Fatalf("function class = %q, want aggregate", aggregate.FunctionClass)
 	}
 	candidates := StaticSuggestionCandidates(aggregate)
-	if len(candidates) != 5 ||
+	if len(candidates) != 6 ||
 		candidates[0].Label != "count" ||
-		candidates[1].Label != "min" ||
-		candidates[2].Label != "max" ||
-		candidates[3].Label != "sum" ||
-		candidates[4].Label != "avg" {
-		t.Fatalf("aggregate suggestions = %v, want count, min, max, sum, and avg", candidates)
+		candidates[1].Label != "dc" ||
+		candidates[2].Label != "min" ||
+		candidates[3].Label != "max" ||
+		candidates[4].Label != "sum" ||
+		candidates[5].Label != "avg" {
+		t.Fatalf("aggregate suggestions = %v, want count, dc, min, max, sum, and avg", candidates)
 	}
 
 	tests := []struct {
@@ -536,12 +539,14 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		{source: "| eventstats max(", kind: SuggestionKindField},
 		{source: "| eventstats sum(eval(", kind: SuggestionKindField},
 		{source: "| eventstats avg(eval(", kind: SuggestionKindField},
+		{source: "| eventstats dc(", kind: SuggestionKindField},
 		{source: "| eventstats min(latency)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats max(latency)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count(status)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count(eval(status=500))", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats sum(bytes)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats avg(duration_ms)", kind: SuggestionKindKeyword, words: []string{"AS"}},
+		{source: "| eventstats dc(user)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count AS event_", kind: SuggestionKindField},
 		{source: "| eventstats count AS events B", kind: SuggestionKindKeyword, words: []string{"BY"}},
 		{source: "| eventstats count(status) AS populated B", kind: SuggestionKindKeyword, words: []string{"BY"}},

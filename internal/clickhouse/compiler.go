@@ -279,9 +279,9 @@ const (
 	// stats measure encounters an object or nested container that has no
 	// scalar SPL representation.
 	UnsupportedStatsMeasureValueMarker = "open-splunk: stats measure requires scalar values"
-	// UnsupportedStatsDistinctLimitMarker classifies an exact dc state that
-	// exceeded its per-group, per-measure cardinality ceiling.
-	UnsupportedStatsDistinctLimitMarker = "open-splunk: stats distinct values exceed the supported limit"
+	// ExactDistinctLimitMarker classifies an exact dc state that exceeded its
+	// per-group, per-measure cardinality ceiling.
+	ExactDistinctLimitMarker = "open-splunk: exact distinct values exceed the supported limit"
 	// StatsValuesBytesLimitMarker classifies an exact values result whose
 	// per-group raw lexical payload exceeded the supported byte ceiling.
 	StatsValuesBytesLimitMarker = "open-splunk: stats values bytes exceed the supported limit"
@@ -11821,6 +11821,10 @@ func eventAggregateMeasureSpecFor(
 		spec.materialized = true
 		spec.valuePrefix = "__os_eventstats_value_count_"
 		return spec, nil
+	case plan.AggregateFunctionDistinctCount:
+		spec.materialized = true
+		spec.valuePrefix = "__os_eventstats_value_dc_"
+		return spec, nil
 	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 		spec.materialized = true
 		spec.numberType = "Float64"
@@ -11856,6 +11860,10 @@ func (spec eventAggregateMeasureSpec) aggregateSQL(
 	case plan.AggregateFunctionCountValues,
 		plan.AggregateFunctionCountPredicate:
 		return "toUInt64(sum(toUInt128(" + inputSQL + ")))", nil
+	case plan.AggregateFunctionDistinctCount:
+		return distinctCountCardinalitySQL(
+			"tupleElement(" + inputSQL + ", 1)",
+		), nil
 	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 		if sql, supported := numericArrayAggregateSQL(spec.function, inputSQL); supported {
 			return sql, nil
@@ -11947,7 +11955,7 @@ func compileEventAggregate(
 	var measureInputColumns []string
 	measureInputSQL := ""
 	var measureInputArgs []any
-	var measureValidationSQL func(string) string
+	var measureValidationSQL func(string, string) string
 	measureUsesGroupEligibility := false
 	var eventStatsPrerequisiteDefinitions []string
 	prefixArgumentsAfterExisting := false
@@ -12029,7 +12037,7 @@ func compileEventAggregate(
 		measureInputArgs = predicateArgs
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
-		plan.AggregateFunctionMaximum:
+		plan.AggregateFunctionMaximum, plan.AggregateFunctionDistinctCount:
 		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
 			return compiledRelation{}, compileState{}, nil, nil, &plan.Diagnostic{
 				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
@@ -12053,6 +12061,31 @@ func compileEventAggregate(
 			if exists {
 				measureInputSQL, measureInputArgs = numericArrayInputSQL(input)
 			}
+		case plan.AggregateFunctionDistinctCount:
+			emptyValues := "CAST([], 'Array(String)')"
+			measureInputSQL = "tuple(" + emptyValues + ", toUInt8(0))"
+			if exists {
+				if input.kind == fieldKindDynamic {
+					rowEligibleSQL := "1"
+					if len(operator.GroupBy) > 0 {
+						rowEligibleSQL = quoteIdentifier(fmt.Sprintf(
+							"__os_eventstats_eligible_%d",
+							stage,
+						)) + " != 0"
+						measureUsesGroupEligibility = true
+					}
+					measureInputSQL, measureInputArgs =
+						eventStatsDistinctCountDynamicMeasureSQL(
+							input,
+							rowEligibleSQL,
+						)
+				} else {
+					valuesSQL, valuesArgs := stringArrayInputSQL(input)
+					measureInputSQL = "tuple(" + valuesSQL + ", toUInt8(0))"
+					measureInputArgs = valuesArgs
+				}
+			}
+			measureValidationSQL = eventStatsDistinctCountValidationSQL
 		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
 			extremaFunction := measure.Function
 			outputState = fieldState{
@@ -12149,7 +12182,7 @@ func compileEventAggregate(
 				}
 				measurePublishValueSQL = statsExtremaScalarValueSQL
 				measurePublishTypeSQL = statsExtremaScalarStoredTypeSQL
-				measureValidationSQL = func(inputSQL string) string {
+				measureValidationSQL = func(inputSQL, _ string) string {
 					return "maxOrDefault(toUInt8(tupleElement(" + inputSQL +
 						", 6)))"
 				}
@@ -12220,7 +12253,7 @@ func compileEventAggregate(
 	validationColumn := ""
 	if measureValidationSQL != nil {
 		validationColumn = quoteIdentifier(fmt.Sprintf(
-			"__os_eventstats_extrema_invalid_%d",
+			"__os_eventstats_validation_%d",
 			stage,
 		))
 	}
@@ -12327,7 +12360,8 @@ func compileEventAggregate(
 		if measureValidationSQL != nil {
 			totalProjection = append(
 				totalProjection,
-				measureValidationSQL(measureAlias)+" AS "+validationColumn,
+				measureValidationSQL(measureAlias, rawValueColumn)+
+					" AS "+validationColumn,
 			)
 		}
 	}
@@ -12381,7 +12415,10 @@ func compileEventAggregate(
 		groupProjection := strings.Join(groupKeys, ", ") + ", " +
 			groupValueSQL + " AS " + groupCountColumn
 		if measureValidationSQL != nil {
-			groupProjection += ", " + measureValidationSQL(measureAlias) +
+			groupProjection += ", " + measureValidationSQL(
+				measureAlias,
+				groupCountColumn,
+			) +
 				" AS " + validationColumn
 		}
 		groupValueColumn := groupCountColumn
@@ -12505,7 +12542,7 @@ func validateEventAggregate(
 		}
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
-		plan.AggregateFunctionMaximum:
+		plan.AggregateFunctionMaximum, plan.AggregateFunctionDistinctCount:
 		form := "count(field)"
 		switch measure.Function {
 		case plan.AggregateFunctionSum:
@@ -12516,6 +12553,8 @@ func validateEventAggregate(
 			form = "min(field)"
 		case plan.AggregateFunctionMaximum:
 			form = "max(field)"
+		case plan.AggregateFunctionDistinctCount:
+			form = "dc(field)"
 		}
 		if measure.Predicate != nil || measure.Percentile != 0 {
 			return plan.FieldRef{}, fmt.Errorf(
@@ -12542,7 +12581,7 @@ func validateEventAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), min(field), max(field), sum(field), or avg(field) is supported",
+			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), dc(field), min(field), max(field), sum(field), or avg(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -12637,6 +12676,20 @@ func boundedEventStatsCountSQL(countSQL string) string {
 	return "arrayElement(arrayMap(total -> total + toUInt64(throwIf(toUInt8(total > " +
 		maximum + "), '" + EventStatsInputLimitMarker + "')), [toUInt64(" +
 		countSQL + ")]), 1)"
+}
+
+// eventStatsDistinctCountValidationSQL keeps both failure classes inside the
+// deferred whole-result validation graph. The value set itself contains at
+// most one sentinel beyond the supported cardinality, while unsupported
+// containers contribute no strings and retain a separate constant-size bit.
+func eventStatsDistinctCountValidationSQL(inputSQL, cardinalitySQL string) string {
+	maximum := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup, 10)
+	unsupported := "maxOrDefault(toUInt8(tupleElement(" + inputSQL + ", 2)))"
+	return "if(" + unsupported + " != 0, " +
+		"throwIf(toUInt8(1), '" + UnsupportedStatsMeasureValueMarker + "'), " +
+		"if(" + cardinalitySQL + " > toUInt64(" + maximum + "), " +
+		"throwIf(toUInt8(1), '" + ExactDistinctLimitMarker + "'), " +
+		"toUInt8(0)))"
 }
 
 func validateAggregatePredicateMeasures(
@@ -13764,55 +13817,95 @@ func stringArrayInputSQL(field fieldState) (string, []any) {
 		return "if(" + field.existsSQL + ", " + field.valueSQL + ", " + empty + ")",
 			append([]any(nil), field.existsArgs...)
 	}
-	scalar := statsTextEligibleScalarStringOrNullSQL(field)
-	scalarArray := compactNullableArraySQL("[" + scalar + "]")
-	value := scalarArray
 	if field.kind == fieldKindDynamic {
-		typeSQL := dynamicTypeExpression(field)
-		element := fieldState{
-			valueSQL:       "element",
-			dynamicTypeSQL: "dynamicType(element)",
-			kind:           fieldKindDynamic,
-		}
-		elementSupported, elementLexical := statsByScalarExpressions(element)
-		elementType := dynamicTypeExpression(element)
-		nullString := "CAST(NULL AS Nullable(String))"
-		elementValue := "if(" + elementType + " = 'None', " + nullString +
-			", if(throwIf(toUInt8(NOT (" + elementSupported + ")), '" +
-			UnsupportedStatsMeasureValueMarker + "') = 0, " + elementLexical + ", " + nullString + "))"
-		array := compactNullableArraySQL(
-			"arrayMap(element -> " + elementValue +
-				", dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))",
-		)
-		value = "if(" + typeSQL + " = 'Array(Dynamic)', " + array + ", " + scalarArray + ")"
-
-		scalarSupported, _ := statsByScalarExpressions(field)
-		existsSQL := field.existsSQL
-		if existsSQL == "" {
-			existsSQL = "1"
-		}
-		lambdaParameters := []string{"field_present"}
-		lambdaArguments := []string{"[toUInt8(" + existsSQL + ")]"}
-		args := append([]any(nil), field.existsArgs...)
-		descendantPresent := "0"
-		if field.descendantSQL != "" {
-			lambdaParameters = append(lambdaParameters, "descendant_present")
-			lambdaArguments = append(lambdaArguments, "[toUInt8("+field.descendantSQL+")]")
-			args = append(args, field.descendantArgs...)
-			descendantPresent = "descendant_present"
-		}
-		topLevelUnsupported := "(field_present != 0 AND " + typeSQL +
-			" != 'None' AND " + typeSQL + " != 'Array(Dynamic)' AND NOT (" + scalarSupported + "))"
-		invalid := "(" + topLevelUnsupported + " OR " + descendantPresent + " != 0)"
-		body := "if(throwIf(toUInt8(" + invalid + "), '" + UnsupportedStatsMeasureValueMarker +
-			"') = 0, if(field_present != 0, " + value + ", " + empty + "), " + empty + ")"
-		return "arrayElement(arrayMap((" + strings.Join(lambdaParameters, ", ") + ") -> " + body +
-			", " + strings.Join(lambdaArguments, ", ") + "), 1)", args
+		state, args := dynamicStringArrayStateSQL(field, "1")
+		stateAlias := "__os_dynamic_string_array_state"
+		body := "if(throwIf(toUInt8(tupleElement(" + stateAlias + ", 2)), '" +
+			UnsupportedStatsMeasureValueMarker + "') = 0, tupleElement(" +
+			stateAlias + ", 1), " + empty + ")"
+		return bindSQLExpressions(
+			[]string{stateAlias},
+			[]string{state},
+			body,
+		), args
 	}
+	scalar := statsTextEligibleScalarStringOrNullSQL(field)
+	value := compactNullableArraySQL("[" + scalar + "]")
 	if field.existsSQL == "" || field.existsSQL == "1" {
 		return value, nil
 	}
 	return "if(" + field.existsSQL + ", " + value + ", " + empty + ")", append([]any(nil), field.existsArgs...)
+}
+
+// dynamicStringArrayStateSQL normalizes one Dynamic field into an exact String
+// array plus an unsupported-container bit. Callers choose whether to throw
+// immediately or retain the bit for deferred whole-result validation. A false
+// row-eligibility expression short-circuits member inspection.
+func dynamicStringArrayStateSQL(
+	field fieldState,
+	rowEligibleSQL string,
+) (string, []any) {
+	emptyValues := "CAST([], 'Array(String)')"
+	empty := "tuple(" + emptyValues + ", toUInt8(0))"
+	scalar := compileDynamicMeasureScalar(field)
+	invalid := "tuple(" + emptyValues + ", toUInt8(1))"
+	scalarState := "tuple(if(" + scalar.eligibleSQL + ", [" +
+		scalar.lexicalSQL + "], " + emptyValues + "), toUInt8(" +
+		scalar.invalidSQL + "))"
+
+	element := fieldState{
+		valueSQL:       "element",
+		dynamicTypeSQL: "dynamicType(element)",
+		kind:           fieldKindDynamic,
+	}
+	member := compileDynamicMeasureScalar(element)
+	nullString := "CAST(NULL AS Nullable(String))"
+	dynamicValues := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
+	memberStates := "arrayMap(element -> tuple(" +
+		"if(" + member.eligibleSQL + ", CAST(" + member.lexicalSQL +
+		" AS Nullable(String)), " + nullString + "), toUInt8(" +
+		member.invalidSQL + ")), " + dynamicValues + ")"
+	memberStatesAlias := "__os_dynamic_string_member_states"
+	arrayState := bindSQLExpressions(
+		[]string{memberStatesAlias},
+		[]string{memberStates},
+		"tuple("+compactNullableArraySQL(
+			"arrayMap(member -> tupleElement(member, 1), "+memberStatesAlias+")",
+		)+", toUInt8(arrayExists(member -> tupleElement(member, 2) != 0, "+
+			memberStatesAlias+")))",
+	)
+
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	args := append([]any(nil), field.existsArgs...)
+	descendantSQL := "0"
+	if field.descendantSQL != "" {
+		descendantSQL = field.descendantSQL
+		args = append(args, field.descendantArgs...)
+	}
+	if rowEligibleSQL == "" {
+		rowEligibleSQL = "1"
+	}
+	value := "multiIf(" +
+		"row_eligible = 0, " + empty + ", " +
+		"descendant_present != 0, " + invalid + ", " +
+		"field_present = 0 OR " + scalar.typeSQL + " = 'None', " + empty + ", " +
+		scalar.typeSQL + " = 'Array(Dynamic)', " + arrayState + ", " +
+		scalarState + ")"
+	return "arrayElement(arrayMap((row_eligible, field_present, descendant_present) -> " +
+		value + ", [toUInt8(" + rowEligibleSQL + ")], [toUInt8(" + existsSQL +
+		")], [toUInt8(" + descendantSQL + ")]), 1)", args
+}
+
+// eventStatsDistinctCountDynamicMeasureSQL retains unsupported input as a
+// constant-size bit so downstream projection or limits cannot hide failure.
+func eventStatsDistinctCountDynamicMeasureSQL(
+	field fieldState,
+	rowEligibleSQL string,
+) (string, []any) {
+	return dynamicStringArrayStateSQL(field, rowEligibleSQL)
 }
 
 // chronologicalCandidatesSQL normalizes one event field to a constant-size
@@ -14101,7 +14194,7 @@ func statsExtremaCandidateSQL(valueSQL, exactTextSQL string) string {
 	return bound
 }
 
-type compiledDynamicExtremaScalar struct {
+type compiledDynamicMeasureScalar struct {
 	typeSQL      string
 	supportedSQL string
 	lexicalSQL   string
@@ -14110,11 +14203,11 @@ type compiledDynamicExtremaScalar struct {
 	invalidSQL   string
 }
 
-// compileDynamicExtremaScalar centralizes the scalar/member classification
+// compileDynamicMeasureScalar centralizes the scalar/member classification
 // used by transforming stats and row-preserving eventstats. None is missing;
 // supported scalar values are eligible unless an upstream text guard excludes
-// them; unsupported non-None values poison the enclosing extrema operation.
-func compileDynamicExtremaScalar(field fieldState) compiledDynamicExtremaScalar {
+// them; unsupported non-None values poison the enclosing measure.
+func compileDynamicMeasureScalar(field fieldState) compiledDynamicMeasureScalar {
 	typeSQL := dynamicTypeExpression(field)
 	supportedSQL, lexicalSQL := statsByScalarExpressions(field)
 	eligibleSQL := "(" + typeSQL + " != 'None' AND " + supportedSQL + ")"
@@ -14122,7 +14215,7 @@ func compileDynamicExtremaScalar(field fieldState) compiledDynamicExtremaScalar 
 		eligibleSQL = "(" + eligibleSQL + " AND ifNull(" +
 			field.textEligibleSQL + ", 0))"
 	}
-	return compiledDynamicExtremaScalar{
+	return compiledDynamicMeasureScalar{
 		typeSQL:      typeSQL,
 		supportedSQL: supportedSQL,
 		lexicalSQL:   lexicalSQL,
@@ -14135,7 +14228,7 @@ func compileDynamicExtremaScalar(field fieldState) compiledDynamicExtremaScalar 
 
 func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
 	empty := "CAST([], 'Array(Tuple(String, String))')"
-	scalar := compileDynamicExtremaScalar(field)
+	scalar := compileDynamicMeasureScalar(field)
 	scalarInput := "if(" + scalar.eligibleSQL + ", [tuple(" + scalar.lexicalSQL +
 		", " + scalar.exactTextSQL + ")], " + empty + ")"
 
@@ -14144,7 +14237,7 @@ func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
 		dynamicTypeSQL: "dynamicType(element)",
 		kind:           fieldKindDynamic,
 	}
-	element := compileDynamicExtremaScalar(elementField)
+	element := compileDynamicMeasureScalar(elementField)
 	elementInput := "if(throwIf(toUInt8(" + element.invalidSQL + "), '" +
 		UnsupportedStatsMeasureValueMarker + "') = 0, tuple(" + element.lexicalSQL + ", " +
 		element.exactTextSQL +
@@ -14200,7 +14293,7 @@ func eventStatsExtremaEmptyRowStateSQL(invalidSQL string) string {
 func eventStatsExtremaFoldStepSQL(
 	function plan.AggregateFunction,
 	stateSQL string,
-	value compiledDynamicExtremaScalar,
+	value compiledDynamicMeasureScalar,
 ) string {
 	numberSQL := statsExtremaNumericOrNullSQL(value.lexicalSQL)
 	candidateSQL := statsExtremaPublicationCandidateSQL(
@@ -14253,8 +14346,8 @@ func eventStatsExtremaDynamicMeasureSQL(
 	if rowEligibleSQL == "" {
 		rowEligibleSQL = "1"
 	}
-	scalar := compileDynamicExtremaScalar(field)
-	element := compileDynamicExtremaScalar(fieldState{
+	scalar := compileDynamicMeasureScalar(field)
+	element := compileDynamicMeasureScalar(fieldState{
 		valueSQL:       "element",
 		dynamicTypeSQL: "dynamicType(element)",
 		kind:           fieldKindDynamic,
@@ -14505,7 +14598,7 @@ func boundedDistinctCountSQL(inputSQL string) string {
 	maximum := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup, 10)
 	cardinality := distinctCountCardinalitySQL(inputSQL)
 	return "arrayElement(arrayMap(cardinality -> cardinality + toUInt64(throwIf(toUInt8(cardinality > " +
-		maximum + "), '" + UnsupportedStatsDistinctLimitMarker + "')), [" + cardinality + "]), 1)"
+		maximum + "), '" + ExactDistinctLimitMarker + "')), [" + cardinality + "]), 1)"
 }
 
 func distinctCountCardinalitySQL(inputSQL string) string {
@@ -14841,7 +14934,7 @@ func compileBoundedExactStringResults(
 		validations = append(
 			validations,
 			"throwIf(toUInt8("+cardinalityOverflow+" != 0), '"+
-				UnsupportedStatsDistinctLimitMarker+"') = 0",
+				ExactDistinctLimitMarker+"') = 0",
 		)
 	}
 	if valuesBytesOverflow != "" {
@@ -14902,7 +14995,7 @@ func compileBoundedDistinctCountResults(
 	publishAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+2))
 	publishSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql +
 		") AS " + publishAlias + " WHERE throwIf(toUInt8(" + overflowColumn +
-		" != 0), '" + UnsupportedStatsDistinctLimitMarker + "') = 0"
+		" != 0), '" + ExactDistinctLimitMarker + "') = 0"
 	return relation.selectFrom(publishSQL, ownerRange), 2
 }
 

@@ -2522,6 +2522,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testStatsCountEvalAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testEventStatsDistinctCountAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsNumericAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsMinimumAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsMaximumAgainstClickHouse(t, ctx, store, connection, indexTime)
@@ -4346,7 +4347,7 @@ func testStatsAggregatesAgainstClickHouse(
 		),
 	)
 	err = connection.QueryRow(ctx, overflowBoundarySQL).Scan(&exactBoundary)
-	if err == nil || !strings.Contains(err.Error(), UnsupportedStatsDistinctLimitMarker) {
+	if err == nil || !strings.Contains(err.Error(), ExactDistinctLimitMarker) {
 		t.Fatalf("overflow dc boundary error = %v, want stable limit marker", err)
 	}
 
@@ -4370,7 +4371,7 @@ func testStatsAggregatesAgainstClickHouse(
 	hiddenOverflowSQL := `SELECT "distinct_values" FROM (` + boundedGroups.sql +
 		`) ORDER BY "group" LIMIT 1`
 	err = connection.QueryRow(ctx, hiddenOverflowSQL).Scan(&exactBoundary)
-	if err == nil || !strings.Contains(err.Error(), UnsupportedStatsDistinctLimitMarker) {
+	if err == nil || !strings.Contains(err.Error(), ExactDistinctLimitMarker) {
 		t.Fatalf("dc overflow hidden behind downstream LIMIT error = %v, want stable limit marker", err)
 	}
 

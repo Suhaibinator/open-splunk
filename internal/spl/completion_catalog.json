@@ -77,8 +77,8 @@
     },
     {
       "name": "eventstats",
-      "insertion": "eventstats count(eval(status>=500)) AS errors BY level",
-      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), numeric sum, numeric average, exact mixed-type minimum, or exact mixed-type maximum to every input row globally or within up to 16 exact BY fields."
+      "insertion": "eventstats dc(user) AS unique_users BY level",
+      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), exact distinct count, numeric sum, numeric average, exact mixed-type minimum, or exact mixed-type maximum to every input row globally or within up to 16 exact BY fields."
     },
     {
       "name": "top",

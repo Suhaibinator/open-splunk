@@ -609,19 +609,20 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 		}
 		if command.Name == "eventstats" {
 			if command.Insertion !=
-				"eventstats count(eval(status>=500)) AS errors BY level" {
+				"eventstats dc(user) AS unique_users BY level" {
 				t.Fatalf(
-					"eventstats insertion = %q, want conditional-count form",
+					"eventstats insertion = %q, want exact-distinct form",
 					command.Insertion,
 				)
 			}
 			if !strings.Contains(command.Detail, "true-only count(eval(predicate))") ||
+				!strings.Contains(command.Detail, "exact distinct count") ||
 				!strings.Contains(command.Detail, "minimum") ||
 				!strings.Contains(command.Detail, "maximum") ||
 				!strings.Contains(command.Detail, "numeric sum") ||
 				!strings.Contains(command.Detail, "numeric average") {
 				t.Fatalf(
-					"eventstats detail = %q, want conditional-count, minimum, maximum, sum, and average description",
+					"eventstats detail = %q, want conditional-count, exact-distinct, minimum, maximum, sum, and average description",
 					command.Detail,
 				)
 			}

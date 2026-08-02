@@ -613,8 +613,9 @@ func (c *StatsCommand) SourceRange() Range { return c.Range }
 // argument-free AggregateFunctionCount, exact-field
 // AggregateFunctionCountValues, true-only AggregateFunctionCountPredicate, or
 // exact-field AggregateFunctionMinimum/AggregateFunctionMaximum/
-// AggregateFunctionSum/AggregateFunctionAverage while retaining the singular
-// aggregate's source locations through StatsAggregate.
+// AggregateFunctionSum/AggregateFunctionAverage/
+// AggregateFunctionDistinctCount while retaining the singular aggregate's
+// source locations through StatsAggregate.
 type EventStatsCommand struct {
 	Aggregate StatsAggregate
 	GroupBy   []StatsGroupField

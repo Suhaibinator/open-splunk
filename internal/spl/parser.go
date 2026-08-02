@@ -1480,15 +1480,12 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 	}, nil
 }
 
-const eventStatsAcceptedAggregateForms = "count, count(field) AS output, " +
-	"count(eval(predicate)) AS output, min(field) AS output, " +
-	"max(field) AS output, sum(field) AS output, or avg(field) AS output"
-
 func (p *parser) parseEventStatsCommand(name token) (Command, error) {
+	acceptedForms := eventStatsAcceptedAggregateForms()
 	if p.atCommandEnd() {
 		return nil, p.errorAtCurrent(
 			"SPL_EXPECTED_AGGREGATE",
-			"eventstats requires "+eventStatsAcceptedAggregateForms,
+			"eventstats requires "+acceptedForms,
 		)
 	}
 
@@ -1496,7 +1493,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if functionToken.kind != tokenWord {
 		return nil, p.errorAtCurrent(
 			"SPL_EXPECTED_AGGREGATE",
-			"eventstats requires "+eventStatsAcceptedAggregateForms,
+			"eventstats requires "+acceptedForms,
 		)
 	}
 	functionName := strings.ToLower(functionToken.text)
@@ -1515,7 +1512,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 			fmt.Sprintf(
 				"eventstats aggregate %q is not supported; this compatibility slice accepts %s",
 				functionToken.text,
-				eventStatsAcceptedAggregateForms,
+				acceptedForms,
 			),
 		)
 	}
@@ -1634,7 +1631,11 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedEventStatsSyntax(
 			p.current(),
-			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, minimum, maximum, sum, or average, optional AS for row count, required AS for field or predicate measures, and optional BY", p.current().text),
+			fmt.Sprintf(
+				"unsupported eventstats syntax at %q; this compatibility slice accepts %s and optional BY",
+				p.current().text,
+				acceptedForms,
+			),
 		)
 	}
 	return &EventStatsCommand{
@@ -1925,6 +1926,24 @@ var eventStatsFieldAggregateDescriptors = [...]eventStatsFieldAggregateDescripto
 		form:       "avg(field)",
 		suggestion: "eventstats avg(field) AS mean",
 	},
+	{
+		name:       "dc",
+		function:   AggregateFunctionDistinctCount,
+		form:       "dc(field)",
+		suggestion: "eventstats dc(field) AS distinct_values",
+	},
+}
+
+func eventStatsAcceptedAggregateForms() string {
+	forms := []string{
+		"count",
+		"count(field) AS output",
+		"count(eval(predicate)) AS output",
+	}
+	for _, descriptor := range eventStatsFieldAggregateDescriptors {
+		forms = append(forms, descriptor.form+" AS output")
+	}
+	return strings.Join(forms, ", ")
 }
 
 func eventStatsFunctionNames() []string {

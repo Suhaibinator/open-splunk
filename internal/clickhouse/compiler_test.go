@@ -3006,7 +3006,7 @@ func TestCompileStatsDistinctCountUsesExactStringArraysWithoutRowExpansion(t *te
 		`max(toUInt8("__os_dc_cardinality_0" > toUInt64(`,
 		`OVER () AS "__os_stats_dc_any_overflow"`,
 		`WHERE throwIf(toUInt8("__os_stats_dc_any_overflow" != 0)`,
-		UnsupportedStatsDistinctLimitMarker,
+		ExactDistinctLimitMarker,
 		UnsupportedStatsMeasureValueMarker,
 		`"__os_dc_cardinality_0" AS "users"`,
 		`"__os_dc_cardinality_0" AS "users_again"`,
@@ -3121,7 +3121,7 @@ func TestCompileStatsValuesUsesOneBoundedExactSetWithLexicalPublication(t *testi
 	if !strings.Contains(dcOnly.SQL, `groupUniqArrayArray(`+dcSentinel+`)`) ||
 		!strings.Contains(dcOnly.SQL, `)) AS "__os_dc_cardinality_0"`) ||
 		strings.Contains(dcOnly.SQL, `AS "__os_exact_strings_0"`) ||
-		!strings.Contains(dcOnly.SQL, UnsupportedStatsDistinctLimitMarker) {
+		!strings.Contains(dcOnly.SQL, ExactDistinctLimitMarker) {
 		t.Fatalf("dc-only query lost its scalar exact-cardinality path:\n%s", dcOnly.SQL)
 	}
 }

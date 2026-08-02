@@ -291,9 +291,10 @@ test("eventstats completion advertises the bounded aggregate surface including e
   assert.ok(eventstatsCompletion);
   assert.equal(
     eventstatsCompletion.insertion,
-    "eventstats count(eval(status>=500)) AS errors BY level",
+    "eventstats dc(user) AS unique_users BY level",
   );
   assert.match(eventstatsCompletion.detail, /true-only count\(eval\(predicate\)\)/i);
+  assert.match(eventstatsCompletion.detail, /exact distinct count/i);
   assert.match(eventstatsCompletion.detail, /numeric sum/i);
   assert.match(eventstatsCompletion.detail, /average/i);
   assert.match(eventstatsCompletion.detail, /exact mixed-type minimum/i);
@@ -319,6 +320,10 @@ test("eventstats completion advertises the bounded aggregate surface including e
   const maximumToken = classifiedTokens("index=main | eventstats max(duration_ms) AS max_ms")
     .find((token) => token.text.toLowerCase() === "max");
   assert.deepEqual(maximumToken, { className: "spl-function", text: "max" });
+
+  const distinctToken = classifiedTokens("index=main | eventstats dc(user) AS unique_users")
+    .find((token) => token.text.toLowerCase() === "dc");
+  assert.deepEqual(distinctToken, { className: "spl-function", text: "dc" });
 });
 
 test("where completion advertises direct bounded match and like predicates", () => {

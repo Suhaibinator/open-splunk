@@ -2145,6 +2145,8 @@ eventstats count(status) AS populated
 eventstats count(status) AS populated BY host
 eventstats count(eval(status>=500)) AS errors
 eventstats count(eval(status>=500)) AS errors BY service
+eventstats dc(user) AS unique_users
+eventstats dc(user) AS service_users BY service
 eventstats sum(bytes) AS total_bytes
 eventstats sum(bytes) AS service_bytes BY service
 eventstats avg(duration_ms) AS mean_ms
@@ -2155,22 +2157,25 @@ eventstats max(duration_ms) AS maximum_ms
 eventstats max(duration_ms) AS service_maximum_ms BY service
 ```
 
-Exactly one `count`, `sum`, `avg`, `min`, or `max` is accepted. Argument-free row
-count uses the default output field `count` and may provide one exact output
+Exactly one `count`, `dc`, `sum`, `avg`, `min`, or `max` is accepted.
+Argument-free row count uses the default output field `count` and may provide one exact output
 with `AS`. The field-occurrence form accepts exactly one unquoted exact field in
 `count(field)` and requires `AS` followed by one exact output field.
 Conditional count accepts exactly
 `count(eval(<where predicate>)) AS <exact output field>` and also requires the
-alias. Numeric sum and average accept exactly one unquoted exact field in
+alias. Exact distinct count accepts exactly one unquoted exact field in
+`dc(field)` and requires an explicit exact output alias. Numeric sum and
+average accept exactly one unquoted exact field in
 `sum(field)` or `avg(field)` and likewise require an explicit exact output
 alias. Minimum and maximum each accept exactly one unquoted exact field in
 `min(field)` or `max(field)` and also require an explicit exact output alias.
 `BY` may contain from one through
 16 distinct exact fields. Command, function, and keyword spelling is
 case-insensitive, while field names remain case-sensitive. Parenthesized
-`count()`, `c(field)`, `c(eval(...))`,
+`count()`, `c(field)`, `c(eval(...))`, `distinct_count(field)`,
 `sum(eval(...))`, `avg(eval(...))`, wildcard or quoted input fields, empty or
-multiple inputs, `min(eval(...))`, `max(eval(...))`, every other aggregate function,
+multiple inputs, `dc(eval(...))`, `min(eval(...))`, `max(eval(...))`, every
+other aggregate function,
 multiple measures, quoted or wildcard output/grouping fields, and command
 options fail with source-located unsupported-syntax or unsupported-aggregate
 diagnostics.
@@ -2215,6 +2220,38 @@ contribution is non-null `UInt64`, sums through `UInt128`, and publishes as
 share one per-row exact numeric key and eligibility calculation. Downstream
 filtering cannot change the already-computed total or hide an over-limit
 upstream relation.
+
+`eventstats dc(field)` uses the same exact canonical-value contract as
+`stats dc(field)`. Missing values, explicit nulls, empty multivalues, and null
+members contribute nothing; an empty String contributes one value. Every
+immediate scalar member of a top-level multivalue contributes independently,
+and duplicates collapse across members and rows. Stored scalar spellings are
+case-sensitive and type-normalized: values such as a numeric `1` and its
+canonical String spelling `"1"` share an identity, while `"01"` and `"1.0"`
+remain distinct. The result is a present, non-null `UInt64` on every row
+eligible for annotation, including zero for a complete scope with no
+contributing value. A projected-away input stays missing. A row with an
+incomplete `BY` tuple remains visible but has a logically absent, physically
+nullable output.
+
+Generic objects, flattened object parents, nested arrays, and nested objects
+in an eligible measure value fail the complete scoped command atomically with
+the same sanitized unsupported-value error as `stats dc`. Rows outside the
+authorized tenant/index/time/visibility scope, rows removed upstream, and
+rows omitted by an incomplete `BY` tuple cannot poison the result. Each global
+or grouped exact set retains at most 100,001 canonical spellings: 100,000
+succeeds, while the sentinel value fails the whole search with the exact-
+distinct execution-limit error. Validation is forced before a later filter,
+projection, sort, or row limit can hide either an unsupported value or an
+overflowing group.
+
+The canonical String array and constant-size invalid bit are calculated once
+per evaluation of the bounded input. A global distinct count uses one exact
+bounded aggregate; a grouped distinct count uses one bounded `GROUP BY` and
+one left join back to the same rows. It uses no approximate `uniq` function,
+`ARRAY JOIN`, row expansion, pipeline sort, physical-event rescan, or Go-side
+buffering. Composed stages participate in the same flat deferred eventstats
+graph and pass-amplification budget as the other supported measures.
 
 `eventstats sum(field)` and `eventstats avg(field)` use exactly the numeric
 normalization and immediate-member semantics of their `stats` counterparts.
@@ -2292,7 +2329,7 @@ The output replaces an existing field of the same name rather than creating a
 duplicate. As with `eval`, replacing a dynamic-schema name closes the public
 raw `fields` convenience payload so an immutable member cannot contradict the
 calculated value. The literal output name `fields` is rejected while the event
-schema is open, and `count(fields)`, `sum(fields)`, `avg(fields)`,
+schema is open, and `count(fields)`, `dc(fields)`, `sum(fields)`, `avg(fields)`,
 `min(fields)`, and `max(fields)` cannot read that ambiguous payload while the
 schema is open. The
 name becomes ordinary data after `table` or another transforming command
@@ -2305,10 +2342,11 @@ the input at 10,001 rows, uses the additional row only as an overflow sentinel,
 and fails the whole search with an execution-limit error above the boundary
 instead of annotating a prefix. A standalone stage materializes that bounded
 relation once; a stack shares its earliest physical-scan fence. Global count
-uses one constant-size aggregate, and global sum or average uses one
-constant-size numeric aggregate. A global minimum or maximum likewise uses one
-constant-size extrema aggregate. Grouped count, sum, average, minimum, or
-maximum uses one bounded `GROUP BY` and one left join back to those same rows;
+uses one constant-size aggregate, global distinct count uses one bounded exact
+set, and global sum or average uses one constant-size numeric aggregate. A global minimum or maximum likewise uses one
+constant-size extrema aggregate. Each grouped count, sum, average, minimum,
+maximum, or distinct count uses one bounded `GROUP BY` and one left join back
+to those same rows;
 none performs a per-group query, row expansion, `groupArray`, physical-event
 rescan, or Go-side buffering.
 
@@ -2930,9 +2968,9 @@ subset. The broader `count` forms listed in the stats section are unsupported
 too.
 
 `eventstats` supports one argument-free `count`, exact-field `count(field) AS
-output`, conditional `count(eval(predicate)) AS output`, or exact-field
-`sum(field) AS output`, exact-field `avg(field) AS output`, exact-field
-`min(field) AS output`, or exact-field `max(field) AS output`, optionally
+output`, conditional `count(eval(predicate)) AS output`, or one exact-field
+`dc(field)`, `sum(field)`, `avg(field)`, `min(field)`, or `max(field)` with an
+explicit output alias, optionally
 grouped by up to 16 exact fields. Other aggregate functions, multiple measures,
 and the broader eval-expression surface remain unsupported for `eventstats`.
 
