@@ -566,7 +566,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
 					Message: "eventstats currently supports exactly one count, " +
-						"count(field), count(eval(predicate)), min(field), sum(field), or avg(field) AS output measure",
+						"count(field), count(eval(predicate)), min(field), max(field), sum(field), or avg(field) AS output measure",
 					Range: aggregate.Range,
 				}
 			}
@@ -596,7 +596,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				if inputErr != nil {
 					return nil, inputErr
 				}
-			case spl.AggregateFunctionMinimum, spl.AggregateFunctionSum,
+			case spl.AggregateFunctionMinimum, spl.AggregateFunctionMaximum,
+				spl.AggregateFunctionSum,
 				spl.AggregateFunctionAverage:
 				var function AggregateFunction
 				var form string
@@ -604,6 +605,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				case spl.AggregateFunctionMinimum:
 					function = AggregateFunctionMinimum
 					form = "min(field)"
+				case spl.AggregateFunctionMaximum:
+					function = AggregateFunctionMaximum
+					form = "max(field)"
 				case spl.AggregateFunctionSum:
 					function = AggregateFunctionSum
 					form = "sum(field)"
@@ -642,7 +646,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
 					Message: "eventstats currently supports exactly one count, " +
-						"count(field), count(eval(predicate)), min(field), sum(field), or avg(field) AS output measure",
+						"count(field), count(eval(predicate)), min(field), max(field), sum(field), or avg(field) AS output measure",
 					Range: aggregate.Range,
 				}
 			}

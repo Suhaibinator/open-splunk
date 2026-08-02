@@ -84,12 +84,6 @@ func TestCompileEventStatsSumRejectsForgedMeasureMetadata(t *testing.T) {
 				operator.Measure.Output = "__os_eventstats_sum_private"
 			},
 		},
-		{
-			name: "unsupported maximum function",
-			mutate: func(operator *plan.EventAggregate) {
-				operator.Measure.Function = plan.AggregateFunctionMaximum
-			},
-		},
 	}
 	for _, test := range tests {
 		test := test

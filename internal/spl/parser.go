@@ -1482,7 +1482,7 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 
 const eventStatsAcceptedAggregateForms = "count, count(field) AS output, " +
 	"count(eval(predicate)) AS output, min(field) AS output, " +
-	"sum(field) AS output, or avg(field) AS output"
+	"max(field) AS output, sum(field) AS output, or avg(field) AS output"
 
 func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if p.atCommandEnd() {
@@ -1578,11 +1578,12 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		end = alias.sourceRange.End
 		p.advance()
 	}
+	_, exactFieldAggregate := eventStatsFieldAggregateDescriptorForFunction(
+		aggregate.Function,
+	)
 	if (aggregate.Function == AggregateFunctionCountValues ||
 		aggregate.Function == AggregateFunctionCountPredicate ||
-		aggregate.Function == AggregateFunctionMinimum ||
-		aggregate.Function == AggregateFunctionSum ||
-		aggregate.Function == AggregateFunctionAverage) &&
+		exactFieldAggregate) &&
 		!aggregate.ExplicitAlias {
 		form := "count(field)"
 		suggestion := "eventstats count(field) AS occurrences"
@@ -1633,7 +1634,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedEventStatsSyntax(
 			p.current(),
-			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, minimum, sum, or average, optional AS for row count, required AS for field or predicate measures, and optional BY", p.current().text),
+			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, minimum, maximum, sum, or average, optional AS for row count, required AS for field or predicate measures, and optional BY", p.current().text),
 		)
 	}
 	return &EventStatsCommand{
@@ -1905,6 +1906,12 @@ var eventStatsFieldAggregateDescriptors = [...]eventStatsFieldAggregateDescripto
 		function:   AggregateFunctionMinimum,
 		form:       "min(field)",
 		suggestion: "eventstats min(field) AS minimum",
+	},
+	{
+		name:       "max",
+		function:   AggregateFunctionMaximum,
+		form:       "max(field)",
+		suggestion: "eventstats max(field) AS maximum",
 	},
 	{
 		name:       "sum",

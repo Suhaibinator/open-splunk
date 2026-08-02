@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** July 31, 2026
+**Last updated:** August 1, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -2151,9 +2151,11 @@ eventstats avg(duration_ms) AS mean_ms
 eventstats avg(duration_ms) AS service_mean_ms BY service
 eventstats min(duration_ms) AS minimum_ms
 eventstats min(duration_ms) AS service_minimum_ms BY service
+eventstats max(duration_ms) AS maximum_ms
+eventstats max(duration_ms) AS service_maximum_ms BY service
 ```
 
-Exactly one `count`, `sum`, `avg`, or `min` is accepted. Argument-free row
+Exactly one `count`, `sum`, `avg`, `min`, or `max` is accepted. Argument-free row
 count uses the default output field `count` and may provide one exact output
 with `AS`. The field-occurrence form accepts exactly one unquoted exact field in
 `count(field)` and requires `AS` followed by one exact output field.
@@ -2161,13 +2163,14 @@ Conditional count accepts exactly
 `count(eval(<where predicate>)) AS <exact output field>` and also requires the
 alias. Numeric sum and average accept exactly one unquoted exact field in
 `sum(field)` or `avg(field)` and likewise require an explicit exact output
-alias. Minimum accepts exactly one unquoted exact field in `min(field)` and
-also requires an explicit exact output alias. `BY` may contain from one through
+alias. Minimum and maximum each accept exactly one unquoted exact field in
+`min(field)` or `max(field)` and also require an explicit exact output alias.
+`BY` may contain from one through
 16 distinct exact fields. Command, function, and keyword spelling is
 case-insensitive, while field names remain case-sensitive. Parenthesized
 `count()`, `c(field)`, `c(eval(...))`,
 `sum(eval(...))`, `avg(eval(...))`, wildcard or quoted input fields, empty or
-multiple inputs, `min(eval(...))`, `max`, every other aggregate function,
+multiple inputs, `min(eval(...))`, `max(eval(...))`, every other aggregate function,
 multiple measures, quoted or wildcard output/grouping fields, and command
 options fail with source-located unsupported-syntax or unsupported-aggregate
 diagnostics.
@@ -2234,17 +2237,19 @@ Grouped sum or average uses one bounded `GROUP BY` and the same left join as
 grouped count. Neither uses `ARRAY JOIN`, multiplies rows, rescans physical
 events, or filters noncontributing rows out of their groups.
 
-`eventstats min(field)` uses the complete `stats min(field)` value contract and
-ordering, rather than a numeric-only approximation. Exact numeric candidates
-sort before lexical candidates; numeric candidates compare by their normalized
-exact-decimal key and lexical candidates compare by raw bytes. Numeric winners
-publish as a lossless `Double` or exact Decimal, lexical winners as String or
-Bytes, and statically typed numeric, Boolean, or timestamp inputs retain their
-physical type and precision. Every immediate member of a top-level multivalue
-participates independently. Missing values, explicit nulls, empty
-multivalues, and null members do not participate, while an empty String is a
-lexical candidate. Projected-away inputs remain missing instead of being
-recovered from hidden event columns.
+`eventstats min(field)` and `eventstats max(field)` use the complete
+corresponding `stats` extrema value contract and ordering, rather than a
+numeric-only approximation. Exact numeric candidates sort before lexical
+candidates; numeric candidates compare by their normalized exact-decimal key
+and lexical candidates compare by raw bytes. Consequently, minimum selects a
+numeric candidate whenever one exists, while maximum selects a lexical
+candidate whenever one exists. Numeric winners publish as a lossless `Double`
+or exact Decimal, lexical winners as String or Bytes, and statically typed
+numeric, Boolean, or timestamp inputs retain their physical type and precision.
+Every immediate member of a top-level multivalue participates independently.
+Missing values, explicit nulls, empty multivalues, and null members do not
+participate, while an empty String is a lexical candidate. Projected-away
+inputs remain missing instead of being recovered from hidden event columns.
 
 The result is present and nullable on every row eligible for global or grouped
 annotation. A complete scope with no eligible candidate publishes null; a
@@ -2255,18 +2260,20 @@ aggregates.
 
 Generic objects, flattened object parents, nested arrays, and nested objects
 in a retained measure value fail the complete scoped command atomically with
-the same sanitized unsupported-value error as `stats min`. Rows outside the
+the same sanitized unsupported-value error as the corresponding `stats`
+extremum. Rows outside the
 authorized tenant/index/time/visibility scope, rows removed upstream, and rows
-omitted from grouping by an incomplete `BY` tuple cannot poison the minimum.
+omitted from grouping by an incomplete `BY` tuple cannot poison the extremum.
 Validation is forced before a later filter, projection, sort, or row limit can
 hide a poisoned retained row.
 
 The row-local extrema candidate and validation state are calculated once per
 evaluation of the bounded input used for annotation and reuse the bounded
-`stats min` lowering. A standalone stage materializes that input; a composed
+`stats min`/`max` lowering in the requested direction. A standalone stage
+materializes that input; a composed
 eventstats graph retains its earliest materialized physical-scan fence and
-keeps later bounded stages in one flat ClickHouse CTE graph. Global minimum
-uses one constant-size aggregate; grouped minimum uses one bounded `GROUP BY`
+keeps later bounded stages in one flat ClickHouse CTE graph. A global extremum
+uses one constant-size aggregate; a grouped extremum uses one bounded `GROUP BY`
 and one left join back to the same rows. It performs no row expansion,
 physical-event rescan, pipeline sort, `groupArray`, or Go-side buffering.
 Present scalar inputs use no Array aggregate combinator; only the missing-input
@@ -2285,8 +2292,9 @@ The output replaces an existing field of the same name rather than creating a
 duplicate. As with `eval`, replacing a dynamic-schema name closes the public
 raw `fields` convenience payload so an immutable member cannot contradict the
 calculated value. The literal output name `fields` is rejected while the event
-schema is open, and `count(fields)`, `sum(fields)`, `avg(fields)`, and
-`min(fields)` cannot read that ambiguous payload while the schema is open. The
+schema is open, and `count(fields)`, `sum(fields)`, `avg(fields)`,
+`min(fields)`, and `max(fields)` cannot read that ambiguous payload while the
+schema is open. The
 name becomes ordinary data after `table` or another transforming command
 closes the schema. Replacing `_time` preserves rows but
 makes timeline analysis ineligible; replacing `index` creates ordinary
@@ -2298,11 +2306,11 @@ and fails the whole search with an execution-limit error above the boundary
 instead of annotating a prefix. A standalone stage materializes that bounded
 relation once; a stack shares its earliest physical-scan fence. Global count
 uses one constant-size aggregate, and global sum or average uses one
-constant-size numeric aggregate. Global minimum likewise uses one
-constant-size extrema aggregate. Grouped count, sum, average, or minimum uses
-one bounded `GROUP BY` and one left join back to those same rows; none performs
-a per-group query, row expansion, `groupArray`, physical-event rescan, or
-Go-side buffering.
+constant-size numeric aggregate. A global minimum or maximum likewise uses one
+constant-size extrema aggregate. Grouped count, sum, average, minimum, or
+maximum uses one bounded `GROUP BY` and one left join back to those same rows;
+none performs a per-group query, row expansion, `groupArray`, physical-event
+rescan, or Go-side buffering.
 
 Later inputs in the flat stack are ordinary ClickHouse CTEs and may be
 re-evaluated by their consumers. The compiler therefore counts passes over the
@@ -2313,7 +2321,7 @@ suggestions, and the forced hidden-validation branches contribute their actual
 fixed fanout as well. The query fails with
 `SPL_QUERY_TOO_COMPLEX` before the complete graph can exceed 128 bounded-leaf
 reads. An ordinary nonvalidating stack therefore admits up to seven global or
-four grouped stages. Dynamic minima retain a smaller boundary because their
+four grouped stages. Dynamic extrema retain a smaller boundary because their
 atomic validation must execute even for an empty or downstream-filtered result;
 analysis products may lower the boundary further according to how many times
 they consume the final event relation. Mixed stacks are charged by their exact
@@ -2923,10 +2931,10 @@ too.
 
 `eventstats` supports one argument-free `count`, exact-field `count(field) AS
 output`, conditional `count(eval(predicate)) AS output`, or exact-field
-`sum(field) AS output`, exact-field `avg(field) AS output`, or exact-field
-`min(field) AS output`, optionally grouped by up to 16 exact fields. `max` and
-other aggregate functions, multiple measures, and the broader eval-expression
-surface remain unsupported for `eventstats`.
+`sum(field) AS output`, exact-field `avg(field) AS output`, exact-field
+`min(field) AS output`, or exact-field `max(field) AS output`, optionally
+grouped by up to 16 exact fields. Other aggregate functions, multiple measures,
+and the broader eval-expression surface remain unsupported for `eventstats`.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

@@ -700,12 +700,6 @@ func TestCompileEventStatsMinimumRejectsForgedPlanBoundaries(t *testing.T) {
 			},
 		},
 		{
-			name: "maximum remains outside this slice",
-			mutate: func(operator *plan.EventAggregate) {
-				operator.Measure.Function = plan.AggregateFunctionMaximum
-			},
-		},
-		{
 			name: "canonical input with forged empty path",
 			mutate: func(operator *plan.EventAggregate) {
 				operator.Measure.Input = plan.FieldRef{

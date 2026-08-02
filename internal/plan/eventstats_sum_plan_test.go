@@ -30,6 +30,15 @@ func TestBuildEventStatsFieldAggregatesProduceSingularRowPreservingMeasure(t *te
 			references: []string{"host", "http.latency", "index", "status"},
 		},
 		{
+			name:       "maximum",
+			source:     `index=gradethis | eventstats max(http.latency) AS maximum_latency BY host, status`,
+			function:   AggregateFunctionMaximum,
+			input:      "http.latency",
+			inputPath:  []string{"http", "latency"},
+			output:     "maximum_latency",
+			references: []string{"host", "http.latency", "index", "status"},
+		},
+		{
 			name:       "sum",
 			source:     `index=gradethis | eventstats sum(http.bytes) AS total_bytes BY host, status`,
 			function:   AggregateFunctionSum,
@@ -336,9 +345,9 @@ func TestBuildEventStatsSumRejectsForgedAggregateMetadata(t *testing.T) {
 			wantCode: "SPL_RESERVED_FIELD",
 		},
 		{
-			name: "maximum function remains unsupported",
+			name: "distinct count function remains unsupported",
 			mutate: func(aggregate *spl.StatsAggregate) {
-				aggregate.Function = spl.AggregateFunctionMaximum
+				aggregate.Function = spl.AggregateFunctionDistinctCount
 			},
 			wantCode: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
 		},
@@ -440,9 +449,9 @@ func TestAnalyzeEventStatsSumAcceptsResolvedInputAndRejectsForgedMetadata(
 			},
 		},
 		{
-			name: "maximum function remains unsupported",
+			name: "chronological function remains unsupported",
 			mutate: func(measure *AggregateMeasure) {
-				measure.Function = AggregateFunctionMaximum
+				measure.Function = AggregateFunctionEarliest
 			},
 		},
 	}

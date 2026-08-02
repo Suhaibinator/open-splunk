@@ -286,7 +286,7 @@ test("stats completion advertises true-only conditional count with an explicit a
   assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
 });
 
-test("eventstats completion advertises the bounded aggregate surface including minimum", () => {
+test("eventstats completion advertises the bounded aggregate surface including extrema", () => {
   const eventstatsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eventstats");
   assert.ok(eventstatsCompletion);
   assert.equal(
@@ -297,6 +297,7 @@ test("eventstats completion advertises the bounded aggregate surface including m
   assert.match(eventstatsCompletion.detail, /numeric sum/i);
   assert.match(eventstatsCompletion.detail, /average/i);
   assert.match(eventstatsCompletion.detail, /exact mixed-type minimum/i);
+  assert.match(eventstatsCompletion.detail, /exact mixed-type maximum/i);
   assert.match(eventstatsCompletion.detail, /every input row/i);
 
   const commandToken = classifiedTokens("index=main | eventstats count")
@@ -314,6 +315,10 @@ test("eventstats completion advertises the bounded aggregate surface including m
   const minimumToken = classifiedTokens("index=main | eventstats min(duration_ms) AS min_ms")
     .find((token) => token.text.toLowerCase() === "min");
   assert.deepEqual(minimumToken, { className: "spl-function", text: "min" });
+
+  const maximumToken = classifiedTokens("index=main | eventstats max(duration_ms) AS max_ms")
+    .find((token) => token.text.toLowerCase() === "max");
+  assert.deepEqual(maximumToken, { className: "spl-function", text: "max" });
 });
 
 test("where completion advertises direct bounded match and like predicates", () => {

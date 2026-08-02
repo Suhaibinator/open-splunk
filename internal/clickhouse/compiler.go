@@ -11831,11 +11831,15 @@ func eventAggregateMeasureSpecFor(
 			spec.valuePrefix = "__os_eventstats_value_avg_"
 		}
 		return spec, nil
-	case plan.AggregateFunctionMinimum:
+	case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
 		spec.materialized = true
 		spec.numberType = ""
 		spec.numericIntegral = false
-		spec.valuePrefix = "__os_eventstats_value_min_"
+		if function == plan.AggregateFunctionMinimum {
+			spec.valuePrefix = "__os_eventstats_value_min_"
+		} else {
+			spec.valuePrefix = "__os_eventstats_value_max_"
+		}
 		return spec, nil
 	default:
 		return eventAggregateMeasureSpec{}, fmt.Errorf(
@@ -11877,7 +11881,7 @@ func nullableEventStatsExtremaType(field fieldState) (string, error) {
 		}
 	}
 	return "", fmt.Errorf(
-		"compile ClickHouse eventstats min: fixed input has unsupported type %d/%q",
+		"compile ClickHouse eventstats extrema: fixed input has unsupported type %d/%q",
 		field.kind,
 		field.numberType,
 	)
@@ -12024,7 +12028,8 @@ func compileEventAggregate(
 		measureInputSQL = "toUInt64(ifNull(" + predicateSQL + ", 0))"
 		measureInputArgs = predicateArgs
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
-		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum:
+		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
+		plan.AggregateFunctionMaximum:
 		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
 			return compiledRelation{}, compileState{}, nil, nil, &plan.Diagnostic{
 				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
@@ -12048,7 +12053,8 @@ func compileEventAggregate(
 			if exists {
 				measureInputSQL, measureInputArgs = numericArrayInputSQL(input)
 			}
-		case plan.AggregateFunctionMinimum:
+		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
+			extremaFunction := measure.Function
 			outputState = fieldState{
 				kind:           fieldKindDynamic,
 				dynamicTypeSQL: "dynamicType(" + quoteIdentifier(output.Name) + ")",
@@ -12064,14 +12070,18 @@ func compileEventAggregate(
 				eligibleSQL, eligibleArgs, fixed := fixedExtremaEligibilitySQL(input)
 				if !fixed {
 					return compiledRelation{}, compileState{}, nil, nil, errors.New(
-						"compile ClickHouse eventstats min: fixed extrema input is invalid",
+						"compile ClickHouse eventstats extrema: fixed input is invalid",
 					)
 				}
 				measureInputSQL = "tuple(" + input.valueSQL + ", toUInt8(" +
 					eligibleSQL + "))"
 				measureInputArgs = eligibleArgs
 				measureAggregateSQL = func(inputSQL string) (string, error) {
-					return "minIfOrNull(tupleElement(" + inputSQL +
+					aggregateName := "minIfOrNull"
+					if extremaFunction == plan.AggregateFunctionMaximum {
+						aggregateName = "maxIfOrNull"
+					}
+					return aggregateName + "(tupleElement(" + inputSQL +
 						", 1), tupleElement(" + inputSQL + ", 2) != 0)", nil
 				}
 				outputState = fieldState{
@@ -12110,7 +12120,7 @@ func compileEventAggregate(
 				)
 				measureAggregateSQL = func(inputSQL string) (string, error) {
 					return statsExtremaScalarAggregateWinnerSQL(
-						plan.AggregateFunctionMinimum,
+						extremaFunction,
 						inputSQL,
 					), nil
 				}
@@ -12126,10 +12136,14 @@ func compileEventAggregate(
 					measureUsesGroupEligibility = true
 				}
 				measureInputSQL, measureInputArgs =
-					eventStatsExtremaDynamicMeasureSQL(input, rowEligibleSQL)
+					eventStatsExtremaDynamicMeasureSQL(
+						extremaFunction,
+						input,
+						rowEligibleSQL,
+					)
 				measureAggregateSQL = func(inputSQL string) (string, error) {
 					return statsExtremaScalarAggregateWinnerSQL(
-						plan.AggregateFunctionMinimum,
+						extremaFunction,
 						inputSQL,
 					), nil
 				}
@@ -12147,7 +12161,7 @@ func compileEventAggregate(
 				measureInputSQL = statsExtremaCandidatesSQL(valuesSQL)
 				measureAggregateSQL = func(inputSQL string) (string, error) {
 					return statsExtremaAggregateSQL(
-						plan.AggregateFunctionMinimum,
+						extremaFunction,
 						inputSQL,
 					), nil
 				}
@@ -12430,7 +12444,7 @@ func compileEventAggregate(
 	barrier := &pendingChronologicalBarrier{
 		name: barrierName,
 		// Defer every eventstats stage into the final flat CTE graph. A later
-		// validating minimum can then compose with count/sum/average stages in
+		// validating extrema can then compose with count/sum/average stages in
 		// either order without nesting one MATERIALIZED input inside another.
 		sql: resultSQL,
 		prerequisiteDefinitions: append(
@@ -12490,7 +12504,8 @@ func validateEventAggregate(
 			)
 		}
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
-		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum:
+		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
+		plan.AggregateFunctionMaximum:
 		form := "count(field)"
 		switch measure.Function {
 		case plan.AggregateFunctionSum:
@@ -12499,6 +12514,8 @@ func validateEventAggregate(
 			form = "avg(field)"
 		case plan.AggregateFunctionMinimum:
 			form = "min(field)"
+		case plan.AggregateFunctionMaximum:
+			form = "max(field)"
 		}
 		if measure.Predicate != nil || measure.Percentile != 0 {
 			return plan.FieldRef{}, fmt.Errorf(
@@ -12525,7 +12542,7 @@ func validateEventAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), min(field), sum(field), or avg(field) is supported",
+			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), min(field), max(field), sum(field), or avg(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -14181,6 +14198,7 @@ func eventStatsExtremaEmptyRowStateSQL(invalidSQL string) string {
 }
 
 func eventStatsExtremaFoldStepSQL(
+	function plan.AggregateFunction,
 	stateSQL string,
 	value compiledDynamicExtremaScalar,
 ) string {
@@ -14195,9 +14213,13 @@ func eventStatsExtremaFoldStepSQL(
 		", toUInt8(" + strconv.Itoa(int(statsExtremaPublicationLexical)) +
 		"), toFloat64(0), CAST('' AS String), toUInt8(0))"
 	candidate := "__os_eventstats_extrema_candidate"
+	comparison := "<"
+	if function == plan.AggregateFunctionMaximum {
+		comparison = ">"
+	}
 	replace := "(tupleElement(" + candidate + ", 5) != 0 AND (tupleElement(" +
-		stateSQL + ", 5) = 0 OR tupleElement(" + candidate + ", 1) < tupleElement(" +
-		stateSQL + ", 1)))"
+		stateSQL + ", 5) = 0 OR tupleElement(" + candidate + ", 1) " + comparison +
+		" tupleElement(" + stateSQL + ", 1)))"
 	fields := make([]string, 0, 6)
 	for index := 1; index <= 4; index++ {
 		position := strconv.Itoa(index)
@@ -14224,6 +14246,7 @@ func eventStatsExtremaFoldStepSQL(
 // grouped query gates the entire fold with its already-bound BY eligibility,
 // so an incomplete group row cannot spend work or contribute poison.
 func eventStatsExtremaDynamicMeasureSQL(
+	function plan.AggregateFunction,
 	field fieldState,
 	rowEligibleSQL string,
 ) (string, []any) {
@@ -14252,9 +14275,9 @@ func eventStatsExtremaDynamicMeasureSQL(
 	memberState := "__os_eventstats_extrema_state"
 	values := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
 	arrayState := "arrayFold((" + memberState + ", element) -> " +
-		eventStatsExtremaFoldStepSQL(memberState, element) + ", " + values +
+		eventStatsExtremaFoldStepSQL(function, memberState, element) + ", " + values +
 		", " + initial + ")"
-	scalarState := eventStatsExtremaFoldStepSQL(initial, scalar)
+	scalarState := eventStatsExtremaFoldStepSQL(function, initial, scalar)
 	rowState := "multiIf(field_present = 0 OR " + scalar.typeSQL +
 		" = 'None', " + initial + ", " + scalar.typeSQL +
 		" = 'Array(Dynamic)', " + arrayState + ", " + scalarState + ")"

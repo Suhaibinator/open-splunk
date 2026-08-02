@@ -10,6 +10,7 @@ func TestClassifyResultShapeTreatsEventStatsFieldAggregatesAsRowPreserving(t *te
 		source string
 	}{
 		{"minimum", "index=main | eventstats min(latency_ms) AS minimum_latency BY service"},
+		{"maximum", "index=main | eventstats max(latency_ms) AS maximum_latency BY service"},
 		{"sum", "index=main | eventstats sum(bytes) AS total_bytes BY level"},
 		{"average", "index=main | eventstats avg(duration_ms) AS mean_ms BY service"},
 	} {

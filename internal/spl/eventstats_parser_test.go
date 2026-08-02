@@ -188,12 +188,6 @@ func TestParseEventStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 			rangeText: "dc",
 		},
 		{
-			name:      "maximum remains unsupported",
-			source:    `index=main | eventstats max(latency_ms) AS maximum`,
-			code:      "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-			rangeText: "max",
-		},
-		{
 			name:      "comma separated second measure",
 			source:    `index=main | eventstats count, count`,
 			code:      "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
@@ -394,6 +388,7 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats count(field) AS occurrences BY group",
 				"eventstats count(eval(field=value)) AS matches BY group",
 				"eventstats min(field) AS minimum BY group",
+				"eventstats max(field) AS maximum BY group",
 				"eventstats sum(field) AS total BY group",
 				"eventstats avg(field) AS mean BY group",
 			},
@@ -409,6 +404,7 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats count(field) AS occurrences BY group",
 				"eventstats count(eval(field=value)) AS matches BY group",
 				"eventstats min(field) AS minimum BY group",
+				"eventstats max(field) AS maximum BY group",
 				"eventstats sum(field) AS total BY group",
 				"eventstats avg(field) AS mean BY group",
 			},
@@ -520,12 +516,13 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		t.Fatalf("function class = %q, want aggregate", aggregate.FunctionClass)
 	}
 	candidates := StaticSuggestionCandidates(aggregate)
-	if len(candidates) != 4 ||
+	if len(candidates) != 5 ||
 		candidates[0].Label != "count" ||
 		candidates[1].Label != "min" ||
-		candidates[2].Label != "sum" ||
-		candidates[3].Label != "avg" {
-		t.Fatalf("aggregate suggestions = %v, want count, min, sum, and avg", candidates)
+		candidates[2].Label != "max" ||
+		candidates[3].Label != "sum" ||
+		candidates[4].Label != "avg" {
+		t.Fatalf("aggregate suggestions = %v, want count, min, max, sum, and avg", candidates)
 	}
 
 	tests := []struct {
@@ -536,9 +533,11 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		{source: "| eventstats count A", kind: SuggestionKindKeyword, words: []string{"AS", "BY"}},
 		{source: "| eventstats count(", kind: SuggestionKindField},
 		{source: "| eventstats min(", kind: SuggestionKindField},
+		{source: "| eventstats max(", kind: SuggestionKindField},
 		{source: "| eventstats sum(eval(", kind: SuggestionKindField},
 		{source: "| eventstats avg(eval(", kind: SuggestionKindField},
 		{source: "| eventstats min(latency)", kind: SuggestionKindKeyword, words: []string{"AS"}},
+		{source: "| eventstats max(latency)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count(status)", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats count(eval(status=500))", kind: SuggestionKindKeyword, words: []string{"AS"}},
 		{source: "| eventstats sum(bytes)", kind: SuggestionKindKeyword, words: []string{"AS"}},
@@ -547,6 +546,7 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		{source: "| eventstats count AS events B", kind: SuggestionKindKeyword, words: []string{"BY"}},
 		{source: "| eventstats count(status) AS populated B", kind: SuggestionKindKeyword, words: []string{"BY"}},
 		{source: "| eventstats min(latency) AS minimum B", kind: SuggestionKindKeyword, words: []string{"BY"}},
+		{source: "| eventstats max(latency) AS maximum B", kind: SuggestionKindKeyword, words: []string{"BY"}},
 		{source: "| eventstats count BY ho", kind: SuggestionKindField},
 	}
 	for _, test := range tests {
