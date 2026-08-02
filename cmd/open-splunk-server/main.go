@@ -403,9 +403,17 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return fmt.Errorf("create ClickHouse ingestion store: %w", err)
 	}
+	indexReads, err := newIndexReadLifecycle(
+		controlDB,
+		config.tenantID,
+	)
+	if err != nil {
+		return err
+	}
 	indexDataDeletion, err = newIndexDataDeletionRuntime(
 		controlDB,
 		eventStore,
+		indexReads.retirement,
 		config.tenantID,
 		func(err error) {
 			log.Printf("reconcile index data deletion: %v", err)
@@ -489,17 +497,22 @@ func runWithOptions(config options) error {
 		}()
 	}
 
-	indexStatistics, err := internalclickhouse.NewIndexStatisticsReader(
+	indexStatistics, err := newRuntimeIndexStatisticsReader(
 		connection,
 		internalclickhouse.IndexStatisticsConfig{
 			Database: "open_splunk",
 			Table:    "events",
 		},
+		indexReads.admission,
 	)
 	if err != nil {
 		return fmt.Errorf("create index statistics reader: %w", err)
 	}
-	executor, err := queryexec.New(connection, queryexec.Config{})
+	executor, err := newRuntimeQueryExecutor(
+		connection,
+		queryexec.Config{},
+		indexReads.admission,
+	)
 	if err != nil {
 		return fmt.Errorf("create query executor: %w", err)
 	}
@@ -550,7 +563,12 @@ func runWithOptions(config options) error {
 			log.Printf("close search inspection services: %v", err)
 		}
 	}()
-	exportExecutor, err := queryexec.New(connection, exportSettings.queryExecutorConfig())
+	exportExecutorConfig := exportSettings.queryExecutorConfig()
+	exportExecutor, err := newRuntimeQueryExecutor(
+		connection,
+		exportExecutorConfig,
+		indexReads.admission,
+	)
 	if err != nil {
 		return fmt.Errorf("create export query executor: %w", err)
 	}

@@ -89,9 +89,22 @@ func (executor *Executor) ExecuteFieldSummary(
 	if executor.newQueryID == nil {
 		return FieldSummaryResult{}, errors.New("execute ClickHouse field summary: query ID generator is required")
 	}
+	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledFieldSummary(query); err != nil {
 		return FieldSummaryResult{}, err
 	}
+	admittedContext, releaseRead, err := executor.acquireRead(ctx, query, "execute ClickHouse field summary")
+	if err != nil {
+		return FieldSummaryResult{}, err
+	}
+	defer releaseRead()
+	defer func() {
+		resultErr = preserveReadCancellationCause(admittedContext, resultErr)
+		if resultErr != nil {
+			result = FieldSummaryResult{}
+		}
+	}()
+	ctx = admittedContext
 	settings, err := settingsForFieldSummary(executor.settings, query.Spec)
 	if err != nil {
 		return FieldSummaryResult{}, err

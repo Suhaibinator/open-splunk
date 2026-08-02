@@ -11,6 +11,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -183,8 +184,9 @@ func TestIndexStatisticsReaderAgainstClickHouse(t *testing.T) {
 	reader, err := internalclickhouse.NewIndexStatisticsReader(
 		connection,
 		internalclickhouse.IndexStatisticsConfig{
-			Database: container.Database,
-			Table:    "events",
+			Database:      container.Database,
+			Table:         "events",
+			ReadAdmission: indexread.UnfencedAdmission{},
 		},
 	)
 	if err != nil {

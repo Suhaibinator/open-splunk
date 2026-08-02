@@ -16,12 +16,18 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexes"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/queryexec"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/server"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -111,6 +117,14 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 	// A long reconciler delay gives each restart schedule a deterministic
 	// window in which only the coordinator's frozen drain can claim the outbox.
 	storeConfig.RetryAfter = 30 * time.Second
+	t.Run("shared registry rejects reads before native deletion", func(t *testing.T) {
+		testCoordinatorSharedReadRetirement(
+			t,
+			ctx,
+			queryConnection,
+			storeConfig,
+		)
+	})
 
 	const (
 		targetTenant  = "coordinator-tenant"
@@ -355,6 +369,7 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 		wrongTenantStore,
 		indexes.IndexDataDeletionCoordinatorConfig{
 			TenantID:         foreignTenant,
+			ReadRetirement:   indexread.NewRegistry(),
 			PollInterval:     time.Hour,
 			RecoveryInterval: time.Hour,
 			RetryInitial:     time.Hour,
@@ -454,6 +469,7 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 		firstDeletionStore,
 		indexes.IndexDataDeletionCoordinatorConfig{
 			TenantID:         targetTenant,
+			ReadRetirement:   indexread.NewRegistry(),
 			PollInterval:     25 * time.Millisecond,
 			RecoveryInterval: time.Hour,
 			RetryInitial:     time.Hour,
@@ -570,6 +586,7 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 		secondDeletionStore,
 		indexes.IndexDataDeletionCoordinatorConfig{
 			TenantID:         targetTenant,
+			ReadRetirement:   indexread.NewRegistry(),
 			PollInterval:     25 * time.Millisecond,
 			RecoveryInterval: 250 * time.Millisecond,
 			RetryInitial:     25 * time.Millisecond,
@@ -713,11 +730,302 @@ func TestIndexDataDeletionCoordinatorAgainstClickHouse(t *testing.T) {
 	)
 }
 
+func testCoordinatorSharedReadRetirement(
+	t *testing.T,
+	ctx context.Context,
+	queryConnection driver.Conn,
+	storeConfig clickhouse.Config,
+) {
+	t.Helper()
+
+	const (
+		tenantID  = "coordinator-read-fence-tenant"
+		indexName = "coordinator-read-fence"
+		eventID   = "coordinator-read-fence-event"
+	)
+	eventTime := time.Date(2026, time.June, 2, 3, 4, 5, 0, time.UTC)
+	process := openCoordinatorIntegrationProcess(
+		t,
+		ctx,
+		filepath.Join(t.TempDir(), "read-fence-control.sqlite"),
+		storeConfig,
+		nil,
+	)
+	storeCoordinatorEvent(t, ctx, process.store, 1, coordinatorEventFixture{
+		eventID:   eventID,
+		tenantID:  tenantID,
+		indexName: indexName,
+		eventTime: eventTime,
+	})
+
+	sharedRegistry := indexread.NewRegistry()
+	countingConnection := &coordinatorReadFenceConnection{
+		Conn: queryConnection,
+	}
+	executor, err := queryexec.New(
+		countingConnection,
+		queryexec.Config{ReadAdmission: sharedRegistry},
+	)
+	if err != nil {
+		t.Fatalf("create read-fenced ClickHouse executor: %v", err)
+	}
+	compiled := compileCoordinatorReadFenceQuery(
+		t,
+		tenantID,
+		indexName,
+		eventTime,
+	)
+	preflightSink := &coordinatorReadFenceSink{}
+	if err := executor.Execute(ctx, compiled, preflightSink); err != nil {
+		t.Fatalf("execute pre-retirement query: %v", err)
+	}
+	if schemaCalls, rowCalls := preflightSink.calls(); schemaCalls != 1 || rowCalls != 1 {
+		t.Fatalf(
+			"pre-retirement publications = schema %d, rows %d; want 1/1",
+			schemaCalls,
+			rowCalls,
+		)
+	}
+
+	index, err := process.control.CreateIndex(ctx, control.IndexDefinition{
+		Name:             indexName,
+		DisplayName:      "Coordinator read retirement",
+		IngestionEnabled: true,
+		SearchEnabled:    true,
+	})
+	if err != nil {
+		t.Fatalf("create read-retirement index: %v", err)
+	}
+	index, err = process.control.SetIndexState(
+		ctx,
+		index.ID,
+		index.Version,
+		control.IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive read-retirement index: %v", err)
+	}
+	operation, err := process.control.BeginIndexDataDeletion(
+		ctx,
+		control.IndexDataDeletionScope{TenantID: tenantID},
+		index.ID,
+		index.Version,
+		index.Definition.Name,
+	)
+	if err != nil {
+		t.Fatalf("begin read-retirement deletion: %v", err)
+	}
+
+	blockedStore := newCoordinatorReadFenceDeletionStore(process.store)
+	coordinatorErrors := make(chan error, 1)
+	coordinator := startCoordinatorIntegration(
+		t,
+		process.control,
+		blockedStore,
+		indexes.IndexDataDeletionCoordinatorConfig{
+			TenantID:         tenantID,
+			ReadRetirement:   sharedRegistry,
+			PollInterval:     25 * time.Millisecond,
+			RecoveryInterval: time.Hour,
+			RetryInitial:     25 * time.Millisecond,
+			RetryMaximum:     250 * time.Millisecond,
+			StepTimeout:      30 * time.Second,
+			OnError: func(err error) {
+				select {
+				case coordinatorErrors <- err:
+				default:
+				}
+			},
+		},
+	)
+	waitCoordinatorIntegrationSignal(
+		t,
+		ctx,
+		blockedStore.entered,
+		"read retirement before native deletion",
+	)
+	assertCoordinatorEventCount(t, ctx, queryConnection, eventID, 1)
+
+	queryCallsBefore := countingConnection.queryCalls.Load()
+	retiredSink := &coordinatorReadFenceSink{}
+	err = executor.Execute(ctx, compiled, retiredSink)
+	if !errors.Is(err, indexread.ErrUnavailable) ||
+		!errors.Is(err, searchjobs.ErrStorageUnavailable) {
+		t.Fatalf(
+			"post-retirement Execute() error = %v, want ErrUnavailable and ErrStorageUnavailable",
+			err,
+		)
+	}
+	if queryCallsAfter := countingConnection.queryCalls.Load(); queryCallsAfter != queryCallsBefore {
+		t.Fatalf(
+			"post-retirement native query calls = %d, want unchanged %d",
+			queryCallsAfter,
+			queryCallsBefore,
+		)
+	}
+	if schemaCalls, rowCalls := retiredSink.calls(); schemaCalls != 0 || rowCalls != 0 {
+		t.Fatalf(
+			"post-retirement publications = schema %d, rows %d; want 0/0",
+			schemaCalls,
+			rowCalls,
+		)
+	}
+
+	close(blockedStore.release)
+	waitCoordinatorReadFenceCompletion(
+		t,
+		ctx,
+		process.control,
+		operation.ID,
+		coordinatorErrors,
+	)
+	closeCoordinatorIntegration(t, coordinator)
+	assertCoordinatorEventCount(t, ctx, queryConnection, eventID, 0)
+}
+
 type coordinatorEventFixture struct {
 	eventID   string
 	tenantID  string
 	indexName string
 	eventTime time.Time
+}
+
+type coordinatorReadFenceConnection struct {
+	driver.Conn
+	queryCalls atomic.Uint32
+}
+
+func (connection *coordinatorReadFenceConnection) Query(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (driver.Rows, error) {
+	connection.queryCalls.Add(1)
+	return connection.Conn.Query(ctx, query, args...)
+}
+
+type coordinatorReadFenceSink struct {
+	schemaCalls atomic.Uint32
+	rowCalls    atomic.Uint32
+}
+
+func (sink *coordinatorReadFenceSink) SetSchema(searchjobs.Schema) error {
+	sink.schemaCalls.Add(1)
+	return nil
+}
+
+func (sink *coordinatorReadFenceSink) AddRow([]searchjobs.Value) error {
+	sink.rowCalls.Add(1)
+	return nil
+}
+
+func (sink *coordinatorReadFenceSink) calls() (uint32, uint32) {
+	return sink.schemaCalls.Load(), sink.rowCalls.Load()
+}
+
+type coordinatorReadFenceDeletionStore struct {
+	delegate *clickhouse.Store
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func newCoordinatorReadFenceDeletionStore(
+	delegate *clickhouse.Store,
+) *coordinatorReadFenceDeletionStore {
+	return &coordinatorReadFenceDeletionStore{
+		delegate: delegate,
+		entered:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (store *coordinatorReadFenceDeletionStore) IndexDataDeletionStatus(
+	ctx context.Context,
+	request clickhouse.IndexDataDeletionRequest,
+) (clickhouse.IndexDataDeletionProgress, error) {
+	return store.delegate.IndexDataDeletionStatus(ctx, request)
+}
+
+func (store *coordinatorReadFenceDeletionStore) WithWritesFrozen(
+	ctx context.Context,
+	callback func(context.Context, clickhouse.FrozenWrites) error,
+) error {
+	store.once.Do(func() { close(store.entered) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-store.release:
+	}
+	return store.delegate.WithWritesFrozen(ctx, callback)
+}
+
+func compileCoordinatorReadFenceQuery(
+	t *testing.T,
+	tenantID string,
+	indexName string,
+	eventTime time.Time,
+) clickhouse.CompiledQuery {
+	t.Helper()
+
+	parsed, err := spl.Parse("index=" + indexName + " | stats count")
+	if err != nil {
+		t.Fatalf("parse read-fence SPL: %v", err)
+	}
+	visibilityCutoff := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          tenantID,
+		AuthorizedIndexes: []string{indexName},
+		RequestedIndexes:  []string{indexName},
+		Earliest:          eventTime.Add(-time.Hour),
+		Latest:            eventTime.Add(time.Hour),
+		SearchStart:       eventTime.Add(2 * time.Hour),
+		SearchTimezone:    "UTC",
+		IndexTimeCutoff:   eventTime.Add(2 * time.Hour),
+		VisibilityCutoff:  &visibilityCutoff,
+	})
+	if err != nil {
+		t.Fatalf("build read-fence plan: %v", err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatalf("compile read-fence plan: %v", err)
+	}
+	return compiled
+}
+
+func waitCoordinatorReadFenceCompletion(
+	t *testing.T,
+	ctx context.Context,
+	controlPlane *control.DB,
+	operationID string,
+	coordinatorErrors <-chan error,
+) {
+	t.Helper()
+
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+	for {
+		if _, err := controlPlane.GetIndexDataDeletionCompletion(
+			ctx,
+			operationID,
+		); err == nil {
+			return
+		} else if !errors.Is(err, control.ErrNotFound) {
+			t.Fatalf("read read-fence deletion completion: %v", err)
+		}
+		select {
+		case err := <-coordinatorErrors:
+			t.Fatalf("reconcile read-fence deletion: %v", err)
+		case <-ctx.Done():
+			t.Fatalf("wait for read-fence deletion completion: %v", ctx.Err())
+		case <-timer.C:
+			t.Fatal("timed out waiting for read-fence deletion completion")
+		case <-ticker.C:
+		}
+	}
 }
 
 func storeCoordinatorEvent(
@@ -893,6 +1201,15 @@ func assertCoordinatorTerminalControlState(
 		control.ErrNotFound,
 	) {
 		t.Fatalf("GetIndex(terminal) error = %v, want ErrNotFound", err)
+	}
+	if _, err := db.GetIndexByName(
+		ctx,
+		operation.IndexName,
+	); !errors.Is(err, control.ErrNotFound) {
+		t.Fatalf(
+			"GetIndexByName(terminal) error = %v, want ErrNotFound",
+			err,
+		)
 	}
 	if _, err := db.GetIndexDeletionOperation(
 		ctx,

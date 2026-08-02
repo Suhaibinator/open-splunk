@@ -19,6 +19,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus"
@@ -70,7 +71,9 @@ func TestGradeThisCompatibilityV0_1AgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	gradeThisStopInspectionMerges(t, ctx, queryConnection)
-	executor, err := New(queryConnection, Config{})
+	executor, err := New(queryConnection, Config{
+		ReadAdmission: indexread.UnfencedAdmission{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -61,6 +61,8 @@ type CompiledFieldSummary struct {
 	Args       []any
 	Spec       FieldSummarySpec
 	FieldKnown bool
+
+	readScope compiledReadScope
 }
 
 const (
@@ -142,6 +144,7 @@ func (c Compiler) CompileFieldSummary(query *plan.Query, spec FieldSummarySpec) 
 		Args:       compiled.Args,
 		Spec:       spec,
 		FieldKnown: fieldKnown,
+		readScope:  compiled.readScope,
 	}, nil
 }
 

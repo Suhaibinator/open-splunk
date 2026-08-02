@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"sync"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -62,13 +61,13 @@ type runtimeSearchInspection struct {
 func newRuntimeSearchInspection(
 	config runtimeSearchInspectionConfig,
 ) (*runtimeSearchInspection, error) {
-	if nilRuntimeInspectionDependency(config.Searches) {
+	if nilRuntimeDependency(config.Searches) {
 		return nil, errors.New(
 			"compose search inspection runtime: completed search snapshots " +
 				"are required",
 		)
 	}
-	if nilRuntimeInspectionDependency(config.Compiler) {
+	if nilRuntimeDependency(config.Compiler) {
 		return nil, errors.New(
 			"compose search inspection runtime: query compiler is required",
 		)
@@ -97,7 +96,7 @@ func newRuntimeSearchInspection(
 			err,
 		)
 	}
-	if nilRuntimeInspectionDependency(explainer) {
+	if nilRuntimeDependency(explainer) {
 		return nil, errors.New(
 			"compose search inspection runtime: query Explainer is required",
 		)
@@ -139,7 +138,7 @@ func (inspection *runtimeSearchInspection) Close() error {
 	inspection.closeOnce.Do(func() {
 		serviceErr := inspection.service.Close(context.Background())
 		var explainerErr error
-		if nilRuntimeInspectionDependency(inspection.explainer) {
+		if nilRuntimeDependency(inspection.explainer) {
 			explainerErr = errors.New(
 				"close search inspection runtime: query Explainer is required",
 			)
@@ -149,18 +148,4 @@ func (inspection *runtimeSearchInspection) Close() error {
 		inspection.closeErr = errors.Join(serviceErr, explainerErr)
 	})
 	return inspection.closeErr
-}
-
-func nilRuntimeInspectionDependency(value any) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
 }

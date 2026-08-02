@@ -14,6 +14,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 )
 
 const indexStatisticsBatchAggregateSQL = `
@@ -867,6 +868,9 @@ func mustIndexStatisticsBatchReader(
 	config IndexStatisticsConfig,
 ) *IndexStatisticsReader {
 	t.Helper()
+	if config.ReadAdmission == nil {
+		config.ReadAdmission = indexread.UnfencedAdmission{}
+	}
 	reader, err := NewIndexStatisticsReader(connection, config)
 	if err != nil {
 		t.Fatalf("NewIndexStatisticsReader(): %v", err)

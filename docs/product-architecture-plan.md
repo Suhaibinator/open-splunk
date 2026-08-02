@@ -563,6 +563,41 @@ live-leased rows—and succeeds only after proving the count and bytes are both
 zero. The production runtime's single Store owner is part of that fence
 contract; every writer for the physical events table must use it.
 
+Physical deletion also requires a read fence; HTTP admission alone is not a
+safe execution boundary because a search may remain queued and an export may
+re-execute a retained job later. The compiler therefore binds the trusted
+tenant/index scope and the exact positions and values of its security bind
+arguments into private, tamper-evident metadata. The ordinary search executor
+and its timeline, field-catalog, field-summary, field-suggestion, and export
+re-execution paths validate that metadata against one detached argument
+snapshot, then acquire a shared process-local lease for every index in the
+scope before issuing ClickHouse work. Multi-index admission is atomic.
+
+Each lease derives a cancellation context. Retirement permanently closes one
+tenant/index key, cancels every overlapping lease with an explicit unavailable
+cause, and joins every release before deletion may inspect or advance a native
+mutation. The coordinator reapplies this idempotent retirement after validating
+each durable operation and before reading its mutation attempt, polling native
+status, freezing writers, or issuing ClickHouse mutation work. A failed or
+timed-out drain retries without touching ClickHouse. Consequently a queued job
+cannot silently complete with an empty result after deletion, a running job is
+joined before mutation, and a retained export fails as an unavailable source
+instead of publishing a changed empty artifact.
+
+The in-memory retirement set is paired with a GORM catalog check at query
+execution. Active and archived generations may remain physically readable;
+`DELETING`, missing, and terminally tombstoned names are rejected before the
+live lease. This durable check preserves the fence after process restart, while
+the registry closes the race between the check and a concurrent transition to
+`DELETING`. Compiler-only validation and `EXPLAIN` do not read event rows and do
+not acquire a physical-read lease.
+
+Native administrator index-statistics reads use the same catalog and live
+lease. List enrichment batches only `ACTIVE` and `ARCHIVED` records: a visible
+`DELETING` item keeps its optional statistics unset, and an all-deleting page
+does no visibility-snapshot or ClickHouse work. A direct statistics request for
+a deleting index fails explicitly as unavailable.
+
 Before the first outcome-ambiguous ClickHouse `ALTER`, migration 0018 and an
 explicit GORM model now persist exactly one immutable mutation attempt beneath
 the outstanding deletion operation. It binds a stable correlation ID and
@@ -812,12 +847,12 @@ The authenticated administrator
 creating a search job or accepting caller-written SPL. Every request first
 resolves its ID or canonical-name selector through the GORM/SQLite control
 plane. The resolved stable ID, canonical name, and current version become
-trusted service inputs. Resolution deliberately adds no active/search-enabled
-policy: `ACTIVE`, `ARCHIVED`, and outstanding `DELETING` records, including
-records with disabled search access, remain eligible while they are current
-and non-tombstoned. Terminal tombstones remain invisible. This keeps catalog
-identity and lifecycle policy in GORM without making GORM responsible for
-event analysis.
+trusted service inputs. Selector resolution deliberately adds no
+search-enabled policy. Physical execution admission then permits current
+`ACTIVE` and `ARCHIVED` records, including records with disabled search access,
+while outstanding `DELETING` records fail explicitly as unavailable and
+terminal tombstones remain invisible. This keeps catalog identity and
+lifecycle policy in GORM without making GORM responsible for event analysis.
 
 Executable index-field requests require the `TimeRangeSpec` message and both
 of its bounds. Absolute or relative expressions are resolved once to a
@@ -1170,6 +1205,9 @@ The socket implementation must enforce binary-frame size limits, bounded per-con
 Even a single-node product benefits from a search-job abstraction. A job should have a stable search ID, owner, normalized query, effective index scope, time range, state, progress metadata, result schema, ClickHouse query ID, warnings, timing, and expiration.
 
 Each job also records a resolved absolute time range and `_indextime` cutoff. Re-running an operation such as export against that snapshot excludes events ingested after the original search began, making results repeatable within the job's retention window.
+That repeatability contract does not permit re-execution through an index
+deletion boundary: once any scoped index enters physical deletion or is
+terminally tombstoned, the operation must fail explicitly as unavailable.
 
 Recommended lifecycle:
 

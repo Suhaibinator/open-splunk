@@ -29,6 +29,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -99,6 +100,11 @@ type Config struct {
 	// MaxRowsToGroupBy is left at zero.
 	ExpandTimechartGroupLimit bool
 	MaxThreads                uint64
+	// ReadAdmission joins every compiler-scoped physical read to the shared
+	// index retirement fence. It is required. Isolated tests and diagnostics
+	// without an index-deletion lifecycle must explicitly use
+	// indexread.UnfencedAdmission.
+	ReadAdmission indexread.Admission
 }
 
 // Executor is a native ClickHouse implementation of searchjobs.Executor.
@@ -108,6 +114,7 @@ type Executor struct {
 	expandTimechartGroupLimit bool
 	newQueryID                func() (string, error)
 	withProgress              func(func(*clickhousedriver.Progress)) clickhousedriver.QueryOption
+	readAdmission             indexread.Admission
 }
 
 type queryConnection interface {
@@ -122,6 +129,9 @@ func New(connection driver.Conn, config Config) (*Executor, error) {
 	if connection == nil {
 		return nil, errors.New("create ClickHouse query executor: connection is required")
 	}
+	if config.ReadAdmission == nil || isNilDriverValue(config.ReadAdmission) {
+		return nil, errors.New("create ClickHouse query executor: read admission is required")
+	}
 	expandTimechartGroupLimit := config.MaxRowsToGroupBy == 0 || config.ExpandTimechartGroupLimit
 	settings, err := querySettings(config)
 	if err != nil {
@@ -133,6 +143,7 @@ func New(connection driver.Conn, config Config) (*Executor, error) {
 		expandTimechartGroupLimit: expandTimechartGroupLimit,
 		newQueryID:                randomQueryID,
 		withProgress:              clickhousedriver.WithProgress,
+		readAdmission:             config.ReadAdmission,
 	}, nil
 }
 
@@ -193,6 +204,67 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 	}, nil
 }
 
+type readScopedCompiledQuery interface {
+	ReadScope() (string, []string, bool)
+}
+
+func (executor *Executor) acquireRead(
+	ctx context.Context,
+	query readScopedCompiledQuery,
+	operation string,
+) (context.Context, func(), error) {
+	// Only same-package tests can construct an Executor without New. Keep that
+	// private diagnostic path able to exercise intentionally unsealed query
+	// fixtures; the public constructor always installs an explicit admission.
+	if executor.readAdmission == nil {
+		return ctx, func() {}, nil
+	}
+	if isNilDriverValue(executor.readAdmission) {
+		return nil, nil, fmt.Errorf("%s: read admission is nil", operation)
+	}
+	tenantID, indexNames, ok := query.ReadScope()
+	if !ok {
+		return nil, nil, fmt.Errorf(
+			"%w: %s compiled query read scope is missing or invalid",
+			searchjobs.ErrInvalidResult,
+			operation,
+		)
+	}
+	admittedContext, release, err := executor.readAdmission.Acquire(ctx, tenantID, indexNames)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"%s: admit index read: %w",
+			operation,
+			classifyIndexReadError(err),
+		)
+	}
+	if admittedContext == nil || release == nil {
+		if release != nil {
+			release()
+		}
+		return nil, nil, fmt.Errorf("%s: read admission returned an incomplete lease", operation)
+	}
+	return admittedContext, release, nil
+}
+
+func preserveReadCancellationCause(ctx context.Context, err error) error {
+	cause := context.Cause(ctx)
+	if cause == nil || errors.Is(cause, context.Canceled) || errors.Is(cause, context.DeadlineExceeded) {
+		return err
+	}
+	// Retirement is authoritative once it linearizes. Do not retain a driver or
+	// sink error produced while cancellation unwinds: besides obscuring the
+	// lifecycle cause, native errors may contain SQL or storage details.
+	return classifyIndexReadError(cause)
+}
+
+func classifyIndexReadError(err error) error {
+	if !errors.Is(err, indexread.ErrUnavailable) || errors.Is(err, searchjobs.ErrStorageUnavailable) {
+		return err
+	}
+	return errors.Join(err, searchjobs.ErrStorageUnavailable)
+}
+
 // Execute sends schema once and then streams rows in server order. It never
 // retains sink or calls it after returning.
 func (executor *Executor) Execute(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) (resultErr error) {
@@ -202,6 +274,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if sink == nil {
 		return errors.New("execute ClickHouse search: result sink is required")
 	}
+	query.Args = slices.Clone(query.Args)
 	if strings.TrimSpace(query.SQL) == "" || len(query.OutputFields) == 0 {
 		return errors.New("execute ClickHouse search: compiled query is incomplete")
 	}
@@ -222,8 +295,17 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err != nil {
 		return err
 	}
-	if err := ctx.Err(); err != nil {
+	admittedContext, releaseRead, err := executor.acquireRead(ctx, query, "execute ClickHouse search")
+	if err != nil {
 		return err
+	}
+	defer releaseRead()
+	defer func() {
+		resultErr = preserveReadCancellationCause(admittedContext, resultErr)
+	}()
+	ctx = admittedContext
+	if err := ctx.Err(); err != nil {
+		return preserveReadCancellationCause(ctx, err)
 	}
 	queryID, err := executor.newQueryID()
 	if err != nil {
@@ -1867,6 +1949,10 @@ var executionLimitMarkers = [...]struct {
 
 func classifyQueryError(ctx context.Context, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		cause := context.Cause(ctx)
+		if cause != nil && !errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+			return cause
+		}
 		return ctxErr
 	}
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {

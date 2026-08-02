@@ -65,9 +65,26 @@ func (executor *Executor) ExecuteFieldSuggestions(
 			"execute ClickHouse field suggestions: query ID generator is required",
 		)
 	}
+	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledFieldSuggestions(query); err != nil {
 		return FieldSuggestionResult{}, err
 	}
+	admittedContext, releaseRead, err := executor.acquireRead(
+		ctx,
+		query,
+		"execute ClickHouse field suggestions",
+	)
+	if err != nil {
+		return FieldSuggestionResult{}, err
+	}
+	defer releaseRead()
+	defer func() {
+		resultErr = preserveReadCancellationCause(admittedContext, resultErr)
+		if resultErr != nil {
+			result = FieldSuggestionResult{}
+		}
+	}()
+	ctx = admittedContext
 	settings, err := settingsForFieldSuggestions(executor.settings, query.Spec.MaximumFields)
 	if err != nil {
 		return FieldSuggestionResult{}, err

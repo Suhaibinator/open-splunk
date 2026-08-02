@@ -369,7 +369,7 @@ type CompiledQuery struct {
 	// extend an already validated event relation without reparsing SQL.
 	relationalDepth      int
 	relationalDepthRange spl.Range
-	sqlSeal              compiledSQLSeal
+	readScope            compiledReadScope
 }
 
 // ChartOutput describes the bounded runtime-wide pivot contract. Both axes are
@@ -438,7 +438,7 @@ func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	return sealCompiledQuerySQL(compiled), nil
+	return compiled, nil
 }
 
 type queryFinalizer func(
@@ -1035,7 +1035,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					Range:   operator.Range,
 				}
 			}
-			return compiled, nil
+			return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
 		case *plan.Chart:
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: chart is unavailable for event analysis")
@@ -1067,7 +1067,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					Range:   operator.Range,
 				}
 			}
-			return compiled, nil
+			return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
 		case *plan.Window:
 			expression, nextState, compileErr := compileWindow(operator, state)
 			if compileErr != nil {
@@ -1150,7 +1150,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			Range:   scan.Range,
 		}
 	}
-	return compiled, nil
+	return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
 }
 
 func validateCompiledExtractionBudgets(operators []plan.Operator) error {
@@ -4287,9 +4287,9 @@ func compileScan(
 		quoteIdentifier("visibility_seq") + " <= ?",
 	}
 	args := make([]any, 0, len(scan.Indexes)+6)
-	args = append(args, scan.TenantID)
-	for _, index := range scan.Indexes {
-		args = append(args, index)
+	args = append(args, compiledReadScopeArgument{ordinal: 0, value: scan.TenantID})
+	for ordinal, index := range scan.Indexes {
+		args = append(args, compiledReadScopeArgument{ordinal: ordinal + 1, value: index})
 	}
 	// clickhouse-go infers a bare time.Time placeholder as DateTime, which has
 	// only second precision. Bind canonical text and parse it explicitly so the

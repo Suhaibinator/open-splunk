@@ -59,9 +59,22 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	if executor.newQueryID == nil {
 		return FieldCatalogResult{}, errors.New("execute ClickHouse field catalog: query ID generator is required")
 	}
+	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledFieldCatalog(query); err != nil {
 		return FieldCatalogResult{}, err
 	}
+	admittedContext, releaseRead, err := executor.acquireRead(ctx, query, "execute ClickHouse field catalog")
+	if err != nil {
+		return FieldCatalogResult{}, err
+	}
+	defer releaseRead()
+	defer func() {
+		resultErr = preserveReadCancellationCause(admittedContext, resultErr)
+		if resultErr != nil {
+			result = FieldCatalogResult{}
+		}
+	}()
+	ctx = admittedContext
 	settings, err := settingsForFieldCatalog(executor.settings, query.Spec.MaximumFields)
 	if err != nil {
 		return FieldCatalogResult{}, err

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
+
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -90,6 +92,7 @@ func TestShutdownDrainsDeletionAdmissionWakeBeforeRuntimeClose(t *testing.T) {
 	runtime, err := newIndexDataDeletionRuntime(
 		&runtimeDeletionControl{},
 		store,
+		indexread.NewRegistry(),
 		"tenant-a",
 		nil,
 	)

@@ -604,36 +604,41 @@ func (handler *apiHandler) listIndexes(request *http.Request, input *opensplunkv
 		if err != nil {
 			return nil, internalError()
 		}
-
-		// The native read can take most of the route deadline. Release the
-		// serialization permit after the bounded control-plane page has been
-		// validated, then reacquire it before validating and materializing the
-		// enriched response.
-		release()
-		permitHeld = false
-		statisticsBatch, statisticsResults, err =
-			handler.readIndexListStatistics(
-				request.Context(),
+		// DELETING indexes remain visible to administrators, but their
+		// physical rows are behind the deletion read fence. An all-deleting
+		// page therefore needs neither a visibility snapshot nor ClickHouse
+		// work; each item's optional statistics stay unset.
+		if len(statisticsBatch.Indexes) > 0 {
+			// The native read can take most of the route deadline. Release the
+			// serialization permit after the bounded control-plane page has been
+			// validated, then reacquire it before validating and materializing the
+			// enriched response.
+			release()
+			permitHeld = false
+			statisticsBatch, statisticsResults, err =
+				handler.readIndexListStatistics(
+					request.Context(),
+					statisticsBatch,
+				)
+			if err != nil {
+				return nil, err
+			}
+			nextRelease, reacquired := handler.acquireSerialization()
+			if !reacquired {
+				return nil, unavailableError(
+					"administrative response capacity is exhausted",
+				)
+			}
+			release = nextRelease
+			permitHeld = true
+			if err := handler.attachIndexListStatistics(
 				statisticsBatch,
-			)
-		if err != nil {
-			return nil, err
-		}
-		nextRelease, reacquired := handler.acquireSerialization()
-		if !reacquired {
-			return nil, unavailableError(
-				"administrative response capacity is exhausted",
-			)
-		}
-		release = nextRelease
-		permitHeld = true
-		if err := handler.attachIndexListStatistics(
-			statisticsBatch,
-			selected,
-			items,
-			statisticsResults,
-		); err != nil {
-			return nil, internalError()
+				selected,
+				items,
+				statisticsResults,
+			); err != nil {
+				return nil, internalError()
+			}
 		}
 	}
 	message := &opensplunkv1.ListIndexesResponse{Indexes: items, Page: page}
@@ -1077,7 +1082,17 @@ func (handler *apiHandler) indexListStatisticsBatch(
 		}
 		expected[scope.IndexID] = scope
 		names[scope.IndexName] = struct{}{}
-		batch.Indexes = append(batch.Indexes, scope)
+		switch record.State {
+		case control.IndexStateActive, control.IndexStateArchived:
+			batch.Indexes = append(batch.Indexes, scope)
+		case control.IndexStateDeleting:
+			// The record remains visible while DELETE_DATA is reconciled, but
+			// the physical read fence deliberately makes its statistics
+			// unavailable. Leave the optional response field unset.
+		default:
+			return clickhouse.IndexStatisticsBatchRequest{},
+				errors.New("invalid index statistics page state")
+		}
 	}
 	return batch, nil
 }
@@ -1126,18 +1141,39 @@ func (handler *apiHandler) attachIndexListStatistics(
 	if len(records) == 0 ||
 		len(records) > maximumIndexRowsPerResponse ||
 		len(items) != len(records) ||
-		len(batch.Indexes) != len(records) ||
-		len(results) != len(records) ||
+		len(batch.Indexes) == 0 ||
+		len(batch.Indexes) > len(records) ||
+		len(results) != len(batch.Indexes) ||
 		batch.TenantID != handler.tenantID {
 		return errors.New("invalid index statistics batch")
 	}
-	expected := make(map[string]clickhouse.IndexStatisticsScope, len(records))
+	expected := make(
+		map[string]clickhouse.IndexStatisticsScope,
+		len(batch.Indexes),
+	)
+	eligiblePosition := 0
 	for position, record := range records {
-		scope := batch.Indexes[position]
 		if items[position] == nil ||
 			items[position].GetIndex() == nil ||
 			items[position].GetIndex().GetIndexId() != record.ID ||
-			scope.IndexID != record.ID ||
+			record.ID == "" ||
+			record.Definition.Name == "" {
+			return errors.New("invalid index statistics batch identity")
+		}
+		if record.State == control.IndexStateDeleting {
+			items[position].Stats = nil
+			continue
+		}
+		if record.State != control.IndexStateActive &&
+			record.State != control.IndexStateArchived {
+			return errors.New("invalid index statistics batch state")
+		}
+		if eligiblePosition >= len(batch.Indexes) {
+			return errors.New("missing index statistics batch scope")
+		}
+		scope := batch.Indexes[eligiblePosition]
+		eligiblePosition++
+		if scope.IndexID != record.ID ||
 			scope.IndexName != record.Definition.Name {
 			return errors.New("invalid index statistics batch identity")
 		}
@@ -1145,6 +1181,9 @@ func (handler *apiHandler) attachIndexListStatistics(
 			return errors.New("duplicate index statistics batch identity")
 		}
 		expected[scope.IndexID] = scope
+	}
+	if eligiblePosition != len(batch.Indexes) {
+		return errors.New("unexpected index statistics batch scope")
 	}
 	converted := make(map[string]*opensplunkv1.IndexStats, len(results))
 	for _, result := range results {
@@ -1171,6 +1210,10 @@ func (handler *apiHandler) attachIndexListStatistics(
 		converted[result.IndexID] = protoStats
 	}
 	for position, record := range records {
+		if record.State == control.IndexStateDeleting {
+			items[position].Stats = nil
+			continue
+		}
 		stats, exists := converted[record.ID]
 		if !exists {
 			return errors.New("missing index statistics result")

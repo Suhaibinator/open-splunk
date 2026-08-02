@@ -103,7 +103,9 @@ type Explainer struct {
 // compiler-produced query. It validates and detaches the ordered bind
 // arguments but never returns or logs them. The complete bounded one-row JSON
 // result is structurally validated before publication, so cancellation,
-// malformed plans, and driver failures are atomic.
+// malformed plans, and driver failures are atomic. EXPLAIN does not execute
+// the event read and uses dedicated diagnostic lanes, so it intentionally does
+// not acquire Executor's runtime index-read lease.
 func (explainer *Explainer) Explain(
 	ctx context.Context,
 	query clickhouse.CompiledQuery,

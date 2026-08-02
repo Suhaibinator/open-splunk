@@ -37,6 +37,8 @@ type CompiledFieldSuggestions struct {
 	SQL  string
 	Args []any
 	Spec FieldSuggestionSpec
+
+	readScope compiledReadScope
 }
 
 // CompileFieldSuggestions compiles a name-only lookup over the final event
@@ -89,9 +91,10 @@ func (c Compiler) CompileFieldSuggestions(
 		return CompiledFieldSuggestions{}, err
 	}
 	return CompiledFieldSuggestions{
-		SQL:  compiled.SQL,
-		Args: compiled.Args,
-		Spec: spec,
+		SQL:       compiled.SQL,
+		Args:      compiled.Args,
+		Spec:      spec,
+		readScope: compiled.readScope,
 	}, nil
 }
 

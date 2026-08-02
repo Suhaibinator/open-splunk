@@ -14,6 +14,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 )
 
 const (
@@ -69,7 +70,11 @@ type DeletionStore interface {
 type IndexDataDeletionCoordinatorConfig struct {
 	// TenantID must equal the immutable tenant on every admitted operation.
 	// Drift is rejected before the mutation-attempt read or any native call.
-	TenantID         string
+	TenantID string
+	// ReadRetirement permanently rejects new reads for the operation's index,
+	// cancels active reads, and waits for them to release before reconciliation
+	// is allowed to inspect or advance the physical deletion attempt.
+	ReadRetirement   indexread.Retirement
 	PollInterval     time.Duration
 	RecoveryInterval time.Duration
 	RetryInitial     time.Duration
@@ -86,6 +91,7 @@ type IndexDataDeletionCoordinatorConfig struct {
 type IndexDataDeletionCoordinator struct {
 	control          DeletionControl
 	store            DeletionStore
+	readRetirement   indexread.Retirement
 	tenantID         string
 	pollInterval     time.Duration
 	recoveryInterval time.Duration
@@ -149,6 +155,9 @@ func NewIndexDataDeletionCoordinator(
 	if interfaceIsNil(store) {
 		return nil, errors.New("index data deletion ClickHouse store is required")
 	}
+	if interfaceIsNil(config.ReadRetirement) {
+		return nil, errors.New("index data deletion read retirement is required")
+	}
 	if !validDeletionTenantID(config.TenantID) {
 		return nil, errors.New("index data deletion tenant ID is invalid")
 	}
@@ -204,6 +213,7 @@ func NewIndexDataDeletionCoordinator(
 	coordinator := &IndexDataDeletionCoordinator{
 		control:          controlPlane,
 		store:            store,
+		readRetirement:   config.ReadRetirement,
 		tenantID:         strings.Clone(config.TenantID),
 		pollInterval:     pollInterval,
 		recoveryInterval: recoveryInterval,
@@ -321,6 +331,17 @@ func (coordinator *IndexDataDeletionCoordinator) reconcileStep(
 	}
 	if err := coordinator.validateOperation(current.operation); err != nil {
 		return current, indexDataDeletionContinue, err
+	}
+	if err := coordinator.readRetirement.Retire(
+		ctx,
+		current.operation.TenantID,
+		current.operation.IndexName,
+	); err != nil {
+		return current, indexDataDeletionContinue, coordinator.operationError(
+			current.operation,
+			"retire index reads",
+			err,
+		)
 	}
 
 	if current.attempt == nil {

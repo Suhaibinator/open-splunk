@@ -15,10 +15,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
 var testAccess = searchjobs.AccessScope{TenantID: "tenant-a", OwnerID: "owner-a"}
+
+func TestSafeFailureClassifiesRetiredIndexAsUnavailableSource(t *testing.T) {
+	t.Parallel()
+
+	failure := safeFailure(fmt.Errorf("private deletion detail: %w", indexread.ErrUnavailable))
+	if failure.Code != FailureSourceUnavailable ||
+		failure.Message != "export source results became unavailable" ||
+		failure.Retryable {
+		t.Fatalf("safeFailure(retired index) = %#v", failure)
+	}
+}
 
 type exportTestDataset struct {
 	schema          searchjobs.Schema

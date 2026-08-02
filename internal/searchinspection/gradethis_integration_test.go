@@ -18,6 +18,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -289,7 +290,9 @@ func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
 	if cutoff != 1 {
 		t.Fatal("GradeThis inspection visibility cutoff changed")
 	}
-	executor, err := queryexec.New(connection, queryexec.Config{})
+	executor, err := queryexec.New(connection, queryexec.Config{
+		ReadAdmission: indexread.UnfencedAdmission{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

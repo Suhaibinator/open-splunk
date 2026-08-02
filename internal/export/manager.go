@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"golang.org/x/sys/unix"
 )
@@ -1671,6 +1672,8 @@ func safeFailure(cause error) Failure {
 	case errors.Is(cause, ErrByteLimit):
 		code = FailureByteLimit
 	case errors.Is(cause, ErrSourceUnavailable):
+		code = FailureSourceUnavailable
+	case errors.Is(cause, indexread.ErrUnavailable):
 		code = FailureSourceUnavailable
 	case errors.Is(cause, errArtifactStorage):
 		code = FailureStorageUnavailable

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"reflect"
 	"sync"
 	"time"
 )
@@ -65,24 +64,11 @@ type webSocketShutdown interface {
 	Close(context.Context) error
 }
 
-func isNilWebSocketShutdown(value webSocketShutdown) bool {
-	if value == nil {
-		return true
-	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
-	default:
-		return false
-	}
-}
-
 // shutdownHTTPServer first permits graceful completion, then force-closes
 // connections at the deadline. In either case it waits for every handler to
 // return before run() closes the search manager or its databases.
 func shutdownHTTPServer(server shutdownServer, requests *trackedHandler, webSockets webSocketShutdown, timeout time.Duration) error {
-	if isNilWebSocketShutdown(webSockets) {
+	if nilRuntimeDependency(webSockets) {
 		return errors.New("shutdown HTTP server: websocket service is required")
 	}
 	requests.stopAccepting()

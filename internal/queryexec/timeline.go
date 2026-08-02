@@ -44,9 +44,22 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 	if executor.newQueryID == nil {
 		return nil, errors.New("execute ClickHouse timeline: query ID generator is required")
 	}
+	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledTimeline(query); err != nil {
 		return nil, err
 	}
+	admittedContext, releaseRead, err := executor.acquireRead(ctx, query, "execute ClickHouse timeline")
+	if err != nil {
+		return nil, err
+	}
+	defer releaseRead()
+	defer func() {
+		resultErr = preserveReadCancellationCause(admittedContext, resultErr)
+		if resultErr != nil {
+			buckets = nil
+		}
+	}()
+	ctx = admittedContext
 	settings, err := settingsForTimeline(executor.settings, query.Spec.BucketCount)
 	if err != nil {
 		return nil, err

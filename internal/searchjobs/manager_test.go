@@ -14,6 +14,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
@@ -1915,6 +1916,14 @@ func TestFailuresAreClassifiedAndStorageDetailsAreNotExposed(t *testing.T) {
 			wantCode:    FailureStorageUnavailable,
 			wantText:    "storage is unavailable",
 			wantRetry:   true,
+		},
+		{
+			name:        "index retired during execution",
+			request:     validRequest(),
+			executorErr: fmt.Errorf("private deletion detail: %w", indexread.ErrUnavailable),
+			wantCode:    FailureExecution,
+			wantText:    "index became unavailable",
+			wantRetry:   false,
 		},
 		{
 			name:        "unsupported runtime field value",

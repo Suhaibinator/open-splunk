@@ -39,6 +39,8 @@ type CompiledFieldCatalog struct {
 	SQL  string
 	Args []any
 	Spec FieldCatalogSpec
+
+	readScope compiledReadScope
 }
 
 // CompileFieldCatalog compiles an exact catalog over the final event relation.
@@ -79,9 +81,10 @@ func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) 
 		return CompiledFieldCatalog{}, err
 	}
 	return CompiledFieldCatalog{
-		SQL:  compiled.SQL,
-		Args: compiled.Args,
-		Spec: spec,
+		SQL:       compiled.SQL,
+		Args:      compiled.Args,
+		Spec:      spec,
+		readScope: compiled.readScope,
 	}, nil
 }
 

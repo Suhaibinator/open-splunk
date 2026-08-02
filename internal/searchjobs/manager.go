@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -1663,6 +1664,8 @@ func (manager *Manager) executionFailed(entry *jobEntry, err error) {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		failure = Failure{Code: FailureTimeout, Message: "search execution timed out", Retryable: true}
+	case errors.Is(err, indexread.ErrUnavailable):
+		failure = Failure{Code: FailureExecution, Message: "search index became unavailable"}
 	case errors.Is(err, ErrStorageUnavailable):
 		failure = Failure{Code: FailureStorageUnavailable, Message: "search storage is unavailable", Retryable: true}
 	case errors.Is(err, ErrUnsupportedValue):

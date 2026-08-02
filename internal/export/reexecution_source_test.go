@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
@@ -838,6 +839,112 @@ func TestReexecutionLeasePreservesExecutorFailureBeforeSchema(t *testing.T) {
 	}
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCompletedSearchExportFailsExplicitlyWhenItsIndexIsRetired(t *testing.T) {
+	t.Parallel()
+
+	searches, _, access := newReexecutionTestSearches()
+	registry := indexread.NewRegistry()
+	executionStarted := make(chan struct{})
+	executor := reexecutionTestExecutor(func(
+		ctx context.Context,
+		compiled clickhouse.CompiledQuery,
+		_ searchjobs.ResultSink,
+	) error {
+		tenantID, indexNames, ok := compiled.ReadScope()
+		if !ok {
+			return errors.New("compiled export query has no read scope")
+		}
+		admittedContext, release, err := registry.Acquire(ctx, tenantID, indexNames)
+		if err != nil {
+			return err
+		}
+		close(executionStarted)
+		<-admittedContext.Done()
+		cause := context.Cause(admittedContext)
+		release()
+		return cause
+	})
+	source := newReexecutionTestSource(t, searches, executor, nil)
+	manager := newExportTestManager(t, source, nil)
+	created, err := manager.Create(
+		context.Background(),
+		access,
+		CreateRequest{SearchJobID: searches.job.ID, Format: FormatCSV},
+	)
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	select {
+	case <-executionStarted:
+	case <-time.After(time.Second):
+		t.Fatal("export re-execution did not start")
+	}
+	if err := registry.Retire(context.Background(), access.TenantID, "main"); err != nil {
+		t.Fatalf("Retire(): %v", err)
+	}
+
+	failed := waitExportState(t, manager, access, created.ID, StateFailed)
+	if failed.Failure == nil || failed.Failure.Code != FailureSourceUnavailable ||
+		failed.Failure.Retryable || failed.Artifact != nil {
+		t.Fatalf("retired-index export = %#v, want non-retryable source failure", failed)
+	}
+}
+
+func TestCompletedSearchExportFailsExplicitlyWhenItsIndexWasAlreadyRetired(t *testing.T) {
+	t.Parallel()
+
+	searches, _, access := newReexecutionTestSearches()
+	registry := indexread.NewRegistry()
+	if err := registry.Retire(context.Background(), access.TenantID, "main"); err != nil {
+		t.Fatalf("Retire(): %v", err)
+	}
+
+	var (
+		executorCalls atomic.Int32
+		nativeWork    atomic.Int32
+	)
+	executor := reexecutionTestExecutor(func(
+		ctx context.Context,
+		compiled clickhouse.CompiledQuery,
+		_ searchjobs.ResultSink,
+	) error {
+		executorCalls.Add(1)
+		tenantID, indexNames, ok := compiled.ReadScope()
+		if !ok {
+			return errors.New("compiled export query has no read scope")
+		}
+		_, release, err := registry.Acquire(ctx, tenantID, indexNames)
+		if err != nil {
+			return err
+		}
+		defer release()
+		nativeWork.Add(1)
+		return nil
+	})
+	source := newReexecutionTestSource(t, searches, executor, nil)
+	manager := newExportTestManager(t, source, nil)
+	created, err := manager.Create(
+		context.Background(),
+		access,
+		CreateRequest{SearchJobID: searches.job.ID, Format: FormatCSV},
+	)
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+
+	failed := waitExportState(t, manager, access, created.ID, StateFailed)
+	if failed.Failure == nil || failed.Failure.Code != FailureSourceUnavailable ||
+		failed.Failure.Retryable || failed.Artifact != nil {
+		t.Fatalf("already-retired-index export = %#v, want non-retryable source failure", failed)
+	}
+	if got := executorCalls.Load(); got != 1 {
+		t.Fatalf("executor calls = %d, want 1 admission attempt", got)
+	}
+	if got := nativeWork.Load(); got != 0 {
+		t.Fatalf("native executor work = %d, want 0 after admission rejection", got)
 	}
 }
 

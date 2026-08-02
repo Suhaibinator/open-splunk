@@ -12,6 +12,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 )
 
@@ -73,7 +74,9 @@ func TestChartBreakTransportRowCeilingAgainstClickHouse(t *testing.T) {
 	if err := connection.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	executor, err := New(connection, Config{})
+	executor, err := New(connection, Config{
+		ReadAdmission: indexread.UnfencedAdmission{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

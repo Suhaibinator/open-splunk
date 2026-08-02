@@ -20,6 +20,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -83,10 +84,13 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	executor, err := New(connection, Config{})
+	executor, err := New(connection, Config{
+		ReadAdmission: indexread.UnfencedAdmission{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	diagnosticExecutor := queryIntegrationDiagnosticExecutor(t, connection, Config{})
 	explainer, err := NewExplainer(connectionOptions, Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +136,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	t.Run("native progress reports exact generated scan", func(t *testing.T) {
 		const generatedRows = uint64(262_144)
 		sink := &recordingProgressSink{}
-		err := executor.Execute(ctx, clickhouse.CompiledQuery{
+		err := diagnosticExecutor.Execute(ctx, clickhouse.CompiledQuery{
 			SQL: "SELECT sum(cityHash64(number)) AS checksum FROM numbers(262144)",
 			OutputFields: []string{
 				"checksum",
@@ -163,7 +167,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	})
 	t.Run("native typed scan types", func(t *testing.T) {
 		sink := &fakeSink{}
-		err := executor.Execute(ctx, clickhouse.CompiledQuery{
+		err := diagnosticExecutor.Execute(ctx, clickhouse.CompiledQuery{
 			SQL: "SELECT toDecimal128('123.4500', 4) AS amount, " +
 				"CAST('12:34:56.123456' AS Time64(6)) AS elapsed, " +
 				"CAST(42 AS Dynamic) AS choice, " +
@@ -1563,7 +1567,7 @@ ORDER BY grid.number`,
 			},
 		}
 		sink := &fakeSink{}
-		if err := executor.Execute(ctx, query, sink); err != nil {
+		if err := diagnosticExecutor.Execute(ctx, query, sink); err != nil {
 			t.Fatalf("execute dense timechart: %v", err)
 		}
 		wantNames := []string{"_time", "a", "b"}
@@ -1588,10 +1592,11 @@ ORDER BY grid.number`,
 			}
 		}
 
-		explicitlyBounded, err := New(connection, Config{MaxRowsToGroupBy: 10_001})
-		if err != nil {
-			t.Fatal(err)
-		}
+		explicitlyBounded := queryIntegrationDiagnosticExecutor(
+			t,
+			connection,
+			Config{MaxRowsToGroupBy: 10_001},
+		)
 		boundedSink := &fakeSink{}
 		err = explicitlyBounded.Execute(ctx, query, boundedSink)
 		if !errors.Is(err, searchjobs.ErrExecutionLimit) || boundedSink.setCalls != 0 || len(boundedSink.rows) != 0 {
@@ -1855,7 +1860,7 @@ ORDER BY grid.number`,
 			}
 		}
 		sink := &fakeSink{}
-		if err := executor.Execute(ctx, denseChart(10_000), sink); err != nil {
+		if err := diagnosticExecutor.Execute(ctx, denseChart(10_000), sink); err != nil {
 			t.Fatalf("execute dense chart: %v", err)
 		}
 		if len(sink.rows) != 10_000 || len(sink.schema.Columns) != 3 ||
@@ -1864,7 +1869,7 @@ ORDER BY grid.number`,
 			t.Fatalf("dense chart schema=%#v rows=%d", sink.schema, len(sink.rows))
 		}
 		overflowSink := &fakeSink{}
-		err := executor.Execute(ctx, denseChart(10_001), overflowSink)
+		err := diagnosticExecutor.Execute(ctx, denseChart(10_001), overflowSink)
 		if !errors.Is(err, searchjobs.ErrExecutionLimit) || overflowSink.setCalls != 0 || len(overflowSink.rows) != 0 {
 			t.Fatalf("dense chart overflow: err=%v schema calls=%d rows=%d",
 				err, overflowSink.setCalls, len(overflowSink.rows))
@@ -2028,7 +2033,7 @@ ORDER BY grid.number`,
 			clickhouse.UnsupportedNumericBinValueMarker,
 			clickhouse.UnsupportedSpathValueMarker,
 		} {
-			err := executor.Execute(ctx, clickhouse.CompiledQuery{
+			err := diagnosticExecutor.Execute(ctx, clickhouse.CompiledQuery{
 				SQL:          `SELECT throwIf(toUInt8(1), '` + marker + `') AS impossible`,
 				OutputFields: []string{"impossible"},
 			}, &fakeSink{})
@@ -2049,7 +2054,7 @@ ORDER BY grid.number`,
 			clickhouse.StatsListBytesLimitMarker,
 			clickhouse.StatsListLimitMarker,
 		} {
-			err := executor.Execute(ctx, clickhouse.CompiledQuery{
+			err := diagnosticExecutor.Execute(ctx, clickhouse.CompiledQuery{
 				SQL: `SELECT throwIf(toUInt8(1), '` + marker +
 					`') AS impossible`,
 				OutputFields: []string{"impossible"},
@@ -2062,10 +2067,11 @@ ORDER BY grid.number`,
 	})
 
 	t.Run("group cardinality is bounded before result streaming", func(t *testing.T) {
-		bounded, err := New(connection, Config{MaxRowsToGroupBy: 1})
-		if err != nil {
-			t.Fatal(err)
-		}
+		bounded := queryIntegrationDiagnosticExecutor(
+			t,
+			connection,
+			Config{MaxRowsToGroupBy: 1},
+		)
 		for _, query := range []clickhouse.CompiledQuery{
 			{
 				SQL:          "SELECT count() AS total FROM numbers(2)",
@@ -2097,7 +2103,7 @@ ORDER BY grid.number`,
 		cancelCtx, cancelQuery := context.WithTimeout(ctx, 150*time.Millisecond)
 		defer cancelQuery()
 		started := time.Now()
-		err := executor.Execute(cancelCtx, clickhouse.CompiledQuery{
+		err := diagnosticExecutor.Execute(cancelCtx, clickhouse.CompiledQuery{
 			SQL:          "SELECT sleep(2) AS waited",
 			OutputFields: []string{"waited"},
 		}, &fakeSink{})
@@ -2108,6 +2114,25 @@ ORDER BY grid.number`,
 			t.Fatalf("canceled query returned after %v", elapsed)
 		}
 	})
+}
+
+func queryIntegrationDiagnosticExecutor(
+	t *testing.T,
+	connection queryConnection,
+	config Config,
+) *Executor {
+	t.Helper()
+	settings, err := querySettings(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Executor{
+		connection:                connection,
+		settings:                  settings,
+		expandTimechartGroupLimit: config.MaxRowsToGroupBy == 0 || config.ExpandTimechartGroupLimit,
+		newQueryID:                randomQueryID,
+		withProgress:              clickhousedriver.WithProgress,
+	}
 }
 
 func queryIntegrationAssertStructuredExplain(

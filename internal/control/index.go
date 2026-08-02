@@ -215,6 +215,94 @@ func (db *DB) GetIndexByName(ctx context.Context, name string) (Index, error) {
 	return index, indexLookupError(err)
 }
 
+// GetIndexesByNames gets a bounded, unique set of live indexes by canonical
+// immutable name using one catalog query. Results preserve the caller's exact
+// input order. If any requested name is absent or terminally tombstoned, the
+// method returns no partial records and ErrNotFound.
+func (db *DB) GetIndexesByNames(
+	ctx context.Context,
+	names []string,
+) ([]Index, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("%w: nil context", ErrInvalidArgument)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(names) == 0 || len(names) > MaximumPhysicalIndexRecords {
+		return nil, fmt.Errorf(
+			"%w: index-name batch must contain between 1 and %d entries",
+			ErrInvalidArgument,
+			MaximumPhysicalIndexRecords,
+		)
+	}
+
+	requested := make([]string, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for position, name := range names {
+		normalized, err := NormalizeIndexName(name)
+		if err != nil || normalized != name {
+			return nil, fmt.Errorf(
+				"%w: index name at position %d is not canonical",
+				ErrInvalidArgument,
+				position,
+			)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, fmt.Errorf(
+				"%w: duplicate index name %q",
+				ErrInvalidArgument,
+				name,
+			)
+		}
+		requested[position] = strings.Clone(name)
+		seen[requested[position]] = struct{}{}
+	}
+
+	var records []indexRecord
+	query := visibleIndexRecords(db.orm.WithContext(ctx)).
+		Where("name IN ?", requested).
+		Order("name").
+		Limit(len(requested) + 1).
+		Find(&records)
+	if query.Error != nil {
+		return nil, fmt.Errorf("get indexes by names: %w", query.Error)
+	}
+	if len(records) != len(requested) {
+		return nil, ErrNotFound
+	}
+
+	byName := make(map[string]Index, len(records))
+	for _, record := range records {
+		index, err := indexFromRecord(record)
+		if err != nil {
+			return nil, fmt.Errorf("get indexes by names: %w", err)
+		}
+		name := index.Definition.Name
+		if _, requestedName := seen[name]; !requestedName {
+			return nil, errors.New(
+				"get indexes by names: catalog returned an unexpected name",
+			)
+		}
+		if _, duplicate := byName[name]; duplicate {
+			return nil, errors.New(
+				"get indexes by names: catalog returned a duplicate name",
+			)
+		}
+		byName[name] = index
+	}
+
+	indexes := make([]Index, len(requested))
+	for position, name := range requested {
+		index, ok := byName[name]
+		if !ok {
+			return nil, ErrNotFound
+		}
+		indexes[position] = index
+	}
+	return indexes, nil
+}
+
 // ListIndexes lists every live, non-tombstoned index in normalized-name order.
 // The hard physical catalog ceiling makes this legacy bootstrap/authorization
 // view bounded; administrative clients should use ListIndexPage.

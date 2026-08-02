@@ -13,6 +13,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 )
 
 const (
@@ -455,24 +456,27 @@ func TestIndexStatisticsRejectsInvalidConstruction(t *testing.T) {
 			name:       "database expression",
 			connection: &indexStatisticsScriptConnection{},
 			config: IndexStatisticsConfig{
-				Database: "open_splunk; DROP TABLE events",
-				Table:    "events",
+				Database:      "open_splunk; DROP TABLE events",
+				Table:         "events",
+				ReadAdmission: indexread.UnfencedAdmission{},
 			},
 		},
 		{
 			name:       "quoted table",
 			connection: &indexStatisticsScriptConnection{},
 			config: IndexStatisticsConfig{
-				Database: "open_splunk",
-				Table:    "`events`",
+				Database:      "open_splunk",
+				Table:         "`events`",
+				ReadAdmission: indexread.UnfencedAdmission{},
 			},
 		},
 		{
 			name:       "qualified table",
 			connection: &indexStatisticsScriptConnection{},
 			config: IndexStatisticsConfig{
-				Database: "open_splunk",
-				Table:    "other.events",
+				Database:      "open_splunk",
+				Table:         "other.events",
+				ReadAdmission: indexread.UnfencedAdmission{},
 			},
 		},
 	}
@@ -959,6 +963,9 @@ func mustIndexStatisticsReader(
 	config IndexStatisticsConfig,
 ) indexStatisticsGetter {
 	t.Helper()
+	if config.ReadAdmission == nil {
+		config.ReadAdmission = indexread.UnfencedAdmission{}
+	}
 	reader, err := NewIndexStatisticsReader(connection, config)
 	if err != nil {
 		t.Fatalf("NewIndexStatisticsReader(): %v", err)

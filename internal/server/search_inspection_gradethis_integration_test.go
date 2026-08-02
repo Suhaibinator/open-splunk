@@ -21,6 +21,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -190,7 +191,9 @@ func TestSearchInspectionRouteGradeThisAgainstClickHouse(t *testing.T) {
 	if cutoff != 1 {
 		t.Fatalf("GradeThis inspection visibility cutoff = %d, want 1", cutoff)
 	}
-	executor, err := queryexec.New(connection, queryexec.Config{})
+	executor, err := queryexec.New(connection, queryexec.Config{
+		ReadAdmission: indexread.UnfencedAdmission{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

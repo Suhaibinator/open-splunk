@@ -17,6 +17,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/Suhaibinator/open-splunk/internal/indexname"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
 )
 
@@ -43,10 +44,12 @@ const (
 )
 
 // IndexStatisticsConfig identifies the shared MergeTree whose logical index
-// statistics are read. Empty values select the canonical event table.
+// statistics are read. Empty database and table values select the canonical
+// event table. ReadAdmission is required.
 type IndexStatisticsConfig struct {
-	Database string
-	Table    string
+	Database      string
+	Table         string
+	ReadAdmission indexread.Admission
 }
 
 // IndexStatisticsRequest is a trusted, fully resolved logical-index scope.
@@ -107,12 +110,13 @@ type indexStatisticsRowsConnection interface {
 // nonempty result performs one system.parts aggregate and applies the table's
 // active compressed bytes per physical row to the logical event count.
 type IndexStatisticsReader struct {
-	connection indexStatisticsConnection
-	database   string
-	table      string
-	settings   clickhousedriver.Settings
-	newQueryID func() (string, error)
-	operation  chan struct{}
+	connection    indexStatisticsConnection
+	database      string
+	table         string
+	settings      clickhousedriver.Settings
+	newQueryID    func() (string, error)
+	operation     chan struct{}
+	readAdmission indexread.Admission
 }
 
 // NewIndexStatisticsReader validates a borrowed native connection. The caller
@@ -154,14 +158,69 @@ func newIndexStatisticsReader(
 			"create ClickHouse index statistics reader: database and table identifiers are invalid",
 		)
 	}
+	if config.ReadAdmission == nil ||
+		isNilIndexStatisticsDependency(config.ReadAdmission) {
+		return nil, errors.New(
+			"create ClickHouse index statistics reader: read admission is required",
+		)
+	}
 	return &IndexStatisticsReader{
-		connection: connection,
-		database:   database,
-		table:      table,
-		settings:   indexStatisticsSettings(),
-		newQueryID: randomIndexStatisticsQueryID,
-		operation:  make(chan struct{}, 1),
+		connection:    connection,
+		database:      database,
+		table:         table,
+		settings:      indexStatisticsSettings(),
+		newQueryID:    randomIndexStatisticsQueryID,
+		operation:     make(chan struct{}, 1),
+		readAdmission: config.ReadAdmission,
 	}, nil
+}
+
+func (reader *IndexStatisticsReader) acquireIndexStatisticsRead(
+	ctx context.Context,
+	tenantID string,
+	indexNames []string,
+) (context.Context, func(), error) {
+	if reader.readAdmission == nil ||
+		isNilIndexStatisticsDependency(reader.readAdmission) {
+		return nil, nil, errors.New(
+			"read ClickHouse index statistics: read admission is required",
+		)
+	}
+	admittedContext, release, err := reader.readAdmission.Acquire(
+		ctx,
+		tenantID,
+		indexNames,
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"read ClickHouse index statistics: admit index read: %w",
+			err,
+		)
+	}
+	if admittedContext == nil || release == nil {
+		if release != nil {
+			release()
+		}
+		return nil, nil, errors.New(
+			"read ClickHouse index statistics: read admission returned an incomplete lease",
+		)
+	}
+	return admittedContext, release, nil
+}
+
+func preserveIndexStatisticsReadCause(ctx context.Context, err error) error {
+	cause := context.Cause(ctx)
+	if cause == nil || errors.Is(cause, context.Canceled) ||
+		errors.Is(cause, context.DeadlineExceeded) {
+		return err
+	}
+	if err == nil {
+		return cause
+	}
+	if errors.Is(err, cause) {
+		return err
+	}
+	return errors.Join(cause, err)
 }
 
 // GetIndexStatistics returns an exact retained/committed logical count and
@@ -172,7 +231,7 @@ func newIndexStatisticsReader(
 func (reader *IndexStatisticsReader) GetIndexStatistics(
 	ctx context.Context,
 	request IndexStatisticsRequest,
-) (IndexStatisticsResult, error) {
+) (result IndexStatisticsResult, resultErr error) {
 	if ctx == nil {
 		return IndexStatisticsResult{}, errors.New(
 			"read ClickHouse index statistics: context is nil",
@@ -193,15 +252,29 @@ func (reader *IndexStatisticsReader) GetIndexStatistics(
 	if err := ctx.Err(); err != nil {
 		return IndexStatisticsResult{}, err
 	}
-	if err := reader.acquireOperation(ctx); err != nil {
-		return IndexStatisticsResult{}, err
-	}
-	defer reader.releaseOperation()
 	operationContext, cancel := context.WithTimeout(
 		ctx,
 		indexStatisticsOperationTimeout,
 	)
 	defer cancel()
+	operationContext, releaseRead, err := reader.acquireIndexStatisticsRead(
+		operationContext,
+		request.TenantID,
+		[]string{request.IndexName},
+	)
+	if err != nil {
+		return IndexStatisticsResult{}, err
+	}
+	defer releaseRead()
+	defer func() {
+		resultErr = preserveIndexStatisticsReadCause(operationContext, resultErr)
+	}()
+	// Catalog-backed admission may wait on SQLite. Keep that work outside the
+	// single native-session gate while retaining one overall operation deadline.
+	if err := reader.acquireOperation(operationContext); err != nil {
+		return IndexStatisticsResult{}, err
+	}
+	defer reader.releaseOperation()
 
 	measuredAt := request.MeasuredAt.Round(0).UTC()
 	queryID, err := reader.nextQueryID(operationContext)
@@ -250,7 +323,7 @@ func (reader *IndexStatisticsReader) GetIndexStatistics(
 		return IndexStatisticsResult{}, err
 	}
 
-	result := IndexStatisticsResult{
+	result = IndexStatisticsResult{
 		TenantID:          request.TenantID,
 		IndexID:           request.IndexID,
 		IndexName:         request.IndexName,
@@ -313,7 +386,7 @@ func (reader *IndexStatisticsReader) GetIndexStatistics(
 func (reader *IndexStatisticsReader) GetIndexStatisticsBatch(
 	ctx context.Context,
 	request IndexStatisticsBatchRequest,
-) ([]IndexStatisticsResult, error) {
+) (results []IndexStatisticsResult, resultErr error) {
 	if ctx == nil {
 		return nil, errors.New(
 			"read ClickHouse index statistics batch: context is nil",
@@ -343,16 +416,33 @@ func (reader *IndexStatisticsReader) GetIndexStatisticsBatch(
 			"read ClickHouse index statistics batch: reader does not support row queries",
 		)
 	}
-	if err := reader.acquireOperation(ctx); err != nil {
-		return nil, err
-	}
-	defer reader.releaseOperation()
-
 	operationContext, cancel := context.WithTimeout(
 		ctx,
 		indexStatisticsOperationTimeout,
 	)
 	defer cancel()
+	indexNames := make([]string, len(request.Indexes))
+	for index, scope := range request.Indexes {
+		indexNames[index] = scope.IndexName
+	}
+	operationContext, releaseRead, err := reader.acquireIndexStatisticsRead(
+		operationContext,
+		request.TenantID,
+		indexNames,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseRead()
+	defer func() {
+		resultErr = preserveIndexStatisticsReadCause(operationContext, resultErr)
+	}()
+	// Catalog-backed admission may wait on SQLite. Keep that work outside the
+	// single native-session gate while retaining one overall operation deadline.
+	if err := reader.acquireOperation(operationContext); err != nil {
+		return nil, err
+	}
+	defer reader.releaseOperation()
 
 	measuredAt := request.MeasuredAt.Round(0).UTC()
 	queryID, err := reader.nextQueryID(operationContext)
@@ -404,7 +494,7 @@ func (reader *IndexStatisticsReader) GetIndexStatisticsBatch(
 	if err != nil {
 		return nil, err
 	}
-	results := make([]IndexStatisticsResult, len(request.Indexes))
+	results = make([]IndexStatisticsResult, len(request.Indexes))
 	for index, scope := range request.Indexes {
 		result := IndexStatisticsResult{
 			TenantID:         request.TenantID,

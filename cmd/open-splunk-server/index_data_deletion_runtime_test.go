@@ -11,6 +11,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 )
 
 func TestNewIndexDataDeletionRuntimeStartsImmediateRecoveryScan(t *testing.T) {
@@ -26,6 +27,7 @@ func TestNewIndexDataDeletionRuntimeStartsImmediateRecoveryScan(t *testing.T) {
 	runtime, err := newIndexDataDeletionRuntime(
 		controlPlane,
 		store,
+		indexread.NewRegistry(),
 		"tenant-a",
 		nil,
 	)
@@ -59,6 +61,7 @@ func TestIndexDataDeletionRuntimeWakeInterruptsIdleRecovery(
 	runtime, err := newIndexDataDeletionRuntime(
 		controlPlane,
 		store,
+		indexread.NewRegistry(),
 		"tenant-a",
 		nil,
 	)
@@ -106,6 +109,7 @@ func TestIndexDataDeletionRuntimeRejectsWakeAfterCloseBegins(t *testing.T) {
 	runtime, err := newIndexDataDeletionRuntime(
 		controlPlane,
 		store,
+		indexread.NewRegistry(),
 		"tenant-a",
 		nil,
 	)
@@ -172,6 +176,7 @@ func TestNewIndexDataDeletionRuntimeForwardsTenantAndErrorReporter(t *testing.T)
 	runtime, err := newIndexDataDeletionRuntime(
 		controlPlane,
 		store,
+		indexread.NewRegistry(),
 		"configured-tenant",
 		func(err error) {
 			reported <- err
@@ -205,6 +210,7 @@ func TestNewIndexDataDeletionRuntimeReturnsConstructionFailure(t *testing.T) {
 	runtime, err := newIndexDataDeletionRuntime(
 		&runtimeDeletionControl{},
 		store,
+		indexread.NewRegistry(),
 		"",
 		nil,
 	)
@@ -216,6 +222,28 @@ func TestNewIndexDataDeletionRuntimeReturnsConstructionFailure(t *testing.T) {
 	}
 	if runtime != nil {
 		t.Fatalf("runtime = %#v after construction failure, want nil", runtime)
+	}
+	if got := store.closeCalls.Load(); got != 0 {
+		t.Fatalf("Store.Close calls = %d after construction failure, want 0", got)
+	}
+}
+
+func TestNewIndexDataDeletionRuntimeRequiresSharedReadRetirement(t *testing.T) {
+	t.Parallel()
+
+	store := &runtimeDeletionStore{}
+	runtime, err := newIndexDataDeletionRuntime(
+		&runtimeDeletionControl{},
+		store,
+		nil,
+		"tenant-a",
+		nil,
+	)
+	if err == nil || runtime != nil {
+		if runtime != nil {
+			_ = runtime.Close(context.Background())
+		}
+		t.Fatalf("newIndexDataDeletionRuntime(nil retirement) = (%v, %v), want nil and error", runtime, err)
 	}
 	if got := store.closeCalls.Load(); got != 0 {
 		t.Fatalf("Store.Close calls = %d after construction failure, want 0", got)
@@ -248,6 +276,7 @@ func TestIndexDataDeletionRuntimeClosesCoordinatorBeforeStore(t *testing.T) {
 	runtime, err := newIndexDataDeletionRuntime(
 		controlPlane,
 		store,
+		indexread.NewRegistry(),
 		"tenant-a",
 		nil,
 	)
@@ -291,6 +320,7 @@ func TestIndexDataDeletionRuntimeCloseTimeoutLeavesStoreOpenUntilWorkerJoins(
 	runtime, err := newIndexDataDeletionRuntime(
 		controlPlane,
 		store,
+		indexread.NewRegistry(),
 		"tenant-a",
 		nil,
 	)
@@ -346,6 +376,7 @@ func TestIndexDataDeletionRuntimeCloseDeadlineBoundsBlockingStoreClose(
 	runtime, err := newIndexDataDeletionRuntime(
 		&runtimeDeletionControl{},
 		store,
+		indexread.NewRegistry(),
 		"tenant-a",
 		nil,
 	)
@@ -462,6 +493,7 @@ func TestFinalizeIndexDataDeletionRuntimeRetainsDependenciesUntilJoined(
 	runtime, err := newIndexDataDeletionRuntime(
 		controlPlane,
 		store,
+		indexread.NewRegistry(),
 		"tenant-a",
 		nil,
 	)

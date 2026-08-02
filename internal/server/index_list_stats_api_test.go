@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -168,6 +169,159 @@ func TestIndexListStatisticsEnrichOnlyTheSelectedPageInOneTrustedBatch(
 			IndexID: records["bravo"].ID, IndexName: "bravo",
 		}) {
 		t.Fatalf("trusted batch request = %#v", request)
+	}
+}
+
+func TestIndexListStatisticsSkipDeletingRecordsButEnrichReadableRecords(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	database := openIndexStatisticsControlDB(t)
+	active, err := database.CreateIndex(
+		context.Background(),
+		adminTestIndex("alpha"),
+	)
+	if err != nil {
+		t.Fatalf("CreateIndex(active): %v", err)
+	}
+	deleting := createDeletingIndexForListStatistics(t, database, "bravo")
+	archivedCreated, err := database.CreateIndex(
+		context.Background(),
+		adminTestIndex("charlie"),
+	)
+	if err != nil {
+		t.Fatalf("CreateIndex(archived): %v", err)
+	}
+	archived, err := database.SetIndexState(
+		context.Background(),
+		archivedCreated.ID,
+		archivedCreated.Version,
+		control.IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("SetIndexState(archived): %v", err)
+	}
+
+	statistics := &recordingIndexStatistics{
+		batchFn: func(
+			_ context.Context,
+			request clickhouse.IndexStatisticsBatchRequest,
+		) ([]clickhouse.IndexStatisticsResult, error) {
+			earliest := testNow.Add(-time.Hour)
+			latest := testNow.Add(-time.Minute)
+			want := []clickhouse.IndexStatisticsScope{
+				{IndexID: active.ID, IndexName: "alpha"},
+				{IndexID: archived.ID, IndexName: "charlie"},
+			}
+			if !slices.Equal(request.Indexes, want) {
+				t.Fatalf("statistics scopes = %#v, want %#v", request.Indexes, want)
+			}
+			return []clickhouse.IndexStatisticsResult{
+				listIndexStatisticsResult(request, want[1], 33, &earliest, &latest),
+				listIndexStatisticsResult(request, want[0], 11, &earliest, &latest),
+			}, nil
+		},
+	}
+	snapshotter := &recordingIndexStatisticsSnapshotter{cutoff: 71}
+	var clockCalls atomic.Int32
+	handler := newIndexListStatisticsTestHandler(
+		t,
+		database,
+		statistics,
+		snapshotter,
+		func() time.Time {
+			clockCalls.Add(1)
+			return testNow
+		},
+		0,
+	)
+	response := postAuthenticatedIndexList(
+		t,
+		handler,
+		&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var decoded opensplunkv1.ListIndexesResponse
+	unmarshalResponse(t, response, &decoded)
+	items := make(map[string]*opensplunkv1.IndexListItem, 3)
+	for _, item := range decoded.GetIndexes() {
+		items[item.GetIndex().GetDefinition().GetName()] = item
+	}
+	if len(items) != 3 ||
+		items["alpha"].GetStats().GetEventCount() != 11 ||
+		items["charlie"].GetStats().GetEventCount() != 33 ||
+		items["bravo"].GetIndex().GetIndexId() != deleting.ID ||
+		items["bravo"].GetStats() != nil {
+		t.Fatalf("mixed readable/deleting response = %#v", &decoded)
+	}
+	if snapshotter.callCount() != 1 ||
+		statistics.batchCallCount() != 1 ||
+		statistics.callCount() != 0 ||
+		clockCalls.Load() != 1 {
+		t.Fatalf(
+			"work = snapshot %d batch %d single %d clock %d, want 1/1/0/1",
+			snapshotter.callCount(),
+			statistics.batchCallCount(),
+			statistics.callCount(),
+			clockCalls.Load(),
+		)
+	}
+}
+
+func TestIndexListStatisticsAllDeletingPageDoesNoSnapshotOrNativeWork(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	database := openIndexStatisticsControlDB(t)
+	first := createDeletingIndexForListStatistics(t, database, "alpha")
+	second := createDeletingIndexForListStatistics(t, database, "bravo")
+	statistics := &recordingIndexStatistics{}
+	snapshotter := &recordingIndexStatisticsSnapshotter{cutoff: 91}
+	var clockCalls atomic.Int32
+	handler := newIndexListStatisticsTestHandler(
+		t,
+		database,
+		statistics,
+		snapshotter,
+		func() time.Time {
+			clockCalls.Add(1)
+			return testNow
+		},
+		0,
+	)
+	response := postAuthenticatedIndexList(
+		t,
+		handler,
+		&opensplunkv1.ListIndexesRequest{IncludeStats: true},
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var decoded opensplunkv1.ListIndexesResponse
+	unmarshalResponse(t, response, &decoded)
+	items := decoded.GetIndexes()
+	if len(items) != 2 ||
+		items[0].GetIndex().GetIndexId() != first.ID ||
+		items[1].GetIndex().GetIndexId() != second.ID ||
+		items[0].GetStats() != nil ||
+		items[1].GetStats() != nil {
+		t.Fatalf("all-deleting response = %#v", &decoded)
+	}
+	if snapshotter.callCount() != 0 ||
+		statistics.batchCallCount() != 0 ||
+		statistics.callCount() != 0 ||
+		clockCalls.Load() != 0 {
+		t.Fatalf(
+			"unexpected work = snapshot %d batch %d single %d clock %d",
+			snapshotter.callCount(),
+			statistics.batchCallCount(),
+			statistics.callCount(),
+			clockCalls.Load(),
+		)
 	}
 }
 
@@ -916,6 +1070,47 @@ func echoEmptyListIndexStatistics(
 		)
 	}
 	return results, nil
+}
+
+func createDeletingIndexForListStatistics(
+	t *testing.T,
+	database *control.DB,
+	name string,
+) control.Index {
+	t.Helper()
+	created, err := database.CreateIndex(
+		context.Background(),
+		adminTestIndex(name),
+	)
+	if err != nil {
+		t.Fatalf("CreateIndex(%q): %v", name, err)
+	}
+	archived, err := database.SetIndexState(
+		context.Background(),
+		created.ID,
+		created.Version,
+		control.IndexStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("SetIndexState(%q): %v", name, err)
+	}
+	if _, err := database.BeginIndexDataDeletion(
+		context.Background(),
+		control.IndexDataDeletionScope{TenantID: browserGateTenantID},
+		archived.ID,
+		archived.Version,
+		archived.Definition.Name,
+	); err != nil {
+		t.Fatalf("BeginIndexDataDeletion(%q): %v", name, err)
+	}
+	deleting, err := database.GetIndex(
+		context.Background(),
+		archived.ID,
+	)
+	if err != nil {
+		t.Fatalf("GetIndex(%q): %v", name, err)
+	}
+	return deleting
 }
 
 func listIndexStatisticsResult(

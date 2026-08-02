@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/indexes"
+	"github.com/Suhaibinator/open-splunk/internal/indexread"
 )
 
 // indexDataDeletionRuntimeStore is the single native ClickHouse Store shared
@@ -35,6 +36,7 @@ type indexDataDeletionRuntime struct {
 func newIndexDataDeletionRuntime(
 	controlPlane indexes.DeletionControl,
 	store indexDataDeletionRuntimeStore,
+	readRetirement indexread.Retirement,
 	tenantID string,
 	onError func(error),
 ) (*indexDataDeletionRuntime, error) {
@@ -42,8 +44,9 @@ func newIndexDataDeletionRuntime(
 		controlPlane,
 		store,
 		indexes.IndexDataDeletionCoordinatorConfig{
-			TenantID: tenantID,
-			OnError:  onError,
+			TenantID:       tenantID,
+			ReadRetirement: readRetirement,
+			OnError:        onError,
 		},
 	)
 	if err != nil {

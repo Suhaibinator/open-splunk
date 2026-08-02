@@ -35,7 +35,7 @@ func serveRuntime(
 	httpShutdownTimeout time.Duration,
 	collectorShutdownGraceTimeout time.Duration,
 ) error {
-	if ctx == nil || httpServer == nil || requests == nil || isNilWebSocketShutdown(webSockets) {
+	if ctx == nil || httpServer == nil || requests == nil || nilRuntimeDependency(webSockets) {
 		return errors.New("serve runtime: context, HTTP server, request tracker, and websocket service are required")
 	}
 	if httpShutdownTimeout <= 0 {

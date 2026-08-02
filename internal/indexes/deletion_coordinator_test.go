@@ -3,6 +3,7 @@ package indexes
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -18,6 +19,255 @@ import (
 const coordinatorTestTimeout = 5 * time.Second
 
 var errCoordinatorTestPrecommit = errors.New("test completion failed before commit")
+
+func TestIndexDataDeletionCoordinatorRetiresReadsBeforeInspectingOrAdvancingAttempt(
+	t *testing.T,
+) {
+	operation, attempt, _, _ := coordinatorTestRecords("read-retirement-order")
+	recorder := newCoordinatorTestRecorder()
+	retirementStarted := make(chan struct{})
+	releaseRetirement := make(chan struct{})
+	var retirementStartedOnce sync.Once
+	var releaseRetirementOnce sync.Once
+	t.Cleanup(func() {
+		releaseRetirementOnce.Do(func() { close(releaseRetirement) })
+	})
+	readRetirement := &coordinatorTestReadRetirement{
+		recorder: recorder,
+		retire: func(ctx context.Context, tenantID, indexName string) error {
+			if tenantID != operation.TenantID || indexName != operation.IndexName {
+				return fmt.Errorf(
+					"retirement scope = %q/%q, want %q/%q",
+					tenantID,
+					indexName,
+					operation.TenantID,
+					operation.IndexName,
+				)
+			}
+			retirementStartedOnce.Do(func() { close(retirementStarted) })
+			select {
+			case <-releaseRetirement:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	controlPlane := &coordinatorTestControl{
+		recorder: recorder,
+		next: func(context.Context) (control.IndexDeletionOperation, error) {
+			return operation, nil
+		},
+		getAttempt: func(
+			context.Context,
+			string,
+		) (control.IndexDeletionMutationAttempt, error) {
+			return attempt, nil
+		},
+	}
+	store := &coordinatorTestStore{
+		recorder: recorder,
+		statusProgress: clickhouse.IndexDataDeletionProgress{
+			State: clickhouse.IndexDataDeletionReady,
+		},
+		advanceProgress: clickhouse.IndexDataDeletionProgress{
+			State: clickhouse.IndexDataDeletionPending,
+		},
+	}
+	config := coordinatorTestConfig()
+	config.ReadRetirement = readRetirement
+	coordinator := startCoordinatorTest(t, controlPlane, store, config)
+	waitForCoordinatorTestSignal(t, retirementStarted, "read retirement")
+
+	if got, want := recorder.snapshot(), []string{"control.next", "read.retire"}; !slices.Equal(got, want) {
+		t.Fatalf("calls while read retirement is blocked = %v, want %v", got, want)
+	}
+
+	releaseRetirementOnce.Do(func() { close(releaseRetirement) })
+	recorder.waitFor(t, func(events []string) bool {
+		return countCoordinatorTestEvent(events, "store.freeze.exit") == 1
+	}, "frozen mutation advancement after read retirement")
+	closeCoordinatorTest(t, coordinator)
+
+	wantEvents := []string{
+		"control.next",
+		"read.retire",
+		"control.get-attempt",
+		"store.status",
+		"store.freeze.enter",
+		"frozen.drain",
+		"frozen.advance",
+		"store.freeze.exit",
+	}
+	if got := recorder.snapshot(); !slices.Equal(got, wantEvents) {
+		t.Fatalf("coordinator call order = %v, want %v", got, wantEvents)
+	}
+}
+
+func TestIndexDataDeletionCoordinatorRetriesReadRetirementWithoutInspectingAttempt(
+	t *testing.T,
+) {
+	operation, attempt, _, _ := coordinatorTestRecords("read-retirement-retry")
+	recorder := newCoordinatorTestRecorder()
+	retirementPoison := errors.New("test read retirement failed")
+	secondRetirement := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	var releaseSecondOnce sync.Once
+	t.Cleanup(func() { releaseSecondOnce.Do(func() { close(releaseSecond) }) })
+	var retirementCalls atomic.Int32
+	readRetirement := &coordinatorTestReadRetirement{
+		recorder: recorder,
+		retire: func(ctx context.Context, tenantID, indexName string) error {
+			if tenantID != operation.TenantID || indexName != operation.IndexName {
+				return errors.New("unexpected read retirement scope")
+			}
+			if retirementCalls.Add(1) == 1 {
+				return retirementPoison
+			}
+			close(secondRetirement)
+			select {
+			case <-releaseSecond:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	controlPlane := &coordinatorTestControl{
+		recorder: recorder,
+		next: func(context.Context) (control.IndexDeletionOperation, error) {
+			return operation, nil
+		},
+		getAttempt: func(
+			context.Context,
+			string,
+		) (control.IndexDeletionMutationAttempt, error) {
+			return attempt, nil
+		},
+	}
+	store := &coordinatorTestStore{
+		recorder: recorder,
+		statusProgress: clickhouse.IndexDataDeletionProgress{
+			State: clickhouse.IndexDataDeletionPending,
+		},
+	}
+	reported := make(chan error, 1)
+	config := coordinatorTestConfig()
+	config.ReadRetirement = readRetirement
+	config.RetryInitial = time.Millisecond
+	config.RetryMaximum = time.Millisecond
+	config.OnError = func(err error) { reported <- err }
+	coordinator := startCoordinatorTest(t, controlPlane, store, config)
+
+	select {
+	case err := <-reported:
+		if !errors.Is(err, retirementPoison) {
+			t.Fatalf("reported error = %v, want read retirement failure", err)
+		}
+	case <-time.After(coordinatorTestTimeout):
+		t.Fatal("coordinator did not report read retirement failure")
+	}
+	waitForCoordinatorTestSignal(t, secondRetirement, "read retirement retry")
+	assertCoordinatorTestCount(t, recorder.snapshot(), "control.get-attempt", 0)
+	assertCoordinatorTestCount(t, recorder.snapshot(), "store.status", 0)
+	assertCoordinatorTestCount(t, recorder.snapshot(), "store.freeze.enter", 0)
+	assertCoordinatorTestCount(t, recorder.snapshot(), "frozen.advance", 0)
+
+	releaseSecondOnce.Do(func() { close(releaseSecond) })
+	recorder.waitFor(t, func(events []string) bool {
+		return countCoordinatorTestEvent(events, "store.status") == 1
+	}, "attempt inspection after successful read retirement retry")
+	closeCoordinatorTest(t, coordinator)
+
+	assertCoordinatorTestSubsequence(t, recorder.snapshot(), []string{
+		"control.next",
+		"read.retire",
+		"read.retire",
+		"control.get-attempt",
+		"store.status",
+	})
+}
+
+func TestIndexDataDeletionCoordinatorReappliesIdempotentReadRetirementWhileRecoveringAttempt(
+	t *testing.T,
+) {
+	operation, attempt, _, _ := coordinatorTestRecords("read-retirement-recovery")
+	recorder := newCoordinatorTestRecorder()
+	var retirementMu sync.Mutex
+	var retirementScopes [][2]string
+	readRetirement := &coordinatorTestReadRetirement{
+		recorder: recorder,
+		retire: func(_ context.Context, tenantID, indexName string) error {
+			retirementMu.Lock()
+			retirementScopes = append(retirementScopes, [2]string{tenantID, indexName})
+			retirementMu.Unlock()
+			return nil
+		},
+	}
+	controlPlane := &coordinatorTestControl{
+		recorder: recorder,
+		next: func(context.Context) (control.IndexDeletionOperation, error) {
+			return operation, nil
+		},
+		getAttempt: func(
+			context.Context,
+			string,
+		) (control.IndexDeletionMutationAttempt, error) {
+			return attempt, nil
+		},
+	}
+	var statusCalls atomic.Int32
+	store := &coordinatorTestStore{
+		recorder: recorder,
+		status: func(
+			context.Context,
+			clickhouse.IndexDataDeletionRequest,
+		) (clickhouse.IndexDataDeletionProgress, error) {
+			if statusCalls.Add(1) == 1 {
+				return clickhouse.IndexDataDeletionProgress{
+					State: clickhouse.IndexDataDeletionPending,
+				}, nil
+			}
+			return clickhouse.IndexDataDeletionProgress{
+				State: clickhouse.IndexDataDeletionReady,
+			}, nil
+		},
+		advanceProgress: clickhouse.IndexDataDeletionProgress{
+			State: clickhouse.IndexDataDeletionPending,
+		},
+	}
+	config := coordinatorTestConfig()
+	config.ReadRetirement = readRetirement
+	config.PollInterval = time.Millisecond
+	coordinator := startCoordinatorTest(t, controlPlane, store, config)
+	recorder.waitFor(t, func(events []string) bool {
+		return countCoordinatorTestEvent(events, "store.freeze.exit") == 1
+	}, "recovered mutation advancement")
+	closeCoordinatorTest(t, coordinator)
+
+	assertCoordinatorTestSubsequence(t, recorder.snapshot(), []string{
+		"control.next",
+		"read.retire",
+		"control.get-attempt",
+		"store.status",
+		"read.retire",
+		"store.status",
+		"store.freeze.enter",
+		"frozen.drain",
+		"frozen.advance",
+		"store.freeze.exit",
+	})
+	retirementMu.Lock()
+	defer retirementMu.Unlock()
+	if len(retirementScopes) < 2 {
+		t.Fatalf("read retirement calls = %d, want at least 2", len(retirementScopes))
+	}
+	for call, scope := range retirementScopes {
+		if want := [2]string{operation.TenantID, operation.IndexName}; scope != want {
+			t.Fatalf("read retirement call %d scope = %q, want %q", call, scope, want)
+		}
+	}
+}
 
 func TestIndexDataDeletionCoordinatorCompletesFreshAttemptInsideFrozenSequence(
 	t *testing.T,
@@ -1324,6 +1574,7 @@ func TestNewIndexDataDeletionCoordinatorRejectsInvalidConfiguration(
 	validConfig := coordinatorTestConfig()
 	var nilControl *coordinatorTestControl
 	var nilStore *coordinatorTestStore
+	var nilReadRetirement *coordinatorTestReadRetirement
 
 	dependencyTests := []struct {
 		name         string
@@ -1334,6 +1585,34 @@ func TestNewIndexDataDeletionCoordinatorRejectsInvalidConfiguration(
 		{name: "typed nil control", controlPlane: nilControl, store: validStore},
 		{name: "nil store", controlPlane: validControl, store: nil},
 		{name: "typed nil store", controlPlane: validControl, store: nilStore},
+	}
+	for _, test := range []struct {
+		name       string
+		retirement *coordinatorTestReadRetirement
+	}{
+		{name: "nil read retirement", retirement: nil},
+		{name: "typed nil read retirement", retirement: nilReadRetirement},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			config := validConfig
+			if test.name == "nil read retirement" {
+				config.ReadRetirement = nil
+			} else {
+				config.ReadRetirement = test.retirement
+			}
+			coordinator, err := NewIndexDataDeletionCoordinator(
+				validControl,
+				validStore,
+				config,
+			)
+			if err == nil {
+				closeCoordinatorTest(t, coordinator)
+				t.Fatal("constructor accepted nil read retirement")
+			}
+			if coordinator != nil {
+				t.Fatalf("coordinator = %#v after constructor error, want nil", coordinator)
+			}
+		})
 	}
 	for _, test := range dependencyTests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1454,7 +1733,10 @@ func TestNewIndexDataDeletionCoordinatorAppliesDurationDefaults(
 	coordinator, err := NewIndexDataDeletionCoordinator(
 		controlPlane,
 		store,
-		IndexDataDeletionCoordinatorConfig{TenantID: "tenant-a"},
+		IndexDataDeletionCoordinatorConfig{
+			TenantID:       "tenant-a",
+			ReadRetirement: &coordinatorTestReadRetirement{},
+		},
 	)
 	if err != nil {
 		t.Fatalf("NewIndexDataDeletionCoordinator(): %v", err)
@@ -1658,6 +1940,25 @@ type coordinatorTestControl struct {
 	getCompletion func(context.Context, string) (control.IndexDataDeletionCompletion, error)
 }
 
+type coordinatorTestReadRetirement struct {
+	recorder *coordinatorTestRecorder
+	retire   func(context.Context, string, string) error
+}
+
+func (fake *coordinatorTestReadRetirement) Retire(
+	ctx context.Context,
+	tenantID string,
+	indexName string,
+) error {
+	if fake.recorder != nil {
+		fake.recorder.record("read.retire")
+	}
+	if fake.retire == nil {
+		return nil
+	}
+	return fake.retire(ctx, tenantID, indexName)
+}
+
 func (fake *coordinatorTestControl) NextIndexDeletionOperation(
 	ctx context.Context,
 ) (control.IndexDeletionOperation, error) {
@@ -1849,6 +2150,7 @@ func (recorder *coordinatorTestRecorder) waitFor(
 func coordinatorTestConfig() IndexDataDeletionCoordinatorConfig {
 	return IndexDataDeletionCoordinatorConfig{
 		TenantID:         "tenant-a",
+		ReadRetirement:   &coordinatorTestReadRetirement{},
 		PollInterval:     time.Hour,
 		RecoveryInterval: time.Hour,
 		RetryInitial:     time.Hour,
