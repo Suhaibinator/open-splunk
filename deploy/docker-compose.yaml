@@ -13,6 +13,32 @@ x-open-splunk-server-security: &open-splunk-server-security
     - no-new-privileges:true
 
 services:
+  # A fresh named-volume root is root-owned. This networkless one-shot makes
+  # the recovery disk writable by ClickHouse while retaining read-only access
+  # for the non-root backup and restore helpers through the shared fixed GID.
+  clickhouse-recovery-volume-bootstrap:
+    <<: *open-splunk-server-image
+    user: "0:65532"
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    healthcheck:
+      disable: true
+    network_mode: none
+    command:
+      - prepare-clickhouse-recovery-volume
+      - -path
+      - /var/lib/open-splunk/clickhouse-backups
+    volumes:
+      - clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups
+    pids_limit: 32
+
   clickhouse:
     # Current tested LTS patch. Do not replace this with latest/lts: schema
     # migrations depend on the production JSON type and GA native text index.
@@ -24,6 +50,11 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    group_add:
+      - "65532"
+    depends_on:
+      clickhouse-recovery-volume-bootstrap:
+        condition: service_completed_successfully
     environment:
       CLICKHOUSE_USER: open_splunk_bootstrap
       CLICKHOUSE_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_BOOTSTRAP_PASSWORD:?run ./generate-env.sh before docker compose up}"
@@ -36,15 +67,19 @@ services:
       OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD:?run ./generate-env.sh before docker compose up}"
       OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD:?run ./generate-env.sh before docker compose up}"
       OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD:?run ./generate-env.sh before docker compose up}"
+      OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD:?run ./generate-env.sh before docker compose up}"
+      OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD: "${OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD:?run ./generate-env.sh before docker compose up}"
       OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME: "${OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME:?run ./generate-env.sh before docker compose up}"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
       - clickhouse-logs:/var/log/clickhouse-server
+      - clickhouse-recovery:/var/lib/open-splunk-clickhouse-backups
       - ./clickhouse-init.sh:/docker-entrypoint-initdb.d/0100_open_splunk.sh:ro
       - ./clickhouse-config/access.xml:/etc/clickhouse-server/config.d/open_splunk_access.xml:ro
       - ./clickhouse-config/bootstrap-user.xml:/etc/clickhouse-server/users.d/open_splunk_bootstrap.xml:ro
       - ./clickhouse-config/tls.xml:/etc/clickhouse-server/config.d/open_splunk_tls.xml:ro
       - ./clickhouse-config/client-tls.xml:/etc/clickhouse-client/open-splunk-tls.xml:ro
+      - ./clickhouse-config/recovery.xml:/etc/clickhouse-server/config.d/open_splunk_recovery.xml:ro
       - "${OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE:?run ./generate-env.sh before docker compose up}:/etc/clickhouse-client/open-splunk-ca.crt:ro"
       - "${OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE:?run ./generate-env.sh before docker compose up}:/etc/clickhouse-server/tls/server.crt:ro"
       - "${OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE:?run ./generate-env.sh before docker compose up}:/etc/clickhouse-server/tls/server.key:ro"
@@ -84,6 +119,8 @@ services:
       - *open-splunk-server-image
       - *open-splunk-server-security
     restart: "no"
+    healthcheck:
+      disable: true
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -114,6 +151,8 @@ services:
       - *open-splunk-server-image
       - *open-splunk-server-security
     restart: "no"
+    healthcheck:
+      disable: true
     network_mode: none
     entrypoint:
       - /usr/local/bin/open-splunk-server
@@ -126,6 +165,201 @@ services:
     volumes:
       - server-state:/var/lib/open-splunk/state
       - "${OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk-bootstrap/administrator.token:ro"
+
+  # Recovery helpers are opt-in and never join the normal application
+  # lifecycle. The server must be stopped before either command is run.
+  deployment-backup:
+    profiles:
+      - recovery
+    <<:
+      - *open-splunk-server-image
+      - *open-splunk-server-security
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command:
+      - backup-deployment-recovery-set
+      - -control-db
+      - /var/lib/open-splunk/state/private/open-splunk.db
+      - -master-key
+      - /var/lib/open-splunk/state/private/master.key
+      - -administrator-token-file
+      - /var/lib/open-splunk/state/private/administrator.token
+      - -destination
+      - "${OPEN_SPLUNK_DEPLOYMENT_RECOVERY_SET_PATH:-/var/lib/open-splunk/recovery/private/deployment-recovery-set}"
+      - -archive-root
+      - /var/lib/open-splunk/clickhouse-backups
+      - -address
+      - clickhouse:9440
+      - -password-file
+      - /run/open-splunk/clickhouse/backup.password
+      - -ca-cert
+      - /run/open-splunk/clickhouse/ca.crt
+      - -server-name
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME:?run ./generate-env.sh before docker compose up}"
+    environment:
+      OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock
+    volumes:
+      - server-state:/var/lib/open-splunk/state
+      - server-lock:/var/lib/open-splunk/lock
+      - server-recovery:/var/lib/open-splunk/recovery
+      - clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups:ro
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk/clickhouse/ca.crt:ro"
+      - "${OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk/clickhouse/backup.password:ro"
+    networks:
+      - backend
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532
+    pids_limit: 64
+
+  # An interrupted native BACKUP can retain its exact source marker after the
+  # helper is gone. This operator-attested one-shot clears only that confirmed
+  # marker after ClickHouse has been restarted to terminate any old native
+  # operation. It receives neither control state nor either recovery volume.
+  deployment-marker-reconcile:
+    profiles:
+      - recovery
+    <<:
+      - *open-splunk-server-image
+      - *open-splunk-server-security
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command:
+      - reconcile-deployment-recovery-marker
+      - -recovery-set-id
+      - "${OPEN_SPLUNK_STALE_RECOVERY_SET_ID:-}"
+      - -confirm-recovery-set-id
+      - "${OPEN_SPLUNK_CONFIRMED_STALE_RECOVERY_SET_ID:-}"
+      - -backup-operation-uuid
+      - "${OPEN_SPLUNK_STALE_BACKUP_OPERATION_UUID:-}"
+      - -confirm-backup-operation-uuid
+      - "${OPEN_SPLUNK_CONFIRMED_STALE_BACKUP_OPERATION_UUID:-}"
+      - -address
+      - clickhouse:9440
+      - -password-file
+      - /run/open-splunk/clickhouse/backup.password
+      - -ca-cert
+      - /run/open-splunk/clickhouse/ca.crt
+      - -server-name
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME:?run ./generate-env.sh before docker compose up}"
+    environment:
+      OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock
+    volumes:
+      - server-lock:/var/lib/open-splunk/lock
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk/clickhouse/ca.crt:ro"
+      - "${OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk/clickhouse/backup.password:ro"
+    networks:
+      - backend
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532
+    pids_limit: 64
+
+  # A failed backup can leave ClickHouse's already-closed archive behind when
+  # the normal helper's read-only mount correctly prevents deletion. This is
+  # an explicitly destructive, operator-attested one-shot: it cannot infer
+  # publication status, so ClickHouse must be stopped and both names must be
+  # copied independently from the same failed-attempt diagnostic.
+  deployment-archive-delete:
+    profiles:
+      - recovery
+    <<: *open-splunk-server-image
+    user: "101:65532"
+    working_dir: /
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    healthcheck:
+      disable: true
+    network_mode: none
+    command:
+      - delete-deployment-recovery-archive
+      - -archive-root
+      - /var/lib/open-splunk/clickhouse-backups
+      - -archive-name
+      - "${OPEN_SPLUNK_FAILED_RECOVERY_ARCHIVE_NAME:-}"
+      - -confirm-archive-name
+      - "${OPEN_SPLUNK_CONFIRMED_RECOVERY_ARCHIVE_NAME:-}"
+    volumes:
+      - clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups
+    pids_limit: 32
+
+  deployment-verify:
+    profiles:
+      - recovery
+    <<:
+      - *open-splunk-server-image
+      - *open-splunk-server-security
+    restart: "no"
+    healthcheck:
+      disable: true
+    network_mode: none
+    command:
+      - verify-deployment-recovery-set
+      - -source
+      - "${OPEN_SPLUNK_DEPLOYMENT_RECOVERY_SET_PATH:-/var/lib/open-splunk/recovery/private/deployment-recovery-set}"
+      - -archive-root
+      - /var/lib/open-splunk/clickhouse-backups
+    volumes:
+      - server-recovery:/var/lib/open-splunk/recovery:ro
+      - clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups:ro
+    pids_limit: 64
+
+  deployment-restore:
+    profiles:
+      - recovery
+    <<:
+      - *open-splunk-server-image
+      - *open-splunk-server-security
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    command:
+      - restore-deployment-recovery-set
+      - -source
+      - "${OPEN_SPLUNK_DEPLOYMENT_RECOVERY_SET_PATH:-/var/lib/open-splunk/recovery/private/deployment-recovery-set}"
+      - -archive-root
+      - /var/lib/open-splunk/clickhouse-backups
+      - -control-db
+      - /var/lib/open-splunk/state/private/open-splunk.db
+      - -master-key
+      - /var/lib/open-splunk/state/private/master.key
+      - -administrator-token-file
+      - /var/lib/open-splunk/state/private/administrator.token
+      - -address
+      - clickhouse:9440
+      - -password-file
+      - /run/open-splunk/clickhouse/restore.password
+      - -ca-cert
+      - /run/open-splunk/clickhouse/ca.crt
+      - -server-name
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME:?run ./generate-env.sh before docker compose up}"
+    environment:
+      OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock
+    volumes:
+      - server-state:/var/lib/open-splunk/state
+      - server-lock:/var/lib/open-splunk/lock
+      - server-recovery:/var/lib/open-splunk/recovery:ro
+      - clickhouse-recovery:/var/lib/open-splunk/clickhouse-backups:ro
+      - "${OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk/clickhouse/ca.crt:ro"
+      - "${OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk/clickhouse/restore.password:ro"
+    networks:
+      - backend
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532
+    pids_limit: 64
 
   server:
     <<:
@@ -142,6 +376,7 @@ services:
         condition: service_completed_successfully
     environment:
       TMPDIR: /tmp
+      OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock
     command:
       - -http-address
       - 0.0.0.0:8080
@@ -182,6 +417,7 @@ services:
       - "127.0.0.1:${OPEN_SPLUNK_SERVER_GRPC_PORT:-4317}:4317"
     volumes:
       - server-state:/var/lib/open-splunk/state
+      - server-lock:/var/lib/open-splunk/lock
       - server-exports:/var/lib/open-splunk/exports
       - "${OPEN_SPLUNK_SERVER_TLS_CA_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk/tls/ca.crt:ro"
       - "${OPEN_SPLUNK_SERVER_TLS_CERT_FILE:?run ./generate-env.sh before docker compose up}:/run/open-splunk/tls/server.crt:ro"
@@ -224,5 +460,8 @@ networks:
 volumes:
   clickhouse-data:
   clickhouse-logs:
+  clickhouse-recovery:
   server-state:
   server-exports:
+  server-recovery:
+  server-lock:

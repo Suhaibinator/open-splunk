@@ -62,6 +62,18 @@ func runDeploymentSubcommand(arguments []string) (bool, error) {
 		return true, runDeploymentHealthcheckSubcommand(arguments[1:])
 	case "migrate-clickhouse":
 		return true, runDeploymentClickHouseMigrationSubcommand(arguments[1:])
+	case "prepare-clickhouse-recovery-volume":
+		return true, runPrepareClickHouseRecoveryVolumeSubcommand(arguments[1:])
+	case "delete-deployment-recovery-archive":
+		return true, runDeleteDeploymentRecoveryArchiveSubcommand(arguments[1:])
+	case "backup-deployment-recovery-set":
+		return true, runBackupDeploymentRecoverySetSubcommand(arguments[1:])
+	case "verify-deployment-recovery-set":
+		return true, runVerifyDeploymentRecoverySetSubcommand(arguments[1:])
+	case "restore-deployment-recovery-set":
+		return true, runRestoreDeploymentRecoverySetSubcommand(arguments[1:])
+	case "reconcile-deployment-recovery-marker":
+		return true, runDeploymentRecoveryMarkerReconcileSubcommand(arguments[1:])
 	case "provision-administrator-token":
 		return true, runProvisionAdministratorTokenSubcommand(arguments[1:])
 	case "backup-control-plane":
@@ -225,11 +237,16 @@ func loadDeploymentHealthTLSConfig(
 }
 
 func validateDeploymentHealthServerName(serverName string) error {
+	if err := validateExactDeploymentTLSServerName(serverName); err != nil {
+		return fmt.Errorf("deployment healthcheck: %w", err)
+	}
+	return nil
+}
+
+func validateExactDeploymentTLSServerName(serverName string) error {
 	if serverName == "" || serverName != strings.TrimSpace(serverName) ||
 		!validExplicitTLSServerName(serverName) {
-		return errors.New(
-			"deployment healthcheck: -server-name must be an explicit valid bounded DNS name or IP address",
-		)
+		return errors.New("-server-name must be an explicit valid bounded DNS name or IP address")
 	}
 	return nil
 }

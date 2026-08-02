@@ -102,7 +102,7 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 
 	// The migration ledger remains complete throughout these adversarial
 	// mutations. The release contract must independently detect a missing data
-	// table, either table's physical-definition drift, and an unexpected object.
+	// release-owned table, physical-definition drift, and an unexpected object.
 	physicalSchemaMutations := []struct {
 		name    string
 		apply   string
@@ -114,6 +114,20 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 				"open_splunk.events_schema_contract_hidden",
 			restore: "RENAME TABLE open_splunk.events_schema_contract_hidden TO " +
 				"open_splunk.events",
+		},
+		{
+			name: "missing recovery sets table",
+			apply: "RENAME TABLE open_splunk.recovery_sets TO " +
+				"open_splunk.recovery_sets_schema_contract_hidden",
+			restore: "RENAME TABLE open_splunk.recovery_sets_schema_contract_hidden TO " +
+				"open_splunk.recovery_sets",
+		},
+		{
+			name: "missing recovery archive markers table",
+			apply: "RENAME TABLE open_splunk.recovery_archive_markers TO " +
+				"open_splunk.recovery_archive_markers_schema_contract_hidden",
+			restore: "RENAME TABLE open_splunk.recovery_archive_markers_schema_contract_hidden TO " +
+				"open_splunk.recovery_archive_markers",
 		},
 		{
 			name: "mutated events definition",
@@ -130,7 +144,21 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 				"DROP COLUMN physical_schema_drift",
 		},
 		{
-			name: "unexpected third table",
+			name: "mutated recovery sets definition",
+			apply: "ALTER TABLE open_splunk.recovery_sets " +
+				"ADD COLUMN physical_schema_drift UInt8 DEFAULT 0",
+			restore: "ALTER TABLE open_splunk.recovery_sets " +
+				"DROP COLUMN physical_schema_drift",
+		},
+		{
+			name: "mutated recovery archive markers definition",
+			apply: "ALTER TABLE open_splunk.recovery_archive_markers " +
+				"ADD COLUMN physical_schema_drift UInt8 DEFAULT 0",
+			restore: "ALTER TABLE open_splunk.recovery_archive_markers " +
+				"DROP COLUMN physical_schema_drift",
+		},
+		{
+			name: "unexpected fifth table",
 			apply: "CREATE TABLE open_splunk.physical_schema_drift " +
 				"(value UInt8) ENGINE = Memory",
 			restore: "DROP TABLE open_splunk.physical_schema_drift",

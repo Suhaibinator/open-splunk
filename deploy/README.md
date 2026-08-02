@@ -158,7 +158,7 @@ It runs as numeric UID/GID `101:101` with a read-only root filesystem, all
 capabilities dropped, `no-new-privileges`, private data/log volumes, and a
 UID-owned temporary filesystem.
 
-ClickHouse receives four generated password values because its official
+ClickHouse receives six distinct generated password values because its official
 initialization path must provision and rotate the principals. That hook does
 not receive source files or apply the application schema. The one-shot
 `clickhouse-migrator` uses the exact same prebuilt image as the server, mounts
@@ -173,9 +173,10 @@ The long-running Open Splunk server does not receive any ClickHouse password
 environment variable. It reads only the runtime and deletion credentials from
 separate bounded, no-follow, stable, read-only files and starts with embedded
 migrations disabled because successful completion of the one-shot migrator is
-a dependency. Neither the bootstrap nor migration credential is mounted into
-or passed to the long-running server. Shell ClickHouse clients consume
-passwords through their environment rather than command-line arguments.
+a dependency. The bootstrap, migration, backup, and restore credentials are
+never mounted into or passed to the long-running server. Shell ClickHouse
+clients consume passwords through their environment rather than command-line
+arguments.
 
 The production Compose file publishes no ClickHouse port. Its plaintext native
 port 9000 remains required by the official image's initialization path and is
@@ -186,11 +187,12 @@ solely for automated tests.
 
 ## ClickHouse principals and migrations
 
-Initialization creates four distinct identities:
+Initialization creates six distinct identities:
 
 - `open_splunk_bootstrap` is the deployment administrator. Its network
-  allowlist is loopback-only, so recovery runs with `docker compose exec
-  clickhouse ...`; the application never receives this credential.
+  allowlist is loopback-only, so direct administrative operations run with
+  `docker compose exec clickhouse ...`; neither the application nor the
+  recovery helpers receive this credential.
 - `open_splunk_migrator` can create only the embedded schema and migration
   ledger, and can inspect only the metadata needed to prove their exact
   definitions. It is used only by the exact-release one-shot migrator.
@@ -198,6 +200,24 @@ Initialization creates four distinct identities:
   index-statistics metadata.
 - `open_splunk_deletion` can submit and reconcile physical data deletion. Its
   event reads are restricted to the logical index identity columns.
+- `open_splunk_backup` can create a native backup of the release-owned
+  `open_splunk` database and inspect only the schema, visibility, and mutation
+  metadata needed to prove a quiescent source. Database-scoped `SHOW TABLES`
+  ensures administrator-owned extras cannot be hidden from the exact physical
+  schema check. Its only ordinary table
+  mutation authority is `INSERT`, `SELECT`, and `TRUNCATE` on the singleton
+  `recovery_archive_markers` table, used to bind one native archive and to
+  synchronously clear an interrupted backup marker.
+- `open_splunk_restore` can create only the canonical `open_splunk` database
+  and its four exact release-owned tables, inspect only the metadata and
+  bounded columns needed to validate the restored state, including scoped
+  `SHOW TABLES` visibility for administrator-owned extras, write its singleton
+  receipt, and consume its archive marker. Native `RESTORE` unavoidably
+  requires `INSERT` on each exact destination table; the principal receives no
+  raw event read, cannot truncate `events` or `schema_migrations`, and has no
+  broad table target. Event reads expose only `visibility_seq`. This credential
+  is used only by the one-shot recovery helper, is never mounted into the
+  long-running server, and should be rotated after the restore operation.
 
 ClickHouse 26.3 authorizes several partition operations through the same
 `ALTER DELETE` privilege. That unavoidable blast radius is why the deletion
@@ -205,28 +225,30 @@ connection is private to the fixed deletion Store path and is never shared
 with ingestion, search, export, or inspection.
 
 `clickhouse-init.sh` rejects every server version other than `26.3.17.4` and
-provisions or rotates all three service principals and their exact grants. The
-grants name their future database/table targets, so they can be installed
-before the schema exists. The hook runs on every ClickHouse container start;
-it never reads migration SQL. The image's passwordless base `default` user is
-removed.
+provisions or rotates all six principals. For every managed non-bootstrap
+principal, it first removes all prior direct privileges and role assignments,
+then reapplies the exact release allowlist. The grants name their future
+database/table targets, so they can be installed before the schema exists. The
+hook runs on every ClickHouse container start; it never reads migration SQL.
+The image's passwordless base `default` user is removed.
 
 After ClickHouse becomes healthy, `clickhouse-migrator` connects through
 verified native TLS and applies only the migrations embedded in its image.
 The runner accepts an existing ledger only when it is an exact prefix of that
 release, applies a pending suffix idempotently, records each ledger row last,
 and verifies the complete ledger afterward. Before reporting success it also
-requires the `open_splunk` table set to contain exactly `events` and
-`schema_migrations`, and compares both complete canonical
-`system.tables.create_table_query` definitions with the definitions produced by
-this pinned ClickHouse release. Missing or extra objects and any change to a
-column, type, default, codec, index, constraint, engine, key, TTL, or table
-setting fail even when the ledger is complete. Renamed, duplicate, gapped, or
-otherwise drifted history fails before DDL. An older image rejects a database
-migrated by a newer image; there is no automatic down-migration or schema
-rollback. The long-running server starts only after a zero exit and then
-validates the exact runtime and deletion grant allowlists before opening normal
-services. It has no migrator session or credential.
+requires the `open_splunk` table set to contain exactly `events`,
+`schema_migrations`, `recovery_archive_markers`, and `recovery_sets`, and
+compares all four complete
+canonical `system.tables.create_table_query` definitions with the definitions
+produced by this pinned ClickHouse release. Missing or extra objects and any
+change to a column, type, default, codec, index, constraint, engine, key, TTL,
+or table setting fail even when the ledger is complete. Renamed, duplicate,
+gapped, or otherwise drifted history fails before DDL. An older image rejects
+a database migrated by a newer image; there is no automatic down-migration or
+schema rollback. The long-running server starts only after a zero exit and
+then validates the exact runtime and deletion grant allowlists before opening
+normal services. It has no migrator session or credential.
 
 For an upgrade, build a new immutable server tag from the exact clean commit,
 change `OPEN_SPLUNK_SERVER_IMAGE` in `.env` to that tag, and run:
@@ -243,9 +265,9 @@ not an upgrade signal; use immutable tags, or deliberately add
 `--force-recreate` after verifying the tag contents.
 
 Credential rotation is coordinated. Atomically replace the migration, runtime,
-and deletion password files, update all four distinct 64-character hexadecimal
-password values in `.env`, then force-recreate `clickhouse`,
-`clickhouse-migrator`, and `server` in one operation:
+deletion, backup, and restore password files, update all six distinct
+64-character hexadecimal password values in `.env`, then force-recreate
+`clickhouse`, `clickhouse-migrator`, and `server` in one operation:
 
 ```sh
 docker compose up --detach --wait --no-build --force-recreate \
@@ -259,14 +281,21 @@ work. Do not rotate only one side of this boundary.
 
 ## State, restart, and cleanup
 
-The stack owns four named volumes:
+The stack owns seven named volumes:
 
 - `clickhouse-data`;
 - `clickhouse-logs`;
+- `clickhouse-recovery`, whose exact-ownership root holds ClickHouse-native
+  deployment recovery archives;
 - `server-state`, whose owner-only `private` child holds the administrator
-  token, master key, SQLite database, WAL, and singleton lock;
+  token, master key, SQLite database, WAL, and database-specific lock sidecar;
 - `server-exports`, whose owner-only `private` child holds bounded export
-  artifacts.
+  artifacts;
+- `server-recovery`, whose owner-only `private` child holds canonical outer
+  deployment recovery-set manifests and control-plane children; and
+- `server-lock`, whose owner-only `private` child holds the empty deployment
+  singleton lock shared by the long-running server and backup/restore helpers,
+  including when `server-state` is rebound to a fresh restore volume.
 
 `docker compose up --detach --wait` is safe to repeat. An unchanged successful
 one-shot migrator remains completed; changing the release image reruns it.
@@ -285,10 +314,310 @@ docker compose down
 ClickHouse and Open Splunk state and is appropriate only for a disposable
 stack.
 
+## Coordinated deployment recovery
+
+The supported recovery unit pairs the SQLite visibility/control plane with the
+ClickHouse event database. The `recovery` Compose profile provides five
+exact-release one-shot services:
+
+- `deployment-backup` runs `backup-deployment-recovery-set` against a stopped
+  server and a healthy, quiescent ClickHouse server;
+- `deployment-marker-reconcile` clears only an explicitly repeated, exact stale
+  source marker after the server and ClickHouse have been stopped and only
+  ClickHouse has been restarted;
+- `deployment-archive-delete` is a networkless UID-`101` archive-owner tool
+  for explicit, operator-attested deletion after a failed backup;
+- `deployment-verify` runs `verify-deployment-recovery-set` without a network,
+  application-state mount, CA, or credential; and
+- `deployment-restore` runs `restore-deployment-recovery-set` against fresh
+  ClickHouse and server-state volumes. During this lifecycle the production
+  `docker-compose.restore.yaml` overlay replaces ClickHouse's normal writable
+  recovery mount with the same named volume mounted read-only.
+
+Every recovery helper has a read-only root filesystem, drops all capabilities,
+uses `no-new-privileges`, has no host namespace or device authority, and
+disables the server image's inherited healthcheck. Backup, marker reconciliation,
+and restore mount the same retained `server-lock` volume as the long-running
+server and use its exact image-seeded lock path. Thus each command fails before
+opening ClickHouse if the original server still owns the deployment, even when
+restore uses a fresh `server-state` volume. At runtime, the configured lock parent must remain an
+owner-private `0700` real directory without an extended ACL, and the lock must
+remain an empty, single-link, effective-UID/GID-owned regular file with exact
+mode `0600`; pathname replacement or metadata drift fails closed.
+
+The outer recovery-set directory contains exactly `manifest.json` and an
+unchanged `control-plane` backup child. The ClickHouse-native
+`<recovery_set_id>.tar.zst` archive remains on the separate recovery disk. The
+canonical outer manifest binds the child manifest and external archive by
+exact name, size, and SHA-256, and also records the exact application release,
+migration identities, ClickHouse server version, source database/table UUIDs,
+maximum visibility sequence, native backup operation UUID, and the UUID of the
+release-owned archive-marker table. Verification
+recursively verifies the control-plane snapshot, master key, administrator
+token, outer manifest, archive bytes, and ownership metadata. Renaming,
+swapping, truncating, or combining members from different recovery sets fails
+closed.
+
+The recovery volumes have an exact identity contract. The image seeds
+`server-recovery/private` as UID/GID `65532:65532`, mode `0700`; recovery-set
+directories are mode `0700` and their files are mode `0600`. The networkless
+`clickhouse-recovery-volume-bootstrap` accepts either an empty root-owned named
+volume or an already prepared root, and prepares only that root as UID `101`,
+GID `65532`, mode `02750`. Every native archive must remain a single-link
+regular file owned by `101:65532` with mode `0640`. Do not change an archive to
+the Open Splunk UID when copying it. Preserve both recovery volumes, member
+names, and metadata as one off-host recovery set. Retain the separate
+`server-lock` volume for the deployment lifecycle; it contains no recovery
+payload, but it is the fence shared with the original server.
+
+`generate-env.sh` creates distinct bootstrap, migration, runtime, deletion,
+backup, and restore passwords. ClickHouse receives all six values so its
+startup hook can provision or rotate the exact principals. Backup and marker
+reconciliation receive only the read-only backup-password file and ClickHouse
+CA; restore receives only its read-only restore-password file and the CA. The
+verify helper receives neither, and the long-running server never receives
+either recovery credential or recovery-volume mount. Keep the generated
+password files in their owner-private host directory and never put a password
+in a command argument.
+
+### Create and verify a recovery set
+
+Choose a new path below `/var/lib/open-splunk/recovery/private` by setting
+`OPEN_SPLUNK_DEPLOYMENT_RECOVERY_SET_PATH` in `.env`. The default path is
+`/var/lib/open-splunk/recovery/private/deployment-recovery-set`; backup refuses
+to replace an existing destination or archive alias. Stop the server, then run
+backup and the independent networkless verification:
+
+```sh
+docker compose stop --timeout 40 server
+docker compose --profile recovery run --rm --no-deps deployment-backup
+docker compose --profile recovery run --rm --no-deps deployment-verify
+```
+
+Both successful commands are silent and exit with status zero. Backup holds
+the same retained deployment singleton lock as the server, rejects an active ClickHouse
+mutation, proves the exact source schema and migration ledger before and after
+the native backup, embeds an exact recovery-set/backup-operation marker inside
+the archive, clears that marker from the live source, and rejects any
+visibility or UUID identity change across the operation. A pre-publication
+diagnostic or nonzero exit means that attempt is not a usable recovery set. The
+normal backup helper deliberately sees
+the archive volume read-only and cannot delete any retained backup. If its
+diagnostic reports that exact cleanup of a newly created
+`<recovery_set_id>.tar.zst` archive failed, first verify that no recovery set
+was published by that attempt. Stop ClickHouse as well as the server, then
+copy that canonical archive name independently into both confirmations for the
+separate networkless destructive one-shot:
+
+```sh
+docker compose stop --timeout 40 clickhouse
+OPEN_SPLUNK_FAILED_RECOVERY_ARCHIVE_NAME=<recovery_set_id>.tar.zst \
+OPEN_SPLUNK_CONFIRMED_RECOVERY_ARCHIVE_NAME=<recovery_set_id>.tar.zst \
+  docker compose --profile recovery run --rm --no-deps \
+  deployment-archive-delete
+```
+
+An error explicitly reporting that outer publication already occurred is
+different: do not delete that archive. Preserve the outer directory and
+archive, then run `deployment-verify` independently. A zero verify retains a
+usable published set; a failed verify leaves an ambiguous pair that must be
+preserved for diagnosis rather than split or individually deleted.
+
+This command deliberately cannot infer whether an archive was published. The
+operator attests that the repeated exact name belongs to the failed attempt and
+must be destroyed; supplying the name of a published recovery set destroys its
+ClickHouse member. The tool runs as the fixed ClickHouse archive-owner UID,
+mounts only the recovery volume, has no network or secret, revalidates the exact
+root, file ownership, mode, link count, ACL, and pathname identity immediately
+before deletion, syncs and proves final absence, and is idempotent when the
+attested archive is already absent. It is supported only while ClickHouse is
+stopped, because POSIX has no atomic unlink-by-descriptor operation. After
+verified off-host retention, the original server may be restarted with:
+
+```sh
+docker compose up --detach --wait --no-build --no-deps clickhouse
+docker compose up --detach --wait --no-build --no-deps server
+```
+
+### Reconcile an interrupted source marker
+
+If a backup is interrupted after writing its source marker but before exact
+cleanup completes, later backups fail closed rather than overwrite the retained
+identity. Do not manually truncate `recovery_archive_markers`. Preserve the
+failed-attempt diagnostic containing the exact recovery-set ID and backup
+operation UUID.
+
+The retained host singleton lock fences the server and recovery helper
+processes, but it cannot cancel a native `BACKUP` that an earlier helper already
+submitted inside ClickHouse. Stop both the server and ClickHouse, then restart
+only ClickHouse before reconciliation. That restart is mandatory: it terminates
+any old server-side native backup before the marker can be cleared while the
+server remains fenced.
+
+```sh
+docker compose stop --timeout 40 server clickhouse
+docker compose up --detach --wait --no-build --no-deps clickhouse
+```
+
+Before clearing anything, use the loopback-only bootstrap principal from inside
+the ClickHouse container to inspect the confirmed operation UUID in
+`system.backups` and the exact singleton marker, and inventory the retained
+`clickhouse-recovery` volume. Confirm that no native backup remains active and
+preserve any archive plus any published outer recovery-set directory for
+independent verification. Reconciliation is not archive cleanup and cannot
+decide whether those retained bytes are published or disposable.
+
+```sh
+OPEN_SPLUNK_STALE_RECOVERY_SET_ID=<recovery_set_id> \
+OPEN_SPLUNK_CONFIRMED_STALE_RECOVERY_SET_ID=<recovery_set_id> \
+OPEN_SPLUNK_STALE_BACKUP_OPERATION_UUID=<backup_operation_uuid> \
+OPEN_SPLUNK_CONFIRMED_STALE_BACKUP_OPERATION_UUID=<backup_operation_uuid> \
+  docker compose --profile recovery run --rm --no-deps \
+  deployment-marker-reconcile
+```
+
+Copy both values independently into their confirmation variables. The helper
+acquires the retained singleton lock before reading credentials or opening a
+network connection, validates the exact backup-principal grant surface and
+canonical source, requires the exact marker, clears it synchronously, and
+proves absence. An already absent marker is an idempotent success only with
+valid exact confirmations. A wrong, malformed, or duplicate marker fails
+without mutation. The helper mounts no control state or recovery volume and
+does not inspect backup status, open an archive, or delete one. After a zero
+exit, either retry backup while the server remains stopped or restart the
+server. Preserve the database for diagnosis instead of guessing if the two
+marker identities cannot be established exactly.
+
+### Restore a recovery set
+
+Restore with the exact Open Splunk release recorded in the manifest. Retain
+the paired `server-recovery` and `clickhouse-recovery` volumes and the existing
+`server-lock` volume, but use fresh
+`clickhouse-data`, `clickhouse-logs`, `server-state`, and `server-exports`
+volumes. Rebind those four Compose volume keys to newly created named volumes,
+using the committed `docker-compose.recovery-target.yaml` binding file, while
+leaving both recovery volume keys and `server-lock` bound to the retained
+deployment. Keep this binding file in every Compose command for the full
+lifetime of the restored deployment; it is not a temporary restore overlay.
+Keep the original data volumes intact
+until the restored deployment passes validation. Do not start
+`clickhouse-migrator`, `server-bootstrap`, or `server` against the fresh
+volumes before restore: the final `open_splunk` database and all three
+control-plane files must be absent. The restore helper itself creates and
+exclusively holds the exact empty `open-splunk.db.server.lock` sidecar; that
+mode-`0600`, single-link, helper-owned inode is the only additional entry
+admitted in the fresh private state directory. Before opening ClickHouse, the
+helper verifies the control bundle and complete destination publication prefix,
+and proves that the lock pathname still names the descriptor it actually
+holds. Apply `docker-compose.recovery-target.yaml` after the base file, then
+apply `docker-compose.restore.yaml` for the entire restore lifecycle. The
+read-only overlay intentionally does not rebind the
+`clickhouse-recovery` volume; it changes only ClickHouse's mount mode, and the
+restore command refuses to issue native `RESTORE` unless `system.disks`
+attests the exact recovery disk path as read-only. Start only ClickHouse under
+that overlay so its recovery principals are initialized, verify the retained
+set again, and run restore:
+
+```sh
+docker volume create open-splunk-restored-clickhouse-data
+docker volume create open-splunk-restored-clickhouse-logs
+docker volume create open-splunk-restored-server-state
+docker volume create open-splunk-restored-server-exports
+
+export OPEN_SPLUNK_RECOVERY_CLICKHOUSE_DATA_VOLUME=open-splunk-restored-clickhouse-data
+export OPEN_SPLUNK_RECOVERY_CLICKHOUSE_LOGS_VOLUME=open-splunk-restored-clickhouse-logs
+export OPEN_SPLUNK_RECOVERY_SERVER_STATE_VOLUME=open-splunk-restored-server-state
+export OPEN_SPLUNK_RECOVERY_SERVER_EXPORTS_VOLUME=open-splunk-restored-server-exports
+
+docker compose -f docker-compose.yaml -f docker-compose.recovery-target.yaml -f docker-compose.restore.yaml \
+  up --detach --wait --no-build --no-deps clickhouse
+docker compose -f docker-compose.yaml -f docker-compose.recovery-target.yaml -f docker-compose.restore.yaml \
+  --profile recovery run --rm --no-deps deployment-verify
+docker compose -f docker-compose.yaml -f docker-compose.recovery-target.yaml -f docker-compose.restore.yaml \
+  --profile recovery run --rm --no-deps deployment-restore
+```
+
+Use deployment-unique volume names, independently verify that all four volumes
+are new and empty, and retain the four exported bindings in the deployment's
+managed environment. `external: true` makes a typo or missing volume fail
+instead of silently allocating a different target.
+
+Restore verifies the complete set before mutation. Before issuing native
+`RESTORE`, the command enumerates the bounded `open_splunk*` database namespace
+and requires the canonical `open_splunk` database to be absent; every archive,
+recovery, foreign reserved alias, or other prefixed database requires a
+fresh ClickHouse data volume. ClickHouse restores the archive directly into
+`open_splunk`. The command then rehashes and revalidates the complete recovery
+set, requires the exact original manifest and archive digest, and validates the
+canonical database's exact physical schema, migration ledger, server version,
+visibility boundary, and lack of active mutations.
+
+The exact archive-embedded recovery-set/backup-operation marker must be present
+before receipt publication, so a same-name archive mounted into the helper but
+different bytes mounted into ClickHouse cannot pass. Native `RESTORE ... AS`
+intentionally creates fresh database and table UUIDs; the source UUIDs in the
+outer manifest are provenance, not the expected restored UUIDs. The command
+records the actual fresh UUIDs, including the marker-table UUID, in a durable
+`recovery_sets` receipt bound to the recovery-set ID and outer-manifest SHA-256.
+Only after that exact receipt is readable and revalidated does restore consume
+the marker synchronously and prove its absence. There is no staging database,
+rename, or promotion step.
+
+ClickHouse native restore is not transactional. An unreceipted or mismatched
+canonical database fails closed and requires another fresh ClickHouse data
+volume. Only an exact receipted canonical database is resumable: a retry may
+consume the still-exact marker after an interruption between receipt and
+cleanup, or require it already absent after cleanup completed. Once the
+canonical database and receipt are fully revalidated, the command closes its
+restore session before restoring the control plane in the only allowed
+publication order: SQLite database, master key, then administrator token. If that final
+phase is interrupted, rerunning the same deployment restore revalidates the
+ClickHouse receipt and resumes only an exact prefix of those three files.
+Both the preflight and final control restore bind the recursively verified
+child to the outer recovery-set ID and child-manifest SHA-256, so replacing it
+with another same-release bundle after ClickHouse completion still fails before
+any control target is mutated.
+Every control-plane staging and publication boundary also revalidates that the
+database-lock pathname still names the held inode; replacement, removal,
+hard-linking, permission drift, or nonempty lock content fails closed.
+
+Because ClickHouse authorization requires `INSERT` on every exact destination
+table during native restore, treat the restore credential as an exposed
+one-shot capability even though its table names and reads are tightly bounded.
+Rotate its password after the one-shot restore before returning the deployment
+to ordinary service. Revocation is not a supported substitute: the deliberate
+restart initialization hook recreates the principal and its exact grants.
+
+The base `docker-compose.yaml` deliberately keeps ClickHouse's recovery mount
+writable so a later stopped-server backup can create a new native archive; the
+backup and restore helper mounts remain read-only. Do not use a base-only
+ClickHouse topology for this restored deployment. Retain both the fresh-volume
+binding and read-only restore overlay while the restored deployment is being
+validated. Before a future backup, recreate ClickHouse with the base file and
+the retained recovery-target binding, dropping only the restore overlay, to
+return only ClickHouse's recovery mount to its normal writable mode.
+
+After a successful restore, use the exact-release migrator to verify the
+restored schema, then start the server directly from restored state. Do not run
+`server-bootstrap`, because doing so could mask a missing restored
+administrator token.
+
+```sh
+docker compose -f docker-compose.yaml -f docker-compose.recovery-target.yaml -f docker-compose.restore.yaml \
+  run --rm --no-deps clickhouse-migrator
+docker compose -f docker-compose.yaml -f docker-compose.recovery-target.yaml -f docker-compose.restore.yaml \
+  up --detach --wait --no-build --no-deps server
+```
+
+Export artifacts are deliberately outside the deployment recovery set. They
+may be recreated by rerunning their source searches.
+
+### Lower-level control-plane-only commands
+
 Hot-copying the SQLite database, WAL, or sidecar files is not a supported
-backup. Stop the Open Splunk server before creating or restoring a
-control-plane bundle. Use the same `open-splunk-server` release for all three
-operations.
+backup. The same release still provides lower-level control-plane-only
+commands for maintenance that intentionally does not claim deployment
+recovery. Stop the Open Splunk server before using them.
 
 Create a bundle at a destination which does not already exist. Its existing
 parent directory must be owned by the command user with mode `0700`:
@@ -339,22 +668,12 @@ key without its database, a token without both predecessors, a SQLite sidecar,
 or an unrelated directory entry fails closed. Do not repair a partial restore
 by copying files manually.
 
-> **Coordinated-recovery warning:** A control-plane bundle is not a deployment
-> backup. It contains neither ClickHouse event data nor export artifacts. The
-> SQLite visibility ledger and the ClickHouse events table form one recovery
-> unit. Create this bundle only while the Open Splunk server is stopped, pair
-> it with a ClickHouse-native backup taken during the same quiescent interval,
-> and restore both members together. Record the bundle manifest's
-> `recovery_set_id` with that ClickHouse backup. Restoring this bundle against
-> an independently advanced, older, or different ClickHouse data set is
-> unsupported and can make acknowledged events invisible, reuse visibility
-> identities, or revive stale deletion state. The control-plane commands
-> cannot verify that external pairing.
-
-Export artifacts are deliberately outside this recovery bundle and may be
-recreated by rerunning their source searches. This procedure establishes only
-the control-plane member of a coordinated recovery set; it does not claim a
-complete disaster-recovery procedure.
+> **Control-plane-only warning:** These commands contain no ClickHouse event
+> data and are not deployment backup/restore commands. Use the coordinated
+> recovery-set commands above whenever deployment recovery is intended. Never
+> pair a control-plane-only bundle manually with an independently advanced,
+> older, or different ClickHouse data set; doing so can hide acknowledged
+> events, reuse visibility identities, or revive stale deletion state.
 
 ## Collector image
 

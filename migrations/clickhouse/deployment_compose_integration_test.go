@@ -28,6 +28,9 @@ const (
 	composeMigrationUsername              = "open_splunk_migrator"
 	composeRuntimeUsername                = "open_splunk_runtime"
 	composeDeletionUsername               = "open_splunk_deletion"
+	composeBackupUsername                 = "open_splunk_backup"
+	composeRestoreUsername                = "open_splunk_restore"
+	composeExcessRoleName                 = "open_splunk_integration_excess_role"
 	maximumDeploymentComposeCommandOutput = 1 << 20
 )
 
@@ -42,6 +45,34 @@ func TestDeploymentComposeOutputBufferIsBounded(t *testing.T) {
 	captured, truncated := output.snapshot()
 	if string(captured) != "abcd" || !truncated {
 		t.Fatalf("snapshot() = (%q, %t), want (abcd, true)", captured, truncated)
+	}
+}
+
+func TestDeploymentComposeRecoveryBootstrapOverrideContract(t *testing.T) {
+	t.Parallel()
+
+	override := readFile(
+		t,
+		filepath.Join(deploymentDirectory(t), "docker-compose.integration.yaml"),
+	)
+	for _, fragment := range []string{
+		"clickhouse-recovery-volume-bootstrap:",
+		"image: " + testsupport.DefaultClickHouseImage,
+		"pull_policy: missing",
+		"user: \"0:65532\"",
+		"entrypoint:",
+		"- /bin/sh",
+		"chown 101:65532 /var/lib/open-splunk/clickhouse-backups",
+		"chmod 2750 /var/lib/open-splunk/clickhouse-backups",
+	} {
+		if !strings.Contains(override, fragment) {
+			t.Errorf("Compose integration recovery bootstrap is missing %q", fragment)
+		}
+	}
+	for _, prohibited := range []string{"chmod -R", "chown -R", ":latest", ":lts"} {
+		if strings.Contains(override, prohibited) {
+			t.Errorf("Compose integration recovery bootstrap contains %q", prohibited)
+		}
 	}
 }
 
@@ -140,6 +171,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 	firstDataVolume := inspectComposeDataVolume(t, ctx, firstContainerID)
 	firstAddress := stack.publishedAddress(t, ctx, firstContainerID, "9440")
 
+	verifyComposeRecoveryVolumeOwnership(t, ctx, stack)
 	verifyComposeBootstrapBoundary(t, ctx, stack, firstAddress)
 	verifyComposeTLSBoundary(t, ctx, stack, firstAddress)
 	markerEventID := "compose-persistence-" + randomHex(t, 8)
@@ -152,6 +184,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 		markerEventID,
 		true,
 	)
+	seedComposeExcessPrincipalAuthority(t, ctx, stack, firstAddress)
 
 	oldCredentials := stack.credentials
 	stack.credentials = newDeploymentComposeCredentials(
@@ -192,6 +225,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 	}
 	secondAddress := stack.publishedAddress(t, ctx, secondContainerID, "9440")
 
+	verifyComposeRecoveryVolumeOwnership(t, ctx, stack)
 	expectComposeBootstrapPasswordRejected(
 		t,
 		ctx,
@@ -215,6 +249,7 @@ func TestDeploymentComposePersistentCredentialRotation(t *testing.T) {
 		markerEventID,
 		false,
 	)
+	verifyComposeExcessPrincipalAuthorityRemoved(t, ctx, stack, secondAddress)
 }
 
 type deploymentComposeCredentials struct {
@@ -222,6 +257,8 @@ type deploymentComposeCredentials struct {
 	migrationPassword string
 	runtimePassword   string
 	deletionPassword  string
+	backupPassword    string
+	restorePassword   string
 }
 
 type deploymentComposeClientTLSIdentity struct {
@@ -258,12 +295,16 @@ func generateDeploymentComposeEnvironment(
 		migrationPassword: values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"],
 		runtimePassword:   values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD"],
 		deletionPassword:  values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD"],
+		backupPassword:    values["OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD"],
+		restorePassword:   values["OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD"],
 	}
 	for name, password := range map[string]string{
 		"bootstrap": credentials.bootstrapPassword,
 		"migration": credentials.migrationPassword,
 		"runtime":   credentials.runtimePassword,
 		"deletion":  credentials.deletionPassword,
+		"backup":    credentials.backupPassword,
+		"restore":   credentials.restorePassword,
 	} {
 		if len(password) != 64 || strings.Trim(password, "0123456789abcdef") != "" {
 			t.Fatalf("generated deployment %s password is invalid", name)
@@ -283,7 +324,7 @@ func newDeploymentComposeCredentials(
 	excluded map[string]struct{},
 ) deploymentComposeCredentials {
 	t.Helper()
-	used := make(map[string]struct{}, len(excluded)+4)
+	used := make(map[string]struct{}, len(excluded)+6)
 	for password := range excluded {
 		used[password] = struct{}{}
 	}
@@ -302,6 +343,8 @@ func newDeploymentComposeCredentials(
 		migrationPassword: nextPassword(),
 		runtimePassword:   nextPassword(),
 		deletionPassword:  nextPassword(),
+		backupPassword:    nextPassword(),
+		restorePassword:   nextPassword(),
 	}
 }
 
@@ -311,6 +354,8 @@ func (credentials deploymentComposeCredentials) passwordSet() map[string]struct{
 		credentials.migrationPassword: {},
 		credentials.runtimePassword:   {},
 		credentials.deletionPassword:  {},
+		credentials.backupPassword:    {},
+		credentials.restorePassword:   {},
 	}
 }
 
@@ -408,6 +453,8 @@ func (stack *deploymentComposeStack) environment(
 	values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"] = stack.credentials.migrationPassword
 	values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD"] = stack.credentials.runtimePassword
 	values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD"] = stack.credentials.deletionPassword
+	values["OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD"] = stack.credentials.backupPassword
+	values["OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD"] = stack.credentials.restorePassword
 	values["OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT"] = "0"
 	values["OPEN_SPLUNK_SERVER_HTTP_PORT"] = "0"
 	values["OPEN_SPLUNK_SERVER_GRPC_PORT"] = "0"
@@ -501,18 +548,20 @@ func (stack *deploymentComposeStack) publishedAddress(
 func requireDigestPinnedComposeImage(t *testing.T, output string) {
 	t.Helper()
 	images := strings.Fields(output)
-	if len(images) != 1 {
-		t.Fatalf("Docker Compose images = %q, want exactly one ClickHouse image", output)
+	if len(images) == 0 {
+		t.Fatal("Docker Compose resolved no images for ClickHouse and its dependencies")
 	}
-	image := images[0]
-	digestIndex := strings.LastIndex(image, "@sha256:")
-	if digestIndex <= 0 ||
-		len(image[digestIndex+len("@sha256:"):]) != 64 ||
-		strings.Trim(image[digestIndex+len("@sha256:"):], "0123456789abcdef") != "" {
-		t.Fatalf(
-			"deploy/docker-compose.yaml image must be digest-pinned, got %q",
-			image,
-		)
+	for _, image := range images {
+		digestIndex := strings.LastIndex(image, "@sha256:")
+		if image != testsupport.DefaultClickHouseImage || digestIndex <= 0 ||
+			len(image[digestIndex+len("@sha256:"):]) != 64 ||
+			strings.Trim(image[digestIndex+len("@sha256:"):], "0123456789abcdef") != "" {
+			t.Fatalf(
+				"ClickHouse integration image must use the exact digest pin %q, got %q",
+				testsupport.DefaultClickHouseImage,
+				image,
+			)
+		}
 	}
 }
 
@@ -549,6 +598,32 @@ func inspectComposeDataVolume(
 		)
 	}
 	return strings.TrimPrefix(mount, volumePrefix)
+}
+
+func verifyComposeRecoveryVolumeOwnership(
+	t *testing.T,
+	ctx context.Context,
+	stack *deploymentComposeStack,
+) {
+	t.Helper()
+	const recoveryPath = "/var/lib/open-splunk-clickhouse-backups"
+	ownership := stack.mustRun(
+		t,
+		ctx,
+		"inspect ClickHouse recovery volume ownership",
+		"exec",
+		"--no-TTY",
+		"clickhouse",
+		"stat",
+		"--format=%u:%g:%a",
+		recoveryPath,
+	)
+	if ownership != "101:65532:2750" {
+		t.Fatalf(
+			"ClickHouse recovery volume ownership and mode = %q, want 101:65532:2750",
+			ownership,
+		)
+	}
 }
 
 func verifyComposeBootstrapBoundary(
@@ -604,6 +679,104 @@ func verifyComposeBootstrapBoundary(
 			"bootstrap docker compose exec query = %q, want 1",
 			strings.TrimSpace(string(output)),
 		)
+	}
+}
+
+func seedComposeExcessPrincipalAuthority(
+	t *testing.T,
+	ctx context.Context,
+	stack *deploymentComposeStack,
+	address string,
+) {
+	t.Helper()
+	stack.mustRun(
+		t,
+		ctx,
+		"seed excess direct and role-derived runtime authority",
+		"exec",
+		"--no-TTY",
+		"clickhouse",
+		"clickhouse-client",
+		"--host",
+		"127.0.0.1",
+		"--user",
+		composeBootstrapUsername,
+		"--multiquery",
+		"--query",
+		"CREATE ROLE "+composeExcessRoleName+"; "+
+			"GRANT DROP TABLE ON open_splunk.events TO "+composeRuntimeUsername+"; "+
+			"GRANT SELECT ON system.users TO "+composeExcessRoleName+"; "+
+			"GRANT "+composeExcessRoleName+" TO "+composeRuntimeUsername,
+	)
+
+	connection := openDeploymentComposeConnection(
+		t,
+		address,
+		"open_splunk",
+		composeRuntimeUsername,
+		stack.credentials.runtimePassword,
+		stack.clientTLSConfig(),
+	)
+	defer closeDeploymentComposeConnection(t, "excess-authority runtime", connection)
+	assertComposeGrantCheck(t, ctx, connection, "DROP TABLE ON open_splunk.events", 1)
+	assertComposeGrantCheck(t, ctx, connection, "SELECT ON system.users", 1)
+}
+
+func verifyComposeExcessPrincipalAuthorityRemoved(
+	t *testing.T,
+	ctx context.Context,
+	stack *deploymentComposeStack,
+	address string,
+) {
+	t.Helper()
+	connection := openDeploymentComposeConnection(
+		t,
+		address,
+		"open_splunk",
+		composeRuntimeUsername,
+		stack.credentials.runtimePassword,
+		stack.clientTLSConfig(),
+	)
+	defer closeDeploymentComposeConnection(t, "reset-authority runtime", connection)
+	assertComposeGrantCheck(t, ctx, connection, "DROP TABLE ON open_splunk.events", 0)
+	assertComposeGrantCheck(t, ctx, connection, "SELECT ON system.users", 0)
+
+	roleGrants := stack.mustRun(
+		t,
+		ctx,
+		"prove stale runtime role assignment was removed",
+		"exec",
+		"--no-TTY",
+		"clickhouse",
+		"clickhouse-client",
+		"--host",
+		"127.0.0.1",
+		"--user",
+		composeBootstrapUsername,
+		"--query",
+		"SELECT count() FROM system.role_grants WHERE user_name = '"+
+			composeRuntimeUsername+"' AND granted_role_name = '"+
+			composeExcessRoleName+"' FORMAT TSVRaw",
+	)
+	if roleGrants != "0" {
+		t.Fatalf("stale runtime role assignment count = %q, want 0", roleGrants)
+	}
+}
+
+func assertComposeGrantCheck(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	grant string,
+	want uint8,
+) {
+	t.Helper()
+	var got uint8
+	if err := connection.QueryRow(ctx, "CHECK GRANT "+grant).Scan(&got); err != nil {
+		t.Fatalf("check deployment principal grant %q: %v", grant, err)
+	}
+	if got != want {
+		t.Fatalf("deployment principal grant %q = %d, want %d", grant, got, want)
 	}
 }
 
@@ -882,6 +1055,38 @@ func validateComposePrincipalsAndSchema(
 		t.Fatalf("validate deployment deletion principal: %v", err)
 	}
 
+	backupConnection := openDeploymentComposeConnection(
+		t,
+		address,
+		"open_splunk",
+		composeBackupUsername,
+		credentials.backupPassword,
+		stack.clientTLSConfig(),
+	)
+	defer closeDeploymentComposeConnection(t, "backup", backupConnection)
+	if err := backupConnection.Ping(ctx); err != nil {
+		t.Fatalf("ping deployment backup principal: %v", err)
+	}
+	if err := server.ValidateClickHouseBackupPrivileges(ctx, backupConnection); err != nil {
+		t.Fatalf("validate deployment backup principal: %v", err)
+	}
+
+	restoreConnection := openDeploymentComposeConnection(
+		t,
+		address,
+		"default",
+		composeRestoreUsername,
+		credentials.restorePassword,
+		stack.clientTLSConfig(),
+	)
+	defer closeDeploymentComposeConnection(t, "restore", restoreConnection)
+	if err := restoreConnection.Ping(ctx); err != nil {
+		t.Fatalf("ping deployment restore principal: %v", err)
+	}
+	if err := server.ValidateClickHouseRestorePrivileges(ctx, restoreConnection); err != nil {
+		t.Fatalf("validate deployment restore principal: %v", err)
+	}
+
 	const (
 		markerTenant = "compose-persistence-tenant"
 		markerIndex  = "compose-persistence-index"
@@ -954,6 +1159,16 @@ func expectComposePrincipalCredentialsRejected(
 			name:     composeDeletionUsername,
 			database: "open_splunk",
 			password: credentials.deletionPassword,
+		},
+		{
+			name:     composeBackupUsername,
+			database: "open_splunk",
+			password: credentials.backupPassword,
+		},
+		{
+			name:     composeRestoreUsername,
+			database: "default",
+			password: credentials.restorePassword,
 		},
 	} {
 		connection := openDeploymentComposeConnection(

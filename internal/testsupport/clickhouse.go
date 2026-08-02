@@ -711,6 +711,8 @@ GRANT CREATE DATABASE ON open_splunk.* TO open_splunk_migrator;
 GRANT SHOW TABLES ON open_splunk.* TO open_splunk_migrator;
 GRANT CREATE TABLE ON open_splunk.schema_migrations TO open_splunk_migrator;
 GRANT CREATE TABLE ON open_splunk.events TO open_splunk_migrator;
+GRANT CREATE TABLE ON open_splunk.recovery_sets TO open_splunk_migrator;
+GRANT CREATE TABLE ON open_splunk.recovery_archive_markers TO open_splunk_migrator;
 GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX ON open_splunk.events TO open_splunk_migrator;
 GRANT SELECT ON system.tables TO open_splunk_migrator;
 GRANT SELECT, INSERT ON open_splunk.schema_migrations TO open_splunk_migrator;

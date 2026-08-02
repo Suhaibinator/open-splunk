@@ -617,6 +617,52 @@ func TestRenameNoReplaceIsAtomicUnderConcurrency(t *testing.T) {
 	}
 }
 
+func TestRenameNoReplaceFailureClassificationDrivesOutcomeAndPublicError(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name          string
+		err           error
+		wantClass     renameNoReplaceFailure
+		wantPublicErr error
+		wantUnchanged bool
+	}{
+		{
+			name:          "destination exists",
+			err:           unix.EEXIST,
+			wantClass:     renameNoReplaceFailureDestinationExists,
+			wantPublicErr: ErrDestinationExists,
+			wantUnchanged: true,
+		},
+		{
+			name:          "unsupported",
+			err:           unix.ENOSYS,
+			wantClass:     renameNoReplaceFailureUnsupported,
+			wantPublicErr: ErrUnsupportedPlatform,
+			wantUnchanged: true,
+		},
+		{
+			name:          "ambiguous syscall failure",
+			err:           unix.EIO,
+			wantClass:     renameNoReplaceFailureOther,
+			wantPublicErr: unix.EIO,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if got := classifyRenameNoReplaceFailure(testCase.err); got != testCase.wantClass {
+				t.Fatalf("failure class = %d, want %d", got, testCase.wantClass)
+			}
+			if got := definitivelyUnchangedRenameError(testCase.err); got != testCase.wantUnchanged {
+				t.Fatalf("definitively unchanged = %t, want %t", got, testCase.wantUnchanged)
+			}
+			if err := renameNoReplaceError("destination", testCase.err); !errors.Is(err, testCase.wantPublicErr) {
+				t.Fatalf("public error = %v, want errors.Is(_, %v)", err, testCase.wantPublicErr)
+			}
+		})
+	}
+}
+
 func TestRenameNoReplacePreservesEveryExistingDestinationKind(t *testing.T) {
 	t.Parallel()
 
@@ -702,6 +748,192 @@ func TestRenameNoReplaceAcrossPinnedDirectories(t *testing.T) {
 	}
 }
 
+func TestRenameNoReplaceWithStatusReportsCompletedRenameBeforeStabilityFailure(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	path, directory := openTestDirectory(t)
+	source := createPinnedSourceDirectory(t, path)
+	movedPath := path + ".moved"
+	outcome, err := directory.renameNoReplaceWithStatus(
+		"source",
+		source,
+		directory,
+		"destination",
+		func(fromDirectory int, from string, toDirectory int, to string) error {
+			if err := renameNoReplaceAt(fromDirectory, from, toDirectory, to); err != nil {
+				return err
+			}
+			if err := os.Rename(path, movedPath); err != nil {
+				return err
+			}
+			return os.Mkdir(path, 0o700)
+		},
+	)
+	if outcome != RenameNoReplaceCompleted {
+		t.Fatalf("completed no-replace rename outcome = %v", outcome)
+	}
+	if err == nil || !strings.Contains(err.Error(), "directory stability") {
+		t.Fatalf("RenameNoReplaceWithStatus error = %v, want stability failure", err)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(movedPath, "destination", "payload"))
+	if readErr != nil {
+		t.Fatalf("read renamed destination: %v", readErr)
+	}
+	if string(contents) != "payload" {
+		t.Fatalf("renamed destination contents = %q", contents)
+	}
+}
+
+func TestRenameNoReplaceWithStatusRecognizesErrorAfterCommit(t *testing.T) {
+	t.Parallel()
+
+	path, directory := openTestDirectory(t)
+	source := createPinnedSourceDirectory(t, path)
+	outcome, err := directory.renameNoReplaceWithStatus(
+		"source",
+		source,
+		directory,
+		"destination",
+		func(fromDirectory int, from string, toDirectory int, to string) error {
+			if err := renameNoReplaceAt(fromDirectory, from, toDirectory, to); err != nil {
+				return err
+			}
+			return unix.EIO
+		},
+	)
+	if outcome != RenameNoReplaceCompleted {
+		t.Fatalf("error-after-commit outcome = %v, want completed", outcome)
+	}
+	if !errors.Is(err, unix.EIO) {
+		t.Fatalf("error-after-commit error = %v, want EIO", err)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(path, "destination", "payload"))
+	if readErr != nil {
+		t.Fatalf("read committed destination: %v", readErr)
+	}
+	if string(contents) != "payload" {
+		t.Fatalf("committed destination contents = %q", contents)
+	}
+}
+
+func TestRenameNoReplaceWithStatusPreservesAmbiguousMutation(t *testing.T) {
+	t.Parallel()
+
+	path, directory := openTestDirectory(t)
+	source := createPinnedSourceDirectory(t, path)
+	outcome, err := directory.renameNoReplaceWithStatus(
+		"source",
+		source,
+		directory,
+		"destination",
+		func(fromDirectory int, from string, _ int, _ string) error {
+			if err := renameNoReplaceAt(fromDirectory, from, fromDirectory, "third"); err != nil {
+				return err
+			}
+			return unix.EIO
+		},
+	)
+	if outcome != RenameNoReplaceAmbiguous {
+		t.Fatalf("unresolved mutation outcome = %v, want ambiguous", outcome)
+	}
+	if !errors.Is(err, unix.EIO) {
+		t.Fatalf("ambiguous mutation error = %v, want EIO", err)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(path, "third", "payload"))
+	if readErr != nil {
+		t.Fatalf("read ambiguously moved source: %v", readErr)
+	}
+	if string(contents) != "payload" {
+		t.Fatalf("ambiguously moved contents = %q", contents)
+	}
+}
+
+func TestRenameNoReplaceWithStatusBindsPinnedStageBeforeSyscall(t *testing.T) {
+	t.Parallel()
+
+	path, directory := openTestDirectory(t)
+	source := createPinnedSourceDirectory(t, path)
+	if err := directory.RenameNoReplace("source", directory, "destination"); err != nil {
+		t.Fatal(err)
+	}
+	mustMkdir(t, filepath.Join(path, "source"), 0o700)
+	operationCalled := false
+	outcome, err := directory.renameNoReplaceWithStatus(
+		"source",
+		source,
+		directory,
+		"destination",
+		func(_ int, _ string, _ int, _ string) error {
+			operationCalled = true
+			return nil
+		},
+	)
+	if operationCalled {
+		t.Fatal("rename syscall ran after the stage source name was replaced")
+	}
+	if outcome != RenameNoReplaceCompleted {
+		t.Fatalf("displaced stage outcome = %v, want completed", outcome)
+	}
+	if err == nil || !strings.Contains(err.Error(), "pinned stage") {
+		t.Fatalf("displaced stage error = %v", err)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(path, "destination", "payload"))
+	if readErr != nil {
+		t.Fatalf("read displaced published stage: %v", readErr)
+	}
+	if string(contents) != "payload" {
+		t.Fatalf("displaced published stage contents = %q", contents)
+	}
+}
+
+func TestRenameNoReplaceWithStatusPreservesStageAfterParentStabilityFailure(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	path, directory := openTestDirectory(t)
+	source := createPinnedSourceDirectory(t, path)
+	if err := directory.RenameNoReplace("source", directory, "destination"); err != nil {
+		t.Fatal(err)
+	}
+	movedPath := path + ".moved"
+	if err := os.Rename(path, movedPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	operationCalled := false
+	outcome, err := directory.renameNoReplaceWithStatus(
+		"source",
+		source,
+		directory,
+		"destination",
+		func(_ int, _ string, _ int, _ string) error {
+			operationCalled = true
+			return nil
+		},
+	)
+	if operationCalled {
+		t.Fatal("rename syscall ran after parent stability failed")
+	}
+	if outcome != RenameNoReplaceAmbiguous {
+		t.Fatalf("unstable-parent outcome = %v, want ambiguous", outcome)
+	}
+	if err == nil || !strings.Contains(err.Error(), "revalidate private directory") {
+		t.Fatalf("unstable-parent error = %v", err)
+	}
+	contents, readErr := os.ReadFile(filepath.Join(movedPath, "destination", "payload"))
+	if readErr != nil {
+		t.Fatalf("read publication after parent stability failure: %v", readErr)
+	}
+	if string(contents) != "payload" {
+		t.Fatalf("publication after parent stability failure = %q", contents)
+	}
+}
+
 func TestClosedDirectoryFailsClosed(t *testing.T) {
 	t.Parallel()
 
@@ -749,6 +981,23 @@ func openTestDirectory(t *testing.T) (string, *Directory) {
 		}
 	})
 	return path, directory
+}
+
+func createPinnedSourceDirectory(t *testing.T, parent string) *Directory {
+	t.Helper()
+	path := filepath.Join(parent, "source")
+	mustMkdir(t, path, 0o700)
+	mustWriteFile(t, filepath.Join(path, "payload"), []byte("payload"), 0o600)
+	directory, err := OpenDirectory(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := directory.Close(); err != nil {
+			t.Errorf("close pinned source directory: %v", err)
+		}
+	})
+	return directory
 }
 
 func sequenceGenerator(names ...string) NameGenerator {

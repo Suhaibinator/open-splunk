@@ -125,6 +125,34 @@ func TestFieldMetadataMigrationContract(t *testing.T) {
 	}
 }
 
+func TestRecoverySetsMigrationContract(t *testing.T) {
+	t.Parallel()
+	sql := readFile(t, "0004_create_recovery_sets.sql")
+	for _, fragment := range []string{
+		"CREATE TABLE IF NOT EXISTS open_splunk.recovery_sets",
+		"`slot` UInt8",
+		"`recovery_set_id` FixedString(32)",
+		"`deployment_manifest_sha256` FixedString(64)",
+		"`database_uuid` UUID",
+		"`schema_migrations_table_uuid` UUID",
+		"`events_table_uuid` UUID",
+		"`recovery_sets_table_uuid` UUID",
+		"`recovery_archive_markers_table_uuid` UUID",
+		"`restored_at` DateTime64(3, 'UTC')",
+		"CREATE TABLE IF NOT EXISTS open_splunk.recovery_archive_markers",
+		"`backup_operation_uuid` UUID",
+		"CONSTRAINT slot_is_singleton CHECK `slot` = 1",
+		"ENGINE = MergeTree",
+		"ORDER BY (`slot`)",
+		"SELECT 4, 'create_recovery_sets'",
+		"WHERE `version` = 4",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("recovery sets migration is missing contract fragment %q", fragment)
+		}
+	}
+}
+
 func TestComposeFullStackSecurityContract(t *testing.T) {
 	compose := readFile(t, filepath.Join("..", "..", "deploy", "docker-compose.yaml"))
 
@@ -194,9 +222,11 @@ func TestComposeFullStackSecurityContract(t *testing.T) {
 		"healthcheck",
 		"https://127.0.0.1:8080/readyz",
 		"server-state:/var/lib/open-splunk/state",
+		"server-lock:/var/lib/open-splunk/lock",
 		"server-exports:/var/lib/open-splunk/exports",
 		"internal: true",
 		"TMPDIR: /tmp",
+		"OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH: /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock",
 	} {
 		if !strings.Contains(compose, fragment) {
 			t.Errorf("deployment compose file is missing safety contract fragment %q", fragment)
@@ -258,7 +288,11 @@ func TestComposeFullStackSecurityContract(t *testing.T) {
 	if serverStart < 0 {
 		t.Fatal("deployment compose file has no server service")
 	}
-	bootstrapSection := compose[bootstrapStart:serverStart]
+	recoveryStart := strings.Index(compose, "\n  deployment-backup:\n")
+	if recoveryStart <= bootstrapStart || recoveryStart >= serverStart {
+		t.Fatal("deployment compose file has no bounded recovery-profile services")
+	}
+	bootstrapSection := compose[bootstrapStart:recoveryStart]
 	for _, fragment := range []string{
 		"*open-splunk-server-security",
 		"network_mode: none",
@@ -283,6 +317,7 @@ func TestComposeFullStackSecurityContract(t *testing.T) {
 		"-administrator-token-file\n      - /var/lib/open-splunk/state/private/administrator.token",
 		"-export-artifact-dir\n      - /var/lib/open-splunk/exports/private",
 		"- server-state:/var/lib/open-splunk/state",
+		"- server-lock:/var/lib/open-splunk/lock",
 		"- server-exports:/var/lib/open-splunk/exports",
 	} {
 		if !strings.Contains(serverSection, fragment) {
@@ -392,6 +427,8 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD",
 	} {
 		if password := values[name]; len(password) != 64 ||
 			strings.Trim(password, "0123456789abcdef") != "" {
@@ -399,7 +436,9 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 		}
 	}
 	for role, variable := range map[string]string{
+		"backup":    "OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE",
 		"migration": "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE",
+		"restore":   "OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD_FILE",
 		"runtime":   "OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD_FILE",
 		"deletion":  "OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD_FILE",
 	} {
@@ -539,6 +578,8 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 		"migration": values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"],
 		"runtime":   values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD"],
 		"deletion":  values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD"],
+		"backup":    values["OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD"],
+		"restore":   values["OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD"],
 	} {
 		if administratorToken == password {
 			t.Fatalf("administrator token duplicates the %s ClickHouse password", name)
@@ -561,6 +602,8 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 		"migration password":  values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE"],
 		"runtime password":    values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD_FILE"],
 		"deletion password":   values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD_FILE"],
+		"backup password":     values["OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE"],
+		"restore password":    values["OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD_FILE"],
 	} {
 		info, err := os.Stat(path)
 		if err != nil {
@@ -592,8 +635,10 @@ func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 	wantedTLSFiles := []string{
 		"administrator.token",
 		"ca.crt",
+		"clickhouse-backup.password",
 		"clickhouse-deletion.password",
 		"clickhouse-migration.password",
+		"clickhouse-restore.password",
 		"clickhouse-runtime.password",
 		"open-splunk-server.crt",
 		"open-splunk-server.key",
@@ -914,6 +959,8 @@ func TestDeploymentClickHouseBootstrapSeparatesServicePrincipals(t *testing.T) {
 		"GRANT SHOW TABLES ON open_splunk.* TO open_splunk_migrator",
 		"GRANT CREATE TABLE ON open_splunk.schema_migrations TO open_splunk_migrator",
 		"GRANT CREATE TABLE ON open_splunk.events TO open_splunk_migrator",
+		"GRANT CREATE TABLE ON open_splunk.recovery_sets TO open_splunk_migrator",
+		"GRANT CREATE TABLE ON open_splunk.recovery_archive_markers TO open_splunk_migrator",
 		"GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX ON open_splunk.events TO open_splunk_migrator",
 		"CREATE USER IF NOT EXISTS open_splunk_runtime",
 		"GRANT SELECT, INSERT ON open_splunk.events TO open_splunk_runtime",
@@ -1026,6 +1073,8 @@ func TestDeploymentClickHouseBootstrapRejectsReusedCredentials(t *testing.T) {
 		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD="+sharedPassword,
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD="+strings.Repeat("b", 64),
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD="+strings.Repeat("c", 64),
+		"OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD="+strings.Repeat("d", 64),
+		"OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD="+strings.Repeat("e", 64),
 	)
 	output, err := command.CombinedOutput()
 	if err == nil {
@@ -1033,7 +1082,7 @@ func TestDeploymentClickHouseBootstrapRejectsReusedCredentials(t *testing.T) {
 	}
 	if !strings.Contains(
 		string(output),
-		"bootstrap, migration, runtime, and deletion passwords must be distinct",
+		"bootstrap, migration, runtime, deletion, backup, and restore passwords must be distinct",
 	) {
 		t.Fatalf("clickhouse-init.sh output = %q", output)
 	}
@@ -1230,7 +1279,7 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 			ORDER BY version
 		)
 		FORMAT TSVRaw`)
-	if versions != "[(1,1),(2,1),(3,1)]" {
+	if versions != "[(1,1),(2,1),(3,1),(4,1)]" {
 		t.Fatalf("migration ledger = %q, want one row for each version", versions)
 	}
 }

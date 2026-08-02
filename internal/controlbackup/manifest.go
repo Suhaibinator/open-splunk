@@ -189,19 +189,36 @@ func validateManifestRelease(manifest Manifest, expected ReleaseIdentity) error 
 	return nil
 }
 
-func validateReleaseIdentity(identity ReleaseIdentity) error {
+// ValidateReleaseIdentity validates the release compatibility boundary without
+// attaching an operation-specific error prefix, so deployment recovery sets
+// can reuse the exact same rules.
+func ValidateReleaseIdentity(identity ReleaseIdentity) error {
 	if _, err := buildinfo.Parse(identity.ApplicationVersion, identity.SourceRevision); err != nil {
-		return fmt.Errorf("control-plane backup release identity is invalid: %w", err)
+		return fmt.Errorf("release identity is invalid: %w", err)
 	}
-	if err := validateMigrationIdentity("SQLite", identity.SQLiteMigrations); err != nil {
+	if err := validateReleaseMigrationIdentity("SQLite", identity.SQLiteMigrations); err != nil {
 		return err
 	}
-	return validateMigrationIdentity("ClickHouse", identity.ClickHouseMigrations)
+	return validateReleaseMigrationIdentity("ClickHouse", identity.ClickHouseMigrations)
+}
+
+func validateReleaseIdentity(identity ReleaseIdentity) error {
+	if err := ValidateReleaseIdentity(identity); err != nil {
+		return fmt.Errorf("control-plane backup %w", err)
+	}
+	return nil
 }
 
 func validateMigrationIdentity(name string, identity MigrationIdentity) error {
+	if err := validateReleaseMigrationIdentity(name, identity); err != nil {
+		return fmt.Errorf("control-plane backup %w", err)
+	}
+	return nil
+}
+
+func validateReleaseMigrationIdentity(name string, identity MigrationIdentity) error {
 	if !buildinfo.ValidSHA256(identity.SHA256) || identity.LatestVersion == 0 {
-		return fmt.Errorf("control-plane backup %s migration identity is invalid", name)
+		return fmt.Errorf("%s migration identity is invalid", name)
 	}
 	return nil
 }

@@ -1,6 +1,23 @@
 # Test-only exposure for host-side verified native-protocol assertions. The
 # production full-stack file publishes no ClickHouse port.
 services:
+  # The ClickHouse-only credential-rotation integration deliberately does not
+  # build the Open Splunk server image. Reuse the already digest-pinned
+  # ClickHouse image for this test-only named-volume ownership step so the
+  # production bootstrap dependency remains exercised without an unbuilt
+  # local image dependency.
+  clickhouse-recovery-volume-bootstrap:
+    image: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
+    pull_policy: missing
+    user: "0:65532"
+    entrypoint:
+      - /bin/sh
+    command:
+      - -ec
+      - >-
+        chown 101:65532 /var/lib/open-splunk/clickhouse-backups &&
+        chmod 2750 /var/lib/open-splunk/clickhouse-backups
+
   clickhouse:
     ports:
       - "127.0.0.1:${OPEN_SPLUNK_CLICKHOUSE_SECURE_NATIVE_PORT:?integration test must request a host port}:9440"

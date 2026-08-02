@@ -123,11 +123,15 @@ RUN set -eu; \
       /image-rootfs/server/var/lib/open-splunk \
       /image-rootfs/server/var/lib/open-splunk/state \
       /image-rootfs/server/var/lib/open-splunk/exports \
+      /image-rootfs/server/var/lib/open-splunk/recovery \
+      /image-rootfs/server/var/lib/open-splunk/lock \
       /image-rootfs/collector/var \
       /image-rootfs/collector/var/lib; \
     install -d -o 65532 -g 65532 -m 0700 \
       /image-rootfs/server/var/lib/open-splunk/state/private \
       /image-rootfs/server/var/lib/open-splunk/exports/private \
+      /image-rootfs/server/var/lib/open-splunk/recovery/private \
+      /image-rootfs/server/var/lib/open-splunk/lock/private \
       /image-rootfs/collector/var/lib/open-splunk-collector; \
     install -o 0 -g 0 -m 0444 \
       oci/rootfs/etc/passwd \

@@ -406,21 +406,111 @@ in [Ingestion rate limits v0.1](ingestion-rate-limits-v0.1.md).
 
 The first deployment is single-user on a trusted network, so end-user authentication and RBAC are not release blockers. Collector ingestion tokens remain necessary: even on a trusted network, they prevent accidental cross-index writes and establish a protocol that can be hardened later. SQLite is sufficient for this single-node control plane and should run in WAL mode with explicit backup and migration tooling. Checked-in SQL migrations remain the sole schema authority, while explicit GORM models make control-plane keys, relationships, constraints, and bounded projections legible in Go. `AutoMigrate` is not used in production. Narrow raw SQL remains appropriate for SQLite transaction modes and conditional compare-and-swap or fencing operations that GORM cannot express safely or efficiently.
 
-The control-plane recovery contract is offline and release-exact. With the
-server stopped, one command creates a new bundle containing a self-contained
-SQLite snapshot, its matching external master key, and its matching
-administrator token; a second command verifies that bundle; and a third
-restores it only into absent paths in one secure fresh directory. Interrupted
-restore is retryable only for an exact database, database-plus-key, or complete
-database-plus-key-plus-token prefix from the same bundle. The bundle explicitly
-excludes ClickHouse and export artifacts and therefore is not a deployment
-backup or a complete disaster-recovery procedure. Its recovery-set ID must be
-recorded with a ClickHouse-native backup taken during the same server-quiescent
-interval, and both members must be restored together. Pairing the SQLite
-visibility ledger with an independently advanced, older, or different
-ClickHouse data set is unsupported: it can hide acknowledged events, reuse
-visibility identities, or revive stale deletion state, and the control-plane
-commands cannot verify that external pairing.
+The deployment recovery contract is offline, coordinated, and release-exact.
+With the server stopped, `backup-deployment-recovery-set` creates an unchanged,
+independently verifiable control-plane bundle and a ClickHouse-native archive
+within one quiescent operation. A strict canonical outer manifest binds the
+control-plane child manifest and external archive by exact name, size, SHA-256,
+release and migration identities, source ClickHouse UUID provenance, maximum
+visibility sequence, backup operation UUID, and release-owned archive-marker
+table UUID. The networkless
+`verify-deployment-recovery-set` command recursively verifies both members and
+their ownership metadata, so renaming, swapping, truncating, or combining
+members from different recovery sets fails closed.
+
+The archive root and every archive have exact descriptor-revalidated UID, GID,
+mode, special-bit, single-link, and no-extended-ACL contracts. Normal backup,
+verify, and restore helpers mount retained archives read-only. If a native
+archive was created but outer publication later fails, the backup attempts an
+exact pinned rollback; an ownership failure is recoverable only through a
+separate networkless UID-`101` destructive one-shot. That tool cannot infer
+publication status: with both ClickHouse and the server stopped, an operator
+must establish that the archive belongs to the failed attempt and repeat its
+canonical name as an explicit deletion confirmation. It mounts no state or
+secret, revalidates the pinned root/file contract immediately before unlink,
+syncs and proves final absence, and cannot be confused with normal backup
+execution.
+
+Once outer publication has occurred, any later close, sync, identity, or final
+verification failure is explicitly classified as a published-but-ambiguous
+result. Operators must preserve both members and independently verify the set;
+the archive-owner deletion path is permitted only for a proven
+pre-publication failed attempt.
+
+An interrupted backup may instead retain its exact source marker. Recovery is
+an explicit, confirmation-bound operation that uses the backup principal only:
+it takes the deployment singleton lock before credentials or network access,
+validates the canonical source and exact repeated recovery-set/operation
+identity, and clears only that singleton marker synchronously. The server and
+ClickHouse must both be stopped and only ClickHouse restarted before this
+operation. The host lock fences server and helper processes, but cannot fence a
+native `BACKUP` already executing inside ClickHouse; the restart terminates
+that old server-side operation. Reconciliation mounts no recovery archive,
+queries no backup status, and deletes no archive. Operators separately inspect
+`system.backups`, the exact marker, and retained archive inventory before
+invoking it.
+
+`restore-deployment-recovery-set` accepts only a verified set and fresh
+ClickHouse and control-plane targets. A persistent Compose binding maps the
+four fresh data/state volume keys for the full restored-deployment lifetime; a
+separate restore-only overlay retains the same recovery named volume but mounts
+it read-only into ClickHouse;
+the restore principal proves the exact configured disk name, path, and
+read-only state through `system.disks` before native restore. The reserved
+`open_splunk*` namespace must be absent for a fresh attempt, and ClickHouse
+restores directly into the canonical `open_splunk` database. The command then
+re-verifies the complete recovery set, requires the exact original manifest and
+archive digest, and validates the complete release-owned schema, migration
+ledger, visibility boundary, and inactive-mutation state. Both one-shot
+principals have `SHOW TABLES` only on `open_splunk.*`, making
+administrator-owned extra tables visible to exact source and restored-schema
+validation without granting row access.
+The backup writes an exact recovery-set/backup-operation marker immediately
+before native `BACKUP`, so that marker is physically carried inside the
+archive and is removed from the live source afterward. Restore requires that
+exact marker before receipt publication, records the fresh restored UUIDs and
+marker-table UUID in a durable receipt bound to the outer-manifest digest, then
+revalidates the receipt, consumes the marker synchronously, and proves marker
+absence before accepting the canonical database as complete. This intrinsically
+binds the archive ClickHouse actually consumed to the verified outer set even
+when mount aliases or filenames are adversarially substituted.
+Source UUIDs remain provenance: a native `RESTORE ... AS` creates new database
+and table UUIDs, and the receipt makes those restored UUIDs the retry identity.
+Native restore is not transactional; an unreceipted or mismatched canonical
+database requires a fresh data volume. Only an exact receipted canonical
+database may resume, either consuming the still-exact marker after a
+receipt-before-cleanup interruption or requiring it already absent. There is no
+staging database, rename, or promotion boundary. The restore session is closed
+after the canonical database and receipt are fully revalidated, before
+the SQLite snapshot, master key, and administrator token are published in
+their own resumable order. Before any ClickHouse connection or mutation, a
+read-only control-target preflight validates the complete resumable prefix and
+binds the exact empty database-lock pathname to the descriptor actually held
+by the recovery process. That descriptor/path identity and its owner-only,
+single-link metadata are revalidated at every control publication boundary.
+Before any restore mutation, a bounded enumeration of the complete
+`open_splunk*` database namespace admits only absence for a fresh restore or the
+exact canonical database for a receipt-gated retry, and rejects every
+foreign/archive alias or unexpected prefixed database. The server, backup,
+marker-reconciliation, and restore containers also share one image-seeded
+retained singleton lock volume, independent of a rebound `server-state` volume;
+restore therefore cannot proceed while the original server still owns the
+deployment. Its configured private directory and empty lock inode have exact
+owner, mode, single-link, ACL, size, and pathname-identity checks at runtime. Both
+control-plane preflight and final restore require the child recovery-set ID and
+canonical child-manifest SHA-256 recorded by the outer set, preventing a
+same-release child swap after ClickHouse completion. Native restore requires
+the one-shot restore principal to hold `INSERT` on each exact destination table;
+that unavoidable authority is confined to the four canonical table names, and
+the credential is rotated after the operation. Revocation is not treated as
+durable because restart initialization intentionally recreates the principal
+and its exact grants.
+Export artifacts remain outside the recovery set
+and can be recreated from their source searches. The lower-level
+`backup-control-plane`, `verify-control-plane-backup`, and
+`restore-control-plane` commands remain available for control-plane-only
+maintenance, but their bundles are not deployment backups and must not be
+paired manually with unrelated ClickHouse state.
 
 The ingestion-token catalog is deliberately bounded rather than an unbounded
 audit log. The production default and hard structural ceiling both admit at
@@ -704,7 +794,7 @@ remains the operator escape hatch for a dependency that ignores cancellation.
 
 The local deployment uses the same production contract: a digest-pinned image,
 an exact pre-DDL version check, idempotent initialization on every container
-start, four independent credentials, and a config-backed bootstrap
+start, six independent credentials, and a config-backed bootstrap
 administrator limited to container loopback. A composed live test creates the
 real checked-in stack, validates every principal and the migrated schema,
 rotates all credentials while retaining the data volume, rejects the old

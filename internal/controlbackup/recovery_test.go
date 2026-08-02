@@ -17,7 +17,9 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/migrations"
+	"golang.org/x/sys/unix"
 )
 
 func TestCreateVerifyRestoreControlPlaneRoundTrip(t *testing.T) {
@@ -105,6 +107,418 @@ func TestCreateVerifyRestoreControlPlaneRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(token, fixture.administratorToken) {
 		t.Fatal("restored administrator token differs")
+	}
+}
+
+func TestRemoveCreatedBundleOwnsCompleteMemberNamespace(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	if _, err := Create(t.Context(), fixture.createOptions()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(fixture.bundle, databaseFilename+"-wal"),
+		[]byte("interrupted-sidecar"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := privatefs.OpenDirectory(filepath.Dir(fixture.bundle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := parent.OpenChildDirectory(filepath.Base(fixture.bundle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+
+	if err := RemoveCreatedBundle(parent, filepath.Base(fixture.bundle), child); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(fixture.bundle); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed bundle remains: %v", err)
+	}
+	if err := RemoveCreatedBundle(parent, filepath.Base(fixture.bundle), nil); err == nil {
+		t.Fatal("bundle cleanup accepted a missing attempt-owned descriptor")
+	}
+	assertExactRecoveryDirectory(t, filepath.Dir(fixture.bundle), nil)
+}
+
+func TestRemoveCreatedBundleRejectsPinnedChildReplacementWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	if _, err := Create(t.Context(), fixture.createOptions()); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := privatefs.OpenDirectory(filepath.Dir(fixture.bundle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := parent.OpenChildDirectory(filepath.Base(fixture.bundle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+
+	originalPath := fixture.bundle + ".original"
+	if err := os.Rename(fixture.bundle, originalPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(fixture.bundle, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacementPath := filepath.Join(fixture.bundle, databaseFilename)
+	if err := os.WriteFile(replacementPath, []byte("replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveCreatedBundle(parent, filepath.Base(fixture.bundle), child); err == nil {
+		t.Fatal("bundle cleanup accepted a replacement for its pinned child")
+	}
+	contents, err := os.ReadFile(replacementPath)
+	if err != nil || string(contents) != "replacement" {
+		t.Fatalf("replacement member = %q, error=%v", contents, err)
+	}
+	if _, err := os.Lstat(filepath.Join(originalPath, manifestFilename)); err != nil {
+		t.Fatalf("attempt-owned child was mutated: %v", err)
+	}
+}
+
+func TestRemoveCreatedBundleRejectsUnexpectedEntryBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	if _, err := Create(t.Context(), fixture.createOptions()); err != nil {
+		t.Fatal(err)
+	}
+	unexpectedPath := filepath.Join(fixture.bundle, "unexpected")
+	if err := os.WriteFile(unexpectedPath, []byte("preserve"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := privatefs.OpenDirectory(filepath.Dir(fixture.bundle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	child, err := parent.OpenChildDirectory(filepath.Base(fixture.bundle))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer child.Close()
+
+	if err := RemoveCreatedBundle(parent, filepath.Base(fixture.bundle), child); err == nil ||
+		!strings.Contains(err.Error(), "unexpected child entry") {
+		t.Fatalf("unexpected-entry cleanup error = %v", err)
+	}
+	for _, name := range append(append([]string(nil), bundleMemberNames...), "unexpected") {
+		if _, err := os.Lstat(filepath.Join(fixture.bundle, name)); err != nil {
+			t.Fatalf("preflight failure removed %q: %v", name, err)
+		}
+	}
+}
+
+func TestCreateCleanupPreservesReplacedStageName(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	const stageName = ".test-backup-stage"
+	stagePath := filepath.Join(filepath.Dir(fixture.bundle), stageName)
+	originalPath := stagePath + ".original"
+	_, err := createWithHooks(t.Context(), fixture.createOptions(), createHooks{
+		now:       time.Now,
+		random:    bytes.NewReader(bytes.Repeat([]byte{8}, recoverySetIDBytes)),
+		stageName: fixedNameGenerator(stageName),
+		afterStageSync: func() {
+			if renameErr := os.Rename(stagePath, originalPath); renameErr != nil {
+				t.Error(renameErr)
+				return
+			}
+			if mkdirErr := os.Mkdir(stagePath, 0o700); mkdirErr != nil {
+				t.Error(mkdirErr)
+			}
+		},
+	})
+	if err == nil {
+		t.Fatal("Create succeeded after its pinned stage name was replaced")
+	}
+	if _, statErr := os.Lstat(stagePath); statErr != nil {
+		t.Fatalf("replacement stage was deleted: %v", statErr)
+	}
+	for _, name := range bundleMemberNames {
+		if _, statErr := os.Lstat(filepath.Join(originalPath, name)); statErr != nil {
+			t.Fatalf("attempt-owned stage member %q was deleted: %v", name, statErr)
+		}
+	}
+}
+
+func TestCopyMemberCleanupPreservesConformingPathReplacement(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	manifest, err := Create(t.Context(), fixture.createOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := privatefs.OpenDirectory(fixture.bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	destinationPath := privateTestDirectory(t)
+	destination, err := privatefs.OpenDirectory(destinationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+
+	const destinationName = ".restore-test-master-key"
+	memberPath := filepath.Join(destinationPath, destinationName)
+	originalPath := memberPath + ".original"
+	var hookErr error
+	err = copyMemberWithHooks(
+		t.Context(),
+		source,
+		manifest.MasterKey.Name,
+		destination,
+		destinationName,
+		manifest.MasterKey,
+		copyMemberHooks{
+			afterWriterClose: func() {
+				hookErr = os.Rename(memberPath, originalPath)
+				if hookErr != nil {
+					return
+				}
+				hookErr = os.WriteFile(memberPath, fixture.masterKey, 0o600)
+			},
+		},
+	)
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if err == nil {
+		t.Fatal("copy accepted a content-conforming replacement for its staged path")
+	}
+	for _, candidate := range []string{memberPath, originalPath} {
+		got, readErr := os.ReadFile(candidate)
+		if readErr != nil || !bytes.Equal(got, fixture.masterKey) {
+			t.Fatalf("preserved candidate %q = %x, error=%v", candidate, got, readErr)
+		}
+	}
+}
+
+func TestCopyMemberCleanupOpenRejectsConformingPathReplacement(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	manifest, err := Create(t.Context(), fixture.createOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := privatefs.OpenDirectory(fixture.bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	destinationPath := privateTestDirectory(t)
+	destination, err := privatefs.OpenDirectory(destinationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+
+	const destinationName = ".restore-test-master-key"
+	memberPath := filepath.Join(destinationPath, destinationName)
+	originalPath := memberPath + ".original"
+	var hookErr error
+	err = copyMemberWithHooks(
+		t.Context(),
+		source,
+		manifest.MasterKey.Name,
+		destination,
+		destinationName,
+		manifest.MasterKey,
+		copyMemberHooks{
+			beforeCleanupOpen: func() {
+				hookErr = os.Rename(memberPath, originalPath)
+				if hookErr != nil {
+					return
+				}
+				hookErr = os.WriteFile(memberPath, fixture.masterKey, 0o600)
+			},
+		},
+	)
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if err == nil {
+		t.Fatal("copy trusted a conforming replacement as its cleanup descriptor")
+	}
+	for _, candidate := range []string{memberPath, originalPath} {
+		got, readErr := os.ReadFile(candidate)
+		if readErr != nil || !bytes.Equal(got, fixture.masterKey) {
+			t.Fatalf("preserved candidate %q = %x, error=%v", candidate, got, readErr)
+		}
+	}
+}
+
+func TestRestoreEnforcesOptionalDeploymentBinding(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name        string
+		configure   func(Manifest, string, *RestoreOptions)
+		wantSuccess bool
+	}{
+		{
+			name: "exact binding",
+			configure: func(manifest Manifest, digest string, options *RestoreOptions) {
+				options.ExpectedRecoverySetID = manifest.RecoverySetID
+				options.ExpectedManifestSHA256 = digest
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "partial ID",
+			configure: func(manifest Manifest, _ string, options *RestoreOptions) {
+				options.ExpectedRecoverySetID = manifest.RecoverySetID
+			},
+		},
+		{
+			name: "partial digest",
+			configure: func(_ Manifest, digest string, options *RestoreOptions) {
+				options.ExpectedManifestSHA256 = digest
+			},
+		},
+		{
+			name: "malformed ID",
+			configure: func(_ Manifest, digest string, options *RestoreOptions) {
+				options.ExpectedRecoverySetID = "not-an-id"
+				options.ExpectedManifestSHA256 = digest
+			},
+		},
+		{
+			name: "malformed digest",
+			configure: func(manifest Manifest, _ string, options *RestoreOptions) {
+				options.ExpectedRecoverySetID = manifest.RecoverySetID
+				options.ExpectedManifestSHA256 = "not-a-digest"
+			},
+		},
+		{
+			name: "wrong ID",
+			configure: func(manifest Manifest, digest string, options *RestoreOptions) {
+				options.ExpectedRecoverySetID = strings.Repeat("0", recoverySetIDHexBytes)
+				if options.ExpectedRecoverySetID == manifest.RecoverySetID {
+					options.ExpectedRecoverySetID = strings.Repeat("1", recoverySetIDHexBytes)
+				}
+				options.ExpectedManifestSHA256 = digest
+			},
+		},
+		{
+			name: "wrong digest",
+			configure: func(manifest Manifest, digest string, options *RestoreOptions) {
+				options.ExpectedRecoverySetID = manifest.RecoverySetID
+				options.ExpectedManifestSHA256 = strings.Repeat("0", sha256.Size*2)
+				if options.ExpectedManifestSHA256 == digest {
+					options.ExpectedManifestSHA256 = strings.Repeat("1", sha256.Size*2)
+				}
+			},
+		},
+	} {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newRecoveryFixture(t)
+			manifest, err := Create(t.Context(), fixture.createOptions())
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := marshalManifest(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(encoded)
+			restore := fixture.restoreOptions()
+			testCase.configure(manifest, hex.EncodeToString(digest[:]), &restore)
+			before := testDirectorySnapshot(t, fixture.restoreDirectory)
+			preflightErr := PreflightRestore(t.Context(), restore)
+			if testCase.wantSuccess {
+				if preflightErr != nil {
+					t.Fatalf("preflight exact binding: %v", preflightErr)
+				}
+				if err := Restore(t.Context(), restore); err != nil {
+					t.Fatalf("restore exact binding: %v", err)
+				}
+				return
+			}
+			if preflightErr == nil {
+				t.Fatal("preflight accepted mismatched deployment binding")
+			}
+			if err := Restore(t.Context(), restore); err == nil {
+				t.Fatal("restore accepted mismatched deployment binding")
+			}
+			after := testDirectorySnapshot(t, fixture.restoreDirectory)
+			if !slices.Equal(before, after) {
+				t.Fatalf("rejected binding mutated destination: before=%q after=%q", before, after)
+			}
+		})
+	}
+}
+
+func TestValidateReleaseIdentityProvidesReusableAndScopedErrors(t *testing.T) {
+	t.Parallel()
+
+	valid := ReleaseIdentity{
+		ApplicationVersion: "0.1.0",
+		SourceRevision:     "development",
+		SQLiteMigrations: MigrationIdentity{
+			SHA256: strings.Repeat("1", sha256.Size*2), LatestVersion: 1,
+		},
+		ClickHouseMigrations: MigrationIdentity{
+			SHA256: strings.Repeat("2", sha256.Size*2), LatestVersion: 1,
+		},
+	}
+	if err := ValidateReleaseIdentity(valid); err != nil {
+		t.Fatalf("valid release identity: %v", err)
+	}
+
+	for _, test := range []struct {
+		name       string
+		mutate     func(*ReleaseIdentity)
+		genericErr string
+		scopedErr  string
+	}{
+		{
+			name: "SQLite migrations",
+			mutate: func(identity *ReleaseIdentity) {
+				identity.SQLiteMigrations.LatestVersion = 0
+			},
+			genericErr: "SQLite migration identity is invalid",
+			scopedErr:  "control-plane backup SQLite migration identity is invalid",
+		},
+		{
+			name: "ClickHouse migrations",
+			mutate: func(identity *ReleaseIdentity) {
+				identity.ClickHouseMigrations.SHA256 = ""
+			},
+			genericErr: "ClickHouse migration identity is invalid",
+			scopedErr:  "control-plane backup ClickHouse migration identity is invalid",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			identity := valid
+			test.mutate(&identity)
+			if err := ValidateReleaseIdentity(identity); err == nil || err.Error() != test.genericErr {
+				t.Fatalf("generic error = %v, want %q", err, test.genericErr)
+			}
+			if err := validateReleaseIdentity(identity); err == nil || err.Error() != test.scopedErr {
+				t.Fatalf("scoped error = %v, want %q", err, test.scopedErr)
+			}
+		})
 	}
 }
 
@@ -278,6 +692,350 @@ func TestRestoreResumesOnlyExactFailClosedPublicationPrefixes(t *testing.T) {
 	}
 }
 
+func TestRestorePreservesExplicitExactDatabaseLock(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	if _, err := Create(t.Context(), fixture.createOptions()); err != nil {
+		t.Fatal(err)
+	}
+	restore := fixture.restoreOptions()
+	lockPath := restore.DatabasePath + ".server.lock"
+	restore.DatabaseLock = openTestDatabaseLock(t, lockPath)
+	lockBefore, err := os.Lstat(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := PreflightRestore(t.Context(), restore); err != nil {
+		t.Fatalf("preflight exact held database lock: %v", err)
+	}
+	if err := Restore(t.Context(), restore); err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(t.Context(), restore); err != nil {
+		t.Fatalf("idempotent restore with held database lock: %v", err)
+	}
+	lockAfter, err := os.Lstat(lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(lockBefore, lockAfter) || lockAfter.Size() != 0 ||
+		!lockAfter.Mode().IsRegular() || lockAfter.Mode().Perm() != 0o600 {
+		t.Fatalf("restored database lock changed: before=%v after=%v", lockBefore, lockAfter)
+	}
+	assertExactRecoveryDirectory(t, fixture.restoreDirectory, []string{
+		filepath.Base(restore.AdministratorTokenPath),
+		filepath.Base(restore.DatabasePath),
+		filepath.Base(lockPath),
+		filepath.Base(restore.MasterKeyPath),
+	})
+}
+
+func TestPreflightRestoreAdmitsSafeInterruptedStageAndValidPrefixWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	manifest, err := Create(t.Context(), fixture.createOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	restore := fixture.restoreOptions()
+	copyTestFile(
+		t,
+		filepath.Join(fixture.bundle, databaseFilename),
+		restore.DatabasePath,
+	)
+	staleStagePath := filepath.Join(
+		fixture.restoreDirectory,
+		restoreStageNames(manifest.RecoverySetID)[1],
+	)
+	if err := os.WriteFile(staleStagePath, []byte("safe stale stage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := testDirectorySnapshot(t, fixture.restoreDirectory)
+	if err := PreflightRestore(t.Context(), restore); err != nil {
+		t.Fatal(err)
+	}
+	after := testDirectorySnapshot(t, fixture.restoreDirectory)
+	if !slices.Equal(before, after) {
+		t.Fatalf("preflight mutated resumable state: before=%q after=%q", before, after)
+	}
+	if err := Restore(t.Context(), restore); err != nil {
+		t.Fatalf("restore after resumable preflight: %v", err)
+	}
+}
+
+func TestCleanupRestoreStagesPreservesReplacementBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
+
+	destinationPath := privateTestDirectory(t)
+	destination, err := privatefs.OpenDirectory(destinationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	stageNames := []string{
+		".restore-test-database",
+		".restore-test-master-key",
+	}
+	contents := [][]byte{
+		[]byte("stale database"),
+		[]byte("stale master key"),
+	}
+	for index, stageName := range stageNames {
+		if err := os.WriteFile(
+			filepath.Join(destinationPath, stageName),
+			contents[index],
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	replacedPath := filepath.Join(destinationPath, stageNames[1])
+	originalPath := replacedPath + ".original"
+	var hookErr error
+	err = cleanupRestoreStagesWithHooks(
+		destination,
+		stageNames,
+		nil,
+		"",
+		nil,
+		cleanupRestoreStagesHooks{
+			afterPreflight: func() {
+				hookErr = os.Rename(replacedPath, originalPath)
+				if hookErr != nil {
+					return
+				}
+				hookErr = os.WriteFile(replacedPath, contents[1], 0o600)
+			},
+		},
+	)
+	if hookErr != nil {
+		t.Fatal(hookErr)
+	}
+	if err == nil {
+		t.Fatal("stale-stage cleanup accepted a content-conforming path replacement")
+	}
+	for _, candidate := range []struct {
+		path     string
+		contents []byte
+	}{
+		{path: filepath.Join(destinationPath, stageNames[0]), contents: contents[0]},
+		{path: replacedPath, contents: contents[1]},
+		{path: originalPath, contents: contents[1]},
+	} {
+		got, readErr := os.ReadFile(candidate.path)
+		if readErr != nil || !bytes.Equal(got, candidate.contents) {
+			t.Fatalf("preserved candidate %q = %q, error=%v", candidate.path, got, readErr)
+		}
+	}
+}
+
+func TestRestoreRebuildsPlanAfterSuccessfulPreflight(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	if _, err := Create(t.Context(), fixture.createOptions()); err != nil {
+		t.Fatal(err)
+	}
+	restore := fixture.restoreOptions()
+	if err := PreflightRestore(t.Context(), restore); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(fixture.restoreDirectory, "appeared-after-preflight"),
+		[]byte("unrelated"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	before := testDirectorySnapshot(t, fixture.restoreDirectory)
+	if err := Restore(t.Context(), restore); err == nil {
+		t.Fatal("restore accepted destination state that changed after preflight")
+	}
+	after := testDirectorySnapshot(t, fixture.restoreDirectory)
+	if !slices.Equal(before, after) {
+		t.Fatalf("rejected restore mutated destination: before=%q after=%q", before, after)
+	}
+}
+
+func TestRestoreRejectsUnsafeOrImplicitDatabaseLockWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		seed func(*testing.T, *recoveryFixture, *RestoreOptions, string)
+	}{
+		{
+			name: "implicit",
+			seed: func(t *testing.T, _ *recoveryFixture, _ *RestoreOptions, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "removed pathname",
+			seed: func(t *testing.T, _ *recoveryFixture, restore *RestoreOptions, path string) {
+				restore.DatabaseLock = openTestDatabaseLock(t, path)
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "closed descriptor",
+			seed: func(t *testing.T, _ *recoveryFixture, restore *RestoreOptions, path string) {
+				restore.DatabaseLock = openTestDatabaseLock(t, path)
+				if err := restore.DatabaseLock.Close(); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "wrong exact path",
+			seed: func(t *testing.T, _ *recoveryFixture, restore *RestoreOptions, _ string) {
+				restore.DatabaseLock = openTestDatabaseLock(
+					t,
+					filepath.Join(privateTestDirectory(t), "other.server.lock"),
+				)
+			},
+		},
+		{
+			name: "mode",
+			seed: func(t *testing.T, _ *recoveryFixture, restore *RestoreOptions, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(path, 0o640); err != nil {
+					t.Fatal(err)
+				}
+				restore.DatabaseLock = openTestDatabaseLock(t, path)
+			},
+		},
+		{
+			name: "nonempty",
+			seed: func(t *testing.T, _ *recoveryFixture, restore *RestoreOptions, path string) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte("not a lock artifact"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				restore.DatabaseLock = openTestDatabaseLock(t, path)
+			},
+		},
+		{
+			name: "symlink",
+			seed: func(t *testing.T, _ *recoveryFixture, restore *RestoreOptions, path string) {
+				t.Helper()
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatal(err)
+				}
+				restore.DatabaseLock = openTestDatabaseLock(t, path)
+			},
+		},
+		{
+			name: "hardlink",
+			seed: func(t *testing.T, _ *recoveryFixture, restore *RestoreOptions, path string) {
+				t.Helper()
+				target := filepath.Join(t.TempDir(), "target")
+				if err := os.WriteFile(target, nil, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Link(target, path); err != nil {
+					t.Fatal(err)
+				}
+				restore.DatabaseLock = openTestDatabaseLock(t, path)
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newRecoveryFixture(t)
+			if _, err := Create(t.Context(), fixture.createOptions()); err != nil {
+				t.Fatal(err)
+			}
+			restore := fixture.restoreOptions()
+			lockPath := restore.DatabasePath + ".server.lock"
+			test.seed(t, fixture, &restore, lockPath)
+			before := testDirectorySnapshot(t, fixture.restoreDirectory)
+			if err := PreflightRestore(t.Context(), restore); err == nil {
+				t.Fatal("unsafe database lock state passed preflight")
+			}
+			if err := Restore(t.Context(), restore); err == nil {
+				t.Fatal("unsafe database lock state restored")
+			}
+			after := testDirectorySnapshot(t, fixture.restoreDirectory)
+			if !slices.Equal(before, after) {
+				t.Fatalf("rejected lock state mutated destination: before=%q after=%q", before, after)
+			}
+		})
+	}
+}
+
+func TestRestoreRejectsDatabaseLockPathReplacementDuringPublication(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	if _, err := Create(t.Context(), fixture.createOptions()); err != nil {
+		t.Fatal(err)
+	}
+	restore := fixture.restoreOptions()
+	lockPath := restore.DatabasePath + ".server.lock"
+	restore.DatabaseLock = openTestDatabaseLock(t, lockPath)
+	movedLockPath := filepath.Join(filepath.Dir(fixture.restoreDirectory), "moved-held-lock")
+	replaced := false
+	err := restoreWithHooks(t.Context(), restore, restoreHooks{
+		beforePublication: func(index int) {
+			if index != 0 || replaced {
+				return
+			}
+			replaced = true
+			if renameErr := os.Rename(lockPath, movedLockPath); renameErr != nil {
+				t.Fatal(renameErr)
+			}
+			if writeErr := os.WriteFile(lockPath, nil, 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no longer names the held lock") {
+		t.Fatalf("lock replacement restore error = %v", err)
+	}
+	if !replaced {
+		t.Fatal("lock replacement hook did not run")
+	}
+	for _, path := range []string{
+		restore.DatabasePath,
+		restore.MasterKeyPath,
+		restore.AdministratorTokenPath,
+	} {
+		if _, statErr := os.Lstat(path); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("lock replacement published %q: %v", path, statErr)
+		}
+	}
+}
+
+func openTestDatabaseLock(t *testing.T, path string) *os.File {
+	t.Helper()
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	return file
+}
+
 func TestCreateRequiresAbsentBundleAndLeavesExistingDestinationUntouched(t *testing.T) {
 	t.Parallel()
 
@@ -359,6 +1117,129 @@ func TestCreateCancellationAndPublicationRaceLeaveNoOwnedPartialBundle(t *testin
 		}
 		if len(entries) != 1 || entries[0].Name() != filepath.Base(fixture.bundle) {
 			t.Fatalf("publication-race parent entries = %v", entries)
+		}
+	})
+}
+
+func TestCreateKeepsRenamedStageDescriptorLiveUntilDestinationIsPinned(t *testing.T) {
+	t.Parallel()
+
+	fixture := newRecoveryFixture(t)
+	descriptorLive := false
+	_, err := createWithHooks(t.Context(), fixture.createOptions(), createHooks{
+		now:       time.Now,
+		random:    bytes.NewReader(bytes.Repeat([]byte{9}, recoverySetIDBytes)),
+		stageName: fixedNameGenerator(".test-backup-stage"),
+		afterRename: func(stage *privatefs.Directory) error {
+			if _, statErr := stage.PinnedInfo(); statErr != nil {
+				return statErr
+			}
+			descriptorLive = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !descriptorLive {
+		t.Fatal("renamed staging descriptor was not retained through destination pinning")
+	}
+	if _, err := Verify(t.Context(), fixture.bundle, fixture.release); err != nil {
+		t.Fatalf("verify live-descriptor publication: %v", err)
+	}
+}
+
+func TestCreatePreservesCompletedOrAmbiguousPublicationFailures(t *testing.T) {
+	t.Parallel()
+
+	t.Run("completed rename then error", func(t *testing.T) {
+		t.Parallel()
+		fixture := newRecoveryFixture(t)
+		injected := errors.New("injected post-rename error")
+		_, err := createWithHooks(t.Context(), fixture.createOptions(), createHooks{
+			now:       time.Now,
+			random:    bytes.NewReader(bytes.Repeat([]byte{3}, recoverySetIDBytes)),
+			stageName: fixedNameGenerator(".test-backup-stage"),
+			publish: func(
+				sourceParent *privatefs.Directory,
+				from string,
+				source *privatefs.Directory,
+				destination *privatefs.Directory,
+				to string,
+			) (privatefs.RenameNoReplaceOutcome, error) {
+				outcome, renameErr := sourceParent.RenameDirectoryNoReplaceWithStatus(
+					from,
+					source,
+					destination,
+					to,
+				)
+				if renameErr != nil {
+					return outcome, renameErr
+				}
+				return outcome, injected
+			},
+		})
+		if err == nil {
+			t.Fatal("Create succeeded after completed rename error")
+		}
+		var publicationErr *PublicationStatusError
+		if !errors.As(err, &publicationErr) || !errors.Is(err, injected) {
+			t.Fatalf("completed publication error = %v, want typed injected cause", err)
+		}
+		if publicationErr.Outcome != privatefs.RenameNoReplaceCompleted {
+			t.Fatalf("completed publication outcome = %v", publicationErr.Outcome)
+		}
+		if _, verifyErr := Verify(t.Context(), fixture.bundle, fixture.release); verifyErr != nil {
+			t.Fatalf("verify preserved published bundle: %v", verifyErr)
+		}
+		entries, readErr := os.ReadDir(filepath.Dir(fixture.bundle))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if len(entries) != 1 || entries[0].Name() != filepath.Base(fixture.bundle) {
+			t.Fatalf("preserved publication entries = %v", entries)
+		}
+	})
+
+	t.Run("ambiguous rename", func(t *testing.T) {
+		t.Parallel()
+		fixture := newRecoveryFixture(t)
+		injected := errors.New("injected ambiguous rename error")
+		const stageName = ".test-backup-stage"
+		_, err := createWithHooks(t.Context(), fixture.createOptions(), createHooks{
+			now:       time.Now,
+			random:    bytes.NewReader(bytes.Repeat([]byte{4}, recoverySetIDBytes)),
+			stageName: fixedNameGenerator(stageName),
+			publish: func(
+				_ *privatefs.Directory,
+				_ string,
+				_ *privatefs.Directory,
+				_ *privatefs.Directory,
+				_ string,
+			) (privatefs.RenameNoReplaceOutcome, error) {
+				return privatefs.RenameNoReplaceAmbiguous, injected
+			},
+		})
+		if err == nil {
+			t.Fatal("Create succeeded after ambiguous rename")
+		}
+		var publicationErr *PublicationStatusError
+		if !errors.As(err, &publicationErr) || !errors.Is(err, injected) {
+			t.Fatalf("ambiguous publication error = %v, want typed injected cause", err)
+		}
+		if publicationErr.Outcome != privatefs.RenameNoReplaceAmbiguous {
+			t.Fatalf("ambiguous publication outcome = %v", publicationErr.Outcome)
+		}
+		preservedStage := filepath.Join(filepath.Dir(fixture.bundle), stageName)
+		if _, verifyErr := Verify(t.Context(), preservedStage, fixture.release); verifyErr != nil {
+			t.Fatalf("verify preserved ambiguous stage: %v", verifyErr)
+		}
+		entries, readErr := os.ReadDir(filepath.Dir(fixture.bundle))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if len(entries) != 1 || entries[0].Name() != stageName {
+			t.Fatalf("preserved ambiguous entries = %v", entries)
 		}
 	})
 }

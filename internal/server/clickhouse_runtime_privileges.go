@@ -82,6 +82,14 @@ var clickHouseMigrationGrantAllowlist = []clickHouseGrant{
 		},
 	},
 	{
+		target:     "open_splunk.recovery_sets",
+		privileges: []string{"CREATE TABLE"},
+	},
+	{
+		target:     "open_splunk.recovery_archive_markers",
+		privileges: []string{"CREATE TABLE"},
+	},
+	{
 		target:     "system.tables",
 		privileges: []string{"SELECT"},
 	},
@@ -102,6 +110,102 @@ var clickHouseDeletionWorkerGrantAllowlist = []clickHouseGrant{
 	{
 		target:     "system.tables",
 		privileges: []string{"SELECT"},
+	},
+}
+
+var clickHouseBackupGrantAllowlist = []clickHouseGrant{
+	{
+		target:     "open_splunk.*",
+		privileges: []string{"BACKUP", "SHOW TABLES"},
+	},
+	{
+		target:     "open_splunk.events",
+		privileges: []string{"SELECT(visibility_seq)"},
+	},
+	{
+		target:     "open_splunk.schema_migrations",
+		privileges: []string{"SELECT"},
+	},
+	{
+		target: "open_splunk.recovery_archive_markers",
+		privileges: []string{
+			"INSERT",
+			"SELECT",
+			"TRUNCATE",
+		},
+	},
+	{
+		target:     "system.databases",
+		privileges: []string{"SELECT"},
+	},
+	{
+		target:     "system.mutations",
+		privileges: []string{"SELECT"},
+	},
+	{
+		target:     "system.tables",
+		privileges: []string{"SELECT"},
+	},
+}
+
+var clickHouseRestoreGrantAllowlist = []clickHouseGrant{
+	{
+		target:     "open_splunk.*",
+		privileges: []string{"CREATE DATABASE", "SHOW TABLES"},
+	},
+	{
+		target: "open_splunk.events",
+		privileges: []string{
+			"CREATE TABLE",
+			"INSERT",
+			"SELECT(visibility_seq)",
+		},
+	},
+	{
+		target: "open_splunk.schema_migrations",
+		privileges: []string{
+			"CREATE TABLE",
+			"INSERT",
+			"SELECT(name, version)",
+		},
+	},
+	{
+		target: "open_splunk.recovery_archive_markers",
+		privileges: []string{
+			"CREATE TABLE",
+			"INSERT",
+			"SELECT",
+			"TRUNCATE",
+		},
+	},
+	{
+		target: "open_splunk.recovery_sets",
+		privileges: []string{
+			"CREATE TABLE",
+			"INSERT",
+			"SELECT(database_uuid, deployment_manifest_sha256, events_table_uuid, recovery_archive_markers_table_uuid, recovery_set_id, recovery_sets_table_uuid, restored_at, schema_migrations_table_uuid, slot)",
+			"TRUNCATE",
+		},
+	},
+	{
+		target:     "system.databases",
+		privileges: []string{"SELECT"},
+	},
+	{
+		target:     "system.disks",
+		privileges: []string{"SELECT"},
+	},
+	{
+		target:     "system.mutations",
+		privileges: []string{"SELECT"},
+	},
+	{
+		target:     "system.tables",
+		privileges: []string{"SELECT"},
+	},
+	{
+		target:     "*.*",
+		privileges: []string{"SHOW DATABASES"},
 	},
 }
 
@@ -195,6 +299,39 @@ func ValidateClickHouseDeletionWorkerPrivileges(
 		connection,
 		"deletion worker",
 		clickHouseDeletionWorkerGrantAllowlist,
+	)
+}
+
+// ValidateClickHouseBackupPrivileges verifies the stopped-server snapshot
+// principal. In addition to inspecting release identity and quiescence, it can
+// replace the canonical archive marker immediately around a native backup; it
+// cannot create or restore objects.
+func ValidateClickHouseBackupPrivileges(
+	ctx context.Context,
+	connection ClickHousePrivilegeConnection,
+) error {
+	return validateClickHousePrincipalPrivileges(
+		ctx,
+		connection,
+		"backup",
+		clickHouseBackupGrantAllowlist,
+	)
+}
+
+// ValidateClickHouseRestorePrivileges verifies the short-lived fresh-volume
+// restore principal. Its DDL and INSERT access are limited to the exact
+// canonical database; reads and truncates are further confined to recovery
+// metadata plus the event visibility high-water mark. It cannot read raw event
+// data, drop database objects, or create new backups.
+func ValidateClickHouseRestorePrivileges(
+	ctx context.Context,
+	connection ClickHousePrivilegeConnection,
+) error {
+	return validateClickHousePrincipalPrivileges(
+		ctx,
+		connection,
+		"restore",
+		clickHouseRestoreGrantAllowlist,
 	)
 }
 

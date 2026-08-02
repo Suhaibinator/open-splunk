@@ -216,24 +216,36 @@ func (directory *Directory) Close() error {
 	return file.Close()
 }
 
+// PinnedInfo returns metadata for the exact descriptor-backed directory
+// without requiring its original pathname to remain present. This is useful
+// across an intentional directory rename while still rejecting descriptor,
+// ownership, mode, or ACL changes.
+func (directory *Directory) PinnedInfo() (os.FileInfo, error) {
+	if directory == nil || directory.file == nil {
+		return nil, ErrClosed
+	}
+	opened, err := directory.file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect pinned private directory descriptor: %w", err)
+	}
+	if !os.SameFile(directory.info, opened) {
+		return nil, errors.New("pinned private directory descriptor identity changed")
+	}
+	if err := validateOwnedDirectory(opened, os.Geteuid()); err != nil {
+		return nil, fmt.Errorf("inspect pinned private directory: %w", err)
+	}
+	if err := validateNoExtendedACL(directory.file); err != nil {
+		return nil, fmt.Errorf("inspect pinned private directory: %w", err)
+	}
+	return opened, nil
+}
+
 // Revalidate proves that the configured pathname still resolves to the
 // pinned, owner-private directory. Directory modification times and link
 // counts intentionally are not frozen because child publication changes them.
 func (directory *Directory) Revalidate() error {
-	if directory == nil || directory.file == nil {
-		return ErrClosed
-	}
-	opened, err := directory.file.Stat()
+	opened, err := directory.PinnedInfo()
 	if err != nil {
-		return fmt.Errorf("revalidate private directory: inspect descriptor: %w", err)
-	}
-	if !os.SameFile(directory.info, opened) {
-		return errors.New("revalidate private directory: descriptor identity changed")
-	}
-	if err := validateOwnedDirectory(opened, os.Geteuid()); err != nil {
-		return fmt.Errorf("revalidate private directory: %w", err)
-	}
-	if err := validateNoExtendedACL(directory.file); err != nil {
 		return fmt.Errorf("revalidate private directory: %w", err)
 	}
 	current, err := os.Lstat(directory.path)
@@ -555,6 +567,68 @@ func (directory *Directory) CreateTemporaryDirectory(
 	)
 }
 
+// OpenChildDirectory opens and pins one exact existing owner-private 0700
+// child relative to the parent descriptor. Both the parent and child paths are
+// revalidated before the descriptor is returned.
+func (directory *Directory) OpenChildDirectory(name string) (*Directory, error) {
+	if err := ValidateComponent(name); err != nil {
+		return nil, err
+	}
+	if err := directory.Revalidate(); err != nil {
+		return nil, err
+	}
+	child, err := directory.openChildDirectory(name, false)
+	if err != nil {
+		return nil, err
+	}
+	if err := directory.Revalidate(); err != nil {
+		return nil, errors.Join(err, child.Close())
+	}
+	return child, nil
+}
+
+// RequirePinnedChildDirectory proves that name still identifies the exact
+// owner-private child descriptor supplied by the caller. The child descriptor
+// must have been opened beneath this parent and must remain open for the whole
+// operation that relies on the proof.
+func (directory *Directory) RequirePinnedChildDirectory(
+	name string,
+	child *Directory,
+) error {
+	if err := ValidateComponent(name); err != nil {
+		return err
+	}
+	if child == nil {
+		return errors.New("require pinned private child directory: child is required")
+	}
+	if err := directory.Revalidate(); err != nil {
+		return err
+	}
+	if child.Path() != filepath.Join(directory.Path(), name) {
+		return errors.New(
+			"require pinned private child directory: child was not opened at the expected name",
+		)
+	}
+	if err := child.Revalidate(); err != nil {
+		return err
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return err
+	}
+	childFD, err := child.descriptor()
+	if err != nil {
+		return err
+	}
+	if err := sameOpenPath(directoryFD, name, childFD); err != nil {
+		return fmt.Errorf("require pinned private child directory %q: %w", name, err)
+	}
+	if err := directory.Revalidate(); err != nil {
+		return err
+	}
+	return sameOpenPath(directoryFD, name, childFD)
+}
+
 func (directory *Directory) openChildDirectory(
 	name string,
 	secureNewDirectory bool,
@@ -725,6 +799,104 @@ func (directory *Directory) Unlink(name string) error {
 	return directory.Revalidate()
 }
 
+// RequirePinnedRegular proves that name still identifies the exact open
+// regular-file descriptor supplied by the caller. Callers retain ownership of
+// the descriptor and must keep it open until their descriptor-relative
+// operation has finished.
+func (directory *Directory) RequirePinnedRegular(name string, file *os.File) error {
+	if err := ValidateComponent(name); err != nil {
+		return err
+	}
+	if file == nil {
+		return errors.New("require pinned private regular file: file is required")
+	}
+	if err := directory.Revalidate(); err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("require pinned private regular file %q: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("require pinned private regular file %q: descriptor is not regular", name)
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return err
+	}
+	// #nosec G115 -- os.File descriptors are native int descriptors on the
+	// supported Unix targets.
+	fileFD := int(file.Fd())
+	if err := sameOpenPath(directoryFD, name, fileFD); err != nil {
+		return fmt.Errorf("require pinned private regular file %q: %w", name, err)
+	}
+	if err := directory.Revalidate(); err != nil {
+		return err
+	}
+	if err := sameOpenPath(directoryFD, name, fileFD); err != nil {
+		return fmt.Errorf("require pinned private regular file %q: %w", name, err)
+	}
+	return nil
+}
+
+// UnlinkPinnedRegular removes name only while it still identifies the exact
+// live regular-file descriptor supplied by the caller. The descriptor remains
+// open and owned by the caller after this method returns.
+func (directory *Directory) UnlinkPinnedRegular(name string, file *os.File) error {
+	if err := directory.RequirePinnedRegular(name, file); err != nil {
+		return err
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return err
+	}
+	// Keep the pathname comparison immediately adjacent to unlink. POSIX has no
+	// unlink-by-file-descriptor primitive; owner-private parents and the
+	// deployment singleton lock exclude supported concurrent writers.
+	// #nosec G115 -- os.File descriptors are native int descriptors on the
+	// supported Unix targets.
+	if err := sameOpenPath(directoryFD, name, int(file.Fd())); err != nil {
+		return fmt.Errorf("unlink pinned private regular file %q: %w", name, err)
+	}
+	if err := unix.Unlinkat(directoryFD, name, 0); err != nil {
+		return fmt.Errorf("unlink pinned private regular file %q: %w", name, err)
+	}
+	return directory.Revalidate()
+}
+
+// RemovePinnedEmptyDirectory removes name only while it still identifies the
+// exact live child descriptor supplied by the caller. The child descriptor
+// remains open and owned by the caller after this method returns.
+func (directory *Directory) RemovePinnedEmptyDirectory(
+	name string,
+	child *Directory,
+) error {
+	if err := directory.RequirePinnedChildDirectory(name, child); err != nil {
+		return err
+	}
+	if err := child.RequireEntries(nil, 0); err != nil {
+		return fmt.Errorf("remove pinned private empty directory %q: %w", name, err)
+	}
+	if err := directory.RequirePinnedChildDirectory(name, child); err != nil {
+		return fmt.Errorf("remove pinned private empty directory %q: %w", name, err)
+	}
+	directoryFD, err := directory.descriptor()
+	if err != nil {
+		return err
+	}
+	childFD, err := child.descriptor()
+	if err != nil {
+		return err
+	}
+	if err := sameOpenPath(directoryFD, name, childFD); err != nil {
+		return fmt.Errorf("remove pinned private empty directory %q: %w", name, err)
+	}
+	if err := unix.Unlinkat(directoryFD, name, unix.AT_REMOVEDIR); err != nil {
+		return fmt.Errorf("remove pinned private empty directory %q: %w", name, err)
+	}
+	return directory.Revalidate()
+}
+
 // RemoveOwnedEmptyDirectory removes one owner-private 0700 stage only after a
 // pinned descriptor proves that it is empty. It never follows a reserved-name
 // symlink or recursively traverses attacker-controlled entries.
@@ -735,53 +907,11 @@ func (directory *Directory) RemoveOwnedEmptyDirectory(name string) error {
 	if err := directory.Revalidate(); err != nil {
 		return err
 	}
-	directoryFD, err := directory.descriptor()
-	if err != nil {
-		return err
-	}
 	child, err := directory.openChildDirectory(name, false)
 	if err != nil {
 		return err
 	}
-	childFD, descriptorErr := child.descriptor()
-	var opened unix.Stat_t
-	if descriptorErr == nil {
-		descriptorErr = unix.Fstat(childFD, &opened)
-	}
-	if descriptorErr == nil {
-		descriptorErr = child.RequireEntries(nil, 0)
-	}
-	if descriptorErr != nil {
-		closeErr := child.Close()
-		return fmt.Errorf(
-			"remove private empty directory %q: %w",
-			name,
-			errors.Join(descriptorErr, closeErr),
-		)
-	}
-	var current unix.Stat_t
-	if err := unix.Fstatat(
-		directoryFD,
-		name,
-		&current,
-		unix.AT_SYMLINK_NOFOLLOW,
-	); err != nil {
-		closeErr := child.Close()
-		return fmt.Errorf(
-			"remove private empty directory %q: reinspect name: %w",
-			name,
-			errors.Join(err, closeErr),
-		)
-	}
-	if opened.Dev != current.Dev || opened.Ino != current.Ino {
-		closeErr := child.Close()
-		return fmt.Errorf(
-			"remove private empty directory %q: %w",
-			name,
-			errors.Join(errors.New("name changed"), closeErr),
-		)
-	}
-	removeErr := unix.Unlinkat(directoryFD, name, unix.AT_REMOVEDIR)
+	removeErr := directory.RemovePinnedEmptyDirectory(name, child)
 	closeErr := child.Close()
 	if err := errors.Join(removeErr, closeErr); err != nil {
 		return fmt.Errorf("remove private empty directory %q: %w", name, err)
@@ -797,48 +927,275 @@ func (directory *Directory) RenameNoReplace(
 	destination *Directory,
 	to string,
 ) error {
+	_, err := directory.renameNoReplaceWithStatus(
+		from,
+		nil,
+		destination,
+		to,
+		renameNoReplaceAt,
+	)
+	return err
+}
+
+// RenameNoReplaceOutcome records what is known about an attempted atomic
+// no-replace rename. Completed and Ambiguous outcomes must be treated as
+// mutations by callers whose error cleanup could destroy the destination.
+type RenameNoReplaceOutcome uint8
+
+const (
+	RenameNoReplaceNotAttempted RenameNoReplaceOutcome = iota
+	RenameNoReplaceUnchanged
+	RenameNoReplaceCompleted
+	RenameNoReplaceAmbiguous
+)
+
+// RenameDirectoryNoReplaceWithStatus atomically publishes the exact source
+// directory identified by its open descriptor. It reports an authoritative or
+// conservative mutation outcome. A source-name replacement before the syscall
+// and an error-after-commit are therefore never mistaken for a safely
+// unpublished stage.
+func (directory *Directory) RenameDirectoryNoReplaceWithStatus(
+	from string,
+	source *Directory,
+	destination *Directory,
+	to string,
+) (RenameNoReplaceOutcome, error) {
+	if source == nil {
+		return RenameNoReplaceNotAttempted, errors.New(
+			"rename private directory: pinned source descriptor is required",
+		)
+	}
+	return directory.renameNoReplaceWithStatus(
+		from,
+		source,
+		destination,
+		to,
+		renameNoReplaceAt,
+	)
+}
+
+type renameNoReplaceOperation func(int, string, int, string) error
+
+func (directory *Directory) renameNoReplaceWithStatus(
+	from string,
+	expectedSource *Directory,
+	destination *Directory,
+	to string,
+	rename renameNoReplaceOperation,
+) (RenameNoReplaceOutcome, error) {
 	if err := ValidateComponent(from); err != nil {
-		return err
+		return RenameNoReplaceNotAttempted, err
 	}
 	if err := ValidateComponent(to); err != nil {
-		return err
+		return RenameNoReplaceNotAttempted, err
+	}
+	if rename == nil {
+		return RenameNoReplaceNotAttempted, errors.New("rename private child: operation is required")
 	}
 	if err := directory.Revalidate(); err != nil {
-		return err
+		return renamePreparationFailureOutcome(expectedSource), err
 	}
 	if err := destination.Revalidate(); err != nil {
-		return err
+		return renamePreparationFailureOutcome(expectedSource), err
 	}
 	fromFD, err := directory.descriptor()
 	if err != nil {
-		return err
+		return renamePreparationFailureOutcome(expectedSource), err
 	}
 	toFD, err := destination.descriptor()
 	if err != nil {
-		return err
+		return renamePreparationFailureOutcome(expectedSource), err
 	}
-	renameErr := renameNoReplaceAt(fromFD, from, toFD, to)
+	var sourceIdentity unix.Stat_t
+	if expectedSource == nil {
+		if err := unix.Fstatat(fromFD, from, &sourceIdentity, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			return RenameNoReplaceNotAttempted, fmt.Errorf(
+				"rename private child: pin source identity: %w",
+				err,
+			)
+		}
+	} else {
+		if _, err := expectedSource.PinnedInfo(); err != nil {
+			return RenameNoReplaceAmbiguous, fmt.Errorf(
+				"rename private directory: inspect expected source: %w",
+				err,
+			)
+		}
+		expectedFD, err := expectedSource.descriptor()
+		if err != nil {
+			return RenameNoReplaceAmbiguous, fmt.Errorf(
+				"rename private directory: inspect expected source descriptor: %w",
+				err,
+			)
+		}
+		if err := unix.Fstat(expectedFD, &sourceIdentity); err != nil {
+			return RenameNoReplaceAmbiguous, fmt.Errorf(
+				"rename private directory: pin expected source identity: %w",
+				err,
+			)
+		}
+		outcome, bindingErr := requireExpectedRenameSource(
+			fromFD,
+			from,
+			toFD,
+			to,
+			sourceIdentity,
+		)
+		if bindingErr != nil {
+			return outcome, bindingErr
+		}
+	}
+	renameErr := rename(fromFD, from, toFD, to)
+	outcome, observationErr := classifyRenameNoReplaceOutcome(
+		fromFD,
+		from,
+		toFD,
+		to,
+		sourceIdentity,
+		renameErr,
+	)
 	fromStableErr := directory.Revalidate()
 	var toStableErr error
 	if destination != directory {
 		toStableErr = destination.Revalidate()
 	}
-	if stabilityErr := errors.Join(fromStableErr, toStableErr); stabilityErr != nil {
-		return fmt.Errorf("rename private child: directory stability: %w", stabilityErr)
+	stabilityErr := errors.Join(fromStableErr, toStableErr)
+	if stabilityErr != nil {
+		stabilityErr = fmt.Errorf("rename private child: directory stability: %w", stabilityErr)
 	}
-	if renameErr != nil {
-		if errors.Is(renameErr, unix.EEXIST) || errors.Is(renameErr, unix.ENOTEMPTY) {
-			return fmt.Errorf("%w: %s", ErrDestinationExists, to)
-		}
-		if errors.Is(renameErr, unix.ENOSYS) || errors.Is(renameErr, unix.ENOTSUP) ||
-			errors.Is(renameErr, unix.EOPNOTSUPP) || errors.Is(renameErr, unix.EINVAL) {
-			return fmt.Errorf(
-				"%w: no-replace rename: %w",
-				ErrUnsupportedPlatform,
-				renameErr,
-			)
-		}
-		return fmt.Errorf("rename private child without replacement: %w", renameErr)
+	if renameErr == nil {
+		return outcome, errors.Join(observationErr, stabilityErr)
 	}
-	return nil
+	return outcome, errors.Join(
+		renameNoReplaceError(to, renameErr),
+		observationErr,
+		stabilityErr,
+	)
+}
+
+func renamePreparationFailureOutcome(
+	expectedSource *Directory,
+) RenameNoReplaceOutcome {
+	if expectedSource != nil {
+		return RenameNoReplaceAmbiguous
+	}
+	return RenameNoReplaceNotAttempted
+}
+
+func requireExpectedRenameSource(
+	fromFD int,
+	from string,
+	toFD int,
+	to string,
+	expected unix.Stat_t,
+) (RenameNoReplaceOutcome, error) {
+	sourcePresent, sourceMatches, sourceErr := childMatchesIdentity(fromFD, from, expected)
+	if sourceErr == nil && sourcePresent && sourceMatches {
+		return RenameNoReplaceUnchanged, nil
+	}
+	destinationPresent, destinationMatches, destinationErr := childMatchesIdentity(
+		toFD,
+		to,
+		expected,
+	)
+	outcome := RenameNoReplaceAmbiguous
+	if sourceErr == nil && (!sourcePresent || !sourceMatches) &&
+		destinationErr == nil && destinationPresent && destinationMatches {
+		outcome = RenameNoReplaceCompleted
+	}
+	return outcome, errors.Join(
+		errors.New("rename private directory: source name no longer identifies the pinned stage"),
+		sourceErr,
+		destinationErr,
+	)
+}
+
+func classifyRenameNoReplaceOutcome(
+	fromFD int,
+	from string,
+	toFD int,
+	to string,
+	sourceIdentity unix.Stat_t,
+	renameErr error,
+) (RenameNoReplaceOutcome, error) {
+	if renameErr == nil {
+		return RenameNoReplaceCompleted, nil
+	}
+	sourcePresent, sourceMatches, sourceErr := childMatchesIdentity(
+		fromFD,
+		from,
+		sourceIdentity,
+	)
+	destinationPresent, destinationMatches, destinationErr := childMatchesIdentity(
+		toFD,
+		to,
+		sourceIdentity,
+	)
+	observationErr := errors.Join(sourceErr, destinationErr)
+	if observationErr != nil {
+		return RenameNoReplaceAmbiguous, fmt.Errorf(
+			"rename private child: inspect names after syscall error: %w",
+			observationErr,
+		)
+	}
+	if destinationPresent && destinationMatches && (!sourcePresent || !sourceMatches) {
+		return RenameNoReplaceCompleted, nil
+	}
+	if definitivelyUnchangedRenameError(renameErr) && sourcePresent && sourceMatches {
+		return RenameNoReplaceUnchanged, nil
+	}
+	return RenameNoReplaceAmbiguous, nil
+}
+
+func childMatchesIdentity(
+	directoryFD int,
+	name string,
+	want unix.Stat_t,
+) (present bool, matches bool, returnedErr error) {
+	var current unix.Stat_t
+	if err := unix.Fstatat(directoryFD, name, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	return true, current.Dev == want.Dev && current.Ino == want.Ino, nil
+}
+
+type renameNoReplaceFailure uint8
+
+const (
+	renameNoReplaceFailureOther renameNoReplaceFailure = iota
+	renameNoReplaceFailureDestinationExists
+	renameNoReplaceFailureUnsupported
+)
+
+func classifyRenameNoReplaceFailure(err error) renameNoReplaceFailure {
+	if errors.Is(err, unix.EEXIST) || errors.Is(err, unix.ENOTEMPTY) {
+		return renameNoReplaceFailureDestinationExists
+	}
+	if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.ENOTSUP) ||
+		errors.Is(err, unix.EOPNOTSUPP) || errors.Is(err, unix.EINVAL) {
+		return renameNoReplaceFailureUnsupported
+	}
+	return renameNoReplaceFailureOther
+}
+
+func definitivelyUnchangedRenameError(err error) bool {
+	return classifyRenameNoReplaceFailure(err) != renameNoReplaceFailureOther
+}
+
+func renameNoReplaceError(to string, err error) error {
+	switch classifyRenameNoReplaceFailure(err) {
+	case renameNoReplaceFailureDestinationExists:
+		return fmt.Errorf("%w: %s", ErrDestinationExists, to)
+	case renameNoReplaceFailureUnsupported:
+		return fmt.Errorf(
+			"%w: no-replace rename: %w",
+			ErrUnsupportedPlatform,
+			err,
+		)
+	default:
+		return fmt.Errorf("rename private child without replacement: %w", err)
+	}
 }

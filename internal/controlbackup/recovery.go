@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"github.com/Suhaibinator/open-splunk/migrations"
+	"golang.org/x/sys/unix"
 )
 
 var bundleMemberNames = []string{
@@ -38,6 +40,40 @@ var bundleStageCleanupNames = []string{
 	masterKeyFilename,
 }
 
+// ErrDeploymentBindingMismatch identifies a verified control-plane child that
+// is valid on its own but does not match the outer deployment recovery set.
+var ErrDeploymentBindingMismatch = errors.New(
+	"controlbackup: deployment recovery binding mismatch",
+)
+
+// PublicationStatusError reports a control-plane bundle publication that
+// completed or may have completed before Create failed. Cleanup must preserve
+// every candidate stage/destination until an operator independently reconciles
+// the result.
+type PublicationStatusError struct {
+	Destination string
+	Outcome     privatefs.RenameNoReplaceOutcome
+	Err         error
+}
+
+func (err *PublicationStatusError) Error() string {
+	if err == nil {
+		return "create control-plane backup: publication status is unavailable"
+	}
+	return fmt.Sprintf(
+		"create control-plane backup: publication completed or may have occurred at %q; preserve and independently reconcile all candidate bundles: %v",
+		err.Destination,
+		err.Err,
+	)
+}
+
+func (err *PublicationStatusError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
 // CreateOptions identifies one stopped server's control-plane state and a new
 // bundle directory. The caller must hold the supported server lock for the
 // complete operation.
@@ -51,20 +87,40 @@ type CreateOptions struct {
 
 // RestoreOptions identifies one verified bundle and three runtime targets in
 // a single owner-private directory. Restore never overwrites mismatched state.
+// DatabaseLock is optional. When set, it must be the caller-owned open file
+// descriptor for the supported lock at exactly DatabasePath + ".server.lock".
+// The caller retains ownership of the descriptor and must keep it open for the
+// complete operation. Restore retains its exclusive flock and repeatedly
+// proves that the exact pathname still names the same secure inode.
+// ExpectedRecoverySetID and ExpectedManifestSHA256 are an optional pair used
+// by deployment recovery to bind this child to its already-verified outer
+// manifest. Control-plane-only restores leave both empty.
 type RestoreOptions struct {
 	Source                 string
 	DatabasePath           string
+	DatabaseLock           *os.File
 	MasterKeyPath          string
 	AdministratorTokenPath string
 	Release                ReleaseIdentity
+	ExpectedRecoverySetID  string
+	ExpectedManifestSHA256 string
 }
 
 type createHooks struct {
-	now            func() time.Time
-	random         io.Reader
-	stageName      privatefs.NameGenerator
-	afterStageSync func()
-	beforePublish  func()
+	now             func() time.Time
+	random          io.Reader
+	stageName       privatefs.NameGenerator
+	afterStageSync  func()
+	retainPublished func(*privatefs.Directory)
+	beforePublish   func()
+	afterRename     func(*privatefs.Directory) error
+	publish         func(
+		*privatefs.Directory,
+		string,
+		*privatefs.Directory,
+		*privatefs.Directory,
+		string,
+	) (privatefs.RenameNoReplaceOutcome, error)
 }
 
 type restoreHooks struct {
@@ -81,6 +137,42 @@ type restoreMember struct {
 	afterPublish func() error
 }
 
+type restoreTargets struct {
+	parentPath             string
+	databaseName           string
+	databaseLockName       string
+	masterKeyName          string
+	administratorTokenName string
+}
+
+type restorePlan struct {
+	source         *privatefs.Directory
+	destination    *privatefs.Directory
+	manifest       Manifest
+	targets        restoreTargets
+	stageNames     []string
+	finalNames     []string
+	namespaceNames []string
+	knownNames     []string
+}
+
+func (plan *restorePlan) close() error {
+	if plan == nil {
+		return nil
+	}
+	var sourceErr error
+	if plan.source != nil {
+		sourceErr = plan.source.Close()
+		plan.source = nil
+	}
+	var destinationErr error
+	if plan.destination != nil {
+		destinationErr = plan.destination.Close()
+		plan.destination = nil
+	}
+	return errors.Join(sourceErr, destinationErr)
+}
+
 // Create produces and verifies one atomic directory bundle. It never copies a
 // live SQLite file: the native backup API absorbs committed WAL state into the
 // self-contained database member.
@@ -92,11 +184,50 @@ func Create(ctx context.Context, options CreateOptions) (Manifest, error) {
 	})
 }
 
+// CreatePinned creates a verified bundle and returns a live descriptor for the
+// exact published directory. The caller must close the descriptor. Recovery-set
+// orchestration keeps it open so rollback can never confuse a replacement at
+// the fixed child name with the bundle created by this attempt.
+func CreatePinned(
+	ctx context.Context,
+	options CreateOptions,
+) (manifest Manifest, published *privatefs.Directory, returnedErr error) {
+	manifest, returnedErr = createWithHooks(ctx, options, createHooks{
+		now:       time.Now,
+		random:    rand.Reader,
+		stageName: privatefs.RandomName(".control-plane-backup-tmp-"),
+		retainPublished: func(directory *privatefs.Directory) {
+			published = directory
+		},
+	})
+	if returnedErr != nil && published != nil {
+		returnedErr = errors.Join(returnedErr, published.Close())
+		published = nil
+	}
+	return manifest, published, returnedErr
+}
+
 func createWithHooks(
 	ctx context.Context,
 	options CreateOptions,
 	hooks createHooks,
 ) (manifest Manifest, returnedErr error) {
+	publicationMayHaveOccurred := false
+	publicationOutcome := privatefs.RenameNoReplaceNotAttempted
+	defer func() {
+		if !publicationMayHaveOccurred || returnedErr == nil {
+			return
+		}
+		var publicationErr *PublicationStatusError
+		if errors.As(returnedErr, &publicationErr) {
+			return
+		}
+		returnedErr = &PublicationStatusError{
+			Destination: options.Destination,
+			Outcome:     publicationOutcome,
+			Err:         returnedErr,
+		}
+	}()
 	if ctx == nil {
 		return Manifest{}, errors.New("create control-plane backup: context is required")
 	}
@@ -184,16 +315,18 @@ func createWithHooks(
 		return Manifest{}, fmt.Errorf("create control-plane backup staging directory: %w", err)
 	}
 	stageExists := true
+	stageOpen := true
 	defer func() {
 		if !stageExists {
+			if stageOpen {
+				returnedErr = errors.Join(returnedErr, stage.Close())
+				stageOpen = false
+			}
 			return
 		}
-		cleanupErr := cleanupKnownFiles(stage, bundleStageCleanupNames)
+		cleanupErr := RemoveCreatedBundle(destinationParent, stageName, stage)
 		cleanupErr = errors.Join(cleanupErr, stage.Close())
-		cleanupErr = errors.Join(
-			cleanupErr,
-			destinationParent.RemoveOwnedEmptyDirectory(stageName),
-		)
+		stageOpen = false
 		returnedErr = errors.Join(returnedErr, cleanupErr)
 	}()
 
@@ -280,9 +413,12 @@ func createWithHooks(
 	if err != nil {
 		return Manifest{}, fmt.Errorf("create control-plane backup: verify staged bundle: %w", err)
 	}
-	stageInfo, err := os.Lstat(stage.Path())
+	stageInfo, err := stage.PinnedInfo()
 	if err != nil {
-		return Manifest{}, fmt.Errorf("create control-plane backup: inspect verified staging directory: %w", err)
+		return Manifest{}, fmt.Errorf(
+			"create control-plane backup: inspect pinned verified staging directory: %w",
+			err,
+		)
 	}
 	if hooks.beforePublish != nil {
 		hooks.beforePublish()
@@ -290,16 +426,44 @@ func createWithHooks(
 	if err := ctx.Err(); err != nil {
 		return Manifest{}, err
 	}
-	if err := destinationParent.RenameNoReplace(
-		stageName,
-		destinationParent,
-		destinationName,
-	); err != nil {
+	var outcome privatefs.RenameNoReplaceOutcome
+	if hooks.publish == nil {
+		outcome, err = destinationParent.RenameDirectoryNoReplaceWithStatus(
+			stageName,
+			stage,
+			destinationParent,
+			destinationName,
+		)
+	} else {
+		outcome, err = hooks.publish(
+			destinationParent,
+			stageName,
+			stage,
+			destinationParent,
+			destinationName,
+		)
+	}
+	if outcome == privatefs.RenameNoReplaceCompleted ||
+		outcome == privatefs.RenameNoReplaceAmbiguous {
+		publicationMayHaveOccurred = true
+		publicationOutcome = outcome
+		stageExists = false
+	}
+	if err != nil {
 		return Manifest{}, fmt.Errorf("create control-plane backup: publish bundle: %w", err)
 	}
-	stageExists = false
-	if err := stage.Close(); err != nil {
-		return Manifest{}, fmt.Errorf("create control-plane backup: close published staging descriptor: %w", err)
+	if outcome != privatefs.RenameNoReplaceCompleted {
+		return Manifest{}, errors.New(
+			"create control-plane backup: publish bundle returned without a completed rename",
+		)
+	}
+	if hooks.afterRename != nil {
+		if err := hooks.afterRename(stage); err != nil {
+			return Manifest{}, fmt.Errorf(
+				"create control-plane backup: inspect live renamed stage: %w",
+				err,
+			)
+		}
 	}
 	if err := destinationParent.Sync(); err != nil {
 		return Manifest{}, fmt.Errorf("create control-plane backup: sync published bundle: %w", err)
@@ -308,17 +472,42 @@ func createWithHooks(
 	if err != nil {
 		return Manifest{}, fmt.Errorf("create control-plane backup: open published bundle: %w", err)
 	}
-	publishedInfo, statErr := os.Lstat(options.Destination)
+	stableStageInfo, stageStatErr := stage.PinnedInfo()
+	publishedInfo, statErr := published.PinnedInfo()
 	entriesErr := published.RequireEntries(bundleMemberNames, len(bundleMemberNames))
-	publishedCloseErr := published.Close()
-	if statErr != nil || entriesErr != nil || publishedCloseErr != nil {
+	if stageStatErr != nil || statErr != nil || entriesErr != nil {
+		publishedCloseErr := published.Close()
 		return Manifest{}, fmt.Errorf(
 			"create control-plane backup: verify published bundle identity: %w",
-			errors.Join(statErr, entriesErr, publishedCloseErr),
+			errors.Join(stageStatErr, statErr, entriesErr, publishedCloseErr),
 		)
 	}
-	if !os.SameFile(stageInfo, publishedInfo) {
-		return Manifest{}, errors.New("create control-plane backup: published bundle identity changed")
+	if !os.SameFile(stageInfo, stableStageInfo) || !os.SameFile(stableStageInfo, publishedInfo) {
+		return Manifest{}, errors.Join(
+			errors.New("create control-plane backup: published bundle identity changed"),
+			published.Close(),
+		)
+	}
+	if err := stage.Close(); err != nil {
+		stageOpen = false
+		return Manifest{}, errors.Join(
+			fmt.Errorf(
+				"create control-plane backup: close published staging descriptor: %w",
+				err,
+			),
+			published.Close(),
+		)
+	}
+	stageOpen = false
+	if hooks.retainPublished != nil {
+		hooks.retainPublished(published)
+		return verified, nil
+	}
+	if err := published.Close(); err != nil {
+		return Manifest{}, fmt.Errorf(
+			"create control-plane backup: close verified published bundle: %w",
+			err,
+		)
 	}
 	return verified, nil
 }
@@ -440,6 +629,68 @@ func Verify(
 	return manifest, nil
 }
 
+// PreflightRestore verifies the source, destination publication prefix,
+// interrupted staging files, and optional held database lock without removing,
+// creating, or publishing any file. Restore independently repeats these checks
+// so a successful deployment preflight is never treated as an authorization
+// for a later filesystem mutation.
+func PreflightRestore(ctx context.Context, options RestoreOptions) (returnedErr error) {
+	if ctx == nil {
+		return errors.New("preflight control-plane restore: context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	plan, err := openRestorePlan(
+		ctx,
+		options,
+		"preflight control-plane restore",
+		"open source",
+	)
+	if err != nil {
+		return err
+	}
+	defer func() { returnedErr = errors.Join(returnedErr, plan.close()) }()
+
+	entries, err := plan.destination.List(len(plan.knownNames))
+	if err != nil {
+		return fmt.Errorf("preflight control-plane restore: inspect destination entries: %w", err)
+	}
+	for _, entry := range entries {
+		if !slices.Contains(plan.knownNames, entry) {
+			return fmt.Errorf("preflight control-plane restore: destination contains unrelated entry %q", entry)
+		}
+	}
+	if err := validateRestoreDatabaseLock(
+		plan.destination,
+		plan.targets.databaseLockName,
+		options.DatabaseLock,
+	); err != nil {
+		return err
+	}
+	if err := validateRestoreStageFiles(plan.destination, entries, plan.stageNames); err != nil {
+		return err
+	}
+	if _, err := inspectRestorePrefix(
+		ctx,
+		plan.destination,
+		plan.finalNames,
+		plan.knownNames,
+		plan.manifest,
+		options.Release,
+	); err != nil {
+		return err
+	}
+	if err := plan.source.Revalidate(); err != nil {
+		return fmt.Errorf("preflight control-plane restore: revalidate source: %w", err)
+	}
+	return validateRestoreDatabaseLock(
+		plan.destination,
+		plan.targets.databaseLockName,
+		options.DatabaseLock,
+	)
+}
+
 // Restore copies and verifies bundle members before publishing a resumable,
 // fail-closed database -> master key -> administrator token prefix.
 func Restore(ctx context.Context, options RestoreOptions) error {
@@ -457,99 +708,85 @@ func restoreWithHooks(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateReleaseIdentity(options.Release); err != nil {
-		return err
-	}
-	if _, _, err := validateExactAbsolutePath("control-plane backup source", options.Source); err != nil {
-		return err
-	}
-	destinationParentPath, databaseName, masterKeyName, administratorTokenName, err :=
-		validateRestoreTargets(options)
+	plan, err := openRestorePlan(
+		ctx,
+		options,
+		"restore control-plane backup",
+		"reopen source",
+	)
 	if err != nil {
 		return err
 	}
-	destination, err := privatefs.OpenDirectory(destinationParentPath)
-	if err != nil {
-		return fmt.Errorf("restore control-plane backup: open destination: %w", err)
-	}
-	defer func() { returnedErr = errors.Join(returnedErr, destination.Close()) }()
-	source, err := privatefs.OpenDirectory(options.Source)
-	if err != nil {
-		return fmt.Errorf("restore control-plane backup: reopen source: %w", err)
-	}
-	defer func() { returnedErr = errors.Join(returnedErr, source.Close()) }()
-
-	sourceInfo, err := os.Stat(options.Source)
-	if err != nil {
-		return fmt.Errorf("restore control-plane backup: inspect source: %w", err)
-	}
-	destinationInfo, err := os.Stat(destinationParentPath)
-	if err != nil {
-		return fmt.Errorf("restore control-plane backup: inspect destination: %w", err)
-	}
-	if os.SameFile(sourceInfo, destinationInfo) {
-		return errors.New("restore control-plane backup: source and destination directories must differ")
-	}
-	manifest, err := Verify(ctx, options.Source, options.Release)
-	if err != nil {
-		return err
-	}
-
-	stageNames := restoreStageNames(manifest.RecoverySetID)
-	finalNames := []string{databaseName, masterKeyName, administratorTokenName}
-	if err := validateRestoreNamespace(stageNames, finalNames); err != nil {
-		return err
-	}
+	defer func() { returnedErr = errors.Join(returnedErr, plan.close()) }()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := cleanupRestoreStages(destination, stageNames, finalNames); err != nil {
+	if err := cleanupRestoreStages(
+		plan.destination,
+		plan.stageNames,
+		plan.namespaceNames,
+		plan.targets.databaseLockName,
+		options.DatabaseLock,
+	); err != nil {
 		return err
 	}
 	prefix, err := inspectRestorePrefix(
 		ctx,
-		destination,
-		finalNames,
-		manifest,
+		plan.destination,
+		plan.finalNames,
+		plan.namespaceNames,
+		plan.manifest,
 		options.Release,
 	)
 	if err != nil {
 		return err
 	}
-	if prefix == len(finalNames) {
-		return nil
+	if prefix == len(plan.finalNames) {
+		return requireFinalRestoreNamespace(
+			plan.destination,
+			plan.namespaceNames,
+			plan.targets.databaseLockName,
+			options.DatabaseLock,
+		)
 	}
 	members := []restoreMember{
 		{
-			identity: manifest.Database, stageName: stageNames[0], finalName: finalNames[0],
+			identity: plan.manifest.Database, stageName: plan.stageNames[0], finalName: plan.finalNames[0],
 			afterPublish: hooks.afterDatabasePublish,
 		},
 		{
-			identity: manifest.MasterKey, stageName: stageNames[1], finalName: finalNames[1],
+			identity: plan.manifest.MasterKey, stageName: plan.stageNames[1], finalName: plan.finalNames[1],
 			afterPublish: hooks.afterMasterKeyPublish,
 		},
 		{
-			identity: manifest.AdministratorToken, stageName: stageNames[2], finalName: finalNames[2],
+			identity: plan.manifest.AdministratorToken, stageName: plan.stageNames[2], finalName: plan.finalNames[2],
 			afterPublish: hooks.afterAdministratorTokenPublish,
 		},
 	}
 
-	remainingStages := make([]string, 0, len(stageNames)-prefix)
+	remainingStages := make([]string, 0, len(plan.stageNames)-prefix)
 	defer func() {
-		cleanupErr := cleanupKnownFiles(destination, remainingStages)
+		cleanupErr := cleanupKnownFiles(plan.destination, remainingStages)
 		if cleanupErr == nil && len(remainingStages) != 0 {
-			cleanupErr = destination.Sync()
+			cleanupErr = plan.destination.Sync()
 		}
 		returnedErr = errors.Join(returnedErr, cleanupErr)
 	}()
 	for index := prefix; index < len(members); index++ {
 		member := members[index]
+		if err := validateRestoreDatabaseLock(
+			plan.destination,
+			plan.targets.databaseLockName,
+			options.DatabaseLock,
+		); err != nil {
+			return err
+		}
 		remainingStages = append(remainingStages, member.stageName)
 		if err := copyMember(
 			ctx,
-			source,
+			plan.source,
 			member.identity.Name,
-			destination,
+			plan.destination,
 			member.stageName,
 			member.identity,
 		); err != nil {
@@ -566,15 +803,22 @@ func restoreWithHooks(
 	}
 	if err := verifyRestoreMembers(
 		ctx,
-		destination,
+		plan.destination,
 		resolvedNames,
-		manifest,
+		plan.manifest,
 		options.Release,
 	); err != nil {
 		return err
 	}
-	if err := destination.Sync(); err != nil {
+	if err := plan.destination.Sync(); err != nil {
 		return fmt.Errorf("restore control-plane backup: sync staging files: %w", err)
+	}
+	if err := validateRestoreDatabaseLock(
+		plan.destination,
+		plan.targets.databaseLockName,
+		options.DatabaseLock,
+	); err != nil {
+		return err
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -585,12 +829,19 @@ func restoreWithHooks(
 		if hooks.beforePublication != nil {
 			hooks.beforePublication(index)
 		}
+		if err := validateRestoreDatabaseLock(
+			plan.destination,
+			plan.targets.databaseLockName,
+			options.DatabaseLock,
+		); err != nil {
+			return err
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := destination.RenameNoReplace(
+		if err := plan.destination.RenameNoReplace(
 			member.stageName,
-			destination,
+			plan.destination,
 			member.finalName,
 		); err != nil {
 			return fmt.Errorf("restore control-plane backup: publish %q: %w", member.identity.Name, err)
@@ -598,8 +849,15 @@ func restoreWithHooks(
 		remainingStages = slices.DeleteFunc(remainingStages, func(name string) bool {
 			return name == member.stageName
 		})
-		if err := destination.Sync(); err != nil {
+		if err := plan.destination.Sync(); err != nil {
 			return fmt.Errorf("restore control-plane backup: sync %q publication: %w", member.identity.Name, err)
+		}
+		if err := validateRestoreDatabaseLock(
+			plan.destination,
+			plan.targets.databaseLockName,
+			options.DatabaseLock,
+		); err != nil {
+			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
@@ -610,10 +868,12 @@ func restoreWithHooks(
 			}
 		}
 	}
-	if err := destination.RequireEntries(finalNames, len(finalNames)); err != nil {
-		return fmt.Errorf("restore control-plane backup: verify published entry set: %w", err)
-	}
-	return nil
+	return requireFinalRestoreNamespace(
+		plan.destination,
+		plan.namespaceNames,
+		plan.targets.databaseLockName,
+		options.DatabaseLock,
+	)
 }
 
 func readSourceMasterKey(ctx context.Context, path string) ([]byte, error) {
@@ -738,38 +998,172 @@ func mustPolicy(identity FileIdentity) privatefs.FilePolicy {
 	return policy
 }
 
-func validateRestoreTargets(
+func openRestorePlan(
+	ctx context.Context,
 	options RestoreOptions,
-) (parent, database, masterKey, administratorToken string, err error) {
+	errorPrefix string,
+	sourceOpenAction string,
+) (plan restorePlan, returnedErr error) {
+	if err := validateRestoreBinding(options); err != nil {
+		return restorePlan{}, err
+	}
+	if err := validateReleaseIdentity(options.Release); err != nil {
+		return restorePlan{}, err
+	}
+	if _, _, err := validateExactAbsolutePath(
+		"control-plane backup source",
+		options.Source,
+	); err != nil {
+		return restorePlan{}, err
+	}
+	targets, err := validateRestoreTargets(options)
+	if err != nil {
+		return restorePlan{}, err
+	}
+	destination, err := privatefs.OpenDirectory(targets.parentPath)
+	if err != nil {
+		return restorePlan{}, fmt.Errorf("%s: open destination: %w", errorPrefix, err)
+	}
+	defer func() {
+		if returnedErr != nil {
+			returnedErr = errors.Join(returnedErr, destination.Close())
+		}
+	}()
+	source, err := privatefs.OpenDirectory(options.Source)
+	if err != nil {
+		return restorePlan{}, fmt.Errorf("%s: %s: %w", errorPrefix, sourceOpenAction, err)
+	}
+	defer func() {
+		if returnedErr != nil {
+			returnedErr = errors.Join(returnedErr, source.Close())
+		}
+	}()
+
+	sourceInfo, err := os.Stat(options.Source)
+	if err != nil {
+		return restorePlan{}, fmt.Errorf("%s: inspect source: %w", errorPrefix, err)
+	}
+	destinationInfo, err := os.Stat(targets.parentPath)
+	if err != nil {
+		return restorePlan{}, fmt.Errorf("%s: inspect destination: %w", errorPrefix, err)
+	}
+	if os.SameFile(sourceInfo, destinationInfo) {
+		return restorePlan{}, errors.New(errorPrefix + ": source and destination directories must differ")
+	}
+	manifest, err := Verify(ctx, options.Source, options.Release)
+	if err != nil {
+		return restorePlan{}, err
+	}
+	if err := requireRestoreBinding(manifest, options); err != nil {
+		return restorePlan{}, err
+	}
+	plan, err = buildRestorePlan(manifest, targets)
+	if err != nil {
+		return restorePlan{}, err
+	}
+	plan.source = source
+	plan.destination = destination
+	return plan, nil
+}
+
+func validateRestoreBinding(options RestoreOptions) error {
+	hasRecoverySetID := options.ExpectedRecoverySetID != ""
+	hasManifestSHA256 := options.ExpectedManifestSHA256 != ""
+	if hasRecoverySetID != hasManifestSHA256 {
+		return errors.New(
+			"control-plane restore binding requires both recovery-set ID and manifest SHA-256",
+		)
+	}
+	if !hasRecoverySetID {
+		return nil
+	}
+	if !validLowerHex(options.ExpectedRecoverySetID, recoverySetIDBytes) {
+		return errors.New("control-plane restore binding recovery-set ID is invalid")
+	}
+	if !validLowerHex(options.ExpectedManifestSHA256, sha256.Size) {
+		return errors.New("control-plane restore binding manifest SHA-256 is invalid")
+	}
+	return nil
+}
+
+func requireRestoreBinding(manifest Manifest, options RestoreOptions) error {
+	if options.ExpectedRecoverySetID == "" {
+		return nil
+	}
+	encoded, err := marshalManifest(manifest)
+	if err != nil {
+		return fmt.Errorf("control-plane restore binding: encode verified manifest: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	wantDigest, err := hex.DecodeString(options.ExpectedManifestSHA256)
+	if err != nil {
+		return errors.New("control-plane restore binding manifest SHA-256 is invalid")
+	}
+	if manifest.RecoverySetID != options.ExpectedRecoverySetID ||
+		!hmac.Equal(digest[:], wantDigest) {
+		return fmt.Errorf(
+			"%w: verified control-plane bundle does not match the expected recovery-set ID and manifest SHA-256",
+			ErrDeploymentBindingMismatch,
+		)
+	}
+	return nil
+}
+
+func buildRestorePlan(manifest Manifest, targets restoreTargets) (restorePlan, error) {
+	stageNames := restoreStageNames(manifest.RecoverySetID)
+	finalNames := []string{
+		targets.databaseName,
+		targets.masterKeyName,
+		targets.administratorTokenName,
+	}
+	namespaceNames := append([]string(nil), finalNames...)
+	if targets.databaseLockName != "" {
+		namespaceNames = append(namespaceNames, targets.databaseLockName)
+	}
+	if err := validateRestoreNamespace(stageNames, namespaceNames); err != nil {
+		return restorePlan{}, err
+	}
+	knownNames := append(append([]string(nil), stageNames...), namespaceNames...)
+	return restorePlan{
+		manifest:       manifest,
+		targets:        targets,
+		stageNames:     stageNames,
+		finalNames:     finalNames,
+		namespaceNames: namespaceNames,
+		knownNames:     knownNames,
+	}, nil
+}
+
+func validateRestoreTargets(options RestoreOptions) (restoreTargets, error) {
 	databaseParent, databaseName, err := validateExactAbsolutePath(
 		"restored control database",
 		options.DatabasePath,
 	)
 	if err != nil {
-		return "", "", "", "", err
+		return restoreTargets{}, err
 	}
 	keyParent, keyName, err := validateExactAbsolutePath(
 		"restored server master key",
 		options.MasterKeyPath,
 	)
 	if err != nil {
-		return "", "", "", "", err
+		return restoreTargets{}, err
 	}
 	tokenParent, tokenName, err := validateExactAbsolutePath(
 		"restored administrator token",
 		options.AdministratorTokenPath,
 	)
 	if err != nil {
-		return "", "", "", "", err
+		return restoreTargets{}, err
 	}
 	if databaseParent != keyParent || databaseParent != tokenParent {
-		return "", "", "", "", errors.New("restore control-plane backup targets must share one exact parent directory")
+		return restoreTargets{}, errors.New("restore control-plane backup targets must share one exact parent directory")
 	}
 	names := []string{databaseName, keyName, tokenName}
 	unique := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		if _, exists := unique[name]; exists {
-			return "", "", "", "", errors.New("restore control-plane backup target names must be distinct")
+			return restoreTargets{}, errors.New("restore control-plane backup target names must be distinct")
 		}
 		unique[name] = struct{}{}
 	}
@@ -780,10 +1174,35 @@ func validateRestoreTargets(
 		databaseName + ".server.lock",
 	} {
 		if slices.Contains(names, sidecar) {
-			return "", "", "", "", errors.New("restore control-plane backup target conflicts with a SQLite sidecar")
+			return restoreTargets{}, errors.New("restore control-plane backup target conflicts with a SQLite sidecar")
 		}
 	}
-	return databaseParent, databaseName, keyName, tokenName, nil
+	databaseLockName := ""
+	if options.DatabaseLock != nil {
+		lockPath := options.DatabaseLock.Name()
+		lockParent, lockName, lockErr := validateExactAbsolutePath(
+			"restored control database lock",
+			lockPath,
+		)
+		if lockErr != nil {
+			return restoreTargets{}, lockErr
+		}
+		expectedLockPath := options.DatabasePath + ".server.lock"
+		if lockPath != expectedLockPath || lockParent != databaseParent ||
+			lockName != databaseName+".server.lock" {
+			return restoreTargets{}, errors.New(
+				"restored control database lock descriptor must name exactly the control database path plus .server.lock",
+			)
+		}
+		databaseLockName = lockName
+	}
+	return restoreTargets{
+		parentPath:             databaseParent,
+		databaseName:           databaseName,
+		databaseLockName:       databaseLockName,
+		masterKeyName:          keyName,
+		administratorTokenName: tokenName,
+	}, nil
 }
 
 func restoreStageNames(recoverySetID string) []string {
@@ -809,19 +1228,114 @@ func validateRestoreNamespace(stageNames, finalNames []string) error {
 func cleanupRestoreStages(
 	destination *privatefs.Directory,
 	stageNames []string,
-	finalNames []string,
+	namespaceNames []string,
+	databaseLockName string,
+	databaseLock *os.File,
 ) error {
-	entries, err := destination.List(len(stageNames) + len(finalNames))
+	return cleanupRestoreStagesWithHooks(
+		destination,
+		stageNames,
+		namespaceNames,
+		databaseLockName,
+		databaseLock,
+		cleanupRestoreStagesHooks{},
+	)
+}
+
+type cleanupRestoreStagesHooks struct {
+	afterPreflight func()
+}
+
+func cleanupRestoreStagesWithHooks(
+	destination *privatefs.Directory,
+	stageNames []string,
+	namespaceNames []string,
+	databaseLockName string,
+	databaseLock *os.File,
+	hooks cleanupRestoreStagesHooks,
+) (returnedErr error) {
+	entries, err := destination.List(len(stageNames) + len(namespaceNames))
 	if err != nil {
 		return fmt.Errorf("restore control-plane backup: inspect destination entries: %w", err)
 	}
-	allowed := append(append([]string(nil), stageNames...), finalNames...)
+	allowed := append(append([]string(nil), stageNames...), namespaceNames...)
 	for _, entry := range entries {
 		if !slices.Contains(allowed, entry) {
 			return fmt.Errorf("restore control-plane backup: destination contains unrelated entry %q", entry)
 		}
 	}
+	if databaseLockName != "" {
+		if !slices.Contains(entries, databaseLockName) {
+			return errors.New("restore control-plane backup: declared control database lock is missing")
+		}
+		if err := validateRestoreDatabaseLock(
+			destination,
+			databaseLockName,
+			databaseLock,
+		); err != nil {
+			return err
+		}
+	}
+	pinned := make([]pinnedCleanupFile, 0, len(stageNames))
+	defer func() {
+		returnedErr = errors.Join(returnedErr, closePinnedCleanupFiles(pinned))
+	}()
+	for _, stageName := range stageNames {
+		if !slices.Contains(entries, stageName) {
+			continue
+		}
+		file, openErr := destination.OpenRegular(stageName, privatefs.FilePolicy{
+			AllowedModes: privateMode,
+			MinimumSize:  0,
+			MaximumSize:  int64(maximumDatabaseBytes),
+		})
+		if openErr != nil {
+			return fmt.Errorf(
+				"restore control-plane backup: unsafe stale staging file %q: %w",
+				stageName,
+				openErr,
+			)
+		}
+		pinned = append(pinned, pinnedCleanupFile{name: stageName, file: file})
+	}
+	if hooks.afterPreflight != nil {
+		hooks.afterPreflight()
+	}
+	// Prove every stale name before mutating any of them, so a replacement
+	// discovered during preflight cannot cause partial cleanup.
+	for _, stage := range pinned {
+		if err := destination.RequirePinnedRegular(stage.name, stage.file); err != nil {
+			return fmt.Errorf(
+				"restore control-plane backup: stale staging file %q changed before cleanup: %w",
+				stage.name,
+				err,
+			)
+		}
+	}
 	removed := false
+	for _, stage := range pinned {
+		if err := destination.UnlinkPinnedRegular(stage.name, stage.file); err != nil {
+			return fmt.Errorf(
+				"restore control-plane backup: remove stale staging file %q: %w",
+				stage.name,
+				err,
+			)
+		}
+		removed = true
+	}
+	if removed {
+		if err := destination.Sync(); err != nil {
+			return err
+		}
+	}
+	return validateRestoreDatabaseLock(destination, databaseLockName, databaseLock)
+}
+
+func validateRestoreStageFiles(
+	destination *privatefs.Directory,
+	entries []string,
+	stageNames []string,
+) error {
 	for _, stageName := range stageNames {
 		if !slices.Contains(entries, stageName) {
 			continue
@@ -832,18 +1346,105 @@ func cleanupRestoreStages(
 			MaximumSize:  int64(maximumDatabaseBytes),
 		})
 		if err != nil {
-			return fmt.Errorf("restore control-plane backup: unsafe stale staging file %q: %w", stageName, err)
+			return fmt.Errorf(
+				"preflight control-plane restore: unsafe stale staging file %q: %w",
+				stageName,
+				err,
+			)
 		}
 		if err := file.Close(); err != nil {
-			return err
+			return fmt.Errorf(
+				"preflight control-plane restore: close stale staging file %q: %w",
+				stageName,
+				err,
+			)
 		}
-		if err := destination.Unlink(stageName); err != nil {
-			return err
-		}
-		removed = true
 	}
-	if removed {
-		return destination.Sync()
+	return nil
+}
+
+func requireFinalRestoreNamespace(
+	destination *privatefs.Directory,
+	namespaceNames []string,
+	databaseLockName string,
+	databaseLock *os.File,
+) error {
+	if err := destination.RequireEntries(namespaceNames, len(namespaceNames)); err != nil {
+		return fmt.Errorf("restore control-plane backup: verify published entry set: %w", err)
+	}
+	return validateRestoreDatabaseLock(destination, databaseLockName, databaseLock)
+}
+
+func validateRestoreDatabaseLock(
+	destination *privatefs.Directory,
+	databaseLockName string,
+	databaseLock *os.File,
+) error {
+	if databaseLockName == "" {
+		if databaseLock != nil {
+			return errors.New("restore control-plane backup: database lock descriptor has no exact target")
+		}
+		return nil
+	}
+	if databaseLock == nil {
+		return errors.New("restore control-plane backup: declared control database lock descriptor is missing")
+	}
+	if err := retainRestoreDatabaseLock(databaseLock); err != nil {
+		return err
+	}
+	heldInfo, err := databaseLock.Stat()
+	if err != nil {
+		return fmt.Errorf("restore control-plane backup: inspect held control database lock: %w", err)
+	}
+	if err := privatefs.ValidateExactLockFileInfo(heldInfo); err != nil {
+		return fmt.Errorf("restore control-plane backup: unsafe held control database lock: %w", err)
+	}
+	pathFile, err := destination.OpenRegular(databaseLockName, privatefs.FilePolicy{
+		AllowedModes: privateMode,
+		MinimumSize:  0,
+		MaximumSize:  0,
+	})
+	if err != nil {
+		return fmt.Errorf("restore control-plane backup: unsafe control database lock: %w", err)
+	}
+	pathInfo, statErr := pathFile.Stat()
+	closeErr := pathFile.Close()
+	if statErr != nil {
+		return errors.Join(
+			fmt.Errorf("restore control-plane backup: inspect control database lock path: %w", statErr),
+			closeErr,
+		)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("restore control-plane backup: close inspected control database lock: %w", closeErr)
+	}
+	if !os.SameFile(heldInfo, pathInfo) {
+		return errors.New("restore control-plane backup: control database lock path no longer names the held lock descriptor")
+	}
+	stableHeldInfo, err := databaseLock.Stat()
+	if err != nil {
+		return fmt.Errorf("restore control-plane backup: reinspect held control database lock: %w", err)
+	}
+	if err := privatefs.ValidateExactLockFileInfo(stableHeldInfo); err != nil {
+		return fmt.Errorf("restore control-plane backup: unsafe held control database lock: %w", err)
+	}
+	if !os.SameFile(heldInfo, stableHeldInfo) {
+		return errors.New("restore control-plane backup: held control database lock descriptor identity changed")
+	}
+	if err := destination.Revalidate(); err != nil {
+		return fmt.Errorf("restore control-plane backup: revalidate database lock directory: %w", err)
+	}
+	return nil
+}
+
+func retainRestoreDatabaseLock(databaseLock *os.File) error {
+	if databaseLock == nil {
+		return errors.New("restore control-plane backup: control database lock descriptor is missing")
+	}
+	// #nosec G115 -- os.File descriptors are native int descriptors on the
+	// supported Unix targets.
+	if err := unix.Flock(int(databaseLock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		return fmt.Errorf("restore control-plane backup: retain exclusive control database lock: %w", err)
 	}
 	return nil
 }
@@ -852,15 +1453,16 @@ func inspectRestorePrefix(
 	ctx context.Context,
 	destination *privatefs.Directory,
 	finalNames []string,
+	namespaceNames []string,
 	manifest Manifest,
 	release ReleaseIdentity,
 ) (int, error) {
-	entries, err := destination.List(len(finalNames))
+	entries, err := destination.List(len(namespaceNames))
 	if err != nil {
 		return 0, fmt.Errorf("restore control-plane backup: inspect destination: %w", err)
 	}
 	for _, entry := range entries {
-		if !slices.Contains(finalNames, entry) {
+		if !slices.Contains(namespaceNames, entry) {
 			return 0, fmt.Errorf("restore control-plane backup: destination contains unrelated entry %q", entry)
 		}
 	}

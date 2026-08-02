@@ -49,8 +49,8 @@ func TestValidateNoExtendedACLRejectsLinuxPOSIXACL(t *testing.T) {
 	); err != nil || size == 0 {
 		t.Fatalf("POSIX ACL fixture was not retained: size=%d err=%v", size, err)
 	}
-	if err := validateNoExtendedACL(file); err == nil {
-		t.Fatal("validateNoExtendedACL accepted a POSIX ACL xattr")
+	if err := ValidateNoExtendedACL(file); err == nil {
+		t.Fatal("ValidateNoExtendedACL accepted a POSIX ACL xattr")
 	}
 }
 

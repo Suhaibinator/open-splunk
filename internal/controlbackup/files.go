@@ -3,7 +3,6 @@
 package controlbackup
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/Suhaibinator/open-splunk/internal/privatefs"
@@ -76,83 +76,23 @@ func inspectMember(
 	if err := ctx.Err(); err != nil {
 		return memberResult{}, err
 	}
-	file, err := directory.OpenRegular(name, policy)
-	if err != nil {
-		return memberResult{}, err
-	}
-	closed := false
-	defer func() {
-		if !closed {
-			_ = file.Close()
-		}
-	}()
-	before, err := file.Stat()
-	if err != nil {
-		return memberResult{}, fmt.Errorf("inspect private member %q: %w", name, err)
-	}
-	hash := sha256.New()
-	var retained bytes.Buffer
-	var writer io.Writer = hash
-	if retainContents {
-		writer = io.MultiWriter(hash, &retained)
-	}
-	read, err := io.CopyBuffer(
-		writer,
-		contextReader{
-			ctx:    ctx,
-			reader: io.LimitReader(file, policy.MaximumSize+1),
-		},
-		make([]byte, 64<<10),
+	inspected, err := privatefs.InspectStableRegularFile(
+		ctx,
+		directory,
+		name,
+		policy,
+		retainContents,
 	)
 	if err != nil {
-		return memberResult{}, fmt.Errorf("read private member %q: %w", name, err)
-	}
-	if read < policy.MinimumSize || read > policy.MaximumSize || read != before.Size() {
-		return memberResult{}, fmt.Errorf("private member %q changed while it was read", name)
-	}
-	after, err := file.Stat()
-	if err != nil {
-		return memberResult{}, fmt.Errorf("reinspect private member %q: %w", name, err)
-	}
-	if !sameFileState(before, after) {
-		return memberResult{}, fmt.Errorf("private member %q changed while it was read", name)
-	}
-	if err := ctx.Err(); err != nil {
 		return memberResult{}, err
 	}
-	if err := file.Close(); err != nil {
-		return memberResult{}, fmt.Errorf("close private member %q: %w", name, err)
-	}
-	closed = true
-
-	reopened, err := directory.OpenRegular(name, policy)
-	if err != nil {
-		return memberResult{}, fmt.Errorf("reopen private member %q: %w", name, err)
-	}
-	reopenedInfo, statErr := reopened.Stat()
-	closeErr := reopened.Close()
-	if statErr != nil {
-		return memberResult{}, fmt.Errorf("reinspect private member %q: %w", name, statErr)
-	}
-	if closeErr != nil {
-		return memberResult{}, fmt.Errorf("close reinspected private member %q: %w", name, closeErr)
-	}
-	if !sameFileState(before, reopenedInfo) {
-		return memberResult{}, fmt.Errorf("private member %q changed after it was read", name)
-	}
-	if err := directory.Revalidate(); err != nil {
-		return memberResult{}, err
-	}
-	// #nosec G115 -- io.CopyBuffer cannot return a negative byte count, and the
-	// count was checked against the nonnegative policy bounds above.
-	sizeBytes := uint64(read)
 	return memberResult{
 		identity: FileIdentity{
 			Name:      name,
-			SizeBytes: sizeBytes,
-			SHA256:    hex.EncodeToString(hash.Sum(nil)),
+			SizeBytes: inspected.SizeBytes,
+			SHA256:    hex.EncodeToString(inspected.SHA256[:]),
 		},
-		contents: retained.Bytes(),
+		contents: inspected.Contents,
 	}, nil
 }
 
@@ -176,54 +116,24 @@ func writeMember(
 	directory *privatefs.Directory,
 	name string,
 	contents []byte,
-) (result memberResult, returnedErr error) {
+) (memberResult, error) {
 	if ctx == nil {
 		return memberResult{}, errors.New("write private member: context is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return memberResult{}, err
 	}
-	temporaryName, file, err := directory.CreateTemporaryFile(fixedNameGenerator(name))
+	written, err := privatefs.WriteStableRegularFile(ctx, directory, name, contents)
 	if err != nil {
 		return memberResult{}, err
 	}
-	exists := true
-	closed := false
-	defer func() {
-		if !closed {
-			returnedErr = errors.Join(returnedErr, file.Close())
-		}
-		if exists {
-			if unlinkErr := directory.Unlink(temporaryName); unlinkErr != nil &&
-				!errors.Is(unlinkErr, os.ErrNotExist) {
-				returnedErr = errors.Join(returnedErr, unlinkErr)
-			}
-		}
-	}()
-	if err := writeAll(ctx, file, contents); err != nil {
-		return memberResult{}, fmt.Errorf("write private member %q: %w", name, err)
-	}
-	if err := privatefs.SyncFile(file); err != nil {
-		return memberResult{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return memberResult{}, err
-	}
-	if err := file.Close(); err != nil {
-		return memberResult{}, fmt.Errorf("close private member %q: %w", name, err)
-	}
-	closed = true
-	policy := privatefs.FilePolicy{
-		AllowedModes: privateMode,
-		MinimumSize:  int64(len(contents)),
-		MaximumSize:  int64(len(contents)),
-	}
-	result, err = inspectMember(ctx, directory, name, policy, false)
-	if err != nil {
-		return memberResult{}, err
-	}
-	exists = false
-	return result, nil
+	return memberResult{
+		identity: FileIdentity{
+			Name:      name,
+			SizeBytes: written.SizeBytes,
+			SHA256:    hex.EncodeToString(written.SHA256[:]),
+		},
+	}, nil
 }
 
 func copyMember(
@@ -233,6 +143,31 @@ func copyMember(
 	destination *privatefs.Directory,
 	destinationName string,
 	want FileIdentity,
+) (returnedErr error) {
+	return copyMemberWithHooks(
+		ctx,
+		source,
+		sourceName,
+		destination,
+		destinationName,
+		want,
+		copyMemberHooks{},
+	)
+}
+
+type copyMemberHooks struct {
+	beforeCleanupOpen func()
+	afterWriterClose  func()
+}
+
+func copyMemberWithHooks(
+	ctx context.Context,
+	source *privatefs.Directory,
+	sourceName string,
+	destination *privatefs.Directory,
+	destinationName string,
+	want FileIdentity,
+	hooks copyMemberHooks,
 ) (returnedErr error) {
 	if ctx == nil {
 		return errors.New("copy control-plane backup member: context is required")
@@ -256,25 +191,33 @@ func copyMember(
 		return err
 	}
 	exists := true
-	closed := false
+	writerOpen := true
+	var cleanupFile *os.File
 	defer func() {
-		if !closed {
-			returnedErr = errors.Join(returnedErr, destinationFile.Close())
-		}
 		if returnedErr != nil && exists {
-			if unlinkErr := destination.Unlink(temporaryName); unlinkErr != nil &&
-				!errors.Is(unlinkErr, os.ErrNotExist) {
-				returnedErr = errors.Join(returnedErr, unlinkErr)
+			expected := cleanupFile
+			if expected == nil && writerOpen {
+				expected = destinationFile
 			}
+			if expected != nil {
+				if unlinkErr := destination.UnlinkPinnedRegular(temporaryName, expected); unlinkErr != nil &&
+					!errors.Is(unlinkErr, os.ErrNotExist) {
+					returnedErr = errors.Join(returnedErr, unlinkErr)
+				}
+			}
+		}
+		if cleanupFile != nil {
+			returnedErr = errors.Join(returnedErr, cleanupFile.Close())
+		}
+		if writerOpen {
+			returnedErr = errors.Join(returnedErr, destinationFile.Close())
 		}
 	}()
 	hash := sha256.New()
-	written, err := io.CopyBuffer(
+	written, err := privatefs.CopyBufferWithContext(
+		ctx,
 		io.MultiWriter(destinationFile, hash),
-		contextReader{
-			ctx:    ctx,
-			reader: io.LimitReader(sourceFile, policy.MaximumSize+1),
-		},
+		io.LimitReader(sourceFile, policy.MaximumSize+1),
 		make([]byte, 64<<10),
 	)
 	if err != nil {
@@ -293,10 +236,44 @@ func copyMember(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if hooks.beforeCleanupOpen != nil {
+		hooks.beforeCleanupOpen()
+	}
+	cleanupCandidate, err := destination.OpenRegular(destinationName, policy)
+	if err != nil {
+		return fmt.Errorf(
+			"pin restored temporary member %q for cleanup: %w",
+			destinationName,
+			err,
+		)
+	}
+	writerInfo, writerStatErr := destinationFile.Stat()
+	candidateInfo, candidateStatErr := cleanupCandidate.Stat()
+	identityErr := errors.Join(writerStatErr, candidateStatErr)
+	if identityErr == nil && !os.SameFile(writerInfo, candidateInfo) {
+		identityErr = errors.New(
+			"reopened cleanup descriptor does not identify the staged file",
+		)
+	}
+	if identityErr != nil {
+		return errors.Join(
+			fmt.Errorf(
+				"pin restored temporary member %q for cleanup: %w",
+				destinationName,
+				identityErr,
+			),
+			cleanupCandidate.Close(),
+		)
+	}
+	cleanupFile = cleanupCandidate
 	if err := destinationFile.Close(); err != nil {
+		writerOpen = false
 		return fmt.Errorf("close restored temporary member %q: %w", destinationName, err)
 	}
-	closed = true
+	writerOpen = false
+	if hooks.afterWriterClose != nil {
+		hooks.afterWriterClose()
+	}
 	staged, err := inspectMember(ctx, destination, destinationName, policy, false)
 	if err != nil {
 		return err
@@ -305,47 +282,28 @@ func copyMember(
 	if err := requireFileIdentity(staged, want); err != nil {
 		return err
 	}
+	if err := destination.RequirePinnedRegular(destinationName, cleanupFile); err != nil {
+		return fmt.Errorf(
+			"rebind restored temporary member %q after inspection: %w",
+			destinationName,
+			err,
+		)
+	}
 	exists = false
+	if err := cleanupFile.Close(); err != nil {
+		cleanupFile = nil
+		return fmt.Errorf(
+			"close restored temporary member %q cleanup descriptor: %w",
+			destinationName,
+			err,
+		)
+	}
+	cleanupFile = nil
 	return nil
 }
 
 func fixedNameGenerator(name string) privatefs.NameGenerator {
 	return func() (string, error) { return name, nil }
-}
-
-func writeAll(ctx context.Context, file *os.File, contents []byte) error {
-	for len(contents) != 0 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		written, err := file.Write(contents)
-		if err != nil {
-			return err
-		}
-		if written <= 0 || written > len(contents) {
-			return io.ErrShortWrite
-		}
-		contents = contents[written:]
-	}
-	return nil
-}
-
-type contextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (reader contextReader) Read(buffer []byte) (int, error) {
-	if err := reader.ctx.Err(); err != nil {
-		return 0, err
-	}
-	read, err := reader.reader.Read(buffer)
-	if err == nil {
-		if contextErr := reader.ctx.Err(); contextErr != nil {
-			return read, contextErr
-		}
-	}
-	return read, err
 }
 
 func policyForIdentity(identity FileIdentity) (privatefs.FilePolicy, error) {
@@ -382,14 +340,170 @@ func cleanupKnownFiles(
 			result = errors.Join(result, err)
 			continue
 		}
+		unlinkErr := directory.UnlinkPinnedRegular(name, file)
 		closeErr := file.Close()
+		if unlinkErr != nil && !errors.Is(unlinkErr, os.ErrNotExist) {
+			result = errors.Join(result, unlinkErr)
+		}
 		if closeErr != nil {
 			result = errors.Join(result, closeErr)
-			continue
-		}
-		if err := directory.Unlink(name); err != nil && !errors.Is(err, os.ErrNotExist) {
-			result = errors.Join(result, err)
 		}
 	}
 	return result
+}
+
+type pinnedCleanupFile struct {
+	name string
+	file *os.File
+}
+
+func closePinnedCleanupFiles(files []pinnedCleanupFile) error {
+	var result error
+	for index := len(files) - 1; index >= 0; index-- {
+		if files[index].file == nil {
+			continue
+		}
+		result = errors.Join(result, files[index].file.Close())
+		files[index].file = nil
+	}
+	return result
+}
+
+func prepareExactBundleCleanup(
+	parent *privatefs.Directory,
+	name string,
+	child *privatefs.Directory,
+) ([]pinnedCleanupFile, error) {
+	if parent == nil {
+		return nil, errors.New("prepare created control-plane bundle removal: parent is required")
+	}
+	if err := privatefs.ValidateComponent(name); err != nil {
+		return nil, err
+	}
+	if child == nil {
+		return nil, errors.New(
+			"prepare created control-plane bundle removal: pinned child is required",
+		)
+	}
+	if err := parent.RequirePinnedChildDirectory(name, child); err != nil {
+		return nil, fmt.Errorf(
+			"prepare created control-plane bundle removal: bind pinned child: %w",
+			err,
+		)
+	}
+	entries, err := child.List(len(bundleStageCleanupNames))
+	if err != nil {
+		return nil, fmt.Errorf(
+			"prepare created control-plane bundle removal: inventory child: %w",
+			err,
+		)
+	}
+	for _, entry := range entries {
+		if !slices.Contains(bundleStageCleanupNames, entry) {
+			return nil, fmt.Errorf(
+				"prepare created control-plane bundle removal: unexpected child entry %q",
+				entry,
+			)
+		}
+	}
+
+	files := make([]pinnedCleanupFile, 0, len(entries))
+	for _, entry := range entries {
+		file, openErr := child.OpenRegular(entry, privatefs.FilePolicy{
+			AllowedModes: privateMode,
+			MinimumSize:  0,
+			MaximumSize:  int64(maximumDatabaseBytes),
+		})
+		if openErr != nil {
+			return nil, errors.Join(
+				fmt.Errorf(
+					"prepare created control-plane bundle removal: open child entry %q: %w",
+					entry,
+					openErr,
+				),
+				closePinnedCleanupFiles(files),
+			)
+		}
+		files = append(files, pinnedCleanupFile{name: entry, file: file})
+	}
+	for _, member := range files {
+		if err := child.RequirePinnedRegular(member.name, member.file); err != nil {
+			return nil, errors.Join(
+				fmt.Errorf(
+					"prepare created control-plane bundle removal: bind child entry %q: %w",
+					member.name,
+					err,
+				),
+				closePinnedCleanupFiles(files),
+			)
+		}
+	}
+	if err := parent.RequirePinnedChildDirectory(name, child); err != nil {
+		return nil, errors.Join(
+			fmt.Errorf(
+				"prepare created control-plane bundle removal: rebind pinned child: %w",
+				err,
+			),
+			closePinnedCleanupFiles(files),
+		)
+	}
+	return files, nil
+}
+
+// ValidateCreatedBundleForRemoval performs the complete non-mutating preflight
+// used by outer recovery-set cleanup. It rejects a replaced child, an
+// unexpected entry, or an unsafe known member before any outer member is
+// removed.
+func ValidateCreatedBundleForRemoval(
+	parent *privatefs.Directory,
+	name string,
+	child *privatefs.Directory,
+) error {
+	files, err := prepareExactBundleCleanup(parent, name, child)
+	if err != nil {
+		return err
+	}
+	if err := closePinnedCleanupFiles(files); err != nil {
+		return fmt.Errorf("validate created control-plane bundle removal: %w", err)
+	}
+	return nil
+}
+
+// RemoveCreatedBundle removes one controlbackup-owned child from an already
+// pinned owner-private parent. It knows the complete bundle and interrupted
+// SQLite sidecar namespace, removes only those exact regular-file names, and
+// never recursively traverses an unexpected object.
+func RemoveCreatedBundle(
+	parent *privatefs.Directory,
+	name string,
+	child *privatefs.Directory,
+) (returnedErr error) {
+	files, err := prepareExactBundleCleanup(parent, name, child)
+	if err != nil {
+		return fmt.Errorf("remove created control-plane bundle: %w", err)
+	}
+	defer func() {
+		returnedErr = errors.Join(returnedErr, closePinnedCleanupFiles(files))
+	}()
+
+	for index := range files {
+		member := &files[index]
+		unlinkErr := child.UnlinkPinnedRegular(member.name, member.file)
+		closeErr := member.file.Close()
+		member.file = nil
+		if err := errors.Join(unlinkErr, closeErr); err != nil {
+			return fmt.Errorf(
+				"remove created control-plane bundle: remove child entry %q: %w",
+				member.name,
+				err,
+			)
+		}
+	}
+	if err := child.Sync(); err != nil {
+		return fmt.Errorf("remove created control-plane bundle: sync child: %w", err)
+	}
+	if err := parent.RemovePinnedEmptyDirectory(name, child); err != nil {
+		return fmt.Errorf("remove created control-plane bundle: remove child: %w", err)
+	}
+	return nil
 }

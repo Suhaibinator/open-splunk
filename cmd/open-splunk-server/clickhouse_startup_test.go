@@ -578,6 +578,8 @@ func startupMigrationGrants() []string {
 		"GRANT CREATE DATABASE, SHOW TABLES ON open_splunk.* TO principal",
 		"GRANT ALTER ADD COLUMN, ALTER ADD CONSTRAINT, ALTER ADD INDEX, CREATE TABLE ON open_splunk.events TO principal",
 		"GRANT CREATE TABLE, INSERT, SELECT ON open_splunk.schema_migrations TO principal",
+		"GRANT CREATE TABLE ON open_splunk.recovery_sets TO principal",
+		"GRANT CREATE TABLE ON open_splunk.recovery_archive_markers TO principal",
 		"GRANT SELECT ON system.tables TO principal",
 	}
 }

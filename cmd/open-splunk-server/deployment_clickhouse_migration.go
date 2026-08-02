@@ -292,24 +292,26 @@ func probeDeploymentClickHouse(
 }
 
 func validateDeploymentClickHouseMigrationAddress(rawAddress string) (string, error) {
+	address, err := validateExactDeploymentClickHouseAddress(rawAddress)
+	if err != nil {
+		return "", fmt.Errorf("deployment ClickHouse migration: %w", err)
+	}
+	return address, nil
+}
+
+func validateExactDeploymentClickHouseAddress(rawAddress string) (string, error) {
 	if rawAddress == "" || rawAddress != strings.TrimSpace(rawAddress) ||
 		strings.IndexByte(rawAddress, 0) >= 0 {
-		return "", errors.New(
-			"deployment ClickHouse migration: -address must be an exact host:port address",
-		)
+		return "", errors.New("-address must be an exact host:port address")
 	}
 	host, port, err := net.SplitHostPort(rawAddress)
 	if err != nil || host == "" || port == "" ||
 		!validExplicitTLSServerName(host) {
-		return "", errors.New(
-			"deployment ClickHouse migration: -address must be an exact host:port address",
-		)
+		return "", errors.New("-address must be an exact host:port address")
 	}
 	parsedPort, err := strconv.ParseUint(port, 10, 16)
 	if err != nil || parsedPort == 0 {
-		return "", errors.New(
-			"deployment ClickHouse migration: -address port must be between 1 and 65535",
-		)
+		return "", errors.New("-address port must be between 1 and 65535")
 	}
 	return rawAddress, nil
 }

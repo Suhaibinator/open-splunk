@@ -77,10 +77,10 @@ func TestDeploymentClickHouseMigrationUsesOneVerifiedPrivilegedSession(
 				}
 				contents, readErr := fs.ReadFile(
 					migrationFiles,
-					"0003_add_field_metadata.sql",
+					"0004_create_recovery_sets.sql",
 				)
 				if readErr != nil ||
-					!strings.Contains(string(contents), "field_metadata_version") {
+					!strings.Contains(string(contents), "open_splunk.recovery_sets") {
 					t.Fatalf(
 						"deployment migration filesystem is not the embedded release: %v",
 						readErr,

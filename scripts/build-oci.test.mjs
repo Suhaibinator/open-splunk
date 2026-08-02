@@ -392,6 +392,7 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   );
   assert.match(dockerfile, /\/var\/lib\/open-splunk\/state/);
   assert.match(dockerfile, /\/var\/lib\/open-splunk\/exports/);
+  assert.match(dockerfile, /\/var\/lib\/open-splunk\/lock/);
   assert.match(dockerfile, /\/var\/lib\/open-splunk-collector/);
   assert.match(dockerfile, /install -d -o 0 -g 0 -m 0555/);
   assert.equal(
@@ -468,7 +469,7 @@ test("images seed secure writable paths in their normalized rootfs trees", async
 
   assert.match(
     dockerfile,
-    /install -d -o 65532 -g 65532 -m 0700 \\\n+\s*\/image-rootfs\/server\/var\/lib\/open-splunk\/state\/private \\\n+\s*\/image-rootfs\/server\/var\/lib\/open-splunk\/exports\/private \\\n+\s*\/image-rootfs\/collector\/var\/lib\/open-splunk-collector;/,
+    /install -d -o 65532 -g 65532 -m 0700 \\\n+\s*\/image-rootfs\/server\/var\/lib\/open-splunk\/state\/private \\\n+\s*\/image-rootfs\/server\/var\/lib\/open-splunk\/exports\/private \\\n+\s*\/image-rootfs\/server\/var\/lib\/open-splunk\/recovery\/private \\\n+\s*\/image-rootfs\/server\/var\/lib\/open-splunk\/lock\/private \\\n+\s*\/image-rootfs\/collector\/var\/lib\/open-splunk-collector;/,
   );
   assert.match(
     serverTarget,

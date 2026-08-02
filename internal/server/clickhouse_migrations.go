@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/Suhaibinator/open-splunk/internal/recoverycontract"
 )
 
 var (
@@ -22,11 +24,65 @@ var (
 
 var clickHouseMigrationFilename = regexp.MustCompile(`^([0-9]{4})_([a-z0-9][a-z0-9_]*)\.sql$`)
 
-const maximumClickHouseMigrationCount = 9_999
+const (
+	maximumClickHouseMigrationCount             = 9_999
+	clickHouseMigrationTableResultLimit         = clickHouseReleaseOwnedTableSentinel
+	clickHouseMigrationTableReadByteLimit       = 1 << 20
+	clickHouseMigrationLedgerReadByteLimit      = 16 << 20
+	clickHouseMigrationLedgerMaximumMemoryBytes = 64 << 20
+	clickHouseMigrationLedgerMaximumResultBytes = 8 << 20
+	// One additional raw row and ordered group form overflow sentinels. The inner
+	// limit bounds duplicate-heavy input before aggregation, and callers reject
+	// any duplicate or full output sentinel before retaining migration history.
+	clickHouseMigrationLedgerResultLimit = maximumClickHouseMigrationCount + 1
+)
 
 var (
 	clickHouseMigrationLedgerInsertPrefix = regexp.MustCompile("(?is)^\\s*INSERT\\s+INTO\\s+(?:open_splunk|`open_splunk`)\\s*\\.\\s*(?:schema_migrations\\b|`schema_migrations`)")
 	clickHouseMigrationLedgerInsert       = regexp.MustCompile("(?is)^\\s*INSERT\\s+INTO\\s+(?:open_splunk|`open_splunk`)\\s*\\.\\s*(?:schema_migrations\\b|`schema_migrations`)\\s*(?:\\([^)]*\\))?\\s*SELECT\\s+([0-9]+)\\s*,\\s*'([a-z0-9_]+)'(?:\\s*,|\\s*(?:WHERE\\b|$))")
+	clickHouseMigrationLedgerQuery        = clickHouseMigrationLedgerQueryForDatabase(recoverycontract.CanonicalDatabase)
+	clickHouseMigrationTablesQuery        = fmt.Sprintf(`
+		SELECT name
+		FROM
+		(
+			SELECT name
+			FROM system.tables
+			WHERE database = 'open_splunk'
+			LIMIT %d
+		)
+		ORDER BY name
+		SETTINGS
+			max_rows_to_read = %d,
+			max_bytes_to_read = %d,
+			read_overflow_mode = 'throw',
+			max_result_rows = %d,
+			result_overflow_mode = 'throw'`,
+		clickHouseMigrationTableResultLimit,
+		clickHouseMigrationTableResultLimit,
+		clickHouseMigrationTableReadByteLimit,
+		clickHouseMigrationTableResultLimit,
+	)
+	clickHouseMigrationTablesByDatabaseQuery = fmt.Sprintf(`
+		SELECT name
+		FROM
+		(
+			SELECT name
+			FROM system.tables
+			WHERE database = ?
+			LIMIT %d
+		)
+		ORDER BY name
+		SETTINGS
+			max_rows_to_read = %d,
+			max_bytes_to_read = %d,
+			read_overflow_mode = 'throw',
+			max_result_rows = %d,
+			result_overflow_mode = 'throw'`,
+		clickHouseMigrationTableResultLimit,
+		clickHouseMigrationTableResultLimit,
+		clickHouseMigrationTableReadByteLimit,
+		clickHouseMigrationTableResultLimit,
+	)
 )
 
 // One server process has only one canonical open_splunk schema. Serializing
@@ -35,19 +91,6 @@ var (
 // one server process at a time; ClickHouse MergeTree does not provide a unique
 // constraint that can serve as a cross-process migration lock.
 var clickHouseMigrationRunGate = make(chan struct{}, 1)
-
-const (
-	clickHouseMigrationTablesQuery = `
-		SELECT name
-		FROM system.tables
-		WHERE database = 'open_splunk'
-		ORDER BY name`
-	clickHouseMigrationLedgerQuery = `
-		SELECT version, name, count() AS row_count
-		FROM open_splunk.schema_migrations
-		GROUP BY version, name
-		ORDER BY version, name`
-)
 
 // ClickHouseMigrationConnection is the subset of clickhouse-go's Conn used by
 // the startup migration runner.
@@ -239,11 +282,76 @@ func validateClickHouseMigrationLedgerInsert(migration clickHouseMigration) erro
 }
 
 func readClickHouseMigrationHistory(ctx context.Context, connection ClickHouseMigrationConnection) ([]clickHouseMigrationLedgerRow, error) {
+	return readClickHouseMigrationHistoryForDatabase(
+		ctx,
+		connection,
+		recoverycontract.CanonicalDatabase,
+		false,
+	)
+}
+
+type clickHouseMigrationHistoryConnection interface {
+	Select(ctx context.Context, dest any, query string, args ...any) error
+}
+
+// readClickHouseMigrationHistoryForDatabase is the single migration-history
+// reader for both the canonical migrator and recovery aliases. A caller may
+// skip the preliminary table enumeration only after the exact physical-schema
+// inspector has already proved that the database contains precisely the
+// release-owned table set, including schema_migrations.
+func readClickHouseMigrationHistoryForDatabase(
+	ctx context.Context,
+	connection clickHouseMigrationHistoryConnection,
+	databaseName string,
+	tableSetValidated bool,
+) ([]clickHouseMigrationLedgerRow, error) {
+	if err := validateClickHouseRecoveryDatabaseName(databaseName); err != nil {
+		return nil, fmt.Errorf("read ClickHouse migration history: %w", err)
+	}
+	tablesQuery := clickHouseMigrationTablesByDatabaseQuery
+	ledgerQuery := clickHouseMigrationLedgerQueryForDatabase(databaseName)
+	var tableArguments []any
+	if databaseName == recoverycontract.CanonicalDatabase {
+		tablesQuery = clickHouseMigrationTablesQuery
+		ledgerQuery = clickHouseMigrationLedgerQuery
+	} else {
+		tableArguments = []any{databaseName}
+	}
+
+	if !tableSetValidated {
+		return readClickHouseMigrationHistoryWithTableProbe(
+			ctx,
+			connection,
+			databaseName,
+			tablesQuery,
+			tableArguments,
+			ledgerQuery,
+		)
+	}
+	return readClickHouseMigrationLedgerRows(ctx, connection, ledgerQuery)
+}
+
+func readClickHouseMigrationHistoryWithTableProbe(
+	ctx context.Context,
+	connection clickHouseMigrationHistoryConnection,
+	databaseName string,
+	tablesQuery string,
+	tableArguments []any,
+	ledgerQuery string,
+) ([]clickHouseMigrationLedgerRow, error) {
 	// clickhouse-go's Select maps each row into a struct, even for a one-column
 	// query; using a scalar slice here would fail at runtime.
 	var tables []clickHouseMigrationTable
-	if err := connection.Select(ctx, &tables, clickHouseMigrationTablesQuery); err != nil {
+	if err := connection.Select(ctx, &tables, tablesQuery, tableArguments...); err != nil {
 		return nil, fmt.Errorf("inspect ClickHouse migration tables: %w", err)
+	}
+	if len(tables) >= clickHouseMigrationTableResultLimit {
+		return nil, fmt.Errorf(
+			"%w: %s contains more than the supported maximum of %d release-owned tables",
+			ErrClickHouseMigrationDrift,
+			databaseName,
+			clickHouseReleaseOwnedTableCount,
+		)
 	}
 	ledgerExists := false
 	for _, table := range tables {
@@ -258,8 +366,9 @@ func readClickHouseMigrationHistory(ctx context.Context, connection ClickHouseMi
 			names[index] = table.Name
 		}
 		return nil, fmt.Errorf(
-			"%w: open_splunk contains tables %q but no migration ledger",
+			"%w: %s contains tables %q but no migration ledger",
 			ErrClickHouseMigrationDrift,
+			databaseName,
 			strings.Join(names, ", "),
 		)
 	}
@@ -267,11 +376,60 @@ func readClickHouseMigrationHistory(ctx context.Context, connection ClickHouseMi
 		return nil, nil
 	}
 
+	return readClickHouseMigrationLedgerRows(ctx, connection, ledgerQuery)
+}
+
+func readClickHouseMigrationLedgerRows(
+	ctx context.Context,
+	connection clickHouseMigrationHistoryConnection,
+	ledgerQuery string,
+) ([]clickHouseMigrationLedgerRow, error) {
 	var history []clickHouseMigrationLedgerRow
-	if err := connection.Select(ctx, &history, clickHouseMigrationLedgerQuery); err != nil {
+	if err := connection.Select(ctx, &history, ledgerQuery); err != nil {
 		return nil, fmt.Errorf("read ClickHouse migration ledger: %w", err)
 	}
+	if len(history) >= clickHouseMigrationLedgerResultLimit {
+		return nil, fmt.Errorf(
+			"%w: migration ledger contains more than the supported maximum of %d distinct version/name identities",
+			ErrClickHouseMigrationDrift,
+			maximumClickHouseMigrationCount,
+		)
+	}
 	return history, nil
+}
+
+func clickHouseMigrationLedgerQueryForDatabase(databaseName string) string {
+	return fmt.Sprintf(`
+		SELECT version, name, count() AS row_count
+		FROM
+		(
+			SELECT version, name
+			FROM %s.schema_migrations
+			LIMIT %d
+		)
+		GROUP BY version, name
+		ORDER BY version, name
+		LIMIT %d
+		SETTINGS
+			max_rows_to_read = %d,
+			max_bytes_to_read = %d,
+			read_overflow_mode = 'throw',
+			max_rows_to_group_by = %d,
+			group_by_overflow_mode = 'throw',
+			max_memory_usage = %d,
+			max_result_rows = %d,
+			max_result_bytes = %d,
+			result_overflow_mode = 'throw'`,
+		databaseName,
+		clickHouseMigrationLedgerResultLimit,
+		clickHouseMigrationLedgerResultLimit,
+		clickHouseMigrationLedgerResultLimit,
+		clickHouseMigrationLedgerReadByteLimit,
+		clickHouseMigrationLedgerResultLimit,
+		clickHouseMigrationLedgerMaximumMemoryBytes,
+		clickHouseMigrationLedgerResultLimit,
+		clickHouseMigrationLedgerMaximumResultBytes,
+	)
 }
 
 func verifyClickHouseMigrationHistory(history []clickHouseMigrationLedgerRow, migrations []clickHouseMigration, requireComplete bool) error {

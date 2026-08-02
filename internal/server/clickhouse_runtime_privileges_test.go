@@ -165,6 +165,263 @@ func TestValidateClickHouseRuntimePrivilegesRequiresNarrowIndexStatisticsGrant(
 	}
 }
 
+func TestValidateClickHouseMigrationPrivilegesRequiresRecoveryTableCreateGrants(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, target := range []string{
+		"open_splunk.recovery_sets",
+		"open_splunk.recovery_archive_markers",
+	} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			connection := validClickHousePrivilegeConnection(
+				clickHouseMigrationGrantAllowlist,
+			)
+			connection.grants = slicesWithoutClickHouseGrantTarget(
+				connection.grants,
+				target,
+			)
+			err := ValidateClickHouseMigrationPrivileges(
+				context.Background(),
+				connection,
+			)
+			if !errors.Is(err, ErrClickHousePrivilegeMissing) {
+				t.Fatalf(
+					"ValidateClickHouseMigrationPrivileges() error = %v, want missing %s CREATE TABLE grant",
+					err,
+					target,
+				)
+			}
+		})
+	}
+}
+
+func TestValidateClickHouseRecoveryPrivilegesUseSeparateLeastPrivilegeRoles(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	if slicesContainClickHousePrivilege(
+		clickHouseBackupGrantAllowlist,
+		"CREATE DATABASE",
+	) || slicesContainClickHousePrivilegeOutsideTarget(
+		clickHouseBackupGrantAllowlist,
+		"INSERT",
+		"open_splunk.recovery_archive_markers",
+	) {
+		t.Fatalf("backup grant allowlist permits restore writes: %#v", clickHouseBackupGrantAllowlist)
+	}
+	if slicesContainClickHousePrivilege(
+		clickHouseRestoreGrantAllowlist,
+		"BACKUP",
+	) {
+		t.Fatalf("restore grant allowlist permits creating backups: %#v", clickHouseRestoreGrantAllowlist)
+	}
+	if slicesContainClickHousePrivilege(clickHouseRestoreGrantAllowlist, "DROP TABLE") {
+		t.Fatalf("restore grant allowlist permits unnecessary table drops: %#v", clickHouseRestoreGrantAllowlist)
+	}
+	if slicesContainClickHousePrivilege(clickHouseRestoreGrantAllowlist, "DROP DATABASE") {
+		t.Fatalf("restore grant allowlist permits unnecessary database drops: %#v", clickHouseRestoreGrantAllowlist)
+	}
+	for _, grant := range clickHouseRestoreGrantAllowlist {
+		if strings.Contains(grant.target, "open_splunk*") {
+			t.Fatalf("restore grant allowlist contains a prefix wildcard target: %#v", grant)
+		}
+		if grant.target == "open_splunk.*" &&
+			!reflect.DeepEqual(grant.privileges, []string{"CREATE DATABASE", "SHOW TABLES"}) {
+			t.Fatalf("restore database-wide grant exceeds creation and metadata visibility: %#v", grant)
+		}
+		for _, privilege := range grant.privileges {
+			if (privilege == "CREATE TABLE" || privilege == "INSERT") &&
+				grant.target != "open_splunk.events" &&
+				grant.target != "open_splunk.schema_migrations" &&
+				grant.target != "open_splunk.recovery_archive_markers" &&
+				grant.target != "open_splunk.recovery_sets" {
+				t.Fatalf("restore data mutation is not exact-table scoped: %#v", grant)
+			}
+		}
+	}
+	for name, profile := range map[string]struct {
+		allowlist  []clickHouseGrant
+		privileges []string
+	}{
+		"backup": {
+			allowlist:  clickHouseBackupGrantAllowlist,
+			privileges: []string{"BACKUP", "SHOW TABLES"},
+		},
+		"restore": {
+			allowlist:  clickHouseRestoreGrantAllowlist,
+			privileges: []string{"CREATE DATABASE", "SHOW TABLES"},
+		},
+	} {
+		if !slicesContainExactClickHouseGrantPrivileges(
+			profile.allowlist,
+			"open_splunk.*",
+			profile.privileges,
+		) {
+			t.Fatalf(
+				"%s grant allowlist cannot observe administrator-owned schema additions: %#v",
+				name,
+				profile.allowlist,
+			)
+		}
+	}
+	if !slicesContainExactClickHouseGrant(
+		clickHouseRestoreGrantAllowlist,
+		"*.*",
+		"SHOW DATABASES",
+	) {
+		t.Fatalf(
+			"restore grant allowlist cannot observe the complete reserved namespace: %#v",
+			clickHouseRestoreGrantAllowlist,
+		)
+	}
+	if !slicesContainExactClickHouseGrant(
+		clickHouseRestoreGrantAllowlist,
+		"system.mutations",
+		"SELECT",
+	) {
+		t.Fatalf(
+			"restore grant allowlist cannot validate restored canonical mutations: %#v",
+			clickHouseRestoreGrantAllowlist,
+		)
+	}
+}
+
+func TestValidateClickHouseRestorePrivilegesRejectsBroadEventReadsAndTruncates(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, statement := range []string{
+		"GRANT SELECT ON open_splunk.events TO restore",
+		"GRANT SELECT ON open_splunk_restore.events TO restore",
+		"GRANT SELECT ON open_splunk*.events TO restore",
+		"GRANT SELECT ON open_splunk*.events* TO restore",
+		"GRANT TRUNCATE ON open_splunk.events TO restore",
+		"GRANT TRUNCATE ON open_splunk_restore.events TO restore",
+		"GRANT TRUNCATE ON open_splunk*.events TO restore",
+		"GRANT TRUNCATE ON open_splunk*.events* TO restore",
+		"GRANT TRUNCATE ON open_splunk.schema_migrations TO restore",
+		"GRANT TRUNCATE ON open_splunk_restore.schema_migrations TO restore",
+		"GRANT TRUNCATE ON open_splunk*.schema_migrations TO restore",
+		"GRANT TRUNCATE ON open_splunk*.schema_migrations* TO restore",
+	} {
+		t.Run(statement, func(t *testing.T) {
+			t.Parallel()
+
+			connection := validClickHousePrivilegeConnection(
+				clickHouseRestoreGrantAllowlist,
+			)
+			connection.grants = append(connection.grants, statement)
+			err := ValidateClickHouseRestorePrivileges(
+				context.Background(),
+				connection,
+			)
+			if !errors.Is(err, ErrClickHousePrivilegeProhibited) {
+				t.Fatalf(
+					"ValidateClickHouseRestorePrivileges() error = %v, want prohibited broad grant",
+					err,
+				)
+			}
+		})
+	}
+}
+
+func TestClickHouseRecoveryMarkerPrivilegesMatchOneShotResponsibilities(t *testing.T) {
+	t.Parallel()
+
+	if !slicesContainExactClickHouseGrantPrivileges(
+		clickHouseBackupGrantAllowlist,
+		"open_splunk.recovery_archive_markers",
+		[]string{"INSERT", "SELECT", "TRUNCATE"},
+	) {
+		t.Fatalf(
+			"backup grant allowlist cannot publish and clear canonical archive markers: %#v",
+			clickHouseBackupGrantAllowlist,
+		)
+	}
+	if !slicesContainExactClickHouseGrantPrivileges(
+		clickHouseRestoreGrantAllowlist,
+		"open_splunk.recovery_archive_markers",
+		[]string{"CREATE TABLE", "INSERT", "SELECT", "TRUNCATE"},
+	) {
+		t.Fatalf(
+			"restore grant allowlist cannot validate and consume the restored archive marker: %#v",
+			clickHouseRestoreGrantAllowlist,
+		)
+	}
+}
+
+func slicesContainClickHousePrivilege(grants []clickHouseGrant, privilege string) bool {
+	for _, grant := range grants {
+		for _, candidate := range grant.privileges {
+			if candidate == privilege {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func slicesContainClickHousePrivilegeOutsideTarget(
+	grants []clickHouseGrant,
+	privilege string,
+	allowedTarget string,
+) bool {
+	for _, grant := range grants {
+		if grant.target == allowedTarget {
+			continue
+		}
+		for _, candidate := range grant.privileges {
+			if candidate == privilege {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func slicesContainExactClickHouseGrant(
+	grants []clickHouseGrant,
+	target string,
+	privilege string,
+) bool {
+	for _, grant := range grants {
+		if grant.target == target && len(grant.privileges) == 1 &&
+			grant.privileges[0] == privilege {
+			return true
+		}
+	}
+	return false
+}
+
+func slicesContainExactClickHouseGrantPrivileges(
+	grants []clickHouseGrant,
+	target string,
+	privileges []string,
+) bool {
+	for _, grant := range grants {
+		if grant.target == target && reflect.DeepEqual(grant.privileges, privileges) {
+			return true
+		}
+	}
+	return false
+}
+
+func slicesWithoutClickHouseGrantTarget(grants []string, target string) []string {
+	filtered := make([]string, 0, len(grants))
+	for _, grant := range grants {
+		if !strings.Contains(grant, " ON "+target+" TO ") {
+			filtered = append(filtered, grant)
+		}
+	}
+	return filtered
+}
+
 func TestValidateClickHousePrincipalPrivilegesRejectsDuplicateGrant(t *testing.T) {
 	t.Parallel()
 
@@ -376,6 +633,18 @@ func testClickHousePrivilegeProfiles() []testClickHousePrivilegeProfile {
 			validatorName: "ValidateClickHouseDeletionWorkerPrivileges",
 			validate:      ValidateClickHouseDeletionWorkerPrivileges,
 			allowlist:     clickHouseDeletionWorkerGrantAllowlist,
+		},
+		{
+			name:          "backup",
+			validatorName: "ValidateClickHouseBackupPrivileges",
+			validate:      ValidateClickHouseBackupPrivileges,
+			allowlist:     clickHouseBackupGrantAllowlist,
+		},
+		{
+			name:          "restore",
+			validatorName: "ValidateClickHouseRestorePrivileges",
+			validate:      ValidateClickHouseRestorePrivileges,
+			allowlist:     clickHouseRestoreGrantAllowlist,
 		},
 	}
 }

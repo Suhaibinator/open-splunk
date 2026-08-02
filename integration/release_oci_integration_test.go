@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -25,8 +26,14 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const releaseOCIIntegrationFlag = "OPEN_SPLUNK_OCI_INTEGRATION"
@@ -45,7 +52,7 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 		t.Fatalf("release OCI integration does not support host architecture %q", runtime.GOARCH)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	repository := repositoryRoot(t)
 	deployDirectory := filepath.Join(repository, "deploy")
@@ -99,10 +106,22 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 	serverID := stack.serviceContainerID(t, ctx, "server", false)
 	clickHouseID := stack.serviceContainerID(t, ctx, "clickhouse", false)
 	migratorID := stack.serviceContainerID(t, ctx, "clickhouse-migrator", true)
+	recoveryVolumeBootstrapID := stack.serviceContainerID(
+		t,
+		ctx,
+		"clickhouse-recovery-volume-bootstrap",
+		true,
+	)
 	bootstrapID := stack.serviceContainerID(t, ctx, "server-bootstrap", true)
 	serverContainer := releaseOCIInspectContainer(t, ctx, stack, serverID)
 	clickHouseContainer := releaseOCIInspectContainer(t, ctx, stack, clickHouseID)
 	migratorContainer := releaseOCIInspectContainer(t, ctx, stack, migratorID)
+	recoveryVolumeBootstrapContainer := releaseOCIInspectContainer(
+		t,
+		ctx,
+		stack,
+		recoveryVolumeBootstrapID,
+	)
 	bootstrapContainer := releaseOCIInspectContainer(t, ctx, stack, bootstrapID)
 	releaseOCIAssertContainerHardening(t, serverContainer, "65532:65532", true)
 	releaseOCIAssertContainerHardening(t, migratorContainer, "65532:65532", false)
@@ -112,9 +131,11 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 	releaseOCIAssertContainerHealth(t, clickHouseContainer, "clickhouse")
 	releaseOCIAssertMigratorCompleted(t, migratorContainer)
 	releaseOCIAssertMigratorIsolation(t, stack, migratorContainer)
+	releaseOCIAssertRecoveryVolumeBootstrap(t, stack, recoveryVolumeBootstrapContainer)
 	releaseOCIAssertBootstrapCompleted(t, bootstrapContainer)
 	releaseOCIAssertBootstrapNetworkDisabled(t, bootstrapContainer)
 	releaseOCIAssertClickHouseHasNoHostPorts(t, clickHouseContainer)
+	releaseOCIAssertClickHouseRecoveryVolumeOwnership(t, ctx, stack)
 	releaseOCIAssertDefaultClickHouseUserRejected(t, ctx, stack)
 	releaseOCIAssertServerEnvironmentHasNoSecrets(t, stack, serverContainer)
 	httpAddress, grpcAddress := releaseOCIPublishedServerAddresses(t, serverContainer)
@@ -171,6 +192,7 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 		"240",
 		"--no-build",
 		"--force-recreate",
+		"clickhouse-recovery-volume-bootstrap",
 		"clickhouse",
 		"clickhouse-migrator",
 		"server-bootstrap",
@@ -189,6 +211,18 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 	if recreatedMigratorID == migratorID {
 		t.Fatalf("force-recreate retained ClickHouse migrator container %q", migratorID)
 	}
+	recreatedRecoveryVolumeBootstrapID := stack.serviceContainerID(
+		t,
+		ctx,
+		"clickhouse-recovery-volume-bootstrap",
+		true,
+	)
+	if recreatedRecoveryVolumeBootstrapID == recoveryVolumeBootstrapID {
+		t.Fatalf(
+			"force-recreate retained ClickHouse recovery volume bootstrap container %q",
+			recoveryVolumeBootstrapID,
+		)
+	}
 	recreatedBootstrapID := stack.serviceContainerID(t, ctx, "server-bootstrap", true)
 	recreatedServerContainer := releaseOCIInspectContainer(t, ctx, stack, recreatedServerID)
 	recreatedClickHouseContainer := releaseOCIInspectContainer(
@@ -203,13 +237,25 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 		stack,
 		recreatedMigratorID,
 	)
+	recreatedRecoveryVolumeBootstrapContainer := releaseOCIInspectContainer(
+		t,
+		ctx,
+		stack,
+		recreatedRecoveryVolumeBootstrapID,
+	)
 	recreatedBootstrapContainer := releaseOCIInspectContainer(t, ctx, stack, recreatedBootstrapID)
 	if got := releaseOCIStateVolume(t, recreatedServerContainer); got != firstStateVolume {
 		t.Fatalf("server state volume after force-recreate = %q, want %q", got, firstStateVolume)
 	}
 	releaseOCIAssertBootstrapCompleted(t, recreatedBootstrapContainer)
 	releaseOCIAssertBootstrapNetworkDisabled(t, recreatedBootstrapContainer)
+	releaseOCIAssertRecoveryVolumeBootstrap(
+		t,
+		stack,
+		recreatedRecoveryVolumeBootstrapContainer,
+	)
 	releaseOCIAssertContainerHealth(t, recreatedClickHouseContainer, "recreated ClickHouse")
+	releaseOCIAssertClickHouseRecoveryVolumeOwnership(t, ctx, stack)
 	releaseOCIAssertContainerHardening(t, recreatedMigratorContainer, "65532:65532", false)
 	releaseOCIAssertMigratorCompleted(t, recreatedMigratorContainer)
 	releaseOCIAssertMigratorIsolation(t, stack, recreatedMigratorContainer)
@@ -245,122 +291,1213 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 			t.Fatalf("persisted bootstrap indexes do not contain %q: %+v", name, bootstrap.GetIndexes())
 		}
 	}
-	releaseOCIAssertControlPlaneRecovery(
-		t,
-		ctx,
-		stack,
-		client,
-		administratorToken,
-		[]string{firstIndex, secondIndex},
-		firstStateVolume,
-		recreatedServerID,
-		recreatedClickHouseID,
-		suffix,
-	)
+	recoveryFixture := &releaseOCIRecoveryFixture{
+		t:                    t,
+		ctx:                  ctx,
+		stack:                stack,
+		client:               client,
+		baseURL:              baseURL,
+		grpcAddress:          recreatedGRPCAddress,
+		administratorToken:   administratorToken,
+		preBackupIndexes:     []string{firstIndex, secondIndex},
+		originalStateVolume:  firstStateVolume,
+		originalServerID:     recreatedServerID,
+		originalClickHouseID: recreatedClickHouseID,
+		bootstrapID:          recreatedBootstrapID,
+		suffix:               suffix,
+	}
+	recoveryFixture.run()
 }
 
-func releaseOCIAssertControlPlaneRecovery(
+const (
+	releaseOCIClickHouseDataPath     = "/var/lib/clickhouse"
+	releaseOCIClickHouseLogsPath     = "/var/log/clickhouse-server"
+	releaseOCIClickHouseRecoveryPath = "/var/lib/open-splunk-clickhouse-backups"
+	releaseOCIServerExportsPath      = "/var/lib/open-splunk/exports"
+)
+
+type releaseOCIRecoveryFixture struct {
+	t     *testing.T
+	ctx   context.Context
+	stack *releaseOCIComposeStack
+
+	client               *http.Client
+	baseURL              string
+	grpcAddress          string
+	administratorToken   string
+	preBackupIndexes     []string
+	originalStateVolume  string
+	originalServerID     string
+	originalClickHouseID string
+	bootstrapID          string
+	suffix               string
+
+	recoveryIndex              string
+	credential                 releaseOCIIngestionCredential
+	fixtureTime                time.Time
+	preBackupEventID           string
+	postBackupEventID          string
+	postRestoreEventID         string
+	postBackupIndex            string
+	mutationServerID           string
+	originalClickHouseRecovery string
+	restoredClient             *http.Client
+	restoredBaseURL            string
+	restoredGRPCAddress        string
+}
+
+type releaseOCIRecoveryHelperMount struct {
+	kind     string
+	source   string
+	writable bool
+}
+
+type releaseOCIRecoveryHelperContract struct {
+	command     []string
+	mounts      map[string]releaseOCIRecoveryHelperMount
+	environment []string
+	networkMode string
+	networks    []string
+	tmpfs       bool
+	user        string
+	workingDir  string
+	pidsLimit   int64
+	exitCode    int
+}
+
+func releaseOCIRunRecoveryHelper(
 	t *testing.T,
 	ctx context.Context,
 	stack *releaseOCIComposeStack,
-	client *http.Client,
-	administratorToken string,
-	preBackupIndexes []string,
-	originalStateVolume string,
-	originalServerID string,
-	clickHouseID string,
-	suffix string,
+	purpose string,
+	service string,
+	stateVolume string,
+	recoveryVolume string,
 ) {
 	t.Helper()
-	const (
-		stateRoot                = "/var/lib/open-splunk/state"
-		statePrivateDirectory    = stateRoot + "/private"
-		controlDatabasePath      = statePrivateDirectory + "/open-splunk.db"
-		masterKeyPath            = statePrivateDirectory + "/master.key"
-		administratorTokenPath   = statePrivateDirectory + "/administrator.token"
-		backupRoot               = "/var/lib/open-splunk/exports"
-		backupPrivateDirectory   = backupRoot + "/private"
-		controlPlaneBackupSource = backupPrivateDirectory + "/control-plane"
+	contract := releaseOCIRecoveryHelperContractFor(
+		t,
+		stack,
+		service,
+		stateVolume,
+		recoveryVolume,
 	)
+	containerName := stack.project + "-" + purpose + "-" + releaseOCIRandomHex(t, 4)
+	stack.ownedContainers = append(stack.ownedContainers, containerName)
+	stack.mustCompose(
+		t,
+		ctx,
+		"run and retain "+service+" for confinement inspection",
+		"--profile",
+		"recovery",
+		"run",
+		"--name",
+		containerName,
+		"--no-deps",
+		service,
+	)
+	container := releaseOCIInspectContainer(t, ctx, stack, containerName)
+	releaseOCIAssertRecoveryHelperConfinement(t, stack, service, container, contract)
+	releaseOCIRunDocker(
+		t,
+		ctx,
+		stack,
+		"remove inspected "+service+" one-off container",
+		"container",
+		"rm",
+		"--force",
+		containerName,
+	)
+	stack.forgetOwnedContainer(containerName)
+}
+
+func releaseOCIRequireRecoveryHelperFailure(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	purpose string,
+	service string,
+	stateVolume string,
+	recoveryVolume string,
+	wantError string,
+) {
+	t.Helper()
+	contract := releaseOCIRecoveryHelperContractFor(
+		t,
+		stack,
+		service,
+		stateVolume,
+		recoveryVolume,
+	)
+	contract.exitCode = 1
+	containerName := stack.project + "-" + purpose + "-" + releaseOCIRandomHex(t, 4)
+	stack.ownedContainers = append(stack.ownedContainers, containerName)
+	output, truncated, err := stack.runCompose(
+		ctx,
+		"--profile",
+		"recovery",
+		"run",
+		"--name",
+		containerName,
+		"--no-deps",
+		service,
+	)
+	if err == nil || truncated || !strings.Contains(output, wantError) {
+		t.Fatalf(
+			"%s failure = %v truncated=%t output=%q, want error containing %q",
+			service,
+			err,
+			truncated,
+			stack.redact(output),
+			wantError,
+		)
+	}
+	container := releaseOCIInspectContainer(t, ctx, stack, containerName)
+	releaseOCIAssertRecoveryHelperConfinement(t, stack, service, container, contract)
+	releaseOCIRunDocker(
+		t,
+		ctx,
+		stack,
+		"remove inspected failing "+service+" one-off container",
+		"container",
+		"rm",
+		"--force",
+		containerName,
+	)
+	stack.forgetOwnedContainer(containerName)
+}
+
+func releaseOCIRecoveryHelperContractFor(
+	t *testing.T,
+	stack *releaseOCIComposeStack,
+	service string,
+	stateVolume string,
+	recoveryVolume string,
+) releaseOCIRecoveryHelperContract {
+	t.Helper()
+	recoverySetPath := releaseOCIRecoverySetPath(stack)
+	serverRecoveryVolume := stack.project + "_server-recovery"
+	serverLockVolume := stack.project + "_server-lock"
+	backendNetwork := stack.project + "_backend"
+	contract := releaseOCIRecoveryHelperContract{
+		networkMode: backendNetwork,
+		networks:    []string{backendNetwork},
+		user:        "65532:65532",
+		workingDir:  "/var/lib/open-splunk/state/private",
+		pidsLimit:   64,
+		environment: []string{
+			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		},
+	}
+	switch service {
+	case "deployment-backup":
+		if stateVolume == "" || recoveryVolume == "" {
+			t.Fatal("deployment-backup confinement contract requires exact state and recovery volumes")
+		}
+		contract.command = []string{
+			"backup-deployment-recovery-set",
+			"-control-db",
+			"/var/lib/open-splunk/state/private/open-splunk.db",
+			"-master-key",
+			"/var/lib/open-splunk/state/private/master.key",
+			"-administrator-token-file",
+			"/var/lib/open-splunk/state/private/administrator.token",
+			"-destination",
+			recoverySetPath,
+			"-archive-root",
+			"/var/lib/open-splunk/clickhouse-backups",
+			"-address",
+			"clickhouse:9440",
+			"-password-file",
+			"/run/open-splunk/clickhouse/backup.password",
+			"-ca-cert",
+			"/run/open-splunk/clickhouse/ca.crt",
+			"-server-name",
+			stack.values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
+		}
+		contract.mounts = map[string]releaseOCIRecoveryHelperMount{
+			"/var/lib/open-splunk/state": {
+				kind: "volume", source: stateVolume, writable: true,
+			},
+			"/var/lib/open-splunk/lock": {
+				kind: "volume", source: serverLockVolume, writable: true,
+			},
+			"/var/lib/open-splunk/recovery": {
+				kind: "volume", source: serverRecoveryVolume, writable: true,
+			},
+			"/var/lib/open-splunk/clickhouse-backups": {
+				kind: "volume", source: recoveryVolume,
+			},
+			"/run/open-splunk/clickhouse/ca.crt": {
+				kind: "bind", source: stack.values["OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE"],
+			},
+			"/run/open-splunk/clickhouse/backup.password": {
+				kind: "bind", source: stack.values["OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE"],
+			},
+		}
+		contract.environment = append(
+			contract.environment,
+			"OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH=/var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock",
+		)
+		contract.tmpfs = true
+	case "deployment-verify":
+		if stateVolume != "" || recoveryVolume == "" {
+			t.Fatal("deployment-verify confinement contract requires only the recovery volume")
+		}
+		contract.command = []string{
+			"verify-deployment-recovery-set",
+			"-source",
+			recoverySetPath,
+			"-archive-root",
+			"/var/lib/open-splunk/clickhouse-backups",
+		}
+		contract.mounts = map[string]releaseOCIRecoveryHelperMount{
+			"/var/lib/open-splunk/recovery": {
+				kind: "volume", source: serverRecoveryVolume,
+			},
+			"/var/lib/open-splunk/clickhouse-backups": {
+				kind: "volume", source: recoveryVolume,
+			},
+		}
+		contract.networkMode = "none"
+		contract.networks = []string{"none"}
+	case "deployment-restore":
+		if stateVolume == "" || recoveryVolume == "" {
+			t.Fatal("deployment-restore confinement contract requires exact state and recovery volumes")
+		}
+		contract.command = []string{
+			"restore-deployment-recovery-set",
+			"-source",
+			recoverySetPath,
+			"-archive-root",
+			"/var/lib/open-splunk/clickhouse-backups",
+			"-control-db",
+			"/var/lib/open-splunk/state/private/open-splunk.db",
+			"-master-key",
+			"/var/lib/open-splunk/state/private/master.key",
+			"-administrator-token-file",
+			"/var/lib/open-splunk/state/private/administrator.token",
+			"-address",
+			"clickhouse:9440",
+			"-password-file",
+			"/run/open-splunk/clickhouse/restore.password",
+			"-ca-cert",
+			"/run/open-splunk/clickhouse/ca.crt",
+			"-server-name",
+			stack.values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
+		}
+		contract.mounts = map[string]releaseOCIRecoveryHelperMount{
+			"/var/lib/open-splunk/state": {
+				kind: "volume", source: stateVolume, writable: true,
+			},
+			"/var/lib/open-splunk/lock": {
+				kind: "volume", source: serverLockVolume, writable: true,
+			},
+			"/var/lib/open-splunk/recovery": {
+				kind: "volume", source: serverRecoveryVolume,
+			},
+			"/var/lib/open-splunk/clickhouse-backups": {
+				kind: "volume", source: recoveryVolume,
+			},
+			"/run/open-splunk/clickhouse/ca.crt": {
+				kind: "bind", source: stack.values["OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE"],
+			},
+			"/run/open-splunk/clickhouse/restore.password": {
+				kind: "bind", source: stack.values["OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD_FILE"],
+			},
+		}
+		contract.environment = append(
+			contract.environment,
+			"OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH=/var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock",
+		)
+		contract.tmpfs = true
+	case "deployment-marker-reconcile":
+		if stateVolume != "" || recoveryVolume != "" {
+			t.Fatal("deployment-marker-reconcile confinement contract requires no state or recovery volume")
+		}
+		recoverySetID := stack.values["OPEN_SPLUNK_STALE_RECOVERY_SET_ID"]
+		confirmedRecoverySetID := stack.values["OPEN_SPLUNK_CONFIRMED_STALE_RECOVERY_SET_ID"]
+		backupOperationUUID := stack.values["OPEN_SPLUNK_STALE_BACKUP_OPERATION_UUID"]
+		confirmedBackupOperationUUID := stack.values["OPEN_SPLUNK_CONFIRMED_STALE_BACKUP_OPERATION_UUID"]
+		if recoverySetID == "" || confirmedRecoverySetID == "" ||
+			backupOperationUUID == "" || confirmedBackupOperationUUID == "" {
+			t.Fatal("deployment-marker-reconcile confinement contract requires explicit marker identities")
+		}
+		contract.command = []string{
+			"reconcile-deployment-recovery-marker",
+			"-recovery-set-id",
+			recoverySetID,
+			"-confirm-recovery-set-id",
+			confirmedRecoverySetID,
+			"-backup-operation-uuid",
+			backupOperationUUID,
+			"-confirm-backup-operation-uuid",
+			confirmedBackupOperationUUID,
+			"-address",
+			"clickhouse:9440",
+			"-password-file",
+			"/run/open-splunk/clickhouse/backup.password",
+			"-ca-cert",
+			"/run/open-splunk/clickhouse/ca.crt",
+			"-server-name",
+			stack.values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
+		}
+		contract.mounts = map[string]releaseOCIRecoveryHelperMount{
+			"/var/lib/open-splunk/lock": {
+				kind: "volume", source: serverLockVolume, writable: true,
+			},
+			"/run/open-splunk/clickhouse/ca.crt": {
+				kind: "bind", source: stack.values["OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE"],
+			},
+			"/run/open-splunk/clickhouse/backup.password": {
+				kind: "bind", source: stack.values["OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE"],
+			},
+		}
+		contract.environment = append(
+			contract.environment,
+			"OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH=/var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock",
+		)
+		contract.tmpfs = true
+	case "deployment-archive-delete":
+		if stateVolume != "" || recoveryVolume == "" {
+			t.Fatal("deployment-archive-delete confinement contract requires only the recovery volume")
+		}
+		archiveName := stack.values["OPEN_SPLUNK_FAILED_RECOVERY_ARCHIVE_NAME"]
+		confirmedName := stack.values["OPEN_SPLUNK_CONFIRMED_RECOVERY_ARCHIVE_NAME"]
+		if archiveName == "" || confirmedName != archiveName {
+			t.Fatal("deployment-archive-delete confinement contract requires matching exact archive confirmations")
+		}
+		contract.command = []string{
+			"delete-deployment-recovery-archive",
+			"-archive-root",
+			"/var/lib/open-splunk/clickhouse-backups",
+			"-archive-name",
+			archiveName,
+			"-confirm-archive-name",
+			confirmedName,
+		}
+		contract.mounts = map[string]releaseOCIRecoveryHelperMount{
+			"/var/lib/open-splunk/clickhouse-backups": {
+				kind: "volume", source: recoveryVolume, writable: true,
+			},
+		}
+		contract.networkMode = "none"
+		contract.networks = []string{"none"}
+		contract.user = "101:65532"
+		contract.workingDir = "/"
+		contract.pidsLimit = 32
+	default:
+		t.Fatalf("unsupported recovery helper service %q", service)
+	}
+	return contract
+}
+
+func releaseOCIRecoverySetPath(stack *releaseOCIComposeStack) string {
+	path := stack.values["OPEN_SPLUNK_DEPLOYMENT_RECOVERY_SET_PATH"]
+	if path == "" {
+		path = os.Getenv("OPEN_SPLUNK_DEPLOYMENT_RECOVERY_SET_PATH")
+	}
+	if path == "" {
+		return "/var/lib/open-splunk/recovery/private/deployment-recovery-set"
+	}
+	return path
+}
+
+func releaseOCIAssertRecoveryHelperConfinement(
+	t *testing.T,
+	stack *releaseOCIComposeStack,
+	service string,
+	container *releaseOCIContainerInspect,
+	contract releaseOCIRecoveryHelperContract,
+) {
+	t.Helper()
+	releaseOCIAssertContainerHardening(t, container, contract.user, false)
+	if !slices.Equal(container.HostConfig.CapDrop, []string{"ALL"}) ||
+		!slices.Equal(container.HostConfig.SecurityOpt, []string{"no-new-privileges:true"}) {
+		t.Fatalf(
+			"%s one-off capability/security contract = cap-drop %v security %v, want exactly ALL/no-new-privileges",
+			service,
+			container.HostConfig.CapDrop,
+			container.HostConfig.SecurityOpt,
+		)
+	}
+	if container.HostConfig.Privileged || container.HostConfig.PidMode != "" ||
+		container.HostConfig.UTSMode != "" ||
+		container.HostConfig.UsernsMode != "" ||
+		(container.HostConfig.IpcMode != "" && container.HostConfig.IpcMode != "private") ||
+		(container.HostConfig.CgroupnsMode != "" && container.HostConfig.CgroupnsMode != "private") ||
+		len(container.HostConfig.Devices) != 0 || len(container.HostConfig.DeviceRequests) != 0 ||
+		len(container.HostConfig.DeviceCgroupRules) != 0 ||
+		len(container.HostConfig.GroupAdd) != 0 || len(container.HostConfig.VolumesFrom) != 0 {
+		t.Fatalf(
+			"%s one-off has privileged device/namespace sharing: privileged=%t pid=%q ipc=%q uts=%q userns=%q cgroup=%q devices=%d requests=%d device-rules=%v groups=%v volumes-from=%v",
+			service,
+			container.HostConfig.Privileged,
+			container.HostConfig.PidMode,
+			container.HostConfig.IpcMode,
+			container.HostConfig.UTSMode,
+			container.HostConfig.UsernsMode,
+			container.HostConfig.CgroupnsMode,
+			len(container.HostConfig.Devices),
+			len(container.HostConfig.DeviceRequests),
+			container.HostConfig.DeviceCgroupRules,
+			container.HostConfig.GroupAdd,
+			container.HostConfig.VolumesFrom,
+		)
+	}
+	if container.State.Status != "exited" || container.State.ExitCode != contract.exitCode {
+		t.Fatalf(
+			"%s one-off state = %q exit %d, want retained exit %d",
+			service,
+			container.State.Status,
+			container.State.ExitCode,
+			contract.exitCode,
+		)
+	}
+	if container.HostConfig.AutoRemove {
+		t.Fatalf("%s one-off unexpectedly enables automatic removal", service)
+	}
+	if container.HostConfig.PidsLimit != contract.pidsLimit {
+		t.Fatalf(
+			"%s one-off PID limit = %d, want %d",
+			service,
+			container.HostConfig.PidsLimit,
+			contract.pidsLimit,
+		)
+	}
+	if container.Config.WorkingDir != contract.workingDir {
+		t.Fatalf(
+			"%s one-off working directory = %q, want %q",
+			service,
+			container.Config.WorkingDir,
+			contract.workingDir,
+		)
+	}
+	if !slices.Equal(
+		container.Config.Entrypoint,
+		[]string{"/usr/local/bin/open-splunk-server"},
+	) || !slices.Equal(container.Config.Cmd, contract.command) {
+		t.Fatalf(
+			"%s one-off process = entrypoint %q command %q, want exact command %q",
+			service,
+			container.Config.Entrypoint,
+			container.Config.Cmd,
+			contract.command,
+		)
+	}
+	gotEnvironment := slices.Clone(container.Config.Env)
+	wantEnvironment := slices.Clone(contract.environment)
+	slices.Sort(gotEnvironment)
+	slices.Sort(wantEnvironment)
+	if !slices.Equal(gotEnvironment, wantEnvironment) {
+		t.Fatalf("%s one-off environment = %q, want exact %q", service, gotEnvironment, wantEnvironment)
+	}
+	if container.Config.Healthcheck != nil &&
+		!slices.Equal(container.Config.Healthcheck.Test, []string{"NONE"}) {
+		t.Fatalf(
+			"%s one-off healthcheck = %q, want absent or disabled",
+			service,
+			container.Config.Healthcheck.Test,
+		)
+	}
+	process := strings.Join(
+		append(slices.Clone(container.Config.Entrypoint), container.Config.Cmd...),
+		"\x00",
+	)
+	for _, secret := range stack.secrets() {
+		if secret != "" && strings.Contains(process, secret) {
+			t.Fatalf("%s one-off process arguments contain secret material", service)
+		}
+	}
+	releaseOCIAssertRecoveryHelperMounts(t, service, container, contract.mounts)
+	releaseOCIAssertRecoveryHelperTmpfs(t, service, container, contract.tmpfs)
+	if container.HostConfig.NetworkMode != contract.networkMode ||
+		!slices.Equal(mapsKeys(container.NetworkSettings.Networks), contract.networks) {
+		t.Fatalf(
+			"%s one-off network mode/networks = %q/%v, want %q/%v",
+			service,
+			container.HostConfig.NetworkMode,
+			mapsKeys(container.NetworkSettings.Networks),
+			contract.networkMode,
+			contract.networks,
+		)
+	}
+	if len(container.HostConfig.PortBindings) != 0 {
+		t.Fatalf("%s one-off publishes host ports: %+v", service, container.HostConfig.PortBindings)
+	}
+	for port, bindings := range container.NetworkSettings.Ports {
+		if len(bindings) != 0 {
+			t.Fatalf("%s one-off port %s is published: %+v", service, port, bindings)
+		}
+	}
+}
+
+func releaseOCIAssertRecoveryHelperMounts(
+	t *testing.T,
+	service string,
+	container *releaseOCIContainerInspect,
+	want map[string]releaseOCIRecoveryHelperMount,
+) {
+	t.Helper()
+	if len(container.Mounts) != len(want) {
+		t.Fatalf("%s one-off mounts = %+v, want exact destinations %v", service, container.Mounts, mapsKeys(want))
+	}
+	seen := make(map[string]struct{}, len(container.Mounts))
+	for _, mount := range container.Mounts {
+		expected, exists := want[mount.Destination]
+		if !exists {
+			t.Fatalf("%s one-off has unexpected mount %+v", service, mount)
+		}
+		if _, duplicate := seen[mount.Destination]; duplicate {
+			t.Fatalf("%s one-off has duplicate mount destination %q", service, mount.Destination)
+		}
+		seen[mount.Destination] = struct{}{}
+		if mount.Type != expected.kind || mount.RW != expected.writable {
+			t.Fatalf("%s one-off mount = %+v, want type %q writable=%t", service, mount, expected.kind, expected.writable)
+		}
+		switch expected.kind {
+		case "volume":
+			if mount.Name != expected.source {
+				t.Fatalf("%s one-off volume mount = %+v, want volume %q", service, mount, expected.source)
+			}
+		case "bind":
+			if mount.Name != "" || !releaseOCIBindSourceMatches(mount.Source, expected.source) {
+				t.Fatalf("%s one-off bind mount = %+v, want source %q", service, mount, expected.source)
+			}
+		default:
+			t.Fatalf("%s one-off expected mount has unsupported type %q", service, expected.kind)
+		}
+	}
+}
+
+func releaseOCIBindSourceMatches(actual, expected string) bool {
+	return releaseOCIBindSourceMatchesForOS(runtime.GOOS, actual, expected)
+}
+
+func releaseOCIBindSourceMatchesForOS(hostOS, actual, expected string) bool {
+	if !filepath.IsAbs(actual) || !filepath.IsAbs(expected) ||
+		filepath.Clean(actual) != actual || filepath.Clean(expected) != expected {
+		return false
+	}
+	actualHostPath := actual
+	// Docker Desktop exposes macOS host bind sources under /host_mnt inside
+	// its Linux VM. Remove only that fixed transport prefix, then resolve both
+	// host paths so /var and /private/var aliases compare by physical identity.
+	if hostOS == "darwin" && strings.HasPrefix(actualHostPath, "/host_mnt/") {
+		actualHostPath = strings.TrimPrefix(actualHostPath, "/host_mnt")
+	}
+	physicalActual, actualErr := filepath.EvalSymlinks(actualHostPath)
+	physicalExpected, expectedErr := filepath.EvalSymlinks(expected)
+	return actualErr == nil && expectedErr == nil && physicalActual == physicalExpected
+}
+
+func TestReleaseOCIBindSourceIdentity(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(path, []byte("fixture"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	physical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !releaseOCIBindSourceMatchesForOS("darwin", "/host_mnt"+physical, path) {
+		t.Fatal("Darwin Docker Desktop physical bind identity was rejected")
+	}
+	if releaseOCIBindSourceMatchesForOS("linux", "/host_mnt"+physical, path) {
+		t.Fatal("Linux bind identity accepted the Docker Desktop transport prefix")
+	}
+	if releaseOCIBindSourceMatchesForOS("darwin", "/host_mnt"+physical+"-other", path) {
+		t.Fatal("different Darwin Docker Desktop bind source was accepted")
+	}
+}
+
+func releaseOCIAssertRecoveryHelperTmpfs(
+	t *testing.T,
+	service string,
+	container *releaseOCIContainerInspect,
+	want bool,
+) {
+	t.Helper()
+	if !want {
+		if len(container.HostConfig.Tmpfs) != 0 {
+			t.Fatalf("%s one-off tmpfs mounts = %+v, want none", service, container.HostConfig.Tmpfs)
+		}
+		return
+	}
+	options, exists := container.HostConfig.Tmpfs["/tmp"]
+	if len(container.HostConfig.Tmpfs) != 1 || !exists {
+		t.Fatalf("%s one-off tmpfs mounts = %+v, want only /tmp", service, container.HostConfig.Tmpfs)
+	}
+	got := strings.Split(options, ",")
+	wantOptions := []string{"gid=65532", "mode=0700", "nodev", "noexec", "nosuid", "rw", "uid=65532"}
+	slices.Sort(got)
+	slices.Sort(wantOptions)
+	if !slices.Equal(got, wantOptions) {
+		t.Fatalf("%s one-off /tmp options = %v, want %v", service, got, wantOptions)
+	}
+}
+
+func (fixture *releaseOCIRecoveryFixture) run() {
+	fixture.t.Helper()
+	fixture.seedPreBackupState()
+	fixture.captureBackupBoundaryAndPostBackupMutations()
+	fixture.restoreIntoFreshVolumes()
+	fixture.assertPostRestoreState()
+}
+
+func (fixture *releaseOCIRecoveryFixture) seedPreBackupState() {
+	t := fixture.t
+	t.Helper()
+
+	fixture.recoveryIndex = "oci-recovery-" + fixture.suffix
+	fixture.preBackupIndexes = append(
+		slices.Clone(fixture.preBackupIndexes),
+		fixture.recoveryIndex,
+	)
+	releaseOCICreateIndex(
+		t,
+		fixture.ctx,
+		fixture.client,
+		fixture.baseURL,
+		fixture.administratorToken,
+		fixture.recoveryIndex,
+	)
+	collectorID := "oci-recovery-collector-" + fixture.suffix
+	fixture.credential = releaseOCICreateIngestionCredential(
+		t,
+		fixture.ctx,
+		fixture.client,
+		fixture.baseURL,
+		fixture.administratorToken,
+		"Release recovery authentication proof",
+		fixture.recoveryIndex,
+		collectorID,
+	)
+	fixture.stack.retainedSecrets = append(
+		fixture.stack.retainedSecrets,
+		fixture.credential.plaintext,
+	)
+	fixture.fixtureTime = time.Now().UTC().Add(-5 * time.Minute).Truncate(time.Millisecond)
+	fixture.preBackupEventID = "oci-recovery-before-backup-" + fixture.suffix
+	fixture.postBackupEventID = "oci-recovery-after-backup-" + fixture.suffix
+	fixture.postRestoreEventID = "oci-recovery-after-restore-" + fixture.suffix
+	releaseOCIIngestEvent(
+		t,
+		fixture.ctx,
+		fixture.stack,
+		fixture.grpcAddress,
+		fixture.credential,
+		fixture.recoveryIndex,
+		fixture.preBackupEventID,
+		"paired recovery pre-backup event",
+		fixture.fixtureTime,
+		1,
+	)
+	releaseOCIAssertSearchEventIDs(
+		t,
+		fixture.ctx,
+		fixture.client,
+		fixture.baseURL,
+		fixture.recoveryIndex,
+		fixture.fixtureTime,
+		[]string{fixture.preBackupEventID},
+	)
+}
+
+func (fixture *releaseOCIRecoveryFixture) captureBackupBoundaryAndPostBackupMutations() {
+	t := fixture.t
+	t.Helper()
+	ctx := fixture.ctx
+	stack := fixture.stack
 
 	stack.mustCompose(
 		t,
 		ctx,
-		"stop server before control-plane backup",
+		"stop server before paired deployment backup",
 		"stop",
 		"--timeout",
 		"40",
 		"server",
 	)
-	client.CloseIdleConnections()
-	stoppedServer := releaseOCIInspectContainer(t, ctx, stack, originalServerID)
+	fixture.client.CloseIdleConnections()
+	stoppedServer := releaseOCIInspectContainer(t, ctx, stack, fixture.originalServerID)
 	if stoppedServer.State.Status != "exited" {
-		t.Fatalf("server state before control-plane backup = %q, want exited", stoppedServer.State.Status)
+		t.Fatalf("server state before deployment backup = %q, want exited", stoppedServer.State.Status)
 	}
-
-	backupVolume := releaseOCICreateRecoveryVolume(t, ctx, stack, "control-plane-backup")
-	restoredStateVolume := releaseOCICreateRecoveryVolume(t, ctx, stack, "restored-server-state")
-	releaseOCIRunSilentRecoveryCommand(
+	releaseOCIRunRecoveryHelper(
 		t,
 		ctx,
 		stack,
-		"back up control plane with release image",
-		stack.project+"-control-plane-backup",
-		[]string{
-			"type=volume,source=" + originalStateVolume + ",target=" + stateRoot,
-			"type=volume,source=" + backupVolume + ",target=" + backupRoot,
-		},
-		"backup-control-plane",
-		"-control-db", controlDatabasePath,
-		"-master-key", masterKeyPath,
-		"-administrator-token-file", administratorTokenPath,
-		"-destination", controlPlaneBackupSource,
+		"paired-backup",
+		"deployment-backup",
+		fixture.originalStateVolume,
+		stack.project+"_clickhouse-recovery",
 	)
-	releaseOCIRunSilentRecoveryCommand(
+	releaseOCIAssertClickHouseArchiveMarkerAbsent(
 		t,
 		ctx,
 		stack,
-		"verify control-plane backup from read-only volume",
-		stack.project+"-control-plane-verify",
-		[]string{
-			"type=volume,source=" + backupVolume + ",target=" + backupRoot + ",readonly",
-		},
-		"verify-control-plane-backup",
-		"-source", controlPlaneBackupSource,
+		"live canonical source after backup",
 	)
-	releaseOCIRunSilentRecoveryCommand(
+	fixture.exerciseStaleMarkerReconciliation()
+	releaseOCIRunRecoveryHelper(
 		t,
 		ctx,
 		stack,
-		"restore control plane into fresh state volume",
-		stack.project+"-control-plane-restore",
-		[]string{
-			"type=volume,source=" + backupVolume + ",target=" + backupRoot + ",readonly",
-			"type=volume,source=" + restoredStateVolume + ",target=" + stateRoot,
-		},
-		"restore-control-plane",
-		"-source", controlPlaneBackupSource,
-		"-control-db", controlDatabasePath,
-		"-master-key", masterKeyPath,
-		"-administrator-token-file", administratorTokenPath,
+		"paired-verify",
+		"deployment-verify",
+		"",
+		stack.project+"_clickhouse-recovery",
 	)
 
-	// Rebind only the logical server-state volume. ClickHouse keeps running on
-	// its original persistent volumes throughout the recovery drill.
-	stack.ownedVolumes = append(stack.ownedVolumes, originalStateVolume)
-	overridePath := filepath.Join(filepath.Dir(stack.envFile), "recovery-volume.override.yaml")
-	override := "volumes:\n  server-state:\n    external: true\n    name: " +
-		strconv.Quote(restoredStateVolume) + "\n"
-	if err := os.WriteFile(overridePath, []byte(override), 0o600); err != nil {
-		t.Fatalf("write recovery Compose override: %v", err)
-	}
-	stack.composeOverrides = append(stack.composeOverrides, overridePath)
-	// Start directly from restored state. Running server-bootstrap first could
-	// recreate a missing administrator token and mask an incomplete restore.
+	// Prove the recovery set is a point-in-time boundary by committing one
+	// control-plane mutation and the next visibility-reserved batch afterward.
 	stack.mustCompose(
 		t,
 		ctx,
-		"restart server on restored state volume",
+		"restart original server for post-backup mutations",
+		"up",
+		"--detach",
+		"--wait",
+		"--wait-timeout",
+		"240",
+		"--no-build",
+		"--no-deps",
+		"server",
+	)
+	fixture.mutationServerID = stack.serviceContainerID(t, ctx, "server", false)
+	if fixture.mutationServerID != fixture.originalServerID {
+		t.Fatalf(
+			"post-backup mutation restart replaced server %q with %q",
+			fixture.originalServerID,
+			fixture.mutationServerID,
+		)
+	}
+	mutationServer := releaseOCIInspectContainer(t, ctx, stack, fixture.mutationServerID)
+	if got := releaseOCIStateVolume(t, mutationServer); got != fixture.originalStateVolume {
+		t.Fatalf(
+			"post-backup mutation server state volume = %q, want %q",
+			got,
+			fixture.originalStateVolume,
+		)
+	}
+	releaseOCIAssertContainerHardening(t, mutationServer, "65532:65532", true)
+	releaseOCIAssertContainerHealth(t, mutationServer, "post-backup mutation server")
+	postBackupHTTPAddress, postBackupGRPCAddress := releaseOCIPublishedServerAddresses(
+		t,
+		mutationServer,
+	)
+	if postBackupHTTPAddress == postBackupGRPCAddress {
+		t.Fatalf(
+			"post-backup mutation server HTTP and gRPC share host address %q",
+			postBackupHTTPAddress,
+		)
+	}
+	postBackupClient, postBackupBaseURL := releaseOCIHTTPSClient(
+		t,
+		stack,
+		postBackupHTTPAddress,
+	)
+	releaseOCIAssertHTTPSBoundary(
+		t,
+		ctx,
+		postBackupClient,
+		postBackupBaseURL,
+		postBackupHTTPAddress,
+	)
+	fixture.postBackupIndex = "oci-after-backup-" + fixture.suffix
+	releaseOCICreateIndex(
+		t,
+		ctx,
+		postBackupClient,
+		postBackupBaseURL,
+		fixture.administratorToken,
+		fixture.postBackupIndex,
+	)
+	releaseOCIIngestEvent(
+		t,
+		ctx,
+		stack,
+		postBackupGRPCAddress,
+		fixture.credential,
+		fixture.recoveryIndex,
+		fixture.postBackupEventID,
+		"paired recovery post-backup event",
+		fixture.fixtureTime.Add(time.Second),
+		2,
+	)
+	releaseOCIAssertSearchEventIDs(
+		t,
+		ctx,
+		postBackupClient,
+		postBackupBaseURL,
+		fixture.recoveryIndex,
+		fixture.fixtureTime,
+		[]string{fixture.preBackupEventID, fixture.postBackupEventID},
+	)
+	lockNegativeStateVolume := releaseOCICreateRecoveryVolume(
+		t,
+		ctx,
+		stack,
+		"lock-negative-server-state",
+	)
+	lockNegativeOverridePath := filepath.Join(
+		filepath.Dir(stack.envFile),
+		"lock-negative-state.override.yaml",
+	)
+	lockNegativeOverride := "volumes:\n" +
+		"  server-state:\n    external: true\n    name: " +
+		strconv.Quote(lockNegativeStateVolume) + "\n"
+	if err := os.WriteFile(lockNegativeOverridePath, []byte(lockNegativeOverride), 0o600); err != nil {
+		t.Fatalf("write singleton-lock negative Compose override: %v", err)
+	}
+	stack.composeOverrides = append(stack.composeOverrides, lockNegativeOverridePath)
+	releaseOCIRequireRecoveryHelperFailure(
+		t,
+		ctx,
+		stack,
+		"restore-while-server-running",
+		"deployment-restore",
+		lockNegativeStateVolume,
+		stack.project+"_clickhouse-recovery",
+		"lock /var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock is held",
+	)
+	stack.composeOverrides = stack.composeOverrides[:len(stack.composeOverrides)-1]
+
+	originalClickHouse := releaseOCIInspectContainer(t, ctx, stack, fixture.originalClickHouseID)
+	originalClickHouseData := releaseOCIVolumeAt(t, originalClickHouse, releaseOCIClickHouseDataPath)
+	originalClickHouseLogs := releaseOCIVolumeAt(t, originalClickHouse, releaseOCIClickHouseLogsPath)
+	fixture.originalClickHouseRecovery = releaseOCIVolumeAt(
+		t,
+		originalClickHouse,
+		releaseOCIClickHouseRecoveryPath,
+	)
+	originalServerExports := releaseOCIVolumeAt(
+		t,
+		mutationServer,
+		releaseOCIServerExportsPath,
+	)
+	stack.ownedVolumes = append(stack.ownedVolumes, []string{
+		fixture.originalStateVolume,
+		originalServerExports,
+		originalClickHouseData,
+		originalClickHouseLogs,
+	}...)
+	stack.mustCompose(t, ctx, "stop original deployment before fresh-volume restore", "stop", "--timeout", "40")
+	fixture.client.CloseIdleConnections()
+	postBackupClient.CloseIdleConnections()
+	fixture.exerciseAttestedArchiveDeletion()
+}
+
+func (fixture *releaseOCIRecoveryFixture) exerciseStaleMarkerReconciliation() {
+	t := fixture.t
+	t.Helper()
+	ctx := fixture.ctx
+	stack := fixture.stack
+	const (
+		recoverySetID       = "dddddddddddddddddddddddddddddddd"
+		wrongRecoverySetID  = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+		backupOperationUUID = "70000000-0000-4000-8000-000000000001"
+	)
+	releaseOCIQueryClickHouseBootstrap(
+		t,
+		ctx,
+		stack,
+		"seed interrupted-backup marker for packaged reconciliation",
+		"INSERT INTO open_splunk.recovery_archive_markers (slot, recovery_set_id, backup_operation_uuid) VALUES (1, '"+
+			recoverySetID+"', toUUID('"+backupOperationUUID+"'))",
+	)
+	stack.mustCompose(
+		t,
+		ctx,
+		"stop ClickHouse to terminate any old native backup before marker reconciliation",
+		"stop",
+		"--timeout",
+		"40",
+		"clickhouse",
+	)
+	stack.mustCompose(
+		t,
+		ctx,
+		"restart only ClickHouse before marker reconciliation",
+		"up",
+		"--detach",
+		"--wait",
+		"--wait-timeout",
+		"240",
+		"--no-build",
+		"--no-deps",
+		"clickhouse",
+	)
+	setMarkerIdentity := func(id string) {
+		stack.values["OPEN_SPLUNK_STALE_RECOVERY_SET_ID"] = id
+		stack.values["OPEN_SPLUNK_CONFIRMED_STALE_RECOVERY_SET_ID"] = id
+		stack.values["OPEN_SPLUNK_STALE_BACKUP_OPERATION_UUID"] = backupOperationUUID
+		stack.values["OPEN_SPLUNK_CONFIRMED_STALE_BACKUP_OPERATION_UUID"] = backupOperationUUID
+	}
+	setMarkerIdentity(wrongRecoverySetID)
+	releaseOCIRequireRecoveryHelperFailure(
+		t,
+		ctx,
+		stack,
+		"marker-reconcile-mismatch",
+		"deployment-marker-reconcile",
+		"",
+		"",
+		"require exact confirmed marker",
+	)
+	exactMarkerQuery := "SELECT count() FROM open_splunk.recovery_archive_markers " +
+		"WHERE recovery_set_id = '" + recoverySetID + "' AND backup_operation_uuid = toUUID('" +
+		backupOperationUUID + "') FORMAT TSVRaw"
+	if got := releaseOCIQueryClickHouseBootstrap(
+		t,
+		ctx,
+		stack,
+		"prove mismatched reconciliation retained exact marker",
+		exactMarkerQuery,
+	); got != "1" {
+		t.Fatalf("marker after mismatched reconciliation = %q, want exact retained row", got)
+	}
+	setMarkerIdentity(recoverySetID)
+	releaseOCIRunRecoveryHelper(
+		t,
+		ctx,
+		stack,
+		"marker-reconcile-exact",
+		"deployment-marker-reconcile",
+		"",
+		"",
+	)
+	releaseOCIAssertClickHouseArchiveMarkerAbsent(
+		t,
+		ctx,
+		stack,
+		"packaged exact marker reconciliation",
+	)
+	releaseOCIRunRecoveryHelper(
+		t,
+		ctx,
+		stack,
+		"marker-reconcile-idempotent-retry",
+		"deployment-marker-reconcile",
+		"",
+		"",
+	)
+}
+
+func (fixture *releaseOCIRecoveryFixture) exerciseAttestedArchiveDeletion() {
+	t := fixture.t
+	t.Helper()
+	ctx := fixture.ctx
+	stack := fixture.stack
+	recoveryVolume := fixture.originalClickHouseRecovery
+	if recoveryVolume == "" {
+		t.Fatal("archive deletion drill requires the original ClickHouse recovery volume")
+	}
+	orphanName := releaseOCIRandomHex(t, 16) + ".tar.zst"
+	releaseOCIRunArchiveVolumeShell(
+		t,
+		ctx,
+		stack,
+		recoveryVolume,
+		"create test-owned failed-attempt archive",
+		fmt.Sprintf(
+			`set -eu; set -- /archive/*.tar.zst; test "$#" -eq 1; test -f "$1"; cp "$1" /archive/%s; chmod 0640 /archive/%s`,
+			orphanName,
+			orphanName,
+		),
+	)
+	stack.values["OPEN_SPLUNK_FAILED_RECOVERY_ARCHIVE_NAME"] = orphanName
+	stack.values["OPEN_SPLUNK_CONFIRMED_RECOVERY_ARCHIVE_NAME"] = orphanName
+	defer delete(stack.values, "OPEN_SPLUNK_FAILED_RECOVERY_ARCHIVE_NAME")
+	defer delete(stack.values, "OPEN_SPLUNK_CONFIRMED_RECOVERY_ARCHIVE_NAME")
+	releaseOCIRunRecoveryHelper(
+		t,
+		ctx,
+		stack,
+		"attested-archive-delete",
+		"deployment-archive-delete",
+		"",
+		recoveryVolume,
+	)
+	releaseOCIRunRecoveryHelper(
+		t,
+		ctx,
+		stack,
+		"attested-archive-delete-retry",
+		"deployment-archive-delete",
+		"",
+		recoveryVolume,
+	)
+	releaseOCIRunArchiveVolumeShell(
+		t,
+		ctx,
+		stack,
+		recoveryVolume,
+		"prove exact failed-attempt deletion retained the published archive",
+		fmt.Sprintf(
+			`set -eu; test ! -e /archive/%s; set -- /archive/*.tar.zst; test "$#" -eq 1; test -f "$1"`,
+			orphanName,
+		),
+	)
+}
+
+func releaseOCIRunArchiveVolumeShell(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	volume string,
+	operation string,
+	script string,
+) {
+	t.Helper()
+	containerName := stack.project + "-archive-volume-probe-" + releaseOCIRandomHex(t, 4)
+	stack.ownedContainers = append(stack.ownedContainers, containerName)
+	releaseOCIRunDocker(
+		t,
+		ctx,
+		stack,
+		operation,
+		"run",
+		"--rm",
+		"--name",
+		containerName,
+		"--label",
+		"com.open-splunk.integration.project="+stack.project,
+		"--network",
+		"none",
+		"--user",
+		"101:65532",
+		"--workdir",
+		"/",
+		"--read-only",
+		"--cap-drop",
+		"ALL",
+		"--security-opt",
+		"no-new-privileges:true",
+		"--pids-limit",
+		"32",
+		"--mount",
+		"type=volume,source="+volume+",target=/archive",
+		"--entrypoint",
+		"/bin/sh",
+		testsupport.DefaultClickHouseImage,
+		"-eu",
+		"-c",
+		script,
+	)
+	stack.forgetOwnedContainer(containerName)
+}
+
+func (fixture *releaseOCIRecoveryFixture) restoreIntoFreshVolumes() {
+	t := fixture.t
+	t.Helper()
+	ctx := fixture.ctx
+	stack := fixture.stack
+
+	restoredStateVolume := releaseOCICreateRecoveryVolume(t, ctx, stack, "restored-server-state")
+	restoredServerExports := releaseOCICreateRecoveryVolume(t, ctx, stack, "restored-server-exports")
+	restoredClickHouseData := releaseOCICreateRecoveryVolume(t, ctx, stack, "restored-clickhouse-data")
+	restoredClickHouseLogs := releaseOCICreateRecoveryVolume(t, ctx, stack, "restored-clickhouse-logs")
+	stack.values["OPEN_SPLUNK_RECOVERY_CLICKHOUSE_DATA_VOLUME"] = restoredClickHouseData
+	stack.values["OPEN_SPLUNK_RECOVERY_CLICKHOUSE_LOGS_VOLUME"] = restoredClickHouseLogs
+	stack.values["OPEN_SPLUNK_RECOVERY_SERVER_STATE_VOLUME"] = restoredStateVolume
+	stack.values["OPEN_SPLUNK_RECOVERY_SERVER_EXPORTS_VOLUME"] = restoredServerExports
+	stack.composeOverrides = append(
+		stack.composeOverrides,
+		filepath.Join(stack.deployDirectory, "docker-compose.recovery-target.yaml"),
+	)
+	stack.composeOverrides = append(
+		stack.composeOverrides,
+		filepath.Join(stack.deployDirectory, "docker-compose.restore.yaml"),
+	)
+	releaseOCIAssertRestoreComposeConfig(t, ctx, stack)
+
+	// A fresh ClickHouse initializes only recovery principals. Neither the
+	// migrator nor either server process may create schema before RESTORE.
+	stack.mustCompose(
+		t,
+		ctx,
+		"start only fresh ClickHouse before deployment restore",
+		"up",
+		"--detach",
+		"--wait",
+		"--wait-timeout",
+		"240",
+		"--no-build",
+		"--no-deps",
+		"--force-recreate",
+		"clickhouse",
+	)
+	restoredClickHouseID := stack.serviceContainerID(t, ctx, "clickhouse", false)
+	if restoredClickHouseID == fixture.originalClickHouseID {
+		t.Fatalf(
+			"fresh-volume recovery retained original ClickHouse container %q",
+			fixture.originalClickHouseID,
+		)
+	}
+	restoredClickHouse := releaseOCIInspectContainer(t, ctx, stack, restoredClickHouseID)
+	if got := releaseOCIVolumeAt(t, restoredClickHouse, releaseOCIClickHouseDataPath); got != restoredClickHouseData {
+		t.Fatalf("restored ClickHouse data volume = %q, want %q", got, restoredClickHouseData)
+	}
+	if got := releaseOCIVolumeAt(t, restoredClickHouse, releaseOCIClickHouseLogsPath); got != restoredClickHouseLogs {
+		t.Fatalf("restored ClickHouse logs volume = %q, want %q", got, restoredClickHouseLogs)
+	}
+	if got := releaseOCIReadOnlyVolumeAt(
+		t,
+		restoredClickHouse,
+		releaseOCIClickHouseRecoveryPath,
+	); got != fixture.originalClickHouseRecovery {
+		t.Fatalf(
+			"restored ClickHouse recovery volume = %q, want retained %q",
+			got,
+			fixture.originalClickHouseRecovery,
+		)
+	}
+	releaseOCIAssertContainerHealth(t, restoredClickHouse, "fresh ClickHouse before restore")
+	releaseOCIAssertClickHouseRecoveryVolumeOwnership(t, ctx, stack)
+	releaseOCIAssertClickHouseRecoveryNamespace(t, ctx, stack, "fresh restore target", "")
+	releaseOCIRunRecoveryHelper(
+		t,
+		ctx,
+		stack,
+		"paired-restore",
+		"deployment-restore",
+		restoredStateVolume,
+		fixture.originalClickHouseRecovery,
+	)
+	releaseOCIAssertRestoredClickHouseRecoveryIdentity(t, ctx, stack, "initial restore")
+	releaseOCIRunRecoveryHelper(
+		t,
+		ctx,
+		stack,
+		"paired-restore-retry",
+		"deployment-restore",
+		restoredStateVolume,
+		fixture.originalClickHouseRecovery,
+	)
+	releaseOCIAssertRestoredClickHouseRecoveryIdentity(t, ctx, stack, "restore retry")
+	stack.mustCompose(
+		t,
+		ctx,
+		"verify restored schema with exact embedded migrator",
+		"run",
+		"--rm",
+		"--no-deps",
+		"clickhouse-migrator",
+	)
+	if got := stack.serviceContainerID(t, ctx, "server-bootstrap", true); got != fixture.bootstrapID {
+		t.Fatalf("deployment restore recreated server bootstrap %q as %q", fixture.bootstrapID, got)
+	}
+
+	// Start directly from restored state. Running server-bootstrap could create
+	// a missing administrator token and mask an incomplete control restore.
+	stack.mustCompose(
+		t,
+		ctx,
+		"start server directly on restored state",
 		"up",
 		"--detach",
 		"--wait",
@@ -371,22 +1508,19 @@ func releaseOCIAssertControlPlaneRecovery(
 		"--force-recreate",
 		"server",
 	)
-
-	restoredClickHouseID := stack.serviceContainerID(t, ctx, "clickhouse", false)
-	if restoredClickHouseID != clickHouseID {
-		t.Fatalf(
-			"control-plane recovery replaced ClickHouse container %q with %q",
-			clickHouseID,
-			restoredClickHouseID,
-		)
-	}
 	restoredServerID := stack.serviceContainerID(t, ctx, "server", false)
-	if restoredServerID == originalServerID {
-		t.Fatalf("control-plane recovery retained stopped server container %q", originalServerID)
+	if restoredServerID == fixture.mutationServerID {
+		t.Fatalf("paired recovery retained pre-restore server container %q", fixture.mutationServerID)
 	}
 	restoredServer := releaseOCIInspectContainer(t, ctx, stack, restoredServerID)
 	if got := releaseOCIStateVolume(t, restoredServer); got != restoredStateVolume {
 		t.Fatalf("restored server state volume = %q, want %q", got, restoredStateVolume)
+	}
+	if got := releaseOCIVolumeAt(t, restoredServer, releaseOCIServerExportsPath); got != restoredServerExports {
+		t.Fatalf("restored server exports volume = %q, want %q", got, restoredServerExports)
+	}
+	if got := stack.serviceContainerID(t, ctx, "server-bootstrap", true); got != fixture.bootstrapID {
+		t.Fatalf("direct restored server start recreated bootstrap %q as %q", fixture.bootstrapID, got)
 	}
 	releaseOCIAssertContainerHardening(t, restoredServer, "65532:65532", true)
 	releaseOCIAssertContainerHealth(t, restoredServer, "restored server")
@@ -398,9 +1532,24 @@ func releaseOCIAssertControlPlaneRecovery(
 			restoredHTTPAddress,
 		)
 	}
-	restoredClient, restoredBaseURL := releaseOCIHTTPSClient(t, stack, restoredHTTPAddress)
-	releaseOCIAssertHTTPSBoundary(t, ctx, restoredClient, restoredBaseURL, restoredHTTPAddress)
-	status, body, err := releaseOCIProbeHealthEndpoint(ctx, restoredClient, restoredBaseURL+"/readyz")
+	fixture.restoredGRPCAddress = restoredGRPCAddress
+	fixture.restoredClient, fixture.restoredBaseURL = releaseOCIHTTPSClient(
+		t,
+		stack,
+		restoredHTTPAddress,
+	)
+	releaseOCIAssertHTTPSBoundary(
+		t,
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+		restoredHTTPAddress,
+	)
+	status, body, err := releaseOCIProbeHealthEndpoint(
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL+"/readyz",
+	)
 	if err != nil || status != http.StatusOK || body != "ok\n" {
 		t.Fatalf(
 			"restored runtime readiness = status %d body %q error %v",
@@ -409,25 +1558,124 @@ func releaseOCIAssertControlPlaneRecovery(
 			err,
 		)
 	}
+}
 
-	restoredBootstrap := releaseOCIBootstrap(t, ctx, restoredClient, restoredBaseURL)
-	for _, name := range preBackupIndexes {
+func (fixture *releaseOCIRecoveryFixture) assertPostRestoreState() {
+	t := fixture.t
+	t.Helper()
+	ctx := fixture.ctx
+	stack := fixture.stack
+
+	restoredBootstrap := releaseOCIBootstrap(
+		t,
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+	)
+	for _, name := range fixture.preBackupIndexes {
 		if !slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
 			return index.GetName() == name
 		}) {
 			t.Fatalf("restored bootstrap indexes do not contain %q: %+v", name, restoredBootstrap.GetIndexes())
 		}
 	}
-	postRestoreIndex := "oci-after-control-plane-restore-" + suffix
+	if slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
+		return index.GetName() == fixture.postBackupIndex
+	}) {
+		t.Fatalf(
+			"restored bootstrap retained post-backup index %q: %+v",
+			fixture.postBackupIndex,
+			restoredBootstrap.GetIndexes(),
+		)
+	}
+	releaseOCIAssertRestoredIngestionCredential(
+		t,
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+		fixture.administratorToken,
+		fixture.credential,
+		fixture.recoveryIndex,
+	)
+	releaseOCIAssertSearchEventIDs(
+		t,
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+		fixture.recoveryIndex,
+		fixture.fixtureTime,
+		[]string{fixture.preBackupEventID},
+	)
+	releaseOCIIngestEvent(
+		t,
+		ctx,
+		stack,
+		fixture.restoredGRPCAddress,
+		fixture.credential,
+		fixture.recoveryIndex,
+		fixture.postRestoreEventID,
+		"paired recovery post-restore visibility event",
+		fixture.fixtureTime.Add(2*time.Second),
+		2,
+	)
+	releaseOCIAssertSearchEventIDs(
+		t,
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+		fixture.recoveryIndex,
+		fixture.fixtureTime,
+		[]string{fixture.preBackupEventID, fixture.postRestoreEventID},
+	)
+
+	postRestoreIndex := "oci-after-restore-" + fixture.suffix
 	releaseOCICreateIndex(
 		t,
 		ctx,
-		restoredClient,
-		restoredBaseURL,
-		administratorToken,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+		fixture.administratorToken,
 		postRestoreIndex,
 	)
-	restoredBootstrap = releaseOCIBootstrap(t, ctx, restoredClient, restoredBaseURL)
+	postRestoreCredential := releaseOCICreateIngestionCredential(
+		t,
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+		fixture.administratorToken,
+		"Release recovery post-restore write",
+		postRestoreIndex,
+		"oci-after-restore-collector-"+fixture.suffix,
+	)
+	stack.retainedSecrets = append(stack.retainedSecrets, postRestoreCredential.plaintext)
+	postRestoreWriteEventID := "oci-after-restore-write-" + fixture.suffix
+	releaseOCIIngestEvent(
+		t,
+		ctx,
+		stack,
+		fixture.restoredGRPCAddress,
+		postRestoreCredential,
+		postRestoreIndex,
+		postRestoreWriteEventID,
+		"paired recovery post-restore control and ingest write",
+		fixture.fixtureTime.Add(3*time.Second),
+		1,
+	)
+	releaseOCIAssertSearchEventIDs(
+		t,
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+		postRestoreIndex,
+		fixture.fixtureTime,
+		[]string{postRestoreWriteEventID},
+	)
+	restoredBootstrap = releaseOCIBootstrap(
+		t,
+		ctx,
+		fixture.restoredClient,
+		fixture.restoredBaseURL,
+	)
 	if !slices.ContainsFunc(restoredBootstrap.GetIndexes(), func(index *opensplunkv1.IndexSummary) bool {
 		return index.GetName() == postRestoreIndex
 	}) {
@@ -437,6 +1685,381 @@ func releaseOCIAssertControlPlaneRecovery(
 			restoredBootstrap.GetIndexes(),
 		)
 	}
+}
+
+type releaseOCIIngestionCredential struct {
+	tokenID     string
+	tokenPrefix string
+	plaintext   string
+	collectorID string
+}
+
+func releaseOCICreateIngestionCredential(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	name string,
+	indexName string,
+	collectorID string,
+) releaseOCIIngestionCredential {
+	t.Helper()
+	var created opensplunkv1.CreateIngestionTokenResponse
+	postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/ingestion-tokens/create",
+		administratorToken,
+		&opensplunkv1.CreateIngestionTokenRequest{
+			Definition: &opensplunkv1.IngestionTokenDefinition{
+				Name: name,
+				Constraints: &opensplunkv1.IngestionTokenConstraints{
+					AllowedIndexNames: []string{indexName},
+					BoundCollectorId:  &collectorID,
+				},
+			},
+		},
+		&created,
+	)
+	metadata := created.GetIngestionToken()
+	plaintext := created.GetPlaintextToken()
+	if metadata.GetIngestionTokenId() == "" || metadata.GetVersion() != 1 ||
+		metadata.GetState() != opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
+		metadata.GetTokenPrefix() == "" || plaintext == "" ||
+		!strings.HasPrefix(plaintext, metadata.GetTokenPrefix()) ||
+		metadata.GetConstraints().GetBoundCollectorId() != collectorID ||
+		!slices.Equal(metadata.GetConstraints().GetAllowedIndexNames(), []string{indexName}) {
+		t.Fatalf(
+			"created release recovery ingestion credential metadata = %+v, plaintext length = %d",
+			metadata,
+			len(plaintext),
+		)
+	}
+	return releaseOCIIngestionCredential{
+		tokenID:     metadata.GetIngestionTokenId(),
+		tokenPrefix: metadata.GetTokenPrefix(),
+		plaintext:   plaintext,
+		collectorID: collectorID,
+	}
+}
+
+func releaseOCIAssertRestoredIngestionCredential(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	credential releaseOCIIngestionCredential,
+	indexName string,
+) {
+	t.Helper()
+	var response opensplunkv1.GetIngestionTokenResponse
+	wire := postAdministratorProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/ingestion-tokens/get",
+		administratorToken,
+		&opensplunkv1.GetIngestionTokenRequest{IngestionTokenId: credential.tokenID},
+		&response,
+	)
+	if bytes.Contains(wire, []byte(credential.plaintext)) {
+		t.Fatal("restored ingestion credential response exposed plaintext")
+	}
+	metadata := response.GetIngestionToken()
+	if metadata.GetIngestionTokenId() != credential.tokenID ||
+		metadata.GetTokenPrefix() != credential.tokenPrefix ||
+		metadata.GetState() != opensplunkv1.IngestionTokenState_INGESTION_TOKEN_STATE_ACTIVE ||
+		metadata.GetLastUsedAt() == nil ||
+		metadata.GetConstraints().GetBoundCollectorId() != credential.collectorID ||
+		!slices.Equal(metadata.GetConstraints().GetAllowedIndexNames(), []string{indexName}) {
+		t.Fatalf("restored release recovery ingestion credential = %+v", metadata)
+	}
+}
+
+func releaseOCIIngestEvent(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	grpcAddress string,
+	credential releaseOCIIngestionCredential,
+	indexName string,
+	eventID string,
+	message string,
+	eventTime time.Time,
+	batchSequence uint64,
+) {
+	t.Helper()
+	if batchSequence == 0 {
+		t.Fatal("release recovery ingestion batch sequence must be positive")
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM([]byte(releaseOCIReadFile(
+		t,
+		stack.values["OPEN_SPLUNK_SERVER_TLS_CA_FILE"],
+	))) {
+		t.Fatal("generated server CA contains no certificates for recovery ingestion")
+	}
+	connection, err := grpc.NewClient(
+		grpcAddress,
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    roots,
+			ServerName: stack.values["OPEN_SPLUNK_SERVER_TLS_SERVER_NAME"],
+		})),
+	)
+	if err != nil {
+		t.Fatalf("create release recovery ingestion client: %s", stack.redact(err.Error()))
+	}
+	defer func() {
+		if closeErr := connection.Close(); closeErr != nil {
+			t.Errorf("close release recovery ingestion client: %v", closeErr)
+		}
+	}()
+	streamContext, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	streamContext = metadata.NewOutgoingContext(
+		streamContext,
+		metadata.Pairs("authorization", "Bearer "+credential.plaintext),
+	)
+	stream, err := opensplunkv1.NewCollectorIngestServiceClient(connection).Collect(streamContext)
+	if err != nil {
+		t.Fatalf("open release recovery ingestion stream: %s", stack.redact(err.Error()))
+	}
+	now := time.Now().UTC()
+	var lastAcknowledged *uint64
+	if batchSequence > 1 {
+		value := batchSequence - 1
+		lastAcknowledged = &value
+	}
+	inputID := "oci-recovery-input-" + strings.TrimPrefix(credential.collectorID, "oci-recovery-collector-")
+	if err := stream.Send(&opensplunkv1.CollectRequest{
+		StreamSequence: 1,
+		SentAt:         timestamppb.New(now),
+		Payload: &opensplunkv1.CollectRequest_Hello{Hello: &opensplunkv1.CollectorHello{
+			CollectorId:                   credential.collectorID,
+			InstanceId:                    credential.collectorID + "-instance-" + strconv.FormatUint(batchSequence, 10),
+			ProtocolMajor:                 1,
+			ProtocolMinor:                 0,
+			CollectorVersion:              "release-oci-recovery-test",
+			Hostname:                      "release-oci-recovery-test",
+			StartedAt:                     timestamppb.New(now.Add(-time.Minute)),
+			Capabilities:                  []opensplunkv1.CollectorCapability{opensplunkv1.CollectorCapability_COLLECTOR_CAPABILITY_FILE_INPUT},
+			Inputs:                        []*opensplunkv1.CollectorInputRegistration{{InputId: inputID, InputType: opensplunkv1.CollectorInputType_COLLECTOR_INPUT_TYPE_FILE, IndexName: indexName}},
+			LastAcknowledgedBatchSequence: lastAcknowledged,
+		}},
+	}); err != nil {
+		t.Fatalf("send release recovery collector hello: %s", stack.redact(err.Error()))
+	}
+	readyResponse, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("receive release recovery collector ready: %s", stack.redact(err.Error()))
+	}
+	ready := readyResponse.GetReady()
+	if ready == nil || ready.GetProtocolMajor() != 1 || ready.GetProtocolMinor() != 0 ||
+		!slices.Contains(ready.GetAuthorizedIndexes(), indexName) {
+		t.Fatalf("release recovery collector ready = %+v", ready)
+	}
+	event := &opensplunkv1.LogEvent{
+		EventId:         eventID,
+		IndexName:       indexName,
+		EventTime:       timestamppb.New(eventTime.UTC()),
+		CollectedAt:     timestamppb.New(eventTime.UTC().Add(100 * time.Millisecond)),
+		EventTimeSource: opensplunkv1.EventTimeSource_EVENT_TIME_SOURCE_PARSED,
+		Host:            "release-oci-recovery-host",
+		Source:          "/var/log/release-oci-recovery.log",
+		Sourcetype:      "json",
+		Severity:        opensplunkv1.LogSeverity_LOG_SEVERITY_INFO,
+		Message:         &message,
+		Raw:             []byte(`{"message":"` + message + `"}`),
+		RawEncoding:     opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		Fields:          &opensplunkv1.TypedObject{},
+	}
+	batch := &opensplunkv1.EventBatch{
+		CollectorId:           credential.collectorID,
+		BatchId:               "oci-recovery-batch-" + eventID,
+		BatchSequence:         batchSequence,
+		CreatedAt:             timestamppb.New(now),
+		Events:                []*opensplunkv1.LogEvent{event},
+		UncompressedSizeBytes: uint64(proto.Size(event)),
+		EventIdsSha256:        wal.ComputeEventIDsDigest([]*opensplunkv1.LogEvent{event}),
+		ProtocolMajor:         1,
+		ProtocolMinor:         0,
+	}
+	if err := stream.Send(&opensplunkv1.CollectRequest{
+		StreamSequence: 2,
+		SentAt:         timestamppb.New(time.Now().UTC()),
+		Payload:        &opensplunkv1.CollectRequest_Batch{Batch: batch},
+	}); err != nil {
+		t.Fatalf("send release recovery event batch: %s", stack.redact(err.Error()))
+	}
+	for {
+		response, receiveErr := stream.Recv()
+		if receiveErr != nil {
+			t.Fatalf("receive release recovery event acknowledgment: %s", stack.redact(receiveErr.Error()))
+		}
+		if rejection := response.GetBatchReject(); rejection != nil {
+			t.Fatalf("release recovery event batch rejected: %+v", rejection)
+		}
+		if retry := response.GetRetryBatch(); retry != nil {
+			t.Fatalf("release recovery event batch unexpectedly requested retry: %+v", retry)
+		}
+		acknowledgment := response.GetBatchAck()
+		if acknowledgment == nil {
+			continue
+		}
+		if acknowledgment.GetBatchId() != batch.GetBatchId() ||
+			acknowledgment.GetBatchSequence() != batchSequence ||
+			acknowledgment.GetDurability() != opensplunkv1.AckDurability_ACK_DURABILITY_CLICKHOUSE_COMMITTED ||
+			acknowledgment.GetAcceptedEventCount() != 1 ||
+			acknowledgment.GetDuplicateEventCount() != 0 ||
+			len(acknowledgment.GetRejectedEvents()) != 0 {
+			t.Fatalf("release recovery event acknowledgment = %+v", acknowledgment)
+		}
+		break
+	}
+	if err := stream.Send(&opensplunkv1.CollectRequest{
+		StreamSequence: 3,
+		SentAt:         timestamppb.New(time.Now().UTC()),
+		Payload: &opensplunkv1.CollectRequest_Goodbye{Goodbye: &opensplunkv1.CollectorGoodbye{
+			Reason: opensplunkv1.CollectorGoodbyeReason_COLLECTOR_GOODBYE_REASON_SHUTDOWN,
+		}},
+	}); err != nil {
+		t.Fatalf("send release recovery collector goodbye: %s", stack.redact(err.Error()))
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			t.Fatal("release recovery collector goodbye received an unexpected response")
+		}
+		t.Fatalf("complete release recovery collector goodbye: %s", stack.redact(err.Error()))
+	}
+}
+
+func releaseOCIAssertSearchEventIDs(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	indexName string,
+	fixtureTime time.Time,
+	want []string,
+) {
+	t.Helper()
+	earliest := fixtureTime.Add(-time.Minute).Format(time.RFC3339Nano)
+	latest := fixtureTime.Add(time.Hour).Format(time.RFC3339Nano)
+	timezone := "UTC"
+	var created opensplunkv1.CreateSearchJobResponse
+	postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/search/jobs/create",
+		&opensplunkv1.CreateSearchJobRequest{Definition: &opensplunkv1.SearchDefinition{
+			Spl: "index=" + indexName + " | dedup event_id | table event_id",
+			TimeRange: &opensplunkv1.TimeRangeSpec{
+				Earliest: &earliest,
+				Latest:   &latest,
+				Timezone: &timezone,
+			},
+			IndexScope: []string{indexName},
+		}},
+		&created,
+	)
+	jobID := created.GetSearchJob().GetSearchJobId()
+	if jobID == "" {
+		t.Fatalf("created release recovery search job = %+v", created.GetSearchJob())
+	}
+	completed := waitForCompletedSearch(t, ctx, client, baseURL, jobID, 45*time.Second)
+	if completed.GetIndexTimeCutoff() == nil || completed.GetResultsTruncated() {
+		t.Fatalf("completed release recovery search = %+v", completed)
+	}
+	pageSize := uint32(100)
+	var results opensplunkv1.GetSearchResultsResponse
+	postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/search/jobs/results",
+		&opensplunkv1.GetSearchResultsRequest{
+			SearchJobId: jobID,
+			Page: &opensplunkv1.PageRequest{
+				PageSize:         &pageSize,
+				IncludeTotalSize: true,
+			},
+		},
+		&results,
+	)
+	page := results.GetResultPage()
+	if results.GetSearchJobId() != jobID || page.GetSchema() == nil || page.GetPage() == nil ||
+		!page.GetSnapshotComplete() || !page.GetPage().GetTotalSizeExact() ||
+		page.GetPage().GetNextPageToken() != "" || page.GetPage().GetTotalSize() != uint64(len(want)) {
+		t.Fatalf("release recovery search result page = %+v", page)
+	}
+	columnIndex := -1
+	for index, column := range page.GetSchema().GetColumns() {
+		if column.GetFieldName() == "event_id" {
+			columnIndex = index
+			break
+		}
+	}
+	if columnIndex < 0 {
+		t.Fatalf("release recovery search schema lacks event_id: %+v", page.GetSchema())
+	}
+	got := make([]string, 0, len(page.GetRows()))
+	for _, row := range page.GetRows() {
+		if columnIndex >= len(row.GetCells()) {
+			t.Fatalf("release recovery search row does not match schema: %+v", row)
+		}
+		value := row.GetCells()[columnIndex]
+		if _, ok := value.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok || value.GetStringValue() == "" {
+			t.Fatalf("release recovery event_id cell = %+v", value)
+		}
+		got = append(got, value.GetStringValue())
+	}
+	want = slices.Clone(want)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("release recovery search event IDs = %v, want %v", got, want)
+	}
+}
+
+func releaseOCIVolumeAt(
+	t *testing.T,
+	container *releaseOCIContainerInspect,
+	destination string,
+) string {
+	t.Helper()
+	for _, mount := range container.Mounts {
+		if mount.Destination == destination {
+			if mount.Type != "volume" || mount.Name == "" || !mount.RW {
+				t.Fatalf("container mount at %q = %+v, want writable named volume", destination, mount)
+			}
+			return mount.Name
+		}
+	}
+	t.Fatalf("container has no volume at %q", destination)
+	return ""
+}
+
+func releaseOCIReadOnlyVolumeAt(
+	t *testing.T,
+	container *releaseOCIContainerInspect,
+	destination string,
+) string {
+	t.Helper()
+	for _, mount := range container.Mounts {
+		if mount.Destination == destination {
+			if mount.Type != "volume" || mount.Name == "" || mount.RW {
+				t.Fatalf("container mount at %q = %+v, want read-only named volume", destination, mount)
+			}
+			return mount.Name
+		}
+	}
+	t.Fatalf("container has no volume at %q", destination)
+	return ""
 }
 
 func releaseOCICreateRecoveryVolume(
@@ -465,40 +2088,130 @@ func releaseOCICreateRecoveryVolume(
 	return name
 }
 
-func releaseOCIRunSilentRecoveryCommand(
+func releaseOCIQueryClickHouseBootstrap(
 	t *testing.T,
 	ctx context.Context,
 	stack *releaseOCIComposeStack,
 	operation string,
-	containerName string,
-	mounts []string,
-	arguments ...string,
+	query string,
+) string {
+	t.Helper()
+	return stack.mustCompose(
+		t,
+		ctx,
+		operation,
+		"exec",
+		"--no-TTY",
+		"clickhouse",
+		"clickhouse-client",
+		"--config-file",
+		"/etc/clickhouse-client/open-splunk-tls.xml",
+		"--secure",
+		"--host",
+		"127.0.0.1",
+		"--port",
+		"9440",
+		"--tls-sni-override",
+		stack.values["OPEN_SPLUNK_CLICKHOUSE_TLS_SERVER_NAME"],
+		"--user",
+		"open_splunk_bootstrap",
+		"--query",
+		query,
+	)
+}
+
+func releaseOCIAssertClickHouseArchiveMarkerAbsent(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	label string,
 ) {
 	t.Helper()
-	stack.ownedContainers = append(stack.ownedContainers, containerName)
-	dockerArguments := []string{
-		"run",
-		"--rm",
-		"--name", containerName,
-		"--network", "none",
-		"--read-only",
-		"--user", "65532:65532",
-		"--cap-drop", "ALL",
-		"--security-opt", "no-new-privileges:true",
-		"--pids-limit", "64",
-		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532",
+	const query = `
+		SELECT count()
+		FROM open_splunk.recovery_archive_markers
+		FORMAT TSVRaw`
+	if got := releaseOCIQueryClickHouseBootstrap(
+		t,
+		ctx,
+		stack,
+		"inspect "+label+" recovery archive marker",
+		query,
+	); got != "0" {
+		t.Fatalf("%s recovery archive marker count = %q, want 0", label, got)
 	}
-	for _, mount := range mounts {
-		dockerArguments = append(dockerArguments, "--mount", mount)
+}
+
+func releaseOCIAssertClickHouseRecoveryNamespace(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	label string,
+	want string,
+) {
+	t.Helper()
+	const query = `
+		SELECT arrayStringConcat(arraySort(groupArray(name)), ',')
+		FROM system.databases
+		WHERE startsWith(name, 'open_splunk')
+		FORMAT TSVRaw`
+	if got := releaseOCIQueryClickHouseBootstrap(
+		t,
+		ctx,
+		stack,
+		"inspect "+label+" recovery database namespace",
+		query,
+	); got != want {
+		t.Fatalf("%s recovery database namespace = %q, want %q", label, got, want)
 	}
-	dockerArguments = append(dockerArguments, stack.serverImage)
-	dockerArguments = append(dockerArguments, arguments...)
-	if output := releaseOCIRunDocker(t, ctx, stack, operation, dockerArguments...); output != "" {
-		t.Fatalf("%s produced output on success: %q", operation, stack.redact(output))
+}
+
+func releaseOCIAssertRestoredClickHouseRecoveryIdentity(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+	label string,
+) {
+	t.Helper()
+	releaseOCIAssertClickHouseArchiveMarkerAbsent(t, ctx, stack, label)
+	releaseOCIAssertClickHouseRecoveryNamespace(t, ctx, stack, label, "open_splunk")
+	const receiptQuery = `
+		SELECT count(), toString(any(recovery_archive_markers_table_uuid))
+		FROM open_splunk.recovery_sets
+		WHERE slot = 1
+		FORMAT TSVRaw`
+	receipt := releaseOCIQueryClickHouseBootstrap(
+		t,
+		ctx,
+		stack,
+		"inspect "+label+" recovery receipt",
+		receiptQuery,
+	)
+	receiptFields := strings.Split(receipt, "\t")
+	if len(receiptFields) != 2 || receiptFields[0] != "1" {
+		t.Fatalf("%s recovery receipt identity = %q, want one UUID-bound row", label, receipt)
 	}
-	stack.ownedContainers = slices.DeleteFunc(stack.ownedContainers, func(name string) bool {
-		return name == containerName
-	})
+	const tableQuery = `
+		SELECT toString(uuid)
+		FROM system.tables
+		WHERE database = 'open_splunk' AND name = 'recovery_archive_markers'
+		FORMAT TSVRaw`
+	tableUUID := releaseOCIQueryClickHouseBootstrap(
+		t,
+		ctx,
+		stack,
+		"inspect "+label+" recovery archive marker table UUID",
+		tableQuery,
+	)
+	if tableUUID == "" || tableUUID == "00000000-0000-0000-0000-000000000000" ||
+		receiptFields[1] != tableUUID {
+		t.Fatalf(
+			"%s receipt marker-table UUID = %q, physical UUID = %q",
+			label,
+			receiptFields[1],
+			tableUUID,
+		)
+	}
 }
 
 func releaseOCIAssertDefaultClickHouseUserRejected(
@@ -555,6 +2268,15 @@ type releaseOCIComposeStack struct {
 	collectorImage   string
 	ownedContainers  []string
 	ownedVolumes     []string
+}
+
+func (stack *releaseOCIComposeStack) forgetOwnedContainer(name string) {
+	for index, candidate := range stack.ownedContainers {
+		if candidate == name {
+			stack.ownedContainers = slices.Delete(stack.ownedContainers, index, index+1)
+			return
+		}
+	}
 }
 
 func (stack *releaseOCIComposeStack) environment() []string {
@@ -658,6 +2380,8 @@ func (stack *releaseOCIComposeStack) secrets() []string {
 		stack.values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD"],
 		stack.values["OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD"],
 		stack.values["OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD"],
+		stack.values["OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD"],
+		stack.values["OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD"],
 	)
 	if token, err := os.ReadFile(stack.values["OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE"]); err == nil {
 		result = append(result, strings.TrimSpace(string(token)))
@@ -722,6 +2446,7 @@ func (stack *releaseOCIComposeStack) cleanup(t *testing.T) {
 			)
 		}
 	}
+	stack.cleanupLabeledResources(t, "container")
 	for _, volume := range stack.ownedVolumes {
 		volumeContext, volumeCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		command := exec.CommandContext(volumeContext, "docker", "volume", "rm", "--force", volume)
@@ -744,6 +2469,8 @@ func (stack *releaseOCIComposeStack) cleanup(t *testing.T) {
 			)
 		}
 	}
+	stack.cleanupLabeledResources(t, "volume")
+	stack.cleanupLabeledResources(t, "network")
 	for _, image := range []string{stack.serverImage, stack.collectorImage} {
 		imageContext, imageCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		command := exec.CommandContext(imageContext, "docker", "image", "rm", "--force", image)
@@ -766,6 +2493,122 @@ func (stack *releaseOCIComposeStack) cleanup(t *testing.T) {
 			)
 		}
 	}
+	stack.assertImagesRemoved(t)
+	for _, kind := range []string{"container", "volume", "network"} {
+		if leftovers := stack.labeledResources(t, kind); len(leftovers) != 0 {
+			t.Errorf(
+				"release OCI test project %q retained %s resources: %v",
+				stack.project,
+				kind,
+				leftovers,
+			)
+		}
+	}
+}
+
+func (stack *releaseOCIComposeStack) assertImagesRemoved(t *testing.T) {
+	t.Helper()
+	for _, image := range []string{stack.serverImage, stack.collectorImage} {
+		inspectContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		command := exec.CommandContext(inspectContext, "docker", "image", "inspect", image)
+		configureProcessGroup(command)
+		output, truncated, err := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
+		cancel()
+		if err == nil || !strings.Contains(strings.ToLower(output), "no such image") {
+			t.Errorf(
+				"release OCI test image %q remains after cleanup or could not be inventoried: %v: %s",
+				image,
+				err,
+				formatBoundedCommandOutput(output, truncated, maximumHarnessOutputBytes),
+			)
+		}
+		if truncated {
+			t.Errorf(
+				"inventory removed release OCI test image %q produced excessive output: %s",
+				image,
+				formatBoundedCommandOutput(output, true, maximumHarnessOutputBytes),
+			)
+		}
+	}
+}
+
+func (stack *releaseOCIComposeStack) cleanupLabeledResources(t *testing.T, kind string) {
+	t.Helper()
+	resources := stack.labeledResources(t, kind)
+	if len(resources) == 0 {
+		return
+	}
+	arguments := []string{kind, "rm"}
+	switch kind {
+	case "container", "volume":
+		arguments = append(arguments, "--force")
+	case "network":
+	default:
+		t.Errorf("clean release OCI project %q: unsupported Docker resource kind %q", stack.project, kind)
+		return
+	}
+	arguments = append(arguments, resources...)
+	cleanupContext, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	command := exec.CommandContext(cleanupContext, "docker", arguments...)
+	configureProcessGroup(command)
+	output, truncated, err := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
+	cancel()
+	if err != nil && !strings.Contains(strings.ToLower(output), "no such") {
+		t.Errorf(
+			"remove labeled release OCI test %s resources %v: %v: %s",
+			kind,
+			resources,
+			err,
+			formatBoundedCommandOutput(output, truncated, maximumHarnessOutputBytes),
+		)
+	}
+	if truncated {
+		t.Errorf(
+			"remove labeled release OCI test %s resources %v produced excessive output: %s",
+			kind,
+			resources,
+			formatBoundedCommandOutput(output, true, maximumHarnessOutputBytes),
+		)
+	}
+}
+
+func (stack *releaseOCIComposeStack) labeledResources(t *testing.T, kind string) []string {
+	t.Helper()
+	resourceSet := make(map[string]struct{})
+	for _, label := range []string{
+		"com.docker.compose.project=" + stack.project,
+		"com.open-splunk.integration.project=" + stack.project,
+	} {
+		arguments := []string{kind, "ls"}
+		if kind == "container" {
+			arguments = append(arguments, "--all")
+		}
+		arguments = append(arguments, "--quiet", "--filter", "label="+label)
+		listContext, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		command := exec.CommandContext(listContext, "docker", arguments...)
+		configureProcessGroup(command)
+		output, truncated, err := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
+		cancel()
+		if err != nil || truncated {
+			t.Errorf(
+				"inventory release OCI test %s resources for label %q: %v: %s",
+				kind,
+				label,
+				err,
+				formatBoundedCommandOutput(output, truncated, maximumHarnessOutputBytes),
+			)
+			continue
+		}
+		for _, resource := range strings.Fields(output) {
+			resourceSet[resource] = struct{}{}
+		}
+	}
+	resources := make([]string, 0, len(resourceSet))
+	for resource := range resourceSet {
+		resources = append(resources, resource)
+	}
+	slices.Sort(resources)
+	return resources
 }
 
 func releaseOCIRequireCompose(t *testing.T, ctx context.Context, repository string) {
@@ -852,9 +2695,13 @@ func releaseOCIGenerateEnvironment(
 		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE",
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD_FILE",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD_FILE",
+		"OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE",
+		"OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD_FILE",
 		"OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE",
 		"OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE",
 		"OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE",
@@ -910,6 +2757,13 @@ type releaseOCIImageInspect struct {
 		Env        []string          `json:"Env"`
 		Labels     map[string]string `json:"Labels"`
 	} `json:"Config"`
+}
+
+type releaseOCIComposeVolume struct {
+	Type     string `json:"type"`
+	Source   string `json:"source"`
+	Target   string `json:"target"`
+	ReadOnly bool   `json:"read_only"`
 }
 
 func releaseOCIAssertImageContract(
@@ -1032,9 +2886,10 @@ func releaseOCIAssertProductionComposeConfig(
 	}
 	var config struct {
 		Services map[string]struct {
-			Image string          `json:"image"`
-			Ports []composePort   `json:"ports"`
-			Build json.RawMessage `json:"build"`
+			Image   string                    `json:"image"`
+			Ports   []composePort             `json:"ports"`
+			Build   json.RawMessage           `json:"build"`
+			Volumes []releaseOCIComposeVolume `json:"volumes"`
 		} `json:"services"`
 	}
 	if err := json.Unmarshal([]byte(output), &config); err != nil {
@@ -1043,6 +2898,7 @@ func releaseOCIAssertProductionComposeConfig(
 	wantServices := []string{
 		"clickhouse",
 		"clickhouse-migrator",
+		"clickhouse-recovery-volume-bootstrap",
 		"server",
 		"server-bootstrap",
 	}
@@ -1060,9 +2916,16 @@ func releaseOCIAssertProductionComposeConfig(
 	}
 	if config.Services["server"].Image != stack.serverImage ||
 		config.Services["clickhouse-migrator"].Image != stack.serverImage ||
+		config.Services["clickhouse-recovery-volume-bootstrap"].Image != stack.serverImage ||
 		config.Services["server-bootstrap"].Image != stack.serverImage {
 		t.Fatalf("production server images do not use %q", stack.serverImage)
 	}
+	releaseOCIAssertComposeRecoveryMount(
+		t,
+		"normal ClickHouse",
+		config.Services["clickhouse"].Volumes,
+		false,
+	)
 	server := config.Services["server"]
 	wantServerPorts := map[uint16]bool{8080: false, 4317: false}
 	if len(server.Ports) != len(wantServerPorts) {
@@ -1094,12 +2957,78 @@ func releaseOCIAssertProductionComposeConfig(
 	if len(migrator.Ports) != 0 {
 		t.Fatalf("production ClickHouse migrator publishes host ports: %+v", migrator.Ports)
 	}
+	recoveryVolumeBootstrap := config.Services["clickhouse-recovery-volume-bootstrap"]
+	if len(recoveryVolumeBootstrap.Ports) != 0 {
+		t.Fatalf(
+			"production ClickHouse recovery volume bootstrap publishes host ports: %+v",
+			recoveryVolumeBootstrap.Ports,
+		)
+	}
 	clickHouse := config.Services["clickhouse"]
 	if clickHouse.Image != testsupport.DefaultClickHouseImage {
 		t.Fatalf("production ClickHouse image = %q, want %q", clickHouse.Image, testsupport.DefaultClickHouseImage)
 	}
 	if len(clickHouse.Ports) != 0 {
 		t.Fatalf("production ClickHouse publishes host ports: %+v", clickHouse.Ports)
+	}
+}
+
+func releaseOCIAssertRestoreComposeConfig(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+) {
+	t.Helper()
+	output := stack.mustCompose(
+		t,
+		ctx,
+		"render restore Compose config",
+		"--profile",
+		"recovery",
+		"config",
+		"--format",
+		"json",
+	)
+	var config struct {
+		Services map[string]struct {
+			Volumes []releaseOCIComposeVolume `json:"volumes"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal([]byte(output), &config); err != nil {
+		t.Fatalf("decode restore Compose config: %v", err)
+	}
+	for _, service := range []string{"clickhouse", "deployment-restore"} {
+		value, exists := config.Services[service]
+		if !exists {
+			t.Fatalf("restore Compose config has no %q service", service)
+		}
+		releaseOCIAssertComposeRecoveryMount(t, service, value.Volumes, true)
+	}
+}
+
+func releaseOCIAssertComposeRecoveryMount(
+	t *testing.T,
+	label string,
+	volumes []releaseOCIComposeVolume,
+	wantReadOnly bool,
+) {
+	t.Helper()
+	var matches []releaseOCIComposeVolume
+	for _, volume := range volumes {
+		if volume.Target == releaseOCIClickHouseRecoveryPath ||
+			volume.Target == "/var/lib/open-splunk/clickhouse-backups" {
+			matches = append(matches, volume)
+		}
+	}
+	if len(matches) != 1 || matches[0].Type != "volume" ||
+		matches[0].Source != "clickhouse-recovery" ||
+		matches[0].ReadOnly != wantReadOnly {
+		t.Fatalf(
+			"%s recovery mounts = %+v, want one clickhouse-recovery named volume with read_only=%t",
+			label,
+			matches,
+			wantReadOnly,
+		)
 	}
 }
 
@@ -1114,19 +3043,36 @@ func mapsKeys[V any](input map[string]V) []string {
 
 type releaseOCIContainerInspect struct {
 	Config struct {
-		User       string   `json:"User"`
-		Env        []string `json:"Env"`
-		Entrypoint []string `json:"Entrypoint"`
-		Cmd        []string `json:"Cmd"`
+		User        string   `json:"User"`
+		WorkingDir  string   `json:"WorkingDir"`
+		Env         []string `json:"Env"`
+		Entrypoint  []string `json:"Entrypoint"`
+		Cmd         []string `json:"Cmd"`
+		Healthcheck *struct {
+			Test []string `json:"Test"`
+		} `json:"Healthcheck"`
 	} `json:"Config"`
 	HostConfig struct {
-		ReadonlyRootfs bool                  `json:"ReadonlyRootfs"`
-		NetworkMode    string                `json:"NetworkMode"`
-		PidsLimit      int64                 `json:"PidsLimit"`
-		CapAdd         []string              `json:"CapAdd"`
-		CapDrop        []string              `json:"CapDrop"`
-		SecurityOpt    []string              `json:"SecurityOpt"`
-		PortBindings   map[string][]struct{} `json:"PortBindings"`
+		ReadonlyRootfs    bool                  `json:"ReadonlyRootfs"`
+		AutoRemove        bool                  `json:"AutoRemove"`
+		Privileged        bool                  `json:"Privileged"`
+		NetworkMode       string                `json:"NetworkMode"`
+		PidMode           string                `json:"PidMode"`
+		IpcMode           string                `json:"IpcMode"`
+		UTSMode           string                `json:"UTSMode"`
+		UsernsMode        string                `json:"UsernsMode"`
+		CgroupnsMode      string                `json:"CgroupnsMode"`
+		PidsLimit         int64                 `json:"PidsLimit"`
+		CapAdd            []string              `json:"CapAdd"`
+		CapDrop           []string              `json:"CapDrop"`
+		GroupAdd          []string              `json:"GroupAdd"`
+		Devices           []json.RawMessage     `json:"Devices"`
+		DeviceRequests    []json.RawMessage     `json:"DeviceRequests"`
+		DeviceCgroupRules []string              `json:"DeviceCgroupRules"`
+		VolumesFrom       []string              `json:"VolumesFrom"`
+		SecurityOpt       []string              `json:"SecurityOpt"`
+		PortBindings      map[string][]struct{} `json:"PortBindings"`
+		Tmpfs             map[string]string     `json:"Tmpfs"`
 	} `json:"HostConfig"`
 	State struct {
 		Status   string `json:"Status"`
@@ -1209,6 +3155,131 @@ func releaseOCIAssertBootstrapCompleted(
 	if container.State.Status != "exited" || container.State.ExitCode != 0 {
 		t.Fatalf("server bootstrap state = %q exit %d", container.State.Status, container.State.ExitCode)
 	}
+	releaseOCIAssertOneShotHealthcheckDisabled(t, "server bootstrap", container)
+}
+
+func releaseOCIAssertRecoveryVolumeBootstrap(
+	t *testing.T,
+	stack *releaseOCIComposeStack,
+	container *releaseOCIContainerInspect,
+) {
+	t.Helper()
+	releaseOCIAssertOneShotHealthcheckDisabled(t, "ClickHouse recovery volume bootstrap", container)
+	wantCommand := []string{
+		"prepare-clickhouse-recovery-volume",
+		"-path",
+		"/var/lib/open-splunk/clickhouse-backups",
+	}
+	if container.Config.User != "0:65532" || !container.HostConfig.ReadonlyRootfs ||
+		!slices.Contains(container.HostConfig.CapDrop, "ALL") ||
+		!slices.Contains(container.HostConfig.SecurityOpt, "no-new-privileges:true") {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap hardening = user %q readonly %t cap-drop %v security %v",
+			container.Config.User,
+			container.HostConfig.ReadonlyRootfs,
+			container.HostConfig.CapDrop,
+			container.HostConfig.SecurityOpt,
+		)
+	}
+	capabilities := make([]string, 0, len(container.HostConfig.CapAdd))
+	for _, capability := range container.HostConfig.CapAdd {
+		capabilities = append(capabilities, strings.TrimPrefix(capability, "CAP_"))
+	}
+	slices.Sort(capabilities)
+	if !slices.Equal(capabilities, []string{"CHOWN", "FOWNER"}) {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap capabilities = %v, want CHOWN and FOWNER",
+			container.HostConfig.CapAdd,
+		)
+	}
+	if container.State.Status != "exited" || container.State.ExitCode != 0 {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap state = %q exit %d, want successful one-shot exit",
+			container.State.Status,
+			container.State.ExitCode,
+		)
+	}
+	if container.HostConfig.NetworkMode != "none" {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap network mode = %q, want none",
+			container.HostConfig.NetworkMode,
+		)
+	}
+	if container.HostConfig.PidsLimit != 32 {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap PID limit = %d, want 32",
+			container.HostConfig.PidsLimit,
+		)
+	}
+	if !slices.Equal(container.Config.Cmd, wantCommand) {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap command = %q, want %q",
+			container.Config.Cmd,
+			wantCommand,
+		)
+	}
+	if len(container.HostConfig.PortBindings) != 0 {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap publishes host ports: %+v",
+			container.HostConfig.PortBindings,
+		)
+	}
+	for _, entry := range container.Config.Env {
+		name, value, _ := strings.Cut(entry, "=")
+		if strings.Contains(name, "PASSWORD") {
+			t.Fatalf(
+				"ClickHouse recovery volume bootstrap environment contains password variable %q",
+				name,
+			)
+		}
+		for _, secret := range stack.secrets() {
+			if secret != "" && strings.Contains(value, secret) {
+				t.Fatalf(
+					"ClickHouse recovery volume bootstrap environment variable %q contains secret material",
+					name,
+				)
+			}
+		}
+	}
+	if len(container.Mounts) != 1 {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap mounts = %+v, want one recovery volume",
+			container.Mounts,
+		)
+	}
+	mount := container.Mounts[0]
+	if mount.Type != "volume" || mount.Name != stack.project+"_clickhouse-recovery" ||
+		mount.Destination != "/var/lib/open-splunk/clickhouse-backups" || !mount.RW {
+		t.Fatalf(
+			"ClickHouse recovery volume bootstrap mount = %+v, want writable project recovery volume",
+			mount,
+		)
+	}
+}
+
+func releaseOCIAssertClickHouseRecoveryVolumeOwnership(
+	t *testing.T,
+	ctx context.Context,
+	stack *releaseOCIComposeStack,
+) {
+	t.Helper()
+	ownership := stack.mustCompose(
+		t,
+		ctx,
+		"inspect ClickHouse recovery volume ownership",
+		"exec",
+		"--no-TTY",
+		"clickhouse",
+		"stat",
+		"--format=%u:%g:%a",
+		"/var/lib/open-splunk-clickhouse-backups",
+	)
+	if ownership != "101:65532:2750" {
+		t.Fatalf(
+			"ClickHouse recovery volume ownership and mode = %q, want 101:65532:2750",
+			ownership,
+		)
+	}
 }
 
 func releaseOCIAssertMigratorCompleted(
@@ -1221,6 +3292,23 @@ func releaseOCIAssertMigratorCompleted(
 			"ClickHouse migrator state = %q exit %d, want successful one-shot exit",
 			container.State.Status,
 			container.State.ExitCode,
+		)
+	}
+	releaseOCIAssertOneShotHealthcheckDisabled(t, "ClickHouse migrator", container)
+}
+
+func releaseOCIAssertOneShotHealthcheckDisabled(
+	t *testing.T,
+	label string,
+	container *releaseOCIContainerInspect,
+) {
+	t.Helper()
+	if container.Config.Healthcheck != nil &&
+		!slices.Equal(container.Config.Healthcheck.Test, []string{"NONE"}) {
+		t.Fatalf(
+			"%s healthcheck = %q, want absent or disabled",
+			label,
+			container.Config.Healthcheck.Test,
 		)
 	}
 }
@@ -1338,12 +3426,22 @@ func releaseOCIAssertServerEnvironmentHasNoSecrets(
 		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD":     {},
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD":       {},
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD":      {},
+		"OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD":        {},
+		"OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD":       {},
 		"OPEN_SPLUNK_ADMINISTRATOR_TOKEN":               {},
 		"OPEN_SPLUNK_ADMINISTRATOR_TOKEN_FILE_CONTENTS": {},
 	}
 	secrets := stack.secrets()
+	singletonLockEnvironment := false
 	for _, entry := range container.Config.Env {
 		name, value, _ := strings.Cut(entry, "=")
+		if name == "OPEN_SPLUNK_SERVER_SINGLETON_LOCK_PATH" {
+			if singletonLockEnvironment ||
+				value != "/var/lib/open-splunk/lock/private/open-splunk-server-open_splunk.server.lock" {
+				t.Fatalf("server singleton-lock environment = %q", entry)
+			}
+			singletonLockEnvironment = true
+		}
 		if _, forbidden := forbiddenNames[name]; forbidden {
 			t.Fatalf("server environment contains forbidden secret variable %q", name)
 		}
@@ -1362,10 +3460,15 @@ func releaseOCIAssertServerEnvironmentHasNoSecrets(
 			}
 		}
 	}
+	if !singletonLockEnvironment {
+		t.Fatal("server environment omits the retained deployment singleton lock")
+	}
 	joinedProcess := strings.Join(append(slices.Clone(container.Config.Entrypoint), container.Config.Cmd...), "\x00")
 	if !slices.Contains(container.Config.Cmd, "-clickhouse-skip-migrations") ||
-		strings.Contains(joinedProcess, "migration.password") {
-		t.Fatalf("server process does not isolate migration credentials: %q", joinedProcess)
+		strings.Contains(joinedProcess, "migration.password") ||
+		strings.Contains(joinedProcess, "backup.password") ||
+		strings.Contains(joinedProcess, "restore.password") {
+		t.Fatalf("server process does not isolate one-shot ClickHouse credentials: %q", joinedProcess)
 	}
 	for _, secret := range secrets {
 		if secret != "" && strings.Contains(joinedProcess, secret) {
@@ -1377,7 +3480,15 @@ func releaseOCIAssertServerEnvironmentHasNoSecrets(
 		"/run/open-splunk/clickhouse/runtime.password":  false,
 		"/run/open-splunk/clickhouse/deletion.password": false,
 	}
+	singletonLockMount := false
 	for _, mount := range container.Mounts {
+		if mount.Destination == "/var/lib/open-splunk/lock" {
+			if singletonLockMount || mount.Type != "volume" ||
+				mount.Name != stack.project+"_server-lock" || !mount.RW {
+				t.Fatalf("long-running server singleton-lock mount = %+v", mount)
+			}
+			singletonLockMount = true
+		}
 		if mount.Source == administratorSource || strings.Contains(mount.Destination, "open-splunk-bootstrap") {
 			t.Fatalf("long-running server mounts administrator token source: %+v", mount)
 		}
@@ -1387,9 +3498,21 @@ func releaseOCIAssertServerEnvironmentHasNoSecrets(
 			}
 			passwordFileMounts[mount.Destination] = true
 		}
-		if strings.Contains(mount.Destination, "migration.password") {
-			t.Fatalf("long-running server mounts migration credentials: %+v", mount)
+		if strings.Contains(mount.Destination, "migration.password") ||
+			strings.Contains(mount.Destination, "backup.password") ||
+			strings.Contains(mount.Destination, "restore.password") ||
+			mount.Source == stack.values["OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE"] ||
+			mount.Source == stack.values["OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE"] ||
+			mount.Source == stack.values["OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD_FILE"] {
+			t.Fatalf("long-running server mounts isolated ClickHouse credentials: %+v", mount)
 		}
+		if mount.Destination == "/var/lib/open-splunk/recovery" ||
+			strings.Contains(mount.Destination, "clickhouse-backups") {
+			t.Fatalf("long-running server mounts recovery storage: %+v", mount)
+		}
+	}
+	if !singletonLockMount {
+		t.Fatal("long-running server does not mount the retained deployment singleton lock")
 	}
 	for destination, mounted := range passwordFileMounts {
 		if !mounted {
@@ -1804,6 +3927,8 @@ func releaseOCIRotateClickHouseCredentials(
 		"OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD",
+		"OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD",
 	}
 	used := make(map[string]struct{}, len(passwordKeys)*2)
 	for _, key := range passwordKeys {

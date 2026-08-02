@@ -231,11 +231,17 @@ bootstrap_password=$(openssl rand -hex 32)
 migration_password=$(openssl rand -hex 32)
 runtime_password=$(openssl rand -hex 32)
 deletion_password=$(openssl rand -hex 32)
+backup_password=$(openssl rand -hex 32)
+restore_password=$(openssl rand -hex 32)
 printf '%s' "$migration_password" >"$tls_directory/clickhouse-migration.password"
 printf '%s' "$runtime_password" >"$tls_directory/clickhouse-runtime.password"
 printf '%s' "$deletion_password" >"$tls_directory/clickhouse-deletion.password"
+printf '%s' "$backup_password" >"$tls_directory/clickhouse-backup.password"
+printf '%s' "$restore_password" >"$tls_directory/clickhouse-restore.password"
 chmod 0644 \
+	"$tls_directory/clickhouse-backup.password" \
 	"$tls_directory/clickhouse-migration.password" \
+	"$tls_directory/clickhouse-restore.password" \
 	"$tls_directory/clickhouse-runtime.password" \
 	"$tls_directory/clickhouse-deletion.password"
 {
@@ -249,9 +255,13 @@ chmod 0644 \
     echo "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD=$migration_password"
     echo "OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD=$runtime_password"
     echo "OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD=$deletion_password"
+	echo "OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD=$backup_password"
+	echo "OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD=$restore_password"
 	echo "OPEN_SPLUNK_CLICKHOUSE_MIGRATION_PASSWORD_FILE=\"$tls_directory/clickhouse-migration.password\""
 	echo "OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD_FILE=\"$tls_directory/clickhouse-runtime.password\""
 	echo "OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD_FILE=\"$tls_directory/clickhouse-deletion.password\""
+	echo "OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD_FILE=\"$tls_directory/clickhouse-backup.password\""
+	echo "OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD_FILE=\"$tls_directory/clickhouse-restore.password\""
     echo "OPEN_SPLUNK_CLICKHOUSE_TLS_CA_FILE=\"$tls_directory/ca.crt\""
     echo "OPEN_SPLUNK_CLICKHOUSE_TLS_CERT_FILE=\"$tls_directory/server.crt\""
     echo "OPEN_SPLUNK_CLICKHOUSE_TLS_KEY_FILE=\"$tls_directory/server.key\""
