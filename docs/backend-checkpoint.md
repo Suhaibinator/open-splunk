@@ -15,6 +15,8 @@ Committed implementation checkpoint:
 
 - `f25db02` — bounded `eventstats min(field) AS output [BY ...]` plus
   whole-graph execution-amplification accounting.
+- `5aaa4cd` — phase-scoped shared-container integration deadlines after the
+  expanded real-ClickHouse corpus exhausted its original cumulative budget.
 
 This test-first SPL unit adds one explicitly bounded row-preserving minimum
 without changing either database schema or putting GORM on the ClickHouse
@@ -71,12 +73,23 @@ path:
     reviews drove the flat graph, endpoint-aware budget, predicate-hoist bind
     ordering, canonical field-reference fix, shared diagnostics, stale helper
     removal, and documentation corrections. The final reviews found no
-    remaining concrete correctness, efficiency, CI, or stale-comment issue.
+    remaining concrete production correctness, efficiency, or stale-comment
+    issue.
     A larger compiled-measure abstraction was deliberately left for a future
     multi-aggregate change because it would add churn without changing this
     bounded contract.
+11. The first pushed CI run passed Go lint and every other independently
+    executed job but exposed that `TestStoreAgainstClickHouse` still gave its
+    now-expanded shared-container corpus one five-minute context dating to the
+    original test. It expired at exactly 5m00.008s and blamed the active
+    stacked-suggestion query. Setup/storage, the named compiled-SPL corpus,
+    and post-corpus deletion now receive independent five-, fifteen-, and
+    two-minute phase contexts, all capped by the test deadline with cleanup
+    headroom. The stacked query remains deliberately bounded to 54 reads of
+    one retained leaf and one textual physical-events scan; no production SQL
+    or coverage was weakened.
 
-Validation on implementation commit `f25db02`:
+Validation on implementation commit `f25db02` and CI repair `5aaa4cd`:
 
 ```sh
 git diff --check
@@ -117,6 +130,14 @@ also passed. Cleanup found no test-owned `open-splunk-clickhouse-*` container
 or `open-splunk-compose-test-*` volume. The dependency upgrades are already
 committed at `347a015`; `go mod tidy` made no additional `go.mod` or `go.sum`
 change.
+
+GitHub Actions run `30727550275` passed Go lint in 2m08s as well as protobuf,
+race/coverage, vulnerability, frontend, GradeThis, and release OCI jobs. Its
+Backend vertical failure was solely the stale cumulative Store-test deadline
+described above. On `5aaa4cd`, the final digest-pinned Store rerun passed in
+244.55 seconds, including the newly named compiled-SPL phase in 237.14
+seconds; full Go tests, vet, build, package race, and cached v2.12.2 lint also
+passed, and cleanup again left no test-owned container or volume.
 
 This checkpoint does not claim general `eventstats`, `max`, or `streamstats`
 support. Each further aggregate needs its own syntax, null, multivalue, type,
