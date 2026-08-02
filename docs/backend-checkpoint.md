@@ -7,7 +7,132 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded eventstats percentiles
+## Latest checkpoint: coordinated deployment recovery
+
+Date: 2026-08-02
+
+Committed implementation checkpoint:
+
+- `f68597b` — coordinated, directly bound control-plane and ClickHouse-native
+  deployment backup/restore.
+
+This test-first recovery unit adds an operator-driven disaster-recovery path
+without putting GORM on ClickHouse, introducing an intermediate ClickHouse
+database promoter, or attempting an in-place restore:
+
+1. A retained deployment singleton lock fences the running server and every
+   recovery helper. Backup snapshots the stopped SQLite control plane through
+   its native backup API, then uses ClickHouse's native `BACKUP` operation for
+   the exact canonical database. Restore requires fresh control-plane and
+   ClickHouse data volumes and restores directly into the absent canonical
+   `open_splunk` database.
+2. The outer recovery-set manifest cryptographically binds the verified
+   control child, native ClickHouse archive, release identity, migration
+   ledgers, physical schema, database/table UUIDs, maximum visibility sequence,
+   and native operation UUID. Restore revalidates those bindings before and
+   after every authoritative transition and writes an exact singleton receipt
+   into the restored database.
+3. Control-plane restore remains GORM-backed SQLite only. It accepts only the
+   exact database -> master key -> administrator token publication prefix,
+   verifies the child manifest digest and recovery-set ID, preserves a live
+   database lock, and resumes interruption without accepting mixed members or
+   an unrelated valid control backup.
+4. ClickHouse recovery remains on `clickhouse-go`. It verifies the exact four
+   release-owned table definitions, migration history, UUID identity, archive
+   marker, receipt, and visibility fence. Migration-ledger, singleton marker /
+   receipt, and system-catalog reads use raw input sentinels plus row, byte,
+   memory, group, and result limits so duplicate-heavy corruption cannot hide
+   behind a small aggregate result.
+5. Native `BACKUP` ambiguity fails closed. Any transport, cancellation,
+   nonterminal, or wrong-operation result retains the exact source marker and
+   reports both the recovery-set ID and operation UUID. A separate
+   operator-attested reconciliation helper can clear only that exact marker
+   after ClickHouse restart; it cannot access either archive or control state.
+6. All ordinary cleanup is descriptor-bound and namespace-bounded. Published
+   child directories, archive files, control members, restore stages, and
+   stable files stay pinned through identity proof and unlink. Ambiguous
+   publication, same-name replacement, unexpected entries, or cleanup errors
+   preserve candidates for independent reconciliation rather than deleting by
+   pathname.
+7. Production Compose supplies separate retained lock, recovery, state,
+   exports, ClickHouse data, and ClickHouse log volumes. The recovery-target
+   overlay binds independently verified fresh external volumes; the restore
+   overlay makes the archive disk read-only; the runbook starts ClickHouse with
+   `--no-deps` so the writable recovery-volume bootstrap cannot run during
+   restore.
+8. ClickHouse now has six independent credentials: bootstrap, migration,
+   runtime, deletion, backup, and restore. Credential rotation authoritatively
+   revokes all direct grants and role assignments from every managed SQL
+   principal before rebuilding its exact allowlist. Backup and restore helpers
+   receive only their bounded native-operation, metadata, receipt, and marker
+   privileges.
+9. Pinned ClickHouse integration covers the full backup/restore/resume/archive
+   deletion lifecycle, 10,001 migration identities, duplicate singleton rows,
+   oversized ledger data, extra target tables, unrelated catalog noise,
+   persistent credential rotation, and exact cleanup. The release OCI contract
+   covers fresh external recovery volumes, direct canonical restore, marker
+   reconciliation, helper hardening, and Docker Desktop physical bind identity.
+10. Three simplify passes and repeated independent adversarial reviews found
+    and corrected ambiguous marker cleanup, unbounded input scans,
+    close-then-unlink replacement races, nested publication cleanup, stale
+    privilege grants, restore runbook dependency drift, TLS fixture grant
+    drift, and Darwin inherited-group lock rejection. The final end-to-end
+    state-machine, cleanup, query-bound, packaging, and GORM/native-driver
+    reviews reported no unresolved concrete defect.
+
+Validation on commit `f68597b`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+CGO_ENABLED=0 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+node --test scripts/build-oci.test.mjs
+bash -n deploy/clickhouse-init.sh deploy/generate-env.sh scripts/build-oci.sh \
+  scripts/verify-release-clean.sh
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=25m -p=1 -v
+
+OPEN_SPLUNK_OCI_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./integration -run '^TestReleaseOCIComposeContract$' \
+  -count=1 -timeout=25m -v
+```
+
+Every local command passed. The full unit and race/shuffle trees were clean;
+vet and the CGO-disabled build passed; cached golangci-lint v2.12.2 reported
+`0 issues`; module files remained unchanged. Frontend lint, type-check, 65
+build-transaction tests, 137 frontend tests, the static production build, all
+18 OCI launcher tests, and shell syntax passed. The exact CI Backend vertical
+matrix passed: the compiled SPL store corpus completed in 322.75 seconds, the
+native recovery lifecycle in 18.42 seconds, and persistent credential rotation
+in 20.01 seconds. The exact clean-snapshot release OCI Compose contract passed
+in 140.40 seconds. Every test-owned Docker container and volume was removed.
+
+This unit retains GORM solely for the SQLite control plane and the native
+ClickHouse driver for event data. The external GradeThis Compose collector
+cutover remains explicitly deferred. Broader SPL compatibility remains the
+next backend stream, and the overall backend goal remains active.
+
+## Previous checkpoint: bounded eventstats percentiles
 
 Date: 2026-08-02
 
