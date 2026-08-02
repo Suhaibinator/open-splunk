@@ -8,14 +8,18 @@ import (
 
 // validEventAggregateContract recognizes the deliberately narrow,
 // row-preserving eventstats count/count(field)/count(eval(predicate)),
-// min(field), max(field), sum(field), avg(field), or dc(field) plan contract.
+// pN/percN(field), min(field), max(field), sum(field), avg(field), or dc(field)
+// plan contract.
 // Consumers that use event provenance metadata must fail closed when handed
 // forged logical operators.
 func validEventAggregateContract(operator *EventAggregate) bool {
 	if operator == nil ||
 		len(operator.GroupBy) > spl.MaximumStatsGroupFields ||
-		operator.Measure.Percentile != 0 ||
 		operator.Measure.Output == "" {
+		return false
+	}
+	if operator.Measure.Function != AggregateFunctionPercentile &&
+		operator.Measure.Percentile != 0 {
 		return false
 	}
 	switch operator.Measure.Function {
@@ -33,6 +37,13 @@ func validEventAggregateContract(operator *EventAggregate) bool {
 		AggregateFunctionAverage,
 		AggregateFunctionDistinctCount:
 		if operator.Measure.Predicate != nil ||
+			!validResolvedEventAggregateField(operator.Measure.Input) {
+			return false
+		}
+	case AggregateFunctionPercentile:
+		if operator.Measure.Predicate != nil ||
+			operator.Measure.Percentile < 1 ||
+			operator.Measure.Percentile > 99 ||
 			!validResolvedEventAggregateField(operator.Measure.Input) {
 			return false
 		}

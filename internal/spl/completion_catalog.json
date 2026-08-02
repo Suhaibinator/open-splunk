@@ -77,8 +77,8 @@
     },
     {
       "name": "eventstats",
-      "insertion": "eventstats dc(user) AS unique_users BY level",
-      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), exact distinct count, numeric sum, numeric average, exact mixed-type minimum, or exact mixed-type maximum to every input row globally or within up to 16 exact BY fields."
+      "insertion": "eventstats p95(duration_ms) AS p95_ms BY service",
+      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), exact distinct count, bounded pN/percN percentile (1-99), numeric sum, numeric average, exact mixed-type minimum, or exact mixed-type maximum to every input row globally or within up to 16 exact BY fields."
     },
     {
       "name": "top",

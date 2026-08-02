@@ -63,9 +63,11 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 
 	container := "open-splunk-store-" + integrationRandomHex(t, 6)
 	password := integrationRandomHex(t, 24)
-	image := os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE")
-	if image == "" {
-		image = storeIntegrationImage
+	image, err := testsupport.ResolvePinnedClickHouseImage(
+		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
+	)
+	if err != nil {
+		t.Fatalf("resolve pinned ClickHouse integration image: %v", err)
 	}
 	integrationDocker(t, ctx, nil,
 		"run", "--detach", "--rm", "--name", container,
@@ -2524,6 +2526,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsDistinctCountAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsNumericAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testEventStatsPercentilesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsMinimumAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsMaximumAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testStatsPercentilesAgainstClickHouse(ctx, t, store, connection, indexTime)

@@ -387,6 +387,8 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats count AS event_count BY group",
 				"eventstats count(field) AS occurrences BY group",
 				"eventstats count(eval(field=value)) AS matches BY group",
+				"eventstats p50(field) AS p50_value BY group",
+				"eventstats p95(field) AS p95_value BY group",
 				"eventstats min(field) AS minimum BY group",
 				"eventstats max(field) AS maximum BY group",
 				"eventstats sum(field) AS total BY group",
@@ -404,6 +406,8 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 				"eventstats count AS event_count BY group",
 				"eventstats count(field) AS occurrences BY group",
 				"eventstats count(eval(field=value)) AS matches BY group",
+				"eventstats p50(field) AS p50_value BY group",
+				"eventstats p95(field) AS p95_value BY group",
 				"eventstats min(field) AS minimum BY group",
 				"eventstats max(field) AS maximum BY group",
 				"eventstats sum(field) AS total BY group",
@@ -518,14 +522,16 @@ func TestAnalyzeEventStatsSuggestionContextStaysWithinBoundedGrammar(t *testing.
 		t.Fatalf("function class = %q, want aggregate", aggregate.FunctionClass)
 	}
 	candidates := StaticSuggestionCandidates(aggregate)
-	if len(candidates) != 6 ||
+	if len(candidates) != 8 ||
 		candidates[0].Label != "count" ||
-		candidates[1].Label != "dc" ||
-		candidates[2].Label != "min" ||
-		candidates[3].Label != "max" ||
-		candidates[4].Label != "sum" ||
-		candidates[5].Label != "avg" {
-		t.Fatalf("aggregate suggestions = %v, want count, dc, min, max, sum, and avg", candidates)
+		candidates[1].Label != "p50" ||
+		candidates[2].Label != "p95" ||
+		candidates[3].Label != "dc" ||
+		candidates[4].Label != "min" ||
+		candidates[5].Label != "max" ||
+		candidates[6].Label != "sum" ||
+		candidates[7].Label != "avg" {
+		t.Fatalf("aggregate suggestions = %v, want count, p50, p95, dc, min, max, sum, and avg", candidates)
 	}
 
 	tests := []struct {

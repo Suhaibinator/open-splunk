@@ -3353,9 +3353,10 @@ func compileFixedValueTimechart(
 	var aggregateValueSQL string
 	switch valueKind {
 	case TimechartValueKindPercentile:
-		aggregateValueSQL = "arrayElementOrNull(quantilesGKOrNullArray(100, " +
-			statsPercentileLevelSQL(operator.Measure.Percentile) + ")(" +
-			measureValues + "), 1)"
+		aggregateValueSQL = singlePercentileArrayAggregateSQL(
+			operator.Measure.Percentile,
+			measureValues,
+		)
 	case TimechartValueKindSum, TimechartValueKindAverage:
 		var supported bool
 		aggregateValueSQL, supported = numericArrayAggregateSQL(
@@ -11799,6 +11800,7 @@ type compiledEventStatsGroup struct {
 
 type eventAggregateMeasureSpec struct {
 	function        plan.AggregateFunction
+	percentile      uint8
 	materialized    bool
 	numberType      string
 	numericIntegral bool
@@ -11806,14 +11808,15 @@ type eventAggregateMeasureSpec struct {
 }
 
 func eventAggregateMeasureSpecFor(
-	function plan.AggregateFunction,
+	measure plan.AggregateMeasure,
 ) (eventAggregateMeasureSpec, error) {
 	spec := eventAggregateMeasureSpec{
-		function:        function,
+		function:        measure.Function,
+		percentile:      measure.Percentile,
 		numberType:      "UInt64",
 		numericIntegral: true,
 	}
-	switch function {
+	switch measure.Function {
 	case plan.AggregateFunctionCountRows:
 		return spec, nil
 	case plan.AggregateFunctionCountValues,
@@ -11825,11 +11828,23 @@ func eventAggregateMeasureSpecFor(
 		spec.materialized = true
 		spec.valuePrefix = "__os_eventstats_value_dc_"
 		return spec, nil
+	case plan.AggregateFunctionPercentile:
+		if measure.Percentile < 1 || measure.Percentile > 99 {
+			return eventAggregateMeasureSpec{}, fmt.Errorf(
+				"compile ClickHouse eventstats: invalid percentile level %d",
+				measure.Percentile,
+			)
+		}
+		spec.materialized = true
+		spec.numberType = "Float64"
+		spec.numericIntegral = false
+		spec.valuePrefix = "__os_eventstats_value_percentile_"
+		return spec, nil
 	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 		spec.materialized = true
 		spec.numberType = "Float64"
 		spec.numericIntegral = false
-		if function == plan.AggregateFunctionSum {
+		if measure.Function == plan.AggregateFunctionSum {
 			spec.valuePrefix = "__os_eventstats_value_sum_"
 		} else {
 			spec.valuePrefix = "__os_eventstats_value_avg_"
@@ -11839,7 +11854,7 @@ func eventAggregateMeasureSpecFor(
 		spec.materialized = true
 		spec.numberType = ""
 		spec.numericIntegral = false
-		if function == plan.AggregateFunctionMinimum {
+		if measure.Function == plan.AggregateFunctionMinimum {
 			spec.valuePrefix = "__os_eventstats_value_min_"
 		} else {
 			spec.valuePrefix = "__os_eventstats_value_max_"
@@ -11848,7 +11863,7 @@ func eventAggregateMeasureSpecFor(
 	default:
 		return eventAggregateMeasureSpec{}, fmt.Errorf(
 			"compile ClickHouse eventstats: unsupported function %d",
-			function,
+			measure.Function,
 		)
 	}
 }
@@ -11864,6 +11879,8 @@ func (spec eventAggregateMeasureSpec) aggregateSQL(
 		return distinctCountCardinalitySQL(
 			"tupleElement(" + inputSQL + ", 1)",
 		), nil
+	case plan.AggregateFunctionPercentile:
+		return singlePercentileArrayAggregateSQL(spec.percentile, inputSQL), nil
 	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 		if sql, supported := numericArrayAggregateSQL(spec.function, inputSQL); supported {
 			return sql, nil
@@ -11936,7 +11953,7 @@ func compileEventAggregate(
 	}
 
 	measure := operator.Measure
-	measureSpec, specErr := eventAggregateMeasureSpecFor(measure.Function)
+	measureSpec, specErr := eventAggregateMeasureSpecFor(measure)
 	if specErr != nil {
 		return compiledRelation{}, compileState{}, nil, nil, specErr
 	}
@@ -12035,7 +12052,8 @@ func compileEventAggregate(
 		}
 		measureInputSQL = "toUInt64(ifNull(" + predicateSQL + ", 0))"
 		measureInputArgs = predicateArgs
-	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
+	case plan.AggregateFunctionCountValues, plan.AggregateFunctionPercentile,
+		plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
 		plan.AggregateFunctionMaximum, plan.AggregateFunctionDistinctCount:
 		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
@@ -12056,7 +12074,8 @@ func compileEventAggregate(
 			if exists {
 				measureInputSQL, measureInputArgs = countValueInputSQL(input)
 			}
-		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
+		case plan.AggregateFunctionPercentile, plan.AggregateFunctionSum,
+			plan.AggregateFunctionAverage:
 			measureInputSQL = "CAST([], 'Array(Float64)')"
 			if exists {
 				measureInputSQL, measureInputArgs = numericArrayInputSQL(input)
@@ -12569,6 +12588,20 @@ func validateEventAggregate(
 		); err != nil {
 			return plan.FieldRef{}, err
 		}
+	case plan.AggregateFunctionPercentile:
+		if measure.Predicate != nil ||
+			measure.Percentile < 1 || measure.Percentile > 99 {
+			return plan.FieldRef{}, errors.New(
+				"compile ClickHouse eventstats: pN(field) contains unsupported predicate or percentile metadata",
+			)
+		}
+		if err := validateCanonicalFieldRef(
+			"eventstats",
+			"input",
+			measure.Input,
+		); err != nil {
+			return plan.FieldRef{}, err
+		}
 	case plan.AggregateFunctionCountPredicate:
 		if err := validateConditionalCountMeasure(
 			measure,
@@ -12581,7 +12614,7 @@ func validateEventAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), dc(field), min(field), max(field), sum(field), or avg(field) is supported",
+			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), dc(field), min(field), max(field), sum(field), avg(field), or pN/percN(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -13767,6 +13800,14 @@ func statsPercentileLevelSQL(percentile uint8) string {
 		return "0." + strconv.Itoa(int(percentile/10))
 	}
 	return fmt.Sprintf("0.%02d", percentile)
+}
+
+func singlePercentileArrayAggregateSQL(
+	percentile uint8,
+	inputSQL string,
+) string {
+	return "arrayElementOrNull(quantilesGKOrNullArray(100, " +
+		statsPercentileLevelSQL(percentile) + ")(" + inputSQL + "), 1)"
 }
 
 func numericArrayAggregateSQL(function plan.AggregateFunction, inputSQL string) (string, bool) {

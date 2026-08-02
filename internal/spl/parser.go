@@ -1529,7 +1529,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		var aggregateErr error
 		aggregate, end, aggregateErr = p.parseEventStatsFieldAggregate(
 			functionToken,
-			fieldSpec.function,
+			fieldSpec,
 		)
 		if aggregateErr != nil {
 			return nil, aggregateErr
@@ -1552,7 +1552,11 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		var aggregateErr error
 		aggregate, end, aggregateErr = p.parseEventStatsFieldAggregate(
 			functionToken,
-			AggregateFunctionCountValues,
+			statsAggregateSpec{
+				function:      AggregateFunctionCountValues,
+				canonicalName: "count",
+				requiresInput: true,
+			},
 		)
 		if aggregateErr != nil {
 			return nil, aggregateErr
@@ -1575,12 +1579,9 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		end = alias.sourceRange.End
 		p.advance()
 	}
-	_, exactFieldAggregate := eventStatsFieldAggregateDescriptorForFunction(
-		aggregate.Function,
-	)
 	if (aggregate.Function == AggregateFunctionCountValues ||
 		aggregate.Function == AggregateFunctionCountPredicate ||
-		exactFieldAggregate) &&
+		fieldAggregate) &&
 		!aggregate.ExplicitAlias {
 		form := "count(field)"
 		suggestion := "eventstats count(field) AS occurrences"
@@ -1594,17 +1595,14 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 			// predicate forms, so it intentionally remains outside the shared
 			// exact-field descriptor table.
 		default:
-			descriptor, ok := eventStatsFieldAggregateDescriptorForFunction(
-				aggregate.Function,
-			)
+			var ok bool
+			form, suggestion, ok = eventStatsFieldAggregatePresentation(fieldSpec)
 			if !ok {
 				return nil, p.unsupportedEventStatsAggregate(
 					functionToken,
 					"eventstats aggregate metadata is invalid",
 				)
 			}
-			form = descriptor.form
-			suggestion = descriptor.suggestion
 		}
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
@@ -1647,12 +1645,13 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 
 func (p *parser) parseEventStatsFieldAggregate(
 	functionToken token,
-	function AggregateFunction,
+	spec statsAggregateSpec,
 ) (StatsAggregate, Position, error) {
 	functionName := strings.ToLower(functionToken.text)
 	end := functionToken.sourceRange.End
 	aggregate := StatsAggregate{
-		Function:   function,
+		Function:   spec.function,
+		Percentile: spec.percentile,
 		Range:      functionToken.sourceRange,
 		AliasRange: functionToken.sourceRange,
 	}
@@ -1664,7 +1663,7 @@ func (p *parser) parseEventStatsFieldAggregate(
 				" requires one exact field argument in parentheses",
 		)
 	}
-	if function == AggregateFunctionCountValues &&
+	if spec.function == AggregateFunctionCountValues &&
 		p.current().kind == tokenRightParen {
 		return StatsAggregate{}, end, p.unsupportedEventStatsSyntax(
 			openParen,
@@ -1727,6 +1726,8 @@ func eventStatsDiagnosticSuggestions() []string {
 		"eventstats count AS event_count BY group",
 		"eventstats count(field) AS occurrences BY group",
 		"eventstats count(eval(field=value)) AS matches BY group",
+		"eventstats p50(field) AS p50_value BY group",
+		"eventstats p95(field) AS p95_value BY group",
 	}
 	for _, descriptor := range eventStatsFieldAggregateDescriptors {
 		suggestions = append(suggestions, descriptor.suggestion+" BY group")
@@ -1939,6 +1940,7 @@ func eventStatsAcceptedAggregateForms() string {
 		"count",
 		"count(field) AS output",
 		"count(eval(predicate)) AS output",
+		"pN/percN(field) AS output for N from 1 through 99",
 	}
 	for _, descriptor := range eventStatsFieldAggregateDescriptors {
 		forms = append(forms, descriptor.form+" AS output")
@@ -1947,8 +1949,8 @@ func eventStatsAcceptedAggregateForms() string {
 }
 
 func eventStatsFunctionNames() []string {
-	names := make([]string, 1, len(eventStatsFieldAggregateDescriptors)+1)
-	names[0] = "count"
+	names := make([]string, 0, len(eventStatsFieldAggregateDescriptors)+3)
+	names = append(names, "count", "p50", "p95")
 	for _, descriptor := range eventStatsFieldAggregateDescriptors {
 		names = append(names, descriptor.name)
 	}
@@ -2027,6 +2029,19 @@ func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 func eventStatsFieldAggregateSpecForName(
 	name string,
 ) (statsAggregateSpec, bool) {
+	name = strings.ToLower(name)
+	if percentile, supported := parseStatsPercentileSuffix(name); supported {
+		prefix := "p"
+		if strings.HasPrefix(name, "perc") {
+			prefix = "perc"
+		}
+		return statsAggregateSpec{
+			function:      AggregateFunctionPercentile,
+			canonicalName: prefix + strconv.Itoa(int(percentile)),
+			requiresInput: true,
+			percentile:    percentile,
+		}, true
+	}
 	descriptor, supported := eventStatsFieldAggregateDescriptorForName(name)
 	if !supported {
 		return statsAggregateSpec{}, false
@@ -2036,6 +2051,25 @@ func eventStatsFieldAggregateSpecForName(
 		canonicalName: descriptor.name,
 		requiresInput: true,
 	}, true
+}
+
+func eventStatsFieldAggregatePresentation(
+	spec statsAggregateSpec,
+) (string, string, bool) {
+	if spec.function == AggregateFunctionPercentile &&
+		spec.percentile >= 1 && spec.percentile <= 99 &&
+		(spec.canonicalName == "p"+strconv.Itoa(int(spec.percentile)) ||
+			spec.canonicalName == "perc"+strconv.Itoa(int(spec.percentile))) {
+		form := spec.canonicalName + "(field)"
+		return form, "eventstats " + form + " AS " + spec.canonicalName + "_value", true
+	}
+	descriptor, supported := eventStatsFieldAggregateDescriptorForFunction(
+		spec.function,
+	)
+	if !supported {
+		return "", "", false
+	}
+	return descriptor.form, descriptor.suggestion, true
 }
 
 func parseStatsPercentileSuffix(name string) (uint8, bool) {

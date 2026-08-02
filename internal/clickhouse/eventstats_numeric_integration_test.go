@@ -172,94 +172,25 @@ func testEventStatsNumericAggregatesAgainstClickHouse(
 	}
 	base := `index=compiler source="` + fixtureSource + `"`
 
-	type numericRow struct {
-		id    string
-		value *float64
-	}
-	collect := func(name string, query CompiledQuery) []numericRow {
+	collect := func(name string, query CompiledQuery) []eventStatsNullableFloatRow {
 		t.Helper()
-		rows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
-		if queryErr != nil {
-			t.Fatalf(
-				"execute %s: %v\nSQL: %s\nargs: %#v",
-				name,
-				queryErr,
-				query.SQL,
-				query.Args,
-			)
-		}
-		types := rows.ColumnTypes()
-		if len(types) != 2 ||
-			types[0].DatabaseTypeName() != "String" ||
-			types[1].DatabaseTypeName() != "Nullable(Float64)" {
-			typeNames := make([]string, len(types))
-			for index, columnType := range types {
-				typeNames[index] = columnType.DatabaseTypeName()
-			}
-			_ = rows.Close()
-			t.Fatalf("%s column types = %#v", name, typeNames)
-		}
-		var got []numericRow
-		for rows.Next() {
-			var row numericRow
-			if scanErr := rows.Scan(&row.id, &row.value); scanErr != nil {
-				_ = rows.Close()
-				t.Fatalf("scan %s: %v", name, scanErr)
-			}
-			got = append(got, row)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			_ = rows.Close()
-			t.Fatalf("iterate %s: %v", name, rowsErr)
-		}
-		if closeErr := rows.Close(); closeErr != nil {
-			t.Fatalf("close %s rows: %v", name, closeErr)
-		}
-		return got
+		return collectEventStatsNullableFloatRows(
+			t,
+			ctx,
+			connection,
+			name,
+			query,
+		)
 	}
 	collectSingleValue := func(name string, query CompiledQuery) *float64 {
 		t.Helper()
-		rows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
-		if queryErr != nil {
-			t.Fatalf(
-				"execute %s: %v\nSQL: %s\nargs: %#v",
-				name,
-				queryErr,
-				query.SQL,
-				query.Args,
-			)
-		}
-		types := rows.ColumnTypes()
-		if len(types) != 1 || types[0].DatabaseTypeName() != "Nullable(Float64)" {
-			typeNames := make([]string, len(types))
-			for index, columnType := range types {
-				typeNames[index] = columnType.DatabaseTypeName()
-			}
-			_ = rows.Close()
-			t.Fatalf("%s column types = %#v", name, typeNames)
-		}
-		if !rows.Next() {
-			rowsErr := rows.Err()
-			_ = rows.Close()
-			t.Fatalf("%s returned no row: %v", name, rowsErr)
-		}
-		var value *float64
-		if scanErr := rows.Scan(&value); scanErr != nil {
-			_ = rows.Close()
-			t.Fatalf("scan %s: %v", name, scanErr)
-		}
-		if rows.Next() {
-			_ = rows.Close()
-			t.Fatalf("%s returned multiple rows", name)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			_ = rows.Close()
-			t.Fatalf("iterate %s: %v", name, rowsErr)
-		}
-		if closeErr := rows.Close(); closeErr != nil {
-			t.Fatalf("close %s rows: %v", name, closeErr)
-		}
-		return value
+		return collectEventStatsNullableFloat(
+			t,
+			ctx,
+			connection,
+			name,
+			query,
+		)
 	}
 
 	ids := []string{
@@ -289,58 +220,34 @@ func testEventStatsNumericAggregatesAgainstClickHouse(
 			indexTime.Add(10*time.Second),
 			visibilityCutoff,
 		)
-		summary, compileErr := (Compiler{}).CompileFieldSummary(
-			logical,
-			FieldSummarySpec{
-				FieldName:             field,
-				MaximumValues:         10,
-				MaximumDistinctValues: 10,
-				MaximumValueBytes:     64,
-			},
-		)
-		if compileErr != nil {
-			t.Fatalf("compile %s field summary: %v", name, compileErr)
-		}
-		control := `SELECT ` +
-			quoteIdentifier(FieldSummaryEventCountColumn) + `, ` +
-			quoteIdentifier(FieldSummaryNullCountColumn) + `, ` +
-			quoteIdentifier(FieldSummaryMissingCountColumn) + `, ` +
-			quoteIdentifier(FieldSummaryTotalEventCountColumn) +
-			` FROM (` + summary.SQL + `) WHERE ` +
-			quoteIdentifier(FieldSummaryRowKindColumn) + ` = 0`
-		var present, nulls, missing, total uint64
-		if queryErr := connection.QueryRow(
+		got := collectEventStatsFieldPresence(
+			t,
 			ctx,
-			control,
-			summary.Args...,
-		).Scan(&present, &nulls, &missing, &total); queryErr != nil {
+			connection,
+			logical,
+			field,
+		)
+		want := eventStatsFieldPresence{present: 7, nulls: 2, missing: 2, total: 9}
+		if got != want {
 			t.Fatalf(
-				"execute %s field summary: %v\nSQL: %s\nargs: %#v",
+				"%s presence = %#v, want %#v",
 				name,
-				queryErr,
-				summary.SQL,
-				summary.Args,
-			)
-		}
-		if present != 7 || nulls != 2 || missing != 2 || total != 9 {
-			t.Fatalf(
-				"%s presence = present:%d null:%d missing:%d total:%d, want 7/2/2/9",
-				name,
-				present,
-				nulls,
-				missing,
-				total,
+				got,
+				want,
 			)
 		}
 	}
-	numericRows := func(value float64, presentIDs ...string) []numericRow {
+	numericRows := func(
+		value float64,
+		presentIDs ...string,
+	) []eventStatsNullableFloatRow {
 		present := make(map[string]struct{}, len(presentIDs))
 		for _, id := range presentIDs {
 			present[id] = struct{}{}
 		}
-		rows := make([]numericRow, 0, len(ids))
+		rows := make([]eventStatsNullableFloatRow, 0, len(ids))
 		for _, id := range ids {
-			row := numericRow{id: id}
+			row := eventStatsNullableFloatRow{id: id}
 			if _, ok := present[id]; ok {
 				row.value = &value
 			}
@@ -448,7 +355,7 @@ func testEventStatsNumericAggregatesAgainstClickHouse(
 			}
 		}
 
-		downstreamWant := []numericRow{
+		downstreamWant := []eventStatsNullableFloatRow{
 			{id: ids[0], value: &aggregate.globalValue},
 			{id: ids[3], value: &aggregate.globalValue},
 		}
@@ -470,7 +377,7 @@ func testEventStatsNumericAggregatesAgainstClickHouse(
 					` | sort event_id | head 1 | table event_id `+aggregate.output,
 			),
 		)
-		if want := []numericRow{{id: ids[0]}}; !reflect.DeepEqual(projected, want) {
+		if want := []eventStatsNullableFloatRow{{id: ids[0]}}; !reflect.DeepEqual(projected, want) {
 			t.Fatalf("projected eventstats %s = %#v, want %#v", aggregate.name, projected, want)
 		}
 

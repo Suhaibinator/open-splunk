@@ -35,8 +35,8 @@ const (
 	timechartSeriesLimit                = 10
 	maxTimechartSeries                  = 12
 	eventStatsSupportedAggregateMessage = "eventstats currently supports exactly one count, " +
-		"count(field), count(eval(predicate)), min(field), max(field), sum(field), " +
-		"avg(field), or dc(field) AS output measure"
+		"count(field), count(eval(predicate)), pN(field), percN(field), min(field), " +
+		"max(field), sum(field), avg(field), or dc(field) AS output measure"
 	// Chart's row axis is runtime data rather than a plan-time constant, so
 	// it carries its own explicit ceiling. Splunk truncates at the
 	// installation-configurable maxresultrows; this backend instead fails
@@ -594,6 +594,16 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					aggregate,
 					AggregateFunctionCountValues,
 					"count(field)",
+				)
+				if inputErr != nil {
+					return nil, inputErr
+				}
+			case spl.AggregateFunctionPercentile:
+				var inputErr error
+				measure, inputErr = buildEventStatsFieldMeasure(
+					aggregate,
+					AggregateFunctionPercentile,
+					"pN(field) or percN(field)",
 				)
 				if inputErr != nil {
 					return nil, inputErr
@@ -2165,10 +2175,28 @@ func buildEventStatsFieldMeasure(
 	function AggregateFunction,
 	form string,
 ) (AggregateMeasure, error) {
+	percentile := uint8(0)
+	if function == AggregateFunctionPercentile {
+		if aggregate.Percentile < 1 || aggregate.Percentile > 99 {
+			return AggregateMeasure{}, &Diagnostic{
+				Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+				Message: "eventstats percentile suffix must be an integer " +
+					"from 1 through 99",
+				Range: aggregate.Range,
+			}
+		}
+		percentile = aggregate.Percentile
+	} else if aggregate.Percentile != 0 {
+		return AggregateMeasure{}, &Diagnostic{
+			Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+			Message: "non-percentile eventstats aggregate contains " +
+				"percentile metadata",
+			Range: aggregate.Range,
+		}
+	}
 	if aggregate.Input == "" ||
 		aggregate.InputRange == (spl.Range{}) ||
 		aggregate.Predicate != nil ||
-		aggregate.Percentile != 0 ||
 		!aggregate.ExplicitAlias {
 		return AggregateMeasure{}, &Diagnostic{
 			Code: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
@@ -2182,9 +2210,10 @@ func buildEventStatsFieldMeasure(
 		return AggregateMeasure{}, err
 	}
 	return AggregateMeasure{
-		Function: function,
-		Input:    input,
-		Output:   aggregate.Alias,
+		Function:   function,
+		Input:      input,
+		Output:     aggregate.Alias,
+		Percentile: percentile,
 	}, nil
 }
 

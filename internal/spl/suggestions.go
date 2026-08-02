@@ -523,7 +523,7 @@ func eventStatsMeasureRequiresAlias(tokens []token) bool {
 	if tokenWordEqual(tokens[0], "count") {
 		return true
 	}
-	_, supported := eventStatsFieldAggregateDescriptorForName(tokens[0].text)
+	_, supported := eventStatsFieldAggregateSpecForName(tokens[0].text)
 	return supported
 }
 
