@@ -124,6 +124,59 @@ func TestCompileEventStatsCountComposesAndReplacesAliases(t *testing.T) {
 	}
 }
 
+func TestCompileEventStatsDeferredStageWrapsTerminalWideOutputs(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		source string
+		valid  func(CompiledQuery) bool
+	}{
+		{
+			name: "chart",
+			source: `index=gradethis | eventstats count AS peers` +
+				` | chart count OVER path BY level`,
+			valid: func(compiled CompiledQuery) bool {
+				return compiled.Chart != nil && compiled.Timechart == nil
+			},
+		},
+		{
+			name: "timechart",
+			source: `index=gradethis | eventstats count AS peers` +
+				` | timechart span=5m count BY path`,
+			valid: func(compiled CompiledQuery) bool {
+				return compiled.Timechart != nil && compiled.Chart == nil
+			},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			compiled := compileSPL(t, test.source)
+			if !test.valid(compiled) {
+				t.Fatalf("%s output contract is missing", test.name)
+			}
+			for _, required := range []string{
+				`"__os_eventstats_input_`,
+				`"__os_eventstats_result_`,
+				` AS MATERIALIZED (`,
+				materializedCTESettingsSQL,
+			} {
+				if !strings.Contains(compiled.SQL, required) {
+					t.Fatalf("%s SQL missing %q:\n%s", test.name, required, compiled.SQL)
+				}
+			}
+			if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+				t.Fatalf("%s physical scans = %d, want 1:\n%s", test.name, got, compiled.SQL)
+			}
+			if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+				t.Fatalf("%s placeholders = %d, args = %d", test.name, got, want)
+			}
+		})
+	}
+}
+
 func TestCompileEventStatsGroupedCountRejectsMultivalueKeys(t *testing.T) {
 	t.Parallel()
 

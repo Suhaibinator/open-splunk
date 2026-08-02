@@ -162,9 +162,7 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		); err != nil {
 			return err
 		}
-		if operator.Measure.Function == AggregateFunctionCountValues ||
-			operator.Measure.Function == AggregateFunctionSum ||
-			operator.Measure.Function == AggregateFunctionAverage {
+		if operator.Measure.Input.Name != "" {
 			if err := analyzer.addField(
 				operator.Measure.Input,
 				depth+1,

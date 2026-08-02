@@ -373,6 +373,7 @@ func TestWrapChronologicalValidationOrdersArgumentsByCTEDefinition(t *testing.T)
 		[]string{`"result"`},
 		[]string{"result"},
 		"",
+		eventStatsOrdinarySourceFanout,
 		CompiledQuery{Args: []any{"final-input-argument"}},
 		0,
 	)

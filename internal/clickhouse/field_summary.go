@@ -110,10 +110,29 @@ func (c Compiler) CompileFieldSummary(query *plan.Query, spec FieldSummarySpec) 
 		state compileState,
 		args []any,
 		scan *plan.Scan,
-		_ int,
+		aliasSequence int,
 	) (CompiledQuery, error) {
 		_, fieldKnown = state.visible[spec.FieldName]
-		return finalizeFieldSummary(relation, state, args, ref, spec, scan.Range)
+		contract := fieldSummaryResultContract()
+		policy := eventAnalysisFinalizationPolicyFor(state.chronologicalBarriers)
+		compiled, finalizeErr := finalizeFieldSummary(
+			relation,
+			state,
+			args,
+			ref,
+			spec,
+			scan.Range,
+			policy,
+		)
+		if finalizeErr != nil {
+			return CompiledQuery{}, finalizeErr
+		}
+		return wrapEventAnalysisValidation(
+			compiled,
+			state,
+			contract,
+			aliasSequence,
+		)
 	})
 	if err != nil {
 		return CompiledFieldSummary{}, err
@@ -124,6 +143,30 @@ func (c Compiler) CompileFieldSummary(query *plan.Query, spec FieldSummarySpec) 
 		Spec:       spec,
 		FieldKnown: fieldKnown,
 	}, nil
+}
+
+func fieldSummaryResultContract() eventAnalysisResultContract {
+	return eventAnalysisResultContract{
+		sourceFanout: eventStatsSummarySourceFanout,
+		columns: []string{
+			FieldSummaryRowKindColumn,
+			FieldSummaryFieldNameColumn,
+			FieldSummaryObservedTypesColumn,
+			FieldSummaryEventCountColumn,
+			FieldSummaryNullCountColumn,
+			FieldSummaryMissingCountColumn,
+			FieldSummaryTotalEventCountColumn,
+			FieldSummaryValueTypeColumn,
+			FieldSummaryEncodedValueColumn,
+			FieldSummaryValueCountColumn,
+			FieldSummaryMetadataInvalidColumn,
+			FieldSummaryUnsupportedColumn,
+			FieldSummaryOversizedColumn,
+		},
+		order: quoteIdentifier(FieldSummaryRowKindColumn) + " ASC, " +
+			quoteIdentifier(FieldSummaryValueTypeColumn) + " ASC, " +
+			quoteIdentifier(FieldSummaryEncodedValueColumn) + " ASC",
+	}
 }
 
 func validateFieldSummarySpec(spec FieldSummarySpec) error {
@@ -158,6 +201,7 @@ func finalizeFieldSummary(
 	ref plan.FieldRef,
 	spec FieldSummarySpec,
 	ownerRange spl.Range,
+	policy eventAnalysisFinalizationPolicy,
 ) (CompiledQuery, error) {
 	if !state.eventRows {
 		return CompiledQuery{}, errors.New("compile ClickHouse field summary: final relation is not an event relation")
@@ -189,13 +233,15 @@ func finalizeFieldSummary(
 	sql.WriteString("), ")
 
 	// Keep the heterogeneous value out of GROUP BY: ClickHouse Dynamic has no
-	// safe cross-type grouping contract. Materialize the already-narrow typed
+	// safe cross-type grouping contract. Share the already-narrow typed
 	// projection before agreement and encoding: those expressions reuse the
 	// Dynamic value and would otherwise make ClickHouse's analyzer clone a
-	// complex final event pipeline. Rows remains the shared materialization
-	// consumed by both totals and groups.
+	// complex final event pipeline. The ordinary analysis path materializes this
+	// CTE; deferred eventstats graphs keep it ordinary so ClickHouse 26.3 can
+	// schedule the flat dependency chain.
 	sql.WriteString(q(fieldSummaryTypedCTE))
-	sql.WriteString(" AS MATERIALIZED (SELECT toUInt8(ifNull(")
+	writeCTEOpening(&sql, policy.materializeSharedCTEs)
+	sql.WriteString("SELECT toUInt8(ifNull(")
 	sql.WriteString(presenceSQL)
 	sql.WriteString(", 0)) AS ")
 	sql.WriteString(q(fieldSummaryPresent))
@@ -254,7 +300,8 @@ func finalizeFieldSummary(
 	sql.WriteString("), ")
 
 	sql.WriteString(q(fieldSummaryRowsCTE))
-	sql.WriteString(" AS MATERIALIZED (SELECT ")
+	writeCTEOpening(&sql, policy.materializeSharedCTEs)
+	sql.WriteString("SELECT ")
 	sql.WriteString(q(fieldSummaryPresent))
 	sql.WriteString(", ")
 	sql.WriteString(q(fieldSummaryStoredType))
@@ -301,7 +348,7 @@ func finalizeFieldSummary(
 	sql.WriteString("), ")
 	args = append(args, uint64(spec.MaximumValueBytes))
 
-	writeFieldSummaryTotals(&sql)
+	writeFieldSummaryTotals(&sql, policy.materializeSharedCTEs)
 	args = append(args,
 		eventfields.CurrentFieldMetadataVersion,
 		uint64(eventfields.MaximumStoredFieldsPerEvent),
@@ -343,7 +390,7 @@ func finalizeFieldSummary(
 	sql.WriteString(q(fieldSummaryGroupEncoded))
 	sql.WriteString(") ")
 
-	writeFieldSummaryResult(&sql)
+	writeFieldSummaryResult(&sql, policy.includeResultOrder)
 	sql.WriteString(materializedCTESettingsSQL)
 	args = append(args, spec.FieldName)
 
@@ -361,10 +408,11 @@ func finalizeFieldSummary(
 	return withCompiledRelationalDepth(compiled, resultDepth, ownerRange), nil
 }
 
-func writeFieldSummaryTotals(sql *strings.Builder) {
+func writeFieldSummaryTotals(sql *strings.Builder, materialized bool) {
 	q := quoteIdentifier
 	sql.WriteString(q(fieldSummaryTotalsCTE))
-	sql.WriteString(" AS MATERIALIZED (SELECT arraySort(groupUniqArrayIf(toUInt8(")
+	writeCTEOpening(sql, materialized)
+	sql.WriteString("SELECT arraySort(groupUniqArrayIf(toUInt8(")
 	sql.WriteString(q(fieldSummaryStoredType))
 	sql.WriteString("), ")
 	sql.WriteString(q(fieldSummaryPresent))
@@ -426,7 +474,7 @@ func writeFieldSummaryTotals(sql *strings.Builder) {
 	sql.WriteString(")")
 }
 
-func writeFieldSummaryResult(sql *strings.Builder) {
+func writeFieldSummaryResult(sql *strings.Builder, includeResultOrder bool) {
 	q := quoteIdentifier
 	sql.WriteString("SELECT * FROM (SELECT toUInt8(0) AS ")
 	sql.WriteString(q(FieldSummaryRowKindColumn))
@@ -511,13 +559,11 @@ func writeFieldSummaryResult(sql *strings.Builder) {
 	sql.WriteString(q(fieldSummaryUnsupported))
 	sql.WriteString(" = 0 AND ")
 	sql.WriteString(q(fieldSummaryOversized))
-	sql.WriteString(" = 0) ORDER BY ")
-	sql.WriteString(q(FieldSummaryRowKindColumn))
-	sql.WriteString(" ASC, ")
-	sql.WriteString(q(FieldSummaryValueTypeColumn))
-	sql.WriteString(" ASC, ")
-	sql.WriteString(q(FieldSummaryEncodedValueColumn))
-	sql.WriteString(" ASC")
+	sql.WriteString(" = 0)")
+	if includeResultOrder {
+		sql.WriteString(" ORDER BY ")
+		sql.WriteString(fieldSummaryResultContract().order)
+	}
 }
 
 type dynamicEnvelopeSQL struct {

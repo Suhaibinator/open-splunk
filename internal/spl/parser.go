@@ -1481,7 +1481,8 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 }
 
 const eventStatsAcceptedAggregateForms = "count, count(field) AS output, " +
-	"count(eval(predicate)) AS output, sum(field) AS output, or avg(field) AS output"
+	"count(eval(predicate)) AS output, min(field) AS output, " +
+	"sum(field) AS output, or avg(field) AS output"
 
 func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if p.atCommandEnd() {
@@ -1499,10 +1500,10 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		)
 	}
 	functionName := strings.ToLower(functionToken.text)
-	numericSpec, numericAggregate := eventStatsNumericAggregateSpecForName(
+	fieldSpec, fieldAggregate := eventStatsFieldAggregateSpecForName(
 		functionName,
 	)
-	if functionName != "count" && !numericAggregate {
+	if functionName != "count" && !fieldAggregate {
 		if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
 			return nil, p.unsupportedEventStatsSyntax(
 				functionToken,
@@ -1527,11 +1528,11 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		AliasRange: functionToken.sourceRange,
 	}
 	end := functionToken.sourceRange.End
-	if numericAggregate {
+	if fieldAggregate {
 		var aggregateErr error
 		aggregate, end, aggregateErr = p.parseEventStatsFieldAggregate(
 			functionToken,
-			numericSpec.function,
+			fieldSpec.function,
 		)
 		if aggregateErr != nil {
 			return nil, aggregateErr
@@ -1579,6 +1580,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	}
 	if (aggregate.Function == AggregateFunctionCountValues ||
 		aggregate.Function == AggregateFunctionCountPredicate ||
+		aggregate.Function == AggregateFunctionMinimum ||
 		aggregate.Function == AggregateFunctionSum ||
 		aggregate.Function == AggregateFunctionAverage) &&
 		!aggregate.ExplicitAlias {
@@ -1588,12 +1590,23 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		case AggregateFunctionCountPredicate:
 			form = "count(eval(...))"
 			suggestion = "eventstats count(eval(field=value)) AS matches"
-		case AggregateFunctionSum:
-			form = "sum(field)"
-			suggestion = "eventstats sum(field) AS total"
-		case AggregateFunctionAverage:
-			form = "avg(field)"
-			suggestion = "eventstats avg(field) AS mean"
+		case AggregateFunctionCountValues:
+			// The defaults describe count(field). Unlike the exact-field
+			// extrema and arithmetic functions, count also owns the row and
+			// predicate forms, so it intentionally remains outside the shared
+			// exact-field descriptor table.
+		default:
+			descriptor, ok := eventStatsFieldAggregateDescriptorForFunction(
+				aggregate.Function,
+			)
+			if !ok {
+				return nil, p.unsupportedEventStatsAggregate(
+					functionToken,
+					"eventstats aggregate metadata is invalid",
+				)
+			}
+			form = descriptor.form
+			suggestion = descriptor.suggestion
 		}
 		return nil, &Diagnostic{
 			Code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
@@ -1620,7 +1633,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	if !p.atCommandEnd() {
 		return nil, p.unsupportedEventStatsSyntax(
 			p.current(),
-			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, sum, or average, optional AS for row count, required AS for field or predicate measures, and optional BY", p.current().text),
+			fmt.Sprintf("unsupported eventstats syntax at %q; this compatibility slice accepts one count, minimum, sum, or average, optional AS for row count, required AS for field or predicate measures, and optional BY", p.current().text),
 		)
 	}
 	return &EventStatsCommand{
@@ -1690,34 +1703,33 @@ func (p *parser) parseEventStatsFieldAggregate(
 
 func (p *parser) unsupportedEventStatsAggregate(tok token, message string) *Diagnostic {
 	return &Diagnostic{
-		Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-		Message: message,
-		Range:   tok.sourceRange,
-		Suggestions: []string{
-			"eventstats count",
-			"eventstats count AS event_count BY group",
-			"eventstats count(field) AS occurrences BY group",
-			"eventstats count(eval(field=value)) AS matches BY group",
-			"eventstats sum(field) AS total BY group",
-			"eventstats avg(field) AS mean BY group",
-		},
+		Code:        "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+		Message:     message,
+		Range:       tok.sourceRange,
+		Suggestions: eventStatsDiagnosticSuggestions(),
 	}
 }
 
 func (p *parser) unsupportedEventStatsSyntax(tok token, message string) *Diagnostic {
 	return &Diagnostic{
-		Code:    "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
-		Message: message,
-		Range:   tok.sourceRange,
-		Suggestions: []string{
-			"eventstats count",
-			"eventstats count AS event_count BY group",
-			"eventstats count(field) AS occurrences BY group",
-			"eventstats count(eval(field=value)) AS matches BY group",
-			"eventstats sum(field) AS total BY group",
-			"eventstats avg(field) AS mean BY group",
-		},
+		Code:        "SPL_UNSUPPORTED_EVENTSTATS_SYNTAX",
+		Message:     message,
+		Range:       tok.sourceRange,
+		Suggestions: eventStatsDiagnosticSuggestions(),
 	}
+}
+
+func eventStatsDiagnosticSuggestions() []string {
+	suggestions := []string{
+		"eventstats count",
+		"eventstats count AS event_count BY group",
+		"eventstats count(field) AS occurrences BY group",
+		"eventstats count(eval(field=value)) AS matches BY group",
+	}
+	for _, descriptor := range eventStatsFieldAggregateDescriptors {
+		suggestions = append(suggestions, descriptor.suggestion+" BY group")
+	}
+	return suggestions
 }
 
 func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
@@ -1876,6 +1888,70 @@ type statsAggregateSpec struct {
 	percentile    uint8
 }
 
+type eventStatsFieldAggregateDescriptor struct {
+	name       string
+	function   AggregateFunction
+	form       string
+	suggestion string
+}
+
+// eventStatsFieldAggregateDescriptors is the ordered authority for the
+// exact-field eventstats surface shared by parsing, diagnostics, and editor
+// suggestions. Row count remains separate because only its parenthesized
+// forms require an alias.
+var eventStatsFieldAggregateDescriptors = [...]eventStatsFieldAggregateDescriptor{
+	{
+		name:       "min",
+		function:   AggregateFunctionMinimum,
+		form:       "min(field)",
+		suggestion: "eventstats min(field) AS minimum",
+	},
+	{
+		name:       "sum",
+		function:   AggregateFunctionSum,
+		form:       "sum(field)",
+		suggestion: "eventstats sum(field) AS total",
+	},
+	{
+		name:       "avg",
+		function:   AggregateFunctionAverage,
+		form:       "avg(field)",
+		suggestion: "eventstats avg(field) AS mean",
+	},
+}
+
+func eventStatsFunctionNames() []string {
+	names := make([]string, 1, len(eventStatsFieldAggregateDescriptors)+1)
+	names[0] = "count"
+	for _, descriptor := range eventStatsFieldAggregateDescriptors {
+		names = append(names, descriptor.name)
+	}
+	return names
+}
+
+func eventStatsFieldAggregateDescriptorForName(
+	name string,
+) (eventStatsFieldAggregateDescriptor, bool) {
+	name = strings.ToLower(name)
+	for _, descriptor := range eventStatsFieldAggregateDescriptors {
+		if descriptor.name == name {
+			return descriptor, true
+		}
+	}
+	return eventStatsFieldAggregateDescriptor{}, false
+}
+
+func eventStatsFieldAggregateDescriptorForFunction(
+	function AggregateFunction,
+) (eventStatsFieldAggregateDescriptor, bool) {
+	for _, descriptor := range eventStatsFieldAggregateDescriptors {
+		if descriptor.function == function {
+			return descriptor, true
+		}
+	}
+	return eventStatsFieldAggregateDescriptor{}, false
+}
+
 func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 	name = strings.ToLower(name)
 	if percentile, ok := parseStatsPercentileSuffix(name); ok {
@@ -1922,19 +1998,18 @@ func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 	}
 }
 
-func eventStatsNumericAggregateSpecForName(
+func eventStatsFieldAggregateSpecForName(
 	name string,
 ) (statsAggregateSpec, bool) {
-	spec, supported := statsAggregateSpecForName(name)
+	descriptor, supported := eventStatsFieldAggregateDescriptorForName(name)
 	if !supported {
 		return statsAggregateSpec{}, false
 	}
-	switch spec.function {
-	case AggregateFunctionSum, AggregateFunctionAverage:
-		return spec, true
-	default:
-		return statsAggregateSpec{}, false
-	}
+	return statsAggregateSpec{
+		function:      descriptor.function,
+		canonicalName: descriptor.name,
+		requiresInput: true,
+	}, true
 }
 
 func parseStatsPercentileSuffix(name string) (uint8, bool) {

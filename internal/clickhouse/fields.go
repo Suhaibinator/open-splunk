@@ -53,9 +53,27 @@ func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) 
 		state compileState,
 		args []any,
 		scan *plan.Scan,
-		_ int,
+		aliasSequence int,
 	) (CompiledQuery, error) {
-		return finalizeFieldCatalog(relation, state, args, spec, scan.Range)
+		contract := fieldCatalogResultContract()
+		policy := eventAnalysisFinalizationPolicyFor(state.chronologicalBarriers)
+		compiled, finalizeErr := finalizeFieldCatalog(
+			relation,
+			state,
+			args,
+			spec,
+			scan.Range,
+			policy,
+		)
+		if finalizeErr != nil {
+			return CompiledQuery{}, finalizeErr
+		}
+		return wrapEventAnalysisValidation(
+			compiled,
+			state,
+			contract,
+			aliasSequence,
+		)
 	})
 	if err != nil {
 		return CompiledFieldCatalog{}, err
@@ -65,6 +83,24 @@ func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) 
 		Args: compiled.Args,
 		Spec: spec,
 	}, nil
+}
+
+func fieldCatalogResultContract() eventAnalysisResultContract {
+	return eventAnalysisResultContract{
+		sourceFanout: eventStatsCatalogSourceFanout,
+		columns: []string{
+			FieldCatalogRowKindColumn,
+			FieldCatalogNameColumn,
+			FieldCatalogObservedTypesColumn,
+			FieldCatalogEventCountColumn,
+			FieldCatalogNullCountColumn,
+			FieldCatalogMissingCountColumn,
+			FieldCatalogTotalEventsColumn,
+			FieldCatalogInvalidColumn,
+		},
+		order: quoteIdentifier(FieldCatalogRowKindColumn) + " ASC, " +
+			quoteIdentifier(FieldCatalogNameColumn) + " ASC",
+	}
 }
 
 const (
@@ -106,6 +142,7 @@ func finalizeFieldCatalog(
 	args []any,
 	spec FieldCatalogSpec,
 	ownerRange spl.Range,
+	policy eventAnalysisFinalizationPolicy,
 ) (CompiledQuery, error) {
 	if !state.eventRows {
 		return CompiledQuery{}, errors.New("compile ClickHouse field catalog: final relation is not an event relation")
@@ -140,7 +177,7 @@ func finalizeFieldCatalog(
 	sql.Grow(len(relation.sql) + 8_192 + len(knownNames)*768)
 	sql.WriteString("WITH ")
 	sql.WriteString(q(fieldCatalogSourceCTE))
-	sql.WriteString(" AS MATERIALIZED (")
+	writeCTEOpening(&sql, policy.materializeSharedCTEs)
 	sql.WriteString(relation.sql)
 	sql.WriteString("), ")
 	if len(knownFields) > 0 {
@@ -279,11 +316,10 @@ func finalizeFieldCatalog(
 	sql.WriteString(q(fieldCatalogLimitedCTE))
 	sql.WriteString(") AS ")
 	sql.WriteString(q("__os_field_catalog_output"))
-	sql.WriteString(" ORDER BY ")
-	sql.WriteString(q(FieldCatalogRowKindColumn))
-	sql.WriteString(" ASC, ")
-	sql.WriteString(q(FieldCatalogNameColumn))
-	sql.WriteString(" ASC")
+	if policy.includeResultOrder {
+		sql.WriteString(" ORDER BY ")
+		sql.WriteString(fieldCatalogResultContract().order)
+	}
 
 	sourceDepth := relation.depth
 	var totalsDepth, profilesDepth int
@@ -407,7 +443,7 @@ func knownColumn(base string, index int) string {
 }
 
 // writeKnownFieldRows projects every known field's heterogeneous value and
-// scalar analysis inputs in one pass over the materialized final relation.
+// scalar analysis inputs in one pass over the shared final relation.
 // Keeping Dynamic values in separate columns avoids grouping or array-building
 // over Dynamic while eliminating one full CTE scan per known field.
 func writeKnownFieldRows(sql *strings.Builder, fields []compiledKnownField) {

@@ -226,6 +226,15 @@ const (
 	// eventstats stage. The compiler reads one additional sentinel row and
 	// fails the whole search instead of annotating a partial relation.
 	MaximumEventStatsInputRows uint64 = 10_000
+	// MaximumEventStatsGraphAmplification bounds passes over the one retained
+	// materialized bounded leaf in a deferred stack. Every global stage has two
+	// consumers and every grouped stage has three; final result, analysis, and
+	// validation consumers are included before the query is emitted.
+	MaximumEventStatsGraphAmplification uint64 = 128
+	eventStatsOrdinarySourceFanout      uint64 = 1
+	eventStatsChartSourceFanout         uint64 = 2
+	eventStatsSummarySourceFanout       uint64 = 3
+	eventStatsCatalogSourceFanout       uint64 = 5
 	// maxChartRowValues bounds the chart pivot's runtime row axis. It is a
 	// deliberate resource policy rather than Splunk's configurable
 	// maxresultrows truncation: exceeding it fails the whole search.
@@ -440,6 +449,34 @@ type queryFinalizer func(
 	aliasSequence int,
 ) (CompiledQuery, error)
 
+type eventAnalysisResultContract struct {
+	columns      []string
+	order        string
+	sourceFanout uint64
+}
+
+type eventAnalysisFinalizationPolicy struct {
+	materializeSharedCTEs bool
+	includeResultOrder    bool
+}
+
+func eventAnalysisFinalizationPolicyFor(
+	barriers []compiledChronologicalBarrier,
+) eventAnalysisFinalizationPolicy {
+	return eventAnalysisFinalizationPolicy{
+		materializeSharedCTEs: !hasPrerequisiteChronologicalBarrier(barriers),
+		includeResultOrder:    len(barriers) == 0,
+	}
+}
+
+func writeCTEOpening(sql *strings.Builder, materialized bool) {
+	if materialized {
+		sql.WriteString(" AS MATERIALIZED (")
+		return
+	}
+	sql.WriteString(" AS (")
+}
+
 // compileEventAnalysis proves that the final relation still consists of
 // individual events before exposing it to an analysis-specific projection.
 func (c Compiler) compileEventAnalysis(query *plan.Query, finalize queryFinalizer) (CompiledQuery, error) {
@@ -447,6 +484,38 @@ func (c Compiler) compileEventAnalysis(query *plan.Query, finalize queryFinalize
 		return CompiledQuery{}, err
 	}
 	return c.compileWithFinalizer(query, finalize, false)
+}
+
+func wrapEventAnalysisValidation(
+	compiled CompiledQuery,
+	state compileState,
+	contract eventAnalysisResultContract,
+	aliasSequence int,
+) (CompiledQuery, error) {
+	if len(state.chronologicalBarriers) == 0 {
+		return compiled, nil
+	}
+	if len(contract.columns) == 0 {
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse event analysis: validation result schema is empty",
+		)
+	}
+	projection := make([]string, 0, len(contract.columns))
+	for _, name := range contract.columns {
+		projection = append(projection, quoteIdentifier(name))
+	}
+	return wrapChronologicalValidation(
+		compiled.SQL,
+		compiled.relationalDepth,
+		compiled.relationalDepthRange,
+		state.chronologicalBarriers,
+		projection,
+		contract.columns,
+		contract.order,
+		contract.sourceFanout,
+		compiled,
+		aliasSequence,
+	)
 }
 
 // compileWithFinalizer lowers every logical operator once, then delegates the
@@ -830,7 +899,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			args = append(args, aggregateArgs...)
 			if len(nextState.postAggregateChronological) > 0 {
 				var additionalAliases int
-				var barrier *compiledChronologicalBarrier
+				var barrier *pendingChronologicalBarrier
 				relation, additionalAliases, barrier = compileChronologicalResults(
 					relation,
 					nextState.postAggregateChronological,
@@ -839,11 +908,11 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				)
 				aliasSequence += additionalAliases
 				if barrier != nil {
-					barrier.args = append([]any(nil), args...)
+					boundBarrier := barrier.bind(args)
 					args = nil
 					nextState.chronologicalBarriers = append(
 						nextState.chronologicalBarriers,
-						*barrier,
+						boundBarrier,
 					)
 				}
 				nextState.postAggregateChronological = nil
@@ -902,7 +971,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			}
 			state = nextState
 		case *plan.EventAggregate:
-			enriched, nextState, prefixArgs, compileErr := compileEventAggregate(
+			enriched, nextState, prefixArgs, barrier, compileErr := compileEventAggregate(
 				relation,
 				operator,
 				state,
@@ -912,7 +981,19 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				return CompiledQuery{}, compileErr
 			}
 			relation = enriched
-			args = prependArguments(prefixArgs, args)
+			if barrier != nil && barrier.prefixArgumentsAfterExisting {
+				args = append(args, prefixArgs...)
+			} else {
+				args = prependArguments(prefixArgs, args)
+			}
+			if barrier != nil {
+				boundBarrier := barrier.bind(args)
+				args = nil
+				nextState.chronologicalBarriers = append(
+					nextState.chronologicalBarriers,
+					boundBarrier,
+				)
+			}
 			state = nextState
 		case *plan.Timechart:
 			if !permitTerminalWideOperators {
@@ -1260,6 +1341,7 @@ func finalizeChronologicallyValidatedQuery(
 		projection,
 		resultColumns,
 		order,
+		eventStatsOrdinarySourceFanout,
 		CompiledQuery{
 			Args:         args,
 			OutputFields: outputFields,
@@ -1275,8 +1357,10 @@ func wrapCompiledChronologicalValidation(
 	aliasSequence int,
 ) (CompiledQuery, error) {
 	var resultColumns []string
+	sourceFanout := eventStatsOrdinarySourceFanout
 	switch {
 	case compiled.Chart != nil && compiled.Timechart == nil:
+		sourceFanout = eventStatsChartSourceFanout
 		resultColumns = []string{
 			ChartOrdinalColumn,
 			ChartRowColumn,
@@ -1323,6 +1407,7 @@ func wrapCompiledChronologicalValidation(
 		projection,
 		resultColumns,
 		quoteIdentifier(resultColumns[0])+" ASC",
+		sourceFanout,
 		compiled,
 		aliasSequence,
 	)
@@ -1336,34 +1421,109 @@ func wrapChronologicalValidation(
 	projection []string,
 	resultColumns []string,
 	order string,
+	sourceFanout uint64,
 	compiled CompiledQuery,
 	aliasSequence int,
 ) (CompiledQuery, error) {
 	if len(barriers) == 0 || inputSQL == "" || inputDepth <= 0 ||
-		len(projection) == 0 || len(resultColumns) != len(projection) {
+		len(projection) == 0 || len(resultColumns) != len(projection) ||
+		sourceFanout == 0 {
 		return CompiledQuery{}, errors.New(
 			"compile ClickHouse query: chronological validation envelope is invalid",
 		)
 	}
+	if amplificationErr := validateEventStatsGraphAmplification(
+		barriers,
+		sourceFanout,
+		ownerRange,
+	); amplificationErr != nil {
+		return CompiledQuery{}, amplificationErr
+	}
 	definitions := make([]string, 0, len(barriers)+2)
 	barrierArgs := make([]any, 0)
+	hasPrerequisiteBarrier := hasPrerequisiteChronologicalBarrier(barriers)
+	// ClickHouse 26.3 can leave a chain of MATERIALIZED CTEs unplanned when
+	// every consumer is another CTE. Preserve only the earliest materialization
+	// in a graph that contains eventstats prerequisites; it is the physical-scan
+	// fence, while every later stage already reads that bounded result graph.
+	keptGraphMaterialization := false
 	for _, barrier := range barriers {
+		for _, definition := range barrier.prerequisiteDefinitions {
+			if topLevelMaterializedCTE(definition) {
+				if keptGraphMaterialization {
+					definition = inlineTopLevelMaterializedCTE(definition)
+				} else {
+					keptGraphMaterialization = true
+				}
+			}
+			definitions = append(definitions, definition)
+		}
+		barrierClause := " AS MATERIALIZED ("
+		if len(barrier.prerequisiteDefinitions) > 0 {
+			barrierClause = " AS ("
+		} else if hasPrerequisiteBarrier {
+			if keptGraphMaterialization {
+				barrierClause = " AS ("
+			} else {
+				keptGraphMaterialization = true
+			}
+		}
 		definitions = append(
 			definitions,
-			barrier.name+" AS MATERIALIZED ("+barrier.sql+")",
+			barrier.name+barrierClause+barrier.sql+")",
 		)
 		barrierArgs = append(barrierArgs, barrier.args...)
 	}
 
 	finalInput := quoteIdentifier(fmt.Sprintf("__os_chronological_final_input_%d", aliasSequence+1))
-	definitions = append(definitions, finalInput+" AS MATERIALIZED ("+inputSQL+")")
-	validationName := quoteIdentifier(fmt.Sprintf(
-		"__os_chronological_validation_%d",
-		aliasSequence+1,
-	))
+	finalInputClause := " AS MATERIALIZED ("
+	if hasPrerequisiteBarrier {
+		finalInputClause = " AS ("
+	}
+	definitions = append(definitions, finalInput+finalInputClause+inputSQL+")")
+
+	validationRows := make([]string, 0, len(barriers))
+	maximumBarrierDepth := 0
+	for _, barrier := range barriers {
+		if len(barrier.validationColumns) == 0 {
+			continue
+		}
+		invalid := make([]string, 0, len(barrier.validationColumns))
+		for _, column := range barrier.validationColumns {
+			invalid = append(invalid, column+" != 0")
+		}
+		validationRows = append(
+			validationRows,
+			"SELECT toUInt8(("+strings.Join(invalid, ") OR (")+
+				")) AS "+quoteIdentifier("__os_chronological_invalid")+" FROM "+barrier.name,
+		)
+		if barrier.depth > maximumBarrierDepth {
+			maximumBarrierDepth = barrier.depth
+		}
+	}
 
 	aliasSequence++
 	mainAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+	if len(validationRows) == 0 {
+		main := "SELECT " + strings.Join(projection, ", ") + " FROM " +
+			finalInput + " AS " + mainAlias
+		if order != "" {
+			main += " ORDER BY " + order
+		}
+		compiled.SQL = "WITH " + strings.Join(definitions, ", ") + " " + main +
+			materializedCTESettingsSQL
+		compiled.Args = append(barrierArgs, compiled.Args...)
+		return withCompiledRelationalDepth(
+			compiled,
+			relationalNodeDepth(inputDepth),
+			ownerRange,
+		), nil
+	}
+
+	validationName := quoteIdentifier(fmt.Sprintf(
+		"__os_chronological_validation_%d",
+		aliasSequence,
+	))
 	aliasSequence++
 	mainValidationAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 	main := "SELECT " + strings.Join(projection, ", ") + " FROM " + finalInput +
@@ -1389,22 +1549,6 @@ func wrapChronologicalValidation(
 	dummy := "SELECT " + strings.Join(dummyProjection, ", ") + " FROM (" +
 		schemaSource + ") AS " + schemaAlias
 
-	validationRows := make([]string, 0, len(barriers))
-	maximumBarrierDepth := 0
-	for _, barrier := range barriers {
-		invalid := make([]string, 0, len(barrier.validationColumns))
-		for _, column := range barrier.validationColumns {
-			invalid = append(invalid, column+" != 0")
-		}
-		validationRows = append(
-			validationRows,
-			"SELECT toUInt8(("+strings.Join(invalid, ") OR (")+
-				")) AS "+quoteIdentifier("__os_chronological_invalid")+" FROM "+barrier.name,
-		)
-		if barrier.depth > maximumBarrierDepth {
-			maximumBarrierDepth = barrier.depth
-		}
-	}
 	validationUnion := strings.Join(validationRows, " UNION ALL ")
 	validationRowsDepth := relationalNodeDepth(maximumBarrierDepth)
 	validationDepth := relationalNodeDepth(validationRowsDepth)
@@ -1412,7 +1556,16 @@ func wrapChronologicalValidation(
 		") != 0, throwIf(toUInt8(1), '" + UnsupportedStatsMeasureValueMarker +
 		"'), toUInt8(0)) AS " + quoteIdentifier("__os_chronological_valid") +
 		" FROM (" + validationUnion + ")"
-	definitions = append(definitions, validationName+" AS MATERIALIZED ("+validation+")")
+	validationClause := " AS MATERIALIZED ("
+	if hasPrerequisiteBarrier {
+		// Keep this tiny validation aggregate ordinary so both top-level UNION
+		// branches directly consume the eventstats barriers. Only the earliest
+		// bounded prerequisite remains materialized; later stages stay in the
+		// same flat dependency graph. The aggregate dummy branch below supplies
+		// one schema row, so validation is still forced when the analysis is empty.
+		validationClause = " AS ("
+	}
+	definitions = append(definitions, validationName+validationClause+validation+")")
 
 	aliasSequence++
 	dummyAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
@@ -1443,6 +1596,105 @@ func prependArguments(prefix, existing []any) []any {
 	result := make([]any, 0, len(prefix)+len(existing))
 	result = append(result, prefix...)
 	return append(result, existing...)
+}
+
+func hasPrerequisiteChronologicalBarrier(
+	barriers []compiledChronologicalBarrier,
+) bool {
+	for _, barrier := range barriers {
+		if len(barrier.prerequisiteDefinitions) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validateEventStatsGraphAmplification(
+	barriers []compiledChronologicalBarrier,
+	sourceFanout uint64,
+	fallbackRange spl.Range,
+) error {
+	hasEventStats := false
+	hasValidation := false
+	diagnosticRange := fallbackRange
+	for _, barrier := range barriers {
+		fanout := barrier.fanout
+		if fanout == 0 {
+			fanout = 1
+		}
+		if fanout > 3 {
+			return errors.New(
+				"compile ClickHouse query: chronological barrier fanout is invalid",
+			)
+		}
+		if fanout > 1 {
+			hasEventStats = true
+			if barrier.ownerRange != (spl.Range{}) {
+				diagnosticRange = barrier.ownerRange
+			}
+		}
+		if len(barrier.validationColumns) > 0 {
+			hasValidation = true
+		}
+	}
+	if !hasEventStats {
+		return nil
+	}
+
+	overflow := func() error {
+		return &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"stacked eventstats exceeds the maximum deferred execution amplification of %d bounded-leaf reads",
+				MaximumEventStatsGraphAmplification,
+			),
+			Range: diagnosticRange,
+		}
+	}
+	consumers := sourceFanout
+	if consumers > MaximumEventStatsGraphAmplification {
+		return overflow()
+	}
+	if hasValidation {
+		if consumers > MaximumEventStatsGraphAmplification/2 {
+			return overflow()
+		}
+		consumers *= 2
+	}
+	for index := len(barriers) - 1; index >= 0; index-- {
+		barrier := barriers[index]
+		if len(barrier.validationColumns) > 0 {
+			if consumers > MaximumEventStatsGraphAmplification-2 {
+				return overflow()
+			}
+			consumers += 2
+		}
+		fanout := barrier.fanout
+		if fanout == 0 {
+			fanout = 1
+		}
+		if consumers > MaximumEventStatsGraphAmplification/fanout {
+			return overflow()
+		}
+		consumers *= fanout
+	}
+	return nil
+}
+
+const materializedCTEOpening = " AS MATERIALIZED ("
+
+func topLevelMaterializedCTE(definition string) bool {
+	opening := strings.Index(definition, materializedCTEOpening)
+	return opening > 0 && !strings.Contains(definition[:opening], "(")
+}
+
+func inlineTopLevelMaterializedCTE(definition string) string {
+	opening := strings.Index(definition, materializedCTEOpening)
+	if opening <= 0 || strings.Contains(definition[:opening], "(") {
+		return definition
+	}
+	return definition[:opening] + " AS (" +
+		definition[opening+len(materializedCTEOpening):]
 }
 
 func compileTimeBucket(
@@ -2432,6 +2684,7 @@ func validateCanonicalFieldRef(operation, role string, field plan.FieldRef) erro
 		return fmt.Errorf("compile ClickHouse %s: invalid %s field: %w", operation, role, err)
 	}
 	if resolved.Name != field.Name || resolved.Canonical != field.Canonical ||
+		(resolved.Path == nil) != (field.Path == nil) ||
 		!slices.Equal(resolved.Path, field.Path) {
 		return fmt.Errorf("compile ClickHouse %s: %s field metadata is not canonical", operation, role)
 	}
@@ -3849,17 +4102,48 @@ type compiledChronologicalMeasure struct {
 	outputColumn     string
 }
 
-// compiledChronologicalBarrier owns one materialized aggregate result, its
-// bind arguments, and the hidden columns checked by the final validation
-// envelope. Keeping the check outside every downstream SPL operator prevents
-// ClickHouse from proving an intervening filter empty and pruning the
-// validation subtree.
+// compiledChronologicalBarrier owns one deferred relation stage, its bind
+// arguments, and any hidden columns checked by the final validation envelope.
+// Eventstats stages without validation also use this graph so a later extrema
+// stage never nests MATERIALIZED CTEs. Keeping validation outside downstream
+// SPL operators prevents ClickHouse from pruning it behind an empty filter.
 type compiledChronologicalBarrier struct {
-	name              string
-	sql               string
-	args              []any
-	validationColumns []string
-	depth             int
+	name                    string
+	sql                     string
+	prerequisiteDefinitions []string
+	args                    []any
+	validationColumns       []string
+	fanout                  uint64
+	depth                   int
+	ownerRange              spl.Range
+}
+
+// pendingChronologicalBarrier cannot enter compile state until its complete
+// placeholder prefix has been captured. This keeps argument ownership atomic
+// when a deferred stage takes responsibility for every query stage compiled
+// since the preceding barrier.
+type pendingChronologicalBarrier struct {
+	name                         string
+	sql                          string
+	prerequisiteDefinitions      []string
+	prefixArgumentsAfterExisting bool
+	validationColumns            []string
+	fanout                       uint64
+	depth                        int
+	ownerRange                   spl.Range
+}
+
+func (barrier pendingChronologicalBarrier) bind(args []any) compiledChronologicalBarrier {
+	return compiledChronologicalBarrier{
+		name:                    barrier.name,
+		sql:                     barrier.sql,
+		prerequisiteDefinitions: append([]string(nil), barrier.prerequisiteDefinitions...),
+		args:                    append([]any(nil), args...),
+		validationColumns:       append([]string(nil), barrier.validationColumns...),
+		fanout:                  barrier.fanout,
+		depth:                   barrier.depth,
+		ownerRange:              barrier.ownerRange,
+	}
 }
 
 type compiledScalarExtremaMeasure struct {
@@ -4071,6 +4355,12 @@ func canonicalState(field string) fieldState {
 	state := fieldState{valueSQL: value, existsSQL: "1", kind: kind, caseSensitive: field == "index"}
 	if field == "severity" {
 		state.numberType = "UInt8"
+	}
+	if field == "_time" {
+		state.numberType = "DateTime64(9, 'UTC')"
+	}
+	if field == "_indextime" {
+		state.numberType = "DateTime64(3, 'UTC')"
 	}
 	if field == "_time" {
 		state.canonicalTime = true
@@ -11541,6 +11831,12 @@ func eventAggregateMeasureSpecFor(
 			spec.valuePrefix = "__os_eventstats_value_avg_"
 		}
 		return spec, nil
+	case plan.AggregateFunctionMinimum:
+		spec.materialized = true
+		spec.numberType = ""
+		spec.numericIntegral = false
+		spec.valuePrefix = "__os_eventstats_value_min_"
+		return spec, nil
 	default:
 		return eventAggregateMeasureSpec{}, fmt.Errorf(
 			"compile ClickHouse eventstats: unsupported function %d",
@@ -11567,18 +11863,59 @@ func (spec eventAggregateMeasureSpec) aggregateSQL(
 	)
 }
 
+func nullableEventStatsExtremaType(field fieldState) (string, error) {
+	switch field.kind {
+	case fieldKindNumber:
+		if field.numberType != "" {
+			return field.numberType, nil
+		}
+	case fieldKindBool:
+		return "Bool", nil
+	case fieldKindTime:
+		if field.numberType != "" {
+			return field.numberType, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"compile ClickHouse eventstats min: fixed input has unsupported type %d/%q",
+		field.kind,
+		field.numberType,
+	)
+}
+
+// fixedExtremaEligibilitySQL is the common row contract for native extrema.
+// Keeping fixed Number, Bool, and Time values in their physical type avoids a
+// lossy String/Float64 round trip; only present, non-null values participate,
+// and non-finite floating-point numbers are omitted.
+func fixedExtremaEligibilitySQL(field fieldState) (string, []any, bool) {
+	switch field.kind {
+	case fieldKindNumber, fieldKindBool, fieldKindTime:
+	default:
+		return "", nil, false
+	}
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	eligibleSQL := "(" + existsSQL + ") AND isNotNull(" + field.valueSQL + ")"
+	if field.kind == fieldKindNumber && strings.HasPrefix(field.numberType, "Float") {
+		eligibleSQL += " AND isFinite(" + field.valueSQL + ")"
+	}
+	return eligibleSQL, append([]any(nil), field.existsArgs...), true
+}
+
 func compileEventAggregate(
 	relation compiledRelation,
 	operator *plan.EventAggregate,
 	state compileState,
 	stage int,
-) (compiledRelation, compileState, []any, error) {
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
 	output, validateErr := validateEventAggregate(operator, state)
 	if validateErr != nil {
-		return compiledRelation{}, compileState{}, nil, validateErr
+		return compiledRelation{}, compileState{}, nil, nil, validateErr
 	}
 	if state.eventRows && state.allowDynamic && output.Name == "fields" {
-		return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
+		return compiledRelation{}, compileState{}, nil, nil, &plan.Diagnostic{
 			Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
 			Message: "eventstats cannot replace the event result's " +
 				"reserved fields payload without an exact upstream schema",
@@ -11589,10 +11926,27 @@ func compileEventAggregate(
 	measure := operator.Measure
 	measureSpec, specErr := eventAggregateMeasureSpecFor(measure.Function)
 	if specErr != nil {
-		return compiledRelation{}, compileState{}, nil, specErr
+		return compiledRelation{}, compileState{}, nil, nil, specErr
 	}
+	measureAggregateSQL := measureSpec.aggregateSQL
+	measurePublishValueSQL := func(valueSQL string) string { return valueSQL }
+	measurePublishTypeSQL := func(string) string { return "" }
+	measureNullSQL := ""
+	if measureSpec.numberType != "" {
+		measureNullSQL = "CAST(NULL AS Nullable(" + measureSpec.numberType + "))"
+	}
+	outputState := fieldState{
+		kind:            fieldKindNumber,
+		numberType:      measureSpec.numberType,
+		numericIntegral: measureSpec.numericIntegral,
+	}
+	var measureInputColumns []string
 	measureInputSQL := ""
 	var measureInputArgs []any
+	var measureValidationSQL func(string) string
+	measureUsesGroupEligibility := false
+	var eventStatsPrerequisiteDefinitions []string
+	prefixArgumentsAfterExisting := false
 	durableState := state
 	predicateState := state
 	switch measure.Function {
@@ -11628,7 +11982,7 @@ func compileEventAggregate(
 				"eventstats",
 			)
 			if bindErr != nil {
-				return compiledRelation{}, compileState{}, nil, bindErr
+				return compiledRelation{}, compileState{}, nil, nil, bindErr
 			}
 			predicateColumns = append(predicateColumns, exactColumns...)
 		}
@@ -11644,13 +11998,20 @@ func compileEventAggregate(
 				predicateSQL += " ARRAY JOIN " + strings.Join(bindings, ", ")
 			}
 			predicateSQL += " LIMIT " + sentinelRows
+			eventStatsPrerequisiteDefinitions = append(
+				eventStatsPrerequisiteDefinitions,
+				materialized+" AS MATERIALIZED ("+predicateSQL+")",
+			)
 			relation = relation.selectFrom(
-				"WITH "+materialized+" AS MATERIALIZED ("+predicateSQL+") "+
-					"SELECT * FROM "+materialized+materializedCTESettingsSQL,
+				"SELECT * FROM "+materialized,
 				operator.Range,
 			)
+			// Hoisting moves the predicate fence ahead of the eventstats input
+			// definition. Its already-compiled relation arguments must therefore
+			// precede the predicate/group arguments introduced by this stage.
+			prefixArgumentsAfterExisting = true
 			if err := validateRelationalDepth(relation.depth, relation.ownerRange); err != nil {
-				return compiledRelation{}, compileState{}, nil, err
+				return compiledRelation{}, compileState{}, nil, nil, err
 			}
 		}
 		predicateSQL, predicateArgs, compileErr := compileExpression(
@@ -11658,14 +12019,14 @@ func compileEventAggregate(
 			predicateState,
 		)
 		if compileErr != nil {
-			return compiledRelation{}, compileState{}, nil, compileErr
+			return compiledRelation{}, compileState{}, nil, nil, compileErr
 		}
 		measureInputSQL = "toUInt64(ifNull(" + predicateSQL + ", 0))"
 		measureInputArgs = predicateArgs
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
-		plan.AggregateFunctionAverage:
+		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum:
 		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
-			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
+			return compiledRelation{}, compileState{}, nil, nil, &plan.Diagnostic{
 				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
 				Message: "eventstats cannot read the event result's " +
 					"reserved fields payload without an exact upstream schema",
@@ -11674,7 +12035,7 @@ func compileEventAggregate(
 		}
 		input, exists, resolveErr := resolveCompiledField(measure.Input, durableState)
 		if resolveErr != nil {
-			return compiledRelation{}, compileState{}, nil, resolveErr
+			return compiledRelation{}, compileState{}, nil, nil, resolveErr
 		}
 		switch measure.Function {
 		case plan.AggregateFunctionCountValues:
@@ -11687,6 +12048,110 @@ func compileEventAggregate(
 			if exists {
 				measureInputSQL, measureInputArgs = numericArrayInputSQL(input)
 			}
+		case plan.AggregateFunctionMinimum:
+			outputState = fieldState{
+				kind:           fieldKindDynamic,
+				dynamicTypeSQL: "dynamicType(" + quoteIdentifier(output.Name) + ")",
+			}
+			measureNullSQL = "CAST(NULL AS Dynamic)"
+			measurePublishTypeSQL = statsExtremaStoredTypeSQL
+			if exists {
+				outputState.maxStringBytes = fieldStateStringByteBound(input)
+			}
+			switch {
+			case exists && (input.kind == fieldKindNumber ||
+				input.kind == fieldKindBool || input.kind == fieldKindTime):
+				eligibleSQL, eligibleArgs, fixed := fixedExtremaEligibilitySQL(input)
+				if !fixed {
+					return compiledRelation{}, compileState{}, nil, nil, errors.New(
+						"compile ClickHouse eventstats min: fixed extrema input is invalid",
+					)
+				}
+				measureInputSQL = "tuple(" + input.valueSQL + ", toUInt8(" +
+					eligibleSQL + "))"
+				measureInputArgs = eligibleArgs
+				measureAggregateSQL = func(inputSQL string) (string, error) {
+					return "minIfOrNull(tupleElement(" + inputSQL +
+						", 1), tupleElement(" + inputSQL + ", 2) != 0)", nil
+				}
+				outputState = fieldState{
+					maxStringBytes:  fieldStateStringByteBound(input),
+					kind:            input.kind,
+					caseSensitive:   input.caseSensitive,
+					numberType:      input.numberType,
+					numericSort:     input.numericSort,
+					numericIntegral: input.numericIntegral,
+				}
+				nullType, nullTypeErr := nullableEventStatsExtremaType(input)
+				if nullTypeErr != nil {
+					return compiledRelation{}, compileState{}, nil, nil, nullTypeErr
+				}
+				measureNullSQL = "CAST(NULL AS Nullable(" + nullType + "))"
+				measurePublishTypeSQL = func(string) string { return "" }
+			case exists && input.kind == fieldKindString:
+				valueAlias := quoteIdentifier(fmt.Sprintf(
+					"__os_eventstats_extrema_string_%d",
+					stage,
+				))
+				numberAlias := quoteIdentifier(fmt.Sprintf(
+					"__os_eventstats_extrema_number_%d",
+					stage,
+				))
+				valueSQL, valueArgs := statsScalarStringInputSQL(input)
+				measureInputColumns = append(
+					measureInputColumns,
+					valueSQL+" AS "+valueAlias,
+					statsExtremaScalarNumberSQL(valueAlias)+" AS "+numberAlias,
+				)
+				measureInputArgs = valueArgs
+				measureInputSQL = statsExtremaScalarCandidateSQL(
+					valueAlias,
+					numberAlias,
+				)
+				measureAggregateSQL = func(inputSQL string) (string, error) {
+					return statsExtremaScalarAggregateWinnerSQL(
+						plan.AggregateFunctionMinimum,
+						inputSQL,
+					), nil
+				}
+				measurePublishValueSQL = statsExtremaScalarValueSQL
+				measurePublishTypeSQL = statsExtremaScalarStoredTypeSQL
+			case exists && input.kind == fieldKindDynamic:
+				rowEligibleSQL := "1"
+				if len(operator.GroupBy) > 0 {
+					rowEligibleSQL = quoteIdentifier(fmt.Sprintf(
+						"__os_eventstats_eligible_%d",
+						stage,
+					)) + " != 0"
+					measureUsesGroupEligibility = true
+				}
+				measureInputSQL, measureInputArgs =
+					eventStatsExtremaDynamicMeasureSQL(input, rowEligibleSQL)
+				measureAggregateSQL = func(inputSQL string) (string, error) {
+					return statsExtremaScalarAggregateWinnerSQL(
+						plan.AggregateFunctionMinimum,
+						inputSQL,
+					), nil
+				}
+				measurePublishValueSQL = statsExtremaScalarValueSQL
+				measurePublishTypeSQL = statsExtremaScalarStoredTypeSQL
+				measureValidationSQL = func(inputSQL string) string {
+					return "maxOrDefault(toUInt8(tupleElement(" + inputSQL +
+						", 6)))"
+				}
+			default:
+				valuesSQL := "CAST([], 'Array(String)')"
+				if exists {
+					valuesSQL, measureInputArgs = stringArrayInputSQL(input)
+				}
+				measureInputSQL = statsExtremaCandidatesSQL(valuesSQL)
+				measureAggregateSQL = func(inputSQL string) (string, error) {
+					return statsExtremaAggregateSQL(
+						plan.AggregateFunctionMinimum,
+						inputSQL,
+					), nil
+				}
+			}
 		}
 	}
 
@@ -11694,17 +12159,17 @@ func compileEventAggregate(
 	seenGroups := make(map[string]struct{}, len(operator.GroupBy))
 	for index, group := range operator.GroupBy {
 		if validateErr := validateCanonicalFieldRef("eventstats", "group", group); validateErr != nil {
-			return compiledRelation{}, compileState{}, nil, validateErr
+			return compiledRelation{}, compileState{}, nil, nil, validateErr
 		}
 		if _, duplicate := seenGroups[group.Name]; duplicate {
-			return compiledRelation{}, compileState{}, nil, fmt.Errorf(
+			return compiledRelation{}, compileState{}, nil, nil, fmt.Errorf(
 				"compile ClickHouse eventstats: grouping field %q is repeated",
 				group.Name,
 			)
 		}
 		seenGroups[group.Name] = struct{}{}
 		if durableState.eventRows && durableState.allowDynamic && group.Name == "fields" {
-			return compiledRelation{}, compileState{}, nil, &plan.Diagnostic{
+			return compiledRelation{}, compileState{}, nil, nil, &plan.Diagnostic{
 				Code:    "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
 				Message: "eventstats cannot group by the event result's reserved fields payload without an exact upstream schema",
 				Range:   group.Range,
@@ -11713,18 +12178,23 @@ func compileEventAggregate(
 
 		scalar, compileErr := compileExactScalarGroup(group, durableState, "eventstats BY")
 		if compileErr != nil {
-			return compiledRelation{}, compileState{}, nil, compileErr
+			return compiledRelation{}, compileState{}, nil, nil, compileErr
 		}
 		groups = append(groups, compiledEventStatsGroup{
 			scalar:   scalar,
 			keyAlias: quoteIdentifier(fmt.Sprintf("__os_eventstats_group_%d", index)),
 		})
 	}
-
+	if outputState.kind == fieldKindDynamic {
+		outputState.storedTypeSQL = quoteIdentifier(fmt.Sprintf(
+			"__os_eventstats_extrema_type_%d",
+			stage,
+		))
+	}
 	next := eventAggregateCompileState(
 		durableState,
 		output,
-		measureSpec,
+		outputState,
 		len(groups) > 0,
 		stage,
 	)
@@ -11733,6 +12203,13 @@ func compileEventAggregate(
 	inputAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_rows_%d", stage))
 	totalAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_total_row_%d", stage))
 	totalColumn := quoteIdentifier(fmt.Sprintf("__os_eventstats_input_count_%d", stage))
+	validationColumn := ""
+	if measureValidationSQL != nil {
+		validationColumn = quoteIdentifier(fmt.Sprintf(
+			"__os_eventstats_extrema_invalid_%d",
+			stage,
+		))
+	}
 	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
 	sentinelRows := strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
 
@@ -11740,10 +12217,13 @@ func compileEventAggregate(
 	measureAlias := ""
 	if measureSpec.materialized {
 		measureAlias = quoteIdentifier(fmt.Sprintf("__os_eventstats_measure_%d", stage))
-		inputProjection = append(
-			inputProjection,
-			measureInputSQL+" AS "+measureAlias,
-		)
+		inputProjection = append(inputProjection, measureInputColumns...)
+		if !measureUsesGroupEligibility {
+			inputProjection = append(
+				inputProjection,
+				measureInputSQL+" AS "+measureAlias,
+			)
+		}
 	}
 	var eligibilityArgs, unsupportedArgs []any
 	eligibility := make([]string, 0, len(groups))
@@ -11773,6 +12253,16 @@ func compileEventAggregate(
 			"toUInt8("+unsupportedSQL+") AS "+unsupportedAlias,
 		)
 	}
+	if measureSpec.materialized && measureUsesGroupEligibility {
+		// Keep the BY eligibility alias textually before the Dynamic fold that it
+		// guards. ClickHouse aliases are visible throughout a SELECT projection;
+		// the pinned integration suite proves that this reference also preserves
+		// short-circuit traversal for incomplete group rows.
+		inputProjection = append(
+			inputProjection,
+			measureInputSQL+" AS "+measureAlias,
+		)
+	}
 
 	inputSourceAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_source_%d", stage))
 	inputSQL := "SELECT " + strings.Join(inputProjection, ", ") + " FROM (" +
@@ -11782,31 +12272,69 @@ func compileEventAggregate(
 		0,
 		len(measureInputArgs)+len(eligibilityArgs)+len(unsupportedArgs),
 	)
-	prefixArgs = append(prefixArgs, measureInputArgs...)
-	prefixArgs = append(prefixArgs, eligibilityArgs...)
-	prefixArgs = append(prefixArgs, unsupportedArgs...)
+	if measureUsesGroupEligibility {
+		prefixArgs = append(prefixArgs, eligibilityArgs...)
+		prefixArgs = append(prefixArgs, unsupportedArgs...)
+		prefixArgs = append(prefixArgs, measureInputArgs...)
+	} else {
+		prefixArgs = append(prefixArgs, measureInputArgs...)
+		prefixArgs = append(prefixArgs, eligibilityArgs...)
+		prefixArgs = append(prefixArgs, unsupportedArgs...)
+	}
 	totalProjection := []string{
 		boundedEventStatsCountSQL("count()") + " AS " + totalColumn,
 	}
 	valueColumn := totalColumn
+	typeColumn := ""
+	publishAggregateResult := outputState.kind == fieldKindDynamic
 	if measureSpec.materialized && len(groups) == 0 {
-		valueColumn = quoteIdentifier(measureSpec.valuePrefix + strconv.Itoa(stage))
-		aggregateSQL, aggregateErr := measureSpec.aggregateSQL(measureAlias)
+		rawValueColumn := quoteIdentifier(measureSpec.valuePrefix + strconv.Itoa(stage))
+		aggregateSQL, aggregateErr := measureAggregateSQL(measureAlias)
 		if aggregateErr != nil {
-			return compiledRelation{}, compileState{}, nil, aggregateErr
+			return compiledRelation{}, compileState{}, nil, nil, aggregateErr
 		}
 		totalProjection = append(
 			totalProjection,
-			aggregateSQL+" AS "+valueColumn,
+			aggregateSQL+" AS "+rawValueColumn,
 		)
+		valueColumn = rawValueColumn
+		if publishAggregateResult {
+			valueColumn = quoteIdentifier(fmt.Sprintf(
+				"__os_eventstats_published_value_%d",
+				stage,
+			))
+			typeColumn = outputState.storedTypeSQL
+			totalProjection = append(
+				totalProjection,
+				measurePublishValueSQL(rawValueColumn)+" AS "+valueColumn,
+				measurePublishTypeSQL(rawValueColumn)+" AS "+typeColumn,
+			)
+		}
+		if measureValidationSQL != nil {
+			totalProjection = append(
+				totalProjection,
+				measureValidationSQL(measureAlias)+" AS "+validationColumn,
+			)
+		}
 	}
+	// A standalone stage needs only its shared bounded input materialized; the
+	// total and per-group aggregates each have one consumer. Finalization keeps
+	// the earliest such fence when several deferred eventstats stages compose.
 	definitions := []string{
 		inputName + " AS MATERIALIZED (" + inputSQL + ")",
-		totalName + " AS MATERIALIZED (SELECT " +
+		totalName + " AS (SELECT " +
 			strings.Join(totalProjection, ", ") + " FROM " + inputName + ")",
 	}
 
 	outputValue := totalAlias + "." + valueColumn
+	outputStoredType := ""
+	if typeColumn != "" {
+		outputStoredType = totalAlias + "." + typeColumn
+	}
+	outputValidation := ""
+	if measureValidationSQL != nil {
+		outputValidation = totalAlias + "." + validationColumn
+	}
 	outputExistsSQL := "1"
 	fromSQL := inputName + " AS " + inputAlias + " CROSS JOIN " +
 		totalName + " AS " + totalAlias
@@ -11831,24 +12359,49 @@ func compileEventAggregate(
 		groupValueSQL := "toUInt64(count())"
 		if measureSpec.materialized {
 			var groupValueErr error
-			groupValueSQL, groupValueErr = measureSpec.aggregateSQL(measureAlias)
+			groupValueSQL, groupValueErr = measureAggregateSQL(measureAlias)
 			if groupValueErr != nil {
-				return compiledRelation{}, compileState{}, nil, groupValueErr
+				return compiledRelation{}, compileState{}, nil, nil, groupValueErr
 			}
+		}
+		groupProjection := strings.Join(groupKeys, ", ") + ", " +
+			groupValueSQL + " AS " + groupCountColumn
+		if measureValidationSQL != nil {
+			groupProjection += ", " + measureValidationSQL(measureAlias) +
+				" AS " + validationColumn
+		}
+		groupValueColumn := groupCountColumn
+		groupTypeColumn := ""
+		if publishAggregateResult {
+			groupValueColumn = quoteIdentifier(fmt.Sprintf(
+				"__os_eventstats_published_value_%d",
+				stage,
+			))
+			groupTypeColumn = outputState.storedTypeSQL
+			groupProjection += ", " + measurePublishValueSQL(groupCountColumn) +
+				" AS " + groupValueColumn + ", " +
+				measurePublishTypeSQL(groupCountColumn) + " AS " + groupTypeColumn
 		}
 		definitions = append(
 			definitions,
-			groupCountsName+" AS MATERIALIZED (SELECT "+
-				strings.Join(groupKeys, ", ")+", "+groupValueSQL+" AS "+groupCountColumn+
+			groupCountsName+" AS (SELECT "+groupProjection+
 				" FROM "+inputName+" WHERE "+validGroup+
 				" GROUP BY "+strings.Join(groupKeys, ", ")+")",
 		)
 		fromSQL += " LEFT JOIN " + groupCountsName + " AS " + groupCountsAlias +
 			" ON " + strings.Join(joinPredicates, " AND ")
 		outputExistsSQL = inputAlias + "." + eligibleAlias + " != 0"
-		outputValue = "if(" + outputExistsSQL + ", " +
-			groupCountsAlias + "." + groupCountColumn +
-			", CAST(NULL AS Nullable(" + measureSpec.numberType + ")))"
+		outputValue = "if(" + outputExistsSQL + ", " + groupCountsAlias + "." +
+			groupValueColumn + ", " + measureNullSQL + ")"
+		if groupTypeColumn != "" {
+			outputStoredType = "if(" + outputExistsSQL + ", " + groupCountsAlias +
+				"." + groupTypeColumn +
+				", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "))"
+		}
+		if measureValidationSQL != nil {
+			outputValidation = "if(" + outputExistsSQL + ", " + groupCountsAlias +
+				"." + validationColumn + ", toUInt8(0))"
+		}
 	}
 
 	projection := eventAggregateProjection(
@@ -11856,18 +12409,58 @@ func compileEventAggregate(
 		next,
 		output.Name,
 		outputValue,
+		outputStoredType,
 		outputExistsSQL,
+		validationColumn,
+		outputValidation,
 	)
-	sql := "WITH " + strings.Join(definitions, ", ") + " SELECT " +
+	resultSQL := "SELECT " +
 		strings.Join(projection, ", ") + " FROM " + fromSQL +
-		" WHERE " + totalAlias + "." + totalColumn + " <= " + maximumRows +
-		materializedCTESettingsSQL
-
-	return compiledRelation{
-		sql:        sql,
+		" WHERE " + totalAlias + "." + totalColumn + " <= " + maximumRows
+	enriched := compiledRelation{
+		sql:        resultSQL,
 		depth:      relation.depth + 3,
 		ownerRange: operator.Range,
-	}, next, prefixArgs, nil
+	}
+
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_%d",
+		stage,
+	))
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		// Defer every eventstats stage into the final flat CTE graph. A later
+		// validating minimum can then compose with count/sum/average stages in
+		// either order without nesting one MATERIALIZED input inside another.
+		sql: resultSQL,
+		prerequisiteDefinitions: append(
+			append(
+				[]string(nil),
+				eventStatsPrerequisiteDefinitions...,
+			),
+			definitions...,
+		),
+		prefixArgumentsAfterExisting: prefixArgumentsAfterExisting,
+		fanout:                       2,
+		depth:                        enriched.depth,
+		ownerRange:                   operator.Range,
+	}
+	if len(groups) > 0 {
+		barrier.fanout = 3
+	}
+	if validationColumn != "" {
+		barrier.validationColumns = []string{validationColumn}
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_rows_result_%d",
+		stage,
+	))
+	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	if validationColumn != "" {
+		publishedSQL = "SELECT * EXCEPT (" + validationColumn + ") FROM " +
+			barrierName + " AS " + publishedAlias
+	}
+	return enriched.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
 }
 
 func validateEventAggregate(
@@ -11897,13 +12490,15 @@ func validateEventAggregate(
 			)
 		}
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
-		plan.AggregateFunctionAverage:
+		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum:
 		form := "count(field)"
 		switch measure.Function {
 		case plan.AggregateFunctionSum:
 			form = "sum(field)"
 		case plan.AggregateFunctionAverage:
 			form = "avg(field)"
+		case plan.AggregateFunctionMinimum:
+			form = "min(field)"
 		}
 		if measure.Predicate != nil || measure.Percentile != 0 {
 			return plan.FieldRef{}, fmt.Errorf(
@@ -11930,7 +12525,7 @@ func validateEventAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), sum(field), or avg(field) is supported",
+			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), min(field), sum(field), or avg(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -11947,7 +12542,7 @@ func validateEventAggregate(
 func eventAggregateCompileState(
 	state compileState,
 	output plan.FieldRef,
-	measure eventAggregateMeasureSpec,
+	outputState fieldState,
 	grouped bool,
 	stage int,
 ) compileState {
@@ -11963,14 +12558,13 @@ func eventAggregateCompileState(
 	if grouped {
 		existsSQL = quoteIdentifier(fmt.Sprintf("__os_eventstats_exists_%d", stage))
 	}
-	next.visible[output.Name] = fieldState{
-		valueSQL:        quoteIdentifier(output.Name),
-		existsSQL:       existsSQL,
-		kind:            fieldKindNumber,
-		numberType:      measure.numberType,
-		numericIntegral: measure.numericIntegral,
-	}
+	outputState.valueSQL = quoteIdentifier(output.Name)
+	outputState.existsSQL = existsSQL
+	next.visible[output.Name] = outputState
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
+	if outputState.storedTypeSQL != "" {
+		next.privateColumns = append(next.privateColumns, outputState.storedTypeSQL)
+	}
 	if grouped {
 		next.privateColumns = append(next.privateColumns, existsSQL)
 	}
@@ -11979,7 +12573,8 @@ func eventAggregateCompileState(
 
 func eventAggregateProjection(
 	state, next compileState,
-	outputName, outputValue, outputExistsSQL string,
+	outputName, outputValue, outputStoredTypeSQL, outputExistsSQL string,
+	validationColumn, outputValidationSQL string,
 ) []string {
 	names := orderedVisibleNames(next)
 	projection := make([]string, 0, len(names)+12+len(next.privateColumns))
@@ -11999,10 +12594,22 @@ func eventAggregateProjection(
 	projectionState := next
 	projectionState.privateColumns = livePrivateColumns(state.privateColumns, next.visible)
 	projection = appendPrivateEventProjection(projection, projectionState)
+	if outputStoredTypeSQL != "" {
+		projection = append(
+			projection,
+			outputStoredTypeSQL+" AS "+next.visible[outputName].storedTypeSQL,
+		)
+	}
 	if outputExistsSQL != "1" {
 		projection = append(
 			projection,
 			"toUInt8("+outputExistsSQL+") AS "+next.visible[outputName].existsSQL,
+		)
+	}
+	if validationColumn != "" && outputValidationSQL != "" {
+		projection = append(
+			projection,
+			"toUInt8("+outputValidationSQL+") AS "+validationColumn,
 		)
 	}
 	return projection
@@ -12682,22 +13289,13 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			if resolveErr != nil {
 				return nil, nil, nil, compileState{}, nil, resolveErr
 			}
-			if ok && (input.kind == fieldKindNumber || input.kind == fieldKindTime ||
-				input.kind == fieldKindBool) {
-				existsSQL := input.existsSQL
-				if existsSQL == "" {
-					existsSQL = "1"
-				}
-				eligible := "(" + existsSQL + ") AND isNotNull(" + input.valueSQL + ")"
-				if input.kind == fieldKindNumber && strings.HasPrefix(input.numberType, "Float") {
-					eligible += " AND isFinite(" + input.valueSQL + ")"
-				}
+			if eligible, eligibleArgs, fixed := fixedExtremaEligibilitySQL(input); ok && fixed {
 				function := "minIfOrNull"
 				if measure.Function == plan.AggregateFunctionMaximum {
 					function = "maxIfOrNull"
 				}
 				projection = append(projection, function+"("+input.valueSQL+", "+eligible+") AS "+output)
-				args = append(args, input.existsArgs...)
+				args = append(args, eligibleArgs...)
 				measureState.kind = input.kind
 				measureState.numberType = input.numberType
 				measureState.caseSensitive = input.caseSensitive
@@ -13360,17 +13958,40 @@ func statsExtremaExactFloatKeyMatchSQL(
 
 func statsExtremaScalarCandidateSQL(valueSQL, numberSQL string) string {
 	value := "ifNull(" + valueSQL + ", CAST('' AS String))"
-	boundedValue := boundedExactNumericOrderingInputSQL(value)
+	return statsExtremaPublicationCandidateSQL(
+		value,
+		numberSQL,
+		boundedExactNumericOrderingInputSQL(value),
+		"isNotNull("+valueSQL+")",
+	)
+}
+
+// statsExtremaPublicationCandidateSQL lowers one already-classified scalar to
+// the fixed candidate tuple shared by scalar String extrema and row-local
+// Dynamic eventstats folds:
+//
+//	(exact ordering key, publication kind, Float64 publication,
+//	 publication text, eligible bit)
+//
+// The publication tuple deliberately contains no Dynamic value. This lets
+// argMinOrNullIf represent an empty aggregate explicitly without attempting to
+// construct Nullable(Dynamic), which ClickHouse does not support.
+func statsExtremaPublicationCandidateSQL(
+	valueSQL string,
+	numberSQL string,
+	exactTextSQL string,
+	eligibleSQL string,
+) string {
 	exactVariable := "__os_stats_extrema_exact_key"
 	floatVariable := "__os_stats_extrema_float_key"
-	ordering := statsExtremaOrderingKeySQL(value, exactVariable)
+	ordering := statsExtremaOrderingKeySQL(valueSQL, exactVariable)
 	exactFloat := statsExtremaExactFloatKeyMatchSQL(
 		numberSQL,
 		exactVariable,
 		floatVariable,
 	)
 	numeric := exactNumericKeyEligibleSQL(exactVariable)
-	decimalInput := "if(" + numeric + ", " + value + ", CAST('0' AS String))"
+	decimalInput := "if(" + numeric + ", " + valueSQL + ", CAST('0' AS String))"
 	publicationKind := "toUInt8(multiIf(NOT (" + numeric + "), " +
 		strconv.Itoa(int(statsExtremaPublicationLexical)) + ", " +
 		exactFloat + ", " +
@@ -13378,16 +13999,16 @@ func statsExtremaScalarCandidateSQL(valueSQL, numberSQL string) string {
 		strconv.Itoa(int(statsExtremaPublicationDecimal)) + "))"
 	publicationNumber := "if(isNotNull(" + numberSQL + "), " +
 		statsExtremaNormalizedNumberSQL(numberSQL) + ", toFloat64(0))"
-	publicationText := "multiIf(NOT (" + numeric + "), " + value + ", " +
+	publicationText := "multiIf(NOT (" + numeric + "), " + valueSQL + ", " +
 		exactFloat + ", CAST('' AS String), " +
 		decimalInput + ")"
 	candidate := "tuple(" + ordering + ", " + publicationKind + ", " +
-		publicationNumber + ", " + publicationText + ", toUInt8(isNotNull(" +
-		valueSQL + ")))"
+		publicationNumber + ", " + publicationText + ", toUInt8(" +
+		eligibleSQL + "))"
 	return bindSQLExpressions(
 		[]string{exactVariable, floatVariable},
 		[]string{
-			exactNumericOrderingKeySQL(boundedValue),
+			exactNumericOrderingKeySQL(exactTextSQL),
 			exactNumericOrderingKeySQL(
 				"toString(ifNull(" + numberSQL + ", toFloat64(0)))",
 			),
@@ -13463,32 +14084,55 @@ func statsExtremaCandidateSQL(valueSQL, exactTextSQL string) string {
 	return bound
 }
 
-func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
-	empty := "CAST([], 'Array(Tuple(String, String))')"
+type compiledDynamicExtremaScalar struct {
+	typeSQL      string
+	supportedSQL string
+	lexicalSQL   string
+	exactTextSQL string
+	eligibleSQL  string
+	invalidSQL   string
+}
+
+// compileDynamicExtremaScalar centralizes the scalar/member classification
+// used by transforming stats and row-preserving eventstats. None is missing;
+// supported scalar values are eligible unless an upstream text guard excludes
+// them; unsupported non-None values poison the enclosing extrema operation.
+func compileDynamicExtremaScalar(field fieldState) compiledDynamicExtremaScalar {
 	typeSQL := dynamicTypeExpression(field)
-	scalar := compiledScalarFromField(field)
-	scalarSupported, scalarLexical := statsByScalarExpressions(field)
-	scalarEligible := scalarSupported
+	supportedSQL, lexicalSQL := statsByScalarExpressions(field)
+	eligibleSQL := "(" + typeSQL + " != 'None' AND " + supportedSQL + ")"
 	if field.textEligibleSQL != "" {
-		scalarEligible = "(" + scalarEligible + " AND ifNull(" +
+		eligibleSQL = "(" + eligibleSQL + " AND ifNull(" +
 			field.textEligibleSQL + ", 0))"
 	}
-	scalarInput := "if(" + scalarEligible + ", [tuple(" + scalarLexical + ", " +
-		exactNumericScalarTextSQL(scalar) + ")], " + empty + ")"
+	return compiledDynamicExtremaScalar{
+		typeSQL:      typeSQL,
+		supportedSQL: supportedSQL,
+		lexicalSQL:   lexicalSQL,
+		exactTextSQL: exactNumericScalarTextSQL(compiledScalarFromField(field)),
+		eligibleSQL:  eligibleSQL,
+		invalidSQL: "(" + typeSQL + " != 'None' AND NOT (" +
+			supportedSQL + "))",
+	}
+}
+
+func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
+	empty := "CAST([], 'Array(Tuple(String, String))')"
+	scalar := compileDynamicExtremaScalar(field)
+	scalarInput := "if(" + scalar.eligibleSQL + ", [tuple(" + scalar.lexicalSQL +
+		", " + scalar.exactTextSQL + ")], " + empty + ")"
 
 	elementField := fieldState{
 		valueSQL:       "element",
 		dynamicTypeSQL: "dynamicType(element)",
 		kind:           fieldKindDynamic,
 	}
-	element := compiledScalarFromField(elementField)
-	elementType := dynamicTypeExpression(elementField)
-	elementSupported, elementLexical := statsByScalarExpressions(elementField)
-	elementInput := "if(throwIf(toUInt8(NOT (" + elementSupported + ")), '" +
-		UnsupportedStatsMeasureValueMarker + "') = 0, tuple(" + elementLexical + ", " +
-		exactNumericScalarTextSQL(element) +
+	element := compileDynamicExtremaScalar(elementField)
+	elementInput := "if(throwIf(toUInt8(" + element.invalidSQL + "), '" +
+		UnsupportedStatsMeasureValueMarker + "') = 0, tuple(" + element.lexicalSQL + ", " +
+		element.exactTextSQL +
 		"), tuple(CAST('' AS String), CAST('' AS String)))"
-	arrayValues := "arrayFilter(element -> " + elementType +
+	arrayValues := "arrayFilter(element -> " + element.typeSQL +
 		" != 'None', dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))"
 	arrayInput := "arrayMap(element -> " + elementInput + ", " + arrayValues + ")"
 
@@ -13502,12 +14146,12 @@ func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
 		descendantSQL = field.descendantSQL
 		args = append(args, field.descendantArgs...)
 	}
-	topLevelUnsupported := "(field_present != 0 AND " + typeSQL +
-		" != 'None' AND " + typeSQL + " != 'Array(Dynamic)' AND NOT (" +
-		scalarSupported + "))"
+	topLevelUnsupported := "(field_present != 0 AND " + scalar.typeSQL +
+		" != 'None' AND " + scalar.typeSQL + " != 'Array(Dynamic)' AND NOT (" +
+		scalar.supportedSQL + "))"
 	invalid := "(" + topLevelUnsupported + " OR descendant_present != 0)"
-	value := "multiIf(" + typeSQL + " = 'None', " + empty + ", " +
-		typeSQL + " = 'Array(Dynamic)', " + arrayInput + ", " +
+	value := "multiIf(" + scalar.typeSQL + " = 'None', " + empty + ", " +
+		scalar.typeSQL + " = 'Array(Dynamic)', " + arrayInput + ", " +
 		scalarInput + ")"
 	body := "if(throwIf(toUInt8(" + invalid + "), '" +
 		UnsupportedStatsMeasureValueMarker + "') = 0, if(field_present != 0, " +
@@ -13523,6 +14167,103 @@ func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
 		"tupleElement("+input+", 2)",
 	)
 	return "arrayMap(" + input + " -> " + candidate + ", " + inputs + ")", args
+}
+
+func eventStatsExtremaEmptyOrderingKeySQL() string {
+	return "tuple(toUInt8(1), toUInt8(1), toInt64(0), " +
+		"CAST('' AS String), CAST('' AS String))"
+}
+
+func eventStatsExtremaEmptyRowStateSQL(invalidSQL string) string {
+	return "tuple(" + eventStatsExtremaEmptyOrderingKeySQL() + ", toUInt8(" +
+		strconv.Itoa(int(statsExtremaPublicationLexical)) + "), toFloat64(0), " +
+		"CAST('' AS String), toUInt8(0), toUInt8(" + invalidSQL + "))"
+}
+
+func eventStatsExtremaFoldStepSQL(
+	stateSQL string,
+	value compiledDynamicExtremaScalar,
+) string {
+	numberSQL := statsExtremaNumericOrNullSQL(value.lexicalSQL)
+	candidateSQL := statsExtremaPublicationCandidateSQL(
+		value.lexicalSQL,
+		numberSQL,
+		value.exactTextSQL,
+		"1",
+	)
+	emptyCandidate := "tuple(" + eventStatsExtremaEmptyOrderingKeySQL() +
+		", toUInt8(" + strconv.Itoa(int(statsExtremaPublicationLexical)) +
+		"), toFloat64(0), CAST('' AS String), toUInt8(0))"
+	candidate := "__os_eventstats_extrema_candidate"
+	replace := "(tupleElement(" + candidate + ", 5) != 0 AND (tupleElement(" +
+		stateSQL + ", 5) = 0 OR tupleElement(" + candidate + ", 1) < tupleElement(" +
+		stateSQL + ", 1)))"
+	fields := make([]string, 0, 6)
+	for index := 1; index <= 4; index++ {
+		position := strconv.Itoa(index)
+		fields = append(fields, "if("+replace+", tupleElement("+candidate+", "+
+			position+"), tupleElement("+stateSQL+", "+position+"))")
+	}
+	fields = append(
+		fields,
+		"toUInt8(tupleElement("+stateSQL+", 5) != 0 OR tupleElement("+
+			candidate+", 5) != 0)",
+		"toUInt8(tupleElement("+stateSQL+", 6) != 0 OR ("+value.invalidSQL+"))",
+	)
+	return bindSQLExpressions(
+		[]string{candidate},
+		[]string{"if(" + value.eligibleSQL + ", " + candidateSQL + ", " +
+			emptyCandidate + ")"},
+		"tuple("+strings.Join(fields, ", ")+")",
+	)
+}
+
+// eventStatsExtremaDynamicMeasureSQL folds one Dynamic row to a constant-size
+// winner tuple plus an invalid-container bit. Dynamic multivalue members are
+// visited once; no candidate array or second validation walk is retained. A
+// grouped query gates the entire fold with its already-bound BY eligibility,
+// so an incomplete group row cannot spend work or contribute poison.
+func eventStatsExtremaDynamicMeasureSQL(
+	field fieldState,
+	rowEligibleSQL string,
+) (string, []any) {
+	if rowEligibleSQL == "" {
+		rowEligibleSQL = "1"
+	}
+	scalar := compileDynamicExtremaScalar(field)
+	element := compileDynamicExtremaScalar(fieldState{
+		valueSQL:       "element",
+		dynamicTypeSQL: "dynamicType(element)",
+		kind:           fieldKindDynamic,
+	})
+
+	existsSQL := field.existsSQL
+	if existsSQL == "" {
+		existsSQL = "1"
+	}
+	descendantSQL := "0"
+	args := append([]any(nil), field.existsArgs...)
+	if field.descendantSQL != "" {
+		descendantSQL = field.descendantSQL
+		args = append(args, field.descendantArgs...)
+	}
+	empty := eventStatsExtremaEmptyRowStateSQL("0")
+	initial := eventStatsExtremaEmptyRowStateSQL("descendant_present != 0")
+	memberState := "__os_eventstats_extrema_state"
+	values := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
+	arrayState := "arrayFold((" + memberState + ", element) -> " +
+		eventStatsExtremaFoldStepSQL(memberState, element) + ", " + values +
+		", " + initial + ")"
+	scalarState := eventStatsExtremaFoldStepSQL(initial, scalar)
+	rowState := "multiIf(field_present = 0 OR " + scalar.typeSQL +
+		" = 'None', " + initial + ", " + scalar.typeSQL +
+		" = 'Array(Dynamic)', " + arrayState + ", " + scalarState + ")"
+	gated := "if(" + rowEligibleSQL + ", " + rowState + ", " + empty + ")"
+	return bindSQLExpressions(
+		[]string{"field_present", "descendant_present"},
+		[]string{"toUInt8(" + existsSQL + ")", "toUInt8(" + descendantSQL + ")"},
+		gated,
+	), args
 }
 
 func statsExtremaNumericOrNullSQL(valueSQL string) string {
@@ -13594,7 +14335,7 @@ func compileChronologicalResults(
 	measures []compiledChronologicalMeasure,
 	ownerRange spl.Range,
 	stage int,
-) (compiledRelation, int, *compiledChronologicalBarrier) {
+) (compiledRelation, int, *pendingChronologicalBarrier) {
 	if len(measures) == 0 {
 		return relation, 0, nil
 	}
@@ -13657,11 +14398,13 @@ func compileChronologicalResults(
 	sql := "SELECT " + strings.Join(projection, ", ") +
 		" FROM " + materialized + " AS " + alias
 	published := relation.selectFrom(sql, ownerRange)
-	return published, 1, &compiledChronologicalBarrier{
+	return published, 1, &pendingChronologicalBarrier{
 		name:              materialized,
 		sql:               relation.sql,
 		validationColumns: validations,
+		fanout:            1,
 		depth:             relation.depth,
+		ownerRange:        ownerRange,
 	}
 }
 

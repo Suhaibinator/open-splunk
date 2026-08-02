@@ -63,9 +63,27 @@ func (c Compiler) CompileFieldSuggestions(
 		state compileState,
 		args []any,
 		scan *plan.Scan,
-		_ int,
+		aliasSequence int,
 	) (CompiledQuery, error) {
-		return finalizeFieldSuggestions(relation, state, args, spec, scan.Range)
+		contract := fieldSuggestionResultContract()
+		policy := eventAnalysisFinalizationPolicyFor(state.chronologicalBarriers)
+		compiled, finalizeErr := finalizeFieldSuggestions(
+			relation,
+			state,
+			args,
+			spec,
+			scan.Range,
+			policy,
+		)
+		if finalizeErr != nil {
+			return CompiledQuery{}, finalizeErr
+		}
+		return wrapEventAnalysisValidation(
+			compiled,
+			state,
+			contract,
+			aliasSequence,
+		)
 	})
 	if err != nil {
 		return CompiledFieldSuggestions{}, err
@@ -75,6 +93,20 @@ func (c Compiler) CompileFieldSuggestions(
 		Args: compiled.Args,
 		Spec: spec,
 	}, nil
+}
+
+func fieldSuggestionResultContract() eventAnalysisResultContract {
+	return eventAnalysisResultContract{
+		sourceFanout: eventStatsSummarySourceFanout,
+		columns: []string{
+			FieldSuggestionRowKindColumn,
+			FieldSuggestionNameColumn,
+			FieldSuggestionInvalidColumn,
+		},
+		order: quoteIdentifier(FieldSuggestionRowKindColumn) + " ASC, lower(" +
+			quoteIdentifier(FieldSuggestionNameColumn) + ") ASC, " +
+			quoteIdentifier(FieldSuggestionNameColumn) + " ASC",
+	}
 }
 
 const (
@@ -122,6 +154,7 @@ func finalizeFieldSuggestions(
 	args []any,
 	spec FieldSuggestionSpec,
 	ownerRange spl.Range,
+	policy eventAnalysisFinalizationPolicy,
 ) (CompiledQuery, error) {
 	if !state.eventRows {
 		return CompiledQuery{}, errors.New(
@@ -160,7 +193,7 @@ func finalizeFieldSuggestions(
 	sql.Grow(len(relation.sql) + 6_144 + len(knownNames)*16)
 	sql.WriteString("WITH ")
 	sql.WriteString(q(fieldSuggestionSourceCTE))
-	sql.WriteString(" AS MATERIALIZED (")
+	writeCTEOpening(&sql, policy.materializeSharedCTEs)
 	sql.WriteString(relation.sql)
 	sql.WriteString("), ")
 
@@ -354,14 +387,10 @@ func finalizeFieldSuggestions(
 	sql.WriteString(q(fieldSuggestionLimitedCTE))
 	sql.WriteString(") AS ")
 	sql.WriteString(q("__os_field_suggestion_output"))
-	sql.WriteString(" ORDER BY ")
-	sql.WriteString(q(FieldSuggestionRowKindColumn))
-	sql.WriteString(" ASC, ")
-	sql.WriteString("lower(")
-	sql.WriteString(q(FieldSuggestionNameColumn))
-	sql.WriteString(") ASC, ")
-	sql.WriteString(q(FieldSuggestionNameColumn))
-	sql.WriteString(" ASC")
+	if policy.includeResultOrder {
+		sql.WriteString(" ORDER BY ")
+		sql.WriteString(fieldSuggestionResultContract().order)
+	}
 
 	sourceDepth := relation.depth
 	metadataDepth := relationalNodeDepth(sourceDepth)

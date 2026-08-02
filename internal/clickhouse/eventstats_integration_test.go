@@ -776,6 +776,42 @@ func testEventStatsAgainstClickHouse(
 		t.Fatalf("missing eventstats group IDs = %v, want %v", missingIDs, want)
 	}
 
+	for _, test := range []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "chart after eventstats",
+			source: base + ` | eventstats count AS peers` +
+				` | chart count OVER host BY source`,
+		},
+		{
+			name: "timechart after eventstats",
+			source: base + ` | eventstats count AS peers` +
+				` | timechart span=5m count BY source`,
+		},
+	} {
+		query := compile(test.source)
+		wideRows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
+		if queryErr != nil {
+			t.Fatalf("execute %s: %v\nSQL: %s", test.name, queryErr, query.SQL)
+		}
+		rowCount := 0
+		for wideRows.Next() {
+			rowCount++
+		}
+		if rowsErr := wideRows.Err(); rowsErr != nil {
+			_ = wideRows.Close()
+			t.Fatalf("iterate %s: %v", test.name, rowsErr)
+		}
+		if closeErr := wideRows.Close(); closeErr != nil {
+			t.Fatalf("close %s rows: %v", test.name, closeErr)
+		}
+		if rowCount == 0 {
+			t.Fatalf("%s returned no rows", test.name)
+		}
+	}
+
 	for name, source := range map[string]string{
 		"visible poison":           `index=compiler source="eventstats-poison" | eventstats count AS peers BY eventstats_group`,
 		"downstream hidden poison": `index=compiler source="eventstats-poison" | eventstats count AS peers BY eventstats_group | fields - peers | search event_id="not-present"`,

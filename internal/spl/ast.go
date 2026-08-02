@@ -612,8 +612,9 @@ func (c *StatsCommand) SourceRange() Range { return c.Range }
 // within an exact BY tuple. The bounded compatibility surface accepts
 // argument-free AggregateFunctionCount, exact-field
 // AggregateFunctionCountValues, true-only AggregateFunctionCountPredicate, or
-// exact-field AggregateFunctionSum/AggregateFunctionAverage while retaining
-// the singular aggregate's source locations through StatsAggregate.
+// exact-field AggregateFunctionMinimum/AggregateFunctionSum/
+// AggregateFunctionAverage while retaining the singular aggregate's source
+// locations through StatsAggregate.
 type EventStatsCommand struct {
 	Aggregate StatsAggregate
 	GroupBy   []StatsGroupField

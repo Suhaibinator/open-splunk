@@ -2,13 +2,14 @@ package spl
 
 import "testing"
 
-func TestClassifyResultShapeTreatsEventStatsNumericAggregatesAsRowPreserving(t *testing.T) {
+func TestClassifyResultShapeTreatsEventStatsFieldAggregatesAsRowPreserving(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
 		name   string
 		source string
 	}{
+		{"minimum", "index=main | eventstats min(latency_ms) AS minimum_latency BY service"},
 		{"sum", "index=main | eventstats sum(bytes) AS total_bytes BY level"},
 		{"average", "index=main | eventstats avg(duration_ms) AS mean_ms BY service"},
 	} {

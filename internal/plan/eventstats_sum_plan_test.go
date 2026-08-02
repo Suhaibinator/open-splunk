@@ -8,69 +8,97 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-func TestBuildEventStatsSumProducesSingularRowPreservingMeasure(t *testing.T) {
+func TestBuildEventStatsFieldAggregatesProduceSingularRowPreservingMeasure(t *testing.T) {
 	t.Parallel()
 
-	logical, err := Build(
-		mustParse(
-			t,
-			`index=gradethis | eventstats sum(http.bytes) AS total_bytes BY host, status`,
-		),
-		testScope([]string{"gradethis"}, nil),
-	)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	for _, test := range []struct {
+		name       string
+		source     string
+		function   AggregateFunction
+		input      string
+		inputPath  []string
+		output     string
+		references []string
+	}{
+		{
+			name:       "minimum",
+			source:     `index=gradethis | eventstats min(http.latency) AS minimum_latency BY host, status`,
+			function:   AggregateFunctionMinimum,
+			input:      "http.latency",
+			inputPath:  []string{"http", "latency"},
+			output:     "minimum_latency",
+			references: []string{"host", "http.latency", "index", "status"},
+		},
+		{
+			name:       "sum",
+			source:     `index=gradethis | eventstats sum(http.bytes) AS total_bytes BY host, status`,
+			function:   AggregateFunctionSum,
+			input:      "http.bytes",
+			inputPath:  []string{"http", "bytes"},
+			output:     "total_bytes",
+			references: []string{"host", "http.bytes", "index", "status"},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 
-	var eventAggregates []*EventAggregate
-	for _, operator := range logical.Operators {
-		if eventAggregate, ok := operator.(*EventAggregate); ok {
-			eventAggregates = append(eventAggregates, eventAggregate)
-		}
-	}
-	if len(eventAggregates) != 1 {
-		t.Fatalf("EventAggregate operators = %d, want exactly 1", len(eventAggregates))
-	}
-	eventAggregate := eventAggregates[0]
-	if logical.Operators[len(logical.Operators)-1] != eventAggregate {
-		t.Fatalf("EventAggregate is not the terminal operator: %T", logical.Operators[len(logical.Operators)-1])
-	}
-	measure := eventAggregate.Measure
-	if eventAggregate.LogicalName() != "EventAggregate" ||
-		eventAggregate.SourceRange() != eventAggregate.Range ||
-		measure.Function != AggregateFunctionSum ||
-		measure.Input.Name != "http.bytes" ||
-		measure.Input.Canonical ||
-		!slices.Equal(measure.Input.Path, []string{"http", "bytes"}) ||
-		measure.Input.Range == (spl.Range{}) ||
-		measure.Predicate != nil ||
-		measure.Percentile != 0 ||
-		measure.Output != "total_bytes" {
-		t.Fatalf("event aggregate = %#v", eventAggregate)
-	}
-	if len(eventAggregate.GroupBy) != 2 ||
-		eventAggregate.GroupBy[0].Name != "host" ||
-		eventAggregate.GroupBy[1].Name != "status" ||
-		eventAggregate.GroupBy[0].Range == (spl.Range{}) ||
-		eventAggregate.GroupBy[1].Range == (spl.Range{}) {
-		t.Fatalf("event aggregate groups = %#v, want resolved host/status", eventAggregate.GroupBy)
-	}
+			logical, err := Build(
+				mustParse(t, test.source),
+				testScope([]string{"gradethis"}, nil),
+			)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
 
-	analysis, err := Analyze(logical)
-	if err != nil {
-		t.Fatalf("Analyze: %v", err)
-	}
-	if !slices.Equal(
-		analysis.ReferencedFields,
-		[]string{"host", "http.bytes", "index", "status"},
-	) {
-		t.Fatalf("referenced fields = %v", analysis.ReferencedFields)
-	}
-	if err := ValidateFieldAnalysisEligibility(logical); err != nil {
-		t.Fatalf("field analysis eligibility: %v", err)
-	}
-	if err := ValidateTimelineEligibility(logical); err != nil {
-		t.Fatalf("timeline eligibility: %v", err)
+			var eventAggregates []*EventAggregate
+			for _, operator := range logical.Operators {
+				if eventAggregate, ok := operator.(*EventAggregate); ok {
+					eventAggregates = append(eventAggregates, eventAggregate)
+				}
+			}
+			if len(eventAggregates) != 1 {
+				t.Fatalf("EventAggregate operators = %d, want exactly 1", len(eventAggregates))
+			}
+			eventAggregate := eventAggregates[0]
+			if logical.Operators[len(logical.Operators)-1] != eventAggregate {
+				t.Fatalf("EventAggregate is not the terminal operator: %T", logical.Operators[len(logical.Operators)-1])
+			}
+			measure := eventAggregate.Measure
+			if eventAggregate.LogicalName() != "EventAggregate" ||
+				eventAggregate.SourceRange() != eventAggregate.Range ||
+				measure.Function != test.function ||
+				measure.Input.Name != test.input ||
+				measure.Input.Canonical ||
+				!slices.Equal(measure.Input.Path, test.inputPath) ||
+				measure.Input.Range == (spl.Range{}) ||
+				measure.Predicate != nil ||
+				measure.Percentile != 0 ||
+				measure.Output != test.output {
+				t.Fatalf("event aggregate = %#v", eventAggregate)
+			}
+			if len(eventAggregate.GroupBy) != 2 ||
+				eventAggregate.GroupBy[0].Name != "host" ||
+				eventAggregate.GroupBy[1].Name != "status" ||
+				eventAggregate.GroupBy[0].Range == (spl.Range{}) ||
+				eventAggregate.GroupBy[1].Range == (spl.Range{}) {
+				t.Fatalf("event aggregate groups = %#v, want resolved host/status", eventAggregate.GroupBy)
+			}
+
+			analysis, analyzeErr := Analyze(logical)
+			if analyzeErr != nil {
+				t.Fatalf("Analyze: %v", analyzeErr)
+			}
+			if !slices.Equal(analysis.ReferencedFields, test.references) {
+				t.Fatalf("referenced fields = %v", analysis.ReferencedFields)
+			}
+			if eligibilityErr := ValidateFieldAnalysisEligibility(logical); eligibilityErr != nil {
+				t.Fatalf("field analysis eligibility: %v", eligibilityErr)
+			}
+			if timelineErr := ValidateTimelineEligibility(logical); timelineErr != nil {
+				t.Fatalf("timeline eligibility: %v", timelineErr)
+			}
+		})
 	}
 }
 
@@ -307,6 +335,13 @@ func TestBuildEventStatsSumRejectsForgedAggregateMetadata(t *testing.T) {
 			},
 			wantCode: "SPL_RESERVED_FIELD",
 		},
+		{
+			name: "maximum function remains unsupported",
+			mutate: func(aggregate *spl.StatsAggregate) {
+				aggregate.Function = spl.AggregateFunctionMaximum
+			},
+			wantCode: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+		},
 	}
 	for _, test := range tests {
 		test := test
@@ -402,6 +437,12 @@ func TestAnalyzeEventStatsSumAcceptsResolvedInputAndRejectsForgedMetadata(
 			name: "private output",
 			mutate: func(measure *AggregateMeasure) {
 				measure.Output = "__os_eventstats_private"
+			},
+		},
+		{
+			name: "maximum function remains unsupported",
+			mutate: func(measure *AggregateMeasure) {
+				measure.Function = AggregateFunctionMaximum
 			},
 		},
 	}

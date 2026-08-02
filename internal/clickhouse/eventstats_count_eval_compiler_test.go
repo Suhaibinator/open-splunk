@@ -110,21 +110,30 @@ func TestCompileEventStatsCountEvalFencesCalculatedPredicateField(t *testing.T) 
 	if got := strings.Count(strings.ToUpper(compiled.SQL), "ARRAY JOIN"); got != 1 {
 		t.Fatalf("calculated predicate fences = %d, want 1:\n%s", got, compiled.SQL)
 	}
-	cteStart := strings.Index(compiled.SQL, `WITH "__os_eventstats_predicate_input_`)
+	predicateAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_predicate_input_",
+	)
+	inputAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_input_")
+	cteStart := strings.Index(compiled.SQL, predicateAlias+` AS MATERIALIZED (`)
 	if cteStart < 0 {
 		t.Fatalf("conditional eventstats predicate CTE is missing:\n%s", compiled.SQL)
 	}
-	cteEndOffset := strings.Index(compiled.SQL[cteStart:], `) SELECT * FROM "__os_eventstats_predicate_input_`)
-	if cteEndOffset < 0 {
+	cteEnd := strings.Index(compiled.SQL, `, `+inputAlias+` AS (`)
+	if cteEnd <= cteStart {
 		t.Fatalf("conditional eventstats predicate CTE boundary is missing:\n%s", compiled.SQL)
 	}
-	boundedPredicateSQL := compiled.SQL[cteStart : cteStart+cteEndOffset]
+	boundedPredicateSQL := compiled.SQL[cteStart:cteEnd]
 	sentinel := `LIMIT ` + strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
 	if !strings.Contains(boundedPredicateSQL, sentinel) {
 		t.Fatalf(
 			"predicate MATERIALIZED CTE is not bounded to the sentinel rows before eventstats input:\n%s",
 			compiled.SQL,
 		)
+	}
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("conditional eventstats materialized CTEs = %d, want predicate leaf only:\n%s", got, compiled.SQL)
 	}
 
 	downstream := compileSPL(
@@ -173,8 +182,21 @@ func TestCompileEventStatsCountEvalMaterializesRepeatedExactNumericKeysOnce(t *t
 	if got := strings.Count(compiled.SQL, `"__os_eventstats_exact_key_`); got < 3 {
 		t.Fatalf("exact numeric key references = %d, want definition plus both comparisons:\n%s", got, compiled.SQL)
 	}
-	if len(compiled.Args) == 0 || compiled.Args[0] != "api" {
-		t.Fatalf("conditional eventstats arguments = %#v, want predicate argument order preserved", compiled.Args)
+	apiAt := slices.Index(compiled.Args, any("api"))
+	wantPredicateArgs := []any{
+		"api",
+		"ratio",
+		float64(9_007_199_254_740_992),
+		"ratio",
+		int64(9_007_199_254_740_994),
+	}
+	if apiAt < 0 || !slices.Equal(compiled.Args[apiAt:], wantPredicateArgs) {
+		t.Fatalf(
+			"conditional eventstats arguments = %#v, want predicate suffix %#v\nSQL: %s",
+			compiled.Args,
+			wantPredicateArgs,
+			compiled.SQL,
+		)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)

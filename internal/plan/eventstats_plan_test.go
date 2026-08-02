@@ -499,10 +499,10 @@ func TestAnalyzeEventAggregateReadsGroupsAndCountFieldAndValidatesContract(
 			},
 		},
 		{
-			name: "wrong function",
+			name: "unsupported maximum function",
 			operator: &EventAggregate{
 				Measure: AggregateMeasure{
-					Function: AggregateFunctionMinimum,
+					Function: AggregateFunctionMaximum,
 					Output:   "events",
 				},
 			},
@@ -634,10 +634,10 @@ func TestEventAggregateEligibilityRejectsForgedContracts(t *testing.T) {
 		operator Operator
 	}{
 		{
-			name: "wrong function",
+			name: "unsupported maximum function",
 			operator: &EventAggregate{
 				Measure: AggregateMeasure{
-					Function: AggregateFunctionMinimum,
+					Function: AggregateFunctionMaximum,
 					Output:   "events",
 				},
 			},

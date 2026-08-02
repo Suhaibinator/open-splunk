@@ -286,7 +286,7 @@ test("stats completion advertises true-only conditional count with an explicit a
   assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
 });
 
-test("eventstats completion advertises bounded conditional count, numeric sum, and average", () => {
+test("eventstats completion advertises the bounded aggregate surface including minimum", () => {
   const eventstatsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eventstats");
   assert.ok(eventstatsCompletion);
   assert.equal(
@@ -296,6 +296,7 @@ test("eventstats completion advertises bounded conditional count, numeric sum, a
   assert.match(eventstatsCompletion.detail, /true-only count\(eval\(predicate\)\)/i);
   assert.match(eventstatsCompletion.detail, /numeric sum/i);
   assert.match(eventstatsCompletion.detail, /average/i);
+  assert.match(eventstatsCompletion.detail, /exact mixed-type minimum/i);
   assert.match(eventstatsCompletion.detail, /every input row/i);
 
   const commandToken = classifiedTokens("index=main | eventstats count")
@@ -309,6 +310,10 @@ test("eventstats completion advertises bounded conditional count, numeric sum, a
   const averageToken = classifiedTokens("index=main | eventstats avg(duration_ms) AS mean_ms")
     .find((token) => token.text.toLowerCase() === "avg");
   assert.deepEqual(averageToken, { className: "spl-function", text: "avg" });
+
+  const minimumToken = classifiedTokens("index=main | eventstats min(duration_ms) AS min_ms")
+    .find((token) => token.text.toLowerCase() === "min");
+  assert.deepEqual(minimumToken, { className: "spl-function", text: "min" });
 });
 
 test("where completion advertises direct bounded match and like predicates", () => {

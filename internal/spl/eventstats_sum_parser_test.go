@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestParseEventStatsNumericAggregatesAcceptExactFieldAndPreserveSourceRanges(
+func TestParseEventStatsFieldAggregatesAcceptExactFieldAndPreserveSourceRanges(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -22,6 +22,27 @@ func TestParseEventStatsNumericAggregatesAcceptExactFieldAndPreserveSourceRanges
 		commandText   string
 		aggregateText string
 	}{
+		{
+			name:          "minimum global",
+			function:      AggregateFunctionMinimum,
+			functionName:  "min",
+			source:        `index=main | eventstats min(latency_ms) AS minimum_latency`,
+			input:         "latency_ms",
+			output:        "minimum_latency",
+			commandText:   "eventstats min(latency_ms) AS minimum_latency",
+			aggregateText: "min(latency_ms) AS minimum_latency",
+		},
+		{
+			name:          "minimum grouped case insensitive function and keywords",
+			function:      AggregateFunctionMinimum,
+			functionName:  "min",
+			source:        "index=main\n| EvEnTsTaTs MiN(http.latency) aS floorLatency bY Host, source",
+			input:         "http.latency",
+			output:        "floorLatency",
+			groupNames:    []string{"Host", "source"},
+			commandText:   "EvEnTsTaTs MiN(http.latency) aS floorLatency bY Host, source",
+			aggregateText: "MiN(http.latency) aS floorLatency",
+		},
 		{
 			name:          "sum global",
 			function:      AggregateFunctionSum,
@@ -114,7 +135,7 @@ func TestParseEventStatsNumericAggregatesAcceptExactFieldAndPreserveSourceRanges
 	}
 }
 
-func TestParseEventStatsNumericAggregatesRequireExplicitAlias(t *testing.T) {
+func TestParseEventStatsFieldAggregatesRequireExplicitAlias(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
@@ -123,6 +144,7 @@ func TestParseEventStatsNumericAggregatesRequireExplicitAlias(t *testing.T) {
 		input      string
 		suggestion string
 	}{
+		{"minimum", "min", "latency_ms", "eventstats min(field) AS minimum"},
 		{"sum", "sum", "bytes", "eventstats sum(field) AS total"},
 		{"average", "avg", "duration_ms", "eventstats avg(field) AS mean"},
 	} {
