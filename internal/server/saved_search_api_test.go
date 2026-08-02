@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -418,12 +419,16 @@ func TestSavedSearchRoutesEnforceRequestSizeLimits(t *testing.T) {
 func TestSavedSearchListSerializationIsCapacityBounded(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFirst := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	t.Cleanup(releaseFirst)
+	var listCalls atomic.Int32
 	store := &fakeSavedSearches{listFn: func(context.Context, savedobjects.AccessScope, savedobjects.ListRequest) (savedobjects.ListResult, error) {
-		select {
-		case entered <- struct{}{}:
+		if listCalls.Add(1) == 1 {
+			close(entered)
 			<-release
-		default:
-			t.Fatal("second list reached the store without a serialization permit")
 		}
 		return savedobjects.ListResult{}, nil
 	}}
@@ -442,17 +447,21 @@ func TestSavedSearchListSerializationIsCapacityBounded(t *testing.T) {
 	}
 
 	second := postProto(t, handler, "/api/v1/saved-searches/list", &opensplunkv1.ListSavedSearchesRequest{})
-	if second.Code != http.StatusServiceUnavailable {
-		t.Fatalf("second list status = %d, body = %s", second.Code, second.Body.String())
-	}
-	close(release)
+	releaseFirst()
+	var first *httptest.ResponseRecorder
 	select {
-	case first := <-firstDone:
-		if first.Code != http.StatusOK {
-			t.Fatalf("first list status = %d, body = %s", first.Code, first.Body.String())
-		}
+	case first = <-firstDone:
 	case <-time.After(time.Second):
 		t.Fatal("first list did not finish")
+	}
+	if got := listCalls.Load(); got != 1 {
+		t.Errorf("store list calls = %d, want 1", got)
+	}
+	if second.Code != http.StatusServiceUnavailable {
+		t.Errorf("second list status = %d, body = %s", second.Code, second.Body.String())
+	}
+	if first.Code != http.StatusOK {
+		t.Errorf("first list status = %d, body = %s", first.Code, first.Body.String())
 	}
 }
 
