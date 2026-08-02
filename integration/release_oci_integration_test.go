@@ -883,6 +883,14 @@ func releaseOCIBuildImages(
 	command.Env = stack.environment()
 	configureProcessGroup(command)
 	output, truncated, err := runCommandWithBoundedOutput(command, maximumHarnessOutputBytes)
+	// Docker Desktop BuildKit may leave an inherited progress pipe open after
+	// make and both docker build commands have exited successfully. Go reports
+	// that otherwise-successful exit as ErrWaitDelay after closing the orphaned
+	// pipe. The immediately following image inspection is the authoritative
+	// proof that both requested images were published.
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil
+	}
 	if err != nil || truncated {
 		t.Fatalf(
 			"build exact release OCI images through make oci: %v: %s",
