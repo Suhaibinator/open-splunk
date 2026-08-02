@@ -171,6 +171,8 @@ jobs:
     name: GradeThis compatibility corpus
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -182,10 +184,22 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      - name: Pre-pull pinned ClickHouse image with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+
       - name: Execute exact GradeThis corpus and plans against pinned ClickHouse
         env:
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
-          OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
         run: >-
           go test ./internal/queryexec ./internal/searchinspection ./internal/server
           -run '^(TestGradeThis(CompatibilityV0_1|InspectionService)AgainstClickHouse|TestSearchInspectionRouteGradeThisAgainstClickHouse)$'
@@ -198,6 +212,8 @@ jobs:
     name: Backend vertical
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -208,6 +224,32 @@ jobs:
           go-version-file: go.mod
           cache: true
           cache-dependency-path: go.sum
+
+      - name: Download Go modules with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+
+      - name: Pre-pull pinned ClickHouse image with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -225,7 +267,6 @@ jobs:
         env:
           OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
-          OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
         run: >-
           go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse
           -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
