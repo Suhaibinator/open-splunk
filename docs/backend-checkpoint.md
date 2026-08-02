@@ -7,7 +7,122 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: offline control-plane recovery bundle
+## Latest checkpoint: deletion-safe index read retirement
+
+Date: 2026-08-01
+
+Committed implementation checkpoint:
+
+- `82d2cb5` — durable and live read retirement across physical index deletion.
+
+This test-first lifecycle unit closes the remaining read-side race around
+physical `DELETE_DATA` without changing either database schema, applying a
+control-plane migration, or putting GORM on the ClickHouse path:
+
+1. The new `internal/indexread` registry admits bounded, canonical multi-index
+   leases atomically, permanently retires an index, cancels every in-flight
+   lease with an authoritative unavailable cause, and lets retirement join
+   concurrent readers before deletion continues. Scope normalization validates
+   the tenant, sorts and deduplicates cloned index names, and caps one request at
+   256 indexes. Production constructs admission and retirement from one
+   lifecycle factory so deletion cannot accidentally fence a different
+   registry.
+2. Live fencing is paired with durable control-plane admission. One GORM
+   `WHERE name IN ?` query resolves the complete requested batch in exact input
+   order and fails closed on a missing or tombstoned member. Only matching
+   `Active` and `Archived` records are readable; `Deleting` is unavailable.
+   Catalog admission runs before the process-local lease, covering restart
+   recovery while the registry closes the live catalog-check/ALTER race.
+3. Compiled ClickHouse reads carry a private SHA-256 seal binding tenant,
+   normalized indexes, SQL, and every security-argument position, type, and
+   value. The compiler now rejects malformed or reordered markers immediately;
+   executors validate the seal before acquiring a lease. This prevents a caller
+   from widening or changing the authorized physical scope after compilation.
+   Explicit unfenced admission exists only for isolated tests and diagnostics;
+   production constructors require a real admission dependency.
+4. Ordinary searches and all search-derived reads—timeline, field catalog,
+   field summary, and field suggestions—hold a lease through native execution.
+   A queued-search regression proves a search retired while waiting for worker
+   capacity never reaches ClickHouse. Running jobs fail with a sanitized,
+   non-retryable execution error, while retained export reexecution reports a
+   non-retryable source-unavailable failure and publishes no artifact.
+5. Single-index and batch statistics acquire the same atomic lease before
+   native work. Durable catalog admission happens before the scarce native
+   operation gate while remaining inside the request deadline. The index-list
+   endpoint excludes `Deleting` records from the statistics batch, enriches
+   mixed Active/Archived pages in one native call, and performs no clock,
+   snapshot, or ClickHouse work when every listed record is deleting. Direct
+   statistics reads for a deleting index fail unavailable.
+6. The physical-deletion coordinator retires reads only after durable operation
+   validation but before recording an attempt, freezing writes, or issuing an
+   `ALTER`. Retirement failure prevents every downstream side effect and is
+   retried; restart re-applies retirement from durable state. The pinned
+   ClickHouse integration shares one real registry between executor and
+   coordinator, proves a preflight row is readable, blocks deletion after
+   retirement while the raw row still exists, proves subsequent reads do not
+   reach the native connection or publish rows, then releases the mutation and
+   verifies terminal zero-row deletion and durable tombstoning after reopen.
+7. CI's Backend vertical job now runs `internal/indexes` and the exact physical
+   deletion coordinator integration alongside the existing service-principal,
+   statistics, executor, backend, browser-recovery, and Compose credential-
+   rotation proofs.
+8. Independent adversarial reviews covered lifecycle ordering, restart
+   behavior, typed-nil dependencies, forged compiled queries, queued/running
+   searches, derived reads, retained exports, direct and list statistics,
+   multi-index atomicity, and shared-registry identity. Three additional
+   simplify passes drove a shared scope normalizer, one GORM batch query,
+   consolidated typed-nil validation, immediate compiler invariant failures,
+   allocation-light seal validation, and catalog admission outside the native
+   statistics gate. No unresolved high- or medium-severity finding remained.
+
+Validation on commit `82d2cb5`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+
+go test ./internal/indexread ./internal/control ./internal/clickhouse \
+  ./internal/queryexec ./internal/server ./internal/searchinspection \
+  ./cmd/open-splunk-server -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-read-fence-coverage.out ./...
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m ./...
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=25m -p=1 -v
+```
+
+Every command passed. The full race/shuffle tree was clean; representative
+coverage was 95.1% for `internal/indexread`, 89.2% for `internal/clickhouse`,
+89.1% for `internal/indexes`, 86.4% for `internal/queryexec`, and 84.9% for
+`internal/server`. Cached golangci-lint v2.12.2 reported `0 issues`; module
+files remained unchanged; the Linux cross-build passed; and the complete local
+digest-pinned backend matrix removed every test-owned container and volume.
+
+GitHub Actions run
+[`30739519458`](https://github.com/Suhaibinator/open-splunk/actions/runs/30739519458)
+was fully green. The previously reported Backend vertical job passed in 20m3s
+and Go lint passed in 2m14s; race/coverage, GradeThis compatibility, release OCI,
+frontend, vulnerability, production-binary, and cross-platform asset checks
+also passed.
+
+This unit changes no frontend or public API contract. It retains GORM solely for
+the SQLite control plane and uses the native ClickHouse driver for event reads,
+statistics, and physical deletion. Broader SPL support, coordinated
+ClickHouse-native disaster recovery, and the explicitly deferred external
+GradeThis Compose collector cutover remain separate work. The overall backend
+goal remains active.
+
+## Previous checkpoint: offline control-plane recovery bundle
 
 Date: 2026-08-01
 
@@ -12839,11 +12954,11 @@ multivalue output, XML, terminal containers, escaped literal-dot keys, and the
 
 Resource/lifecycle audit findings to retain in the backlog:
 
-- Implement physical `DELETE_DATA` only after composing the Store/replay fence
-  and proven bounded outbox drain from `8676b4d` with a durable restartable
-  operation, outcome-ambiguous ClickHouse mutation reconciliation, and
-  terminal zero-row verification. Synchronous `KEEP_DATA` deletion is complete
-  in `66f36d1`.
+- Physical `DELETE_DATA`, durable replay/outbox fencing, restartable mutation
+  reconciliation, terminal zero-row verification, and live/durable read
+  retirement are complete; the read boundary is checkpointed at `82d2cb5`.
+  Retain coordinated ClickHouse-native backup/restore and recovery-set pairing
+  as the remaining deletion-adjacent disaster-recovery work.
 
 The architecture plan still requires product decisions for capacity-planning
 retention/event size, target hardware, concurrent search load, immediate
