@@ -7,7 +7,120 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded exact-field eventstats minimum
+## Latest checkpoint: bounded exact-field eventstats maximum
+
+Date: 2026-08-01
+
+Committed implementation checkpoint:
+
+- `f04c1f2` — bounded `eventstats max(field) AS output [BY ...]` with
+  direction-correct mixed-type and multivalue execution.
+
+This test-first SPL unit completes the currently bounded row-preserving
+extrema pair without changing either database schema, introducing a
+control-plane migration, or putting GORM on the ClickHouse path:
+
+1. The parser accepts exactly one `max(<exact unquoted field>) AS <exact
+   output>` followed by zero through 16 distinct exact `BY` fields. Function
+   and keyword spelling is case-insensitive while field spelling remains
+   exact. The alias is mandatory; eval, wildcard, quoted, empty, multiple-
+   input, multiple-measure, and option forms fail with source-located
+   diagnostics. Suggestions, result-shape classification, the generated
+   completion catalog, and frontend highlighting expose only the implemented
+   form.
+2. Planning, dependency analysis, result-shape inference, field/timeline
+   eligibility, and search-inspection projection preserve the existing
+   row-enrichment contract. Known output fields append or replace in place;
+   open-schema `fields` ambiguity fails closed; `_time` replacement invalidates
+   timeline provenance; and replacing `index` never widens the authorized
+   physical scan.
+3. Maximum uses the complete `stats max` mixed-value contract. Exact numeric
+   candidates sort before lexical candidates, so the maximum is lexical when
+   a lexical candidate exists and otherwise is the greatest exact numeric
+   value. Exact values beyond IEEE-754 integer precision publish through the
+   Decimal envelope, while native Number, Boolean, timestamp, and String
+   values retain their physical type. Every immediate top-level multivalue
+   member participates independently; missing, null, empty multivalue, and
+   null members do not participate.
+4. The compiler parameterizes the existing extrema pipeline instead of
+   duplicating it. Fixed native values use `maxIfOrNull`; fixed String values
+   use the scalar exact-order `argMaxOrNullIf` path; fixed multivalues use one
+   guarded `argMaxArray`; and Dynamic scalars or multivalues fold each row to
+   one constant-size candidate before the scoped aggregate. A direction-
+   specific test caught that the initial implementation changed the outer
+   aggregate but still compared Dynamic members with `<`; the row-local fold
+   now uses `>` for maximum.
+5. Global and grouped maximum preserve source cardinality, established order,
+   and every upstream field. An incomplete grouping tuple keeps its source row
+   but makes the output logically absent. Consecutive minimum/maximum stages
+   work in both orders and retain one flat CTE graph, one earliest materialized
+   physical-scan fence, correct bind ordering, and the existing conservative
+   128 bounded-leaf-read ceiling.
+6. Unsupported objects, flattened parents, nested arrays, and nested objects
+   fail the complete scoped command atomically with a sanitized marker. Hidden
+   validation survives downstream filtering, projection, row limits, and
+   analysis endpoints. The existing 10,000-row input boundary still reads one
+   sentinel row and rejects 10,001 rows atomically instead of publishing a
+   prefix.
+7. Parser, planner, analysis, result-shape, search-inspection, compiler, and
+   real ClickHouse tests cover global and grouped maximum, source ranges and
+   the 16/17 `BY` boundary, schema replacement, reserved/provenance fields,
+   forged AST and plan metadata, mixed scalar and multivalue winners, exact
+   Decimal values above 2^53, native UInt8/timestamp/Boolean values, fixed
+   String and fixed multivalue paths, grouped present/null/missing states,
+   minimum-to-maximum and maximum-to-minimum stacks, hidden poison, and the
+   10,001-row fence.
+8. Independent contract and compiler adversarial reviews found no production
+   correctness, safety, or boundedness defect. Their two low-risk coverage
+   findings drove direct native-time, computed-Boolean, fixed-multivalue, and
+   forged-maximum compiler tests; the final reviews have no remaining
+   actionable finding.
+
+Validation on implementation commit `f04c1f2`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+go test ./... -count=1 -timeout=10m
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-eventstats-max-final-coverage.out \
+  -timeout=15m ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=15m -p=1 -v
+```
+
+Every command above passed. The final shuffled race run reported 89.2%
+statement coverage in `internal/clickhouse`; cached golangci-lint v2.12.2
+reported `0 issues`; and all 202 frontend tests passed. The final
+digest-pinned Store run passed in 288.59 seconds (package: 288.958 seconds),
+including the additional timestamp, Boolean, and fixed-multivalue maximum
+probes. Cleanup found no test-owned ClickHouse container or Compose volume.
+The dependency upgrades remain committed at `347a015`; `go mod tidy` made no
+additional module-file change.
+
+This checkpoint completes only the bounded exact-field `eventstats` minimum
+and maximum pair. Other eventstats aggregates, multiple measures, its broader
+eval-expression surface, and `streamstats` remain unsupported and require
+their own semantic and resource contracts. Durable audit-log search and
+SQLite backup/restore and disaster-recovery operations remain broader backend
+architecture work. The external GradeThis Compose collector cutover remains
+intentionally deferred pending explicit user direction.
+
+## Previous checkpoint: bounded exact-field eventstats minimum
 
 Date: 2026-08-01
 
@@ -12717,7 +12830,8 @@ Do not guess those decisions if they materially affect the implementation.
    complete through `0c78cb7`; bounded exact-field numeric eventstats sum is
    complete at `1a94faf`, and bounded exact-field numeric eventstats average is
    complete at `3f83414`; bounded exact-field mixed-type eventstats minimum is
-   complete at `f25db02`. First-start collector identity bootstrap and real
+   complete at `f25db02`, and bounded exact-field mixed-type eventstats maximum
+   is complete at `f04c1f2`. First-start collector identity bootstrap and real
    absent-token enrollment proof are complete at `75db36f`, with the final
    working-directory inode-alias fence at `ceab244`.
    Typed Unicode `lower`/`upper` is complete through `8e68c7e`, `3d9d5f8`,
