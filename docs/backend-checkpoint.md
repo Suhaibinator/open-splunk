@@ -7,7 +7,133 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded exact-field eventstats maximum
+## Latest checkpoint: offline control-plane recovery bundle
+
+Date: 2026-08-01
+
+Committed implementation checkpoints:
+
+- `b3302fa` — release-exact offline control-plane backup, verification, and
+  fresh-target resumable restore.
+- `92d4667` — Docker Desktop BuildKit output-pipe portability for the release
+  OCI acceptance harness.
+
+This test-first operations unit establishes the control-plane member of a
+coordinated recovery set without changing the greenfield schema, applying a
+startup migration, or putting GORM on the ClickHouse path:
+
+1. `open-splunk-server` now dispatches three isolated lifecycle commands before
+   runtime startup: `backup-control-plane`, `verify-control-plane-backup`, and
+   `restore-control-plane`. Parsers accept no positional arguments and require
+   exact clean absolute paths with portable final components. Backup acquires
+   the existing host-wide and database server locks, restore acquires the
+   host-wide lock, and both reject a missing injected lock. SIGINT/SIGTERM
+   cancels bounded hashing, copying, SQLite work, and pre-publication steps;
+   default signal handling is restored after the first signal so a second can
+   force termination during cleanup.
+2. `control.OpenReadOnly` opens one query-only SQLite connection shared by SQL
+   and GORM without creating files, changing permissions, selecting WAL, or
+   applying migrations. Exact migration-ledger verification compares every
+   version, name, and checksum against the embedded SQL corpus. Native SQLite
+   backup copies a transactionally consistent committed snapshot in bounded
+   page batches, absorbs committed WAL state, excludes uncommitted rows,
+   normalizes the result to DELETE journal mode, publishes without replacement,
+   and leaves no SQLite sidecar.
+3. A canonical version-1 manifest binds the exact application release, source
+   revision, SQLite and ClickHouse release migration identities, the applied
+   SQLite migration-ledger digest, member names/sizes/SHA-256 values, master-key
+   fingerprint, UTC creation time, control-plane-only scope, and a random
+   128-bit recovery-set ID. Decoding rejects unknown fields, duplicates,
+   noncanonical JSON, invalid bounds, alternate names, and trailing data.
+4. Every bundle is an exact owner-private `0700` directory containing only four
+   owner-private `0600` regular files: manifest, self-contained SQLite snapshot,
+   matching 32-byte master key, and matching administrator token. Descriptor-
+   relative Darwin/Linux filesystem primitives reject symlinks, FIFOs, hard
+   links, special modes, foreign ownership, unsafe ACLs, excessive entries,
+   path replacement, and unsupported no-replace rename semantics. Staging files
+   and directories are exclusive, synced, bounded, and cleaned on ordinary
+   failure.
+5. Verification checks the complete entry set and metadata, hashes every member,
+   validates release compatibility and token syntax, proves the master key
+   matches both the manifest and the database registration, runs SQLite
+   structural and foreign-key integrity checks, and verifies the exact applied
+   migration ledger. Bundle creation performs one complete staged semantic
+   verification; the same-parent atomic directory rename is followed by parent
+   fsync and a cheap inode/entry-set publication proof rather than redundant
+   potentially terabyte-scale re-reads.
+6. Restore accepts three distinct target names in one fresh owner-private
+   directory and publishes one durable no-replace prefix: database, master key,
+   administrator token. It validates cheap target and source/destination
+   topology before expensive bundle work, rejects target/stage and SQLite
+   sidecar collisions, copies and hashes all remaining members before the first
+   rename, semantically verifies the resolved staged database/key/token set, and
+   fsyncs every publication. Retry accepts only no members, exact database, exact
+   database-plus-key, or the exact complete set; mismatches, gaps, sidecars,
+   stale unsafe stages, and unrelated entries fail closed without mutation.
+7. Fault tests cover cancellation after staged bundle fsync and before restore
+   publication, a competing bundle destination, interruption after each durable
+   restore member, idempotent resume, stage/final namespace collision, database,
+   manifest, key, token, migration-ledger and release tampering, consistent
+   wrong-key manifest changes, unsafe modes, symlinks, hard links, unrelated
+   entries, and invalid publication prefixes. Native SQLite tests cover committed
+   WAL capture, uncommitted-row exclusion, cancellation cleanup, destination
+   contention, read-only nonmutation, migration drift/too-new/incomplete ledgers,
+   and foreign-key corruption.
+8. Three independent pre-commit review passes examined reuse, maintainability,
+   efficiency, failure atomicity, CLI locking, and the production drill. Their
+   findings drove shared path validation, migration-ledger binding, target/stage
+   collision rejection, one-shot signal handling, nil-lock rejection, context-
+   aware large-file I/O, early target validation, consolidated restore member
+   verification, removal of redundant full database scans and no-op fsyncs, and
+   a restored-token false-positive fix in the OCI drill.
+9. The release OCI acceptance stops the server, runs backup and read-only verify
+   in the exact scratch image with `--network none`, restores into a fresh named
+   state volume, rebinds only the server state volume, and starts the server
+   directly without bootstrap masking. It proves TLS/readiness, restored
+   administrator authentication, both pre-backup indexes, unchanged ClickHouse
+   container identity, and a post-restore administrator mutation. Every
+   test-owned container and volume is removed.
+
+Validation on commits `b3302fa` and `92d4667`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+go test ./... -count=1
+go test -race -shuffle=on ./...
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_OCI_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./integration -run '^TestReleaseOCIComposeContract$' \
+  -count=1 -timeout=20m -v
+```
+
+Every command above passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+the full race/shuffle tree was clean; all 202 frontend tests passed;
+and the digest-pinned production OCI drill passed in 365.33 seconds (package:
+365.763 seconds). Cleanup found no test-labelled Docker container or volume.
+The dependency upgrades remain committed at `347a015`; `go mod tidy` made no
+additional module-file change.
+
+This bundle explicitly excludes ClickHouse event data and export artifacts. It
+is not a deployment backup or a complete disaster-recovery procedure. Operators
+must pair its `recovery_set_id` with a ClickHouse-native backup taken during the
+same server-quiescent interval and restore both together; the command cannot
+verify that external pairing. Broader SPL support, full coordinated ClickHouse
+disaster recovery, and the external GradeThis Compose collector cutover remain
+separate work.
+
+## Previous checkpoint: bounded exact-field eventstats maximum
 
 Date: 2026-08-01
 
