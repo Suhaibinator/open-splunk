@@ -7,7 +7,127 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded exact eventstats distinct count
+## Latest checkpoint: bounded eventstats percentiles
+
+Date: 2026-08-02
+
+Committed implementation checkpoint:
+
+- `b614080` — bounded `eventstats pN(field)` and `percN(field)` for `N` from
+  1 through 99.
+
+This test-first SPL unit adds row-preserving approximate percentiles without
+changing a database or public API schema, applying a control-plane migration,
+or putting GORM on the ClickHouse path:
+
+1. The parser accepts exactly one case-insensitive `pN(field)` or
+   `percN(field)` with an integer suffix from 1 through 99, a required exact
+   `AS` output, and an optional one-through-16 distinct exact-field `BY` tuple.
+   Leading zeroes canonicalize to the same level. Decimal/two-argument,
+   zero/100, `upperperc`/`exactperc`, eval/wildcard/quoted/multiple input,
+   multiple-measure, option, and missing-alias forms fail with source-located
+   diagnostics. Suggestions and the shared completion catalog advertise the
+   same bounded grammar.
+2. Planning lowers both spellings to the singular row-preserving
+   `EventAggregate` with `AggregateFunctionPercentile`, the validated level,
+   exact input and output, and optional exact groups. Field analysis, timeline
+   eligibility, reserved open-schema handling, output replacement, inspection
+   projection, and all defensive AST/logical/compiler checks fail closed on
+   forged percentile, predicate, field, path, alias, or group metadata.
+3. Eligibility exactly reuses the proven numeric-array contract shared with
+   `stats` percentiles and `eventstats sum`/`avg`: finite numbers, numeric
+   strings, decimals, canonical timestamps, and immediate multivalue numeric
+   members participate; duplicates remain observations. Missing, null, empty
+   strings, Booleans, bytes, objects, nonnumeric/nonfinite values, and nested
+   members do not. Results are nullable `Float64`.
+4. A complete global or grouped scope with no eligible member publishes a
+   present null. An incomplete `BY` tuple retains its source row with a
+   logically absent output. Production-digest field-summary integration proves
+   the distinction directly: projected-away global input is
+   `9 present / 9 null / 0 missing`, while the grouped fixture is
+   `7 present / 2 null / 2 missing` across nine rows.
+5. ClickHouse lowering uses `quantilesGKOrNullArray(100, level)` and documents
+   the explicit approximately one-percent rank-error boundary rather than
+   claiming Splunk's proprietary exact-small/approximate-large behavior. Each
+   stage calculates one bounded numeric member array per row and retains one
+   bounded GK state globally or per complete group. It performs no `ARRAY
+   JOIN`, row expansion, `groupArray`, pipeline sort, physical-event rescan, or
+   Go-side result buffering.
+6. The existing eventstats fence remains atomic: 10,000 rows succeed and the
+   10,001st sentinel fails the whole search even when a later projection,
+   filter, sort, or limit would hide every enriched row. Global lowering uses a
+   cross join; grouped lowering uses one `GROUP BY` and left join. Stacks retain
+   the established flat deferred graph, one physical scan, one earliest leaf
+   materialization, and the validated fanout budget. Same-input percentile
+   state fusion remains an optional guarded optimizer, not part of this
+   compatibility unit.
+7. Parser, plan, compiler, inspection, frontend, and production-digest
+   integration tests cover both spellings, levels 1/50/99, leading zeroes,
+   rejected syntax, reserved fields, forged metadata, Dynamic/fixed
+   multivalue/time normalization, global/grouped/projected/stacked execution,
+   nullable type and logical presence, parity with transforming `stats`, one
+   scan/no expansion, physical GK state counts, and hidden overflow.
+8. Three frozen-diff simplify passes found and removed duplicated parser
+   recognition, builder metadata mutation, GK SQL construction, integration
+   collectors, and a redundant database query. Three independent adversarial
+   passes found the private source-range comparison and missing logical-
+   presence proof; both were corrected and re-reviewed. No unresolved defect
+   remained.
+
+Validation on commit `b614080`:
+
+```sh
+git diff --check
+go mod tidy
+git diff --exit-code -- go.mod go.sum
+
+go test ./... -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-eventstats-percentile-coverage.out \
+  ./... -count=1
+go vet ./...
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+npm run test:frontend
+npm run typecheck
+npm run lint
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' -count=1 -v
+```
+
+Every local command passed. The race/shuffle tree was clean; representative
+coverage was 89.2% for `internal/clickhouse`, 88.0% for `internal/spl`, 87.5%
+for `internal/plan`, 87.4% for `internal/searchinspection`, and 86.4% for
+`internal/queryexec`. Cached golangci-lint v2.12.2 reported `0 issues`; module
+files remained unchanged; vet, Linux cross-build, and all frontend gates
+passed. The digest-pinned Store/compiler corpus passed in 292.08 seconds
+(292.506-second package result), and cleanup left no test-owned container or
+volume.
+
+GitHub Actions run
+[`30747680535`](https://github.com/Suhaibinator/open-splunk/actions/runs/30747680535)
+was fully green for the exact implementation commit after rerunning its one
+transient Backend vertical failure. The archived failure reached result-schema
+publication and then returned an unclassified driver/stream error before its
+first sparse row; it did not reproduce in 11 exact digest-pinned local runs or
+the adjacent deletion-lifecycle sequence. The rerun passed Backend vertical in
+19m47s and Go lint in 2m3s. Race/coverage, GradeThis compatibility, release
+OCI, frontend, vulnerability, protobuf, Linux/macOS production binaries, and
+release-asset consistency also passed.
+
+This unit retains GORM solely for the SQLite control plane and the native
+ClickHouse driver for event data. Additional SPL families, HEC compatibility,
+coordinated ClickHouse-native disaster recovery, and the explicitly deferred
+external GradeThis Compose collector cutover remain separate work. The overall
+backend goal remains active.
+
+## Previous checkpoint: bounded exact eventstats distinct count
 
 Date: 2026-08-02
 
