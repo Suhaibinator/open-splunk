@@ -7,6 +7,39 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Follow-up checkpoint: Backend vertical CI deadline hardening
+
+Date: 2026-08-02
+
+Committed implementation checkpoint:
+
+- `b597553` — make the large sequential ClickHouse Store corpus observable,
+  remove subsumed optimizer-heavy repetitions, and restore bounded CI headroom.
+
+The prior Backend vertical failure was not a `rex` semantic or transport bug.
+The compiled SPL corpus began at 05:29:11.833 UTC and the reported `rex`
+query inherited its expired context exactly 17 minutes later. The preceding
+successful `rex` cases still completed in 20–40 ms. The unlabelled interval
+contained the full stats/eventstats helper sequence, with ClickHouse optimizer
+fanout in `eventstats minimum` accounting for the dominant cost.
+
+This hardening keeps the fixture-dependent phases sequential but logs each
+phase's start and elapsed time. It retains live execution of both adversarial
+`spath`/eventstats orderings and the unique first-input/non-materialized field
+suggestion graph, while the existing unit matrix continues to pin all four
+simple/fenced materialization and argument-order shapes. Two simpler mixed
+queries and three redundant suggestion products were therefore removed without
+losing either runtime ordering or the riskiest live analysis proof.
+
+The nested budgets are now explicit: a 20-minute compiled corpus sits inside a
+27-minute Store lifecycle, the Go process has 30 minutes, and the Backend
+vertical job has 35 minutes for setup and artifact headroom. Locally, the full
+digest-pinned Store corpus passed in 350 seconds; `eventstats minimum` was
+reported at 3m23s and the complete `rex` phase at 1.06s. Full Go tests,
+ClickHouse-package race/shuffle tests, vet, module tidiness, workflow YAML
+parsing, and cached golangci-lint v2.12.2 (`0 issues`) also passed. Test-owned
+containers were cleaned up.
+
 ## Latest checkpoint: exact numeric spath leaves
 
 Date: 2026-08-02
