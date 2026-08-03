@@ -2,6 +2,7 @@ package spl
 
 import (
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -163,6 +164,48 @@ func TestParseChartSumAndAverageRejectsAdditionalAggregatesAliasesAndOptions(t *
 				t.Fatalf("Parse(%q) diagnostic = %#v, want %s", test.source, err, test.code)
 			}
 			assertSourceRangeText(t, test.source, diagnostic.Range, test.locatedAt)
+		})
+	}
+}
+
+func TestChartSumAndAverageSuggestionContext(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		source        string
+		kinds         []SuggestionKind
+		functionNames []string
+		keywords      []string
+	}{
+		{
+			source:        `| chart a`,
+			kinds:         []SuggestionKind{SuggestionKindFunction},
+			functionNames: []string{"count", "sum", "avg"},
+		},
+		{source: `| chart sum(`, kinds: []SuggestionKind{SuggestionKindField}},
+		{
+			source:   `| chart avg(latency) `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"OVER", "BY"},
+		},
+		{source: `| chart sum(bytes) OVER `, kinds: []SuggestionKind{SuggestionKindField}},
+		{source: `| chart avg(latency) OVER path BY `, kinds: []SuggestionKind{SuggestionKindField}},
+		{source: `| chart sum(bytes) BY `, kinds: []SuggestionKind{SuggestionKindField}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.source, func(t *testing.T) {
+			t.Parallel()
+
+			context, diagnostic := AnalyzeSuggestionContext(test.source, len(test.source))
+			if diagnostic != nil {
+				t.Fatalf("AnalyzeSuggestionContext(%q): %v", test.source, diagnostic)
+			}
+			if !slices.Equal(context.Kinds, test.kinds) ||
+				!slices.Equal(context.FunctionNames, test.functionNames) ||
+				!slices.Equal(context.Keywords, test.keywords) {
+				t.Fatalf("context for %q = %#v", test.source, context)
+			}
 		})
 	}
 }
