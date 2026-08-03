@@ -7,7 +7,119 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded chronological eventstats
+## Latest checkpoint: bounded exact eventstats values
+
+Date: 2026-08-02
+
+Committed implementation checkpoint:
+
+- `d5c3336` — bounded row-preserving
+  `eventstats values(field) AS output [BY ...]`.
+
+This test-first SPL unit adds exact distinct-value enrichment without a
+database or public API schema change, a control-plane migration, or GORM on the
+ClickHouse path:
+
+1. The parser accepts exactly one case-insensitive `values(field)` over an
+   unquoted exact field, requires an explicit exact `AS` output, and permits an
+   optional one-through-16 distinct exact-field `BY` tuple. Missing aliases,
+   wildcard, quoted, eval, empty, multiple-input, multiple-measure, option,
+   repeated-group, and every other unsupported form fail with source-located
+   diagnostics. Suggestions and the shared completion catalog expose the same
+   bounded grammar.
+2. Planning lowers the command to the singular row-preserving
+   `EventAggregate`, preserves result kind, time/index provenance, and the
+   complete upstream schema, and upserts only the requested fixed multivalue
+   output. Builder, analysis, Search Inspection, and defensive compiler
+   validation reject forged predicate, percentile, field, group, output, and
+   reserved-open-schema metadata.
+3. Values reuse the exact canonical scalar identities and immediate top-level
+   multivalue semantics of transforming `stats values` and `eventstats dc`.
+   Missing values, explicit nulls, empty multivalues, and null members
+   contribute nothing; an empty String is retained. Duplicates collapse across
+   members and rows, and the result is sorted by raw String bytes. Fixed
+   ClickHouse Strings with invalid UTF-8 remain byte-exact through the existing
+   String/Bytes result boundary.
+4. Generic objects, flattened object parents, nested arrays, and nested objects
+   poison the complete retained measure scope atomically. Incomplete `BY` rows
+   stay visible but cannot poison a complete group. A complete empty scope, an
+   incomplete group row, and a projected-away input all publish physical `[]`
+   with logical SPL absence. Alias replacement and later fixed-array
+   `count`/`values` composition retain that presence contract.
+5. Each global or grouped exact state retains one 10,001st sentinel: 10,000
+   published elements succeed and the sentinel fails. A cell is additionally
+   capped at 512 KiB of raw lexical bytes. Because eventstats repeats arrays on
+   source rows, the complete annotated relation is capped at 100,000 elements
+   and 8 MiB across all rows. The existing 10,000/10,001 input-row fence and
+   128-pass deferred-graph budget remain intact. A later filter, projection,
+   sort, or row limit cannot hide any poison or limit violation.
+6. Global lowering uses one bounded `groupUniqArrayArray(10001)` exact-set
+   definition; grouped lowering uses one bounded `GROUP BY` and one left join.
+   Element and payload-byte metadata are calculated once per aggregate cell
+   and reused by both cell and whole-annotation validation. The unsorted state
+   is validated first, and only an accepted cell pays for one raw-byte
+   `arraySort`. No approximate `uniq`, `ARRAY JOIN`, row expansion,
+   `groupArray`, physical-event rescan, or Go-side buffering is introduced.
+7. Eventstats-specific element and byte markers now classify into sanitized,
+   command-accurate execution-limit messages. Unit coverage pins the single
+   exact set, single payload fold, validation-before-sort order, one physical
+   scan, placeholder accounting, downstream validation envelope, logical
+   presence, replacement, composition, and forged-plan rejection.
+8. Production-digest integration covers canonical global/grouped ordering,
+   empty and incomplete scopes, projected input, hidden object/nested poison,
+   exact and overflowing cell/result element and byte boundaries, invalid
+   fixed String bytes, the input-row fence, and the physical plan. Grouped
+   `values -> count` and `count -> values` stacks cover the ClickHouse 26.3
+   deferred-CTE graph in both directions. The frontend needed no component,
+   transport, or result-schema change; only its shared completion-catalog
+   expectation changed.
+9. Three frozen-diff reuse/quality/efficiency reviews plus an independent
+   adversarial correctness pass found and corrected a duplicated test helper,
+   repeated payload walks, sorting rejected cells, stats-specific error text,
+   missing stacked-engine coverage, and a distinct-count-only helper name.
+   Post-fix quality, efficiency, and correctness re-reviews found no remaining
+   actionable issue.
+
+Validation on commit `d5c3336`:
+
+```sh
+git diff --check
+go mod tidy -diff
+
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+CGO_ENABLED=0 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=8m -v
+```
+
+Every final command passed. The full unit tree completed in 31.04 seconds and
+the race/shuffle tree in 63.46 seconds; module files remained unchanged; vet,
+the CGO-disabled build, and cached golangci-lint v2.12.2 were clean with
+`0 issues`. Frontend lint and type-check passed, all 65 build-transaction tests
+and 137 frontend tests passed, and the 11-page static production build
+succeeded without a generated tracked change. The final digest-pinned
+Store/compiler corpus passed in 307.10 seconds (307.642-second package result),
+and its disposable ClickHouse container was removed.
+
+This unit retains GORM solely for the SQLite control plane and the native
+ClickHouse driver for event data. The external GradeThis Compose collector
+cutover remains explicitly deferred. Broader SPL compatibility remains the
+next backend stream, and the overall backend goal remains active.
+
+## Previous checkpoint: bounded chronological eventstats
 
 Date: 2026-08-02
 
