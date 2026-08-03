@@ -17,6 +17,9 @@ Committed implementation checkpoint:
   pivots.
 - `8d032b1` — pin numeric-chart aggregate, measure, and axis completion
   contexts after the final documentation review.
+- `a6a337f` — ratchet digest-pinned numeric-chart SQL coverage into CI and
+  prove nullable `sum`/`avg` publication through the production executor and
+  job manager.
 
 This test-first SPL unit extends the two-axis chart path without a control-plane
 schema change, migration, public protobuf change, GORM on the ClickHouse path,
@@ -77,45 +80,48 @@ or frontend transport/component change:
    ordering risk, malformed empty-domain acceptance, loose row scan type,
    undercounted buffering, and five documentation contradictions; every
    concrete finding was fixed and rechecked.
+9. The CI backend vertical now selects the dedicated digest-pinned numeric
+   chart suite in addition to the existing executor/manager suite. The latter
+   now carries a live numeric fixture through ClickHouse, the production
+   executor, job persistence, and result paging. It asserts nullable Double
+   schema, weighted `OTHER` (`50/21` for average), genuine zero versus null,
+   all-ineligible row retention, and no partial schema or rows when numeric
+   chart validation fails. The fixture uses isolated source and event IDs, and
+   an independent adversarial review found no false-green, ordering, fixture
+   contamination, selector, or time-budget issue.
 
-Validation for `1a9f6ef`, `8d032b1`, and the final reviewed state:
+Validation for `1a9f6ef`, `8d032b1`, `a6a337f`, and the final reviewed state:
 
 ```sh
 git diff --check
 go mod tidy -diff
 go test ./... -count=1
-go test -race ./internal/spl ./internal/plan ./internal/clickhouse \
-  ./internal/queryexec ./internal/searchjobs ./internal/export \
-  ./internal/searchinspection -count=1
+go test -race ./... -count=1
 go vet ./...
 go build ./...
 
 /Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
   run ./...
 
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
-go test ./internal/queryexec \
-  -run '^TestExecutorAndManagerAgainstClickHouse$' \
-  -count=1 -timeout=6m -v
-
-OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
-OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
-go test ./internal/clickhouse \
-  -run '^TestNumericChartAgainstClickHouse$' \
-  -count=1 -timeout=6m -v
+go test ./internal/clickhouse ./internal/queryexec \
+  -run '^(TestNumericChartAgainstClickHouse|TestExecutorAndManagerAgainstClickHouse)$' \
+  -count=1 -p=1 -timeout=15m -v
 ```
 
 Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`.
-The complete pinned executor/manager vertical passed in 25.87 seconds, and the
+The complete pinned executor/manager vertical passed in 25.25 seconds, and the
 focused numeric-chart suite passed in 7.69 seconds. No test-owned ClickHouse
 containers or volumes remained. The preceding pushed main runs `30849697473`,
 `30844985317`, and `30842254430` passed all jobs, including the previously
-reported Backend vertical and Go lint failures. The implementation run
-`30854640701` had already passed Go lint, GradeThis, vulnerability, protobuf,
-and frontend jobs when this checkpoint was recorded; Backend vertical and the
-remaining jobs were still in progress. The external GradeThis Compose cutover
-remains explicitly deferred, and the broader backend/SPL goal remains active.
+reported Backend vertical and Go lint failures. Run `30855261335` passed Go
+tests, lint, vulnerability, release OCI, frontend, protobuf, GradeThis, and the
+backend vertical before the `a6a337f` push superseded it during the downstream
+production-binary jobs. The `a6a337f` run is `30856322563`. The external
+GradeThis Compose cutover remains explicitly deferred, and the broader
+backend/SPL goal remains active.
 
 ## Latest checkpoint: bounded multi-field top and rare
 
