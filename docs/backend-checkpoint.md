@@ -7,6 +7,117 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded multi-field top and rare
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `5db9816` — add exact, bounded multi-field `top` and `rare` tuple execution.
+
+This test-first SPL unit extends the existing frequency commands without a
+control-plane schema change, migration, public protobuf change, GORM on the
+ClickHouse path, or frontend code change:
+
+1. `top` and `rare` now accept from one through 16 distinct exact unquoted
+   fields, separated by commas, after the default, positional, or `limit=N`
+   result count. The parser retains every source range and rejects whitespace
+   separation, malformed commas, duplicates, wildcards, quoted fields, `BY`,
+   unsupported options, negative/overflow limits, and a seventeenth field with
+   source-located diagnostics. The planner independently rechecks empty,
+   oversized, duplicate, invalid, and generated `count`/`percent` collisions
+   against forged ASTs.
+2. Output fields preserve the requested tuple order, followed by unsigned
+   `count` and unrounded Float64 `percent`. One aggregate groups the complete
+   tuple, one window computes each percentage over the full eligible domain
+   before limiting, and one bounded sort selects the result. `top` orders count
+   descending and `rare` count ascending; both then order every tuple component
+   left-to-right in descending lexical scalar order for deterministic cutoffs.
+   The positive maximum-width proof compiles 16 aggregate keys and 17 sort keys
+   with one scoped event-table scan.
+3. A row participates only when every tuple component is present, non-null,
+   and scalar. Empty strings remain values. Dynamic scalar identity reuses the
+   established `stats BY` normalization; a list, object, flattened parent, or
+   nested container in any component fails the complete command atomically.
+   Missing, projected-away, nullable, empty-string, and invalid-container tuple
+   cases are covered against the digest-pinned ClickHouse server.
+4. The live tuple fixture deliberately gives its first and second fields
+   opposing lexical ranks, so reversing source-order tie keys fails the test.
+   It also proves full-domain percentages, count-direction differences between
+   `top` and `rare`, four-column physical types, and deterministic limited rows.
+   The manager path publishes the same ordered four-column typed schema and
+   values without an extra integration job.
+5. Editor completion follows the same bounded grammar. It excludes committed
+   tuple names exactly, generated `count`/`percent` exactly, and `BY`
+   case-insensitively while retaining valid case-distinct fields. A bounded,
+   tolerant same-stage suffix scan also prevents a replacement at an earlier
+   cursor from duplicating a later field, without surfacing diagnostics from an
+   unrelated malformed suffix. Exclusions are deep-cloned through the
+   production suggestion service and remain private at the HTTP API boundary.
+6. The implementation reuses the existing stats grouping-field type, maximum,
+   planner resolver, aggregate compiler, scalar eligibility, and sort path.
+   Parser duplicate checks use a bounded linear scan, completion state uses a
+   fixed 16-field array, and existing Store/manager integration cases were
+   converted to tuples instead of adding redundant live queries or jobs.
+7. Unit coverage spans parser ranges and diagnostics, completion limits and
+   mid-stage cursors, production suggestion filtering/cloning, planner output
+   and forged inputs, maximum-width lowering, compiler shape and
+   percent-before-limit order, downstream projection, manager transport, and
+   API non-leakage.
+   The pinned Store corpus covers ordered values, percentages, eligibility,
+   physical types, projection, and atomic invalid-domain failure.
+8. Three independent simplify/adversarial review passes found duplicated stats
+   tuple machinery, avoidable integration executions and completion
+   allocations, brittle SQL assertions, missing maximum-width proof, invalid
+   limit completion, generated/duplicate field suggestions, earlier-cursor
+   suffix duplication, a false-positive tuple-order fixture, and missing clone
+   and API-boundary assertions. Every concrete finding was fixed and
+   independently rechecked; the final reuse, quality, and efficiency reviewers
+   reported no remaining concrete issue.
+
+Validation for `5db9816` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+go test ./... -count=1
+go test -race ./internal/spl ./internal/plan ./internal/clickhouse \
+  ./internal/queryexec ./internal/searchsuggestions ./internal/server -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend lint/type-check, all 65 build-transaction tests, all 140 frontend
+tests, and the 11-page production build passed. The complete pinned
+query-executor/manager vertical passed in 23.49 seconds (23.888-second package
+result), and the final pinned Store corpus passed in 135.28 seconds
+(135.698-second package result). No test-owned ClickHouse containers or volumes
+remained. The preceding pushed main run `30844985317` passed all 11 jobs,
+including the previously reported Backend vertical and Go lint failures. The
+external GradeThis Compose cutover remains explicitly deferred, and the broader
+backend/SPL goal remains active.
+
 ## Latest checkpoint: bounded split percentile timechart
 
 Date: 2026-08-03
