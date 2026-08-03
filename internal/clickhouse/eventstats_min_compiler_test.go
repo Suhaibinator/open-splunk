@@ -24,7 +24,17 @@ func TestCompileEventStatsMinimumFoldsOneBoundedDynamicInputToScalarWinners(
 		t.Fatalf("eventstats min output fields = %#v", compiled.OutputFields)
 	}
 
-	inputAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_input_")
+	resultInputAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_result_input_",
+	)
+	barrierAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_result_",
+	)
+	rowsAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_rows_")
 	measureAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_measure_")
 	publishedAlias := eventStatsPrivateAlias(
 		t,
@@ -32,11 +42,18 @@ func TestCompileEventStatsMinimumFoldsOneBoundedDynamicInputToScalarWinners(
 		"__os_eventstats_published_value_",
 	)
 	typeAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_extrema_type_")
+	validationAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_validation_",
+	)
 	sentinel := `LIMIT ` + strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
 	for _, required := range []string{
-		inputAlias + ` AS MATERIALIZED (`,
+		resultInputAlias + ` AS MATERIALIZED (`,
+		barrierAlias + ` AS (SELECT * FROM ` + resultInputAlias + `)`,
 		sentinel,
-		`dynamicElement("__os_fields"."eventstats_value", 'Array(Dynamic)')`,
+		`dynamicType("__os_fields"."eventstats_value")`,
+		`dynamicElement(__os_eventstats_extrema_field_value, 'Array(Dynamic)')`,
 		`arrayFold((__os_eventstats_extrema_state, element) ->`,
 		`__os_eventstats_extrema_candidate`,
 		`'decimal/v1'`,
@@ -47,8 +64,12 @@ func TestCompileEventStatsMinimumFoldsOneBoundedDynamicInputToScalarWinners(
 			strconv.Itoa(MaximumExactNumericOrderingTextBytes),
 		`argMinOrNullIf(tuple(tupleElement(` + measureAlias + `, 2), tupleElement(` +
 			measureAlias + `, 3), tupleElement(` + measureAlias + `, 4)), tupleElement(` +
-			measureAlias + `, 1), tupleElement(` + measureAlias + `, 5) != 0)`,
-		`maxOrDefault(toUInt8(tupleElement(` + measureAlias + `, 6)))`,
+			measureAlias + `, 1), tupleElement(` + measureAlias + `, 5) != 0) OVER ()`,
+		`count() OVER ()`,
+		`toUInt8(toUInt8(tupleElement(` + measureAlias + `, 6))) AS ` + validationAlias,
+		`toUInt8(` + rowsAlias + `.` + validationAlias + `) AS ` + validationAlias,
+		`SELECT toUInt8((` + validationAlias + ` != 0)) AS ` +
+			quoteIdentifier("__os_chronological_invalid") + ` FROM ` + barrierAlias,
 		` AS ` + publishedAlias,
 		`.` + publishedAlias + ` AS "low"`,
 		`AS "low"`,
@@ -62,26 +83,27 @@ func TestCompileEventStatsMinimumFoldsOneBoundedDynamicInputToScalarWinners(
 			t.Fatalf("eventstats min SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	if got := strings.Count(compiled.SQL, inputAlias+` AS MATERIALIZED (`); got != 1 {
-		t.Fatalf("bounded eventstats min input definitions = %d, want 1:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, resultInputAlias+` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("bounded eventstats min result-input definitions = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("eventstats min materialized CTEs = %d, want only result input:\n%s", got, compiled.SQL)
 	}
 	if got := strings.Count(compiled.SQL, sentinel); got != 1 {
 		t.Fatalf("eventstats min sentinel limits = %d, want 1:\n%s", got, compiled.SQL)
 	}
-	inputStart := strings.Index(compiled.SQL, inputAlias+` AS MATERIALIZED (`)
-	if inputStart < 0 {
-		t.Fatalf("eventstats min bounded input is missing:\n%s", compiled.SQL)
-	}
-	inputEnd := strings.Index(compiled.SQL[inputStart:], sentinel)
-	if inputEnd < 0 {
-		t.Fatalf("eventstats min bounded input is missing:\n%s", compiled.SQL)
-	}
-	boundedInput := compiled.SQL[inputStart : inputStart+inputEnd]
-	if strings.Contains(boundedInput, UnsupportedStatsMeasureValueMarker) {
+	barrierAt := strings.Index(compiled.SQL, barrierAlias+` AS (`)
+	unsupportedAt := strings.Index(compiled.SQL, UnsupportedStatsMeasureValueMarker)
+	if barrierAt < 0 || unsupportedAt <= barrierAt {
 		t.Fatalf(
-			"eventstats min row fold throws before whole-result validation:\n%s",
-			boundedInput,
+			"eventstats min final validation does not consume the result barrier: barrier=%d final throw=%d:\n%s",
+			barrierAt,
+			unsupportedAt,
+			compiled.SQL,
 		)
+	}
+	if got := strings.Count(compiled.SQL, ` AS `+validationAlias); got != 2 {
+		t.Fatalf("eventstats min validation projections = %d, want row-local plus result projection:\n%s", got, compiled.SQL)
 	}
 	if got := strings.Count(compiled.SQL, `arrayFold(`); got != 1 {
 		t.Fatalf("eventstats min Dynamic member folds = %d, want 1:\n%s", got, compiled.SQL)
@@ -89,15 +111,8 @@ func TestCompileEventStatsMinimumFoldsOneBoundedDynamicInputToScalarWinners(
 	if got := strings.Count(compiled.SQL, `argMinOrNullIf(`); got != 1 {
 		t.Fatalf("eventstats min aggregate count = %d, want 1:\n%s", got, compiled.SQL)
 	}
-	publicationAt := strings.Index(compiled.SQL, ` AS `+publishedAlias)
-	annotationAt := strings.Index(compiled.SQL, `.`+publishedAlias+` AS "low"`)
-	if publicationAt < 0 || annotationAt <= publicationAt {
-		t.Fatalf(
-			"eventstats min publication was not prepared before annotation: publication=%d annotation=%d\n%s",
-			publicationAt,
-			annotationAt,
-			compiled.SQL,
-		)
+	if got := strings.Count(compiled.SQL, ` AS `+publishedAlias); got != 1 {
+		t.Fatalf("eventstats min published-value definitions = %d, want 1:\n%s", got, compiled.SQL)
 	}
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("eventstats min physical scan count = %d, want 1:\n%s", got, compiled.SQL)
@@ -228,10 +243,15 @@ func TestCompileEventStatsMinimumKeepsSearchScopeBelowTheInputFence(t *testing.T
 		t,
 		`index=gradethis source="eventstats-min-fixture" host="web" | eventstats min(eventstats_value) AS low | table event_id low`,
 	)
-	inputAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_input_")
-	inputStart := strings.Index(compiled.SQL, inputAlias+` AS MATERIALIZED (`)
+	resultInputAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_result_input_",
+	)
+	preparedAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_prepared_")
+	inputStart := strings.Index(compiled.SQL, resultInputAlias+` AS MATERIALIZED (`)
 	if inputStart < 0 {
-		t.Fatalf("eventstats min materialized input is missing:\n%s", compiled.SQL)
+		t.Fatalf("eventstats min materialized result input is missing:\n%s", compiled.SQL)
 	}
 	sentinel := `LIMIT ` + strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
 	limitOffset := strings.Index(compiled.SQL[inputStart:], sentinel)
@@ -239,6 +259,16 @@ func TestCompileEventStatsMinimumKeepsSearchScopeBelowTheInputFence(t *testing.T
 		t.Fatalf("eventstats min input fence is missing:\n%s", compiled.SQL)
 	}
 	boundedInput := compiled.SQL[inputStart : inputStart+limitOffset]
+	scanAt := strings.Index(boundedInput, `FROM "open_splunk"."events"`)
+	whereAt := strings.Index(boundedInput, `WHERE "tenant_id" = ?`)
+	if scanAt < 0 || whereAt <= scanAt {
+		t.Fatalf(
+			"eventstats min source scan or scope is outside the bounded input: scan=%d where=%d\n%s",
+			scanAt,
+			whereAt,
+			compiled.SQL,
+		)
+	}
 	for _, predicate := range []string{
 		`WHERE "tenant_id" = ? AND "index_name" IN (?)`,
 		`"event_time" >= parseDateTime64BestEffort(?, 9, 'UTC')`,
@@ -257,10 +287,20 @@ func TestCompileEventStatsMinimumKeepsSearchScopeBelowTheInputFence(t *testing.T
 			)
 		}
 	}
-	limitAt := inputStart + limitOffset
-	minimumAt := strings.Index(compiled.SQL, `argMinOrNullIf(`)
-	if minimumAt < limitAt {
-		t.Fatalf("eventstats min aggregate ran before its input fence:\n%s", compiled.SQL)
+	if !strings.Contains(
+		compiled.SQL[inputStart+limitOffset:],
+		sentinel+`) AS `+preparedAlias,
+	) {
+		t.Fatalf("eventstats min prepared window does not consume the bounded input:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, sentinel); got != 1 {
+		t.Fatalf("eventstats min scope sentinel limits = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("eventstats min scope physical scans = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d", got, want)
 	}
 }
 
@@ -273,8 +313,16 @@ func TestCompileEventStatsMinimumUsesOneGroupedAggregateAndPreservesPresence(
 		t,
 		`index=gradethis | eventstats min(eventstats_value) AS low BY eventstats_group | search low=* | sort 0 +event_id | table event_id eventstats_group low`,
 	)
+	resultInputAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_result_input_",
+	)
+	barrierAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_result_")
+	rowsAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_rows_")
 	existsAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_exists_")
 	eligibleAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_eligible_")
+	groupAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_group_")
 	measureAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_measure_")
 	publishedAlias := eventStatsPrivateAlias(
 		t,
@@ -282,16 +330,26 @@ func TestCompileEventStatsMinimumUsesOneGroupedAggregateAndPreservesPresence(
 		"__os_eventstats_published_value_",
 	)
 	typeAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_extrema_type_")
+	validationAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_validation_",
+	)
 	for _, required := range []string{
+		resultInputAlias + ` AS MATERIALIZED (`,
+		barrierAlias + ` AS (SELECT * FROM ` + resultInputAlias + `)`,
 		`arrayFold((__os_eventstats_extrema_state, element) ->`,
 		`argMinOrNullIf(tuple(tupleElement(` + measureAlias + `, 2), tupleElement(` +
 			measureAlias + `, 3), tupleElement(` + measureAlias + `, 4)), tupleElement(` +
-			measureAlias + `, 1), tupleElement(` + measureAlias + `, 5) != 0)`,
-		`maxOrDefault(toUInt8(tupleElement(` + measureAlias + `, 6)))`,
-		`GROUP BY "__os_eventstats_group_0"`,
-		`LEFT JOIN`,
+			measureAlias + `, 1), tupleElement(` + measureAlias + `, 5) != 0) OVER (` +
+			`PARTITION BY ` + eligibleAlias + `, ` + groupAlias + `)`,
+		`tupleElement(` + groupAlias + `, 2) != 0`,
+		`tupleElement(` + groupAlias + `, 3) != 0`,
+		`tupleElement(` + measureAlias + `, 6)`,
+		` AS ` + validationAlias,
 		` AS ` + publishedAlias,
-		`.` + publishedAlias,
+		`if(` + rowsAlias + `.` + eligibleAlias + ` != 0, ` + rowsAlias + `.` +
+			publishedAlias + `, CAST(NULL AS Dynamic)) AS "low"`,
 		existsAlias,
 		` AS ` + typeAlias,
 		`AS "low"`,
@@ -307,29 +365,22 @@ func TestCompileEventStatsMinimumUsesOneGroupedAggregateAndPreservesPresence(
 	if got := strings.Count(compiled.SQL, `argMinOrNullIf(`); got != 1 {
 		t.Fatalf("grouped eventstats min aggregates = %d, want 1:\n%s", got, compiled.SQL)
 	}
-	if got := strings.Count(compiled.SQL, ` GROUP BY `); got != 1 {
-		t.Fatalf("grouped eventstats min grouping passes = %d, want 1:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, `PARTITION BY `); got != 1 {
+		t.Fatalf("grouped eventstats min window partitions = %d, want 1:\n%s", got, compiled.SQL)
 	}
-	if got := strings.Count(compiled.SQL, ` LEFT JOIN `); got != 1 {
-		t.Fatalf("grouped eventstats min left joins = %d, want 1:\n%s", got, compiled.SQL)
-	}
-	publicationAt := strings.Index(compiled.SQL, ` AS `+publishedAlias)
-	joinAt := strings.Index(compiled.SQL, ` LEFT JOIN `)
-	if publicationAt < 0 || joinAt <= publicationAt {
-		t.Fatalf(
-			"grouped eventstats min publication was not prepared before annotation join: publication=%d join=%d\n%s",
-			publicationAt,
-			joinAt,
-			compiled.SQL,
-		)
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("grouped eventstats min materialized CTEs = %d, want result input only:\n%s", got, compiled.SQL)
 	}
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("grouped eventstats min physical scans = %d, want 1:\n%s", got, compiled.SQL)
 	}
+	if got := strings.Count(compiled.SQL, ` AS `+groupAlias); got != 1 {
+		t.Fatalf("grouped eventstats min group classifiers = %d, want 1:\n%s", got, compiled.SQL)
+	}
 	eligibilityProjectionAt := strings.Index(compiled.SQL, ` AS `+eligibleAlias)
-	gateAt := strings.Index(compiled.SQL, `if(`+eligibleAlias+` != 0, multiIf(`)
+	gateAt := strings.Index(compiled.SQL, `if(`+eligibleAlias+` != 0, arrayFold(`)
 	foldAt := strings.Index(compiled.SQL, `arrayFold(`)
-	if eligibilityProjectionAt < 0 || gateAt <= eligibilityProjectionAt || foldAt <= gateAt {
+	if eligibilityProjectionAt < 0 || gateAt <= eligibilityProjectionAt || foldAt != gateAt+len(`if(`+eligibleAlias+` != 0, `) {
 		t.Fatalf(
 			"group eligibility does not gate Dynamic member traversal: projection=%d gate=%d fold=%d\n%s",
 			eligibilityProjectionAt,
@@ -346,10 +397,45 @@ func TestCompileEventStatsMinimumUsesOneGroupedAggregateAndPreservesPresence(
 		"Array(Tuple(String, String))",
 		"arrayFilter(element ->",
 		"arrayExists(element ->",
+		" GROUP BY ",
+		" LEFT JOIN ",
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("grouped eventstats min contains row-multiplying %q:\n%s", forbidden, compiled.SQL)
 		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d", got, want)
+	}
+}
+
+func TestCompileEventStatsMinimumOrdersMeasureBeforeMultiKeyClassifiers(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | eventstats min(measure_value) AS low BY first_group second_group | where low=2 | table event_id low`,
+	)
+	wantPrefix := []any{
+		"measure_value",
+		"measure_value.",
+		"first_group",
+		"first_group.",
+		"second_group",
+		"second_group.",
+	}
+	if len(compiled.Args) < len(wantPrefix) ||
+		!slices.Equal(compiled.Args[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf(
+			"grouped eventstats min argument prefix = %#v, want %#v",
+			compiled.Args,
+			wantPrefix,
+		)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d", got, want)
 	}
 }
 
@@ -407,7 +493,23 @@ func TestCompileEventStatsMinimumCannotPruneUnsupportedContainerValidation(
 	if !slices.Equal(compiled.OutputFields, []string{"event_id"}) {
 		t.Fatalf("discarded eventstats min output fields = %#v", compiled.OutputFields)
 	}
+	resultInputAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_result_input_",
+	)
+	barrierAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_result_")
+	validationAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_validation_",
+	)
 	for _, required := range []string{
+		resultInputAlias + ` AS MATERIALIZED (`,
+		barrierAlias + ` AS (SELECT * FROM ` + resultInputAlias + `)`,
+		` AS ` + validationAlias,
+		`SELECT toUInt8((` + validationAlias + ` != 0)) AS ` +
+			quoteIdentifier("__os_chronological_invalid") + ` FROM ` + barrierAlias,
 		UnsupportedStatsMeasureValueMarker,
 		EventStatsInputLimitMarker,
 		`WHERE 0`,
@@ -424,10 +526,22 @@ func TestCompileEventStatsMinimumCannotPruneUnsupportedContainerValidation(
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("validation envelope rescans events %d times, want 1:\n%s", got, compiled.SQL)
 	}
-	for _, forbidden := range []string{"ARRAY JOIN", "arrayJoin(", "groupArray("} {
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("validation envelope materialized CTEs = %d, want result input only:\n%s", got, compiled.SQL)
+	}
+	for _, forbidden := range []string{
+		"ARRAY JOIN",
+		"arrayJoin(",
+		"groupArray(",
+		" GROUP BY ",
+		" LEFT JOIN ",
+	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("validation envelope contains row-multiplying %q:\n%s", forbidden, compiled.SQL)
 		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d", got, want)
 	}
 }
 
@@ -445,7 +559,11 @@ func TestCompileEventStatsMinimumAnalysisKeepsOneMaterializedLeaf(t *testing.T) 
 	if err != nil {
 		t.Fatalf("CompileFieldSuggestions: %v", err)
 	}
-	inputAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_input_")
+	resultInputAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_result_input_",
+	)
 	barrierAlias := eventStatsPrivateAlias(
 		t,
 		compiled.SQL,
@@ -462,8 +580,8 @@ func TestCompileEventStatsMinimumAnalysisKeepsOneMaterializedLeaf(t *testing.T) 
 		"__os_chronological_validation_",
 	)
 	for _, required := range []string{
-		inputAlias + ` AS MATERIALIZED (`,
-		barrierAlias + ` AS (`,
+		resultInputAlias + ` AS MATERIALIZED (`,
+		barrierAlias + ` AS (SELECT * FROM ` + resultInputAlias + `)`,
 		quoteIdentifier(fieldSuggestionSourceCTE) + ` AS (`,
 		finalAlias + ` AS (`,
 		validationAlias + ` AS (`,
@@ -476,10 +594,22 @@ func TestCompileEventStatsMinimumAnalysisKeepsOneMaterializedLeaf(t *testing.T) 
 	}
 	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
 		t.Fatalf(
-			"eventstats analysis materialized CTEs = %d, want only bounded leaf:\n%s",
+			"eventstats analysis materialized CTEs = %d, want only result input:\n%s",
 			got,
 			compiled.SQL,
 		)
+	}
+	if got := strings.Count(compiled.SQL, `arrayFold(`); got != 1 {
+		t.Fatalf("eventstats analysis folds = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `argMinOrNullIf(`); got != 1 {
+		t.Fatalf("eventstats analysis window minima = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(
+		compiled.SQL,
+		`LIMIT `+strconv.FormatUint(MaximumEventStatsInputRows+1, 10),
+	); got != 1 {
+		t.Fatalf("eventstats analysis sentinel limits = %d, want 1:\n%s", got, compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d", got, want)
@@ -541,7 +671,7 @@ func TestCompileStackedEventStatsMinimumAnalysisKeepsFirstBoundedLeaf(
 		t.Fatalf("CompileFieldSuggestions: %v", err)
 	}
 	inputDefinitions := regexp.MustCompile(
-		`"__os_eventstats_input_[0-9]+" AS (?:MATERIALIZED )?\(`,
+		`"__os_eventstats_result_input_[0-9]+" AS (?:MATERIALIZED )?\(`,
 	).FindAllString(compiled.SQL, -1)
 	if len(inputDefinitions) != 2 ||
 		!strings.Contains(inputDefinitions[0], " AS MATERIALIZED (") ||
@@ -550,6 +680,21 @@ func TestCompileStackedEventStatsMinimumAnalysisKeepsFirstBoundedLeaf(
 	}
 	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
 		t.Fatalf("stacked eventstats materialized CTEs = %d, want first leaf only", got)
+	}
+	if got := strings.Count(
+		compiled.SQL,
+		`LIMIT `+strconv.FormatUint(MaximumEventStatsInputRows+1, 10),
+	); got != 2 {
+		t.Fatalf("stacked eventstats sentinel limits = %d, want 2:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `arrayFold(`); got != 2 {
+		t.Fatalf("stacked eventstats folds = %d, want 2:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `argMinOrNullIf(`); got != 2 {
+		t.Fatalf("stacked eventstats window minima = %d, want 2:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("stacked eventstats physical scans = %d, want 1:\n%s", got, compiled.SQL)
 	}
 	firstAt := slices.Index(compiled.Args, any("first_payload"))
 	secondAt := slices.Index(compiled.Args, any("second_payload"))
@@ -568,6 +713,7 @@ func TestCompileMixedEventStatsAnalysisKeepsOneFlatMaterializedLeaf(t *testing.T
 		name                       string
 		source                     string
 		wantFirstInputMaterialized bool
+		wantSentinelLimits         int
 		argumentOrder              []string
 	}{
 		{
@@ -575,19 +721,22 @@ func TestCompileMixedEventStatsAnalysisKeepsOneFlatMaterializedLeaf(t *testing.T
 			source: `index=gradethis | eventstats count AS peers` +
 				` | eventstats min(payload) AS low`,
 			wantFirstInputMaterialized: true,
+			wantSentinelLimits:         2,
 		},
 		{
 			name: "minimum then count",
 			source: `index=gradethis | eventstats min(payload) AS low` +
 				` | eventstats count AS peers`,
 			wantFirstInputMaterialized: true,
+			wantSentinelLimits:         2,
 		},
 		{
 			name: "fenced conditional count then minimum",
 			source: `index=gradethis | spath input=_raw output=selected path=needle` +
 				` | eventstats count(eval(selected="wanted")) AS hits` +
 				` | eventstats min(payload) AS low`,
-			argumentOrder: []string{"needle", "wanted", "payload"},
+			wantSentinelLimits: 3,
+			argumentOrder:      []string{"needle", "wanted", "payload"},
 		},
 		{
 			name: "minimum then fenced conditional count",
@@ -595,6 +744,7 @@ func TestCompileMixedEventStatsAnalysisKeepsOneFlatMaterializedLeaf(t *testing.T
 				` | spath input=_raw output=selected path=needle` +
 				` | eventstats count(eval(selected="wanted")) AS hits`,
 			wantFirstInputMaterialized: true,
+			wantSentinelLimits:         3,
 			argumentOrder:              []string{"payload", "needle", "wanted"},
 		},
 	} {
@@ -611,7 +761,7 @@ func TestCompileMixedEventStatsAnalysisKeepsOneFlatMaterializedLeaf(t *testing.T
 				t.Fatalf("CompileFieldSuggestions: %v", err)
 			}
 			inputDefinitions := regexp.MustCompile(
-				`"__os_eventstats_input_[0-9]+" AS (?:MATERIALIZED )?\(`,
+				`"__os_eventstats_(?:input|result_input)_[0-9]+" AS (?:MATERIALIZED )?\(`,
 			).FindAllString(compiled.SQL, -1)
 			if len(inputDefinitions) != 2 ||
 				strings.Contains(inputDefinitions[0], " AS MATERIALIZED (") !=
@@ -632,6 +782,23 @@ func TestCompileMixedEventStatsAnalysisKeepsOneFlatMaterializedLeaf(t *testing.T
 			}
 			if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 				t.Fatalf("mixed eventstats physical scans = %d, want 1:\n%s", got, compiled.SQL)
+			}
+			if got := strings.Count(
+				compiled.SQL,
+				`LIMIT `+strconv.FormatUint(MaximumEventStatsInputRows+1, 10),
+			); got != test.wantSentinelLimits {
+				t.Fatalf(
+					"mixed eventstats sentinel limits = %d, want %d:\n%s",
+					got,
+					test.wantSentinelLimits,
+					compiled.SQL,
+				)
+			}
+			if got := strings.Count(compiled.SQL, `arrayFold(`); got != 1 {
+				t.Fatalf("mixed eventstats minimum folds = %d, want 1:\n%s", got, compiled.SQL)
+			}
+			if got := strings.Count(compiled.SQL, `argMinOrNullIf(`); got != 1 {
+				t.Fatalf("mixed eventstats window minima = %d, want 1:\n%s", got, compiled.SQL)
 			}
 			if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 				t.Fatalf("placeholder count = %d, args = %d", got, want)

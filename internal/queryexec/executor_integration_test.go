@@ -20,6 +20,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -207,6 +208,14 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
 	binaryIndexTime := queryIntegrationInsertBinaryEvent(t, ctx, connection)
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
+	t.Run("eventstats production resource envelope", func(t *testing.T) {
+		queryIntegrationTestEventStatsProductionEnvelope(
+			t,
+			ctx,
+			connection,
+			eventIndexTime,
+		)
+	})
 	t.Run("fixed percentile timechart", func(t *testing.T) {
 		queryIntegrationTestFixedPercentileTimechart(
 			t,
@@ -2190,7 +2199,8 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	t.Helper()
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
-		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
+		"raw_encoding, trace_id, span_id, fields, field_names, field_types, field_metadata_version, " +
+		"collector_id, batch_id, batch_sequence, " +
 		"expires_at, visibility_seq)"
 	batch, err := connection.PrepareBatch(ctx, query)
 	if err != nil {
@@ -2198,22 +2208,37 @@ func queryIntegrationInsertEvent(t *testing.T, ctx context.Context, connection c
 	}
 	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Second).Add(987 * time.Millisecond)
 	message := "manager integration"
+	fields := []struct {
+		name       string
+		value      any
+		storedType eventfields.StoredValueType
+	}{
+		{"component.child", clickhousedriver.NewDynamic("stored-target-child"), eventfields.StoredValueTypeString},
+		{"duration", clickhousedriver.NewDynamic("650ms"), eventfields.StoredValueTypeString},
+		{"logger.child", clickhousedriver.NewDynamic("stored-source-child"), eventfields.StoredValueTypeString},
+		{"path", clickhousedriver.NewDynamic("/manager"), eventfields.StoredValueTypeString},
+		{"payload", clickhousedriver.NewDynamic(`{"items":[{"sku":"sku-1"}]}`), eventfields.StoredValueTypeString},
+		{"status", clickhousedriver.NewDynamic("200"), eventfields.StoredValueTypeString},
+		{"typed_bytes", queryIntegrationExtendedValue("bytes/v1", "AP8"), eventfields.StoredValueTypeBytes},
+		{"typed_decimal", queryIntegrationExtendedValue("decimal/v1", "-123.4500e+2"), eventfields.StoredValueTypeDecimal},
+		{"typed_duration", queryIntegrationExtendedValue("duration/v1", "-12:-345000000"), eventfields.StoredValueTypeDuration},
+		{"typed_timestamp", queryIntegrationExtendedValue("timestamp/v1", now.Add(42*time.Second).Format(time.RFC3339Nano)), eventfields.StoredValueTypeTimestamp},
+	}
 	document := clickhousedriver.NewJSON()
-	document.SetValueAtPath("status", clickhousedriver.NewDynamic("200"))
-	document.SetValueAtPath("path", clickhousedriver.NewDynamic("/manager"))
-	document.SetValueAtPath("payload", clickhousedriver.NewDynamic(`{"items":[{"sku":"sku-1"}]}`))
-	document.SetValueAtPath("duration", clickhousedriver.NewDynamic("650ms"))
-	document.SetValueAtPath("logger.child", clickhousedriver.NewDynamic("stored-source-child"))
-	document.SetValueAtPath("typed_bytes", queryIntegrationExtendedValue("bytes/v1", "AP8"))
-	document.SetValueAtPath("typed_timestamp", queryIntegrationExtendedValue("timestamp/v1", now.Add(42*time.Second).Format(time.RFC3339Nano)))
-	document.SetValueAtPath("typed_duration", queryIntegrationExtendedValue("duration/v1", "-12:-345000000"))
-	document.SetValueAtPath("typed_decimal", queryIntegrationExtendedValue("decimal/v1", "-123.4500e+2"))
-	document.SetValueAtPath("component.child", clickhousedriver.NewDynamic("stored-target-child"))
+	fieldNames := make([]string, len(fields))
+	fieldTypes := make([]uint8, len(fields))
+	for index, field := range fields {
+		document.SetValueAtPath(field.name, field.value)
+		fieldNames[index] = field.name
+		fieldTypes[index] = uint8(field.storedType)
+	}
 	if err := batch.Append(
 		"queryexec-event", "tenant", "main", now, now,
 		nil, uint8(1), "host", "source", "test", nil, uint8(1), nil, &message, []byte(message),
 		uint8(1), nil, nil, document,
-		[]string{"component.child", "duration", "logger.child", "path", "payload", "status", "typed_bytes", "typed_decimal", "typed_duration", "typed_timestamp"},
+		fieldNames,
+		fieldTypes,
+		eventfields.CurrentFieldMetadataVersion,
 		"collector", "batch", uint64(1),
 		now.Add(24*time.Hour), uint64(1),
 	); err != nil {

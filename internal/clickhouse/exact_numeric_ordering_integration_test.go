@@ -13,6 +13,70 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// testTrustedFiniteFloatOrderingKeyAgainstClickHouse differentially proves the
+// publication-only parser against the generic attacker-facing parser. Boundary
+// bit patterns pin signed zero, subnormal/normal transitions, and the largest
+// finite magnitudes; deterministic hashed bits densely sample binary exponent
+// classes without relying on generated decimal input.
+func testTrustedFiniteFloatOrderingKeyAgainstClickHouse(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+) {
+	t.Helper()
+
+	boundarySource := `SELECT arrayJoin([
+		reinterpretAsFloat64(toUInt64(0)),
+		reinterpretAsFloat64(toUInt64(9223372036854775808)),
+		reinterpretAsFloat64(toUInt64(1)),
+		reinterpretAsFloat64(toUInt64(9223372036854775809)),
+		reinterpretAsFloat64(toUInt64(4503599627370495)),
+		reinterpretAsFloat64(toUInt64(4503599627370496)),
+		reinterpretAsFloat64(toUInt64(4607182418800017408)),
+		reinterpretAsFloat64(toUInt64(9218868437227405311)),
+		reinterpretAsFloat64(toUInt64(18442240474082181119)),
+		toFloat64('0.001'),
+		toFloat64('1000'),
+		toFloat64('1e20'),
+		toFloat64('-1e20'),
+		toFloat64('1.2345678901234567')
+	]) AS finite_value`
+	randomSource := `SELECT
+		reinterpretAsFloat64(cityHash64(number)) AS finite_value
+		FROM numbers(1000000)
+		WHERE isFinite(finite_value)`
+	for _, corpus := range []struct {
+		name   string
+		source string
+	}{
+		{name: "boundary bit patterns", source: boundarySource},
+		{name: "deterministic hashed bit patterns", source: randomSource},
+	} {
+		generic := exactNumericOrderingKeySQL("toString(finite_value)")
+		trusted := trustedFiniteFloatOrderingKeySQL("finite_value")
+		query := "SELECT count(), countIf(generic_key != trusted_key) FROM (" +
+			"SELECT " + generic + " AS generic_key, " + trusted +
+			" AS trusted_key FROM (" + corpus.source + "))"
+		var total, mismatches uint64
+		if err := connection.QueryRow(ctx, query).Scan(&total, &mismatches); err != nil {
+			t.Fatalf(
+				"compare trusted finite Float64 keys for %s: %v\nSQL: %s",
+				corpus.name,
+				err,
+				query,
+			)
+		}
+		if total == 0 || mismatches != 0 {
+			t.Fatalf(
+				"trusted finite Float64 key %s corpus = %d values/%d mismatches",
+				corpus.name,
+				total,
+				mismatches,
+			)
+		}
+	}
+}
+
 // testExactNumericOrderingAgainstClickHouse pins the mixed integer/decimal
 // boundary that Float64 cannot distinguish. The same values exercise
 // field-to-field comparison, numeric-looking String search, auto-sort, and
@@ -25,6 +89,7 @@ func testExactNumericOrderingAgainstClickHouse(
 	indexTime time.Time,
 ) {
 	t.Helper()
+	testTrustedFiniteFloatOrderingKeyAgainstClickHouse(t, ctx, connection)
 
 	const (
 		negativeLower = "-9007199254740992.75"

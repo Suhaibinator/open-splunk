@@ -181,6 +181,88 @@ func exactNumericOrderingKeySQL(valueSQL string) string {
 	return bindSQLExpressions([]string{raw}, []string{valueSQL}, result)
 }
 
+// trustedFiniteFloatOrderingKeySQL returns the same key shape as
+// exactNumericOrderingKeySQL for one non-null, finite Float64 expression. It
+// is deliberately not a String helper: callers must establish the Float64
+// type and finite/null handling before entering this trusted path.
+//
+// The pinned ClickHouse server formats every finite Float64 as a short ASCII
+// decimal accepted by the generic parser. That lets this publication-only
+// path omit attacker-facing byte, UTF-8, grammar, and exponent-work bounds
+// while retaining the sign, exponent, and coefficient normalization required
+// for exact key equality. Raw event text must continue to use
+// exactNumericOrderingKeySQL.
+func trustedFiniteFloatOrderingKeySQL(valueSQL string) string {
+	raw := "__os_trusted_float_order_text"
+	negative := "__os_trusted_float_order_negative"
+	body := "__os_trusted_float_order_body"
+	exponentPosition := "__os_trusted_float_order_exponent_position"
+	significand := "__os_trusted_float_order_significand"
+	exponent := "__os_trusted_float_order_exponent"
+	fractionDigits := "__os_trusted_float_order_fraction_digits"
+	significant := "__os_trusted_float_order_significant"
+	coefficient := "__os_trusted_float_order_coefficient"
+	decimalOrder := "__os_trusted_float_order_decimal_order"
+
+	bodySQL := "if(startsWith(" + raw + ", '-'), substring(" + raw + ", 2), " + raw + ")"
+	exponentPositionSQL := "position(" + body + ", 'e')"
+	significandSQL := "if(" + exponentPosition + " = 0, " + body +
+		", substring(" + body + ", 1, " + exponentPosition + " - 1))"
+	exponentTextSQL := "if(" + exponentPosition + " = 0, CAST('0' AS String), substring(" +
+		body + ", " + exponentPosition + " + 1))"
+	exponentSQL := "toInt16OrZero(" + exponentTextSQL + ")"
+	fractionDigitsSQL := "toInt64(if(position(" + significand +
+		", '.') = 0, 0, length(" + significand + ") - position(" + significand + ", '.')))"
+	significantSQL := "trimLeft(replaceAll(" + significand + ", '.', ''), '0')"
+	coefficientSQL := "trimRight(" + significant + ", '0')"
+	decimalOrderSQL := "toInt64(length(" + significant + ")) + toInt64(" +
+		exponent + ") - " + fractionDigits
+
+	zero := "empty(" + significant + ")"
+	signClass := "toUInt8(multiIf(" + zero + ", 1, " + negative + " != 0, 0, 2))"
+	orderKey := "multiIf(" + zero + ", toInt64(0), " + negative +
+		" != 0, -(" + decimalOrder + "), " + decimalOrder + ")"
+	coefficientKey := "multiIf(" + zero + ", CAST('' AS String), " +
+		negative + " != 0, concat(translate(" + coefficient +
+		", '0123456789', '9876543210'), ':'), " + coefficient + ")"
+	result := "tuple(toUInt8(1), " + signClass + ", " + orderKey + ", " +
+		coefficientKey + ")"
+
+	result = bindSQLExpressions(
+		[]string{coefficient, decimalOrder},
+		[]string{coefficientSQL, decimalOrderSQL},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{fractionDigits, significant},
+		[]string{fractionDigitsSQL, significantSQL},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{significand, exponent},
+		[]string{significandSQL, exponentSQL},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{exponentPosition},
+		[]string{exponentPositionSQL},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{negative, body},
+		[]string{
+			"toUInt8(startsWith(" + raw + ", '-'))",
+			bodySQL,
+		},
+		result,
+	)
+	return bindSQLExpressions(
+		[]string{raw},
+		[]string{"toString(" + valueSQL + ")"},
+		result,
+	)
+}
+
 func exactNumericKeyEligibleSQL(keySQL string) string {
 	return "tupleElement(" + keySQL + ", 1) != 0"
 }

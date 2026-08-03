@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
@@ -63,6 +64,74 @@ func TestExactNumericOrderingSQLStaysBounded(t *testing.T) {
 				t.Fatalf("generated SQL is %d bytes, ceiling is %d", got, test.maximum)
 			}
 		})
+	}
+}
+
+func TestTrustedFiniteFloatOrderingKeySQLHasNarrowTrustBoundary(t *testing.T) {
+	t.Parallel()
+
+	trusted := trustedFiniteFloatOrderingKeySQL("finite_number")
+	if got, maximum := len(trusted), 3<<10; got > maximum {
+		t.Fatalf("trusted finite Float64 key is %d bytes, ceiling is %d", got, maximum)
+	}
+	if generic := exactNumericOrderingKeySQL("toString(finite_number)"); len(trusted) >= len(generic) {
+		t.Fatalf(
+			"trusted finite Float64 key is %d bytes, generic key is %d",
+			len(trusted),
+			len(generic),
+		)
+	}
+	for _, required := range []string{
+		"toString(finite_number)",
+		"toInt16OrZero(",
+		"trimLeft(",
+		"trimRight(",
+		"translate(",
+		"tuple(toUInt8(1),",
+	} {
+		if !strings.Contains(trusted, required) {
+			t.Errorf("trusted finite Float64 key is missing %q:\n%s", required, trusted)
+		}
+	}
+	for _, forbidden := range []string{
+		"isValidUTF8(",
+		"match(",
+		"replaceRegexp",
+		"[if(__os_trusted_float_order_negative",
+		"__os_exact_order_bounded",
+		"__os_exact_order_exponent_eligible",
+		strconv.Itoa(MaximumExactNumericOrderingTextBytes),
+		strconv.Itoa(jsonnumber.MaximumExponentMagnitude),
+	} {
+		if strings.Contains(trusted, forbidden) {
+			t.Errorf("trusted finite Float64 key contains generic guard %q:\n%s", forbidden, trusted)
+		}
+	}
+}
+
+func TestStatsExtremaPublicationCandidateUsesTrustedFloatKeyOnly(t *testing.T) {
+	t.Parallel()
+
+	candidate := statsExtremaPublicationCandidateSQL(
+		"value",
+		"number",
+		"exact_text",
+		"eligible",
+	)
+	if !strings.Contains(candidate, "__os_trusted_float_order_text") {
+		t.Fatalf("extrema publication candidate lacks trusted Float64 key:\n%s", candidate)
+	}
+	if !strings.Contains(
+		candidate,
+		"toString(ifNull(__os_stats_extrema_number, toFloat64(0)))",
+	) {
+		t.Fatalf("trusted Float64 key is not fed by the finite-or-null number binding:\n%s", candidate)
+	}
+	if !strings.Contains(candidate, "isValidUTF8(__os_exact_order_bounded)") {
+		t.Fatalf("attacker-controlled exact-text key lost its generic guards:\n%s", candidate)
+	}
+	if got := strings.Count(candidate, "__os_trusted_float_order_text) ->"); got != 1 {
+		t.Fatalf("trusted Float64 key definitions = %d, want 1:\n%s", got, candidate)
 	}
 }
 

@@ -353,6 +353,41 @@ func TestEventStatsListRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
 	relationalDepthRequireLimitDiagnostic(t, err, eventStatsRange)
 }
 
+func TestGroupedEventStatsExtremaRelationalDepthBoundaryIsSourceLocated(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	acceptedSource := relationalDepthEvalPipeline(
+		t,
+		20,
+		64,
+		"eventstats min(user) AS low BY cohort",
+	)
+	accepted, err := (Compiler{}).Compile(relationalDepthPlan(t, acceptedSource))
+	if err != nil {
+		t.Fatalf("Compile(grouped eventstats min at depth 96): %v", err)
+	}
+	if accepted.relationalDepth != maximumCompiledRelationalDepth {
+		t.Fatalf(
+			"accepted grouped eventstats min relational depth = %d, want %d",
+			accepted.relationalDepth,
+			maximumCompiledRelationalDepth,
+		)
+	}
+
+	rejectedSource := relationalDepthEvalPipeline(
+		t,
+		21,
+		64,
+		"eventstats min(user) AS low BY cohort",
+	)
+	rejected := relationalDepthPlan(t, rejectedSource)
+	eventStatsRange := rejected.Operators[len(rejected.Operators)-1].SourceRange()
+	_, err = (Compiler{}).Compile(rejected)
+	relationalDepthRequireLimitDiagnostic(t, err, eventStatsRange)
+}
+
 func TestSpathRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
 	t.Parallel()
 

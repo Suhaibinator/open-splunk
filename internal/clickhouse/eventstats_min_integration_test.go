@@ -668,6 +668,28 @@ func testEventStatsMinimumAgainstClickHouse(
 		)
 	}
 
+	// A missing key may suppress measure traversal, but it must not hide an
+	// independently unsupported BY key on the same row. Exercise both source
+	// orders so classifier argument order cannot accidentally choose the result.
+	for _, groupOrder := range []string{
+		"required_group eventstats_min_object",
+		"eventstats_min_object required_group",
+	} {
+		poison := compile(
+			base + ` | eventstats min(eventstats_min_value) AS discarded BY ` +
+				groupOrder + ` | fields event_id | search event_id="not-present"`,
+		)
+		poisonErr := executeCompiledExpectingNoRows(ctx, connection, poison)
+		if poisonErr == nil ||
+			!strings.Contains(poisonErr.Error(), UnsupportedStatsByValueMarker) {
+			t.Fatalf(
+				"multi-key eventstats min BY %q error = %v, want atomic unsupported-BY marker",
+				groupOrder,
+				poisonErr,
+			)
+		}
+	}
+
 	// Projection hides both the unsupported input and the eventstats output
 	// from each analysis product. The chronological validation barrier must
 	// still inspect every eligible source row and fail atomically.
@@ -716,6 +738,30 @@ func testEventStatsMinimumAgainstClickHouse(
 		t.Fatalf(
 			"hidden-poison field suggestions error = %v, want atomic unsupported-value marker",
 			hiddenSuggestionsErr,
+		)
+	}
+
+	// Only the first extrema result remains materialized in a stacked graph.
+	// The ordinary second result must still be consumed by whole-result
+	// validation when all of its public columns and rows are pruned downstream.
+	stackedHiddenPoison := compile(
+		base + ` | eventstats min(eventstats_min_value) AS safe` +
+			` | eventstats min(eventstats_min_object) AS discarded` +
+			` | fields event_id | search event_id="not-present"`,
+	)
+	stackedHiddenPoisonErr := executeCompiledExpectingNoRows(
+		ctx,
+		connection,
+		stackedHiddenPoison,
+	)
+	if stackedHiddenPoisonErr == nil ||
+		!strings.Contains(
+			stackedHiddenPoisonErr.Error(),
+			UnsupportedStatsMeasureValueMarker,
+		) {
+		t.Fatalf(
+			"stacked hidden eventstats min error = %v, want atomic unsupported-measure marker",
+			stackedHiddenPoisonErr,
 		)
 	}
 

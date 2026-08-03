@@ -12204,6 +12204,46 @@ func compileExactScalarGroup(
 	return compiled, nil
 }
 
+// exactScalarGroupClassificationSQL binds the Dynamic support predicate once
+// and publishes the complete row-local BY contract as:
+//
+//	(key, present, unsupported)
+//
+// Windowed Dynamic eventstats extrema consume this tuple from a separate
+// preparation layer. That keeps key construction and independent container
+// validation from expanding the tagged-envelope classifier twice.
+func exactScalarGroupClassificationSQL(
+	group compiledExactScalarGroup,
+) (string, []any) {
+	if group.field.kind != fieldKindDynamic {
+		return "tuple(" + group.keySQL + ", toUInt8(" +
+				group.presenceSQL + "), toUInt8(0))",
+			append([]any(nil), group.presenceArgs...)
+	}
+
+	presenceVariable := "__os_eventstats_group_present"
+	typeVariable := "__os_eventstats_group_type"
+	supportedVariable := "__os_eventstats_group_supported"
+	supportedSQL, lexicalSQL := statsByScalarExpressionsFor(
+		group.field.valueSQL,
+		typeVariable,
+	)
+	classification := "tuple(if(" + supportedVariable + ", " + lexicalSQL +
+		", CAST('' AS String)), toUInt8(" + presenceVariable + "), toUInt8(" +
+		presenceVariable + " AND NOT (" + supportedVariable + ")))"
+	classification = bindSQLExpressions(
+		[]string{presenceVariable, supportedVariable},
+		[]string{group.presenceSQL, supportedSQL},
+		classification,
+	)
+	classification = bindSQLExpressions(
+		[]string{typeVariable},
+		[]string{dynamicTypeExpression(group.field)},
+		classification,
+	)
+	return classification, append([]any(nil), group.presenceArgs...)
+}
+
 type compiledEventStatsGroup struct {
 	scalar   compiledExactScalarGroup
 	keyAlias string
@@ -12784,8 +12824,13 @@ func compileEventAggregate(
 	}
 	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
 	sentinelRows := strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
+	windowedDynamicExtrema := (measure.Function == plan.AggregateFunctionMinimum ||
+		measure.Function == plan.AggregateFunctionMaximum) &&
+		outputState.kind == fieldKindDynamic && measureValidationSQL != nil
 
 	inputProjection := []string{"*"}
+	classificationProjection := []string{"*"}
+	var classificationArgs []any
 	measureAlias := ""
 	if measureSpec.materialized {
 		measureAlias = quoteIdentifier(fmt.Sprintf("__os_eventstats_measure_%d", stage))
@@ -12801,7 +12846,27 @@ func compileEventAggregate(
 	eligibility := make([]string, 0, len(groups))
 	unsupported := make([]string, 0, len(groups))
 	for _, group := range groups {
-		inputProjection = append(inputProjection, group.scalar.keySQL+" AS "+group.keyAlias)
+		if windowedDynamicExtrema {
+			classification, args := exactScalarGroupClassificationSQL(group.scalar)
+			classificationProjection = append(
+				classificationProjection,
+				classification+" AS "+group.keyAlias,
+			)
+			classificationArgs = append(classificationArgs, args...)
+			eligibility = append(
+				eligibility,
+				"tupleElement("+group.keyAlias+", 2) != 0",
+			)
+			unsupported = append(
+				unsupported,
+				"tupleElement("+group.keyAlias+", 3) != 0",
+			)
+			continue
+		}
+		inputProjection = append(
+			inputProjection,
+			group.scalar.keySQL+" AS "+group.keyAlias,
+		)
 		eligibility = append(eligibility, group.scalar.presenceSQL)
 		eligibilityArgs = append(eligibilityArgs, group.scalar.presenceArgs...)
 		if group.scalar.unsupportedSQL != "" {
@@ -12837,14 +12902,33 @@ func compileEventAggregate(
 	}
 
 	inputSourceAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_source_%d", stage))
+	inputSourceSQL := relation.sql
+	inputLimitSQL := " LIMIT " + sentinelRows
+	if windowedDynamicExtrema && len(groups) > 0 {
+		classificationAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_eventstats_group_source_%d",
+			stage,
+		))
+		inputSourceSQL = "SELECT " + strings.Join(classificationProjection, ", ") +
+			" FROM (" + relation.sql + ") AS " + inputSourceAlias +
+			" LIMIT " + sentinelRows
+		inputSourceAlias = classificationAlias
+		inputLimitSQL = ""
+	}
 	inputSQL := "SELECT " + strings.Join(inputProjection, ", ") + " FROM (" +
-		relation.sql + ") AS " + inputSourceAlias + " LIMIT " + sentinelRows
+		inputSourceSQL + ") AS " + inputSourceAlias + inputLimitSQL
 	prefixArgs := make(
 		[]any,
 		0,
-		len(measureInputArgs)+len(eligibilityArgs)+len(unsupportedArgs),
+		len(measureInputArgs)+len(eligibilityArgs)+len(unsupportedArgs)+
+			len(classificationArgs),
 	)
-	if measureUsesGroupEligibility {
+	if windowedDynamicExtrema && len(groups) > 0 {
+		// The outer prepared projection (including the measure fold) appears
+		// textually before the classified source subquery and its BY arguments.
+		prefixArgs = append(prefixArgs, measureInputArgs...)
+		prefixArgs = append(prefixArgs, classificationArgs...)
+	} else if measureUsesGroupEligibility {
 		prefixArgs = append(prefixArgs, eligibilityArgs...)
 		prefixArgs = append(prefixArgs, unsupportedArgs...)
 		prefixArgs = append(prefixArgs, measureInputArgs...)
@@ -12852,6 +12936,20 @@ func compileEventAggregate(
 		prefixArgs = append(prefixArgs, measureInputArgs...)
 		prefixArgs = append(prefixArgs, eligibilityArgs...)
 		prefixArgs = append(prefixArgs, unsupportedArgs...)
+	}
+	if windowedDynamicExtrema {
+		return compileWindowedDynamicEventStatsExtrema(
+			relation,
+			operator,
+			durableState,
+			next,
+			output,
+			outputState,
+			stage,
+			groups,
+			inputSQL,
+			prefixArgs,
+		)
 	}
 	aggregateInputName := inputName
 	aggregateMeasureAlias := measureAlias
@@ -13280,6 +13378,181 @@ func compileEventAggregate(
 		publishedSQL = "SELECT * EXCEPT (" + validationColumn + ") FROM " +
 			barrierName + " AS " + publishedAlias
 	}
+	return enriched.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
+}
+
+// compileWindowedDynamicEventStatsExtrema keeps the bounded Dynamic row fold,
+// winner aggregate, row-count guard, publication, and validation inside one
+// materialized result input. The public barrier is a cheap pass-through, which
+// lets the established prerequisite graph keep its result, analysis source,
+// final input, and validation CTEs ordinary. ClickHouse 26.3 can then reuse the
+// complete evaluated event relation without planning a materialized CTE chain.
+func compileWindowedDynamicEventStatsExtrema(
+	relation compiledRelation,
+	operator *plan.EventAggregate,
+	state compileState,
+	next compileState,
+	output plan.FieldRef,
+	outputState fieldState,
+	stage int,
+	groups []compiledEventStatsGroup,
+	preparedSQL string,
+	prefixArgs []any,
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
+	if operator == nil ||
+		(operator.Measure.Function != plan.AggregateFunctionMinimum &&
+			operator.Measure.Function != plan.AggregateFunctionMaximum) ||
+		outputState.kind != fieldKindDynamic || outputState.storedTypeSQL == "" ||
+		preparedSQL == "" {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse eventstats extrema window: contract is invalid",
+		)
+	}
+
+	inputAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_rows_%d", stage))
+	measureAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_measure_%d", stage))
+	eligibleAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_eligible_%d", stage))
+	unsupportedAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_unsupported_%d", stage))
+	totalColumn := quoteIdentifier(fmt.Sprintf("__os_eventstats_input_count_%d", stage))
+	rawTotalColumn := quoteIdentifier(fmt.Sprintf("__os_eventstats_raw_count_%d", stage))
+	rawValueColumn := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_raw_extrema_%d",
+		stage,
+	))
+	publishedValueColumn := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_published_value_%d",
+		stage,
+	))
+	typeColumn := outputState.storedTypeSQL
+	validationColumn := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_validation_%d",
+		stage,
+	))
+
+	partition := ""
+	if len(groups) > 0 {
+		partitionKeys := make([]string, 0, len(groups)+1)
+		partitionKeys = append(partitionKeys, eligibleAlias)
+		for _, group := range groups {
+			partitionKeys = append(partitionKeys, group.keyAlias)
+		}
+		partition = "PARTITION BY " + strings.Join(partitionKeys, ", ")
+	}
+	window := " OVER (" + partition + ")"
+	winner := statsExtremaScalarAggregateWinnerSQL(
+		operator.Measure.Function,
+		measureAlias,
+	) + window
+
+	preparedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_prepared_%d",
+		stage,
+	))
+	windowSQL := "SELECT *, count() OVER () AS " + rawTotalColumn + ", " +
+		winner + " AS " + rawValueColumn + " FROM (" + preparedSQL + ") AS " +
+		preparedAlias
+
+	// The final chronological validation envelope already reduces this hidden
+	// bit across every row of the complete materialized result. Keeping the
+	// row-local poison flag avoids a second window aggregate while preserving
+	// whole-result atomicity behind downstream projection, filtering, or LIMIT.
+	validation := "toUInt8(tupleElement(" + measureAlias + ", 6))"
+	hasUnsupportedGroup := false
+	for _, group := range groups {
+		hasUnsupportedGroup = hasUnsupportedGroup || group.scalar.unsupportedSQL != ""
+	}
+	if hasUnsupportedGroup {
+		// Validate each BY key independently of combined group eligibility. An
+		// object/list key must poison the complete scoped result even when a
+		// different key is missing on the same row.
+		validation = "if(" + unsupportedAlias + " != 0, throwIf(toUInt8(1), '" +
+			UnsupportedStatsByValueMarker + "'), " + validation + ")"
+	}
+
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_window_%d",
+		stage,
+	))
+	discarded := []string{
+		measureAlias,
+		rawTotalColumn,
+		rawValueColumn,
+	}
+	materializedSQL := "SELECT * EXCEPT (" + strings.Join(discarded, ", ") + "), " +
+		boundedEventStatsCountSQL(rawTotalColumn) + " AS " + totalColumn + ", " +
+		statsExtremaScalarValueSQL(rawValueColumn) + " AS " + publishedValueColumn +
+		", " + statsExtremaScalarStoredTypeSQL(rawValueColumn) + " AS " + typeColumn +
+		", toUInt8(" + validation + ") AS " + validationColumn + " FROM (" +
+		windowSQL + ") AS " + windowAlias
+
+	outputExistsSQL := "1"
+	outputValue := inputAlias + "." + publishedValueColumn
+	outputStoredType := inputAlias + "." + typeColumn
+	if len(groups) > 0 {
+		outputExistsSQL = inputAlias + "." + eligibleAlias + " != 0"
+		outputValue = "if(" + outputExistsSQL + ", " + outputValue +
+			", CAST(NULL AS Dynamic))"
+		outputStoredType = "if(" + outputExistsSQL + ", " + outputStoredType +
+			", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "))"
+	}
+	projection := eventAggregateProjection(
+		state,
+		next,
+		output.Name,
+		outputValue,
+		outputStoredType,
+		outputExistsSQL,
+		validationColumn,
+		inputAlias+"."+validationColumn,
+	)
+	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
+	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		materializedSQL + ") AS " + inputAlias + " WHERE " + inputAlias + "." +
+		totalColumn + " <= " + maximumRows
+	resultDepth := relation.depth + 4
+	if len(groups) > 0 {
+		// Grouped window extrema classify every BY field in one additional
+		// projection below the prepared measure relation. Account for that
+		// dependency even though the classifier is embedded in preparedSQL.
+		resultDepth++
+	}
+	enriched := compiledRelation{
+		sql:        resultSQL,
+		depth:      resultDepth,
+		ownerRange: operator.Range,
+	}
+
+	resultInputName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_input_%d",
+		stage,
+	))
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_%d",
+		stage,
+	))
+	barrierSQL := "SELECT * FROM " + resultInputName
+	barrierDepth := relationalNodeDepth(enriched.depth)
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		sql:  barrierSQL,
+		prerequisiteDefinitions: []string{
+			resultInputName + " AS MATERIALIZED (" + resultSQL + ")",
+		},
+		validationColumns: []string{validationColumn},
+		fanout:            2,
+		depth:             barrierDepth,
+		ownerRange:        operator.Range,
+	}
+	if len(groups) > 0 {
+		barrier.fanout = 3
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_rows_result_%d",
+		stage,
+	))
+	publishedSQL := "SELECT * EXCEPT (" + validationColumn + ") FROM " +
+		barrierName + " AS " + publishedAlias
+	enriched.depth = barrierDepth
 	return enriched.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
 }
 
@@ -15308,37 +15581,51 @@ func statsExtremaPublicationCandidateSQL(
 	exactTextSQL string,
 	eligibleSQL string,
 ) string {
+	valueVariable := "__os_stats_extrema_value"
+	numberVariable := "__os_stats_extrema_number"
+	exactTextVariable := "__os_stats_extrema_exact_text"
 	exactVariable := "__os_stats_extrema_exact_key"
 	floatVariable := "__os_stats_extrema_float_key"
-	ordering := statsExtremaOrderingKeySQL(valueSQL, exactVariable)
+	exactFloatVariable := "__os_stats_extrema_exact_float"
+	ordering := statsExtremaOrderingKeySQL(valueVariable, exactVariable)
 	exactFloat := statsExtremaExactFloatKeyMatchSQL(
-		numberSQL,
+		numberVariable,
 		exactVariable,
 		floatVariable,
 	)
 	numeric := exactNumericKeyEligibleSQL(exactVariable)
-	decimalInput := "if(" + numeric + ", " + valueSQL + ", CAST('0' AS String))"
+	decimalInput := "if(" + numeric + ", " + valueVariable + ", CAST('0' AS String))"
 	publicationKind := "toUInt8(multiIf(NOT (" + numeric + "), " +
 		strconv.Itoa(int(statsExtremaPublicationLexical)) + ", " +
-		exactFloat + ", " +
+		exactFloatVariable + ", " +
 		strconv.Itoa(int(statsExtremaPublicationFloat)) + ", " +
 		strconv.Itoa(int(statsExtremaPublicationDecimal)) + "))"
-	publicationNumber := "if(isNotNull(" + numberSQL + "), " +
-		statsExtremaNormalizedNumberSQL(numberSQL) + ", toFloat64(0))"
-	publicationText := "multiIf(NOT (" + numeric + "), " + valueSQL + ", " +
-		exactFloat + ", CAST('' AS String), " +
+	publicationNumber := "if(isNotNull(" + numberVariable + "), " +
+		statsExtremaNormalizedNumberSQL(numberVariable) + ", toFloat64(0))"
+	publicationText := "multiIf(NOT (" + numeric + "), " + valueVariable + ", " +
+		exactFloatVariable + ", CAST('' AS String), " +
 		decimalInput + ")"
 	candidate := "tuple(" + ordering + ", " + publicationKind + ", " +
 		publicationNumber + ", " + publicationText + ", toUInt8(" +
 		eligibleSQL + "))"
-	return bindSQLExpressions(
+	candidate = bindSQLExpressions(
+		[]string{exactFloatVariable},
+		[]string{exactFloat},
+		candidate,
+	)
+	candidate = bindSQLExpressions(
 		[]string{exactVariable, floatVariable},
 		[]string{
-			exactNumericOrderingKeySQL(exactTextSQL),
-			exactNumericOrderingKeySQL(
-				"toString(ifNull(" + numberSQL + ", toFloat64(0)))",
+			exactNumericOrderingKeySQL(exactTextVariable),
+			trustedFiniteFloatOrderingKeySQL(
+				"ifNull(" + numberVariable + ", toFloat64(0))",
 			),
 		},
+		candidate,
+	)
+	return bindSQLExpressions(
+		[]string{valueVariable, numberVariable, exactTextVariable},
+		[]string{valueSQL, numberSQL, exactTextSQL},
 		candidate,
 	)
 }
@@ -15411,6 +15698,7 @@ func statsExtremaCandidateSQL(valueSQL, exactTextSQL string) string {
 }
 
 type compiledDynamicMeasureScalar struct {
+	valueSQL     string
 	typeSQL      string
 	supportedSQL string
 	lexicalSQL   string
@@ -15432,6 +15720,7 @@ func compileDynamicMeasureScalar(field fieldState) compiledDynamicMeasureScalar 
 			field.textEligibleSQL + ", 0))"
 	}
 	return compiledDynamicMeasureScalar{
+		valueSQL:     field.valueSQL,
 		typeSQL:      typeSQL,
 		supportedSQL: supportedSQL,
 		lexicalSQL:   lexicalSQL,
@@ -15509,14 +15798,41 @@ func eventStatsExtremaEmptyRowStateSQL(invalidSQL string) string {
 func eventStatsExtremaFoldStepSQL(
 	function plan.AggregateFunction,
 	stateSQL string,
-	value compiledDynamicMeasureScalar,
+	value fieldState,
+	eligibilityGuardSQL string,
 ) string {
-	numberSQL := statsExtremaNumericOrNullSQL(value.lexicalSQL)
+	typeVariable := "__os_eventstats_extrema_type"
+	supportedVariable := "__os_eventstats_extrema_supported"
+	lexicalVariable := "__os_eventstats_extrema_lexical"
+	exactTextVariable := "__os_eventstats_extrema_exact_text"
+	supportedSQL, lexicalSQL := statsByScalarExpressionsFor(
+		value.valueSQL,
+		typeVariable,
+	)
+	exactTextSQL := exactNumericScalarTextSQL(compiledScalar{
+		valueSQL:       value.valueSQL,
+		dynamicTypeSQL: typeVariable,
+		kind:           fieldKindDynamic,
+	})
+	eligibleSQL := "(" + typeVariable + " != 'None' AND " +
+		supportedVariable + ")"
+	if eligibilityGuardSQL != "" {
+		eligibleSQL = "(" + eligibleSQL + " AND ifNull(" +
+			eligibilityGuardSQL + ", 0))"
+	}
+	invalidSQL := "(" + typeVariable + " != 'None' AND NOT (" +
+		supportedVariable + "))"
+	numberSQL := statsExtremaNumericOrNullSQL(lexicalVariable)
 	candidateSQL := statsExtremaPublicationCandidateSQL(
-		value.lexicalSQL,
+		lexicalVariable,
 		numberSQL,
-		value.exactTextSQL,
+		exactTextVariable,
 		"1",
+	)
+	candidateSQL = bindSQLExpressions(
+		[]string{lexicalVariable, exactTextVariable},
+		[]string{lexicalSQL, exactTextSQL},
+		candidateSQL,
 	)
 	emptyCandidate := "tuple(" + eventStatsExtremaEmptyOrderingKeySQL() +
 		", toUInt8(" + strconv.Itoa(int(statsExtremaPublicationLexical)) +
@@ -15539,13 +15855,23 @@ func eventStatsExtremaFoldStepSQL(
 		fields,
 		"toUInt8(tupleElement("+stateSQL+", 5) != 0 OR tupleElement("+
 			candidate+", 5) != 0)",
-		"toUInt8(tupleElement("+stateSQL+", 6) != 0 OR ("+value.invalidSQL+"))",
+		"toUInt8(tupleElement("+stateSQL+", 6) != 0 OR ("+invalidSQL+"))",
 	)
-	return bindSQLExpressions(
+	result := bindSQLExpressions(
 		[]string{candidate},
-		[]string{"if(" + value.eligibleSQL + ", " + candidateSQL + ", " +
+		[]string{"if(" + eligibleSQL + ", " + candidateSQL + ", " +
 			emptyCandidate + ")"},
 		"tuple("+strings.Join(fields, ", ")+")",
+	)
+	result = bindSQLExpressions(
+		[]string{supportedVariable},
+		[]string{supportedSQL},
+		result,
+	)
+	return bindSQLExpressions(
+		[]string{typeVariable},
+		[]string{dynamicTypeExpression(value)},
+		result,
 	)
 }
 
@@ -15562,12 +15888,20 @@ func eventStatsExtremaDynamicMeasureSQL(
 	if rowEligibleSQL == "" {
 		rowEligibleSQL = "1"
 	}
-	scalar := compileDynamicMeasureScalar(field)
-	element := compileDynamicMeasureScalar(fieldState{
+	element := fieldState{
 		valueSQL:       "element",
 		dynamicTypeSQL: "dynamicType(element)",
 		kind:           fieldKindDynamic,
-	})
+	}
+	topLevelType := "__os_eventstats_extrema_top_level_type"
+	fieldValue := "__os_eventstats_extrema_field_value"
+	eligibilityGuardSQL := ""
+	if field.textEligibleSQL != "" {
+		// A scalar text guard applies to the singleton top-level value. Array
+		// members retain their existing independent eligibility contract.
+		eligibilityGuardSQL = "(" + topLevelType +
+			" = 'Array(Dynamic)' OR ifNull(" + field.textEligibleSQL + ", 0))"
+	}
 
 	existsSQL := field.existsSQL
 	if existsSQL == "" {
@@ -15582,18 +15916,32 @@ func eventStatsExtremaDynamicMeasureSQL(
 	empty := eventStatsExtremaEmptyRowStateSQL("0")
 	initial := eventStatsExtremaEmptyRowStateSQL("descendant_present != 0")
 	memberState := "__os_eventstats_extrema_state"
-	values := "dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)')"
-	arrayState := "arrayFold((" + memberState + ", element) -> " +
-		eventStatsExtremaFoldStepSQL(function, memberState, element) + ", " + values +
+	values := "multiIf(field_present = 0 OR " + topLevelType +
+		" = 'None', arraySlice([" + fieldValue + "], 1, 0), " + topLevelType +
+		" = 'Array(Dynamic)', dynamicElement(" + fieldValue +
+		", 'Array(Dynamic)'), [" + fieldValue + "])"
+	rowState := "arrayFold((" + memberState + ", element) -> " +
+		eventStatsExtremaFoldStepSQL(
+			function,
+			memberState,
+			element,
+			eligibilityGuardSQL,
+		) + ", " + values +
 		", " + initial + ")"
-	scalarState := eventStatsExtremaFoldStepSQL(function, initial, scalar)
-	rowState := "multiIf(field_present = 0 OR " + scalar.typeSQL +
-		" = 'None', " + initial + ", " + scalar.typeSQL +
-		" = 'Array(Dynamic)', " + arrayState + ", " + scalarState + ")"
 	gated := "if(" + rowEligibleSQL + ", " + rowState + ", " + empty + ")"
 	return bindSQLExpressions(
-		[]string{"field_present", "descendant_present"},
-		[]string{"toUInt8(" + existsSQL + ")", "toUInt8(" + descendantSQL + ")"},
+		[]string{
+			"field_present",
+			"descendant_present",
+			topLevelType,
+			fieldValue,
+		},
+		[]string{
+			"toUInt8(" + existsSQL + ")",
+			"toUInt8(" + descendantSQL + ")",
+			dynamicTypeExpression(field),
+			field.valueSQL,
+		},
 		gated,
 	), args
 }
@@ -16237,11 +16585,16 @@ func finiteDynamicFloatOrNullSQL(valueSQL string) string {
 }
 
 func statsByScalarExpressions(field fieldState) (supported, lexical string) {
-	typeSQL := dynamicTypeExpression(field)
-	mapSQL := "dynamicElement(" + field.valueSQL + ", 'Map(String, String)')"
+	return statsByScalarExpressionsFor(field.valueSQL, dynamicTypeExpression(field))
+}
+
+func statsByScalarExpressionsFor(
+	valueSQL, typeSQL string,
+) (supported, lexical string) {
+	mapSQL := "dynamicElement(" + valueSQL + ", 'Map(String, String)')"
 	valueKey := "concat(char(0), 'open_splunk_value')"
 	value := compiledScalar{
-		valueSQL:       field.valueSQL,
+		valueSQL:       valueSQL,
 		dynamicTypeSQL: typeSQL,
 		kind:           fieldKindDynamic,
 	}
@@ -16251,7 +16604,8 @@ func statsByScalarExpressions(field fieldState) (supported, lexical string) {
 	// at its literal path and must set the unsupported-container flag.
 	supported = "(" + typeSQL + " IN ('String', 'Float64', 'Bool') OR " +
 		dynamicIntegerTypePredicate(typeSQL) + " OR " + extended + ")"
-	lexical = "if(" + typeSQL + " = 'Map(String, String)', " + mapSQL + "[" + valueKey + "], toString(" + field.valueSQL + "))"
+	lexical = "if(" + typeSQL + " = 'Map(String, String)', " + mapSQL + "[" +
+		valueKey + "], toString(" + valueSQL + "))"
 	return supported, lexical
 }
 

@@ -312,16 +312,34 @@ func TestCompileStackedEventStatsDistinctCountKeepsFlatDeferredGraph(
 		t,
 		`index=gradethis | eventstats dc(first_value) AS distinct_first | eventstats min(second_value) AS lowest_second | table event_id distinct_first lowest_second`,
 	)
-	definitions := regexp.MustCompile(
+	distinctCountDefinitions := regexp.MustCompile(
 		`"__os_eventstats_input_[0-9]+" AS (?:MATERIALIZED )?\(`,
 	).FindAllString(compiled.SQL, -1)
-	if len(definitions) != 2 ||
-		!strings.Contains(definitions[0], " AS MATERIALIZED (") ||
-		strings.Contains(definitions[1], " AS MATERIALIZED (") {
-		t.Fatalf("stacked eventstats input definitions = %#v\n%s", definitions, compiled.SQL)
+	extremaDefinitions := regexp.MustCompile(
+		`"__os_eventstats_result_input_[0-9]+" AS (?:MATERIALIZED )?\(`,
+	).FindAllString(compiled.SQL, -1)
+	if len(distinctCountDefinitions) != 1 ||
+		!strings.Contains(distinctCountDefinitions[0], " AS MATERIALIZED (") ||
+		len(extremaDefinitions) != 1 ||
+		strings.Contains(extremaDefinitions[0], " AS MATERIALIZED (") {
+		t.Fatalf(
+			"stacked eventstats definitions = dc:%#v extrema:%#v\n%s",
+			distinctCountDefinitions,
+			extremaDefinitions,
+			compiled.SQL,
+		)
 	}
 	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
 		t.Fatalf("stacked eventstats materialized CTEs = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	validationSource := ` AS "__os_chronological_invalid" FROM "__os_eventstats_result_`
+	if got := strings.Count(compiled.SQL, validationSource); got != 2 ||
+		!strings.Contains(compiled.SQL, ` UNION ALL SELECT `) {
+		t.Fatalf(
+			"stacked eventstats deferred validation sources = %d, want two flat UNION branches:\n%s",
+			got,
+			compiled.SQL,
+		)
 	}
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("stacked eventstats physical scans = %d, want 1:\n%s", got, compiled.SQL)

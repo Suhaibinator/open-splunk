@@ -22,7 +22,11 @@ func TestCompileEventStatsMaximumFoldsOneBoundedDynamicInputToScalarWinner(
 		t.Fatalf("eventstats max output fields = %#v", compiled.OutputFields)
 	}
 
-	inputAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_input_")
+	resultInputAlias := eventStatsPrivateAlias(
+		t,
+		compiled.SQL,
+		"__os_eventstats_result_input_",
+	)
 	measureAlias := eventStatsPrivateAlias(t, compiled.SQL, "__os_eventstats_measure_")
 	publishedAlias := eventStatsPrivateAlias(
 		t,
@@ -34,16 +38,20 @@ func TestCompileEventStatsMaximumFoldsOneBoundedDynamicInputToScalarWinner(
 	maximumFold := `tupleElement(__os_eventstats_extrema_candidate, 1) > ` +
 		`tupleElement(__os_eventstats_extrema_state, 1)`
 	for _, required := range []string{
-		inputAlias + ` AS MATERIALIZED (`,
+		resultInputAlias + ` AS MATERIALIZED (`,
 		sentinel,
-		`dynamicElement("__os_fields"."eventstats_min_value", 'Array(Dynamic)')`,
+		`__os_eventstats_extrema_top_level_type`,
+		`dynamicElement(__os_eventstats_extrema_field_value, 'Array(Dynamic)')`,
+		`[__os_eventstats_extrema_field_value]`,
 		`arrayFold((__os_eventstats_extrema_state, element) ->`,
 		maximumFold,
 		`'decimal/v1'`,
 		`argMaxOrNullIf(tuple(tupleElement(` + measureAlias + `, 2), tupleElement(` +
 			measureAlias + `, 3), tupleElement(` + measureAlias + `, 4)), tupleElement(` +
 			measureAlias + `, 1), tupleElement(` + measureAlias + `, 5) != 0)`,
-		`maxOrDefault(toUInt8(tupleElement(` + measureAlias + `, 6)))`,
+		`toUInt8(tupleElement(` + measureAlias + `, 6))`,
+		`count() OVER ()`,
+		`OVER () AS "__os_eventstats_raw_extrema_`,
 		` AS ` + publishedAlias,
 		`.` + publishedAlias + ` AS "high"`,
 		` AS ` + typeAlias,
@@ -55,8 +63,11 @@ func TestCompileEventStatsMaximumFoldsOneBoundedDynamicInputToScalarWinner(
 			t.Fatalf("eventstats max SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	if got := strings.Count(compiled.SQL, inputAlias+` AS MATERIALIZED (`); got != 1 {
-		t.Fatalf("bounded eventstats max input definitions = %d, want 1:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, resultInputAlias+` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("bounded eventstats max result inputs = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("eventstats max materialized fences = %d, want 1:\n%s", got, compiled.SQL)
 	}
 	if got := strings.Count(compiled.SQL, sentinel); got != 1 {
 		t.Fatalf("eventstats max sentinel limits = %d, want 1:\n%s", got, compiled.SQL)
@@ -79,6 +90,8 @@ func TestCompileEventStatsMaximumFoldsOneBoundedDynamicInputToScalarWinner(
 		"Array(Tuple(String, String))",
 		"arrayFilter(element ->",
 		"arrayExists(element ->",
+		" LEFT JOIN ",
+		" GROUP BY ",
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("eventstats max SQL contains row-multiplying %q:\n%s", forbidden, compiled.SQL)
@@ -297,7 +310,7 @@ func TestCompileEventStatsMaximumComposesAfterMinimumWithGroupedPresence(
 		`argMinOrNullIf(`,
 		`argMaxOrNullIf(`,
 		`"__os_eventstats_exists_`,
-		`LEFT JOIN`,
+		`OVER (PARTITION BY`,
 		`AS "low"`,
 		`AS "high"`,
 		UnsupportedStatsMeasureValueMarker,
@@ -308,8 +321,16 @@ func TestCompileEventStatsMaximumComposesAfterMinimumWithGroupedPresence(
 			t.Fatalf("stacked eventstats min/max SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	if got := strings.Count(compiled.SQL, ` LEFT JOIN `); got != 2 {
-		t.Fatalf("stacked grouped eventstats joins = %d, want 2:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, `OVER (PARTITION BY`); got != 2 {
+		t.Fatalf("stacked grouped eventstats windows = %d, want 2:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("stacked grouped eventstats fences = %d, want 1:\n%s", got, compiled.SQL)
+	}
+	for _, forbidden := range []string{` LEFT JOIN `, ` GROUP BY `} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("stacked grouped eventstats retained %q:\n%s", forbidden, compiled.SQL)
+		}
 	}
 	if !slices.Contains(compiled.Args, any("z")) {
 		t.Fatalf("stacked eventstats max lost downstream predicate args: %#v", compiled.Args)
