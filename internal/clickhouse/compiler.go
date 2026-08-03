@@ -14,6 +14,7 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
+	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchtimebounds"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -76,6 +77,10 @@ const (
 	// ingestion already caps complete events at the same size; this independent
 	// guard also covers calculated Strings amplified by earlier commands.
 	MaximumSpathInputBytes = 1 << 20
+	// MaximumSpathJSONTokens bounds the arrays used to preserve numeric JSON
+	// lexemes before structural path evaluation. Runs of punctuation and
+	// whitespace share one token, so ordinary documents remain far below it.
+	MaximumSpathJSONTokens = 16_384
 	maxCompiledQueryBytes  = 256 << 10
 	// maxCompiledIfScalarSQLBytes stops nested conditional values before
 	// Dynamic comparison lowering can repeatedly duplicate their SQL. The
@@ -321,9 +326,11 @@ const (
 	// SpathInputLimitMarker classifies an oversized calculated JSON source as a
 	// resource limit without retaining source bytes or generated SQL.
 	SpathInputLimitMarker = "open-splunk: spath input bytes exceed the per-row limit"
+	// SpathJSONTokenLimitMarker classifies a structurally adversarial JSON
+	// source before its two bounded lexical projections are constructed.
+	SpathJSONTokenLimitMarker = "open-splunk: spath JSON token count exceeds the per-row limit" // #nosec G101 -- stable error classifier, not a credential
 	// UnsupportedSpathValueMarker is emitted when an explicitly selected JSON
-	// leaf is a container or a number that this compatibility slice cannot
-	// publish without losing information.
+	// leaf is a container that this compatibility slice cannot publish.
 	UnsupportedSpathValueMarker = "open-splunk: spath selected value is outside the supported scalar domain"
 	// UnsupportedNumericBinValueMarker is emitted when a mathematically correct
 	// numeric bucket cannot be represented by the input field's fixed type, or
@@ -1880,7 +1887,7 @@ const (
 	// operations to the configurable event-size ceiling.
 	MaximumExactNumericBinTextBytes = 4 << 10
 	exactNumericBinMaxDigits        = 77
-	exactNumericBinExponentClamp    = 10_000
+	exactNumericBinExponentClamp    = jsonnumber.MaximumExponentMagnitude
 	exactNumericBinMaxInt256        = "57896044618658097711785492504343953926634992332820282019728792003956564819967"
 	exactNumericBinMinMagnitude     = "57896044618658097711785492504343953926634992332820282019728792003956564819968"
 )
@@ -9962,6 +9969,319 @@ func compileExtractInput(input plan.FieldRef, state compileState) (valueSQL, eli
 	}
 }
 
+const (
+	// The first alternative consumes one complete JSON string, including
+	// escapes, before the number alternative can observe digits inside it. The
+	// third alternative groups all bytes that cannot begin either token, and
+	// the dot fallback makes extraction lossless even for malformed input. The
+	// rebuilt document is still parsed structurally, so tokenization never turns
+	// malformed JSON into a successful match.
+	spathJSONNumberBodyPattern  = `-?(?:0|[1-9][0-9]*)(?:[.][0-9]+)?(?:[eE][+-]?[0-9]+)?`
+	spathJSONTokenPattern       = `(?s)("(?:\\.|[^"\\])*"|` + spathJSONNumberBodyPattern + `|[^"0-9-]+|.)`
+	spathJSONNumberPattern      = `^` + spathJSONNumberBodyPattern + `$`
+	spathJSONNumberMarkerPrefix = "__open_splunk_number_v1_"
+	spathJSONNumberMarkerSuffix = "__"
+)
+
+func spathJSONNumberDynamicSQL(valueSQL string) string {
+	raw := "__os_spath_number_raw"
+	signed := "__os_spath_number_signed"
+	unsigned := "__os_spath_number_unsigned"
+	floating := "__os_spath_number_float"
+	integerSyntax := "position(" + raw + ", '.') = 0 AND positionCaseInsensitive(" +
+		raw + ", 'e') = 0"
+	decimal := decimalEnvelopePayloadDynamicSQL(spathJSONCanonicalDecimalTextSQL(raw))
+	integerBody := "multiIf(" +
+		integerSyntax + " AND isNotNull(" + signed + "), CAST(assumeNotNull(" + signed + ") AS Dynamic), " +
+		integerSyntax + " AND NOT startsWith(" + raw + ", '-') AND isNotNull(" + unsigned +
+		"), CAST(assumeNotNull(" + unsigned + ") AS Dynamic), " + decimal + ")"
+	integerBody = bindSQLExpressions(
+		[]string{signed, unsigned},
+		[]string{
+			"accurateCastOrNull(" + raw + ", 'Int64')",
+			"accurateCastOrNull(" + raw + ", 'UInt64')",
+		},
+		integerBody,
+	)
+	floatBody := "if(" + spathJSONExactFloatSQL(raw, floating) +
+		", CAST(assumeNotNull(" + floating + ") AS Dynamic), " + decimal + ")"
+	floatBody = bindSQLExpressions(
+		[]string{floating},
+		[]string{finiteFloatOrNullSQL(spathJSONPlainDecimalSQL(raw))},
+		floatBody,
+	)
+	body := "if(" + integerSyntax + ", " + integerBody + ", " + floatBody + ")"
+	return bindSQLExpressions([]string{raw}, []string{valueSQL}, body)
+}
+
+// spathJSONPlainDecimalSQL expands one bounded JSON exponent spelling before
+// Float64 parsing. The pinned server can round a direct spelling such as
+// 9.7e2 one ULP low; its parser is correctly rounded for the minimal plain
+// decimal produced here. Ineligible or expansion-heavy inputs return empty and
+// remain decimal/v1 values.
+func spathJSONPlainDecimalSQL(raw string) string {
+	lowered := "__os_spath_plain_lowered"
+	negative := "__os_spath_plain_negative"
+	bodyVariable := "__os_spath_plain_body"
+	exponentPosition := "__os_spath_plain_exponent_position"
+	significand := "__os_spath_plain_significand"
+	exponentText := "__os_spath_plain_exponent_text"
+	exponentEligible := "__os_spath_plain_exponent_eligible"
+	exponentValue := "__os_spath_plain_exponent_value"
+	dotPosition := "__os_spath_plain_dot_position"
+	integerDigits := "__os_spath_plain_integer_digits"
+	digits := "__os_spath_plain_digits"
+	significant := "__os_spath_plain_significant"
+	coefficient := "__os_spath_plain_coefficient"
+	leadingZeros := "__os_spath_plain_leading_zeros"
+	decimalPosition := "__os_spath_plain_decimal_position"
+	eligible := "__os_spath_plain_eligible"
+
+	sign := "if(" + negative + " != 0, CAST('-' AS String), CAST('' AS String))"
+	plain := "multiIf(empty(" + significant + "), concat(" + sign + ", '0'), " +
+		decimalPosition + " <= 0, concat(" + sign + ", '0.', repeat('0', toUInt64(-(" +
+		decimalPosition + "))), " + coefficient + "), " +
+		decimalPosition + " >= length(" + coefficient + "), concat(" + sign + ", " +
+		coefficient + ", repeat('0', toUInt64(" + decimalPosition + " - length(" +
+		coefficient + ")))), concat(" + sign + ", substring(" + coefficient +
+		", 1, " + decimalPosition + "), '.', substring(" + coefficient + ", " +
+		decimalPosition + " + 1)))"
+	result := "if(" + eligible + " != 0, " + plain + ", CAST('' AS String))"
+	eligibility := "toUInt8(length(" + raw + ") <= " +
+		strconv.Itoa(jsonnumber.MaximumFloat64TextBytes) + " AND " + exponentEligible +
+		" != 0 AND (empty(" + significant + ") OR (" + decimalPosition +
+		" >= -" + strconv.Itoa(jsonnumber.MaximumFloat64DecimalScale) + " AND " +
+		decimalPosition + " <= " + strconv.Itoa(jsonnumber.MaximumFloat64DecimalScale) + ")))"
+	result = bindSQLExpressions([]string{eligible}, []string{eligibility}, result)
+	positionSQL := integerDigits + " + toInt64(" + exponentValue +
+		") - toInt64(" + leadingZeros + ")"
+	result = bindSQLExpressions(
+		[]string{decimalPosition},
+		[]string{positionSQL},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{coefficient, leadingZeros},
+		[]string{
+			"replaceRegexpOne(" + significant + ", '0+$', '')",
+			"length(" + digits + ") - length(" + significant + ")",
+		},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{significant},
+		[]string{"replaceRegexpOne(" + digits + ", '^0+', '')"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{integerDigits, digits},
+		[]string{
+			"if(" + dotPosition + " = 0, toInt64(length(" + significand +
+				")), toInt64(" + dotPosition + ") - 1)",
+			"replaceAll(" + significand + ", '.', '')",
+		},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{dotPosition},
+		[]string{"position(" + significand + ", '.')"},
+		result,
+	)
+	exponentParseInput := "if(" + exponentEligible + " != 0, " + exponentText +
+		", CAST('0' AS String))"
+	result = bindSQLExpressions(
+		[]string{exponentValue},
+		[]string{"toInt64OrZero(" + exponentParseInput + ")"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{exponentEligible},
+		[]string{"toUInt8(" + spathJSONExponentEligibleSQL(raw) + ")"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{significand, exponentText},
+		[]string{
+			"if(" + exponentPosition + " = 0, " + bodyVariable + ", substring(" +
+				bodyVariable + ", 1, " + exponentPosition + " - 1))",
+			"if(" + exponentPosition + " = 0, CAST('0' AS String), substring(" +
+				bodyVariable + ", " + exponentPosition + " + 1))",
+		},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{exponentPosition},
+		[]string{"position(" + bodyVariable + ", 'e')"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{negative, bodyVariable},
+		[]string{
+			"toUInt8(startsWith(" + lowered + ", '-'))",
+			"if(startsWith(" + lowered + ", '-'), substring(" + lowered + ", 2), " +
+				lowered + ")",
+		},
+		result,
+	)
+	return bindSQLExpressions([]string{lowered}, []string{"lower(" + raw + ")"}, result)
+}
+
+func spathJSONExactFloatSQL(raw, floating string) string {
+	bitsVariable := "__os_spath_float_bits"
+	magnitudeVariable := "__os_spath_float_magnitude"
+	exponentVariable := "__os_spath_float_exponent"
+	fractionVariable := "__os_spath_float_fraction"
+	significandVariable := "__os_spath_float_significand"
+	trailingVariable := "__os_spath_float_trailing"
+	binaryExponentVariable := "__os_spath_float_binary_exponent"
+	scaleVariable := "__os_spath_float_scale"
+	eligibleVariable := "__os_spath_float_eligible"
+	formattedVariable := "__os_spath_float_formatted"
+	rawKeyVariable := "__os_spath_float_raw_key"
+	formattedKeyVariable := "__os_spath_float_formatted_key"
+
+	result := eligibleVariable + " != 0 AND " + rawKeyVariable + " = " + formattedKeyVariable
+	result = bindSQLExpressions(
+		[]string{rawKeyVariable, formattedKeyVariable},
+		[]string{
+			exactNumericOrderingKeySQL(raw),
+			exactNumericOrderingKeySQL(formattedVariable),
+		},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{formattedVariable},
+		[]string{"if(" + eligibleVariable + " != 0, toDecimalString(assumeNotNull(" +
+			floating + "), " + strconv.Itoa(jsonnumber.MaximumFloat64DecimalScale) +
+			"), CAST('0' AS String))"},
+		result,
+	)
+	// Plain-decimal construction already enforces the raw byte, exponent,
+	// expansion, finite-value, and magnitude bounds before floating is non-null.
+	eligible := "toUInt8(isNotNull(" + floating + ") AND " + scaleVariable +
+		" <= " + strconv.Itoa(jsonnumber.MaximumFloat64DecimalScale) + ")"
+	result = bindSQLExpressions(
+		[]string{eligibleVariable},
+		[]string{eligible},
+		result,
+	)
+	scale := "toInt16(if(" + magnitudeVariable + " = 0, 0, greatest(0, -(" +
+		binaryExponentVariable + " + " + trailingVariable + "))))"
+	result = bindSQLExpressions([]string{scaleVariable}, []string{scale}, result)
+	binaryExponent := "toInt16(if(" + exponentVariable + " = 0, -1074, toInt16(" +
+		exponentVariable + ") - 1075))"
+	trailing := "toInt16(if(" + significandVariable + " = 0, 0, toInt16(bitCount(bitXor(" +
+		significandVariable + ", " + significandVariable + " - toUInt64(1)))) - 1))"
+	result = bindSQLExpressions(
+		[]string{binaryExponentVariable, trailingVariable},
+		[]string{binaryExponent, trailing},
+		result,
+	)
+	significand := "if(" + exponentVariable + " = 0, " + fractionVariable +
+		", bitOr(" + fractionVariable + ", toUInt64(4503599627370496)))"
+	result = bindSQLExpressions(
+		[]string{significandVariable},
+		[]string{significand},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{exponentVariable, fractionVariable},
+		[]string{
+			"bitAnd(bitShiftRight(" + magnitudeVariable + ", 52), toUInt64(2047))",
+			"bitAnd(" + magnitudeVariable + ", toUInt64(4503599627370495))",
+		},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{magnitudeVariable},
+		[]string{"bitAnd(" + bitsVariable + ", toUInt64('9223372036854775807'))"},
+		result,
+	)
+	return bindSQLExpressions(
+		[]string{bitsVariable},
+		[]string{"reinterpretAsUInt64(ifNull(" + floating + ", toFloat64(0)))"},
+		result,
+	)
+}
+
+func spathJSONExponentEligibleSQL(raw string) string {
+	lowered := "__os_spath_exponent_lowered"
+	positionVariable := "__os_spath_exponent_position"
+	textVariable := "__os_spath_exponent_text"
+	digitsVariable := "__os_spath_exponent_digits"
+	trimmedVariable := "__os_spath_exponent_trimmed"
+	maximum := strconv.Itoa(jsonnumber.MaximumExponentMagnitude)
+	maximumDigits := strconv.Itoa(len(maximum))
+	result := positionVariable + " = 0 OR empty(" + trimmedVariable + ") OR length(" +
+		trimmedVariable + ") < " + maximumDigits + " OR (length(" + trimmedVariable +
+		") = " + maximumDigits + " AND " +
+		trimmedVariable + " <= '" + maximum + "')"
+	result = bindSQLExpressions(
+		[]string{trimmedVariable},
+		[]string{"replaceRegexpOne(" + digitsVariable + ", '^0+', '')"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{digitsVariable},
+		[]string{"if(startsWith(" + textVariable + ", '+') OR startsWith(" + textVariable +
+			", '-'), substring(" + textVariable + ", 2), " + textVariable + ")"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{textVariable},
+		[]string{"if(" + positionVariable + " = 0, CAST('0' AS String), substring(" +
+			lowered + ", " + positionVariable + " + 1))"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{positionVariable},
+		[]string{"position(" + lowered + ", 'e')"},
+		result,
+	)
+	return bindSQLExpressions([]string{lowered}, []string{"lower(" + raw + ")"}, result)
+}
+
+func spathJSONCanonicalDecimalTextSQL(raw string) string {
+	lowered := "__os_spath_decimal_lowered"
+	positionVariable := "__os_spath_decimal_exponent_position"
+	mantissaVariable := "__os_spath_decimal_mantissa"
+	exponentVariable := "__os_spath_decimal_exponent"
+	digitsVariable := "__os_spath_decimal_exponent_digits"
+	trimmedVariable := "__os_spath_decimal_exponent_trimmed"
+	canonicalExponent := "if(empty(" + trimmedVariable + "), CAST('0' AS String), concat(" +
+		"if(startsWith(" + exponentVariable + ", '-'), '-', ''), " + trimmedVariable + "))"
+	result := "if(" + positionVariable + " = 0, " + lowered + ", concat(" +
+		mantissaVariable + ", 'e', " + canonicalExponent + "))"
+	result = bindSQLExpressions(
+		[]string{trimmedVariable},
+		[]string{"replaceRegexpOne(" + digitsVariable + ", '^0+', '')"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{digitsVariable},
+		[]string{"if(startsWith(" + exponentVariable + ", '+') OR startsWith(" +
+			exponentVariable + ", '-'), substring(" + exponentVariable + ", 2), " +
+			exponentVariable + ")"},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{mantissaVariable, exponentVariable},
+		[]string{
+			"if(" + positionVariable + " = 0, " + lowered + ", substring(" + lowered +
+				", 1, " + positionVariable + " - 1))",
+			"if(" + positionVariable + " = 0, CAST('0' AS String), substring(" + lowered +
+				", " + positionVariable + " + 1))",
+		},
+		result,
+	)
+	result = bindSQLExpressions(
+		[]string{positionVariable},
+		[]string{"position(" + lowered + ", 'e')"},
+		result,
+	)
+	return bindSQLExpressions([]string{lowered}, []string{"lower(" + raw + ")"}, result)
+}
+
 func compileExtractJSON(
 	relation compiledRelation,
 	operator *plan.ExtractJSON,
@@ -9994,8 +10314,15 @@ func compileExtractJSON(
 	sourceEligibleAlias := quoteIdentifier(fmt.Sprintf("__os_spath_source_eligible_%d", stage))
 	inputAlias := quoteIdentifier(fmt.Sprintf("__os_spath_input_%d", stage))
 	eligibleAlias := quoteIdentifier(fmt.Sprintf("__os_spath_eligible_%d", stage))
+	tokenCountAlias := quoteIdentifier(fmt.Sprintf("__os_spath_token_count_%d", stage))
+	tokensAlias := quoteIdentifier(fmt.Sprintf("__os_spath_tokens_%d", stage))
+	tokenGuardAlias := quoteIdentifier(fmt.Sprintf("__os_spath_token_guard_%d", stage))
+	numberFlagsAlias := quoteIdentifier(fmt.Sprintf("__os_spath_number_flags_%d", stage))
+	nulledJSONAlias := quoteIdentifier(fmt.Sprintf("__os_spath_nulled_json_%d", stage))
 	pathEligibleAlias := quoteIdentifier(fmt.Sprintf("__os_spath_path_eligible_%d", stage))
-	jsonTypeAlias := quoteIdentifier(fmt.Sprintf("__os_spath_json_type_%d", stage))
+	nullRawAlias := quoteIdentifier(fmt.Sprintf("__os_spath_null_raw_%d", stage))
+	numberMarkerAlias := quoteIdentifier(fmt.Sprintf("__os_spath_number_marker_%d", stage))
+	numberSelectedAlias := quoteIdentifier(fmt.Sprintf("__os_spath_number_selected_%d", stage))
 	rawAlias := quoteIdentifier(fmt.Sprintf("__os_spath_raw_%d", stage))
 	matchedAlias := quoteIdentifier(fmt.Sprintf("__os_spath_matched_%d", stage))
 	valueAlias := quoteIdentifier(fmt.Sprintf("__os_spath_value_%d", stage))
@@ -10014,30 +10341,93 @@ func compileExtractJSON(
 	boundedEligible := "toUInt8(if(" + overInputLimit + ", throwIf(toUInt8(" +
 		overInputLimit + "), '" + SpathInputLimitMarker + "') = 0, " +
 		sourceEligibleAlias + " != 0)) AS " + eligibleAlias
-	arrayGuardSQL, arrayGuardArgs := spathArrayGuardSQL(inputAlias, steps)
-	pathEligible := eligibleAlias + " != 0"
+	needsTokenPreflight := eligibleAlias + " != 0 AND length(" + inputAlias + ") > " +
+		strconv.Itoa(MaximumSpathJSONTokens)
+	preflightInput := "if(" + needsTokenPreflight + ", " + inputAlias +
+		", CAST('' AS String))"
+	tokenCountExpression := "if(" + needsTokenPreflight + ", countMatches(" +
+		preflightInput + ", ?), toUInt64(0)) AS " + tokenCountAlias
+	preflightFragment := "SELECT *, " + boundedEligible + ", " + tokenCountExpression +
+		" FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_spath_source_%d", stage))
+	relation = relation.selectFrom(preflightFragment, operator.Range)
+
+	overTokenLimit := eligibleAlias + " != 0 AND " + tokenCountAlias + " > " +
+		strconv.Itoa(MaximumSpathJSONTokens)
+	tokenGuardExpression := "toUInt8(if(" + overTokenLimit + ", throwIf(toUInt8(" +
+		overTokenLimit + "), '" + SpathJSONTokenLimitMarker + "') = 0, " +
+		eligibleAlias + " != 0)) AS " + tokenGuardAlias
+	guardedTokenInput := "if(" + tokenGuardAlias + " != 0, " + inputAlias +
+		", CAST('' AS String))"
+	tokensExpression := "if(" + tokenGuardAlias + " != 0, extractAll(" + guardedTokenInput +
+		", ?), CAST([], 'Array(String)')) AS " + tokensAlias
+	tokensFragment := "SELECT *, " + tokenGuardExpression + ", " + tokensExpression +
+		" FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_spath_preflight_%d", stage))
+	relation = relation.selectFrom(tokensFragment, operator.Range)
+
+	numberFlagsExpression := "if(" + tokenGuardAlias + " != 0, arrayMap(token -> " +
+		"toUInt8(match(token, ?)), " + tokensAlias + "), CAST([], 'Array(UInt8)')) AS " +
+		numberFlagsAlias
+	nulledJSONExpression := "if(" + tokenGuardAlias + " != 0, if(has(" + numberFlagsAlias +
+		", toUInt8(1)), arrayStringConcat(arrayMap((token, flag) -> if(flag != 0, " +
+		"CAST('null' AS String), token), " + tokensAlias + ", " + numberFlagsAlias +
+		")), " + inputAlias + "), CAST('' AS String)) AS " + nulledJSONAlias
+	shapeFragment := "SELECT *, " + strings.Join([]string{
+		numberFlagsExpression,
+		nulledJSONExpression,
+	}, ", ") + " FROM (" + relation.sql + ") AS " +
+		quoteIdentifier(fmt.Sprintf("_spath_token_guard_%d", stage))
+	relation = relation.selectFrom(shapeFragment, operator.Range)
+
+	arrayGuardSQL, arrayGuardArgs := spathArrayGuardSQL(nulledJSONAlias, steps)
+	pathEligible := tokenGuardAlias + " != 0"
 	if arrayGuardSQL != "" {
 		pathEligible += " AND " + arrayGuardSQL
 	}
 	pathEligibleExpression := "toUInt8(" + pathEligible + ") AS " + pathEligibleAlias
-	typePathSQL, typePathArgs := spathPathSQL(steps)
-	jsonTypeExpression := "if(" + pathEligibleAlias + " != 0, toString(JSONType(" +
-		inputAlias + ", " + typePathSQL + ")), CAST('' AS String)) AS " + jsonTypeAlias
-	rawPathSQL, rawPathArgs := spathPathSQL(steps)
-	rawExpression := "if(" + pathEligibleAlias + " != 0, JSONExtractRaw(" + inputAlias +
-		", " + rawPathSQL + "), CAST('' AS String)) AS " + rawAlias
-	rawFragment := "SELECT *, " + boundedEligible + ", " + pathEligibleExpression +
-		", " + jsonTypeExpression + ", " + rawExpression +
-		" FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_spath_source_%d", stage))
+	pathSQL, pathArgs := spathPathSQL(steps)
+	nullRawExpression := "if(" + pathEligibleAlias + " != 0, JSONExtractRaw(" +
+		nulledJSONAlias + ", " + pathSQL + "), CAST('' AS String)) AS " + nullRawAlias
+	markedJSONSQL := "arrayStringConcat(arrayMap((token, flag, token_index) -> if(flag != 0, " +
+		"concat(char(34), '" + spathJSONNumberMarkerPrefix + "', toString(token_index), '" +
+		spathJSONNumberMarkerSuffix + "', char(34)), token), " + tokensAlias + ", " +
+		numberFlagsAlias + ", arrayEnumerate(" + tokensAlias + ")))"
+	numberMarkerExpression := "if(" + pathEligibleAlias + " != 0 AND " + nullRawAlias +
+		" = 'null' AND has(" + numberFlagsAlias + ", toUInt8(1)), JSONExtractString(" +
+		markedJSONSQL + ", " + pathSQL +
+		"), CAST('' AS String)) AS " + numberMarkerAlias
+	pathFragment := "SELECT *, " + strings.Join([]string{
+		pathEligibleExpression,
+		nullRawExpression,
+		numberMarkerExpression,
+	}, ", ") + " FROM (" + relation.sql + ") AS " +
+		quoteIdentifier(fmt.Sprintf("_spath_shape_%d", stage))
+	relation = relation.selectFrom(pathFragment, operator.Range)
+
+	numberSelectedExpression := "toUInt8(startsWith(" + numberMarkerAlias + ", '" +
+		spathJSONNumberMarkerPrefix + "') AND endsWith(" + numberMarkerAlias + ", '" +
+		spathJSONNumberMarkerSuffix + "')) AS " + numberSelectedAlias
+	numberFragment := "SELECT *, " + numberSelectedExpression + " FROM (" + relation.sql +
+		") AS " + quoteIdentifier(fmt.Sprintf("_spath_path_%d", stage))
+	relation = relation.selectFrom(numberFragment, operator.Range)
+
+	markerIndex := "toUInt64OrZero(substring(" + numberMarkerAlias + ", " +
+		strconv.Itoa(len(spathJSONNumberMarkerPrefix)+1) + ", length(" + numberMarkerAlias +
+		") - " + strconv.Itoa(len(spathJSONNumberMarkerPrefix)+len(spathJSONNumberMarkerSuffix)) + "))"
+	rawExpression := "if(" + numberSelectedAlias + " != 0, arrayElement(" +
+		tokensAlias + ", " + markerIndex + "), " + nullRawAlias + ") AS " + rawAlias
+	rawFragment := "SELECT *, " + rawExpression + " FROM (" + relation.sql +
+		") AS " + quoteIdentifier(fmt.Sprintf("_spath_number_%d", stage))
 	relation = relation.selectFrom(rawFragment, operator.Range)
 
-	supportedType := jsonTypeAlias + " IN ('Null', 'String', 'Bool', 'Int64', 'UInt64')"
+	supportedType := numberSelectedAlias + " != 0 OR " + rawAlias +
+		" IN ('null', 'true', 'false') OR startsWith(" + rawAlias + ", char(34))"
 	unsupportedRaw := "notEmpty(" + rawAlias + ") AND NOT (" + supportedType + ")"
 	matchedExpression := "toUInt8(if(" + unsupportedRaw + ", throwIf(toUInt8(" +
 		unsupportedRaw + "), '" + UnsupportedSpathValueMarker + "') = 0, notEmpty(" +
 		rawAlias + "))) AS " + matchedAlias
-	valueExpression := "if(" + matchedAlias + " != 0, JSONExtract(" + rawAlias +
-		", 'Dynamic'), CAST(NULL AS Dynamic)) AS " + valueAlias
+	valueExpression := "if(" + matchedAlias + " != 0, if(" + numberSelectedAlias +
+		" != 0, " + spathJSONNumberDynamicSQL(rawAlias) + ", JSONExtract(" + rawAlias +
+		", 'Dynamic')), CAST(NULL AS Dynamic)) AS " + valueAlias
 	valueFragment := "SELECT *, " + matchedExpression + ", " + valueExpression +
 		" FROM (" + relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_spath_raw_%d", stage))
 	relation = relation.selectFrom(valueFragment, operator.Range)
@@ -10073,7 +10463,9 @@ func compileExtractJSON(
 		dynamicType + " = 'String', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), " +
 		"startsWith(" + dynamicType + ", 'Int'), toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeSint64)) + "), " +
 		"startsWith(" + dynamicType + ", 'UInt'), toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeUint64)) + "), " +
+		dynamicType + " = 'Float64', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeDouble)) + "), " +
 		dynamicType + " = 'Bool', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeBool)) + "), " +
+		numberSelectedAlias + " != 0 AND " + dynamicType + " = 'Map(String, String)', toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeDecimal)) + "), " +
 		"toUInt8(0))"
 	typeProjection := "toUInt8(if(" + matchedAlias + " != 0, " + selectedType +
 		", " + previousTypeSQL + ")) AS " + typeAlias
@@ -10165,14 +10557,17 @@ func compileExtractJSON(
 
 	prefixArgs := make([]any, 0,
 		len(existenceArgs)+len(typeArgs)+len(descendantArgs)+len(arrayGuardArgs)+
-			len(typePathArgs)+len(rawPathArgs)+len(inputArgs),
+			2*len(pathArgs)+3+len(inputArgs),
 	)
 	prefixArgs = append(prefixArgs, existenceArgs...)
 	prefixArgs = append(prefixArgs, typeArgs...)
 	prefixArgs = append(prefixArgs, descendantArgs...)
 	prefixArgs = append(prefixArgs, arrayGuardArgs...)
-	prefixArgs = append(prefixArgs, typePathArgs...)
-	prefixArgs = append(prefixArgs, rawPathArgs...)
+	prefixArgs = append(prefixArgs, pathArgs...)
+	prefixArgs = append(prefixArgs, pathArgs...)
+	prefixArgs = append(prefixArgs, spathJSONNumberPattern)
+	prefixArgs = append(prefixArgs, spathJSONTokenPattern)
+	prefixArgs = append(prefixArgs, spathJSONTokenPattern)
 	prefixArgs = append(prefixArgs, inputArgs...)
 	return relation, next, prefixArgs, 1, nil
 }

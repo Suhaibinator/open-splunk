@@ -24,9 +24,10 @@ const (
 	// required because ClickHouse integer path arguments also index objects by
 	// member position.
 	MaximumArraySelectors = 4
-	// MaximumEvaluationWorkUnits bounds cumulative JSON parser invocations per
-	// row. One stage costs terminal type + raw extraction + typed-leaf decode,
-	// plus one container-type check for each fixed array selector.
+	// MaximumEvaluationWorkUnits bounds cumulative structural JSON parser work
+	// per row. One stage reserves raw extraction, conditional numeric-marker
+	// lookup, and ordinary typed-leaf decode, plus one container-type check for
+	// each fixed array selector.
 	MaximumEvaluationWorkUnits = 32
 	// MaximumArrayIndex leaves room to translate Splunk's zero-based index to
 	// a positive signed-32-bit ClickHouse index. The pinned server wraps larger

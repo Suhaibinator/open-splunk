@@ -9,15 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/big"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -422,32 +421,25 @@ func typedJSONValue(value any) (*opensplunkv1.TypedValue, error) {
 }
 
 func typedJSONNumber(number json.Number) (*opensplunkv1.TypedValue, error) {
-	text := number.String()
-	if !strings.ContainsAny(text, ".eE") {
-		if value, err := strconv.ParseInt(text, 10, 64); err == nil {
-			return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Sint64Value{Sint64Value: value}}, nil
-		}
-		if !strings.HasPrefix(text, "-") {
-			if value, err := strconv.ParseUint(text, 10, 64); err == nil {
-				return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Uint64Value{Uint64Value: value}}, nil
-			}
-		}
-		return decimalTypedValue(canonicalDecimal(text)), nil
+	classified := jsonnumber.Classify(number.String())
+	switch classified.Kind {
+	case jsonnumber.KindSint64:
+		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Sint64Value{
+			Sint64Value: classified.Sint64,
+		}}, nil
+	case jsonnumber.KindUint64:
+		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_Uint64Value{
+			Uint64Value: classified.Uint64,
+		}}, nil
+	case jsonnumber.KindFloat64:
+		return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DoubleValue{
+			DoubleValue: classified.Float64,
+		}}, nil
+	case jsonnumber.KindDecimal:
+		return decimalTypedValue(classified.Decimal), nil
+	default:
+		return nil, fmt.Errorf("classify JSON number: invalid kind %d", classified.Kind)
 	}
-
-	floatValue, err := strconv.ParseFloat(text, 64)
-	if err == nil && !math.IsInf(floatValue, 0) && !math.IsNaN(floatValue) {
-		// Very long decimals are necessarily better represented as DecimalValue;
-		// avoid constructing attacker-controlled, enormous big integers merely to
-		// prove that they are not exactly representable as float64.
-		if len(text) <= 128 {
-			exact, exactErr := decimalRat(text)
-			if exactErr == nil && exact.Cmp(new(big.Rat).SetFloat64(floatValue)) == 0 {
-				return &opensplunkv1.TypedValue{Kind: &opensplunkv1.TypedValue_DoubleValue{DoubleValue: floatValue}}, nil
-			}
-		}
-	}
-	return decimalTypedValue(canonicalDecimal(text)), nil
 }
 
 func decimalTypedValue(value string) *opensplunkv1.TypedValue {
@@ -456,68 +448,12 @@ func decimalTypedValue(value string) *opensplunkv1.TypedValue {
 	}}
 }
 
-func decimalRat(text string) (*big.Rat, error) {
-	mantissa, exponentText, _ := strings.Cut(strings.ToLower(text), "e")
-	exponent := int64(0)
-	var err error
-	if exponentText != "" {
-		exponent, err = strconv.ParseInt(exponentText, 10, 32)
-		if err != nil {
-			return nil, fmt.Errorf("decimal exponent is too large: %w", err)
-		}
-		if exponent < -10_000 || exponent > 10_000 {
-			return nil, errors.New("decimal exponent exceeds supported conversion range")
-		}
-	}
-	negative := strings.HasPrefix(mantissa, "-")
-	mantissa = strings.TrimPrefix(mantissa, "-")
-	integer, fraction, hasFraction := strings.Cut(mantissa, ".")
-	digits := integer
-	if hasFraction {
-		digits += fraction
-	}
-	numerator := new(big.Int)
-	if _, ok := numerator.SetString(digits, 10); !ok {
-		return nil, fmt.Errorf("invalid JSON number %q", text)
-	}
-	if negative {
-		numerator.Neg(numerator)
-	}
-	scale := int64(len(fraction)) - exponent
-	denominator := big.NewInt(1)
-	if scale > 0 {
-		denominator.Exp(big.NewInt(10), big.NewInt(scale), nil)
-	} else if scale < 0 {
-		numerator.Mul(numerator, new(big.Int).Exp(big.NewInt(10), big.NewInt(-scale), nil))
-	}
-	return new(big.Rat).SetFrac(numerator, denominator), nil
-}
-
-func canonicalDecimal(text string) string {
-	mantissa, exponent, found := strings.Cut(strings.ToLower(text), "e")
-	if !found {
-		return mantissa
-	}
-	sign := ""
-	if strings.HasPrefix(exponent, "+") {
-		exponent = strings.TrimPrefix(exponent, "+")
-	} else if strings.HasPrefix(exponent, "-") {
-		sign = "-"
-		exponent = strings.TrimPrefix(exponent, "-")
-	}
-	exponent = strings.TrimLeft(exponent, "0")
-	if exponent == "" {
-		exponent, sign = "0", ""
-	}
-	return mantissa + "e" + sign + exponent
-}
-
 // parseEventTime converts a canonical timestamp value to a time.Time. Every
 // error it returns is deliberately VALUE-FREE (no payload bytes): the offending
 // timestamp string/number is never embedded, because these errors flow into
 // recordDecodeFailure logs and a source field may carry secret material. In
 // particular the string branch does not wrap time.Parse's error (which embeds
-// the input value), and the numeric branch does not propagate decimalRat's
+// the input value), and the numeric branch does not propagate ParseDecimalRat's
 // %q-bearing error.
 func parseEventTime(value any) (time.Time, error) {
 	switch value := value.(type) {
@@ -531,7 +467,7 @@ func parseEventTime(value any) (time.Time, error) {
 		if len(value.String()) > 128 {
 			return time.Time{}, errors.New("numeric timestamp is too long")
 		}
-		rat, err := decimalRat(value.String())
+		rat, err := jsonnumber.ParseDecimalRat(value.String())
 		if err != nil {
 			return time.Time{}, errors.New("numeric timestamp is invalid")
 		}

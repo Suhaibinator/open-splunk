@@ -1540,15 +1540,28 @@ is erroneous but does not define row-versus-job failure precisely.
 
 On a successful extraction, JSON String, Boolean, null, `Int64`, and `UInt64`
 leaves retain those types. Explicit JSON null is present but null, so it remains
-distinct from a missing path. Fractional or exponent-form numbers produce a
-sanitized unsupported-value error in this first slice rather than being
-silently rounded to `Float64`; exact Decimal parity with ingestion is reserved
-for a later slice. A terminal array or object likewise produces that error
-instead of being stringified or exposed as a partially supported container.
-JSON documents containing numbers outside ClickHouse's bounded
-`Int64`/`UInt64` parser domain may be treated as malformed by the pinned server,
-even when the selected member is unrelated. This is documented as an
-unverified compatibility boundary, not Splunk parity.
+distinct from a missing path. Every other valid JSON number follows the same
+bounded representation contract as collector ingestion. Fractional or
+exponent syntax becomes `Double` only when its complete decimal rational is
+exactly representable as a finite binary64 value, its source spelling is at
+most 19 bytes, its exact decimal scale is at most 60, its nonzero magnitude is
+less than `1e60`, and its exponent magnitude is at most 10,000. All other
+numbers, including integers outside `UInt64`, inexact fractions, underflow,
+overflow, and longer exact dyadic spellings, remain exact `decimal/v1` values.
+Decimal publication preserves the coefficient spelling while lowercasing `E`
+and removing a redundant exponent plus sign and exponent leading zeroes.
+
+The compiler recovers a selected numeric token from the original JSON text; it
+does not classify the rounded spelling returned by ClickHouse's structured JSON
+extractors. It tokenizes once, replaces every number with null and a
+compiler-owned token-index marker in two structurally equivalent documents, and
+uses the native JSON path functions on those documents. Escaped member names,
+duplicate-member order, array selectors, nested same-name members, and numbers
+outside Float64 range therefore retain structural path semantics and exact
+lexemes. An overflow or underflow numeric sibling cannot poison extraction of
+an unrelated member. A terminal array or object still produces a sanitized
+unsupported-value error instead of being stringified or exposed as a partially
+supported container.
 
 A successful extraction replaces an existing destination, including replacing
 it with explicit null. When extraction does not match, an existing destination
@@ -1559,17 +1572,25 @@ established ordering. Its typed output participates in downstream `search`,
 `where`, `sort`, `stats`, `dedup`, `bin`, projections, field discovery, field
 summaries, and timelines under their existing value contracts.
 
-One source String is limited to 1 MiB per row. An oversized calculated input
-produces a sanitized execution-limit error rather than exposing payload bytes.
+One source String is limited to 1 MiB and 16,384 lexical JSON tokens per row.
+An oversized calculated input or over-token document produces a sanitized
+execution-limit error rather than exposing payload bytes. Inputs larger than
+16,384 bytes are token-counted before a token array is allocated; admitted rows
+are tokenized once and all later reconstruction is bounded by the token ceiling.
+These resource guards precede JSON validity checks, so a malformed document
+that exceeds either ceiling receives the corresponding execution-limit error;
+a malformed document within both ceilings remains a row-local miss.
+
 `rex` captures and `spath` destinations share a limit of 64 calculated
-extraction outputs per query. Each stage binds every user path component as a
-ClickHouse argument; no path text is interpolated into SQL. It performs one
-terminal type inspection, one raw-value extraction, one typed-leaf decode, and
-one additional array-container inspection per fixed selector. The
-four-selector ceiling therefore bounds a stage to at most seven JSON parser
-invocations. Across all `spath` stages, a query may use at most 32 of these
-evaluation work units per row; the planner and compiler independently enforce
-that cumulative ceiling.
+extraction outputs per query. Each stage binds every user path component and
+both compiler-owned regular expressions as ClickHouse arguments; no path or
+payload text is interpolated into SQL. It reserves at most three structural
+JSON parser invocations for raw extraction, conditional numeric-marker lookup,
+and ordinary typed-leaf decoding, plus one array-container inspection per fixed
+selector. The four-selector ceiling therefore bounds a stage to at most seven
+JSON parser invocations. Across all `spath` stages, a query may use at most 32
+of these evaluation work units per row; the planner and compiler independently
+enforce that cumulative ceiling.
 
 The input-size and unsupported-value errors are part of evaluating a live
 destination. A destination is live when it is returned, consumed downstream,

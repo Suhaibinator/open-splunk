@@ -19,6 +19,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/jsonnumbercorpus"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -27,6 +28,8 @@ const (
 	spathIntegrationIndex  = "spath-edge"
 	spathLimitIndex        = "spath-limit"
 	spathCorruptIndex      = "spath-corrupt"
+	spathNumericIndex      = "spath-numeric"
+	spathParityIndex       = "spath-parity"
 	spathIntegrationTenant = "tenant"
 )
 
@@ -118,6 +121,64 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 				path: "payload.unsigned",
 				want: "UInt64/18446744073709551615",
 			},
+			{name: "exact fraction", path: "payload.fraction", want: "Float64/1.25"},
+			{name: "exact exponent", path: "payload.exponent", want: "Float64/1"},
+			{name: "exact fractional exponent", path: "payload.fractional_exponent", want: "Float64/15"},
+			{
+				name: "inexact fraction", path: "payload.inexact_fraction",
+				want: "Map(String, String)/decimal/v1/0.1",
+			},
+			{
+				name: "rounded fractional spelling", path: "payload.rounded_fraction",
+				want: "Map(String, String)/decimal/v1/9007199254740993.0",
+			},
+			{
+				name: "exact wide fraction", path: "payload.exact_wide_fraction",
+				want: "Float64/9007199254740994",
+			},
+			{
+				name: "integer overflow", path: "payload.integer_overflow",
+				want: "Map(String, String)/decimal/v1/18446744073709551616",
+			},
+			{
+				name: "underflow", path: "payload.underflow",
+				want: "Map(String, String)/decimal/v1/1e-400",
+			},
+			{
+				name: "overflow", path: "payload.overflow",
+				want: "Map(String, String)/decimal/v1/1e400",
+			},
+			{name: "normalized exponent parser trap", path: "payload.parser_trap", want: "Float64/970"},
+			{name: "negative exponent parser trap", path: "payload.negative_parser_trap", want: "Float64/-186"},
+			{name: "exact Float text bound", path: "payload.exact_text_bound", want: "Float64/72057594037927940"},
+			{
+				name: "over exact Float text bound", path: "payload.over_exact_text_bound",
+				want: "Map(String, String)/decimal/v1/144115188075855872.0",
+			},
+			{
+				name: "over zero exponent bound", path: "payload.over_zero_exponent",
+				want: "Map(String, String)/decimal/v1/0e10001",
+			},
+			{
+				name: "escaped member name", path: "payload.escaped_numeric",
+				want: "Float64/0.5",
+			},
+			{
+				name: "direct member after nested same name", path: "payload.value",
+				want: "Float64/0.5",
+			},
+			{
+				name: "wide number at array index", path: "payload.numeric_items{0}",
+				want: "Map(String, String)/decimal/v1/9007199254740993.0",
+			},
+			{
+				name: "first duplicate numeric member", path: "payload.duplicate_numeric",
+				want: "Map(String, String)/decimal/v1/0.1",
+			},
+			{
+				name: "explicit null before duplicate numeric member", path: "payload.duplicate_null_numeric",
+				want: "None/<none>",
+			},
 			{name: "zero array index", path: "payload.items{0}.name", want: "String/zero"},
 			{name: "one array index", path: "payload.items{1}.name", want: "String/one"},
 			{name: "first duplicate member", path: "payload.duplicate", want: "String/first"},
@@ -127,14 +188,56 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 | spath output=selected path=`+test.path+`
 | table selected`)
 				got := spathRows(t, ctx, connection,
-					`SELECT concat(dynamicType(selected), '/',
-						if(dynamicType(selected) = 'None', '<none>', toString(selected)))
+					`SELECT concat(dynamicType(selected), '/', multiIf(
+						dynamicType(selected) = 'None', '<none>',
+						dynamicType(selected) = 'Map(String, String)', concat(
+							dynamicElement(selected, 'Map(String, String)')[concat(char(0), 'open_splunk_type')], '/',
+							dynamicElement(selected, 'Map(String, String)')[concat(char(0), 'open_splunk_value')]),
+						toString(selected)))
 					FROM (`+compiled.SQL+`)`,
 					compiled.Args, 1)
 				if !reflect.DeepEqual(got, [][]string{{test.want}}) {
 					t.Fatalf("spath %s value = %#v, want %q", test.name, got, test.want)
 				}
 			})
+		}
+	})
+
+	t.Run("collector and spath share one bounded numeric corpus", func(t *testing.T) {
+		compiled := compile(t, `index=spath-parity
+| spath output=selected path=value
+| table event_id selected`)
+		rows := spathRows(t, ctx, connection,
+			`SELECT event_id, dynamicType(selected), multiIf(
+				dynamicType(selected) = 'Float64', toString(reinterpretAsUInt64(
+					dynamicElement(selected, 'Float64'))),
+				dynamicType(selected) = 'Map(String, String)', concat(
+					dynamicElement(selected, 'Map(String, String)')[concat(char(0), 'open_splunk_type')], '/',
+					dynamicElement(selected, 'Map(String, String)')[concat(char(0), 'open_splunk_value')]),
+				toString(selected))
+			FROM (`+compiled.SQL+`)`,
+			compiled.Args, 3)
+		got := make(map[string][]string, len(rows))
+		for _, row := range rows {
+			if _, duplicate := got[row[0]]; duplicate {
+				t.Fatalf("duplicate numeric parity event %q", row[0])
+			}
+			got[row[0]] = row[1:]
+		}
+		cases := jsonnumbercorpus.Cases()
+		if len(got) != len(cases) {
+			t.Fatalf("numeric parity rows = %d, want %d: %#v", len(got), len(cases), got)
+		}
+		for _, test := range cases {
+			wantValue := test.Value
+			if test.DynamicType == "Map(String, String)" {
+				wantValue = "decimal/v1/" + wantValue
+			}
+			want := []string{test.DynamicType, wantValue}
+			if !reflect.DeepEqual(got[test.EventID], want) {
+				t.Errorf("numeric parity %s (%s) = %#v, want %#v",
+					test.Name, test.Lexeme, got[test.EventID], want)
+			}
 		}
 	})
 
@@ -249,10 +352,6 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 			name string
 			path string
 		}{
-			{name: "fraction", path: "payload.fraction"},
-			{name: "exponent", path: "payload.exponent"},
-			{name: "fractional exponent", path: "payload.fractional_exponent"},
-			{name: "rounded fractional spelling", path: "payload.rounded_fraction"},
 			{name: "object", path: "payload.container"},
 			{name: "array", path: "payload.items"},
 		} {
@@ -310,6 +409,91 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 			over.Args)
 		if err == nil || !strings.Contains(err.Error(), SpathInputLimitMarker) {
 			t.Fatalf("1 MiB + 1 spath input error = %v, want stable limit marker", err)
+		}
+
+		for _, eventID := range []string{"s-token-over", "s-token-malformed-over"} {
+			tokenOver := compile(t, `index=spath-limit event_id=`+eventID+`
+ | spath output=selected path=values{0}
+ | table selected`)
+			err = spathQueryError(ctx, connection,
+				`SELECT toString(selected) FROM (`+tokenOver.SQL+`)`,
+				tokenOver.Args)
+			if err == nil || !strings.Contains(err.Error(), SpathJSONTokenLimitMarker) {
+				t.Fatalf("spath token-limit error for %s = %v, want stable token marker", eventID, err)
+			}
+		}
+
+		tokenExact := compile(t, `index=spath-limit event_id=s-token-exact
+| spath output=selected path=values{0}
+| table selected`)
+		got = spathRows(t, ctx, connection,
+			`SELECT dynamicType(selected) FROM (`+tokenExact.SQL+`)`, tokenExact.Args, 1)
+		if !reflect.DeepEqual(got, [][]string{{"None"}}) {
+			t.Fatalf("exactly %d-token malformed input = %#v, want bounded miss",
+				MaximumSpathJSONTokens, got)
+		}
+		validUnder := compile(t, `index=spath-limit event_id=s-token-valid-under
+| spath output=selected path=values{0}
+| table selected`)
+		got = spathRows(t, ctx, connection,
+			`SELECT concat(dynamicType(selected), '/', toString(selected)) FROM (`+
+				validUnder.SQL+`)`, validUnder.Args, 1)
+		if !reflect.DeepEqual(got, [][]string{{"Int64/0"}}) {
+			t.Fatalf("largest valid token document below limit = %#v, want Int64/0", got)
+		}
+		validOver := compile(t, `index=spath-limit event_id=s-token-valid-over
+| spath output=selected path=values{0}
+| table selected`)
+		err = spathQueryError(ctx, connection,
+			`SELECT toString(selected) FROM (`+validOver.SQL+`)`, validOver.Args)
+		if err == nil || !strings.Contains(err.Error(), SpathJSONTokenLimitMarker) {
+			t.Fatalf("smallest valid token document above limit error = %v, want stable marker", err)
+		}
+
+		lowMemory := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(clickhousedriver.Settings{
+			"max_execution_time":                uint64(30),
+			"timeout_overflow_mode":             "throw",
+			"max_memory_usage":                  uint64(30 << 20),
+			"max_threads":                       uint64(1),
+			"max_subquery_depth":                uint64(100),
+			"max_query_size":                    uint64(1 << 20),
+			"enable_materialized_cte":           uint8(1),
+			"short_circuit_function_evaluation": "enable",
+		}))
+		for _, test := range []struct {
+			name        string
+			value       string
+			replacement string
+			suffix      string
+			marker      string
+		}{
+			{
+				name:        "constant input limit",
+				value:       strings.Repeat("x", 1025),
+				replacement: strings.Repeat("a", 1024),
+				marker:      SpathInputLimitMarker,
+			},
+			{
+				name:        "constant token limit",
+				value:       strings.Repeat("x", 512),
+				replacement: strings.Repeat("0,", 512),
+				suffix:      `| eval amplified="{\"values\":[" . amplified . "0]}"`,
+				marker:      SpathJSONTokenLimitMarker,
+			},
+		} {
+			t.Run(test.name+" is guarded before constant folding", func(t *testing.T) {
+				source := `index=spath-limit event_id=s-limit-exact
+| eval amplified=replace("` + test.value + `","x","` + test.replacement + `")
+` + test.suffix + `
+| spath input=amplified output=selected path=values{0}
+| table selected`
+				compiled := compile(t, source)
+				err := spathQueryError(lowMemory, connection,
+					`SELECT toString(selected) FROM (`+compiled.SQL+`)`, compiled.Args)
+				if err == nil || !strings.Contains(err.Error(), test.marker) {
+					t.Fatalf("%s error = %v, want stable marker %q", test.name, err, test.marker)
+				}
+			})
 		}
 
 		dead := compile(t, sourceFor("s-limit-over", "table event_id"))
@@ -386,6 +570,111 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("numeric leaves stay exact through comparison sort extrema and bin", func(t *testing.T) {
+		bounded := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(clickhousedriver.Settings{
+			"max_execution_time":                uint64(30),
+			"timeout_overflow_mode":             "throw",
+			"max_memory_usage":                  uint64(512 << 20),
+			"max_threads":                       uint64(1),
+			"max_subquery_depth":                uint64(100),
+			"max_query_size":                    uint64(1 << 20),
+			"enable_materialized_cte":           uint8(1),
+			"short_circuit_function_evaluation": "enable",
+		}))
+
+		comparison := compile(t, `index=spath-numeric
+| spath output=value path=value
+| where value>9007199254740992
+| stats count`)
+		var count uint64
+		if err := connection.QueryRow(
+			bounded,
+			`SELECT toUInt64(count) FROM (`+comparison.SQL+`)`,
+			comparison.Args...,
+		).Scan(&count); err != nil {
+			t.Fatalf("execute exact spath comparison: %v\nSQL: %s", err, comparison.SQL)
+		}
+		if count != 3 {
+			t.Fatalf("exact spath comparison count = %d, want 3", count)
+		}
+
+		sorted := compile(t, `index=spath-numeric
+| spath output=value path=value
+| sort 0 +value
+| table event_id`)
+		got := spathRows(t, bounded, connection,
+			`SELECT event_id FROM (`+sorted.SQL+`)`, sorted.Args, 1)
+		want := [][]string{
+			{"n-neg-huge"},
+			{"n-neg-tiny"},
+			{"n-zero"},
+			{"n-pos-tiny"},
+			{"n-inexact"},
+			{"n-inexact-high"},
+			{"n-exact"},
+			{"n-wide-low"},
+			{"n-wide-mid"},
+			{"n-wide-high"},
+			{"n-pos-huge"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("exact spath sort = %#v, want %#v", got, want)
+		}
+
+		extrema := compile(t, `index=spath-numeric
+| spath output=value path=value
+| stats min(value) AS low max(value) AS high`)
+		got = spathRows(t, bounded, connection,
+			`SELECT
+				dynamicElement(low, 'Map(String, String)')[concat(char(0), 'open_splunk_value')],
+				dynamicElement(high, 'Map(String, String)')[concat(char(0), 'open_splunk_value')]
+			FROM (`+extrema.SQL+`)`,
+			extrema.Args, 2)
+		if want := [][]string{{"-1e400", "1e400"}}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("exact spath extrema = %#v, want %#v", got, want)
+		}
+
+		for _, test := range []struct {
+			name   string
+			path   string
+			span   string
+			want   string
+			marker string
+		}{
+			{name: "Double", path: "payload.fraction", span: "1", want: "Float64/1"},
+			{
+				name: "wide Decimal", path: "payload.rounded_fraction", span: "2",
+				want: "Int256/9007199254740992",
+			},
+			{
+				name: "overflow Decimal", path: "payload.overflow", span: "1",
+				marker: UnsupportedNumericBinValueMarker,
+			},
+		} {
+			t.Run("bin "+test.name, func(t *testing.T) {
+				binned := compile(t, `index=spath-edge event_id=s-scalars
+| spath output=selected path=`+test.path+`
+| bin selected span=`+test.span+`
+| table selected`)
+				query := `SELECT concat(dynamicType(selected), '/', if(
+					dynamicType(selected) = 'Map(String, String)',
+					dynamicElement(selected, 'Map(String, String)')[concat(char(0), 'open_splunk_value')],
+					toString(selected))) FROM (` + binned.SQL + `)`
+				if test.marker != "" {
+					err := spathQueryError(bounded, connection, query, binned.Args)
+					if err == nil || !strings.Contains(err.Error(), test.marker) {
+						t.Fatalf("bin %s error = %v, want marker %q", test.name, err, test.marker)
+					}
+					return
+				}
+				got := spathRows(t, bounded, connection, query, binned.Args, 1)
+				if want := [][]string{{test.want}}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("bin %s = %#v, want %#v", test.name, got, want)
+				}
+			})
+		}
+	})
+
 	t.Run("field catalog consumes spath presence and type metadata", func(t *testing.T) {
 		bounded := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(clickhousedriver.Settings{
 			"max_execution_time":                uint64(15),
@@ -411,6 +700,18 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 				name:   "Boolean",
 				source: `index=spath-edge | spath output=selected path=payload.flag | table selected`,
 				field:  "selected", wantTypes: []uint8{uint8(eventfields.StoredValueTypeBool)},
+				events: 1, missing: 3, totalEvents: 4,
+			},
+			{
+				name:   "Double",
+				source: `index=spath-edge | spath output=selected path=payload.fraction | table selected`,
+				field:  "selected", wantTypes: []uint8{uint8(eventfields.StoredValueTypeDouble)},
+				events: 1, missing: 3, totalEvents: 4,
+			},
+			{
+				name:   "Decimal",
+				source: `index=spath-edge | spath output=selected path=payload.inexact_fraction | table selected`,
+				field:  "selected", wantTypes: []uint8{uint8(eventfields.StoredValueTypeDecimal)},
 				events: 1, missing: 3, totalEvents: 4,
 			},
 			{
@@ -560,7 +861,7 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("physical actions perform one raw extraction and bounded type checks", func(t *testing.T) {
+	t.Run("physical actions perform one raw extraction without a terminal type pass", func(t *testing.T) {
 		compiled := compile(t, `index=spath-edge
 | spath output=selected path=payload.text
 | table event_id selected`)
@@ -568,8 +869,8 @@ func TestSpathAgainstClickHouse(t *testing.T) {
 		if got := strings.Count(actions, "FUNCTION JSONExtractRaw("); got != 1 {
 			t.Fatalf("physical plan has %d raw JSON function actions, want one:\n%s", got, actions)
 		}
-		if got := strings.Count(actions, "FUNCTION JSONType("); got != 1 {
-			t.Fatalf("physical plan has %d JSON type actions, want one for a non-indexed path:\n%s", got, actions)
+		if got := strings.Count(actions, "FUNCTION JSONType("); got != 0 {
+			t.Fatalf("physical plan has %d terminal JSON type actions, want none:\n%s", got, actions)
 		}
 		planText := explainCompiledQuery(t, ctx, connection, "EXPLAIN ", compiled)
 		for _, blockingStep := range []string{"Aggregating", "Join", "Window", "MergingAggregated"} {
@@ -587,7 +888,17 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 		`"signed":-9,"signed_min":-9223372036854775808,"signed_max":9223372036854775807,` +
 		`"unsigned_min":9223372036854775808,"unsigned":18446744073709551615,` +
 		`"fraction":1.25,"exponent":1e0,"fractional_exponent":1.5e1,` +
-		`"rounded_fraction":9007199254740993.0,` +
+		`"inexact_fraction":0.1,"rounded_fraction":9007199254740993.0,` +
+		`"exact_wide_fraction":9007199254740994.0,` +
+		`"integer_overflow":18446744073709551616,` +
+		`"underflow":1E-0400,"overflow":1E+0400,` +
+		`"parser_trap":9.7e2,"negative_parser_trap":-0.0186E4,` +
+		`"exact_text_bound":72057594037927936.0,` +
+		`"over_exact_text_bound":144115188075855872.0,"over_zero_exponent":0e10001,` +
+		`"\u0065scaped_numeric":0.5,"earlier":{"value":0.1},"value":0.5,` +
+		`"numeric_items":[9007199254740993.0,1.25],` +
+		`"duplicate_numeric":0.1,"duplicate_numeric":0.5,` +
+		`"duplicate_null_numeric":null,"duplicate_null_numeric":0.5,` +
 		`"container":{"leaf":"value"},"items":[{"name":"zero"},{"name":"one"}],` +
 		`"nested_json":"{\"deep\":{\"value\":\"stage-two\"}}",` +
 		`"duplicate":"first","duplicate":"second"}}`
@@ -644,6 +955,41 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 		7,
 	)
 	corrupt.Event.IndexName = spathCorruptIndex
+	tokenHeavy := spathEvent(
+		"s-token-over",
+		[]byte(`{"values":[`+strings.Repeat("0,", MaximumSpathJSONTokens/2+1)+`0]}`),
+		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		22,
+	)
+	tokenHeavy.Event.IndexName = spathLimitIndex
+	malformedTokenHeavy := spathEvent(
+		"s-token-malformed-over",
+		[]byte(`{"values":[`+strings.Repeat("0,", MaximumSpathJSONTokens/2+1)),
+		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		23,
+	)
+	malformedTokenHeavy.Event.IndexName = spathLimitIndex
+	tokenExact := spathEvent(
+		"s-token-exact",
+		[]byte(strings.Repeat("0,", MaximumSpathJSONTokens/2)),
+		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		24,
+	)
+	tokenExact.Event.IndexName = spathLimitIndex
+	validTokenUnder := spathEvent(
+		"s-token-valid-under",
+		[]byte(`{"values":[`+strings.Repeat("0,", (MaximumSpathJSONTokens-5)/2)+`0]}`),
+		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		25,
+	)
+	validTokenUnder.Event.IndexName = spathLimitIndex
+	validTokenOver := spathEvent(
+		"s-token-valid-over",
+		[]byte(`{"values":[`+strings.Repeat("0,", (MaximumSpathJSONTokens-3)/2)+`0]}`),
+		opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+		26,
+	)
+	validTokenOver.Event.IndexName = spathLimitIndex
 	poison := spathEvent(
 		"s-poison",
 		[]byte(`{"payload":{"poison":{"must":"not execute"}}}`),
@@ -651,7 +997,43 @@ func spathStoreFixture(t *testing.T, ctx context.Context, store *Store, indexTim
 		4,
 	)
 	poison.Event.IndexName = "spath-poison"
-	events = append(events, poison, limitExact, limitOver, corrupt)
+	events = append(events, poison, limitExact, limitOver, corrupt, tokenHeavy,
+		malformedTokenHeavy, tokenExact, validTokenUnder, validTokenOver)
+	for index, fixture := range []struct {
+		id    string
+		value string
+	}{
+		{id: "n-neg-huge", value: "-1e400"},
+		{id: "n-neg-tiny", value: "-1e-400"},
+		{id: "n-zero", value: "0"},
+		{id: "n-pos-tiny", value: "1e-400"},
+		{id: "n-inexact", value: "0.1"},
+		{id: "n-inexact-high", value: "0.10000000000000001"},
+		{id: "n-exact", value: "1.25"},
+		{id: "n-wide-low", value: "9007199254740992.0"},
+		{id: "n-wide-mid", value: "9007199254740993.0"},
+		{id: "n-wide-high", value: "9007199254740994.0"},
+		{id: "n-pos-huge", value: "1e400"},
+	} {
+		numeric := spathEvent(
+			fixture.id,
+			[]byte(`{"value":`+fixture.value+`}`),
+			opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			10+index,
+		)
+		numeric.Event.IndexName = spathNumericIndex
+		events = append(events, numeric)
+	}
+	for index, fixture := range jsonnumbercorpus.Cases() {
+		parity := spathEvent(
+			fixture.EventID,
+			[]byte(`{"value":`+fixture.Lexeme+`}`),
+			opensplunkv1.RawEncoding_RAW_ENCODING_UTF8,
+			40+index,
+		)
+		parity.Event.IndexName = spathParityIndex
+		events = append(events, parity)
+	}
 	if _, err := store.Store(ctx, ingest.StoreBatch{
 		TenantID:          spathIntegrationTenant,
 		CollectorID:       "collector",
@@ -721,14 +1103,20 @@ func spathBuildPlan(t *testing.T, source string, cutoff time.Time, visibilityCut
 		t.Fatalf("parse spath SPL %q: %v", source, err)
 	}
 	logical, err := plan.Build(parsed, plan.Scope{
-		TenantID:          spathIntegrationTenant,
-		AuthorizedIndexes: []string{spathIntegrationIndex, spathLimitIndex, spathCorruptIndex},
-		Earliest:          time.Date(2026, time.July, 25, 0, 0, 0, 0, time.UTC),
-		Latest:            time.Date(2026, time.July, 26, 0, 0, 0, 0, time.UTC),
-		SearchStart:       cutoff.Add(-time.Second),
-		SearchTimezone:    "UTC",
-		IndexTimeCutoff:   cutoff,
-		VisibilityCutoff:  uint64PointerForIntegration(visibilityCutoff),
+		TenantID: spathIntegrationTenant,
+		AuthorizedIndexes: []string{
+			spathIntegrationIndex,
+			spathLimitIndex,
+			spathCorruptIndex,
+			spathNumericIndex,
+			spathParityIndex,
+		},
+		Earliest:         time.Date(2026, time.July, 25, 0, 0, 0, 0, time.UTC),
+		Latest:           time.Date(2026, time.July, 26, 0, 0, 0, 0, time.UTC),
+		SearchStart:      cutoff.Add(-time.Second),
+		SearchTimezone:   "UTC",
+		IndexTimeCutoff:  cutoff,
+		VisibilityCutoff: uint64PointerForIntegration(visibilityCutoff),
 	})
 	if err != nil {
 		t.Fatalf("build spath SPL %q: %v", source, err)

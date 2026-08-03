@@ -1938,6 +1938,7 @@ var executionLimitMarkers = [...]struct {
 }{
 	{clickhouse.RexCaptureLimitMarker, "rex capture bytes exceeded the per-row limit"},
 	{clickhouse.SpathInputLimitMarker, "spath input bytes exceeded the per-row limit"},
+	{clickhouse.SpathJSONTokenLimitMarker, "spath JSON tokens exceeded the per-row limit"},
 	{clickhouse.ChartRowLimitMarker, "chart row values exceeded the supported limit"},
 	{clickhouse.EventStatsInputLimitMarker, "eventstats input rows exceeded the supported limit"},
 	{clickhouse.ExactDistinctLimitMarker, "exact distinct values exceeded the supported limit"},

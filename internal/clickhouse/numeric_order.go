@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
@@ -16,8 +17,6 @@ const (
 	MaximumExactNumericOrderingInputTextBytes = MaximumExactNumericBinTextBytes
 	MaximumExactNumericOrderingTextBytes      = MaximumExactNumericBinTextBytes + 1
 )
-
-const maximumExactNumericOrderingExponent = 10_000
 
 func bindSQLExpressions(parameters, values []string, body string) string {
 	if len(parameters) != len(values) {
@@ -70,7 +69,8 @@ func exactNumericOrderingKeySQL(valueSQL string) string {
 	decimalOrder := "__os_exact_order_decimal_order"
 
 	limit := strconv.Itoa(MaximumExactNumericOrderingTextBytes)
-	maximumExponent := strconv.Itoa(maximumExactNumericOrderingExponent)
+	maximumExponent := strconv.Itoa(jsonnumber.MaximumExponentMagnitude)
+	maximumExponentDigits := strconv.Itoa(len(maximumExponent))
 	boundedSQL := "if(length(" + raw + ") <= " + limit + ", " + raw +
 		", CAST('' AS String))"
 	validSQL := "toUInt8(isValidUTF8(" + bounded + ") AND length(" + raw + ") <= " +
@@ -89,7 +89,8 @@ func exactNumericOrderingKeySQL(valueSQL string) string {
 	exponentDigitsSQL := "substring(" + exponentText + ", " + exponentOffset + ")"
 	exponentTrimmedSQL := "replaceRegexpOne(" + exponentDigits + ", '^0+', '')"
 	exponentEligibleSQL := "toUInt8(empty(" + exponentTrimmed + ") OR length(" +
-		exponentTrimmed + ") < 5 OR (length(" + exponentTrimmed + ") = 5 AND " +
+		exponentTrimmed + ") < " + maximumExponentDigits + " OR (length(" +
+		exponentTrimmed + ") = " + maximumExponentDigits + " AND " +
 		exponentTrimmed + " <= '" + maximumExponent + "'))"
 	exponentMagnitudeSQL := "toInt64OrZero(if(" + exponentEligible +
 		" != 0 AND NOT empty(" + exponentTrimmed + "), " + exponentTrimmed +
@@ -379,8 +380,9 @@ func boundedExactNumericLiteralExponent(text string) (int64, bool) {
 	if text == "" {
 		return 0, true
 	}
-	if len(text) > 5 ||
-		(len(text) == 5 && text > strconv.Itoa(maximumExactNumericOrderingExponent)) {
+	maximumExponent := strconv.Itoa(jsonnumber.MaximumExponentMagnitude)
+	if len(text) > len(maximumExponent) ||
+		(len(text) == len(maximumExponent) && text > maximumExponent) {
 		return 0, false
 	}
 	exponent, err := strconv.ParseInt(text, 10, 64)
@@ -475,8 +477,15 @@ func decimalEnvelopeTextSQL(valueSQL string) string {
 }
 
 func decimalEnvelopeDynamicSQL(valueSQL string) string {
+	return decimalEnvelopePayloadDynamicSQL(decimalEnvelopeTextSQL(valueSQL))
+}
+
+// decimalEnvelopePayloadDynamicSQL wraps an already-normalized decimal/v1
+// payload. Lexical extraction uses this narrower constructor so its collector-
+// canonical spelling is not coupled to computed-result normalization rules.
+func decimalEnvelopePayloadDynamicSQL(payloadSQL string) string {
 	typeKey := "concat(char(0), 'open_splunk_type')"
 	valueKey := "concat(char(0), 'open_splunk_value')"
 	return "CAST(map(" + typeKey + ", 'decimal/v1', " + valueKey + ", " +
-		decimalEnvelopeTextSQL(valueSQL) + ") AS Dynamic)"
+		payloadSQL + ") AS Dynamic)"
 }

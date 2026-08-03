@@ -121,7 +121,7 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 			depth:  23,
 		},
 		{name: "rex", source: `| rex field=_raw "(?<word>[a-z]+)"`, depth: 7},
-		{name: "spath", source: `| spath output=value path=payload.value`, depth: 6},
+		{name: "spath", source: `| spath output=value path=payload.value`, depth: 11},
 		{name: "fixed dedup", source: `| dedup host`, depth: 4},
 		{name: "dynamic dedup", source: `| dedup latency`, depth: 5},
 		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 6},
@@ -358,7 +358,7 @@ func TestSpathRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
 
 	acceptedSource := relationalDepthEvalPipeline(
 		t,
-		26,
+		21,
 		64,
 		"spath output=value path=payload.value",
 	)
@@ -372,7 +372,7 @@ func TestSpathRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
 
 	rejectedSource := relationalDepthEvalPipeline(
 		t,
-		27,
+		22,
 		64,
 		"spath output=value path=payload.value",
 	)

@@ -11,7 +11,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 )
 
-func TestCompileSpathBindsPathAndChecksTypesBeforeOneRawExtraction(t *testing.T) {
+func TestCompileSpathBindsPathAndChecksContainersBeforeOneRawExtraction(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(
@@ -21,8 +21,8 @@ func TestCompileSpathBindsPathAndChecksTypesBeforeOneRawExtraction(t *testing.T)
 	if got := strings.Count(compiled.SQL, "JSONExtractRaw("); got != 1 {
 		t.Fatalf("JSONExtractRaw occurrences = %d, want one:\n%s", got, compiled.SQL)
 	}
-	if got := strings.Count(compiled.SQL, "JSONType("); got != 2 {
-		t.Fatalf("JSONType occurrences = %d, want terminal plus one array-prefix check:\n%s", got, compiled.SQL)
+	if got := strings.Count(compiled.SQL, "JSONType("); got != 1 {
+		t.Fatalf("JSONType occurrences = %d, want one array-prefix check:\n%s", got, compiled.SQL)
 	}
 	if got := strings.Count(compiled.SQL, "JSONExtract("); got != 1 {
 		t.Fatalf("typed JSONExtract occurrences = %d, want one:\n%s", got, compiled.SQL)
@@ -35,7 +35,6 @@ func TestCompileSpathBindsPathAndChecksTypesBeforeOneRawExtraction(t *testing.T)
 	for _, required := range []string{
 		`"__os_spath_input_`,
 		`"__os_spath_path_eligible_`,
-		`"__os_spath_json_type_`,
 		`"__os_spath_raw_`,
 		`"__os_spath_matched_`,
 		`"__os_spath_exists_`,
@@ -59,6 +58,58 @@ func TestCompileSpathBindsPathAndChecksTypesBeforeOneRawExtraction(t *testing.T)
 	}
 	if !slices.Contains(compiled.OutputFields, "extracted") {
 		t.Fatalf("spath output fields = %v, want extracted", compiled.OutputFields)
+	}
+}
+
+func TestCompileSpathClassifiesNumbersFromOneBoundedLexicalTokenization(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | spath output=selected path=payload.value | table selected`,
+	)
+	for fragment, want := range map[string]int{
+		"extractAll(":          1,
+		"JSONExtractString(":   1,
+		"JSONExtractRaw(":      1,
+		"reinterpretAsUInt64(": 1,
+		"toDecimalString(":     1,
+	} {
+		if got := strings.Count(compiled.SQL, fragment); got != want {
+			t.Fatalf("spath SQL contains %q %d times, want %d:\n%s", fragment, got, want, compiled.SQL)
+		}
+	}
+	for _, required := range []string{
+		"countMatches(",
+		"countMatches(if(",
+		"extractAll(if(",
+		"arrayEnumerate(",
+		"arrayStringConcat(",
+		"accurateCastOrNull(",
+		"'decimal/v1'",
+		SpathJSONTokenLimitMarker,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("numeric spath SQL is missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	for _, forbidden := range []string{"arrayCumSum(", "arrayFilter("} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Fatalf("numeric spath SQL retains avoidable %q work:\n%s", forbidden, compiled.SQL)
+		}
+	}
+	if !slices.Contains(compiled.Args, spathJSONTokenPattern) ||
+		!slices.Contains(compiled.Args, spathJSONNumberPattern) {
+		t.Fatalf("numeric spath regexes are not bound arguments: %#v", compiled.Args)
+	}
+	if got := countArgument(compiled.Args, spathJSONTokenPattern); got != 2 {
+		t.Fatalf("numeric spath token-pattern arguments = %d, want preflight plus extraction", got)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("numeric spath placeholders = %d, args = %d:\n%s\n%#v", got, want, compiled.SQL, compiled.Args)
+	}
+	if got, wantMax := len(compiled.SQL), 64<<10; got > wantMax {
+		t.Fatalf("numeric spath compiled SQL bytes = %d, want at most %d", got, wantMax)
 	}
 }
 
@@ -136,7 +187,7 @@ func TestCompileSpathReadsPreCommandValueWhenInputEqualsOutput(t *testing.T) {
 		t,
 		`index=gradethis | spath input=message output=message path=value`,
 	)
-	if got := strings.Count(compiled.SQL, `JSONExtractRaw("__os_spath_input_`); got != 1 {
+	if got := strings.Count(compiled.SQL, `extractAll(if("__os_spath_token_guard_`); got != 1 {
 		t.Fatalf("same-field spath does not read its bound pre-command input once:\n%s", compiled.SQL)
 	}
 	if !slices.Contains(compiled.OutputFields, "message") {
