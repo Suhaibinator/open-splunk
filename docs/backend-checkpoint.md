@@ -7,6 +7,102 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded split numeric timechart
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `d7734b6` — add exact, bounded runtime-wide `timechart sum(field) BY split`
+  and `timechart avg(field) BY split` execution.
+
+This test-first SPL unit extends the nullable numeric timechart path without a
+control-plane schema change, a migration, GORM on the ClickHouse path, a public
+protobuf change, or a frontend transport/component change:
+
+1. `sum(field)` and `avg(field)` now accept one optional exact `BY` split field,
+   following the aggregate or its optional `AS` alias. The alias remains
+   logical metadata; runtime split values name the public columns. Percentile
+   timecharts remain unsplit, and using the same field as the measure and split
+   is a source-located `SPL_DUPLICATE_FIELD` error.
+2. The public runtime schema is `_time` plus at most ten ordinary string series,
+   optional `NULL`, and optional `OTHER`. Numeric cells are nullable Double:
+   gaps remain null, real zero remains present, and empty input publishes only
+   the runtime `_time` schema with no rows. String, missing, and null split
+   values are supported; unsupported types, overlong/invalid/reserved labels,
+   and normalization collisions fail atomically before schema publication.
+3. Ordinary series rank by the sum of their finalized per-bucket aggregate
+   values across the complete range, with lexical ties. Open Splunk pins
+   computed score order to positive infinity, finite descending, negative
+   infinity, then NaN. `OTHER` sums underlying states; average combines their
+   numerators and eligible-member counts before division, so it is weighted by
+   members rather than averaging averages.
+4. ClickHouse performs one tenant/index/time/snapshot-scoped scan and no
+   `ARRAY JOIN`. One mergeable `sumCountArray` state consumes each normalized
+   immediate-member array exactly once per raw `(bucket, split-kind, label)`
+   group. Materialized group states drive scoring, selection, collision and
+   invalid-value validation, weighted collapse, and value/presence maps.
+5. Runtime-wide timecharts now receive a fixed 130,000 raw-group allowance
+   instead of incorrectly deriving pre-ranking capacity from their twelve-column
+   output width. Overflow still throws rather than silently approximating top
+   series. The private transport sends series names only on ordinal zero and
+   reuses scan destinations across later buckets, avoiding roughly 30 MiB of
+   duplicate label transport and tens of thousands of avoidable allocations at
+   the maximum grid/label bounds.
+6. Executor and manager validation share the runtime-series bound contract and
+   independently reject forged output kinds, widths, labels, arrays, presence
+   bits, ordinals, or partial grids. The executor buffers the complete result
+   before publishing, preserving atomic failure and exact NaN/infinity values.
+7. Unit coverage spans parser suggestions/diagnostics, plan contracts, forged
+   metadata, SQL shape, deterministic non-finite ordering, transport types,
+   nullable publication, scan reuse, manager schemas, and raw-group budgeting.
+   The digest-pinned integration covers sum and average ranking, lexical ties,
+   weighted `OTHER`, `NULL`, immediate multivalue normalization, missing and
+   nonnumeric measures, real zero, all-ineligible and empty inputs, invalid
+   split atomicity, tenant/index/time/visibility poison, one physical read, and
+   the no-`ARRAY JOIN` invariant.
+8. Three independent simplify/adversarial reviews found the raw-cardinality
+   budget defect, repeated-name transport cost, per-row scan allocation, plan
+   split-contract gap, manager/executor bound drift, and parser/suggestion policy
+   duplication. Each concrete finding was closed; the suggested large count/
+   value compiler and executor abstractions were intentionally left explicit
+   because they would increase risk without removing runtime work.
+
+Validation for `d7734b6` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+go test ./... -count=1
+go test -race ./internal/spl ./internal/plan ./internal/clickhouse \
+  ./internal/queryexec ./internal/searchjobs -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' \
+  -count=1 -timeout=6m
+```
+
+The final commands passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend lint/type-check, all 65 build-transaction tests, and all 140 frontend
+tests passed. The complete pinned query-executor/manager ClickHouse vertical
+passed in 25.777 seconds; the focused split-numeric child passed independently
+in 7.798 seconds. An existing manager-close timing test failed once during the
+first concurrent race attempt, then passed 20 isolated race repetitions and the
+complete affected-package race rerun. No test-owned ClickHouse containers or
+volumes remained. The external GradeThis Compose cutover remains explicitly
+deferred, and the broader backend/SPL goal remains active.
+
 ## Latest checkpoint: protobuf HTTP forward compatibility
 
 Date: 2026-08-03
@@ -14067,7 +14163,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `ceab244`, `75db36f`, `3f83414`, `1a94faf`, `fbdb99f`,
+   commits, especially `d7734b6`, `ceab244`, `75db36f`, `3f83414`, `1a94faf`,
+   `fbdb99f`,
    `0c78cb7`, `ab0514e`, `67689e8`,
    `a03aa33`, `72b1b11`, `347a015`,
    `e312ae9`, `9115465`, `2a82932`, `076ff43`, `7eba237`,
