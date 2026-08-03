@@ -189,6 +189,9 @@ func queryIntegrationTestEventStatsProductionEnvelope(
 	if err := connection.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatalf("flush eventstats production query log: %v", err)
 	}
+	// system.query_log.Settings records deviations from the active profile,
+	// so a cap equal to ClickHouse's host-derived default is omitted. Resolve
+	// that omission through the effective setting instead of treating it as 0.
 	rows, err := connection.Query(
 		ctx,
 		`SELECT query_id, query_duration_ms, memory_usage,
@@ -199,7 +202,11 @@ func queryIntegrationTestEventStatsProductionEnvelope(
 			toUInt64OrZero(Settings['max_result_rows']),
 			toUInt64OrZero(Settings['max_result_bytes']),
 			toUInt64OrZero(Settings['max_rows_to_group_by']),
-			toUInt64OrZero(Settings['max_threads']),
+			if(
+				mapContains(Settings, 'max_threads'),
+				toUInt64OrZero(Settings['max_threads']),
+				toUInt64(getSetting('max_threads'))
+			),
 			toUInt64OrZero(Settings['use_query_cache'])
 		FROM system.query_log
 		WHERE type = 'QueryFinish' AND startsWith(query_id, ?)`,
