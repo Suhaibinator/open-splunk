@@ -7,6 +7,111 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded ingestion-token host/source constraints
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `c1d43ca` — enforce durable, bounded host/source constraints throughout the
+  native-ingestion token lifecycle.
+
+This unit closes the architecture gap where the public administration protobuf
+advertised optional `allowed_host_regexes` and `allowed_source_regexes`, but the
+backend rejected them and native ingestion did not enforce them:
+
+1. `docs/ingestion-token-constraints-v0.1.md` is now the normative contract.
+   Empty dimensions are unrestricted; patterns use complete-value Go/RE2
+   matching with OR within a dimension and AND across dimensions. Exact
+   duplicates are removed and the remainder is byte-lexically sorted. Each
+   dimension is capped at 16 unique patterns, 4,096 source bytes, and 16,384
+   compiled instructions; each pattern is capped at 512 valid UTF-8 bytes and
+   4,096 compiled instructions, with empty, NUL-bearing, invalid, and
+   over-complex expressions rejected.
+2. The SQLite control plane persists normalized children in the GORM-managed
+   `ingestion_token_constraints` model keyed by token, kind, and ordinal. The
+   greenfield `0001_control_plane.sql` schema owns foreign-key cascade,
+   `STRICT`/`WITHOUT ROWID` storage, and byte checks. Create and replacement
+   update token metadata, index scopes, and both constraint dimensions in one
+   transaction; stale versions and injected child-write failures roll back
+   completely, while revoked-token pruning cascades. This adds no upgrade
+   migration and introduces no GORM dependency on the ClickHouse path.
+3. Bounded hydration validates physical counts and widths before loading child
+   data, then rejects unknown kinds, ordinal gaps, duplicates, non-lexical
+   projections, invalid UTF-8/RE2, aggregate overflow, and corrupt fanout. The
+   contract is covered across create/get/list/authenticate/update, close/reopen,
+   optimistic conflict, rollback, and parent pruning.
+4. The protobuf administration API now accepts, canonicalizes, projects, and
+   round-trips both dimensions without reflecting a rejected expression.
+   Whole-`constraints` updates replace both lists; unrelated and collector-only
+   update masks preserve them. Generated Go and TypeScript contracts include
+   append-only event rejection numbers 11 (`UNAUTHORIZED_HOST`) and 12
+   (`UNAUTHORIZED_SOURCE`).
+5. Native ingestion compiles each fresh bounded authorization snapshot once,
+   reuses unchanged compiled dimensions across heartbeat/batch refreshes, and
+   checks the normalized canonical event after index/ordinary validation but
+   before retention, quota, or storage. Host is the deterministic first failure
+   when both dimensions miss. Partial batches store and charge only accepted
+   events; all-rejected batches retain the existing durable terminal rejection.
+6. Corrupt refreshed constraints return a typed deferred authority failure only
+   after bearer identity, collector binding, and the exact current lease are
+   verified. Committed acknowledgements, terminal rejections, and pending
+   outboxes replay/resume before that mutable failure; fresh operations fail
+   closed and the stream never installs a partial or corrupt snapshot.
+7. The pinned ClickHouse integration drives the real gRPC ingestion service
+   with one matching event and one substring-only host mismatch. It proves the
+   accepted event produces exactly one physical row while the rejected event
+   produces zero. The full backend vertical now provisions matching constraints
+   through HTTP, hydrates them through GORM, and exercises both the vertical and
+   current GradeThis collector fixtures through ClickHouse, including existing
+   crash/restart replay.
+8. Two independent adversarial passes found no remaining actionable
+   correctness, security, replay, leakage, or efficiency issue. They added the
+   missing inline case/dot-all RE2-mode regression; a separate aggregate
+   compiled-program test pins the per-dimension instruction ceiling.
+
+Validation for `c1d43ca` and the immediately preceding adversarial state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+
+go test ./... -count=1
+go test -race -shuffle=on \
+  ./internal/tokenconstraint ./internal/auth ./internal/collectoradmission \
+  ./internal/ingest ./internal/server ./cmd/open-splunk-server -count=1
+go vet ./...
+CGO_ENABLED=0 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run 'TestStoreAgainstClickHouse/partial_event_authorization_filters_ClickHouse_rows' \
+  -count=1 -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=12m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend lint/type-check, all 65 build-transaction tests, all 137 frontend
+tests, and the 11-page production build passed. The focused ClickHouse proof
+passed in 6.56 seconds (7.181-second package result), and the full constrained
+backend vertical passed in 42.31 seconds (47.175-second package result). Both
+test-owned ClickHouse containers were confirmed removed. The external
+GradeThis Compose cutover remains explicitly deferred, and the broader backend
+goal remains active.
+
 ## Follow-up checkpoint: Backend vertical CI deadline hardening
 
 Date: 2026-08-02
