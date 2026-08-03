@@ -7,6 +7,134 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded ordered eventstats list
+
+Date: 2026-08-02
+
+Committed implementation checkpoint:
+
+- `a7ef08e` — bounded row-preserving
+  `eventstats list(field) AS output [BY ...]`.
+
+This test-first SPL unit adds deterministic ordered-list enrichment without a
+database or public API schema change, a control-plane migration, or GORM on the
+ClickHouse path:
+
+1. The parser accepts exactly one case-insensitive `list(field)` over an
+   unquoted exact field, requires an explicit exact `AS` output, and permits an
+   optional one-through-16 distinct exact-field `BY` tuple. Missing aliases,
+   wildcard, quoted, eval, empty, multiple-input, multiple-measure, option,
+   repeated-group, and every other unsupported form fail with source-located
+   diagnostics. Suggestions and the shared completion catalog expose the same
+   bounded grammar.
+2. Planning lowers the command to the singular row-preserving
+   `EventAggregate`, preserves result kind, input ordering, time/index
+   provenance, and the complete upstream schema, and upserts only the requested
+   fixed multivalue output. Builder, analysis, Search Inspection, and defensive
+   compiler validation reject forged predicate, percentile, field, group,
+   output, reserved-open-schema, and orderless-relation metadata. Relational
+   depth now pins the list stage's two additional CTE levels at the exact 96/97
+   boundary.
+3. The aggregate preserves duplicates and publishes the first 100 eligible
+   canonical strings in deterministic pipeline order. An explicit upstream
+   sort is honored; otherwise event rows use descending original `_time`, event
+   ID, visibility sequence, and immutable source identity. Immediate
+   multivalue members retain their one-based order before the next row. Missing
+   values, explicit nulls, empty multivalues, and null members contribute
+   nothing, while an empty String remains eligible and invalid fixed String
+   bytes remain byte-exact through the String/Bytes result boundary.
+4. Complete empty scopes, projected-away inputs, and incomplete `BY` rows
+   publish physical non-nil `[]` with logical SPL absence. Incomplete rows stay
+   visible but cannot contribute to or poison a complete group. The ordered
+   window partitions first by group eligibility and then by normalized keys,
+   so a missing key cannot collide with a present empty String and consume that
+   group's fixed scalar or `Array(String)` prefix. A production-digest stacked
+   `values -> list` regression proves this adversarial case with exactly 100
+   fixed members.
+5. Generic objects, flattened object parents, nested arrays, and nested objects
+   poison the complete retained measure scope atomically, including when the
+   poisoned value follows the first 100 eligible strings. Valid values after
+   occurrence 100 are deliberately truncated. A selected cell may contain at
+   most 512 KiB of raw lexical bytes; the complete repeated annotation is
+   capped at 100,000 elements and 8 MiB. The existing 10,000/10,001 input-row
+   fence and 128-pass deferred-graph budget remain authoritative, and a later
+   filter, projection, sort, or row limit cannot hide poison or overflow.
+6. Each retained row computes one canonical String array and one constant-size
+   invalid bit. One partitioned prefix window admits only byte-bounded
+   first-100 candidate tuples, and one `groupArraySortedArray(100)` definition
+   assembles the global or grouped result. The prepared candidate relation is
+   the standalone stage's sole materialized fence, reducing the pinned
+   ClickHouse 26.3 plan from three sort/window pipelines to one materialization
+   with bounded readers. Prior-byte accounting walks at most 100 members per
+   row; stacked eventstats keeps one earliest fence. No `ARRAY JOIN`, row
+   expansion, unbounded `groupArray`, physical-event rescan, or Go buffering is
+   introduced.
+7. Eventstats-list element and byte markers classify into sanitized,
+   command-specific execution-limit messages. Unit coverage pins parser and
+   plan contracts, one ordered state, one materialized candidate, grouped
+   eligibility isolation, default and explicit order, byte/element windows,
+   projected work elimination, logical presence, alias replacement,
+   downstream composition, stacked fence selection, one physical scan,
+   placeholder accounting, depth accounting, and deterministic-order
+   rejection. Shared table-driven parser/plan and integration collectors keep
+   the values/list contracts aligned without duplicated test lifecycles.
+8. Production-digest integration covers explicit/default order, duplicates,
+   immediate multivalues, global/grouped empty scopes, incomplete groups,
+   projected input, replacement and downstream fixed-array composition,
+   missing-key versus empty-key fixed-array isolation, hidden object/nested
+   poison, poison after occurrence 100, exact/truncated element boundaries,
+   exact/overflowing cell and repeated-result byte and element boundaries,
+   invalid fixed String bytes, the input-row fence, and the non-expanding
+   physical plan. The frontend needed no component, transport, or result-schema
+   change; only its shared completion-catalog expectation changed.
+9. Three exact frozen-diff reuse/quality/efficiency passes plus independent
+   semantic, ClickHouse, and test-gap adversarial reviews found and corrected
+   repeated cursor helpers, duplicated parser/plan suites, a repeated
+   annotation validator, repeated sort/window execution, an unbounded
+   secondary payload walk, the missing/empty grouped-key collision, an
+   orderless branch gap, empty-scope gaps, relational-depth gaps, and one
+   missing fail-closed maintenance guard. Final RC2 re-reviews reported no
+   remaining actionable issue.
+
+Validation on commit `a7ef08e`:
+
+```sh
+git diff --check
+go mod tidy -diff
+
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+CGO_ENABLED=0 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=8m -v
+```
+
+Every final command passed. Module files remained unchanged; the full unit and
+race/shuffle trees were clean; vet, the CGO-disabled build, and cached
+golangci-lint v2.12.2 passed with `0 issues`. Frontend lint and type-check
+passed, all 65 build-transaction tests and 137 frontend tests passed, and the
+11-page static production build succeeded without a generated tracked change.
+The final digest-pinned Store/compiler corpus passed in 326.56 seconds
+(327.034-second package result), and no test-owned ClickHouse container or
+volume remained.
+
+This unit retains GORM solely for the SQLite control plane and the native
+ClickHouse driver for event data. The external GradeThis Compose collector
+cutover remains explicitly deferred. Broader SPL compatibility remains the
+next backend stream, and the overall backend goal remains active.
+
 ## Latest checkpoint: bounded exact eventstats values
 
 Date: 2026-08-02
