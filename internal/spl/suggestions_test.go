@@ -609,14 +609,15 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 		}
 		if command.Name == "eventstats" {
 			if command.Insertion !=
-				"eventstats p95(duration_ms) AS p95_ms BY service" {
+				"eventstats values(user) AS users BY service" {
 				t.Fatalf(
-					"eventstats insertion = %q, want percentile form",
+					"eventstats insertion = %q, want values form",
 					command.Insertion,
 				)
 			}
 			if !strings.Contains(command.Detail, "true-only count(eval(predicate))") ||
 				!strings.Contains(command.Detail, "exact distinct count") ||
+				!strings.Contains(command.Detail, "canonical distinct-values list") ||
 				!strings.Contains(command.Detail, "pN/percN percentile") ||
 				!strings.Contains(command.Detail, "minimum") ||
 				!strings.Contains(command.Detail, "maximum") ||
@@ -625,7 +626,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 				!strings.Contains(command.Detail, "numeric sum") ||
 				!strings.Contains(command.Detail, "numeric average") {
 				t.Fatalf(
-					"eventstats detail = %q, want conditional-count, exact-distinct, percentile, minimum, maximum, chronological, sum, and average description",
+					"eventstats detail = %q, want conditional-count, exact-distinct, values, percentile, minimum, maximum, chronological, sum, and average description",
 					command.Detail,
 				)
 			}

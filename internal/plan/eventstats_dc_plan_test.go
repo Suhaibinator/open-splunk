@@ -148,7 +148,7 @@ func TestAnalyzeEventStatsDistinctCountAcceptsResolvedInputAndRejectsForgedMetad
 		{"predicate metadata", func(measure *AggregateMeasure) { measure.Predicate = &ComparisonExpression{} }},
 		{"percentile metadata", func(measure *AggregateMeasure) { measure.Percentile = 95 }},
 		{"private output", func(measure *AggregateMeasure) { measure.Output = "__os_eventstats_private" }},
-		{"unsupported function", func(measure *AggregateMeasure) { measure.Function = AggregateFunctionValues }},
+		{"unsupported function", func(measure *AggregateMeasure) { measure.Function = AggregateFunctionList }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

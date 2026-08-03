@@ -1943,6 +1943,8 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.ExactDistinctLimitMarker, "exact distinct values exceeded the supported limit"},
 	{clickhouse.StatsValuesBytesLimitMarker, "stats values bytes exceeded the supported limit"},
 	{clickhouse.StatsValuesLimitMarker, "stats values exceeded the supported limit"},
+	{clickhouse.EventStatsValuesBytesLimitMarker, "eventstats values bytes exceeded the supported limit"},
+	{clickhouse.EventStatsValuesLimitMarker, "eventstats values exceeded the supported limit"},
 	{clickhouse.StatsListBytesLimitMarker, "stats list bytes exceeded the supported limit"},
 	{clickhouse.StatsListLimitMarker, "stats list exceeded the supported result limit"},
 }

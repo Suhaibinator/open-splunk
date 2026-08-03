@@ -2150,6 +2150,8 @@ eventstats count(eval(status>=500)) AS errors
 eventstats count(eval(status>=500)) AS errors BY service
 eventstats dc(user) AS unique_users
 eventstats dc(user) AS service_users BY service
+eventstats values(user) AS users
+eventstats values(user) AS service_users BY service
 eventstats sum(bytes) AS total_bytes
 eventstats sum(bytes) AS service_bytes BY service
 eventstats avg(duration_ms) AS mean_ms
@@ -2166,7 +2168,7 @@ eventstats latest(status) AS last_status
 eventstats latest(status) AS last_service_status BY service
 ```
 
-Exactly one `count`, `dc`, `pN`/`percN`, `sum`, `avg`, `min`, `max`,
+Exactly one `count`, `dc`, `values`, `pN`/`percN`, `sum`, `avg`, `min`, `max`,
 `earliest`, or `latest` is accepted. Integer percentile suffix `N` is from 1
 through 99; the two spellings are synonyms, and leading zeroes canonicalize to
 the same level.
@@ -2176,8 +2178,9 @@ with `AS`. The field-occurrence form accepts exactly one unquoted exact field in
 Conditional count accepts exactly
 `count(eval(<where predicate>)) AS <exact output field>` and also requires the
 alias. Exact distinct count accepts exactly one unquoted exact field in
-`dc(field)` and requires an explicit exact output alias. Numeric sum and
-average accept exactly one unquoted exact field in
+`dc(field)` and requires an explicit exact output alias. `values(field)`
+likewise accepts one unquoted exact field and requires an explicit exact output
+alias. Numeric sum and average accept exactly one unquoted exact field in
 `sum(field)` or `avg(field)` and likewise require an explicit exact output
 alias. Percentiles accept exactly one unquoted exact field in `pN(field)` or
 `percN(field)` and require an explicit exact output alias. Minimum and maximum
@@ -2191,7 +2194,8 @@ output alias.
 case-insensitive, while field names remain case-sensitive. Parenthesized
 `count()`, `c(field)`, `c(eval(...))`, `distinct_count(field)`,
 `sum(eval(...))`, `avg(eval(...))`, wildcard or quoted input fields, empty or
-multiple inputs, `dc(eval(...))`, `p0`, `p100`, decimal percentile suffixes,
+multiple inputs, `dc(eval(...))`, `values(eval(...))`, `p0`, `p100`, decimal
+percentile suffixes,
 SPL2 two-argument `perc(field,N)`, `upperperc`, `exactperc`, percentile eval
 arguments, `min(eval(...))`, `max(eval(...))`, `earliest(eval(...))`,
 `latest(eval(...))`, every other aggregate function, multiple measures, quoted
@@ -2270,6 +2274,37 @@ one left join back to the same rows. It uses no approximate `uniq` function,
 `ARRAY JOIN`, row expansion, pipeline sort, physical-event rescan, or Go-side
 buffering. Composed stages participate in the same flat deferred eventstats
 graph and pass-amplification budget as the other supported measures.
+
+`eventstats values(field)` uses the same canonical scalar identities,
+immediate top-level multivalue flattening, missing/null handling, unsupported
+container failure, and raw-byte lexicographic ordering as `stats values` and
+the exact set used by `eventstats dc`. Every row in a complete global or
+grouped scope receives the same non-null `Array(String)` for that scope. An
+empty complete scope publishes physical `[]`, which is logically absent to
+downstream SPL presence tests. A row with an incomplete `BY` tuple is retained
+with the same physical `[]` and logical absence. Projected-away inputs remain
+absent and therefore also produce `[]`. Invalid UTF-8 in a fixed ClickHouse
+String is preserved byte-for-byte and becomes a Bytes child at the typed
+result boundary.
+
+Each global or grouped values set retains at most 10,001 canonical strings:
+10,000 succeeds, while the sentinel fails atomically. One published cell may
+contain at most 10,000 elements and 512 KiB of raw lexical payload. Because
+eventstats repeats a cell on source rows, the complete annotated relation is
+additionally limited to 100,000 published elements and 8 MiB of published
+lexical payload across all rows. These limits are checked before any downstream
+filter, projection, sort, or row limit can hide the excess; results are never
+truncated or approximated.
+
+The bounded input computes one canonical String array and one constant-size
+invalid bit per source row. Each admitted graph pass uses one exact
+`groupUniqArrayArray(10001)` definition and one raw-byte sort globally or per
+retained group; grouped lowering adds one left join. Per-cell element and byte
+counts are materialized once and only those scalars feed the
+whole-annotation window sums, so repeated-result validation does not rescan
+each array. The lowering uses no approximate `uniq`, `ARRAY JOIN`, row
+expansion, `groupArray`, physical-event rescan, or Go-side buffering and stays
+inside the existing flat eventstats pass-amplification budget.
 
 `eventstats sum(field)` and `eventstats avg(field)` use exactly the numeric
 normalization and immediate-member semantics of their `stats` counterparts.
@@ -2393,7 +2428,8 @@ projection, sort, or limit cannot hide an invalid retained value or the
 
 A missing or explicit-null `BY` field makes only that row ineligible for a
 group. The row remains in the result, but the eventstats output is logically
-absent and physically nullable. Complete Dynamic scalar keys reuse the exact
+absent and physically nullable; the fixed multivalue `values` result instead
+uses physical `[]`. Complete Dynamic scalar keys reuse the exact
 `stats BY` lexical normalization, so the integer `500` and string `"500"`
 share a group. Fixed multivalues are rejected during compilation. A runtime
 Dynamic list, object, flattened object parent, or nested container poisons the
@@ -2405,10 +2441,10 @@ duplicate. As with `eval`, replacing a dynamic-schema name closes the public
 raw `fields` convenience payload so an immutable member cannot contradict the
 calculated value. The literal output name `fields` is rejected while the event
 schema is open, and `count(fields)`, `dc(fields)`, `pN(fields)`,
-`percN(fields)`, `sum(fields)`, `avg(fields)`, `min(fields)`, and `max(fields)`
-as well as `earliest(fields)` and `latest(fields)`, cannot read that ambiguous
-payload while the schema is open. The
-name becomes ordinary data after `table` or another transforming command
+`percN(fields)`, `sum(fields)`, `avg(fields)`, `min(fields)`, `max(fields)`,
+`values(fields)`, `earliest(fields)`, and `latest(fields)` cannot read that
+ambiguous payload while the schema is open. The name becomes ordinary data
+after `table` or another transforming command
 closes the schema. Replacing `_time` preserves rows but
 makes timeline analysis ineligible; replacing `index` creates ordinary
 pipeline data and never changes the authorization-constrained physical scan.
@@ -2419,11 +2455,12 @@ and fails the whole search with an execution-limit error above the boundary
 instead of annotating a prefix. A standalone stage materializes that bounded
 relation once; a stack shares its earliest physical-scan fence. Global count
 uses one constant-size aggregate, global distinct count uses one bounded exact
-set, and global percentile, sum, or average uses one bounded numeric aggregate.
-A global minimum, maximum, earliest, or latest likewise uses one constant-size
-aggregate. Each grouped count, sum, average, minimum, maximum, earliest,
-latest, percentile, or distinct count uses one bounded `GROUP BY` and one left
-join back to those same rows;
+set, global values uses one smaller bounded exact set, and global percentile,
+sum, or average uses one bounded numeric aggregate. A global minimum, maximum,
+earliest, or latest likewise uses one constant-size aggregate. Each grouped
+count, sum, average, minimum, maximum, earliest, latest, percentile, distinct
+count, or values uses one bounded `GROUP BY` and one left join back to those
+same rows;
 none performs a per-group query, row expansion, `groupArray`, physical-event
 rescan, or Go-side buffering.
 
@@ -3047,11 +3084,11 @@ too.
 
 `eventstats` supports one argument-free `count`, exact-field `count(field) AS
 output`, conditional `count(eval(predicate)) AS output`, or one exact-field
-`dc(field)`, integer-suffix `pN(field)`/`percN(field)` for `N` from 1 through
-99, `sum(field)`, `avg(field)`, `min(field)`, `max(field)`, `earliest(field)`,
-or `latest(field)` with an explicit output alias, optionally grouped by up to
-16 exact fields. Other aggregate functions, multiple measures, and the broader
-eval-expression surface remain unsupported for `eventstats`.
+`dc(field)`, `values(field)`, integer-suffix `pN(field)`/`percN(field)` for `N`
+from 1 through 99, `sum(field)`, `avg(field)`, `min(field)`, `max(field)`,
+`earliest(field)`, or `latest(field)` with an explicit output alias, optionally
+grouped by up to 16 exact fields. Other aggregate functions, multiple measures,
+and the broader eval-expression surface remain unsupported for `eventstats`.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

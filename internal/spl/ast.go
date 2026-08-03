@@ -616,8 +616,8 @@ func (c *StatsCommand) SourceRange() Range { return c.Range }
 // AggregateFunctionMaximum/AggregateFunctionEarliest/
 // AggregateFunctionLatest/
 // AggregateFunctionSum/AggregateFunctionAverage/
-// AggregateFunctionDistinctCount while retaining the singular aggregate's
-// source locations through StatsAggregate.
+// AggregateFunctionDistinctCount/AggregateFunctionValues while retaining the
+// singular aggregate's source locations through StatsAggregate.
 type EventStatsCommand struct {
 	Aggregate StatsAggregate
 	GroupBy   []StatsGroupField

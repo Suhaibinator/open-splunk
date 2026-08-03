@@ -2051,6 +2051,8 @@ ORDER BY grid.number`,
 			clickhouse.ExactDistinctLimitMarker,
 			clickhouse.StatsValuesBytesLimitMarker,
 			clickhouse.StatsValuesLimitMarker,
+			clickhouse.EventStatsValuesBytesLimitMarker,
+			clickhouse.EventStatsValuesLimitMarker,
 			clickhouse.StatsListBytesLimitMarker,
 			clickhouse.StatsListLimitMarker,
 		} {

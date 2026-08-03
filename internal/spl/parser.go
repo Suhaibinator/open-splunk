@@ -1945,6 +1945,12 @@ var eventStatsFieldAggregateDescriptors = [...]eventStatsFieldAggregateDescripto
 		form:       "dc(field)",
 		suggestion: "eventstats dc(field) AS distinct_values",
 	},
+	{
+		name:       "values",
+		function:   AggregateFunctionValues,
+		form:       "values(field)",
+		suggestion: "eventstats values(field) AS distinct_values",
+	},
 }
 
 func eventStatsAcceptedAggregateForms() string {

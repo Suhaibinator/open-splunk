@@ -345,9 +345,9 @@ func TestBuildEventStatsSumRejectsForgedAggregateMetadata(t *testing.T) {
 			wantCode: "SPL_RESERVED_FIELD",
 		},
 		{
-			name: "values function remains unsupported",
+			name: "list function remains unsupported",
 			mutate: func(aggregate *spl.StatsAggregate) {
-				aggregate.Function = spl.AggregateFunctionValues
+				aggregate.Function = spl.AggregateFunctionList
 			},
 			wantCode: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
 		},

@@ -1755,7 +1755,8 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 			Message: classified.marker + "; generated SQL contained secret",
 		}
 		if err := classifyQueryError(context.Background(), limit); !errors.Is(err, searchjobs.ErrExecutionLimit) ||
-			strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), classified.marker) {
+			strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), classified.marker) ||
+			!strings.Contains(err.Error(), classified.message) {
 			t.Fatalf("execution-limit marker %q classification = %v", classified.marker, err)
 		}
 	}

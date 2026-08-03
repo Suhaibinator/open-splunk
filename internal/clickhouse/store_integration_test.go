@@ -2525,6 +2525,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsDistinctCountAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testEventStatsValuesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsNumericAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsPercentilesAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testEventStatsMinimumAgainstClickHouse(t, ctx, store, connection, indexTime)

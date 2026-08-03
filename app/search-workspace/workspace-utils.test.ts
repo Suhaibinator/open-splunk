@@ -286,15 +286,16 @@ test("stats completion advertises true-only conditional count with an explicit a
   assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
 });
 
-test("eventstats completion advertises the bounded aggregate surface including percentiles", () => {
+test("eventstats completion advertises bounded values and percentile aggregates", () => {
   const eventstatsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "eventstats");
   assert.ok(eventstatsCompletion);
   assert.equal(
     eventstatsCompletion.insertion,
-    "eventstats p95(duration_ms) AS p95_ms BY service",
+    "eventstats values(user) AS users BY service",
   );
   assert.match(eventstatsCompletion.detail, /true-only count\(eval\(predicate\)\)/i);
   assert.match(eventstatsCompletion.detail, /exact distinct count/i);
+  assert.match(eventstatsCompletion.detail, /bounded canonical distinct-values list/i);
   assert.match(eventstatsCompletion.detail, /pN\/percN percentile.*1-99/i);
   assert.match(eventstatsCompletion.detail, /numeric sum/i);
   assert.match(eventstatsCompletion.detail, /average/i);

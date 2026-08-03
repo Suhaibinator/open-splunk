@@ -254,8 +254,9 @@ const (
 	// result check runs.
 	MaximumStatsValuesBytesPerGroup = 512 << 10
 	// The result-wide ceilings count every published values alias independently,
-	// even when aggregate state is shared. They bound intermediate transforming
-	// results before a later head/sort limit can hide them.
+	// even when aggregate state is shared. They bound both transforming values
+	// results and row-preserving eventstats annotation before a later filter,
+	// projection, sort, or row limit can hide them.
 	MaximumStatsValuesPerResult      = 100_000
 	MaximumStatsValuesBytesPerResult = 8 << 20
 	// MaximumStatsListValuesPerGroup matches Splunk's fixed list() behavior:
@@ -285,9 +286,16 @@ const (
 	// StatsValuesBytesLimitMarker classifies an exact values result whose
 	// per-group raw lexical payload exceeded the supported byte ceiling.
 	StatsValuesBytesLimitMarker = "open-splunk: stats values bytes exceed the supported limit"
-	// StatsValuesLimitMarker classifies a values cell or complete transforming
-	// result that exceeded its published element ceiling.
+	// StatsValuesLimitMarker classifies a stats values cell or complete
+	// transforming result that exceeded its published element ceiling.
 	StatsValuesLimitMarker = "open-splunk: stats values exceed the supported limit"
+	// EventStatsValuesBytesLimitMarker classifies a row-preserving values result
+	// whose per-cell or complete annotated raw lexical payload exceeded its byte
+	// ceiling.
+	EventStatsValuesBytesLimitMarker = "open-splunk: eventstats values bytes exceed the supported limit"
+	// EventStatsValuesLimitMarker classifies a row-preserving values result whose
+	// per-cell or complete annotated element count exceeded its ceiling.
+	EventStatsValuesLimitMarker = "open-splunk: eventstats values exceed the supported limit"
 	// StatsListBytesLimitMarker classifies the selected first-100 list values
 	// when their per-cell or whole-result lexical payload is too large.
 	StatsListBytesLimitMarker = "open-splunk: stats list bytes exceed the supported limit"
@@ -11828,6 +11836,12 @@ func eventAggregateMeasureSpecFor(
 		spec.materialized = true
 		spec.valuePrefix = "__os_eventstats_value_dc_"
 		return spec, nil
+	case plan.AggregateFunctionValues:
+		spec.materialized = true
+		spec.numberType = ""
+		spec.numericIntegral = false
+		spec.valuePrefix = "__os_eventstats_value_values_"
+		return spec, nil
 	case plan.AggregateFunctionPercentile:
 		if measure.Percentile < 1 || measure.Percentile > 99 {
 			return eventAggregateMeasureSpec{}, fmt.Errorf(
@@ -11888,6 +11902,11 @@ func (spec eventAggregateMeasureSpec) aggregateSQL(
 	case plan.AggregateFunctionDistinctCount:
 		return distinctCountCardinalitySQL(
 			"tupleElement(" + inputSQL + ", 1)",
+		), nil
+	case plan.AggregateFunctionValues:
+		return exactDistinctStringSetSQL(
+			"tupleElement("+inputSQL+", 1)",
+			uint64(MaximumStatsValuesPerGroup),
 		), nil
 	case plan.AggregateFunctionPercentile:
 		return singlePercentileArrayAggregateSQL(spec.percentile, inputSQL), nil
@@ -11983,6 +12002,7 @@ func compileEventAggregate(
 	measureInputSQL := ""
 	var measureInputArgs []any
 	var measureValidationSQL func(string, string) string
+	measureUsesValuesValidation := false
 	measureUsesGroupEligibility := false
 	var eventStatsPrerequisiteDefinitions []string
 	prefixArgumentsAfterExisting := false
@@ -12066,7 +12086,8 @@ func compileEventAggregate(
 		plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
 		plan.AggregateFunctionMaximum, plan.AggregateFunctionEarliest,
-		plan.AggregateFunctionLatest, plan.AggregateFunctionDistinctCount:
+		plan.AggregateFunctionLatest, plan.AggregateFunctionDistinctCount,
+		plan.AggregateFunctionValues:
 		if durableState.eventRows && durableState.allowDynamic && measure.Input.Name == "fields" {
 			return compiledRelation{}, compileState{}, nil, nil, &plan.Diagnostic{
 				Code: "SPL_AMBIGUOUS_EVENTSTATS_FIELD",
@@ -12091,7 +12112,7 @@ func compileEventAggregate(
 			if exists {
 				measureInputSQL, measureInputArgs = numericArrayInputSQL(input)
 			}
-		case plan.AggregateFunctionDistinctCount:
+		case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
 			emptyValues := "CAST([], 'Array(String)')"
 			measureInputSQL = "tuple(" + emptyValues + ", toUInt8(0))"
 			if exists {
@@ -12105,7 +12126,7 @@ func compileEventAggregate(
 						measureUsesGroupEligibility = true
 					}
 					measureInputSQL, measureInputArgs =
-						eventStatsDistinctCountDynamicMeasureSQL(
+						eventStatsExactStringDynamicMeasureSQL(
 							input,
 							rowEligibleSQL,
 						)
@@ -12115,7 +12136,13 @@ func compileEventAggregate(
 					measureInputArgs = valuesArgs
 				}
 			}
-			measureValidationSQL = eventStatsDistinctCountValidationSQL
+			if measure.Function == plan.AggregateFunctionDistinctCount {
+				measureValidationSQL = eventStatsDistinctCountValidationSQL
+			} else {
+				measureUsesValuesValidation = true
+				measureNullSQL = emptyValues
+				outputState = fieldState{kind: fieldKindStringArray}
+			}
 		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
 			extremaFunction := measure.Function
 			outputState = fieldState{
@@ -12323,7 +12350,7 @@ func compileEventAggregate(
 	totalAlias := quoteIdentifier(fmt.Sprintf("__os_eventstats_total_row_%d", stage))
 	totalColumn := quoteIdentifier(fmt.Sprintf("__os_eventstats_input_count_%d", stage))
 	validationColumn := ""
-	if measureValidationSQL != nil {
+	if measureValidationSQL != nil || measureUsesValuesValidation {
 		validationColumn = quoteIdentifier(fmt.Sprintf(
 			"__os_eventstats_validation_%d",
 			stage,
@@ -12406,6 +12433,19 @@ func compileEventAggregate(
 	valueColumn := totalColumn
 	typeColumn := ""
 	publishAggregateResult := outputState.kind == fieldKindDynamic
+	publishesValues := measure.Function == plan.AggregateFunctionValues
+	valueElementsColumn := ""
+	valueBytesColumn := ""
+	if publishesValues {
+		valueElementsColumn = quoteIdentifier(fmt.Sprintf(
+			"__os_eventstats_value_elements_%d",
+			stage,
+		))
+		valueBytesColumn = quoteIdentifier(fmt.Sprintf(
+			"__os_eventstats_value_bytes_%d",
+			stage,
+		))
+	}
 	if measureSpec.materialized && len(groups) == 0 {
 		rawValueColumn := quoteIdentifier(measureSpec.valuePrefix + strconv.Itoa(stage))
 		aggregateSQL, aggregateErr := measureAggregateSQL(measureAlias)
@@ -12429,7 +12469,27 @@ func compileEventAggregate(
 				measurePublishTypeSQL(rawValueColumn)+" AS "+typeColumn,
 			)
 		}
-		if measureValidationSQL != nil {
+		if publishesValues {
+			totalProjection = append(
+				totalProjection,
+				"toUInt64(length("+rawValueColumn+")) AS "+valueElementsColumn,
+				stringArrayPayloadBytesSQL(rawValueColumn)+" AS "+valueBytesColumn,
+				eventStatsValuesValidationSQL(
+					measureAlias,
+					valueElementsColumn,
+					valueBytesColumn,
+				)+" AS "+validationColumn,
+			)
+			valueColumn = quoteIdentifier(fmt.Sprintf(
+				"__os_eventstats_published_value_%d",
+				stage,
+			))
+			totalProjection = append(
+				totalProjection,
+				"if(toUInt8("+validationColumn+") = 0, arraySort("+
+					rawValueColumn+"), "+measureNullSQL+") AS "+valueColumn,
+			)
+		} else if measureValidationSQL != nil {
 			totalProjection = append(
 				totalProjection,
 				measureValidationSQL(measureAlias, rawValueColumn)+
@@ -12447,12 +12507,18 @@ func compileEventAggregate(
 	}
 
 	outputValue := totalAlias + "." + valueColumn
+	outputValueElements := "toUInt64(0)"
+	outputValueBytes := "toUInt128(0)"
+	if publishesValues && len(groups) == 0 {
+		outputValueElements = totalAlias + "." + valueElementsColumn
+		outputValueBytes = totalAlias + "." + valueBytesColumn
+	}
 	outputStoredType := ""
 	if typeColumn != "" {
 		outputStoredType = totalAlias + "." + typeColumn
 	}
 	outputValidation := ""
-	if measureValidationSQL != nil {
+	if measureValidationSQL != nil || measureUsesValuesValidation {
 		outputValidation = totalAlias + "." + validationColumn
 	}
 	outputExistsSQL := "1"
@@ -12486,14 +12552,30 @@ func compileEventAggregate(
 		}
 		groupProjection := strings.Join(groupKeys, ", ") + ", " +
 			groupValueSQL + " AS " + groupCountColumn
-		if measureValidationSQL != nil {
+		groupValueColumn := groupCountColumn
+		if publishesValues {
+			groupProjection += ", toUInt64(length(" + groupCountColumn +
+				")) AS " + valueElementsColumn + ", " +
+				stringArrayPayloadBytesSQL(groupCountColumn) + " AS " + valueBytesColumn
+			groupProjection += ", " + eventStatsValuesValidationSQL(
+				measureAlias,
+				valueElementsColumn,
+				valueBytesColumn,
+			) + " AS " + validationColumn
+			groupValueColumn = quoteIdentifier(fmt.Sprintf(
+				"__os_eventstats_published_value_%d",
+				stage,
+			))
+			groupProjection += ", if(toUInt8(" + validationColumn +
+				") = 0, arraySort(" + groupCountColumn + "), " +
+				measureNullSQL + ") AS " + groupValueColumn
+		} else if measureValidationSQL != nil {
 			groupProjection += ", " + measureValidationSQL(
 				measureAlias,
 				groupCountColumn,
 			) +
 				" AS " + validationColumn
 		}
-		groupValueColumn := groupCountColumn
 		groupTypeColumn := ""
 		if publishAggregateResult {
 			groupValueColumn = quoteIdentifier(fmt.Sprintf(
@@ -12516,15 +12598,32 @@ func compileEventAggregate(
 		outputExistsSQL = inputAlias + "." + eligibleAlias + " != 0"
 		outputValue = "if(" + outputExistsSQL + ", " + groupCountsAlias + "." +
 			groupValueColumn + ", " + measureNullSQL + ")"
+		if publishesValues {
+			outputValueElements = "if(" + outputExistsSQL + ", " + groupCountsAlias +
+				"." + valueElementsColumn + ", toUInt64(0))"
+			outputValueBytes = "if(" + outputExistsSQL + ", " + groupCountsAlias +
+				"." + valueBytesColumn + ", toUInt128(0))"
+		}
 		if groupTypeColumn != "" {
 			outputStoredType = "if(" + outputExistsSQL + ", " + groupCountsAlias +
 				"." + groupTypeColumn +
 				", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "))"
 		}
-		if measureValidationSQL != nil {
+		if measureValidationSQL != nil || measureUsesValuesValidation {
 			outputValidation = "if(" + outputExistsSQL + ", " + groupCountsAlias +
 				"." + validationColumn + ", toUInt8(0))"
 		}
+	}
+	if publishesValues {
+		// An empty values result is physically [] but logically absent to SPL.
+		// Keep the presence expression bound to the public output alias so later
+		// projections and direct copies preserve the fixed multivalue contract.
+		outputExistsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
+		outputValidation = eventStatsValuesAnnotatedResultValidationSQL(
+			outputValidation,
+			outputValueElements,
+			outputValueBytes,
+		)
 	}
 
 	projection := eventAggregateProjection(
@@ -12629,7 +12728,8 @@ func validateEventAggregate(
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
 		plan.AggregateFunctionMaximum, plan.AggregateFunctionEarliest,
-		plan.AggregateFunctionLatest, plan.AggregateFunctionDistinctCount:
+		plan.AggregateFunctionLatest, plan.AggregateFunctionDistinctCount,
+		plan.AggregateFunctionValues:
 		form := "count(field)"
 		switch measure.Function {
 		case plan.AggregateFunctionSum:
@@ -12646,6 +12746,8 @@ func validateEventAggregate(
 			form = "latest(field)"
 		case plan.AggregateFunctionDistinctCount:
 			form = "dc(field)"
+		case plan.AggregateFunctionValues:
+			form = "values(field)"
 		}
 		if measure.Predicate != nil || measure.Percentile != 0 {
 			return plan.FieldRef{}, fmt.Errorf(
@@ -12686,7 +12788,7 @@ func validateEventAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), dc(field), min(field), max(field), earliest(field), latest(field), sum(field), avg(field), or pN/percN(field) is supported",
+			"compile ClickHouse eventstats: only count, count(field), count(eval(...)), dc(field), values(field), min(field), max(field), earliest(field), latest(field), sum(field), avg(field), or pN/percN(field) is supported",
 		)
 	}
 	output, err := plan.ResolveField(measure.Output, operator.Range)
@@ -12716,7 +12818,8 @@ func eventAggregateCompileState(
 		next.publicOrder = append(next.publicOrder, output.Name)
 	}
 	existsSQL := "1"
-	if grouped {
+	hasLogicalPresence := grouped || outputState.kind == fieldKindStringArray
+	if hasLogicalPresence {
 		existsSQL = quoteIdentifier(fmt.Sprintf("__os_eventstats_exists_%d", stage))
 	}
 	outputState.valueSQL = quoteIdentifier(output.Name)
@@ -12726,7 +12829,7 @@ func eventAggregateCompileState(
 	if outputState.storedTypeSQL != "" {
 		next.privateColumns = append(next.privateColumns, outputState.storedTypeSQL)
 	}
-	if grouped {
+	if hasLogicalPresence {
 		next.privateColumns = append(next.privateColumns, existsSQL)
 	}
 	return next
@@ -12795,6 +12898,47 @@ func eventStatsDistinctCountValidationSQL(inputSQL, cardinalitySQL string) strin
 		"if(" + cardinalitySQL + " > toUInt64(" + maximum + "), " +
 		"throwIf(toUInt8(1), '" + ExactDistinctLimitMarker + "'), " +
 		"toUInt8(0)))"
+}
+
+// eventStatsValuesValidationSQL validates one complete global or grouped
+// exact-string cell before it can be copied onto source rows. The set itself
+// retains only one count sentinel; the raw byte ceiling remains independently
+// enforced after aggregation under ClickHouse's query-memory limit.
+func eventStatsValuesValidationSQL(
+	inputSQL, valueElementsSQL, valueBytesSQL string,
+) string {
+	unsupported := "maxOrDefault(toUInt8(tupleElement(" + inputSQL + ", 2)))"
+	maximumValues := strconv.FormatUint(MaximumStatsValuesPerGroup, 10)
+	maximumBytes := strconv.FormatUint(MaximumStatsValuesBytesPerGroup, 10)
+	return "if(" + unsupported + " != 0, " +
+		"throwIf(toUInt8(1), '" + UnsupportedStatsMeasureValueMarker + "'), " +
+		"if(" + valueElementsSQL + " > toUInt64(" + maximumValues + "), " +
+		"throwIf(toUInt8(1), '" + EventStatsValuesLimitMarker + "'), " +
+		"if(" + valueBytesSQL + " > toUInt128(" +
+		maximumBytes + "), throwIf(toUInt8(1), '" +
+		EventStatsValuesBytesLimitMarker + "'), toUInt8(0))))"
+}
+
+// eventStatsValuesAnnotatedResultValidationSQL bounds the serialized
+// amplification created when a values cell is repeated on every eligible
+// source row. Its inputs are scalar counts materialized once per aggregate
+// scope, so the window sums never rescan the arrays they account for.
+func eventStatsValuesAnnotatedResultValidationSQL(
+	cellValidationSQL, valueElementsSQL, valueBytesSQL string,
+) string {
+	totalElements := "sum(toUInt128(" + valueElementsSQL + ")) OVER ()"
+	totalBytes := "sum(toUInt128(" + valueBytesSQL + ")) OVER ()"
+	resultValidation := "if(" + totalElements + " > toUInt128(" +
+		strconv.FormatUint(MaximumStatsValuesPerResult, 10) + "), " +
+		"throwIf(toUInt8(1), '" + EventStatsValuesLimitMarker + "'), " +
+		"if(" + totalBytes + " > toUInt128(" +
+		strconv.FormatUint(MaximumStatsValuesBytesPerResult, 10) + "), " +
+		"throwIf(toUInt8(1), '" + EventStatsValuesBytesLimitMarker + "'), toUInt8(0)))"
+	if cellValidationSQL == "" {
+		return resultValidation
+	}
+	return "if(toUInt8(" + cellValidationSQL + ") != 0, toUInt8(1), " +
+		resultValidation + ")"
 }
 
 func validateAggregatePredicateMeasures(
@@ -14020,9 +14164,10 @@ func dynamicStringArrayStateSQL(
 		")], [toUInt8(" + descendantSQL + ")]), 1)", args
 }
 
-// eventStatsDistinctCountDynamicMeasureSQL retains unsupported input as a
-// constant-size bit so downstream projection or limits cannot hide failure.
-func eventStatsDistinctCountDynamicMeasureSQL(
+// eventStatsExactStringDynamicMeasureSQL normalizes the shared eventstats dc
+// and values input while retaining unsupported data as a constant-size bit, so
+// downstream projection or limits cannot hide failure.
+func eventStatsExactStringDynamicMeasureSQL(
 	field fieldState,
 	rowEligibleSQL string,
 ) (string, []any) {
