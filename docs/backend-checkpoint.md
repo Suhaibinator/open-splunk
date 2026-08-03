@@ -7,6 +7,109 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded split percentile timechart
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `99be8a9` — add bounded runtime-wide `timechart pN(field) BY split` and
+  `timechart percN(field) BY split` execution.
+
+This test-first SPL unit extends the existing percentile and runtime-wide
+numeric paths without a control-plane schema change, migration, public
+protobuf change, GORM on the ClickHouse path, or frontend code change:
+
+1. Integer-suffix `pN(field)` and `percN(field)` for levels 1 through 99 now
+   accept one optional exact `BY` split field after the aggregate or its
+   optional `AS` alias. The alias remains logical metadata because runtime
+   split values name the public columns. Parser suggestions, result-shape
+   classification, logical-plan inspection, analysis, compiler validation,
+   manager metadata detachment, and export reexecution all carry the bounded
+   runtime schema contract. Reusing the measure as the split remains a
+   source-located `SPL_DUPLICATE_FIELD` error.
+2. The public schema is `_time` plus at most ten ordinary string series,
+   optional `NULL`, and optional `OTHER`; every series cell is nullable Double.
+   Empty input publishes only the `_time` schema and no rows. A nonempty series
+   with no eligible numeric member retains the complete bucket grid with null
+   cells. Percentile cells must be finite or null, and the executor buffers the
+   whole grid before publishing anything.
+3. Ordinary labels rank by the sum of their finalized per-bucket percentile
+   values across the complete range, with the existing deterministic lexical
+   tie and non-finite score policy. `NULL` never consumes a top-ten slot.
+   Omitted labels collapse by merging their underlying GK states per bucket
+   before finalization, so `OTHER` is the requested percentile of the pooled
+   eligible members rather than an average of already-finalized percentiles.
+4. ClickHouse performs one tenant/index/time/snapshot-scoped event scan and no
+   `ARRAY JOIN`. Each valid raw `(bucket, split-kind, label)` group retains one
+   `quantilesGKOrNullArrayState(100, level)` sketch. The materialized states
+   drive scoring, top-ten selection, collision validation, `NULL`/`OTHER`
+   collapse, and the value/presence maps. Invalid split rows keep only their
+   validation count and an empty GK state, so a query guaranteed to fail does
+   not feed its measure arrays into sketches.
+5. Split percentiles have a separate hard ceiling of 20,000 raw GK-state
+   groups rather than the 130,000 allowance used by runtime count, sum, and
+   average. A higher general group limit is clamped; a lower limit remains
+   authoritative unless timechart expansion is explicitly enabled, and even
+   then cannot exceed 20,000. The pinned integration proves an actual low-cap
+   ClickHouse overflow returns an execution-limit failure atomically before
+   schema or row publication.
+6. `TimechartValueKind` now reserves zero as invalid. Compiler fallback and
+   executor, manager, and export consumers share `Valid()` instead of carrying
+   three drifting allowlists, so forged or partially initialized runtime-wide
+   value metadata fails closed.
+7. Unit coverage spans parser diagnostics/suggestions, canonical percentile
+   levels, dynamic plan output, forged metadata, SQL state/merge shape,
+   inspection/export boundaries, nullable transport, finite-result checks,
+   resource settings, and manager detachment. The digest-pinned ClickHouse
+   suite covers both `p95` and `perc50`, exact top-ten/tie selection,
+   immediate multivalue and numeric-String normalization, `NULL`, pooled
+   `OTHER`, all-ineligible and empty inputs, invalid splits, real group
+   overflow, one structured physical read, and the no-`ARRAY JOIN` invariant.
+8. Three independent simplify/adversarial reviewers found the duplicated kind
+   allowlists, zero-valued percentile metadata ambiguity, avoidable invalid-row
+   GK work, and the missing real-overflow proof. Every concrete finding was
+   fixed and independently rechecked; all three reviewers reported no
+   remaining concrete reuse, correctness, or scaling issue.
+
+Validation for `99be8a9` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+go test ./... -count=1
+go test -race ./internal/spl ./internal/plan ./internal/clickhouse \
+  ./internal/queryexec ./internal/searchjobs ./internal/searchinspection \
+  ./internal/export -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend lint/type-check, all 65 build-transaction tests, all 140 frontend
+tests, and the 11-page production build passed. The complete pinned
+query-executor/manager ClickHouse vertical passed in 26.15 seconds
+(26.553-second package result); the final focused split-percentile child passed
+in 8.52 seconds. No test-owned ClickHouse containers or volumes remained. The
+preceding pushed main run `30842254430` passed all 11 jobs, including Go lint,
+Backend vertical, GradeThis, release, and cross-platform artifact checks. The
+external GradeThis Compose cutover remains explicitly deferred, and the
+broader backend/SPL goal remains active.
+
 ## Latest checkpoint: bounded split numeric timechart
 
 Date: 2026-08-03
@@ -14054,13 +14157,14 @@ aggregate contract at a time:
 - decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
   remain separate percentile contracts and are not part of the first bounded
   integer-suffix slice;
-- bounded conditional-count `eventstats` is complete at `0c78cb7`, and bounded
-  exact-field numeric `eventstats sum(field) AS output` is complete at
-  `1a94faf`; bounded exact-field numeric `eventstats avg(field) AS output` is
-  complete at `3f83414`; bounded exact-field mixed-type `eventstats min(field)
-  AS output` is complete at `f25db02`. Remaining `eventstats` aggregates need
-  their own explicit contracts, while `streamstats` remains outside the first
-  release unless scope changes; and
+- split integer-suffix percentile timecharts are complete at `99be8a9`;
+  numeric `chart sum(field)` / `chart avg(field)` pivots and multi-field
+  `top`/`rare` remain optional bounded follow-up slices;
+- bounded single-measure `eventstats` now covers row/field/conditional count,
+  `dc`, `values`, `list`, integer-suffix percentiles, `sum`, `avg`, `min`,
+  `max`, `earliest`, and `latest`. Multiple measures and broader eval-expression
+  arguments remain separate contracts, while `streamstats` remains outside the
+  first release unless scope changes; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
 
@@ -14163,8 +14267,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `d7734b6`, `ceab244`, `75db36f`, `3f83414`, `1a94faf`,
-   `fbdb99f`,
+   commits, especially `99be8a9`, `d7734b6`, `ceab244`, `75db36f`, `3f83414`,
+   `1a94faf`, `fbdb99f`,
    `0c78cb7`, `ab0514e`, `67689e8`,
    `a03aa33`, `72b1b11`, `347a015`,
    `e312ae9`, `9115465`, `2a82932`, `076ff43`, `7eba237`,
@@ -14218,7 +14322,9 @@ Do not guess those decisions if they materially affect the implementation.
    comparison. Bounded chronological `earliest(field)` / `latest(field)` is
    complete across `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`;
    the bounded percentile family is published after parser/planner commit
-   `efe4199`, exact-field `c(field)` is complete at `070d24f`, and native
+   `efe4199`, split numeric timecharts are complete at `d7734b6`, split
+   percentile timecharts are complete at `99be8a9`, exact-field `c(field)` is
+   complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
    `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
