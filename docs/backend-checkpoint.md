@@ -7,6 +7,135 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: exact numeric spath leaves
+
+Date: 2026-08-02
+
+Committed implementation checkpoint:
+
+- `1cbb88b` — lossless, ingestion-parity numeric JSON leaves for bounded
+  explicit-path `spath`.
+
+This test-first SPL unit closes the remaining scalar `spath` type gap without
+a database or public API schema change, a control-plane migration, GORM on the
+ClickHouse path, or a frontend component/transport change:
+
+1. Collector ingestion and runtime `spath` now share one bounded
+   `internal/jsonnumber` representation contract. JSON integer syntax publishes
+   `Int64`, then `UInt64`, then exact `decimal/v1`; fractional or exponent syntax
+   publishes `Double` only when the complete decimal rational is exactly
+   binary64, finite, at most 19 source bytes, below the `1e60` nonzero magnitude
+   ceiling, within 60 exact decimal places, and within exponent magnitude
+   10,000. Every other valid number remains exact Decimal. The shared package
+   validates JSON-number grammar, bounds rational construction, returns zero
+   before exponent expansion, and preserves coefficient spelling while
+   canonicalizing exponent case/sign/leading zeroes.
+2. ClickHouse's structured JSON extractors cannot supply that contract:
+   production-digest probes showed `JSONExtractRaw` rounding
+   `9007199254740993.0`, underflowing `1e-400`, and allowing `1e400` to poison
+   unrelated paths, while the lexical convenience extractors lose escaped-key,
+   nested-member, duplicate, and array semantics. Direct Float parsing also
+   rounds the exact spelling `9.7e2` one ULP low. The compiler therefore performs
+   one lossless tokenization, replaces number tokens with null or compiler-owned
+   token-index markers in structurally equivalent JSON, uses native path
+   functions on the rebuilt document, and recovers the selected original token.
+3. The numeric classifier normalizes an eligible exponent spelling to bounded
+   plain decimal before Float parsing, then verifies the exact binary value via
+   a 60-place fixed-decimal comparison and the existing exact-decimal ordering
+   key. An 84,969-candidate production-digest probe established the 19-byte
+   shared bound and verified bit-for-bit Go/ClickHouse agreement after
+   normalization. Wide integers, inexact fractions, underflow, overflow, long
+   dyadic spellings, signed fractional zero, and exponent-bound zero spellings
+   retain their intended type and sign.
+4. One source remains capped at 1 MiB and is now additionally capped at 16,384
+   lexical tokens. Inputs above 16 KiB are counted before a token array is
+   allocated; admitted rows reconstruct at most the token ceiling. The heavy
+   `countMatches` and `extractAll` arguments themselves depend on the preceding
+   guards, preventing ClickHouse constant folding from allocating an oversized
+   calculated literal before its marker fires. Input and token markers map to
+   sanitized execution-limit errors. Resource guards deliberately precede JSON
+   validity, while malformed input inside both bounds remains a row-local miss.
+5. The finalized streaming lowering removes cumulative ordinal and filtered
+   numeric-token arrays, indexes the original token array directly, reuses the
+   original document when no number exists, constructs marked JSON only for a
+   null/numeric candidate, and classifies a raw leaf without a redundant
+   terminal `JSONType` pass. Integers avoid Float proof work, trailing-zero
+   counting uses constant-space bit arithmetic, decimal payloads avoid a second
+   normalization pass, and shared exponent constants prevent collector,
+   ordering, and binning policy drift. Generated SQL remains below 64 KiB and
+   relational-depth boundaries were re-pinned.
+6. Exact numeric outputs carry Double or Decimal stored-type metadata into field
+   catalogs and remain correct through `where`, exact sort, `stats min/max`, and
+   `bin`. Integration pins mathematical ordering across `-1e400` through
+   `1e400`, precision around `2^53`, exact/inexact fractions, ordinary and wide
+   buckets, and stable unsupported overflow behavior. Objects and arrays retain
+   the prior sanitized unsupported boundary; malformed, missing, wrong-container,
+   binary, and non-String inputs retain sparse miss semantics.
+7. One implementation-independent `internal/testsupport/jsonnumbercorpus` now
+   drives both the Go classifier and pinned ClickHouse `spath` integration. It
+   includes signed zero bit patterns, both signed exponent-zero boundaries,
+   coefficient-preserving Decimal normalization, parser traps, UInt64 overflow,
+   exact/inexact wide fractions, underflow, overflow, and the Float text bound.
+   Additional adversarial coverage pins escaped keys, arrays, nested same-name
+   members, first-duplicate selection, explicit null before a duplicate number,
+   numeric siblings outside Float range, and exact/adjacent token ceilings.
+8. Three frozen-diff reuse/quality/efficiency reviews and three final adversarial
+   reviews found and corrected duplicated number grammar, exponent-policy drift,
+   eager integer/Float work, redundant parser passes and arrays, unbounded token
+   allocation before preflight, a constant-fold resource-guard bypass, missing
+   signed-zero/duplicate-null cases, and independently drifting parity corpora.
+   The final production-digest suite proves constant calculated inputs return
+   the intended input/token marker under a 30 MiB memory ceiling rather than a
+   ClickHouse memory exception.
+9. The change retains GORM solely for SQLite control-plane state and the native
+   ClickHouse driver/compiler for event data. The external GradeThis Compose
+   collector cutover remains explicitly deferred, and the broader backend goal
+   remains active.
+
+Validation for implementation commit `1cbb88b` and its immediately preceding
+adversarial states:
+
+```sh
+git diff --check
+go mod tidy -diff
+
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go test -race -shuffle=on \
+  ./internal/jsonnumber ./internal/collector ./internal/clickhouse \
+  ./internal/queryexec ./internal/testsupport/jsonnumbercorpus -count=1
+go vet ./...
+CGO_ENABLED=0 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestSpathAgainstClickHouse$' \
+  -count=1 -timeout=4m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=8m -v
+```
+
+Every command passed. The final full Go tree, static build, vet, module-diff,
+changed-package race/shuffle suite, and cached golangci-lint v2.12.2 were clean;
+the earlier full race/shuffle tree also passed. Frontend lint and type-check,
+all 65 build-transaction tests, all 137 frontend tests, and the 11-page static
+production build passed without a tracked generated change. The final pinned
+`spath` suite passed in 42.78 seconds (43.201-second package result), including
+the 30 MiB constant-fold regressions. The full pinned Store/compiler corpus
+passed in 379.75 seconds (380.336-second package result) before the final
+spath-only guard/test hardening. No test-owned ClickHouse container remained.
+
 ## Latest checkpoint: bounded ordered eventstats list
 
 Date: 2026-08-02
