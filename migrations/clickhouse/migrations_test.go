@@ -1125,7 +1125,14 @@ func TestMigrationsAgainstClickHouse(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
-		output, err := exec.CommandContext(cleanupCtx, "docker", "rm", "--force", container).CombinedOutput()
+		output, err := exec.CommandContext(
+			cleanupCtx,
+			"docker",
+			"rm",
+			"--force",
+			"--volumes",
+			container,
+		).CombinedOutput()
 		if err != nil && !bytes.Contains(bytes.ToLower(output), []byte("no such container")) {
 			t.Errorf("remove test container: %v: %s", err, output)
 		}

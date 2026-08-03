@@ -543,7 +543,7 @@ func chartBreakPipelineStartClickHouse(t *testing.T, ctx context.Context) (click
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
-		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", container).Run()
+		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", "--volumes", container).Run()
 	})
 	integrationWaitForClickHouse(t, ctx, container, password)
 

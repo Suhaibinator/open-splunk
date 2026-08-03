@@ -754,6 +754,134 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if aggregate.Alias == "_time" {
 				canonicalTimeAvailable = false
 			}
+		case *spl.StreamStatsCommand:
+			if command == nil {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_QUERY",
+					Message: "streamstats command is nil",
+				}
+			}
+			if len(command.GroupBy) > spl.MaximumStatsGroupFields {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"streamstats BY contains more than %d grouping fields",
+						spl.MaximumStatsGroupFields,
+					),
+					Range: command.Range,
+				}
+			}
+			if command.Window > spl.MaximumStreamStatsWindow {
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+					Message: fmt.Sprintf(
+						"streamstats window must be between 0 and %d rows",
+						spl.MaximumStreamStatsWindow,
+					),
+					Range: command.Range,
+				}
+			}
+			if (!command.CurrentSpecified && !command.Current) ||
+				(!command.WindowSpecified && command.Window != 0) ||
+				(!command.GlobalSpecified && !command.Global) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+					Message: "streamstats option values are inconsistent with their default metadata",
+					Range:   command.Range,
+				}
+			}
+			if len(command.GroupBy) > 0 && command.Window > 0 &&
+				(!command.GlobalSpecified || command.Global) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+					Message: "streamstats with BY and a positive window requires explicit global=false",
+					Range:   command.Range,
+				}
+			}
+
+			aggregate := command.Aggregate
+			if aggregate.Function != spl.AggregateFunctionCount ||
+				aggregate.Input != "" ||
+				aggregate.InputRange != (spl.Range{}) ||
+				aggregate.Predicate != nil ||
+				aggregate.Percentile != 0 ||
+				aggregate.Alias == "" ||
+				(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+					Message: "streamstats currently supports exactly one argument-free count " +
+						"with its count default or one explicit alias",
+					Range: aggregate.Range,
+				}
+			}
+			if !validStreamAggregateFieldName(aggregate.Alias) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+					Message: "streamstats AS requires one exact unquoted output field",
+					Range:   aggregate.AliasRange,
+				}
+			}
+			if !outputSchemaKnown && aggregate.Alias == "fields" {
+				return nil, &Diagnostic{
+					Code: "SPL_AMBIGUOUS_STREAMSTATS_FIELD",
+					Message: "streamstats cannot replace the event result's reserved " +
+						"fields payload without an exact upstream schema",
+					Range: aggregate.AliasRange,
+				}
+			}
+			if _, aliasErr := ResolveField(
+				aggregate.Alias,
+				aggregate.AliasRange,
+			); aliasErr != nil {
+				return nil, aliasErr
+			}
+			for _, group := range command.GroupBy {
+				if !validStreamAggregateFieldName(group.Name) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+						Message: "streamstats BY requires exact unquoted grouping fields",
+						Range:   group.Range,
+					}
+				}
+				if !outputSchemaKnown {
+					if group.Name == "fields" {
+						return nil, &Diagnostic{
+							Code: "SPL_AMBIGUOUS_STREAMSTATS_FIELD",
+							Message: "streamstats cannot group by the event result's " +
+								"reserved fields payload without an exact upstream schema",
+							Range: group.Range,
+						}
+					}
+				}
+			}
+			groupBy, groupErr := convertStatsGroupFields(
+				"streamstats",
+				command.GroupBy,
+			)
+			if groupErr != nil {
+				return nil, groupErr
+			}
+			result.Operators = append(
+				result.Operators,
+				&StreamAggregate{
+					GroupBy: groupBy,
+					Measure: AggregateMeasure{
+						Function: AggregateFunctionCountRows,
+						Output:   aggregate.Alias,
+					},
+					IncludeCurrent: command.Current,
+					WindowRows:     command.Window,
+					Global:         command.Global,
+					Range:          command.Range,
+				},
+			)
+			if outputSchemaKnown &&
+				!slices.Contains(result.OutputFields, aggregate.Alias) {
+				result.OutputFields = append(result.OutputFields, aggregate.Alias)
+			}
+			if aggregate.Alias == "_time" {
+				canonicalTimeAvailable = false
+			}
 		case *spl.StatsCommand:
 			if len(command.Aggregates) == 0 {
 				return nil, &Diagnostic{
@@ -1852,6 +1980,10 @@ func positiveIndexReferences(
 				}
 			}
 		case *spl.EventStatsCommand:
+			if command == nil || command.Aggregate.Alias == "index" {
+				return references
+			}
+		case *spl.StreamStatsCommand:
 			if command == nil || command.Aggregate.Alias == "index" {
 				return references
 			}

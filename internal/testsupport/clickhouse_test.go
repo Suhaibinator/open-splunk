@@ -421,6 +421,16 @@ func TestClickHouseContainerCloseRemovesServicePrincipalConfig(t *testing.T) {
 	}
 }
 
+func TestClickHouseContainerRemovalArgumentsIncludeAnonymousVolumes(t *testing.T) {
+	t.Parallel()
+
+	arguments := clickHouseContainerRemovalArguments("fixture")
+	if got, want := strings.Join(arguments, " "),
+		"rm --force --volumes fixture"; got != want {
+		t.Fatalf("ClickHouse removal arguments = %q, want %q", got, want)
+	}
+}
+
 func TestBoundedOutputRetainsDiagnosticTail(t *testing.T) {
 	input := strings.Repeat("prefix", 1_000) + "diagnostic-tail\n"
 	output := boundedOutput([]byte(input))

@@ -62,7 +62,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
-		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", container).Run()
+		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", "--volumes", container).Run()
 	})
 	queryIntegrationWait(t, ctx, container, password)
 	queryIntegrationMigrate(t, ctx, container, password)
@@ -213,6 +213,14 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			t,
 			ctx,
 			connection,
+			eventIndexTime,
+		)
+	})
+	t.Run("streamstats executor and manager transport", func(t *testing.T) {
+		queryIntegrationTestStreamStatsTransport(
+			t,
+			ctx,
+			executor,
 			eventIndexTime,
 		)
 	})
@@ -2218,6 +2226,7 @@ ORDER BY grid.number`,
 			clickhouse.SpathInputLimitMarker,
 			clickhouse.SpathJSONTokenLimitMarker,
 			clickhouse.EventStatsInputLimitMarker,
+			clickhouse.StreamStatsInputLimitMarker,
 			clickhouse.ExactDistinctLimitMarker,
 			clickhouse.StatsValuesBytesLimitMarker,
 			clickhouse.StatsValuesLimitMarker,

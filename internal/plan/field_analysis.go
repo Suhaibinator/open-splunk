@@ -35,6 +35,10 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			if !validEventAggregateContract(operator) {
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
+		case *StreamAggregate:
+			if !validStreamAggregateContract(operator) {
+				return fieldAnalysisPipelineDiagnostic(operator.Range)
+			}
 		case *Project:
 			switch operator.Mode {
 			case ProjectModeInclude, ProjectModeExclude, ProjectModeTable:

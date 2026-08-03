@@ -207,6 +207,19 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			}
 		}
 		return nil
+	case *StreamAggregate:
+		if !validStreamAggregateContract(operator) {
+			return errors.New(
+				"analyze logical query: stream aggregate is invalid",
+			)
+		}
+		if err := analyzer.validateOutputName(
+			operator.Measure.Output,
+			depth+1,
+		); err != nil {
+			return err
+		}
+		return analyzer.addFields(operator.GroupBy, depth+1)
 	case *Aggregate:
 		if err := analyzer.addFields(operator.GroupBy, depth+1); err != nil {
 			return err

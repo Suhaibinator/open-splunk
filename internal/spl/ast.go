@@ -560,6 +560,11 @@ const (
 	// MaximumStatsGroupFields is the corresponding ceiling for one stats or
 	// eventstats BY tuple.
 	MaximumStatsGroupFields = 16
+	// MaximumStreamStatsWindow is the largest explicit row window accepted by
+	// the bounded streamstats compatibility surface. The backend separately
+	// caps the complete input relation so window=0 remains exact rather than
+	// silently degrading after an installation-specific memory threshold.
+	MaximumStreamStatsWindow uint64 = 10_000
 )
 
 const (
@@ -635,6 +640,33 @@ type EventStatsCommand struct {
 func (*EventStatsCommand) command()             {}
 func (*EventStatsCommand) Name() string         { return "eventstats" }
 func (c *EventStatsCommand) SourceRange() Range { return c.Range }
+
+// StreamStatsCommand appends one running row count to every input row. The
+// first compatibility slice deliberately accepts only argument-free count;
+// Aggregate still carries its source locations and alias using the common
+// stats representation. Current controls whether the present row contributes,
+// Window is zero for the complete bounded prefix, and Global is meaningful
+// only for a positive window. GlobalSpecified distinguishes Splunk's default
+// global window from the explicit global=false required by the supported
+// grouped finite-window form.
+type StreamStatsCommand struct {
+	Aggregate        StatsAggregate
+	Current          bool
+	CurrentSpecified bool
+	CurrentRange     Range
+	Window           uint64
+	WindowSpecified  bool
+	WindowRange      Range
+	Global           bool
+	GlobalSpecified  bool
+	GlobalRange      Range
+	GroupBy          []StatsGroupField
+	Range            Range
+}
+
+func (*StreamStatsCommand) command()             {}
+func (*StreamStatsCommand) Name() string         { return "streamstats" }
+func (c *StreamStatsCommand) SourceRange() Range { return c.Range }
 
 // TimeSpanUnit identifies the fixed-duration units shared by the initial bin
 // and timechart compatibility slices. Calendar and subsecond spans require

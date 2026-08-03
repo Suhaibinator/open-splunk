@@ -83,7 +83,7 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cleanupCancel()
-		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", container).Run()
+		_ = exec.CommandContext(cleanupCtx, "docker", "rm", "--force", "--volumes", container).Run()
 	})
 	integrationWaitForClickHouse(t, ctx, container, password)
 
@@ -2559,6 +2559,7 @@ func testCompiledQueriesAgainstClickHouse(
 		{"stats count eval", func(t *testing.T) { testStatsCountEvalAgainstClickHouse(ctx, t, store, connection, indexTime) }},
 		{"stats aggregates", func(t *testing.T) { testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"eventstats", func(t *testing.T) { testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"streamstats", func(t *testing.T) { testStreamStatsAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"eventstats distinct count", func(t *testing.T) { testEventStatsDistinctCountAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"eventstats values", func(t *testing.T) { testEventStatsValuesAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"eventstats numeric aggregates", func(t *testing.T) {

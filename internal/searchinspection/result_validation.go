@@ -162,6 +162,7 @@ func supportedInspectionOperator(value string) bool {
 		"Rename",
 		"Aggregate",
 		"EventAggregate",
+		"StreamAggregate",
 		"Timechart",
 		"Chart",
 		"Window",

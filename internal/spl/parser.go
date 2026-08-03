@@ -164,6 +164,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseStatsCommand(nameToken)
 	case "eventstats":
 		return p.parseEventStatsCommand(nameToken)
+	case "streamstats":
+		return p.parseStreamStatsCommand(nameToken)
 	case "top":
 		return p.parseTopCommand(nameToken)
 	case "rare":
@@ -1779,6 +1781,311 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 		GroupBy:   groupBy,
 		Range:     Range{Start: name.sourceRange.Start, End: end},
 	}, nil
+}
+
+const streamStatsSyntaxSuggestion = "streamstats count AS running_count"
+
+// parseStreamStatsCommand accepts one deliberately bounded running-count
+// surface. Splunk commonly places options both before and after the aggregate
+// (and examples also place them after BY), so this parser treats supported
+// name=value options as position-independent while keeping the aggregate,
+// alias, and grouping tuple exact.
+func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
+	command := &StreamStatsCommand{
+		Current: true,
+		Global:  true,
+	}
+	var (
+		aggregateSeen bool
+		aliasSeen     bool
+		bySeen        bool
+		byClosed      bool
+		currentSeen   bool
+		windowSeen    bool
+		globalSeen    bool
+		end           = name.sourceRange.End
+	)
+
+	for !p.atCommandEnd() {
+		current := p.current()
+		followedByEqual := current.kind == tokenWord &&
+			p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual
+		if followedByEqual {
+			optionName := strings.ToLower(current.text)
+			option := current
+			p.advance()
+			p.advance() // '=' was established by lookahead.
+			value := p.current()
+			if value.kind != tokenWord {
+				if value.kind == tokenEOF || value.kind == tokenPipe {
+					value = option
+				}
+				return nil, p.unsupportedStreamStatsSyntax(
+					value,
+					fmt.Sprintf("streamstats option %q requires an unquoted value", option.text),
+				)
+			}
+
+			switch optionName {
+			case "current":
+				if currentSeen {
+					return nil, p.unsupportedStreamStatsSyntax(option, "streamstats current may be specified only once")
+				}
+				parsed, ok := parseStreamStatsBool(value.text)
+				if !ok {
+					return nil, p.unsupportedStreamStatsSyntax(value, "streamstats current must be t, true, f, or false")
+				}
+				currentSeen = true
+				command.Current = parsed
+				command.CurrentSpecified = true
+				command.CurrentRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+			case "window":
+				if windowSeen {
+					return nil, p.unsupportedStreamStatsSyntax(option, "streamstats window may be specified only once")
+				}
+				if !unsignedIntegerSyntax(value.text) {
+					return nil, p.unsupportedStreamStatsSyntax(
+						value,
+						fmt.Sprintf("streamstats window must be an unsigned base-10 integer from 0 through %d", MaximumStreamStatsWindow),
+					)
+				}
+				parsed, err := strconv.ParseUint(value.text, 10, 64)
+				if err != nil || parsed > MaximumStreamStatsWindow {
+					return nil, p.unsupportedStreamStatsSyntax(
+						value,
+						fmt.Sprintf("streamstats window must be an unsigned base-10 integer from 0 through %d", MaximumStreamStatsWindow),
+					)
+				}
+				windowSeen = true
+				command.Window = parsed
+				command.WindowSpecified = true
+				command.WindowRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+			case "global":
+				if globalSeen {
+					return nil, p.unsupportedStreamStatsSyntax(option, "streamstats global may be specified only once")
+				}
+				parsed, ok := parseStreamStatsBool(value.text)
+				if !ok {
+					return nil, p.unsupportedStreamStatsSyntax(value, "streamstats global must be t, true, f, or false")
+				}
+				globalSeen = true
+				command.Global = parsed
+				command.GlobalSpecified = true
+				command.GlobalRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+			case "time_window", "allnum", "reset_before", "reset_after", "reset_on_change":
+				return nil, p.unsupportedStreamStatsSyntax(
+					option,
+					fmt.Sprintf("streamstats option %q is not supported by the running-count compatibility slice", option.text),
+				)
+			default:
+				return nil, p.unsupportedStreamStatsSyntax(
+					option,
+					fmt.Sprintf("streamstats option %q is not supported", option.text),
+				)
+			}
+			end = value.sourceRange.End
+			p.advance()
+			if bySeen {
+				byClosed = true
+			}
+			continue
+		}
+
+		if current.kind == tokenWord {
+			optionName := strings.ToLower(current.text)
+			if optionName == "current" || optionName == "window" || optionName == "global" ||
+				optionName == "time_window" || optionName == "allnum" ||
+				optionName == "reset_before" || optionName == "reset_after" ||
+				optionName == "reset_on_change" {
+				return nil, &Diagnostic{
+					Code:        "SPL_EXPECTED_EQUAL",
+					Message:     fmt.Sprintf("streamstats option %q must be followed by '='", current.text),
+					Range:       current.sourceRange,
+					Suggestions: []string{streamStatsSyntaxSuggestion},
+				}
+			}
+		}
+
+		if current.kind == tokenWord && strings.EqualFold(current.text, "count") {
+			if aggregateSeen || bySeen {
+				return nil, p.unsupportedStreamStatsAggregate(current, "streamstats supports exactly one argument-free count aggregate")
+			}
+			if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen {
+				return nil, p.unsupportedStreamStatsAggregate(current, "streamstats count() and count arguments are not supported; use argument-free count")
+			}
+			aggregateSeen = true
+			command.Aggregate = StatsAggregate{
+				Function:   AggregateFunctionCount,
+				Alias:      "count",
+				Range:      current.sourceRange,
+				AliasRange: current.sourceRange,
+			}
+			end = current.sourceRange.End
+			p.advance()
+			continue
+		}
+
+		if current.kind == tokenWord && strings.EqualFold(current.text, "AS") {
+			if !aggregateSeen || aliasSeen || bySeen {
+				return nil, p.unsupportedStreamStatsSyntax(current, "streamstats AS must follow its count aggregate and may appear only once before BY")
+			}
+			p.advance()
+			alias := p.current()
+			if !isExactUnquotedStreamStatsField(alias) || strings.EqualFold(alias.text, "BY") {
+				return nil, p.unsupportedStreamStatsSyntax(alias, "streamstats AS requires one exact unquoted output field")
+			}
+			if strings.Contains(alias.text, "*") {
+				return nil, p.unsupportedStreamStatsSyntax(alias, "wildcard streamstats output fields are not supported")
+			}
+			aliasSeen = true
+			command.Aggregate.Alias = alias.text
+			command.Aggregate.ExplicitAlias = true
+			command.Aggregate.AliasRange = alias.sourceRange
+			command.Aggregate.Range.End = alias.sourceRange.End
+			end = alias.sourceRange.End
+			p.advance()
+			continue
+		}
+
+		if current.kind == tokenWord && strings.EqualFold(current.text, "BY") {
+			if !aggregateSeen || bySeen {
+				return nil, p.unsupportedStreamStatsSyntax(current, "streamstats accepts one BY clause after its count aggregate")
+			}
+			bySeen = true
+			p.advance()
+			groups, groupEnd, err := p.parseStreamStatsGroupFields()
+			if err != nil {
+				return nil, err
+			}
+			command.GroupBy = groups
+			end = groupEnd
+			if !p.atCommandEnd() {
+				byClosed = true
+			}
+			continue
+		}
+
+		if byClosed {
+			return nil, p.unsupportedStreamStatsSyntax(current, "streamstats BY fields must precede any trailing options")
+		}
+		if current.kind == tokenComma {
+			return nil, p.unsupportedStreamStatsAggregate(current, "streamstats supports exactly one aggregate")
+		}
+		if current.kind == tokenWord {
+			return nil, p.unsupportedStreamStatsAggregate(
+				current,
+				fmt.Sprintf("streamstats aggregate %q is not supported; use argument-free count", current.text),
+			)
+		}
+		return nil, p.unsupportedStreamStatsSyntax(current, "streamstats requires one argument-free count aggregate")
+	}
+
+	if !aggregateSeen {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "streamstats requires one argument-free count aggregate")
+	}
+	if len(command.GroupBy) > 0 && command.Window > 0 &&
+		(!command.GlobalSpecified || command.Global) {
+		located := command.WindowRange
+		if command.GlobalSpecified {
+			located = command.GlobalRange
+		}
+		return nil, &Diagnostic{
+			Code: "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+			Message: "streamstats with BY and a positive window currently requires " +
+				"explicit global=false so each group owns an independent row window",
+			Range:       located,
+			Suggestions: []string{"streamstats window=5 global=false count BY group"},
+		}
+	}
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
+	return command, nil
+}
+
+func (p *parser) parseStreamStatsGroupFields() ([]StatsGroupField, Position, error) {
+	fields := make([]StatsGroupField, 0, 4)
+	seen := make(map[string]struct{}, 4)
+	end := p.current().sourceRange.Start
+	wantField := true
+	for !p.atCommandEnd() {
+		tok := p.current()
+		followedByEqual := tok.kind == tokenWord && p.index+1 < len(p.tokens) &&
+			p.tokens[p.index+1].kind == tokenEqual
+		if followedByEqual && !wantField {
+			break
+		}
+		if tok.kind == tokenComma {
+			if wantField {
+				return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "streamstats BY requires an exact grouping field")
+			}
+			wantField = true
+			p.advance()
+			continue
+		}
+		if tok.kind != tokenWord || followedByEqual {
+			return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "streamstats BY requires an exact unquoted grouping field")
+		}
+		if !isExactUnquotedStreamStatsField(tok) {
+			return nil, end, p.unsupportedStreamStatsSyntax(tok, "quoted streamstats grouping fields are not supported")
+		}
+		if strings.EqualFold(tok.text, "AS") || strings.EqualFold(tok.text, "BY") {
+			return nil, end, p.unsupportedStreamStatsSyntax(tok, "streamstats accepts one BY clause and its alias must appear before BY")
+		}
+		if strings.Contains(tok.text, "*") {
+			return nil, end, p.unsupportedStreamStatsSyntax(tok, "wildcard streamstats grouping fields are not supported")
+		}
+		if _, duplicate := seen[tok.text]; duplicate {
+			return nil, end, p.unsupportedStreamStatsSyntax(tok, fmt.Sprintf("streamstats grouping field %q is repeated", tok.text))
+		}
+		if len(fields) >= MaximumStatsGroupFields {
+			return nil, end, &Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("streamstats BY contains more than %d grouping fields", MaximumStatsGroupFields),
+				Range:   tok.sourceRange,
+			}
+		}
+		seen[tok.text] = struct{}{}
+		fields = append(fields, StatsGroupField{Name: tok.text, Range: tok.sourceRange})
+		end = tok.sourceRange.End
+		wantField = false
+		p.advance()
+	}
+	if len(fields) == 0 || wantField {
+		return nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "streamstats BY requires at least one exact grouping field")
+	}
+	return fields, end, nil
+}
+
+func isExactUnquotedStreamStatsField(tok token) bool {
+	return tok.kind == tokenWord && !strings.ContainsAny(tok.text, "'\"`")
+}
+
+func parseStreamStatsBool(value string) (bool, bool) {
+	switch strings.ToLower(value) {
+	case "t", "true":
+		return true, true
+	case "f", "false":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func (p *parser) unsupportedStreamStatsAggregate(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+		Message:     message,
+		Range:       tok.sourceRange,
+		Suggestions: []string{streamStatsSyntaxSuggestion},
+	}
+}
+
+func (p *parser) unsupportedStreamStatsSyntax(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:        "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+		Message:     message,
+		Range:       tok.sourceRange,
+		Suggestions: []string{streamStatsSyntaxSuggestion},
+	}
 }
 
 func (p *parser) parseEventStatsFieldAggregate(

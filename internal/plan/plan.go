@@ -263,6 +263,25 @@ func (*EventAggregate) operator()                 {}
 func (*EventAggregate) LogicalName() string       { return "EventAggregate" }
 func (op *EventAggregate) SourceRange() spl.Range { return op.Range }
 
+// StreamAggregate appends one running aggregate while preserving the input
+// relation and its established row order. The first bounded compatibility
+// slice accepts only CountRows. IncludeCurrent chooses whether the frame ends
+// at the current row or the immediately preceding row; WindowRows is zero for
+// the complete admitted prefix. A positive grouped window is valid only with
+// Global=false, which gives every exact BY tuple an independent row window.
+type StreamAggregate struct {
+	GroupBy        []FieldRef
+	Measure        AggregateMeasure
+	IncludeCurrent bool
+	WindowRows     uint64
+	Global         bool
+	Range          spl.Range
+}
+
+func (*StreamAggregate) operator()                 {}
+func (*StreamAggregate) LogicalName() string       { return "StreamAggregate" }
+func (op *StreamAggregate) SourceRange() spl.Range { return op.Range }
+
 // TimechartSplit is the bounded runtime-wide contract for a count, percentile,
 // sum, or average timechart BY field. A nil split selects a fixed two-column
 // form.

@@ -406,6 +406,7 @@ func releaseOCIRunRecoveryHelper(
 		"container",
 		"rm",
 		"--force",
+		"--volumes",
 		containerName,
 	)
 	stack.forgetOwnedContainer(containerName)
@@ -462,6 +463,7 @@ func releaseOCIRequireRecoveryHelperFailure(
 		"container",
 		"rm",
 		"--force",
+		"--volumes",
 		containerName,
 	)
 	stack.forgetOwnedContainer(containerName)
@@ -2425,6 +2427,7 @@ func (stack *releaseOCIComposeStack) cleanup(t *testing.T) {
 			"container",
 			"rm",
 			"--force",
+			"--volumes",
 			container,
 		)
 		configureProcessGroup(command)
@@ -2540,7 +2543,9 @@ func (stack *releaseOCIComposeStack) cleanupLabeledResources(t *testing.T, kind 
 	}
 	arguments := []string{kind, "rm"}
 	switch kind {
-	case "container", "volume":
+	case "container":
+		arguments = append(arguments, "--force", "--volumes")
+	case "volume":
 		arguments = append(arguments, "--force")
 	case "network":
 	default:

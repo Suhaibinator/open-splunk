@@ -1,0 +1,34 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+import { getQueryDiagnostic } from "./spl-editor";
+import {
+  isSupportedSplPipelineCommand,
+  SPL_PIPELINE_COMMANDS,
+  UNSUPPORTED_SPL_PIPELINE_COMMANDS,
+} from "./spl-syntax";
+
+test("streamstats is advertised once with the bounded supported syntax", () => {
+  const definitions = SPL_PIPELINE_COMMANDS.filter((command) => command.name === "streamstats");
+  assert.equal(definitions.length, 1);
+  assert.equal(definitions[0]?.insertion, "streamstats count AS running_count");
+  assert.match(definitions[0]?.detail ?? "", /bounded running row count/i);
+  assert.match(definitions[0]?.detail ?? "", /deterministic pipeline order/i);
+  assert.match(definitions[0]?.detail ?? "", /excluding the current row/i);
+  assert.match(definitions[0]?.detail ?? "", /exact fields/i);
+});
+
+test("frontend support classification accepts streamstats without weakening rejection", () => {
+  assert.equal(isSupportedSplPipelineCommand("streamstats"), true);
+  assert.equal(isSupportedSplPipelineCommand("StReAmStAtS"), true);
+  assert.equal(new Set<string>(UNSUPPORTED_SPL_PIPELINE_COMMANDS).has("streamstats"), false);
+
+  const supported = getQueryDiagnostic(
+    "index=main | STREAMSTATS current=f window=3 global=f count AS prior BY service",
+  );
+  assert.equal(supported, null);
+
+  const unsupported = getQueryDiagnostic("index=main | transaction trace_id");
+  assert.equal(unsupported?.kind, "unsupported");
+  assert.equal(unsupported?.token, "transaction");
+});

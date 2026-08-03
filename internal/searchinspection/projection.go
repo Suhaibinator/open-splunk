@@ -299,6 +299,11 @@ func describeOperator(
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
 		}
 		outputs = []string{concrete.Measure.Output}
+	case *plan.StreamAggregate:
+		if concrete == nil {
+			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
+		}
+		outputs = []string{concrete.Measure.Output}
 	case *plan.Timechart:
 		if concrete == nil {
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")

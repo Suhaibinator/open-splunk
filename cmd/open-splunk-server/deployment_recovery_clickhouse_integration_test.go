@@ -934,7 +934,7 @@ func (fixture *nativeRecoveryIntegrationFixture) restartContainer(
 ) {
 	t.Helper()
 	fixture.docker(t, ctx, "container", "stop", "--timeout", "30", fixture.containerName)
-	fixture.docker(t, ctx, "container", "rm", fixture.containerName)
+	fixture.docker(t, ctx, "container", "rm", "--volumes", fixture.containerName)
 	fixture.startContainer(t, ctx, recoveryReadOnly)
 }
 
@@ -1170,7 +1170,14 @@ func (fixture *nativeRecoveryIntegrationFixture) close(t *testing.T) {
 	t.Helper()
 	for _, name := range append([]string{fixture.containerName}, fixture.bootstrapNames...) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		output, err := exec.CommandContext(ctx, "docker", "rm", "--force", name).CombinedOutput()
+		output, err := exec.CommandContext(
+			ctx,
+			"docker",
+			"rm",
+			"--force",
+			"--volumes",
+			name,
+		).CombinedOutput()
 		cancel()
 		if err != nil && !strings.Contains(string(output), "No such container") {
 			t.Errorf("remove recovery integration container %s: %v: %s", name, err, nativeRecoveryIntegrationBoundedOutput(output))

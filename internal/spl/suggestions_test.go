@@ -456,6 +456,26 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			kinds:    []SuggestionKind{SuggestionKindKeyword},
 			keywords: []string{"input=", "output="},
 		},
+		{
+			source:   `| streamstats current=false count `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"AS", "BY", "window=", "global="},
+		},
+		{
+			source:   `| streamstats count BY host `,
+			kinds:    []SuggestionKind{SuggestionKindField, SuggestionKindKeyword},
+			keywords: []string{"current=", "window=", "global="},
+		},
+		{
+			source:   `| streamstats count BY host current=false `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"window=", "global="},
+		},
+		{
+			source:   `| streamstats count BY host current=false window=2 global=false `,
+			kinds:    nil,
+			keywords: nil,
+		},
 	}
 	for _, test := range tests {
 		test := test
@@ -714,8 +734,8 @@ func TestStaticSuggestionsUseSharedCatalogAndContextFilters(t *testing.T) {
 	if command.Diagnostic != nil {
 		t.Fatalf("Suggest(command): %v", command.Diagnostic)
 	}
-	if labels := suggestionLabels(command.Suggestions); !slices.Equal(labels, []string{"stats"}) {
-		t.Fatalf("command labels = %v, want stats", labels)
+	if labels := suggestionLabels(command.Suggestions); !slices.Equal(labels, []string{"stats", "streamstats"}) {
+		t.Fatalf("command labels = %v, want stats/streamstats", labels)
 	}
 
 	scalar := Suggest("| eval x=to", len("| eval x=to"), 20)
@@ -757,7 +777,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 	wantCommands := []string{
 		"search", "where", "eval", "rename", "fields", "table", "sort",
 		"dedup", "rex", "spath", "bin", "bucket", "head", "tail", "stats",
-		"eventstats", "top", "rare", "timechart", "chart",
+		"eventstats", "streamstats", "top", "rare", "timechart", "chart",
 	}
 	gotCommands := make([]string, 0, len(completionCatalog.Commands))
 	for _, command := range completionCatalog.Commands {

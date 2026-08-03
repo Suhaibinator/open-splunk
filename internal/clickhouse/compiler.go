@@ -235,6 +235,10 @@ const (
 	// eventstats stage. The compiler reads one additional sentinel row and
 	// fails the whole search instead of annotating a partial relation.
 	MaximumEventStatsInputRows uint64 = 10_000
+	// MaximumStreamStatsInputRows bounds the complete ordered relation consumed
+	// by one streamstats stage. The compiler reads one sentinel row and fails
+	// atomically instead of publishing a partial running sequence.
+	MaximumStreamStatsInputRows uint64 = 10_000
 	// MaximumEventStatsGraphAmplification bounds passes over the one retained
 	// materialized bounded leaf in a deferred stack. Every global stage has two
 	// consumers and every grouped stage has three; final result, analysis, and
@@ -285,6 +289,9 @@ const (
 	// EventStatsInputLimitMarker classifies an eventstats stage whose upstream
 	// relation exceeded the bounded row-enrichment contract.
 	EventStatsInputLimitMarker = "open-splunk: eventstats input exceeds the supported limit"
+	// StreamStatsInputLimitMarker classifies a streamstats stage whose ordered
+	// upstream relation exceeded MaximumStreamStatsInputRows.
+	StreamStatsInputLimitMarker = "open-splunk: streamstats input exceeds the supported limit"
 	// UnsupportedStatsMeasureValueMarker is emitted when a string-oriented
 	// stats measure encounters an object or nested container that has no
 	// scalar SPL representation.
@@ -1055,6 +1062,27 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			} else {
 				args = prependArguments(prefixArgs, args)
 			}
+			if barrier != nil {
+				boundBarrier := barrier.bind(args)
+				args = nil
+				nextState.chronologicalBarriers = append(
+					nextState.chronologicalBarriers,
+					boundBarrier,
+				)
+			}
+			state = nextState
+		case *plan.StreamAggregate:
+			enriched, nextState, prefixArgs, barrier, compileErr := compileStreamAggregate(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = prependArguments(prefixArgs, args)
 			if barrier != nil {
 				boundBarrier := barrier.bind(args)
 				args = nil
@@ -13262,6 +13290,437 @@ type eventAggregateMeasureSpec struct {
 	numberType      string
 	numericIntegral bool
 	valuePrefix     string
+}
+
+func validateStreamAggregate(
+	operator *plan.StreamAggregate,
+	state compileState,
+) (plan.FieldRef, error) {
+	if operator == nil {
+		return plan.FieldRef{}, errors.New(
+			"compile ClickHouse streamstats: operator is missing",
+		)
+	}
+	if len(operator.GroupBy) > spl.MaximumStatsGroupFields {
+		return plan.FieldRef{}, fmt.Errorf(
+			"compile ClickHouse streamstats: more than %d grouping fields",
+			spl.MaximumStatsGroupFields,
+		)
+	}
+	if operator.WindowRows > spl.MaximumStreamStatsWindow {
+		return plan.FieldRef{}, fmt.Errorf(
+			"compile ClickHouse streamstats: window exceeds %d rows",
+			spl.MaximumStreamStatsWindow,
+		)
+	}
+	if len(operator.GroupBy) > 0 && operator.WindowRows > 0 && operator.Global {
+		return plan.FieldRef{}, errors.New(
+			"compile ClickHouse streamstats: grouped positive windows require global=false",
+		)
+	}
+	measure := operator.Measure
+	if measure.Function != plan.AggregateFunctionCountRows ||
+		measure.Input.Name != "" ||
+		measure.Input.Canonical ||
+		measure.Input.Path != nil ||
+		measure.Input.Range != (spl.Range{}) ||
+		measure.Predicate != nil ||
+		measure.Percentile != 0 ||
+		measure.Output == "" {
+		return plan.FieldRef{}, errors.New(
+			"compile ClickHouse streamstats: only argument-free count is supported",
+		)
+	}
+	if strings.ContainsAny(measure.Output, "'\"`") {
+		return plan.FieldRef{}, errors.New(
+			"compile ClickHouse streamstats: output must be one exact unquoted field",
+		)
+	}
+	output, err := plan.ResolveField(measure.Output, operator.Range)
+	if err != nil {
+		return plan.FieldRef{}, fmt.Errorf(
+			"compile ClickHouse streamstats: invalid output field %q: %w",
+			measure.Output,
+			err,
+		)
+	}
+	if state.eventRows && state.allowDynamic && output.Name == "fields" {
+		return plan.FieldRef{}, &plan.Diagnostic{
+			Code: "SPL_AMBIGUOUS_STREAMSTATS_FIELD",
+			Message: "streamstats cannot replace the event result's reserved " +
+				"fields payload without an exact upstream schema",
+			Range: output.Range,
+		}
+	}
+	seen := make(map[string]struct{}, len(operator.GroupBy))
+	for _, group := range operator.GroupBy {
+		if strings.ContainsAny(group.Name, "'\"`") {
+			return plan.FieldRef{}, errors.New(
+				"compile ClickHouse streamstats: grouping fields must be exact and unquoted",
+			)
+		}
+		if err := validateCanonicalFieldRef(
+			"streamstats",
+			"grouping",
+			group,
+		); err != nil {
+			return plan.FieldRef{}, err
+		}
+		if _, duplicate := seen[group.Name]; duplicate {
+			return plan.FieldRef{}, fmt.Errorf(
+				"compile ClickHouse streamstats: grouping field %q is repeated",
+				group.Name,
+			)
+		}
+		seen[group.Name] = struct{}{}
+		if state.eventRows && state.allowDynamic && group.Name == "fields" {
+			return plan.FieldRef{}, &plan.Diagnostic{
+				Code: "SPL_AMBIGUOUS_STREAMSTATS_FIELD",
+				Message: "streamstats cannot group by the event result's reserved " +
+					"fields payload without an exact upstream schema",
+				Range: group.Range,
+			}
+		}
+	}
+	return output, nil
+}
+
+func streamAggregateCompileState(
+	state compileState,
+	output plan.FieldRef,
+	grouped bool,
+	stage int,
+	order []compiledSortKey,
+	tieBreakers []compiledSortKey,
+) compileState {
+	next := cloneCompileState(state)
+	if exposesRawFieldsPayload(state) && !output.Canonical {
+		dropRawFieldsPayload(&next)
+	}
+	delete(next.blocked, output.Name)
+	if !slices.Contains(next.publicOrder, output.Name) {
+		next.publicOrder = append(next.publicOrder, output.Name)
+	}
+	existsSQL := "1"
+	if grouped {
+		existsSQL = quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_exists_%d",
+			stage,
+		))
+	}
+	next.visible[output.Name] = fieldState{
+		valueSQL:        quoteIdentifier(output.Name),
+		existsSQL:       existsSQL,
+		kind:            fieldKindNumber,
+		numberType:      "UInt64",
+		numericIntegral: true,
+	}
+	// The running value may replace a public field that supplied the incoming
+	// order. Every key was snapshotted before replacement, so make those private
+	// sequences the durable pipeline order and stable event identity. A later
+	// explicit sort consumes tieBreakers independently from order.
+	next.order = append([]compiledSortKey(nil), order...)
+	next.tieBreakers = append([]compiledSortKey(nil), tieBreakers...)
+	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
+	if grouped {
+		next.privateColumns = append(next.privateColumns, existsSQL)
+	}
+	return next
+}
+
+func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
+	if window == 0 {
+		if includeCurrent {
+			return "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+		}
+		return "ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING"
+	}
+	if includeCurrent {
+		if window == 1 {
+			return "ROWS BETWEEN CURRENT ROW AND CURRENT ROW"
+		}
+		return "ROWS BETWEEN " + strconv.FormatUint(window-1, 10) +
+			" PRECEDING AND CURRENT ROW"
+	}
+	return "ROWS BETWEEN " + strconv.FormatUint(window, 10) +
+		" PRECEDING AND 1 PRECEDING"
+}
+
+// compileStreamAggregate lowers one running row count over the order already
+// established by the pipeline. Its only retained relation is capped at one
+// sentinel beyond the public limit; both row overflow and Dynamic BY poison
+// are checked inside the deferred barrier before any downstream operator can
+// hide them.
+func compileStreamAggregate(
+	relation compiledRelation,
+	operator *plan.StreamAggregate,
+	state compileState,
+	stage int,
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
+	output, validateErr := validateStreamAggregate(operator, state)
+	if validateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, validateErr
+	}
+
+	orderKeys := append([]compiledSortKey(nil), defaultCompiledOrder(state)...)
+	tieBreakers := append([]compiledSortKey(nil), state.tieBreakers...)
+	orderProjection := make([]string, 0, len(orderKeys)+len(tieBreakers))
+	for index := range orderKeys {
+		captured := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_order_%d_%d",
+			stage,
+			index,
+		))
+		orderProjection = append(
+			orderProjection,
+			orderKeys[index].valueSQL+" AS "+captured,
+		)
+		orderKeys[index].valueSQL = captured
+	}
+	for index := range tieBreakers {
+		captured := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_tie_breaker_%d_%d",
+			stage,
+			index,
+		))
+		orderProjection = append(
+			orderProjection,
+			tieBreakers[index].valueSQL+" AS "+captured,
+		)
+		tieBreakers[index].valueSQL = captured
+	}
+	orderSQL := ""
+	if len(orderKeys) > 0 {
+		var orderErr error
+		orderSQL, orderErr = compileMaterializedOrder(orderKeys, false)
+		if orderErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, fmt.Errorf(
+				"compile ClickHouse streamstats order: %w",
+				orderErr,
+			)
+		}
+	}
+
+	groupClassifications := make([]string, 0, len(operator.GroupBy))
+	groupAliases := make([]string, 0, len(operator.GroupBy))
+	groupPresence := make([]string, 0, len(operator.GroupBy))
+	groupUnsupported := make([]string, 0, len(operator.GroupBy))
+	prefixArgs := make([]any, 0, len(operator.GroupBy)*2)
+	for index, group := range operator.GroupBy {
+		scalar, compileErr := compileExactScalarGroup(
+			group,
+			state,
+			"streamstats BY",
+		)
+		if compileErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, compileErr
+		}
+		classification, classificationArgs := exactScalarGroupClassificationSQL(
+			scalar,
+		)
+		classificationAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_group_classification_%d",
+			index,
+		))
+		groupAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_group_%d",
+			index,
+		))
+		groupClassifications = append(
+			groupClassifications,
+			classification+" AS "+classificationAlias,
+		)
+		groupAliases = append(groupAliases, groupAlias)
+		groupPresence = append(
+			groupPresence,
+			"tupleElement("+classificationAlias+", 2) != 0",
+		)
+		groupUnsupported = append(
+			groupUnsupported,
+			"tupleElement("+classificationAlias+", 3) != 0",
+		)
+		prefixArgs = append(prefixArgs, classificationArgs...)
+	}
+
+	maximumRows := strconv.FormatUint(MaximumStreamStatsInputRows, 10)
+	sentinelRows := strconv.FormatUint(MaximumStreamStatsInputRows+1, 10)
+	sourceAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_source_%d",
+		stage,
+	))
+	orderedInput := "SELECT *"
+	if len(groupClassifications) > 0 {
+		orderedInput += ", " + strings.Join(groupClassifications, ", ")
+	}
+	if len(orderProjection) > 0 {
+		orderedInput += ", " + strings.Join(orderProjection, ", ")
+	}
+	orderedInput += " FROM (" + relation.sql + ") AS " + sourceAlias
+	if orderSQL != "" {
+		orderedInput += " ORDER BY " + orderSQL
+	}
+	orderedInput += " LIMIT " + sentinelRows
+
+	eligibleAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_eligible_%d",
+		stage,
+	))
+	unsupportedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_unsupported_%d",
+		stage,
+	))
+	preparedSQL := orderedInput
+	if len(groupAliases) > 0 {
+		preparedProjection := []string{"*"}
+		for index, groupAlias := range groupAliases {
+			preparedProjection = append(
+				preparedProjection,
+				"tupleElement("+quoteIdentifier(fmt.Sprintf(
+					"__os_streamstats_group_classification_%d",
+					index,
+				))+", 1) AS "+groupAlias,
+			)
+		}
+		preparedProjection = append(
+			preparedProjection,
+			"toUInt8("+strings.Join(groupPresence, " AND ")+") AS "+eligibleAlias,
+			"toUInt8(("+strings.Join(groupUnsupported, ") OR (")+")) AS "+unsupportedAlias,
+		)
+		preparedAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_classified_%d",
+			stage,
+		))
+		preparedSQL = "SELECT " + strings.Join(preparedProjection, ", ") +
+			" FROM (" + orderedInput + ") AS " + preparedAlias
+	}
+
+	inputName := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_input_%d",
+		stage,
+	))
+	inputCount := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_input_count_%d",
+		stage,
+	))
+	windowValue := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_value_%d",
+		stage,
+	))
+	windowParts := make([]string, 0, 3)
+	if len(groupAliases) > 0 {
+		partition := append([]string{eligibleAlias}, groupAliases...)
+		windowParts = append(
+			windowParts,
+			"PARTITION BY "+strings.Join(partition, ", "),
+		)
+	}
+	if orderSQL != "" {
+		windowParts = append(windowParts, "ORDER BY "+orderSQL)
+	} else {
+		// A supported relation without order keys is a global aggregate and has
+		// at most one row. Pin a syntactically complete window order without
+		// pretending that a wider unordered relation is deterministic.
+		windowParts = append(windowParts, "ORDER BY tuple()")
+	}
+	windowParts = append(
+		windowParts,
+		streamStatsFrameSQL(operator.IncludeCurrent, operator.WindowRows),
+	)
+	windowExpression := "count() OVER (" + strings.Join(windowParts, " ") + ")"
+	if !operator.IncludeCurrent {
+		windowExpression = "ifNull(" + windowExpression + ", toUInt64(0))"
+	}
+
+	windowProjection := []string{
+		"*",
+		"count() OVER () AS " + inputCount,
+		windowExpression + " AS " + windowValue,
+	}
+	unsupportedAny := ""
+	if len(groupAliases) > 0 {
+		unsupportedAny = quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_any_unsupported_%d",
+			stage,
+		))
+		windowProjection = append(
+			windowProjection,
+			"max(toUInt8("+unsupportedAlias+" != 0)) OVER () AS "+unsupportedAny,
+		)
+	}
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_window_%d",
+		stage,
+	))
+	windowSQL := "SELECT " + strings.Join(windowProjection, ", ") +
+		" FROM " + inputName
+
+	next := streamAggregateCompileState(
+		state,
+		output,
+		len(groupAliases) > 0,
+		stage,
+		orderKeys,
+		tieBreakers,
+	)
+	outputValue := windowAlias + "." + windowValue
+	outputExists := "1"
+	if len(groupAliases) > 0 {
+		outputExists = windowAlias + "." + eligibleAlias + " != 0"
+		outputValue = "if(" + outputExists + ", " + outputValue +
+			", CAST(NULL AS Nullable(UInt64)))"
+	}
+	projection := eventAggregateProjection(
+		state,
+		next,
+		output.Name,
+		outputValue,
+		"",
+		outputExists,
+		"",
+		"",
+	)
+	guard := "if(" + windowAlias + "." + inputCount + " > toUInt64(" +
+		maximumRows + "), throwIf(toUInt8(1), '" +
+		StreamStatsInputLimitMarker + "'), toUInt8(0))"
+	if unsupportedAny != "" {
+		guard = "if(" + windowAlias + "." + inputCount + " > toUInt64(" +
+			maximumRows + "), throwIf(toUInt8(1), '" +
+			StreamStatsInputLimitMarker + "'), if(" + windowAlias + "." +
+			unsupportedAny + " != 0, throwIf(toUInt8(1), '" +
+			UnsupportedStatsByValueMarker + "'), toUInt8(0)))"
+	}
+	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		windowSQL + ") AS " + windowAlias + " WHERE " + guard + " = 0"
+
+	depth := relation.depth + 3
+	if len(groupAliases) > 0 {
+		depth++
+	}
+	enriched := compiledRelation{
+		sql:        resultSQL,
+		depth:      depth,
+		ownerRange: operator.Range,
+	}
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_result_%d",
+		stage,
+	))
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		sql:  resultSQL,
+		prerequisiteDefinitions: []string{
+			inputName + " AS MATERIALIZED (" + preparedSQL + ")",
+		},
+		fanout:     1,
+		depth:      depth,
+		ownerRange: operator.Range,
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_rows_result_%d",
+		stage,
+	))
+	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	return enriched.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
 }
 
 func eventAggregateMeasureSpecFor(

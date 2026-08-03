@@ -343,6 +343,8 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 		return classifyStatsSuggestion(base, body)
 	case "eventstats":
 		return classifyEventStatsSuggestion(base, body)
+	case "streamstats":
+		return classifyStreamStatsSuggestion(base, body)
 	case "chart":
 		return classifyChartSuggestion(base, body)
 	case "timechart":
@@ -516,6 +518,68 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 		context.Keywords = []string{"BY"}
 	}
 	return context
+}
+
+func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	optionKeywords, byClosed := streamStatsSuggestionOptions(tokens)
+	if endsOptionEqual(tokens, "current") || endsOptionEqual(tokens, "window") ||
+		endsOptionEqual(tokens, "global") {
+		return context
+	}
+	if len(tokens) > 0 && tokenWordEqual(tokens[len(tokens)-1], "AS") {
+		context.Kinds = []SuggestionKind{SuggestionKindField}
+		return context
+	}
+	if topLevelWordIndex(tokens, "BY") >= 0 {
+		if !byClosed {
+			context.Kinds = append(context.Kinds, SuggestionKindField)
+		}
+		if len(optionKeywords) > 0 {
+			context.Kinds = append(context.Kinds, SuggestionKindKeyword)
+		}
+		context.Keywords = optionKeywords
+		return context
+	}
+	if topLevelWordIndex(tokens, "count") < 0 {
+		context = aggregateSuggestionContext(context)
+		context.FunctionNames = []string{"count"}
+		context.Kinds = append(context.Kinds, SuggestionKindKeyword)
+		context.Keywords = optionKeywords
+		return context
+	}
+	context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+	if topLevelWordIndex(tokens, "AS") < 0 {
+		context.Keywords = append(context.Keywords, "AS")
+	}
+	context.Keywords = append(context.Keywords, "BY")
+	context.Keywords = append(context.Keywords, optionKeywords...)
+	return context
+}
+
+func streamStatsSuggestionOptions(tokens []token) ([]string, bool) {
+	used := make(map[string]struct{}, 3)
+	byIndex := topLevelWordIndex(tokens, "BY")
+	byClosed := false
+	for index := 0; index+1 < len(tokens); index++ {
+		if tokens[index].kind != tokenWord || tokens[index+1].kind != tokenEqual {
+			continue
+		}
+		name := asciiFold(tokens[index].text)
+		switch name {
+		case "current", "window", "global":
+			used[name] = struct{}{}
+			if byIndex >= 0 && index > byIndex {
+				byClosed = true
+			}
+		}
+	}
+	keywords := make([]string, 0, 3-len(used))
+	for _, name := range []string{"current", "window", "global"} {
+		if _, exists := used[name]; !exists {
+			keywords = append(keywords, name+"=")
+		}
+	}
+	return keywords, byClosed
 }
 
 func insideEventStatsCountEval(tokens []token) bool {

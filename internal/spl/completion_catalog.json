@@ -81,6 +81,11 @@
       "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), exact distinct count, bounded canonical distinct-values list, bounded order-preserving list, pN/percN percentile (1-99), numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, chronologically earliest, or chronologically latest value to every input row globally or within up to 16 exact BY fields."
     },
     {
+      "name": "streamstats",
+      "insertion": "streamstats count AS running_count",
+      "detail": "Add one bounded running row count in deterministic pipeline order, optionally excluding the current row or partitioning by exact fields."
+    },
+    {
       "name": "top",
       "insertion": "top limit=20 message",
       "detail": "Find the most frequent values."
@@ -416,6 +421,24 @@
       "name": "limit=",
       "insertion": "limit=",
       "detail": "Set an explicit bounded result count.",
+      "highlight": false
+    },
+    {
+      "name": "current=",
+      "insertion": "current=",
+      "detail": "Include or exclude the current streamstats row.",
+      "highlight": false
+    },
+    {
+      "name": "window=",
+      "insertion": "window=",
+      "detail": "Set a bounded streamstats row window.",
+      "highlight": false
+    },
+    {
+      "name": "global=",
+      "insertion": "global=",
+      "detail": "Select a global or per-group streamstats window.",
       "highlight": false
     },
     {

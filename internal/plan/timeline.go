@@ -48,6 +48,13 @@ func ValidateTimelineEligibility(query *Query) error {
 			if operator.Measure.Output == "_time" {
 				return timelineTimeDiagnostic(operator.Range)
 			}
+		case *StreamAggregate:
+			if !validStreamAggregateContract(operator) {
+				return timelinePipelineDiagnostic(operator.Range)
+			}
+			if operator.Measure.Output == "_time" {
+				return timelineTimeDiagnostic(operator.Range)
+			}
 		case *Extend:
 			for _, assignment := range operator.Assignments {
 				if assignment.Output.Name == "_time" {

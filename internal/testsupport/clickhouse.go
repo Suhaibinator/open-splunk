@@ -492,16 +492,20 @@ func (container *ClickHouseContainer) ExecuteBootstrapSQLForTest(
 	return nil
 }
 
-// Close forcibly removes the disposable container. Docker --rm makes this
-// idempotent after a process or daemon has already removed it. It also removes
-// any temporary server configuration owned by an opt-in fixture.
+// Close forcibly removes the disposable container and every anonymous volume
+// declared by the ClickHouse image. Docker --rm makes this idempotent after a
+// process or daemon has already removed it. It also removes any temporary
+// server configuration owned by an opt-in fixture.
 func (container *ClickHouseContainer) Close(ctx context.Context) error {
 	if container == nil {
 		return nil
 	}
 	var closeErrors []error
 	if strings.TrimSpace(container.Name) != "" {
-		output, err := docker(ctx, "rm", "--force", container.Name)
+		output, err := docker(
+			ctx,
+			clickHouseContainerRemovalArguments(container.Name)...,
+		)
 		if err != nil && !strings.Contains(string(output), "No such container") {
 			closeErrors = append(closeErrors, fmt.Errorf(
 				"remove ClickHouse test container: %w: %s",
@@ -520,6 +524,10 @@ func (container *ClickHouseContainer) Close(ctx context.Context) error {
 	container.bootstrapUsername = ""
 	container.bootstrapPassword = ""
 	return errors.Join(closeErrors...)
+}
+
+func clickHouseContainerRemovalArguments(name string) []string {
+	return []string{"rm", "--force", "--volumes", name}
 }
 
 func (container *ClickHouseContainer) waitReady(ctx context.Context) error {
