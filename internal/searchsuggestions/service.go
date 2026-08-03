@@ -794,6 +794,10 @@ func cloneSuggestionContext(context spl.SuggestionContext) spl.SuggestionContext
 	context.Kinds = slices.Clone(context.Kinds)
 	context.FunctionNames = cloneStrings(context.FunctionNames)
 	context.Keywords = cloneStrings(context.Keywords)
+	context.Exclusions = slices.Clone(context.Exclusions)
+	for index := range context.Exclusions {
+		context.Exclusions[index].Label = strings.Clone(context.Exclusions[index].Label)
+	}
 	context.Prefix = strings.Clone(context.Prefix)
 	return context
 }

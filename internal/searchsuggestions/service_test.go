@@ -275,6 +275,138 @@ func TestSuggestFieldContextUsesOneImmutablePrefixScope(t *testing.T) {
 	}
 }
 
+func TestSuggestFrequencyFieldCandidatesExcludeGeneratedAndCommittedNames(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		source    string
+		fields    []string
+		required  []string
+		forbidden []string
+	}{
+		{
+			name:   "first tuple field",
+			source: `index=main | top `,
+			fields: []string{
+				"BY", "by", "Count", "count", "Host", "host",
+				"Percent", "percent", "source",
+			},
+			required:  []string{"Count", "Host", "host", "Percent", "source"},
+			forbidden: []string{"BY", "by", "count", "percent"},
+		},
+		{
+			name:   "next tuple field",
+			source: `index=main | top host, `,
+			fields: []string{
+				"BY", "by", "Count", "count", "Host", "host",
+				"Percent", "percent", "source",
+			},
+			required:  []string{"Count", "Host", "Percent", "source"},
+			forbidden: []string{"BY", "by", "count", "host", "percent"},
+		},
+		{
+			name:      "active next tuple prefix",
+			source:    `index=main | top host, ho`,
+			fields:    []string{"host", "hostname"},
+			required:  []string{"hostname"},
+			forbidden: []string{"host"},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := validSuggestionRequest(test.source)
+			wantContext, contextDiagnostic := spl.AnalyzeSuggestionContext(
+				test.source,
+				len(test.source),
+			)
+			if contextDiagnostic != nil {
+				t.Fatalf("AnalyzeSuggestionContext() error = %v", contextDiagnostic)
+			}
+			validator := &suggestionTestValidator{result: searchjobs.ValidationResult{
+				Diagnostics: []searchjobs.Diagnostic{
+					activeDiagnostic(test.source, "SPL_EXPECTED_FIELD"),
+				},
+			}}
+			scopes := &suggestionTestScopes{snapshot: validSuggestionSnapshot(t, request)}
+			compiler := &suggestionTestCompiler{}
+			executor := &suggestionTestExecutor{result: queryexec.FieldSuggestionResult{
+				FieldNames: slices.Clone(test.fields),
+			}}
+			service := mustSuggestionService(t, Config{
+				Validator: validator,
+				Scopes:    scopes,
+				Compiler:  compiler,
+				Executor:  executor,
+			})
+
+			result, err := service.Suggest(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Suggest() error = %v", err)
+			}
+			if validator.calls != 1 || scopes.calls != 1 || compiler.calls != 1 || executor.calls != 1 {
+				t.Fatalf("dependency calls = validator:%d scope:%d compiler:%d executor:%d, want one each",
+					validator.calls, scopes.calls, compiler.calls, executor.calls)
+			}
+			if !reflect.DeepEqual(result.Context.Exclusions, wantContext.Exclusions) {
+				t.Fatalf(
+					"context exclusions = %#v, want cloned analyzer exclusions %#v",
+					result.Context.Exclusions,
+					wantContext.Exclusions,
+				)
+			}
+			for _, label := range test.required {
+				if !hasSuggestion(result.Suggestions, spl.SuggestionKindField, label) {
+					t.Errorf("Suggest() omitted required field %q: %#v", label, result.Suggestions)
+				}
+			}
+			for _, label := range test.forbidden {
+				for _, suggestion := range result.Suggestions {
+					if suggestion.Label == label {
+						t.Errorf("Suggest() returned excluded label %q: %#v", label, result.Suggestions)
+						break
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSuggestFrequencyFieldCandidatesExcludeLaterTupleNamesAtMidStageCursor(t *testing.T) {
+	t.Parallel()
+
+	source := `index=main | top ho,host`
+	request := validSuggestionRequest(source)
+	request.CursorByteOffset = len(`index=main | top ho`)
+	validator := validSuggestionValidator()
+	scopes := &suggestionTestScopes{snapshot: validSuggestionSnapshot(t, request)}
+	compiler := &suggestionTestCompiler{}
+	executor := &suggestionTestExecutor{result: queryexec.FieldSuggestionResult{
+		FieldNames: []string{"host", "hostname"},
+	}}
+	service := mustSuggestionService(t, Config{
+		Validator: validator,
+		Scopes:    scopes,
+		Compiler:  compiler,
+		Executor:  executor,
+	})
+
+	result, err := service.Suggest(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Suggest() error = %v", err)
+	}
+	if validator.calls != 1 || scopes.calls != 1 || compiler.calls != 1 || executor.calls != 1 {
+		t.Fatalf("dependency calls = validator:%d scope:%d compiler:%d executor:%d, want one each",
+			validator.calls, scopes.calls, compiler.calls, executor.calls)
+	}
+	if hasSuggestion(result.Suggestions, spl.SuggestionKindField, "host") ||
+		!hasSuggestion(result.Suggestions, spl.SuggestionKindField, "hostname") {
+		t.Fatalf("Suggest() suggestions = %#v, want hostname without later tuple field host", result.Suggestions)
+	}
+}
+
 func TestSuggestBaseFieldContextBuildsOnlyScopedScan(t *testing.T) {
 	t.Parallel()
 

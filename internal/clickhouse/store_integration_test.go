@@ -1479,6 +1479,7 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("literal.dot", typedString("needle")),
 		typedField("category", typedString("alpha")),
 		typedField("category_nullable", typedString("alpha")),
+		typedField("tuple_order", typedString("mid")),
 		typedField("empty_value", typedString("")),
 		typedField("path", typedString("/slow")),
 		typedField("duration", typedString("600ms")),
@@ -1498,6 +1499,7 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("sort_value", typedString("2")),
 		typedField("category", typedString("alpha")),
 		typedField("category_nullable", typedString("alpha")),
+		typedField("tuple_order", typedString("mid")),
 		typedField("path", typedString("/slow")),
 		typedField("duration", typedString("700ms")),
 	)
@@ -1511,6 +1513,7 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("bin_numeric_string", typedNull()),
 		typedField("category", typedString("beta")),
 		typedField("category_nullable", typedNull()),
+		typedField("tuple_order", typedString("z")),
 		typedField("path", typedString("/fast")),
 		typedField("duration", typedString("20ms")),
 		typedField("duration_null", typedNull()),
@@ -1530,6 +1533,7 @@ func testCompiledQueriesAgainstClickHouse(
 		typedField("object_parent", typedObject(typedField("child", typedString("nested")))),
 		typedField("mixed_by", typedList(typedString("container"))),
 		typedField("category", typedString("gamma")),
+		typedField("tuple_order", typedString("a")),
 		typedField("path", typedString("/slow")),
 		typedField("duration", typedString("5µs")),
 		typedField("duration_container", typedList(typedString("800ms"))),
@@ -1939,126 +1943,142 @@ func testCompiledQueriesAgainstClickHouse(
 		t.Fatalf("grouped stats = keys %v counts %v, want [500] [2]", groupedKeys, groupedCounts)
 	}
 
-	top := compileIntegrationSPL(t, `index=compiler | top limit=2 category`, indexTime.Add(10*time.Second), visibilityCutoff)
-	topRows, err := connection.Query(ctx, top.SQL, top.Args...)
-	if err != nil {
-		t.Fatalf("execute top: %v\nSQL: %s\nargs: %#v", err, top.SQL, top.Args)
-	}
-	if types := topRows.ColumnTypes(); len(types) != 3 || types[0].DatabaseTypeName() != "String" ||
-		types[1].DatabaseTypeName() != "UInt64" || types[2].DatabaseTypeName() != "Float64" {
-		_ = topRows.Close()
-		t.Fatalf("top column types = %#v", types)
-	}
-	var topKeys []string
-	var topCounts []uint64
-	var topPercents []float64
-	for topRows.Next() {
-		var key string
-		var count uint64
-		var percent float64
-		if err := topRows.Scan(&key, &count, &percent); err != nil {
-			_ = topRows.Close()
-			t.Fatalf("scan top: %v", err)
+	for _, test := range []struct {
+		name       string
+		command    string
+		wantTuples [][2]string
+		wantCounts []uint64
+	}{
+		{
+			name:       "top tuple",
+			command:    `top limit=2 category,tuple_order`,
+			wantTuples: [][2]string{{"alpha", "mid"}, {"gamma", "a"}},
+			wantCounts: []uint64{2, 1},
+		},
+		{
+			name:       "rare tuple",
+			command:    `rare limit=2 category,tuple_order`,
+			wantTuples: [][2]string{{"gamma", "a"}, {"beta", "z"}},
+			wantCounts: []uint64{1, 1},
+		},
+	} {
+		compiled := compileIntegrationSPL(
+			t,
+			`index=compiler | `+test.command,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+		)
+		rows, queryErr := connection.Query(ctx, compiled.SQL, compiled.Args...)
+		if queryErr != nil {
+			t.Fatalf("execute %s: %v\nSQL: %s\nargs: %#v", test.name, queryErr, compiled.SQL, compiled.Args)
 		}
-		topKeys = append(topKeys, key)
-		topCounts = append(topCounts, count)
-		topPercents = append(topPercents, percent)
-	}
-	if err := topRows.Err(); err != nil {
-		_ = topRows.Close()
-		t.Fatalf("iterate top: %v", err)
-	}
-	if err := topRows.Close(); err != nil {
-		t.Fatalf("close top: %v", err)
-	}
-	if strings.Join(topKeys, ",") != "alpha,gamma" || !slices.Equal(topCounts, []uint64{2, 1}) ||
-		len(topPercents) != 2 || math.Abs(topPercents[0]-50) > 1e-12 || math.Abs(topPercents[1]-25) > 1e-12 {
-		t.Fatalf("top rows = keys %v counts %v percents %v, want alpha/2/50 then gamma/1/25", topKeys, topCounts, topPercents)
+		if types := rows.ColumnTypes(); len(types) != 4 ||
+			types[0].DatabaseTypeName() != "String" ||
+			types[1].DatabaseTypeName() != "String" ||
+			types[2].DatabaseTypeName() != "UInt64" ||
+			types[3].DatabaseTypeName() != "Float64" {
+			_ = rows.Close()
+			t.Fatalf("%s column types = %#v", test.name, types)
+		}
+		var tuples [][2]string
+		var counts []uint64
+		var percents []float64
+		for rows.Next() {
+			var first, second string
+			var count uint64
+			var percent float64
+			if scanErr := rows.Scan(&first, &second, &count, &percent); scanErr != nil {
+				_ = rows.Close()
+				t.Fatalf("scan %s: %v", test.name, scanErr)
+			}
+			tuples = append(tuples, [2]string{first, second})
+			counts = append(counts, count)
+			percents = append(percents, percent)
+		}
+		if iterationErr := rows.Err(); iterationErr != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate %s: %v", test.name, iterationErr)
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatalf("close %s: %v", test.name, closeErr)
+		}
+		if !reflect.DeepEqual(tuples, test.wantTuples) ||
+			!slices.Equal(counts, test.wantCounts) || len(percents) != 2 ||
+			math.Abs(percents[0]-float64(test.wantCounts[0])*25) > 1e-12 ||
+			math.Abs(percents[1]-float64(test.wantCounts[1])*25) > 1e-12 {
+			t.Fatalf(
+				"%s rows = tuples %v counts %v percents %v, want %v/%v with full-domain percentages",
+				test.name,
+				tuples,
+				counts,
+				percents,
+				test.wantTuples,
+				test.wantCounts,
+			)
+		}
 	}
 
-	rare := compileIntegrationSPL(t, `index=compiler | rare limit=2 category`, indexTime.Add(10*time.Second), visibilityCutoff)
-	rareRows, err := connection.Query(ctx, rare.SQL, rare.Args...)
-	if err != nil {
-		t.Fatalf("execute rare: %v\nSQL: %s\nargs: %#v", err, rare.SQL, rare.Args)
-	}
-	if types := rareRows.ColumnTypes(); len(types) != 3 || types[0].DatabaseTypeName() != "String" ||
-		types[1].DatabaseTypeName() != "UInt64" || types[2].DatabaseTypeName() != "Float64" {
-		_ = rareRows.Close()
-		t.Fatalf("rare column types = %#v", types)
-	}
-	var rareKeys []string
-	var rareCounts []uint64
-	var rarePercents []float64
-	for rareRows.Next() {
-		var key string
-		var count uint64
-		var percent float64
-		if err := rareRows.Scan(&key, &count, &percent); err != nil {
-			_ = rareRows.Close()
-			t.Fatalf("scan rare: %v", err)
-		}
-		rareKeys = append(rareKeys, key)
-		rareCounts = append(rareCounts, count)
-		rarePercents = append(rarePercents, percent)
-	}
-	if err := rareRows.Err(); err != nil {
-		_ = rareRows.Close()
-		t.Fatalf("iterate rare: %v", err)
-	}
-	if err := rareRows.Close(); err != nil {
-		t.Fatalf("close rare: %v", err)
-	}
-	if strings.Join(rareKeys, ",") != "gamma,beta" || !slices.Equal(rareCounts, []uint64{1, 1}) ||
-		len(rarePercents) != 2 || math.Abs(rarePercents[0]-25) > 1e-12 || math.Abs(rarePercents[1]-25) > 1e-12 {
-		t.Fatalf("rare rows = keys %v counts %v percents %v, want gamma/1/25 then beta/1/25", rareKeys, rareCounts, rarePercents)
-	}
-
-	nullableTop := compileIntegrationSPL(t, `index=compiler | top limit=0 category_nullable`, indexTime.Add(10*time.Second), visibilityCutoff)
-	var nullableKey string
+	nullableTop := compileIntegrationSPL(t, `index=compiler | top limit=0 category_nullable,path`, indexTime.Add(10*time.Second), visibilityCutoff)
+	var nullableKey, nullablePath string
 	var nullableCount uint64
 	var nullablePercent float64
-	if err := connection.QueryRow(ctx, nullableTop.SQL, nullableTop.Args...).Scan(&nullableKey, &nullableCount, &nullablePercent); err != nil {
-		t.Fatalf("execute missing/null top: %v\nSQL: %s\nargs: %#v", err, nullableTop.SQL, nullableTop.Args)
+	if err := connection.QueryRow(ctx, nullableTop.SQL, nullableTop.Args...).Scan(
+		&nullableKey,
+		&nullablePath,
+		&nullableCount,
+		&nullablePercent,
+	); err != nil {
+		t.Fatalf("execute missing/null tuple top: %v\nSQL: %s\nargs: %#v", err, nullableTop.SQL, nullableTop.Args)
 	}
-	if nullableKey != "alpha" || nullableCount != 2 || nullablePercent != 100 {
-		t.Fatalf("missing/null top = %q/%d/%v, want alpha/2/100", nullableKey, nullableCount, nullablePercent)
-	}
-
-	nullableRare := compileIntegrationSPL(t, `index=compiler | rare limit=0 category_nullable`, indexTime.Add(10*time.Second), visibilityCutoff)
-	if err := connection.QueryRow(ctx, nullableRare.SQL, nullableRare.Args...).Scan(&nullableKey, &nullableCount, &nullablePercent); err != nil {
-		t.Fatalf("execute missing/null rare: %v\nSQL: %s\nargs: %#v", err, nullableRare.SQL, nullableRare.Args)
-	}
-	if nullableKey != "alpha" || nullableCount != 2 || nullablePercent != 100 {
-		t.Fatalf("missing/null rare = %q/%d/%v, want alpha/2/100", nullableKey, nullableCount, nullablePercent)
+	if nullableKey != "alpha" || nullablePath != "/slow" || nullableCount != 2 || nullablePercent != 100 {
+		t.Fatalf("missing/null tuple top = %q/%q/%d/%v, want alpha//slow/2/100", nullableKey, nullablePath, nullableCount, nullablePercent)
 	}
 
-	emptyTop := compileIntegrationSPL(t, `index=compiler | top empty_value`, indexTime.Add(10*time.Second), visibilityCutoff)
-	var emptyKey string
+	nullableRare := compileIntegrationSPL(t, `index=compiler | rare limit=0 category_nullable,path`, indexTime.Add(10*time.Second), visibilityCutoff)
+	if err := connection.QueryRow(ctx, nullableRare.SQL, nullableRare.Args...).Scan(
+		&nullableKey,
+		&nullablePath,
+		&nullableCount,
+		&nullablePercent,
+	); err != nil {
+		t.Fatalf("execute missing/null tuple rare: %v\nSQL: %s\nargs: %#v", err, nullableRare.SQL, nullableRare.Args)
+	}
+	if nullableKey != "alpha" || nullablePath != "/slow" || nullableCount != 2 || nullablePercent != 100 {
+		t.Fatalf("missing/null tuple rare = %q/%q/%d/%v, want alpha//slow/2/100", nullableKey, nullablePath, nullableCount, nullablePercent)
+	}
+
+	emptyTop := compileIntegrationSPL(t, `index=compiler | top empty_value,path`, indexTime.Add(10*time.Second), visibilityCutoff)
+	var emptyKey, emptyPath string
 	var emptyValueCount uint64
 	var emptyPercent float64
-	if err := connection.QueryRow(ctx, emptyTop.SQL, emptyTop.Args...).Scan(&emptyKey, &emptyValueCount, &emptyPercent); err != nil {
-		t.Fatalf("execute empty-string top: %v", err)
+	if err := connection.QueryRow(ctx, emptyTop.SQL, emptyTop.Args...).Scan(
+		&emptyKey,
+		&emptyPath,
+		&emptyValueCount,
+		&emptyPercent,
+	); err != nil {
+		t.Fatalf("execute empty-string tuple top: %v", err)
 	}
-	if emptyKey != "" || emptyValueCount != 1 || emptyPercent != 100 {
-		t.Fatalf("empty-string top = %q/%d/%v, want empty/1/100", emptyKey, emptyValueCount, emptyPercent)
+	if emptyKey != "" || emptyPath != "/slow" || emptyValueCount != 1 || emptyPercent != 100 {
+		t.Fatalf("empty-string tuple top = %q/%q/%d/%v, want empty//slow/1/100", emptyKey, emptyPath, emptyValueCount, emptyPercent)
 	}
 
-	missingTop := compileIntegrationSPL(t, `index=compiler | top absent`, indexTime.Add(10*time.Second), visibilityCutoff)
+	missingTop := compileIntegrationSPL(t, `index=compiler | top category,absent`, indexTime.Add(10*time.Second), visibilityCutoff)
 	if err := executeCompiledExpectingNoRows(ctx, connection, missingTop); err != nil {
-		t.Fatalf("execute all-missing top: %v\nSQL: %s\nargs: %#v", err, missingTop.SQL, missingTop.Args)
+		t.Fatalf("execute tuple with missing field top: %v\nSQL: %s\nargs: %#v", err, missingTop.SQL, missingTop.Args)
 	}
 
-	projectedTop := compileIntegrationSPL(t, `index=compiler | fields host | top category`, indexTime.Add(10*time.Second), visibilityCutoff)
+	projectedTop := compileIntegrationSPL(t, `index=compiler | fields host | top category,path`, indexTime.Add(10*time.Second), visibilityCutoff)
 	if err := executeCompiledExpectingNoRows(ctx, connection, projectedTop); err != nil {
-		t.Fatalf("execute projected-away top: %v\nSQL: %s\nargs: %#v", err, projectedTop.SQL, projectedTop.Args)
+		t.Fatalf("execute projected-away tuple top: %v\nSQL: %s\nargs: %#v", err, projectedTop.SQL, projectedTop.Args)
 	}
 
-	unsupportedTop := compileIntegrationSPL(t, `index=compiler | top mixed_by`, indexTime.Add(10*time.Second), visibilityCutoff)
+	unsupportedTop := compileIntegrationSPL(t, `index=compiler | top category,mixed_by`, indexTime.Add(10*time.Second), visibilityCutoff)
 	unsupportedTopErr := executeCompiledExpectingNoRows(ctx, connection, unsupportedTop)
 	var unsupportedTopException *clickhousedriver.Exception
 	if !errors.As(unsupportedTopErr, &unsupportedTopException) || unsupportedTopException.Code != 395 ||
 		!strings.Contains(unsupportedTopException.Message, UnsupportedStatsByValueMarker) {
-		t.Fatalf("non-scalar top error = %v, want guarded ClickHouse exception", unsupportedTopErr)
+		t.Fatalf("non-scalar tuple top error = %v, want guarded ClickHouse exception", unsupportedTopErr)
 	}
 
 	numericGroupSort := compileIntegrationSPL(t,

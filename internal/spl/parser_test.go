@@ -2390,11 +2390,11 @@ func TestParseTopSingleFieldAndLimits(t *testing.T) {
 				t.Fatalf("Parse: %v", err)
 			}
 			command, ok := query.Commands[0].(*TopCommand)
-			if !ok || command.Field != test.field || command.Limit != test.limit {
+			if !ok || len(command.Fields) != 1 || command.Fields[0].Name != test.field || command.Limit != test.limit {
 				t.Fatalf("top command = %#v, want field %q limit %d", query.Commands[0], test.field, test.limit)
 			}
-			if command.FieldRange.Start.Column <= command.Range.Start.Column {
-				t.Fatalf("field range = %#v, command range = %#v", command.FieldRange, command.Range)
+			if command.Fields[0].Range.Start.Column <= command.Range.Start.Column {
+				t.Fatalf("field range = %#v, command range = %#v", command.Fields[0].Range, command.Range)
 			}
 		})
 	}
@@ -2413,7 +2413,6 @@ func TestParseTopRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{name: "negative limit", source: `index=main | top limit=-1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "negative positional limit", source: `index=main | top -1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "limit overflow", source: `index=main | top limit=18446744073709551616 message`, code: "SPL_NUMBER_OUT_OF_RANGE"},
-		{name: "multiple fields", source: `index=main | top message, host`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
 		{name: "by clause", source: `index=main | top message BY host`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
 		{name: "unsupported option", source: `index=main | top showperc=false message`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
 		{name: "wildcard field", source: `index=main | top mes*`, code: "SPL_UNSUPPORTED_TOP_SYNTAX"},
@@ -2479,11 +2478,11 @@ func TestParseRareSingleFieldAndLimits(t *testing.T) {
 				t.Fatalf("Parse: %v", err)
 			}
 			command, ok := query.Commands[0].(*RareCommand)
-			if !ok || command.Field != test.field || command.Limit != test.limit || command.Name() != "rare" {
+			if !ok || len(command.Fields) != 1 || command.Fields[0].Name != test.field || command.Limit != test.limit || command.Name() != "rare" {
 				t.Fatalf("rare command = %#v, want field %q limit %d", query.Commands[0], test.field, test.limit)
 			}
-			if command.FieldRange.Start.Column <= command.Range.Start.Column {
-				t.Fatalf("field range = %#v, command range = %#v", command.FieldRange, command.Range)
+			if command.Fields[0].Range.Start.Column <= command.Range.Start.Column {
+				t.Fatalf("field range = %#v, command range = %#v", command.Fields[0].Range, command.Range)
 			}
 		})
 	}
@@ -2502,7 +2501,6 @@ func TestParseRareRejectsUnsupportedOrMalformedSyntax(t *testing.T) {
 		{name: "negative limit", source: `index=main | rare limit=-1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "negative positional limit", source: `index=main | rare -1 message`, code: "SPL_INVALID_ARGUMENT"},
 		{name: "limit overflow", source: `index=main | rare limit=18446744073709551616 message`, code: "SPL_NUMBER_OUT_OF_RANGE"},
-		{name: "multiple fields", source: `index=main | rare message, host`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 		{name: "by clause", source: `index=main | rare message BY host`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 		{name: "unsupported option", source: `index=main | rare showperc=false message`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},
 		{name: "wildcard field", source: `index=main | rare mes*`, code: "SPL_UNSUPPORTED_RARE_SYNTAX"},

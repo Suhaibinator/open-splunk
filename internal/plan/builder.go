@@ -957,46 +957,96 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			})
 			canonicalTimeAvailable = false
 		case *spl.TopCommand, *spl.RareCommand:
-			var commandName, fieldName string
-			var fieldRange, commandRange spl.Range
+			var commandName string
+			var frequencyFields []spl.FrequencyField
+			var commandRange spl.Range
 			var limit uint64
 			leastFrequent := false
 			switch command := command.(type) {
 			case *spl.TopCommand:
+				if command == nil {
+					return nil, &Diagnostic{
+						Code:    "SPL_INVALID_QUERY",
+						Message: "top command is nil",
+					}
+				}
 				commandName = command.Name()
-				fieldName = command.Field
-				fieldRange = command.FieldRange
+				frequencyFields = command.Fields
 				commandRange = command.Range
 				limit = command.Limit
 			case *spl.RareCommand:
+				if command == nil {
+					return nil, &Diagnostic{
+						Code:    "SPL_INVALID_QUERY",
+						Message: "rare command is nil",
+					}
+				}
 				commandName = command.Name()
-				fieldName = command.Field
-				fieldRange = command.FieldRange
+				frequencyFields = command.Fields
 				commandRange = command.Range
 				limit = command.Limit
 				leastFrequent = true
 			}
+			if len(frequencyFields) == 0 {
+				return nil, &Diagnostic{
+					Code:    "SPL_EXPECTED_FIELD",
+					Message: commandName + " requires at least one field",
+					Range:   commandRange,
+				}
+			}
+			if len(frequencyFields) > spl.MaximumFrequencyFields {
+				return nil, &Diagnostic{
+					Code: "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf(
+						"%s contains more than %d fields",
+						commandName,
+						spl.MaximumFrequencyFields,
+					),
+					Range: commandRange,
+				}
+			}
 			canonicalTimeAvailable = false
-			field, fieldErr := ResolveField(fieldName, fieldRange)
+			outputFields := make([]string, 0, len(frequencyFields)+2)
+			for _, frequencyField := range frequencyFields {
+				fieldName := frequencyField.Name
+				fieldRange := frequencyField.Range
+				if fieldName == "count" || fieldName == "percent" {
+					return nil, &Diagnostic{
+						Code:    "SPL_DUPLICATE_FIELD",
+						Message: fmt.Sprintf("%s field %q collides with a generated output field", commandName, fieldName),
+						Range:   fieldRange,
+					}
+				}
+				outputFields = append(outputFields, fieldName)
+			}
+			fields, fieldErr := convertStatsGroupFields(
+				commandName,
+				frequencyFields,
+			)
 			if fieldErr != nil {
 				return nil, fieldErr
-			}
-			if fieldName == "count" || fieldName == "percent" {
-				return nil, &Diagnostic{
-					Code:    "SPL_DUPLICATE_FIELD",
-					Message: fmt.Sprintf("%s field %q collides with a generated output field", commandName, fieldName),
-					Range:   fieldRange,
-				}
 			}
 			countField, countErr := ResolveField("count", commandRange)
 			if countErr != nil {
 				return nil, countErr
 			}
-			result.OutputFields = []string{fieldName, "count", "percent"}
+			result.OutputFields = append(outputFields, "count", "percent")
 			outputSchemaKnown = true
+			sortKeys := make([]SortKey, 0, len(fields)+1)
+			sortKeys = append(sortKeys, SortKey{
+				Field:      countField,
+				Descending: !leastFrequent,
+			})
+			for _, field := range fields {
+				sortKeys = append(sortKeys, SortKey{
+					Field:      field,
+					Descending: true,
+					Mode:       SortValueModeLexical,
+				})
+			}
 			result.Operators = append(result.Operators,
 				&Aggregate{
-					GroupBy: []FieldRef{field},
+					GroupBy: fields,
 					Measures: []AggregateMeasure{{
 						Function: AggregateFunctionCountRows,
 						Output:   "count",
@@ -1010,10 +1060,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:    commandRange,
 				},
 				&Sort{
-					Keys: []SortKey{
-						{Field: countField, Descending: !leastFrequent},
-						{Field: field, Descending: true, Mode: SortValueModeLexical},
-					},
+					Keys:  sortKeys,
 					Limit: limit,
 					Range: commandRange,
 				},

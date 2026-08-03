@@ -2556,53 +2556,65 @@ The executor's memory, read, query-size, relational-depth, result, and
 
 ```spl
 | top field
+| top service,status
 | top 20 field
-| top limit=20 field
+| top limit=20 service,status
 | top limit=0 field
 ```
 
-This version supports one exact scalar field. Default output is exactly:
+This version supports from one through 16 distinct exact scalar fields,
+separated by commas. Whitespace may surround a comma, but whitespace alone is
+not a field separator. Default output is exactly the selected fields in source
+order followed by:
 
 ```text
-field, count, percent
+field1, field2, ..., count, percent
 ```
 
 `count` is an unsigned 64-bit frequency. `percent` is an unrounded `Float64`
-computed as `100 * count / eligible_count` across every eligible group before
-the result limit is applied. Missing and explicit-null values are ineligible;
-an empty string is a value. Lists and objects fail the whole search before any
-partial result is exposed.
+computed as `100 * count / eligible_count` across every eligible tuple before
+the result limit is applied. A row contributes only when every selected field
+is present and non-null; an empty string is a value. Each tuple component uses
+the same scalar normalization as `stats BY`, so runtime scalar values retain
+the established lexical grouping identity. A list, object, flattened object
+parent, or nested container in any selected field fails the whole search before
+any partial result is exposed, even when another tuple component is missing.
 
-Rows order by count descending, then field value descending in UTF-8 lexical
-order. The default limit is 10. `limit=0` means no logical top-N limit, but the
-query still fails explicitly at Open Splunk's configured group/result budget;
-the default distinct-group budget is 10,001. This resource policy intentionally
-differs from Splunk's installation-configurable `maxresultrows` ceiling.
+Rows order by count descending, then by each selected field from left to right,
+descending in the existing lexical scalar order. This gives a deterministic
+cutoff when tuple counts tie. The default limit is 10. `limit=0` means no
+logical top-N limit, but the query still fails explicitly at Open Splunk's
+configured group/result budget; the default distinct-group budget is 10,001.
+This resource policy intentionally differs from Splunk's
+installation-configurable `maxresultrows` ceiling.
 
-Multiple fields, `BY`, wildcards, `countfield`, `percentfield`, `showcount`,
-`showperc`, `useother`, and `otherstr` are not yet supported. Selecting a field
-named `count` or `percent` is rejected until output-renaming options exist.
+`BY`, wildcard or quoted fields, more than 16 fields, repeated fields,
+`countfield`, `percentfield`, `showcount`, `showperc`, `useother`, and
+`otherstr` are not supported. Selecting any field named `count` or `percent`
+is rejected until output-renaming options exist.
 
 ### `rare`
 
 ```spl
 | rare field
+| rare host,error_code
 | rare 20 field
-| rare limit=20 field
+| rare limit=20 host,error_code
 | rare limit=0 field
 ```
 
 The supported schema, scalar eligibility, percentage calculation, limit
 behavior, and failure semantics are identical to `top`. Rows order by count
-ascending to select the least frequent values, then by field value descending
-in UTF-8 lexical order for a deterministic tie cutoff. The default limit is 10;
-`limit=0` removes the logical bottom-N limit while retaining the same configured
-group and result budgets.
+ascending to select the least frequent tuples, then by each selected field from
+left to right in descending lexical scalar order for a deterministic tie
+cutoff. The default limit is 10; `limit=0` removes the logical bottom-N limit
+while retaining the same configured group and result budgets.
 
-Only one exact field and a limit are accepted. Multiple fields, `BY`, wildcards,
-`countfield`, `percentfield`, `showcount`, `showperc`, and any other option are
-rejected. A field named `count` or `percent` is rejected because it collides with
-the fixed output schema.
+From one through 16 comma-separated exact fields and a limit are accepted.
+`BY`, wildcard or quoted fields, repeated fields, `countfield`, `percentfield`,
+`showcount`, `showperc`, and every other option are rejected. A selected field
+named `count` or `percent` is rejected because it collides with the fixed output
+schema.
 
 ### `bin` / `bucket`
 

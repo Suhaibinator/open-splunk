@@ -722,7 +722,11 @@ func TestSearchSuggestionsAcceptsPositionlessDiagnostic(t *testing.T) {
 				Kinds:         []spl.SuggestionKind{spl.SuggestionKind("secret-context")},
 				FunctionNames: []string{"secret-function"},
 				Keywords:      []string{"secret-keyword"},
-				Prefix:        "secret-prefix",
+				Exclusions: []spl.SuggestionExclusion{{
+					Kind:  spl.SuggestionKindField,
+					Label: "secret-exclusion",
+				}},
+				Prefix: "secret-prefix",
 				Replacement: spl.Range{
 					Start: spl.Position{Offset: -1, Line: -1, Column: -1},
 					End:   spl.Position{Offset: math.MaxInt, Line: math.MaxInt, Column: math.MaxInt},

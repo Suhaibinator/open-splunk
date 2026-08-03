@@ -515,27 +515,34 @@ func (*LimitCommand) command()             {}
 func (c *LimitCommand) Name() string       { return c.CommandName }
 func (c *LimitCommand) SourceRange() Range { return c.Range }
 
-// TopCommand returns the most frequent scalar values for one field. The
-// initial compatibility slice keeps Splunk's default count and percent output
-// fields while rejecting multi-field, BY, and output-renaming options.
+// MaximumFrequencyFields shares the stats grouping-tuple ceiling because top
+// and rare lower through that exact bounded aggregate path.
+const MaximumFrequencyFields = MaximumStatsGroupFields
+
+// FrequencyField shares the source-located stats grouping-field contract.
+// The alias keeps top/rare call sites descriptive without creating a parallel
+// tuple representation.
+type FrequencyField = StatsGroupField
+
+// TopCommand returns the most frequent scalar tuples for one or more fields.
+// Its compatibility slice keeps Splunk's default count and percent output
+// fields while rejecting BY and output-renaming options.
 type TopCommand struct {
-	Field      string
-	FieldRange Range
-	Limit      uint64
-	Range      Range
+	Fields []FrequencyField
+	Limit  uint64
+	Range  Range
 }
 
 func (*TopCommand) command()             {}
 func (*TopCommand) Name() string         { return "top" }
 func (c *TopCommand) SourceRange() Range { return c.Range }
 
-// RareCommand returns the least frequent scalar values for one field. It has
-// the same deliberately bounded compatibility surface as TopCommand.
+// RareCommand returns the least frequent scalar tuples for one or more fields.
+// It has the same deliberately bounded compatibility surface as TopCommand.
 type RareCommand struct {
-	Field      string
-	FieldRange Range
-	Limit      uint64
-	Range      Range
+	Fields []FrequencyField
+	Limit  uint64
+	Range  Range
 }
 
 func (*RareCommand) command()             {}

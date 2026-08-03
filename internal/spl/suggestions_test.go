@@ -412,6 +412,22 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			kinds:  []SuggestionKind{SuggestionKindField},
 		},
 		{
+			source: `| top 20 `,
+			kinds:  []SuggestionKind{SuggestionKindField},
+		},
+		{
+			source: `| top host, so`,
+			kinds:  []SuggestionKind{SuggestionKindField},
+		},
+		{
+			source: `| rare limit=5 `,
+			kinds:  []SuggestionKind{SuggestionKindField},
+		},
+		{
+			source: `| rare limit=5 host, `,
+			kinds:  []SuggestionKind{SuggestionKindField},
+		},
+		{
 			source:   `| bin foo span=5m sp`,
 			kinds:    []SuggestionKind{SuggestionKindKeyword},
 			keywords: []string{"AS"},
@@ -457,6 +473,156 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 					test.kinds,
 					test.keywords,
 				)
+			}
+		})
+	}
+}
+
+func TestAnalyzeSuggestionContextBoundsFrequencyFieldLists(t *testing.T) {
+	t.Parallel()
+
+	fieldNames := make([]string, MaximumFrequencyFields)
+	for index := range fieldNames {
+		fieldNames[index] = fmt.Sprintf("field%d", index)
+	}
+	tests := []struct {
+		name       string
+		fieldNames []string
+		wantField  bool
+	}{
+		{
+			name:       "below ceiling",
+			fieldNames: fieldNames[:MaximumFrequencyFields-1],
+			wantField:  true,
+		},
+		{
+			name:       "at ceiling",
+			fieldNames: fieldNames,
+		},
+		{
+			name:       "duplicate tuple",
+			fieldNames: []string{"host", "host"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			source := "| top " + strings.Join(test.fieldNames, ",") + ", "
+			context, diagnostic := AnalyzeSuggestionContext(source, len(source))
+			if diagnostic != nil {
+				t.Fatalf("AnalyzeSuggestionContext: %v", diagnostic)
+			}
+			if got := context.Allows(SuggestionKindField); got != test.wantField {
+				t.Fatalf("field suggestion = %t, want %t; context = %#v", got, test.wantField, context)
+			}
+		})
+	}
+}
+
+func TestAnalyzeSuggestionContextRejectsInvalidFrequencyLimits(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		source string
+	}{
+		{name: "negative positional", source: `| top -1, `},
+		{name: "overflow positional", source: `| rare 18446744073709551616, `},
+		{name: "overflow named", source: `| top limit=18446744073709551616 `},
+		{name: "malformed named", source: `| rare limit=lots, `},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			context, diagnostic := AnalyzeSuggestionContext(test.source, len(test.source))
+			if diagnostic != nil {
+				t.Fatalf("AnalyzeSuggestionContext: %v", diagnostic)
+			}
+			if context.Allows(SuggestionKindField) || len(context.Kinds) != 0 {
+				t.Fatalf("context = %#v, want invalid limit to suppress field continuation", context)
+			}
+		})
+	}
+}
+
+func TestRankSuggestionCandidatesExcludesFrequencyGeneratedAndCommittedFields(t *testing.T) {
+	t.Parallel()
+
+	source := `| top host, `
+	context, diagnostic := AnalyzeSuggestionContext(source, len(source))
+	if diagnostic != nil {
+		t.Fatalf("AnalyzeSuggestionContext: %v", diagnostic)
+	}
+	labels := []string{
+		"host", "Host",
+		"count", "Count",
+		"percent", "Percent",
+		"BY", "by", "By",
+		"Bypass", "source",
+	}
+	candidates := make([]SuggestionCandidate, 0, len(labels))
+	for _, label := range labels {
+		candidates = append(candidates, SuggestionCandidate{
+			Kind:      SuggestionKindField,
+			Label:     label,
+			Insertion: label,
+		})
+	}
+
+	got := suggestionLabels(RankSuggestionCandidates(context, candidates, 20))
+	want := []string{"Bypass", "Count", "Host", "Percent", "source"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("labels = %v, want exact exclusions with only BY folded: %v", got, want)
+	}
+}
+
+func TestRankSuggestionCandidatesExcludesLaterFrequencyTupleFields(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		source     string
+		cursor     int
+		candidates []string
+		want       []string
+	}{
+		{
+			name:       "active field replacement expects comma",
+			source:     `| top ho,host | where !`,
+			cursor:     len(`| top ho`),
+			candidates: []string{"host", "hostname"},
+			want:       []string{"hostname"},
+		},
+		{
+			name:       "empty field slot accepts suffix field",
+			source:     `| top host, source | where !`,
+			cursor:     len(`| top host,`),
+			candidates: []string{"source", "sourcetype"},
+			want:       []string{"sourcetype"},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			context, diagnostic := AnalyzeSuggestionContext(test.source, test.cursor)
+			if diagnostic != nil {
+				t.Fatalf("AnalyzeSuggestionContext: %v", diagnostic)
+			}
+			candidates := make([]SuggestionCandidate, 0, len(test.candidates))
+			for _, label := range test.candidates {
+				candidates = append(candidates, SuggestionCandidate{
+					Kind:      SuggestionKindField,
+					Label:     label,
+					Insertion: label,
+				})
+			}
+			got := suggestionLabels(RankSuggestionCandidates(context, candidates, 20))
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("labels = %v, want %v; context=%#v", got, test.want, context)
 			}
 		})
 	}

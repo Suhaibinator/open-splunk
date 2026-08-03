@@ -1318,6 +1318,153 @@ func TestBuildTopRejectsGeneratedOutputCollisions(t *testing.T) {
 	}
 }
 
+func TestBuildFrequencyCommandsUseCompleteOrderedFieldTuples(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name          string
+		source        string
+		leastFrequent bool
+	}{
+		{name: "top", source: `index=gradethis | top limit=20 service,status`},
+		{name: "rare", source: `index=gradethis | rare limit=20 service,status`, leastFrequent: true},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			logical, err := Build(
+				mustParse(t, test.source),
+				testScope([]string{"gradethis"}, nil),
+			)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if !slices.Equal(
+				logical.OutputFields,
+				[]string{"service", "status", "count", "percent"},
+			) {
+				t.Fatalf("output fields = %v", logical.OutputFields)
+			}
+			if got := len(logical.Operators); got != 5 {
+				t.Fatalf("operators = %#v, want scan/filter/aggregate/window/sort", logical.Operators)
+			}
+			aggregate, ok := logical.Operators[2].(*Aggregate)
+			if !ok || len(aggregate.GroupBy) != 2 ||
+				aggregate.GroupBy[0].Name != "service" ||
+				aggregate.GroupBy[1].Name != "status" ||
+				len(aggregate.Measures) != 1 ||
+				aggregate.Measures[0].Function != AggregateFunctionCountRows {
+				t.Fatalf("aggregate = %#v", logical.Operators[2])
+			}
+			sortOp, ok := logical.Operators[4].(*Sort)
+			if !ok || sortOp.Limit != 20 || len(sortOp.Keys) != 3 ||
+				sortOp.Keys[0].Field.Name != "count" ||
+				sortOp.Keys[0].Descending == test.leastFrequent ||
+				sortOp.Keys[1].Field.Name != "service" ||
+				!sortOp.Keys[1].Descending ||
+				sortOp.Keys[1].Mode != SortValueModeLexical ||
+				sortOp.Keys[2].Field.Name != "status" ||
+				!sortOp.Keys[2].Descending ||
+				sortOp.Keys[2].Mode != SortValueModeLexical {
+				t.Fatalf("sort = %#v", logical.Operators[4])
+			}
+		})
+	}
+}
+
+func TestBuildFrequencyCommandAcceptsMaximumOrderedFieldTuple(t *testing.T) {
+	t.Parallel()
+
+	fieldNames := make([]string, spl.MaximumFrequencyFields)
+	for index := range fieldNames {
+		fieldNames[index] = fmt.Sprintf("field_%02d", index)
+	}
+	logical, err := Build(
+		mustParse(t, `index=gradethis | top `+strings.Join(fieldNames, ",")),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got := len(logical.Operators); got != 5 {
+		t.Fatalf("operators = %#v, want scan/filter/aggregate/window/sort", logical.Operators)
+	}
+
+	aggregate, ok := logical.Operators[2].(*Aggregate)
+	if !ok || len(aggregate.GroupBy) != spl.MaximumFrequencyFields {
+		t.Fatalf("aggregate = %#v, want %d grouping fields", logical.Operators[2], spl.MaximumFrequencyFields)
+	}
+	for index, field := range aggregate.GroupBy {
+		if field.Name != fieldNames[index] {
+			t.Fatalf("aggregate grouping field %d = %q, want %q", index, field.Name, fieldNames[index])
+		}
+	}
+
+	sortOp, ok := logical.Operators[4].(*Sort)
+	if !ok || len(sortOp.Keys) != spl.MaximumFrequencyFields+1 {
+		t.Fatalf("sort = %#v, want %d keys", logical.Operators[4], spl.MaximumFrequencyFields+1)
+	}
+	if sortOp.Keys[0].Field.Name != "count" || !sortOp.Keys[0].Descending {
+		t.Fatalf("frequency sort key 0 = %#v, want descending count", sortOp.Keys[0])
+	}
+	for index, fieldName := range fieldNames {
+		key := sortOp.Keys[index+1]
+		if key.Field.Name != fieldName || !key.Descending || key.Mode != SortValueModeLexical {
+			t.Fatalf("frequency sort key %d = %#v, want descending lexical %q", index+1, key, fieldName)
+		}
+	}
+}
+
+func TestBuildFrequencyCommandsRevalidateForgedFieldTuples(t *testing.T) {
+	t.Parallel()
+
+	base := mustParse(t, `index=gradethis`)
+	tooMany := make([]spl.FrequencyField, spl.MaximumFrequencyFields+1)
+	for index := range tooMany {
+		tooMany[index] = spl.FrequencyField{Name: fmt.Sprintf("field_%d", index)}
+	}
+	for _, test := range []struct {
+		name    string
+		command spl.Command
+		code    string
+	}{
+		{name: "empty top", command: &spl.TopCommand{}, code: "SPL_EXPECTED_FIELD"},
+		{name: "empty rare", command: &spl.RareCommand{}, code: "SPL_EXPECTED_FIELD"},
+		{name: "oversized top", command: &spl.TopCommand{Fields: tooMany}, code: "SPL_QUERY_TOO_COMPLEX"},
+		{name: "oversized rare", command: &spl.RareCommand{Fields: tooMany}, code: "SPL_QUERY_TOO_COMPLEX"},
+		{
+			name: "duplicate top",
+			command: &spl.TopCommand{Fields: []spl.FrequencyField{
+				{Name: "service"}, {Name: "service"},
+			}},
+			code: "SPL_DUPLICATE_FIELD",
+		},
+		{
+			name: "generated collision rare",
+			command: &spl.RareCommand{Fields: []spl.FrequencyField{
+				{Name: "service"}, {Name: "percent"},
+			}},
+			code: "SPL_DUPLICATE_FIELD",
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			query := &spl.Query{
+				Search:   base.Search,
+				Commands: []spl.Command{test.command},
+				Range:    base.Range,
+			}
+			_, err := Build(
+				query,
+				testScope([]string{"gradethis"}, nil),
+			)
+			assertDiagnosticCode(t, err, test.code)
+		})
+	}
+}
+
 func TestBuildRareLowersToAggregateWindowAndDeterministicBottomN(t *testing.T) {
 	t.Parallel()
 

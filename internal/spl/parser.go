@@ -1308,8 +1308,7 @@ func (p *parser) unsupportedChartSyntaxAt(sourceRange Range, message string) *Di
 }
 
 type parsedFrequencyCommand struct {
-	field       string
-	fieldRange  Range
+	fields      []FrequencyField
 	limit       uint64
 	sourceRange Range
 }
@@ -1320,10 +1319,9 @@ func (p *parser) parseTopCommand(name token) (Command, error) {
 		return nil, err
 	}
 	return &TopCommand{
-		Field:      parsed.field,
-		FieldRange: parsed.fieldRange,
-		Limit:      parsed.limit,
-		Range:      parsed.sourceRange,
+		Fields: parsed.fields,
+		Limit:  parsed.limit,
+		Range:  parsed.sourceRange,
 	}, nil
 }
 
@@ -1333,10 +1331,9 @@ func (p *parser) parseRareCommand(name token) (Command, error) {
 		return nil, err
 	}
 	return &RareCommand{
-		Field:      parsed.field,
-		FieldRange: parsed.fieldRange,
-		Limit:      parsed.limit,
-		Range:      parsed.sourceRange,
+		Fields: parsed.fields,
+		Limit:  parsed.limit,
+		Range:  parsed.sourceRange,
 	}, nil
 }
 
@@ -1383,25 +1380,97 @@ func (p *parser) parseFrequencyCommand(name token, commandName string) (parsedFr
 	if p.atCommandEnd() {
 		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", commandName+" requires one field")
 	}
-	if p.current().kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
-		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
-			p.current(), commandName, fmt.Sprintf("%s option %q is not supported", commandName, p.current().text),
+	command.fields = make([]FrequencyField, 0, 1)
+	wantField := true
+	end := name.sourceRange.End
+	for !p.atCommandEnd() {
+		tok := p.current()
+		if wantField {
+			if tok.kind == tokenComma {
+				return parsedFrequencyCommand{}, p.errorAtCurrent(
+					"SPL_EXPECTED_FIELD",
+					commandName+" requires an exact field after each comma",
+				)
+			}
+			if tok.kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
+				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+					tok,
+					commandName,
+					fmt.Sprintf("%s option %q is not supported", commandName, tok.text),
+				)
+			}
+			if tok.kind != tokenWord {
+				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+					tok,
+					commandName,
+					commandName+" supports unquoted exact fields only",
+				)
+			}
+			if strings.EqualFold(tok.text, "BY") {
+				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+					tok,
+					commandName,
+					commandName+" BY clauses are not supported",
+				)
+			}
+			if strings.Contains(tok.text, "*") {
+				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+					tok,
+					commandName,
+					"wildcard "+commandName+" fields are not supported",
+				)
+			}
+			duplicate := false
+			for _, field := range command.fields {
+				if field.Name == tok.text {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(
+					tok,
+					commandName,
+					fmt.Sprintf("%s field %q is repeated", commandName, tok.text),
+				)
+			}
+			if len(command.fields) >= MaximumFrequencyFields {
+				return parsedFrequencyCommand{}, &Diagnostic{
+					Code:    "SPL_QUERY_TOO_COMPLEX",
+					Message: fmt.Sprintf("%s contains more than %d fields", commandName, MaximumFrequencyFields),
+					Range:   tok.sourceRange,
+				}
+			}
+			command.fields = append(command.fields, FrequencyField{
+				Name:  tok.text,
+				Range: tok.sourceRange,
+			})
+			end = tok.sourceRange.End
+			wantField = false
+			p.advance()
+			continue
+		}
+
+		if tok.kind == tokenComma {
+			wantField = true
+			p.advance()
+			continue
+		}
+		message := commandName + " fields must be separated by commas"
+		if tok.kind == tokenWord && p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenEqual {
+			message = fmt.Sprintf("%s option %q is not supported", commandName, tok.text)
+		} else if strings.EqualFold(tok.text, "BY") {
+			message = commandName + " BY clauses are not supported"
+		}
+		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(tok, commandName, message)
+	}
+	if len(command.fields) == 0 || wantField {
+		return parsedFrequencyCommand{}, p.errorAtCurrent(
+			"SPL_EXPECTED_FIELD",
+			commandName+" requires at least one exact field and cannot end with a comma",
 		)
 	}
-	field := p.current()
-	if field.kind != tokenWord {
-		return parsedFrequencyCommand{}, p.errorAtCurrent("SPL_EXPECTED_FIELD", commandName+" requires one field")
-	}
-	if strings.Contains(field.text, "*") {
-		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(field, commandName, "wildcard "+commandName+" fields are not supported")
-	}
-	command.field = field.text
-	command.fieldRange = field.sourceRange
-	command.sourceRange = Range{Start: name.sourceRange.Start, End: field.sourceRange.End}
-	p.advance()
-	if !p.atCommandEnd() {
-		return parsedFrequencyCommand{}, p.unsupportedFrequencySyntax(p.current(), commandName, "only one "+commandName+" field is currently supported")
-	}
+	command.sourceRange = Range{Start: name.sourceRange.Start, End: end}
 	return command, nil
 }
 
@@ -1410,7 +1479,7 @@ func (p *parser) unsupportedFrequencySyntax(tok token, commandName, message stri
 		Code:        "SPL_UNSUPPORTED_" + strings.ToUpper(commandName) + "_SYNTAX",
 		Message:     message,
 		Range:       tok.sourceRange,
-		Suggestions: []string{commandName + " field", commandName + " limit=20 field"},
+		Suggestions: []string{commandName + " field1, field2", commandName + " limit=20 field1, field2"},
 	}
 }
 

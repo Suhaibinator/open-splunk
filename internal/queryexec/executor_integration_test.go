@@ -1211,29 +1211,37 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("top pipeline through manager", func(t *testing.T) {
+	t.Run("multi-field top pipeline through manager", func(t *testing.T) {
 		job, page := queryIntegrationRunSearch(t, ctx, executor, eventIndexTime,
-			"queryexec-top-pipeline", `index=main | top limit=20 message`,
+			"queryexec-top-pipeline", `index=main | top limit=20 path,status`,
 		)
 		if job.State != searchjobs.StateCompleted {
 			t.Fatalf("top state = %v, failure=%#v", job.State, job.Failure)
 		}
-		if len(page.Schema.Columns) != 3 || page.Schema.Columns[0].Name != "message" ||
-			page.Schema.Columns[0].Kind != searchjobs.ValueKindString ||
-			page.Schema.Columns[1].Name != "count" || page.Schema.Columns[1].Kind != searchjobs.ValueKindUnsigned ||
-			page.Schema.Columns[2].Name != "percent" || page.Schema.Columns[2].Kind != searchjobs.ValueKindDouble {
+		queryIntegrationAssertColumns(
+			t,
+			page,
+			[]string{"path", "status", "count", "percent"},
+		)
+		if page.Schema.Columns[0].Kind != searchjobs.ValueKindString ||
+			page.Schema.Columns[1].Kind != searchjobs.ValueKindString ||
+			page.Schema.Columns[2].Kind != searchjobs.ValueKindUnsigned ||
+			page.Schema.Columns[3].Kind != searchjobs.ValueKindDouble {
 			t.Fatalf("top schema = %#v", page.Schema)
 		}
 		if len(page.Rows) != 1 {
 			t.Fatalf("top rows = %d, want 1", len(page.Rows))
 		}
-		if message, ok := page.Rows[0].Values[0].String(); !ok || message != "manager integration" {
-			t.Fatalf("top message = %q, %v", message, ok)
+		if path, ok := page.Rows[0].Values[0].String(); !ok || path != "/manager" {
+			t.Fatalf("top path = %q, %v", path, ok)
 		}
-		if count, ok := page.Rows[0].Values[1].Unsigned(); !ok || count != 1 {
+		if statusValue, ok := page.Rows[0].Values[1].String(); !ok || statusValue != "200" {
+			t.Fatalf("top status = %q, %v", statusValue, ok)
+		}
+		if count, ok := page.Rows[0].Values[2].Unsigned(); !ok || count != 1 {
 			t.Fatalf("top count = %d, %v", count, ok)
 		}
-		if percent, ok := page.Rows[0].Values[2].Double(); !ok || percent != 100 {
+		if percent, ok := page.Rows[0].Values[3].Double(); !ok || percent != 100 {
 			t.Fatalf("top percent = %v, %v", percent, ok)
 		}
 	})

@@ -1923,6 +1923,68 @@ func TestCompileTopCalculatesPercentBeforeDeterministicLimit(t *testing.T) {
 	}
 }
 
+func TestCompileMultiFieldTopUsesOneTupleAggregateAndExplicitTieOrder(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | top limit=20 service,status`,
+	)
+	if !slices.Equal(
+		compiled.OutputFields,
+		[]string{"service", "status", "count", "percent"},
+	) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`count() AS "count"`,
+		`sum("count") OVER ()`,
+		`AS "percent"`,
+		`LIMIT ?`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("multi-field top SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 {
+		t.Fatalf("multi-field top rescanned the event table:\n%s", compiled.SQL)
+	}
+	assertFinalOrderDirections(t, compiled.SQL, "DESC", "DESC", "DESC")
+	percent := strings.Index(compiled.SQL, `AS "percent"`)
+	limit := strings.LastIndex(compiled.SQL, "LIMIT ?")
+	if percent < 0 || limit < 0 || percent > limit {
+		t.Fatalf("multi-field top limited before computing percent:\n%s", compiled.SQL)
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(20) {
+		t.Fatalf("multi-field top limit argument = %#v, want 20", got)
+	}
+}
+
+func TestCompileTopAcceptsMaximumOrderedFieldTuple(t *testing.T) {
+	t.Parallel()
+
+	fieldNames := make([]string, spl.MaximumFrequencyFields)
+	for index := range fieldNames {
+		fieldNames[index] = fmt.Sprintf("field_%02d", index)
+	}
+	compiled := compileSPL(
+		t,
+		`index=gradethis | top limit=20 `+strings.Join(fieldNames, ","),
+	)
+	wantOutputFields := append(slices.Clone(fieldNames), "count", "percent")
+	if !slices.Equal(compiled.OutputFields, wantOutputFields) {
+		t.Fatalf("output fields = %v, want %v", compiled.OutputFields, wantOutputFields)
+	}
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("maximum-width top scanned events %d times, want once:\n%s", got, compiled.SQL)
+	}
+	wantDirections := make([]string, spl.MaximumFrequencyFields+1)
+	for index := range wantDirections {
+		wantDirections[index] = "DESC"
+	}
+	assertFinalOrderDirections(t, compiled.SQL, wantDirections...)
+}
+
 func TestCompileTopLimitZeroAndDownstreamPipeline(t *testing.T) {
 	t.Parallel()
 
@@ -1965,6 +2027,50 @@ func TestCompileRareCalculatesPercentBeforeDeterministicLimit(t *testing.T) {
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
+	}
+}
+
+func TestCompileMultiFieldRareUsesAscendingFrequencyAndDescendingTupleTieOrder(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileSPL(
+		t,
+		`index=gradethis | rare limit=2 service,status`,
+	)
+	if !slices.Equal(
+		compiled.OutputFields,
+		[]string{"service", "status", "count", "percent"},
+	) {
+		t.Fatalf("output fields = %v", compiled.OutputFields)
+	}
+	for _, required := range []string{
+		`count() AS "count"`,
+		`sum("count") OVER ()`,
+		`AS "percent"`,
+		`LIMIT ?`,
+	} {
+		if !strings.Contains(compiled.SQL, required) {
+			t.Fatalf("multi-field rare SQL missing %q:\n%s", required, compiled.SQL)
+		}
+	}
+	if strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 {
+		t.Fatalf("multi-field rare rescanned the event table:\n%s", compiled.SQL)
+	}
+	assertFinalOrderDirections(t, compiled.SQL, "ASC", "DESC", "DESC")
+	percent := strings.Index(compiled.SQL, `AS "percent"`)
+	limit := strings.LastIndex(compiled.SQL, "LIMIT ?")
+	if percent < 0 || limit < 0 || percent > limit {
+		t.Fatalf("multi-field rare limited before computing percent:\n%s", compiled.SQL)
+	}
+	downstream := compileSPL(
+		t,
+		`index=gradethis | rare service,status | table status,service,count,percent`,
+	)
+	if !slices.Equal(
+		downstream.OutputFields,
+		[]string{"status", "service", "count", "percent"},
+	) {
+		t.Fatalf("downstream output fields = %v", downstream.OutputFields)
 	}
 }
 
@@ -4894,6 +5000,30 @@ func TestAnalysisFinalizerMustReportCompiledRelationalDepth(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "relational depth was not reported") {
 		t.Fatalf("compileEventAnalysis() error = %v, want missing relational-depth evidence", err)
+	}
+}
+
+func assertFinalOrderDirections(t *testing.T, sql string, want ...string) {
+	t.Helper()
+
+	const orderMarker = "ORDER BY "
+	orderStart := strings.LastIndex(sql, orderMarker)
+	if orderStart < 0 {
+		t.Fatalf("compiled SQL has no ORDER BY clause:\n%s", sql)
+	}
+	clause := sql[orderStart+len(orderMarker):]
+	if limitStart := strings.Index(clause, " LIMIT "); limitStart >= 0 {
+		clause = clause[:limitStart]
+	}
+	terms := strings.Split(strings.TrimSpace(clause), ", ")
+	if len(terms) != len(want) {
+		t.Fatalf("final ORDER BY = %q, want %d terms with directions %v", clause, len(want), want)
+	}
+	for index, direction := range want {
+		suffix := " " + direction + " NULLS LAST"
+		if !strings.HasSuffix(terms[index], suffix) {
+			t.Fatalf("final ORDER BY term %d = %q, want direction %s; clause=%q", index, terms[index], direction, clause)
+		}
 	}
 }
 

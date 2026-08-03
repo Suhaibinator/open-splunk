@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -47,12 +48,22 @@ type SuggestionContext struct {
 	FunctionClass SuggestionFunctionClass
 	FunctionNames []string
 	Keywords      []string
+	Exclusions    []SuggestionExclusion
 	Prefix        string
 	Replacement   Range
 	// PipelinePrefixEnd is the byte offset immediately before the real pipe
 	// that introduces the active stage. source[:PipelinePrefixEnd] is the
 	// preceding pipeline, and the value is zero for the base-search stage.
 	PipelinePrefixEnd int
+}
+
+// SuggestionExclusion removes one candidate label from a context. Labels are
+// matched exactly unless ASCIIFold is set. Kind scopes the exclusion so a
+// reserved keyword does not hide an unrelated candidate namespace.
+type SuggestionExclusion struct {
+	Kind      SuggestionKind
+	Label     string
+	ASCIIFold bool
 }
 
 // Allows reports whether context admits candidates of kind.
@@ -178,6 +189,7 @@ func AnalyzeSuggestionContext(source string, cursorByteOffset int) (SuggestionCo
 		context.FunctionNames = nil
 		context.Keywords = nil
 	}
+	context = addFrequencySuggestionSuffixExclusions(source, scan, context)
 	return context, nil
 }
 
@@ -660,10 +672,13 @@ func classifyFrequencySuggestion(context SuggestionContext, tokens []token) Sugg
 	if len(tokens) == 0 {
 		context.Kinds = []SuggestionKind{SuggestionKindField, SuggestionKindKeyword}
 		context.Keywords = []string{"limit="}
+		context.Exclusions = frequencySuggestionExclusions(frequencySuggestionState{})
 		return context
 	}
-	if frequencyLimitIsComplete(tokens) {
+	state := analyzeFrequencySuggestionTokens(tokens)
+	if !state.invalid && state.fieldOnly {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
+		context.Exclusions = frequencySuggestionExclusions(state)
 	}
 	return context
 }
@@ -781,15 +796,188 @@ func analyzeBinSuggestionTokens(tokens []token) binSuggestionState {
 	return state
 }
 
-func frequencyLimitIsComplete(tokens []token) bool {
-	if len(tokens) == 1 {
-		return tokens[0].kind == tokenWord && unsignedIntegerSyntax(tokens[0].text)
-	}
-	return len(tokens) == 3 &&
+type frequencySuggestionState struct {
+	invalid    bool
+	fieldOnly  bool
+	fields     [MaximumFrequencyFields]string
+	fieldCount int
+}
+
+func analyzeFrequencySuggestionTokens(tokens []token) frequencySuggestionState {
+	if len(tokens) > 0 && tokens[0].kind == tokenWord && unsignedIntegerSyntax(tokens[0].text) {
+		if !validFrequencySuggestionLimit(tokens[0]) {
+			return frequencySuggestionState{invalid: true}
+		}
+		tokens = tokens[1:]
+	} else if len(tokens) > 0 &&
+		tokens[0].kind == tokenWord &&
+		strings.HasPrefix(tokens[0].text, "-") &&
+		integerSyntax(tokens[0].text) {
+		return frequencySuggestionState{invalid: true}
+	} else if len(tokens) >= 2 &&
 		tokenWordEqual(tokens[0], "limit") &&
-		tokens[1].kind == tokenEqual &&
-		tokens[2].kind == tokenWord &&
-		unsignedIntegerSyntax(tokens[2].text)
+		tokens[1].kind == tokenEqual {
+		if len(tokens) < 3 || !validFrequencySuggestionLimit(tokens[2]) {
+			return frequencySuggestionState{invalid: true}
+		}
+		tokens = tokens[3:]
+	}
+	if len(tokens) == 0 {
+		return frequencySuggestionState{fieldOnly: true}
+	}
+
+	wantField := true
+	var state frequencySuggestionState
+	for _, tok := range tokens {
+		if wantField {
+			if tok.kind != tokenWord ||
+				tokenWordEqual(tok, "BY") ||
+				strings.Contains(tok.text, "*") {
+				return frequencySuggestionState{invalid: true}
+			}
+			for index := 0; index < state.fieldCount; index++ {
+				if state.fields[index] == tok.text {
+					return frequencySuggestionState{invalid: true}
+				}
+			}
+			if state.fieldCount >= MaximumFrequencyFields {
+				return frequencySuggestionState{invalid: true}
+			}
+			state.fields[state.fieldCount] = tok.text
+			state.fieldCount++
+			wantField = false
+			continue
+		}
+		if tok.kind != tokenComma {
+			return frequencySuggestionState{invalid: true}
+		}
+		wantField = true
+	}
+	state.fieldOnly = wantField && state.fieldCount > 0 &&
+		state.fieldCount < MaximumFrequencyFields
+	return state
+}
+
+func validFrequencySuggestionLimit(tok token) bool {
+	if tok.kind != tokenWord || !unsignedIntegerSyntax(tok.text) {
+		return false
+	}
+	_, err := strconv.ParseUint(tok.text, 10, 64)
+	return err == nil
+}
+
+func frequencySuggestionExclusions(state frequencySuggestionState) []SuggestionExclusion {
+	exclusions := make([]SuggestionExclusion, 0, state.fieldCount+3)
+	for index := 0; index < state.fieldCount; index++ {
+		exclusions = append(exclusions, SuggestionExclusion{
+			Kind:  SuggestionKindField,
+			Label: state.fields[index],
+		})
+	}
+	return append(exclusions,
+		SuggestionExclusion{Kind: SuggestionKindField, Label: "count"},
+		SuggestionExclusion{Kind: SuggestionKindField, Label: "percent"},
+		SuggestionExclusion{Kind: SuggestionKindField, Label: "BY", ASCIIFold: true},
+	)
+}
+
+const frequencySuggestionFixedExclusions = 3
+
+func addFrequencySuggestionSuffixExclusions(
+	source string,
+	scan suggestionCursorScan,
+	context SuggestionContext,
+) SuggestionContext {
+	command := suggestionStageCommand(scan.tokens)
+	if (command != "top" && command != "rare") ||
+		!context.Allows(SuggestionKindField) ||
+		len(context.Exclusions) < frequencySuggestionFixedExclusions {
+		return context
+	}
+
+	// The active candidate itself consumes one tuple slot. Prefix analysis has
+	// already admitted at most MaximumFrequencyFields-1 committed fields, and
+	// every frequency context ends with the three fixed output/keyword
+	// exclusions, so suffix work and the returned exclusion list stay within the
+	// same 16-field grammar boundary.
+	committedFields := len(context.Exclusions) - frequencySuggestionFixedExclusions
+	maximumSuffixFields := MaximumFrequencyFields - committedFields - 1
+	if maximumSuffixFields <= 0 {
+		return context
+	}
+	for _, field := range frequencySuggestionSuffixFields(
+		source,
+		context.Replacement.End,
+		scan.activeWord,
+		maximumSuffixFields,
+	) {
+		context.Exclusions = append(context.Exclusions, SuggestionExclusion{
+			Kind:  SuggestionKindField,
+			Label: field,
+		})
+	}
+	return context
+}
+
+// frequencySuggestionSuffixFields tolerantly recognizes only the bounded
+// comma-separated exact fields in the remainder of the active top/rare stage.
+// An active word fills the current field slot, so its suffix must begin with a
+// comma. With an empty slot, the suffix may begin with a field. Lexer or grammar
+// errors simply stop collection: full validation owns diagnostics, and a pipe
+// always ends this local scan before an unrelated malformed stage.
+func frequencySuggestionSuffixFields(
+	source string,
+	start Position,
+	activeWord bool,
+	maximumFields int,
+) []string {
+	if maximumFields <= 0 || start.Offset < 0 || start.Offset > len(source) {
+		return nil
+	}
+	suffix := lexer{
+		source: source,
+		offset: start.Offset,
+		line:   start.Line,
+		column: start.Column,
+	}
+	fields := make([]string, 0, maximumFields)
+	wantField := !activeWord
+	pendingField := ""
+	maximumTokens := maximumFields*2 + 1
+	for range maximumTokens {
+		tok, err := suffix.next()
+		if err != nil {
+			return fields
+		}
+		if tok.kind == tokenPipe || tok.kind == tokenEOF {
+			if pendingField != "" {
+				fields = append(fields, pendingField)
+			}
+			return fields
+		}
+		if wantField {
+			if tok.kind != tokenWord ||
+				tokenWordEqual(tok, "BY") ||
+				strings.Contains(tok.text, "*") {
+				return fields
+			}
+			pendingField = tok.text
+			wantField = false
+			continue
+		}
+		if tok.kind != tokenComma {
+			return fields
+		}
+		if pendingField != "" {
+			fields = append(fields, pendingField)
+			pendingField = ""
+			if len(fields) == maximumFields {
+				return fields
+			}
+		}
+		wantField = true
+	}
+	return fields
 }
 
 type rexSuggestionState struct {
@@ -1066,6 +1254,9 @@ func RankSuggestionCandidates(context SuggestionContext, candidates []Suggestion
 		if kindRank < 0 || candidate.Label == "" || candidate.Insertion == "" {
 			continue
 		}
+		if suggestionCandidateExcluded(context, candidate) {
+			continue
+		}
 		if candidate.Kind == SuggestionKindFunction {
 			if context.FunctionClass != "" &&
 				candidate.FunctionClass != "" &&
@@ -1154,6 +1345,44 @@ func suggestionKindRank(context SuggestionContext, kind SuggestionKind) int {
 		}
 	}
 	return -1
+}
+
+func suggestionCandidateExcluded(context SuggestionContext, candidate SuggestionCandidate) bool {
+	for _, exclusion := range context.Exclusions {
+		if exclusion.Kind != candidate.Kind {
+			continue
+		}
+		if exclusion.ASCIIFold {
+			if equalASCIIFold(exclusion.Label, candidate.Label) {
+				return true
+			}
+			continue
+		}
+		if exclusion.Label == candidate.Label {
+			return true
+		}
+	}
+	return false
+}
+
+func equalASCIIFold(left, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range len(left) {
+		leftByte := left[index]
+		if leftByte >= 'A' && leftByte <= 'Z' {
+			leftByte += 'a' - 'A'
+		}
+		rightByte := right[index]
+		if rightByte >= 'A' && rightByte <= 'Z' {
+			rightByte += 'a' - 'A'
+		}
+		if leftByte != rightByte {
+			return false
+		}
+	}
+	return true
 }
 
 func suggestionPrefixMatch(kind SuggestionKind, label, prefix string) (bool, bool) {
