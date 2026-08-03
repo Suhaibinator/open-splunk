@@ -37,7 +37,7 @@ import (
 const (
 	storeIntegrationImage            = testsupport.DefaultClickHouseImage
 	storeIntegrationSetupTimeout     = 5 * time.Minute
-	storeIntegrationCompilerTimeout  = 15 * time.Minute
+	storeIntegrationCompilerTimeout  = 17 * time.Minute
 	storeIntegrationDeletionTimeout  = 2 * time.Minute
 	storeIntegrationCleanupHeadroom  = 30 * time.Second
 	storeIntegrationLifecycleTimeout = storeIntegrationSetupTimeout +

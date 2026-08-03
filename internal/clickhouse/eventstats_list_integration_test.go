@@ -10,7 +10,6 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 )
 
 // testEventStatsListAgainstClickHouse deliberately reuses the stats list,
@@ -30,13 +29,6 @@ func testEventStatsListAgainstClickHouse(
 	if err != nil {
 		t.Fatalf("capture eventstats list visibility cutoff: %v", err)
 	}
-	prepareRepeatedElementFixtures(
-		t,
-		ctx,
-		connection,
-		indexTime,
-		visibilityCutoff,
-	)
 	compile := func(source string) CompiledQuery {
 		t.Helper()
 		return compileIntegrationSPL(
@@ -395,12 +387,17 @@ func testEventStatsListAgainstClickHouse(
 		EventStatsListBytesLimitMarker,
 	)
 
+	// Reuse the dedicated eventstats input-fence index instead of adding 2,001
+	// rows to the shared compiler corpus. list retains the first 100 "in"
+	// values, so 1,000 annotated rows publish exactly 100,000 elements while
+	// 1,001 rows exceed the repeated-result ceiling.
 	repeatedElementsExact := oneList(
 		"exact repeated eventstats list element boundary",
-		compile(
-			`index=compiler source="eventstats-list-elements-exact"`+
-				` | eventstats list(eventstats_list_boundary) AS ordered`+
+		compileForIndex(
+			`index=eventstats-boundary host="in" | head 1000`+
+				` | eventstats list(host) AS ordered`+
 				` | head 1 | table ordered`,
+			"eventstats-boundary",
 		),
 	)
 	if len(repeatedElementsExact) != int(MaximumStatsListValuesPerGroup) {
@@ -412,10 +409,11 @@ func testEventStatsListAgainstClickHouse(
 	}
 	expectError(
 		"eventstats list repeated element overflow",
-		compile(
-			`index=compiler source="eventstats-list-elements-over"`+
-				` | eventstats list(eventstats_list_boundary) AS discarded`+
+		compileForIndex(
+			`index=eventstats-boundary host="in" | head 1001`+
+				` | eventstats list(host) AS discarded`+
 				` | head 1 | table event_id | search event_id="absent"`,
+			"eventstats-boundary",
 		),
 		EventStatsListLimitMarker,
 	)
@@ -482,83 +480,5 @@ func testEventStatsListAgainstClickHouse(
 		if strings.Contains(physical.SQL, forbidden) {
 			t.Fatalf("eventstats list SQL contains %q:\n%s", forbidden, physical.SQL)
 		}
-	}
-}
-
-func prepareRepeatedElementFixtures(
-	t *testing.T,
-	ctx context.Context,
-	connection clickhousedriver.Conn,
-	indexTime time.Time,
-	visibilityCutoff uint64,
-) {
-	t.Helper()
-
-	batch, err := connection.PrepareBatch(ctx, `
-		INSERT INTO open_splunk.events
-		(
-			event_id, tenant_id, index_name, event_time, index_time,
-			host, source, sourcetype, severity, raw, raw_encoding,
-			fields, field_names, field_types, field_metadata_version,
-			collector_id, batch_id, batch_sequence, expires_at,
-			visibility_seq
-		)`)
-	if err != nil {
-		t.Fatalf("prepare repeated eventstats list elements: %v", err)
-	}
-	members := make([]clickhousedriver.Dynamic, MaximumStatsListValuesPerGroup)
-	for index := range members {
-		members[index] = clickhousedriver.NewDynamicWithType(
-			fmt.Sprintf("value-%03d", index),
-			"String",
-		)
-	}
-	appendScope := func(source string, rows int) {
-		t.Helper()
-		for index := 0; index < rows; index++ {
-			document := clickhousedriver.NewJSON()
-			var names []string
-			var types []uint8
-			if index == 0 {
-				document.SetValueAtPath(
-					"eventstats_list_boundary",
-					clickhousedriver.NewDynamicWithType(members, "Array(Dynamic)"),
-				)
-				names = []string{"eventstats_list_boundary"}
-				types = []uint8{uint8(eventfields.StoredValueTypeList)}
-			}
-			id := fmt.Sprintf("%s-%04d", source, index)
-			appendErr := batch.Append(
-				id,
-				"tenant",
-				"compiler",
-				indexTime.Add(-time.Duration(index)*time.Nanosecond),
-				indexTime,
-				"eventstats-list-elements-host",
-				source,
-				"eventstats-list-elements",
-				uint8(0),
-				"eventstats list repeated elements",
-				uint8(1),
-				document,
-				names,
-				types,
-				eventfields.CurrentFieldMetadataVersion,
-				"eventstats-list-elements",
-				source,
-				uint64(index+1),
-				MaximumSearchTime(),
-				visibilityCutoff,
-			)
-			if appendErr != nil {
-				_ = batch.Abort()
-				t.Fatalf("append repeated eventstats list fixture %q: %v", id, appendErr)
-			}
-		}
-	}
-	appendScope("eventstats-list-elements-exact", 1_000)
-	appendScope("eventstats-list-elements-over", 1_001)
-	if err := batch.Send(); err != nil {
-		t.Fatalf("send repeated eventstats list fixtures: %v", err)
 	}
 }
