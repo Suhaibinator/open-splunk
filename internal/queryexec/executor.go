@@ -52,11 +52,13 @@ const (
 	// independent, fixed defense-in-depth setting rather than a derived value.
 	defaultMaxSubqueryDepth = uint64(100)
 	maximumTimechartBuckets = uint64(10_000)
-	maximumTimechartSeries  = uint16(12)
-	maximumTimechartLabel   = uint16(256)
-	maximumChartRows        = uint64(10_000)
-	maximumChartSeries      = uint16(12)
-	maximumChartLabel       = uint16(256)
+	// Runtime-wide timecharts must rank every raw split label before reducing
+	// the result to twelve public series. Bound that exact pre-ranking work
+	// independently of the much smaller output width.
+	maximumRuntimeWideTimechartGroups = uint64(130_000)
+	maximumChartRows                  = uint64(10_000)
+	maximumChartSeries                = uint16(12)
+	maximumChartLabel                 = uint16(256)
 	// maximumChartResultBytes bounds the buffered pivot. Unlike timechart,
 	// whose buffered row is a fixed-width bucket plus at most 13 counts, a
 	// chart row carries a runtime row value with no length ceiling, and the
@@ -94,10 +96,11 @@ type Config struct {
 	// default. A fixed-schema timechart keeps the ordinary cap.
 	MaxRowsToGroupBy uint64
 	// ExpandTimechartGroupLimit permits validated bounded pivots to raise
-	// MaxRowsToGroupBy. A fixed timechart needs only BucketCount; runtime-wide
-	// timechart and chart need rows*(MaxSeries+1), bounded at 130,000. Ordinary
-	// queries remain unchanged. Expansion is enabled automatically when
-	// MaxRowsToGroupBy is left at zero.
+	// MaxRowsToGroupBy. A fixed timechart needs only BucketCount; a runtime-wide
+	// timechart gets a fixed 130,000-group raw-ranking allowance; chart uses
+	// rows*(MaxSeries+1), also bounded at 130,000. Ordinary queries remain
+	// unchanged. Expansion is enabled automatically when MaxRowsToGroupBy is
+	// left at zero.
 	ExpandTimechartGroupLimit bool
 	MaxThreads                uint64
 	// ReadAdmission joins every compiler-scoped physical read to the shared
@@ -381,6 +384,23 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse fixed value timechart result stream: %w", closeErr))
 			}
 			return publishFixedValueTimechart(executionContext, sink, buffered)
+		case clickhouse.TimechartModeRuntimeWideValue:
+			buffered, readErr := readValueTimechartRows(
+				executionContext,
+				rows,
+				columns,
+				columnTypes,
+				*query.Timechart,
+			)
+			if readErr != nil {
+				return readErr
+			}
+			closeErr := rows.Close()
+			rowsClosed = true
+			if closeErr != nil {
+				return classifyQueryError(executionContext, fmt.Errorf("close ClickHouse split value timechart result stream: %w", closeErr))
+			}
+			return publishValueTimechart(executionContext, sink, buffered)
 		}
 		buffered, err := readTimechartRows(
 			executionContext,
@@ -513,18 +533,19 @@ func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhouse
 	if !executor.expandTimechartGroupLimit {
 		return executor.settings
 	}
-	// A fixed timechart groups only by bucket. The row-keyed aggregation of a
-	// bounded runtime-wide query instead has one state per non-empty (row,
-	// series) pair, so reserve room for every public series plus one canonical
-	// invalid-value state per row. Both dynamic operators declare a constant row
-	// ceiling, keeping the expanded budget bounded at 130k groups. The base
-	// setting continues to govern every ordinary query.
+	// A fixed timechart groups only by bucket. Runtime-wide timecharts must first
+	// aggregate every distinct raw (bucket, label) pair to rank the exact top
+	// series, so output width cannot size their group budget. Give both dynamic
+	// modes the fixed 130k raw-work allowance; exceeding it fails rather than
+	// silently approximating the result. The base setting continues to govern
+	// every ordinary query.
 	var required uint64
 	switch {
 	case query.Timechart != nil:
 		required = query.Timechart.BucketCount
-		if query.Timechart.Mode == clickhouse.TimechartModeRuntimeWide {
-			required *= uint64(query.Timechart.MaxSeries) + 1
+		if query.Timechart.Mode == clickhouse.TimechartModeRuntimeWide ||
+			query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue {
+			required = maximumRuntimeWideTimechartGroups
 		}
 	case query.Chart != nil:
 		required = query.Chart.RowLimit * (uint64(query.Chart.MaxSeries) + 1)
@@ -548,6 +569,16 @@ type timechartRow struct {
 type bufferedTimechart struct {
 	columns []string
 	rows    []timechartRow
+}
+
+type timechartValueRow struct {
+	bucket time.Time
+	values []nullableFloat64
+}
+
+type bufferedValueTimechart struct {
+	columns []string
+	rows    []timechartValueRow
 }
 
 func validateTimechartOutput(query clickhouse.CompiledQuery) error {
@@ -580,10 +611,17 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 		}
 	case clickhouse.TimechartModeRuntimeWide:
 		if !slices.Equal(query.OutputFields, []string{"_time"}) ||
-			output.MaxSeries == 0 || output.MaxSeries > maximumTimechartSeries ||
-			output.MaxLabelBytes == 0 || output.MaxLabelBytes > maximumTimechartLabel ||
+			!output.RuntimeWideBoundsValid() ||
 			output.ValueField != "" {
 			return fmt.Errorf("%w: compiled dynamic timechart output contract is invalid", searchjobs.ErrInvalidResult)
+		}
+	case clickhouse.TimechartModeRuntimeWideValue:
+		if !slices.Equal(query.OutputFields, []string{"_time"}) ||
+			!output.RuntimeWideBoundsValid() ||
+			output.ValueField != "" ||
+			(output.ValueKind != clickhouse.TimechartValueKindSum &&
+				output.ValueKind != clickhouse.TimechartValueKindAverage) {
+			return fmt.Errorf("%w: compiled split value timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
 	default:
 		return fmt.Errorf("%w: compiled timechart output mode is invalid", searchjobs.ErrInvalidResult)
@@ -944,6 +982,184 @@ func scannedTimechartRow(destinations []any) (uint64, []string, []uint64, uint8,
 	return ordinal, names, counts, invalid, nil
 }
 
+func readValueTimechartRows(
+	ctx context.Context,
+	rows driver.Rows,
+	columns []string,
+	columnTypes []driver.ColumnType,
+	output clickhouse.TimechartOutput,
+) (bufferedValueTimechart, error) {
+	if err := ctx.Err(); err != nil {
+		return bufferedValueTimechart{}, err
+	}
+	expectedColumns := []string{
+		clickhouse.TimechartOrdinalColumn,
+		clickhouse.TimechartNamesColumn,
+		clickhouse.TimechartValuesColumn,
+		clickhouse.TimechartValuePresentColumn,
+		clickhouse.TimechartInvalidColumn,
+	}
+	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
+		return bufferedValueTimechart{}, fmt.Errorf(
+			"%w: ClickHouse split value timechart columns do not match the compiled output",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	expectedTypes := []string{
+		"UInt64",
+		"Array(String)",
+		"Array(Float64)",
+		"Array(UInt8)",
+		"UInt8",
+	}
+	expectedScanTypes := []reflect.Type{
+		reflect.TypeOf(uint64(0)),
+		reflect.TypeOf([]string{}),
+		reflect.TypeOf([]float64{}),
+		reflect.TypeOf([]uint8{}),
+		reflect.TypeOf(uint8(0)),
+	}
+	for index, columnType := range columnTypes {
+		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] ||
+			columnType.Nullable() ||
+			strings.TrimSpace(columnType.DatabaseTypeName()) != expectedTypes[index] ||
+			columnType.ScanType() != expectedScanTypes[index] {
+			return bufferedValueTimechart{}, fmt.Errorf(
+				"%w: ClickHouse split value timechart column %q has an invalid type",
+				searchjobs.ErrInvalidResult,
+				expectedColumns[index],
+			)
+		}
+	}
+
+	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
+	bucketCapacity := int(output.BucketCount)
+	buffered := bufferedValueTimechart{rows: make([]timechartValueRow, 0, bucketCapacity)}
+	var encodedNames []string
+	destinations, err := scanDestinations(columnTypes)
+	if err != nil {
+		return bufferedValueTimechart{}, fmt.Errorf(
+			"%w: prepare ClickHouse split value timechart row scan: %w",
+			searchjobs.ErrInvalidResult,
+			err,
+		)
+	}
+	for rows.Next() {
+		if err := ctx.Err(); err != nil {
+			return bufferedValueTimechart{}, err
+		}
+		if uint64(len(buffered.rows)) >= output.BucketCount {
+			return bufferedValueTimechart{}, fmt.Errorf(
+				"%w: ClickHouse split value timechart returned too many buckets",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		if err := rows.Scan(destinations...); err != nil {
+			return bufferedValueTimechart{}, classifyQueryError(
+				ctx,
+				fmt.Errorf("scan ClickHouse split value timechart result row: %w", err),
+			)
+		}
+		ordinal, names, values, present, invalid, err := scannedValueTimechartRow(destinations)
+		if err != nil {
+			return bufferedValueTimechart{}, err
+		}
+		rowIndex := len(buffered.rows)
+		if len(values) != len(present) || len(values) > int(output.MaxSeries) ||
+			(rowIndex == 0 && len(names) != len(values)) ||
+			(rowIndex > 0 && (len(names) != 0 || len(values) != len(encodedNames))) {
+			return bufferedValueTimechart{}, fmt.Errorf(
+				"%w: ClickHouse split value timechart series arrays are invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		rowValues := make([]nullableFloat64, len(values))
+		for index, presence := range present {
+			if presence > 1 || (presence == 0 && values[index] != 0) {
+				return bufferedValueTimechart{}, fmt.Errorf(
+					"%w: ClickHouse split value timechart presence array is invalid",
+					searchjobs.ErrInvalidResult,
+				)
+			}
+			if presence == 1 {
+				rowValues[index] = nullableFloat64{value: values[index], valid: true}
+			}
+		}
+
+		if ordinal >= output.BucketCount || ordinal != uint64(rowIndex) {
+			return bufferedValueTimechart{}, fmt.Errorf(
+				"%w: ClickHouse split value timechart ordinal sequence is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		bucketUnix, ok := checkedBucketBoundary(
+			output.FirstBucket.Unix(),
+			int64(output.Span/time.Second),
+			ordinal,
+		)
+		if !ok {
+			return bufferedValueTimechart{}, fmt.Errorf(
+				"%w: compiled timechart bucket arithmetic overflowed",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		if rowIndex == 0 {
+			publicColumns, validateErr := decodeSeriesNames(names, output.MaxLabelBytes, "_time")
+			if validateErr != nil {
+				return bufferedValueTimechart{}, validateErr
+			}
+			encodedNames = slices.Clone(names)
+			buffered.columns = publicColumns
+		}
+		if invalid != 0 {
+			return bufferedValueTimechart{}, searchjobs.ErrUnsupportedValue
+		}
+		buffered.rows = append(buffered.rows, timechartValueRow{
+			bucket: time.Unix(bucketUnix, 0).UTC(),
+			values: rowValues,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return bufferedValueTimechart{}, classifyQueryError(
+			ctx,
+			fmt.Errorf("iterate ClickHouse split value timechart results: %w", err),
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return bufferedValueTimechart{}, err
+	}
+	if uint64(len(buffered.rows)) != output.BucketCount {
+		return bufferedValueTimechart{}, fmt.Errorf(
+			"%w: ClickHouse split value timechart returned an incomplete bucket sequence",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	return buffered, nil
+}
+
+func scannedValueTimechartRow(
+	destinations []any,
+) (uint64, []string, []float64, []uint8, uint8, error) {
+	if len(destinations) != 5 {
+		return 0, nil, nil, nil, 0, fmt.Errorf(
+			"%w: ClickHouse split value timechart row has an invalid width",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	ordinal, ordinalOK := scannedValue(destinations[0]).(uint64)
+	names, namesOK := scannedValue(destinations[1]).([]string)
+	values, valuesOK := scannedValue(destinations[2]).([]float64)
+	present, presentOK := scannedValue(destinations[3]).([]uint8)
+	invalid, invalidOK := scannedValue(destinations[4]).(uint8)
+	if !ordinalOK || !namesOK || !valuesOK || !presentOK || !invalidOK {
+		return 0, nil, nil, nil, 0, fmt.Errorf(
+			"%w: ClickHouse split value timechart row has invalid native values",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	return ordinal, names, values, present, invalid, nil
+}
+
 // decodeSeriesNames validates and decodes the wide transport's encoded series
 // array. fixedColumn seeds the public collision domain: no runtime series may
 // take the name of the result's first, plan-time column.
@@ -1133,6 +1349,48 @@ func publishTimechart(ctx context.Context, sink searchjobs.ResultSink, buffered 
 		values[0] = searchjobs.TimeValue(row.bucket)
 		for index, count := range row.counts {
 			values[index+1] = searchjobs.UnsignedValue(count)
+		}
+		if err := sink.AddRow(values); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
+func publishValueTimechart(
+	ctx context.Context,
+	sink searchjobs.ResultSink,
+	buffered bufferedValueTimechart,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(buffered.columns)+1)}
+	schema.Columns[0] = searchjobs.Column{Name: "_time", Kind: searchjobs.ValueKindTime}
+	for index, name := range buffered.columns {
+		schema.Columns[index+1] = searchjobs.Column{
+			Name:     name,
+			Kind:     searchjobs.ValueKindDouble,
+			Nullable: true,
+		}
+	}
+	if err := sink.SetSchema(schema); err != nil {
+		return err
+	}
+	if len(buffered.columns) == 0 {
+		return ctx.Err()
+	}
+	for _, row := range buffered.rows {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		values := make([]searchjobs.Value, len(row.values)+1)
+		values[0] = searchjobs.TimeValue(row.bucket)
+		for index, value := range row.values {
+			values[index+1] = searchjobs.NullValue()
+			if value.valid {
+				values[index+1] = searchjobs.DoubleValue(value.value)
+			}
 		}
 		if err := sink.AddRow(values); err != nil {
 			return err

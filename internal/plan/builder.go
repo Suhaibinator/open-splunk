@@ -1067,6 +1067,16 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				if splitErr != nil {
 					return nil, splitErr
 				}
+				if measure.Input.Name != "" && resolved.Name == measure.Input.Name {
+					return nil, &Diagnostic{
+						Code:    "SPL_DUPLICATE_FIELD",
+						Message: fmt.Sprintf("timechart aggregate input and split field %q are repeated", resolved.Name),
+						Range:   command.SplitBy.Range,
+						Suggestions: []string{
+							"use a different split field or copy the aggregate input before timechart",
+						},
+					}
+				}
 				split = &TimechartSplit{
 					Field:        resolved,
 					SeriesLimit:  timechartSeriesLimit,
@@ -1232,7 +1242,14 @@ func buildTimechartMeasure(
 		}
 		canonicalOutput := "perc" + strconv.Itoa(int(aggregate.Percentile)) +
 			"(" + aggregate.Input + ")"
-		return buildUnsplitTimechartFieldMeasure(
+		if command.SplitBy != nil {
+			return AggregateMeasure{}, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+				Message: "this timechart aggregate does not support a BY split field",
+				Range:   command.SplitBy.Range,
+			}
+		}
+		return buildTimechartFieldMeasure(
 			command,
 			AggregateFunctionPercentile,
 			canonicalOutput,
@@ -1257,7 +1274,7 @@ func buildTimechartMeasure(
 			function = AggregateFunctionAverage
 			canonicalName = "avg"
 		}
-		return buildUnsplitTimechartFieldMeasure(
+		return buildTimechartFieldMeasure(
 			command,
 			function,
 			canonicalName+"("+aggregate.Input+")",
@@ -1273,7 +1290,7 @@ func buildTimechartMeasure(
 	}
 }
 
-func buildUnsplitTimechartFieldMeasure(
+func buildTimechartFieldMeasure(
 	command *spl.TimechartCommand,
 	function AggregateFunction,
 	canonicalOutput string,
@@ -1281,13 +1298,6 @@ func buildUnsplitTimechartFieldMeasure(
 	outputSchemaKnown bool,
 ) (AggregateMeasure, error) {
 	aggregate := command.Aggregate
-	if command.SplitBy != nil {
-		return AggregateMeasure{}, &Diagnostic{
-			Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-			Message: "this timechart aggregate does not support a BY split field",
-			Range:   command.SplitBy.Range,
-		}
-	}
 	if !aggregate.ExplicitAlias && aggregate.Alias != canonicalOutput {
 		return AggregateMeasure{}, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",

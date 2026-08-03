@@ -151,7 +151,12 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 				Time:    mustResolveEventAggregateField(t, "_time"),
 				Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "count"},
 				Split: &TimechartSplit{
-					Field: mustResolveEventAggregateField(t, "timechart_series"),
+					Field:        mustResolveEventAggregateField(t, "timechart_series"),
+					SeriesLimit:  timechartSeriesLimit,
+					IncludeNull:  true,
+					IncludeOther: true,
+					NullLabel:    "NULL",
+					OtherLabel:   "OTHER",
 				},
 			},
 			want: []string{"_time", "timechart_series"},

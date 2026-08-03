@@ -264,7 +264,7 @@ func TestExecutorRejectsMalformedFixedPercentileTimechartAtomically(t *testing.T
 		{
 			name: "oversized value field",
 			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
-				query.Timechart.ValueField = strings.Repeat("x", int(maximumTimechartLabel)+1)
+				query.Timechart.ValueField = strings.Repeat("x", int(clickhouse.MaximumTimechartLabelBytes)+1)
 				query.OutputFields[1] = query.Timechart.ValueField
 			},
 		},

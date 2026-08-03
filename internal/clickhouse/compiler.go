@@ -55,6 +55,8 @@ const (
 	TimechartInputPresentColumn = "__os_timechart_input_present"
 	TimechartNamesColumn        = "__os_timechart_names"
 	TimechartCountsColumn       = "__os_timechart_counts"
+	TimechartValuesColumn       = "__os_timechart_values"
+	TimechartValuePresentColumn = "__os_timechart_value_present"
 	TimechartInvalidColumn      = "__os_timechart_invalid"
 	// Chart physical columns are the same executor-only transport with one
 	// additional column: the pivot's row axis is runtime data rather than a
@@ -416,6 +418,13 @@ const (
 	TimechartModeRuntimeWide TimechartMode = iota
 	TimechartModeFixedCount
 	TimechartModeFixedValue
+	TimechartModeRuntimeWideValue
+	// MaximumTimechartSeries bounds the runtime-selected ordinary and sentinel
+	// columns carried by either wide timechart transport.
+	MaximumTimechartSeries uint16 = 12
+	// MaximumTimechartLabelBytes bounds one raw runtime series label before its
+	// reserved-name normalization is applied.
+	MaximumTimechartLabelBytes uint16 = maxTimechartLabelBytes
 )
 
 // TimechartValueKind identifies the semantic policy carried by the shared
@@ -440,7 +449,8 @@ func (kind TimechartValueKind) Valid() bool {
 }
 
 // TimechartOutput describes a bounded fixed-count, fixed-value, or runtime-wide
-// result contract.
+// result contract. A runtime-wide value result carries ValueKind but leaves
+// ValueField empty because its public columns are selected by split values.
 type TimechartOutput struct {
 	Mode          TimechartMode
 	FirstBucket   time.Time
@@ -453,6 +463,13 @@ type TimechartOutput struct {
 	// validation policy instead of trusting mutable OutputFields alone.
 	ValueField string
 	ValueKind  TimechartValueKind
+}
+
+// RuntimeWideBoundsValid reports whether the dynamic-series metadata is safe
+// for both the executor transport and the public search-job schema boundary.
+func (output TimechartOutput) RuntimeWideBoundsValid() bool {
+	return output.MaxSeries > 0 && output.MaxSeries <= MaximumTimechartSeries &&
+		output.MaxLabelBytes > 0 && output.MaxLabelBytes <= MaximumTimechartLabelBytes
 }
 
 // Compile compiles one plan without mutating it.
@@ -1406,6 +1423,14 @@ func wrapCompiledChronologicalValidation(
 				TimechartOrdinalColumn,
 				TimechartNamesColumn,
 				TimechartCountsColumn,
+				TimechartInvalidColumn,
+			}
+		case TimechartModeRuntimeWideValue:
+			resultColumns = []string{
+				TimechartOrdinalColumn,
+				TimechartNamesColumn,
+				TimechartValuesColumn,
+				TimechartValuePresentColumn,
 				TimechartInvalidColumn,
 			}
 		default:
@@ -2869,7 +2894,7 @@ func compileTimechart(
 		}
 	}
 
-	if valueKind, fixedValue := fixedTimechartValueKind(operator.Measure.Function); fixedValue {
+	if valueKind, fixedValue := fixedTimechartValueKind(operator.Measure.Function); fixedValue && operator.Split == nil {
 		if len(outputFields) != 2 || outputFields[0] != "_time" ||
 			outputFields[1] != operator.Measure.Output || outputFields[1] == "_time" ||
 			dynamic != nil {
@@ -2927,6 +2952,13 @@ func compileTimechart(
 		operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
 		return CompiledQuery{}, errors.New("compile ClickHouse timechart: dynamic output contract is invalid")
 	}
+	if err := validateCanonicalFieldRef(
+		"timechart",
+		"split",
+		operator.Split.Field,
+	); err != nil {
+		return CompiledQuery{}, err
+	}
 
 	splitField, splitExists, err := resolveCompiledField(operator.Split.Field, state)
 	if err != nil {
@@ -2940,6 +2972,17 @@ func compileTimechart(
 			valueSQL:  "CAST(NULL AS Nullable(String))",
 			existsSQL: "0",
 			kind:      fieldKindString,
+		}
+	}
+	if splitField.kind == fieldKindInvalid {
+		// A statically null field is in the supported missing/null split domain.
+		// Preserve its exact-presence expression while assigning the String type
+		// used by the runtime label classifier.
+		splitField = fieldState{
+			valueSQL:   "CAST(NULL AS Nullable(String))",
+			existsSQL:  splitField.existsSQL,
+			existsArgs: splitField.existsArgs,
+			kind:       fieldKindString,
 		}
 	}
 	if splitField.kind != fieldKindString && splitField.kind != fieldKindDynamic {
@@ -2958,6 +3001,41 @@ func compileTimechart(
 	valueTypeSQL := "if(isNull(" + splitField.valueSQL + "), 'None', 'String')"
 	if splitField.kind == fieldKindDynamic {
 		valueTypeSQL = dynamicTypeExpression(splitField)
+	}
+	if valueKind, splitValue := fixedTimechartValueKind(operator.Measure.Function); splitValue {
+		if valueKind == TimechartValueKindPercentile {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse timechart: percentile cannot split by a field",
+			)
+		}
+		measureField, measureExists, resolveErr := resolveCompiledField(
+			operator.Measure.Input,
+			state,
+		)
+		if resolveErr != nil {
+			return CompiledQuery{}, resolveErr
+		}
+		measureInputSQL := "CAST([], 'Array(Float64)')"
+		var measureArgs []any
+		if measureExists {
+			measureInputSQL, measureArgs = numericArrayInputSQL(measureField)
+		}
+		return compileSplitValueTimechart(
+			relation,
+			args,
+			operator,
+			valueKind,
+			timeField,
+			splitField,
+			existsSQL,
+			valueTypeSQL,
+			measureInputSQL,
+			measureArgs,
+			dynamic,
+			spanNanoseconds,
+			firstBucketNumber,
+			alias,
+		)
 	}
 	// The exact-presence placeholder occurs before the nested scoped fragment.
 	// Descendant detection is emitted in the following CTE so exact leaves do
@@ -3154,6 +3232,259 @@ func compileTimechart(
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
 }
 
+func compileSplitValueTimechart(
+	relation compiledRelation,
+	args []any,
+	operator *plan.Timechart,
+	valueKind TimechartValueKind,
+	timeField fieldState,
+	splitField fieldState,
+	splitExistsSQL string,
+	splitValueTypeSQL string,
+	measureInputSQL string,
+	measureArgs []any,
+	dynamic *plan.DynamicSeriesOutput,
+	spanNanoseconds int64,
+	firstBucketNumber int64,
+	alias string,
+) (CompiledQuery, error) {
+	if operator == nil || operator.Split == nil || dynamic == nil {
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse split numeric timechart: contract is required",
+		)
+	}
+	if valueKind != TimechartValueKindSum && valueKind != TimechartValueKindAverage {
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse split numeric timechart: value kind is invalid",
+		)
+	}
+
+	q := quoteIdentifier
+	source := q("__os_timechart_source")
+	prepared := q("__os_timechart_prepared")
+	classified := q("__os_timechart_classified")
+	canonicalized := q("__os_timechart_canonicalized")
+	numericGroups := q("__os_timechart_numeric_groups")
+	numericScores := q("__os_timechart_numeric_scores")
+	collapsed := q("__os_timechart_collapsed")
+	finalized := q("__os_timechart_finalized")
+	domainRows := q("__os_timechart_domain_rows")
+	domain := q("__os_timechart_domain")
+	collisions := q("__os_timechart_normalization_collisions")
+	bucketMaps := q("__os_timechart_bucket_maps")
+	validation := q("__os_timechart_validation")
+	grid := q("__os_timechart_grid")
+
+	eventTime := q("__os_tc_event_time")
+	value := q("__os_tc_value")
+	present := q("__os_tc_present")
+	descendant := q("__os_tc_descendant")
+	valueType := q("__os_tc_value_type")
+	ticks := q("__os_tc_ticks")
+	label := q("__os_tc_label")
+	measureValues := q("__os_tc_measure_values")
+	bucketNumber := q("__os_tc_bucket_number")
+	kind := q("__os_tc_kind")
+	numerator := q("__os_tc_numerator")
+	denominator := q("__os_tc_denominator")
+	frequency := q("__os_tc_count")
+	numericState := q("__os_tc_numeric_state")
+	score := q("__os_tc_score")
+	encoded := q("__os_tc_encoded")
+	measureValue := q("__os_tc_measure_value")
+	normalized := q("__os_tc_normalized")
+	collision := q("__os_tc_collision")
+	sortLabel := q("__os_tc_sort_label")
+	valueMap := q("__os_tc_value_map")
+	presentMap := q("__os_tc_present_map")
+	invalid := q("__os_tc_invalid")
+	ordinal := q(TimechartOrdinalColumn)
+
+	bucketNumberExpression := epochFloorBucketNumberSQL(ticks)
+	validLabel := "isValidUTF8(" + label + ") AND length(" + label + ") BETWEEN 1 AND " +
+		strconv.Itoa(maxTimechartLabelBytes) + " AND " + label + " NOT IN ('NULL', 'OTHER')"
+
+	var scoreSQL string
+	var publishSQL string
+	switch valueKind {
+	case TimechartValueKindSum:
+		scoreSQL = "sum(if(" + denominator + " = 0, toFloat64(0), " + numerator + "))"
+		publishSQL = "if(" + denominator + " = 0, CAST(NULL AS Nullable(Float64)), " + numerator + ")"
+	case TimechartValueKindAverage:
+		bucketAverage := numerator + " / toFloat64(" + denominator + ")"
+		scoreSQL = "sum(if(" + denominator + " = 0, toFloat64(0), " + bucketAverage + "))"
+		publishSQL = "if(" + denominator + " = 0, CAST(NULL AS Nullable(Float64)), " + bucketAverage + ")"
+	}
+
+	// Source-select bind markers precede the nested relation text. Descendant
+	// detection lives in the next CTE and therefore follows every source marker.
+	prefixArgs := make([]any, 0, len(splitField.existsArgs)+len(measureArgs))
+	prefixArgs = append(prefixArgs, splitField.existsArgs...)
+	prefixArgs = append(prefixArgs, measureArgs...)
+	args = prependArguments(prefixArgs, args)
+	hasDescendant := splitField.kind == fieldKindDynamic && splitField.descendantSQL != ""
+	if hasDescendant {
+		args = append(args, splitField.descendantArgs...)
+	}
+
+	var sql strings.Builder
+	sql.Grow(len(relation.sql) + len(measureInputSQL) + 12_288)
+	sql.WriteString("WITH ")
+	sql.WriteString(source)
+	sql.WriteString(" AS (SELECT ")
+	sql.WriteString(timeField.valueSQL + " AS " + eventTime + ", ")
+	sql.WriteString(splitField.valueSQL + " AS " + value + ", ")
+	sql.WriteString("toUInt8(" + splitExistsSQL + ") AS " + present + ", ")
+	sql.WriteString(splitValueTypeSQL + " AS " + valueType + ", ")
+	sql.WriteString(measureInputSQL + " AS " + measureValues)
+	if hasDescendant {
+		sql.WriteString(", " + q(internalFieldNamesColumn))
+	}
+	sql.WriteString(" FROM (")
+	sql.WriteString(relation.sql)
+	sql.WriteString(") AS " + alias + "), ")
+
+	sql.WriteString(prepared)
+	sql.WriteString(" AS (SELECT *, ")
+	if hasDescendant {
+		sql.WriteString("toUInt8(if(" + present + " != 0, 0, " + splitField.descendantSQL + ")) AS " + descendant + ", ")
+	} else {
+		sql.WriteString("toUInt8(0) AS " + descendant + ", ")
+	}
+	sql.WriteString("reinterpretAsInt64(" + eventTime + ") AS " + ticks + ", ")
+	sql.WriteString("if(" + present + " != 0 AND isNotNull(" + value + ") AND " + valueType + " = 'String', ")
+	sql.WriteString("assumeNotNull(toString(" + value + ")), CAST('' AS String)) AS " + label)
+	sql.WriteString(" FROM " + source + "), ")
+
+	sql.WriteString(classified)
+	sql.WriteString(" AS (SELECT " + bucketNumberExpression + " AS " + bucketNumber + ", ")
+	sql.WriteString("multiIf(" + descendant + " != 0, toUInt8(3), " + present + " = 0 OR isNull(" + value + ") OR " + valueType + " = 'None', toUInt8(1), ")
+	sql.WriteString(valueType + " != 'String', toUInt8(3), NOT (" + validLabel + "), toUInt8(3), toUInt8(0)) AS " + kind + ", " + label + ", " + measureValues)
+	sql.WriteString(" FROM " + prepared + "), ")
+
+	sql.WriteString(canonicalized)
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", " + kind + ", if(" + kind + " = 0, " + label + ", CAST('' AS String)) AS " + label + ", " + measureValues)
+	sql.WriteString(" FROM " + classified + "), ")
+
+	sql.WriteString(numericGroups)
+	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
+	sql.WriteString("tupleElement(" + numericState + ", 1) AS " + numerator + ", ")
+	sql.WriteString("toUInt64(tupleElement(" + numericState + ", 2)) AS " + denominator + ", " + frequency)
+	sql.WriteString(" FROM (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
+	// One mergeable aggregate consumes each normalized immediate-member array
+	// exactly once and retains both the Float64 numerator and member count. This
+	// avoids ARRAY JOIN and prevents repeated Dynamic-array normalization.
+	sql.WriteString("sumCountArray(" + measureValues + ") AS " + numericState + ", count() AS " + frequency)
+	sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucketNumber + ", " + kind + ", " + label + ") AS " + q("__os_timechart_numeric_state_source") + "), ")
+
+	sql.WriteString(numericScores)
+	sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", " + scoreSQL + " AS " + score + " FROM " + numericGroups)
+	sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY ")
+	// Splunk does not specify computed non-finite score ordering. Pin a stable
+	// boundary: +Inf, finite descending, -Inf, NaN, then raw label lexical order.
+	sql.WriteString("multiIf(isNaN(" + score + "), toUInt8(0), isInfinite(" + score + ") AND " + score + " < 0, toUInt8(1), isInfinite(" + score + "), toUInt8(3), toUInt8(2)) DESC, ")
+	sql.WriteString("if(isFinite(" + score + "), " + score + ", toFloat64(0)) DESC, " + label + " ASC LIMIT ")
+	sql.WriteString(strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10))
+	sql.WriteString("), ")
+
+	sql.WriteString(collapsed)
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", multiIf(" + kind + " = 1, '1:', ")
+	sql.WriteString(label + " IN (SELECT " + label + " FROM " + numericScores + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
+	sql.WriteString("sum(" + numerator + ") AS " + numerator + ", sum(" + denominator + ") AS " + denominator)
+	sql.WriteString(" FROM " + numericGroups + " WHERE " + kind + " IN (0, 1) GROUP BY " + bucketNumber + ", " + encoded + "), ")
+
+	sql.WriteString(finalized)
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", " + encoded + ", " + publishSQL + " AS " + measureValue)
+	sql.WriteString(" FROM " + collapsed + "), ")
+
+	sql.WriteString(domainRows)
+	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, ")
+	sql.WriteString(splunkSeriesLabelSQL(label) + " AS " + sortLabel + ", concat('0:', " + label + ") AS " + encoded)
+	sql.WriteString(" FROM " + numericScores)
+	sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " + numericGroups + " WHERE " + kind + " = 1 LIMIT 1)")
+	sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " + numericGroups + " WHERE " + kind + " = 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + numericScores + ") LIMIT 1)), ")
+
+	sql.WriteString(domain)
+	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
+
+	sql.WriteString(collisions)
+	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS " + collision + " FROM (")
+	sql.WriteString("SELECT " + splunkSeriesLabelSQL(label) + " AS " + normalized)
+	sql.WriteString(" FROM " + numericGroups + " WHERE " + kind + " = 0 GROUP BY " + normalized + " HAVING uniqExact(" + label + ") > 1 LIMIT 1)), ")
+
+	sql.WriteString(bucketMaps)
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", mapFromArrays(groupArray(" + encoded + "), groupArray(ifNull(" + measureValue + ", toFloat64(0)))) AS " + valueMap + ", ")
+	sql.WriteString("mapFromArrays(groupArray(" + encoded + "), groupArray(toUInt8(isNotNull(" + measureValue + ")))) AS " + presentMap)
+	sql.WriteString(" FROM " + finalized + " GROUP BY " + bucketNumber + "), ")
+
+	sql.WriteString(validation)
+	sql.WriteString(" AS (SELECT toUInt8(sumIf(" + frequency + ", " + kind + " = 3) > 0) AS " + invalid + " FROM " + numericGroups + "), ")
+
+	sql.WriteString(grid)
+	sql.WriteString(" AS (" + ordinalGridSQL(ordinal, bucketNumber) + ") ")
+
+	sql.WriteString("SELECT " + grid + "." + ordinal + " AS " + ordinal + ", ")
+	sql.WriteString("if(" + grid + "." + ordinal + " = 0, " + domain + ".names, CAST([], 'Array(String)')) AS " + q(TimechartNamesColumn) + ", ")
+	sql.WriteString("arrayMap(name -> ifNull(" + bucketMaps + "." + valueMap + "[name], toFloat64(0)), " + domain + ".names) AS " + q(TimechartValuesColumn) + ", ")
+	sql.WriteString("arrayMap(name -> ifNull(" + bucketMaps + "." + presentMap + "[name], toUInt8(0)), " + domain + ".names) AS " + q(TimechartValuePresentColumn) + ", ")
+	sql.WriteString("toUInt8(" + validation + "." + invalid + " != 0 OR " + collisions + "." + collision + " != 0) AS " + q(TimechartInvalidColumn))
+	sql.WriteString(" FROM " + grid + " CROSS JOIN " + domain + " CROSS JOIN " + validation + " CROSS JOIN " + collisions)
+	sql.WriteString(" LEFT JOIN " + bucketMaps + " ON " + bucketMaps + "." + bucketNumber + " = " + grid + "." + bucketNumber + " ORDER BY " + grid + "." + ordinal + " ASC")
+	sql.WriteString(materializedCTESettingsSQL)
+
+	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, operator.BucketCount)
+	sourceDepth := relationalNodeDepth(relation.depth)
+	preparedDepth := relationalNodeDepth(sourceDepth)
+	classifiedDepth := relationalNodeDepth(preparedDepth)
+	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
+	numericStateDepth := relationalNodeDepth(canonicalizedDepth)
+	numericGroupsDepth := relationalNodeDepth(numericStateDepth)
+	numericScoresDepth := relationalNodeDepth(numericGroupsDepth)
+	scoreMembershipDepth := relationalNodeDepth(numericScoresDepth)
+	collapsedDepth := relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth)
+	finalizedDepth := relationalNodeDepth(collapsedDepth)
+
+	domainScoreBranchDepth := relationalNodeDepth(numericScoresDepth)
+	domainNullInputDepth := relationalNodeDepth(numericGroupsDepth)
+	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
+	domainOtherInputDepth := relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth)
+	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
+	domainRowsDepth := relationalNodeDepth(
+		domainScoreBranchDepth,
+		domainNullBranchDepth,
+		domainOtherBranchDepth,
+	)
+	domainDepth := relationalNodeDepth(domainRowsDepth)
+	collisionInputDepth := relationalNodeDepth(numericGroupsDepth)
+	collisionsDepth := relationalNodeDepth(collisionInputDepth)
+	bucketMapsDepth := relationalNodeDepth(finalizedDepth)
+	validationDepth := relationalNodeDepth(numericGroupsDepth)
+	gridDepth := relationalNodeDepth()
+	resultDepth := relationalNodeDepth(
+		gridDepth,
+		domainDepth,
+		validationDepth,
+		collisionsDepth,
+		bucketMapsDepth,
+	)
+
+	compiled := CompiledQuery{
+		SQL:          sql.String(),
+		Args:         args,
+		OutputFields: slices.Clone(dynamic.FixedFields),
+		Timechart: &TimechartOutput{
+			Mode:          TimechartModeRuntimeWideValue,
+			FirstBucket:   operator.FirstBucket.UTC(),
+			Span:          operator.Span,
+			BucketCount:   operator.BucketCount,
+			MaxSeries:     dynamic.MaxSeries,
+			MaxLabelBytes: maxTimechartLabelBytes,
+			ValueKind:     valueKind,
+		},
+	}
+	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
+}
+
 func validateTimechartMeasure(operator *plan.Timechart, state compileState) error {
 	if operator == nil {
 		return errors.New("compile ClickHouse timechart: operator is required")
@@ -3186,9 +3517,10 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 		}
 		return validateFixedTimechartValueMeasure(measure, state, operator.Range)
 	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
-		if operator.Split != nil {
+		if operator.Split != nil &&
+			operator.Split.Field.Name == measure.Input.Name {
 			return errors.New(
-				"compile ClickHouse timechart: numeric aggregate cannot split by a field",
+				"compile ClickHouse timechart: aggregate input and split field must differ",
 			)
 		}
 		if measure.Percentile != 0 {

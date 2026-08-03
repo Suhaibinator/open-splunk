@@ -263,8 +263,8 @@ func (*EventAggregate) operator()                 {}
 func (*EventAggregate) LogicalName() string       { return "EventAggregate" }
 func (op *EventAggregate) SourceRange() spl.Range { return op.Range }
 
-// TimechartSplit is the bounded runtime-wide contract for a count timechart BY
-// field. A nil split selects a fixed two-column count or percentile form.
+// TimechartSplit is the bounded runtime-wide contract for a count, sum, or
+// average timechart BY field. A nil split selects a fixed two-column form.
 type TimechartSplit struct {
 	Field        FieldRef
 	SeriesLimit  uint16
@@ -275,8 +275,8 @@ type TimechartSplit struct {
 }
 
 // Timechart transforms rows into one aggregate series over fixed,
-// epoch-aligned UTC buckets. Measure is either row count (optionally paired
-// with Split) or one unsplit percentile, sum, or average. FirstBucket and
+// epoch-aligned UTC buckets. Measure is row count, sum, or average (each
+// optionally paired with Split), or one unsplit percentile. FirstBucket and
 // BucketCount describe the complete fixed range, including partial boundary
 // buckets and continuous gaps.
 type Timechart struct {

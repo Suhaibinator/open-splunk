@@ -79,6 +79,85 @@ func TestBuildTimechartSumAndAverageProducesStaticNumericMeasure(t *testing.T) {
 	}
 }
 
+func TestBuildTimechartSumAndAverageProducesBoundedDynamicSplitSeries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		source   string
+		function AggregateFunction
+		input    string
+		output   string
+		split    string
+	}{
+		{
+			name:     "sum",
+			source:   `index=gradethis | timechart span=5m sum(bytes) BY service`,
+			function: AggregateFunctionSum,
+			input:    "bytes",
+			output:   "sum(bytes)",
+			split:    "service",
+		},
+		{
+			name:     "average with alias",
+			source:   `index=gradethis | timechart span=5m avg(latency) AS mean BY http.route`,
+			function: AggregateFunctionAverage,
+			input:    "latency",
+			output:   "mean",
+			split:    "http.route",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			logical, err := Build(
+				mustParse(t, test.source),
+				testScope([]string{"gradethis"}, nil),
+			)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
+			if operator.Measure.Function != test.function ||
+				operator.Measure.Input.Name != test.input ||
+				operator.Measure.Output != test.output || operator.Split == nil ||
+				operator.Split.Field.Name != test.split || operator.Split.SeriesLimit != 10 ||
+				!operator.Split.IncludeNull || !operator.Split.IncludeOther ||
+				operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
+				t.Fatalf("timechart = %#v", operator)
+			}
+			if len(logical.OutputFields) != 0 || logical.DynamicOutput == nil ||
+				!slices.Equal(logical.DynamicOutput.FixedFields, []string{"_time"}) ||
+				logical.DynamicOutput.MaxSeries != 12 {
+				t.Fatalf("output = %v/%#v", logical.OutputFields, logical.DynamicOutput)
+			}
+			analysis, err := Analyze(logical)
+			if err != nil {
+				t.Fatalf("Analyze: %v", err)
+			}
+			wantReferencedFields := []string{"_time", test.input, test.split, "index"}
+			slices.Sort(wantReferencedFields)
+			if !slices.Equal(analysis.ReferencedFields, wantReferencedFields) {
+				t.Fatalf("referenced fields = %v", analysis.ReferencedFields)
+			}
+		})
+	}
+}
+
+func TestBuildTimechartSumAndAverageRejectsMeasureSplitCollision(t *testing.T) {
+	t.Parallel()
+
+	for _, function := range []string{"sum", "avg"} {
+		_, err := Build(
+			mustParse(t, `index=gradethis | timechart span=5m `+function+`(latency) BY latency`),
+			testScope([]string{"gradethis"}, nil),
+		)
+		assertDiagnosticCode(t, err, "SPL_DUPLICATE_FIELD")
+	}
+}
+
 func TestBuildTimechartSumAndAverageRejectsOutputCollisionAndAmbiguousInput(t *testing.T) {
 	t.Parallel()
 
@@ -193,7 +272,7 @@ func TestBuildRejectsForgedTimechartSumAndAverageContracts(t *testing.T) {
 			got.Alias = ""
 			return got
 		}(), code: "SPL_UNSUPPORTED_TIMECHART_AGGREGATE"},
-		{name: "split numeric aggregate", aggregate: valid, split: &spl.StatsGroupField{Name: "service", Range: fieldRange}, code: "SPL_UNSUPPORTED_TIMECHART_SYNTAX"},
+		{name: "same measure and split field", aggregate: valid, split: &spl.StatsGroupField{Name: "latency", Range: fieldRange}, code: "SPL_DUPLICATE_FIELD"},
 	}
 	for _, test := range tests {
 		test := test
@@ -222,12 +301,28 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 
 	timeField := mustResolveEventAggregateField(t, "_time")
 	input := mustResolveEventAggregateField(t, "latency")
+	splitField := mustResolveEventAggregateField(t, "service")
+	validSplit := func(field FieldRef) *TimechartSplit {
+		return &TimechartSplit{
+			Field:        field,
+			SeriesLimit:  timechartSeriesLimit,
+			IncludeNull:  true,
+			IncludeOther: true,
+			NullLabel:    "NULL",
+			OtherLabel:   "OTHER",
+		}
+	}
 	for _, function := range []AggregateFunction{AggregateFunctionSum, AggregateFunctionAverage} {
 		valid := AggregateMeasure{Function: function, Input: input, Output: "result"}
 		if _, err := Analyze(&Query{Operators: []Operator{&Timechart{
 			Time: timeField, Measure: valid,
 		}}}); err != nil {
 			t.Fatalf("Analyze(valid %v): %v", function, err)
+		}
+		if _, err := Analyze(&Query{Operators: []Operator{&Timechart{
+			Time: timeField, Measure: valid, Split: validSplit(splitField),
+		}}}); err != nil {
+			t.Fatalf("Analyze(valid split %v): %v", function, err)
 		}
 
 		tests := []struct {
@@ -241,7 +336,13 @@ func TestAnalyzeAcceptsValidAndRejectsForgedTimechartSumAndAverageMeasures(t *te
 			{name: "time output", measure: func() AggregateMeasure { got := valid; got.Output = "_time"; return got }()},
 			{name: "forged path", measure: func() AggregateMeasure { got := valid; got.Input.Path = []string{"attacker"}; return got }()},
 			{name: "canonical input", measure: func() AggregateMeasure { got := valid; got.Input.Canonical = true; return got }()},
-			{name: "split", measure: valid, split: &TimechartSplit{Field: mustResolveEventAggregateField(t, "service")}},
+			{name: "same measure and split", measure: valid, split: validSplit(input)},
+			{name: "zero series limit", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.SeriesLimit = 0; return got }()},
+			{name: "wrong series limit", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.SeriesLimit++; return got }()},
+			{name: "null series disabled", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.IncludeNull = false; return got }()},
+			{name: "other series disabled", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.IncludeOther = false; return got }()},
+			{name: "null label renamed", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.NullLabel = "none"; return got }()},
+			{name: "other label renamed", measure: valid, split: func() *TimechartSplit { got := validSplit(splitField); got.OtherLabel = "rest"; return got }()},
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {

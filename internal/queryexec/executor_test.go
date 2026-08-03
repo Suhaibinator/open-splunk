@@ -786,10 +786,10 @@ func TestExecutorRejectsMalformedTimechartAtomically(t *testing.T) {
 			query.Timechart.BucketCount = maximumTimechartBuckets + 1
 		}, want: searchjobs.ErrInvalidResult},
 		{name: "excessive metadata series", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
-			query.Timechart.MaxSeries = maximumTimechartSeries + 1
+			query.Timechart.MaxSeries = clickhouse.MaximumTimechartSeries + 1
 		}, want: searchjobs.ErrInvalidResult},
 		{name: "excessive metadata label", mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
-			query.Timechart.MaxLabelBytes = maximumTimechartLabel + 1
+			query.Timechart.MaxLabelBytes = clickhouse.MaximumTimechartLabelBytes + 1
 		}, want: searchjobs.ErrInvalidResult},
 	}
 	for _, test := range tests {
@@ -1645,7 +1645,7 @@ func TestExecutorExpandsOnlyOptedInTimechartGroupBudget(t *testing.T) {
 	dense := timechartQuery(time.Unix(0, 0).UTC(), 5_001)
 	dense.Timechart.MaxSeries = 2
 	denseSettings := executor.settingsFor(dense)
-	if got, want := denseSettings["max_rows_to_group_by"], uint64(15_003); got != want {
+	if got, want := denseSettings["max_rows_to_group_by"], maximumRuntimeWideTimechartGroups; got != want {
 		t.Fatalf("dense timechart group cap = %v, want %d", got, want)
 	}
 	if got := settings["max_rows_to_group_by"]; got != defaultMaxResultRows {
@@ -1672,7 +1672,7 @@ func TestExecutorExpandsOnlyOptedInTimechartGroupBudget(t *testing.T) {
 		t.Fatalf("explicit group cap = %v, want 7", got)
 	}
 	customExpanded := &Executor{settings: customSettings, expandTimechartGroupLimit: true}
-	if got, want := customExpanded.settingsFor(dense)["max_rows_to_group_by"], uint64(15_003); got != want {
+	if got, want := customExpanded.settingsFor(dense)["max_rows_to_group_by"], maximumRuntimeWideTimechartGroups; got != want {
 		t.Fatalf("opted-in timechart group cap = %v, want %d", got, want)
 	}
 	fixed.Timechart.BucketCount = 5_001
@@ -1818,15 +1818,16 @@ func (column fakeColumnType) ScanType() reflect.Type   { return column.scanType 
 func (column fakeColumnType) DatabaseTypeName() string { return column.databaseType }
 
 type fakeRows struct {
-	columns   []string
-	types     []driver.ColumnType
-	data      [][]any
-	index     int
-	nextCalls int
-	err       error
-	closeErr  error
-	closed    bool
-	afterScan func()
+	columns     []string
+	types       []driver.ColumnType
+	data        [][]any
+	index       int
+	nextCalls   int
+	err         error
+	closeErr    error
+	closed      bool
+	afterScan   func()
+	observeScan func([]any)
 }
 
 func (rows *fakeRows) Next() bool {
@@ -1844,6 +1845,9 @@ func (rows *fakeRows) Scan(destinations ...any) error {
 	values := rows.data[rows.index-1]
 	if len(values) != len(destinations) {
 		return errors.New("destination count mismatch")
+	}
+	if rows.observeScan != nil {
+		rows.observeScan(destinations)
 	}
 	for index, destination := range destinations {
 		if err := assignFakeScan(destination, values[index]); err != nil {

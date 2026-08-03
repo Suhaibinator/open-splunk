@@ -2393,10 +2393,20 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 		}
 		return nil
 	}
-	if output.Mode != clickhouse.TimechartModeRuntimeWide {
+	runtimeWideValue := false
+	switch output.Mode {
+	case clickhouse.TimechartModeRuntimeWide:
+	case clickhouse.TimechartModeRuntimeWideValue:
+		if output.ValueKind != clickhouse.TimechartValueKindSum &&
+			output.ValueKind != clickhouse.TimechartValueKindAverage {
+			return fmt.Errorf("%w: split value timechart aggregate kind is invalid", ErrInvalidResult)
+		}
+		runtimeWideValue = true
+	default:
 		return fmt.Errorf("%w: timechart output mode is invalid", ErrInvalidResult)
 	}
-	if output.ValueField != "" || !slices.Equal(expected, []string{"_time"}) ||
+	if !output.RuntimeWideBoundsValid() || output.ValueField != "" ||
+		!slices.Equal(expected, []string{"_time"}) ||
 		len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
 		return fmt.Errorf("%w: timechart schema exceeds the compiled output", ErrInvalidResult)
 	}
@@ -2419,8 +2429,15 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 		if strings.HasPrefix(column.Name, "VALUE_") {
 			maximumPublicBytes += len("VALUE")
 		}
+		expectedKind := ValueKindUnsigned
+		expectedNullable := false
+		if runtimeWideValue {
+			expectedKind = ValueKindDouble
+			expectedNullable = true
+		}
 		if len(column.Name) > maximumPublicBytes || strings.HasPrefix(column.Name, "_") ||
-			column.Kind != ValueKindUnsigned || column.Nullable || column.Multivalue {
+			column.Kind != expectedKind || column.Nullable != expectedNullable ||
+			column.Multivalue {
 			return fmt.Errorf("%w: timechart schema column %d is invalid", ErrInvalidResult, index)
 		}
 	}

@@ -87,8 +87,12 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 					Output:   "count",
 				},
 				Split: &plan.TimechartSplit{
-					Field:     plan.FieldRef{Name: "host", Canonical: true},
-					NullLabel: "private-null-label", OtherLabel: "private-other-label",
+					Field:        plan.FieldRef{Name: "host", Canonical: true},
+					SeriesLimit:  10,
+					IncludeNull:  true,
+					IncludeOther: true,
+					NullLabel:    "NULL",
+					OtherLabel:   "OTHER",
 				},
 				Range: sourceRange,
 			},
@@ -181,7 +185,6 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 	rendered := fmt.Sprintf("%#v", projected)
 	for _, secret := range []string{
 		"private-literal", "private-regex", "private-json-path",
-		"private-null-label", "private-other-label",
 		"private-chart-null", "private-chart-other",
 	} {
 		if strings.Contains(rendered, secret) {

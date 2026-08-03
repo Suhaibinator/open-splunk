@@ -2731,26 +2731,30 @@ rather than falling back to an approximate or data-dependent bin.
 | timechart span=1h perc50(duration_ms) AS median_ms
 | timechart span=5m sum(bytes) AS total_bytes
 | timechart span=5m avg(duration_ms) AS mean_ms
+| timechart span=5m sum(bytes) BY service
+| timechart span=5m avg(duration_ms) AS ignored_alias BY service
 ```
 
 The supported aggregate forms are exactly one argument-free `count`, one
-unsplit `sum(field)` or `avg(field)`, or one unsplit integer-suffix percentile.
-`count` retains its optional `BY` with one exact split field and cannot be
-aliased. Every numeric form accepts one exact unquoted input field and an
-optional exact unquoted `AS` output. A percentile is written `pN(field)` or
-`percN(field)`, where `N` is an integer from 1 through 99. Without `AS`, its
-two spellings publish the canonical lowercase `percN(field)` name; for
-example, `p095(duration_ms)` publishes `perc95(duration_ms)`. `sum` and `avg`
-likewise publish canonical lowercase `sum(field)` and `avg(field)` names when
-`AS` is absent. Function and clause names are case-insensitive. No numeric
-form accepts `BY`.
+`sum(field)` or `avg(field)`, or one unsplit integer-suffix percentile.
+`count`, `sum`, and `avg` each accept an optional `BY` with one exact split
+field; `count` cannot be aliased. Every numeric form accepts one exact unquoted
+input field and an optional exact unquoted `AS` output. A percentile is written
+`pN(field)` or `percN(field)`, where `N` is an integer from 1 through 99.
+Without `AS`, its two spellings publish the canonical lowercase
+`percN(field)` name; for example, `p095(duration_ms)` publishes
+`perc95(duration_ms)`. Unsplit `sum` and `avg` likewise publish canonical
+lowercase `sum(field)` and `avg(field)` names when `AS` is absent. With `BY`,
+the runtime split values name the public series, so an accepted `AS` alias does
+not become a public output column. Function and clause names are
+case-insensitive. Percentiles do not accept `BY`.
 
 Every form requires a positive fixed `s`, `m`, or `h` span from one second
 through 24 hours and must be the final pipeline command. Unsplit count has the
 fixed `_time,count` schema. An unsplit numeric aggregate has the fixed
-`_time,<aggregate-output>` schema. With count `BY`, split values determine the
-wide output columns at runtime. All are time-series results, but only count
-`BY` has runtime-named columns.
+`_time,<aggregate-output>` schema. With `count`, `sum`, or `avg` `BY`, split
+values determine the wide output columns at runtime. All are time-series
+results; every `BY` form has runtime-named columns.
 
 The search time range remains half-open `[earliest, latest)`. Buckets are
 aligned to Unix epoch boundaries using mathematical floor division, including
@@ -2759,8 +2763,8 @@ form, when at least one input event exists, missing buckets are filled with
 zero counts and rows are ordered by `_time` ascending. A completely empty
 input returns zero rows while preserving the known schema: `_time,count`
 without `BY`, the fixed `_time,<aggregate-output>` schema for a numeric
-aggregate, or `_time` with count `BY` because there are no observed runtime
-series. `timechart` requires the unmodified canonical `_time`; removing,
+aggregate, or `_time` with `BY` because there are no observed runtime series.
+`timechart` requires the unmodified canonical `_time`; removing,
 replacing, or transforming it is a source-located error.
 
 Aligned bucket starts are not constrained to ClickHouse's timestamp storage
@@ -2780,6 +2784,23 @@ with `_` receive Splunk's `VALUE` prefix (`_audit` becomes `VALUE_audit`). An
 upstream projection that removes the split field treats it as missing for all
 retained events.
 
+With numeric `BY`, `_time` is followed by nullable `Float64` series columns.
+The ten ordinary string series with the highest numeric score are retained;
+the score is the sum of that series' finalized per-bucket aggregate values
+across the complete range. Equal scores use UTF-8 lexical order. Because
+Splunk does not specify computed non-finite score ordering, Open Splunk pins a
+deterministic boundary: positive infinity, finite values descending, negative
+infinity, then `NaN`, with lexical order inside each class. The public ordinary
+columns retain lexical order and are followed by `NULL` and `OTHER` under the
+same naming and normalization rules as count.
+
+`OTHER` combines the underlying omitted series' aggregate states per bucket.
+For `sum`, their numerators are added. For `avg`, their numerators and eligible
+member counts are added before division, so the result is a member-weighted
+average rather than an average of already-finalized series averages. A
+missing or explicit-null split value contributes to `NULL`, independently of
+the top-ten ranking.
+
 Every numeric input uses the same normalization and immediate-member rules as
 `stats` numeric aggregates. Finite integers, floats, numeric Strings, tagged
 decimals, and canonical timestamps converted to Unix epoch seconds are
@@ -2793,16 +2814,16 @@ event value hidden by the projection.
 
 Every numeric output is `Nullable(Float64)`. When at least one scoped input row
 exists, the command publishes the complete fixed bucket grid in ascending time
-order; a bucket with no eligible numeric contribution contains null, including
-for `sum`, rather than zero. A real sum of zero remains non-null. `avg` weights
-each eligible immediate member independently, so an event carrying three
-eligible multivalue members contributes three values to both its numerator and
-denominator. Non-finite inputs are filtered before aggregation, but a computed
-IEEE `NaN` or positive/negative infinity produced by `sum` or `avg` arithmetic
-is preserved. This distinguishes an empty scoped input, which publishes the
-static schema but zero rows, from present input
-whose measure field is missing or wholly ineligible, which publishes every
-bucket with null values.
+order; a bucket/series pair with no eligible numeric contribution contains
+null, including for `sum`, rather than zero. A real sum of zero remains
+non-null. `avg` weights each eligible immediate member independently, so an
+event carrying three eligible multivalue members contributes three values to
+both its numerator and denominator. Non-finite inputs are filtered before
+aggregation, but a computed IEEE `NaN` or positive/negative infinity produced
+by `sum` or `avg` arithmetic is preserved. This distinguishes an empty scoped
+input, which publishes the static or runtime-only schema but zero rows, from
+present input whose measure field is missing or wholly ineligible, which
+publishes every bucket with null values for its fixed or runtime series.
 
 The fixed numeric lowering scans the tenant/index/time/snapshot-scoped source
 once, computing bucket ticks and normalized numeric-member arrays inline. It
@@ -2817,6 +2838,17 @@ second scoped storage scan is performed. Percentile approximation, roughly
 1%-rank-error accuracy, and resource limits are the same as the `stats`
 percentile contract; `sum` and `avg` use ordinary `Float64` arithmetic.
 
+The numeric split lowering likewise scans the scoped source once and never
+uses `ARRAY JOIN`. It normalizes each measure to one immediate-member array,
+then builds one mergeable `sumCountArray` state for each raw
+`(bucket, split-kind, label)` group. Those bounded states drive exact scoring,
+top-ten selection, collision validation, weighted `OTHER` collapse, and the
+per-bucket value/presence maps. The private transport sends the runtime name
+array only with ordinal zero; later rows carry only the fixed-width value and
+presence arrays. The executor buffers and validates the complete grid before
+publishing a schema or row, and the separate presence array preserves the
+difference between null gaps and real numeric zero.
+
 The split form supports string split values plus missing/null. Numeric,
 Boolean, extended, list, and object split values fail the whole command before
 schema or rows are published; Splunk's default numeric discretization is not
@@ -2826,20 +2858,21 @@ Results in either form are bounded to 10,000 buckets. The split form is
 additionally bounded to 12 runtime series (ten ordinary, `NULL`, and `OTHER`),
 for at most 13 public columns. The 10,000-bucket resource policy is
 intentionally lower than Splunk's installation-configurable `maxbins` default.
-With default executor settings, the split form's intermediate group budget
-grows with the requested bucket count to at most 130,000 states. Domains with
-enough distinct raw values to exceed that budget fail atomically with an
-execution-limit error; an explicitly configured lower group cap remains
-authoritative.
+With default executor settings, every runtime-wide timechart receives a fixed
+130,000-group allowance for its exact pre-ranking raw
+`(bucket, split-kind, label)` work; it is intentionally independent of the
+twelve-column output width. Domains with enough distinct raw groups to exceed
+that budget fail atomically with an execution-limit error; an explicitly
+configured lower group cap remains authoritative.
 
 Retained unsupported forms fail rather than being approximated. These include
-count arguments or aliases; percentile, `sum`, or `avg` forms with `BY`;
+count arguments or aliases; percentile forms with `BY`;
 wildcard, quoted, missing, multiple, or eval-expression numeric inputs;
 wildcard, quoted, or missing numeric aliases after `AS`;
 multiple aggregates; every other aggregate such as `dc`, `values`, or
 `count(field)`; percentile suffixes outside 1 through 99 or with a decimal
 level; `perc(field, N)`, `upperperc`, and `exactperc`; options; malformed,
-wildcard, quoted, missing, or multiple count split fields; and omitted,
+wildcard, quoted, missing, or multiple split fields; and omitted,
 nonpositive, overflowing, compound, logarithmic, calendar, or subsecond spans.
 Every unsupported form retains a source-located timechart diagnostic.
 

@@ -768,28 +768,6 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 	if err != nil {
 		return nil, err
 	}
-	if aggregate.Function != AggregateFunctionCount {
-		if p.isKeyword("BY") {
-			return nil, p.unsupportedTimechartSyntax(
-				p.current(),
-				"this timechart aggregate does not support a BY split field",
-			)
-		}
-		if !p.atCommandEnd() {
-			return nil, p.unsupportedTimechartSyntax(
-				p.current(),
-				"this timechart form accepts exactly one aggregate and an optional AS output",
-			)
-		}
-		return &TimechartCommand{
-			Span:      span,
-			Aggregate: aggregate,
-			Range: Range{
-				Start: name.sourceRange.Start,
-				End:   aggregateEnd,
-			},
-		}, nil
-	}
 	if p.atCommandEnd() {
 		return &TimechartCommand{
 			Span:      span,
@@ -801,9 +779,19 @@ func (p *parser) parseTimechartCommand(name token) (Command, error) {
 		}, nil
 	}
 	if !p.isKeyword("BY") {
+		message := "this timechart form accepts exactly one aggregate and an optional AS output"
+		if aggregate.Function == AggregateFunctionCount {
+			message = "timechart count accepts only an optional BY followed by one split field"
+		}
 		return nil, p.unsupportedTimechartSyntax(
 			p.current(),
-			"timechart count accepts only an optional BY followed by one split field",
+			message,
+		)
+	}
+	if !timechartAggregateSupportsSplit(aggregate.Function) {
+		return nil, p.unsupportedTimechartSyntax(
+			p.current(),
+			"this timechart aggregate does not support a BY split field",
 		)
 	}
 	p.advance()
@@ -920,6 +908,15 @@ func timechartFieldAggregateSpecForName(name string) (statsAggregateSpec, bool) 
 		return spec, true
 	default:
 		return statsAggregateSpec{}, false
+	}
+}
+
+func timechartAggregateSupportsSplit(function AggregateFunction) bool {
+	switch function {
+	case AggregateFunctionCount, AggregateFunctionSum, AggregateFunctionAverage:
+		return true
+	default:
+		return false
 	}
 }
 

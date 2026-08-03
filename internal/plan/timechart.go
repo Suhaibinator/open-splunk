@@ -18,8 +18,7 @@ func validTimechartMeasureContract(operator *Timechart) bool {
 	if _, err := ResolveField(operator.Measure.Output, spl.Range{}); err != nil {
 		return false
 	}
-	if operator.Split != nil &&
-		!validResolvedEventAggregateField(operator.Split.Field) {
+	if operator.Split != nil && !validTimechartSplitContract(operator.Split) {
 		return false
 	}
 	switch operator.Measure.Function {
@@ -37,11 +36,22 @@ func validTimechartMeasureContract(operator *Timechart) bool {
 			operator.Measure.Percentile <= 99 &&
 			operator.Measure.Output != "_time"
 	case AggregateFunctionSum, AggregateFunctionAverage:
-		return operator.Split == nil &&
-			validResolvedEventAggregateField(operator.Measure.Input) &&
+		return validResolvedEventAggregateField(operator.Measure.Input) &&
 			operator.Measure.Percentile == 0 &&
-			operator.Measure.Output != "_time"
+			operator.Measure.Output != "_time" &&
+			(operator.Split == nil ||
+				operator.Split.Field.Name != operator.Measure.Input.Name)
 	default:
 		return false
 	}
+}
+
+func validTimechartSplitContract(split *TimechartSplit) bool {
+	return split != nil &&
+		validResolvedEventAggregateField(split.Field) &&
+		split.SeriesLimit == timechartSeriesLimit &&
+		split.IncludeNull &&
+		split.IncludeOther &&
+		split.NullLabel == "NULL" &&
+		split.OtherLabel == "OTHER"
 }

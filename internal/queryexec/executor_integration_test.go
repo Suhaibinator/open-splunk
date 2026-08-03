@@ -237,6 +237,18 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			timechartIndexTime,
 		)
 	})
+	splitNumericBase, splitNumericIndexTime := queryIntegrationInsertSplitNumericTimechartEvents(t, ctx, connection)
+	t.Run("split numeric timechart", func(t *testing.T) {
+		queryIntegrationTestSplitNumericTimechart(
+			t,
+			ctx,
+			connection,
+			executor,
+			explainer,
+			splitNumericBase,
+			splitNumericIndexTime,
+		)
+	})
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
 	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
 	t.Run("structured EXPLAIN accepts an index-free MergeTree read", func(t *testing.T) {

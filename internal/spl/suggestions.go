@@ -587,16 +587,27 @@ func classifyTimechartSuggestion(context SuggestionContext, tokens []token) Sugg
 		context.Keywords = []string{"BY"}
 		return context
 	}
-	if _, supported := timechartFieldAggregateSpecForName(aggregate[0].text); !supported {
+	spec, supported := timechartFieldAggregateSpecForName(aggregate[0].text)
+	if !supported {
 		return context
 	}
+	splitSupported := timechartAggregateSupportsSplit(spec.function)
 	if parenthesisDepth(aggregate) > 0 {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
+		return context
+	}
+	if byIndex := topLevelWordIndex(aggregate, "BY"); byIndex >= 0 {
+		if splitSupported {
+			context.Kinds = []SuggestionKind{SuggestionKindField}
+		}
 		return context
 	}
 	if asIndex := topLevelWordIndex(aggregate, "AS"); asIndex >= 0 {
 		if len(aggregate) == asIndex+1 {
 			context.Kinds = []SuggestionKind{SuggestionKindField}
+		} else if splitSupported && len(aggregate) == asIndex+2 {
+			context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+			context.Keywords = []string{"BY"}
 		}
 		return context
 	}
@@ -606,6 +617,9 @@ func classifyTimechartSuggestion(context SuggestionContext, tokens []token) Sugg
 		aggregate[3].kind == tokenRightParen {
 		context.Kinds = []SuggestionKind{SuggestionKindKeyword}
 		context.Keywords = []string{"AS"}
+		if splitSupported {
+			context.Keywords = append(context.Keywords, "BY")
+		}
 	}
 	return context
 }
