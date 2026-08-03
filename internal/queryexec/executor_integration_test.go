@@ -1721,6 +1721,133 @@ ORDER BY grid.number`,
 		}
 	})
 
+	t.Run("numeric chart publishes nullable values through manager", func(t *testing.T) {
+		wantColumns := []string{
+			"path", "s01", "s02", "s03", "s04", "s05", "s06",
+			"s07", "s08", "s09", "s10", "NULL", "OTHER",
+		}
+		for _, test := range []struct {
+			name          string
+			aggregate     string
+			otherWeighted float64
+		}{
+			{name: "sum", aggregate: "sum", otherWeighted: 50},
+			{name: "member weighted average", aggregate: "avg", otherWeighted: 50.0 / 21.0},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				job, page := chartRange(
+					t,
+					"queryexec-chart-numeric-"+strings.ReplaceAll(test.name, " ", "-"),
+					`index=main source="chart-numeric" | chart `+test.aggregate+`(metric) OVER path BY series`,
+				)
+				if job.State != searchjobs.StateCompleted || job.RowCount != 3 {
+					t.Fatalf("numeric %s chart job = %#v, failure=%#v", test.aggregate, job, job.Failure)
+				}
+				queryIntegrationAssertColumns(t, page, wantColumns)
+				if page.Schema.Columns[0] != (searchjobs.Column{Name: "path", Kind: searchjobs.ValueKindString}) {
+					t.Fatalf("numeric %s chart row column = %#v", test.aggregate, page.Schema.Columns[0])
+				}
+				for columnIndex, column := range page.Schema.Columns[1:] {
+					if column.Kind != searchjobs.ValueKindDouble || !column.Nullable || column.Multivalue {
+						t.Fatalf(
+							"numeric %s chart value column %d = %#v, want nullable scalar Double",
+							test.aggregate,
+							columnIndex+1,
+							column,
+						)
+					}
+				}
+				if len(page.Rows) != 3 {
+					t.Fatalf("numeric %s chart rows = %d, want 3", test.aggregate, len(page.Rows))
+				}
+				for rowIndex, wantRow := range []string{"/empty", "/weighted", "/zero"} {
+					gotRow, ok := page.Rows[rowIndex].Values[0].String()
+					if !ok || gotRow != wantRow {
+						t.Fatalf(
+							"numeric %s chart row %d = %q, %v, want %q",
+							test.aggregate,
+							rowIndex,
+							gotRow,
+							ok,
+							wantRow,
+						)
+					}
+				}
+
+				// A valid row domain is independent of numeric measure eligibility.
+				// The row survives, while every cell publishes as an explicit null.
+				for columnIndex, value := range page.Rows[0].Values[1:] {
+					if !value.IsNull() {
+						t.Fatalf(
+							"numeric %s all-ineligible cell %q = %#v, want null",
+							test.aggregate,
+							wantColumns[columnIndex+1],
+							value,
+						)
+					}
+				}
+
+				weighted := page.Rows[1].Values
+				for index := 1; index <= 10; index++ {
+					queryIntegrationAssertDouble(
+						t,
+						weighted[index],
+						float64(101-index),
+						fmt.Sprintf("numeric %s s%02d", test.aggregate, index),
+					)
+				}
+				queryIntegrationAssertDouble(t, weighted[11], 7, "numeric "+test.aggregate+" NULL")
+				queryIntegrationAssertDouble(
+					t,
+					weighted[12],
+					test.otherWeighted,
+					"numeric "+test.aggregate+" weighted OTHER",
+				)
+
+				// The value-presence bitmap must keep a real zero distinct from
+				// absent or wholly ineligible cells in the same public schema.
+				zero := page.Rows[2].Values
+				queryIntegrationAssertDouble(t, zero[1], 0, "numeric "+test.aggregate+" real zero")
+				for columnIndex, value := range zero[2:] {
+					if !value.IsNull() {
+						t.Fatalf(
+							"numeric %s zero-row cell %q = %#v, want null",
+							test.aggregate,
+							wantColumns[columnIndex+2],
+							value,
+						)
+					}
+				}
+			})
+		}
+
+		// Numeric aggregation cannot make a malformed split domain safe. The
+		// executor buffers the complete pivot and rejects it before publishing.
+		const invalidSource = `index=main source="chart-bad-rowname" | chart sum(metric) OVER path BY series`
+		compiled := queryIntegrationCompileSearchRange(
+			t,
+			invalidSource,
+			chartIndexTime,
+			chartBase,
+			chartBase.Add(30*time.Minute),
+		)
+		sink := &fakeSink{}
+		err := executor.Execute(ctx, compiled, sink)
+		if !errors.Is(err, searchjobs.ErrUnsupportedValue) || sink.setCalls != 0 || len(sink.rows) != 0 {
+			t.Fatalf(
+				"invalid numeric chart: err=%v schema calls=%d rows=%d",
+				err,
+				sink.setCalls,
+				len(sink.rows),
+			)
+		}
+		job, _ := chartRange(t, "queryexec-chart-numeric-atomic", invalidSource)
+		if job.State != searchjobs.StateFailed || job.Failure == nil ||
+			job.Failure.Code != searchjobs.FailureUnsupportedSPL || job.RowCount != 0 || job.Schema != nil {
+			t.Fatalf("invalid numeric chart job = %#v, failure=%+v", job, job.Failure)
+		}
+	})
+
 	t.Run("chart row totals equal stats count by the row field", func(t *testing.T) {
 		// The primary differential: usenull and useother are always on, so the
 		// column bound can never drop an eligible input row.
@@ -3196,6 +3323,59 @@ func queryIntegrationInsertChartEvents(t *testing.T, ctx context.Context, connec
 			add(fmt.Sprintf("chart-c8-%d", counter), "chart-c8", base, &info, fields)
 		}
 	}
+
+	// Numeric chart needs a result-level fixture because the CI vertical runs
+	// the production executor and manager, not only the compiler transport.
+	// Ten labels dominate both sum and average ranking; the remaining two are
+	// folded into OTHER, where average must merge 21 underlying members before
+	// finalization rather than averaging two already-finalized cells.
+	numericLabel := func(value string) *string { return &value }
+	addNumeric := func(id, row string, series *string, metricSet bool, metric any) {
+		fields := path(row)
+		if series != nil {
+			fields["series"] = *series
+		}
+		if metricSet {
+			fields["metric"] = metric
+		}
+		add(id, "chart-numeric", base, &info, fields)
+	}
+	for index := 1; index <= 10; index++ {
+		addNumeric(
+			fmt.Sprintf("numeric-top-%02d", index),
+			"/weighted",
+			numericLabel(fmt.Sprintf("s%02d", index)),
+			true,
+			float64(101-index),
+		)
+	}
+	addNumeric("numeric-overflow-eleven", "/weighted", numericLabel("s11"), true, float64(30))
+	for index := range 20 {
+		addNumeric(
+			fmt.Sprintf("numeric-overflow-twelve-%02d", index),
+			"/weighted",
+			numericLabel("s12"),
+			true,
+			float64(1),
+		)
+	}
+	addNumeric("numeric-null-series", "/weighted", nil, true, float64(7))
+
+	// One eligible zero plus poison remains present. The adjacent s02 cell and
+	// the entire /empty row have no eligible member and must publish as null.
+	addNumeric("numeric-zero", "/zero", numericLabel("s01"), true, float64(0))
+	addNumeric("numeric-zero-text", "/zero", numericLabel("s01"), true, "not-numeric")
+	addNumeric("numeric-zero-bool", "/zero", numericLabel("s01"), true, true)
+	addNumeric("numeric-zero-null", "/zero", numericLabel("s01"), true, nil)
+	addNumeric("numeric-zero-missing", "/zero", numericLabel("s01"), false, nil)
+	addNumeric("numeric-null-text", "/zero", numericLabel("s02"), true, "still-not-numeric")
+	addNumeric("numeric-null-bool", "/zero", numericLabel("s02"), true, false)
+	addNumeric("numeric-null-explicit", "/zero", numericLabel("s02"), true, nil)
+	addNumeric("numeric-null-missing", "/zero", numericLabel("s02"), false, nil)
+	addNumeric("numeric-empty-text", "/empty", numericLabel("s03"), true, "never-numeric")
+	addNumeric("numeric-empty-bool", "/empty", numericLabel("s03"), true, true)
+	addNumeric("numeric-empty-null", "/empty", numericLabel("s03"), true, nil)
+	addNumeric("numeric-empty-missing", "/empty", numericLabel("s03"), false, nil)
 
 	add("underscore-audit", "chart-underscore", base, &info, pathSeries("/u", "_audit"))
 	add("underscore-z", "chart-underscore", base, &info, pathSeries("/u", "Z"))
