@@ -7,6 +7,79 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: protobuf HTTP forward compatibility
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `af8be1f` — tolerate syntactically valid unknown protobuf fields at every
+  protobuf HTTP route without weakening known-field or durable-state validation.
+
+This unit closes the architecture requirement that append-only protobuf changes
+remain forward compatible across rolling upgrades:
+
+1. All 49 protobuf POST routes now pass through one typed construction boundary.
+   Its iterative sanitizer discards unknown fields from the complete present
+   request graph, including singular messages, repeated messages, and
+   message-valued maps, before endpoint validation. The existing raw-body cap is
+   still enforced first, and known enum, oneof, field-mask, capability, and
+   required-field errors still fail closed.
+2. Unknown wire data is discarded only at the HTTP request compatibility
+   boundary. Internal durable-state decoding and service-response validation
+   remain strict, so corrupted stored or produced messages are not silently
+   accepted. The public contract explicitly does not promise to echo discarded
+   unknown request bytes.
+3. A production-linked AST inventory proves that every build-active protobuf
+   route uses the boundary and prevents direct, aliased, converted, indirect, or
+   mutable escape paths. The sole unwrap is an exact, non-aliasing projection
+   into SRouter, with count, order, and route identity pinned by unit tests.
+4. The checked-in cross-runtime manifest covers all 49 routes and all 98 request
+   and response message types. Go generates known and future wire fixtures;
+   generated TypeScript codecs prove semantic known-field parity and exact
+   reproduction of the appended future field. Representative nested request and
+   response contracts are also pinned independently.
+5. Request tests cover root and nested unknown fields across bootstrap, app,
+   collector, export, history, saved-search, search-inspection, and search-list
+   surfaces. Adversarial cases prove an unknown-only oversized body still returns
+   413 and that unknown fields cannot mask invalid known values or missing
+   required selectors.
+6. Two independent adversarial reviews found no remaining concrete construction,
+   projection, route-inventory, sanitizer, or runtime compatibility defect after
+   their demonstrated bypasses were closed.
+
+Validation for `af8be1f`:
+
+```sh
+git diff --check
+go mod tidy -diff
+go test ./... -count=1
+go test -race . ./internal/server -count=1
+go vet ./...
+CGO_ENABLED=0 go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=15m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend lint/type-check, all 65 build-transaction tests, all 140 frontend
+tests, and the 11-page production build passed. The final pinned backend
+vertical passed in 21.18 seconds (22.218-second package result), including
+collector/server crash recovery and all six GradeThis cases. No test-owned
+containers, volumes, or networks remained. The preceding main CI run
+`30830527194` was fully green. The external GradeThis Compose cutover remains
+explicitly deferred, and the broader backend/SPL goal remains active.
+
 ## Latest checkpoint: bounded ingestion-token host/source constraints
 
 Date: 2026-08-03
