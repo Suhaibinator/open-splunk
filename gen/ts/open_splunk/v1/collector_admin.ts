@@ -195,7 +195,11 @@ export interface CollectorAdministrationSnapshot {
 
 export interface IngestionTokenConstraints {
   allowedIndexNames: string[];
-  /** Regexes use Go/RE2 syntax and must match the complete host/source value. */
+  /**
+   * Regexes use Go/RE2 syntax and must match the complete host/source value.
+   * Bounds, normalization, and matching semantics are normative in
+   * docs/ingestion-token-constraints-v0.1.md.
+   */
   allowedHostRegexes: string[];
   allowedSourceRegexes: string[];
   boundCollectorId?: string | undefined;

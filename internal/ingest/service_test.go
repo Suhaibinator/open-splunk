@@ -966,7 +966,7 @@ func TestProcessBatchPendingReservationGoneDefersToIndexAuthority(t *testing.T) 
 		validTestEvent("event-one", "main"),
 	)
 
-	response, processErr := service.processBatchWithIndexAuthority(
+	response, processErr := service.processBatchWithDeferredAuthority(
 		context.Background(), batch, state, validationTestNow, ErrNoActiveIndexAuthority,
 	)
 	if response != nil || status.Code(processErr) != codes.Unauthenticated {

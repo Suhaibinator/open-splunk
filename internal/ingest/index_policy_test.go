@@ -1123,7 +1123,7 @@ func TestProcessBatchDeferredIndexAuthorityMasksEveryUnprovenDurableOutcome(t *t
 			if test.setup != nil {
 				test.setup(t, service, state, batch)
 			}
-			response, err := service.processBatchWithIndexAuthority(
+			response, err := service.processBatchWithDeferredAuthority(
 				context.Background(),
 				batch,
 				state,

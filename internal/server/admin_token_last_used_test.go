@@ -302,6 +302,8 @@ func (administration *mutableTokenAdministration) setBoundCollectorID(
 
 func cloneAdminToken(record auth.CollectorToken) auth.CollectorToken {
 	record.AllowedIndexNames = slices.Clone(record.AllowedIndexNames)
+	record.AllowedHostRegexes = slices.Clone(record.AllowedHostRegexes)
+	record.AllowedSourceRegexes = slices.Clone(record.AllowedSourceRegexes)
 	return record
 }
 

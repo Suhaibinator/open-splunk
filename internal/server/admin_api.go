@@ -33,6 +33,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
+	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -1920,8 +1921,19 @@ func tokenDefinitionFromProtoWithCurrentBinding(
 	if constraints == nil {
 		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token constraints are required")
 	}
-	if len(constraints.GetAllowedHostRegexes()) != 0 || len(constraints.GetAllowedSourceRegexes()) != 0 {
-		return auth.UpdateCollectorTokenRequest{}, errors.New("host and source token constraints are not supported by this API version")
+	allowedHostRegexes, err := normalizeTokenConstraintRegexes(
+		constraints.GetAllowedHostRegexes(),
+		"host",
+	)
+	if err != nil {
+		return auth.UpdateCollectorTokenRequest{}, err
+	}
+	allowedSourceRegexes, err := normalizeTokenConstraintRegexes(
+		constraints.GetAllowedSourceRegexes(),
+		"source",
+	)
+	if err != nil {
+		return auth.UpdateCollectorTokenRequest{}, err
 	}
 	boundCollectorID, err := tokenCollectorBinding(constraints, currentBinding, requireBinding)
 	if err != nil {
@@ -1956,9 +1968,19 @@ func tokenDefinitionFromProtoWithCurrentBinding(
 	}
 	return auth.UpdateCollectorTokenRequest{
 		Name: name, Description: description, BoundCollectorID: boundCollectorID,
-		AllowedIndexNames: allowedIndexes, ExpiresAt: expiresAt,
+		AllowedIndexNames:  allowedIndexes,
+		AllowedHostRegexes: allowedHostRegexes, AllowedSourceRegexes: allowedSourceRegexes,
+		ExpiresAt:           expiresAt,
 		IngestionRateLimits: rateLimits,
 	}, nil
+}
+
+func normalizeTokenConstraintRegexes(input []string, dimension string) ([]string, error) {
+	result, err := tokenconstraint.Normalize(input)
+	if err != nil {
+		return nil, fmt.Errorf("ingestion token %s constraints are invalid", dimension)
+	}
+	return result, nil
 }
 
 func tokenCollectorBinding(
@@ -2013,9 +2035,12 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 	}
 	result := auth.UpdateCollectorTokenRequest{
 		Name: current.Name, Description: current.Description,
-		BoundCollectorID:  current.BoundCollectorID,
-		AllowedIndexNames: slices.Clone(current.AllowedIndexNames), ExpiresAt: current.ExpiresAt,
-		IngestionRateLimits: current.IngestionRateLimits,
+		BoundCollectorID:     current.BoundCollectorID,
+		AllowedIndexNames:    slices.Clone(current.AllowedIndexNames),
+		AllowedHostRegexes:   slices.Clone(current.AllowedHostRegexes),
+		AllowedSourceRegexes: slices.Clone(current.AllowedSourceRegexes),
+		ExpiresAt:            current.ExpiresAt,
+		IngestionRateLimits:  current.IngestionRateLimits,
 	}
 	for _, path := range paths {
 		switch path {
@@ -2036,6 +2061,8 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 				return auth.UpdateCollectorTokenRequest{}, err
 			}
 			result.AllowedIndexNames = parsed.AllowedIndexNames
+			result.AllowedHostRegexes = parsed.AllowedHostRegexes
+			result.AllowedSourceRegexes = parsed.AllowedSourceRegexes
 			result.BoundCollectorID = parsed.BoundCollectorID
 		case "constraints.bound_collector_id":
 			constraints := input.GetConstraints()
@@ -2095,6 +2122,12 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 		}
 		previousScope = scope
 	}
+	if err := tokenconstraint.ValidateNormalized(record.AllowedHostRegexes); err != nil {
+		return nil, errors.New("invalid ingestion token host constraints")
+	}
+	if err := tokenconstraint.ValidateNormalized(record.AllowedSourceRegexes); err != nil {
+		return nil, errors.New("invalid ingestion token source constraints")
+	}
 	created, err := validTimestamp(record.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -2117,8 +2150,12 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 	result := &opensplunkv1.IngestionToken{
 		IngestionTokenId: record.ID, Version: record.Version, Name: record.Name,
 		TokenPrefix: record.Prefix, State: state,
-		Constraints: &opensplunkv1.IngestionTokenConstraints{AllowedIndexNames: slices.Clone(record.AllowedIndexNames)},
-		CreatedAt:   created, UpdatedAt: updated,
+		Constraints: &opensplunkv1.IngestionTokenConstraints{
+			AllowedIndexNames:    slices.Clone(record.AllowedIndexNames),
+			AllowedHostRegexes:   slices.Clone(record.AllowedHostRegexes),
+			AllowedSourceRegexes: slices.Clone(record.AllowedSourceRegexes),
+		},
+		CreatedAt: created, UpdatedAt: updated,
 		IngestionRateLimits: ingestionRateLimitsToProto(record.IngestionRateLimits),
 	}
 	if record.Description != "" {

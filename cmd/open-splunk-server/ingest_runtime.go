@@ -156,11 +156,13 @@ func (authorizer collectorAuthorizer) Authorize(ctx context.Context, token strin
 		return ingest.Authorization{}, ingest.ErrUnauthorized
 	}
 	return ingest.Authorization{
-		SubjectID:         authentication.TokenID,
-		TenantID:          authorizer.tenantID,
-		CollectorID:       authentication.BoundCollectorID,
-		TokenRateLimits:   authentication.TokenRateLimits,
-		AuthorizedIndexes: slices.Clone(authentication.AuthorizedIndexes),
+		SubjectID:            authentication.TokenID,
+		TenantID:             authorizer.tenantID,
+		CollectorID:          authentication.BoundCollectorID,
+		TokenRateLimits:      authentication.TokenRateLimits,
+		AuthorizedIndexes:    slices.Clone(authentication.AuthorizedIndexes),
+		AllowedHostRegexes:   slices.Clone(authentication.AllowedHostRegexes),
+		AllowedSourceRegexes: slices.Clone(authentication.AllowedSourceRegexes),
 	}, nil
 }
 
@@ -256,7 +258,8 @@ func (manager collectorSessionManager) AuthorizeLease(
 	if err != nil {
 		mapped := mapCollectorSessionError(err)
 		if errors.Is(mapped, ingest.ErrNoActiveIndexAuthority) ||
-			errors.Is(mapped, ingest.ErrInvalidIndexAuthority) {
+			errors.Is(mapped, ingest.ErrInvalidIndexAuthority) ||
+			errors.Is(mapped, ingest.ErrInvalidEventAuthority) {
 			return collectorAuthenticationAuthorization(
 				authentication,
 				lease.TenantID,
@@ -329,11 +332,13 @@ func collectorAuthenticationAuthorization(
 	tenantID string,
 ) ingest.Authorization {
 	return ingest.Authorization{
-		SubjectID:         authentication.TokenID,
-		TenantID:          tenantID,
-		CollectorID:       authentication.BoundCollectorID,
-		TokenRateLimits:   authentication.TokenRateLimits,
-		AuthorizedIndexes: slices.Clone(authentication.AuthorizedIndexes),
+		SubjectID:            authentication.TokenID,
+		TenantID:             tenantID,
+		CollectorID:          authentication.BoundCollectorID,
+		TokenRateLimits:      authentication.TokenRateLimits,
+		AuthorizedIndexes:    slices.Clone(authentication.AuthorizedIndexes),
+		AllowedHostRegexes:   slices.Clone(authentication.AllowedHostRegexes),
+		AllowedSourceRegexes: slices.Clone(authentication.AllowedSourceRegexes),
 	}
 }
 
@@ -345,6 +350,8 @@ func mapCollectorSessionError(err error) error {
 		return ingest.ErrNoActiveIndexAuthority
 	case errors.Is(err, auth.ErrInvalidIndexAuthority):
 		return ingest.ErrInvalidIndexAuthority
+	case errors.Is(err, auth.ErrInvalidEventAuthority):
+		return ingest.ErrInvalidEventAuthority
 	case errors.Is(err, auth.ErrUnauthorized),
 		errors.Is(err, auth.ErrInactiveToken):
 		return ingest.ErrUnauthorized

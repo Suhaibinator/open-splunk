@@ -13,8 +13,9 @@ import (
 // checkedAt and resolves its complete current ingestion scope using a
 // caller-owned transaction. It does not record token use and neither commits
 // nor rolls back transaction. A verified identity may accompany
-// ErrNoActiveIndexAuthority or ErrInvalidIndexAuthority so an exact current
-// lease can recover a durable batch outcome before mutable scope is enforced.
+// ErrNoActiveIndexAuthority, ErrInvalidIndexAuthority, or
+// ErrInvalidEventAuthority so an exact current lease can recover a durable
+// batch outcome before mutable authority is enforced.
 //
 // Callers must use an active transaction from the same migrated control
 // database and include every other authorization-boundary read in that

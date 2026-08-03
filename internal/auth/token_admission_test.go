@@ -171,6 +171,18 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 			},
 			want: ErrInvalidIndexAuthority,
 		},
+		{
+			name: "invalid event constraint",
+			mutate: func(t *testing.T, ctx context.Context, database *control.DB, _ control.Index) {
+				if _, err := database.SQLDB().ExecContext(ctx, `
+					UPDATE ingestion_token_constraints
+					SET pattern = '['
+					WHERE constraint_kind = 'host'`); err != nil {
+					t.Fatalf("corrupt event constraint: %v", err)
+				}
+			},
+			want: ErrInvalidEventAuthority,
+		},
 	}
 
 	for _, test := range tests {
@@ -192,6 +204,7 @@ func TestLeaseRevalidationReturnsIdentityWithDeferredIndexAuthorityOnly(t *testi
 			store.now = func() time.Time { return createdAt }
 			issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
 				Name: "collector", AllowedIndexNames: []string{"main"}, BoundCollectorID: testCollectorID,
+				AllowedHostRegexes: []string{"^valid$"},
 			})
 			if err != nil {
 				t.Fatalf("CreateCollectorToken(): %v", err)

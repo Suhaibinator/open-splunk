@@ -60,26 +60,6 @@ func TestIngestionTokenCollectorBindingValidation(t *testing.T) {
 			}
 		})
 	}
-
-	for name, constraints := range map[string]*opensplunkv1.IngestionTokenConstraints{
-		"host": {
-			AllowedIndexNames: []string{"main"}, AllowedHostRegexes: []string{".*"},
-			BoundCollectorId: stringPointer("collector-host"),
-		},
-		"source": {
-			AllowedIndexNames: []string{"main"}, AllowedSourceRegexes: []string{".*"},
-			BoundCollectorId: stringPointer("collector-source"),
-		},
-	} {
-		t.Run("unsupported "+name+" regex", func(t *testing.T) {
-			t.Parallel()
-			if _, err := tokenDefinitionFromProto(&opensplunkv1.IngestionTokenDefinition{
-				Name: "token", Constraints: constraints,
-			}); err == nil {
-				t.Fatalf("%s regex was accepted", name)
-			}
-		})
-	}
 }
 
 func TestApplyIngestionTokenUpdatePreservesAndFencesCollectorBinding(t *testing.T) {

@@ -67,6 +67,20 @@ CREATE TABLE ingestion_token_indexes (
 CREATE INDEX ingestion_token_indexes_index_idx
     ON ingestion_token_indexes (index_id, ingestion_token_id);
 
+CREATE TABLE ingestion_token_constraints (
+    ingestion_token_id TEXT NOT NULL
+        REFERENCES ingestion_tokens (ingestion_token_id)
+            ON UPDATE RESTRICT
+            ON DELETE CASCADE,
+    constraint_kind TEXT NOT NULL COLLATE BINARY
+        CHECK (constraint_kind IN ('host', 'source')),
+    ordinal INTEGER NOT NULL CHECK (ordinal BETWEEN 0 AND 15),
+    pattern TEXT NOT NULL COLLATE BINARY,
+    PRIMARY KEY (ingestion_token_id, constraint_kind, ordinal),
+    CHECK (length(CAST(pattern AS BLOB)) BETWEEN 1 AND 512),
+    CHECK (instr(CAST(pattern AS BLOB), X'00') = 0)
+) STRICT, WITHOUT ROWID;
+
 CREATE TRIGGER ingestion_token_digest_is_immutable
 BEFORE UPDATE OF token_digest ON ingestion_tokens
 WHEN NEW.token_digest <> OLD.token_digest

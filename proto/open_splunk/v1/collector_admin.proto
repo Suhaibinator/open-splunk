@@ -67,6 +67,8 @@ enum IngestionTokenState {
 message IngestionTokenConstraints {
   repeated string allowed_index_names = 1;
   // Regexes use Go/RE2 syntax and must match the complete host/source value.
+  // Bounds, normalization, and matching semantics are normative in
+  // docs/ingestion-token-constraints-v0.1.md.
   repeated string allowed_host_regexes = 2;
   repeated string allowed_source_regexes = 3;
   optional string bound_collector_id = 4;

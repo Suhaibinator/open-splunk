@@ -23,28 +23,28 @@ func (s *Service) processBatch(
 	state *streamState,
 	boundaryAt time.Time,
 ) (*opensplunkv1.CollectResponse, error) {
-	return s.processBatchWithIndexAuthority(ctx, batch, state, boundaryAt, nil)
+	return s.processBatchWithDeferredAuthority(ctx, batch, state, boundaryAt, nil)
 }
 
-func (s *Service) processBatchWithIndexAuthority(
+func (s *Service) processBatchWithDeferredAuthority(
 	ctx context.Context,
 	batch *opensplunkv1.EventBatch,
 	state *streamState,
 	boundaryAt time.Time,
-	deferredIndexAuthority error,
+	deferredAuthority error,
 ) (*opensplunkv1.CollectResponse, error) {
 	state.pendingThrottle = nil
 	if rejection := s.validateBatchHardEnvelope(batch, state); rejection != nil {
-		if deferredIndexAuthority != nil {
-			return nil, indexAuthorityRPCError(deferredIndexAuthority)
+		if deferredAuthority != nil {
+			return nil, authorityRPCError(deferredAuthority)
 		}
 		return responseWithBatchReject(rejection), nil
 	}
 
 	identity, err := batchFingerprint(batch)
 	if err != nil {
-		if deferredIndexAuthority != nil {
-			return nil, indexAuthorityRPCError(deferredIndexAuthority)
+		if deferredAuthority != nil {
+			return nil, authorityRPCError(deferredAuthority)
 		}
 		return responseWithBatchReject(batchRejection(
 			batch,
@@ -55,8 +55,8 @@ func (s *Service) processBatchWithIndexAuthority(
 		)), nil
 	}
 	if rejection := pendingBatchIdentityConflict(state, batch.GetBatchSequence(), identity); rejection != nil {
-		if deferredIndexAuthority != nil {
-			return nil, indexAuthorityRPCError(deferredIndexAuthority)
+		if deferredAuthority != nil {
+			return nil, authorityRPCError(deferredAuthority)
 		}
 		return responseWithRetryBatch(
 			batch,
@@ -75,8 +75,8 @@ func (s *Service) processBatchWithIndexAuthority(
 	if recoverable, ok := s.store.(RecoverableEventStore); ok {
 		storedState, result, lookupErr := recoverable.LookupBatch(ctx, durableIdentity)
 		if lookupErr != nil {
-			if deferredIndexAuthority != nil {
-				return nil, indexAuthorityRPCError(deferredIndexAuthority)
+			if deferredAuthority != nil {
+				return nil, authorityRPCError(deferredAuthority)
 			}
 			return s.storeFailure(batch, state, lookupErr)
 		}
@@ -99,15 +99,15 @@ func (s *Service) processBatchWithIndexAuthority(
 			result, resumeErr := recoverable.ResumeBatch(ctx, durableIdentity)
 			if resumeErr != nil {
 				if isStoredBatchGone(resumeErr) {
-					if deferredIndexAuthority != nil {
-						return nil, indexAuthorityRPCError(deferredIndexAuthority)
+					if deferredAuthority != nil {
+						return nil, authorityRPCError(deferredAuthority)
 					}
 					break
 				}
 				if isDurableIdentityConflict(resumeErr) {
 					observeBatchSequence(state, batch.GetBatchSequence())
-					if deferredIndexAuthority != nil {
-						return nil, indexAuthorityRPCError(deferredIndexAuthority)
+					if deferredAuthority != nil {
+						return nil, authorityRPCError(deferredAuthority)
 					}
 					completeBatchIdentity(state, batch.GetBatchSequence(), identity)
 					return s.storeFailure(batch, state, resumeErr)
@@ -132,14 +132,14 @@ func (s *Service) processBatchWithIndexAuthority(
 			return s.responseForStoredBatch(batch, result, nil)
 		case StoredBatchNotFound:
 		default:
-			if deferredIndexAuthority != nil {
-				return nil, indexAuthorityRPCError(deferredIndexAuthority)
+			if deferredAuthority != nil {
+				return nil, authorityRPCError(deferredAuthority)
 			}
 			return nil, status.Error(codes.Internal, "event store returned an invalid durable batch state")
 		}
 	}
-	if deferredIndexAuthority != nil {
-		return nil, indexAuthorityRPCError(deferredIndexAuthority)
+	if deferredAuthority != nil {
+		return nil, authorityRPCError(deferredAuthority)
 	}
 
 	receivedAt, rejection, atCapacity := recordBatchIdentity(
@@ -251,6 +251,14 @@ func (s *Service) processBatchWithIndexAuthority(
 				eventID = event.GetEventId()
 			}
 			rejections = append(rejections, toProtoRejection(uint32(eventIndex), eventID, eventErr))
+			continue
+		}
+		if eventErr := state.eventAuthorization.rejection(normalizedEvent); eventErr != nil {
+			rejections = append(rejections, toProtoRejection(
+				uint32(eventIndex),
+				normalizedEvent.Event.GetEventId(),
+				eventErr,
+			))
 			continue
 		}
 		normalized = append(normalized, normalizedEvent)

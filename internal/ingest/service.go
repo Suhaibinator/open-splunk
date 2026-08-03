@@ -215,6 +215,13 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 		!validIdentifier(authorization.CollectorID, s.config.Limits.MaxIDBytes) {
 		return status.Error(codes.Unavailable, "collector authentication service is unavailable")
 	}
+	if _, err := compileEventAuthorization(authorization); err != nil {
+		return status.Error(
+			codes.Unavailable,
+			"collector authentication service returned invalid event authority",
+		)
+	}
+	authorization = cloneAuthorization(authorization)
 	collectorKey := CollectorStreamKey{
 		TenantID:    authorization.TenantID,
 		CollectorID: authorization.CollectorID,
@@ -310,7 +317,14 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	); err != nil {
 		return err
 	}
-	authorization = session.Authorization
+	eventAuthorization, err := compileEventAuthorization(session.Authorization)
+	if err != nil {
+		return status.Error(
+			codes.Unavailable,
+			"collector admission service returned invalid event authority",
+		)
+	}
+	authorization = cloneAuthorization(session.Authorization)
 	if err := authorization.TokenRateLimits.Validate(); err != nil {
 		return status.Error(
 			codes.Unavailable,
@@ -364,12 +378,13 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 	defer cancelAuthorization()
 
 	state := streamState{
-		collectorID:   hello.GetCollectorId(),
-		instanceID:    hello.GetInstanceId(),
-		protocolMajor: hello.GetProtocolMajor(),
-		protocolMinor: hello.GetProtocolMinor(),
-		authorization: authorization,
-		indexPolicies: resolvedIndexes.byName,
+		collectorID:        hello.GetCollectorId(),
+		instanceID:         hello.GetInstanceId(),
+		protocolMajor:      hello.GetProtocolMajor(),
+		protocolMinor:      hello.GetProtocolMinor(),
+		authorization:      authorization,
+		indexPolicies:      resolvedIndexes.byName,
+		eventAuthorization: eventAuthorization,
 	}
 	responseSequence := uint64(1)
 	if err := stream.Send(&opensplunkv1.CollectResponse{
@@ -437,10 +452,10 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			}
 			heartbeatSnapshot = &snapshot
 		}
-		var deferredIndexAuthority, authorizationErr error
+		var deferredAuthority, authorizationErr error
 		switch request.GetPayload().(type) {
 		case *opensplunkv1.CollectRequest_Heartbeat, *opensplunkv1.CollectRequest_Batch:
-			deferredIndexAuthority, authorizationErr = s.refreshLeaseAuthorization(
+			deferredAuthority, authorizationErr = s.refreshLeaseAuthorization(
 				authorizationContext,
 				token,
 				lease.Lease,
@@ -455,8 +470,8 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			return authorizationErr
 		}
 		if _, heartbeat := request.GetPayload().(*opensplunkv1.CollectRequest_Heartbeat); heartbeat &&
-			deferredIndexAuthority != nil {
-			return indexAuthorityRPCError(deferredIndexAuthority)
+			deferredAuthority != nil {
+			return authorityRPCError(deferredAuthority)
 		}
 		expectedRequestSequence++
 
@@ -487,12 +502,12 @@ func (s *Service) Collect(stream opensplunkv1.CollectorIngestService_CollectServ
 			}
 			return nil
 		case *opensplunkv1.CollectRequest_Batch:
-			response, err := s.processBatchWithIndexAuthority(
+			response, err := s.processBatchWithDeferredAuthority(
 				stream.Context(),
 				payload.Batch,
 				&state,
 				boundaryAt,
-				deferredIndexAuthority,
+				deferredAuthority,
 			)
 			if err != nil {
 				return err
@@ -829,15 +844,17 @@ func (s *Service) refreshLeaseAuthorization(
 	lease collectorfleet.Lease,
 	checkedAt time.Time,
 	state *streamState,
-) (deferredIndexAuthority error, fatalErr error) {
+) (deferredAuthority error, fatalErr error) {
 	authorization, err := s.sessionManager.AuthorizeLease(
 		ctx,
 		token,
 		lease,
 		checkedAt,
 	)
-	deferred := errors.Is(err, ErrNoActiveIndexAuthority) ||
+	deferredIndex := errors.Is(err, ErrNoActiveIndexAuthority) ||
 		errors.Is(err, ErrInvalidIndexAuthority)
+	deferredEvent := errors.Is(err, ErrInvalidEventAuthority)
+	deferred := deferredIndex || deferredEvent
 	if err != nil && !deferred {
 		if errors.Is(err, ErrCollectorLeaseNotCurrent) {
 			return nil, supersededStreamRPCError()
@@ -876,7 +893,10 @@ func (s *Service) refreshLeaseAuthorization(
 	if authorization.SubjectID != state.authorization.SubjectID {
 		return nil, status.Error(codes.PermissionDenied, "collector principal changed during the stream")
 	}
-	if deferred {
+	if deferredEvent {
+		return ErrInvalidEventAuthority, nil
+	}
+	if deferredIndex {
 		if len(authorization.AuthorizedIndexes) != 0 {
 			return nil, status.Error(codes.Unavailable, "collector authentication service is unavailable")
 		}
@@ -885,9 +905,23 @@ func (s *Service) refreshLeaseAuthorization(
 	if len(authorization.AuthorizedIndexes) == 0 {
 		return nil, status.Error(codes.Unavailable, "collector authentication service is unavailable")
 	}
+	eventAuthorization, eventAuthorityErr := refreshEventAuthorization(
+		state.eventAuthorization,
+		state.authorization,
+		authorization,
+	)
+	if eventAuthorityErr != nil {
+		return ErrInvalidEventAuthority, nil
+	}
 	if authorization.TokenRateLimits == state.authorization.TokenRateLimits && slices.Equal(
 		authorization.AuthorizedIndexes,
 		state.authorization.AuthorizedIndexes,
+	) && slices.Equal(
+		authorization.AllowedHostRegexes,
+		state.authorization.AllowedHostRegexes,
+	) && slices.Equal(
+		authorization.AllowedSourceRegexes,
+		state.authorization.AllowedSourceRegexes,
 	) {
 		for _, policy := range authorization.AuthorizedIndexes {
 			if _, policyErr := policy.ResolveRetentionAt(
@@ -906,13 +940,15 @@ func (s *Service) refreshLeaseAuthorization(
 	if !indexesValid {
 		return ErrInvalidIndexAuthority, nil
 	}
+	authorization = cloneAuthorization(authorization)
 	authorization.AuthorizedIndexes = resolvedIndexes.policies
 	state.authorization = authorization
 	state.indexPolicies = resolvedIndexes.byName
+	state.eventAuthorization = eventAuthorization
 	return nil, nil
 }
 
-func indexAuthorityRPCError(err error) error {
+func authorityRPCError(err error) error {
 	switch {
 	case errors.Is(err, ErrNoActiveIndexAuthority):
 		return status.Error(codes.Unauthenticated, "collector authentication is no longer valid")
@@ -920,6 +956,11 @@ func indexAuthorityRPCError(err error) error {
 		return status.Error(
 			codes.Unavailable,
 			"collector authentication service returned invalid index authority",
+		)
+	case errors.Is(err, ErrInvalidEventAuthority):
+		return status.Error(
+			codes.Unavailable,
+			"collector authentication service returned invalid event authority",
 		)
 	default:
 		return status.Error(codes.Unavailable, "collector authentication service is unavailable")
@@ -1069,13 +1110,14 @@ func (s *Service) validateHeartbeat(
 }
 
 type streamState struct {
-	collectorID     string
-	instanceID      string
-	protocolMajor   uint32
-	protocolMinor   uint32
-	authorization   Authorization
-	indexPolicies   map[string]resolvedIndexPolicy
-	pendingThrottle *opensplunkv1.Throttle
+	collectorID        string
+	instanceID         string
+	protocolMajor      uint32
+	protocolMinor      uint32
+	authorization      Authorization
+	indexPolicies      map[string]resolvedIndexPolicy
+	eventAuthorization eventAuthorizationMatcher
+	pendingThrottle    *opensplunkv1.Throttle
 
 	hasHighestBatchSequence bool
 	highestBatchSequence    uint64

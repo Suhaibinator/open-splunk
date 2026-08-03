@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -213,6 +214,8 @@ func TestBackendVertical(t *testing.T) {
 		"backend-vertical-collector",
 		verticalIndexName,
 		collectorID,
+		[]string{`vertical-host`},
+		[]string{`app\.log`},
 	)
 	serverSecrets := []string{
 		administratorToken,
@@ -723,6 +726,8 @@ func createIndexScopedIngestionToken(
 	name string,
 	indexName string,
 	collectorID string,
+	allowedHostRegexes []string,
+	allowedSourceRegexes []string,
 ) string {
 	t.Helper()
 	var created opensplunkv1.CreateIngestionTokenResponse
@@ -736,8 +741,10 @@ func createIndexScopedIngestionToken(
 			Definition: &opensplunkv1.IngestionTokenDefinition{
 				Name: name,
 				Constraints: &opensplunkv1.IngestionTokenConstraints{
-					AllowedIndexNames: []string{indexName},
-					BoundCollectorId:  &collectorID,
+					AllowedIndexNames:    []string{indexName},
+					AllowedHostRegexes:   slices.Clone(allowedHostRegexes),
+					AllowedSourceRegexes: slices.Clone(allowedSourceRegexes),
+					BoundCollectorId:     &collectorID,
 				},
 			},
 		},
@@ -747,6 +754,8 @@ func createIndexScopedIngestionToken(
 	metadata := created.GetIngestionToken()
 	if plaintext == "" || metadata.GetVersion() != 1 ||
 		metadata.GetConstraints().GetBoundCollectorId() != collectorID ||
+		!slices.Equal(metadata.GetConstraints().GetAllowedHostRegexes(), allowedHostRegexes) ||
+		!slices.Equal(metadata.GetConstraints().GetAllowedSourceRegexes(), allowedSourceRegexes) ||
 		!strings.HasPrefix(plaintext, metadata.GetTokenPrefix()) {
 		t.Fatalf(
 			"created ingestion token %q metadata = %+v, plaintext length = %d",
@@ -819,6 +828,8 @@ func assertCurrentGradeThisMigration(
 		"gradethis-current-migration",
 		gradethiscorpus.MigrationIndexName,
 		collectorID,
+		[]string{`gradethis-integration-host`},
+		[]string{`gradethis-backend`},
 	)
 	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
 

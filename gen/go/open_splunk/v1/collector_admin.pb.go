@@ -453,6 +453,8 @@ type IngestionTokenConstraints struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	AllowedIndexNames []string               `protobuf:"bytes,1,rep,name=allowed_index_names,json=allowedIndexNames,proto3" json:"allowed_index_names,omitempty"`
 	// Regexes use Go/RE2 syntax and must match the complete host/source value.
+	// Bounds, normalization, and matching semantics are normative in
+	// docs/ingestion-token-constraints-v0.1.md.
 	AllowedHostRegexes   []string `protobuf:"bytes,2,rep,name=allowed_host_regexes,json=allowedHostRegexes,proto3" json:"allowed_host_regexes,omitempty"`
 	AllowedSourceRegexes []string `protobuf:"bytes,3,rep,name=allowed_source_regexes,json=allowedSourceRegexes,proto3" json:"allowed_source_regexes,omitempty"`
 	BoundCollectorId     *string  `protobuf:"bytes,4,opt,name=bound_collector_id,json=boundCollectorId,proto3,oneof" json:"bound_collector_id,omitempty"`

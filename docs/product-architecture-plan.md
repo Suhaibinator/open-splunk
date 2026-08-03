@@ -1454,7 +1454,9 @@ The SPL editor should eventually share the Go grammar through generated syntax m
 Security is part of the data model, not a later middleware task.
 
 - Store ingestion tokens only as hashes; show plaintext once at creation.
-- Scope tokens to explicit indexes and optional source/host constraints.
+- Scope tokens to explicit indexes and optional source/host constraints. The
+  first-release matching, resource, rejection, and replay semantics are
+  normative in [Ingestion token host/source constraints v0.1](ingestion-token-constraints-v0.1.md).
 - Intersect every search with RBAC-authorized indexes in the logical plan.
 - Parameterize values and quote identifiers through a single ClickHouse compiler path.
 - Require authenticated TLS with explicit trust and hostname verification for non-loopback ClickHouse traffic.

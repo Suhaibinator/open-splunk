@@ -88,3 +88,29 @@ func TestCollectorServiceDescriptorIsBidirectionalStreaming(t *testing.T) {
 		t.Fatalf("unexpected response type: %s", got)
 	}
 }
+
+func TestEventRejectionAuthorizationCodesKeepStableWireNumbers(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		code opensplunkv1.EventRejectionCode
+		want int32
+	}{
+		"host": {
+			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_HOST,
+			want: 11,
+		},
+		"source": {
+			code: opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE,
+			want: 12,
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := int32(test.code); got != test.want {
+				t.Fatalf("wire number = %d, want %d", got, test.want)
+			}
+		})
+	}
+}

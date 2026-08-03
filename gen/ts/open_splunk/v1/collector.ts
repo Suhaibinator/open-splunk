@@ -248,6 +248,10 @@ export function ackDurabilityToJSON(object: AckDurability): string {
   }
 }
 
+/**
+ * Host/source rejection precedence and public violations are normative in
+ * docs/ingestion-token-constraints-v0.1.md.
+ */
 export enum EventRejectionCode {
   EVENT_REJECTION_CODE_UNSPECIFIED = 0,
   EVENT_REJECTION_CODE_INVALID_EVENT_ID = 1,
@@ -260,6 +264,8 @@ export enum EventRejectionCode {
   EVENT_REJECTION_CODE_NESTING_TOO_DEEP = 8,
   EVENT_REJECTION_CODE_VALUE_INVALID = 9,
   EVENT_REJECTION_CODE_REDACTION_POLICY = 10,
+  EVENT_REJECTION_CODE_UNAUTHORIZED_HOST = 11,
+  EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE = 12,
   UNRECOGNIZED = -1,
 }
 
@@ -298,6 +304,12 @@ export function eventRejectionCodeFromJSON(object: any): EventRejectionCode {
     case 10:
     case "EVENT_REJECTION_CODE_REDACTION_POLICY":
       return EventRejectionCode.EVENT_REJECTION_CODE_REDACTION_POLICY;
+    case 11:
+    case "EVENT_REJECTION_CODE_UNAUTHORIZED_HOST":
+      return EventRejectionCode.EVENT_REJECTION_CODE_UNAUTHORIZED_HOST;
+    case 12:
+    case "EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE":
+      return EventRejectionCode.EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -329,6 +341,10 @@ export function eventRejectionCodeToJSON(object: EventRejectionCode): string {
       return "EVENT_REJECTION_CODE_VALUE_INVALID";
     case EventRejectionCode.EVENT_REJECTION_CODE_REDACTION_POLICY:
       return "EVENT_REJECTION_CODE_REDACTION_POLICY";
+    case EventRejectionCode.EVENT_REJECTION_CODE_UNAUTHORIZED_HOST:
+      return "EVENT_REJECTION_CODE_UNAUTHORIZED_HOST";
+    case EventRejectionCode.EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE:
+      return "EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE";
     case EventRejectionCode.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

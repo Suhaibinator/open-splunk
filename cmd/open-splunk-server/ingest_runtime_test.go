@@ -134,13 +134,19 @@ func TestCollectorAuthorizerMapsCurrentTokenScopeWithoutAliasing(t *testing.T) {
 	}
 	store := fakeCollectorAuthenticationStore{authentication: auth.Authentication{
 		TokenID: "token-id", BoundCollectorID: "collector-id", AuthorizedIndexes: indexes,
+		AllowedHostRegexes:   []string{`^host$`},
+		AllowedSourceRegexes: []string{`^/var/log/app\.log$`},
 	}}
 	authorization, err := (collectorAuthorizer{store: store, tenantID: "tenant"}).Authorize(context.Background(), "secret")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if authorization.SubjectID != "token-id" || authorization.TenantID != "tenant" ||
-		authorization.CollectorID != "collector-id" || len(authorization.AuthorizedIndexes) != 2 {
+		authorization.CollectorID != "collector-id" || len(authorization.AuthorizedIndexes) != 2 ||
+		len(authorization.AllowedHostRegexes) != 1 ||
+		len(authorization.AllowedSourceRegexes) != 1 ||
+		authorization.AllowedHostRegexes[0] != `^host$` ||
+		authorization.AllowedSourceRegexes[0] != `^/var/log/app\.log$` {
 		t.Fatalf("authorization = %+v", authorization)
 	}
 	if got := authorization.AuthorizedIndexes[0]; got.Name != "audit" ||
@@ -149,8 +155,14 @@ func TestCollectorAuthorizerMapsCurrentTokenScopeWithoutAliasing(t *testing.T) {
 		t.Fatalf("mapped index policy = %+v", got)
 	}
 	authorization.AuthorizedIndexes[0].Name = "changed"
+	authorization.AllowedHostRegexes[0] = "changed"
+	authorization.AllowedSourceRegexes[0] = "changed"
 	if indexes[0].Name != "audit" {
 		t.Fatal("authorization aliases authentication scope")
+	}
+	if store.authentication.AllowedHostRegexes[0] != `^host$` ||
+		store.authentication.AllowedSourceRegexes[0] != `^/var/log/app\.log$` {
+		t.Fatal("authorization aliases authentication event constraints")
 	}
 }
 
@@ -206,6 +218,8 @@ func TestCollectorSessionManagerAdmitsAndDetachesFreshAuthority(t *testing.T) {
 		runtimeAuthorizedIndexPolicy("audit", 7*24*time.Hour),
 		runtimeAuthorizedIndexPolicy("main", 30*24*time.Hour),
 	}
+	hosts := []string{`^host$`}
+	sources := []string{`^/var/log/app\.log$`}
 	lease := collectorfleet.Lease{
 		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
 		CollectorID: "collector-a",
@@ -216,9 +230,11 @@ func TestCollectorSessionManagerAdmitsAndDetachesFreshAuthority(t *testing.T) {
 	store := &fakeCollectorAdmissionRuntimeStore{
 		admitResult: collectoradmission.Result{
 			Authentication: auth.Authentication{
-				TokenID:           "token-safe-id",
-				BoundCollectorID:  "collector-a",
-				AuthorizedIndexes: indexes,
+				TokenID:              "token-safe-id",
+				BoundCollectorID:     "collector-a",
+				AuthorizedIndexes:    indexes,
+				AllowedHostRegexes:   hosts,
+				AllowedSourceRegexes: sources,
 			},
 			Lease: lease,
 		},
@@ -245,12 +261,70 @@ func TestCollectorSessionManagerAdmitsAndDetachesFreshAuthority(t *testing.T) {
 	if got.Lease != lease ||
 		got.Authorization.SubjectID != "token-safe-id" ||
 		got.Authorization.TenantID != "tenant-a" ||
-		got.Authorization.CollectorID != "collector-a" {
+		got.Authorization.CollectorID != "collector-a" ||
+		len(got.Authorization.AllowedHostRegexes) != 1 ||
+		len(got.Authorization.AllowedSourceRegexes) != 1 ||
+		got.Authorization.AllowedHostRegexes[0] != `^host$` ||
+		got.Authorization.AllowedSourceRegexes[0] != `^/var/log/app\.log$` {
 		t.Fatalf("admission = %+v", got)
 	}
 	got.Authorization.AuthorizedIndexes[0].Name = "changed"
+	got.Authorization.AllowedHostRegexes[0] = "changed"
+	got.Authorization.AllowedSourceRegexes[0] = "changed"
 	if indexes[0].Name != "audit" {
 		t.Fatal("admission authorization aliases persistence result")
+	}
+	if hosts[0] != `^host$` || sources[0] != `^/var/log/app\.log$` {
+		t.Fatal("admission event constraints alias persistence result")
+	}
+}
+
+func TestCollectorSessionManagerPreservesInvalidEventAuthorityForDurableReplay(t *testing.T) {
+	t.Parallel()
+
+	lease := collectorfleet.Lease{
+		Scope:       collectorfleet.Scope{TenantID: "tenant-a"},
+		CollectorID: "collector-a",
+		BootEpoch:   "boot-a",
+		StreamID:    "stream-a",
+		Generation:  7,
+	}
+	hosts := []string{`(`}
+	sources := []string{`^/var/log/app\.log$`}
+	store := &fakeCollectorAdmissionRuntimeStore{
+		authorizeAuthentication: auth.Authentication{
+			TokenID:              "token-safe-id",
+			BoundCollectorID:     "collector-a",
+			AllowedHostRegexes:   hosts,
+			AllowedSourceRegexes: sources,
+		},
+		authorizeErr: auth.ErrInvalidEventAuthority,
+	}
+	manager := collectorSessionManager{admission: store}
+	checkedAt := time.Date(2026, 7, 28, 12, 45, 0, 0, time.UTC)
+	got, err := manager.AuthorizeLease(
+		context.Background(),
+		"private-bearer",
+		lease,
+		checkedAt,
+	)
+	if !errors.Is(err, ingest.ErrInvalidEventAuthority) {
+		t.Fatalf("AuthorizeLease() error = %v, want ErrInvalidEventAuthority", err)
+	}
+	if got.SubjectID != "token-safe-id" || got.TenantID != "tenant-a" ||
+		got.CollectorID != "collector-a" || len(got.AllowedHostRegexes) != 1 ||
+		len(got.AllowedSourceRegexes) != 1 || got.AllowedHostRegexes[0] != `(` ||
+		got.AllowedSourceRegexes[0] != `^/var/log/app\.log$` {
+		t.Fatalf("deferred event authority = %+v", got)
+	}
+	if store.authorizeBearer != "private-bearer" ||
+		store.authorizeLease != lease || !store.authorizeCheckedAt.Equal(checkedAt) {
+		t.Fatalf("forwarded lease authorization = %+v", store)
+	}
+	got.AllowedHostRegexes[0] = "changed"
+	got.AllowedSourceRegexes[0] = "changed"
+	if hosts[0] != `(` || sources[0] != `^/var/log/app\.log$` {
+		t.Fatal("deferred event authority aliases persistence result")
 	}
 }
 
@@ -273,6 +347,12 @@ func TestCollectorSessionManagerMapsOnlyKnownBoundaryErrors(t *testing.T) {
 			name:          "inactive",
 			err:           auth.ErrInactiveToken,
 			want:          ingest.ErrUnauthorized,
+			knownBoundary: true,
+		},
+		{
+			name:          "invalid event authority",
+			err:           auth.ErrInvalidEventAuthority,
+			want:          ingest.ErrInvalidEventAuthority,
 			knownBoundary: true,
 		},
 		{
@@ -570,10 +650,15 @@ func (store fakeCollectorAuthenticationStore) Authenticate(context.Context, stri
 }
 
 type fakeCollectorAdmissionRuntimeStore struct {
-	admitBearer  string
-	admitRequest collectoradmission.Request
-	admitResult  collectoradmission.Result
-	admitErr     error
+	admitBearer             string
+	admitRequest            collectoradmission.Request
+	admitResult             collectoradmission.Result
+	admitErr                error
+	authorizeBearer         string
+	authorizeLease          collectorfleet.Lease
+	authorizeCheckedAt      time.Time
+	authorizeAuthentication auth.Authentication
+	authorizeErr            error
 }
 
 func (store *fakeCollectorAdmissionRuntimeStore) Admit(
@@ -586,13 +671,19 @@ func (store *fakeCollectorAdmissionRuntimeStore) Admit(
 	return store.admitResult, store.admitErr
 }
 
-func (*fakeCollectorAdmissionRuntimeStore) AuthorizeLease(
-	context.Context,
-	string,
-	collectorfleet.Lease,
-	time.Time,
+func (store *fakeCollectorAdmissionRuntimeStore) AuthorizeLease(
+	_ context.Context,
+	bearer string,
+	lease collectorfleet.Lease,
+	checkedAt time.Time,
 ) (auth.Authentication, error) {
-	return auth.Authentication{}, errors.New("unexpected lease authorization")
+	store.authorizeBearer = bearer
+	store.authorizeLease = lease
+	store.authorizeCheckedAt = checkedAt
+	if store.authorizeAuthentication.TokenID == "" && store.authorizeErr == nil {
+		return auth.Authentication{}, errors.New("unexpected lease authorization")
+	}
+	return store.authorizeAuthentication, store.authorizeErr
 }
 
 type fakeCollectorHeartbeatRuntime struct {

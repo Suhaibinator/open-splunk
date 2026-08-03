@@ -1082,10 +1082,10 @@ func TestAdministrativeValidationAndStatusMapping(t *testing.T) {
 			status: http.StatusBadRequest,
 		},
 		{
-			name: "unsupported token constraints", path: "/api/v1/ingestion-tokens/create",
+			name: "invalid token constraints", path: "/api/v1/ingestion-tokens/create",
 			request: &opensplunkv1.CreateIngestionTokenRequest{Definition: &opensplunkv1.IngestionTokenDefinition{
 				Name: "bad", Constraints: &opensplunkv1.IngestionTokenConstraints{
-					AllowedIndexNames: []string{"main"}, AllowedHostRegexes: []string{".*"},
+					AllowedIndexNames: []string{"main"}, AllowedHostRegexes: []string{"["},
 					BoundCollectorId: stringPointer("collector-bad"),
 				},
 			}},

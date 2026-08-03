@@ -164,6 +164,8 @@ message CollectorReady {
   BuildMetadata build = 15;
 }
 
+// Host/source rejection precedence and public violations are normative in
+// docs/ingestion-token-constraints-v0.1.md.
 enum EventRejectionCode {
   EVENT_REJECTION_CODE_UNSPECIFIED = 0;
   EVENT_REJECTION_CODE_INVALID_EVENT_ID = 1;
@@ -176,6 +178,8 @@ enum EventRejectionCode {
   EVENT_REJECTION_CODE_NESTING_TOO_DEEP = 8;
   EVENT_REJECTION_CODE_VALUE_INVALID = 9;
   EVENT_REJECTION_CODE_REDACTION_POLICY = 10;
+  EVENT_REJECTION_CODE_UNAUTHORIZED_HOST = 11;
+  EVENT_REJECTION_CODE_UNAUTHORIZED_SOURCE = 12;
 }
 
 message EventRejection {

@@ -176,6 +176,15 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	t.Run("terminal rejection writes no ClickHouse block", func(t *testing.T) {
 		testTerminalRejectionAgainstClickHouse(t, ctx, config, queryConnection, indexTime)
 	})
+	t.Run("partial event authorization filters ClickHouse rows", func(t *testing.T) {
+		testEventAuthorizationFilteringAgainstClickHouse(
+			t,
+			ctx,
+			config,
+			queryConnection,
+			indexTime,
+		)
+	})
 	t.Run("durable quota denial writes no ClickHouse block", func(t *testing.T) {
 		testQuotaDenialAgainstClickHouse(t, ctx, config, queryConnection, indexTime)
 	})

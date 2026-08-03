@@ -107,10 +107,10 @@ func New(
 // A concurrent administrative or credential change that commits before the
 // snapshot is established takes effect for this operation. A change that
 // commits afterward fences the next operation; the already admitted operation
-// may finish. A verified identity accompanies ErrNoActiveIndexAuthority or
-// ErrInvalidIndexAuthority only after the exact lease check also succeeds, so
-// native ingestion can recover a previously durable batch before applying the
-// mutable index result.
+// may finish. A verified identity accompanies ErrNoActiveIndexAuthority,
+// ErrInvalidIndexAuthority, or ErrInvalidEventAuthority only after the exact
+// lease check also succeeds, so native ingestion can recover a previously
+// durable batch before applying mutable event/index authority.
 func (store *Store) AuthorizeLease(
 	ctx context.Context,
 	bearer string,
@@ -145,12 +145,13 @@ func (store *Store) AuthorizeLease(
 		bearer,
 		checkedAt,
 	)
-	deferredIndexAuthority := errors.Is(err, auth.ErrNoActiveIndexAuthority) ||
-		errors.Is(err, auth.ErrInvalidIndexAuthority)
-	if err != nil && !deferredIndexAuthority {
+	deferredAuthority := errors.Is(err, auth.ErrNoActiveIndexAuthority) ||
+		errors.Is(err, auth.ErrInvalidIndexAuthority) ||
+		errors.Is(err, auth.ErrInvalidEventAuthority)
+	if err != nil && !deferredAuthority {
 		return auth.Authentication{}, preferContextCancellation(ctx, err)
 	}
-	indexAuthorityErr := err
+	authorityErr := err
 	if authentication.BoundCollectorID != lease.CollectorID {
 		return auth.Authentication{}, auth.ErrUnauthorized
 	}
@@ -172,7 +173,7 @@ func (store *Store) AuthorizeLease(
 		)
 	}
 	finished = true
-	return authentication, indexAuthorityErr
+	return authentication, authorityErr
 }
 
 // Admit atomically revalidates bearer at AcceptedAt, records token use,

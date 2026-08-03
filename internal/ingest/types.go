@@ -58,6 +58,11 @@ var (
 	// lease returned a corrupt bounded index projection. It must never admit a
 	// fresh batch or replace the stream's last valid policy snapshot.
 	ErrInvalidIndexAuthority = errors.New("ingest: collector index authority is invalid")
+	// ErrInvalidEventAuthority means a freshly revalidated credential and exact
+	// lease returned corrupt bounded host or source constraints. An exact durable
+	// batch lookup may precede this mutable-policy failure, but the snapshot must
+	// never admit a fresh batch or replace the stream's last valid authority.
+	ErrInvalidEventAuthority = errors.New("ingest: collector event authority is invalid")
 	// ErrCollectorLeaseNotCurrent means a request no longer owns the exact
 	// enabled durable collector lease which admitted its stream.
 	ErrCollectorLeaseNotCurrent = errors.New("ingest: collector lease is not current")
@@ -207,11 +212,13 @@ type IndexPolicy = indexpolicy.Policy
 // CollectorID. An empty CollectorID represents a legacy unbound credential and
 // fails closed before CollectorHello is accepted.
 type Authorization struct {
-	SubjectID         string
-	TenantID          string
-	CollectorID       string
-	TokenRateLimits   ingestquota.Limits
-	AuthorizedIndexes []IndexPolicy
+	SubjectID            string
+	TenantID             string
+	CollectorID          string
+	TokenRateLimits      ingestquota.Limits
+	AuthorizedIndexes    []IndexPolicy
+	AllowedHostRegexes   []string
+	AllowedSourceRegexes []string
 }
 
 // Authorizer performs the preliminary bearer check. CollectorSessionManager
@@ -232,6 +239,14 @@ func cloneAuthorization(authorization Authorization) Authorization {
 	authorization.AuthorizedIndexes = append(
 		[]IndexPolicy(nil),
 		authorization.AuthorizedIndexes...,
+	)
+	authorization.AllowedHostRegexes = append(
+		[]string(nil),
+		authorization.AllowedHostRegexes...,
+	)
+	authorization.AllowedSourceRegexes = append(
+		[]string(nil),
+		authorization.AllowedSourceRegexes...,
 	)
 	return authorization
 }
@@ -262,9 +277,9 @@ type CollectorSessionAdmission struct {
 // snapshot. Activate must install that exact already-committed Lease in the
 // bounded process runtime before CollectorReady is sent. Heartbeat and
 // Disconnect must condition every mutation on Lease. AuthorizeLease may return
-// a verified nonzero identity with ErrNoActiveIndexAuthority or
-// ErrInvalidIndexAuthority; callers may use it only for exact durable batch
-// recovery and must reject every fresh operation.
+// a verified nonzero identity with ErrNoActiveIndexAuthority,
+// ErrInvalidIndexAuthority, or ErrInvalidEventAuthority; callers may use it
+// only for exact durable batch recovery and must reject every fresh operation.
 type CollectorSessionManager interface {
 	Admit(
 		context.Context,

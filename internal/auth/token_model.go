@@ -44,6 +44,27 @@ func (collectorTokenIndexRecord) TableName() string {
 	return "ingestion_token_indexes"
 }
 
+type collectorTokenConstraintKind string
+
+const (
+	collectorTokenConstraintKindHost   collectorTokenConstraintKind = "host"
+	collectorTokenConstraintKindSource collectorTokenConstraintKind = "source"
+)
+
+// collectorTokenConstraintRecord is the explicit GORM representation of
+// ingestion_token_constraints. The SQL schema remains authoritative for its
+// foreign key, STRICT/WITHOUT ROWID storage, and byte-level checks.
+type collectorTokenConstraintRecord struct {
+	IngestionTokenID string                       `gorm:"column:ingestion_token_id;type:text;primaryKey;not null"`
+	ConstraintKind   collectorTokenConstraintKind `gorm:"column:constraint_kind;type:text;primaryKey;not null;check:ingestion_token_constraints_kind,constraint_kind IN ('host','source')"`
+	Ordinal          int64                        `gorm:"column:ordinal;type:integer;primaryKey;not null;check:ingestion_token_constraints_ordinal,ordinal BETWEEN 0 AND 15"`
+	Pattern          string                       `gorm:"column:pattern;type:text;not null;check:ingestion_token_constraints_pattern_valid,length(CAST(pattern AS BLOB)) BETWEEN 1 AND 512 AND instr(CAST(pattern AS BLOB),X'00') = 0"`
+}
+
+func (collectorTokenConstraintRecord) TableName() string {
+	return "ingestion_token_constraints"
+}
+
 // collectorTokenMetadataRow is a read-only parent projection. Scope children
 // are hydrated separately under a bounded query so corrupt fanout cannot make
 // one aggregate string consume unbounded memory.
@@ -63,6 +84,8 @@ type collectorTokenMetadataRow struct {
 	MaxIngestEventsPerSecond            int64               `gorm:"column:max_ingest_events_per_second"`
 	MaxIngestUncompressedBytesPerSecond int64               `gorm:"column:max_ingest_uncompressed_bytes_per_second"`
 	AllowedIndexNames                   []string            `gorm:"-"`
+	AllowedHostRegexes                  []string            `gorm:"-"`
+	AllowedSourceRegexes                []string            `gorm:"-"`
 }
 
 // collectorTokenProjectionWidths is a constant-size preflight projection.
@@ -84,6 +107,19 @@ type collectorTokenMetadataScopeWidths struct {
 type collectorTokenMetadataScopeRow struct {
 	IngestionTokenID string         `gorm:"column:ingestion_token_id"`
 	IndexName        sql.NullString `gorm:"column:index_name"`
+}
+
+type collectorTokenConstraintWidths struct {
+	IngestionTokenIDBytes int64 `gorm:"column:ingestion_token_id_bytes"`
+	ConstraintKindBytes   int64 `gorm:"column:constraint_kind_bytes"`
+	PatternBytes          int64 `gorm:"column:pattern_bytes"`
+}
+
+type collectorTokenConstraintRow struct {
+	IngestionTokenID string                       `gorm:"column:ingestion_token_id"`
+	ConstraintKind   collectorTokenConstraintKind `gorm:"column:constraint_kind"`
+	Ordinal          int64                        `gorm:"column:ordinal"`
+	Pattern          string                       `gorm:"column:pattern"`
 }
 
 type collectorTokenScopeDistributionRow struct {

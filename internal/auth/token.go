@@ -20,27 +20,33 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/tokenconstraint"
 	"gorm.io/gorm"
 )
 
 const (
-	collectorTokenPrefix              = "ost_v1_"
-	tokenRandomBytes                  = 32
-	tokenIDRandomBytes                = 16
-	minimumDigestKeyBytes             = 32
-	maximumTokenScopes                = 256
-	maximumTokenIDBytes               = 128
-	maximumTokenNameBytes             = 255
-	maximumDescriptionBytes           = 8 << 10
-	minimumTokenPrefixBytes           = 8
-	maximumTokenPrefixBytes           = 32
-	maximumCollectorIDBytes           = 128
-	defaultRetainedRevokedTokenLimit  = 256
-	defaultTotalTokenRecordLimit      = 1024
-	maximumTotalTokenRecordLimit      = 1024
-	maximumRetainedRevokedTokenLimit  = maximumTotalTokenRecordLimit - 1
-	maximumTotalTokenScopeRecordLimit = 16_384
-	redactedValue                     = "[REDACTED]"
+	collectorTokenPrefix               = "ost_v1_"
+	tokenRandomBytes                   = 32
+	tokenIDRandomBytes                 = 16
+	minimumDigestKeyBytes              = 32
+	maximumTokenScopes                 = 256
+	maximumTokenIDBytes                = 128
+	maximumTokenNameBytes              = 255
+	maximumDescriptionBytes            = 8 << 10
+	minimumTokenPrefixBytes            = 8
+	maximumTokenPrefixBytes            = 32
+	maximumCollectorIDBytes            = 128
+	defaultRetainedRevokedTokenLimit   = 256
+	defaultTotalTokenRecordLimit       = 1024
+	maximumTotalTokenRecordLimit       = 1024
+	maximumRetainedRevokedTokenLimit   = maximumTotalTokenRecordLimit - 1
+	maximumTotalTokenScopeRecordLimit  = 16_384
+	maximumTokenConstraintPatterns     = tokenconstraint.MaximumPatternsPerDimension
+	maximumTokenConstraintPatternBytes = tokenconstraint.MaximumPatternBytes
+	maximumTokenConstraintRecords      = 2 * maximumTokenConstraintPatterns
+	maximumTotalTokenConstraintRecords = maximumTotalTokenRecordLimit *
+		maximumTokenConstraintRecords
+	redactedValue = "[REDACTED]"
 )
 
 var (
@@ -60,6 +66,11 @@ var (
 	// only by lease revalidation when its bounded index projection is corrupt.
 	// It is never permission to ingest with a partial or stale scope.
 	ErrInvalidIndexAuthority = errors.New("auth: collector index authority is invalid")
+	// ErrInvalidEventAuthority is returned with a verified collector identity
+	// only by lease revalidation when its host/source constraint projection is
+	// corrupt. Callers may use the identity solely to recover an exact durable
+	// batch outcome before rejecting every fresh event.
+	ErrInvalidEventAuthority = errors.New("auth: collector event authority is invalid")
 	// ErrInactiveToken means an operation that requires an active collector
 	// credential could not proceed. Accepted-use recording deliberately uses
 	// this one sentinel for missing, disabled, revoked, and expired IDs so the
@@ -88,20 +99,22 @@ const (
 // CollectorToken contains safe token metadata. It never contains a secret or
 // digest.
 type CollectorToken struct {
-	ID                  string
-	Version             uint64
-	Name                string
-	Description         string
-	Prefix              string
-	State               CollectorTokenState
-	BoundCollectorID    string
-	AllowedIndexNames   []string
-	IngestionRateLimits ingestquota.Limits
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-	LastUsedAt          time.Time
-	ExpiresAt           time.Time
-	RevokedAt           time.Time
+	ID                   string
+	Version              uint64
+	Name                 string
+	Description          string
+	Prefix               string
+	State                CollectorTokenState
+	BoundCollectorID     string
+	AllowedIndexNames    []string
+	AllowedHostRegexes   []string
+	AllowedSourceRegexes []string
+	IngestionRateLimits  ingestquota.Limits
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	LastUsedAt           time.Time
+	ExpiresAt            time.Time
+	RevokedAt            time.Time
 }
 
 // Secret is an opaque newly-issued collector credential. Plaintext is
@@ -136,23 +149,27 @@ func (issued IssuedCollectorToken) GoString() string { return issued.String() }
 // CreateCollectorTokenRequest describes a collector token and its explicit
 // ingestion-index scope.
 type CreateCollectorTokenRequest struct {
-	Name                string
-	Description         string
-	AllowedIndexNames   []string
-	BoundCollectorID    string
-	ExpiresAt           time.Time
-	IngestionRateLimits ingestquota.Limits
+	Name                 string
+	Description          string
+	AllowedIndexNames    []string
+	AllowedHostRegexes   []string
+	AllowedSourceRegexes []string
+	BoundCollectorID     string
+	ExpiresAt            time.Time
+	IngestionRateLimits  ingestquota.Limits
 }
 
 // UpdateCollectorTokenRequest replaces the mutable definition of an existing
 // collector token. The credential digest and safe prefix are immutable.
 type UpdateCollectorTokenRequest struct {
-	Name                string
-	Description         string
-	AllowedIndexNames   []string
-	BoundCollectorID    string
-	ExpiresAt           time.Time
-	IngestionRateLimits ingestquota.Limits
+	Name                 string
+	Description          string
+	AllowedIndexNames    []string
+	AllowedHostRegexes   []string
+	AllowedSourceRegexes []string
+	BoundCollectorID     string
+	ExpiresAt            time.Time
+	IngestionRateLimits  ingestquota.Limits
 }
 
 // Principal is the safe result of a collector authorization check.
@@ -174,11 +191,13 @@ type AuthorizedIndexPolicy = indexpolicy.Policy
 // refreshed at each security boundary where index or credential changes need
 // to take effect.
 type Authentication struct {
-	TokenID           string
-	TokenName         string
-	BoundCollectorID  string
-	TokenRateLimits   ingestquota.Limits
-	AuthorizedIndexes []AuthorizedIndexPolicy
+	TokenID              string
+	TokenName            string
+	BoundCollectorID     string
+	TokenRateLimits      ingestquota.Limits
+	AuthorizedIndexes    []AuthorizedIndexPolicy
+	AllowedHostRegexes   []string
+	AllowedSourceRegexes []string
 }
 
 // AuthorizedIndexNames returns a detached name projection in authoritative
@@ -276,6 +295,13 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	if err != nil {
 		return IssuedCollectorToken{}, err
 	}
+	allowedHostRegexes, allowedSourceRegexes, err := normalizeCollectorTokenConstraints(
+		request.AllowedHostRegexes,
+		request.AllowedSourceRegexes,
+	)
+	if err != nil {
+		return IssuedCollectorToken{}, err
+	}
 	if err := request.IngestionRateLimits.Validate(); err != nil {
 		return IssuedCollectorToken{}, fmt.Errorf(
 			"%w: ingestion token rate limits: %w",
@@ -367,6 +393,19 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	if err := tx.Create(&memberships).Error; err != nil {
 		return IssuedCollectorToken{}, fmt.Errorf("store collector token scope: %w", err)
 	}
+	constraints := collectorTokenConstraintRecords(
+		tokenID,
+		allowedHostRegexes,
+		allowedSourceRegexes,
+	)
+	if len(constraints) != 0 {
+		if err := tx.Create(&constraints).Error; err != nil {
+			return IssuedCollectorToken{}, fmt.Errorf(
+				"store collector token constraints: %w",
+				err,
+			)
+		}
+	}
 	commitErr := tx.Commit().Error
 	transactionFinished = true
 	if commitErr != nil {
@@ -376,10 +415,12 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	metadata := CollectorToken{
 		ID: tokenID, Version: 1, Name: name, Description: description,
 		Prefix: prefix, State: CollectorTokenStateActive,
-		BoundCollectorID:    request.BoundCollectorID,
-		AllowedIndexNames:   append([]string(nil), allowedNames...),
-		IngestionRateLimits: request.IngestionRateLimits,
-		CreatedAt:           now, UpdatedAt: now, ExpiresAt: expiresAt,
+		BoundCollectorID:     request.BoundCollectorID,
+		AllowedIndexNames:    append([]string(nil), allowedNames...),
+		AllowedHostRegexes:   append([]string(nil), allowedHostRegexes...),
+		AllowedSourceRegexes: append([]string(nil), allowedSourceRegexes...),
+		IngestionRateLimits:  request.IngestionRateLimits,
+		CreatedAt:            now, UpdatedAt: now, ExpiresAt: expiresAt,
 	}
 	return IssuedCollectorToken{Token: metadata, Secret: Secret{plaintext: plaintext}}, nil
 }
@@ -432,6 +473,13 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	}
 	name, description, allowedNames, expiresAt, err := normalizeTokenDefinition(
 		request.Name, request.Description, request.AllowedIndexNames, request.ExpiresAt, now,
+	)
+	if err != nil {
+		return CollectorToken{}, err
+	}
+	allowedHostRegexes, allowedSourceRegexes, err := normalizeCollectorTokenConstraints(
+		request.AllowedHostRegexes,
+		request.AllowedSourceRegexes,
 	)
 	if err != nil {
 		return CollectorToken{}, err
@@ -513,6 +561,26 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	}
 	if err := tx.Create(&memberships).Error; err != nil {
 		return CollectorToken{}, fmt.Errorf("store updated collector token scope: %w", err)
+	}
+	if deleteErr := tx.Where("ingestion_token_id = ?", tokenID).
+		Delete(&collectorTokenConstraintRecord{}).Error; deleteErr != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"replace collector token constraints: %w",
+			deleteErr,
+		)
+	}
+	constraints := collectorTokenConstraintRecords(
+		tokenID,
+		allowedHostRegexes,
+		allowedSourceRegexes,
+	)
+	if len(constraints) != 0 {
+		if err := tx.Create(&constraints).Error; err != nil {
+			return CollectorToken{}, fmt.Errorf(
+				"store updated collector token constraints: %w",
+				err,
+			)
+		}
 	}
 
 	result, err = takeCollectorTokenMetadata(tx, tokenID, now)
@@ -636,7 +704,7 @@ func (store *Store) authenticateWithIndexAuthority(
 	database *gorm.DB,
 	plaintext string,
 	now time.Time,
-	deferIndexAuthorityErrors bool,
+	deferAuthorityErrors bool,
 ) (Authentication, error) {
 	if plaintext == "" {
 		return Authentication{}, ErrUnauthorized
@@ -701,6 +769,35 @@ func (store *Store) authenticateWithIndexAuthority(
 		BoundCollectorID: row.BoundCollectorID,
 		TokenRateLimits:  tokenRateLimits,
 	}
+	constraintTokens, constraintErr := hydrateCollectorTokenConstraints(
+		database,
+		[]CollectorToken{{ID: row.IngestionTokenID}},
+		map[string]int{row.IngestionTokenID: 0},
+		[]string{row.IngestionTokenID},
+		0,
+		false,
+	)
+	if constraintErr != nil {
+		if deferAuthorityErrors &&
+			(errors.Is(constraintErr, errCollectorTokenCatalogInconsistent) ||
+				errors.Is(constraintErr, errCollectorTokenCatalogOverflow)) {
+			return authentication, ErrInvalidEventAuthority
+		}
+		return Authentication{}, fmt.Errorf(
+			"authenticate collector token constraints: %w",
+			constraintErr,
+		)
+	}
+	if len(constraintTokens) != 1 {
+		if deferAuthorityErrors {
+			return authentication, ErrInvalidEventAuthority
+		}
+		return Authentication{}, errors.New(
+			"authenticate collector token constraints: invalid projection cardinality",
+		)
+	}
+	authentication.AllowedHostRegexes = constraintTokens[0].AllowedHostRegexes
+	authentication.AllowedSourceRegexes = constraintTokens[0].AllowedSourceRegexes
 	var scopes []collectorTokenAuthenticationScopeRow
 	scopeResult := database.
 		Table("ingestion_token_indexes AS scope").
@@ -733,13 +830,13 @@ func (store *Store) authenticateWithIndexAuthority(
 		)
 	}
 	if len(scopes) == 0 {
-		if deferIndexAuthorityErrors {
+		if deferAuthorityErrors {
 			return authentication, ErrInvalidIndexAuthority
 		}
 		return Authentication{}, ErrUnauthorized
 	}
 	if len(scopes) > maximumTokenScopes {
-		if deferIndexAuthorityErrors {
+		if deferAuthorityErrors {
 			return authentication, ErrInvalidIndexAuthority
 		}
 		return Authentication{}, errors.New(
@@ -749,7 +846,7 @@ func (store *Store) authenticateWithIndexAuthority(
 	authorizedIndexes := make([]AuthorizedIndexPolicy, 0, len(scopes))
 	for scopeIndex, scope := range scopes {
 		if scopeIndex > 0 && scopes[scopeIndex-1].Name >= scope.Name {
-			if deferIndexAuthorityErrors {
+			if deferAuthorityErrors {
 				return authentication, ErrInvalidIndexAuthority
 			}
 			return Authentication{}, errors.New(
@@ -762,7 +859,7 @@ func (store *Store) authenticateWithIndexAuthority(
 				scope.State != string(control.IndexStateArchived) &&
 				scope.State != string(control.IndexStateDeleting)) ||
 			(scope.IngestionEnabled != 0 && scope.IngestionEnabled != 1) {
-			if deferIndexAuthorityErrors {
+			if deferAuthorityErrors {
 				return authentication, ErrInvalidIndexAuthority
 			}
 			return Authentication{}, errors.New(
@@ -775,7 +872,7 @@ func (store *Store) authenticateWithIndexAuthority(
 		}
 	}
 	if len(authorizedIndexes) == 0 {
-		if deferIndexAuthorityErrors {
+		if deferAuthorityErrors {
 			return authentication, ErrNoActiveIndexAuthority
 		}
 		return Authentication{}, ErrUnauthorized
@@ -1135,6 +1232,17 @@ func collectorTokenScopeRecordCountProbe(
 	return boundedCollectorTokenQueryCount(
 		database,
 		database.Model(&collectorTokenIndexRecord{}),
+		limit,
+	)
+}
+
+func collectorTokenConstraintRecordCountProbe(
+	database *gorm.DB,
+	limit int,
+) (int, bool, error) {
+	return boundedCollectorTokenQueryCount(
+		database,
+		database.Model(&collectorTokenConstraintRecord{}),
 		limit,
 	)
 }
@@ -1562,10 +1670,28 @@ func listCollectorTokenMetadata(
 			len(rows),
 		)
 	}
+	constraintRecords, overLimit, err := collectorTokenConstraintRecordCountProbe(
+		database,
+		maximumTotalTokenConstraintRecords,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"count physical collector token constraint records: %w",
+			err,
+		)
+	}
+	if overLimit {
+		return nil, fmt.Errorf(
+			"%w: token constraint records exceed the structural maximum of %d",
+			errCollectorTokenCatalogOverflow,
+			maximumTotalTokenConstraintRecords,
+		)
+	}
 	return hydrateCollectorTokenScopes(
 		database,
 		rows,
 		catalog.scopeRecords,
+		constraintRecords,
 		true,
 		now,
 	)
@@ -1603,6 +1729,7 @@ func takeCollectorTokenMetadata(
 		database,
 		[]collectorTokenMetadataRow{row},
 		catalog.scopeRecords,
+		0,
 		false,
 		now,
 	)
@@ -1623,6 +1750,7 @@ func hydrateCollectorTokenScopes(
 	database *gorm.DB,
 	parents []collectorTokenMetadataRow,
 	globalPhysicalScopeCount int,
+	globalPhysicalConstraintCount int,
 	requireCompleteCatalog bool,
 	now time.Time,
 ) ([]CollectorToken, error) {
@@ -1651,7 +1779,14 @@ func hydrateCollectorTokenScopes(
 				errCollectorTokenCatalogInconsistent,
 			)
 		}
-		return tokens, nil
+		return hydrateCollectorTokenConstraints(
+			database,
+			tokens,
+			parentIndexes,
+			parentIDs,
+			globalPhysicalConstraintCount,
+			requireCompleteCatalog,
+		)
 	}
 
 	physicalScopeCount, overLimit, err := boundedCollectorTokenQueryCount(
@@ -1783,6 +1918,175 @@ func hydrateCollectorTokenScopes(
 			return nil, fmt.Errorf(
 				"%w: collector token is missing its required scope",
 				errCollectorTokenCatalogInconsistent,
+			)
+		}
+	}
+	return hydrateCollectorTokenConstraints(
+		database,
+		tokens,
+		parentIndexes,
+		parentIDs,
+		globalPhysicalConstraintCount,
+		requireCompleteCatalog,
+	)
+}
+
+func hydrateCollectorTokenConstraints(
+	database *gorm.DB,
+	tokens []CollectorToken,
+	parentIndexes map[string]int,
+	parentIDs []string,
+	globalPhysicalConstraintCount int,
+	requireCompleteCatalog bool,
+) ([]CollectorToken, error) {
+	if len(parentIDs) == 0 {
+		if requireCompleteCatalog && globalPhysicalConstraintCount != 0 {
+			return nil, fmt.Errorf(
+				"%w: constraint rows exist without collector token parents",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
+		return tokens, nil
+	}
+
+	aggregateLimit := len(parentIDs) * maximumTokenConstraintRecords
+	physicalConstraintCount, overLimit, err := boundedCollectorTokenQueryCount(
+		database,
+		database.Model(&collectorTokenConstraintRecord{}).
+			Where("ingestion_token_id IN ?", parentIDs),
+		aggregateLimit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("count selected collector token constraints: %w", err)
+	}
+	if overLimit {
+		return nil, fmt.Errorf(
+			"%w: selected constraint rows exceed aggregate per-token bounds",
+			errCollectorTokenCatalogInconsistent,
+		)
+	}
+	if requireCompleteCatalog &&
+		physicalConstraintCount != globalPhysicalConstraintCount {
+		return nil, fmt.Errorf(
+			"%w: physical constraint rows = %d, selected constraint rows = %d",
+			errCollectorTokenCatalogInconsistent,
+			globalPhysicalConstraintCount,
+			physicalConstraintCount,
+		)
+	}
+
+	var widths []collectorTokenConstraintWidths
+	widthQuery := database.
+		Table("ingestion_token_constraints AS constraint_row").
+		Select(`
+			length(CAST(constraint_row.ingestion_token_id AS BLOB))
+				AS ingestion_token_id_bytes,
+			length(CAST(constraint_row.constraint_kind AS BLOB))
+				AS constraint_kind_bytes,
+			length(CAST(constraint_row.pattern AS BLOB)) AS pattern_bytes`).
+		Where("constraint_row.ingestion_token_id IN ?", parentIDs).
+		Limit(aggregateLimit + 1).
+		Scan(&widths)
+	if widthQuery.Error != nil {
+		return nil, fmt.Errorf(
+			"preflight collector token constraint widths: %w",
+			widthQuery.Error,
+		)
+	}
+	if len(widths) != physicalConstraintCount {
+		return nil, fmt.Errorf(
+			"%w: physical constraint rows = %d, width rows = %d",
+			errCollectorTokenCatalogInconsistent,
+			physicalConstraintCount,
+			len(widths),
+		)
+	}
+	for _, projection := range widths {
+		if projection.IngestionTokenIDBytes < 1 ||
+			projection.IngestionTokenIDBytes > maximumTokenIDBytes ||
+			projection.ConstraintKindBytes < int64(len(collectorTokenConstraintKindHost)) ||
+			projection.ConstraintKindBytes > int64(len(collectorTokenConstraintKindSource)) ||
+			projection.PatternBytes < 1 ||
+			projection.PatternBytes > tokenconstraint.MaximumPatternBytes {
+			return nil, fmt.Errorf(
+				"%w: collector token constraint projection exceeds persisted byte bounds",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
+	}
+
+	var rows []collectorTokenConstraintRow
+	rowQuery := database.
+		Table("ingestion_token_constraints AS constraint_row").
+		Select(
+			"constraint_row.ingestion_token_id",
+			"constraint_row.constraint_kind",
+			"constraint_row.ordinal",
+			"constraint_row.pattern",
+		).
+		Where("constraint_row.ingestion_token_id IN ?", parentIDs).
+		Order("constraint_row.ingestion_token_id").
+		Order("constraint_row.constraint_kind").
+		Order("constraint_row.ordinal").
+		Limit(aggregateLimit + 1).
+		Scan(&rows)
+	if rowQuery.Error != nil {
+		return nil, fmt.Errorf("read collector token constraints: %w", rowQuery.Error)
+	}
+	if len(rows) != physicalConstraintCount {
+		return nil, fmt.Errorf(
+			"%w: physical constraint rows = %d, hydrated constraint rows = %d",
+			errCollectorTokenCatalogInconsistent,
+			physicalConstraintCount,
+			len(rows),
+		)
+	}
+	for _, row := range rows {
+		parentIndex, requested := parentIndexes[row.IngestionTokenID]
+		if !requested {
+			return nil, fmt.Errorf(
+				"%w: collector token constraint has an unknown parent",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
+		var dimension *[]string
+		switch row.ConstraintKind {
+		case collectorTokenConstraintKindHost:
+			dimension = &tokens[parentIndex].AllowedHostRegexes
+		case collectorTokenConstraintKindSource:
+			dimension = &tokens[parentIndex].AllowedSourceRegexes
+		default:
+			return nil, fmt.Errorf(
+				"%w: collector token constraint has an unknown kind",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
+		if row.Ordinal != int64(len(*dimension)) ||
+			len(*dimension) >= tokenconstraint.MaximumPatternsPerDimension {
+			return nil, fmt.Errorf(
+				"%w: collector token constraint ordinals are malformed",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
+		*dimension = append(*dimension, row.Pattern)
+	}
+	for index := range tokens {
+		if err := tokenconstraint.ValidateNormalized(
+			tokens[index].AllowedHostRegexes,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%w: invalid collector token host constraints: %w",
+				errCollectorTokenCatalogInconsistent,
+				err,
+			)
+		}
+		if err := tokenconstraint.ValidateNormalized(
+			tokens[index].AllowedSourceRegexes,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%w: invalid collector token source constraints: %w",
+				errCollectorTokenCatalogInconsistent,
+				err,
 			)
 		}
 	}
@@ -1925,6 +2229,57 @@ func normalizeTokenScopes(inputs []string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+func normalizeCollectorTokenConstraints(
+	hostPatterns []string,
+	sourcePatterns []string,
+) ([]string, []string, error) {
+	normalizedHosts, err := tokenconstraint.Normalize(hostPatterns)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"%w: invalid collector token host constraints: %w",
+			control.ErrInvalidArgument,
+			err,
+		)
+	}
+	normalizedSources, err := tokenconstraint.Normalize(sourcePatterns)
+	if err != nil {
+		return nil, nil, fmt.Errorf(
+			"%w: invalid collector token source constraints: %w",
+			control.ErrInvalidArgument,
+			err,
+		)
+	}
+	return normalizedHosts, normalizedSources, nil
+}
+
+func collectorTokenConstraintRecords(
+	tokenID string,
+	hostPatterns []string,
+	sourcePatterns []string,
+) []collectorTokenConstraintRecord {
+	records := make(
+		[]collectorTokenConstraintRecord,
+		0,
+		len(hostPatterns)+len(sourcePatterns),
+	)
+	appendDimension := func(
+		kind collectorTokenConstraintKind,
+		patterns []string,
+	) {
+		for ordinal, pattern := range patterns {
+			records = append(records, collectorTokenConstraintRecord{
+				IngestionTokenID: tokenID,
+				ConstraintKind:   kind,
+				Ordinal:          int64(ordinal),
+				Pattern:          pattern,
+			})
+		}
+	}
+	appendDimension(collectorTokenConstraintKindHost, hostPatterns)
+	appendDimension(collectorTokenConstraintKindSource, sourcePatterns)
+	return records
 }
 
 func replacementCollectorID(current, requested string) (string, error) {

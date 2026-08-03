@@ -786,6 +786,8 @@ func createBackendLoadToken(
 		"backend-sustained-load-collector",
 		indexName,
 		collectorID,
+		nil,
+		nil,
 	)
 }
 

@@ -361,6 +361,23 @@ func TestAuthorizeLeaseDefersOnlyMutableIndexAuthorityAfterExactLeaseCheck(t *te
 			},
 			want: auth.ErrInvalidIndexAuthority,
 		},
+		{
+			name: "invalid event constraint",
+			mutate: func(t *testing.T, ctx context.Context, fixture *admissionFixture) {
+				if _, err := fixture.database.SQLDB().ExecContext(ctx, `
+					INSERT INTO ingestion_token_constraints (
+						ingestion_token_id,
+						constraint_kind,
+						ordinal,
+						pattern
+					)
+					SELECT ingestion_token_id, 'host', 0, '['
+					FROM ingestion_tokens`); err != nil {
+					t.Fatalf("corrupt event constraint: %v", err)
+				}
+			},
+			want: auth.ErrInvalidEventAuthority,
+		},
 	}
 
 	for _, test := range tests {

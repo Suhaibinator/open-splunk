@@ -637,6 +637,7 @@ func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
 	}{
 		{table: "ingestion_tokens", model: &collectorTokenRecord{}},
 		{table: "ingestion_token_indexes", model: &collectorTokenIndexRecord{}},
+		{table: "ingestion_token_constraints", model: &collectorTokenConstraintRecord{}},
 	}
 	for _, test := range tests {
 		t.Run(test.table, func(t *testing.T) {
@@ -716,6 +717,24 @@ func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
 					t.Fatalf("GORM token-scope primary key = %v, want %v", primaryColumns, want)
 				}
 				assertCollectorTokenScopeIndexParity(t, db, statement)
+			case "ingestion_token_constraints":
+				primaryColumns := make([]string, len(statement.Schema.PrimaryFields))
+				for index, field := range statement.Schema.PrimaryFields {
+					primaryColumns[index] = field.DBName
+				}
+				if want := []string{"ingestion_token_id", "constraint_kind", "ordinal"}; !slices.Equal(primaryColumns, want) {
+					t.Fatalf("GORM token-constraint primary key = %v, want %v", primaryColumns, want)
+				}
+				checks := statement.Schema.ParseCheckConstraints()
+				for _, name := range []string{
+					"ingestion_token_constraints_kind",
+					"ingestion_token_constraints_ordinal",
+					"ingestion_token_constraints_pattern_valid",
+				} {
+					if _, present := checks[name]; !present {
+						t.Fatalf("GORM token-constraint check %q is missing: %v", name, checks)
+					}
+				}
 			}
 		})
 	}
@@ -741,10 +760,12 @@ func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
 		t.Fatalf("NewStore(first): %v", err)
 	}
 	issued, err := store.CreateCollectorToken(ctx, CreateCollectorTokenRequest{
-		Name:              "persistent",
-		Description:       "before reopen",
-		AllowedIndexNames: []string{"main"},
-		BoundCollectorID:  testCollectorID,
+		Name:                 "persistent",
+		Description:          "before reopen",
+		AllowedIndexNames:    []string{"main"},
+		BoundCollectorID:     testCollectorID,
+		AllowedHostRegexes:   []string{"^before-host$"},
+		AllowedSourceRegexes: []string{"^before-source$"},
 	})
 	if err != nil {
 		_ = db.Close()
@@ -769,19 +790,31 @@ func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
 	}
 	if got.ID != issued.Token.ID || got.Name != "persistent" ||
 		got.BoundCollectorID != testCollectorID ||
-		!slices.Equal(got.AllowedIndexNames, []string{"main"}) {
+		!slices.Equal(got.AllowedIndexNames, []string{"main"}) ||
+		!slices.Equal(got.AllowedHostRegexes, []string{"^before-host$"}) ||
+		!slices.Equal(got.AllowedSourceRegexes, []string{"^before-source$"}) {
 		t.Fatalf("reopened token = %#v", got)
 	}
 	if _, err := reopenedStore.Authorize(ctx, issued.Secret.Plaintext(), "main"); err != nil {
 		t.Fatalf("Authorize(reopened): %v", err)
+	}
+	authentication, err := reopenedStore.Authenticate(ctx, issued.Secret.Plaintext())
+	if err != nil {
+		t.Fatalf("Authenticate(reopened): %v", err)
+	}
+	if !slices.Equal(authentication.AllowedHostRegexes, []string{"^before-host$"}) ||
+		!slices.Equal(authentication.AllowedSourceRegexes, []string{"^before-source$"}) {
+		t.Fatalf("reopened authentication constraints = %#v", authentication)
 	}
 	updated, err := reopenedStore.UpdateCollectorToken(
 		ctx,
 		got.ID,
 		got.Version,
 		UpdateCollectorTokenRequest{
-			Name:              "after reopen",
-			AllowedIndexNames: []string{"main"},
+			Name:                 "after reopen",
+			AllowedIndexNames:    []string{"main"},
+			AllowedHostRegexes:   []string{"^after-host$"},
+			AllowedSourceRegexes: []string{"^after-source$"},
 		},
 	)
 	if err != nil {
@@ -789,7 +822,9 @@ func TestCollectorTokenStoreSurvivesDatabaseReopen(t *testing.T) {
 	}
 	if updated.Version != 2 ||
 		updated.Name != "after reopen" ||
-		updated.BoundCollectorID != testCollectorID {
+		updated.BoundCollectorID != testCollectorID ||
+		!slices.Equal(updated.AllowedHostRegexes, []string{"^after-host$"}) ||
+		!slices.Equal(updated.AllowedSourceRegexes, []string{"^after-source$"}) {
 		t.Fatalf("updated reopened token = %#v", updated)
 	}
 }
