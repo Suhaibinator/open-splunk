@@ -7,6 +7,116 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded streamstats count
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `182b60c` — add exact, bounded `streamstats count` execution.
+
+This test-first SPL unit adds a row-preserving running-count command without a
+control-plane schema change, migration, public protobuf change, or GORM on the
+ClickHouse path:
+
+1. `streamstats` accepts exactly one bare argument-free `count`, with its
+   default `count` output or one exact unquoted `AS` alias before `BY`. Options
+   are `current=t|true|f|false`, unsigned `window=0..10000`, and
+   `global=t|true|f|false`; each is case-insensitive, optional, accepted once,
+   and may occur before or after the aggregate or after a complete `BY` tuple.
+   Up to 16 distinct exact unquoted BY fields are supported. Quoted, wildcard,
+   parenthesized, field/eval, multiple, reset, time-window, allnum, signed, and
+   broader aggregate forms fail with source-located diagnostics.
+2. Defaults are `current=true`, `window=0`, and `global=true`. Current rows and
+   bounded preceding ROWS frames follow deterministic pipeline order. With
+   `current=false`, the first participating row publishes a present UInt64
+   zero. A finite grouped window requires explicit `global=false`; unsupported
+   grouped global-window semantics fail rather than being approximated.
+3. The planner uses a dedicated `StreamAggregate` operator and revalidates the
+   complete contract against forged AST and logical-plan inputs. The operator
+   preserves the current event/statistics result shape, field-analysis
+   eligibility, and timeline eligibility unless it replaces `_time`. Alias
+   replacement is exact, including an upstream global `stats count` field.
+4. ClickHouse lowering performs one bounded relation read, materializes at most
+   10,001 ordered rows, and uses exact `ROWS` windows. The 10,001st row is an
+   overflow sentinel for the public 10,000-row ceiling; overflow and unsupported
+   Dynamic BY containers poison the complete stage before downstream filters,
+   projections, or limits can hide them. There is no `ARRAY JOIN`, unbounded
+   `groupArray`, row expansion, physical rescan, or Go-side running buffer.
+5. Incoming order and stable tie-breakers are snapshotted under private aliases
+   before the output field is replaced. This keeps stacked streamstats,
+   downstream stable sorts, field summaries, timelines, and global-stats alias
+   collisions deterministic without binding a stale public alias to the new
+   running value.
+6. Grouping uses the existing exact scalar normalization. Missing or null keys
+   retain their rows with a logically absent nullable output; empty strings are
+   values; compatible Dynamic numeric/text scalars share groups; fixed
+   multivalue keys fail compilation; and runtime list/object/container keys
+   fail the whole stage atomically. Tenant, index, snapshot, and retention scope
+   stays inside the original physical scan.
+7. Query execution maps the row-limit marker to a stable execution-limit
+   failure and carries UInt64/Nullable(UInt64) through Executor, Manager,
+   persistence, paging, inspection, field summary, and timeline compilation.
+   The shared completion catalog and frontend support classifier now advertise
+   only the bounded backend surface; no frontend transport or component change
+   was required.
+8. Unit coverage spans parser ranges/defaults/options/rejections, suggestions,
+   result shape, forged AST/plan/compiler inputs, temporal/index provenance,
+   one-scan SQL structure, exact frames, order/tie snapshots, nullable groups,
+   hidden guards, finalizers, error mapping, Manager cleanup, inspection, and
+   frontend metadata. Digest-pinned ClickHouse coverage proves default and
+   explicit order, all supported frames, grouped scalar/null behavior, alias
+   replacement, stacked/transformed stages, tenant isolation, hidden poison,
+   the exact 10,000-row boundary, hidden 10,001-row overflow, and the production
+   Executor/Manager transport.
+9. Three adversarial reviews found quoted-field bypasses, duplicate completion
+   states, missing provenance/finalizer coverage, a stale aggregate-order alias,
+   dropped downstream-sort tie-breakers, and a colliding integration batch
+   identity. Every finding was fixed and independently rechecked. Disposable
+   ClickHouse test harnesses now remove anonymous image volumes as well as their
+   owned containers, preventing repeated pinned runs from exhausting Docker's
+   VM storage.
+
+Validation for `182b60c` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+go test ./... -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-streamstats-coverage.out ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$/^compiled_SPL_corpus$' \
+  -count=1 -timeout=30m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/^streamstats_executor_and_manager_transport$' \
+  -count=1 -timeout=30m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`.
+The full compiled SPL corpus passed in 139.68 seconds and the focused pinned
+Executor/Manager transport passed in 7.86 seconds. Test-owned containers and
+their anonymous volumes were removed. Main run `30858191187` passed every CI
+job before this unit; the `182b60c` run is `30862684897` and was in progress
+when this checkpoint was written. The external GradeThis Compose cutover
+remains explicitly deferred, and the broader backend/SPL goal remains active.
+
 ## Latest checkpoint: bounded chart percentiles
 
 Date: 2026-08-03
@@ -14595,7 +14705,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `8d032b1`, `1a9f6ef`, `5db9816`, `99be8a9`, `d7734b6`,
+   commits, especially `182b60c`, `8d032b1`, `1a9f6ef`, `5db9816`, `99be8a9`,
+   `d7734b6`,
    `ceab244`, `75db36f`, `3f83414`,
    `1a94faf`, `fbdb99f`,
    `0c78cb7`, `ab0514e`, `67689e8`,
@@ -14653,7 +14764,8 @@ Do not guess those decisions if they materially affect the implementation.
    the bounded percentile family is published after parser/planner commit
    `efe4199`, split numeric timecharts are complete at `d7734b6`, split
    percentile timecharts are complete at `99be8a9`, numeric chart pivots are
-   complete at `1a9f6ef`, multi-field `top`/`rare` is complete at `5db9816`,
+   complete at `1a9f6ef`, bounded running `streamstats count` is complete at
+   `182b60c`, multi-field `top`/`rare` is complete at `5db9816`,
    exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
