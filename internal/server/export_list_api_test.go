@@ -15,7 +15,6 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -55,7 +54,7 @@ func TestExportListRouteRoundTripsScopeCanonicalFiltersAndAllStates(t *testing.T
 	})
 	pageSize := uint32(len(jobs))
 	pageToken, searchJobID := "current-export-page", "search-1"
-	response := postProto(t, handler, exportJobsListPath, &opensplunkv1.ListExportJobsRequest{
+	request := &opensplunkv1.ListExportJobsRequest{
 		Page: &opensplunkv1.PageRequest{
 			PageSize:         &pageSize,
 			PageToken:        &pageToken,
@@ -71,7 +70,10 @@ func TestExportListRouteRoundTripsScopeCanonicalFiltersAndAllStates(t *testing.T
 			opensplunkv1.ExportJobState_EXPORT_JOB_STATE_FAILED,
 		},
 		SearchJobIdFilter: &searchJobID,
-	})
+	}
+	request.ProtoReflect().SetUnknown(futureProtobufField("future-export-list"))
+	request.Page.ProtoReflect().SetUnknown(futureProtobufField("future-export-page"))
+	response := postProto(t, handler, exportJobsListPath, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -248,17 +250,6 @@ func TestExportListRejectsInvalidRequestBeforeService(t *testing.T) {
 		exportjobs.MaximumSearchJobIDBytes+1,
 	)
 	controlSearchID := "search\nid"
-	unknown := protowire.AppendVarint(
-		protowire.AppendTag(nil, 99, protowire.VarintType),
-		1,
-	)
-	topLevelUnknown := &opensplunkv1.ListExportJobsRequest{}
-	topLevelUnknown.ProtoReflect().SetUnknown(unknown)
-	nestedUnknown := &opensplunkv1.ListExportJobsRequest{
-		Page: &opensplunkv1.PageRequest{},
-	}
-	nestedUnknown.Page.ProtoReflect().SetUnknown(unknown)
-
 	tests := []struct {
 		name    string
 		request *opensplunkv1.ListExportJobsRequest
@@ -316,8 +307,6 @@ func TestExportListRejectsInvalidRequestBeforeService(t *testing.T) {
 		{name: "control search job filter", request: &opensplunkv1.ListExportJobsRequest{
 			SearchJobIdFilter: &controlSearchID,
 		}},
-		{name: "top-level unknown field", request: topLevelUnknown},
-		{name: "nested unknown field", request: nestedUnknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

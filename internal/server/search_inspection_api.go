@@ -22,14 +22,11 @@ const maximumSearchInspectionResponseBytes = 8 << 20
 func (handler *apiHandler) searchInspectionRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.NewGenericRouteDefinition[
+) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.InspectSearchJobRequest,
-			*serializedSearchInspectionResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedSearchInspectionResponse](router.RouteConfig[
 			*opensplunkv1.InspectSearchJobRequest,
 			*serializedSearchInspectionResponse,
 		]{
@@ -39,7 +36,7 @@ func (handler *apiHandler) searchInspectionRoutes(
 			Codec:      newSerializedSearchInspectionCodec(),
 			Handler:    handler.inspectSearchJob,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.InspectSearchJobRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.InspectSearchJobRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: smallRequestBytes,
 			},

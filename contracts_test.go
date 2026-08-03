@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -64,6 +65,34 @@ func TestTypedValueRoundTripPreservesDistinctKinds(t *testing.T) {
 				t.Fatalf("round trip changed value: want %v, got %v", value, &decoded)
 			}
 		})
+	}
+}
+
+func TestGeneratedGoMessagesRetainKnownFieldsFromFuturePeers(t *testing.T) {
+	t.Parallel()
+
+	wire, err := proto.Marshal(&opensplunkv1.GetSystemBootstrapResponse{
+		ApiVersion:              "v1",
+		SplCompatibilityVersion: "open-splunk-v0.1",
+	})
+	if err != nil {
+		t.Fatalf("marshal current response: %v", err)
+	}
+	wire = protowire.AppendString(
+		protowire.AppendTag(wire, 2_047, protowire.BytesType),
+		"future-response-field",
+	)
+
+	var decoded opensplunkv1.GetSystemBootstrapResponse
+	if err := proto.Unmarshal(wire, &decoded); err != nil {
+		t.Fatalf("unmarshal future response: %v", err)
+	}
+	if decoded.GetApiVersion() != "v1" ||
+		decoded.GetSplCompatibilityVersion() != "open-splunk-v0.1" {
+		t.Fatalf("known response fields = %+v", &decoded)
+	}
+	if len(decoded.ProtoReflect().GetUnknown()) == 0 {
+		t.Fatal("Go runtime did not retain the future response field")
 	}
 }
 

@@ -14,7 +14,6 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -191,11 +190,6 @@ func TestSearchJobListRejectsInvalidOptionsBeforeService(t *testing.T) {
 	oversizedText := strings.Repeat("x", maximumSearchJobListFilterTextBytes+1)
 	oversizedToken := strings.Repeat("t", maximumSearchJobListPageTokenBytes+1)
 	paddedToken := " signed-token "
-	unknownField := protowire.AppendVarint(protowire.AppendTag(nil, 99, protowire.VarintType), 1)
-	topLevelUnknown := &opensplunkv1.ListSearchJobsRequest{}
-	topLevelUnknown.ProtoReflect().SetUnknown(unknownField)
-	nestedPageUnknown := &opensplunkv1.ListSearchJobsRequest{Page: &opensplunkv1.PageRequest{}}
-	nestedPageUnknown.Page.ProtoReflect().SetUnknown(unknownField)
 	tests := []struct {
 		name    string
 		request *opensplunkv1.ListSearchJobsRequest
@@ -214,8 +208,6 @@ func TestSearchJobListRejectsInvalidOptionsBeforeService(t *testing.T) {
 		{name: "oversized app", request: &opensplunkv1.ListSearchJobsRequest{AppIdFilter: &oversizedApp}},
 		{name: "control app", request: &opensplunkv1.ListSearchJobsRequest{AppIdFilter: &controlApp}},
 		{name: "oversized text", request: &opensplunkv1.ListSearchJobsRequest{TextFilter: &oversizedText}},
-		{name: "top-level unknown field", request: topLevelUnknown},
-		{name: "nested page unknown field", request: nestedPageUnknown},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

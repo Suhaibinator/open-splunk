@@ -17,7 +17,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
-	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -955,23 +954,6 @@ func TestCollectorAdministrationRejectsMalformedRequestsBeforeService(
 	)
 	controlText := "needle\ncontrol"
 	displayName := "valid"
-	unknownField := protowire.AppendVarint(
-		protowire.AppendTag(nil, 99, protowire.VarintType),
-		1,
-	)
-	unknownPage := &opensplunkv1.ListCollectorsRequest{
-		Page: &opensplunkv1.PageRequest{},
-	}
-	unknownPage.Page.ProtoReflect().SetUnknown(unknownField)
-	unknownMask := &opensplunkv1.UpdateCollectorRequest{
-		CollectorId:     collectorID,
-		ExpectedVersion: 1,
-		DisplayName:     &displayName,
-		UpdateMask: &fieldmaskpb.FieldMask{
-			Paths: []string{"display_name"},
-		},
-	}
-	unknownMask.UpdateMask.ProtoReflect().SetUnknown(unknownField)
 	tests := []struct {
 		name    string
 		path    string
@@ -1028,11 +1010,6 @@ func TestCollectorAdministrationRejectsMalformedRequestsBeforeService(
 			},
 		},
 		{
-			name:    "unknown nested page field",
-			path:    "/api/v1/collectors/list",
-			request: unknownPage,
-		},
-		{
 			name: "unsupported update mask",
 			path: "/api/v1/collectors/update",
 			request: &opensplunkv1.UpdateCollectorRequest{
@@ -1043,11 +1020,6 @@ func TestCollectorAdministrationRejectsMalformedRequestsBeforeService(
 					Paths: []string{"collector_id"},
 				},
 			},
-		},
-		{
-			name:    "unknown nested mask field",
-			path:    "/api/v1/collectors/update",
-			request: unknownMask,
 		},
 		{
 			name: "unknown administrative enum",
@@ -1383,6 +1355,20 @@ func TestCollectorAdministrationRoutesRequireAuthAndAdvertiseFeature(
 		},
 	}
 	for _, route := range routes {
+		route.request.ProtoReflect().SetUnknown(
+			futureProtobufField("future-collector-request"),
+		)
+		switch request := route.request.(type) {
+		case *opensplunkv1.ListCollectorsRequest:
+			request.Page = &opensplunkv1.PageRequest{}
+			request.Page.ProtoReflect().SetUnknown(
+				futureProtobufField("future-collector-page"),
+			)
+		case *opensplunkv1.UpdateCollectorRequest:
+			request.UpdateMask.ProtoReflect().SetUnknown(
+				futureProtobufField("future-collector-mask"),
+			)
+		}
 		response := postCollectorAdministrationProto(
 			t,
 			handler,

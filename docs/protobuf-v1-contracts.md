@@ -18,6 +18,28 @@ Persistent database rows and ClickHouse table definitions are deliberately not p
 
 Every route below is `POST`, relative to `/api/v1`, and uses `application/x-protobuf` for successful request and response bodies. Non-2xx errors use the standard SRouter/go-common transport error shape. Authentication can be added by SRouter middleware without changing these messages.
 
+Binary protobuf version skew follows the normal ignore-unknown contract. Every
+syntactically valid request may contain fields that this server version does
+not recognize, including within populated known submessages. Those fields
+count toward the route's raw body limit and are discarded at the HTTP
+transport boundary before known-field validation or persistence. They cannot
+change authentication, authorization, target selection, confirmation,
+optimistic versions, update masks, quotas, stored objects, or responses.
+
+Recognized fields keep their complete validation contract. In particular, an
+unsupported numeric value in a known enum is not an unknown field and remains
+invalid where the operation does not define it. A future oneof arm is absent
+from an older server's known view, so an operation that requires that oneof
+still rejects the request. New fields whose omission would change a
+security-sensitive operation require explicit capability negotiation or a
+new versioned route. Malformed or truncated protobuf remains a transport
+error, and duplicate known fields retain the protobuf runtime's existing
+decode semantics.
+
+Clients may rely on known fields remaining decodable, not on unknown bytes
+being preserved or echoed. The Go runtime retains unknown response bytes by
+default, while the generated TypeScript decoders skip them.
+
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.
 The snapshot is the exact durable result of the optimistic update and contains

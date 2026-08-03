@@ -16,7 +16,6 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
-	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -244,17 +243,68 @@ func TestSearchHistoryRoutesValidateBeforeStoreCalls(t *testing.T) {
 	}
 }
 
-func TestSearchHistoryRoutesRejectUnknownFieldsRecursively(t *testing.T) {
-	store := &fakeSearchHistory{}
+func TestSearchHistoryRoutesDiscardUnknownFieldsRecursively(t *testing.T) {
+	store := &fakeSearchHistory{listFn: func(
+		_ context.Context,
+		_ searchhistory.AccessScope,
+		_ searchhistory.ListRequest,
+	) (searchhistory.ListResult, error) {
+		return searchhistory.ListResult{}, nil
+	}}
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SearchHistory: store, WebUI: testUI()})
 	request := &opensplunkv1.ListSearchHistoryRequest{Filter: &opensplunkv1.SearchHistoryFilter{}}
-	request.Filter.ProtoReflect().SetUnknown(protowire.AppendVarint(protowire.AppendTag(nil, 99, protowire.VarintType), 1))
+	request.ProtoReflect().SetUnknown(futureProtobufField("future-history-list"))
+	request.Filter.ProtoReflect().SetUnknown(futureProtobufField("future-history-filter"))
 	response := postProto(t, handler, "/api/v1/search/history/list", request)
-	if response.Code != http.StatusBadRequest {
+	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
-	if store.callCount() != 0 {
-		t.Fatalf("store calls = %d", store.callCount())
+	if store.callCount() != 1 {
+		t.Fatalf("store calls = %d, want 1", store.callCount())
+	}
+}
+
+func TestSearchHistoryRejectsUnknownFieldsFromServiceOutput(t *testing.T) {
+	entry := historyEntry(
+		"job-unknown-output",
+		testNow,
+		"app-main",
+		"saved-1",
+		opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED,
+	)
+	entry.ProtoReflect().SetUnknown(
+		futureProtobufField("future-history-output"),
+	)
+	store := &fakeSearchHistory{getFn: func(
+		context.Context,
+		searchhistory.AccessScope,
+		string,
+	) (*opensplunkv1.SearchHistoryEntry, error) {
+		return entry, nil
+	}}
+	handler := newTestHandler(t, Config{
+		SearchJobs:    &fakeSearchJobs{},
+		Indexes:       fakeIndexCatalog{},
+		SearchHistory: store,
+		WebUI:         testUI(),
+	})
+	response := postProto(
+		t,
+		handler,
+		"/api/v1/search/history/get",
+		&opensplunkv1.GetSearchHistoryEntryRequest{
+			SearchJobId: "job-unknown-output",
+		},
+	)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	if store.callCount() != 1 {
+		t.Fatalf("store calls = %d, want 1", store.callCount())
 	}
 }
 

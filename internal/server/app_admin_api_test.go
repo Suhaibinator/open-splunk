@@ -15,7 +15,6 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
-	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -1057,15 +1056,33 @@ func TestAppAdministrationRequestBoundaryOrderAndExactness(t *testing.T) {
 	}
 }
 
-func TestAppAdministrationRejectsUnknownFieldsRecursively(t *testing.T) {
+func TestAppAdministrationDiscardsUnknownFieldsRecursively(t *testing.T) {
 	t.Parallel()
 
-	service := &fakeAppAdministration{}
-	handler := newAppAdministrationTestHandler(t, service, BootstrapConfig{})
-	unknown := protowire.AppendVarint(
-		protowire.AppendTag(nil, 99, protowire.VarintType),
+	record := appAdministrationFixture(
+		"app_valid",
 		1,
+		AppAdministrationStateActive,
+		AppAdministrationDefinition{Slug: "valid", DisplayName: "Valid"},
 	)
+	service := &fakeAppAdministration{
+		getFn: func(
+			context.Context,
+			AppAdministrationScope,
+			AppAdministrationSelector,
+		) (AppAdministrationWorkspace, error) {
+			return record, nil
+		},
+		listFn: func(
+			context.Context,
+			AppAdministrationScope,
+			AppAdministrationListRequest,
+		) (AppAdministrationListResult, error) {
+			return AppAdministrationListResult{}, nil
+		},
+	}
+	handler := newAppAdministrationTestHandler(t, service, BootstrapConfig{})
+	unknown := futureProtobufField("future-app-field")
 	topLevel := &opensplunkv1.GetAppRequest{
 		Selector: &opensplunkv1.AppSelector{
 			Selector: &opensplunkv1.AppSelector_AppId{AppId: "app_valid"},
@@ -1095,7 +1112,7 @@ func TestAppAdministrationRejectsUnknownFieldsRecursively(t *testing.T) {
 				test.path,
 				test.request,
 			)
-			if response.Code != http.StatusBadRequest {
+			if response.Code != http.StatusOK {
 				t.Fatalf(
 					"status = %d, body = %s",
 					response.Code,
@@ -1104,8 +1121,29 @@ func TestAppAdministrationRejectsUnknownFieldsRecursively(t *testing.T) {
 			}
 		})
 	}
-	if service.calls() != ([6]int{}) {
-		t.Fatalf("unknown fields reached service: %v", service.calls())
+	if service.calls() != ([6]int{0, 2, 1, 0, 0, 0}) {
+		t.Fatalf("service calls = %v", service.calls())
+	}
+
+	unknownOnlySelector := &opensplunkv1.GetAppRequest{
+		Selector: &opensplunkv1.AppSelector{},
+	}
+	unknownOnlySelector.Selector.ProtoReflect().SetUnknown(unknown)
+	response := postAppAdministrationProto(
+		t,
+		handler,
+		"/api/v1/apps/get",
+		unknownOnlySelector,
+	)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"unknown-only selector status = %d, body = %s",
+			response.Code,
+			response.Body,
+		)
+	}
+	if service.calls() != ([6]int{0, 2, 1, 0, 0, 0}) {
+		t.Fatalf("unknown-only selector reached service: %v", service.calls())
 	}
 }
 

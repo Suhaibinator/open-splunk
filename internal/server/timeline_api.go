@@ -16,12 +16,12 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-func (handler *apiHandler) searchTimelineRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.NewGenericRouteDefinition[*opensplunkv1.GetSearchTimelineRequest, *serializedSearchTimelineResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetSearchTimelineRequest, *serializedSearchTimelineResponse]{
+func (handler *apiHandler) searchTimelineRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[*opensplunkv1.GetSearchTimelineRequest, *serializedSearchTimelineResponse](router.RouteConfig[*opensplunkv1.GetSearchTimelineRequest, *serializedSearchTimelineResponse]{
 			Path: "/search/jobs/timeline", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchTimelineCodec(), Handler: handler.getSearchTimeline,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetSearchTimelineRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetSearchTimelineRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }

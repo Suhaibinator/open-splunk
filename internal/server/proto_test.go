@@ -7,11 +7,71 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func TestUnwrapProtobufRoutesIsAnExactProjection(t *testing.T) {
+	t.Parallel()
+
+	first := &router.RouteConfigBase{Path: "/first"}
+	second := &router.RouteConfigBase{Path: "/second"}
+	routes := []protobufRouteDefinition{
+		{definition: first},
+		{definition: second},
+	}
+
+	got := unwrapProtobufRoutes(routes)
+	if len(got) != len(routes) {
+		t.Fatalf("unwrapped route count = %d, want %d", len(got), len(routes))
+	}
+	if got[0] != first || got[1] != second {
+		t.Fatalf("unwrapped routes = %#v, want the two input definitions in order", got)
+	}
+	routes[0].definition = second
+	if got[0] != first {
+		t.Fatal("unwrapped route slice aliases its wrapper input")
+	}
+}
+
+func TestForwardCompatibleProtoSanitizerDiscardsUnknownFieldsRecursively(t *testing.T) {
+	t.Parallel()
+
+	request, err := structpb.NewStruct(map[string]any{
+		"nested": []any{"known", true},
+	})
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	want := proto.Clone(request)
+	unknown := protowire.AppendVarint(
+		protowire.AppendTag(nil, 2_047, protowire.VarintType),
+		1,
+	)
+	request.ProtoReflect().SetUnknown(unknown)
+	nested := request.GetFields()["nested"]
+	nested.ProtoReflect().SetUnknown(unknown)
+	list := nested.GetListValue()
+	list.ProtoReflect().SetUnknown(unknown)
+	list.GetValues()[0].ProtoReflect().SetUnknown(unknown)
+
+	got, err := forwardCompatibleProtoSanitizer(request)
+	if err != nil {
+		t.Fatalf("sanitize request: %v", err)
+	}
+	if got != request {
+		t.Fatal("sanitizer replaced the decoded request")
+	}
+	if !proto.Equal(got, want) {
+		t.Fatalf("sanitized request = %v, want %v", got, want)
+	}
+}
 
 func TestValueToProtoPreservesEverySupportedKind(t *testing.T) {
 	decimal, err := searchjobs.DecimalValue("-12345678901234567890.00100")

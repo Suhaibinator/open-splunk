@@ -143,12 +143,16 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 	result := validServerSearchInspectionResult(t)
 	service := &fakeSearchInspections{result: result}
 	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
+	requestMessage := &opensplunkv1.InspectSearchJobRequest{
+		SearchJobId: "inspection-job",
+	}
+	requestMessage.ProtoReflect().SetUnknown(
+		futureProtobufField("future-inspection-field"),
+	)
 	response := postAuthenticatedInspection(
 		t,
 		handler,
-		&opensplunkv1.InspectSearchJobRequest{
-			SearchJobId: "inspection-job",
-		},
+		requestMessage,
 	)
 	if response.Code != http.StatusOK {
 		t.Fatalf(

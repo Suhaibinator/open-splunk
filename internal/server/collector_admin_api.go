@@ -42,14 +42,11 @@ const (
 func (handler *apiHandler) collectorAdministrationRoutes(
 	noAuth router.AuthLevel,
 	requestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.NewGenericRouteDefinition[
+) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.ListCollectorsRequest,
-			*serializedListCollectorsResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedListCollectorsResponse](router.RouteConfig[
 			*opensplunkv1.ListCollectorsRequest,
 			*serializedListCollectorsResponse,
 		]{
@@ -59,17 +56,14 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Codec:      newSerializedListCollectorsCodec(),
 			Handler:    handler.listCollectors,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.ListCollectorsRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.ListCollectorsRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
 		}),
-		router.NewGenericRouteDefinition[
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.GetCollectorRequest,
-			*serializedGetCollectorResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedGetCollectorResponse](router.RouteConfig[
 			*opensplunkv1.GetCollectorRequest,
 			*serializedGetCollectorResponse,
 		]{
@@ -79,17 +73,14 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Codec:      newSerializedGetCollectorCodec(),
 			Handler:    handler.getCollector,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.GetCollectorRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.GetCollectorRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
 		}),
-		router.NewGenericRouteDefinition[
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.UpdateCollectorRequest,
-			*serializedUpdateCollectorResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedUpdateCollectorResponse](router.RouteConfig[
 			*opensplunkv1.UpdateCollectorRequest,
 			*serializedUpdateCollectorResponse,
 		]{
@@ -99,17 +90,14 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Codec:      newSerializedUpdateCollectorCodec(),
 			Handler:    handler.updateCollector,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.UpdateCollectorRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateCollectorRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},
 		}),
-		router.NewGenericRouteDefinition[
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.SetCollectorEnabledRequest,
-			*serializedSetCollectorEnabledResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedSetCollectorEnabledResponse](router.RouteConfig[
 			*opensplunkv1.SetCollectorEnabledRequest,
 			*serializedSetCollectorEnabledResponse,
 		]{
@@ -119,7 +107,7 @@ func (handler *apiHandler) collectorAdministrationRoutes(
 			Codec:      newSerializedSetCollectorEnabledCodec(),
 			Handler:    handler.setCollectorEnabled,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.SetCollectorEnabledRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.SetCollectorEnabledRequest],
 			Overrides: sroutercommon.RouteOverrides{
 				MaxBodySize: requestBytes,
 			},

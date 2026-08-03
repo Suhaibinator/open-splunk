@@ -22,17 +22,17 @@ const (
 	maximumSearchFieldDisplayNameBytes = eventfields.MaximumNormalizedFieldNameBytes
 )
 
-func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.NewGenericRouteDefinition[*opensplunkv1.ListSearchFieldsRequest, *serializedSearchFieldsResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListSearchFieldsRequest, *serializedSearchFieldsResponse]{
+func (handler *apiHandler) searchFieldRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[*opensplunkv1.ListSearchFieldsRequest, *serializedSearchFieldsResponse](router.RouteConfig[*opensplunkv1.ListSearchFieldsRequest, *serializedSearchFieldsResponse]{
 			Path: searchFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldsCodec(), Handler: handler.listSearchFields,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListSearchFieldsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListSearchFieldsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse](router.RouteConfig[*opensplunkv1.GetSearchFieldSummaryRequest, *serializedSearchFieldSummaryResponse]{
 			Path: searchFieldSummaryRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchFieldSummaryCodec(), Handler: handler.getSearchFieldSummary,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetSearchFieldSummaryRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetSearchFieldSummaryRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }

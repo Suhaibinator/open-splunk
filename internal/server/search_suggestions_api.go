@@ -42,20 +42,17 @@ const (
 func (handler *apiHandler) searchSuggestionRoutes(
 	noAuth router.AuthLevel,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.NewGenericRouteDefinition[
+) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.GetSearchSuggestionsRequest,
-			*serializedSearchSuggestionsResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedSearchSuggestionsResponse](router.RouteConfig[
 			*opensplunkv1.GetSearchSuggestionsRequest,
 			*serializedSearchSuggestionsResponse,
 		]{
 			Path: searchSuggestionsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedSearchSuggestionsCodec(), Handler: handler.getSearchSuggestions,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetSearchSuggestionsRequest],
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetSearchSuggestionsRequest],
 			Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}

@@ -26,6 +26,11 @@ import (
 
 var testNow = time.Date(2026, 7, 22, 12, 0, 0, 123_000_000, time.UTC)
 
+func futureProtobufField(value string) []byte {
+	payload := protowire.AppendTag(nil, 2_047, protowire.BytesType)
+	return protowire.AppendString(payload, value)
+}
+
 type fakeRuntimeReadiness struct {
 	mu          sync.Mutex
 	err         error
@@ -693,20 +698,80 @@ func TestProtobufMediaTypeMethodAndBodyLimit(t *testing.T) {
 	if response.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("chunked large body status = %d, body = %s", response.Code, response.Body.String())
 	}
+
+	request = httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"/api/v1/system/bootstrap",
+		bytes.NewReader(futureProtobufField(strings.Repeat("x", 64))),
+	)
+	request.Header.Set("Content-Type", "application/x-protobuf")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf(
+			"unknown-only large body status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
 }
 
 func TestProtobufUnknownFieldsRemainForwardCompatible(t *testing.T) {
+	jobs := &fakeSearchJobs{}
 	handler := newTestHandler(t, Config{
-		SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, WebUI: testUI(),
+		SearchJobs: jobs, Indexes: fakeIndexCatalog{}, WebUI: testUI(),
 	})
-	payload := protowire.AppendTag(nil, 2_047, protowire.BytesType)
-	payload = protowire.AppendString(payload, "future-client-field")
+	payload := futureProtobufField("future-client-field")
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/system/bootstrap", bytes.NewReader(payload))
 	request.Header.Set("Content-Type", "application/x-protobuf")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	listRequest := &opensplunkv1.ListSearchJobsRequest{
+		Page: &opensplunkv1.PageRequest{},
+	}
+	listRequest.ProtoReflect().SetUnknown(payload)
+	listRequest.Page.ProtoReflect().SetUnknown(payload)
+	response = postProto(t, handler, searchJobsListPath, listRequest)
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"nested unknown-field status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	jobs.mu.Lock()
+	listCalls := jobs.listCalls
+	jobs.mu.Unlock()
+	if listCalls != 1 {
+		t.Fatalf("search-job list calls = %d, want 1", listCalls)
+	}
+
+	invalid := &opensplunkv1.ListSearchJobsRequest{
+		Page: &opensplunkv1.PageRequest{},
+		StateFilters: []opensplunkv1.SearchJobState{
+			opensplunkv1.SearchJobState(99),
+		},
+	}
+	invalid.ProtoReflect().SetUnknown(payload)
+	invalid.Page.ProtoReflect().SetUnknown(payload)
+	response = postProto(t, handler, searchJobsListPath, invalid)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"unknown field with invalid known enum status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	jobs.mu.Lock()
+	listCalls = jobs.listCalls
+	jobs.mu.Unlock()
+	if listCalls != 1 {
+		t.Fatalf("invalid request search-job list calls = %d, want 1", listCalls)
 	}
 }
 

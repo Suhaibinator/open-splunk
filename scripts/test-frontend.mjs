@@ -14,6 +14,7 @@ const testFiles = [
   path.join("app", "search-workspace", "workspace-utils.test.ts"),
   path.join("app", "search-workspace", "virtual-table.test.ts"),
   path.join("lib", "api", "pagination.test.ts"),
+  path.join("lib", "api", "protobuf-forward-compat.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "api", "system-bootstrap.test.ts"),
   path.join("lib", "search", "backend-data.test.ts"),

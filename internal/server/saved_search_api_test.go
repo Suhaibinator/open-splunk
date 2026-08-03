@@ -114,6 +114,10 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 		if scope.OwnerID != ownerID || definition.GetOwnerId() != ownerID || definition.GetSearch().GetAppId() != appID {
 			t.Fatalf("create scope/definition = %+v / %+v", scope, definition)
 		}
+		if len(definition.ProtoReflect().GetUnknown()) != 0 ||
+			len(definition.GetSearch().ProtoReflect().GetUnknown()) != 0 {
+			t.Fatalf("create retained unknown fields: %+v", definition)
+		}
 		definition.Name = "service-mutated-input"
 		return created, nil
 	}
@@ -148,6 +152,11 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 		if mask == nil || len(mask.Paths) != 1 || mask.Paths[0] != "definition.name" {
 			t.Fatalf("update mask = %+v", mask)
 		}
+		if len(definition.ProtoReflect().GetUnknown()) != 0 ||
+			len(definition.GetSearch().ProtoReflect().GetUnknown()) != 0 ||
+			len(mask.ProtoReflect().GetUnknown()) != 0 {
+			t.Fatalf("update retained unknown fields: definition=%+v mask=%+v", definition, mask)
+		}
 		mask.Paths[0] = "service-mutated-mask"
 		return updated, nil
 	}
@@ -166,7 +175,24 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 	handler := newTestHandler(t, Config{SearchJobs: &fakeSearchJobs{}, Indexes: fakeIndexCatalog{}, SavedSearches: store, WebUI: testUI(), OwnerID: ownerID})
 
 	definition := savedSearchDefinition(ownerID, appID, "Errors")
-	response := postProto(t, handler, "/api/v1/saved-searches/create", &opensplunkv1.CreateSavedSearchRequest{Definition: definition})
+	definition.ProtoReflect().SetUnknown(
+		futureProtobufField("future-saved-search-definition"),
+	)
+	definition.Search.ProtoReflect().SetUnknown(
+		futureProtobufField("future-search-definition"),
+	)
+	createRequest := &opensplunkv1.CreateSavedSearchRequest{
+		Definition: definition,
+	}
+	createRequest.ProtoReflect().SetUnknown(
+		futureProtobufField("future-saved-search-create"),
+	)
+	response := postProto(
+		t,
+		handler,
+		"/api/v1/saved-searches/create",
+		createRequest,
+	)
 	assertSavedSearchResponse(t, response, &opensplunkv1.CreateSavedSearchResponse{}, "saved-1", 1)
 	if definition.GetName() != "Errors" {
 		t.Fatalf("service mutation escaped cloned create input: %q", definition.GetName())
@@ -198,9 +224,27 @@ func TestSavedSearchRoutesRoundTripProtobuf(t *testing.T) {
 
 	updateDefinition := savedSearchDefinition(ownerID, appID, "Errors Today")
 	updateMask := &fieldmaskpb.FieldMask{Paths: []string{"definition.name"}}
-	response = postProto(t, handler, "/api/v1/saved-searches/update", &opensplunkv1.UpdateSavedSearchRequest{
+	updateDefinition.ProtoReflect().SetUnknown(
+		futureProtobufField("future-saved-search-update-definition"),
+	)
+	updateDefinition.Search.ProtoReflect().SetUnknown(
+		futureProtobufField("future-saved-search-update-search"),
+	)
+	updateMask.ProtoReflect().SetUnknown(
+		futureProtobufField("future-saved-search-update-mask"),
+	)
+	updateRequest := &opensplunkv1.UpdateSavedSearchRequest{
 		SavedSearchId: "saved-1", ExpectedVersion: 1, Definition: updateDefinition, UpdateMask: updateMask,
-	})
+	}
+	updateRequest.ProtoReflect().SetUnknown(
+		futureProtobufField("future-saved-search-update"),
+	)
+	response = postProto(
+		t,
+		handler,
+		"/api/v1/saved-searches/update",
+		updateRequest,
+	)
 	assertSavedSearchResponse(t, response, &opensplunkv1.UpdateSavedSearchResponse{}, "saved-1", 2)
 	if updateMask.Paths[0] != "definition.name" {
 		t.Fatalf("service mutation escaped cloned update mask: %v", updateMask.Paths)

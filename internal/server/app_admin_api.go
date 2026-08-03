@@ -158,14 +158,11 @@ func (handler *apiHandler) appAdministrationRoutes(
 	noAuth router.AuthLevel,
 	requestBytes int64,
 	smallRequestBytes int64,
-) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.NewGenericRouteDefinition[
+) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.CreateAppRequest,
-			*serializedCreateAppResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedCreateAppResponse](router.RouteConfig[
 			*opensplunkv1.CreateAppRequest,
 			*serializedCreateAppResponse,
 		]{
@@ -175,15 +172,12 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedCreateAppCodec(),
 			Handler:    handler.createApp,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.CreateAppRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.CreateAppRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
-		router.NewGenericRouteDefinition[
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.GetAppRequest,
-			*serializedGetAppResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedGetAppResponse](router.RouteConfig[
 			*opensplunkv1.GetAppRequest,
 			*serializedGetAppResponse,
 		]{
@@ -193,15 +187,12 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedGetAppCodec(),
 			Handler:    handler.getApp,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.GetAppRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.GetAppRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.ListAppsRequest,
-			*serializedListAppsResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedListAppsResponse](router.RouteConfig[
 			*opensplunkv1.ListAppsRequest,
 			*serializedListAppsResponse,
 		]{
@@ -211,15 +202,12 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedListAppsCodec(),
 			Handler:    handler.listApps,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.ListAppsRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.ListAppsRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.UpdateAppRequest,
-			*serializedUpdateAppResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedUpdateAppResponse](router.RouteConfig[
 			*opensplunkv1.UpdateAppRequest,
 			*serializedUpdateAppResponse,
 		]{
@@ -229,15 +217,12 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedUpdateAppCodec(),
 			Handler:    handler.updateApp,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.UpdateAppRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateAppRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
-		router.NewGenericRouteDefinition[
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.SetAppStateRequest,
-			*serializedSetAppStateResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedSetAppStateResponse](router.RouteConfig[
 			*opensplunkv1.SetAppStateRequest,
 			*serializedSetAppStateResponse,
 		]{
@@ -247,15 +232,12 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedSetAppStateCodec(),
 			Handler:    handler.setAppState,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.SetAppStateRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.SetAppStateRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[
+		newForwardCompatibleProtoRoute[
 			*opensplunkv1.DeleteAppRequest,
-			*serializedDeleteAppResponse,
-			string,
-			struct{},
-		](router.RouteConfig[
+			*serializedDeleteAppResponse](router.RouteConfig[
 			*opensplunkv1.DeleteAppRequest,
 			*serializedDeleteAppResponse,
 		]{
@@ -265,7 +247,7 @@ func (handler *apiHandler) appAdministrationRoutes(
 			Codec:      newSerializedDeleteAppCodec(),
 			Handler:    handler.deleteApp,
 			SourceType: router.Body,
-			Sanitizer:  identitySanitizer[*opensplunkv1.DeleteAppRequest],
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.DeleteAppRequest],
 			Overrides:  sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}

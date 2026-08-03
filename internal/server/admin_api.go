@@ -251,88 +251,88 @@ func canonicalHTTPAuthority(input string) (string, string, error) {
 	return host, port, nil
 }
 
-func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []router.RouteDefinition {
-	routes := []router.RouteDefinition{
-		router.NewGenericRouteDefinition[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse]{
+func (handler *apiHandler) indexAdministrationRoutes(noAuth router.AuthLevel, smallRequestBytes int64) []protobufRouteDefinition {
+	routes := []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse](router.RouteConfig[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse]{
 			Path: "/indexes/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.CreateIndexRequest, *opensplunkv1.CreateIndexResponse](), Handler: handler.createIndex,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.CreateIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.CreateIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.GetIndexRequest, *opensplunkv1.GetIndexResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetIndexRequest, *opensplunkv1.GetIndexResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.GetIndexRequest, *opensplunkv1.GetIndexResponse](router.RouteConfig[*opensplunkv1.GetIndexRequest, *opensplunkv1.GetIndexResponse]{
 			Path: "/indexes/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.GetIndexRequest, *opensplunkv1.GetIndexResponse](), Handler: handler.getIndex,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.ListIndexesRequest, *serializedIndexListResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListIndexesRequest, *serializedIndexListResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.ListIndexesRequest, *serializedIndexListResponse](router.RouteConfig[*opensplunkv1.ListIndexesRequest, *serializedIndexListResponse]{
 			Path: "/indexes/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedIndexListCodec(), Handler: handler.listIndexes,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListIndexesRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListIndexesRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.UpdateIndexRequest, *opensplunkv1.UpdateIndexResponse, string, struct{}](router.RouteConfig[*opensplunkv1.UpdateIndexRequest, *opensplunkv1.UpdateIndexResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateIndexRequest, *opensplunkv1.UpdateIndexResponse](router.RouteConfig[*opensplunkv1.UpdateIndexRequest, *opensplunkv1.UpdateIndexResponse]{
 			Path: "/indexes/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.UpdateIndexRequest, *opensplunkv1.UpdateIndexResponse](), Handler: handler.updateIndex,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.UpdateIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse, string, struct{}](router.RouteConfig[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse](router.RouteConfig[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse]{
 			Path: "/indexes/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.SetIndexStateRequest, *opensplunkv1.SetIndexStateResponse](), Handler: handler.setIndexState,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.SetIndexStateRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.SetIndexStateRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse, string, struct{}](router.RouteConfig[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse](router.RouteConfig[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse]{
 			Path: "/indexes/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.DeleteIndexRequest, *opensplunkv1.DeleteIndexResponse](), Handler: handler.deleteIndex,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.DeleteIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.DeleteIndexRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 	if handler.indexStatistics != nil {
 		routes = append(
 			routes,
-			router.NewGenericRouteDefinition[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse]{
+			newForwardCompatibleProtoRoute[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse](router.RouteConfig[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse]{
 				Path: "/indexes/stats/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: codec.NewProtoCodec[*opensplunkv1.GetIndexStatsRequest, *opensplunkv1.GetIndexStatsResponse](), Handler: handler.getIndexStatistics,
-				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetIndexStatsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+				SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetIndexStatsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 			}),
 		)
 	}
 	if handler.indexFields != nil {
 		routes = append(
 			routes,
-			router.NewGenericRouteDefinition[*opensplunkv1.ListIndexFieldsRequest, *serializedIndexFieldsResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListIndexFieldsRequest, *serializedIndexFieldsResponse]{
+			newForwardCompatibleProtoRoute[*opensplunkv1.ListIndexFieldsRequest, *serializedIndexFieldsResponse](router.RouteConfig[*opensplunkv1.ListIndexFieldsRequest, *serializedIndexFieldsResponse]{
 				Path: indexFieldsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 				Codec: newSerializedIndexFieldsCodec(), Handler: handler.listIndexFields,
-				SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListIndexFieldsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+				SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListIndexFieldsRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 			}),
 		)
 	}
 	return routes
 }
 
-func (handler *apiHandler) ingestionTokenRoutes(noAuth router.AuthLevel, requestBytes, smallRequestBytes int64) []router.RouteDefinition {
-	return []router.RouteDefinition{
-		router.NewGenericRouteDefinition[*opensplunkv1.CreateIngestionTokenRequest, *opensplunkv1.CreateIngestionTokenResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CreateIngestionTokenRequest, *opensplunkv1.CreateIngestionTokenResponse]{
+func (handler *apiHandler) ingestionTokenRoutes(noAuth router.AuthLevel, requestBytes, smallRequestBytes int64) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[*opensplunkv1.CreateIngestionTokenRequest, *opensplunkv1.CreateIngestionTokenResponse](router.RouteConfig[*opensplunkv1.CreateIngestionTokenRequest, *opensplunkv1.CreateIngestionTokenResponse]{
 			Path: "/ingestion-tokens/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.CreateIngestionTokenRequest, *opensplunkv1.CreateIngestionTokenResponse](), Handler: handler.createIngestionToken,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.CreateIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.CreateIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.GetIngestionTokenRequest, *opensplunkv1.GetIngestionTokenResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetIngestionTokenRequest, *opensplunkv1.GetIngestionTokenResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.GetIngestionTokenRequest, *opensplunkv1.GetIngestionTokenResponse](router.RouteConfig[*opensplunkv1.GetIngestionTokenRequest, *opensplunkv1.GetIngestionTokenResponse]{
 			Path: "/ingestion-tokens/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.GetIngestionTokenRequest, *opensplunkv1.GetIngestionTokenResponse](), Handler: handler.getIngestionToken,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.GetIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.ListIngestionTokensRequest, *serializedTokenListResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListIngestionTokensRequest, *serializedTokenListResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.ListIngestionTokensRequest, *serializedTokenListResponse](router.RouteConfig[*opensplunkv1.ListIngestionTokensRequest, *serializedTokenListResponse]{
 			Path: "/ingestion-tokens/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedTokenListCodec(), Handler: handler.listIngestionTokens,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.ListIngestionTokensRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListIngestionTokensRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse, string, struct{}](router.RouteConfig[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse](router.RouteConfig[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse]{
 			Path: "/ingestion-tokens/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse](), Handler: handler.updateIngestionToken,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.UpdateIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
 		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse, string, struct{}](router.RouteConfig[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse]{
+		newForwardCompatibleProtoRoute[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse](router.RouteConfig[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse]{
 			Path: "/ingestion-tokens/revoke", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse](), Handler: handler.revokeIngestionToken,
-			SourceType: router.Body, Sanitizer: identitySanitizer[*opensplunkv1.RevokeIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.RevokeIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 	}
 }
