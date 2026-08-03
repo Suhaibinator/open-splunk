@@ -2982,10 +2982,10 @@ Numeric, Boolean, timestamp, extended, list, and object column values fail the
 whole command atomically before any schema or row is published — Splunk
 documents `bins`/`span`/`start`/`end` discretization for the row split only and
 documents nothing about rendering numeric split values as column names, so no
-approximation is attempted. A compile-time-known non-string column field type is
-rejected earlier with `SPL_UNSUPPORTED_CHART_FIELD_TYPE`. Numeric values are
-therefore legal row labels and fatal column labels. Convert a numeric scalar to
-a separate string field before `chart`, for example
+approximation is attempted. A compile-time-known non-string scalar column field
+type is rejected earlier with `SPL_UNSUPPORTED_CHART_FIELD_TYPE`. Numeric
+values are therefore legal row labels and fatal column labels. Convert a numeric
+scalar to a separate string field before `chart`, for example
 `eval status_text=tostring(status) | chart count OVER path BY status_text`.
 `bin` does not perform that conversion: it discretizes numbers into numeric
 bucket starts and so only converts a working string column axis into a fatal

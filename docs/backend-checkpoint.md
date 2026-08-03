@@ -7,6 +7,116 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded numeric chart aggregates
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `1a9f6ef` — add exact, bounded `chart sum(field)` and `chart avg(field)`
+  pivots.
+- `8d032b1` — pin numeric-chart aggregate, measure, and axis completion
+  contexts after the final documentation review.
+
+This test-first SPL unit extends the two-axis chart path without a control-plane
+schema change, migration, public protobuf change, GORM on the ClickHouse path,
+or frontend transport/component change:
+
+1. `chart sum(field) OVER row BY series`, `chart avg(field) OVER row BY
+   series`, and the equivalent `BY row, series` spelling now accept exactly one
+   unquoted measure field. The parser preserves source ranges, suggestions
+   complete the supported aggregate and field positions, and parser/planner
+   validation rejects aliases, `average`, wildcards, eval expressions,
+   multiple inputs, options, malformed splits, and reuse of the measure as the
+   row axis. The measure may equal the column split.
+2. Numeric cells are nullable Double. Numeric eligibility reuses the existing
+   bounded array normalization shared by numeric aggregates; missing, null,
+   empty or nonnumeric text, Boolean, and container members do not contribute.
+   A row with no eligible measure members remains in the result with null
+   cells, while a genuine numeric zero remains present through a private
+   value-presence
+   bitmap. Count chart retains its non-null UInt64 cells.
+3. The ten ordinary series rank globally by the sum of their finalized
+   per-row cells, with deterministic lexical ties and the established
+   positive-infinity, finite, negative-infinity, then NaN score ordering.
+   `NULL` never consumes an ordinary slot. `OTHER` merges the omitted
+   numerator/count states before finalizing `avg`, so it is member-weighted
+   rather than an average of averages.
+4. Numeric lowering performs one tenant/index/time/snapshot-scoped relation
+   read and no `ARRAY JOIN`. One bounded raw `(row, split-kind, label)` state
+   relation drives scoring, domain selection, validation, collapse, and final
+   row publication. Count chart keeps its separate bounded domain-first shape.
+5. Both chart modes now carry a private invalid-result sentinel, ordered before
+   public rows, so an invalid split, collision, or poisoned row is observable
+   even when no eligible row-axis value exists. Chronological validation
+   wrappers preserve that sentinel ordering. Forged plans cannot lower the
+   exact 10,000-row compiler contract, and terminal chart relational depth is
+   pinned at 16.
+6. Runtime bounds are 10,000 row values, at most 12 public series, 256 bytes per
+   series label, 130,000 raw groups, and a conservatively accounted 48 MiB
+   buffered result. The executor pins every compiler-emitted row kind/database
+   type to its exact clickhouse-go scan type, rejects nonempty empty-domain
+   transports, charges row structs, slice capacity, names, payload, and 8-byte
+   count or 16-byte nullable numeric cells, clears reused scan destinations,
+   and publishes nothing until the complete pivot validates.
+7. Query execution, job metadata, and export reexecution share the new
+   value-kind contract; logical inspection accepts the richer chart plan. No
+   public result-schema envelope changed: runtime series still use the existing
+   ordered schema and typed values, so the frontend and protobuf require no
+   update.
+8. Unit coverage spans parser diagnostics and completion, forged AST/plan
+   inputs, one-read SQL shape, state merging, non-finite ordering, validation
+   sentinels, chronological wrappers, relational depth, nullable transport,
+   exact native types, byte boundaries, manager metadata, logical-plan
+   inspection compatibility, and export reexecution. Digest-pinned ClickHouse
+   coverage proves sum, weighted average, real-zero/null distinction,
+   all-ineligible row retention, and row-independent invalid-split rejection
+   for count and numeric chart. Independent compiler,
+   transport, and documentation reviews found the false two-read numeric shape,
+   empty-row-domain validation hole, lowered-row-limit acceptance, sentinel
+   ordering risk, malformed empty-domain acceptance, loose row scan type,
+   undercounted buffering, and five documentation contradictions; every
+   concrete finding was fixed and rechecked.
+
+Validation for `1a9f6ef`, `8d032b1`, and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+go test ./... -count=1
+go test -race ./internal/spl ./internal/plan ./internal/clickhouse \
+  ./internal/queryexec ./internal/searchjobs ./internal/export \
+  ./internal/searchinspection -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestNumericChartAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`.
+The complete pinned executor/manager vertical passed in 25.87 seconds, and the
+focused numeric-chart suite passed in 7.69 seconds. No test-owned ClickHouse
+containers or volumes remained. The preceding pushed main runs `30849697473`,
+`30844985317`, and `30842254430` passed all jobs, including the previously
+reported Backend vertical and Go lint failures. The implementation run
+`30854640701` had already passed Go lint, GradeThis, vulnerability, protobuf,
+and frontend jobs when this checkpoint was recorded; Backend vertical and the
+remaining jobs were still in progress. The external GradeThis Compose cutover
+remains explicitly deferred, and the broader backend/SPL goal remains active.
+
 ## Latest checkpoint: bounded multi-field top and rare
 
 Date: 2026-08-03
@@ -14268,9 +14378,10 @@ aggregate contract at a time:
 - decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
   remain separate percentile contracts and are not part of the first bounded
   integer-suffix slice;
-- split integer-suffix percentile timecharts are complete at `99be8a9`;
-  numeric `chart sum(field)` / `chart avg(field)` pivots and multi-field
-  `top`/`rare` remain optional bounded follow-up slices;
+- split integer-suffix percentile timecharts are complete at `99be8a9`, numeric
+  `chart sum(field)` / `chart avg(field)` pivots are complete at `1a9f6ef`, and
+  multi-field `top`/`rare` is complete at `5db9816`; broader chart aggregate
+  families and options remain separate contracts;
 - bounded single-measure `eventstats` now covers row/field/conditional count,
   `dc`, `values`, `list`, integer-suffix percentiles, `sum`, `avg`, `min`,
   `max`, `earliest`, and `latest`. Multiple measures and broader eval-expression
@@ -14378,7 +14489,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `99be8a9`, `d7734b6`, `ceab244`, `75db36f`, `3f83414`,
+   commits, especially `8d032b1`, `1a9f6ef`, `5db9816`, `99be8a9`, `d7734b6`,
+   `ceab244`, `75db36f`, `3f83414`,
    `1a94faf`, `fbdb99f`,
    `0c78cb7`, `ab0514e`, `67689e8`,
    `a03aa33`, `72b1b11`, `347a015`,
@@ -14434,8 +14546,9 @@ Do not guess those decisions if they materially affect the implementation.
    complete across `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`;
    the bounded percentile family is published after parser/planner commit
    `efe4199`, split numeric timecharts are complete at `d7734b6`, split
-   percentile timecharts are complete at `99be8a9`, exact-field `c(field)` is
-   complete at `070d24f`, and native
+   percentile timecharts are complete at `99be8a9`, numeric chart pivots are
+   complete at `1a9f6ef`, multi-field `top`/`rare` is complete at `5db9816`,
+   exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
    `c1ad25b`, and `fed3276`; typed conditional count is complete at `66b2b16`.
