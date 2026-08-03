@@ -428,17 +428,18 @@ const (
 )
 
 // TimechartValueKind identifies the semantic policy carried by the shared
-// fixed nullable-Float64 transport. Percentile is the zero value so compiled
-// metadata produced before the transport was generalized remains fail-safe.
+// nullable-Float64 transport. The zero value is invalid so a partially
+// initialized compiled contract fails closed at every consumer boundary.
 type TimechartValueKind uint8
 
 const (
-	TimechartValueKindPercentile TimechartValueKind = iota
+	TimechartValueKindInvalid TimechartValueKind = iota
+	TimechartValueKindPercentile
 	TimechartValueKindSum
 	TimechartValueKindAverage
 )
 
-// Valid reports whether kind selects a supported fixed-value validation policy.
+// Valid reports whether kind selects a supported nullable-value policy.
 func (kind TimechartValueKind) Valid() bool {
 	switch kind {
 	case TimechartValueKindPercentile, TimechartValueKindSum, TimechartValueKindAverage:
@@ -458,9 +459,10 @@ type TimechartOutput struct {
 	BucketCount   uint64
 	MaxSeries     uint16
 	MaxLabelBytes uint16
-	// ValueField and ValueKind are populated for a fixed nullable-Double result.
-	// They bind the private transport to the exact public column and aggregate
-	// validation policy instead of trusting mutable OutputFields alone.
+	// ValueField is populated only for a fixed nullable-Double result. ValueKind
+	// is populated for both fixed and runtime-wide nullable values. Together they
+	// bind the private transport to the aggregate validation policy instead of
+	// trusting mutable OutputFields alone.
 	ValueField string
 	ValueKind  TimechartValueKind
 }
@@ -3003,11 +3005,6 @@ func compileTimechart(
 		valueTypeSQL = dynamicTypeExpression(splitField)
 	}
 	if valueKind, splitValue := fixedTimechartValueKind(operator.Measure.Function); splitValue {
-		if valueKind == TimechartValueKindPercentile {
-			return CompiledQuery{}, errors.New(
-				"compile ClickHouse timechart: percentile cannot split by a field",
-			)
-		}
 		measureField, measureExists, resolveErr := resolveCompiledField(
 			operator.Measure.Input,
 			state,
@@ -3250,12 +3247,12 @@ func compileSplitValueTimechart(
 ) (CompiledQuery, error) {
 	if operator == nil || operator.Split == nil || dynamic == nil {
 		return CompiledQuery{}, errors.New(
-			"compile ClickHouse split numeric timechart: contract is required",
+			"compile ClickHouse split value timechart: contract is required",
 		)
 	}
-	if valueKind != TimechartValueKindSum && valueKind != TimechartValueKindAverage {
+	if !valueKind.Valid() {
 		return CompiledQuery{}, errors.New(
-			"compile ClickHouse split numeric timechart: value kind is invalid",
+			"compile ClickHouse split value timechart: value kind is invalid",
 		)
 	}
 
@@ -3289,6 +3286,8 @@ func compileSplitValueTimechart(
 	denominator := q("__os_tc_denominator")
 	frequency := q("__os_tc_count")
 	numericState := q("__os_tc_numeric_state")
+	percentileState := q("__os_tc_percentile_state")
+	percentileValues := q("__os_tc_percentile_values")
 	score := q("__os_tc_score")
 	encoded := q("__os_tc_encoded")
 	measureValue := q("__os_tc_measure_value")
@@ -3307,6 +3306,10 @@ func compileSplitValueTimechart(
 	var scoreSQL string
 	var publishSQL string
 	switch valueKind {
+	case TimechartValueKindPercentile:
+		scoreSQL = "sum(ifNull(arrayElementOrNull(finalizeAggregation(" +
+			percentileState + "), 1), toFloat64(0)))"
+		publishSQL = "arrayElementOrNull(" + percentileValues + ", 1)"
 	case TimechartValueKindSum:
 		scoreSQL = "sum(if(" + denominator + " = 0, toFloat64(0), " + numerator + "))"
 		publishSQL = "if(" + denominator + " = 0, CAST(NULL AS Nullable(Float64)), " + numerator + ")"
@@ -3367,15 +3370,27 @@ func compileSplitValueTimechart(
 	sql.WriteString(" FROM " + classified + "), ")
 
 	sql.WriteString(numericGroups)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
-	sql.WriteString("tupleElement(" + numericState + ", 1) AS " + numerator + ", ")
-	sql.WriteString("toUInt64(tupleElement(" + numericState + ", 2)) AS " + denominator + ", " + frequency)
-	sql.WriteString(" FROM (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
-	// One mergeable aggregate consumes each normalized immediate-member array
-	// exactly once and retains both the Float64 numerator and member count. This
-	// avoids ARRAY JOIN and prevents repeated Dynamic-array normalization.
-	sql.WriteString("sumCountArray(" + measureValues + ") AS " + numericState + ", count() AS " + frequency)
-	sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucketNumber + ", " + kind + ", " + label + ") AS " + q("__os_timechart_numeric_state_source") + "), ")
+	if valueKind == TimechartValueKindPercentile {
+		// Retain the GK aggregate state for every raw bucket/split group. Ordinary
+		// series scoring finalizes each state independently, while OTHER merges
+		// the omitted states before finalization so it remains a true percentile
+		// of the combined member population.
+		level := statsPercentileLevelSQL(operator.Measure.Percentile)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
+		eligibleValues := "if(" + kind + " IN (0, 1), " + measureValues + ", CAST([], 'Array(Float64)'))"
+		sql.WriteString("quantilesGKOrNullArrayState(100, " + level + ")(" + eligibleValues + ") AS " + percentileState + ", count() AS " + frequency)
+		sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucketNumber + ", " + kind + ", " + label + "), ")
+	} else {
+		sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
+		sql.WriteString("tupleElement(" + numericState + ", 1) AS " + numerator + ", ")
+		sql.WriteString("toUInt64(tupleElement(" + numericState + ", 2)) AS " + denominator + ", " + frequency)
+		sql.WriteString(" FROM (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
+		// One mergeable aggregate consumes each normalized immediate-member array
+		// exactly once and retains both the Float64 numerator and member count. This
+		// avoids ARRAY JOIN and prevents repeated Dynamic-array normalization.
+		sql.WriteString("sumCountArray(" + measureValues + ") AS " + numericState + ", count() AS " + frequency)
+		sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucketNumber + ", " + kind + ", " + label + ") AS " + q("__os_timechart_numeric_state_source") + "), ")
+	}
 
 	sql.WriteString(numericScores)
 	sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", " + scoreSQL + " AS " + score + " FROM " + numericGroups)
@@ -3390,7 +3405,12 @@ func compileSplitValueTimechart(
 	sql.WriteString(collapsed)
 	sql.WriteString(" AS (SELECT " + bucketNumber + ", multiIf(" + kind + " = 1, '1:', ")
 	sql.WriteString(label + " IN (SELECT " + label + " FROM " + numericScores + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
-	sql.WriteString("sum(" + numerator + ") AS " + numerator + ", sum(" + denominator + ") AS " + denominator)
+	if valueKind == TimechartValueKindPercentile {
+		level := statsPercentileLevelSQL(operator.Measure.Percentile)
+		sql.WriteString("quantilesGKOrNullArrayMerge(100, " + level + ")(" + percentileState + ") AS " + percentileValues)
+	} else {
+		sql.WriteString("sum(" + numerator + ") AS " + numerator + ", sum(" + denominator + ") AS " + denominator)
+	}
 	sql.WriteString(" FROM " + numericGroups + " WHERE " + kind + " IN (0, 1) GROUP BY " + bucketNumber + ", " + encoded + "), ")
 
 	sql.WriteString(finalized)
@@ -3437,8 +3457,13 @@ func compileSplitValueTimechart(
 	preparedDepth := relationalNodeDepth(sourceDepth)
 	classifiedDepth := relationalNodeDepth(preparedDepth)
 	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
-	numericStateDepth := relationalNodeDepth(canonicalizedDepth)
-	numericGroupsDepth := relationalNodeDepth(numericStateDepth)
+	var numericGroupsDepth int
+	if valueKind == TimechartValueKindPercentile {
+		numericGroupsDepth = relationalNodeDepth(canonicalizedDepth)
+	} else {
+		numericStateDepth := relationalNodeDepth(canonicalizedDepth)
+		numericGroupsDepth = relationalNodeDepth(numericStateDepth)
+	}
 	numericScoresDepth := relationalNodeDepth(numericGroupsDepth)
 	scoreMembershipDepth := relationalNodeDepth(numericScoresDepth)
 	collapsedDepth := relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth)
@@ -3505,9 +3530,10 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 			)
 		}
 	case plan.AggregateFunctionPercentile:
-		if operator.Split != nil {
+		if operator.Split != nil &&
+			operator.Split.Field.Name == measure.Input.Name {
 			return errors.New(
-				"compile ClickHouse timechart: percentile cannot split by a field",
+				"compile ClickHouse timechart: aggregate input and split field must differ",
 			)
 		}
 		if measure.Percentile < 1 || measure.Percentile > 99 {
@@ -3576,7 +3602,7 @@ func fixedTimechartValueKind(function plan.AggregateFunction) (TimechartValueKin
 	case plan.AggregateFunctionAverage:
 		return TimechartValueKindAverage, true
 	default:
-		return TimechartValueKindPercentile, false
+		return TimechartValueKindInvalid, false
 	}
 }
 

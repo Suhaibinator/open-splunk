@@ -1242,13 +1242,6 @@ func buildTimechartMeasure(
 		}
 		canonicalOutput := "perc" + strconv.Itoa(int(aggregate.Percentile)) +
 			"(" + aggregate.Input + ")"
-		if command.SplitBy != nil {
-			return AggregateMeasure{}, &Diagnostic{
-				Code:    "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
-				Message: "this timechart aggregate does not support a BY split field",
-				Range:   command.SplitBy.Range,
-			}
-		}
 		return buildTimechartFieldMeasure(
 			command,
 			AggregateFunctionPercentile,

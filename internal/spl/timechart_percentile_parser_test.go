@@ -79,6 +79,60 @@ func TestParseTimechartPercentileCanonicalizesAndLocatesAggregate(t *testing.T) 
 	}
 }
 
+func TestParseTimechartPercentileAcceptsOneSplitField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		source        string
+		percentile    uint8
+		input         string
+		output        string
+		explicitAlias bool
+		split         string
+	}{
+		{
+			name:       "short spelling",
+			source:     `index=main | timechart span=5m P95(latency) BY service`,
+			percentile: 95,
+			input:      "latency",
+			output:     "perc95(latency)",
+			split:      "service",
+		},
+		{
+			name:          "long spelling with alias",
+			source:        `index=main | TIMECHART SPAN=1H perc050(http.duration) AS median BY http.route`,
+			percentile:    50,
+			input:         "http.duration",
+			output:        "median",
+			explicitAlias: true,
+			split:         "http.route",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command := query.Commands[0].(*TimechartCommand)
+			if command.Aggregate.Function != AggregateFunctionPercentile ||
+				command.Aggregate.Percentile != test.percentile ||
+				command.Aggregate.Input != test.input ||
+				command.Aggregate.Alias != test.output ||
+				command.Aggregate.ExplicitAlias != test.explicitAlias ||
+				command.SplitBy == nil || command.SplitBy.Name != test.split {
+				t.Fatalf("timechart = %#v", command)
+			}
+			assertSourceRangeText(t, test.source, command.SplitBy.Range, test.split)
+			assertSourceRangeText(t, test.source, command.SourceRange(), test.source[len("index=main | "):])
+		})
+	}
+}
+
 func TestParseTimechartPercentileRejectsUnsupportedShapesAtSource(t *testing.T) {
 	t.Parallel()
 
@@ -88,7 +142,6 @@ func TestParseTimechartPercentileRejectsUnsupportedShapesAtSource(t *testing.T) 
 		code      string
 		locatedAt string
 	}{
-		{"split percentile", `index=main | timechart span=5m p95(latency) BY service`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "BY"},
 		{"wildcard input", `index=main | timechart span=5m p95(lat*)`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", "lat*"},
 		{"quoted input", `index=main | timechart span=5m p95("latency")`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", `"latency"`},
 		{"missing input", `index=main | timechart span=5m p95()`, "SPL_UNSUPPORTED_TIMECHART_SYNTAX", ")"},
@@ -148,7 +201,7 @@ func TestTimechartPercentileSuggestionContext(t *testing.T) {
 		{
 			source:   `| timechart span=5m p95(latency) `,
 			kinds:    []SuggestionKind{SuggestionKindKeyword},
-			keywords: []string{"AS"},
+			keywords: []string{"AS", "BY"},
 		},
 		{
 			source: `| timechart span=5m p95(latency) AS p`,
@@ -156,6 +209,7 @@ func TestTimechartPercentileSuggestionContext(t *testing.T) {
 		},
 		{
 			source: `| timechart span=5m p95(latency) BY `,
+			kinds:  []SuggestionKind{SuggestionKindField},
 		},
 	}
 	for _, test := range tests {
@@ -180,6 +234,19 @@ func TestClassifyPercentileTimechartAsStaticTimeSeries(t *testing.T) {
 	}
 	if got := ClassifyResultShape(query); got != (ResultShape{Kind: ResultKindTimeSeries}) {
 		t.Fatalf("ClassifyResultShape = %#v, want static time series", got)
+	}
+}
+
+func TestClassifySplitPercentileTimechartAsRuntimeNamedTimeSeries(t *testing.T) {
+	t.Parallel()
+
+	query, err := Parse(`index=main | timechart span=5m perc95(latency) AS p95_latency BY service`)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	want := ResultShape{Kind: ResultKindTimeSeries, RuntimeNamedColumns: true}
+	if got := ClassifyResultShape(query); got != want {
+		t.Fatalf("ClassifyResultShape = %#v, want %#v", got, want)
 	}
 }
 

@@ -702,6 +702,41 @@ func TestSchemaMatchesCompiledFixedPercentileTimechartRejectsForeignSchemas(t *t
 	}
 }
 
+func TestSchemaMatchesCompiledSplitPercentileTimechart(t *testing.T) {
+	t.Parallel()
+
+	compiled := clickhouse.CompiledQuery{
+		OutputFields: []string{"_time"},
+		Timechart: &clickhouse.TimechartOutput{
+			Mode:          clickhouse.TimechartModeRuntimeWideValue,
+			MaxSeries:     clickhouse.MaximumTimechartSeries,
+			MaxLabelBytes: clickhouse.MaximumTimechartLabelBytes,
+			ValueKind:     clickhouse.TimechartValueKindPercentile,
+		},
+	}
+	valid := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "api", Kind: searchjobs.ValueKindDouble, Nullable: true},
+		{Name: "NULL", Kind: searchjobs.ValueKindDouble, Nullable: true},
+	}}
+	if !schemaMatchesCompiledQuery(valid, compiled) {
+		t.Fatal("valid split percentile timechart schema was rejected")
+	}
+
+	for _, kind := range []clickhouse.TimechartValueKind{
+		clickhouse.TimechartValueKindInvalid,
+		clickhouse.TimechartValueKind(255),
+	} {
+		invalid := compiled
+		timechart := *compiled.Timechart
+		timechart.ValueKind = kind
+		invalid.Timechart = &timechart
+		if schemaMatchesCompiledQuery(valid, invalid) {
+			t.Fatalf("invalid split percentile timechart kind %d was admitted", kind)
+		}
+	}
+}
+
 func TestSchemaMatchesCompiledFixedValueKinds(t *testing.T) {
 	t.Parallel()
 

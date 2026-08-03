@@ -56,9 +56,14 @@ const (
 	// the result to twelve public series. Bound that exact pre-ranking work
 	// independently of the much smaller output width.
 	maximumRuntimeWideTimechartGroups = uint64(130_000)
-	maximumChartRows                  = uint64(10_000)
-	maximumChartSeries                = uint16(12)
-	maximumChartLabel                 = uint16(256)
+	// Percentiles retain a mergeable GK sketch per raw bucket/series group,
+	// unlike the constant-size count or sum/count state used by other wide
+	// timecharts. Crossing this independently accounted ceiling fails the
+	// complete ClickHouse query instead of approximating or truncating it.
+	maximumRuntimeWidePercentileTimechartGroups = uint64(20_000)
+	maximumChartRows                            = uint64(10_000)
+	maximumChartSeries                          = uint16(12)
+	maximumChartLabel                           = uint16(256)
 	// maximumChartResultBytes bounds the buffered pivot. Unlike timechart,
 	// whose buffered row is a fixed-width bucket plus at most 13 counts, a
 	// chart row carries a runtime row value with no length ceiling, and the
@@ -96,8 +101,9 @@ type Config struct {
 	// default. A fixed-schema timechart keeps the ordinary cap.
 	MaxRowsToGroupBy uint64
 	// ExpandTimechartGroupLimit permits validated bounded pivots to raise
-	// MaxRowsToGroupBy. A fixed timechart needs only BucketCount; a runtime-wide
-	// timechart gets a fixed 130,000-group raw-ranking allowance; chart uses
+	// MaxRowsToGroupBy. A fixed timechart needs only BucketCount; runtime-wide
+	// count/sum/average receives a 130,000-group raw-ranking allowance, while a
+	// split percentile is capped at 20,000 GK states. Chart uses
 	// rows*(MaxSeries+1), also bounded at 130,000. Ordinary queries remain
 	// unchanged. Expansion is enabled automatically when MaxRowsToGroupBy is
 	// left at zero.
@@ -530,15 +536,19 @@ func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
-	if !executor.expandTimechartGroupLimit {
+	percentileWide := query.Timechart != nil &&
+		query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue &&
+		query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile
+	if !executor.expandTimechartGroupLimit && !percentileWide {
 		return executor.settings
 	}
 	// A fixed timechart groups only by bucket. Runtime-wide timecharts must first
 	// aggregate every distinct raw (bucket, label) pair to rank the exact top
-	// series, so output width cannot size their group budget. Give both dynamic
-	// modes the fixed 130k raw-work allowance; exceeding it fails rather than
-	// silently approximating the result. The base setting continues to govern
-	// every ordinary query.
+	// series, so output width cannot size their group budget. Count, sum, and
+	// average receive the fixed 130k raw-work allowance. Split percentiles are
+	// capped independently at 20k sketches, even when the general configured
+	// group limit is higher. Exceeding either bound fails instead of silently
+	// approximating the result. The base setting governs ordinary queries.
 	var required uint64
 	switch {
 	case query.Timechart != nil:
@@ -546,6 +556,10 @@ func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhouse
 		if query.Timechart.Mode == clickhouse.TimechartModeRuntimeWide ||
 			query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue {
 			required = maximumRuntimeWideTimechartGroups
+			if query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue &&
+				query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile {
+				required = maximumRuntimeWidePercentileTimechartGroups
+			}
 		}
 	case query.Chart != nil:
 		required = query.Chart.RowLimit * (uint64(query.Chart.MaxSeries) + 1)
@@ -553,7 +567,15 @@ func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhouse
 		return executor.settings
 	}
 	current, ok := executor.settings["max_rows_to_group_by"].(uint64)
-	if !ok || current >= required {
+	if !ok {
+		return executor.settings
+	}
+	if percentileWide && current > required {
+		settings := maps.Clone(executor.settings)
+		settings["max_rows_to_group_by"] = required
+		return settings
+	}
+	if current >= required || !executor.expandTimechartGroupLimit {
 		return executor.settings
 	}
 	settings := maps.Clone(executor.settings)
@@ -619,8 +641,7 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 		if !slices.Equal(query.OutputFields, []string{"_time"}) ||
 			!output.RuntimeWideBoundsValid() ||
 			output.ValueField != "" ||
-			(output.ValueKind != clickhouse.TimechartValueKindSum &&
-				output.ValueKind != clickhouse.TimechartValueKindAverage) {
+			!output.ValueKind.Valid() {
 			return fmt.Errorf("%w: compiled split value timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
 	default:
@@ -1082,6 +1103,13 @@ func readValueTimechartRows(
 				)
 			}
 			if presence == 1 {
+				if output.ValueKind == clickhouse.TimechartValueKindPercentile &&
+					(math.IsNaN(values[index]) || math.IsInf(values[index], 0)) {
+					return bufferedValueTimechart{}, fmt.Errorf(
+						"%w: ClickHouse split percentile timechart value is not finite",
+						searchjobs.ErrInvalidResult,
+					)
+				}
 				rowValues[index] = nullableFloat64{value: values[index], valid: true}
 			}
 		}

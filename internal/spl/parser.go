@@ -913,7 +913,8 @@ func timechartFieldAggregateSpecForName(name string) (statsAggregateSpec, bool) 
 
 func timechartAggregateSupportsSplit(function AggregateFunction) bool {
 	switch function {
-	case AggregateFunctionCount, AggregateFunctionSum, AggregateFunctionAverage:
+	case AggregateFunctionCount, AggregateFunctionPercentile,
+		AggregateFunctionSum, AggregateFunctionAverage:
 		return true
 	default:
 		return false

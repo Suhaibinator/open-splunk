@@ -69,6 +69,47 @@ func TestExecutorPublishesSplitSumAndAverageAsNullableWideValues(t *testing.T) {
 	}
 }
 
+func TestExecutorPublishesSplitPercentileAsNullableWideValues(t *testing.T) {
+	t.Parallel()
+
+	first := time.Date(2026, time.July, 22, 12, 0, 0, 0, time.UTC)
+	rows := splitValueTimechartRows(
+		[]string{"0:api", "1:", "2:"},
+		[][]float64{{12.5, 0, 98.25}, {0, -2.25, 0}},
+		[][]uint8{{1, 0, 1}, {0, 1, 0}},
+	)
+	sink := &fakeSink{}
+	if err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
+		context.Background(),
+		splitValueTimechartQuery(first, 2, clickhouse.TimechartValueKindPercentile),
+		sink,
+	); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	wantSchema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "_time", Kind: searchjobs.ValueKindTime},
+		{Name: "api", Kind: searchjobs.ValueKindDouble, Nullable: true},
+		{Name: "NULL", Kind: searchjobs.ValueKindDouble, Nullable: true},
+		{Name: "OTHER", Kind: searchjobs.ValueKindDouble, Nullable: true},
+	}}
+	if sink.setCalls != 1 || !reflect.DeepEqual(sink.schema, wantSchema) ||
+		len(sink.rows) != 2 || !rows.closed {
+		t.Fatalf("schema=%#v calls=%d rows=%d closed=%v", sink.schema, sink.setCalls, len(sink.rows), rows.closed)
+	}
+	if value, ok := sink.rows[0][1].Double(); !ok || value != 12.5 {
+		t.Fatalf("api percentile = %v, %v", value, ok)
+	}
+	if !sink.rows[0][2].IsNull() {
+		t.Fatalf("NULL percentile gap = %#v, want null", sink.rows[0][2])
+	}
+	if value, ok := sink.rows[0][3].Double(); !ok || value != 98.25 {
+		t.Fatalf("OTHER percentile = %v, %v", value, ok)
+	}
+	if !sink.rows[1][1].IsNull() || !sink.rows[1][3].IsNull() {
+		t.Fatalf("second-row percentile gaps = %#v", sink.rows[1])
+	}
+}
+
 func TestExecutorSuppressesEmptySplitNumericTimechartRows(t *testing.T) {
 	t.Parallel()
 
@@ -125,7 +166,7 @@ func TestExecutorReusesSplitNumericScanDestinations(t *testing.T) {
 	}
 }
 
-func TestExecutorExpandsSplitNumericTimechartGroupBudget(t *testing.T) {
+func TestExecutorExpandsSplitValueTimechartGroupBudget(t *testing.T) {
 	t.Parallel()
 
 	settings, err := querySettings(Config{})
@@ -145,6 +186,27 @@ func TestExecutorExpandsSplitNumericTimechartGroupBudget(t *testing.T) {
 	if got := settings["max_rows_to_group_by"]; got != defaultMaxResultRows {
 		t.Fatalf("base settings were mutated: cap=%v", got)
 	}
+	query.Timechart.ValueKind = clickhouse.TimechartValueKindPercentile
+	if got, want := executor.settingsFor(query)["max_rows_to_group_by"], maximumRuntimeWidePercentileTimechartGroups; got != want {
+		t.Fatalf("split percentile timechart group cap = %v, want %d", got, want)
+	}
+
+	highSettings, err := querySettings(Config{MaxRowsToGroupBy: 50_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	high := &Executor{settings: highSettings}
+	if got, want := high.settingsFor(query)["max_rows_to_group_by"], maximumRuntimeWidePercentileTimechartGroups; got != want {
+		t.Fatalf("explicit high split percentile group cap = %v, want clamped %d", got, want)
+	}
+	lowSettings, err := querySettings(Config{MaxRowsToGroupBy: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	low := &Executor{settings: lowSettings}
+	if got := low.settingsFor(query)["max_rows_to_group_by"]; got != uint64(7) {
+		t.Fatalf("explicit low split percentile group cap = %v, want 7", got)
+	}
 }
 
 func TestExecutorRejectsInvalidSplitNumericMetadataBeforeQuery(t *testing.T) {
@@ -154,8 +216,8 @@ func TestExecutorRejectsInvalidSplitNumericMetadataBeforeQuery(t *testing.T) {
 		name   string
 		mutate func(*clickhouse.CompiledQuery)
 	}{
-		{name: "percentile kind", mutate: func(query *clickhouse.CompiledQuery) {
-			query.Timechart.ValueKind = clickhouse.TimechartValueKindPercentile
+		{name: "unset kind", mutate: func(query *clickhouse.CompiledQuery) {
+			query.Timechart.ValueKind = clickhouse.TimechartValueKindInvalid
 		}},
 		{name: "unknown kind", mutate: func(query *clickhouse.CompiledQuery) {
 			query.Timechart.ValueKind = clickhouse.TimechartValueKind(255)
@@ -191,6 +253,34 @@ func TestExecutorRejectsInvalidSplitNumericMetadataBeforeQuery(t *testing.T) {
 				t.Fatalf("invalid metadata reached query/publication: query=%q schema=%d rows=%d", connection.query, sink.setCalls, len(sink.rows))
 			}
 		})
+	}
+}
+
+func TestExecutorRejectsNonFiniteSplitPercentileAtomically(t *testing.T) {
+	t.Parallel()
+
+	for _, nonfinite := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		rows := splitValueTimechartRows(
+			[]string{"0:a"},
+			[][]float64{{1}, {nonfinite}},
+			[][]uint8{{1}, {1}},
+		)
+		sink := &fakeSink{}
+		err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
+			context.Background(),
+			splitValueTimechartQuery(
+				time.Unix(0, 0).UTC(),
+				2,
+				clickhouse.TimechartValueKindPercentile,
+			),
+			sink,
+		)
+		if !errors.Is(err, searchjobs.ErrInvalidResult) {
+			t.Fatalf("Execute(%v) error = %v, want ErrInvalidResult", nonfinite, err)
+		}
+		if sink.setCalls != 0 || len(sink.rows) != 0 || !rows.closed {
+			t.Fatalf("nonfinite percentile published partial output: closed=%v schema=%d rows=%d", rows.closed, sink.setCalls, len(sink.rows))
+		}
 	}
 }
 

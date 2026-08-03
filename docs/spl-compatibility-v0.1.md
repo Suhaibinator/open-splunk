@@ -2729,6 +2729,8 @@ rather than falling back to an approximate or data-dependent bin.
 | timechart span=5m count BY level
 | timechart span=5m p95(duration_ms)
 | timechart span=1h perc50(duration_ms) AS median_ms
+| timechart span=5m p95(duration_ms) BY service
+| timechart span=1h perc50(duration_ms) AS ignored_alias BY route
 | timechart span=5m sum(bytes) AS total_bytes
 | timechart span=5m avg(duration_ms) AS mean_ms
 | timechart span=5m sum(bytes) BY service
@@ -2736,25 +2738,25 @@ rather than falling back to an approximate or data-dependent bin.
 ```
 
 The supported aggregate forms are exactly one argument-free `count`, one
-`sum(field)` or `avg(field)`, or one unsplit integer-suffix percentile.
-`count`, `sum`, and `avg` each accept an optional `BY` with one exact split
-field; `count` cannot be aliased. Every numeric form accepts one exact unquoted
-input field and an optional exact unquoted `AS` output. A percentile is written
-`pN(field)` or `percN(field)`, where `N` is an integer from 1 through 99.
+integer-suffix percentile, or one `sum(field)` or `avg(field)`. Every form
+accepts an optional `BY` with one exact split field; `count` cannot be aliased.
+Every numeric form accepts one exact unquoted input field and an optional exact
+unquoted `AS` output. A percentile is written `pN(field)` or `percN(field)`,
+where `N` is an integer from 1 through 99.
 Without `AS`, its two spellings publish the canonical lowercase
 `percN(field)` name; for example, `p095(duration_ms)` publishes
 `perc95(duration_ms)`. Unsplit `sum` and `avg` likewise publish canonical
 lowercase `sum(field)` and `avg(field)` names when `AS` is absent. With `BY`,
 the runtime split values name the public series, so an accepted `AS` alias does
 not become a public output column. Function and clause names are
-case-insensitive. Percentiles do not accept `BY`.
+case-insensitive.
 
 Every form requires a positive fixed `s`, `m`, or `h` span from one second
 through 24 hours and must be the final pipeline command. Unsplit count has the
 fixed `_time,count` schema. An unsplit numeric aggregate has the fixed
-`_time,<aggregate-output>` schema. With `count`, `sum`, or `avg` `BY`, split
-values determine the wide output columns at runtime. All are time-series
-results; every `BY` form has runtime-named columns.
+`_time,<aggregate-output>` schema. With `BY`, split values determine the wide
+output columns at runtime. All are time-series results; every `BY` form has
+runtime-named columns.
 
 The search time range remains half-open `[earliest, latest)`. Buckets are
 aligned to Unix epoch boundaries using mathematical floor division, including
@@ -2797,9 +2799,12 @@ same naming and normalization rules as count.
 `OTHER` combines the underlying omitted series' aggregate states per bucket.
 For `sum`, their numerators are added. For `avg`, their numerators and eligible
 member counts are added before division, so the result is a member-weighted
-average rather than an average of already-finalized series averages. A
-missing or explicit-null split value contributes to `NULL`, independently of
-the top-ten ranking.
+average rather than an average of already-finalized series averages. For a
+percentile, the omitted series' GK states are merged before finalization, so
+`OTHER` is the requested percentile of the pooled eligible members rather than
+an average of the omitted series' finalized percentiles. A missing or
+explicit-null split value contributes to `NULL`, independently of the top-ten
+ranking.
 
 Every numeric input uses the same normalization and immediate-member rules as
 `stats` numeric aggregates. Finite integers, floats, numeric Strings, tagged
@@ -2820,10 +2825,12 @@ non-null. `avg` weights each eligible immediate member independently, so an
 event carrying three eligible multivalue members contributes three values to
 both its numerator and denominator. Non-finite inputs are filtered before
 aggregation, but a computed IEEE `NaN` or positive/negative infinity produced
-by `sum` or `avg` arithmetic is preserved. This distinguishes an empty scoped
-input, which publishes the static or runtime-only schema but zero rows, from
-present input whose measure field is missing or wholly ineligible, which
-publishes every bucket with null values for its fixed or runtime series.
+by `sum` or `avg` arithmetic is preserved. A percentile cell is finite or null;
+the executor rejects a non-finite percentile returned by the storage boundary.
+This distinguishes an empty scoped input, which publishes the static or
+runtime-only schema but zero rows, from present input whose measure field is
+missing or wholly ineligible, which publishes every bucket with null values
+for its fixed or runtime series.
 
 The fixed numeric lowering scans the tenant/index/time/snapshot-scoped source
 once, computing bucket ticks and normalized numeric-member arrays inline. It
@@ -2839,15 +2846,19 @@ second scoped storage scan is performed. Percentile approximation, roughly
 percentile contract; `sum` and `avg` use ordinary `Float64` arithmetic.
 
 The numeric split lowering likewise scans the scoped source once and never
-uses `ARRAY JOIN`. It normalizes each measure to one immediate-member array,
-then builds one mergeable `sumCountArray` state for each raw
-`(bucket, split-kind, label)` group. Those bounded states drive exact scoring,
-top-ten selection, collision validation, weighted `OTHER` collapse, and the
-per-bucket value/presence maps. The private transport sends the runtime name
-array only with ordinal zero; later rows carry only the fixed-width value and
-presence arrays. The executor buffers and validates the complete grid before
-publishing a schema or row, and the separate presence array preserves the
-difference between null gaps and real numeric zero.
+uses `ARRAY JOIN`. It normalizes each measure to one immediate-member array.
+`sum` and `avg` build one mergeable `sumCountArray` state for each raw
+`(bucket, split-kind, label)` group. A percentile builds one
+`quantilesGKOrNullArrayState(100, level)` state per raw group, finalizes those
+states for deterministic series scoring, and merges omitted states before
+finalizing `OTHER`. Invalid split rows retain only the constant validation
+count and an empty GK state; their measure arrays never feed a sketch. The
+bounded states drive top-ten selection, collision validation, collapse, and
+the per-bucket value/presence maps. The private transport sends the runtime
+name array only with ordinal zero; later rows carry only the fixed-width value
+and presence arrays. The executor buffers and validates the complete grid
+before publishing a schema or row, and the separate presence array preserves
+the difference between null gaps and real numeric zero.
 
 The split form supports string split values plus missing/null. Numeric,
 Boolean, extended, list, and object split values fail the whole command before
@@ -2858,15 +2869,19 @@ Results in either form are bounded to 10,000 buckets. The split form is
 additionally bounded to 12 runtime series (ten ordinary, `NULL`, and `OTHER`),
 for at most 13 public columns. The 10,000-bucket resource policy is
 intentionally lower than Splunk's installation-configurable `maxbins` default.
-With default executor settings, every runtime-wide timechart receives a fixed
-130,000-group allowance for its exact pre-ranking raw
+With default executor settings, count, sum, and average runtime-wide timecharts
+receive a fixed 130,000-group allowance for their exact pre-ranking raw
 `(bucket, split-kind, label)` work; it is intentionally independent of the
-twelve-column output width. Domains with enough distinct raw groups to exceed
-that budget fail atomically with an execution-limit error; an explicitly
-configured lower group cap remains authoritative.
+twelve-column output width. A split percentile instead has a hard 20,000 raw-
+group/sketch ceiling because each group retains a GK state rather than a
+constant-size count or sum/count tuple. A higher general group setting is
+clamped to that percentile ceiling. A lower configured cap remains
+authoritative unless timechart expansion is explicitly enabled, in which case
+it may rise only to 20,000. Domains exceeding the applicable budget fail
+atomically with an execution-limit error.
 
 Retained unsupported forms fail rather than being approximated. These include
-count arguments or aliases; percentile forms with `BY`;
+count arguments or aliases;
 wildcard, quoted, missing, multiple, or eval-expression numeric inputs;
 wildcard, quoted, or missing numeric aliases after `AS`;
 multiple aggregates; every other aggregate such as `dc`, `values`, or

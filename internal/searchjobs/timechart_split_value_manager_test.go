@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ func TestValidateSplitNumericTimechartSchema(t *testing.T) {
 		{Name: "NULL", Kind: ValueKindDouble, Nullable: true},
 	}}
 	for _, kind := range []clickhouse.TimechartValueKind{
+		clickhouse.TimechartValueKindPercentile,
 		clickhouse.TimechartValueKindSum,
 		clickhouse.TimechartValueKindAverage,
 	} {
@@ -45,8 +47,8 @@ func TestValidateSplitNumericTimechartSchema(t *testing.T) {
 		{name: "unsigned series", mutate: func(schema *Schema, _ *clickhouse.TimechartOutput) { schema.Columns[1].Kind = ValueKindUnsigned }},
 		{name: "nonnullable series", mutate: func(schema *Schema, _ *clickhouse.TimechartOutput) { schema.Columns[1].Nullable = false }},
 		{name: "multivalue series", mutate: func(schema *Schema, _ *clickhouse.TimechartOutput) { schema.Columns[1].Multivalue = true }},
-		{name: "percentile split", mutate: func(_ *Schema, got *clickhouse.TimechartOutput) {
-			got.ValueKind = clickhouse.TimechartValueKindPercentile
+		{name: "unset aggregate", mutate: func(_ *Schema, got *clickhouse.TimechartOutput) {
+			got.ValueKind = clickhouse.TimechartValueKindInvalid
 		}},
 		{name: "unknown aggregate", mutate: func(_ *Schema, got *clickhouse.TimechartOutput) {
 			got.ValueKind = clickhouse.TimechartValueKind(255)
@@ -134,5 +136,48 @@ func TestSplitNumericTimechartResultSinkPreservesNullAndNonfiniteValues(t *testi
 		!nanOK || !math.IsNaN(notANumber) ||
 		!negativeOK || !math.IsInf(negative, -1) {
 		t.Fatalf("nonfinite values were not preserved: +Inf=%v/%v NaN=%v/%v -Inf=%v/%v", positive, positiveOK, notANumber, nanOK, negative, negativeOK)
+	}
+}
+
+func TestManagerDetachesSplitPercentileTimechartMetadataFromExecutor(t *testing.T) {
+	t.Parallel()
+
+	schema := Schema{Columns: []Column{
+		{Name: "_time", Kind: ValueKindTime},
+		{Name: "api", Kind: ValueKindDouble, Nullable: true},
+	}}
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(
+			_ context.Context,
+			query clickhouse.CompiledQuery,
+			sink ResultSink,
+		) error {
+			if query.Timechart == nil ||
+				query.Timechart.Mode != clickhouse.TimechartModeRuntimeWideValue ||
+				query.Timechart.ValueKind != clickhouse.TimechartValueKindPercentile ||
+				query.Timechart.ValueField != "" ||
+				len(query.OutputFields) != 1 || query.OutputFields[0] != "_time" {
+				t.Fatalf("compiled split percentile timechart = fields %v metadata %#v", query.OutputFields, query.Timechart)
+			}
+			query.Timechart.ValueKind = clickhouse.TimechartValueKind(255)
+			query.Timechart.MaxSeries = 1
+			return sink.SetSchema(schema)
+		}),
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("split-percentile-timechart-detachment"),
+	})
+	created, err := manager.Create(
+		context.Background(),
+		withSPL(
+			validRequest(),
+			"index=main | timechart span=5m p95(duration) AS ignored BY service",
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := waitForState(t, manager, created.ID, StateCompleted)
+	if completed.Schema == nil || !reflect.DeepEqual(*completed.Schema, schema) {
+		t.Fatalf("completed schema = %#v, want %#v", completed.Schema, schema)
 	}
 }

@@ -2397,8 +2397,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	switch output.Mode {
 	case clickhouse.TimechartModeRuntimeWide:
 	case clickhouse.TimechartModeRuntimeWideValue:
-		if output.ValueKind != clickhouse.TimechartValueKindSum &&
-			output.ValueKind != clickhouse.TimechartValueKindAverage {
+		if !output.ValueKind.Valid() {
 			return fmt.Errorf("%w: split value timechart aggregate kind is invalid", ErrInvalidResult)
 		}
 		runtimeWideValue = true

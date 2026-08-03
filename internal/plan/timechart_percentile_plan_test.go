@@ -67,6 +67,74 @@ func TestBuildTimechartPercentileUsesCanonicalDefaultOutput(t *testing.T) {
 	}
 }
 
+func TestBuildTimechartPercentileProducesBoundedDynamicSplitSeries(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		percentile uint8
+		input      string
+		output     string
+		split      string
+	}{
+		{
+			name:       "short spelling",
+			source:     `index=gradethis | timechart span=5m p95(latency) BY service`,
+			percentile: 95,
+			input:      "latency",
+			output:     "perc95(latency)",
+			split:      "service",
+		},
+		{
+			name:       "long spelling with alias",
+			source:     `index=gradethis | timechart span=5m perc50(http.duration) AS median BY http.route`,
+			percentile: 50,
+			input:      "http.duration",
+			output:     "median",
+			split:      "http.route",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			logical, err := Build(
+				mustParse(t, test.source),
+				testScope([]string{"gradethis"}, nil),
+			)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			operator := logical.Operators[len(logical.Operators)-1].(*Timechart)
+			if operator.Measure.Function != AggregateFunctionPercentile ||
+				operator.Measure.Input.Name != test.input ||
+				operator.Measure.Percentile != test.percentile ||
+				operator.Measure.Output != test.output || operator.Split == nil ||
+				operator.Split.Field.Name != test.split || operator.Split.SeriesLimit != 10 ||
+				!operator.Split.IncludeNull || !operator.Split.IncludeOther ||
+				operator.Split.NullLabel != "NULL" || operator.Split.OtherLabel != "OTHER" {
+				t.Fatalf("timechart = %#v", operator)
+			}
+			if len(logical.OutputFields) != 0 || logical.DynamicOutput == nil ||
+				!slices.Equal(logical.DynamicOutput.FixedFields, []string{"_time"}) ||
+				logical.DynamicOutput.MaxSeries != 12 {
+				t.Fatalf("output = %v/%#v", logical.OutputFields, logical.DynamicOutput)
+			}
+			analysis, err := Analyze(logical)
+			if err != nil {
+				t.Fatalf("Analyze: %v", err)
+			}
+			wantReferencedFields := []string{"_time", test.input, test.split, "index"}
+			slices.Sort(wantReferencedFields)
+			if !slices.Equal(analysis.ReferencedFields, wantReferencedFields) {
+				t.Fatalf("referenced fields = %v, want %v", analysis.ReferencedFields, wantReferencedFields)
+			}
+		})
+	}
+}
+
 func TestBuildRejectsForgedTimechartAggregateContracts(t *testing.T) {
 	t.Parallel()
 
@@ -142,10 +210,10 @@ func TestBuildRejectsForgedTimechartAggregateContracts(t *testing.T) {
 			code: "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
 		},
 		{
-			name:      "split percentile",
+			name:      "same percentile input and split field",
 			aggregate: validPercentile,
-			split:     &spl.StatsGroupField{Name: "service", Range: fieldRange},
-			code:      "SPL_UNSUPPORTED_TIMECHART_SYNTAX",
+			split:     &spl.StatsGroupField{Name: "latency", Range: fieldRange},
+			code:      "SPL_DUPLICATE_FIELD",
 		},
 		{
 			name: "count with input",
@@ -233,16 +301,32 @@ func TestBuildTimechartPercentileRejectsOutputCollisionAndAmbiguousInput(t *test
 	}
 }
 
-func TestAnalyzeRejectsForgedTimechartMeasures(t *testing.T) {
+func TestAnalyzeAcceptsValidAndRejectsForgedTimechartPercentileMeasures(t *testing.T) {
 	t.Parallel()
 
 	valid := mustResolveEventAggregateField(t, "_time")
 	validInput := mustResolveEventAggregateField(t, "latency")
+	splitField := mustResolveEventAggregateField(t, "service")
 	validPercentile := AggregateMeasure{
 		Function:   AggregateFunctionPercentile,
 		Input:      validInput,
 		Percentile: 95,
 		Output:     "latency_p95",
+	}
+	validSplit := func(field FieldRef) *TimechartSplit {
+		return &TimechartSplit{
+			Field:        field,
+			SeriesLimit:  timechartSeriesLimit,
+			IncludeNull:  true,
+			IncludeOther: true,
+			NullLabel:    "NULL",
+			OtherLabel:   "OTHER",
+		}
+	}
+	if _, err := Analyze(&Query{Operators: []Operator{&Timechart{
+		Time: valid, Measure: validPercentile, Split: validSplit(splitField),
+	}}}); err != nil {
+		t.Fatalf("Analyze(valid split percentile): %v", err)
 	}
 	tests := []struct {
 		name    string
@@ -271,7 +355,8 @@ func TestAnalyzeRejectsForgedTimechartMeasures(t *testing.T) {
 			got.Output = "__os_private"
 			return got
 		}()},
-		{name: "percentile split", measure: validPercentile, split: &TimechartSplit{Field: mustResolveEventAggregateField(t, "service")}},
+		{name: "malformed split", measure: validPercentile, split: &TimechartSplit{Field: splitField}},
+		{name: "same percentile input and split field", measure: validPercentile, split: validSplit(validInput)},
 	}
 	for _, test := range tests {
 		test := test
