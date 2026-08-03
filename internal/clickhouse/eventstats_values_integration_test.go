@@ -233,56 +233,11 @@ func testEventStatsValuesAgainstClickHouse(
 
 	oneValues := func(name string, query CompiledQuery) []string {
 		t.Helper()
-		rows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
-		if queryErr != nil {
-			t.Fatalf(
-				"execute %s: %v\nSQL: %s\nargs: %#v",
-				name,
-				queryErr,
-				query.SQL,
-				query.Args,
-			)
-		}
-		types := rows.ColumnTypes()
-		if len(types) != 1 || types[0].DatabaseTypeName() != "Array(String)" {
-			_ = rows.Close()
-			t.Fatalf("%s column types = %#v, want Array(String)", name, types)
-		}
-		if !rows.Next() {
-			rowsErr := rows.Err()
-			_ = rows.Close()
-			t.Fatalf("%s returned no row: %v", name, rowsErr)
-		}
-		var values []string
-		if scanErr := rows.Scan(&values); scanErr != nil {
-			_ = rows.Close()
-			t.Fatalf("scan %s: %v", name, scanErr)
-		}
-		if rows.Next() {
-			_ = rows.Close()
-			t.Fatalf("%s returned multiple rows", name)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			_ = rows.Close()
-			t.Fatalf("iterate %s: %v", name, rowsErr)
-		}
-		if closeErr := rows.Close(); closeErr != nil {
-			t.Fatalf("close %s: %v", name, closeErr)
-		}
-		return values
+		return collectEventStatsStringArray(t, ctx, connection, name, query)
 	}
 	expectError := func(name string, query CompiledQuery, marker string) {
 		t.Helper()
-		executeErr := executeCompiledExpectingNoRows(ctx, connection, query)
-		if executeErr == nil || !strings.Contains(executeErr.Error(), marker) {
-			t.Fatalf(
-				"%s error = %v, want marker %q\nSQL: %s",
-				name,
-				executeErr,
-				marker,
-				query.SQL,
-			)
-		}
+		expectCompiledErrorMarker(t, ctx, connection, name, query, marker)
 	}
 
 	const base = `index=compiler source="stats-sum-avg"`
@@ -307,35 +262,10 @@ func testEventStatsValuesAgainstClickHouse(
 		t.Fatalf("ordered eventstats values = %#v, want raw-byte lexical %#v", ordered, want)
 	}
 
-	type groupedRow struct {
-		id     string
-		values []string
-	}
-	collect := func(name string, query CompiledQuery) []groupedRow {
-		t.Helper()
-		rows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
-		if queryErr != nil {
-			t.Fatalf("execute %s: %v\nSQL: %s", name, queryErr, query.SQL)
-		}
-		var result []groupedRow
-		for rows.Next() {
-			var row groupedRow
-			if scanErr := rows.Scan(&row.id, &row.values); scanErr != nil {
-				_ = rows.Close()
-				t.Fatalf("scan %s: %v", name, scanErr)
-			}
-			result = append(result, row)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			_ = rows.Close()
-			t.Fatalf("iterate %s: %v", name, rowsErr)
-		}
-		if closeErr := rows.Close(); closeErr != nil {
-			t.Fatalf("close %s: %v", name, closeErr)
-		}
-		return result
-	}
-	grouped := collect(
+	grouped := collectEventStatsStringArrayRows(
+		t,
+		ctx,
+		connection,
 		"grouped eventstats values",
 		compile(
 			base+` | eventstats values(distinct_value) AS distinct_values BY aggregate_group`+
@@ -344,7 +274,7 @@ func testEventStatsValuesAgainstClickHouse(
 	)
 	wantA := []string{"", "01", "1", "1.0", "Case", "case"}
 	wantB := []string{"repeat"}
-	if want := []groupedRow{
+	if want := []eventStatsStringArrayRow{
 		{id: "sum-avg-a-array", values: wantA},
 		{id: "sum-avg-a-int", values: wantA},
 		{id: "sum-avg-a-missing", values: wantA},
@@ -358,7 +288,10 @@ func testEventStatsValuesAgainstClickHouse(
 	// The sole object is outside the complete official_group scopes. Every
 	// retained row has a physical [] boundary, and empty complete scopes are
 	// logically absent just like incomplete-BY rows.
-	incomplete := collect(
+	incomplete := collectEventStatsStringArrayRows(
+		t,
+		ctx,
+		connection,
 		"incomplete-BY eventstats values",
 		compile(
 			base+` | eventstats values(dc_object) AS object_kinds BY official_group`+

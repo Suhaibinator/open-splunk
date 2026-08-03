@@ -344,13 +344,6 @@ func TestBuildEventStatsSumRejectsForgedAggregateMetadata(t *testing.T) {
 			},
 			wantCode: "SPL_RESERVED_FIELD",
 		},
-		{
-			name: "list function remains unsupported",
-			mutate: func(aggregate *spl.StatsAggregate) {
-				aggregate.Function = spl.AggregateFunctionList
-			},
-			wantCode: "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
-		},
 	}
 	for _, test := range tests {
 		test := test
@@ -446,12 +439,6 @@ func TestAnalyzeEventStatsSumAcceptsResolvedInputAndRejectsForgedMetadata(
 			name: "private output",
 			mutate: func(measure *AggregateMeasure) {
 				measure.Output = "__os_eventstats_private"
-			},
-		},
-		{
-			name: "list function remains unsupported",
-			mutate: func(measure *AggregateMeasure) {
-				measure.Function = AggregateFunctionList
 			},
 		},
 	}

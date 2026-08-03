@@ -131,6 +131,7 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 		{name: "dynamic extrema aggregate", source: `| stats min(user) AS low max(user) AS high`, depth: 4},
 		{name: "values aggregate", source: `| stats values(user) AS users`, depth: 6},
 		{name: "list aggregate", source: `| stats list(user) AS users`, depth: 8},
+		{name: "eventstats list", source: `| eventstats list(user) AS users`, depth: 11},
 		{
 			name:   "shared dc and values aggregate",
 			source: `| stats dc(user) AS user_count values(user) AS users`,
@@ -317,6 +318,39 @@ func TestStatsListRelationalDepthBoundariesAreSourceLocated(t *testing.T) {
 			relationalDepthRequireLimitDiagnostic(t, err, statsRange)
 		})
 	}
+}
+
+func TestEventStatsListRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
+	t.Parallel()
+
+	acceptedSource := relationalDepthEvalPipeline(
+		t,
+		21,
+		64,
+		"eventstats list(user) AS users",
+	)
+	accepted, err := (Compiler{}).Compile(relationalDepthPlan(t, acceptedSource))
+	if err != nil {
+		t.Fatalf("Compile(eventstats list at depth 96): %v", err)
+	}
+	if accepted.relationalDepth != maximumCompiledRelationalDepth {
+		t.Fatalf(
+			"accepted eventstats list relational depth = %d, want %d",
+			accepted.relationalDepth,
+			maximumCompiledRelationalDepth,
+		)
+	}
+
+	rejectedSource := relationalDepthEvalPipeline(
+		t,
+		22,
+		64,
+		"eventstats list(user) AS users",
+	)
+	rejected := relationalDepthPlan(t, rejectedSource)
+	eventStatsRange := rejected.Operators[len(rejected.Operators)-1].SourceRange()
+	_, err = (Compiler{}).Compile(rejected)
+	relationalDepthRequireLimitDiagnostic(t, err, eventStatsRange)
 }
 
 func TestSpathRelationalDepthBoundaryIsSourceLocated(t *testing.T) {

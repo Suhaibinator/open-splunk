@@ -78,7 +78,7 @@
     {
       "name": "eventstats",
       "insertion": "eventstats values(user) AS users BY service",
-      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), exact distinct count, bounded canonical distinct-values list, pN/percN percentile (1-99), numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, chronologically earliest, or chronologically latest value to every input row globally or within up to 16 exact BY fields."
+      "detail": "Add one row count, field-occurrence count, true-only count(eval(predicate)), exact distinct count, bounded canonical distinct-values list, bounded order-preserving list, pN/percN percentile (1-99), numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, chronologically earliest, or chronologically latest value to every input row globally or within up to 16 exact BY fields."
     },
     {
       "name": "top",

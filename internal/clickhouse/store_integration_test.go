@@ -2536,6 +2536,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testEventStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testStatsListAgainstClickHouse(t, ctx, store, connection, indexTime)
+	testEventStatsListAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testRexAgainstClickHouse(t, ctx, store, connection, indexTime)
 	testTextCaseAgainstClickHouse(ctx, t, store, connection, indexTime)

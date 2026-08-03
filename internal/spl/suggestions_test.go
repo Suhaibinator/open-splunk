@@ -618,6 +618,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 			if !strings.Contains(command.Detail, "true-only count(eval(predicate))") ||
 				!strings.Contains(command.Detail, "exact distinct count") ||
 				!strings.Contains(command.Detail, "canonical distinct-values list") ||
+				!strings.Contains(command.Detail, "order-preserving list") ||
 				!strings.Contains(command.Detail, "pN/percN percentile") ||
 				!strings.Contains(command.Detail, "minimum") ||
 				!strings.Contains(command.Detail, "maximum") ||
@@ -626,7 +627,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 				!strings.Contains(command.Detail, "numeric sum") ||
 				!strings.Contains(command.Detail, "numeric average") {
 				t.Fatalf(
-					"eventstats detail = %q, want conditional-count, exact-distinct, values, percentile, minimum, maximum, chronological, sum, and average description",
+					"eventstats detail = %q, want conditional-count, exact-distinct, values, order-preserving list, percentile, minimum, maximum, chronological, sum, and average description",
 					command.Detail,
 				)
 			}

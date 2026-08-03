@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -25,6 +26,11 @@ type eventStatsDynamicPairRow struct {
 	id     string
 	first  any
 	second any
+}
+
+type eventStatsStringArrayRow struct {
+	id     string
+	values []string
 }
 
 func collectEventStatsDynamicPairRows(
@@ -66,6 +72,38 @@ func collectEventStatsDynamicPairRows(
 		t.Fatalf("close %s rows: %v", name, err)
 	}
 	return got
+}
+
+func collectEventStatsStringArrayRows(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	name string,
+	query CompiledQuery,
+) []eventStatsStringArrayRow {
+	t.Helper()
+
+	rows, err := connection.Query(ctx, query.SQL, query.Args...)
+	if err != nil {
+		t.Fatalf("execute %s: %v\nSQL: %s", name, err, query.SQL)
+	}
+	var result []eventStatsStringArrayRow
+	for rows.Next() {
+		var row eventStatsStringArrayRow
+		if err := rows.Scan(&row.id, &row.values); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan %s: %v", name, err)
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate %s: %v", name, err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close %s: %v", name, err)
+	}
+	return result
 }
 
 func collectEventStatsFieldPresence(
@@ -180,6 +218,43 @@ func collectEventStatsNullableFloat(
 	query CompiledQuery,
 ) *float64 {
 	t.Helper()
+	return collectSingleEventStatsValue[*float64](
+		t,
+		ctx,
+		connection,
+		name,
+		"Nullable(Float64)",
+		query,
+	)
+}
+
+func collectEventStatsStringArray(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	name string,
+	query CompiledQuery,
+) []string {
+	t.Helper()
+	return collectSingleEventStatsValue[[]string](
+		t,
+		ctx,
+		connection,
+		name,
+		"Array(String)",
+		query,
+	)
+}
+
+func collectSingleEventStatsValue[T any](
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	name string,
+	databaseType string,
+	query CompiledQuery,
+) T {
+	t.Helper()
 
 	rows, err := connection.Query(ctx, query.SQL, query.Args...)
 	if err != nil {
@@ -192,16 +267,17 @@ func collectEventStatsNullableFloat(
 		)
 	}
 	types := rows.ColumnTypes()
-	if len(types) != 1 || types[0].DatabaseTypeName() != "Nullable(Float64)" {
+	if len(types) != 1 || types[0].DatabaseTypeName() != databaseType {
 		typeNames := make([]string, len(types))
 		for index, columnType := range types {
 			typeNames[index] = columnType.DatabaseTypeName()
 		}
 		_ = rows.Close()
 		t.Fatalf(
-			"%s column types = %#v, want Nullable(Float64)",
+			"%s column types = %#v, want %s",
 			name,
 			typeNames,
+			databaseType,
 		)
 	}
 	if !rows.Next() {
@@ -209,7 +285,7 @@ func collectEventStatsNullableFloat(
 		_ = rows.Close()
 		t.Fatalf("%s returned no row: %v", name, err)
 	}
-	var value *float64
+	var value T
 	if err := rows.Scan(&value); err != nil {
 		_ = rows.Close()
 		t.Fatalf("scan %s: %v", name, err)
@@ -226,4 +302,26 @@ func collectEventStatsNullableFloat(
 		t.Fatalf("close %s rows: %v", name, err)
 	}
 	return value
+}
+
+func expectCompiledErrorMarker(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	name string,
+	query CompiledQuery,
+	marker string,
+) {
+	t.Helper()
+
+	err := executeCompiledExpectingNoRows(ctx, connection, query)
+	if err == nil || !strings.Contains(err.Error(), marker) {
+		t.Fatalf(
+			"%s error = %v, want marker %q\nSQL: %s",
+			name,
+			err,
+			marker,
+			query.SQL,
+		)
+	}
 }

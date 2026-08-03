@@ -36,8 +36,8 @@ const (
 	maxTimechartSeries                  = 12
 	eventStatsSupportedAggregateMessage = "eventstats currently supports exactly one count, " +
 		"count(field), count(eval(predicate)), pN(field), percN(field), min(field), " +
-		"max(field), earliest(field), latest(field), sum(field), avg(field), or " +
-		"dc(field) or values(field) AS output measure"
+		"max(field), earliest(field), latest(field), sum(field), avg(field), " +
+		"dc(field), values(field), or list(field) AS output measure"
 	// Chart's row axis is runtime data rather than a plan-time constant, so
 	// it carries its own explicit ceiling. Splunk truncates at the
 	// installation-configurable maxresultrows; this backend instead fails
@@ -615,7 +615,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				spl.AggregateFunctionSum,
 				spl.AggregateFunctionAverage,
 				spl.AggregateFunctionDistinctCount,
-				spl.AggregateFunctionValues:
+				spl.AggregateFunctionValues,
+				spl.AggregateFunctionList:
 				var function AggregateFunction
 				var form string
 				switch aggregate.Function {
@@ -643,6 +644,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				case spl.AggregateFunctionValues:
 					function = AggregateFunctionValues
 					form = "values(field)"
+				case spl.AggregateFunctionList:
+					function = AggregateFunctionList
+					form = "list(field)"
 				}
 				var inputErr error
 				measure, inputErr = buildEventStatsFieldMeasure(

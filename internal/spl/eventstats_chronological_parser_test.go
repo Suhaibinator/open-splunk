@@ -73,7 +73,7 @@ func TestEventStatsChronologicalSuggestionsFollowBoundedGrammar(t *testing.T) {
 		!slices.Contains(root.FunctionNames, "earliest") ||
 		!slices.Contains(root.FunctionNames, "latest") ||
 		!slices.Contains(root.FunctionNames, "values") ||
-		slices.Contains(root.FunctionNames, "list") ||
+		!slices.Contains(root.FunctionNames, "list") ||
 		slices.Contains(root.FunctionNames, "distinct_count") {
 		t.Fatalf("eventstats functions = %v", root.FunctionNames)
 	}

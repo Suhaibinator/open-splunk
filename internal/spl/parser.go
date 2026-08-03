@@ -1951,6 +1951,12 @@ var eventStatsFieldAggregateDescriptors = [...]eventStatsFieldAggregateDescripto
 		form:       "values(field)",
 		suggestion: "eventstats values(field) AS distinct_values",
 	},
+	{
+		name:       "list",
+		function:   AggregateFunctionList,
+		form:       "list(field)",
+		suggestion: "eventstats list(field) AS ordered_values",
+	},
 }
 
 func eventStatsAcceptedAggregateForms() string {

@@ -134,6 +134,10 @@ func testStatsListAgainstClickHouse(
 		))
 	}
 
+	fixedListMembers := make([]*opensplunkv1.TypedValue, MaximumStatsListValuesPerGroup)
+	for index := range fixedListMembers {
+		fixedListMembers[index] = typedString(fmt.Sprintf("fixed-%03d", index))
+	}
 	events = append(events,
 		newEvent(
 			"list-by-complete",
@@ -149,6 +153,20 @@ func testStatsListAgainstClickHouse(
 			typedField("list_value", typedObject(
 				typedField("child", typedString("must remain ineligible")),
 			)),
+		),
+		newEvent(
+			"list-fixed-by-incomplete",
+			"eventstats-list-fixed-incomplete-by",
+			tiedTime,
+			typedField("list_sequence", typedUint(0)),
+			typedField("list_fixed_seed", typedList(fixedListMembers...)),
+		),
+		newEvent(
+			"list-fixed-by-complete",
+			"eventstats-list-fixed-incomplete-by",
+			tiedTime,
+			typedField("list_group", typedString("")),
+			typedField("list_sequence", typedUint(1)),
 		),
 		newEvent(
 			"list-bytes-exact",

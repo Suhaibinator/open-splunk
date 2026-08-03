@@ -2152,6 +2152,8 @@ eventstats dc(user) AS unique_users
 eventstats dc(user) AS service_users BY service
 eventstats values(user) AS users
 eventstats values(user) AS service_users BY service
+eventstats list(user) AS recent_users
+eventstats list(user) AS recent_service_users BY service
 eventstats sum(bytes) AS total_bytes
 eventstats sum(bytes) AS service_bytes BY service
 eventstats avg(duration_ms) AS mean_ms
@@ -2168,8 +2170,8 @@ eventstats latest(status) AS last_status
 eventstats latest(status) AS last_service_status BY service
 ```
 
-Exactly one `count`, `dc`, `values`, `pN`/`percN`, `sum`, `avg`, `min`, `max`,
-`earliest`, or `latest` is accepted. Integer percentile suffix `N` is from 1
+Exactly one `count`, `dc`, `values`, `list`, `pN`/`percN`, `sum`, `avg`, `min`,
+`max`, `earliest`, or `latest` is accepted. Integer percentile suffix `N` is from 1
 through 99; the two spellings are synonyms, and leading zeroes canonicalize to
 the same level.
 Argument-free row count uses the default output field `count` and may provide one exact output
@@ -2180,7 +2182,8 @@ Conditional count accepts exactly
 alias. Exact distinct count accepts exactly one unquoted exact field in
 `dc(field)` and requires an explicit exact output alias. `values(field)`
 likewise accepts one unquoted exact field and requires an explicit exact output
-alias. Numeric sum and average accept exactly one unquoted exact field in
+alias. `list(field)` accepts the same exact input shape and also requires an
+explicit exact output alias. Numeric sum and average accept exactly one unquoted exact field in
 `sum(field)` or `avg(field)` and likewise require an explicit exact output
 alias. Percentiles accept exactly one unquoted exact field in `pN(field)` or
 `percN(field)` and require an explicit exact output alias. Minimum and maximum
@@ -2194,7 +2197,8 @@ output alias.
 case-insensitive, while field names remain case-sensitive. Parenthesized
 `count()`, `c(field)`, `c(eval(...))`, `distinct_count(field)`,
 `sum(eval(...))`, `avg(eval(...))`, wildcard or quoted input fields, empty or
-multiple inputs, `dc(eval(...))`, `values(eval(...))`, `p0`, `p100`, decimal
+multiple inputs, `dc(eval(...))`, `values(eval(...))`, `list(eval(...))`, `p0`,
+`p100`, decimal
 percentile suffixes,
 SPL2 two-argument `perc(field,N)`, `upperperc`, `exactperc`, percentile eval
 arguments, `min(eval(...))`, `max(eval(...))`, `earliest(eval(...))`,
@@ -2305,6 +2309,50 @@ whole-annotation window sums, so repeated-result validation does not rescan
 each array. The lowering uses no approximate `uniq`, `ARRAY JOIN`, row
 expansion, `groupArray`, physical-event rescan, or Go-side buffering and stays
 inside the existing flat eventstats pass-amplification budget.
+
+`eventstats list(field)` uses the same canonical scalar conversion,
+immediate top-level multivalue flattening, missing/null behavior, byte
+preservation, and unsupported-container classification as transforming
+`stats list`. It preserves duplicates and annotates each complete global or
+grouped scope with the first 100 eligible strings in the current deterministic
+pipeline order. Members from one multivalue row retain their original
+one-based order before the next row contributes. An empty String is eligible;
+missing fields, explicit nulls, empty multivalues, and null members contribute
+nothing.
+
+An upstream `sort`, `head`, `tail`, `dedup`, filter, or projection determines
+both the admitted relation and its current order. Without an explicit order,
+event rows use descending original `_time`, event ID, visibility sequence, and
+immutable source identity. A forged relation with no deterministic order is
+rejected rather than assigned a backend-dependent order. The command itself
+preserves every upstream row and that row order. A complete scope with no
+eligible member publishes physical `[]`, which is logically absent to
+downstream SPL presence tests. A projected-away input behaves the same way and
+skips ordered-window work. An incomplete `BY` tuple retains its source row with
+physical `[]` and logical absence and cannot contribute or poison another
+group.
+
+Generic objects, flattened object parents, nested arrays, and nested objects
+in any retained measure row fail the complete command atomically, including
+when the poisoned value appears after the first 100 eligible strings. Valid
+eligible values after the first 100 are deliberately truncated and are not an
+overflow. The selected first-100 cell may contain at most 512 KiB of raw
+lexical payload. Because the cell is repeated on source rows, the complete
+annotated relation is additionally limited to 100,000 published elements and
+8 MiB of published lexical payload. The existing 10,000/10,001 input-row fence
+and flat 128-pass eventstats graph budget remain authoritative. Poison and all
+resource limits are validated before a downstream filter, projection, sort,
+or row limit can hide them.
+
+The bounded input computes one canonical String array, one invalid bit, exact
+group eligibility, and deterministic order metadata per source row. One
+partitioned order/prefix window admits only the selected first-100,
+byte-bounded candidate tuples, and one `groupArraySortedArray(100)` definition
+retains them globally or per complete group; grouped lowering adds one left
+join. Scalar element and byte metadata feed whole-annotation validation
+without walking the published arrays again. The lowering uses no `ARRAY JOIN`,
+row expansion, unbounded `groupArray`, physical-event rescan, or Go-side
+buffering.
 
 `eventstats sum(field)` and `eventstats avg(field)` use exactly the numeric
 normalization and immediate-member semantics of their `stats` counterparts.
@@ -3084,8 +3132,9 @@ too.
 
 `eventstats` supports one argument-free `count`, exact-field `count(field) AS
 output`, conditional `count(eval(predicate)) AS output`, or one exact-field
-`dc(field)`, `values(field)`, integer-suffix `pN(field)`/`percN(field)` for `N`
-from 1 through 99, `sum(field)`, `avg(field)`, `min(field)`, `max(field)`,
+`dc(field)`, `values(field)`, `list(field)`, integer-suffix
+`pN(field)`/`percN(field)` for `N` from 1 through 99, `sum(field)`, `avg(field)`,
+`min(field)`, `max(field)`,
 `earliest(field)`, or `latest(field)` with an explicit output alias, optionally
 grouped by up to 16 exact fields. Other aggregate functions, multiple measures,
 and the broader eval-expression surface remain unsupported for `eventstats`.
