@@ -1895,6 +1895,7 @@ ORDER BY grid.number`,
 					RowLimit:        10_000,
 					MaxSeries:       12,
 					MaxLabelBytes:   256,
+					ValueKind:       clickhouse.ChartValueKindCount,
 				},
 			}
 		}

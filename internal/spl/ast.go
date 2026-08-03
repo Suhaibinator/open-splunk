@@ -725,13 +725,13 @@ func (*TimechartCommand) Name() string         { return "timechart" }
 func (c *TimechartCommand) SourceRange() Range { return c.Range }
 
 // ChartCommand produces a bounded runtime-wide pivot: one row per distinct
-// value of the row split and one runtime count series per retained value of
-// the column split. The initial compatibility slice supports exactly one
-// argument-free count and two distinct split fields, and is a terminal
-// transforming command.
+// value of the row split and one runtime series per retained value of the
+// column split. Aggregate retains the same source-located representation used
+// by stats and timechart. The bounded compatibility surface supports one
+// argument-free count or one exact-field sum/average plus two distinct split
+// fields, and is a terminal transforming command.
 type ChartCommand struct {
-	Function       AggregateFunction
-	AggregateRange Range
+	Aggregate StatsAggregate
 	// Over is Splunk's row-split field: the first output column.
 	Over StatsGroupField
 	// SplitBy is Splunk's column-split field: its runtime values become the

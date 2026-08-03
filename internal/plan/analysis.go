@@ -256,10 +256,19 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		}
 		return nil
 	case *Chart:
+		if !validChartContract(operator) {
+			return errors.New("analyze logical query: chart contract is invalid")
+		}
 		if err := analyzer.addField(operator.Over, depth+1); err != nil {
 			return err
 		}
-		return analyzer.addField(operator.SplitBy, depth+1)
+		if err := analyzer.addField(operator.SplitBy, depth+1); err != nil {
+			return err
+		}
+		if operator.Measure.Function != AggregateFunctionCountRows {
+			return analyzer.addField(operator.Measure.Input, depth+1)
+		}
+		return nil
 	case *Window:
 		if err := analyzer.validateOutputName(operator.Output, depth+1); err != nil {
 			return err

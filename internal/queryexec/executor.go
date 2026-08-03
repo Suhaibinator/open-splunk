@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
@@ -73,10 +74,16 @@ const (
 	// would otherwise enforce incrementally. The guard trips on the offending
 	// row, so at most one row beyond the ceiling is ever resident.
 	maximumChartResultBytes = uint64(48 << 20)
-	// chartRowOverheadBytes approximates the fixed Go cost of one retained
-	// pivot row: the row value header, the counts slice header, and the
-	// chartRow struct itself.
-	chartRowOverheadBytes = uint64(96)
+	// A buffered row is stored by value in a growing slice. Reserving two
+	// complete slots per logical row conservatively covers both the Value and
+	// cell-slice headers in the struct plus the slice's unused growth capacity.
+	// The cell backing arrays and variable row payload are charged separately.
+	chartRowOverheadBytes      = 2 * uint64(unsafe.Sizeof(chartRow{}))
+	chartValueRowOverheadBytes = 2 * uint64(unsafe.Sizeof(chartValueRow{}))
+	chartCountCellBytes        = uint64(unsafe.Sizeof(uint64(0)))
+	chartValueCellBytes        = uint64(unsafe.Sizeof(nullableFloat64{}))
+	chartBufferedBaseBytes     = uint64(unsafe.Sizeof(bufferedChart{}))
+	chartStringHeaderBytes     = uint64(unsafe.Sizeof(""))
 
 	extendedTypeKey  = "\x00open_splunk_type"
 	extendedValueKey = "\x00open_splunk_value"
@@ -1432,9 +1439,15 @@ type chartRow struct {
 	counts []uint64
 }
 
+type chartValueRow struct {
+	value  searchjobs.Value
+	values []nullableFloat64
+}
+
 type bufferedChart struct {
-	columns []string
-	rows    []chartRow
+	columns   []string
+	rows      []chartRow
+	valueRows []chartValueRow
 }
 
 // chartRowValueKind maps the compiler's declared row kind onto the public
@@ -1461,6 +1474,44 @@ func chartRowValueKind(kind clickhouse.ChartRowKind) (searchjobs.ValueKind, bool
 	}
 }
 
+// chartRowScanType binds the compiler's closed row-type contract to the exact
+// native value clickhouse-go must expose. Keeping the database type and public
+// kind in the same mapping prevents either half of forged metadata from
+// weakening the transport check.
+func chartRowScanType(kind clickhouse.ChartRowKind, databaseType string) (reflect.Type, bool) {
+	switch databaseType {
+	case "String":
+		if kind == clickhouse.ChartRowKindString || kind == clickhouse.ChartRowKindMixed {
+			return reflect.TypeOf(""), true
+		}
+	case "Int64":
+		if kind == clickhouse.ChartRowKindSigned {
+			return reflect.TypeOf(int64(0)), true
+		}
+	case "UInt8":
+		if kind == clickhouse.ChartRowKindUnsigned {
+			return reflect.TypeOf(uint8(0)), true
+		}
+	case "UInt64":
+		if kind == clickhouse.ChartRowKindUnsigned {
+			return reflect.TypeOf(uint64(0)), true
+		}
+	case "Float64":
+		if kind == clickhouse.ChartRowKindDouble {
+			return reflect.TypeOf(float64(0)), true
+		}
+	case "Bool":
+		if kind == clickhouse.ChartRowKindBool {
+			return reflect.TypeOf(false), true
+		}
+	case "DateTime64(9, 'UTC')":
+		if kind == clickhouse.ChartRowKindTime {
+			return reflect.TypeOf(time.Time{}), true
+		}
+	}
+	return nil, false
+}
+
 func validateChartOutput(query clickhouse.CompiledQuery) error {
 	output := query.Chart
 	if output == nil {
@@ -1474,8 +1525,11 @@ func validateChartOutput(query clickhouse.CompiledQuery) error {
 		strings.TrimSpace(output.RowDatabaseType) == "" {
 		return fmt.Errorf("%w: compiled chart output contract is invalid", searchjobs.ErrInvalidResult)
 	}
-	if _, ok := chartRowValueKind(output.RowKind); !ok {
-		return fmt.Errorf("%w: compiled chart row kind is invalid", searchjobs.ErrInvalidResult)
+	if _, ok := chartRowScanType(output.RowKind, output.RowDatabaseType); !ok {
+		return fmt.Errorf("%w: compiled chart row transport is invalid", searchjobs.ErrInvalidResult)
+	}
+	if !output.ValueKind.Valid() {
+		return fmt.Errorf("%w: compiled chart value kind is invalid", searchjobs.ErrInvalidResult)
 	}
 	return nil
 }
@@ -1494,84 +1548,160 @@ func readChartRows(
 	if err := ctx.Err(); err != nil {
 		return bufferedChart{}, err
 	}
-	expectedColumns := []string{
-		clickhouse.ChartOrdinalColumn,
-		clickhouse.ChartRowColumn,
-		clickhouse.ChartNamesColumn,
-		clickhouse.ChartCountsColumn,
-		clickhouse.ChartInvalidColumn,
+	rowKind, rowKindOK := chartRowValueKind(output.RowKind)
+	rowScanType, rowScanTypeOK := chartRowScanType(output.RowKind, output.RowDatabaseType)
+	if !rowKindOK || !rowScanTypeOK {
+		return bufferedChart{}, fmt.Errorf("%w: compiled chart row transport is invalid", searchjobs.ErrInvalidResult)
+	}
+	expectedColumns := []string(nil)
+	expectedTypes := []string(nil)
+	expectedScanTypes := []reflect.Type(nil)
+	switch output.ValueKind {
+	case clickhouse.ChartValueKindCount:
+		expectedColumns = []string{
+			clickhouse.ChartOrdinalColumn,
+			clickhouse.ChartRowColumn,
+			clickhouse.ChartNamesColumn,
+			clickhouse.ChartCountsColumn,
+			clickhouse.ChartInvalidColumn,
+		}
+		expectedTypes = []string{"UInt64", output.RowDatabaseType, "Array(String)", "Array(UInt64)", "UInt8"}
+		expectedScanTypes = []reflect.Type{
+			reflect.TypeOf(uint64(0)),
+			rowScanType,
+			reflect.TypeOf([]string{}),
+			reflect.TypeOf([]uint64{}),
+			reflect.TypeOf(uint8(0)),
+		}
+	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+		expectedColumns = []string{
+			clickhouse.ChartOrdinalColumn,
+			clickhouse.ChartRowColumn,
+			clickhouse.ChartNamesColumn,
+			clickhouse.ChartValuesColumn,
+			clickhouse.ChartValuePresentColumn,
+			clickhouse.ChartInvalidColumn,
+		}
+		expectedTypes = []string{
+			"UInt64",
+			output.RowDatabaseType,
+			"Array(String)",
+			"Array(Float64)",
+			"Array(UInt8)",
+			"UInt8",
+		}
+		expectedScanTypes = []reflect.Type{
+			reflect.TypeOf(uint64(0)),
+			rowScanType,
+			reflect.TypeOf([]string{}),
+			reflect.TypeOf([]float64{}),
+			reflect.TypeOf([]uint8{}),
+			reflect.TypeOf(uint8(0)),
+		}
+	default:
+		return bufferedChart{}, fmt.Errorf("%w: compiled chart value kind is invalid", searchjobs.ErrInvalidResult)
 	}
 	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
 		return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart columns do not match the compiled output", searchjobs.ErrInvalidResult)
 	}
-	expectedTypes := []string{"UInt64", output.RowDatabaseType, "Array(String)", "Array(UInt64)", "UInt8"}
-	// Only the row column's physical type varies, and the compiler declares it.
-	// Every transport column keeps timechart's exact scan-type pinning.
-	expectedScanTypes := []reflect.Type{
-		reflect.TypeOf(uint64(0)),
-		nil,
-		reflect.TypeOf([]string{}),
-		reflect.TypeOf([]uint64{}),
-		reflect.TypeOf(uint8(0)),
-	}
+	// Only the row column's physical type varies, and the compiler's closed
+	// database-type/kind pair resolves it before this exact scan-type check.
 	for index, columnType := range columnTypes {
 		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] || columnType.Nullable() ||
 			strings.TrimSpace(columnType.DatabaseTypeName()) != expectedTypes[index] || columnType.ScanType() == nil ||
-			(expectedScanTypes[index] != nil && columnType.ScanType() != expectedScanTypes[index]) {
+			columnType.ScanType() != expectedScanTypes[index] {
 			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart column %q has an invalid type", searchjobs.ErrInvalidResult, expectedColumns[index])
 		}
-	}
-	rowKind, ok := chartRowValueKind(output.RowKind)
-	if !ok {
-		return bufferedChart{}, fmt.Errorf("%w: compiled chart row kind is invalid", searchjobs.ErrInvalidResult)
 	}
 
 	buffered := bufferedChart{}
 	var encodedNames []string
-	var retainedBytes uint64
+	retainedBytes := chartBufferedBaseBytes
+	destinations, err := scanDestinations(columnTypes)
+	if err != nil {
+		return bufferedChart{}, fmt.Errorf("%w: prepare ClickHouse chart row scan: %w", searchjobs.ErrInvalidResult, err)
+	}
+	defer clearScanDestinations(destinations)
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return bufferedChart{}, err
 		}
-		if uint64(len(buffered.rows)) >= output.RowLimit {
+		rowIndex := len(buffered.rows) + len(buffered.valueRows)
+		if uint64(rowIndex) >= output.RowLimit {
 			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart returned too many rows", searchjobs.ErrExecutionLimit)
-		}
-		destinations, err := scanDestinations(columnTypes)
-		if err != nil {
-			return bufferedChart{}, fmt.Errorf("%w: prepare ClickHouse chart row scan: %w", searchjobs.ErrInvalidResult, err)
 		}
 		if err := rows.Scan(destinations...); err != nil {
 			return bufferedChart{}, classifyQueryError(ctx, fmt.Errorf("scan ClickHouse chart result row: %w", err))
 		}
-		ordinal, rowValue, names, counts, invalid, err := scannedChartRow(destinations, rowKind)
+		var (
+			ordinal  uint64
+			rowValue searchjobs.Value
+			names    []string
+			counts   []uint64
+			values   []nullableFloat64
+			invalid  uint8
+		)
+		switch output.ValueKind {
+		case clickhouse.ChartValueKindCount:
+			ordinal, rowValue, names, counts, invalid, err = scannedChartRow(destinations, rowKind)
+		case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+			ordinal, rowValue, names, values, invalid, err = scannedNumericChartRow(
+				destinations,
+				rowKind,
+				output.MaxSeries,
+			)
+		}
 		if err != nil {
 			return bufferedChart{}, err
 		}
-		if len(names) != len(counts) || len(names) > int(output.MaxSeries) {
+		seriesCount := len(counts)
+		if output.ValueKind != clickhouse.ChartValueKindCount {
+			seriesCount = len(values)
+		}
+		if len(names) != seriesCount || len(names) > int(output.MaxSeries) {
 			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart series arrays are invalid", searchjobs.ErrInvalidResult)
 		}
-		if ordinal != uint64(len(buffered.rows)) {
+		if ordinal != uint64(rowIndex) {
 			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart ordinal sequence is invalid", searchjobs.ErrInvalidResult)
 		}
-		if len(buffered.rows) == 0 {
+		var domainBytes uint64
+		if rowIndex == 0 {
 			publicColumns, validateErr := decodeSeriesNames(names, output.MaxLabelBytes, output.RowField)
 			if validateErr != nil {
 				return bufferedChart{}, validateErr
 			}
 			encodedNames = slices.Clone(names)
 			buffered.columns = publicColumns
+			domainBytes = chartDomainRetainedBytes(encodedNames, publicColumns)
 		} else if !slices.Equal(names, encodedNames) {
 			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart series changed between rows", searchjobs.ErrInvalidResult)
 		}
 		if invalid != 0 {
 			return bufferedChart{}, searchjobs.ErrUnsupportedValue
 		}
-		rowBytes := chartRowRetainedBytes(scannedValue(destinations[1]), len(counts))
+		// Every compiler-produced public row has at least one valid split
+		// domain member. Empty arrays are reserved for an invalid sentinel or
+		// a truly empty result stream, never a row whose data may be dropped.
+		if len(names) == 0 {
+			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart row has an empty series domain", searchjobs.ErrInvalidResult)
+		}
+		rowBytes := chartRowRetainedBytes(scannedValue(destinations[1]), seriesCount, output.ValueKind)
+		if domainBytes > maximumChartResultBytes-retainedBytes {
+			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart series domain exceeded the supported result size", searchjobs.ErrExecutionLimit)
+		}
+		rowBytes += domainBytes
 		if rowBytes > maximumChartResultBytes-retainedBytes {
 			return bufferedChart{}, fmt.Errorf("%w: ClickHouse chart row values exceeded the supported result size", searchjobs.ErrExecutionLimit)
 		}
 		retainedBytes += rowBytes
-		buffered.rows = append(buffered.rows, chartRow{value: rowValue, counts: slices.Clone(counts)})
+		if output.ValueKind == clickhouse.ChartValueKindCount {
+			clonedCounts := make([]uint64, len(counts))
+			copy(clonedCounts, counts)
+			buffered.rows = append(buffered.rows, chartRow{value: rowValue, counts: clonedCounts})
+		} else {
+			buffered.valueRows = append(buffered.valueRows, chartValueRow{value: rowValue, values: values})
+		}
+		clearScanDestinations(destinations)
 	}
 	if err := rows.Err(); err != nil {
 		return bufferedChart{}, classifyQueryError(ctx, fmt.Errorf("iterate ClickHouse chart results: %w", err))
@@ -1582,11 +1712,11 @@ func readChartRows(
 	return buffered, nil
 }
 
-// chartRowRetainedBytes is the Go heap a single buffered pivot row holds. Only
-// the row value is unbounded; every other component is fixed by the compiled
-// series bound. It measures the scanned transport value so accounting never
-// copies the payload it is sizing.
-func chartRowRetainedBytes(scanned any, seriesCount int) uint64 {
+// chartRowRetainedBytes is a conservative reservation for one buffered pivot
+// row. It includes the complete row struct, outer-slice capacity slack, and
+// the exact cell backing-array element size. Only the cloned row payload is
+// unbounded. Measuring the scanned value avoids another copy merely to size it.
+func chartRowRetainedBytes(scanned any, seriesCount int, valueKind clickhouse.ChartValueKind) uint64 {
 	payload := uint64(0)
 	switch typed := scanned.(type) {
 	case string:
@@ -1594,8 +1724,46 @@ func chartRowRetainedBytes(scanned any, seriesCount int) uint64 {
 	case []byte:
 		payload = uint64(len(typed))
 	}
+	cellBytes := chartCountCellBytes
+	rowBytes := chartRowOverheadBytes
+	if valueKind == clickhouse.ChartValueKindSum || valueKind == clickhouse.ChartValueKindAverage {
+		cellBytes = chartValueCellBytes
+		rowBytes = chartValueRowOverheadBytes
+	}
 	// #nosec G115 -- seriesCount comes from a slice length and is capped by maximumChartSeries.
-	return payload + uint64(seriesCount)*8 + chartRowOverheadBytes
+	return payload + uint64(seriesCount)*cellBytes + rowBytes
+}
+
+// chartDomainRetainedBytes reserves both domain slice backings with up to 2x
+// capacity slack and both encoded/public string payloads. Most public names are
+// substrings of their encoded names, so charging both is deliberately
+// conservative; normalized leading-underscore names really do allocate both.
+func chartDomainRetainedBytes(encoded, public []string) uint64 {
+	// #nosec G115 -- both lengths are capped by maximumChartSeries.
+	stringSlots := 2 * uint64(len(encoded)+len(public)) * chartStringHeaderBytes
+	payload := uint64(0)
+	for _, value := range encoded {
+		// #nosec G115 -- labels are capped by maximumChartLabel.
+		payload += uint64(len(value))
+	}
+	for _, value := range public {
+		// #nosec G115 -- labels are capped by maximumChartLabel plus normalization.
+		payload += uint64(len(value))
+	}
+	return stringSlots + payload
+}
+
+// clearScanDestinations releases driver-owned row/array payloads after every
+// value needed by the buffer has been cloned. Reusing the destination pointers
+// avoids per-row allocations without retaining a second copy of the last row.
+func clearScanDestinations(destinations []any) {
+	for _, destination := range destinations {
+		value := reflect.ValueOf(destination)
+		if !value.IsValid() || value.Kind() != reflect.Pointer || value.IsNil() || !value.Elem().CanSet() {
+			continue
+		}
+		value.Elem().Set(reflect.Zero(value.Elem().Type()))
+	}
 }
 
 func scannedChartRow(destinations []any, rowKind searchjobs.ValueKind) (uint64, searchjobs.Value, []string, []uint64, uint8, error) {
@@ -1633,6 +1801,51 @@ func scannedChartRow(destinations []any, rowKind searchjobs.ValueKind) (uint64, 
 	return ordinal, value, names, counts, invalid, nil
 }
 
+func scannedNumericChartRow(destinations []any, rowKind searchjobs.ValueKind, maxSeries uint16) (uint64, searchjobs.Value, []string, []nullableFloat64, uint8, error) {
+	invalidResult := func(message string) (uint64, searchjobs.Value, []string, []nullableFloat64, uint8, error) {
+		return 0, searchjobs.Value{}, nil, nil, 0, fmt.Errorf("%w: %s", searchjobs.ErrInvalidResult, message)
+	}
+	if len(destinations) != 6 {
+		return invalidResult("ClickHouse numeric chart row has an invalid width")
+	}
+	ordinal, ordinalOK := scannedValue(destinations[0]).(uint64)
+	names, namesOK := scannedValue(destinations[2]).([]string)
+	rawValues, valuesOK := scannedValue(destinations[3]).([]float64)
+	present, presentOK := scannedValue(destinations[4]).([]uint8)
+	invalid, invalidOK := scannedValue(destinations[5]).(uint8)
+	if !ordinalOK || !namesOK || !valuesOK || !presentOK || !invalidOK {
+		return invalidResult("ClickHouse numeric chart row has invalid native values")
+	}
+	if len(rawValues) != len(present) || len(names) != len(rawValues) || len(rawValues) > int(maxSeries) {
+		return invalidResult("ClickHouse numeric chart series arrays are invalid")
+	}
+	values := make([]nullableFloat64, len(rawValues))
+	for index, presence := range present {
+		if presence > 1 || (presence == 0 && rawValues[index] != 0) {
+			return invalidResult("ClickHouse numeric chart presence array is invalid")
+		}
+		if presence == 1 {
+			values[index] = nullableFloat64{value: rawValues[index], valid: true}
+		}
+	}
+	scanned := scannedValue(destinations[1])
+	if scanned == nil {
+		return invalidResult("ClickHouse chart row value is null")
+	}
+	value, err := convertValue(scanned)
+	if err != nil {
+		return invalidResult("ClickHouse chart row value cannot be converted")
+	}
+	if rowKind == searchjobs.ValueKindMixed {
+		if kind := value.Kind(); kind != searchjobs.ValueKindString && kind != searchjobs.ValueKindBytes {
+			return invalidResult("ClickHouse chart row value does not match the compiled row kind")
+		}
+	} else if value.Kind() != rowKind {
+		return invalidResult("ClickHouse chart row value does not match the compiled row kind")
+	}
+	return ordinal, value, names, values, invalid, nil
+}
+
 func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickhouse.ChartOutput, buffered bufferedChart) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1640,6 +1853,23 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 	rowKind, ok := chartRowValueKind(output.RowKind)
 	if !ok {
 		return fmt.Errorf("%w: compiled chart row kind is invalid", searchjobs.ErrInvalidResult)
+	}
+	var seriesKind searchjobs.ValueKind
+	seriesNullable := false
+	switch output.ValueKind {
+	case clickhouse.ChartValueKindCount:
+		seriesKind = searchjobs.ValueKindUnsigned
+		if len(buffered.valueRows) != 0 {
+			return fmt.Errorf("%w: buffered chart value kind is invalid", searchjobs.ErrInvalidResult)
+		}
+	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+		seriesKind = searchjobs.ValueKindDouble
+		seriesNullable = true
+		if len(buffered.rows) != 0 {
+			return fmt.Errorf("%w: buffered chart value kind is invalid", searchjobs.ErrInvalidResult)
+		}
+	default:
+		return fmt.Errorf("%w: compiled chart value kind is invalid", searchjobs.ErrInvalidResult)
 	}
 	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(buffered.columns)+1)}
 	// A Mixed row column mirrors the ordinary result path, which declares every
@@ -1650,7 +1880,7 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 		Nullable: rowKind == searchjobs.ValueKindMixed,
 	}
 	for index, name := range buffered.columns {
-		schema.Columns[index+1] = searchjobs.Column{Name: name, Kind: searchjobs.ValueKindUnsigned}
+		schema.Columns[index+1] = searchjobs.Column{Name: name, Kind: seriesKind, Nullable: seriesNullable}
 	}
 	if err := sink.SetSchema(schema); err != nil {
 		return err
@@ -1659,14 +1889,33 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 		// A chart with no eligible input publishes only its declared row column.
 		return ctx.Err()
 	}
-	for _, row := range buffered.rows {
+	if output.ValueKind == clickhouse.ChartValueKindCount {
+		for _, row := range buffered.rows {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			values := make([]searchjobs.Value, len(row.counts)+1)
+			values[0] = row.value
+			for index, count := range row.counts {
+				values[index+1] = searchjobs.UnsignedValue(count)
+			}
+			if err := sink.AddRow(values); err != nil {
+				return err
+			}
+		}
+		return ctx.Err()
+	}
+	for _, row := range buffered.valueRows {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		values := make([]searchjobs.Value, len(row.counts)+1)
+		values := make([]searchjobs.Value, len(row.values)+1)
 		values[0] = row.value
-		for index, count := range row.counts {
-			values[index+1] = searchjobs.UnsignedValue(count)
+		for index, value := range row.values {
+			values[index+1] = searchjobs.NullValue()
+			if value.valid {
+				values[index+1] = searchjobs.DoubleValue(value.value)
+			}
 		}
 		if err := sink.AddRow(values); err != nil {
 			return err

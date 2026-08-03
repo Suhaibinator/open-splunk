@@ -20,6 +20,14 @@ import (
 func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 	source := strings.Repeat("x", 256)
 	sourceRange := testSourceRange()
+	chartOver, err := plan.ResolveField("host", sourceRange)
+	if err != nil {
+		t.Fatalf("resolve chart row field: %v", err)
+	}
+	chartSplit, err := plan.ResolveField("level", sourceRange)
+	if err != nil {
+		t.Fatalf("resolve chart column field: %v", err)
+	}
 	query := &plan.Query{
 		Operators: []plan.Operator{
 			&plan.Scan{Range: sourceRange},
@@ -97,8 +105,15 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 				Range: sourceRange,
 			},
 			&plan.Chart{
-				Over: plan.FieldRef{Name: "host"}, SplitBy: plan.FieldRef{Name: "level"},
-				NullLabel: "private-chart-null", OtherLabel: "private-chart-other", Range: sourceRange,
+				Over: chartOver, SplitBy: chartSplit,
+				Measure:      plan.AggregateMeasure{Function: plan.AggregateFunctionCountRows, Output: "count"},
+				RowLimit:     10_000,
+				SeriesLimit:  10,
+				IncludeNull:  true,
+				IncludeOther: true,
+				NullLabel:    "NULL",
+				OtherLabel:   "OTHER",
+				Range:        sourceRange,
 			},
 			&plan.Window{
 				Input: plan.FieldRef{Name: "events"}, Output: "percent", Range: sourceRange,
@@ -185,7 +200,6 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 	rendered := fmt.Sprintf("%#v", projected)
 	for _, secret := range []string{
 		"private-literal", "private-regex", "private-json-path",
-		"private-chart-null", "private-chart-other",
 	} {
 		if strings.Contains(rendered, secret) {
 			t.Fatalf("safe projection contains %q: %s", secret, rendered)

@@ -4472,7 +4472,7 @@ func TestAnalysisFinalizerCannotBypassTerminalChart(t *testing.T) {
 	}
 }
 
-func TestCompileChartUsesOneScopedScanAndBoundedPivotTransport(t *testing.T) {
+func TestCompileChartUsesBoundedPivotTransport(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis message="Request metrics" | chart count OVER path BY status_class`)
@@ -4488,6 +4488,7 @@ func TestCompileChartUsesOneScopedScanAndBoundedPivotTransport(t *testing.T) {
 	want := ChartOutput{
 		RowField: "path", RowKind: ChartRowKindString, RowDatabaseType: "String",
 		RowLimit: 10_000, MaxSeries: 12, MaxLabelBytes: 256,
+		ValueKind: ChartValueKindCount,
 	}
 	if *compiled.Chart != want {
 		t.Fatalf("compiled chart metadata = %#v, want %#v", *compiled.Chart, want)
@@ -4508,7 +4509,7 @@ func TestCompileChartUsesOneScopedScanAndBoundedPivotTransport(t *testing.T) {
 		`"__os_chart_column_check" AS (`,
 		`ORDER BY "__os_ch_count" DESC, "__os_ch_label" ASC LIMIT 10`,
 		`maxOrDefault("__os_ch_kind" = 3)`,
-		`max("__os_ch_row_invalid") > 0`,
+		`maxOrDefault("__os_ch_row_invalid") > 0`,
 		`HAVING uniqExact("__os_ch_label") > 1`,
 		`concat('VALUE', "__os_ch_label")`,
 		`"__os_ch_sort_label"`,
@@ -4521,7 +4522,8 @@ func TestCompileChartUsesOneScopedScanAndBoundedPivotTransport(t *testing.T) {
 		`AS "` + ChartCountsColumn + `"`,
 		`AS "` + ChartInvalidColumn + `"`,
 		`WHERE throwIf("__os_chart_row_domain"."` + ChartOrdinalColumn + `" >= 10000, '` + ChartRowLimitMarker + `') = 0`,
-		`ORDER BY "__os_chart_row_domain"."` + ChartOrdinalColumn + `" ASC`,
+		`CAST([], 'Array(UInt64)') AS "` + ChartCountsColumn + `"`,
+		`ORDER BY "` + ChartInvalidColumn + `" DESC, "` + ChartOrdinalColumn + `" ASC`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("chart SQL missing %q:\n%s", required, compiled.SQL)
@@ -4534,7 +4536,7 @@ func TestCompileChartUsesOneScopedScanAndBoundedPivotTransport(t *testing.T) {
 		}
 	}
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
-		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+		t.Fatalf("scoped storage relation occurs %d times in generated SQL, want once:\n%s", got, compiled.SQL)
 	}
 	// Exactly two aggregations read the scanned rows: the one-dimensional label
 	// aggregate that chooses the column domain, then the row-keyed aggregate
@@ -4911,6 +4913,7 @@ func TestCompileChartRevalidatesTheBoundedContract(t *testing.T) {
 		want    string
 	}{
 		{"row limit raised", func(_ *plan.Query, chart *plan.Chart) { chart.RowLimit = 10_001 }, "bounded defaults are invalid"},
+		{"row limit lowered", func(_ *plan.Query, chart *plan.Chart) { chart.RowLimit = 9_999 }, "bounded defaults are invalid"},
 		{"row limit removed", func(_ *plan.Query, chart *plan.Chart) { chart.RowLimit = 0 }, "bounded defaults are invalid"},
 		{"series limit raised", func(_ *plan.Query, chart *plan.Chart) { chart.SeriesLimit = 11 }, "bounded defaults are invalid"},
 		{"usenull disabled", func(_ *plan.Query, chart *plan.Chart) { chart.IncludeNull = false }, "bounded defaults are invalid"},
@@ -4919,8 +4922,10 @@ func TestCompileChartRevalidatesTheBoundedContract(t *testing.T) {
 		{"axes collapsed", func(_ *plan.Query, chart *plan.Chart) { chart.SplitBy = chart.Over }, "bounded defaults are invalid"},
 		{
 			"aggregate replaced",
-			func(_ *plan.Query, chart *plan.Chart) { chart.Function = plan.AggregateFunctionSum },
-			"count operator is required",
+			func(_ *plan.Query, chart *plan.Chart) {
+				chart.Measure.Function = plan.AggregateFunctionMaximum
+			},
+			"aggregate function is unsupported",
 		},
 		{
 			"declared schema widened",

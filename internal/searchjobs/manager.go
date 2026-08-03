@@ -2467,9 +2467,21 @@ func chartRowSchemaKind(kind clickhouse.ChartRowKind) (ValueKind, bool) {
 	}
 }
 
+func chartSeriesSchema(kind clickhouse.ChartValueKind) (ValueKind, bool, bool) {
+	switch kind {
+	case clickhouse.ChartValueKindCount:
+		return ValueKindUnsigned, false, true
+	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+		return ValueKindDouble, true, true
+	default:
+		return ValueKindInvalid, false, false
+	}
+}
+
 func validateChartSchema(schema Schema, expected []string, output clickhouse.ChartOutput) error {
 	rowKind, ok := chartRowSchemaKind(output.RowKind)
-	if !ok || output.RowField == "" || !slices.Equal(expected, []string{output.RowField}) ||
+	seriesKind, seriesNullable, seriesOK := chartSeriesSchema(output.ValueKind)
+	if !ok || !seriesOK || output.RowField == "" || !slices.Equal(expected, []string{output.RowField}) ||
 		len(schema.Columns) == 0 || len(schema.Columns)-1 > int(output.MaxSeries) {
 		return fmt.Errorf("%w: chart schema exceeds the compiled output", ErrInvalidResult)
 	}
@@ -2497,7 +2509,7 @@ func validateChartSchema(schema Schema, expected []string, output clickhouse.Cha
 			maximumPublicBytes += len("VALUE")
 		}
 		if len(column.Name) > maximumPublicBytes || strings.HasPrefix(column.Name, "_") ||
-			column.Kind != ValueKindUnsigned || column.Nullable || column.Multivalue {
+			column.Kind != seriesKind || column.Nullable != seriesNullable || column.Multivalue {
 			return fmt.Errorf("%w: chart schema column %d is invalid", ErrInvalidResult, index)
 		}
 	}

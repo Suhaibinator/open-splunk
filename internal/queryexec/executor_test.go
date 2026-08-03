@@ -431,7 +431,8 @@ func TestExecutorPublishesEveryChartRowKind(t *testing.T) {
 		want         searchjobs.ValueKind
 	}{
 		{"string", clickhouse.ChartRowKindString, "String", reflect.TypeOf(""), "/a", searchjobs.ValueKindString},
-		{"unsigned", clickhouse.ChartRowKindUnsigned, "UInt8", reflect.TypeOf(uint8(0)), uint8(10), searchjobs.ValueKindUnsigned},
+		{"unsigned8", clickhouse.ChartRowKindUnsigned, "UInt8", reflect.TypeOf(uint8(0)), uint8(10), searchjobs.ValueKindUnsigned},
+		{"unsigned64", clickhouse.ChartRowKindUnsigned, "UInt64", reflect.TypeOf(uint64(0)), uint64(10), searchjobs.ValueKindUnsigned},
 		{"signed", clickhouse.ChartRowKindSigned, "Int64", reflect.TypeOf(int64(0)), int64(-20), searchjobs.ValueKindSigned},
 		{"double", clickhouse.ChartRowKindDouble, "Float64", reflect.TypeOf(float64(0)), 1.5, searchjobs.ValueKindDouble},
 		{"bool", clickhouse.ChartRowKindBool, "Bool", reflect.TypeOf(false), true, searchjobs.ValueKindBool},
@@ -566,6 +567,13 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 			want: searchjobs.ErrInvalidResult, queryIssued: true,
 		},
 		{
+			name: "row column scan type drift",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeOf([]byte{})}
+			},
+			want: searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
 			name: "nullable row column",
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.types[1] = fakeColumnType{name: clickhouse.ChartRowColumn, databaseType: "String", scanType: reflect.TypeOf(""), nullable: true}
@@ -579,7 +587,7 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 			mutate: func(_ *fakeRows, query *clickhouse.CompiledQuery) {
 				query.Chart.RowKind = clickhouse.ChartRowKindUnsigned
 			},
-			want: searchjobs.ErrInvalidResult, queryIssued: true,
+			want: searchjobs.ErrInvalidResult,
 		},
 		{
 			// The Mixed row column admits exactly the two kinds a String
@@ -594,7 +602,7 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 					row[1] = uint64(index)
 				}
 			},
-			want: searchjobs.ErrInvalidResult, queryIssued: true,
+			want: searchjobs.ErrInvalidResult,
 		},
 		{
 			name:   "sparse ordinal sequence",
@@ -606,6 +614,16 @@ func TestExecutorRejectsMalformedChartAtomically(t *testing.T) {
 			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
 				rows.data[1][2] = []string{"0:OTHERWISE"}
 				rows.data[1][3] = []uint64{1}
+			},
+			want: searchjobs.ErrInvalidResult, queryIssued: true,
+		},
+		{
+			name: "nonempty result with empty series domain",
+			mutate: func(rows *fakeRows, _ *clickhouse.CompiledQuery) {
+				for _, row := range rows.data {
+					row[2] = []string{}
+					row[3] = []uint64{}
+				}
 			},
 			want: searchjobs.ErrInvalidResult, queryIssued: true,
 		},
@@ -883,6 +901,7 @@ func chartQuery(rowField string, rowKind clickhouse.ChartRowKind, rowDatabaseTyp
 		Chart: &clickhouse.ChartOutput{
 			RowField: rowField, RowKind: rowKind, RowDatabaseType: rowDatabaseType,
 			RowLimit: 10_000, MaxSeries: 12, MaxLabelBytes: 256,
+			ValueKind: clickhouse.ChartValueKindCount,
 		},
 	}
 }

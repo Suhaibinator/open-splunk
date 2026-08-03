@@ -2038,11 +2038,11 @@ func TestParseChartAcceptsBothTwoFieldPivotSpellings(t *testing.T) {
 			if !ok {
 				t.Fatalf("last command = %T, want *ChartCommand", query.Commands[len(query.Commands)-1])
 			}
-			if command.Function != AggregateFunctionCount || command.Over.Name != test.over ||
+			if command.Aggregate.Function != AggregateFunctionCount || command.Over.Name != test.over ||
 				command.SplitBy.Name != test.splitBy || command.OverSpelledOver != test.overSpelled {
 				t.Fatalf("chart = %#v", command)
 			}
-			if aggregateText := test.source[command.AggregateRange.Start.Offset:command.AggregateRange.End.Offset]; !strings.EqualFold(aggregateText, "count") {
+			if aggregateText := test.source[command.Aggregate.Range.Start.Offset:command.Aggregate.Range.End.Offset]; !strings.EqualFold(aggregateText, "count") {
 				t.Fatalf("aggregate source = %q", aggregateText)
 			}
 			if overText := test.source[command.Over.Range.Start.Offset:command.Over.Range.End.Offset]; overText != test.over {
@@ -2079,7 +2079,7 @@ func TestParseChartSpellingsProduceIdenticalAxes(t *testing.T) {
 	}
 	over := overForm.Commands[0].(*ChartCommand)
 	by := byForm.Commands[0].(*ChartCommand)
-	if over.Function != by.Function || over.Over.Name != by.Over.Name || over.SplitBy.Name != by.SplitBy.Name {
+	if over.Aggregate.Function != by.Aggregate.Function || over.Over.Name != by.Over.Name || over.SplitBy.Name != by.SplitBy.Name {
 		t.Fatalf("axes differ: %#v vs %#v", over, by)
 	}
 	if !over.OverSpelledOver || by.OverSpelledOver {
@@ -2153,8 +2153,6 @@ func TestParseChartRejectsUnsupportedAggregates(t *testing.T) {
 		locatedAt string
 	}{
 		{"missing aggregate", `index=main | chart`, ""},
-		{"sum", `index=main | chart sum(bytes) over path by level`, "sum"},
-		{"average", `index=main | chart avg(bytes) over path by level`, "avg"},
 		{"percentile", `index=main | chart p95(bytes) over path by level`, "p95"},
 		{"count field argument", `index=main | chart count(level) over path by level`, "count"},
 		{"count empty arguments", `index=main | chart count() over path by level`, "count"},

@@ -450,7 +450,13 @@ func TestCompiledRelationalDepthPinsTerminalWideOperatorCosts(t *testing.T) {
 		{
 			name:      "chart",
 			terminal:  "chart count OVER path BY level",
-			depth:     14,
+			depth:     16,
+			wantChart: true,
+		},
+		{
+			name:      "numeric chart",
+			terminal:  "chart avg(metric) OVER path BY level",
+			depth:     16,
 			wantChart: true,
 		},
 	} {
@@ -536,8 +542,15 @@ func TestTerminalWideRelationalDepthBoundariesAreSourceLocated(t *testing.T) {
 		{
 			name:            "chart",
 			terminal:        "chart count OVER path BY level",
-			acceptedSingles: 18,
-			rejectedSingles: 19,
+			acceptedSingles: 16,
+			rejectedSingles: 17,
+			wantChart:       true,
+		},
+		{
+			name:            "numeric chart",
+			terminal:        "chart sum(metric) OVER path BY level",
+			acceptedSingles: 16,
+			rejectedSingles: 17,
 			wantChart:       true,
 		},
 	} {

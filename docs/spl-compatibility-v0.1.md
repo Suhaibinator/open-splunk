@@ -2536,10 +2536,10 @@ rescan, or Go-side buffering.
 Later inputs in the flat stack are ordinary ClickHouse CTEs and may be
 re-evaluated by their consumers. The compiler therefore counts passes over the
 one retained bounded materialized leaf: every global stage multiplies the count
-by two and every grouped stage by three. Ordinary results and timechart consume
-the final relation once, chart consumes it twice, and field summary, catalog,
-suggestions, and the forced hidden-validation branches contribute their actual
-fixed fanout as well. The query fails with
+by two and every grouped stage by three. Ordinary results, timechart, and
+numeric chart consume the final relation once; count chart consumes it twice.
+Field summary, catalog, suggestions, and the forced hidden-validation branches
+contribute their actual fixed fanout as well. The query fails with
 `SPL_QUERY_TOO_COMPLEX` before the complete graph can exceed 128 bounded-leaf
 reads. An ordinary nonvalidating stack therefore admits up to seven global or
 four grouped stages. Dynamic extrema and chronological measures retain a
@@ -2908,19 +2908,30 @@ Every unsupported form retains a source-located timechart diagnostic.
 ```spl
 | chart count OVER path BY status_class
 | chart count BY path, status_class
+| chart sum(bytes) OVER path BY service
+| chart avg(duration_ms) BY path, service
 ```
 
 `chart` is a bounded runtime-wide two-field pivot, not a `stats` alias. The
-initial slice accepts exactly one argument-free `count`, exactly one row-split
-field (Splunk's `<row-split>`, the first output column), and exactly one
-column-split field (the `<column-split>` whose values become column names). The
-two spellings above are the only accepted ones and compile to identical plans
-and SQL; in the `BY` form the fields may be separated by a comma, whitespace, or
-both, and a trailing comma is rejected. `OVER`, `BY`, and `count` are
-case-insensitive. A field literally named `over` is charted by either spelling,
-but in the `BY` form it must be comma-separated (`chart count BY over, level`),
-because `chart count BY level over` is indistinguishable from the rejected
+supported slice accepts exactly one argument-free `count` or one exact-field
+`sum(field)` / `avg(field)`, exactly one row-split field (Splunk's
+`<row-split>`, the first output column), and exactly one column-split field (the
+`<column-split>` whose values become column names). `OVER <row> BY <column>` and
+`BY <row>, <column>` compile to identical plans and SQL; in the `BY` form the
+fields may be separated by a comma, whitespace, or both, and a trailing comma
+is rejected. `OVER`, `BY`, `count`, `sum`, and `avg` are case-insensitive. A
+field literally named `over` is charted by either spelling. In the `BY` form,
+`chart count BY over level` is unambiguous because `over` is the first field;
+when it is second, a comma is required (`chart count BY level, over`) because
+`chart count BY level over` is indistinguishable from the rejected
 `BY`-before-`OVER` form.
+
+The numeric forms accept one exact unquoted measure field and no `AS` alias.
+The measure cannot also be the row-split field, matching Splunk's documented
+chart restriction, but it may also be the column-split field. The canonical
+logical aggregate name is lowercase `sum(field)` or `avg(field)` even when the
+source used mixed case; runtime split values, rather than that name, still name
+the public series columns.
 
 `chart` must be the final pipeline command (`SPL_UNSUPPORTED_CHART_PIPELINE`,
 located at the following command) because every public column except the first
@@ -2931,7 +2942,8 @@ resulting relation as transforming, exactly as they reject `timechart`.
 Unlike `timechart`, `chart` does not require event rows and does not require the
 canonical `_time`, so `... | stats count BY path, level | chart count OVER path
 BY level` is legal. `count` counts rows of the input relation, never a sum of an
-upstream `count` column.
+upstream `count` column. Numeric measures likewise read the current relation's
+declared field and never recover a value removed by an upstream projection.
 
 #### Row axis
 
@@ -2972,11 +2984,13 @@ documents `bins`/`span`/`start`/`end` discretization for the row split only and
 documents nothing about rendering numeric split values as column names, so no
 approximation is attempted. A compile-time-known non-string column field type is
 rejected earlier with `SPL_UNSUPPORTED_CHART_FIELD_TYPE`. Numeric values are
-therefore legal row labels and fatal column labels, and this version offers no
-remedy that makes one chartable: `bin` discretizes numbers into numeric bucket
-starts and so only converts a working string column axis into a fatal numeric
-one, while `tonumber` produces numbers and `rex` does not match a non-string
-source. A numeric column field must be a string before it reaches `chart`.
+therefore legal row labels and fatal column labels. Convert a numeric scalar to
+a separate string field before `chart`, for example
+`eval status_text=tostring(status) | chart count OVER path BY status_text`.
+`bin` does not perform that conversion: it discretizes numbers into numeric
+bucket starts and so only converts a working string column axis into a fatal
+numeric one. Likewise, `tonumber` produces numbers and `rex` does not match a
+non-string source.
 
 A column value is classified on its own presence, independent of whether the
 same input row carries an eligible row value. An unsupported column value on an
@@ -2986,17 +3000,33 @@ name the row axis. Column values that appear only on row-ineligible events name
 no public column, because no published row could count them.
 
 Behavior equals Splunk's documented defaults `limit=top 10`, `useother=true`,
-`usenull=true`, `otherstr=OTHER`, and `nullstr=NULL`. The ten ordinary values
-with the highest total count across the whole chart are retained — the limit is
-global, not per row — with UTF-8 lexical ascending order of the raw label
-breaking ties. `NULL` exists whenever at least one input row has a missing or
+`usenull=true`, `otherstr=OTHER`, and `nullstr=NULL`. For `count`, the ten
+ordinary values with the highest total count across the whole chart are
+retained — the limit is global, not per row. For `sum` and `avg`, the score is
+the sum of that series' finalized per-row cells across the complete chart.
+Equal scores use UTF-8 lexical ascending order of the raw label. Because Splunk
+does not specify computed non-finite score ordering, Open Splunk pins positive
+infinity, finite values descending, negative infinity, then `NaN`, with lexical
+order inside each class.
+
+`NULL` exists whenever at least one row-eligible input has a missing or
 explicit-null column value and never consumes a top-ten slot; `OTHER` exists
-whenever at least one ordinary value was excluded and carries the per-row sum of
-every excluded value. Column values beginning with `_` receive Splunk's `VALUE`
-prefix (`_audit` becomes `VALUE_audit`). Public columns are the row column
-first, then ordinary columns in UTF-8 lexical ascending order of the published
-name, then `NULL`, then `OTHER`, for at most 13 columns. Cells are non-null
-unsigned counts and an absent (row, column) pair is exactly `0`.
+whenever at least one ordinary value was excluded. For `count`, `OTHER` carries
+the per-row sum of every excluded value. For numeric chart, it merges the
+excluded raw series' aggregate states per row: `sum` adds their numerators, and
+`avg` adds their numerators and eligible-member counts before division, so it
+is a member-weighted average rather than an average of finalized series cells.
+Column values beginning with `_` receive Splunk's `VALUE` prefix (`_audit`
+becomes `VALUE_audit`). Public columns are the row column first, then ordinary
+columns in UTF-8 lexical ascending order of the published name, then `NULL`,
+then `OTHER`, for at most 13 columns.
+
+Count cells are non-null unsigned values and an absent (row, column) pair is
+exactly `0`. Numeric cells are nullable `Float64`: a cell with no eligible
+numeric contribution is null, including `sum` rather than zero, while a real
+sum or average of zero remains non-null. Rows are retained whenever their row
+axis is eligible even if every measure value in that row is missing or
+nonnumeric, so an all-ineligible row publishes an entirely null numeric grid.
 
 A label fails the whole command atomically when it is empty, invalid UTF-8,
 longer than 256 bytes, exactly `NULL` or `OTHER`, when two distinct labels
@@ -3007,9 +3037,31 @@ converging labels fail the search whether they lose the top-ten cutoff, fold
 into `OTHER`, or appear only on row-ineligible events.
 
 Because `NULL` and `OTHER` are always available, the column bound can never drop
-an input row: for every published row, the sum of its cells equals exactly the
-count `stats count BY <row field>` reports, and the published row set and order
-equal `stats count BY <row field> | sort 0 +<row field>`.
+an input row. For count, the sum of every published row's cells equals exactly
+the count `stats count BY <row field>` reports. For every aggregate, the
+published row set and order equal `stats count BY <row field> | sort 0 +<row
+field>`.
+
+#### Numeric measures
+
+Numeric chart uses exactly the normalization and immediate-member rules of the
+`stats` and `timechart` numeric aggregates. Finite integers, floats, numeric
+Strings, tagged decimals, and canonical timestamps converted to Unix epoch
+seconds are eligible. Missing, null, empty-String, Boolean, bytes, object,
+nonnumeric, `NaN`, and infinite inputs are ignored. Each finite numeric scalar
+in a top-level runtime or fixed multivalue contributes independently, including
+duplicates; nonnumeric members and nested containers are ignored without
+expanding source rows. Computed IEEE non-finite results produced by `sum` or
+`avg` arithmetic are preserved.
+
+The lowering scans the tenant/index/time/snapshot-scoped relation once and
+never uses `ARRAY JOIN`. It normalizes each measure to one immediate-member
+array and builds one mergeable `sumCountArray` state for each raw `(row,
+split-kind, label)` group. Those bounded states drive scoring, top-ten
+selection, normalization/collision validation, weighted `OTHER`, and per-row
+value/presence maps. The private transport keeps a separate presence bitmap so
+the executor can distinguish null from a real numeric zero, and the executor
+buffers and validates the complete pivot before publishing any schema or row.
 
 #### Discretization
 
@@ -3035,36 +3087,45 @@ an execution-limit error and no partial result — never truncation and never an
 `OTHER` row, because Splunk documents no `OTHER` row. This non-truncating
 resource policy intentionally differs from Splunk's installation-configurable
 `maxresultrows` ceiling. With default executor settings the intermediate group
-budget grows to at most 130,000 states, exactly as for `timechart`; an
-explicitly configured lower group cap remains authoritative.
+budget grows to at most 130,000 states, exactly as for `timechart`. An
+explicitly configured lower group cap remains authoritative unless the caller
+also explicitly enables `ExpandTimechartGroupLimit`, which permits the bounded
+pivot allowance to raise it to 130,000.
 
-The column axis is collapsed to the published domain before the row-keyed
-aggregation, so that aggregation holds at most one state per (row value, public
-series) pair and a wide column axis never consumes the row budget: 200 distinct
-row values across 1,000 distinct column values publishes 200 rows and 13 columns
-and stays inside the budget. The preceding one-dimensional aggregate that
-chooses the domain holds one state per distinct raw column value, so a column
-field with more than roughly 130,000 distinct raw values still fails atomically
-with an execution-limit error and no partial result. Reducing that raw
-cardinality means re-shaping the column field into a coarser string — `replace`
-is the string-in, string-out surface for it — because `bin` would replace the
-labels with numeric bucket starts, which the column axis rejects.
+For count, the column axis is collapsed to the published domain before the
+row-keyed aggregation, so that aggregation holds at most one state per (row
+value, public series) pair. The preceding one-dimensional aggregate that
+chooses the domain holds one state per distinct raw column value. Numeric chart
+must additionally retain one mergeable state per observed raw `(row, label)`
+group until score selection is known; it then collapses those states to the
+same at-most-12 public series. Both shapes are governed by the executor's
+130,000 group ceiling. A sufficiently high raw label count, or for numeric
+chart a sufficiently wide row/label cross-product, therefore fails atomically
+with an execution-limit error and no partial result. Reducing raw cardinality means
+re-shaping the column field into a coarser string — `replace` is the
+string-in, string-out surface for it — because `bin` would replace labels with
+numeric bucket starts, which the column axis rejects.
 
 The whole pivot is buffered before any schema or row is published, because the
-public column names are runtime values. The buffered result therefore carries
-its own total-byte ceiling in addition to the row ceiling: a chart whose
-retained row values exceed it fails atomically with an execution-limit error and
-no partial result, rather than materializing an unbounded result in front of the
-search job's incremental byte limits. Individual row values remain unbounded;
-only their total is capped.
+public column names are runtime values. The buffered result therefore carries a
+48 MiB ceiling in addition to the row ceiling. Conservative accounting includes
+the retained row payload, per-row object and slice overhead, and 8 bytes per
+count cell or 16 bytes per nullable numeric cell. Crossing that ceiling fails
+atomically with an execution-limit error and no partial result, rather than
+materializing an unbounded result in front of the search job's incremental byte
+limits. Individual row values remain unbounded; only the complete buffered
+result is capped.
 
 The following fail explicitly rather than being approximated:
 
-- any aggregate other than argument-free `count` — `sum`, `avg`, percentiles,
-  `count(field)`, `dc`, `values`, multiple aggregates, `agg=<term>`, sparkline
-  aggregates, and parenthesized eval-expression aggregates — and `AS <name>` on
-  the aggregate, all with `SPL_UNSUPPORTED_CHART_AGGREGATE`. `AS` is rejected
-  because no output column of the supported pivot could carry the alias;
+- any aggregate other than argument-free `count`, `sum(field)`, or
+  `avg(field)` — including `average`, percentiles, `count(field)`, `dc`,
+  `values`, multiple aggregates, `agg=<term>`, and sparkline aggregates — and
+  `AS <name>` on any aggregate, all with
+  `SPL_UNSUPPORTED_CHART_AGGREGATE`. Numeric wildcard, quoted, missing,
+  multiple, or parenthesized eval-expression inputs fail with
+  `SPL_UNSUPPORTED_CHART_SYNTAX`. `AS` is rejected because runtime split values,
+  not an aggregate output field, name every measure column;
 - every option other than `agg`, with `SPL_UNSUPPORTED_CHART_OPTION`, including
   spellings equal to a documented default: `limit`, `useother`, `usenull`,
   `otherstr`, `nullstr`, `cont`, `sep`, `format`, `bins`, `span`, `start`,
@@ -3073,15 +3134,17 @@ The following fail explicitly rather than being approximated:
   position;
 - the trailing `WHERE` series filter (`... BY x WHERE count > 100`,
   `... in top 5`), with `SPL_UNSUPPORTED_CHART_SYNTAX`;
-- the single-split forms `chart count OVER f` and `chart count BY f`, with
-  `SPL_UNSUPPORTED_CHART_SYNTAX` and a suggestion to use `stats count BY f`;
+- the single-split forms such as `chart count OVER f` and
+  `chart sum(x) BY f`, with `SPL_UNSUPPORTED_CHART_SYNTAX` and a suggestion to
+  use `stats count BY f`;
 - more than two split fields, a duplicated field on both axes, `BY` before
   `OVER`, wildcard or quoted field names, and any trailing token, all with
   `SPL_UNSUPPORTED_CHART_SYNTAX`; a missing field token after `OVER`/`BY` is
   `SPL_EXPECTED_FIELD`;
 - a row or column field named `NULL` or `OTHER`, and the reserved `fields`
   convenience column on an open event schema, with
-  `SPL_UNSUPPORTED_CHART_FIELD_TYPE`.
+  `SPL_UNSUPPORTED_CHART_FIELD_TYPE`; using that open-schema `fields` payload
+  as a numeric measure is `SPL_AMBIGUOUS_CHART_FIELD`.
 
 ## Completed-job field analysis
 
@@ -3188,7 +3251,12 @@ The `chart` pivot additionally has pinned ClickHouse coverage for
 `bin severity span=10 | chart count OVER severity BY level`, for
 `chart count OVER path BY level` with both `NULL` and `OTHER` present, and for
 the differential that every published row's cells sum to the count
-`stats count BY path` reports.
+`stats count BY path` reports. Numeric pivot coverage executes both
+`chart sum(metric)` and `chart avg(metric)` against the pinned server and pins
+the exact top-ten domain, `NULL` and `OTHER`, member-weighted average `OTHER`,
+real zero versus null through the private presence bitmap, ignored
+nonnumeric/Boolean/null/missing measures, and retention of a row whose entire
+measure grid is ineligible.
 
 ## Explicitly unsupported surface
 

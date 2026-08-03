@@ -1163,12 +1163,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Suggestions: []string{"move chart to the final pipeline stage"},
 				}
 			}
-			if command.Function != spl.AggregateFunctionCount {
-				return nil, &Diagnostic{
-					Code:    "SPL_UNSUPPORTED_CHART_AGGREGATE",
-					Message: "unsupported chart aggregate",
-					Range:   command.AggregateRange,
-				}
+			measure, measureErr := buildChartMeasure(command, outputSchemaKnown)
+			if measureErr != nil {
+				return nil, measureErr
 			}
 			// usenull and useother default to true, so NULL and OTHER are
 			// always reachable public column names. A field spelled like one
@@ -1210,6 +1207,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:   command.SplitBy.Range,
 				}
 			}
+			if measure.Function != AggregateFunctionCountRows &&
+				measure.Input.Name == over.Name {
+				return nil, &Diagnostic{
+					Code:    "SPL_DUPLICATE_FIELD",
+					Message: fmt.Sprintf("chart aggregate input and row field %q are repeated", over.Name),
+					Range:   command.Over.Range,
+				}
+			}
 			result.OutputFields = nil
 			result.DynamicOutput = &DynamicSeriesOutput{
 				FixedFields: []string{over.Name},
@@ -1218,7 +1223,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			result.Operators = append(result.Operators, &Chart{
 				Over:         over,
 				SplitBy:      splitBy,
-				Function:     AggregateFunctionCountRows,
+				Measure:      measure,
 				RowLimit:     maxChartRows,
 				SeriesLimit:  chartSeriesLimit,
 				IncludeNull:  true,
@@ -1236,6 +1241,78 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		}
 	}
 	return result, nil
+}
+
+func buildChartMeasure(
+	command *spl.ChartCommand,
+	outputSchemaKnown bool,
+) (AggregateMeasure, error) {
+	if command == nil {
+		return AggregateMeasure{}, &Diagnostic{
+			Code:    "SPL_INVALID_QUERY",
+			Message: "chart command is nil",
+		}
+	}
+	aggregate := command.Aggregate
+	invalid := func(message string) (AggregateMeasure, error) {
+		return AggregateMeasure{}, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_CHART_AGGREGATE",
+			Message: message,
+			Range:   aggregate.Range,
+		}
+	}
+	if aggregate.Range == (spl.Range{}) || aggregate.AliasRange == (spl.Range{}) ||
+		aggregate.Predicate != nil {
+		return invalid("chart aggregate metadata is invalid")
+	}
+
+	switch aggregate.Function {
+	case spl.AggregateFunctionCount:
+		if aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) ||
+			aggregate.Percentile != 0 || aggregate.Alias != "count" ||
+			aggregate.ExplicitAlias {
+			return invalid("chart count must be argument-free and unaliased")
+		}
+		return AggregateMeasure{
+			Function: AggregateFunctionCountRows,
+			Output:   "count",
+		}, nil
+	case spl.AggregateFunctionSum, spl.AggregateFunctionAverage:
+		canonicalName := "sum"
+		function := AggregateFunctionSum
+		if aggregate.Function == spl.AggregateFunctionAverage {
+			canonicalName = "avg"
+			function = AggregateFunctionAverage
+		}
+		canonicalOutput := canonicalName + "(" + aggregate.Input + ")"
+		if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) ||
+			aggregate.Percentile != 0 || aggregate.ExplicitAlias ||
+			aggregate.Alias != canonicalOutput {
+			return invalid("chart sum and average require one exact input field and no alias")
+		}
+		input, err := ResolveField(aggregate.Input, aggregate.InputRange)
+		if err != nil {
+			return AggregateMeasure{}, err
+		}
+		if !outputSchemaKnown && input.Name == "fields" {
+			return AggregateMeasure{}, &Diagnostic{
+				Code:    "SPL_AMBIGUOUS_CHART_FIELD",
+				Message: "chart cannot read the event result's reserved fields payload without an exact upstream schema",
+				Range:   aggregate.InputRange,
+				Suggestions: []string{
+					"select an exact ordinary field with table before chart",
+					"produce a closed stats schema before charting fields",
+				},
+			}
+		}
+		return AggregateMeasure{
+			Function: function,
+			Input:    input,
+			Output:   canonicalOutput,
+		}, nil
+	default:
+		return invalid("unsupported chart aggregate")
+	}
 }
 
 func buildTimechartMeasure(

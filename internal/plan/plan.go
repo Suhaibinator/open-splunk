@@ -310,9 +310,9 @@ func (op *Timechart) SourceRange() spl.Range { return op.Range }
 // non-truncating failure), SeriesLimit ordinary series, plus the documented
 // usenull/useother series named by NullLabel and OtherLabel.
 type Chart struct {
-	Over     FieldRef
-	SplitBy  FieldRef
-	Function AggregateFunction
+	Over    FieldRef
+	SplitBy FieldRef
+	Measure AggregateMeasure
 
 	RowLimit     uint32
 	SeriesLimit  uint16

@@ -2051,7 +2051,8 @@ func TestBuildChartProducesBoundedRuntimeWidePivot(t *testing.T) {
 		t.Fatalf("last operator = %T, want *Chart", logical.Operators[2])
 	}
 	if operator.Over.Name != "path" || operator.Over.Canonical || operator.SplitBy.Name != "status_class" ||
-		operator.Function != AggregateFunctionCountRows || operator.RowLimit != maxChartRows ||
+		operator.Measure.Function != AggregateFunctionCountRows || operator.Measure.Output != "count" ||
+		operator.RowLimit != maxChartRows ||
 		operator.SeriesLimit != chartSeriesLimit || !operator.IncludeNull || operator.NullLabel != "NULL" ||
 		!operator.IncludeOther || operator.OtherLabel != "OTHER" {
 		t.Fatalf("chart = %#v", operator)
@@ -2256,6 +2257,10 @@ func TestBuildRevalidatesForgedChartCommands(t *testing.T) {
 	t.Parallel()
 
 	base := mustParse(t, `index=gradethis`)
+	fieldRange := spl.Range{
+		Start: spl.Position{Offset: 1, Line: 1, Column: 2},
+		End:   spl.Position{Offset: 5, Line: 1, Column: 6},
+	}
 	tests := []struct {
 		name    string
 		command *spl.ChartCommand
@@ -2264,18 +2269,32 @@ func TestBuildRevalidatesForgedChartCommands(t *testing.T) {
 		{
 			name: "repeated axis field",
 			command: &spl.ChartCommand{
-				Function: spl.AggregateFunctionCount,
-				Over:     spl.StatsGroupField{Name: "path"},
-				SplitBy:  spl.StatsGroupField{Name: "path"},
+				Aggregate: spl.StatsAggregate{
+					Function:   spl.AggregateFunctionCount,
+					Alias:      "count",
+					Range:      fieldRange,
+					AliasRange: fieldRange,
+				},
+				Over:    spl.StatsGroupField{Name: "path", Range: fieldRange},
+				SplitBy: spl.StatsGroupField{Name: "path", Range: fieldRange},
+				Range:   fieldRange,
 			},
 			code: "SPL_DUPLICATE_FIELD",
 		},
 		{
 			name: "unsupported aggregate",
 			command: &spl.ChartCommand{
-				Function: spl.AggregateFunctionSum,
-				Over:     spl.StatsGroupField{Name: "path"},
-				SplitBy:  spl.StatsGroupField{Name: "level"},
+				Aggregate: spl.StatsAggregate{
+					Function:   spl.AggregateFunctionMaximum,
+					Input:      "bytes",
+					InputRange: fieldRange,
+					Alias:      "max(bytes)",
+					Range:      fieldRange,
+					AliasRange: fieldRange,
+				},
+				Over:    spl.StatsGroupField{Name: "path", Range: fieldRange},
+				SplitBy: spl.StatsGroupField{Name: "level", Range: fieldRange},
+				Range:   fieldRange,
 			},
 			code: "SPL_UNSUPPORTED_CHART_AGGREGATE",
 		},

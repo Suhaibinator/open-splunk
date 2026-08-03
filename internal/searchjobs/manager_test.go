@@ -1179,6 +1179,7 @@ func TestValidateChartSchemaEnforcesBoundedPivotContract(t *testing.T) {
 	output := clickhouse.ChartOutput{
 		RowField: "path", RowKind: clickhouse.ChartRowKindString,
 		RowDatabaseType: "String", RowLimit: 10_000, MaxSeries: 3, MaxLabelBytes: 256,
+		ValueKind: clickhouse.ChartValueKindCount,
 	}
 	valid := Schema{Columns: []Column{
 		{Name: "path", Kind: ValueKindString},
@@ -1188,6 +1189,17 @@ func TestValidateChartSchemaEnforcesBoundedPivotContract(t *testing.T) {
 	}}
 	if err := validateChartSchema(valid, []string{"path"}, output); err != nil {
 		t.Fatalf("valid chart schema: %v", err)
+	}
+	numericOutput := output
+	numericOutput.ValueKind = clickhouse.ChartValueKindSum
+	numericValid := Schema{Columns: []Column{
+		{Name: "path", Kind: ValueKindString},
+		{Name: "api", Kind: ValueKindDouble, Nullable: true},
+		{Name: "NULL", Kind: ValueKindDouble, Nullable: true},
+		{Name: "OTHER", Kind: ValueKindDouble, Nullable: true},
+	}}
+	if err := validateChartSchema(numericValid, []string{"path"}, numericOutput); err != nil {
+		t.Fatalf("valid numeric chart schema: %v", err)
 	}
 	// A chart over zero eligible rows publishes only its declared row column.
 	if err := validateChartSchema(Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}}}, []string{"path"}, output); err != nil {
@@ -1260,12 +1272,27 @@ func TestValidateChartSchemaEnforcesBoundedPivotContract(t *testing.T) {
 			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: "a", Kind: ValueKindUnsigned, Nullable: true}}},
 			expected: []string{"path"}, output: output,
 		},
+		{name: "count schema for numeric chart", schema: valid, expected: []string{"path"}, output: numericOutput},
+		{name: "numeric schema for count chart", schema: numericValid, expected: []string{"path"}, output: output},
+		{
+			name:     "numeric series is not nullable",
+			schema:   Schema{Columns: []Column{{Name: "path", Kind: ValueKindString}, {Name: "api", Kind: ValueKindDouble}}},
+			expected: []string{"path"}, output: numericOutput,
+		},
+		{
+			name: "unset value kind", schema: valid, expected: []string{"path"},
+			output: clickhouse.ChartOutput{
+				RowField: "path", RowKind: clickhouse.ChartRowKindString, RowDatabaseType: "String",
+				RowLimit: 10_000, MaxSeries: 3, MaxLabelBytes: 256,
+			},
+		},
 		{
 			name:     "unset row kind",
 			schema:   valid,
 			expected: []string{"path"},
 			output: clickhouse.ChartOutput{
 				RowField: "path", RowDatabaseType: "String", RowLimit: 10_000, MaxSeries: 3, MaxLabelBytes: 256,
+				ValueKind: clickhouse.ChartValueKindCount,
 			},
 		},
 	}

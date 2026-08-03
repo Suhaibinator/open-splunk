@@ -91,7 +91,8 @@ func TestChartBreakPipelineOperatorIsTerminalAndWideAfterEveryUpstream(t *testin
 			if chart.Over.Name != test.row || chart.SplitBy.Name != test.column {
 				t.Fatalf("chart axes = %q/%q, want %q/%q", chart.Over.Name, chart.SplitBy.Name, test.row, test.column)
 			}
-			if chart.Function != AggregateFunctionCountRows || chart.RowLimit != 10_000 || chart.SeriesLimit != 10 ||
+			if chart.Measure.Function != AggregateFunctionCountRows || chart.Measure.Output != "count" ||
+				chart.RowLimit != 10_000 || chart.SeriesLimit != 10 ||
 				!chart.IncludeNull || !chart.IncludeOther || chart.NullLabel != "NULL" || chart.OtherLabel != "OTHER" {
 				t.Fatalf("chart bounds = %#v", chart)
 			}

@@ -62,11 +62,13 @@ const (
 	// additional column: the pivot's row axis is runtime data rather than a
 	// plan-time constant, so the row value itself crosses the boundary beside
 	// the dense ordinal that proves the server-side order was preserved.
-	ChartOrdinalColumn = "__os_chart_ordinal"
-	ChartRowColumn     = "__os_chart_row"
-	ChartNamesColumn   = "__os_chart_names"
-	ChartCountsColumn  = "__os_chart_counts"
-	ChartInvalidColumn = "__os_chart_invalid"
+	ChartOrdinalColumn      = "__os_chart_ordinal"
+	ChartRowColumn          = "__os_chart_row"
+	ChartNamesColumn        = "__os_chart_names"
+	ChartCountsColumn       = "__os_chart_counts"
+	ChartValuesColumn       = "__os_chart_values"
+	ChartValuePresentColumn = "__os_chart_value_present"
+	ChartInvalidColumn      = "__os_chart_invalid"
 	// SparseEventFieldNamesColumn carries per-row presence metadata beside the
 	// public raw fields JSON. The executor consumes it and never publishes it.
 	SparseEventFieldNamesColumn = "__os_result_field_names"
@@ -366,6 +368,28 @@ const (
 	ChartRowKindMixed
 )
 
+// ChartValueKind identifies the public cell policy carried by a chart's
+// runtime-named series. The zero value is invalid so a partially initialized
+// compiled contract fails closed at every consumer boundary.
+type ChartValueKind uint8
+
+const (
+	ChartValueKindInvalid ChartValueKind = iota
+	ChartValueKindCount
+	ChartValueKindSum
+	ChartValueKindAverage
+)
+
+// Valid reports whether kind selects one supported chart cell policy.
+func (kind ChartValueKind) Valid() bool {
+	switch kind {
+	case ChartValueKindCount, ChartValueKindSum, ChartValueKindAverage:
+		return true
+	default:
+		return false
+	}
+}
+
 var physicalIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Compiler lowers backend-neutral logical plans to parameterized ClickHouse
@@ -407,6 +431,7 @@ type ChartOutput struct {
 	RowLimit        uint64
 	MaxSeries       uint16
 	MaxLabelBytes   uint16
+	ValueKind       ChartValueKind
 }
 
 // TimechartMode identifies the executor transport and public schema contract.
@@ -1402,13 +1427,33 @@ func wrapCompiledChronologicalValidation(
 	sourceFanout := eventStatsOrdinarySourceFanout
 	switch {
 	case compiled.Chart != nil && compiled.Timechart == nil:
-		sourceFanout = eventStatsChartSourceFanout
-		resultColumns = []string{
-			ChartOrdinalColumn,
-			ChartRowColumn,
-			ChartNamesColumn,
-			ChartCountsColumn,
-			ChartInvalidColumn,
+		switch compiled.Chart.ValueKind {
+		case ChartValueKindCount:
+			sourceFanout = eventStatsChartSourceFanout
+			resultColumns = []string{
+				ChartOrdinalColumn,
+				ChartRowColumn,
+				ChartNamesColumn,
+				ChartCountsColumn,
+				ChartInvalidColumn,
+			}
+		case ChartValueKindSum, ChartValueKindAverage:
+			// Numeric chart derives label selection and validation from its
+			// row/label numeric aggregate, so the scoped relation has one
+			// physical consumer rather than count chart's two.
+			sourceFanout = eventStatsOrdinarySourceFanout
+			resultColumns = []string{
+				ChartOrdinalColumn,
+				ChartRowColumn,
+				ChartNamesColumn,
+				ChartValuesColumn,
+				ChartValuePresentColumn,
+				ChartInvalidColumn,
+			}
+		default:
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse query: chart output value kind is invalid",
+			)
 		}
 	case compiled.Timechart != nil && compiled.Chart == nil:
 		switch compiled.Timechart.Mode {
@@ -1449,6 +1494,15 @@ func wrapCompiledChronologicalValidation(
 	for _, name := range resultColumns {
 		projection = append(projection, quoteIdentifier(name))
 	}
+	resultOrder := quoteIdentifier(resultColumns[0]) + " ASC"
+	if compiled.Chart != nil {
+		// Chart can carry a private invalid-result sentinel whose ordinal is
+		// deliberately zero. Keep it ahead of every real ordinal after an
+		// eventstats validation wrapper so the executor observes the atomic
+		// rejection before applying the dense public-row sequence contract.
+		resultOrder = quoteIdentifier(ChartInvalidColumn) + " DESC, " +
+			quoteIdentifier(ChartOrdinalColumn) + " ASC"
+	}
 	return wrapChronologicalValidation(
 		compiled.SQL,
 		compiled.relationalDepth,
@@ -1456,7 +1510,7 @@ func wrapCompiledChronologicalValidation(
 		state.chronologicalBarriers,
 		projection,
 		resultColumns,
-		quoteIdentifier(resultColumns[0])+" ASC",
+		resultOrder,
 		sourceFanout,
 		compiled,
 		aliasSequence,
@@ -3915,6 +3969,17 @@ func chartRowColumnType(name string, field fieldState) (databaseType string, kin
 	return "", ChartRowKindInvalid, fmt.Errorf("compile ClickHouse chart: row field has an unsupported fixed type %d/%q", field.kind, field.numberType)
 }
 
+// chartValidationRowSQL produces one non-null value of the compiler-validated
+// row transport type. It is used only by the private invalid-result sentinel:
+// when the row axis is empty, a bad split label still has to cross the storage
+// boundary so the executor can reject the whole command before publication.
+func chartValidationRowSQL(databaseType string) string {
+	if databaseType == "String" {
+		return "CAST('' AS String)"
+	}
+	return "CAST(0 AS " + databaseType + ")"
+}
+
 // materializedCTESettingsSQL declares the requirement a lowering takes on when
 // it reads an aggregate through a CTE declared `AS MATERIALIZED`. ClickHouse
 // honors that declaration only while enable_materialized_cte is on; with it off
@@ -3944,7 +4009,32 @@ func compileChart(
 	dynamic *plan.DynamicSeriesOutput,
 	alias string,
 ) (CompiledQuery, error) {
-	if operator == nil || operator.Function != plan.AggregateFunctionCountRows {
+	if operator == nil {
+		return CompiledQuery{}, errors.New("compile ClickHouse chart: operator is required")
+	}
+	switch operator.Measure.Function {
+	case plan.AggregateFunctionCountRows:
+		return compileCountChart(relation, state, args, operator, dynamic, alias)
+	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
+		return compileNumericChart(relation, state, args, operator, dynamic, alias)
+	default:
+		return CompiledQuery{}, errors.New("compile ClickHouse chart: aggregate function is unsupported")
+	}
+}
+
+func compileCountChart(
+	relation compiledRelation,
+	state compileState,
+	args []any,
+	operator *plan.Chart,
+	dynamic *plan.DynamicSeriesOutput,
+	alias string,
+) (CompiledQuery, error) {
+	if operator == nil || operator.Measure.Function != plan.AggregateFunctionCountRows ||
+		operator.Measure.Input.Name != "" || operator.Measure.Input.Canonical ||
+		operator.Measure.Input.Path != nil || operator.Measure.Input.Range != (spl.Range{}) ||
+		operator.Measure.Predicate != nil || operator.Measure.Percentile != 0 ||
+		operator.Measure.Output != "count" {
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: count operator is required")
 	}
 	rowName := operator.Over.Name
@@ -3954,7 +4044,7 @@ func compileChart(
 	// The plan carries the complete bounding contract as data precisely so the
 	// backend can revalidate it before emitting SQL.
 	if rowName == "" || operator.SplitBy.Name == "" || rowName == operator.SplitBy.Name ||
-		operator.RowLimit == 0 || uint64(operator.RowLimit) > uint64(maxChartRowValues) || operator.SeriesLimit != 10 ||
+		operator.RowLimit != maxChartRowValues || operator.SeriesLimit != 10 ||
 		dynamic.MaxSeries != 12 || uint32(operator.SeriesLimit)+2 != uint32(dynamic.MaxSeries) ||
 		!operator.IncludeNull || !operator.IncludeOther ||
 		operator.NullLabel != "NULL" || operator.OtherLabel != "OTHER" {
@@ -4279,7 +4369,7 @@ func compileChart(
 	sql.WriteString(" FROM " + collapsed + " GROUP BY " + row + "), ")
 
 	sql.WriteString(validation)
-	sql.WriteString(" AS (SELECT toUInt8(max(" + rowInvalid + ") > 0) AS " + invalid)
+	sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + rowInvalid + ") > 0) AS " + invalid)
 	sql.WriteString(" FROM " + counts + "), ")
 
 	// The row axis is data, so its ordinal is assigned server-side from the
@@ -4289,20 +4379,33 @@ func compileChart(
 	sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", toUInt64(row_number() OVER (ORDER BY " + rowSortSQL + " ASC) - 1) AS " + ordinal)
 	sql.WriteString(" FROM (SELECT " + row + " FROM " + counts + " GROUP BY " + row + ")) ")
 
+	// A private sentinel carries row-independent validation across an empty row
+	// axis. It is ordered first and rejected by the buffering executor, so the
+	// synthetic row and empty arrays can never become public output.
+	sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", " +
+		q(ChartNamesColumn) + ", " + q(ChartCountsColumn) + ", " +
+		q(ChartInvalidColumn) + " FROM (")
 	sql.WriteString("SELECT " + rowDomain + "." + ordinal + " AS " + ordinal + ", ")
 	sql.WriteString(rowDomain + "." + row + " AS " + q(ChartRowColumn) + ", ")
 	sql.WriteString(domain + ".names AS " + q(ChartNamesColumn) + ", ")
 	sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(ChartCountsColumn) + ", ")
-	sql.WriteString("toUInt8(" + validation + "." + invalid + " != 0 OR " + collisions + "." + collision + " != 0 OR ")
-	sql.WriteString(columnCheck + "." + columnInvalid + " != 0) AS " + q(ChartInvalidColumn))
-	sql.WriteString(" FROM " + rowDomain + " CROSS JOIN " + domain + " CROSS JOIN " + validation)
-	sql.WriteString(" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck)
+	sql.WriteString("toUInt8(0) AS " + q(ChartInvalidColumn))
+	sql.WriteString(" FROM " + rowDomain + " CROSS JOIN " + domain)
 	sql.WriteString(" LEFT JOIN " + rowMaps + " ON " + rowMaps + "." + row + " = " + rowDomain + "." + row)
 	// Deterministic, non-truncating overflow: the guard runs during filtering,
 	// before the ordered result is produced, so no partial pivot is published.
 	sql.WriteString(" WHERE throwIf(" + rowDomain + "." + ordinal + " >= " + strconv.FormatUint(uint64(operator.RowLimit), 10) +
 		", '" + ChartRowLimitMarker + "') = 0")
-	sql.WriteString(" ORDER BY " + rowDomain + "." + ordinal + " ASC")
+	sql.WriteString(" UNION ALL SELECT toUInt64(0) AS " + ordinal + ", " +
+		chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn) +
+		", CAST([], 'Array(String)') AS " + q(ChartNamesColumn) +
+		", CAST([], 'Array(UInt64)') AS " + q(ChartCountsColumn) +
+		", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
+		" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
+		" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
+		"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
+		" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
+		q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
 	sql.WriteString(materializedCTESettingsSQL)
 
 	sourceDepth := relationalNodeDepth(relation.depth)
@@ -4334,14 +4437,18 @@ func compileChart(
 	validationDepth := relationalNodeDepth(countsDepth)
 	rowDomainInputDepth := relationalNodeDepth(countsDepth)
 	rowDomainDepth := relationalNodeDepth(rowDomainInputDepth)
-	resultDepth := relationalNodeDepth(
+	regularResultDepth := relationalNodeDepth(
 		rowDomainDepth,
 		domainDepth,
+		rowMapsDepth,
+	)
+	validationSentinelDepth := relationalNodeDepth(
 		validationDepth,
 		collisionsDepth,
 		columnCheckDepth,
-		rowMapsDepth,
 	)
+	unionDepth := relationalNodeDepth(regularResultDepth, validationSentinelDepth)
+	resultDepth := relationalNodeDepth(unionDepth)
 
 	compiled := CompiledQuery{
 		SQL:          sql.String(),
@@ -4354,6 +4461,486 @@ func compileChart(
 			RowLimit:        uint64(operator.RowLimit),
 			MaxSeries:       dynamic.MaxSeries,
 			MaxLabelBytes:   maxTimechartLabelBytes,
+			ValueKind:       ChartValueKindCount,
+		},
+	}
+	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
+}
+
+func compileNumericChart(
+	relation compiledRelation,
+	state compileState,
+	args []any,
+	operator *plan.Chart,
+	dynamic *plan.DynamicSeriesOutput,
+	alias string,
+) (CompiledQuery, error) {
+	if operator == nil || operator.Measure.Predicate != nil ||
+		operator.Measure.Percentile != 0 {
+		return CompiledQuery{}, errors.New("compile ClickHouse chart: numeric measure contract is invalid")
+	}
+	var valueKind ChartValueKind
+	canonicalOutput := ""
+	switch operator.Measure.Function {
+	case plan.AggregateFunctionSum:
+		valueKind = ChartValueKindSum
+		canonicalOutput = "sum(" + operator.Measure.Input.Name + ")"
+	case plan.AggregateFunctionAverage:
+		valueKind = ChartValueKindAverage
+		canonicalOutput = "avg(" + operator.Measure.Input.Name + ")"
+	default:
+		return CompiledQuery{}, errors.New("compile ClickHouse chart: numeric function is unsupported")
+	}
+	if err := validateCanonicalFieldRef("chart", "input", operator.Measure.Input); err != nil {
+		return CompiledQuery{}, err
+	}
+	if operator.Measure.Input.Name == operator.Over.Name ||
+		operator.Measure.Output != canonicalOutput {
+		return CompiledQuery{}, errors.New("compile ClickHouse chart: numeric measure contract is invalid")
+	}
+	if state.eventRows && state.allowDynamic && operator.Measure.Input.Name == "fields" {
+		return CompiledQuery{}, &plan.Diagnostic{
+			Code:    "SPL_AMBIGUOUS_CHART_FIELD",
+			Message: "chart cannot read the event result's reserved fields payload without an exact upstream schema",
+			Range:   operator.Measure.Input.Range,
+		}
+	}
+
+	rowName := operator.Over.Name
+	if dynamic == nil || !slices.Equal(dynamic.FixedFields, []string{rowName}) ||
+		dynamic.MaxSeries == 0 {
+		return CompiledQuery{}, errors.New("compile ClickHouse chart: dynamic output contract is invalid")
+	}
+	if rowName == "" || operator.SplitBy.Name == "" ||
+		rowName == operator.SplitBy.Name ||
+		operator.RowLimit != maxChartRowValues ||
+		operator.SeriesLimit != 10 || dynamic.MaxSeries != 12 ||
+		uint32(operator.SeriesLimit)+2 != uint32(dynamic.MaxSeries) ||
+		!operator.IncludeNull || !operator.IncludeOther ||
+		operator.NullLabel != "NULL" || operator.OtherLabel != "OTHER" {
+		return CompiledQuery{}, errors.New("compile ClickHouse chart: bounded defaults are invalid")
+	}
+	for _, axis := range []plan.FieldRef{operator.Over, operator.SplitBy} {
+		if err := validateCanonicalFieldRef("chart", "axis", axis); err != nil {
+			return CompiledQuery{}, err
+		}
+		if axis.Name == operator.NullLabel || axis.Name == operator.OtherLabel {
+			return CompiledQuery{}, &plan.Diagnostic{
+				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+				Message: "NULL and OTHER are reserved chart series names",
+				Range:   axis.Range,
+			}
+		}
+		if state.eventRows && state.allowDynamic && axis.Name == "fields" {
+			return CompiledQuery{}, &plan.Diagnostic{
+				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+				Message: "chart cannot use the event result's reserved fields payload without an exact upstream schema",
+				Range:   axis.Range,
+			}
+		}
+	}
+
+	rowField, rowResolved, err := resolveCompiledField(operator.Over, state)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	if !rowResolved {
+		rowField = fieldState{
+			valueSQL:  "CAST(NULL AS Nullable(String))",
+			existsSQL: "0",
+			kind:      fieldKindString,
+		}
+	}
+	if rowField.kind == fieldKindStringArray {
+		return CompiledQuery{}, unsupportedMultivalueUsage(
+			"chart row field",
+			operator.Over.Range,
+		)
+	}
+	rowDatabaseType, rowKind, err := chartRowColumnType(rowName, rowField)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+
+	splitField, splitResolved, err := resolveCompiledField(operator.SplitBy, state)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	if !splitResolved {
+		splitField = fieldState{
+			valueSQL:  "CAST(NULL AS Nullable(String))",
+			existsSQL: "0",
+			kind:      fieldKindString,
+		}
+	}
+	if splitField.kind == fieldKindStringArray {
+		return CompiledQuery{}, unsupportedMultivalueUsage(
+			"chart column field",
+			operator.SplitBy.Range,
+		)
+	}
+	if splitField.kind == fieldKindInvalid {
+		splitField = fieldState{
+			valueSQL:   "CAST(NULL AS Nullable(String))",
+			existsSQL:  splitField.existsSQL,
+			existsArgs: splitField.existsArgs,
+			kind:       fieldKindString,
+		}
+	}
+	if splitField.kind != fieldKindString && splitField.kind != fieldKindDynamic {
+		return CompiledQuery{}, &plan.Diagnostic{
+			Code:        "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+			Message:     "chart column fields currently support strings plus missing and null values",
+			Range:       operator.SplitBy.Range,
+			Suggestions: []string{"convert the column field to a string before chart"},
+		}
+	}
+
+	measureField, measureResolved, err := resolveCompiledField(
+		operator.Measure.Input,
+		state,
+	)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	measureInputSQL := "CAST([], 'Array(Float64)')"
+	var measureArgs []any
+	if measureResolved {
+		measureInputSQL, measureArgs = numericArrayInputSQL(measureField)
+	}
+
+	rowExistsSQL := rowField.existsSQL
+	if rowExistsSQL == "" {
+		rowExistsSQL = "1"
+	}
+	splitExistsSQL := splitField.existsSQL
+	if splitExistsSQL == "" {
+		splitExistsSQL = "1"
+	}
+	rowDynamic := rowField.kind == fieldKindDynamic
+	splitDynamic := splitField.kind == fieldKindDynamic
+	rowHasDescendant := rowDynamic && rowField.descendantSQL != ""
+	splitHasDescendant := splitDynamic && splitField.descendantSQL != ""
+
+	q := quoteIdentifier
+	source := q("__os_chart_source")
+	prepared := q("__os_chart_prepared")
+	kinded := q("__os_chart_kinded")
+	classified := q("__os_chart_classified")
+	canonicalized := q("__os_chart_canonicalized")
+	labelTotals := q("__os_chart_label_totals")
+	numericGroups := q("__os_chart_numeric_groups")
+	numericScores := q("__os_chart_numeric_scores")
+	collapsed := q("__os_chart_collapsed")
+	finalized := q("__os_chart_finalized")
+	domainRows := q("__os_chart_domain_rows")
+	domain := q("__os_chart_domain")
+	collisions := q("__os_chart_normalization_collisions")
+	columnCheck := q("__os_chart_column_check")
+	rowMaps := q("__os_chart_row_maps")
+	validation := q("__os_chart_validation")
+	rowDomain := q("__os_chart_row_domain")
+
+	rowValue := q("__os_ch_row_value")
+	rowExact := q("__os_ch_row_exact")
+	rowType := q("__os_ch_row_type")
+	rowPresent := q("__os_ch_row_present")
+	rowEligible := q("__os_ch_row_eligible")
+	rowSupported := q("__os_ch_row_supported")
+	rowInvalid := q("__os_ch_row_invalid")
+	row := q("__os_ch_row")
+	value := q("__os_ch_value")
+	present := q("__os_ch_present")
+	descendant := q("__os_ch_descendant")
+	valueType := q("__os_ch_value_type")
+	label := q("__os_ch_label")
+	kind := q("__os_ch_kind")
+	measureValues := q("__os_ch_measure_values")
+	numerator := q("__os_ch_numerator")
+	denominator := q("__os_ch_denominator")
+	numericState := q("__os_ch_numeric_state")
+	frequency := q("__os_ch_count")
+	score := q("__os_ch_score")
+	encoded := q("__os_ch_encoded")
+	measureValue := q("__os_ch_measure_value")
+	normalized := q("__os_ch_normalized")
+	sortLabel := q("__os_ch_sort_label")
+	valueMap := q("__os_ch_value_map")
+	presentMap := q("__os_ch_present_map")
+	invalid := q("__os_ch_invalid")
+	collision := q("__os_ch_collision")
+	columnInvalid := q("__os_ch_column_invalid")
+	ordinal := q(ChartOrdinalColumn)
+
+	prefixArgs := make([]any, 0,
+		len(rowField.existsArgs)+len(splitField.existsArgs)+len(measureArgs))
+	prefixArgs = append(prefixArgs, rowField.existsArgs...)
+	prefixArgs = append(prefixArgs, splitField.existsArgs...)
+	prefixArgs = append(prefixArgs, measureArgs...)
+	args = prependArguments(prefixArgs, args)
+	if rowHasDescendant {
+		args = append(args, rowField.descendantArgs...)
+	}
+	if splitHasDescendant {
+		args = append(args, splitField.descendantArgs...)
+	}
+	args = append(args, rowName)
+
+	splitTypeSQL := "if(isNull(" + splitField.valueSQL + "), 'None', 'String')"
+	if splitDynamic {
+		splitTypeSQL = dynamicTypeExpression(splitField)
+	}
+	validLabel := "isValidUTF8(" + label + ") AND length(" + label +
+		") BETWEEN 1 AND " + strconv.Itoa(maxTimechartLabelBytes) + " AND " +
+		label + " NOT IN ('NULL', 'OTHER') AND " +
+		splunkSeriesLabelSQL(label) + " != ?"
+
+	rowPresenceSQL := "(" + rowExact + " != 0 AND isNotNull(" + rowValue + "))"
+	if rowHasDescendant {
+		rowPresenceSQL = "(" + rowPresenceSQL + " OR " +
+			rowField.descendantSQL + ")"
+	}
+	rowKeySQL := "CAST(assumeNotNull(" + rowValue + ") AS " +
+		rowDatabaseType + ")"
+	rowSupportedSQL := "1"
+	if rowDynamic {
+		runtime := fieldState{
+			valueSQL:       rowValue,
+			dynamicTypeSQL: rowType,
+			kind:           fieldKindDynamic,
+		}
+		supported, lexical := statsByScalarExpressions(runtime)
+		rowSupportedSQL = supported
+		rowKeySQL = "CAST(if(" + rowSupported + " != 0, " + lexical +
+			", '') AS String)"
+	}
+	rowSortSQL := row
+	if rowDynamic || rowField.numericSort {
+		rowSortSQL = dynamicSortValue(row, false)
+	}
+
+	cellValueSQL := numerator
+	scoreSQL := "sum(if(" + denominator + " = 0, toFloat64(0), " +
+		numerator + "))"
+	if valueKind == ChartValueKindAverage {
+		cellValueSQL = numerator + " / toFloat64(" + denominator + ")"
+		scoreSQL = "sum(if(" + denominator + " = 0, toFloat64(0), " +
+			cellValueSQL + "))"
+	}
+	publishSQL := "if(" + denominator +
+		" = 0, CAST(NULL AS Nullable(Float64)), " + cellValueSQL + ")"
+
+	var sql strings.Builder
+	sql.Grow(len(relation.sql) + len(measureInputSQL) + 12_288)
+	sql.WriteString("WITH " + source + " AS (SELECT ")
+	sql.WriteString(rowField.valueSQL + " AS " + rowValue + ", ")
+	sql.WriteString("toUInt8(" + rowExistsSQL + ") AS " + rowExact + ", ")
+	if rowDynamic {
+		sql.WriteString(dynamicTypeExpression(rowField) + " AS " + rowType + ", ")
+	}
+	sql.WriteString(splitField.valueSQL + " AS " + value + ", ")
+	sql.WriteString("toUInt8(" + splitExistsSQL + ") AS " + present + ", ")
+	sql.WriteString(splitTypeSQL + " AS " + valueType + ", ")
+	sql.WriteString(measureInputSQL + " AS " + measureValues)
+	if rowHasDescendant || splitHasDescendant {
+		sql.WriteString(", " + q(internalFieldNamesColumn))
+	}
+	sql.WriteString(" FROM (" + relation.sql + ") AS " + alias + "), ")
+
+	sql.WriteString(prepared + " AS (SELECT *, ")
+	sql.WriteString("toUInt8(" + rowPresenceSQL + ") AS " + rowPresent + ", ")
+	if splitHasDescendant {
+		sql.WriteString("toUInt8(if(" + present + " != 0, 0, " +
+			splitField.descendantSQL + ")) AS " + descendant + ", ")
+	} else {
+		sql.WriteString("toUInt8(0) AS " + descendant + ", ")
+	}
+	sql.WriteString("toUInt8(" + rowSupportedSQL + ") AS " + rowSupported + ", ")
+	sql.WriteString("if(" + present + " != 0 AND isNotNull(" + value +
+		") AND " + valueType + " = 'String', assumeNotNull(toString(" + value +
+		")), CAST('' AS String)) AS " + label + " FROM " + source + "), ")
+
+	sql.WriteString(kinded + " AS (SELECT *, multiIf(" + descendant +
+		" != 0, toUInt8(3), " + present + " = 0 OR isNull(" + value +
+		") OR " + valueType + " = 'None', toUInt8(1), " + valueType +
+		" != 'String', toUInt8(3), NOT (" + validLabel +
+		"), toUInt8(3), toUInt8(0)) AS " + kind + " FROM " + prepared + "), ")
+
+	sql.WriteString(classified + " AS (SELECT " + rowKeySQL + " AS " + row +
+		", toUInt8(" + rowSupported + " = 0) AS " + rowInvalid + ", " +
+		rowPresent + " AS " + rowEligible + ", " + kind + ", " + label +
+		", " + measureValues + " FROM " + kinded + "), ")
+
+	sql.WriteString(canonicalized + " AS (SELECT " + row + ", " + rowInvalid +
+		", " + rowEligible + ", " + kind + ", if(" + kind + " = 0, " +
+		label + ", CAST('' AS String)) AS " + label + ", if(" + kind +
+		" IN (0, 1) AND " + rowEligible + " != 0, " + measureValues +
+		", CAST([], 'Array(Float64)')) AS " +
+		measureValues + " FROM " + classified + "), ")
+
+	sql.WriteString(numericGroups + " AS MATERIALIZED (SELECT " + row + ", " +
+		rowEligible + ", " + kind + ", " + label + ", " + rowInvalid +
+		", tupleElement(" + numericState + ", 1) AS " + numerator +
+		", toUInt64(tupleElement(" + numericState + ", 2)) AS " + denominator +
+		", " + frequency + " FROM (SELECT " + row + ", " + rowEligible +
+		", " + kind + ", " + label + ", max(" + rowInvalid + ") AS " +
+		rowInvalid + ", sumCountArray(" + measureValues + ") AS " +
+		numericState + ", count() AS " + frequency + " FROM " +
+		canonicalized + " GROUP BY " + row + ", " + rowEligible + ", " +
+		kind + ", " + label + ") AS " +
+		q("__os_chart_numeric_state_source") + "), ")
+
+	// Label selection and row-independent validation derive from the same
+	// materialized row/label aggregate. Unlike count chart, numeric chart has
+	// exactly one consumer of the scoped event relation; no raw-event CTE is
+	// expanded independently for label totals.
+	sql.WriteString(labelTotals + " AS MATERIALIZED (SELECT " + kind + ", " +
+		label + ", sumIf(" + frequency + ", " + rowEligible + " != 0) AS " +
+		frequency + " FROM " + numericGroups + " GROUP BY " + kind + ", " +
+		label + "), ")
+
+	sql.WriteString(numericScores + " AS MATERIALIZED (SELECT " + label + ", " +
+		scoreSQL + " AS " + score + " FROM " + numericGroups + " WHERE " +
+		rowEligible + " != 0 AND " + kind + " = 0 GROUP BY " + label +
+		" ORDER BY ")
+	sql.WriteString("multiIf(isNaN(" + score + "), toUInt8(0), isInfinite(" +
+		score + ") AND " + score + " < 0, toUInt8(1), isInfinite(" + score +
+		"), toUInt8(3), toUInt8(2)) DESC, if(isFinite(" + score + "), " +
+		score + ", toFloat64(0)) DESC, " + label + " ASC LIMIT ")
+	sql.WriteString(strconv.FormatUint(uint64(operator.SeriesLimit), 10) + "), ")
+
+	sql.WriteString(collapsed + " AS (SELECT " + row + ", multiIf(" + kind +
+		" = 1, '1:', " + label + " IN (SELECT " + label + " FROM " +
+		numericScores + "), concat('0:', " + label + "), '2:') AS " + encoded +
+		", sum(" + numerator + ") AS " + numerator + ", sum(" + denominator +
+		") AS " + denominator + " FROM " + numericGroups + " WHERE " +
+		rowEligible + " != 0 AND " + kind + " IN (0, 1) GROUP BY " + row +
+		", " + encoded + "), ")
+
+	sql.WriteString(finalized + " AS (SELECT " + row + ", " + encoded + ", " +
+		publishSQL + " AS " + measureValue + " FROM " + collapsed + "), ")
+
+	sql.WriteString(domainRows + " AS (SELECT toUInt8(0) AS sort_kind, " +
+		splunkSeriesLabelSQL(label) + " AS " + sortLabel + ", concat('0:', " +
+		label + ") AS " + encoded + " FROM " + numericScores)
+	sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " +
+		numericGroups + " WHERE " + rowEligible + " != 0 AND " + kind + " = 1 LIMIT 1)")
+	sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " +
+		numericGroups + " WHERE " + rowEligible + " != 0 AND " + kind + " = 0 AND " + label +
+		" NOT IN (SELECT " + label + " FROM " + numericScores + ") LIMIT 1)), ")
+
+	sql.WriteString(domain + " AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " +
+		sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
+
+	sql.WriteString(collisions + " AS (SELECT toUInt8(count() > 0) AS " +
+		collision + " FROM (SELECT " + splunkSeriesLabelSQL(label) + " AS " +
+		normalized + " FROM " + labelTotals + " WHERE " + kind +
+		" = 0 GROUP BY " + normalized + " HAVING uniqExact(" + label +
+		") > 1 LIMIT 1)), ")
+
+	sql.WriteString(columnCheck + " AS (SELECT toUInt8(maxOrDefault(" + kind +
+		" = 3)) AS " + columnInvalid + " FROM " + labelTotals + "), ")
+
+	sql.WriteString(rowMaps + " AS (SELECT " + row +
+		", mapFromArrays(groupArray(" + encoded + "), groupArray(ifNull(" +
+		measureValue + ", toFloat64(0)))) AS " + valueMap +
+		", mapFromArrays(groupArray(" + encoded + "), groupArray(toUInt8(isNotNull(" +
+		measureValue + ")))) AS " + presentMap + " FROM " + finalized +
+		" GROUP BY " + row + "), ")
+
+	sql.WriteString(validation + " AS (SELECT toUInt8(maxOrDefault(" + rowInvalid +
+		") > 0) AS " + invalid + " FROM " + numericGroups + "), ")
+
+	sql.WriteString(rowDomain + " AS MATERIALIZED (SELECT " + row +
+		", toUInt64(row_number() OVER (ORDER BY " + rowSortSQL +
+		" ASC) - 1) AS " + ordinal + " FROM (SELECT " + row + " FROM " +
+		numericGroups + " WHERE " + rowEligible + " != 0 GROUP BY " + row +
+		")) ")
+
+	// The invalid sentinel is a private transport row, ordered before every
+	// real row. It makes split-type/label/collision validation observable even
+	// when the row axis has no eligible values. The executor buffers the whole
+	// result and rejects any nonzero invalid marker before publishing a schema.
+	sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", " +
+		q(ChartNamesColumn) + ", " + q(ChartValuesColumn) + ", " +
+		q(ChartValuePresentColumn) + ", " + q(ChartInvalidColumn) + " FROM (")
+	sql.WriteString("SELECT " + rowDomain + "." + ordinal + " AS " + ordinal +
+		", " + rowDomain + "." + row + " AS " + q(ChartRowColumn) + ", " +
+		domain + ".names AS " + q(ChartNamesColumn) + ", ")
+	sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + valueMap +
+		"[name], toFloat64(0)), " + domain + ".names) AS " +
+		q(ChartValuesColumn) + ", ")
+	sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + presentMap +
+		"[name], toUInt8(0)), " + domain + ".names) AS " +
+		q(ChartValuePresentColumn) + ", ")
+	sql.WriteString("toUInt8(0) AS " + q(ChartInvalidColumn))
+	sql.WriteString(" FROM " + rowDomain + " CROSS JOIN " + domain +
+		" LEFT JOIN " + rowMaps + " ON " +
+		rowMaps + "." + row + " = " + rowDomain + "." + row)
+	sql.WriteString(" WHERE throwIf(" + rowDomain + "." + ordinal + " >= " +
+		strconv.FormatUint(uint64(operator.RowLimit), 10) + ", '" +
+		ChartRowLimitMarker + "') = 0")
+	sql.WriteString(" UNION ALL SELECT toUInt64(0) AS " + ordinal + ", " +
+		chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn) +
+		", CAST([], 'Array(String)') AS " + q(ChartNamesColumn) +
+		", CAST([], 'Array(Float64)') AS " + q(ChartValuesColumn) +
+		", CAST([], 'Array(UInt8)') AS " + q(ChartValuePresentColumn) +
+		", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
+		" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
+		" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
+		"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
+		" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
+		q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC" +
+		materializedCTESettingsSQL)
+
+	sourceDepth := relationalNodeDepth(relation.depth)
+	preparedDepth := relationalNodeDepth(sourceDepth)
+	kindedDepth := relationalNodeDepth(preparedDepth)
+	classifiedDepth := relationalNodeDepth(kindedDepth)
+	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
+	numericStateDepth := relationalNodeDepth(canonicalizedDepth)
+	numericGroupsDepth := relationalNodeDepth(numericStateDepth)
+	labelTotalsDepth := relationalNodeDepth(numericGroupsDepth)
+	numericScoresDepth := relationalNodeDepth(numericGroupsDepth)
+	scoreMembershipDepth := relationalNodeDepth(numericScoresDepth)
+	collapsedDepth := relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth)
+	finalizedDepth := relationalNodeDepth(collapsedDepth)
+	domainRowsDepth := relationalNodeDepth(
+		relationalNodeDepth(numericScoresDepth),
+		relationalNodeDepth(numericGroupsDepth),
+		relationalNodeDepth(numericGroupsDepth, scoreMembershipDepth),
+	)
+	domainDepth := relationalNodeDepth(domainRowsDepth)
+	collisionsDepth := relationalNodeDepth(relationalNodeDepth(labelTotalsDepth))
+	columnCheckDepth := relationalNodeDepth(labelTotalsDepth)
+	rowMapsDepth := relationalNodeDepth(finalizedDepth)
+	validationDepth := relationalNodeDepth(numericGroupsDepth)
+	rowDomainDepth := relationalNodeDepth(relationalNodeDepth(numericGroupsDepth))
+	regularResultDepth := relationalNodeDepth(
+		rowDomainDepth,
+		domainDepth,
+		rowMapsDepth,
+	)
+	validationSentinelDepth := relationalNodeDepth(
+		validationDepth,
+		collisionsDepth,
+		columnCheckDepth,
+	)
+	unionDepth := relationalNodeDepth(regularResultDepth, validationSentinelDepth)
+	resultDepth := relationalNodeDepth(unionDepth)
+
+	compiled := CompiledQuery{
+		SQL:          sql.String(),
+		Args:         args,
+		OutputFields: slices.Clone(dynamic.FixedFields),
+		Chart: &ChartOutput{
+			RowField:        rowName,
+			RowKind:         rowKind,
+			RowDatabaseType: rowDatabaseType,
+			RowLimit:        uint64(operator.RowLimit),
+			MaxSeries:       dynamic.MaxSeries,
+			MaxLabelBytes:   maxTimechartLabelBytes,
+			ValueKind:       valueKind,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil

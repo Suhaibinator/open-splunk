@@ -1087,25 +1087,21 @@ func timechartSyntaxSuggestions() []string {
 }
 
 // parseChartCommand parses the bounded two-field pivot
-// "chart count OVER <row> BY <column>" and its equivalent spelling
-// "chart count BY <row>, <column>". Chart never discretizes, so no option is
-// accepted; bin/bucket remains the only discretizer.
+// "chart <aggregate> OVER <row> BY <column>" and its equivalent spelling
+// "chart <aggregate> BY <row>, <column>". Chart never discretizes, so no
+// option is accepted; bin/bucket remains the only discretizer.
 func (p *parser) parseChartCommand(name token) (Command, error) {
 	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
 		return nil, diagnostic
 	}
-	aggregate := p.current()
-	if aggregate.kind != tokenWord || !strings.EqualFold(aggregate.text, "count") {
-		return nil, p.unsupportedChartAggregate(aggregate, "only argument-free count is supported by chart")
+	aggregate, _, err := p.parseChartAggregate()
+	if err != nil {
+		return nil, err
 	}
-	if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen {
-		return nil, p.unsupportedChartAggregate(aggregate, "count arguments are not supported by chart; use argument-free count")
-	}
-	p.advance()
 	if p.isKeyword("AS") {
 		return nil, p.unsupportedChartAggregate(
 			p.current(),
-			"chart count cannot be renamed with AS because no pivot column can carry the alias",
+			"chart aggregates cannot be renamed with AS because no pivot column can carry the alias",
 		)
 	}
 	if diagnostic := p.chartOptionDiagnostic(); diagnostic != nil {
@@ -1152,22 +1148,95 @@ func (p *parser) parseChartCommand(name token) (Command, error) {
 		current := p.current()
 		if current.kind == tokenComma || (current.kind == tokenWord && (supportedStatsAggregateName(current.text) ||
 			(p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen))) {
-			return nil, p.unsupportedChartAggregate(current, "only one chart aggregate is supported; use argument-free count")
+			return nil, p.unsupportedChartAggregate(current, "only one chart aggregate is supported")
 		}
-		return nil, p.chartClauseDiagnostic("chart count requires OVER <row> BY <column> or BY <row>, <column>")
+		return nil, p.chartClauseDiagnostic("chart requires OVER <row> BY <column> or BY <row>, <column>")
 	}
 
 	if over.Name == splitBy.Name {
 		return nil, p.unsupportedChartSyntaxAt(splitBy.Range, "chart row and column fields must be different")
 	}
 	return &ChartCommand{
-		Function:        AggregateFunctionCount,
-		AggregateRange:  aggregate.sourceRange,
+		Aggregate:       aggregate,
 		Over:            over,
 		SplitBy:         splitBy,
 		OverSpelledOver: overSpelledOver,
 		Range:           Range{Start: name.sourceRange.Start, End: splitBy.Range.End},
 	}, nil
+}
+
+func (p *parser) parseChartAggregate() (StatsAggregate, Position, error) {
+	function := p.current()
+	if function.kind != tokenWord {
+		return StatsAggregate{}, function.sourceRange.End,
+			p.unsupportedChartAggregate(
+				function,
+				"chart requires argument-free count or one sum(field) or avg(field) aggregate",
+			)
+	}
+	functionName := strings.ToLower(function.text)
+	if functionName == "count" {
+		if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen {
+			return StatsAggregate{}, function.sourceRange.End,
+				p.unsupportedChartAggregate(
+					function,
+					"count arguments are not supported by chart; use argument-free count",
+				)
+		}
+		p.advance()
+		return StatsAggregate{
+			Function:   AggregateFunctionCount,
+			Alias:      "count",
+			Range:      function.sourceRange,
+			AliasRange: function.sourceRange,
+		}, function.sourceRange.End, nil
+	}
+
+	spec, supported := statsAggregateSpecForName(functionName)
+	if !supported || (spec.function != AggregateFunctionSum &&
+		spec.function != AggregateFunctionAverage) {
+		return StatsAggregate{}, function.sourceRange.End,
+			p.unsupportedChartAggregate(
+				function,
+				fmt.Sprintf("chart aggregate %q is not supported; use count, sum(field), or avg(field)", function.text),
+			)
+	}
+	p.advance()
+	if !p.match(tokenLeftParen) {
+		return StatsAggregate{}, function.sourceRange.End,
+			p.unsupportedChartSyntax(
+				function,
+				"chart numeric aggregates require one exact unquoted field in parentheses",
+			)
+	}
+	input := p.current()
+	if input.kind != tokenWord || strings.Contains(input.text, "*") ||
+		(strings.EqualFold(input.text, "eval") &&
+			p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen) {
+		return StatsAggregate{}, input.sourceRange.End,
+			p.unsupportedChartSyntax(
+				input,
+				"chart numeric aggregates require one exact unquoted field",
+			)
+	}
+	p.advance()
+	if !p.match(tokenRightParen) {
+		return StatsAggregate{}, input.sourceRange.End,
+			p.unsupportedChartSyntax(
+				p.current(),
+				"chart numeric aggregates accept exactly one field argument",
+			)
+	}
+	end := p.previous().sourceRange.End
+	aggregate := StatsAggregate{
+		Function:   spec.function,
+		Input:      input.text,
+		InputRange: input.sourceRange,
+		Alias:      spec.canonicalName + "(" + input.text + ")",
+		Range:      Range{Start: function.sourceRange.Start, End: end},
+		AliasRange: Range{Start: function.sourceRange.Start, End: end},
+	}
+	return aggregate, end, nil
 }
 
 // parseChartSplitFields parses exactly two comma-, whitespace-, or
@@ -1252,13 +1321,13 @@ func (p *parser) chartOptionDiagnostic() *Diagnostic {
 		return nil
 	}
 	if strings.EqualFold(option.text, "agg") {
-		return p.unsupportedChartAggregate(option, "chart agg= is not supported; only argument-free count is available")
+		return p.unsupportedChartAggregate(option, "chart agg= is not supported; write count, sum(field), or avg(field) directly")
 	}
 	return &Diagnostic{
 		Code:        "SPL_UNSUPPORTED_CHART_OPTION",
 		Message:     fmt.Sprintf("chart option %q is not supported", option.text),
 		Range:       option.sourceRange,
-		Suggestions: []string{"chart count OVER row BY column"},
+		Suggestions: []string{"chart count OVER row BY column", "chart sum(field) OVER row BY column"},
 	}
 }
 
@@ -1281,7 +1350,7 @@ func (p *parser) chartSingleSplitSyntax() *Diagnostic {
 		Code:        "SPL_UNSUPPORTED_CHART_SYNTAX",
 		Message:     "chart requires one row split field and one column split field",
 		Range:       p.current().sourceRange,
-		Suggestions: []string{"stats count BY <field>", "chart count OVER row BY column"},
+		Suggestions: []string{"stats count BY <field>", "chart count OVER row BY column", "chart sum(field) OVER row BY column"},
 	}
 }
 
@@ -1290,7 +1359,7 @@ func (p *parser) unsupportedChartAggregate(tok token, message string) *Diagnosti
 		Code:        "SPL_UNSUPPORTED_CHART_AGGREGATE",
 		Message:     message,
 		Range:       tok.sourceRange,
-		Suggestions: []string{"chart count OVER row BY column"},
+		Suggestions: []string{"chart count OVER row BY column", "chart sum(field) OVER row BY column"},
 	}
 }
 

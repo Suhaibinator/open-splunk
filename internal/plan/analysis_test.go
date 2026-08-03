@@ -172,8 +172,15 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 		{
 			name: "chart axes",
 			operator: &Chart{
-				Over:    analysisField("chart_rows"),
-				SplitBy: analysisField("chart_series"),
+				Over:         mustResolveEventAggregateField(t, "chart_rows"),
+				SplitBy:      mustResolveEventAggregateField(t, "chart_series"),
+				Measure:      AggregateMeasure{Function: AggregateFunctionCountRows, Output: "count"},
+				RowLimit:     maxChartRows,
+				SeriesLimit:  chartSeriesLimit,
+				IncludeNull:  true,
+				IncludeOther: true,
+				NullLabel:    "NULL",
+				OtherLabel:   "OTHER",
 			},
 			want: []string{"chart_rows", "chart_series"},
 		},

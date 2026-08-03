@@ -27,15 +27,18 @@ func chartBreakTransportStringRows(names []string, values ...string) *fakeRows {
 	return chartPivotRows("String", reflect.TypeOf(""), names, rowValues, counts)
 }
 
-// TestChartBreakTransportByteCeilingIsExactAtBothSides pins the buffered
-// pivot's 48 MiB ceiling to the byte. The guard must accept a result whose
-// retained size equals the bound exactly and reject the same result one byte
-// larger, publishing nothing in that case.
+// TestChartBreakTransportByteCeilingIsExactAtBothSides pins the conservative
+// buffered-pivot reservation to the byte. The guard must accept a result whose
+// charged size equals 48 MiB exactly and reject the same result one byte larger,
+// publishing nothing in that case.
 func TestChartBreakTransportByteCeilingIsExactAtBothSides(t *testing.T) {
 	// One shared backing array; every case slices it, so the fixture allocates
 	// the ceiling once rather than once per subtest.
-	const oneSeriesOverhead = chartRowOverheadBytes + 8
-	exact := int(maximumChartResultBytes - oneSeriesOverhead)
+	oneSeriesRowBytes := chartRowOverheadBytes + chartCountCellBytes
+	oneSeriesInitialBytes := chartBufferedBaseBytes +
+		chartDomainRetainedBytes([]string{"0:INFO"}, []string{"INFO"}) +
+		oneSeriesRowBytes
+	exact := int(maximumChartResultBytes - oneSeriesInitialBytes)
 	base := strings.Repeat("w", exact+1)
 
 	t.Run("exactly at the ceiling publishes", func(t *testing.T) {
@@ -84,8 +87,8 @@ func TestChartBreakTransportByteCeilingIsExactAtBothSides(t *testing.T) {
 		// The first row leaves exactly 1000 bytes of headroom, so the second
 		// row decides the outcome by a single byte in either direction.
 		const headroom = 1000
-		firstLength := int(maximumChartResultBytes - oneSeriesOverhead - headroom)
-		fitting := headroom - int(oneSeriesOverhead)
+		firstLength := int(maximumChartResultBytes - oneSeriesInitialBytes - headroom)
+		fitting := headroom - int(oneSeriesRowBytes)
 		for _, test := range []struct {
 			name         string
 			secondLength int
@@ -123,6 +126,36 @@ func TestChartBreakTransportByteCeilingIsExactAtBothSides(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestChartBreakTransportClearsReusedScanDestinations(t *testing.T) {
+	t.Parallel()
+
+	rows := chartBreakTransportStringRows([]string{"0:INFO"}, "/a", "/b")
+	var first []uintptr
+	scanCalls := 0
+	rows.observeScan = func(destinations []any) {
+		got := make([]uintptr, len(destinations))
+		for index, destination := range destinations {
+			if scanCalls > 0 && !reflect.ValueOf(destination).Elem().IsZero() {
+				t.Fatalf("count chart scan destination %d retained the prior row", index)
+			}
+			got[index] = reflect.ValueOf(destination).Pointer()
+		}
+		if scanCalls == 0 {
+			first = got
+		} else if !reflect.DeepEqual(got, first) {
+			t.Fatalf("count chart scan destinations changed: got %v, want %v", got, first)
+		}
+		scanCalls++
+	}
+	sink := &fakeSink{}
+	if err := executeChartBreakTransport(t, rows, sink); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if scanCalls != 2 || len(sink.rows) != 2 {
+		t.Fatalf("scan calls=%d published rows=%d, want two", scanCalls, len(sink.rows))
+	}
 }
 
 // TestChartBreakTransportCancellationBeforeAnyRowIsScanned proves a chart

@@ -480,6 +480,7 @@ func TestSchemaMatchesCompiledChartRejectsForeignWideSchemas(t *testing.T) {
 		Chart: &clickhouse.ChartOutput{
 			RowField: "path", RowKind: clickhouse.ChartRowKindString, RowDatabaseType: "String",
 			RowLimit: 10_000, MaxSeries: 2, MaxLabelBytes: 256,
+			ValueKind: clickhouse.ChartValueKindCount,
 		},
 	}
 	valid := searchjobs.Schema{Columns: []searchjobs.Column{
@@ -488,6 +489,20 @@ func TestSchemaMatchesCompiledChartRejectsForeignWideSchemas(t *testing.T) {
 	}}
 	if !schemaMatchesCompiledQuery(valid, compiled) {
 		t.Fatal("valid bounded pivot schema was rejected")
+	}
+	numeric := compiled
+	numericChart := *compiled.Chart
+	numericChart.ValueKind = clickhouse.ChartValueKindAverage
+	numeric.Chart = &numericChart
+	numericSchema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "path", Kind: searchjobs.ValueKindString},
+		{Name: "api", Kind: searchjobs.ValueKindDouble, Nullable: true},
+	}}
+	if !schemaMatchesCompiledQuery(numericSchema, numeric) {
+		t.Fatal("valid numeric pivot schema was rejected")
+	}
+	if schemaMatchesCompiledQuery(valid, numeric) || schemaMatchesCompiledQuery(numericSchema, compiled) {
+		t.Fatal("chart schema value policy was not bound to its compiled value kind")
 	}
 	for _, test := range []struct {
 		name   string
@@ -509,6 +524,10 @@ func TestSchemaMatchesCompiledChartRejectsForeignWideSchemas(t *testing.T) {
 		{
 			name: "row kind unset", schema: valid,
 			mutate: func(query *clickhouse.CompiledQuery) { query.Chart.RowKind = clickhouse.ChartRowKindInvalid },
+		},
+		{
+			name: "value kind unset", schema: valid,
+			mutate: func(query *clickhouse.CompiledQuery) { query.Chart.ValueKind = clickhouse.ChartValueKindInvalid },
 		},
 		{
 			name: "two wide contracts", schema: valid,

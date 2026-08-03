@@ -479,10 +479,10 @@ func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.Co
 		) == nil
 	}
 	// The remaining bounded runtime-wide operator is chart: one fixed,
-	// plan-time row column followed by at most MaxSeries unsigned count columns
-	// whose names came from runtime values.
+	// plan-time row column followed by at most MaxSeries runtime-named cells.
 	fixedKind, ok := chartRowExportKind(compiled.Chart.RowKind)
-	if !ok || compiled.Chart.RowField == "" {
+	seriesKind, seriesNullable, seriesOK := chartSeriesExportKind(compiled.Chart.ValueKind)
+	if !ok || !seriesOK || compiled.Chart.RowField == "" {
 		return false
 	}
 	fixedName := compiled.Chart.RowField
@@ -515,11 +515,22 @@ func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.Co
 			maximumNameBytes += len("VALUE")
 		}
 		if len(column.Name) > maximumNameBytes || strings.HasPrefix(column.Name, "_") ||
-			column.Kind != searchjobs.ValueKindUnsigned || column.Nullable {
+			column.Kind != seriesKind || column.Nullable != seriesNullable {
 			return false
 		}
 	}
 	return true
+}
+
+func chartSeriesExportKind(kind clickhouse.ChartValueKind) (searchjobs.ValueKind, bool, bool) {
+	switch kind {
+	case clickhouse.ChartValueKindCount:
+		return searchjobs.ValueKindUnsigned, false, true
+	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+		return searchjobs.ValueKindDouble, true, true
+	default:
+		return searchjobs.ValueKindInvalid, false, false
+	}
 }
 
 func chartRowExportKind(kind clickhouse.ChartRowKind) (searchjobs.ValueKind, bool) {
