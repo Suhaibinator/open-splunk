@@ -1727,12 +1727,14 @@ ORDER BY grid.number`,
 			"s07", "s08", "s09", "s10", "NULL", "OTHER",
 		}
 		for _, test := range []struct {
-			name          string
-			aggregate     string
-			otherWeighted float64
+			name       string
+			aggregate  string
+			otherValue float64
 		}{
-			{name: "sum", aggregate: "sum", otherWeighted: 50},
-			{name: "member weighted average", aggregate: "avg", otherWeighted: 50.0 / 21.0},
+			{name: "sum", aggregate: "sum", otherValue: 50},
+			{name: "member weighted average", aggregate: "avg", otherValue: 50.0 / 21.0},
+			{name: "p95 pooled raw state", aggregate: "p95", otherValue: 1},
+			{name: "perc50 pooled raw state", aggregate: "perc50", otherValue: 1},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				job, page := chartRange(
@@ -1800,7 +1802,7 @@ ORDER BY grid.number`,
 				queryIntegrationAssertDouble(
 					t,
 					weighted[12],
-					test.otherWeighted,
+					test.otherValue,
 					"numeric "+test.aggregate+" weighted OTHER",
 				)
 
@@ -3326,9 +3328,10 @@ func queryIntegrationInsertChartEvents(t *testing.T, ctx context.Context, connec
 
 	// Numeric chart needs a result-level fixture because the CI vertical runs
 	// the production executor and manager, not only the compiler transport.
-	// Ten labels dominate both sum and average ranking; the remaining two are
-	// folded into OTHER, where average must merge 21 underlying members before
-	// finalization rather than averaging two already-finalized cells.
+	// Ten labels dominate numeric ranking; the remaining two are folded into
+	// OTHER. Average must merge 21 underlying members, while percentile must
+	// merge both raw GK states before finalization rather than combine the two
+	// already-finalized cells.
 	numericLabel := func(value string) *string { return &value }
 	addNumeric := func(id, row string, series *string, metricSet bool, metric any) {
 		fields := path(row)

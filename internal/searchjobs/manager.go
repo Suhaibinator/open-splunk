@@ -2471,7 +2471,7 @@ func chartSeriesSchema(kind clickhouse.ChartValueKind) (ValueKind, bool, bool) {
 	switch kind {
 	case clickhouse.ChartValueKindCount:
 		return ValueKindUnsigned, false, true
-	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage, clickhouse.ChartValueKindPercentile:
 		return ValueKindDouble, true, true
 	default:
 		return ValueKindInvalid, false, false

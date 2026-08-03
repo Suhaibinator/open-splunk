@@ -180,7 +180,7 @@ func TestChartSumAndAverageSuggestionContext(t *testing.T) {
 		{
 			source:        `| chart a`,
 			kinds:         []SuggestionKind{SuggestionKindFunction},
-			functionNames: []string{"count", "sum", "avg"},
+			functionNames: []string{"count", "p50", "p95", "sum", "avg"},
 		},
 		{source: `| chart sum(`, kinds: []SuggestionKind{SuggestionKindField}},
 		{

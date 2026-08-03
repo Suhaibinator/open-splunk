@@ -57,14 +57,14 @@ const (
 	// the result to twelve public series. Bound that exact pre-ranking work
 	// independently of the much smaller output width.
 	maximumRuntimeWideTimechartGroups = uint64(130_000)
-	// Percentiles retain a mergeable GK sketch per raw bucket/series group,
+	// Percentiles retain a mergeable GK sketch per raw axis/series group,
 	// unlike the constant-size count or sum/count state used by other wide
-	// timecharts. Crossing this independently accounted ceiling fails the
-	// complete ClickHouse query instead of approximating or truncating it.
-	maximumRuntimeWidePercentileTimechartGroups = uint64(20_000)
-	maximumChartRows                            = uint64(10_000)
-	maximumChartSeries                          = uint16(12)
-	maximumChartLabel                           = uint16(256)
+	// pivots. Crossing this independently accounted ceiling fails the complete
+	// ClickHouse query instead of approximating or truncating it.
+	maximumRuntimeWidePercentileGroups = uint64(20_000)
+	maximumChartRows                   = uint64(10_000)
+	maximumChartSeries                 = uint16(12)
+	maximumChartLabel                  = uint16(256)
 	// maximumChartResultBytes bounds the buffered pivot. Unlike timechart,
 	// whose buffered row is a fixed-width bucket plus at most 13 counts, a
 	// chart row carries a runtime row value with no length ceiling, and the
@@ -110,10 +110,10 @@ type Config struct {
 	// ExpandTimechartGroupLimit permits validated bounded pivots to raise
 	// MaxRowsToGroupBy. A fixed timechart needs only BucketCount; runtime-wide
 	// count/sum/average receives a 130,000-group raw-ranking allowance, while a
-	// split percentile is capped at 20,000 GK states. Chart uses
-	// rows*(MaxSeries+1), also bounded at 130,000. Ordinary queries remain
-	// unchanged. Expansion is enabled automatically when MaxRowsToGroupBy is
-	// left at zero.
+	// split percentile is capped at 20,000 GK states. Count/sum/average chart
+	// uses rows*(MaxSeries+1), also bounded at 130,000; percentile chart has the
+	// same hard 20,000-state ceiling. Ordinary queries remain unchanged.
+	// Expansion is enabled automatically when MaxRowsToGroupBy is left at zero.
 	ExpandTimechartGroupLimit bool
 	MaxThreads                uint64
 	// ReadAdmission joins every compiler-scoped physical read to the shared
@@ -543,9 +543,11 @@ func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
-	percentileWide := query.Timechart != nil &&
+	percentileWide := (query.Timechart != nil &&
 		query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue &&
-		query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile
+		query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile) ||
+		(query.Chart != nil &&
+			query.Chart.ValueKind == clickhouse.ChartValueKindPercentile)
 	if !executor.expandTimechartGroupLimit && !percentileWide {
 		return executor.settings
 	}
@@ -565,11 +567,15 @@ func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhouse
 			required = maximumRuntimeWideTimechartGroups
 			if query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue &&
 				query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile {
-				required = maximumRuntimeWidePercentileTimechartGroups
+				required = maximumRuntimeWidePercentileGroups
 			}
 		}
 	case query.Chart != nil:
-		required = query.Chart.RowLimit * (uint64(query.Chart.MaxSeries) + 1)
+		if query.Chart.ValueKind == clickhouse.ChartValueKindPercentile {
+			required = maximumRuntimeWidePercentileGroups
+		} else {
+			required = query.Chart.RowLimit * (uint64(query.Chart.MaxSeries) + 1)
+		}
 	default:
 		return executor.settings
 	}
@@ -1573,7 +1579,8 @@ func readChartRows(
 			reflect.TypeOf([]uint64{}),
 			reflect.TypeOf(uint8(0)),
 		}
-	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage,
+		clickhouse.ChartValueKindPercentile:
 		expectedColumns = []string{
 			clickhouse.ChartOrdinalColumn,
 			clickhouse.ChartRowColumn,
@@ -1644,11 +1651,13 @@ func readChartRows(
 		switch output.ValueKind {
 		case clickhouse.ChartValueKindCount:
 			ordinal, rowValue, names, counts, invalid, err = scannedChartRow(destinations, rowKind)
-		case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+		case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage,
+			clickhouse.ChartValueKindPercentile:
 			ordinal, rowValue, names, values, invalid, err = scannedNumericChartRow(
 				destinations,
 				rowKind,
 				output.MaxSeries,
+				output.ValueKind == clickhouse.ChartValueKindPercentile,
 			)
 		}
 		if err != nil {
@@ -1726,7 +1735,9 @@ func chartRowRetainedBytes(scanned any, seriesCount int, valueKind clickhouse.Ch
 	}
 	cellBytes := chartCountCellBytes
 	rowBytes := chartRowOverheadBytes
-	if valueKind == clickhouse.ChartValueKindSum || valueKind == clickhouse.ChartValueKindAverage {
+	if valueKind == clickhouse.ChartValueKindSum ||
+		valueKind == clickhouse.ChartValueKindAverage ||
+		valueKind == clickhouse.ChartValueKindPercentile {
 		cellBytes = chartValueCellBytes
 		rowBytes = chartValueRowOverheadBytes
 	}
@@ -1801,7 +1812,12 @@ func scannedChartRow(destinations []any, rowKind searchjobs.ValueKind) (uint64, 
 	return ordinal, value, names, counts, invalid, nil
 }
 
-func scannedNumericChartRow(destinations []any, rowKind searchjobs.ValueKind, maxSeries uint16) (uint64, searchjobs.Value, []string, []nullableFloat64, uint8, error) {
+func scannedNumericChartRow(
+	destinations []any,
+	rowKind searchjobs.ValueKind,
+	maxSeries uint16,
+	requireFinite bool,
+) (uint64, searchjobs.Value, []string, []nullableFloat64, uint8, error) {
 	invalidResult := func(message string) (uint64, searchjobs.Value, []string, []nullableFloat64, uint8, error) {
 		return 0, searchjobs.Value{}, nil, nil, 0, fmt.Errorf("%w: %s", searchjobs.ErrInvalidResult, message)
 	}
@@ -1825,6 +1841,9 @@ func scannedNumericChartRow(destinations []any, rowKind searchjobs.ValueKind, ma
 			return invalidResult("ClickHouse numeric chart presence array is invalid")
 		}
 		if presence == 1 {
+			if requireFinite && (math.IsNaN(rawValues[index]) || math.IsInf(rawValues[index], 0)) {
+				return invalidResult("ClickHouse percentile chart value is not finite")
+			}
 			values[index] = nullableFloat64{value: rawValues[index], valid: true}
 		}
 	}
@@ -1862,7 +1881,8 @@ func publishChart(ctx context.Context, sink searchjobs.ResultSink, output clickh
 		if len(buffered.valueRows) != 0 {
 			return fmt.Errorf("%w: buffered chart value kind is invalid", searchjobs.ErrInvalidResult)
 		}
-	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage,
+		clickhouse.ChartValueKindPercentile:
 		seriesKind = searchjobs.ValueKindDouble
 		seriesNullable = true
 		if len(buffered.rows) != 0 {

@@ -1,6 +1,10 @@
 package plan
 
-import "github.com/Suhaibinator/open-splunk/internal/spl"
+import (
+	"strconv"
+
+	"github.com/Suhaibinator/open-splunk/internal/spl"
+)
 
 // validChartContract recognizes the deliberately bounded two-axis pivot.
 // Build constructs this shape, while analysis and backend compilation repeat
@@ -15,20 +19,22 @@ func validChartContract(operator *Chart) bool {
 		operator.SeriesLimit != chartSeriesLimit ||
 		!operator.IncludeNull || !operator.IncludeOther ||
 		operator.NullLabel != "NULL" || operator.OtherLabel != "OTHER" ||
-		operator.Measure.Predicate != nil || operator.Measure.Percentile != 0 {
+		operator.Measure.Predicate != nil {
 		return false
 	}
 
 	switch operator.Measure.Function {
 	case AggregateFunctionCountRows:
-		return operator.Measure.Input.Name == "" &&
+		return operator.Measure.Percentile == 0 &&
+			operator.Measure.Input.Name == "" &&
 			!operator.Measure.Input.Canonical &&
 			operator.Measure.Input.Path == nil &&
 			operator.Measure.Input.Range == (spl.Range{}) &&
 			operator.Measure.Output == "count"
 	case AggregateFunctionSum, AggregateFunctionAverage:
 		if !validResolvedEventAggregateField(operator.Measure.Input) ||
-			operator.Measure.Input.Name == operator.Over.Name {
+			operator.Measure.Input.Name == operator.Over.Name ||
+			operator.Measure.Percentile != 0 {
 			return false
 		}
 		canonicalName := "sum"
@@ -36,6 +42,13 @@ func validChartContract(operator *Chart) bool {
 			canonicalName = "avg"
 		}
 		return operator.Measure.Output == canonicalName+"("+operator.Measure.Input.Name+")"
+	case AggregateFunctionPercentile:
+		return validResolvedEventAggregateField(operator.Measure.Input) &&
+			operator.Measure.Input.Name != operator.Over.Name &&
+			operator.Measure.Percentile >= 1 && operator.Measure.Percentile <= 99 &&
+			operator.Measure.Output == "perc"+
+				strconv.Itoa(int(operator.Measure.Percentile))+"("+
+				operator.Measure.Input.Name+")"
 	default:
 		return false
 	}

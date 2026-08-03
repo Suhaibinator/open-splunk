@@ -187,7 +187,7 @@ func TestExecutorExpandsSplitValueTimechartGroupBudget(t *testing.T) {
 		t.Fatalf("base settings were mutated: cap=%v", got)
 	}
 	query.Timechart.ValueKind = clickhouse.TimechartValueKindPercentile
-	if got, want := executor.settingsFor(query)["max_rows_to_group_by"], maximumRuntimeWidePercentileTimechartGroups; got != want {
+	if got, want := executor.settingsFor(query)["max_rows_to_group_by"], maximumRuntimeWidePercentileGroups; got != want {
 		t.Fatalf("split percentile timechart group cap = %v, want %d", got, want)
 	}
 
@@ -196,7 +196,7 @@ func TestExecutorExpandsSplitValueTimechartGroupBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	high := &Executor{settings: highSettings}
-	if got, want := high.settingsFor(query)["max_rows_to_group_by"], maximumRuntimeWidePercentileTimechartGroups; got != want {
+	if got, want := high.settingsFor(query)["max_rows_to_group_by"], maximumRuntimeWidePercentileGroups; got != want {
 		t.Fatalf("explicit high split percentile group cap = %v, want clamped %d", got, want)
 	}
 	lowSettings, err := querySettings(Config{MaxRowsToGroupBy: 7})

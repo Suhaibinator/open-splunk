@@ -526,7 +526,7 @@ func chartSeriesExportKind(kind clickhouse.ChartValueKind) (searchjobs.ValueKind
 	switch kind {
 	case clickhouse.ChartValueKindCount:
 		return searchjobs.ValueKindUnsigned, false, true
-	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage:
+	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage, clickhouse.ChartValueKindPercentile:
 		return searchjobs.ValueKindDouble, true, true
 	default:
 		return searchjobs.ValueKindInvalid, false, false

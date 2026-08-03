@@ -378,12 +378,14 @@ const (
 	ChartValueKindCount
 	ChartValueKindSum
 	ChartValueKindAverage
+	ChartValueKindPercentile
 )
 
 // Valid reports whether kind selects one supported chart cell policy.
 func (kind ChartValueKind) Valid() bool {
 	switch kind {
-	case ChartValueKindCount, ChartValueKindSum, ChartValueKindAverage:
+	case ChartValueKindCount, ChartValueKindSum, ChartValueKindAverage,
+		ChartValueKindPercentile:
 		return true
 	default:
 		return false
@@ -1437,7 +1439,7 @@ func wrapCompiledChronologicalValidation(
 				ChartCountsColumn,
 				ChartInvalidColumn,
 			}
-		case ChartValueKindSum, ChartValueKindAverage:
+		case ChartValueKindSum, ChartValueKindAverage, ChartValueKindPercentile:
 			// Numeric chart derives label selection and validation from its
 			// row/label numeric aggregate, so the scoped relation has one
 			// physical consumer rather than count chart's two.
@@ -3596,7 +3598,8 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 			)
 		}
 		return validateFixedTimechartValueMeasure(measure, state, operator.Range)
-	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
+	case plan.AggregateFunctionSum,
+		plan.AggregateFunctionAverage:
 		if operator.Split != nil &&
 			operator.Split.Field.Name == measure.Input.Name {
 			return errors.New(
@@ -4015,7 +4018,9 @@ func compileChart(
 	switch operator.Measure.Function {
 	case plan.AggregateFunctionCountRows:
 		return compileCountChart(relation, state, args, operator, dynamic, alias)
-	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
+	case plan.AggregateFunctionPercentile,
+		plan.AggregateFunctionSum,
+		plan.AggregateFunctionAverage:
 		return compileNumericChart(relation, state, args, operator, dynamic, alias)
 	default:
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: aggregate function is unsupported")
@@ -4475,17 +4480,36 @@ func compileNumericChart(
 	dynamic *plan.DynamicSeriesOutput,
 	alias string,
 ) (CompiledQuery, error) {
-	if operator == nil || operator.Measure.Predicate != nil ||
-		operator.Measure.Percentile != 0 {
+	if operator == nil || operator.Measure.Predicate != nil {
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: numeric measure contract is invalid")
 	}
 	var valueKind ChartValueKind
 	canonicalOutput := ""
 	switch operator.Measure.Function {
+	case plan.AggregateFunctionPercentile:
+		if operator.Measure.Percentile < 1 || operator.Measure.Percentile > 99 {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse chart: percentile must be from 1 through 99",
+			)
+		}
+		valueKind = ChartValueKindPercentile
+		canonicalOutput = "perc" +
+			strconv.Itoa(int(operator.Measure.Percentile)) + "(" +
+			operator.Measure.Input.Name + ")"
 	case plan.AggregateFunctionSum:
+		if operator.Measure.Percentile != 0 {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse chart: numeric aggregate contains percentile metadata",
+			)
+		}
 		valueKind = ChartValueKindSum
 		canonicalOutput = "sum(" + operator.Measure.Input.Name + ")"
 	case plan.AggregateFunctionAverage:
+		if operator.Measure.Percentile != 0 {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse chart: numeric aggregate contains percentile metadata",
+			)
+		}
 		valueKind = ChartValueKindAverage
 		canonicalOutput = "avg(" + operator.Measure.Input.Name + ")"
 	default:
@@ -4659,6 +4683,8 @@ func compileNumericChart(
 	numerator := q("__os_ch_numerator")
 	denominator := q("__os_ch_denominator")
 	numericState := q("__os_ch_numeric_state")
+	percentileState := q("__os_ch_percentile_state")
+	percentileValues := q("__os_ch_percentile_values")
 	frequency := q("__os_ch_count")
 	score := q("__os_ch_score")
 	encoded := q("__os_ch_encoded")
@@ -4719,16 +4745,29 @@ func compileNumericChart(
 		rowSortSQL = dynamicSortValue(row, false)
 	}
 
-	cellValueSQL := numerator
-	scoreSQL := "sum(if(" + denominator + " = 0, toFloat64(0), " +
-		numerator + "))"
-	if valueKind == ChartValueKindAverage {
-		cellValueSQL = numerator + " / toFloat64(" + denominator + ")"
-		scoreSQL = "sum(if(" + denominator + " = 0, toFloat64(0), " +
-			cellValueSQL + "))"
+	var scoreSQL string
+	var publishSQL string
+	switch valueKind {
+	case ChartValueKindPercentile:
+		scoreSQL = "sum(ifNull(arrayElementOrNull(finalizeAggregation(" +
+			percentileState + "), 1), toFloat64(0)))"
+		publishSQL = "arrayElementOrNull(" + percentileValues + ", 1)"
+	case ChartValueKindSum:
+		scoreSQL = "sum(if(" + denominator +
+			" = 0, toFloat64(0), " + numerator + "))"
+		publishSQL = "if(" + denominator +
+			" = 0, CAST(NULL AS Nullable(Float64)), " + numerator + ")"
+	case ChartValueKindAverage:
+		cellAverage := numerator + " / toFloat64(" + denominator + ")"
+		scoreSQL = "sum(if(" + denominator +
+			" = 0, toFloat64(0), " + cellAverage + "))"
+		publishSQL = "if(" + denominator +
+			" = 0, CAST(NULL AS Nullable(Float64)), " + cellAverage + ")"
+	default:
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse chart: numeric value kind is invalid",
+		)
 	}
-	publishSQL := "if(" + denominator +
-		" = 0, CAST(NULL AS Nullable(Float64)), " + cellValueSQL + ")"
 
 	var sql strings.Builder
 	sql.Grow(len(relation.sql) + len(measureInputSQL) + 12_288)
@@ -4778,17 +4817,28 @@ func compileNumericChart(
 		", CAST([], 'Array(Float64)')) AS " +
 		measureValues + " FROM " + classified + "), ")
 
-	sql.WriteString(numericGroups + " AS MATERIALIZED (SELECT " + row + ", " +
-		rowEligible + ", " + kind + ", " + label + ", " + rowInvalid +
-		", tupleElement(" + numericState + ", 1) AS " + numerator +
-		", toUInt64(tupleElement(" + numericState + ", 2)) AS " + denominator +
-		", " + frequency + " FROM (SELECT " + row + ", " + rowEligible +
-		", " + kind + ", " + label + ", max(" + rowInvalid + ") AS " +
-		rowInvalid + ", sumCountArray(" + measureValues + ") AS " +
-		numericState + ", count() AS " + frequency + " FROM " +
-		canonicalized + " GROUP BY " + row + ", " + rowEligible + ", " +
-		kind + ", " + label + ") AS " +
-		q("__os_chart_numeric_state_source") + "), ")
+	if valueKind == ChartValueKindPercentile {
+		level := statsPercentileLevelSQL(operator.Measure.Percentile)
+		sql.WriteString(numericGroups + " AS MATERIALIZED (SELECT " + row +
+			", " + rowEligible + ", " + kind + ", " + label + ", max(" +
+			rowInvalid + ") AS " + rowInvalid +
+			", quantilesGKOrNullArrayState(100, " + level + ")(" +
+			measureValues + ") AS " + percentileState + ", count() AS " +
+			frequency + " FROM " + canonicalized + " GROUP BY " + row +
+			", " + rowEligible + ", " + kind + ", " + label + "), ")
+	} else {
+		sql.WriteString(numericGroups + " AS MATERIALIZED (SELECT " + row + ", " +
+			rowEligible + ", " + kind + ", " + label + ", " + rowInvalid +
+			", tupleElement(" + numericState + ", 1) AS " + numerator +
+			", toUInt64(tupleElement(" + numericState + ", 2)) AS " + denominator +
+			", " + frequency + " FROM (SELECT " + row + ", " + rowEligible +
+			", " + kind + ", " + label + ", max(" + rowInvalid + ") AS " +
+			rowInvalid + ", sumCountArray(" + measureValues + ") AS " +
+			numericState + ", count() AS " + frequency + " FROM " +
+			canonicalized + " GROUP BY " + row + ", " + rowEligible + ", " +
+			kind + ", " + label + ") AS " +
+			q("__os_chart_numeric_state_source") + "), ")
+	}
 
 	// Label selection and row-independent validation derive from the same
 	// materialized row/label aggregate. Unlike count chart, numeric chart has
@@ -4812,10 +4862,18 @@ func compileNumericChart(
 	sql.WriteString(collapsed + " AS (SELECT " + row + ", multiIf(" + kind +
 		" = 1, '1:', " + label + " IN (SELECT " + label + " FROM " +
 		numericScores + "), concat('0:', " + label + "), '2:') AS " + encoded +
-		", sum(" + numerator + ") AS " + numerator + ", sum(" + denominator +
-		") AS " + denominator + " FROM " + numericGroups + " WHERE " +
-		rowEligible + " != 0 AND " + kind + " IN (0, 1) GROUP BY " + row +
-		", " + encoded + "), ")
+		", ")
+	if valueKind == ChartValueKindPercentile {
+		level := statsPercentileLevelSQL(operator.Measure.Percentile)
+		sql.WriteString("quantilesGKOrNullArrayMerge(100, " + level + ")(" +
+			percentileState + ") AS " + percentileValues)
+	} else {
+		sql.WriteString("sum(" + numerator + ") AS " + numerator + ", sum(" +
+			denominator + ") AS " + denominator)
+	}
+	sql.WriteString(" FROM " + numericGroups + " WHERE " + rowEligible +
+		" != 0 AND " + kind + " IN (0, 1) GROUP BY " + row + ", " +
+		encoded + "), ")
 
 	sql.WriteString(finalized + " AS (SELECT " + row + ", " + encoded + ", " +
 		publishSQL + " AS " + measureValue + " FROM " + collapsed + "), ")
@@ -4899,7 +4957,10 @@ func compileNumericChart(
 	classifiedDepth := relationalNodeDepth(kindedDepth)
 	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
 	numericStateDepth := relationalNodeDepth(canonicalizedDepth)
-	numericGroupsDepth := relationalNodeDepth(numericStateDepth)
+	numericGroupsDepth := numericStateDepth
+	if valueKind != ChartValueKindPercentile {
+		numericGroupsDepth = relationalNodeDepth(numericStateDepth)
+	}
 	labelTotalsDepth := relationalNodeDepth(numericGroupsDepth)
 	numericScoresDepth := relationalNodeDepth(numericGroupsDepth)
 	scoreMembershipDepth := relationalNodeDepth(numericScoresDepth)

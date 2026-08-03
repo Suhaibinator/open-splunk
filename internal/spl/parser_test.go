@@ -2153,7 +2153,6 @@ func TestParseChartRejectsUnsupportedAggregates(t *testing.T) {
 		locatedAt string
 	}{
 		{"missing aggregate", `index=main | chart`, ""},
-		{"percentile", `index=main | chart p95(bytes) over path by level`, "p95"},
 		{"count field argument", `index=main | chart count(level) over path by level`, "count"},
 		{"count empty arguments", `index=main | chart count() over path by level`, "count"},
 		{"second aggregate", `index=main | chart count avg(bytes) over path by level`, "avg"},

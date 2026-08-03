@@ -1277,18 +1277,28 @@ func buildChartMeasure(
 			Function: AggregateFunctionCountRows,
 			Output:   "count",
 		}, nil
-	case spl.AggregateFunctionSum, spl.AggregateFunctionAverage:
+	case spl.AggregateFunctionPercentile,
+		spl.AggregateFunctionSum,
+		spl.AggregateFunctionAverage:
 		canonicalName := "sum"
 		function := AggregateFunctionSum
-		if aggregate.Function == spl.AggregateFunctionAverage {
+		switch aggregate.Function {
+		case spl.AggregateFunctionPercentile:
+			if aggregate.Percentile < 1 || aggregate.Percentile > 99 {
+				return invalid("chart percentile must be from 1 through 99")
+			}
+			canonicalName = "perc" + strconv.Itoa(int(aggregate.Percentile))
+			function = AggregateFunctionPercentile
+		case spl.AggregateFunctionAverage:
 			canonicalName = "avg"
 			function = AggregateFunctionAverage
 		}
 		canonicalOutput := canonicalName + "(" + aggregate.Input + ")"
 		if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) ||
-			aggregate.Percentile != 0 || aggregate.ExplicitAlias ||
+			(function != AggregateFunctionPercentile && aggregate.Percentile != 0) ||
+			aggregate.ExplicitAlias ||
 			aggregate.Alias != canonicalOutput {
-			return invalid("chart sum and average require one exact input field and no alias")
+			return invalid("chart numeric aggregates require one exact input field and no alias")
 		}
 		input, err := ResolveField(aggregate.Input, aggregate.InputRange)
 		if err != nil {
@@ -1306,9 +1316,10 @@ func buildChartMeasure(
 			}
 		}
 		return AggregateMeasure{
-			Function: function,
-			Input:    input,
-			Output:   canonicalOutput,
+			Function:   function,
+			Input:      input,
+			Percentile: aggregate.Percentile,
+			Output:     canonicalOutput,
 		}, nil
 	default:
 		return invalid("unsupported chart aggregate")

@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** August 1, 2026
+**Last updated:** August 3, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -2910,28 +2910,35 @@ Every unsupported form retains a source-located timechart diagnostic.
 | chart count BY path, status_class
 | chart sum(bytes) OVER path BY service
 | chart avg(duration_ms) BY path, service
+| chart p95(duration_ms) OVER path BY service
+| chart perc50(duration_ms) BY path, service
 ```
 
 `chart` is a bounded runtime-wide two-field pivot, not a `stats` alias. The
-supported slice accepts exactly one argument-free `count` or one exact-field
-`sum(field)` / `avg(field)`, exactly one row-split field (Splunk's
-`<row-split>`, the first output column), and exactly one column-split field (the
-`<column-split>` whose values become column names). `OVER <row> BY <column>` and
-`BY <row>, <column>` compile to identical plans and SQL; in the `BY` form the
-fields may be separated by a comma, whitespace, or both, and a trailing comma
-is rejected. `OVER`, `BY`, `count`, `sum`, and `avg` are case-insensitive. A
-field literally named `over` is charted by either spelling. In the `BY` form,
-`chart count BY over level` is unambiguous because `over` is the first field;
-when it is second, a comma is required (`chart count BY level, over`) because
-`chart count BY level over` is indistinguishable from the rejected
-`BY`-before-`OVER` form.
+supported slice accepts exactly one argument-free `count`, one exact-field
+`sum(field)` / `avg(field)`, or one exact-field integer-suffix percentile
+`pN(field)` / `percN(field)` for `N` from 1 through 99; exactly one row-split
+field (Splunk's `<row-split>`, the first output column); and exactly one
+column-split field (the `<column-split>` whose values become column names).
+`OVER <row> BY <column>` and `BY <row>, <column>` compile to identical plans
+and SQL; in the `BY` form the fields may be separated by a comma, whitespace,
+or both, and a trailing comma is rejected. Command, clause, and aggregate
+function spelling is case-insensitive. A field literally named `over` is
+charted by either spelling. In the `BY` form, `chart count BY over level` is
+unambiguous because `over` is the first field; when it is second, a comma is
+required (`chart count BY level, over`) because `chart count BY level over` is
+indistinguishable from the rejected `BY`-before-`OVER` form.
 
 The numeric forms accept one exact unquoted measure field and no `AS` alias.
 The measure cannot also be the row-split field, matching Splunk's documented
-chart restriction, but it may also be the column-split field. The canonical
-logical aggregate name is lowercase `sum(field)` or `avg(field)` even when the
-source used mixed case; runtime split values, rather than that name, still name
-the public series columns.
+chart restriction, but it may also be the column-split field. The two
+percentile spellings are synonyms and leading zeroes in `N` are removed during
+canonicalization: for example, both `p095(duration_ms)` and
+`perc95(duration_ms)` have the canonical logical aggregate/output-metadata name
+`perc95(duration_ms)`. Sum and average likewise use the canonical lowercase
+`sum(field)` or `avg(field)` name even when the source used mixed case. These
+logical names are metadata only for this wide result; runtime split values
+still name the public series columns.
 
 `chart` must be the final pipeline command (`SPL_UNSUPPORTED_CHART_PIPELINE`,
 located at the following command) because every public column except the first
@@ -3002,12 +3009,16 @@ no public column, because no published row could count them.
 Behavior equals Splunk's documented defaults `limit=top 10`, `useother=true`,
 `usenull=true`, `otherstr=OTHER`, and `nullstr=NULL`. For `count`, the ten
 ordinary values with the highest total count across the whole chart are
-retained — the limit is global, not per row. For `sum` and `avg`, the score is
-the sum of that series' finalized per-row cells across the complete chart.
-Equal scores use UTF-8 lexical ascending order of the raw label. Because Splunk
-does not specify computed non-finite score ordering, Open Splunk pins positive
-infinity, finite values descending, negative infinity, then `NaN`, with lexical
-order inside each class.
+retained — the limit is global, not per row. For every numeric aggregate, the
+score is the sum of that series' finalized per-row cells across the complete
+chart; a null cell contributes zero. Thus a percentile series is ranked by the
+sum of its finalized requested percentile in every retained row, not by member
+count or by a percentile over the whole chart. Equal scores use UTF-8 lexical
+ascending order of the raw label. Because Splunk does not specify computed
+non-finite score ordering, Open Splunk pins positive infinity, finite values
+descending, negative infinity, then `NaN`, with lexical order inside each
+class. This includes score overflow even though every percentile cell itself
+is finite or null.
 
 `NULL` exists whenever at least one row-eligible input has a missing or
 explicit-null column value and never consumes a top-ten slot; `OTHER` exists
@@ -3016,6 +3027,10 @@ the per-row sum of every excluded value. For numeric chart, it merges the
 excluded raw series' aggregate states per row: `sum` adds their numerators, and
 `avg` adds their numerators and eligible-member counts before division, so it
 is a member-weighted average rather than an average of finalized series cells.
+For a percentile, the omitted labels' raw GK states are merged within each row
+before finalization, so `OTHER` is the requested percentile of all pooled
+eligible members in that row rather than an average (or percentile) of the
+omitted labels' already-finalized percentile cells.
 Column values beginning with `_` receive Splunk's `VALUE` prefix (`_audit`
 becomes `VALUE_audit`). Public columns are the row column first, then ordinary
 columns in UTF-8 lexical ascending order of the published name, then `NULL`,
@@ -3024,9 +3039,14 @@ then `OTHER`, for at most 13 columns.
 Count cells are non-null unsigned values and an absent (row, column) pair is
 exactly `0`. Numeric cells are nullable `Float64`: a cell with no eligible
 numeric contribution is null, including `sum` rather than zero, while a real
-sum or average of zero remains non-null. Rows are retained whenever their row
-axis is eligible even if every measure value in that row is missing or
-nonnumeric, so an all-ineligible row publishes an entirely null numeric grid.
+sum, average, or percentile value of zero remains non-null. Rows are retained
+whenever their row axis is eligible even if every measure value in that row is
+missing or nonnumeric, so an all-ineligible row publishes an entirely null
+numeric grid.
+A percentile cell is finite or null; the executor rejects a non-finite
+percentile returned by the storage boundary before publishing any schema or
+row. Computed IEEE non-finite `sum` or `avg` results retain the separate policy
+described below.
 
 A label fails the whole command atomically when it is empty, invalid UTF-8,
 longer than 256 bytes, exactly `NULL` or `OTHER`, when two distinct labels
@@ -3056,12 +3076,22 @@ expanding source rows. Computed IEEE non-finite results produced by `sum` or
 
 The lowering scans the tenant/index/time/snapshot-scoped relation once and
 never uses `ARRAY JOIN`. It normalizes each measure to one immediate-member
-array and builds one mergeable `sumCountArray` state for each raw `(row,
-split-kind, label)` group. Those bounded states drive scoring, top-ten
-selection, normalization/collision validation, weighted `OTHER`, and per-row
-value/presence maps. The private transport keeps a separate presence bitmap so
-the executor can distinguish null from a real numeric zero, and the executor
-buffers and validates the complete pivot before publishing any schema or row.
+array. `sum` and `avg` build one mergeable `sumCountArray` state for each raw
+`(row, split-kind, label)` group. A percentile builds one
+`quantilesGKOrNullArrayState(100, level)` GK state for each such group,
+finalizes those states for deterministic series scoring, and merges omitted
+states per row before finalizing `OTHER`. It uses the same fixed accuracy and
+roughly 1%-rank-error approximation as the `stats` and `timechart` percentile
+contract, including at small cardinalities. These bounded states drive
+scoring, top-ten selection, normalization/collision validation, weighted or
+pooled `OTHER`, and per-row value/presence maps.
+
+The private transport keeps a separate presence bitmap so the executor can
+distinguish null from a real numeric zero. Any invalid column-axis sentinel is
+ordered before public rows, and the executor buffers and validates the complete
+pivot before publishing any schema or row. Invalid labels, malformed transport,
+non-finite percentile cells, group overflow, and buffered-result overflow
+therefore fail atomically; a later valid row can never expose a partial result.
 
 #### Discretization
 
@@ -3086,11 +3116,10 @@ ordinary, `NULL`, and `OTHER`). Exceeding the row ceiling fails atomically with
 an execution-limit error and no partial result — never truncation and never an
 `OTHER` row, because Splunk documents no `OTHER` row. This non-truncating
 resource policy intentionally differs from Splunk's installation-configurable
-`maxresultrows` ceiling. With default executor settings the intermediate group
-budget grows to at most 130,000 states, exactly as for `timechart`. An
-explicitly configured lower group cap remains authoritative unless the caller
-also explicitly enables `ExpandTimechartGroupLimit`, which permits the bounded
-pivot allowance to raise it to 130,000.
+`maxresultrows` ceiling. With bounded pivot expansion enabled, count, sum, and
+average may receive an intermediate allowance of at most 130,000 states,
+exactly as for `timechart`. An explicitly configured lower group cap remains
+authoritative unless the caller explicitly enables that bounded expansion.
 
 For count, the column axis is collapsed to the published domain before the
 row-keyed aggregation, so that aggregation holds at most one state per (row
@@ -3098,13 +3127,18 @@ value, public series) pair. The preceding one-dimensional aggregate that
 chooses the domain holds one state per distinct raw column value. Numeric chart
 must additionally retain one mergeable state per observed raw `(row, label)`
 group until score selection is known; it then collapses those states to the
-same at-most-12 public series. Both shapes are governed by the executor's
-130,000 group ceiling. A sufficiently high raw label count, or for numeric
-chart a sufficiently wide row/label cross-product, therefore fails atomically
-with an execution-limit error and no partial result. Reducing raw cardinality means
-re-shaping the column field into a coarser string — `replace` is the
-string-in, string-out surface for it — because `bin` would replace labels with
-numeric bucket starts, which the column axis rejects.
+same at-most-12 public series. Count, sum, and average are governed by the
+executor's at-most-130,000-group pivot allowance. A percentile has a separate
+hard ceiling of 20,000 raw `(row, label)` GK-state groups because every raw
+group retains a sketch: a higher configured group limit is clamped to 20,000,
+while a lower configured limit remains authoritative unless bounded pivot
+expansion is explicitly enabled, in which case it is raised only to 20,000. A
+sufficiently high raw label count, or for numeric chart a sufficiently wide
+row/label cross-product, therefore fails atomically with an execution-limit
+error and no partial result. Reducing raw cardinality means re-shaping the
+column field into a coarser string — `replace` is the string-in, string-out
+surface for it — because `bin` would replace labels with numeric bucket starts,
+which the column axis rejects.
 
 The whole pivot is buffered before any schema or row is published, because the
 public column names are runtime values. The buffered result therefore carries a
@@ -3118,14 +3152,18 @@ result is capped.
 
 The following fail explicitly rather than being approximated:
 
-- any aggregate other than argument-free `count`, `sum(field)`, or
-  `avg(field)` — including `average`, percentiles, `count(field)`, `dc`,
-  `values`, multiple aggregates, `agg=<term>`, and sparkline aggregates — and
-  `AS <name>` on any aggregate, all with
+- any aggregate other than argument-free `count`, `sum(field)`, `avg(field)`,
+  or integer-suffix `pN(field)` / `percN(field)` for `N` from 1 through 99 —
+  including `average`, `count(field)`, `dc`, `values`, multiple aggregates,
+  `agg=<term>`, and sparkline aggregates — and `AS <name>` on any aggregate,
+  all with
   `SPL_UNSUPPORTED_CHART_AGGREGATE`. Numeric wildcard, quoted, missing,
   multiple, or parenthesized eval-expression inputs fail with
   `SPL_UNSUPPORTED_CHART_SYNTAX`. `AS` is rejected because runtime split values,
   not an aggregate output field, name every measure column;
+- percentile suffixes outside 1 through 99, a decimal, missing, or malformed
+  suffix, SPL2 two-argument `perc(field, N)`, `upperperc`, and `exactperc`, all
+  with source-located `SPL_UNSUPPORTED_CHART_AGGREGATE`;
 - every option other than `agg`, with `SPL_UNSUPPORTED_CHART_OPTION`, including
   spellings equal to a documented default: `limit`, `useother`, `usenull`,
   `otherstr`, `nullstr`, `cont`, `sep`, `format`, `bins`, `span`, `start`,
@@ -3256,7 +3294,11 @@ the differential that every published row's cells sum to the count
 the exact top-ten domain, `NULL` and `OTHER`, member-weighted average `OTHER`,
 real zero versus null through the private presence bitmap, ignored
 nonnumeric/Boolean/null/missing measures, and retention of a row whose entire
-measure grid is ineligible.
+measure grid is ineligible. Percentile pivot coverage executes both `p95` and
+`perc50`, pins lexical top-ten ties and raw-state pooled `OTHER`, proves null
+versus real zero and all-ineligible-row retention, forces overflow at the raw
+`(row, label)` GK-state stage, and verifies that an invalid column sentinel is
+returned before any public row.
 
 ## Explicitly unsupported surface
 

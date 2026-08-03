@@ -117,12 +117,12 @@ func queryIntegrationTestSplitPercentileTimechart(
 				t.Fatalf("split %s percentile does not share one mergeable state:\n%s", test.name, compiled.SQL)
 			}
 			settings := executor.settingsFor(compiled)
-			if got := settings["max_rows_to_group_by"]; got != maximumRuntimeWidePercentileTimechartGroups {
+			if got := settings["max_rows_to_group_by"]; got != maximumRuntimeWidePercentileGroups {
 				t.Fatalf(
 					"split %s percentile group cap = %v, want %d",
 					test.name,
 					got,
-					maximumRuntimeWidePercentileTimechartGroups,
+					maximumRuntimeWidePercentileGroups,
 				)
 			}
 			if got := settings["group_by_overflow_mode"]; got != "throw" {
@@ -329,12 +329,12 @@ func queryIntegrationTestSplitPercentileTimechart(
 			strings.Contains(strings.ToUpper(query), "ARRAY JOIN") {
 			t.Fatalf("logged split percentile query %q rescans or expands rows:\n%s", queryID, query)
 		}
-		if maximumGroups != maximumRuntimeWidePercentileTimechartGroups {
+		if maximumGroups != maximumRuntimeWidePercentileGroups {
 			t.Fatalf(
 				"logged split percentile query %q group cap = %d, want %d",
 				queryID,
 				maximumGroups,
-				maximumRuntimeWidePercentileTimechartGroups,
+				maximumRuntimeWidePercentileGroups,
 			)
 		}
 	}

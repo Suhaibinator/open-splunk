@@ -542,11 +542,13 @@ func eventStatsMeasureRequiresAlias(tokens []token) bool {
 func classifyChartSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
 	if len(tokens) == 0 {
 		context = aggregateSuggestionContext(context)
-		context.FunctionNames = []string{"count", "sum", "avg"}
+		context.FunctionNames = []string{"count", "p50", "p95", "sum", "avg"}
 		return context
 	}
 	if spec, supported := statsAggregateSpecForName(tokens[0].text); supported &&
-		(spec.function == AggregateFunctionSum || spec.function == AggregateFunctionAverage) &&
+		(spec.function == AggregateFunctionPercentile ||
+			spec.function == AggregateFunctionSum ||
+			spec.function == AggregateFunctionAverage) &&
 		parenthesisDepth(tokens) > 0 {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
 		return context
