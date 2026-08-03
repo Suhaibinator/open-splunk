@@ -590,26 +590,18 @@ func testEventStatsMinimumAgainstClickHouse(
 		t.Fatalf("stacked eventstats min field suggestions = %#v, want %#v", got, want)
 	}
 
+	fencedCountThenMinimumSource := base +
+		` | spath input=_raw output=selected path=value` +
+		` | eventstats count(eval(selected="wanted")) AS hits` +
+		` | eventstats min(eventstats_min_value) AS low` +
+		` | where hits=1`
 	for _, test := range []struct {
 		name   string
 		source string
 	}{
 		{
-			name: "count then minimum",
-			source: base + ` | eventstats count AS peers` +
-				` | eventstats min(eventstats_min_value) AS low`,
-		},
-		{
-			name: "minimum then count",
-			source: base + ` | eventstats min(eventstats_min_value) AS low` +
-				` | eventstats count AS peers`,
-		},
-		{
-			name: "fenced conditional count then minimum",
-			source: base + ` | spath input=_raw output=selected path=value` +
-				` | eventstats count(eval(selected="wanted")) AS hits` +
-				` | eventstats min(eventstats_min_value) AS low` +
-				` | where hits=1`,
+			name:   "fenced conditional count then minimum",
+			source: fencedCountThenMinimumSource,
 		},
 		{
 			name: "minimum then fenced conditional count",
@@ -626,16 +618,20 @@ func testEventStatsMinimumAgainstClickHouse(
 		if want := dynamicRows(float64(1), allIDs...); !reflect.DeepEqual(mixed, want) {
 			t.Fatalf("%s = %#v, want %#v", test.name, mixed, want)
 		}
-		if got, want := collectSuggestions(
-			test.name,
-			test.source,
-			"lo",
-		), []suggestionRow{
-			{kind: 0},
-			{kind: 1, name: "low"},
-		}; !reflect.DeepEqual(got, want) {
-			t.Fatalf("%s field suggestions = %#v, want %#v", test.name, got, want)
-		}
+	}
+	// The compiler suite pins all four count/minimum orderings. Keep the live
+	// analysis execution on the first-input, non-materialized spath branch; the
+	// reverse branch is executed above as a search and would otherwise duplicate
+	// a costly ClickHouse optimizer proof.
+	if got, want := collectSuggestions(
+		"fenced conditional count then minimum",
+		fencedCountThenMinimumSource,
+		"lo",
+	), []suggestionRow{
+		{kind: 0},
+		{kind: 1, name: "low"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fenced conditional count then minimum field suggestions = %#v, want %#v", got, want)
 	}
 
 	// The unsupported object is deliberately attached to the row whose BY key

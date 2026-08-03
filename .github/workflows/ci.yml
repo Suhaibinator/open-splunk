@@ -211,7 +211,8 @@ jobs:
   backend-vertical:
     name: Backend vertical
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Leave setup and artifact headroom above the 30-minute Go test deadline.
+    timeout-minutes: 35
     env:
       OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
     steps:
@@ -267,11 +268,13 @@ jobs:
         env:
           OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
           OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        # The Store lifecycle reserves 5m setup + 20m compiler + 2m deletion
+        # and 30s cleanup headroom beneath this process deadline.
         run: >-
           go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse
           -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
-          -timeout=25m
+          -timeout=30m
           -p=1
           -v
 

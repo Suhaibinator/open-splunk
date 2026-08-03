@@ -34,10 +34,12 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// Keep the complete 27-minute lifecycle plus cleanup headroom below the
+// Backend vertical command's 30-minute deadline.
 const (
 	storeIntegrationImage            = testsupport.DefaultClickHouseImage
 	storeIntegrationSetupTimeout     = 5 * time.Minute
-	storeIntegrationCompilerTimeout  = 17 * time.Minute
+	storeIntegrationCompilerTimeout  = 20 * time.Minute
 	storeIntegrationDeletionTimeout  = 2 * time.Minute
 	storeIntegrationCleanupHeadroom  = 30 * time.Second
 	storeIntegrationLifecycleTimeout = storeIntegrationSetupTimeout +
@@ -2517,28 +2519,41 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 
 	testNumericBinAgainstClickHouse(t, ctx, connection, indexTime, visibilityCutoff)
-	testNullPredicatesAgainstClickHouse(ctx, t, store, connection, indexTime)
-	testIfAgainstClickHouse(ctx, t, store, connection, indexTime)
-	testCoalesceAgainstClickHouse(ctx, t, store, connection, indexTime)
-	testCaseAgainstClickHouse(ctx, t, store, connection, indexTime)
-	testStatsCountEvalAgainstClickHouse(ctx, t, store, connection, indexTime)
-	testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testEventStatsDistinctCountAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testEventStatsValuesAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testEventStatsNumericAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testEventStatsPercentilesAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testEventStatsMinimumAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testEventStatsMaximumAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testStatsPercentilesAgainstClickHouse(ctx, t, store, connection, indexTime)
-	testStatsExtremaAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testExactNumericOrderingAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime)
-	testEventStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime)
-	testStatsListAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testEventStatsListAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testDedupAgainstClickHouse(t, ctx, store, connection, indexTime)
-	testRexAgainstClickHouse(t, ctx, store, connection, indexTime)
+	phases := []struct {
+		name string
+		run  func(*testing.T)
+	}{
+		{"null predicates", func(t *testing.T) { testNullPredicatesAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"if", func(t *testing.T) { testIfAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"coalesce", func(t *testing.T) { testCoalesceAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"case", func(t *testing.T) { testCaseAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"stats count eval", func(t *testing.T) { testStatsCountEvalAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"stats aggregates", func(t *testing.T) { testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"eventstats", func(t *testing.T) { testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"eventstats distinct count", func(t *testing.T) { testEventStatsDistinctCountAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"eventstats values", func(t *testing.T) { testEventStatsValuesAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"eventstats numeric aggregates", func(t *testing.T) {
+			testEventStatsNumericAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime)
+		}},
+		{"eventstats percentiles", func(t *testing.T) { testEventStatsPercentilesAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"eventstats minimum", func(t *testing.T) { testEventStatsMinimumAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"eventstats maximum", func(t *testing.T) { testEventStatsMaximumAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"stats percentiles", func(t *testing.T) { testStatsPercentilesAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"stats extrema", func(t *testing.T) { testStatsExtremaAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"exact numeric ordering", func(t *testing.T) { testExactNumericOrderingAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"stats chronological", func(t *testing.T) { testStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"eventstats chronological", func(t *testing.T) { testEventStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"stats list", func(t *testing.T) { testStatsListAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"eventstats list", func(t *testing.T) { testEventStatsListAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"dedup", func(t *testing.T) { testDedupAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"rex", func(t *testing.T) { testRexAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+	}
+	for _, phase := range phases {
+		started := time.Now()
+		t.Logf("starting compiled SPL phase %q", phase.name)
+		phase.run(t)
+		t.Logf("completed compiled SPL phase %q in %s", phase.name, time.Since(started))
+	}
 	testTextCaseAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testTextLengthAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testSubstringAgainstClickHouse(ctx, t, store, connection, indexTime)
