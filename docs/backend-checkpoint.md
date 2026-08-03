@@ -7,6 +7,106 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded chart percentiles
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `b61ff30` — add bounded `chart pN(field)` and `chart percN(field)`
+  pivots.
+
+This test-first SPL unit extends the two-axis numeric chart path without a
+control-plane schema change, migration, public protobuf change, GORM on the
+ClickHouse path, or frontend transport/component change:
+
+1. `chart pN(field) OVER row BY series`, `chart percN(field) OVER row BY
+   series`, and the equivalent `BY row, series` spelling accept integer levels
+   1 through 99 and one exact unquoted measure. Both spellings canonicalize to
+   `percN(field)` logical metadata, including removal of leading zeroes. The
+   measure cannot equal the row axis but may equal the column axis. Aliases,
+   options, wildcard/quoted/eval/multiple inputs, malformed suffixes, and
+   unsupported percentile families fail with source-located diagnostics.
+2. Percentile cells are nullable finite Double values. Numeric eligibility is
+   identical to stats/timechart: missing, null, Boolean, container, and
+   nonnumeric members do not contribute; a genuine zero remains present; and
+   an eligible row with no numeric member publishes an all-null grid. The
+   executor rejects a forged non-finite percentile transport before publishing
+   schema or rows.
+3. Ordinary labels rank globally by the sum of their finalized per-row
+   percentiles, with lexical ascending ties. `NULL` remains special and never
+   consumes a top-ten slot. `OTHER` merges the omitted labels' raw GK states
+   within each row before finalization, so it is the percentile of the pooled
+   members rather than an average or percentile of finalized label cells.
+4. ClickHouse lowering consumes the scoped event relation once, uses no
+   `ARRAY JOIN`, constructs one `quantilesGKOrNullArrayState(100, level)` per raw
+   `(row, split-kind, label)` group, and uses one merge stage for collapsed
+   cells. The terminal relational depth remains 16. Compiler revalidation
+   rejects forged level, function, input, predicate, and canonical-output
+   metadata.
+5. The existing 10,000-row, 12-series, 256-byte-label, and 48 MiB buffered
+   result limits remain. Percentile chart adds a hard 20,000 raw-sketch group
+   ceiling: higher configured caps are clamped, lower caps remain authoritative
+   unless bounded pivot expansion is explicitly enabled, and expansion raises
+   only to 20,000. Overflow fails the complete query rather than truncating or
+   approximating the public domain.
+6. Query execution, job schema validation, result paging, and export
+   reexecution carry a distinct percentile chart value kind mapped to nullable
+   Double. Invalid split/collision sentinels are ordered first, and the whole
+   pivot remains buffered, so malformed storage results and unsupported values
+   fail atomically.
+7. Unit coverage spans parser ranges/diagnostics/completion, both axis
+   spellings, p1/p99, measure-axis rules, forged AST/plan/compiler metadata,
+   one-scan GK SQL shape, relational depth, nullable/finite transport, high and
+   low group-cap policies, manager schema, and export reexecution. Existing
+   sum/average and split-percentile timechart tests remain green.
+8. Digest-pinned ClickHouse coverage proves p95/perc50 lexical top-ten ties,
+   raw-state pooled `OTHER=1`, `NULL`, real zero versus null, all-ineligible row
+   retention, raw-stage group overflow, and invalid-sentinel ordering. The
+   production executor/manager vertical proves the same percentile schemas and
+   values through job persistence and result paging. CI now selects the
+   dedicated percentile-chart test in addition to numeric chart and the full
+   executor/manager vertical.
+9. Two independent adversarial reviews found stale percentile diagnostics/AST
+   wording and an under-specified low-cap expansion quadrant. Those findings
+   were fixed, the missing policy test was added, and the final reviews reported
+   no remaining correctness, efficiency, isolation, or coverage issue.
+
+Validation for `b61ff30` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+go test ./... -count=1
+go test -race ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run ./...
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestChartPercentileAgainstClickHouse$' \
+  -count=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' \
+  -count=1 -timeout=5m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`.
+The focused percentile-chart suite passed in 8.11 seconds, and the complete
+pinned executor/manager vertical passed in 26.24 seconds. No test-owned
+ClickHouse containers or volumes remained. The preceding numeric-chart docs
+head run `30856428516` passed every CI job. The `b61ff30` run is
+`30858109543` and was in progress when this checkpoint was written. The
+external GradeThis Compose cutover remains explicitly deferred, and the broader
+backend/SPL goal remains active.
+
 ## Latest checkpoint: bounded numeric chart aggregates
 
 Date: 2026-08-03
