@@ -7,7 +7,136 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: atomic app mutation audit coverage
+## Latest checkpoint: bounded mixed-type streamstats minimum
+
+Date: 2026-08-04
+
+Committed implementation checkpoint:
+
+- `01fe27f` — add bounded exact-field mixed-type `streamstats min(field)`.
+
+This test-first SPL unit extends the bounded row-preserving stream aggregate
+without changing the GORM-only SQLite control plane or putting GORM on the
+ClickHouse path:
+
+1. The case-insensitive parser accepts exactly one long-form `min(field)` with
+   one exact unquoted input, canonical default output `min(field)`, optional
+   exact `AS`, existing `current`, `window`, and `global` options, and the
+   existing bounded exact `BY` tuple. Parser diagnostics, suggestions, the
+   completion catalog, and the frontend support surface all advertise the same
+   grammar; `max(field)` and broader streamstats forms remain unsupported.
+2. The logical plan carries the existing extrema minimum function through a
+   validated `StreamAggregate`. Defensive compiler validation rejects forged
+   paths, canonical metadata, predicates, percentiles, mismatched default
+   outputs, ambiguous raw `fields`, unsupported functions, and invalid grouped
+   finite-window contracts.
+3. The command reuses the complete mixed-type extrema contract: immediate
+   non-null top-level multivalue members participate independently; missing,
+   null, and empty multivalues do not; numeric candidates sort before lexical
+   candidates; exact-decimal ordering is lossless; and lexical ordering uses
+   raw bytes. Dynamic winners preserve Double, exact Decimal, String, or Bytes
+   identity through private stored-type metadata. Fixed numeric, Boolean, and
+   DateTime inputs retain their native physical type and precision. Fixed
+   Float non-finite values are excluded, while runtime String spellings and
+   Dynamic non-finite Floats remain lexical under the documented contract.
+4. Prefix, prior-only, and finite row windows use the already established
+   deterministic pipeline order. A top-level multivalue still consumes one
+   source-row frame position. Grouped positive windows retain the explicit
+   `global=false` boundary; incomplete `BY` tuples retain their rows but neither
+   contribute nor poison another group.
+5. Runtime objects, flattened object parents, nested arrays, and nested objects
+   in a retained group-eligible measure poison the complete scoped command.
+   Group-key poison and measure poison are forced through the chronological
+   validation envelope before downstream filtering, projection, sorting, or
+   limiting can hide them, including poison on a final row excluded by
+   `current=false`. Validation-only stacked streamstats now shares the bounded
+   deferred-graph amplification check used by eventstats.
+6. Dynamic and fixed multivalue paths reduce each admitted row once to a
+   constant-size winner tuple, then execute one window winner. Dynamic poison
+   materializes the completed evaluated result once instead of repeating the
+   window for public and validation consumers. Fixed String and group
+   classification scratch columns are discarded before materialization.
+   Every path retains at most the public 10,000 rows plus one overflow sentinel,
+   performs one physical event scan, and uses no `ARRAY JOIN`, row expansion,
+   unbounded collector, per-group query, or Go-side result buffering.
+7. Search inspection, export reexecution, direct executor, manager, field
+   catalog, field summary, timeline, and typed transport surfaces all preserve
+   the minimum projection and stored type. Replacement aliases snapshot their
+   input and order first, and stacked minima consume their private calculated
+   state without rebinding hidden event storage.
+8. Unit coverage spans parser ranges and adversarial diagnostics, plan mapping,
+   all six frame shapes, native and mixed compiler paths, placeholder order,
+   physical shape, row-limit and deferred-graph boundaries, projected inputs,
+   replacement and stacked outputs, and every cross-layer reexecution path.
+   Pinned ClickHouse coverage executes mixed numeric/lexical/Decimal/Bytes and
+   multivalue winners, native DateTime64 and Bool, fixed String and
+   `Array(String)`, grouping eligibility/poison, downstream-hidden poison,
+   exact 10,000-row acceptance, and hidden 10,001-row rejection.
+9. Three independent adversarial reviews examined SPL correctness, ClickHouse
+   efficiency/resource behavior, and cross-layer/test completeness. Their
+   findings removed synthetic count-to-min plan mutation, shared the extrema
+   row fold, materialized the completed Dynamic result, dropped String and
+   group-classification scratch payloads, centralized parser/suggestion
+   descriptors, tightened exact suggestion expectations, and added the missing
+   fixed String/Array(String) live cases. Narrow final rereviews were clean.
+
+Validation for `01fe27f` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+make proto-lint
+go test ./... -count=1 -timeout=5m
+go test -race -shuffle=on ./... -count=1 -timeout=10m
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=6m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+```
+
+Every local command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 65/65 build-script tests and 144/144 application tests.
+The final pinned Store suite passed in 137.455 seconds, including the complete
+compiled SPL corpus and the 5.682-second streamstats-minimum phase. The final
+executor/manager suite passed in 36.381 seconds, including 7.75 seconds of
+streamstats transport, field-catalog, summary, and timeline checks. Post-test
+Docker inventory contained no Open Splunk or ClickHouse test container or
+volume.
+
+Exact feature-SHA GitHub Actions run
+[`30908801017`](https://github.com/Suhaibinator/open-splunk/actions/runs/30908801017)
+completed successfully. Backend vertical passed in 14m31s and Go lint passed
+in 1m52s, resolving both previously failing checks. Go tests, the frontend,
+GradeThis compatibility, protobuf contracts, the vulnerability scan, release
+OCI validation, Linux and macOS production binaries, and cross-platform release
+asset consistency also passed.
+
+The frontend search editor completion catalog and support classification now
+understand `streamstats min(field)`; the existing typed result path already
+renders its nullable/mixed winners. No new API or protobuf contract is needed.
+The broader backend/SPL goal remains active, but no next SPL slice has been
+started. Wait for explicit instructions before choosing one. The external
+GradeThis Compose cutover remains deferred.
+
+## Previous checkpoint: atomic app mutation audit coverage
 
 Date: 2026-08-04
 
