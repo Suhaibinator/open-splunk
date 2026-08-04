@@ -7,7 +7,120 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: chart field occurrence count
+## Latest checkpoint: atomic app mutation audit coverage
+
+Date: 2026-08-04
+
+Committed implementation checkpoint:
+
+- `a8428ed` — publish every production app mutation to the durable audit
+  journal in the same SQLite transaction.
+
+This test-first control-plane unit closes the product-plan audit gap for app
+administration without putting GORM on the ClickHouse path:
+
+1. The fixed audit taxonomy now includes `app.create`, `app.update`,
+   `app.activate`, `app.archive`, and `app.delete`, all bound to the fixed
+   `app` target kind. Create records exactly version 1; update, activate, and
+   archive record the newly committed version 2 or later; delete records the
+   final archived version instead of fabricating another object generation.
+2. Go validation, protobuf enums, generated Go/TypeScript bindings, and the
+   authoritative greenfield `0022_audit_events.sql` migration enforce the same
+   14-action, three-target taxonomy and action/version matrix. The list API's
+   action-filter ceiling is now the complete 14-action set. No upgrade
+   migration was added because the project remains pre-release and greenfield.
+3. `control.AuditedAppCatalog` owns a trusted tenant and a narrow transaction
+   appender. Create, update, activate, archive, and delete append after their
+   complete catalog mutation and before the sole commit through the exact live
+   GORM transaction. App mutation rows, memberships, revisions, and audit rows
+   therefore commit or roll back as one SQLite unit.
+4. Audit persistence failure rolls back the entire app mutation. Validation,
+   not-found, stale-version, conflict, actor, and dependency failures emit no
+   event. Create-ID collision retries publish only the committed create, and a
+   failed delete cannot remove app state without its final archived event.
+5. The immutable projection contains only mutation time, fixed action, stable
+   app ID, and committed target version. Production requires an explicitly
+   installed successful system or browser-administrator actor; an ordinary
+   user, missing actor, or mismatch with the immutable administration scope
+   fails before mutation and cannot produce a misattributed event.
+6. Production now constructs only the audited runtime app catalog for command
+   handling. Raw app constructors remain test/setup boundaries, and a runtime
+   call-site audit found no production mutation bypass. GORM remains confined
+   to the SQLite control plane; ClickHouse storage and SPL execution are
+   unchanged.
+7. The authenticated HTTP runtime vertical performs a complete app lifecycle:
+   create, update, archive, activate, archive, and delete. It verifies the
+   deleted app is no longer readable, then lists the five distinct audit
+   actions through `POST /api/v1/audit/events/list` and pins actor, target,
+   version, and enum projection through the real protobuf routes.
+8. Direct transaction tests cover rollback of rows, memberships, and catalog
+   revision accounting; stale and concurrent attempts; ID-collision retry;
+   every lifecycle version; actor failure; typed-nil dependencies; and schema,
+   storage, taxonomy, list-filter, and API projection parity.
+9. Two independent adversarial correctness reviews found and closed two gaps:
+   runtime actor/scope mismatches were not rejected, and only create had been
+   exercised through the authenticated HTTP boundary. A three-lens frozen-diff
+   reuse/quality/efficiency review then consolidated shared actor and typed-nil
+   guards and separated raw from audited runtime construction. Final read-only
+   re-reviews found no remaining concrete transaction, attribution, API,
+   schema, test, or resource issue.
+
+Validation for `a8428ed` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+make proto
+make proto-lint
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=30m -p=1 -v
+```
+
+Every final command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 144/144. The complete compiled SPL corpus passed in about
+124 seconds, the production query executor/manager integration passed in about
+29 seconds, and `TestBackendVertical` passed in about 11 seconds inside the
+exact Backend vertical command. Post-test Docker inventory contained only
+unrelated pre-existing containers; no Open Splunk or ClickHouse test container
+remained, and no broad volume deletion was attempted.
+
+Exact feature-SHA GitHub Actions run
+[`30901590250`](https://github.com/Suhaibinator/open-splunk/actions/runs/30901590250)
+was fully green. Backend vertical passed in 14m11s and Go lint in 2m12s;
+race/coverage, frontend, GradeThis, protobuf, vulnerability, release OCI,
+Linux/macOS production binaries, and release-asset consistency also passed.
+
+Frontend handoff: the administrator Activity data route is ready at
+`POST /api/v1/audit/events/list`. The frontend should show an Audit tab only
+when bootstrap advertises `SERVER_FEATURE_AUDIT_SEARCH`, use the authenticated
+protobuf transport and opaque cursor, and present only successful token,
+index, and app mutation families. The current frontend is not wired and must
+not fabricate unsupported broader activity families.
+
+The recommended next SPL candidate is bounded `streamstats min(field)`, but it
+is intentionally unstarted pending further instructions. The external
+GradeThis Compose cutover remains explicitly deferred, and the broader
+backend/SPL goal remains active.
+
+## Previous checkpoint: chart field occurrence count
 
 Date: 2026-08-04
 
