@@ -7,7 +7,118 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded streamstats numeric sum
+## Latest checkpoint: atomic index mutation audit coverage
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `a509a54` — publish every production index mutation to the durable audit
+  journal in the same SQLite transaction.
+
+This test-first control-plane unit closes the product-plan audit gap for index
+changes without putting GORM on the ClickHouse path:
+
+1. The fixed audit taxonomy now includes `index.create`, `index.update`,
+   `index.activate`, `index.archive`, `index.delete_keep_data`, and
+   `index.delete_data`, all bound to the fixed `index` target kind. Create is
+   exactly version 1; update, reversible lifecycle changes, and KEEP_DATA are
+   version 2 or later; DELETE_DATA admission is version 3 or later.
+2. Go validation and authoritative greenfield migration
+   `0022_audit_events.sql` enforce the same action, target, and version matrix.
+   Forged cross-family rows and unsupported generations fail at both the
+   application and SQLite boundaries. No upgrade migration was added because
+   this project remains pre-release and greenfield.
+3. `control.AuditedIndexAdministration` owns one trusted tenant and a narrow
+   transaction appender interface, avoiding an import cycle with the audit
+   package. Create, update, activate, archive, KEEP_DATA tombstoning, and fresh
+   DELETE_DATA admission call the appender after their mutation and before the
+   sole commit through the exact live GORM transaction.
+4. An audit append failure rolls back the complete mutation. Direct tests pin
+   index rows and versions, index-catalog revision/count accounting,
+   KEEP_DATA tombstones, DELETE_DATA operations, and the trigger-owned
+   archived-to-deleting transition. Validation, not-found, optimistic-lock,
+   and dependency failures append no event.
+5. The event projection contains only mutation time, fixed action, stable
+   index ID, and resulting version. It cannot carry an index name, display
+   name, description, definition, request body, arbitrary metadata, SQL, or
+   credentials. The audit adapter requires an explicitly installed successful
+   system or browser-administrator actor; a missing actor and browser user
+   fail closed.
+6. Production constructs one tenant-bound audited wrapper and injects it for
+   both `IndexAdmin` and `IndexDataDeletionAdmission`. The raw control DB
+   remains the catalog/reconciliation dependency, and a production call-site
+   audit found no raw index mutation bypass. GORM remains confined to SQLite;
+   native ClickHouse deletion and reconciliation are unchanged.
+7. Exact sequential, concurrent, and post-restart DELETE_DATA retries return
+   the original operation without appending another event. Concurrent index
+   compare-and-swap attempts publish only the winning generation. Event
+   timestamps and versions reuse the committed control-plane projections.
+8. Protobuf and generated Go/TypeScript contracts expose all nine total audit
+   actions and both target kinds. The administrator list boundary accepts at
+   most the complete nine-action filter set, maps every enum explicitly, and
+   preserves tenant-bound signed cursor semantics across SQLite restart.
+9. The authenticated command-runtime vertical performs two complete index
+   lifecycles, reads all six action kinds back through the protobuf HTTP API,
+   verifies exact sequence/version/actor/tenant values, replays DELETE_DATA
+   after reopen, and proves request-payload canaries are absent from both the
+   API response and persisted journal. A rejected audit dependency produces a
+   sanitized 503 and leaves neither an index nor an audit row.
+10. Two independent adversarial reviews found one concrete test defect: the
+    restart acceptance changed a cursor-bound page size and was correctly
+    rejected. The fixed test retains the original page size and now also pins
+    post-restart deletion retry deduplication; repeated control, runtime, and
+    race re-reviews found no remaining transaction, tenant, actor, retry,
+    schema, API, or data-leak defect.
+11. Full shuffled race validation exposed an unrelated ingest-test scheduling
+    assumption. Preliminary authorization is rejected before `Collect` reads
+    `Hello`, so an unnecessary client send could legitimately observe EOF
+    before `Recv` exposed the final `Unavailable` status. Removing that send
+    changed no production code and passed 100 normal and 100 race repetitions.
+
+Validation for `a509a54` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+make proto
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+
+npm run lint -- --quiet
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./integration \
+  -run '^TestBackendIndexDataDeletionLifecycle$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./integration \
+  -run '^TestBackendVertical$' \
+  -count=1 -timeout=10m -v
+```
+
+Every final command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 142/142 and the release/protobuf harness passed 65/65.
+The digest-pinned physical-deletion lifecycle passed in 20.19 seconds, and the
+complete Backend vertical passed in 24.00 seconds. Test-owned ClickHouse
+containers and volumes were removed.
+
+The next SPL candidate remains bounded `streamstats avg(field)`. The external
+GradeThis Compose cutover remains explicitly deferred, and the broader
+backend/SPL goal remains active.
+
+## Previous checkpoint: bounded streamstats numeric sum
 
 Date: 2026-08-03
 
