@@ -7,7 +7,109 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded streamstats field occurrence count
+## Latest checkpoint: bounded streamstats numeric sum
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `6e06394` — add bounded `streamstats sum(field)` execution.
+
+This test-first SPL unit extends the existing bounded running-count command
+without a control-plane schema change, migration, public protobuf change, or
+GORM on the ClickHouse path:
+
+1. `streamstats` now accepts exact long-form `sum(field)` with one exact,
+   unquoted, case-sensitive input field and an optional exact unquoted `AS`
+   alias before `BY`. Without `AS`, the output is canonical lowercase
+   `sum(field)` while preserving the input field's spelling. Bare, empty,
+   wildcard, quoted, multiple, expression, eval, and shorthand forms fail with
+   source-located diagnostics.
+2. Numeric eligibility reuses the bounded `stats` and `eventstats` contract.
+   Finite integers, floats, numeric Strings, tagged decimals, canonical
+   timestamps, and each immediate top-level multivalue numeric member
+   contribute as `Float64`, including duplicates. Missing, null, empty,
+   nonnumeric, Boolean, bytes, object, nested-container, and stored nonfinite
+   values contribute nothing.
+3. Windows remain row windows, not numeric-member windows. An admitted frame
+   with no eligible numeric member publishes a present null, including the
+   first row with `current=false`; a real zero remains non-null. Ungrouped and
+   complete-group results are `Nullable(Float64)`. A missing or null BY tuple
+   keeps the source row but makes the output logically absent.
+4. Existing `current`, `window`, `global`, deterministic order, grouping, and
+   10,000-row contracts are preserved. The planner resolves the input before
+   alias replacement, preserves index-authorization provenance, invalidates
+   timeline eligibility only when `_time` is replaced, and rejects an
+   unprovable open `fields` input.
+5. ClickHouse lowering reads one bounded relation, materializes one normalized
+   `Array(Float64)` contribution per row, and applies one nullable
+   `sumOrNullArray` state over an exact `ROWS` frame. It does not change member
+   accumulation into per-row partial sums and performs no `ARRAY JOIN`, row
+   expansion, `groupArray`, rescan, per-group query, or Go-side buffering.
+6. The hidden 10,001st row remains the overflow sentinel. Row overflow and
+   Dynamic BY poison are forced before any downstream filter, projection,
+   sort, or limit can conceal them. Computed IEEE `NaN` or infinity remains
+   observable under the existing Float64 aggregate policy.
+7. Production Executor and Manager transport, stage inspection, field
+   discovery/summary/timeline, stored-SPL export re-execution, tenant scope,
+   alias replacement, projected-away inputs, Dynamic and fixed multivalue
+   inputs, resource publication, and exact-boundary overflow all have direct
+   coverage.
+8. Parser diagnostics, completion metadata, and frontend support detection now
+   advertise the bounded numeric form. An adversarial review found that bare
+   `streamstats sum` incorrectly received post-aggregate completions; a red
+   regression drove the editor guard without misclassifying alias or BY fields
+   literally named `sum`.
+9. Independent compiler/physical and cross-layer adversarial re-reviews found
+   no remaining concrete issue. Pinned primitive probes independently verified
+   empty-frame nulls, real zero, bounded frames, direct member-order
+   accumulation, and computed infinity preservation. Existing count paths
+   remain unchanged and green.
+
+Validation for `6e06394` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+make proto
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint -- --quiet
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/^streamstats_executor_and_manager_transport$' \
+  -count=1 -timeout=6m -v
+```
+
+Every final command passed. Cached golangci-lint v2.12.2 reported `0 issues`,
+and frontend tests passed 142/142. The complete pinned ClickHouse store suite
+passed in 132.93 seconds, including the streamstats phase in 459.748
+milliseconds; the focused production Executor/Manager transport passed in
+8.362 seconds, with its streamstats subtest in 0.59 seconds. Test-owned
+ClickHouse containers were removed.
+
+The next SPL slice is intentionally unselected pending user direction. The
+external GradeThis Compose cutover remains explicitly deferred, and the
+broader backend/SPL goal remains active.
+
+## Previous checkpoint: bounded streamstats field occurrence count
 
 Date: 2026-08-03
 
@@ -97,9 +199,10 @@ frontend tests passed 142/142. The complete pinned ClickHouse store suite
 passed in 134.15 seconds; the focused production Executor/Manager transport
 passed in 6.17 seconds. Test-owned ClickHouse containers were removed.
 
-The next SPL slice is intentionally unselected pending user direction. The
-external GradeThis Compose cutover remains explicitly deferred, and the
-broader backend/SPL goal remains active.
+The subsequent bounded `streamstats sum(field)` slice is complete at
+`6e06394`; see the checkpoint above. The next SPL slice is intentionally
+unselected pending user direction. The external GradeThis Compose cutover
+remains explicitly deferred, and the broader backend/SPL goal remains active.
 
 ## Latest checkpoint: durable bounded audit journal
 
@@ -14800,9 +14903,9 @@ aggregate contract at a time:
   `dc`, `values`, `list`, integer-suffix percentiles, `sum`, `avg`, `min`,
   `max`, `earliest`, and `latest`. Multiple measures and broader eval-expression
   arguments remain separate contracts. Bounded `streamstats` now covers bare
-  row count and exact-field occurrence count; broader aggregates, expression
-  arguments, reset conditions, and time windows remain separate contracts, and
-  no next slice is selected; and
+  row count, exact-field occurrence count, and exact-field numeric sum through
+  `6e06394`; broader aggregates, expression arguments, reset conditions, and
+  time windows remain separate contracts, and no next slice is selected; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
 
@@ -14905,7 +15008,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `2e1c47e`, `182b60c`, `8d032b1`, `1a9f6ef`, `5db9816`,
+   commits, especially `6e06394`, `2e1c47e`, `182b60c`, `8d032b1`,
+   `1a9f6ef`, `5db9816`,
    `99be8a9`,
    `d7734b6`,
    `ceab244`, `75db36f`, `3f83414`,
@@ -14967,7 +15071,8 @@ Do not guess those decisions if they materially affect the implementation.
    percentile timecharts are complete at `99be8a9`, numeric chart pivots are
    complete at `1a9f6ef`, bounded running `streamstats count` is complete at
    `182b60c`, bounded field-occurrence `streamstats count(field)` is complete
-   at `2e1c47e`, multi-field `top`/`rare` is complete at `5db9816`,
+   at `2e1c47e`, bounded numeric `streamstats sum(field)` is complete at
+   `6e06394`, multi-field `top`/`rare` is complete at `5db9816`,
    exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
