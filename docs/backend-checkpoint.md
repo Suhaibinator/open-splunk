@@ -7,7 +7,131 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: timechart field occurrence count
+## Latest checkpoint: chart field occurrence count
+
+Date: 2026-08-04
+
+Committed implementation checkpoint:
+
+- `6d76841` — add bounded `chart count(field)` execution.
+
+This test-first SPL unit completes exact-field occurrence count for the
+bounded two-axis chart without a control-plane schema change, migration,
+public protobuf change, frontend protocol change, or GORM on the ClickHouse
+path:
+
+1. `chart` now accepts one exact long-form `count(field)` measure in both
+   `OVER <row> BY <column>` and `BY <row>, <column>` forms. It has canonical
+   lowercase metadata `count(field)`, preserves exact input spelling, rejects
+   aliases and malformed/abbreviated/eval/wildcard/quoted forms with
+   source-located diagnostics, forbids the measure as the row axis, and allows
+   it as the column axis.
+2. Occurrence semantics exactly reuse `stats count(field)`: missing, explicit
+   null, empty multivalue, and null members contribute zero; every other
+   scalar, flattened object parent, and immediate non-null multivalue member
+   contributes one. A projected-away measure remains zero and cannot rebind
+   the private source document.
+3. Source-row presence owns row and series domains independently of occurrence
+   contribution. Zero-occurrence ordinary and `NULL` series remain visible,
+   missing/null dynamic row values name no row, and unsupported row containers
+   or column values still fail atomically even when their measure contributes
+   zero.
+4. Ordinary series are ranked globally by occurrence totals with lexical tie
+   ordering. Occurrence totals also drive per-row cells and `OTHER`; row
+   frequency retains zero-valued domains. Empty input publishes only the row
+   schema, and every published count cell is a non-null unsigned value.
+5. The ClickHouse lowering performs one tenant/index/time/snapshot-scoped read
+   and never uses `ARRAY JOIN`. It materializes one raw row/label aggregate
+   carrying source-row frequency and `UInt128` occurrence totals, then
+   collapses to the bounded top ten plus `NULL` and `OTHER` before publishing
+   `UInt64` cells.
+6. The existing dynamic count-chart transport is reused unchanged. A private
+   compiler fanout proof distinguishes bare count's two consumers from
+   field-count's one consumer, including through chronological `eventstats`
+   validation and the exact 128-leaf amplification boundary.
+7. Stored-SPL export re-execution now proves occurrence-specific SQL instead
+   of only shared count-chart metadata. Parser, planner, analyzer, compiler,
+   query executor, search manager, completion catalog, compatibility contract,
+   and product architecture documentation all carry the same feature.
+8. Digest-pinned ClickHouse coverage proves scalar/multivalue/container
+   occurrence semantics, tenant/index/time/snapshot isolation, occurrence
+   ranking with a cutoff tie, zero ordinary and `NULL` domains, pooled
+   `OTHER`, column-as-measure, projected measure, invalid zero-contribution
+   column values, missing/null dynamic row exclusion, object-parent rejection,
+   empty input, exactly one physical read, and no row expansion.
+9. Three independent adversarial reviews covered reuse, semantic correctness,
+   lifecycle coverage, and SQL/resource safety. Review repairs generalized
+   exact-field and pivot-aggregate helpers, consolidated count-input and
+   physical-shape helpers, fixed missing/null dynamic rows poisoning
+   validation, closed forged numeric-chart contracts, and strengthened row,
+   re-execution, chronological, and object-parent assertions. Final read-only
+   re-reviews found no remaining code, SQL, documentation, or coverage issue.
+
+Validation for `6d76841` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+make proto
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/^chart_field_occurrence_count$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestChartBreakPipelineAgainstClickHouse$/^flattened_object_parent_row_axis_fails_atomically$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$/^compiled_SPL_corpus$' \
+  -count=1 -timeout=20m -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=30m -p=1 -v
+```
+
+Every final command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 144/144 and the release/protobuf harness passed 65/65.
+The focused field-count and object-parent integrations passed, the compiled
+SPL corpus passed in about 132 seconds, and the exact Backend vertical command
+passed every package. Test-owned ClickHouse containers and volumes were
+removed.
+
+Exact feature-SHA GitHub Actions run
+[`30895360317`](https://github.com/Suhaibinator/open-splunk/actions/runs/30895360317)
+was fully green. The previously failing Backend vertical job passed in 12m08s
+and Go lint passed in 2m16s; race/coverage, frontend, GradeThis, protobuf,
+vulnerability, release OCI, Linux/macOS production binaries, and release asset
+consistency also passed.
+
+The next backend/SPL unit is intentionally unselected pending further
+instructions. The external GradeThis Compose cutover remains explicitly
+deferred, and the broader backend/SPL goal remains active.
+
+## Previous checkpoint: timechart field occurrence count
 
 Date: 2026-08-03
 
