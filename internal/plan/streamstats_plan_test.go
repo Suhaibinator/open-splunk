@@ -67,6 +67,25 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 			global:         true,
 			groups:         []string{"host"},
 		},
+		{
+			name:           "numeric sum with canonical output",
+			source:         `index=gradethis | streamstats sum(payload.bytes)`,
+			function:       AggregateFunctionSum,
+			input:          "payload.bytes",
+			output:         "sum(payload.bytes)",
+			includeCurrent: true,
+			global:         true,
+		},
+		{
+			name:           "prior numeric sum by group",
+			source:         `index=gradethis | streamstats current=f sum(bytes) AS prior_bytes BY host`,
+			function:       AggregateFunctionSum,
+			input:          "bytes",
+			output:         "prior_bytes",
+			includeCurrent: false,
+			global:         true,
+			groups:         []string{"host"},
+		},
 	}
 
 	for _, test := range tests {
@@ -169,6 +188,16 @@ func TestBuildStreamStatsCountUpsertsKnownSchemaAndPreservesRelationKind(t *test
 			source: `index=gradethis | table _time,status,populated | streamstats count(status) AS populated`,
 			want:   []string{"_time", "status", "populated"},
 		},
+		{
+			name:   "append canonical sum output",
+			source: `index=gradethis | table _time,bytes | streamstats sum(bytes)`,
+			want:   []string{"_time", "bytes", "sum(bytes)"},
+		},
+		{
+			name:   "sum alias replaces input in place",
+			source: `index=gradethis | table _time,bytes | streamstats sum(bytes) AS bytes`,
+			want:   []string{"_time", "bytes"},
+		},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -191,6 +220,7 @@ func TestBuildStreamStatsEnforcesReservedFieldsAndProvenance(t *testing.T) {
 		`index=gradethis | streamstats count AS fields`,
 		`index=gradethis | streamstats count BY fields`,
 		`index=gradethis | streamstats count(fields) AS occurrences`,
+		`index=gradethis | streamstats sum(fields) AS total`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
 		assertDiagnosticCode(t, err, "SPL_AMBIGUOUS_STREAMSTATS_FIELD")
@@ -215,6 +245,16 @@ func TestBuildStreamStatsEnforcesReservedFieldsAndProvenance(t *testing.T) {
 	}
 	if !slices.Equal(closedInput.OutputFields, []string{"fields", "host", "occurrences"}) {
 		t.Fatalf("closed fields input output = %v", closedInput.OutputFields)
+	}
+	closedSumInput, err := Build(
+		mustParse(t, `index=gradethis | table fields,host | streamstats sum(fields) AS total BY host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build closed sum fields input: %v", err)
+	}
+	if !slices.Equal(closedSumInput.OutputFields, []string{"fields", "host", "total"}) {
+		t.Fatalf("closed sum fields input output = %v", closedSumInput.OutputFields)
 	}
 
 	if _, err := Build(
@@ -244,6 +284,55 @@ func TestBuildStreamStatsEnforcesReservedFieldsAndProvenance(t *testing.T) {
 		testScope([]string{"gradethis"}, nil),
 	)
 	assertDiagnosticCode(t, err, "SPL_INDEX_FORBIDDEN")
+}
+
+func TestBuildStreamStatsSumResolvesInputBeforeReplacementAndPreservesProvenance(t *testing.T) {
+	t.Parallel()
+
+	replaced, err := Build(
+		mustParse(t, `index=gradethis | table _time,bytes | streamstats sum(bytes) AS bytes`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build sum alias replacement: %v", err)
+	}
+	operator, ok := replaced.Operators[len(replaced.Operators)-1].(*StreamAggregate)
+	if !ok || operator.Measure.Function != AggregateFunctionSum ||
+		operator.Measure.Input.Name != "bytes" ||
+		operator.Measure.Input.Range == (spl.Range{}) ||
+		operator.Measure.Output != "bytes" {
+		t.Fatalf("sum alias replacement operator = %#v", replaced.Operators[len(replaced.Operators)-1])
+	}
+	analysis, analyzeErr := Analyze(replaced)
+	if analyzeErr != nil {
+		t.Fatalf("Analyze sum alias replacement: %v", analyzeErr)
+	}
+	if !slices.Contains(analysis.ReferencedFields, "bytes") {
+		t.Fatalf("sum alias replacement references = %v, want bytes input", analysis.ReferencedFields)
+	}
+
+	if _, err := Build(
+		mustParse(t, `index=gradethis | streamstats sum(bytes) AS running | timechart span=5m count BY level`),
+		testScope([]string{"gradethis"}, nil),
+	); err != nil {
+		t.Fatalf("ordinary sum output invalidated canonical time: %v", err)
+	}
+	_, err = Build(
+		mustParse(t, `index=gradethis | streamstats sum(bytes) AS _time | timechart span=5m count BY level`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_TIMECHART_TIME_FIELD")
+
+	overwrittenIndex, err := Build(
+		mustParse(t, `index=gradethis | streamstats sum(bytes) AS index | search index=secret`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build overwritten index from sum: %v", err)
+	}
+	if !slices.Equal(overwrittenIndex.EffectiveIndexes, []string{"gradethis"}) {
+		t.Fatalf("sum effective indexes = %v", overwrittenIndex.EffectiveIndexes)
+	}
 }
 
 func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
@@ -276,13 +365,20 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 		command.Aggregate.Alias = "count(status)"
 		command.Aggregate.AliasRange = base.Range
 	}
+	asSum := func(command *spl.StreamStatsCommand) {
+		command.Aggregate.Function = spl.AggregateFunctionSum
+		command.Aggregate.Input = "bytes"
+		command.Aggregate.InputRange = base.Range
+		command.Aggregate.Alias = "sum(bytes)"
+		command.Aggregate.AliasRange = base.Range
+	}
 
 	for _, test := range []struct {
 		name   string
 		mutate func(*spl.StreamStatsCommand)
 		code   string
 	}{
-		{"wrong function", func(c *spl.StreamStatsCommand) { c.Aggregate.Function = spl.AggregateFunctionSum }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"wrong function", func(c *spl.StreamStatsCommand) { c.Aggregate.Function = spl.AggregateFunctionAverage }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"input metadata", func(c *spl.StreamStatsCommand) { c.Aggregate.Input = "status" }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"field count missing input", func(c *spl.StreamStatsCommand) {
 			c.Aggregate.Function = spl.AggregateFunctionCountValues
@@ -312,6 +408,40 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
 		{"field count default spelling forged as explicit alias", func(c *spl.StreamStatsCommand) {
 			asFieldCount(c)
+			c.Aggregate.ExplicitAlias = true
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"sum missing input", func(c *spl.StreamStatsCommand) {
+			c.Aggregate.Function = spl.AggregateFunctionSum
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"sum missing input range", func(c *spl.StreamStatsCommand) {
+			c.Aggregate.Function = spl.AggregateFunctionSum
+			c.Aggregate.Input = "bytes"
+			c.Aggregate.Alias = "sum(bytes)"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"sum noncanonical implicit alias", func(c *spl.StreamStatsCommand) {
+			asSum(c)
+			c.Aggregate.Alias = "total"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"sum predicate metadata", func(c *spl.StreamStatsCommand) {
+			asSum(c)
+			c.Aggregate.Predicate = &spl.WhereNotExpr{}
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"sum percentile metadata", func(c *spl.StreamStatsCommand) {
+			asSum(c)
+			c.Aggregate.Percentile = 50
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"sum comma input", func(c *spl.StreamStatsCommand) {
+			asSum(c)
+			c.Aggregate.Input = "bytes,duration"
+			c.Aggregate.Alias = "sum(bytes,duration)"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"sum parser-inexpressible explicit alias", func(c *spl.StreamStatsCommand) {
+			asSum(c)
+			c.Aggregate.Alias = "prior bytes"
+			c.Aggregate.ExplicitAlias = true
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"sum default spelling forged as explicit alias", func(c *spl.StreamStatsCommand) {
+			asSum(c)
 			c.Aggregate.ExplicitAlias = true
 		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
 		{"predicate metadata", func(c *spl.StreamStatsCommand) { c.Aggregate.Predicate = &spl.WhereNotExpr{} }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
@@ -409,6 +539,17 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 			fieldAnalysis.ReferencedFields,
 		)
 	}
+	sum := valid()
+	sum.Measure.Function = AggregateFunctionSum
+	sum.Measure.Input = status
+	sum.Measure.Output = "sum(status)"
+	sumAnalysis, err := Analyze(&Query{Operators: []Operator{sum}})
+	if err != nil {
+		t.Fatalf("Analyze valid sum stream aggregate: %v", err)
+	}
+	if !slices.Equal(sumAnalysis.ReferencedFields, []string{"host", "status"}) {
+		t.Fatalf("sum referenced fields = %v, want [host status]", sumAnalysis.ReferencedFields)
+	}
 
 	for _, operator := range []*StreamAggregate{
 		{Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "ordinal"}, Global: true},
@@ -418,6 +559,9 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 		{Measure: AggregateMeasure{Function: AggregateFunctionCountValues, Input: status, Output: "ordinal"}, Global: true},
 		{Measure: AggregateMeasure{Function: AggregateFunctionCountValues, Input: status, Output: "count(status)"}, Global: true},
 		{GroupBy: []FieldRef{host}, Measure: AggregateMeasure{Function: AggregateFunctionCountValues, Input: status, Output: "ordinal"}, Global: false, WindowRows: 2},
+		{Measure: AggregateMeasure{Function: AggregateFunctionSum, Input: status, Output: "total"}, Global: true},
+		{Measure: AggregateMeasure{Function: AggregateFunctionSum, Input: status, Output: "sum(status)"}, Global: true},
+		{GroupBy: []FieldRef{host}, Measure: AggregateMeasure{Function: AggregateFunctionSum, Input: status, Output: "total"}, Global: false, WindowRows: 2},
 	} {
 		if _, err := Analyze(&Query{Operators: []Operator{operator}}); err != nil {
 			t.Fatalf("Analyze valid option combination %#v: %v", operator, err)
@@ -429,7 +573,7 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 		mutate func(*StreamAggregate)
 	}{
 		{"missing output", func(op *StreamAggregate) { op.Measure.Output = "" }},
-		{"wrong function", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionSum }},
+		{"wrong function", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionAverage }},
 		{"field count missing input", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionCountValues }},
 		{"field count comma input", func(op *StreamAggregate) {
 			op.Measure.Function = AggregateFunctionCountValues
@@ -447,6 +591,19 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 			op.Measure.Function = AggregateFunctionCountValues
 			op.Measure.Input = status
 			op.Measure.Output = "count(host)"
+		}},
+		{"sum missing input", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionSum
+		}},
+		{"sum comma input", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionSum
+			op.Measure.Input = mustResolveStreamStatsField(t, "status,host")
+			op.Measure.Output = "sum(status,host)"
+		}},
+		{"mismatched sum default output", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionSum
+			op.Measure.Input = status
+			op.Measure.Output = "sum(host)"
 		}},
 		{"row count parenthesized output", func(op *StreamAggregate) {
 			op.Measure.Output = "count(status)"

@@ -93,3 +93,98 @@ func TestManagerRetainsRowPreservingStreamStatsCountFieldSchemaAndResults(t *tes
 		}
 	}
 }
+
+func TestManagerRetainsRowPreservingStreamStatsSumSchemaAndResults(t *testing.T) {
+	t.Parallel()
+
+	schema := Schema{Columns: []Column{
+		{Name: "event_id", Kind: ValueKindString},
+		{Name: "service", Kind: ValueKindString, Nullable: true},
+		{Name: "prior_total", Kind: ValueKindDouble, Nullable: true},
+	}}
+	rows := [][]Value{
+		{StringValue("event-1"), StringValue("api"), NullValue()},
+		{StringValue("event-2"), StringValue("worker"), NullValue()},
+		{StringValue("event-3"), NullValue(), NullValue()},
+		{StringValue("event-4"), StringValue("api"), DoubleValue(2.5)},
+	}
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(
+			_ context.Context,
+			query clickhouse.CompiledQuery,
+			sink ResultSink,
+		) error {
+			if !slices.Equal(query.OutputFields, []string{"event_id", "service", "prior_total"}) {
+				t.Fatalf("compiled streamstats sum fields = %v", query.OutputFields)
+			}
+			if query.Timechart != nil || query.Chart != nil || query.SparseFields {
+				t.Fatalf("streamstats sum declared a non-tabular transport: %#v", query)
+			}
+			if err := sink.SetSchema(schema); err != nil {
+				return err
+			}
+			for _, row := range rows {
+				if err := sink.AddRow(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		}),
+		CleanupInterval: -1,
+		NewID:           sequenceIDs("streamstats-sum-row-preserving"),
+	})
+	created, err := manager.Create(context.Background(), withSPL(
+		validRequest(),
+		"index=main | table event_id,service,status | streamstats current=f window=2 global=f sum(status) AS prior_total BY service | table event_id,service,prior_total",
+	))
+	if err != nil {
+		t.Fatalf("Create(streamstats sum): %v", err)
+	}
+	completed := waitForState(t, manager, created.ID, StateCompleted)
+	if completed.RowCount != uint64(len(rows)) || completed.ResultsTruncated ||
+		completed.Schema == nil || !reflect.DeepEqual(*completed.Schema, schema) {
+		t.Fatalf(
+			"completed streamstats sum result = rows %d truncated %v schema %#v",
+			completed.RowCount,
+			completed.ResultsTruncated,
+			completed.Schema,
+		)
+	}
+
+	page, err := manager.Results(created.ID, PageRequest{Limit: len(rows)})
+	if err != nil {
+		t.Fatalf("Results(streamstats sum): %v", err)
+	}
+	if page.TotalRows != uint64(len(rows)) || len(page.Rows) != len(rows) || !page.Complete ||
+		!reflect.DeepEqual(page.Schema, schema) {
+		t.Fatalf("streamstats sum page = %#v", page)
+	}
+	wantEventIDs := []string{"event-1", "event-2", "event-3", "event-4"}
+	wantServices := []string{"api", "worker", "", "api"}
+	for index, row := range page.Rows {
+		if row.Ordinal != uint64(index) || len(row.Values) != 3 {
+			t.Fatalf("streamstats sum row %d = %#v", index, row)
+		}
+		if got, ok := row.Values[0].String(); !ok || got != wantEventIDs[index] {
+			t.Fatalf("streamstats sum event_id at row %d = (%q, %v)", index, got, ok)
+		}
+		if index == 2 {
+			if !row.Values[1].IsNull() || !row.Values[2].IsNull() {
+				t.Fatalf("missing BY row = %#v, want retained null group and sum", row)
+			}
+			continue
+		}
+		if got, ok := row.Values[1].String(); !ok || got != wantServices[index] {
+			t.Fatalf("streamstats sum service at row %d = (%q, %v)", index, got, ok)
+		}
+		if index < 3 {
+			if !row.Values[2].IsNull() {
+				t.Fatalf("streamstats sum prior total at row %d = %#v, want null", index, row.Values[2])
+			}
+			continue
+		}
+		if got, ok := row.Values[2].Double(); !ok || got != 2.5 {
+			t.Fatalf("streamstats sum prior total at row %d = (%v, %v)", index, got, ok)
+		}
+	}
+}

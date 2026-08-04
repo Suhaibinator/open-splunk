@@ -466,6 +466,15 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			kinds:  []SuggestionKind{SuggestionKindField},
 		},
 		{
+			source: `| streamstats current=false sum(`,
+			kinds:  []SuggestionKind{SuggestionKindField},
+		},
+		{
+			source:   `| streamstats sum `,
+			kinds:    nil,
+			keywords: nil,
+		},
+		{
 			source:   `| streamstats count(status) `,
 			kinds:    []SuggestionKind{SuggestionKindKeyword},
 			keywords: []string{"AS", "BY", "current=", "window=", "global="},
@@ -476,7 +485,27 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			keywords: []string{"BY", "current=", "window=", "global="},
 		},
 		{
+			source:   `| streamstats count AS sum `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"BY", "current=", "window=", "global="},
+		},
+		{
+			source:   `| streamstats sum(bytes) `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"AS", "BY", "current=", "window=", "global="},
+		},
+		{
+			source:   `| streamstats sum(bytes) AS running_bytes `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"BY", "current=", "window=", "global="},
+		},
+		{
 			source:   `| streamstats count BY host `,
+			kinds:    []SuggestionKind{SuggestionKindField, SuggestionKindKeyword},
+			keywords: []string{"current=", "window=", "global="},
+		},
+		{
+			source:   `| streamstats count BY sum `,
 			kinds:    []SuggestionKind{SuggestionKindField, SuggestionKindKeyword},
 			keywords: []string{"current=", "window=", "global="},
 		},
@@ -509,6 +538,19 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestAnalyzeStreamStatsSuggestionsAdvertiseNumericSum(t *testing.T) {
+	t.Parallel()
+
+	source := `| streamstats `
+	context, diagnostic := AnalyzeSuggestionContext(source, len(source))
+	if diagnostic != nil {
+		t.Fatalf("AnalyzeSuggestionContext: %v", diagnostic)
+	}
+	if !slices.Equal(context.FunctionNames, []string{"count", "sum"}) {
+		t.Fatalf("streamstats functions = %v, want [count sum]", context.FunctionNames)
 	}
 }
 

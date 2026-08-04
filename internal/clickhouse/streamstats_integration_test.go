@@ -58,6 +58,7 @@ func testStreamStatsAgainstClickHouse(
 			1,
 			typedField("streamstats_group", typedString("500")),
 			typedField("streamstats_existing", typedString("shadowed")),
+			typedField("streamstats_sum_value", typedSint(2)),
 			typedField("streamstats_value", typedString("present")),
 		),
 		newEvent(
@@ -65,6 +66,18 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			2,
 			typedField("streamstats_group", typedString("other")),
+			typedField(
+				"streamstats_sum_value",
+				typedList(
+					typedUint(3),
+					typedString("4.5"),
+					typedString("not-a-number"),
+					typedNull(),
+					typedBool(true),
+					typedList(typedSint(99)),
+					typedObject(typedField("child", typedSint(99))),
+				),
+			),
 			typedField(
 				"streamstats_value",
 				typedList(
@@ -81,6 +94,7 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			3,
 			typedField("streamstats_group", typedSint(500)),
+			typedField("streamstats_sum_value", typedString("-1.5")),
 			typedField("streamstats_value", typedList()),
 		),
 		newEvent("streamstats-04", "streamstats-order", 4),
@@ -89,6 +103,7 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			5,
 			typedField("streamstats_group", typedNull()),
+			typedField("streamstats_sum_value", typedNull()),
 			typedField("streamstats_value", typedNull()),
 		),
 		newEvent(
@@ -96,6 +111,7 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			6,
 			typedField("streamstats_group", typedString("other")),
+			typedField("streamstats_sum_value", typedString("not-a-number")),
 			typedField("streamstats_value", typedString("")),
 		),
 		newEvent(
@@ -103,6 +119,7 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			7,
 			typedField("streamstats_group", typedUint(500)),
+			typedField("streamstats_sum_value", typedDouble(0)),
 			typedField(
 				"streamstats_value",
 				typedObject(typedField("child", typedString("flattened"))),
@@ -146,6 +163,10 @@ func testStreamStatsAgainstClickHouse(
 		typedField(
 			"streamstats_group",
 			typedObject(typedField("child", typedString("foreign"))),
+		),
+		typedField(
+			"streamstats_sum_value",
+			typedSint(1_000),
 		),
 		typedField(
 			"streamstats_value",
@@ -425,6 +446,147 @@ func testStreamStatsAgainstClickHouse(
 		[]uint64{0, 0, 0, 0, 0, 0, 0},
 	)
 
+	type sumRow struct {
+		id    string
+		total *float64
+	}
+	floatPointer := func(value float64) *float64 { return &value }
+	collectSums := func(name string, query CompiledQuery) []sumRow {
+		t.Helper()
+		rows, queryErr := connection.Query(ctx, query.SQL, query.Args...)
+		if queryErr != nil {
+			t.Fatalf(
+				"execute %s: %v\nSQL: %s\nargs: %#v",
+				name,
+				queryErr,
+				query.SQL,
+				query.Args,
+			)
+		}
+		types := rows.ColumnTypes()
+		if len(types) != 2 || types[1].DatabaseTypeName() != "Nullable(Float64)" {
+			_ = rows.Close()
+			t.Fatalf("%s column types = %#v, want Nullable(Float64)", name, types)
+		}
+		var got []sumRow
+		for rows.Next() {
+			var row sumRow
+			if scanErr := rows.Scan(&row.id, &row.total); scanErr != nil {
+				_ = rows.Close()
+				t.Fatalf("scan %s: %v", name, scanErr)
+			}
+			got = append(got, row)
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			_ = rows.Close()
+			t.Fatalf("iterate %s: %v", name, rowsErr)
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Fatalf("close %s: %v", name, closeErr)
+		}
+		return got
+	}
+	assertSums := func(name, source string, wantTotals []*float64) {
+		t.Helper()
+		got := collectSums(name, compile(source))
+		want := make([]sumRow, len(ascendingIDs))
+		for index, id := range ascendingIDs {
+			want[index] = sumRow{id: id, total: wantTotals[index]}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s rows = %#v, want %#v", name, got, want)
+		}
+	}
+	for _, test := range []struct {
+		name       string
+		options    string
+		wantTotals []*float64
+	}{
+		{
+			name: "numeric complete prefix",
+			wantTotals: []*float64{
+				floatPointer(2), floatPointer(9.5), floatPointer(8),
+				floatPointer(8), floatPointer(8), floatPointer(8),
+				floatPointer(8),
+			},
+		},
+		{
+			name:    "numeric complete prior prefix",
+			options: "current=false",
+			wantTotals: []*float64{
+				nil, floatPointer(2), floatPointer(9.5), floatPointer(8),
+				floatPointer(8), floatPointer(8), floatPointer(8),
+			},
+		},
+		{
+			name:    "numeric two-row current window",
+			options: "window=2",
+			wantTotals: []*float64{
+				floatPointer(2), floatPointer(9.5), floatPointer(6),
+				floatPointer(-1.5), nil, nil, floatPointer(0),
+			},
+		},
+		{
+			name:    "numeric two-row prior window",
+			options: "current=false window=2",
+			wantTotals: []*float64{
+				nil, floatPointer(2), floatPointer(9.5), floatPointer(6),
+				floatPointer(-1.5), nil, nil,
+			},
+		},
+	} {
+		assertSums(
+			test.name,
+			base+` | sort 0 +event_id | streamstats `+test.options+
+				` sum(streamstats_sum_value) AS running_total | table event_id running_total`,
+			test.wantTotals,
+		)
+	}
+
+	groupedSum := collectSums(
+		"grouped streamstats sum(field)",
+		compile(
+			base+` | sort 0 +event_id`+
+				` | streamstats window=2 global=false sum(streamstats_sum_value) AS running_total BY streamstats_group`+
+				` | table event_id running_total`,
+		),
+	)
+	groupedSumWant := []sumRow{
+		{id: "streamstats-01", total: floatPointer(2)},
+		{id: "streamstats-02", total: floatPointer(7.5)},
+		{id: "streamstats-03", total: floatPointer(0.5)},
+		{id: "streamstats-04"},
+		{id: "streamstats-05"},
+		{id: "streamstats-06", total: floatPointer(7.5)},
+		{id: "streamstats-07", total: floatPointer(-1.5)},
+	}
+	if !reflect.DeepEqual(groupedSum, groupedSumWant) {
+		t.Fatalf(
+			"grouped streamstats sum(field) rows = %#v, want %#v",
+			groupedSum,
+			groupedSumWant,
+		)
+	}
+
+	assertSums(
+		"numeric alias replacement",
+		base+` | sort 0 +event_id`+
+			` | streamstats sum(streamstats_sum_value) AS streamstats_sum_value`+
+			` | table event_id streamstats_sum_value`,
+		[]*float64{
+			floatPointer(2), floatPointer(9.5), floatPointer(8),
+			floatPointer(8), floatPointer(8), floatPointer(8),
+			floatPointer(8),
+		},
+	)
+	assertSums(
+		"projected-away numeric input",
+		base+` | sort 0 +event_id | fields event_id`+
+			` | streamstats sum(streamstats_sum_value) AS running_total`+
+			` | table event_id running_total`,
+		[]*float64{nil, nil, nil, nil, nil, nil, nil},
+	)
+
 	fixedMultivalue := compile(
 		base + ` | stats values(streamstats_group) AS groups` +
 			` | streamstats count(groups) AS populated | table populated`,
@@ -439,6 +601,41 @@ func testStreamStatsAgainstClickHouse(
 	}
 	if fixedMultivalueCount != 2 {
 		t.Fatalf("fixed multivalue streamstats count(field) = %d, want 2", fixedMultivalueCount)
+	}
+
+	fixedMultivalueSum := compile(
+		base + ` | stats values(streamstats_group) AS groups` +
+			` | streamstats sum(groups) AS total | table total`,
+	)
+	if got := strings.Count(fixedMultivalueSum.SQL, "groupUniqArray"); got != 1 {
+		t.Fatalf(
+			"fixed multivalue streamstats sum collectors = %d, want only the upstream values collector:\n%s",
+			got,
+			fixedMultivalueSum.SQL,
+		)
+	}
+	for _, forbidden := range []string{"ARRAY JOIN", "arrayJoin(", "groupArray("} {
+		if strings.Contains(fixedMultivalueSum.SQL, forbidden) {
+			t.Fatalf(
+				"fixed multivalue streamstats sum introduced %q:\n%s",
+				forbidden,
+				fixedMultivalueSum.SQL,
+			)
+		}
+	}
+	var fixedMultivalueTotal *float64
+	if err := connection.QueryRow(
+		ctx,
+		fixedMultivalueSum.SQL,
+		fixedMultivalueSum.Args...,
+	).Scan(&fixedMultivalueTotal); err != nil {
+		t.Fatalf("execute fixed multivalue streamstats sum(field): %v", err)
+	}
+	if fixedMultivalueTotal == nil || *fixedMultivalueTotal != 500 {
+		t.Fatalf(
+			"fixed multivalue streamstats sum(field) = %v, want 500",
+			fixedMultivalueTotal,
+		)
 	}
 
 	grouped := compile(
@@ -631,6 +828,23 @@ func testStreamStatsAgainstClickHouse(
 		t.Fatalf("tenant-scoped streamstats field total = %d, want 7", tenantTotal)
 	}
 
+	tenantScopedSum := compile(
+		base + ` | sort 0 +event_id` +
+			` | streamstats sum(streamstats_sum_value) AS total` +
+			` | tail 1 | table total`,
+	)
+	var tenantSum *float64
+	if err := connection.QueryRow(
+		ctx,
+		tenantScopedSum.SQL,
+		tenantScopedSum.Args...,
+	).Scan(&tenantSum); err != nil {
+		t.Fatalf("execute tenant-scoped streamstats sum: %v", err)
+	}
+	if tenantSum == nil || *tenantSum != 8 {
+		t.Fatalf("tenant-scoped streamstats sum total = %v, want 8", tenantSum)
+	}
+
 	hiddenPoison := compile(
 		`index=compiler source="streamstats-poison"` +
 			` | streamstats count AS peers BY streamstats_group` +
@@ -671,6 +885,27 @@ func testStreamStatsAgainstClickHouse(
 		)
 	}
 
+	exactSumBoundary := compileBoundary(
+		`index=eventstats-boundary source="eventstats-boundary" host="in"` +
+			` | streamstats window=10000 sum(eventstats_missing) AS total` +
+			` | head 1 | table total`,
+	)
+	var exactEmptySum *float64
+	if err := connection.QueryRow(
+		ctx,
+		exactSumBoundary.SQL,
+		exactSumBoundary.Args...,
+	).Scan(&exactEmptySum); err != nil {
+		t.Fatalf(
+			"execute exact streamstats sum boundary: %v\nSQL: %s",
+			err,
+			exactSumBoundary.SQL,
+		)
+	}
+	if exactEmptySum != nil {
+		t.Fatalf("exact streamstats sum boundary = %v, want null", exactEmptySum)
+	}
+
 	hiddenOverflow := compileBoundary(
 		`index=eventstats-boundary source="eventstats-boundary"` +
 			` | streamstats count(projected_away) AS ordinal` +
@@ -682,6 +917,25 @@ func testStreamStatsAgainstClickHouse(
 		t.Fatalf(
 			"downstream-hidden streamstats overflow error = %v, want %q",
 			overflowErr,
+			StreamStatsInputLimitMarker,
+		)
+	}
+
+	hiddenSumOverflow := compileBoundary(
+		`index=eventstats-boundary source="eventstats-boundary"` +
+			` | streamstats sum(projected_away) AS total` +
+			` | fields - total | search event_id="not-present"`,
+	)
+	sumOverflowErr := executeCompiledExpectingNoRows(
+		ctx,
+		connection,
+		hiddenSumOverflow,
+	)
+	if sumOverflowErr == nil ||
+		!strings.Contains(sumOverflowErr.Error(), StreamStatsInputLimitMarker) {
+		t.Fatalf(
+			"downstream-hidden streamstats sum overflow error = %v, want %q",
+			sumOverflowErr,
 			StreamStatsInputLimitMarker,
 		)
 	}

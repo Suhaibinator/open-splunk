@@ -13321,7 +13321,7 @@ func validateStreamAggregate(
 	measure := operator.Measure
 	if measure.Predicate != nil || measure.Percentile != 0 || measure.Output == "" {
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse streamstats: count contains unsupported metadata",
+			"compile ClickHouse streamstats: aggregate contains unsupported metadata",
 		)
 	}
 	switch measure.Function {
@@ -13334,15 +13334,20 @@ func validateStreamAggregate(
 				"compile ClickHouse streamstats: argument-free count contains input metadata",
 			)
 		}
-	case plan.AggregateFunctionCountValues:
+	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum:
+		form := "count"
+		if measure.Function == plan.AggregateFunctionSum {
+			form = "sum"
+		}
 		if !spl.IsExactUnquotedStreamStatsFieldName(measure.Input.Name) {
 			return plan.FieldRef{}, errors.New(
-				"compile ClickHouse streamstats: count input must be one exact unquoted field",
+				"compile ClickHouse streamstats: " + form +
+					" input must be one exact unquoted field",
 			)
 		}
 		if err := validateCanonicalFieldRef(
 			"streamstats",
-			"count input",
+			form+" input",
 			measure.Input,
 		); err != nil {
 			return plan.FieldRef{}, err
@@ -13357,12 +13362,18 @@ func validateStreamAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse streamstats: only count and count(field) are supported",
+			"compile ClickHouse streamstats: only count, count(field), and sum(field) are supported",
 		)
 	}
+	defaultOutput := ""
+	switch measure.Function {
+	case plan.AggregateFunctionCountValues:
+		defaultOutput = "count(" + measure.Input.Name + ")"
+	case plan.AggregateFunctionSum:
+		defaultOutput = "sum(" + measure.Input.Name + ")"
+	}
 	validOutput := spl.IsExactUnquotedStreamStatsFieldName(measure.Output) ||
-		(measure.Function == plan.AggregateFunctionCountValues &&
-			measure.Output == "count("+measure.Input.Name+")")
+		(defaultOutput != "" && measure.Output == defaultOutput)
 	if !validOutput {
 		return plan.FieldRef{}, errors.New(
 			"compile ClickHouse streamstats: output must be one exact unquoted field",
@@ -13420,6 +13431,7 @@ func validateStreamAggregate(
 func streamAggregateCompileState(
 	state compileState,
 	output plan.FieldRef,
+	function plan.AggregateFunction,
 	grouped bool,
 	stage int,
 	order []compiledSortKey,
@@ -13440,12 +13452,18 @@ func streamAggregateCompileState(
 			stage,
 		))
 	}
+	numberType := "UInt64"
+	numericIntegral := true
+	if function == plan.AggregateFunctionSum {
+		numberType = "Float64"
+		numericIntegral = false
+	}
 	next.visible[output.Name] = fieldState{
 		valueSQL:        quoteIdentifier(output.Name),
 		existsSQL:       existsSQL,
 		kind:            fieldKindNumber,
-		numberType:      "UInt64",
-		numericIntegral: true,
+		numberType:      numberType,
+		numericIntegral: numericIntegral,
 	}
 	// The running value may replace a public field that supplied the incoming
 	// order. Every key was snapshotted before replacement, so make those private
@@ -13478,11 +13496,11 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 		" PRECEDING AND 1 PRECEDING"
 }
 
-// compileStreamAggregate lowers one running row or field-occurrence count over
-// the order already established by the pipeline. Its only retained relation is
-// capped at one sentinel beyond the public limit; both row overflow and
-// Dynamic BY poison are checked inside the deferred barrier before any
-// downstream operator can hide them.
+// compileStreamAggregate lowers one running count or numeric sum over the order
+// already established by the pipeline. Its only retained relation is capped at
+// one sentinel beyond the public limit; both row overflow and Dynamic BY poison
+// are checked inside the deferred barrier before any downstream operator can
+// hide them.
 func compileStreamAggregate(
 	relation compiledRelation,
 	operator *plan.StreamAggregate,
@@ -13576,21 +13594,30 @@ func compileStreamAggregate(
 
 	measureAlias := ""
 	measureProjection := ""
-	if operator.Measure.Function == plan.AggregateFunctionCountValues {
+	if operator.Measure.Function == plan.AggregateFunctionCountValues ||
+		operator.Measure.Function == plan.AggregateFunctionSum {
 		input, exists, resolveErr := resolveCompiledField(operator.Measure.Input, state)
 		if resolveErr != nil {
 			return compiledRelation{}, compileState{}, nil, nil, resolveErr
 		}
-		contributionSQL := "toUInt64(0)"
+		measureSQL := "toUInt64(0)"
 		var contributionArgs []any
-		if exists {
-			contributionSQL, contributionArgs = countValueInputSQL(input)
+		switch operator.Measure.Function {
+		case plan.AggregateFunctionCountValues:
+			if exists {
+				measureSQL, contributionArgs = countValueInputSQL(input)
+			}
+		case plan.AggregateFunctionSum:
+			measureSQL = "CAST([], 'Array(Float64)')"
+			if exists {
+				measureSQL, contributionArgs = numericArrayInputSQL(input)
+			}
 		}
 		measureAlias = quoteIdentifier(fmt.Sprintf(
 			"__os_streamstats_measure_%d",
 			stage,
 		))
-		measureProjection = contributionSQL + " AS " + measureAlias
+		measureProjection = measureSQL + " AS " + measureAlias
 		prefixArgs = append(prefixArgs, contributionArgs...)
 	}
 
@@ -13683,11 +13710,26 @@ func compileStreamAggregate(
 	)
 	windowClause := strings.Join(windowParts, " ")
 	windowExpression := "count() OVER (" + windowClause + ")"
-	if operator.Measure.Function == plan.AggregateFunctionCountValues {
+	switch operator.Measure.Function {
+	case plan.AggregateFunctionCountValues:
 		windowExpression = "toUInt64(ifNull(sum(toUInt128(" + measureAlias +
 			")) OVER (" + windowClause + "), toUInt128(0)))"
-	} else if !operator.IncludeCurrent {
-		windowExpression = "ifNull(" + windowExpression + ", toUInt64(0))"
+	case plan.AggregateFunctionSum:
+		numericAggregate, supported := numericArrayAggregateSQL(
+			operator.Measure.Function,
+			measureAlias,
+		)
+		if !supported {
+			return compiledRelation{}, compileState{}, nil, nil, errors.New(
+				"compile ClickHouse streamstats: numeric aggregate is unsupported",
+			)
+		}
+		windowExpression = "CAST(" + numericAggregate + " OVER (" +
+			windowClause + ") AS Nullable(Float64))"
+	default:
+		if !operator.IncludeCurrent {
+			windowExpression = "ifNull(" + windowExpression + ", toUInt64(0))"
+		}
 	}
 
 	windowProjection := []string{
@@ -13716,6 +13758,7 @@ func compileStreamAggregate(
 	next := streamAggregateCompileState(
 		state,
 		output,
+		operator.Measure.Function,
 		len(groupAliases) > 0,
 		stage,
 		orderKeys,
@@ -13725,8 +13768,12 @@ func compileStreamAggregate(
 	outputExists := "1"
 	if len(groupAliases) > 0 {
 		outputExists = windowAlias + "." + eligibleAlias + " != 0"
+		nullType := "UInt64"
+		if operator.Measure.Function == plan.AggregateFunctionSum {
+			nullType = "Float64"
+		}
 		outputValue = "if(" + outputExists + ", " + outputValue +
-			", CAST(NULL AS Nullable(UInt64)))"
+			", CAST(NULL AS Nullable(" + nullType + ")))"
 	}
 	projection := eventAggregateProjection(
 		state,

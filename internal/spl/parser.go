@@ -1785,11 +1785,11 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 
 const streamStatsSyntaxSuggestion = "streamstats count AS running_count"
 
-// parseStreamStatsCommand accepts one deliberately bounded running-count or
-// running field-occurrence-count surface. Splunk commonly places options both
-// before and after the aggregate (and examples also place them after BY), so
-// this parser treats supported name=value options as position-independent
-// while keeping the aggregate, alias, and grouping tuple exact.
+// parseStreamStatsCommand accepts one deliberately bounded running count or
+// exact-field numeric sum. Splunk commonly places options both before and
+// after the aggregate (and examples also place them after BY), so this parser
+// treats supported name=value options as position-independent while keeping
+// the aggregate, alias, and grouping tuple exact.
 func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 	command := &StreamStatsCommand{
 		Current: true,
@@ -1875,7 +1875,7 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 			case "time_window", "allnum", "reset_before", "reset_after", "reset_on_change":
 				return nil, p.unsupportedStreamStatsSyntax(
 					option,
-					fmt.Sprintf("streamstats option %q is not supported by the running-count compatibility slice", option.text),
+					fmt.Sprintf("streamstats option %q is not supported by the bounded compatibility slice", option.text),
 				)
 			default:
 				return nil, p.unsupportedStreamStatsSyntax(
@@ -1906,23 +1906,35 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 			}
 		}
 
-		if current.kind == tokenWord && strings.EqualFold(current.text, "count") {
+		if current.kind == tokenWord &&
+			(strings.EqualFold(current.text, "count") || strings.EqualFold(current.text, "sum")) {
 			if aggregateSeen || bySeen {
-				return nil, p.unsupportedStreamStatsAggregate(current, "streamstats supports exactly one count aggregate")
+				return nil, p.unsupportedStreamStatsAggregate(current, "streamstats supports exactly one aggregate")
 			}
-			if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen {
-				countPredicate := p.index+3 < len(p.tokens) &&
+			function := AggregateFunctionCountValues
+			form := "count"
+			if strings.EqualFold(current.text, "sum") {
+				function = AggregateFunctionSum
+				form = "sum"
+			}
+			hasArguments := p.index+1 < len(p.tokens) &&
+				p.tokens[p.index+1].kind == tokenLeftParen
+			if hasArguments {
+				evalArgument := p.index+3 < len(p.tokens) &&
 					p.tokens[p.index+2].kind == tokenWord &&
 					strings.EqualFold(p.tokens[p.index+2].text, "eval") &&
 					p.tokens[p.index+3].kind == tokenLeftParen
-				if countPredicate ||
+				if evalArgument ||
 					p.index+2 < len(p.tokens) && p.tokens[p.index+2].kind == tokenRightParen {
 					return nil, p.unsupportedStreamStatsAggregate(
 						current,
-						"streamstats supports bare count or count(field), not count() or count(eval(...))",
+						fmt.Sprintf("streamstats %s(field) requires one exact field, not %s() or %s(eval(...))", form, form, form),
 					)
 				}
-				aggregate, aggregateEnd, aggregateErr := p.parseStreamStatsCountField(current)
+				aggregate, aggregateEnd, aggregateErr := p.parseStreamStatsFieldAggregate(
+					current,
+					function,
+				)
 				if aggregateErr != nil {
 					return nil, aggregateErr
 				}
@@ -1930,6 +1942,12 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 				command.Aggregate = aggregate
 				end = aggregateEnd
 				continue
+			}
+			if function == AggregateFunctionSum {
+				return nil, p.unsupportedStreamStatsAggregate(
+					current,
+					"streamstats sum requires one exact field in parentheses",
+				)
 			}
 			aggregateSeen = true
 			command.Aggregate = StatsAggregate{
@@ -1945,7 +1963,7 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 
 		if current.kind == tokenWord && strings.EqualFold(current.text, "AS") {
 			if !aggregateSeen || aliasSeen || bySeen {
-				return nil, p.unsupportedStreamStatsSyntax(current, "streamstats AS must follow its count aggregate and may appear only once before BY")
+				return nil, p.unsupportedStreamStatsSyntax(current, "streamstats AS must follow its aggregate and may appear only once before BY")
 			}
 			p.advance()
 			alias := p.current()
@@ -1967,7 +1985,7 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 
 		if current.kind == tokenWord && strings.EqualFold(current.text, "BY") {
 			if !aggregateSeen || bySeen {
-				return nil, p.unsupportedStreamStatsSyntax(current, "streamstats accepts one BY clause after its count aggregate")
+				return nil, p.unsupportedStreamStatsSyntax(current, "streamstats accepts one BY clause after its aggregate")
 			}
 			bySeen = true
 			p.advance()
@@ -1992,14 +2010,14 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 		if current.kind == tokenWord {
 			return nil, p.unsupportedStreamStatsAggregate(
 				current,
-				fmt.Sprintf("streamstats aggregate %q is not supported; use count or count(field)", current.text),
+				fmt.Sprintf("streamstats aggregate %q is not supported; use count, count(field), or sum(field)", current.text),
 			)
 		}
-		return nil, p.unsupportedStreamStatsSyntax(current, "streamstats requires one count or count(field) aggregate")
+		return nil, p.unsupportedStreamStatsSyntax(current, "streamstats requires one count, count(field), or sum(field) aggregate")
 	}
 
 	if !aggregateSeen {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "streamstats requires one count or count(field) aggregate")
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "streamstats requires one count, count(field), or sum(field) aggregate")
 	}
 	if len(command.GroupBy) > 0 && command.Window > 0 &&
 		(!command.GlobalSpecified || command.Global) {
@@ -2019,14 +2037,19 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 	return command, nil
 }
 
-// parseStreamStatsCountField consumes the exact long-form count(field) call.
-// It deliberately does not share eventstats parsing because the two commands
-// have different alias requirements and diagnostic namespaces.
-func (p *parser) parseStreamStatsCountField(
+// parseStreamStatsFieldAggregate consumes an exact long-form count(field) or
+// sum(field) call. It deliberately does not share eventstats parsing because
+// the two commands have different alias requirements and diagnostic namespaces.
+func (p *parser) parseStreamStatsFieldAggregate(
 	functionToken token,
+	function AggregateFunction,
 ) (StatsAggregate, Position, error) {
+	form := "count"
+	if function == AggregateFunctionSum {
+		form = "sum"
+	}
 	aggregate := StatsAggregate{
-		Function: AggregateFunctionCountValues,
+		Function: function,
 		Range:    functionToken.sourceRange,
 	}
 	end := functionToken.sourceRange.End
@@ -2034,7 +2057,7 @@ func (p *parser) parseStreamStatsCountField(
 	if !p.match(tokenLeftParen) {
 		return StatsAggregate{}, end, p.unsupportedStreamStatsAggregate(
 			functionToken,
-			"streamstats count(field) requires one exact field in parentheses",
+			fmt.Sprintf("streamstats %s(field) requires one exact field in parentheses", form),
 		)
 	}
 
@@ -2042,13 +2065,13 @@ func (p *parser) parseStreamStatsCountField(
 	if input.kind == tokenWord && strings.Contains(input.text, "*") {
 		return StatsAggregate{}, end, p.unsupportedStreamStatsSyntax(
 			input,
-			"wildcard streamstats count fields are not supported",
+			fmt.Sprintf("wildcard streamstats %s fields are not supported", form),
 		)
 	}
 	if !isExactUnquotedStreamStatsField(input) {
 		return StatsAggregate{}, end, p.unsupportedStreamStatsSyntax(
 			input,
-			"streamstats count(field) requires one exact unquoted input field",
+			fmt.Sprintf("streamstats %s(field) requires one exact unquoted input field", form),
 		)
 	}
 	aggregate.Input = input.text
@@ -2057,12 +2080,12 @@ func (p *parser) parseStreamStatsCountField(
 	if !p.match(tokenRightParen) {
 		return StatsAggregate{}, end, p.unsupportedStreamStatsAggregate(
 			p.current(),
-			"streamstats count(field) requires exactly one field and a closing ')'",
+			fmt.Sprintf("streamstats %s(field) requires exactly one field and a closing ')'", form),
 		)
 	}
 	end = p.previous().sourceRange.End
 	aggregate.Range.End = end
-	aggregate.Alias = "count(" + input.text + ")"
+	aggregate.Alias = form + "(" + input.text + ")"
 	aggregate.AliasRange = Range{
 		Start: functionToken.sourceRange.Start,
 		End:   end,

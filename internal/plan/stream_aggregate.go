@@ -8,9 +8,21 @@ func validStreamAggregateFieldName(name string) bool {
 
 func validStreamAggregateOutputName(measure AggregateMeasure) bool {
 	return validStreamAggregateFieldName(measure.Output) ||
-		(measure.Function == AggregateFunctionCountValues &&
+		((measure.Function == AggregateFunctionCountValues ||
+			measure.Function == AggregateFunctionSum) &&
 			measure.Input.Name != "" &&
-			measure.Output == "count("+measure.Input.Name+")")
+			measure.Output == streamAggregateDefaultOutput(measure))
+}
+
+func streamAggregateDefaultOutput(measure AggregateMeasure) string {
+	switch measure.Function {
+	case AggregateFunctionCountValues:
+		return "count(" + measure.Input.Name + ")"
+	case AggregateFunctionSum:
+		return "sum(" + measure.Input.Name + ")"
+	default:
+		return ""
+	}
 }
 
 // validStreamAggregateContract is shared by every analysis that relies on
@@ -35,7 +47,7 @@ func validStreamAggregateContract(operator *StreamAggregate) bool {
 			operator.Measure.Input.Range != (spl.Range{}) {
 			return false
 		}
-	case AggregateFunctionCountValues:
+	case AggregateFunctionCountValues, AggregateFunctionSum:
 		if !validStreamAggregateFieldName(operator.Measure.Input.Name) ||
 			!validResolvedEventAggregateField(operator.Measure.Input) {
 			return false

@@ -527,11 +527,29 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		return context
 	}
 	if parenthesisDepth(tokens) > 0 {
-		if countIndex := topLevelWordIndex(tokens, "count"); countIndex >= 0 && countIndex+1 < len(tokens) &&
-			tokens[countIndex+1].kind == tokenLeftParen {
+		aggregateIndex := topLevelWordIndex(tokens, "count")
+		if aggregateIndex < 0 {
+			aggregateIndex = topLevelWordIndex(tokens, "sum")
+		}
+		if aggregateIndex >= 0 && aggregateIndex+1 < len(tokens) &&
+			tokens[aggregateIndex+1].kind == tokenLeftParen {
 			context.Kinds = []SuggestionKind{SuggestionKindField}
 		}
 		return context
+	}
+	if sumIndex := topLevelWordIndex(tokens, "sum"); sumIndex >= 0 {
+		byIndex := topLevelWordIndex(tokens, "BY")
+		alias := sumIndex > 0 && tokenWordEqual(tokens[sumIndex-1], "AS")
+		group := byIndex >= 0 && sumIndex > byIndex
+		optionValue := sumIndex > 0 && tokens[sumIndex-1].kind == tokenEqual
+		call := sumIndex+1 < len(tokens) &&
+			tokens[sumIndex+1].kind == tokenLeftParen
+		if !alias && !group && !optionValue && !call {
+			// Unlike bare count, bare sum is not a complete aggregate. Do not
+			// offer AS, BY, or trailing options that would turn the current
+			// parser-rejected surface into a longer invalid command.
+			return context
+		}
 	}
 	if len(tokens) > 0 && tokenWordEqual(tokens[len(tokens)-1], "AS") {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
@@ -547,9 +565,9 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		context.Keywords = optionKeywords
 		return context
 	}
-	if topLevelWordIndex(tokens, "count") < 0 {
+	if topLevelWordIndex(tokens, "count") < 0 && topLevelWordIndex(tokens, "sum") < 0 {
 		context = aggregateSuggestionContext(context)
-		context.FunctionNames = []string{"count"}
+		context.FunctionNames = []string{"count", "sum"}
 		context.Kinds = append(context.Kinds, SuggestionKindKeyword)
 		context.Keywords = optionKeywords
 		return context

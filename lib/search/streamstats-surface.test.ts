@@ -14,6 +14,7 @@ test("streamstats is advertised once with the bounded supported syntax", () => {
   assert.equal(definitions[0]?.insertion, "streamstats count AS running_count");
   assert.match(definitions[0]?.detail ?? "", /bounded running row count/i);
   assert.match(definitions[0]?.detail ?? "", /field occurrence count/i);
+  assert.match(definitions[0]?.detail ?? "", /numeric sum/i);
   assert.match(definitions[0]?.detail ?? "", /deterministic pipeline order/i);
   assert.match(definitions[0]?.detail ?? "", /excluding the current row/i);
   assert.match(definitions[0]?.detail ?? "", /exact fields/i);
@@ -28,6 +29,12 @@ test("frontend support classification accepts streamstats without weakening reje
     "index=main | STREAMSTATS current=f window=3 global=f count AS prior BY service",
   );
   assert.equal(supported, null);
+  assert.equal(
+    getQueryDiagnostic(
+      "index=main | STREAMSTATS current=f window=3 global=f sum(bytes) AS prior_bytes BY service",
+    ),
+    null,
+  );
 
   const unsupported = getQueryDiagnostic("index=main | transaction trace_id");
   assert.equal(unsupported?.kind, "unsupported");

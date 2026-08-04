@@ -641,13 +641,13 @@ func (*EventStatsCommand) command()             {}
 func (*EventStatsCommand) Name() string         { return "eventstats" }
 func (c *EventStatsCommand) SourceRange() Range { return c.Range }
 
-// StreamStatsCommand appends one running row or exact-field occurrence count
-// to every input row. Aggregate carries the common count/count(field) input,
-// source locations, and alias representation. Current controls whether the
-// present row contributes, Window is zero for the complete bounded prefix,
+// StreamStatsCommand appends one running row count, exact-field occurrence
+// count, or exact-field numeric sum to every input row. Aggregate carries the
+// input, source locations, and alias representation. Current controls whether
+// the present row contributes, Window is zero for the complete bounded prefix,
 // and Global is meaningful only for a positive window. GlobalSpecified
-// distinguishes Splunk's default global window from the explicit
-// global=false required by the supported grouped finite-window form.
+// distinguishes Splunk's default global window from the explicit global=false
+// required by the supported grouped finite-window form.
 type StreamStatsCommand struct {
 	Aggregate        StatsAggregate
 	Current          bool

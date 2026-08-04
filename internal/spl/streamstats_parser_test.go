@@ -241,6 +241,92 @@ func TestParseStreamStatsCountField(t *testing.T) {
 	}
 }
 
+func TestParseStreamStatsSumField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, source, input, alias string
+		explicitAlias              bool
+		current                    bool
+		window                     uint64
+		global                     bool
+		groups                     []string
+	}{
+		{
+			name:    "default output preserves input spelling",
+			source:  `index=main | streamstats SuM(Payload.Bytes)`,
+			input:   "Payload.Bytes",
+			alias:   "sum(Payload.Bytes)",
+			current: true,
+			global:  true,
+		},
+		{
+			name:          "explicit output and bounded group window",
+			source:        `index=main | streamstats current=f window=3 global=f sum(payload.bytes) AS prior_bytes BY service`,
+			input:         "payload.bytes",
+			alias:         "prior_bytes",
+			explicitAlias: true,
+			window:        3,
+			groups:        []string{"service"},
+		},
+		{
+			name:   "trailing options",
+			source: `index=main | streamstats sum(bytes) BY service current=false window=0 global=t`,
+			input:  "bytes",
+			alias:  "sum(bytes)",
+			global: true,
+			groups: []string{"service"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*StreamStatsCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *StreamStatsCommand", query.Commands[0])
+			}
+			if command.Aggregate.Function != AggregateFunctionSum ||
+				command.Aggregate.Input != test.input ||
+				command.Aggregate.InputRange == (Range{}) ||
+				command.Aggregate.Predicate != nil ||
+				command.Aggregate.Percentile != 0 ||
+				command.Aggregate.Alias != test.alias ||
+				command.Aggregate.ExplicitAlias != test.explicitAlias ||
+				command.Current != test.current ||
+				command.Window != test.window ||
+				command.Global != test.global {
+				t.Fatalf("streamstats sum(field) command = %#v", command)
+			}
+			if len(command.GroupBy) != len(test.groups) {
+				t.Fatalf("groups = %#v, want %v", command.GroupBy, test.groups)
+			}
+			for index, want := range test.groups {
+				if command.GroupBy[index].Name != want {
+					t.Fatalf("group %d = %#v, want %q", index, command.GroupBy[index], want)
+				}
+			}
+			assertSourceRangeText(t, test.source, command.Aggregate.InputRange, test.input)
+			if test.explicitAlias {
+				assertSourceRangeText(t, test.source, command.Aggregate.AliasRange, test.alias)
+			} else {
+				functionStart := strings.Index(strings.ToLower(test.source), "sum(")
+				assertSourceRangeText(
+					t,
+					test.source,
+					command.Aggregate.AliasRange,
+					test.source[functionStart:functionStart+len("sum(")+len(test.input)+1],
+				)
+			}
+		})
+	}
+}
+
 func TestExactUnquotedStreamStatsFieldNameMatchesParserTokenBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -257,7 +343,11 @@ func TestExactUnquotedStreamStatsFieldNameMatchesParserTokenBoundary(t *testing.
 	for _, name := range []string{
 		"",
 		"status host",
+		"status\thost",
+		"status\nhost",
 		"status\u00a0host",
+		"status\u2003host",
+		"status\u3000host",
 		"status,host",
 		"status(host)",
 		"status|host",
@@ -316,7 +406,17 @@ func TestParseStreamStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 		{"backtick quoted count input", "index=main | streamstats count(`status`)", "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "`status`"},
 		{"multiple count inputs", `index=main | streamstats count(status, host)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ","},
 		{"missing count close", `index=main | streamstats count(status`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ""},
-		{"other aggregate", `index=main | streamstats sum(bytes)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "sum"},
+		{"bare sum", `index=main | streamstats sum`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "sum"},
+		{"empty sum", `index=main | streamstats sum()`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "sum"},
+		{"eval sum", `index=main | streamstats sum(eval(bytes>0))`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "sum"},
+		{"abbreviated sum", `index=main | streamstats s(bytes)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "s"},
+		{"wildcard sum input", `index=main | streamstats sum(bytes*)`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "bytes*"},
+		{"quoted sum input", `index=main | streamstats sum("bytes")`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", `"bytes"`},
+		{"single quoted sum input", `index=main | streamstats sum('bytes')`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "'bytes'"},
+		{"backtick quoted sum input", "index=main | streamstats sum(`bytes`)", "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "`bytes`"},
+		{"multiple sum inputs", `index=main | streamstats sum(bytes, duration)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ","},
+		{"missing sum close", `index=main | streamstats sum(bytes`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ""},
+		{"other aggregate", `index=main | streamstats avg(bytes)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "avg"},
 		{"comma second aggregate", `index=main | streamstats count, count`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ","},
 		{"space second aggregate", `index=main | streamstats count count`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "count"},
 		{"allnum", `index=main | streamstats allnum=false count`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "allnum"},
@@ -411,8 +511,10 @@ func TestClassifyResultShapeTreatsStreamStatsAsRowPreserving(t *testing.T) {
 	}{
 		{source: `index=main | streamstats count`, want: ResultShape{Kind: ResultKindEvents}},
 		{source: `index=main | streamstats count(status)`, want: ResultShape{Kind: ResultKindEvents}},
+		{source: `index=main | streamstats sum(bytes)`, want: ResultShape{Kind: ResultKindEvents}},
 		{source: `index=main | stats count BY host | streamstats count AS groups`, want: ResultShape{Kind: ResultKindStatistics}},
 		{source: `index=main | stats count BY host | streamstats count(count) AS populated`, want: ResultShape{Kind: ResultKindStatistics}},
+		{source: `index=main | stats sum(bytes) AS bytes BY host | streamstats sum(bytes) AS running`, want: ResultShape{Kind: ResultKindStatistics}},
 		{
 			source: `index=main | timechart span=5m count BY level | streamstats count AS buckets`,
 			want:   ResultShape{Kind: ResultKindTimeSeries, RuntimeNamedColumns: true},

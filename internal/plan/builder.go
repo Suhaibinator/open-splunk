@@ -817,25 +817,33 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 				measure.Function = AggregateFunctionCountRows
-			case spl.AggregateFunctionCountValues:
+			case spl.AggregateFunctionCountValues, spl.AggregateFunctionSum:
+				form := "count"
+				function := AggregateFunctionCountValues
+				if aggregate.Function == spl.AggregateFunctionSum {
+					form = "sum"
+					function = AggregateFunctionSum
+				}
 				if aggregate.Input == "" ||
 					aggregate.InputRange == (spl.Range{}) ||
 					aggregate.Predicate != nil ||
 					aggregate.Percentile != 0 ||
 					aggregate.Alias == "" ||
 					(!aggregate.ExplicitAlias &&
-						aggregate.Alias != "count("+aggregate.Input+")") {
+						aggregate.Alias != form+"("+aggregate.Input+")") {
 					return nil, &Diagnostic{
 						Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
-						Message: "streamstats count(field) requires one exact input " +
-							"with its canonical default or one explicit alias",
+						Message: fmt.Sprintf(
+							"streamstats %s(field) requires one exact input with its canonical default or one explicit alias",
+							form,
+						),
 						Range: aggregate.Range,
 					}
 				}
 				if !validStreamAggregateFieldName(aggregate.Input) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
-						Message: "streamstats count(field) requires one exact unquoted input field",
+						Message: fmt.Sprintf("streamstats %s(field) requires one exact unquoted input field", form),
 						Range:   aggregate.InputRange,
 					}
 				}
@@ -846,13 +854,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				if inputErr != nil {
 					return nil, inputErr
 				}
-				measure.Function = AggregateFunctionCountValues
+				measure.Function = function
 				measure.Input = input
 			default:
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
-					Message: "streamstats currently supports exactly one count " +
-						"or count(field) aggregate",
+					Message: "streamstats currently supports exactly one count, " +
+						"count(field), or sum(field) aggregate",
 					Range: aggregate.Range,
 				}
 			}
