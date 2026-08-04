@@ -106,10 +106,11 @@ projection.
 
 `POST /api/v1/audit/events/list` is administrator-only. Tenant and owner scope
 come from the authenticated browser principal and cannot be supplied on the
-wire. The first contract contains successful ingestion-token create, update,
-and revoke events only. Actor kind, actor role, action, and target kind are
+wire. The first contract contains successful ingestion-token, index, and app
+administration mutations. Actor kind, actor role, action, and target kind are
 fixed enums; the projection contains no arbitrary payload or credential
-material.
+material. App deletion reports the final archived app version rather than a
+fictitious post-delete generation.
 
 Pages are ordered by descending tenant-local sequence and capped at 200 rows.
 The opaque HMAC-authenticated cursor binds tenant, exact normalized filters,

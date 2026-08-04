@@ -20,12 +20,8 @@ func (store *Store) AppendIndexMutationInTransaction(
 	tenantID string,
 	event control.IndexMutationAuditEvent,
 ) error {
-	actor, explicit := ActorFromContext(ctx)
-	if !explicit || !validSuccessfulActor(actor) {
-		return fmt.Errorf(
-			"%w: audit actor cannot perform successful mutations",
-			control.ErrInvalidArgument,
-		)
+	if err := requireExplicitSuccessfulActor(ctx); err != nil {
+		return err
 	}
 	action, ok := indexMutationAction(event.Action)
 	if !ok {

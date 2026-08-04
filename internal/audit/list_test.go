@@ -231,12 +231,9 @@ func TestListRejectsInvalidRequestsSeparatelyFromInvalidCursors(t *testing.T) {
 		{name: "page size", tenantID: "tenant", request: ListRequest{PageSize: MaximumListPageSize + 1}},
 		{name: "oversized token", tenantID: "tenant", request: ListRequest{PageToken: strings.Repeat("x", maximumListCursorBytes+1)}},
 		{name: "unknown action", tenantID: "tenant", request: ListRequest{ActionFilters: []Action{"other"}}},
-		{name: "too many actions", tenantID: "tenant", request: ListRequest{ActionFilters: []Action{
-			ActionIngestionTokenCreate, ActionIngestionTokenUpdate,
-			ActionIngestionTokenRevoke, ActionIndexCreate,
-			ActionIndexUpdate, ActionIndexActivate, ActionIndexArchive,
-			ActionIndexDeleteKeepData, ActionIndexDeleteData, ActionIndexCreate,
-		}}},
+		{name: "too many actions", tenantID: "tenant", request: ListRequest{
+			ActionFilters: append(allKnownAuditActions(), ActionAppCreate),
+		}},
 		{name: "actor", tenantID: "tenant", request: ListRequest{ActorID: &badActor}},
 		{name: "target", tenantID: "tenant", request: ListRequest{TargetKind: &badTarget}},
 	}

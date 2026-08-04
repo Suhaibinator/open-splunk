@@ -372,6 +372,16 @@ func auditActionFromProto(value opensplunkv1.AuditAction) (audit.Action, bool) {
 		return audit.ActionIndexDeleteKeepData, true
 	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA:
 		return audit.ActionIndexDeleteData, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE:
+		return audit.ActionAppCreate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE:
+		return audit.ActionAppUpdate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE:
+		return audit.ActionAppActivate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE:
+		return audit.ActionAppArchive, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE:
+		return audit.ActionAppDelete, true
 	default:
 		return "", false
 	}
@@ -397,6 +407,16 @@ func auditActionToProto(value audit.Action) (opensplunkv1.AuditAction, bool) {
 		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, true
 	case audit.ActionIndexDeleteData:
 		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, true
+	case audit.ActionAppCreate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE, true
+	case audit.ActionAppUpdate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE, true
+	case audit.ActionAppActivate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE, true
+	case audit.ActionAppArchive:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE, true
+	case audit.ActionAppDelete:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE, true
 	default:
 		return opensplunkv1.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
 	}
@@ -410,6 +430,8 @@ func auditTargetKindFromProto(
 		return audit.TargetKindIngestionToken, true
 	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX:
 		return audit.TargetKindIndex, true
+	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP:
+		return audit.TargetKindApp, true
 	default:
 		return "", false
 	}
@@ -423,6 +445,8 @@ func auditTargetKindToProto(
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN, true
 	case audit.TargetKindIndex:
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX, true
+	case audit.TargetKindApp:
+		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP, true
 	default:
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
 	}

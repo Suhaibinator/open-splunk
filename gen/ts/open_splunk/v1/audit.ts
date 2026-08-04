@@ -103,6 +103,11 @@ export enum AuditAction {
   AUDIT_ACTION_INDEX_ARCHIVE = 7,
   AUDIT_ACTION_INDEX_DELETE_KEEP_DATA = 8,
   AUDIT_ACTION_INDEX_DELETE_DATA = 9,
+  AUDIT_ACTION_APP_CREATE = 10,
+  AUDIT_ACTION_APP_UPDATE = 11,
+  AUDIT_ACTION_APP_ACTIVATE = 12,
+  AUDIT_ACTION_APP_ARCHIVE = 13,
+  AUDIT_ACTION_APP_DELETE = 14,
   UNRECOGNIZED = -1,
 }
 
@@ -138,6 +143,21 @@ export function auditActionFromJSON(object: any): AuditAction {
     case 9:
     case "AUDIT_ACTION_INDEX_DELETE_DATA":
       return AuditAction.AUDIT_ACTION_INDEX_DELETE_DATA;
+    case 10:
+    case "AUDIT_ACTION_APP_CREATE":
+      return AuditAction.AUDIT_ACTION_APP_CREATE;
+    case 11:
+    case "AUDIT_ACTION_APP_UPDATE":
+      return AuditAction.AUDIT_ACTION_APP_UPDATE;
+    case 12:
+    case "AUDIT_ACTION_APP_ACTIVATE":
+      return AuditAction.AUDIT_ACTION_APP_ACTIVATE;
+    case 13:
+    case "AUDIT_ACTION_APP_ARCHIVE":
+      return AuditAction.AUDIT_ACTION_APP_ARCHIVE;
+    case 14:
+    case "AUDIT_ACTION_APP_DELETE":
+      return AuditAction.AUDIT_ACTION_APP_DELETE;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -167,6 +187,16 @@ export function auditActionToJSON(object: AuditAction): string {
       return "AUDIT_ACTION_INDEX_DELETE_KEEP_DATA";
     case AuditAction.AUDIT_ACTION_INDEX_DELETE_DATA:
       return "AUDIT_ACTION_INDEX_DELETE_DATA";
+    case AuditAction.AUDIT_ACTION_APP_CREATE:
+      return "AUDIT_ACTION_APP_CREATE";
+    case AuditAction.AUDIT_ACTION_APP_UPDATE:
+      return "AUDIT_ACTION_APP_UPDATE";
+    case AuditAction.AUDIT_ACTION_APP_ACTIVATE:
+      return "AUDIT_ACTION_APP_ACTIVATE";
+    case AuditAction.AUDIT_ACTION_APP_ARCHIVE:
+      return "AUDIT_ACTION_APP_ARCHIVE";
+    case AuditAction.AUDIT_ACTION_APP_DELETE:
+      return "AUDIT_ACTION_APP_DELETE";
     case AuditAction.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -177,6 +207,7 @@ export enum AuditTargetKind {
   AUDIT_TARGET_KIND_UNSPECIFIED = 0,
   AUDIT_TARGET_KIND_INGESTION_TOKEN = 1,
   AUDIT_TARGET_KIND_INDEX = 2,
+  AUDIT_TARGET_KIND_APP = 3,
   UNRECOGNIZED = -1,
 }
 
@@ -191,6 +222,9 @@ export function auditTargetKindFromJSON(object: any): AuditTargetKind {
     case 2:
     case "AUDIT_TARGET_KIND_INDEX":
       return AuditTargetKind.AUDIT_TARGET_KIND_INDEX;
+    case 3:
+    case "AUDIT_TARGET_KIND_APP":
+      return AuditTargetKind.AUDIT_TARGET_KIND_APP;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -206,6 +240,8 @@ export function auditTargetKindToJSON(object: AuditTargetKind): string {
       return "AUDIT_TARGET_KIND_INGESTION_TOKEN";
     case AuditTargetKind.AUDIT_TARGET_KIND_INDEX:
       return "AUDIT_TARGET_KIND_INDEX";
+    case AuditTargetKind.AUDIT_TARGET_KIND_APP:
+      return "AUDIT_TARGET_KIND_APP";
     case AuditTargetKind.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

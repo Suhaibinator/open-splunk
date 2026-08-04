@@ -36,6 +36,17 @@ func ActorFromContext(ctx context.Context) (Actor, bool) {
 	return actor.detached(), true
 }
 
+func requireExplicitSuccessfulActor(ctx context.Context) error {
+	actor, explicit := ActorFromContext(ctx)
+	if !explicit || !validSuccessfulActor(actor) {
+		return fmt.Errorf(
+			"%w: audit actor cannot perform successful mutations",
+			control.ErrInvalidArgument,
+		)
+	}
+	return nil
+}
+
 func actorForAppend(ctx context.Context) Actor {
 	if actor, ok := ActorFromContext(ctx); ok {
 		return actor

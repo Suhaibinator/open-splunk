@@ -836,6 +836,7 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 		firstCatalog,
 		firstCursorKey,
 		authenticator,
+		nil,
 	)
 	if !allRuntimeAppBytesCleared(firstCursorKey) {
 		_ = firstDB.Close()
@@ -983,6 +984,7 @@ func TestRuntimeAppCatalogEndToEndHTTPAndCursorReopen(t *testing.T) {
 		secondCatalog,
 		secondCursorKey,
 		authenticator,
+		nil,
 	)
 	if !allRuntimeAppBytesCleared(secondCursorKey) {
 		t.Fatal("reopened caller key was not cleared after handler construction")
@@ -1039,6 +1041,7 @@ func newRuntimeAppHTTPHandlerForTest(
 	catalog *runtimeAppCatalog,
 	cursorKey []byte,
 	authenticator auth.BrowserAuthenticator,
+	auditEvents server.AuditEvents,
 ) *server.Handler {
 	t.Helper()
 	config := runtimeServerConfig()
@@ -1049,6 +1052,7 @@ func newRuntimeAppHTTPHandlerForTest(
 	config.TenantID = "tenant-a"
 	config.OwnerID = "administrator"
 	config.AdministrativeAllowedHosts = []string{"127.0.0.1"}
+	config.AuditEvents = auditEvents
 	handler, err := server.NewHandler(config)
 	clear(cursorKey)
 	if err != nil {

@@ -114,6 +114,11 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE,
 		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
 		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA,
+		opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE,
 	}
 	service := &fakeAuditEvents{}
 	handler := newAuditTestHandler(t, service)
@@ -128,6 +133,69 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 	if calls != 1 || len(request.ActionFilters) != audit.MaximumActionFilters ||
 		request.TargetKind == nil || *request.TargetKind != audit.TargetKindIndex {
 		t.Fatalf("complete audit filter call = %d/%+v", calls, request)
+	}
+}
+
+func TestAppAuditProtoTaxonomyRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		action  audit.Action
+		proto   opensplunkv1.AuditAction
+		version uint64
+	}{
+		{audit.ActionAppCreate, opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE, 1},
+		{audit.ActionAppUpdate, opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE, 2},
+		{audit.ActionAppActivate, opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE, 3},
+		{audit.ActionAppArchive, opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE, 4},
+		{audit.ActionAppDelete, opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE, 4},
+	} {
+		testCase := testCase
+		t.Run(string(testCase.action), func(t *testing.T) {
+			t.Parallel()
+			fromProto, ok := auditActionFromProto(testCase.proto)
+			if !ok || fromProto != testCase.action {
+				t.Fatalf("auditActionFromProto(%v) = (%q, %t)", testCase.proto, fromProto, ok)
+			}
+			toProto, ok := auditActionToProto(testCase.action)
+			if !ok || toProto != testCase.proto {
+				t.Fatalf("auditActionToProto(%q) = (%v, %t)", testCase.action, toProto, ok)
+			}
+			message, err := auditEventToProto(audit.Event{
+				Sequence:   1,
+				TenantID:   "tenant",
+				OccurredAt: time.Date(2026, time.August, 3, 20, 21, 22, 123456000, time.UTC),
+				Actor: audit.Actor{
+					Kind: audit.ActorKindBrowser,
+					ID:   "administrator",
+					Role: audit.ActorRoleAdministrator,
+				},
+				Action:        testCase.action,
+				TargetKind:    audit.TargetKindApp,
+				TargetID:      "app-observability",
+				TargetVersion: testCase.version,
+			}, "tenant")
+			if err != nil {
+				t.Fatalf("auditEventToProto(%q): %v", testCase.action, err)
+			}
+			if message.GetAction() != testCase.proto ||
+				message.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP ||
+				message.GetTargetId() != "app-observability" ||
+				message.GetTargetVersion() != testCase.version {
+				t.Fatalf("app audit proto = %+v", message)
+			}
+		})
+	}
+
+	fromProto, ok := auditTargetKindFromProto(
+		opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP,
+	)
+	if !ok || fromProto != audit.TargetKindApp {
+		t.Fatalf("auditTargetKindFromProto(app) = (%q, %t)", fromProto, ok)
+	}
+	toProto, ok := auditTargetKindToProto(audit.TargetKindApp)
+	if !ok || toProto != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP {
+		t.Fatalf("auditTargetKindToProto(app) = (%v, %t)", toProto, ok)
 	}
 }
 
@@ -514,7 +582,12 @@ func TestAuditEventListRejectsInvalidFiltersBeforeStorage(t *testing.T) {
 				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE,
 				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
 				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_APP_UPDATE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_APP_CREATE,
 			}},
 		},
 		{

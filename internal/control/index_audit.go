@@ -81,7 +81,7 @@ func NewAuditedIndexAdministration(
 			ErrInvalidArgument,
 		)
 	}
-	if options.Appender == nil || isNilIndexMutationAuditAppender(options.Appender) {
+	if options.Appender == nil || isNilMutationAuditAppender(options.Appender) {
 		return nil, fmt.Errorf(
 			"%w: index audit appender is required",
 			ErrInvalidArgument,
@@ -94,7 +94,7 @@ func NewAuditedIndexAdministration(
 	}, nil
 }
 
-func isNilIndexMutationAuditAppender(appender IndexMutationAuditAppender) bool {
+func isNilMutationAuditAppender(appender any) bool {
 	value := reflect.ValueOf(appender)
 	switch value.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,

@@ -156,6 +156,15 @@ func (catalog *AppCatalog) CreateApp(
 	scope AppAccessScope,
 	definition AppDefinition,
 ) (AppWorkspace, error) {
+	return catalog.createApp(ctx, scope, definition, nil)
+}
+
+func (catalog *AppCatalog) createApp(
+	ctx context.Context,
+	scope AppAccessScope,
+	definition AppDefinition,
+	auditPublisher appMutationAuditPublisher,
+) (AppWorkspace, error) {
 	if err := validateAppContext(ctx); err != nil {
 		return AppWorkspace{}, err
 	}
@@ -180,7 +189,14 @@ func (catalog *AppCatalog) CreateApp(
 		if !validCanonicalAppID(appID) {
 			return AppWorkspace{}, errors.New("generate app ID: generator returned an invalid ID")
 		}
-		created, createErr := catalog.createAppOnce(ctx, tenantID, appID, normalized, now)
+		created, createErr := catalog.createAppOnce(
+			ctx,
+			tenantID,
+			appID,
+			normalized,
+			now,
+			auditPublisher,
+		)
 		if errors.Is(createErr, errAppIDCollision) {
 			continue
 		}
@@ -195,6 +211,7 @@ func (catalog *AppCatalog) createAppOnce(
 	appID string,
 	definition AppDefinition,
 	now time.Time,
+	auditPublisher appMutationAuditPublisher,
 ) (result AppWorkspace, returnedErr error) {
 	tx := catalog.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
@@ -255,6 +272,20 @@ func (catalog *AppCatalog) createAppOnce(
 	result, err = appFromRecord(record, definition.DefaultIndexes)
 	if err != nil {
 		return AppWorkspace{}, fmt.Errorf("read created app: %w", err)
+	}
+	if err := publishAppMutationAudit(
+		ctx,
+		tx,
+		tenantID,
+		auditPublisher,
+		AppMutationAuditEvent{
+			OccurredAt: result.CreatedAt,
+			Action:     AppMutationAuditActionCreate,
+			AppID:      result.ID,
+			AppVersion: result.Version,
+		},
+	); err != nil {
+		return AppWorkspace{}, err
 	}
 	if err := tx.Commit().Error; err != nil {
 		return AppWorkspace{}, appContextError(ctx, "commit app creation", err)
@@ -320,6 +351,24 @@ func (catalog *AppCatalog) UpdateApp(
 	selector AppSelector,
 	expectedVersion uint64,
 	definition AppDefinition,
+) (result AppWorkspace, returnedErr error) {
+	return catalog.updateApp(
+		ctx,
+		scope,
+		selector,
+		expectedVersion,
+		definition,
+		nil,
+	)
+}
+
+func (catalog *AppCatalog) updateApp(
+	ctx context.Context,
+	scope AppAccessScope,
+	selector AppSelector,
+	expectedVersion uint64,
+	definition AppDefinition,
+	auditPublisher appMutationAuditPublisher,
 ) (result AppWorkspace, returnedErr error) {
 	if err := validateAppContext(ctx); err != nil {
 		return AppWorkspace{}, err
@@ -402,6 +451,20 @@ func (catalog *AppCatalog) UpdateApp(
 	if err != nil {
 		return AppWorkspace{}, fmt.Errorf("read updated app: %w", err)
 	}
+	if err := publishAppMutationAudit(
+		ctx,
+		tx,
+		tenantID,
+		auditPublisher,
+		AppMutationAuditEvent{
+			OccurredAt: result.UpdatedAt,
+			Action:     AppMutationAuditActionUpdate,
+			AppID:      result.ID,
+			AppVersion: result.Version,
+		},
+	); err != nil {
+		return AppWorkspace{}, err
+	}
 	if err := tx.Commit().Error; err != nil {
 		return AppWorkspace{}, appContextError(ctx, "commit app update", err)
 	}
@@ -416,6 +479,17 @@ func (catalog *AppCatalog) SetAppState(
 	selector AppSelector,
 	expectedVersion uint64,
 	state AppState,
+) (result AppWorkspace, returnedErr error) {
+	return catalog.setAppState(ctx, scope, selector, expectedVersion, state, nil)
+}
+
+func (catalog *AppCatalog) setAppState(
+	ctx context.Context,
+	scope AppAccessScope,
+	selector AppSelector,
+	expectedVersion uint64,
+	state AppState,
+	auditPublisher appMutationAuditPublisher,
 ) (result AppWorkspace, returnedErr error) {
 	if err := validateAppContext(ctx); err != nil {
 		return AppWorkspace{}, err
@@ -503,6 +577,24 @@ func (catalog *AppCatalog) SetAppState(
 	if err != nil {
 		return AppWorkspace{}, fmt.Errorf("read app after state update: %w", err)
 	}
+	action := AppMutationAuditActionActivate
+	if result.State == AppStateArchived {
+		action = AppMutationAuditActionArchive
+	}
+	if err := publishAppMutationAudit(
+		ctx,
+		tx,
+		tenantID,
+		auditPublisher,
+		AppMutationAuditEvent{
+			OccurredAt: result.UpdatedAt,
+			Action:     action,
+			AppID:      result.ID,
+			AppVersion: result.Version,
+		},
+	); err != nil {
+		return AppWorkspace{}, err
+	}
 	if err := tx.Commit().Error; err != nil {
 		return AppWorkspace{}, appContextError(ctx, "commit app state update", err)
 	}
@@ -518,6 +610,24 @@ func (catalog *AppCatalog) DeleteApp(
 	selector AppSelector,
 	expectedVersion uint64,
 	confirmationSlug string,
+) (deletedID string, returnedErr error) {
+	return catalog.deleteApp(
+		ctx,
+		scope,
+		selector,
+		expectedVersion,
+		confirmationSlug,
+		nil,
+	)
+}
+
+func (catalog *AppCatalog) deleteApp(
+	ctx context.Context,
+	scope AppAccessScope,
+	selector AppSelector,
+	expectedVersion uint64,
+	confirmationSlug string,
+	auditPublisher appMutationAuditPublisher,
 ) (deletedID string, returnedErr error) {
 	if err := validateAppContext(ctx); err != nil {
 		return "", err
@@ -584,6 +694,29 @@ func (catalog *AppCatalog) DeleteApp(
 	}
 	if deleted.RowsAffected != 1 {
 		return "", ErrVersionConflict
+	}
+	if auditPublisher != nil {
+		occurredAt, clockErr := nextAppUpdateTime(
+			catalog.clock(),
+			currentWorkspace.UpdatedAt,
+		)
+		if clockErr != nil {
+			return "", clockErr
+		}
+		if err := publishAppMutationAudit(
+			ctx,
+			tx,
+			tenantID,
+			auditPublisher,
+			AppMutationAuditEvent{
+				OccurredAt: occurredAt,
+				Action:     AppMutationAuditActionDelete,
+				AppID:      currentWorkspace.ID,
+				AppVersion: currentWorkspace.Version,
+			},
+		); err != nil {
+			return "", err
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return "", appContextError(ctx, "commit app deletion", err)

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 )
@@ -59,7 +60,11 @@ type controlAppCatalog interface {
 // borrows the process control database, so runtime shutdown continues to close
 // that database exactly once through main.
 type runtimeAppCatalog struct {
-	catalog controlAppCatalog
+	catalog                controlAppCatalog
+	mutationScopeValidator func(
+		context.Context,
+		server.AppAdministrationScope,
+	) error
 }
 
 var _ server.AppAdministration = (*runtimeAppCatalog)(nil)
@@ -70,6 +75,51 @@ func newRuntimeAppCatalog(
 	db *control.DB,
 	masterKeyPath string,
 ) (*runtimeAppCatalog, []byte, error) {
+	catalog, administrationKey, err := newRuntimeControlAppCatalog(
+		ctx,
+		db,
+		masterKeyPath,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &runtimeAppCatalog{catalog: catalog}, administrationKey, nil
+}
+
+// newRuntimeAuditedAppCatalog is the production app-administration
+// constructor. Read-only catalog operations continue to use the same GORM
+// store, while every mutation is made contingent on an audit append in its
+// caller-owned SQLite transaction.
+func newRuntimeAuditedAppCatalog(
+	ctx context.Context,
+	db *control.DB,
+	masterKeyPath string,
+	appender control.AppMutationAuditAppender,
+) (*runtimeAppCatalog, []byte, error) {
+	catalog, administrationKey, err := newRuntimeControlAppCatalog(
+		ctx,
+		db,
+		masterKeyPath,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	audited, err := control.NewAuditedAppCatalog(catalog, appender)
+	if err != nil {
+		clear(administrationKey)
+		return nil, nil, fmt.Errorf("create audited app catalog: %w", err)
+	}
+	return &runtimeAppCatalog{
+		catalog:                audited,
+		mutationScopeValidator: validateRuntimeAppMutationActor,
+	}, administrationKey, nil
+}
+
+func newRuntimeControlAppCatalog(
+	ctx context.Context,
+	db *control.DB,
+	masterKeyPath string,
+) (*control.AppCatalog, []byte, error) {
 	masterKey, err := loadVerifiedMasterKey(ctx, db, masterKeyPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open app-catalog master key: %w", err)
@@ -90,7 +140,7 @@ func newRuntimeAppCatalog(
 		clear(administrationCursorKey)
 		return nil, nil, fmt.Errorf("create app catalog: %w", err)
 	}
-	return &runtimeAppCatalog{catalog: catalog}, administrationCursorKey, nil
+	return catalog, administrationCursorKey, nil
 }
 
 func deriveAppCursorKeys(masterKey []byte) ([]byte, []byte, error) {
@@ -114,6 +164,9 @@ func (adapter *runtimeAppCatalog) CreateApp(
 	scope server.AppAdministrationScope,
 	definition server.AppAdministrationDefinition,
 ) (server.AppAdministrationWorkspace, error) {
+	if err := adapter.validateMutationActor(ctx, scope); err != nil {
+		return server.AppAdministrationWorkspace{}, err
+	}
 	result, err := adapter.catalog.CreateApp(
 		ctx,
 		controlAppScope(scope),
@@ -168,6 +221,9 @@ func (adapter *runtimeAppCatalog) UpdateApp(
 	expectedVersion uint64,
 	definition server.AppAdministrationDefinition,
 ) (server.AppAdministrationWorkspace, error) {
+	if err := adapter.validateMutationActor(ctx, scope); err != nil {
+		return server.AppAdministrationWorkspace{}, err
+	}
 	result, err := adapter.catalog.UpdateApp(
 		ctx,
 		controlAppScope(scope),
@@ -188,6 +244,9 @@ func (adapter *runtimeAppCatalog) SetAppState(
 	expectedVersion uint64,
 	state server.AppAdministrationState,
 ) (server.AppAdministrationWorkspace, error) {
+	if err := adapter.validateMutationActor(ctx, scope); err != nil {
+		return server.AppAdministrationWorkspace{}, err
+	}
 	convertedState, err := controlAppState(state)
 	if err != nil {
 		return server.AppAdministrationWorkspace{}, err
@@ -212,6 +271,9 @@ func (adapter *runtimeAppCatalog) DeleteApp(
 	expectedVersion uint64,
 	confirmationSlug string,
 ) (string, error) {
+	if err := adapter.validateMutationActor(ctx, scope); err != nil {
+		return "", err
+	}
 	deletedID, err := adapter.catalog.DeleteApp(
 		ctx,
 		controlAppScope(scope),
@@ -223,6 +285,27 @@ func (adapter *runtimeAppCatalog) DeleteApp(
 		return "", mapRuntimeAppCatalogError(err)
 	}
 	return strings.Clone(deletedID), nil
+}
+
+func (adapter *runtimeAppCatalog) validateMutationActor(
+	ctx context.Context,
+	scope server.AppAdministrationScope,
+) error {
+	if adapter.mutationScopeValidator == nil {
+		return nil
+	}
+	return adapter.mutationScopeValidator(ctx, scope)
+}
+
+func validateRuntimeAppMutationActor(
+	ctx context.Context,
+	scope server.AppAdministrationScope,
+) error {
+	actor, ok := audit.ActorFromContext(ctx)
+	if !ok || actor.ID != scope.ActorID {
+		return server.ErrAppAdministrationInvalidArgument
+	}
+	return nil
 }
 
 func (adapter *runtimeAppCatalog) ListActiveApps(

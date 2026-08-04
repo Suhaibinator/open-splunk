@@ -1,9 +1,26 @@
 # Audit events v0.1
 
 This contract is the first durable security-audit slice. It covers successful
-ingestion-token creation, update, and revocation only. Authentication attempts,
-token use, index changes, searches, exports, saved-object changes, and broader
-RBAC activity remain future, separately bounded event families.
+ingestion-token, index, and app administration mutations. Authentication
+attempts, token use, searches, exports, saved-object changes, and broader RBAC
+activity remain future, separately bounded event families.
+
+The closed action taxonomy is:
+
+- `ingestion_token.create` at exactly version 1, then
+  `ingestion_token.update` and `ingestion_token.revoke` at version 2 or later;
+- `index.create` at exactly version 1; `index.update`, `index.activate`,
+  `index.archive`, and `index.delete_keep_data` at version 2 or later; and
+  `index.delete_data` at version 3 or later; and
+- `app.create` at exactly version 1, then `app.update`, `app.activate`,
+  `app.archive`, and `app.delete` at version 2 or later. App deletion records
+  the final archived app version; deletion does not fabricate another object
+  generation.
+
+Each action is bound to its corresponding fixed `ingestion_token`, `index`, or
+`app` target kind. Successful events accept only an explicitly installed system
+actor or authenticated browser administrator. An ordinary browser user remains
+an invalid successful-mutation actor.
 
 ## Durable record and atomicity
 
@@ -24,29 +41,29 @@ unsupported actor/action/target combinations, invalid action/version pairs,
 replacement, update, deletion, gaps, sequence reuse, and invalid tenant-state
 transitions.
 
-Token mutation and audit append use the same caller-owned GORM/SQLite
-transaction and the same already-captured mutation timestamp. The audit store
-rejects an autocommit handle or a transaction from another database. If audit
-persistence fails, the token mutation rolls back; the server never reports a
-changed-but-unaudited token. Rejected and failed mutation attempts do not create
-successful-event rows.
+Each supported mutation and its audit append use the same caller-owned
+GORM/SQLite transaction and the same already-captured mutation timestamp. The
+audit store rejects an autocommit handle or a transaction from another
+database. If audit persistence fails, the complete token, index, or app
+mutation rolls back; the server never reports a changed-but-unaudited object.
+Rejected and failed mutation attempts do not create successful-event rows.
 
-Direct/internal stores default to the explicit `default` tenant and a fixed
-system actor. The production runtime injects the configured tenant and requires
-an authenticated actor in the context before randomness or mutation work. The
-administrator middleware installs that actor only after validating the browser
-principal and removes the reusable bearer credential before the handler runs.
-An ordinary browser user cannot emit a successful token-mutation event.
+The low-level audit append API can use the fixed system actor for trusted
+internal work. Production mutation adapters require an explicit successful
+actor in the context and never use that fallback. The administrator middleware
+installs the actor only after validating the browser principal and removes the
+reusable bearer credential before the handler runs. An ordinary browser user
+cannot emit a successful mutation event.
 
 ## Bounds and failure behavior
 
 Sequences are dense, one-based, and local to a tenant. A tenant may retain at
 most 100,000 events. Events are never discarded to admit newer events. At the
-ceiling, audited token creation, update, and revocation fail closed; the HTTP
-administration surface maps the capacity error to `429 Too Many Requests`.
-Existing credentials and read-only administration remain available. Operators
-must treat approaching audit capacity as a service-capacity alert until a
-future archival/retention contract exists.
+ceiling, audited token, index, and app mutations fail closed; the HTTP
+administration surfaces map the capacity error to `429 Too Many Requests`.
+Existing objects and read-only administration remain available. Operators must
+treat approaching audit capacity as a service-capacity alert until a future
+archival/retention contract exists.
 
 Every hydrated row has a scalar byte-width preflight. Context-bounded store
 construction verifies every persisted tenant's bounded journal count, dense
@@ -116,8 +133,9 @@ frontend team should:
    authorization, `429` mutation capacity, and `503` unavailable/corrupt audit
    storage; and
 6. remove the current claim that the backend has no audit route, while making
-   clear that v0.1 contains token mutations only and must not fabricate the
-   broader activity families that remain unsupported.
+   clear that v0.1 contains successful token, index, and app mutations only and
+   must not fabricate the broader activity families that remain unsupported.
 
 CSV/export, live streaming, free-text search, time-range filtering, and audit
-families beyond successful token mutations are not part of v0.1.
+families beyond successful token, index, and app mutations are not part of
+v0.1.

@@ -21,7 +21,7 @@ const (
 	MaximumListPageSize = 200
 	// MaximumActionFilters is the complete fixed action taxonomy. One list
 	// request cannot contain more distinct action filters than this bound.
-	MaximumActionFilters = 9
+	MaximumActionFilters = 14
 
 	defaultListPageSize     = 50
 	maximumTenantIDBytes    = 255
@@ -107,6 +107,11 @@ const (
 	ActionIndexArchive         Action = "index.archive"
 	ActionIndexDeleteKeepData  Action = "index.delete_keep_data"
 	ActionIndexDeleteData      Action = "index.delete_data"
+	ActionAppCreate            Action = "app.create"
+	ActionAppUpdate            Action = "app.update"
+	ActionAppActivate          Action = "app.activate"
+	ActionAppArchive           Action = "app.archive"
+	ActionAppDelete            Action = "app.delete"
 )
 
 // Valid reports whether action belongs to the first immutable audit taxonomy.
@@ -120,7 +125,12 @@ func (action Action) Valid() bool {
 		ActionIndexActivate,
 		ActionIndexArchive,
 		ActionIndexDeleteKeepData,
-		ActionIndexDeleteData:
+		ActionIndexDeleteData,
+		ActionAppCreate,
+		ActionAppUpdate,
+		ActionAppActivate,
+		ActionAppArchive,
+		ActionAppDelete:
 		return true
 	default:
 		return false
@@ -133,12 +143,13 @@ type TargetKind string
 const (
 	TargetKindIngestionToken TargetKind = "ingestion_token"
 	TargetKindIndex          TargetKind = "index"
+	TargetKindApp            TargetKind = "app"
 )
 
 // Valid reports whether kind belongs to the first audit target taxonomy.
 func (kind TargetKind) Valid() bool {
 	switch kind {
-	case TargetKindIngestionToken, TargetKindIndex:
+	case TargetKindIngestionToken, TargetKindIndex, TargetKindApp:
 		return true
 	default:
 		return false
@@ -168,14 +179,18 @@ func (event SuccessfulEvent) valid() bool {
 
 func validActionVersion(action Action, version uint64) bool {
 	switch action {
-	case ActionIngestionTokenCreate, ActionIndexCreate:
+	case ActionIngestionTokenCreate, ActionIndexCreate, ActionAppCreate:
 		return version == 1
 	case ActionIngestionTokenUpdate,
 		ActionIngestionTokenRevoke,
 		ActionIndexUpdate,
 		ActionIndexActivate,
 		ActionIndexArchive,
-		ActionIndexDeleteKeepData:
+		ActionIndexDeleteKeepData,
+		ActionAppUpdate,
+		ActionAppActivate,
+		ActionAppArchive,
+		ActionAppDelete:
 		return version >= 2
 	case ActionIndexDeleteData:
 		return version >= 3
@@ -197,6 +212,12 @@ func validActionTarget(action Action, targetKind TargetKind) bool {
 		ActionIndexDeleteKeepData,
 		ActionIndexDeleteData:
 		return targetKind == TargetKindIndex
+	case ActionAppCreate,
+		ActionAppUpdate,
+		ActionAppActivate,
+		ActionAppArchive,
+		ActionAppDelete:
+		return targetKind == TargetKindApp
 	default:
 		return false
 	}

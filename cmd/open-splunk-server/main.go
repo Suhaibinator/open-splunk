@@ -652,10 +652,11 @@ func runWithOptions(config options) error {
 			log.Printf("close search websocket service: %v", err)
 		}
 	}()
-	appCatalog, appCursorKey, err := newRuntimeAppCatalog(
+	appCatalog, appCursorKey, err := newRuntimeAuditedAppCatalog(
 		startupContext,
 		controlDB,
 		config.masterKeyPath,
+		securityStores.auditEvents,
 	)
 	if err != nil {
 		return err
