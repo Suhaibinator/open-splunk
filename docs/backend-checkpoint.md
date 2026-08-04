@@ -7,6 +7,100 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: bounded streamstats field occurrence count
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `2e1c47e` — add bounded `streamstats count(field)` execution.
+
+This test-first SPL unit extends the existing bounded running row count without
+a control-plane schema change, migration, public protobuf change, or GORM on
+the ClickHouse path:
+
+1. `streamstats` now accepts exact long-form `count(field)` with one exact,
+   unquoted, case-sensitive input field and an optional exact unquoted `AS`
+   alias. Without `AS`, the output is the spelling-preserving
+   `count(field)`. Empty, wildcard, quoted, multiple, expression, eval, and
+   shorthand `c(field)` forms fail with source-located diagnostics.
+2. Missing, explicit null, empty multivalue, and null multivalue members
+   contribute zero. Each immediate non-null multivalue member contributes one,
+   including duplicates and nested containers treated atomically; any present
+   scalar, object, or flattened parent contributes one. Windows remain row
+   windows, not occurrence windows.
+3. Existing `current`, `window`, `global`, ordering, grouping, and 10,000-row
+   contracts are preserved. `current=false` publishes a present zero before
+   the first eligible contribution. Ungrouped output is non-null `UInt64`;
+   grouped output is nullable only when the BY key is missing or null, while a
+   complete group with no occurrences publishes zero.
+4. The logical operator resolves its input before replacing the output alias,
+   preserves index authorization provenance, and invalidates timeline
+   eligibility only when `_time` is replaced. Closed schemas accept known
+   exact inputs; an open `fields` shape is rejected because it cannot prove the
+   requested field safely.
+5. ClickHouse lowering reads one bounded relation, materializes a per-row
+   contribution, and uses exact `ROWS` windows without row expansion, physical
+   rescans, or Go-side buffering. A hidden 10,001st row remains the overflow
+   sentinel, and invalid Dynamic BY values poison the complete stage before a
+   downstream projection or limit can conceal the error.
+6. Occurrences accumulate through `UInt128` and publish as `UInt64`, avoiding
+   narrow intermediate arithmetic. The input, BY values, nested relation
+   parameters, and generated aliases retain deterministic argument ordering.
+7. Production Executor and Manager transport, stage inspection, field
+   discovery/summary/timeline, stored-SPL export re-execution, alias
+   replacement, projected-away inputs, and resource publication all have
+   direct coverage for the new form.
+8. Parser diagnostics and editor completion advertise the new syntax; the
+   existing frontend transport and result rendering require no component
+   change. GORM remains confined to the SQLite control plane.
+9. Independent compiler and cross-layer adversarial reviews completed. The
+   compiler review found that forged canonical plans could bypass the parser's
+   exact-field grammar; a shared lexer-aligned validator now fences parser,
+   builder, planner analysis, and compiler inputs. The re-review found no
+   residual concrete issue.
+
+Validation for `2e1c47e` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+make proto
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint -- --quiet
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=6m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/^streamstats_executor_and_manager_transport$' \
+  -count=1 -timeout=6m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`, and
+frontend tests passed 142/142. The complete pinned ClickHouse store suite
+passed in 134.15 seconds; the focused production Executor/Manager transport
+passed in 6.17 seconds. Test-owned ClickHouse containers were removed.
+
+The next SPL slice is intentionally unselected pending user direction. The
+external GradeThis Compose cutover remains explicitly deferred, and the
+broader backend/SPL goal remains active.
+
 ## Latest checkpoint: durable bounded audit journal
 
 Date: 2026-08-03
@@ -105,10 +199,11 @@ Executor/Manager transport passed in 7.70 seconds. Test-owned ClickHouse
 containers and volumes were removed.
 
 Version 0.1 intentionally records only successful ingestion-token mutations;
-other audit families and frontend consumption remain future work. The next SPL
-compatibility unit is `streamstats count(field)` when work resumes. The
-external GradeThis Compose cutover remains explicitly deferred, and the broader
-backend/SPL goal remains active.
+other audit families and frontend consumption remain future work. The planned
+`streamstats count(field)` unit is complete at `2e1c47e`; see the checkpoint
+above. The next SPL slice is intentionally unselected. The external GradeThis
+Compose cutover remains explicitly deferred, and the broader backend/SPL goal
+remains active.
 
 ## Latest checkpoint: bounded streamstats count
 
@@ -14704,8 +14799,10 @@ aggregate contract at a time:
 - bounded single-measure `eventstats` now covers row/field/conditional count,
   `dc`, `values`, `list`, integer-suffix percentiles, `sum`, `avg`, `min`,
   `max`, `earliest`, and `latest`. Multiple measures and broader eval-expression
-  arguments remain separate contracts, while `streamstats` remains outside the
-  first release unless scope changes; and
+  arguments remain separate contracts. Bounded `streamstats` now covers bare
+  row count and exact-field occurrence count; broader aggregates, expression
+  arguments, reset conditions, and time windows remain separate contracts, and
+  no next slice is selected; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
 
@@ -14808,7 +14905,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `182b60c`, `8d032b1`, `1a9f6ef`, `5db9816`, `99be8a9`,
+   commits, especially `2e1c47e`, `182b60c`, `8d032b1`, `1a9f6ef`, `5db9816`,
+   `99be8a9`,
    `d7734b6`,
    `ceab244`, `75db36f`, `3f83414`,
    `1a94faf`, `fbdb99f`,
@@ -14868,7 +14966,8 @@ Do not guess those decisions if they materially affect the implementation.
    `efe4199`, split numeric timecharts are complete at `d7734b6`, split
    percentile timecharts are complete at `99be8a9`, numeric chart pivots are
    complete at `1a9f6ef`, bounded running `streamstats count` is complete at
-   `182b60c`, multi-field `top`/`rare` is complete at `5db9816`,
+   `182b60c`, bounded field-occurrence `streamstats count(field)` is complete
+   at `2e1c47e`, multi-field `top`/`rare` is complete at `5db9816`,
    exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
