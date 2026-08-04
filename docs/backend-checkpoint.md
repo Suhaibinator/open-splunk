@@ -7,7 +7,124 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: atomic saved-search mutation audit and restart/rerun
+## Latest checkpoint: atomic search-attempt admission audit
+
+Date: 2026-08-04
+
+Committed implementation checkpoint:
+
+- `ef2b1f3` — record every durably admitted search attempt in a separate,
+  payload-free, bounded control-plane journal in the same transaction as the
+  pending search-history row.
+
+This test-first architecture unit completes the admitted-search portion of the
+durable audit contract without putting GORM on the ClickHouse path:
+
+1. A new `internal/searchaudit` GORM repository projects authoritative SQLite
+   migration `0023_search_attempt_audit.sql`. Each tenant has a dense retained
+   interval, monotonic never-reused sequence allocation, and a configurable
+   rolling ceiling that defaults to and never exceeds 100,000 rows. At the
+   ceiling, one append removes exactly the oldest row in the same transaction.
+2. Search history inserts the pending job before invoking the audit appender on
+   the same caller-owned GORM transaction. Either both rows commit or neither
+   does. An identical pending retry is idempotent; conflicting or terminal job
+   ID reuse appends nothing; concurrent conflicting admissions produce exactly
+   one winner, one version conflict, and one audit event.
+3. The immutable audit projection contains only tenant-local sequence and UTC
+   microsecond time, canonical actor kind/ID/role, owner ID, and search-job ID.
+   It has no SPL, normalized query, index/app/saved-object scope, generated SQL,
+   results, progress, warnings, errors, headers, credentials, request payload,
+   or arbitrary metadata.
+4. SQLite constraints and triggers guard the state and event primary keys,
+   retained search-job uniqueness, exact state transitions, append accounting,
+   immutability, and oldest-row-only eviction. Startup performs a complete
+   bounded, scalar-width-preflighted integrity scan and fails closed on gaps,
+   forged values, orphan rows, invalid state, or configured-cap mismatch.
+5. Administrator traversal is descending sequence keyset pagination with exact
+   actor-ID and owner-ID filters, a 200-row/2-MiB response envelope, and optional
+   exact totals. Purpose-separated HMAC cursors bind tenant, page shape,
+   filters, total, retained floor, high-water, and high-water identity. Appends
+   below the cap survive continuation and reopen; any prune invalidates the old
+   traversal rather than returning an incomplete snapshot.
+6. `POST /api/v1/audit/search-attempts/list` derives tenant identity from the
+   authenticated browser administrator, shares the existing administrator
+   audit authorization helper, advertises
+   `SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT`, and maps malformed/evicted cursors,
+   authorization failures, and unavailable/corrupt storage without leaking
+   audit payload or storage detail. Ordinary users and cross-tenant principals
+   are rejected before storage is touched.
+7. Production startup requires the audit appender, derives a stable
+   purpose-separated cursor key from the master key, and exposes
+   `--search-attempt-audit-maximum-retained-attempts` with an exact 1..100,000
+   contract. Reopening a populated tenant with a different effective ceiling,
+   including accidentally omitting a prior custom value, fails before serving.
+8. Generated Go and TypeScript messages, the 51-route HTTP fixture, bootstrap
+   feature taxonomy, API documentation, and the product architecture plan all
+   agree. The frontend test that still asserted 50 routes was corrected; the
+   generated TypeScript contract is ready for a future administrator Activity
+   surface, but no current search-workspace UI change is required.
+9. Independent storage, API/privacy, runtime/atomicity, migration-consistency,
+   acceptance, and three-lens simplification reviews were completed. Findings
+   added an explicit retained-job collision trigger that defeats SQLite
+   `INSERT OR REPLACE`, filled authorization and conflicting-admission seams,
+   made retention operator-configurable, shared audit authorization, and
+   reduced an existing-tenant append from 12 SQL statements to at most 5.
+   List boundary/high-water validation was then batched from 9 statements to a
+   tested 5-statement ceiling without weakening scalar preflight, cursor digest,
+   corruption, or SQLite snapshot guarantees. Final rereviews were clean.
+
+Validation for `ef2b1f3` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+make proto-lint
+go test ./... -count=1 -timeout=10m
+go test -race -shuffle=on ./... -count=1 -timeout=15m
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=30m -p=1 -v
+```
+
+Every local command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 65/65 build-script tests and 144/144 application tests.
+The exact pinned ClickHouse Store corpus passed in 139.44 seconds,
+executor/manager transport in 35.43 seconds, backend/browser integration in
+61.49 seconds, and deployment credential rotation in 19.07 seconds. Post-test
+inventory contained no Open Splunk test container, pinned-image container, or
+Open Splunk test volume.
+
+Exact feature-SHA GitHub Actions run
+[`30927667497`](https://github.com/Suhaibinator/open-splunk/actions/runs/30927667497)
+is fully green. Go lint and Backend vertical, the two checks reported failing
+before this unit, both passed, together with race/coverage, protobuf, frontend,
+GradeThis, vulnerability, release OCI, Linux/macOS production binaries, and
+release-asset consistency.
+
+The frontend handoff is recorded in `docs/search-attempt-audit-v0.1.md`: gate
+an administrator Activity surface on the advertised feature, use the generated
+protobuf transport and opaque tokens, and render only occurrence time, actor,
+owner, and job ID. The broader backend/SPL goal remains active, but no next unit
+has been started. Wait for explicit instructions before choosing one. The
+external GradeThis Compose cutover remains deferred.
+
+## Previous checkpoint: atomic saved-search mutation audit and restart/rerun
 
 Date: 2026-08-04
 
