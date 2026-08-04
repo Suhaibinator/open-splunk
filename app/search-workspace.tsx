@@ -3638,6 +3638,16 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     void refreshBackendHistory(bootstrap);
   }
 
+  function removeBackendHistoryEntryLocally(id: string) {
+    backendHistoryRef.current.delete(id);
+    if (backendHistoryRerunRef.current?.id === id) {
+      backendHistoryRerunRef.current = null;
+    }
+    setHistory((current) => current.some((entry) => entry.id === id)
+      ? current.filter((entry) => entry.id !== id)
+      : current);
+  }
+
   async function runBackendSearch(nextQuery: string, rangeOverride: TimeRange = timeRange) {
     const generation = ++generationRef.current;
     const launchTimeRange = rangeOverride;
@@ -3716,63 +3726,73 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       }
       const bootstrap = await ensureBackendBootstrap();
       if (generationRef.current !== generation || controller.signal.aborted) return;
-      const timeRangeError = serverTimeRangeValidationError(
-        launchTimeRange,
-        currentBackendServerTime(bootstrap),
-      );
-      if (timeRangeError !== null) throw new Error(timeRangeError);
       const savedExecution = launchSavedSearchId === null
         ? undefined
         : backendSavedSearchesRef.current.get(launchSavedSearchId);
       const launchAppId = savedExecution !== undefined
         ? savedExecution.search.appId
-        : launchHistoryEntry !== null
-          ? launchHistoryEntry.search.appId
-          : bootstrap.response.selectedAppId ?? undefined;
-      if (
-        launchAppId !== undefined
-        && !bootstrap.response.apps.some((app) => app.appId === launchAppId)
-      ) {
-        throw new Error("The persisted search belongs to an app that is not available in this backend session.");
+        : bootstrap.response.selectedAppId ?? undefined;
+      if (launchHistoryEntry === null) {
+        const timeRangeError = serverTimeRangeValidationError(
+          launchTimeRange,
+          currentBackendServerTime(bootstrap),
+        );
+        if (timeRangeError !== null) throw new Error(timeRangeError);
+        if (
+          launchAppId !== undefined
+          && !bootstrap.response.apps.some((app) => app.appId === launchAppId)
+        ) {
+          throw new Error("The persisted search belongs to an app that is not available in this backend session.");
+        }
       }
       const response = await apiClient.search.create({
-        definition: {
-          spl: nextQuery,
-          // Keep relative/calendar intent intact. The server resolves it once,
-          // against its own authoritative clock, and persists both forms.
-          timeRange: backendTimeRangeIntent(
-            launchTimeRange,
-            savedExecution !== undefined || launchHistoryEntry !== null,
-          ),
-          appId: launchAppId,
-          indexScope: backendDispatchIndexScope(
-            nextQuery,
-            bootstrap,
-            launchSavedSearchId,
-            launchHistoryEntry,
-          ),
-          preferredResultTab: 0,
-          selectedFields: [],
-          visualization: undefined,
-        },
-        // The current create handler only accepts persisted SAVED_SEARCH
-        // provenance. HISTORY_RERUN exists in the wire model but is rejected by
-        // internal/server/api.go, so history drafts are dispatched as ad hoc.
-        source: savedExecution === undefined
-          ? undefined
-          : {
+        definition: launchHistoryEntry === null
+          ? {
+            spl: nextQuery,
+            // Keep relative/calendar intent intact. The server resolves it once,
+            // against its own authoritative clock, and persists both forms.
+            timeRange: backendTimeRangeIntent(
+              launchTimeRange,
+              savedExecution !== undefined,
+            ),
+            appId: launchAppId,
+            indexScope: backendDispatchIndexScope(
+              nextQuery,
+              bootstrap,
+              launchSavedSearchId,
+            ),
+            preferredResultTab: 0,
+            selectedFields: [],
+            visualization: undefined,
+          }
+          : undefined,
+        source: savedExecution !== undefined
+          ? {
             origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH,
             savedSearchId: savedExecution.id,
             historySearchId: undefined,
             dashboardId: undefined,
-          },
+          }
+          : launchHistoryEntry === null
+            ? undefined
+            : {
+              origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+              savedSearchId: undefined,
+              historySearchId: launchHistoryEntry.id,
+              dashboardId: undefined,
+            },
         options: undefined,
+      }).catch((error: unknown) => {
+        if (launchHistoryEntry !== null && isHttpStatus(error, 404)) {
+          removeBackendHistoryEntryLocally(launchHistoryEntry.id);
+        }
+        throw error;
       });
+      let job = response.searchJob;
+      if (job === undefined || job.searchJobId.length === 0) throw new Error("The server did not return a search job ID.");
       if (backendHistoryRerunRef.current?.id === launchHistoryEntry?.id) {
         backendHistoryRerunRef.current = null;
       }
-      let job = response.searchJob;
-      if (job === undefined || job.searchJobId.length === 0) throw new Error("The server did not return a search job ID.");
       if (generationRef.current !== generation || controller.signal.aborted) {
         void apiClient.search.cancel(
           { searchJobId: job.searchJobId, reason: undefined },
@@ -4421,15 +4441,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     searchText: string,
     bootstrap: BackendBootstrapState,
     savedSearchId: string | null,
-    historyEntry: ServerSearchHistoryEntry | null,
   ): string[] {
-    if ((historyEntry?.effectiveIndexScope.length ?? 0) > 0) {
-      return resolveExactIndexScope({
-        spl: searchText,
-        bootstrap: bootstrap.response,
-        requestedIndexes: historyEntry?.effectiveIndexScope,
-      });
-    }
     const saved = savedSearchId === null
       ? undefined
       : backendSavedSearchesRef.current.get(savedSearchId);
@@ -4440,18 +4452,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         requestedIndexes: saved?.search.indexScope,
       });
     }
-    const persistedAppId = saved !== undefined
-      ? saved.search.appId
-      : historyEntry?.search.appId;
-    if (saved !== undefined || historyEntry !== null) {
+    if (saved !== undefined) {
       const searchableIndexes = bootstrap.response.indexes
         .filter((index) => index.searchable)
         .map((index) => index.name);
       const searchableIndexNames = new Set(searchableIndexes);
-      const persistedAppDefaults = persistedAppId === undefined
+      const persistedAppDefaults = saved.search.appId === undefined
         ? []
         : bootstrap.response.apps
-          .find((app) => app.appId === persistedAppId)
+          .find((app) => app.appId === saved.search.appId)
           ?.defaultIndexNames
           .filter((indexName) => searchableIndexNames.has(indexName)) ?? [];
       const selectors = indexSelectorsFromSPL(searchText);
@@ -5086,8 +5095,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       try {
         const result = await deleteServerSearchHistoryEntry(apiClient, bootstrap.response, id);
         if (result.status === "unavailable") throw new Error("Search history is not available from this server.");
-        backendHistoryRef.current.delete(id);
-        setHistory((current) => current.filter((item) => item.id !== id));
+        removeBackendHistoryEntryLocally(id);
         showToast("History entry deleted.", "warning");
       } catch (error) {
         setHistoryDeleteError(error instanceof Error ? error.message : "Unable to delete the history entry.");
@@ -5120,6 +5128,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       return;
     }
     setHistoryClearError(null);
+    const clearedHistoryRerunId = backendHistoryRerunRef.current?.search.appId === selectedAppId
+      ? backendHistoryRerunRef.current.id
+      : null;
     backendObjectMutationRef.current = true;
     setHistoryClearBusy(true);
     try {
@@ -5146,6 +5157,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setHistoryLoadingMore(false);
       setHistory([]);
       backendHistoryRef.current.clear();
+      if (
+        clearedHistoryRerunId !== null
+        && backendHistoryRerunRef.current?.id === clearedHistoryRerunId
+      ) {
+        backendHistoryRerunRef.current = null;
+      }
       setHistoryNextPageToken(null);
       setModal("history");
       showToast(`Cleared ${NUMBER_FORMAT.format(result.value)} history entries.`, "warning");

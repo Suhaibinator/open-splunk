@@ -43,6 +43,7 @@ const (
 	verticalEventCount             = uint64(4)
 	verticalTimelineMaximumBuckets = uint32(1_000)
 	bulkIndexName                  = "vertical-bulk"
+	historyRerunIndexName          = "vertical-history-rerun"
 	bulkEventCount                 = uint64(10_001)
 	redactionAPIKeySentinel        = "vertical-api-key-must-not-survive"
 	redactionCookieSentinel        = "vertical-cookie-must-not-survive"
@@ -400,6 +401,27 @@ func TestBackendVertical(t *testing.T) {
 		downloadToken,
 		verticalEventCount,
 	)
+	createBackendIndex(
+		t,
+		ctx,
+		httpClient,
+		baseURL,
+		administratorToken,
+		historyRerunIndexName,
+		"Backend history rerun",
+	)
+	serverSecrets = append(serverSecrets, assertBackendHistoryRerun(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		collectorAddress,
+		work,
+		httpClient,
+		storage,
+		baseURL,
+		administratorToken,
+	))
 
 	serverSecrets = append(serverSecrets, assertCurrentGradeThisMigration(
 		t,
@@ -541,6 +563,7 @@ func assertBrowserVisibleResults(
 	t.Helper()
 	runBrowserVerticalSpec(t, ctx, repository, browserVerticalSpecConfig{
 		grepPattern: "collector event is visible through the compiled backend UI|" +
+			"history Run again delegates persisted intent with source-only rerun provenance|" +
 			"failed search terminal rejects without waiting for results",
 		outputDirectory:    "backend-vertical",
 		failureDescription: "verify browser-visible backend result",
@@ -954,6 +977,21 @@ func appendSyncedFixture(t *testing.T, path string, contents []byte) {
 		t.Fatalf("append collector fixture: wrote %d of %d bytes: %v", written, len(contents), writeErr)
 	}
 	syncAndCloseFixture(t, file)
+}
+
+func appendHistoryRerunFixture(
+	t *testing.T,
+	path string,
+	eventTime time.Time,
+	marker string,
+) {
+	t.Helper()
+	line := fmt.Sprintf(
+		`{"timestamp":%q,"level":"INFO","message":%q}`+"\n",
+		eventTime.UTC().Format(time.RFC3339Nano),
+		marker,
+	)
+	appendSyncedFixture(t, path, []byte(line))
 }
 
 func assertCurrentGradeThisStoredMetadata(
@@ -1669,6 +1707,35 @@ processors:
     replacement: %q
 `, address, tokenPath, statePath, logPath, verticalIndexName,
 		redactionCredentialMarker, redactionPINMarker)
+}
+
+func historyRerunCollectorYAML(address, tokenPath, statePath, logPath string) string {
+	return fmt.Sprintf(`server:
+  address: %q
+  transport: grpc
+  token_file: %q
+  compression: gzip
+  tls:
+    enabled: false
+state:
+  directory: %q
+  max_queue_bytes: 16MiB
+inputs:
+  - id: history-rerun-log
+    type: file
+    include:
+      - %q
+    format: ndjson
+    start_at: beginning
+    index: %s
+    source: history-rerun.log
+    sourcetype: json
+    host: vertical-host
+    poll_interval: 20ms
+    fields:
+      environment: integration
+      service: history-rerun
+`, address, tokenPath, statePath, logPath, historyRerunIndexName)
 }
 
 func waitForStoredEventCount(
@@ -2989,6 +3056,387 @@ func runSearch(
 	return completedSearch{jobID: jobID, results: results}
 }
 
+func assertBackendHistoryRerun(
+	t *testing.T,
+	ctx context.Context,
+	repository, collectorBinary, collectorAddress, work string,
+	client *http.Client,
+	connection clickhousedriver.Conn,
+	baseURL, administratorToken string,
+) string {
+	t.Helper()
+
+	const (
+		baselineMarker = "history-rerun-baseline"
+		lateMarker     = "history-rerun-late"
+	)
+	stateDir := filepath.Join(work, "history-rerun-state")
+	logPath := filepath.Join(work, "history-rerun.log")
+	createEmptyFixture(t, logPath)
+	tokenPath := filepath.Join(work, "history-rerun.token")
+	configPath := filepath.Join(work, "history-rerun-collector.yaml")
+	writePrivateFile(
+		t,
+		configPath,
+		[]byte(historyRerunCollectorYAML(collectorAddress, tokenPath, stateDir, logPath)),
+	)
+	environment := os.Environ()
+	collectorID := initializeCollectorIdentity(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		configPath,
+		environment,
+		stateDir,
+	)
+	plaintextToken := createIndexScopedIngestionToken(
+		t,
+		ctx,
+		client,
+		baseURL,
+		administratorToken,
+		"backend-history-rerun",
+		historyRerunIndexName,
+		collectorID,
+		[]string{`vertical-host`},
+		[]string{`history-rerun\.log`},
+	)
+	writePrivateFile(t, tokenPath, []byte(plaintextToken+"\n"))
+	validateCollectorConfigurationWithInput(
+		t,
+		ctx,
+		repository,
+		collectorBinary,
+		configPath,
+		environment,
+		plaintextToken,
+		"history-rerun",
+		"history-rerun-log",
+	)
+	process := startProcess(
+		t,
+		repository,
+		[]string{collectorBinary, "run", "-config", configPath},
+		environment,
+	)
+	waitForCollectorDiscovery(t, ctx, stateDir, logPath, process, plaintextToken)
+	baselineEventTime := backendServerTime(t, ctx, client, baseURL).
+		Add(-30 * time.Second).
+		Truncate(time.Millisecond)
+	appendHistoryRerunFixture(t, logPath, baselineEventTime, baselineMarker)
+	waitForDistinctStoredEventCount(
+		t,
+		ctx,
+		connection,
+		process,
+		historyRerunIndexName,
+		1,
+		0,
+		plaintextToken,
+	)
+	waitForCollectorCheckpoint(t, ctx, stateDir, logPath, process, plaintextToken)
+	waitForCollectorWALAcknowledgedThroughCurrent(t, ctx, stateDir, process, plaintextToken)
+	baselineStored := historyRerunStoredEvent(t, ctx, connection, baselineMarker)
+
+	earliest := "-5m"
+	latest := "now"
+	timezone := "UTC"
+	source := "index=" + historyRerunIndexName +
+		` source="history-rerun.log" | table message`
+	var originalCreate opensplunkv1.CreateSearchJobResponse
+	postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/search/jobs/create",
+		&opensplunkv1.CreateSearchJobRequest{Definition: &opensplunkv1.SearchDefinition{
+			Spl: source,
+			TimeRange: &opensplunkv1.TimeRangeSpec{
+				Earliest: &earliest,
+				Latest:   &latest,
+				Timezone: &timezone,
+			},
+			IndexScope: []string{historyRerunIndexName},
+		}},
+		&originalCreate,
+	)
+	originalID := originalCreate.GetSearchJob().GetSearchJobId()
+	if originalID == "" {
+		t.Fatalf("created history-rerun source job = %+v", originalCreate.GetSearchJob())
+	}
+	original := waitForCompletedSearch(t, ctx, client, baseURL, originalID, 30*time.Second)
+	originalHistory := waitForSearchHistoryEntry(t, ctx, client, baseURL, originalID)
+	if original.GetProgress().GetProducedRows() != 1 ||
+		originalHistory.GetProducedRows() != 1 ||
+		originalHistory.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC {
+		t.Fatalf("history-rerun source search = job %+v history %+v", original, originalHistory)
+	}
+	originalResults := fetchAllCompletedSearchResults(
+		t,
+		ctx,
+		client,
+		baseURL,
+		originalID,
+		1,
+		1,
+	)
+	if got := resultStringCell(t, originalResults, 0, 0); got != baselineMarker {
+		t.Fatalf("history-rerun source result = %q", got)
+	}
+
+	originalLatest := original.GetResolvedTimeRange().GetLatest()
+	originalIndexTimeCutoff := original.GetIndexTimeCutoff()
+	if originalLatest == nil || originalIndexTimeCutoff == nil {
+		t.Fatalf("history-rerun source lacks immutable cutoffs: %+v", original)
+	}
+	waitAfter := originalLatest.AsTime()
+	if originalIndexTimeCutoff.AsTime().After(waitAfter) {
+		waitAfter = originalIndexTimeCutoff.AsTime()
+	}
+	lateEventTime := waitForBackendServerTimeAfter(
+		t,
+		ctx,
+		client,
+		baseURL,
+		waitAfter.Add(5*time.Millisecond),
+	)
+	appendHistoryRerunFixture(t, logPath, lateEventTime, lateMarker)
+	waitForDistinctStoredEventCount(
+		t,
+		ctx,
+		connection,
+		process,
+		historyRerunIndexName,
+		2,
+		0,
+		plaintextToken,
+	)
+	waitForCollectorCheckpoint(t, ctx, stateDir, logPath, process, plaintextToken)
+	waitForCollectorWALAcknowledgedThroughCurrent(t, ctx, stateDir, process, plaintextToken)
+	lateStored := historyRerunStoredEvent(t, ctx, connection, lateMarker)
+	if lateStored.visibilitySequence <= baselineStored.visibilitySequence ||
+		!lateStored.indexTime.After(originalIndexTimeCutoff.AsTime()) ||
+		!lateEventTime.After(originalLatest.AsTime()) {
+		t.Fatalf(
+			"late history-rerun fixture did not cross every original snapshot boundary: "+
+				"baseline=%+v late=%+v late_event_time=%s original=%+v",
+			baselineStored,
+			lateStored,
+			lateEventTime,
+			original,
+		)
+	}
+	if err := process.Interrupt(15 * time.Second); err != nil {
+		t.Fatalf(
+			"stop history-rerun collector: %v\nlogs:\n%s",
+			err,
+			redactForFailure(process.Logs(), plaintextToken),
+		)
+	}
+	assertDurableCollectorState(t, stateDir, uint64(mustFileSize(t, logPath)), 2)
+	assertProcessLogsDoNotLeak(t, process.Logs(), plaintextToken)
+
+	var rerunCreate opensplunkv1.CreateSearchJobResponse
+	postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/search/jobs/create",
+		&opensplunkv1.CreateSearchJobRequest{Source: &opensplunkv1.SearchJobSource{
+			Origin:          opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+			HistorySearchId: &originalID,
+		}},
+		&rerunCreate,
+	)
+	rerunID := rerunCreate.GetSearchJob().GetSearchJobId()
+	if rerunID == "" || rerunID == originalID {
+		t.Fatalf("created history rerun = %+v", rerunCreate.GetSearchJob())
+	}
+	var deleted opensplunkv1.DeleteSearchHistoryEntryResponse
+	postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/search/history/delete",
+		&opensplunkv1.DeleteSearchHistoryEntryRequest{SearchJobId: originalID},
+		&deleted,
+	)
+	if deleted.GetSearchJobId() != originalID {
+		t.Fatalf("deleted history-rerun source = %+v", &deleted)
+	}
+
+	rerun := waitForCompletedSearch(t, ctx, client, baseURL, rerunID, 30*time.Second)
+	rerunHistory := waitForSearchHistoryEntry(t, ctx, client, baseURL, rerunID)
+	if rerun.GetDefinition().GetSpl() != source ||
+		rerun.GetDefinition().GetTimeRange().GetEarliest() != earliest ||
+		rerun.GetDefinition().GetTimeRange().GetLatest() != latest ||
+		rerun.GetDefinition().GetTimeRange().GetTimezone() != timezone ||
+		!slices.Equal(rerun.GetEffectiveIndexScope(), []string{historyRerunIndexName}) ||
+		rerun.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
+		rerun.GetSource().GetHistorySearchId() != originalID ||
+		rerun.GetProgress().GetProducedRows() != 2 ||
+		rerun.GetResolvedTimeRange().GetLatest() == nil ||
+		!rerun.GetResolvedTimeRange().GetLatest().AsTime().After(
+			originalLatest.AsTime(),
+		) ||
+		!rerun.GetResolvedTimeRange().GetLatest().AsTime().After(lateEventTime) ||
+		rerun.GetIndexTimeCutoff() == nil ||
+		!rerun.GetIndexTimeCutoff().AsTime().After(originalIndexTimeCutoff.AsTime()) ||
+		rerun.GetIndexTimeCutoff().AsTime().Before(lateStored.indexTime) {
+		t.Fatalf("completed history rerun = original %+v rerun %+v", original, rerun)
+	}
+	if rerunHistory.GetDefinition().GetSpl() != source ||
+		rerunHistory.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
+		rerunHistory.GetSource().GetHistorySearchId() != originalID ||
+		rerunHistory.GetProducedRows() != 2 ||
+		rerunHistory.GetCompilerVersion() != splCompatibilityVersionForTest ||
+		!slices.Equal(rerunHistory.GetEffectiveIndexScope(), []string{historyRerunIndexName}) ||
+		rerunHistory.GetResolvedTimeRange().GetLatest() == nil ||
+		!rerunHistory.GetResolvedTimeRange().GetLatest().AsTime().Equal(
+			rerun.GetResolvedTimeRange().GetLatest().AsTime(),
+		) {
+		t.Fatalf("terminal history rerun = %+v", rerunHistory)
+	}
+	rerunResults := fetchAllCompletedSearchResults(t, ctx, client, baseURL, rerunID, 2, 1)
+	got := []string{
+		resultStringCell(t, rerunResults, 0, 0),
+		resultStringCell(t, rerunResults, 1, 0),
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []string{baselineMarker, lateMarker}) {
+		t.Fatalf("history rerun results = %v", got)
+	}
+	retainedOriginal := fetchAllCompletedSearchResults(t, ctx, client, baseURL, originalID, 1, 1)
+	if got := resultStringCell(t, retainedOriginal, 0, 0); got != baselineMarker {
+		t.Fatalf("retained source result after rerun = %q", got)
+	}
+	return plaintextToken
+}
+
+type historyRerunStoredEventMetadata struct {
+	indexTime          time.Time
+	visibilitySequence uint64
+}
+
+func historyRerunStoredEvent(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	marker string,
+) historyRerunStoredEventMetadata {
+	t.Helper()
+	var (
+		count      uint64
+		indexTime  time.Time
+		visibility uint64
+	)
+	err := connection.QueryRow(
+		ctx,
+		`SELECT count(), any(index_time), any(visibility_seq)
+		 FROM open_splunk.events
+		 WHERE tenant_id = ? AND index_name = ? AND source = ? AND body = ?`,
+		verticalTenantID,
+		historyRerunIndexName,
+		"history-rerun.log",
+		marker,
+	).Scan(&count, &indexTime, &visibility)
+	if err != nil {
+		t.Fatalf("read stored history-rerun event %q: %v", marker, err)
+	}
+	if count != 1 || indexTime.IsZero() || visibility == 0 {
+		t.Fatalf(
+			"stored history-rerun event %q metadata = count %d index_time %s visibility %d",
+			marker,
+			count,
+			indexTime,
+			visibility,
+		)
+	}
+	return historyRerunStoredEventMetadata{
+		indexTime:          indexTime,
+		visibilitySequence: visibility,
+	}
+}
+
+func backendServerTime(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+) time.Time {
+	t.Helper()
+	var bootstrap opensplunkv1.GetSystemBootstrapResponse
+	postProto(
+		t,
+		ctx,
+		client,
+		baseURL+"/api/v1/system/bootstrap",
+		&opensplunkv1.GetSystemBootstrapRequest{},
+		&bootstrap,
+	)
+	serverTime := bootstrap.GetServerTime()
+	if serverTime == nil || serverTime.CheckValid() != nil {
+		t.Fatalf("backend bootstrap returned invalid server time: %+v", &bootstrap)
+	}
+	return serverTime.AsTime()
+}
+
+func waitForBackendServerTimeAfter(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	threshold time.Time,
+) time.Time {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	var last time.Time
+	for {
+		last = backendServerTime(t, ctx, client, baseURL)
+		if last.After(threshold) {
+			return last
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf(
+				"wait for backend server time after %s: %v (last %s)",
+				threshold,
+				ctx.Err(),
+				last,
+			)
+		case <-deadline.C:
+			t.Fatalf(
+				"wait for backend server time after %s: timed out (last %s)",
+				threshold,
+				last,
+			)
+		case <-ticker.C:
+		}
+	}
+}
+
+func resultStringCell(
+	t *testing.T,
+	results *collectedVerticalSearchResults,
+	rowIndex, columnIndex int,
+) string {
+	t.Helper()
+	if results == nil || rowIndex < 0 || rowIndex >= len(results.rows) ||
+		columnIndex < 0 || columnIndex >= len(results.rows[rowIndex].GetCells()) {
+		t.Fatalf("result cell [%d,%d] is unavailable: %+v", rowIndex, columnIndex, results)
+	}
+	cell := results.rows[rowIndex].GetCells()[columnIndex]
+	_, ok := cell.GetKind().(*opensplunkv1.TypedValue_StringValue)
+	if !ok {
+		t.Fatalf("result cell [%d,%d] = %+v, want string", rowIndex, columnIndex, cell)
+	}
+	return cell.GetStringValue()
+}
+
 func fetchAllVerticalSearchResults(
 	t *testing.T,
 	ctx context.Context,
@@ -3676,6 +4124,22 @@ func readBackendSearchWebSocketEvent(t *testing.T, connection *websocket.Conn) *
 
 func waitForTerminalHistory(t *testing.T, ctx context.Context, client *http.Client, baseURL, jobID string) {
 	t.Helper()
+	entry := waitForSearchHistoryEntry(t, ctx, client, baseURL, jobID)
+	if entry.GetSearchJobId() != jobID || entry.GetDefinition().GetSpl() != verticalSearchSPL ||
+		entry.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
+		entry.GetProducedRows() != verticalEventCount || entry.GetCompilerVersion() != splCompatibilityVersionForTest ||
+		len(entry.GetEffectiveIndexScope()) != 1 || entry.GetEffectiveIndexScope()[0] != verticalIndexName {
+		t.Fatalf("terminal search history = %+v", entry)
+	}
+}
+
+func waitForSearchHistoryEntry(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL, jobID string,
+) *opensplunkv1.SearchHistoryEntry {
+	t.Helper()
 	payload, err := proto.Marshal(&opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: jobID})
 	if err != nil {
 		t.Fatal(err)
@@ -3705,13 +4169,11 @@ func waitForTerminalHistory(t *testing.T, ctx context.Context, client *http.Clie
 				t.Fatalf("decode search history: %v", err)
 			}
 			entry := got.GetHistoryEntry()
-			if entry.GetSearchJobId() != jobID || entry.GetDefinition().GetSpl() != verticalSearchSPL ||
-				entry.GetFinalState() != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED ||
-				entry.GetProducedRows() != verticalEventCount || entry.GetCompilerVersion() != splCompatibilityVersionForTest ||
-				len(entry.GetEffectiveIndexScope()) != 1 || entry.GetEffectiveIndexScope()[0] != verticalIndexName {
-				t.Fatalf("terminal search history = %+v", entry)
+			if entry.GetSearchJobId() != jobID ||
+				entry.GetFinalState() == opensplunkv1.SearchJobState_SEARCH_JOB_STATE_UNSPECIFIED {
+				t.Fatalf("search history entry = %+v", entry)
 			}
-			return
+			return entry
 		}
 		if response.StatusCode != http.StatusNotFound {
 			t.Fatalf("get search history status = %d, body = %q", response.StatusCode, body)

@@ -16,14 +16,27 @@ import {
 
 import {
   CancelSearchJobResponse,
+  CreateSearchJobRequest,
   CreateSearchJobResponse,
   GetSearchJobResponse,
   GetSearchResultsRequest,
   GetSearchResultsResponse,
 } from "../gen/ts/open_splunk/v1/search_api";
+import { AppState } from "../gen/ts/open_splunk/v1/app";
+import { IndexAccessState, IndexState } from "../gen/ts/open_splunk/v1/index";
+import {
+  DeleteSearchHistoryEntryRequest,
+  DeleteSearchHistoryEntryResponse,
+  ListSearchHistoryResponse,
+} from "../gen/ts/open_splunk/v1/history_api";
+import {
+  GetSystemBootstrapResponse,
+  ServerFeature,
+} from "../gen/ts/open_splunk/v1/system_api";
 import {
   SearchExecutionPhase,
   SearchFailureCode,
+  SearchJobOrigin,
   SearchJobState,
   type SearchProgress,
 } from "../gen/ts/open_splunk/v1/search";
@@ -132,6 +145,330 @@ test("collector event is visible through the compiled backend UI", async ({ page
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
   assertBrowserSafety(safety);
+});
+
+test("history Run again delegates persisted intent with source-only rerun provenance", async ({
+  page,
+}) => {
+  const historySearchId = "history-rerun-source-job";
+  const deletedHistorySearchId = "history-rerun-deleted-source-job";
+  const selectedAppId = "history-rerun-current-app";
+  const retainedAppId = "history-rerun-stale-app";
+  const indexName = "history-rerun-index";
+  const historySPL = `index=${JSON.stringify(indexName)} level=ERROR | table _time message`;
+  const deletedHistorySPL = `index=${JSON.stringify(indexName)} level=WARN | table _time message`;
+  const historyTimeRange = {
+    earliest: "server-owned-relative-expression",
+    latest: "server-owned-latest-expression",
+    timezone: "server-owned-timezone",
+  };
+  const deletedHistoryTimeRange = {
+    earliest: "-24h",
+    latest: "now",
+    timezone: "UTC",
+  };
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const ordinaryCreateRequests: CreateSearchJobRequest[] = [];
+  const historyRerunCreateRequests: CreateSearchJobRequest[] = [];
+  let historyRerunSourceMissing = false;
+
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(GetSystemBootstrapResponse.encode(
+        GetSystemBootstrapResponse.fromPartial({
+          serverVersion: "history-rerun-test",
+          apiVersion: "v1",
+          splCompatibilityVersion: "open-splunk-v0.1",
+          searchWebsocketPath: "/api/v1/search/ws",
+          features: [
+            ServerFeature.SERVER_FEATURE_SEARCH,
+            ServerFeature.SERVER_FEATURE_SEARCH_HISTORY,
+          ],
+          limits: { maximumPageSize: 15 },
+          apps: [{
+            appId: selectedAppId,
+            slug: "history-rerun-current",
+            displayName: "History rerun current app",
+            defaultIndexNames: [indexName],
+            state: AppState.APP_STATE_ACTIVE,
+          }],
+          indexes: [{
+            indexId: "history-rerun-index-id",
+            name: indexName,
+            displayName: "History rerun index",
+            state: IndexState.INDEX_STATE_ACTIVE,
+            ingestionAccess: IndexAccessState.INDEX_ACCESS_STATE_ENABLED,
+            searchAccess: IndexAccessState.INDEX_ACCESS_STATE_ENABLED,
+          }],
+          selectedAppId,
+          serverTime: new Date("2026-08-04T12:00:00.000Z"),
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/history/list",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(ListSearchHistoryResponse.encode(
+        ListSearchHistoryResponse.fromPartial({
+          historyEntries: [{
+            searchJobId: historySearchId,
+            definition: {
+              spl: historySPL,
+              timeRange: historyTimeRange,
+              appId: retainedAppId,
+              indexScope: [indexName],
+              preferredResultTab: 0,
+              selectedFields: [],
+            },
+            source: { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
+            effectiveIndexScope: [indexName],
+            finalState: SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+            producedRows: 1n,
+            duration: { seconds: 1n, nanos: 0 },
+            compilerVersion: "open-splunk-v0.1",
+            createdAt: new Date("2026-08-04T11:59:58.000Z"),
+            startedAt: new Date("2026-08-04T11:59:59.000Z"),
+            finishedAt: new Date("2026-08-04T12:00:00.000Z"),
+          }, {
+            searchJobId: deletedHistorySearchId,
+            definition: {
+              spl: deletedHistorySPL,
+              timeRange: deletedHistoryTimeRange,
+              appId: retainedAppId,
+              indexScope: [indexName],
+              preferredResultTab: 0,
+              selectedFields: [],
+            },
+            source: { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
+            effectiveIndexScope: [indexName],
+            finalState: SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+            producedRows: 1n,
+            duration: { seconds: 1n, nanos: 0 },
+            compilerVersion: "open-splunk-v0.1",
+            createdAt: new Date("2026-08-04T11:59:55.000Z"),
+            startedAt: new Date("2026-08-04T11:59:56.000Z"),
+            finishedAt: new Date("2026-08-04T11:59:57.000Z"),
+          }],
+          page: { totalSize: 2n, totalSizeExact: true },
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/history/delete",
+    async (route) => {
+      const requestWire = route.request().postDataBuffer();
+      if (requestWire === null) throw new Error("history delete request omitted its protobuf body");
+      expect(DeleteSearchHistoryEntryRequest.decode(requestWire).searchJobId).toBe(
+        deletedHistorySearchId,
+      );
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(DeleteSearchHistoryEntryResponse.encode({
+          searchJobId: deletedHistorySearchId,
+        }).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/create",
+    async (route) => {
+      const requestWire = route.request().postDataBuffer();
+      if (requestWire === null) throw new Error("history rerun create request omitted its protobuf body");
+      const request = CreateSearchJobRequest.decode(requestWire);
+      const historyRerun = request.source?.origin
+        === SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN;
+      if (historyRerun) historyRerunCreateRequests.push(request);
+      else ordinaryCreateRequests.push(request);
+      if (historyRerun && historyRerunSourceMissing) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "history entry no longer exists" }),
+        });
+        return;
+      }
+      const requestOrdinal = ordinaryCreateRequests.length + historyRerunCreateRequests.length;
+      const admittedAt = new Date(Date.parse("2026-08-04T12:00:01.000Z") + requestOrdinal);
+      const admittedDefinition = historyRerun
+        ? {
+          spl: historySPL,
+          timeRange: historyTimeRange,
+          appId: retainedAppId,
+          indexScope: [indexName],
+        }
+        : request.definition;
+      if (admittedDefinition === undefined) {
+        throw new Error("ordinary create request omitted its search definition");
+      }
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(CreateSearchJobResponse.encode(
+          CreateSearchJobResponse.fromPartial({
+            searchJob: {
+              searchJobId: historyRerun
+                ? `history-rerun-admitted-job-${historyRerunCreateRequests.length}`
+                : `history-rerun-ad-hoc-job-${ordinaryCreateRequests.length}`,
+              stateVersion: 1n,
+              definition: admittedDefinition,
+              source: historyRerun
+                ? request.source
+                : { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
+              compilerVersion: "open-splunk-v0.1",
+              effectiveIndexScope: admittedDefinition.indexScope,
+              resolvedTimeRange: {
+                earliest: new Date("2026-08-04T11:00:01.000Z"),
+                latest: admittedAt,
+                timezone: "UTC",
+              },
+              state: SearchJobState.SEARCH_JOB_STATE_CANCELED,
+              progress: {
+                phase: SearchExecutionPhase.SEARCH_EXECUTION_PHASE_COMPLETE,
+                percentComplete: 100,
+                elapsed: { seconds: 0n, nanos: 1_000_000 },
+                queueWait: { seconds: 0n, nanos: 0 },
+                updatedAt: admittedAt,
+                stateVersion: 1n,
+              },
+              createdAt: admittedAt,
+              startedAt: admittedAt,
+              finishedAt: admittedAt,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
+
+  const launchURL = new URL("/search/", origin);
+  launchURL.search = new URLSearchParams({
+    q: `index=${JSON.stringify(indexName)}`,
+    earliest: "-24h",
+    latest: "now",
+    timezone: "UTC",
+    run: "0",
+  }).toString();
+  await page.goto(launchURL.href, { waitUntil: "domcontentloaded", timeout });
+  await expect(page.getByText("Backend data", { exact: true })).toBeVisible({ timeout });
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  const deletedHistoryRow = page.getByTestId("history-list").getByRole("row").filter({
+    hasText: deletedHistorySPL,
+  });
+  await expect(deletedHistoryRow).toHaveCount(1, { timeout });
+  await deletedHistoryRow.getByRole("button", { name: "Open", exact: true }).click();
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  const deleteResponse = page.waitForResponse((response) => {
+    const responseURL = new URL(response.url());
+    return responseURL.origin === origin
+      && responseURL.pathname === "/api/v1/search/history/delete"
+      && response.status() === 200;
+  });
+  await page.getByTestId("history-list").getByRole("row").filter({
+    hasText: deletedHistorySPL,
+  }).getByRole("button", { name: "Delete history entry", exact: true }).click();
+  await deleteResponse;
+  await expect(page.getByTestId("history-list").getByRole("row").filter({
+    hasText: deletedHistorySPL,
+  })).toHaveCount(0, { timeout });
+  const historyDialogAfterDelete = page.getByRole("dialog", {
+    name: "Search history",
+    exact: true,
+  });
+  await expect(historyDialogAfterDelete.getByRole("button", {
+    name: "Clear history",
+    exact: true,
+  })).toBeEnabled({ timeout });
+  await historyDialogAfterDelete.getByRole("button", {
+    name: "Close dialog",
+    exact: true,
+  }).click();
+  const postDeleteCreateRequest = page.waitForRequest((request) => {
+    const requestURL = new URL(request.url());
+    return request.method() === "POST"
+      && requestURL.origin === origin
+      && requestURL.pathname === "/api/v1/search/jobs/create";
+  });
+  await page.getByTestId("run-search").click();
+  await postDeleteCreateRequest;
+  await expect(page.getByTestId("job-strip")).toContainText("Canceled", { timeout });
+  expect(historyRerunCreateRequests).toHaveLength(0);
+  expect(ordinaryCreateRequests).toHaveLength(1);
+  expect(ordinaryCreateRequests[0]?.definition?.spl).toBe(deletedHistorySPL);
+  expect(ordinaryCreateRequests[0]?.source).toBeUndefined();
+
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  const historyRow = page.getByTestId("history-list").getByRole("row").filter({
+    hasText: historySPL,
+  });
+  await expect(historyRow).toHaveCount(1, { timeout });
+
+  const rerunRequestPromise = page.waitForRequest((request) => {
+    const requestURL = new URL(request.url());
+    return request.method() === "POST"
+      && requestURL.origin === origin
+      && requestURL.pathname === "/api/v1/search/jobs/create";
+  });
+  await historyRow.getByRole("button", { name: "Run again", exact: true }).click();
+  await rerunRequestPromise;
+
+  expect(historyRerunCreateRequests).toHaveLength(1);
+  expect(historyRerunCreateRequests[0]).toEqual({
+    definition: undefined,
+    source: {
+      origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_HISTORY_RERUN,
+      savedSearchId: undefined,
+      historySearchId,
+      dashboardId: undefined,
+    },
+    options: undefined,
+    clientRequestId: undefined,
+  });
+
+  await expect(page.getByTestId("job-strip")).toContainText("Canceled", { timeout });
+  await page.getByTestId("run-search").click();
+  await expect(page.getByText(/The connected server accepts RFC 3339 timestamps/)).toBeVisible({
+    timeout,
+  });
+  expect(historyRerunCreateRequests).toHaveLength(1);
+  expect(ordinaryCreateRequests).toHaveLength(1);
+
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  const refreshedHistoryRow = page.getByTestId("history-list").getByRole("row").filter({
+    hasText: historySPL,
+  });
+  await expect(refreshedHistoryRow).toHaveCount(1, { timeout });
+  historyRerunSourceMissing = true;
+  const missingRerunResponse = page.waitForResponse((response) => {
+    const responseURL = new URL(response.url());
+    return responseURL.origin === origin
+      && responseURL.pathname === "/api/v1/search/jobs/create"
+      && response.status() === 404;
+  });
+  await refreshedHistoryRow.getByRole("button", { name: "Run again", exact: true }).click();
+  await missingRerunResponse;
+  await expect.poll(() => historyRerunCreateRequests.length, { timeout }).toBe(2);
+  expect(historyRerunCreateRequests[1]).toEqual(historyRerunCreateRequests[0]);
+
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await expect(page.getByTestId("history-list").getByRole("row").filter({
+    hasText: historySPL,
+  })).toHaveCount(0, { timeout });
+  await page.getByRole("dialog", { name: "Search history", exact: true })
+    .getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByTestId("run-search").click();
+  await expect(page.getByText(/The connected server accepts RFC 3339 timestamps/)).toBeVisible({
+    timeout,
+  });
+  expect(historyRerunCreateRequests).toHaveLength(2);
+  expect(ordinaryCreateRequests).toHaveLength(1);
 });
 
 test("failed search terminal rejects without waiting for results", async () => {

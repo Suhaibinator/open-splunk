@@ -85,11 +85,14 @@ func (SearchSuggestionKind) EnumDescriptor() ([]byte, []int) {
 
 // POST /api/v1/search/jobs/create
 type CreateSearchJobRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	Definition      *SearchDefinition      `protobuf:"bytes,1,opt,name=definition,proto3" json:"definition,omitempty"`
-	Source          *SearchJobSource       `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
-	Options         *SearchJobOptions      `protobuf:"bytes,3,opt,name=options,proto3" json:"options,omitempty"`
-	ClientRequestId *string                `protobuf:"bytes,4,opt,name=client_request_id,json=clientRequestId,proto3,oneof" json:"client_request_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required for ordinary and saved-search creates. HISTORY_RERUN requests
+	// must omit definition so the server can replay the owner-scoped retained
+	// intent and resolve relative time again at admission.
+	Definition      *SearchDefinition `protobuf:"bytes,1,opt,name=definition,proto3" json:"definition,omitempty"`
+	Source          *SearchJobSource  `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	Options         *SearchJobOptions `protobuf:"bytes,3,opt,name=options,proto3" json:"options,omitempty"`
+	ClientRequestId *string           `protobuf:"bytes,4,opt,name=client_request_id,json=clientRequestId,proto3,oneof" json:"client_request_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }

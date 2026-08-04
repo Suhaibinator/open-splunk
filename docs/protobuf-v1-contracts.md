@@ -443,7 +443,7 @@ clear semantics. The hard ceilings, accepted-event charging, durable virtual
 schedule, exact-retry precedence, and collector backpressure behavior are
 normative in [Ingestion rate limits v0.1](ingestion-rate-limits-v0.1.md).
 
-Search creation always creates a job record—even parse or planning failures transition that job to `FAILED` and therefore appear in history. Search and export cancellation are idempotent, and an already-terminal job is returned unchanged.
+Search creation always creates a job record—even parse or planning failures transition that job to `FAILED` and therefore appear in history. An ordinary or saved-search create supplies `definition`. A `SEARCH_JOB_ORIGIN_HISTORY_RERUN` create instead supplies only `source.history_search_id`: `definition` is forbidden, and the server reconstructs trusted reusable intent from the caller's owner-scoped retained history row, reauthorizes its current app/index scope, resolves relative time again, and records the immediate source history ID on the fresh job. If current-clock resolution makes a retained mixed relative/absolute range non-executable, the server returns `409 Conflict` without admitting a job. Search and export cancellation are idempotent, and an already-terminal job is returned unchanged.
 
 Result cursors are scoped to one immutable search snapshot and one column selection. A page token must not be reused with another job or changed request parameters. Rows contain exactly one cell per schema column; a nonexistent field uses `MISSING_VALUE_MISSING`, while an explicitly present null uses `NULL_VALUE_NULL`.
 

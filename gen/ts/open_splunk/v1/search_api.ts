@@ -92,6 +92,11 @@ export function searchSuggestionKindToJSON(object: SearchSuggestionKind): string
 
 /** POST /api/v1/search/jobs/create */
 export interface CreateSearchJobRequest {
+  /**
+   * Required for ordinary and saved-search creates. HISTORY_RERUN requests
+   * must omit definition so the server can replay the owner-scoped retained
+   * intent and resolve relative time again at admission.
+   */
   definition: SearchDefinition | undefined;
   source: SearchJobSource | undefined;
   options: SearchJobOptions | undefined;

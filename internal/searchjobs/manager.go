@@ -961,8 +961,9 @@ func (manager *Manager) validateRequestSize(request CreateRequest) error {
 	if len(request.AppID) > maximumJobAppIDBytes {
 		return fmt.Errorf("%w: app ID exceeds %d bytes", ErrRequestTooLarge, maximumJobAppIDBytes)
 	}
-	if len(request.Source.ObjectID) > maximumJobSourceIDBytes {
-		return fmt.Errorf("%w: source object ID exceeds %d bytes", ErrRequestTooLarge, maximumJobSourceIDBytes)
+	maximumSourceIDBytes := maximumJobSourceObjectIDBytes(request.Source.Origin)
+	if len(request.Source.ObjectID) > maximumSourceIDBytes {
+		return fmt.Errorf("%w: source object ID exceeds %d bytes", ErrRequestTooLarge, maximumSourceIDBytes)
 	}
 	for _, value := range []string{
 		request.AppID,
@@ -1014,10 +1015,21 @@ func CanonicalJobSource(source JobSource) (JobSource, error) {
 	if requiresObject != (source.ObjectID != "") {
 		return JobSource{}, errors.New("search job source object ID does not match its origin")
 	}
-	if source.ObjectID != "" && !canonicalJobMetadataIdentifier(source.ObjectID, maximumJobSourceIDBytes, false) {
+	if source.ObjectID != "" && !canonicalJobMetadataIdentifier(
+		source.ObjectID,
+		maximumJobSourceObjectIDBytes(source.Origin),
+		false,
+	) {
 		return JobSource{}, errors.New("search job source object ID is invalid")
 	}
 	return source, nil
+}
+
+func maximumJobSourceObjectIDBytes(origin JobOrigin) int {
+	if origin == JobOriginHistoryRerun {
+		return MaximumJobIDBytes
+	}
+	return maximumJobSourceIDBytes
 }
 
 func canonicalJobMetadataIdentifier(value string, maximumBytes int, allowEmpty bool) bool {

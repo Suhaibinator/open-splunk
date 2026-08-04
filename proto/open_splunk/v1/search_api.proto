@@ -11,6 +11,9 @@ option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;o
 
 // POST /api/v1/search/jobs/create
 message CreateSearchJobRequest {
+  // Required for ordinary and saved-search creates. HISTORY_RERUN requests
+  // must omit definition so the server can replay the owner-scoped retained
+  // intent and resolve relative time again at admission.
   SearchDefinition definition = 1;
   SearchJobSource source = 2;
   SearchJobOptions options = 3;

@@ -219,19 +219,20 @@ func normalizeSource(entry *opensplunkv1.SearchHistoryEntry) error {
 		return invalid("search origin is invalid")
 	}
 	for _, field := range []struct {
-		name  string
-		value *string
+		name         string
+		value        *string
+		maximumBytes int
 	}{
-		{name: "saved-search ID", value: source.SavedSearchId},
-		{name: "history search ID", value: source.HistorySearchId},
-		{name: "dashboard ID", value: source.DashboardId},
+		{name: "saved-search ID", value: source.SavedSearchId, maximumBytes: maximumSavedSearchIDBytes},
+		{name: "history search ID", value: source.HistorySearchId, maximumBytes: maximumSearchJobIDBytes},
+		{name: "dashboard ID", value: source.DashboardId, maximumBytes: maximumSavedSearchIDBytes},
 	} {
 		name, value := field.name, field.value
 		if value == nil {
 			continue
 		}
 		trimmed := strings.TrimSpace(*value)
-		if err := validateText(name, trimmed, maximumSavedSearchIDBytes, false); err != nil {
+		if err := validateText(name, trimmed, field.maximumBytes, false); err != nil {
 			return err
 		}
 		*value = trimmed

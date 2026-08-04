@@ -180,18 +180,48 @@ func appCatalogSummariesToProto(
 }
 
 func (handler *apiHandler) createSearchJob(request *http.Request, input *opensplunkv1.CreateSearchJobRequest) (*opensplunkv1.CreateSearchJobResponse, error) {
-	resolved, err := handler.resolveSearchDefinition(input.GetDefinition(), func(definition *opensplunkv1.SearchDefinition) error {
-		return rejectUnsupportedCreateFields(input, definition)
-	})
-	if err != nil {
-		return nil, err
+	var (
+		resolved     resolvedSearchDefinition
+		source       searchjobs.JobSource
+		err          error
+		historyRerun = input.GetSource().GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN
+	)
+	if historyRerun {
+		resolved, source, err = handler.resolveHistoryRerun(
+			request.Context(),
+			input,
+		)
+	} else {
+		resolved, err = handler.resolveSearchDefinition(input.GetDefinition(), func(definition *opensplunkv1.SearchDefinition) error {
+			return rejectUnsupportedCreateFields(input, definition)
+		})
+		if err == nil {
+			resolved.AppID, source, err = handler.resolveSearchJobSource(
+				request.Context(),
+				resolved.AppID,
+				input.GetSource(),
+			)
+		}
 	}
-	appID, source, err := handler.resolveSearchJobSource(request.Context(), resolved.AppID, input.GetSource())
 	if err != nil {
+		if contextErr := historyRerunContextError(
+			request.Context(),
+			err,
+			historyRerun,
+		); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, err
 	}
 	requestedIndexes, err := handler.resolveAuthorizedSearchIndexes(request.Context(), resolved.IndexScope)
 	if err != nil {
+		if contextErr := historyRerunContextError(
+			request.Context(),
+			err,
+			historyRerun,
+		); contextErr != nil {
+			return nil, contextErr
+		}
 		return nil, err
 	}
 
@@ -205,10 +235,17 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		AuthorizedIndexes: slices.Clone(requestedIndexes),
 		RequestedIndexes:  requestedIndexes,
 		TimeRange:         resolved.TimeRange,
-		AppID:             appID,
+		AppID:             resolved.AppID,
 		Source:            source,
 	})
 	if err != nil {
+		if contextErr := historyRerunContextError(
+			request.Context(),
+			err,
+			historyRerun,
+		); contextErr != nil {
+			return nil, contextErr
+		}
 		if contextErr := requestContextFailure(request.Context(), err); contextErr != nil {
 			return nil, contextErr
 		}
@@ -219,6 +256,216 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		return nil, internalError()
 	}
 	return &opensplunkv1.CreateSearchJobResponse{SearchJob: converted}, nil
+}
+
+func historyRerunContextError(
+	ctx context.Context,
+	operationErr error,
+	historyRerun bool,
+) error {
+	if !historyRerun || requestContextFailure(ctx, operationErr) == nil {
+		return nil
+	}
+	return router.NewHTTPError(
+		http.StatusRequestTimeout,
+		"history rerun request was canceled",
+	)
+}
+
+func (handler *apiHandler) resolveHistoryRerun(
+	ctx context.Context,
+	input *opensplunkv1.CreateSearchJobRequest,
+) (resolvedSearchDefinition, searchjobs.JobSource, error) {
+	if input.GetDefinition() != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{},
+			badRequestError("history rerun cannot include a client search definition")
+	}
+	if err := rejectUnsupportedCreateFields(input, nil); err != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{},
+			badRequestError(err.Error())
+	}
+	source := input.GetSource()
+	if source == nil || source.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
+		source.HistorySearchId == nil || source.SavedSearchId != nil || source.DashboardId != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{},
+			badRequestError("history-rerun origin requires a history search ID")
+	}
+	historyID, err := historySearchJobID(source.GetHistorySearchId())
+	if err != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{},
+			badRequestError(err.Error())
+	}
+	if handler.searchHistory == nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{},
+			badRequestError("history rerun is not supported")
+	}
+
+	entry, err := handler.searchHistory.Get(
+		ctx,
+		handler.searchHistoryScope(),
+		historyID,
+	)
+	if contextErr := requestContextFailure(ctx, err); contextErr != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, contextErr
+	}
+	if mapped := mapSearchHistoryCallError(ctx, err); mapped != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, mapped
+	}
+	trusted, err := cloneSearchHistoryEntry(entry)
+	if err != nil || trusted.GetSearchJobId() != historyID {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
+	}
+	definition, err := trustedHistoryRerunDefinition(trusted)
+	if err != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
+	}
+	resolvedRange, err := resolveSearchTimeRange(
+		definition.GetTimeRange(),
+		handler.now(),
+	)
+	if err != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{},
+			router.NewHTTPError(
+				http.StatusConflict,
+				"retained search time range is not executable at the current server time",
+			)
+	}
+	resolved := resolvedSearchDefinition{
+		SPL:        definition.GetSpl(),
+		TimeRange:  resolvedRange,
+		AppID:      definition.GetAppId(),
+		IndexScope: slices.Clone(definition.GetIndexScope()),
+	}
+	if err := handler.authorizeHistoryRerunApp(ctx, resolved.AppID); err != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, err
+	}
+	return resolved, searchjobs.JobSource{
+		Origin:   searchjobs.JobOriginHistoryRerun,
+		ObjectID: historyID,
+	}, nil
+}
+
+func trustedHistoryRerunDefinition(
+	entry *opensplunkv1.SearchHistoryEntry,
+) (*opensplunkv1.SearchDefinition, error) {
+	stored := entry.GetDefinition()
+	if stored == nil || stored.GetTimeRange() == nil ||
+		stored.GetTimeRange().Earliest == nil || stored.GetTimeRange().Latest == nil {
+		return nil, errors.New("history entry does not contain reusable time intent")
+	}
+	if strings.TrimSpace(stored.GetSpl()) == "" ||
+		strings.IndexByte(stored.GetSpl(), 0) >= 0 {
+		return nil, errors.New("history entry contains invalid SPL")
+	}
+	for _, value := range []*string{
+		stored.GetTimeRange().Earliest,
+		stored.GetTimeRange().Latest,
+		stored.GetTimeRange().Timezone,
+	} {
+		if value != nil && strings.TrimSpace(*value) != *value {
+			return nil, errors.New("history entry contains noncanonical time intent")
+		}
+	}
+	timeIntent := searchtime.Intent{
+		Earliest: stored.GetTimeRange().GetEarliest(),
+		Latest:   stored.GetTimeRange().GetLatest(),
+		Timezone: "UTC",
+	}
+	if stored.GetTimeRange().Timezone != nil {
+		timeIntent.Timezone = stored.GetTimeRange().GetTimezone()
+		timeIntent.TimezoneSpecified = true
+	}
+	if err := searchtime.ValidateIntent(timeIntent); err != nil {
+		return nil, errors.New("history entry contains invalid time intent")
+	}
+	if stored.AppId != nil {
+		appID, err := normalizeSearchAppID(stored.GetAppId())
+		if err != nil || appID != stored.GetAppId() {
+			return nil, errors.New("history entry contains a noncanonical app ID")
+		}
+	}
+
+	requested, err := normalizeRequestedIndexes(stored.GetIndexScope())
+	if err != nil || !slices.Equal(requested, stored.GetIndexScope()) {
+		return nil, errors.New("history entry contains a noncanonical requested index scope")
+	}
+	effective := requested
+	if len(entry.GetEffectiveIndexScope()) != 0 {
+		effective, err = normalizeRequestedIndexes(entry.GetEffectiveIndexScope())
+		if err != nil || !slices.Equal(effective, entry.GetEffectiveIndexScope()) {
+			return nil, errors.New("history entry contains a noncanonical effective index scope")
+		}
+		requestedSet := make(map[string]struct{}, len(requested))
+		for _, name := range requested {
+			requestedSet[name] = struct{}{}
+		}
+		for _, name := range effective {
+			if _, allowed := requestedSet[name]; !allowed {
+				return nil, errors.New("history entry effective index scope exceeds its requested scope")
+			}
+		}
+	}
+	if len(effective) == 0 {
+		return nil, errors.New("history entry does not contain a reusable index scope")
+	}
+
+	return &opensplunkv1.SearchDefinition{
+		Spl: strings.Clone(stored.GetSpl()),
+		TimeRange: &opensplunkv1.TimeRangeSpec{
+			Earliest: cloneOptionalString(stored.GetTimeRange().Earliest),
+			Latest:   cloneOptionalString(stored.GetTimeRange().Latest),
+			Timezone: cloneOptionalString(stored.GetTimeRange().Timezone),
+		},
+		AppId:      cloneOptionalString(stored.AppId),
+		IndexScope: slices.Clone(effective),
+	}, nil
+}
+
+func (handler *apiHandler) authorizeHistoryRerunApp(
+	ctx context.Context,
+	appID string,
+) error {
+	if appID == "" {
+		return nil
+	}
+	apps := handler.bootstrap.Apps
+	if handler.appCatalog != nil {
+		catalog, err := handler.appCatalog.ListActiveApps(
+			ctx,
+			handler.tenantID,
+			uint32(maximumBootstrapApps),
+		)
+		if contextErr := requestContextFailure(ctx, err); contextErr != nil {
+			return contextErr
+		}
+		if err != nil || !catalog.Complete || len(catalog.Apps) > maximumBootstrapApps {
+			return unavailableError("control plane is unavailable")
+		}
+		apps, err = appCatalogSummariesToProto(catalog)
+		if err != nil {
+			return internalError()
+		}
+	}
+	if !activeHistoryRerunAppExists(apps, appID) {
+		return forbiddenError("search app is unavailable")
+	}
+	return nil
+}
+
+func activeHistoryRerunAppExists(
+	apps []*opensplunkv1.AppSummary,
+	appID string,
+) bool {
+	for _, app := range apps {
+		if app.GetAppId() == appID &&
+			app.GetState() == opensplunkv1.AppState_APP_STATE_ACTIVE {
+			return true
+		}
+	}
+	return false
 }
 
 func (handler *apiHandler) getSearchJob(request *http.Request, input *opensplunkv1.GetSearchJobRequest) (*opensplunkv1.GetSearchJobResponse, error) {
@@ -394,7 +641,16 @@ func requestContextFailure(ctx context.Context, operationErr error) error {
 	return nil
 }
 
-var errIndexUnavailable = errors.New("requested index is unavailable")
+var (
+	errIndexUnavailable         = errors.New("requested index is unavailable")
+	errInvalidIndexCatalogBatch = errors.New("index catalog returned an invalid batch result")
+)
+
+type batchIndexCatalog interface {
+	GetIndexesByNames(context.Context, []string) ([]control.Index, error)
+}
+
+var _ batchIndexCatalog = (*control.DB)(nil)
 
 func (handler *apiHandler) resolveAuthorizedSearchIndexes(ctx context.Context, scope []string) ([]string, error) {
 	requestedIndexes, err := normalizeRequestedIndexes(scope)
@@ -417,6 +673,31 @@ func (handler *apiHandler) resolveAuthorizedSearchIndexes(ctx context.Context, s
 }
 
 func (handler *apiHandler) authorizeRequestedIndexes(ctx context.Context, requested []string) error {
+	if catalog, ok := handler.indexes.(batchIndexCatalog); ok {
+		records, err := catalog.GetIndexesByNames(ctx, slices.Clone(requested))
+		if errors.Is(err, control.ErrNotFound) {
+			return errIndexUnavailable
+		}
+		if err != nil {
+			return err
+		}
+		if len(records) != len(requested) {
+			return errInvalidIndexCatalogBatch
+		}
+		remainingRecords := records
+		for _, requestedName := range requested {
+			record := remainingRecords[0]
+			remainingRecords = remainingRecords[1:]
+			if record.Definition.Name != requestedName {
+				return errInvalidIndexCatalogBatch
+			}
+			if !isSearchableIndexRecord(record, requestedName) {
+				return errIndexUnavailable
+			}
+		}
+		return nil
+	}
+
 	for _, name := range requested {
 		record, err := handler.indexes.GetIndexByName(ctx, name)
 		if errors.Is(err, control.ErrNotFound) {
@@ -425,11 +706,17 @@ func (handler *apiHandler) authorizeRequestedIndexes(ctx context.Context, reques
 		if err != nil {
 			return err
 		}
-		if record.State != control.IndexStateActive || !record.Definition.SearchEnabled || record.Definition.Name != name {
+		if !isSearchableIndexRecord(record, name) {
 			return errIndexUnavailable
 		}
 	}
 	return nil
+}
+
+func isSearchableIndexRecord(record control.Index, requestedName string) bool {
+	return record.State == control.IndexStateActive &&
+		record.Definition.SearchEnabled &&
+		record.Definition.Name == requestedName
 }
 
 func rejectUnsupportedCreateFields(input *opensplunkv1.CreateSearchJobRequest, definition *opensplunkv1.SearchDefinition) error {
