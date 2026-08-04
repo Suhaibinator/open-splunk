@@ -7,6 +7,109 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
+## Latest checkpoint: durable bounded audit journal
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `1453e50` — add a durable audit journal for successful ingestion-token
+  mutations.
+
+This test-first control-plane unit adds a fail-closed, tenant-scoped security
+journal without putting GORM on the ClickHouse path:
+
+1. SQLite migration `0022_audit_events.sql` is the schema authority for an
+   append-only `audit_events` journal and its per-tenant tail state. Explicit
+   GORM projections are used only in the control plane; there is no
+   `AutoMigrate` call and no GORM use in ClickHouse execution.
+2. The schema admits only fixed actor, role, action, and target kinds, stores no
+   token secret, bearer value, prefix, request payload, or free-form metadata,
+   and enforces dense one-based tenant sequences. Update, delete, replacement,
+   and invalid state-transition triggers make the journal immutable. Each
+   tenant has a permanent 100,000-event ceiling.
+3. Store construction performs a context-bounded, complete validation of every
+   journal in fixed 512-row batches. It detects orphan state or rows, interior
+   gaps, malformed values, oversized fields, and forged state before serving
+   requests. After construction, append and ordinary list boundaries validate
+   the state and tail in constant query count; tests prove the same statement
+   count with one and 2,048 rows.
+4. Token create, update, and revoke append their successful audit event in the
+   same caller-owned GORM transaction and reuse the mutation timestamp and
+   target version. Any audit error rolls back token metadata, scopes, host
+   constraints, and revoke pruning. Production stores require an explicit
+   trusted actor before randomness or mutation begins.
+5. Browser administrator middleware derives the actor and tenant from the
+   authenticated principal, overwrites any upstream actor context, rejects a
+   browser user role, and strips every case variant of `Authorization` before
+   dispatch. The audit request carries no client-selectable tenant.
+6. The administrator-only protobuf route `/api/v1/audit/events/list` supports
+   exact action, actor, and target filters; descending keyset pages; optional
+   exact totals; a 200-row page ceiling; a 2 KiB cursor ceiling; and a 2 MiB
+   response ceiling. HMAC cursors are purpose-separated and bind tenant,
+   normalized filters, page size, total mode, sequence boundary, and the
+   high-water row digest.
+7. Corrupt storage, invalid service projections, unavailable actor context,
+   capacity, and configuration failures remain fail-closed and are sanitized
+   to service-unavailable responses. Only authenticated cursor defects map to
+   a client error; request cancellation maps to a timeout.
+8. Generated Go and TypeScript bindings, the system feature advertisement, and
+   the 50-route protobuf contract fixture include the new API. The frontend
+   currently advertises that the audit view is not wired; no partial client
+   transport was presented as a working activity view.
+9. Unit and real-HTTP tests cover transactional rollback, actor and tenant
+   derivation, secret redaction, immutable storage, startup and tail
+   corruption, stable cursor reopen behavior, concurrent append sequencing,
+   filters, totals, pagination, backup behavior, bounded statements, and the
+   honest 100,000-row boundary. A final independent cross-layer adversarial
+   review reported no remaining concrete finding.
+
+Validation for `1453e50` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+make proto
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$/^compiled_SPL_corpus$' \
+  -count=1 -timeout=30m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/^streamstats_executor_and_manager_transport$' \
+  -count=1 -timeout=30m -v
+```
+
+Every command passed. Cached golangci-lint v2.12.2 reported `0 issues`, and
+frontend tests passed 142/142. Focused coverage was 82.9% for `internal/audit`,
+84.0% for `internal/auth`, 84.8% for `internal/server`, and 73.2% for the server
+command. The honest 100,000-row journal validated in about 2.7 seconds. The
+compiled SPL corpus passed in 137.49 seconds and the focused production
+Executor/Manager transport passed in 7.70 seconds. Test-owned ClickHouse
+containers and volumes were removed.
+
+Version 0.1 intentionally records only successful ingestion-token mutations;
+other audit families and frontend consumption remain future work. The next SPL
+compatibility unit is `streamstats count(field)` when work resumes. The
+external GradeThis Compose cutover remains explicitly deferred, and the broader
+backend/SPL goal remains active.
+
 ## Latest checkpoint: bounded streamstats count
 
 Date: 2026-08-03
