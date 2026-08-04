@@ -7,7 +7,111 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: atomic index mutation audit coverage
+## Latest checkpoint: bounded streamstats numeric average
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `df99748` — add bounded `streamstats avg(field)` execution.
+
+This test-first SPL unit extends the running aggregate command without a
+control-plane schema change, migration, public protobuf change, or GORM on the
+ClickHouse path:
+
+1. `streamstats` now accepts one exact long-form `avg(field)` aggregate with an
+   exact, unquoted, case-sensitive input and an optional exact unquoted `AS`
+   alias before `BY`. Without `AS`, the output is canonical lowercase
+   `avg(field)` while preserving the input spelling. Bare, empty, wildcard,
+   quoted, eval, multi-input, `average`, `mean`, and multiple-aggregate forms
+   fail with source-located diagnostics.
+2. Numeric eligibility exactly reuses the reviewed `stats` and `eventstats`
+   contract. Finite numeric scalars, bounded numeric Strings, tagged decimals,
+   canonical timestamps, and every eligible immediate top-level multivalue
+   member contribute independently. Missing, null, empty, nonnumeric, Boolean,
+   bytes, object, nested-container, and stored nonfinite values contribute
+   nothing.
+3. Average is numeric-member weighted, never row weighted. The compiler
+   materializes one normalized `Array(Float64)` per admitted row and applies
+   one `avgOrNullArray` window over the exact row frame. It performs no
+   `ARRAY JOIN`, row expansion, `groupArray`, physical rescan, per-group query,
+   per-row partial average, or Go-side buffering.
+4. Results are `Nullable(Float64)`. A complete empty or all-ineligible frame is
+   present null while a real zero remains non-null. Downstream compiler state,
+   comparisons, result transport, field catalog, summary, timeline, export
+   re-execution, and search inspection all retain the Float64/nullability
+   contract.
+5. Existing chronological behavior is unchanged. `current`, row-counted
+   `window`, unbounded prefixes, exact BY partitioning, explicit
+   `global=false` for positive grouped windows, input-before-alias replacement,
+   and deterministic order snapshots reuse the count/sum implementation.
+   Missing or null BY tuples retain the row with logically absent output; a
+   complete group with no numeric member publishes present null.
+6. The 10,000-row admission ceiling, hidden 10,001st-row sentinel, scoped
+   tenant read, Dynamic grouping poison, downstream validation barrier, and
+   ordinary resource ceilings remain atomic and unchanged. Exact-boundary and
+   downstream-hidden overflow tests cover average independently.
+7. Digest-pinned ClickHouse coverage proves the complete/prior and two-row
+   frame matrix, multivalue member weighting, grouped windows, alias
+   replacement, projected-away input, decimal and canonical-time conversion,
+   computed positive infinity, tenant exclusion, nullable empty frames, and
+   exact limit behavior. Production executor/manager transport was exercised
+   separately against the same image.
+8. Parser/planner/compiler tests began red before production support. Three
+   independent post-implementation adversarial reviews found no semantic or
+   SQL defect. One reviewer found missing explicit `average`/`mean` rejection
+   coverage and two stale comments; all were fixed before the final validation.
+9. Product architecture, the exact compatibility contract, completion
+   metadata, and the frontend support diagnostic now advertise numeric running
+   average without widening the unsupported streamstats surface.
+
+Validation for `df99748` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+make proto
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=10m --max-issues-per-linter=0 --max-same-issues=0
+
+npm run lint -- --quiet
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$/^compiled_SPL_corpus$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/^streamstats_executor_and_manager_transport$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=10m -v
+```
+
+Every final command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 142/142 and the release/protobuf harness passed 65/65.
+The compiled SPL corpus passed in 141.52 seconds, executor/manager streamstats
+transport passed in 1.02 seconds, and the Backend vertical passed in 25.69
+seconds. Test-owned ClickHouse containers and volumes were removed.
+
+The next backend/SPL unit is intentionally unselected pending further
+instructions. The external GradeThis Compose cutover remains explicitly
+deferred, and the broader backend/SPL goal remains active.
+
+## Previous checkpoint: atomic index mutation audit coverage
 
 Date: 2026-08-03
 
@@ -114,9 +218,10 @@ The digest-pinned physical-deletion lifecycle passed in 20.19 seconds, and the
 complete Backend vertical passed in 24.00 seconds. Test-owned ClickHouse
 containers and volumes were removed.
 
-The next SPL candidate remains bounded `streamstats avg(field)`. The external
-GradeThis Compose cutover remains explicitly deferred, and the broader
-backend/SPL goal remains active.
+The next SPL candidate at that checkpoint was bounded
+`streamstats avg(field)`, now complete at `df99748`. The external GradeThis
+Compose cutover remains explicitly deferred, and the broader backend/SPL goal
+remains active.
 
 ## Previous checkpoint: bounded streamstats numeric sum
 
@@ -15183,7 +15288,8 @@ Do not guess those decisions if they materially affect the implementation.
    complete at `1a9f6ef`, bounded running `streamstats count` is complete at
    `182b60c`, bounded field-occurrence `streamstats count(field)` is complete
    at `2e1c47e`, bounded numeric `streamstats sum(field)` is complete at
-   `6e06394`, multi-field `top`/`rare` is complete at `5db9816`,
+   `6e06394`, bounded numeric `streamstats avg(field)` is complete at
+   `df99748`, multi-field `top`/`rare` is complete at `5db9816`,
    exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
