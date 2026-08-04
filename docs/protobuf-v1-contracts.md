@@ -10,6 +10,7 @@ This directory is the source of truth shared by the Go server, Go collector, and
 - `search_ws.proto` defines binary WebSocket commands and sequenced progress events. It is not a results paging API.
 - `saved_search*`, `history*`, and `export*` remain separate because they have different lifecycle, persistence, and security semantics.
 - `index*`, `app*`, and `collector_admin*` define control-plane entities plus SRouter operations.
+- `audit*` defines the fixed, administrator-only immutable audit projection and bounded list operation.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
@@ -94,11 +95,30 @@ projection.
 | `/collectors/get` | `GetCollectorRequest` | `GetCollectorResponse` |
 | `/collectors/update` | `UpdateCollectorRequest` | `UpdateCollectorResponse` |
 | `/collectors/state/set` | `SetCollectorEnabledRequest` | `SetCollectorEnabledResponse` |
+| `/audit/events/list` | `ListAuditEventsRequest` | `ListAuditEventsResponse` |
 | `/ingestion-tokens/create` | `CreateIngestionTokenRequest` | `CreateIngestionTokenResponse` |
 | `/ingestion-tokens/get` | `GetIngestionTokenRequest` | `GetIngestionTokenResponse` |
 | `/ingestion-tokens/list` | `ListIngestionTokensRequest` | `ListIngestionTokensResponse` |
 | `/ingestion-tokens/update` | `UpdateIngestionTokenRequest` | `UpdateIngestionTokenResponse` |
 | `/ingestion-tokens/revoke` | `RevokeIngestionTokenRequest` | `RevokeIngestionTokenResponse` |
+
+### Audit events
+
+`POST /api/v1/audit/events/list` is administrator-only. Tenant and owner scope
+come from the authenticated browser principal and cannot be supplied on the
+wire. The first contract contains successful ingestion-token create, update,
+and revoke events only. Actor kind, actor role, action, and target kind are
+fixed enums; the projection contains no arbitrary payload or credential
+material.
+
+Pages are ordered by descending tenant-local sequence and capped at 200 rows.
+The opaque HMAC-authenticated cursor binds tenant, exact normalized filters,
+page size, total-size choice, sequence boundary, and an immutable first-page
+journal high-water identity. Later appends cannot enter the traversal, and a
+cursor from a database state newer than a restored snapshot fails instead of
+silently traversing the wrong prefix. See
+[Audit events v0.1](audit-events-v0.1.md) for storage, atomicity, capacity,
+redaction, and frontend requirements.
 
 ### Index deletion
 

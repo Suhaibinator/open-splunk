@@ -13,6 +13,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -920,8 +921,16 @@ func TestValidAdministratorPrincipalIsExactAndCredentialBufferIsCleared(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	upstreamContext, err := audit.WithActor(context.Background(), audit.Actor{
+		Kind: audit.ActorKindBrowser,
+		ID:   "attacker-controlled-upstream-actor",
+		Role: audit.ActorRoleAdministrator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := httptest.NewRequestWithContext(
-		context.Background(),
+		upstreamContext,
 		http.MethodPost,
 		"/api/v1/indexes/list",
 		bytes.NewReader(payload),
@@ -967,10 +976,23 @@ func TestValidAdministratorPrincipalIsExactAndCredentialBufferIsCleared(t *testi
 			captured.Valid(),
 		)
 	}
-	if _, ok := request.Context().Value(
+	capturedActor, ok := audit.ActorFromContext(capturedContext)
+	wantActor := audit.Actor{
+		Kind: audit.ActorKindBrowser,
+		ID:   browserGateOwnerID,
+		Role: audit.ActorRoleAdministrator,
+	}
+	if !ok || capturedActor != wantActor {
+		t.Fatalf("captured audit actor = (%+v, %t), want %+v", capturedActor, ok, wantActor)
+	}
+	if _, originalHasPrincipal := request.Context().Value(
 		browserPrincipalContextKey{},
-	).(auth.BrowserPrincipal); ok {
+	).(auth.BrowserPrincipal); originalHasPrincipal {
 		t.Fatal("original request context was mutated")
+	}
+	originalActor, ok := audit.ActorFromContext(request.Context())
+	if !ok || originalActor.ID != "attacker-controlled-upstream-actor" {
+		t.Fatalf("caller-owned audit context was mutated: (%+v, %t)", originalActor, ok)
 	}
 	if request.Header.Get("Authorization") !=
 		"bEaReR "+adminIntegrationBearerToken {

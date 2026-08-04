@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+enum AuditActorKind {
+  AUDIT_ACTOR_KIND_UNSPECIFIED = 0;
+  AUDIT_ACTOR_KIND_SYSTEM = 1;
+  AUDIT_ACTOR_KIND_BROWSER = 2;
+}
+
+enum AuditActorRole {
+  AUDIT_ACTOR_ROLE_UNSPECIFIED = 0;
+  AUDIT_ACTOR_ROLE_SYSTEM = 1;
+  AUDIT_ACTOR_ROLE_USER = 2;
+  AUDIT_ACTOR_ROLE_ADMINISTRATOR = 3;
+}
+
+enum AuditAction {
+  AUDIT_ACTION_UNSPECIFIED = 0;
+  AUDIT_ACTION_INGESTION_TOKEN_CREATE = 1;
+  AUDIT_ACTION_INGESTION_TOKEN_UPDATE = 2;
+  AUDIT_ACTION_INGESTION_TOKEN_REVOKE = 3;
+}
+
+enum AuditTargetKind {
+  AUDIT_TARGET_KIND_UNSPECIFIED = 0;
+  AUDIT_TARGET_KIND_INGESTION_TOKEN = 1;
+}
+
+// AuditEvent is an immutable, allowlisted administrative-event projection.
+// The contract deliberately has no arbitrary metadata, detail, or payload
+// field. Implementations must never place secrets, token digests, credential
+// material, authorization headers, request bodies, or generated SQL in any
+// identity field.
+message AuditEvent {
+  uint64 sequence = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+  AuditActorKind actor_kind = 3;
+  string actor_id = 4;
+  AuditActorRole actor_role = 5;
+  AuditAction action = 6;
+  AuditTargetKind target_kind = 7;
+  string target_id = 8;
+  uint64 target_version = 9;
+}

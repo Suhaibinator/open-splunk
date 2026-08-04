@@ -18,6 +18,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunk "github.com/Suhaibinator/open-splunk"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildinfo"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -42,6 +43,7 @@ const (
 	defaultIndexRetention            = ingest.DefaultIndexRetention
 	defaultOwnerID                   = "single-user"
 	splCompatibility                 = "tier-1-dev"
+	auditCursorKeyPurpose            = "audit-event-cursors"
 	collectorHeartbeatFlushInterval  = time.Second
 	collectorHeartbeatWriteTimeout   = 5 * time.Second
 	collectorHeartbeatReleaseTimeout = 2 * collectorHeartbeatWriteTimeout
@@ -250,10 +252,17 @@ func runWithOptions(config options) error {
 			log.Printf("shutdown visibility sequencer: %v", err)
 		}
 	}()
-	savedSearches, tokenStore, err := openSecurityStores(startupContext, controlDB, config.masterKeyPath)
+	securityStores, err := openRuntimeSecurityStores(
+		startupContext,
+		controlDB,
+		config.masterKeyPath,
+		config.tenantID,
+	)
 	if err != nil {
 		return err
 	}
+	savedSearches := securityStores.savedSearches
+	tokenStore := securityStores.ingestionTokens
 	collectorAdmissions, err := collectoradmission.New(
 		controlDB,
 		tokenStore,
@@ -667,6 +676,7 @@ func runWithOptions(config options) error {
 		IndexDataDeletionAdmission: controlDB,
 		IndexDataDeletionWaker:     indexDataDeletion,
 		IngestionTokens:            tokenStore,
+		AuditEvents:                securityStores.auditEvents,
 		CollectorAdmin:             collectorAdministration,
 		AppAdmin:                   appCatalog,
 		AppCatalog:                 appCatalog,
@@ -877,31 +887,87 @@ func parseFlags() options {
 }
 
 func openSecurityStores(ctx context.Context, db *control.DB, masterKeyPath string) (*savedobjects.Store, *auth.Store, error) {
+	stores, err := openSecurityStoreSet(
+		ctx,
+		db,
+		masterKeyPath,
+		"default",
+		false,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return stores.savedSearches, stores.ingestionTokens, nil
+}
+
+type securityStoreSet struct {
+	savedSearches   *savedobjects.Store
+	ingestionTokens *auth.Store
+	auditEvents     *audit.Store
+}
+
+func openRuntimeSecurityStores(
+	ctx context.Context,
+	db *control.DB,
+	masterKeyPath string,
+	tenantID string,
+) (securityStoreSet, error) {
+	return openSecurityStoreSet(ctx, db, masterKeyPath, tenantID, true)
+}
+
+func openSecurityStoreSet(
+	ctx context.Context,
+	db *control.DB,
+	masterKeyPath string,
+	tenantID string,
+	requireExplicitAuditActor bool,
+) (securityStoreSet, error) {
 	masterKey, err := loadVerifiedMasterKey(ctx, db, masterKeyPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open server master key: %w", err)
+		return securityStoreSet{}, fmt.Errorf("open server master key: %w", err)
 	}
 	defer clear(masterKey)
 	cursorKey, err := deriveServerKey(masterKey, "saved-search-cursors")
 	if err != nil {
-		return nil, nil, err
+		return securityStoreSet{}, err
 	}
 	defer clear(cursorKey)
 	digestKey, err := deriveServerKey(masterKey, "collector-token-digests")
 	if err != nil {
-		return nil, nil, err
+		return securityStoreSet{}, err
 	}
 	defer clear(digestKey)
+	auditCursorKey, err := deriveServerKey(masterKey, auditCursorKeyPurpose)
+	if err != nil {
+		return securityStoreSet{}, err
+	}
+	defer clear(auditCursorKey)
 
 	savedSearches, err := savedobjects.New(db, savedobjects.Options{CursorKey: cursorKey})
 	if err != nil {
-		return nil, nil, fmt.Errorf("create saved-search store: %w", err)
+		return securityStoreSet{}, fmt.Errorf("create saved-search store: %w", err)
 	}
-	tokens, err := auth.NewStore(db, digestKey)
+	auditEvents, err := audit.NewStoreWithContext(
+		ctx,
+		db,
+		audit.StoreOptions{CursorKey: auditCursorKey},
+	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create collector-token store: %w", err)
+		return securityStoreSet{}, fmt.Errorf("create audit-event store: %w", err)
 	}
-	return savedSearches, tokens, nil
+	tokens, err := auth.NewStoreWithOptions(db, digestKey, auth.StoreOptions{
+		AuditAppender:             auditEvents,
+		AuditTenantID:             tenantID,
+		RequireExplicitAuditActor: requireExplicitAuditActor,
+	})
+	if err != nil {
+		return securityStoreSet{}, fmt.Errorf("create collector-token store: %w", err)
+	}
+	return securityStoreSet{
+		savedSearches:   savedSearches,
+		ingestionTokens: tokens,
+		auditEvents:     auditEvents,
+	}, nil
 }
 
 func openSearchHistoryStore(

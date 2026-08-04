@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
@@ -76,6 +78,11 @@ var (
 	// this one sentinel for missing, disabled, revoked, and expired IDs so the
 	// stream-admission path does not disclose credential existence or state.
 	ErrInactiveToken = errors.New("auth: collector token is inactive")
+	// ErrAuditActorUnavailable means a security-sensitive administrative
+	// mutation reached the production store without the trusted actor that the
+	// authenticated route must install. It is a server wiring failure, not a
+	// malformed client request.
+	ErrAuditActorUnavailable = errors.New("auth: audit actor is unavailable")
 
 	errCollectorTokenScopeUnavailable = errors.New("collector token scope is unavailable")
 	errCollectorTokenCatalogOverflow  = errors.New(
@@ -220,6 +227,9 @@ type Store struct {
 	now                       func() time.Time
 	retainedRevokedTokenLimit int
 	totalTokenRecordLimit     int
+	auditAppender             audit.TransactionAppender
+	auditTenantID             string
+	requireExplicitAuditActor bool
 }
 
 // StoreOptions configures bounded collector-token lifecycle behavior. Zero
@@ -227,6 +237,17 @@ type Store struct {
 type StoreOptions struct {
 	RetainedRevokedTokenLimit int
 	TotalTokenRecordLimit     int
+	// AuditAppender records successful administrative token mutations inside
+	// the same SQLite transaction. Nil selects the control database's audit
+	// store. A typed nil is rejected.
+	AuditAppender audit.TransactionAppender
+	// AuditTenantID scopes every event emitted by this token store. Empty
+	// selects the single-tenant default used by direct/internal callers.
+	AuditTenantID string
+	// RequireExplicitAuditActor makes mutation calls fail before generating a
+	// credential or opening a write transaction unless a trusted actor was
+	// installed in the context. Production enables this option.
+	RequireExplicitAuditActor bool
 }
 
 // NewStore constructs a collector-token store. digestKey is copied so caller
@@ -275,6 +296,26 @@ func NewStoreWithOptions(db *control.DB, digestKey []byte, options StoreOptions)
 			control.ErrInvalidArgument,
 		)
 	}
+	auditTenantID := options.AuditTenantID
+	if auditTenantID == "" {
+		auditTenantID = "default"
+	}
+	if err := audit.ValidateTenantID(auditTenantID); err != nil {
+		return nil, fmt.Errorf("configure collector-token audit tenant: %w", err)
+	}
+	auditAppender := options.AuditAppender
+	if auditAppender == nil {
+		var err error
+		auditAppender, err = audit.NewStore(db, audit.StoreOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("configure collector-token audit store: %w", err)
+		}
+	} else if isNilAuditAppender(auditAppender) {
+		return nil, fmt.Errorf(
+			"%w: collector-token audit appender is nil",
+			control.ErrInvalidArgument,
+		)
+	}
 	return &Store{
 		orm:                       db.GORMDB(),
 		digestKey:                 append([]byte(nil), digestKey...),
@@ -282,12 +323,56 @@ func NewStoreWithOptions(db *control.DB, digestKey []byte, options StoreOptions)
 		now:                       time.Now,
 		retainedRevokedTokenLimit: retainedRevokedTokenLimit,
 		totalTokenRecordLimit:     totalTokenRecordLimit,
+		auditAppender:             auditAppender,
+		auditTenantID:             auditTenantID,
+		requireExplicitAuditActor: options.RequireExplicitAuditActor,
 	}, nil
+}
+
+func isNilAuditAppender(appender audit.TransactionAppender) bool {
+	value := reflect.ValueOf(appender)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func (store *Store) validateTokenMutationActor(ctx context.Context) error {
+	if ctx == nil {
+		return fmt.Errorf(
+			"%w: collector-token mutation context is nil",
+			control.ErrInvalidArgument,
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	actor, explicit := audit.ActorFromContext(ctx)
+	if !explicit {
+		if store.requireExplicitAuditActor {
+			return ErrAuditActorUnavailable
+		}
+		return nil
+	}
+	if actor.Kind == audit.ActorKindBrowser &&
+		actor.Role != audit.ActorRoleAdministrator {
+		return fmt.Errorf(
+			"%w: collector-token mutation requires an administrator actor",
+			control.ErrInvalidArgument,
+		)
+	}
+	return nil
 }
 
 // CreateCollectorToken generates a cryptographically random token, persists
 // only its HMAC-SHA-256 digest, and returns the plaintext exactly once.
 func (store *Store) CreateCollectorToken(ctx context.Context, request CreateCollectorTokenRequest) (issued IssuedCollectorToken, err error) {
+	if err := store.validateTokenMutationActor(ctx); err != nil {
+		return IssuedCollectorToken{}, err
+	}
 	now := databaseTime(store.now())
 	name, description, allowedNames, expiresAt, err := normalizeTokenDefinition(
 		request.Name, request.Description, request.AllowedIndexNames, request.ExpiresAt, now,
@@ -406,6 +491,23 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 			)
 		}
 	}
+	if _, err := store.auditAppender.AppendInTransaction(
+		ctx,
+		tx,
+		store.auditTenantID,
+		audit.SuccessfulEvent{
+			OccurredAt:    now,
+			Action:        audit.ActionIngestionTokenCreate,
+			TargetKind:    audit.TargetKindIngestionToken,
+			TargetID:      tokenID,
+			TargetVersion: 1,
+		},
+	); err != nil {
+		return IssuedCollectorToken{}, fmt.Errorf(
+			"append collector token creation audit event: %w",
+			err,
+		)
+	}
 	commitErr := tx.Commit().Error
 	transactionFinished = true
 	if commitErr != nil {
@@ -430,6 +532,9 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 // credentials remain immutable so an administrative edit cannot accidentally
 // reactivate them.
 func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, expectedVersion uint64, request UpdateCollectorTokenRequest) (result CollectorToken, err error) {
+	if err := store.validateTokenMutationActor(ctx); err != nil {
+		return CollectorToken{}, err
+	}
 	if strings.TrimSpace(tokenID) == "" {
 		return CollectorToken{}, fmt.Errorf("%w: token ID is required", control.ErrInvalidArgument)
 	}
@@ -586,6 +691,23 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	result, err = takeCollectorTokenMetadata(tx, tokenID, now)
 	if err != nil {
 		return CollectorToken{}, fmt.Errorf("read updated collector token: %w", err)
+	}
+	if _, err := store.auditAppender.AppendInTransaction(
+		ctx,
+		tx,
+		store.auditTenantID,
+		audit.SuccessfulEvent{
+			OccurredAt:    now,
+			Action:        audit.ActionIngestionTokenUpdate,
+			TargetKind:    audit.TargetKindIngestionToken,
+			TargetID:      result.ID,
+			TargetVersion: result.Version,
+		},
+	); err != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"append collector token update audit event: %w",
+			err,
+		)
 	}
 	commitErr := tx.Commit().Error
 	transactionFinished = true
@@ -1392,6 +1514,9 @@ func (store *Store) ListCollectorTokens(
 
 // RevokeCollectorToken irreversibly revokes a token under optimistic locking.
 func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, expectedVersion uint64) (result CollectorToken, err error) {
+	if err := store.validateTokenMutationActor(ctx); err != nil {
+		return CollectorToken{}, err
+	}
 	if expectedVersion == 0 || expectedVersion > math.MaxInt64 {
 		return CollectorToken{}, fmt.Errorf("%w: expected token version is outside the supported range", control.ErrInvalidArgument)
 	}
@@ -1470,6 +1595,23 @@ func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, ex
 	}
 	if err := store.pruneRevokedCollectorTokenTombstones(tx, tokenID); err != nil {
 		return CollectorToken{}, fmt.Errorf("prune revoked collector token tombstones: %w", err)
+	}
+	if _, err := store.auditAppender.AppendInTransaction(
+		ctx,
+		tx,
+		store.auditTenantID,
+		audit.SuccessfulEvent{
+			OccurredAt:    now,
+			Action:        audit.ActionIngestionTokenRevoke,
+			TargetKind:    audit.TargetKindIngestionToken,
+			TargetID:      result.ID,
+			TargetVersion: result.Version,
+		},
+	); err != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"append collector token revocation audit event: %w",
+			err,
+		)
 	}
 	commitErr := tx.Commit().Error
 	transactionFinished = true

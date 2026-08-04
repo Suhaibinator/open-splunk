@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
@@ -95,13 +96,117 @@ func TestDeriveServerKeySeparatesPurposes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	auditEvents, err := deriveServerKey(master, auditCursorKeyPurpose)
+	if err != nil {
+		t.Fatal(err)
+	}
 	firstAgain, err := deriveServerKey(master, "saved-search-cursors")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Equal(first, second) || bytes.Equal(first, history) || bytes.Equal(second, history) ||
-		!bytes.Equal(first, firstAgain) || len(first) != 32 || len(history) != 32 {
+	if bytes.Equal(first, second) || bytes.Equal(first, history) || bytes.Equal(first, auditEvents) ||
+		bytes.Equal(second, history) || bytes.Equal(second, auditEvents) ||
+		bytes.Equal(history, auditEvents) || !bytes.Equal(first, firstAgain) ||
+		len(first) != 32 || len(history) != 32 || len(auditEvents) != 32 {
 		t.Fatalf("derived keys do not provide deterministic purpose separation")
+	}
+}
+
+func TestOpenRuntimeSecurityStoresSharesStableTenantBoundAuditStore(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	directory := t.TempDir()
+	db, err := control.Open(ctx, filepath.Join(directory, "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := db.CreateIndex(ctx, control.IndexDefinition{
+		Name:             "main",
+		RetentionPeriod:  30 * 24 * time.Hour,
+		IngestionEnabled: true,
+		SearchEnabled:    true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	keyPath := filepath.Join(directory, "server.key")
+	first, err := openRuntimeSecurityStores(ctx, db, keyPath, "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.savedSearches == nil || first.ingestionTokens == nil || first.auditEvents == nil {
+		t.Fatalf("openRuntimeSecurityStores() returned a nil store: %+v", first)
+	}
+	if _, err := first.ingestionTokens.CreateCollectorToken(
+		ctx,
+		auth.CreateCollectorTokenRequest{
+			Name:              "missing actor",
+			BoundCollectorID:  "collector-missing-actor",
+			AllowedIndexNames: []string{"main"},
+		},
+	); err == nil {
+		t.Fatal("production token store accepted a mutation without an explicit audit actor")
+	}
+
+	administratorContext, err := audit.WithActor(ctx, audit.Actor{
+		Kind: audit.ActorKindBrowser,
+		ID:   "single-user",
+		Role: audit.ActorRoleAdministrator,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, definition := range []struct {
+		name        string
+		collectorID string
+	}{
+		{name: "first audited token", collectorID: "collector-a"},
+		{name: "second audited token", collectorID: "collector-b"},
+	} {
+		if _, err := first.ingestionTokens.CreateCollectorToken(
+			administratorContext,
+			auth.CreateCollectorTokenRequest{
+				Name:              definition.name,
+				BoundCollectorID:  definition.collectorID,
+				AllowedIndexNames: []string{"main"},
+			},
+		); err != nil {
+			t.Fatalf("CreateCollectorToken(%q): %v", definition.name, err)
+		}
+	}
+
+	firstPage, err := first.auditEvents.List(ctx, "tenant-a", audit.ListRequest{PageSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Events) != 1 || firstPage.NextPageToken == "" ||
+		firstPage.Events[0].Sequence != 2 ||
+		firstPage.Events[0].Actor.Kind != audit.ActorKindBrowser ||
+		firstPage.Events[0].Actor.ID != "single-user" ||
+		firstPage.Events[0].Actor.Role != audit.ActorRoleAdministrator {
+		t.Fatalf("first audit page = %+v", firstPage)
+	}
+
+	second, err := openRuntimeSecurityStores(ctx, db, keyPath, "tenant-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuation, err := second.auditEvents.List(ctx, "tenant-a", audit.ListRequest{
+		PageSize:  1,
+		PageToken: firstPage.NextPageToken,
+	})
+	if err != nil {
+		t.Fatalf("continue audit cursor after reopen: %v", err)
+	}
+	if len(continuation.Events) != 1 || continuation.Events[0].Sequence != 1 ||
+		continuation.NextPageToken != "" || continuation.Events[0].TenantID != "tenant-a" {
+		t.Fatalf("continued audit page = %+v", continuation)
 	}
 }
 

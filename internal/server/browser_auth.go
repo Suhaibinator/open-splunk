@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 )
 
@@ -78,8 +79,21 @@ func (handler *apiHandler) authorizeBrowserAdministrator(
 		return request, false
 	}
 
+	auditContext, err := audit.WithActor(request.Context(), audit.Actor{
+		Kind: audit.ActorKindBrowser,
+		ID:   principal.OwnerID(),
+		Role: audit.ActorRole(principal.Role().String()),
+	})
+	if err != nil {
+		writeAPIError(
+			response,
+			http.StatusServiceUnavailable,
+			"administrator authentication is unavailable",
+		)
+		return request, false
+	}
 	ctx := context.WithValue(
-		request.Context(),
+		auditContext,
 		browserPrincipalContextKey{},
 		principal,
 	)

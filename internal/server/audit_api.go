@@ -1,0 +1,450 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/Suhaibinator/SRouter/pkg/codec"
+	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
+	"github.com/Suhaibinator/SRouter/pkg/router"
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/audit"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	defaultAuditListPageSize      = uint32(50)
+	maximumAuditListResponseBytes = 2 << 20
+	maximumAuditPageTokenBytes    = 2 << 10
+	maximumAuditActorIDBytes      = 255
+)
+
+func (handler *apiHandler) auditEventRoutes(
+	noAuth router.AuthLevel,
+	smallRequestBytes int64,
+) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[
+			*opensplunkv1.ListAuditEventsRequest,
+			*serializedAuditEventListResponse](router.RouteConfig[
+			*opensplunkv1.ListAuditEventsRequest,
+			*serializedAuditEventListResponse,
+		]{
+			Path:       auditEventsListRoute,
+			Methods:    []router.HttpMethod{router.MethodPost},
+			AuthLevel:  &noAuth,
+			Codec:      newSerializedAuditEventListCodec(),
+			Handler:    handler.listAuditEvents,
+			SourceType: router.Body,
+			Sanitizer:  forwardCompatibleProtoSanitizer[*opensplunkv1.ListAuditEventsRequest],
+			Overrides: sroutercommon.RouteOverrides{
+				MaxBodySize: smallRequestBytes,
+			},
+		}),
+	}
+}
+
+func (handler *apiHandler) listAuditEvents(
+	request *http.Request,
+	input *opensplunkv1.ListAuditEventsRequest,
+) (*serializedAuditEventListResponse, error) {
+	tenantID, err := handler.auditEventAccess(request)
+	if err != nil {
+		return nil, err
+	}
+	if handler.auditEvents == nil {
+		return nil, unavailableError("audit event service is unavailable")
+	}
+	listRequest, err := handler.auditListRequest(input)
+	if err != nil {
+		return nil, err
+	}
+	if err := auditListContextError(request.Context()); err != nil {
+		return nil, err
+	}
+
+	page, operationErr := handler.auditEvents.List(
+		request.Context(),
+		tenantID,
+		listRequest,
+	)
+	if mapped := mapAuditListCallError(request.Context(), operationErr); mapped != nil {
+		return nil, mapped
+	}
+	if err := auditListContextError(request.Context()); err != nil {
+		return nil, err
+	}
+
+	release, acquired := handler.acquireSerialization()
+	if !acquired {
+		return nil, unavailableError(
+			"audit event response capacity is exhausted",
+		)
+	}
+	transferred := false
+	defer func() {
+		if !transferred {
+			release()
+		}
+	}()
+	message, err := auditListPageToProto(tenantID, listRequest, page)
+	if err != nil || proto.Size(message) > maximumAuditListResponseBytes {
+		return nil, internalError()
+	}
+	if err := auditListContextError(request.Context()); err != nil {
+		return nil, err
+	}
+	transferred = true
+	return &serializedAuditEventListResponse{
+		message: message,
+		ctx:     request.Context(),
+		release: release,
+	}, nil
+}
+
+func (handler *apiHandler) auditEventAccess(
+	request *http.Request,
+) (string, error) {
+	if handler == nil || request == nil {
+		return "", forbiddenError("administrator access is required")
+	}
+	principal, ok := browserPrincipalFromRequest(request)
+	if !ok || !principal.IsAdministrator() ||
+		principal.TenantID() != handler.tenantID ||
+		principal.OwnerID() != handler.ownerID {
+		return "", forbiddenError("administrator access is required")
+	}
+	return principal.TenantID(), nil
+}
+
+func (handler *apiHandler) auditListRequest(
+	input *opensplunkv1.ListAuditEventsRequest,
+) (audit.ListRequest, error) {
+	if input == nil || len(input.ProtoReflect().GetUnknown()) != 0 {
+		return audit.ListRequest{}, badRequestError(
+			"audit event list request is invalid",
+		)
+	}
+	maximumPageSize := min(handler.maximumPageSize, audit.MaximumListPageSize)
+	pageSize := min(defaultAuditListPageSize, maximumPageSize)
+	pageToken := ""
+	includeTotal := false
+	if input.Page != nil {
+		if len(input.Page.ProtoReflect().GetUnknown()) != 0 {
+			return audit.ListRequest{}, badRequestError(
+				"audit event page request is invalid",
+			)
+		}
+		includeTotal = input.Page.GetIncludeTotalSize()
+		if input.Page.PageSize != nil {
+			pageSize = input.Page.GetPageSize()
+			if pageSize == 0 || pageSize > maximumPageSize {
+				return audit.ListRequest{}, badRequestError(
+					"audit event page size is invalid",
+				)
+			}
+		}
+		if input.Page.PageToken != nil {
+			pageToken = input.Page.GetPageToken()
+			if !validBoundedListPageToken(
+				pageToken,
+				maximumAuditPageTokenBytes,
+				false,
+			) {
+				return audit.ListRequest{}, badRequestError(
+					"audit event page token is invalid",
+				)
+			}
+		}
+	}
+
+	if len(input.GetActionFilters()) > 3 {
+		return audit.ListRequest{}, badRequestError(
+			"audit event action filters are invalid",
+		)
+	}
+	actions := make([]audit.Action, 0, len(input.GetActionFilters()))
+	seenActions := make(map[audit.Action]struct{}, len(input.GetActionFilters()))
+	for _, value := range input.GetActionFilters() {
+		action, ok := auditActionFromProto(value)
+		if !ok {
+			return audit.ListRequest{}, badRequestError(
+				"audit event action filter is invalid",
+			)
+		}
+		if _, duplicate := seenActions[action]; duplicate {
+			return audit.ListRequest{}, badRequestError(
+				"audit event action filter is duplicated",
+			)
+		}
+		seenActions[action] = struct{}{}
+		actions = append(actions, action)
+	}
+
+	var actorID *string
+	if input.ActorIdFilter != nil {
+		value := input.GetActorIdFilter()
+		if strings.TrimSpace(value) != value || validateBoundedIdentifier(
+			value,
+			maximumAuditActorIDBytes,
+			false,
+		) != nil {
+			return audit.ListRequest{}, badRequestError(
+				"audit event actor filter is invalid",
+			)
+		}
+		actorID = stringPointer(strings.Clone(value))
+	}
+
+	var targetKind *audit.TargetKind
+	if input.TargetKindFilter != nil {
+		value, ok := auditTargetKindFromProto(input.GetTargetKindFilter())
+		if !ok {
+			return audit.ListRequest{}, badRequestError(
+				"audit event target filter is invalid",
+			)
+		}
+		targetKind = &value
+	}
+
+	return audit.ListRequest{
+		PageSize:      pageSize,
+		PageToken:     strings.Clone(pageToken),
+		ActionFilters: actions,
+		ActorID:       actorID,
+		TargetKind:    targetKind,
+		IncludeTotal:  includeTotal,
+	}, nil
+}
+
+func auditListPageToProto(
+	tenantID string,
+	request audit.ListRequest,
+	page audit.ListPage,
+) (*opensplunkv1.ListAuditEventsResponse, error) {
+	if len(page.Events) > int(request.PageSize) {
+		return nil, errors.New("audit event service returned too many rows")
+	}
+	events := make([]*opensplunkv1.AuditEvent, len(page.Events))
+	var previous uint64
+	for index, event := range page.Events {
+		if index > 0 && event.Sequence >= previous {
+			return nil, errors.New(
+				"audit event service returned unstable ordering",
+			)
+		}
+		converted, err := auditEventToProto(event, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if !auditEventMatchesListRequest(event, request) {
+			return nil, errors.New(
+				"audit event service returned a row outside the requested filters",
+			)
+		}
+		events[index] = converted
+		previous = event.Sequence
+	}
+	if page.TotalSize != nil && *page.TotalSize > audit.MaximumEventsPerTenant {
+		return nil, errors.New("audit event service returned an invalid total")
+	}
+	metadata, err := boundedListPageResponse(
+		"audit event",
+		boundedListPageMetadata{
+			itemCount:     len(events),
+			nextPageToken: page.NextPageToken,
+			totalSize:     page.TotalSize,
+			totalExact:    page.TotalSizeExact,
+		},
+		int(request.PageSize),
+		request.PageToken,
+		request.IncludeTotal,
+		maximumAuditPageTokenBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &opensplunkv1.ListAuditEventsResponse{
+		AuditEvents: events,
+		Page:        metadata,
+	}, nil
+}
+
+func auditEventMatchesListRequest(event audit.Event, request audit.ListRequest) bool {
+	if len(request.ActionFilters) != 0 &&
+		!slices.Contains(request.ActionFilters, event.Action) {
+		return false
+	}
+	if request.ActorID != nil && event.Actor.ID != *request.ActorID {
+		return false
+	}
+	return request.TargetKind == nil || event.TargetKind == *request.TargetKind
+}
+
+func auditEventToProto(
+	event audit.Event,
+	expectedTenantID string,
+) (*opensplunkv1.AuditEvent, error) {
+	if err := event.ValidateForTenant(expectedTenantID); err != nil {
+		return nil, errors.New("audit event service returned an invalid event")
+	}
+	occurredAt, err := validTimestamp(event.OccurredAt)
+	if err != nil {
+		return nil, errors.New("audit event service returned an invalid time")
+	}
+	actorKind, ok := auditActorKindToProto(event.Actor.Kind)
+	if !ok {
+		return nil, errors.New("audit event service returned an invalid actor")
+	}
+	actorRole, ok := auditActorRoleToProto(event.Actor.Role)
+	if !ok {
+		return nil, errors.New("audit event service returned an invalid actor")
+	}
+	action, ok := auditActionToProto(event.Action)
+	if !ok {
+		return nil, errors.New("audit event service returned an invalid action")
+	}
+	targetKind, ok := auditTargetKindToProto(event.TargetKind)
+	if !ok {
+		return nil, errors.New("audit event service returned an invalid target")
+	}
+	return &opensplunkv1.AuditEvent{
+		Sequence:      event.Sequence,
+		OccurredAt:    occurredAt,
+		ActorKind:     actorKind,
+		ActorId:       strings.Clone(event.Actor.ID),
+		ActorRole:     actorRole,
+		Action:        action,
+		TargetKind:    targetKind,
+		TargetId:      strings.Clone(event.TargetID),
+		TargetVersion: event.TargetVersion,
+	}, nil
+}
+
+func auditActorRoleToProto(
+	value audit.ActorRole,
+) (opensplunkv1.AuditActorRole, bool) {
+	switch value {
+	case audit.ActorRoleSystem:
+		return opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_SYSTEM, true
+	case audit.ActorRoleUser:
+		return opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_USER, true
+	case audit.ActorRoleAdministrator:
+		return opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_ADMINISTRATOR, true
+	default:
+		return opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_UNSPECIFIED, false
+	}
+}
+
+func auditActorKindToProto(
+	value audit.ActorKind,
+) (opensplunkv1.AuditActorKind, bool) {
+	switch value {
+	case audit.ActorKindSystem:
+		return opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_SYSTEM, true
+	case audit.ActorKindBrowser:
+		return opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_BROWSER, true
+	default:
+		return opensplunkv1.AuditActorKind_AUDIT_ACTOR_KIND_UNSPECIFIED, false
+	}
+}
+
+func auditActionFromProto(value opensplunkv1.AuditAction) (audit.Action, bool) {
+	switch value {
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE:
+		return audit.ActionIngestionTokenCreate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE:
+		return audit.ActionIngestionTokenUpdate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE:
+		return audit.ActionIngestionTokenRevoke, true
+	default:
+		return "", false
+	}
+}
+
+func auditActionToProto(value audit.Action) (opensplunkv1.AuditAction, bool) {
+	switch value {
+	case audit.ActionIngestionTokenCreate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE, true
+	case audit.ActionIngestionTokenUpdate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE, true
+	case audit.ActionIngestionTokenRevoke:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE, true
+	default:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
+	}
+}
+
+func auditTargetKindFromProto(
+	value opensplunkv1.AuditTargetKind,
+) (audit.TargetKind, bool) {
+	if value == opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN {
+		return audit.TargetKindIngestionToken, true
+	}
+	return "", false
+}
+
+func auditTargetKindToProto(
+	value audit.TargetKind,
+) (opensplunkv1.AuditTargetKind, bool) {
+	if value == audit.TargetKindIngestionToken {
+		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN, true
+	}
+	return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
+}
+
+func mapAuditListCallError(ctx context.Context, operationErr error) error {
+	if operationErr == nil {
+		return nil
+	}
+	if requestContextFailure(ctx, operationErr) != nil {
+		return router.NewHTTPError(
+			http.StatusRequestTimeout,
+			"audit event request was canceled",
+		)
+	}
+	switch {
+	case errors.Is(operationErr, audit.ErrInvalidCursor):
+		return badRequestError("audit event page token is invalid")
+	case errors.Is(operationErr, audit.ErrCorrupt):
+		return unavailableError("audit event service is unavailable")
+	default:
+		return unavailableError("audit event service is unavailable")
+	}
+}
+
+func auditListContextError(ctx context.Context) error {
+	if ctx != nil && ctx.Err() != nil {
+		return router.NewHTTPError(
+			http.StatusRequestTimeout,
+			"audit event request was canceled",
+		)
+	}
+	return nil
+}
+
+type serializedAuditEventListResponse = boundedProtoResponse[*opensplunkv1.ListAuditEventsResponse]
+
+type serializedAuditEventListCodec = boundedProtoCodec[
+	*opensplunkv1.ListAuditEventsRequest,
+	*opensplunkv1.ListAuditEventsResponse,
+]
+
+func newSerializedAuditEventListCodec() *serializedAuditEventListCodec {
+	return newBoundedProtoCodec(
+		codec.NewProtoCodec[
+			*opensplunkv1.ListAuditEventsRequest,
+			*opensplunkv1.ListAuditEventsResponse,
+		](),
+		boundedProtoCodecOptions{
+			stateError:   "audit event serialization state is invalid",
+			messageError: "audit event response is missing",
+			contextError: auditListContextError,
+			maximumBytes: maximumAuditListResponseBytes,
+			sizeError:    "audit event response exceeds its byte limit",
+		},
+	)
+}

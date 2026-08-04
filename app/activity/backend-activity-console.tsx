@@ -528,8 +528,8 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
           </section>
 
           <section className="suite-card backend-unavailable-card">
-            <header className="suite-card-header"><div><h2>Administrative events</h2><p>Unavailable in backend mode.</p></div><span aria-hidden="true">i</span></header>
-            <p>The backend does not register an audit-event route, so this page does not fabricate configuration or collector activity.</p>
+            <header className="suite-card-header"><div><h2>Administrative events</h2><p>Not yet available in this client.</p></div><span aria-hidden="true">i</span></header>
+            <p>This frontend does not yet consume the backend audit-event route, so this page does not fabricate configuration or collector activity.</p>
           </section>
         </>
       ) : null}

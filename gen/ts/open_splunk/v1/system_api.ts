@@ -31,6 +31,7 @@ export enum ServerFeature {
   SERVER_FEATURE_INDEX_ADMIN = 10,
   SERVER_FEATURE_APP_ADMIN = 11,
   SERVER_FEATURE_PLAN_INSPECTION = 12,
+  SERVER_FEATURE_AUDIT_SEARCH = 13,
   UNRECOGNIZED = -1,
 }
 
@@ -75,6 +76,9 @@ export function serverFeatureFromJSON(object: any): ServerFeature {
     case 12:
     case "SERVER_FEATURE_PLAN_INSPECTION":
       return ServerFeature.SERVER_FEATURE_PLAN_INSPECTION;
+    case 13:
+    case "SERVER_FEATURE_AUDIT_SEARCH":
+      return ServerFeature.SERVER_FEATURE_AUDIT_SEARCH;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -110,6 +114,8 @@ export function serverFeatureToJSON(object: ServerFeature): string {
       return "SERVER_FEATURE_APP_ADMIN";
     case ServerFeature.SERVER_FEATURE_PLAN_INSPECTION:
       return "SERVER_FEATURE_PLAN_INSPECTION";
+    case ServerFeature.SERVER_FEATURE_AUDIT_SEARCH:
+      return "SERVER_FEATURE_AUDIT_SEARCH";
     case ServerFeature.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

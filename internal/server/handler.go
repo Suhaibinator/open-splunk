@@ -17,6 +17,7 @@ import (
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/buildmetadata"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
@@ -49,6 +50,8 @@ const (
 	searchTimelinePath                = "/api/v1/search/jobs/timeline"
 	searchInspectionRoute             = "/search/jobs/inspect"
 	searchInspectionPath              = apiV1PathPrefix + searchInspectionRoute
+	auditEventsListRoute              = "/audit/events/list"
+	auditEventsListPath               = apiV1PathPrefix + auditEventsListRoute
 	searchWebSocketPath               = "/api/v1/search/ws"
 	defaultMaximumRequestBytes        = int64(128 << 10)
 	defaultMaximumPageSize            = uint32(1_000)
@@ -166,6 +169,13 @@ type IngestionTokenAdministration interface {
 	ListCollectorTokens(context.Context) ([]auth.CollectorToken, error)
 	UpdateCollectorToken(context.Context, string, uint64, auth.UpdateCollectorTokenRequest) (auth.CollectorToken, error)
 	RevokeCollectorToken(context.Context, string, uint64) (auth.CollectorToken, error)
+}
+
+// AuditEvents is the bounded, administrator-only successful-event journal.
+// Tenant identity comes from the authenticated browser principal and is never
+// accepted from protobuf input.
+type AuditEvents interface {
+	List(context.Context, string, audit.ListRequest) (audit.ListPage, error)
 }
 
 // CollectorAdministration is the complete tenant-scoped fleet surface exposed
@@ -399,6 +409,7 @@ type Config struct {
 	IndexDataDeletionAdmission IndexDataDeletionAdmission
 	IndexDataDeletionWaker     IndexDataDeletionWaker
 	IngestionTokens            IngestionTokenAdministration
+	AuditEvents                AuditEvents
 	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
@@ -442,6 +453,7 @@ type apiHandler struct {
 	indexDataDeletionAdmission IndexDataDeletionAdmission
 	indexDataDeletionWaker     IndexDataDeletionWaker
 	ingestionTokens            IngestionTokenAdministration
+	auditEvents                AuditEvents
 	collectorAdmin             CollectorAdministration
 	appAdmin                   AppAdministration
 	appCatalog                 AppCatalog
@@ -549,6 +561,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(ingestionTokens) {
 		ingestionTokens = nil
 	}
+	auditEvents := config.AuditEvents
+	if isNilDependency(auditEvents) {
+		auditEvents = nil
+	}
 	collectorAdmin := config.CollectorAdmin
 	if isNilDependency(collectorAdmin) {
 		collectorAdmin = nil
@@ -578,6 +594,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexStatistics != nil ||
 		indexFields != nil ||
 		ingestionTokens != nil ||
+		auditEvents != nil ||
 		collectorAdmin != nil ||
 		appAdmin != nil ||
 		inspectionService != nil) &&
@@ -782,6 +799,7 @@ func NewHandler(config Config) (*Handler, error) {
 			indexDataDeletionWaker != nil,
 		appAdmin:       appAdmin != nil,
 		planInspection: inspectionService != nil,
+		auditSearch:    auditEvents != nil,
 		fieldDiscovery: fieldService != nil,
 		previews:       searchWebSocket != nil,
 	})
@@ -809,6 +827,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexDataDeletionAdmission: indexDataDeletionAdmission,
 		indexDataDeletionWaker:     indexDataDeletionWaker,
 		ingestionTokens:            ingestionTokens,
+		auditEvents:                auditEvents,
 		collectorAdmin:             collectorAdmin,
 		appAdmin:                   appAdmin,
 		appCatalog:                 appCatalog,
@@ -901,6 +920,10 @@ func NewHandler(config Config) (*Handler, error) {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}
 		}
+	}
+	if api.auditEvents != nil {
+		apiRoutes[auditEventsListPath] = http.MethodPost
+		administratorRoutes[auditEventsListPath] = struct{}{}
 	}
 	if api.collectorAdmin != nil {
 		for _, path := range []string{
@@ -1099,6 +1122,7 @@ type serviceCapabilities struct {
 	indexAdmin     bool
 	appAdmin       bool
 	planInspection bool
+	auditSearch    bool
 	fieldDiscovery bool
 	previews       bool
 }
@@ -1119,6 +1143,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_INDEX_ADMIN, capabilities.indexAdmin},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN, capabilities.appAdmin},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION, capabilities.planInspection},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH, capabilities.auditSearch},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
 	}
@@ -1227,6 +1252,12 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.ingestionTokens != nil {
 		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
+	}
+	if handler.auditEvents != nil {
+		routes = append(
+			routes,
+			handler.auditEventRoutes(noAuth, smallRequestBytes)...,
+		)
 	}
 	if handler.collectorAdmin != nil {
 		routes = append(

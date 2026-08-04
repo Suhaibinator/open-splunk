@@ -1188,6 +1188,15 @@ func TestCommittedAdministrativeSuccessWinsContextCancellationRace(t *testing.T)
 		),
 		http.StatusConflict,
 	)
+	assertHTTPErrorStatus(
+		t,
+		mapAdministrativeCallError(
+			context.Background(),
+			auth.ErrAuditActorUnavailable,
+			"ingestion token",
+		),
+		http.StatusServiceUnavailable,
+	)
 }
 
 func TestAdministrativeRoutesRejectDNSRebindingAndCrossOriginBrowsers(t *testing.T) {
