@@ -276,6 +276,57 @@ func TestReexecutionSourceRebuildsStreamStatsSumFromStoredSPL(t *testing.T) {
 	}
 }
 
+func TestReexecutionSourceRebuildsStreamStatsAverageFromStoredSPL(t *testing.T) {
+	t.Parallel()
+
+	searches, _, access := newReexecutionTestSearches()
+	searches.job.SPL = `index=main | table status | streamstats current=false avg(status) AS prior_mean`
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "status", Kind: searchjobs.ValueKindSigned},
+		{Name: "prior_mean", Kind: searchjobs.ValueKindDouble, Nullable: true},
+	}}
+	searches.pin.schema = schema
+	var captured clickhouse.CompiledQuery
+	executor := reexecutionTestExecutor(func(
+		_ context.Context,
+		query clickhouse.CompiledQuery,
+		sink searchjobs.ResultSink,
+	) error {
+		captured = query
+		return sink.SetSchema(schema)
+	})
+	source := newReexecutionTestSource(t, searches, executor, nil)
+	lease, err := source.AcquireResultsFor(
+		context.Background(),
+		access,
+		searches.job.ID,
+	)
+	if err != nil {
+		t.Fatalf("AcquireResultsFor(streamstats avg(field)): %v", err)
+	}
+	if _, ok, nextErr := lease.Next(context.Background()); ok || nextErr != nil {
+		t.Fatalf("Next(streamstats avg(field)) = ok %t err %v", ok, nextErr)
+	}
+	for _, required := range []string{
+		`avgOrNullArray(`,
+		`ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING`,
+		`AS "prior_mean"`,
+		`Nullable(Float64)`,
+		clickhouse.StreamStatsInputLimitMarker,
+	} {
+		if !strings.Contains(captured.SQL, required) {
+			t.Fatalf(
+				"re-executed streamstats avg(field) SQL missing %q:\n%s",
+				required,
+				captured.SQL,
+			)
+		}
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("close streamstats avg(field) re-execution: %v", err)
+	}
+}
+
 func TestReexecutionSourceUsesDistinctExecutionGenerations(t *testing.T) {
 	t.Parallel()
 	searches, _, access := newReexecutionTestSearches()

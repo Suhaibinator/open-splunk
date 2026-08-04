@@ -1161,7 +1161,8 @@ The first useful compatibility tier should support:
 - `now`, `relative_time`, `strftime`, `strptime`
 
 `eventstats` and the deliberately bounded `streamstats` bare row-count,
-exact-field occurrence-count, and exact-field numeric-sum subset are
+exact-field occurrence-count, exact-field numeric-sum, and exact-field
+numeric-average subset are
 second-tier commands included in the pre-release backend. `transaction`,
 subsearches, `join`, `append`, `appendpipe`, `map`, `foreach`, data models,
 `tstats`, and arbitrary scripted commands remain explicitly out of the first

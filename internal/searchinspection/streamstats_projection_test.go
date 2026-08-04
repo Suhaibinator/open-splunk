@@ -125,4 +125,22 @@ func TestProjectLogicalPlanDescribesNumericStreamAggregate(t *testing.T) {
 		) || projected.Output.MaxDynamicFields != 0 {
 		t.Fatalf("numeric stream aggregate output = %#v, want row-preserving static schema", projected.Output)
 	}
+
+	logical.Operators[1].(*plan.StreamAggregate).Measure.Function = plan.AggregateFunctionAverage
+	averageProjected, err := projectLogicalPlan(context.Background(), logical, source)
+	if err != nil {
+		t.Fatalf("projectLogicalPlan(streamstats average): %v", err)
+	}
+	averageStage := averageProjected.Stages[1]
+	if averageStage.Operator != "StreamAggregate" ||
+		!slices.Equal(averageStage.InputFields, []string{"status", "user"}) ||
+		!slices.Equal(averageStage.OutputFields, []string{"prior_total"}) ||
+		!slices.Equal(averageProjected.ReferencedFields, []string{"status", "user"}) ||
+		averageProjected.Output.Kind != OutputKindStatic ||
+		!slices.Equal(
+			averageProjected.Output.Fields,
+			[]string{"event_id", "user", "status", "prior_total"},
+		) {
+		t.Fatalf("average stream aggregate projection = %#v", averageProjected)
+	}
 }

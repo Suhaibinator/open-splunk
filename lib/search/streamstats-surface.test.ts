@@ -15,6 +15,7 @@ test("streamstats is advertised once with the bounded supported syntax", () => {
   assert.match(definitions[0]?.detail ?? "", /bounded running row count/i);
   assert.match(definitions[0]?.detail ?? "", /field occurrence count/i);
   assert.match(definitions[0]?.detail ?? "", /numeric sum/i);
+  assert.match(definitions[0]?.detail ?? "", /numeric average/i);
   assert.match(definitions[0]?.detail ?? "", /deterministic pipeline order/i);
   assert.match(definitions[0]?.detail ?? "", /excluding the current row/i);
   assert.match(definitions[0]?.detail ?? "", /exact fields/i);
@@ -32,6 +33,12 @@ test("frontend support classification accepts streamstats without weakening reje
   assert.equal(
     getQueryDiagnostic(
       "index=main | STREAMSTATS current=f window=3 global=f sum(bytes) AS prior_bytes BY service",
+    ),
+    null,
+  );
+  assert.equal(
+    getQueryDiagnostic(
+      "index=main | STREAMSTATS current=f window=3 global=f avg(bytes) AS prior_mean BY service",
     ),
     null,
   );

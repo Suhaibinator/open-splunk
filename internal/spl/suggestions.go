@@ -531,24 +531,28 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		if aggregateIndex < 0 {
 			aggregateIndex = topLevelWordIndex(tokens, "sum")
 		}
+		if aggregateIndex < 0 {
+			aggregateIndex = topLevelWordIndex(tokens, "avg")
+		}
 		if aggregateIndex >= 0 && aggregateIndex+1 < len(tokens) &&
 			tokens[aggregateIndex+1].kind == tokenLeftParen {
 			context.Kinds = []SuggestionKind{SuggestionKindField}
 		}
 		return context
 	}
-	if sumIndex := topLevelWordIndex(tokens, "sum"); sumIndex >= 0 {
-		byIndex := topLevelWordIndex(tokens, "BY")
-		alias := sumIndex > 0 && tokenWordEqual(tokens[sumIndex-1], "AS")
-		group := byIndex >= 0 && sumIndex > byIndex
-		optionValue := sumIndex > 0 && tokens[sumIndex-1].kind == tokenEqual
-		call := sumIndex+1 < len(tokens) &&
-			tokens[sumIndex+1].kind == tokenLeftParen
-		if !alias && !group && !optionValue && !call {
-			// Unlike bare count, bare sum is not a complete aggregate. Do not
-			// offer AS, BY, or trailing options that would turn the current
-			// parser-rejected surface into a longer invalid command.
-			return context
+	for _, requiredCall := range []string{"sum", "avg"} {
+		if functionIndex := topLevelWordIndex(tokens, requiredCall); functionIndex >= 0 {
+			byIndex := topLevelWordIndex(tokens, "BY")
+			alias := functionIndex > 0 && tokenWordEqual(tokens[functionIndex-1], "AS")
+			group := byIndex >= 0 && functionIndex > byIndex
+			optionValue := functionIndex > 0 && tokens[functionIndex-1].kind == tokenEqual
+			call := functionIndex+1 < len(tokens) &&
+				tokens[functionIndex+1].kind == tokenLeftParen
+			if !alias && !group && !optionValue && !call {
+				// Unlike bare count, bare numeric aggregates are incomplete. Do
+				// not offer trailing syntax that would extend an invalid command.
+				return context
+			}
 		}
 	}
 	if len(tokens) > 0 && tokenWordEqual(tokens[len(tokens)-1], "AS") {
@@ -565,9 +569,11 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		context.Keywords = optionKeywords
 		return context
 	}
-	if topLevelWordIndex(tokens, "count") < 0 && topLevelWordIndex(tokens, "sum") < 0 {
+	if topLevelWordIndex(tokens, "count") < 0 &&
+		topLevelWordIndex(tokens, "sum") < 0 &&
+		topLevelWordIndex(tokens, "avg") < 0 {
 		context = aggregateSuggestionContext(context)
-		context.FunctionNames = []string{"count", "sum"}
+		context.FunctionNames = []string{"count", "sum", "avg"}
 		context.Kinds = append(context.Kinds, SuggestionKindKeyword)
 		context.Keywords = optionKeywords
 		return context

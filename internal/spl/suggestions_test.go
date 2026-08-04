@@ -470,7 +470,16 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			kinds:  []SuggestionKind{SuggestionKindField},
 		},
 		{
+			source: `| streamstats current=false avg(`,
+			kinds:  []SuggestionKind{SuggestionKindField},
+		},
+		{
 			source:   `| streamstats sum `,
+			kinds:    nil,
+			keywords: nil,
+		},
+		{
+			source:   `| streamstats avg `,
 			kinds:    nil,
 			keywords: nil,
 		},
@@ -490,6 +499,11 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			keywords: []string{"BY", "current=", "window=", "global="},
 		},
 		{
+			source:   `| streamstats count AS avg `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"BY", "current=", "window=", "global="},
+		},
+		{
 			source:   `| streamstats sum(bytes) `,
 			kinds:    []SuggestionKind{SuggestionKindKeyword},
 			keywords: []string{"AS", "BY", "current=", "window=", "global="},
@@ -500,12 +514,22 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			keywords: []string{"BY", "current=", "window=", "global="},
 		},
 		{
+			source:   `| streamstats avg(bytes) AS running_mean `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"BY", "current=", "window=", "global="},
+		},
+		{
 			source:   `| streamstats count BY host `,
 			kinds:    []SuggestionKind{SuggestionKindField, SuggestionKindKeyword},
 			keywords: []string{"current=", "window=", "global="},
 		},
 		{
 			source:   `| streamstats count BY sum `,
+			kinds:    []SuggestionKind{SuggestionKindField, SuggestionKindKeyword},
+			keywords: []string{"current=", "window=", "global="},
+		},
+		{
+			source:   `| streamstats count BY avg `,
 			kinds:    []SuggestionKind{SuggestionKindField, SuggestionKindKeyword},
 			keywords: []string{"current=", "window=", "global="},
 		},
@@ -541,7 +565,7 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 	}
 }
 
-func TestAnalyzeStreamStatsSuggestionsAdvertiseNumericSum(t *testing.T) {
+func TestAnalyzeStreamStatsSuggestionsAdvertiseNumericAggregates(t *testing.T) {
 	t.Parallel()
 
 	source := `| streamstats `
@@ -549,8 +573,8 @@ func TestAnalyzeStreamStatsSuggestionsAdvertiseNumericSum(t *testing.T) {
 	if diagnostic != nil {
 		t.Fatalf("AnalyzeSuggestionContext: %v", diagnostic)
 	}
-	if !slices.Equal(context.FunctionNames, []string{"count", "sum"}) {
-		t.Fatalf("streamstats functions = %v, want [count sum]", context.FunctionNames)
+	if !slices.Equal(context.FunctionNames, []string{"count", "sum", "avg"}) {
+		t.Fatalf("streamstats functions = %v, want [count sum avg]", context.FunctionNames)
 	}
 }
 

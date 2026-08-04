@@ -327,6 +327,83 @@ func TestParseStreamStatsSumField(t *testing.T) {
 	}
 }
 
+func TestParseStreamStatsAverageField(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name, source, input, alias string
+		explicitAlias              bool
+		current                    bool
+		window                     uint64
+		global                     bool
+		groups                     []string
+	}{
+		{
+			name:    "canonical default preserves input spelling",
+			source:  `index=main | streamstats AvG(Payload.Bytes)`,
+			input:   "Payload.Bytes",
+			alias:   "avg(Payload.Bytes)",
+			current: true,
+			global:  true,
+		},
+		{
+			name:          "prior bounded group window",
+			source:        `index=main | streamstats current=f window=3 global=f avg(payload.bytes) AS prior_mean BY service`,
+			input:         "payload.bytes",
+			alias:         "prior_mean",
+			explicitAlias: true,
+			window:        3,
+			groups:        []string{"service"},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*StreamStatsCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *StreamStatsCommand", query.Commands[0])
+			}
+			if command.Aggregate.Function != AggregateFunctionAverage ||
+				command.Aggregate.Input != test.input ||
+				command.Aggregate.InputRange == (Range{}) ||
+				command.Aggregate.Predicate != nil ||
+				command.Aggregate.Percentile != 0 ||
+				command.Aggregate.Alias != test.alias ||
+				command.Aggregate.ExplicitAlias != test.explicitAlias ||
+				command.Current != test.current ||
+				command.Window != test.window ||
+				command.Global != test.global {
+				t.Fatalf("streamstats avg(field) command = %#v", command)
+			}
+			if len(command.GroupBy) != len(test.groups) {
+				t.Fatalf("groups = %#v, want %v", command.GroupBy, test.groups)
+			}
+			for index, want := range test.groups {
+				if command.GroupBy[index].Name != want {
+					t.Fatalf("group %d = %#v, want %q", index, command.GroupBy[index], want)
+				}
+			}
+			assertSourceRangeText(t, test.source, command.Aggregate.InputRange, test.input)
+			if test.explicitAlias {
+				assertSourceRangeText(t, test.source, command.Aggregate.AliasRange, test.alias)
+			} else {
+				functionStart := strings.Index(strings.ToLower(test.source), "avg(")
+				assertSourceRangeText(
+					t,
+					test.source,
+					command.Aggregate.AliasRange,
+					test.source[functionStart:functionStart+len("avg(")+len(test.input)+1],
+				)
+			}
+		})
+	}
+}
+
 func TestExactUnquotedStreamStatsFieldNameMatchesParserTokenBoundary(t *testing.T) {
 	t.Parallel()
 
@@ -416,7 +493,16 @@ func TestParseStreamStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 		{"backtick quoted sum input", "index=main | streamstats sum(`bytes`)", "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "`bytes`"},
 		{"multiple sum inputs", `index=main | streamstats sum(bytes, duration)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ","},
 		{"missing sum close", `index=main | streamstats sum(bytes`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ""},
-		{"other aggregate", `index=main | streamstats avg(bytes)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "avg"},
+		{"bare average", `index=main | streamstats avg`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "avg"},
+		{"empty average", `index=main | streamstats avg()`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "avg"},
+		{"eval average", `index=main | streamstats avg(eval(bytes>0))`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "avg"},
+		{"wildcard average input", `index=main | streamstats avg(bytes*)`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "bytes*"},
+		{"quoted average input", `index=main | streamstats avg("bytes")`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", `"bytes"`},
+		{"multiple average inputs", `index=main | streamstats avg(bytes, duration)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ","},
+		{"missing average close", `index=main | streamstats avg(bytes`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ""},
+		{"average long name", `index=main | streamstats average(bytes)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "average"},
+		{"mean synonym", `index=main | streamstats mean(bytes)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "mean"},
+		{"other aggregate", `index=main | streamstats min(bytes)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "min"},
 		{"comma second aggregate", `index=main | streamstats count, count`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ","},
 		{"space second aggregate", `index=main | streamstats count count`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "count"},
 		{"allnum", `index=main | streamstats allnum=false count`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "allnum"},

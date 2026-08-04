@@ -1785,11 +1785,12 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 
 const streamStatsSyntaxSuggestion = "streamstats count AS running_count"
 
-// parseStreamStatsCommand accepts one deliberately bounded running count or
-// exact-field numeric sum. Splunk commonly places options both before and
-// after the aggregate (and examples also place them after BY), so this parser
-// treats supported name=value options as position-independent while keeping
-// the aggregate, alias, and grouping tuple exact.
+// parseStreamStatsCommand accepts one deliberately bounded running count,
+// exact-field numeric sum, or exact-field numeric average. Splunk commonly
+// places options both before and after the aggregate (and examples also place
+// them after BY), so this parser treats supported name=value options as
+// position-independent while keeping the aggregate, alias, and grouping tuple
+// exact.
 func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 	command := &StreamStatsCommand{
 		Current: true,
@@ -1907,15 +1908,21 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 		}
 
 		if current.kind == tokenWord &&
-			(strings.EqualFold(current.text, "count") || strings.EqualFold(current.text, "sum")) {
+			(strings.EqualFold(current.text, "count") ||
+				strings.EqualFold(current.text, "sum") ||
+				strings.EqualFold(current.text, "avg")) {
 			if aggregateSeen || bySeen {
 				return nil, p.unsupportedStreamStatsAggregate(current, "streamstats supports exactly one aggregate")
 			}
 			function := AggregateFunctionCountValues
 			form := "count"
-			if strings.EqualFold(current.text, "sum") {
+			switch {
+			case strings.EqualFold(current.text, "sum"):
 				function = AggregateFunctionSum
 				form = "sum"
+			case strings.EqualFold(current.text, "avg"):
+				function = AggregateFunctionAverage
+				form = "avg"
 			}
 			hasArguments := p.index+1 < len(p.tokens) &&
 				p.tokens[p.index+1].kind == tokenLeftParen
@@ -1943,10 +1950,10 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 				end = aggregateEnd
 				continue
 			}
-			if function == AggregateFunctionSum {
+			if function != AggregateFunctionCountValues {
 				return nil, p.unsupportedStreamStatsAggregate(
 					current,
-					"streamstats sum requires one exact field in parentheses",
+					fmt.Sprintf("streamstats %s requires one exact field in parentheses", form),
 				)
 			}
 			aggregateSeen = true
@@ -2010,14 +2017,14 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 		if current.kind == tokenWord {
 			return nil, p.unsupportedStreamStatsAggregate(
 				current,
-				fmt.Sprintf("streamstats aggregate %q is not supported; use count, count(field), or sum(field)", current.text),
+				fmt.Sprintf("streamstats aggregate %q is not supported; use count, count(field), sum(field), or avg(field)", current.text),
 			)
 		}
-		return nil, p.unsupportedStreamStatsSyntax(current, "streamstats requires one count, count(field), or sum(field) aggregate")
+		return nil, p.unsupportedStreamStatsSyntax(current, "streamstats requires one count, count(field), sum(field), or avg(field) aggregate")
 	}
 
 	if !aggregateSeen {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "streamstats requires one count, count(field), or sum(field) aggregate")
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "streamstats requires one count, count(field), sum(field), or avg(field) aggregate")
 	}
 	if len(command.GroupBy) > 0 && command.Window > 0 &&
 		(!command.GlobalSpecified || command.Global) {
@@ -2037,16 +2044,20 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 	return command, nil
 }
 
-// parseStreamStatsFieldAggregate consumes an exact long-form count(field) or
-// sum(field) call. It deliberately does not share eventstats parsing because
-// the two commands have different alias requirements and diagnostic namespaces.
+// parseStreamStatsFieldAggregate consumes an exact long-form count(field),
+// sum(field), or avg(field) call. It deliberately does not share eventstats
+// parsing because the two commands have different alias requirements and
+// diagnostic namespaces.
 func (p *parser) parseStreamStatsFieldAggregate(
 	functionToken token,
 	function AggregateFunction,
 ) (StatsAggregate, Position, error) {
 	form := "count"
-	if function == AggregateFunctionSum {
+	switch function {
+	case AggregateFunctionSum:
 		form = "sum"
+	case AggregateFunctionAverage:
+		form = "avg"
 	}
 	aggregate := StatsAggregate{
 		Function: function,

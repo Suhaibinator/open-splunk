@@ -86,6 +86,25 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 			global:         true,
 			groups:         []string{"host"},
 		},
+		{
+			name:           "numeric average with canonical output",
+			source:         `index=gradethis | streamstats avg(payload.bytes)`,
+			function:       AggregateFunctionAverage,
+			input:          "payload.bytes",
+			output:         "avg(payload.bytes)",
+			includeCurrent: true,
+			global:         true,
+		},
+		{
+			name:           "prior numeric average by group",
+			source:         `index=gradethis | streamstats current=f avg(bytes) AS prior_mean BY host`,
+			function:       AggregateFunctionAverage,
+			input:          "bytes",
+			output:         "prior_mean",
+			includeCurrent: false,
+			global:         true,
+			groups:         []string{"host"},
+		},
 	}
 
 	for _, test := range tests {
@@ -198,6 +217,16 @@ func TestBuildStreamStatsCountUpsertsKnownSchemaAndPreservesRelationKind(t *test
 			source: `index=gradethis | table _time,bytes | streamstats sum(bytes) AS bytes`,
 			want:   []string{"_time", "bytes"},
 		},
+		{
+			name:   "append canonical average output",
+			source: `index=gradethis | table _time,bytes | streamstats avg(bytes)`,
+			want:   []string{"_time", "bytes", "avg(bytes)"},
+		},
+		{
+			name:   "average alias replaces input in place",
+			source: `index=gradethis | table _time,bytes | streamstats avg(bytes) AS bytes`,
+			want:   []string{"_time", "bytes"},
+		},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -221,6 +250,7 @@ func TestBuildStreamStatsEnforcesReservedFieldsAndProvenance(t *testing.T) {
 		`index=gradethis | streamstats count BY fields`,
 		`index=gradethis | streamstats count(fields) AS occurrences`,
 		`index=gradethis | streamstats sum(fields) AS total`,
+		`index=gradethis | streamstats avg(fields) AS mean`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
 		assertDiagnosticCode(t, err, "SPL_AMBIGUOUS_STREAMSTATS_FIELD")
@@ -255,6 +285,16 @@ func TestBuildStreamStatsEnforcesReservedFieldsAndProvenance(t *testing.T) {
 	}
 	if !slices.Equal(closedSumInput.OutputFields, []string{"fields", "host", "total"}) {
 		t.Fatalf("closed sum fields input output = %v", closedSumInput.OutputFields)
+	}
+	closedAverageInput, err := Build(
+		mustParse(t, `index=gradethis | table fields,host | streamstats avg(fields) AS mean BY host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build closed average fields input: %v", err)
+	}
+	if !slices.Equal(closedAverageInput.OutputFields, []string{"fields", "host", "mean"}) {
+		t.Fatalf("closed average fields input output = %v", closedAverageInput.OutputFields)
 	}
 
 	if _, err := Build(
@@ -372,13 +412,20 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 		command.Aggregate.Alias = "sum(bytes)"
 		command.Aggregate.AliasRange = base.Range
 	}
+	asAverage := func(command *spl.StreamStatsCommand) {
+		command.Aggregate.Function = spl.AggregateFunctionAverage
+		command.Aggregate.Input = "bytes"
+		command.Aggregate.InputRange = base.Range
+		command.Aggregate.Alias = "avg(bytes)"
+		command.Aggregate.AliasRange = base.Range
+	}
 
 	for _, test := range []struct {
 		name   string
 		mutate func(*spl.StreamStatsCommand)
 		code   string
 	}{
-		{"wrong function", func(c *spl.StreamStatsCommand) { c.Aggregate.Function = spl.AggregateFunctionAverage }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"wrong function", func(c *spl.StreamStatsCommand) { c.Aggregate.Function = spl.AggregateFunctionMinimum }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"input metadata", func(c *spl.StreamStatsCommand) { c.Aggregate.Input = "status" }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"field count missing input", func(c *spl.StreamStatsCommand) {
 			c.Aggregate.Function = spl.AggregateFunctionCountValues
@@ -442,6 +489,40 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
 		{"sum default spelling forged as explicit alias", func(c *spl.StreamStatsCommand) {
 			asSum(c)
+			c.Aggregate.ExplicitAlias = true
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"average missing input", func(c *spl.StreamStatsCommand) {
+			c.Aggregate.Function = spl.AggregateFunctionAverage
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"average missing input range", func(c *spl.StreamStatsCommand) {
+			c.Aggregate.Function = spl.AggregateFunctionAverage
+			c.Aggregate.Input = "bytes"
+			c.Aggregate.Alias = "avg(bytes)"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"average noncanonical implicit alias", func(c *spl.StreamStatsCommand) {
+			asAverage(c)
+			c.Aggregate.Alias = "mean"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"average predicate metadata", func(c *spl.StreamStatsCommand) {
+			asAverage(c)
+			c.Aggregate.Predicate = &spl.WhereNotExpr{}
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"average percentile metadata", func(c *spl.StreamStatsCommand) {
+			asAverage(c)
+			c.Aggregate.Percentile = 50
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"average comma input", func(c *spl.StreamStatsCommand) {
+			asAverage(c)
+			c.Aggregate.Input = "bytes,duration"
+			c.Aggregate.Alias = "avg(bytes,duration)"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"average parser-inexpressible explicit alias", func(c *spl.StreamStatsCommand) {
+			asAverage(c)
+			c.Aggregate.Alias = "prior mean"
+			c.Aggregate.ExplicitAlias = true
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"average default spelling forged as explicit alias", func(c *spl.StreamStatsCommand) {
+			asAverage(c)
 			c.Aggregate.ExplicitAlias = true
 		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
 		{"predicate metadata", func(c *spl.StreamStatsCommand) { c.Aggregate.Predicate = &spl.WhereNotExpr{} }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
@@ -550,6 +631,17 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 	if !slices.Equal(sumAnalysis.ReferencedFields, []string{"host", "status"}) {
 		t.Fatalf("sum referenced fields = %v, want [host status]", sumAnalysis.ReferencedFields)
 	}
+	average := valid()
+	average.Measure.Function = AggregateFunctionAverage
+	average.Measure.Input = status
+	average.Measure.Output = "avg(status)"
+	averageAnalysis, err := Analyze(&Query{Operators: []Operator{average}})
+	if err != nil {
+		t.Fatalf("Analyze valid average stream aggregate: %v", err)
+	}
+	if !slices.Equal(averageAnalysis.ReferencedFields, []string{"host", "status"}) {
+		t.Fatalf("average referenced fields = %v, want [host status]", averageAnalysis.ReferencedFields)
+	}
 
 	for _, operator := range []*StreamAggregate{
 		{Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "ordinal"}, Global: true},
@@ -562,6 +654,9 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 		{Measure: AggregateMeasure{Function: AggregateFunctionSum, Input: status, Output: "total"}, Global: true},
 		{Measure: AggregateMeasure{Function: AggregateFunctionSum, Input: status, Output: "sum(status)"}, Global: true},
 		{GroupBy: []FieldRef{host}, Measure: AggregateMeasure{Function: AggregateFunctionSum, Input: status, Output: "total"}, Global: false, WindowRows: 2},
+		{Measure: AggregateMeasure{Function: AggregateFunctionAverage, Input: status, Output: "mean"}, Global: true},
+		{Measure: AggregateMeasure{Function: AggregateFunctionAverage, Input: status, Output: "avg(status)"}, Global: true},
+		{GroupBy: []FieldRef{host}, Measure: AggregateMeasure{Function: AggregateFunctionAverage, Input: status, Output: "mean"}, Global: false, WindowRows: 2},
 	} {
 		if _, err := Analyze(&Query{Operators: []Operator{operator}}); err != nil {
 			t.Fatalf("Analyze valid option combination %#v: %v", operator, err)
@@ -573,7 +668,7 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 		mutate func(*StreamAggregate)
 	}{
 		{"missing output", func(op *StreamAggregate) { op.Measure.Output = "" }},
-		{"wrong function", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionAverage }},
+		{"wrong function", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionMinimum }},
 		{"field count missing input", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionCountValues }},
 		{"field count comma input", func(op *StreamAggregate) {
 			op.Measure.Function = AggregateFunctionCountValues
@@ -604,6 +699,19 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 			op.Measure.Function = AggregateFunctionSum
 			op.Measure.Input = status
 			op.Measure.Output = "sum(host)"
+		}},
+		{"average missing input", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionAverage
+		}},
+		{"average comma input", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionAverage
+			op.Measure.Input = mustResolveStreamStatsField(t, "status,host")
+			op.Measure.Output = "avg(status,host)"
+		}},
+		{"mismatched average default output", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionAverage
+			op.Measure.Input = status
+			op.Measure.Output = "avg(host)"
 		}},
 		{"row count parenthesized output", func(op *StreamAggregate) {
 			op.Measure.Output = "count(status)"

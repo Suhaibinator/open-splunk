@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"slices"
 	"strings"
@@ -17,8 +18,8 @@ import (
 
 const streamStatsIntegrationCollectorID = "streamstats-integration-collector"
 
-// testStreamStatsAgainstClickHouse pins the bounded running-count contract to
-// the production ClickHouse image. The 10,000-row fixture is deliberately
+// testStreamStatsAgainstClickHouse pins the bounded running aggregate contract
+// to the production ClickHouse image. The 10,000-row fixture is deliberately
 // shared with eventstats, whose phase runs immediately before this helper, so
 // the full store integration does not ingest a duplicate boundary corpus.
 func testStreamStatsAgainstClickHouse(
@@ -57,6 +58,7 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			1,
 			typedField("streamstats_group", typedString("500")),
+			typedField("streamstats_avg_overflow", typedDouble(math.MaxFloat64)),
 			typedField("streamstats_existing", typedString("shadowed")),
 			typedField("streamstats_sum_value", typedSint(2)),
 			typedField("streamstats_value", typedString("present")),
@@ -66,6 +68,7 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			2,
 			typedField("streamstats_group", typedString("other")),
+			typedField("streamstats_avg_overflow", typedDouble(math.MaxFloat64)),
 			typedField(
 				"streamstats_sum_value",
 				typedList(
@@ -103,6 +106,7 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			5,
 			typedField("streamstats_group", typedNull()),
+			typedField("streamstats_decimal", typedDecimal("3.25")),
 			typedField("streamstats_sum_value", typedNull()),
 			typedField("streamstats_value", typedNull()),
 		),
@@ -542,6 +546,124 @@ func testStreamStatsAgainstClickHouse(
 			test.wantTotals,
 		)
 	}
+	assertAverages := func(name, source string, wantMeans []*float64) {
+		t.Helper()
+		got := collectSums(name, compile(source))
+		want := make([]sumRow, len(ascendingIDs))
+		for index, id := range ascendingIDs {
+			want[index] = sumRow{id: id, total: wantMeans[index]}
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s rows = %#v, want %#v", name, got, want)
+		}
+	}
+	for _, test := range []struct {
+		name      string
+		options   string
+		wantMeans []*float64
+	}{
+		{
+			name: "numeric average complete prefix",
+			wantMeans: []*float64{
+				floatPointer(2), floatPointer(19.0 / 6.0), floatPointer(2),
+				floatPointer(2), floatPointer(2), floatPointer(2),
+				floatPointer(8.0 / 5.0),
+			},
+		},
+		{
+			name:    "numeric average complete prior prefix",
+			options: "current=false",
+			wantMeans: []*float64{
+				nil, floatPointer(2), floatPointer(19.0 / 6.0), floatPointer(2),
+				floatPointer(2), floatPointer(2), floatPointer(2),
+			},
+		},
+		{
+			name:    "numeric average two-row current window",
+			options: "window=2",
+			wantMeans: []*float64{
+				floatPointer(2), floatPointer(19.0 / 6.0), floatPointer(2),
+				floatPointer(-1.5), nil, nil, floatPointer(0),
+			},
+		},
+		{
+			name:    "numeric average two-row prior window",
+			options: "current=false window=2",
+			wantMeans: []*float64{
+				nil, floatPointer(2), floatPointer(19.0 / 6.0), floatPointer(2),
+				floatPointer(-1.5), nil, nil,
+			},
+		},
+	} {
+		assertAverages(
+			test.name,
+			base+` | sort 0 +event_id | streamstats `+test.options+
+				` avg(streamstats_sum_value) AS running_mean | table event_id running_mean`,
+			test.wantMeans,
+		)
+	}
+
+	canonicalTimeAverage := compile(
+		base + ` | sort 0 +event_id | streamstats avg(_time) AS mean_time` +
+			` | tail 1 | table mean_time`,
+	)
+	var canonicalTimeMean *float64
+	if err := connection.QueryRow(
+		ctx,
+		canonicalTimeAverage.SQL,
+		canonicalTimeAverage.Args...,
+	).Scan(&canonicalTimeMean); err != nil {
+		t.Fatalf(
+			"execute canonical-time streamstats avg(field): %v\nSQL: %s",
+			err,
+			canonicalTimeAverage.SQL,
+		)
+	}
+	wantCanonicalTime := float64(indexTime.Add(4*time.Second).UnixNano()) / 1e9
+	if canonicalTimeMean == nil ||
+		math.Abs(*canonicalTimeMean-wantCanonicalTime) > 1e-6 {
+		t.Fatalf(
+			"canonical-time streamstats avg(field) = %v, want %g",
+			canonicalTimeMean,
+			wantCanonicalTime,
+		)
+	}
+
+	decimalAverage := compile(
+		base + ` | sort 0 +event_id | streamstats avg(streamstats_decimal) AS mean_decimal` +
+			` | tail 1 | table mean_decimal`,
+	)
+	var decimalMean *float64
+	if err := connection.QueryRow(
+		ctx,
+		decimalAverage.SQL,
+		decimalAverage.Args...,
+	).Scan(&decimalMean); err != nil {
+		t.Fatalf("execute decimal streamstats avg(field): %v", err)
+	}
+	if decimalMean == nil || *decimalMean != 3.25 {
+		t.Fatalf("decimal streamstats avg(field) = %v, want 3.25", decimalMean)
+	}
+
+	computedNonFiniteAverage := compile(
+		base + ` | sort 0 +event_id` +
+			` | streamstats avg(streamstats_avg_overflow) AS mean_overflow` +
+			` | tail 1 | table mean_overflow`,
+	)
+	var computedNonFiniteMean *float64
+	if err := connection.QueryRow(
+		ctx,
+		computedNonFiniteAverage.SQL,
+		computedNonFiniteAverage.Args...,
+	).Scan(&computedNonFiniteMean); err != nil {
+		t.Fatalf("execute computed non-finite streamstats avg(field): %v", err)
+	}
+	if computedNonFiniteMean == nil || !math.IsInf(*computedNonFiniteMean, 1) {
+		t.Fatalf(
+			"computed non-finite streamstats avg(field) = %v, want +Inf",
+			computedNonFiniteMean,
+		)
+	}
 
 	groupedSum := collectSums(
 		"grouped streamstats sum(field)",
@@ -567,6 +689,30 @@ func testStreamStatsAgainstClickHouse(
 			groupedSumWant,
 		)
 	}
+	groupedAverage := collectSums(
+		"grouped streamstats avg(field)",
+		compile(
+			base+` | sort 0 +event_id`+
+				` | streamstats window=2 global=false avg(streamstats_sum_value) AS running_mean BY streamstats_group`+
+				` | table event_id running_mean`,
+		),
+	)
+	groupedAverageWant := []sumRow{
+		{id: "streamstats-01", total: floatPointer(2)},
+		{id: "streamstats-02", total: floatPointer(15.0 / 4.0)},
+		{id: "streamstats-03", total: floatPointer(1.0 / 4.0)},
+		{id: "streamstats-04"},
+		{id: "streamstats-05"},
+		{id: "streamstats-06", total: floatPointer(15.0 / 4.0)},
+		{id: "streamstats-07", total: floatPointer(-3.0 / 4.0)},
+	}
+	if !reflect.DeepEqual(groupedAverage, groupedAverageWant) {
+		t.Fatalf(
+			"grouped streamstats avg(field) rows = %#v, want %#v",
+			groupedAverage,
+			groupedAverageWant,
+		)
+	}
 
 	assertSums(
 		"numeric alias replacement",
@@ -584,6 +730,24 @@ func testStreamStatsAgainstClickHouse(
 		base+` | sort 0 +event_id | fields event_id`+
 			` | streamstats sum(streamstats_sum_value) AS running_total`+
 			` | table event_id running_total`,
+		[]*float64{nil, nil, nil, nil, nil, nil, nil},
+	)
+	assertAverages(
+		"numeric average alias replacement",
+		base+` | sort 0 +event_id`+
+			` | streamstats avg(streamstats_sum_value) AS streamstats_sum_value`+
+			` | table event_id streamstats_sum_value`,
+		[]*float64{
+			floatPointer(2), floatPointer(19.0 / 6.0), floatPointer(2),
+			floatPointer(2), floatPointer(2), floatPointer(2),
+			floatPointer(8.0 / 5.0),
+		},
+	)
+	assertAverages(
+		"projected-away numeric average input",
+		base+` | sort 0 +event_id | fields event_id`+
+			` | streamstats avg(streamstats_sum_value) AS running_mean`+
+			` | table event_id running_mean`,
 		[]*float64{nil, nil, nil, nil, nil, nil, nil},
 	)
 
@@ -635,6 +799,40 @@ func testStreamStatsAgainstClickHouse(
 		t.Fatalf(
 			"fixed multivalue streamstats sum(field) = %v, want 500",
 			fixedMultivalueTotal,
+		)
+	}
+	fixedMultivalueAverage := compile(
+		base + ` | stats values(streamstats_group) AS groups` +
+			` | streamstats avg(groups) AS mean | table mean`,
+	)
+	if got := strings.Count(fixedMultivalueAverage.SQL, "groupUniqArray"); got != 1 {
+		t.Fatalf(
+			"fixed multivalue streamstats average collectors = %d, want only the upstream values collector:\n%s",
+			got,
+			fixedMultivalueAverage.SQL,
+		)
+	}
+	for _, forbidden := range []string{"ARRAY JOIN", "arrayJoin(", "groupArray(", "arrayAvg("} {
+		if strings.Contains(fixedMultivalueAverage.SQL, forbidden) {
+			t.Fatalf(
+				"fixed multivalue streamstats average introduced %q:\n%s",
+				forbidden,
+				fixedMultivalueAverage.SQL,
+			)
+		}
+	}
+	var fixedMultivalueMean *float64
+	if err := connection.QueryRow(
+		ctx,
+		fixedMultivalueAverage.SQL,
+		fixedMultivalueAverage.Args...,
+	).Scan(&fixedMultivalueMean); err != nil {
+		t.Fatalf("execute fixed multivalue streamstats avg(field): %v", err)
+	}
+	if fixedMultivalueMean == nil || *fixedMultivalueMean != 500 {
+		t.Fatalf(
+			"fixed multivalue streamstats avg(field) = %v, want 500",
+			fixedMultivalueMean,
 		)
 	}
 
@@ -845,6 +1043,23 @@ func testStreamStatsAgainstClickHouse(
 		t.Fatalf("tenant-scoped streamstats sum total = %v, want 8", tenantSum)
 	}
 
+	tenantScopedAverage := compile(
+		base + ` | sort 0 +event_id` +
+			` | streamstats avg(streamstats_sum_value) AS mean` +
+			` | tail 1 | table mean`,
+	)
+	var tenantMean *float64
+	if err := connection.QueryRow(
+		ctx,
+		tenantScopedAverage.SQL,
+		tenantScopedAverage.Args...,
+	).Scan(&tenantMean); err != nil {
+		t.Fatalf("execute tenant-scoped streamstats average: %v", err)
+	}
+	if tenantMean == nil || *tenantMean != 8.0/5.0 {
+		t.Fatalf("tenant-scoped streamstats average = %v, want 1.6", tenantMean)
+	}
+
 	hiddenPoison := compile(
 		`index=compiler source="streamstats-poison"` +
 			` | streamstats count AS peers BY streamstats_group` +
@@ -906,6 +1121,27 @@ func testStreamStatsAgainstClickHouse(
 		t.Fatalf("exact streamstats sum boundary = %v, want null", exactEmptySum)
 	}
 
+	exactAverageBoundary := compileBoundary(
+		`index=eventstats-boundary source="eventstats-boundary" host="in"` +
+			` | streamstats window=10000 avg(eventstats_missing) AS mean` +
+			` | head 1 | table mean`,
+	)
+	var exactEmptyMean *float64
+	if err := connection.QueryRow(
+		ctx,
+		exactAverageBoundary.SQL,
+		exactAverageBoundary.Args...,
+	).Scan(&exactEmptyMean); err != nil {
+		t.Fatalf(
+			"execute exact streamstats average boundary: %v\nSQL: %s",
+			err,
+			exactAverageBoundary.SQL,
+		)
+	}
+	if exactEmptyMean != nil {
+		t.Fatalf("exact streamstats average boundary = %v, want null", exactEmptyMean)
+	}
+
 	hiddenOverflow := compileBoundary(
 		`index=eventstats-boundary source="eventstats-boundary"` +
 			` | streamstats count(projected_away) AS ordinal` +
@@ -936,6 +1172,25 @@ func testStreamStatsAgainstClickHouse(
 		t.Fatalf(
 			"downstream-hidden streamstats sum overflow error = %v, want %q",
 			sumOverflowErr,
+			StreamStatsInputLimitMarker,
+		)
+	}
+
+	hiddenAverageOverflow := compileBoundary(
+		`index=eventstats-boundary source="eventstats-boundary"` +
+			` | streamstats avg(projected_away) AS mean` +
+			` | fields - mean | search event_id="not-present"`,
+	)
+	averageOverflowErr := executeCompiledExpectingNoRows(
+		ctx,
+		connection,
+		hiddenAverageOverflow,
+	)
+	if averageOverflowErr == nil ||
+		!strings.Contains(averageOverflowErr.Error(), StreamStatsInputLimitMarker) {
+		t.Fatalf(
+			"downstream-hidden streamstats average overflow error = %v, want %q",
+			averageOverflowErr,
 			StreamStatsInputLimitMarker,
 		)
 	}

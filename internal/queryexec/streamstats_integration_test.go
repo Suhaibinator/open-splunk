@@ -132,6 +132,62 @@ func queryIntegrationTestStreamStatsTransport(
 		)
 	}
 
+	averageJob, averagePage := queryIntegrationRunSearch(
+		t,
+		ctx,
+		executor,
+		indexTime,
+		"queryexec-streamstats-average-transport",
+		`index=main source="source"`+
+			` | streamstats avg(status) AS running_mean`+
+			` | streamstats current=false avg(status) AS preceding_mean BY path`+
+			` | table event_id running_mean preceding_mean`,
+	)
+	if averageJob.State != searchjobs.StateCompleted {
+		t.Fatalf(
+			"streamstats average transport state = %v, failure=%#v",
+			averageJob.State,
+			averageJob.Failure,
+		)
+	}
+	wantAverageColumns := []searchjobs.Column{
+		{Name: "event_id", Kind: searchjobs.ValueKindString},
+		{Name: "running_mean", Kind: searchjobs.ValueKindDouble, Nullable: true},
+		{Name: "preceding_mean", Kind: searchjobs.ValueKindDouble, Nullable: true},
+	}
+	if len(averagePage.Schema.Columns) != len(wantAverageColumns) {
+		t.Fatalf(
+			"streamstats average transport schema = %#v, want %#v",
+			averagePage.Schema.Columns,
+			wantAverageColumns,
+		)
+	}
+	for index := range wantAverageColumns {
+		if averagePage.Schema.Columns[index] != wantAverageColumns[index] {
+			t.Fatalf(
+				"streamstats average transport column %d = %#v, want %#v",
+				index,
+				averagePage.Schema.Columns[index],
+				wantAverageColumns[index],
+			)
+		}
+	}
+	if len(averagePage.Rows) != 1 {
+		t.Fatalf("streamstats average transport rows = %#v, want one row", averagePage.Rows)
+	}
+	if eventID, ok := averagePage.Rows[0].Values[0].String(); !ok || eventID != "queryexec-event" {
+		t.Fatalf("streamstats average transport event_id = %q, string=%v", eventID, ok)
+	}
+	if mean, ok := averagePage.Rows[0].Values[1].Double(); !ok || mean != 200 {
+		t.Fatalf("streamstats average running_mean = %v, double=%v", mean, ok)
+	}
+	if !averagePage.Rows[0].Values[2].IsNull() {
+		t.Fatalf(
+			"streamstats average preceding_mean = %#v, want null empty prior frame",
+			averagePage.Rows[0].Values[2],
+		)
+	}
+
 	const analysis = `index=main source="source" | streamstats count(path) AS populated`
 	logical := queryIntegrationFieldPlan(t, "main", indexTime, analysis)
 	compiler := clickhouse.Compiler{}
@@ -321,6 +377,101 @@ func queryIntegrationTestStreamStatsTransport(
 		t.Fatalf(
 			"streamstats sum timeline = %#v, want one event at %v",
 			sumBuckets,
+			firstBucket,
+		)
+	}
+
+	const averageAnalysis = `index=main source="source" | streamstats avg(status) AS running_mean`
+	averageLogical := queryIntegrationFieldPlan(t, "main", indexTime, averageAnalysis)
+	averageCatalogQuery, err := compiler.CompileFieldCatalog(
+		averageLogical,
+		clickhouse.FieldCatalogSpec{MaximumFields: clickhouse.MaximumFieldCatalogFields},
+	)
+	if err != nil {
+		t.Fatalf("compile streamstats average field catalog: %v", err)
+	}
+	averageCatalog, err := executor.ExecuteFieldCatalog(ctx, averageCatalogQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats average field catalog: %v\nSQL: %s\nargs: %#v",
+			err,
+			averageCatalogQuery.SQL,
+			averageCatalogQuery.Args,
+		)
+	}
+	if averageCatalog.TotalEvents != 1 {
+		t.Fatalf("streamstats average field catalog = %#v, want one event", averageCatalog)
+	}
+	assertFieldCatalogProfile(t, averageCatalog, FieldProfileRow{
+		FieldName:     "running_mean",
+		ObservedTypes: []eventfields.StoredValueType{eventfields.StoredValueTypeDouble},
+		EventCount:    1,
+	})
+
+	averageSummaryQuery, err := compiler.CompileFieldSummary(
+		averageLogical,
+		clickhouse.FieldSummarySpec{
+			FieldName:             "running_mean",
+			MaximumValues:         10,
+			MaximumDistinctValues: clickhouse.MaximumFieldSummaryDistinctValues,
+			MaximumValueBytes:     clickhouse.MaximumFieldSummaryValueBytes,
+		},
+	)
+	if err != nil {
+		t.Fatalf("compile streamstats average field summary: %v", err)
+	}
+	averageSummary, err := executor.ExecuteFieldSummary(ctx, averageSummaryQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats average field summary: %v\nSQL: %s\nargs: %#v",
+			err,
+			averageSummaryQuery.SQL,
+			averageSummaryQuery.Args,
+		)
+	}
+	if averageSummary.FieldName != "running_mean" ||
+		len(averageSummary.ObservedTypes) != 1 ||
+		averageSummary.ObservedTypes[0] != eventfields.StoredValueTypeDouble ||
+		averageSummary.EventCount != 1 || averageSummary.NullCount != 0 ||
+		averageSummary.MissingCount != 0 || averageSummary.DistinctCount != 1 ||
+		len(averageSummary.TopValues) != 1 || averageSummary.TopValues[0].Count != 1 {
+		t.Fatalf("streamstats average field summary = %#v", averageSummary)
+	}
+	if mean, ok := averageSummary.TopValues[0].Value.Double(); !ok || mean != 200 {
+		t.Fatalf(
+			"streamstats average summary running_mean = %v, double=%v",
+			mean,
+			ok,
+		)
+	}
+
+	averageTimelineQuery := queryIntegrationCompileTimeline(
+		t,
+		averageAnalysis,
+		"main",
+		indexTime,
+		clickhouse.TimelineSpec{
+			FirstBucket: firstBucket,
+			SpanSeconds: 2,
+			BucketCount: 1,
+			Earliest:    firstBucket,
+			Latest:      firstBucket.Add(2 * time.Second),
+		},
+	)
+	averageBuckets, err := executor.ExecuteTimeline(ctx, averageTimelineQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats average timeline: %v\nSQL: %s\nargs: %#v",
+			err,
+			averageTimelineQuery.SQL,
+			averageTimelineQuery.Args,
+		)
+	}
+	if len(averageBuckets) != 1 || averageBuckets[0].Count != 1 ||
+		!averageBuckets[0].AlignedStart.Equal(firstBucket) {
+		t.Fatalf(
+			"streamstats average timeline = %#v, want one event at %v",
+			averageBuckets,
 			firstBucket,
 		)
 	}

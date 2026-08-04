@@ -13334,10 +13334,14 @@ func validateStreamAggregate(
 				"compile ClickHouse streamstats: argument-free count contains input metadata",
 			)
 		}
-	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum:
+	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
+		plan.AggregateFunctionAverage:
 		form := "count"
-		if measure.Function == plan.AggregateFunctionSum {
+		switch measure.Function {
+		case plan.AggregateFunctionSum:
 			form = "sum"
+		case plan.AggregateFunctionAverage:
+			form = "avg"
 		}
 		if !spl.IsExactUnquotedStreamStatsFieldName(measure.Input.Name) {
 			return plan.FieldRef{}, errors.New(
@@ -13362,7 +13366,7 @@ func validateStreamAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse streamstats: only count, count(field), and sum(field) are supported",
+			"compile ClickHouse streamstats: only count, count(field), sum(field), and avg(field) are supported",
 		)
 	}
 	defaultOutput := ""
@@ -13371,6 +13375,8 @@ func validateStreamAggregate(
 		defaultOutput = "count(" + measure.Input.Name + ")"
 	case plan.AggregateFunctionSum:
 		defaultOutput = "sum(" + measure.Input.Name + ")"
+	case plan.AggregateFunctionAverage:
+		defaultOutput = "avg(" + measure.Input.Name + ")"
 	}
 	validOutput := spl.IsExactUnquotedStreamStatsFieldName(measure.Output) ||
 		(defaultOutput != "" && measure.Output == defaultOutput)
@@ -13454,7 +13460,8 @@ func streamAggregateCompileState(
 	}
 	numberType := "UInt64"
 	numericIntegral := true
-	if function == plan.AggregateFunctionSum {
+	if function == plan.AggregateFunctionSum ||
+		function == plan.AggregateFunctionAverage {
 		numberType = "Float64"
 		numericIntegral = false
 	}
@@ -13496,11 +13503,11 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 		" PRECEDING AND 1 PRECEDING"
 }
 
-// compileStreamAggregate lowers one running count or numeric sum over the order
-// already established by the pipeline. Its only retained relation is capped at
-// one sentinel beyond the public limit; both row overflow and Dynamic BY poison
-// are checked inside the deferred barrier before any downstream operator can
-// hide them.
+// compileStreamAggregate lowers one running count, numeric sum, or numeric
+// average over the order already established by the pipeline. Its only retained
+// relation is capped at one sentinel beyond the public limit; both row overflow
+// and Dynamic BY poison are checked inside the deferred barrier before any
+// downstream operator can hide them.
 func compileStreamAggregate(
 	relation compiledRelation,
 	operator *plan.StreamAggregate,
@@ -13595,7 +13602,8 @@ func compileStreamAggregate(
 	measureAlias := ""
 	measureProjection := ""
 	if operator.Measure.Function == plan.AggregateFunctionCountValues ||
-		operator.Measure.Function == plan.AggregateFunctionSum {
+		operator.Measure.Function == plan.AggregateFunctionSum ||
+		operator.Measure.Function == plan.AggregateFunctionAverage {
 		input, exists, resolveErr := resolveCompiledField(operator.Measure.Input, state)
 		if resolveErr != nil {
 			return compiledRelation{}, compileState{}, nil, nil, resolveErr
@@ -13607,7 +13615,7 @@ func compileStreamAggregate(
 			if exists {
 				measureSQL, contributionArgs = countValueInputSQL(input)
 			}
-		case plan.AggregateFunctionSum:
+		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 			measureSQL = "CAST([], 'Array(Float64)')"
 			if exists {
 				measureSQL, contributionArgs = numericArrayInputSQL(input)
@@ -13714,7 +13722,7 @@ func compileStreamAggregate(
 	case plan.AggregateFunctionCountValues:
 		windowExpression = "toUInt64(ifNull(sum(toUInt128(" + measureAlias +
 			")) OVER (" + windowClause + "), toUInt128(0)))"
-	case plan.AggregateFunctionSum:
+	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
 		numericAggregate, supported := numericArrayAggregateSQL(
 			operator.Measure.Function,
 			measureAlias,
@@ -13769,7 +13777,8 @@ func compileStreamAggregate(
 	if len(groupAliases) > 0 {
 		outputExists = windowAlias + "." + eligibleAlias + " != 0"
 		nullType := "UInt64"
-		if operator.Measure.Function == plan.AggregateFunctionSum {
+		if operator.Measure.Function == plan.AggregateFunctionSum ||
+			operator.Measure.Function == plan.AggregateFunctionAverage {
 			nullType = "Float64"
 		}
 		outputValue = "if(" + outputExists + ", " + outputValue +

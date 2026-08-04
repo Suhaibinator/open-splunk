@@ -817,12 +817,17 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 				measure.Function = AggregateFunctionCountRows
-			case spl.AggregateFunctionCountValues, spl.AggregateFunctionSum:
+			case spl.AggregateFunctionCountValues, spl.AggregateFunctionSum,
+				spl.AggregateFunctionAverage:
 				form := "count"
 				function := AggregateFunctionCountValues
-				if aggregate.Function == spl.AggregateFunctionSum {
+				switch aggregate.Function {
+				case spl.AggregateFunctionSum:
 					form = "sum"
 					function = AggregateFunctionSum
+				case spl.AggregateFunctionAverage:
+					form = "avg"
+					function = AggregateFunctionAverage
 				}
 				if aggregate.Input == "" ||
 					aggregate.InputRange == (spl.Range{}) ||
@@ -860,7 +865,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
 					Message: "streamstats currently supports exactly one count, " +
-						"count(field), or sum(field) aggregate",
+						"count(field), sum(field), or avg(field) aggregate",
 					Range: aggregate.Range,
 				}
 			}
