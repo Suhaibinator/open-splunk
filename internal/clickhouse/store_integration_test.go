@@ -173,6 +173,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = queryConnection.Close() })
+	t.Run("native raw text token index preserves SPL semantics and prunes granules", func(t *testing.T) {
+		testRawTextTokenIndexAgainstClickHouse(t, ctx, queryConnection, indexTime)
+	})
 	t.Run("terminal rejection writes no ClickHouse block", func(t *testing.T) {
 		testTerminalRejectionAgainstClickHouse(t, ctx, config, queryConnection, indexTime)
 	})

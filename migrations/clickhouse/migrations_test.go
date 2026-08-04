@@ -78,7 +78,7 @@ func TestInitialEventsSchemaContract(t *testing.T) {
 		"ORDER BY (`tenant_id`, `index_name`, toStartOfHour(`event_time`), `event_time`, `event_id`)",
 		"TTL `expires_at` DELETE",
 		"non_replicated_deduplication_window = 10000",
-		"TYPE text(tokenizer = 'splitByNonAlpha')",
+		"INDEX idx_raw_text arrayMap(token -> lower(token), extractAll(translateUTF8(`raw`, 'ſK', 'sk'), '[A-Za-z0-9_]+')) TYPE text(tokenizer = 'array')",
 	} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("initial events migration is missing schema contract fragment %q", fragment)

@@ -652,6 +652,14 @@ func settingsForExplain(
 			"execute ClickHouse EXPLAIN: materialized CTEs are not enabled",
 		)
 	}
+	for _, name := range requiredTextIndexSettingNames {
+		if base[name] != uint8(1) {
+			return nil, fmt.Errorf(
+				"execute ClickHouse EXPLAIN: setting %s is not enabled",
+				name,
+			)
+		}
+	}
 	if base["short_circuit_function_evaluation"] != "enable" {
 		return nil, errors.New(
 			"execute ClickHouse EXPLAIN: short-circuit evaluation is not enabled",

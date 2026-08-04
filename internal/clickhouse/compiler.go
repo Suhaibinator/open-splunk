@@ -36,6 +36,9 @@ const (
 	internalSortVisibilityColumn       = "__os_sort_visibility_seq"
 	internalSortSourceIdentityColumn   = "__os_sort_source_identity"
 	rawEncodingUTF8                    = 1
+	rawTextIndexExtractionRegex        = "[A-Za-z0-9_]+"
+	rawTextIndexASCIIFoldFrom          = "ſK"
+	rawTextIndexASCIIFoldTo            = "sk"
 	// Timechart physical columns are executor-only transports. The fixed-schema
 	// form returns ordinal/count, while runtime series names remain data and are
 	// expanded into the public wide schema only after the complete bounded
@@ -696,7 +699,10 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				aliasSequence++
 				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 			}
-			predicate, predicateArgs, compileErr := compileExpression(operator.Expression, predicateState)
+			predicate, predicateArgs, compileErr := compileFilterExpression(
+				operator.Expression,
+				predicateState,
+			)
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
@@ -5644,6 +5650,7 @@ type fieldState struct {
 	dynamicNumericEligibleSQL string
 	maxStringBytes            uint64
 	textEligibleSQL           string
+	rawTextIndexEligible      bool
 	dynamicDomain             dynamicScalarDomain
 	numericIntegral           bool
 	mvCountOneOrNull          bool
@@ -5806,18 +5813,45 @@ func canonicalState(field string) fieldState {
 	if field == "_raw" {
 		state.textEligibleSQL = quoteIdentifier(internalRawEncodingColumn) + " = " +
 			strconv.Itoa(rawEncodingUTF8)
+		state.rawTextIndexEligible = true
 	}
 	return state
 }
 
 func compileExpression(expression plan.Expression, state compileState) (string, []any, error) {
+	return compileExpressionWithRawTextIndex(expression, state, false)
+}
+
+// compileFilterExpression permits a native text-index candidate only for a
+// positive filter over the canonical physical _raw lineage. Other expression
+// consumers (for example eval conditions and aggregate predicates) retain the
+// exact scan predicate because an index candidate there cannot prune the
+// physical event read. A NOT boundary disables candidates for its complete
+// operand: negative token lookup cannot safely or usefully narrow the scan.
+func compileFilterExpression(expression plan.Expression, state compileState) (string, []any, error) {
+	return compileExpressionWithRawTextIndex(expression, state, true)
+}
+
+func compileExpressionWithRawTextIndex(
+	expression plan.Expression,
+	state compileState,
+	allowRawTextIndex bool,
+) (string, []any, error) {
 	switch expression := expression.(type) {
 	case *plan.BooleanExpression:
-		left, leftArgs, err := compileExpression(expression.Left, state)
+		left, leftArgs, err := compileExpressionWithRawTextIndex(
+			expression.Left,
+			state,
+			allowRawTextIndex,
+		)
 		if err != nil {
 			return "", nil, err
 		}
-		right, rightArgs, err := compileExpression(expression.Right, state)
+		right, rightArgs, err := compileExpressionWithRawTextIndex(
+			expression.Right,
+			state,
+			allowRawTextIndex,
+		)
 		if err != nil {
 			return "", nil, err
 		}
@@ -5827,7 +5861,11 @@ func compileExpression(expression plan.Expression, state compileState) (string, 
 		}
 		return "(" + left + " " + operator + " " + right + ")", append(leftArgs, rightArgs...), nil
 	case *plan.NotExpression:
-		operand, args, err := compileExpression(expression.Operand, state)
+		operand, args, err := compileExpressionWithRawTextIndex(
+			expression.Operand,
+			state,
+			false,
+		)
 		if err != nil {
 			return "", nil, err
 		}
@@ -5844,7 +5882,15 @@ func compileExpression(expression plan.Expression, state compileState) (string, 
 			return "match(toString(" + raw.valueSQL + "), ?)", []any{freeTextRegex(expression.Value, expression.Quoted)}, nil
 		}
 		if !expression.Quoted {
-			return "match(toString(" + raw.valueSQL + "), ?)", []any{freeTextRegex(expression.Value, false)}, nil
+			verifier := freeTextRegex(expression.Value, false)
+			if allowRawTextIndex && raw.rawTextIndexEligible &&
+				rawTextIndexTokenEligible(expression.Value) {
+				candidate := "has(" + rawTextIndexTokensSQL(raw.valueSQL) + ", lower(?))"
+				exact := "match(toString(" + raw.valueSQL + "), ?)"
+				return "(" + candidate + " AND " + exact + ")",
+					[]any{expression.Value, verifier}, nil
+			}
+			return "match(toString(" + raw.valueSQL + "), ?)", []any{verifier}, nil
 		}
 		return "positionCaseInsensitiveUTF8(toString(" + raw.valueSQL + "), ?) > 0", []any{expression.Value}, nil
 	case *plan.ComparisonExpression:
@@ -12192,17 +12238,18 @@ func renamePublicOrder(current []string, source, destination string, sourceIsPub
 func projectedRenameField(source fieldState, destination string) fieldState {
 	value := quoteIdentifier(destination)
 	result := fieldState{
-		valueSQL:        value,
-		maxStringBytes:  source.maxStringBytes,
-		textEligibleSQL: source.textEligibleSQL,
-		dynamicDomain:   source.dynamicDomain,
-		numericIntegral: source.numericIntegral,
-		storedTypeSQL:   source.storedTypeSQL,
-		existsSQL:       rewriteExistenceForProjection(source, destination),
-		existsArgs:      append([]any(nil), source.existsArgs...),
-		descendantSQL:   source.descendantSQL,
-		descendantArgs:  append([]any(nil), source.descendantArgs...),
-		kind:            source.kind,
+		valueSQL:             value,
+		maxStringBytes:       source.maxStringBytes,
+		textEligibleSQL:      source.textEligibleSQL,
+		rawTextIndexEligible: source.rawTextIndexEligible,
+		dynamicDomain:        source.dynamicDomain,
+		numericIntegral:      source.numericIntegral,
+		storedTypeSQL:        source.storedTypeSQL,
+		existsSQL:            rewriteExistenceForProjection(source, destination),
+		existsArgs:           append([]any(nil), source.existsArgs...),
+		descendantSQL:        source.descendantSQL,
+		descendantArgs:       append([]any(nil), source.descendantArgs...),
+		kind:                 source.kind,
 		// A field renamed to index is calculated pipeline data, not the
 		// authorization-constrained physical index selector.
 		caseSensitive:           false,
@@ -13516,6 +13563,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		next.visible[name] = fieldState{
 			valueSQL: publicName, maxStringBytes: compiled.maxStringBytes,
 			textEligibleSQL:         compiled.textEligibleSQL,
+			rawTextIndexEligible:    compiled.rawTextIndexEligible,
 			dynamicDomain:           compiled.dynamicDomain,
 			numericIntegral:         compiled.numericIntegral,
 			mvCountOneOrNull:        compiled.mvCountOneOrNull,
@@ -19291,6 +19339,39 @@ func freeTextRegex(value string, quoted bool) string {
 		result.WriteString("(?:$|[^[:alnum:]_])")
 	}
 	return result.String()
+}
+
+// rawTextIndexTokenEligible intentionally starts with the narrow query shape
+// whose exact-regex matches necessarily contain one indexed ASCII-alphanumeric
+// token. The regex remains authoritative; broader Unicode, phrase, wildcard,
+// and punctuation forms stay on the exact scan path until their tokenizer
+// parity is proven.
+func rawTextIndexTokenEligible(value string) bool {
+	if value == "" {
+		return false
+	}
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		if character >= 'a' && character <= 'z' ||
+			character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// rawTextIndexTokensSQL must stay expression-identical to idx_raw_text. RE2's
+// Unicode simple-fold orbit has two non-ASCII members reachable from ASCII:
+// long s folds with s and the Kelvin sign folds with k. Translating those two
+// before extracting maximal ASCII alnum/underscore runs preserves both match
+// and boundary semantics. Only the resulting ASCII tokens are lowercased, so
+// Unicode lowercase expansions cannot join otherwise separate runs.
+func rawTextIndexTokensSQL(valueSQL string) string {
+	return "arrayMap(token -> lower(token), extractAll(translateUTF8(" + valueSQL +
+		", '" + rawTextIndexASCIIFoldFrom + "', '" + rawTextIndexASCIIFoldTo +
+		"'), '" + rawTextIndexExtractionRegex + "'))"
 }
 
 func cloneSet(source map[string]struct{}) map[string]struct{} {

@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS open_splunk.events
     INDEX idx_trace_id ifNull(`trace_id`, '') TYPE bloom_filter(0.001) GRANULARITY 1,
     INDEX idx_span_id ifNull(`span_id`, '') TYPE bloom_filter(0.001) GRANULARITY 1,
     INDEX idx_field_names `field_names` TYPE text(tokenizer = 'array'),
-    INDEX idx_raw_text lowerUTF8(`raw`) TYPE text(tokenizer = 'splitByNonAlpha')
+    INDEX idx_raw_text arrayMap(token -> lower(token), extractAll(translateUTF8(`raw`, 'ſK', 'sk'), '[A-Za-z0-9_]+')) TYPE text(tokenizer = 'array')
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(`event_time`)

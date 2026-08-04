@@ -561,6 +561,9 @@ func TestSettingsForExplainClonesAndTightensEveryResourceCap(t *testing.T) {
 		"max_query_size":       defaultMaxQueryBytes,
 		"use_query_cache":      uint8(0),
 	}
+	for _, name := range requiredTextIndexSettingNames {
+		want[name] = uint8(1)
+	}
 	for name, wantValue := range want {
 		if got[name] != wantValue {
 			t.Errorf("setting %s = %#v, want %#v", name, got[name], wantValue)
@@ -679,14 +682,22 @@ func TestSettingsForExplainRejectsMalformedOrUnsafeBase(t *testing.T) {
 			}
 		})
 	}
-	for _, test := range []struct {
+	type unsafeSetting struct {
 		name  string
 		value any
-	}{
+	}
+	unsafeSettings := []unsafeSetting{
 		{name: "enable_materialized_cte", value: uint8(0)},
 		{name: "short_circuit_function_evaluation", value: "disable"},
 		{name: "async_insert", value: uint8(1)},
-	} {
+	}
+	for _, name := range requiredTextIndexSettingNames {
+		unsafeSettings = append(
+			unsafeSettings,
+			unsafeSetting{name: name, value: uint8(0)},
+		)
+	}
+	for _, test := range unsafeSettings {
 		t.Run(test.name, func(t *testing.T) {
 			malformed := maps.Clone(base)
 			malformed[test.name] = test.value

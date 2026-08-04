@@ -63,7 +63,7 @@ const (
 		"INDEX idx_trace_id ifNull(trace_id, '') TYPE bloom_filter(0.001) GRANULARITY 1, " +
 		"INDEX idx_span_id ifNull(span_id, '') TYPE bloom_filter(0.001) GRANULARITY 1, " +
 		"INDEX idx_field_names field_names TYPE text(tokenizer = 'array') GRANULARITY 100000000, " +
-		"INDEX idx_raw_text lowerUTF8(raw) TYPE text(tokenizer = 'splitByNonAlpha') GRANULARITY 100000000, " +
+		"INDEX idx_raw_text arrayMap(token -> lower(token), extractAll(translateUTF8(raw, 'ſK', 'sk'), '[A-Za-z0-9_]+')) TYPE text(tokenizer = 'array') GRANULARITY 100000000, " +
 		"INDEX idx_visibility_seq visibility_seq TYPE minmax GRANULARITY 1, " +
 		"CONSTRAINT visibility_seq_is_positive CHECK visibility_seq > 0, " +
 		"CONSTRAINT field_metadata_version_is_supported CHECK field_metadata_version IN (0, 1), " +

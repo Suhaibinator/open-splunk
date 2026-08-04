@@ -156,7 +156,7 @@ func TestClickHousePhysicalSchemaDefinitionsMatchPinnedReleaseDigests(
 		{
 			name:       "events",
 			definition: clickHouseEventsPhysicalSchemaDefinition,
-			want:       "fe48406b7a8336e8e4d9b50f024e7ade52de4b80528dd4364bae38301a812c1c",
+			want:       "7cfc0676530898bd585e38d8c6fb60426df5cdf8c692d9f2ae38addd87c9b629",
 		},
 		{
 			name:       "recovery sets",

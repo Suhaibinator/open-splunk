@@ -90,7 +90,13 @@ const (
 )
 
 var (
-	extendedDecimalPattern = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
+	extendedDecimalPattern        = regexp.MustCompile(`^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?(?:0|[1-9][0-9]*))?$`)
+	requiredTextIndexSettingNames = [...]string{
+		"enable_full_text_index",
+		"query_plan_direct_read_from_text_index",
+		"use_skip_indexes_on_data_read",
+		"use_skip_indexes",
+	}
 )
 
 // Config bounds every ClickHouse query independently of the search-job sink.
@@ -198,7 +204,7 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 	if seconds == 0 {
 		seconds = 1
 	}
-	return clickhousedriver.Settings{
+	settings := clickhousedriver.Settings{
 		"readonly":                          uint8(2),
 		"max_execution_time":                seconds,
 		"timeout_overflow_mode":             "throw",
@@ -217,7 +223,11 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 		"enable_materialized_cte":           uint8(1),
 		"short_circuit_function_evaluation": "enable",
 		"async_insert":                      uint8(0),
-	}, nil
+	}
+	for _, name := range requiredTextIndexSettingNames {
+		settings[name] = uint8(1)
+	}
+	return settings, nil
 }
 
 type readScopedCompiledQuery interface {

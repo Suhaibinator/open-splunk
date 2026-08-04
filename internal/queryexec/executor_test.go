@@ -1638,6 +1638,24 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	if settings["enable_materialized_cte"] != uint8(1) {
 		t.Fatalf("materialized CTE setting = %v, want 1", settings["enable_materialized_cte"])
 	}
+	wantTextIndexSettingNames := []string{
+		"enable_full_text_index",
+		"query_plan_direct_read_from_text_index",
+		"use_skip_indexes_on_data_read",
+		"use_skip_indexes",
+	}
+	if !slices.Equal(requiredTextIndexSettingNames[:], wantTextIndexSettingNames) {
+		t.Fatalf(
+			"required text-index settings = %q, want %q",
+			requiredTextIndexSettingNames,
+			wantTextIndexSettingNames,
+		)
+	}
+	for _, name := range requiredTextIndexSettingNames {
+		if settings[name] != uint8(1) {
+			t.Errorf("text-index setting %s = %v, want 1", name, settings[name])
+		}
+	}
 	if settings["short_circuit_function_evaluation"] != "enable" {
 		t.Fatalf("short-circuit setting = %v, want enable", settings["short_circuit_function_evaluation"])
 	}
