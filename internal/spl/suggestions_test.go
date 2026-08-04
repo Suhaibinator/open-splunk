@@ -873,6 +873,14 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 				t.Fatalf("timechart detail = %q, want aggregate/split description", command.Detail)
 			}
 		}
+		if command.Name == "chart" {
+			if command.Insertion != "chart count OVER status BY level" {
+				t.Fatalf("chart insertion = %q, want bounded two-axis form", command.Insertion)
+			}
+			if command.Detail != "Build a bounded two-dimensional pivot of row counts, exact-field occurrence counts, percentiles, sums, or averages." {
+				t.Fatalf("chart detail = %q, want supported aggregate description", command.Detail)
+			}
+		}
 		if command.Name == "eventstats" {
 			if command.Insertion !=
 				"eventstats values(user) AS users BY service" {

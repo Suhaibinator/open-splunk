@@ -428,6 +428,10 @@ type CompiledQuery struct {
 	relationalDepth      int
 	relationalDepthRange spl.Range
 	readScope            compiledReadScope
+	// sourceFanout records how many physical consumers the terminal lowering
+	// has for a chronology-validated source. It stays private because it is
+	// compiler resource evidence, not an executor transport contract.
+	sourceFanout uint64
 }
 
 // ChartOutput describes the bounded runtime-wide pivot contract. Both axes are
@@ -1465,7 +1469,19 @@ func wrapCompiledChronologicalValidation(
 	case compiled.Chart != nil && compiled.Timechart == nil:
 		switch compiled.Chart.ValueKind {
 		case ChartValueKindCount:
-			sourceFanout = eventStatsChartSourceFanout
+			sourceFanout = compiled.sourceFanout
+			if sourceFanout == 0 {
+				// Older direct compiler fixtures describe bare count and predate the
+				// private evidence field. Preserve their conservative two-consumer
+				// contract while letting count(field)'s raw-group path prove one.
+				sourceFanout = eventStatsChartSourceFanout
+			}
+			if sourceFanout != eventStatsOrdinarySourceFanout &&
+				sourceFanout != eventStatsChartSourceFanout {
+				return CompiledQuery{}, errors.New(
+					"compile ClickHouse query: chart source fanout is invalid",
+				)
+			}
 			resultColumns = []string{
 				ChartOrdinalColumn,
 				ChartRowColumn,
@@ -3036,17 +3052,12 @@ func compileTimechart(
 					"compile ClickHouse timechart: fixed count(field) output contract is invalid",
 				)
 			}
-			measureField, measureExists, resolveErr := resolveCompiledField(
+			measureInputSQL, measureArgs, resolveErr := resolveCountValueInput(
 				operator.Measure.Input,
 				state,
 			)
 			if resolveErr != nil {
 				return CompiledQuery{}, resolveErr
-			}
-			measureInputSQL := "toUInt64(0)"
-			var measureArgs []any
-			if measureExists {
-				measureInputSQL, measureArgs = countValueInputSQL(measureField)
 			}
 			return compileFixedCountValueTimechart(
 				relation,
@@ -3167,16 +3178,13 @@ func compileTimechart(
 	measureInputSQL := ""
 	var measureArgs []any
 	if fieldOccurrenceCount {
-		measureField, measureExists, resolveErr := resolveCompiledField(
+		var resolveErr error
+		measureInputSQL, measureArgs, resolveErr = resolveCountValueInput(
 			operator.Measure.Input,
 			state,
 		)
 		if resolveErr != nil {
 			return CompiledQuery{}, resolveErr
-		}
-		measureInputSQL = "toUInt64(0)"
-		if measureExists {
-			measureInputSQL, measureArgs = countValueInputSQL(measureField)
 		}
 	}
 	// Source-select bind markers precede the nested scoped relation. Split
@@ -4296,7 +4304,7 @@ func compileChart(
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: operator is required")
 	}
 	switch operator.Measure.Function {
-	case plan.AggregateFunctionCountRows:
+	case plan.AggregateFunctionCountRows, plan.AggregateFunctionCountValues:
 		return compileCountChart(relation, state, args, operator, dynamic, alias)
 	case plan.AggregateFunctionPercentile,
 		plan.AggregateFunctionSum,
@@ -4315,11 +4323,35 @@ func compileCountChart(
 	dynamic *plan.DynamicSeriesOutput,
 	alias string,
 ) (CompiledQuery, error) {
-	if operator == nil || operator.Measure.Function != plan.AggregateFunctionCountRows ||
-		operator.Measure.Input.Name != "" || operator.Measure.Input.Canonical ||
-		operator.Measure.Input.Path != nil || operator.Measure.Input.Range != (spl.Range{}) ||
-		operator.Measure.Predicate != nil || operator.Measure.Percentile != 0 ||
-		operator.Measure.Output != "count" {
+	if operator == nil || operator.Measure.Predicate != nil {
+		return CompiledQuery{}, errors.New("compile ClickHouse chart: count operator is required")
+	}
+	fieldOccurrenceCount := operator.Measure.Function == plan.AggregateFunctionCountValues
+	switch operator.Measure.Function {
+	case plan.AggregateFunctionCountRows:
+		if operator.Measure.Input.Name != "" || operator.Measure.Input.Canonical ||
+			operator.Measure.Input.Path != nil || operator.Measure.Input.Range != (spl.Range{}) ||
+			operator.Measure.Percentile != 0 || operator.Measure.Output != "count" {
+			return CompiledQuery{}, errors.New("compile ClickHouse chart: row count contract is invalid")
+		}
+	case plan.AggregateFunctionCountValues:
+		if operator.Measure.Percentile != 0 ||
+			operator.Measure.Output != "count("+operator.Measure.Input.Name+")" ||
+			operator.Measure.Input.Name == operator.Over.Name ||
+			!spl.IsExactUnquotedFieldName(operator.Measure.Input.Name) {
+			return CompiledQuery{}, errors.New("compile ClickHouse chart: field count contract is invalid")
+		}
+		if err := validateCanonicalFieldRef("chart", "input", operator.Measure.Input); err != nil {
+			return CompiledQuery{}, err
+		}
+		if state.eventRows && state.allowDynamic && operator.Measure.Input.Name == "fields" {
+			return CompiledQuery{}, &plan.Diagnostic{
+				Code:    "SPL_AMBIGUOUS_CHART_FIELD",
+				Message: "chart cannot read the event result's reserved fields payload without an exact upstream schema",
+				Range:   operator.Measure.Input.Range,
+			}
+		}
+	default:
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: count operator is required")
 	}
 	rowName := operator.Over.Name
@@ -4413,6 +4445,18 @@ func compileCountChart(
 			Suggestions: []string{"convert the column field to a string before chart"},
 		}
 	}
+	measureInputSQL := ""
+	var measureArgs []any
+	if fieldOccurrenceCount {
+		var resolveErr error
+		measureInputSQL, measureArgs, resolveErr = resolveCountValueInput(
+			operator.Measure.Input,
+			state,
+		)
+		if resolveErr != nil {
+			return CompiledQuery{}, resolveErr
+		}
+	}
 
 	rowExistsSQL := rowField.existsSQL
 	if rowExistsSQL == "" {
@@ -4459,6 +4503,10 @@ func compileCountChart(
 	valueType := q("__os_ch_value_type")
 	label := q("__os_ch_label")
 	kind := q("__os_ch_kind")
+	measureCount := q("__os_ch_measure_count")
+	rowCount := q("__os_ch_row_count")
+	occurrenceCount := q("__os_ch_occurrence_count")
+	occurrenceScore := q("__os_ch_occurrence_score")
 	frequency := q("__os_ch_count")
 	encoded := q("__os_ch_encoded")
 	normalized := q("__os_ch_normalized")
@@ -4474,9 +4522,10 @@ func compileCountChart(
 	// therefore precede every nested argument; descendant detection and the
 	// reserved-column-name probe are emitted afterwards and append in the order
 	// they appear.
-	var prefixArgs []any
+	prefixArgs := make([]any, 0, len(rowField.existsArgs)+len(splitField.existsArgs)+len(measureArgs))
 	prefixArgs = append(prefixArgs, rowField.existsArgs...)
 	prefixArgs = append(prefixArgs, splitField.existsArgs...)
+	prefixArgs = append(prefixArgs, measureArgs...)
 	args = prependArguments(prefixArgs, args)
 	if rowHasDescendant {
 		args = append(args, rowField.descendantArgs...)
@@ -4538,6 +4587,9 @@ func compileCountChart(
 	sql.WriteString(splitField.valueSQL + " AS " + value + ", ")
 	sql.WriteString("toUInt8(" + splitExistsSQL + ") AS " + present + ", ")
 	sql.WriteString(splitTypeSQL + " AS " + valueType)
+	if fieldOccurrenceCount {
+		sql.WriteString(", " + measureInputSQL + " AS " + measureCount)
+	}
 	if rowHasDescendant || splitHasDescendant {
 		sql.WriteString(", " + q(internalFieldNamesColumn))
 	}
@@ -4577,54 +4629,89 @@ func compileCountChart(
 	sql.WriteString(classified)
 	sql.WriteString(" AS (SELECT " + rowKeySQL + " AS " + row + ", toUInt8(" + rowSupported + " = 0) AS " + rowInvalid + ", ")
 	sql.WriteString(rowPresent + " AS " + rowEligible + ", " + kind + ", " + label)
+	if fieldOccurrenceCount {
+		sql.WriteString(", " + measureCount)
+	}
 	sql.WriteString(" FROM " + kinded + "), ")
 
 	sql.WriteString(canonicalized)
 	sql.WriteString(" AS (SELECT " + row + ", " + rowInvalid + ", " + rowEligible + ", " + kind)
 	sql.WriteString(", if(" + kind + " = 0, " + label + ", CAST('' AS String)) AS " + label)
+	if fieldOccurrenceCount {
+		sql.WriteString(", " + measureCount)
+	}
 	sql.WriteString(" FROM " + classified + "), ")
 
-	// The column axis is collapsed before the row-keyed aggregation, so the
-	// only wide intermediate is this one-dimensional label aggregate whose
-	// state count is the number of distinct raw column values. Its frequency
-	// counts row-eligible input only, matching the counts the pivot publishes,
-	// while the group itself exists for every classified input row so the
-	// atomic column rejection is visible without a second scoped scan.
-	sql.WriteString(labelTotals)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + kind + ", " + label + ", countIf(" + rowEligible + " != 0) AS " + frequency)
-	sql.WriteString(" FROM " + canonicalized + " GROUP BY " + kind + ", " + label + "), ")
+	if fieldOccurrenceCount {
+		// Field occurrence count cannot select its label domain before it knows
+		// the measure totals. Materialize one bounded raw (row, label) aggregate
+		// carrying both source-row frequency and a wide occurrence total; every
+		// later domain, score, validation, and cell operation reads this relation.
+		// This is the same one-scan topology used by numeric chart and avoids
+		// materializing the unbounded per-event canonicalized relation.
+		sql.WriteString(counts)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", " + rowEligible + ", " + kind + ", " + label + ", ")
+		sql.WriteString("max(" + rowInvalid + ") AS " + rowInvalid + ", count() AS " + rowCount + ", ")
+		sql.WriteString("sum(toUInt128(" + measureCount + ")) AS " + occurrenceCount)
+		sql.WriteString(" FROM " + canonicalized + " GROUP BY " + row + ", " + rowEligible + ", " + kind + ", " + label + "), ")
 
-	sql.WriteString(top)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", " + frequency + " FROM " + labelTotals)
-	sql.WriteString(" WHERE " + kind + " = 0 AND " + frequency + " > 0 ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
-	sql.WriteString(strconv.FormatUint(uint64(operator.SeriesLimit), 10))
-	sql.WriteString("), ")
+		sql.WriteString(labelTotals)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + kind + ", " + label + ", ")
+		sql.WriteString("sumIf(" + rowCount + ", " + rowEligible + " != 0) AS " + rowCount + ", ")
+		sql.WriteString("sumIf(" + occurrenceCount + ", " + rowEligible + " != 0) AS " + occurrenceScore)
+		sql.WriteString(" FROM " + counts + " GROUP BY " + kind + ", " + label + "), ")
 
-	// The row-keyed aggregation. Every column value is already encoded into the
-	// published domain, so this holds exactly one state per (row value, public
-	// series) pair plus one canonical unsupported-value state per row — the
-	// bound the executor's expanded group budget describes.
-	sql.WriteString(counts)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", " + kind + ", multiIf(" + kind + " = 1, '1:', " + kind + " = 3, CAST('' AS String), ")
-	sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
-	sql.WriteString("max(" + rowInvalid + ") AS " + rowInvalid + ", count() AS " + frequency)
-	sql.WriteString(" FROM " + canonicalized + " WHERE " + rowEligible + " != 0 GROUP BY " + row + ", " + kind + ", " + encoded + "), ")
+		sql.WriteString(top)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", " + occurrenceScore + " FROM " + labelTotals)
+		sql.WriteString(" WHERE " + kind + " = 0 AND " + rowCount + " > 0 ORDER BY " + occurrenceScore + " DESC, " + label + " ASC LIMIT ")
+		sql.WriteString(strconv.FormatUint(uint64(operator.SeriesLimit), 10))
+		sql.WriteString("), ")
 
-	sql.WriteString(collapsed)
-	sql.WriteString(" AS (SELECT " + row + ", " + encoded + ", sum(" + frequency + ") AS " + frequency)
-	sql.WriteString(" FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + row + ", " + encoded + "), ")
+		sql.WriteString(collapsed)
+		sql.WriteString(" AS (SELECT " + row + ", multiIf(" + kind + " = 1, '1:', ")
+		sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
+		sql.WriteString("toUInt64(sum(toUInt128(" + occurrenceCount + "))) AS " + frequency)
+		sql.WriteString(" FROM " + counts + " WHERE " + rowEligible + " != 0 AND " + kind + " IN (0, 1) GROUP BY " + row + ", " + encoded + "), ")
+	} else {
+		// Bare count can select and collapse the column axis before its row-keyed
+		// aggregation. This keeps that existing path bounded to the published
+		// series width rather than the raw row/label cross-product.
+		sql.WriteString(labelTotals)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + kind + ", " + label + ", countIf(" + rowEligible + " != 0) AS " + frequency)
+		sql.WriteString(" FROM " + canonicalized + " GROUP BY " + kind + ", " + label + "), ")
+
+		sql.WriteString(top)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", " + frequency + " FROM " + labelTotals)
+		sql.WriteString(" WHERE " + kind + " = 0 AND " + frequency + " > 0 ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
+		sql.WriteString(strconv.FormatUint(uint64(operator.SeriesLimit), 10))
+		sql.WriteString("), ")
+
+		sql.WriteString(counts)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", " + kind + ", multiIf(" + kind + " = 1, '1:', " + kind + " = 3, CAST('' AS String), ")
+		sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
+		sql.WriteString("max(" + rowInvalid + ") AS " + rowInvalid + ", count() AS " + frequency)
+		sql.WriteString(" FROM " + canonicalized + " WHERE " + rowEligible + " != 0 GROUP BY " + row + ", " + kind + ", " + encoded + "), ")
+
+		sql.WriteString(collapsed)
+		sql.WriteString(" AS (SELECT " + row + ", " + encoded + ", sum(" + frequency + ") AS " + frequency)
+		sql.WriteString(" FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + row + ", " + encoded + "), ")
+	}
 
 	// Both sentinels probe the materialized label aggregate as ordinary
 	// relations. A scalar subquery would be evaluated during analysis, before
 	// the materialized temporary table exists, and would re-run the whole
 	// scoped scan once per occurrence.
+	domainFrequency := frequency
+	if fieldOccurrenceCount {
+		domainFrequency = rowCount
+	}
 	sql.WriteString(domainRows)
 	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, " + splunkSeriesLabelSQL(label) + " AS " + sortLabel)
 	sql.WriteString(", concat('0:', " + label + ") AS " + encoded + " FROM " + top)
 	sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " + labelTotals)
-	sql.WriteString(" WHERE " + kind + " = 1 AND " + frequency + " > 0 LIMIT 1)")
+	sql.WriteString(" WHERE " + kind + " = 1 AND " + domainFrequency + " > 0 LIMIT 1)")
 	sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " + labelTotals)
-	sql.WriteString(" WHERE " + kind + " = 0 AND " + frequency + " > 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + top + ") LIMIT 1)), ")
+	sql.WriteString(" WHERE " + kind + " = 0 AND " + domainFrequency + " > 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + top + ") LIMIT 1)), ")
 
 	sql.WriteString(domain)
 	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
@@ -4655,14 +4742,25 @@ func compileCountChart(
 
 	sql.WriteString(validation)
 	sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + rowInvalid + ") > 0) AS " + invalid)
-	sql.WriteString(" FROM " + counts + "), ")
+	sql.WriteString(" FROM " + counts)
+	if fieldOccurrenceCount {
+		// Missing and explicit-null dynamic row values are not chart rows and
+		// therefore cannot invalidate the row domain. Unsupported descendants
+		// remain eligible by construction and still fail atomically.
+		sql.WriteString(" WHERE " + rowEligible + " != 0")
+	}
+	sql.WriteString("), ")
 
 	// The row axis is data, so its ordinal is assigned server-side from the
 	// declared order. Only the dense ordinal proves that order to the executor;
 	// the row value itself crosses the boundary as an ordinary typed column.
 	sql.WriteString(rowDomain)
 	sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", toUInt64(row_number() OVER (ORDER BY " + rowSortSQL + " ASC) - 1) AS " + ordinal)
-	sql.WriteString(" FROM (SELECT " + row + " FROM " + counts + " GROUP BY " + row + ")) ")
+	sql.WriteString(" FROM (SELECT " + row + " FROM " + counts)
+	if fieldOccurrenceCount {
+		sql.WriteString(" WHERE " + rowEligible + " != 0")
+	}
+	sql.WriteString(" GROUP BY " + row + ")) ")
 
 	// A private sentinel carries row-independent validation across an empty row
 	// axis. It is ordered first and rejected by the buffering executor, so the
@@ -4698,11 +4796,21 @@ func compileCountChart(
 	kindedDepth := relationalNodeDepth(preparedDepth)
 	classifiedDepth := relationalNodeDepth(kindedDepth)
 	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
-	labelTotalsDepth := relationalNodeDepth(canonicalizedDepth)
+	var labelTotalsDepth, countsDepth, collapsedDepth int
+	if fieldOccurrenceCount {
+		countsDepth = relationalNodeDepth(canonicalizedDepth)
+		labelTotalsDepth = relationalNodeDepth(countsDepth)
+	} else {
+		labelTotalsDepth = relationalNodeDepth(canonicalizedDepth)
+	}
 	topDepth := relationalNodeDepth(labelTotalsDepth)
 	topMembershipDepth := relationalNodeDepth(topDepth)
-	countsDepth := relationalNodeDepth(canonicalizedDepth, topMembershipDepth)
-	collapsedDepth := relationalNodeDepth(countsDepth)
+	if fieldOccurrenceCount {
+		collapsedDepth = relationalNodeDepth(countsDepth, topMembershipDepth)
+	} else {
+		countsDepth = relationalNodeDepth(canonicalizedDepth, topMembershipDepth)
+		collapsedDepth = relationalNodeDepth(countsDepth)
+	}
 
 	domainTopBranchDepth := relationalNodeDepth(topDepth)
 	domainNullInputDepth := relationalNodeDepth(labelTotalsDepth)
@@ -4739,6 +4847,7 @@ func compileCountChart(
 		SQL:          sql.String(),
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
+		sourceFanout: eventStatsChartSourceFanout,
 		Chart: &ChartOutput{
 			RowField:        rowName,
 			RowKind:         rowKind,
@@ -4748,6 +4857,9 @@ func compileCountChart(
 			MaxLabelBytes:   maxTimechartLabelBytes,
 			ValueKind:       ChartValueKindCount,
 		},
+	}
+	if fieldOccurrenceCount {
+		compiled.sourceFanout = eventStatsOrdinarySourceFanout
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
 }
@@ -4798,7 +4910,8 @@ func compileNumericChart(
 	if err := validateCanonicalFieldRef("chart", "input", operator.Measure.Input); err != nil {
 		return CompiledQuery{}, err
 	}
-	if operator.Measure.Input.Name == operator.Over.Name ||
+	if !spl.IsExactUnquotedFieldName(operator.Measure.Input.Name) ||
+		operator.Measure.Input.Name == operator.Over.Name ||
 		operator.Measure.Output != canonicalOutput {
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: numeric measure contract is invalid")
 	}
@@ -5186,8 +5299,12 @@ func compileNumericChart(
 		measureValue + ")))) AS " + presentMap + " FROM " + finalized +
 		" GROUP BY " + row + "), ")
 
+	// Missing and explicit-null dynamic row values are outside the row domain.
+	// Unsupported descendants are deliberately eligible and remain visible to
+	// this atomic validation guard.
 	sql.WriteString(validation + " AS (SELECT toUInt8(maxOrDefault(" + rowInvalid +
-		") > 0) AS " + invalid + " FROM " + numericGroups + "), ")
+		") > 0) AS " + invalid + " FROM " + numericGroups + " WHERE " +
+		rowEligible + " != 0), ")
 
 	sql.WriteString(rowDomain + " AS MATERIALIZED (SELECT " + row +
 		", toUInt64(row_number() OVER (ORDER BY " + rowSortSQL +
@@ -13595,7 +13712,7 @@ func validateStreamAggregate(
 		case plan.AggregateFunctionAverage:
 			form = "avg"
 		}
-		if !spl.IsExactUnquotedStreamStatsFieldName(measure.Input.Name) {
+		if !spl.IsExactUnquotedFieldName(measure.Input.Name) {
 			return plan.FieldRef{}, errors.New(
 				"compile ClickHouse streamstats: " + form +
 					" input must be one exact unquoted field",
@@ -13630,7 +13747,7 @@ func validateStreamAggregate(
 	case plan.AggregateFunctionAverage:
 		defaultOutput = "avg(" + measure.Input.Name + ")"
 	}
-	validOutput := spl.IsExactUnquotedStreamStatsFieldName(measure.Output) ||
+	validOutput := spl.IsExactUnquotedFieldName(measure.Output) ||
 		(defaultOutput != "" && measure.Output == defaultOutput)
 	if !validOutput {
 		return plan.FieldRef{}, errors.New(
@@ -13655,7 +13772,7 @@ func validateStreamAggregate(
 	}
 	seen := make(map[string]struct{}, len(operator.GroupBy))
 	for _, group := range operator.GroupBy {
-		if !spl.IsExactUnquotedStreamStatsFieldName(group.Name) {
+		if !spl.IsExactUnquotedFieldName(group.Name) {
 			return plan.FieldRef{}, errors.New(
 				"compile ClickHouse streamstats: grouping fields must be exact and unquoted",
 			)
@@ -16724,6 +16841,21 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		}
 	}
 	return projection, predicates, groups, next, args, nil
+}
+
+func resolveCountValueInput(
+	input plan.FieldRef,
+	state compileState,
+) (string, []any, error) {
+	field, resolved, err := resolveCompiledField(input, state)
+	if err != nil {
+		return "", nil, err
+	}
+	if !resolved {
+		return "toUInt64(0)", nil, nil
+	}
+	inputSQL, args := countValueInputSQL(field)
+	return inputSQL, args, nil
 }
 
 func countValueInputSQL(field fieldState) (string, []any) {

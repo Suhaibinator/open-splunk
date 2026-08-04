@@ -165,6 +165,14 @@ func TestBuildRejectsForgedChartNumericAggregateContracts(t *testing.T) {
 		{"predicate metadata", func(command *spl.ChartCommand) { command.Aggregate.Predicate = &spl.WhereComparisonExpr{} }, "SPL_UNSUPPORTED_CHART_AGGREGATE"},
 		{"explicit alias", func(command *spl.ChartCommand) { command.Aggregate.ExplicitAlias = true }, "SPL_UNSUPPORTED_CHART_AGGREGATE"},
 		{"forged canonical output", func(command *spl.ChartCommand) { command.Aggregate.Alias = "total" }, "SPL_UNSUPPORTED_CHART_AGGREGATE"},
+		{"multiple-token input", func(command *spl.ChartCommand) {
+			command.Aggregate.Input = "latency host"
+			command.Aggregate.Alias = "sum(latency host)"
+		}, "SPL_UNSUPPORTED_CHART_AGGREGATE"},
+		{"quoted input", func(command *spl.ChartCommand) {
+			command.Aggregate.Input = "\"latency\""
+			command.Aggregate.Alias = "sum(\"latency\")"
+		}, "SPL_UNSUPPORTED_CHART_AGGREGATE"},
 		{"private input", func(command *spl.ChartCommand) {
 			command.Aggregate.Input = "__os_private"
 			command.Aggregate.Alias = "sum(__os_private)"
@@ -242,6 +250,8 @@ func TestAnalyzeRejectsForgedChartNumericMeasureAndBounds(t *testing.T) {
 	if _, err := Analyze(&Query{Operators: []Operator{columnMeasure}}); err != nil {
 		t.Fatalf("Analyze(valid measure equal to column): %v", err)
 	}
+	multipleTokenInput := mustResolveEventAggregateField(t, "latency host")
+	quotedInput := mustResolveEventAggregateField(t, "\"latency\"")
 
 	tests := []struct {
 		name   string
@@ -255,6 +265,14 @@ func TestAnalyzeRejectsForgedChartNumericMeasureAndBounds(t *testing.T) {
 		{"percentile metadata", func(operator *Chart) { operator.Measure.Percentile = 95 }},
 		{"predicate metadata", func(operator *Chart) { operator.Measure.Predicate = &ComparisonExpression{} }},
 		{"wrong canonical output", func(operator *Chart) { operator.Measure.Output = "total" }},
+		{"multiple-token input", func(operator *Chart) {
+			operator.Measure.Input = multipleTokenInput
+			operator.Measure.Output = "sum(latency host)"
+		}},
+		{"quoted input", func(operator *Chart) {
+			operator.Measure.Input = quotedInput
+			operator.Measure.Output = "sum(\"latency\")"
+		}},
 		{"duplicate axes", func(operator *Chart) { operator.SplitBy = operator.Over }},
 		{"measure equals row", func(operator *Chart) { operator.Measure.Input = operator.Over; operator.Measure.Output = "sum(path)" }},
 		{"zero row bound", func(operator *Chart) { operator.RowLimit = 0 }},

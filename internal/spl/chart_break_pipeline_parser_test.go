@@ -244,7 +244,7 @@ func TestChartBreakPipelineSurvivesHostileLayout(t *testing.T) {
 }
 
 // TestChartBreakPipelineQuotedAndNonWordAggregates keeps the aggregate slot
-// closed to every token shape other than the bare count word.
+// closed to quoted, non-word, and unknown function tokens.
 func TestChartBreakPipelineQuotedAndNonWordAggregates(t *testing.T) {
 	t.Parallel()
 
@@ -252,9 +252,6 @@ func TestChartBreakPipelineQuotedAndNonWordAggregates(t *testing.T) {
 		`index=main | chart "count" over path by level`,
 		`index=main | chart 5 over path by level`,
 		`index=main | chart , count over path by level`,
-		`index=main | chart count() over path by level`,
-		`index=main | chart count(*) over path by level`,
-		`index=main | chart count (path) over path by level`,
 		`index=main | chart counter over path by level`,
 		`index=main | chart countx over path by level`,
 	} {

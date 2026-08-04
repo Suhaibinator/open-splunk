@@ -1119,6 +1119,11 @@ func TestCompileEventStatsGraphAmplificationChargesTerminalWideFanout(t *testing
 			acceptedStages: 6,
 		},
 		{
+			name:           "chart count field reads its event source once",
+			terminal:       ` | chart count(amplification_0) OVER host BY source`,
+			acceptedStages: 7,
+		},
+		{
 			name:           "timechart reads its event source once",
 			terminal:       ` | timechart span=1m count`,
 			acceptedStages: 7,

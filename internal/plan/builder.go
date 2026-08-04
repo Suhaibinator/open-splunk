@@ -1469,12 +1469,16 @@ func buildChartMeasure(
 			Function: AggregateFunctionCountRows,
 			Output:   "count",
 		}, nil
-	case spl.AggregateFunctionPercentile,
+	case spl.AggregateFunctionCountValues,
+		spl.AggregateFunctionPercentile,
 		spl.AggregateFunctionSum,
 		spl.AggregateFunctionAverage:
 		canonicalName := "sum"
 		function := AggregateFunctionSum
 		switch aggregate.Function {
+		case spl.AggregateFunctionCountValues:
+			canonicalName = "count"
+			function = AggregateFunctionCountValues
 		case spl.AggregateFunctionPercentile:
 			if aggregate.Percentile < 1 || aggregate.Percentile > 99 {
 				return invalid("chart percentile must be from 1 through 99")
@@ -1490,7 +1494,10 @@ func buildChartMeasure(
 			(function != AggregateFunctionPercentile && aggregate.Percentile != 0) ||
 			aggregate.ExplicitAlias ||
 			aggregate.Alias != canonicalOutput {
-			return invalid("chart numeric aggregates require one exact input field and no alias")
+			return invalid("chart field aggregates require one exact input field and no alias")
+		}
+		if !spl.IsExactUnquotedFieldName(aggregate.Input) {
+			return invalid("chart field aggregates require one exact unquoted input field")
 		}
 		input, err := ResolveField(aggregate.Input, aggregate.InputRange)
 		if err != nil {

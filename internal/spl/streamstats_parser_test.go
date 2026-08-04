@@ -404,7 +404,7 @@ func TestParseStreamStatsAverageField(t *testing.T) {
 	}
 }
 
-func TestExactUnquotedStreamStatsFieldNameMatchesParserTokenBoundary(t *testing.T) {
+func TestExactUnquotedFieldNameMatchesParserTokenBoundary(t *testing.T) {
 	t.Parallel()
 
 	for _, name := range []string{
@@ -413,8 +413,8 @@ func TestExactUnquotedStreamStatsFieldNameMatchesParserTokenBoundary(t *testing.
 		`literal\.dot`,
 		"field-name",
 	} {
-		if !IsExactUnquotedStreamStatsFieldName(name) {
-			t.Fatalf("IsExactUnquotedStreamStatsFieldName(%q) = false", name)
+		if !IsExactUnquotedFieldName(name) {
+			t.Fatalf("IsExactUnquotedFieldName(%q) = false", name)
 		}
 	}
 	for _, name := range []string{
@@ -434,8 +434,8 @@ func TestExactUnquotedStreamStatsFieldNameMatchesParserTokenBoundary(t *testing.
 		"`status`",
 		"status*",
 	} {
-		if IsExactUnquotedStreamStatsFieldName(name) {
-			t.Fatalf("IsExactUnquotedStreamStatsFieldName(%q) = true", name)
+		if IsExactUnquotedFieldName(name) {
+			t.Fatalf("IsExactUnquotedFieldName(%q) = true", name)
 		}
 	}
 }

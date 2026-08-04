@@ -341,21 +341,8 @@ func assertTimechartCountFieldShape(
 	measureAlias string,
 ) {
 	t.Helper()
+	assertCountFieldPhysicalShape(t, compiled, measureAlias, "timechart")
 
-	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
-		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
-	}
-	if got := strings.Count(compiled.SQL, `AS `+measureAlias); got != 1 {
-		t.Fatalf("per-row countValue normalization definitions = %d, want one:\n%s", got, compiled.SQL)
-	}
-	upperSQL := strings.ToUpper(compiled.SQL)
-	if strings.Contains(upperSQL, "ARRAY JOIN") ||
-		strings.Contains(upperSQL, "ARRAYJOIN(") {
-		t.Fatalf("timechart count(field) expanded rows:\n%s", compiled.SQL)
-	}
-	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
-		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
-	}
 	if compiled.Timechart != nil && compiled.Timechart.Mode == TimechartModeRuntimeWide {
 		firstOrdinalNames := `if("__os_timechart_grid"."` + TimechartOrdinalColumn +
 			`" = 0, "__os_timechart_domain".names, CAST([], 'Array(String)')) AS "` +
@@ -373,6 +360,30 @@ func assertTimechartCountFieldShape(
 		) {
 			t.Fatalf("runtime count(field) repeats names on every bucket:\n%s", compiled.SQL)
 		}
+	}
+}
+
+func assertCountFieldPhysicalShape(
+	t *testing.T,
+	compiled CompiledQuery,
+	measureAlias string,
+	subject string,
+) {
+	t.Helper()
+
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("%s scoped storage scan occurs %d times, want once:\n%s", subject, got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, `AS `+measureAlias); got != 1 {
+		t.Fatalf("%s per-row countValue normalization definitions = %d, want one:\n%s", subject, got, compiled.SQL)
+	}
+	upperSQL := strings.ToUpper(compiled.SQL)
+	if strings.Contains(upperSQL, "ARRAY JOIN") ||
+		strings.Contains(upperSQL, "ARRAYJOIN(") {
+		t.Fatalf("%s count(field) expanded rows:\n%s", subject, compiled.SQL)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
 	}
 }
 

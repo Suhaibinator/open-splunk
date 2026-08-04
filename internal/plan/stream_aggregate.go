@@ -3,7 +3,7 @@ package plan
 import "github.com/Suhaibinator/open-splunk/internal/spl"
 
 func validStreamAggregateFieldName(name string) bool {
-	return spl.IsExactUnquotedStreamStatsFieldName(name)
+	return spl.IsExactUnquotedFieldName(name)
 }
 
 func validStreamAggregateOutputName(measure AggregateMeasure) bool {

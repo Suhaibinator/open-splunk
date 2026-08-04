@@ -302,11 +302,26 @@ func TestChartBreakPipelineAgainstClickHouse(t *testing.T) {
 
 	// A flattened non-empty object parent on the row axis is the documented
 	// stats BY boundary and must raise the atomic invalid flag rather than
-	// silently naming a row, even though the compiler accepted the plan.
+	// silently naming a row, even though the compiler accepted the plan. Pin
+	// both validation lowerings: bare count filters before grouping, while every
+	// field measure retains ineligible rows for independent column validation.
 	t.Run("flattened object parent row axis fails atomically", func(t *testing.T) {
-		if got := chartBreakPipelineInvalid(t, ctx, connection,
-			compile(`index=chartpipe source="pipe-object" | chart count OVER obj BY level`)); got != 1 {
-			t.Fatalf("object-parent row axis invalid flag = %d, want 1", got)
+		for _, aggregate := range []string{"count", "count(path)", "sum(path)"} {
+			aggregate := aggregate
+			t.Run(aggregate, func(t *testing.T) {
+				source := fmt.Sprintf(
+					`index=chartpipe source="pipe-object" | chart %s OVER obj BY level`,
+					aggregate,
+				)
+				if got := chartBreakPipelineInvalid(
+					t,
+					ctx,
+					connection,
+					compile(source),
+				); got != 1 {
+					t.Fatalf("%s object-parent row invalid flag = %d, want 1", aggregate, got)
+				}
+			})
 		}
 		if got := chartBreakPipelineInvalid(t, ctx, connection,
 			compile(`index=chartpipe source="pipe-object" | chart count OVER path BY obj`)); got != 1 {

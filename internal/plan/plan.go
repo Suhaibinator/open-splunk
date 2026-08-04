@@ -325,8 +325,9 @@ func (op *Timechart) SourceRange() spl.Range { return op.Range }
 // the only discretizer, so a numeric or timestamp row axis must already have
 // been bucketed upstream.
 //
-// The operator carries the complete bounding contract as data so the backend
-// can revalidate it: RowLimit rows at most (exceeded is a deterministic,
+// Measure is row count, exact-field occurrence count, percentile, sum, or
+// average. The operator carries the complete bounding contract as data so the
+// backend can revalidate it: RowLimit rows at most (exceeded is a deterministic,
 // non-truncating failure), SeriesLimit ordinary series, plus the documented
 // usenull/useother series named by NullLabel and OtherLabel.
 type Chart struct {

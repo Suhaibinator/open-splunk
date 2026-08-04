@@ -281,6 +281,17 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	})
 	gradeThisBase, gradeThisIndexTime, gradeThisTraceID := queryIntegrationInsertGradeThisEvents(t, ctx, connection)
 	chartBase, chartIndexTime := queryIntegrationInsertChartEvents(t, ctx, connection)
+	t.Run("chart field occurrence count", func(t *testing.T) {
+		queryIntegrationTestChartCountField(
+			t,
+			ctx,
+			connection,
+			executor,
+			explainer,
+			countFieldBase,
+			countFieldIndexTime,
+		)
+	})
 	t.Run("structured EXPLAIN accepts an index-free MergeTree read", func(t *testing.T) {
 		compiled := queryIntegrationCompileSearchRange(
 			t,

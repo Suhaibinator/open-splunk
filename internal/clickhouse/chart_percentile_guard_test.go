@@ -59,6 +59,16 @@ func TestCompileChartPercentileRevalidatesForgedMeasureMetadata(t *testing.T) {
 		{name: "missing input", mutate: func(operator *plan.Chart) { operator.Measure.Input = plan.FieldRef{} }},
 		{name: "predicate metadata", mutate: func(operator *plan.Chart) { operator.Measure.Predicate = &plan.ComparisonExpression{} }},
 		{name: "wrong canonical output", mutate: func(operator *plan.Chart) { operator.Measure.Output = "p95_metric" }},
+		{name: "multiple-token input", mutate: func(operator *plan.Chart) {
+			operator.Measure.Input.Name = "metric other"
+			operator.Measure.Input.Path = []string{"metric other"}
+			operator.Measure.Output = "perc95(metric other)"
+		}},
+		{name: "quoted input", mutate: func(operator *plan.Chart) {
+			operator.Measure.Input.Name = "\"metric\""
+			operator.Measure.Input.Path = []string{"\"metric\""}
+			operator.Measure.Output = "perc95(\"metric\")"
+		}},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {

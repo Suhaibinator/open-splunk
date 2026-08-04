@@ -346,23 +346,42 @@ func queryIntegrationAssertCountFieldPhysicalShape(
 		compiled.Timechart.Span != 5*time.Minute {
 		t.Fatalf("count(field) compiled shape = %#v", compiled.Timechart)
 	}
+	queryIntegrationAssertOneScanNoArrayJoin(
+		t,
+		ctx,
+		connection,
+		explainer,
+		compiled,
+		"timechart count(field)",
+	)
+}
+
+func queryIntegrationAssertOneScanNoArrayJoin(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	explainer *Explainer,
+	compiled clickhouse.CompiledQuery,
+	subject string,
+) {
+	t.Helper()
 	upperSQL := strings.ToUpper(compiled.SQL)
 	if strings.Count(compiled.SQL, `FROM "open_splunk"."events"`) != 1 ||
 		strings.Contains(upperSQL, "ARRAY JOIN") ||
 		strings.Contains(compiled.SQL, "arrayJoin(") {
-		t.Fatalf("count(field) timechart rescans or expands source rows:\n%s", compiled.SQL)
+		t.Fatalf("%s rescans or expands source rows:\n%s", subject, compiled.SQL)
 	}
 	explained, err := explainer.Explain(ctx, compiled)
 	if err != nil {
-		t.Fatalf("EXPLAIN count(field) timechart: %v\nSQL: %s\nargs: %#v", err, compiled.SQL, compiled.Args)
+		t.Fatalf("EXPLAIN %s: %v\nSQL: %s\nargs: %#v", subject, err, compiled.SQL, compiled.Args)
 	}
 	physical := queryIntegrationAssertStructuredExplain(t, explained)
 	if len(physical.Reads) != 1 || queryIntegrationPlanContainsArrayJoin(physical) {
-		t.Fatalf("count(field) timechart physical plan rescans or expands rows: %#v", physical)
+		t.Fatalf("%s physical plan rescans or expands rows: %#v", subject, physical)
 	}
 	actions := queryIntegrationExplainActions(t, ctx, connection, compiled)
 	if strings.Contains(actions, "ArrayJoin") {
-		t.Fatalf("count(field) timechart EXPLAIN actions expand rows:\n%s", actions)
+		t.Fatalf("%s EXPLAIN actions expand rows:\n%s", subject, actions)
 	}
 }
 

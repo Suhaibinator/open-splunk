@@ -759,7 +759,7 @@ func (c *TimechartCommand) SourceRange() Range { return c.Range }
 // value of the row split and one runtime series per retained value of the
 // column split. Aggregate retains the same source-located representation used
 // by stats and timechart. The bounded compatibility surface supports one
-// argument-free count or one exact-field percentile/sum/average plus two
+// argument-free count or one exact-field count/percentile/sum/average plus two
 // distinct split fields, and is a terminal transforming command.
 type ChartCommand struct {
 	Aggregate StatsAggregate

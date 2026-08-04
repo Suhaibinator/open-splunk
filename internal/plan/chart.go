@@ -31,8 +31,15 @@ func validChartContract(operator *Chart) bool {
 			operator.Measure.Input.Path == nil &&
 			operator.Measure.Input.Range == (spl.Range{}) &&
 			operator.Measure.Output == "count"
+	case AggregateFunctionCountValues:
+		return spl.IsExactUnquotedFieldName(operator.Measure.Input.Name) &&
+			validResolvedEventAggregateField(operator.Measure.Input) &&
+			operator.Measure.Input.Name != operator.Over.Name &&
+			operator.Measure.Percentile == 0 &&
+			operator.Measure.Output == "count("+operator.Measure.Input.Name+")"
 	case AggregateFunctionSum, AggregateFunctionAverage:
-		if !validResolvedEventAggregateField(operator.Measure.Input) ||
+		if !spl.IsExactUnquotedFieldName(operator.Measure.Input.Name) ||
+			!validResolvedEventAggregateField(operator.Measure.Input) ||
 			operator.Measure.Input.Name == operator.Over.Name ||
 			operator.Measure.Percentile != 0 {
 			return false
@@ -43,7 +50,8 @@ func validChartContract(operator *Chart) bool {
 		}
 		return operator.Measure.Output == canonicalName+"("+operator.Measure.Input.Name+")"
 	case AggregateFunctionPercentile:
-		return validResolvedEventAggregateField(operator.Measure.Input) &&
+		return spl.IsExactUnquotedFieldName(operator.Measure.Input.Name) &&
+			validResolvedEventAggregateField(operator.Measure.Input) &&
 			operator.Measure.Input.Name != operator.Over.Name &&
 			operator.Measure.Percentile >= 1 && operator.Measure.Percentile <= 99 &&
 			operator.Measure.Output == "perc"+

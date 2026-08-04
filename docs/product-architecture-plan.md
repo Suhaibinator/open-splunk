@@ -1174,6 +1174,13 @@ each with an optional one-field runtime split. Its compatibility contract pins
 empty versus present-all-ineligible input, continuous fixed grids, top-ten,
 `NULL`, and `OTHER` selection, and one-scan ClickHouse lowering.
 
+The bounded `chart` implementation includes bare row count, exact-field
+occurrence count, integer-suffix percentile, numeric sum, and numeric average
+over one row field and one runtime column field. Its compatibility contract
+pins row-domain parity with `stats BY`, occurrence-based top-ten and cells for
+`count(field)`, `NULL` and `OTHER`, atomic runtime validation, and one-scan
+ClickHouse lowering for every field-measure form.
+
 ### Example target searches
 
 The first usable release should treat the following as its initial GradeThis compatibility corpus.

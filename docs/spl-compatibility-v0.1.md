@@ -2536,8 +2536,9 @@ rescan, or Go-side buffering.
 Later inputs in the flat stack are ordinary ClickHouse CTEs and may be
 re-evaluated by their consumers. The compiler therefore counts passes over the
 one retained bounded materialized leaf: every global stage multiplies the count
-by two and every grouped stage by three. Ordinary results, timechart, and
-numeric chart consume the final relation once; count chart consumes it twice.
+by two and every grouped stage by three. Ordinary results, timechart, numeric
+chart, and `chart count(field)` consume the final relation once; bare-count
+chart consumes it twice.
 Field summary, catalog, suggestions, and the forced hidden-validation branches
 contribute their actual fixed fanout as well. The query fails with
 `SPL_QUERY_TOO_COMPLEX` before the complete graph can exceed 128 bounded-leaf
@@ -3126,6 +3127,8 @@ Every unsupported form retains a source-located timechart diagnostic.
 ```spl
 | chart count OVER path BY status_class
 | chart count BY path, status_class
+| chart count(status) OVER path BY service
+| chart count(payload) BY path, service
 | chart sum(bytes) OVER path BY service
 | chart avg(duration_ms) BY path, service
 | chart p95(duration_ms) OVER path BY service
@@ -3133,8 +3136,9 @@ Every unsupported form retains a source-located timechart diagnostic.
 ```
 
 `chart` is a bounded runtime-wide two-field pivot, not a `stats` alias. The
-supported slice accepts exactly one argument-free `count`, one exact-field
-`sum(field)` / `avg(field)`, or one exact-field integer-suffix percentile
+supported slice accepts exactly one argument-free `count`, one long-form
+exact-field `count(field)`, one exact-field `sum(field)` / `avg(field)`, or one
+exact-field integer-suffix percentile
 `pN(field)` / `percN(field)` for `N` from 1 through 99; exactly one row-split
 field (Splunk's `<row-split>`, the first output column); and exactly one
 column-split field (the `<column-split>` whose values become column names).
@@ -3147,10 +3151,12 @@ unambiguous because `over` is the first field; when it is second, a comma is
 required (`chart count BY level, over`) because `chart count BY level over` is
 indistinguishable from the rejected `BY`-before-`OVER` form.
 
-The numeric forms accept one exact unquoted measure field and no `AS` alias.
-The measure cannot also be the row-split field, matching Splunk's documented
-chart restriction, but it may also be the column-split field. The two
-percentile spellings are synonyms and leading zeroes in `N` are removed during
+Every field aggregate accepts one exact unquoted measure field and no `AS`
+alias. The measure cannot also be the row-split field, matching Splunk's
+documented chart restriction, but it may also be the column-split field.
+`count(field)` uses the canonical lowercase logical name `count(field)`,
+preserving the exact input spelling. The two percentile spellings are synonyms
+and leading zeroes in `N` are removed during
 canonicalization: for example, both `p095(duration_ms)` and
 `perc95(duration_ms)` have the canonical logical aggregate/output-metadata name
 `perc95(duration_ms)`. Sum and average likewise use the canonical lowercase
@@ -3167,8 +3173,9 @@ resulting relation as transforming, exactly as they reject `timechart`.
 Unlike `timechart`, `chart` does not require event rows and does not require the
 canonical `_time`, so `... | stats count BY path, level | chart count OVER path
 BY level` is legal. `count` counts rows of the input relation, never a sum of an
-upstream `count` column. Numeric measures likewise read the current relation's
-declared field and never recover a value removed by an upstream projection.
+upstream `count` column. `count(field)` and numeric measures likewise read the
+current relation's declared field and never recover a value removed by an
+upstream projection.
 
 #### Row axis
 
@@ -3226,8 +3233,11 @@ no public column, because no published row could count them.
 
 Behavior equals Splunk's documented defaults `limit=top 10`, `useother=true`,
 `usenull=true`, `otherstr=OTHER`, and `nullstr=NULL`. For `count`, the ten
-ordinary values with the highest total count across the whole chart are
-retained — the limit is global, not per row. For every numeric aggregate, the
+ordinary values with the highest total row count across the whole chart are
+retained — the limit is global, not per row. For `count(field)`, ordinary
+values are ranked by total immediate non-null field occurrences across
+row-eligible input; a value still participates when its source rows contribute
+zero occurrences. For every numeric aggregate, the
 score is the sum of that series' finalized per-row cells across the complete
 chart; a null cell contributes zero. Thus a percentile series is ranked by the
 sum of its finalized requested percentile in every retained row, not by member
@@ -3240,9 +3250,11 @@ is finite or null.
 
 `NULL` exists whenever at least one row-eligible input has a missing or
 explicit-null column value and never consumes a top-ten slot; `OTHER` exists
-whenever at least one ordinary value was excluded. For `count`, `OTHER` carries
-the per-row sum of every excluded value. For numeric chart, it merges the
-excluded raw series' aggregate states per row: `sum` adds their numerators, and
+whenever at least one ordinary value was excluded. For bare `count`, `OTHER`
+carries the per-row row count of every excluded value. For `count(field)`, it
+carries the per-row occurrence total of every excluded value. For numeric
+chart, it merges the excluded raw series' aggregate states per row: `sum` adds
+their numerators, and
 `avg` adds their numerators and eligible-member counts before division, so it
 is a member-weighted average rather than an average of finalized series cells.
 For a percentile, the omitted labels' raw GK states are merged within each row
@@ -3254,9 +3266,11 @@ becomes `VALUE_audit`). Public columns are the row column first, then ordinary
 columns in UTF-8 lexical ascending order of the published name, then `NULL`,
 then `OTHER`, for at most 13 columns.
 
-Count cells are non-null unsigned values and an absent (row, column) pair is
-exactly `0`. Numeric cells are nullable `Float64`: a cell with no eligible
-numeric contribution is null, including `sum` rather than zero, while a real
+Bare-count and field-occurrence-count cells are non-null unsigned values and an
+absent (row, column) pair is exactly `0`. A `count(field)` cell counts the
+immediate non-null occurrences described below. Numeric cells are nullable
+`Float64`: a cell with no eligible numeric contribution is null, including
+`sum` rather than zero, while a real
 sum, average, or percentile value of zero remains non-null. Rows are retained
 whenever their row axis is eligible even if every measure value in that row is
 missing or nonnumeric, so an all-ineligible row publishes an entirely null
@@ -3275,10 +3289,41 @@ converging labels fail the search whether they lose the top-ten cutoff, fold
 into `OTHER`, or appear only on row-ineligible events.
 
 Because `NULL` and `OTHER` are always available, the column bound can never drop
-an input row. For count, the sum of every published row's cells equals exactly
-the count `stats count BY <row field>` reports. For every aggregate, the
+an input row. For bare count, the sum of every published row's cells equals
+exactly the count `stats count BY <row field>` reports. For `count(field)`, it
+equals `stats count(field) BY <row field>`. For every aggregate, the
 published row set and order equal `stats count BY <row field> | sort 0 +<row
 field>`.
+
+#### Field occurrence count
+
+`chart count(field)` uses the exact occurrence semantics specified for
+`stats count(field)`. A missing value, explicit null, or empty multivalue
+contributes zero. A present scalar — including `false`, numeric zero, and the
+empty String — contributes one; a flattened non-empty object parent also
+contributes one. A
+multivalue contributes one for each immediate non-null member, without
+recursing into nested containers or expanding source rows. The measure may be
+the column-split field but not the row-split field. If an upstream projection
+removed the measure, every retained cell is zero rather than rebinding the
+private event document.
+
+Row and series domains come from source-row presence, independently of
+occurrence contribution. Present ordinary and `NULL` column values therefore
+remain visible when every measure contributes zero, while missing/null row
+values name no row and do not invalidate valid rows. Column-axis type and label
+validation remains independent: an invalid column value fails atomically even
+when its measure contribution is zero.
+
+The lowering scans the tenant/index/time/snapshot-scoped relation once and
+never uses `ARRAY JOIN`. It normalizes the measure once per input row, then
+materializes one raw `(row, row-eligibility, split-kind, label)` aggregate with
+both source-row frequency and an unsigned 128-bit occurrence total. Occurrence
+totals drive top-ten selection, cells, and `OTHER`; row frequency retains
+zero-occurrence domains. The bounded public cells are converted to `UInt64` at
+the final collapsed aggregate. The materialized raw aggregate is the scoped
+relation's only physical consumer, including inside the chronological
+`eventstats` validation envelope.
 
 #### Numeric measures
 
@@ -3334,26 +3379,30 @@ ordinary, `NULL`, and `OTHER`). Exceeding the row ceiling fails atomically with
 an execution-limit error and no partial result — never truncation and never an
 `OTHER` row, because Splunk documents no `OTHER` row. This non-truncating
 resource policy intentionally differs from Splunk's installation-configurable
-`maxresultrows` ceiling. With bounded pivot expansion enabled, count, sum, and
-average may receive an intermediate allowance of at most 130,000 states,
-exactly as for `timechart`. An explicitly configured lower group cap remains
+`maxresultrows` ceiling. With bounded pivot expansion enabled, bare count,
+field occurrence count, sum, and average may receive an intermediate allowance
+of at most 130,000 states, exactly as for `timechart`. An explicitly configured
+lower group cap remains
 authoritative unless the caller explicitly enables that bounded expansion.
 
-For count, the column axis is collapsed to the published domain before the
+For bare count, the column axis is collapsed to the published domain before the
 row-keyed aggregation, so that aggregation holds at most one state per (row
 value, public series) pair. The preceding one-dimensional aggregate that
-chooses the domain holds one state per distinct raw column value. Numeric chart
-must additionally retain one mergeable state per observed raw `(row, label)`
-group until score selection is known; it then collapses those states to the
-same at-most-12 public series. Count, sum, and average are governed by the
-executor's at-most-130,000-group pivot allowance. A percentile has a separate
-hard ceiling of 20,000 raw `(row, label)` GK-state groups because every raw
+chooses the domain holds one state per distinct raw column value. Field
+occurrence count must retain one small count state per observed raw
+`(row, label)` group until occurrence-based score selection is known; numeric
+chart likewise retains one mergeable state per raw group. Both then collapse
+to the same at-most-12 public series. Bare count, field occurrence count, sum,
+and average are governed by the executor's at-most-130,000-group pivot
+allowance. A percentile has a separate hard ceiling of 20,000 raw `(row,
+label)` GK-state groups because every raw
 group retains a sketch: a higher configured group limit is clamped to 20,000,
 while a lower configured limit remains authoritative unless bounded pivot
 expansion is explicitly enabled, in which case it is raised only to 20,000. A
-sufficiently high raw label count, or for numeric chart a sufficiently wide
-row/label cross-product, therefore fails atomically with an execution-limit
-error and no partial result. Reducing raw cardinality means re-shaping the
+sufficiently high raw label count, or for field and numeric chart a
+sufficiently wide row/label cross-product, therefore fails atomically with an
+execution-limit error and no partial result. Reducing raw cardinality means
+re-shaping the
 column field into a coarser string — `replace` is the string-in, string-out
 surface for it — because `bin` would replace labels with numeric bucket starts,
 which the column axis rejects.
@@ -3370,13 +3419,15 @@ result is capped.
 
 The following fail explicitly rather than being approximated:
 
-- any aggregate other than argument-free `count`, `sum(field)`, `avg(field)`,
-  or integer-suffix `pN(field)` / `percN(field)` for `N` from 1 through 99 —
-  including `average`, `count(field)`, `dc`, `values`, multiple aggregates,
-  `agg=<term>`, and sparkline aggregates — and `AS <name>` on any aggregate,
-  all with
-  `SPL_UNSUPPORTED_CHART_AGGREGATE`. Numeric wildcard, quoted, missing,
-  multiple, or parenthesized eval-expression inputs fail with
+- any aggregate other than argument-free `count`, long-form exact-field
+	`count(field)`, `sum(field)`, `avg(field)`, or integer-suffix `pN(field)` /
+	`percN(field)` for `N` from 1 through 99 — including `average`, `c(field)`,
+  `dc`, `values`, multiple aggregates,
+	`agg=<term>`, and sparkline aggregates — and `AS <name>` on any aggregate,
+	all with
+	`SPL_UNSUPPORTED_CHART_AGGREGATE`. Field-aggregate wildcard, quoted, missing,
+  multiple, or parenthesized eval-expression inputs — including `count()` and
+  `count(eval(...))` — fail with
   `SPL_UNSUPPORTED_CHART_SYNTAX`. `AS` is rejected because runtime split values,
   not an aggregate output field, name every measure column;
 - percentile suffixes outside 1 through 99, a decimal, missing, or malformed
@@ -3400,7 +3451,7 @@ The following fail explicitly rather than being approximated:
 - a row or column field named `NULL` or `OTHER`, and the reserved `fields`
   convenience column on an open event schema, with
   `SPL_UNSUPPORTED_CHART_FIELD_TYPE`; using that open-schema `fields` payload
-  as a numeric measure is `SPL_AMBIGUOUS_CHART_FIELD`.
+  as a field measure is `SPL_AMBIGUOUS_CHART_FIELD`.
 
 ## Completed-job field analysis
 
@@ -3507,7 +3558,13 @@ The `chart` pivot additionally has pinned ClickHouse coverage for
 `bin severity span=10 | chart count OVER severity BY level`, for
 `chart count OVER path BY level` with both `NULL` and `OTHER` present, and for
 the differential that every published row's cells sum to the count
-`stats count BY path` reports. Numeric pivot coverage executes both
+`stats count BY path` reports. Field-occurrence pivot coverage pins scalar,
+multivalue, container, missing, null, and projected-away measure semantics;
+occurrence-ranked top-ten ties; zero-contribution ordinary and `NULL` domains;
+occurrence-based `OTHER`; a measure equal to the column axis; missing/null
+dynamic row exclusion; atomic invalid-column rejection; empty input; stored-SPL
+re-execution; chronological `eventstats` fanout; and a structured one-read,
+no-`ARRAY JOIN` ClickHouse plan. Numeric pivot coverage executes both
 `chart sum(metric)` and `chart avg(metric)` against the pinned server and pins
 the exact top-ten domain, `NULL` and `OTHER`, member-weighted average `OTHER`,
 real zero versus null through the private presence bitmap, ignored

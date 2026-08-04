@@ -640,10 +640,7 @@ func classifyChartSuggestion(context SuggestionContext, tokens []token) Suggesti
 		context.FunctionNames = []string{"count", "p50", "p95", "sum", "avg"}
 		return context
 	}
-	if spec, supported := statsAggregateSpecForName(tokens[0].text); supported &&
-		(spec.function == AggregateFunctionPercentile ||
-			spec.function == AggregateFunctionSum ||
-			spec.function == AggregateFunctionAverage) &&
+	if _, supported := pivotFieldAggregateSpecForName(tokens[0].text); supported &&
 		parenthesisDepth(tokens) > 0 {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
 		return context
@@ -704,7 +701,7 @@ func classifyTimechartSuggestion(context SuggestionContext, tokens []token) Sugg
 			return context
 		}
 	}
-	spec, supported := timechartFieldAggregateSpecForName(aggregate[0].text)
+	spec, supported := pivotFieldAggregateSpecForName(aggregate[0].text)
 	if !supported {
 		return context
 	}

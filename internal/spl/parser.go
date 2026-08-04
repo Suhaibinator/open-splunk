@@ -837,7 +837,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 			AliasRange: function.sourceRange,
 		}, function.sourceRange.End, nil
 	}
-	spec, supported := timechartFieldAggregateSpecForName(functionName)
+	spec, supported := pivotFieldAggregateSpecForName(functionName)
 	if !supported {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedTimechartAggregate(
@@ -908,7 +908,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 	return aggregate, aggregate.Range.End, nil
 }
 
-func timechartFieldAggregateSpecForName(name string) (statsAggregateSpec, bool) {
+func pivotFieldAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 	if strings.EqualFold(name, "count") {
 		return statsAggregateSpec{
 			function:      AggregateFunctionCountValues,
@@ -1189,18 +1189,12 @@ func (p *parser) parseChartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedChartAggregate(
 				function,
-				"chart requires argument-free count or one pN(field), percN(field), sum(field), or avg(field) aggregate",
+				"chart requires argument-free count or one count(field), pN(field), percN(field), sum(field), or avg(field) aggregate",
 			)
 	}
 	functionName := strings.ToLower(function.text)
-	if functionName == "count" {
-		if p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen {
-			return StatsAggregate{}, function.sourceRange.End,
-				p.unsupportedChartAggregate(
-					function,
-					"count arguments are not supported by chart; use argument-free count",
-				)
-		}
+	if functionName == "count" &&
+		(p.index+1 >= len(p.tokens) || p.tokens[p.index+1].kind != tokenLeftParen) {
 		p.advance()
 		return StatsAggregate{
 			Function:   AggregateFunctionCount,
@@ -1210,14 +1204,12 @@ func (p *parser) parseChartAggregate() (StatsAggregate, Position, error) {
 		}, function.sourceRange.End, nil
 	}
 
-	spec, supported := statsAggregateSpecForName(functionName)
-	if !supported || (spec.function != AggregateFunctionPercentile &&
-		spec.function != AggregateFunctionSum &&
-		spec.function != AggregateFunctionAverage) {
+	spec, supported := pivotFieldAggregateSpecForName(functionName)
+	if !supported {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedChartAggregate(
 				function,
-				fmt.Sprintf("chart aggregate %q is not supported; use count, pN(field), percN(field), sum(field), or avg(field)", function.text),
+				fmt.Sprintf("chart aggregate %q is not supported; use count, count(field), pN(field), percN(field), sum(field), or avg(field)", function.text),
 			)
 	}
 	p.advance()
@@ -1225,17 +1217,17 @@ func (p *parser) parseChartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedChartSyntax(
 				function,
-				"chart numeric aggregates require one exact unquoted field in parentheses",
+				"chart field aggregates require one exact unquoted field in parentheses",
 			)
 	}
 	input := p.current()
-	if input.kind != tokenWord || strings.Contains(input.text, "*") ||
+	if input.kind != tokenWord || !IsExactUnquotedFieldName(input.text) ||
 		(strings.EqualFold(input.text, "eval") &&
 			p.index+1 < len(p.tokens) && p.tokens[p.index+1].kind == tokenLeftParen) {
 		return StatsAggregate{}, input.sourceRange.End,
 			p.unsupportedChartSyntax(
 				input,
-				"chart numeric aggregates require one exact unquoted field",
+				"chart field aggregates require one exact unquoted field",
 			)
 	}
 	p.advance()
@@ -1243,7 +1235,7 @@ func (p *parser) parseChartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, input.sourceRange.End,
 			p.unsupportedChartSyntax(
 				p.current(),
-				"chart numeric aggregates accept exactly one field argument",
+				"chart field aggregates accept exactly one field argument",
 			)
 	}
 	end := p.previous().sourceRange.End
@@ -2175,7 +2167,7 @@ func (p *parser) parseStreamStatsGroupFields() ([]StatsGroupField, Position, err
 }
 
 func isExactUnquotedStreamStatsField(tok token) bool {
-	return tok.kind == tokenWord && IsExactUnquotedStreamStatsFieldName(tok.text)
+	return tok.kind == tokenWord && IsExactUnquotedFieldName(tok.text)
 }
 
 func parseStreamStatsBool(value string) (bool, bool) {

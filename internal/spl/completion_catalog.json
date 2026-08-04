@@ -103,7 +103,7 @@
     {
       "name": "chart",
       "insertion": "chart count OVER status BY level",
-      "detail": "Build a bounded two-dimensional aggregate table."
+      "detail": "Build a bounded two-dimensional pivot of row counts, exact-field occurrence counts, percentiles, sums, or averages."
     }
   ],
   "functions": [
