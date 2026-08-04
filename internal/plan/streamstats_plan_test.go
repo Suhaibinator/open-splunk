@@ -425,7 +425,7 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 		mutate func(*spl.StreamStatsCommand)
 		code   string
 	}{
-		{"wrong function", func(c *spl.StreamStatsCommand) { c.Aggregate.Function = spl.AggregateFunctionMinimum }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"wrong function", func(c *spl.StreamStatsCommand) { c.Aggregate.Function = spl.AggregateFunctionMaximum }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"input metadata", func(c *spl.StreamStatsCommand) { c.Aggregate.Input = "status" }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"field count missing input", func(c *spl.StreamStatsCommand) {
 			c.Aggregate.Function = spl.AggregateFunctionCountValues
@@ -668,7 +668,7 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 		mutate func(*StreamAggregate)
 	}{
 		{"missing output", func(op *StreamAggregate) { op.Measure.Output = "" }},
-		{"wrong function", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionMinimum }},
+		{"wrong function", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionMaximum }},
 		{"field count missing input", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionCountValues }},
 		{"field count comma input", func(op *StreamAggregate) {
 			op.Measure.Function = AggregateFunctionCountValues

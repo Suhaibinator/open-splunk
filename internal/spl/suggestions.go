@@ -527,21 +527,18 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		return context
 	}
 	if parenthesisDepth(tokens) > 0 {
-		aggregateIndex := topLevelWordIndex(tokens, "count")
-		if aggregateIndex < 0 {
-			aggregateIndex = topLevelWordIndex(tokens, "sum")
-		}
-		if aggregateIndex < 0 {
-			aggregateIndex = topLevelWordIndex(tokens, "avg")
-		}
+		aggregateIndex := topLevelStreamStatsAggregateIndex(tokens)
 		if aggregateIndex >= 0 && aggregateIndex+1 < len(tokens) &&
 			tokens[aggregateIndex+1].kind == tokenLeftParen {
 			context.Kinds = []SuggestionKind{SuggestionKindField}
 		}
 		return context
 	}
-	for _, requiredCall := range []string{"sum", "avg"} {
-		if functionIndex := topLevelWordIndex(tokens, requiredCall); functionIndex >= 0 {
+	for _, descriptor := range streamStatsAggregateDescriptors {
+		if descriptor.allowsBare {
+			continue
+		}
+		if functionIndex := topLevelWordIndex(tokens, descriptor.name); functionIndex >= 0 {
 			byIndex := topLevelWordIndex(tokens, "BY")
 			alias := functionIndex > 0 && tokenWordEqual(tokens[functionIndex-1], "AS")
 			group := byIndex >= 0 && functionIndex > byIndex
@@ -569,11 +566,9 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		context.Keywords = optionKeywords
 		return context
 	}
-	if topLevelWordIndex(tokens, "count") < 0 &&
-		topLevelWordIndex(tokens, "sum") < 0 &&
-		topLevelWordIndex(tokens, "avg") < 0 {
+	if topLevelStreamStatsAggregateIndex(tokens) < 0 {
 		context = aggregateSuggestionContext(context)
-		context.FunctionNames = []string{"count", "sum", "avg"}
+		context.FunctionNames = streamStatsFunctionNames()
 		context.Kinds = append(context.Kinds, SuggestionKindKeyword)
 		context.Keywords = optionKeywords
 		return context
@@ -585,6 +580,15 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 	context.Keywords = append(context.Keywords, "BY")
 	context.Keywords = append(context.Keywords, optionKeywords...)
 	return context
+}
+
+func topLevelStreamStatsAggregateIndex(tokens []token) int {
+	for _, descriptor := range streamStatsAggregateDescriptors {
+		if index := topLevelWordIndex(tokens, descriptor.name); index >= 0 {
+			return index
+		}
+	}
+	return -1
 }
 
 func streamStatsSuggestionOptions(tokens []token) ([]string, bool) {

@@ -13,8 +13,8 @@ import (
 // queryIntegrationTestStreamStatsTransport runs both ungrouped and grouped
 // field-occurrence results through Executor and Manager. The store integration
 // owns the broader ordering and resource-bound matrix; this pins the public
-// UInt64/Nullable(UInt64) schemas and current=false zero at the transport
-// boundary.
+// count, numeric, and Dynamic-extrema schemas plus current=false empty-frame
+// behavior at the transport boundary.
 func queryIntegrationTestStreamStatsTransport(
 	t *testing.T,
 	ctx context.Context,
@@ -185,6 +185,62 @@ func queryIntegrationTestStreamStatsTransport(
 		t.Fatalf(
 			"streamstats average preceding_mean = %#v, want null empty prior frame",
 			averagePage.Rows[0].Values[2],
+		)
+	}
+
+	minimumJob, minimumPage := queryIntegrationRunSearch(
+		t,
+		ctx,
+		executor,
+		indexTime,
+		"queryexec-streamstats-minimum-transport",
+		`index=main source="source"`+
+			` | streamstats min(status) AS running_min`+
+			` | streamstats current=false min(status) AS preceding_min BY path`+
+			` | table event_id running_min preceding_min`,
+	)
+	if minimumJob.State != searchjobs.StateCompleted {
+		t.Fatalf(
+			"streamstats minimum transport state = %v, failure=%#v",
+			minimumJob.State,
+			minimumJob.Failure,
+		)
+	}
+	wantMinimumColumns := []searchjobs.Column{
+		{Name: "event_id", Kind: searchjobs.ValueKindString},
+		{Name: "running_min", Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: "preceding_min", Kind: searchjobs.ValueKindMixed, Nullable: true},
+	}
+	if len(minimumPage.Schema.Columns) != len(wantMinimumColumns) {
+		t.Fatalf(
+			"streamstats minimum transport schema = %#v, want %#v",
+			minimumPage.Schema.Columns,
+			wantMinimumColumns,
+		)
+	}
+	for index := range wantMinimumColumns {
+		if minimumPage.Schema.Columns[index] != wantMinimumColumns[index] {
+			t.Fatalf(
+				"streamstats minimum transport column %d = %#v, want %#v",
+				index,
+				minimumPage.Schema.Columns[index],
+				wantMinimumColumns[index],
+			)
+		}
+	}
+	if len(minimumPage.Rows) != 1 {
+		t.Fatalf("streamstats minimum transport rows = %#v, want one row", minimumPage.Rows)
+	}
+	if eventID, ok := minimumPage.Rows[0].Values[0].String(); !ok || eventID != "queryexec-event" {
+		t.Fatalf("streamstats minimum transport event_id = %q, string=%v", eventID, ok)
+	}
+	if minimum, ok := minimumPage.Rows[0].Values[1].Double(); !ok || minimum != 200 {
+		t.Fatalf("streamstats minimum running_min = %v, double=%v", minimum, ok)
+	}
+	if !minimumPage.Rows[0].Values[2].IsNull() {
+		t.Fatalf(
+			"streamstats minimum preceding_min = %#v, want null empty prior frame",
+			minimumPage.Rows[0].Values[2],
 		)
 	}
 
@@ -472,6 +528,101 @@ func queryIntegrationTestStreamStatsTransport(
 		t.Fatalf(
 			"streamstats average timeline = %#v, want one event at %v",
 			averageBuckets,
+			firstBucket,
+		)
+	}
+
+	const minimumAnalysis = `index=main source="source" | streamstats min(status) AS running_min`
+	minimumLogical := queryIntegrationFieldPlan(t, "main", indexTime, minimumAnalysis)
+	minimumCatalogQuery, err := compiler.CompileFieldCatalog(
+		minimumLogical,
+		clickhouse.FieldCatalogSpec{MaximumFields: clickhouse.MaximumFieldCatalogFields},
+	)
+	if err != nil {
+		t.Fatalf("compile streamstats minimum field catalog: %v", err)
+	}
+	minimumCatalog, err := executor.ExecuteFieldCatalog(ctx, minimumCatalogQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats minimum field catalog: %v\nSQL: %s\nargs: %#v",
+			err,
+			minimumCatalogQuery.SQL,
+			minimumCatalogQuery.Args,
+		)
+	}
+	if minimumCatalog.TotalEvents != 1 {
+		t.Fatalf("streamstats minimum field catalog = %#v, want one event", minimumCatalog)
+	}
+	assertFieldCatalogProfile(t, minimumCatalog, FieldProfileRow{
+		FieldName:     "running_min",
+		ObservedTypes: []eventfields.StoredValueType{eventfields.StoredValueTypeDouble},
+		EventCount:    1,
+	})
+
+	minimumSummaryQuery, err := compiler.CompileFieldSummary(
+		minimumLogical,
+		clickhouse.FieldSummarySpec{
+			FieldName:             "running_min",
+			MaximumValues:         10,
+			MaximumDistinctValues: clickhouse.MaximumFieldSummaryDistinctValues,
+			MaximumValueBytes:     clickhouse.MaximumFieldSummaryValueBytes,
+		},
+	)
+	if err != nil {
+		t.Fatalf("compile streamstats minimum field summary: %v", err)
+	}
+	minimumSummary, err := executor.ExecuteFieldSummary(ctx, minimumSummaryQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats minimum field summary: %v\nSQL: %s\nargs: %#v",
+			err,
+			minimumSummaryQuery.SQL,
+			minimumSummaryQuery.Args,
+		)
+	}
+	if minimumSummary.FieldName != "running_min" ||
+		len(minimumSummary.ObservedTypes) != 1 ||
+		minimumSummary.ObservedTypes[0] != eventfields.StoredValueTypeDouble ||
+		minimumSummary.EventCount != 1 || minimumSummary.NullCount != 0 ||
+		minimumSummary.MissingCount != 0 || minimumSummary.DistinctCount != 1 ||
+		len(minimumSummary.TopValues) != 1 || minimumSummary.TopValues[0].Count != 1 {
+		t.Fatalf("streamstats minimum field summary = %#v", minimumSummary)
+	}
+	if minimum, ok := minimumSummary.TopValues[0].Value.Double(); !ok || minimum != 200 {
+		t.Fatalf(
+			"streamstats minimum summary running_min = %v, double=%v",
+			minimum,
+			ok,
+		)
+	}
+
+	minimumTimelineQuery := queryIntegrationCompileTimeline(
+		t,
+		minimumAnalysis,
+		"main",
+		indexTime,
+		clickhouse.TimelineSpec{
+			FirstBucket: firstBucket,
+			SpanSeconds: 2,
+			BucketCount: 1,
+			Earliest:    firstBucket,
+			Latest:      firstBucket.Add(2 * time.Second),
+		},
+	)
+	minimumBuckets, err := executor.ExecuteTimeline(ctx, minimumTimelineQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats minimum timeline: %v\nSQL: %s\nargs: %#v",
+			err,
+			minimumTimelineQuery.SQL,
+			minimumTimelineQuery.Args,
+		)
+	}
+	if len(minimumBuckets) != 1 || minimumBuckets[0].Count != 1 ||
+		!minimumBuckets[0].AlignedStart.Equal(firstBucket) {
+		t.Fatalf(
+			"streamstats minimum timeline = %#v, want one event at %v",
+			minimumBuckets,
 			firstBucket,
 		)
 	}

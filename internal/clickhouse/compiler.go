@@ -1594,7 +1594,7 @@ func wrapChronologicalValidation(
 			"compile ClickHouse query: chronological validation envelope is invalid",
 		)
 	}
-	if amplificationErr := validateEventStatsGraphAmplification(
+	if amplificationErr := validateChronologicalGraphAmplification(
 		barriers,
 		sourceFanout,
 		ownerRange,
@@ -1771,7 +1771,7 @@ func hasPrerequisiteChronologicalBarrier(
 	return false
 }
 
-func validateEventStatsGraphAmplification(
+func validateChronologicalGraphAmplification(
 	barriers []compiledChronologicalBarrier,
 	sourceFanout uint64,
 	fallbackRange spl.Range,
@@ -1779,6 +1779,7 @@ func validateEventStatsGraphAmplification(
 	hasEventStats := false
 	hasValidation := false
 	diagnosticRange := fallbackRange
+	validationRange := fallbackRange
 	for _, barrier := range barriers {
 		fanout := barrier.fanout
 		if fanout == 0 {
@@ -1797,17 +1798,27 @@ func validateEventStatsGraphAmplification(
 		}
 		if len(barrier.validationColumns) > 0 {
 			hasValidation = true
+			if barrier.ownerRange != (spl.Range{}) {
+				validationRange = barrier.ownerRange
+			}
 		}
 	}
-	if !hasEventStats {
+	if !hasEventStats && !hasValidation {
 		return nil
+	}
+	if !hasEventStats {
+		diagnosticRange = validationRange
+	}
+	graphName := "stacked eventstats"
+	if !hasEventStats {
+		graphName = "stacked streamstats"
 	}
 
 	overflow := func() error {
 		return &plan.Diagnostic{
 			Code: "SPL_QUERY_TOO_COMPLEX",
 			Message: fmt.Sprintf(
-				"stacked eventstats exceeds the maximum deferred execution amplification of %d bounded-leaf reads",
+				graphName+" exceeds the maximum deferred execution amplification of %d bounded-leaf reads",
 				MaximumEventStatsGraphAmplification,
 			),
 			Range: diagnosticRange,
@@ -13704,13 +13715,15 @@ func validateStreamAggregate(
 			)
 		}
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
-		plan.AggregateFunctionAverage:
+		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum:
 		form := "count"
 		switch measure.Function {
 		case plan.AggregateFunctionSum:
 			form = "sum"
 		case plan.AggregateFunctionAverage:
 			form = "avg"
+		case plan.AggregateFunctionMinimum:
+			form = "min"
 		}
 		if !spl.IsExactUnquotedFieldName(measure.Input.Name) {
 			return plan.FieldRef{}, errors.New(
@@ -13735,7 +13748,7 @@ func validateStreamAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse streamstats: only count, count(field), sum(field), and avg(field) are supported",
+			"compile ClickHouse streamstats: only count, count(field), sum(field), avg(field), and min(field) are supported",
 		)
 	}
 	defaultOutput := ""
@@ -13746,6 +13759,8 @@ func validateStreamAggregate(
 		defaultOutput = "sum(" + measure.Input.Name + ")"
 	case plan.AggregateFunctionAverage:
 		defaultOutput = "avg(" + measure.Input.Name + ")"
+	case plan.AggregateFunctionMinimum:
+		defaultOutput = "min(" + measure.Input.Name + ")"
 	}
 	validOutput := spl.IsExactUnquotedFieldName(measure.Output) ||
 		(defaultOutput != "" && measure.Output == defaultOutput)
@@ -13806,7 +13821,7 @@ func validateStreamAggregate(
 func streamAggregateCompileState(
 	state compileState,
 	output plan.FieldRef,
-	function plan.AggregateFunction,
+	outputState fieldState,
 	grouped bool,
 	stage int,
 	order []compiledSortKey,
@@ -13827,20 +13842,12 @@ func streamAggregateCompileState(
 			stage,
 		))
 	}
-	numberType := "UInt64"
-	numericIntegral := true
-	if function == plan.AggregateFunctionSum ||
-		function == plan.AggregateFunctionAverage {
-		numberType = "Float64"
-		numericIntegral = false
-	}
-	next.visible[output.Name] = fieldState{
-		valueSQL:        quoteIdentifier(output.Name),
-		existsSQL:       existsSQL,
-		kind:            fieldKindNumber,
-		numberType:      numberType,
-		numericIntegral: numericIntegral,
-	}
+	outputState.valueSQL = quoteIdentifier(output.Name)
+	outputState.existsSQL = existsSQL
+	// Every streamstats result is derived. Even min(_time) is not the immutable
+	// event timestamp required by canonical-time consumers such as timechart.
+	outputState.canonicalTime = false
+	next.visible[output.Name] = outputState
 	// The running value may replace a public field that supplied the incoming
 	// order. Every key was snapshotted before replacement, so make those private
 	// sequences the durable pipeline order and stable event identity. A later
@@ -13848,10 +13855,43 @@ func streamAggregateCompileState(
 	next.order = append([]compiledSortKey(nil), order...)
 	next.tieBreakers = append([]compiledSortKey(nil), tieBreakers...)
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
+	if outputState.storedTypeSQL != "" {
+		next.privateColumns = append(next.privateColumns, outputState.storedTypeSQL)
+	}
 	if grouped {
 		next.privateColumns = append(next.privateColumns, existsSQL)
 	}
 	return next
+}
+
+// streamStatsStringArrayExtremaMeasureSQL folds a fixed Array(String) row to
+// the same constant-size winner tuple used by Dynamic extrema. The stream
+// window is still measured in source rows: multivalue members never expand the
+// relation or consume independent frame positions.
+func streamStatsStringArrayExtremaMeasureSQL(
+	function plan.AggregateFunction,
+	valuesSQL string,
+	rowEligibleSQL string,
+) string {
+	if rowEligibleSQL == "" {
+		rowEligibleSQL = "1"
+	}
+	state := "__os_streamstats_extrema_state"
+	value := "value"
+	candidateSQL := statsExtremaScalarCandidateSQL(
+		value,
+		statsExtremaScalarNumberSQL(value),
+	)
+	step := extremaFoldWinnerStateSQL(
+		function,
+		state,
+		candidateSQL,
+		"",
+	)
+	empty := eventStatsExtremaEmptyRowStateSQL("0")
+	fold := "arrayFold((" + state + ", " + value + ") -> " + step + ", " +
+		valuesSQL + ", " + empty + ")"
+	return "if(" + rowEligibleSQL + ", " + fold + ", " + empty + ")"
 }
 
 func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
@@ -13872,11 +13912,11 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 		" PRECEDING AND 1 PRECEDING"
 }
 
-// compileStreamAggregate lowers one running count, numeric sum, or numeric
-// average over the order already established by the pipeline. Its only retained
-// relation is capped at one sentinel beyond the public limit; both row overflow
-// and Dynamic BY poison are checked inside the deferred barrier before any
-// downstream operator can hide them.
+// compileStreamAggregate lowers one running count, numeric sum/average, or
+// mixed minimum over the order already established by the pipeline. Its
+// retained relation is capped at one sentinel beyond the public limit; row
+// overflow, Dynamic BY poison, and minimum-measure poison are forced through
+// the deferred barrier before downstream operators can hide them.
 func compileStreamAggregate(
 	relation compiledRelation,
 	operator *plan.StreamAggregate,
@@ -13928,10 +13968,11 @@ func compileStreamAggregate(
 	}
 
 	groupClassifications := make([]string, 0, len(operator.GroupBy))
+	groupClassificationAliases := make([]string, 0, len(operator.GroupBy))
 	groupAliases := make([]string, 0, len(operator.GroupBy))
 	groupPresence := make([]string, 0, len(operator.GroupBy))
 	groupUnsupported := make([]string, 0, len(operator.GroupBy))
-	prefixArgs := make([]any, 0, len(operator.GroupBy)*2)
+	groupArgs := make([]any, 0, len(operator.GroupBy)*2)
 	for index, group := range operator.GroupBy {
 		scalar, compileErr := compileExactScalarGroup(
 			group,
@@ -13956,6 +13997,10 @@ func compileStreamAggregate(
 			groupClassifications,
 			classification+" AS "+classificationAlias,
 		)
+		groupClassificationAliases = append(
+			groupClassificationAliases,
+			classificationAlias,
+		)
 		groupAliases = append(groupAliases, groupAlias)
 		groupPresence = append(
 			groupPresence,
@@ -13965,11 +14010,20 @@ func compileStreamAggregate(
 			groupUnsupported,
 			"tupleElement("+classificationAlias+", 3) != 0",
 		)
-		prefixArgs = append(prefixArgs, classificationArgs...)
+		groupArgs = append(groupArgs, classificationArgs...)
 	}
 
+	eligibleAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_eligible_%d",
+		stage,
+	))
+	unsupportedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_unsupported_%d",
+		stage,
+	))
 	measureAlias := ""
 	measureProjection := ""
+	var stageMeasureArgs []any
 	if operator.Measure.Function == plan.AggregateFunctionCountValues ||
 		operator.Measure.Function == plan.AggregateFunctionSum ||
 		operator.Measure.Function == plan.AggregateFunctionAverage {
@@ -13995,7 +14049,7 @@ func compileStreamAggregate(
 			stage,
 		))
 		measureProjection = measureSQL + " AS " + measureAlias
-		prefixArgs = append(prefixArgs, contributionArgs...)
+		stageMeasureArgs = contributionArgs
 	}
 
 	maximumRows := strconv.FormatUint(MaximumStreamStatsInputRows, 10)
@@ -14020,17 +14074,12 @@ func compileStreamAggregate(
 	}
 	orderedInput += " LIMIT " + sentinelRows
 
-	eligibleAlias := quoteIdentifier(fmt.Sprintf(
-		"__os_streamstats_eligible_%d",
-		stage,
-	))
-	unsupportedAlias := quoteIdentifier(fmt.Sprintf(
-		"__os_streamstats_unsupported_%d",
-		stage,
-	))
 	preparedSQL := orderedInput
+	preparedLayers := 0
 	if len(groupAliases) > 0 {
-		preparedProjection := []string{"*"}
+		preparedProjection := []string{
+			"* EXCEPT (" + strings.Join(groupClassificationAliases, ", ") + ")",
+		}
 		for index, groupAlias := range groupAliases {
 			preparedProjection = append(
 				preparedProjection,
@@ -14051,6 +14100,146 @@ func compileStreamAggregate(
 		))
 		preparedSQL = "SELECT " + strings.Join(preparedProjection, ", ") +
 			" FROM (" + orderedInput + ") AS " + preparedAlias
+		preparedLayers++
+	}
+
+	outputState := fieldState{
+		kind:            fieldKindNumber,
+		numberType:      "UInt64",
+		numericIntegral: true,
+	}
+	minimumNullType := ""
+	minimumMeasureHasInvalidBit := false
+	var minimumScratchColumns []string
+	if operator.Measure.Function == plan.AggregateFunctionSum ||
+		operator.Measure.Function == plan.AggregateFunctionAverage {
+		outputState.numberType = "Float64"
+		outputState.numericIntegral = false
+	}
+	if operator.Measure.Function == plan.AggregateFunctionMinimum {
+		measureAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_measure_%d",
+			stage,
+		))
+		rowEligibleSQL := "1"
+		if len(groupAliases) > 0 {
+			rowEligibleSQL = eligibleAlias + " != 0"
+		}
+		input, exists, resolveErr := resolveCompiledField(operator.Measure.Input, state)
+		if resolveErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, resolveErr
+		}
+		measureSQL := eventStatsExtremaEmptyRowStateSQL("0")
+		var measureArgs []any
+		outputState = fieldState{
+			kind:           fieldKindDynamic,
+			dynamicTypeSQL: "dynamicType(" + quoteIdentifier(output.Name) + ")",
+			storedTypeSQL: quoteIdentifier(fmt.Sprintf(
+				"__os_streamstats_extrema_type_%d",
+				stage,
+			)),
+		}
+		if exists {
+			outputState.maxStringBytes = fieldStateStringByteBound(input)
+			switch input.kind {
+			case fieldKindNumber, fieldKindBool, fieldKindTime:
+				eligibleSQL, eligibleArgs, fixed := fixedExtremaEligibilitySQL(input)
+				if !fixed {
+					return compiledRelation{}, compileState{}, nil, nil, errors.New(
+						"compile ClickHouse streamstats minimum: fixed input is invalid",
+					)
+				}
+				eligibleSQL = "(" + rowEligibleSQL + ") AND (" + eligibleSQL + ")"
+				measureSQL = "tuple(" + input.valueSQL + ", toUInt8(" +
+					eligibleSQL + "))"
+				measureArgs = eligibleArgs
+				outputState = fieldState{
+					maxStringBytes:  fieldStateStringByteBound(input),
+					kind:            input.kind,
+					caseSensitive:   input.caseSensitive,
+					numberType:      input.numberType,
+					numericSort:     input.numericSort,
+					numericIntegral: input.numericIntegral,
+				}
+				var nullTypeErr error
+				minimumNullType, nullTypeErr = nullableEventStatsExtremaType(input)
+				if nullTypeErr != nil {
+					return compiledRelation{}, compileState{}, nil, nil, nullTypeErr
+				}
+			case fieldKindString:
+				valueAlias := quoteIdentifier(fmt.Sprintf(
+					"__os_streamstats_extrema_string_%d",
+					stage,
+				))
+				numberAlias := quoteIdentifier(fmt.Sprintf(
+					"__os_streamstats_extrema_number_%d",
+					stage,
+				))
+				valueSQL, valueArgs := statsScalarStringInputSQL(input)
+				scalarAlias := quoteIdentifier(fmt.Sprintf(
+					"__os_streamstats_extrema_scalar_%d",
+					stage,
+				))
+				preparedSQL = "SELECT *, " + valueSQL + " AS " + valueAlias +
+					", " + statsExtremaScalarNumberSQL(valueAlias) + " AS " +
+					numberAlias + " FROM (" + preparedSQL + ") AS " + scalarAlias
+				preparedLayers++
+				minimumScratchColumns = append(
+					minimumScratchColumns,
+					valueAlias,
+					numberAlias,
+				)
+				measureSQL = "if(" + rowEligibleSQL + ", " +
+					statsExtremaScalarCandidateSQL(valueAlias, numberAlias) + ", " +
+					"tuple(" + eventStatsExtremaEmptyOrderingKeySQL() +
+					", toUInt8(" + strconv.Itoa(int(statsExtremaPublicationLexical)) +
+					"), toFloat64(0), CAST('' AS String), toUInt8(0)))"
+				measureArgs = valueArgs
+			case fieldKindDynamic:
+				measureSQL, measureArgs = eventStatsExtremaDynamicMeasureSQL(
+					plan.AggregateFunctionMinimum,
+					input,
+					rowEligibleSQL,
+				)
+				minimumMeasureHasInvalidBit = true
+			case fieldKindStringArray:
+				valuesSQL, valuesArgs := stringArrayInputSQL(input)
+				measureSQL = streamStatsStringArrayExtremaMeasureSQL(
+					plan.AggregateFunctionMinimum,
+					valuesSQL,
+					rowEligibleSQL,
+				)
+				measureArgs = valuesArgs
+			default:
+				return compiledRelation{}, compileState{}, nil, nil, errors.New(
+					"compile ClickHouse streamstats minimum: input state is invalid",
+				)
+			}
+		}
+		measureStageAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_measure_source_%d",
+			stage,
+		))
+		measureSourceProjection := "*"
+		if len(minimumScratchColumns) > 0 {
+			measureSourceProjection = "* EXCEPT (" +
+				strings.Join(minimumScratchColumns, ", ") + ")"
+		}
+		preparedSQL = "SELECT " + measureSourceProjection + ", " + measureSQL + " AS " + measureAlias +
+			" FROM (" + preparedSQL + ") AS " + measureStageAlias
+		preparedLayers++
+		stageMeasureArgs = measureArgs
+	}
+
+	// The minimum projection is textually outside the bounded BY
+	// classification subquery, so its placeholders precede group arguments.
+	prefixArgs := make([]any, 0, len(groupArgs)+len(stageMeasureArgs))
+	if operator.Measure.Function == plan.AggregateFunctionMinimum {
+		prefixArgs = append(prefixArgs, stageMeasureArgs...)
+		prefixArgs = append(prefixArgs, groupArgs...)
+	} else {
+		prefixArgs = append(prefixArgs, groupArgs...)
+		prefixArgs = append(prefixArgs, stageMeasureArgs...)
 	}
 
 	inputName := quoteIdentifier(fmt.Sprintf(
@@ -14103,6 +14292,17 @@ func compileStreamAggregate(
 		}
 		windowExpression = "CAST(" + numericAggregate + " OVER (" +
 			windowClause + ") AS Nullable(Float64))"
+	case plan.AggregateFunctionMinimum:
+		if minimumNullType != "" {
+			windowExpression = "minIfOrNull(tupleElement(" + measureAlias +
+				", 1), tupleElement(" + measureAlias + ", 2) != 0) OVER (" +
+				windowClause + ")"
+		} else {
+			windowExpression = statsExtremaScalarAggregateWinnerSQL(
+				plan.AggregateFunctionMinimum,
+				measureAlias,
+			) + " OVER (" + windowClause + ")"
+		}
 	default:
 		if !operator.IncludeCurrent {
 			windowExpression = "ifNull(" + windowExpression + ", toUInt64(0))"
@@ -14125,23 +14325,49 @@ func compileStreamAggregate(
 			"max(toUInt8("+unsupportedAlias+" != 0)) OVER () AS "+unsupportedAny,
 		)
 	}
+	validationColumn := ""
+	if minimumMeasureHasInvalidBit {
+		validationColumn = quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_validation_%d",
+			stage,
+		))
+		windowProjection = append(
+			windowProjection,
+			"toUInt8(tupleElement("+measureAlias+", 6)) AS "+validationColumn,
+		)
+	}
 	windowAlias := quoteIdentifier(fmt.Sprintf(
 		"__os_streamstats_window_%d",
 		stage,
 	))
+	windowSource := inputName
+	if minimumMeasureHasInvalidBit {
+		preparedAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_prepared_%d",
+			stage,
+		))
+		windowSource = "(" + preparedSQL + ") AS " + preparedAlias
+	}
 	windowSQL := "SELECT " + strings.Join(windowProjection, ", ") +
-		" FROM " + inputName
+		" FROM " + windowSource
 
 	next := streamAggregateCompileState(
 		state,
 		output,
-		operator.Measure.Function,
+		outputState,
 		len(groupAliases) > 0,
 		stage,
 		orderKeys,
 		tieBreakers,
 	)
 	outputValue := windowAlias + "." + windowValue
+	outputStoredType := ""
+	if operator.Measure.Function == plan.AggregateFunctionMinimum && minimumNullType == "" {
+		outputValue = statsExtremaScalarValueSQL(outputValue)
+		outputStoredType = statsExtremaScalarStoredTypeSQL(
+			windowAlias + "." + windowValue,
+		)
+	}
 	outputExists := "1"
 	if len(groupAliases) > 0 {
 		outputExists = windowAlias + "." + eligibleAlias + " != 0"
@@ -14150,18 +14376,36 @@ func compileStreamAggregate(
 			operator.Measure.Function == plan.AggregateFunctionAverage {
 			nullType = "Float64"
 		}
-		outputValue = "if(" + outputExists + ", " + outputValue +
-			", CAST(NULL AS Nullable(" + nullType + ")))"
+		if operator.Measure.Function == plan.AggregateFunctionMinimum {
+			if minimumNullType != "" {
+				nullType = minimumNullType
+				outputValue = "if(" + outputExists + ", " + outputValue +
+					", CAST(NULL AS Nullable(" + nullType + ")))"
+			} else {
+				outputValue = "if(" + outputExists + ", " + outputValue +
+					", CAST(NULL AS Dynamic))"
+				outputStoredType = "if(" + outputExists + ", " +
+					outputStoredType + ", toUInt8(" +
+					strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "))"
+			}
+		} else {
+			outputValue = "if(" + outputExists + ", " + outputValue +
+				", CAST(NULL AS Nullable(" + nullType + ")))"
+		}
+	}
+	outputValidation := ""
+	if validationColumn != "" {
+		outputValidation = windowAlias + "." + validationColumn
 	}
 	projection := eventAggregateProjection(
 		state,
 		next,
 		output.Name,
 		outputValue,
-		"",
+		outputStoredType,
 		outputExists,
-		"",
-		"",
+		validationColumn,
+		outputValidation,
 	)
 	guard := "if(" + windowAlias + "." + inputCount + " > toUInt64(" +
 		maximumRows + "), throwIf(toUInt8(1), '" +
@@ -14176,10 +14420,7 @@ func compileStreamAggregate(
 	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
 		windowSQL + ") AS " + windowAlias + " WHERE " + guard + " = 0"
 
-	depth := relation.depth + 3
-	if len(groupAliases) > 0 {
-		depth++
-	}
+	depth := relation.depth + 3 + preparedLayers
 	enriched := compiledRelation{
 		sql:        resultSQL,
 		depth:      depth,
@@ -14189,21 +14430,43 @@ func compileStreamAggregate(
 		"__os_streamstats_result_%d",
 		stage,
 	))
+	barrierSQL := resultSQL
+	barrierDepth := depth
+	prerequisiteDefinitions := []string{
+		inputName + " AS MATERIALIZED (" + preparedSQL + ")",
+	}
+	if validationColumn != "" {
+		resultInputName := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_result_input_%d",
+			stage,
+		))
+		barrierSQL = "SELECT * FROM " + resultInputName
+		barrierDepth = relationalNodeDepth(depth)
+		prerequisiteDefinitions = []string{
+			resultInputName + " AS MATERIALIZED (" + resultSQL + ")",
+		}
+		enriched.depth = barrierDepth
+	}
 	barrier := &pendingChronologicalBarrier{
-		name: barrierName,
-		sql:  resultSQL,
-		prerequisiteDefinitions: []string{
-			inputName + " AS MATERIALIZED (" + preparedSQL + ")",
-		},
-		fanout:     1,
-		depth:      depth,
-		ownerRange: operator.Range,
+		name:                    barrierName,
+		sql:                     barrierSQL,
+		prerequisiteDefinitions: prerequisiteDefinitions,
+		fanout:                  1,
+		depth:                   barrierDepth,
+		ownerRange:              operator.Range,
+	}
+	if validationColumn != "" {
+		barrier.validationColumns = []string{validationColumn}
 	}
 	publishedAlias := quoteIdentifier(fmt.Sprintf(
 		"__os_streamstats_rows_result_%d",
 		stage,
 	))
 	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	if validationColumn != "" {
+		publishedSQL = "SELECT * EXCEPT (" + validationColumn + ") FROM " +
+			barrierName + " AS " + publishedAlias
+	}
 	return enriched.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
 }
 
@@ -17759,6 +18022,48 @@ func eventStatsExtremaEmptyRowStateSQL(invalidSQL string) string {
 		"CAST('' AS String), toUInt8(0), toUInt8(" + invalidSQL + "))"
 }
 
+// extremaFoldWinnerStateSQL merges one normalized five-element candidate into
+// the shared six-element row state. Dynamic callers supply the candidate's
+// unsupported-value bit; fixed String arrays leave it empty.
+func extremaFoldWinnerStateSQL(
+	function plan.AggregateFunction,
+	stateSQL string,
+	candidateSQL string,
+	invalidSQL string,
+) string {
+	// Keep the established private alias stable because compiler-shape tests and
+	// query diagnostics use it to identify the normalized extrema candidate.
+	candidate := "__os_eventstats_extrema_candidate"
+	comparison := "<"
+	if function == plan.AggregateFunctionMaximum {
+		comparison = ">"
+	}
+	replace := "(tupleElement(" + candidate + ", 5) != 0 AND (tupleElement(" +
+		stateSQL + ", 5) = 0 OR tupleElement(" + candidate + ", 1) " + comparison +
+		" tupleElement(" + stateSQL + ", 1)))"
+	fields := make([]string, 0, 6)
+	for index := 1; index <= 4; index++ {
+		position := strconv.Itoa(index)
+		fields = append(fields, "if("+replace+", tupleElement("+candidate+", "+
+			position+"), tupleElement("+stateSQL+", "+position+"))")
+	}
+	fields = append(
+		fields,
+		"toUInt8(tupleElement("+stateSQL+", 5) != 0 OR tupleElement("+
+			candidate+", 5) != 0)",
+	)
+	invalidState := "tupleElement(" + stateSQL + ", 6)"
+	if invalidSQL != "" {
+		invalidState = "toUInt8(" + invalidState + " != 0 OR (" + invalidSQL + "))"
+	}
+	fields = append(fields, invalidState)
+	return bindSQLExpressions(
+		[]string{candidate},
+		[]string{candidateSQL},
+		"tuple("+strings.Join(fields, ", ")+")",
+	)
+}
+
 func eventStatsExtremaFoldStepSQL(
 	function plan.AggregateFunction,
 	stateSQL string,
@@ -17801,31 +18106,11 @@ func eventStatsExtremaFoldStepSQL(
 	emptyCandidate := "tuple(" + eventStatsExtremaEmptyOrderingKeySQL() +
 		", toUInt8(" + strconv.Itoa(int(statsExtremaPublicationLexical)) +
 		"), toFloat64(0), CAST('' AS String), toUInt8(0))"
-	candidate := "__os_eventstats_extrema_candidate"
-	comparison := "<"
-	if function == plan.AggregateFunctionMaximum {
-		comparison = ">"
-	}
-	replace := "(tupleElement(" + candidate + ", 5) != 0 AND (tupleElement(" +
-		stateSQL + ", 5) = 0 OR tupleElement(" + candidate + ", 1) " + comparison +
-		" tupleElement(" + stateSQL + ", 1)))"
-	fields := make([]string, 0, 6)
-	for index := 1; index <= 4; index++ {
-		position := strconv.Itoa(index)
-		fields = append(fields, "if("+replace+", tupleElement("+candidate+", "+
-			position+"), tupleElement("+stateSQL+", "+position+"))")
-	}
-	fields = append(
-		fields,
-		"toUInt8(tupleElement("+stateSQL+", 5) != 0 OR tupleElement("+
-			candidate+", 5) != 0)",
-		"toUInt8(tupleElement("+stateSQL+", 6) != 0 OR ("+invalidSQL+"))",
-	)
-	result := bindSQLExpressions(
-		[]string{candidate},
-		[]string{"if(" + eligibleSQL + ", " + candidateSQL + ", " +
-			emptyCandidate + ")"},
-		"tuple("+strings.Join(fields, ", ")+")",
+	result := extremaFoldWinnerStateSQL(
+		function,
+		stateSQL,
+		"if("+eligibleSQL+", "+candidateSQL+", "+emptyCandidate+")",
+		invalidSQL,
 	)
 	result = bindSQLExpressions(
 		[]string{supportedVariable},

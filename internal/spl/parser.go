@@ -1793,8 +1793,40 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 
 const streamStatsSyntaxSuggestion = "streamstats count AS running_count"
 
+type streamStatsAggregateDescriptor struct {
+	name       string
+	function   AggregateFunction
+	allowsBare bool
+}
+
+var streamStatsAggregateDescriptors = []streamStatsAggregateDescriptor{
+	{name: "count", function: AggregateFunctionCountValues, allowsBare: true},
+	{name: "sum", function: AggregateFunctionSum},
+	{name: "avg", function: AggregateFunctionAverage},
+	{name: "min", function: AggregateFunctionMinimum},
+}
+
+func streamStatsAggregateDescriptorForName(
+	name string,
+) (streamStatsAggregateDescriptor, bool) {
+	for _, descriptor := range streamStatsAggregateDescriptors {
+		if strings.EqualFold(descriptor.name, name) {
+			return descriptor, true
+		}
+	}
+	return streamStatsAggregateDescriptor{}, false
+}
+
+func streamStatsFunctionNames() []string {
+	names := make([]string, 0, len(streamStatsAggregateDescriptors))
+	for _, descriptor := range streamStatsAggregateDescriptors {
+		names = append(names, descriptor.name)
+	}
+	return names
+}
+
 // parseStreamStatsCommand accepts one deliberately bounded running count,
-// exact-field numeric sum, or exact-field numeric average. Splunk commonly
+// exact-field numeric sum or average, or exact-field mixed minimum. Splunk commonly
 // places options both before and after the aggregate (and examples also place
 // them after BY), so this parser treats supported name=value options as
 // position-independent while keeping the aggregate, alias, and grouping tuple
@@ -1915,22 +1947,12 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 			}
 		}
 
-		if current.kind == tokenWord &&
-			(strings.EqualFold(current.text, "count") ||
-				strings.EqualFold(current.text, "sum") ||
-				strings.EqualFold(current.text, "avg")) {
+		descriptor, supportedAggregate := streamStatsAggregateDescriptorForName(
+			current.text,
+		)
+		if current.kind == tokenWord && supportedAggregate {
 			if aggregateSeen || bySeen {
 				return nil, p.unsupportedStreamStatsAggregate(current, "streamstats supports exactly one aggregate")
-			}
-			function := AggregateFunctionCountValues
-			form := "count"
-			switch {
-			case strings.EqualFold(current.text, "sum"):
-				function = AggregateFunctionSum
-				form = "sum"
-			case strings.EqualFold(current.text, "avg"):
-				function = AggregateFunctionAverage
-				form = "avg"
 			}
 			hasArguments := p.index+1 < len(p.tokens) &&
 				p.tokens[p.index+1].kind == tokenLeftParen
@@ -1943,12 +1965,12 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 					p.index+2 < len(p.tokens) && p.tokens[p.index+2].kind == tokenRightParen {
 					return nil, p.unsupportedStreamStatsAggregate(
 						current,
-						fmt.Sprintf("streamstats %s(field) requires one exact field, not %s() or %s(eval(...))", form, form, form),
+						fmt.Sprintf("streamstats %s(field) requires one exact field, not %s() or %s(eval(...))", descriptor.name, descriptor.name, descriptor.name),
 					)
 				}
 				aggregate, aggregateEnd, aggregateErr := p.parseStreamStatsFieldAggregate(
 					current,
-					function,
+					descriptor,
 				)
 				if aggregateErr != nil {
 					return nil, aggregateErr
@@ -1958,10 +1980,10 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 				end = aggregateEnd
 				continue
 			}
-			if function != AggregateFunctionCountValues {
+			if !descriptor.allowsBare {
 				return nil, p.unsupportedStreamStatsAggregate(
 					current,
-					fmt.Sprintf("streamstats %s requires one exact field in parentheses", form),
+					fmt.Sprintf("streamstats %s requires one exact field in parentheses", descriptor.name),
 				)
 			}
 			aggregateSeen = true
@@ -2025,14 +2047,14 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 		if current.kind == tokenWord {
 			return nil, p.unsupportedStreamStatsAggregate(
 				current,
-				fmt.Sprintf("streamstats aggregate %q is not supported; use count, count(field), sum(field), or avg(field)", current.text),
+				fmt.Sprintf("streamstats aggregate %q is not supported; use count, count(field), sum(field), avg(field), or min(field)", current.text),
 			)
 		}
-		return nil, p.unsupportedStreamStatsSyntax(current, "streamstats requires one count, count(field), sum(field), or avg(field) aggregate")
+		return nil, p.unsupportedStreamStatsSyntax(current, "streamstats requires one count, count(field), sum(field), avg(field), or min(field) aggregate")
 	}
 
 	if !aggregateSeen {
-		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "streamstats requires one count, count(field), sum(field), or avg(field) aggregate")
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "streamstats requires one count, count(field), sum(field), avg(field), or min(field) aggregate")
 	}
 	if len(command.GroupBy) > 0 && command.Window > 0 &&
 		(!command.GlobalSpecified || command.Global) {
@@ -2053,22 +2075,16 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 }
 
 // parseStreamStatsFieldAggregate consumes an exact long-form count(field),
-// sum(field), or avg(field) call. It deliberately does not share eventstats
+// sum(field), avg(field), or min(field) call. It deliberately does not share eventstats
 // parsing because the two commands have different alias requirements and
 // diagnostic namespaces.
 func (p *parser) parseStreamStatsFieldAggregate(
 	functionToken token,
-	function AggregateFunction,
+	descriptor streamStatsAggregateDescriptor,
 ) (StatsAggregate, Position, error) {
-	form := "count"
-	switch function {
-	case AggregateFunctionSum:
-		form = "sum"
-	case AggregateFunctionAverage:
-		form = "avg"
-	}
+	form := descriptor.name
 	aggregate := StatsAggregate{
-		Function: function,
+		Function: descriptor.function,
 		Range:    functionToken.sourceRange,
 	}
 	end := functionToken.sourceRange.End

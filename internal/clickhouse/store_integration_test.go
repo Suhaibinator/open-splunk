@@ -2560,6 +2560,9 @@ func testCompiledQueriesAgainstClickHouse(
 		{"stats aggregates", func(t *testing.T) { testStatsAggregatesAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"eventstats", func(t *testing.T) { testEventStatsAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"streamstats", func(t *testing.T) { testStreamStatsAgainstClickHouse(t, ctx, store, connection, indexTime) }},
+		{"streamstats minimum", func(t *testing.T) {
+			testStreamStatsMinimumAgainstClickHouse(t, ctx, store, connection, indexTime)
+		}},
 		{"eventstats distinct count", func(t *testing.T) { testEventStatsDistinctCountAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"eventstats values", func(t *testing.T) { testEventStatsValuesAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"eventstats numeric aggregates", func(t *testing.T) {

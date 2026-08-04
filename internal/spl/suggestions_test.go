@@ -474,12 +474,21 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			kinds:  []SuggestionKind{SuggestionKindField},
 		},
 		{
+			source: `| streamstats current=false min(`,
+			kinds:  []SuggestionKind{SuggestionKindField},
+		},
+		{
 			source:   `| streamstats sum `,
 			kinds:    nil,
 			keywords: nil,
 		},
 		{
 			source:   `| streamstats avg `,
+			kinds:    nil,
+			keywords: nil,
+		},
+		{
+			source:   `| streamstats min `,
 			kinds:    nil,
 			keywords: nil,
 		},
@@ -515,6 +524,11 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 		},
 		{
 			source:   `| streamstats avg(bytes) AS running_mean `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"BY", "current=", "window=", "global="},
+		},
+		{
+			source:   `| streamstats min(bytes) AS running_minimum `,
 			kinds:    []SuggestionKind{SuggestionKindKeyword},
 			keywords: []string{"BY", "current=", "window=", "global="},
 		},
@@ -565,7 +579,7 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 	}
 }
 
-func TestAnalyzeStreamStatsSuggestionsAdvertiseNumericAggregates(t *testing.T) {
+func TestAnalyzeStreamStatsSuggestionsAdvertiseSupportedAggregates(t *testing.T) {
 	t.Parallel()
 
 	source := `| streamstats `
@@ -573,8 +587,47 @@ func TestAnalyzeStreamStatsSuggestionsAdvertiseNumericAggregates(t *testing.T) {
 	if diagnostic != nil {
 		t.Fatalf("AnalyzeSuggestionContext: %v", diagnostic)
 	}
-	if !slices.Equal(context.FunctionNames, []string{"count", "sum", "avg"}) {
-		t.Fatalf("streamstats functions = %v, want [count sum avg]", context.FunctionNames)
+	if !slices.Equal(context.FunctionNames, []string{"count", "sum", "avg", "min"}) {
+		t.Fatalf("streamstats functions = %v, want [count sum avg min]", context.FunctionNames)
+	}
+}
+
+func TestAnalyzeStreamStatsSuggestionsPreserveFieldsNamedMinimum(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		source   string
+		kinds    []SuggestionKind
+		keywords []string
+	}{
+		{
+			source:   `| streamstats count AS min `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"BY", "current=", "window=", "global="},
+		},
+		{
+			source: `| streamstats count BY min `,
+			kinds: []SuggestionKind{
+				SuggestionKindField,
+				SuggestionKindKeyword,
+			},
+			keywords: []string{"current=", "window=", "global="},
+		},
+	} {
+		context, diagnostic := AnalyzeSuggestionContext(test.source, len(test.source))
+		if diagnostic != nil {
+			t.Fatalf("AnalyzeSuggestionContext(%q): %v", test.source, diagnostic)
+		}
+		if !slices.Equal(context.Kinds, test.kinds) ||
+			!slices.Equal(context.Keywords, test.keywords) {
+			t.Fatalf(
+				"streamstats context for %q = %#v, want kinds=%v keywords=%v",
+				test.source,
+				context,
+				test.kinds,
+				test.keywords,
+			)
+		}
 	}
 }
 

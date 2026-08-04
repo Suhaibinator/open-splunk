@@ -818,7 +818,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				measure.Function = AggregateFunctionCountRows
 			case spl.AggregateFunctionCountValues, spl.AggregateFunctionSum,
-				spl.AggregateFunctionAverage:
+				spl.AggregateFunctionAverage, spl.AggregateFunctionMinimum:
 				form := "count"
 				function := AggregateFunctionCountValues
 				switch aggregate.Function {
@@ -828,6 +828,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				case spl.AggregateFunctionAverage:
 					form = "avg"
 					function = AggregateFunctionAverage
+				case spl.AggregateFunctionMinimum:
+					form = "min"
+					function = AggregateFunctionMinimum
 				}
 				if aggregate.Input == "" ||
 					aggregate.InputRange == (spl.Range{}) ||
@@ -865,7 +868,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
 					Message: "streamstats currently supports exactly one count, " +
-						"count(field), sum(field), or avg(field) aggregate",
+						"count(field), sum(field), avg(field), or min(field) aggregate",
 					Range: aggregate.Range,
 				}
 			}

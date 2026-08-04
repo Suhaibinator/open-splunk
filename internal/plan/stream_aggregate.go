@@ -10,7 +10,8 @@ func validStreamAggregateOutputName(measure AggregateMeasure) bool {
 	return validStreamAggregateFieldName(measure.Output) ||
 		((measure.Function == AggregateFunctionCountValues ||
 			measure.Function == AggregateFunctionSum ||
-			measure.Function == AggregateFunctionAverage) &&
+			measure.Function == AggregateFunctionAverage ||
+			measure.Function == AggregateFunctionMinimum) &&
 			measure.Input.Name != "" &&
 			measure.Output == streamAggregateDefaultOutput(measure))
 }
@@ -23,6 +24,8 @@ func streamAggregateDefaultOutput(measure AggregateMeasure) string {
 		return "sum(" + measure.Input.Name + ")"
 	case AggregateFunctionAverage:
 		return "avg(" + measure.Input.Name + ")"
+	case AggregateFunctionMinimum:
+		return "min(" + measure.Input.Name + ")"
 	default:
 		return ""
 	}
@@ -51,7 +54,7 @@ func validStreamAggregateContract(operator *StreamAggregate) bool {
 			return false
 		}
 	case AggregateFunctionCountValues, AggregateFunctionSum,
-		AggregateFunctionAverage:
+		AggregateFunctionAverage, AggregateFunctionMinimum:
 		if !validStreamAggregateFieldName(operator.Measure.Input.Name) ||
 			!validResolvedEventAggregateField(operator.Measure.Input) {
 			return false

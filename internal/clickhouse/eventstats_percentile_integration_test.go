@@ -331,7 +331,7 @@ func testEventStatsPercentilesAgainstClickHouse(
 	assertPhysicalStates("grouped p75", grouped, 1)
 	// The later global stage has two CTE consumers, so it evaluates the earlier
 	// p50 state twice and its own q90 state once. This is the exact bounded
-	// fanout charged by validateEventStatsGraphAmplification; the SQL still
+	// fanout charged by validateChronologicalGraphAmplification; the SQL still
 	// contains only two aggregate definitions and one physical event scan.
 	assertPhysicalStates("stacked p50/perc90", stacked, 3)
 

@@ -167,7 +167,7 @@ func TestCompileStreamStatsAverageCanonicalDefaultAndDefensiveValidation(t *test
 		{"sum default on average", func(op *plan.StreamAggregate) { op.Measure.Output = "sum(status)" }},
 		{"predicate", func(op *plan.StreamAggregate) { op.Measure.Predicate = &plan.BooleanExpression{} }},
 		{"percentile", func(op *plan.StreamAggregate) { op.Measure.Percentile = 50 }},
-		{"unsupported minimum", func(op *plan.StreamAggregate) { op.Measure.Function = plan.AggregateFunctionMinimum }},
+		{"unsupported maximum", func(op *plan.StreamAggregate) { op.Measure.Function = plan.AggregateFunctionMaximum }},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {

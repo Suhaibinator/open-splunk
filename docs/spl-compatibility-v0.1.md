@@ -2557,7 +2557,7 @@ The executor's memory, read, query-size, relational-depth, result, and
 
 The additional pre-release compatibility surface supports one deliberately
 bounded running row count, exact-field occurrence count, exact-field numeric
-sum, or exact-field numeric average per command:
+sum, exact-field numeric average, or exact-field mixed-type minimum per command:
 
 ```spl
 streamstats count
@@ -2576,6 +2576,9 @@ streamstats window=5 global=false sum(bytes) AS recent_bytes BY host
 streamstats avg(bytes)
 streamstats current=false avg(bytes) AS prior_mean
 streamstats window=5 global=false avg(bytes) AS recent_mean BY host
+streamstats min(duration_ms)
+streamstats current=false min(duration_ms) AS prior_minimum
+streamstats window=5 global=false min(duration_ms) AS recent_minimum BY host
 ```
 
 Splunk documents `streamstats` as a row-preserving command that calculates a
@@ -2589,15 +2592,15 @@ claims about undocumented Splunk type edges. See Splunk's official
 and [running-statistics examples](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/streamstats-command/streamstats-command-examples).
 
 Exactly one aggregate is accepted: bare argument-free `count`, long-form
-`count(field)`, long-form `sum(field)`, or long-form `avg(field)`. Each field
-form contains exactly one exact unquoted input. The bare form uses the default
-output `count`; field forms use canonical lowercase `count(field)`,
-`sum(field)`, or `avg(field)`, preserving the input field's spelling. Any form
-may instead provide one exact unquoted output with `AS`, which must remain
-before `BY`. Because the downstream exact field grammar cannot refer to
-parentheses in a field form's default name, use `AS` whenever a later command
-will consume that result. `BY` accepts from one through 16 distinct exact
-unquoted fields, separated by commas or whitespace.
+`count(field)`, long-form `sum(field)`, long-form `avg(field)`, or long-form
+`min(field)`. Each field form contains exactly one exact unquoted input. The
+bare form uses the default output `count`; field forms use canonical lowercase
+`count(field)`, `sum(field)`, `avg(field)`, or `min(field)`, preserving the
+input field's spelling. Any form may instead provide one exact unquoted output
+with `AS`, which must remain before `BY`. Because the downstream exact field
+grammar cannot refer to parentheses in a field form's default name, use `AS`
+whenever a later command will consume that result. `BY` accepts from one
+through 16 distinct exact unquoted fields, separated by commas or whitespace.
 Command, function, option, Boolean, and keyword spelling is case-insensitive;
 input, output, and grouping field names remain case-sensitive. The supported
 options are `current=t|true|f|false`, `window=N`, and
@@ -2635,6 +2638,30 @@ weight. Computed IEEE `NaN` or positive/negative infinity caused by Float64
 aggregation is preserved, matching the existing numeric aggregate policy. The
 result type for both functions is `Nullable(Float64)`.
 
+`min(field)` reuses the complete mixed-type extrema contract of `stats` and
+`eventstats min`, rather than coercing every value to Float64. Every immediate
+non-null member of a top-level multivalue is an independent candidate,
+including duplicates. Missing values, explicit nulls, empty multivalues, and
+null multivalue members do not participate; an empty String does. Projecting
+the input away makes it missing and never recovers it from hidden event
+storage. Generic objects, flattened object parents, nested arrays, and nested
+objects in a retained, group-eligible row poison the complete scoped command
+atomically. A row with an incomplete `BY` tuple neither contributes nor
+poisons another group.
+
+Exact numeric candidates sort before lexical candidates. Numeric values compare
+by the shared normalized exact-decimal key, while lexical values compare by raw
+bytes. A frame containing any numeric candidate therefore chooses its least
+numeric value even when it also contains lexical values. Dynamic numeric
+winners publish losslessly as Double or exact Decimal, and Dynamic lexical
+winners publish as String or Bytes. Fixed Float `NaN` and positive or negative
+infinity do not participate. Runtime String spellings instead remain raw-byte
+lexical candidates, while Dynamic non-finite Float values remain lexical using
+their canonical string spelling. Statically typed numeric, Boolean, and
+timestamp inputs retain their physical type and precision. A complete admitted
+frame with no candidate publishes a present null; numeric zero and an empty
+String winner remain non-null.
+
 The command retains every input row, every other visible field, the established
 row order, and the current relation classification. Executable v0.1 pipelines
 may therefore preserve either event or statistics results; the current
@@ -2642,13 +2669,15 @@ may therefore preserve either event or statistics results; the current
 input rows, not field occurrences or numeric members. Bare `count` contributes
 one for each row; `count(field)` contributes the occurrence cardinality above;
 `sum(field)` contributes all eligible immediate numeric members from the row;
-and `avg(field)` averages those members across the complete row frame. With
-`current=true`, a positive window includes the current row and at most its
+`avg(field)` averages those members across the complete row frame; and
+`min(field)` selects the least eligible immediate member across the complete
+row frame. With `current=true`, a positive window includes the current row and at most its
 `N-1` preceding rows. With `current=false`, only preceding rows
 participate, and a positive window includes at most the `N` preceding rows.
 The first eligible row then has the present `UInt64` value zero for either
 count form and a present null `Float64` for either numeric form. These empty
-preceding frame representations are explicit Open Splunk v0.1 choices because
+preceding frames publish a present null for `min(field)`. These representations
+are explicit Open Splunk v0.1 choices because
 the official reference does not pin their transport representation.
 `count(field)` contributions are summed as `UInt128` before the published
 result is converted to `UInt64`; `sum(field)` and `avg(field)` each use one
@@ -2674,21 +2703,23 @@ documented as-seen processing model and its requirement that a global
 [parallel-reduce execution](https://help.splunk.com/en/splunk-enterprise/administer/distributed-search/10.0/manage-parallel-reduce-search-processing/supported-commands-for-parallel-reduce-search-processing).
 
 Without `BY`, both count forms publish a non-null `UInt64`; `sum(field)` and
-`avg(field)` publish a present nullable `Float64`. Grouped keys use the same
-exact scalar contract as `stats BY` and `eventstats BY`. A missing or explicit-null
-component retains its source row but makes the streamstats output logically
-absent and physically nullable; it contributes to no group. Every row with a
-complete grouping tuple has a present result: zero when a `count(field)` frame
-contains no occurrences, and null when a `sum(field)` or `avg(field)` frame
-contains no eligible numeric members. An empty String grouping key is a value. Complete
-Dynamic scalar keys use the existing lexical normalization, so numeric `500`
-and String `"500"` share a group. A known fixed multivalue key is rejected
-during compilation. A runtime Dynamic list, object, flattened object parent,
-or nested container poisons the complete scoped command atomically, even when
-another key is missing or a downstream filter, projection, sort, or limit
-would hide the row. Splunk's official reference does not settle these typed
-null and container cases, so they remain conservative Open Splunk boundaries
-pending a live differential oracle.
+`avg(field)` publish a present nullable `Float64`; `min(field)` publishes the
+nullable winner type described above. Grouped keys use the same exact scalar
+contract as `stats BY` and `eventstats BY`. A missing or explicit-null component
+retains its source row but makes the streamstats output logically absent and
+physically nullable; it contributes to no group. Every row with a complete
+grouping tuple has a present result: zero when a `count(field)` frame contains
+no occurrences, and null when a `sum(field)`, `avg(field)`, or `min(field)`
+frame contains no eligible member. An empty String grouping key is a value.
+Complete Dynamic scalar keys use the existing lexical normalization, so numeric
+`500` and String `"500"` share a group. A known fixed multivalue key is rejected
+during compilation. A runtime Dynamic list, object, flattened object parent, or
+nested container in a grouping key poisons the complete scoped command
+atomically, even when another key is missing. Group-key and `min(field)` measure
+poison are forced before a downstream filter, projection, sort, or limit can
+hide the row. Splunk's official reference does not settle these typed null and
+container cases, so they remain conservative Open Splunk boundaries pending a
+live differential oracle.
 
 The output replaces an existing field of the same name rather than creating a
 duplicate. The literal input, output, or grouping name `fields` is rejected
@@ -2711,14 +2742,21 @@ ClickHouse row window. `sum(field)` materializes one normalized
 `Array(Float64)` per row and applies one exact `sumOrNullArray` window state,
 without changing Float64 accumulation into per-row partial sums. `avg(field)`
 uses the same per-row normalized array and one exact `avgOrNullArray` window
-state, never a per-row average or a row-count denominator. The stage performs
-no `ARRAY JOIN`, row expansion, unbounded `groupArray`, per-group query, or
-Go-side result buffering. The normal query memory, read, group, depth, and
-result ceilings remain independently authoritative.
+state, never a per-row average or a row-count denominator. `min(field)` reduces
+each row once to a constant-size exact winner and invalid bit, then applies one
+exact minimum window state over the admitted row frame; private stored-type
+metadata lets the typed result boundary publish the lossless winner.
+Unsupported-value validation is forced for the complete stage, even if the
+poisoned result would otherwise be empty or hidden downstream. The stage
+performs no `ARRAY JOIN`, row expansion, unbounded `groupArray`, per-group
+query, physical-event rescan, or Go-side result buffering. The normal query
+memory, read, group, depth, and result ceilings remain independently
+authoritative.
 
-Parenthesized `count()`, bare or parenthesized-empty `sum` or `avg`, abbreviated
-`c` or `c(field)`, `count(eval(...))`, `sum(eval(...))`, `avg(eval(...))`,
-wildcard, quoted, or multiple inputs, every other aggregate, multiple
+Parenthesized `count()`, bare or parenthesized-empty `sum`, `avg`, or `min`,
+abbreviated `c` or `c(field)`, `count(eval(...))`, `sum(eval(...))`,
+`avg(eval(...))`, `min(eval(...))`, wildcard, quoted, or multiple inputs,
+`max(field)`, every other aggregate, multiple
 aggregates, wildcard or quoted output/grouping fields, duplicate or
 more-than-16 grouping fields, and an alias after `BY` are unsupported. So are
 `allnum`, `time_window`, `reset_before`, `reset_after`, `reset_on_change`,
@@ -3600,11 +3638,12 @@ grouped by up to 16 exact fields. Other aggregate functions, multiple measures,
 and the broader eval-expression surface remain unsupported for `eventstats`.
 
 `streamstats` supports only the bare argument-free running `count`, long-form
-exact-field `count(field)`, long-form exact-field `sum(field)`, and long-form
-exact-field `avg(field)` surfaces specified above. Abbreviated, wildcard,
-quoted-field, eval, or multi-input forms, other or multiple aggregates,
-time-based windows, reset behavior, `allnum`, grouped finite global windows,
-and the broader expression surface remain unsupported.
+exact-field `count(field)`, long-form exact-field `sum(field)`, long-form
+exact-field `avg(field)`, and long-form exact-field mixed-type `min(field)`
+surfaces specified above. `max(field)` remains unsupported. Abbreviated,
+wildcard, quoted-field, eval, or multi-input forms, other or multiple
+aggregates, time-based windows, reset behavior, `allnum`, grouped finite global
+windows, and the broader expression surface remain unsupported.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,
