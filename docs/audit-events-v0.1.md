@@ -1,9 +1,10 @@
 # Audit events v0.1
 
 This contract is the first durable security-audit slice. It covers successful
-ingestion-token, index, and app administration mutations. Authentication
-attempts, token use, searches, exports, saved-object changes, and broader RBAC
-activity remain future, separately bounded event families.
+ingestion-token, index, and app administration mutations plus saved-search
+changes. Authentication attempts, token use, searches, exports, other
+saved-object families, and broader RBAC activity remain future, separately
+bounded event families.
 
 The closed action taxonomy is:
 
@@ -15,12 +16,16 @@ The closed action taxonomy is:
 - `app.create` at exactly version 1, then `app.update`, `app.activate`,
   `app.archive`, and `app.delete` at version 2 or later. App deletion records
   the final archived app version; deletion does not fabricate another object
-  generation.
+  generation; and
+- `saved_search.create` and `saved_search.duplicate` at exactly version 1,
+  `saved_search.update` at version 2 or later, and `saved_search.delete` at
+  version 1 or later. Duplication targets the new object, and deletion records
+  the last retained version without fabricating another generation.
 
-Each action is bound to its corresponding fixed `ingestion_token`, `index`, or
-`app` target kind. Successful events accept only an explicitly installed system
-actor or authenticated browser administrator. An ordinary browser user remains
-an invalid successful-mutation actor.
+Each action is bound to its corresponding fixed `ingestion_token`, `index`,
+`app`, or `saved_search` target kind. System and browser-administrator actors
+are valid for every action. A browser user is valid only for saved-search
+actions and remains invalid for token, index, and app administration.
 
 ## Durable record and atomicity
 
@@ -44,24 +49,28 @@ transitions.
 Each supported mutation and its audit append use the same caller-owned
 GORM/SQLite transaction and the same already-captured mutation timestamp. The
 audit store rejects an autocommit handle or a transaction from another
-database. If audit persistence fails, the complete token, index, or app
-mutation rolls back; the server never reports a changed-but-unaudited object.
-Rejected and failed mutation attempts do not create successful-event rows.
+database. If audit persistence fails, the complete token, index, app, or
+saved-search mutation rolls back; the server never reports a
+changed-but-unaudited object. Rejected and failed mutation attempts do not
+create successful-event rows.
 
 The low-level audit append API can use the fixed system actor for trusted
-internal work. Production mutation adapters require an explicit successful
-actor in the context and never use that fallback. The administrator middleware
-installs the actor only after validating the browser principal and removes the
-reusable bearer credential before the handler runs. An ordinary browser user
-cannot emit a successful mutation event.
+internal work. Production administration adapters require an explicit
+successful actor in the context and never use that fallback. The administrator
+middleware installs the actor only after validating the browser principal and
+removes the reusable bearer credential before the handler runs. The current
+trusted single-user saved-search routes are intentionally unauthenticated, so
+their mandatory production audit adapter uses the fixed system actor when no
+actor is installed. If a future authenticated saved-search route installs a
+browser user or administrator, the audit store preserves that explicit actor.
 
 ## Bounds and failure behavior
 
 Sequences are dense, one-based, and local to a tenant. A tenant may retain at
 most 100,000 events. Events are never discarded to admit newer events. At the
-ceiling, audited token, index, and app mutations fail closed; the HTTP
-administration surfaces map the capacity error to `429 Too Many Requests`.
-Existing objects and read-only administration remain available. Operators must
+ceiling, audited token, index, app, and saved-search mutations fail closed; the
+HTTP mutation surfaces map the capacity error to `429 Too Many Requests`.
+Existing objects and read-only operations remain available. Operators must
 treat approaching audit capacity as a service-capacity alert until a future
 archival/retention contract exists.
 
@@ -69,8 +78,9 @@ Every hydrated row has a scalar byte-width preflight. Context-bounded store
 construction verifies every persisted tenant's bounded journal count, dense
 sequence, and every row's canonical tenant, timestamp, actor, action, target,
 and version contract in fixed-size batches. A pre-existing interior gap or
-malformed row therefore prevents the audit store, token store, and production
-server from starting.
+malformed row therefore prevents the audit store from opening, blocks token
+and audited saved-search construction, and prevents the production server from
+starting.
 
 After that startup invariant is established, append admission and ordinary
 first and continuation pages perform only bounded tenant-state, current-tail,
@@ -132,10 +142,15 @@ frontend team should:
 5. distinguish `400` invalid/expired traversal, `401/403` authentication or
    authorization, `429` mutation capacity, and `503` unavailable/corrupt audit
    storage; and
-6. remove the current claim that the backend has no audit route, while making
-   clear that v0.1 contains successful token, index, and app mutations only and
-   must not fabricate the broader activity families that remain unsupported.
+6. render `saved_search.create`, `saved_search.update`,
+   `saved_search.duplicate`, and `saved_search.delete` against the
+   `saved_search` target kind without attempting to display a definition or
+   source saved-search ID; and
+7. retain the current disclosure that the Activity client is not yet wired to
+   the existing backend audit route; once it is wired, make clear that v0.1
+   contains successful token, index, app, and saved-search mutations only and
+   must not fabricate broader unsupported activity families.
 
 CSV/export, live streaming, free-text search, time-range filtering, and audit
-families beyond successful token, index, and app mutations are not part of
-v0.1.
+families beyond successful token, index, app, and saved-search mutations are
+not part of v0.1.

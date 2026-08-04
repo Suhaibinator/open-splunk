@@ -36,9 +36,9 @@ func ActorFromContext(ctx context.Context) (Actor, bool) {
 	return actor.detached(), true
 }
 
-func requireExplicitSuccessfulActor(ctx context.Context) error {
+func requireExplicitAdministrativeMutationActor(ctx context.Context) error {
 	actor, explicit := ActorFromContext(ctx)
-	if !explicit || !validSuccessfulActor(actor) {
+	if !explicit || !validAdministrativeMutationActor(actor) {
 		return fmt.Errorf(
 			"%w: audit actor cannot perform successful mutations",
 			control.ErrInvalidArgument,

@@ -1091,6 +1091,29 @@ func postRuntimeAppProto(
 	return response
 }
 
+func postRuntimeProtoOK(
+	t *testing.T,
+	handler http.Handler,
+	path string,
+	request proto.Message,
+	response proto.Message,
+	bearerToken []byte,
+) []byte {
+	t.Helper()
+	recorded := postRuntimeAppProto(t, handler, path, request, bearerToken)
+	if recorded.Code != http.StatusOK {
+		t.Fatalf(
+			"POST %s status = %d, body = %s",
+			path,
+			recorded.Code,
+			recorded.Body.String(),
+		)
+	}
+	payload := bytes.Clone(recorded.Body.Bytes())
+	unmarshalRuntimeAppResponse(t, recorded, response)
+	return payload
+}
+
 func getRuntimeAppBootstrap(
 	t *testing.T,
 	handler http.Handler,

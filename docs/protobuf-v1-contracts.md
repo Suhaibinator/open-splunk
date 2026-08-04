@@ -106,11 +106,15 @@ projection.
 
 `POST /api/v1/audit/events/list` is administrator-only. Tenant and owner scope
 come from the authenticated browser principal and cannot be supplied on the
-wire. The first contract contains successful ingestion-token, index, and app
-administration mutations. Actor kind, actor role, action, and target kind are
-fixed enums; the projection contains no arbitrary payload or credential
-material. App deletion reports the final archived app version rather than a
-fictitious post-delete generation.
+wire. The first contract contains successful ingestion-token, index, app, and
+saved-search mutations. Actor kind, actor role, action, and target kind are
+fixed enums; the projection contains no arbitrary payload, saved-search
+definition, or credential material. Administrative token, index, and app
+mutations require a system or browser-administrator actor. Saved-search
+mutations also accept an authenticated browser-user actor; the current trusted
+single-user saved-search routes record the system actor when no browser
+principal is present. App deletion reports the final archived app version
+rather than a fictitious post-delete generation.
 
 Pages are ordered by descending tenant-local sequence and capped at 200 rows.
 The opaque HMAC-authenticated cursor binds tenant, exact normalized filters,

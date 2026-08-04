@@ -20,7 +20,7 @@ func (store *Store) AppendAppMutationInTransaction(
 	tenantID string,
 	event control.AppMutationAuditEvent,
 ) error {
-	if err := requireExplicitSuccessfulActor(ctx); err != nil {
+	if err := requireExplicitAdministrativeMutationActor(ctx); err != nil {
 		return err
 	}
 	action, ok := appMutationAction(event.Action)

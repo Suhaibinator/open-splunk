@@ -141,6 +141,10 @@ const (
 	AuditAction_AUDIT_ACTION_APP_ACTIVATE           AuditAction = 12
 	AuditAction_AUDIT_ACTION_APP_ARCHIVE            AuditAction = 13
 	AuditAction_AUDIT_ACTION_APP_DELETE             AuditAction = 14
+	AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE    AuditAction = 15
+	AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE    AuditAction = 16
+	AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE AuditAction = 17
+	AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE    AuditAction = 18
 )
 
 // Enum value maps for AuditAction.
@@ -161,6 +165,10 @@ var (
 		12: "AUDIT_ACTION_APP_ACTIVATE",
 		13: "AUDIT_ACTION_APP_ARCHIVE",
 		14: "AUDIT_ACTION_APP_DELETE",
+		15: "AUDIT_ACTION_SAVED_SEARCH_CREATE",
+		16: "AUDIT_ACTION_SAVED_SEARCH_UPDATE",
+		17: "AUDIT_ACTION_SAVED_SEARCH_DUPLICATE",
+		18: "AUDIT_ACTION_SAVED_SEARCH_DELETE",
 	}
 	AuditAction_value = map[string]int32{
 		"AUDIT_ACTION_UNSPECIFIED":            0,
@@ -178,6 +186,10 @@ var (
 		"AUDIT_ACTION_APP_ACTIVATE":           12,
 		"AUDIT_ACTION_APP_ARCHIVE":            13,
 		"AUDIT_ACTION_APP_DELETE":             14,
+		"AUDIT_ACTION_SAVED_SEARCH_CREATE":    15,
+		"AUDIT_ACTION_SAVED_SEARCH_UPDATE":    16,
+		"AUDIT_ACTION_SAVED_SEARCH_DUPLICATE": 17,
+		"AUDIT_ACTION_SAVED_SEARCH_DELETE":    18,
 	}
 )
 
@@ -215,6 +227,7 @@ const (
 	AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN AuditTargetKind = 1
 	AuditTargetKind_AUDIT_TARGET_KIND_INDEX           AuditTargetKind = 2
 	AuditTargetKind_AUDIT_TARGET_KIND_APP             AuditTargetKind = 3
+	AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH    AuditTargetKind = 4
 )
 
 // Enum value maps for AuditTargetKind.
@@ -224,12 +237,14 @@ var (
 		1: "AUDIT_TARGET_KIND_INGESTION_TOKEN",
 		2: "AUDIT_TARGET_KIND_INDEX",
 		3: "AUDIT_TARGET_KIND_APP",
+		4: "AUDIT_TARGET_KIND_SAVED_SEARCH",
 	}
 	AuditTargetKind_value = map[string]int32{
 		"AUDIT_TARGET_KIND_UNSPECIFIED":     0,
 		"AUDIT_TARGET_KIND_INGESTION_TOKEN": 1,
 		"AUDIT_TARGET_KIND_INDEX":           2,
 		"AUDIT_TARGET_KIND_APP":             3,
+		"AUDIT_TARGET_KIND_SAVED_SEARCH":    4,
 	}
 )
 
@@ -260,7 +275,7 @@ func (AuditTargetKind) EnumDescriptor() ([]byte, []int) {
 	return file_open_splunk_v1_audit_proto_rawDescGZIP(), []int{3}
 }
 
-// AuditEvent is an immutable, allowlisted administrative-event projection.
+// AuditEvent is an immutable, allowlisted security-event projection.
 // The contract deliberately has no arbitrary metadata, detail, or payload
 // field. Implementations must never place secrets, token digests, credential
 // material, authorization headers, request bodies, or generated SQL in any
@@ -401,7 +416,7 @@ const file_open_splunk_v1_audit_proto_rawDesc = "" +
 	"\x1cAUDIT_ACTOR_ROLE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17AUDIT_ACTOR_ROLE_SYSTEM\x10\x01\x12\x19\n" +
 	"\x15AUDIT_ACTOR_ROLE_USER\x10\x02\x12\"\n" +
-	"\x1eAUDIT_ACTOR_ROLE_ADMINISTRATOR\x10\x03*\x86\x04\n" +
+	"\x1eAUDIT_ACTOR_ROLE_ADMINISTRATOR\x10\x03*\xa1\x05\n" +
 	"\vAuditAction\x12\x1c\n" +
 	"\x18AUDIT_ACTION_UNSPECIFIED\x10\x00\x12'\n" +
 	"#AUDIT_ACTION_INGESTION_TOKEN_CREATE\x10\x01\x12'\n" +
@@ -418,12 +433,17 @@ const file_open_splunk_v1_audit_proto_rawDesc = "" +
 	"\x17AUDIT_ACTION_APP_UPDATE\x10\v\x12\x1d\n" +
 	"\x19AUDIT_ACTION_APP_ACTIVATE\x10\f\x12\x1c\n" +
 	"\x18AUDIT_ACTION_APP_ARCHIVE\x10\r\x12\x1b\n" +
-	"\x17AUDIT_ACTION_APP_DELETE\x10\x0e*\x93\x01\n" +
+	"\x17AUDIT_ACTION_APP_DELETE\x10\x0e\x12$\n" +
+	" AUDIT_ACTION_SAVED_SEARCH_CREATE\x10\x0f\x12$\n" +
+	" AUDIT_ACTION_SAVED_SEARCH_UPDATE\x10\x10\x12'\n" +
+	"#AUDIT_ACTION_SAVED_SEARCH_DUPLICATE\x10\x11\x12$\n" +
+	" AUDIT_ACTION_SAVED_SEARCH_DELETE\x10\x12*\xb7\x01\n" +
 	"\x0fAuditTargetKind\x12!\n" +
 	"\x1dAUDIT_TARGET_KIND_UNSPECIFIED\x10\x00\x12%\n" +
 	"!AUDIT_TARGET_KIND_INGESTION_TOKEN\x10\x01\x12\x1b\n" +
 	"\x17AUDIT_TARGET_KIND_INDEX\x10\x02\x12\x19\n" +
-	"\x15AUDIT_TARGET_KIND_APP\x10\x03BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"\x15AUDIT_TARGET_KIND_APP\x10\x03\x12\"\n" +
+	"\x1eAUDIT_TARGET_KIND_SAVED_SEARCH\x10\x04BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_audit_proto_rawDescOnce sync.Once

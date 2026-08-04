@@ -1366,6 +1366,7 @@ POST /api/v1/saved-searches/create
 POST /api/v1/saved-searches/get
 POST /api/v1/saved-searches/list
 POST /api/v1/saved-searches/update
+POST /api/v1/saved-searches/duplicate
 POST /api/v1/saved-searches/delete
 ```
 

@@ -465,6 +465,11 @@ func mapSavedSearchCallError(ctx context.Context, operationErr error) error {
 		return router.NewHTTPError(http.StatusRequestTimeout, "saved search request was canceled")
 	}
 	switch {
+	case errors.Is(operationErr, control.ErrCapacityExceeded):
+		return router.NewHTTPError(
+			http.StatusTooManyRequests,
+			"saved search audit capacity is exhausted",
+		)
 	case errors.Is(operationErr, control.ErrInvalidArgument):
 		return badRequestError("saved search request is invalid")
 	case errors.Is(operationErr, control.ErrNotFound):

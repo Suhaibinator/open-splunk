@@ -20,7 +20,7 @@ func (store *Store) AppendIndexMutationInTransaction(
 	tenantID string,
 	event control.IndexMutationAuditEvent,
 ) error {
-	if err := requireExplicitSuccessfulActor(ctx); err != nil {
+	if err := requireExplicitAdministrativeMutationActor(ctx); err != nil {
 		return err
 	}
 	action, ok := indexMutationAction(event.Action)

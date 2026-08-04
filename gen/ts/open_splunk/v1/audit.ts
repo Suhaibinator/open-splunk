@@ -108,6 +108,10 @@ export enum AuditAction {
   AUDIT_ACTION_APP_ACTIVATE = 12,
   AUDIT_ACTION_APP_ARCHIVE = 13,
   AUDIT_ACTION_APP_DELETE = 14,
+  AUDIT_ACTION_SAVED_SEARCH_CREATE = 15,
+  AUDIT_ACTION_SAVED_SEARCH_UPDATE = 16,
+  AUDIT_ACTION_SAVED_SEARCH_DUPLICATE = 17,
+  AUDIT_ACTION_SAVED_SEARCH_DELETE = 18,
   UNRECOGNIZED = -1,
 }
 
@@ -158,6 +162,18 @@ export function auditActionFromJSON(object: any): AuditAction {
     case 14:
     case "AUDIT_ACTION_APP_DELETE":
       return AuditAction.AUDIT_ACTION_APP_DELETE;
+    case 15:
+    case "AUDIT_ACTION_SAVED_SEARCH_CREATE":
+      return AuditAction.AUDIT_ACTION_SAVED_SEARCH_CREATE;
+    case 16:
+    case "AUDIT_ACTION_SAVED_SEARCH_UPDATE":
+      return AuditAction.AUDIT_ACTION_SAVED_SEARCH_UPDATE;
+    case 17:
+    case "AUDIT_ACTION_SAVED_SEARCH_DUPLICATE":
+      return AuditAction.AUDIT_ACTION_SAVED_SEARCH_DUPLICATE;
+    case 18:
+    case "AUDIT_ACTION_SAVED_SEARCH_DELETE":
+      return AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -197,6 +213,14 @@ export function auditActionToJSON(object: AuditAction): string {
       return "AUDIT_ACTION_APP_ARCHIVE";
     case AuditAction.AUDIT_ACTION_APP_DELETE:
       return "AUDIT_ACTION_APP_DELETE";
+    case AuditAction.AUDIT_ACTION_SAVED_SEARCH_CREATE:
+      return "AUDIT_ACTION_SAVED_SEARCH_CREATE";
+    case AuditAction.AUDIT_ACTION_SAVED_SEARCH_UPDATE:
+      return "AUDIT_ACTION_SAVED_SEARCH_UPDATE";
+    case AuditAction.AUDIT_ACTION_SAVED_SEARCH_DUPLICATE:
+      return "AUDIT_ACTION_SAVED_SEARCH_DUPLICATE";
+    case AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE:
+      return "AUDIT_ACTION_SAVED_SEARCH_DELETE";
     case AuditAction.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -208,6 +232,7 @@ export enum AuditTargetKind {
   AUDIT_TARGET_KIND_INGESTION_TOKEN = 1,
   AUDIT_TARGET_KIND_INDEX = 2,
   AUDIT_TARGET_KIND_APP = 3,
+  AUDIT_TARGET_KIND_SAVED_SEARCH = 4,
   UNRECOGNIZED = -1,
 }
 
@@ -225,6 +250,9 @@ export function auditTargetKindFromJSON(object: any): AuditTargetKind {
     case 3:
     case "AUDIT_TARGET_KIND_APP":
       return AuditTargetKind.AUDIT_TARGET_KIND_APP;
+    case 4:
+    case "AUDIT_TARGET_KIND_SAVED_SEARCH":
+      return AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -242,6 +270,8 @@ export function auditTargetKindToJSON(object: AuditTargetKind): string {
       return "AUDIT_TARGET_KIND_INDEX";
     case AuditTargetKind.AUDIT_TARGET_KIND_APP:
       return "AUDIT_TARGET_KIND_APP";
+    case AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH:
+      return "AUDIT_TARGET_KIND_SAVED_SEARCH";
     case AuditTargetKind.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -249,7 +279,7 @@ export function auditTargetKindToJSON(object: AuditTargetKind): string {
 }
 
 /**
- * AuditEvent is an immutable, allowlisted administrative-event projection.
+ * AuditEvent is an immutable, allowlisted security-event projection.
  * The contract deliberately has no arbitrary metadata, detail, or payload
  * field. Implementations must never place secrets, token digests, credential
  * material, authorization headers, request bodies, or generated SQL in any

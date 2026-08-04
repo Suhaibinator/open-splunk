@@ -382,6 +382,14 @@ func auditActionFromProto(value opensplunkv1.AuditAction) (audit.Action, bool) {
 		return audit.ActionAppArchive, true
 	case opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE:
 		return audit.ActionAppDelete, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE:
+		return audit.ActionSavedSearchCreate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE:
+		return audit.ActionSavedSearchUpdate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE:
+		return audit.ActionSavedSearchDuplicate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE:
+		return audit.ActionSavedSearchDelete, true
 	default:
 		return "", false
 	}
@@ -417,6 +425,14 @@ func auditActionToProto(value audit.Action) (opensplunkv1.AuditAction, bool) {
 		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE, true
 	case audit.ActionAppDelete:
 		return opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE, true
+	case audit.ActionSavedSearchCreate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE, true
+	case audit.ActionSavedSearchUpdate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE, true
+	case audit.ActionSavedSearchDuplicate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, true
+	case audit.ActionSavedSearchDelete:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE, true
 	default:
 		return opensplunkv1.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
 	}
@@ -432,6 +448,8 @@ func auditTargetKindFromProto(
 		return audit.TargetKindIndex, true
 	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP:
 		return audit.TargetKindApp, true
+	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH:
+		return audit.TargetKindSavedSearch, true
 	default:
 		return "", false
 	}
@@ -447,6 +465,8 @@ func auditTargetKindToProto(
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX, true
 	case audit.TargetKindApp:
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP, true
+	case audit.TargetKindSavedSearch:
+		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH, true
 	default:
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
 	}

@@ -97,7 +97,20 @@ func New(db *control.DB, options Options) (*Store, error) {
 }
 
 // Create persists a normalized definition at version one.
-func (store *Store) Create(ctx context.Context, scope AccessScope, definition *opensplunkv1.SavedSearchDefinition) (*opensplunkv1.SavedSearch, error) {
+func (store *Store) Create(
+	ctx context.Context,
+	scope AccessScope,
+	definition *opensplunkv1.SavedSearchDefinition,
+) (*opensplunkv1.SavedSearch, error) {
+	return store.create(ctx, scope, definition, nil)
+}
+
+func (store *Store) create(
+	ctx context.Context,
+	scope AccessScope,
+	definition *opensplunkv1.SavedSearchDefinition,
+	publisher savedSearchMutationAuditPublisher,
+) (*opensplunkv1.SavedSearch, error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -123,9 +136,43 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, definition *o
 			return nil, errors.New("generate saved-search ID: generator returned an invalid ID")
 		}
 		record := newSavedSearchRecord(id, ownerID, indexed, encoded, now)
-		create := store.orm.WithContext(ctx).Create(&record)
-		if create.Error == nil {
-			return buildSavedSearch(id, 1, normalized, now, now), nil
+		var createErr error
+		if publisher == nil {
+			createErr = store.orm.WithContext(ctx).Create(&record).Error
+			if createErr == nil {
+				return buildSavedSearch(id, 1, normalized, now, now), nil
+			}
+		} else {
+			tx := store.orm.WithContext(ctx).Begin()
+			if tx.Error != nil {
+				return nil, mapContextError(ctx, "begin saved-search create", tx.Error)
+			}
+			createErr = tx.Create(&record).Error
+			if createErr == nil {
+				if err := publishSavedSearchMutationAudit(
+					ctx,
+					tx,
+					publisher,
+					SavedSearchMutationAuditEvent{
+						OccurredAt:         now,
+						Action:             SavedSearchMutationAuditActionCreate,
+						SavedSearchID:      id,
+						SavedSearchVersion: 1,
+					},
+				); err != nil {
+					return nil, rollbackSavedSearchTx(tx, err)
+				}
+				if err := tx.Commit().Error; err != nil {
+					return nil, rollbackSavedSearchTx(
+						tx,
+						mapContextError(ctx, "commit saved-search create", err),
+					)
+				}
+				return buildSavedSearch(id, 1, normalized, now, now), nil
+			}
+			if err := rollbackSavedSearchTx(tx, nil); err != nil {
+				return nil, err
+			}
 		}
 		if contextErr := ctx.Err(); contextErr != nil {
 			return nil, fmt.Errorf("create saved search: %w", contextErr)
@@ -146,7 +193,7 @@ func (store *Store) Create(ctx context.Context, scope AccessScope, definition *o
 		case idErr == nil:
 			continue
 		case errors.Is(idErr, gorm.ErrRecordNotFound):
-			return nil, fmt.Errorf("create saved search: %w", create.Error)
+			return nil, fmt.Errorf("create saved search: %w", createErr)
 		default:
 			return nil, fmt.Errorf("check saved-search ID collision: %w", idErr)
 		}
@@ -190,7 +237,34 @@ func (store *Store) Get(ctx context.Context, scope AccessScope, id string) (*ope
 
 // Update applies a top-level SavedSearchDefinition field mask under
 // optimistic locking. A nil or empty mask replaces the full definition.
-func (store *Store) Update(ctx context.Context, scope AccessScope, id string, expectedVersion uint64, definition *opensplunkv1.SavedSearchDefinition, updateMask *fieldmaskpb.FieldMask) (result *opensplunkv1.SavedSearch, returnedErr error) {
+func (store *Store) Update(
+	ctx context.Context,
+	scope AccessScope,
+	id string,
+	expectedVersion uint64,
+	definition *opensplunkv1.SavedSearchDefinition,
+	updateMask *fieldmaskpb.FieldMask,
+) (*opensplunkv1.SavedSearch, error) {
+	return store.update(
+		ctx,
+		scope,
+		id,
+		expectedVersion,
+		definition,
+		updateMask,
+		nil,
+	)
+}
+
+func (store *Store) update(
+	ctx context.Context,
+	scope AccessScope,
+	id string,
+	expectedVersion uint64,
+	definition *opensplunkv1.SavedSearchDefinition,
+	updateMask *fieldmaskpb.FieldMask,
+	publisher savedSearchMutationAuditPublisher,
+) (result *opensplunkv1.SavedSearch, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -282,15 +356,59 @@ func (store *Store) Update(ctx context.Context, scope AccessScope, id string, ex
 	if update.RowsAffected != 1 {
 		return nil, control.ErrVersionConflict
 	}
-	result = buildSavedSearch(id, expectedVersion+1, normalized, current.CreatedAt.AsTime(), now)
+	newVersion := expectedVersion + 1
+	if err := publishSavedSearchMutationAudit(
+		ctx,
+		tx,
+		publisher,
+		SavedSearchMutationAuditEvent{
+			OccurredAt:         now,
+			Action:             SavedSearchMutationAuditActionUpdate,
+			SavedSearchID:      id,
+			SavedSearchVersion: newVersion,
+		},
+	); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit().Error; err != nil {
 		return nil, mapContextError(ctx, "commit saved-search update", err)
 	}
+	result = buildSavedSearch(
+		id,
+		newVersion,
+		normalized,
+		current.CreatedAt.AsTime(),
+		now,
+	)
 	return result, nil
 }
 
 // Duplicate atomically clones a source definition into a new stable object.
-func (store *Store) Duplicate(ctx context.Context, scope AccessScope, sourceID, newName string, destinationAppID *string) (result *opensplunkv1.SavedSearch, returnedErr error) {
+func (store *Store) Duplicate(
+	ctx context.Context,
+	scope AccessScope,
+	sourceID string,
+	newName string,
+	destinationAppID *string,
+) (*opensplunkv1.SavedSearch, error) {
+	return store.duplicate(
+		ctx,
+		scope,
+		sourceID,
+		newName,
+		destinationAppID,
+		nil,
+	)
+}
+
+func (store *Store) duplicate(
+	ctx context.Context,
+	scope AccessScope,
+	sourceID string,
+	newName string,
+	destinationAppID *string,
+	publisher savedSearchMutationAuditPublisher,
+) (result *opensplunkv1.SavedSearch, returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -357,10 +475,23 @@ func (store *Store) Duplicate(ctx context.Context, scope AccessScope, sourceID, 
 		record := newSavedSearchRecord(id, ownerID, indexed, encoded, now)
 		create := tx.Create(&record)
 		if create.Error == nil {
-			result = buildSavedSearch(id, 1, normalized, now, now)
+			if err := publishSavedSearchMutationAudit(
+				ctx,
+				tx,
+				publisher,
+				SavedSearchMutationAuditEvent{
+					OccurredAt:         now,
+					Action:             SavedSearchMutationAuditActionDuplicate,
+					SavedSearchID:      id,
+					SavedSearchVersion: 1,
+				},
+			); err != nil {
+				return nil, err
+			}
 			if err := tx.Commit().Error; err != nil {
 				return nil, mapContextError(ctx, "commit saved-search duplicate", err)
 			}
+			result = buildSavedSearch(id, 1, normalized, now, now)
 			return result, nil
 		}
 		if contextErr := ctx.Err(); contextErr != nil {
@@ -390,7 +521,22 @@ func (store *Store) Duplicate(ctx context.Context, scope AccessScope, sourceID, 
 }
 
 // Delete removes an owned saved search under optimistic locking.
-func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, expectedVersion uint64) (returnedErr error) {
+func (store *Store) Delete(
+	ctx context.Context,
+	scope AccessScope,
+	id string,
+	expectedVersion uint64,
+) error {
+	return store.delete(ctx, scope, id, expectedVersion, nil)
+}
+
+func (store *Store) delete(
+	ctx context.Context,
+	scope AccessScope,
+	id string,
+	expectedVersion uint64,
+	publisher savedSearchMutationAuditPublisher,
+) (returnedErr error) {
 	if err := validateContext(ctx); err != nil {
 		return err
 	}
@@ -425,6 +571,13 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, ex
 	if current.Version != expectedVersionDB {
 		return control.ErrVersionConflict
 	}
+	var occurredAt time.Time
+	if publisher != nil {
+		occurredAt, err = normalizeClockTime(store.clock())
+		if err != nil {
+			return err
+		}
+	}
 	deleted := tx.
 		Where(
 			"saved_search_id = ? AND owner_id = ? AND version = ?",
@@ -438,6 +591,21 @@ func (store *Store) Delete(ctx context.Context, scope AccessScope, id string, ex
 	}
 	if deleted.RowsAffected != 1 {
 		return control.ErrVersionConflict
+	}
+	if publisher != nil {
+		if err := publishSavedSearchMutationAudit(
+			ctx,
+			tx,
+			publisher,
+			SavedSearchMutationAuditEvent{
+				OccurredAt:         occurredAt,
+				Action:             SavedSearchMutationAuditActionDelete,
+				SavedSearchID:      id,
+				SavedSearchVersion: expectedVersion,
+			},
+		); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return mapContextError(ctx, "commit saved-search delete", err)
@@ -622,9 +790,20 @@ func finishSavedSearchTx(tx *gorm.DB, returnedErr *error) {
 	if tx == nil || returnedErr == nil || *returnedErr == nil {
 		return
 	}
-	if err := tx.Rollback().Error; err != nil && !errors.Is(err, sql.ErrTxDone) {
-		*returnedErr = errors.Join(*returnedErr, fmt.Errorf("roll back saved-search transaction: %w", err))
+	*returnedErr = rollbackSavedSearchTx(tx, *returnedErr)
+}
+
+func rollbackSavedSearchTx(tx *gorm.DB, cause error) error {
+	if tx == nil {
+		return cause
 	}
+	if err := tx.Rollback().Error; err != nil && !errors.Is(err, sql.ErrTxDone) {
+		return errors.Join(
+			cause,
+			fmt.Errorf("roll back saved-search transaction: %w", err),
+		)
+	}
+	return cause
 }
 
 func newSavedSearchID() (string, error) {

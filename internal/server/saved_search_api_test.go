@@ -558,6 +558,7 @@ func TestSavedSearchErrorMapping(t *testing.T) {
 		{name: "not found", err: control.ErrNotFound, want: http.StatusNotFound},
 		{name: "name conflict", err: control.ErrAlreadyExists, want: http.StatusConflict},
 		{name: "version conflict", err: control.ErrVersionConflict, want: http.StatusConflict},
+		{name: "audit capacity", err: control.ErrCapacityExceeded, want: http.StatusTooManyRequests},
 		{name: "unavailable", err: errors.New("SELECT secret FROM saved_searches"), want: http.StatusServiceUnavailable},
 		{name: "canceled", err: context.Canceled, want: http.StatusRequestTimeout},
 	}

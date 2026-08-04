@@ -895,7 +895,11 @@ func parseFlags() options {
 	return result
 }
 
-func openSecurityStores(ctx context.Context, db *control.DB, masterKeyPath string) (*savedobjects.Store, *auth.Store, error) {
+func openSecurityStores(
+	ctx context.Context,
+	db *control.DB,
+	masterKeyPath string,
+) (*savedobjects.AuditedStore, *auth.Store, error) {
 	stores, err := openSecurityStoreSet(
 		ctx,
 		db,
@@ -910,7 +914,7 @@ func openSecurityStores(ctx context.Context, db *control.DB, masterKeyPath strin
 }
 
 type securityStoreSet struct {
-	savedSearches   *savedobjects.Store
+	savedSearches   *savedobjects.AuditedStore
 	ingestionTokens *auth.Store
 	auditEvents     *audit.Store
 }
@@ -952,7 +956,10 @@ func openSecurityStoreSet(
 	}
 	defer clear(auditCursorKey)
 
-	savedSearches, err := savedobjects.New(db, savedobjects.Options{CursorKey: cursorKey})
+	rawSavedSearches, err := savedobjects.New(
+		db,
+		savedobjects.Options{CursorKey: cursorKey},
+	)
 	if err != nil {
 		return securityStoreSet{}, fmt.Errorf("create saved-search store: %w", err)
 	}
@@ -963,6 +970,17 @@ func openSecurityStoreSet(
 	)
 	if err != nil {
 		return securityStoreSet{}, fmt.Errorf("create audit-event store: %w", err)
+	}
+	savedSearches, err := savedobjects.NewAuditedStore(
+		rawSavedSearches,
+		tenantID,
+		auditEvents,
+	)
+	if err != nil {
+		return securityStoreSet{}, fmt.Errorf(
+			"create audited saved-search store: %w",
+			err,
+		)
 	}
 	tokens, err := auth.NewStoreWithOptions(db, digestKey, auth.StoreOptions{
 		AuditAppender:             auditEvents,

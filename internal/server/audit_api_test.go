@@ -119,6 +119,10 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ACTIVATE,
 		opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE,
 		opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE,
 	}
 	service := &fakeAuditEvents{}
 	handler := newAuditTestHandler(t, service)
@@ -196,6 +200,69 @@ func TestAppAuditProtoTaxonomyRoundTrips(t *testing.T) {
 	toProto, ok := auditTargetKindToProto(audit.TargetKindApp)
 	if !ok || toProto != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP {
 		t.Fatalf("auditTargetKindToProto(app) = (%v, %t)", toProto, ok)
+	}
+}
+
+func TestSavedSearchAuditProtoTaxonomyRoundTrips(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		action  audit.Action
+		proto   opensplunkv1.AuditAction
+		version uint64
+	}{
+		{audit.ActionSavedSearchCreate, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE, 1},
+		{audit.ActionSavedSearchUpdate, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE, 2},
+		{audit.ActionSavedSearchDuplicate, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, 1},
+		{audit.ActionSavedSearchDelete, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE, 1},
+	} {
+		testCase := testCase
+		t.Run(string(testCase.action), func(t *testing.T) {
+			t.Parallel()
+			fromProto, ok := auditActionFromProto(testCase.proto)
+			if !ok || fromProto != testCase.action {
+				t.Fatalf("auditActionFromProto(%v) = (%q, %t)", testCase.proto, fromProto, ok)
+			}
+			toProto, ok := auditActionToProto(testCase.action)
+			if !ok || toProto != testCase.proto {
+				t.Fatalf("auditActionToProto(%q) = (%v, %t)", testCase.action, toProto, ok)
+			}
+			message, err := auditEventToProto(audit.Event{
+				Sequence:   1,
+				TenantID:   "tenant",
+				OccurredAt: time.Date(2026, time.August, 3, 20, 21, 22, 123456000, time.UTC),
+				Actor: audit.Actor{
+					Kind: audit.ActorKindBrowser,
+					ID:   "single-user",
+					Role: audit.ActorRoleUser,
+				},
+				Action:        testCase.action,
+				TargetKind:    audit.TargetKindSavedSearch,
+				TargetID:      "saved-search-observability",
+				TargetVersion: testCase.version,
+			}, "tenant")
+			if err != nil {
+				t.Fatalf("auditEventToProto(%q): %v", testCase.action, err)
+			}
+			if message.GetAction() != testCase.proto ||
+				message.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH ||
+				message.GetActorRole() != opensplunkv1.AuditActorRole_AUDIT_ACTOR_ROLE_USER ||
+				message.GetTargetId() != "saved-search-observability" ||
+				message.GetTargetVersion() != testCase.version {
+				t.Fatalf("saved-search audit proto = %+v", message)
+			}
+		})
+	}
+
+	fromProto, ok := auditTargetKindFromProto(
+		opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH,
+	)
+	if !ok || fromProto != audit.TargetKindSavedSearch {
+		t.Fatalf("auditTargetKindFromProto(saved search) = (%q, %t)", fromProto, ok)
+	}
+	toProto, ok := auditTargetKindToProto(audit.TargetKindSavedSearch)
+	if !ok || toProto != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH {
+		t.Fatalf("auditTargetKindToProto(saved search) = (%v, %t)", toProto, ok)
 	}
 }
 

@@ -196,6 +196,10 @@ func allKnownAuditActions() []Action {
 		ActionAppActivate,
 		ActionAppArchive,
 		ActionAppDelete,
+		ActionSavedSearchCreate,
+		ActionSavedSearchUpdate,
+		ActionSavedSearchDuplicate,
+		ActionSavedSearchDelete,
 	}
 }
 

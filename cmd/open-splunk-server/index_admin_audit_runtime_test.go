@@ -14,7 +14,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/auth"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/server"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"gorm.io/gorm"
 )
@@ -200,7 +199,7 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 	firstPageSize := uint32(5)
 	indexTargetKind := opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX
 	var firstPage opensplunkv1.ListAuditEventsResponse
-	firstPagePayload := postRuntimeIndexAuditProtoOK(
+	firstPagePayload := postRuntimeProtoOK(
 		t,
 		firstHandler,
 		"/api/v1/audit/events/list",
@@ -288,7 +287,7 @@ func TestRuntimeIndexAdministrationPublishesAuthenticatedAudit(t *testing.T) {
 	secondPageSize := firstPageSize
 	continuation := firstPageMetadata.GetNextPageToken()
 	var secondPage opensplunkv1.ListAuditEventsResponse
-	secondPagePayload := postRuntimeIndexAuditProtoOK(
+	secondPagePayload := postRuntimeProtoOK(
 		t,
 		secondHandler,
 		"/api/v1/audit/events/list",
@@ -647,7 +646,7 @@ func createRuntimeIndexForAudit(
 ) *opensplunkv1.Index {
 	t.Helper()
 	var response opensplunkv1.CreateIndexResponse
-	postRuntimeIndexAuditProtoOK(
+	postRuntimeProtoOK(
 		t,
 		handler,
 		"/api/v1/indexes/create",
@@ -677,7 +676,7 @@ func updateRuntimeIndexDescriptionForAudit(
 ) *opensplunkv1.Index {
 	t.Helper()
 	var response opensplunkv1.UpdateIndexResponse
-	postRuntimeIndexAuditProtoOK(
+	postRuntimeProtoOK(
 		t,
 		handler,
 		"/api/v1/indexes/update",
@@ -707,7 +706,7 @@ func setRuntimeIndexStateForAudit(
 ) *opensplunkv1.Index {
 	t.Helper()
 	var response opensplunkv1.SetIndexStateResponse
-	postRuntimeIndexAuditProtoOK(
+	postRuntimeProtoOK(
 		t,
 		handler,
 		"/api/v1/indexes/state/set",
@@ -734,7 +733,7 @@ func deleteRuntimeIndexForAudit(
 ) *opensplunkv1.DeleteIndexResponse {
 	t.Helper()
 	var response opensplunkv1.DeleteIndexResponse
-	postRuntimeIndexAuditProtoOK(
+	postRuntimeProtoOK(
 		t,
 		handler,
 		"/api/v1/indexes/delete",
@@ -763,29 +762,6 @@ func runtimeIndexAuditSelector(indexID string) *opensplunkv1.IndexSelector {
 	return &opensplunkv1.IndexSelector{
 		Selector: &opensplunkv1.IndexSelector_IndexId{IndexId: indexID},
 	}
-}
-
-func postRuntimeIndexAuditProtoOK(
-	t *testing.T,
-	handler http.Handler,
-	path string,
-	request proto.Message,
-	response proto.Message,
-	bearerToken []byte,
-) []byte {
-	t.Helper()
-	recorded := postRuntimeAppProto(t, handler, path, request, bearerToken)
-	if recorded.Code != http.StatusOK {
-		t.Fatalf(
-			"POST %s status = %d, body = %s",
-			path,
-			recorded.Code,
-			recorded.Body.String(),
-		)
-	}
-	payload := bytes.Clone(recorded.Body.Bytes())
-	unmarshalRuntimeAppResponse(t, recorded, response)
-	return payload
 }
 
 type runtimeIndexAuditWaker struct{}

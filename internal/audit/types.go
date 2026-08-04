@@ -21,7 +21,7 @@ const (
 	MaximumListPageSize = 200
 	// MaximumActionFilters is the complete fixed action taxonomy. One list
 	// request cannot contain more distinct action filters than this bound.
-	MaximumActionFilters = 14
+	MaximumActionFilters = 18
 
 	defaultListPageSize     = 50
 	maximumTenantIDBytes    = 255
@@ -112,6 +112,10 @@ const (
 	ActionAppActivate          Action = "app.activate"
 	ActionAppArchive           Action = "app.archive"
 	ActionAppDelete            Action = "app.delete"
+	ActionSavedSearchCreate    Action = "saved_search.create"
+	ActionSavedSearchUpdate    Action = "saved_search.update"
+	ActionSavedSearchDuplicate Action = "saved_search.duplicate"
+	ActionSavedSearchDelete    Action = "saved_search.delete"
 )
 
 // Valid reports whether action belongs to the first immutable audit taxonomy.
@@ -130,7 +134,11 @@ func (action Action) Valid() bool {
 		ActionAppUpdate,
 		ActionAppActivate,
 		ActionAppArchive,
-		ActionAppDelete:
+		ActionAppDelete,
+		ActionSavedSearchCreate,
+		ActionSavedSearchUpdate,
+		ActionSavedSearchDuplicate,
+		ActionSavedSearchDelete:
 		return true
 	default:
 		return false
@@ -144,12 +152,14 @@ const (
 	TargetKindIngestionToken TargetKind = "ingestion_token"
 	TargetKindIndex          TargetKind = "index"
 	TargetKindApp            TargetKind = "app"
+	TargetKindSavedSearch    TargetKind = "saved_search"
 )
 
 // Valid reports whether kind belongs to the first audit target taxonomy.
 func (kind TargetKind) Valid() bool {
 	switch kind {
-	case TargetKindIngestionToken, TargetKindIndex, TargetKindApp:
+	case TargetKindIngestionToken, TargetKindIndex, TargetKindApp,
+		TargetKindSavedSearch:
 		return true
 	default:
 		return false
@@ -179,7 +189,8 @@ func (event SuccessfulEvent) valid() bool {
 
 func validActionVersion(action Action, version uint64) bool {
 	switch action {
-	case ActionIngestionTokenCreate, ActionIndexCreate, ActionAppCreate:
+	case ActionIngestionTokenCreate, ActionIndexCreate, ActionAppCreate,
+		ActionSavedSearchCreate, ActionSavedSearchDuplicate:
 		return version == 1
 	case ActionIngestionTokenUpdate,
 		ActionIngestionTokenRevoke,
@@ -190,8 +201,11 @@ func validActionVersion(action Action, version uint64) bool {
 		ActionAppUpdate,
 		ActionAppActivate,
 		ActionAppArchive,
-		ActionAppDelete:
+		ActionAppDelete,
+		ActionSavedSearchUpdate:
 		return version >= 2
+	case ActionSavedSearchDelete:
+		return version >= 1
 	case ActionIndexDeleteData:
 		return version >= 3
 	default:
@@ -218,14 +232,30 @@ func validActionTarget(action Action, targetKind TargetKind) bool {
 		ActionAppArchive,
 		ActionAppDelete:
 		return targetKind == TargetKindApp
+	case ActionSavedSearchCreate,
+		ActionSavedSearchUpdate,
+		ActionSavedSearchDuplicate,
+		ActionSavedSearchDelete:
+		return targetKind == TargetKindSavedSearch
 	default:
 		return false
 	}
 }
 
-func validSuccessfulActor(actor Actor) bool {
+func validAdministrativeMutationActor(actor Actor) bool {
 	return actor.Valid() &&
 		(actor.Kind != ActorKindBrowser || actor.Role == ActorRoleAdministrator)
+}
+
+func validSuccessfulActorForAction(actor Actor, action Action) bool {
+	if !actor.Valid() {
+		return false
+	}
+	if actor.Kind != ActorKindBrowser || actor.Role == ActorRoleAdministrator {
+		return true
+	}
+	return actor.Role == ActorRoleUser &&
+		validActionTarget(action, TargetKindSavedSearch)
 }
 
 // Event is the complete immutable public audit projection. Sequence is dense,
@@ -252,7 +282,7 @@ func (event Event) ValidateForTenant(tenantID string) error {
 		event.OccurredAt.Location() != time.UTC ||
 		event.OccurredAt.Nanosecond()%1_000 != 0 ||
 		event.OccurredAt != event.OccurredAt.Round(0) ||
-		!validSuccessfulActor(event.Actor) ||
+		!validSuccessfulActorForAction(event.Actor, event.Action) ||
 		!(SuccessfulEvent{
 			OccurredAt:    event.OccurredAt,
 			Action:        event.Action,

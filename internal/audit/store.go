@@ -224,7 +224,7 @@ func (store *Store) AppendInTransaction(
 		)
 	}
 	actor := actorForAppend(ctx)
-	if !validSuccessfulActor(actor) {
+	if !validSuccessfulActorForAction(actor, definition.Action) {
 		return Event{}, fmt.Errorf(
 			"%w: audit actor cannot perform successful mutations",
 			control.ErrInvalidArgument,
@@ -391,7 +391,8 @@ func eventFromRecord(record auditEventRecord) (Event, error) {
 		TargetID:      record.TargetID,
 		TargetVersion: uint64(record.TargetVersion),
 	}
-	if !validSuccessfulActor(actor) || !definition.valid() {
+	if !validSuccessfulActorForAction(actor, definition.Action) ||
+		!definition.valid() {
 		return Event{}, fmt.Errorf("%w: audit event taxonomy is invalid", ErrCorrupt)
 	}
 	return Event{

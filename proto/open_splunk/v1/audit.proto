@@ -35,6 +35,10 @@ enum AuditAction {
   AUDIT_ACTION_APP_ACTIVATE = 12;
   AUDIT_ACTION_APP_ARCHIVE = 13;
   AUDIT_ACTION_APP_DELETE = 14;
+  AUDIT_ACTION_SAVED_SEARCH_CREATE = 15;
+  AUDIT_ACTION_SAVED_SEARCH_UPDATE = 16;
+  AUDIT_ACTION_SAVED_SEARCH_DUPLICATE = 17;
+  AUDIT_ACTION_SAVED_SEARCH_DELETE = 18;
 }
 
 enum AuditTargetKind {
@@ -42,9 +46,10 @@ enum AuditTargetKind {
   AUDIT_TARGET_KIND_INGESTION_TOKEN = 1;
   AUDIT_TARGET_KIND_INDEX = 2;
   AUDIT_TARGET_KIND_APP = 3;
+  AUDIT_TARGET_KIND_SAVED_SEARCH = 4;
 }
 
-// AuditEvent is an immutable, allowlisted administrative-event projection.
+// AuditEvent is an immutable, allowlisted security-event projection.
 // The contract deliberately has no arbitrary metadata, detail, or payload
 // field. Implementations must never place secrets, token digests, credential
 // material, authorization headers, request bodies, or generated SQL in any
