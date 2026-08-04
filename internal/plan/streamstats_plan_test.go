@@ -13,6 +13,8 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 	tests := []struct {
 		name           string
 		source         string
+		function       AggregateFunction
+		input          string
 		output         string
 		includeCurrent bool
 		windowRows     uint64
@@ -22,6 +24,7 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 		{
 			name:           "defaults",
 			source:         `index=gradethis | streamstats count`,
+			function:       AggregateFunctionCountRows,
 			output:         "count",
 			includeCurrent: true,
 			global:         true,
@@ -29,6 +32,7 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 		{
 			name:           "prior per group window",
 			source:         `index=gradethis | streamstats current=f window=7 global=false count AS prior BY host, status`,
+			function:       AggregateFunctionCountRows,
 			output:         "prior",
 			includeCurrent: false,
 			windowRows:     7,
@@ -38,10 +42,30 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 		{
 			name:           "explicit defaults after BY",
 			source:         `index=gradethis | streamstats count AS seen BY service current=true window=0 global=t`,
+			function:       AggregateFunctionCountRows,
 			output:         "seen",
 			includeCurrent: true,
 			global:         true,
 			groups:         []string{"service"},
+		},
+		{
+			name:           "field occurrences with canonical output",
+			source:         `index=gradethis | streamstats count(payload.items)`,
+			function:       AggregateFunctionCountValues,
+			input:          "payload.items",
+			output:         "count(payload.items)",
+			includeCurrent: true,
+			global:         true,
+		},
+		{
+			name:           "prior field occurrences by group",
+			source:         `index=gradethis | streamstats current=f count(status) AS populated BY host`,
+			function:       AggregateFunctionCountValues,
+			input:          "status",
+			output:         "populated",
+			includeCurrent: false,
+			global:         true,
+			groups:         []string{"host"},
 		},
 	}
 
@@ -69,15 +93,22 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 				operator.IncludeCurrent != test.includeCurrent ||
 				operator.WindowRows != test.windowRows ||
 				operator.Global != test.global ||
-				operator.Measure.Function != AggregateFunctionCountRows ||
-				operator.Measure.Input.Name != "" ||
-				operator.Measure.Input.Canonical ||
-				operator.Measure.Input.Path != nil ||
-				operator.Measure.Input.Range != (spl.Range{}) ||
+				operator.Measure.Function != test.function ||
+				operator.Measure.Input.Name != test.input ||
 				operator.Measure.Predicate != nil ||
 				operator.Measure.Percentile != 0 ||
 				operator.Measure.Output != test.output {
 				t.Fatalf("stream aggregate = %#v", operator)
+			}
+			if test.input == "" {
+				if operator.Measure.Input.Canonical ||
+					operator.Measure.Input.Path != nil ||
+					operator.Measure.Input.Range != (spl.Range{}) {
+					t.Fatalf("row count input metadata = %#v", operator.Measure.Input)
+				}
+			} else if operator.Measure.Input.Range == (spl.Range{}) ||
+				len(operator.Measure.Input.Path) == 0 {
+				t.Fatalf("field count input metadata = %#v", operator.Measure.Input)
 			}
 			if len(operator.GroupBy) != len(test.groups) {
 				t.Fatalf("groups = %#v, want %v", operator.GroupBy, test.groups)
@@ -92,8 +123,13 @@ func TestBuildStreamStatsCountProducesBoundedRowPreservingOperator(t *testing.T)
 			if analyzeErr != nil {
 				t.Fatalf("Analyze: %v", analyzeErr)
 			}
-			wantReferences := append([]string{"index"}, test.groups...)
+			wantReferences := []string{"index"}
+			if test.input != "" {
+				wantReferences = append(wantReferences, test.input)
+			}
+			wantReferences = append(wantReferences, test.groups...)
 			slices.Sort(wantReferences)
+			wantReferences = slices.Compact(wantReferences)
 			if !slices.Equal(analysis.ReferencedFields, wantReferences) {
 				t.Fatalf("referenced fields = %v, want %v", analysis.ReferencedFields, wantReferences)
 			}
@@ -123,6 +159,16 @@ func TestBuildStreamStatsCountUpsertsKnownSchemaAndPreservesRelationKind(t *test
 			source: `index=gradethis | stats count BY host | streamstats count AS group_ordinal`,
 			want:   []string{"host", "count", "group_ordinal"},
 		},
+		{
+			name:   "append canonical field count output",
+			source: `index=gradethis | table _time,status | streamstats count(status)`,
+			want:   []string{"_time", "status", "count(status)"},
+		},
+		{
+			name:   "field count alias replaces in place",
+			source: `index=gradethis | table _time,status,populated | streamstats count(status) AS populated`,
+			want:   []string{"_time", "status", "populated"},
+		},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -144,6 +190,7 @@ func TestBuildStreamStatsEnforcesReservedFieldsAndProvenance(t *testing.T) {
 	for _, source := range []string{
 		`index=gradethis | streamstats count AS fields`,
 		`index=gradethis | streamstats count BY fields`,
+		`index=gradethis | streamstats count(fields) AS occurrences`,
 	} {
 		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
 		assertDiagnosticCode(t, err, "SPL_AMBIGUOUS_STREAMSTATS_FIELD")
@@ -158,6 +205,16 @@ func TestBuildStreamStatsEnforcesReservedFieldsAndProvenance(t *testing.T) {
 	}
 	if !slices.Equal(closed.OutputFields, []string{"fields", "host"}) {
 		t.Fatalf("closed fields output = %v", closed.OutputFields)
+	}
+	closedInput, err := Build(
+		mustParse(t, `index=gradethis | table fields,host | streamstats count(fields) AS occurrences BY host`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build closed fields input: %v", err)
+	}
+	if !slices.Equal(closedInput.OutputFields, []string{"fields", "host", "occurrences"}) {
+		t.Fatalf("closed fields input output = %v", closedInput.OutputFields)
 	}
 
 	if _, err := Build(
@@ -212,6 +269,13 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 		}, testScope([]string{"gradethis"}, nil))
 		return err
 	}
+	asFieldCount := func(command *spl.StreamStatsCommand) {
+		command.Aggregate.Function = spl.AggregateFunctionCountValues
+		command.Aggregate.Input = "status"
+		command.Aggregate.InputRange = base.Range
+		command.Aggregate.Alias = "count(status)"
+		command.Aggregate.AliasRange = base.Range
+	}
 
 	for _, test := range []struct {
 		name   string
@@ -220,6 +284,36 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 	}{
 		{"wrong function", func(c *spl.StreamStatsCommand) { c.Aggregate.Function = spl.AggregateFunctionSum }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"input metadata", func(c *spl.StreamStatsCommand) { c.Aggregate.Input = "status" }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"field count missing input", func(c *spl.StreamStatsCommand) {
+			c.Aggregate.Function = spl.AggregateFunctionCountValues
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"field count missing input range", func(c *spl.StreamStatsCommand) {
+			c.Aggregate.Function = spl.AggregateFunctionCountValues
+			c.Aggregate.Input = "status"
+			c.Aggregate.Alias = "count(status)"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"field count noncanonical implicit alias", func(c *spl.StreamStatsCommand) {
+			asFieldCount(c)
+			c.Aggregate.Alias = "occurrences"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"field count predicate metadata", func(c *spl.StreamStatsCommand) {
+			asFieldCount(c)
+			c.Aggregate.Predicate = &spl.WhereNotExpr{}
+		}, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
+		{"field count comma input", func(c *spl.StreamStatsCommand) {
+			asFieldCount(c)
+			c.Aggregate.Input = "status,host"
+			c.Aggregate.Alias = "count(status,host)"
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"field count parser-inexpressible explicit alias", func(c *spl.StreamStatsCommand) {
+			asFieldCount(c)
+			c.Aggregate.Alias = "prior value"
+			c.Aggregate.ExplicitAlias = true
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"field count default spelling forged as explicit alias", func(c *spl.StreamStatsCommand) {
+			asFieldCount(c)
+			c.Aggregate.ExplicitAlias = true
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
 		{"predicate metadata", func(c *spl.StreamStatsCommand) { c.Aggregate.Predicate = &spl.WhereNotExpr{} }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"percentile metadata", func(c *spl.StreamStatsCommand) { c.Aggregate.Percentile = 50 }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
 		{"empty alias", func(c *spl.StreamStatsCommand) { c.Aggregate.Alias = "" }, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE"},
@@ -254,6 +348,9 @@ func TestBuildStreamStatsRejectsForgedASTMetadata(t *testing.T) {
 		{"backtick quoted group", func(c *spl.StreamStatsCommand) {
 			c.GroupBy = []spl.StatsGroupField{{Name: "`host`"}}
 		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
+		{"comma group", func(c *spl.StreamStatsCommand) {
+			c.GroupBy = []spl.StatsGroupField{{Name: "host,status"}}
+		}, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX"},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -280,6 +377,7 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 	t.Parallel()
 
 	host := mustResolveStreamStatsField(t, "host")
+	status := mustResolveStreamStatsField(t, "status")
 	valid := func() *StreamAggregate {
 		return &StreamAggregate{
 			GroupBy: []FieldRef{host},
@@ -298,12 +396,28 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 	if !slices.Equal(analysis.ReferencedFields, []string{"host"}) {
 		t.Fatalf("referenced fields = %v, want [host]", analysis.ReferencedFields)
 	}
+	fieldCount := valid()
+	fieldCount.Measure.Function = AggregateFunctionCountValues
+	fieldCount.Measure.Input = status
+	fieldAnalysis, err := Analyze(&Query{Operators: []Operator{fieldCount}})
+	if err != nil {
+		t.Fatalf("Analyze valid field-count stream aggregate: %v", err)
+	}
+	if !slices.Equal(fieldAnalysis.ReferencedFields, []string{"host", "status"}) {
+		t.Fatalf(
+			"field-count referenced fields = %v, want [host status]",
+			fieldAnalysis.ReferencedFields,
+		)
+	}
 
 	for _, operator := range []*StreamAggregate{
 		{Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "ordinal"}, Global: true},
 		{Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "ordinal"}, Global: false},
 		{GroupBy: []FieldRef{host}, Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "ordinal"}, Global: false, WindowRows: 2},
 		{GroupBy: []FieldRef{host}, Measure: AggregateMeasure{Function: AggregateFunctionCountRows, Output: "ordinal"}, Global: true, WindowRows: 0},
+		{Measure: AggregateMeasure{Function: AggregateFunctionCountValues, Input: status, Output: "ordinal"}, Global: true},
+		{Measure: AggregateMeasure{Function: AggregateFunctionCountValues, Input: status, Output: "count(status)"}, Global: true},
+		{GroupBy: []FieldRef{host}, Measure: AggregateMeasure{Function: AggregateFunctionCountValues, Input: status, Output: "ordinal"}, Global: false, WindowRows: 2},
 	} {
 		if _, err := Analyze(&Query{Operators: []Operator{operator}}); err != nil {
 			t.Fatalf("Analyze valid option combination %#v: %v", operator, err)
@@ -315,7 +429,28 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 		mutate func(*StreamAggregate)
 	}{
 		{"missing output", func(op *StreamAggregate) { op.Measure.Output = "" }},
-		{"wrong function", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionCountValues }},
+		{"wrong function", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionSum }},
+		{"field count missing input", func(op *StreamAggregate) { op.Measure.Function = AggregateFunctionCountValues }},
+		{"field count comma input", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionCountValues
+			op.Measure.Input = mustResolveStreamStatsField(t, "status,host")
+		}},
+		{"field count whitespace input", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionCountValues
+			op.Measure.Input = mustResolveStreamStatsField(t, "status host")
+		}},
+		{"field count parenthesized input", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionCountValues
+			op.Measure.Input = mustResolveStreamStatsField(t, "status(host)")
+		}},
+		{"mismatched field count default output", func(op *StreamAggregate) {
+			op.Measure.Function = AggregateFunctionCountValues
+			op.Measure.Input = status
+			op.Measure.Output = "count(host)"
+		}},
+		{"row count parenthesized output", func(op *StreamAggregate) {
+			op.Measure.Output = "count(status)"
+		}},
 		{"input metadata", func(op *StreamAggregate) { op.Measure.Input = host }},
 		{"predicate metadata", func(op *StreamAggregate) { op.Measure.Predicate = &BooleanExpression{} }},
 		{"percentile metadata", func(op *StreamAggregate) { op.Measure.Percentile = 1 }},
@@ -331,6 +466,9 @@ func TestAnalyzeStreamAggregateReadsGroupsAndRejectsForgedContracts(t *testing.T
 		}},
 		{"backtick quoted group", func(op *StreamAggregate) {
 			op.GroupBy = []FieldRef{mustResolveStreamStatsField(t, "`host`")}
+		}},
+		{"whitespace group", func(op *StreamAggregate) {
+			op.GroupBy = []FieldRef{mustResolveStreamStatsField(t, "host status")}
 		}},
 	} {
 		test := test

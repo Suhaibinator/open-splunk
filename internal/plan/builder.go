@@ -800,21 +800,67 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 
 			aggregate := command.Aggregate
-			if aggregate.Function != spl.AggregateFunctionCount ||
-				aggregate.Input != "" ||
-				aggregate.InputRange != (spl.Range{}) ||
-				aggregate.Predicate != nil ||
-				aggregate.Percentile != 0 ||
-				aggregate.Alias == "" ||
-				(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
+			measure := AggregateMeasure{Output: aggregate.Alias}
+			switch aggregate.Function {
+			case spl.AggregateFunctionCount:
+				if aggregate.Input != "" ||
+					aggregate.InputRange != (spl.Range{}) ||
+					aggregate.Predicate != nil ||
+					aggregate.Percentile != 0 ||
+					aggregate.Alias == "" ||
+					(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
+					return nil, &Diagnostic{
+						Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+						Message: "streamstats row count requires no input metadata " +
+							"and uses its count default or one explicit alias",
+						Range: aggregate.Range,
+					}
+				}
+				measure.Function = AggregateFunctionCountRows
+			case spl.AggregateFunctionCountValues:
+				if aggregate.Input == "" ||
+					aggregate.InputRange == (spl.Range{}) ||
+					aggregate.Predicate != nil ||
+					aggregate.Percentile != 0 ||
+					aggregate.Alias == "" ||
+					(!aggregate.ExplicitAlias &&
+						aggregate.Alias != "count("+aggregate.Input+")") {
+					return nil, &Diagnostic{
+						Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+						Message: "streamstats count(field) requires one exact input " +
+							"with its canonical default or one explicit alias",
+						Range: aggregate.Range,
+					}
+				}
+				if !validStreamAggregateFieldName(aggregate.Input) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+						Message: "streamstats count(field) requires one exact unquoted input field",
+						Range:   aggregate.InputRange,
+					}
+				}
+				input, inputErr := ResolveField(
+					aggregate.Input,
+					aggregate.InputRange,
+				)
+				if inputErr != nil {
+					return nil, inputErr
+				}
+				measure.Function = AggregateFunctionCountValues
+				measure.Input = input
+			default:
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
-					Message: "streamstats currently supports exactly one argument-free count " +
-						"with its count default or one explicit alias",
+					Message: "streamstats currently supports exactly one count " +
+						"or count(field) aggregate",
 					Range: aggregate.Range,
 				}
 			}
-			if !validStreamAggregateFieldName(aggregate.Alias) {
+			validOutput := validStreamAggregateFieldName(aggregate.Alias)
+			if !aggregate.ExplicitAlias && validStreamAggregateOutputName(measure) {
+				validOutput = true
+			}
+			if !validOutput {
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
 					Message: "streamstats AS requires one exact unquoted output field",
@@ -827,6 +873,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Message: "streamstats cannot replace the event result's reserved " +
 						"fields payload without an exact upstream schema",
 					Range: aggregate.AliasRange,
+				}
+			}
+			if !outputSchemaKnown && aggregate.Input == "fields" {
+				return nil, &Diagnostic{
+					Code: "SPL_AMBIGUOUS_STREAMSTATS_FIELD",
+					Message: "streamstats cannot read the event result's reserved " +
+						"fields payload without an exact upstream schema",
+					Range: aggregate.InputRange,
 				}
 			}
 			if _, aliasErr := ResolveField(
@@ -864,11 +918,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			result.Operators = append(
 				result.Operators,
 				&StreamAggregate{
-					GroupBy: groupBy,
-					Measure: AggregateMeasure{
-						Function: AggregateFunctionCountRows,
-						Output:   aggregate.Alias,
-					},
+					GroupBy:        groupBy,
+					Measure:        measure,
 					IncludeCurrent: command.Current,
 					WindowRows:     command.Window,
 					Global:         command.Global,

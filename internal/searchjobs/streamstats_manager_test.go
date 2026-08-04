@@ -9,7 +9,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 )
 
-func TestManagerRetainsRowPreservingStreamStatsSchemaAndResults(t *testing.T) {
+func TestManagerRetainsRowPreservingStreamStatsCountFieldSchemaAndResults(t *testing.T) {
 	t.Parallel()
 
 	schema := Schema{Columns: []Column{
@@ -50,7 +50,7 @@ func TestManagerRetainsRowPreservingStreamStatsSchemaAndResults(t *testing.T) {
 	})
 	created, err := manager.Create(context.Background(), withSPL(
 		validRequest(),
-		"index=main | table event_id,service | streamstats current=f window=2 global=f count AS prior BY service",
+		"index=main | table event_id,service | streamstats current=f window=2 global=f count(event_id) AS prior BY service",
 	))
 	if err != nil {
 		t.Fatalf("Create(streamstats): %v", err)

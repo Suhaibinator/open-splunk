@@ -1,13 +1,16 @@
 package plan
 
-import (
-	"strings"
-
-	"github.com/Suhaibinator/open-splunk/internal/spl"
-)
+import "github.com/Suhaibinator/open-splunk/internal/spl"
 
 func validStreamAggregateFieldName(name string) bool {
-	return name != "" && !strings.ContainsAny(name, "'\"`")
+	return spl.IsExactUnquotedStreamStatsFieldName(name)
+}
+
+func validStreamAggregateOutputName(measure AggregateMeasure) bool {
+	return validStreamAggregateFieldName(measure.Output) ||
+		(measure.Function == AggregateFunctionCountValues &&
+			measure.Input.Name != "" &&
+			measure.Output == "count("+measure.Input.Name+")")
 }
 
 // validStreamAggregateContract is shared by every analysis that relies on
@@ -18,15 +21,26 @@ func validStreamAggregateContract(operator *StreamAggregate) bool {
 	if operator == nil ||
 		len(operator.GroupBy) > spl.MaximumStatsGroupFields ||
 		operator.WindowRows > spl.MaximumStreamStatsWindow ||
-		operator.Measure.Function != AggregateFunctionCountRows ||
-		!validStreamAggregateFieldName(operator.Measure.Output) ||
-		operator.Measure.Input.Name != "" ||
-		operator.Measure.Input.Canonical ||
-		operator.Measure.Input.Path != nil ||
-		operator.Measure.Input.Range != (spl.Range{}) ||
+		!validStreamAggregateOutputName(operator.Measure) ||
 		operator.Measure.Predicate != nil ||
 		operator.Measure.Percentile != 0 ||
 		(len(operator.GroupBy) > 0 && operator.WindowRows > 0 && operator.Global) {
+		return false
+	}
+	switch operator.Measure.Function {
+	case AggregateFunctionCountRows:
+		if operator.Measure.Input.Name != "" ||
+			operator.Measure.Input.Canonical ||
+			operator.Measure.Input.Path != nil ||
+			operator.Measure.Input.Range != (spl.Range{}) {
+			return false
+		}
+	case AggregateFunctionCountValues:
+		if !validStreamAggregateFieldName(operator.Measure.Input.Name) ||
+			!validResolvedEventAggregateField(operator.Measure.Input) {
+			return false
+		}
+	default:
 		return false
 	}
 	if _, err := ResolveField(operator.Measure.Output, spl.Range{}); err != nil {

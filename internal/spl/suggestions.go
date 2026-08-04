@@ -526,6 +526,13 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		endsOptionEqual(tokens, "global") {
 		return context
 	}
+	if parenthesisDepth(tokens) > 0 {
+		if countIndex := topLevelWordIndex(tokens, "count"); countIndex >= 0 && countIndex+1 < len(tokens) &&
+			tokens[countIndex+1].kind == tokenLeftParen {
+			context.Kinds = []SuggestionKind{SuggestionKindField}
+		}
+		return context
+	}
 	if len(tokens) > 0 && tokenWordEqual(tokens[len(tokens)-1], "AS") {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
 		return context

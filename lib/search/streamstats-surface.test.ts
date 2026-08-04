@@ -13,6 +13,7 @@ test("streamstats is advertised once with the bounded supported syntax", () => {
   assert.equal(definitions.length, 1);
   assert.equal(definitions[0]?.insertion, "streamstats count AS running_count");
   assert.match(definitions[0]?.detail ?? "", /bounded running row count/i);
+  assert.match(definitions[0]?.detail ?? "", /field occurrence count/i);
   assert.match(definitions[0]?.detail ?? "", /deterministic pipeline order/i);
   assert.match(definitions[0]?.detail ?? "", /excluding the current row/i);
   assert.match(definitions[0]?.detail ?? "", /exact fields/i);

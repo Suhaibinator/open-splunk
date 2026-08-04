@@ -1160,11 +1160,11 @@ The first useful compatibility tier should support:
 - `match`, `like`, `replace`
 - `now`, `relative_time`, `strftime`, `strptime`
 
-`eventstats` and the deliberately bounded `streamstats count` subset are
-second-tier commands included in the pre-release backend. `transaction`,
-subsearches, `join`, `append`, `appendpipe`, `map`, `foreach`, data models,
-`tstats`, and arbitrary scripted commands remain explicitly out of the first
-release.
+`eventstats` and the deliberately bounded `streamstats` bare row-count and
+exact-field `count(field)` subset are second-tier commands included in the
+pre-release backend. `transaction`, subsearches, `join`, `append`, `appendpipe`,
+`map`, `foreach`, data models, `tstats`, and arbitrary scripted commands remain
+explicitly out of the first release.
 
 ### Example target searches
 

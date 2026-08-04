@@ -175,6 +175,56 @@ func TestReexecutionSourceIsLazyScopedAndStreamsBeyondRetainedPreview(t *testing
 	}
 }
 
+func TestReexecutionSourceRebuildsStreamStatsCountFieldFromStoredSPL(t *testing.T) {
+	t.Parallel()
+
+	searches, _, access := newReexecutionTestSearches()
+	searches.job.SPL = `index=main | table status | streamstats current=false count(status) AS prior`
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "status", Kind: searchjobs.ValueKindSigned},
+		{Name: "prior", Kind: searchjobs.ValueKindUnsigned},
+	}}
+	searches.pin.schema = schema
+	var captured clickhouse.CompiledQuery
+	executor := reexecutionTestExecutor(func(
+		_ context.Context,
+		query clickhouse.CompiledQuery,
+		sink searchjobs.ResultSink,
+	) error {
+		captured = query
+		return sink.SetSchema(schema)
+	})
+	source := newReexecutionTestSource(t, searches, executor, nil)
+	lease, err := source.AcquireResultsFor(
+		context.Background(),
+		access,
+		searches.job.ID,
+	)
+	if err != nil {
+		t.Fatalf("AcquireResultsFor(streamstats count(field)): %v", err)
+	}
+	if _, ok, nextErr := lease.Next(context.Background()); ok || nextErr != nil {
+		t.Fatalf("Next(streamstats count(field)) = ok %t err %v", ok, nextErr)
+	}
+	for _, required := range []string{
+		`sum(toUInt128("__os_streamstats_measure_`,
+		`ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING`,
+		`AS "prior"`,
+		clickhouse.StreamStatsInputLimitMarker,
+	} {
+		if !strings.Contains(captured.SQL, required) {
+			t.Fatalf(
+				"re-executed streamstats count(field) SQL missing %q:\n%s",
+				required,
+				captured.SQL,
+			)
+		}
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("close streamstats count(field) re-execution: %v", err)
+	}
+}
+
 func TestReexecutionSourceUsesDistinctExecutionGenerations(t *testing.T) {
 	t.Parallel()
 	searches, _, access := newReexecutionTestSearches()

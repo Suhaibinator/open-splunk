@@ -13319,19 +13319,51 @@ func validateStreamAggregate(
 		)
 	}
 	measure := operator.Measure
-	if measure.Function != plan.AggregateFunctionCountRows ||
-		measure.Input.Name != "" ||
-		measure.Input.Canonical ||
-		measure.Input.Path != nil ||
-		measure.Input.Range != (spl.Range{}) ||
-		measure.Predicate != nil ||
-		measure.Percentile != 0 ||
-		measure.Output == "" {
+	if measure.Predicate != nil || measure.Percentile != 0 || measure.Output == "" {
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse streamstats: only argument-free count is supported",
+			"compile ClickHouse streamstats: count contains unsupported metadata",
 		)
 	}
-	if strings.ContainsAny(measure.Output, "'\"`") {
+	switch measure.Function {
+	case plan.AggregateFunctionCountRows:
+		if measure.Input.Name != "" ||
+			measure.Input.Canonical ||
+			measure.Input.Path != nil ||
+			measure.Input.Range != (spl.Range{}) {
+			return plan.FieldRef{}, errors.New(
+				"compile ClickHouse streamstats: argument-free count contains input metadata",
+			)
+		}
+	case plan.AggregateFunctionCountValues:
+		if !spl.IsExactUnquotedStreamStatsFieldName(measure.Input.Name) {
+			return plan.FieldRef{}, errors.New(
+				"compile ClickHouse streamstats: count input must be one exact unquoted field",
+			)
+		}
+		if err := validateCanonicalFieldRef(
+			"streamstats",
+			"count input",
+			measure.Input,
+		); err != nil {
+			return plan.FieldRef{}, err
+		}
+		if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
+			return plan.FieldRef{}, &plan.Diagnostic{
+				Code: "SPL_AMBIGUOUS_STREAMSTATS_FIELD",
+				Message: "streamstats cannot read the event result's reserved " +
+					"fields payload without an exact upstream schema",
+				Range: measure.Input.Range,
+			}
+		}
+	default:
+		return plan.FieldRef{}, errors.New(
+			"compile ClickHouse streamstats: only count and count(field) are supported",
+		)
+	}
+	validOutput := spl.IsExactUnquotedStreamStatsFieldName(measure.Output) ||
+		(measure.Function == plan.AggregateFunctionCountValues &&
+			measure.Output == "count("+measure.Input.Name+")")
+	if !validOutput {
 		return plan.FieldRef{}, errors.New(
 			"compile ClickHouse streamstats: output must be one exact unquoted field",
 		)
@@ -13354,7 +13386,7 @@ func validateStreamAggregate(
 	}
 	seen := make(map[string]struct{}, len(operator.GroupBy))
 	for _, group := range operator.GroupBy {
-		if strings.ContainsAny(group.Name, "'\"`") {
+		if !spl.IsExactUnquotedStreamStatsFieldName(group.Name) {
 			return plan.FieldRef{}, errors.New(
 				"compile ClickHouse streamstats: grouping fields must be exact and unquoted",
 			)
@@ -13446,11 +13478,11 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 		" PRECEDING AND 1 PRECEDING"
 }
 
-// compileStreamAggregate lowers one running row count over the order already
-// established by the pipeline. Its only retained relation is capped at one
-// sentinel beyond the public limit; both row overflow and Dynamic BY poison
-// are checked inside the deferred barrier before any downstream operator can
-// hide them.
+// compileStreamAggregate lowers one running row or field-occurrence count over
+// the order already established by the pipeline. Its only retained relation is
+// capped at one sentinel beyond the public limit; both row overflow and
+// Dynamic BY poison are checked inside the deferred barrier before any
+// downstream operator can hide them.
 func compileStreamAggregate(
 	relation compiledRelation,
 	operator *plan.StreamAggregate,
@@ -13542,6 +13574,26 @@ func compileStreamAggregate(
 		prefixArgs = append(prefixArgs, classificationArgs...)
 	}
 
+	measureAlias := ""
+	measureProjection := ""
+	if operator.Measure.Function == plan.AggregateFunctionCountValues {
+		input, exists, resolveErr := resolveCompiledField(operator.Measure.Input, state)
+		if resolveErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, resolveErr
+		}
+		contributionSQL := "toUInt64(0)"
+		var contributionArgs []any
+		if exists {
+			contributionSQL, contributionArgs = countValueInputSQL(input)
+		}
+		measureAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_measure_%d",
+			stage,
+		))
+		measureProjection = contributionSQL + " AS " + measureAlias
+		prefixArgs = append(prefixArgs, contributionArgs...)
+	}
+
 	maximumRows := strconv.FormatUint(MaximumStreamStatsInputRows, 10)
 	sentinelRows := strconv.FormatUint(MaximumStreamStatsInputRows+1, 10)
 	sourceAlias := quoteIdentifier(fmt.Sprintf(
@@ -13551,6 +13603,9 @@ func compileStreamAggregate(
 	orderedInput := "SELECT *"
 	if len(groupClassifications) > 0 {
 		orderedInput += ", " + strings.Join(groupClassifications, ", ")
+	}
+	if measureProjection != "" {
+		orderedInput += ", " + measureProjection
 	}
 	if len(orderProjection) > 0 {
 		orderedInput += ", " + strings.Join(orderProjection, ", ")
@@ -13626,8 +13681,12 @@ func compileStreamAggregate(
 		windowParts,
 		streamStatsFrameSQL(operator.IncludeCurrent, operator.WindowRows),
 	)
-	windowExpression := "count() OVER (" + strings.Join(windowParts, " ") + ")"
-	if !operator.IncludeCurrent {
+	windowClause := strings.Join(windowParts, " ")
+	windowExpression := "count() OVER (" + windowClause + ")"
+	if operator.Measure.Function == plan.AggregateFunctionCountValues {
+		windowExpression = "toUInt64(ifNull(sum(toUInt128(" + measureAlias +
+			")) OVER (" + windowClause + "), toUInt128(0)))"
+	} else if !operator.IncludeCurrent {
 		windowExpression = "ifNull(" + windowExpression + ", toUInt64(0))"
 	}
 

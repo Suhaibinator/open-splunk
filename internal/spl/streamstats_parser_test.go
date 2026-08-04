@@ -156,6 +156,123 @@ func TestParseStreamStatsCountPreservesOptionsAliasGroupsAndRanges(t *testing.T)
 	}
 }
 
+func TestParseStreamStatsCountField(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, source, input, alias string
+		explicitAlias              bool
+		current                    bool
+		window                     uint64
+		global                     bool
+		groups                     []string
+	}{
+		{
+			name:    "default output",
+			source:  `index=main | streamstats count(status)`,
+			input:   "status",
+			alias:   "count(status)",
+			current: true,
+			global:  true,
+		},
+		{
+			name:          "explicit output and bounded group window",
+			source:        `index=main | streamstats current=f window=3 global=f count(payload.items) AS populated BY service`,
+			input:         "payload.items",
+			alias:         "populated",
+			explicitAlias: true,
+			window:        3,
+			groups:        []string{"service"},
+		},
+		{
+			name:   "trailing options",
+			source: `index=main | streamstats count(tags) BY service current=false window=0 global=t`,
+			input:  "tags",
+			alias:  "count(tags)",
+			global: true,
+			groups: []string{"service"},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			query, err := Parse(test.source)
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			command, ok := query.Commands[0].(*StreamStatsCommand)
+			if !ok {
+				t.Fatalf("command = %T, want *StreamStatsCommand", query.Commands[0])
+			}
+			if command.Aggregate.Function != AggregateFunctionCountValues ||
+				command.Aggregate.Input != test.input ||
+				command.Aggregate.InputRange == (Range{}) ||
+				command.Aggregate.Predicate != nil ||
+				command.Aggregate.Percentile != 0 ||
+				command.Aggregate.Alias != test.alias ||
+				command.Aggregate.ExplicitAlias != test.explicitAlias ||
+				command.Current != test.current ||
+				command.Window != test.window ||
+				command.Global != test.global {
+				t.Fatalf("streamstats count(field) command = %#v", command)
+			}
+			if len(command.GroupBy) != len(test.groups) {
+				t.Fatalf("groups = %#v, want %v", command.GroupBy, test.groups)
+			}
+			for index, want := range test.groups {
+				if command.GroupBy[index].Name != want {
+					t.Fatalf("group %d = %#v, want %q", index, command.GroupBy[index], want)
+				}
+			}
+			assertSourceRangeText(t, test.source, command.Aggregate.InputRange, test.input)
+			if test.explicitAlias {
+				assertSourceRangeText(t, test.source, command.Aggregate.AliasRange, test.alias)
+			} else {
+				assertSourceRangeText(
+					t,
+					test.source,
+					command.Aggregate.AliasRange,
+					"count("+test.input+")",
+				)
+			}
+		})
+	}
+}
+
+func TestExactUnquotedStreamStatsFieldNameMatchesParserTokenBoundary(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"status",
+		"Payload.Items",
+		`literal\.dot`,
+		"field-name",
+	} {
+		if !IsExactUnquotedStreamStatsFieldName(name) {
+			t.Fatalf("IsExactUnquotedStreamStatsFieldName(%q) = false", name)
+		}
+	}
+	for _, name := range []string{
+		"",
+		"status host",
+		"status\u00a0host",
+		"status,host",
+		"status(host)",
+		"status|host",
+		"status=host",
+		`"status"`,
+		"'status'",
+		"`status`",
+		"status*",
+	} {
+		if IsExactUnquotedStreamStatsFieldName(name) {
+			t.Fatalf("IsExactUnquotedStreamStatsFieldName(%q) = true", name)
+		}
+	}
+}
+
 func TestParseStreamStatsAcceptsEveryBooleanSpelling(t *testing.T) {
 	t.Parallel()
 
@@ -191,8 +308,14 @@ func TestParseStreamStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 		name, source, code, rangeText string
 	}{
 		{"empty call", `index=main | streamstats count()`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "count"},
-		{"field count", `index=main | streamstats count(status)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "count"},
 		{"eval count", `index=main | streamstats count(eval(status=500))`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "count"},
+		{"abbreviated field count", `index=main | streamstats c(status)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "c"},
+		{"wildcard count input", `index=main | streamstats count(status*)`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "status*"},
+		{"quoted count input", `index=main | streamstats count("status")`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", `"status"`},
+		{"single quoted count input", `index=main | streamstats count('status')`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "'status'"},
+		{"backtick quoted count input", "index=main | streamstats count(`status`)", "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "`status`"},
+		{"multiple count inputs", `index=main | streamstats count(status, host)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ","},
+		{"missing count close", `index=main | streamstats count(status`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ""},
 		{"other aggregate", `index=main | streamstats sum(bytes)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "sum"},
 		{"comma second aggregate", `index=main | streamstats count, count`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", ","},
 		{"space second aggregate", `index=main | streamstats count count`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "count"},
@@ -287,7 +410,9 @@ func TestClassifyResultShapeTreatsStreamStatsAsRowPreserving(t *testing.T) {
 		want   ResultShape
 	}{
 		{source: `index=main | streamstats count`, want: ResultShape{Kind: ResultKindEvents}},
+		{source: `index=main | streamstats count(status)`, want: ResultShape{Kind: ResultKindEvents}},
 		{source: `index=main | stats count BY host | streamstats count AS groups`, want: ResultShape{Kind: ResultKindStatistics}},
+		{source: `index=main | stats count BY host | streamstats count(count) AS populated`, want: ResultShape{Kind: ResultKindStatistics}},
 		{
 			source: `index=main | timechart span=5m count BY level | streamstats count AS buckets`,
 			want:   ResultShape{Kind: ResultKindTimeSeries, RuntimeNamedColumns: true},

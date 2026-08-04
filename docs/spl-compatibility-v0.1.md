@@ -2555,16 +2555,19 @@ The executor's memory, read, query-size, relational-depth, result, and
 ### `streamstats`
 
 The additional pre-release compatibility surface supports one deliberately
-bounded running row count per command:
+bounded running row or exact-field occurrence count per command:
 
 ```spl
 streamstats count
 streamstats count AS row_number
+streamstats count(status)
+streamstats count(status) AS populated
 streamstats current=false count
 streamstats window=5 count AS recent
 streamstats count BY host
+streamstats current=false count(status) AS prior_statuses BY host
 streamstats window=5 global=false count AS recent BY host
-streamstats count AS prior BY host current=f window=5 global=f
+streamstats count(bytes) AS recent_values BY host current=f window=5 global=f
 ```
 
 Splunk documents `streamstats` as a row-preserving command that calculates a
@@ -2577,29 +2580,50 @@ claims about undocumented Splunk type edges. See Splunk's official
 [`streamstats` reference](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/search-commands/streamstats)
 and [running-count examples](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/streamstats-command/streamstats-command-examples).
 
-Exactly one bare, argument-free `count` is accepted. Its default output name is
-`count`; `AS` may supply one exact unquoted output field and must remain before
-`BY`. `BY` accepts from one through 16 distinct exact unquoted fields, separated
-by commas or whitespace. Command, function, option, Boolean, and keyword
-spelling is case-insensitive; field names remain case-sensitive. The supported
-options are `current=t|true|f|false`, `window=N`, and
-`global=t|true|f|false`. Each may occur at most once and may appear before or
-after `count`, including after the complete `BY` tuple. Their defaults are
-`current=true`, `window=0`, and `global=true`. `window` must contain unsigned
-ASCII base-10 digits only, with no `+` or `-` sign, and must represent an
-integer from zero through 10,000 inclusive.
+Exactly one aggregate is accepted: bare argument-free `count`, or long-form
+`count(field)` containing exactly one exact unquoted input field. The bare form
+uses the default output `count`; the field form uses `count(field)`, preserving
+the input field's spelling. Either form may instead provide one exact unquoted
+output with `AS`, which must remain before `BY`. Because the downstream exact
+field grammar cannot refer to the parentheses in the field form's default
+name, use `AS` whenever a later command will consume that result. `BY` accepts
+from one through 16 distinct exact unquoted fields, separated by commas or
+whitespace. Command, function, option, Boolean, and keyword spelling is
+case-insensitive; input, output, and grouping field names remain
+case-sensitive. The supported options are `current=t|true|f|false`,
+`window=N`, and `global=t|true|f|false`. Each may occur at most once and may
+appear before or after the aggregate, including after the complete `BY` tuple.
+Their defaults are `current=true`, `window=0`, and `global=true`. `window` must
+contain unsigned ASCII base-10 digits only, with no `+` or `-` sign, and must
+represent an integer from zero through 10,000 inclusive.
+
+`count(field)` counts immediate non-null occurrences without stringifying
+values, recursively traversing containers, or expanding rows. A missing field,
+explicit null, empty multivalue, or null multivalue member contributes zero.
+Every other scalar contributes one, including an empty String, numeric zero,
+and Boolean false. Each immediate non-null multivalue member contributes one,
+including duplicates; a nested array or object member remains one atomic
+occurrence. A non-null object or flattened object parent likewise contributes
+one. The measure input is resolved before an output of the same name replaces
+it, while a field removed by an upstream projection remains missing and
+contributes zero. These typed null and container choices are explicit Open
+Splunk v0.1 boundaries where the public documentation does not establish an
+exact representation.
 
 The command retains every input row, every other visible field, the established
 row order, and the current relation classification. Executable v0.1 pipelines
 may therefore preserve either event or statistics results; the current
-`timechart` and `chart` lowerings remain terminal. With `current=true`, the
-first participating row has count 1. A positive window contains the current row
-and at most its `N-1` preceding rows. With `current=false`, only preceding rows
-participate: the first participating row has the present `UInt64` value zero,
-and a positive window contains at most the `N` preceding rows. The explicit
-zero on an empty preceding frame is an Open Splunk v0.1 choice because the
-official reference does not pin that result's transport representation. Empty
-input remains empty.
+`timechart` and `chart` lowerings remain terminal. Windows are measured in
+input rows, not field occurrences. Bare `count` contributes one for each row;
+`count(field)` contributes the occurrence cardinality above. With
+`current=true`, a positive window includes the current row and at most its
+`N-1` preceding rows. With `current=false`, only preceding rows participate,
+and a positive window includes at most the `N` preceding rows. The first
+eligible row then has the present `UInt64` value zero, even for
+`count(field)`. The explicit zero on an empty preceding frame is an Open Splunk
+v0.1 choice because the official reference does not pin that result's transport
+representation. `count(field)` contributions are summed as `UInt128` before
+the published result is converted to `UInt64`. Empty input remains empty.
 
 Without `BY`, `global=true` and `global=false` are equivalent because there is
 only one partition. With `BY` and `window=0`, `global` is likewise irrelevant,
@@ -2613,54 +2637,59 @@ The order seen by `streamstats` is the current deterministic pipeline order.
 Event pipelines begin with the established descending `_time`, event ID,
 visibility-sequence, and immutable-source-identity order. An upstream `sort`,
 `head`, `tail`, `dedup`, filter, projection, or transforming command determines
-the rows and order consumed by the running count; a downstream command consumes
-the already-computed result. This order sensitivity follows Splunk's documented
-as-seen processing model and its requirement that a global `streamstats`
-consumer of sorted input retain a global order in
+the rows and order consumed by the running statistic; a downstream command
+consumes the already-computed result. This order sensitivity follows Splunk's
+documented as-seen processing model and its requirement that a global
+`streamstats` consumer of sorted input retain a global order in
 [parallel-reduce execution](https://help.splunk.com/en/splunk-enterprise/administer/distributed-search/10.0/manage-parallel-reduce-search-processing/supported-commands-for-parallel-reduce-search-processing).
 
-Grouped keys use the same exact scalar contract as `stats BY` and
-`eventstats BY`. A missing or explicit-null component retains its source row
-but makes the streamstats output logically absent and physically nullable; it
-contributes to no group. An empty String is a value. Complete Dynamic scalar
-keys use the existing lexical normalization, so numeric `500` and String
-`"500"` share a group. A known fixed multivalue key is rejected during
-compilation. A runtime Dynamic list, object, flattened object parent, or nested
-container poisons the complete scoped command atomically, even when another
-key is missing or a downstream filter, projection, sort, or limit would hide
-the row. Splunk's
-official reference does not settle these typed null and container cases, so
-they remain conservative Open Splunk boundaries pending a live differential
-oracle.
+Without `BY`, both count forms publish a non-null `UInt64`. Grouped keys use the
+same exact scalar contract as `stats BY` and `eventstats BY`. A missing or
+explicit-null component retains its source row but makes the streamstats output
+logically absent and physically nullable; it contributes to no group. Every
+row with a complete grouping tuple has a present value, including zero when a
+`count(field)` frame contains no occurrences. An empty String grouping key is
+a value. Complete Dynamic scalar keys use the existing lexical normalization,
+so numeric `500` and String `"500"` share a group. A known fixed multivalue key
+is rejected during compilation. A runtime Dynamic list, object, flattened
+object parent, or nested container poisons the complete scoped command
+atomically, even when another key is missing or a downstream filter,
+projection, sort, or limit would hide the row. Splunk's official reference does
+not settle these typed null and container cases, so they remain conservative
+Open Splunk boundaries pending a live differential oracle.
 
 The output replaces an existing field of the same name rather than creating a
-duplicate. The literal output or grouping name `fields` is rejected while the
-event schema is open and becomes ordinary data after an exact `table` or
-transforming schema closes it. Replacing `_time` preserves rows but invalidates
-later timeline analysis. Replacing `index` creates ordinary pipeline data and
-does not change the authorization-constrained physical scan.
+duplicate. The literal input, output, or grouping name `fields` is rejected
+while the event schema is open and becomes ordinary data after an exact `table`
+or transforming schema closes it. Replacing `_time` preserves rows but
+invalidates later timeline analysis. Replacing `index` creates ordinary
+pipeline data and does not change the authorization-constrained physical scan.
 
 One streamstats stage admits at most 10,000 upstream rows. The compiler orders
 and materializes at most 10,001 rows, uses the additional row only as an
 overflow sentinel, and fails the complete search with an execution-limit error
 above the boundary. It never publishes a 10,000-row prefix or silently plateaus
-a running count. This atomic fence also makes `window=0` exact over every
-admitted relation. Dynamic grouping poison and row overflow are forced before
-any downstream operation can hide them. A standalone stage uses one bounded
-materialized input and one exact running-count ClickHouse row window; it
-performs no `ARRAY JOIN`, row expansion, unbounded `groupArray`, per-group
-query, or Go-side result buffering. The normal query memory, read, group,
-depth, and result ceilings remain independently authoritative.
+a running statistic. The sentinel counts rows independently of whether one
+row's field contribution is zero, one, or greater than one. This atomic fence
+also makes `window=0` exact over every admitted relation. Dynamic grouping
+poison and row overflow are forced before any downstream operation can hide
+them. A standalone stage uses one bounded materialized input; `count(field)`
+computes one per-row occurrence contribution in that materialization and sums
+it with one exact ClickHouse row window. The stage performs no `ARRAY JOIN`,
+row expansion, unbounded `groupArray`, per-group query, or Go-side result
+buffering. The normal query memory, read, group, depth, and result ceilings
+remain independently authoritative.
 
-Parenthesized `count()`, `count(field)`, `count(eval(...))`, `c`, every other
-aggregate, multiple aggregates, wildcard or quoted output/grouping fields,
-duplicate or more-than-16 grouping fields, and an alias after `BY` are
-unsupported. So are `allnum`, `time_window`, `reset_before`, `reset_after`,
-`reset_on_change`, unknown options, duplicate options, invalid Boolean values,
-fractional or signed windows, windows above 10,000, and a positive grouped
-window without explicit `global=false`. Reset options are rejected even when
-their supplied value would appear to be a no-op; reset expressions and
-change-segment semantics require a separate reviewed slice.
+Parenthesized `count()`, abbreviated `c` or `c(field)`, `count(eval(...))`,
+wildcard, quoted, or multiple count inputs, every other aggregate, multiple
+aggregates, wildcard or quoted output/grouping fields, duplicate or more-than-16
+grouping fields, and an alias after `BY` are unsupported. So are `allnum`,
+`time_window`, `reset_before`, `reset_after`, `reset_on_change`, unknown options,
+duplicate options, invalid Boolean values, fractional or signed windows,
+windows above 10,000, and a positive grouped window without explicit
+`global=false`. Reset options are rejected even when their supplied value would
+appear to be a no-op; reset expressions and change-segment semantics require a
+separate reviewed slice.
 
 ### `top`
 
@@ -3434,10 +3463,11 @@ output`, conditional `count(eval(predicate)) AS output`, or one exact-field
 grouped by up to 16 exact fields. Other aggregate functions, multiple measures,
 and the broader eval-expression surface remain unsupported for `eventstats`.
 
-`streamstats` supports only the bare argument-free running `count` surface
-specified above. Field/eval counts, other or multiple aggregates, time-based
-windows, reset behavior, `allnum`, grouped finite global windows, and the
-broader wildcard/eval expression surface remain unsupported.
+`streamstats` supports only the bare argument-free running `count` and
+long-form exact-field `count(field)` surfaces specified above. Abbreviated,
+wildcard, quoted-field, or eval counts, other or multiple aggregates,
+time-based windows, reset behavior, `allnum`, grouped finite global windows,
+and the broader expression surface remain unsupported.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

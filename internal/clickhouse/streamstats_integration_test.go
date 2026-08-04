@@ -58,18 +58,30 @@ func testStreamStatsAgainstClickHouse(
 			1,
 			typedField("streamstats_group", typedString("500")),
 			typedField("streamstats_existing", typedString("shadowed")),
+			typedField("streamstats_value", typedString("present")),
 		),
 		newEvent(
 			"streamstats-02",
 			"streamstats-order",
 			2,
 			typedField("streamstats_group", typedString("other")),
+			typedField(
+				"streamstats_value",
+				typedList(
+					typedString("duplicate"),
+					typedNull(),
+					typedString("duplicate"),
+					typedList(typedString("nested")),
+					typedObject(typedField("child", typedString("nested"))),
+				),
+			),
 		),
 		newEvent(
 			"streamstats-03",
 			"streamstats-order",
 			3,
 			typedField("streamstats_group", typedSint(500)),
+			typedField("streamstats_value", typedList()),
 		),
 		newEvent("streamstats-04", "streamstats-order", 4),
 		newEvent(
@@ -77,18 +89,24 @@ func testStreamStatsAgainstClickHouse(
 			"streamstats-order",
 			5,
 			typedField("streamstats_group", typedNull()),
+			typedField("streamstats_value", typedNull()),
 		),
 		newEvent(
 			"streamstats-06",
 			"streamstats-order",
 			6,
 			typedField("streamstats_group", typedString("other")),
+			typedField("streamstats_value", typedString("")),
 		),
 		newEvent(
 			"streamstats-07",
 			"streamstats-order",
 			7,
 			typedField("streamstats_group", typedUint(500)),
+			typedField(
+				"streamstats_value",
+				typedObject(typedField("child", typedString("flattened"))),
+			),
 		),
 		newEvent(
 			"streamstats-poison-scalar",
@@ -128,6 +146,13 @@ func testStreamStatsAgainstClickHouse(
 		typedField(
 			"streamstats_group",
 			typedObject(typedField("child", typedString("foreign"))),
+		),
+		typedField(
+			"streamstats_value",
+			typedList(
+				typedString("foreign-1"),
+				typedString("foreign-2"),
+			),
 		),
 	)
 	foreign.TenantID = "other-tenant"
@@ -231,6 +256,12 @@ func testStreamStatsAgainstClickHouse(
 	descendingIDs := slices.Clone(ascendingIDs)
 	slices.Reverse(descendingIDs)
 	ascendingCounts := []uint64{1, 2, 3, 4, 5, 6, 7}
+	type groupedRow struct {
+		id    string
+		peers *uint64
+	}
+	one := uint64(1)
+	two := uint64(2)
 	assertCounts(
 		"default descending event order",
 		base+` | streamstats count AS running | table event_id running`,
@@ -290,6 +321,126 @@ func testStreamStatsAgainstClickHouse(
 		)
 	}
 
+	for _, test := range []struct {
+		name       string
+		options    string
+		wantCounts []uint64
+	}{
+		{
+			name:       "field occurrence complete prefix",
+			wantCounts: []uint64{1, 5, 5, 5, 5, 6, 7},
+		},
+		{
+			name:       "field occurrence complete prior prefix",
+			options:    "current=false",
+			wantCounts: []uint64{0, 1, 5, 5, 5, 5, 6},
+		},
+		{
+			name:       "field occurrence two-row current window",
+			options:    "window=2",
+			wantCounts: []uint64{1, 5, 4, 0, 0, 1, 2},
+		},
+		{
+			name:       "field occurrence two-row prior window",
+			options:    "current=false window=2",
+			wantCounts: []uint64{0, 1, 5, 4, 0, 0, 1},
+		},
+	} {
+		assertCounts(
+			test.name,
+			base+` | sort 0 +event_id | streamstats `+test.options+
+				` count(streamstats_value) AS populated | table event_id populated`,
+			ascendingIDs,
+			test.wantCounts,
+		)
+	}
+
+	groupedField := compile(
+		base + ` | sort 0 +event_id` +
+			` | streamstats window=2 global=false count(streamstats_value) AS populated BY streamstats_group` +
+			` | table event_id populated`,
+	)
+	groupedFieldRows, err := connection.Query(
+		ctx,
+		groupedField.SQL,
+		groupedField.Args...,
+	)
+	if err != nil {
+		t.Fatalf(
+			"execute grouped streamstats count(field): %v\nSQL: %s\nargs: %#v",
+			err,
+			groupedField.SQL,
+			groupedField.Args,
+		)
+	}
+	var groupedFieldGot []groupedRow
+	for groupedFieldRows.Next() {
+		var row groupedRow
+		if scanErr := groupedFieldRows.Scan(&row.id, &row.peers); scanErr != nil {
+			_ = groupedFieldRows.Close()
+			t.Fatalf("scan grouped streamstats count(field): %v", scanErr)
+		}
+		groupedFieldGot = append(groupedFieldGot, row)
+	}
+	if rowsErr := groupedFieldRows.Err(); rowsErr != nil {
+		_ = groupedFieldRows.Close()
+		t.Fatalf("iterate grouped streamstats count(field): %v", rowsErr)
+	}
+	if closeErr := groupedFieldRows.Close(); closeErr != nil {
+		t.Fatalf("close grouped streamstats count(field): %v", closeErr)
+	}
+	four := uint64(4)
+	five := uint64(5)
+	groupedFieldWant := []groupedRow{
+		{id: "streamstats-01", peers: &one},
+		{id: "streamstats-02", peers: &four},
+		{id: "streamstats-03", peers: &one},
+		{id: "streamstats-04"},
+		{id: "streamstats-05"},
+		{id: "streamstats-06", peers: &five},
+		{id: "streamstats-07", peers: &one},
+	}
+	if !reflect.DeepEqual(groupedFieldGot, groupedFieldWant) {
+		t.Fatalf(
+			"grouped streamstats count(field) rows = %#v, want %#v",
+			groupedFieldGot,
+			groupedFieldWant,
+		)
+	}
+
+	assertCounts(
+		"field occurrence alias replacement",
+		base+` | sort 0 +event_id`+
+			` | streamstats count(streamstats_value) AS streamstats_value`+
+			` | table event_id streamstats_value`,
+		ascendingIDs,
+		[]uint64{1, 5, 5, 5, 5, 6, 7},
+	)
+	assertCounts(
+		"projected-away field occurrence input",
+		base+` | sort 0 +event_id | fields event_id`+
+			` | streamstats count(streamstats_value) AS populated`+
+			` | table event_id populated`,
+		ascendingIDs,
+		[]uint64{0, 0, 0, 0, 0, 0, 0},
+	)
+
+	fixedMultivalue := compile(
+		base + ` | stats values(streamstats_group) AS groups` +
+			` | streamstats count(groups) AS populated | table populated`,
+	)
+	var fixedMultivalueCount uint64
+	if err := connection.QueryRow(
+		ctx,
+		fixedMultivalue.SQL,
+		fixedMultivalue.Args...,
+	).Scan(&fixedMultivalueCount); err != nil {
+		t.Fatalf("execute fixed multivalue streamstats count(field): %v", err)
+	}
+	if fixedMultivalueCount != 2 {
+		t.Fatalf("fixed multivalue streamstats count(field) = %d, want 2", fixedMultivalueCount)
+	}
+
 	grouped := compile(
 		base + ` | sort 0 +event_id` +
 			` | streamstats window=2 global=false count AS peers BY streamstats_group` +
@@ -309,10 +460,6 @@ func testStreamStatsAgainstClickHouse(
 		_ = groupedRows.Close()
 		t.Fatalf("grouped streamstats column types = %#v", types)
 	}
-	type groupedRow struct {
-		id    string
-		peers *uint64
-	}
 	var groupedGot []groupedRow
 	for groupedRows.Next() {
 		var row groupedRow
@@ -329,8 +476,6 @@ func testStreamStatsAgainstClickHouse(
 	if closeErr := groupedRows.Close(); closeErr != nil {
 		t.Fatalf("close grouped streamstats: %v", closeErr)
 	}
-	one := uint64(1)
-	two := uint64(2)
 	groupedWant := []groupedRow{
 		{id: "streamstats-01", peers: &one},
 		{id: "streamstats-02", peers: &one},
@@ -471,7 +616,7 @@ func testStreamStatsAgainstClickHouse(
 	// The foreign poison is newer than every authorized event. It must neither
 	// contribute to this count nor trigger the grouped validator above.
 	tenantScoped := compile(
-		base + ` | streamstats count AS total` +
+		base + ` | streamstats count(streamstats_value) AS total` +
 			` | sort 0 -total | head 1 | table total`,
 	)
 	var tenantTotal uint64
@@ -482,8 +627,8 @@ func testStreamStatsAgainstClickHouse(
 	).Scan(&tenantTotal); err != nil {
 		t.Fatalf("execute tenant-scoped streamstats: %v", err)
 	}
-	if tenantTotal != uint64(len(ascendingIDs)) {
-		t.Fatalf("tenant-scoped streamstats total = %d, want %d", tenantTotal, len(ascendingIDs))
+	if tenantTotal != 7 {
+		t.Fatalf("tenant-scoped streamstats field total = %d, want 7", tenantTotal)
 	}
 
 	hiddenPoison := compile(
@@ -503,7 +648,7 @@ func testStreamStatsAgainstClickHouse(
 
 	exactBoundary := compileBoundary(
 		`index=eventstats-boundary source="eventstats-boundary" host="in"` +
-			` | streamstats window=10000 count AS ordinal` +
+			` | streamstats window=10000 count(event_id) AS ordinal` +
 			` | sort 0 -ordinal | head 1 | table ordinal`,
 	)
 	var exactMaximum uint64
@@ -528,7 +673,7 @@ func testStreamStatsAgainstClickHouse(
 
 	hiddenOverflow := compileBoundary(
 		`index=eventstats-boundary source="eventstats-boundary"` +
-			` | streamstats count AS ordinal` +
+			` | streamstats count(projected_away) AS ordinal` +
 			` | fields - ordinal | search event_id="not-present"`,
 	)
 	overflowErr := executeCompiledExpectingNoRows(ctx, connection, hiddenOverflow)

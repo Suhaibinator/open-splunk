@@ -602,7 +602,7 @@ func assertBoundedStreamStatsSQL(t *testing.T, compiled CompiledQuery) {
 	}
 }
 
-const streamStatsAnalysisSource = `index=gradethis | table _time,event_id,user | sort 0 +event_id | streamstats current=false count AS prior BY user`
+const streamStatsAnalysisSource = `index=gradethis | table _time,event_id,user,status | sort 0 +event_id | streamstats current=false count(status) AS prior BY user`
 
 func assertStreamStatsAnalysisBarrier(t *testing.T, sql string, args []any) {
 	t.Helper()
@@ -610,7 +610,8 @@ func assertStreamStatsAnalysisBarrier(t *testing.T, sql string, args []any) {
 	for _, required := range []string{
 		`"__os_streamstats_input_`,
 		`"__os_streamstats_result_`,
-		`count() OVER (PARTITION BY "__os_streamstats_eligible_`,
+		`sum(toUInt128("__os_streamstats_measure_`,
+		`OVER (PARTITION BY "__os_streamstats_eligible_`,
 		`ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING`,
 		`AS "prior"`,
 		StreamStatsInputLimitMarker,
@@ -637,7 +638,7 @@ func assertStreamStatsAnalysisBarrier(t *testing.T, sql string, args []any) {
 	if got := strings.Count(sql, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("analysis physical event scans = %d, want one:\n%s", got, sql)
 	}
-	wantPrefix := []any{"user", "user.", "tenant-1"}
+	wantPrefix := []any{"user", "user.", "status", "status.", "tenant-1"}
 	if len(args) < len(wantPrefix) || !slices.Equal(args[:len(wantPrefix)], wantPrefix) {
 		t.Fatalf("analysis streamstats argument prefix = %#v, want %#v", args, wantPrefix)
 	}

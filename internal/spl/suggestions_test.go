@@ -462,6 +462,20 @@ func TestAnalyzeSuggestionContextTracksConsumedCommandOptions(t *testing.T) {
 			keywords: []string{"AS", "BY", "window=", "global="},
 		},
 		{
+			source: `| streamstats current=false count(`,
+			kinds:  []SuggestionKind{SuggestionKindField},
+		},
+		{
+			source:   `| streamstats count(status) `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"AS", "BY", "current=", "window=", "global="},
+		},
+		{
+			source:   `| streamstats count(status) AS populated `,
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"BY", "current=", "window=", "global="},
+		},
+		{
 			source:   `| streamstats count BY host `,
 			kinds:    []SuggestionKind{SuggestionKindField, SuggestionKindKeyword},
 			keywords: []string{"current=", "window=", "global="},

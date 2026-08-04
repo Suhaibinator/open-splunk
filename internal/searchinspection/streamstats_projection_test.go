@@ -11,20 +11,25 @@ import (
 func TestProjectLogicalPlanDescribesRowPreservingStreamAggregate(t *testing.T) {
 	t.Parallel()
 
-	source := "index=main | table event_id,user | streamstats current=f window=2 global=f count AS prior BY user"
+	source := "index=main | table event_id,user,status | streamstats current=f window=2 global=f count(status) AS prior BY user"
 	sourceRange := testSourceRange()
 	user, err := plan.ResolveField("user", sourceRange)
 	if err != nil {
 		t.Fatalf("ResolveField(user): %v", err)
 	}
+	status, err := plan.ResolveField("status", sourceRange)
+	if err != nil {
+		t.Fatalf("ResolveField(status): %v", err)
+	}
 	logical := &plan.Query{
-		OutputFields: []string{"event_id", "user", "prior"},
+		OutputFields: []string{"event_id", "user", "status", "prior"},
 		Operators: []plan.Operator{
 			&plan.Scan{Range: sourceRange},
 			&plan.StreamAggregate{
 				GroupBy: []plan.FieldRef{user},
 				Measure: plan.AggregateMeasure{
-					Function: plan.AggregateFunctionCountRows,
+					Function: plan.AggregateFunctionCountValues,
+					Input:    status,
 					Output:   "prior",
 				},
 				IncludeCurrent: false,
@@ -41,15 +46,15 @@ func TestProjectLogicalPlanDescribesRowPreservingStreamAggregate(t *testing.T) {
 	}
 	stage := projected.Stages[1]
 	if stage.Operator != "StreamAggregate" ||
-		!slices.Equal(stage.InputFields, []string{"user"}) ||
+		!slices.Equal(stage.InputFields, []string{"status", "user"}) ||
 		!slices.Equal(stage.OutputFields, []string{"prior"}) {
 		t.Fatalf("stream aggregate stage = %#v", stage)
 	}
-	if !slices.Equal(projected.ReferencedFields, []string{"user"}) {
-		t.Fatalf("referenced fields = %v, want BY field only", projected.ReferencedFields)
+	if !slices.Equal(projected.ReferencedFields, []string{"status", "user"}) {
+		t.Fatalf("referenced fields = %v, want measure and BY fields", projected.ReferencedFields)
 	}
 	if projected.Output.Kind != OutputKindStatic ||
-		!slices.Equal(projected.Output.Fields, []string{"event_id", "user", "prior"}) ||
+		!slices.Equal(projected.Output.Fields, []string{"event_id", "user", "status", "prior"}) ||
 		projected.Output.MaxDynamicFields != 0 {
 		t.Fatalf("output = %#v, want row-preserving static schema", projected.Output)
 	}

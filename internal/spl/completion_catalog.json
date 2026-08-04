@@ -83,7 +83,7 @@
     {
       "name": "streamstats",
       "insertion": "streamstats count AS running_count",
-      "detail": "Add one bounded running row count in deterministic pipeline order, optionally excluding the current row or partitioning by exact fields."
+      "detail": "Add one bounded running row count or exact-field occurrence count in deterministic pipeline order, optionally excluding the current row or partitioning by exact fields."
     },
     {
       "name": "top",
