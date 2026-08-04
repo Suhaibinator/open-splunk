@@ -845,7 +845,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendTimeline,
     displayedBackendResults?.timeline,
   ]);
-  const timechartValueColumns = useMemo(() => timechartValueFields(timelinePoints), [timelinePoints]);
+  const timechartValueColumns = useMemo(() => backendEnabled
+    ? backendResultSchema === null
+      ? []
+      : timechartValueFields(timelinePoints, backendResultSchema)
+    : timechartValueFields(timelinePoints), [
+    backendEnabled,
+    backendResultSchema,
+    timelinePoints,
+  ]);
   const statisticsRows: WorkspaceStatistic[] = backendEnabled
     ? displayedBackendResults?.statistics ?? backendStatistics
     : DEMO_STATISTICS;
@@ -6332,6 +6340,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             statsDensity={statsDensity}
             statsSort={statsSort}
             timechartSort={timechartSort}
+            timechartValueColumns={timechartValueColumns}
             timelinePoints={timelinePoints}
             onApplyPivot={(field, value) => applyPivot(field, value, "include")}
             onExport={() => openExportDialog("statistics")}

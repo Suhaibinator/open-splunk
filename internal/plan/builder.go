@@ -1576,21 +1576,26 @@ func buildTimechartMeasure(
 			aggregate.Percentile,
 			outputSchemaKnown,
 		)
-	case spl.AggregateFunctionSum, spl.AggregateFunctionAverage:
+	case spl.AggregateFunctionCountValues, spl.AggregateFunctionSum,
+		spl.AggregateFunctionAverage:
 		if aggregate.Input == "" ||
 			aggregate.InputRange == (spl.Range{}) ||
 			aggregate.Percentile != 0 ||
 			aggregate.Alias == "" {
 			return AggregateMeasure{}, &Diagnostic{
 				Code: "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
-				Message: "timechart sum and average require one exact input " +
+				Message: "timechart field aggregate requires one exact input " +
 					"field, no percentile metadata, and one output",
 				Range: aggregate.Range,
 			}
 		}
-		function := AggregateFunctionSum
-		canonicalName := "sum"
-		if aggregate.Function == spl.AggregateFunctionAverage {
+		function := AggregateFunctionCountValues
+		canonicalName := "count"
+		switch aggregate.Function {
+		case spl.AggregateFunctionSum:
+			function = AggregateFunctionSum
+			canonicalName = "sum"
+		case spl.AggregateFunctionAverage:
 			function = AggregateFunctionAverage
 			canonicalName = "avg"
 		}

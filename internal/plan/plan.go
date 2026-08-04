@@ -283,9 +283,9 @@ func (*StreamAggregate) operator()                 {}
 func (*StreamAggregate) LogicalName() string       { return "StreamAggregate" }
 func (op *StreamAggregate) SourceRange() spl.Range { return op.Range }
 
-// TimechartSplit is the bounded runtime-wide contract for a count, percentile,
-// sum, or average timechart BY field. A nil split selects a fixed two-column
-// form.
+// TimechartSplit is the bounded runtime-wide contract for a row count, field
+// count, percentile, sum, or average timechart BY field. A nil split selects a
+// fixed two-column form.
 type TimechartSplit struct {
 	Field        FieldRef
 	SeriesLimit  uint16
@@ -296,10 +296,10 @@ type TimechartSplit struct {
 }
 
 // Timechart transforms rows into one aggregate series over fixed,
-// epoch-aligned UTC buckets. Measure is row count, percentile, sum, or average,
-// each optionally paired with Split. FirstBucket and
-// BucketCount describe the complete fixed range, including partial boundary
-// buckets and continuous gaps.
+// epoch-aligned UTC buckets. Measure is row count, exact-field count,
+// percentile, sum, or average, each optionally paired with Split. FirstBucket
+// and BucketCount describe the complete fixed range, including partial
+// boundary buckets and continuous gaps.
 type Timechart struct {
 	Time        FieldRef
 	Split       *TimechartSplit

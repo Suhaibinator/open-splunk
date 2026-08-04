@@ -703,7 +703,8 @@ func binEdgeTimechart(
 	if compiled.Timechart == nil {
 		t.Fatalf("compiled query is not a timechart: %#v", compiled)
 	}
-	query := "SELECT arrayStringConcat(any(" + quoteIdentifier(TimechartNamesColumn) + "), '|'), " +
+	query := "SELECT arrayStringConcat(argMin(" + quoteIdentifier(TimechartNamesColumn) + ", " +
+		quoteIdentifier(TimechartOrdinalColumn) + "), '|'), " +
 		"arrayStringConcat(arrayMap(value -> toString(value), sumForEach(" +
 		quoteIdentifier(TimechartCountsColumn) + ")), '|'), " +
 		"max(" + quoteIdentifier(TimechartInvalidColumn) + ") FROM (" + compiled.SQL + ")"

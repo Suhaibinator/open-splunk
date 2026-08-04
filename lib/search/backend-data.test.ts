@@ -778,6 +778,54 @@ test("empty and invalid time-series rows do not construct date-time formatters",
   assert.deepEqual(invalid.value.timeline, []);
 });
 
+test("empty fixed timecharts retain canonical and aliased metric schema names", () => {
+  for (const metricName of ["count(payload.value)", "Occurrences"]) {
+    const schema: ResultSchema = {
+      schemaId: `empty-fixed-timechart-${metricName}`,
+      revision: 1n,
+      resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+      columns: [
+        column(
+          "_time",
+          ValueType.VALUE_TYPE_TIMESTAMP,
+          ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+        ),
+        column(
+          metricName,
+          ValueType.VALUE_TYPE_UINT64,
+          ColumnSemanticType.COLUMN_SEMANTIC_TYPE_METRIC,
+        ),
+      ],
+    };
+
+    const adapted = adaptSearchResults(schema, []);
+
+    assert.deepEqual(adapted.timeline, []);
+    assert.deepEqual(timechartValueFields(adapted.timeline, schema), [metricName]);
+  }
+});
+
+test("empty dynamic timecharts do not invent a count series", () => {
+  const schema: ResultSchema = {
+    schemaId: "empty-dynamic-timechart-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_TIME_SERIES,
+    columns: [
+      column(
+        "_time",
+        ValueType.VALUE_TYPE_TIMESTAMP,
+        ColumnSemanticType.COLUMN_SEMANTIC_TYPE_EVENT_TIME,
+      ),
+    ],
+  };
+
+  const adapted = adaptSearchResults(schema, []);
+
+  assert.deepEqual(adapted.timeline, []);
+  assert.deepEqual(timechartValueFields(adapted.timeline, schema), []);
+  assert.deepEqual(timechartValueFields(adapted.timeline), ["count"]);
+});
+
 test("formatter reuse refreshes the local timezone for each adaptation", (context) => {
   const originalTimezone = process.env.TZ;
   const schema: ResultSchema = {
@@ -947,6 +995,7 @@ test("timechart keeps siblings when a runtime series is named count", () => {
   assert.deepEqual(adapted.statistics, []);
   assert.equal(adapted.timeline[0]?.label, expectedFirstTimelineLabel);
   assert.deepEqual(Object.keys(adapted.timeline[0]?.series ?? {}), ["count", "ERROR", "WARN"]);
+  assert.deepEqual(timechartValueFields(adapted.timeline, schema), ["count", "ERROR", "WARN"]);
   assert.deepEqual(timechartValueFields(adapted.timeline), ["count", "ERROR", "WARN"]);
   assert.equal(adapted.timeline[0]?.exactSeries?.ERROR, "9007199254740993");
   assert.deepEqual(timechartRowsForExport(adapted.timeline), [{

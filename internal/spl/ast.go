@@ -740,10 +740,10 @@ func (c *BinCommand) SourceRange() Range { return c.Range }
 
 // TimechartCommand produces one aggregate series over fixed _time buckets.
 // Aggregate retains the same source-located representation used by stats.
-// Argument-free count, sum, and average may optionally use SplitBy for a
-// bounded runtime-wide relation. Percentile remains deliberately unsplit and
-// therefore has a static _time/aggregate-output schema. Every form is a
-// terminal transforming command.
+// Argument-free count, exact-field count, percentile, sum, and average may
+// optionally use SplitBy for a bounded runtime-wide relation. Every unsplit
+// form has a static _time/aggregate-output schema, and every form is a terminal
+// transforming command.
 type TimechartCommand struct {
 	Span      TimeSpan
 	Aggregate StatsAggregate

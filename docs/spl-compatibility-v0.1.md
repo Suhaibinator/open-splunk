@@ -2914,6 +2914,9 @@ rather than falling back to an approximate or data-dependent bin.
 ```spl
 | timechart span=5m count
 | timechart span=5m count BY level
+| timechart span=5m count(status)
+| timechart span=5m count(payload) AS populated
+| timechart span=5m count(status) BY service
 | timechart span=5m p95(duration_ms)
 | timechart span=1h perc50(duration_ms) AS median_ms
 | timechart span=5m p95(duration_ms) BY service
@@ -2925,34 +2928,39 @@ rather than falling back to an approximate or data-dependent bin.
 ```
 
 The supported aggregate forms are exactly one argument-free `count`, one
-integer-suffix percentile, or one `sum(field)` or `avg(field)`. Every form
-accepts an optional `BY` with one exact split field; `count` cannot be aliased.
-Every numeric form accepts one exact unquoted input field and an optional exact
-unquoted `AS` output. A percentile is written `pN(field)` or `percN(field)`,
-where `N` is an integer from 1 through 99.
-Without `AS`, its two spellings publish the canonical lowercase
-`percN(field)` name; for example, `p095(duration_ms)` publishes
-`perc95(duration_ms)`. Unsplit `sum` and `avg` likewise publish canonical
-lowercase `sum(field)` and `avg(field)` names when `AS` is absent. With `BY`,
-the runtime split values name the public series, so an accepted `AS` alias does
-not become a public output column. Function and clause names are
-case-insensitive.
+long-form exact-field `count(field)`, one integer-suffix percentile, or one
+`sum(field)` or `avg(field)`. Every form accepts an optional `BY` with one exact
+split field; for field aggregates, the split must differ from the measure
+input. Argument-free `count` cannot be aliased. Every field form accepts one
+exact unquoted input field and an optional exact unquoted `AS` output. A
+percentile is written `pN(field)` or `percN(field)`, where `N` is an integer
+from 1 through 99. Without `AS`, field occurrence count publishes canonical
+lowercase `count(field)`, preserving the exact input spelling. The two
+percentile spellings publish canonical lowercase `percN(field)`; for example,
+`p095(duration_ms)` publishes `perc95(duration_ms)`. Unsplit `sum` and `avg`
+likewise publish canonical lowercase `sum(field)` and `avg(field)` names when
+`AS` is absent. With `BY`, the runtime split values name the public series, so
+an accepted `AS` alias does not become a public output column. Function and
+clause names are case-insensitive; field and alias names remain case-sensitive.
 
 Every form requires a positive fixed `s`, `m`, or `h` span from one second
-through 24 hours and must be the final pipeline command. Unsplit count has the
-fixed `_time,count` schema. An unsplit numeric aggregate has the fixed
-`_time,<aggregate-output>` schema. With `BY`, split values determine the wide
-output columns at runtime. All are time-series results; every `BY` form has
-runtime-named columns.
+through 24 hours and must be the final pipeline command. Unsplit argument-free
+count has the fixed `_time,count` schema. Unsplit field occurrence count and
+numeric aggregates have the fixed `_time,<aggregate-output>` schema. With
+`BY`, split values determine the wide output columns at runtime. All are
+time-series results; every `BY` form has runtime-named columns.
 
 The search time range remains half-open `[earliest, latest)`. Buckets are
 aligned to Unix epoch boundaries using mathematical floor division, including
 before 1970. Partial first and last buckets are retained. For either count
 form, when at least one input event exists, missing buckets are filled with
-zero counts and rows are ordered by `_time` ascending. A completely empty
-input returns zero rows while preserving the known schema: `_time,count`
-without `BY`, the fixed `_time,<aggregate-output>` schema for a numeric
-aggregate, or `_time` with `BY` because there are no observed runtime series.
+zero counts and rows are ordered by `_time` ascending. For `count(field)`, a
+nonempty input whose field is wholly missing, null, or an empty multivalue
+therefore publishes the complete zero grid rather than being mistaken for an
+empty input. A completely empty input returns zero rows while preserving the
+known schema: `_time,count` for bare count, fixed
+`_time,<aggregate-output>` for an unsplit field aggregate, or `_time` with
+`BY` because there are no observed runtime series.
 `timechart` requires the unmodified canonical `_time`; removing,
 replacing, or transforming it is a source-located error.
 
@@ -2962,16 +2970,28 @@ with `span=7h` retains the partial bucket beginning at
 `1899-12-31T19:00:00Z`; the executor reconstructs public bucket timestamps from
 bounded integer ordinals rather than round-tripping them through `DateTime64`.
 
-For count, `_time` is a non-null timestamp and every count is a non-null
-unsigned value. With `BY`, the public result remains wide: `_time` is followed
-by non-null unsigned count columns. The ten ordinary string series with the
-highest total count across the complete range are retained; equal scores use
-UTF-8 lexical order. Ordinary output columns are then ordered lexically,
-followed by `NULL` for missing/explicit-null values and `OTHER` for omitted
-ordinary series. `NULL` does not consume a top-ten slot. Split values beginning
-with `_` receive Splunk's `VALUE` prefix (`_audit` becomes `VALUE_audit`). An
-upstream projection that removes the split field treats it as missing for all
-retained events.
+`count(field)` uses the exact occurrence semantics specified for `stats`: a
+missing field, explicit null, empty multivalue, or null multivalue member
+contributes zero; every other scalar and every immediate non-null multivalue
+member contributes one; and typed containers count atomically without
+expanding event rows. A projected-away measure remains missing and contributes
+zero.
+The output is always a non-null `UInt64`.
+
+For either count form, `_time` is a non-null timestamp and every count is a
+non-null unsigned value. With `BY`, the public result remains wide: `_time` is
+followed by non-null unsigned count columns. The ten ordinary string series
+with the highest total measure across the complete range are retained: source
+rows for bare count and field occurrences for `count(field)`. Equal scores use
+UTF-8 lexical order. Row presence, not a positive measure, establishes the
+split domain, so an ordinary or `NULL` series whose counted field is wholly
+ineligible remains visible with zero cells. Ordinary output columns are then
+ordered lexically, followed by `NULL` for missing/explicit-null values and
+`OTHER` for omitted ordinary series. `OTHER` sums the omitted row or occurrence
+totals as appropriate. `NULL` does not consume a top-ten slot. Split values
+beginning with `_` receive Splunk's `VALUE` prefix (`_audit` becomes
+`VALUE_audit`). An upstream projection that removes the split field treats it
+as missing for all retained events.
 
 With numeric `BY`, `_time` is followed by nullable `Float64` series columns.
 The ten ordinary string series with the highest numeric score are retained;
@@ -3019,6 +3039,26 @@ runtime-only schema but zero rows, from present input whose measure field is
 missing or wholly ineligible, which publishes every bucket with null values
 for its fixed or runtime series.
 
+The fixed `count(field)` lowering scans the tenant/index/time/snapshot-scoped
+source once and computes one bounded `UInt64` immediate-occurrence contribution
+per event. Bucket totals accumulate through `UInt128` before publication as
+`UInt64`; no `ARRAY JOIN` or row expansion is used. The materialized bucket
+groups, at most 10,000, are also the independent input-presence proof, so the
+executor can distinguish an empty source from a present all-zero measure
+without rescanning events.
+
+The split `count(field)` lowering likewise scans once. Every raw `(bucket,
+split-kind, label)` group retains both a source-row count and an occurrence
+total. Occurrence totals drive top-ten scoring, `OTHER`, and the published
+maps; row counts independently retain zero-contribution domains and poison an
+invalid split value. Both raw and collapsed occurrence sums use `UInt128`
+intermediates, and no source row or multivalue member is expanded.
+
+For both split count forms, the private transport sends the runtime name array
+only with ordinal zero; later rows carry only the fixed-width count array. The
+executor buffers and validates the complete grid before publishing a schema or
+row.
+
 The fixed numeric lowering scans the tenant/index/time/snapshot-scoped source
 once, computing bucket ticks and normalized numeric-member arrays inline. It
 materializes only the resulting at-most-10,000 bucket groups. The final join
@@ -3041,11 +3081,11 @@ states for deterministic series scoring, and merges omitted states before
 finalizing `OTHER`. Invalid split rows retain only the constant validation
 count and an empty GK state; their measure arrays never feed a sketch. The
 bounded states drive top-ten selection, collision validation, collapse, and
-the per-bucket value/presence maps. The private transport sends the runtime
-name array only with ordinal zero; later rows carry only the fixed-width value
-and presence arrays. The executor buffers and validates the complete grid
-before publishing a schema or row, and the separate presence array preserves
-the difference between null gaps and real numeric zero.
+the per-bucket value/presence maps. The private transport similarly sends the
+runtime name array only with ordinal zero; later rows carry only the
+fixed-width value and presence arrays. The executor buffers and validates the
+complete grid before publishing a schema or row, and the separate presence
+array preserves the difference between null gaps and real numeric zero.
 
 The split form supports string split values plus missing/null. Numeric,
 Boolean, extended, list, and object split values fail the whole command before
@@ -3056,11 +3096,12 @@ Results in either form are bounded to 10,000 buckets. The split form is
 additionally bounded to 12 runtime series (ten ordinary, `NULL`, and `OTHER`),
 for at most 13 public columns. The 10,000-bucket resource policy is
 intentionally lower than Splunk's installation-configurable `maxbins` default.
-With default executor settings, count, sum, and average runtime-wide timecharts
-receive a fixed 130,000-group allowance for their exact pre-ranking raw
+With default executor settings, row-count, field-occurrence-count, sum, and
+average runtime-wide timecharts receive a fixed 130,000-group allowance for
+their exact pre-ranking raw
 `(bucket, split-kind, label)` work; it is intentionally independent of the
-twelve-column output width. A split percentile instead has a hard 20,000 raw-
-group/sketch ceiling because each group retains a GK state rather than a
+twelve-column output width. A split percentile instead has a hard 20,000
+raw-group/sketch ceiling because each group retains a GK state rather than a
 constant-size count or sum/count tuple. A higher general group setting is
 clamped to that percentile ceiling. A lower configured cap remains
 authoritative unless timechart expansion is explicitly enabled, in which case
@@ -3068,14 +3109,16 @@ it may rise only to 20,000. Domains exceeding the applicable budget fail
 atomically with an execution-limit error.
 
 Retained unsupported forms fail rather than being approximated. These include
-count arguments or aliases;
-wildcard, quoted, missing, multiple, or eval-expression numeric inputs;
-wildcard, quoted, or missing numeric aliases after `AS`;
-multiple aggregates; every other aggregate such as `dc`, `values`, or
-`count(field)`; percentile suffixes outside 1 through 99 or with a decimal
+`count()`, abbreviated `c`/`c(field)`, aliases on argument-free `count`, and
+wildcard, quoted, missing, multiple, or eval-expression field inputs;
+wildcard, quoted, or missing field aliases after `AS`;
+multiple aggregates; every other aggregate such as `dc` or `values`;
+percentile suffixes outside 1 through 99 or with a decimal
 level; `perc(field, N)`, `upperperc`, and `exactperc`; options; malformed,
-wildcard, quoted, missing, or multiple split fields; and omitted,
-nonpositive, overflowing, compound, logarithmic, calendar, or subsecond spans.
+wildcard, quoted, missing, or multiple split fields; a split field identical to
+the field aggregate input; an aggregate output alias that collides with
+`_time`; and omitted, nonpositive, overflowing, compound, logarithmic,
+calendar, or subsecond spans.
 Every unsupported form retains a source-located timechart diagnostic.
 
 ### `chart`

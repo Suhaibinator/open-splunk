@@ -682,8 +682,19 @@ function timelineFromRows(
   });
 }
 
-/** Stable backend field order for a timechart table or export. */
-export function timechartValueFields(points: TimelinePoint[]): string[] {
+/** Stable field order for a timechart table or export. */
+export function timechartValueFields(
+  points: TimelinePoint[],
+  schema?: ResultSchema,
+): string[] {
+  if (schema !== undefined) {
+    if (schema.resultKind !== ResultSetKind.RESULT_SET_KIND_TIME_SERIES) return [];
+    const timeIndex = schema.columns.findIndex((column) => /^_?time$/i.test(column.fieldName));
+    if (timeIndex < 0) return [];
+    return schema.columns.flatMap((column, index) =>
+      index !== timeIndex && column.fieldName.length > 0 ? [column.fieldName] : []
+    );
+  }
   const fields = new Set<string>();
   for (const point of points) {
     for (const field of Object.keys(point.series ?? {})) fields.add(field);

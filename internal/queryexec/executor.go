@@ -363,7 +363,8 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	columns := rows.Columns()
 	if query.Timechart != nil {
 		switch query.Timechart.Mode {
-		case clickhouse.TimechartModeFixedCount:
+		case clickhouse.TimechartModeFixedCount,
+			clickhouse.TimechartModeFixedFieldCount:
 			buffered, readErr := readFixedTimechartRows(
 				executionContext,
 				rows,
@@ -628,8 +629,19 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 	switch output.Mode {
 	case clickhouse.TimechartModeFixedCount:
 		if !slices.Equal(query.OutputFields, []string{"_time", "count"}) ||
-			output.MaxSeries != 1 || output.MaxLabelBytes != 0 || output.ValueField != "" {
+			output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.ValueField != "" ||
+			output.ValueKind != clickhouse.TimechartValueKindInvalid {
 			return fmt.Errorf("%w: compiled fixed timechart output contract is invalid", searchjobs.ErrInvalidResult)
+		}
+	case clickhouse.TimechartModeFixedFieldCount:
+		resolved, resolveErr := plan.ResolveField(output.ValueField, spl.Range{})
+		if resolveErr != nil || resolved.Name != output.ValueField ||
+			output.ValueField == "" || output.ValueField == "_time" ||
+			!slices.Equal(query.OutputFields, []string{"_time", output.ValueField}) ||
+			output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.ValueKind != clickhouse.TimechartValueKindInvalid {
+			return fmt.Errorf("%w: compiled fixed field-count timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
 	case clickhouse.TimechartModeFixedValue:
 		resolvedValueField, valueFieldErr := plan.ResolveField(
@@ -647,7 +659,8 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 	case clickhouse.TimechartModeRuntimeWide:
 		if !slices.Equal(query.OutputFields, []string{"_time"}) ||
 			!output.RuntimeWideBoundsValid() ||
-			output.ValueField != "" {
+			output.ValueField != "" ||
+			output.ValueKind != clickhouse.TimechartValueKindInvalid {
 			return fmt.Errorf("%w: compiled dynamic timechart output contract is invalid", searchjobs.ErrInvalidResult)
 		}
 	case clickhouse.TimechartModeRuntimeWideValue:
@@ -673,9 +686,10 @@ func validateTimechartOutput(query clickhouse.CompiledQuery) error {
 }
 
 type bufferedFixedTimechart struct {
-	first  time.Time
-	span   time.Duration
-	counts []uint64
+	first      time.Time
+	span       time.Duration
+	countField string
+	counts     []uint64
 }
 
 func readFixedTimechartRows(
@@ -688,9 +702,13 @@ func readFixedTimechartRows(
 	if err := ctx.Err(); err != nil {
 		return bufferedFixedTimechart{}, err
 	}
+	fieldOccurrenceCount := output.Mode == clickhouse.TimechartModeFixedFieldCount
 	expectedColumns := []string{
 		clickhouse.TimechartOrdinalColumn,
 		clickhouse.TimechartCountColumn,
+	}
+	if fieldOccurrenceCount {
+		expectedColumns = append(expectedColumns, clickhouse.TimechartInputPresentColumn)
 	}
 	if len(columnTypes) != len(expectedColumns) || !slices.Equal(columns, expectedColumns) {
 		return bufferedFixedTimechart{}, fmt.Errorf(
@@ -699,10 +717,16 @@ func readFixedTimechartRows(
 		)
 	}
 	for index, columnType := range columnTypes {
+		databaseType := "UInt64"
+		scanType := reflect.TypeOf(uint64(0))
+		if fieldOccurrenceCount && index == 2 {
+			databaseType = "UInt8"
+			scanType = reflect.TypeOf(uint8(0))
+		}
 		if isNilDriverValue(columnType) || columnType.Name() != expectedColumns[index] ||
 			columnType.Nullable() ||
-			strings.TrimSpace(columnType.DatabaseTypeName()) != "UInt64" ||
-			columnType.ScanType() != reflect.TypeOf(uint64(0)) {
+			strings.TrimSpace(columnType.DatabaseTypeName()) != databaseType ||
+			columnType.ScanType() != scanType {
 			return bufferedFixedTimechart{}, fmt.Errorf(
 				"%w: ClickHouse fixed timechart column %q has an invalid type",
 				searchjobs.ErrInvalidResult,
@@ -714,11 +738,17 @@ func readFixedTimechartRows(
 	// #nosec G115 -- validateTimechartOutput caps BucketCount at 10,000.
 	bucketCapacity := int(output.BucketCount)
 	buffered := bufferedFixedTimechart{
-		first:  output.FirstBucket,
-		span:   output.Span,
-		counts: make([]uint64, 0, bucketCapacity),
+		first:      output.FirstBucket,
+		span:       output.Span,
+		countField: "count",
+		counts:     make([]uint64, 0, bucketCapacity),
+	}
+	if fieldOccurrenceCount {
+		buffered.countField = output.ValueField
 	}
 	sawPositiveCount := false
+	var upstreamPresent uint8
+	haveUpstreamPresence := false
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return bufferedFixedTimechart{}, err
@@ -730,10 +760,17 @@ func readFixedTimechartRows(
 			)
 		}
 		var ordinal, count uint64
-		if err := rows.Scan(&ordinal, &count); err != nil {
+		var rowUpstreamPresent uint8
+		var scanErr error
+		if fieldOccurrenceCount {
+			scanErr = rows.Scan(&ordinal, &count, &rowUpstreamPresent)
+		} else {
+			scanErr = rows.Scan(&ordinal, &count)
+		}
+		if scanErr != nil {
 			return bufferedFixedTimechart{}, classifyQueryError(
 				ctx,
-				fmt.Errorf("scan ClickHouse fixed timechart result row: %w", err),
+				fmt.Errorf("scan ClickHouse fixed timechart result row: %w", scanErr),
 			)
 		}
 		if err := ctx.Err(); err != nil {
@@ -746,6 +783,18 @@ func readFixedTimechartRows(
 				"%w: ClickHouse fixed timechart row is invalid",
 				searchjobs.ErrInvalidResult,
 			)
+		}
+		if fieldOccurrenceCount {
+			if rowUpstreamPresent > 1 ||
+				(haveUpstreamPresence && rowUpstreamPresent != upstreamPresent) ||
+				(rowUpstreamPresent == 0 && count != 0) {
+				return bufferedFixedTimechart{}, fmt.Errorf(
+					"%w: ClickHouse fixed timechart input-presence transport is invalid",
+					searchjobs.ErrInvalidResult,
+				)
+			}
+			upstreamPresent = rowUpstreamPresent
+			haveUpstreamPresence = true
 		}
 		sawPositiveCount = sawPositiveCount || count > 0
 		buffered.counts = append(buffered.counts, count)
@@ -765,7 +814,8 @@ func readFixedTimechartRows(
 			searchjobs.ErrInvalidResult,
 		)
 	}
-	if !sawPositiveCount {
+	if (fieldOccurrenceCount && upstreamPresent == 0) ||
+		(!fieldOccurrenceCount && !sawPositiveCount) {
 		// A wholly empty upstream relation is represented by the exact zero grid
 		// so truncation remains detectable, but Splunk publishes no result rows.
 		buffered.counts = nil
@@ -945,16 +995,20 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 	bucketCapacity := int(output.BucketCount)
 	buffered := bufferedTimechart{rows: make([]timechartRow, 0, bucketCapacity)}
 	var encodedNames []string
+	destinations, err := scanDestinations(columnTypes)
+	if err != nil {
+		return bufferedTimechart{}, fmt.Errorf(
+			"%w: prepare ClickHouse timechart row scan: %w",
+			searchjobs.ErrInvalidResult,
+			err,
+		)
+	}
 	for rows.Next() {
 		if err := ctx.Err(); err != nil {
 			return bufferedTimechart{}, err
 		}
 		if uint64(len(buffered.rows)) >= output.BucketCount {
 			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart returned too many buckets", searchjobs.ErrInvalidResult)
-		}
-		destinations, err := scanDestinations(columnTypes)
-		if err != nil {
-			return bufferedTimechart{}, fmt.Errorf("%w: prepare ClickHouse timechart row scan: %w", searchjobs.ErrInvalidResult, err)
 		}
 		if err := rows.Scan(destinations...); err != nil {
 			return bufferedTimechart{}, classifyQueryError(ctx, fmt.Errorf("scan ClickHouse timechart result row: %w", err))
@@ -963,10 +1017,12 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 		if err != nil {
 			return bufferedTimechart{}, err
 		}
-		if len(names) != len(counts) || len(names) > int(output.MaxSeries) {
+		rowIndex := len(buffered.rows)
+		if len(counts) > int(output.MaxSeries) ||
+			(rowIndex == 0 && len(names) != len(counts)) ||
+			(rowIndex > 0 && (len(names) != 0 || len(counts) != len(encodedNames))) {
 			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart series arrays are invalid", searchjobs.ErrInvalidResult)
 		}
-		rowIndex := len(buffered.rows)
 		if ordinal >= output.BucketCount || ordinal != uint64(rowIndex) {
 			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart ordinal sequence is invalid", searchjobs.ErrInvalidResult)
 		}
@@ -982,8 +1038,6 @@ func readTimechartRows(ctx context.Context, rows driver.Rows, columns []string, 
 			}
 			encodedNames = slices.Clone(names)
 			buffered.columns = publicColumns
-		} else if !slices.Equal(names, encodedNames) {
-			return bufferedTimechart{}, fmt.Errorf("%w: ClickHouse timechart series changed between buckets", searchjobs.ErrInvalidResult)
 		}
 		if invalid != 0 {
 			return bufferedTimechart{}, searchjobs.ErrUnsupportedValue
@@ -1297,7 +1351,7 @@ func publishFixedTimechart(
 	}
 	schema := searchjobs.Schema{Columns: []searchjobs.Column{
 		{Name: "_time", Kind: searchjobs.ValueKindTime},
-		{Name: "count", Kind: searchjobs.ValueKindUnsigned},
+		{Name: buffered.countField, Kind: searchjobs.ValueKindUnsigned},
 	}}
 	if err := sink.SetSchema(schema); err != nil {
 		return err

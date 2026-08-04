@@ -691,16 +691,18 @@ func classifyTimechartSuggestion(context SuggestionContext, tokens []token) Sugg
 	}
 	aggregate := tokens[3:]
 	if tokenWordEqual(aggregate[0], "count") {
-		if topLevelWordIndex(aggregate, "BY") >= 0 {
-			context.Kinds = []SuggestionKind{SuggestionKindField}
+		if len(aggregate) == 1 || aggregate[1].kind != tokenLeftParen {
+			if topLevelWordIndex(aggregate, "BY") >= 0 {
+				context.Kinds = []SuggestionKind{SuggestionKindField}
+				return context
+			}
+			if len(aggregate) != 1 {
+				return context
+			}
+			context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+			context.Keywords = []string{"BY"}
 			return context
 		}
-		if len(aggregate) != 1 {
-			return context
-		}
-		context.Kinds = []SuggestionKind{SuggestionKindKeyword}
-		context.Keywords = []string{"BY"}
-		return context
 	}
 	spec, supported := timechartFieldAggregateSpecForName(aggregate[0].text)
 	if !supported {

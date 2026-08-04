@@ -14,7 +14,6 @@ import { ValueType } from "@/gen/ts/open_splunk/v1/value";
 import type { DemoScalar, TimelinePoint } from "@/lib/demo/search-data";
 import {
   compareWorkspaceNumericValues,
-  timechartValueFields,
   type WorkspaceStatistic,
   type WorkspaceStatisticsColumn,
   type WorkspaceStatisticsRow,
@@ -58,6 +57,7 @@ interface StatisticsPanelProps {
   statsDensity: StatsDensity;
   statsSort: StatsSort;
   timechartSort: TimechartSort;
+  timechartValueColumns: string[];
   timelinePoints: TimelinePoint[];
   onApplyPivot: (field: string, value: DemoScalar) => void;
   onExport: () => void;
@@ -181,6 +181,7 @@ export function StatisticsPanel({
   statsDensity,
   statsSort,
   timechartSort,
+  timechartValueColumns,
   timelinePoints,
   onApplyPivot,
   onExport,
@@ -197,16 +198,13 @@ export function StatisticsPanel({
   );
   const [timechartSeriesSort, setTimechartSeriesSort] = useState<TimechartSeriesSort | null>(null);
   const tableShellRef = useRef<HTMLDivElement>(null);
-  const explicitTimechartSeries = useMemo(
-    () => timechartValueFields(timelinePoints).filter((field) =>
-      timelinePoints.some((point) => Object.hasOwn(point.series ?? {}, field)),
-    ),
-    [timelinePoints],
+  const hasExplicitTimechartSeries = timelinePoints.some(
+    (point) => Object.keys(point.series ?? {}).length > 0,
   );
-  const hasExplicitTimechartSeries = explicitTimechartSeries.length > 0;
-  const timechartSeries = hasExplicitTimechartSeries ? explicitTimechartSeries : ["count"];
+  const timechartSeries = timechartValueColumns;
   const activeTimechartSeriesSort = timechartSeriesSort !== null
-    && explicitTimechartSeries.includes(timechartSeriesSort.key)
+    && hasExplicitTimechartSeries
+    && timechartSeries.includes(timechartSeriesSort.key)
     ? timechartSeriesSort
     : null;
   const displayedTimechartRows = useMemo(() => activeTimechartSeriesSort === null

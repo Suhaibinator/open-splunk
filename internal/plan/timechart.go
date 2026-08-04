@@ -36,7 +36,8 @@ func validTimechartMeasureContract(operator *Timechart) bool {
 			operator.Measure.Output != "_time" &&
 			(operator.Split == nil ||
 				operator.Split.Field.Name != operator.Measure.Input.Name)
-	case AggregateFunctionSum, AggregateFunctionAverage:
+	case AggregateFunctionCountValues, AggregateFunctionSum,
+		AggregateFunctionAverage:
 		return validResolvedEventAggregateField(operator.Measure.Input) &&
 			operator.Measure.Percentile == 0 &&
 			operator.Measure.Output != "_time" &&

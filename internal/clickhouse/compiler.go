@@ -453,6 +453,11 @@ const (
 	TimechartModeFixedCount
 	TimechartModeFixedValue
 	TimechartModeRuntimeWideValue
+	// TimechartModeFixedFieldCount carries a private input-presence flag in
+	// addition to the ordinal and unsigned occurrence count. Keeping it
+	// distinct from row count prevents a public output name from selecting a
+	// physical transport protocol.
+	TimechartModeFixedFieldCount
 	// MaximumTimechartSeries bounds the runtime-selected ordinary and sentinel
 	// columns carried by either wide timechart transport.
 	MaximumTimechartSeries uint16 = 12
@@ -484,8 +489,10 @@ func (kind TimechartValueKind) Valid() bool {
 }
 
 // TimechartOutput describes a bounded fixed-count, fixed-value, or runtime-wide
-// result contract. A runtime-wide value result carries ValueKind but leaves
-// ValueField empty because its public columns are selected by split values.
+// result contract. ValueField names a fixed field-count public output or a
+// fixed nullable-Double result; it stays empty for row count and runtime-wide
+// results because their public fields are predetermined or selected by split
+// values.
 type TimechartOutput struct {
 	Mode          TimechartMode
 	FirstBucket   time.Time
@@ -493,10 +500,9 @@ type TimechartOutput struct {
 	BucketCount   uint64
 	MaxSeries     uint16
 	MaxLabelBytes uint16
-	// ValueField is populated only for a fixed nullable-Double result. ValueKind
-	// is populated for both fixed and runtime-wide nullable values. Together they
-	// bind the private transport to the aggregate validation policy instead of
-	// trusting mutable OutputFields alone.
+	// ValueKind is populated for both fixed and runtime-wide nullable values.
+	// Together ValueField and ValueKind bind each private transport to its
+	// aggregate validation policy instead of trusting mutable OutputFields alone.
 	ValueField string
 	ValueKind  TimechartValueKind
 }
@@ -1489,6 +1495,12 @@ func wrapCompiledChronologicalValidation(
 		switch compiled.Timechart.Mode {
 		case TimechartModeFixedCount:
 			resultColumns = []string{TimechartOrdinalColumn, TimechartCountColumn}
+		case TimechartModeFixedFieldCount:
+			resultColumns = []string{
+				TimechartOrdinalColumn,
+				TimechartCountColumn,
+				TimechartInputPresentColumn,
+			}
 		case TimechartModeFixedValue:
 			resultColumns = []string{
 				TimechartOrdinalColumn,
@@ -3016,6 +3028,39 @@ func compileTimechart(
 	}
 
 	if operator.Split == nil {
+		if operator.Measure.Function == plan.AggregateFunctionCountValues {
+			if len(outputFields) != 2 || outputFields[0] != "_time" ||
+				outputFields[1] != operator.Measure.Output ||
+				outputFields[1] == "_time" || dynamic != nil {
+				return CompiledQuery{}, errors.New(
+					"compile ClickHouse timechart: fixed count(field) output contract is invalid",
+				)
+			}
+			measureField, measureExists, resolveErr := resolveCompiledField(
+				operator.Measure.Input,
+				state,
+			)
+			if resolveErr != nil {
+				return CompiledQuery{}, resolveErr
+			}
+			measureInputSQL := "toUInt64(0)"
+			var measureArgs []any
+			if measureExists {
+				measureInputSQL, measureArgs = countValueInputSQL(measureField)
+			}
+			return compileFixedCountValueTimechart(
+				relation,
+				args,
+				operator,
+				timeField,
+				measureInputSQL,
+				measureArgs,
+				outputFields,
+				spanNanoseconds,
+				firstBucketNumber,
+				alias,
+			)
+		}
 		if !slices.Equal(outputFields, []string{"_time", "count"}) || dynamic != nil {
 			return CompiledQuery{}, errors.New("compile ClickHouse timechart: fixed output contract is invalid")
 		}
@@ -3118,11 +3163,30 @@ func compileTimechart(
 			alias,
 		)
 	}
-	// The exact-presence placeholder occurs before the nested scoped fragment.
-	// Descendant detection is emitted in the following CTE so exact leaves do
-	// not pay for a second field_names scan.
-	args = prependArguments(splitField.existsArgs, args)
-	if splitField.kind == fieldKindDynamic && splitField.descendantSQL != "" {
+	fieldOccurrenceCount := operator.Measure.Function == plan.AggregateFunctionCountValues
+	measureInputSQL := ""
+	var measureArgs []any
+	if fieldOccurrenceCount {
+		measureField, measureExists, resolveErr := resolveCompiledField(
+			operator.Measure.Input,
+			state,
+		)
+		if resolveErr != nil {
+			return CompiledQuery{}, resolveErr
+		}
+		measureInputSQL = "toUInt64(0)"
+		if measureExists {
+			measureInputSQL, measureArgs = countValueInputSQL(measureField)
+		}
+	}
+	// Source-select bind markers precede the nested scoped relation. Split
+	// descendant detection lives in the next CTE, after every source marker.
+	prefixArgs := make([]any, 0, len(splitField.existsArgs)+len(measureArgs))
+	prefixArgs = append(prefixArgs, splitField.existsArgs...)
+	prefixArgs = append(prefixArgs, measureArgs...)
+	args = prependArguments(prefixArgs, args)
+	hasDescendant := splitField.kind == fieldKindDynamic && splitField.descendantSQL != ""
+	if hasDescendant {
 		args = append(args, splitField.descendantArgs...)
 	}
 
@@ -3148,9 +3212,13 @@ func compileTimechart(
 	valueType := q("__os_tc_value_type")
 	ticks := q("__os_tc_ticks")
 	label := q("__os_tc_label")
+	measureCount := q("__os_tc_measure_count")
 	bucketNumber := q("__os_tc_bucket_number")
 	kind := q("__os_tc_kind")
 	frequency := q("__os_tc_count")
+	rowCount := q("__os_tc_row_count")
+	occurrenceCount := q("__os_tc_occurrence_count")
+	occurrenceScore := q("__os_tc_occurrence_score")
 	encoded := q("__os_tc_encoded")
 	normalized := q("__os_tc_normalized")
 	collision := q("__os_tc_collision")
@@ -3172,7 +3240,10 @@ func compileTimechart(
 	sql.WriteString(splitField.valueSQL + " AS " + value + ", ")
 	sql.WriteString("toUInt8(" + existsSQL + ") AS " + present + ", ")
 	sql.WriteString(valueTypeSQL + " AS " + valueType)
-	if splitField.kind == fieldKindDynamic && splitField.descendantSQL != "" {
+	if fieldOccurrenceCount {
+		sql.WriteString(", " + measureInputSQL + " AS " + measureCount)
+	}
+	if hasDescendant {
 		sql.WriteString(", " + q(internalFieldNamesColumn))
 	}
 	sql.WriteString(" FROM (")
@@ -3181,7 +3252,7 @@ func compileTimechart(
 
 	sql.WriteString(prepared)
 	sql.WriteString(" AS (SELECT *, ")
-	if splitField.kind == fieldKindDynamic && splitField.descendantSQL != "" {
+	if hasDescendant {
 		sql.WriteString("toUInt8(if(" + present + " != 0, 0, " + splitField.descendantSQL + ")) AS " + descendant + ", ")
 	} else {
 		sql.WriteString("toUInt8(0) AS " + descendant + ", ")
@@ -3195,42 +3266,57 @@ func compileTimechart(
 	sql.WriteString(" AS (SELECT " + bucketNumberExpression + " AS " + bucketNumber + ", ")
 	sql.WriteString("multiIf(" + descendant + " != 0, toUInt8(3), " + present + " = 0 OR isNull(" + value + ") OR " + valueType + " = 'None', toUInt8(1), ")
 	sql.WriteString(valueType + " != 'String', toUInt8(3), NOT (" + validLabel + "), toUInt8(3), toUInt8(0)) AS " + kind + ", " + label)
+	if fieldOccurrenceCount {
+		sql.WriteString(", " + measureCount)
+	}
 	sql.WriteString(" FROM " + prepared + "), ")
 
 	sql.WriteString(canonicalized)
 	sql.WriteString(" AS (SELECT " + bucketNumber + ", " + kind + ", if(" + kind + " = 0, " + label + ", CAST('' AS String)) AS " + label)
+	if fieldOccurrenceCount {
+		sql.WriteString(", " + measureCount)
+	}
 	sql.WriteString(" FROM " + classified + "), ")
 
 	sql.WriteString(counts)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", count() AS " + frequency)
+	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
+	if fieldOccurrenceCount {
+		// Row frequency and occurrence cardinality are intentionally
+		// independent. The former keeps zero-contribution labels in the domain
+		// and validates bad split rows; only the latter selects series and
+		// populates their cells.
+		sql.WriteString("count() AS " + rowCount + ", ")
+		sql.WriteString("toUInt64(sum(toUInt128(" + measureCount + "))) AS " + occurrenceCount)
+	} else {
+		sql.WriteString("count() AS " + frequency)
+	}
 	sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucketNumber + ", " + kind + ", " + label + "), ")
 
 	sql.WriteString(top)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(" + frequency + ") AS " + frequency + " FROM " + counts)
-	sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
+	if fieldOccurrenceCount {
+		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(toUInt128(" + occurrenceCount + ")) AS " + occurrenceScore + " FROM " + counts)
+		sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY " + occurrenceScore + " DESC, " + label + " ASC LIMIT ")
+	} else {
+		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(" + frequency + ") AS " + frequency + " FROM " + counts)
+		sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
+	}
 	sql.WriteString(strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10))
 	sql.WriteString("), ")
 
 	sql.WriteString(collapsed)
 	sql.WriteString(" AS (SELECT " + bucketNumber + ", multiIf(" + kind + " = 1, '1:', ")
 	sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
-	sql.WriteString("sum(" + frequency + ") AS " + frequency + " FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + bucketNumber + ", " + encoded + "), ")
+	if fieldOccurrenceCount {
+		sql.WriteString("toUInt64(sum(toUInt128(" + occurrenceCount + "))) AS " + occurrenceCount)
+	} else {
+		sql.WriteString("sum(" + frequency + ") AS " + frequency)
+	}
+	sql.WriteString(" FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + bucketNumber + ", " + encoded + "), ")
 
 	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, if(startsWith(")
-	sql.WriteString(label)
-	sql.WriteString(", '_'), concat('VALUE', ")
-	sql.WriteString(label)
-	sql.WriteString("), ")
-	sql.WriteString(label)
-	sql.WriteString(") AS ")
-	sql.WriteString(sortLabel)
-	sql.WriteString(", concat('0:', ")
-	sql.WriteString(label)
-	sql.WriteString(") AS ")
-	sql.WriteString(encoded)
-	sql.WriteString(" FROM ")
-	sql.WriteString(top)
+	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, ")
+	sql.WriteString(splunkSeriesLabelSQL(label) + " AS " + sortLabel + ", concat('0:', " + label + ") AS " + encoded)
+	sql.WriteString(" FROM " + top)
 	// Both sentinels probe the materialized aggregate as an ordinary relation.
 	// A scalar subquery would be evaluated during analysis, before the
 	// materialized temporary table exists, and would re-run the scoped scan
@@ -3243,20 +3329,29 @@ func compileTimechart(
 
 	sql.WriteString(collisions)
 	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS " + collision + " FROM (")
-	sql.WriteString("SELECT if(startsWith(" + label + ", '_'), concat('VALUE', " + label + "), " + label + ") AS " + normalized)
+	sql.WriteString("SELECT " + splunkSeriesLabelSQL(label) + " AS " + normalized)
 	sql.WriteString(" FROM " + counts + " WHERE " + kind + " = 0 GROUP BY " + normalized + " HAVING uniqExact(" + label + ") > 1 LIMIT 1)), ")
 
 	sql.WriteString(bucketMaps)
-	sql.WriteString(" AS (SELECT " + bucketNumber + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + frequency + ")) AS " + countMap)
+	mapValue := frequency
+	if fieldOccurrenceCount {
+		mapValue = occurrenceCount
+	}
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + mapValue + ")) AS " + countMap)
 	sql.WriteString(" FROM " + collapsed + " GROUP BY " + bucketNumber + "), ")
 
 	sql.WriteString(validation)
-	sql.WriteString(" AS (SELECT toUInt8(sumIf(" + frequency + ", " + kind + " = 3) > 0) AS " + invalid + " FROM " + counts + "), ")
+	validationCount := frequency
+	if fieldOccurrenceCount {
+		validationCount = rowCount
+	}
+	sql.WriteString(" AS (SELECT toUInt8(sumIf(" + validationCount + ", " + kind + " = 3) > 0) AS " + invalid + " FROM " + counts + "), ")
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (" + ordinalGridSQL(ordinal, bucketNumber) + ") ")
 
-	sql.WriteString("SELECT " + grid + "." + ordinal + " AS " + ordinal + ", " + domain + ".names AS " + q(TimechartNamesColumn) + ", ")
+	sql.WriteString("SELECT " + grid + "." + ordinal + " AS " + ordinal + ", ")
+	sql.WriteString("if(" + grid + "." + ordinal + " = 0, " + domain + ".names, CAST([], 'Array(String)')) AS " + q(TimechartNamesColumn) + ", ")
 	sql.WriteString("arrayMap(name -> ifNull(" + bucketMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(TimechartCountsColumn) + ", ")
 	sql.WriteString("toUInt8(" + validation + "." + invalid + " != 0 OR " + collisions + "." + collision + " != 0) AS " + q(TimechartInvalidColumn))
 	sql.WriteString(" FROM " + grid + " CROSS JOIN " + domain + " CROSS JOIN " + validation + " CROSS JOIN " + collisions)
@@ -3308,6 +3403,7 @@ func compileTimechart(
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     dynamic.MaxSeries,
 			MaxLabelBytes: maxTimechartLabelBytes,
+			ValueKind:     TimechartValueKindInvalid,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -3613,6 +3709,19 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 				"compile ClickHouse timechart: count measure contract is invalid",
 			)
 		}
+	case plan.AggregateFunctionCountValues:
+		if operator.Split != nil &&
+			operator.Split.Field.Name == measure.Input.Name {
+			return errors.New(
+				"compile ClickHouse timechart: aggregate input and split field must differ",
+			)
+		}
+		if measure.Percentile != 0 {
+			return errors.New(
+				"compile ClickHouse timechart: count(field) contains percentile metadata",
+			)
+		}
+		return validateTimechartFieldMeasure(measure, state, operator.Range)
 	case plan.AggregateFunctionPercentile:
 		if operator.Split != nil &&
 			operator.Split.Field.Name == measure.Input.Name {
@@ -3625,7 +3734,7 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 				"compile ClickHouse timechart: percentile must be from 1 through 99",
 			)
 		}
-		return validateFixedTimechartValueMeasure(measure, state, operator.Range)
+		return validateTimechartFieldMeasure(measure, state, operator.Range)
 	case plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage:
 		if operator.Split != nil &&
@@ -3639,7 +3748,7 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 				"compile ClickHouse timechart: numeric aggregate contains percentile metadata",
 			)
 		}
-		return validateFixedTimechartValueMeasure(measure, state, operator.Range)
+		return validateTimechartFieldMeasure(measure, state, operator.Range)
 	default:
 		return errors.New(
 			"compile ClickHouse timechart: aggregate function is unsupported",
@@ -3648,7 +3757,7 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 	return nil
 }
 
-func validateFixedTimechartValueMeasure(
+func validateTimechartFieldMeasure(
 	measure plan.AggregateMeasure,
 	state compileState,
 	sourceRange spl.Range,
@@ -3665,7 +3774,7 @@ func validateFixedTimechartValueMeasure(
 	}
 	if measure.Output == "_time" {
 		return errors.New(
-			"compile ClickHouse timechart: fixed value output contract is invalid",
+			"compile ClickHouse timechart: field aggregate output contract is invalid",
 		)
 	}
 	if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
@@ -3786,6 +3895,149 @@ func compileFixedCountTimechart(
 			BucketCount:   operator.BucketCount,
 			MaxSeries:     1,
 			MaxLabelBytes: 0,
+		},
+	}
+	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
+}
+
+func compileFixedCountValueTimechart(
+	relation compiledRelation,
+	args []any,
+	operator *plan.Timechart,
+	timeField fieldState,
+	measureInputSQL string,
+	measureArgs []any,
+	outputFields []string,
+	spanNanoseconds int64,
+	firstBucketNumber int64,
+	alias string,
+) (CompiledQuery, error) {
+	q := quoteIdentifier
+	source := q("__os_timechart_source")
+	counts := q("__os_timechart_group_counts")
+	inputPresence := q("__os_timechart_input_presence")
+	grid := q("__os_timechart_grid")
+	ticks := q("__os_tc_ticks")
+	measureCount := q("__os_tc_measure_count")
+	bucketNumber := q("__os_tc_bucket_number")
+	upstreamPresent := q(TimechartInputPresentColumn)
+	ordinal := q(TimechartOrdinalColumn)
+	count := q(TimechartCountColumn)
+
+	var sql strings.Builder
+	sql.Grow(len(relation.sql) + len(measureInputSQL) + 2_048)
+	sql.WriteString("WITH ")
+	sql.WriteString(source)
+	sql.WriteString(" AS (SELECT reinterpretAsInt64(")
+	sql.WriteString(timeField.valueSQL)
+	sql.WriteString(") AS ")
+	sql.WriteString(ticks)
+	sql.WriteString(", ")
+	sql.WriteString(measureInputSQL)
+	sql.WriteString(" AS ")
+	sql.WriteString(measureCount)
+	sql.WriteString(" FROM (")
+	sql.WriteString(relation.sql)
+	sql.WriteString(") AS ")
+	sql.WriteString(alias)
+	sql.WriteString("), ")
+
+	// The materialized bucket aggregate is the source's only consumer. Both the
+	// fixed grid and the independent upstream-presence proof read this bounded
+	// relation, so an all-zero count(field) result never re-runs the scoped scan.
+	sql.WriteString(counts)
+	sql.WriteString(" AS MATERIALIZED (SELECT ")
+	sql.WriteString(epochFloorBucketNumberSQL(ticks))
+	sql.WriteString(" AS ")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(", toUInt64(sum(toUInt128(")
+	sql.WriteString(measureCount)
+	sql.WriteString("))) AS ")
+	sql.WriteString(count)
+	sql.WriteString(" FROM ")
+	sql.WriteString(source)
+	sql.WriteString(" GROUP BY ")
+	sql.WriteString(bucketNumber)
+	sql.WriteString("), ")
+
+	sql.WriteString(inputPresence)
+	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS ")
+	sql.WriteString(upstreamPresent)
+	sql.WriteString(" FROM ")
+	sql.WriteString(counts)
+	sql.WriteString("), ")
+
+	sql.WriteString(grid)
+	sql.WriteString(" AS (")
+	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
+	sql.WriteString(") SELECT ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(ordinal)
+	sql.WriteString(" AS ")
+	sql.WriteString(ordinal)
+	sql.WriteString(", ifNull(")
+	sql.WriteString(counts)
+	sql.WriteString(".")
+	sql.WriteString(count)
+	sql.WriteString(", toUInt64(0)) AS ")
+	sql.WriteString(count)
+	sql.WriteString(", ")
+	sql.WriteString(inputPresence)
+	sql.WriteString(".")
+	sql.WriteString(upstreamPresent)
+	sql.WriteString(" AS ")
+	sql.WriteString(upstreamPresent)
+	sql.WriteString(" FROM ")
+	sql.WriteString(grid)
+	sql.WriteString(" CROSS JOIN ")
+	sql.WriteString(inputPresence)
+	sql.WriteString(" LEFT JOIN ")
+	sql.WriteString(counts)
+	sql.WriteString(" ON ")
+	sql.WriteString(counts)
+	sql.WriteString(".")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(" = ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(bucketNumber)
+	sql.WriteString(" ORDER BY ")
+	sql.WriteString(grid)
+	sql.WriteString(".")
+	sql.WriteString(ordinal)
+	sql.WriteString(" ASC")
+	sql.WriteString(materializedCTESettingsSQL)
+
+	args = prependArguments(measureArgs, args)
+	args = appendOrdinalGridArgs(
+		args,
+		spanNanoseconds,
+		firstBucketNumber,
+		operator.BucketCount,
+	)
+	sourceDepth := relationalNodeDepth(relation.depth)
+	countsDepth := relationalNodeDepth(sourceDepth)
+	inputPresenceDepth := relationalNodeDepth(countsDepth)
+	gridDepth := relationalNodeDepth()
+	resultDepth := relationalNodeDepth(
+		gridDepth,
+		countsDepth,
+		inputPresenceDepth,
+	)
+	compiled := CompiledQuery{
+		SQL:          sql.String(),
+		Args:         args,
+		OutputFields: slices.Clone(outputFields),
+		Timechart: &TimechartOutput{
+			Mode:          TimechartModeFixedFieldCount,
+			FirstBucket:   operator.FirstBucket.UTC(),
+			Span:          operator.Span,
+			BucketCount:   operator.BucketCount,
+			MaxSeries:     1,
+			MaxLabelBytes: 0,
+			ValueField:    operator.Measure.Output,
+			ValueKind:     TimechartValueKindInvalid,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil

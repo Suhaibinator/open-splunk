@@ -2345,6 +2345,7 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 		if output.MaxSeries != 1 ||
 			output.MaxLabelBytes != 0 ||
 			output.ValueField != "" ||
+			output.ValueKind != clickhouse.TimechartValueKindInvalid ||
 			!slices.Equal(expected, []string{"_time", "count"}) ||
 			len(schema.Columns) != 2 {
 			return fmt.Errorf("%w: static timechart schema does not match the compiled output", ErrInvalidResult)
@@ -2360,6 +2361,27 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 			countColumn.Nullable ||
 			countColumn.Multivalue {
 			return fmt.Errorf("%w: static timechart schema is invalid", ErrInvalidResult)
+		}
+		return nil
+	}
+	if output.Mode == clickhouse.TimechartModeFixedFieldCount {
+		resolved, resolveErr := plan.ResolveField(output.ValueField, spl.Range{})
+		if resolveErr != nil || resolved.Name != output.ValueField ||
+			output.ValueField == "" || output.ValueField == "_time" ||
+			output.MaxSeries != 1 || output.MaxLabelBytes != 0 ||
+			output.ValueKind != clickhouse.TimechartValueKindInvalid ||
+			!slices.Equal(expected, []string{"_time", output.ValueField}) ||
+			len(schema.Columns) != 2 {
+			return fmt.Errorf("%w: fixed field-count timechart schema does not match the compiled output", ErrInvalidResult)
+		}
+		timeColumn := schema.Columns[0]
+		countColumn := schema.Columns[1]
+		if timeColumn.Name != "_time" || timeColumn.Kind != ValueKindTime ||
+			timeColumn.Nullable || timeColumn.Multivalue ||
+			countColumn.Name != output.ValueField ||
+			countColumn.Kind != ValueKindUnsigned || countColumn.Nullable ||
+			countColumn.Multivalue {
+			return fmt.Errorf("%w: fixed field-count timechart schema is invalid", ErrInvalidResult)
 		}
 		return nil
 	}
@@ -2396,6 +2418,9 @@ func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse
 	runtimeWideValue := false
 	switch output.Mode {
 	case clickhouse.TimechartModeRuntimeWide:
+		if output.ValueKind != clickhouse.TimechartValueKindInvalid {
+			return fmt.Errorf("%w: split count timechart aggregate kind is invalid", ErrInvalidResult)
+		}
 	case clickhouse.TimechartModeRuntimeWideValue:
 		if !output.ValueKind.Valid() {
 			return fmt.Errorf("%w: split value timechart aggregate kind is invalid", ErrInvalidResult)

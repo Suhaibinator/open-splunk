@@ -1136,6 +1136,89 @@ func TestValidateTimechartSchemaEnforcesStaticCountContract(t *testing.T) {
 	}
 }
 
+func TestValidateTimechartSchemaEnforcesFixedFieldCountAlias(t *testing.T) {
+	t.Parallel()
+
+	output := clickhouse.TimechartOutput{
+		Mode:       clickhouse.TimechartModeFixedFieldCount,
+		MaxSeries:  1,
+		ValueField: "eligible_values",
+	}
+	valid := Schema{Columns: []Column{
+		{Name: "_time", Kind: ValueKindTime},
+		{Name: "eligible_values", Kind: ValueKindUnsigned},
+	}}
+	if err := ValidateTimechartSchema(
+		valid,
+		[]string{"_time", "eligible_values"},
+		output,
+	); err != nil {
+		t.Fatalf("valid fixed count(field) schema: %v", err)
+	}
+
+	for _, test := range []struct {
+		name     string
+		schema   Schema
+		expected []string
+		output   clickhouse.TimechartOutput
+	}{
+		{
+			name:     "public schema alias disagreement",
+			schema:   Schema{Columns: []Column{valid.Columns[0], {Name: "attacker", Kind: ValueKindUnsigned}}},
+			expected: []string{"_time", "eligible_values"},
+			output:   output,
+		},
+		{
+			name:     "compiler fields alias disagreement",
+			schema:   valid,
+			expected: []string{"_time", "attacker"},
+			output:   output,
+		},
+		{
+			name:     "invalid alias metadata",
+			schema:   valid,
+			expected: []string{"_time", "eligible_values"},
+			output: func() clickhouse.TimechartOutput {
+				got := output
+				got.ValueField = "eligible*"
+				return got
+			}(),
+		},
+		{
+			name:     "time alias metadata",
+			schema:   valid,
+			expected: []string{"_time", "eligible_values"},
+			output: func() clickhouse.TimechartOutput {
+				got := output
+				got.ValueField = "_time"
+				return got
+			}(),
+		},
+		{
+			name:     "nullable value policy on unsigned count",
+			schema:   valid,
+			expected: []string{"_time", "eligible_values"},
+			output: func() clickhouse.TimechartOutput {
+				got := output
+				got.ValueKind = clickhouse.TimechartValueKindSum
+				return got
+			}(),
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := ValidateTimechartSchema(
+				test.schema,
+				test.expected,
+				test.output,
+			); !errors.Is(err, ErrInvalidResult) {
+				t.Fatalf("ValidateTimechartSchema() = %v, want ErrInvalidResult", err)
+			}
+		})
+	}
+}
+
 func TestManagerDetachesStaticTimechartMetadataFromExecutor(t *testing.T) {
 	t.Parallel()
 

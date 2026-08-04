@@ -859,7 +859,11 @@ func timechartOrdinalRows(names []string, counts [][]uint64) *fakeRows {
 		data: make([][]any, len(counts)),
 	}
 	for index, values := range counts {
-		rows.data[index] = []any{uint64(index), slices.Clone(names), slices.Clone(values), uint8(0)}
+		rowNames := []string(nil)
+		if index == 0 {
+			rowNames = slices.Clone(names)
+		}
+		rows.data[index] = []any{uint64(index), rowNames, slices.Clone(values), uint8(0)}
 	}
 	return rows
 }
@@ -931,8 +935,11 @@ func chartPivotRows(rowDatabaseType string, rowScanType reflect.Type, names []st
 }
 
 func setTimechartNames(rows *fakeRows, names []string) {
-	for _, row := range rows.data {
-		row[1] = slices.Clone(names)
+	for index, row := range rows.data {
+		row[1] = []string(nil)
+		if index == 0 {
+			row[1] = slices.Clone(names)
+		}
 		row[2] = make([]uint64, len(names))
 	}
 }

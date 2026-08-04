@@ -1168,6 +1168,12 @@ subsearches, `join`, `append`, `appendpipe`, `map`, `foreach`, data models,
 `tstats`, and arbitrary scripted commands remain explicitly out of the first
 release.
 
+The bounded `timechart` implementation includes bare row count, exact-field
+occurrence count, integer-suffix percentile, numeric sum, and numeric average,
+each with an optional one-field runtime split. Its compatibility contract pins
+empty versus present-all-ineligible input, continuous fixed grids, top-ten,
+`NULL`, and `OTHER` selection, and one-scan ClickHouse lowering.
+
 ### Example target searches
 
 The first usable release should treat the following as its initial GradeThis compatibility corpus.

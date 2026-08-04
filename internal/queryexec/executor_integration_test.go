@@ -208,6 +208,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 	eventIndexTime := queryIntegrationInsertEvent(t, ctx, connection)
 	binaryIndexTime := queryIntegrationInsertBinaryEvent(t, ctx, connection)
 	timechartBase, timechartIndexTime := queryIntegrationInsertTimechartEvents(t, ctx, connection)
+	countFieldBase, countFieldIndexTime := queryIntegrationInsertTimechartCountFieldEvents(t, ctx, connection)
 	t.Run("eventstats production resource envelope", func(t *testing.T) {
 		queryIntegrationTestEventStatsProductionEnvelope(
 			t,
@@ -222,6 +223,17 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			ctx,
 			executor,
 			eventIndexTime,
+		)
+	})
+	t.Run("timechart field occurrence count", func(t *testing.T) {
+		queryIntegrationTestTimechartCountField(
+			t,
+			ctx,
+			connection,
+			executor,
+			explainer,
+			countFieldBase,
+			countFieldIndexTime,
 		)
 	})
 	t.Run("fixed percentile timechart", func(t *testing.T) {
@@ -1598,7 +1610,7 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 )
 SELECT
     toUInt64(grid.number) AS "__os_timechart_ordinal",
-    ` + names + ` AS "__os_timechart_names",
+    if(grid.number = 0, ` + names + `, CAST([], 'Array(String)')) AS "__os_timechart_names",
     arrayMap(series -> ifNull("__os_dense_maps".series_counts[series], toUInt64(0)), ` + names + `) AS "__os_timechart_counts",
     toUInt8(0) AS "__os_timechart_invalid"
 FROM numbers(5001) AS grid

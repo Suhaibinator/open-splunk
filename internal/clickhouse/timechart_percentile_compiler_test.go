@@ -260,7 +260,7 @@ func TestCompileTimechartPercentileRevalidatesForgedMeasureAndOutput(t *testing.
 				operator.Measure.Output = "_time"
 				query.OutputFields = []string{"_time", "_time"}
 			},
-			want: "fixed value output contract is invalid",
+			want: "field aggregate output contract is invalid",
 		},
 	} {
 		test := test

@@ -823,11 +823,12 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedTimechartAggregate(
 				function,
-				"timechart requires argument-free count or one pN/percN(field), sum(field), or avg(field) aggregate",
+				"timechart requires argument-free count or one count(field), pN/percN(field), sum(field), or avg(field) aggregate",
 			)
 	}
 	functionName := strings.ToLower(function.text)
-	if functionName == "count" {
+	if functionName == "count" &&
+		(p.index+1 >= len(p.tokens) || p.tokens[p.index+1].kind != tokenLeftParen) {
 		p.advance()
 		return StatsAggregate{
 			Function:   AggregateFunctionCount,
@@ -841,15 +842,16 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedTimechartAggregate(
 				function,
-				fmt.Sprintf("timechart aggregate %q is not supported; use argument-free count or one pN/percN(field), sum(field), or avg(field) aggregate", function.text),
+				fmt.Sprintf("timechart aggregate %q is not supported; use argument-free count or one count(field), pN/percN(field), sum(field), or avg(field) aggregate", function.text),
 			)
 	}
 	p.advance()
+	leftParenthesis := p.current()
 	if !p.match(tokenLeftParen) {
 		return StatsAggregate{}, function.sourceRange.End,
 			p.unsupportedTimechartSyntax(
 				function,
-				"timechart numeric aggregate requires one exact unquoted field in parentheses",
+				"timechart field aggregate requires one exact unquoted field in parentheses",
 			)
 	}
 	input := p.current()
@@ -857,10 +859,16 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 		(strings.EqualFold(input.text, "eval") &&
 			p.index+1 < len(p.tokens) &&
 			p.tokens[p.index+1].kind == tokenLeftParen) {
+		located := input
+		// Keep the established count() diagnostic on the opening parenthesis,
+		// which previously marked the first token forbidden after bare count.
+		if functionName == "count" && input.kind == tokenRightParen {
+			located = leftParenthesis
+		}
 		return StatsAggregate{}, input.sourceRange.End,
 			p.unsupportedTimechartSyntax(
-				input,
-				"timechart numeric aggregate requires one exact unquoted field",
+				located,
+				"timechart field aggregate requires one exact unquoted field",
 			)
 	}
 	p.advance()
@@ -868,7 +876,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, input.sourceRange.End,
 			p.unsupportedTimechartSyntax(
 				p.current(),
-				"timechart numeric aggregate accepts exactly one field argument",
+				"timechart field aggregate accepts exactly one field argument",
 			)
 	}
 	end := p.previous().sourceRange.End
@@ -889,7 +897,7 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 	if alias.kind != tokenWord || p.isKeyword("BY") || strings.Contains(alias.text, "*") {
 		return StatsAggregate{}, end, p.unsupportedTimechartSyntax(
 			alias,
-			"timechart numeric aggregate AS requires one exact unquoted output field",
+			"timechart field aggregate AS requires one exact unquoted output field",
 		)
 	}
 	aggregate.Alias = alias.text
@@ -901,6 +909,13 @@ func (p *parser) parseTimechartAggregate() (StatsAggregate, Position, error) {
 }
 
 func timechartFieldAggregateSpecForName(name string) (statsAggregateSpec, bool) {
+	if strings.EqualFold(name, "count") {
+		return statsAggregateSpec{
+			function:      AggregateFunctionCountValues,
+			canonicalName: "count",
+			requiresInput: true,
+		}, true
+	}
 	spec, supported := statsAggregateSpecForName(name)
 	if !supported || !spec.requiresInput {
 		return statsAggregateSpec{}, false
@@ -915,7 +930,8 @@ func timechartFieldAggregateSpecForName(name string) (statsAggregateSpec, bool) 
 
 func timechartAggregateSupportsSplit(function AggregateFunction) bool {
 	switch function {
-	case AggregateFunctionCount, AggregateFunctionPercentile,
+	case AggregateFunctionCount, AggregateFunctionCountValues,
+		AggregateFunctionPercentile,
 		AggregateFunctionSum, AggregateFunctionAverage:
 		return true
 	default:
