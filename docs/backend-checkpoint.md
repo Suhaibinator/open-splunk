@@ -7,7 +7,128 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded streamstats numeric average
+## Latest checkpoint: timechart field occurrence count
+
+Date: 2026-08-03
+
+Committed implementation checkpoint:
+
+- `5dd8685` — add bounded `timechart count(field)` execution.
+
+This test-first SPL unit completes exact-field occurrence count for fixed and
+runtime-split timecharts without a control-plane schema change, migration,
+public protobuf change, or GORM on the ClickHouse path:
+
+1. `timechart` now accepts one exact long-form `count(field)` aggregate with an
+   optional exact unquoted `AS` alias and optional one-field `BY` split.
+   Without `AS`, the fixed output is canonical lowercase `count(field)` while
+   preserving the exact input spelling. Empty, wildcard, quoted, eval,
+   multi-input, abbreviated `c`, and same-input/split forms fail with
+   source-located diagnostics; bare row `count` remains unchanged.
+2. Occurrence semantics exactly reuse `stats count(field)`: missing, explicit
+   null, empty multivalue, and null members contribute zero; every other
+   scalar, typed container, and immediate non-null multivalue member
+   contributes one. A projected-away measure remains missing and cannot
+   rebind the private source document.
+3. Fixed output has the static `_time,<aggregate-output>` schema and a distinct
+   `TimechartModeFixedFieldCount` transport. Its ordinal/count/input-presence
+   envelope distinguishes a completely empty source from a present
+   all-ineligible source, so the former publishes schema only while the latter
+   publishes the complete zero grid. An output alias literally named `count`
+   cannot select or masquerade as the legacy row-count protocol.
+4. Split output retains the bounded runtime-wide count schema. Source-row
+   counts establish ordinary/`NULL` domains and validate every split value,
+   including rows whose measure contributes zero. Occurrence totals alone
+   drive top-ten ranking, bucket cells, and `OTHER`; equal cutoff scores use
+   lexical order. Missing/null and wholly ineligible domains remain visible as
+   zero-valued series.
+5. Both fixed and split lowerings perform one scoped ClickHouse read, compute
+   one bounded per-event contribution, accumulate with `UInt128`
+   intermediates, and never use `ARRAY JOIN` or row expansion. The split
+   row-count and field-count forms share one lowering instead of duplicating
+   their domain, collision, grid, and validation machinery.
+6. Runtime-wide count transports now send the series-name array only on
+   ordinal zero; later buckets carry only the fixed-width count array. The
+   executor prepares scan destinations once, buffers and validates the whole
+   result before publication, and rejects repeated/changed names, malformed
+   presence flags, truncation, extra buckets, and forged mode/physical-column
+   combinations atomically.
+7. Digest-pinned ClickHouse coverage proves fixed scalar/multivalue/container
+   occurrences, canonical and aliased outputs, empty versus all-ineligible
+   sources, projected measures, occurrence-based top-ten selection, a lexical
+   tie at the cutoff, zero-contribution ordinary and `NULL` domains, pooled
+   `OTHER`, tenant/index/time/snapshot isolation, and an unsupported split
+   value whose measure contribution is zero. Structured and action EXPLAIN
+   assertions pin one physical scan and no row expansion.
+8. Re-execution and search-inspection tests use real parsed SPL and preserve
+   fixed mode metadata, private columns, static aliases, dynamic bounds,
+   referenced fields, and export schema admission. A chronological
+   `streamstats -> timechart count(field)` compiler test pins all three private
+   columns through the validation wrapper.
+9. The frontend now derives timechart value columns from the authoritative
+   result schema. Empty fixed results retain canonical or aliased metric
+   headers, empty split results expose only `_time`, and demo mode keeps its
+   intentional `count` fallback.
+10. Three independent adversarial lenses reviewed semantics, SQL/resource
+    behavior, and coverage. The review introduced an explicit fixed-field
+    mode, consolidated duplicate split lowering, removed per-bucket name-array
+    repetition and scan allocation, corrected two hand-built integration
+    consumers of the new protocol, and added tie, invalid-zero-measure,
+    canonical-name, mode-confusion, lifecycle, inspection, and frontend-empty
+    coverage. Final read-only re-reviews found no remaining concrete issue.
+
+Validation for `5dd8685` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy
+make proto
+go test ./... -count=1
+go test -race -shuffle=on ./... -count=1
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/^timechart_field_occurrence_count$' \
+  -count=1 -timeout=10m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$/^compiled_SPL_corpus$' \
+  -count=1 -timeout=20m -v
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=30m -p=1 -v
+```
+
+Every final command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 144/144 and the release/protobuf harness passed 65/65.
+The focused occurrence-count integration passed all nine scenarios, the full
+compiled SPL corpus passed, and the exact current Backend vertical workflow
+command passed every package. Test-owned ClickHouse containers and volumes
+were removed.
+
+The next backend/SPL unit is intentionally unselected pending further
+instructions. The external GradeThis Compose cutover remains explicitly
+deferred, and the broader backend/SPL goal remains active.
+
+## Previous checkpoint: bounded streamstats numeric average
 
 Date: 2026-08-03
 
@@ -15111,17 +15232,20 @@ aggregate contract at a time:
 - decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
   remain separate percentile contracts and are not part of the first bounded
   integer-suffix slice;
-- split integer-suffix percentile timecharts are complete at `99be8a9`, numeric
-  `chart sum(field)` / `chart avg(field)` pivots are complete at `1a9f6ef`, and
-  multi-field `top`/`rare` is complete at `5db9816`; broader chart aggregate
-  families and options remain separate contracts;
+- exact-field occurrence-count timecharts, with or without a split, are
+  complete at `5dd8685`; split integer-suffix percentile timecharts are
+  complete at `99be8a9`, numeric `chart sum(field)` / `chart avg(field)` pivots
+  are complete at `1a9f6ef`, and multi-field `top`/`rare` is complete at
+  `5db9816`; broader chart aggregate families and options remain separate
+  contracts;
 - bounded single-measure `eventstats` now covers row/field/conditional count,
   `dc`, `values`, `list`, integer-suffix percentiles, `sum`, `avg`, `min`,
   `max`, `earliest`, and `latest`. Multiple measures and broader eval-expression
   arguments remain separate contracts. Bounded `streamstats` now covers bare
-  row count, exact-field occurrence count, and exact-field numeric sum through
-  `6e06394`; broader aggregates, expression arguments, reset conditions, and
-  time windows remain separate contracts, and no next slice is selected; and
+  row count, exact-field occurrence count, exact-field numeric sum, and
+  exact-field numeric average through `df99748`; broader aggregates,
+  expression arguments, reset conditions, and time windows remain separate
+  contracts, and no next slice is selected; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
 
@@ -15289,7 +15413,8 @@ Do not guess those decisions if they materially affect the implementation.
    `182b60c`, bounded field-occurrence `streamstats count(field)` is complete
    at `2e1c47e`, bounded numeric `streamstats sum(field)` is complete at
    `6e06394`, bounded numeric `streamstats avg(field)` is complete at
-   `df99748`, multi-field `top`/`rare` is complete at `5db9816`,
+   `df99748`, exact-field occurrence-count timecharts are complete at
+   `5dd8685`, multi-field `top`/`rare` is complete at `5db9816`,
    exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
