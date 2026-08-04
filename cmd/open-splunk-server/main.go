@@ -29,6 +29,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
+	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
@@ -38,15 +39,16 @@ import (
 )
 
 const (
-	startupTimeout                   = 2 * time.Minute
-	shutdownTimeout                  = 35 * time.Second
-	defaultIndexRetention            = ingest.DefaultIndexRetention
-	defaultOwnerID                   = "single-user"
-	splCompatibility                 = "tier-1-dev"
-	auditCursorKeyPurpose            = "audit-event-cursors"
-	collectorHeartbeatFlushInterval  = time.Second
-	collectorHeartbeatWriteTimeout   = 5 * time.Second
-	collectorHeartbeatReleaseTimeout = 2 * collectorHeartbeatWriteTimeout
+	startupTimeout                     = 2 * time.Minute
+	shutdownTimeout                    = 35 * time.Second
+	defaultIndexRetention              = ingest.DefaultIndexRetention
+	defaultOwnerID                     = "single-user"
+	splCompatibility                   = "tier-1-dev"
+	auditCursorKeyPurpose              = "audit-event-cursors"
+	searchAttemptAuditCursorKeyPurpose = "search-attempt-audit-cursors"
+	collectorHeartbeatFlushInterval    = time.Second
+	collectorHeartbeatWriteTimeout     = 5 * time.Second
+	collectorHeartbeatReleaseTimeout   = 2 * collectorHeartbeatWriteTimeout
 	// SQLite may spend five seconds waiting on a competing writer. Reserve a
 	// second write window for transaction overhead and a useful retry after
 	// heartbeat Release has consumed its own bound.
@@ -58,36 +60,37 @@ const (
 )
 
 type options struct {
-	verifyEmbeddedRelease               bool
-	httpAddress                         string
-	httpAllowedHosts                    []string
-	httpAllowedHostsCSV                 string
-	httpTLSCert                         string
-	httpTLSKey                          string
-	controlDBPath                       string
-	masterKeyPath                       string
-	administratorTokenFile              string
-	exportArtifactDir                   string
-	clickhouseAddress                   string
-	clickhouseDatabase                  string
-	clickhouseRuntimeUsername           string
-	clickhouseDeletionUsername          string
-	clickhouseMigrationUsername         string
-	clickhouseSkipMigrations            bool
-	clickhouseRuntimePasswordFile       string
-	clickhouseDeletionPasswordFile      string
-	clickhouseMigrationPasswordFile     string
-	clickhouseSecure                    bool
-	clickhouseCACertFile                string
-	clickhouseServerName                string
-	collectorAddress                    string
-	collectorInsecure                   bool
-	collectorTLSCert                    string
-	collectorTLSKey                     string
-	indexRetention                      time.Duration
-	searchHistoryMaximumAge             time.Duration
-	searchHistoryMaximumEntriesPerOwner int
-	tenantID                            string
+	verifyEmbeddedRelease                     bool
+	httpAddress                               string
+	httpAllowedHosts                          []string
+	httpAllowedHostsCSV                       string
+	httpTLSCert                               string
+	httpTLSKey                                string
+	controlDBPath                             string
+	masterKeyPath                             string
+	administratorTokenFile                    string
+	exportArtifactDir                         string
+	clickhouseAddress                         string
+	clickhouseDatabase                        string
+	clickhouseRuntimeUsername                 string
+	clickhouseDeletionUsername                string
+	clickhouseMigrationUsername               string
+	clickhouseSkipMigrations                  bool
+	clickhouseRuntimePasswordFile             string
+	clickhouseDeletionPasswordFile            string
+	clickhouseMigrationPasswordFile           string
+	clickhouseSecure                          bool
+	clickhouseCACertFile                      string
+	clickhouseServerName                      string
+	collectorAddress                          string
+	collectorInsecure                         bool
+	collectorTLSCert                          string
+	collectorTLSKey                           string
+	indexRetention                            time.Duration
+	searchHistoryMaximumAge                   time.Duration
+	searchHistoryMaximumEntriesPerOwner       int
+	searchAttemptAuditMaximumRetainedAttempts int
+	tenantID                                  string
 }
 
 type visibilitySnapshotter struct {
@@ -252,11 +255,13 @@ func runWithOptions(config options) error {
 			log.Printf("shutdown visibility sequencer: %v", err)
 		}
 	}()
-	securityStores, err := openRuntimeSecurityStores(
+	securityStores, err := openRuntimeSecurityStoresWithSearchAttemptMaximum(
 		startupContext,
 		controlDB,
 		config.masterKeyPath,
 		config.tenantID,
+		// #nosec G115 -- normalizeRuntimeOptions bounds this value to [1, 100000].
+		uint32(config.searchAttemptAuditMaximumRetainedAttempts),
 	)
 	if err != nil {
 		return err
@@ -284,8 +289,10 @@ func runWithOptions(config options) error {
 		controlDB,
 		config.masterKeyPath,
 		searchhistory.Options{
-			MaximumAge:             config.searchHistoryMaximumAge,
-			MaximumEntriesPerOwner: config.searchHistoryMaximumEntriesPerOwner,
+			MaximumAge:                config.searchHistoryMaximumAge,
+			MaximumEntriesPerOwner:    config.searchHistoryMaximumEntriesPerOwner,
+			AuditAppender:             securityStores.searchAttemptAuditEvents,
+			RequireSearchAttemptAudit: true,
 		},
 	)
 	if err != nil {
@@ -686,6 +693,7 @@ func runWithOptions(config options) error {
 		IndexDataDeletionWaker:     indexDataDeletion,
 		IngestionTokens:            tokenStore,
 		AuditEvents:                securityStores.auditEvents,
+		SearchAttemptAuditEvents:   securityStores.searchAttemptAuditEvents,
 		CollectorAdmin:             collectorAdministration,
 		AppAdmin:                   appCatalog,
 		AppCatalog:                 appCatalog,
@@ -792,6 +800,18 @@ func closeCollectorHeartbeatRuntime(
 	return runtime.Close(ctx)
 }
 
+func registerSearchAttemptAuditMaximumRetainedFlag(
+	flags *flag.FlagSet,
+	config *options,
+) {
+	flags.IntVar(
+		&config.searchAttemptAuditMaximumRetainedAttempts,
+		"search-attempt-audit-maximum-retained-attempts",
+		int(searchaudit.DefaultMaximumRetainedAttempts),
+		"maximum search-attempt audit events retained per tenant",
+	)
+}
+
 func parseFlags() options {
 	var result options
 	flag.BoolVar(&result.verifyEmbeddedRelease, "verify-embedded-release", false, "verify the embedded release payload and exit before opening runtime resources")
@@ -887,6 +907,7 @@ func parseFlags() options {
 		searchhistory.DefaultMaximumEntriesPerOwner,
 		"maximum terminal entries retained per owner (pending attempts are capped separately at the same value)",
 	)
+	registerSearchAttemptAuditMaximumRetainedFlag(flag.CommandLine, &result)
 	flag.StringVar(&result.tenantID, "tenant-id", "default", "single-node tenant identifier")
 	flag.Parse()
 	if strings.TrimSpace(result.masterKeyPath) == "" {
@@ -906,6 +927,7 @@ func openSecurityStores(
 		masterKeyPath,
 		"default",
 		false,
+		0,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -914,9 +936,10 @@ func openSecurityStores(
 }
 
 type securityStoreSet struct {
-	savedSearches   *savedobjects.AuditedStore
-	ingestionTokens *auth.Store
-	auditEvents     *audit.Store
+	savedSearches            *savedobjects.AuditedStore
+	ingestionTokens          *auth.Store
+	auditEvents              *audit.Store
+	searchAttemptAuditEvents *searchaudit.Store
 }
 
 func openRuntimeSecurityStores(
@@ -925,7 +948,30 @@ func openRuntimeSecurityStores(
 	masterKeyPath string,
 	tenantID string,
 ) (securityStoreSet, error) {
-	return openSecurityStoreSet(ctx, db, masterKeyPath, tenantID, true)
+	return openRuntimeSecurityStoresWithSearchAttemptMaximum(
+		ctx,
+		db,
+		masterKeyPath,
+		tenantID,
+		0,
+	)
+}
+
+func openRuntimeSecurityStoresWithSearchAttemptMaximum(
+	ctx context.Context,
+	db *control.DB,
+	masterKeyPath string,
+	tenantID string,
+	maximumRetainedAttempts uint32,
+) (securityStoreSet, error) {
+	return openSecurityStoreSet(
+		ctx,
+		db,
+		masterKeyPath,
+		tenantID,
+		true,
+		maximumRetainedAttempts,
+	)
 }
 
 func openSecurityStoreSet(
@@ -934,6 +980,7 @@ func openSecurityStoreSet(
 	masterKeyPath string,
 	tenantID string,
 	requireExplicitAuditActor bool,
+	searchAttemptMaximumRetained uint32,
 ) (securityStoreSet, error) {
 	masterKey, err := loadVerifiedMasterKey(ctx, db, masterKeyPath)
 	if err != nil {
@@ -955,6 +1002,14 @@ func openSecurityStoreSet(
 		return securityStoreSet{}, err
 	}
 	defer clear(auditCursorKey)
+	searchAttemptAuditCursorKey, err := deriveServerKey(
+		masterKey,
+		searchAttemptAuditCursorKeyPurpose,
+	)
+	if err != nil {
+		return securityStoreSet{}, err
+	}
+	defer clear(searchAttemptAuditCursorKey)
 
 	rawSavedSearches, err := savedobjects.New(
 		db,
@@ -970,6 +1025,20 @@ func openSecurityStoreSet(
 	)
 	if err != nil {
 		return securityStoreSet{}, fmt.Errorf("create audit-event store: %w", err)
+	}
+	searchAttemptAuditEvents, err := searchaudit.NewWithContext(
+		ctx,
+		db,
+		searchaudit.Options{
+			CursorKey:               searchAttemptAuditCursorKey,
+			MaximumRetainedAttempts: searchAttemptMaximumRetained,
+		},
+	)
+	if err != nil {
+		return securityStoreSet{}, fmt.Errorf(
+			"create search-attempt audit store: %w",
+			err,
+		)
 	}
 	savedSearches, err := savedobjects.NewAuditedStore(
 		rawSavedSearches,
@@ -991,9 +1060,10 @@ func openSecurityStoreSet(
 		return securityStoreSet{}, fmt.Errorf("create collector-token store: %w", err)
 	}
 	return securityStoreSet{
-		savedSearches:   savedSearches,
-		ingestionTokens: tokens,
-		auditEvents:     auditEvents,
+		savedSearches:            savedSearches,
+		ingestionTokens:          tokens,
+		auditEvents:              auditEvents,
+		searchAttemptAuditEvents: searchAttemptAuditEvents,
 	}, nil
 }
 

@@ -3,6 +3,7 @@
 package searchhistory
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -55,6 +56,26 @@ type AccessScope struct {
 	OwnerID  string
 }
 
+// SearchAttemptAuditEvent is the payload-free projection emitted when one
+// search attempt is durably admitted. OccurredAt is the same canonical
+// microsecond timestamp persisted with the pending history row.
+type SearchAttemptAuditEvent struct {
+	OccurredAt  time.Time
+	SearchJobID string
+	OwnerID     string
+}
+
+// SearchAttemptAuditAppender publishes one admitted-search event through the
+// caller-owned GORM transaction without committing or rolling it back.
+type SearchAttemptAuditAppender interface {
+	AppendSearchAttemptInTransaction(
+		context.Context,
+		*gorm.DB,
+		string,
+		SearchAttemptAuditEvent,
+	) error
+}
+
 // Options controls retention and cursor integrity. CursorKey must be a stable
 // process secret so pagination tokens survive restarts and cannot be forged.
 // Zero retention values select conservative defaults.
@@ -66,6 +87,14 @@ type Options struct {
 	// attempts. At most twice this value may therefore exist physically for
 	// one owner while every admitted attempt is still pending recovery.
 	MaximumEntriesPerOwner int
+	// AuditAppender records each newly admitted search attempt inside the same
+	// SQLite transaction as its pending history row. Nil keeps direct and test
+	// construction backward-compatible unless RequireSearchAttemptAudit is set.
+	// A typed nil is always rejected.
+	AuditAppender SearchAttemptAuditAppender
+	// RequireSearchAttemptAudit makes construction fail closed when no audit
+	// appender is configured. Production enables this option.
+	RequireSearchAttemptAudit bool
 }
 
 // RetentionPolicy is the validated, default-resolved physical retention
@@ -144,9 +173,10 @@ type ListResult struct {
 
 // Store owns search-history persistence over the configured control database.
 type Store struct {
-	orm                    *gorm.DB
-	clock                  func() time.Time
-	cursorKey              []byte
-	maximumAge             time.Duration
-	maximumEntriesPerOwner int
+	orm                        *gorm.DB
+	clock                      func() time.Time
+	cursorKey                  []byte
+	maximumAge                 time.Duration
+	maximumEntriesPerOwner     int
+	searchAttemptAuditAppender SearchAttemptAuditAppender
 }

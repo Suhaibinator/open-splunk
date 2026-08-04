@@ -2,9 +2,10 @@
 
 This contract is the first durable security-audit slice. It covers successful
 ingestion-token, index, and app administration mutations plus saved-search
-changes. Authentication attempts, token use, searches, exports, other
-saved-object families, and broader RBAC activity remain future, separately
-bounded event families.
+changes. Admitted searches use the separate rolling, payload-free
+[search-attempt audit](search-attempt-audit-v0.1.md). Authentication attempts,
+token use, exports, other saved-object families, and broader RBAC activity
+remain future, separately bounded event families.
 
 The closed action taxonomy is:
 
@@ -153,4 +154,6 @@ frontend team should:
 
 CSV/export, live streaming, free-text search, time-range filtering, and audit
 families beyond successful token, index, app, and saved-search mutations are
-not part of v0.1.
+not part of this mutation-journal v0.1. Search admission is intentionally not
+added to this permanent-capacity journal; its independent rolling contract is
+defined in [Search-attempt audit v0.1](search-attempt-audit-v0.1.md).

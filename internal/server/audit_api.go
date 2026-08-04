@@ -51,7 +51,7 @@ func (handler *apiHandler) listAuditEvents(
 	request *http.Request,
 	input *opensplunkv1.ListAuditEventsRequest,
 ) (*serializedAuditEventListResponse, error) {
-	tenantID, err := handler.auditEventAccess(request)
+	tenantID, err := handler.administratorAuditTenantAccess(request)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (handler *apiHandler) listAuditEvents(
 	}, nil
 }
 
-func (handler *apiHandler) auditEventAccess(
+func (handler *apiHandler) administratorAuditTenantAccess(
 	request *http.Request,
 ) (string, error) {
 	if handler == nil || request == nil {

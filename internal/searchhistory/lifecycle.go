@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -123,6 +124,24 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 	})
 	if create.Error != nil {
 		return nil, mapContextError(ctx, "record pending search-history entry", create.Error)
+	}
+	if err := requireOneAffected(create.RowsAffected, "record pending search-history entry"); err != nil {
+		return nil, err
+	}
+	if store.searchAttemptAuditAppender != nil {
+		event := SearchAttemptAuditEvent{
+			OccurredAt:  time.UnixMicro(indexed.createdAt).UTC(),
+			SearchJobID: strings.Clone(indexed.jobID),
+			OwnerID:     strings.Clone(scope.OwnerID),
+		}
+		if err := store.searchAttemptAuditAppender.AppendSearchAttemptInTransaction(
+			ctx,
+			tx,
+			scope.TenantID,
+			event,
+		); err != nil {
+			return nil, fmt.Errorf("append search-attempt audit event: %w", err)
+		}
 	}
 	if err := tx.Commit().Error; err != nil {
 		return nil, fmt.Errorf("commit pending search-history record: %w", err)

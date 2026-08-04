@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/audit.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// SearchAttemptAuditEvent is the immutable, allowlisted projection of one
+// admitted search attempt. It deliberately carries no query, execution, or
+// result content.
+message SearchAttemptAuditEvent {
+  uint64 sequence = 1;
+  google.protobuf.Timestamp occurred_at = 2;
+  AuditActorKind actor_kind = 3;
+  string actor_id = 4;
+  AuditActorRole actor_role = 5;
+  string owner_id = 6;
+  string search_job_id = 7;
+}

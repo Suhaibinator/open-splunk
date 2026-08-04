@@ -84,31 +84,41 @@ func TestLoadOrCreateMasterKeyRejectsUnsafeOrCorruptFiles(t *testing.T) {
 func TestDeriveServerKeySeparatesPurposes(t *testing.T) {
 	t.Parallel()
 	master := bytes.Repeat([]byte{7}, masterKeyBytes)
-	first, err := deriveServerKey(master, "saved-search-cursors")
+	purposes := []string{
+		"saved-search-cursors",
+		"collector-token-digests",
+		"search-history-cursors",
+		auditCursorKeyPurpose,
+		searchAttemptAuditCursorKeyPurpose,
+	}
+	derived := make([][]byte, len(purposes))
+	for index, purpose := range purposes {
+		key, err := deriveServerKey(master, purpose)
+		if err != nil {
+			t.Fatalf("deriveServerKey(%q): %v", purpose, err)
+		}
+		if len(key) != 32 {
+			t.Fatalf("deriveServerKey(%q) length = %d, want 32", purpose, len(key))
+		}
+		derived[index] = key
+	}
+	for left := range derived {
+		for right := left + 1; right < len(derived); right++ {
+			if bytes.Equal(derived[left], derived[right]) {
+				t.Fatalf(
+					"derived keys for %q and %q are equal",
+					purposes[left],
+					purposes[right],
+				)
+			}
+		}
+	}
+	firstAgain, err := deriveServerKey(master, purposes[0])
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := deriveServerKey(master, "collector-token-digests")
-	if err != nil {
-		t.Fatal(err)
-	}
-	history, err := deriveServerKey(master, "search-history-cursors")
-	if err != nil {
-		t.Fatal(err)
-	}
-	auditEvents, err := deriveServerKey(master, auditCursorKeyPurpose)
-	if err != nil {
-		t.Fatal(err)
-	}
-	firstAgain, err := deriveServerKey(master, "saved-search-cursors")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bytes.Equal(first, second) || bytes.Equal(first, history) || bytes.Equal(first, auditEvents) ||
-		bytes.Equal(second, history) || bytes.Equal(second, auditEvents) ||
-		bytes.Equal(history, auditEvents) || !bytes.Equal(first, firstAgain) ||
-		len(first) != 32 || len(history) != 32 || len(auditEvents) != 32 {
-		t.Fatalf("derived keys do not provide deterministic purpose separation")
+	if !bytes.Equal(derived[0], firstAgain) {
+		t.Fatal("derived key is not stable for the same purpose")
 	}
 }
 
@@ -140,7 +150,8 @@ func TestOpenRuntimeSecurityStoresSharesStableTenantBoundAuditStore(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.savedSearches == nil || first.ingestionTokens == nil || first.auditEvents == nil {
+	if first.savedSearches == nil || first.ingestionTokens == nil ||
+		first.auditEvents == nil || first.searchAttemptAuditEvents == nil {
 		t.Fatalf("openRuntimeSecurityStores() returned a nil store: %+v", first)
 	}
 	if _, err := first.ingestionTokens.CreateCollectorToken(

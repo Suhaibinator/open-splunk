@@ -26,6 +26,7 @@ import (
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
+	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -176,6 +177,17 @@ type IngestionTokenAdministration interface {
 // accepted from protobuf input.
 type AuditEvents interface {
 	List(context.Context, string, audit.ListRequest) (audit.ListPage, error)
+}
+
+// SearchAttemptAuditEvents is the bounded, administrator-only journal of every
+// admitted search attempt. Tenant identity comes from the authenticated
+// browser principal and is never accepted from protobuf input.
+type SearchAttemptAuditEvents interface {
+	List(
+		context.Context,
+		string,
+		searchaudit.ListRequest,
+	) (searchaudit.ListPage, error)
 }
 
 // CollectorAdministration is the complete tenant-scoped fleet surface exposed
@@ -410,6 +422,7 @@ type Config struct {
 	IndexDataDeletionWaker     IndexDataDeletionWaker
 	IngestionTokens            IngestionTokenAdministration
 	AuditEvents                AuditEvents
+	SearchAttemptAuditEvents   SearchAttemptAuditEvents
 	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
@@ -454,6 +467,7 @@ type apiHandler struct {
 	indexDataDeletionWaker     IndexDataDeletionWaker
 	ingestionTokens            IngestionTokenAdministration
 	auditEvents                AuditEvents
+	searchAttemptAuditEvents   SearchAttemptAuditEvents
 	collectorAdmin             CollectorAdministration
 	appAdmin                   AppAdministration
 	appCatalog                 AppCatalog
@@ -565,6 +579,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(auditEvents) {
 		auditEvents = nil
 	}
+	searchAttemptAuditEvents := config.SearchAttemptAuditEvents
+	if isNilDependency(searchAttemptAuditEvents) {
+		searchAttemptAuditEvents = nil
+	}
 	collectorAdmin := config.CollectorAdmin
 	if isNilDependency(collectorAdmin) {
 		collectorAdmin = nil
@@ -595,6 +613,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexFields != nil ||
 		ingestionTokens != nil ||
 		auditEvents != nil ||
+		searchAttemptAuditEvents != nil ||
 		collectorAdmin != nil ||
 		appAdmin != nil ||
 		inspectionService != nil) &&
@@ -797,11 +816,12 @@ func NewHandler(config Config) (*Handler, error) {
 			indexFields != nil &&
 			indexDataDeletionAdmission != nil &&
 			indexDataDeletionWaker != nil,
-		appAdmin:       appAdmin != nil,
-		planInspection: inspectionService != nil,
-		auditSearch:    auditEvents != nil,
-		fieldDiscovery: fieldService != nil,
-		previews:       searchWebSocket != nil,
+		appAdmin:           appAdmin != nil,
+		planInspection:     inspectionService != nil,
+		auditSearch:        auditEvents != nil,
+		searchAttemptAudit: searchAttemptAuditEvents != nil,
+		fieldDiscovery:     fieldService != nil,
+		previews:           searchWebSocket != nil,
 	})
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
@@ -828,6 +848,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexDataDeletionWaker:     indexDataDeletionWaker,
 		ingestionTokens:            ingestionTokens,
 		auditEvents:                auditEvents,
+		searchAttemptAuditEvents:   searchAttemptAuditEvents,
 		collectorAdmin:             collectorAdmin,
 		appAdmin:                   appAdmin,
 		appCatalog:                 appCatalog,
@@ -924,6 +945,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if api.auditEvents != nil {
 		apiRoutes[auditEventsListPath] = http.MethodPost
 		administratorRoutes[auditEventsListPath] = struct{}{}
+	}
+	if api.searchAttemptAuditEvents != nil {
+		apiRoutes[searchAttemptAuditListPath] = http.MethodPost
+		administratorRoutes[searchAttemptAuditListPath] = struct{}{}
 	}
 	if api.collectorAdmin != nil {
 		for _, path := range []string{
@@ -1115,16 +1140,17 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 }
 
 type serviceCapabilities struct {
-	history        bool
-	exports        bool
-	timeline       bool
-	collectorAdmin bool
-	indexAdmin     bool
-	appAdmin       bool
-	planInspection bool
-	auditSearch    bool
-	fieldDiscovery bool
-	previews       bool
+	history            bool
+	exports            bool
+	timeline           bool
+	collectorAdmin     bool
+	indexAdmin         bool
+	appAdmin           bool
+	planInspection     bool
+	auditSearch        bool
+	searchAttemptAudit bool
+	fieldDiscovery     bool
+	previews           bool
 }
 
 func featuresForServices(features []opensplunkv1.ServerFeature, capabilities serviceCapabilities) []opensplunkv1.ServerFeature {
@@ -1144,6 +1170,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_APP_ADMIN, capabilities.appAdmin},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION, capabilities.planInspection},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_AUDIT_SEARCH, capabilities.auditSearch},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT, capabilities.searchAttemptAudit},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
 	}
@@ -1257,6 +1284,12 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 		routes = append(
 			routes,
 			handler.auditEventRoutes(noAuth, smallRequestBytes)...,
+		)
+	}
+	if handler.searchAttemptAuditEvents != nil {
+		routes = append(
+			routes,
+			handler.searchAttemptAuditRoutes(noAuth, smallRequestBytes)...,
 		)
 	}
 	if handler.collectorAdmin != nil {

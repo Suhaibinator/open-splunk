@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexpolicy"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
 
@@ -54,6 +55,18 @@ func normalizeRuntimeOptions(config *options) error {
 	config.searchHistoryMaximumAge = searchHistoryRetention.MaximumAge
 	config.searchHistoryMaximumEntriesPerOwner =
 		searchHistoryRetention.MaximumEntriesPerOwner
+	if config.searchAttemptAuditMaximumRetainedAttempts == 0 {
+		config.searchAttemptAuditMaximumRetainedAttempts =
+			int(searchaudit.DefaultMaximumRetainedAttempts)
+	}
+	if config.searchAttemptAuditMaximumRetainedAttempts < 1 ||
+		config.searchAttemptAuditMaximumRetainedAttempts >
+			int(searchaudit.MaximumRetainedAttempts) {
+		return fmt.Errorf(
+			"search-attempt audit maximum retained attempts must be between 1 and %d",
+			searchaudit.MaximumRetainedAttempts,
+		)
+	}
 	config.exportArtifactDir = strings.TrimSpace(config.exportArtifactDir)
 	if config.exportArtifactDir == "" {
 		controlDBPath := strings.TrimSpace(config.controlDBPath)

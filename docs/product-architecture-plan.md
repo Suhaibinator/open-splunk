@@ -1385,6 +1385,13 @@ Search history is created automatically for every attempted job, including parse
 
 History is bounded by configurable age and row-count limits in SQLite. The UI should expose Recent Searches and a full History view with Open in Search, Run Again, Save, and Delete actions. “Open” restores the original query and time-range expression; “Run Again” creates a fresh job and resolves relative time against the current clock. History never stores generated SQL as the reusable source of truth.
 
+The security record of search admission is deliberately separate from this
+user-facing history. It retains only actor, owner, job identity, and occurrence
+metadata in its own bounded rolling SQLite journal, commits atomically with the
+pending history row, survives normal history deletion, and never copies SPL or
+execution payloads. The normative contract is
+[Search-attempt audit v0.1](search-attempt-audit-v0.1.md).
+
 ### Results export
 
 Export is server-side so large results do not need to be assembled in browser memory. The first usable release should support:

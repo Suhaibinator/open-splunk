@@ -408,6 +408,15 @@
       "responseFutureWire": "CgIIAfp/KWZ1dHVyZTovYXBpL3YxL2F1ZGl0L2V2ZW50cy9saXN0OnJlc3BvbnNl"
     },
     {
+      "path": "/api/v1/audit/search-attempts/list",
+      "requestType": "ListSearchAttemptAuditEventsRequest",
+      "responseType": "ListSearchAttemptAuditEventsResponse",
+      "requestKnownWire": "CgIIAQ==",
+      "requestFutureWire": "CgIIAfp/MWZ1dHVyZTovYXBpL3YxL2F1ZGl0L3NlYXJjaC1hdHRlbXB0cy9saXN0OnJlcXVlc3Q=",
+      "responseKnownWire": "CgIIAQ==",
+      "responseFutureWire": "CgIIAfp/MmZ1dHVyZTovYXBpL3YxL2F1ZGl0L3NlYXJjaC1hdHRlbXB0cy9saXN0OnJlc3BvbnNl"
+    },
+    {
       "path": "/api/v1/ingestion-tokens/create",
       "requestType": "CreateIngestionTokenRequest",
       "responseType": "CreateIngestionTokenResponse",

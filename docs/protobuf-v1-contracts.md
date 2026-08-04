@@ -10,7 +10,7 @@ This directory is the source of truth shared by the Go server, Go collector, and
 - `search_ws.proto` defines binary WebSocket commands and sequenced progress events. It is not a results paging API.
 - `saved_search*`, `history*`, and `export*` remain separate because they have different lifecycle, persistence, and security semantics.
 - `index*`, `app*`, and `collector_admin*` define control-plane entities plus SRouter operations.
-- `audit*` defines the fixed, administrator-only immutable audit projection and bounded list operation.
+- `audit*` defines the fixed, administrator-only immutable mutation-audit projection and bounded list operation. `search_attempt_audit*` defines the separately bounded, payload-free search-admission projection and list operation.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
@@ -96,6 +96,7 @@ projection.
 | `/collectors/update` | `UpdateCollectorRequest` | `UpdateCollectorResponse` |
 | `/collectors/state/set` | `SetCollectorEnabledRequest` | `SetCollectorEnabledResponse` |
 | `/audit/events/list` | `ListAuditEventsRequest` | `ListAuditEventsResponse` |
+| `/audit/search-attempts/list` | `ListSearchAttemptAuditEventsRequest` | `ListSearchAttemptAuditEventsResponse` |
 | `/ingestion-tokens/create` | `CreateIngestionTokenRequest` | `CreateIngestionTokenResponse` |
 | `/ingestion-tokens/get` | `GetIngestionTokenRequest` | `GetIngestionTokenResponse` |
 | `/ingestion-tokens/list` | `ListIngestionTokensRequest` | `ListIngestionTokensResponse` |
@@ -124,6 +125,24 @@ cursor from a database state newer than a restored snapshot fails instead of
 silently traversing the wrong prefix. See
 [Audit events v0.1](audit-events-v0.1.md) for storage, atomicity, capacity,
 redaction, and frontend requirements.
+
+### Search-attempt audit
+
+`POST /api/v1/audit/search-attempts/list` is administrator-only. Tenant scope
+comes from the authenticated browser principal and cannot be supplied on the
+wire. Its immutable projection contains only tenant-local sequence, occurrence
+time, fixed actor identity, owner ID, and search-job ID. It never exposes SPL,
+index or app scope, generated SQL, results, warnings, failures, headers,
+credentials, or arbitrary metadata.
+
+Pages are ordered by descending sequence, capped at 200 rows and 2 MiB, and
+support exact actor-ID and owner-ID filters. The purpose-separated authenticated
+cursor binds tenant, filters, page size, total-size choice, retained-range
+floor, and first-page high-water identity. Appends below the rolling ceiling
+cannot enter a continuation; an eviction invalidates the continuation instead
+of returning an incomplete snapshot. See
+[Search-attempt audit v0.1](search-attempt-audit-v0.1.md) for atomic admission,
+retention, corruption, privacy, and frontend requirements.
 
 ### Index deletion
 

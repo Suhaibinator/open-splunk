@@ -39,10 +39,11 @@ const (
 	// The complete configured index-administration family is available:
 	// CRUD/state, statistics, field catalog, and physical deletion. This is
 	// capability discovery, not a dependency-health or caller-entitlement flag.
-	ServerFeature_SERVER_FEATURE_INDEX_ADMIN     ServerFeature = 10
-	ServerFeature_SERVER_FEATURE_APP_ADMIN       ServerFeature = 11
-	ServerFeature_SERVER_FEATURE_PLAN_INSPECTION ServerFeature = 12
-	ServerFeature_SERVER_FEATURE_AUDIT_SEARCH    ServerFeature = 13
+	ServerFeature_SERVER_FEATURE_INDEX_ADMIN          ServerFeature = 10
+	ServerFeature_SERVER_FEATURE_APP_ADMIN            ServerFeature = 11
+	ServerFeature_SERVER_FEATURE_PLAN_INSPECTION      ServerFeature = 12
+	ServerFeature_SERVER_FEATURE_AUDIT_SEARCH         ServerFeature = 13
+	ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT ServerFeature = 14
 )
 
 // Enum value maps for ServerFeature.
@@ -62,22 +63,24 @@ var (
 		11: "SERVER_FEATURE_APP_ADMIN",
 		12: "SERVER_FEATURE_PLAN_INSPECTION",
 		13: "SERVER_FEATURE_AUDIT_SEARCH",
+		14: "SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT",
 	}
 	ServerFeature_value = map[string]int32{
-		"SERVER_FEATURE_UNSPECIFIED":       0,
-		"SERVER_FEATURE_SEARCH":            1,
-		"SERVER_FEATURE_SEARCH_PREVIEW":    2,
-		"SERVER_FEATURE_FIELD_DISCOVERY":   3,
-		"SERVER_FEATURE_TIMELINE":          4,
-		"SERVER_FEATURE_SAVED_SEARCHES":    5,
-		"SERVER_FEATURE_SEARCH_HISTORY":    6,
-		"SERVER_FEATURE_EXPORT_CSV":        7,
-		"SERVER_FEATURE_EXPORT_JSON_LINES": 8,
-		"SERVER_FEATURE_COLLECTOR_ADMIN":   9,
-		"SERVER_FEATURE_INDEX_ADMIN":       10,
-		"SERVER_FEATURE_APP_ADMIN":         11,
-		"SERVER_FEATURE_PLAN_INSPECTION":   12,
-		"SERVER_FEATURE_AUDIT_SEARCH":      13,
+		"SERVER_FEATURE_UNSPECIFIED":          0,
+		"SERVER_FEATURE_SEARCH":               1,
+		"SERVER_FEATURE_SEARCH_PREVIEW":       2,
+		"SERVER_FEATURE_FIELD_DISCOVERY":      3,
+		"SERVER_FEATURE_TIMELINE":             4,
+		"SERVER_FEATURE_SAVED_SEARCHES":       5,
+		"SERVER_FEATURE_SEARCH_HISTORY":       6,
+		"SERVER_FEATURE_EXPORT_CSV":           7,
+		"SERVER_FEATURE_EXPORT_JSON_LINES":    8,
+		"SERVER_FEATURE_COLLECTOR_ADMIN":      9,
+		"SERVER_FEATURE_INDEX_ADMIN":          10,
+		"SERVER_FEATURE_APP_ADMIN":            11,
+		"SERVER_FEATURE_PLAN_INSPECTION":      12,
+		"SERVER_FEATURE_AUDIT_SEARCH":         13,
+		"SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT": 14,
 	}
 )
 
@@ -428,7 +431,7 @@ const file_open_splunk_v1_system_api_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\x123\n" +
 	"\x05build\x18\v \x01(\v2\x1d.open_splunk.v1.BuildMetadataR\x05buildB\x12\n" +
-	"\x10_selected_app_id*\xe0\x03\n" +
+	"\x10_selected_app_id*\x89\x04\n" +
 	"\rServerFeature\x12\x1e\n" +
 	"\x1aSERVER_FEATURE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SERVER_FEATURE_SEARCH\x10\x01\x12!\n" +
@@ -444,7 +447,8 @@ const file_open_splunk_v1_system_api_proto_rawDesc = "" +
 	"\x12\x1c\n" +
 	"\x18SERVER_FEATURE_APP_ADMIN\x10\v\x12\"\n" +
 	"\x1eSERVER_FEATURE_PLAN_INSPECTION\x10\f\x12\x1f\n" +
-	"\x1bSERVER_FEATURE_AUDIT_SEARCH\x10\rBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"\x1bSERVER_FEATURE_AUDIT_SEARCH\x10\r\x12'\n" +
+	"#SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT\x10\x0eBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_system_api_proto_rawDescOnce sync.Once

@@ -27,6 +27,8 @@ export * from "./open_splunk/v1/index_api";
 export * from "./open_splunk/v1/saved_search";
 export * from "./open_splunk/v1/saved_search_api";
 export * from "./open_splunk/v1/search_api";
+export * from "./open_splunk/v1/search_attempt_audit";
+export * from "./open_splunk/v1/search_attempt_audit_api";
 export * from "./open_splunk/v1/search_inspection_api";
 export * from "./open_splunk/v1/search_ws";
 export * from "./open_splunk/v1/system_api";
