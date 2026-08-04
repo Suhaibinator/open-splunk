@@ -7,7 +7,113 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: atomic search-attempt admission audit
+## Latest checkpoint: native `_raw` token-index pruning with exact SPL residuals
+
+Date: 2026-08-04
+
+Committed implementation checkpoint:
+
+- `9f21f4c` — accelerate eligible positive bare `_raw` terms with ClickHouse's
+  native text index while retaining the exact SPL regex predicate.
+
+This test-first SPL/storage unit activates the text index already required by
+the architecture without changing the public API or putting GORM on the
+ClickHouse path:
+
+1. Positive, unquoted, wildcard-free bare terms containing only ASCII letters
+   and digits now compile to a parameterized native token candidate conjoined
+   with the existing parameterized regex verifier. The verifier remains the
+   semantic authority; term text never enters generated SQL.
+2. `idx_raw_text` now indexes the expression-identical array produced by
+   `arrayMap(token -> lower(token), extractAll(translateUTF8(raw, 'ſK', 'sk'),
+   '[A-Za-z0-9_]+'))`. Translating long s and the Kelvin sign covers the only
+   non-ASCII RE2 simple-fold members reachable from ASCII. Extracting before
+   lowercasing prevents Unicode expansions such as `İ -> i` plus combining dot
+   from joining a valid ASCII term to an adjacent boundary.
+3. Native candidates are restricted to positive filter polarity and canonical
+   physical `_raw` lineage. `NOT` disables its complete operand; quoted,
+   wildcard, Unicode, punctuated, and underscored terms keep their exact paths.
+   Identity projection and rename preserve lineage, while `eval` and unrelated
+   rename overwrites conservatively clear it.
+4. The greenfield authoritative ClickHouse migration and runtime physical
+   schema contract use the same array-token expression. The pinned release
+   schema digest is `7cfc0676530898bd585e38d8c6fb60426df5cdf8c692d9f2ae38addd87c9b629`,
+   and the service-principal lifecycle proves the live canonical `SHOW CREATE`
+   serialization agrees.
+5. Production read-only execution pins `enable_full_text_index`,
+   `query_plan_direct_read_from_text_index`, `use_skip_indexes_on_data_read`,
+   and `use_skip_indexes` to one. The bounded administrator explainer preserves
+   that contract but sets on-read analysis and the query-condition cache to
+   zero in its sealed SQL so selected-granule evidence is deterministic.
+6. Compiler tests cover candidate/verifier pairing, ordered bound arguments,
+   Boolean polarity, exact fallbacks, literal non-leakage, projection, rename
+   round trips, and calculated `_raw`. The pinned ClickHouse corpus covers
+   punctuation, underscores, alphanumeric adjacency, Unicode boundaries,
+   `İ`, long s, Kelvin, combined folds, invalid UTF-8 bytes, quoted/wildcard/
+   negative fallbacks, Boolean composition, and overwritten `_raw`.
+7. Structured `EXPLAIN PLAN ... indexes = 1` must select exactly one
+   `idx_raw_text` entry and reduce selected granules in a 24,576-row fixture.
+   The exact CI backend vertical invokes this proof through
+   `TestStoreAgainstClickHouse` and independently attests the physical schema
+   through `TestClickHouseServicePrincipalLifecycle`.
+8. Independent semantic, physical-schema, runtime-setting, and three-lens
+   simplification reviews were completed. They caught the original
+   `hasToken` Unicode-boundary mismatch, the lower-before-extract `İ` false
+   negative, the long-s/Kelvin RE2 fold aliases, nondeterministic EXPLAIN
+   settings, fixture-ID drift risk, duplicated settings contracts, and one lint
+   heuristic. The final reviewed state has no reportable finding.
+9. No protobuf, HTTP, WebSocket, or UI contract changed. The frontend needs no
+   update for this checkpoint; searches benefit transparently.
+
+Validation for `9f21f4c` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+make proto-lint
+go test ./... -count=1 -timeout=10m
+go test -race -shuffle=on ./... -count=1 -timeout=15m
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=30m -p=1 -v
+```
+
+Every final command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 65/65 build-script tests and 144/144 application tests.
+The exact pinned ClickHouse Store corpus passed in 141.79 seconds,
+executor/manager transport in 36.59 seconds, backend/browser integration in
+60.48 seconds, and deployment credential rotation in 19.10 seconds. The
+post-test inventory contained no Open Splunk test container or volume.
+
+Exact feature-SHA GitHub Actions run
+[`30936330532`](https://github.com/Suhaibinator/open-splunk/actions/runs/30936330532)
+completed successfully for `9f21f4cf2a159ebd99ea8571bf7b85fc09392a90`.
+Go lint, Backend vertical, Frontend checks, Release OCI contract, Protobuf
+contracts, GradeThis compatibility corpus, Go vulnerability scan, Go tests,
+both production-binary builds, and Linux/macOS release-asset consistency were
+all green.
+
+The broader backend/SPL goal remains active, but no next unit has been started.
+Wait for explicit instructions before choosing one. The external GradeThis
+Compose cutover remains deferred.
+
+## Previous checkpoint: atomic search-attempt admission audit
 
 Date: 2026-08-04
 

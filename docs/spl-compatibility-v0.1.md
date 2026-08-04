@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** August 3, 2026
+**Last updated:** August 4, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -167,6 +167,26 @@ Base search and pipeline `search` support:
 - string, signed/unsigned integer, floating-point, boolean, and null literals;
 - `*` wildcards in term and comparison values; and
 - canonical fields plus deterministic dotted dynamic-field paths.
+
+A positive, unquoted, wildcard-free bare term made only of ASCII letters and
+digits is eligible for native `_raw` text-index pruning while `_raw` still has
+its canonical physical lineage. The compiler conjoins that candidate with the
+existing parameterized regex predicate; the regex remains authoritative, so
+the optimization cannot broaden or replace SPL matching. The indexed token
+array extracts maximal ASCII alphanumeric/underscore runs, case-normalizes
+only those runs, and maps the two non-ASCII RE2 simple-fold aliases reachable
+from ASCII (`ſ` with `s`, and `K` with `k`) before extraction. This preserves
+both case-insensitive matches and the established POSIX boundary behavior
+without letting Unicode lowercase expansion join two ASCII runs.
+
+Candidates are emitted only in positive `search` filter polarity. A complete
+operand below `NOT`, quoted phrases, wildcards, Unicode terms, punctuation,
+underscored terms, and any `_raw` value overwritten by `eval` or another field
+retain their prior exact predicate with no native candidate. Identity
+projection and rename preserve physical lineage. Runtime queries explicitly
+enable ClickHouse text and skip indexes; administrator `EXPLAIN` disables
+on-read analysis and the condition cache so selected-granule evidence remains
+deterministic.
 
 Equality comparisons preserve literal type intent. Ordered comparisons against
 a numeric literal also accept numeric-looking dynamic strings; failed numeric

@@ -1064,7 +1064,12 @@ This is a hypothesis, not a universal answer. It must be validated against the e
 Additional storage principles:
 
 - pin a tested ClickHouse release;
-- use the current native text index for token searches over `_raw`/`body`, with a benchmarked tokenizer;
+- use the current native text index only where tokenizer parity is executable:
+  v0.1 accelerates positive bare ASCII-alphanumeric terms over the canonical
+  `_raw` lineage with an expression-identical array tokenizer and retains the
+  exact regex predicate as the authority; quoted, wildcard, Unicode,
+  punctuated, underscored, negative, and calculated-raw forms keep their exact
+  scan path, while `body` remains an evidence-driven extension;
 - retain the original event even when structured parsing succeeds;
 - materialize frequently used fields only after query evidence justifies it;
 - make retention configurable per index;
