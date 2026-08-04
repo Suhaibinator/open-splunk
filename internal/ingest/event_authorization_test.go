@@ -659,7 +659,6 @@ func TestCollectRejectsCorruptPreliminaryEventAuthorizationBeforeAdmission(t *te
 	config.SessionManager = manager
 	harness := newServiceHarness(t, config, authorizer, acceptingStore())
 	stream := harness.stream(t, "Bearer good-token")
-	sendHello(t, stream, 1, 1, 0)
 	if response, err := stream.Recv(); response != nil || status.Code(err) != codes.Unavailable {
 		t.Fatalf("corrupt preliminary event authorization = (%#v, %v), want nil/Unavailable", response, err)
 	}

@@ -85,6 +85,14 @@ func NormalizeIndexName(input string) (string, error) {
 
 // CreateIndex creates an active logical index at version 1.
 func (db *DB) CreateIndex(ctx context.Context, definition IndexDefinition) (Index, error) {
+	return db.createIndex(ctx, definition, nil)
+}
+
+func (db *DB) createIndex(
+	ctx context.Context,
+	definition IndexDefinition,
+	auditPublisher indexMutationAuditPublisher,
+) (Index, error) {
 	if ctx == nil {
 		return Index{}, fmt.Errorf("%w: nil context", ErrInvalidArgument)
 	}
@@ -107,6 +115,7 @@ func (db *DB) CreateIndex(ctx context.Context, definition IndexDefinition) (Inde
 			id,
 			definition,
 			now,
+			auditPublisher,
 		)
 		if errors.Is(createErr, errIndexIDCollision) {
 			continue
@@ -121,6 +130,7 @@ func (db *DB) createIndexOnce(
 	id string,
 	definition IndexDefinition,
 	now time.Time,
+	auditPublisher indexMutationAuditPublisher,
 ) (result Index, returnedErr error) {
 	tx := db.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
@@ -181,6 +191,19 @@ func (db *DB) createIndexOnce(
 	result, err = indexFromRecord(record)
 	if err != nil {
 		return Index{}, fmt.Errorf("read created index: %w", err)
+	}
+	if err := publishIndexMutationAudit(
+		ctx,
+		tx,
+		auditPublisher,
+		IndexMutationAuditEvent{
+			OccurredAt:   result.CreatedAt,
+			Action:       IndexMutationAuditActionCreate,
+			IndexID:      result.ID,
+			IndexVersion: result.Version,
+		},
+	); err != nil {
+		return Index{}, err
 	}
 	if err := tx.Commit().Error; err != nil {
 		return Index{}, fmt.Errorf("commit index creation: %w", err)
@@ -352,6 +375,16 @@ func (db *DB) ListIndexes(
 // UpdateIndex replaces mutable index configuration when expectedVersion is
 // current. The normalized name must match the existing immutable name.
 func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64, definition IndexDefinition) (result Index, err error) {
+	return db.updateIndex(ctx, id, expectedVersion, definition, nil)
+}
+
+func (db *DB) updateIndex(
+	ctx context.Context,
+	id string,
+	expectedVersion uint64,
+	definition IndexDefinition,
+	auditPublisher indexMutationAuditPublisher,
+) (result Index, err error) {
 	if err := validateExpectedVersion(expectedVersion); err != nil {
 		return Index{}, err
 	}
@@ -415,6 +448,19 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 	if err != nil {
 		return Index{}, fmt.Errorf("read updated index: %w", err)
 	}
+	if err := publishIndexMutationAudit(
+		ctx,
+		tx,
+		auditPublisher,
+		IndexMutationAuditEvent{
+			OccurredAt:   result.UpdatedAt,
+			Action:       IndexMutationAuditActionUpdate,
+			IndexID:      result.ID,
+			IndexVersion: result.Version,
+		},
+	); err != nil {
+		return Index{}, err
+	}
 	if commitErr := tx.Commit().Error; commitErr != nil {
 		return Index{}, fmt.Errorf("commit index update: %w", commitErr)
 	}
@@ -423,6 +469,16 @@ func (db *DB) UpdateIndex(ctx context.Context, id string, expectedVersion uint64
 
 // SetIndexState changes an index lifecycle state under optimistic locking.
 func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint64, state IndexState) (result Index, err error) {
+	return db.setIndexState(ctx, id, expectedVersion, state, nil)
+}
+
+func (db *DB) setIndexState(
+	ctx context.Context,
+	id string,
+	expectedVersion uint64,
+	state IndexState,
+	auditPublisher indexMutationAuditPublisher,
+) (result Index, err error) {
 	if err := validateExpectedVersion(expectedVersion); err != nil {
 		return Index{}, err
 	}
@@ -499,6 +555,23 @@ func (db *DB) SetIndexState(ctx context.Context, id string, expectedVersion uint
 	if err != nil {
 		return Index{}, fmt.Errorf("read index after state update: %w", err)
 	}
+	action := IndexMutationAuditActionActivate
+	if state == IndexStateArchived {
+		action = IndexMutationAuditActionArchive
+	}
+	if err := publishIndexMutationAudit(
+		ctx,
+		tx,
+		auditPublisher,
+		IndexMutationAuditEvent{
+			OccurredAt:   result.UpdatedAt,
+			Action:       action,
+			IndexID:      result.ID,
+			IndexVersion: result.Version,
+		},
+	); err != nil {
+		return Index{}, err
+	}
 	if commitErr := tx.Commit().Error; commitErr != nil {
 		return Index{}, fmt.Errorf("commit index state update: %w", commitErr)
 	}
@@ -514,6 +587,16 @@ func (db *DB) DeleteIndex(
 	id string,
 	expectedVersion uint64,
 	confirmationName string,
+) (deletedID string, err error) {
+	return db.deleteIndex(ctx, id, expectedVersion, confirmationName, nil)
+}
+
+func (db *DB) deleteIndex(
+	ctx context.Context,
+	id string,
+	expectedVersion uint64,
+	confirmationName string,
+	auditPublisher indexMutationAuditPublisher,
 ) (deletedID string, err error) {
 	if err := validateExpectedVersion(expectedVersion); err != nil {
 		return "", err
@@ -560,6 +643,19 @@ func (db *DB) DeleteIndex(
 	}
 	if create := tx.Create(&tombstone); create.Error != nil {
 		return "", fmt.Errorf("create index deletion tombstone: %w", create.Error)
+	}
+	if err := publishIndexMutationAudit(
+		ctx,
+		tx,
+		auditPublisher,
+		IndexMutationAuditEvent{
+			OccurredAt:   time.UnixMicro(tombstone.DeletedAtUnixMicro).UTC(),
+			Action:       IndexMutationAuditActionDeleteKeepData,
+			IndexID:      current.ID,
+			IndexVersion: current.Version,
+		},
+	); err != nil {
+		return "", err
 	}
 	if commitErr := tx.Commit().Error; commitErr != nil {
 		return "", fmt.Errorf("commit index deletion: %w", commitErr)

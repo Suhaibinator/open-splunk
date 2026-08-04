@@ -12,7 +12,7 @@ import (
 const (
 	maximumActorKindBytes  = len(ActorKindBrowser)
 	maximumActorRoleBytes  = len(ActorRoleAdministrator)
-	maximumActionBytes     = len(ActionIngestionTokenCreate)
+	maximumActionBytes     = len(ActionIndexDeleteKeepData)
 	maximumTargetKindBytes = len(TargetKindIngestionToken)
 	maximumIntegrityBatch  = 512
 )

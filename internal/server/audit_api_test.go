@@ -52,6 +52,85 @@ func (service *fakeAuditEvents) snapshot() (int, string, audit.ListRequest) {
 	return service.calls, service.tenantID, service.request
 }
 
+func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		action  audit.Action
+		proto   opensplunkv1.AuditAction
+		version uint64
+	}{
+		{audit.ActionIndexCreate, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE, 1},
+		{audit.ActionIndexUpdate, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE, 2},
+		{audit.ActionIndexActivate, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE, 2},
+		{audit.ActionIndexArchive, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, 2},
+		{audit.ActionIndexDeleteKeepData, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, 2},
+		{audit.ActionIndexDeleteData, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, 3},
+	}
+	for _, testCase := range tests {
+		testCase := testCase
+		t.Run(string(testCase.action), func(t *testing.T) {
+			t.Parallel()
+			fromProto, ok := auditActionFromProto(testCase.proto)
+			if !ok || fromProto != testCase.action {
+				t.Fatalf("auditActionFromProto(%v) = (%q, %t)", testCase.proto, fromProto, ok)
+			}
+			toProto, ok := auditActionToProto(testCase.action)
+			if !ok || toProto != testCase.proto {
+				t.Fatalf("auditActionToProto(%q) = (%v, %t)", testCase.action, toProto, ok)
+			}
+			message, err := auditEventToProto(audit.Event{
+				Sequence:   1,
+				TenantID:   "tenant",
+				OccurredAt: time.Date(2026, time.August, 3, 20, 21, 22, 123456000, time.UTC),
+				Actor: audit.Actor{
+					Kind: audit.ActorKindSystem,
+					ID:   "open-splunk-server",
+					Role: audit.ActorRoleSystem,
+				},
+				Action:        testCase.action,
+				TargetKind:    audit.TargetKindIndex,
+				TargetID:      "events",
+				TargetVersion: testCase.version,
+			}, "tenant")
+			if err != nil {
+				t.Fatalf("auditEventToProto(%q): %v", testCase.action, err)
+			}
+			if message.GetAction() != testCase.proto ||
+				message.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX {
+				t.Fatalf("index audit proto = %+v", message)
+			}
+		})
+	}
+
+	indexTarget := opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX
+	allActions := []opensplunkv1.AuditAction{
+		opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
+		opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA,
+	}
+	service := &fakeAuditEvents{}
+	handler := newAuditTestHandler(t, service)
+	response := postAuthenticatedAudit(t, handler, &opensplunkv1.ListAuditEventsRequest{
+		ActionFilters:    allActions,
+		TargetKindFilter: &indexTarget,
+	})
+	if response.Code != http.StatusOK {
+		t.Fatalf("all-action filter status = %d, body = %s", response.Code, response.Body.String())
+	}
+	calls, _, request := service.snapshot()
+	if calls != 1 || len(request.ActionFilters) != audit.MaximumActionFilters ||
+		request.TargetKind == nil || *request.TargetKind != audit.TargetKindIndex {
+		t.Fatalf("complete audit filter call = %d/%+v", calls, request)
+	}
+}
+
 func TestAuditEventListUsesAuthenticatedTenantAndProjectsBoundedPage(t *testing.T) {
 	t.Parallel()
 
@@ -429,7 +508,13 @@ func TestAuditEventListRejectsInvalidFiltersBeforeStorage(t *testing.T) {
 				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
 				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE,
 				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
-				opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE,
+				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
+				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA,
+				opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE,
 			}},
 		},
 		{

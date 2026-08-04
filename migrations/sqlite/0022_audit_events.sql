@@ -39,11 +39,17 @@ CREATE TABLE audit_events (
         action IN (
             'ingestion_token.create',
             'ingestion_token.update',
-            'ingestion_token.revoke'
+            'ingestion_token.revoke',
+            'index.create',
+            'index.update',
+            'index.activate',
+            'index.archive',
+            'index.delete_keep_data',
+            'index.delete_data'
         )
     ),
     target_kind TEXT NOT NULL COLLATE BINARY CHECK (
-        target_kind = 'ingestion_token'
+        target_kind IN ('ingestion_token', 'index')
     ),
     target_id TEXT NOT NULL COLLATE BINARY,
     target_version INTEGER NOT NULL CHECK (
@@ -67,13 +73,42 @@ CREATE TABLE audit_events (
         )
     ),
     CONSTRAINT audit_events_action_version_supported CHECK (
-        (action = 'ingestion_token.create' AND target_version = 1)
+        (
+            action IN ('ingestion_token.create', 'index.create')
+            AND target_version = 1
+        )
         OR (
             action IN (
                 'ingestion_token.update',
-                'ingestion_token.revoke'
+                'ingestion_token.revoke',
+                'index.update',
+                'index.activate',
+                'index.archive',
+                'index.delete_keep_data'
             )
             AND target_version >= 2
+        )
+        OR (action = 'index.delete_data' AND target_version >= 3)
+    ),
+    CONSTRAINT audit_events_action_target_supported CHECK (
+        (
+            action IN (
+                'ingestion_token.create',
+                'ingestion_token.update',
+                'ingestion_token.revoke'
+            )
+            AND target_kind = 'ingestion_token'
+        )
+        OR (
+            action IN (
+                'index.create',
+                'index.update',
+                'index.activate',
+                'index.archive',
+                'index.delete_keep_data',
+                'index.delete_data'
+            )
+            AND target_kind = 'index'
         )
     ),
     CONSTRAINT audit_events_target_id_bounded CHECK (

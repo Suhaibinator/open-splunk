@@ -161,7 +161,7 @@ func (handler *apiHandler) auditListRequest(
 		}
 	}
 
-	if len(input.GetActionFilters()) > 3 {
+	if len(input.GetActionFilters()) > audit.MaximumActionFilters {
 		return audit.ListRequest{}, badRequestError(
 			"audit event action filters are invalid",
 		)
@@ -360,6 +360,18 @@ func auditActionFromProto(value opensplunkv1.AuditAction) (audit.Action, bool) {
 		return audit.ActionIngestionTokenUpdate, true
 	case opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE:
 		return audit.ActionIngestionTokenRevoke, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE:
+		return audit.ActionIndexCreate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE:
+		return audit.ActionIndexUpdate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE:
+		return audit.ActionIndexActivate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE:
+		return audit.ActionIndexArchive, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA:
+		return audit.ActionIndexDeleteKeepData, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA:
+		return audit.ActionIndexDeleteData, true
 	default:
 		return "", false
 	}
@@ -373,6 +385,18 @@ func auditActionToProto(value audit.Action) (opensplunkv1.AuditAction, bool) {
 		return opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE, true
 	case audit.ActionIngestionTokenRevoke:
 		return opensplunkv1.AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE, true
+	case audit.ActionIndexCreate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_CREATE, true
+	case audit.ActionIndexUpdate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_UPDATE, true
+	case audit.ActionIndexActivate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ACTIVATE, true
+	case audit.ActionIndexArchive:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_ARCHIVE, true
+	case audit.ActionIndexDeleteKeepData:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, true
+	case audit.ActionIndexDeleteData:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, true
 	default:
 		return opensplunkv1.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
 	}
@@ -381,19 +405,27 @@ func auditActionToProto(value audit.Action) (opensplunkv1.AuditAction, bool) {
 func auditTargetKindFromProto(
 	value opensplunkv1.AuditTargetKind,
 ) (audit.TargetKind, bool) {
-	if value == opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN {
+	switch value {
+	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN:
 		return audit.TargetKindIngestionToken, true
+	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX:
+		return audit.TargetKindIndex, true
+	default:
+		return "", false
 	}
-	return "", false
 }
 
 func auditTargetKindToProto(
 	value audit.TargetKind,
 ) (opensplunkv1.AuditTargetKind, bool) {
-	if value == audit.TargetKindIngestionToken {
+	switch value {
+	case audit.TargetKindIngestionToken:
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN, true
+	case audit.TargetKindIndex:
+		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_INDEX, true
+	default:
+		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
 	}
-	return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
 }
 
 func mapAuditListCallError(ctx context.Context, operationErr error) error {

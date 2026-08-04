@@ -19,6 +19,9 @@ const (
 	MaximumEventsPerTenant = 100_000
 	// MaximumListPageSize bounds one administrative audit traversal response.
 	MaximumListPageSize = 200
+	// MaximumActionFilters is the complete fixed action taxonomy. One list
+	// request cannot contain more distinct action filters than this bound.
+	MaximumActionFilters = 9
 
 	defaultListPageSize     = 50
 	maximumTenantIDBytes    = 255
@@ -98,6 +101,12 @@ const (
 	ActionIngestionTokenCreate Action = "ingestion_token.create"
 	ActionIngestionTokenUpdate Action = "ingestion_token.update"
 	ActionIngestionTokenRevoke Action = "ingestion_token.revoke"
+	ActionIndexCreate          Action = "index.create"
+	ActionIndexUpdate          Action = "index.update"
+	ActionIndexActivate        Action = "index.activate"
+	ActionIndexArchive         Action = "index.archive"
+	ActionIndexDeleteKeepData  Action = "index.delete_keep_data"
+	ActionIndexDeleteData      Action = "index.delete_data"
 )
 
 // Valid reports whether action belongs to the first immutable audit taxonomy.
@@ -105,7 +114,13 @@ func (action Action) Valid() bool {
 	switch action {
 	case ActionIngestionTokenCreate,
 		ActionIngestionTokenUpdate,
-		ActionIngestionTokenRevoke:
+		ActionIngestionTokenRevoke,
+		ActionIndexCreate,
+		ActionIndexUpdate,
+		ActionIndexActivate,
+		ActionIndexArchive,
+		ActionIndexDeleteKeepData,
+		ActionIndexDeleteData:
 		return true
 	default:
 		return false
@@ -115,10 +130,20 @@ func (action Action) Valid() bool {
 // TargetKind is the fixed family of the object changed by an action.
 type TargetKind string
 
-const TargetKindIngestionToken TargetKind = "ingestion_token"
+const (
+	TargetKindIngestionToken TargetKind = "ingestion_token"
+	TargetKindIndex          TargetKind = "index"
+)
 
 // Valid reports whether kind belongs to the first audit target taxonomy.
-func (kind TargetKind) Valid() bool { return kind == TargetKindIngestionToken }
+func (kind TargetKind) Valid() bool {
+	switch kind {
+	case TargetKindIngestionToken, TargetKindIndex:
+		return true
+	default:
+		return false
+	}
+}
 
 // SuccessfulEvent is the caller-owned definition appended in the same
 // transaction as a successful control-plane mutation.
@@ -135,6 +160,7 @@ func (event SuccessfulEvent) valid() bool {
 	return validTime &&
 		event.Action.Valid() &&
 		event.TargetKind.Valid() &&
+		validActionTarget(event.Action, event.TargetKind) &&
 		validIdentity(event.TargetID, maximumTargetIDBytes) &&
 		event.TargetVersion <= math.MaxInt64 &&
 		validActionVersion(event.Action, event.TargetVersion)
@@ -142,10 +168,35 @@ func (event SuccessfulEvent) valid() bool {
 
 func validActionVersion(action Action, version uint64) bool {
 	switch action {
-	case ActionIngestionTokenCreate:
+	case ActionIngestionTokenCreate, ActionIndexCreate:
 		return version == 1
-	case ActionIngestionTokenUpdate, ActionIngestionTokenRevoke:
+	case ActionIngestionTokenUpdate,
+		ActionIngestionTokenRevoke,
+		ActionIndexUpdate,
+		ActionIndexActivate,
+		ActionIndexArchive,
+		ActionIndexDeleteKeepData:
 		return version >= 2
+	case ActionIndexDeleteData:
+		return version >= 3
+	default:
+		return false
+	}
+}
+
+func validActionTarget(action Action, targetKind TargetKind) bool {
+	switch action {
+	case ActionIngestionTokenCreate,
+		ActionIngestionTokenUpdate,
+		ActionIngestionTokenRevoke:
+		return targetKind == TargetKindIngestionToken
+	case ActionIndexCreate,
+		ActionIndexUpdate,
+		ActionIndexActivate,
+		ActionIndexArchive,
+		ActionIndexDeleteKeepData,
+		ActionIndexDeleteData:
+		return targetKind == TargetKindIndex
 	default:
 		return false
 	}

@@ -97,6 +97,12 @@ export enum AuditAction {
   AUDIT_ACTION_INGESTION_TOKEN_CREATE = 1,
   AUDIT_ACTION_INGESTION_TOKEN_UPDATE = 2,
   AUDIT_ACTION_INGESTION_TOKEN_REVOKE = 3,
+  AUDIT_ACTION_INDEX_CREATE = 4,
+  AUDIT_ACTION_INDEX_UPDATE = 5,
+  AUDIT_ACTION_INDEX_ACTIVATE = 6,
+  AUDIT_ACTION_INDEX_ARCHIVE = 7,
+  AUDIT_ACTION_INDEX_DELETE_KEEP_DATA = 8,
+  AUDIT_ACTION_INDEX_DELETE_DATA = 9,
   UNRECOGNIZED = -1,
 }
 
@@ -114,6 +120,24 @@ export function auditActionFromJSON(object: any): AuditAction {
     case 3:
     case "AUDIT_ACTION_INGESTION_TOKEN_REVOKE":
       return AuditAction.AUDIT_ACTION_INGESTION_TOKEN_REVOKE;
+    case 4:
+    case "AUDIT_ACTION_INDEX_CREATE":
+      return AuditAction.AUDIT_ACTION_INDEX_CREATE;
+    case 5:
+    case "AUDIT_ACTION_INDEX_UPDATE":
+      return AuditAction.AUDIT_ACTION_INDEX_UPDATE;
+    case 6:
+    case "AUDIT_ACTION_INDEX_ACTIVATE":
+      return AuditAction.AUDIT_ACTION_INDEX_ACTIVATE;
+    case 7:
+    case "AUDIT_ACTION_INDEX_ARCHIVE":
+      return AuditAction.AUDIT_ACTION_INDEX_ARCHIVE;
+    case 8:
+    case "AUDIT_ACTION_INDEX_DELETE_KEEP_DATA":
+      return AuditAction.AUDIT_ACTION_INDEX_DELETE_KEEP_DATA;
+    case 9:
+    case "AUDIT_ACTION_INDEX_DELETE_DATA":
+      return AuditAction.AUDIT_ACTION_INDEX_DELETE_DATA;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -131,6 +155,18 @@ export function auditActionToJSON(object: AuditAction): string {
       return "AUDIT_ACTION_INGESTION_TOKEN_UPDATE";
     case AuditAction.AUDIT_ACTION_INGESTION_TOKEN_REVOKE:
       return "AUDIT_ACTION_INGESTION_TOKEN_REVOKE";
+    case AuditAction.AUDIT_ACTION_INDEX_CREATE:
+      return "AUDIT_ACTION_INDEX_CREATE";
+    case AuditAction.AUDIT_ACTION_INDEX_UPDATE:
+      return "AUDIT_ACTION_INDEX_UPDATE";
+    case AuditAction.AUDIT_ACTION_INDEX_ACTIVATE:
+      return "AUDIT_ACTION_INDEX_ACTIVATE";
+    case AuditAction.AUDIT_ACTION_INDEX_ARCHIVE:
+      return "AUDIT_ACTION_INDEX_ARCHIVE";
+    case AuditAction.AUDIT_ACTION_INDEX_DELETE_KEEP_DATA:
+      return "AUDIT_ACTION_INDEX_DELETE_KEEP_DATA";
+    case AuditAction.AUDIT_ACTION_INDEX_DELETE_DATA:
+      return "AUDIT_ACTION_INDEX_DELETE_DATA";
     case AuditAction.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -140,6 +176,7 @@ export function auditActionToJSON(object: AuditAction): string {
 export enum AuditTargetKind {
   AUDIT_TARGET_KIND_UNSPECIFIED = 0,
   AUDIT_TARGET_KIND_INGESTION_TOKEN = 1,
+  AUDIT_TARGET_KIND_INDEX = 2,
   UNRECOGNIZED = -1,
 }
 
@@ -151,6 +188,9 @@ export function auditTargetKindFromJSON(object: any): AuditTargetKind {
     case 1:
     case "AUDIT_TARGET_KIND_INGESTION_TOKEN":
       return AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN;
+    case 2:
+    case "AUDIT_TARGET_KIND_INDEX":
+      return AuditTargetKind.AUDIT_TARGET_KIND_INDEX;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -164,6 +204,8 @@ export function auditTargetKindToJSON(object: AuditTargetKind): string {
       return "AUDIT_TARGET_KIND_UNSPECIFIED";
     case AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN:
       return "AUDIT_TARGET_KIND_INGESTION_TOKEN";
+    case AuditTargetKind.AUDIT_TARGET_KIND_INDEX:
+      return "AUDIT_TARGET_KIND_INDEX";
     case AuditTargetKind.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

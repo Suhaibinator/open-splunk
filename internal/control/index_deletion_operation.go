@@ -54,6 +54,24 @@ func (db *DB) BeginIndexDataDeletion(
 	expectedVersion uint64,
 	confirmationName string,
 ) (IndexDeletionOperation, error) {
+	return db.beginIndexDataDeletionWithAudit(
+		ctx,
+		scope,
+		indexID,
+		expectedVersion,
+		confirmationName,
+		nil,
+	)
+}
+
+func (db *DB) beginIndexDataDeletionWithAudit(
+	ctx context.Context,
+	scope IndexDataDeletionScope,
+	indexID string,
+	expectedVersion uint64,
+	confirmationName string,
+	auditPublisher indexMutationAuditPublisher,
+) (IndexDeletionOperation, error) {
 	if validateTenantID(scope.TenantID) != nil {
 		return IndexDeletionOperation{}, fmt.Errorf(
 			"%w: index data deletion tenant ID is invalid",
@@ -92,13 +110,14 @@ func (db *DB) BeginIndexDataDeletion(
 				generateErr,
 			)
 		}
-		operation, beginErr := db.beginIndexDataDeletion(
+		operation, beginErr := db.beginIndexDataDeletionTransaction(
 			ctx,
 			operationID,
 			scope.TenantID,
 			indexID,
 			expectedVersion,
 			canonicalConfirmation,
+			auditPublisher,
 		)
 		if !errors.Is(beginErr, errIndexDeletionOperationIDCollision) {
 			return operation, beginErr
@@ -152,6 +171,26 @@ func (db *DB) beginIndexDataDeletion(
 	indexID string,
 	expectedVersion uint64,
 	confirmationName string,
+) (result IndexDeletionOperation, err error) {
+	return db.beginIndexDataDeletionTransaction(
+		ctx,
+		operationID,
+		tenantID,
+		indexID,
+		expectedVersion,
+		confirmationName,
+		nil,
+	)
+}
+
+func (db *DB) beginIndexDataDeletionTransaction(
+	ctx context.Context,
+	operationID string,
+	tenantID string,
+	indexID string,
+	expectedVersion uint64,
+	confirmationName string,
+	auditPublisher indexMutationAuditPublisher,
 ) (result IndexDeletionOperation, err error) {
 	tx := db.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
@@ -259,6 +298,19 @@ func (db *DB) beginIndexDataDeletion(
 			"read created index deletion operation: %w",
 			conversionErr,
 		)
+	}
+	if err := publishIndexMutationAudit(
+		ctx,
+		tx,
+		auditPublisher,
+		IndexMutationAuditEvent{
+			OccurredAt:   operation.CreatedAt,
+			Action:       IndexMutationAuditActionDeleteData,
+			IndexID:      operation.IndexID,
+			IndexVersion: operation.DeletingVersion,
+		},
+	); err != nil {
+		return IndexDeletionOperation{}, err
 	}
 	if commitErr := tx.Commit().Error; commitErr != nil {
 		return IndexDeletionOperation{}, fmt.Errorf(

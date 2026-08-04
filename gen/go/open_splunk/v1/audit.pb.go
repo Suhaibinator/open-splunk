@@ -130,6 +130,12 @@ const (
 	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE AuditAction = 1
 	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE AuditAction = 2
 	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE AuditAction = 3
+	AuditAction_AUDIT_ACTION_INDEX_CREATE           AuditAction = 4
+	AuditAction_AUDIT_ACTION_INDEX_UPDATE           AuditAction = 5
+	AuditAction_AUDIT_ACTION_INDEX_ACTIVATE         AuditAction = 6
+	AuditAction_AUDIT_ACTION_INDEX_ARCHIVE          AuditAction = 7
+	AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA AuditAction = 8
+	AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA      AuditAction = 9
 )
 
 // Enum value maps for AuditAction.
@@ -139,12 +145,24 @@ var (
 		1: "AUDIT_ACTION_INGESTION_TOKEN_CREATE",
 		2: "AUDIT_ACTION_INGESTION_TOKEN_UPDATE",
 		3: "AUDIT_ACTION_INGESTION_TOKEN_REVOKE",
+		4: "AUDIT_ACTION_INDEX_CREATE",
+		5: "AUDIT_ACTION_INDEX_UPDATE",
+		6: "AUDIT_ACTION_INDEX_ACTIVATE",
+		7: "AUDIT_ACTION_INDEX_ARCHIVE",
+		8: "AUDIT_ACTION_INDEX_DELETE_KEEP_DATA",
+		9: "AUDIT_ACTION_INDEX_DELETE_DATA",
 	}
 	AuditAction_value = map[string]int32{
 		"AUDIT_ACTION_UNSPECIFIED":            0,
 		"AUDIT_ACTION_INGESTION_TOKEN_CREATE": 1,
 		"AUDIT_ACTION_INGESTION_TOKEN_UPDATE": 2,
 		"AUDIT_ACTION_INGESTION_TOKEN_REVOKE": 3,
+		"AUDIT_ACTION_INDEX_CREATE":           4,
+		"AUDIT_ACTION_INDEX_UPDATE":           5,
+		"AUDIT_ACTION_INDEX_ACTIVATE":         6,
+		"AUDIT_ACTION_INDEX_ARCHIVE":          7,
+		"AUDIT_ACTION_INDEX_DELETE_KEEP_DATA": 8,
+		"AUDIT_ACTION_INDEX_DELETE_DATA":      9,
 	}
 )
 
@@ -180,6 +198,7 @@ type AuditTargetKind int32
 const (
 	AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED     AuditTargetKind = 0
 	AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN AuditTargetKind = 1
+	AuditTargetKind_AUDIT_TARGET_KIND_INDEX           AuditTargetKind = 2
 )
 
 // Enum value maps for AuditTargetKind.
@@ -187,10 +206,12 @@ var (
 	AuditTargetKind_name = map[int32]string{
 		0: "AUDIT_TARGET_KIND_UNSPECIFIED",
 		1: "AUDIT_TARGET_KIND_INGESTION_TOKEN",
+		2: "AUDIT_TARGET_KIND_INDEX",
 	}
 	AuditTargetKind_value = map[string]int32{
 		"AUDIT_TARGET_KIND_UNSPECIFIED":     0,
 		"AUDIT_TARGET_KIND_INGESTION_TOKEN": 1,
+		"AUDIT_TARGET_KIND_INDEX":           2,
 	}
 )
 
@@ -362,15 +383,22 @@ const file_open_splunk_v1_audit_proto_rawDesc = "" +
 	"\x1cAUDIT_ACTOR_ROLE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17AUDIT_ACTOR_ROLE_SYSTEM\x10\x01\x12\x19\n" +
 	"\x15AUDIT_ACTOR_ROLE_USER\x10\x02\x12\"\n" +
-	"\x1eAUDIT_ACTOR_ROLE_ADMINISTRATOR\x10\x03*\xa6\x01\n" +
+	"\x1eAUDIT_ACTOR_ROLE_ADMINISTRATOR\x10\x03*\xf2\x02\n" +
 	"\vAuditAction\x12\x1c\n" +
 	"\x18AUDIT_ACTION_UNSPECIFIED\x10\x00\x12'\n" +
 	"#AUDIT_ACTION_INGESTION_TOKEN_CREATE\x10\x01\x12'\n" +
 	"#AUDIT_ACTION_INGESTION_TOKEN_UPDATE\x10\x02\x12'\n" +
-	"#AUDIT_ACTION_INGESTION_TOKEN_REVOKE\x10\x03*[\n" +
+	"#AUDIT_ACTION_INGESTION_TOKEN_REVOKE\x10\x03\x12\x1d\n" +
+	"\x19AUDIT_ACTION_INDEX_CREATE\x10\x04\x12\x1d\n" +
+	"\x19AUDIT_ACTION_INDEX_UPDATE\x10\x05\x12\x1f\n" +
+	"\x1bAUDIT_ACTION_INDEX_ACTIVATE\x10\x06\x12\x1e\n" +
+	"\x1aAUDIT_ACTION_INDEX_ARCHIVE\x10\a\x12'\n" +
+	"#AUDIT_ACTION_INDEX_DELETE_KEEP_DATA\x10\b\x12\"\n" +
+	"\x1eAUDIT_ACTION_INDEX_DELETE_DATA\x10\t*x\n" +
 	"\x0fAuditTargetKind\x12!\n" +
 	"\x1dAUDIT_TARGET_KIND_UNSPECIFIED\x10\x00\x12%\n" +
-	"!AUDIT_TARGET_KIND_INGESTION_TOKEN\x10\x01BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"!AUDIT_TARGET_KIND_INGESTION_TOKEN\x10\x01\x12\x1b\n" +
+	"\x17AUDIT_TARGET_KIND_INDEX\x10\x02BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_audit_proto_rawDescOnce sync.Once

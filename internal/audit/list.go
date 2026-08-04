@@ -323,7 +323,7 @@ func normalizeListRequest(
 			control.ErrInvalidArgument,
 		)
 	}
-	if len(request.ActionFilters) > 3 {
+	if len(request.ActionFilters) > MaximumActionFilters {
 		return normalizedListRequest{}, fmt.Errorf(
 			"%w: too many audit action filters",
 			control.ErrInvalidArgument,

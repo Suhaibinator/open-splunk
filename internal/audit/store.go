@@ -226,7 +226,7 @@ func (store *Store) AppendInTransaction(
 	actor := actorForAppend(ctx)
 	if !validSuccessfulActor(actor) {
 		return Event{}, fmt.Errorf(
-			"%w: audit actor cannot perform ingestion-token mutations",
+			"%w: audit actor cannot perform successful mutations",
 			control.ErrInvalidArgument,
 		)
 	}

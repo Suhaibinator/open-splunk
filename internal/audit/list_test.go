@@ -233,7 +233,9 @@ func TestListRejectsInvalidRequestsSeparatelyFromInvalidCursors(t *testing.T) {
 		{name: "unknown action", tenantID: "tenant", request: ListRequest{ActionFilters: []Action{"other"}}},
 		{name: "too many actions", tenantID: "tenant", request: ListRequest{ActionFilters: []Action{
 			ActionIngestionTokenCreate, ActionIngestionTokenUpdate,
-			ActionIngestionTokenRevoke, ActionIngestionTokenCreate,
+			ActionIngestionTokenRevoke, ActionIndexCreate,
+			ActionIndexUpdate, ActionIndexActivate, ActionIndexArchive,
+			ActionIndexDeleteKeepData, ActionIndexDeleteData, ActionIndexCreate,
 		}}},
 		{name: "actor", tenantID: "tenant", request: ListRequest{ActorID: &badActor}},
 		{name: "target", tenantID: "tenant", request: ListRequest{TargetKind: &badTarget}},

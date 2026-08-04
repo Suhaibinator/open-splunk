@@ -261,6 +261,14 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
+	indexAdministration, err := newRuntimeIndexAdministration(
+		controlDB,
+		config.tenantID,
+		securityStores.auditEvents,
+	)
+	if err != nil {
+		return err
+	}
 	savedSearches := securityStores.savedSearches
 	tokenStore := securityStores.ingestionTokens
 	collectorAdmissions, err := collectoradmission.New(
@@ -670,10 +678,10 @@ func runWithOptions(config options) error {
 		SearchWebSocket:            searchWebSocket,
 		Exports:                    exports,
 		Indexes:                    controlDB,
-		IndexAdmin:                 controlDB,
+		IndexAdmin:                 indexAdministration,
 		IndexStatistics:            indexStatistics,
 		IndexStatisticsSnapshotter: visibilitySnapshotter{sequencer: sequencer},
-		IndexDataDeletionAdmission: controlDB,
+		IndexDataDeletionAdmission: indexAdministration,
 		IndexDataDeletionWaker:     indexDataDeletion,
 		IngestionTokens:            tokenStore,
 		AuditEvents:                securityStores.auditEvents,
