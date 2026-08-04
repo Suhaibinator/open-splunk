@@ -7,7 +7,115 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: native `_raw` token-index pruning with exact SPL residuals
+## Latest checkpoint: trusted source-only search-history reruns
+
+Date: 2026-08-04
+
+Committed implementation checkpoint:
+
+- `1d54039` — admit `HISTORY_RERUN` searches only from an owner-scoped
+  retained history snapshot, with fresh authorization, time resolution, and
+  ClickHouse visibility.
+
+This test-first search-admission unit completes the architecture's distinct
+Run Again behavior without putting GORM on the ClickHouse path:
+
+1. A history rerun sends only `source.origin = HISTORY_RERUN` and
+   `source.history_search_id`; a client-supplied search definition is
+   forbidden. The server performs the tenant/owner-scoped lookup and clones
+   the bounded retained entry before making any admission decision.
+2. The trusted reconstruction reuses only original SPL, app ID, relative or
+   absolute time intent, and the effective index scope. A failed pre-planning
+   search with no effective scope falls back to its requested scope. Generated
+   SQL, compiler state, resolved absolute timestamps, visibility/index-time
+   cutoffs, results, progress, and terminal state are never replayed.
+3. Relative time is resolved against the current authoritative server clock.
+   A retained mixed relative/absolute range that was valid originally but is
+   no longer executable returns `409 Conflict` without creating a job.
+   Canceled lookup, control-plane, and job-admission operations consistently
+   return the bounded history-rerun timeout response.
+4. Current app and index authorization is repeated before admission. The
+   production GORM/SQLite index catalog uses its existing bounded
+   `GetIndexesByNames` query, reducing a 128-index scope from 128 sequential
+   lookups to one. The handler detaches the caller's slice before the catalog
+   call, rejects malformed/misordered batch results as a 503 control-plane
+   fault, and keeps missing, inactive, or search-disabled indexes as a 403.
+5. The new job receives fresh visibility and index-time cutoffs and records
+   one-hop provenance pointing at the immediate history row. History-source
+   IDs accept the 256-byte search-job boundary while saved-search/dashboard
+   source IDs retain their 128-byte boundary; stored history validation and
+   job admission agree at both edges.
+6. The real backend vertical uses a dedicated authenticated collector and two
+   independently acknowledged batches. It proves that an event ingested after
+   the original job's event range, visibility sequence, and index-time cutoff
+   appears in the rerun, while the immutable original snapshot still returns
+   only its baseline event.
+7. The frontend now implements the source-only contract. History reruns bypass
+   stale client-side app/time preflight, consume their local intent exactly
+   once after successful admission, cancel a superseded successful job safely,
+   and remove stale local history only when the create itself returns 404.
+   Explicit delete and app-scoped clear also compare-and-clear pending reruns.
+8. Browser coverage proves source-only serialization, stale app/time bypass,
+   explicit-delete cleanup, clear cleanup, one-shot consumption, and create-time
+   404 cleanup without allowing later job/result 404s to erase history. Unit
+   and adversarial suites cover source-shape rejection, scoped lookup, detached
+   deletion races, canonical retained snapshots, current-clock conflicts,
+   active app/index reauthorization, cancellation, boundary sizes, and
+   malformed service results.
+9. Independent backend security/correctness, frontend state-machine,
+   integration-realism, and three-lens simplification reviews were completed.
+   They caught the original inverted-range 500, archived-app authorization,
+   stale rerun references, overly broad 404 cleanup, order-dependent browser
+   fixtures, synthetic visibility evidence, duplicated test helpers, mutable
+   batch input, and malformed-batch 403 classification. The final reviewed
+   state has no reportable finding.
+
+Validation for `1d54039` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/tmp/open-splunk-history-rerun-final-coverage.out ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=10m -v
+```
+
+Every local gate passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 65/65 build-script tests and 144/144 application tests.
+The focused digest-pinned backend/browser/collector/ClickHouse vertical passed
+in 26.20 seconds, and no test-owned container remained afterward.
+
+Exact feature-SHA GitHub Actions run
+[`30947488613`](https://github.com/Suhaibinator/open-splunk/actions/runs/30947488613)
+completed successfully for `1d54039059ab9621dc3e7b66c6a081a45ce6ad31`.
+Go lint and Backend vertical—the two checks reported failing before this
+unit—both passed, together with race/coverage, protobuf, frontend, GradeThis,
+vulnerability, release OCI, Linux/macOS production binaries, and release-asset
+consistency.
+
+The frontend is already updated for this contract; no additional frontend
+change is required for history reruns. Future clients must continue to send
+only the generated history source/id and must treat the server's retained
+definition, current authorization, clock, and cutoffs as authoritative. The
+broader backend/SPL goal remains active, but no next unit has been started.
+Wait for explicit instructions before choosing one. The external GradeThis
+Compose cutover remains deferred.
+
+## Previous checkpoint: native `_raw` token-index pruning with exact SPL residuals
 
 Date: 2026-08-04
 
