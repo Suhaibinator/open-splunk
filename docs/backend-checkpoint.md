@@ -7,7 +7,127 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded mixed-type streamstats minimum
+## Latest checkpoint: atomic saved-search mutation audit and restart/rerun
+
+Date: 2026-08-04
+
+Committed implementation checkpoint:
+
+- `1a365fe` — audit every production saved-search mutation atomically and
+  prove persisted definitions can be reopened and rerun through the real
+  runtime.
+
+This test-first control-plane unit closes the saved-search portion of the
+durable audit contract without putting GORM on the ClickHouse path:
+
+1. Production create, update, duplicate, and delete operations now append a
+   durable audit row in the same GORM/SQLite transaction as the saved-search
+   mutation. An audit append, capacity, commit, or journal failure rolls the
+   mutation back; rejected mutations publish nothing.
+2. The protobuf, Go taxonomy, SQLite constraints, generated Go/TypeScript, and
+   list API agree on `saved_search.create`, `saved_search.update`,
+   `saved_search.duplicate`, and `saved_search.delete` with target kind
+   `saved_search`. Create and duplicate report version 1; update reports the
+   committed version at or above 2; delete reports the last retained version.
+   Duplicate targets the new saved search and discloses neither its source ID
+   nor a source payload.
+3. Saved-search actions accept the system actor, browser administrators, and
+   authenticated browser users. Existing token, index, and app administration
+   actions remain restricted to system or browser-administrator actors. The
+   current trusted single-user saved-search routes use the canonical
+   `open-splunk-server` system actor when no browser principal is present.
+4. The audit projection remains intentionally payload-free: no raw SPL,
+   serialized search definition, source saved-search ID, credentials, or
+   arbitrary metadata enters the journal. Tenant, action, actor, version, and
+   target checks are enforced both in Go and by the authoritative greenfield
+   SQLite migration.
+5. The saved-object store retains its direct insert/delete paths when no audit
+   publisher is configured, while the production runtime wraps it with the
+   narrow audited store. GORM remains confined to the SQLite control plane;
+   ClickHouse execution and storage are unchanged.
+6. Runtime integration coverage opens the real control-plane stores, creates a
+   saved definition containing relative `-24h` to `now` intent, closes and
+   reopens SQLite, retrieves the exact persisted definition, projects only
+   execution fields as the frontend already does, and creates a fresh
+   saved-search-origin job through the real manager and history journal. It
+   verifies post-restart absolute time resolution plus saved-search provenance
+   in both job and history records.
+7. The same runtime vertical then updates, duplicates, and deletes the saved
+   search, lists all four audit events through administrator authentication,
+   verifies the system actor and payload non-disclosure, deliberately removes
+   the audit table, and proves the next mutation fails closed with a sanitized
+   `503` and no saved-object change. Audit-capacity exhaustion maps to `429`.
+8. Unit coverage spans all lifecycle events, same-transaction visibility,
+   rollback for every mutation, collision retry and exhaustion, concurrent
+   create/update winners, invalid configuration, actor/action/version/target
+   forgery, foreign and autocommit transactions, sequence rollback, complete
+   filters, API enum mappings, repeated execution, shuffle, and race detection.
+9. Three independent adversarial reviews covered transactional correctness,
+   audit security, and product/runtime acceptance. Their findings removed
+   avoidable raw-store transactions, moved response cloning outside commit
+   boundaries, eliminated discarded delete events and duplicate taxonomy
+   switches/helpers, clarified action-specific actor names, consolidated
+   runtime assertions, and corrected two stale documentation claims. Narrow
+   rereviews were clean.
+
+Validation for `1a365fe` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+make proto-lint
+go test ./... -count=1 -timeout=5m
+go test -race -shuffle=on ./... -count=1 -timeout=10m
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=30m -p=1 -v
+```
+
+Every local command passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend tests passed 65/65 build-script tests and 144/144 application tests.
+The exact pinned Backend vertical passed all seven packages: the complete
+ClickHouse Store corpus passed in 136.65 seconds, executor/manager transport in
+35.95 seconds, backend/browser integration in 59.61 seconds, and deployment
+credential rotation in 20.02 seconds. Test-owned containers were removed, and
+no named Open Splunk, ClickHouse, or testcontainers volume remained.
+
+Historical push run
+[`30610447133`](https://github.com/Suhaibinator/open-splunk/actions/runs/30610447133)
+failed because a deletion fixture mistook one pending asynchronous mutation for
+a duplicate, six search-only browser fixtures accidentally exposed the optional
+index-administration interface, and Linux `unconvert` rejected a redundant
+`uint64(stat.Nlink)` conversion. Commit `f0042a5` fixed all three; immediate run
+`30612385499` passed both jobs. Exact feature-SHA run
+[`30916159785`](https://github.com/Suhaibinator/open-splunk/actions/runs/30916159785)
+is fully green: Backend vertical passed in 14m51s and Go lint in 2m17s, along
+with race/coverage, protobuf, frontend, GradeThis, vulnerability, release OCI,
+Linux/macOS binaries, and release-asset consistency.
+
+The frontend already projects executable fields when rerunning a saved search,
+so this persistence/runtime unit needs no search-workspace contract change. The
+Activity client still accurately discloses that it is not wired to the existing
+audit route; the frontend handoff in `docs/audit-events-v0.1.md` describes the
+future audit-console work. The broader backend/SPL goal remains active, but no
+next unit has been started. Wait for explicit instructions before choosing one.
+The external GradeThis Compose cutover remains deferred.
+
+## Previous checkpoint: bounded mixed-type streamstats minimum
 
 Date: 2026-08-04
 
