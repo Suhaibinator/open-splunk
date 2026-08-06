@@ -7,7 +7,106 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: trusted source-only search-history reruns
+## Latest checkpoint: bounded `streamstats max(field)`
+
+Date: 2026-08-05
+
+Committed implementation checkpoint:
+
+- `7ea9aa3` — add bounded, type-preserving `streamstats max(field)` across
+  parsing, planning, ClickHouse compilation, execution, inspection, history,
+  export, completion, and frontend compatibility surfaces.
+
+This test-first SPL unit completes the symmetric maximum counterpart to the
+existing bounded `streamstats min(field)` implementation without putting GORM
+on the ClickHouse path:
+
+1. The parser accepts case-insensitive long-form `max(exact_field)` with an
+   optional exact `AS` alias. The default output name is canonicalized to
+   `max(field)`, while the existing `current`, `window`, `global`, and `BY`
+   constraints and the 10,000-row frame limit remain authoritative.
+2. Mixed extrema use one total order shared by `stats`, `eventstats`, and
+   `streamstats`: exact numeric values sort before lexical values; numeric
+   values use the exact normalized numeric key and lexical values use raw-byte
+   ordering. Thus minimum prefers numeric when any numeric value exists and
+   maximum prefers lexical when any lexical value exists.
+3. Winner values preserve native fixed types and Dynamic Double, Decimal,
+   String, or Bytes identity. Equal String/Bytes lexical values use a stable
+   String-before-Bytes type tie, so minimum and maximum remain deterministic.
+   Empty String and empty Bytes winners are covered explicitly.
+4. Bytes provenance is authoritative even when the bytes happen to be valid
+   UTF-8, including physical `_raw`. Canonical unpadded RawStd `bytes/v1`
+   envelopes are validated strictly; malformed encodings poison an extrema
+   atomically instead of being reinterpreted as text. Container values also
+   poison atomically.
+5. Empty, null, and not-yet-populated frames produce null. Incomplete `BY`
+   rows are retained with the output logically absent. `current=f`, bounded
+   windows, global/partitioned execution, and the 10,000/10,001-row fence are
+   covered in unit and pinned ClickHouse tests.
+6. Dynamic and array transforming extrema compute each `(input, direction)`
+   winner aggregate once and reuse its alias for both value and stored type.
+   A three-measure fixture proves one `argMinArray` and one `argMaxArray`,
+   avoiding repeated aggregate state or an extra relational scan.
+7. Reexecution through query execution, search-job management, search
+   inspection, retained history, and export is covered. The frontend
+   completion/surface contract recognizes `max`, but no protobuf, HTTP,
+   WebSocket, control-plane schema, or UI workflow changed.
+8. Independent adversarial and simplification reviews caught stale physical
+   plan signatures, valid-UTF8 binary `_raw` publication, noncanonical RawStd
+   aliases, nondeterministic equal String/Bytes types, repeated aggregate SQL,
+   and missing production-envelope integration cases. The final exact staged
+   diff received a separate read-only review with no blocking or high-confidence
+   finding.
+
+Validation for `7ea9aa3` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+go test -race -shuffle=on -covermode=atomic -coverprofile=coverage.out ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes \
+  ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse \
+  -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$' \
+  -count=1 -timeout=30m -p=1 -v
+```
+
+Every local gate passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend lint, type-check, all 65 frontend tests, and the 11-page static build
+passed. The final digest-pinned Store corpus passed in 196.155 seconds and the
+executor/manager transport corpus in 53.079 seconds. The full backend vertical
+passed and left no `open-splunk-*` test container behind.
+
+Exact feature-SHA GitHub Actions run
+[`31068726652`](https://github.com/Suhaibinator/open-splunk/actions/runs/31068726652)
+completed successfully for `7ea9aa3e35c0d441e79279e15014a66046fbe519`.
+Go lint passed in 2m27s and Backend vertical passed in 19m43s, directly
+resolving the two reported CI failures. Race/coverage, frontend production
+dependency audit, protobuf, GradeThis, vulnerability scan, release OCI,
+Linux/macOS production binaries, and release-asset consistency were also
+green.
+
+The frontend requires no additional product change for this unit beyond the
+already committed completion/surface compatibility. The broader backend/SPL
+goal remains active, but no next unit has been started. Wait for explicit
+instructions before choosing one. The external GradeThis Compose cutover
+remains deferred.
+
+## Previous checkpoint: trusted source-only search-history reruns
 
 Date: 2026-08-04
 
