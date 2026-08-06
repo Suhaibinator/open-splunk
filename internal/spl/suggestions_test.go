@@ -587,8 +587,14 @@ func TestAnalyzeStreamStatsSuggestionsAdvertiseSupportedAggregates(t *testing.T)
 	if diagnostic != nil {
 		t.Fatalf("AnalyzeSuggestionContext: %v", diagnostic)
 	}
-	if !slices.Equal(context.FunctionNames, []string{"count", "sum", "avg", "min", "max"}) {
-		t.Fatalf("streamstats functions = %v, want [count sum avg min max]", context.FunctionNames)
+	if !slices.Equal(
+		context.FunctionNames,
+		[]string{"count", "sum", "avg", "min", "max", "earliest", "latest"},
+	) {
+		t.Fatalf(
+			"streamstats functions = %v, want [count sum avg min max earliest latest]",
+			context.FunctionNames,
+		)
 	}
 }
 

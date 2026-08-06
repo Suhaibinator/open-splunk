@@ -50,14 +50,14 @@ func testEventStatsMaximumAgainstClickHouse(
 			` | eventstats max(eventstats_min_value) AS high BY eventstats_min_group` +
 			` | where high="z" | sort event_id | table event_id low high`,
 	)
-	got := collectEventStatsDynamicPairRows(
+	got := collectDynamicPairRows(
 		t,
 		ctx,
 		connection,
 		"stacked eventstats min/max",
 		stacked,
 	)
-	want := []eventStatsDynamicPairRow{
+	want := []dynamicPairRow{
 		{id: "eventstats-min-01-int", first: float64(1), second: "z"},
 		{id: "eventstats-min-02-multivalue", first: float64(1), second: "z"},
 	}

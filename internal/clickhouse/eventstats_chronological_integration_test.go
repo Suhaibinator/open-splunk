@@ -46,9 +46,9 @@ func testEventStatsChronologicalAgainstClickHouse(
 		)
 	}
 
-	collect := func(name string, query CompiledQuery) []eventStatsDynamicPairRow {
+	collect := func(name string, query CompiledQuery) []dynamicPairRow {
 		t.Helper()
-		return collectEventStatsDynamicPairRows(t, ctx, connection, name, query)
+		return collectDynamicPairRows(t, ctx, connection, name, query)
 	}
 
 	const orderBase = `index=compiler source="stats-chronological-order"`
@@ -61,7 +61,7 @@ func testEventStatsChronologicalAgainstClickHouse(
 				` | sort 0 +event_id | table event_id first last`,
 		),
 	)
-	wantGlobal := []eventStatsDynamicPairRow{
+	wantGlobal := []dynamicPairRow{
 		{id: "chronological-order-middle", first: "z", second: "a"},
 		{id: "chronological-order-newest", first: "z", second: "a"},
 		{id: "chronological-order-oldest", first: "z", second: "a"},
@@ -79,7 +79,7 @@ func testEventStatsChronologicalAgainstClickHouse(
 				` | sort 0 +event_id | table event_id first last`,
 		),
 	)
-	wantHead := []eventStatsDynamicPairRow{
+	wantHead := []dynamicPairRow{
 		{id: "chronological-order-middle", first: "z", second: "middle"},
 		{id: "chronological-order-oldest", first: "z", second: "middle"},
 	}
@@ -96,7 +96,7 @@ func testEventStatsChronologicalAgainstClickHouse(
 				` | table event_id first last`,
 		),
 	)
-	wantMultivalue := []eventStatsDynamicPairRow{{
+	wantMultivalue := []dynamicPairRow{{
 		id: "chronological-multivalue", first: "", second: "last",
 	}}
 	if !reflect.DeepEqual(multivalue, wantMultivalue) {
@@ -140,7 +140,7 @@ func testEventStatsChronologicalAgainstClickHouse(
 				` | sort 0 +event_id | table event_id first last`,
 		),
 	)
-	wantAllNull := []eventStatsDynamicPairRow{
+	wantAllNull := []dynamicPairRow{
 		{id: "chronological-null-explicit", first: nil, second: nil},
 		{id: "chronological-null-missing", first: nil, second: nil},
 	}
@@ -180,7 +180,7 @@ func testEventStatsChronologicalAgainstClickHouse(
 					` | eventstats latest(chronological_value) AS last` +
 					` | head 1 | table event_id first last`,
 			)
-			got := collectEventStatsDynamicPairRows(
+			got := collectDynamicPairRows(
 				t,
 				threadContext,
 				connection,

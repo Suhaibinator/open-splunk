@@ -1167,8 +1167,9 @@ The first useful compatibility tier should support:
 
 `eventstats` and the deliberately bounded `streamstats` bare row-count,
 exact-field occurrence-count, exact-field numeric-sum, exact-field
-numeric-average, and the exact-field mixed-type minimum and maximum subsets are
-second-tier commands included in the pre-release backend.
+numeric-average, exact-field mixed-type minimum/maximum, and exact-field
+chronological earliest/latest subsets are second-tier commands included in the
+pre-release backend.
 `transaction`, subsearches, `join`, `append`, `appendpipe`, `map`, `foreach`,
 data models, `tstats`, and arbitrary scripted commands remain explicitly out of
 the first release.

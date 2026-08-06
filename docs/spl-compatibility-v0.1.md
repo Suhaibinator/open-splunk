@@ -2578,7 +2578,8 @@ The executor's memory, read, query-size, relational-depth, result, and
 The additional pre-release compatibility surface supports one deliberately
 bounded running row count, exact-field occurrence count, exact-field numeric
 sum, exact-field numeric average, exact-field mixed-type minimum, or exact-field
-mixed-type maximum per command:
+mixed-type maximum, or exact-field chronological earliest/latest value per
+command:
 
 ```spl
 streamstats count
@@ -2603,6 +2604,9 @@ streamstats window=5 global=false min(duration_ms) AS recent_minimum BY host
 streamstats max(duration_ms)
 streamstats current=false max(duration_ms) AS prior_maximum
 streamstats window=5 global=false max(duration_ms) AS recent_maximum BY host
+streamstats earliest(status)
+streamstats current=false earliest(status) AS prior_earliest
+streamstats window=5 global=false latest(status) AS recent_latest BY host
 ```
 
 Splunk documents `streamstats` as a row-preserving command that calculates a
@@ -2617,10 +2621,11 @@ and [running-statistics examples](https://help.splunk.com/en/splunk-enterprise/s
 
 Exactly one aggregate is accepted: bare argument-free `count`, long-form
 `count(field)`, long-form `sum(field)`, long-form `avg(field)`, or long-form
-`min(field)` or `max(field)`. Each field form contains exactly one exact
-unquoted input. The bare form uses the default output `count`; field forms use
-canonical lowercase `count(field)`, `sum(field)`, `avg(field)`, `min(field)`, or
-`max(field)`, preserving the input field's spelling. Any form may instead
+`min(field)`, `max(field)`, `earliest(field)`, or `latest(field)`. Each field
+form contains exactly one exact unquoted input. The bare form uses the default
+output `count`; field forms use canonical lowercase `count(field)`,
+`sum(field)`, `avg(field)`, `min(field)`, `max(field)`, `earliest(field)`, or
+`latest(field)`, preserving the input field's spelling. Any form may instead
 provide one exact unquoted output with `AS`, which must remain before `BY`.
 Because the downstream exact field grammar cannot refer to parentheses in a
 field form's default name, use `AS` whenever a later command will consume that
@@ -2700,24 +2705,52 @@ timestamp inputs retain their physical type and precision. A complete admitted
 frame with no candidate publishes a present null; numeric zero and an empty
 String winner remain non-null.
 
+`earliest(field)` and `latest(field)` reuse the complete chronological value
+contract of `stats` and `eventstats`, but select independently inside every
+running row frame. They require source event rows with visible, unmodified
+canonical `_time`. Removing, replacing, renaming, or binning `_time` in place,
+or placing a transforming command before the chronological `streamstats`,
+fails explicitly. Event-preserving filters, projections that retain `_time`,
+sorts, `head`, `tail`, and `dedup` remain valid.
+
+The current deterministic pipeline order determines which rows belong to each
+frame. Within that frame, `earliest` selects the first eligible member and
+`latest` the last under the ascending immutable key of original nanosecond
+`_time`, event ID, visibility sequence, source identity, and one-based member
+ordinal. An upstream sort can therefore change prefix or finite-window
+membership, but cannot change the winner for an identical member set. Within
+one multivalue event, the first eligible immediate member participates in
+`earliest` and the last in `latest`.
+
+Missing values, explicit nulls, empty multivalues, and null members do not
+participate; an empty String does. Generic objects, flattened object parents,
+nested arrays, and nested objects in a retained group-eligible measure poison
+the complete stage atomically. A complete frame without an eligible member
+publishes a present null. Winners use the same canonical nullable `Mixed`
+spelling and String/Bytes distinction as `stats earliest` and `stats latest`:
+numeric, Boolean, timestamp, duration, and decimal values publish through their
+canonical String spelling rather than the native extrema result types.
+
 The command retains every input row, every other visible field, the established
 row order, and the current relation classification. Executable v0.1 pipelines
-may therefore preserve either event or statistics results; the current
-`timechart` and `chart` lowerings remain terminal. Windows are measured in
-input rows, not field occurrences or numeric members. Bare `count` contributes
-one for each row; `count(field)` contributes the occurrence cardinality above;
-`sum(field)` contributes all eligible immediate numeric members from the row;
-`avg(field)` averages those members across the complete row frame; and
-`min(field)` selects the least eligible immediate member while `max(field)`
-selects the greatest across the complete row frame. With `current=true`, a
+may therefore preserve either event or statistics results for the
+non-chronological aggregates; earliest/latest require event rows as described
+above. The current `timechart` and `chart` lowerings remain terminal. Windows
+are measured in input rows, not field occurrences or numeric members. Bare
+`count` contributes one for each row; `count(field)` contributes the occurrence
+cardinality above; `sum(field)` contributes all eligible immediate numeric
+members from the row; `avg(field)` averages those members across the complete
+row frame; `min(field)` selects the least eligible immediate member;
+`max(field)` selects the greatest; and `earliest(field)` / `latest(field)`
+select chronologically within the admitted frame. With `current=true`, a
 positive window includes the current row and at most its `N-1` preceding rows.
 With `current=false`, only preceding rows participate, and a positive window
 includes at most the `N` preceding rows. The first eligible row then has the
 present `UInt64` value zero for either count form and a present null `Float64`
 for either numeric form. These empty preceding frames publish a present null
-for `min(field)` and `max(field)`. These representations are explicit Open
-Splunk v0.1 choices because the official reference does not pin their transport
-representation.
+for `min(field)`, `max(field)`, `earliest(field)`, and `latest(field)`. These
+representations are explicit Open Splunk v0.1 choices because the official
+reference does not pin their transport representation.
 `count(field)` contributions are summed as `UInt128` before the published
 result is converted to `UInt64`; `sum(field)` and `avg(field)` each use one
 nullable Float64 window state over the normalized numeric members. Empty input
@@ -2740,22 +2773,25 @@ consumes the already-computed result. This order sensitivity follows Splunk's
 documented as-seen processing model and its requirement that a global
 `streamstats` consumer of sorted input retain a global order in
 [parallel-reduce execution](https://help.splunk.com/en/splunk-enterprise/administer/distributed-search/10.0/manage-parallel-reduce-search-processing/supported-commands-for-parallel-reduce-search-processing).
+For chronological streamstats, this as-seen order defines frame membership
+only; the immutable event key above defines the winner within the frame.
 
 Without `BY`, both count forms publish a non-null `UInt64`; `sum(field)` and
 `avg(field)` publish a present nullable `Float64`; `min(field)` publishes the
-nullable winner type described above, as does `max(field)`. Grouped keys use
-the same exact scalar contract as `stats BY` and `eventstats BY`. A missing or
-explicit-null component retains its source row but makes the streamstats output
-logically absent and physically nullable; it contributes to no group. Every
-row with a complete grouping tuple has a present result: zero when a
-`count(field)` frame contains no occurrences, and null when a `sum(field)`,
-`avg(field)`, `min(field)`, or `max(field)` frame contains no eligible member.
+nullable winner type described above, as does `max(field)`; earliest/latest
+publish nullable `Mixed`. Grouped keys use the same exact scalar contract as
+`stats BY` and `eventstats BY`. A missing or explicit-null component retains
+its source row but makes the streamstats output logically absent and physically
+nullable; it contributes to no group. Every row with a complete grouping tuple
+has a present result: zero when a `count(field)` frame contains no occurrences,
+and null when a `sum(field)`, `avg(field)`, `min(field)`, `max(field)`,
+`earliest(field)`, or `latest(field)` frame contains no eligible member.
 An empty String grouping key is a value. Complete Dynamic scalar keys use the
 existing lexical normalization, so numeric `500` and String `"500"` share a
 group. A known fixed multivalue key is rejected during compilation. A runtime
 Dynamic list, object, flattened object parent, or nested container in a
 grouping key poisons the complete scoped command atomically, even when another
-key is missing. Group-key and extrema-measure poison are forced before a
+key is missing. Group-key and aggregate-measure poison are forced before a
 downstream filter, projection, sort, or limit can hide the row. Splunk's
 official reference does not settle these typed null and container cases, so
 they remain conservative Open Splunk boundaries pending a live differential
@@ -2786,7 +2822,11 @@ state, never a per-row average or a row-count denominator. `min(field)` and
 `max(field)` each reduce a row once to a constant-size exact winner and invalid
 bit, then apply one exact direction-matched window state over the admitted row
 frame; private stored-type metadata lets the typed result boundary publish the
-lossless winner.
+lossless winner. `earliest(field)` and `latest(field)` each reduce a row once to
+only the requested first or last eligible lexical member, original member
+ordinal, eligibility/invalid bits, and immutable row key, then apply one
+direction-matched conditional `argMin` or `argMax` window state. They never
+retain the opposite member or an array-sized ordering key.
 
 Unsupported-value validation is forced for the complete stage, even if the
 poisoned result would otherwise be empty or hidden downstream. The stage
@@ -2795,12 +2835,13 @@ query, physical-event rescan, or Go-side result buffering. The normal query
 memory, read, group, depth, and result ceilings remain independently
 authoritative.
 
-Parenthesized `count()`, bare or parenthesized-empty `sum`, `avg`, `min`, or
-`max`, abbreviated `c` or `c(field)`, `count(eval(...))`, `sum(eval(...))`,
-`avg(eval(...))`, `min(eval(...))`, `max(eval(...))`, wildcard, quoted, or
-multiple inputs, every other aggregate, multiple aggregates, wildcard or
-quoted output/grouping fields, duplicate or more-than-16 grouping fields, and
-an alias after `BY` are unsupported. So are `allnum`, `time_window`,
+Parenthesized `count()`, bare or parenthesized-empty `sum`, `avg`, `min`, `max`,
+`earliest`, or `latest`, abbreviated `c` or `c(field)`, `count(eval(...))`,
+`sum(eval(...))`, `avg(eval(...))`, `min(eval(...))`, `max(eval(...))`,
+`earliest(eval(...))`, `latest(eval(...))`, wildcard, quoted, or multiple
+inputs, every other aggregate, multiple aggregates, wildcard or quoted
+output/grouping fields, duplicate or more-than-16 grouping fields, and an alias
+after `BY` are unsupported. So are `allnum`, `time_window`,
 `reset_before`, `reset_after`, `reset_on_change`, unknown options, duplicate
 options, invalid Boolean values, fractional or signed windows, windows above
 10,000, and a positive grouped window without explicit `global=false`. Reset
@@ -3682,7 +3723,8 @@ and the broader eval-expression surface remain unsupported for `eventstats`.
 `streamstats` supports only the bare argument-free running `count`, long-form
 exact-field `count(field)`, long-form exact-field `sum(field)`, long-form
 exact-field `avg(field)`, and long-form exact-field mixed-type `min(field)` and
-`max(field)` surfaces specified above. Abbreviated, wildcard, quoted-field,
+`max(field)`, plus long-form exact-field chronological `earliest(field)` and
+`latest(field)` surfaces specified above. Abbreviated, wildcard, quoted-field,
 eval, or multi-input forms, other or multiple aggregates, time-based windows,
 reset behavior, `allnum`, grouped finite global windows, and the broader
 expression surface remain unsupported.

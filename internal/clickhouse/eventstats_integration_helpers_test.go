@@ -22,7 +22,7 @@ type eventStatsFieldPresence struct {
 	total   uint64
 }
 
-type eventStatsDynamicPairRow struct {
+type dynamicPairRow struct {
 	id     string
 	first  any
 	second any
@@ -33,13 +33,13 @@ type eventStatsStringArrayRow struct {
 	values []string
 }
 
-func collectEventStatsDynamicPairRows(
+func collectDynamicPairRows(
 	t *testing.T,
 	ctx context.Context,
 	connection clickhousedriver.Conn,
 	name string,
 	query CompiledQuery,
-) []eventStatsDynamicPairRow {
+) []dynamicPairRow {
 	t.Helper()
 
 	rows, err := connection.Query(ctx, query.SQL, query.Args...)
@@ -52,7 +52,7 @@ func collectEventStatsDynamicPairRows(
 			query.Args,
 		)
 	}
-	var got []eventStatsDynamicPairRow
+	var got []dynamicPairRow
 	for rows.Next() {
 		var id string
 		var first, second chcol.Dynamic
@@ -60,7 +60,7 @@ func collectEventStatsDynamicPairRows(
 			_ = rows.Close()
 			t.Fatalf("scan %s: %v", name, err)
 		}
-		got = append(got, eventStatsDynamicPairRow{
+		got = append(got, dynamicPairRow{
 			id: id, first: first.Any(), second: second.Any(),
 		})
 	}

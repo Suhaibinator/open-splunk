@@ -13720,6 +13720,29 @@ type eventAggregateMeasureSpec struct {
 	valuePrefix     string
 }
 
+func streamAggregateFieldFunctionForm(
+	function plan.AggregateFunction,
+) (string, bool) {
+	switch function {
+	case plan.AggregateFunctionCountValues:
+		return "count", true
+	case plan.AggregateFunctionSum:
+		return "sum", true
+	case plan.AggregateFunctionAverage:
+		return "avg", true
+	case plan.AggregateFunctionMinimum:
+		return "min", true
+	case plan.AggregateFunctionMaximum:
+		return "max", true
+	case plan.AggregateFunctionEarliest:
+		return "earliest", true
+	case plan.AggregateFunctionLatest:
+		return "latest", true
+	default:
+		return "", false
+	}
+}
+
 func validateStreamAggregate(
 	operator *plan.StreamAggregate,
 	state compileState,
@@ -13752,6 +13775,19 @@ func validateStreamAggregate(
 			"compile ClickHouse streamstats: aggregate contains unsupported metadata",
 		)
 	}
+	if (measure.Function == plan.AggregateFunctionEarliest ||
+		measure.Function == plan.AggregateFunctionLatest) &&
+		!hasCanonicalEventTime(state) {
+		return plan.FieldRef{}, &plan.Diagnostic{
+			Code: "SPL_UNSUPPORTED_STREAMSTATS_TIME_FIELD",
+			Message: "streamstats earliest and latest require event rows " +
+				"with the unmodified canonical _time field",
+			Range: measure.Input.Range,
+			Suggestions: []string{
+				"run streamstats earliest or latest before removing, replacing, or transforming _time",
+			},
+		}
+	}
 	switch measure.Function {
 	case plan.AggregateFunctionCountRows:
 		if measure.Input.Name != "" ||
@@ -13764,17 +13800,13 @@ func validateStreamAggregate(
 		}
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
-		plan.AggregateFunctionMaximum:
-		form := "count"
-		switch measure.Function {
-		case plan.AggregateFunctionSum:
-			form = "sum"
-		case plan.AggregateFunctionAverage:
-			form = "avg"
-		case plan.AggregateFunctionMinimum:
-			form = "min"
-		case plan.AggregateFunctionMaximum:
-			form = "max"
+		plan.AggregateFunctionMaximum, plan.AggregateFunctionEarliest,
+		plan.AggregateFunctionLatest:
+		form, supported := streamAggregateFieldFunctionForm(measure.Function)
+		if !supported {
+			return plan.FieldRef{}, errors.New(
+				"compile ClickHouse streamstats: field aggregate form is unsupported",
+			)
 		}
 		if !spl.IsExactUnquotedFieldName(measure.Input.Name) {
 			return plan.FieldRef{}, errors.New(
@@ -13799,21 +13831,12 @@ func validateStreamAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse streamstats: only count, count(field), sum(field), avg(field), min(field), and max(field) are supported",
+			"compile ClickHouse streamstats: only count, count(field), sum(field), avg(field), min(field), max(field), earliest(field), and latest(field) are supported",
 		)
 	}
 	defaultOutput := ""
-	switch measure.Function {
-	case plan.AggregateFunctionCountValues:
-		defaultOutput = "count(" + measure.Input.Name + ")"
-	case plan.AggregateFunctionSum:
-		defaultOutput = "sum(" + measure.Input.Name + ")"
-	case plan.AggregateFunctionAverage:
-		defaultOutput = "avg(" + measure.Input.Name + ")"
-	case plan.AggregateFunctionMinimum:
-		defaultOutput = "min(" + measure.Input.Name + ")"
-	case plan.AggregateFunctionMaximum:
-		defaultOutput = "max(" + measure.Input.Name + ")"
+	if form, supported := streamAggregateFieldFunctionForm(measure.Function); supported {
+		defaultOutput = form + "(" + measure.Input.Name + ")"
 	}
 	validOutput := spl.IsExactUnquotedFieldName(measure.Output) ||
 		(defaultOutput != "" && measure.Output == defaultOutput)
@@ -13966,11 +13989,12 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 		" PRECEDING AND 1 PRECEDING"
 }
 
-// compileStreamAggregate lowers one running count, numeric sum/average, or
-// mixed extremum over the order already established by the pipeline. Its
-// retained relation is capped at one sentinel beyond the public limit; row
-// overflow, Dynamic BY poison, and extrema-measure poison are forced through
-// the deferred barrier before downstream operators can hide them.
+// compileStreamAggregate lowers one running count, numeric sum/average, mixed
+// extremum, or chronological selection over frames in the order already
+// established by the pipeline. Its retained relation is capped at one sentinel
+// beyond the public limit; row overflow, Dynamic BY poison, and aggregate
+// measure poison are forced through the deferred barrier before downstream
+// operators can hide them.
 func compileStreamAggregate(
 	relation compiledRelation,
 	operator *plan.StreamAggregate,
@@ -13981,6 +14005,11 @@ func compileStreamAggregate(
 	if validateErr != nil {
 		return compiledRelation{}, compileState{}, nil, nil, validateErr
 	}
+	function := operator.Measure.Function
+	isExtrema := function == plan.AggregateFunctionMinimum ||
+		function == plan.AggregateFunctionMaximum
+	isChronological := function == plan.AggregateFunctionEarliest ||
+		function == plan.AggregateFunctionLatest
 
 	orderKeys := append([]compiledSortKey(nil), defaultCompiledOrder(state)...)
 	tieBreakers := append([]compiledSortKey(nil), state.tieBreakers...)
@@ -14163,15 +14192,14 @@ func compileStreamAggregate(
 		numericIntegral: true,
 	}
 	extremaNullType := ""
-	extremaMeasureHasInvalidBit := false
+	measureValidationSQL := ""
 	var extremaScratchColumns []string
 	if operator.Measure.Function == plan.AggregateFunctionSum ||
 		operator.Measure.Function == plan.AggregateFunctionAverage {
 		outputState.numberType = "Float64"
 		outputState.numericIntegral = false
 	}
-	if operator.Measure.Function == plan.AggregateFunctionMinimum ||
-		operator.Measure.Function == plan.AggregateFunctionMaximum {
+	if isExtrema {
 		measureAlias = quoteIdentifier(fmt.Sprintf(
 			"__os_streamstats_measure_%d",
 			stage,
@@ -14260,7 +14288,7 @@ func compileStreamAggregate(
 					input,
 					rowEligibleSQL,
 				)
-				extremaMeasureHasInvalidBit = true
+				measureValidationSQL = "toUInt8(tupleElement(" + measureAlias + ", 6))"
 			case fieldKindStringArray:
 				valuesSQL, valuesArgs := stringArrayInputSQL(input)
 				measureSQL = streamStatsStringArrayExtremaMeasureSQL(
@@ -14289,12 +14317,63 @@ func compileStreamAggregate(
 		preparedLayers++
 		stageMeasureArgs = measureArgs
 	}
+	if isChronological {
+		measureAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_measure_%d",
+			stage,
+		))
+		rowEligibleSQL := "1"
+		if len(groupAliases) > 0 {
+			rowEligibleSQL = eligibleAlias + " != 0"
+		}
+		input, exists, resolveErr := resolveCompiledField(operator.Measure.Input, state)
+		if resolveErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, resolveErr
+		}
+		candidateSQL, candidateArgs, runtimeValidated, candidateErr :=
+			singleChronologicalCandidateSQL(
+				operator.Measure.Function,
+				input,
+				exists,
+			)
+		if candidateErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, candidateErr
+		}
+		if len(groupAliases) > 0 {
+			candidateSQL = "if(" + rowEligibleSQL + ", " + candidateSQL +
+				", " + emptySingleChronologicalCandidateSQL() + ")"
+		}
+		measureSQL := "tuple(" + candidateSQL + ", " +
+			immutableChronologicalRowKeySQL() + ")"
+		measureStageAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_measure_source_%d",
+			stage,
+		))
+		preparedSQL = "SELECT *, " + measureSQL + " AS " + measureAlias +
+			" FROM (" + preparedSQL + ") AS " + measureStageAlias
+		preparedLayers++
+		stageMeasureArgs = candidateArgs
+		outputState = fieldState{
+			kind:           fieldKindDynamic,
+			dynamicTypeSQL: "dynamicType(" + quoteIdentifier(output.Name) + ")",
+			storedTypeSQL: quoteIdentifier(fmt.Sprintf(
+				"__os_streamstats_chronological_type_%d",
+				stage,
+			)),
+		}
+		if exists {
+			outputState.maxStringBytes = fieldStateStringByteBound(input)
+		}
+		if runtimeValidated {
+			measureValidationSQL = "toUInt8(tupleElement(tupleElement(" +
+				measureAlias + ", 1), 4))"
+		}
+	}
 
-	// The extrema projection is textually outside the bounded BY
+	// Extrema and chronological projections are textually outside the bounded BY
 	// classification subquery, so its placeholders precede group arguments.
 	prefixArgs := make([]any, 0, len(groupArgs)+len(stageMeasureArgs))
-	if operator.Measure.Function == plan.AggregateFunctionMinimum ||
-		operator.Measure.Function == plan.AggregateFunctionMaximum {
+	if isExtrema || isChronological {
 		prefixArgs = append(prefixArgs, stageMeasureArgs...)
 		prefixArgs = append(prefixArgs, groupArgs...)
 	} else {
@@ -14367,6 +14446,15 @@ func compileStreamAggregate(
 				measureAlias,
 			) + " OVER (" + windowClause + ")"
 		}
+	case plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
+		chronologicalAggregate, aggregateErr := singleChronologicalAggregateSQL(
+			operator.Measure.Function,
+			measureAlias,
+		)
+		if aggregateErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+		}
+		windowExpression = chronologicalAggregate + " OVER (" + windowClause + ")"
 	default:
 		if !operator.IncludeCurrent {
 			windowExpression = "ifNull(" + windowExpression + ", toUInt64(0))"
@@ -14390,14 +14478,14 @@ func compileStreamAggregate(
 		)
 	}
 	validationColumn := ""
-	if extremaMeasureHasInvalidBit {
+	if measureValidationSQL != "" {
 		validationColumn = quoteIdentifier(fmt.Sprintf(
 			"__os_streamstats_validation_%d",
 			stage,
 		))
 		windowProjection = append(
 			windowProjection,
-			"toUInt8(tupleElement("+measureAlias+", 6)) AS "+validationColumn,
+			measureValidationSQL+" AS "+validationColumn,
 		)
 	}
 	windowAlias := quoteIdentifier(fmt.Sprintf(
@@ -14405,7 +14493,7 @@ func compileStreamAggregate(
 		stage,
 	))
 	windowSource := inputName
-	if extremaMeasureHasInvalidBit {
+	if measureValidationSQL != "" {
 		preparedAlias := quoteIdentifier(fmt.Sprintf(
 			"__os_streamstats_prepared_%d",
 			stage,
@@ -14424,14 +14512,19 @@ func compileStreamAggregate(
 		orderKeys,
 		tieBreakers,
 	)
-	outputValue := windowAlias + "." + windowValue
+	rawOutputValue := windowAlias + "." + windowValue
+	outputValue := rawOutputValue
 	outputStoredType := ""
-	if (operator.Measure.Function == plan.AggregateFunctionMinimum ||
-		operator.Measure.Function == plan.AggregateFunctionMaximum) && extremaNullType == "" {
+	usesDynamicExtrema := isExtrema && extremaNullType == ""
+	if usesDynamicExtrema {
 		outputValue = statsExtremaScalarValueSQL(outputValue)
 		outputStoredType = statsExtremaScalarStoredTypeSQL(
-			windowAlias + "." + windowValue,
+			rawOutputValue,
 		)
+	}
+	if isChronological {
+		outputValue = chronologicalPublishedValueSQL(rawOutputValue)
+		outputStoredType = chronologicalPublishedTypeSQL(rawOutputValue)
 	}
 	outputExists := "1"
 	if len(groupAliases) > 0 {
@@ -14441,20 +14534,20 @@ func compileStreamAggregate(
 			operator.Measure.Function == plan.AggregateFunctionAverage {
 			nullType = "Float64"
 		}
-		if operator.Measure.Function == plan.AggregateFunctionMinimum ||
-			operator.Measure.Function == plan.AggregateFunctionMaximum {
+		if isExtrema {
 			if extremaNullType != "" {
 				nullType = extremaNullType
 				outputValue = "if(" + outputExists + ", " + outputValue +
 					", CAST(NULL AS Nullable(" + nullType + ")))"
-			} else {
-				outputValue = "if(" + outputExists + ", " + outputValue +
-					", CAST(NULL AS Dynamic))"
-				outputStoredType = "if(" + outputExists + ", " +
-					outputStoredType + ", toUInt8(" +
-					strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "))"
 			}
-		} else {
+		}
+		if usesDynamicExtrema || isChronological {
+			outputValue = "if(" + outputExists + ", " + outputValue +
+				", CAST(NULL AS Dynamic))"
+			outputStoredType = "if(" + outputExists + ", " +
+				outputStoredType + ", toUInt8(" +
+				strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "))"
+		} else if !isExtrema {
 			outputValue = "if(" + outputExists + ", " + outputValue +
 				", CAST(NULL AS Nullable(" + nullType + ")))"
 		}
@@ -15003,7 +15096,7 @@ func compileEventAggregate(
 		case plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
 			chronologicalFunction := measure.Function
 			candidateSQL, candidateArgs, runtimeValidated, candidateErr :=
-				eventStatsChronologicalCandidateSQL(
+				singleChronologicalCandidateSQL(
 					chronologicalFunction,
 					input,
 					exists,
@@ -15017,14 +15110,14 @@ func compileEventAggregate(
 					stage,
 				)) + " != 0"
 				candidateSQL = "if(" + rowEligibleSQL + ", " + candidateSQL +
-					", " + emptyEventStatsChronologicalCandidateSQL() + ")"
+					", " + emptySingleChronologicalCandidateSQL() + ")"
 				measureUsesGroupEligibility = true
 			}
 			measureInputSQL = "tuple(" + candidateSQL + ", " +
 				immutableChronologicalRowKeySQL() + ")"
 			measureInputArgs = candidateArgs
 			measureAggregateSQL = func(inputSQL string) (string, error) {
-				return eventStatsChronologicalAggregateSQL(
+				return singleChronologicalAggregateSQL(
 					chronologicalFunction,
 					inputSQL,
 				)
@@ -17442,16 +17535,16 @@ func immutableChronologicalRowKeySQL() string {
 	}, ", ") + ")"
 }
 
-func emptyEventStatsChronologicalCandidateSQL() string {
+func emptySingleChronologicalCandidateSQL() string {
 	return "tuple(CAST('' AS String), toUInt64(0), toUInt8(0), toUInt8(0))"
 }
 
-// eventStatsChronologicalCandidateSQL reduces one event field to the only
-// direction this single-measure eventstats stage consumes: selected lexical
+// singleChronologicalCandidateSQL reduces one event field to the only
+// direction a single-measure chronological aggregate consumes: selected lexical
 // value, original one-based member ordinal, eligible bit, and invalid bit.
 // Unlike multi-measure stats, this avoids selecting and retaining the opposite
 // end of every multivalue.
-func eventStatsChronologicalCandidateSQL(
+func singleChronologicalCandidateSQL(
 	function plan.AggregateFunction,
 	field fieldState,
 	exists bool,
@@ -17465,12 +17558,12 @@ func eventStatsChronologicalCandidateSQL(
 		fixedArrayIndex = "-1"
 	default:
 		return "", nil, false, fmt.Errorf(
-			"compile ClickHouse eventstats chronological candidate: unsupported function %d",
+			"compile ClickHouse chronological candidate: unsupported function %d",
 			function,
 		)
 	}
 
-	empty := emptyEventStatsChronologicalCandidateSQL()
+	empty := emptySingleChronologicalCandidateSQL()
 	if !exists {
 		return empty, nil, false, nil
 	}
@@ -17570,7 +17663,7 @@ func eventStatsChronologicalCandidateSQL(
 		nil
 }
 
-func eventStatsChronologicalAggregateSQL(
+func singleChronologicalAggregateSQL(
 	function plan.AggregateFunction,
 	inputSQL string,
 ) (string, error) {
@@ -17583,7 +17676,7 @@ func eventStatsChronologicalAggregateSQL(
 		aggregate = "argMaxOrNullIf"
 	default:
 		return "", fmt.Errorf(
-			"compile ClickHouse eventstats chronological aggregate: unsupported function %d",
+			"compile ClickHouse single chronological aggregate: unsupported function %d",
 			function,
 		)
 	}
@@ -17631,8 +17724,10 @@ func eventStatsChronologicalValidationSQL(inputSQL, _ string) string {
 }
 
 func chronologicalPublishedValueSQL(winnerSQL string) string {
-	return "if(isNull(" + winnerSQL + "), CAST(NULL AS Dynamic), CAST(" +
-		"assumeNotNull(" + winnerSQL + ") AS Dynamic))"
+	nonNull := "assumeNotNull(" + winnerSQL + ")"
+	return "if(isNull(" + winnerSQL + "), CAST(NULL AS Dynamic), if(" +
+		"isValidUTF8(" + nonNull + "), CAST(" + nonNull + " AS Dynamic), " +
+		bytesEnvelopePayloadDynamicSQL(rawStdBase64EncodeSQL(nonNull)) + "))"
 }
 
 func chronologicalPublishedTypeSQL(winnerSQL string) string {

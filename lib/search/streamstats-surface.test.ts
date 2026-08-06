@@ -18,7 +18,9 @@ test("streamstats is advertised once with the bounded supported syntax", () => {
   assert.match(definitions[0]?.detail ?? "", /numeric average/i);
   assert.match(definitions[0]?.detail ?? "", /exact mixed-type minimum/i);
   assert.match(definitions[0]?.detail ?? "", /exact mixed-type maximum/i);
-  assert.match(definitions[0]?.detail ?? "", /deterministic pipeline order/i);
+  assert.match(definitions[0]?.detail ?? "", /chronological earliest\/latest/i);
+  assert.match(definitions[0]?.detail ?? "", /deterministic pipeline frames/i);
+  assert.match(definitions[0]?.detail ?? "", /immutable event order/i);
   assert.match(definitions[0]?.detail ?? "", /excluding the current row/i);
   assert.match(definitions[0]?.detail ?? "", /exact fields/i);
 });
@@ -53,6 +55,18 @@ test("frontend support classification accepts streamstats without weakening reje
   assert.equal(
     getQueryDiagnostic(
       "index=main | STREAMSTATS current=f window=3 global=f MAX(bytes) AS prior_max BY service",
+    ),
+    null,
+  );
+  assert.equal(
+    getQueryDiagnostic(
+      "index=main | STREAMSTATS current=f window=3 global=f earliest(status) AS prior_first BY service",
+    ),
+    null,
+  );
+  assert.equal(
+    getQueryDiagnostic(
+      "index=main | STREAMSTATS current=f window=3 global=f LATEST(status) AS prior_last BY service",
     ),
     null,
   );

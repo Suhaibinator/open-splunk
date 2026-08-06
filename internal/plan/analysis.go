@@ -227,6 +227,13 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 				return err
 			}
 		}
+		if err := analyzer.addChronologicalTimeDependency(
+			operator.Measure.Function,
+			operator.Measure.Input,
+			depth+1,
+		); err != nil {
+			return err
+		}
 		return analyzer.addFields(operator.GroupBy, depth+1)
 	case *Aggregate:
 		if err := analyzer.addFields(operator.GroupBy, depth+1); err != nil {

@@ -266,11 +266,11 @@ func (op *EventAggregate) SourceRange() spl.Range { return op.Range }
 // StreamAggregate appends one running aggregate while preserving the input
 // relation and its established row order. The bounded compatibility slice
 // accepts CountRows, CountValues, a nullable numeric Sum/Average, or a mixed
-// extrema Minimum/Maximum over one exact input field. IncludeCurrent chooses
-// whether the frame ends at the current row or the immediately preceding row;
-// WindowRows is zero for the complete admitted prefix. A positive grouped
-// window is valid only with Global=false, which gives every exact BY tuple an
-// independent row window.
+// extrema Minimum/Maximum or chronological Earliest/Latest over one exact input
+// field. IncludeCurrent chooses whether the frame ends at the current row or the
+// immediately preceding row; WindowRows is zero for the complete admitted
+// prefix. A positive grouped window is valid only with Global=false, which gives
+// every exact BY tuple an independent row window.
 type StreamAggregate struct {
 	GroupBy        []FieldRef
 	Measure        AggregateMeasure

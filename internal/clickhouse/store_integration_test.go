@@ -2582,6 +2582,9 @@ func testCompiledQueriesAgainstClickHouse(
 		{"exact numeric ordering", func(t *testing.T) { testExactNumericOrderingAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"stats chronological", func(t *testing.T) { testStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime) }},
 		{"eventstats chronological", func(t *testing.T) { testEventStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime) }},
+		{"streamstats chronological", func(t *testing.T) {
+			testStreamStatsChronologicalAgainstClickHouse(ctx, t, store, connection, indexTime)
+		}},
 		{"stats list", func(t *testing.T) { testStatsListAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"eventstats list", func(t *testing.T) { testEventStatsListAgainstClickHouse(t, ctx, store, connection, indexTime) }},
 		{"dedup", func(t *testing.T) { testDedupAgainstClickHouse(t, ctx, store, connection, indexTime) }},

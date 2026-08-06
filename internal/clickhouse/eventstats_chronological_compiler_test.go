@@ -163,9 +163,9 @@ func TestEventStatsChronologicalAggregateUsesMemberOrdinalTieBreak(t *testing.T)
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := eventStatsChronologicalAggregateSQL(test.function, `"input"`)
+			got, err := singleChronologicalAggregateSQL(test.function, `"input"`)
 			if err != nil {
-				t.Fatalf("eventStatsChronologicalAggregateSQL: %v", err)
+				t.Fatalf("singleChronologicalAggregateSQL: %v", err)
 			}
 			for _, required := range []string{
 				test.aggregate,
@@ -181,11 +181,11 @@ func TestEventStatsChronologicalAggregateUsesMemberOrdinalTieBreak(t *testing.T)
 		})
 	}
 
-	if _, err := eventStatsChronologicalAggregateSQL(
+	if _, err := singleChronologicalAggregateSQL(
 		plan.AggregateFunctionValues,
 		`"input"`,
 	); err == nil {
-		t.Fatal("eventStatsChronologicalAggregateSQL accepted a non-chronological function")
+		t.Fatal("singleChronologicalAggregateSQL accepted a non-chronological function")
 	}
 }
 

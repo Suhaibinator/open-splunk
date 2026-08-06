@@ -819,7 +819,8 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				measure.Function = AggregateFunctionCountRows
 			case spl.AggregateFunctionCountValues, spl.AggregateFunctionSum,
 				spl.AggregateFunctionAverage, spl.AggregateFunctionMinimum,
-				spl.AggregateFunctionMaximum:
+				spl.AggregateFunctionMaximum, spl.AggregateFunctionEarliest,
+				spl.AggregateFunctionLatest:
 				form := "count"
 				function := AggregateFunctionCountValues
 				switch aggregate.Function {
@@ -835,6 +836,12 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				case spl.AggregateFunctionMaximum:
 					form = "max"
 					function = AggregateFunctionMaximum
+				case spl.AggregateFunctionEarliest:
+					form = "earliest"
+					function = AggregateFunctionEarliest
+				case spl.AggregateFunctionLatest:
+					form = "latest"
+					function = AggregateFunctionLatest
 				}
 				if aggregate.Input == "" ||
 					aggregate.InputRange == (spl.Range{}) ||
@@ -872,8 +879,22 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
 					Message: "streamstats currently supports exactly one count, " +
-						"count(field), sum(field), avg(field), min(field), or max(field) aggregate",
+						"count(field), sum(field), avg(field), min(field), max(field), " +
+						"earliest(field), or latest(field) aggregate",
 					Range: aggregate.Range,
+				}
+			}
+			if (aggregate.Function == spl.AggregateFunctionEarliest ||
+				aggregate.Function == spl.AggregateFunctionLatest) &&
+				!canonicalTimeAvailable {
+				return nil, &Diagnostic{
+					Code: "SPL_UNSUPPORTED_STREAMSTATS_TIME_FIELD",
+					Message: "streamstats earliest and latest require the " +
+						"unmodified canonical _time field",
+					Range: aggregate.Range,
+					Suggestions: []string{
+						"run streamstats earliest or latest before removing, replacing, or transforming _time",
+					},
 				}
 			}
 			validOutput := validStreamAggregateFieldName(aggregate.Alias)
