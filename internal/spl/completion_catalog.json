@@ -83,7 +83,7 @@
     {
       "name": "streamstats",
       "insertion": "streamstats count AS running_count",
-      "detail": "Add one bounded running row count, exact-field occurrence count, numeric sum, numeric average, or exact mixed-type minimum in deterministic pipeline order, optionally excluding the current row or partitioning by exact fields; maximum remains unsupported."
+      "detail": "Add one bounded running row count, exact-field occurrence count, numeric sum, numeric average, exact mixed-type minimum, or exact mixed-type maximum in deterministic pipeline order, optionally excluding the current row or partitioning by exact fields."
     },
     {
       "name": "top",

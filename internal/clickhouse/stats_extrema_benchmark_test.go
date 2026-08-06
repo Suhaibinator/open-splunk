@@ -233,7 +233,7 @@ func statsExtremaBenchmarkCorpusSQL(rows uint64) string {
 
 func statsExtremaScalarBenchmarkSQL(rows uint64) string {
 	number := statsExtremaScalarNumberSQL("value")
-	candidate := statsExtremaScalarCandidateSQL("value", "parsed_number")
+	candidate := statsExtremaScalarCandidateSQL("value", "parsed_number", "0")
 	minimum := statsExtremaScalarAggregateWinnerSQL(plan.AggregateFunctionMinimum, "candidate")
 	maximum := statsExtremaScalarAggregateWinnerSQL(plan.AggregateFunctionMaximum, "candidate")
 	return `SELECT

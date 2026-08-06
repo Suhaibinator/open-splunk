@@ -68,7 +68,7 @@ func TestCompileEvalMVCountDynamicInputIsBoundOnceAndCountsNonNullMembers(t *tes
 		`tag = 'duration/v1'`,
 		`tag = 'decimal/v1'`,
 		`length(payload) <= ` + strconv.Itoa(MaximumMVCountTaggedPayloadBytes),
-		`'^[A-Za-z0-9+/]*$'`,
+		dynamicBytesPayloadPattern,
 		dynamicDecimalPayloadPattern,
 		`CAST(NULL AS Nullable(UInt64))`,
 	} {

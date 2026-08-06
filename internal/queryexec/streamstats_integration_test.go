@@ -1,6 +1,7 @@
 package queryexec
 
 import (
+	"bytes"
 	"context"
 	"testing"
 	"time"
@@ -241,6 +242,62 @@ func queryIntegrationTestStreamStatsTransport(
 		t.Fatalf(
 			"streamstats minimum preceding_min = %#v, want null empty prior frame",
 			minimumPage.Rows[0].Values[2],
+		)
+	}
+
+	maximumJob, maximumPage := queryIntegrationRunSearch(
+		t,
+		ctx,
+		executor,
+		indexTime,
+		"queryexec-streamstats-maximum-transport",
+		`index=main source="source"`+
+			` | streamstats max(status) AS running_max`+
+			` | streamstats current=false max(status) AS preceding_max BY path`+
+			` | table event_id running_max preceding_max`,
+	)
+	if maximumJob.State != searchjobs.StateCompleted {
+		t.Fatalf(
+			"streamstats maximum transport state = %v, failure=%#v",
+			maximumJob.State,
+			maximumJob.Failure,
+		)
+	}
+	wantMaximumColumns := []searchjobs.Column{
+		{Name: "event_id", Kind: searchjobs.ValueKindString},
+		{Name: "running_max", Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: "preceding_max", Kind: searchjobs.ValueKindMixed, Nullable: true},
+	}
+	if len(maximumPage.Schema.Columns) != len(wantMaximumColumns) {
+		t.Fatalf(
+			"streamstats maximum transport schema = %#v, want %#v",
+			maximumPage.Schema.Columns,
+			wantMaximumColumns,
+		)
+	}
+	for index := range wantMaximumColumns {
+		if maximumPage.Schema.Columns[index] != wantMaximumColumns[index] {
+			t.Fatalf(
+				"streamstats maximum transport column %d = %#v, want %#v",
+				index,
+				maximumPage.Schema.Columns[index],
+				wantMaximumColumns[index],
+			)
+		}
+	}
+	if len(maximumPage.Rows) != 1 {
+		t.Fatalf("streamstats maximum transport rows = %#v, want one row", maximumPage.Rows)
+	}
+	if eventID, ok := maximumPage.Rows[0].Values[0].String(); !ok || eventID != "queryexec-event" {
+		t.Fatalf("streamstats maximum transport event_id = %q, string=%v", eventID, ok)
+	}
+	if maximum, ok := maximumPage.Rows[0].Values[1].Double(); !ok || maximum != 200 {
+		t.Fatalf("streamstats maximum running_max = %v, double=%v", maximum, ok)
+	}
+	if !maximumPage.Rows[0].Values[2].IsNull() {
+		t.Fatalf(
+			"streamstats maximum preceding_max = %#v, want null empty prior frame",
+			maximumPage.Rows[0].Values[2],
 		)
 	}
 
@@ -624,6 +681,101 @@ func queryIntegrationTestStreamStatsTransport(
 			"streamstats minimum timeline = %#v, want one event at %v",
 			minimumBuckets,
 			firstBucket,
+		)
+	}
+
+	const bytesAnalysis = `index=main source="source"` +
+		` | streamstats max(typed_bytes) AS high` +
+		` | streamstats max(high) AS higher | table high higher`
+	bytesJob, bytesPage := queryIntegrationRunSearch(
+		t,
+		ctx,
+		executor,
+		indexTime,
+		"queryexec-streamstats-bytes-transport",
+		bytesAnalysis,
+	)
+	if bytesJob.State != searchjobs.StateCompleted {
+		t.Fatalf(
+			"streamstats Bytes transport state = %v, failure=%#v",
+			bytesJob.State,
+			bytesJob.Failure,
+		)
+	}
+	wantBytesColumns := []searchjobs.Column{
+		{Name: "high", Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: "higher", Kind: searchjobs.ValueKindMixed, Nullable: true},
+	}
+	if len(bytesPage.Schema.Columns) != len(wantBytesColumns) {
+		t.Fatalf(
+			"streamstats Bytes transport schema = %#v, want %#v",
+			bytesPage.Schema.Columns,
+			wantBytesColumns,
+		)
+	}
+	for index := range wantBytesColumns {
+		if bytesPage.Schema.Columns[index] != wantBytesColumns[index] {
+			t.Fatalf(
+				"streamstats Bytes transport column %d = %#v, want %#v",
+				index,
+				bytesPage.Schema.Columns[index],
+				wantBytesColumns[index],
+			)
+		}
+	}
+	if len(bytesPage.Rows) != 1 || len(bytesPage.Rows[0].Values) != 2 {
+		t.Fatalf("streamstats Bytes transport rows = %#v, want one two-cell row", bytesPage.Rows)
+	}
+	wantBytes := []byte{0x00, 0xff}
+	for index, field := range []string{"high", "higher"} {
+		got, ok := bytesPage.Rows[0].Values[index].Bytes()
+		if !ok || !bytes.Equal(got, wantBytes) {
+			t.Fatalf(
+				"streamstats Bytes transport %s = %x, bytes=%v, want %x",
+				field,
+				got,
+				ok,
+				wantBytes,
+			)
+		}
+	}
+
+	bytesLogical := queryIntegrationFieldPlan(t, "main", indexTime, bytesAnalysis)
+	bytesSummaryQuery, err := compiler.CompileFieldSummary(
+		bytesLogical,
+		clickhouse.FieldSummarySpec{
+			FieldName:             "higher",
+			MaximumValues:         10,
+			MaximumDistinctValues: clickhouse.MaximumFieldSummaryDistinctValues,
+			MaximumValueBytes:     clickhouse.MaximumFieldSummaryValueBytes,
+		},
+	)
+	if err != nil {
+		t.Fatalf("compile streamstats Bytes field summary: %v", err)
+	}
+	bytesSummary, err := executor.ExecuteFieldSummary(ctx, bytesSummaryQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats Bytes field summary: %v\nSQL: %s\nargs: %#v",
+			err,
+			bytesSummaryQuery.SQL,
+			bytesSummaryQuery.Args,
+		)
+	}
+	if bytesSummary.FieldName != "higher" ||
+		len(bytesSummary.ObservedTypes) != 1 ||
+		bytesSummary.ObservedTypes[0] != eventfields.StoredValueTypeBytes ||
+		bytesSummary.EventCount != 1 || bytesSummary.NullCount != 0 ||
+		bytesSummary.MissingCount != 0 || bytesSummary.DistinctCount != 1 ||
+		len(bytesSummary.TopValues) != 1 || bytesSummary.TopValues[0].Count != 1 {
+		t.Fatalf("streamstats Bytes field summary = %#v", bytesSummary)
+	}
+	if got, ok := bytesSummary.TopValues[0].Value.Bytes(); !ok || !bytes.Equal(got, wantBytes) {
+		t.Fatalf(
+			"streamstats Bytes summary higher = %x, bytes=%v, want %x",
+			got,
+			ok,
+			wantBytes,
 		)
 	}
 }

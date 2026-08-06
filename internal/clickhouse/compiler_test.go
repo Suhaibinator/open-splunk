@@ -3717,9 +3717,8 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 		`argMaxArray(arrayMap(candidate -> tupleElement(candidate, 1), "__os_measure_extrema_0")`,
 		`AS "__os_stats_extrema_type_0"`,
 		`AS "__os_stats_extrema_type_1"`,
-		`AS "__os_stats_extrema_type_2"`,
 		`__os_stats_extrema_input`,
-		`Array(Tuple(String, String))`,
+		`Array(Tuple(String, String, String, UInt8))`,
 		`length(toString(element)) <= ` +
 			strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
 		`length(dynamicElement(element, 'Map(String, String)')` +
@@ -3735,6 +3734,9 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 	if strings.Count(compiled.SQL, `AS "__os_measure_extrema_0"`) != 1 ||
 		strings.Contains(compiled.SQL, `__os_measure_extrema_1`) {
 		t.Fatalf("min/max did not share one normalization for the same input:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, `__os_stats_extrema_type_2`) {
+		t.Fatalf("duplicate min published a duplicate stored-type state:\n%s", compiled.SQL)
 	}
 	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
 		t.Fatalf("min/max expanded event rows:\n%s", compiled.SQL)

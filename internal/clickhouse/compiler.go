@@ -13763,7 +13763,8 @@ func validateStreamAggregate(
 			)
 		}
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
-		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum:
+		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
+		plan.AggregateFunctionMaximum:
 		form := "count"
 		switch measure.Function {
 		case plan.AggregateFunctionSum:
@@ -13772,6 +13773,8 @@ func validateStreamAggregate(
 			form = "avg"
 		case plan.AggregateFunctionMinimum:
 			form = "min"
+		case plan.AggregateFunctionMaximum:
+			form = "max"
 		}
 		if !spl.IsExactUnquotedFieldName(measure.Input.Name) {
 			return plan.FieldRef{}, errors.New(
@@ -13796,7 +13799,7 @@ func validateStreamAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse streamstats: only count, count(field), sum(field), avg(field), and min(field) are supported",
+			"compile ClickHouse streamstats: only count, count(field), sum(field), avg(field), min(field), and max(field) are supported",
 		)
 	}
 	defaultOutput := ""
@@ -13809,6 +13812,8 @@ func validateStreamAggregate(
 		defaultOutput = "avg(" + measure.Input.Name + ")"
 	case plan.AggregateFunctionMinimum:
 		defaultOutput = "min(" + measure.Input.Name + ")"
+	case plan.AggregateFunctionMaximum:
+		defaultOutput = "max(" + measure.Input.Name + ")"
 	}
 	validOutput := spl.IsExactUnquotedFieldName(measure.Output) ||
 		(defaultOutput != "" && measure.Output == defaultOutput)
@@ -13929,6 +13934,7 @@ func streamStatsStringArrayExtremaMeasureSQL(
 	candidateSQL := statsExtremaScalarCandidateSQL(
 		value,
 		statsExtremaScalarNumberSQL(value),
+		"0",
 	)
 	step := extremaFoldWinnerStateSQL(
 		function,
@@ -13961,9 +13967,9 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 }
 
 // compileStreamAggregate lowers one running count, numeric sum/average, or
-// mixed minimum over the order already established by the pipeline. Its
+// mixed extremum over the order already established by the pipeline. Its
 // retained relation is capped at one sentinel beyond the public limit; row
-// overflow, Dynamic BY poison, and minimum-measure poison are forced through
+// overflow, Dynamic BY poison, and extrema-measure poison are forced through
 // the deferred barrier before downstream operators can hide them.
 func compileStreamAggregate(
 	relation compiledRelation,
@@ -14156,15 +14162,16 @@ func compileStreamAggregate(
 		numberType:      "UInt64",
 		numericIntegral: true,
 	}
-	minimumNullType := ""
-	minimumMeasureHasInvalidBit := false
-	var minimumScratchColumns []string
+	extremaNullType := ""
+	extremaMeasureHasInvalidBit := false
+	var extremaScratchColumns []string
 	if operator.Measure.Function == plan.AggregateFunctionSum ||
 		operator.Measure.Function == plan.AggregateFunctionAverage {
 		outputState.numberType = "Float64"
 		outputState.numericIntegral = false
 	}
-	if operator.Measure.Function == plan.AggregateFunctionMinimum {
+	if operator.Measure.Function == plan.AggregateFunctionMinimum ||
+		operator.Measure.Function == plan.AggregateFunctionMaximum {
 		measureAlias = quoteIdentifier(fmt.Sprintf(
 			"__os_streamstats_measure_%d",
 			stage,
@@ -14194,7 +14201,7 @@ func compileStreamAggregate(
 				eligibleSQL, eligibleArgs, fixed := fixedExtremaEligibilitySQL(input)
 				if !fixed {
 					return compiledRelation{}, compileState{}, nil, nil, errors.New(
-						"compile ClickHouse streamstats minimum: fixed input is invalid",
+						"compile ClickHouse streamstats extrema: fixed input is invalid",
 					)
 				}
 				eligibleSQL = "(" + rowEligibleSQL + ") AND (" + eligibleSQL + ")"
@@ -14210,7 +14217,7 @@ func compileStreamAggregate(
 					numericIntegral: input.numericIntegral,
 				}
 				var nullTypeErr error
-				minimumNullType, nullTypeErr = nullableEventStatsExtremaType(input)
+				extremaNullType, nullTypeErr = nullableEventStatsExtremaType(input)
 				if nullTypeErr != nil {
 					return compiledRelation{}, compileState{}, nil, nil, nullTypeErr
 				}
@@ -14232,35 +14239,39 @@ func compileStreamAggregate(
 					", " + statsExtremaScalarNumberSQL(valueAlias) + " AS " +
 					numberAlias + " FROM (" + preparedSQL + ") AS " + scalarAlias
 				preparedLayers++
-				minimumScratchColumns = append(
-					minimumScratchColumns,
+				extremaScratchColumns = append(
+					extremaScratchColumns,
 					valueAlias,
 					numberAlias,
 				)
 				measureSQL = "if(" + rowEligibleSQL + ", " +
-					statsExtremaScalarCandidateSQL(valueAlias, numberAlias) + ", " +
+					statsExtremaScalarCandidateSQL(
+						valueAlias,
+						numberAlias,
+						fixedStringExtremaRawBytesSQL(input),
+					) + ", " +
 					"tuple(" + eventStatsExtremaEmptyOrderingKeySQL() +
 					", toUInt8(" + strconv.Itoa(int(statsExtremaPublicationLexical)) +
 					"), toFloat64(0), CAST('' AS String), toUInt8(0)))"
 				measureArgs = valueArgs
 			case fieldKindDynamic:
 				measureSQL, measureArgs = eventStatsExtremaDynamicMeasureSQL(
-					plan.AggregateFunctionMinimum,
+					operator.Measure.Function,
 					input,
 					rowEligibleSQL,
 				)
-				minimumMeasureHasInvalidBit = true
+				extremaMeasureHasInvalidBit = true
 			case fieldKindStringArray:
 				valuesSQL, valuesArgs := stringArrayInputSQL(input)
 				measureSQL = streamStatsStringArrayExtremaMeasureSQL(
-					plan.AggregateFunctionMinimum,
+					operator.Measure.Function,
 					valuesSQL,
 					rowEligibleSQL,
 				)
 				measureArgs = valuesArgs
 			default:
 				return compiledRelation{}, compileState{}, nil, nil, errors.New(
-					"compile ClickHouse streamstats minimum: input state is invalid",
+					"compile ClickHouse streamstats extrema: input state is invalid",
 				)
 			}
 		}
@@ -14269,9 +14280,9 @@ func compileStreamAggregate(
 			stage,
 		))
 		measureSourceProjection := "*"
-		if len(minimumScratchColumns) > 0 {
+		if len(extremaScratchColumns) > 0 {
 			measureSourceProjection = "* EXCEPT (" +
-				strings.Join(minimumScratchColumns, ", ") + ")"
+				strings.Join(extremaScratchColumns, ", ") + ")"
 		}
 		preparedSQL = "SELECT " + measureSourceProjection + ", " + measureSQL + " AS " + measureAlias +
 			" FROM (" + preparedSQL + ") AS " + measureStageAlias
@@ -14279,10 +14290,11 @@ func compileStreamAggregate(
 		stageMeasureArgs = measureArgs
 	}
 
-	// The minimum projection is textually outside the bounded BY
+	// The extrema projection is textually outside the bounded BY
 	// classification subquery, so its placeholders precede group arguments.
 	prefixArgs := make([]any, 0, len(groupArgs)+len(stageMeasureArgs))
-	if operator.Measure.Function == plan.AggregateFunctionMinimum {
+	if operator.Measure.Function == plan.AggregateFunctionMinimum ||
+		operator.Measure.Function == plan.AggregateFunctionMaximum {
 		prefixArgs = append(prefixArgs, stageMeasureArgs...)
 		prefixArgs = append(prefixArgs, groupArgs...)
 	} else {
@@ -14340,14 +14352,18 @@ func compileStreamAggregate(
 		}
 		windowExpression = "CAST(" + numericAggregate + " OVER (" +
 			windowClause + ") AS Nullable(Float64))"
-	case plan.AggregateFunctionMinimum:
-		if minimumNullType != "" {
-			windowExpression = "minIfOrNull(tupleElement(" + measureAlias +
+	case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
+		if extremaNullType != "" {
+			aggregateName := "minIfOrNull"
+			if operator.Measure.Function == plan.AggregateFunctionMaximum {
+				aggregateName = "maxIfOrNull"
+			}
+			windowExpression = aggregateName + "(tupleElement(" + measureAlias +
 				", 1), tupleElement(" + measureAlias + ", 2) != 0) OVER (" +
 				windowClause + ")"
 		} else {
 			windowExpression = statsExtremaScalarAggregateWinnerSQL(
-				plan.AggregateFunctionMinimum,
+				operator.Measure.Function,
 				measureAlias,
 			) + " OVER (" + windowClause + ")"
 		}
@@ -14374,7 +14390,7 @@ func compileStreamAggregate(
 		)
 	}
 	validationColumn := ""
-	if minimumMeasureHasInvalidBit {
+	if extremaMeasureHasInvalidBit {
 		validationColumn = quoteIdentifier(fmt.Sprintf(
 			"__os_streamstats_validation_%d",
 			stage,
@@ -14389,7 +14405,7 @@ func compileStreamAggregate(
 		stage,
 	))
 	windowSource := inputName
-	if minimumMeasureHasInvalidBit {
+	if extremaMeasureHasInvalidBit {
 		preparedAlias := quoteIdentifier(fmt.Sprintf(
 			"__os_streamstats_prepared_%d",
 			stage,
@@ -14410,7 +14426,8 @@ func compileStreamAggregate(
 	)
 	outputValue := windowAlias + "." + windowValue
 	outputStoredType := ""
-	if operator.Measure.Function == plan.AggregateFunctionMinimum && minimumNullType == "" {
+	if (operator.Measure.Function == plan.AggregateFunctionMinimum ||
+		operator.Measure.Function == plan.AggregateFunctionMaximum) && extremaNullType == "" {
 		outputValue = statsExtremaScalarValueSQL(outputValue)
 		outputStoredType = statsExtremaScalarStoredTypeSQL(
 			windowAlias + "." + windowValue,
@@ -14424,9 +14441,10 @@ func compileStreamAggregate(
 			operator.Measure.Function == plan.AggregateFunctionAverage {
 			nullType = "Float64"
 		}
-		if operator.Measure.Function == plan.AggregateFunctionMinimum {
-			if minimumNullType != "" {
-				nullType = minimumNullType
+		if operator.Measure.Function == plan.AggregateFunctionMinimum ||
+			operator.Measure.Function == plan.AggregateFunctionMaximum {
+			if extremaNullType != "" {
+				nullType = extremaNullType
 				outputValue = "if(" + outputExists + ", " + outputValue +
 					", CAST(NULL AS Nullable(" + nullType + ")))"
 			} else {
@@ -14932,6 +14950,7 @@ func compileEventAggregate(
 				measureInputSQL = statsExtremaScalarCandidateSQL(
 					valueAlias,
 					numberAlias,
+					fixedStringExtremaRawBytesSQL(input),
 				)
 				measureAggregateSQL = func(inputSQL string) (string, error) {
 					return statsExtremaScalarAggregateWinnerSQL(
@@ -16372,6 +16391,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		valueAlias     string
 		numberAlias    string
 		candidateAlias string
+		rawBytesSQL    string
 		extremaReady   bool
 	}
 	scalarStringInputs := make(map[string]*scalarStringInput)
@@ -16422,6 +16442,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		typeAlias   string
 	}
 	scalarExtremaResults := make(map[scalarExtremaResultKey]scalarExtremaResult)
+	dynamicExtremaResults := make(map[scalarExtremaResultKey]scalarExtremaResult)
 	type chronologicalInput struct {
 		candidatesAlias string
 		validationAlias string
@@ -16519,8 +16540,9 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			ordinal,
 		))
 		cached := &scalarStringInput{
-			ordinal:    ordinal,
-			valueAlias: inputAlias,
+			ordinal:     ordinal,
+			valueAlias:  inputAlias,
+			rawBytesSQL: fixedStringExtremaRawBytesSQL(input),
 		}
 		scalarStringInputs[ref.Name] = cached
 		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
@@ -16843,6 +16865,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 						statsExtremaScalarCandidateSQL(
 							scalarInput.valueAlias,
 							scalarInput.numberAlias,
+							scalarInput.rawBytesSQL,
 						)+" AS "+scalarInput.candidateAlias,
 					)
 					scalarInput.extremaReady = true
@@ -16916,21 +16939,40 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				)
 				next.preAggregateArgs = append(next.preAggregateArgs, candidateArgs...)
 			}
-			extreme := statsExtremaAggregateSQL(measure.Function, candidates)
-			typeAlias := quoteIdentifier(fmt.Sprintf("__os_stats_extrema_type_%d", measureIndex))
-			projection = append(
-				projection,
-				extreme+" AS "+output,
-				statsExtremaStoredTypeSQL(extreme)+" AS "+typeAlias,
-			)
+			resultKey := scalarExtremaResultKey{
+				input:    measure.Input.Name,
+				function: measure.Function,
+			}
+			result, cached := dynamicExtremaResults[resultKey]
+			if !cached {
+				result = scalarExtremaResult{
+					winnerAlias: quoteIdentifier(fmt.Sprintf(
+						"__os_stats_extrema_winner_%d",
+						measureIndex,
+					)),
+					typeAlias: quoteIdentifier(fmt.Sprintf(
+						"__os_stats_extrema_type_%d",
+						measureIndex,
+					)),
+				}
+				dynamicExtremaResults[resultKey] = result
+				projection = append(
+					projection,
+					statsExtremaAggregateSQL(measure.Function, candidates)+
+						" AS "+result.winnerAlias,
+					statsExtremaStoredTypeSQL(result.winnerAlias)+
+						" AS "+result.typeAlias,
+				)
+				next.privateColumns = append(next.privateColumns, result.typeAlias)
+			}
+			projection = append(projection, result.winnerAlias+" AS "+output)
 			measureState = fieldState{
 				valueSQL:       output,
 				dynamicTypeSQL: "dynamicType(" + output + ")",
-				storedTypeSQL:  typeAlias,
+				storedTypeSQL:  result.typeAlias,
 				existsSQL:      "1",
 				kind:           fieldKindDynamic,
 			}
-			next.privateColumns = append(next.privateColumns, typeAlias)
 		case plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
 			input, inputErr := chronologicalInputFor(measure.Input)
 			if inputErr != nil {
@@ -17784,6 +17826,13 @@ func statsScalarStringInputSQL(field fieldState) (string, []any) {
 		", CAST(NULL AS Nullable(String)))", append([]any(nil), field.existsArgs...)
 }
 
+func fixedStringExtremaRawBytesSQL(field fieldState) string {
+	if field.kind != fieldKindString || field.textEligibleSQL == "" {
+		return "0"
+	}
+	return "NOT ifNull(" + field.textEligibleSQL + ", 0)"
+}
+
 func statsExtremaScalarNumberSQL(valueSQL string) string {
 	value := "ifNull(" + valueSQL + ", CAST('' AS String))"
 	return "if(isNotNull(" + valueSQL + "), " + statsExtremaNumericOrNullSQL(value) +
@@ -17799,16 +17848,22 @@ const (
 	statsExtremaPublicationFloat uint8 = iota
 	statsExtremaPublicationDecimal
 	statsExtremaPublicationLexical
+	statsExtremaPublicationEncodedBytes
 )
 
-func statsExtremaOrderingKeySQL(valueSQL, exactKeySQL string) string {
+func statsExtremaOrderingKeySQL(
+	valueSQL string,
+	exactKeySQL string,
+	typeTieBreakSQL string,
+) string {
 	exact := exactNumericKeyValueSQL(exactKeySQL)
 	numeric := exactNumericKeyEligibleSQL(exactKeySQL)
 	return "tuple(toUInt8(NOT (" + numeric + ")), " +
 		"if(" + numeric + ", tupleElement(" + exact + ", 1), toUInt8(1)), " +
 		"if(" + numeric + ", tupleElement(" + exact + ", 2), toInt64(0)), " +
 		"if(" + numeric + ", tupleElement(" + exact + ", 3), CAST('' AS String)), " +
-		"if(" + numeric + ", CAST('' AS String), " + valueSQL + "))"
+		"if(" + numeric + ", CAST('' AS String), " + valueSQL + "), toUInt8(" +
+		typeTieBreakSQL + "))"
 }
 
 func statsExtremaExactFloatPublicationSQL(numberSQL, exactKeySQL string) string {
@@ -17830,13 +17885,35 @@ func statsExtremaExactFloatKeyMatchSQL(
 		exactKeySQL + " = " + floatKeySQL
 }
 
-func statsExtremaScalarCandidateSQL(valueSQL, numberSQL string) string {
+func statsExtremaScalarCandidateSQL(
+	valueSQL string,
+	numberSQL string,
+	rawBytesSQL string,
+) string {
 	value := "ifNull(" + valueSQL + ", CAST('' AS String))"
-	return statsExtremaPublicationCandidateSQL(
-		value,
-		numberSQL,
-		boundedExactNumericOrderingInputSQL(value),
-		"isNotNull("+valueSQL+")",
+	if rawBytesSQL == "" {
+		rawBytesSQL = "0"
+	}
+	rawBytes := "__os_stats_extrema_scalar_raw_bytes"
+	candidate := statsExtremaPublicationCandidateSQL(
+		statsExtremaPublicationCandidateInput{
+			publicationValueSQL: "if(" + rawBytes + ", " +
+				rawStdBase64EncodeSQL(value) + ", " + value + ")",
+			orderingValueSQL: value,
+			numberSQL: "if(" + rawBytes + ", CAST(NULL AS Nullable(Float64)), " +
+				numberSQL + ")",
+			exactTextSQL: "if(" + rawBytes + ", CAST('' AS String), " +
+				boundedExactNumericOrderingInputSQL(value) + ")",
+			lexicalPublicationKindSQL: "if(" + rawBytes + ", toUInt8(" +
+				strconv.Itoa(int(statsExtremaPublicationEncodedBytes)) + "), toUInt8(" +
+				strconv.Itoa(int(statsExtremaPublicationLexical)) + "))",
+			eligibleSQL: "isNotNull(" + valueSQL + ")",
+		},
+	)
+	return bindSQLExpressions(
+		[]string{rawBytes},
+		[]string{"toUInt8(ifNull(" + rawBytesSQL + ", 0)) != 0"},
+		candidate,
 	)
 }
 
@@ -17850,19 +17927,25 @@ func statsExtremaScalarCandidateSQL(valueSQL, numberSQL string) string {
 // The publication tuple deliberately contains no Dynamic value. This lets
 // argMinOrNullIf represent an empty aggregate explicitly without attempting to
 // construct Nullable(Dynamic), which ClickHouse does not support.
+type statsExtremaPublicationCandidateInput struct {
+	publicationValueSQL       string
+	orderingValueSQL          string
+	numberSQL                 string
+	exactTextSQL              string
+	lexicalPublicationKindSQL string
+	eligibleSQL               string
+}
+
 func statsExtremaPublicationCandidateSQL(
-	valueSQL string,
-	numberSQL string,
-	exactTextSQL string,
-	eligibleSQL string,
+	input statsExtremaPublicationCandidateInput,
 ) string {
 	valueVariable := "__os_stats_extrema_value"
+	orderingValueVariable := "__os_stats_extrema_ordering_value"
 	numberVariable := "__os_stats_extrema_number"
 	exactTextVariable := "__os_stats_extrema_exact_text"
 	exactVariable := "__os_stats_extrema_exact_key"
 	floatVariable := "__os_stats_extrema_float_key"
 	exactFloatVariable := "__os_stats_extrema_exact_float"
-	ordering := statsExtremaOrderingKeySQL(valueVariable, exactVariable)
 	exactFloat := statsExtremaExactFloatKeyMatchSQL(
 		numberVariable,
 		exactVariable,
@@ -17871,10 +17954,15 @@ func statsExtremaPublicationCandidateSQL(
 	numeric := exactNumericKeyEligibleSQL(exactVariable)
 	decimalInput := "if(" + numeric + ", " + valueVariable + ", CAST('0' AS String))"
 	publicationKind := "toUInt8(multiIf(NOT (" + numeric + "), " +
-		strconv.Itoa(int(statsExtremaPublicationLexical)) + ", " +
+		input.lexicalPublicationKindSQL + ", " +
 		exactFloatVariable + ", " +
 		strconv.Itoa(int(statsExtremaPublicationFloat)) + ", " +
 		strconv.Itoa(int(statsExtremaPublicationDecimal)) + "))"
+	ordering := statsExtremaOrderingKeySQL(
+		orderingValueVariable,
+		exactVariable,
+		"if("+numeric+", toUInt8(0), "+input.lexicalPublicationKindSQL+")",
+	)
 	publicationNumber := "if(isNotNull(" + numberVariable + "), " +
 		statsExtremaNormalizedNumberSQL(numberVariable) + ", toFloat64(0))"
 	publicationText := "multiIf(NOT (" + numeric + "), " + valueVariable + ", " +
@@ -17882,7 +17970,7 @@ func statsExtremaPublicationCandidateSQL(
 		decimalInput + ")"
 	candidate := "tuple(" + ordering + ", " + publicationKind + ", " +
 		publicationNumber + ", " + publicationText + ", toUInt8(" +
-		eligibleSQL + "))"
+		input.eligibleSQL + "))"
 	candidate = bindSQLExpressions(
 		[]string{exactFloatVariable},
 		[]string{exactFloat},
@@ -17899,8 +17987,13 @@ func statsExtremaPublicationCandidateSQL(
 		candidate,
 	)
 	return bindSQLExpressions(
-		[]string{valueVariable, numberVariable, exactTextVariable},
-		[]string{valueSQL, numberSQL, exactTextSQL},
+		[]string{valueVariable, orderingValueVariable, numberVariable, exactTextVariable},
+		[]string{
+			input.publicationValueSQL,
+			input.orderingValueSQL,
+			input.numberSQL,
+			input.exactTextSQL,
+		},
 		candidate,
 	)
 }
@@ -17930,6 +18023,8 @@ func statsExtremaScalarValueSQL(extremeWinnerSQL string) string {
 		", CAST(" + number + " AS Dynamic), " +
 		kind + " = " + strconv.Itoa(int(statsExtremaPublicationDecimal)) +
 		", " + decimalEnvelopeDynamicSQL(text) + ", " +
+		kind + " = " + strconv.Itoa(int(statsExtremaPublicationEncodedBytes)) +
+		", " + bytesEnvelopePayloadDynamicSQL(text) + ", " +
 		"CAST(" + text + " AS Dynamic)))"
 }
 
@@ -17937,39 +18032,75 @@ func statsExtremaScalarStoredTypeSQL(extremeWinnerSQL string) string {
 	nonNull := "assumeNotNull(" + extremeWinnerSQL + ")"
 	kind := "tupleElement(" + nonNull + ", 1)"
 	lexical := "tupleElement(" + nonNull + ", 3)"
-	return statsExtremaStoredTypeWithDecimalSQL(
+	ordinary := statsExtremaStoredTypeWithDecimalSQL(
 		"isNull("+extremeWinnerSQL+")",
 		kind+" = "+strconv.Itoa(int(statsExtremaPublicationFloat)),
 		kind+" = "+strconv.Itoa(int(statsExtremaPublicationDecimal)),
 		kind+" = "+strconv.Itoa(int(statsExtremaPublicationLexical)),
 		lexical,
 	)
+	return "if(" + kind + " = " +
+		strconv.Itoa(int(statsExtremaPublicationEncodedBytes)) +
+		", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeBytes)) +
+		"), " + ordinary + ")"
 }
 
 func statsExtremaCandidatesSQL(valuesSQL string) string {
 	candidate := statsExtremaCandidateSQL(
 		"value",
+		"value",
 		boundedExactNumericOrderingInputSQL("value"),
+		"toUInt8("+strconv.Itoa(int(statsExtremaPublicationLexical))+")",
 	)
 	return "arrayMap(value -> " + candidate + ", " + valuesSQL + ")"
 }
 
-func statsExtremaCandidateSQL(valueSQL, exactTextSQL string) string {
-	number := statsExtremaNumericOrNullSQL(valueSQL)
-	exact := exactNumericOrderingKeySQL(exactTextSQL)
+func statsExtremaCandidateSQL(
+	publicationValueSQL string,
+	orderingValueSQL string,
+	exactTextSQL string,
+	lexicalPublicationKindSQL string,
+) string {
+	publicationValue := "__os_stats_extrema_publication_value"
+	orderingValue := "__os_stats_extrema_ordering_value"
+	exactText := "__os_stats_extrema_exact_text"
+	lexicalKind := "__os_stats_extrema_lexical_kind"
+	number := "if(" + lexicalKind + " = toUInt8(" +
+		strconv.Itoa(int(statsExtremaPublicationEncodedBytes)) + "), " +
+		"CAST(NULL AS Nullable(Float64)), " +
+		statsExtremaNumericOrNullSQL(publicationValue) + ")"
+	exact := exactNumericOrderingKeySQL(exactText)
 	exactFloat := statsExtremaExactFloatPublicationSQL("number", "exact_key")
 	numeric := exactNumericKeyEligibleSQL("exact_key")
-	decimalInput := "if(" + numeric + ", lexical_value, CAST('0' AS String))"
-	candidate := "multiIf(NOT (" + numeric + "), CAST(lexical_value AS Dynamic), " +
+	decimalInput := "if(" + numeric + ", " + publicationValue +
+		", CAST('0' AS String))"
+	lexicalCandidate := "if(" + lexicalKind + " = toUInt8(" +
+		strconv.Itoa(int(statsExtremaPublicationEncodedBytes)) + "), " +
+		bytesEnvelopePayloadDynamicSQL(publicationValue) + ", CAST(" +
+		publicationValue + " AS Dynamic))"
+	candidate := "multiIf(NOT (" + numeric + "), " + lexicalCandidate + ", " +
 		exactFloat + ", CAST(" + statsExtremaNormalizedNumberSQL("number") +
 		" AS Dynamic), " + decimalEnvelopeDynamicSQL(decimalInput) + ")"
-	key := statsExtremaOrderingKeySQL("lexical_value", "exact_key")
+	key := statsExtremaOrderingKeySQL(
+		orderingValue,
+		"exact_key",
+		"if("+numeric+", toUInt8(0), "+lexicalKind+")",
+	)
 	bound := bindSQLExpressions(
-		[]string{"lexical_value", "number", "exact_key"},
-		[]string{valueSQL, number, exact},
+		[]string{"number", "exact_key"},
+		[]string{number, exact},
 		"tuple("+candidate+", "+key+")",
 	)
-	return bound
+	return bindSQLExpressions(
+		[]string{publicationValue, orderingValue, exactText, lexicalKind},
+		[]string{
+			publicationValueSQL,
+			orderingValueSQL,
+			exactTextSQL,
+			lexicalPublicationKindSQL,
+		},
+		bound,
+	)
 }
 
 type compiledDynamicMeasureScalar struct {
@@ -18006,11 +18137,79 @@ func compileDynamicMeasureScalar(field fieldState) compiledDynamicMeasureScalar 
 	}
 }
 
+// dynamicExtremaNormalizedTupleSQL preserves the distinction between a
+// bytes/v1 envelope's RawStd payload and a Dynamic String that already carries
+// Bytes provenance. Both order on raw bytes and publish one canonical bytes/v1
+// payload; ordinary lexical and numeric candidates retain their existing text.
+//
+// The tuple is:
+//
+//	(publication text, ordering text, exact-numeric text, lexical kind)
+func dynamicExtremaNormalizedTupleSQL(
+	field fieldState,
+	scalar compiledDynamicMeasureScalar,
+) string {
+	lexical := "__os_stats_extrema_dynamic_lexical"
+	exactText := "__os_stats_extrema_dynamic_exact_text"
+	encodedBytes := "__os_stats_extrema_dynamic_encoded_bytes"
+	rawBytes := "__os_stats_extrema_dynamic_raw_bytes"
+	bytesValue := "__os_stats_extrema_dynamic_bytes"
+	ordering := "__os_stats_extrema_dynamic_ordering"
+	publication := "__os_stats_extrema_dynamic_publication"
+
+	dynamic := compiledScalar{
+		valueSQL:       field.valueSQL,
+		dynamicTypeSQL: scalar.typeSQL,
+		kind:           fieldKindDynamic,
+	}
+	encodedBytesSQL := dynamicTaggedEnvelopeCondition(dynamic, "bytes/v1")
+	rawBytesSQL := "0"
+	if field.storedTypeSQL != "" {
+		rawBytesSQL = "(" + scalar.typeSQL + " = 'String' AND toUInt8(" +
+			field.storedTypeSQL + ") = toUInt8(" +
+			strconv.Itoa(int(eventfields.StoredValueTypeBytes)) + "))"
+	}
+	orderingSQL := "if(" + encodedBytes + ", " +
+		rawStdBase64DecodeSQL(lexical) + ", " + lexical + ")"
+	publicationSQL := "multiIf(" + encodedBytes + ", " + lexical + ", " +
+		rawBytes + ", " + rawStdBase64EncodeSQL(ordering) + ", " + lexical + ")"
+	lexicalKind := "if(" + bytesValue + ", toUInt8(" +
+		strconv.Itoa(int(statsExtremaPublicationEncodedBytes)) + "), toUInt8(" +
+		strconv.Itoa(int(statsExtremaPublicationLexical)) + "))"
+	body := "tuple(" + publication + ", " + ordering + ", if(" + bytesValue +
+		", CAST('' AS String), " + exactText + "), " + lexicalKind + ")"
+	body = bindSQLExpressions(
+		[]string{publication},
+		[]string{publicationSQL},
+		body,
+	)
+	body = bindSQLExpressions(
+		[]string{bytesValue},
+		[]string{"(" + encodedBytes + " OR " + rawBytes + ")"},
+		body,
+	)
+	body = bindSQLExpressions(
+		[]string{ordering},
+		[]string{orderingSQL},
+		body,
+	)
+	body = bindSQLExpressions(
+		[]string{encodedBytes, rawBytes},
+		[]string{encodedBytesSQL, rawBytesSQL},
+		body,
+	)
+	return bindSQLExpressions(
+		[]string{lexical, exactText},
+		[]string{scalar.lexicalSQL, scalar.exactTextSQL},
+		body,
+	)
+}
+
 func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
-	empty := "CAST([], 'Array(Tuple(String, String))')"
+	empty := "CAST([], 'Array(Tuple(String, String, String, UInt8))')"
 	scalar := compileDynamicMeasureScalar(field)
-	scalarInput := "if(" + scalar.eligibleSQL + ", [tuple(" + scalar.lexicalSQL +
-		", " + scalar.exactTextSQL + ")], " + empty + ")"
+	scalarInput := "if(" + scalar.eligibleSQL + ", [" +
+		dynamicExtremaNormalizedTupleSQL(field, scalar) + "], " + empty + ")"
 
 	elementField := fieldState{
 		valueSQL:       "element",
@@ -18019,9 +18218,10 @@ func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
 	}
 	element := compileDynamicMeasureScalar(elementField)
 	elementInput := "if(throwIf(toUInt8(" + element.invalidSQL + "), '" +
-		UnsupportedStatsMeasureValueMarker + "') = 0, tuple(" + element.lexicalSQL + ", " +
-		element.exactTextSQL +
-		"), tuple(CAST('' AS String), CAST('' AS String)))"
+		UnsupportedStatsMeasureValueMarker + "') = 0, " +
+		dynamicExtremaNormalizedTupleSQL(elementField, element) +
+		", tuple(CAST('' AS String), CAST('' AS String), CAST('' AS String), " +
+		"toUInt8(" + strconv.Itoa(int(statsExtremaPublicationLexical)) + ")))"
 	arrayValues := "arrayFilter(element -> " + element.typeSQL +
 		" != 'None', dynamicElement(" + field.valueSQL + ", 'Array(Dynamic)'))"
 	arrayInput := "arrayMap(element -> " + elementInput + ", " + arrayValues + ")"
@@ -18055,13 +18255,16 @@ func statsExtremaDynamicCandidatesSQL(field fieldState) (string, []any) {
 	candidate := statsExtremaCandidateSQL(
 		"tupleElement("+input+", 1)",
 		"tupleElement("+input+", 2)",
+		"tupleElement("+input+", 3)",
+		"tupleElement("+input+", 4)",
 	)
 	return "arrayMap(" + input + " -> " + candidate + ", " + inputs + ")", args
 }
 
 func eventStatsExtremaEmptyOrderingKeySQL() string {
 	return "tuple(toUInt8(1), toUInt8(1), toInt64(0), " +
-		"CAST('' AS String), CAST('' AS String))"
+		"CAST('' AS String), CAST('' AS String), toUInt8(" +
+		strconv.Itoa(int(statsExtremaPublicationLexical)) + "))"
 }
 
 func eventStatsExtremaEmptyRowStateSQL(invalidSQL string) string {
@@ -18120,8 +18323,6 @@ func eventStatsExtremaFoldStepSQL(
 ) string {
 	typeVariable := "__os_eventstats_extrema_type"
 	supportedVariable := "__os_eventstats_extrema_supported"
-	lexicalVariable := "__os_eventstats_extrema_lexical"
-	exactTextVariable := "__os_eventstats_extrema_exact_text"
 	supportedSQL, lexicalSQL := statsByScalarExpressionsFor(
 		value.valueSQL,
 		typeVariable,
@@ -18139,16 +18340,37 @@ func eventStatsExtremaFoldStepSQL(
 	}
 	invalidSQL := "(" + typeVariable + " != 'None' AND NOT (" +
 		supportedVariable + "))"
-	numberSQL := statsExtremaNumericOrNullSQL(lexicalVariable)
+	scalar := compiledDynamicMeasureScalar{
+		valueSQL:     value.valueSQL,
+		typeSQL:      typeVariable,
+		supportedSQL: supportedVariable,
+		lexicalSQL:   lexicalSQL,
+		exactTextSQL: exactTextSQL,
+		eligibleSQL:  eligibleSQL,
+		invalidSQL:   invalidSQL,
+	}
+	normalizedVariable := "__os_eventstats_extrema_normalized"
+	publicationValue := "tupleElement(" + normalizedVariable + ", 1)"
+	orderingValue := "tupleElement(" + normalizedVariable + ", 2)"
+	exactText := "tupleElement(" + normalizedVariable + ", 3)"
+	lexicalKind := "tupleElement(" + normalizedVariable + ", 4)"
+	numberSQL := "if(" + lexicalKind + " = toUInt8(" +
+		strconv.Itoa(int(statsExtremaPublicationEncodedBytes)) + "), " +
+		"CAST(NULL AS Nullable(Float64)), " +
+		statsExtremaNumericOrNullSQL(publicationValue) + ")"
 	candidateSQL := statsExtremaPublicationCandidateSQL(
-		lexicalVariable,
-		numberSQL,
-		exactTextVariable,
-		"1",
+		statsExtremaPublicationCandidateInput{
+			publicationValueSQL:       publicationValue,
+			orderingValueSQL:          orderingValue,
+			numberSQL:                 numberSQL,
+			exactTextSQL:              exactText,
+			lexicalPublicationKindSQL: lexicalKind,
+			eligibleSQL:               "1",
+		},
 	)
 	candidateSQL = bindSQLExpressions(
-		[]string{lexicalVariable, exactTextVariable},
-		[]string{lexicalSQL, exactTextSQL},
+		[]string{normalizedVariable},
+		[]string{dynamicExtremaNormalizedTupleSQL(value, scalar)},
 		candidateSQL,
 	)
 	emptyCandidate := "tuple(" + eventStatsExtremaEmptyOrderingKeySQL() +
@@ -18185,12 +18407,19 @@ func eventStatsExtremaDynamicMeasureSQL(
 	if rowEligibleSQL == "" {
 		rowEligibleSQL = "1"
 	}
+	topLevelType := "__os_eventstats_extrema_top_level_type"
+	elementStoredTypeSQL := ""
+	if field.storedTypeSQL != "" {
+		elementStoredTypeSQL = "if(" + topLevelType +
+			" = 'Array(Dynamic)', toUInt8(0), toUInt8(" +
+			field.storedTypeSQL + "))"
+	}
 	element := fieldState{
 		valueSQL:       "element",
 		dynamicTypeSQL: "dynamicType(element)",
+		storedTypeSQL:  elementStoredTypeSQL,
 		kind:           fieldKindDynamic,
 	}
-	topLevelType := "__os_eventstats_extrema_top_level_type"
 	fieldValue := "__os_eventstats_extrema_field_value"
 	eligibilityGuardSQL := ""
 	if field.textEligibleSQL != "" {
@@ -18264,14 +18493,33 @@ func statsExtremaAggregateSQL(function plan.AggregateFunction, candidatesSQL str
 }
 
 func statsExtremaStoredTypeSQL(valueSQL string) string {
-	typeSQL := "dynamicType(" + valueSQL + ")"
-	stringSQL := "dynamicElement(" + valueSQL + ", 'String')"
-	return statsExtremaStoredTypeWithDecimalSQL(
-		typeSQL+" = 'None'",
-		typeSQL+" = 'Float64'",
-		typeSQL+" = 'Map(String, String)'",
-		typeSQL+" = 'String'",
-		stringSQL,
+	valueVariable := "__os_stats_extrema_stored_value"
+	typeSQL := "dynamicType(" + valueVariable + ")"
+	stringSQL := "dynamicElement(" + valueVariable + ", 'String')"
+	value := compiledScalar{
+		valueSQL:       valueVariable,
+		dynamicTypeSQL: typeSQL,
+		kind:           fieldKindDynamic,
+	}
+	decimal := dynamicTaggedEnvelopeCondition(value, "decimal/v1")
+	bytesValue := dynamicTaggedEnvelopeCondition(value, "bytes/v1")
+	body := "multiIf(" +
+		typeSQL + " = 'None', toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeNull)) + "), " +
+		typeSQL + " = 'Float64', toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeDouble)) + "), " +
+		decimal + ", toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeDecimal)) + "), " +
+		bytesValue + ", toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeBytes)) + "), " +
+		typeSQL + " = 'String' AND isValidUTF8(" + stringSQL + "), toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeString)) + "), " +
+		typeSQL + " = 'String', toUInt8(" +
+		strconv.Itoa(int(eventfields.StoredValueTypeBytes)) + "), toUInt8(0))"
+	return bindSQLExpressions(
+		[]string{valueVariable},
+		[]string{valueSQL},
+		body,
 	)
 }
 

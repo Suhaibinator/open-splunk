@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/jsonnumber"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
@@ -38,7 +39,7 @@ func TestExactNumericOrderingSQLStaysBounded(t *testing.T) {
 		},
 		{
 			name:    "scalar extrema candidate",
-			sql:     statsExtremaScalarCandidateSQL("value", "number"),
+			sql:     statsExtremaScalarCandidateSQL("value", "number", "0"),
 			maximum: 16 << 10,
 		},
 		{
@@ -113,10 +114,15 @@ func TestStatsExtremaPublicationCandidateUsesTrustedFloatKeyOnly(t *testing.T) {
 	t.Parallel()
 
 	candidate := statsExtremaPublicationCandidateSQL(
-		"value",
-		"number",
-		"exact_text",
-		"eligible",
+		statsExtremaPublicationCandidateInput{
+			publicationValueSQL: "value",
+			orderingValueSQL:    "value",
+			numberSQL:           "number",
+			exactTextSQL:        "exact_text",
+			lexicalPublicationKindSQL: "toUInt8(" +
+				strconv.Itoa(int(statsExtremaPublicationLexical)) + ")",
+			eligibleSQL: "eligible",
+		},
 	)
 	if !strings.Contains(candidate, "__os_trusted_float_order_text") {
 		t.Fatalf("extrema publication candidate lacks trusted Float64 key:\n%s", candidate)
@@ -132,6 +138,44 @@ func TestStatsExtremaPublicationCandidateUsesTrustedFloatKeyOnly(t *testing.T) {
 	}
 	if got := strings.Count(candidate, "__os_trusted_float_order_text) ->"); got != 1 {
 		t.Fatalf("trusted Float64 key definitions = %d, want 1:\n%s", got, candidate)
+	}
+}
+
+func TestDynamicExtremaBytesNormalizationSeparatesEncodedAndRawRepresentations(t *testing.T) {
+	t.Parallel()
+
+	field := fieldState{
+		valueSQL:       "value",
+		dynamicTypeSQL: "dynamicType(value)",
+		storedTypeSQL:  "stored_type",
+		kind:           fieldKindDynamic,
+	}
+	normalized := dynamicExtremaNormalizedTupleSQL(
+		field,
+		compileDynamicMeasureScalar(field),
+	)
+	for _, required := range []string{
+		`'bytes/v1'`,
+		`tryBase64Decode(`,
+		`modulo(length(__os_raw_base64_payload), 4) = 2`,
+		`modulo(length(__os_raw_base64_payload), 4) = 3`,
+		`replaceRegexpOne(base64Encode(__os_stats_extrema_dynamic_ordering), '=+$', '')`,
+		`stored_type) = toUInt8(` + strconv.Itoa(int(eventfields.StoredValueTypeBytes)) + `)`,
+		`CAST('' AS String)`,
+	} {
+		if !strings.Contains(normalized, required) {
+			t.Fatalf("Dynamic Bytes extrema normalization is missing %q:\n%s", required, normalized)
+		}
+	}
+	if strings.Contains(normalized, `tryBase64Decode(__os_stats_extrema_dynamic_lexical)`) {
+		t.Fatalf("RawStd payload is decoded without padding:\n%s", normalized)
+	}
+
+	storedType := statsExtremaStoredTypeSQL("winner")
+	for _, tag := range []string{"'decimal/v1'", "'bytes/v1'"} {
+		if !strings.Contains(storedType, tag) {
+			t.Fatalf("extrema stored type does not distinguish %s:\n%s", tag, storedType)
+		}
 	}
 }
 

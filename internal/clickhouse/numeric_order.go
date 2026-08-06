@@ -562,6 +562,29 @@ func decimalEnvelopeDynamicSQL(valueSQL string) string {
 	return decimalEnvelopePayloadDynamicSQL(decimalEnvelopeTextSQL(valueSQL))
 }
 
+func bytesEnvelopePayloadDynamicSQL(payloadSQL string) string {
+	typeKey := "concat(char(0), 'open_splunk_type')"
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	return "CAST(map(" + typeKey + ", 'bytes/v1', " + valueKey + ", " +
+		payloadSQL + ") AS Dynamic)"
+}
+
+func rawStdBase64EncodeSQL(valueSQL string) string {
+	return "replaceRegexpOne(base64Encode(" + valueSQL + "), '=+$', '')"
+}
+
+func rawStdBase64DecodeSQL(payloadSQL string) string {
+	payload := "__os_raw_base64_payload"
+	padded := "multiIf(modulo(length(" + payload + "), 4) = 2, concat(" +
+		payload + ", '=='), modulo(length(" + payload + "), 4) = 3, concat(" +
+		payload + ", '='), " + payload + ")"
+	return bindSQLExpressions(
+		[]string{payload},
+		[]string{payloadSQL},
+		"tryBase64Decode("+padded+")",
+	)
+}
+
 // decimalEnvelopePayloadDynamicSQL wraps an already-normalized decimal/v1
 // payload. Lexical extraction uses this narrower constructor so its collector-
 // canonical spelling is not coupled to computed-result normalization rules.

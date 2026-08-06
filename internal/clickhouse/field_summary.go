@@ -587,12 +587,15 @@ type dynamicEnvelopePayloadValiditySQL struct {
 	decimalValid   string
 }
 
-const dynamicDecimalPayloadPattern = `'^(-|)(0|[1-9][0-9]*)([.][0-9]+|)([eE]([+]|-|)(0|[1-9][0-9]*)|)$'`
+const (
+	dynamicBytesPayloadPattern = `'^([A-Za-z0-9+/][A-Za-z0-9+/][A-Za-z0-9+/][A-Za-z0-9+/])*` +
+		`([A-Za-z0-9+/][AQgw]|[A-Za-z0-9+/][A-Za-z0-9+/][AEIMQUYcgkosw048]|)$'`
+	dynamicDecimalPayloadPattern = `'^(-|)(0|[1-9][0-9]*)([.][0-9]+|)([eE]([+]|-|)(0|[1-9][0-9]*)|)$'`
+)
 
 func newDynamicEnvelopePayloadValiditySQL(payload string) dynamicEnvelopePayloadValiditySQL {
 	return dynamicEnvelopePayloadValiditySQL{
-		bytesValid: "match(" + payload +
-			", '^[A-Za-z0-9+/]*$') AND modulo(length(" + payload + "), 4) != 1",
+		bytesValid: "match(" + payload + ", " + dynamicBytesPayloadPattern + ")",
 		timestampValid: "match(" + payload +
 			", '^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]([.][0-9]+|)Z$')" +
 			" AND (position(" + payload + ", '.') = 0 OR length(" + payload +
@@ -722,8 +725,8 @@ func fieldSummaryRuntimeDynamicExpressions(storedType, value string) (agreement,
 		storedType + " = " + code(eventfields.StoredValueTypeBool) + ", " +
 		"if(dynamicElement(" + value + ", 'Bool'), 'true', 'false'), " +
 		storedType + " = " + code(eventfields.StoredValueTypeBytes) + ", " +
-		"if(" + physicalType + " = 'String', replaceRegexpOne(base64Encode(" + stringSQL +
-		"), '=+$', ''), " + tagged.payload + "), " +
+		"if(" + physicalType + " = 'String', " + rawStdBase64EncodeSQL(stringSQL) +
+		", " + tagged.payload + "), " +
 		storedType + " = " + code(eventfields.StoredValueTypeTimestamp) + ", " +
 		"if(startsWith(" + physicalType + ", 'Date'), " + timestamp + ", " + tagged.payload + "), " +
 		storedType + " = " + code(eventfields.StoredValueTypeDuration) + ", " + tagged.payload + ", " +
@@ -770,8 +773,8 @@ func fieldSummaryFixedEncoding(field fieldState, storedType, value string) strin
 	switch field.kind {
 	case fieldKindString:
 		return "if(" + storedType + " = toUInt8(" +
-			fmt.Sprint(uint8(eventfields.StoredValueTypeBytes)) + "), replaceRegexpOne(base64Encode(toString(" +
-			value + ")), '=+$', ''), toString(" + value + "))"
+			fmt.Sprint(uint8(eventfields.StoredValueTypeBytes)) + "), " +
+			rawStdBase64EncodeSQL("toString("+value+")") + ", toString(" + value + "))"
 	case fieldKindNumber:
 		return "toString(" + value + ")"
 	case fieldKindBool:

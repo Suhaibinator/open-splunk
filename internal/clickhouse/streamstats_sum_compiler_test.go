@@ -329,9 +329,6 @@ func TestCompileStreamStatsSumRejectsForgedCanonicalPlans(t *testing.T) {
 			operator.Measure.Predicate = &plan.BooleanExpression{}
 		}},
 		{"percentile", func(operator *plan.StreamAggregate) { operator.Measure.Percentile = 50 }},
-		{"unsupported maximum", func(operator *plan.StreamAggregate) {
-			operator.Measure.Function = plan.AggregateFunctionMaximum
-		}},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {

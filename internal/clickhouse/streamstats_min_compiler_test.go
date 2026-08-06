@@ -614,7 +614,6 @@ func TestCompileStreamStatsMinimumCanonicalDefaultAndDefensiveValidation(t *test
 		{"forged canonical input", func(operator *plan.StreamAggregate) { operator.Measure.Input.Canonical = true }},
 		{"forged input path", func(operator *plan.StreamAggregate) { operator.Measure.Input.Path = []string{"attacker"} }},
 		{"mismatched default", func(operator *plan.StreamAggregate) { operator.Measure.Output = "min(other)" }},
-		{"maximum function", func(operator *plan.StreamAggregate) { operator.Measure.Function = plan.AggregateFunctionMaximum }},
 		{"predicate", func(operator *plan.StreamAggregate) { operator.Measure.Predicate = &plan.BooleanExpression{} }},
 		{"percentile", func(operator *plan.StreamAggregate) { operator.Measure.Percentile = 50 }},
 	} {
