@@ -465,7 +465,7 @@ test("release publication creates immutable amd64 and arm64 GHCR images", async 
   const workflowDirectory = path.join(workspace, ".github", "workflows");
   const publicationWorkflows = (await readdir(workflowDirectory))
     .filter((name) => /^publish.*\.ya?ml$/.test(name))
-    .sort();
+    .toSorted();
   assert.deepEqual(publicationWorkflows, ["publish-images.yml"]);
 
   const workflow = await readFile(
