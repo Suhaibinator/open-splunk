@@ -7,7 +7,108 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded `streamstats max(field)`
+## Latest checkpoint: bounded chronological `streamstats`
+
+Date: 2026-08-05
+
+Committed implementation checkpoint:
+
+- `900dc74` — add bounded, nullable-Mixed and binary-safe
+  `streamstats earliest(field)` and `streamstats latest(field)` across parsing,
+  planning, ClickHouse compilation, execution, inspection, history, export,
+  completion, and frontend compatibility surfaces.
+
+This test-first SPL unit completes the chronological pair for bounded
+`streamstats` without putting GORM on the ClickHouse path:
+
+1. The parser accepts case-insensitive long-form `earliest(exact_field)` and
+   `latest(exact_field)` with an optional exact `AS` alias. Default output
+   names are canonicalized, while the existing `current`, `window`, `global`,
+   and `BY` constraints and the 10,000-row frame limit remain authoritative.
+2. Chronological measures require the canonical `_time` provenance field.
+   Missing or overwritten provenance is rejected with
+   `SPL_UNSUPPORTED_STREAMSTATS_TIME_FIELD`, and `_time` is included in field
+   dependency analysis even when it is not otherwise projected.
+3. Pipeline order determines only which rows belong to each bounded window.
+   Within that frame, earliest/latest select by immutable event chronology:
+   original nanosecond `_time`, event ID, visibility sequence, source identity,
+   and member ordinal. This makes ties and reordered pipelines deterministic.
+4. Nulls, missing values, empty multivalues, and null members do not compete.
+   Earliest selects the first eligible immediate multivalue member and latest
+   the last; generic objects, flattened parents, nested containers, malformed
+   binary envelopes, and other unsupported values poison the measure
+   atomically. A complete frame with no eligible member publishes present
+   Dynamic null, while an incomplete `BY` row remains visible with the output
+   logically absent. `current=f`, bounded windows, global/partitioned
+   execution, and the 10,000/10,001-row fence are covered.
+5. Winners publish as canonical nullable Mixed lexical values. Numeric,
+   Boolean, timestamp, duration, and decimal values use their canonical String
+   spelling; invalid-UTF-8 lexical winners use the canonical unpadded RawStd
+   `bytes/v1` Dynamic envelope. A live ClickHouse regression caught physical
+   String publication for that binary path, and the final corpus verifies its
+   physical Bytes identity.
+6. The compiler lowers each chronological direction through constant-state,
+   direction-specific candidate helpers and exactly one `argMinOrNullIf` or
+   `argMaxOrNullIf` window state. Shared validation and publication aliases
+   avoid repeated aggregate state while retaining hidden poison checks.
+7. Query execution, search jobs, inspection, retained-history reruns, and
+   export preserve the plan and result contract. Completion metadata and the
+   frontend surface now distinguish pipeline-defined frames from immutable
+   chronological winners. No protobuf, HTTP, WebSocket, control-plane schema,
+   or product UI workflow changed.
+8. Independent adversarial and simplification reviews drove command-neutral
+   chronological helpers, descriptor-derived parser forms, shared Dynamic-null
+   publication, leaner transport fixtures, and the live invalid-UTF-8 case.
+   The final post-fix review reported no finding.
+
+Validation for `900dc74` and the final reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+go test ./... -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-streamstats-chronological-final-coverage.out ./...
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=30m -v
+```
+
+Every local gate passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+frontend lint, type-check, 65 release/infrastructure tests, 144 frontend tests,
+and the 11-page static build passed. The final digest-pinned Store corpus
+passed in 228.29 seconds, including the compiled SPL corpus in 221.52 seconds
+and the new chronological phase in 5.201 seconds. It left no test-owned
+container or volume behind.
+
+Exact feature-SHA GitHub Actions run
+[`31073335287`](https://github.com/Suhaibinator/open-splunk/actions/runs/31073335287)
+completed successfully for `900dc749f4e627e588b9f59549ca4aa531c4a802`.
+Backend vertical passed in 18m06s, race/coverage in 11m12s, Go lint in 2m01s,
+and the release OCI contract in 9m19s. Frontend, protobuf, GradeThis,
+vulnerability scanning, Linux/macOS production binaries, and release-asset
+consistency were also green.
+
+The frontend requires no additional product change for this unit beyond the
+already committed completion/surface compatibility. The broader backend/SPL
+goal remains active, but no next unit has been started. Wait for explicit
+instructions before choosing one. The external GradeThis Compose cutover
+remains deferred.
+
+## Previous checkpoint: bounded `streamstats max(field)`
 
 Date: 2026-08-05
 
@@ -16158,17 +16259,18 @@ aggregate contract at a time:
   `dc`, `values`, `list`, integer-suffix percentiles, `sum`, `avg`, `min`,
   `max`, `earliest`, and `latest`. Multiple measures and broader eval-expression
   arguments remain separate contracts. Bounded `streamstats` now covers bare
-  row count, exact-field occurrence count, exact-field numeric sum, and
-  exact-field numeric average through `df99748`; broader aggregates,
-  expression arguments, reset conditions, and time windows remain separate
-  contracts, and no next slice is selected; and
+  row count, exact-field occurrence count, exact-field numeric sum/average,
+  exact-field mixed-type minimum/maximum, and exact-field chronological
+  earliest/latest through `900dc74`; broader expression arguments, reset
+  conditions, and time windows remain separate contracts, and no next slice
+  is selected; and
 - exact Decimal comparison/aggregation remains separate work from the current
   finite-`Float64` runtime compatibility path.
 
-Chronological nonblocking P3 opportunities are direction-aware Dynamic
-selector generation when only `earliest` or only `latest` is requested, and
-reducing the validation envelope's additional logical final-result pass
-without weakening one-evaluation or atomic-error guarantees.
+The remaining chronological nonblocking P3 opportunity is reducing the
+validation envelope's additional logical final-result pass without weakening
+one-evaluation or atomic-error guarantees. Direction-aware Dynamic selector
+generation is complete for stats, eventstats, and streamstats.
 
 Extend `chart`, `rex`, or `spath` only behind compatibility and pinned
 ClickHouse tests. Deferred `spath` surface includes auto-extraction, `{}`
