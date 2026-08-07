@@ -343,7 +343,8 @@ func (x *GetKnowledgeObjectResponse) GetKnowledgeObject() *KnowledgeObject {
 
 // POST /api/v1/knowledge/objects/list
 // The signed continuation binds every normalized filter, ordering choice,
-// caller scope, page bound, and first-page catalog revision.
+// caller scope, page bound, and first-page catalog revision plus its exact
+// 32-byte restore-fork-safe catalog-state commitment.
 // text_filter is a binary substring of the current name or description;
 // selector_text_filter is a binary substring of one individual current
 // selector pattern. Every predicate is applied before keyset LIMIT.

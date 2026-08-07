@@ -460,6 +460,242 @@ func TestDecodeCanonicalVerifiesDigestUnknownsAndExactBytes(t *testing.T) {
 	}
 }
 
+func TestDecodeCanonicalFutureBodyPreservesCanonicalInactiveDefinition(t *testing.T) {
+	t.Parallel()
+
+	canonical := futureDefinitionBytes(t, validBaseDefinition(), 13, []byte{0x08, 0x01})
+	canonical = protowire.AppendVarint(
+		protowire.AppendTag(canonical, 32, protowire.VarintType),
+		7,
+	)
+	canonical = protowire.AppendBytes(
+		protowire.AppendTag(canonical, 33, protowire.BytesType),
+		[]byte("future metadata"),
+	)
+	digest := sha256.Sum256(canonical)
+	decoded, err := DecodeCanonicalInactiveFutureBody(
+		canonical,
+		digest[:],
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+	)
+	if err != nil {
+		t.Fatalf("DecodeCanonicalInactiveFutureBody: %v", err)
+	}
+	if decoded.Digest != digest || !bytes.Equal(decoded.Bytes, canonical) ||
+		decoded.AppID != validBaseDefinition().GetAppId() || decoded.Name != "revenue" ||
+		decoded.SharingScope != opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE ||
+		decoded.Description != nil || decoded.Selector == nil || decoded.Selector.Stats().Patterns != 1 {
+		t.Fatalf("decoded future authorities = %#v", decoded)
+	}
+	wantUnknown := canonicalFutureBodyField(13, []byte{0x08, 0x01})
+	wantUnknown = protowire.AppendVarint(protowire.AppendTag(wantUnknown, 32, protowire.VarintType), 7)
+	wantUnknown = protowire.AppendBytes(
+		protowire.AppendTag(wantUnknown, 33, protowire.BytesType),
+		[]byte("future metadata"),
+	)
+	if decoded.Definition.GetBody() != nil ||
+		!bytes.Equal(decoded.Definition.ProtoReflect().GetUnknown(), wantUnknown) {
+		t.Fatalf("future body was not retained exactly: %x", decoded.Definition.ProtoReflect().GetUnknown())
+	}
+	if _, err := DecodeCanonical(canonical, digest[:]); !errors.Is(err, ErrNonCanonical) {
+		t.Fatalf("strict decode error = %v, want ErrNonCanonical", err)
+	}
+
+	// Every returned mutable authority is detached from both the input and a
+	// later decode, including the protobuf unknown-field storage.
+	original := bytes.Clone(canonical)
+	canonical[0] ^= 0xff
+	decoded.Bytes[0] ^= 0xff
+	decoded.Definition.Name = "mutated"
+	decoded.Definition.ProtoReflect().SetUnknown(nil)
+	again, err := DecodeCanonicalInactiveFutureBody(
+		original,
+		digest[:],
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+	)
+	if err != nil {
+		t.Fatalf("DecodeCanonicalInactiveFutureBody(second): %v", err)
+	}
+	if again.Name != "revenue" || again.Definition.GetName() != "revenue" ||
+		len(again.Definition.ProtoReflect().GetUnknown()) == 0 || again.Bytes[0] != original[0] {
+		t.Fatalf("future decode retained caller-owned storage: %#v", again)
+	}
+}
+
+func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testing.T) {
+	t.Parallel()
+
+	known := validAliasDefinition()
+	knownNormalized, err := Normalize(known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataOnly, err := (proto.MarshalOptions{Deterministic: true}).Marshal(validBaseDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	varintUnknown := protowire.AppendVarint(
+		protowire.AppendTag(bytes.Clone(metadataOnly), 13, protowire.VarintType),
+		1,
+	)
+	reservedUnknown := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(9, []byte{1})...)
+	twoBodies := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(13, []byte{1})...)
+	twoBodies = append(twoBodies, canonicalFutureBodyField(14, []byte{2})...)
+	compilerReserved := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(19_000, []byte{1})...)
+	outOfOrder := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(13, []byte{1})...)
+	outOfOrder = protowire.AppendVarint(protowire.AppendTag(outOfOrder, 33, protowire.VarintType), 1)
+	outOfOrder = protowire.AppendVarint(protowire.AppendTag(outOfOrder, 32, protowire.VarintType), 1)
+	overlongTag := append(bytes.Clone(metadataOnly), 0xea, 0x00, 0x01, 0x01)
+	overlongLength := append(bytes.Clone(metadataOnly), 0x6a, 0x81, 0x00, 0x01)
+	knownAndFuture := append(bytes.Clone(knownNormalized.Bytes), canonicalFutureBodyField(13, []byte{1})...)
+	nestedUnknown := validBaseDefinition()
+	nestedUnknown.Selector.ProtoReflect().SetUnknown(testUnknownField())
+	nestedUnknownBytes := futureDefinitionBytes(t, nestedUnknown, 13, []byte{1})
+	noncanonicalMetadata := validBaseDefinition()
+	noncanonicalMetadata.Name = " revenue "
+	noncanonicalBytes := futureDefinitionBytes(t, noncanonicalMetadata, 13, []byte{1})
+	tooManyPatterns := validBaseDefinition()
+	for len(tooManyPatterns.Selector.IndexPatterns) <= knowledge.MaximumSelectorPatternsPerDimension {
+		tooManyPatterns.Selector.IndexPatterns = append(
+			tooManyPatterns.Selector.IndexPatterns,
+			&opensplunkv1.KnowledgeSelectorPattern{
+				MatchKind: opensplunkv1.KnowledgeSelectorMatchKind_KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+				Value:     "bounded",
+			},
+		)
+	}
+	tooManyPatternsBytes := futureDefinitionBytes(t, tooManyPatterns, 13, []byte{1})
+	duplicateName := protowire.AppendString(
+		protowire.AppendTag(
+			futureDefinitionBytes(t, validBaseDefinition(), 13, []byte{1}),
+			2,
+			protowire.BytesType,
+		),
+		"revenue",
+	)
+
+	tests := []struct {
+		name string
+		data []byte
+		err  error
+	}{
+		{name: "recognized body", data: knownNormalized.Bytes, err: ErrUnknownFutureBody},
+		{name: "missing body", data: metadataOnly, err: ErrUnknownFutureBody},
+		{name: "wrong wire type", data: varintUnknown, err: ErrUnknownFutureBody},
+		{name: "reserved field number", data: reservedUnknown, err: ErrUnknownFutureBody},
+		{name: "two future bodies", data: twoBodies, err: ErrUnknownFutureBody},
+		{name: "compiler-reserved field", data: compilerReserved, err: ErrUnknownFutureBody},
+		{name: "out-of-order metadata", data: outOfOrder, err: ErrUnknownFutureBody},
+		{name: "overlong tag", data: overlongTag, err: ErrNonCanonical},
+		{name: "overlong length", data: overlongLength, err: ErrUnknownFutureBody},
+		{name: "known and future bodies", data: knownAndFuture, err: ErrUnknownFutureBody},
+		{name: "nested unknown", data: nestedUnknownBytes, err: ErrNonCanonical},
+		{name: "noncanonical metadata", data: noncanonicalBytes, err: ErrNonCanonical},
+		{name: "preflight repeated values", data: tooManyPatternsBytes, err: ErrNonCanonical},
+		{name: "duplicate known field", data: duplicateName, err: ErrNonCanonical},
+		{name: "malformed", data: []byte{0x80}, err: ErrNonCanonical},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			digest := sha256.Sum256(test.data)
+			if _, err := DecodeCanonicalInactiveFutureBody(
+				test.data,
+				digest[:],
+				opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+			); !errors.Is(err, test.err) {
+				t.Fatalf("error = %v, want %v", err, test.err)
+			}
+		})
+	}
+
+	valid := futureDefinitionBytes(t, validBaseDefinition(), 13, []byte{1})
+	digest := sha256.Sum256(valid)
+	wrong := digest
+	wrong[0] ^= 0xff
+	if _, err := DecodeCanonicalInactiveFutureBody(
+		valid,
+		wrong[:],
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+	); !errors.Is(err, ErrDigestMismatch) {
+		t.Fatalf("wrong digest error = %v", err)
+	}
+	if _, err := DecodeCanonicalInactiveFutureBody(
+		valid,
+		digest[:sha256.Size-1],
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+	); !errors.Is(err, ErrDigestMismatch) {
+		t.Fatalf("short digest error = %v", err)
+	}
+	oversized := make([]byte, MaximumCanonicalBytes+1)
+	oversizedDigest := sha256.Sum256(oversized)
+	if _, err := DecodeCanonicalInactiveFutureBody(
+		oversized,
+		oversizedDigest[:],
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+	); !errors.Is(err, ErrDefinitionTooLarge) {
+		t.Fatalf("oversized error = %v", err)
+	}
+}
+
+func TestDecodeCanonicalInactiveFutureBodyEnforcesTrustedLifecycleState(t *testing.T) {
+	t.Parallel()
+
+	data := futureDefinitionBytes(t, validBaseDefinition(), 13, []byte{1})
+	digest := sha256.Sum256(data)
+	for _, state := range []opensplunkv1.KnowledgeObjectState{
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED,
+	} {
+		if _, err := DecodeCanonicalInactiveFutureBody(data, digest[:], state); err != nil {
+			t.Errorf("state %v: %v", state, err)
+		}
+	}
+	for _, state := range []opensplunkv1.KnowledgeObjectState{
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_UNSPECIFIED,
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED,
+		opensplunkv1.KnowledgeObjectState(99),
+	} {
+		// The state gate deliberately runs before size, digest, or wire parsing.
+		if _, err := DecodeCanonicalInactiveFutureBody(nil, nil, state); !errors.Is(err, ErrUnknownFutureBody) {
+			t.Errorf("state %v error = %v, want ErrUnknownFutureBody", state, err)
+		}
+	}
+}
+
+func TestKnowledgeDefinitionDescriptorPinsFutureBodyNumberNamespace(t *testing.T) {
+	t.Parallel()
+
+	descriptor := (&opensplunkv1.KnowledgeObjectDefinition{}).ProtoReflect().Descriptor()
+	body := descriptor.Oneofs().ByName("body")
+	if body == nil || body.IsSynthetic() {
+		t.Fatal("KnowledgeObjectDefinition.body oneof is missing or synthetic")
+	}
+	fields := descriptor.Fields()
+	for index := 0; index < fields.Len(); index++ {
+		field := fields.Get(index)
+		number := int(field.Number())
+		inBody := field.ContainingOneof() == body
+		switch {
+		case number <= 5:
+			if inBody {
+				t.Errorf("metadata field %s (%d) unexpectedly belongs to body", field.Name(), number)
+			}
+		case number <= 9:
+			t.Errorf("field %s occupies compatibility-reserved gap %d", field.Name(), number)
+		case number <= 31:
+			if !inBody {
+				t.Errorf("field %s (%d) must be a body alternative", field.Name(), number)
+			}
+		default:
+			if inBody {
+				t.Errorf("body field %s (%d) exceeds reserved body range", field.Name(), number)
+			}
+		}
+	}
+}
+
 func TestNormalizeCollapsesEmptySelectorAndDescriptionPresence(t *testing.T) {
 	t.Parallel()
 
@@ -538,5 +774,26 @@ func testUnknownField() []byte {
 	return protowire.AppendVarint(
 		protowire.AppendTag(nil, 2_047, protowire.VarintType),
 		1,
+	)
+}
+
+func futureDefinitionBytes(
+	t *testing.T,
+	definition *opensplunkv1.KnowledgeObjectDefinition,
+	field protowire.Number,
+	payload []byte,
+) []byte {
+	t.Helper()
+	known, err := (proto.MarshalOptions{Deterministic: true}).Marshal(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return append(known, canonicalFutureBodyField(field, payload)...)
+}
+
+func canonicalFutureBodyField(field protowire.Number, payload []byte) []byte {
+	return protowire.AppendBytes(
+		protowire.AppendTag(nil, field, protowire.BytesType),
+		payload,
 	)
 }

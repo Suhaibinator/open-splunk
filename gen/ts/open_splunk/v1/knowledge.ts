@@ -397,7 +397,14 @@ export interface CalculatedFieldDefinition {
  * app_id, name, and sharing_scope deliberately repeat indexed registry fields;
  * disagreement after decoding is corruption. Executable objects are ordered by
  * stage, normalized binary name, and stable object ID; clients cannot author an
- * execution-order override.
+ * execution-order override. Field numbers 13 through 31 are allocated
+ * exclusively to future length-delimited body oneof alternatives. Future
+ * top-level metadata fields must use numbers 32 or greater and must not use the
+ * protobuf compiler-reserved range 19000 through 19999. This allocation lets an
+ * older server distinguish one unreadable inactive body from future metadata
+ * while preserving the complete canonical stored message. For such an inactive
+ * opaque body only, an older reader may display the sealed registry object type
+ * but cannot infer or execute semantic type authority from this message.
  */
 export interface KnowledgeObjectDefinition {
   appId: string;
@@ -416,7 +423,9 @@ export interface KnowledgeObjectDefinition {
  * KnowledgeObject is the safe control-plane projection. definition_sha256 is
  * exactly 32 bytes. version is an optimistic token and increases on every
  * successful definition or state mutation. A quarantined projection has no
- * definition because its suspect bytes remain forensic storage only.
+ * definition because its suspect bytes remain forensic storage only. Lifecycle
+ * timestamps are exact immutable transition markers. quarantine_reason is a
+ * bounded closed server reason code, never free-form diagnostic text.
  */
 export interface KnowledgeObject {
   knowledgeObjectId: string;
@@ -433,6 +442,9 @@ export interface KnowledgeObject {
   createdAt: Date | undefined;
   updatedAt: Date | undefined;
   disabledAt?: Date | undefined;
+  quarantinedAt?: Date | undefined;
+  deletedAt?: Date | undefined;
+  quarantineReason?: string | undefined;
 }
 
 export interface KnowledgeObjectVersionReference {
@@ -603,6 +615,8 @@ export interface KnowledgeSnapshotBudgetCharges {
  * hashing. snapshot_sha256 is calculated over deterministic canonical protobuf
  * bytes with that field absent and is exactly 32 bytes. Wall-clock admission
  * time and every other timestamp are deliberately outside this digest message.
+ * tenant_catalog_state_token is the exact 32-byte restore-fork-safe commitment
+ * paired with tenant_catalog_revision and is included in the digest.
  */
 export interface KnowledgeSnapshot {
   formatVersion: number;
@@ -620,6 +634,7 @@ export interface KnowledgeSnapshot {
   shadows: KnowledgeSnapshotShadow[];
   warnings: KnowledgeSnapshotWarning[];
   budgetCharges: KnowledgeSnapshotBudgetCharges | undefined;
+  tenantCatalogStateToken: Uint8Array;
 }
 
 function createBaseKnowledgeSelectorPattern(): KnowledgeSelectorPattern {
@@ -1560,6 +1575,9 @@ function createBaseKnowledgeObject(): KnowledgeObject {
     createdAt: undefined,
     updatedAt: undefined,
     disabledAt: undefined,
+    quarantinedAt: undefined,
+    deletedAt: undefined,
+    quarantineReason: undefined,
   };
 }
 
@@ -1609,6 +1627,15 @@ export const KnowledgeObject: MessageFns<KnowledgeObject> = {
     }
     if (message.disabledAt !== undefined) {
       Timestamp.encode(toTimestamp(message.disabledAt), writer.uint32(114).fork()).join();
+    }
+    if (message.quarantinedAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.quarantinedAt), writer.uint32(122).fork()).join();
+    }
+    if (message.deletedAt !== undefined) {
+      Timestamp.encode(toTimestamp(message.deletedAt), writer.uint32(130).fork()).join();
+    }
+    if (message.quarantineReason !== undefined) {
+      writer.uint32(138).string(message.quarantineReason);
     }
     return writer;
   },
@@ -1732,6 +1759,30 @@ export const KnowledgeObject: MessageFns<KnowledgeObject> = {
           message.disabledAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
           continue;
         }
+        case 15: {
+          if (tag !== 122) {
+            break;
+          }
+
+          message.quarantinedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 16: {
+          if (tag !== 130) {
+            break;
+          }
+
+          message.deletedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 17: {
+          if (tag !== 138) {
+            break;
+          }
+
+          message.quarantineReason = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1797,6 +1848,21 @@ export const KnowledgeObject: MessageFns<KnowledgeObject> = {
         : isSet(object.disabled_at)
         ? fromJsonTimestamp(object.disabled_at)
         : undefined,
+      quarantinedAt: isSet(object.quarantinedAt)
+        ? fromJsonTimestamp(object.quarantinedAt)
+        : isSet(object.quarantined_at)
+        ? fromJsonTimestamp(object.quarantined_at)
+        : undefined,
+      deletedAt: isSet(object.deletedAt)
+        ? fromJsonTimestamp(object.deletedAt)
+        : isSet(object.deleted_at)
+        ? fromJsonTimestamp(object.deleted_at)
+        : undefined,
+      quarantineReason: isSet(object.quarantineReason)
+        ? globalThis.String(object.quarantineReason)
+        : isSet(object.quarantine_reason)
+        ? globalThis.String(object.quarantine_reason)
+        : undefined,
     };
   },
 
@@ -1844,6 +1910,15 @@ export const KnowledgeObject: MessageFns<KnowledgeObject> = {
     if (message.disabledAt !== undefined) {
       obj.disabledAt = message.disabledAt.toISOString();
     }
+    if (message.quarantinedAt !== undefined) {
+      obj.quarantinedAt = message.quarantinedAt.toISOString();
+    }
+    if (message.deletedAt !== undefined) {
+      obj.deletedAt = message.deletedAt.toISOString();
+    }
+    if (message.quarantineReason !== undefined) {
+      obj.quarantineReason = message.quarantineReason;
+    }
     return obj;
   },
 
@@ -1868,6 +1943,9 @@ export const KnowledgeObject: MessageFns<KnowledgeObject> = {
     message.createdAt = object.createdAt ?? undefined;
     message.updatedAt = object.updatedAt ?? undefined;
     message.disabledAt = object.disabledAt ?? undefined;
+    message.quarantinedAt = object.quarantinedAt ?? undefined;
+    message.deletedAt = object.deletedAt ?? undefined;
+    message.quarantineReason = object.quarantineReason ?? undefined;
     return message;
   },
 };
@@ -4013,6 +4091,7 @@ function createBaseKnowledgeSnapshot(): KnowledgeSnapshot {
     shadows: [],
     warnings: [],
     budgetCharges: undefined,
+    tenantCatalogStateToken: new Uint8Array(0),
   };
 }
 
@@ -4068,6 +4147,9 @@ export const KnowledgeSnapshot: MessageFns<KnowledgeSnapshot> = {
     }
     if (message.budgetCharges !== undefined) {
       KnowledgeSnapshotBudgetCharges.encode(message.budgetCharges, writer.uint32(122).fork()).join();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(130).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -4199,6 +4281,14 @@ export const KnowledgeSnapshot: MessageFns<KnowledgeSnapshot> = {
           message.budgetCharges = KnowledgeSnapshotBudgetCharges.decode(reader, reader.uint32());
           continue;
         }
+        case 16: {
+          if (tag !== 130) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -4277,6 +4367,11 @@ export const KnowledgeSnapshot: MessageFns<KnowledgeSnapshot> = {
         : isSet(object.budget_charges)
         ? KnowledgeSnapshotBudgetCharges.fromJSON(object.budget_charges)
         : undefined,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -4327,6 +4422,9 @@ export const KnowledgeSnapshot: MessageFns<KnowledgeSnapshot> = {
     if (message.budgetCharges !== undefined) {
       obj.budgetCharges = KnowledgeSnapshotBudgetCharges.toJSON(message.budgetCharges);
     }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
+    }
     return obj;
   },
 
@@ -4357,6 +4455,7 @@ export const KnowledgeSnapshot: MessageFns<KnowledgeSnapshot> = {
     message.budgetCharges = (object.budgetCharges !== undefined && object.budgetCharges !== null)
       ? KnowledgeSnapshotBudgetCharges.fromPartial(object.budgetCharges)
       : undefined;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
     return message;
   },
 };

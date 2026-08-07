@@ -104,7 +104,14 @@ message CalculatedFieldDefinition {
 // app_id, name, and sharing_scope deliberately repeat indexed registry fields;
 // disagreement after decoding is corruption. Executable objects are ordered by
 // stage, normalized binary name, and stable object ID; clients cannot author an
-// execution-order override.
+// execution-order override. Field numbers 13 through 31 are allocated
+// exclusively to future length-delimited body oneof alternatives. Future
+// top-level metadata fields must use numbers 32 or greater and must not use the
+// protobuf compiler-reserved range 19000 through 19999. This allocation lets an
+// older server distinguish one unreadable inactive body from future metadata
+// while preserving the complete canonical stored message. For such an inactive
+// opaque body only, an older reader may display the sealed registry object type
+// but cannot infer or execute semantic type authority from this message.
 message KnowledgeObjectDefinition {
   string app_id = 1;
   string name = 2;
@@ -121,7 +128,9 @@ message KnowledgeObjectDefinition {
 // KnowledgeObject is the safe control-plane projection. definition_sha256 is
 // exactly 32 bytes. version is an optimistic token and increases on every
 // successful definition or state mutation. A quarantined projection has no
-// definition because its suspect bytes remain forensic storage only.
+// definition because its suspect bytes remain forensic storage only. Lifecycle
+// timestamps are exact immutable transition markers. quarantine_reason is a
+// bounded closed server reason code, never free-form diagnostic text.
 message KnowledgeObject {
   string knowledge_object_id = 1;
   string tenant_id = 2;
@@ -137,6 +146,9 @@ message KnowledgeObject {
   google.protobuf.Timestamp created_at = 12;
   google.protobuf.Timestamp updated_at = 13;
   optional google.protobuf.Timestamp disabled_at = 14;
+  optional google.protobuf.Timestamp quarantined_at = 15;
+  optional google.protobuf.Timestamp deleted_at = 16;
+  optional string quarantine_reason = 17;
 }
 
 message KnowledgeObjectVersionReference {
@@ -302,6 +314,8 @@ message KnowledgeSnapshotBudgetCharges {
 // hashing. snapshot_sha256 is calculated over deterministic canonical protobuf
 // bytes with that field absent and is exactly 32 bytes. Wall-clock admission
 // time and every other timestamp are deliberately outside this digest message.
+// tenant_catalog_state_token is the exact 32-byte restore-fork-safe commitment
+// paired with tenant_catalog_revision and is included in the digest.
 message KnowledgeSnapshot {
   uint32 format_version = 1;
   string tenant_id = 2;
@@ -318,4 +332,5 @@ message KnowledgeSnapshot {
   repeated KnowledgeSnapshotShadow shadows = 13;
   repeated KnowledgeSnapshotWarning warnings = 14;
   KnowledgeSnapshotBudgetCharges budget_charges = 15;
+  bytes tenant_catalog_state_token = 16;
 }

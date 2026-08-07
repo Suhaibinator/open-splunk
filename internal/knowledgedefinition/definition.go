@@ -18,6 +18,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
@@ -53,6 +54,11 @@ var (
 	// ErrNonCanonical identifies stored protobuf bytes that decode but are not
 	// exactly the one deterministic normalized representation.
 	ErrNonCanonical = errors.New("knowledge definition is not canonical")
+	// ErrUnknownFutureBody identifies a stored definition whose top-level
+	// unknown-field set does not contain exactly one canonical future body in
+	// the compatibility-reserved field range. Only inactive administrative
+	// reads may accept a successful future-body decode.
+	ErrUnknownFutureBody = errors.New("knowledge definition has an unknown future body")
 )
 
 // Normalized is a detached canonical definition and its derived immutable
@@ -63,6 +69,22 @@ type Normalized struct {
 	Bytes        []byte
 	Digest       [sha256.Size]byte
 	ObjectType   opensplunkv1.KnowledgeObjectType
+	AppID        string
+	Name         string
+	SharingScope opensplunkv1.SharingScope
+	Description  *string
+	Selector     *knowledge.Selector
+}
+
+// ForwardCompatible is a detached canonical definition whose body is a future
+// oneof alternative unknown to this binary. Definition retains the exact
+// top-level future body and metadata bytes so a Go response can preserve them.
+// Bytes remains the immutable storage authority. This type deliberately has no
+// ObjectType: the current binary cannot infer semantics from an unreadable body.
+type ForwardCompatible struct {
+	Definition   *opensplunkv1.KnowledgeObjectDefinition
+	Bytes        []byte
+	Digest       [sha256.Size]byte
 	AppID        string
 	Name         string
 	SharingScope opensplunkv1.SharingScope
@@ -90,33 +112,10 @@ func Normalize(input *opensplunkv1.KnowledgeObjectDefinition) (Normalized, error
 		return Normalized{}, invalid("definition", errors.New("could not be cloned"))
 	}
 
-	appID, err := normalizeRequiredText(definition.GetAppId(), MaximumAppIDBytes)
-	if err != nil {
-		return Normalized{}, invalid("app_id", err)
-	}
-	definition.AppId = appID
-
-	name, err := knowledge.NormalizeName(definition.GetName())
-	if err != nil {
-		return Normalized{}, invalid("name", err)
-	}
-	definition.Name = name.String()
-
-	description, err := normalizeDescription(definition.Description)
-	if err != nil {
-		return Normalized{}, invalid("description", err)
-	}
-	definition.Description = cloneOptionalString(description)
-
-	if !validSharingScope(definition.GetSharingScope()) {
-		return Normalized{}, invalid("sharing_scope", errors.New("is unspecified or unknown"))
-	}
-
-	selector, canonicalSelector, err := normalizeSelector(definition.GetSelector())
+	description, selector, err := normalizeMetadata(definition)
 	if err != nil {
 		return Normalized{}, err
 	}
-	definition.Selector = canonicalSelector
 
 	objectType, err := normalizeBody(definition)
 	if err != nil {
@@ -197,23 +196,12 @@ func preflightInput(input *opensplunkv1.KnowledgeObjectDefinition) error {
 // or recursively unknown protobuf data, re-normalizes it, and requires the raw
 // bytes to already equal the deterministic normalized representation.
 func DecodeCanonical(data, expectedDigest []byte) (Normalized, error) {
-	if len(data) == 0 || len(data) > MaximumCanonicalBytes {
-		return Normalized{}, fmt.Errorf(
-			"%w: stored bytes must be between 1 and %d",
-			ErrDefinitionTooLarge,
-			MaximumCanonicalBytes,
-		)
-	}
-	if len(expectedDigest) != sha256.Size {
-		return Normalized{}, fmt.Errorf("%w: digest must contain %d bytes", ErrDigestMismatch, sha256.Size)
-	}
-	actual := sha256.Sum256(data)
-	if subtle.ConstantTimeCompare(actual[:], expectedDigest) != 1 {
-		return Normalized{}, ErrDigestMismatch
+	if _, err := verifyStoredBytes(data, expectedDigest); err != nil {
+		return Normalized{}, err
 	}
 
 	definition := &opensplunkv1.KnowledgeObjectDefinition{}
-	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(data, definition); err != nil {
+	if err := (proto.UnmarshalOptions{DiscardUnknown: false, RecursionLimit: 32}).Unmarshal(data, definition); err != nil {
 		return Normalized{}, fmt.Errorf("%w: malformed protobuf", ErrNonCanonical)
 	}
 	normalized, err := Normalize(definition)
@@ -224,6 +212,148 @@ func DecodeCanonical(data, expectedDigest []byte) (Normalized, error) {
 		return Normalized{}, ErrNonCanonical
 	}
 	return normalized, nil
+}
+
+// DecodeCanonicalInactiveFutureBody verifies a stored digest and exact
+// deterministic encoding, then decodes the known metadata around one
+// unreadable future body. The immutable version's trusted state is mandatory:
+// only draft, disabled, and deleted versions may take this path. Active,
+// quarantined, unspecified, and unknown states fail closed before bytes are
+// inspected. Active publication and resolution always use DecodeCanonical.
+//
+// The decoder rejects known bodies, nested unknown fields, a missing or
+// ambiguous body, noncanonical outer wire data, and noncanonical known
+// metadata. Canonical top-level future metadata fields are retained.
+func DecodeCanonicalInactiveFutureBody(
+	data, expectedDigest []byte,
+	state opensplunkv1.KnowledgeObjectState,
+) (ForwardCompatible, error) {
+	switch state {
+	case opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED:
+	default:
+		return ForwardCompatible{}, fmt.Errorf(
+			"%w: lifecycle state %d cannot expose an unknown body",
+			ErrUnknownFutureBody,
+			state,
+		)
+	}
+	return decodeCanonicalFutureBody(data, expectedDigest)
+}
+
+func decodeCanonicalFutureBody(data, expectedDigest []byte) (ForwardCompatible, error) {
+	digest, err := verifyStoredBytes(data, expectedDigest)
+	if err != nil {
+		return ForwardCompatible{}, err
+	}
+
+	definition := &opensplunkv1.KnowledgeObjectDefinition{}
+	if err := (proto.UnmarshalOptions{DiscardUnknown: false, RecursionLimit: 32}).Unmarshal(data, definition); err != nil {
+		return ForwardCompatible{}, fmt.Errorf("%w: malformed protobuf", ErrNonCanonical)
+	}
+	if err := preflightInput(definition); err != nil {
+		return ForwardCompatible{}, fmt.Errorf("%w: %v", ErrNonCanonical, err)
+	}
+	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(definition)
+	if err != nil || !bytes.Equal(encoded, data) {
+		return ForwardCompatible{}, ErrNonCanonical
+	}
+	if definition.GetBody() != nil {
+		return ForwardCompatible{}, fmt.Errorf("%w: recognized body is present", ErrUnknownFutureBody)
+	}
+	if err := validateFutureBodyUnknown(definition.ProtoReflect().GetUnknown()); err != nil {
+		return ForwardCompatible{}, err
+	}
+	if err := rejectNestedUnknownFields(definition.ProtoReflect(), "definition"); err != nil {
+		return ForwardCompatible{}, fmt.Errorf("%w: %v", ErrNonCanonical, err)
+	}
+
+	known, ok := cloneWithoutTopLevelUnknown(definition)
+	if !ok || known == nil {
+		return ForwardCompatible{}, fmt.Errorf("%w: definition could not be cloned", ErrNonCanonical)
+	}
+	canonical, ok := proto.Clone(known).(*opensplunkv1.KnowledgeObjectDefinition)
+	if !ok || canonical == nil {
+		return ForwardCompatible{}, fmt.Errorf("%w: definition metadata could not be cloned", ErrNonCanonical)
+	}
+	description, selector, err := normalizeMetadata(canonical)
+	if err != nil || !proto.Equal(known, canonical) {
+		return ForwardCompatible{}, fmt.Errorf("%w: known metadata is not canonical", ErrNonCanonical)
+	}
+
+	return ForwardCompatible{
+		Definition:   definition,
+		Bytes:        bytes.Clone(data),
+		Digest:       digest,
+		AppID:        canonical.GetAppId(),
+		Name:         canonical.GetName(),
+		SharingScope: canonical.GetSharingScope(),
+		Description:  cloneOptionalString(description),
+		Selector:     selector,
+	}, nil
+}
+
+func cloneWithoutTopLevelUnknown(
+	definition *opensplunkv1.KnowledgeObjectDefinition,
+) (*opensplunkv1.KnowledgeObjectDefinition, bool) {
+	cloned, ok := proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition)
+	if !ok || cloned == nil {
+		return nil, false
+	}
+	cloned.ProtoReflect().SetUnknown(nil)
+	return cloned, true
+}
+
+func verifyStoredBytes(data, expectedDigest []byte) ([sha256.Size]byte, error) {
+	if len(data) == 0 || len(data) > MaximumCanonicalBytes {
+		return [sha256.Size]byte{}, fmt.Errorf(
+			"%w: stored bytes must be between 1 and %d",
+			ErrDefinitionTooLarge,
+			MaximumCanonicalBytes,
+		)
+	}
+	if len(expectedDigest) != sha256.Size {
+		return [sha256.Size]byte{}, fmt.Errorf("%w: digest must contain %d bytes", ErrDigestMismatch, sha256.Size)
+	}
+	digest := sha256.Sum256(data)
+	if subtle.ConstantTimeCompare(digest[:], expectedDigest) != 1 {
+		return [sha256.Size]byte{}, ErrDigestMismatch
+	}
+	return digest, nil
+}
+
+func normalizeMetadata(
+	definition *opensplunkv1.KnowledgeObjectDefinition,
+) (*string, *knowledge.Selector, error) {
+	appID, err := normalizeRequiredText(definition.GetAppId(), MaximumAppIDBytes)
+	if err != nil {
+		return nil, nil, invalid("app_id", err)
+	}
+	definition.AppId = appID
+
+	name, err := knowledge.NormalizeName(definition.GetName())
+	if err != nil {
+		return nil, nil, invalid("name", err)
+	}
+	definition.Name = name.String()
+
+	description, err := normalizeDescription(definition.Description)
+	if err != nil {
+		return nil, nil, invalid("description", err)
+	}
+	definition.Description = cloneOptionalString(description)
+
+	if !validSharingScope(definition.GetSharingScope()) {
+		return nil, nil, invalid("sharing_scope", errors.New("is unspecified or unknown"))
+	}
+
+	selector, canonicalSelector, err := normalizeSelector(definition.GetSelector())
+	if err != nil {
+		return nil, nil, err
+	}
+	definition.Selector = canonicalSelector
+	return description, selector, nil
 }
 
 func normalizeSelector(input *opensplunkv1.KnowledgeSelector) (*knowledge.Selector, *opensplunkv1.KnowledgeSelector, error) {
@@ -555,6 +685,13 @@ func rejectUnknownFields(message protoreflect.Message, path string) error {
 	if len(message.GetUnknown()) != 0 {
 		return fmt.Errorf("%w: %s", ErrUnknownFields, path)
 	}
+	return rejectNestedUnknownFields(message, path)
+}
+
+func rejectNestedUnknownFields(message protoreflect.Message, path string) error {
+	if !message.IsValid() {
+		return nil
+	}
 	var nestedErr error
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 		fieldPath := path + "." + string(field.Name())
@@ -588,6 +725,69 @@ func rejectUnknownFields(message protoreflect.Message, path string) error {
 		return true
 	})
 	return nestedErr
+}
+
+func validateFutureBodyUnknown(raw []byte) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("%w: body field is absent", ErrUnknownFutureBody)
+	}
+	bodyCount := 0
+	previousNumber := protowire.Number(0)
+	for len(raw) != 0 {
+		number, wireType, tagBytes := protowire.ConsumeTag(raw)
+		if tagBytes < 0 || number < 13 || number >= 19_000 && number <= 19_999 {
+			return fmt.Errorf("%w: top-level unknown field number is not forward-compatible", ErrUnknownFutureBody)
+		}
+		canonicalTag := protowire.AppendTag(nil, number, wireType)
+		if !bytes.Equal(raw[:tagBytes], canonicalTag) || number < previousNumber {
+			return fmt.Errorf("%w: top-level unknown field order or tag is not canonical", ErrUnknownFutureBody)
+		}
+		previousNumber = number
+		raw = raw[tagBytes:]
+
+		if number <= 31 {
+			if wireType != protowire.BytesType {
+				return fmt.Errorf("%w: future body is not a message field", ErrUnknownFutureBody)
+			}
+			bodyCount++
+			if bodyCount > 1 {
+				return fmt.Errorf("%w: multiple future bodies are present", ErrUnknownFutureBody)
+			}
+		}
+
+		valueBytes, canonical := canonicalUnknownValue(raw, wireType)
+		if valueBytes < 0 || !canonical {
+			return fmt.Errorf("%w: top-level unknown value is not canonical", ErrUnknownFutureBody)
+		}
+		raw = raw[valueBytes:]
+	}
+	if bodyCount != 1 {
+		return fmt.Errorf("%w: body field is absent", ErrUnknownFutureBody)
+	}
+	return nil
+}
+
+func canonicalUnknownValue(raw []byte, wireType protowire.Type) (int, bool) {
+	switch wireType {
+	case protowire.VarintType:
+		value, count := protowire.ConsumeVarint(raw)
+		return count, count >= 0 && bytes.Equal(raw[:count], protowire.AppendVarint(nil, value))
+	case protowire.Fixed32Type:
+		_, count := protowire.ConsumeFixed32(raw)
+		return count, count >= 0
+	case protowire.Fixed64Type:
+		_, count := protowire.ConsumeFixed64(raw)
+		return count, count >= 0
+	case protowire.BytesType:
+		value, count := protowire.ConsumeBytes(raw)
+		if count < 0 {
+			return count, false
+		}
+		lengthBytes := count - len(value)
+		return count, bytes.Equal(raw[:lengthBytes], protowire.AppendVarint(nil, uint64(len(value))))
+	default:
+		return -1, false
+	}
 }
 
 func cloneOptionalString(value *string) *string {

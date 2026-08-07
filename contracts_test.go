@@ -172,10 +172,11 @@ func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 		t.Fatal("KnowledgeSnapshot descriptor is missing")
 	}
 	for name, wantNumber := range map[protoreflect.Name]protoreflect.FieldNumber{
-		"objects":         8,
-		"dependencies":    9,
-		"lookup_assets":   10,
-		"snapshot_sha256": 11,
+		"objects":                    8,
+		"dependencies":               9,
+		"lookup_assets":              10,
+		"snapshot_sha256":            11,
+		"tenant_catalog_state_token": 16,
 	} {
 		field := snapshot.Fields().ByName(name)
 		if field == nil {
@@ -184,6 +185,9 @@ func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 		}
 		if field.Number() != wantNumber {
 			t.Errorf("KnowledgeSnapshot.%s wire number = %d, want %d", name, field.Number(), wantNumber)
+		}
+		if name == "tenant_catalog_state_token" && field.Kind() != protoreflect.BytesKind {
+			t.Errorf("KnowledgeSnapshot.%s kind = %s, want bytes", name, field.Kind())
 		}
 	}
 	visited := make(map[protoreflect.FullName]bool)
@@ -311,6 +315,31 @@ func TestTierOneKnowledgeDefinitionBodiesKeepStableWireNumbers(t *testing.T) {
 	for _, name := range []protoreflect.Name{"app_id", "name", "sharing_scope", "object_type", "definition"} {
 		if field := object.Fields().ByName(name); field == nil {
 			t.Errorf("KnowledgeObject.%s indexed-agreement field is missing", name)
+		}
+	}
+	for name, contract := range map[protoreflect.Name]struct {
+		number   protoreflect.FieldNumber
+		kind     protoreflect.Kind
+		optional bool
+	}{
+		"disabled_at":       {number: 14, kind: protoreflect.MessageKind, optional: true},
+		"quarantined_at":    {number: 15, kind: protoreflect.MessageKind, optional: true},
+		"deleted_at":        {number: 16, kind: protoreflect.MessageKind, optional: true},
+		"quarantine_reason": {number: 17, kind: protoreflect.StringKind, optional: true},
+	} {
+		field := object.Fields().ByName(name)
+		if field == nil {
+			t.Errorf("KnowledgeObject.%s lifecycle field is missing", name)
+			continue
+		}
+		if field.Number() != contract.number || field.Kind() != contract.kind {
+			t.Errorf("KnowledgeObject.%s = wire field %d kind %s, want %d %s", name, field.Number(), field.Kind(), contract.number, contract.kind)
+		}
+		if field.HasOptionalKeyword() != contract.optional {
+			t.Errorf("KnowledgeObject.%s optional = %t, want %t", name, field.HasOptionalKeyword(), contract.optional)
+		}
+		if contract.kind == protoreflect.MessageKind && field.Message().FullName() != "google.protobuf.Timestamp" {
+			t.Errorf("KnowledgeObject.%s message = %s, want google.protobuf.Timestamp", name, field.Message().FullName())
 		}
 	}
 	for _, name := range []protoreflect.Name{"app_id", "name", "sharing_scope", "body"} {

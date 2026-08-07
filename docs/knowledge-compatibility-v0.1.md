@@ -2,7 +2,7 @@
 
 **Status:** normative implementation contract; executable runtime corpus pending
 **Compatibility version:** `0.1`
-**Last updated:** August 6, 2026
+**Last updated:** August 7, 2026
 
 This contract defines the first Open Splunk search-time knowledge surface. It
 is intentionally narrower than Splunk Enterprise knowledge behavior. Anything
@@ -299,9 +299,22 @@ dependencies, checks conservative destination and selector overlap, and charges
 publication and snapshot budgets. Invalid definitions never become partially
 active.
 
-The normalized dependency graph is limited to 256 nodes, 1,024 edges, and
-depth 16. Direct and indirect cycles, missing targets, disabled targets, later-
-stage dependencies, and same-stage data dependencies are invalid. Deleting or
+A recognized draft is an editable, non-executable definition, so its body is
+required to be structurally normalized and canonically encoded but need not yet
+compile or pass executable dependency semantics. Disabled body edits have the
+same authoring behavior, and deletion preserves the final inactive bytes.
+Administrative `Get` and `List` therefore continue to validate identity,
+digest, lifecycle, dependency seals and row order, target identities and
+existence, and bounded acyclic graph shape for these inactive versions, but do
+not apply expression parsing or executable target-state, sharing-scope, stage,
+or field-identity rules. Validation and every transition to `active` rerun all
+of those semantic checks. Inactive definitions never enter resolution,
+snapshots, execution, or provenance.
+
+Every retained normalized dependency graph is limited to 256 nodes, 1,024
+edges, and depth 16; direct and indirect cycles and missing targets are invalid
+in every state. For active versions, disabled targets, later-stage dependencies,
+and same-stage data dependencies are also invalid. Deleting or
 disabling an active dependency fails unless a bounded explicit transaction also
 disables all active dependents. `0.1` does not expose cascading mutation through
 the browser.
@@ -320,6 +333,23 @@ advances the tenant catalog revision in the same immediate SQLite transaction
 as registry/version/dependency/ACL rows and the bounded audit record. App
 revision is optional in `0.1`; when absent the snapshot carries zero and cache
 invalidation uses the mandatory tenant revision.
+
+The same transaction rotates a 32-byte catalog-state commitment stored beside
+the numeric tenant revision. An exact backup and restore preserves the
+commitment, while a mutation on either side of a restored fork produces a new
+commitment even when both histories reach the same numeric revision. Readers,
+pagination cursors, snapshot caches, and retained-job admission compare the
+revision and commitment together; the numeric revision alone is never a
+snapshot identity.
+
+Every immutable object version has one immutable lifecycle record. Draft and
+active versions carry no transition marker. A disabled version carries the
+exact time of the disable transition; later body, metadata, or scope mutations
+that retain the disabled state retain that original marker. Enable clears it,
+and a later disable establishes a new marker. Quarantine and delete markers
+equal their terminal transition time. Version one is timestamped exactly at
+registry creation, retained version timestamps are nondecreasing, and no
+historical timestamp may exceed the current registry update time.
 
 Every mutation carries a 16–128 byte `client_request_id` using only bytes
 `0x21..0x7E`. The
@@ -340,6 +370,29 @@ reject unknown future `oneof` bodies. Exact field-mask updates are applied to
 the current stored message on the server; omitted fields are not replacement
 authority. A state-only disable or delete may preserve an unreadable future
 body byte-for-byte, but an older server cannot enable, publish, or body-edit it.
+
+`KnowledgeObjectDefinition` field numbers 13 through 31 are permanently
+allocated exclusively to future length-delimited `body` oneof alternatives.
+Future top-level metadata fields use 32 or greater and cannot use protobuf's
+compiler-reserved 19000 through 19999 range. An older reader accepts exactly
+one canonical unknown body field in 13 through 31 on a draft, disabled, or
+deleted immutable version; it may also retain canonically ordered top-level
+future metadata fields. Repeated occurrences of one future metadata field
+number are preserved because an older reader cannot know whether that future
+field is singular, repeated, or a compatibility-preserving sequence; their
+wire tags and values must still be minimal and their field numbers
+nondecreasing. It rejects unknown fields nested inside known metadata,
+non-minimal wire encodings, out-of-order fields, multiple future bodies, and
+every unknown body on an active version.
+
+An older reader cannot derive an object type from an opaque body. For one of
+these inactive versions only, it may return the sealed registry/version
+`object_type` as safe administrative display metadata after those scalar
+authorities agree with each other. This is the sole exception to deriving the
+indexed object type from the body. The value is never executable authority,
+never participates in publication or dependency validation, and is never used
+to construct provenance. Stored raw bytes and their digest remain authoritative;
+the fallback never attempts to interpret or execute the opaque payload.
 
 An administrator integrity scan can issue a single-use, ten-minute HMAC token
 binding tenant, catalog revision, the stable root object ID, the SHA-256 digest
@@ -375,7 +428,13 @@ occurs before definition decoding. Hidden rows are never decoded on a search
 path and therefore cannot become an existence oracle or denial of service. A
 candidate visible to the principal is then fully decoded and integrity-checked;
 visible corruption fails admission, while hidden corruption is reported only
-through administrator health and integrity tooling.
+through administrator health and integrity tooling. Caller-facing reads bound
+and validate the authorized visible identity set, not the tenant-wide physical
+identity count or mutation ledger. Tenant-wide physical-count and ledger
+mismatches therefore fail mutation and administrator-health checks without
+changing another owner's Get/List result. Corruption of the shared tenant
+catalog revision itself remains tenant-wide because no coherent read snapshot
+can be established without that authority.
 
 Stored definition bytes are deterministic protobuf encodings with a SHA-256
 digest. Indexed identity fields must exactly equal the decoded normalized
@@ -394,6 +453,29 @@ request and never returns a current or historical definition, digest, or
 definition-derived projection. This quarantine redaction is permanent even if
 the caller once authored the object.
 
+`List` defaults to 50 objects and accepts at most 256. Its opaque signed cursor
+is limited to 4 KiB and binds the normalized tenant, owner, readable-app set,
+filters, sort order, page bound, and first-page catalog revision plus catalog-
+state commitment. A change to either value invalidates continuation rather
+than mixing snapshots, including divergent histories that reuse a revision
+number after restore. One response
+detaches at most 4 MiB of canonical definition bytes and validates at most
+65,536 dependency edges; it stops at the preceding object and emits a cursor
+when either ceiling would be crossed. One maximum-sized object always fits.
+
+Description and selector filtering trusts projected membership only after the
+complete authorized, scalar-filtered candidate set has been decoded and
+checked against canonical definitions. That sweep admits at most 8,192
+authorized identities, 8 MiB each of definition, projection, and selector-value
+bytes, 65,536 selector patterns, and 65,536 dependency edges. Exceeding a sweep
+ceiling fails closed with a capacity error; it does not return a partially
+validated page or total. More than 8,192 physically visible identities is
+catalog corruption rather than a request-capacity error. Scalar-only filters
+hydrate only returned objects.
+Authorization is applied before either path, so hidden rows and their bodies
+cannot consume these caller-visible integrity budgets or become corruption
+oracles.
+
 Known response fields remain decodable across version skew. Unknown bytes may
 be preserved by the Go runtime but are not promised to browser clients. The
 stored canonical bytes, rather than a browser round trip, are the authority for
@@ -403,12 +485,13 @@ snapshot digesting and history.
 
 After authorization and before parsing/planning that can execute enrichment,
 admission detaches a canonical snapshot containing tenant, principal, app,
-effective authorized indexes, tenant revision, optional app revision, compiler
-compatibility version, exact ordered object IDs/versions/types/names/scopes,
-selectors, definition bytes and digests, dependency order, shadow warnings,
-and aggregate budget charges. The SHA-256 snapshot digest covers a versioned,
-length-prefixed canonical encoding of every field; map iteration, timestamps,
-database row order, and mutable ORM records are excluded.
+effective authorized indexes, tenant revision and its exact 32-byte catalog-
+state commitment, optional app revision, compiler compatibility version, exact
+ordered object IDs/versions/types/names/scopes, selectors, definition bytes and
+digests, dependency order, shadow warnings, and aggregate budget charges. The
+SHA-256 snapshot digest covers a versioned, length-prefixed canonical encoding
+of every field, including that commitment; map iteration, timestamps, database
+row order, and mutable ORM records are excluded.
 
 All revision, current-registry, exact-version, dependency, and ACL reads for
 one snapshot occur through one SQLite read transaction. The transaction reads
