@@ -77,6 +77,74 @@ func queryIntegrationTestStreamStatsTransport(
 		t.Fatalf("streamstats transport preceding = %d, unsigned=%v", preceding, ok)
 	}
 
+	conditionalJob, conditionalPage := queryIntegrationRunSearch(
+		t,
+		ctx,
+		executor,
+		indexTime,
+		"queryexec-streamstats-count-eval-transport",
+		`index=main source="source"`+
+			` | streamstats count(eval(status="200" AND like(path, "%manager"))) AS matched`+
+			` | streamstats current=false count(eval(status="200")) AS preceding_match BY path`+
+			` | table event_id matched preceding_match`,
+	)
+	if conditionalJob.State != searchjobs.StateCompleted {
+		t.Fatalf(
+			"streamstats count(eval) transport state = %v, failure=%#v",
+			conditionalJob.State,
+			conditionalJob.Failure,
+		)
+	}
+	wantConditionalColumns := []searchjobs.Column{
+		{Name: "event_id", Kind: searchjobs.ValueKindString},
+		{Name: "matched", Kind: searchjobs.ValueKindUnsigned},
+		{Name: "preceding_match", Kind: searchjobs.ValueKindUnsigned, Nullable: true},
+	}
+	if len(conditionalPage.Schema.Columns) != len(wantConditionalColumns) {
+		t.Fatalf(
+			"streamstats count(eval) transport schema = %#v, want %#v",
+			conditionalPage.Schema.Columns,
+			wantConditionalColumns,
+		)
+	}
+	for index := range wantConditionalColumns {
+		if conditionalPage.Schema.Columns[index] != wantConditionalColumns[index] {
+			t.Fatalf(
+				"streamstats count(eval) transport column %d = %#v, want %#v",
+				index,
+				conditionalPage.Schema.Columns[index],
+				wantConditionalColumns[index],
+			)
+		}
+	}
+	if len(conditionalPage.Rows) != 1 {
+		t.Fatalf(
+			"streamstats count(eval) transport rows = %#v, want one row",
+			conditionalPage.Rows,
+		)
+	}
+	if eventID, ok := conditionalPage.Rows[0].Values[0].String(); !ok || eventID != "queryexec-event" {
+		t.Fatalf(
+			"streamstats count(eval) transport event_id = %q, string=%v",
+			eventID,
+			ok,
+		)
+	}
+	if matched, ok := conditionalPage.Rows[0].Values[1].Unsigned(); !ok || matched != 1 {
+		t.Fatalf(
+			"streamstats count(eval) transport matched = %d, unsigned=%v",
+			matched,
+			ok,
+		)
+	}
+	if preceding, ok := conditionalPage.Rows[0].Values[2].Unsigned(); !ok || preceding != 0 {
+		t.Fatalf(
+			"streamstats count(eval) transport preceding = %d, unsigned=%v",
+			preceding,
+			ok,
+		)
+	}
+
 	sumJob, sumPage := queryIntegrationRunSearch(
 		t,
 		ctx,
@@ -302,70 +370,17 @@ func queryIntegrationTestStreamStatsTransport(
 	}
 
 	const analysis = `index=main source="source" | streamstats count(path) AS populated`
-	logical := queryIntegrationFieldPlan(t, "main", indexTime, analysis)
 	compiler := clickhouse.Compiler{}
-
-	catalogQuery, err := compiler.CompileFieldCatalog(
-		logical,
-		clickhouse.FieldCatalogSpec{MaximumFields: clickhouse.MaximumFieldCatalogFields},
+	queryIntegrationAssertUnsignedStreamStatsFieldAnalysis(
+		t,
+		ctx,
+		executor,
+		compiler,
+		indexTime,
+		analysis,
+		"populated",
+		1,
 	)
-	if err != nil {
-		t.Fatalf("compile streamstats field catalog: %v", err)
-	}
-	catalog, err := executor.ExecuteFieldCatalog(ctx, catalogQuery)
-	if err != nil {
-		t.Fatalf(
-			"execute streamstats field catalog: %v\nSQL: %s\nargs: %#v",
-			err,
-			catalogQuery.SQL,
-			catalogQuery.Args,
-		)
-	}
-	if catalog.TotalEvents != 1 {
-		t.Fatalf("streamstats field catalog = %#v, want one event", catalog)
-	}
-	assertFieldCatalogProfile(t, catalog, FieldProfileRow{
-		FieldName:     "populated",
-		ObservedTypes: []eventfields.StoredValueType{eventfields.StoredValueTypeUint64},
-		EventCount:    1,
-	})
-
-	summaryQuery, err := compiler.CompileFieldSummary(
-		logical,
-		clickhouse.FieldSummarySpec{
-			FieldName:             "populated",
-			MaximumValues:         10,
-			MaximumDistinctValues: clickhouse.MaximumFieldSummaryDistinctValues,
-			MaximumValueBytes:     clickhouse.MaximumFieldSummaryValueBytes,
-		},
-	)
-	if err != nil {
-		t.Fatalf("compile streamstats field summary: %v", err)
-	}
-	summary, err := executor.ExecuteFieldSummary(ctx, summaryQuery)
-	if err != nil {
-		t.Fatalf(
-			"execute streamstats field summary: %v\nSQL: %s\nargs: %#v",
-			err,
-			summaryQuery.SQL,
-			summaryQuery.Args,
-		)
-	}
-	if summary.FieldName != "populated" ||
-		len(summary.ObservedTypes) != 1 ||
-		summary.ObservedTypes[0] != eventfields.StoredValueTypeUint64 ||
-		summary.EventCount != 1 || summary.NullCount != 0 ||
-		summary.MissingCount != 0 || summary.DistinctCount != 1 ||
-		len(summary.TopValues) != 1 || summary.TopValues[0].Count != 1 {
-		t.Fatalf("streamstats field summary = %#v", summary)
-	}
-	if populated, ok := summary.TopValues[0].Value.Unsigned(); !ok || populated != 1 {
-		t.Fatalf(
-			"streamstats summary populated = %d, unsigned=%v",
-			populated,
-			ok,
-		)
-	}
 
 	firstBucket := indexTime.Truncate(2 * time.Second)
 	timelineQuery := queryIntegrationCompileTimeline(
@@ -398,6 +413,18 @@ func queryIntegrationTestStreamStatsTransport(
 			firstBucket,
 		)
 	}
+
+	const conditionalAnalysis = `index=main source="source" | streamstats count(eval(status="200" AND like(path, "%manager"))) AS matched`
+	queryIntegrationAssertUnsignedStreamStatsFieldAnalysis(
+		t,
+		ctx,
+		executor,
+		compiler,
+		indexTime,
+		conditionalAnalysis,
+		"matched",
+		1,
+	)
 
 	const sumAnalysis = `index=main source="source" | streamstats sum(status) AS running_total`
 	sumLogical := queryIntegrationFieldPlan(t, "main", indexTime, sumAnalysis)
@@ -776,6 +803,92 @@ func queryIntegrationTestStreamStatsTransport(
 			got,
 			ok,
 			wantBytes,
+		)
+	}
+}
+
+func queryIntegrationAssertUnsignedStreamStatsFieldAnalysis(
+	t *testing.T,
+	ctx context.Context,
+	executor *Executor,
+	compiler clickhouse.Compiler,
+	indexTime time.Time,
+	analysis string,
+	fieldName string,
+	want uint64,
+) {
+	t.Helper()
+
+	logical := queryIntegrationFieldPlan(t, "main", indexTime, analysis)
+	catalogQuery, err := compiler.CompileFieldCatalog(
+		logical,
+		clickhouse.FieldCatalogSpec{
+			MaximumFields: clickhouse.MaximumFieldCatalogFields,
+		},
+	)
+	if err != nil {
+		t.Fatalf("compile streamstats %s field catalog: %v", fieldName, err)
+	}
+	catalog, err := executor.ExecuteFieldCatalog(ctx, catalogQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats %s field catalog: %v\nSQL: %s\nargs: %#v",
+			fieldName,
+			err,
+			catalogQuery.SQL,
+			catalogQuery.Args,
+		)
+	}
+	if catalog.TotalEvents != 1 {
+		t.Fatalf(
+			"streamstats %s field catalog = %#v, want one event",
+			fieldName,
+			catalog,
+		)
+	}
+	assertFieldCatalogProfile(t, catalog, FieldProfileRow{
+		FieldName:     fieldName,
+		ObservedTypes: []eventfields.StoredValueType{eventfields.StoredValueTypeUint64},
+		EventCount:    1,
+	})
+
+	summaryQuery, err := compiler.CompileFieldSummary(
+		logical,
+		clickhouse.FieldSummarySpec{
+			FieldName:             fieldName,
+			MaximumValues:         10,
+			MaximumDistinctValues: clickhouse.MaximumFieldSummaryDistinctValues,
+			MaximumValueBytes:     clickhouse.MaximumFieldSummaryValueBytes,
+		},
+	)
+	if err != nil {
+		t.Fatalf("compile streamstats %s field summary: %v", fieldName, err)
+	}
+	summary, err := executor.ExecuteFieldSummary(ctx, summaryQuery)
+	if err != nil {
+		t.Fatalf(
+			"execute streamstats %s field summary: %v\nSQL: %s\nargs: %#v",
+			fieldName,
+			err,
+			summaryQuery.SQL,
+			summaryQuery.Args,
+		)
+	}
+	if summary.FieldName != fieldName ||
+		len(summary.ObservedTypes) != 1 ||
+		summary.ObservedTypes[0] != eventfields.StoredValueTypeUint64 ||
+		summary.EventCount != 1 || summary.NullCount != 0 ||
+		summary.MissingCount != 0 || summary.DistinctCount != 1 ||
+		len(summary.TopValues) != 1 || summary.TopValues[0].Count != 1 {
+		t.Fatalf("streamstats %s field summary = %#v", fieldName, summary)
+	}
+	if got, ok := summary.TopValues[0].Value.Unsigned(); !ok || got != want {
+		t.Fatalf(
+			"streamstats summary %s = %d, unsigned=%v, want %d",
+			fieldName,
+			got,
+			ok,
+			want,
 		)
 	}
 }

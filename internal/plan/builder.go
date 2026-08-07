@@ -817,6 +817,24 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 				measure.Function = AggregateFunctionCountRows
+			case spl.AggregateFunctionCountPredicate:
+				predicateMeasure, predicateErr := buildCountPredicateMeasure(
+					aggregate,
+					outputSchemaKnown,
+					&expressionBudget,
+					countPredicateMeasureDiagnostics{
+						unsupportedCode: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+						invalidMessage: "streamstats count(eval(...)) requires one " +
+							"predicate, an explicit alias, and no field or percentile metadata",
+						ambiguousCode: "SPL_AMBIGUOUS_STREAMSTATS_FIELD",
+						reservedMessage: "streamstats cannot read the event result's " +
+							"reserved fields payload without an exact upstream schema",
+					},
+				)
+				if predicateErr != nil {
+					return nil, predicateErr
+				}
+				measure = predicateMeasure
 			case spl.AggregateFunctionCountValues, spl.AggregateFunctionSum,
 				spl.AggregateFunctionAverage, spl.AggregateFunctionMinimum,
 				spl.AggregateFunctionMaximum, spl.AggregateFunctionEarliest,
@@ -879,7 +897,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, &Diagnostic{
 					Code: "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
 					Message: "streamstats currently supports exactly one count, " +
-						"count(field), sum(field), avg(field), min(field), max(field), " +
+						"count(field), count(eval(predicate)), sum(field), avg(field), min(field), max(field), " +
 						"earliest(field), or latest(field) aggregate",
 					Range: aggregate.Range,
 				}
@@ -2629,7 +2647,7 @@ type countPredicateMeasureDiagnostics struct {
 }
 
 // buildCountPredicateMeasure converts the common count(eval(...)) contract
-// while leaving command-specific diagnostics at the stats/eventstats callers.
+// while leaving command-specific diagnostics at the aggregate-command callers.
 func buildCountPredicateMeasure(
 	aggregate spl.StatsAggregate,
 	outputSchemaKnown bool,

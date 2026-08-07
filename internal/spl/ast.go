@@ -557,8 +557,8 @@ const (
 	// logical plan so hand-built inputs cannot bypass the parser's resource
 	// ceiling.
 	MaximumStatsMeasures = 16
-	// MaximumStatsGroupFields is the corresponding ceiling for one stats or
-	// eventstats BY tuple.
+	// MaximumStatsGroupFields is the corresponding ceiling for one stats,
+	// eventstats, or streamstats BY tuple.
 	MaximumStatsGroupFields = 16
 	// MaximumStreamStatsWindow is the largest explicit row window accepted by
 	// the bounded streamstats compatibility surface. The backend separately
@@ -642,11 +642,12 @@ func (*EventStatsCommand) Name() string         { return "eventstats" }
 func (c *EventStatsCommand) SourceRange() Range { return c.Range }
 
 // StreamStatsCommand appends one running row count, exact-field occurrence
-// count, exact-field numeric sum or average, exact-field mixed extremum, or
-// exact-field chronological value to every input row. Aggregate carries the
-// input, source locations, and alias representation. Current controls whether
-// the present row contributes, Window is zero for the complete bounded prefix,
-// and Global is meaningful only for a positive window.
+// count, true-only predicate count, exact-field numeric sum or average,
+// exact-field mixed extremum, or exact-field chronological value to every input
+// row. Aggregate carries the input or predicate, source locations, and alias
+// representation. Current controls whether the present row contributes,
+// Window is zero for the complete bounded prefix, and Global is meaningful only
+// for a positive window.
 // GlobalSpecified distinguishes Splunk's default global window from the
 // explicit global=false required by the supported grouped finite-window form.
 type StreamStatsCommand struct {

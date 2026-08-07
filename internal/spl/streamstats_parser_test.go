@@ -475,7 +475,7 @@ func TestParseStreamStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 		name, source, code, rangeText string
 	}{
 		{"empty call", `index=main | streamstats count()`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "count"},
-		{"eval count", `index=main | streamstats count(eval(status=500))`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "count"},
+		{"eval count missing alias", `index=main | streamstats count(eval(status=500))`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "count(eval(status=500))"},
 		{"abbreviated field count", `index=main | streamstats c(status)`, "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE", "c"},
 		{"wildcard count input", `index=main | streamstats count(status*)`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", "status*"},
 		{"quoted count input", `index=main | streamstats count("status")`, "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX", `"status"`},
@@ -557,8 +557,10 @@ func TestParseStreamStatsRejectsUnsupportedSurfaceAtSource(t *testing.T) {
 			if test.code == "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE" ||
 				test.code == "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX" {
 				wantSuggestion := streamStatsSyntaxSuggestion
-				if test.name == "missing explicit global false" ||
-					test.name == "positive grouped global true" {
+				switch test.name {
+				case "eval count missing alias":
+					wantSuggestion = streamStatsCountPredicateSuggestion
+				case "missing explicit global false", "positive grouped global true":
 					wantSuggestion = "streamstats window=5 global=false count BY group"
 				}
 				if strings.Join(diagnostic.Suggestions, "\x00") != wantSuggestion {

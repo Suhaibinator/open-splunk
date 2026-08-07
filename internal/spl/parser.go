@@ -1791,16 +1791,25 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 	}, nil
 }
 
-const streamStatsSyntaxSuggestion = "streamstats count AS running_count"
+const (
+	streamStatsSyntaxSuggestion         = "streamstats count AS running_count"
+	streamStatsCountPredicateSuggestion = "streamstats count(eval(field=value)) AS matches"
+)
 
 type streamStatsAggregateDescriptor struct {
-	name       string
-	function   AggregateFunction
-	allowsBare bool
+	name            string
+	function        AggregateFunction
+	allowsBare      bool
+	allowsPredicate bool
 }
 
 var streamStatsAggregateDescriptors = []streamStatsAggregateDescriptor{
-	{name: "count", function: AggregateFunctionCountValues, allowsBare: true},
+	{
+		name:            "count",
+		function:        AggregateFunctionCountValues,
+		allowsBare:      true,
+		allowsPredicate: true,
+	},
 	{name: "sum", function: AggregateFunctionSum},
 	{name: "avg", function: AggregateFunctionAverage},
 	{name: "min", function: AggregateFunctionMinimum},
@@ -1829,12 +1838,15 @@ func streamStatsFunctionNames() []string {
 }
 
 func streamStatsAcceptedAggregateForms() string {
-	forms := make([]string, 0, len(streamStatsAggregateDescriptors)+1)
+	forms := make([]string, 0, len(streamStatsAggregateDescriptors)+2)
 	for _, descriptor := range streamStatsAggregateDescriptors {
 		if descriptor.allowsBare {
 			forms = append(forms, descriptor.name)
 		}
 		forms = append(forms, descriptor.name+"(field)")
+		if descriptor.allowsPredicate {
+			forms = append(forms, "count(eval(predicate)) AS output")
+		}
 	}
 	if len(forms) == 1 {
 		return forms[0]
@@ -1843,11 +1855,11 @@ func streamStatsAcceptedAggregateForms() string {
 }
 
 // parseStreamStatsCommand accepts one deliberately bounded running count,
-// exact-field numeric sum or average, exact-field mixed extremum, or exact-field
-// chronological value. Splunk commonly places options both before and after the
-// aggregate (and examples also place them after BY), so this parser treats
-// supported name=value options as position-independent while keeping the
-// aggregate, alias, and grouping tuple exact.
+// conditional count, exact-field numeric sum or average, exact-field mixed
+// extremum, or exact-field chronological value. Splunk commonly places options
+// both before and after the aggregate (and examples also place them after BY),
+// so this parser treats supported name=value options as position-independent
+// while keeping the aggregate, alias, and grouping tuple exact.
 func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 	command := &StreamStatsCommand{
 		Current: true,
@@ -1975,10 +1987,33 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 			hasArguments := p.index+1 < len(p.tokens) &&
 				p.tokens[p.index+1].kind == tokenLeftParen
 			if hasArguments {
-				evalArgument := p.index+3 < len(p.tokens) &&
-					p.tokens[p.index+2].kind == tokenWord &&
-					strings.EqualFold(p.tokens[p.index+2].text, "eval") &&
-					p.tokens[p.index+3].kind == tokenLeftParen
+				evalArgument := startsEvalPredicateArgument(
+					p.tokens,
+					p.index+1,
+				)
+				if evalArgument && descriptor.allowsPredicate {
+					functionToken := current
+					p.advance()
+					predicate, predicateEnd, predicateErr := p.parseCountPredicate()
+					if predicateErr != nil {
+						return nil, predicateErr
+					}
+					aggregateSeen = true
+					command.Aggregate = StatsAggregate{
+						Function:  AggregateFunctionCountPredicate,
+						Predicate: predicate,
+						Range: Range{
+							Start: functionToken.sourceRange.Start,
+							End:   predicateEnd,
+						},
+						AliasRange: Range{
+							Start: functionToken.sourceRange.Start,
+							End:   predicateEnd,
+						},
+					}
+					end = predicateEnd
+					continue
+				}
 				if evalArgument ||
 					p.index+2 < len(p.tokens) && p.tokens[p.index+2].kind == tokenRightParen {
 					return nil, p.unsupportedStreamStatsAggregate(
@@ -2020,13 +2055,19 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 			if !aggregateSeen || aliasSeen || bySeen {
 				return nil, p.unsupportedStreamStatsSyntax(current, "streamstats AS must follow its aggregate and may appear only once before BY")
 			}
+			asToken := current
 			p.advance()
 			alias := p.current()
 			if alias.kind == tokenWord && strings.Contains(alias.text, "*") {
 				return nil, p.unsupportedStreamStatsSyntax(alias, "wildcard streamstats output fields are not supported")
 			}
 			if !isExactUnquotedStreamStatsField(alias) || strings.EqualFold(alias.text, "BY") {
-				return nil, p.unsupportedStreamStatsSyntax(alias, "streamstats AS requires one exact unquoted output field")
+				located := alias
+				if command.Aggregate.Function == AggregateFunctionCountPredicate &&
+					(alias.kind == tokenEOF || alias.kind == tokenPipe) {
+					located = asToken
+				}
+				return nil, p.unsupportedStreamStatsSyntax(located, "streamstats AS requires one exact unquoted output field")
 			}
 			aliasSeen = true
 			command.Aggregate.Alias = alias.text
@@ -2073,6 +2114,16 @@ func (p *parser) parseStreamStatsCommand(name token) (Command, error) {
 
 	if !aggregateSeen {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "streamstats requires one "+acceptedForms+" aggregate")
+	}
+	if command.Aggregate.Function == AggregateFunctionCountPredicate &&
+		!command.Aggregate.ExplicitAlias {
+		return nil, &Diagnostic{
+			Code: "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
+			Message: "streamstats count(eval(...)) requires AS followed by " +
+				"an output field name",
+			Range:       command.Aggregate.Range,
+			Suggestions: []string{streamStatsCountPredicateSuggestion},
+		}
 	}
 	if len(command.GroupBy) > 0 && command.Window > 0 &&
 		(!command.GlobalSpecified || command.Global) {
@@ -2412,17 +2463,27 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 }
 
 func (p *parser) startsCountPredicate() bool {
-	return p.current().kind == tokenLeftParen &&
-		p.index+2 < len(p.tokens) &&
-		p.tokens[p.index+1].kind == tokenWord &&
-		strings.EqualFold(p.tokens[p.index+1].text, "eval") &&
-		p.tokens[p.index+2].kind == tokenLeftParen
+	return startsEvalPredicateArgument(p.tokens, p.index)
+}
+
+func startsEvalPredicateArgument(tokens []token, leftParenthesis int) bool {
+	return leftParenthesis >= 0 && leftParenthesis+2 < len(tokens) &&
+		tokens[leftParenthesis].kind == tokenLeftParen &&
+		tokens[leftParenthesis+1].kind == tokenWord &&
+		strings.EqualFold(tokens[leftParenthesis+1].text, "eval") &&
+		tokens[leftParenthesis+2].kind == tokenLeftParen
+}
+
+func startsCountEvalCall(tokens []token, function int) bool {
+	return function >= 0 && function < len(tokens) &&
+		tokenWordEqual(tokens[function], "count") &&
+		startsEvalPredicateArgument(tokens, function+1)
 }
 
 // parseCountPredicate parses the shared count(eval(<Boolean predicate>))
-// grammar. Both stats and eventstats call this helper so predicate precedence,
-// source ranges, scalar validation, and the query-wide predicate budget cannot
-// drift between the two commands.
+// grammar. Stats, eventstats, and streamstats call this helper so predicate
+// precedence, source ranges, scalar validation, and the query-wide predicate
+// budget cannot drift between commands.
 func (p *parser) parseCountPredicate() (WhereExpr, Position, error) {
 	if !p.match(tokenLeftParen) {
 		return nil, p.current().sourceRange.End, p.errorAtCurrent(

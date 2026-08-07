@@ -2576,20 +2576,22 @@ The executor's memory, read, query-size, relational-depth, result, and
 ### `streamstats`
 
 The additional pre-release compatibility surface supports one deliberately
-bounded running row count, exact-field occurrence count, exact-field numeric
-sum, exact-field numeric average, exact-field mixed-type minimum, or exact-field
-mixed-type maximum, or exact-field chronological earliest/latest value per
-command:
+bounded running row count, exact-field occurrence count, true-only conditional
+count, exact-field numeric sum, exact-field numeric average, exact-field
+mixed-type minimum/maximum, or exact-field chronological earliest/latest value
+per command:
 
 ```spl
 streamstats count
 streamstats count AS row_number
 streamstats count(status)
 streamstats count(status) AS populated
+streamstats count(eval(status>=500)) AS errors_so_far
 streamstats current=false count
 streamstats window=5 count AS recent
 streamstats count BY host
 streamstats current=false count(status) AS prior_statuses BY host
+streamstats current=false window=5 global=false count(eval(status>=500)) AS recent_prior_errors BY host
 streamstats window=5 global=false count AS recent BY host
 streamstats count(bytes) AS recent_values BY host current=f window=5 global=f
 streamstats sum(bytes)
@@ -2620,17 +2622,19 @@ claims about undocumented Splunk type edges. See Splunk's official
 and [running-statistics examples](https://help.splunk.com/en/splunk-enterprise/search/spl2-search-reference/streamstats-command/streamstats-command-examples).
 
 Exactly one aggregate is accepted: bare argument-free `count`, long-form
-`count(field)`, long-form `sum(field)`, long-form `avg(field)`, or long-form
-`min(field)`, `max(field)`, `earliest(field)`, or `latest(field)`. Each field
-form contains exactly one exact unquoted input. The bare form uses the default
-output `count`; field forms use canonical lowercase `count(field)`,
-`sum(field)`, `avg(field)`, `min(field)`, `max(field)`, `earliest(field)`, or
-`latest(field)`, preserving the input field's spelling. Any form may instead
-provide one exact unquoted output with `AS`, which must remain before `BY`.
-Because the downstream exact field grammar cannot refer to parentheses in a
-field form's default name, use `AS` whenever a later command will consume that
-result. `BY` accepts from one through 16 distinct exact unquoted fields,
-separated by commas or whitespace.
+`count(field)`, long-form `count(eval(predicate))`, long-form `sum(field)`,
+long-form `avg(field)`, or long-form `min(field)`, `max(field)`,
+`earliest(field)`, or `latest(field)`. Each field form contains exactly one
+exact unquoted input. The bare form uses the default output `count`; field
+forms use canonical lowercase `count(field)`, `sum(field)`, `avg(field)`,
+`min(field)`, `max(field)`, `earliest(field)`, or `latest(field)`, preserving
+the input field's spelling. Bare and field forms may instead provide one exact
+unquoted output with `AS`. Conditional count always requires
+`AS <exact unquoted output>` and has no inferred output name. Every alias must
+remain before `BY`. Because the downstream exact field grammar cannot refer to
+parentheses in a field form's default name, use `AS` whenever a later command
+will consume that result. `BY` accepts from one through 16 distinct exact
+unquoted fields, separated by commas or whitespace.
 Command, function, option, Boolean, and keyword spelling is case-insensitive;
 input, output, and grouping field names remain case-sensitive. The supported
 options are `current=t|true|f|false`, `window=N`, and
@@ -2652,6 +2656,19 @@ it, while a field removed by an upstream projection remains missing and
 contributes zero. These typed null and container choices are explicit Open
 Splunk v0.1 boundaries where the public documentation does not establish an
 exact representation.
+
+`count(eval(predicate))` uses the same bounded Boolean predicate grammar,
+precedence, typed truth semantics, and query-wide expression budgets as the
+`stats` and `eventstats` conditional-count forms. It is not a general scalar
+truthiness or arbitrary eval-expression form. Each upstream row contributes
+one only when the predicate is Boolean true; false or null contributes zero. A
+missing comparison operand therefore contributes zero, while
+`isnull(missing)` contributes one. Predicate fields are resolved from the
+incoming row before an output of the same name replaces it, and dependency
+analysis includes those fields. An upstream projection can make a field
+missing and the compiler does not recover it from hidden event storage. The
+published result is `UInt64`, subject to the grouped incomplete-key nullability
+described below.
 
 `sum(field)` and `avg(field)` reuse the `stats` and `eventstats` numeric
 contract. Finite integers, floats, numeric Strings, tagged decimals, and
@@ -2738,7 +2755,8 @@ non-chronological aggregates; earliest/latest require event rows as described
 above. The current `timechart` and `chart` lowerings remain terminal. Windows
 are measured in input rows, not field occurrences or numeric members. Bare
 `count` contributes one for each row; `count(field)` contributes the occurrence
-cardinality above; `sum(field)` contributes all eligible immediate numeric
+cardinality above; `count(eval(predicate))` contributes one for true and zero
+for false or null; `sum(field)` contributes all eligible immediate numeric
 members from the row; `avg(field)` averages those members across the complete
 row frame; `min(field)` selects the least eligible immediate member;
 `max(field)` selects the greatest; and `earliest(field)` / `latest(field)`
@@ -2746,15 +2764,15 @@ select chronologically within the admitted frame. With `current=true`, a
 positive window includes the current row and at most its `N-1` preceding rows.
 With `current=false`, only preceding rows participate, and a positive window
 includes at most the `N` preceding rows. The first eligible row then has the
-present `UInt64` value zero for either count form and a present null `Float64`
+present `UInt64` value zero for every count form and a present null `Float64`
 for either numeric form. These empty preceding frames publish a present null
 for `min(field)`, `max(field)`, `earliest(field)`, and `latest(field)`. These
 representations are explicit Open Splunk v0.1 choices because the official
 reference does not pin their transport representation.
-`count(field)` contributions are summed as `UInt128` before the published
-result is converted to `UInt64`; `sum(field)` and `avg(field)` each use one
-nullable Float64 window state over the normalized numeric members. Empty input
-remains empty.
+`count(field)` and `count(eval(predicate))` contributions are summed as
+`UInt128` before the published result is converted to `UInt64`; `sum(field)`
+and `avg(field)` each use one nullable Float64 window state over the normalized
+numeric members. Empty input remains empty.
 
 Without `BY`, `global=true` and `global=false` are equivalent because there is
 only one partition. With `BY` and `window=0`, `global` is likewise irrelevant,
@@ -2776,16 +2794,17 @@ documented as-seen processing model and its requirement that a global
 For chronological streamstats, this as-seen order defines frame membership
 only; the immutable event key above defines the winner within the frame.
 
-Without `BY`, both count forms publish a non-null `UInt64`; `sum(field)` and
+Without `BY`, all count forms publish a non-null `UInt64`; `sum(field)` and
 `avg(field)` publish a present nullable `Float64`; `min(field)` publishes the
 nullable winner type described above, as does `max(field)`; earliest/latest
 publish nullable `Mixed`. Grouped keys use the same exact scalar contract as
 `stats BY` and `eventstats BY`. A missing or explicit-null component retains
 its source row but makes the streamstats output logically absent and physically
 nullable; it contributes to no group. Every row with a complete grouping tuple
-has a present result: zero when a `count(field)` frame contains no occurrences,
-and null when a `sum(field)`, `avg(field)`, `min(field)`, `max(field)`,
-`earliest(field)`, or `latest(field)` frame contains no eligible member.
+has a present result: zero when a count frame contains no contributing row or
+occurrence, and null when a `sum(field)`, `avg(field)`, `min(field)`,
+`max(field)`, `earliest(field)`, or `latest(field)` frame contains no eligible
+member.
 An empty String grouping key is a value. Complete Dynamic scalar keys use the
 existing lexical normalization, so numeric `500` and String `"500"` share a
 group. A known fixed multivalue key is rejected during compilation. A runtime
@@ -2798,11 +2817,12 @@ they remain conservative Open Splunk boundaries pending a live differential
 oracle.
 
 The output replaces an existing field of the same name rather than creating a
-duplicate. The literal input, output, or grouping name `fields` is rejected
-while the event schema is open and becomes ordinary data after an exact `table`
-or transforming schema closes it. Replacing `_time` preserves rows but
-invalidates later timeline analysis. Replacing `index` creates ordinary
-pipeline data and does not change the authorization-constrained physical scan.
+duplicate. The literal aggregate input, predicate reference, output, or
+grouping name `fields` is rejected while the event schema is open and becomes
+ordinary data after an exact `table` or transforming schema closes it.
+Replacing `_time` preserves rows but invalidates later timeline analysis.
+Replacing `index` creates ordinary pipeline data and does not change the
+authorization-constrained physical scan.
 
 One streamstats stage admits at most 10,000 upstream rows. The compiler orders
 and materializes at most 10,001 rows, uses the additional row only as an
@@ -2814,7 +2834,11 @@ also makes `window=0` exact over every admitted relation. Dynamic grouping
 poison and row overflow are forced before any downstream operation can hide
 them. A standalone stage uses one bounded materialized input. `count(field)`
 computes one per-row occurrence contribution there and sums it with one exact
-ClickHouse row window. `sum(field)` materializes one normalized
+ClickHouse row window. `count(eval(predicate))` computes one nullable-safe
+true-only contribution per row and sums it through one `UInt128` ClickHouse row
+window before `UInt64` publication. Exact-numeric and calculated predicate
+inputs reuse private materialization rather than recomputing expressions in the
+window. `sum(field)` materializes one normalized
 `Array(Float64)` per row and applies one exact `sumOrNullArray` window state,
 without changing Float64 accumulation into per-row partial sums. `avg(field)`
 uses the same per-row normalized array and one exact `avgOrNullArray` window
@@ -2830,13 +2854,17 @@ retain the opposite member or an array-sized ordering key.
 
 Unsupported-value validation is forced for the complete stage, even if the
 poisoned result would otherwise be empty or hidden downstream. The stage
-performs no `ARRAY JOIN`, row expansion, unbounded `groupArray`, per-group
-query, physical-event rescan, or Go-side result buffering. The normal query
-memory, read, group, depth, and result ceilings remain independently
-authoritative.
+performs no row-expanding `ARRAY JOIN`, row expansion, unbounded `groupArray`,
+per-group query, physical-event rescan, or Go-side result buffering. An
+ordinary conditional predicate uses no `ARRAY JOIN`. A predicate that reads a
+calculated field may reuse one singleton `ARRAY JOIN [value] AS private_alias`
+materialization fence to stop ClickHouse from inlining the calculation; its
+array cardinality is exactly one, so input and output rows remain one-to-one.
+The normal query memory, read, group, depth, and result ceilings remain
+independently authoritative.
 
 Parenthesized `count()`, bare or parenthesized-empty `sum`, `avg`, `min`, `max`,
-`earliest`, or `latest`, abbreviated `c` or `c(field)`, `count(eval(...))`,
+`earliest`, or `latest`, abbreviated `c`, `c(field)`, or `c(eval(...))`,
 `sum(eval(...))`, `avg(eval(...))`, `min(eval(...))`, `max(eval(...))`,
 `earliest(eval(...))`, `latest(eval(...))`, wildcard, quoted, or multiple
 inputs, every other aggregate, multiple aggregates, wildcard or quoted
@@ -3721,13 +3749,14 @@ grouped by up to 16 exact fields. Other aggregate functions, multiple measures,
 and the broader eval-expression surface remain unsupported for `eventstats`.
 
 `streamstats` supports only the bare argument-free running `count`, long-form
-exact-field `count(field)`, long-form exact-field `sum(field)`, long-form
-exact-field `avg(field)`, and long-form exact-field mixed-type `min(field)` and
-`max(field)`, plus long-form exact-field chronological `earliest(field)` and
-`latest(field)` surfaces specified above. Abbreviated, wildcard, quoted-field,
-eval, or multi-input forms, other or multiple aggregates, time-based windows,
-reset behavior, `allnum`, grouped finite global windows, and the broader
-expression surface remain unsupported.
+exact-field `count(field)`, true-only `count(eval(predicate)) AS output`,
+long-form exact-field `sum(field)`, long-form exact-field `avg(field)`, and
+long-form exact-field mixed-type `min(field)` and `max(field)`, plus long-form
+exact-field chronological `earliest(field)` and `latest(field)` surfaces
+specified above. Abbreviated, wildcard, quoted-field, arbitrary eval-argument,
+or multi-input forms, other or multiple aggregates, time-based windows, reset
+behavior, `allnum`, grouped finite global windows, and the broader expression
+surface remain unsupported.
 
 This contract will be versioned as support expands. A live Splunk differential
 oracle is not currently available, so ambiguous null, multivalue, formatting,

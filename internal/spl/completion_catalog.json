@@ -83,7 +83,7 @@
     {
       "name": "streamstats",
       "insertion": "streamstats count AS running_count",
-      "detail": "Add one bounded running row count, exact-field occurrence count, numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, or chronological earliest/latest value over deterministic pipeline frames; chronological winners use immutable event order. Options support excluding the current row and partitioning frames by exact fields."
+      "detail": "Add one bounded running row count, exact-field occurrence count, true-only count(eval(predicate)), numeric sum, numeric average, exact mixed-type minimum, exact mixed-type maximum, or chronological earliest/latest value over deterministic pipeline frames; chronological winners use immutable event order. Options support excluding the current row and partitioning frames by exact fields."
     },
     {
       "name": "top",

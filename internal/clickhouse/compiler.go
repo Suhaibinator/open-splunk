@@ -6159,6 +6159,60 @@ func bindExactNumericPredicateFields(
 	return predicateState, keyColumns, aliases, nil
 }
 
+// aggregatePredicatePreparation owns the transient state and private columns
+// needed to compile one conditional aggregate without leaking its aliases into
+// the durable pipeline schema. Transforming, event, and stream aggregates keep
+// their relation-specific materialization shape, but share this preparation so
+// exact-numeric and calculated-field fencing cannot drift between commands.
+type aggregatePredicatePreparation struct {
+	durableState   compileState
+	predicateState compileState
+	bindings       []string
+	boundColumns   []string
+	exactColumns   []string
+	exactAliases   []string
+}
+
+func prepareAggregatePredicate(
+	state compileState,
+	predicate plan.Expression,
+	stage int,
+	command string,
+) (aggregatePredicatePreparation, error) {
+	prepared := aggregatePredicatePreparation{
+		durableState:   state,
+		predicateState: state,
+	}
+	materializedFields := predicateMaterializationFields(predicate, state)
+	if len(materializedFields) > 0 {
+		prepared.predicateState, prepared.bindings, prepared.boundColumns =
+			bindAggregatePredicateFields(state, materializedFields, stage)
+		prepared.durableState = predicateMaterializedOutputState(
+			state,
+			materializedFields,
+		)
+	}
+	exactNumericFields := repeatedExactNumericPredicateFields(
+		predicate,
+		prepared.predicateState,
+	)
+	if len(exactNumericFields) == 0 {
+		return prepared, nil
+	}
+	var err error
+	prepared.predicateState, prepared.exactColumns, prepared.exactAliases, err =
+		bindExactNumericPredicateFields(
+			prepared.predicateState,
+			exactNumericFields,
+			stage,
+			command,
+		)
+	if err != nil {
+		return aggregatePredicatePreparation{}, err
+	}
+	return prepared, nil
+}
+
 func aggregatePredicateMaterializationFields(
 	operator *plan.Aggregate,
 	state compileState,
@@ -13770,7 +13824,9 @@ func validateStreamAggregate(
 		)
 	}
 	measure := operator.Measure
-	if measure.Predicate != nil || measure.Percentile != 0 || measure.Output == "" {
+	if measure.Output == "" ||
+		(measure.Function != plan.AggregateFunctionCountPredicate &&
+			(measure.Predicate != nil || measure.Percentile != 0)) {
 		return plan.FieldRef{}, errors.New(
 			"compile ClickHouse streamstats: aggregate contains unsupported metadata",
 		)
@@ -13797,6 +13853,16 @@ func validateStreamAggregate(
 			return plan.FieldRef{}, errors.New(
 				"compile ClickHouse streamstats: argument-free count contains input metadata",
 			)
+		}
+	case plan.AggregateFunctionCountPredicate:
+		if err := validateConditionalCountMeasure(
+			measure,
+			state,
+			"streamstats",
+			"SPL_AMBIGUOUS_STREAMSTATS_FIELD",
+			"streamstats cannot read the event result's reserved fields payload without an exact upstream schema",
+		); err != nil {
+			return plan.FieldRef{}, err
 		}
 	case plan.AggregateFunctionCountValues, plan.AggregateFunctionSum,
 		plan.AggregateFunctionAverage, plan.AggregateFunctionMinimum,
@@ -13831,7 +13897,7 @@ func validateStreamAggregate(
 		}
 	default:
 		return plan.FieldRef{}, errors.New(
-			"compile ClickHouse streamstats: only count, count(field), sum(field), avg(field), min(field), max(field), earliest(field), and latest(field) are supported",
+			"compile ClickHouse streamstats: only count, count(field), count(eval(...)), sum(field), avg(field), min(field), max(field), earliest(field), and latest(field) are supported",
 		)
 	}
 	defaultOutput := ""
@@ -13989,8 +14055,8 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 		" PRECEDING AND 1 PRECEDING"
 }
 
-// compileStreamAggregate lowers one running count, numeric sum/average, mixed
-// extremum, or chronological selection over frames in the order already
+// compileStreamAggregate lowers one running count, true-only predicate count,
+// numeric sum/average, mixed extremum, or chronological selection over frames in the order already
 // established by the pipeline. Its retained relation is capped at one sentinel
 // beyond the public limit; row overflow, Dynamic BY poison, and aggregate
 // measure poison are forced through the deferred barrier before downstream
@@ -14006,6 +14072,7 @@ func compileStreamAggregate(
 		return compiledRelation{}, compileState{}, nil, nil, validateErr
 	}
 	function := operator.Measure.Function
+	isConditionalCount := function == plan.AggregateFunctionCountPredicate
 	isExtrema := function == plan.AggregateFunctionMinimum ||
 		function == plan.AggregateFunctionMaximum
 	isChronological := function == plan.AggregateFunctionEarliest ||
@@ -14104,6 +14171,23 @@ func compileStreamAggregate(
 		"__os_streamstats_unsupported_%d",
 		stage,
 	))
+	durableState := state
+	predicateState := state
+	var predicatePreparation aggregatePredicatePreparation
+	if isConditionalCount {
+		var preparationErr error
+		predicatePreparation, preparationErr = prepareAggregatePredicate(
+			state,
+			operator.Measure.Predicate,
+			stage,
+			"streamstats",
+		)
+		if preparationErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, preparationErr
+		}
+		durableState = predicatePreparation.durableState
+		predicateState = predicatePreparation.predicateState
+	}
 	measureAlias := ""
 	measureProjection := ""
 	var stageMeasureArgs []any
@@ -14134,6 +14218,22 @@ func compileStreamAggregate(
 		measureProjection = measureSQL + " AS " + measureAlias
 		stageMeasureArgs = contributionArgs
 	}
+	if isConditionalCount {
+		predicateSQL, predicateArgs, compileErr := compileExpression(
+			operator.Measure.Predicate,
+			predicateState,
+		)
+		if compileErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, compileErr
+		}
+		measureAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_measure_%d",
+			stage,
+		))
+		measureProjection = "toUInt64(ifNull(" + predicateSQL + ", 0)) AS " +
+			measureAlias
+		stageMeasureArgs = predicateArgs
+	}
 
 	maximumRows := strconv.FormatUint(MaximumStreamStatsInputRows, 10)
 	sentinelRows := strconv.FormatUint(MaximumStreamStatsInputRows+1, 10)
@@ -14145,7 +14245,7 @@ func compileStreamAggregate(
 	if len(groupClassifications) > 0 {
 		orderedInput += ", " + strings.Join(groupClassifications, ", ")
 	}
-	if measureProjection != "" {
+	if measureProjection != "" && !isConditionalCount {
 		orderedInput += ", " + measureProjection
 	}
 	if len(orderProjection) > 0 {
@@ -14159,6 +14259,33 @@ func compileStreamAggregate(
 
 	preparedSQL := orderedInput
 	preparedLayers := 0
+	if len(predicatePreparation.bindings) > 0 {
+		// Limit the deterministic input to the public bound plus one sentinel
+		// before evaluating calculated predicate producers. A singleton ARRAY
+		// JOIN then gives each producer a named dependency that ClickHouse cannot
+		// inline back through the predicate without changing row cardinality.
+		predicateBindingAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_predicate_binding_source_%d",
+			stage,
+		))
+		preparedSQL = "SELECT *, " +
+			strings.Join(predicatePreparation.boundColumns, ", ") +
+			" FROM (" + preparedSQL + ") AS " + predicateBindingAlias +
+			" ARRAY JOIN " + strings.Join(predicatePreparation.bindings, ", ")
+		preparedLayers++
+	}
+	if len(predicatePreparation.exactColumns) > 0 {
+		// Exact-numeric keys can depend on the singleton aliases above, so keep
+		// them in their own post-limit layer before compiling the predicate.
+		exactPredicateAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_predicate_exact_source_%d",
+			stage,
+		))
+		preparedSQL = "SELECT *, " +
+			strings.Join(predicatePreparation.exactColumns, ", ") +
+			" FROM (" + preparedSQL + ") AS " + exactPredicateAlias
+		preparedLayers++
+	}
 	if len(groupAliases) > 0 {
 		preparedProjection := []string{
 			"* EXCEPT (" + strings.Join(groupClassificationAliases, ", ") + ")",
@@ -14182,7 +14309,25 @@ func compileStreamAggregate(
 			stage,
 		))
 		preparedSQL = "SELECT " + strings.Join(preparedProjection, ", ") +
-			" FROM (" + orderedInput + ") AS " + preparedAlias
+			" FROM (" + preparedSQL + ") AS " + preparedAlias
+		preparedLayers++
+	}
+	if isConditionalCount {
+		privatePredicateColumns := append(
+			append([]string(nil), predicatePreparation.boundColumns...),
+			predicatePreparation.exactAliases...,
+		)
+		predicateProjection := "*"
+		if len(privatePredicateColumns) > 0 {
+			predicateProjection = "* EXCEPT (" +
+				strings.Join(privatePredicateColumns, ", ") + ")"
+		}
+		predicateAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_predicate_source_%d",
+			stage,
+		))
+		preparedSQL = "SELECT " + predicateProjection + ", " +
+			measureProjection + " FROM (" + preparedSQL + ") AS " + predicateAlias
 		preparedLayers++
 	}
 
@@ -14373,7 +14518,7 @@ func compileStreamAggregate(
 	// Extrema and chronological projections are textually outside the bounded BY
 	// classification subquery, so its placeholders precede group arguments.
 	prefixArgs := make([]any, 0, len(groupArgs)+len(stageMeasureArgs))
-	if isExtrema || isChronological {
+	if isConditionalCount || isExtrema || isChronological {
 		prefixArgs = append(prefixArgs, stageMeasureArgs...)
 		prefixArgs = append(prefixArgs, groupArgs...)
 	} else {
@@ -14416,7 +14561,7 @@ func compileStreamAggregate(
 	windowClause := strings.Join(windowParts, " ")
 	windowExpression := "count() OVER (" + windowClause + ")"
 	switch operator.Measure.Function {
-	case plan.AggregateFunctionCountValues:
+	case plan.AggregateFunctionCountValues, plan.AggregateFunctionCountPredicate:
 		windowExpression = "toUInt64(ifNull(sum(toUInt128(" + measureAlias +
 			")) OVER (" + windowClause + "), toUInt128(0)))"
 	case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
@@ -14504,7 +14649,7 @@ func compileStreamAggregate(
 		" FROM " + windowSource
 
 	next := streamAggregateCompileState(
-		state,
+		durableState,
 		output,
 		outputState,
 		len(groupAliases) > 0,
@@ -14557,7 +14702,7 @@ func compileStreamAggregate(
 		outputValidation = windowAlias + "." + validationColumn
 	}
 	projection := eventAggregateProjection(
-		state,
+		durableState,
 		next,
 		output.Name,
 		outputValue,
@@ -14832,44 +14977,24 @@ func compileEventAggregate(
 	var eventStatsPrerequisiteDefinitions []string
 	prefixArgumentsAfterExisting := false
 	durableState := state
-	predicateState := state
 	switch measure.Function {
 	case plan.AggregateFunctionCountPredicate:
 		sentinelRows := strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
-		predicateMaterializedFields := predicateMaterializationFields(
-			measure.Predicate,
+		predicatePreparation, preparationErr := prepareAggregatePredicate(
 			state,
-		)
-		var bindings, predicateColumns []string
-		if len(predicateMaterializedFields) > 0 {
-			predicateState, bindings, predicateColumns = bindAggregatePredicateFields(
-				state,
-				predicateMaterializedFields,
-				stage,
-			)
-			durableState = predicateMaterializedOutputState(
-				state,
-				predicateMaterializedFields,
-			)
-		}
-		exactNumericFields := repeatedExactNumericPredicateFields(
 			measure.Predicate,
-			predicateState,
+			stage,
+			"eventstats",
 		)
-		if len(exactNumericFields) > 0 {
-			var exactColumns []string
-			var bindErr error
-			predicateState, exactColumns, _, bindErr = bindExactNumericPredicateFields(
-				predicateState,
-				exactNumericFields,
-				stage,
-				"eventstats",
-			)
-			if bindErr != nil {
-				return compiledRelation{}, compileState{}, nil, nil, bindErr
-			}
-			predicateColumns = append(predicateColumns, exactColumns...)
+		if preparationErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, preparationErr
 		}
+		durableState = predicatePreparation.durableState
+		predicateState := predicatePreparation.predicateState
+		predicateColumns := append(
+			append([]string(nil), predicatePreparation.boundColumns...),
+			predicatePreparation.exactColumns...,
+		)
 		if len(predicateColumns) > 0 {
 			materialized := quoteIdentifier(fmt.Sprintf(
 				"__os_eventstats_predicate_input_%d",
@@ -14878,8 +15003,8 @@ func compileEventAggregate(
 			alias := quoteIdentifier(fmt.Sprintf("__os_eventstats_predicate_rows_%d", stage))
 			predicateSQL := "SELECT *, " + strings.Join(predicateColumns, ", ") +
 				" FROM (" + relation.sql + ") AS " + alias
-			if len(bindings) > 0 {
-				predicateSQL += " ARRAY JOIN " + strings.Join(bindings, ", ")
+			if len(predicatePreparation.bindings) > 0 {
+				predicateSQL += " ARRAY JOIN " + strings.Join(predicatePreparation.bindings, ", ")
 			}
 			predicateSQL += " LIMIT " + sentinelRows
 			eventStatsPrerequisiteDefinitions = append(

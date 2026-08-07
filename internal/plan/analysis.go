@@ -110,6 +110,33 @@ func (analyzer *queryAnalyzer) addChronologicalTimeDependency(
 	}, depth)
 }
 
+func (analyzer *queryAnalyzer) visitAggregateMeasure(
+	measure AggregateMeasure,
+	depth int,
+) error {
+	if err := analyzer.validateOutputName(measure.Output, depth); err != nil {
+		return err
+	}
+	switch measure.Function {
+	case AggregateFunctionCountRows, AggregateFunctionCountPredicate:
+	default:
+		if err := analyzer.addField(measure.Input, depth); err != nil {
+			return err
+		}
+	}
+	if err := analyzer.addChronologicalTimeDependency(
+		measure.Function,
+		measure.Input,
+		depth,
+	); err != nil {
+		return err
+	}
+	if measure.Predicate != nil {
+		return analyzer.visitExpression(measure.Predicate, depth)
+	}
+	return nil
+}
+
 func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error {
 	if err := analyzer.enter(depth); err != nil {
 		return err
@@ -172,34 +199,8 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 				"analyze logical query: event aggregate is invalid",
 			)
 		}
-		if err := analyzer.validateOutputName(
-			operator.Measure.Output,
-			depth+1,
-		); err != nil {
+		if err := analyzer.visitAggregateMeasure(operator.Measure, depth+1); err != nil {
 			return err
-		}
-		if operator.Measure.Input.Name != "" {
-			if err := analyzer.addField(
-				operator.Measure.Input,
-				depth+1,
-			); err != nil {
-				return err
-			}
-		}
-		if err := analyzer.addChronologicalTimeDependency(
-			operator.Measure.Function,
-			operator.Measure.Input,
-			depth+1,
-		); err != nil {
-			return err
-		}
-		if operator.Measure.Predicate != nil {
-			if err := analyzer.visitExpression(
-				operator.Measure.Predicate,
-				depth+1,
-			); err != nil {
-				return err
-			}
 		}
 		for _, field := range operator.GroupBy {
 			if err := analyzer.addField(field, depth+1); err != nil {
@@ -213,25 +214,7 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 				"analyze logical query: stream aggregate is invalid",
 			)
 		}
-		if err := analyzer.validateOutputName(
-			operator.Measure.Output,
-			depth+1,
-		); err != nil {
-			return err
-		}
-		if operator.Measure.Input.Name != "" {
-			if err := analyzer.addField(
-				operator.Measure.Input,
-				depth+1,
-			); err != nil {
-				return err
-			}
-		}
-		if err := analyzer.addChronologicalTimeDependency(
-			operator.Measure.Function,
-			operator.Measure.Input,
-			depth+1,
-		); err != nil {
+		if err := analyzer.visitAggregateMeasure(operator.Measure, depth+1); err != nil {
 			return err
 		}
 		return analyzer.addFields(operator.GroupBy, depth+1)
@@ -240,27 +223,8 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			return err
 		}
 		for _, measure := range operator.Measures {
-			if err := analyzer.validateOutputName(measure.Output, depth+1); err != nil {
+			if err := analyzer.visitAggregateMeasure(measure, depth+1); err != nil {
 				return err
-			}
-			switch measure.Function {
-			case AggregateFunctionCountRows, AggregateFunctionCountPredicate:
-			default:
-				if err := analyzer.addField(measure.Input, depth+1); err != nil {
-					return err
-				}
-			}
-			if err := analyzer.addChronologicalTimeDependency(
-				measure.Function,
-				measure.Input,
-				depth+1,
-			); err != nil {
-				return err
-			}
-			if measure.Predicate != nil {
-				if err := analyzer.visitExpression(measure.Predicate, depth+1); err != nil {
-					return err
-				}
 			}
 		}
 		return nil

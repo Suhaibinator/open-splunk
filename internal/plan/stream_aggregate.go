@@ -42,24 +42,33 @@ func validStreamAggregateContract(operator *StreamAggregate) bool {
 		len(operator.GroupBy) > spl.MaximumStatsGroupFields ||
 		operator.WindowRows > spl.MaximumStreamStatsWindow ||
 		!validStreamAggregateOutputName(operator.Measure) ||
-		operator.Measure.Predicate != nil ||
 		operator.Measure.Percentile != 0 ||
 		(len(operator.GroupBy) > 0 && operator.WindowRows > 0 && operator.Global) {
 		return false
 	}
 	switch operator.Measure.Function {
 	case AggregateFunctionCountRows:
-		if operator.Measure.Input.Name != "" ||
+		if operator.Measure.Predicate != nil ||
+			operator.Measure.Input.Name != "" ||
 			operator.Measure.Input.Canonical ||
 			operator.Measure.Input.Path != nil ||
 			operator.Measure.Input.Range != (spl.Range{}) {
+			return false
+		}
+	case AggregateFunctionCountPredicate:
+		if operator.Measure.Input.Name != "" ||
+			operator.Measure.Input.Canonical ||
+			operator.Measure.Input.Path != nil ||
+			operator.Measure.Input.Range != (spl.Range{}) ||
+			!validEventAggregatePredicate(operator.Measure.Predicate) {
 			return false
 		}
 	case AggregateFunctionCountValues, AggregateFunctionSum,
 		AggregateFunctionAverage, AggregateFunctionMinimum,
 		AggregateFunctionMaximum, AggregateFunctionEarliest,
 		AggregateFunctionLatest:
-		if !validStreamAggregateFieldName(operator.Measure.Input.Name) ||
+		if operator.Measure.Predicate != nil ||
+			!validStreamAggregateFieldName(operator.Measure.Input.Name) ||
 			!validResolvedEventAggregateField(operator.Measure.Input) {
 			return false
 		}

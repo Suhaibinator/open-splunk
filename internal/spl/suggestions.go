@@ -522,12 +522,20 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 
 func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
 	optionKeywords, byClosed := streamStatsSuggestionOptions(tokens)
+	aggregateIndex := topLevelStreamStatsAggregateIndex(tokens)
+	var aggregateTokens []token
+	if aggregateIndex >= 0 {
+		aggregateTokens = tokens[aggregateIndex:]
+	}
+	countPredicate := startsCountEvalCall(aggregateTokens, 0)
 	if endsOptionEqual(tokens, "current") || endsOptionEqual(tokens, "window") ||
 		endsOptionEqual(tokens, "global") {
 		return context
 	}
 	if parenthesisDepth(tokens) > 0 {
-		aggregateIndex := topLevelStreamStatsAggregateIndex(tokens)
+		if countPredicate && insideStatsEval(aggregateTokens) {
+			return scalarSuggestionContext(context, false)
+		}
 		if aggregateIndex >= 0 && aggregateIndex+1 < len(tokens) &&
 			tokens[aggregateIndex+1].kind == tokenLeftParen {
 			context.Kinds = []SuggestionKind{SuggestionKindField}
@@ -556,7 +564,18 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		context.Kinds = []SuggestionKind{SuggestionKindField}
 		return context
 	}
+	requiresAlias := countPredicate
+	aliasMissing := topLevelWordIndex(tokens, "AS") < 0
 	if topLevelWordIndex(tokens, "BY") >= 0 {
+		if requiresAlias && aliasMissing {
+			// The parser requires the conditional-count alias before BY. Once a
+			// user has manually typed the invalid order, no append-only completion
+			// can repair it.
+			context.Kinds = nil
+			context.FunctionNames = nil
+			context.Keywords = nil
+			return context
+		}
 		if !byClosed {
 			context.Kinds = append(context.Kinds, SuggestionKindField)
 		}
@@ -566,7 +585,7 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		context.Keywords = optionKeywords
 		return context
 	}
-	if topLevelStreamStatsAggregateIndex(tokens) < 0 {
+	if aggregateIndex < 0 {
 		context = aggregateSuggestionContext(context)
 		context.FunctionNames = streamStatsFunctionNames()
 		context.Kinds = append(context.Kinds, SuggestionKindKeyword)
@@ -574,10 +593,12 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		return context
 	}
 	context.Kinds = []SuggestionKind{SuggestionKindKeyword}
-	if topLevelWordIndex(tokens, "AS") < 0 {
+	if aliasMissing {
 		context.Keywords = append(context.Keywords, "AS")
 	}
-	context.Keywords = append(context.Keywords, "BY")
+	if !requiresAlias || !aliasMissing {
+		context.Keywords = append(context.Keywords, "BY")
+	}
 	context.Keywords = append(context.Keywords, optionKeywords...)
 	return context
 }

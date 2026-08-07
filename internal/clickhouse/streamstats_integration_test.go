@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"slices"
@@ -39,7 +40,7 @@ func testStreamStatsAgainstClickHouse(
 		event := compilerIntegrationEvent(
 			id,
 			"streamstats-host",
-			"streamstats fixture",
+			fmt.Sprintf(`{"value":%d}`, ordinal),
 			indexTime,
 			fields...,
 		)
@@ -449,6 +450,207 @@ func testStreamStatsAgainstClickHouse(
 		ascendingIDs,
 		[]uint64{0, 0, 0, 0, 0, 0, 0},
 	)
+
+	for _, test := range []struct {
+		name       string
+		options    string
+		predicate  string
+		wantCounts []uint64
+	}{
+		{
+			name:       "conditional complete prefix",
+			predicate:  `event_id="streamstats-01" OR event_id="streamstats-02" OR event_id="streamstats-05" OR event_id="streamstats-07"`,
+			wantCounts: []uint64{1, 2, 2, 2, 3, 3, 4},
+		},
+		{
+			name:       "conditional complete prior prefix",
+			options:    "current=false",
+			predicate:  `event_id="streamstats-01" OR event_id="streamstats-02" OR event_id="streamstats-05" OR event_id="streamstats-07"`,
+			wantCounts: []uint64{0, 1, 2, 2, 2, 3, 3},
+		},
+		{
+			name:       "conditional two-row current window",
+			options:    "window=2",
+			predicate:  `event_id="streamstats-01" OR event_id="streamstats-02" OR event_id="streamstats-05" OR event_id="streamstats-07"`,
+			wantCounts: []uint64{1, 2, 1, 0, 1, 1, 1},
+		},
+		{
+			name:       "conditional two-row prior window",
+			options:    "current=false window=2",
+			predicate:  `event_id="streamstats-01" OR event_id="streamstats-02" OR event_id="streamstats-05" OR event_id="streamstats-07"`,
+			wantCounts: []uint64{0, 1, 2, 1, 0, 1, 1},
+		},
+		{
+			name:       "conditional nullable branches",
+			predicate:  `if(event_id="streamstats-01", true, if(event_id="streamstats-02", null, if(event_id="streamstats-03", true, false)))=true`,
+			wantCounts: []uint64{1, 1, 2, 2, 2, 2, 2},
+		},
+		{
+			name:       "conditional missing comparison",
+			predicate:  `streamstats_missing=1`,
+			wantCounts: []uint64{0, 0, 0, 0, 0, 0, 0},
+		},
+		{
+			name:       "conditional exact numeric and string calls",
+			predicate:  `(streamstats_group=500 AND match(event_id, "-(01|03|07)$")) OR like(event_id, "%06")`,
+			wantCounts: []uint64{0, 0, 1, 1, 1, 2, 3},
+		},
+	} {
+		assertCounts(
+			test.name,
+			base+` | sort 0 +event_id | streamstats `+test.options+
+				` count(eval(`+test.predicate+`)) AS matched | table event_id matched`,
+			ascendingIDs,
+			test.wantCounts,
+		)
+	}
+
+	assertCounts(
+		"conditional alias replacement reads incoming field",
+		base+` | sort 0 +event_id`+
+			` | streamstats count(eval(streamstats_existing="shadowed")) AS streamstats_existing`+
+			` | table event_id streamstats_existing`,
+		ascendingIDs,
+		[]uint64{1, 1, 1, 1, 1, 1, 1},
+	)
+	assertCounts(
+		"projected-away conditional input",
+		base+` | sort 0 +event_id | fields event_id`+
+			` | streamstats count(eval(isnotnull(streamstats_group))) AS matched`+
+			` | table event_id matched`,
+		ascendingIDs,
+		[]uint64{0, 0, 0, 0, 0, 0, 0},
+	)
+
+	calculatedConditional := compile(
+		base + ` | sort 0 +event_id` +
+			` | eval selected=if(event_id="streamstats-01" OR event_id="streamstats-05", "wanted", "other")` +
+			` | streamstats count(eval(selected="wanted")) AS matched` +
+			` | where selected="wanted" | table event_id matched`,
+	)
+	if got := strings.Count(calculatedConditional.SQL, "ARRAY JOIN"); got != 0 {
+		t.Fatalf(
+			"fixed calculated streamstats count(eval) singleton fences = %d, want none:\n%s",
+			got,
+			calculatedConditional.SQL,
+		)
+	}
+	calculatedConditionalGot := collectCounts(
+		"calculated streamstats count(eval)",
+		calculatedConditional,
+	)
+	calculatedConditionalWant := []countRow{
+		{id: "streamstats-01", count: 1},
+		{id: "streamstats-05", count: 2},
+	}
+	if !reflect.DeepEqual(calculatedConditionalGot, calculatedConditionalWant) {
+		t.Fatalf(
+			"calculated streamstats count(eval) rows = %#v, want %#v",
+			calculatedConditionalGot,
+			calculatedConditionalWant,
+		)
+	}
+
+	calculatedNumericConditional := compile(
+		base + ` | sort 0 +event_id` +
+			` | spath input=_raw output=selected path=value` +
+			` | streamstats count(eval(selected>1 AND selected<5)) AS matched` +
+			` | table event_id matched`,
+	)
+	if got := strings.Count(calculatedNumericConditional.SQL, "ARRAY JOIN"); got != 1 {
+		t.Fatalf(
+			"calculated numeric streamstats count(eval) singleton fences = %d, want one:\n%s",
+			got,
+			calculatedNumericConditional.SQL,
+		)
+	}
+	for _, definition := range []string{
+		` AS "__os_streamstats_exact_key_`,
+		` AS "__os_streamstats_exact_numeric_`,
+	} {
+		if got := strings.Count(calculatedNumericConditional.SQL, definition); got != 1 {
+			t.Fatalf(
+				"calculated numeric streamstats count(eval) definition %q count = %d, want one:\n%s",
+				definition,
+				got,
+				calculatedNumericConditional.SQL,
+			)
+		}
+	}
+	calculatedNumericConditionalGot := collectCounts(
+		"calculated numeric streamstats count(eval)",
+		calculatedNumericConditional,
+	)
+	calculatedNumericConditionalWant := []countRow{
+		{id: "streamstats-01", count: 0},
+		{id: "streamstats-02", count: 1},
+		{id: "streamstats-03", count: 2},
+		{id: "streamstats-04", count: 3},
+		{id: "streamstats-05", count: 3},
+		{id: "streamstats-06", count: 3},
+		{id: "streamstats-07", count: 3},
+	}
+	if !reflect.DeepEqual(
+		calculatedNumericConditionalGot,
+		calculatedNumericConditionalWant,
+	) {
+		t.Fatalf(
+			"calculated numeric streamstats count(eval) rows = %#v, want %#v",
+			calculatedNumericConditionalGot,
+			calculatedNumericConditionalWant,
+		)
+	}
+
+	groupedConditional := compile(
+		base + ` | sort 0 +event_id` +
+			` | streamstats window=2 global=false count(eval(event_id!="streamstats-03")) AS matched BY streamstats_group` +
+			` | table event_id matched`,
+	)
+	groupedConditionalRows, err := connection.Query(
+		ctx,
+		groupedConditional.SQL,
+		groupedConditional.Args...,
+	)
+	if err != nil {
+		t.Fatalf(
+			"execute grouped streamstats count(eval): %v\nSQL: %s\nargs: %#v",
+			err,
+			groupedConditional.SQL,
+			groupedConditional.Args,
+		)
+	}
+	var groupedConditionalGot []groupedRow
+	for groupedConditionalRows.Next() {
+		var row groupedRow
+		if scanErr := groupedConditionalRows.Scan(&row.id, &row.peers); scanErr != nil {
+			_ = groupedConditionalRows.Close()
+			t.Fatalf("scan grouped streamstats count(eval): %v", scanErr)
+		}
+		groupedConditionalGot = append(groupedConditionalGot, row)
+	}
+	if rowsErr := groupedConditionalRows.Err(); rowsErr != nil {
+		_ = groupedConditionalRows.Close()
+		t.Fatalf("iterate grouped streamstats count(eval): %v", rowsErr)
+	}
+	if closeErr := groupedConditionalRows.Close(); closeErr != nil {
+		t.Fatalf("close grouped streamstats count(eval): %v", closeErr)
+	}
+	groupedConditionalWant := []groupedRow{
+		{id: "streamstats-01", peers: &one},
+		{id: "streamstats-02", peers: &one},
+		{id: "streamstats-03", peers: &one},
+		{id: "streamstats-04"},
+		{id: "streamstats-05"},
+		{id: "streamstats-06", peers: &two},
+		{id: "streamstats-07", peers: &one},
+	}
+	if !reflect.DeepEqual(groupedConditionalGot, groupedConditionalWant) {
+		t.Fatalf(
+			"grouped streamstats count(eval) rows = %#v, want %#v",
+			groupedConditionalGot,
+			groupedConditionalWant,
+		)
+	}
 
 	type sumRow struct {
 		id    string
@@ -1100,6 +1302,31 @@ func testStreamStatsAgainstClickHouse(
 		)
 	}
 
+	exactConditionalBoundary := compileBoundary(
+		`index=eventstats-boundary source="eventstats-boundary" host="in"` +
+			` | streamstats window=10000 count(eval(host="in")) AS matched` +
+			` | sort 0 -matched | head 1 | table matched`,
+	)
+	var exactConditionalMaximum uint64
+	if err := connection.QueryRow(
+		ctx,
+		exactConditionalBoundary.SQL,
+		exactConditionalBoundary.Args...,
+	).Scan(&exactConditionalMaximum); err != nil {
+		t.Fatalf(
+			"execute exact streamstats count(eval) boundary: %v\nSQL: %s",
+			err,
+			exactConditionalBoundary.SQL,
+		)
+	}
+	if exactConditionalMaximum != MaximumStreamStatsInputRows {
+		t.Fatalf(
+			"exact streamstats count(eval) boundary maximum = %d, want %d",
+			exactConditionalMaximum,
+			MaximumStreamStatsInputRows,
+		)
+	}
+
 	exactSumBoundary := compileBoundary(
 		`index=eventstats-boundary source="eventstats-boundary" host="in"` +
 			` | streamstats window=10000 sum(eventstats_missing) AS total` +
@@ -1153,6 +1380,25 @@ func testStreamStatsAgainstClickHouse(
 		t.Fatalf(
 			"downstream-hidden streamstats overflow error = %v, want %q",
 			overflowErr,
+			StreamStatsInputLimitMarker,
+		)
+	}
+
+	hiddenConditionalOverflow := compileBoundary(
+		`index=eventstats-boundary source="eventstats-boundary"` +
+			` | streamstats count(eval(event_id="not-present")) AS matched` +
+			` | fields - matched | search event_id="not-present"`,
+	)
+	conditionalOverflowErr := executeCompiledExpectingNoRows(
+		ctx,
+		connection,
+		hiddenConditionalOverflow,
+	)
+	if conditionalOverflowErr == nil ||
+		!strings.Contains(conditionalOverflowErr.Error(), StreamStatsInputLimitMarker) {
+		t.Fatalf(
+			"downstream-hidden streamstats count(eval) overflow error = %v, want %q",
+			conditionalOverflowErr,
 			StreamStatsInputLimitMarker,
 		)
 	}

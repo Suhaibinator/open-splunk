@@ -225,6 +225,63 @@ func TestReexecutionSourceRebuildsStreamStatsCountFieldFromStoredSPL(t *testing.
 	}
 }
 
+func TestReexecutionSourceRebuildsStreamStatsCountEvalFromStoredSPL(t *testing.T) {
+	t.Parallel()
+
+	searches, _, access := newReexecutionTestSearches()
+	searches.job.SPL = `index=main | table source,service | streamstats current=false window=3 global=false count(eval(source="api")) AS prior_api BY service`
+	schema := searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: "source", Kind: searchjobs.ValueKindString},
+		{Name: "service", Kind: searchjobs.ValueKindString},
+		{Name: "prior_api", Kind: searchjobs.ValueKindUnsigned, Nullable: true},
+	}}
+	searches.pin.schema = schema
+	var captured clickhouse.CompiledQuery
+	executor := reexecutionTestExecutor(func(
+		_ context.Context,
+		query clickhouse.CompiledQuery,
+		sink searchjobs.ResultSink,
+	) error {
+		captured = query
+		return sink.SetSchema(schema)
+	})
+	source := newReexecutionTestSource(t, searches, executor, nil)
+	lease, err := source.AcquireResultsFor(
+		context.Background(),
+		access,
+		searches.job.ID,
+	)
+	if err != nil {
+		t.Fatalf("AcquireResultsFor(streamstats count(eval)): %v", err)
+	}
+	if _, ok, nextErr := lease.Next(context.Background()); ok || nextErr != nil {
+		t.Fatalf("Next(streamstats count(eval)) = ok %t err %v", ok, nextErr)
+	}
+	for _, required := range []string{
+		`toString("source") = CAST(? AS String)`,
+		`ROWS BETWEEN 3 PRECEDING AND 1 PRECEDING`,
+		`AS "prior_api"`,
+		clickhouse.StreamStatsInputLimitMarker,
+	} {
+		if !strings.Contains(captured.SQL, required) {
+			t.Fatalf(
+				"re-executed streamstats count(eval) SQL missing %q:\n%s",
+				required,
+				captured.SQL,
+			)
+		}
+	}
+	if !slices.Contains(captured.Args, any("api")) {
+		t.Fatalf(
+			"re-executed streamstats count(eval) args = %#v, want predicate value api",
+			captured.Args,
+		)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("close streamstats count(eval) re-execution: %v", err)
+	}
+}
+
 func TestReexecutionSourceRebuildsStreamStatsSumFromStoredSPL(t *testing.T) {
 	t.Parallel()
 
