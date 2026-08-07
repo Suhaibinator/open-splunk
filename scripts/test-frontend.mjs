@@ -7,13 +7,17 @@ import process from "node:process";
 const workspace = process.cwd();
 const outputDirectory = await mkdtemp(path.join(tmpdir(), "open-splunk-frontend-tests-"));
 const testFiles = [
+  path.join("app", "admin", "admin-resource-data.test.ts"),
+  path.join("app", "activity", "backend-audit-data.test.ts"),
   path.join("app", "search-workspace", "live-preview.test.ts"),
   path.join("app", "search-workspace", "progress-revision.test.ts"),
   path.join("app", "search-workspace", "categorical-interaction.test.ts"),
   path.join("app", "search-workspace", "time-range.test.ts"),
   path.join("app", "search-workspace", "workspace-utils.test.ts"),
   path.join("app", "search-workspace", "virtual-table.test.ts"),
+  path.join("app", "datasets", "index-observability-data.test.ts"),
   path.join("lib", "api", "pagination.test.ts"),
+  path.join("lib", "api", "administrator-session.test.ts"),
   path.join("lib", "api", "protobuf-forward-compat.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "api", "system-bootstrap.test.ts"),

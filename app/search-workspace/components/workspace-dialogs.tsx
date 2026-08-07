@@ -1,4 +1,5 @@
 import type { DemoHistoryEntry, DemoSavedSearch } from "@/lib/demo/search-data";
+import type { InspectSearchJobResponse } from "@/gen/ts/open_splunk/v1/search_inspection_api";
 
 import { NUMBER_FORMAT } from "../constants";
 import {
@@ -104,6 +105,11 @@ interface WorkspaceDialogsProps {
   historyFilter: string;
   jobCancelState: DialogActionState;
   jobInspectorNotices: string[] | null;
+  jobInspection: {
+    status: "idle" | "loading" | "available" | "error";
+    response?: InspectSearchJobResponse;
+    error?: string;
+  };
   isRunning: boolean;
   modal: ModalName | null;
   phase: JobPhase;
@@ -185,6 +191,7 @@ export function WorkspaceDialogs({
   historyFilter,
   jobCancelState,
   jobInspectorNotices,
+  jobInspection,
   isRunning,
   modal,
   phase,
@@ -744,6 +751,24 @@ export function WorkspaceDialogs({
             : jobInspectorNotices.length === 0
               ? <p>No execution warnings or sequence gaps were reported by the data source.</p>
               : <div className={styles.inspectorNotices}><strong>Execution notices</strong><ul>{jobInspectorNotices.map((notice) => <li key={notice}>{notice}</li>)}</ul></div>}
+          {jobInspection.status === "loading" ? <output>Loading the administrator inspection plan…</output> : null}
+          {jobInspection.status === "error" ? <p role="alert">Inspection unavailable: {jobInspection.error}</p> : null}
+          {jobInspection.status === "available" && jobInspection.response !== undefined ? (
+            <>
+              <div className={styles.inspectorNotices}>
+                <strong>Logical plan</strong>
+                {jobInspection.response.logicalPlan?.stages.length ? (
+                  <ol>{jobInspection.response.logicalPlan.stages.map((stage) => (
+                    <li key={`${stage.stageIndex}-${stage.operator}`}><code>{stage.operator}</code>{stage.outputFields.length > 0 ? ` → ${stage.outputFields.join(", ")}` : ""}</li>
+                  ))}</ol>
+                ) : <p>No logical stages were returned.</p>}
+              </div>
+              <div className="inspector-query"><span>Physical plan nodes</span><code>{jobInspection.response.physicalPlan?.nodeTypes.join(" → ") || "Not returned"}</code></div>
+              <div className="inspector-query"><span>Generated SQL</span><code>{jobInspection.response.generatedSql || "Not returned"}</code></div>
+              <div className="inspector-query"><span>EXPLAIN output</span><code>{jobInspection.response.explainText || "Not returned"}</code></div>
+              <div className="inspector-query"><span>Diagnostic query ID</span><code>{jobInspection.response.diagnosticQueryId || "Not returned"}</code></div>
+            </>
+          ) : null}
         </div>
       </Modal>
     );

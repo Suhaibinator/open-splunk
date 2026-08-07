@@ -8,6 +8,15 @@ export {
   isHttpError,
   isHttpStatus,
 } from "./protobuf-transport";
+
+export {
+  MAXIMUM_ADMINISTRATOR_BEARER_TOKEN_BYTES,
+  MINIMUM_ADMINISTRATOR_BEARER_TOKEN_BYTES,
+  clearAdministratorBearerToken,
+  hasAdministratorBearerToken,
+  isValidAdministratorBearerToken,
+  setAdministratorBearerToken,
+} from "./administrator-session";
 export type {
   ProtobufCodec,
   ProtobufRequestOptions,
@@ -18,6 +27,9 @@ export type {
 export { OpenSplunkApiClient, createOpenSplunkApiClient } from "./open-splunk-client";
 
 export {
+  appRoutes,
+  auditEventRoutes,
+  collectorRoutes,
   exportRoutes,
   historyRoutes,
   indexRoutes,
@@ -25,6 +37,7 @@ export {
   openSplunkRoutes,
   savedSearchRoutes,
   searchRoutes,
+  searchAttemptAuditRoutes,
   systemRoutes,
 } from "./routes";
 export type { RouteRequest, RouteResponse } from "./routes";

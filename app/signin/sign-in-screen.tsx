@@ -1,6 +1,16 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { OPEN_SPLUNK_BUILD_LABEL } from "@/lib/build-identity";
+import {
+  clearAdministratorBearerToken,
+  hasAdministratorBearerToken,
+  isValidAdministratorBearerToken,
+  setAdministratorBearerToken,
+} from "@/lib/api";
 
 interface SignInScreenProps {
   dataMode: "backend" | "demo";
@@ -8,6 +18,37 @@ interface SignInScreenProps {
 
 export function SignInScreen({ dataMode }: SignInScreenProps) {
   const localSession = dataMode === "backend";
+  const router = useRouter();
+  const [administratorToken, setAdministratorToken] = useState("");
+  const [administratorSessionActive, setAdministratorSessionActive] = useState(false);
+  const [showAdministratorToken, setShowAdministratorToken] = useState(false);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAdministratorSessionActive(hasAdministratorBearerToken());
+  }, []);
+
+  function openAdministratorSession(event: React.FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const token = administratorToken.trim();
+    if (!isValidAdministratorBearerToken(token)) {
+      setTokenError("Enter the 32–512 character administrator bearer token configured on this server.");
+      return;
+    }
+    setAdministratorBearerToken(token);
+    setAdministratorToken("");
+    setTokenError(null);
+    setAdministratorSessionActive(true);
+    router.push("/admin/");
+  }
+
+  function clearAdministratorSession(): void {
+    clearAdministratorBearerToken();
+    setAdministratorToken("");
+    setTokenError(null);
+    setAdministratorSessionActive(false);
+  }
+
   return (
     <main className="signin-page">
       <section className="signin-story" aria-label="Open Splunk product introduction">
@@ -42,12 +83,46 @@ export function SignInScreen({ dataMode }: SignInScreenProps) {
       <section className="signin-panel">
         <div className="signin-card">
           <div className="signin-mobile-brand"><span>open</span><b>&gt;</b><span>splunk</span></div>
-          <header><span className="signin-lock">↳</span><h1>{localSession ? "Local session" : "Frontend preview"}</h1><p>{localSession ? "Access is provided by the trusted local server configuration." : "Authentication is not connected in this build."}</p></header>
-          <div className="signin-help-notice" role="note"><span>i</span>{localSession ? "No credentials are requested or stored. User accounts and sign-out are unavailable in single-user mode." : "Do not enter credentials. This preview does not check or store passwords."}</div>
-          <Link className="signin-submit" href="/" style={{ textDecoration: "none" }}>{localSession ? "Continue to local workspace" : "Continue to preview"}</Link>
+          <header><span className="signin-lock">↳</span><h1>{localSession ? "Administrator session" : "Frontend preview"}</h1><p>{localSession ? "Use the bearer token configured for this local server." : "Authentication is not connected in this build."}</p></header>
+          {localSession ? (
+            administratorSessionActive ? (
+              <>
+                <div className="signin-help-notice" role="note"><span>✓</span>The administrator credential is available to protected API calls in this tab.</div>
+                <button className="signin-submit" type="button" onClick={() => router.push("/admin/")}>Open Administration</button>
+                <button className="signin-preview-link" type="button" onClick={clearAdministratorSession}>Clear administrator session</button>
+              </>
+            ) : (
+              <form onSubmit={openAdministratorSession}>
+                <label htmlFor="administrator-token">Administrator bearer token</label>
+                <div className="signin-password-field">
+                  <input
+                    id="administrator-token"
+                    name="administrator-token"
+                    type={showAdministratorToken ? "text" : "password"}
+                    value={administratorToken}
+                    onChange={(event) => { setAdministratorToken(event.target.value); setTokenError(null); }}
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    aria-invalid={tokenError !== null}
+                    aria-describedby="administrator-token-lifetime"
+                  />
+                  <button type="button" onClick={() => setShowAdministratorToken((current) => !current)}>{showAdministratorToken ? "Hide" : "Show"}</button>
+                </div>
+                {tokenError === null ? null : <div className="signin-error" role="alert"><span>!</span>{tokenError}</div>}
+                <div id="administrator-token-lifetime" className="signin-help-notice" role="note"><span>i</span>The token stays in memory only. Reloading, closing this tab, or opening a new tab clears it; the server verifies it on the next protected request.</div>
+                <button className="signin-submit" type="submit">Open administrator session</button>
+              </form>
+            )
+          ) : (
+            <>
+              <div className="signin-help-notice" role="note"><span>i</span>Do not enter credentials. This preview does not check or store passwords.</div>
+              <Link className="signin-submit" href="/" style={{ textDecoration: "none" }}>Continue to preview</Link>
+            </>
+          )}
           <div className="signin-divider"><span>or</span></div>
           <Link className="signin-preview-link" href="/search/">Open Search &amp; Reporting <span aria-hidden="true">›</span></Link>
-          <footer><span>Open Splunk {OPEN_SPLUNK_BUILD_LABEL} · {localSession ? "local server" : "preview"}</span><span>{localSession ? "Single-user access" : "Authentication unavailable"}</span></footer>
+          <footer><span>Open Splunk {OPEN_SPLUNK_BUILD_LABEL} · {localSession ? "local server" : "preview"}</span><span>{localSession ? "Memory-only bearer session" : "Authentication unavailable"}</span></footer>
         </div>
       </section>
     </main>

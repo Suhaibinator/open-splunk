@@ -1,9 +1,13 @@
 import * as ExportApi from "@/gen/ts/open_splunk/v1/export_api";
 import * as HistoryApi from "@/gen/ts/open_splunk/v1/history_api";
 import * as IndexApi from "@/gen/ts/open_splunk/v1/index_api";
+import * as AppApi from "@/gen/ts/open_splunk/v1/app_api";
+import * as AuditApi from "@/gen/ts/open_splunk/v1/audit_api";
 import * as CollectorAdminApi from "@/gen/ts/open_splunk/v1/collector_admin_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/v1/saved_search_api";
 import * as SearchApi from "@/gen/ts/open_splunk/v1/search_api";
+import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/v1/search_attempt_audit_api";
+import * as SearchInspectionApi from "@/gen/ts/open_splunk/v1/search_inspection_api";
 import * as SystemApi from "@/gen/ts/open_splunk/v1/system_api";
 
 import { defineProtobufRoute, type ProtobufRoute } from "./protobuf-transport";
@@ -53,6 +57,88 @@ export const indexRoutes = {
     IndexApi.SetIndexStateRequest,
     IndexApi.SetIndexStateResponse,
   ),
+  delete: defineProtobufRoute(
+    "/api/v1/indexes/delete",
+    IndexApi.DeleteIndexRequest,
+    IndexApi.DeleteIndexResponse,
+  ),
+  stats: defineProtobufRoute(
+    "/api/v1/indexes/stats/get",
+    IndexApi.GetIndexStatsRequest,
+    IndexApi.GetIndexStatsResponse,
+  ),
+} as const;
+
+export const appRoutes = {
+  create: defineProtobufRoute(
+    "/api/v1/apps/create",
+    AppApi.CreateAppRequest,
+    AppApi.CreateAppResponse,
+  ),
+  get: defineProtobufRoute(
+    "/api/v1/apps/get",
+    AppApi.GetAppRequest,
+    AppApi.GetAppResponse,
+  ),
+  list: defineProtobufRoute(
+    "/api/v1/apps/list",
+    AppApi.ListAppsRequest,
+    AppApi.ListAppsResponse,
+  ),
+  update: defineProtobufRoute(
+    "/api/v1/apps/update",
+    AppApi.UpdateAppRequest,
+    AppApi.UpdateAppResponse,
+  ),
+  setState: defineProtobufRoute(
+    "/api/v1/apps/state/set",
+    AppApi.SetAppStateRequest,
+    AppApi.SetAppStateResponse,
+  ),
+  delete: defineProtobufRoute(
+    "/api/v1/apps/delete",
+    AppApi.DeleteAppRequest,
+    AppApi.DeleteAppResponse,
+  ),
+} as const;
+
+export const collectorRoutes = {
+  list: defineProtobufRoute(
+    "/api/v1/collectors/list",
+    CollectorAdminApi.ListCollectorsRequest,
+    CollectorAdminApi.ListCollectorsResponse,
+  ),
+  get: defineProtobufRoute(
+    "/api/v1/collectors/get",
+    CollectorAdminApi.GetCollectorRequest,
+    CollectorAdminApi.GetCollectorResponse,
+  ),
+  update: defineProtobufRoute(
+    "/api/v1/collectors/update",
+    CollectorAdminApi.UpdateCollectorRequest,
+    CollectorAdminApi.UpdateCollectorResponse,
+  ),
+  setState: defineProtobufRoute(
+    "/api/v1/collectors/state/set",
+    CollectorAdminApi.SetCollectorEnabledRequest,
+    CollectorAdminApi.SetCollectorEnabledResponse,
+  ),
+} as const;
+
+export const auditEventRoutes = {
+  list: defineProtobufRoute(
+    "/api/v1/audit/events/list",
+    AuditApi.ListAuditEventsRequest,
+    AuditApi.ListAuditEventsResponse,
+  ),
+} as const;
+
+export const searchAttemptAuditRoutes = {
+  list: defineProtobufRoute(
+    "/api/v1/audit/search-attempts/list",
+    SearchAttemptAuditApi.ListSearchAttemptAuditEventsRequest,
+    SearchAttemptAuditApi.ListSearchAttemptAuditEventsResponse,
+  ),
 } as const;
 
 export const ingestionTokenRoutes = {
@@ -84,6 +170,16 @@ export const ingestionTokenRoutes = {
 } as const;
 
 export const searchRoutes = {
+  validate: defineProtobufRoute(
+    "/api/v1/search/validate",
+    SearchApi.ValidateSearchRequest,
+    SearchApi.ValidateSearchResponse,
+  ),
+  suggestions: defineProtobufRoute(
+    "/api/v1/search/suggestions",
+    SearchApi.GetSearchSuggestionsRequest,
+    SearchApi.GetSearchSuggestionsResponse,
+  ),
   create: defineProtobufRoute(
     "/api/v1/search/jobs/create",
     SearchApi.CreateSearchJobRequest,
@@ -123,6 +219,11 @@ export const searchRoutes = {
     "/api/v1/search/jobs/cancel",
     SearchApi.CancelSearchJobRequest,
     SearchApi.CancelSearchJobResponse,
+  ),
+  inspect: defineProtobufRoute(
+    "/api/v1/search/jobs/inspect",
+    SearchInspectionApi.InspectSearchJobRequest,
+    SearchInspectionApi.InspectSearchJobResponse,
   ),
 } as const;
 
@@ -207,6 +308,10 @@ export const exportRoutes = {
 
 export const openSplunkRoutes = {
   system: systemRoutes,
+  apps: appRoutes,
+  collectors: collectorRoutes,
+  auditEvents: auditEventRoutes,
+  searchAttemptAudit: searchAttemptAuditRoutes,
   indexes: indexRoutes,
   ingestionTokens: ingestionTokenRoutes,
   search: searchRoutes,

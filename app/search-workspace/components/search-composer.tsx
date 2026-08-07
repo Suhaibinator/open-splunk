@@ -23,6 +23,8 @@ interface CompletionItem {
   label: string;
   insertion: string;
   detail: string;
+  replaceStart?: number;
+  replaceEnd?: number;
 }
 
 interface SearchComposerProps {
@@ -63,7 +65,7 @@ interface SearchComposerProps {
   onEditorFocusedChange: (focused: boolean) => void;
   onEditorKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onEditorScroll: (event: UIEvent<HTMLTextAreaElement>) => void;
-  onInsertCompletion: (insertion: string) => void;
+  onInsertCompletion: (completion: CompletionItem) => void;
   onModalChange: (modal: ModalName | null) => void;
   onRelativeRangeChange: (amount: number, unit: "m" | "h" | "d") => void;
   onRunSearch: () => void;
@@ -223,7 +225,7 @@ export function SearchComposer({
                   key={completion.label}
                   onMouseEnter={() => onCompletionIndexChange(index)}
                   onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => onInsertCompletion(completion.insertion)}
+                  onClick={() => onInsertCompletion(completion)}
                 >
                   <code>{completion.label}</code><span>{completion.detail}</span><kbd>{index === completionIndex ? "↵" : ""}</kbd>
                 </button>

@@ -12,11 +12,13 @@ import Link from "next/link";
 
 import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/v1/history_api";
 import { SearchJobState } from "@/gen/ts/open_splunk/v1/search";
+import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
   createOpenSplunkApiClient,
   getSystemBootstrap,
   recordNextPageToken,
   RepeatedPageCursorError,
+  supportsServerFeature,
   type SystemBootstrapModel,
 } from "@/lib/api";
 import { historySearchLaunchHref } from "@/lib/search/launch-url";
@@ -39,9 +41,11 @@ import {
   searchJobStateLabel,
 } from "./backend-activity-shared";
 import { BackendLiveJobs } from "./backend-live-jobs";
+import { BackendMutationAudit, BackendSearchAttemptAudit } from "./backend-audit-views";
+import { BackendExportJobs } from "./backend-export-jobs";
 
 type ActivityFilter = "all" | "completed" | "failed" | "canceled" | "warnings";
-type ActivityView = "jobs" | "history";
+type ActivityView = "jobs" | "history" | "exports" | "mutations" | "attempts";
 type LoadState = "loading" | "available" | "unavailable" | "error";
 type HistoryModal =
   | { action: "delete"; target: ServerSearchHistoryEntry }
@@ -96,30 +100,70 @@ function historyFilterLabel(filter: ActivityFilter): string {
 }
 
 export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsoleProps) {
+  const client = useMemo(() => createOpenSplunkApiClient({ baseUrl: apiBaseUrl }), [apiBaseUrl]);
   const [view, setView] = useState<ActivityView>("jobs");
-  const [historyVisited, setHistoryVisited] = useState(false);
+  const [visited, setVisited] = useState<ReadonlySet<ActivityView>>(new Set(["jobs"]));
+  const [bootstrap, setBootstrap] = useState<SystemBootstrapModel | null>(null);
   const jobTabRef = useRef<HTMLButtonElement>(null);
   const historyTabRef = useRef<HTMLButtonElement>(null);
+  const exportsTabRef = useRef<HTMLButtonElement>(null);
+  const mutationTabRef = useRef<HTMLButtonElement>(null);
+  const attemptTabRef = useRef<HTMLButtonElement>(null);
+  const mutationAuditAvailable = bootstrap !== null
+    && supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_AUDIT_SEARCH);
+  const searchAttemptAuditAvailable = bootstrap !== null
+    && supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT);
+  const exportsAvailable = bootstrap !== null && (
+    supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_EXPORT_CSV)
+    || supportsServerFeature(bootstrap, ServerFeature.SERVER_FEATURE_EXPORT_JSON_LINES)
+  );
+  const availableViews = useMemo<ActivityView[]>(() => [
+    "jobs",
+    "history",
+    ...(exportsAvailable ? ["exports" as const] : []),
+    ...(mutationAuditAvailable ? ["mutations" as const] : []),
+    ...(searchAttemptAuditAvailable ? ["attempts" as const] : []),
+  ], [exportsAvailable, mutationAuditAvailable, searchAttemptAuditAvailable]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let current = true;
+    void getSystemBootstrap(client, undefined, { signal: controller.signal })
+      .then((value) => { if (current) setBootstrap(value); })
+      .catch(() => { if (current) setBootstrap(null); });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [client]);
 
   function selectView(nextView: ActivityView) {
     setView(nextView);
-    if (nextView === "history") setHistoryVisited(true);
+    setVisited((current) => new Set(current).add(nextView));
   }
 
   function navigateTabs(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
-    const currentView: ActivityView = event.currentTarget.id === "activity-jobs-tab" ? "jobs" : "history";
-    const nextView: ActivityView = event.key === "Home"
-      ? "jobs"
+    const currentView = event.currentTarget.dataset.view as ActivityView;
+    const currentIndex = Math.max(0, availableViews.indexOf(currentView));
+    const nextIndex = event.key === "Home"
+      ? 0
       : event.key === "End"
-        ? "history"
+        ? availableViews.length - 1
         : event.key === "ArrowLeft"
-          ? currentView === "jobs" ? "history" : "jobs"
-          : currentView === "history" ? "jobs" : "history";
+          ? (currentIndex - 1 + availableViews.length) % availableViews.length
+          : (currentIndex + 1) % availableViews.length;
+    const nextView = availableViews[nextIndex];
     selectView(nextView);
     window.requestAnimationFrame(() => {
-      (nextView === "jobs" ? jobTabRef.current : historyTabRef.current)?.focus();
+      ({
+        jobs: jobTabRef,
+        history: historyTabRef,
+        exports: exportsTabRef,
+        mutations: mutationTabRef,
+        attempts: attemptTabRef,
+      }[nextView].current)?.focus();
     });
   }
 
@@ -128,12 +172,13 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
       <PageHeading
         eyebrow="OPERATIONS"
         title="Activity"
-        description="Inspect retained backend jobs and separately persisted terminal-search history."
+        description="Inspect retained search and export jobs, search history, and the audit journals advertised by this backend."
       />
       <div className="activity-view-tabs" role="tablist" aria-label="Activity data view">
         <button
           ref={jobTabRef}
           id="activity-jobs-tab"
+          data-view="jobs"
           role="tab"
           type="button"
           aria-controls="activity-jobs-panel"
@@ -148,6 +193,7 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
         <button
           ref={historyTabRef}
           id="activity-history-tab"
+          data-view="history"
           role="tab"
           type="button"
           aria-controls="activity-history-panel"
@@ -159,13 +205,79 @@ export function BackendActivityConsole({ apiBaseUrl }: BackendActivityConsolePro
           <span aria-hidden="true">▤</span>
           <span><strong>Search history</strong><small>Persisted terminal metadata</small></span>
         </button>
+        {exportsAvailable ? (
+          <button
+            ref={exportsTabRef}
+            id="activity-exports-tab"
+            data-view="exports"
+            role="tab"
+            type="button"
+            aria-controls="activity-exports-panel"
+            aria-selected={view === "exports"}
+            tabIndex={view === "exports" ? 0 : -1}
+            onClick={() => selectView("exports")}
+            onKeyDown={navigateTabs}
+          >
+            <span aria-hidden="true">⇩</span>
+            <span><strong>Export jobs</strong><small>Retained artifact generation</small></span>
+          </button>
+        ) : null}
+        {mutationAuditAvailable ? (
+          <button
+            ref={mutationTabRef}
+            id="activity-mutations-tab"
+            data-view="mutations"
+            role="tab"
+            type="button"
+            aria-controls="activity-mutations-panel"
+            aria-selected={view === "mutations"}
+            tabIndex={view === "mutations" ? 0 : -1}
+            onClick={() => selectView("mutations")}
+            onKeyDown={navigateTabs}
+          >
+            <span aria-hidden="true">⚙</span>
+            <span><strong>Mutation audit</strong><small>Successful configuration changes</small></span>
+          </button>
+        ) : null}
+        {searchAttemptAuditAvailable ? (
+          <button
+            ref={attemptTabRef}
+            id="activity-attempts-tab"
+            data-view="attempts"
+            role="tab"
+            type="button"
+            aria-controls="activity-attempts-panel"
+            aria-selected={view === "attempts"}
+            tabIndex={view === "attempts" ? 0 : -1}
+            onClick={() => selectView("attempts")}
+            onKeyDown={navigateTabs}
+          >
+            <span aria-hidden="true">⌕</span>
+            <span><strong>Search attempts</strong><small>Admitted-search journal</small></span>
+          </button>
+        ) : null}
       </div>
       <section id="activity-jobs-panel" role="tabpanel" aria-labelledby="activity-jobs-tab" hidden={view !== "jobs"}>
         <BackendLiveJobs apiBaseUrl={apiBaseUrl} />
       </section>
       <section id="activity-history-panel" role="tabpanel" aria-labelledby="activity-history-tab" hidden={view !== "history"}>
-        {historyVisited ? <BackendSearchHistory apiBaseUrl={apiBaseUrl} /> : null}
+        {visited.has("history") ? <BackendSearchHistory apiBaseUrl={apiBaseUrl} /> : null}
       </section>
+      {exportsAvailable ? (
+        <section id="activity-exports-panel" role="tabpanel" aria-labelledby="activity-exports-tab" hidden={view !== "exports"}>
+          {visited.has("exports") ? <BackendExportJobs apiBaseUrl={apiBaseUrl} bootstrap={bootstrap} /> : null}
+        </section>
+      ) : null}
+      {mutationAuditAvailable ? (
+        <section id="activity-mutations-panel" role="tabpanel" aria-labelledby="activity-mutations-tab" hidden={view !== "mutations"}>
+          {visited.has("mutations") ? <BackendMutationAudit apiBaseUrl={apiBaseUrl} maximumPageSize={bootstrap.limits.maximumPageSize} /> : null}
+        </section>
+      ) : null}
+      {searchAttemptAuditAvailable ? (
+        <section id="activity-attempts-panel" role="tabpanel" aria-labelledby="activity-attempts-tab" hidden={view !== "attempts"}>
+          {visited.has("attempts") ? <BackendSearchAttemptAudit apiBaseUrl={apiBaseUrl} maximumPageSize={bootstrap.limits.maximumPageSize} /> : null}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -527,10 +639,6 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
             )}
           </section>
 
-          <section className="suite-card backend-unavailable-card">
-            <header className="suite-card-header"><div><h2>Administrative events</h2><p>Not yet available in this client.</p></div><span aria-hidden="true">i</span></header>
-            <p>This frontend does not yet consume the backend audit-event route, so this page does not fabricate configuration or collector activity.</p>
-          </section>
         </>
       ) : null}
 

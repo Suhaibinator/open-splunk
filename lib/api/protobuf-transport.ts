@@ -1,5 +1,10 @@
 import type { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
+import {
+  getAdministratorBearerToken,
+  isAdministratorRoutePath,
+} from "./administrator-session";
+
 export const PROTOBUF_CONTENT_TYPE = "application/x-protobuf";
 export const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -13,6 +18,8 @@ export interface ProtobufRoute<TRequest, TResponse> {
   readonly path: `/${string}`;
   readonly request: ProtobufCodec<TRequest>;
   readonly response: ProtobufCodec<TResponse>;
+  /** Administrator routes receive the current in-memory bearer credential. */
+  readonly authorization: "none" | "administrator";
 }
 
 export interface ProtobufRequestOptions {
@@ -93,11 +100,24 @@ export function defineProtobufRoute<TRequest, TResponse>(
   request: ProtobufCodec<TRequest>,
   response: ProtobufCodec<TResponse>,
 ): ProtobufRoute<TRequest, TResponse> {
-  return { path, request, response };
+  return {
+    path,
+    request,
+    response,
+    authorization: isAdministratorRoutePath(path) ? "administrator" : "none",
+  };
 }
 
 function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "");
+}
+
+function withoutAuthorization(
+  headers: Readonly<Record<string, string>>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(([name]) => name.toLowerCase() !== "authorization"),
+  );
 }
 
 function parseErrorMessage(status: number, statusText: string, body: string): string {
@@ -180,11 +200,23 @@ export class ProtobufTransport {
       }
 
       const requestBytes = route.request.encode(request).finish();
+      const administratorToken = route.authorization === "administrator"
+        ? getAdministratorBearerToken()
+        : null;
+      const defaultHeaders = administratorToken === null
+        ? this.defaultHeaders
+        : withoutAuthorization(this.defaultHeaders);
+      const requestHeaders = administratorToken === null
+        ? (options.headers ?? {})
+        : withoutAuthorization(options.headers ?? {});
       const response = await this.fetchImplementation(url, {
         method: "POST",
         headers: {
-          ...this.defaultHeaders,
-          ...options.headers,
+          ...defaultHeaders,
+          ...requestHeaders,
+          ...(administratorToken === null
+            ? {}
+            : { Authorization: `Bearer ${administratorToken}` }),
           Accept: PROTOBUF_CONTENT_TYPE,
           "Content-Type": PROTOBUF_CONTENT_TYPE,
         },

@@ -53,7 +53,7 @@ export function ProductShell({ activeSection, appName, children, dataMode }: Pro
       : activeSection === "datasets"
         ? "Search authorization comes from backend bootstrap; the registered index route adds available retention and source defaults."
         : activeSection === "activity"
-          ? "Activity shows retained transient jobs and separately persisted search history; the audit-event view is not wired into this client yet."
+          ? "Activity shows retained jobs and search history, plus capability-gated mutation and search-attempt audit journals for administrator sessions."
           : activeSection === "reports"
             ? "This page shows persisted backend saved searches; scheduling is not inferred."
             : "This page remains sample preview content; use Search, Datasets, Reports, Activity, or Administration for connected data.";

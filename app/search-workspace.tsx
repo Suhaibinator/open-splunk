@@ -22,6 +22,7 @@ import {
   type ExportJob,
 } from "@/gen/ts/open_splunk/v1/export";
 import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/v1/history_api";
+import type { InspectSearchJobResponse } from "@/gen/ts/open_splunk/v1/search_inspection_api";
 import {
   DEMO_EVENTS,
   DEMO_FIELDS,
@@ -63,6 +64,7 @@ import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
   assertBrowserResultPageBounds,
   SearchWebSocketClient,
+  clearAdministratorBearerToken,
   createOpenSplunkApiClient,
   getSystemBootstrap,
   indexSelectorsFromSPL,
@@ -450,6 +452,20 @@ function currentBackendServerTime(bootstrap: BackendBootstrapState): Date {
   return new Date(bootstrap.response.serverTime.getTime() + Math.max(0, Date.now() - bootstrap.receivedAt));
 }
 
+function stringIndexForUtf8ByteOffset(value: string, byteOffset: bigint): number {
+  if (byteOffset <= 0n) return 0;
+  const target = Number(byteOffset);
+  let bytes = 0;
+  let index = 0;
+  for (const character of value) {
+    const width = new TextEncoder().encode(character).length;
+    if (bytes + width > target) break;
+    bytes += width;
+    index += character.length;
+  }
+  return index;
+}
+
 function backendIndexScope(spl: string, bootstrap: BackendBootstrapState): string[] {
   const selectors = indexSelectorsFromSPL(spl);
   const searchableIndexes = bootstrap.response.indexes
@@ -605,6 +621,11 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [backendResultsExpired, setBackendResultsExpired] = useState(false);
   const [backendExpiresAt, setBackendExpiresAt] = useState<Date | null>(null);
   const [backendNotices, setBackendNotices] = useState<string[]>([]);
+  const [backendInspection, setBackendInspection] = useState<{
+    status: "idle" | "loading" | "available" | "error";
+    response?: InspectSearchJobResponse;
+    error?: string;
+  }>({ status: "idle" });
   const [backendResultPageSize, setBackendResultPageSize] = useState(20);
   const [backendFieldsLoading, setBackendFieldsLoading] = useState(false);
   const [backendFieldsLoadingMore, setBackendFieldsLoadingMore] = useState(false);
@@ -620,6 +641,13 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   );
   const [completionOpen, setCompletionOpen] = useState(false);
   const [completionIndex, setCompletionIndex] = useState(0);
+  const [backendCompletions, setBackendCompletions] = useState<Array<{
+    label: string;
+    insertion: string;
+    detail: string;
+    replaceStart?: number;
+    replaceEnd?: number;
+  }> | null>(null);
   const [editorCaret, setEditorCaret] = useState(initialWorkspaceQuery.length);
   const [editorFocused, setEditorFocused] = useState(false);
   const [searchMode, setSearchMode] = useState<SearchMode>("Smart");
@@ -730,6 +758,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendExportAbortRef = useRef<AbortController | null>(null);
   const backendExportDownloadAbortRef = useRef<AbortController | null>(null);
   const backendExportCancelAbortRef = useRef<AbortController | null>(null);
+  const backendInspectionAbortRef = useRef<AbortController | null>(null);
   const serverExportJobRef = useRef<ExportJob | null>(null);
   const exportEpochRef = useRef(0);
   const backendSavedSearchesRef = useRef<Map<string, ServerSavedSearch>>(new Map());
@@ -816,11 +845,59 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   }, [backendBootstrapModel?.splCompatibilityVersion, backendEnabled, diagnostic]);
   const completionContext = useMemo(() => completionContextAt(query, editorCaret), [editorCaret, query]);
   const filteredCompletions = useMemo(() => {
+    if (backendEnabled && backendCompletions !== null) return backendCompletions;
     const prefix = completionContext?.prefix.toLowerCase() ?? "";
     return prefix.length === 0
       ? COMPLETIONS
       : COMPLETIONS.filter((completion) => completion.label.startsWith(prefix));
-  }, [completionContext]);
+  }, [backendCompletions, backendEnabled, completionContext]);
+
+  useEffect(() => {
+    if (!backendEnabled || !completionOpen || backendBootstrapModel === null) {
+      setBackendCompletions(null);
+      return;
+    }
+    const bootstrap = backendBootstrapRef.current;
+    if (bootstrap === null) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      let indexScope: string[];
+      try {
+        indexScope = backendDispatchIndexScope(query, bootstrap, activeSavedSearchIdRef.current);
+      } catch {
+        setBackendCompletions(null);
+        return;
+      }
+      void apiClient.search.suggestions({
+        spl: query,
+        cursorByteOffset: BigInt(new TextEncoder().encode(query.slice(0, editorCaret)).length),
+        timeRange: backendTimeRangeIntent(timeRange, false),
+        appId: bootstrap.response.selectedAppId ?? undefined,
+        indexScope,
+        maxSuggestions: 50,
+      }, { signal: controller.signal, timeoutMs: 5_000 }).then((response) => {
+        if (controller.signal.aborted) return;
+        setCompletionIndex(0);
+        setBackendCompletions(response.suggestions.map((suggestion) => {
+          const start = suggestion.replacementRange?.start?.byteOffset;
+          const end = suggestion.replacementRange?.end?.byteOffset;
+          return {
+            label: suggestion.label,
+            insertion: suggestion.insertionText,
+            detail: suggestion.detail ?? suggestion.documentation ?? "Server suggestion",
+            replaceStart: start === undefined ? undefined : stringIndexForUtf8ByteOffset(query, start),
+            replaceEnd: end === undefined ? undefined : stringIndexForUtf8ByteOffset(query, end),
+          };
+        }));
+      }).catch(() => {
+        if (!controller.signal.aborted) setBackendCompletions(null);
+      });
+    }, 150);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [apiClient, backendBootstrapModel, backendEnabled, completionOpen, editorCaret, query, timeRange]);
   const displayedBackendResults = backendDisplayingPreview
     ? backendPreviewDisplay.adapted
     : null;
@@ -1961,6 +2038,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       backendExportAbortRef.current?.abort();
       backendExportDownloadAbortRef.current?.abort();
       backendExportCancelAbortRef.current?.abort();
+      backendInspectionAbortRef.current?.abort();
       appSwitchAbortRef.current?.abort();
       backendSocketRef.current?.dispose();
       const exportJob = serverExportJobRef.current;
@@ -3745,9 +3823,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           throw new Error("The persisted search belongs to an app that is not available in this backend session.");
         }
       }
-      const response = await apiClient.search.create({
-        definition: launchHistoryEntry === null
-          ? {
+      const definition: SearchDefinition | undefined = launchHistoryEntry === null
+        ? {
             spl: nextQuery,
             // Keep relative/calendar intent intact. The server resolves it once,
             // against its own authoritative clock, and persists both forms.
@@ -3765,7 +3842,22 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             selectedFields: [],
             visualization: undefined,
           }
-          : undefined,
+        : undefined;
+      if (definition !== undefined) {
+        const validation = await apiClient.search.validate(
+          { definition },
+          { signal: controller.signal, timeoutMs: 10_000 },
+        );
+        if (!validation.valid) {
+          const detail = validation.diagnostics
+            .map((item) => item.message.trim())
+            .find((message) => message.length > 0);
+          throw new Error(detail ?? "The connected server rejected this SPL search.");
+        }
+      }
+      if (generationRef.current !== generation || controller.signal.aborted) return;
+      const response = await apiClient.search.create({
+        definition,
         source: savedExecution !== undefined
           ? {
             origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_SAVED_SEARCH,
@@ -4090,6 +4182,47 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     showToast("Search canceled.", "warning");
   }
 
+  function openJobInspector() {
+    setModal("inspect");
+    if (!backendEnabled) {
+      setBackendInspection({ status: "idle" });
+      return;
+    }
+    const searchJobId = backendJobIdRef.current;
+    if (searchJobId === null) {
+      setBackendInspection({ status: "error", error: "Run a backend search before requesting its plan." });
+      return;
+    }
+    if (
+      backendBootstrapModel === null
+      || !supportsServerFeature(backendBootstrapModel, ServerFeature.SERVER_FEATURE_PLAN_INSPECTION)
+    ) {
+      setBackendInspection({ status: "error", error: "This server does not advertise administrator plan inspection." });
+      return;
+    }
+    backendInspectionAbortRef.current?.abort();
+    const controller = new AbortController();
+    backendInspectionAbortRef.current = controller;
+    setBackendInspection({ status: "loading" });
+    void apiClient.search.inspect(
+      { searchJobId },
+      { signal: controller.signal, timeoutMs: 15_000 },
+    ).then((response) => {
+      if (!controller.signal.aborted && backendJobIdRef.current === searchJobId) {
+        setBackendInspection({ status: "available", response });
+      }
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setBackendInspection({
+          status: "error",
+          error: error instanceof Error ? error.message : "The server could not inspect this search job.",
+        });
+      }
+    }).finally(() => {
+      if (backendInspectionAbortRef.current === controller) backendInspectionAbortRef.current = null;
+    });
+  }
+
   function handleEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
       event.preventDefault();
@@ -4126,7 +4259,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     }
     if ((event.key === "Enter" || event.key === "Tab") && filteredCompletions.length > 0) {
       event.preventDefault();
-      insertCompletion(filteredCompletions[completionIndex]?.insertion ?? filteredCompletions[0].insertion);
+      insertCompletion(filteredCompletions[completionIndex] ?? filteredCompletions[0]);
       return;
     }
     if (event.key === "Escape") {
@@ -4135,7 +4268,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     }
   }
 
-  function insertCompletion(insertion: string) {
+  function insertCompletion(completion: {
+    insertion: string;
+    replaceStart?: number;
+    replaceEnd?: number;
+  }) {
+    const { insertion } = completion;
     const editor = editorRef.current;
     const selectionStart = editor?.selectionStart ?? editorCaret;
     const selectionEnd = editor?.selectionEnd ?? selectionStart;
@@ -4147,7 +4285,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     let nextQuery: string;
     let nextCaret: number;
 
-    if (context !== null) {
+    if (completion.replaceStart !== undefined && completion.replaceEnd !== undefined) {
+      const replaceStart = Math.max(0, Math.min(query.length, completion.replaceStart));
+      const replaceEnd = Math.max(replaceStart, Math.min(query.length, completion.replaceEnd));
+      nextQuery = `${query.slice(0, replaceStart)}${insertion}${query.slice(replaceEnd)}`;
+      nextCaret = replaceStart + insertion.length;
+    } else if (context !== null) {
       nextQuery = `${query.slice(0, context.fragmentStart)}${insertion}${query.slice(Math.max(context.fragmentEnd, selectionEnd))}`;
       nextCaret = context.fragmentStart + insertion.length;
     } else {
@@ -5927,7 +6070,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
                 <div className="user-summary"><span>A</span><strong>Administrator</strong><small>admin@localhost</small></div>
                 <Link role="menuitem" href="/admin/">Account settings</Link>
                 <button role="menuitem" type="button" onClick={() => showToast("Open Splunk is running in trusted-network mode.")}>Session details</button>
-                <Link role="menuitem" href="/signin/">Sign out</Link>
+                <Link role="menuitem" tabIndex={0} href="/signin/" onClick={clearAdministratorBearerToken}>Sign out</Link>
               </div>
             ) : null}
           </div>
@@ -5954,7 +6097,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             <span className="search-mobile-label">APPLICATION</span>
             <Link href="/"><i>⌂</i>Home</Link><Link className="active" href="/search/"><i>⌕</i>{workspaceAppName}</Link><Link href="/analytics/"><i>⌁</i>Analytics</Link><Link href="/datasets/"><i>▦</i>Datasets</Link><Link href="/reports/"><i>▤</i>Reports</Link><Link href="/dashboards/"><i>▥</i>Dashboards</Link>
             <span className="search-mobile-label">SYSTEM</span>
-            <Link href="/activity/"><i>↻</i>Activity <b className="activity-count">1</b></Link><Link href="/admin/"><i>⚙</i>Administration</Link><Link href="/signin/"><i>⇥</i>Sign out</Link>
+            <Link href="/activity/"><i>↻</i>Activity <b className="activity-count">1</b></Link><Link href="/admin/"><i>⚙</i>Administration</Link><Link href="/signin/" onClick={clearAdministratorBearerToken}><i>⇥</i>Sign out</Link>
           </dialog>
         </>
       ) : null}
@@ -6089,7 +6232,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
           </div>
           <div className="job-controls">
             <button type="button" onClick={() => setModal("jobs")}>Job <span aria-hidden="true">▾</span></button>
-            <button type="button" aria-label="Inspect search job" title="Inspect job" onClick={() => setModal("inspect")}>ⓘ</button>
+            <button type="button" aria-label="Inspect search job" title="Inspect job" onClick={openJobInspector}>ⓘ</button>
             <button
               type="button"
               aria-label="Refresh results"
@@ -6436,6 +6579,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
             ? { status: "idle" }
             : { status: "error", error: cancelError }}
         jobInspectorNotices={backendEnabled ? backendRuntimeNotices : []}
+        jobInspection={backendInspection}
         isRunning={isRunning}
         modal={modal}
         phase={phase}

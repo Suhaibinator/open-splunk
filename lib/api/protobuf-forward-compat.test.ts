@@ -9,6 +9,7 @@ import * as openSplunkV1 from "@/gen/ts/index.open_splunk.v1";
 import { AppSelector } from "@/gen/ts/open_splunk/v1/app";
 import { GetAppRequest } from "@/gen/ts/open_splunk/v1/app_api";
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/v1/system_api";
+import { openSplunkRoutes } from "@/lib/api/routes";
 
 interface ProtobufRouteContractRecord {
   path: string;
@@ -38,6 +39,18 @@ const routeFixture = JSON.parse(
   ),
 ) as ProtobufRouteContractFixture;
 const futureFieldTag = (routeFixture.futureFieldNumber << 3) | 2;
+
+function registeredRoutePaths(value: unknown): string[] {
+  if (value === null || typeof value !== "object") {
+    return [];
+  }
+
+  if ("path" in value && typeof value.path === "string") {
+    return [value.path];
+  }
+
+  return Object.values(value).flatMap(registeredRoutePaths);
+}
 
 function runtimeMessageCodec(typeName: string): RuntimeMessageCodec {
   // oxlint-disable-next-line import/namespace -- the shared route manifest names generated codecs dynamically.
@@ -108,6 +121,13 @@ test("every protobuf HTTP route round-trips generated TypeScript messages across
       route.responseFutureWire,
     );
   }
+});
+
+test("the browser client registers every protobuf HTTP route exposed by the backend", () => {
+  const backendPaths = routeFixture.routes.map((route) => route.path).toSorted();
+  const browserPaths = registeredRoutePaths(openSplunkRoutes).toSorted();
+
+  assert.deepEqual(browserPaths, backendPaths);
 });
 
 test("generated protobuf request decoders ignore future fields recursively", () => {

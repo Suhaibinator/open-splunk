@@ -21,6 +21,7 @@ import {
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
+import { IndexObservabilityPanel } from "./index-observability-panel";
 
 interface BackendDatasetsConsoleProps {
   apiBaseUrl: string;
@@ -138,6 +139,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
   const [definitionState, setDefinitionState] = useState<DefinitionLoadState>("idle");
   const [definitions, setDefinitions] = useState<Map<string, Index>>(new Map());
   const [definitionError, setDefinitionError] = useState<string | null>(null);
+  const [observedIndexId, setObservedIndexId] = useState<string | null>(null);
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
 
   useEffect(() => {
@@ -181,6 +183,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
       normalized.length === 0
       || `${index.name} ${index.displayName}`.toLowerCase().includes(normalized));
   }, [bootstrap, filter]);
+  const observedIndex = bootstrap?.indexes.find((index) => index.id === observedIndexId) ?? null;
 
   return (
     <div className="suite-page datasets-page">
@@ -254,6 +257,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                     <footer>
                       {index.searchable ? <Link href={searchLaunchHref(`index=${index.name} | sort -_time`)}>Search index</Link> : <span className="dataset-action-unavailable">Search unavailable</span>}
                       {index.searchable ? <Link href={searchLaunchHref(`index=${index.name} | stats count by sourcetype | sort -count`)}>Explore source types</Link> : null}
+                      <button type="button" aria-pressed={observedIndexId === index.id} onClick={() => setObservedIndexId(index.id)}>{observedIndexId === index.id ? "Inspecting profile" : "Inspect profile"}</button>
                     </footer>
                   </article>
                 );
@@ -266,17 +270,19 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
                   <thead><tr><th scope="col">Index</th><th scope="col">State</th><th scope="col">Search access</th><th scope="col">Ingestion access</th><th scope="col">Retention</th><th scope="col">Default source type</th><th scope="col"><span className="sr-only">Action</span></th></tr></thead>
                   <tbody>{visible.map((index) => {
                     const detail = definitions.get(index.id);
-                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td>{index.searchable ? <Link className="table-action" href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search ${index.name}`}>Search ›</Link> : "Unavailable"}</td></tr>;
+                    return <tr key={index.id}><td><strong>{index.displayName}</strong><small className="table-secondary">index={index.name}</small></td><td>{stateLabel(index)}</td><td>{accessLabel(index.searchAccess)}</td><td>{accessLabel(index.ingestionAccess)}</td><td>{detail === undefined ? "Not available" : retentionLabel(detail)}</td><td>{detail === undefined ? "Not available" : detail.definition?.defaultSourcetype || "Not set"}</td><td><div className="row-actions">{index.searchable ? <Link className="table-action" href={searchLaunchHref(`index=${index.name} | sort -_time`)} aria-label={`Search ${index.name}`}>Search ›</Link> : "Unavailable"}<button className="table-action" type="button" aria-pressed={observedIndexId === index.id} onClick={() => setObservedIndexId(index.id)}>{observedIndexId === index.id ? "Inspecting" : "Profile"}</button></div></td></tr>;
                   })}</tbody>
                 </table>
               </div>
             </section>
           )}
 
-          <section className="suite-card backend-unavailable-card">
-            <header className="suite-card-header"><div><h2>Field catalog and source profiles</h2><p>Unavailable for index browsing in this server version.</p></div><span aria-hidden="true">i</span></header>
-            <p>Index definitions may provide retention and a default source type. Event volume, storage statistics, discovered fields, and observed source profiles remain unavailable because those routes are not registered. Run an explicit search to inspect data for a searchable index.</p>
-          </section>
+          {observedIndex === null ? (
+            <section className="suite-card index-observability-prompt">
+              <header className="suite-card-header"><div><h2>Statistics and field catalog</h2><p>Select an index to inspect its connected data profile.</p></div><span aria-hidden="true">⌕</span></header>
+              <p>The backend can report event and storage statistics plus a paginated field snapshot over an explicit time range. Choose <strong>Inspect profile</strong> on any index above.</p>
+            </section>
+          ) : <IndexObservabilityPanel client={client} index={observedIndex} />}
         </>
       )}
     </div>

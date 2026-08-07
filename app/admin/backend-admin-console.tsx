@@ -15,7 +15,7 @@ import {
   IndexState,
   type Index,
 } from "@/gen/ts/open_splunk/v1/index";
-import { IndexSortBy } from "@/gen/ts/open_splunk/v1/index_api";
+import { IndexDataDeletionMode, IndexSortBy } from "@/gen/ts/open_splunk/v1/index_api";
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   createOpenSplunkApiClient,
@@ -31,8 +31,9 @@ import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
+import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
 
-type AdminSection = "overview" | "indexes" | "collectors" | "access" | "server";
+type AdminSection = "overview" | "apps" | "indexes" | "collector-fleet" | "collectors" | "access" | "server";
 type AdminModal = "create-index" | "edit-index" | "create-token" | "edit-token";
 type ResourceState = "loading" | "available" | "unavailable" | "error";
 
@@ -137,8 +138,10 @@ interface PersistedTokenCreateGuardV1 {
 
 const NAV_ITEMS: Array<{ key: AdminSection; label: string; detail: string; icon: string }> = [
   { key: "overview", label: "System overview", detail: "Capabilities and limits", icon: "▥" },
+  { key: "apps", label: "Apps", detail: "Workspaces and defaults", icon: "◇" },
   { key: "indexes", label: "Indexes", detail: "State and retention", icon: "▦" },
-  { key: "collectors", label: "Data inputs", detail: "Ingestion tokens", icon: "⇣" },
+  { key: "collector-fleet", label: "Collector fleet", detail: "Health, queues, and inputs", icon: "⌁" },
+  { key: "collectors", label: "Ingestion tokens", detail: "Credentials and scopes", icon: "⇣" },
   { key: "access", label: "Users & access", detail: "Not exposed by this server", icon: "♙" },
   { key: "server", label: "Server settings", detail: "Read-only limits", icon: "⚙" },
 ];
@@ -679,6 +682,11 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const [filter, setFilter] = useState("");
   const [modal, setModal] = useState<AdminModal | null>(null);
   const [indexEditTarget, setIndexEditTarget] = useState<Index | null>(null);
+  const [indexDeleteTarget, setIndexDeleteTarget] = useState<Index | null>(null);
+  const [indexDeleteMode, setIndexDeleteMode] = useState(
+    IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_KEEP_DATA,
+  );
+  const [indexDeleteConfirmation, setIndexDeleteConfirmation] = useState("");
   const [indexName, setIndexName] = useState("");
   const [indexDisplayName, setIndexDisplayName] = useState("");
   const [indexDescription, setIndexDescription] = useState("");
@@ -1409,6 +1417,72 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     } catch (error) {
       setToast({ message: errorMessage(error), kind: "warning" });
       load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function openIndexDeleteDialog(index: Index) {
+    setBusy(`read-index-${index.indexId}`);
+    try {
+      const response = await client.indexes.get({
+        selector: { selector: { $case: "indexId", value: index.indexId } },
+      });
+      const current = response.index;
+      if (current?.definition === undefined) throw new Error("The server returned an empty index definition.");
+      if (current.state === IndexState.INDEX_STATE_DELETING) {
+        throw new Error("This index is already being deleted.");
+      }
+      setIndexDeleteTarget(current);
+      setIndexDeleteMode(IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_KEEP_DATA);
+      setIndexDeleteConfirmation("");
+    } catch (error) {
+      setToast({ message: errorMessage(error), kind: "warning" });
+      load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteIndex(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const target = indexDeleteTarget;
+    const confirmationName = target?.definition?.name;
+    if (target === null || confirmationName === undefined) return;
+    if (indexDeleteConfirmation !== confirmationName) {
+      setToast({ message: `Type ${confirmationName} exactly to confirm deletion.`, kind: "warning" });
+      return;
+    }
+    if (
+      indexDeleteMode !== IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_KEEP_DATA
+      && indexDeleteMode !== IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_DELETE_DATA
+    ) {
+      setToast({ message: "Choose whether stored index data should be retained or physically deleted.", kind: "warning" });
+      return;
+    }
+    cancelIndexLoadMoreRequest();
+    setBusy(`delete-index-${target.indexId}`);
+    try {
+      const response = await client.indexes.delete({
+        selector: { selector: { $case: "indexId", value: target.indexId } },
+        expectedVersion: target.version,
+        dataDeletionMode: indexDeleteMode,
+        confirmationName,
+      });
+      if (response.indexId !== target.indexId) {
+        throw new TypeError("The server acknowledged deletion for a different index.");
+      }
+      setIndexDeleteTarget(null);
+      setIndexDeleteConfirmation("");
+      setToast({
+        message: indexDeleteMode === IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_DELETE_DATA
+          ? `Deletion started for ${confirmationName}${response.deletionOperationId ? ` (${response.deletionOperationId})` : ""}.`
+          : `Index ${confirmationName} was removed from the catalog and its stored data was retained.`,
+        kind: "success",
+      });
+      load();
+    } catch (error) {
+      setToast({ message: errorMessage(error), kind: "warning" });
     } finally {
       setBusy(null);
     }
@@ -2704,7 +2778,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       <PageHeading
         eyebrow="SYSTEM"
         title="Administration"
-        description="Manage indexes and ingestion tokens exposed by the connected server."
+        description="Manage apps, indexes, collectors, and ingestion credentials exposed by the connected server."
         actions={primaryAction}
       />
 
@@ -2769,7 +2843,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               onReload={load}
               onEdit={(index) => void openIndexEditor(index)}
               onChangeState={(index) => void changeIndexState(index)}
+              onDelete={(index) => void openIndexDeleteDialog(index)}
             />
+          ) : null}
+          {section === "apps" ? (
+            <AppsAdminPanel apiBaseUrl={apiBaseUrl} bootstrap={bootstrap} />
+          ) : null}
+          {section === "collector-fleet" ? (
+            <CollectorFleetPanel apiBaseUrl={apiBaseUrl} bootstrap={bootstrap} />
           ) : null}
           {section === "collectors" ? (
             <BackendTokens
@@ -2852,6 +2933,25 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             </label>
             <label htmlFor="edit-index-ingestion-access"><span>Ingestion access</span><select id="edit-index-ingestion-access" value={indexIngestionAccess} onChange={(event) => setIndexIngestionAccess(Number(event.target.value) as IndexAccessState)}><option value={IndexAccessState.INDEX_ACCESS_STATE_ENABLED}>Enabled</option><option value={IndexAccessState.INDEX_ACCESS_STATE_DISABLED}>Disabled</option></select><small>Disabled indexes reject new events and cannot be added to new token scopes.</small></label>
             <label htmlFor="edit-index-search-access"><span>Search access</span><select id="edit-index-search-access" value={indexSearchAccess} onChange={(event) => setIndexSearchAccess(Number(event.target.value) as IndexAccessState)}><option value={IndexAccessState.INDEX_ACCESS_STATE_ENABLED}>Enabled</option><option value={IndexAccessState.INDEX_ACCESS_STATE_DISABLED}>Disabled</option></select><small>Disabled indexes remain configured but cannot be queried.</small></label>
+          </form>
+        </Modal>
+      ) : null}
+
+      {indexDeleteTarget?.definition !== undefined ? (
+        <Modal
+          title={`Delete index ${indexDeleteTarget.definition.name}`}
+          subtitle="This version-checked operation removes the index definition and can also destroy its stored events."
+          onClose={() => {
+            if (busy !== null) return;
+            setIndexDeleteTarget(null);
+            setIndexDeleteConfirmation("");
+          }}
+          footer={<><button className="button secondary" type="button" onClick={() => { setIndexDeleteTarget(null); setIndexDeleteConfirmation(""); }} disabled={busy !== null}>Cancel</button><button className="button danger" type="submit" form="delete-index-form" disabled={busy !== null || indexDeleteConfirmation !== indexDeleteTarget.definition.name}>{busy === `delete-index-${indexDeleteTarget.indexId}` ? "Deleting…" : "Delete index"}</button></>}
+        >
+          <form className="admin-form" id="delete-index-form" onSubmit={(event) => void deleteIndex(event)}>
+            <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Deletion cannot be undone from the browser</strong><p>The server will reject this request if index version {indexDeleteTarget.version.toLocaleString()} is no longer current.</p></div></div>
+            <label htmlFor="delete-index-mode"><span>Stored data</span><select id="delete-index-mode" value={indexDeleteMode} onChange={(event) => setIndexDeleteMode(Number(event.target.value) as IndexDataDeletionMode)}><option value={IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_KEEP_DATA}>Keep physical data</option><option value={IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_DELETE_DATA}>Permanently delete physical data</option></select><small>{indexDeleteMode === IndexDataDeletionMode.INDEX_DATA_DELETION_MODE_DELETE_DATA ? "The backend may run physical deletion asynchronously and return an operation ID." : "Only the control-plane index record is deleted; stored data is preserved."}</small></label>
+            <label htmlFor="delete-index-confirmation"><span>Type <code>{indexDeleteTarget.definition.name}</code> to confirm</span><input id="delete-index-confirmation" value={indexDeleteConfirmation} onChange={(event) => setIndexDeleteConfirmation(event.target.value)} autoComplete="off" spellCheck={false} /><small>The backend also checks this exact name before accepting the operation.</small></label>
           </form>
         </Modal>
       ) : null}
@@ -3208,6 +3308,7 @@ interface BackendIndexesProps {
   onReload: () => void;
   onEdit: (index: Index) => void;
   onChangeState: (index: Index) => void;
+  onDelete: (index: Index) => void;
 }
 
 function BackendIndexes(props: BackendIndexesProps) {
@@ -3254,7 +3355,7 @@ function BackendIndexes(props: BackendIndexesProps) {
                     <td>{indexAccessLabel(definition?.searchAccess)}</td>
                     <td>{formatDuration(definition?.retentionPeriod?.seconds)}</td>
                     <td>{formatDate(index.updatedAt)}</td>
-                    <td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit index ${name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(index)}>{props.busy === `read-index-${index.indexId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"} index ${name}`} disabled={!canChange || props.busy !== null} onClick={() => props.onChangeState(index)}>{props.busy === `index-${index.indexId}` ? "Updating…" : index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"}</button></div></td>
+                    <td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit index ${name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(index)}>{props.busy === `read-index-${index.indexId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"} index ${name}`} disabled={!canChange || props.busy !== null} onClick={() => props.onChangeState(index)}>{props.busy === `index-${index.indexId}` ? "Updating…" : index.state === IndexState.INDEX_STATE_ACTIVE ? "Archive" : "Reactivate"}</button><button className="table-action table-action--danger" type="button" aria-label={`Delete index ${name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onDelete(index)}>Delete</button></div></td>
                   </tr>
                 );
               })}</tbody>
@@ -3272,7 +3373,7 @@ function BackendIndexes(props: BackendIndexesProps) {
           ? <button className="button secondary" type="button" disabled={props.loadingMore || props.busy !== null} onClick={props.onLoadMore}>{props.loadingMore ? "Loading…" : "Load more indexes"}</button>
           : null}
       </div>
-      <p className="resource-footnote">Event counts, storage use, and source statistics are not exposed by the registered index routes and are intentionally omitted.</p>
+      <p className="resource-footnote">Event counts, storage use, and the bounded field catalog are available from the Datasets page. Delete uses a current version, an exact-name confirmation, and an explicit physical-data mode.</p>
     </div>
   );
 }
@@ -3301,7 +3402,7 @@ interface BackendTokensProps {
 
 function BackendTokens(props: BackendTokensProps) {
   if (props.state === "loading") return <ResourceMessage kind="loading" title="Loading ingestion tokens" message="Reading token metadata from the server…" />;
-  if (props.state === "unavailable") return <ResourceMessage kind="unavailable" title="Ingestion tokens are unavailable" message="The connected server did not register the ingestion-token routes. Collector routes are not probed or simulated." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
+  if (props.state === "unavailable") return <ResourceMessage kind="unavailable" title="Ingestion tokens are unavailable" message="The connected server did not register the ingestion-token routes. Collector fleet status is loaded independently from its own capability-gated panel." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
   if (props.state === "error") return <ResourceMessage kind="error" title="Ingestion tokens could not be loaded" message={props.error ?? "The server rejected the token list request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
   const loadedCount = countLabel(
     props.tokens.length,
@@ -3316,7 +3417,7 @@ function BackendTokens(props: BackendTokensProps) {
 
   return (
     <div className="admin-section-stack">
-      <header className="admin-section-header"><div><h2>Data inputs</h2><p>Manage server-issued ingestion tokens. Collector inventory is not exposed.</p></div><button className="suite-button suite-button--primary" type="button" disabled={!props.canCreate} onClick={props.onCreate}>Generate token</button></header>
+      <header className="admin-section-header"><div><h2>Ingestion tokens</h2><p>Manage server-issued ingestion credentials and their index scopes.</p></div><button className="suite-button suite-button--primary" type="button" disabled={!props.canCreate} onClick={props.onCreate}>Generate token</button></header>
       {props.createBlockReason === null ? null : (
         <div className="access-mode-notice" role="alert">
           <span>!</span>
@@ -3336,7 +3437,6 @@ function BackendTokens(props: BackendTokensProps) {
           </div>
         </div>
       )}
-      <div className="access-mode-notice" role="note"><span>i</span><div><strong>Collector status is unavailable</strong><p>This server registers ingestion-token management only. It does not expose collector list or health routes.</p></div></div>
       <section className="suite-card token-section">
         <header className="suite-card-header"><div><h3>Ingestion tokens</h3><p>Token secrets are never returned after creation. {loadedCount}.</p></div><button type="button" onClick={props.onReload}>Refresh</button></header>
         {props.tokens.length === 0 ? (
