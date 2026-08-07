@@ -461,27 +461,43 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   }
 });
 
-test("collector publication creates one immutable amd64 and arm64 GHCR image", async () => {
+test("release publication creates immutable amd64 and arm64 GHCR images", async () => {
+  const workflowDirectory = path.join(workspace, ".github", "workflows");
+  const publicationWorkflows = (await readdir(workflowDirectory))
+    .filter((name) => /^publish.*\.ya?ml$/.test(name))
+    .sort();
+  assert.deepEqual(publicationWorkflows, ["publish-images.yml"]);
+
   const workflow = await readFile(
-    path.join(workspace, ".github", "workflows", "publish-collector-image.yml"),
+    path.join(workflowDirectory, "publish-images.yml"),
     "utf8",
   );
 
   assert.match(workflow, /tags:\n\s+- "v\*"/);
   assert.match(
     workflow,
-    /image="ghcr\.io\/\$\{GITHUB_REPOSITORY_OWNER,,\}\/open-splunk-collector"/,
+    /registry="ghcr\.io\/\$\{GITHUB_REPOSITORY_OWNER,,\}"/,
   );
-  assert.match(workflow, /platform: linux\/amd64\n\s+architecture: amd64/);
-  assert.match(workflow, /platform: linux\/arm64\n\s+architecture: arm64/);
+  assert.match(workflow, /image_name: open-splunk-server/);
+  assert.match(workflow, /image_name: open-splunk-collector/);
+  assert.match(workflow, /target: server/);
   assert.match(workflow, /target: collector/);
+  assert.equal(
+    (workflow.match(/platform: linux\/amd64\n\s+architecture: amd64/g) ?? [])
+      .length,
+    2,
+  );
+  assert.equal(
+    (workflow.match(/platform: linux\/arm64\n\s+architecture: arm64/g) ?? [])
+      .length,
+    2,
+  );
   assert.match(workflow, /uses: docker\/build-push-action@v7/);
   assert.match(workflow, /push-by-digest=true/);
   assert.match(workflow, /provenance: mode=max/);
   assert.match(workflow, /sbom: true/);
   assert.match(workflow, /docker buildx imagetools create --tag/);
   assert.match(workflow, /expected_platforms=\$'linux\/amd64\\nlinux\/arm64'/);
-  assert.doesNotMatch(workflow, /open-splunk-server:/);
   assert.doesNotMatch(workflow, /IMAGE_TAG.*latest/);
 });
 

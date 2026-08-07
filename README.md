@@ -79,8 +79,10 @@ the Docker daemon across independent clones, and transactionally restores both
 prior tags if pair publication fails. The production Compose file consumes
 that prebuilt image and cannot silently rebuild a dirty checkout.
 
-For an end-to-end remote collector deployment using the separately published
-AMD64/ARM64 image, follow
+Each `vX.Y.Z` release tag runs one publication pipeline for both consumable
+images: `open-splunk-server` and `open-splunk-collector`, each for AMD64 and
+ARM64. For an end-to-end remote collector deployment using that release's
+collector image, follow
 [`docs/collector-deployment.md`](docs/collector-deployment.md).
 
 For frontend-only design work, build the deterministic demo workspace

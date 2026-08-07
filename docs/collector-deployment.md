@@ -16,8 +16,10 @@ Release images are published as:
 ghcr.io/suhaibinator/open-splunk-collector:X.Y.Z
 ```
 
-Pushing the corresponding `vX.Y.Z` Git release tag publishes the image without
-the leading `v`.
+Pushing the corresponding `vX.Y.Z` Git release tag runs the single release
+image pipeline. It publishes both this image and the matching backend image,
+`ghcr.io/suhaibinator/open-splunk-server:X.Y.Z`, from the same tagged commit
+and without the leading `v`.
 
 Use an exact semantic-version tag in production. A release version containing
 SemVer build metadata replaces `+` with `_` in the OCI tag. Each release tag is

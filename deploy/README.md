@@ -12,6 +12,23 @@ The default stack intentionally does not run a collector. Collectors belong on
 log-producing hosts, and the GradeThis collector cutover is a separate
 deployment unit.
 
+## Release images
+
+Pushing a `vX.Y.Z` semantic-version tag runs the single **Publish release
+images** workflow. One successful run publishes the complete consumable image
+set from the same tagged commit:
+
+```text
+ghcr.io/suhaibinator/open-splunk-server:X.Y.Z
+ghcr.io/suhaibinator/open-splunk-collector:X.Y.Z
+```
+
+Both references are immutable versioned multi-platform manifests containing
+Linux AMD64 and ARM64 images. The workflow does not publish a floating
+`latest` tag. SemVer build metadata uses `_` in the OCI tag because `+` is not
+valid there. Use the server image for the Compose stack and the collector image
+on log-producing hosts; do not mix versions from different releases.
+
 ## Build and start
 
 Requirements:
@@ -677,11 +694,12 @@ by copying files manually.
 
 ## Collector image
 
-Releases publish the collector independently as the multi-platform
-`ghcr.io/suhaibinator/open-splunk-collector:<version>` image for Linux AMD64
-and ARM64. Docker selects the matching architecture during a normal pull. A
-local `make oci` build also creates `open-splunk-collector:<version>` for its
-selected `OPEN_SPLUNK_OCI_PLATFORM`. The non-root scratch image defaults to:
+The same release pipeline that publishes the backend publishes the
+multi-platform `ghcr.io/suhaibinator/open-splunk-collector:<version>` image
+for Linux AMD64 and ARM64. Docker selects the matching architecture during a
+normal pull. A local `make oci` build also creates
+`open-splunk-collector:<version>` for its selected
+`OPEN_SPLUNK_OCI_PLATFORM`. The non-root scratch image defaults to:
 
 ```text
 open-splunk-collector run -config /etc/open-splunk/collector.yaml
