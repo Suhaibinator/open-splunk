@@ -2,46 +2,46 @@
 
 **Goal status:** active
 **Current milestone:** KO-0 catalog runtime prerequisites
-**Last completed slice:** KO-0B protobuf, selector, and SQLite foundations
-**Evidence date:** August 6, 2026
+**Last completed slice:** KO-0C bounded projections and audit foundations
+**Evidence date:** August 7, 2026
 
 ## Durable checkpoint
 
-- Base commit: `8880ef086eaa7671f5d0c821de552c955c3af1d3`
-- Checkpoint commit: `00c88c19cbdab71d1fbe0c71c5c3552a7f794f38`
-- Branch and remote: `main`; KO-0A is pushed to `origin/main`
-- Commit subject: `docs(knowledge): define v0.1 compatibility contract`
+- KO implementation range: `00c88c1..b7ac77b`
+- KO-0C terminal revision:
+  `b7ac77b1a9fc28b282e72e7153f7b26739a35629`
+- Current repository and published revision:
+  `8d8e5cd068c906680dc67055c964ba6adfb13a63`
+- Branch and remote: `main`; local `main` and `origin/main` are identical
 - Scope: the proposed end-to-end plan, normative Tier 1 compatibility
-  contract, version constant, strict starter compatibility inventory, and its
-  structural test
+  contract, protobuf contracts, bounded selector primitives, immutable catalog
+  schema, bounded current-version list projections, successful-mutation audit
+  taxonomy, and rejected privileged-attempt journal
 - Runtime feature state: unimplemented and unadvertised
 
-## KO-0B local durable commits
+## KO-0 durable commits
 
-The following intentional commits are present on local `main`:
+The following intentional commits are present on `main` and `origin/main`:
 
 | Commit | Subject | Scope |
 | --- | --- | --- |
 | `8a25098` | `feat(knowledge): reserve KO-0 protobuf contracts` | Typed Tier-1 definitions, CRUD/validation/dependency/preview messages, immutable snapshot/provenance wire contracts, generated Go/TypeScript, and a hard-disabled capability guard |
 | `c23889b` | `feat(knowledge): add bounded selector primitives` | Stable text/destination normalization, 17-segment search-field parsing, canonical selectors, combined NFA matching, cumulative resource accounting, cancellation, race tests, and four fuzz targets |
 | `99f42d5` | `feat(knowledge): add immutable catalog schema` | Forward-only SQLite migration 0024, content-addressed bodies, exact registry/version agreement, dependency seals, capacity reserves/counters, idempotency, quarantine recovery audit, app/dependent guards, rollback and migration tests |
+| `b42b046` | `docs(knowledge): checkpoint KO-0B foundations` | Durable KO-0B review, test, and delivery evidence |
+| `1539136` | `docs(knowledge): pin catalog runtime semantics` | Binary substring and selector-filter semantics, exact projection/selector accounting, historical authorization and quarantine non-disclosure, and exact rejected-attempt retention/privacy contracts |
+| `f9eb14a` | `feat(knowledge): add bounded list projections` | Migration 0025, exact sealed current-version projections, canonical selector framing, 256 MiB tenant accounting, pre-LIMIT filtering, lifecycle/rollback guards, and adversarial migration tests |
+| `fc34902` | `feat(knowledge): extend successful mutation audit` | Migration 0026, closed knowledge mutation taxonomy, optional all-or-none knowledge metadata, legacy cursor compatibility, server projection, and migration/corruption/race tests |
+| `b7ac77b` | `feat(knowledge): journal rejected privileged attempts` | Migration 0027 and a fail-closed, payload-free, privacy-shaped, 100,000-row rolling journal with monotonic sequences, owned transactions, startup integrity checks, concurrency tests, and recursive-trigger-safe eviction |
 
-These commits are not yet on `origin/main`. Push was attempted after `8a25098`
-and rejected by the execution approval boundary because local `main` also
-contains the separate pre-existing commit `fdcc17e` (`chore: bump dependencies
-in go.mod and go.sum`). Pushing `main` necessarily publishes that commit too;
-explicit user approval after disclosure is required. No history rewrite,
-alternate branch, or partial-push workaround was attempted.
+The separate pre-existing dependency commit `fdcc17e` is also present in the
+published `main` history. No history rewrite or alternate publication branch
+was used.
 
-The checkpoint intentionally did not stage or modify the pre-existing unified
-image-publication worktree changes in:
-
-- `.github/workflows/publish-collector-image.yml`
-- `.github/workflows/publish-images.yml`
-- `README.md`
-- `deploy/README.md`
-- `docs/collector-deployment.md`
-- `scripts/build-oci.test.mjs`
+The subsequent `8d8e5cd` (`publish backend and collector images`) commit is
+unrelated to knowledge objects and is excluded from KO-0C scope. Any current
+`scripts/build-oci.test.mjs` worktree change also belongs to that separate
+image-publication work and is neither staged nor modified by this checkpoint.
 
 ## Contract decisions frozen
 
@@ -61,6 +61,14 @@ image-publication worktree changes in:
 - One-transaction coherent resolver reads and deterministic snapshot digest
   framing
 - Current-policy response redaction for retained provenance and inspection
+- Binary UTF-8 substring and individual-selector-pattern filters applied before
+  keyset `LIMIT` at one catalog revision
+- Exact sealed current-version projection verification, canonical selector
+  framing, and a 256 MiB per-tenant projection byte ceiling
+- Historical Get authorized from the current identity, with permanent
+  definition redaction while the current identity is quarantined
+- Atomic successful-mutation audit metadata and a separate fail-closed rejected
+  privileged-attempt journal that retains no unauthorized object metadata
 - Catalog, resolver, cache, selector, expression, snapshot, and audit ceilings
 - Terminal corruption quarantine with bounded dependent closure, protected
   version/idempotency capacity, and one recovery-audit slot for every lifetime
@@ -112,6 +120,49 @@ NULL-safe registry/version digest agreement, bodyless terminal quarantine, and
 failure rollback. A deferred immutable dependency seal now proves the exact
 ordinal set before a current registry generation can commit.
 
+KO-0C received three further independent security full-file review shards plus
+independent correctness, concurrency, compatibility, performance, and
+simplification review. All 39 source-like files in the exact
+`b42b046..b7ac77b` diff received unique completion receipts. No plausible
+security candidate survived discovery.
+
+Resolved projection findings included a missing reverse current-version
+projection invariant, undercharged description and selector bytes, missing
+8 KiB canonical framing enforcement, selector ordering/duplicate gaps,
+recursive-trigger behavior, and insufficient proof that correlated filters
+deduplicate before keyset `LIMIT`.
+
+Resolved successful-audit findings included missing app/type/scope metadata,
+insufficient preflight width bounds, cursor digests that did not bind the new
+metadata, migration tests that accidentally included later schema, and list
+lookahead allocation/ownership issues.
+
+Resolved rejected-attempt findings included disclosure-prone metadata shapes,
+an inexact configurable retention ceiling, corrupt-boundary append/eviction,
+redundant persisted authorization state, repeated startup scans and
+allocations, sequence exhaustion, and recursive-trigger/`OR REPLACE`
+tampering. The final journal records no request payloads, error strings,
+derived authorization booleans, or unauthorized object metadata.
+
+The formal Codex Security bundle used scan ID
+`6e16ec57-6a8b-4bf3-a5d6-11502a0b229b`, exact binary-diff snapshot
+`codex-security-snapshot/v1:sha256:3d8a3fbd70b8f42512d21123a68c71b8a2b6acdb62500b7c0897f23b69b656d9`,
+39/39 source-like receipts, complete coverage, and zero reportable findings.
+The desktop finalizer first rejected the unsealed manifest because its range
+launcher omitted `scan.target.snapshotDigest`. The same evidence bundle was
+repaired with the digest of the exact full-index binary Git diff and sealed by
+the plugin's local contract validator. Final SHA-256 values are
+`93c3b8fdc1f17ac64e5a0c6f048caefb10d4ca27b3812fe932f64ad8c957da5d`
+for `scan-manifest.json`,
+`51122d213e5c9ddf109c063835b744374051847f5ef036a6d65916908b731cb4`
+for `findings.json`,
+`d914dcd1313e509ef34a45466b42655ec8b7d12ecece5b15b019c1f73ebf13dc`
+for `coverage.json`, and
+`0614b235166c28c42fc31cf31cb8ae04a62db36c21894af30738e8146fd31010`
+for the deterministic `report.md` projection. The workbench row remains
+terminally failed from the launcher omission; the locally sealed bundle is the
+canonical review evidence.
+
 ## Verification evidence
 
 All commands ran from `/Users/suhaib/code/open-splunk`.
@@ -140,27 +191,50 @@ KO-0B evidence:
 | Control-plane migration race gate | pass | KO migration, startup, backup, and ledger subset; final local run 7.989s |
 | Full control package | pass | `go test ./internal/control -count=1`, 6.809s |
 | Patch hygiene | pass | `git diff --check` and staged checks before every commit |
-| KO-0B remote durability | blocked | requires approval to include pre-existing local `fdcc17e` in the `main` push |
+| KO-0B remote durability | pass | KO-0B commits are present on `origin/main` |
+
+KO-0C evidence:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Patch and formatting hygiene | pass | `git diff --check`; generated Go formatting diff was empty |
+| Protobuf generation and lint | pass | `make proto` |
+| Protobuf backward compatibility | pass | `buf breaking --against '.git#branch=main'` against the pre-change revision |
+| TypeScript contracts | pass | `npm run typecheck` |
+| Generator safety | pass | `node --test scripts/compile-protos.test.mjs`, 6/6 |
+| Focused normal packages | pass | control 11.992s; audit 7.145s; auth 8.624s; server 9.331s; searchaudit 2.193s; knowledgeattemptaudit 4.878s; testsupport 1.062s |
+| Fresh focused confirmation | pass | control 12.458s; audit 7.480s; knowledgeattemptaudit 4.838s; server 11.037s; auth 9.899s; searchaudit 3.763s |
+| Full Go suite | pass | `go test ./... -count=1`, including self-contained ClickHouse package tests |
+| Combined race suite | pass | control 93.489s; audit 117.742s; auth 86.709s; server 64.344s; searchaudit 19.478s; knowledgeattemptaudit 84.702s; testsupport 1.885s |
+| Per-commit isolation | pass | detached worktrees verified `f9eb14a`, `fc34902`, and `b7ac77b` with their relevant package suites |
+| Simplification review | pass | three independent reviews of snapshot SHA-256 `0b016d90d035d204903d8263e525e75a3d8c2240512142444ef19bdb64311e0c`; all credible findings resolved |
+| Attempt-journal performance | pass | normal 4.626s → 3.358s; race 126.474s → 73.650s, 41.8% faster |
+| Formal security diff scan | pass | exact range `b42b046..b7ac77b`; 39/39 receipts; complete coverage; zero reportable findings; canonical bundle sealed locally after the launcher digest omission |
+| KO-0C remote durability | pass | `origin/main` contains terminal KO-0C commit `b7ac77b1a9fc28b282e72e7153f7b26739a35629` |
 
 The first sandboxed full-suite attempt failed only where existing tests bind
 loopback sockets or exercise host ACL behavior. The identical suite passed with
-the required local execution permission. No Docker, ClickHouse, browser,
-migration, recovery, or frontend runtime behavior changed in this contract-only
-slice, so those gates were not applicable. No licensed Splunk oracle was
-available or used; this checkpoint makes no differential-equivalence claim.
+the required local execution permission. KO-0C changed SQLite migrations and
+therefore exercised fresh, upgrade, rollback, corruption, recovery-adjacent,
+recursive-trigger, concurrency, and capacity behavior. It did not add browser
+or ClickHouse runtime behavior, so Docker-backed ClickHouse and browser
+verticals were not applicable. No licensed Splunk oracle was available or
+used; this checkpoint makes no differential-equivalence claim.
 
 ## Next dependency-ordered work
 
-Before CRUD runtime work, additive migration 0025 is a hard gate:
+The migration and audit hard gates are complete. The next slice implements the
+administrator-only catalog and validation runtime in dependency order:
 
-1. add a bounded current-version description/selector search projection so
-   list filters run before keyset `LIMIT` without decoding up to the 512 MiB
-   definition-body tenant budget;
-2. transactionally extend the existing 100,000-row general audit journal and
-   protobuf/Go closed taxonomy for ordinary successful knowledge mutations;
-3. add a separate bounded, fail-closed authenticated rejected-attempt journal;
-4. pin binary-substring filter semantics, the deleted/historical Get policy,
-   and exact projection-to-definition integrity checks; and
-5. only then implement the administrator-only catalog/validation runtime. The
-   full Tier-1 compiler remains mandatory for ACTIVE publication, and routes
-   and the feature flag remain absent until the complete family exists.
+1. add store-level Create/Get/List/Update/Delete with exact idempotency,
+   optimistic version matching, current-policy historical authorization,
+   quarantine non-disclosure, immutable body/version publication, and bounded
+   pre-LIMIT filters;
+2. integrate successful mutations and every authenticated rejected privileged
+   attempt into their respective caller-owned transactions;
+3. add protobuf HTTP routes that derive tenant, owner, and administrator state
+   only from the validated browser principal and never from request fields;
+4. exercise fresh/upgrade/crash/corruption/concurrency/race/resource and
+   adversarial authorization tests before any capability is advertised; and
+5. keep ACTIVE publication and the feature flag disabled until the complete
+   Tier-1 parser/compiler/resolver family is present and proven.
