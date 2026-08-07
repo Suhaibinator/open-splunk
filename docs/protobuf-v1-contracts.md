@@ -11,6 +11,12 @@ This directory is the source of truth shared by the Go server, Go collector, and
 - `saved_search*`, `history*`, and `export*` remain separate because they have different lifecycle, persistence, and security semantics.
 - `index*`, `app*`, and `collector_admin*` define control-plane entities plus SRouter operations.
 - `audit*` defines the fixed, administrator-only immutable mutation-audit projection and bounded list operation. `search_attempt_audit*` defines the separately bounded, payload-free search-admission projection and list operation.
+- `knowledge.proto` defines the common registry projection, authorized selectors,
+  Tier-1 typed definitions, versioned dependencies, provenance, and immutable
+  search snapshot. `knowledge_api.proto` reserves the protobuf CRUD,
+  validation, dependency, and bounded preview messages. These contracts are
+  additive but deliberately unregistered and unadvertised until the complete
+  Tier-1 API and runtime family exists.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
@@ -40,6 +46,81 @@ decode semantics.
 Clients may rely on known fields remaining decodable, not on unknown bytes
 being preserved or echoed. The Go runtime retains unknown response bytes by
 default, while the generated TypeScript decoders skip them.
+
+Knowledge-definition mutation payloads are the deliberate exception to the
+generic browser request rule above. Their raw protobuf must be inspected for
+unknown fields recursively, including nested messages and unknown future
+`oneof` bodies, before any generic decoder can discard those bytes. The route
+rejects such a definition as invalid instead of silently accepting a meaning
+an older server cannot validate. Read-only response evolution retains the
+ordinary known-field decodability rule.
+
+### Reserved knowledge-object contracts
+
+The `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` enum value is reserved for the
+complete Tier-1 field-knowledge family. A server must not include it in
+`GetSystemBootstrapResponse.features` until CRUD, validation, authorized
+resolution, immutable snapshot admission, field enrichment, inspection, and
+the browser workflow are all configured. Merely generating the messages does
+not create a route or advertise a capability.
+
+Knowledge definitions deliberately repeat their indexed app, name, sharing,
+and type identity in the registry projection. A future storage boundary must
+require exact agreement after decoding; it must report corruption rather than
+repairing one representation during a request. Definition and snapshot SHA-256
+fields are raw 32-byte digests and must be length-checked.
+
+`KnowledgeSnapshot` contains no protobuf maps, floating-point fields, or
+timestamps. Unknown fields at any depth are rejected and cleared before
+digesting. The digest input includes normalized binary-sorted effective
+authorized indexes, the bounded shadow and closed-code warning inventory, and
+aggregate query-budget charges. Wall-clock admission time belongs to job
+lifecycle metadata outside the digest message.
+`canonical_snapshot_bytes` is computed first as the length of deterministic
+`KnowledgeSnapshot` protobuf bytes with both `snapshot_sha256` and
+`canonical_snapshot_bytes` cleared. The charge is then populated, the digest
+form is deterministically serialized with only `snapshot_sha256` cleared, and
+the compatibility framing is hashed. This two-step definition is
+non-self-referential and is pinned by golden tests.
+Snapshot objects are encoded in ascending `resolution_ordinal`; each stage has
+its own contiguous `stage_ordinal`. Dependencies carry bounded
+`topological_depth` and are encoded by a unique contiguous
+`canonical_ordinal`. Lookup asset references use a contiguous `asset_ordinal`.
+These ordering rules are part of canonical snapshot hashing, not permission to
+trust a client-authored snapshot. Search admission always creates the snapshot
+after authentication, app and index authorization, and server-side catalog
+resolution.
+
+Executable object order is stage, normalized binary name, and stable object ID.
+There is no client-authored stage order. `QUARANTINED` is a terminal
+administrator-recovery state and ordinary state mutation must reject it. A
+separate prepare operation performs the privileged integrity scan and returns
+only a single-use, ten-minute HMAC token plus bounded metadata. The quarantine
+request accepts that token and a required fresh `client_request_id`; the token
+binds the raw corrupt root and its bounded ordered active-dependent closure so
+recovery does not decode attacker-controlled or future definition bodies.
+Every mutation request uses a required 16–128 byte printable-ASCII
+`client_request_id`; omission is invalid rather than non-idempotent execution.
+Ordinary state mutation accepts only `ACTIVE` or `DISABLED`; `DRAFT` is an
+initial create state and quarantine has its dedicated recovery route. Field
+masks on update, validate, and preview are relative to
+`KnowledgeObjectDefinition`, never the containing request message.
+
+Provenance uses a typed `oneof`: authored SPL carries only its source range, a
+currently authorized object carries its stable identity and definition
+location, and a currently unauthorized historical object carries only its
+stage, bounded object kind, and response-local fixed redacted ordinal. The
+redacted wire variant cannot retain an object ID, name, version, owner, app, or
+definition location.
+
+The route comments in `knowledge_api.proto` reserve the intended endpoint
+names only. They are intentionally absent from the browser-route table below
+until handlers are registered. List and dependency continuations use bounded
+`PageRequest`/`PageResponse` contracts; the future signed cursor must bind all
+normalized filters, ordering, caller scope, page bound, and the first-page
+catalog revision. Preview accepts only a retained server-authorized search-job
+identity plus a candidate definition. It never accepts raw events, physical
+table names, index authority, asset paths, or SQL.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.

@@ -33,6 +33,12 @@ export enum ServerFeature {
   SERVER_FEATURE_PLAN_INSPECTION = 12,
   SERVER_FEATURE_AUDIT_SEARCH = 13,
   SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT = 14,
+  /**
+   * SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS - The server emits this value only when the complete Tier-1 knowledge CRUD,
+   * validation, resolution, snapshot, execution, and browser family exists.
+   * Declaring the wire value alone does not advertise the feature.
+   */
+  SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS = 15,
   UNRECOGNIZED = -1,
 }
 
@@ -83,6 +89,9 @@ export function serverFeatureFromJSON(object: any): ServerFeature {
     case 14:
     case "SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT":
       return ServerFeature.SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT;
+    case 15:
+    case "SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS":
+      return ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -122,6 +131,8 @@ export function serverFeatureToJSON(object: ServerFeature): string {
       return "SERVER_FEATURE_AUDIT_SEARCH";
     case ServerFeature.SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT:
       return "SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT";
+    case ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS:
+      return "SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS";
     case ServerFeature.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

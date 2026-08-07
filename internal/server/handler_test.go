@@ -468,6 +468,7 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 			opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
 			opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
 			opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+			opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
 		}},
 	})
 
@@ -492,10 +493,20 @@ func TestSearchWebSocketRouteAndBootstrapUseServiceLimits(t *testing.T) {
 		opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY,
 		opensplunkv1.ServerFeature_SERVER_FEATURE_TIMELINE,
 		opensplunkv1.ServerFeature_SERVER_FEATURE_PLAN_INSPECTION,
+		opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
 	} {
 		if slices.Contains(bootstrap.GetFeatures(), unsupported) {
 			t.Fatalf("unsupported feature %s was advertised", unsupported)
 		}
+	}
+	knowledgeResponse := postProto(
+		t,
+		handler,
+		"/api/v1/knowledge/objects/list",
+		&opensplunkv1.ListKnowledgeObjectsRequest{},
+	)
+	if knowledgeResponse.Code != http.StatusNotFound {
+		t.Fatalf("unregistered knowledge route status = %d, want %d", knowledgeResponse.Code, http.StatusNotFound)
 	}
 
 	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, searchWebSocketPath, nil)

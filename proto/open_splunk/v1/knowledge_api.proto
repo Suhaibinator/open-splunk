@@ -1,0 +1,247 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/knowledge.proto";
+import "open_splunk/v1/result.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// These messages reserve the KO-0 browser contract. No route is registered and
+// no server feature is advertised until the complete Tier-1 family exists.
+
+// POST /api/v1/knowledge/objects/create
+message CreateKnowledgeObjectRequest {
+  KnowledgeObjectDefinition definition = 1;
+  // initial_state accepts only DRAFT or ACTIVE.
+  KnowledgeObjectState initial_state = 2;
+  string client_request_id = 3;
+}
+
+message CreateKnowledgeObjectResponse {
+  KnowledgeObject knowledge_object = 1;
+  uint64 tenant_catalog_revision = 2;
+}
+
+// POST /api/v1/knowledge/objects/get
+message GetKnowledgeObjectRequest {
+  string knowledge_object_id = 1;
+  optional uint64 version = 2;
+}
+
+message GetKnowledgeObjectResponse {
+  KnowledgeObject knowledge_object = 1;
+}
+
+enum KnowledgeObjectSortBy {
+  KNOWLEDGE_OBJECT_SORT_BY_UNSPECIFIED = 0;
+  KNOWLEDGE_OBJECT_SORT_BY_NAME = 1;
+  KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT = 2;
+  KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT = 3;
+  KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE = 4;
+}
+
+// POST /api/v1/knowledge/objects/list
+// The signed continuation binds every normalized filter, ordering choice,
+// caller scope, page bound, and first-page catalog revision.
+message ListKnowledgeObjectsRequest {
+  PageRequest page = 1;
+  optional string app_id_filter = 2;
+  optional string owner_id_filter = 3;
+  optional string text_filter = 4;
+  repeated KnowledgeObjectType object_type_filters = 5;
+  repeated KnowledgeObjectState state_filters = 6;
+  repeated SharingScope sharing_scope_filters = 7;
+  optional string selector_text_filter = 8;
+  KnowledgeObjectSortBy sort_by = 9;
+  SortDirection sort_direction = 10;
+}
+
+message ListKnowledgeObjectsResponse {
+  repeated KnowledgeObject knowledge_objects = 1;
+  PageResponse page = 2;
+  uint64 tenant_catalog_revision = 3;
+}
+
+// POST /api/v1/knowledge/objects/update
+message UpdateKnowledgeObjectRequest {
+  string knowledge_object_id = 1;
+  uint64 expected_version = 2;
+  KnowledgeObjectDefinition definition = 3;
+  // Paths are relative to KnowledgeObjectDefinition, never this request.
+  google.protobuf.FieldMask update_mask = 4;
+  string client_request_id = 5;
+}
+
+message UpdateKnowledgeObjectResponse {
+  KnowledgeObject knowledge_object = 1;
+  uint64 tenant_catalog_revision = 2;
+}
+
+// POST /api/v1/knowledge/objects/set-state
+// state must be ACTIVE or DISABLED. DRAFT is an initial create state rather
+// than a reversible transition. QUARANTINED is terminal and can be entered
+// only through the dedicated recovery-token route below.
+message SetKnowledgeObjectStateRequest {
+  string knowledge_object_id = 1;
+  uint64 expected_version = 2;
+  KnowledgeObjectState state = 3;
+  string client_request_id = 4;
+}
+
+message SetKnowledgeObjectStateResponse {
+  KnowledgeObject knowledge_object = 1;
+  uint64 tenant_catalog_revision = 2;
+}
+
+// POST /api/v1/knowledge/objects/delete
+message DeleteKnowledgeObjectRequest {
+  string knowledge_object_id = 1;
+  uint64 expected_version = 2;
+  string client_request_id = 3;
+}
+
+message DeleteKnowledgeObjectResponse {
+  string knowledge_object_id = 1;
+  uint64 deleted_version = 2;
+  uint64 tenant_catalog_revision = 3;
+}
+
+enum KnowledgeQuarantineReason {
+  KNOWLEDGE_QUARANTINE_REASON_UNSPECIFIED = 0;
+  KNOWLEDGE_QUARANTINE_REASON_ROOT_CORRUPTION = 1;
+  KNOWLEDGE_QUARANTINE_REASON_DEPENDENCY_RECOVERY = 2;
+}
+
+message KnowledgeQuarantineTransition {
+  uint32 cascade_ordinal = 1;
+  string knowledge_object_id = 2;
+  uint64 previous_version = 3;
+  uint64 quarantined_version = 4;
+  KnowledgeQuarantineReason reason = 5;
+}
+
+// POST /api/v1/knowledge/objects/quarantine/prepare
+// This administrator-only integrity scan returns no definition bytes. Its token
+// expires after ten minutes and binds the raw root row and ordered active-
+// dependent closure observed at tenant_catalog_revision.
+message PrepareKnowledgeObjectQuarantineRequest {
+  string knowledge_object_id = 1;
+}
+
+message PrepareKnowledgeObjectQuarantineResponse {
+  string root_knowledge_object_id = 1;
+  string recovery_token = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  uint32 dependent_count = 4;
+  uint64 tenant_catalog_revision = 5;
+}
+
+// POST /api/v1/knowledge/objects/quarantine
+// recovery_token is a single-use, short-lived HMAC token issued by a privileged
+// integrity scan. It binds the tenant revision, raw root-row digest, and bounded
+// ordered dependent closure. The server re-reads and re-digests that authority
+// transactionally without decoding suspect definitions.
+message QuarantineKnowledgeObjectRequest {
+  string recovery_token = 1;
+  string client_request_id = 2;
+}
+
+message QuarantineKnowledgeObjectResponse {
+  string root_knowledge_object_id = 1;
+  repeated KnowledgeQuarantineTransition transitions = 2;
+  uint64 tenant_catalog_revision = 3;
+}
+
+message KnowledgeResourceEstimate {
+  uint32 selector_patterns = 1;
+  uint64 normalized_definition_bytes = 2;
+  uint32 dependency_nodes = 3;
+  uint32 dependency_edges = 4;
+  uint32 generated_operators = 5;
+  uint32 generated_fields = 6;
+  uint32 regex_programs = 7;
+  uint64 estimated_regex_work_units = 8;
+  uint32 scalar_expressions = 9;
+  uint32 scalar_expression_nodes = 10;
+  uint64 estimated_generated_sql_bytes = 11;
+}
+
+message KnowledgeValidationResult {
+  bool valid = 1;
+  KnowledgeObjectType object_type = 2;
+  optional KnowledgeObjectDefinition normalized_definition = 3;
+  optional bytes definition_sha256 = 4;
+  repeated FieldViolation field_violations = 5;
+  repeated Diagnostic diagnostics = 6;
+  repeated KnowledgeObjectDependency dependencies = 7;
+  KnowledgeResourceEstimate resources = 8;
+}
+
+// POST /api/v1/knowledge/objects/validate
+// When knowledge_object_id is present, expected_version and update_mask are
+// required and validation applies the masked candidate to that exact version.
+message ValidateKnowledgeObjectRequest {
+  KnowledgeObjectDefinition definition = 1;
+  optional string knowledge_object_id = 2;
+  optional uint64 expected_version = 3;
+  // Paths are relative to KnowledgeObjectDefinition, never this request.
+  google.protobuf.FieldMask update_mask = 4;
+}
+
+message ValidateKnowledgeObjectResponse {
+  KnowledgeValidationResult result = 1;
+  uint64 tenant_catalog_revision = 2;
+}
+
+// POST /api/v1/knowledge/objects/dependencies
+message ListKnowledgeObjectDependenciesRequest {
+  string knowledge_object_id = 1;
+  optional uint64 version = 2;
+  PageRequest page = 3;
+}
+
+message ListKnowledgeObjectDependenciesResponse {
+  repeated KnowledgeObjectDependency dependencies = 1;
+  PageResponse page = 2;
+  uint64 tenant_catalog_revision = 3;
+}
+
+// POST /api/v1/knowledge/objects/dependents
+message ListKnowledgeObjectDependentsRequest {
+  string knowledge_object_id = 1;
+  optional uint64 version = 2;
+  PageRequest page = 3;
+}
+
+message ListKnowledgeObjectDependentsResponse {
+  repeated KnowledgeObjectDependency dependents = 1;
+  PageResponse page = 2;
+  uint64 tenant_catalog_revision = 3;
+}
+
+// POST /api/v1/knowledge/objects/preview
+// retained_search_job_id selects a server-authorized immutable event snapshot.
+// A browser cannot submit events, index scope, a physical table, or SQL.
+message PreviewKnowledgeObjectRequest {
+  string retained_search_job_id = 1;
+  KnowledgeObjectDefinition definition = 2;
+  optional string knowledge_object_id = 3;
+  optional uint64 expected_version = 4;
+  // Paths are relative to KnowledgeObjectDefinition, never this request.
+  google.protobuf.FieldMask update_mask = 5;
+  optional uint32 maximum_rows = 6;
+}
+
+message PreviewKnowledgeObjectResponse {
+  KnowledgeValidationResult validation = 1;
+  ResultSchema before_schema = 2;
+  ResultSchema after_schema = 3;
+  repeated ResultRow before_rows = 4;
+  repeated ResultRow after_rows = 5;
+  bool truncated = 6;
+  uint64 tenant_catalog_revision = 7;
+}

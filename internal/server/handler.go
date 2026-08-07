@@ -1173,6 +1173,9 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT, capabilities.searchAttemptAudit},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
+		// Reserved until the complete Tier-1 knowledge service, admission,
+		// execution, inspection, and browser family is configured together.
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS, false},
 	}
 	enabled := make(map[opensplunkv1.ServerFeature]bool, len(managed))
 	for _, item := range managed {

@@ -29,6 +29,10 @@ enum ServerFeature {
   SERVER_FEATURE_PLAN_INSPECTION = 12;
   SERVER_FEATURE_AUDIT_SEARCH = 13;
   SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT = 14;
+  // The server emits this value only when the complete Tier-1 knowledge CRUD,
+  // validation, resolution, snapshot, execution, and browser family exists.
+  // Declaring the wire value alone does not advertise the feature.
+  SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS = 15;
 }
 
 message BrowserApiLimits {
