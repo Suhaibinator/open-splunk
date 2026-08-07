@@ -27,7 +27,7 @@ const (
 
 var (
 	// ErrCorrupt means persisted journal state violates an invariant preserved
-	// by this package and migration 0027. Callers must fail closed.
+	// by this package and its forward migrations. Callers must fail closed.
 	ErrCorrupt = errors.New("knowledgeattemptaudit: persisted state is corrupt")
 )
 
@@ -35,22 +35,26 @@ var (
 type Action string
 
 const (
-	ActionCreate      Action = "create"
-	ActionUpdate      Action = "update"
-	ActionScopeChange Action = "scope_change"
-	ActionEnable      Action = "enable"
-	ActionDisable     Action = "disable"
-	ActionQuarantine  Action = "quarantine"
-	ActionDelete      Action = "delete"
-	ActionValidate    Action = "validate"
-	ActionPreview     Action = "preview"
+	ActionCreate       Action = "create"
+	ActionGet          Action = "get"
+	ActionList         Action = "list"
+	ActionUpdate       Action = "update"
+	ActionScopeChange  Action = "scope_change"
+	ActionEnable       Action = "enable"
+	ActionDisable      Action = "disable"
+	ActionQuarantine   Action = "quarantine"
+	ActionDelete       Action = "delete"
+	ActionValidate     Action = "validate"
+	ActionDependencies Action = "dependencies"
+	ActionDependents   Action = "dependents"
+	ActionPreview      Action = "preview"
 )
 
 func (action Action) valid() bool {
 	switch action {
-	case ActionCreate, ActionUpdate, ActionScopeChange, ActionEnable,
-		ActionDisable, ActionQuarantine, ActionDelete, ActionValidate,
-		ActionPreview:
+	case ActionCreate, ActionGet, ActionList, ActionUpdate, ActionScopeChange,
+		ActionEnable, ActionDisable, ActionQuarantine, ActionDelete,
+		ActionValidate, ActionDependencies, ActionDependents, ActionPreview:
 		return true
 	default:
 		return false
@@ -118,7 +122,7 @@ type AuthorizedObject struct {
 }
 
 // AuthorizedContext is optional trusted publication context. AppID has already
-// been authorized. Object may be nil for create and pre-object failures.
+// been authorized. Object may be nil for create, list, and pre-object failures.
 type AuthorizedContext struct {
 	AppID  string
 	Object *AuthorizedObject
@@ -202,11 +206,16 @@ func validAuthorizedContext(value *AuthorizedContext, action Action, reason Reas
 	if value.Object == nil {
 		return reason != ReasonVersionConflict
 	}
-	return action != ActionCreate && reason != ReasonNotFoundOrForbidden &&
+	return actionAllowsAuthorizedObject(action) &&
+		reason != ReasonNotFoundOrForbidden &&
 		validIdentity(value.Object.KnowledgeObjectID, maximumObjectIDBytes) &&
 		value.Object.ObjectType.Valid() && value.Object.Version >= 1 &&
 		value.Object.Version <= uint64(maximumPersistedSequence+1) &&
 		value.Object.SharingScope.Valid()
+}
+
+func actionAllowsAuthorizedObject(action Action) bool {
+	return action.valid() && action != ActionCreate && action != ActionList
 }
 
 func validIdentity(value string, maximumBytes int) bool {

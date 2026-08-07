@@ -41,8 +41,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 27 {
-		t.Fatalf("schema migration count = %d, want 27", migrationCount)
+	if migrationCount != 28 {
+		t.Fatalf("schema migration count = %d, want 28", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -90,8 +90,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 27 {
-		t.Fatalf("schema migration count after reopen = %d, want 27", migrationCount)
+	if migrationCount != 28 {
+		t.Fatalf("schema migration count after reopen = %d, want 28", migrationCount)
 	}
 }
 
@@ -638,8 +638,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 27 {
-		t.Fatalf("schema migration count = %d, want 27", count)
+	if count != 28 {
+		t.Fatalf("schema migration count = %d, want 28", count)
 	}
 }
 

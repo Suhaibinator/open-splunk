@@ -60,6 +60,16 @@ func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
 			}
 		})
 	}
+	listWithObject := append([]any(nil), valid...)
+	listWithObject[6] = "list"
+	listWithObject[9] = "app_012345678901234567890A"
+	listWithObject[10] = "ko-authorized"
+	listWithObject[11] = "field_alias"
+	listWithObject[12] = int64(1)
+	listWithObject[13] = "app"
+	if _, err := database.SQLDB().Exec(statement, listWithObject...); err == nil {
+		t.Fatal("list attempt retained object metadata")
+	}
 	userWithApp := append([]any(nil), valid...)
 	userWithApp[5] = "user"
 	userWithApp[8] = "not_administrator"

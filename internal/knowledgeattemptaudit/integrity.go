@@ -185,7 +185,7 @@ func validEventSize(record eventSizeRecord) bool {
 		record.ActorIDBytes >= 1 && record.ActorIDBytes <= 255 &&
 		record.ActorRoleBytes >= int64(len(audit.ActorRoleUser)) &&
 		record.ActorRoleBytes <= int64(len(audit.ActorRoleAdministrator)) &&
-		record.ActionBytes >= 1 && record.ActionBytes <= int64(len(ActionScopeChange)) &&
+		record.ActionBytes >= 1 && record.ActionBytes <= int64(len(ActionDependencies)) &&
 		record.ResultBytes == int64(len("rejected")) &&
 		record.ReasonBytes >= 1 && record.ReasonBytes <= int64(len(ReasonNotFoundOrForbidden)) &&
 		record.AppIDBytes >= 0 && record.AppIDBytes <= maximumAppIDBytes &&

@@ -77,6 +77,45 @@ func readEvents(t *testing.T, database *control.DB, tenantID string) []Event {
 	return events
 }
 
+func TestActionTaxonomyIsClosedAndIntegrityBounded(t *testing.T) {
+	t.Parallel()
+	actions := []Action{
+		ActionCreate,
+		ActionGet,
+		ActionList,
+		ActionUpdate,
+		ActionScopeChange,
+		ActionEnable,
+		ActionDisable,
+		ActionQuarantine,
+		ActionDelete,
+		ActionValidate,
+		ActionDependencies,
+		ActionDependents,
+		ActionPreview,
+	}
+	for _, action := range actions {
+		if !action.valid() {
+			t.Errorf("action %q is not valid", action)
+		}
+		if len(action) > len(ActionDependencies) {
+			t.Errorf("action %q exceeds integrity preflight width", action)
+		}
+	}
+	if Action("future").valid() {
+		t.Fatal("unknown action is valid")
+	}
+	if actionAllowsAuthorizedObject(ActionCreate) ||
+		actionAllowsAuthorizedObject(ActionList) {
+		t.Fatal("create or list permits authorized object metadata")
+	}
+	for _, action := range []Action{ActionGet, ActionDependencies, ActionDependents} {
+		if !actionAllowsAuthorizedObject(action) {
+			t.Errorf("action %q rejects authorized object metadata", action)
+		}
+	}
+}
+
 func TestAppendRejectedStoresOnlyTrustedBoundedProjection(t *testing.T) {
 	t.Parallel()
 	_, database := openTestDatabase(t)
@@ -135,6 +174,59 @@ func TestAppendRejectedStoresOnlyTrustedBoundedProjection(t *testing.T) {
 	}
 }
 
+func TestAppendRejectedAcceptsClosedPrivilegedReadActions(t *testing.T) {
+	t.Parallel()
+	_, database := openTestDatabase(t)
+	store := newTestStore(t, database)
+	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
+	authorized := &AuthorizedContext{
+		AppID: "app_012345678901234567890A",
+		Object: &AuthorizedObject{
+			KnowledgeObjectID: "ko-authorized",
+			ObjectType:        ObjectTypeFieldExtraction,
+			Version:           3,
+			SharingScope:      SharingScopePrivate,
+		},
+	}
+	tests := []struct {
+		action     Action
+		authorized *AuthorizedContext
+	}{
+		{action: ActionGet, authorized: authorized},
+		{action: ActionList},
+		{action: ActionDependencies, authorized: authorized},
+		{action: ActionDependents, authorized: authorized},
+	}
+	for index, test := range tests {
+		definition := adminDefinition(
+			test.action,
+			ReasonServiceUnavailable,
+			time.Duration(index)*time.Microsecond,
+		)
+		definition.AuthorizedContext = test.authorized
+		if err := store.AppendRejected(
+			admin,
+			"tenant-read-actions",
+			definition,
+		); err != nil {
+			t.Fatalf("AppendRejected(%q): %v", test.action, err)
+		}
+	}
+
+	events := readEvents(t, database, "tenant-read-actions")
+	if len(events) != len(tests) {
+		t.Fatalf("events = %d, want %d", len(events), len(tests))
+	}
+	for index, event := range events {
+		if event.Action != tests[index].action {
+			t.Fatalf("event %d action = %q, want %q", index, event.Action, tests[index].action)
+		}
+		if err := event.ValidateForTenant("tenant-read-actions"); err != nil {
+			t.Fatalf("ValidateForTenant(%q): %v", event.Action, err)
+		}
+	}
+}
+
 func TestAppendInputTaxonomyAndPrivacyShapes(t *testing.T) {
 	t.Parallel()
 	_, database := openTestDatabase(t)
@@ -166,6 +258,7 @@ func TestAppendInputTaxonomyAndPrivacyShapes(t *testing.T) {
 		{"not admin app metadata", user, Definition{OccurredAt: testTime, Action: ActionValidate, Reason: ReasonNotAdministrator, AuthorizedContext: app}},
 		{"not found object metadata", admin, Definition{OccurredAt: testTime, Action: ActionUpdate, Reason: ReasonNotFoundOrForbidden, AuthorizedContext: object}},
 		{"create object metadata", admin, Definition{OccurredAt: testTime, Action: ActionCreate, Reason: ReasonInvalidDefinition, AuthorizedContext: object}},
+		{"list object metadata", admin, Definition{OccurredAt: testTime, Action: ActionList, Reason: ReasonServiceUnavailable, AuthorizedContext: object}},
 		{"version without object", admin, adminDefinition(ActionUpdate, ReasonVersionConflict, 0)},
 		{"empty app", admin, Definition{OccurredAt: testTime, Action: ActionValidate, Reason: ReasonInvalidDefinition, AuthorizedContext: &AuthorizedContext{}}},
 		{"unknown type", admin, Definition{OccurredAt: testTime, Action: ActionUpdate, Reason: ReasonInvalidDefinition, AuthorizedContext: &AuthorizedContext{AppID: object.AppID, Object: &AuthorizedObject{KnowledgeObjectID: "ko", ObjectType: ObjectType("future"), Version: 1, SharingScope: SharingScopeApp}}}},

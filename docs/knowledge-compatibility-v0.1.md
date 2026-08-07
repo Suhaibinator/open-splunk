@@ -506,8 +506,10 @@ otherwise they use the redacted ordinal. Other object existence is not
 disclosed. Runtime row-content failures never echo `_raw` or derived values.
 
 Committed actions are `create`, `update`, `scope_change`, `enable`, `disable`,
-`quarantine`, and `delete`; read-only actions are `validate` and `preview`.
-Results are `success` or `rejected`. Rejection reasons are the closed set
+`quarantine`, and `delete`. The rejected privileged-attempt taxonomy also
+includes the catalog reads `get`, `list`, `dependencies`, and `dependents`, and
+the read-only operations `validate` and `preview`. Results are `success` or
+`rejected`. Rejection reasons are the closed set
 `not_administrator`, `not_found_or_forbidden`, `version_conflict`,
 `idempotency_conflict`, `invalid_definition`, `forbidden_dependency`,
 `resource_limit`, and `service_unavailable`. No free-form reason is stored.
