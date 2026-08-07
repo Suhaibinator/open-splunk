@@ -677,45 +677,24 @@ by copying files manually.
 
 ## Collector image
 
-`make oci` also creates `open-splunk-collector:<version>`. It is a separate
-non-root scratch image because collectors run beside log sources. The image
-defaults to:
+Releases publish the collector independently as the multi-platform
+`ghcr.io/suhaibinator/open-splunk-collector:<version>` image for Linux AMD64
+and ARM64. Docker selects the matching architecture during a normal pull. A
+local `make oci` build also creates `open-splunk-collector:<version>` for its
+selected `OPEN_SPLUNK_OCI_PLATFORM`. The non-root scratch image defaults to:
 
 ```text
 open-splunk-collector run -config /etc/open-splunk/collector.yaml
 ```
 
-Mount a validated configuration, private writable state directory, trusted
-server CA, and collector token on the log-producing host. Bootstrap a new
-collector in this order:
+The complete Docker runbook covers TLS compatible with this Compose stack,
+network exposure, index and token prerequisites, exact mounts, UID `65532`
+permissions, identity bootstrap, validation, startup, monitoring, upgrades,
+token rotation, WAL recovery, disk pressure, and dead-letter handling:
 
-1. Prepare the configuration with its final `state.directory` and
-   `server.token_file` paths, and mount the final state volume. The state path
-   must be a real directory (not a symlink), owned by the collector UID, under
-   a trusted parent that other users cannot modify. The token file does not
-   need to exist yet. Use a dedicated child directory, never a filesystem root
-   or the collector's current working directory. This filesystem security
-   contract is currently supported on Linux and macOS; other targets fail
-   closed.
-2. Run `open-splunk-collector identity -config
-   /etc/open-splunk/collector.yaml`. The command does not read the token, scan
-   inputs, open the WAL, or contact the server; it prints only the stable
-   collector ID.
-3. Use an authenticated administrator API client to create an ingestion token
-   whose `bound_collector_id` is exactly that printed ID. The server returns
-   the plaintext secret once.
-4. Deliver that secret to `server.token_file` through the host's secret
-   manager or another atomic owner-only file installation. Never put it in the
-   YAML, a URL, a process argument, or a log.
-5. Run `open-splunk-collector validate -config
-   /etc/open-splunk/collector.yaml`, then start the normal `run` command.
+[`docs/collector-deployment.md`](../docs/collector-deployment.md)
 
-Keep the complete state directory across restarts and token rotation. A
-replacement token must bind to the same printed ID. If `collector_id` is
-missing or invalid beside existing WAL, checkpoint, or dead-letter state, the
-collector fails closed instead of creating a new security identity.
-
-Do not give a collector ClickHouse or administrator credentials. The default
-Compose file deliberately has no collector service; the GradeThis
-no-OpenTelemetry cutover will provide and test the first concrete deployment
-configuration.
+The default Compose file deliberately has no collector service. Its collector
+port remains bound to host loopback, so make a deliberate firewall-restricted
+listener change before deploying collectors on remote log hosts. Do not give a
+collector ClickHouse or administrator credentials.

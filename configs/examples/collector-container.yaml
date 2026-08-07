@@ -1,0 +1,65 @@
+# Production-oriented container configuration for the Open Splunk collector.
+# Set every environment placeholder below. The paths used by the
+# deployment guide are:
+#
+#   OPEN_SPLUNK_COLLECTOR_TOKEN_FILE=/run/open-splunk/secrets/collector.token
+#   OPEN_SPLUNK_SERVER_TLS_CA_FILE=/run/open-splunk/tls/ca.crt
+#   OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY=/var/lib/open-splunk-collector/state
+#   OPEN_SPLUNK_LOG_GLOB=/var/log/source/*.log
+#
+# The state directory contains the stable collector identity, WAL, checkpoints,
+# and rejected event payloads. Preserve it as one unit across every restart and
+# upgrade. Never share one state directory between collector instances.
+
+server:
+  address: "${OPEN_SPLUNK_SERVER_GRPC_ADDRESS}"
+  transport: grpc
+  token_file: "${OPEN_SPLUNK_COLLECTOR_TOKEN_FILE}"
+  compression: gzip
+  tls:
+    enabled: true
+    ca_file: "${OPEN_SPLUNK_SERVER_TLS_CA_FILE}"
+    # The production-shaped deploy Compose certificate is issued for this DNS
+    # name. Keep this override when dialing that listener by another DNS name
+    # or IP address.
+    server_name: "${OPEN_SPLUNK_SERVER_TLS_SERVER_NAME}"
+
+state:
+  directory: "${OPEN_SPLUNK_COLLECTOR_STATE_DIRECTORY}"
+  max_queue_bytes: 1GiB
+
+inputs:
+  - id: application-logs
+    type: file
+    include:
+      - "${OPEN_SPLUNK_LOG_GLOB}"
+    exclude:
+      - "*.gz"
+    format: ndjson
+    # Use "beginning" for an intentional first-deployment backfill. "end"
+    # starts a newly discovered existing file at EOF; later appended lines and
+    # files discovered after startup are still collected.
+    start_at: end
+    index: "${OPEN_SPLUNK_INDEX}"
+    source: "${OPEN_SPLUNK_LOG_SOURCE}"
+    sourcetype: "${OPEN_SPLUNK_LOG_SOURCETYPE}"
+    # Set the application/log host explicitly because the container hostname is
+    # normally not the host whose files are mounted below /var/log/source.
+    host: "${OPEN_SPLUNK_LOG_HOST}"
+    fields:
+      service: "${OPEN_SPLUNK_SERVICE}"
+      environment: "${OPEN_SPLUNK_ENVIRONMENT}"
+
+# Redaction happens before an event crosses the durable WAL boundary. Tailor
+# this list to the application's structured fields before the first run.
+processors:
+  - type: redact
+    fields:
+      - token
+      - authorization
+      - password
+      - session_token
+      - cookie
+      - api_key
+      - private_key
+    replacement: "[REDACTED]"

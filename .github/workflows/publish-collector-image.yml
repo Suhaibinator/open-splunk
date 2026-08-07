@@ -1,0 +1,228 @@
+name: Publish collector image
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-collector-image
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: Verify collector release
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      application_version: ${{ steps.release.outputs.application_version }}
+      image: ${{ steps.release.outputs.image }}
+      image_tag: ${{ steps.release.outputs.image_tag }}
+      image_created: ${{ steps.release.outputs.image_created }}
+      source_date_epoch: ${{ steps.release.outputs.source_date_epoch }}
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate release identity
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          semantic_version_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ "$RELEASE_TAG" != v* ]]; then
+            echo "::error::Collector releases require a v-prefixed semantic version tag."
+            exit 1
+          fi
+          application_version=${RELEASE_TAG#v}
+          if [[ ${#application_version} -gt 64 ||
+                ! "$application_version" =~ $semantic_version_pattern ]]; then
+            echo "::error::Tag $RELEASE_TAG is not a supported semantic version."
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::The checked-out release does not match GITHUB_SHA."
+            exit 1
+          fi
+
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/open-splunk-collector"
+          image_tag=${application_version//+/_}
+          image_created=$(git show -s --format=%cI HEAD)
+          source_date_epoch=$(git show -s --format=%ct HEAD)
+
+          {
+            echo "application_version=$application_version"
+            echo "image=$image"
+            echo "image_tag=$image_tag"
+            echo "image_created=$image_created"
+            echo "source_date_epoch=$source_date_epoch"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - name: Verify collector code
+        run: go test ./internal/collector/... ./cmd/open-splunk-collector -count=1
+
+      - name: Verify OCI publication contract
+        run: node --test scripts/build-oci.test.mjs
+
+  build:
+    name: Build collector (${{ matrix.platform }})
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            architecture: amd64
+          - platform: linux/arm64
+            architecture: arm64
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push collector by digest
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: collector
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ needs.verify.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            OPEN_SPLUNK_APPLICATION_VERSION=${{ needs.verify.outputs.application_version }}
+            OPEN_SPLUNK_SOURCE_REVISION=${{ github.sha }}
+            OPEN_SPLUNK_IMAGE_CREATED=${{ needs.verify.outputs.image_created }}
+            OPEN_SPLUNK_SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
+            OPEN_SPLUNK_EXPECTED_TARGETOS=linux
+            OPEN_SPLUNK_EXPECTED_TARGETARCH=${{ matrix.architecture }}
+            SOURCE_DATE_EPOCH=${{ needs.verify.outputs.source_date_epoch }}
+          cache-from: type=gha,scope=collector-${{ matrix.architecture }}
+          cache-to: type=gha,mode=max,scope=collector-${{ matrix.architecture }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Export image digest
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Build returned an invalid collector image digest."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/digests"
+          touch "$RUNNER_TEMP/digests/${IMAGE_DIGEST#sha256:}"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: collector-digest-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-architecture collector
+    needs:
+      - verify
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download image digests
+        uses: actions/download-artifact@v7
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: collector-digest-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and verify multi-architecture manifest
+        env:
+          IMAGE: ${{ needs.verify.outputs.image }}
+          IMAGE_TAG: ${{ needs.verify.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t digest_files < <(find "$RUNNER_TEMP/digests" -maxdepth 1 -type f -print | sort)
+          if [[ ${#digest_files[@]} -ne 2 ]]; then
+            echo "::error::Expected exactly two collector image digests."
+            exit 1
+          fi
+
+          sources=()
+          for digest_file in "${digest_files[@]}"; do
+            digest=${digest_file##*/}
+            if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::Invalid collector digest artifact $digest."
+              exit 1
+            fi
+            sources+=("$IMAGE@sha256:$digest")
+          done
+
+          reference="$IMAGE:$IMAGE_TAG"
+          docker buildx imagetools create --tag "$reference" "${sources[@]}"
+          docker buildx imagetools inspect "$reference"
+          docker buildx imagetools inspect "$reference" --raw >"$RUNNER_TEMP/collector-manifest.json"
+
+          actual_platforms=$(jq -r '
+            .manifests[]
+            | select(.platform.os == "linux")
+            | select(.platform.architecture == "amd64" or .platform.architecture == "arm64")
+            | "\(.platform.os)/\(.platform.architecture)"
+          ' "$RUNNER_TEMP/collector-manifest.json" | sort -u)
+          expected_platforms=$'linux/amd64\nlinux/arm64'
+          if [[ "$actual_platforms" != "$expected_platforms" ]]; then
+            echo "::error::Published collector platforms were '$actual_platforms'."
+            exit 1
+          fi
+
+          echo "Published \`$reference\` for linux/amd64 and linux/arm64." >>"$GITHUB_STEP_SUMMARY"
