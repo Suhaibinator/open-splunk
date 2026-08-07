@@ -58,13 +58,25 @@ func appendNormalizedDynamicPathSegment(destination *strings.Builder, segment st
 // ParseNormalizedDynamicPath reverses NormalizeDynamicPath and rejects
 // noncanonical or empty metadata paths.
 func ParseNormalizedDynamicPath(path string) ([]string, error) {
+	return parseNormalizedPath(path, MaximumDynamicPathSegments)
+}
+
+// ParseNormalizedSearchFieldPath parses the canonical logical field spelling
+// accepted by SPL. Ingestion permits a leaf below sixteen nested objects, so a
+// search field can contain one root plus sixteen child segments. This leaves
+// the storage-oriented ParseNormalizedDynamicPath ceiling unchanged.
+func ParseNormalizedSearchFieldPath(path string) ([]string, error) {
+	return parseNormalizedPath(path, MaximumDynamicPathSegments+1)
+}
+
+func parseNormalizedPath(path string, maximumSegments int) ([]string, error) {
 	if path == "" {
 		return nil, errors.New("dynamic field path is empty")
 	}
 	if len(path) > MaximumNormalizedFieldNameBytes || !utf8.ValidString(path) {
 		return nil, errors.New("dynamic field path has invalid encoding or length")
 	}
-	segments := make([]string, 0, MaximumDynamicPathSegments)
+	segments := make([]string, 0, maximumSegments)
 	var segment strings.Builder
 	escaped := false
 	for _, character := range path {
@@ -83,7 +95,7 @@ func ParseNormalizedDynamicPath(path string) ([]string, error) {
 			if segment.Len() == 0 {
 				return nil, errors.New("dynamic field path contains an empty segment")
 			}
-			if len(segments) >= MaximumDynamicPathSegments {
+			if len(segments) >= maximumSegments {
 				return nil, errors.New("dynamic field path is too deep")
 			}
 			if err := validateDynamicPathSegment(segment.String()); err != nil {
@@ -101,7 +113,7 @@ func ParseNormalizedDynamicPath(path string) ([]string, error) {
 	if segment.Len() == 0 {
 		return nil, errors.New("dynamic field path contains an empty segment")
 	}
-	if len(segments) >= MaximumDynamicPathSegments {
+	if len(segments) >= maximumSegments {
 		return nil, errors.New("dynamic field path is too deep")
 	}
 	if err := validateDynamicPathSegment(segment.String()); err != nil {
