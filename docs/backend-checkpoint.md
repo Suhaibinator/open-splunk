@@ -7,7 +7,125 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded chronological `streamstats`
+## Latest checkpoint: bounded conditional `streamstats` count
+
+Date: 2026-08-06
+
+Committed implementation checkpoint:
+
+- `6eed445` — add bounded `streamstats count(eval(<boolean predicate>)) AS
+  <field>` across parsing, planning, ClickHouse compilation, execution,
+  inspection, stored-query export, completion, and frontend compatibility
+  surfaces.
+
+This test-first SPL unit adds conditional running counts without putting GORM
+on the ClickHouse path:
+
+1. The parser accepts only canonical long-form `count(eval(...))`, requires an
+   explicit exact `AS` alias before any `BY` clause, and reuses the supported
+   bounded Boolean grammar and its query-wide predicate budget. `c`, omitted
+   aliases, multiple measures, reset conditions, and time windows remain
+   unsupported contracts rather than silently widened syntax.
+2. Predicate field dependencies participate in ordinary analysis, reserved
+   open-schema field checks, and forged-plan validation. An input field with
+   the same name as the output alias is resolved before that output is
+   replaced, including stacked commands and calculated fields.
+3. Each row contributes exactly one unsigned `1` when the predicate result is
+   true; false and null predicate results contribute `0`. Missing operands
+   retain ordinary predicate semantics—for example, a comparison becomes null
+   while `isnull(missing)` is true. Existing `current`, bounded `window`,
+   `global`, and `BY` semantics remain authoritative. Complete results publish
+   as `UInt64`; a row with an incomplete `BY` tuple keeps the output logically
+   absent/physically nullable.
+4. The compiler prepares one 0/1 contribution and performs exactly one
+   `sum(toUInt128(...))` window state before bounded `UInt64` publication. It
+   limits the deterministic ordered relation to 10,001 rows before private
+   predicate materialization, so the 10,000-row all-or-fail fence bounds
+   calculated-field work as well as window state.
+5. Ordinary predicates introduce no `ARRAY JOIN`. A calculated Dynamic
+   predicate that needs exact member binding uses a cardinality-preserving
+   exactly-one-member singleton fence after the row limit; repeated exact
+   numeric predicate fields are materialized once. Structural regressions pin
+   clause order, private-alias cleanup, relational depth, placeholder order,
+   and the absence of row expansion.
+6. The pinned Store corpus covers current/prior rows, bounded and unbounded
+   frames, global/partitioned execution, null/missing predicates, calculated
+   Dynamic values, repeated numeric leaves, same-name replacement, projection,
+   the 10,000/10,001 boundary, and downstream hidden overflow. Query execution,
+   manager transport, field catalog, summary, timeline, inspection, export
+   re-execution, completion, and frontend classification are covered too.
+7. No protobuf, HTTP, WebSocket, control-plane schema, GORM model, migration,
+   or product UI workflow changed. The frontend needs no follow-up beyond the
+   committed completion metadata and surface regression.
+8. Three independent frozen-patch reviews covered parser/planner correctness,
+   ClickHouse efficiency/cardinality, and cross-surface release gaps. The
+   simplification pass shared conditional-aggregate preparation, aggregate
+   dependency traversal, count-eval recognition, and query-execution UInt64
+   fixtures. The final staged patch had no blocking or high-confidence finding.
+
+Validation for `6eed445` and the exact reviewed state:
+
+```sh
+git diff --check
+go mod tidy -diff
+make proto
+go test ./... -count=1
+go test -race -shuffle=on -covermode=atomic \
+  -coverprofile=/private/tmp/open-splunk-streamstats-count-eval-final-coverage.out ./...
+go test ./internal/spl -run='^$' -fuzz=FuzzParseDoesNotPanic -fuzztime=5s
+go vet ./...
+go build ./...
+
+/Users/suhaib/Library/Caches/go-build/06/067cb7bcb62095cd55b9becb2d5964b88a2ff4deecb1b39f4724f6a4b4d68df1-d/golangci-lint \
+  run --timeout=5m ./...
+
+npm run lint
+npm run typecheck
+npm run test:frontend
+npm run build
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' \
+  -count=1 -timeout=30m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' \
+go test ./internal/queryexec \
+  -run '^TestExecutorAndManagerAgainstClickHouse$/^streamstats_executor_and_manager_transport$' \
+  -count=1 -timeout=10m -v
+```
+
+Every local gate passed. Cached golangci-lint v2.12.2 reported `0 issues`;
+the parser fuzz smoke completed about 981,000 executions; frontend lint,
+type-check, 65 release/infrastructure tests, 144 frontend tests, and the
+11-page static build passed. The final digest-pinned Store corpus passed in
+208.48 seconds, including the compiled SPL corpus in 202.33 seconds and the
+new conditional-streamstats phase in 1.528 seconds. The focused real
+query-execution transport passed in 32.25 seconds, including its target
+subtest in 25.29 seconds. Both tests left no test-owned container or volume
+behind.
+
+Exact feature-SHA GitHub Actions run
+[`31147177540`](https://github.com/Suhaibinator/open-splunk/actions/runs/31147177540)
+completed successfully for `6eed4453c6d864535c116173712b7a822ad48318`.
+Backend vertical passed in 18m00s, Go lint in 2m18s, race/coverage in 10m49s,
+the release OCI contract in 9m27s, and GradeThis in 2m42s. Frontend, protobuf,
+reachable-vulnerability scanning, Linux/macOS production binaries, and
+release-asset consistency were also green.
+
+The earlier failing run `30610447133` was independently traced to two stale
+Backend vertical fixture assumptions and one Linux-only `unconvert` lint
+finding. Commit `f0042a5` corrected those three defects; the unrelated SQLite
+concurrent-migration follow-up is complete at `33e22cc`. The exact feature run
+above re-executed the formerly failing deletion/browser cases and proves both
+named jobs are green at the `6eed445` feature checkpoint.
+
+The broader backend/SPL goal remains active, but no next unit has been
+selected or started. Wait for explicit instructions before choosing one. The
+external GradeThis Compose cutover remains deferred.
+
+## Previous checkpoint: bounded chronological `streamstats`
 
 Date: 2026-08-05
 
@@ -15901,6 +16019,9 @@ The backend now includes:
 - `stats` with row `count`, exact `count(field)`, `dc`/`distinct_count`,
   bounded ordered `list`, `values`, typed `min`/`max`, `sum`, `avg`, and
   `p95`, plus deterministic bounded `earliest`/`latest`;
+- bounded row-preserving `eventstats` and `streamstats`, including canonical
+  Boolean-predicate `count(eval(...)) AS field`; `streamstats` retains its
+  10,000-row all-or-fail frame bound;
 - `top`, `rare`, `timechart`, and bounded two-field `chart`;
 - extraction-mode `rex`, explicit-span exact `bin`/`bucket`, and bounded
   explicit-path JSON `spath`;
@@ -16070,8 +16191,10 @@ independent stacks.
    side-effect-free search validation is complete at `1919e2b`. Bounded search
    suggestions, scoped field completion, inline diagnostics, and connected
    time-picker semantics are complete through `9115465`, `2a82932`, `076ff43`,
-   and `7eba237`; do not schedule those slices again. Broader `count` syntax
-   remains a separate aggregate contract. The current preview-to-final
+   and `7eba237`; do not schedule those slices again. Bounded conditional
+   `streamstats count(eval(...)) AS field` is complete at `6eed445`; wildcard
+   counts, multiple measures, resets, and time windows remain separate
+   aggregate contracts. The current preview-to-final
    resource-release audit pass is complete at `961cba2`, the sanitized current
    GradeThis Open Splunk path proof at `c576e85`, logical event retention at
    `458c8b4`, clock-driven job/result/export expiration at `b2b2839`, and
@@ -16243,9 +16366,10 @@ The chronological history is `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and
 `f9985a1`. If SPL expansion is the chosen next priority, implement one bounded
 aggregate contract at a time:
 
-- conditional `count(eval(...)) AS field` is complete at `66b2b16`; broader
-  wildcard `count` forms still need a separate syntax and differential
-  contract, while exact-field `c(field)` is complete;
+- conditional `stats count(eval(...)) AS field` is complete at `66b2b16`, and
+  bounded conditional `streamstats count(eval(...)) AS field` is complete at
+  `6eed445`; broader wildcard `count` forms still need a separate syntax and
+  differential contract, while exact-field `c(field)` is complete;
 - decimal suffixes, SPL2 two-argument `perc`, `upperperc`, and `exactperc`
   remain separate percentile contracts and are not part of the first bounded
   integer-suffix slice;
@@ -16260,8 +16384,9 @@ aggregate contract at a time:
   `max`, `earliest`, and `latest`. Multiple measures and broader eval-expression
   arguments remain separate contracts. Bounded `streamstats` now covers bare
   row count, exact-field occurrence count, exact-field numeric sum/average,
-  exact-field mixed-type minimum/maximum, and exact-field chronological
-  earliest/latest through `900dc74`; broader expression arguments, reset
+  exact-field mixed-type minimum/maximum, exact-field chronological
+  earliest/latest, and canonical Boolean-predicate conditional count through
+  `6eed445`; multiple measures, other expression-valued arguments, reset
   conditions, and time windows remain separate contracts, and no next slice
   is selected; and
 - exact Decimal comparison/aggregation remains separate work from the current
@@ -16366,7 +16491,8 @@ Do not guess those decisions if they materially affect the implementation.
    Inventory and preserve every unexpected local change; do not reset unrelated
    work merely to obtain a clean tree.
 2. Read the three documents listed at the top and inspect the latest `main`
-   commits, especially `6e06394`, `2e1c47e`, `182b60c`, `8d032b1`,
+   commits, especially `6eed445`, `900dc74`, `6e06394`, `2e1c47e`,
+   `182b60c`, `8d032b1`,
    `1a9f6ef`, `5db9816`,
    `99be8a9`,
    `d7734b6`,
@@ -16404,7 +16530,7 @@ Do not guess those decisions if they materially affect the implementation.
    ```
 
    Run both broader opt-in pinned ClickHouse suites before changing
-   chronological, extrema, or bin metadata behavior.
+   conditional-count, chronological, extrema, or bin metadata behavior.
 5. The fixed-payload browser rendering measurement is complete at `9d6acc1`,
    and high-source-count collector profiling and polling are complete at
    `f41720e`; composite configured pre-WAL redaction is complete at `34f3a9b`.
@@ -16421,9 +16547,11 @@ Do not guess those decisions if they materially affect the implementation.
    at `b0c00f3`, `fbb8997`, and `4e00428`; the zero-inventory cleanup is
    complete through `53a4dcc`, `b9c61ed`, and `caadf3f`, with the baseline
    fixed.
-   Run `30255910487` passed the complete workflow and cross-platform release
-   comparison. Bounded chronological `earliest(field)` / `latest(field)` is
-   complete across `932f403`, `ac721fb`, `e6acd1d`, `9714c79`, and `f9985a1`;
+   Run `31147177540` passed the complete workflow and cross-platform release
+   comparison for `6eed445`; run `30255910487` remains the earlier full
+   release reference. Bounded chronological `earliest(field)` /
+   `latest(field)` is complete across `932f403`, `ac721fb`, `e6acd1d`,
+   `9714c79`, and `f9985a1`;
    the bounded percentile family is published after parser/planner commit
    `efe4199`, split numeric timecharts are complete at `d7734b6`, split
    percentile timecharts are complete at `99be8a9`, numeric chart pivots are
@@ -16431,8 +16559,9 @@ Do not guess those decisions if they materially affect the implementation.
    `182b60c`, bounded field-occurrence `streamstats count(field)` is complete
    at `2e1c47e`, bounded numeric `streamstats sum(field)` is complete at
    `6e06394`, bounded numeric `streamstats avg(field)` is complete at
-   `df99748`, exact-field occurrence-count timecharts are complete at
-   `5dd8685`, multi-field `top`/`rare` is complete at `5db9816`,
+   `df99748`, and bounded conditional `streamstats count(eval(...)) AS field`
+   is complete at `6eed445`. Exact-field occurrence-count timecharts are
+   complete at `5dd8685`, multi-field `top`/`rare` is complete at `5db9816`,
    exact-field `c(field)` is complete at `070d24f`, and native
    `isnull`/`isnotnull` predicates are complete at `2d35c66`, as described at
    the top of this file. Typed fixed-scalar `if` is complete across `cfaa75b`,
