@@ -3,7 +3,7 @@ module github.com/Suhaibinator/open-splunk
 go 1.26.5
 
 require (
-	github.com/ClickHouse/ch-go v0.73.0
+	github.com/ClickHouse/ch-go v0.74.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.47.0
 	github.com/Suhaibinator/SRouter v1.5.1
 	github.com/google/uuid v1.6.0
@@ -11,11 +11,11 @@ require (
 	github.com/shopspring/decimal v1.4.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/sys v0.47.0
-	google.golang.org/grpc v1.82.1
+	google.golang.org/grpc v1.83.0
 	google.golang.org/protobuf v1.36.11
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
-	modernc.org/sqlite v1.54.0
+	modernc.org/sqlite v1.55.0
 )
 
 require (
