@@ -78,6 +78,28 @@ A sharing change is a checked identity transition and fails on collision. Old
 versions retain their original identity even after the current version changes
 scope, is disabled, or is deleted.
 
+Administrator catalog list filters are normalized with the same stable ASCII
+trim and control-character rules as stored text. `text_filter` is a
+case-sensitive binary UTF-8 substring of the current normalized name or
+description. `selector_text_filter` is a case-sensitive binary UTF-8 substring
+of at least one individual current normalized selector pattern; it never
+matches synthetic delimiters or a concatenation of patterns. Both filters must
+be nonempty after trimming and are limited to 255 UTF-8 bytes. All visibility,
+state, type, scope, text, and selector predicates are applied to one catalog
+revision before keyset ordering and `LIMIT`; filtering a page after retrieval
+is invalid.
+
+These predicates use a current-version-only derived projection rather than
+decoding definition blobs during traversal. The projection stores only the
+normalized description (with absent and normalized-empty both represented as
+zero bytes) and the four ordered selector pattern lists, is tied to the exact
+current registry version, and is verified byte-for-byte against the decoded
+definition before a response is returned. A quarantined current row has an
+empty description and no selector rows because suspect definition bytes are
+never decoded. Projection accounting is the exact sum of stored description
+and selector-value bytes and has a 256 MiB hard ceiling per tenant; publication
+fails atomically before exceeding it.
+
 ## Visibility, shadowing, and deterministic order
 
 For a search in app `A` by principal `P`, candidates are:
@@ -360,6 +382,16 @@ identity disagreement, impossible state, missing version, or invalid dependency
 is corruption. Resolution fails closed and produces a payload-free admission
 diagnostic; request handling never repairs the row in place.
 
+`Get` without a version reads the current registry version. An explicit
+historical version is returned only after the caller is authorized from the
+current registry identity; absence and current-policy denial have the same
+not-found response. Draft, disabled, deleted, and their historical versions
+remain inspectable by an authorized administrator. A currently quarantined
+identity returns only its safe current scalar projection for every `Get`
+request and never returns a current or historical definition, digest, or
+definition-derived projection. This quarantine redaction is permanent even if
+the caller once authored the object.
+
 Known response fields remain decodable across version skew. Unknown bytes may
 be preserved by the Go runtime but are not promised to browser clients. The
 stored canonical bytes, rather than a browser round trip, are the authority for
@@ -489,6 +521,14 @@ separate bounded attempt journal before responding; if that journal is
 unavailable the route fails closed with the same generic unavailable response.
 Unauthenticated traffic remains in the server access-security log because no
 trusted tenant or actor exists to bind a knowledge audit record.
+
+The rejected-attempt journal retains at most 100,000 rows per tenant and
+atomically evicts the oldest row before appending the next one. Its sequence is
+monotonic and never reused; exhaustion of the signed 64-bit sequence space
+fails closed rather than wrapping. An attempt row is immutable, limited to the
+same 4 KiB scalar-only envelope, and includes an object ID only after that
+identity was already authorized. Journal failure is never converted into the
+underlying authorization, validation, conflict, or resource-limit response.
 
 The existing general mutation-audit journal retains its established 100,000
 row tenant ceiling. Protective quarantine cascades instead use a
