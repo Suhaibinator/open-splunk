@@ -133,7 +133,7 @@ jobs:
   go-test:
     name: Go tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -157,6 +157,7 @@ jobs:
           -shuffle=on
           -covermode=atomic
           -coverprofile=coverage.out
+          -timeout=20m
           ./...
 
       - name: Upload Go coverage
@@ -164,6 +165,119 @@ jobs:
         with:
           name: go-coverage
           path: coverage.out
+          if-no-files-found: error
+          retention-days: 14
+
+  knowledge-object-fuzz:
+    name: Knowledge object fuzz (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: selectors
+            package: ./internal/knowledge
+            fuzztime: 15s
+            targets: |
+              ^FuzzNormalizePattern$
+              ^FuzzSelectorMatchReference$
+              ^FuzzSelectorMultiPatternORReference$
+              ^FuzzSelectorCanonicalOrder$
+          - label: definitions
+            package: ./internal/knowledgedefinition
+            fuzztime: 30s
+            targets: |
+              ^FuzzDecodeCanonicalNeverPanicsAndSuccessIsStable$
+              ^FuzzNormalizeNeverPanicsAndSuccessIsIdempotent$
+              ^FuzzDecodeCanonicalFutureBodyNeverPanicsAndSuccessIsStable$
+              ^FuzzInactiveFutureBodyCanonicalWireRoundTrip$
+              ^FuzzInactiveFutureBodyDisallowedStateAlwaysWins$
+          - label: catalog
+            package: ./internal/knowledgecatalog
+            fuzztime: 30s
+            targets: |
+              ^FuzzCalculatedDependencyInputFields$
+              ^FuzzCatalogFingerprintCanonicalizesSetLikeInputs$
+              ^FuzzCatalogCursorRoundTripPreservesTypedKeyset$
+              ^FuzzBoundedListResponseRecordsMatchesReferenceModel$
+              ^FuzzDecodeCursorRejectsMalformedOrReboundInput$
+          - label: spl-parser
+            package: ./internal/spl
+            fuzztime: 15s
+            targets: |
+              ^FuzzParseDoesNotPanic$
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Verify exact fuzz target inventory
+        env:
+          FUZZ_PACKAGE: ${{ matrix.package }}
+          FUZZ_TARGETS: ${{ matrix.targets }}
+        run: |
+          set -euo pipefail
+          artifact_dir="fuzz-artifacts/${{ matrix.label }}"
+          mkdir -p "$artifact_dir"
+          printf '%s\n' "$FUZZ_TARGETS" > "$artifact_dir/exact-target-regexes.txt"
+          sed \
+            -e '/^[[:space:]]*$/d' \
+            -e 's/^\^//' \
+            -e 's/\$$//' \
+            "$artifact_dir/exact-target-regexes.txt" |
+            LC_ALL=C sort > "$artifact_dir/declared-targets.txt"
+          go test "$FUZZ_PACKAGE" -list '^Fuzz' |
+            sed -n '/^Fuzz/p' |
+            LC_ALL=C sort > "$artifact_dir/discovered-targets.txt"
+          diff -u \
+            "$artifact_dir/declared-targets.txt" \
+            "$artifact_dir/discovered-targets.txt"
+
+      - name: Fuzz every declared target within its own budget
+        env:
+          FUZZ_PACKAGE: ${{ matrix.package }}
+          FUZZ_TARGETS: ${{ matrix.targets }}
+          FUZZ_TIME: ${{ matrix.fuzztime }}
+          GOMAXPROCS: "2"
+        run: |
+          set -euo pipefail
+          artifact_dir="fuzz-artifacts/${{ matrix.label }}"
+          status=0
+          while IFS= read -r target_regex; do
+            if [[ -z "$target_regex" ]]; then
+              continue
+            fi
+            target_name="${target_regex#^}"
+            target_name="${target_name%$}"
+            if ! go test "$FUZZ_PACKAGE" \
+              -run '^$' \
+              -fuzz "$target_regex" \
+              -fuzztime "$FUZZ_TIME" \
+              -fuzzminimizetime 10s \
+              -timeout 2m \
+              -parallel 2 \
+              -count 1 2>&1 |
+              tee "$artifact_dir/${target_name}.log"; then
+              status=1
+            fi
+          done <<< "$FUZZ_TARGETS"
+          exit "$status"
+
+      - name: Upload fuzz failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: knowledge-object-fuzz-${{ matrix.label }}-failure
+          path: |
+            fuzz-artifacts/${{ matrix.label }}
+            ${{ matrix.package }}/testdata/fuzz
           if-no-files-found: error
           retention-days: 14
 
@@ -423,6 +537,7 @@ jobs:
       - gradethis-corpus
       - go-lint
       - go-test
+      - knowledge-object-fuzz
       - go-vulnerability
       - protobuf
       - release-oci
