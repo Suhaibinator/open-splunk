@@ -43,6 +43,11 @@ const uiBuildID = `r${identityDigest.replace(
 
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["127.0.0.1"],
+  experimental: {
+    // TypeScript 7 intentionally does not expose the legacy compiler API.
+    // Next.js 16.3 must invoke the project-local TypeScript CLI instead.
+    useTypeScriptCli: true,
+  },
   output: "export",
   reactStrictMode: true,
   trailingSlash: true,
