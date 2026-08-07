@@ -15,7 +15,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
-	modernc.org/sqlite v1.55.0
+	modernc.org/sqlite v1.56.0
 )
 
 require (
