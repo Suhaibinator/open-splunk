@@ -521,13 +521,13 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Download Linux release proof
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-proof-linux-amd64
           path: release-proof/linux
 
       - name: Download macOS release proof
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-proof-macos
           path: release-proof/macos
