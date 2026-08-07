@@ -99,10 +99,16 @@ only a single-use, ten-minute HMAC token plus bounded metadata. The quarantine
 request accepts that token and a required fresh `client_request_id`; the token
 binds the raw corrupt root and its bounded ordered active-dependent closure so
 recovery does not decode attacker-controlled or future definition bodies.
+`DELETED` is a distinct retained terminal tombstone created only by the delete
+route; it is never executable and is not accepted by create or ordinary state
+mutation. The current tombstoned registry identity remains the authorization
+authority, so an authorized administrator can inspect its current projection
+and retained historical versions under current policy. Delete does not
+physically erase immutable definition or version data.
 Every mutation request uses a required 16–128 byte printable-ASCII
 `client_request_id`; omission is invalid rather than non-idempotent execution.
 Ordinary state mutation accepts only `ACTIVE` or `DISABLED`; `DRAFT` is an
-initial create state and quarantine has its dedicated recovery route. Field
+initial create state, while quarantine and delete have dedicated routes. Field
 masks on update, validate, and preview are relative to
 `KnowledgeObjectDefinition`, never the containing request message.
 

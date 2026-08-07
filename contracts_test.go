@@ -340,6 +340,9 @@ func TestKnowledgeRecoveryAndMutationAuthorityKeepStableWireContracts(t *testing
 	if got := int32(opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED); got != 4 {
 		t.Fatalf("quarantined knowledge state wire number = %d, want 4", got)
 	}
+	if got := int32(opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED); got != 5 {
+		t.Fatalf("deleted knowledge state wire number = %d, want 5", got)
+	}
 
 	apiFile := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
 	for _, messageName := range []protoreflect.Name{

@@ -10,8 +10,10 @@ import "open_splunk/v1/result.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
-// These messages reserve the KO-0 browser contract. No route is registered and
-// no server feature is advertised until the complete Tier-1 family exists.
+// These messages reserve the KO-0 browser contract. Catalog management routes
+// may be registered before enrichment execution, but ACTIVE publication and
+// server feature advertisement remain disabled until the complete Tier-1
+// family exists.
 
 // POST /api/v1/knowledge/objects/create
 message CreateKnowledgeObjectRequest {
@@ -89,8 +91,8 @@ message UpdateKnowledgeObjectResponse {
 
 // POST /api/v1/knowledge/objects/set-state
 // state must be ACTIVE or DISABLED. DRAFT is an initial create state rather
-// than a reversible transition. QUARANTINED is terminal and can be entered
-// only through the dedicated recovery-token route below.
+// than a reversible transition. QUARANTINED and DELETED are terminal and can
+// be entered only through their dedicated recovery-token and delete routes.
 message SetKnowledgeObjectStateRequest {
   string knowledge_object_id = 1;
   uint64 expected_version = 2;
@@ -104,6 +106,8 @@ message SetKnowledgeObjectStateResponse {
 }
 
 // POST /api/v1/knowledge/objects/delete
+// Delete appends an immutable version and leaves a terminal DELETED registry
+// tombstone; it does not physically erase retained definition or version data.
 message DeleteKnowledgeObjectRequest {
   string knowledge_object_id = 1;
   uint64 expected_version = 2;

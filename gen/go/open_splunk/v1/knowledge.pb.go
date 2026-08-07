@@ -77,6 +77,10 @@ func (KnowledgeObjectType) EnumDescriptor() ([]byte, []int) {
 	return file_open_splunk_v1_knowledge_proto_rawDescGZIP(), []int{0}
 }
 
+// KnowledgeObjectState is closed for mutation. DELETED is a retained terminal
+// tombstone created only by the delete operation and is never executable. Its
+// current registry identity remains the authorization authority for an
+// administrator inspecting the tombstone or any retained historical version.
 type KnowledgeObjectState int32
 
 const (
@@ -85,6 +89,7 @@ const (
 	KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE      KnowledgeObjectState = 2
 	KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED    KnowledgeObjectState = 3
 	KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_QUARANTINED KnowledgeObjectState = 4
+	KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DELETED     KnowledgeObjectState = 5
 )
 
 // Enum value maps for KnowledgeObjectState.
@@ -95,6 +100,7 @@ var (
 		2: "KNOWLEDGE_OBJECT_STATE_ACTIVE",
 		3: "KNOWLEDGE_OBJECT_STATE_DISABLED",
 		4: "KNOWLEDGE_OBJECT_STATE_QUARANTINED",
+		5: "KNOWLEDGE_OBJECT_STATE_DELETED",
 	}
 	KnowledgeObjectState_value = map[string]int32{
 		"KNOWLEDGE_OBJECT_STATE_UNSPECIFIED": 0,
@@ -102,6 +108,7 @@ var (
 		"KNOWLEDGE_OBJECT_STATE_ACTIVE":      2,
 		"KNOWLEDGE_OBJECT_STATE_DISABLED":    3,
 		"KNOWLEDGE_OBJECT_STATE_QUARANTINED": 4,
+		"KNOWLEDGE_OBJECT_STATE_DELETED":     5,
 	}
 )
 
@@ -2629,13 +2636,14 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"!KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED\x10\x00\x12*\n" +
 	"&KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION\x10\x01\x12%\n" +
 	"!KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS\x10\x02\x12*\n" +
-	"&KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD\x10\x03*\xd0\x01\n" +
+	"&KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD\x10\x03*\xf4\x01\n" +
 	"\x14KnowledgeObjectState\x12&\n" +
 	"\"KNOWLEDGE_OBJECT_STATE_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cKNOWLEDGE_OBJECT_STATE_DRAFT\x10\x01\x12!\n" +
 	"\x1dKNOWLEDGE_OBJECT_STATE_ACTIVE\x10\x02\x12#\n" +
 	"\x1fKNOWLEDGE_OBJECT_STATE_DISABLED\x10\x03\x12&\n" +
-	"\"KNOWLEDGE_OBJECT_STATE_QUARANTINED\x10\x04*\xc0\x01\n" +
+	"\"KNOWLEDGE_OBJECT_STATE_QUARANTINED\x10\x04\x12\"\n" +
+	"\x1eKNOWLEDGE_OBJECT_STATE_DELETED\x10\x05*\xc0\x01\n" +
 	"\x14KnowledgeSearchStage\x12&\n" +
 	"\"KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED\x10\x00\x12+\n" +
 	"'KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION\x10\x01\x12&\n" +

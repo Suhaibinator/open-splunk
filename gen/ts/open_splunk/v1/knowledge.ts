@@ -59,12 +59,19 @@ export function knowledgeObjectTypeToJSON(object: KnowledgeObjectType): string {
   }
 }
 
+/**
+ * KnowledgeObjectState is closed for mutation. DELETED is a retained terminal
+ * tombstone created only by the delete operation and is never executable. Its
+ * current registry identity remains the authorization authority for an
+ * administrator inspecting the tombstone or any retained historical version.
+ */
 export enum KnowledgeObjectState {
   KNOWLEDGE_OBJECT_STATE_UNSPECIFIED = 0,
   KNOWLEDGE_OBJECT_STATE_DRAFT = 1,
   KNOWLEDGE_OBJECT_STATE_ACTIVE = 2,
   KNOWLEDGE_OBJECT_STATE_DISABLED = 3,
   KNOWLEDGE_OBJECT_STATE_QUARANTINED = 4,
+  KNOWLEDGE_OBJECT_STATE_DELETED = 5,
   UNRECOGNIZED = -1,
 }
 
@@ -85,6 +92,9 @@ export function knowledgeObjectStateFromJSON(object: any): KnowledgeObjectState 
     case 4:
     case "KNOWLEDGE_OBJECT_STATE_QUARANTINED":
       return KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_QUARANTINED;
+    case 5:
+    case "KNOWLEDGE_OBJECT_STATE_DELETED":
+      return KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DELETED;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -104,6 +114,8 @@ export function knowledgeObjectStateToJSON(object: KnowledgeObjectState): string
       return "KNOWLEDGE_OBJECT_STATE_DISABLED";
     case KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_QUARANTINED:
       return "KNOWLEDGE_OBJECT_STATE_QUARANTINED";
+    case KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DELETED:
+      return "KNOWLEDGE_OBJECT_STATE_DELETED";
     case KnowledgeObjectState.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

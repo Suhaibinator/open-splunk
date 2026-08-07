@@ -200,8 +200,8 @@ export interface UpdateKnowledgeObjectResponse {
 /**
  * POST /api/v1/knowledge/objects/set-state
  * state must be ACTIVE or DISABLED. DRAFT is an initial create state rather
- * than a reversible transition. QUARANTINED is terminal and can be entered
- * only through the dedicated recovery-token route below.
+ * than a reversible transition. QUARANTINED and DELETED are terminal and can
+ * be entered only through their dedicated recovery-token and delete routes.
  */
 export interface SetKnowledgeObjectStateRequest {
   knowledgeObjectId: string;
@@ -215,7 +215,11 @@ export interface SetKnowledgeObjectStateResponse {
   tenantCatalogRevision: bigint;
 }
 
-/** POST /api/v1/knowledge/objects/delete */
+/**
+ * POST /api/v1/knowledge/objects/delete
+ * Delete appends an immutable version and leaves a terminal DELETED registry
+ * tombstone; it does not physically erase retained definition or version data.
+ */
 export interface DeleteKnowledgeObjectRequest {
   knowledgeObjectId: string;
   expectedVersion: bigint;

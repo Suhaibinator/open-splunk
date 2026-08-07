@@ -655,8 +655,8 @@ func (x *UpdateKnowledgeObjectResponse) GetTenantCatalogRevision() uint64 {
 
 // POST /api/v1/knowledge/objects/set-state
 // state must be ACTIVE or DISABLED. DRAFT is an initial create state rather
-// than a reversible transition. QUARANTINED is terminal and can be entered
-// only through the dedicated recovery-token route below.
+// than a reversible transition. QUARANTINED and DELETED are terminal and can
+// be entered only through their dedicated recovery-token and delete routes.
 type SetKnowledgeObjectStateRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	KnowledgeObjectId string                 `protobuf:"bytes,1,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3" json:"knowledge_object_id,omitempty"`
@@ -778,6 +778,8 @@ func (x *SetKnowledgeObjectStateResponse) GetTenantCatalogRevision() uint64 {
 }
 
 // POST /api/v1/knowledge/objects/delete
+// Delete appends an immutable version and leaves a terminal DELETED registry
+// tombstone; it does not physically erase retained definition or version data.
 type DeleteKnowledgeObjectRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	KnowledgeObjectId string                 `protobuf:"bytes,1,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3" json:"knowledge_object_id,omitempty"`
