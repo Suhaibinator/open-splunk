@@ -25,7 +25,10 @@ message CreateKnowledgeObjectRequest {
 
 message CreateKnowledgeObjectResponse {
   KnowledgeObject knowledge_object = 1;
+  // The revision and state token form one catalog snapshot identity. The token
+  // is exactly 32 bytes and must never be interpreted without this revision.
   uint64 tenant_catalog_revision = 2;
+  bytes tenant_catalog_state_token = 3;
 }
 
 // POST /api/v1/knowledge/objects/get
@@ -87,7 +90,10 @@ message UpdateKnowledgeObjectRequest {
 
 message UpdateKnowledgeObjectResponse {
   KnowledgeObject knowledge_object = 1;
+  // The revision and state token form one catalog snapshot identity. The token
+  // is exactly 32 bytes and must never be interpreted without this revision.
   uint64 tenant_catalog_revision = 2;
+  bytes tenant_catalog_state_token = 3;
 }
 
 // POST /api/v1/knowledge/objects/set-state
@@ -103,7 +109,10 @@ message SetKnowledgeObjectStateRequest {
 
 message SetKnowledgeObjectStateResponse {
   KnowledgeObject knowledge_object = 1;
+  // The revision and state token form one catalog snapshot identity. The token
+  // is exactly 32 bytes and must never be interpreted without this revision.
   uint64 tenant_catalog_revision = 2;
+  bytes tenant_catalog_state_token = 3;
 }
 
 // POST /api/v1/knowledge/objects/delete
@@ -118,7 +127,27 @@ message DeleteKnowledgeObjectRequest {
 message DeleteKnowledgeObjectResponse {
   string knowledge_object_id = 1;
   uint64 deleted_version = 2;
+  // The revision and state token form one catalog snapshot identity. The token
+  // is exactly 32 bytes and must never be interpreted without this revision.
   uint64 tenant_catalog_revision = 3;
+  bytes tenant_catalog_state_token = 4;
+}
+
+// Internal, strictly canonical replay authority persisted in
+// knowledge_mutation_idempotency.outcome_proto. It deliberately duplicates
+// the bounded row scalars so same-width storage corruption cannot forge a
+// response snapshot identity. Ordinary mutations use successful_audit_sequence;
+// protective quarantine uses recovery_audit_sequence.
+message KnowledgeMutationOutcomeRecord {
+  string route = 1;
+  string mutation_kind = 2;
+  KnowledgeObjectVersionReference object = 3;
+  uint64 tenant_catalog_revision = 4;
+  bytes tenant_catalog_state_token = 5;
+  oneof audit_authority {
+    uint64 successful_audit_sequence = 6;
+    uint64 recovery_audit_sequence = 7;
+  }
 }
 
 enum KnowledgeQuarantineReason {

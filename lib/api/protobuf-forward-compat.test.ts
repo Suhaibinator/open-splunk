@@ -8,6 +8,13 @@ import { BinaryWriter } from "@bufbuild/protobuf/wire";
 import * as openSplunkV1 from "@/gen/ts/index.open_splunk.v1";
 import { AppSelector } from "@/gen/ts/open_splunk/v1/app";
 import { GetAppRequest } from "@/gen/ts/open_splunk/v1/app_api";
+import {
+  CreateKnowledgeObjectResponse,
+  DeleteKnowledgeObjectResponse,
+  KnowledgeMutationOutcomeRecord,
+  SetKnowledgeObjectStateResponse,
+  UpdateKnowledgeObjectResponse,
+} from "@/gen/ts/open_splunk/v1/knowledge_api";
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/v1/system_api";
 import { openSplunkRoutes } from "@/lib/api/routes";
 
@@ -159,4 +166,85 @@ test("generated protobuf response decoders retain known fields from future serve
   const decoded = GetSystemBootstrapResponse.decode(response.finish());
   assert.equal(decoded.apiVersion, "v1");
   assert.equal(decoded.splCompatibilityVersion, "open-splunk-v0.1");
+});
+
+test("generated knowledge mutation responses encode paired revision state deterministically", () => {
+  const stateToken = Uint8Array.from({ length: 32 }, (_, index) => index);
+  const sharedWire = Uint8Array.from([0x10, 0x07, 0x1a, 0x20, ...stateToken]);
+  const deleteWire = Uint8Array.from([0x18, 0x07, 0x22, 0x20, ...stateToken]);
+  const cases = [
+    {
+      name: "create",
+      encode: () => CreateKnowledgeObjectResponse.encode(
+        CreateKnowledgeObjectResponse.fromPartial({
+          tenantCatalogRevision: 7n,
+          tenantCatalogStateToken: stateToken,
+        }),
+      ).finish(),
+      expected: sharedWire,
+    },
+    {
+      name: "update",
+      encode: () => UpdateKnowledgeObjectResponse.encode(
+        UpdateKnowledgeObjectResponse.fromPartial({
+          tenantCatalogRevision: 7n,
+          tenantCatalogStateToken: stateToken,
+        }),
+      ).finish(),
+      expected: sharedWire,
+    },
+    {
+      name: "set-state",
+      encode: () => SetKnowledgeObjectStateResponse.encode(
+        SetKnowledgeObjectStateResponse.fromPartial({
+          tenantCatalogRevision: 7n,
+          tenantCatalogStateToken: stateToken,
+        }),
+      ).finish(),
+      expected: sharedWire,
+    },
+    {
+      name: "delete",
+      encode: () => DeleteKnowledgeObjectResponse.encode(
+        DeleteKnowledgeObjectResponse.fromPartial({
+          tenantCatalogRevision: 7n,
+          tenantCatalogStateToken: stateToken,
+        }),
+      ).finish(),
+      expected: deleteWire,
+    },
+  ];
+
+  for (const contract of cases) {
+    const first = contract.encode();
+    const second = contract.encode();
+    assert.deepEqual(first, second, `${contract.name} response encoding changed between runs`);
+    assert.deepEqual(first, contract.expected, `${contract.name} response wire fields changed`);
+  }
+});
+
+test("generated knowledge mutation outcome authority pins canonical wire", () => {
+  const message = KnowledgeMutationOutcomeRecord.fromPartial({
+    route: "objects.update",
+    mutationKind: "scope_change",
+    object: {
+      knowledgeObjectId: "ko-1",
+      version: 7n,
+      definitionSha256: Uint8Array.of(1, 2),
+    },
+    tenantCatalogRevision: 9n,
+    tenantCatalogStateToken: Uint8Array.of(0xaa, 0xbb),
+    auditAuthority: { $case: "successfulAuditSequence", value: 11n },
+  });
+  const expected = Uint8Array.from([
+    0x0a, 0x0e, ...Buffer.from("objects.update"),
+    0x12, 0x0c, ...Buffer.from("scope_change"),
+    0x1a, 0x0c, 0x0a, 0x04, ...Buffer.from("ko-1"),
+    0x10, 0x07, 0x1a, 0x02, 0x01, 0x02,
+    0x20, 0x09, 0x2a, 0x02, 0xaa, 0xbb, 0x30, 0x0b,
+  ]);
+  const first = KnowledgeMutationOutcomeRecord.encode(message).finish();
+  const second = KnowledgeMutationOutcomeRecord.encode(message).finish();
+  assert.deepEqual(first, second);
+  assert.deepEqual(first, expected);
 });

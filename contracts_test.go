@@ -1,6 +1,7 @@
 package opensplunk_test
 
 import (
+	"bytes"
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -403,6 +404,184 @@ func TestKnowledgeRecoveryAndMutationAuthorityKeepStableWireContracts(t *testing
 	}
 	if field := quarantine.Fields().ByName("recovery_token"); field == nil || field.Number() != 1 {
 		t.Errorf("QuarantineKnowledgeObjectRequest.recovery_token = %v, want wire field 1", field)
+	}
+}
+
+func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
+	t.Parallel()
+
+	token := make([]byte, 32)
+	for index := range token {
+		token[index] = byte(index)
+	}
+	sharedWire := append([]byte{0x10, 0x07, 0x1a, 0x20}, token...)
+	deleteWire := append([]byte{0x18, 0x07, 0x22, 0x20}, token...)
+
+	tests := []struct {
+		name           protoreflect.Name
+		fieldCount     int
+		revisionNumber protoreflect.FieldNumber
+		tokenNumber    protoreflect.FieldNumber
+		message        proto.Message
+		wantWire       []byte
+	}{
+		{
+			name:           "CreateKnowledgeObjectResponse",
+			fieldCount:     3,
+			revisionNumber: 2,
+			tokenNumber:    3,
+			message: &opensplunkv1.CreateKnowledgeObjectResponse{
+				TenantCatalogRevision:   7,
+				TenantCatalogStateToken: token,
+			},
+			wantWire: sharedWire,
+		},
+		{
+			name:           "UpdateKnowledgeObjectResponse",
+			fieldCount:     3,
+			revisionNumber: 2,
+			tokenNumber:    3,
+			message: &opensplunkv1.UpdateKnowledgeObjectResponse{
+				TenantCatalogRevision:   7,
+				TenantCatalogStateToken: token,
+			},
+			wantWire: sharedWire,
+		},
+		{
+			name:           "SetKnowledgeObjectStateResponse",
+			fieldCount:     3,
+			revisionNumber: 2,
+			tokenNumber:    3,
+			message: &opensplunkv1.SetKnowledgeObjectStateResponse{
+				TenantCatalogRevision:   7,
+				TenantCatalogStateToken: token,
+			},
+			wantWire: sharedWire,
+		},
+		{
+			name:           "DeleteKnowledgeObjectResponse",
+			fieldCount:     4,
+			revisionNumber: 3,
+			tokenNumber:    4,
+			message: &opensplunkv1.DeleteKnowledgeObjectResponse{
+				TenantCatalogRevision:   7,
+				TenantCatalogStateToken: token,
+			},
+			wantWire: deleteWire,
+		},
+	}
+
+	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	for _, test := range tests {
+		test := test
+		t.Run(string(test.name), func(t *testing.T) {
+			t.Parallel()
+
+			descriptor := file.Messages().ByName(test.name)
+			if descriptor == nil {
+				t.Fatalf("%s descriptor is missing", test.name)
+			}
+			if got := descriptor.Fields().Len(); got != test.fieldCount {
+				t.Fatalf("%s field count = %d, want exact append-only count %d", test.name, got, test.fieldCount)
+			}
+
+			revision := descriptor.Fields().ByName("tenant_catalog_revision")
+			if revision == nil || revision.Number() != test.revisionNumber || revision.Kind() != protoreflect.Uint64Kind {
+				t.Errorf("%s.tenant_catalog_revision = %v, want uint64 field %d", test.name, revision, test.revisionNumber)
+			}
+			stateToken := descriptor.Fields().ByName("tenant_catalog_state_token")
+			if stateToken == nil || stateToken.Number() != test.tokenNumber || stateToken.Kind() != protoreflect.BytesKind {
+				t.Errorf("%s.tenant_catalog_state_token = %v, want bytes field %d", test.name, stateToken, test.tokenNumber)
+			} else if stateToken.IsList() || stateToken.IsMap() || stateToken.HasOptionalKeyword() {
+				t.Errorf("%s.tenant_catalog_state_token must be one validation-required bytes scalar", test.name)
+			}
+
+			first, err := (proto.MarshalOptions{Deterministic: true}).Marshal(test.message)
+			if err != nil {
+				t.Fatalf("marshal response: %v", err)
+			}
+			second, err := (proto.MarshalOptions{Deterministic: true}).Marshal(test.message)
+			if err != nil {
+				t.Fatalf("marshal response again: %v", err)
+			}
+			if !bytes.Equal(first, second) {
+				t.Fatalf("deterministic response encoding changed between runs: first=%x second=%x", first, second)
+			}
+			if !bytes.Equal(first, test.wantWire) {
+				t.Fatalf("response wire encoding = %x, want stable fields %x", first, test.wantWire)
+			}
+		})
+	}
+}
+
+func TestKnowledgeMutationOutcomeRecordPinsCanonicalAuthorityWire(t *testing.T) {
+	t.Parallel()
+
+	descriptor := opensplunkv1.File_open_splunk_v1_knowledge_api_proto.Messages().ByName("KnowledgeMutationOutcomeRecord")
+	if descriptor == nil {
+		t.Fatal("KnowledgeMutationOutcomeRecord descriptor is missing")
+	}
+	fields := []struct {
+		name   protoreflect.Name
+		number protoreflect.FieldNumber
+		kind   protoreflect.Kind
+	}{
+		{"route", 1, protoreflect.StringKind},
+		{"mutation_kind", 2, protoreflect.StringKind},
+		{"object", 3, protoreflect.MessageKind},
+		{"tenant_catalog_revision", 4, protoreflect.Uint64Kind},
+		{"tenant_catalog_state_token", 5, protoreflect.BytesKind},
+		{"successful_audit_sequence", 6, protoreflect.Uint64Kind},
+		{"recovery_audit_sequence", 7, protoreflect.Uint64Kind},
+	}
+	if descriptor.Fields().Len() != len(fields) || descriptor.Oneofs().Len() != 1 {
+		t.Fatalf("outcome descriptor shape = %d fields/%d oneofs, want %d/1",
+			descriptor.Fields().Len(), descriptor.Oneofs().Len(), len(fields))
+	}
+	auditAuthority := descriptor.Oneofs().ByName("audit_authority")
+	for _, want := range fields {
+		field := descriptor.Fields().ByName(want.name)
+		if field == nil || field.Number() != want.number || field.Kind() != want.kind || field.IsList() || field.IsMap() {
+			t.Errorf("KnowledgeMutationOutcomeRecord.%s = %v, want singular %s field %d",
+				want.name, field, want.kind, want.number)
+			continue
+		}
+		if want.number >= 6 && field.ContainingOneof() != auditAuthority {
+			t.Errorf("KnowledgeMutationOutcomeRecord.%s is not in audit_authority", want.name)
+		}
+	}
+
+	message := &opensplunkv1.KnowledgeMutationOutcomeRecord{
+		Route:        "objects.update",
+		MutationKind: "scope_change",
+		Object: &opensplunkv1.KnowledgeObjectVersionReference{
+			KnowledgeObjectId: "ko-1",
+			Version:           7,
+			DefinitionSha256:  []byte{1, 2},
+		},
+		TenantCatalogRevision:   9,
+		TenantCatalogStateToken: []byte{0xaa, 0xbb},
+		AuditAuthority: &opensplunkv1.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
+			SuccessfulAuditSequence: 11,
+		},
+	}
+	wantWire := append([]byte{0x0a, 0x0e}, []byte("objects.update")...)
+	wantWire = append(wantWire, 0x12, 0x0c)
+	wantWire = append(wantWire, []byte("scope_change")...)
+	wantWire = append(wantWire,
+		0x1a, 0x0c, 0x0a, 0x04, 'k', 'o', '-', '1', 0x10, 0x07, 0x1a, 0x02, 0x01, 0x02,
+		0x20, 0x09, 0x2a, 0x02, 0xaa, 0xbb, 0x30, 0x0b,
+	)
+	first, err := (proto.MarshalOptions{Deterministic: true}).Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal outcome authority: %v", err)
+	}
+	second, err := (proto.MarshalOptions{Deterministic: true}).Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal outcome authority again: %v", err)
+	}
+	if !bytes.Equal(first, second) || !bytes.Equal(first, wantWire) {
+		t.Fatalf("outcome authority wire = %x then %x, want %x", first, second, wantWire)
 	}
 }
 

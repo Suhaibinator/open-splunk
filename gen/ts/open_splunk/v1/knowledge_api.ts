@@ -30,6 +30,7 @@ import {
   KnowledgeObjectType,
   knowledgeObjectTypeFromJSON,
   knowledgeObjectTypeToJSON,
+  KnowledgeObjectVersionReference,
 } from "./knowledge";
 import { ResultRow, ResultSchema } from "./result";
 
@@ -134,8 +135,15 @@ export interface CreateKnowledgeObjectRequest {
 }
 
 export interface CreateKnowledgeObjectResponse {
-  knowledgeObject: KnowledgeObject | undefined;
+  knowledgeObject:
+    | KnowledgeObject
+    | undefined;
+  /**
+   * The revision and state token form one catalog snapshot identity. The token
+   * is exactly 32 bytes and must never be interpreted without this revision.
+   */
   tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
 }
 
 /**
@@ -194,8 +202,15 @@ export interface UpdateKnowledgeObjectRequest {
 }
 
 export interface UpdateKnowledgeObjectResponse {
-  knowledgeObject: KnowledgeObject | undefined;
+  knowledgeObject:
+    | KnowledgeObject
+    | undefined;
+  /**
+   * The revision and state token form one catalog snapshot identity. The token
+   * is exactly 32 bytes and must never be interpreted without this revision.
+   */
   tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
 }
 
 /**
@@ -212,8 +227,15 @@ export interface SetKnowledgeObjectStateRequest {
 }
 
 export interface SetKnowledgeObjectStateResponse {
-  knowledgeObject: KnowledgeObject | undefined;
+  knowledgeObject:
+    | KnowledgeObject
+    | undefined;
+  /**
+   * The revision and state token form one catalog snapshot identity. The token
+   * is exactly 32 bytes and must never be interpreted without this revision.
+   */
   tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
 }
 
 /**
@@ -230,7 +252,31 @@ export interface DeleteKnowledgeObjectRequest {
 export interface DeleteKnowledgeObjectResponse {
   knowledgeObjectId: string;
   deletedVersion: bigint;
+  /**
+   * The revision and state token form one catalog snapshot identity. The token
+   * is exactly 32 bytes and must never be interpreted without this revision.
+   */
   tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
+}
+
+/**
+ * Internal, strictly canonical replay authority persisted in
+ * knowledge_mutation_idempotency.outcome_proto. It deliberately duplicates
+ * the bounded row scalars so same-width storage corruption cannot forge a
+ * response snapshot identity. Ordinary mutations use successful_audit_sequence;
+ * protective quarantine uses recovery_audit_sequence.
+ */
+export interface KnowledgeMutationOutcomeRecord {
+  route: string;
+  mutationKind: string;
+  object: KnowledgeObjectVersionReference | undefined;
+  tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
+  auditAuthority: { $case: "successfulAuditSequence"; value: bigint } | {
+    $case: "recoveryAuditSequence";
+    value: bigint;
+  } | undefined;
 }
 
 export interface KnowledgeQuarantineTransition {
@@ -478,7 +524,7 @@ export const CreateKnowledgeObjectRequest: MessageFns<CreateKnowledgeObjectReque
 };
 
 function createBaseCreateKnowledgeObjectResponse(): CreateKnowledgeObjectResponse {
-  return { knowledgeObject: undefined, tenantCatalogRevision: 0n };
+  return { knowledgeObject: undefined, tenantCatalogRevision: 0n, tenantCatalogStateToken: new Uint8Array(0) };
 }
 
 export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResponse> = {
@@ -491,6 +537,9 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(16).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(26).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -518,6 +567,14 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -539,6 +596,11 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -549,6 +611,9 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
     return obj;
   },
@@ -567,6 +632,7 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
     return message;
   },
 };
@@ -1271,7 +1337,7 @@ export const UpdateKnowledgeObjectRequest: MessageFns<UpdateKnowledgeObjectReque
 };
 
 function createBaseUpdateKnowledgeObjectResponse(): UpdateKnowledgeObjectResponse {
-  return { knowledgeObject: undefined, tenantCatalogRevision: 0n };
+  return { knowledgeObject: undefined, tenantCatalogRevision: 0n, tenantCatalogStateToken: new Uint8Array(0) };
 }
 
 export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResponse> = {
@@ -1284,6 +1350,9 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(16).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(26).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -1311,6 +1380,14 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1332,6 +1409,11 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -1342,6 +1424,9 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
     return obj;
   },
@@ -1360,6 +1445,7 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
     return message;
   },
 };
@@ -1492,7 +1578,7 @@ export const SetKnowledgeObjectStateRequest: MessageFns<SetKnowledgeObjectStateR
 };
 
 function createBaseSetKnowledgeObjectStateResponse(): SetKnowledgeObjectStateResponse {
-  return { knowledgeObject: undefined, tenantCatalogRevision: 0n };
+  return { knowledgeObject: undefined, tenantCatalogRevision: 0n, tenantCatalogStateToken: new Uint8Array(0) };
 }
 
 export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectStateResponse> = {
@@ -1505,6 +1591,9 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(16).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(26).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -1532,6 +1621,14 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1553,6 +1650,11 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -1563,6 +1665,9 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
     return obj;
   },
@@ -1581,6 +1686,7 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
     return message;
   },
 };
@@ -1695,7 +1801,12 @@ export const DeleteKnowledgeObjectRequest: MessageFns<DeleteKnowledgeObjectReque
 };
 
 function createBaseDeleteKnowledgeObjectResponse(): DeleteKnowledgeObjectResponse {
-  return { knowledgeObjectId: "", deletedVersion: 0n, tenantCatalogRevision: 0n };
+  return {
+    knowledgeObjectId: "",
+    deletedVersion: 0n,
+    tenantCatalogRevision: 0n,
+    tenantCatalogStateToken: new Uint8Array(0),
+  };
 }
 
 export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResponse> = {
@@ -1714,6 +1825,9 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(24).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(34).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -1749,6 +1863,14 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1775,6 +1897,11 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -1788,6 +1915,9 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
     return obj;
   },
@@ -1807,6 +1937,218 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseKnowledgeMutationOutcomeRecord(): KnowledgeMutationOutcomeRecord {
+  return {
+    route: "",
+    mutationKind: "",
+    object: undefined,
+    tenantCatalogRevision: 0n,
+    tenantCatalogStateToken: new Uint8Array(0),
+    auditAuthority: undefined,
+  };
+}
+
+export const KnowledgeMutationOutcomeRecord: MessageFns<KnowledgeMutationOutcomeRecord> = {
+  encode(message: KnowledgeMutationOutcomeRecord, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.route !== "") {
+      writer.uint32(10).string(message.route);
+    }
+    if (message.mutationKind !== "") {
+      writer.uint32(18).string(message.mutationKind);
+    }
+    if (message.object !== undefined) {
+      KnowledgeObjectVersionReference.encode(message.object, writer.uint32(26).fork()).join();
+    }
+    if (message.tenantCatalogRevision !== 0n) {
+      if (BigInt.asUintN(64, message.tenantCatalogRevision) !== message.tenantCatalogRevision) {
+        throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(42).bytes(message.tenantCatalogStateToken);
+    }
+    switch (message.auditAuthority?.$case) {
+      case "successfulAuditSequence":
+        if (BigInt.asUintN(64, message.auditAuthority.value) !== message.auditAuthority.value) {
+          throw new globalThis.Error("value provided for field message.auditAuthority.value of type uint64 too large");
+        }
+        writer.uint32(48).uint64(message.auditAuthority.value);
+        break;
+      case "recoveryAuditSequence":
+        if (BigInt.asUintN(64, message.auditAuthority.value) !== message.auditAuthority.value) {
+          throw new globalThis.Error("value provided for field message.auditAuthority.value of type uint64 too large");
+        }
+        writer.uint32(56).uint64(message.auditAuthority.value);
+        break;
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeMutationOutcomeRecord {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeMutationOutcomeRecord();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.route = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.mutationKind = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.object = KnowledgeObjectVersionReference.decode(reader, reader.uint32());
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.tenantCatalogRevision = reader.uint64() as bigint;
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.auditAuthority = { $case: "successfulAuditSequence", value: reader.uint64() as bigint };
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.auditAuthority = { $case: "recoveryAuditSequence", value: reader.uint64() as bigint };
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeMutationOutcomeRecord {
+    return {
+      route: isSet(object.route) ? globalThis.String(object.route) : "",
+      mutationKind: isSet(object.mutationKind)
+        ? globalThis.String(object.mutationKind)
+        : isSet(object.mutation_kind)
+        ? globalThis.String(object.mutation_kind)
+        : "",
+      object: isSet(object.object) ? KnowledgeObjectVersionReference.fromJSON(object.object) : undefined,
+      tenantCatalogRevision: isSet(object.tenantCatalogRevision)
+        ? BigInt(object.tenantCatalogRevision)
+        : isSet(object.tenant_catalog_revision)
+        ? BigInt(object.tenant_catalog_revision)
+        : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
+      auditAuthority: isSet(object.successfulAuditSequence)
+        ? { $case: "successfulAuditSequence", value: BigInt(object.successfulAuditSequence) }
+        : isSet(object.successful_audit_sequence)
+        ? { $case: "successfulAuditSequence", value: BigInt(object.successful_audit_sequence) }
+        : isSet(object.recoveryAuditSequence)
+        ? { $case: "recoveryAuditSequence", value: BigInt(object.recoveryAuditSequence) }
+        : isSet(object.recovery_audit_sequence)
+        ? { $case: "recoveryAuditSequence", value: BigInt(object.recovery_audit_sequence) }
+        : undefined,
+    };
+  },
+
+  toJSON(message: KnowledgeMutationOutcomeRecord): unknown {
+    const obj: any = {};
+    if (message.route !== "") {
+      obj.route = message.route;
+    }
+    if (message.mutationKind !== "") {
+      obj.mutationKind = message.mutationKind;
+    }
+    if (message.object !== undefined) {
+      obj.object = KnowledgeObjectVersionReference.toJSON(message.object);
+    }
+    if (message.tenantCatalogRevision !== 0n) {
+      obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
+    }
+    if (message.auditAuthority?.$case === "successfulAuditSequence") {
+      obj.successfulAuditSequence = message.auditAuthority.value.toString();
+    } else if (message.auditAuthority?.$case === "recoveryAuditSequence") {
+      obj.recoveryAuditSequence = message.auditAuthority.value.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeMutationOutcomeRecord>, I>>(base?: I): KnowledgeMutationOutcomeRecord {
+    return KnowledgeMutationOutcomeRecord.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeMutationOutcomeRecord>, I>>(
+    object: I,
+  ): KnowledgeMutationOutcomeRecord {
+    const message = createBaseKnowledgeMutationOutcomeRecord();
+    message.route = object.route ?? "";
+    message.mutationKind = object.mutationKind ?? "";
+    message.object = (object.object !== undefined && object.object !== null)
+      ? KnowledgeObjectVersionReference.fromPartial(object.object)
+      : undefined;
+    message.tenantCatalogRevision =
+      (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
+        ? BigInt(object.tenantCatalogRevision)
+        : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
+    switch (object.auditAuthority?.$case) {
+      case "successfulAuditSequence": {
+        if (object.auditAuthority?.value !== undefined && object.auditAuthority?.value !== null) {
+          message.auditAuthority = { $case: "successfulAuditSequence", value: BigInt(object.auditAuthority.value) };
+        }
+        break;
+      }
+      case "recoveryAuditSequence": {
+        if (object.auditAuthority?.value !== undefined && object.auditAuthority?.value !== null) {
+          message.auditAuthority = { $case: "recoveryAuditSequence", value: BigInt(object.auditAuthority.value) };
+        }
+        break;
+      }
+    }
     return message;
   },
 };
