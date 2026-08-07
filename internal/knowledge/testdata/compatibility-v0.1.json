@@ -1,0 +1,335 @@
+{
+  "compatibility_version": "0.1",
+  "cases": [
+    {
+      "id": "identity.binary-case-sensitive",
+      "stage": "publication",
+      "rule": "Status and status are distinct object and field names",
+      "expect": "accepted"
+    },
+    {
+      "id": "precedence.private-app-global",
+      "stage": "resolution",
+      "rule": "an owner-private object shadows equal app and global identities",
+      "expect": "private"
+    },
+    {
+      "id": "visibility.private-nondisclosure",
+      "stage": "resolution",
+      "rule": "another owner's private object is neither executable nor disclosed",
+      "expect": "omitted"
+    },
+    {
+      "id": "selector.cross-index-per-row",
+      "stage": "extraction",
+      "rule": "an index selector applies per event and never expands authorized indexes",
+      "expect": "matching-authorized-rows-only"
+    },
+    {
+      "id": "selector.missing-metadata",
+      "stage": "extraction",
+      "rule": "a nonempty selector dimension does not match missing or null metadata",
+      "expect": "unchanged"
+    },
+    {
+      "id": "extraction.before-base-filter",
+      "stage": "base-filter",
+      "rule": "the authored base predicate can reference an extracted field",
+      "expect": "matched"
+    },
+    {
+      "id": "extraction.no-match-preserves-destination",
+      "stage": "extraction",
+      "rule": "no regex or JSON match never erases an existing destination",
+      "expect": "preserved"
+    },
+    {
+      "id": "alias.preserves-source",
+      "stage": "alias",
+      "rule": "copying source to destination leaves source unchanged",
+      "expect": "source-and-destination"
+    },
+    {
+      "id": "alias.null-is-present",
+      "stage": "alias",
+      "rule": "a present null destination blocks a non-overwrite alias",
+      "expect": "null-preserved"
+    },
+    {
+      "id": "alias.missing-source-does-not-erase",
+      "stage": "alias",
+      "rule": "a missing alias source leaves an existing destination unchanged",
+      "expect": "preserved"
+    },
+    {
+      "id": "calculated.parallel-no-chain",
+      "stage": "publication",
+      "rule": "a calculated field cannot depend on another calculated field in its stage",
+      "expect": "rejected-same-stage-dependency"
+    },
+    {
+      "id": "calculated.missing-does-not-erase",
+      "stage": "calculated",
+      "rule": "a missing expression result leaves an existing destination unchanged",
+      "expect": "preserved"
+    },
+    {
+      "id": "dependency.later-stage",
+      "stage": "publication",
+      "rule": "an earlier stage cannot depend on a later stage",
+      "expect": "rejected-stage-inversion"
+    },
+    {
+      "id": "collision.possibly-overlapping-writers",
+      "stage": "publication",
+      "rule": "same-stage writers with selectors not provably disjoint are rejected",
+      "expect": "rejected-destination-collision"
+    },
+    {
+      "id": "snapshot.database-order-independent",
+      "stage": "admission",
+      "rule": "row permutation does not change canonical inventory order or digest",
+      "expect": "equal-digest"
+    },
+    {
+      "id": "snapshot.catalog-mutation-isolated",
+      "stage": "execution",
+      "rule": "catalog mutation cannot alter an admitted job or retained export",
+      "expect": "original-version"
+    },
+    {
+      "id": "lifecycle.rerun-resolves-current",
+      "stage": "admission",
+      "rule": "saved-search execution and history Run Again resolve current knowledge",
+      "expect": "current-version-new-digest"
+    },
+    {
+      "id": "forward-compat.unknown-active-body",
+      "stage": "resolution",
+      "rule": "an unknown active definition body fails closed without repair",
+      "expect": "corruption-error"
+    },
+    {
+      "id": "authorization.global-never-widens-indexes",
+      "stage": "admission",
+      "rule": "a global object's index selector cannot add a forbidden index",
+      "expect": "authorized-indexes-only"
+    },
+    {
+      "id": "resource.aggregate-budget",
+      "stage": "admission",
+      "rule": "individually valid objects whose combined work exceeds a limit fail atomically",
+      "expect": "rejected-query-too-complex"
+    },
+    {
+      "id": "identity.ascii-stable-trim",
+      "stage": "publication",
+      "rule": "only the pinned ASCII whitespace set is trimmed and remaining C0 or C1 controls are rejected",
+      "expect": "stable-normalized-bytes"
+    },
+    {
+      "id": "identity.reserved-destination",
+      "stage": "publication",
+      "rule": "canonical, storage, fields-container, and case-folded __os_ destinations are rejected",
+      "expect": "rejected-reserved-field"
+    },
+    {
+      "id": "precedence.app-global",
+      "stage": "resolution",
+      "rule": "an app-shared object shadows an equal global identity when no private object exists",
+      "expect": "app"
+    },
+    {
+      "id": "visibility.corrupt-hidden",
+      "stage": "resolution",
+      "rule": "a corrupt private row outside the principal visibility query cannot fail or influence admission",
+      "expect": "omitted-without-disclosure"
+    },
+    {
+      "id": "selector.anchored",
+      "stage": "extraction",
+      "rule": "a selector glob matches the complete canonical value and never an unanchored substring",
+      "expect": "complete-match-only"
+    },
+    {
+      "id": "selector.case-sensitive",
+      "stage": "extraction",
+      "rule": "selector matching performs no case or locale folding",
+      "expect": "binary-case-sensitive"
+    },
+    {
+      "id": "selector.escape",
+      "stage": "publication",
+      "rule": "backslash quotes only star question-mark or backslash and a trailing backslash is invalid",
+      "expect": "pinned-glob-grammar"
+    },
+    {
+      "id": "selector.disjoint",
+      "stage": "publication",
+      "rule": "same-destination writers are accepted only when selector disjointness is proved conservatively",
+      "expect": "accepted-proven-disjoint"
+    },
+    {
+      "id": "selector.runtime-budget",
+      "stage": "execution",
+      "rule": "each metadata value is matched once per dimension and oversize aggregate work fails without truncation",
+      "expect": "resource-limit"
+    },
+    {
+      "id": "extraction.optional-empty",
+      "stage": "extraction",
+      "rule": "a successful regex publishes an empty String for empty or nonparticipating named captures",
+      "expect": "present-empty-string"
+    },
+    {
+      "id": "extraction.bytes-no-match",
+      "stage": "extraction",
+      "rule": "regex extraction treats every Bytes input as no extraction even when bytes are valid UTF-8",
+      "expect": "unchanged"
+    },
+    {
+      "id": "extraction.json-null",
+      "stage": "extraction",
+      "rule": "an explicit JSON null selected by spath is a produced present-null value",
+      "expect": "present-null"
+    },
+    {
+      "id": "extraction.json-bytes-no-match",
+      "stage": "extraction",
+      "rule": "JSON extraction treats every Bytes input as no extraction",
+      "expect": "unchanged"
+    },
+    {
+      "id": "extraction.json-container-no-output",
+      "stage": "extraction",
+      "rule": "a selected JSON array or object is no output for the scalar destination contract",
+      "expect": "unchanged"
+    },
+    {
+      "id": "extraction.overwrite-true",
+      "stage": "extraction",
+      "rule": "a produced extraction replaces a present destination only when overwrite is true",
+      "expect": "replaced"
+    },
+    {
+      "id": "alias.overwrite-true",
+      "stage": "alias",
+      "rule": "a present alias source replaces a present destination only when overwrite is true",
+      "expect": "replaced-source-copied"
+    },
+    {
+      "id": "alias.null-source",
+      "stage": "alias",
+      "rule": "a present-null alias source produces present null while the source remains present",
+      "expect": "source-and-destination-null"
+    },
+    {
+      "id": "calculated.present-null",
+      "stage": "calculated",
+      "rule": "a present-null expression result writes null subject to overwrite policy",
+      "expect": "present-null"
+    },
+    {
+      "id": "dependency.private-scope",
+      "stage": "publication",
+      "rule": "a private source may depend on same-owner same-app private app-shared or global targets",
+      "expect": "accepted"
+    },
+    {
+      "id": "dependency.app-private-rejected",
+      "stage": "publication",
+      "rule": "an app-shared source cannot depend on a private target",
+      "expect": "rejected-forbidden-or-missing-target"
+    },
+    {
+      "id": "dependency.global-app-rejected",
+      "stage": "publication",
+      "rule": "a global source cannot depend on an app-scoped or private target",
+      "expect": "rejected-forbidden-or-missing-target"
+    },
+    {
+      "id": "snapshot.catalog-mutation-during-admission",
+      "stage": "admission",
+      "rule": "a concurrent mutation yields a complete old or complete new SQLite snapshot and never mixed versions",
+      "expect": "coherent-old-or-new"
+    },
+    {
+      "id": "snapshot.response-reauthorization",
+      "stage": "inspection",
+      "rule": "the stored inspection is immutable while each response redacts identity after access is revoked",
+      "expect": "redacted-ordinal-only"
+    },
+    {
+      "id": "lifecycle.disable-delete-reenable",
+      "stage": "publication",
+      "rule": "state transitions create immutable versions and activation rechecks identity dependency and budget conflicts",
+      "expect": "versioned-and-revalidated"
+    },
+    {
+      "id": "forward-compat.hidden-corrupt",
+      "stage": "resolution",
+      "rule": "unknown or corrupt hidden bodies are not decoded on an unauthorized search path",
+      "expect": "omitted-without-disclosure"
+    },
+    {
+      "id": "authorization.admin-crud",
+      "stage": "api",
+      "rule": "every knowledge management route requires a tenant-bound browser administrator",
+      "expect": "not-found-or-forbidden-without-disclosure"
+    },
+    {
+      "id": "authorization.preview-retained-scope",
+      "stage": "preview",
+      "rule": "draft preview inherits a retained authorized search scope and cannot supply indexes time or visibility",
+      "expect": "retained-boundaries"
+    },
+    {
+      "id": "resource.catalog-capacity",
+      "stage": "publication",
+      "rule": "tenant app owner type version byte and idempotency ceilings reject before mutation",
+      "expect": "rejected-capacity"
+    },
+    {
+      "id": "resource.resolver-cache",
+      "stage": "admission",
+      "rule": "resolver deadline permits decoded bytes concurrency and cache memory are bounded",
+      "expect": "bounded-or-unavailable"
+    },
+    {
+      "id": "audit.redaction",
+      "stage": "audit",
+      "rule": "knowledge audit never stores bodies expressions event values SQL snapshots or free-form errors",
+      "expect": "fixed-bounded-metadata"
+    },
+    {
+      "id": "audit.rejected-privileged",
+      "stage": "audit",
+      "rule": "an authenticated rejected privileged attempt records a fixed reason or fails the route closed",
+      "expect": "recorded-before-response"
+    },
+    {
+      "id": "idempotency.lost-response",
+      "stage": "mutation",
+      "rule": "an exact client-request retry after a committed lost response returns the original outcome",
+      "expect": "same-object-version-and-revision"
+    },
+    {
+      "id": "recovery.quarantine-corrupt-active-at-cap",
+      "stage": "recovery",
+      "rule": "reserved version idempotency and recovery-audit capacity can quarantine a corrupt active object when ordinary capacities are full",
+      "expect": "atomically-quarantined-and-audited"
+    },
+    {
+      "id": "recovery.quarantine-dependent-cascade",
+      "stage": "recovery",
+      "rule": "a row-and-edge-bound integrity token atomically terminally quarantines the corrupt root and every active direct or transitive dependent without decoding suspect bodies",
+      "expect": "bounded-terminal-cascade-restores-admission"
+    },
+    {
+      "id": "recovery.two-generation-audit-reserve",
+      "stage": "recovery",
+      "rule": "the recovery journal reserves one terminal transition for every lifetime physical identity including replacements after a full quarantined generation",
+      "expect": "second-generation-quarantine-succeeds"
+    }
+  ]
+}

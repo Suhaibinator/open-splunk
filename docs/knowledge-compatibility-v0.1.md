@@ -1,0 +1,540 @@
+# Open Splunk knowledge compatibility contract v0.1
+
+**Status:** normative implementation contract; executable runtime corpus pending
+**Compatibility version:** `0.1`
+**Last updated:** August 6, 2026
+
+This contract defines the first Open Splunk search-time knowledge surface. It
+is intentionally narrower than Splunk Enterprise knowledge behavior. Anything
+not described here is unsupported and must fail before publication or search
+execution; the server never applies a supported prefix of an invalid knowledge
+snapshot.
+
+The `0.1` runtime surface contains regular-expression and JSON field
+extractions, field aliases, and calculated fields. Catalog APIs and snapshot
+metadata may ship before enrichment, but the server must not advertise
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` until the complete CRUD, resolution,
+snapshot, planner, executor, inspection, lifecycle, and browser family is
+configured and tested.
+
+## Security boundary
+
+The server resolves knowledge after authenticating the principal, authorizing
+the selected app, and deriving the effective index scope. A request supplies
+authored SPL and an app intent; it cannot supply resolved object bodies,
+versions, catalog revisions, physical storage identities, or a trusted
+snapshot digest.
+
+Knowledge never grants access to an app, index, event, field, or object. A
+selector can only remove rows from the set to which an object applies. It
+cannot add an index to the server-authorized search scope. Unauthorized private
+objects, and authorized draft, disabled, or deleted objects, are omitted without
+disclosing private object existence. A visible active object that is corrupt or
+unsupported fails admission with a payload-free corruption category; it is
+never silently omitted or partially applied.
+
+Version `0.1` targets the existing trusted single-user deployment. Every
+knowledge management route—get, list, create, update, change state, delete,
+validate, dependency inspection, and preview—is browser-administrator-only and
+is bound to the authenticated tenant and owner. The local administrator may
+publish app-shared and tenant-global objects. Supplied tenant or owner identity
+is never authority. A forbidden or cross-tenant object selector returns the
+same not-found response as an absent object.
+
+The schema is ACL-ready, but role-grant enforcement and cross-app export grants
+are not claimed until multi-user RBAC is implemented. Within one tenant, a
+global object is visible in every readable app. This is an explicit Open
+Splunk deviation, not an assertion about Splunk configuration-layer
+permissions. Preview uses a server-retained authorized search snapshot and
+inherits its app, index, time, visibility, row, byte, duration, and concurrency
+limits; draft content never supplies or widens those boundaries.
+
+## Text, identity, and case
+
+Object names, descriptions, app IDs, owner IDs, field names, and selector
+patterns must be valid UTF-8. Normalization trims only the stable ASCII set TAB
+`U+0009`, LF `U+000A`, VT `U+000B`, FF `U+000C`, CR `U+000D`, and SPACE
+`U+0020` from both ends. Any remaining C0 control `U+0000..U+001F` or C1
+control `U+007F..U+009F` is rejected. Names must remain between 1 and 255 UTF-8
+bytes and are otherwise stored exactly. Unicode is not normalized and no
+version-dependent Unicode category table participates. Descriptions are
+trimmed by the same ASCII rule, may be absent, and are limited to 16 KiB.
+
+Names, app IDs, owner IDs, field names, selector values, and lookup keys are
+case-sensitive binary UTF-8 identities. `Status`, `status`, and canonically
+equivalent but byte-distinct Unicode spellings are different. SQLite columns
+and indexes enforcing identity use binary collation; locale and database row
+order never affect resolution.
+
+Object types have separate namespaces. The active-name uniqueness keys are:
+
+| Sharing scope | Unique identity |
+| --- | --- |
+| private | tenant, app, owner, type, name |
+| app | tenant, app, type, name |
+| global | tenant, type, name |
+
+A sharing change is a checked identity transition and fails on collision. Old
+versions retain their original identity even after the current version changes
+scope, is disabled, or is deleted.
+
+## Visibility, shadowing, and deterministic order
+
+For a search in app `A` by principal `P`, candidates are:
+
+1. active private objects owned by `P` in `A`;
+2. active app-shared objects in `A`; and
+3. active tenant-global objects.
+
+For equal `(object_type, name)`, the first candidate in that list wins as a
+whole object. Definitions are never merged. Shadowed objects are recorded in a
+bounded inspection warning but are not executable. Draft, disabled, and
+deleted objects never participate.
+
+Executable objects are ordered first by stage, then by binary normalized name,
+then by stable object ID. This order defines snapshot and inspection output.
+It does not create same-stage data dependencies. Publication fails when two
+objects that may be visible together can write the same destination in the
+same stage and their selectors are not provably disjoint, except when one is
+the shadowed object with the same `(object_type, name)`. A conservative overlap
+check may reject ambiguous wildcard pairs; it must never admit a possible
+collision.
+
+## Selectors
+
+A selector has four optional dimensions: `index`, `host`, `source`, and
+`sourcetype`. Dimensions are ANDed. Patterns within a dimension are ORed. An
+empty dimension is unrestricted. A nonempty dimension does not match a
+missing or null canonical metadata field.
+
+Patterns are case-sensitive anchored globs over Unicode scalar values. `*`
+matches zero or more scalar values, `?` matches exactly one, and `\` quotes the
+next `*`, `?`, or `\`. A trailing `\`, invalid UTF-8, and every other escape
+are invalid. Matching is against the complete field value; there is no
+substring mode or locale folding. Canonical index, host, source, and sourcetype
+values come from the trusted admitted event relation, never similarly named
+user fields.
+
+Resolution may discard an object only when its `index` patterns cannot match
+any authorized effective index. Host, source, and sourcetype are still checked
+per row. Cross-index searches therefore can apply different objects to
+different rows.
+
+Selector limits are 16 patterns per dimension, 64 patterns total, 255 UTF-8
+bytes per pattern after validation, 8 KiB per normalized selector, and 1,024
+aggregate wildcard work units per snapshot. One literal scalar costs one unit,
+`?` costs two, and `*` costs four.
+
+## Search-time stages
+
+The `0.1` relation is built in this order:
+
+1. the server-authorized stored event relation;
+2. all matching regular-expression and JSON extractions, in parallel;
+3. all matching field aliases, in parallel;
+4. all matching calculated fields, in parallel;
+5. the authored base-search predicate; and
+6. authored pipeline commands.
+
+Every object in one stage observes the completed previous-stage relation, not
+another object in its own stage. An extraction cannot read an extraction
+output, an alias cannot read an alias output, and a calculated field cannot
+read a calculated-field output. Same-stage cycles and chains are rejected at
+publication. Dependencies may only point from a later stage to an earlier
+stage. The authored `eval` command retains its existing left-to-right
+assignment semantics and is distinct from the parallel calculated-field
+stage.
+
+In `0.1`, extraction input is `_raw` only. Definitions naming another input
+field are rejected. Supporting other exact scalar String/Bytes fields requires
+a later compatibility version.
+
+All field references use the existing exact SPL field resolver. Any output
+whose root is an ASCII-case-insensitive reserved event root, storage/security
+column, public `fields` container, or compiler-private `__os_` name is rejected
+at publication. In particular, field knowledge cannot write `event_id`,
+`index`, `_time`, `_indextime`, `host`, `source`, `sourcetype`, `service`,
+`severity`, `level`, `message`, `_raw`, `trace_id`, `span_id`, `collector_id`,
+or `batch_id`. Those canonical fields may be read where the object type permits
+it. This prevents pre-base-filter enrichment from replacing authorization,
+selector, timeline, raw-search, or provenance inputs. The reserved-root list is
+the versioned `internal/eventfields` contract and upgrade tests pin it.
+
+## Presence and overwrite semantics
+
+Field state distinguishes missing, present null, and present non-null. Empty
+String, empty Bytes, empty array, and empty object are present non-null values.
+The initial field objects never coerce missing to null.
+
+When `overwrite=false`, an object writes only if its destination is missing;
+a present null destination is preserved. When `overwrite=true`, a produced
+value replaces a missing, null, or non-null destination. A false selector,
+missing source, failed extraction match, or expression result that is missing
+does not erase an existing destination under either policy.
+
+Multivalue extraction input is not supported in `0.1`; encountering one leaves
+the destination unchanged and increments a bounded per-object diagnostic
+counter. Definitions cannot request fan-out, repeated captures, or multivalue
+construction. Aliases are different: they copy an existing array/object value
+as one typed value without iterating or coercing its members.
+
+## Regular-expression extraction
+
+Regular expressions use the repository's bounded RE2-compatible dialect and
+the same parser, normalization, compile-time work estimator, and runtime
+capture ceilings as authored `rex`. PCRE-only constructs, backreferences,
+lookaround, executable replacements, unnamed outputs, duplicate named outputs,
+and repeated-capture output are unsupported.
+
+`_raw` String values are matched as UTF-8. Every Bytes value, including Bytes
+whose payload happens to be valid UTF-8, produces no outputs. Missing, null,
+container, and multivalue `_raw` also produce no outputs. No match produces no
+outputs. On a successful match every declared named output is a present String;
+an empty capture and a named optional group that did not participate both
+produce the empty String. These rules exactly match authored `rex` `0.1` and
+allow the existing typed extraction path to be reused.
+
+One definition is limited to a 4 KiB source pattern, a 4 KiB normalized
+pattern, 4,096 estimated RE2 work units, 16 total capture groups, and 16 named
+outputs. Knowledge and authored `rex` share the query ceilings: 64 regex
+programs, 64 named outputs, and 4 MiB of captured bytes per event. Admission
+rejects a snapshot that cannot fit those aggregate ceilings.
+
+## JSON extraction
+
+JSON extraction uses the exact JSON-path grammar and typed-value behavior
+documented for authored `spath` in the SPL `0.1` contract. The path is compiled
+at publication. It is limited to 17 segments, 256 UTF-8 bytes per unescaped
+segment, 4 KiB encoded path bytes, and one named scalar destination.
+
+Missing, null, every Bytes value, malformed JSON, no-match, and a container
+selected where a scalar is required produce no output. JSON String,
+number, boolean, and explicit null results retain the same typed representation
+as authored `spath`; a selected explicit JSON null is a produced present-null
+value. Runtime parse failures are bounded diagnostics, not query-wide syntax
+failures. Aggregate extraction work shares the authored query limits.
+
+## Field aliases
+
+An alias copies one exact field to one different exact destination and never
+removes or renames the source. Source and destination names are limited to 255
+UTF-8 bytes and 17 dotted segments. Wildcard field names are unsupported.
+
+A missing source produces nothing. A present null source produces a present
+null destination subject to overwrite policy. String, Bytes, boolean, integer,
+unsigned integer, floating point, decimal, timestamp, duration, array, and
+object values are copied without string coercion or mutation. Source equal to
+destination is invalid.
+
+Alias cycles, alias-to-alias chains, and multiple possibly overlapping writers
+for one destination are rejected before publication.
+
+## Calculated fields
+
+A calculated field has one exact non-reserved destination and one expression accepted by
+the current authored `eval` expression subset. The same lexer, parser, type
+rules, function allowlist, source locations, nesting limit, and generated-SQL
+limits apply. Search commands, subsearches, macros, raw ClickHouse SQL, external
+calls, nondeterministic functions, environment access, and mutation are not
+expressions.
+
+Publication parses and plans the expression against the fields available after
+the alias stage. Unknown dynamic event fields are permitted where authored
+`eval` permits them, but a declared dependency on a later or same-stage field
+is rejected. Every calculated field in a snapshot evaluates against the same
+alias-stage input, so `b=lower(a)` and `c=upper(b)` cannot be used to chain `c`
+through a calculated `b`. After both expressions pass syntax validation,
+publication reports the same-stage dependency error for `c`.
+
+Missing, null, numeric, String, Bytes, container, comparison, and conditional
+semantics are identical to authored `eval`. A missing result does not erase an
+existing destination. A present null result is written subject to overwrite
+policy.
+
+One expression is limited to 16 KiB, 32 nested scalar levels, and the existing
+64 KiB per-conditional/per-variadic generated-SQL ceilings. One snapshot is
+limited to 32 calculated fields and all knowledge expressions share the
+authored limits of 32 aggregate eval/where predicates and 256 KiB generated SQL.
+If combined authored and knowledge work exceeds a limit, search admission fails
+before execution with a source-attributed complexity diagnostic.
+
+## Publication and dependency validity
+
+Definitions have `draft`, `active`, `disabled`, and administrator-recovery
+`quarantined` publication states. Delete creates a tombstoned current registry
+state; it does not physically erase version bytes. Quarantined objects are
+never executable or directly re-enabled. Create commits immutable version one.
+Body update, metadata update, scope change, enable, disable, and delete require
+the expected current version and commit one new immutable version. A failed
+mutation creates no version, catalog revision, or success audit event.
+
+Before an active version becomes visible, the server validates and canonicalizes
+all recognized protobuf fields, rejects unknown enum values and unknown future
+definition bodies, compiles regex/JSON/expression bodies, checks field and object
+dependencies, checks conservative destination and selector overlap, and charges
+publication and snapshot budgets. Invalid definitions never become partially
+active.
+
+The normalized dependency graph is limited to 256 nodes, 1,024 edges, and
+depth 16. Direct and indirect cycles, missing targets, disabled targets, later-
+stage dependencies, and same-stage data dependencies are invalid. Deleting or
+disabling an active dependency fails unless a bounded explicit transaction also
+disables all active dependents. `0.1` does not expose cascading mutation through
+the browser.
+
+Every dependency target must have the same tenant and be executable everywhere
+the source is executable. A private source may depend on private objects of the
+same owner and app, app-shared objects of the same app, or global objects. An
+app-shared source may depend only on app-shared objects of the same app or
+global objects. A global source may depend only on global objects. No source
+may depend on a private object owned by another principal, an object from
+another app outside that matrix, or any cross-tenant identity. Forbidden and
+absent targets produce the same publication error category.
+
+Every successful mutation, including a draft or disabled-object mutation,
+advances the tenant catalog revision in the same immediate SQLite transaction
+as registry/version/dependency/ACL rows and the bounded audit record. App
+revision is optional in `0.1`; when absent the snapshot carries zero and cache
+invalidation uses the mandatory tenant revision.
+
+Every mutation carries a 16–128 byte `client_request_id` using only bytes
+`0x21..0x7E`. The
+server stores `(tenant, actor, route, client_request_id, canonical request
+digest, committed outcome)` in the mutation transaction. An exact retry returns
+the original outcome; reuse with different bytes is a conflict. This reconciles
+a commit followed by a lost response for create as well as optimistic updates
+and delete. Normal idempotency records are limited to 16,384 per tenant, with
+the protective reserve defined below. They are retained for at least seven days
+and the maximum configured client retry window, and removed oldest-first only
+after that fence. Capacity exhaustion rejects a new mutation before catalog
+work rather than accepting an unreplayable commit.
+
+## Protobuf forward compatibility and corruption
+
+Mutation routes reject unknown fields anywhere in a submitted definition and
+reject unknown future `oneof` bodies. Exact field-mask updates are applied to
+the current stored message on the server; omitted fields are not replacement
+authority. A state-only disable or delete may preserve an unreadable future
+body byte-for-byte, but an older server cannot enable, publish, or body-edit it.
+
+An administrator integrity scan can issue a single-use, ten-minute HMAC token
+binding tenant, catalog revision, the stable root object ID, the SHA-256 digest
+of its complete raw current registry row, and an ordered digest of all current
+active direct and transitive dependents discovered through trusted inverse
+dependency rows. The closure is limited to the tenant's 4,096 active-object
+ceiling. The quarantine mutation accepts only that token and a fresh client
+request ID, opens an immediate transaction, re-reads and re-digests the exact
+root, dependency edges, and dependent registry rows, and fails on any change.
+It does not decode suspect definitions.
+
+On success the transaction appends a small bodyless forensic version and marks
+the root `quarantined`; every active dependent receives one state-only forensic
+version and also becomes terminally `quarantined` with a fixed
+`dependency_recovery` reason. Cascade members cannot be edited or re-enabled;
+after repair an administrator publishes a newly validated object identity and
+may reuse the inactive name under the ordinary collision rules. The transaction
+retains every suspect byte and row for recovery analysis, advances the catalog
+revision once, consumes the token, and commits one fixed recovery audit record
+for every state transition.
+
+If corrupt inverse edges leave another active invalid object, the post-commit
+integrity scan reports it and a separate token quarantines that object; no
+active invalid object is silently executable. Because every recovery transition
+is terminal, one lifetime reserved record per physical identity is sufficient.
+This bounded cascade can isolate malformed protobuf, digest or identity
+disagreement, impossible state, missing version/dependency, and unknown-body
+corruption without manual SQLite surgery. It cannot repair, enable, export, or
+reveal a suspect body.
+
+Visibility filtering by trusted tenant/app/owner/scope columns and ACL rows
+occurs before definition decoding. Hidden rows are never decoded on a search
+path and therefore cannot become an existence oracle or denial of service. A
+candidate visible to the principal is then fully decoded and integrity-checked;
+visible corruption fails admission, while hidden corruption is reported only
+through administrator health and integrity tooling.
+
+Stored definition bytes are deterministic protobuf encodings with a SHA-256
+digest. Indexed identity fields must exactly equal the decoded normalized
+definition. A digest mismatch, malformed protobuf, unknown active body,
+identity disagreement, impossible state, missing version, or invalid dependency
+is corruption. Resolution fails closed and produces a payload-free admission
+diagnostic; request handling never repairs the row in place.
+
+Known response fields remain decodable across version skew. Unknown bytes may
+be preserved by the Go runtime but are not promised to browser clients. The
+stored canonical bytes, rather than a browser round trip, are the authority for
+snapshot digesting and history.
+
+## Immutable snapshots and lifecycle
+
+After authorization and before parsing/planning that can execute enrichment,
+admission detaches a canonical snapshot containing tenant, principal, app,
+effective authorized indexes, tenant revision, optional app revision, compiler
+compatibility version, exact ordered object IDs/versions/types/names/scopes,
+selectors, definition bytes and digests, dependency order, shadow warnings,
+and aggregate budget charges. The SHA-256 snapshot digest covers a versioned,
+length-prefixed canonical encoding of every field; map iteration, timestamps,
+database row order, and mutable ORM records are excluded.
+
+All revision, current-registry, exact-version, dependency, and ACL reads for
+one snapshot occur through one SQLite read transaction. The transaction reads
+the tenant revision first to establish its WAL snapshot, performs all bounded
+queries through that handle, re-reads the same revision in the same snapshot,
+and detaches all bytes before commit. A revision mismatch, missing row, busy
+snapshot, cancellation, or deadline aborts the attempt; it never produces a
+mixed snapshot. Resolution has three bounded attempts within a 250 ms total
+deadline and otherwise fails unavailable. A concurrent mutation may yield the
+complete old catalog or complete new catalog, never a mixture.
+
+The digest input is a `KnowledgeSnapshot` protobuf with no maps or floating
+point fields. Unknown fields are rejected and cleared before digesting; repeated
+indexes, objects, dependencies, and warnings use the orders specified by this
+contract; absent optional fields remain distinct from present empty values.
+The digest is SHA-256 over the ASCII prefix
+`open-splunk-knowledge-snapshot-v0.1\x00`, followed by the unsigned 64-bit
+big-endian length of deterministic protobuf bytes, followed by those bytes.
+Generated field numbers and this framing are part of compatibility `0.1` and
+are pinned by cross-language golden tests.
+
+One snapshot may contain at most 256 executable objects, 512 generated fields,
+256 generated logical operators, 4 MiB canonical bytes, and the stricter
+type-specific aggregate limits above. Resolution exceeding a ceiling fails
+admission before a job is created.
+
+The physical catalog is limited to 8,192 object identities, 65,536 immutable
+versions, 512 MiB of unique definition-body bytes, and 20,480 idempotency
+records per tenant. Normal creates and edits stop at 61,440 versions and 16,384
+idempotency records, reserving 4,096 rows of each for one protective terminal
+quarantine per maximally full active catalog. Definition bodies are
+content-addressed immutable blobs; a state-only version references the prior
+blob and does not duplicate its bytes, while a bodyless quarantine needs none.
+The reserved rows cannot be consumed by create, edit, scope change, enable, or
+ordinary delete. Once quarantined, an object no longer blocks search admission;
+later deletion may wait for compatible reclamation.
+
+No tenant may have more than 4,096 active objects, one app more than 1,024
+active objects, one owner more than 512 active private objects, one type more
+than 2,048 active tenant objects, or one app/type pair more than 512. Counters
+are transactionally maintained and checked before writes. Identities,
+tombstones, retained versions, and unique bodies continue to count until a
+later compatible garbage collector proves them safe to remove.
+
+Resolution decodes at most 8 MiB of candidate definition bytes before the
+stricter 4 MiB snapshot limit, permits at most 32 concurrent resolver calls per
+server, and fails fast when the permit pool is full. The optional resolver cache
+is bounded to 128 entries and 256 MiB of detached decoded data; eviction is LRU
+and never changes correctness. Catalog capacity and cache use are exposed as
+administrator health metrics with an 80% warning threshold.
+
+Selector patterns for one dimension are compiled into one anchored matcher so
+one value is decoded and matched at most once per dimension; sequentially
+rescanning a value for all 64 patterns is forbidden. Runtime selector input is
+charged once per canonical metadata byte plus eight units per matcher
+transition, with hard ceilings of 1 MiB per value, 4 MiB per event, and 1 GiB
+per query. It shares the search execution deadline and memory ceilings. Crossing
+a boundary fails the query with a source-attributed resource-limit error; input
+is never truncated and an object is never silently skipped.
+
+A running or retained job executes only its detached snapshot. Updating,
+disabling, deleting, shadowing, or corrupting the current catalog cannot change
+that job's result, schema, stored provenance, stored inspection model, or
+export. Export uses the original retained snapshot. Saved-search execution and
+History **Run Again** resolve current knowledge and receive a new digest.
+
+History stores the digest and a bounded safe inventory, not definition bodies.
+Every history, diagnostics, field-provenance, and inspection response uses the
+stable object ID to reauthorize the caller against the current registry scope,
+state, ownership, and ACL policy. A retained historical scope or ACL is
+provenance only and never grants current disclosure. The immutable stored model
+does not change, but its response projection does: an unauthorized caller
+receives only stage/kind and a fixed redacted-object ordinal, with no object ID,
+name, version, app, owner, description, or definition location.
+
+Version `0.1` performs no physical garbage collection of knowledge definition
+versions. Backup and restore include registry rows, exact version bytes,
+dependencies, ACL rows, catalog revision, snapshot leases, and digests in one
+SQLite recovery generation. Cleanup and cross-engine asset retention arrive
+with lookup support and KO-4 hardening. Retaining data on ambiguous cleanup is
+always safer than substituting a newer version.
+
+## Provenance, diagnostics, and audit
+
+Every generated logical operator and field records origin kind, object ID,
+object version, object type, object name, and definition location. Provenance
+survives safe rewrites and nested ClickHouse subqueries. Field discovery may
+return only the bounded kind (`extracted`, `alias`, or `calculated`) plus object
+identity after the response-time current-policy authorization check above.
+
+Publication errors identify the responsible object and source location without
+echoing private definitions in logs or audit. Search diagnostics for an object
+may include name/type/version only after the response-time authorization check;
+otherwise they use the redacted ordinal. Other object existence is not
+disclosed. Runtime row-content failures never echo `_raw` or derived values.
+
+Committed actions are `create`, `update`, `scope_change`, `enable`, `disable`,
+`quarantine`, and `delete`; read-only actions are `validate` and `preview`.
+Results are `success` or `rejected`. Rejection reasons are the closed set
+`not_administrator`, `not_found_or_forbidden`, `version_conflict`,
+`idempotency_conflict`, `invalid_definition`, `forbidden_dependency`,
+`resource_limit`, and `service_unavailable`. No free-form reason is stored.
+
+Records contain only actor, tenant, app, object ID when already authorized,
+type, version, scope, result, fixed reason, and microsecond occurrence time.
+Each string is bounded by its identity limit and a serialized record is limited
+to 4 KiB. They never contain regexes, JSON paths, expressions, event values,
+generated SQL, snapshots, request bodies, or attacker-supplied error text. The
+success record, version, idempotency outcome, and catalog-revision increment are
+atomic. An authenticated privileged attempt that is rejected is written to a
+separate bounded attempt journal before responding; if that journal is
+unavailable the route fails closed with the same generic unavailable response.
+Unauthenticated traffic remains in the server access-security log because no
+trusted tenant or actor exists to bind a knowledge audit record.
+
+The existing general mutation-audit journal retains its established 100,000
+row tenant ceiling. Protective quarantine cascades instead use a
+dedicated append-only `knowledge_recovery_audit` reserve with exactly 8,192
+rows per tenant and a unique `(tenant, object_id)` key. Ordinary actions cannot
+consume it. The reserve matches the lifetime 8,192-identity tenant ceiling, so
+an initial quarantined generation and later replacement identities each retain
+one guaranteed terminal recovery slot. This remains true when general audit,
+normal version, and normal idempotency capacity are exhausted. Recovery records
+follow the same 4 KiB redacted schema, are merged into administrator audit
+reads, are retained for the life of the quarantined forensic identity, and are
+committed in the same SQLite transaction as every cascade row. Exhausting this
+reserve means every physical identity the tenant can ever allocate already
+received its terminal protective transition; the uniqueness constraint
+prevents unrelated consumption.
+
+## Explicit deviations and deferred behavior
+
+Open Splunk `0.1` deliberately uses private → app → tenant-global shadowing
+rather than claiming full Splunk configuration-layer precedence. It includes
+`index` selectors. Extractions are `_raw`-only. Same-stage extraction, alias,
+and calculated objects are parallel and cannot chain. Names and matches are
+binary case-sensitive. Knowledge cannot overwrite canonical or reserved event
+roots. Physical version garbage collection is disabled.
+
+Lookups, event types, tags, macros, workflow actions, arbitrary transforms,
+automatic key/value extraction, index-time extraction, multivalue extraction,
+ordered calculated groups, app import, data models, acceleration, scripts,
+external calls, and custom commands are unsupported by this compatibility
+version. Licensed Splunk differential results are recorded when an oracle is
+available; absence of an oracle must be stated in checkpoint evidence and must
+not be presented as verified equivalence.
+
+## Compatibility fixtures
+
+The normative starter corpus is
+`internal/knowledge/testdata/compatibility-v0.1.json`. Each starter case names a
+rule, stage, and expected result or publication error. Runtime implementations
+extend those records with concrete input relations and visible catalogs rather
+than replacing them, and must execute relevant cases through normalization,
+resolution, planning, and ClickHouse integration. The fixture structural test
+prevents silent deletion, renaming, duplication, or version skew before those
+implementations land.
+
+The starter corpus is not evidence that runtime semantics are implemented. Its
+strict structural test is only a contract inventory. Before field knowledge is
+advertised, every case must contain executable inputs and exact typed outputs
+or diagnostics and must run through the relevant production normalization,
+resolution, planner, compiler, and pinned ClickHouse paths.
