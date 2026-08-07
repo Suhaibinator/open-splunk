@@ -461,6 +461,30 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
   }
 });
 
+test("collector publication creates one immutable amd64 and arm64 GHCR image", async () => {
+  const workflow = await readFile(
+    path.join(workspace, ".github", "workflows", "publish-collector-image.yml"),
+    "utf8",
+  );
+
+  assert.match(workflow, /tags:\n\s+- "v\*"/);
+  assert.match(
+    workflow,
+    /image="ghcr\.io\/\$\{GITHUB_REPOSITORY_OWNER,,\}\/open-splunk-collector"/,
+  );
+  assert.match(workflow, /platform: linux\/amd64\n\s+architecture: amd64/);
+  assert.match(workflow, /platform: linux\/arm64\n\s+architecture: arm64/);
+  assert.match(workflow, /target: collector/);
+  assert.match(workflow, /uses: docker\/build-push-action@v7/);
+  assert.match(workflow, /push-by-digest=true/);
+  assert.match(workflow, /provenance: mode=max/);
+  assert.match(workflow, /sbom: true/);
+  assert.match(workflow, /docker buildx imagetools create --tag/);
+  assert.match(workflow, /expected_platforms=\$'linux\/amd64\\nlinux\/arm64'/);
+  assert.doesNotMatch(workflow, /open-splunk-server:/);
+  assert.doesNotMatch(workflow, /IMAGE_TAG.*latest/);
+});
+
 test("images seed secure writable paths in their normalized rootfs trees", async () => {
   const dockerfile = await readFile(path.join(workspace, "Dockerfile"), "utf8");
   const serverTarget = dockerfile.split("FROM scratch AS server")[1]
