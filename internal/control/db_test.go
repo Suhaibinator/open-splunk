@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/migrations"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
@@ -40,8 +41,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if migrationCount != 24 {
-		t.Fatalf("schema migration count = %d, want 24", migrationCount)
+	if migrationCount != 25 {
+		t.Fatalf("schema migration count = %d, want 25", migrationCount)
 	}
 
 	// Foreign keys are connection-local in SQLite. Force database/sql to open
@@ -89,8 +90,8 @@ func TestOpenConfiguresSQLiteAndAppliesMigrations(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count schema migrations after reopen: %v", err)
 	}
-	if migrationCount != 24 {
-		t.Fatalf("schema migration count after reopen = %d, want 24", migrationCount)
+	if migrationCount != 25 {
+		t.Fatalf("schema migration count after reopen = %d, want 25", migrationCount)
 	}
 }
 
@@ -637,8 +638,8 @@ func TestConcurrentOpenSerializesMigrationStartup(t *testing.T) {
 	if err := db.SQLDB().QueryRowContext(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&count); err != nil {
 		t.Fatalf("count schema migrations: %v", err)
 	}
-	if count != 24 {
-		t.Fatalf("schema migration count = %d, want 24", count)
+	if count != 25 {
+		t.Fatalf("schema migration count = %d, want 25", count)
 	}
 }
 
@@ -1387,23 +1388,7 @@ func TestIndexRetentionPrecisionMigrationCanonicalizesLegacyRows(t *testing.T) {
 
 func migrationsBefore(t *testing.T, cutoff string) fstest.MapFS {
 	t.Helper()
-
-	result := fstest.MapFS{}
-	entries, err := fs.ReadDir(migrations.SQLite(), ".")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() >= cutoff {
-			continue
-		}
-		data, err := fs.ReadFile(migrations.SQLite(), entry.Name())
-		if err != nil {
-			t.Fatal(err)
-		}
-		result[entry.Name()] = &fstest.MapFile{Data: data}
-	}
-	return result
+	return testsupport.SQLiteMigrationsBefore(t, cutoff)
 }
 
 func TestVisibilityPhaseMigrationUpgradesDrainedDatabase(t *testing.T) {

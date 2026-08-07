@@ -90,15 +90,17 @@ revision before keyset ordering and `LIMIT`; filtering a page after retrieval
 is invalid.
 
 These predicates use a current-version-only derived projection rather than
-decoding definition blobs during traversal. The projection stores only the
-normalized description (with absent and normalized-empty both represented as
-zero bytes) and the four ordered selector pattern lists, is tied to the exact
-current registry version, and is verified byte-for-byte against the decoded
+decoding definition blobs during traversal. Its definition-derived portion
+stores only the normalized description (with absent and normalized-empty both
+represented as zero bytes) and the four ordered selector pattern lists; copied
+registry fields bind filtering to the exact current identity and version. The
+complete projection is verified byte-for-byte against the registry and decoded
 definition before a response is returned. A quarantined current row has an
 empty description and no selector rows because suspect definition bytes are
-never decoded. Projection accounting is the exact sum of stored description
-and selector-value bytes and has a 256 MiB hard ceiling per tenant; publication
-fails atomically before exceeding it.
+never decoded. Each projection also stores and verifies the selector's exact
+canonical byte charge, which cannot exceed 8 KiB. Tenant projection accounting
+is the exact sum of stored description and selector-value bytes and has a 256
+MiB hard ceiling; publication fails atomically before exceeding it.
 
 ## Visibility, shadowing, and deterministic order
 

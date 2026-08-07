@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 	"testing"
-
-	"github.com/Suhaibinator/open-splunk/migrations"
 )
 
 const knowledgeMigrationTestAppID = "app_AAAAAAAAAAAAAAAAAAAAAA"
@@ -24,7 +22,7 @@ func TestKnowledgeCatalogMigrationUpgradesLegacyDatabaseAndPinsSchema(t *testing
 	}
 	seedKnowledgeMigrationApp(t, raw)
 
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0025_")); err != nil {
 		t.Fatalf("apply knowledge catalog migration: %v", err)
 	}
 
@@ -133,7 +131,7 @@ func TestKnowledgeCatalogSchemaEnforcesImmutablePublicationAndRecovery(t *testin
 
 	ctx := context.Background()
 	raw := openKnowledgeMigrationTestDB(t, "knowledge-invariants.sqlite")
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0025_")); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	seedKnowledgeMigrationApp(t, raw)
@@ -462,7 +460,7 @@ func TestKnowledgeCatalogSchemaProtectsNormalCapacityReserves(t *testing.T) {
 
 	ctx := context.Background()
 	raw := openKnowledgeMigrationTestDB(t, "knowledge-capacity.sqlite")
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0025_")); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	seedKnowledgeMigrationApp(t, raw)
@@ -598,7 +596,7 @@ func TestKnowledgeCatalogActiveObjectsRequireActiveApp(t *testing.T) {
 
 	ctx := context.Background()
 	raw := openKnowledgeMigrationTestDB(t, "knowledge-active-app.sqlite")
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0025_")); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	seedKnowledgeMigrationApp(t, raw)
@@ -678,7 +676,7 @@ func TestKnowledgeCatalogDependencyTargetsRequireDependentFirstCascade(t *testin
 
 	ctx := context.Background()
 	raw := openKnowledgeMigrationTestDB(t, "knowledge-dependent-first.sqlite")
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0025_")); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	seedKnowledgeMigrationApp(t, raw)
@@ -820,7 +818,7 @@ func TestKnowledgeCatalogSuccessRecordsRequireExactCurrentVersion(t *testing.T) 
 
 	ctx := context.Background()
 	raw := openKnowledgeMigrationTestDB(t, "knowledge-current-success.sqlite")
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0025_")); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	seedKnowledgeMigrationApp(t, raw)
@@ -960,7 +958,7 @@ func TestKnowledgeCatalogDeferredRegistryVersionAgreementIsAtomic(t *testing.T) 
 
 	ctx := context.Background()
 	raw := openKnowledgeMigrationTestDB(t, "knowledge-deferred-fk.sqlite")
-	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
+	if err := ApplyMigrations(ctx, raw, migrationsBefore(t, "0025_")); err != nil {
 		t.Fatalf("apply migrations: %v", err)
 	}
 	seedKnowledgeMigrationApp(t, raw)

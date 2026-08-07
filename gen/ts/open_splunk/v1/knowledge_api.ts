@@ -138,7 +138,12 @@ export interface CreateKnowledgeObjectResponse {
   tenantCatalogRevision: bigint;
 }
 
-/** POST /api/v1/knowledge/objects/get */
+/**
+ * POST /api/v1/knowledge/objects/get
+ * Historical reads are authorized from the current registry identity. A
+ * currently quarantined identity never returns current or historical
+ * definition-derived bytes.
+ */
 export interface GetKnowledgeObjectRequest {
   knowledgeObjectId: string;
   version?: bigint | undefined;
@@ -152,6 +157,9 @@ export interface GetKnowledgeObjectResponse {
  * POST /api/v1/knowledge/objects/list
  * The signed continuation binds every normalized filter, ordering choice,
  * caller scope, page bound, and first-page catalog revision.
+ * text_filter is a binary substring of the current name or description;
+ * selector_text_filter is a binary substring of one individual current
+ * selector pattern. Every predicate is applied before keyset LIMIT.
  */
 export interface ListKnowledgeObjectsRequest {
   page: PageRequest | undefined;

@@ -242,6 +242,9 @@ func (x *CreateKnowledgeObjectResponse) GetTenantCatalogRevision() uint64 {
 }
 
 // POST /api/v1/knowledge/objects/get
+// Historical reads are authorized from the current registry identity. A
+// currently quarantined identity never returns current or historical
+// definition-derived bytes.
 type GetKnowledgeObjectRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	KnowledgeObjectId string                 `protobuf:"bytes,1,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3" json:"knowledge_object_id,omitempty"`
@@ -341,6 +344,9 @@ func (x *GetKnowledgeObjectResponse) GetKnowledgeObject() *KnowledgeObject {
 // POST /api/v1/knowledge/objects/list
 // The signed continuation binds every normalized filter, ordering choice,
 // caller scope, page bound, and first-page catalog revision.
+// text_filter is a binary substring of the current name or description;
+// selector_text_filter is a binary substring of one individual current
+// selector pattern. Every predicate is applied before keyset LIMIT.
 type ListKnowledgeObjectsRequest struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	Page                *PageRequest           `protobuf:"bytes,1,opt,name=page,proto3" json:"page,omitempty"`
