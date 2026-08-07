@@ -311,7 +311,7 @@ func auditEventToProto(
 	if !ok {
 		return nil, errors.New("audit event service returned an invalid target")
 	}
-	return &opensplunkv1.AuditEvent{
+	message := &opensplunkv1.AuditEvent{
 		Sequence:      event.Sequence,
 		OccurredAt:    occurredAt,
 		ActorKind:     actorKind,
@@ -321,7 +321,53 @@ func auditEventToProto(
 		TargetKind:    targetKind,
 		TargetId:      strings.Clone(event.TargetID),
 		TargetVersion: event.TargetVersion,
-	}, nil
+	}
+	if event.TargetKind == audit.TargetKindKnowledgeObject {
+		appID := strings.Clone(event.KnowledgeObject.AppID)
+		objectType, typeOK := auditKnowledgeObjectTypeToProto(
+			event.KnowledgeObject.ObjectType,
+		)
+		sharingScope, scopeOK := auditKnowledgeSharingScopeToProto(
+			event.KnowledgeObject.SharingScope,
+		)
+		if !typeOK || !scopeOK {
+			return nil, errors.New("audit event service returned invalid knowledge metadata")
+		}
+		message.AppId = &appID
+		message.ObjectType = &objectType
+		message.SharingScope = &sharingScope
+	}
+	return message, nil
+}
+
+func auditKnowledgeObjectTypeToProto(
+	value audit.KnowledgeObjectType,
+) (opensplunkv1.KnowledgeObjectType, bool) {
+	switch value {
+	case audit.KnowledgeObjectTypeFieldExtraction:
+		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, true
+	case audit.KnowledgeObjectTypeFieldAlias:
+		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, true
+	case audit.KnowledgeObjectTypeCalculatedField:
+		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, true
+	default:
+		return opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED, false
+	}
+}
+
+func auditKnowledgeSharingScopeToProto(
+	value audit.KnowledgeSharingScope,
+) (opensplunkv1.SharingScope, bool) {
+	switch value {
+	case audit.KnowledgeSharingScopePrivate:
+		return opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE, true
+	case audit.KnowledgeSharingScopeApp:
+		return opensplunkv1.SharingScope_SHARING_SCOPE_APP, true
+	case audit.KnowledgeSharingScopeGlobal:
+		return opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL, true
+	default:
+		return opensplunkv1.SharingScope_SHARING_SCOPE_UNSPECIFIED, false
+	}
 }
 
 func auditActorRoleToProto(
@@ -390,6 +436,18 @@ func auditActionFromProto(value opensplunkv1.AuditAction) (audit.Action, bool) {
 		return audit.ActionSavedSearchDuplicate, true
 	case opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE:
 		return audit.ActionSavedSearchDelete, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE:
+		return audit.ActionKnowledgeObjectCreate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE:
+		return audit.ActionKnowledgeObjectUpdate, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE:
+		return audit.ActionKnowledgeObjectScopeChange, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE:
+		return audit.ActionKnowledgeObjectEnable, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE:
+		return audit.ActionKnowledgeObjectDisable, true
+	case opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE:
+		return audit.ActionKnowledgeObjectDelete, true
 	default:
 		return "", false
 	}
@@ -433,6 +491,18 @@ func auditActionToProto(value audit.Action) (opensplunkv1.AuditAction, bool) {
 		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, true
 	case audit.ActionSavedSearchDelete:
 		return opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE, true
+	case audit.ActionKnowledgeObjectCreate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE, true
+	case audit.ActionKnowledgeObjectUpdate:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE, true
+	case audit.ActionKnowledgeObjectScopeChange:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE, true
+	case audit.ActionKnowledgeObjectEnable:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE, true
+	case audit.ActionKnowledgeObjectDisable:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, true
+	case audit.ActionKnowledgeObjectDelete:
+		return opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, true
 	default:
 		return opensplunkv1.AuditAction_AUDIT_ACTION_UNSPECIFIED, false
 	}
@@ -450,6 +520,8 @@ func auditTargetKindFromProto(
 		return audit.TargetKindApp, true
 	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH:
 		return audit.TargetKindSavedSearch, true
+	case opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT:
+		return audit.TargetKindKnowledgeObject, true
 	default:
 		return "", false
 	}
@@ -467,6 +539,8 @@ func auditTargetKindToProto(
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_APP, true
 	case audit.TargetKindSavedSearch:
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH, true
+	case audit.TargetKindKnowledgeObject:
+		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, true
 	default:
 		return opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED, false
 	}

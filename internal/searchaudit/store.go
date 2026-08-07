@@ -194,7 +194,7 @@ func (store *Store) AppendSearchAttemptInTransaction(
 		)
 	}
 
-	occurredAt, _ := databaseTime(definition.OccurredAt)
+	occurredAt, _ := audit.CanonicalOccurrenceTime(definition.OccurredAt)
 	actor := actorForAppend(ctx)
 	record := searchAttemptEventRecord{
 		TenantID:            tenantID,
@@ -253,7 +253,7 @@ func validateAppendInputs(
 	if !validIdentity(tenantID, maximumTenantIDBytes) {
 		return fmt.Errorf("%w: search-attempt audit tenant ID is invalid", control.ErrInvalidArgument)
 	}
-	if _, ok := databaseTime(definition.OccurredAt); !ok ||
+	if _, ok := audit.CanonicalOccurrenceTime(definition.OccurredAt); !ok ||
 		!validIdentity(definition.OwnerID, maximumOwnerIDBytes) ||
 		!validIdentity(definition.SearchJobID, maximumSearchJobIDBytes) {
 		return fmt.Errorf("%w: search-attempt audit event is invalid", control.ErrInvalidArgument)
@@ -429,7 +429,7 @@ func eventFromRecord(record searchAttemptEventRecord) (Event, error) {
 		!validIdentity(record.SearchJobID, maximumSearchJobIDBytes) {
 		return Event{}, fmt.Errorf("%w: search-attempt audit event scalar is invalid", ErrCorrupt)
 	}
-	occurredAt, ok := databaseTime(time.UnixMicro(record.OccurredAtUnixMicro))
+	occurredAt, ok := audit.CanonicalOccurrenceTime(time.UnixMicro(record.OccurredAtUnixMicro))
 	if !ok || occurredAt.UnixMicro() != record.OccurredAtUnixMicro {
 		return Event{}, fmt.Errorf("%w: search-attempt audit event timestamp is invalid", ErrCorrupt)
 	}

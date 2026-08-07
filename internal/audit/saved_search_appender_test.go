@@ -132,7 +132,7 @@ func TestSavedSearchMutationAppenderMapsAllActionsAndActorsInOneTransaction(t *t
 		*page.TotalSize != uint64(len(tests)) || !page.TotalSizeExact {
 		t.Fatalf("saved-search adapter page = %+v", page)
 	}
-	wantOccurredAt, ok := databaseTime(auditTestTime)
+	wantOccurredAt, ok := CanonicalOccurrenceTime(auditTestTime)
 	if !ok {
 		t.Fatal("audit fixture time is invalid")
 	}

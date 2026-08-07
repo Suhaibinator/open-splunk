@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -216,7 +217,7 @@ func (store *Store) AppendInTransaction(
 		)
 	}
 
-	occurredAt, ok := databaseTime(definition.OccurredAt)
+	occurredAt, ok := CanonicalOccurrenceTime(definition.OccurredAt)
 	if !ok {
 		return Event{}, fmt.Errorf(
 			"%w: audit event timestamp is unsupported",
@@ -242,6 +243,14 @@ func (store *Store) AppendInTransaction(
 		TargetID:            definition.TargetID,
 		// TargetVersion was validated against math.MaxInt64.
 		TargetVersion: int64(definition.TargetVersion), // #nosec G115
+	}
+	if definition.TargetKind == TargetKindKnowledgeObject {
+		appID := strings.Clone(definition.KnowledgeObject.AppID)
+		objectType := definition.KnowledgeObject.ObjectType
+		sharingScope := definition.KnowledgeObject.SharingScope
+		record.AppID = &appID
+		record.ObjectType = &objectType
+		record.SharingScope = &sharingScope
 	}
 	if err := database.Create(&record).Error; err != nil {
 		return Event{}, mapStoreError(ctx, "append audit event", err)
@@ -375,7 +384,7 @@ func eventFromRecord(record auditEventRecord) (Event, error) {
 		record.TargetVersion < 1 {
 		return Event{}, fmt.Errorf("%w: audit event scalar is invalid", ErrCorrupt)
 	}
-	occurredAt, ok := databaseTime(time.UnixMicro(record.OccurredAtUnixMicro))
+	occurredAt, ok := CanonicalOccurrenceTime(time.UnixMicro(record.OccurredAtUnixMicro))
 	if !ok || occurredAt.UnixMicro() != record.OccurredAtUnixMicro {
 		return Event{}, fmt.Errorf("%w: audit event timestamp is invalid", ErrCorrupt)
 	}
@@ -391,19 +400,32 @@ func eventFromRecord(record auditEventRecord) (Event, error) {
 		TargetID:      record.TargetID,
 		TargetVersion: uint64(record.TargetVersion),
 	}
+	metadataPresent := record.AppID != nil
+	if (record.ObjectType != nil) != metadataPresent ||
+		(record.SharingScope != nil) != metadataPresent {
+		return Event{}, fmt.Errorf("%w: audit knowledge metadata is incomplete", ErrCorrupt)
+	}
+	if metadataPresent {
+		definition.KnowledgeObject = KnowledgeObjectMetadata{
+			AppID:        *record.AppID,
+			ObjectType:   *record.ObjectType,
+			SharingScope: *record.SharingScope,
+		}
+	}
 	if !validSuccessfulActorForAction(actor, definition.Action) ||
 		!definition.valid() {
 		return Event{}, fmt.Errorf("%w: audit event taxonomy is invalid", ErrCorrupt)
 	}
 	return Event{
-		Sequence:      uint64(record.Sequence),
-		TenantID:      record.TenantID,
-		OccurredAt:    occurredAt,
-		Actor:         actor,
-		Action:        definition.Action,
-		TargetKind:    definition.TargetKind,
-		TargetID:      definition.TargetID,
-		TargetVersion: definition.TargetVersion,
+		Sequence:        uint64(record.Sequence),
+		TenantID:        record.TenantID,
+		OccurredAt:      occurredAt,
+		Actor:           actor,
+		Action:          definition.Action,
+		TargetKind:      definition.TargetKind,
+		TargetID:        definition.TargetID,
+		TargetVersion:   definition.TargetVersion,
+		KnowledgeObject: definition.KnowledgeObject,
 	}.detached(), nil
 }
 

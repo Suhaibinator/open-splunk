@@ -7,6 +7,8 @@
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Timestamp } from "../../google/protobuf/timestamp";
+import { SharingScope, sharingScopeFromJSON, sharingScopeToJSON } from "./common";
+import { KnowledgeObjectType, knowledgeObjectTypeFromJSON, knowledgeObjectTypeToJSON } from "./knowledge";
 
 export enum AuditActorKind {
   AUDIT_ACTOR_KIND_UNSPECIFIED = 0,
@@ -112,6 +114,12 @@ export enum AuditAction {
   AUDIT_ACTION_SAVED_SEARCH_UPDATE = 16,
   AUDIT_ACTION_SAVED_SEARCH_DUPLICATE = 17,
   AUDIT_ACTION_SAVED_SEARCH_DELETE = 18,
+  AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE = 19,
+  AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE = 20,
+  AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE = 21,
+  AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE = 22,
+  AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE = 23,
+  AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE = 24,
   UNRECOGNIZED = -1,
 }
 
@@ -174,6 +182,24 @@ export function auditActionFromJSON(object: any): AuditAction {
     case 18:
     case "AUDIT_ACTION_SAVED_SEARCH_DELETE":
       return AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE;
+    case 19:
+    case "AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE":
+      return AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE;
+    case 20:
+    case "AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE":
+      return AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE;
+    case 21:
+    case "AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE":
+      return AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE;
+    case 22:
+    case "AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE":
+      return AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE;
+    case 23:
+    case "AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE":
+      return AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE;
+    case 24:
+    case "AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE":
+      return AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -221,6 +247,18 @@ export function auditActionToJSON(object: AuditAction): string {
       return "AUDIT_ACTION_SAVED_SEARCH_DUPLICATE";
     case AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE:
       return "AUDIT_ACTION_SAVED_SEARCH_DELETE";
+    case AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE:
+      return "AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE";
+    case AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE:
+      return "AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE";
+    case AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE:
+      return "AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE";
+    case AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE:
+      return "AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE";
+    case AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE:
+      return "AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE";
+    case AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE:
+      return "AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE";
     case AuditAction.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -233,6 +271,7 @@ export enum AuditTargetKind {
   AUDIT_TARGET_KIND_INDEX = 2,
   AUDIT_TARGET_KIND_APP = 3,
   AUDIT_TARGET_KIND_SAVED_SEARCH = 4,
+  AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT = 5,
   UNRECOGNIZED = -1,
 }
 
@@ -253,6 +292,9 @@ export function auditTargetKindFromJSON(object: any): AuditTargetKind {
     case 4:
     case "AUDIT_TARGET_KIND_SAVED_SEARCH":
       return AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH;
+    case 5:
+    case "AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT":
+      return AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -272,6 +314,8 @@ export function auditTargetKindToJSON(object: AuditTargetKind): string {
       return "AUDIT_TARGET_KIND_APP";
     case AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH:
       return "AUDIT_TARGET_KIND_SAVED_SEARCH";
+    case AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT:
+      return "AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT";
     case AuditTargetKind.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";
@@ -295,6 +339,9 @@ export interface AuditEvent {
   targetKind: AuditTargetKind;
   targetId: string;
   targetVersion: bigint;
+  appId?: string | undefined;
+  objectType?: KnowledgeObjectType | undefined;
+  sharingScope?: SharingScope | undefined;
 }
 
 function createBaseAuditEvent(): AuditEvent {
@@ -308,6 +355,9 @@ function createBaseAuditEvent(): AuditEvent {
     targetKind: 0,
     targetId: "",
     targetVersion: 0n,
+    appId: undefined,
+    objectType: undefined,
+    sharingScope: undefined,
   };
 }
 
@@ -345,6 +395,15 @@ export const AuditEvent: MessageFns<AuditEvent> = {
         throw new globalThis.Error("value provided for field message.targetVersion of type uint64 too large");
       }
       writer.uint32(72).uint64(message.targetVersion);
+    }
+    if (message.appId !== undefined) {
+      writer.uint32(82).string(message.appId);
+    }
+    if (message.objectType !== undefined) {
+      writer.uint32(88).int32(message.objectType);
+    }
+    if (message.sharingScope !== undefined) {
+      writer.uint32(96).int32(message.sharingScope);
     }
     return writer;
   },
@@ -428,6 +487,30 @@ export const AuditEvent: MessageFns<AuditEvent> = {
           message.targetVersion = reader.uint64() as bigint;
           continue;
         }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.appId = reader.string();
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.objectType = reader.int32() as any;
+          continue;
+        }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.sharingScope = reader.int32() as any;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -476,6 +559,21 @@ export const AuditEvent: MessageFns<AuditEvent> = {
         : isSet(object.target_version)
         ? BigInt(object.target_version)
         : 0n,
+      appId: isSet(object.appId)
+        ? globalThis.String(object.appId)
+        : isSet(object.app_id)
+        ? globalThis.String(object.app_id)
+        : undefined,
+      objectType: isSet(object.objectType)
+        ? knowledgeObjectTypeFromJSON(object.objectType)
+        : isSet(object.object_type)
+        ? knowledgeObjectTypeFromJSON(object.object_type)
+        : undefined,
+      sharingScope: isSet(object.sharingScope)
+        ? sharingScopeFromJSON(object.sharingScope)
+        : isSet(object.sharing_scope)
+        ? sharingScopeFromJSON(object.sharing_scope)
+        : undefined,
     };
   },
 
@@ -508,6 +606,15 @@ export const AuditEvent: MessageFns<AuditEvent> = {
     if (message.targetVersion !== 0n) {
       obj.targetVersion = message.targetVersion.toString();
     }
+    if (message.appId !== undefined) {
+      obj.appId = message.appId;
+    }
+    if (message.objectType !== undefined) {
+      obj.objectType = knowledgeObjectTypeToJSON(message.objectType);
+    }
+    if (message.sharingScope !== undefined) {
+      obj.sharingScope = sharingScopeToJSON(message.sharingScope);
+    }
     return obj;
   },
 
@@ -527,6 +634,9 @@ export const AuditEvent: MessageFns<AuditEvent> = {
     message.targetVersion = (object.targetVersion !== undefined && object.targetVersion !== null)
       ? BigInt(object.targetVersion)
       : 0n;
+    message.appId = object.appId ?? undefined;
+    message.objectType = object.objectType ?? undefined;
+    message.sharingScope = object.sharingScope ?? undefined;
     return message;
   },
 };

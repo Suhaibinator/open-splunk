@@ -189,9 +189,24 @@ func TestCollectorTokenMutationsAppendAtomicSecretFreeAuditEvents(t *testing.T) 
 		"target_kind",
 		"target_id",
 		"target_version",
+		"app_id",
+		"object_type",
+		"sharing_scope",
 	}
 	if !slices.Equal(columns, wantColumns) {
 		t.Fatalf("audit columns = %v, want exact secret-free shape %v", columns, wantColumns)
+	}
+	var nonKnowledgeMetadataRows int
+	if err := database.SQLDB().QueryRowContext(ctx, `
+		SELECT count(*)
+		FROM audit_events
+		WHERE target_kind = 'ingestion_token'
+		  AND (app_id IS NOT NULL OR object_type IS NOT NULL OR sharing_scope IS NOT NULL)
+	`).Scan(&nonKnowledgeMetadataRows); err != nil {
+		t.Fatalf("inspect token audit knowledge metadata: %v", err)
+	}
+	if nonKnowledgeMetadataRows != 0 {
+		t.Fatalf("token audit rows with knowledge metadata = %d", nonKnowledgeMetadataRows)
 	}
 }
 

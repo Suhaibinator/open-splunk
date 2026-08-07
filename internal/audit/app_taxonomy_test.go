@@ -19,7 +19,6 @@ func TestAppAuditTaxonomyValidatesActionTargetAndVersion(t *testing.T) {
 		{ActionAppDelete, 2},
 	}
 	for _, testCase := range valid {
-		testCase := testCase
 		t.Run(string(testCase.action), func(t *testing.T) {
 			t.Parallel()
 			event := SuccessfulEvent{
@@ -75,12 +74,12 @@ func TestAppAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) {
 	_, database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	events := []SuccessfulEvent{
-		{auditTestTime, ActionAppCreate, TargetKindApp, "app-observability", 1},
-		{auditTestTime, ActionAppUpdate, TargetKindApp, "app-observability", 2},
-		{auditTestTime, ActionAppArchive, TargetKindApp, "app-observability", 3},
-		{auditTestTime, ActionAppActivate, TargetKindApp, "app-observability", 4},
-		{auditTestTime, ActionAppArchive, TargetKindApp, "app-observability", 5},
-		{auditTestTime, ActionAppDelete, TargetKindApp, "app-observability", 5},
+		{OccurredAt: auditTestTime, Action: ActionAppCreate, TargetKind: TargetKindApp, TargetID: "app-observability", TargetVersion: 1},
+		{OccurredAt: auditTestTime, Action: ActionAppUpdate, TargetKind: TargetKindApp, TargetID: "app-observability", TargetVersion: 2},
+		{OccurredAt: auditTestTime, Action: ActionAppArchive, TargetKind: TargetKindApp, TargetID: "app-observability", TargetVersion: 3},
+		{OccurredAt: auditTestTime, Action: ActionAppActivate, TargetKind: TargetKindApp, TargetID: "app-observability", TargetVersion: 4},
+		{OccurredAt: auditTestTime, Action: ActionAppArchive, TargetKind: TargetKindApp, TargetID: "app-observability", TargetVersion: 5},
+		{OccurredAt: auditTestTime, Action: ActionAppDelete, TargetKind: TargetKindApp, TargetID: "app-observability", TargetVersion: 5},
 	}
 	for index, definition := range events {
 		persisted, err := store.Append(ctx, "tenant-app", definition)

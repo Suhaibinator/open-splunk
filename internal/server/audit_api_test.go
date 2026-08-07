@@ -68,7 +68,6 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 		{audit.ActionIndexDeleteData, opensplunkv1.AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA, 3},
 	}
 	for _, testCase := range tests {
-		testCase := testCase
 		t.Run(string(testCase.action), func(t *testing.T) {
 			t.Parallel()
 			fromProto, ok := auditActionFromProto(testCase.proto)
@@ -123,6 +122,12 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE,
 		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
 		opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE,
+		opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE,
 	}
 	service := &fakeAuditEvents{}
 	handler := newAuditTestHandler(t, service)
@@ -140,6 +145,90 @@ func TestIndexAuditProtoTaxonomyRoundTripsAndAcceptsCompleteFilterSet(t *testing
 	}
 }
 
+func TestKnowledgeAuditProtoTaxonomyAndMetadataRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		action  audit.Action
+		proto   opensplunkv1.AuditAction
+		version uint64
+	}{
+		{audit.ActionKnowledgeObjectCreate, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE, 1},
+		{audit.ActionKnowledgeObjectUpdate, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE, 2},
+		{audit.ActionKnowledgeObjectScopeChange, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE, 2},
+		{audit.ActionKnowledgeObjectEnable, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE, 2},
+		{audit.ActionKnowledgeObjectDisable, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, 2},
+		{audit.ActionKnowledgeObjectDelete, opensplunkv1.AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, 2},
+	} {
+		t.Run(string(testCase.action), func(t *testing.T) {
+			t.Parallel()
+			fromProto, ok := auditActionFromProto(testCase.proto)
+			if !ok || fromProto != testCase.action {
+				t.Fatalf("auditActionFromProto(%v) = (%q, %t)", testCase.proto, fromProto, ok)
+			}
+			toProto, ok := auditActionToProto(testCase.action)
+			if !ok || toProto != testCase.proto {
+				t.Fatalf("auditActionToProto(%q) = (%v, %t)", testCase.action, toProto, ok)
+			}
+			message, err := auditEventToProto(audit.Event{
+				Sequence:   1,
+				TenantID:   "tenant",
+				OccurredAt: time.Date(2026, time.August, 3, 20, 21, 22, 123456000, time.UTC),
+				Actor: audit.Actor{
+					Kind: audit.ActorKindBrowser,
+					ID:   "administrator",
+					Role: audit.ActorRoleAdministrator,
+				},
+				Action:        testCase.action,
+				TargetKind:    audit.TargetKindKnowledgeObject,
+				TargetID:      "ko_AAAAAAAAAAAAAAAAAAAAAA",
+				TargetVersion: testCase.version,
+				KnowledgeObject: audit.KnowledgeObjectMetadata{
+					AppID:        "app_AAAAAAAAAAAAAAAAAAAAAA",
+					ObjectType:   audit.KnowledgeObjectTypeFieldExtraction,
+					SharingScope: audit.KnowledgeSharingScopeApp,
+				},
+			}, "tenant")
+			if err != nil {
+				t.Fatalf("auditEventToProto(%q): %v", testCase.action, err)
+			}
+			if message.GetAction() != testCase.proto ||
+				message.GetTargetKind() != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT ||
+				message.AppId == nil || message.GetAppId() != "app_AAAAAAAAAAAAAAAAAAAAAA" ||
+				message.ObjectType == nil || message.GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
+				message.SharingScope == nil || message.GetSharingScope() != opensplunkv1.SharingScope_SHARING_SCOPE_APP {
+				t.Fatalf("knowledge-object audit proto = %+v", message)
+			}
+		})
+	}
+
+	fromProto, ok := auditTargetKindFromProto(
+		opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT,
+	)
+	if !ok || fromProto != audit.TargetKindKnowledgeObject {
+		t.Fatalf("auditTargetKindFromProto(knowledge object) = (%q, %t)", fromProto, ok)
+	}
+	toProto, ok := auditTargetKindToProto(audit.TargetKindKnowledgeObject)
+	if !ok || toProto != opensplunkv1.AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT {
+		t.Fatalf("auditTargetKindToProto(knowledge object) = (%v, %t)", toProto, ok)
+	}
+	legacy, err := auditEventToProto(audit.Event{
+		Sequence: 1, TenantID: "tenant",
+		OccurredAt: time.Date(2026, time.August, 3, 20, 21, 22, 123456000, time.UTC),
+		Actor: audit.Actor{
+			Kind: audit.ActorKindBrowser, ID: "ordinary-user", Role: audit.ActorRoleUser,
+		},
+		Action: audit.ActionSavedSearchUpdate, TargetKind: audit.TargetKindSavedSearch,
+		TargetID: "saved-search-a", TargetVersion: 2,
+	}, "tenant")
+	if err != nil {
+		t.Fatalf("auditEventToProto(legacy): %v", err)
+	}
+	if legacy.AppId != nil || legacy.ObjectType != nil || legacy.SharingScope != nil {
+		t.Fatalf("legacy audit proto has knowledge metadata: %+v", legacy)
+	}
+}
+
 func TestAppAuditProtoTaxonomyRoundTrips(t *testing.T) {
 	t.Parallel()
 
@@ -154,7 +243,6 @@ func TestAppAuditProtoTaxonomyRoundTrips(t *testing.T) {
 		{audit.ActionAppArchive, opensplunkv1.AuditAction_AUDIT_ACTION_APP_ARCHIVE, 4},
 		{audit.ActionAppDelete, opensplunkv1.AuditAction_AUDIT_ACTION_APP_DELETE, 4},
 	} {
-		testCase := testCase
 		t.Run(string(testCase.action), func(t *testing.T) {
 			t.Parallel()
 			fromProto, ok := auditActionFromProto(testCase.proto)
@@ -216,7 +304,6 @@ func TestSavedSearchAuditProtoTaxonomyRoundTrips(t *testing.T) {
 		{audit.ActionSavedSearchDuplicate, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, 1},
 		{audit.ActionSavedSearchDelete, opensplunkv1.AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE, 1},
 	} {
-		testCase := testCase
 		t.Run(string(testCase.action), func(t *testing.T) {
 			t.Parallel()
 			fromProto, ok := auditActionFromProto(testCase.proto)

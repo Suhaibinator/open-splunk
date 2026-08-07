@@ -25,7 +25,6 @@ func TestSavedSearchAuditTaxonomyValidatesActionTargetAndVersion(t *testing.T) {
 		{"delete later version", ActionSavedSearchDelete, 19},
 	}
 	for _, testCase := range valid {
-		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 			event := SuccessfulEvent{
@@ -202,32 +201,32 @@ func TestSavedSearchAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testi
 		{
 			ctx: ctx,
 			definition: SuccessfulEvent{
-				auditTestTime, ActionSavedSearchCreate, TargetKindSavedSearch,
-				"saved-search-a", 1,
+				OccurredAt: auditTestTime, Action: ActionSavedSearchCreate,
+				TargetKind: TargetKindSavedSearch, TargetID: "saved-search-a", TargetVersion: 1,
 			},
 			actor: Actor{Kind: ActorKindSystem, ID: defaultSystemActorID, Role: ActorRoleSystem},
 		},
 		{
 			ctx: administratorContext,
 			definition: SuccessfulEvent{
-				auditTestTime, ActionSavedSearchUpdate, TargetKindSavedSearch,
-				"saved-search-a", 2,
+				OccurredAt: auditTestTime, Action: ActionSavedSearchUpdate,
+				TargetKind: TargetKindSavedSearch, TargetID: "saved-search-a", TargetVersion: 2,
 			},
 			actor: administrator,
 		},
 		{
 			ctx: userContext,
 			definition: SuccessfulEvent{
-				auditTestTime, ActionSavedSearchDuplicate, TargetKindSavedSearch,
-				"saved-search-b", 1,
+				OccurredAt: auditTestTime, Action: ActionSavedSearchDuplicate,
+				TargetKind: TargetKindSavedSearch, TargetID: "saved-search-b", TargetVersion: 1,
 			},
 			actor: ordinaryUser,
 		},
 		{
 			ctx: userContext,
 			definition: SuccessfulEvent{
-				auditTestTime, ActionSavedSearchDelete, TargetKindSavedSearch,
-				"saved-search-b", 1,
+				OccurredAt: auditTestTime, Action: ActionSavedSearchDelete,
+				TargetKind: TargetKindSavedSearch, TargetID: "saved-search-b", TargetVersion: 1,
 			},
 			actor: ordinaryUser,
 		},
@@ -259,7 +258,8 @@ func TestSavedSearchAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testi
 	}
 
 	created, err := store.Append(ctx, "tenant-saved-search-schema", SuccessfulEvent{
-		auditTestTime, ActionSavedSearchCreate, TargetKindSavedSearch, "saved-search-schema", 1,
+		OccurredAt: auditTestTime, Action: ActionSavedSearchCreate,
+		TargetKind: TargetKindSavedSearch, TargetID: "saved-search-schema", TargetVersion: 1,
 	})
 	if err != nil {
 		t.Fatalf("Append(schema anchor): %v", err)

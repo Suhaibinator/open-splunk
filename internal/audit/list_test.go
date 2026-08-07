@@ -214,6 +214,45 @@ func TestListCursorCanonicalizesEmptyActionFilters(t *testing.T) {
 	}
 }
 
+func TestListPagesAreCallerOwnedAndCursorStateRemainsStable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, database := openAuditTestDatabase(t)
+	store := newAuditTestStore(t, database, auditTestCursorKey())
+	appendAuditTestEvent(t, store, ctx, "tenant-owned", ActionIngestionTokenCreate, "token", 1)
+	appendAuditTestEvent(t, store, ctx, "tenant-owned", ActionIngestionTokenUpdate, "token", 2)
+
+	request := ListRequest{PageSize: 1, IncludeTotal: true}
+	first, err := store.List(ctx, "tenant-owned", request)
+	if err != nil || len(first.Events) != 1 || first.TotalSize == nil ||
+		first.NextPageToken == "" {
+		t.Fatalf("List(first) = (%+v, %v)", first, err)
+	}
+	second, err := store.List(ctx, "tenant-owned", request)
+	if err != nil || len(second.Events) != 1 || second.TotalSize == nil {
+		t.Fatalf("List(second) = (%+v, %v)", second, err)
+	}
+	cursor := first.NextPageToken
+	first.Events[0].Sequence = 0
+	first.Events[0].TenantID = "mutated"
+	first.Events = append(first.Events, Event{Sequence: 99})
+	*first.TotalSize = 0
+	first.NextPageToken = "mutated"
+	if second.Events[0].Sequence != 2 || second.Events[0].TenantID != "tenant-owned" ||
+		len(second.Events) != 1 || *second.TotalSize != 2 || second.NextPageToken != cursor {
+		t.Fatalf("caller mutation escaped page ownership: %+v", second)
+	}
+
+	continuation, err := store.List(ctx, "tenant-owned", ListRequest{
+		PageSize: 1, PageToken: cursor, IncludeTotal: true,
+	})
+	if err != nil || len(continuation.Events) != 1 ||
+		continuation.Events[0].Sequence != 1 || continuation.TotalSize == nil ||
+		*continuation.TotalSize != 2 || continuation.NextPageToken != "" {
+		t.Fatalf("List(continuation) = (%+v, %v)", continuation, err)
+	}
+}
+
 func TestListRejectsInvalidRequestsSeparatelyFromInvalidCursors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -330,6 +369,46 @@ func TestListCorruptionFailsClosedBeforeReturningRows(t *testing.T) {
 		page, err := store.List(ctx, "tenant-poison", ListRequest{})
 		if len(page.Events) != 0 || !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("List(poisoned row) = (%+v, %v)", page, err)
+		}
+	})
+
+	t.Run("corrupt lookahead", func(t *testing.T) {
+		ctx := context.Background()
+		_, database := openAuditTestDatabase(t)
+		store := newAuditTestStore(t, database, auditTestCursorKey())
+		appendAuditTestEvent(t, store, ctx, "tenant-lookahead", ActionIngestionTokenCreate, "token", 1)
+		appendAuditTestEvent(t, store, ctx, "tenant-lookahead", ActionIngestionTokenUpdate, "token", 2)
+		database.SQLDB().SetMaxOpenConns(1)
+		connection, err := database.SQLDB().Conn(ctx)
+		if err != nil {
+			t.Fatalf("acquire corruption connection: %v", err)
+		}
+		if _, err := connection.ExecContext(ctx, "DROP TRIGGER audit_event_update_is_forbidden"); err != nil {
+			_ = connection.Close()
+			t.Fatalf("drop update trigger: %v", err)
+		}
+		if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = ON"); err != nil {
+			_ = connection.Close()
+			t.Fatalf("ignore fixture constraints: %v", err)
+		}
+		if _, err := connection.ExecContext(ctx, `
+			UPDATE audit_events
+			SET target_kind = 'saved_search'
+			WHERE tenant_id = 'tenant-lookahead' AND sequence = 1`); err != nil {
+			_ = connection.Close()
+			t.Fatalf("poison lookahead taxonomy: %v", err)
+		}
+		if _, err := connection.ExecContext(ctx, "PRAGMA ignore_check_constraints = OFF"); err != nil {
+			_ = connection.Close()
+			t.Fatalf("restore fixture constraints: %v", err)
+		}
+		if err := connection.Close(); err != nil {
+			t.Fatalf("close corruption connection: %v", err)
+		}
+
+		page, err := store.List(ctx, "tenant-lookahead", ListRequest{PageSize: 1})
+		if len(page.Events) != 0 || !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("List(corrupt lookahead) = (%+v, %v)", page, err)
 		}
 	})
 

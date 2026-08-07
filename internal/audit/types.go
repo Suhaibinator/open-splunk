@@ -21,19 +21,20 @@ const (
 	MaximumListPageSize = 200
 	// MaximumActionFilters is the complete fixed action taxonomy. One list
 	// request cannot contain more distinct action filters than this bound.
-	MaximumActionFilters = 18
+	MaximumActionFilters = 24
 
-	defaultListPageSize     = 50
-	maximumTenantIDBytes    = 255
-	maximumActorIDBytes     = 255
-	maximumTargetIDBytes    = 128
-	minimumCursorKeyBytes   = 32
-	maximumCursorKeyBytes   = 4 << 10
-	maximumListCursorBytes  = 2 << 10
-	maximumControlUnixMicro = int64(253_402_300_799_999_999)
-	defaultSystemActorID    = "open-splunk-server"
-	auditListCursorVersion  = 1
-	auditListCursorPurpose  = "audit-event-list-cursor"
+	defaultListPageSize        = 50
+	maximumTenantIDBytes       = 255
+	maximumActorIDBytes        = 255
+	maximumTargetIDBytes       = 128
+	maximumKnowledgeAppIDBytes = 128
+	minimumCursorKeyBytes      = 32
+	maximumCursorKeyBytes      = 4 << 10
+	maximumListCursorBytes     = 2 << 10
+	maximumControlUnixMicro    = int64(253_402_300_799_999_999)
+	defaultSystemActorID       = "open-splunk-server"
+	auditListCursorVersion     = 1
+	auditListCursorPurpose     = "audit-event-list-cursor"
 )
 
 var (
@@ -93,32 +94,38 @@ func (actor Actor) detached() Actor {
 	return Actor{Kind: actor.Kind, ID: strings.Clone(actor.ID), Role: actor.Role}
 }
 
-// Action is a successful, fixed audit operation. Failed attempts and broader
-// object families require separate contracts rather than arbitrary strings.
+// Action is a successful, fixed audit operation. Failed attempts use separate
+// bounded contracts rather than arbitrary strings in this journal.
 type Action string
 
 const (
-	ActionIngestionTokenCreate Action = "ingestion_token.create"
-	ActionIngestionTokenUpdate Action = "ingestion_token.update"
-	ActionIngestionTokenRevoke Action = "ingestion_token.revoke"
-	ActionIndexCreate          Action = "index.create"
-	ActionIndexUpdate          Action = "index.update"
-	ActionIndexActivate        Action = "index.activate"
-	ActionIndexArchive         Action = "index.archive"
-	ActionIndexDeleteKeepData  Action = "index.delete_keep_data"
-	ActionIndexDeleteData      Action = "index.delete_data"
-	ActionAppCreate            Action = "app.create"
-	ActionAppUpdate            Action = "app.update"
-	ActionAppActivate          Action = "app.activate"
-	ActionAppArchive           Action = "app.archive"
-	ActionAppDelete            Action = "app.delete"
-	ActionSavedSearchCreate    Action = "saved_search.create"
-	ActionSavedSearchUpdate    Action = "saved_search.update"
-	ActionSavedSearchDuplicate Action = "saved_search.duplicate"
-	ActionSavedSearchDelete    Action = "saved_search.delete"
+	ActionIngestionTokenCreate       Action = "ingestion_token.create"
+	ActionIngestionTokenUpdate       Action = "ingestion_token.update"
+	ActionIngestionTokenRevoke       Action = "ingestion_token.revoke"
+	ActionIndexCreate                Action = "index.create"
+	ActionIndexUpdate                Action = "index.update"
+	ActionIndexActivate              Action = "index.activate"
+	ActionIndexArchive               Action = "index.archive"
+	ActionIndexDeleteKeepData        Action = "index.delete_keep_data"
+	ActionIndexDeleteData            Action = "index.delete_data"
+	ActionAppCreate                  Action = "app.create"
+	ActionAppUpdate                  Action = "app.update"
+	ActionAppActivate                Action = "app.activate"
+	ActionAppArchive                 Action = "app.archive"
+	ActionAppDelete                  Action = "app.delete"
+	ActionSavedSearchCreate          Action = "saved_search.create"
+	ActionSavedSearchUpdate          Action = "saved_search.update"
+	ActionSavedSearchDuplicate       Action = "saved_search.duplicate"
+	ActionSavedSearchDelete          Action = "saved_search.delete"
+	ActionKnowledgeObjectCreate      Action = "knowledge.object.create"
+	ActionKnowledgeObjectUpdate      Action = "knowledge.object.update"
+	ActionKnowledgeObjectScopeChange Action = "knowledge.object.scope_change"
+	ActionKnowledgeObjectEnable      Action = "knowledge.object.enable"
+	ActionKnowledgeObjectDisable     Action = "knowledge.object.disable"
+	ActionKnowledgeObjectDelete      Action = "knowledge.object.delete"
 )
 
-// Valid reports whether action belongs to the first immutable audit taxonomy.
+// Valid reports whether action belongs to the immutable audit taxonomy.
 func (action Action) Valid() bool {
 	switch action {
 	case ActionIngestionTokenCreate,
@@ -138,7 +145,13 @@ func (action Action) Valid() bool {
 		ActionSavedSearchCreate,
 		ActionSavedSearchUpdate,
 		ActionSavedSearchDuplicate,
-		ActionSavedSearchDelete:
+		ActionSavedSearchDelete,
+		ActionKnowledgeObjectCreate,
+		ActionKnowledgeObjectUpdate,
+		ActionKnowledgeObjectScopeChange,
+		ActionKnowledgeObjectEnable,
+		ActionKnowledgeObjectDisable,
+		ActionKnowledgeObjectDelete:
 		return true
 	default:
 		return false
@@ -149,17 +162,18 @@ func (action Action) Valid() bool {
 type TargetKind string
 
 const (
-	TargetKindIngestionToken TargetKind = "ingestion_token"
-	TargetKindIndex          TargetKind = "index"
-	TargetKindApp            TargetKind = "app"
-	TargetKindSavedSearch    TargetKind = "saved_search"
+	TargetKindIngestionToken  TargetKind = "ingestion_token"
+	TargetKindIndex           TargetKind = "index"
+	TargetKindApp             TargetKind = "app"
+	TargetKindSavedSearch     TargetKind = "saved_search"
+	TargetKindKnowledgeObject TargetKind = "knowledge_object"
 )
 
-// Valid reports whether kind belongs to the first audit target taxonomy.
+// Valid reports whether kind belongs to the audit target taxonomy.
 func (kind TargetKind) Valid() bool {
 	switch kind {
 	case TargetKindIngestionToken, TargetKindIndex, TargetKindApp,
-		TargetKindSavedSearch:
+		TargetKindSavedSearch, TargetKindKnowledgeObject:
 		return true
 	default:
 		return false
@@ -169,28 +183,102 @@ func (kind TargetKind) Valid() bool {
 // SuccessfulEvent is the caller-owned definition appended in the same
 // transaction as a successful control-plane mutation.
 type SuccessfulEvent struct {
-	OccurredAt    time.Time
-	Action        Action
-	TargetKind    TargetKind
-	TargetID      string
-	TargetVersion uint64
+	OccurredAt      time.Time
+	Action          Action
+	TargetKind      TargetKind
+	TargetID        string
+	TargetVersion   uint64
+	KnowledgeObject KnowledgeObjectMetadata
+}
+
+// KnowledgeObjectType is the closed, safe object family recorded for a
+// successful knowledge-object mutation. Definitions and definition-derived
+// payloads are intentionally absent.
+type KnowledgeObjectType string
+
+const (
+	KnowledgeObjectTypeFieldExtraction KnowledgeObjectType = "field_extraction"
+	KnowledgeObjectTypeFieldAlias      KnowledgeObjectType = "field_alias"
+	KnowledgeObjectTypeCalculatedField KnowledgeObjectType = "calculated_field"
+)
+
+// Valid reports whether objectType belongs to the closed Tier-1 knowledge
+// object taxonomy shared by successful and rejected audit journals.
+func (objectType KnowledgeObjectType) Valid() bool {
+	switch objectType {
+	case KnowledgeObjectTypeFieldExtraction,
+		KnowledgeObjectTypeFieldAlias,
+		KnowledgeObjectTypeCalculatedField:
+		return true
+	default:
+		return false
+	}
+}
+
+// KnowledgeSharingScope is the closed publication scope recorded for a
+// successful knowledge-object mutation.
+type KnowledgeSharingScope string
+
+const (
+	KnowledgeSharingScopePrivate KnowledgeSharingScope = "private"
+	KnowledgeSharingScopeApp     KnowledgeSharingScope = "app"
+	KnowledgeSharingScopeGlobal  KnowledgeSharingScope = "global"
+)
+
+// Valid reports whether scope belongs to the closed knowledge publication
+// scope taxonomy shared by successful and rejected audit journals.
+func (scope KnowledgeSharingScope) Valid() bool {
+	switch scope {
+	case KnowledgeSharingScopePrivate,
+		KnowledgeSharingScopeApp,
+		KnowledgeSharingScopeGlobal:
+		return true
+	default:
+		return false
+	}
+}
+
+// KnowledgeObjectMetadata is present exactly when TargetKind is
+// knowledge_object. Its zero value represents absence for every legacy target.
+type KnowledgeObjectMetadata struct {
+	AppID        string
+	ObjectType   KnowledgeObjectType
+	SharingScope KnowledgeSharingScope
+}
+
+func (metadata KnowledgeObjectMetadata) empty() bool {
+	return metadata == (KnowledgeObjectMetadata{})
+}
+
+func (metadata KnowledgeObjectMetadata) valid() bool {
+	return validIdentity(metadata.AppID, maximumKnowledgeAppIDBytes) &&
+		metadata.ObjectType.Valid() && metadata.SharingScope.Valid()
 }
 
 func (event SuccessfulEvent) valid() bool {
-	_, validTime := databaseTime(event.OccurredAt)
+	_, validTime := CanonicalOccurrenceTime(event.OccurredAt)
 	return validTime &&
 		event.Action.Valid() &&
 		event.TargetKind.Valid() &&
 		validActionTarget(event.Action, event.TargetKind) &&
 		validIdentity(event.TargetID, maximumTargetIDBytes) &&
 		event.TargetVersion <= math.MaxInt64 &&
-		validActionVersion(event.Action, event.TargetVersion)
+		validActionVersion(event.Action, event.TargetVersion) &&
+		validKnowledgeMetadata(event.TargetKind, event.KnowledgeObject)
+}
+
+func validKnowledgeMetadata(kind TargetKind, metadata KnowledgeObjectMetadata) bool {
+	if kind == TargetKindKnowledgeObject {
+		return metadata.valid()
+	}
+	return metadata.empty()
 }
 
 func validActionVersion(action Action, version uint64) bool {
 	switch action {
 	case ActionIngestionTokenCreate, ActionIndexCreate, ActionAppCreate,
-		ActionSavedSearchCreate, ActionSavedSearchDuplicate:
+		ActionSavedSearchCreate, ActionSavedSearchDuplicate,
+		ActionKnowledgeObjectCreate:
 		return version == 1
 	case ActionIngestionTokenUpdate,
 		ActionIngestionTokenRevoke,
@@ -202,7 +290,12 @@ func validActionVersion(action Action, version uint64) bool {
 		ActionAppActivate,
 		ActionAppArchive,
 		ActionAppDelete,
-		ActionSavedSearchUpdate:
+		ActionSavedSearchUpdate,
+		ActionKnowledgeObjectUpdate,
+		ActionKnowledgeObjectScopeChange,
+		ActionKnowledgeObjectEnable,
+		ActionKnowledgeObjectDisable,
+		ActionKnowledgeObjectDelete:
 		return version >= 2
 	case ActionSavedSearchDelete:
 		return version >= 1
@@ -237,6 +330,13 @@ func validActionTarget(action Action, targetKind TargetKind) bool {
 		ActionSavedSearchDuplicate,
 		ActionSavedSearchDelete:
 		return targetKind == TargetKindSavedSearch
+	case ActionKnowledgeObjectCreate,
+		ActionKnowledgeObjectUpdate,
+		ActionKnowledgeObjectScopeChange,
+		ActionKnowledgeObjectEnable,
+		ActionKnowledgeObjectDisable,
+		ActionKnowledgeObjectDelete:
+		return targetKind == TargetKindKnowledgeObject
 	default:
 		return false
 	}
@@ -261,14 +361,15 @@ func validSuccessfulActorForAction(actor Actor, action Action) bool {
 // Event is the complete immutable public audit projection. Sequence is dense,
 // one-based, and local to TenantID.
 type Event struct {
-	Sequence      uint64
-	TenantID      string
-	OccurredAt    time.Time
-	Actor         Actor
-	Action        Action
-	TargetKind    TargetKind
-	TargetID      string
-	TargetVersion uint64
+	Sequence        uint64
+	TenantID        string
+	OccurredAt      time.Time
+	Actor           Actor
+	Action          Action
+	TargetKind      TargetKind
+	TargetID        string
+	TargetVersion   uint64
+	KnowledgeObject KnowledgeObjectMetadata
 }
 
 // ValidateForTenant verifies the complete persisted-event contract before an
@@ -284,11 +385,12 @@ func (event Event) ValidateForTenant(tenantID string) error {
 		event.OccurredAt != event.OccurredAt.Round(0) ||
 		!validSuccessfulActorForAction(event.Actor, event.Action) ||
 		!(SuccessfulEvent{
-			OccurredAt:    event.OccurredAt,
-			Action:        event.Action,
-			TargetKind:    event.TargetKind,
-			TargetID:      event.TargetID,
-			TargetVersion: event.TargetVersion,
+			OccurredAt:      event.OccurredAt,
+			Action:          event.Action,
+			TargetKind:      event.TargetKind,
+			TargetID:        event.TargetID,
+			TargetVersion:   event.TargetVersion,
+			KnowledgeObject: event.KnowledgeObject,
 		}).valid() {
 		return fmt.Errorf("%w: audit event is invalid", control.ErrInvalidArgument)
 	}
@@ -299,6 +401,7 @@ func (event Event) detached() Event {
 	event.TenantID = strings.Clone(event.TenantID)
 	event.Actor = event.Actor.detached()
 	event.TargetID = strings.Clone(event.TargetID)
+	event.KnowledgeObject.AppID = strings.Clone(event.KnowledgeObject.AppID)
 	return event
 }
 
@@ -346,7 +449,10 @@ func ValidateTenantID(tenantID string) error {
 	return nil
 }
 
-func databaseTime(value time.Time) (time.Time, bool) {
+// CanonicalOccurrenceTime converts one supported audit occurrence time to its
+// UTC microsecond database representation. The boolean is false outside the
+// shared control-plane timestamp domain.
+func CanonicalOccurrenceTime(value time.Time) (time.Time, bool) {
 	value = value.Round(0).UTC()
 	if value.Year() < 1 || value.Year() > 9999 {
 		return time.Time{}, false

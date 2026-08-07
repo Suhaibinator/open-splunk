@@ -225,8 +225,10 @@ func (store *Store) List(
 		return ListPage{}, mapStoreError(ctx, "list audit events", err)
 	}
 
-	events := make([]Event, 0, min(len(records), int(normalized.pageSize)))
-	for _, record := range records {
+	pageSize := int(normalized.pageSize)
+	hasNextPage := len(records) > pageSize
+	events := make([]Event, 0, min(len(records), pageSize))
+	for index, record := range records {
 		event, conversionErr := eventFromRecord(record)
 		if conversionErr != nil {
 			return ListPage{}, conversionErr
@@ -234,7 +236,9 @@ func (store *Store) List(
 		if event.TenantID != normalized.tenantID {
 			return ListPage{}, fmt.Errorf("%w: audit list crossed tenant scope", ErrCorrupt)
 		}
-		events = append(events, event)
+		if index < pageSize {
+			events = append(events, event)
+		}
 	}
 
 	page = ListPage{Events: events}
@@ -255,8 +259,7 @@ func (store *Store) List(
 		page.TotalSize = &total
 		page.TotalSizeExact = true
 	}
-	if len(page.Events) > int(normalized.pageSize) {
-		page.Events = page.Events[:normalized.pageSize]
+	if hasNextPage {
 		last := page.Events[len(page.Events)-1]
 		next := listCursor{
 			FilterHash: filterHash,
@@ -279,7 +282,7 @@ func (store *Store) List(
 	if commitErr != nil {
 		return ListPage{}, mapStoreError(ctx, "commit audit list", commitErr)
 	}
-	return detachListPage(page), nil
+	return page, nil
 }
 
 func validateAbsentTenantBoundary(database *gorm.DB, tenantID string) error {
@@ -566,22 +569,6 @@ func countFilteredEvents(
 		return 0, fmt.Errorf("%w: filtered audit count is invalid", ErrCorrupt)
 	}
 	return uint64(count), nil
-}
-
-func detachListPage(page ListPage) ListPage {
-	result := ListPage{
-		Events:         make([]Event, len(page.Events)),
-		NextPageToken:  strings.Clone(page.NextPageToken),
-		TotalSizeExact: page.TotalSizeExact,
-	}
-	for index, event := range page.Events {
-		result.Events[index] = event.detached()
-	}
-	if page.TotalSize != nil {
-		total := *page.TotalSize
-		result.TotalSize = &total
-	}
-	return result
 }
 
 func clonePointer[T ~string](input *T) *T {

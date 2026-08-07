@@ -33,7 +33,6 @@ const (
 	maximumCursorKeyBytes    = 4 << 10
 	maximumListCursorBytes   = 2 << 10
 	maximumIntegrityBatch    = 512
-	maximumControlUnixMicro  = int64(253_402_300_799_999_999)
 	maximumPersistedSequence = int64(math.MaxInt64 - 1)
 	defaultSystemActorID     = "open-splunk-server"
 	searchAuditCursorVersion = 1
@@ -82,7 +81,7 @@ func (event Event) ValidateForTenant(tenantID string) error {
 		!validIdentity(event.SearchJobID, maximumSearchJobIDBytes) {
 		return fmt.Errorf("%w: search-attempt audit event is invalid", control.ErrInvalidArgument)
 	}
-	occurredAt, ok := databaseTime(event.OccurredAt)
+	occurredAt, ok := audit.CanonicalOccurrenceTime(event.OccurredAt)
 	if !ok || !occurredAt.Equal(event.OccurredAt) {
 		return fmt.Errorf("%w: search-attempt audit event timestamp is invalid", control.ErrInvalidArgument)
 	}
@@ -131,16 +130,4 @@ func validIdentity(value string, maximumBytes int) bool {
 		}
 	}
 	return true
-}
-
-func databaseTime(value time.Time) (time.Time, bool) {
-	value = value.Round(0).UTC()
-	if value.Year() < 1 || value.Year() > 9999 {
-		return time.Time{}, false
-	}
-	microseconds := value.UnixMicro()
-	if microseconds < 1 || microseconds > maximumControlUnixMicro {
-		return time.Time{}, false
-	}
-	return time.UnixMicro(microseconds).UTC(), true
 }

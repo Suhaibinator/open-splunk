@@ -159,7 +159,7 @@ func TestBackupToIncludesCommittedWALAndExcludesUncommittedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if identity.LatestVersion != 25 || identity.SHA256 == ([sha256.Size]byte{}) {
+	if identity.LatestVersion != 26 || identity.SHA256 == ([sha256.Size]byte{}) {
 		t.Fatalf("migration identity = %+v", identity)
 	}
 
@@ -340,12 +340,12 @@ func TestVerifyCurrentMigrationsRequiresExactLedgerAndStableIdentity(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if firstIdentity != secondIdentity || firstIdentity.LatestVersion != 25 {
+	if firstIdentity != secondIdentity || firstIdentity.LatestVersion != 26 {
 		t.Fatalf("migration identities differ: first=%+v second=%+v", firstIdentity, secondIdentity)
 	}
 
 	incomplete := open("incomplete")
-	if _, err := incomplete.SQLDB().ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 25`); err != nil {
+	if _, err := incomplete.SQLDB().ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 26`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := incomplete.VerifyCurrentMigrations(ctx, migrations.SQLite()); !errors.Is(err, ErrDatabaseNotCurrent) {
@@ -360,7 +360,7 @@ func TestVerifyCurrentMigrationsRequiresExactLedgerAndStableIdentity(t *testing.
 	}
 
 	drifted := open("drifted")
-	if _, err := drifted.SQLDB().ExecContext(ctx, `UPDATE schema_migrations SET name = '0025_changed.sql' WHERE version = 25`); err != nil {
+	if _, err := drifted.SQLDB().ExecContext(ctx, `UPDATE schema_migrations SET name = '0026_changed.sql' WHERE version = 26`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := drifted.VerifyCurrentMigrations(ctx, migrations.SQLite()); !errors.Is(err, ErrMigrationDrift) {
@@ -370,7 +370,7 @@ func TestVerifyCurrentMigrationsRequiresExactLedgerAndStableIdentity(t *testing.
 	tooNew := open("too-new")
 	if _, err := tooNew.SQLDB().ExecContext(ctx, `
 		INSERT INTO schema_migrations (version, name, checksum, applied_at_unix_micro)
-			VALUES (26, '0026_future.sql', zeroblob(32), 1)`); err != nil {
+			VALUES (27, '0027_future.sql', zeroblob(32), 1)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := tooNew.VerifyCurrentMigrations(ctx, migrations.SQLite()); !errors.Is(err, ErrDatabaseTooNew) {

@@ -20,7 +20,6 @@ func TestIndexAuditTaxonomyValidatesActionTargetAndVersion(t *testing.T) {
 		{ActionIndexDeleteData, 3},
 	}
 	for _, testCase := range valid {
-		testCase := testCase
 		t.Run(string(testCase.action), func(t *testing.T) {
 			t.Parallel()
 			event := SuccessfulEvent{
@@ -101,12 +100,12 @@ func TestIndexAuditEventsPersistAndSQLiteRejectsTaxonomyForgeries(t *testing.T) 
 	_, database := openAuditTestDatabase(t)
 	store := newAuditTestStore(t, database, auditTestCursorKey())
 	events := []SuccessfulEvent{
-		{auditTestTime, ActionIndexCreate, TargetKindIndex, "events", 1},
-		{auditTestTime, ActionIndexUpdate, TargetKindIndex, "events", 2},
-		{auditTestTime, ActionIndexActivate, TargetKindIndex, "events", 3},
-		{auditTestTime, ActionIndexArchive, TargetKindIndex, "events", 4},
-		{auditTestTime, ActionIndexDeleteKeepData, TargetKindIndex, "events", 5},
-		{auditTestTime, ActionIndexDeleteData, TargetKindIndex, "events", 6},
+		{OccurredAt: auditTestTime, Action: ActionIndexCreate, TargetKind: TargetKindIndex, TargetID: "events", TargetVersion: 1},
+		{OccurredAt: auditTestTime, Action: ActionIndexUpdate, TargetKind: TargetKindIndex, TargetID: "events", TargetVersion: 2},
+		{OccurredAt: auditTestTime, Action: ActionIndexActivate, TargetKind: TargetKindIndex, TargetID: "events", TargetVersion: 3},
+		{OccurredAt: auditTestTime, Action: ActionIndexArchive, TargetKind: TargetKindIndex, TargetID: "events", TargetVersion: 4},
+		{OccurredAt: auditTestTime, Action: ActionIndexDeleteKeepData, TargetKind: TargetKindIndex, TargetID: "events", TargetVersion: 5},
+		{OccurredAt: auditTestTime, Action: ActionIndexDeleteData, TargetKind: TargetKindIndex, TargetID: "events", TargetVersion: 6},
 	}
 	for index, definition := range events {
 		persisted, err := store.Append(ctx, "tenant-index", definition)
@@ -200,6 +199,12 @@ func allKnownAuditActions() []Action {
 		ActionSavedSearchUpdate,
 		ActionSavedSearchDuplicate,
 		ActionSavedSearchDelete,
+		ActionKnowledgeObjectCreate,
+		ActionKnowledgeObjectUpdate,
+		ActionKnowledgeObjectScopeChange,
+		ActionKnowledgeObjectEnable,
+		ActionKnowledgeObjectDisable,
+		ActionKnowledgeObjectDelete,
 	}
 }
 

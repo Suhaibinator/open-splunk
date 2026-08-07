@@ -1022,20 +1022,21 @@ func TestExplicitGORMModelsMatchMigratedAuditColumns(t *testing.T) {
 	if err := statement.Parse(&auditEventRecord{}); err != nil {
 		t.Fatalf("parse auditEventRecord: %v", err)
 	}
-	if statement.Schema.Table != "audit_events" || len(statement.Schema.Fields) != 10 {
+	if statement.Schema.Table != "audit_events" || len(statement.Schema.Fields) != 13 {
 		t.Fatalf("event GORM schema = table %q fields %d", statement.Schema.Table, len(statement.Schema.Fields))
 	}
 	want := []string{
 		"tenant_id", "sequence", "occurred_at_unix_micro", "actor_kind",
 		"actor_id", "actor_role", "action", "target_kind", "target_id",
-		"target_version",
+		"target_version", "app_id", "object_type", "sharing_scope",
 	}
 	if !slices.Equal(statement.Schema.DBNames, want) {
 		t.Fatalf("GORM columns = %v, want %v", statement.Schema.DBNames, want)
 	}
-	for _, field := range statement.Schema.Fields {
-		if !field.NotNull {
-			t.Fatalf("GORM field %q is not marked NOT NULL", field.DBName)
+	for index, field := range statement.Schema.Fields {
+		wantNotNull := index < 10
+		if field.NotNull != wantNotNull {
+			t.Fatalf("GORM field %q NotNull = %t, want %t", field.DBName, field.NotNull, wantNotNull)
 		}
 	}
 	primaryKey := make([]string, len(statement.Schema.PrimaryFields))
@@ -1105,10 +1106,14 @@ func TestExplicitGORMModelsMatchMigratedAuditColumns(t *testing.T) {
 		if index == 1 || index == 2 || index == 9 {
 			wantType = "INTEGER"
 		}
-		if index >= len(want) || name != want[index] || dataType != wantType || notNull != 1 {
+		wantNotNull := 1
+		if index >= 10 {
+			wantNotNull = 0
+		}
+		if index >= len(want) || name != want[index] || dataType != wantType || notNull != wantNotNull {
 			t.Fatalf(
-				"migrated column %d = (%q, %q, %d), want (%q, %q, 1)",
-				index, name, dataType, notNull, want[index], wantType,
+				"migrated column %d = (%q, %q, %d), want (%q, %q, %d)",
+				index, name, dataType, notNull, want[index], wantType, wantNotNull,
 			)
 		}
 	}

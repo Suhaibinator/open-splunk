@@ -8,6 +8,7 @@
 export * from "./open_splunk/v1/common";
 export * from "./open_splunk/v1/app";
 export * from "./open_splunk/v1/app_api";
+export * from "./open_splunk/v1/knowledge";
 export * from "./open_splunk/v1/audit";
 export * from "./open_splunk/v1/audit_api";
 export * from "./open_splunk/v1/value";
@@ -24,7 +25,6 @@ export * from "./open_splunk/v1/history";
 export * from "./open_splunk/v1/history_api";
 export * from "./open_splunk/v1/index";
 export * from "./open_splunk/v1/index_api";
-export * from "./open_splunk/v1/knowledge";
 export * from "./open_splunk/v1/knowledge_api";
 export * from "./open_splunk/v1/saved_search";
 export * from "./open_splunk/v1/saved_search_api";

@@ -126,25 +126,31 @@ func (AuditActorRole) EnumDescriptor() ([]byte, []int) {
 type AuditAction int32
 
 const (
-	AuditAction_AUDIT_ACTION_UNSPECIFIED            AuditAction = 0
-	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE AuditAction = 1
-	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE AuditAction = 2
-	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE AuditAction = 3
-	AuditAction_AUDIT_ACTION_INDEX_CREATE           AuditAction = 4
-	AuditAction_AUDIT_ACTION_INDEX_UPDATE           AuditAction = 5
-	AuditAction_AUDIT_ACTION_INDEX_ACTIVATE         AuditAction = 6
-	AuditAction_AUDIT_ACTION_INDEX_ARCHIVE          AuditAction = 7
-	AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA AuditAction = 8
-	AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA      AuditAction = 9
-	AuditAction_AUDIT_ACTION_APP_CREATE             AuditAction = 10
-	AuditAction_AUDIT_ACTION_APP_UPDATE             AuditAction = 11
-	AuditAction_AUDIT_ACTION_APP_ACTIVATE           AuditAction = 12
-	AuditAction_AUDIT_ACTION_APP_ARCHIVE            AuditAction = 13
-	AuditAction_AUDIT_ACTION_APP_DELETE             AuditAction = 14
-	AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE    AuditAction = 15
-	AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE    AuditAction = 16
-	AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE AuditAction = 17
-	AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE    AuditAction = 18
+	AuditAction_AUDIT_ACTION_UNSPECIFIED                   AuditAction = 0
+	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_CREATE        AuditAction = 1
+	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_UPDATE        AuditAction = 2
+	AuditAction_AUDIT_ACTION_INGESTION_TOKEN_REVOKE        AuditAction = 3
+	AuditAction_AUDIT_ACTION_INDEX_CREATE                  AuditAction = 4
+	AuditAction_AUDIT_ACTION_INDEX_UPDATE                  AuditAction = 5
+	AuditAction_AUDIT_ACTION_INDEX_ACTIVATE                AuditAction = 6
+	AuditAction_AUDIT_ACTION_INDEX_ARCHIVE                 AuditAction = 7
+	AuditAction_AUDIT_ACTION_INDEX_DELETE_KEEP_DATA        AuditAction = 8
+	AuditAction_AUDIT_ACTION_INDEX_DELETE_DATA             AuditAction = 9
+	AuditAction_AUDIT_ACTION_APP_CREATE                    AuditAction = 10
+	AuditAction_AUDIT_ACTION_APP_UPDATE                    AuditAction = 11
+	AuditAction_AUDIT_ACTION_APP_ACTIVATE                  AuditAction = 12
+	AuditAction_AUDIT_ACTION_APP_ARCHIVE                   AuditAction = 13
+	AuditAction_AUDIT_ACTION_APP_DELETE                    AuditAction = 14
+	AuditAction_AUDIT_ACTION_SAVED_SEARCH_CREATE           AuditAction = 15
+	AuditAction_AUDIT_ACTION_SAVED_SEARCH_UPDATE           AuditAction = 16
+	AuditAction_AUDIT_ACTION_SAVED_SEARCH_DUPLICATE        AuditAction = 17
+	AuditAction_AUDIT_ACTION_SAVED_SEARCH_DELETE           AuditAction = 18
+	AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE       AuditAction = 19
+	AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE       AuditAction = 20
+	AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE AuditAction = 21
+	AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE       AuditAction = 22
+	AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE      AuditAction = 23
+	AuditAction_AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE       AuditAction = 24
 )
 
 // Enum value maps for AuditAction.
@@ -169,27 +175,39 @@ var (
 		16: "AUDIT_ACTION_SAVED_SEARCH_UPDATE",
 		17: "AUDIT_ACTION_SAVED_SEARCH_DUPLICATE",
 		18: "AUDIT_ACTION_SAVED_SEARCH_DELETE",
+		19: "AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE",
+		20: "AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE",
+		21: "AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE",
+		22: "AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE",
+		23: "AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE",
+		24: "AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE",
 	}
 	AuditAction_value = map[string]int32{
-		"AUDIT_ACTION_UNSPECIFIED":            0,
-		"AUDIT_ACTION_INGESTION_TOKEN_CREATE": 1,
-		"AUDIT_ACTION_INGESTION_TOKEN_UPDATE": 2,
-		"AUDIT_ACTION_INGESTION_TOKEN_REVOKE": 3,
-		"AUDIT_ACTION_INDEX_CREATE":           4,
-		"AUDIT_ACTION_INDEX_UPDATE":           5,
-		"AUDIT_ACTION_INDEX_ACTIVATE":         6,
-		"AUDIT_ACTION_INDEX_ARCHIVE":          7,
-		"AUDIT_ACTION_INDEX_DELETE_KEEP_DATA": 8,
-		"AUDIT_ACTION_INDEX_DELETE_DATA":      9,
-		"AUDIT_ACTION_APP_CREATE":             10,
-		"AUDIT_ACTION_APP_UPDATE":             11,
-		"AUDIT_ACTION_APP_ACTIVATE":           12,
-		"AUDIT_ACTION_APP_ARCHIVE":            13,
-		"AUDIT_ACTION_APP_DELETE":             14,
-		"AUDIT_ACTION_SAVED_SEARCH_CREATE":    15,
-		"AUDIT_ACTION_SAVED_SEARCH_UPDATE":    16,
-		"AUDIT_ACTION_SAVED_SEARCH_DUPLICATE": 17,
-		"AUDIT_ACTION_SAVED_SEARCH_DELETE":    18,
+		"AUDIT_ACTION_UNSPECIFIED":                   0,
+		"AUDIT_ACTION_INGESTION_TOKEN_CREATE":        1,
+		"AUDIT_ACTION_INGESTION_TOKEN_UPDATE":        2,
+		"AUDIT_ACTION_INGESTION_TOKEN_REVOKE":        3,
+		"AUDIT_ACTION_INDEX_CREATE":                  4,
+		"AUDIT_ACTION_INDEX_UPDATE":                  5,
+		"AUDIT_ACTION_INDEX_ACTIVATE":                6,
+		"AUDIT_ACTION_INDEX_ARCHIVE":                 7,
+		"AUDIT_ACTION_INDEX_DELETE_KEEP_DATA":        8,
+		"AUDIT_ACTION_INDEX_DELETE_DATA":             9,
+		"AUDIT_ACTION_APP_CREATE":                    10,
+		"AUDIT_ACTION_APP_UPDATE":                    11,
+		"AUDIT_ACTION_APP_ACTIVATE":                  12,
+		"AUDIT_ACTION_APP_ARCHIVE":                   13,
+		"AUDIT_ACTION_APP_DELETE":                    14,
+		"AUDIT_ACTION_SAVED_SEARCH_CREATE":           15,
+		"AUDIT_ACTION_SAVED_SEARCH_UPDATE":           16,
+		"AUDIT_ACTION_SAVED_SEARCH_DUPLICATE":        17,
+		"AUDIT_ACTION_SAVED_SEARCH_DELETE":           18,
+		"AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE":       19,
+		"AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE":       20,
+		"AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE": 21,
+		"AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE":       22,
+		"AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE":      23,
+		"AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE":       24,
 	}
 )
 
@@ -223,11 +241,12 @@ func (AuditAction) EnumDescriptor() ([]byte, []int) {
 type AuditTargetKind int32
 
 const (
-	AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED     AuditTargetKind = 0
-	AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN AuditTargetKind = 1
-	AuditTargetKind_AUDIT_TARGET_KIND_INDEX           AuditTargetKind = 2
-	AuditTargetKind_AUDIT_TARGET_KIND_APP             AuditTargetKind = 3
-	AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH    AuditTargetKind = 4
+	AuditTargetKind_AUDIT_TARGET_KIND_UNSPECIFIED      AuditTargetKind = 0
+	AuditTargetKind_AUDIT_TARGET_KIND_INGESTION_TOKEN  AuditTargetKind = 1
+	AuditTargetKind_AUDIT_TARGET_KIND_INDEX            AuditTargetKind = 2
+	AuditTargetKind_AUDIT_TARGET_KIND_APP              AuditTargetKind = 3
+	AuditTargetKind_AUDIT_TARGET_KIND_SAVED_SEARCH     AuditTargetKind = 4
+	AuditTargetKind_AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT AuditTargetKind = 5
 )
 
 // Enum value maps for AuditTargetKind.
@@ -238,13 +257,15 @@ var (
 		2: "AUDIT_TARGET_KIND_INDEX",
 		3: "AUDIT_TARGET_KIND_APP",
 		4: "AUDIT_TARGET_KIND_SAVED_SEARCH",
+		5: "AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT",
 	}
 	AuditTargetKind_value = map[string]int32{
-		"AUDIT_TARGET_KIND_UNSPECIFIED":     0,
-		"AUDIT_TARGET_KIND_INGESTION_TOKEN": 1,
-		"AUDIT_TARGET_KIND_INDEX":           2,
-		"AUDIT_TARGET_KIND_APP":             3,
-		"AUDIT_TARGET_KIND_SAVED_SEARCH":    4,
+		"AUDIT_TARGET_KIND_UNSPECIFIED":      0,
+		"AUDIT_TARGET_KIND_INGESTION_TOKEN":  1,
+		"AUDIT_TARGET_KIND_INDEX":            2,
+		"AUDIT_TARGET_KIND_APP":              3,
+		"AUDIT_TARGET_KIND_SAVED_SEARCH":     4,
+		"AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT": 5,
 	}
 )
 
@@ -291,6 +312,9 @@ type AuditEvent struct {
 	TargetKind    AuditTargetKind        `protobuf:"varint,7,opt,name=target_kind,json=targetKind,proto3,enum=open_splunk.v1.AuditTargetKind" json:"target_kind,omitempty"`
 	TargetId      string                 `protobuf:"bytes,8,opt,name=target_id,json=targetId,proto3" json:"target_id,omitempty"`
 	TargetVersion uint64                 `protobuf:"varint,9,opt,name=target_version,json=targetVersion,proto3" json:"target_version,omitempty"`
+	AppId         *string                `protobuf:"bytes,10,opt,name=app_id,json=appId,proto3,oneof" json:"app_id,omitempty"`
+	ObjectType    *KnowledgeObjectType   `protobuf:"varint,11,opt,name=object_type,json=objectType,proto3,enum=open_splunk.v1.KnowledgeObjectType,oneof" json:"object_type,omitempty"`
+	SharingScope  *SharingScope          `protobuf:"varint,12,opt,name=sharing_scope,json=sharingScope,proto3,enum=open_splunk.v1.SharingScope,oneof" json:"sharing_scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -388,11 +412,32 @@ func (x *AuditEvent) GetTargetVersion() uint64 {
 	return 0
 }
 
+func (x *AuditEvent) GetAppId() string {
+	if x != nil && x.AppId != nil {
+		return *x.AppId
+	}
+	return ""
+}
+
+func (x *AuditEvent) GetObjectType() KnowledgeObjectType {
+	if x != nil && x.ObjectType != nil {
+		return *x.ObjectType
+	}
+	return KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
+}
+
+func (x *AuditEvent) GetSharingScope() SharingScope {
+	if x != nil && x.SharingScope != nil {
+		return *x.SharingScope
+	}
+	return SharingScope_SHARING_SCOPE_UNSPECIFIED
+}
+
 var File_open_splunk_v1_audit_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_audit_proto_rawDesc = "" +
 	"\n" +
-	"\x1aopen_splunk/v1/audit.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb9\x03\n" +
+	"\x1aopen_splunk/v1/audit.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/v1/common.proto\x1a\x1eopen_splunk/v1/knowledge.proto\"\x95\x05\n" +
 	"\n" +
 	"AuditEvent\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12;\n" +
@@ -407,7 +452,15 @@ const file_open_splunk_v1_audit_proto_rawDesc = "" +
 	"\vtarget_kind\x18\a \x01(\x0e2\x1f.open_splunk.v1.AuditTargetKindR\n" +
 	"targetKind\x12\x1b\n" +
 	"\ttarget_id\x18\b \x01(\tR\btargetId\x12%\n" +
-	"\x0etarget_version\x18\t \x01(\x04R\rtargetVersion*m\n" +
+	"\x0etarget_version\x18\t \x01(\x04R\rtargetVersion\x12\x1a\n" +
+	"\x06app_id\x18\n" +
+	" \x01(\tH\x00R\x05appId\x88\x01\x01\x12I\n" +
+	"\vobject_type\x18\v \x01(\x0e2#.open_splunk.v1.KnowledgeObjectTypeH\x01R\n" +
+	"objectType\x88\x01\x01\x12F\n" +
+	"\rsharing_scope\x18\f \x01(\x0e2\x1c.open_splunk.v1.SharingScopeH\x02R\fsharingScope\x88\x01\x01B\t\n" +
+	"\a_app_idB\x0e\n" +
+	"\f_object_typeB\x10\n" +
+	"\x0e_sharing_scope*m\n" +
 	"\x0eAuditActorKind\x12 \n" +
 	"\x1cAUDIT_ACTOR_KIND_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17AUDIT_ACTOR_KIND_SYSTEM\x10\x01\x12\x1c\n" +
@@ -416,7 +469,7 @@ const file_open_splunk_v1_audit_proto_rawDesc = "" +
 	"\x1cAUDIT_ACTOR_ROLE_UNSPECIFIED\x10\x00\x12\x1b\n" +
 	"\x17AUDIT_ACTOR_ROLE_SYSTEM\x10\x01\x12\x19\n" +
 	"\x15AUDIT_ACTOR_ROLE_USER\x10\x02\x12\"\n" +
-	"\x1eAUDIT_ACTOR_ROLE_ADMINISTRATOR\x10\x03*\xa1\x05\n" +
+	"\x1eAUDIT_ACTOR_ROLE_ADMINISTRATOR\x10\x03*\xa4\a\n" +
 	"\vAuditAction\x12\x1c\n" +
 	"\x18AUDIT_ACTION_UNSPECIFIED\x10\x00\x12'\n" +
 	"#AUDIT_ACTION_INGESTION_TOKEN_CREATE\x10\x01\x12'\n" +
@@ -437,13 +490,20 @@ const file_open_splunk_v1_audit_proto_rawDesc = "" +
 	" AUDIT_ACTION_SAVED_SEARCH_CREATE\x10\x0f\x12$\n" +
 	" AUDIT_ACTION_SAVED_SEARCH_UPDATE\x10\x10\x12'\n" +
 	"#AUDIT_ACTION_SAVED_SEARCH_DUPLICATE\x10\x11\x12$\n" +
-	" AUDIT_ACTION_SAVED_SEARCH_DELETE\x10\x12*\xb7\x01\n" +
+	" AUDIT_ACTION_SAVED_SEARCH_DELETE\x10\x12\x12(\n" +
+	"$AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE\x10\x13\x12(\n" +
+	"$AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE\x10\x14\x12.\n" +
+	"*AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE\x10\x15\x12(\n" +
+	"$AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE\x10\x16\x12)\n" +
+	"%AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE\x10\x17\x12(\n" +
+	"$AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE\x10\x18*\xdf\x01\n" +
 	"\x0fAuditTargetKind\x12!\n" +
 	"\x1dAUDIT_TARGET_KIND_UNSPECIFIED\x10\x00\x12%\n" +
 	"!AUDIT_TARGET_KIND_INGESTION_TOKEN\x10\x01\x12\x1b\n" +
 	"\x17AUDIT_TARGET_KIND_INDEX\x10\x02\x12\x19\n" +
 	"\x15AUDIT_TARGET_KIND_APP\x10\x03\x12\"\n" +
-	"\x1eAUDIT_TARGET_KIND_SAVED_SEARCH\x10\x04BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"\x1eAUDIT_TARGET_KIND_SAVED_SEARCH\x10\x04\x12&\n" +
+	"\"AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT\x10\x05BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_audit_proto_rawDescOnce sync.Once
@@ -466,6 +526,8 @@ var file_open_splunk_v1_audit_proto_goTypes = []any{
 	(AuditTargetKind)(0),          // 3: open_splunk.v1.AuditTargetKind
 	(*AuditEvent)(nil),            // 4: open_splunk.v1.AuditEvent
 	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
+	(KnowledgeObjectType)(0),      // 6: open_splunk.v1.KnowledgeObjectType
+	(SharingScope)(0),             // 7: open_splunk.v1.SharingScope
 }
 var file_open_splunk_v1_audit_proto_depIdxs = []int32{
 	5, // 0: open_splunk.v1.AuditEvent.occurred_at:type_name -> google.protobuf.Timestamp
@@ -473,11 +535,13 @@ var file_open_splunk_v1_audit_proto_depIdxs = []int32{
 	1, // 2: open_splunk.v1.AuditEvent.actor_role:type_name -> open_splunk.v1.AuditActorRole
 	2, // 3: open_splunk.v1.AuditEvent.action:type_name -> open_splunk.v1.AuditAction
 	3, // 4: open_splunk.v1.AuditEvent.target_kind:type_name -> open_splunk.v1.AuditTargetKind
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	6, // 5: open_splunk.v1.AuditEvent.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
+	7, // 6: open_splunk.v1.AuditEvent.sharing_scope:type_name -> open_splunk.v1.SharingScope
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_audit_proto_init() }
@@ -485,6 +549,9 @@ func file_open_splunk_v1_audit_proto_init() {
 	if File_open_splunk_v1_audit_proto != nil {
 		return
 	}
+	file_open_splunk_v1_common_proto_init()
+	file_open_splunk_v1_knowledge_proto_init()
+	file_open_splunk_v1_audit_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
