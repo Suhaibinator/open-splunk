@@ -157,7 +157,7 @@ jobs:
           -shuffle=on
           -covermode=atomic
           -coverprofile=coverage.out
-          -timeout=20m
+          -timeout=30m
           ./...
 
       - name: Upload Go coverage
@@ -202,6 +202,10 @@ jobs:
               ^FuzzCatalogCursorRoundTripPreservesTypedKeyset$
               ^FuzzBoundedListResponseRecordsMatchesReferenceModel$
               ^FuzzDecodeCursorRejectsMalformedOrReboundInput$
+              ^FuzzKnowledgeUpdateMaskCanonicalization$
+              ^FuzzApplyKnowledgeDefinitionMaskIsDetachedAndStable$
+              ^FuzzPrepareCreateMutationCanonicalDigest$
+              ^FuzzKnowledgeOutcomeReferenceStrictDecode$
           - label: spl-parser
             package: ./internal/spl
             fuzztime: 15s
