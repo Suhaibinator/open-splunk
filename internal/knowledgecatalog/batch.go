@@ -35,13 +35,37 @@ var listFilterIntegrityHydrationBudget = listHydrationBudget{
 	dependencies:       MaximumListFilterIntegrityDependencies,
 }
 
+type projectionHydrationAuthorities struct {
+	versions     map[string]versionRecord
+	dependencies map[string][]dependencyRecord
+}
+
 func (store *Store) objectsFromProjections(
 	database *gorm.DB,
 	projections []projectionRecord,
 	budget listHydrationBudget,
 ) ([]Object, error) {
-	objects, _, err := store.objectsFromProjectionsInternal(database, projections, budget, false)
+	objects, _, err := store.objectsFromProjectionsInternal(database, projections, budget, false, nil)
 	return objects, err
+}
+
+func (store *Store) objectsFromProjectionsWithAuthorities(
+	database *gorm.DB,
+	projections []projectionRecord,
+	budget listHydrationBudget,
+) ([]Object, projectionHydrationAuthorities, error) {
+	var authorities projectionHydrationAuthorities
+	objects, _, err := store.objectsFromProjectionsInternal(
+		database,
+		projections,
+		budget,
+		false,
+		&authorities,
+	)
+	if err != nil {
+		return nil, projectionHydrationAuthorities{}, err
+	}
+	return objects, authorities, nil
 }
 
 // objectsFromProjectionsPage permits a response page to stop at the preceding
@@ -54,7 +78,7 @@ func (store *Store) objectsFromProjectionsPage(
 	projections []projectionRecord,
 	budget listHydrationBudget,
 ) ([]Object, int, error) {
-	return store.objectsFromProjectionsInternal(database, projections, budget, true)
+	return store.objectsFromProjectionsInternal(database, projections, budget, true, nil)
 }
 
 func (store *Store) objectsFromProjectionsInternal(
@@ -62,6 +86,7 @@ func (store *Store) objectsFromProjectionsInternal(
 	projections []projectionRecord,
 	budget listHydrationBudget,
 	allowSemanticBoundary bool,
+	authorities *projectionHydrationAuthorities,
 ) ([]Object, int, error) {
 	if len(projections) == 0 {
 		return []Object{}, 0, nil
@@ -207,6 +232,25 @@ func (store *Store) objectsFromProjectionsInternal(
 		definitionBytes: max(budget.definitionBytes, int64(maximumDefinitionBytes)),
 		queries:         maximumSemanticNodes * 8,
 	})
+	if !allowSemanticBoundary {
+		// A complete sweep has already decoded every admitted current body and
+		// validated every immutable dependency set. Seed all of those authorities
+		// before walking any root so a lexically earlier source cannot re-query or
+		// re-decode a later target that is already inside the same bounded batch.
+		for _, projection := range projections {
+			normalized, found := decodedByObjectID[projection.KnowledgeObjectID]
+			if !found {
+				continue
+			}
+			if err := semanticValidator.seedDecodedVersion(
+				versions[projection.KnowledgeObjectID],
+				normalized,
+				dependencyRecords[projection.KnowledgeObjectID],
+			); err != nil {
+				return nil, 0, err
+			}
+		}
+	}
 	// Roots are seeded immediately before their graph walk. This makes the
 	// validator's cumulative work at index N exactly the closure needed for the
 	// first N returned objects, so a later root can become a continuation
@@ -232,6 +276,10 @@ func (store *Store) objectsFromProjectionsInternal(
 		if err != nil {
 			return nil, 0, err
 		}
+	}
+	if authorities != nil {
+		authorities.versions = versions
+		authorities.dependencies = dependencyRecords
 	}
 	return objects[:len(objects):len(objects)], len(objects), nil
 }

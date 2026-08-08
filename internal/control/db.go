@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -26,9 +27,11 @@ const (
 
 // DB is the SQLite-backed single-node control-plane database.
 type DB struct {
-	sql      *sql.DB
-	orm      *gorm.DB
-	fileInfo os.FileInfo
+	sql                *sql.DB
+	orm                *gorm.DB
+	fileInfo           os.FileInfo
+	sharedAdmissionMu  sync.Mutex
+	sharedAdmissionMap map[string]*AdmissionGate
 }
 
 // Open opens a persistent SQLite control-plane database, configures its

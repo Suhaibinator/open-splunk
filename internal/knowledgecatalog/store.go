@@ -20,8 +20,9 @@ type Options struct {
 
 // Store reads migration-owned catalog tables without changing schema.
 type Store struct {
-	orm       *gorm.DB
-	cursorKey []byte
+	orm            *gorm.DB
+	cursorKey      []byte
+	resolutionGate *control.AdmissionGate
 }
 
 func New(database *control.DB, options Options) (*Store, error) {
@@ -31,7 +32,13 @@ func New(database *control.DB, options Options) (*Store, error) {
 	if len(options.CursorKey) < minimumCursorKeyBytes || len(options.CursorKey) > maximumCursorKeyBytes {
 		return nil, fmt.Errorf("%w: knowledge catalog cursor key must contain between %d and %d bytes", control.ErrInvalidArgument, minimumCursorKeyBytes, maximumCursorKeyBytes)
 	}
-	return &Store{orm: database.GORMDB(), cursorKey: slices.Clone(options.CursorKey)}, nil
+	gate, err := database.SharedAdmissionGate("knowledge-catalog-resolution", MaximumConcurrentResolutions)
+	if err != nil {
+		return nil, fmt.Errorf("construct knowledge resolver admission: %w", err)
+	}
+	return &Store{
+		orm: database.GORMDB(), cursorKey: slices.Clone(options.CursorKey), resolutionGate: gate,
+	}, nil
 }
 
 func validateContext(ctx context.Context) error {
