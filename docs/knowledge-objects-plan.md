@@ -819,7 +819,7 @@ POST /api/v1/knowledge/lookups/get
 POST /api/v1/knowledge/lookups/preview
 ```
 
-As of KO-0F, the first six object-management handlers and bounded protobuf
+Since KO-0F, the first six object-management handlers and bounded protobuf
 codecs exist behind a test-only route assembly with real Store/Writer/audit
 integration. Production `NewHandler` intentionally registers none of those
 paths, and bootstrap continues to advertise no knowledge capability. The
@@ -1082,10 +1082,12 @@ with an executable Open Splunk fixture.
 **Outcome:** knowledge definitions can be persisted, authorized, resolved, and
 pinned without affecting search results.
 
-**Implementation checkpoint (August 7, 2026):** contracts, migrations 0024
-through 0030, canonical definition handling, the bounded authorization-first
-reader, the atomic catalog Writer, and the six administrator-only management
-handlers/codecs with their synchronous rejected-attempt boundary are complete.
+**Implementation checkpoint (August 8, 2026):** contracts, migrations 0024
+through 0031, canonical definition handling, the bounded authorization-first
+reader, the atomic catalog Writer, the six administrator-only management
+handlers/codecs with their synchronous rejected-attempt boundary, the
+one-read-transaction active resolver, and opaque immutable snapshot preparation
+are complete.
 Their registrations remain intentionally absent from the production router and
 exact API inventory, so their paths still return 404 and the capability is not
 advertised. The Writer currently
@@ -1099,8 +1101,14 @@ of an ACTIVE object, and `SetState` to ACTIVE deliberately return
 and dependency derivation; an exact retained ACTIVE receipt from a newer binary
 remains replayable through the concrete Writer only when its outcome is still
 recognized and canonical, without becoming a false rejected attempt after
-downgrade. Remaining KO-0 work is the resolver and immutable snapshot builder,
-search-lifecycle attachment, and the hidden Knowledge Manager list/detail shell.
+downgrade. The resolver now authorizes and validates every visible ACTIVE
+candidate inside one SQLite read transaction, prunes against trusted effective
+indexes, applies private/app/global precedence, proves exact winning dependency
+closure, and returns a detached opaque authority. Snapshot preparation derives
+canonical object, shadow, dependency, and static-charge authorities and pins a
+shared Go/TypeScript B0/B1 wire/digest contract, but finalization remains sealed
+until KO-0H supplies trusted compiler evidence. Remaining KO-0 work is
+search-lifecycle attachment and the hidden Knowledge Manager list/detail shell.
 Existing negative production registration/capability contracts remain hard
 gates while that work proceeds. The capability remains disabled and
 unadvertised.
@@ -1115,7 +1123,8 @@ unadvertised.
 - implement private/app/global resolution and explicit precedence;
 - implement immutable snapshot creation and digesting;
 - attach snapshot metadata to search jobs, inspection, history, and export;
-- add feature advertisement and API contract tests; and
+- preserve negative feature-advertisement, API-registration, and capability
+  contract tests; and
 - add the initial Knowledge Manager list/detail shell.
 
 ### Phase KO-1 — Field knowledge
@@ -1133,7 +1142,9 @@ results predictably.
 - add operator and field provenance;
 - integrate field discovery, suggestions, inspection, history, and export;
 - add create/edit/validate/preview UI; and
-- add ClickHouse, lifecycle, browser, fuzz, and differential tests.
+- add ClickHouse, lifecycle, browser, fuzz, and differential tests; then only
+  after the complete hidden acceptance vertical passes, register the management
+  APIs and advertise the capability.
 
 ### Phase KO-2 — Exact CSV lookups
 
