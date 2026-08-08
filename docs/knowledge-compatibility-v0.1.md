@@ -363,6 +363,65 @@ and the maximum configured client retry window, and removed oldest-first only
 after that fence. Capacity exhaustion rejects a new mutation before catalog
 work rather than accepting an unreplayable commit.
 
+The request digest is computed from one detached, unknown-free protobuf clone;
+route execution never reads the caller-owned message again. The clone retains
+optional presence, clears only `client_request_id`, and is marshaled
+deterministically before semantic normalization. SHA-256 input is the raw ASCII
+domain `open-splunk/knowledge-mutation-request/v1\x00`, followed by unsigned
+64-bit big-endian length frames for the exact route, trusted owner identity,
+and deterministic request bytes. Tenant, actor kind and actor ID remain exact
+receipt-key dimensions rather than duplicated digest input. A post-call caller
+mutation therefore cannot change either the committed authority or its replay
+key.
+
+Retention uses one SQLite transaction-time microsecond as an independent clock
+authority. Its anchor is the later of that database time and the immutable
+mutation occurrence, and a sub-microsecond configured duration is rounded up;
+the stored fence is never shorter than the configured retry window. Reclaim
+selects only the exact oldest expired prefix required for a new receipt (at
+most 4,097 rows), width-preflights and canonically validates every receipt and
+its immutable commit authority, then deletes that same prefix in the mutation
+transaction. Corruption, cancellation, or a fence disagreement rolls the
+entire attempted reclaim and mutation back.
+
+Replay reauthorizes the current registry scalar before opening the retained
+immutable outcome. If current policy no longer authorizes that identity, the
+retry has the same not-found response as any other current-policy denial and
+does not re-execute the mutation. If the current identity is quarantined, the
+committed side effect likewise remains a no-op replay, but the response is
+withheld with one fixed redacted-outcome error; no historical definition,
+digest, or definition-derived projection is opened. These are the only
+exceptions to returning the original response, and preserve current-policy
+nondisclosure and permanent quarantine redaction over historical idempotency.
+
+If SQLite reports an ambiguous commit result, the server opens one fresh,
+bounded reconciliation transaction and performs that same authorization and
+strict replay validation. A matching durable receipt returns the response
+reconstructed from the durable receipt, version, lifecycle, audit, and snapshot
+authorities. It never returns the staged pre-commit response, whose timestamp
+or catalog token may differ from a concurrent exact retry that actually won.
+Definitive absence or an indeterminate/corrupt reconciliation returns generic
+unavailable and never re-executes under a new request identity.
+
+The version-1 persisted outcome is a deterministic, unknown-free protobuf no
+larger than 1 KiB. It duplicates the exact route, mutation kind, immutable
+object ID and version, definition digest, committed catalog revision and
+32-byte state token, immutable occurrence time, database retention anchor,
+retain-until fence, plus exactly one successful-audit or recovery-audit
+sequence. Ordinary mutations require a 32-byte definition digest and a success
+audit; protective quarantine requires an empty digest and a recovery audit.
+Every committed revision/token pair also has a separate immutable commit row,
+retained independently of the mutable receipt. It binds the exact actor kind
+and ID, route, `client_request_id`, request digest, revision/token pair,
+mutation kind, object/version, occurrence and retention times, and audit
+sequence. A composite receipt foreign key pins those request authorities to
+that commit row, while separate foreign keys pin the immutable version and
+audit. The duplicated envelope, receipt scalars, immutable commit row,
+immutable version and lifecycle, and audit authority must all agree before
+replay hydration or receipt reclamation. Noncanonical encoding, duplicate
+known fields, nested or top-level unknown fields, wrong audit choice, or any
+same-width disagreement fails closed as catalog corruption.
+
 ## Protobuf forward compatibility and corruption
 
 Mutation routes reject unknown fields anywhere in a submitted definition and

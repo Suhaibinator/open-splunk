@@ -1,5 +1,6 @@
-// Package knowledgecatalog provides bounded, read-only access to the immutable
-// knowledge catalog created by SQLite migrations 0024 through 0029.
+// Package knowledgecatalog provides bounded reads and transactional publication
+// of the immutable knowledge catalog created by SQLite migrations 0024 through
+// 0030. Management routes remain separately feature-gated by the server.
 package knowledgecatalog
 
 import (
