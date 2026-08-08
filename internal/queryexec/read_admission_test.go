@@ -50,6 +50,39 @@ func TestExecutorReadAdmissionRejectsTamperedScopeBeforeConnection(t *testing.T)
 	}
 }
 
+func TestExecutorRejectsTamperedNonReadArgumentBeforeAdmissionOrConnection(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileReadAdmissionQuery(t, `index=target status="non-read-literal" | table status`)
+	compiled.Args = slices.Clone(compiled.Args)
+	mutated := false
+	for index, argument := range compiled.Args {
+		if value, ok := argument.(string); ok && value == "non-read-literal" {
+			compiled.Args[index] = "tampered-filter"
+			mutated = true
+			break
+		}
+	}
+	if !mutated {
+		t.Fatal("compiled fixture did not expose the filter bind argument")
+	}
+	if _, _, ok := compiled.ReadScope(); !ok {
+		t.Fatal("non-read mutation unexpectedly invalidated the older read-scope seal")
+	}
+
+	admission := &recordingReadAdmission{}
+	connection := &fakeQueryConnection{err: errors.New("connection must not be called")}
+	executor := mustExecutor(t, connection)
+	executor.readAdmission = admission
+	err := executor.Execute(context.Background(), compiled, &fakeSink{})
+	if !errors.Is(err, searchjobs.ErrInvalidResult) {
+		t.Fatalf("Execute error = %v, want ErrInvalidResult", err)
+	}
+	if admission.acquireCalls.Load() != 0 || connection.query != "" {
+		t.Fatalf("tampered non-read argument reached admission/connection: acquire=%d query=%q", admission.acquireCalls.Load(), connection.query)
+	}
+}
+
 func TestExecutorReadAdmissionRejectsRetiredScopeBeforeConnection(t *testing.T) {
 	t.Parallel()
 

@@ -13,9 +13,11 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
@@ -51,6 +53,43 @@ func TestResolverEmptyCatalogRetainsDurableRevisionZero(t *testing.T) {
 	if again.TenantCatalogStateToken[0] == summary.TenantCatalogStateToken[0] ||
 		again.AppCatalogRevision != nil || again.EffectiveAuthorizedIndexes[0] != "archive" {
 		t.Fatalf("summary accessor retained caller memory: %#v", again)
+	}
+}
+
+func TestResolutionFinalizeKeepsPreparedAuthorityOpaque(t *testing.T) {
+	t.Parallel()
+
+	_, store := newCatalogTestStore(t)
+	resolver := mustTestResolver(t, store)
+	resolved, err := resolver.Resolve(t.Context(), testResolutionScope("main"))
+	if err != nil {
+		t.Fatalf("Resolve(empty): %v", err)
+	}
+	compiled := compileResolutionQuery(t, testTenant, []string{"main"}, `index=main`)
+	snapshot, err := resolved.Finalize(compiled)
+	if err != nil || snapshot.IsZero() || snapshot.Proto().GetTenantId() != testTenant {
+		t.Fatalf("Finalize = (%#v, %v)", snapshot.Proto(), err)
+	}
+}
+
+func TestResolutionFinalizeRejectsNonemptyAuthorityUntilKO1Prelude(t *testing.T) {
+	t.Parallel()
+
+	database, store := newCatalogTestStore(t)
+	insertFixtureObject(t, database, fixtureObject{id: "ko-finalize-nonempty", versions: []fixtureVersion{{
+		definition: resolutionAliasDefinition(testApp, "finalize-nonempty", SharingScopePrivate, "main"),
+		state:      StateActive,
+		mutation:   "create",
+		timestamp:  10,
+	}}})
+	resolved, err := mustTestResolver(t, store).Resolve(t.Context(), testResolutionScope("main"))
+	if err != nil || resolved.Summary().ExecutableObjects != 1 {
+		t.Fatalf("Resolve(nonempty) = (%#v, %v)", resolved.Summary(), err)
+	}
+	compiled := compileResolutionQuery(t, testTenant, []string{"main"}, `index=main`)
+	if snapshot, finalizeErr := resolved.Finalize(compiled); !snapshot.IsZero() ||
+		!errors.Is(finalizeErr, knowledgesnapshot.ErrInvalidInput) {
+		t.Fatalf("Finalize(nonempty resolution) = (%#v, %v), want zero/ErrInvalidInput", snapshot, finalizeErr)
 	}
 }
 
@@ -795,6 +834,38 @@ func testResolutionScope(indexes ...string) ResolutionScope {
 		AppID:                      testApp,
 		EffectiveAuthorizedIndexes: indexes,
 	}
+}
+
+func compileResolutionQuery(
+	t *testing.T,
+	tenantID string,
+	indexes []string,
+	source string,
+) clickhouse.CompiledQuery {
+	t.Helper()
+	parsed, err := spl.Parse(source)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	visibility := uint64(1)
+	logical, err := plan.Build(parsed, plan.Scope{
+		TenantID:          tenantID,
+		AuthorizedIndexes: slices.Clone(indexes),
+		Earliest:          time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC),
+		Latest:            time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC),
+		SearchStart:       time.Date(2026, 8, 2, 0, 0, 1, 0, time.UTC),
+		SearchTimezone:    "UTC",
+		IndexTimeCutoff:   time.Date(2026, 8, 2, 0, 0, 2, 0, time.UTC),
+		VisibilityCutoff:  &visibility,
+	})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	return compiled
 }
 
 func resolutionAliasDefinition(

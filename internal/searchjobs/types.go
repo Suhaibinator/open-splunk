@@ -10,7 +10,10 @@ import (
 	"time"
 	"unsafe"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"google.golang.org/protobuf/proto"
 )
 
 // State is the lifecycle state of one asynchronous search job.
@@ -235,21 +238,22 @@ type JobListRequest struct {
 // no field through which result schema or detailed failure diagnostics can be
 // exposed. New Job fields therefore remain absent until deliberately added.
 type JobListItem struct {
-	ID               string
-	Version          uint64
-	OwnerID          string
-	TenantID         string
-	SPL              string
-	NormalizedSPL    string
-	RequestedIndexes []string
-	EffectiveIndexes []string
-	TimeRange        searchtime.Intent
-	AppID            string
-	Source           JobSource
-	Earliest         time.Time
-	Latest           time.Time
-	IndexTimeCutoff  time.Time
-	State            State
+	ID                string
+	Version           uint64
+	OwnerID           string
+	TenantID          string
+	SPL               string
+	NormalizedSPL     string
+	RequestedIndexes  []string
+	EffectiveIndexes  []string
+	TimeRange         searchtime.Intent
+	AppID             string
+	Source            JobSource
+	Earliest          time.Time
+	Latest            time.Time
+	IndexTimeCutoff   time.Time
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
+	State             State
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
 	// received so far. They are not inferred from retained result rows.
 	ScannedRows      uint64
@@ -301,8 +305,13 @@ type Job struct {
 	Latest           time.Time
 	IndexTimeCutoff  time.Time
 	VisibilityCutoff uint64
-	State            State
-	Schema           *Schema
+	// KnowledgeSnapshot is the bounded, definition-free identity and canonical
+	// inventory prefix sealed for this exact admission. Nil means the legacy
+	// knowledge-disabled path; a present zero-object summary is distinct and
+	// proves that configured admission observed an empty active authority.
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
+	State             State
+	Schema            *Schema
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
 	// received so far. A terminal job may contain only the prefix reported
 	// before cancellation or failure; the manager never extrapolates a total.
@@ -634,6 +643,7 @@ func cloneJob(source Job) Job {
 	result := source
 	result.RequestedIndexes = cloneStrings(source.RequestedIndexes)
 	result.EffectiveIndexes = cloneStrings(source.EffectiveIndexes)
+	result.KnowledgeSnapshot = cloneKnowledgeSnapshotSummary(source.KnowledgeSnapshot)
 	if source.Schema != nil {
 		schema := cloneSchema(*source.Schema)
 		result.Schema = &schema
@@ -651,6 +661,7 @@ func cloneJobSummary(source Job) Job {
 	result.NormalizedSPL = ""
 	result.RequestedIndexes = nil
 	result.EffectiveIndexes = nil
+	result.KnowledgeSnapshot = nil
 	result.Schema = nil
 	if source.Failure != nil {
 		failure := *source.Failure
@@ -658,6 +669,29 @@ func cloneJobSummary(source Job) Job {
 		result.Failure = &failure
 	}
 	return result
+}
+
+func cloneKnowledgeSnapshotSummary(source *opensplunkv1.KnowledgeSnapshotSummary) *opensplunkv1.KnowledgeSnapshotSummary {
+	if source == nil {
+		return nil
+	}
+	cloned, _ := proto.Clone(source).(*opensplunkv1.KnowledgeSnapshotSummary)
+	return cloned
+}
+
+func retainedKnowledgeAdmissionMetadata(
+	snapshot knowledgesnapshot.Snapshot,
+	compiledBytes uint64,
+) (uint64, error) {
+	total, err := checkedAdd(snapshot.RetainedBytes(), compiledBytes)
+	if err != nil {
+		return 0, err
+	}
+	// Charge the complete allowed summary envelope rather than its current
+	// serialized length. This covers protobuf object, repeated-slot, string,
+	// and allocator overhead without making manager capacity depend on runtime
+	// implementation details.
+	return checkedAdd(total, knowledgesnapshot.MaximumSummaryBytes)
 }
 
 func cloneFailure(source Failure) Failure {

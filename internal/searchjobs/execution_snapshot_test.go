@@ -1,9 +1,11 @@
 package searchjobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -67,6 +69,7 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		FinishedAt:       now.UTC(),
 		ExpiresAt:        now.UTC().Add(time.Hour),
 	}
+	want.knowledgeAuthoritySeal = snapshot.knowledgeAuthoritySeal
 	if !reflect.DeepEqual(snapshot, want) {
 		t.Fatalf("CompletedExecutionSnapshotFor() = %#v, want %#v", snapshot, want)
 	}
@@ -80,6 +83,62 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		t.Fatalf("stored effective indexes changed through returned snapshot: %v", fresh.EffectiveIndexes)
 	}
 	assertLeaseCounts(t, manager, job.ID, 0, 0)
+}
+
+func TestOpenRetainedKnowledgeExecutionValidatesAppAndDetaches(t *testing.T) {
+	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(
+			_ context.Context,
+			_ clickhouse.CompiledQuery,
+			sink ResultSink,
+		) error {
+			return sink.SetSchema(messageSchema())
+		}),
+		KnowledgeResolver: resolver,
+		CleanupInterval:   -1,
+		NewID:             sequenceIDs("retained-knowledge-execution"),
+	})
+	request := validRequest()
+	request.AppID = appID
+	created, err := manager.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	completed := waitForState(t, manager, created.ID, StateCompleted)
+	snapshot, err := manager.CompletedExecutionSnapshotFor(
+		context.Background(),
+		AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID},
+		completed.ID,
+	)
+	if err != nil {
+		t.Fatalf("CompletedExecutionSnapshotFor(): %v", err)
+	}
+
+	retained, err := snapshot.OpenRetainedKnowledgeExecution()
+	if err != nil || retained == nil || retained.KnowledgeSummary == nil ||
+		len(retained.CompiledQuery.OutputFields) == 0 {
+		t.Fatalf("OpenRetainedKnowledgeExecution() = (%#v, %v)", retained, err)
+	}
+	wantFields := slices.Clone(retained.CompiledQuery.OutputFields)
+	wantDigest := bytes.Clone(retained.KnowledgeSummary.GetRef().GetSnapshotSha256())
+	retained.CompiledQuery.OutputFields[0] = "mutated"
+	retained.KnowledgeSummary.Ref.SnapshotSha256[0] ^= 0xff
+
+	fresh, err := snapshot.OpenRetainedKnowledgeExecution()
+	if err != nil || fresh == nil || fresh.KnowledgeSummary == nil {
+		t.Fatalf("OpenRetainedKnowledgeExecution(fresh) = (%#v, %v)", fresh, err)
+	}
+	if !slices.Equal(fresh.CompiledQuery.OutputFields, wantFields) ||
+		!bytes.Equal(fresh.KnowledgeSummary.GetRef().GetSnapshotSha256(), wantDigest) {
+		t.Fatal("opened knowledge execution aliases retained authority")
+	}
+
+	drifted := snapshot
+	drifted.AppID = "app_bbbbbbbbbbbbbbbbbbbbbB"
+	if opened, openErr := drifted.OpenRetainedKnowledgeExecution(); opened != nil || !errors.Is(openErr, ErrResultsUnavailable) {
+		t.Fatalf("OpenRetainedKnowledgeExecution(AppID drift) = (%#v, %v)", opened, openErr)
+	}
 }
 
 func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
@@ -101,6 +160,24 @@ func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 		FinishedAt:       baseTime.Add(4 * time.Hour),
 		ExpiresAt:        baseTime.Add(5 * time.Hour),
 	}
+	sealManager := &Manager{knowledgeExecutionSigner: deriveKnowledgeExecutionSigningKey(
+		[]byte("execution-snapshot-equality-test-key-at-least-32-bytes"),
+		"execution-snapshot-equality",
+		"epoch",
+	)}
+	if _, ok := sealManager.sealExecutionSnapshot(
+		&base,
+		executionResultMetadata{
+			jobID:      base.ID,
+			generation: 1,
+			schema: Schema{Columns: []Column{{
+				Name: "message",
+				Kind: ValueKindString,
+			}}},
+		},
+	); !ok {
+		t.Fatal("seal equality fixture")
+	}
 	if !base.Equal(base) {
 		t.Fatal("snapshot is not equal to itself")
 	}
@@ -112,6 +189,7 @@ func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 		{name: "ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.ID += "-changed" }},
 		{name: "owner ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.OwnerID += "-changed" }},
 		{name: "tenant ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.TenantID += "-changed" }},
+		{name: "app ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.AppID = "changed-app" }},
 		{name: "SPL", mutate: func(snapshot *ExecutionSnapshot) { snapshot.SPL += " | head 1" }},
 		{name: "effective index order", mutate: func(snapshot *ExecutionSnapshot) {
 			snapshot.EffectiveIndexes = []string{"beta", "alpha"}

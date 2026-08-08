@@ -2,6 +2,7 @@ package searchjobs
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -124,6 +127,15 @@ var (
 	// ErrExecutionLimit may be wrapped by an Executor when the storage engine
 	// enforces a configured read, memory, or result resource bound.
 	ErrExecutionLimit = errors.New("search execution resource limit exceeded")
+	// ErrInvalidSPL is the fixed synchronous-admission category for malformed
+	// or semantically invalid SPL. It intentionally carries no parser detail.
+	ErrInvalidSPL = errors.New("search SPL is invalid")
+	// ErrUnsupportedSPL is the fixed synchronous-admission category for valid
+	// SPL whose semantics are outside the current compatibility surface.
+	ErrUnsupportedSPL = errors.New("search SPL is unsupported")
+	// ErrKnowledgeUnavailable covers resolution, corruption, compiler sealing,
+	// and unavailable knowledge execution without disclosing catalog identity.
+	ErrKnowledgeUnavailable = errors.New("search knowledge is unavailable")
 )
 
 // ResultSink receives one result schema followed by zero or more rows. Execute
@@ -165,6 +177,13 @@ type Snapshotter interface {
 	VisibilityCutoff(context.Context) (uint64, error)
 }
 
+// KnowledgeResolver resolves one trusted, server-owned search authority. It
+// is optional: nil (including a typed nil) preserves the legacy admission and
+// asynchronous planning path exactly.
+type KnowledgeResolver interface {
+	Resolve(context.Context, knowledgecatalog.ResolutionScope) (knowledgecatalog.Resolution, error)
+}
+
 // Config controls bounded execution and retention. Zero values select safe
 // defaults. A negative CleanupInterval disables the background cleanup loop,
 // which is useful with an injected deterministic clock in tests.
@@ -173,6 +192,9 @@ type Config struct {
 	Snapshotter Snapshotter
 	Journal     JobJournal
 	Compiler    clickhouse.Compiler
+	// KnowledgeResolver enables sealed pre-journal admission only for requests
+	// with a nonempty AppID. App-less searches deliberately remain legacy.
+	KnowledgeResolver KnowledgeResolver
 	// MaxConcurrent bounds workers and, independently, synchronous validations.
 	MaxConcurrent          int
 	MaxConcurrentReads     int
@@ -232,39 +254,41 @@ type Manager struct {
 	nextGeneration      uint64
 	nextCapacityCleanup time.Time
 
-	executor              Executor
-	snapshotter           Snapshotter
-	journal               JobJournal
-	journalTimeout        time.Duration
-	onJournalError        func(error)
-	onExecutionError      func(string, FailureCode, error)
-	compiler              clickhouse.Compiler
-	maxRows               uint64
-	maxBytes              uint64
-	maxJobs               int
-	maxResultLeases       int
-	maxResultLeasesPerJob int
-	maxTotalBytes         uint64
-	maxMetadataBytes      uint64
-	defaultPageSize       int
-	maxPageSize           int
-	maxPageBytes          uint64
-	maxRuntime            time.Duration
-	snapshotTimeout       time.Duration
-	maxSPLBytes           int
-	maxScopeIndexes       int
-	retentionTTL          time.Duration
-	expiredRetention      time.Duration
-	cleanupInterval       time.Duration
-	now                   func() time.Time
-	newID                 func() string
-	cursorKey             []byte
-	cursorScope           string
-	listCursorEpoch       string
-	readGate              chan struct{}
-	listGate              chan struct{}
-	snapshotGate          chan struct{}
-	validationGate        chan struct{}
+	executor                 Executor
+	snapshotter              Snapshotter
+	journal                  JobJournal
+	journalTimeout           time.Duration
+	onJournalError           func(error)
+	onExecutionError         func(string, FailureCode, error)
+	compiler                 clickhouse.Compiler
+	knowledgeResolver        KnowledgeResolver
+	maxRows                  uint64
+	maxBytes                 uint64
+	maxJobs                  int
+	maxResultLeases          int
+	maxResultLeasesPerJob    int
+	maxTotalBytes            uint64
+	maxMetadataBytes         uint64
+	defaultPageSize          int
+	maxPageSize              int
+	maxPageBytes             uint64
+	maxRuntime               time.Duration
+	snapshotTimeout          time.Duration
+	maxSPLBytes              int
+	maxScopeIndexes          int
+	retentionTTL             time.Duration
+	expiredRetention         time.Duration
+	cleanupInterval          time.Duration
+	now                      func() time.Time
+	newID                    func() string
+	cursorKey                []byte
+	cursorScope              string
+	listCursorEpoch          string
+	knowledgeExecutionSigner ed25519.PrivateKey
+	readGate                 chan struct{}
+	listGate                 chan struct{}
+	snapshotGate             chan struct{}
+	validationGate           chan struct{}
 
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -293,25 +317,28 @@ type Manager struct {
 type jobEntry struct {
 	mu sync.RWMutex
 
-	job                    Job
-	authorizedIndexes      []string
-	resultSchema           *Schema
-	rows                   []ResultRow
-	history                []State
-	resultGeneration       uint64
-	resultRevision         uint64
-	resultPins             int
-	generation             uint64
-	retainedBytes          uint64
-	metadataBytes          uint64
-	schemaBytes            uint64
-	expiredAt              time.Time
-	ctx                    context.Context
-	cancel                 context.CancelFunc
-	queuePrev              *jobEntry
-	queueNext              *jobEntry
-	queued                 bool
-	journalFinalizeClaimed bool
+	job                      Job
+	authorizedIndexes        []string
+	resultSchema             *Schema
+	rows                     []ResultRow
+	history                  []State
+	resultGeneration         uint64
+	resultRevision           uint64
+	resultPins               int
+	generation               uint64
+	retainedBytes            uint64
+	metadataBytes            uint64
+	schemaBytes              uint64
+	expiredAt                time.Time
+	ctx                      context.Context
+	cancel                   context.CancelFunc
+	queuePrev                *jobEntry
+	queueNext                *jobEntry
+	queued                   bool
+	journalFinalizeClaimed   bool
+	preparedCompiled         *clickhouse.CompiledQuery
+	preparedExecutionClaimed bool
+	knowledgeSnapshot        knowledgesnapshot.Snapshot
 }
 
 // New constructs and starts a search job manager.
@@ -478,51 +505,58 @@ func New(config Config) (*Manager, error) {
 	if listCursorEpoch == "" {
 		return nil, errors.New("create search job manager: generate transient list cursor epoch")
 	}
+	knowledgeExecutionSigner := deriveKnowledgeExecutionSigningKey(
+		cursorKey,
+		cursorScope,
+		listCursorEpoch,
+	)
 
 	// #nosec G118 -- cancel is retained on Manager and invoked by Close.
 	managerContext, cancel := context.WithCancel(context.Background())
 	manager := &Manager{
-		jobs:                   make(map[string]*jobEntry),
-		jobsByScope:            make(map[AccessScope]*jobListIndexNode),
-		reservedIDs:            make(map[string]struct{}),
-		executor:               config.Executor,
-		snapshotter:            config.Snapshotter,
-		journal:                config.Journal,
-		journalTimeout:         journalTimeout,
-		onJournalError:         config.OnJournalError,
-		onExecutionError:       config.OnExecutionError,
-		journalErrorHookGate:   make(chan struct{}, 1),
-		executionErrorHookGate: make(chan struct{}, 1),
-		compiler:               config.Compiler,
-		maxRows:                maxRows,
-		maxBytes:               maxBytes,
-		maxJobs:                maxJobs,
-		maxResultLeases:        maxResultLeases,
-		maxResultLeasesPerJob:  maxResultLeasesPerJob,
-		maxTotalBytes:          maxTotalBytes,
-		maxMetadataBytes:       maxMetadataBytes,
-		defaultPageSize:        pageSize,
-		maxPageSize:            maxPageSize,
-		maxPageBytes:           maxPageBytes,
-		maxRuntime:             maxRuntime,
-		snapshotTimeout:        snapshotTimeout,
-		maxSPLBytes:            maxSPLBytes,
-		maxScopeIndexes:        maxScopeIndexes,
-		retentionTTL:           retentionTTL,
-		expiredRetention:       expiredRetention,
-		cleanupInterval:        cleanupInterval,
-		now:                    now,
-		newID:                  newID,
-		cursorKey:              cursorKey,
-		cursorScope:            cursorScope,
-		listCursorEpoch:        listCursorEpoch,
-		readGate:               make(chan struct{}, maxConcurrentReads),
-		listGate:               make(chan struct{}, defaultMaxConcurrentLists),
-		snapshotGate:           make(chan struct{}, maxConcurrentSnapshots),
-		validationGate:         make(chan struct{}, maxConcurrent),
-		ctx:                    managerContext,
-		cancel:                 cancel,
-		queueCapacity:          maxQueued,
+		jobs:                     make(map[string]*jobEntry),
+		jobsByScope:              make(map[AccessScope]*jobListIndexNode),
+		reservedIDs:              make(map[string]struct{}),
+		executor:                 config.Executor,
+		snapshotter:              config.Snapshotter,
+		journal:                  config.Journal,
+		journalTimeout:           journalTimeout,
+		onJournalError:           config.OnJournalError,
+		onExecutionError:         config.OnExecutionError,
+		journalErrorHookGate:     make(chan struct{}, 1),
+		executionErrorHookGate:   make(chan struct{}, 1),
+		compiler:                 config.Compiler,
+		knowledgeResolver:        normalizedKnowledgeResolver(config.KnowledgeResolver),
+		maxRows:                  maxRows,
+		maxBytes:                 maxBytes,
+		maxJobs:                  maxJobs,
+		maxResultLeases:          maxResultLeases,
+		maxResultLeasesPerJob:    maxResultLeasesPerJob,
+		maxTotalBytes:            maxTotalBytes,
+		maxMetadataBytes:         maxMetadataBytes,
+		defaultPageSize:          pageSize,
+		maxPageSize:              maxPageSize,
+		maxPageBytes:             maxPageBytes,
+		maxRuntime:               maxRuntime,
+		snapshotTimeout:          snapshotTimeout,
+		maxSPLBytes:              maxSPLBytes,
+		maxScopeIndexes:          maxScopeIndexes,
+		retentionTTL:             retentionTTL,
+		expiredRetention:         expiredRetention,
+		cleanupInterval:          cleanupInterval,
+		now:                      now,
+		newID:                    newID,
+		cursorKey:                cursorKey,
+		cursorScope:              cursorScope,
+		listCursorEpoch:          listCursorEpoch,
+		knowledgeExecutionSigner: knowledgeExecutionSigner,
+		readGate:                 make(chan struct{}, maxConcurrentReads),
+		listGate:                 make(chan struct{}, defaultMaxConcurrentLists),
+		snapshotGate:             make(chan struct{}, maxConcurrentSnapshots),
+		validationGate:           make(chan struct{}, maxConcurrent),
+		ctx:                      managerContext,
+		cancel:                   cancel,
+		queueCapacity:            maxQueued,
 	}
 	manager.queueCond = sync.NewCond(&manager.mu)
 	manager.wg.Add(maxConcurrent)
@@ -549,13 +583,22 @@ func isNilRequiredDependency(dependency any) bool {
 	}
 }
 
+// KnowledgeAdmissionEnabled reports whether this manager is configured to
+// seal nonempty-app searches before durable admission. Callers use it to apply
+// the corresponding live app-authorization boundary without guessing from a
+// concrete resolver type. App-less requests still follow the legacy path.
+func (manager *Manager) KnowledgeAdmissionEnabled() bool {
+	return manager != nil && manager.knowledgeResolver != nil
+}
+
 // Create takes an immutable absolute-time, authorization, and committed-storage
-// visibility snapshot and queues it for asynchronous parsing. Visibility is
-// captured synchronously during admission; if that lookup fails, no job is
-// created and ErrStorageUnavailable is returned without exposing storage
-// details. The submission context is used only for admission; a successfully
-// created job intentionally outlives an HTTP request and is canceled through
-// Cancel or Close.
+// visibility snapshot. Legacy and app-less requests queue asynchronous parsing;
+// when knowledge admission is configured, a nonempty-app request is parsed,
+// planned, resolved, compiled, and sealed synchronously before its ID, journal
+// record, publication, or execution can exist. Visibility is always captured
+// synchronously; failures expose only stable safe categories. The submission
+// context is used only for admission; a successfully created job intentionally
+// outlives an HTTP request and is canceled through Cancel or Close.
 func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job, error) {
 	if ctx == nil {
 		return Job{}, errors.New("create search job: context is nil")
@@ -582,6 +625,24 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	if manager.ctx.Err() != nil {
 		return Job{}, ErrClosed
 	}
+	var prepared *preparedKnowledgeAdmission
+	var visibilityCutoff uint64
+	var now time.Time
+	if manager.knowledgeAdmissionEnabled(request) {
+		visibilityCutoff, err = manager.captureVisibility(ctx)
+		if err != nil {
+			return Job{}, err
+		}
+		now = manager.nowUTC()
+		knowledge, prepareErr := manager.prepareKnowledgeAdmission(ctx, request, visibilityCutoff, now)
+		if prepareErr != nil {
+			return Job{}, prepareErr
+		}
+		prepared = &knowledge
+		if err := manager.operationContextError(ctx); err != nil {
+			return Job{}, err
+		}
+	}
 	id := strings.Clone(manager.newID())
 	if !canonicalJobMetadataIdentifier(id, MaximumJobIDBytes, false) {
 		return Job{}, errors.New("create search job: ID generator returned an invalid ID")
@@ -594,6 +655,12 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
 	}
+	if prepared != nil {
+		metadataBytes, err = checkedAdd(metadataBytes, prepared.metadataBytes)
+		if err != nil || metadataBytes > manager.maxMetadataBytes {
+			return Job{}, ErrCapacity
+		}
+	}
 	if err := manager.reserveMetadataWithCleanup(metadataBytes); err != nil {
 		return Job{}, err
 	}
@@ -603,11 +670,13 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 			manager.releaseMetadata(metadataBytes)
 		}
 	}()
-	visibilityCutoff, err := manager.captureVisibility(ctx)
-	if err != nil {
-		return Job{}, err
+	if prepared == nil {
+		visibilityCutoff, err = manager.captureVisibility(ctx)
+		if err != nil {
+			return Job{}, err
+		}
+		now = manager.nowUTC()
 	}
-	now := manager.nowUTC()
 	jobContext, cancel := context.WithCancel(manager.ctx)
 	sourceSPL := strings.Clone(request.SPL)
 	timeIntent := request.TimeRange.Intent()
@@ -635,6 +704,13 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		metadataBytes:     metadataBytes,
 		ctx:               jobContext,
 		cancel:            cancel,
+	}
+	if prepared != nil {
+		entry.job.EffectiveIndexes = cloneStrings(prepared.effective)
+		entry.job.KnowledgeSnapshot = cloneKnowledgeSnapshotSummary(prepared.summary)
+		compiled := prepared.compiled
+		entry.preparedCompiled = &compiled
+		entry.knowledgeSnapshot = prepared.snapshot
 	}
 	created := cloneJob(entry.job)
 	journalAdmitted := false
@@ -1151,9 +1227,9 @@ func (manager *Manager) getEntry(entry *jobEntry) (Job, error) {
 }
 
 // List returns summary copies of all jobs for trusted administrative callers.
-// Summaries omit query text, scope slices, schema, and detailed diagnostics;
-// callers needing those fields should use Get. API handlers serving an end
-// user should call ListFor.
+// Summaries omit query text, scope slices, knowledge inventory, schema, and
+// detailed diagnostics; callers needing those fields should use Get. API
+// handlers serving an end user should call ListFor.
 func (manager *Manager) List() []Job {
 	return manager.list(nil)
 }
@@ -1546,6 +1622,21 @@ func (manager *Manager) run(entry *jobEntry) {
 	if !manager.advance(entry, StateQueued, StateParsing, nil) {
 		return
 	}
+	if entry.hasPreparedExecution() {
+		if !manager.advance(entry, StateParsing, StatePlanning, nil) {
+			return
+		}
+		if !manager.advance(entry, StatePlanning, StateRunning, nil) {
+			return
+		}
+		compiled, ok := entry.takePreparedExecution()
+		if !ok {
+			manager.failOrCancel(entry, Failure{Code: FailureInternal, Message: "search planning failed"}, manager.nowUTC())
+			return
+		}
+		manager.executeCompiled(entry, compiled)
+		return
+	}
 	parsed, err := parseSPLQuery(entry.ctx, entry.job.SPL)
 	if err != nil {
 		manager.failOrCancel(entry, parseFailure(err), manager.nowUTC())
@@ -1584,21 +1675,35 @@ func (manager *Manager) run(entry *jobEntry) {
 	}) {
 		return
 	}
+	manager.executeCompiled(entry, compiled)
+}
+
+func (manager *Manager) executeCompiled(entry *jobEntry, compiled clickhouse.CompiledQuery) {
+	retained, ok := compiled.CloneForExecution()
+	if !ok || !retained.EqualForExecution(compiled) {
+		manager.executionFailed(entry, ErrInvalidResult)
+		return
+	}
+	executable, ok := retained.CloneForExecution()
+	if !ok || !executable.EqualForExecution(retained) {
+		manager.executionFailed(entry, ErrInvalidResult)
+		return
+	}
 
 	var timechart *clickhouse.TimechartOutput
-	if compiled.Timechart != nil {
-		cloned := *compiled.Timechart
+	if retained.Timechart != nil {
+		cloned := *retained.Timechart
 		timechart = &cloned
 	}
 	var chart *clickhouse.ChartOutput
-	if compiled.Chart != nil {
-		cloned := *compiled.Chart
+	if retained.Chart != nil {
+		cloned := *retained.Chart
 		chart = &cloned
 	}
 	sink := &resultSink{
 		manager:        manager,
 		entry:          entry,
-		expectedFields: cloneStrings(compiled.OutputFields),
+		expectedFields: cloneStrings(retained.OutputFields),
 		timechart:      timechart,
 		chart:          chart,
 	}
@@ -1606,7 +1711,19 @@ func (manager *Manager) run(entry *jobEntry) {
 	defer cancelExecution()
 	sink.ctx = executionContext
 	defer sink.close()
-	executionErr := manager.executor.Execute(executionContext, compiled, sink)
+	// The executor receives its own fully detached clone. Compare it with the
+	// pristine local authority both before and after the call: by-value field
+	// replacement is contained by production executors, while shared-slice or
+	// pointed-result-contract mutation remains observable and must prevent a
+	// successful result publication.
+	if !executable.EqualForExecution(retained) {
+		manager.executionFailed(entry, ErrInvalidResult)
+		return
+	}
+	executionErr := manager.executor.Execute(executionContext, executable, sink)
+	if !executable.EqualForExecution(retained) {
+		executionErr = ErrInvalidResult
+	}
 	executionContextErr := executionContext.Err()
 	sink.close()
 	cancelExecution()
@@ -1634,6 +1751,33 @@ func (manager *Manager) run(entry *jobEntry) {
 		return
 	}
 	manager.finishCompleted(entry, manager.nowUTC(), resultsTruncated)
+}
+
+func (entry *jobEntry) hasPreparedExecution() bool {
+	entry.mu.RLock()
+	defer entry.mu.RUnlock()
+	// The finalized authority, not the query's one-shot claim state, selects
+	// this path. A duplicate or corrupted worker invocation therefore fails
+	// closed in takePreparedExecution instead of falling back to a reparse.
+	return !entry.knowledgeSnapshot.IsZero()
+}
+
+// takePreparedExecution gives the sole worker one detached clone of the
+// privately retained compiled authority. The immutable original remains with
+// the job for inspection and export, while the claim prevents a second worker
+// execution without ever reparsing, replanning, or re-resolving.
+func (entry *jobEntry) takePreparedExecution() (clickhouse.CompiledQuery, bool) {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if entry.preparedCompiled == nil || entry.preparedExecutionClaimed {
+		return clickhouse.CompiledQuery{}, false
+	}
+	compiled, ok := entry.preparedCompiled.CloneForExecution()
+	if !ok {
+		return clickhouse.CompiledQuery{}, false
+	}
+	entry.preparedExecutionClaimed = true
+	return compiled, true
 }
 
 func (manager *Manager) advance(entry *jobEntry, from, to State, update func(*Job)) bool {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
@@ -160,6 +161,12 @@ func (resolution Resolution) StaticCharges() ResolutionStaticCharges {
 
 // IsZero reports whether the resolution contains no prepared authority.
 func (resolution Resolution) IsZero() bool { return resolution.authority.IsZero() }
+
+// Finalize binds this exact opaque resolution to one exact sealed compiler
+// output. Catalog authority remains private to Resolution throughout.
+func (resolution Resolution) Finalize(compiled clickhouse.CompiledQuery) (knowledgesnapshot.Snapshot, error) {
+	return resolution.authority.Finalize(compiled)
+}
 
 // Resolve returns the complete old-or-new catalog authority observed by one
 // SQLite read snapshot. It never mixes revisions and never reads object bodies

@@ -30,6 +30,27 @@ type Query struct {
 	// the search time-range intent. Time formatting must never inherit the
 	// ClickHouse or API server's local timezone.
 	SearchTimezone string
+
+	// parsedEvalPredicates is retained only for plans produced from a parser-
+	// owned SPL query. The compiler re-derives the exact count from this plan
+	// before opening the provenance, so mutation cannot preserve the evidence.
+	parsedEvalPredicates uint32
+	parsedSPL            bool
+}
+
+// AuthoredScalarPredicateCount opens parser-owned whole-query provenance only
+// when the current logical plan still contains the exact admitted number of
+// eval/where predicate leaves. Directly assembled plans intentionally return
+// false while remaining valid ordinary compiler fixtures.
+func (query *Query) AuthoredScalarPredicateCount() (uint32, bool) {
+	if query == nil || !query.parsedSPL || query.parsedEvalPredicates > spl.MaximumEvalPredicates {
+		return 0, false
+	}
+	analysis, err := analyze(query)
+	if err != nil || analysis.scalarPredicates != query.parsedEvalPredicates {
+		return 0, false
+	}
+	return query.parsedEvalPredicates, true
 }
 
 // DynamicSeriesOutput describes a bounded runtime-wide result schema. Fixed

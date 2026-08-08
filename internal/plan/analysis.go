@@ -22,15 +22,28 @@ type Analysis struct {
 // nils, unknown future nodes, malformed field references, excessive depth, and
 // excessive work so forged plans cannot yield incomplete dependency metadata.
 func Analyze(query *Query) (Analysis, error) {
+	analysis, err := analyze(query)
+	if err != nil {
+		return Analysis{}, err
+	}
+	return Analysis{ReferencedFields: analysis.referencedFields}, nil
+}
+
+type internalAnalysis struct {
+	referencedFields []string
+	scalarPredicates uint32
+}
+
+func analyze(query *Query) (internalAnalysis, error) {
 	if query == nil {
-		return Analysis{}, errors.New("analyze logical query: query is nil")
+		return internalAnalysis{}, errors.New("analyze logical query: query is nil")
 	}
 	analyzer := queryAnalyzer{
 		fields: make(map[string]struct{}),
 	}
 	for _, operator := range query.Operators {
 		if err := analyzer.visitOperator(operator, 1); err != nil {
-			return Analysis{}, err
+			return internalAnalysis{}, err
 		}
 	}
 	fields := make([]string, 0, len(analyzer.fields))
@@ -38,12 +51,16 @@ func Analyze(query *Query) (Analysis, error) {
 		fields = append(fields, field)
 	}
 	sort.Strings(fields)
-	return Analysis{ReferencedFields: fields}, nil
+	return internalAnalysis{
+		referencedFields: fields,
+		scalarPredicates: analyzer.scalarPredicates,
+	}, nil
 }
 
 type queryAnalyzer struct {
-	fields map[string]struct{}
-	nodes  int
+	fields           map[string]struct{}
+	nodes            int
+	scalarPredicates uint32
 }
 
 func (analyzer *queryAnalyzer) enter(depth int) error {
@@ -314,6 +331,7 @@ func (analyzer *queryAnalyzer) visitExpression(expression Expression, depth int)
 		if expression == nil {
 			return errors.New("analyze logical query: eval comparison expression is nil")
 		}
+		analyzer.scalarPredicates++
 		if err := analyzer.visitScalarExpression(expression.Left, depth+1); err != nil {
 			return err
 		}
@@ -322,6 +340,7 @@ func (analyzer *queryAnalyzer) visitExpression(expression Expression, depth int)
 		if expression == nil {
 			return errors.New("analyze logical query: scalar predicate expression is nil")
 		}
+		analyzer.scalarPredicates++
 		return analyzer.visitScalarExpression(expression.Value, depth+1)
 	default:
 		return fmt.Errorf("analyze logical query: unsupported expression %T", expression)

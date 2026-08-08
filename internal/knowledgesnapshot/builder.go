@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
@@ -267,6 +268,23 @@ func (snapshot Snapshot) CanonicalBytes() uint64 {
 		return 0
 	}
 	return snapshot.message.BudgetCharges.CanonicalSnapshotBytes
+}
+
+// Clone returns a fully detached immutable snapshot. The canonical encoding
+// and digest remain byte-for-byte identical.
+func (snapshot Snapshot) Clone() Snapshot {
+	if snapshot.message == nil {
+		return Snapshot{}
+	}
+	message, ok := proto.Clone(snapshot.message).(*opensplunkv1.KnowledgeSnapshot)
+	if !ok || message == nil {
+		return Snapshot{}
+	}
+	return Snapshot{
+		message: message,
+		encoded: bytes.Clone(snapshot.encoded),
+		digest:  snapshot.digest,
+	}
 }
 
 type canonicalObject struct {
@@ -1068,6 +1086,41 @@ func finalize(authority Authority, evidence trustedCompilerEvidence) (Snapshot, 
 	snapshot.BudgetCharges.ScalarExpressionNodes = evidence.scalarExpressionNodes
 	snapshot.BudgetCharges.GeneratedSqlBytes = evidence.generatedSQLBytes
 	return digestSnapshot(snapshot)
+}
+
+// Finalize seals this exact prepared authority against one exact compiler-
+// produced ClickHouse execution. It accepts no caller-constructible budget
+// counters. KO-0H deliberately finalizes only an empty authority because KO-1
+// has not yet introduced the generated knowledge prelude; accepting nonempty
+// authority here would pin definitions the executable SQL never applies.
+func (authority Authority) Finalize(compiled clickhouse.CompiledQuery) (Snapshot, error) {
+	if authority.base == nil || authority.base.BudgetCharges == nil {
+		return Snapshot{}, fmt.Errorf("%w: prepared authority is absent", ErrInvalidInput)
+	}
+	compilerEvidence, ok := compiled.KnowledgeSnapshotEvidence()
+	if !ok {
+		return Snapshot{}, fmt.Errorf("%w: compiled query knowledge evidence is absent or unsealed", ErrInvalidInput)
+	}
+	if compilerEvidence.TenantID() != authority.base.GetTenantId() ||
+		!slices.Equal(compilerEvidence.EffectiveIndexes(), authority.base.GetEffectiveAuthorizedIndexes()) {
+		return Snapshot{}, fmt.Errorf("%w: compiled query read scope disagrees with prepared authority", ErrInvalidInput)
+	}
+	if len(authority.objects) != 0 {
+		return Snapshot{}, fmt.Errorf("%w: nonempty authority requires the KO-1 knowledge prelude", ErrInvalidInput)
+	}
+	return finalize(authority, trustedCompilerEvidence{
+		generatedOperators:    compilerEvidence.GeneratedOperators(),
+		generatedFields:       compilerEvidence.GeneratedFields(),
+		regexPrograms:         compilerEvidence.RegexPrograms(),
+		regexWorkUnits:        compilerEvidence.RegexWorkUnits(),
+		regexCaptureBytes:     compilerEvidence.RegexCaptureBytes(),
+		extractionOutputs:     compilerEvidence.ExtractionOutputs(),
+		jsonEvaluationWork:    compilerEvidence.JSONEvaluationWork(),
+		scalarExpressions:     compilerEvidence.ScalarExpressions(),
+		scalarExpressionNodes: compilerEvidence.ScalarExpressionNodes(),
+		scalarPredicates:      compilerEvidence.ScalarPredicates(),
+		generatedSQLBytes:     compilerEvidence.GeneratedSQLBytes(),
+	})
 }
 
 func validateTrustedCompilerEvidence(

@@ -78,11 +78,12 @@ func NewExplainer(
 		allLanes = append(allLanes, lane)
 	}
 	return &Explainer{
-		settings:         settings,
-		executionTimeout: executionTimeout,
-		lanes:            lanes,
-		allLanes:         allLanes,
-		newQueryID:       randomExplainQueryID,
+		settings:             settings,
+		executionTimeout:     executionTimeout,
+		requireExecutionSeal: true,
+		lanes:                lanes,
+		allLanes:             allLanes,
+		newQueryID:           randomExplainQueryID,
 	}, nil
 }
 

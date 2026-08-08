@@ -435,6 +435,12 @@ type CompiledQuery struct {
 	// has for a chronology-validated source. It stays private because it is
 	// compiler resource evidence, not an executor transport contract.
 	sourceFanout uint64
+
+	// executionSeal binds the complete executable contract, including every
+	// bind value and result-shape field. knowledgeEvidence exists only for a
+	// parser-owned plan.Build query and is covered by the same seal.
+	executionSeal     *compiledExecutionSeal
+	knowledgeEvidence *knowledgeCompilationEvidence
 }
 
 // ChartOutput describes the bounded runtime-wide pivot contract. Both axes are
@@ -636,7 +642,8 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if !ok {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: first operator must be Scan")
 	}
-	if err := validateCompiledExtractionBudgets(query.Operators[1:]); err != nil {
+	authoredKnowledge, err := validateCompiledExtractionBudgets(query.Operators[1:])
+	if err != nil {
 		return CompiledQuery{}, err
 	}
 	fragment, state, args, err := compileScan(
@@ -1148,7 +1155,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					Range:   operator.Range,
 				}
 			}
-			return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
+			return sealFinalCompiledQuery(compiled, query, scan, authoredKnowledge)
 		case *plan.Chart:
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: chart is unavailable for event analysis")
@@ -1180,7 +1187,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					Range:   operator.Range,
 				}
 			}
-			return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
+			return sealFinalCompiledQuery(compiled, query, scan, authoredKnowledge)
 		case *plan.Window:
 			expression, nextState, compileErr := compileWindow(operator, state)
 			if compileErr != nil {
@@ -1263,10 +1270,18 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			Range:   scan.Range,
 		}
 	}
-	return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
+	return sealFinalCompiledQuery(compiled, query, scan, authoredKnowledge)
 }
 
-func validateCompiledExtractionBudgets(operators []plan.Operator) error {
+type authoredKnowledgeCompilation struct {
+	regexPrograms      uint32
+	regexWorkUnits     uint64
+	extractionOutputs  uint32
+	jsonEvaluationWork uint32
+}
+
+func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowledgeCompilation, error) {
+	var evidence authoredKnowledgeCompilation
 	outputs := 0
 	spathWorkUnits := 0
 	for _, operator := range operators {
@@ -1275,6 +1290,14 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) error {
 			if operator == nil {
 				continue
 			}
+			validated, err := validateExtractOperator(operator)
+			if err != nil {
+				return authoredKnowledgeCompilation{}, err
+			}
+			evidence.regexPrograms++
+			// #nosec G115 -- bounded extraction compilation returns positive
+			// work no larger than splregex.MaximumExtractionProgramWorkUnits.
+			evidence.regexWorkUnits += uint64(validated.ProgramWorkUnits)
 			outputs += len(operator.Captures)
 		case *plan.ExtractJSON:
 			if operator == nil {
@@ -1282,12 +1305,12 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) error {
 			}
 			steps, err := validateExtractJSONOperator(operator)
 			if err != nil {
-				return err
+				return authoredKnowledgeCompilation{}, err
 			}
 			outputs++
 			spathWorkUnits += splpath.EvaluationWorkUnits(steps)
 			if spathWorkUnits > splpath.MaximumEvaluationWorkUnits {
-				return &plan.Diagnostic{
+				return authoredKnowledgeCompilation{}, &plan.Diagnostic{
 					Code: "SPL_QUERY_TOO_COMPLEX",
 					Message: fmt.Sprintf(
 						"spath stages require more than %d JSON evaluation work units per row",
@@ -1298,7 +1321,7 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) error {
 			}
 		}
 		if outputs > maxCompiledExtractionOutputs {
-			return &plan.Diagnostic{
+			return authoredKnowledgeCompilation{}, &plan.Diagnostic{
 				Code: "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf(
 					"search creates more than %d extraction output fields",
@@ -1308,7 +1331,9 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) error {
 			}
 		}
 	}
-	return nil
+	evidence.extractionOutputs = uint32(outputs)
+	evidence.jsonEvaluationWork = uint32(spathWorkUnits)
+	return evidence, nil
 }
 
 func compileMatchPatternForBackend(

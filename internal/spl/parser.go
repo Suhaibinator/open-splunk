@@ -16,13 +16,17 @@ import (
 )
 
 const (
+	// MaximumEvalPredicates is the shared authored eval/where predicate-leaf
+	// ceiling retained as sealed compiler evidence for knowledge admission.
+	MaximumEvalPredicates = 32
+
 	maxSPLSourceBytes     = 16 << 10
 	maxSPLTokens          = 1024
 	maxPipelineCommands   = 64
 	maxEvalAssignments    = 64
 	maxRenameAssignments  = 64
 	maxDedupFields        = 16
-	maxEvalPredicates     = 32
+	maxEvalPredicates     = MaximumEvalPredicates
 	maxScalarNestingDepth = 32
 )
 
@@ -124,6 +128,9 @@ func (p *parser) parseQuery() (*Query, error) {
 		return nil, p.errorAtCurrent("SPL_EMPTY_QUERY", "search query is empty")
 	}
 	query.Range = Range{Start: start, End: p.current().sourceRange.End}
+	// #nosec G115 -- countEvalPredicate admits at most MaximumEvalPredicates.
+	query.parsedEvalPredicates = uint32(p.evalPredicates)
+	query.parsed = true
 	return query, nil
 }
 

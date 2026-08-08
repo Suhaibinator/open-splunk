@@ -30,10 +30,27 @@ type Query struct {
 	Search   Expr
 	Commands []Command
 	Range    Range
+
+	// parsedEvalPredicates is parser-owned provenance for the exact number of
+	// eval/where predicate leaves admitted from source. Logical planning keeps
+	// it private so a later whole-query compiler can combine authored and
+	// knowledge work without trusting a caller-constructible counter.
+	parsedEvalPredicates uint32
+	parsed               bool
 }
 
 // SourceRange implements Node.
 func (q *Query) SourceRange() Range { return q.Range }
+
+// ParsedEvalPredicateCount returns parser-owned predicate provenance. Queries
+// assembled directly as ASTs deliberately have no provenance: they remain
+// valid planning fixtures, but cannot mint sealed knowledge-snapshot evidence.
+func (q *Query) ParsedEvalPredicateCount() (uint32, bool) {
+	if q == nil || !q.parsed {
+		return 0, false
+	}
+	return q.parsedEvalPredicates, true
+}
 
 // Expr is an SPL search expression.
 type Expr interface {

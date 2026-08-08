@@ -300,6 +300,18 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if sink == nil {
 		return errors.New("execute ClickHouse search: result sink is required")
 	}
+	// Every publicly constructed Executor has an explicit read-admission
+	// dependency. At that production boundary, detach and validate the complete
+	// compiler authority before inspecting it or reaching admission/driver
+	// state. Same-package diagnostic fixtures intentionally omit admission and
+	// retain their historical ability to exercise hand-built row contracts.
+	if executor.readAdmission != nil {
+		detached, ok := query.CloneForExecution()
+		if !ok {
+			return fmt.Errorf("%w: compiled query execution authority is invalid", searchjobs.ErrInvalidResult)
+		}
+		query = detached
+	}
 	query.Args = slices.Clone(query.Args)
 	if strings.TrimSpace(query.SQL) == "" || len(query.OutputFields) == 0 {
 		return errors.New("execute ClickHouse search: compiled query is incomplete")

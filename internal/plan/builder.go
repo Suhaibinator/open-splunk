@@ -1478,6 +1478,10 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 		}
 	}
+	if predicates, ok := query.ParsedEvalPredicateCount(); ok {
+		result.parsedEvalPredicates = predicates
+		result.parsedSPL = true
+	}
 	return result, nil
 }
 

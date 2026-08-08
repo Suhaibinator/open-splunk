@@ -84,11 +84,12 @@ type explainLane struct {
 // service has stopped. It is intentionally separate from Executor: ordinary
 // search and export queries do not reserve these diagnostic connections.
 type Explainer struct {
-	settings         clickhousedriver.Settings
-	executionTimeout time.Duration
-	lanes            chan *explainLane
-	allLanes         []*explainLane
-	newQueryID       func() (string, error)
+	settings             clickhousedriver.Settings
+	executionTimeout     time.Duration
+	requireExecutionSeal bool
+	lanes                chan *explainLane
+	allLanes             []*explainLane
+	newQueryID           func() (string, error)
 
 	mu         sync.Mutex
 	closed     bool
@@ -151,6 +152,15 @@ func (explainer *Explainer) Explain(
 	}
 	if err := explainer.checkOpen(); err != nil {
 		return ExplainResult{}, err
+	}
+	if explainer.requireExecutionSeal {
+		detached, ok := query.CloneForExecution()
+		if !ok {
+			return ExplainResult{}, invalidExplainResult(
+				"compiled execution authority is not an unchanged Compiler result",
+			)
+		}
+		query = detached
 	}
 
 	// Admission is deliberately fail-fast and precedes SQL hashing, argument
