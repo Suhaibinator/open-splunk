@@ -1071,6 +1071,22 @@ with an executable Open Splunk fixture.
 **Outcome:** knowledge definitions can be persisted, authorized, resolved, and
 pinned without affecting search results.
 
+**Implementation checkpoint (August 7, 2026):** contracts, migrations 0024
+through 0030, canonical definition handling, the bounded authorization-first
+reader, and the atomic catalog Writer are complete. The Writer currently
+publishes draft creates, draft/disabled definition updates (opaque future
+bodies: metadata-only), draft/active disable transitions, and
+draft/active/disabled delete tombstones with exact idempotency replay,
+revision/state-token rotation, successful audit, immutable commit authority,
+bounded health/reclamation, and crash recovery. `Create` with ACTIVE, `Update`
+of an ACTIVE object, and `SetState` to ACTIVE deliberately return
+`ErrActivePublicationUnavailable` until KO-1 supplies the publication compiler
+and dependency derivation. Remaining KO-0 work is the authenticated
+read/mutation routes and their rejected-attempt journal boundary, resolver and
+immutable snapshot builder, search-lifecycle attachment, negative feature/API
+contracts, and the hidden Knowledge Manager list/detail shell. The capability
+remains disabled and unadvertised.
+
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and
   provenance contracts;
