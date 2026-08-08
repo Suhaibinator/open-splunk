@@ -1782,6 +1782,7 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		clickhouse.UnsupportedDedupValueMarker,
 		clickhouse.UnsupportedNumericBinValueMarker,
 		clickhouse.UnsupportedSpathValueMarker,
+		clickhouse.KnowledgeSelectorInvalidUTF8Marker,
 	} {
 		unsupported := &clickhousedriver.Exception{
 			Code:    395,
@@ -1810,6 +1811,7 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		clickhouse.UnsupportedDedupValueMarker,
 		clickhouse.UnsupportedNumericBinValueMarker,
 		clickhouse.UnsupportedSpathValueMarker,
+		clickhouse.KnowledgeSelectorInvalidUTF8Marker,
 	} {
 		wrongCode := &clickhousedriver.Exception{Code: 241, Message: marker}
 		if err := classifyQueryError(context.Background(), wrongCode); !errors.Is(err, searchjobs.ErrExecutionLimit) || errors.Is(err, searchjobs.ErrUnsupportedValue) {

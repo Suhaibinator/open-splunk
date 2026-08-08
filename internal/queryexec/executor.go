@@ -2582,6 +2582,9 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.EventStatsListLimitMarker, "eventstats list exceeded the supported limit"},
 	{clickhouse.StatsListBytesLimitMarker, "stats list bytes exceeded the supported limit"},
 	{clickhouse.StatsListLimitMarker, "stats list exceeded the supported result limit"},
+	{clickhouse.KnowledgeSelectorValueLimitMarker, "knowledge selector value bytes exceeded the per-value limit"},
+	{clickhouse.KnowledgeSelectorEventLimitMarker, "knowledge selector input bytes exceeded the per-event limit"},
+	{clickhouse.KnowledgeSelectorQueryLimitMarker, "knowledge selector work exceeded the per-query limit"},
 }
 
 func classifyQueryError(ctx context.Context, err error) error {
@@ -2608,7 +2611,8 @@ func classifyQueryError(ctx context.Context, err error) error {
 			strings.Contains(exception.Message, clickhouse.UnsupportedStatsMeasureValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedNumericBinValueMarker) ||
-			strings.Contains(exception.Message, clickhouse.UnsupportedSpathValueMarker)) {
+			strings.Contains(exception.Message, clickhouse.UnsupportedSpathValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.KnowledgeSelectorInvalidUTF8Marker)) {
 			// The compiler deliberately emits stable markers when an operation
 			// encounters a value outside its supported scalar/type/range
 			// contract. Do not retain any surrounding ClickHouse message,
