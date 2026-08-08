@@ -92,6 +92,10 @@ func TestSnapshotReferenceSummaryEqualityRetentionAndDetachment(t *testing.T) {
 		snapshot.Equal(Snapshot{}) || (Snapshot{}).Equal(snapshot) {
 		t.Fatal("Snapshot.Equal disagrees with exact finalized authority")
 	}
+	if snapshot.Prelude().IsZero() || !snapshot.Prelude().Equal(authority.Prelude()) ||
+		!snapshot.Clone().Prelude().Equal(snapshot.Prelude()) {
+		t.Fatal("Snapshot prelude is absent or not detached across clones")
+	}
 	differentEncoding := snapshot
 	differentEncoding.encoded = bytes.Clone(snapshot.encoded)
 	differentEncoding.encoded[len(differentEncoding.encoded)-1] ^= 0xff
@@ -103,7 +107,7 @@ func TestSnapshotReferenceSummaryEqualityRetentionAndDetachment(t *testing.T) {
 		t.Fatalf("RetainedBytes() = %d", retained)
 	}
 	if (Snapshot{}).Reference() != nil || (Snapshot{}).Summary() != nil ||
-		(Snapshot{}).RetainedBytes() != 0 {
+		(Snapshot{}).RetainedBytes() != 0 || !(Snapshot{}).Prelude().IsZero() {
 		t.Fatal("zero snapshot produced retained authority")
 	}
 }

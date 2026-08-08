@@ -12,6 +12,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
@@ -103,6 +104,11 @@ func (manager *Manager) prepareKnowledgeAdmission(
 	if err := exactKnowledgeResolution(resolution, expectedResolutionScope); err != nil {
 		return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 	}
+	prelude := resolution.Prelude()
+	logical, err = plan.InjectKnowledgePrelude(logical, prelude)
+	if err != nil {
+		return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
+	}
 
 	compiled, err := manager.compiler.Compile(logical)
 	if err != nil {
@@ -157,6 +163,8 @@ func exactKnowledgeResolution(
 	objects := resolution.ObjectSummaries()
 	dependencies := resolution.Dependencies()
 	shadows := resolution.Shadows()
+	prelude := resolution.Prelude()
+	static := resolution.StaticCharges()
 	if summary.TenantID != scope.TenantID ||
 		summary.PrincipalID != scope.PrincipalID ||
 		summary.AppID != scope.AppID ||
@@ -164,7 +172,10 @@ func exactKnowledgeResolution(
 		summary.ExecutableObjects != uint32(len(objects)) ||
 		summary.Dependencies != uint32(len(dependencies)) ||
 		summary.Shadows != uint32(len(shadows)) ||
-		len(summary.TenantCatalogStateToken) != sha256.Size {
+		len(summary.TenantCatalogStateToken) != sha256.Size || prelude.IsZero() ||
+		prelude.ObjectCount() != summary.ExecutableObjects ||
+		prelude.IsEmpty() != (summary.ExecutableObjects == 0) ||
+		!knowledgePreludeChargesMatch(prelude.Charges(), static) {
 		return ErrKnowledgeUnavailable
 	}
 	// A second detached read must be exact. This detects a dependency that
@@ -182,7 +193,24 @@ func exactKnowledgeResolution(
 		again.Shadows != summary.Shadows {
 		return ErrKnowledgeUnavailable
 	}
+	if !prelude.Equal(resolution.Prelude()) {
+		return ErrKnowledgeUnavailable
+	}
 	return nil
+}
+
+func knowledgePreludeChargesMatch(
+	charges knowledgeprogram.Charges,
+	static knowledgecatalog.ResolutionStaticCharges,
+) bool {
+	return charges.GeneratedFields == static.GeneratedFields &&
+		charges.RegexPrograms == static.ExtractionRegexPrograms &&
+		charges.RegexWorkUnits == static.ExtractionRegexWorkUnits &&
+		charges.ExtractionOutputs == static.ExtractionOutputs &&
+		charges.JSONEvaluationWork == static.JSONEvaluationWorkUnits &&
+		charges.ScalarExpressions == static.ScalarExpressions &&
+		charges.ScalarExpressionNodes == static.ScalarExpressionNodes &&
+		charges.ScalarPredicates == static.ScalarPredicates
 }
 
 func equalOptionalUint64(left, right *uint64) bool {

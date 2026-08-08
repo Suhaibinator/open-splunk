@@ -38,6 +38,9 @@ const (
 	MaximumScalarPredicates      = 32
 	MaximumDependencyDepth       = 16
 	commitmentDomain             = "open-splunk-knowledge-prelude-v0.1\x00"
+	retainedObjectCharge         = 32 << 10
+	retainedDependencyCharge     = 256
+	retainedOperatorSlotCharge   = 64
 )
 
 var (
@@ -338,6 +341,20 @@ func (program Program) Equal(other Program) bool {
 		return program.state == nil && other.state == nil
 	}
 	return bytes.Equal(program.state.canonical, other.state.canonical)
+}
+
+// RetainedBytes returns a conservative heap charge for the typed immutable
+// program, its canonical commitment input, selectors, and dependency graph.
+// The per-object reservation deliberately covers the compiled selector/NFA
+// authority which is not reproduced byte-for-byte in canonical.
+func (program Program) RetainedBytes() uint64 {
+	if program.state == nil {
+		return 0
+	}
+	return uint64(cap(program.state.canonical)) + uint64(len(program.state.canonical)) +
+		uint64(program.state.objectCount)*retainedObjectCharge +
+		uint64(len(program.state.dependencies))*retainedDependencyCharge +
+		uint64(cap(program.state.operatorKinds))*retainedOperatorSlotCharge
 }
 
 // Prepare revalidates canonical snapshot objects and creates one immutable

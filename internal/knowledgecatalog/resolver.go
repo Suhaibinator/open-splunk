@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
@@ -157,6 +158,12 @@ func (resolution Resolution) Shadows() []knowledgesnapshot.Shadow {
 // StaticCharges returns the immutable semantic costs of winning definitions.
 func (resolution Resolution) StaticCharges() ResolutionStaticCharges {
 	return resolution.authority.StaticCharges()
+}
+
+// Prelude returns the exact detached backend-neutral executable program
+// independently reconstructed from the canonical resolution.
+func (resolution Resolution) Prelude() knowledgeprogram.Program {
+	return resolution.authority.Prelude()
 }
 
 // IsZero reports whether the resolution contains no prepared authority.

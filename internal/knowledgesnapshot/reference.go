@@ -223,7 +223,8 @@ func (snapshot Snapshot) Equal(other Snapshot) bool {
 	if snapshot.message == nil || other.message == nil {
 		return snapshot.message == nil && other.message == nil
 	}
-	return snapshot.digest == other.digest && bytes.Equal(snapshot.encoded, other.encoded)
+	return snapshot.digest == other.digest && bytes.Equal(snapshot.encoded, other.encoded) &&
+		snapshot.prelude.Equal(other.prelude)
 }
 
 // RetainedBytes returns a deliberately conservative heap charge for the
@@ -234,7 +235,8 @@ func (snapshot Snapshot) RetainedBytes() uint64 {
 	if snapshot.message == nil {
 		return 0
 	}
-	return uint64(cap(snapshot.encoded)) + retainedMessageBytes(snapshot.message.ProtoReflect())
+	return uint64(cap(snapshot.encoded)) + retainedMessageBytes(snapshot.message.ProtoReflect()) +
+		snapshot.prelude.RetainedBytes()
 }
 
 func retainedMessageBytes(message protoreflect.Message) uint64 {

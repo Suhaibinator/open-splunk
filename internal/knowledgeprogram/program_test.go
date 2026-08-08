@@ -29,6 +29,10 @@ func TestPrepareValidEmptyIsDistinctFromAbsent(t *testing.T) {
 	if charges := program.Charges(); charges != (Charges{}) {
 		t.Fatalf("empty charges = %+v", charges)
 	}
+	if program.RetainedBytes() == 0 || program.RetainedBytes() != program.Clone().RetainedBytes() ||
+		(Program{}).RetainedBytes() != 0 {
+		t.Fatalf("empty retained bytes = %d", program.RetainedBytes())
+	}
 }
 
 func TestPrepareBuildsCanonicalTypedProgramAndDetaches(t *testing.T) {
@@ -75,6 +79,14 @@ func TestPrepareBuildsCanonicalTypedProgramAndDetaches(t *testing.T) {
 		program.JSONExtractions()[0].Steps()[0].Key != "payload" ||
 		program.CalculatedFields()[0].InputFields()[0] == "mutated" {
 		t.Fatal("program aliases caller or accessor mutation")
+	}
+	empty, err := Prepare(Input{})
+	if err != nil {
+		t.Fatalf("Prepare(empty): %v", err)
+	}
+	if program.RetainedBytes() <= empty.RetainedBytes() ||
+		program.RetainedBytes() != program.Clone().RetainedBytes() {
+		t.Fatalf("retained bytes = mixed:%d empty:%d", program.RetainedBytes(), empty.RetainedBytes())
 	}
 }
 

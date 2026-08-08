@@ -89,6 +89,26 @@ func TestPrepareCanonicalAuthorityOrderChargesDigestAndDetachment(t *testing.T) 
 	if first.StaticCharges() != wantStatic {
 		t.Fatalf("static charges = %+v, want %+v", first.StaticCharges(), wantStatic)
 	}
+	prelude := first.Prelude()
+	preludeCharges := prelude.Charges()
+	if prelude.IsZero() || prelude.IsEmpty() || prelude.ObjectCount() != uint32(len(wantIDs)) ||
+		preludeCharges.GeneratedOperators != 3 || preludeCharges.GeneratedFields != wantStatic.GeneratedFields ||
+		preludeCharges.RegexPrograms != wantStatic.ExtractionRegexPrograms ||
+		preludeCharges.RegexWorkUnits != wantStatic.ExtractionRegexWorkUnits ||
+		preludeCharges.ExtractionOutputs != wantStatic.ExtractionOutputs ||
+		preludeCharges.ScalarExpressions != wantStatic.ScalarExpressions ||
+		preludeCharges.ScalarExpressionNodes != wantStatic.ScalarExpressionNodes ||
+		!prelude.Equal(second.Prelude()) {
+		t.Fatalf("prelude authority = objects:%d charges:%+v", prelude.ObjectCount(), preludeCharges)
+	}
+	kinds := prelude.OperatorKinds()
+	if len(kinds) == 0 {
+		t.Fatal("prelude operator order is absent")
+	}
+	kinds[0] = 0
+	if first.Prelude().OperatorKinds()[0] == 0 {
+		t.Fatal("prelude accessor aliases retained authority")
+	}
 
 	shadows := first.base.GetShadows()
 	if len(shadows) != 2 || shadows[0].GetKnowledgeObjectId() != "ko-shadow-app" ||
@@ -119,6 +139,10 @@ func TestPrepareCanonicalAuthorityOrderChargesDigestAndDetachment(t *testing.T) 
 	if !bytes.Equal(firstSnapshot.Encoded(), secondSnapshot.Encoded()) ||
 		!proto.Equal(firstSnapshot.Proto(), secondSnapshot.Proto()) {
 		t.Fatal("input permutation changed finalized snapshot")
+	}
+	if !firstSnapshot.Prelude().Equal(first.Prelude()) ||
+		!firstSnapshot.Prelude().Equal(secondSnapshot.Prelude()) {
+		t.Fatal("finalized snapshot changed prelude authority")
 	}
 	finalCharges := firstSnapshot.Proto().GetBudgetCharges()
 	if finalCharges.GetGeneratedOperators() != 7 || finalCharges.GetGeneratedFields() != 4 ||
@@ -222,6 +246,9 @@ func TestPrepareEmptyAuthorityAbsentAndPresentRevisionGoldens(t *testing.T) {
 				authority.base.GetSnapshotSha256() != nil || authority.base.GetBudgetCharges().GetCanonicalSnapshotBytes() != 0 {
 				t.Fatalf("empty unfinalized authority = %+v", authority.base)
 			}
+			if prelude := authority.Prelude(); prelude.IsZero() || !prelude.IsEmpty() || prelude.ObjectCount() != 0 {
+				t.Fatalf("empty prelude = zero:%t empty:%t objects:%d", prelude.IsZero(), prelude.IsEmpty(), prelude.ObjectCount())
+			}
 			snapshot, err := finalize(authority, trustedCompilerEvidence{})
 			if err != nil {
 				t.Fatalf("finalize(): %v", err)
@@ -229,6 +256,9 @@ func TestPrepareEmptyAuthorityAbsentAndPresentRevisionGoldens(t *testing.T) {
 			digest := snapshot.Digest()
 			if snapshot.CanonicalBytes() != test.wantCharge || hex.EncodeToString(digest[:]) != test.wantDigest {
 				t.Fatalf("golden = charge %d digest %x, want %d/%s", snapshot.CanonicalBytes(), digest, test.wantCharge, test.wantDigest)
+			}
+			if !snapshot.Prelude().Equal(authority.Prelude()) {
+				t.Fatal("empty finalized snapshot changed prelude authority")
 			}
 			assertSnapshotDigest(t, snapshot.Proto())
 			if impossible, impossibleErr := finalize(authority, trustedCompilerEvidence{generatedOperators: 1}); !impossible.IsZero() || !errors.Is(impossibleErr, ErrInvalidInput) {

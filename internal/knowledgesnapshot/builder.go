@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
@@ -177,6 +178,7 @@ type Authority struct {
 	dependencies []Dependency
 	shadows      []Shadow
 	static       StaticCharges
+	prelude      knowledgeprogram.Program
 }
 
 // IsZero reports whether no prepared catalog authority is present.
@@ -236,12 +238,19 @@ func (authority Authority) Shadows() []Shadow { return cloneShadows(authority.sh
 // StaticCharges returns the immutable compiler-independent semantic inventory.
 func (authority Authority) StaticCharges() StaticCharges { return authority.static }
 
+// Prelude returns the exact detached backend-neutral executable program
+// independently reconstructed from this canonical authority.
+func (authority Authority) Prelude() knowledgeprogram.Program {
+	return authority.prelude.Clone()
+}
+
 // Snapshot is an opaque, immutable finalized snapshot. KO-0G deliberately
 // exposes no public constructor or finalization method for a nonzero value.
 type Snapshot struct {
 	message *opensplunkv1.KnowledgeSnapshot
 	encoded []byte
 	digest  [sha256.Size]byte
+	prelude knowledgeprogram.Program
 }
 
 // Proto returns a detached protobuf representation.
@@ -284,7 +293,14 @@ func (snapshot Snapshot) Clone() Snapshot {
 		message: message,
 		encoded: bytes.Clone(snapshot.encoded),
 		digest:  snapshot.digest,
+		prelude: snapshot.prelude.Clone(),
 	}
+}
+
+// Prelude returns the exact detached backend-neutral executable program
+// sealed into this finalized authority.
+func (snapshot Snapshot) Prelude() knowledgeprogram.Program {
+	return snapshot.prelude.Clone()
 }
 
 type canonicalObject struct {
@@ -428,6 +444,19 @@ func Prepare(input Input) (Authority, error) {
 		}
 		authorityDependencies[index] = cloneDependency(dependency.input)
 	}
+	prelude, err := knowledgeprogram.Prepare(knowledgeprogram.Input{
+		Objects:      snapshotObjects,
+		Dependencies: snapshotDependencies,
+	})
+	if err != nil {
+		if errors.Is(err, knowledgeprogram.ErrResourceLimit) {
+			return Authority{}, fmt.Errorf("%w: prepare knowledge prelude: %v", ErrResourceLimit, err)
+		}
+		return Authority{}, fmt.Errorf("%w: prepare knowledge prelude: %v", ErrInvalidInput, err)
+	}
+	if err := validatePreludeAuthority(prelude, static, uint32(len(objects))); err != nil {
+		return Authority{}, err
+	}
 
 	base := &opensplunkv1.KnowledgeSnapshot{
 		FormatVersion:                FormatVersion,
@@ -462,7 +491,34 @@ func Prepare(input Input) (Authority, error) {
 		dependencies: authorityDependencies,
 		shadows:      shadowAuthorities(shadows),
 		static:       static,
+		prelude:      prelude,
 	}, nil
+}
+
+func validatePreludeAuthority(
+	prelude knowledgeprogram.Program,
+	static StaticCharges,
+	objects uint32,
+) error {
+	if prelude.IsZero() || prelude.ObjectCount() != objects || prelude.IsEmpty() != (objects == 0) {
+		return fmt.Errorf("%w: prepared knowledge prelude inventory disagrees", ErrInvalidInput)
+	}
+	charges := prelude.Charges()
+	if charges.GeneratedFields != static.GeneratedFields ||
+		charges.RegexPrograms != static.ExtractionRegexPrograms ||
+		charges.RegexWorkUnits != static.ExtractionRegexWorkUnits ||
+		charges.ExtractionOutputs != static.ExtractionOutputs ||
+		charges.JSONEvaluationWork != static.JSONEvaluationWorkUnits ||
+		charges.ScalarExpressions != static.ScalarExpressions ||
+		charges.ScalarExpressionNodes != static.ScalarExpressionNodes ||
+		charges.ScalarPredicates != static.ScalarPredicates ||
+		(objects == 0) != (charges.GeneratedOperators == 0) {
+		return fmt.Errorf("%w: prepared knowledge prelude charges disagree", ErrInvalidInput)
+	}
+	if commitment, ok := prelude.Commitment(); !ok || commitment == ([sha256.Size]byte{}) {
+		return fmt.Errorf("%w: prepared knowledge prelude commitment is absent", ErrInvalidInput)
+	}
+	return nil
 }
 
 func validateTopLevel(input Input) error {
@@ -1085,7 +1141,7 @@ func finalize(authority Authority, evidence trustedCompilerEvidence) (Snapshot, 
 	snapshot.BudgetCharges.ScalarExpressions = evidence.scalarExpressions
 	snapshot.BudgetCharges.ScalarExpressionNodes = evidence.scalarExpressionNodes
 	snapshot.BudgetCharges.GeneratedSqlBytes = evidence.generatedSQLBytes
-	return digestSnapshot(snapshot)
+	return digestSnapshot(snapshot, authority.prelude)
 }
 
 // Finalize seals this exact prepared authority against one exact compiler-
@@ -1173,7 +1229,13 @@ func validateTrustedCompilerEvidence(
 	return nil
 }
 
-func digestSnapshot(snapshot *opensplunkv1.KnowledgeSnapshot) (Snapshot, error) {
+func digestSnapshot(
+	snapshot *opensplunkv1.KnowledgeSnapshot,
+	prelude knowledgeprogram.Program,
+) (Snapshot, error) {
+	if prelude.IsZero() {
+		return Snapshot{}, fmt.Errorf("%w: finalized knowledge prelude is absent", ErrInvalidInput)
+	}
 	marshal := proto.MarshalOptions{Deterministic: true}
 	withoutCharge, err := marshal.Marshal(snapshot)
 	if err != nil {
@@ -1201,7 +1263,12 @@ func digestSnapshot(snapshot *opensplunkv1.KnowledgeSnapshot) (Snapshot, error) 
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], digestBytes)
-	return Snapshot{message: snapshot, encoded: bytes.Clone(encoded), digest: digest}, nil
+	return Snapshot{
+		message: snapshot,
+		encoded: bytes.Clone(encoded),
+		digest:  digest,
+		prelude: prelude.Clone(),
+	}, nil
 }
 
 func stageForObjectType(objectType opensplunkv1.KnowledgeObjectType) (opensplunkv1.KnowledgeSearchStage, uint8, error) {

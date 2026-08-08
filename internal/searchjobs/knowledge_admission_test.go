@@ -181,6 +181,9 @@ func TestKnowledgeAdmissionSealsEmptyAuthorityBeforeJournalAndDetaches(t *testin
 		!reflect.DeepEqual(execution.KnowledgeSnapshot.Reference(), completed.KnowledgeSnapshot.Ref) {
 		t.Fatalf("execution knowledge snapshot = %#v", execution.KnowledgeSnapshot.Reference())
 	}
+	if prelude := execution.KnowledgeSnapshot.Prelude(); prelude.IsZero() || !prelude.IsEmpty() || prelude.ObjectCount() != 0 {
+		t.Fatalf("execution knowledge prelude = zero:%t empty:%t objects:%d", prelude.IsZero(), prelude.IsEmpty(), prelude.ObjectCount())
+	}
 	if execution.CompiledQuery == nil {
 		t.Fatal("completed configured execution omitted its sealed compiled query")
 	}

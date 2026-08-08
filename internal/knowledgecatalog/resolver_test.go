@@ -46,6 +46,9 @@ func TestResolverEmptyCatalogRetainsDurableRevisionZero(t *testing.T) {
 	if charges := resolved.StaticCharges(); charges != (ResolutionStaticCharges{}) {
 		t.Fatalf("empty static charges = %#v", charges)
 	}
+	if prelude := resolved.Prelude(); prelude.IsZero() || !prelude.IsEmpty() || prelude.ObjectCount() != 0 {
+		t.Fatalf("empty prelude = zero:%t empty:%t objects:%d", prelude.IsZero(), prelude.IsEmpty(), prelude.ObjectCount())
+	}
 	// Every pointer- or slice-backed summary field is detached.
 	summary.TenantCatalogStateToken[0] ^= 0xff
 	summary.EffectiveAuthorizedIndexes[0] = "mutated"
@@ -85,6 +88,9 @@ func TestResolutionFinalizeRejectsNonemptyAuthorityUntilKO1Prelude(t *testing.T)
 	resolved, err := mustTestResolver(t, store).Resolve(t.Context(), testResolutionScope("main"))
 	if err != nil || resolved.Summary().ExecutableObjects != 1 {
 		t.Fatalf("Resolve(nonempty) = (%#v, %v)", resolved.Summary(), err)
+	}
+	if prelude := resolved.Prelude(); prelude.IsZero() || prelude.IsEmpty() || prelude.ObjectCount() != 1 {
+		t.Fatalf("Resolve(nonempty) prelude = zero:%t empty:%t objects:%d", prelude.IsZero(), prelude.IsEmpty(), prelude.ObjectCount())
 	}
 	compiled := compileResolutionQuery(t, testTenant, []string{"main"}, `index=main`)
 	if snapshot, finalizeErr := resolved.Finalize(compiled); !snapshot.IsZero() ||
