@@ -21,20 +21,44 @@ func (handler *apiHandler) authorizeBrowserAdministrator(
 	response http.ResponseWriter,
 	request *http.Request,
 ) (*http.Request, bool) {
+	authenticatedRequest, principal, authenticated := handler.authenticateBrowser(
+		response,
+		request,
+	)
+	if !authenticated {
+		return request, false
+	}
+	if !principal.IsAdministrator() ||
+		principal.TenantID() != handler.tenantID ||
+		principal.OwnerID() != handler.ownerID {
+		writeAPIError(
+			response,
+			http.StatusForbidden,
+			"administrator access is required",
+		)
+		return request, false
+	}
+	return authenticatedRequest, true
+}
+
+func (handler *apiHandler) authenticateBrowser(
+	response http.ResponseWriter,
+	request *http.Request,
+) (*http.Request, auth.BrowserPrincipal, bool) {
 	token, ok := browserAuthorizationToken(request)
 	if !ok {
 		writeAdministratorUnauthorized(response)
-		return request, false
+		return request, auth.BrowserPrincipal{}, false
 	}
 	defer clear(token)
 
-	if handler == nil || handler.browserAuthenticator == nil {
+	if handler == nil || isNilDependency(handler.browserAuthenticator) {
 		writeAPIError(
 			response,
 			http.StatusServiceUnavailable,
 			"administrator authentication is unavailable",
 		)
-		return request, false
+		return request, auth.BrowserPrincipal{}, false
 	}
 	principal, err := handler.browserAuthenticator.Authenticate(
 		request.Context(),
@@ -58,7 +82,7 @@ func (handler *apiHandler) authorizeBrowserAdministrator(
 				"administrator authentication is unavailable",
 			)
 		}
-		return request, false
+		return request, auth.BrowserPrincipal{}, false
 	}
 	if !principal.Valid() {
 		writeAPIError(
@@ -66,17 +90,7 @@ func (handler *apiHandler) authorizeBrowserAdministrator(
 			http.StatusServiceUnavailable,
 			"administrator authentication is unavailable",
 		)
-		return request, false
-	}
-	if !principal.IsAdministrator() ||
-		principal.TenantID() != handler.tenantID ||
-		principal.OwnerID() != handler.ownerID {
-		writeAPIError(
-			response,
-			http.StatusForbidden,
-			"administrator access is required",
-		)
-		return request, false
+		return request, auth.BrowserPrincipal{}, false
 	}
 
 	auditContext, err := audit.WithActor(request.Context(), audit.Actor{
@@ -90,22 +104,22 @@ func (handler *apiHandler) authorizeBrowserAdministrator(
 			http.StatusServiceUnavailable,
 			"administrator authentication is unavailable",
 		)
-		return request, false
+		return request, auth.BrowserPrincipal{}, false
 	}
 	ctx := context.WithValue(
 		auditContext,
 		browserPrincipalContextKey{},
 		principal,
 	)
-	authorizedRequest := request.Clone(ctx)
+	authenticatedRequest := request.Clone(ctx)
 	// Route middleware and handlers consume the detached principal, never the
 	// reusable credential.
-	for name := range authorizedRequest.Header {
+	for name := range authenticatedRequest.Header {
 		if strings.EqualFold(name, "Authorization") {
-			delete(authorizedRequest.Header, name)
+			delete(authenticatedRequest.Header, name)
 		}
 	}
-	return authorizedRequest, true
+	return authenticatedRequest, principal, true
 }
 
 func browserAuthorizationToken(request *http.Request) ([]byte, bool) {

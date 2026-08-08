@@ -426,6 +426,13 @@ type Config struct {
 	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
+	// Knowledge-management dependencies are accepted and validated as one
+	// complete unit, but their routes remain deliberately unregistered until
+	// the Tier-1 runtime vertical is ready for capability advertisement.
+	KnowledgeCatalog           KnowledgeCatalog
+	KnowledgeWriter            KnowledgeWriter
+	KnowledgeApps              KnowledgeAppCatalog
+	KnowledgeAttempts          KnowledgeAttemptJournal
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
 	Exports                    Exports
@@ -471,6 +478,10 @@ type apiHandler struct {
 	collectorAdmin             CollectorAdministration
 	appAdmin                   AppAdministration
 	appCatalog                 AppCatalog
+	knowledgeCatalog           KnowledgeCatalog
+	knowledgeWriter            KnowledgeWriter
+	knowledgeApps              KnowledgeAppCatalog
+	knowledgeAttempts          KnowledgeAttemptJournal
 	savedSearches              SavedSearches
 	searchHistory              SearchHistory
 	exports                    Exports
@@ -497,6 +508,7 @@ type apiHandler struct {
 	now                        func() time.Time
 	requestGate                chan struct{}
 	serializationGate          chan struct{}
+	knowledgeAttemptGate       chan struct{}
 	downloadGate               chan struct{}
 	adminCursorKey             [32]byte
 	appCursorKey               []byte
@@ -600,6 +612,38 @@ func NewHandler(config Config) (*Handler, error) {
 			"create server handler: live app catalog and static bootstrap apps cannot both be configured",
 		)
 	}
+	knowledgeCatalog := config.KnowledgeCatalog
+	if isNilDependency(knowledgeCatalog) {
+		knowledgeCatalog = nil
+	}
+	knowledgeWriter := config.KnowledgeWriter
+	if isNilDependency(knowledgeWriter) {
+		knowledgeWriter = nil
+	}
+	knowledgeApps := config.KnowledgeApps
+	if isNilDependency(knowledgeApps) {
+		knowledgeApps = nil
+	}
+	knowledgeAttempts := config.KnowledgeAttempts
+	if isNilDependency(knowledgeAttempts) {
+		knowledgeAttempts = nil
+	}
+	configuredKnowledgeDependencies := 0
+	for _, configured := range []bool{
+		knowledgeCatalog != nil,
+		knowledgeWriter != nil,
+		knowledgeApps != nil,
+		knowledgeAttempts != nil,
+	} {
+		if configured {
+			configuredKnowledgeDependencies++
+		}
+	}
+	if configuredKnowledgeDependencies != 0 && configuredKnowledgeDependencies != 4 {
+		return nil, errors.New(
+			"create server handler: knowledge management dependencies must be configured together",
+		)
+	}
 	browserAuthenticator := config.BrowserAuthenticator
 	if isNilDependency(browserAuthenticator) {
 		browserAuthenticator = nil
@@ -616,6 +660,7 @@ func NewHandler(config Config) (*Handler, error) {
 		searchAttemptAuditEvents != nil ||
 		collectorAdmin != nil ||
 		appAdmin != nil ||
+		knowledgeCatalog != nil ||
 		inspectionService != nil) &&
 		browserAuthenticator == nil {
 		return nil, errors.New(
@@ -852,6 +897,10 @@ func NewHandler(config Config) (*Handler, error) {
 		collectorAdmin:             collectorAdmin,
 		appAdmin:                   appAdmin,
 		appCatalog:                 appCatalog,
+		knowledgeCatalog:           knowledgeCatalog,
+		knowledgeWriter:            knowledgeWriter,
+		knowledgeApps:              knowledgeApps,
+		knowledgeAttempts:          knowledgeAttempts,
 		savedSearches:              config.SavedSearches,
 		searchHistory:              searchHistoryService,
 		exports:                    exportService,
@@ -877,6 +926,7 @@ func NewHandler(config Config) (*Handler, error) {
 		now:                        now,
 		requestGate:                make(chan struct{}, concurrentRequests),
 		serializationGate:          make(chan struct{}, concurrentResponses),
+		knowledgeAttemptGate:       make(chan struct{}, concurrentRequests),
 		downloadGate:               make(chan struct{}, concurrentDownloads),
 		adminCursorKey:             adminCursorKey,
 		appCursorKey:               appCursorKey,
