@@ -442,16 +442,22 @@ marshaling so repeated empty submessages cannot amplify the request byte limit.
 `KnowledgeObjectDefinition` field numbers 13 through 31 are permanently
 allocated exclusively to future length-delimited `body` oneof alternatives.
 Future top-level metadata fields use 32 or greater and cannot use protobuf's
-compiler-reserved 19000 through 19999 range. An older reader accepts exactly
-one canonical unknown body field in 13 through 31 on a draft, disabled, or
-deleted immutable version; it may also retain canonically ordered top-level
-future metadata fields. Repeated occurrences of one future metadata field
-number are preserved because an older reader cannot know whether that future
-field is singular, repeated, or a compatibility-preserving sequence; their
-wire tags and values must still be minimal and their field numbers
-nondecreasing. It rejects unknown fields nested inside known metadata,
-non-minimal wire encodings, out-of-order fields, multiple future bodies, and
-every unknown body on an active version.
+compiler-reserved 19000 through 19999 range. Every future ordinary metadata
+field must be declared in ascending field-number order before the `body` oneof.
+That declaration rule aligns generators that emit ordinary fields before
+oneofs with generators that emit source declaration order. The canonical
+unknown-field suffix therefore contains future metadata fields first, with
+nondecreasing field numbers, followed by exactly one length-delimited future
+body field in 13 through 31 as its final field.
+
+An older reader accepts that suffix on a draft, disabled, or deleted immutable
+version. Repeated occurrences of one future metadata field number are preserved
+because an older reader cannot know whether that future field is singular,
+repeated, or a compatibility-preserving sequence; their wire tags and values
+must still be minimal. It rejects unknown fields nested inside known metadata,
+non-minimal wire encodings, descending metadata numbers, metadata after the
+future body, multiple future bodies, and every unknown body on an active
+version.
 
 An older reader cannot derive an object type from an opaque body. For one of
 these inactive versions only, it may return the sealed registry/version

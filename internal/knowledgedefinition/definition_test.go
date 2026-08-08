@@ -11,6 +11,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 func TestNormalizeProducesDetachedDeterministicCanonicalAuthorities(t *testing.T) {
@@ -463,14 +464,16 @@ func TestDecodeCanonicalVerifiesDigestUnknownsAndExactBytes(t *testing.T) {
 func TestDecodeCanonicalFutureBodyPreservesCanonicalInactiveDefinition(t *testing.T) {
 	t.Parallel()
 
-	canonical := futureDefinitionBytes(t, validBaseDefinition(), 13, []byte{0x08, 0x01})
-	canonical = protowire.AppendVarint(
-		protowire.AppendTag(canonical, 32, protowire.VarintType),
+	futureMetadata := protowire.AppendVarint(
+		protowire.AppendTag(nil, 32, protowire.VarintType),
 		7,
 	)
-	canonical = protowire.AppendBytes(
-		protowire.AppendTag(canonical, 33, protowire.BytesType),
+	futureMetadata = protowire.AppendBytes(
+		protowire.AppendTag(futureMetadata, 33, protowire.BytesType),
 		[]byte("future metadata"),
+	)
+	canonical := futureDefinitionBytesWithMetadata(
+		t, validBaseDefinition(), futureMetadata, 13, []byte{0x08, 0x01},
 	)
 	digest := sha256.Sum256(canonical)
 	decoded, err := DecodeCanonicalInactiveFutureBody(
@@ -487,12 +490,7 @@ func TestDecodeCanonicalFutureBodyPreservesCanonicalInactiveDefinition(t *testin
 		decoded.Description != nil || decoded.Selector == nil || decoded.Selector.Stats().Patterns != 1 {
 		t.Fatalf("decoded future authorities = %#v", decoded)
 	}
-	wantUnknown := canonicalFutureBodyField(13, []byte{0x08, 0x01})
-	wantUnknown = protowire.AppendVarint(protowire.AppendTag(wantUnknown, 32, protowire.VarintType), 7)
-	wantUnknown = protowire.AppendBytes(
-		protowire.AppendTag(wantUnknown, 33, protowire.BytesType),
-		[]byte("future metadata"),
-	)
+	wantUnknown := append(bytes.Clone(futureMetadata), canonicalFutureBodyField(13, []byte{0x08, 0x01})...)
 	if decoded.Definition.GetBody() != nil ||
 		!bytes.Equal(decoded.Definition.ProtoReflect().GetUnknown(), wantUnknown) {
 		t.Fatalf("future body was not retained exactly: %x", decoded.Definition.ProtoReflect().GetUnknown())
@@ -541,10 +539,25 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 	reservedUnknown := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(9, []byte{1})...)
 	twoBodies := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(13, []byte{1})...)
 	twoBodies = append(twoBodies, canonicalFutureBodyField(14, []byte{2})...)
-	compilerReserved := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(19_000, []byte{1})...)
-	outOfOrder := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(13, []byte{1})...)
-	outOfOrder = protowire.AppendVarint(protowire.AppendTag(outOfOrder, 33, protowire.VarintType), 1)
-	outOfOrder = protowire.AppendVarint(protowire.AppendTag(outOfOrder, 32, protowire.VarintType), 1)
+	compilerReservedMetadata := protowire.AppendBytes(
+		protowire.AppendTag(nil, 19_000, protowire.BytesType), []byte{1},
+	)
+	compilerReserved := futureDefinitionBytesWithMetadata(
+		t, validBaseDefinition(), compilerReservedMetadata, 13, []byte{1},
+	)
+	descendingMetadataFields := protowire.AppendVarint(
+		protowire.AppendTag(nil, 33, protowire.VarintType), 1,
+	)
+	descendingMetadataFields = protowire.AppendVarint(
+		protowire.AppendTag(descendingMetadataFields, 32, protowire.VarintType), 1,
+	)
+	descendingMetadata := futureDefinitionBytesWithMetadata(
+		t, validBaseDefinition(), descendingMetadataFields, 13, []byte{1},
+	)
+	metadataAfterBody := append(bytes.Clone(metadataOnly), canonicalFutureBodyField(13, []byte{1})...)
+	metadataAfterBody = protowire.AppendVarint(
+		protowire.AppendTag(metadataAfterBody, 32, protowire.VarintType), 1,
+	)
 	overlongTag := append(bytes.Clone(metadataOnly), 0xea, 0x00, 0x01, 0x01)
 	overlongLength := append(bytes.Clone(metadataOnly), 0x6a, 0x81, 0x00, 0x01)
 	knownAndFuture := append(bytes.Clone(knownNormalized.Bytes), canonicalFutureBodyField(13, []byte{1})...)
@@ -585,7 +598,8 @@ func TestDecodeCanonicalFutureBodyRejectsAmbiguousOrNoncanonicalShapes(t *testin
 		{name: "reserved field number", data: reservedUnknown, err: ErrUnknownFutureBody},
 		{name: "two future bodies", data: twoBodies, err: ErrUnknownFutureBody},
 		{name: "compiler-reserved field", data: compilerReserved, err: ErrUnknownFutureBody},
-		{name: "out-of-order metadata", data: outOfOrder, err: ErrUnknownFutureBody},
+		{name: "descending metadata", data: descendingMetadata, err: ErrUnknownFutureBody},
+		{name: "metadata after body", data: metadataAfterBody, err: ErrUnknownFutureBody},
 		{name: "overlong tag", data: overlongTag, err: ErrNonCanonical},
 		{name: "overlong length", data: overlongLength, err: ErrUnknownFutureBody},
 		{name: "known and future bodies", data: knownAndFuture, err: ErrUnknownFutureBody},
@@ -673,10 +687,23 @@ func TestKnowledgeDefinitionDescriptorPinsFutureBodyNumberNamespace(t *testing.T
 		t.Fatal("KnowledgeObjectDefinition.body oneof is missing or synthetic")
 	}
 	fields := descriptor.Fields()
+	bodyDeclarationSeen := false
+	previousMetadataNumber := protoreflect.FieldNumber(0)
 	for index := 0; index < fields.Len(); index++ {
 		field := fields.Get(index)
 		number := int(field.Number())
 		inBody := field.ContainingOneof() == body
+		if inBody {
+			bodyDeclarationSeen = true
+		} else {
+			if bodyDeclarationSeen {
+				t.Errorf("ordinary metadata field %s (%d) is declared after the body oneof", field.Name(), number)
+			}
+			if field.Number() < previousMetadataNumber {
+				t.Errorf("ordinary metadata field %s (%d) is not declared in ascending field-number order", field.Name(), number)
+			}
+			previousMetadataNumber = field.Number()
+		}
 		switch {
 		case number <= 5:
 			if inBody {
@@ -784,11 +811,23 @@ func futureDefinitionBytes(
 	payload []byte,
 ) []byte {
 	t.Helper()
+	return futureDefinitionBytesWithMetadata(t, definition, nil, field, payload)
+}
+
+func futureDefinitionBytesWithMetadata(
+	t *testing.T,
+	definition *opensplunkv1.KnowledgeObjectDefinition,
+	futureMetadata []byte,
+	field protowire.Number,
+	payload []byte,
+) []byte {
+	t.Helper()
 	known, err := (proto.MarshalOptions{Deterministic: true}).Marshal(definition)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return append(known, canonicalFutureBodyField(field, payload)...)
+	withMetadata := append(known, futureMetadata...)
+	return append(withMetadata, canonicalFutureBodyField(field, payload)...)
 }
 
 func canonicalFutureBodyField(field protowire.Number, payload []byte) []byte {

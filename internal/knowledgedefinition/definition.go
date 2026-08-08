@@ -731,28 +731,33 @@ func validateFutureBodyUnknown(raw []byte) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("%w: body field is absent", ErrUnknownFutureBody)
 	}
-	bodyCount := 0
-	previousNumber := protowire.Number(0)
+	bodySeen := false
+	previousMetadataNumber := protowire.Number(0)
 	for len(raw) != 0 {
 		number, wireType, tagBytes := protowire.ConsumeTag(raw)
 		if tagBytes < 0 || number < 13 || number >= 19_000 && number <= 19_999 {
 			return fmt.Errorf("%w: top-level unknown field number is not forward-compatible", ErrUnknownFutureBody)
 		}
 		canonicalTag := protowire.AppendTag(nil, number, wireType)
-		if !bytes.Equal(raw[:tagBytes], canonicalTag) || number < previousNumber {
-			return fmt.Errorf("%w: top-level unknown field order or tag is not canonical", ErrUnknownFutureBody)
+		if !bytes.Equal(raw[:tagBytes], canonicalTag) {
+			return fmt.Errorf("%w: top-level unknown field tag is not canonical", ErrUnknownFutureBody)
 		}
-		previousNumber = number
 		raw = raw[tagBytes:]
 
-		if number <= 31 {
+		switch {
+		case number >= 32:
+			if bodySeen || number < previousMetadataNumber {
+				return fmt.Errorf("%w: future metadata order is not canonical", ErrUnknownFutureBody)
+			}
+			previousMetadataNumber = number
+		default:
 			if wireType != protowire.BytesType {
 				return fmt.Errorf("%w: future body is not a message field", ErrUnknownFutureBody)
 			}
-			bodyCount++
-			if bodyCount > 1 {
+			if bodySeen {
 				return fmt.Errorf("%w: multiple future bodies are present", ErrUnknownFutureBody)
 			}
+			bodySeen = true
 		}
 
 		valueBytes, canonical := canonicalUnknownValue(raw, wireType)
@@ -761,7 +766,7 @@ func validateFutureBodyUnknown(raw []byte) error {
 		}
 		raw = raw[valueBytes:]
 	}
-	if bodyCount != 1 {
+	if !bodySeen {
 		return fmt.Errorf("%w: body field is absent", ErrUnknownFutureBody)
 	}
 	return nil

@@ -131,14 +131,16 @@ func TestInactiveFutureBodyAcceptsAllocationEdgesAndAllMetadataWireKinds(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			unknown := protowire.AppendBytes(protowire.AppendTag(nil, bodyNumber, protowire.BytesType), []byte{0x08, 0x96, 0x01})
-			unknown = protowire.AppendVarint(protowire.AppendTag(unknown, 32, protowire.VarintType), ^uint64(0))
+			unknown := protowire.AppendVarint(protowire.AppendTag(nil, 32, protowire.VarintType), ^uint64(0))
 			unknown = protowire.AppendFixed64(protowire.AppendTag(unknown, 33, protowire.Fixed64Type), 0xfeedfacecafebeef)
 			unknown = protowire.AppendBytes(protowire.AppendTag(unknown, 34, protowire.BytesType), []byte("future metadata"))
 			unknown = protowire.AppendFixed32(protowire.AppendTag(unknown, 35, protowire.Fixed32Type), 0xdecafbad)
 			unknown = protowire.AppendBytes(protowire.AppendTag(unknown, 18_999, protowire.BytesType), []byte{})
 			unknown = protowire.AppendVarint(protowire.AppendTag(unknown, 20_000, protowire.VarintType), 0)
 			unknown = protowire.AppendBytes(protowire.AppendTag(unknown, protowire.Number(1<<29-1), protowire.BytesType), []byte{1})
+			unknown = protowire.AppendBytes(
+				protowire.AppendTag(unknown, bodyNumber, protowire.BytesType), []byte{0x08, 0x96, 0x01},
+			)
 			data := append(metadata, unknown...)
 			digest := sha256.Sum256(data)
 
@@ -165,9 +167,13 @@ func TestInactiveFutureBodyAcceptsAllocationEdgesAndAllMetadataWireKinds(t *test
 func TestInactiveFutureBodyPreservesRepeatedFutureMetadataField(t *testing.T) {
 	t.Parallel()
 
-	data := futureDefinitionBytes(t, adversarialFutureMetadata(), 13, []byte{0x08, 0x01})
-	data = protowire.AppendString(protowire.AppendTag(data, 32, protowire.BytesType), "first")
-	data = protowire.AppendString(protowire.AppendTag(data, 32, protowire.BytesType), "second")
+	futureMetadata := protowire.AppendString(protowire.AppendTag(nil, 32, protowire.BytesType), "first")
+	futureMetadata = protowire.AppendString(
+		protowire.AppendTag(futureMetadata, 32, protowire.BytesType), "second",
+	)
+	data := futureDefinitionBytesWithMetadata(
+		t, adversarialFutureMetadata(), futureMetadata, 13, []byte{0x08, 0x01},
+	)
 	digest := sha256.Sum256(data)
 
 	decoded, err := DecodeCanonicalInactiveFutureBody(
@@ -201,13 +207,34 @@ func TestInactiveFutureBodyRejectsEveryAmbiguousWireClass(t *testing.T) {
 		return append(append(bytes.Clone(metadata), protowire.AppendTag(nil, number, wireType)...), value...)
 	}
 	validBody := protowire.AppendBytes(protowire.AppendTag(nil, 13, protowire.BytesType), []byte{1})
-	descendingMetadata := append(bytes.Clone(metadata), validBody...)
-	descendingMetadata = protowire.AppendVarint(
-		protowire.AppendTag(descendingMetadata, 33, protowire.VarintType), 1,
+	metadataThenBody := func(futureMetadata []byte) []byte {
+		data := append(bytes.Clone(metadata), futureMetadata...)
+		return append(data, validBody...)
+	}
+	descendingMetadataFields := protowire.AppendVarint(
+		protowire.AppendTag(nil, 33, protowire.VarintType), 1,
 	)
-	descendingMetadata = protowire.AppendVarint(
-		protowire.AppendTag(descendingMetadata, 32, protowire.VarintType), 1,
+	descendingMetadataFields = protowire.AppendVarint(
+		protowire.AppendTag(descendingMetadataFields, 32, protowire.VarintType), 1,
 	)
+	descendingMetadata := metadataThenBody(descendingMetadataFields)
+	metadataAfterBody := append(bytes.Clone(metadata), validBody...)
+	metadataAfterBody = protowire.AppendVarint(
+		protowire.AppendTag(metadataAfterBody, 32, protowire.VarintType), 1,
+	)
+	compilerReservedLow := metadataThenBody(protowire.AppendVarint(
+		protowire.AppendTag(nil, 19_000, protowire.VarintType), 1,
+	))
+	compilerReservedHigh := metadataThenBody(protowire.AppendVarint(
+		protowire.AppendTag(nil, 19_999, protowire.VarintType), 1,
+	))
+	overlongMetadataVarint := append(bytes.Clone(metadata), protowire.AppendTag(nil, 32, protowire.VarintType)...)
+	overlongMetadataVarint = append(overlongMetadataVarint, 0x81, 0x00)
+	overlongMetadataVarint = append(overlongMetadataVarint, validBody...)
+	truncatedMetadataFixed32 := append(
+		bytes.Clone(metadata), protowire.AppendTag(nil, 32, protowire.Fixed32Type)...,
+	)
+	truncatedMetadataFixed32 = append(truncatedMetadataFixed32, 1, 2, 3)
 	tests := []struct {
 		name string
 		data []byte
@@ -221,14 +248,15 @@ func TestInactiveFutureBodyRejectsEveryAmbiguousWireClass(t *testing.T) {
 		{name: "metadata without body", data: protowire.AppendVarint(protowire.AppendTag(bytes.Clone(metadata), 32, protowire.VarintType), 1), want: ErrUnknownFutureBody},
 		{name: "second same body", data: append(append(bytes.Clone(metadata), validBody...), validBody...), want: ErrUnknownFutureBody},
 		{name: "second distinct body", data: protowire.AppendBytes(append(append(bytes.Clone(metadata), validBody...), protowire.AppendTag(nil, 31, protowire.BytesType)...), []byte{2}), want: ErrUnknownFutureBody},
-		{name: "compiler reserved low", data: protowire.AppendVarint(append(append(bytes.Clone(metadata), validBody...), protowire.AppendTag(nil, 19_000, protowire.VarintType)...), 1), want: ErrUnknownFutureBody},
-		{name: "compiler reserved high", data: protowire.AppendVarint(append(append(bytes.Clone(metadata), validBody...), protowire.AppendTag(nil, 19_999, protowire.VarintType)...), 1), want: ErrUnknownFutureBody},
+		{name: "compiler reserved low", data: compilerReservedLow, want: ErrUnknownFutureBody},
+		{name: "compiler reserved high", data: compilerReservedHigh, want: ErrUnknownFutureBody},
 		{name: "metadata descending", data: descendingMetadata, want: ErrUnknownFutureBody},
+		{name: "metadata after body", data: metadataAfterBody, want: ErrUnknownFutureBody},
 		{name: "overlong body tag", data: append(bytes.Clone(metadata), []byte{0xea, 0x00, 0x01, 0x00}...), want: ErrNonCanonical},
 		{name: "overlong body length", data: append(bytes.Clone(metadata), []byte{0x6a, 0x81, 0x00, 0x00}...), want: ErrUnknownFutureBody},
-		{name: "overlong metadata varint", data: append(append(append(bytes.Clone(metadata), validBody...), protowire.AppendTag(nil, 32, protowire.VarintType)...), []byte{0x81, 0x00}...), want: ErrUnknownFutureBody},
+		{name: "overlong metadata varint", data: overlongMetadataVarint, want: ErrUnknownFutureBody},
 		{name: "truncated body", data: append(bytes.Clone(metadata), []byte{0x6a, 0x02, 0x01}...), want: ErrNonCanonical},
-		{name: "truncated metadata fixed32", data: append(append(append(bytes.Clone(metadata), validBody...), protowire.AppendTag(nil, 32, protowire.Fixed32Type)...), []byte{1, 2, 3}...), want: ErrNonCanonical},
+		{name: "truncated metadata fixed32", data: truncatedMetadataFixed32, want: ErrNonCanonical},
 		{name: "unknown before known metadata", data: append(bytes.Clone(validBody), metadata...), want: ErrNonCanonical},
 	}
 	for _, test := range tests {
@@ -249,8 +277,12 @@ func TestInactiveFutureBodyRejectsEveryAmbiguousWireClass(t *testing.T) {
 func TestInactiveFutureBodyPreservesDetachedKnownAndUnknownMetadata(t *testing.T) {
 	t.Parallel()
 
-	data := futureDefinitionBytes(t, adversarialFutureMetadata(), 17, []byte("opaque-body"))
-	data = protowire.AppendBytes(protowire.AppendTag(data, 32, protowire.BytesType), []byte("opaque-metadata"))
+	futureMetadata := protowire.AppendBytes(
+		protowire.AppendTag(nil, 32, protowire.BytesType), []byte("opaque-metadata"),
+	)
+	data := futureDefinitionBytesWithMetadata(
+		t, adversarialFutureMetadata(), futureMetadata, 17, []byte("opaque-body"),
+	)
 	original := bytes.Clone(data)
 	digest := sha256.Sum256(data)
 	decoded, err := DecodeCanonicalInactiveFutureBody(

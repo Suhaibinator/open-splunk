@@ -73,6 +73,15 @@ requires exact agreement after decoding and reports corruption rather than
 repairing one representation during a request. Definition and snapshot SHA-256
 fields are raw 32-byte digests and must be length-checked.
 
+`KnowledgeObjectDefinition` reserves field numbers 13 through 31 for future
+length-delimited `body` oneof alternatives and numbers 32 or greater for future
+ordinary metadata, excluding protobuf's compiler-reserved range. Future
+ordinary metadata must be declared in ascending field-number order before the
+`body` oneof. Its canonical forward-compatible unknown suffix encodes those
+metadata fields first in nondecreasing order, including same-number repeats,
+then exactly one body field as the final field. This declaration and wire order
+is a cross-language deterministic-encoding and digest contract.
+
 `KnowledgeSnapshot` contains no protobuf maps, floating-point fields, or
 timestamps. Unknown fields at any depth are rejected and cleared before
 digesting. The digest input includes normalized binary-sorted effective

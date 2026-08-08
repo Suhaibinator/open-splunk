@@ -30,9 +30,7 @@ func FuzzInactiveFutureBodyCanonicalWireRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		unknown := protowire.AppendBytes(
-			protowire.AppendTag(nil, bodyNumber, protowire.BytesType), value,
-		)
+		var unknown []byte
 		switch wireChoice % 4 {
 		case 0:
 			unknown = protowire.AppendVarint(
@@ -51,6 +49,9 @@ func FuzzInactiveFutureBodyCanonicalWireRoundTrip(f *testing.F) {
 				protowire.AppendTag(unknown, metadataNumber, protowire.Fixed32Type), uint32(integer),
 			)
 		}
+		unknown = protowire.AppendBytes(
+			protowire.AppendTag(unknown, bodyNumber, protowire.BytesType), value,
+		)
 		data := append(known, unknown...)
 		if len(data) > MaximumCanonicalBytes {
 			t.Skip()

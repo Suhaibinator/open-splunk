@@ -849,12 +849,16 @@ func (x *CalculatedFieldDefinition) GetOverwriteBehavior() KnowledgeOverwriteBeh
 // stage, normalized binary name, and stable object ID; clients cannot author an
 // execution-order override. Field numbers 13 through 31 are allocated
 // exclusively to future length-delimited body oneof alternatives. Future
-// top-level metadata fields must use numbers 32 or greater and must not use the
-// protobuf compiler-reserved range 19000 through 19999. This allocation lets an
-// older server distinguish one unreadable inactive body from future metadata
-// while preserving the complete canonical stored message. For such an inactive
-// opaque body only, an older reader may display the sealed registry object type
-// but cannot infer or execute semantic type authority from this message.
+// ordinary top-level metadata fields must use numbers 32 or greater, must not
+// use the protobuf compiler-reserved range 19000 through 19999, and must be
+// declared in ascending field-number order before the body oneof. This source
+// declaration order is part of the cross-language deterministic wire contract:
+// future metadata is encoded before exactly one future body. This allocation
+// lets an older server distinguish one unreadable inactive body from future
+// metadata while preserving the complete canonical stored message. For such an
+// inactive opaque body only, an older reader may display the sealed registry
+// object type but cannot infer or execute semantic type authority from this
+// message.
 type KnowledgeObjectDefinition struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	AppId        string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
