@@ -726,30 +726,31 @@ func listSearchJob(id string, createdAt time.Time) searchjobs.Job {
 
 func listItem(job searchjobs.Job) searchjobs.JobListItem {
 	item := searchjobs.JobListItem{
-		ID:               job.ID,
-		Version:          job.Version,
-		OwnerID:          job.OwnerID,
-		TenantID:         job.TenantID,
-		SPL:              job.SPL,
-		NormalizedSPL:    job.NormalizedSPL,
-		RequestedIndexes: slices.Clone(job.RequestedIndexes),
-		EffectiveIndexes: slices.Clone(job.EffectiveIndexes),
-		TimeRange:        job.TimeRange,
-		AppID:            job.AppID,
-		Source:           job.Source,
-		Earliest:         job.Earliest,
-		Latest:           job.Latest,
-		IndexTimeCutoff:  job.IndexTimeCutoff,
-		State:            job.State,
-		ScannedRows:      job.ScannedRows,
-		ScannedBytes:     job.ScannedBytes,
-		RowCount:         job.RowCount,
-		ResultBytes:      job.ResultBytes,
-		ResultsTruncated: job.ResultsTruncated,
-		CreatedAt:        job.CreatedAt,
-		StartedAt:        job.StartedAt,
-		FinishedAt:       job.FinishedAt,
-		ExpiresAt:        job.ExpiresAt,
+		ID:                job.ID,
+		Version:           job.Version,
+		OwnerID:           job.OwnerID,
+		TenantID:          job.TenantID,
+		SPL:               job.SPL,
+		NormalizedSPL:     job.NormalizedSPL,
+		RequestedIndexes:  slices.Clone(job.RequestedIndexes),
+		EffectiveIndexes:  slices.Clone(job.EffectiveIndexes),
+		TimeRange:         job.TimeRange,
+		AppID:             job.AppID,
+		Source:            job.Source,
+		Earliest:          job.Earliest,
+		Latest:            job.Latest,
+		IndexTimeCutoff:   job.IndexTimeCutoff,
+		State:             job.State,
+		ScannedRows:       job.ScannedRows,
+		ScannedBytes:      job.ScannedBytes,
+		RowCount:          job.RowCount,
+		ResultBytes:       job.ResultBytes,
+		ResultsTruncated:  job.ResultsTruncated,
+		KnowledgeSnapshot: cloneKnowledgeSnapshotSummaryForListTest(job.KnowledgeSnapshot),
+		CreatedAt:         job.CreatedAt,
+		StartedAt:         job.StartedAt,
+		FinishedAt:        job.FinishedAt,
+		ExpiresAt:         job.ExpiresAt,
 	}
 	if job.Failure != nil {
 		item.Failure = &searchjobs.JobListFailure{
@@ -759,6 +760,15 @@ func listItem(job searchjobs.Job) searchjobs.JobListItem {
 		}
 	}
 	return item
+}
+
+func cloneKnowledgeSnapshotSummaryForListTest(
+	summary *opensplunkv1.KnowledgeSnapshotSummary,
+) *opensplunkv1.KnowledgeSnapshotSummary {
+	if summary == nil {
+		return nil
+	}
+	return proto.Clone(summary).(*opensplunkv1.KnowledgeSnapshotSummary)
 }
 
 func listPage(jobs ...searchjobs.Job) searchjobs.JobListPage {

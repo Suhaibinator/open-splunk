@@ -150,6 +150,12 @@ func searchInspectionResultToProto(
 	if err != nil {
 		return nil, err
 	}
+	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(
+		result.KnowledgeSnapshot,
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	stages := make(
 		[]*opensplunkv1.SearchInspectionLogicalStage,
@@ -209,6 +215,7 @@ func searchInspectionResultToProto(
 		GeneratedSql:      strings.Clone(result.GeneratedSQL),
 		ExplainText:       strings.Clone(result.ExplainText),
 		DiagnosticQueryId: strings.Clone(result.DiagnosticQueryID),
+		KnowledgeSnapshot: knowledgeSnapshot,
 	}, nil
 }
 

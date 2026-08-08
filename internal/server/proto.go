@@ -17,6 +17,10 @@ import (
 )
 
 func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJob, error) {
+	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
+	if err != nil {
+		return nil, err
+	}
 	resultShape := resultShapeForSPL(job.SPL)
 	earliest, err := validTimestamp(job.Earliest)
 	if err != nil {
@@ -69,12 +73,13 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 			Latest:   latest,
 			Timezone: timezone,
 		},
-		IndexTimeCutoff:  indexTimeCutoff,
-		State:            searchStateToProto(job.State),
-		ResultKind:       resultShape.Kind,
-		ResultsTruncated: job.ResultsTruncated,
-		Progress:         progress,
-		CreatedAt:        createdAt,
+		IndexTimeCutoff:   indexTimeCutoff,
+		State:             searchStateToProto(job.State),
+		ResultKind:        resultShape.Kind,
+		ResultsTruncated:  job.ResultsTruncated,
+		Progress:          progress,
+		CreatedAt:         createdAt,
+		KnowledgeSnapshot: knowledgeSnapshot,
 	}
 	if job.Schema != nil {
 		result.ResultSchema, err = schemaToProto(job.ID, *job.Schema, resultShape)

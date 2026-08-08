@@ -67,6 +67,7 @@ func TestSearchAttemptAuditProtoContractIsNarrow(t *testing.T) {
 		{name: "actor_role", number: 5},
 		{name: "owner_id", number: 6},
 		{name: "search_job_id", number: 7},
+		{name: "knowledge_snapshot", number: 8},
 	})
 	if got := event.Fields().ByName("actor_kind").Enum().FullName(); got != "open_splunk.v1.AuditActorKind" {
 		t.Fatalf("actor_kind enum = %q", got)
@@ -97,6 +98,53 @@ func TestSearchAttemptAuditProtoContractIsNarrow(t *testing.T) {
 	})
 	if got := int32(opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT); got != 14 {
 		t.Fatalf("search attempt audit feature number = %d, want 14", got)
+	}
+}
+
+func TestSearchAttemptAuditProjectionRetainsDetachedSnapshotReference(t *testing.T) {
+	t.Parallel()
+
+	reference := &opensplunkv1.KnowledgeSnapshotRef{
+		SnapshotSha256:               bytes.Repeat([]byte{0x21}, 32),
+		TenantCatalogRevision:        7,
+		TenantCatalogStateToken:      bytes.Repeat([]byte{0x42}, 32),
+		ObjectCount:                  2,
+		CompilerCompatibilityVersion: "0.1",
+	}
+	event := searchaudit.Event{
+		Sequence:   1,
+		TenantID:   browserGateTenantID,
+		OccurredAt: time.Date(2026, time.August, 8, 1, 2, 3, 456000000, time.UTC),
+		Actor: audit.Actor{
+			Kind: audit.ActorKindBrowser,
+			ID:   browserGateOwnerID,
+			Role: audit.ActorRoleAdministrator,
+		},
+		OwnerID:           browserGateOwnerID,
+		SearchJobID:       "search-audit-snapshot-job",
+		KnowledgeSnapshot: reference,
+	}
+	converted, err := searchAttemptAuditEventToProto(event, browserGateTenantID)
+	if err != nil {
+		t.Fatalf("searchAttemptAuditEventToProto(): %v", err)
+	}
+	if converted.GetKnowledgeSnapshot() == reference ||
+		!proto.Equal(converted.GetKnowledgeSnapshot(), reference) {
+		t.Fatalf("knowledge snapshot projection = %#v", converted.GetKnowledgeSnapshot())
+	}
+	wantDigest := bytes.Clone(converted.GetKnowledgeSnapshot().GetSnapshotSha256())
+	reference.SnapshotSha256[0] ^= 0xff
+	reference.TenantCatalogStateToken[0] ^= 0xff
+	if !bytes.Equal(converted.GetKnowledgeSnapshot().GetSnapshotSha256(), wantDigest) {
+		t.Fatal("projected knowledge snapshot aliases the dependency event")
+	}
+
+	invalid := event
+	invalid.KnowledgeSnapshot = &opensplunkv1.KnowledgeSnapshotRef{
+		SnapshotSha256: []byte("short"),
+	}
+	if got, invalidErr := searchAttemptAuditEventToProto(invalid, browserGateTenantID); invalidErr == nil || got != nil {
+		t.Fatalf("invalid snapshot projection = (%#v, %v)", got, invalidErr)
 	}
 }
 

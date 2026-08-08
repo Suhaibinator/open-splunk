@@ -80,7 +80,7 @@ func TestCreateSearchHistoryRerunUsesTrustedSnapshotAndFreshAdmission(t *testing
 			}}
 			apps := activeHistoryRerunAppCatalog(appID)
 			indexes := activeHistoryRerunIndexCatalog("main")
-			jobs := &fakeSearchJobs{createJob: completeJob("history-rerun-new")}
+			jobs := &fakeSearchJobs{createJob: completeJobForApp("history-rerun-new", appID)}
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       indexes,
@@ -223,7 +223,7 @@ func TestCreateSearchHistoryRerunUsesHistoryIDBoundary(t *testing.T) {
 			}
 			return historyRerunEntry(historyID, opensplunkv1.SearchJobState_SEARCH_JOB_STATE_COMPLETED), nil
 		}}
-		jobs := &fakeSearchJobs{createJob: completeJob("history-rerun-max-id")}
+		jobs := &fakeSearchJobs{createJob: completeJobForApp("history-rerun-max-id", "app-main")}
 		handler := newTestHandler(t, Config{
 			SearchJobs:    jobs,
 			Indexes:       activeHistoryRerunIndexCatalog("main"),
@@ -341,7 +341,7 @@ func TestCreateSearchHistoryRerunUsesEffectiveScopeWithDefinitionFallback(t *tes
 				return entry, nil
 			}}
 			indexes := activeHistoryRerunIndexCatalog(test.wantScope...)
-			jobs := &fakeSearchJobs{createJob: completeJob("history-rerun-scope")}
+			jobs := &fakeSearchJobs{createJob: completeJobForApp("history-rerun-scope", "app-main")}
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       indexes,

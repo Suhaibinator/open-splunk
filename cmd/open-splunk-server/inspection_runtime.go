@@ -8,7 +8,6 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
-	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -20,10 +19,6 @@ type runtimeInspectionSearches interface {
 		searchjobs.AccessScope,
 		string,
 	) (searchjobs.ExecutionSnapshot, error)
-}
-
-type runtimeInspectionCompiler interface {
-	Compile(*plan.Query) (clickhouse.CompiledQuery, error)
 }
 
 type runtimeInspectionExplainer interface {
@@ -41,15 +36,15 @@ type runtimeInspectionExplainerFactory func(
 
 type runtimeSearchInspectionConfig struct {
 	Searches          runtimeInspectionSearches
-	Compiler          runtimeInspectionCompiler
+	Compiler          clickhouse.Compiler
 	ClickHouseOptions *clickhousedriver.Options
 	NewExplainer      runtimeInspectionExplainerFactory
 }
 
 // runtimeSearchInspection owns the administrator-only inspection service and
-// its two isolated ClickHouse EXPLAIN lanes. The search manager and compiler
-// are borrowed. Close must therefore run after HTTP request drain and before
-// either borrowed dependency is released.
+// its two isolated ClickHouse EXPLAIN lanes. The search manager is borrowed;
+// the concrete compiler is copied into the service. Close must therefore run
+// after HTTP request drain and before the search manager is released.
 type runtimeSearchInspection struct {
 	service   *searchinspection.Service
 	explainer runtimeInspectionExplainer
@@ -65,11 +60,6 @@ func newRuntimeSearchInspection(
 		return nil, errors.New(
 			"compose search inspection runtime: completed search snapshots " +
 				"are required",
-		)
-	}
-	if nilRuntimeDependency(config.Compiler) {
-		return nil, errors.New(
-			"compose search inspection runtime: query compiler is required",
 		)
 	}
 	if config.ClickHouseOptions == nil {

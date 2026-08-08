@@ -14,7 +14,7 @@ import (
 
 func TestValidateResultAcceptsServiceOutput(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches: &inspectionSearches{
 			snapshots: []searchjobs.ExecutionSnapshot{snapshot},
 		},

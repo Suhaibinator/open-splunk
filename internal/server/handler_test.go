@@ -872,7 +872,7 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 		}
 		return savedSearchRecord(savedID, 1, ownerID, appID, "Errors"), nil
 	}}
-	jobs := &fakeSearchJobs{createJob: completeJob("job-saved")}
+	jobs := &fakeSearchJobs{createJob: completeJobForApp("job-saved", appID)}
 	handler := newTestHandler(t, Config{
 		SearchJobs: jobs,
 		Indexes: fakeIndexCatalog{indexes: []control.Index{{
@@ -1597,4 +1597,10 @@ func completeJob(id string) searchjobs.Job {
 		FinishedAt:       testNow.Add(-time.Second),
 		ExpiresAt:        testNow.Add(15 * time.Minute),
 	}
+}
+
+func completeJobForApp(id, appID string) searchjobs.Job {
+	job := completeJob(id)
+	job.AppID = appID
+	return job
 }

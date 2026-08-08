@@ -11,12 +11,14 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
@@ -61,6 +63,10 @@ type Result struct {
 	GeneratedSQL      string
 	ExplainText       string
 	DiagnosticQueryID string
+	// KnowledgeSnapshot is the bounded, definition-free inventory for the
+	// exact retained execution authority. It is absent on the legacy path.
+	// Browser projections must apply current-policy redaction before release.
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
 }
 
 type completedSearches interface {
@@ -83,11 +89,13 @@ type queryExplainer interface {
 }
 
 // Config controls inspection admission and execution. Zero bounds select the
-// fixed conservative defaults. Dependencies are borrowed: callers must stop
-// this service before closing a shared Manager or Explainer.
+// fixed conservative defaults. Searches and Explainer are borrowed: callers
+// must stop this service before closing either shared dependency.
 type Config struct {
-	Searches  completedSearches
-	Compiler  queryCompiler
+	Searches completedSearches
+	// Compiler is concrete so callers cannot substitute an implementation
+	// that returns a validly sealed query for a different same-scope plan.
+	Compiler  clickhouse.Compiler
 	Explainer queryExplainer
 
 	MaxConcurrent int
@@ -126,57 +134,78 @@ type operationToken struct {
 // New validates every dependency and bound before constructing an idle
 // internal inspection service.
 func New(config Config) (*Service, error) {
-	if nilInterface(config.Searches) {
+	return newService(
+		config.Searches,
+		config.Compiler,
+		config.Explainer,
+		config.MaxConcurrent,
+		config.MaxRuntime,
+	)
+}
+
+// newService is the package-internal dependency seam used to exercise
+// adversarial compiler behavior. Shipping callers enter through New, whose
+// concrete clickhouse.Compiler field prevents compiler substitution.
+func newService(
+	searches completedSearches,
+	compiler queryCompiler,
+	explainer queryExplainer,
+	maxConcurrent int,
+	maxRuntime time.Duration,
+) (*Service, error) {
+	if nilInterface(searches) {
 		return nil, errors.New(
 			"create search inspection service: completed search snapshots are required",
 		)
 	}
-	if nilInterface(config.Compiler) {
+	if nilInterface(compiler) {
 		return nil, errors.New(
 			"create search inspection service: query compiler is required",
 		)
 	}
-	if nilInterface(config.Explainer) {
+	if nilInterface(explainer) {
 		return nil, errors.New(
 			"create search inspection service: query Explainer is required",
 		)
 	}
-	if config.MaxConcurrent < 0 ||
-		config.MaxConcurrent > maximumConcurrentInspections {
+	if maxConcurrent < 0 ||
+		maxConcurrent > maximumConcurrentInspections {
 		return nil, fmt.Errorf(
 			"create search inspection service: concurrent limit must not exceed %d",
 			maximumConcurrentInspections,
 		)
 	}
-	if config.MaxConcurrent == 0 {
-		config.MaxConcurrent = defaultConcurrentInspections
+	if maxConcurrent == 0 {
+		maxConcurrent = defaultConcurrentInspections
 	}
-	if config.MaxRuntime < 0 ||
-		config.MaxRuntime > maximumInspectionRuntime {
+	if maxRuntime < 0 ||
+		maxRuntime > maximumInspectionRuntime {
 		return nil, fmt.Errorf(
 			"create search inspection service: runtime must not exceed %s",
 			maximumInspectionRuntime,
 		)
 	}
-	if config.MaxRuntime == 0 {
-		config.MaxRuntime = defaultInspectionRuntime
+	if maxRuntime == 0 {
+		maxRuntime = defaultInspectionRuntime
 	}
 
 	return &Service{
-		searches:      config.Searches,
-		compiler:      config.Compiler,
-		explainer:     config.Explainer,
-		maxRuntime:    config.MaxRuntime,
-		gate:          make(chan struct{}, config.MaxConcurrent),
+		searches:      searches,
+		compiler:      compiler,
+		explainer:     explainer,
+		maxRuntime:    maxRuntime,
+		gate:          make(chan struct{}, maxConcurrent),
 		activeCancels: make(map[*operationToken]context.CancelFunc),
 		closeDone:     make(chan struct{}),
 	}, nil
 }
 
-// Inspect rebuilds one exact completed execution snapshot, produces a safe
-// detached logical projection, compiles it once, and sends that exact sealed
-// compiler result unchanged to the bounded Explainer. A second authoritative
-// metadata lookup prevents expiry or tombstone cleanup during EXPLAIN from
+// Inspect reads one exact completed execution snapshot and produces a safe
+// detached logical projection. Legacy snapshots preserve the original
+// rebuild-and-compile path. Knowledge-enabled snapshots instead send a clone
+// of the exact compiler-sealed retained execution to the bounded Explainer;
+// they are never recompiled. A second authoritative metadata lookup prevents
+// expiry, tombstone cleanup, or authority replacement during EXPLAIN from
 // publishing stale diagnostics.
 func (service *Service) Inspect(
 	ctx context.Context,
@@ -236,6 +265,10 @@ func (service *Service) Inspect(
 	if err := operationContext.Err(); err != nil {
 		return Result{}, err
 	}
+	retainedKnowledge, err := snapshot.OpenRetainedKnowledgeExecution()
+	if err != nil {
+		return Result{}, ErrInspectionFailed
+	}
 	if !validSnapshotContract(snapshot, normalized) {
 		return Result{}, ErrInspectionFailed
 	}
@@ -262,9 +295,16 @@ func (service *Service) Inspect(
 		return Result{}, err
 	}
 
-	compiled, err := service.compiler.Compile(logical)
-	if err != nil {
-		return Result{}, classifyPlanningError(err)
+	var knowledgeSummary *opensplunkv1.KnowledgeSnapshotSummary
+	var compiled clickhouse.CompiledQuery
+	if retainedKnowledge == nil {
+		compiled, err = service.compiler.Compile(logical)
+		if err != nil {
+			return Result{}, classifyPlanningError(err)
+		}
+	} else {
+		compiled = retainedKnowledge.CompiledQuery
+		knowledgeSummary = retainedKnowledge.KnowledgeSummary
 	}
 	if err := operationContext.Err(); err != nil {
 		return Result{}, err
@@ -273,9 +313,22 @@ func (service *Service) Inspect(
 		return Result{}, ErrInspectionFailed
 	}
 
+	retainedAuthority, ok := compiled.CloneForExecution()
+	if !ok {
+		return Result{}, ErrInspectionFailed
+	}
+	compiledTenant, compiledIndexes, ok := retainedAuthority.ReadScope()
+	if !ok || compiledTenant != snapshot.TenantID ||
+		!slices.Equal(compiledIndexes, snapshot.EffectiveIndexes) {
+		return Result{}, ErrInspectionFailed
+	}
+	explainAuthority, ok := retainedAuthority.CloneForExecution()
+	if !ok {
+		return Result{}, ErrInspectionFailed
+	}
 	explained, err := service.explainer.Explain(
 		operationContext,
-		compiled,
+		explainAuthority,
 	)
 	if err != nil {
 		return Result{}, err
@@ -283,6 +336,13 @@ func (service *Service) Inspect(
 	if err := operationContext.Err(); err != nil {
 		return Result{}, err
 	}
+	// Explain receives CompiledQuery by value, but its slices are reference
+	// values. Recheck the full private execution seal before using any output
+	// so an adversarial dependency cannot mutate a retained clone in place.
+	if !explainAuthority.EqualForExecution(retainedAuthority) {
+		return Result{}, ErrInspectionFailed
+	}
+	compiled = retainedAuthority
 	physical, err := queryexec.ParseExplainPlan(explained)
 	if err != nil {
 		return Result{}, ErrInspectionFailed
@@ -309,6 +369,7 @@ func (service *Service) Inspect(
 		GeneratedSQL:      strings.Clone(compiled.SQL),
 		ExplainText:       strings.Clone(explained.Text),
 		DiagnosticQueryID: strings.Clone(explained.QueryID),
+		KnowledgeSnapshot: knowledgeSummary,
 	}
 	if err := operationContext.Err(); err != nil {
 		return Result{}, err

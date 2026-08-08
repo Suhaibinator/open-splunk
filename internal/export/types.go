@@ -7,7 +7,10 @@ import (
 	"sync"
 	"time"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -286,6 +289,10 @@ type Job struct {
 	StartedAt   time.Time
 	FinishedAt  time.Time
 	ExpiresAt   time.Time
+	// KnowledgeSnapshot is the bounded, definition-free admission provenance
+	// of the source execution. Nil identifies a legacy knowledge-disabled
+	// search. Public transports must apply current-policy redaction.
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
 }
 
 // ListItem carries the access scope alongside one detached export-job
@@ -311,6 +318,9 @@ type ListPage struct {
 func cloneJob(source Job) Job {
 	result := source
 	result.Columns = append([]string(nil), source.Columns...)
+	if source.KnowledgeSnapshot != nil {
+		result.KnowledgeSnapshot, _ = proto.Clone(source.KnowledgeSnapshot).(*opensplunkv1.KnowledgeSnapshotSummary)
+	}
 	if source.Artifact != nil {
 		artifact := *source.Artifact
 		result.Artifact = &artifact
@@ -320,4 +330,23 @@ func cloneJob(source Job) Job {
 		result.Failure = &failure
 	}
 	return result
+}
+
+// knowledgeSnapshotResultLease is package-private so arbitrary ResultSource
+// implementations cannot invent knowledge provenance. ReexecutionSource is
+// the sole producer; legacy and test sources simply omit it.
+type knowledgeSnapshotResultLease interface {
+	knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error)
+}
+
+func admittedKnowledgeSnapshot(lease searchjobs.ResultLease) (*opensplunkv1.KnowledgeSnapshotSummary, error) {
+	provider, ok := lease.(knowledgeSnapshotResultLease)
+	if !ok {
+		return nil, nil
+	}
+	summary, err := provider.knowledgeSnapshotSummary()
+	if err != nil || summary == nil {
+		return summary, err
+	}
+	return knowledgesnapshot.CloneSummary(summary)
 }

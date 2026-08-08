@@ -11,7 +11,6 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
-	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -310,7 +309,7 @@ func TestRuntimeSearchInspectionClosesServiceBeforeExplainer(t *testing.T) {
 	inspection, err := newRuntimeSearchInspection(
 		runtimeSearchInspectionConfig{
 			Searches: &runtimeInspectionSearchesFixture{},
-			Compiler: runtimeInspectionCompilerFixture{},
+			Compiler: clickhouse.Compiler{},
 			ClickHouseOptions: &clickhousedriver.Options{
 				Addr: []string{"127.0.0.1:9000"},
 			},
@@ -365,7 +364,7 @@ func TestRuntimeSearchInspectionCloseCancelsActiveServiceBeforeExplainer(
 	inspection, err := newRuntimeSearchInspection(
 		runtimeSearchInspectionConfig{
 			Searches: searches,
-			Compiler: runtimeInspectionCompilerFixture{},
+			Compiler: clickhouse.Compiler{},
 			ClickHouseOptions: &clickhousedriver.Options{
 				Addr: []string{"127.0.0.1:9000"},
 			},
@@ -464,7 +463,7 @@ func TestRuntimeSearchInspectionRejectsNilExplainerFactoryResult(t *testing.T) {
 			inspection, err := newRuntimeSearchInspection(
 				runtimeSearchInspectionConfig{
 					Searches: &runtimeInspectionSearchesFixture{},
-					Compiler: runtimeInspectionCompilerFixture{},
+					Compiler: clickhouse.Compiler{},
 					ClickHouseOptions: &clickhousedriver.Options{
 						Addr: []string{"127.0.0.1:9000"},
 					},
@@ -538,14 +537,6 @@ func (searches *runtimeBlockingInspectionSearches) isActive() bool {
 	searches.mu.Lock()
 	defer searches.mu.Unlock()
 	return searches.active
-}
-
-type runtimeInspectionCompilerFixture struct{}
-
-func (runtimeInspectionCompilerFixture) Compile(
-	*plan.Query,
-) (clickhouse.CompiledQuery, error) {
-	return clickhouse.CompiledQuery{}, errors.New("unexpected compile")
 }
 
 type runtimeInspectionExplainerFixture struct {

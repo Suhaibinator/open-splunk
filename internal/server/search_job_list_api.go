@@ -98,7 +98,8 @@ func (handler *apiHandler) listSearchJobs(
 			return nil, err
 		}
 		job := searchJobListItemAsJob(item)
-		if !validSearchJobListItem(job, handler.accessScope(), states, appID, textMatcher) {
+		if !handler.validKnowledgeSearchJobProjection(job) ||
+			!validSearchJobListItem(job, handler.accessScope(), states, appID, textMatcher) {
 			return nil, internalError()
 		}
 		if _, exists := seenIDs[job.ID]; exists {
@@ -143,30 +144,31 @@ func (handler *apiHandler) listSearchJobs(
 
 func searchJobListItemAsJob(item searchjobs.JobListItem) searchjobs.Job {
 	result := searchjobs.Job{
-		ID:               item.ID,
-		Version:          item.Version,
-		OwnerID:          item.OwnerID,
-		TenantID:         item.TenantID,
-		SPL:              item.SPL,
-		NormalizedSPL:    item.NormalizedSPL,
-		RequestedIndexes: slices.Clone(item.RequestedIndexes),
-		EffectiveIndexes: slices.Clone(item.EffectiveIndexes),
-		TimeRange:        item.TimeRange,
-		AppID:            item.AppID,
-		Source:           item.Source,
-		Earliest:         item.Earliest,
-		Latest:           item.Latest,
-		IndexTimeCutoff:  item.IndexTimeCutoff,
-		State:            item.State,
-		ScannedRows:      item.ScannedRows,
-		ScannedBytes:     item.ScannedBytes,
-		RowCount:         item.RowCount,
-		ResultBytes:      item.ResultBytes,
-		ResultsTruncated: item.ResultsTruncated,
-		CreatedAt:        item.CreatedAt,
-		StartedAt:        item.StartedAt,
-		FinishedAt:       item.FinishedAt,
-		ExpiresAt:        item.ExpiresAt,
+		ID:                item.ID,
+		Version:           item.Version,
+		OwnerID:           item.OwnerID,
+		TenantID:          item.TenantID,
+		SPL:               item.SPL,
+		NormalizedSPL:     item.NormalizedSPL,
+		RequestedIndexes:  slices.Clone(item.RequestedIndexes),
+		EffectiveIndexes:  slices.Clone(item.EffectiveIndexes),
+		TimeRange:         item.TimeRange,
+		AppID:             item.AppID,
+		Source:            item.Source,
+		Earliest:          item.Earliest,
+		Latest:            item.Latest,
+		IndexTimeCutoff:   item.IndexTimeCutoff,
+		State:             item.State,
+		ScannedRows:       item.ScannedRows,
+		ScannedBytes:      item.ScannedBytes,
+		RowCount:          item.RowCount,
+		ResultBytes:       item.ResultBytes,
+		ResultsTruncated:  item.ResultsTruncated,
+		KnowledgeSnapshot: item.KnowledgeSnapshot,
+		CreatedAt:         item.CreatedAt,
+		StartedAt:         item.StartedAt,
+		FinishedAt:        item.FinishedAt,
+		ExpiresAt:         item.ExpiresAt,
 	}
 	if item.Failure != nil {
 		result.Failure = &searchjobs.Failure{

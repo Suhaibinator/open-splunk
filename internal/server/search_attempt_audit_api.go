@@ -10,6 +10,7 @@ import (
 	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
 	"google.golang.org/protobuf/proto"
 )
@@ -292,14 +293,26 @@ func searchAttemptAuditEventToProto(
 			"search attempt audit service returned an invalid actor",
 		)
 	}
+	var knowledgeSnapshot *opensplunkv1.KnowledgeSnapshotRef
+	if event.KnowledgeSnapshot != nil {
+		knowledgeSnapshot, err = knowledgesnapshot.CloneReference(
+			event.KnowledgeSnapshot,
+		)
+		if err != nil {
+			return nil, errors.New(
+				"search attempt audit service returned an invalid knowledge snapshot",
+			)
+		}
+	}
 	return &opensplunkv1.SearchAttemptAuditEvent{
-		Sequence:    event.Sequence,
-		OccurredAt:  occurredAt,
-		ActorKind:   actorKind,
-		ActorId:     strings.Clone(event.Actor.ID),
-		ActorRole:   actorRole,
-		OwnerId:     strings.Clone(event.OwnerID),
-		SearchJobId: strings.Clone(event.SearchJobID),
+		Sequence:          event.Sequence,
+		OccurredAt:        occurredAt,
+		ActorKind:         actorKind,
+		ActorId:           strings.Clone(event.Actor.ID),
+		ActorRole:         actorRole,
+		OwnerId:           strings.Clone(event.OwnerID),
+		SearchJobId:       strings.Clone(event.SearchJobID),
+		KnowledgeSnapshot: knowledgeSnapshot,
 	}, nil
 }
 

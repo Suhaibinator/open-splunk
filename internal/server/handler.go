@@ -93,6 +93,23 @@ type SearchJobs interface {
 	CancelFor(searchjobs.AccessScope, string) error
 }
 
+// knowledgeSearchAdmission reports whether the configured search service will
+// resolve and seal knowledge for nonempty app-scoped creates. The capability
+// is deliberately separate from public feature advertisement: it exists only
+// so the transport can establish live app authority before handing a fixed
+// process identity to the internal admission boundary.
+type knowledgeSearchAdmission interface {
+	KnowledgeAdmissionEnabled() bool
+}
+
+func knowledgeSearchAdmissionEnabled(jobs SearchJobs) bool {
+	if isNilDependency(jobs) {
+		return false
+	}
+	admission, ok := jobs.(knowledgeSearchAdmission)
+	return ok && !isNilDependency(admission) && admission.KnowledgeAdmissionEnabled()
+}
+
 // IndexCatalog supplies the live index authorization and bootstrap view.
 // control.DB satisfies this interface directly.
 type IndexCatalog interface {
@@ -482,6 +499,7 @@ type apiHandler struct {
 	knowledgeWriter            KnowledgeWriter
 	knowledgeApps              KnowledgeAppCatalog
 	knowledgeAttempts          KnowledgeAttemptJournal
+	knowledgeSearchAdmission   bool
 	savedSearches              SavedSearches
 	searchHistory              SearchHistory
 	exports                    Exports
@@ -603,9 +621,15 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(appAdmin) {
 		appAdmin = nil
 	}
+	knowledgeAdmission := knowledgeSearchAdmissionEnabled(config.SearchJobs)
 	appCatalog := config.AppCatalog
 	if isNilDependency(appCatalog) {
 		appCatalog = nil
+	}
+	if knowledgeAdmission && appCatalog == nil {
+		return nil, errors.New(
+			"create server handler: knowledge-aware search admission requires a live app catalog",
+		)
 	}
 	if appCatalog != nil && len(config.Bootstrap.Apps) != 0 {
 		return nil, errors.New(
@@ -901,6 +925,7 @@ func NewHandler(config Config) (*Handler, error) {
 		knowledgeWriter:            knowledgeWriter,
 		knowledgeApps:              knowledgeApps,
 		knowledgeAttempts:          knowledgeAttempts,
+		knowledgeSearchAdmission:   knowledgeAdmission,
 		savedSearches:              config.SavedSearches,
 		searchHistory:              searchHistoryService,
 		exports:                    exportService,

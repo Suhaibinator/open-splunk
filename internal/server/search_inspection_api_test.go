@@ -19,6 +19,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
@@ -72,19 +73,35 @@ func (service *fakeSearchInspections) lastCall() (
 	return service.access, service.request
 }
 
-type inspectionFixtureSearches struct {
-	snapshot searchjobs.ExecutionSnapshot
+type inspectionFixtureExecutor struct{}
+
+func (inspectionFixtureExecutor) Execute(
+	ctx context.Context,
+	query clickhouse.CompiledQuery,
+	sink searchjobs.ResultSink,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	columns := make([]searchjobs.Column, len(query.OutputFields))
+	for position, field := range query.OutputFields {
+		columns[position] = searchjobs.Column{
+			Name: field,
+			Kind: searchjobs.ValueKindString,
+		}
+	}
+	return sink.SetSchema(searchjobs.Schema{Columns: columns})
 }
 
-func (searches inspectionFixtureSearches) CompletedExecutionSnapshotFor(
+type inspectionFixtureSnapshotter uint64
+
+func (snapshotter inspectionFixtureSnapshotter) VisibilityCutoff(
 	ctx context.Context,
-	_ searchjobs.AccessScope,
-	_ string,
-) (searchjobs.ExecutionSnapshot, error) {
+) (uint64, error) {
 	if err := ctx.Err(); err != nil {
-		return searchjobs.ExecutionSnapshot{}, err
+		return 0, err
 	}
-	return searches.snapshot, nil
+	return uint64(snapshotter), nil
 }
 
 type inspectionFixtureExplainer struct{}
@@ -141,6 +158,7 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 	t.Parallel()
 
 	result := validServerSearchInspectionResult(t)
+	result.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
 	service := &fakeSearchInspections{result: result}
 	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
 	requestMessage := &opensplunkv1.InspectSearchJobRequest{
@@ -177,6 +195,9 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 		"inspection-job",
 		result,
 	)
+	if result.KnowledgeSnapshot.GetObjects()[0].GetAuthorizedObject() == nil {
+		t.Fatal("inspection response projection mutated service-owned knowledge summary")
+	}
 }
 
 func TestSearchInspectionRouteRequiresAuthenticationBeforeAdmission(
@@ -683,6 +704,39 @@ func TestSearchInspectionRejectsMalformedServiceResultAtomically(
 	}
 }
 
+func TestSearchInspectionRejectsInvalidKnowledgeSummaryAtomically(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	result := validServerSearchInspectionResult(t)
+	result.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
+	result.KnowledgeSnapshot.Objects[0].Disclosure = nil
+	service := &fakeSearchInspections{result: result}
+	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
+	response := postAuthenticatedInspection(
+		t,
+		handler,
+		&opensplunkv1.InspectSearchJobRequest{SearchJobId: "inspection-job"},
+	)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	for _, private := range []string{
+		"extract-secret-id",
+		"Secret Extraction",
+		result.DiagnosticQueryID,
+	} {
+		if strings.Contains(response.Body.String(), private) {
+			t.Fatalf("invalid knowledge summary leaked %q", private)
+		}
+	}
+}
+
 func TestSearchInspectionCancellationAfterServiceSuccessIsAtomic(
 	t *testing.T,
 ) {
@@ -1123,24 +1177,70 @@ func validServerSearchInspectionResult(
 ) searchinspection.Result {
 	t.Helper()
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	snapshot := searchjobs.ExecutionSnapshot{
-		ID:       "inspection-job",
-		OwnerID:  browserGateOwnerID,
-		TenantID: browserGateTenantID,
-		SPL: `index=main status=200 | stats count AS events BY host | ` +
-			`sort -events | head 10`,
-		EffectiveIndexes: []string{"main"},
-		Earliest:         now.Add(-2 * time.Hour),
-		Latest:           now.Add(-time.Hour),
-		SearchStart:      now.Add(-30 * time.Minute),
-		SearchTimezone:   "UTC",
-		IndexTimeCutoff:  now.Add(-20 * time.Minute),
-		VisibilityCutoff: 42,
-		FinishedAt:       now.Add(-10 * time.Minute),
-		ExpiresAt:        now.Add(time.Hour),
+	const (
+		jobID  = "inspection-job"
+		source = `index=main status=200 | stats count AS events BY host | ` +
+			`sort -events | head 10`
+	)
+	manager, err := searchjobs.New(searchjobs.Config{
+		Executor:           inspectionFixtureExecutor{},
+		Snapshotter:        inspectionFixtureSnapshotter(42),
+		RetentionTTL:       90 * time.Minute,
+		CleanupInterval:    -1,
+		Now:                func() time.Time { return now },
+		NewID:              func() string { return jobID },
+		CursorKey:          []byte("server-inspection-fixture-cursor-key-at-least-32-bytes"),
+		MaxResultLeases:    1,
+		MaxConcurrentReads: 1,
+	})
+	if err != nil {
+		t.Fatalf("create inspection fixture manager: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close inspection fixture manager: %v", err)
+		}
+	})
+	resolved, err := searchtime.NewAbsoluteRange(
+		now.Add(-2*time.Hour),
+		now.Add(-time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("create inspection fixture time range: %v", err)
+	}
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+		SPL:               source,
+		OwnerID:           browserGateOwnerID,
+		TenantID:          browserGateTenantID,
+		AuthorizedIndexes: []string{"main"},
+		RequestedIndexes:  []string{"main"},
+		TimeRange:         resolved,
+	})
+	if err != nil {
+		t.Fatalf("create inspection fixture job: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		job, getErr := manager.GetFor(searchjobs.AccessScope{
+			TenantID: browserGateTenantID,
+			OwnerID:  browserGateOwnerID,
+		}, created.ID)
+		if getErr != nil {
+			t.Fatalf("read inspection fixture job: %v", getErr)
+		}
+		if job.State.Terminal() {
+			if job.State != searchjobs.StateCompleted {
+				t.Fatalf("inspection fixture job state = %s, want completed", job.State)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("inspection fixture job did not complete")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	service, err := searchinspection.New(searchinspection.Config{
-		Searches:  inspectionFixtureSearches{snapshot: snapshot},
+		Searches:  manager,
 		Compiler:  clickhouse.Compiler{},
 		Explainer: inspectionFixtureExplainer{},
 	})
@@ -1150,10 +1250,10 @@ func validServerSearchInspectionResult(
 	result, err := service.Inspect(
 		context.Background(),
 		searchjobs.AccessScope{
-			TenantID: snapshot.TenantID,
-			OwnerID:  snapshot.OwnerID,
+			TenantID: browserGateTenantID,
+			OwnerID:  browserGateOwnerID,
 		},
-		searchinspection.Request{SearchJobID: snapshot.ID},
+		searchinspection.Request{SearchJobID: created.ID},
 	)
 	if err != nil {
 		t.Fatalf("inspect fixture: %v", err)
@@ -1289,6 +1389,35 @@ func assertSearchInspectionProtoMatchesResult(
 					expectedIndex,
 				)
 			}
+		}
+	}
+	if expected.KnowledgeSnapshot == nil {
+		if actual.GetKnowledgeSnapshot() != nil {
+			t.Fatalf(
+				"legacy inspection invented knowledge summary: %+v",
+				actual.GetKnowledgeSnapshot(),
+			)
+		}
+		return
+	}
+	projected := actual.GetKnowledgeSnapshot()
+	if projected == nil ||
+		!proto.Equal(projected.GetRef(), expected.KnowledgeSnapshot.GetRef()) ||
+		len(projected.GetObjects()) != len(expected.KnowledgeSnapshot.GetObjects()) ||
+		projected.GetObjectsTruncated() != expected.KnowledgeSnapshot.GetObjectsTruncated() {
+		t.Fatalf("projected inspection knowledge summary = %+v", projected)
+	}
+	for index, want := range expected.KnowledgeSnapshot.GetObjects() {
+		got := projected.GetObjects()[index]
+		if got.GetResolutionOrdinal() != want.GetResolutionOrdinal() ||
+			got.GetObjectType() != want.GetObjectType() ||
+			got.GetStage() != want.GetStage() ||
+			!got.GetRedacted() || got.GetAuthorizedObject() != nil {
+			t.Fatalf(
+				"projected inspection knowledge object %d = %+v",
+				index,
+				got,
+			)
 		}
 	}
 }

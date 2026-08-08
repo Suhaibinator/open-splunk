@@ -355,7 +355,7 @@ func TestGradeThisInspectionServiceAgainstClickHouse(t *testing.T) {
 		calls:   make(map[string]int, len(corpus)),
 	}
 	compiler := &inspectionCompiler{}
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches:  searches,
 		Compiler:  compiler,
 		Explainer: explainer,
@@ -553,6 +553,22 @@ type gradeThisInspectionCompletedSearches struct {
 	mu      sync.Mutex
 	calls   map[string]int
 	total   int
+}
+
+func (searches *gradeThisInspectionCompletedSearches) AcquireExecutionFor(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	id string,
+) (searchjobs.ResultLease, searchjobs.ExecutionSnapshot, error) {
+	lease, snapshot, err := searches.manager.AcquireExecutionFor(ctx, access, id)
+	if err != nil {
+		return nil, searchjobs.ExecutionSnapshot{}, err
+	}
+	searches.mu.Lock()
+	searches.calls[id]++
+	searches.total++
+	searches.mu.Unlock()
+	return lease, snapshot, nil
 }
 
 func (searches *gradeThisInspectionCompletedSearches) CompletedExecutionSnapshotFor(

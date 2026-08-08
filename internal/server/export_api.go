@@ -153,6 +153,10 @@ func exportRequestFromProto(definition *opensplunkv1.ExportDefinition) (exportjo
 }
 
 func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJob, error) {
+	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
+	if err != nil {
+		return nil, err
+	}
 	createdAt, err := validTimestamp(job.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -202,7 +206,8 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 			Elapsed:      durationpb.New(elapsed),
 			UpdatedAt:    progressUpdatedAt,
 		},
-		CreatedAt: createdAt,
+		CreatedAt:         createdAt,
+		KnowledgeSnapshot: knowledgeSnapshot,
 	}
 	if job.Artifact != nil {
 		artifactExpiresAt, timestampErr := validTimestamp(job.Artifact.ExpiresAt)

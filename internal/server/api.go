@@ -213,6 +213,11 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		}
 		return nil, err
 	}
+	if !historyRerun && handler.knowledgeSearchAdmission {
+		if err := handler.authorizeSearchApp(request.Context(), resolved.AppID); err != nil {
+			return nil, err
+		}
+	}
 	requestedIndexes, err := handler.resolveAuthorizedSearchIndexes(request.Context(), resolved.IndexScope)
 	if err != nil {
 		if contextErr := historyRerunContextError(
@@ -250,6 +255,9 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 			return nil, contextErr
 		}
 		return nil, mapSearchJobError(err)
+	}
+	if job.AppID != resolved.AppID || !handler.validKnowledgeSearchJobProjection(job) {
+		return nil, internalError()
 	}
 	converted, err := searchJobToProto(job, handler.now())
 	if err != nil {
@@ -336,7 +344,7 @@ func (handler *apiHandler) resolveHistoryRerun(
 		AppID:      definition.GetAppId(),
 		IndexScope: slices.Clone(definition.GetIndexScope()),
 	}
-	if err := handler.authorizeHistoryRerunApp(ctx, resolved.AppID); err != nil {
+	if err := handler.authorizeSearchApp(ctx, resolved.AppID); err != nil {
 		return resolvedSearchDefinition{}, searchjobs.JobSource{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -424,7 +432,7 @@ func trustedHistoryRerunDefinition(
 	}, nil
 }
 
-func (handler *apiHandler) authorizeHistoryRerunApp(
+func (handler *apiHandler) authorizeSearchApp(
 	ctx context.Context,
 	appID string,
 ) error {
@@ -482,6 +490,9 @@ func (handler *apiHandler) getSearchJob(request *http.Request, input *opensplunk
 	}
 	if err != nil {
 		return nil, mapSearchJobError(err)
+	}
+	if !handler.validKnowledgeSearchJobProjection(job) {
+		return nil, internalError()
 	}
 	converted, err := searchJobToProto(job, handler.now())
 	if err != nil {
@@ -580,6 +591,9 @@ func (handler *apiHandler) cancelSearchJob(request *http.Request, input *openspl
 	if err != nil {
 		return nil, mapSearchJobError(err)
 	}
+	if !handler.validKnowledgeSearchJobProjection(job) {
+		return nil, internalError()
+	}
 	converted, err := searchJobToProto(job, handler.now())
 	if err != nil {
 		return nil, internalError()
@@ -589,6 +603,13 @@ func (handler *apiHandler) cancelSearchJob(request *http.Request, input *openspl
 
 func (handler *apiHandler) accessScope() searchjobs.AccessScope {
 	return searchjobs.AccessScope{TenantID: handler.tenantID, OwnerID: handler.ownerID}
+}
+
+func (handler *apiHandler) validKnowledgeSearchJobProjection(job searchjobs.Job) bool {
+	if !handler.knowledgeSearchAdmission {
+		return job.KnowledgeSnapshot == nil
+	}
+	return (job.AppID == "") == (job.KnowledgeSnapshot == nil)
 }
 
 type resolvedSearchDefinition struct {
@@ -865,9 +886,13 @@ func mapSearchJobError(err error) error {
 		return router.NewHTTPError(http.StatusUnprocessableEntity, "a search result row exceeds the page byte limit")
 	case errors.Is(err, searchjobs.ErrRequestTooLarge):
 		return router.NewHTTPError(http.StatusRequestEntityTooLarge, "search request is too large")
+	case errors.Is(err, searchjobs.ErrInvalidSPL):
+		return badRequestError("search SPL is invalid")
+	case errors.Is(err, searchjobs.ErrUnsupportedSPL):
+		return router.NewHTTPError(http.StatusUnprocessableEntity, "search SPL is unsupported")
 	case errors.Is(err, searchjobs.ErrQueueFull):
 		return router.NewHTTPError(http.StatusTooManyRequests, "search queue is full")
-	case errors.Is(err, searchjobs.ErrCapacity), errors.Is(err, searchjobs.ErrClosed), errors.Is(err, searchjobs.ErrStorageUnavailable), errors.Is(err, searchjobs.ErrJournalUnavailable):
+	case errors.Is(err, searchjobs.ErrCapacity), errors.Is(err, searchjobs.ErrClosed), errors.Is(err, searchjobs.ErrStorageUnavailable), errors.Is(err, searchjobs.ErrJournalUnavailable), errors.Is(err, searchjobs.ErrKnowledgeUnavailable):
 		return unavailableError("search service is unavailable")
 	case errors.Is(err, context.DeadlineExceeded):
 		return err

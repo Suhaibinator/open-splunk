@@ -20,6 +20,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
+// Keep compiler selection a concrete production boundary. If Config.Compiler
+// regresses to an interface, this declaration intentionally stops compiling.
+var _ clickhouse.Compiler = Config{}.Compiler
+
 func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	snapshot := validInspectionSnapshot()
 	logicalFixture, fixtureErr := searchsnapshot.BuildExecutionPlan(snapshot)
@@ -45,7 +49,7 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	explainer := &inspectionExplainer{
 		result: inspectionExplainResult("open-splunk-explain-service-test"),
 	}
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches: searches, Compiler: compiler, Explainer: explainer,
 	})
 
@@ -86,20 +90,23 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	}
 	compiled := compiler.lastQuery()
 	explained := explainer.lastQuery()
-	if !compiled.HasValidSQLSeal() || !explained.HasValidSQLSeal() ||
-		!reflect.DeepEqual(explained, compiled) {
+	if !compiled.HasValidExecutionSeal() || !explained.HasValidExecutionSeal() ||
+		!explained.EqualForExecution(compiled) {
 		t.Fatalf("Explainer input changed:\ncompiled=%#v\nexplained=%#v", compiled, explained)
 	}
 	if len(compiled.Args) == 0 {
 		t.Fatal("fixture compiled without bound arguments")
 	}
-	if &compiled.Args[0] != &explained.Args[0] {
-		t.Fatal("service cloned or replaced the exact compiler argument slice")
+	if &compiled.Args[0] == &explained.Args[0] {
+		t.Fatal("service passed the compiler-owned argument slice to Explainer")
 	}
 	if result.GeneratedSQL != compiled.SQL ||
 		result.ExplainText != explainer.result.Text ||
 		result.DiagnosticQueryID != explainer.result.QueryID {
 		t.Fatal("inspection result did not preserve compiler and Explainer diagnostics")
+	}
+	if result.KnowledgeSnapshot != nil {
+		t.Fatalf("legacy inspection invented knowledge authority: %#v", result.KnowledgeSnapshot)
 	}
 	if !strings.Contains(
 		result.ExplainText,
@@ -177,6 +184,52 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	}
 }
 
+func TestInspectRejectsGenuineSealedCompilerScopeSubstitutionBeforeExplain(t *testing.T) {
+	base := validInspectionSnapshot()
+	for _, test := range []struct {
+		name   string
+		change func(*searchjobs.ExecutionSnapshot)
+	}{
+		{name: "tenant", change: func(value *searchjobs.ExecutionSnapshot) { value.TenantID = "other-tenant" }},
+		{name: "index", change: func(value *searchjobs.ExecutionSnapshot) {
+			value.SPL = strings.ReplaceAll(value.SPL, "sensitive-index-7f2c", "other-index")
+			value.EffectiveIndexes = []string{"other-index"}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			alternate := base
+			alternate.EffectiveIndexes = slices.Clone(base.EffectiveIndexes)
+			test.change(&alternate)
+			logical, err := searchsnapshot.BuildExecutionPlan(alternate)
+			if err != nil {
+				t.Fatalf("BuildExecutionPlan(alternate): %v", err)
+			}
+			compiled, err := (clickhouse.Compiler{}).Compile(logical)
+			if err != nil || !compiled.HasValidExecutionSeal() {
+				t.Fatalf("Compile(alternate) = valid:%t err:%v", compiled.HasValidExecutionSeal(), err)
+			}
+			searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{base, base}}
+			explainer := &inspectionExplainer{result: inspectionExplainResult("scope-substitution")}
+			service := newInspectionTestService(t, inspectionTestConfig{
+				Searches:  searches,
+				Compiler:  &inspectionCompiler{override: &compiled},
+				Explainer: explainer,
+			})
+			result, err := service.Inspect(
+				context.Background(),
+				searchjobs.AccessScope{TenantID: base.TenantID, OwnerID: base.OwnerID},
+				Request{SearchJobID: base.ID},
+			)
+			if !errors.Is(err, ErrInspectionFailed) || !reflect.DeepEqual(result, Result{}) {
+				t.Fatalf("Inspect(scope substitution) = (%#v, %v)", result, err)
+			}
+			if explainer.callCount() != 0 {
+				t.Fatalf("scope-substituted query reached Explainer %d times", explainer.callCount())
+			}
+		})
+	}
+}
+
 func TestInspectRejectsInvalidRequestsBeforeDependencyWork(t *testing.T) {
 	snapshot := validInspectionSnapshot()
 	validAccess := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
@@ -200,7 +253,7 @@ func TestInspectRejectsInvalidRequestsBeforeDependencyWork(t *testing.T) {
 			searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}}
 			compiler := &inspectionCompiler{}
 			explainer := &inspectionExplainer{}
-			service := newInspectionTestService(t, Config{
+			service := newInspectionTestService(t, inspectionTestConfig{
 				Searches: searches, Compiler: compiler, Explainer: explainer,
 			})
 			result, err := service.Inspect(context.Background(), test.access, test.request)
@@ -222,7 +275,7 @@ func TestInspectHonorsCallerCancellationAtEveryBoundary(t *testing.T) {
 
 	t.Run("before admission", func(t *testing.T) {
 		searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}}
-		service := newInspectionTestService(t, Config{
+		service := newInspectionTestService(t, inspectionTestConfig{
 			Searches: searches, Compiler: &inspectionCompiler{}, Explainer: &inspectionExplainer{},
 		})
 		ctx, cancel := context.WithCancel(context.Background())
@@ -241,7 +294,7 @@ func TestInspectHonorsCallerCancellationAtEveryBoundary(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		compiler := &inspectionCompiler{afterCompile: cancel}
 		explainer := &inspectionExplainer{}
-		service := newInspectionTestService(t, Config{
+		service := newInspectionTestService(t, inspectionTestConfig{
 			Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 			Compiler:  compiler,
 			Explainer: explainer,
@@ -262,7 +315,7 @@ func TestInspectHonorsCallerCancellationAtEveryBoundary(t *testing.T) {
 			started: make(chan struct{}),
 			release: make(chan struct{}),
 		}
-		service := newInspectionTestService(t, Config{
+		service := newInspectionTestService(t, inspectionTestConfig{
 			Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 			Compiler:  &inspectionCompiler{},
 			Explainer: explainer,
@@ -288,7 +341,7 @@ func TestInspectEnforcesExactServiceRuntime(t *testing.T) {
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches:      &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 		Compiler:      &inspectionCompiler{},
 		Explainer:     explainer,
@@ -321,7 +374,7 @@ func TestInspectAdmissionIsFailFastBeforeSnapshotAndCompilation(t *testing.T) {
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches: searches, Compiler: compiler, Explainer: explainer, MaxConcurrent: 1,
 	})
 	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
@@ -447,7 +500,7 @@ func TestInspectUsesMetadataOnlyWhenResultLeaseCapacityIsSaturated(t *testing.T)
 		)
 	}
 
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches: manager,
 		Compiler: clickhouse.Compiler{},
 		Explainer: &inspectionExplainer{
@@ -511,7 +564,7 @@ func TestInspectPostflightPreventsStaleOrChangedPublication(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			service := newInspectionTestService(t, Config{
+			service := newInspectionTestService(t, inspectionTestConfig{
 				Searches: &inspectionSearches{
 					snapshots: []searchjobs.ExecutionSnapshot{snapshot, test.second},
 					errors:    []error{nil, test.secondErr},
@@ -573,7 +626,7 @@ func TestInspectRejectsChangedSnapshotIdentityBeforePlanning(t *testing.T) {
 			test.change(&changed)
 			compiler := &inspectionCompiler{}
 			explainer := &inspectionExplainer{}
-			service := newInspectionTestService(t, Config{
+			service := newInspectionTestService(t, inspectionTestConfig{
 				Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{changed}},
 				Compiler:  compiler,
 				Explainer: explainer,
@@ -628,7 +681,7 @@ func TestInspectSanitizesEveryDependencyError(t *testing.T) {
 				case "explainer":
 					explainer.err = wrapped
 				}
-				service := newInspectionTestService(t, Config{
+				service := newInspectionTestService(t, inspectionTestConfig{
 					Searches: searches, Compiler: compiler, Explainer: explainer,
 				})
 				result, err := service.Inspect(context.Background(), access, request)
@@ -665,7 +718,7 @@ func TestInspectSanitizesEveryDependencyError(t *testing.T) {
 				case "explainer":
 					explainer.err = unknown
 				}
-				service := newInspectionTestService(t, Config{
+				service := newInspectionTestService(t, inspectionTestConfig{
 					Searches: searches, Compiler: compiler, Explainer: explainer,
 				})
 				result, err := service.Inspect(context.Background(), access, request)
@@ -687,7 +740,7 @@ func TestInspectClassifiesComplexityAndRejectsUnsealedCompilerOutput(t *testing.
 	request := Request{SearchJobID: snapshot.ID}
 
 	t.Run("complexity", func(t *testing.T) {
-		service := newInspectionTestService(t, Config{
+		service := newInspectionTestService(t, inspectionTestConfig{
 			Searches: &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 			Compiler: &inspectionCompiler{err: &plan.Diagnostic{
 				Code: "SPL_QUERY_TOO_COMPLEX", Message: "contains sensitive source",
@@ -703,7 +756,7 @@ func TestInspectClassifiesComplexityAndRejectsUnsealedCompilerOutput(t *testing.
 
 	t.Run("unsealed", func(t *testing.T) {
 		explainer := &inspectionExplainer{}
-		service := newInspectionTestService(t, Config{
+		service := newInspectionTestService(t, inspectionTestConfig{
 			Searches: &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 			Compiler: &inspectionCompiler{override: &clickhouse.CompiledQuery{
 				SQL: "SELECT private_password FROM events",
@@ -751,7 +804,7 @@ func TestInspectRevalidatesExplainOutputBeforeAtomicPublication(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			service := newInspectionTestService(t, Config{
+			service := newInspectionTestService(t, inspectionTestConfig{
 				Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 				Compiler:  &inspectionCompiler{},
 				Explainer: &inspectionExplainer{result: test.result},
@@ -774,7 +827,7 @@ func TestInspectCloseCancelsAndJoinsWithoutClosingSharedDependencies(t *testing.
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 		Compiler:  &inspectionCompiler{},
 		Explainer: explainer,
@@ -824,7 +877,7 @@ func TestCloseSynchronouslyCancelsAdmittedOperationBeforeDependency(t *testing.T
 	searches := &inspectionSearches{
 		snapshots: []searchjobs.ExecutionSnapshot{snapshot},
 	}
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches:  searches,
 		Compiler:  &inspectionCompiler{},
 		Explainer: &inspectionExplainer{},
@@ -912,7 +965,7 @@ func TestInspectCloseCanTimeOutAndRetry(t *testing.T) {
 		release:       make(chan struct{}),
 		ignoreContext: true,
 	}
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 		Compiler:  &inspectionCompiler{},
 		Explainer: explainer,
@@ -945,11 +998,10 @@ func TestNewRejectsInvalidDependenciesAndBounds(t *testing.T) {
 	snapshot := validInspectionSnapshot()
 	valid := Config{
 		Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
-		Compiler:  &inspectionCompiler{},
+		Compiler:  clickhouse.Compiler{},
 		Explainer: &inspectionExplainer{},
 	}
 	var nilSearches *inspectionSearches
-	var nilCompiler *inspectionCompiler
 	var nilExplainer *inspectionExplainer
 	tests := []struct {
 		name   string
@@ -957,8 +1009,6 @@ func TestNewRejectsInvalidDependenciesAndBounds(t *testing.T) {
 	}{
 		{name: "nil searches", mutate: func(config *Config) { config.Searches = nil }},
 		{name: "typed nil searches", mutate: func(config *Config) { config.Searches = nilSearches }},
-		{name: "nil compiler", mutate: func(config *Config) { config.Compiler = nil }},
-		{name: "typed nil compiler", mutate: func(config *Config) { config.Compiler = nilCompiler }},
 		{name: "nil Explainer", mutate: func(config *Config) { config.Explainer = nil }},
 		{name: "typed nil Explainer", mutate: func(config *Config) { config.Explainer = nilExplainer }},
 		{name: "negative concurrency", mutate: func(config *Config) { config.MaxConcurrent = -1 }},
@@ -988,6 +1038,86 @@ func TestNewRejectsInvalidDependenciesAndBounds(t *testing.T) {
 	}
 }
 
+func TestInternalConstructorRejectsNilCompiler(t *testing.T) {
+	snapshot := validInspectionSnapshot()
+	searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}}
+	explainer := &inspectionExplainer{}
+	var typedNil *inspectionCompiler
+
+	for name, compiler := range map[string]queryCompiler{
+		"nil":       nil,
+		"typed nil": typedNil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			service, err := newService(searches, compiler, explainer, 0, 0)
+			if err == nil || service != nil {
+				t.Fatalf("newService() = (%#v, %v), want nil error", service, err)
+			}
+		})
+	}
+}
+
+func TestPublicConfigRejectsSameScopeCompilerSubstitutionByType(t *testing.T) {
+	field, ok := reflect.TypeOf(Config{}).FieldByName("Compiler")
+	trustedType := reflect.TypeOf(clickhouse.Compiler{})
+	if !ok || field.Type != trustedType {
+		t.Fatalf(
+			"Config.Compiler type = %v, want exact %v",
+			field.Type,
+			trustedType,
+		)
+	}
+
+	base := validInspectionSnapshot()
+	alternate := base
+	alternate.SPL = strings.Replace(
+		base.SPL,
+		`status="sensitive-literal-7f2c"`,
+		`status="same-scope-substitution"`,
+		1,
+	)
+	if alternate.SPL == base.SPL {
+		t.Fatal("same-scope substitution fixture did not change the logical source")
+	}
+	logical, err := searchsnapshot.BuildExecutionPlan(alternate)
+	if err != nil {
+		t.Fatalf("BuildExecutionPlan(same-scope alternate): %v", err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil || !compiled.HasValidExecutionSeal() {
+		t.Fatalf(
+			"Compile(same-scope alternate) = valid:%t err:%v",
+			compiled.HasValidExecutionSeal(),
+			err,
+		)
+	}
+	compiledTenant, compiledIndexes, ok := compiled.ReadScope()
+	if !ok || compiledTenant != base.TenantID ||
+		!slices.Equal(compiledIndexes, base.EffectiveIndexes) {
+		t.Fatalf(
+			"same-scope alternate read scope = (%q, %v, %t), want (%q, %v, true)",
+			compiledTenant,
+			compiledIndexes,
+			ok,
+			base.TenantID,
+			base.EffectiveIndexes,
+		)
+	}
+	fake := &sameScopeSubstitutionCompiler{compiled: compiled}
+	fakeType := reflect.TypeOf(fake)
+	compilerInterface := reflect.TypeOf((*queryCompiler)(nil)).Elem()
+	if !fakeType.Implements(compilerInterface) {
+		t.Fatalf("same-scope fake %v does not implement %v", fakeType, compilerInterface)
+	}
+	if fakeType.AssignableTo(field.Type) || fakeType.ConvertibleTo(field.Type) {
+		t.Fatalf(
+			"same-scope compiler fake %v can enter public Config.Compiler %v",
+			fakeType,
+			field.Type,
+		)
+	}
+}
+
 func TestInspectNilReceiverAndContext(t *testing.T) {
 	var service *Service
 	result, err := service.Inspect(
@@ -1001,7 +1131,7 @@ func TestInspectNilReceiverAndContext(t *testing.T) {
 	assertZeroInspection(t, result)
 
 	snapshot := validInspectionSnapshot()
-	service = newInspectionTestService(t, Config{
+	service = newInspectionTestService(t, inspectionTestConfig{
 		Searches:  &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot}},
 		Compiler:  &inspectionCompiler{},
 		Explainer: &inspectionExplainer{},
@@ -1063,6 +1193,26 @@ func (searches *inspectionSearches) CompletedExecutionSnapshotFor(
 	access searchjobs.AccessScope,
 	id string,
 ) (searchjobs.ExecutionSnapshot, error) {
+	return searches.nextExecutionSnapshot(ctx, access, id)
+}
+
+func (searches *inspectionSearches) AcquireExecutionFor(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	id string,
+) (searchjobs.ResultLease, searchjobs.ExecutionSnapshot, error) {
+	snapshot, err := searches.nextExecutionSnapshot(ctx, access, id)
+	if err != nil {
+		return nil, searchjobs.ExecutionSnapshot{}, err
+	}
+	return inspectionResultLease{}, snapshot, nil
+}
+
+func (searches *inspectionSearches) nextExecutionSnapshot(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	id string,
+) (searchjobs.ExecutionSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return searchjobs.ExecutionSnapshot{}, err
 	}
@@ -1082,6 +1232,22 @@ func (searches *inspectionSearches) CompletedExecutionSnapshotFor(
 		index = len(searches.snapshots) - 1
 	}
 	return searches.snapshots[index], nil
+}
+
+type inspectionResultLease struct{}
+
+func (inspectionResultLease) Schema() searchjobs.Schema {
+	return searchjobs.Schema{Columns: []searchjobs.Column{{
+		Name: "message", Kind: searchjobs.ValueKindString,
+	}}}
+}
+func (inspectionResultLease) RowCount() uint64       { return 0 }
+func (inspectionResultLease) RowCountExact() bool    { return true }
+func (inspectionResultLease) ResultsTruncated() bool { return false }
+func (inspectionResultLease) Generation() uint64     { return 1 }
+func (inspectionResultLease) Close() error           { return nil }
+func (inspectionResultLease) Next(context.Context) (searchjobs.ResultRow, bool, error) {
+	return searchjobs.ResultRow{}, false, nil
 }
 
 func (searches *inspectionSearches) callCount() int {
@@ -1107,6 +1273,20 @@ type inspectionCompiler struct {
 	afterCompile func()
 	calls        int
 	last         clickhouse.CompiledQuery
+}
+
+// sameScopeSubstitutionCompiler models the legacy attack that motivated the
+// concrete public compiler boundary: it ignores the supplied logical plan and
+// returns a genuine compiler-sealed query for a different plan with the same
+// tenant and effective indexes.
+type sameScopeSubstitutionCompiler struct {
+	compiled clickhouse.CompiledQuery
+}
+
+func (compiler *sameScopeSubstitutionCompiler) Compile(
+	*plan.Query,
+) (clickhouse.CompiledQuery, error) {
+	return compiler.compiled, nil
 }
 
 func (compiler *inspectionCompiler) Compile(logical *plan.Query) (clickhouse.CompiledQuery, error) {
@@ -1253,21 +1433,75 @@ func (explainer *inspectionExplainer) lastQuery() clickhouse.CompiledQuery {
 
 func validInspectionSnapshot() searchjobs.ExecutionSnapshot {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
-	return searchjobs.ExecutionSnapshot{
-		ID:               "019fa490-d629-7203-899e-3fcd0fa18cd1",
-		OwnerID:          "sensitive-owner-7f2c",
-		TenantID:         "sensitive-tenant-7f2c",
-		SPL:              `index=sensitive-index-7f2c status="sensitive-literal-7f2c" | stats count AS events BY host | sort -events | head 10`,
-		EffectiveIndexes: []string{"sensitive-index-7f2c"},
-		Earliest:         now.Add(-2 * time.Hour),
-		Latest:           now.Add(-time.Hour),
-		SearchStart:      now.Add(-30 * time.Minute),
-		SearchTimezone:   "UTC",
-		IndexTimeCutoff:  now.Add(-20 * time.Minute),
-		VisibilityCutoff: 42,
-		FinishedAt:       now.Add(-10 * time.Minute),
-		ExpiresAt:        now.Add(time.Hour),
+	const (
+		jobID    = "019fa490-d629-7203-899e-3fcd0fa18cd1"
+		ownerID  = "sensitive-owner-7f2c"
+		tenantID = "sensitive-tenant-7f2c"
+		index    = "sensitive-index-7f2c"
+		source   = `index=sensitive-index-7f2c status="sensitive-literal-7f2c" | stats count AS events BY host | sort -events | head 10`
+	)
+	managerNow := now.Add(-30 * time.Minute)
+	manager, err := searchjobs.New(searchjobs.Config{
+		Executor: inspectionManagerExecutorFunc(func(
+			_ context.Context,
+			query clickhouse.CompiledQuery,
+			sink searchjobs.ResultSink,
+		) error {
+			columns := make([]searchjobs.Column, len(query.OutputFields))
+			for position, field := range query.OutputFields {
+				columns[position] = searchjobs.Column{Name: field, Kind: searchjobs.ValueKindString}
+			}
+			return sink.SetSchema(searchjobs.Schema{Columns: columns})
+		}),
+		Snapshotter:     inspectionSnapshotterFunc(func(context.Context) (uint64, error) { return 42, nil }),
+		RetentionTTL:    90 * time.Minute,
+		CleanupInterval: -1,
+		Now:             func() time.Time { return managerNow },
+		NewID:           func() string { return jobID },
+		CursorKey:       []byte("inspection-legacy-fixture-cursor-key-at-least-32-bytes"),
+	})
+	if err != nil {
+		panic(fmt.Sprintf("create sealed inspection fixture manager: %v", err))
 	}
+	defer func() { _ = manager.Close() }()
+	resolved, err := searchtime.NewAbsoluteRange(now.Add(-2*time.Hour), now.Add(-time.Hour))
+	if err != nil {
+		panic(fmt.Sprintf("create sealed inspection fixture range: %v", err))
+	}
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+		SPL:               source,
+		OwnerID:           ownerID,
+		TenantID:          tenantID,
+		AuthorizedIndexes: []string{index},
+		RequestedIndexes:  []string{index},
+		TimeRange:         resolved,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("create sealed inspection fixture: %v", err))
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		job, getErr := manager.GetFor(searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID}, created.ID)
+		if getErr != nil {
+			panic(fmt.Sprintf("read sealed inspection fixture: %v", getErr))
+		}
+		if job.State.Terminal() {
+			if job.State != searchjobs.StateCompleted {
+				panic(fmt.Sprintf("sealed inspection fixture state: %s", job.State))
+			}
+			snapshot, snapshotErr := manager.CompletedExecutionSnapshotFor(
+				context.Background(),
+				searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},
+				created.ID,
+			)
+			if snapshotErr != nil {
+				panic(fmt.Sprintf("seal inspection fixture snapshot: %v", snapshotErr))
+			}
+			return snapshot
+		}
+		time.Sleep(time.Millisecond)
+	}
+	panic("sealed inspection fixture did not complete")
 }
 
 func waitForInspectionJob(
@@ -1291,9 +1525,27 @@ func waitForInspectionJob(
 	return searchjobs.Job{}
 }
 
-func newInspectionTestService(t *testing.T, config Config) *Service {
+type inspectionTestConfig struct {
+	Searches  completedSearches
+	Compiler  queryCompiler
+	Explainer queryExplainer
+
+	MaxConcurrent int
+	MaxRuntime    time.Duration
+}
+
+func newInspectionTestService(
+	t *testing.T,
+	config inspectionTestConfig,
+) *Service {
 	t.Helper()
-	service, err := New(config)
+	service, err := newService(
+		config.Searches,
+		config.Compiler,
+		config.Explainer,
+		config.MaxConcurrent,
+		config.MaxRuntime,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -34,6 +35,15 @@ const (
 // PhysicalPlan. Errors contain fixed diagnostics and never echo SQL, plan
 // text, query IDs, field names, or other administrator-sensitive content.
 func ValidateResult(result Result) error {
+	if result.KnowledgeSnapshot != nil {
+		if err := knowledgesnapshot.ValidateSummary(
+			result.KnowledgeSnapshot,
+		); err != nil {
+			return invalidInspectionResult(
+				"has an invalid knowledge snapshot summary",
+			)
+		}
+	}
 	if !validInspectionSQL(result.GeneratedSQL) {
 		return invalidInspectionResult("has invalid generated SQL")
 	}
