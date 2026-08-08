@@ -608,17 +608,35 @@ still-runnable job silently use a newer version.
 
 ### Knowledge prelude
 
-The semantic planner should build a backend-neutral knowledge prelude before
-the authored base filter. It should reuse existing operators where their
-semantics match and add explicit operators where they do not.
+KO-1B introduces a cycle-neutral, backend-independent immutable knowledge
+program and injects its explicit Tier-1 field prelude immediately after the
+authorized `Scan`, before the authored base filter. A deliberately resolved
+empty program is a present marker with zero generated operators; it is distinct
+from a legacy query that never crossed the knowledge boundary. Analysis, field
+analysis, and timeline eligibility verify that the retained program still
+matches the complete contiguous generated prefix before consuming it.
 
-Expected additions include:
+The implemented Tier-1 prefix contains:
 
 ```text
 ConditionalExtract
 ConditionalExtractJSON
 CopyFieldAlias
 ParallelExtend
+```
+
+Each regex and JSON object remains an individual operator in canonical
+resolution order. All aliases are fused into one `CopyFieldAlias` stage and all
+calculated fields into one `ParallelExtend` stage, with every fused assignment
+reading the same frozen stage input. The program independently re-normalizes
+definitions, re-derives the exact dependency closure and longest-path depths,
+checks same-stage collisions and chains, enforces aggregate semantic ceilings,
+and commits the typed operation sequence, selectors, bodies, origins, charges,
+and canonical dependencies under a versioned private digest domain.
+
+Later tiers are expected to add:
+
+```text
 Lookup
 ClassifyEventType
 ApplyTags
@@ -630,7 +648,8 @@ preferred.
 
 ### Provenance
 
-Every generated operator and output field should carry a private origin:
+Every implemented Tier-1 generated operator and output field carries a private
+origin:
 
 ```text
 kind                 authored_spl | knowledge_object
@@ -638,8 +657,18 @@ object_id            present for knowledge
 object_version       present for knowledge
 object_type
 object_name
+app_id
+owner_id
+sharing_scope
+resolution_ordinal
+stage_ordinal
+definition_digest
 definition_location  field or expression within the object
 ```
+
+Regex captures and JSON outputs retain their own stable output-field locations,
+rather than inheriting only the enclosing pattern/path location. Source ranges
+remain zero because definition locations are not authored SPL ranges.
 
 Provenance must survive safe rewrites, nested ClickHouse subqueries, inspection,
 execution diagnostics, history re-execution, and export. It is not necessarily

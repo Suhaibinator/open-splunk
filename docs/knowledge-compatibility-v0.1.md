@@ -674,6 +674,26 @@ rendered bind values, executor wrappers, settings, and the independent 1 MiB
 executor query-size defense are excluded. Resolution or sealed compilation
 exceeding a ceiling fails admission before a job is created.
 
+The canonical Tier-1 field program is present even when it contains zero
+objects. Its zero value means absent/legacy; a prepared empty value means
+an admitted empty field program and contributes a stable nonzero private
+commitment. For a nonempty program, individual regex and JSON operators retain
+the canonical resolution order, followed by at most one fused alias stage and
+at most one fused calculated stage. The program re-normalizes every definition,
+requires exact named regex captures, applies authored calculated-assignment
+result restrictions, enforces aggregate charges, rejects possible same-stage
+write collisions or chains unless selectors are provably disjoint, and requires
+the submitted `FIELD_INPUT` list to equal the independently derived closure,
+including canonical order and longest-path source depth.
+
+The versioned program commitment length-frames the exact typed operator order,
+object origin and definition digest, per-output definition location, selector
+canonical bytes and runtime assessment, overwrite behavior, executable body,
+static charges, and canonical dependency authorities. Logical-plan consumers
+must prove the explicit contiguous prefix still equals that retained program;
+equal counters alone are not authority. KO-1B does not yet lower these
+operators to ClickHouse or permit nonempty snapshot finalization.
+
 Generic lifecycle records distinguish absence from emptiness. An absent
 `KnowledgeSnapshotSummary` means knowledge resolution was disabled or the
 request followed the legacy/app-less path. A present reference with

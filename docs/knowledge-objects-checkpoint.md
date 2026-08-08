@@ -4,7 +4,7 @@
 
 **Current milestone:** KO-1 field execution
 
-**Last completed slice:** KO-1A cross-engine selector runtime contract
+**Last completed slice:** KO-1B immutable field-prelude IR
 
 **Evidence date:** August 8, 2026
 
@@ -22,14 +22,16 @@
   `bcf095bb2db19a1b8d9b1810bfd1eaed32bf11ba`
 - KO-1A selector-contract revision:
   `03a0b3e991424ae41716a8cb36749cb3ad8aff5b`
+- KO-1B immutable-prelude revision:
+  `3278018fd5bd989b630e3c722f658177a6192c42`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: thirty-two intentional post-`c5440b9`
-  KO commits through `03a0b3e` are durable locally. This checkpoint is kept as
+- Publication state before this document: thirty-four intentional post-`c5440b9`
+  KO commits through `3278018` are durable locally. This checkpoint is kept as
   a separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so the terminal KO-0G
   test-oracle commits, the KO-0G checkpoint `441fd4d`, all KO-0H work, KO-1A,
-  and this checkpoint are not remotely durable. No further push was attempted
-  without explicit destination approval.
+  KO-1B, and this checkpoint are not remotely durable. No further push was
+  attempted without explicit destination approval.
 - Scope: lifecycle- and commitment-aware protobuf contracts, canonical known
   and inactive-future definitions, migrations 0029–0031 state/commit/tenant
   authorities, a bounded read-only `Get`/`List` catalog, and an atomic Writer
@@ -52,15 +54,19 @@
   browser transport. KO-1A freezes one detached exact-literal/combined-RE2
   selector program and deterministic conservative cross-engine runtime charge,
   while keeping catalog index-pruning probes separate from event-execution
-  accounting.
+  accounting. KO-1B adds the cycle-neutral immutable Tier-1 field program,
+  explicit plan-native extraction/JSON/alias/calculated operators, private
+  object and output provenance, exact dependency/collision revalidation,
+  aggregate semantic ceilings, and prefix-integrity validation for analysis.
 - Runtime feature state: the capability remains hard-disabled and unadvertised;
   the six knowledge-management handlers are deliberately not registered in the
   production router and their paths still return 404. Configured test/runtime
   seams can admit and retain a canonically empty enabled snapshot, but
-  `cmd/open-splunk-server` does not configure the resolver. A nonempty authority
-  still fails before job creation until KO-1 supplies the knowledge prelude.
-  New ACTIVE publication and ClickHouse knowledge execution therefore remain
-  unavailable, and the hidden UI remains unreachable in production.
+  `cmd/open-splunk-server` does not configure the resolver. The new prelude is
+  not yet lowered or sealed by the ClickHouse compiler, so a nonempty authority
+  still fails before job creation. Accordingly, nonempty finalization, new
+  ACTIVE publication, and ClickHouse knowledge execution remain unavailable,
+  and the hidden UI remains unreachable in production.
 
 ## KO-0 durable commits
 
@@ -145,6 +151,12 @@ KO-1A then adds the first field-execution prerequisite:
 | Commit | Subject | Scope |
 | --- | --- | --- |
 | `03a0b3e` | `feat(knowledge): freeze cross-engine selector charging` | Detached exact-literal plus single anchored dot-all RE2 programs; compiler-derived transition upper bounds shared by Go and future ClickHouse lowering; fixed-order/missing/null/UTF-8 charging; and independent bounded catalog-pruning probes that cannot misclassify valid high-work scopes as corruption |
+
+KO-1B then adds the backend-neutral Tier-1 field program:
+
+| Commit | Subject | Scope |
+| --- | --- | --- |
+| `3278018` | `feat(knowledge): add immutable prelude program` | Cycle-neutral immutable typed program; explicit extraction, JSON, fused alias, and fused calculated plan operators; exact dependency and parallel-stage revalidation; aggregate charges; private operation/output provenance and commitment; and analysis-time contiguous-prefix integrity |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -648,6 +660,19 @@ KO-1A evidence:
 | Local durability | pass | `03a0b3e` is a separate selector-contract commit on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | no push was attempted without explicit destination approval |
 
+KO-1B evidence:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Typed program authority | pass | valid-empty versus absent authority, detached typed operations, canonical regex/JSON interleaving, named-capture and calculated-result restrictions, output-level provenance, semantic charge N/N+1, commitment sensitivity, and caller-mutation isolation pass |
+| Dependency and parallel semantics | pass | exact missing/extra/depth dependency closure, endpoint digest/order, sharing and selector implication, overlapping same-stage output and chain rejection, and provably disjoint writer acceptance pass |
+| Plan integrity | pass | prelude placement immediately after detached `Scan`, exact drop/reorder/substitute/duplicate/marker-removal rejection, authored predicate separation, and valid empty/nonempty field-analysis and timeline eligibility pass |
+| Focused verification | pass | `go test ./internal/spl ./internal/knowledgeprogram ./internal/plan -count=1` passed in 1.2s; `go test -race ./internal/knowledgeprogram ./internal/plan -count=1` passed in 3.0s; focused vet passed in 1.2s; `git diff --check` was clean |
+| Independent review | pass | separate semantic-mapping and program/plan adversarial reviews found commitment reconstruction, dependency completeness, same-stage semantics, capture shape, aggregate bounds, ordering, detachment, eligibility, Boolean-result, and provenance gaps; every concrete finding selected for this slice was fixed and covered before the focused rerun |
+| Runtime activation | unchanged | the program is not yet consumed by ClickHouse, sealed into compiler evidence, rebuilt by retained consumers, or accepted by nonempty finalization; production composition/routes/capability/UI remain disabled |
+| Local durability | pass | `3278018` is a separate immutable-prelude implementation commit on `codex/knowledge-objects-runtime` |
+| Remote durability | pending | no push was attempted without explicit destination approval |
+
 The exact KO-0E final retained-log race command was:
 
 ```sh
@@ -725,23 +750,20 @@ gates rather than silently skipped acceptance evidence.
 ## Next dependency-ordered work
 
 KO-0 foundations and the hidden KO-0H lifecycle/browser readiness vertical are
-complete. The next dependency-ordered slices are:
+complete, and KO-1A/KO-1B have frozen the selector and backend-neutral field
+program contracts. The next dependency-ordered slices are:
 
-1. finish the executable selector lowering using the now-frozen canonical
-   combined matcher, missing/null semantics, cancellation, and deterministic
-   conservative per-event/per-query charging in ClickHouse;
-2. add canonical extraction, JSON extraction, fused copy-alias, and fused
-   parallel-calculated planner operators with immutable object origins, frozen
-   same-stage inputs, and a private prelude commitment;
-3. lower that prelude before the authored base filter, combine authored and
-   knowledge semantic ceilings, seal the exact prelude into compiler evidence,
-   and only then permit nonempty snapshot finalization;
-4. rebuild the retained prelude for inspection/field analysis, add bounded
+1. lower the canonical selector and Tier-1 field operators with exact
+   missing/null, frozen-input, overwrite, cancellation, and deterministic
+   conservative per-event/per-query semantics in ClickHouse;
+2. combine authored and knowledge semantic ceilings, seal the exact prelude
+   into compiler evidence, and only then permit nonempty snapshot finalization;
+3. rebuild the retained prelude for inspection/field analysis, add bounded
    redacted provenance, and prove one hidden seeded-ACTIVE lifecycle across
    search, history rerun, inspection, and export;
-5. add transactional ACTIVE publication compilation plus exact dependency
+4. add transactional ACTIVE publication compilation plus exact dependency
    derivation while retaining `ErrActivePublicationUnavailable` until the full
    hidden Tier-1 browser/ClickHouse vertical passes; and
-6. only after that vertical passes, compose the resolver into production,
+5. only after that vertical passes, compose the resolver into production,
    register the six handlers, advertise the capability, enable navigation, and
    permit the supported ACTIVE transitions atomically.
