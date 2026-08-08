@@ -2,9 +2,10 @@
 
 **Goal status:** active
 
-**Current milestone:** KO-0 search-lifecycle attachment
+**Current milestone:** KO-1 field execution
 
-**Last completed slice:** KO-0G immutable resolver/snapshot authority
+**Last completed slice:** KO-0H sealed search-lifecycle attachment and hidden
+read-only shell
 
 **Evidence date:** August 8, 2026
 
@@ -17,13 +18,17 @@
 - KO-0G local implementation range: `6005b24..4aaacc7`
 - KO-0G implementation terminal revision:
   `4aaacc74a2724be28cb0b960646014d8a678f21a`
+- KO-0H local implementation range: `441fd4d..bcf095b`
+- KO-0H implementation terminal revision:
+  `bcf095bb2db19a1b8d9b1810bfd1eaed32bf11ba`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: twenty-five intentional post-`c5440b9`
-  KO commits through `4aaacc7` are durable locally. This checkpoint is kept as
+- Publication state before this document: thirty intentional post-`c5440b9`
+  KO commits through `bcf095b` are durable locally. This checkpoint is kept as
   a separate documentation commit. `origin/main` remains `c5440b9`; the local
-  remote-tracking feature branch ends at `7503246`, so the terminal two
-  test-oracle commits and this checkpoint are not remotely durable. No further
-  push was attempted without explicit destination approval.
+  remote-tracking feature branch ends at `7503246`, so the terminal KO-0G
+  test-oracle commits, the KO-0G checkpoint `441fd4d`, all four KO-0H commits,
+  and this checkpoint are not remotely durable. No further push was attempted
+  without explicit destination approval.
 - Scope: lifecycle- and commitment-aware protobuf contracts, canonical known
   and inactive-future definitions, migrations 0029–0031 state/commit/tenant
   authorities, a bounded read-only `Get`/`List` catalog, and an atomic Writer
@@ -38,13 +43,20 @@
   revision-zero authority for app-provisioned tenants with an empty knowledge
   catalog, a bounded one-read-transaction active resolver, and an opaque
   detached snapshot authority with canonical object, shadow, dependency,
-  static-charge, and cross-language wire/digest contracts.
+  static-charge, and cross-language wire/digest contracts. KO-0H adds migration
+  0032, bounded snapshot reference/summary contracts, optional synchronous
+  nonempty-app admission, compiler- and manager-private execution seals,
+  durable history and attempt-audit provenance, retained inspection/export
+  authority, and a hidden read-only Knowledge Manager shell with bounded
+  browser transport.
 - Runtime feature state: the capability remains hard-disabled and unadvertised;
   the six knowledge-management handlers are deliberately not registered in the
-  production router and their paths still return 404. Resolver/snapshot
-  construction is implemented but is not attached to search admission or any
-  public job surface. Search lifecycle/provenance attachment, UI, new ACTIVE
-  publication, and ClickHouse knowledge execution are not implemented.
+  production router and their paths still return 404. Configured test/runtime
+  seams can admit and retain a canonically empty enabled snapshot, but
+  `cmd/open-splunk-server` does not configure the resolver. A nonempty authority
+  still fails before job creation until KO-1 supplies the knowledge prelude.
+  New ACTIVE publication and ClickHouse knowledge execution therefore remain
+  unavailable, and the hidden UI remains unreachable in production.
 
 ## KO-0 durable commits
 
@@ -115,6 +127,15 @@ KO-0F route boundary`). KO-0G then adds these dependency-ordered local commits:
 | `0144be2` | `test(server): preserve empty knowledge authority` | Real HTTP audit-failure rollback oracle proving the provisioned revision-zero authority and token remain exact while every Writer mutation table rolls back |
 | `4aaacc7` | `test(knowledge): make async oracles causal` | Causal real-journal finalization and paused single-transaction resolver overlap oracles that remain deterministic under the full race suite without weakening production deadlines |
 
+KO-0H then adds these dependency-ordered local commits:
+
+| Commit | Subject | Scope |
+| --- | --- | --- |
+| `20a729d` | `feat(search): persist bounded knowledge provenance` | Additive reference/summary protobufs and shared Go/TypeScript wire fixture, migration 0032 compact attempt-audit authority, detached summary validation, and exact pending-to-terminal history retention |
+| `a5ad901` | `feat(search): seal knowledge-aware admission` | Optional pre-ID parse/plan/resolve/compile/finalize path, compiler-private whole-query evidence, manager-private execution/result authority, bounded metadata admission, and worker reuse of the prepared execution |
+| `de64633` | `feat(search): retain sealed knowledge execution` | Redacted job/list/history/audit projections, retained inspection authority, atomic export result pinning, exact app/scope/result binding, and fail-closed configurable-dependency validation |
+| `bcf095b` | `feat(ui): add hidden knowledge manager shell` | Capability-gated lazy read-only list/detail UI, bounded Get/List adapter and response streaming, app filtering, continuation coherence, accessibility states, and exact absent-capability no-load/no-request behavior |
+
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
 from the ranges above; no history rewrite or alternate publication branch was
@@ -165,6 +186,34 @@ used.
   parallel-stage collision/chaining rejection, static semantic charges, and
   self-excluding B0/B1 byte-charge plus domain-framed digest rules; only KO-0H
   sealed compiler evidence may finalize a nonzero execution snapshot
+- Snapshot presence is authoritative: absent means disabled/legacy or app-less;
+  a present zero-object reference is enabled-empty. References are capped at
+  512 bytes and summaries at 32 KiB, retain at most the first 64 canonical
+  objects out of 256, and reject unknown fields or incoherent ordinal, type,
+  stage, truncation, or disclosure shapes before cloning
+- Configured nonempty-app admission authorizes the live app and indexes, then
+  parses, plans, resolves, compiler-seals, and finalizes before allocating a
+  job ID or writing history/audit. Nil and typed-nil resolvers plus app-less
+  requests preserve the legacy asynchronous path
+- KO-0H finalization is intentionally enabled-empty only. A nonempty resolved
+  authority fails before admission until KO-1 supplies exact knowledge
+  operators, generated fields, and combined authored/knowledge charges
+- A compiler-private seal covers SQL, typed arguments, output/shape contracts,
+  read scope, relational evidence, authored semantic work, generated SQL
+  charges, and snapshot evidence. A manager-private seal binds every completed
+  execution snapshot, including legacy, to its complete immutable execution
+  tuple and exact result generation; only the matching manager-owned result pin
+  can open that generation
+- Search jobs and history retain the bounded summary, attempt audit retains only
+  the compact reference, inspection uses two sealed metadata reads without a
+  result pin, and export atomically retains the matching execution/result pin
+  for its complete lifetime. Browser projections redact every object identity
+  pending a current-policy provenance authorizer
+- The hidden Knowledge Manager is read-only and lazy. Without the trusted
+  capability it is absent from navigation, its chunk is not imported, and it
+  issues no knowledge request. Its adapter bounds bootstrap apps, pages,
+  continuations, totals, success responses, and error bodies before exposing
+  detached data
 - Current-policy response redaction for retained provenance and inspection
 - Binary UTF-8 substring and individual-selector-pattern filters applied before
   keyset `LIMIT` at one catalog revision
@@ -399,6 +448,33 @@ snapshot and resolver reviews reported no remaining concrete blocker. The exact
 seven-commit KO-0G binary diff `6005b24..4aaacc7` has SHA-256
 `d0819a58c8cbe7da302733521dd98830242e68aeea68ec862e0e8753ead6283f`.
 
+KO-0H used independent wire, migration, security/principal, search-lifecycle,
+compiler-seal, audit/history, inspection, export, UI, consumer-adversarial, and
+simplification lanes. Findings were held open until the shared tree and an
+exact regression were green. Resolved issues included untrusted app intent,
+post-admission resolution, forged or downgraded execution snapshots, compiled
+query mutation, cross-manager result pins, inspection/export authority drift,
+typed-nil dependencies, metadata undercharging, late sink callbacks, summary
+omission and identity disclosure across lifecycle states, UI continuation
+contradictions, unmount cancellation, response-body amplification, and
+malformed bootstrap-app amplification.
+
+Three final simplify lanes inspected a frozen 9,473-line tracked diff with
+SHA-256 `42dec703866849092b05f603ef87426367fecf51d6dc7d0763dc5cb56de930fa`
+plus all 29 then-untracked paths. That hash predates the remediations and is not
+the final range hash. The applied cleanup centralized retained-authority
+opening, reused canonical identity validation, replaced a positional
+six-result lease API with `ValidatedResultMetadata`, eliminated ordinary-lease
+execution HMAC work, reused the sealing nonce, and acquired export send turns
+before full-row clones. Consumer/UI rereviews returned clean. A final
+race-shuffle run exposed only a test-fixture dependence on the resolver's
+production 250 ms deadline; the real migrated test resolver now retries only
+its own deadline under a 30-second test watchdog, and the exact captured
+searchjobs package seed passed twice without changing the production bound.
+
+The exact four-commit KO-0H binary diff `441fd4d..bcf095b` has SHA-256
+`0b5f16843bddd62682b9a5b2847709c801ce3b2f5654b8e5936cd054063833c2`.
+
 ## Verification evidence
 
 All commands ran from `/Users/suhaib/code/open-splunk`.
@@ -525,6 +601,24 @@ KO-0G evidence:
 | Local durability | pass | seven KO-0G commits, inclusive `37e6bfc` through `4aaacc7`, are on `codex/knowledge-objects-runtime`; implementation worktree was clean before this checkpoint edit |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` ends at `7503246`; no push of the terminal test-oracle commits or this checkpoint was attempted without explicit destination approval |
 
+KO-0H evidence:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Protobuf generation and compatibility | pass | `make proto` ran twice with stable output; the exact binary `proto`/`gen` diff SHA-256 is `f4f6578f9c99d100d391a689031d5e3bbdee00ab8e29ff96bc0eb63abe6b498b`; Buf breaking passed against `main` at `c5440b96248c68a9b58d10ebaf08eaef5345b61a` |
+| Go/TypeScript summary wire | pass | shared `testdata/knowledge-snapshot-summary-wire.json` SHA-256 `d60bb896c8fba542e36daf02efa3074b2df15b6d341e60fdf6f749e454bc5318`; Go and TypeScript pin absent, enabled-empty, authorized, and redacted presence plus deterministic bytes above JavaScript's safe-integer range |
+| Attempt-audit migration | pass | migration 0032 SHA-256 `5253463a8f669a7287849ab8516db0be62b84d25689e1da993c8fecc872d683a`; legacy upgrade, maximum valid tuple, partial/invalid rejection, immutability, backup, and foreign-key matrices passed |
+| Admission and execution authority | pass | focused matrices cover live-app-before-index authorization, synchronous side-effect-free failure, nil/typed-nil and app-less legacy parity, no worker reparse/replan/reresolve, empty-only finalization, compiler-seal tampering, manager-signed result generations, and cross-manager/mismatched pin rejection |
+| Lifecycle consumers | pass | search job/list, history, compact attempt audit, inspection, and export passed detachment, exact admission identity, corrupt tuple, retained compiler, postflight mutation, expiry, and lease-lifetime result-pinning tests |
+| Hidden browser shell | pass | `npm run typecheck`; `npm run lint`; `npm run test:frontend` (66 infrastructure plus 183 frontend tests, 249 total); final `npm run build` generated all 11 static pages. Absent-capability tests prove unchanged navigation, no chunk import, and no knowledge request |
+| Full non-race backend | pass | `go test ./... -count=1` passed on the final production implementation; after the race-only fixture stabilization, `go test ./internal/searchjobs -count=1` passed in 1.760s |
+| Affected race suites | pass | full race packages for clickhouse, queryexec, searchjobs, searchinspection, export, searchhistory, searchaudit, and the focused server projection/inspection/export families passed; the captured searchjobs shuffle seed `1786190703558618000` passed twice after the test-only deadline repair |
+| All-package race/coverage | canceled | early attempts exposed restricted-sandbox listener/ACL failures and the subsequently repaired searchjobs race-fixture deadline. The affected-package gates passed separately after that repair; an unrestricted all-package attempt then hit host-memory kills in unchanged `internal/auth` and `internal/audit` without a failed assertion or race report. The user canceled another long rerun, so no all-package race pass, package count, coverage, or wall time is claimed |
+| Static analysis and hygiene | pass | final `go vet ./...`; changed and untracked Go files were gofmt-clean; `git diff --check` and every staged diff check passed |
+| Independent review | pass | wire, principal/security, core, consumer, UI, and three simplify lanes resolved every concrete finding selected for KO-0H; final consumer and UI rereviews were clean |
+| Local durability | pass | `20a729d`, `a5ad901`, `de64633`, and `bcf095b` are separate provenance, sealed-admission, retained-consumer, and hidden-UI commits on `codex/knowledge-objects-runtime` |
+| Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
+
 The exact KO-0E final retained-log race command was:
 
 ```sh
@@ -590,25 +684,35 @@ knowledge-execution verticals therefore remain future hard gates; the shared
 Go/TypeScript snapshot fixture is wire/digest evidence, not a claim that the
 browser can yet request or execute knowledge.
 
+KO-0H implements the optional manager seam, enabled-empty sealing, lifecycle
+provenance, retained inspection/export authority, and hidden browser shell, but
+production composition still supplies no resolver, registers no management
+route, and advertises no capability. The shell's component/static tests are
+readiness evidence, not a live browser vertical. Because nonempty finalization
+is rejected and there is no knowledge prelude, Docker-backed ClickHouse
+knowledge execution and licensed-Splunk differential tests remain KO-1 hard
+gates rather than silently skipped acceptance evidence.
+
 ## Next dependency-ordered work
 
-The migration, audit schema/primitives, definition, read-only catalog, Writer,
-unregistered management-route hard gates, one-transaction resolver, and opaque
-snapshot preparation are complete. Search lifecycle attachment, UI, and active
-compilation remain required. The next dependency-ordered slices are:
+KO-0 foundations and the hidden KO-0H lifecycle/browser readiness vertical are
+complete. The next dependency-ordered slices are:
 
-1. attach the resolver before search-job admission, combine its opaque authority
-   with sealed compiler evidence, and persist the resulting snapshot reference
-   plus authorized catalog/index authority in
-   search lifecycle, inspection, history, and export before query execution;
-2. add the hidden Knowledge Manager list/detail shell plus negative API,
-   capability-advertisement, route-registration, and navigation tests; keep the
-   feature unadvertised and navigation absent while the runtime is incomplete;
-3. implement KO-1 field execution and supply the executable publication
-   compiler and dependency derivation needed to replace
-   `ErrActivePublicationUnavailable`, while keeping the handlers unregistered,
-   the capability unadvertised, and ACTIVE publication disabled through the
-   complete hidden Tier-1 browser and ClickHouse acceptance vertical; and
-4. only after that vertical passes, register the six handlers, advertise the
-   capability, and enable the supported ACTIVE publication transitions
-   together.
+1. freeze an executable selector strategy that preserves the canonical combined
+   matcher, missing/null semantics, cancellation, and exact per-event/per-query
+   work charging in ClickHouse;
+2. add canonical extraction, JSON extraction, fused copy-alias, and fused
+   parallel-calculated planner operators with immutable object origins, frozen
+   same-stage inputs, and a private prelude commitment;
+3. lower that prelude before the authored base filter, combine authored and
+   knowledge semantic ceilings, seal the exact prelude into compiler evidence,
+   and only then permit nonempty snapshot finalization;
+4. rebuild the retained prelude for inspection/field analysis, add bounded
+   redacted provenance, and prove one hidden seeded-ACTIVE lifecycle across
+   search, history rerun, inspection, and export;
+5. add transactional ACTIVE publication compilation plus exact dependency
+   derivation while retaining `ErrActivePublicationUnavailable` until the full
+   hidden Tier-1 browser/ClickHouse vertical passes; and
+6. only after that vertical passes, compose the resolver into production,
+   register the six handlers, advertise the capability, enable navigation, and
+   permit the supported ACTIVE transitions atomically.

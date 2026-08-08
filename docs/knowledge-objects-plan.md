@@ -525,6 +525,23 @@ A running job never observes a later catalog mutation. Inspection exposes the
 safe object inventory and provenance without exposing definitions the caller
 is no longer allowed to read.
 
+Lifecycle presence is explicit: an absent `KnowledgeSnapshotSummary` means
+resolution was disabled or the request followed the legacy/app-less path; a
+present reference with `object_count == 0` means resolution was enabled and
+produced the canonical empty snapshot. A retained summary is limited to 32 KiB
+and contains exactly the first `min(object_count, 64)` canonical object
+summaries, with `objects_truncated` true exactly when the total exceeds 64.
+Browser search-job, history, export, and inspection projections currently
+preserve the reference and ordinal/type/stage while redacting every retained
+object identity.
+
+Every completed execution snapshot returned by the manager, including a legacy
+snapshot, is manager-minted with a private seal over the explicit
+knowledge-enabled bit, complete execution scope, enabled compiled/snapshot
+authority, and exact result generation, schema, row count, and truncation
+state. Only the matching manager-owned result pin can open that result
+authority.
+
 Exports re-execute using the original job's knowledge snapshot, event-time
 range, index-time cutoff, and visibility cutoff. If a required lookup version
 has expired or crossed an index-deletion boundary, export fails explicitly as
@@ -533,10 +550,15 @@ unavailable.
 Saved searches store authored SPL and app/time intent, not a trusted knowledge
 snapshot. Running a saved search resolves current knowledge.
 
-History records the knowledge-snapshot digest and a bounded safe inventory of
-object IDs/versions for diagnostics. `Run Again` resolves current knowledge and
-creates a new snapshot; it never reuses the old compiled prelude or lookup
-asset by client request.
+History durably preserves the exact bounded summary admitted with the queued
+job. Search-attempt audit atomically preserves only its compact reference and
+exact object count. Inspection uses two detached sealed metadata reads around
+`EXPLAIN` and consumes no result pin; enabled inspection opens the retained
+compiled authority. Export atomically acquires the execution authority and
+matching result pin and holds the pin for the export lifetime. `Run Again`
+treats the historical summary as provenance only: it reauthorizes current
+app/index intent and, when the optional resolver is configured, performs a
+fresh current-catalog resolution.
 
 ### Retention and garbage collection
 
@@ -858,6 +880,11 @@ SERVER_FEATURE_KNOWLEDGE_WORKFLOW_ACTIONS
 
 ## Browser application
 
+KO-0H supplies only a feature-gated read-only list/detail shell with app
+filtering and bounded continuation handling. It has no mutation controls. When
+the trusted bootstrap capability is absent, Knowledge Manager is omitted from
+navigation, its chunk is not imported, and it issues no knowledge API request.
+
 ### Knowledge Manager
 
 Add an app-aware Knowledge Manager with:
@@ -968,10 +995,12 @@ Records contain actor, tenant, app, object ID, object type, object version,
 sharing scope, occurrence time, result, and safe reason category. They do not
 copy regex text, SPL, lookup rows, macro bodies, or workflow URL parameters.
 
-Search-attempt audit should record the knowledge snapshot digest and object
-count, not definition bodies. User-facing history may show a safe inventory of
-object names and versions only while the caller remains authorized to inspect
-them.
+Search-attempt audit durably records the optional compact snapshot reference:
+digest, catalog revision/state commitment, exact object count, and compiler
+compatibility version, but never the object inventory or definition bodies.
+Durable history retains the bounded summary. Browser projections redact
+retained object identity until a current-policy provenance authorizer is
+available.
 
 ## Testing strategy
 
@@ -1083,7 +1112,7 @@ with an executable Open Splunk fixture.
 pinned without affecting search results.
 
 **Implementation checkpoint (August 8, 2026):** contracts, migrations 0024
-through 0031, canonical definition handling, the bounded authorization-first
+through 0032, canonical definition handling, the bounded authorization-first
 reader, the atomic catalog Writer, the six administrator-only management
 handlers/codecs with their synchronous rejected-attempt boundary, the
 one-read-transaction active resolver, and opaque immutable snapshot preparation
@@ -1106,12 +1135,23 @@ candidate inside one SQLite read transaction, prunes against trusted effective
 indexes, applies private/app/global precedence, proves exact winning dependency
 closure, and returns a detached opaque authority. Snapshot preparation derives
 canonical object, shadow, dependency, and static-charge authorities and pins a
-shared Go/TypeScript B0/B1 wire/digest contract, but finalization remains sealed
-until KO-0H supplies trusted compiler evidence. Remaining KO-0 work is
-search-lifecycle attachment and the hidden Knowledge Manager list/detail shell.
-Existing negative production registration/capability contracts remain hard
-gates while that work proceeds. The capability remains disabled and
-unadvertised.
+shared Go/TypeScript B0/B1 wire/digest contract. KO-0H completes the remaining
+KO-0 lifecycle readiness work: an optional nonempty-app pre-admission resolver
+path; compiler-sealed empty-authority finalization; bounded summary/reference
+lifecycle contracts; durable history and search-attempt-audit persistence;
+retained inspection authority; atomic export execution/result pinning; and a
+hidden read-only Knowledge Manager shell. Nil or typed-nil resolvers and
+app-less searches preserve the legacy path. A configured request is parsed,
+planned, resolved, compiled, and finalized before any job ID, journal
+admission, publication, or execution.
+
+KO-0H deliberately finalizes only a canonically empty enabled snapshot. Any
+resolution containing an executable object fails before job creation because
+the knowledge prelude and knowledge-generated operators remain KO-1 work. No
+shipping knowledge runtime is claimed: `cmd/open-splunk-server` does not
+configure the resolver, production `NewHandler` still registers no
+knowledge-management route, bootstrap hard-disables the capability, and the
+hidden UI therefore remains unreachable.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and

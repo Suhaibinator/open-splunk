@@ -6,11 +6,18 @@ This directory is the source of truth shared by the Go server, Go collector, and
 
 - `value.proto`, `common.proto`, `event.proto`, and `result.proto` define shared wire primitives, exact dynamic values, canonical collected events, dynamic result schemas, field summaries, timelines, and visualization settings.
 - `collector.proto` is the only gRPC service. It defines the collector registration and at-least-once batch-delivery stream.
-- `search.proto` and `search_api.proto` separate reusable search intent and job state from SRouter request/response messages. `search_inspection_api.proto` is the administrator-only completed-job logical/physical plan inspection contract.
+- `search.proto` and `search_api.proto` separate reusable search intent and job
+  state from SRouter request/response messages. `search.proto`, `history.proto`,
+  `export.proto`, and `search_inspection_api.proto` carry the optional bounded
+  `KnowledgeSnapshotSummary`; `search_inspection_api.proto` remains the
+  administrator-only completed-job logical/physical plan inspection contract.
 - `search_ws.proto` defines binary WebSocket commands and sequenced progress events. It is not a results paging API.
 - `saved_search*`, `history*`, and `export*` remain separate because they have different lifecycle, persistence, and security semantics.
 - `index*`, `app*`, and `collector_admin*` define control-plane entities plus SRouter operations.
-- `audit*` defines the fixed, administrator-only immutable mutation-audit projection and bounded list operation. `search_attempt_audit*` defines the separately bounded, payload-free search-admission projection and list operation.
+- `audit*` defines the fixed, administrator-only immutable mutation-audit
+  projection and bounded list operation. `search_attempt_audit*` defines the
+  separately bounded, payload-free search-admission projection and list
+  operation and carries only the optional compact `KnowledgeSnapshotRef`.
 - `knowledge.proto` defines the common registry projection, authorized selectors,
   Tier-1 typed definitions, versioned dependencies, provenance, and immutable
   search snapshot. `knowledge_api.proto` reserves the protobuf CRUD,
@@ -105,9 +112,35 @@ ID/version, target kind, target ID/version, then role, and carry their unique
 contiguous `canonical_ordinal`. Lookup asset references use a contiguous
 `asset_ordinal`.
 These ordering rules are part of canonical snapshot hashing, not permission to
-trust a client-authored snapshot. Search admission always creates the snapshot
-after authentication, app and index authorization, and server-side catalog
-resolution.
+trust a client-authored snapshot. Knowledge-enabled search admission creates
+the snapshot after authentication, app and index authorization, and server-side
+catalog resolution. Legacy, resolver-disabled, and app-less admission leaves it
+absent.
+
+`KnowledgeSnapshotRef` has explicit presence semantics: absence means disabled
+or legacy resolution, while a present reference with `object_count` zero means
+enabled-empty resolution. `KnowledgeSnapshotSummary` is limited to 32 KiB and
+contains exactly the canonical first `min(ref.object_count, 64)` object
+summaries; `objects_truncated` is true exactly when `ref.object_count` exceeds
+64. The reference always carries the exact total. Retained internal summaries
+may carry authorized object identity, but current browser search-job, history,
+export, and inspection projections replace every such disclosure with
+`redacted = true`, preserving only ordinal, type, and stage.
+
+These wire fields are provenance, not client-authored execution authority. The
+search manager privately seals every completed execution snapshot, legacy or
+enabled, together with its explicit enabled bit and exact result generation,
+schema, row count, and truncation state. Enabled seals also commit the compiled
+query and snapshot authority. Inspection and export accept only
+manager-validated authority; export additionally requires the matching
+manager-owned result pin.
+
+`SearchHistoryEntry` durably preserves the exact admitted summary from queued
+admission through the first terminal publication. Production commits the
+pending history row and its `SearchAttemptAuditEvent` in one SQLite transaction;
+the audit event retains only the summary's compact reference. Terminal history
+publication must reproduce the same summary and cannot add, remove, or replace
+that admission authority.
 
 Executable object order is stage, normalized binary name, and stable object ID.
 There is no client-authored stage order. `QUARANTINED` is a terminal
@@ -164,6 +197,14 @@ or an indeterminate outcome never creates a second rejected-attempt row. New
 ACTIVE publication remains unavailable, but an exact retained ACTIVE result
 from the concrete receipt-first catalog Writer remains replayable after
 downgrade only when the retained outcome is still recognized and canonical.
+
+KO-0H adds only internal lifecycle and browser readiness. Production does not
+configure the optional knowledge resolver, register any knowledge-management
+route, or advertise the capability. The hidden read-only Knowledge Manager is
+therefore omitted from navigation, is not dynamically loaded, and issues no
+knowledge API request. KO-0H finalizes only an enabled-empty snapshot;
+nonempty finalization, the knowledge prelude, and knowledge-generated operators
+remain KO-1 work, so no shipping knowledge execution is claimed.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.
@@ -254,10 +295,12 @@ redaction, and frontend requirements.
 
 `POST /api/v1/audit/search-attempts/list` is administrator-only. Tenant scope
 comes from the authenticated browser principal and cannot be supplied on the
-wire. Its immutable projection contains only tenant-local sequence, occurrence
-time, fixed actor identity, owner ID, and search-job ID. It never exposes SPL,
-index or app scope, generated SQL, results, warnings, failures, headers,
-credentials, or arbitrary metadata.
+wire. Its immutable projection contains tenant-local sequence, occurrence
+time, fixed actor identity, owner ID, search-job ID, and an optional compact
+`KnowledgeSnapshotRef`. That reference contains only digest, catalog/compiler
+identity, and exact object count; no object inventory or definition is stored.
+The projection never exposes SPL, index or app scope, generated SQL, results,
+warnings, failures, headers, credentials, or arbitrary metadata.
 
 Pages are ordered by descending sequence, capped at 200 rows and 2 MiB, and
 support exact actor-ID and owner-ID filters. The purpose-separated authenticated
@@ -506,7 +549,8 @@ The response contains a bounded logical projection (ordered stages, safe field
 names, exact source ranges, and final output shape), a bounded physical
 projection (allowlisted ClickHouse node types, read columns, index names and
 keys, and initial/selected part and granule counts), the generated SQL, raw
-structured `EXPLAIN PLAN` text, and the diagnostic ClickHouse query ID.
+structured `EXPLAIN PLAN` text, the diagnostic ClickHouse query ID, and the
+optional bounded knowledge summary.
 `OPEN`, `STATIC`, and `DYNAMIC` output kinds distinguish an unknown schema, a
 complete ordered schema, and a fixed prefix with a maximum number of dynamic
 fields.
@@ -519,6 +563,19 @@ EXPLAIN text. Treat the entire inspection response as privileged diagnostic
 data. Execution rows, owner IDs, and mutable planner state are never part of
 this contract. The server validates and bounds every projected collection and
 string before serialization.
+
+For an enabled snapshot, inspection uses the retained manager-sealed compiled
+authority. It performs a second detached execution-snapshot read after
+`EXPLAIN` and requires exact sealed equality; this metadata-only path consumes
+no result lease. The browser projection redacts every object identity in the
+returned summary.
+
+Export admission atomically obtains the completed execution authority and its
+exact manager-owned result-generation pin. The pin is held for the full
+re-execution and export lifetime. An enabled export uses the retained compiled
+query and snapshot summary; it cannot substitute a current catalog snapshot or
+a constructed, cross-manager, or mismatched result lease. Export responses use
+the same redacted bounded summary projection.
 
 Export-job listing is owner-and-tenant scoped and ordered by immutable
 `created_at DESC, export_job_id DESC`. Pages default to and are capped at 15
@@ -567,7 +624,23 @@ clear semantics. The hard ceilings, accepted-event charging, durable virtual
 schedule, exact-retry precedence, and collector backpressure behavior are
 normative in [Ingestion rate limits v0.1](ingestion-rate-limits-v0.1.md).
 
-Search creation always creates a job record—even parse or planning failures transition that job to `FAILED` and therefore appear in history. An ordinary or saved-search create supplies `definition`. A `SEARCH_JOB_ORIGIN_HISTORY_RERUN` create instead supplies only `source.history_search_id`: `definition` is forbidden, and the server reconstructs trusted reusable intent from the caller's owner-scoped retained history row, reauthorizes its current app/index scope, resolves relative time again, and records the immediate source history ID on the fresh job. If current-clock resolution makes a retained mixed relative/absolute range non-executable, the server returns `409 Conflict` without admitting a job. Search and export cancellation are idempotent, and an already-terminal job is returned unchanged.
+A legacy or app-less search creation creates a job record even for parse or
+planning failures; that job transitions to `FAILED` and appears in history. A
+configured nonempty-app knowledge admission instead parses, plans, resolves,
+compiles, and finalizes before an ID exists, so any failure creates no job or
+history/audit row. An ordinary or saved-search create supplies `definition`. A
+`SEARCH_JOB_ORIGIN_HISTORY_RERUN` create instead supplies only
+`source.history_search_id`: `definition` is forbidden, and the server
+reconstructs trusted reusable intent from the caller's owner-scoped retained
+history row, reauthorizes its current app/index scope, resolves relative time
+again, and records the immediate source history ID on the fresh job. The
+retained knowledge summary is provenance only. When knowledge admission is
+configured, the fresh job resolves the current catalog and receives a new
+snapshot; it never reuses the historical snapshot or compiled authority. If
+current-clock resolution makes a retained mixed relative/absolute range
+non-executable, the server returns `409 Conflict` without admitting a job.
+Search and export cancellation are idempotent, and an already-terminal job is
+returned unchanged.
 
 Result cursors are scoped to one immutable search snapshot and one column selection. A page token must not be reused with another job or changed request parameters. Rows contain exactly one cell per schema column; a nonexistent field uses `MISSING_VALUE_MISSING`, while an explicitly present null uses `NULL_VALUE_NULL`.
 

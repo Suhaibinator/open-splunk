@@ -2,7 +2,7 @@
 
 **Status:** normative implementation contract; executable runtime corpus pending
 **Compatibility version:** `0.1`
-**Last updated:** August 7, 2026
+**Last updated:** August 8, 2026
 
 This contract defines the first Open Splunk search-time knowledge surface. It
 is intentionally narrower than Splunk Enterprise knowledge behavior. Anything
@@ -10,20 +10,27 @@ not described here is unsupported and must fail before publication or search
 execution; the server never applies a supported prefix of an invalid knowledge
 snapshot.
 
-The `0.1` runtime surface contains regular-expression and JSON field
-extractions, field aliases, and calculated fields. Catalog APIs and snapshot
-metadata may ship before enrichment, but the server must not advertise
+The eventual advertised `0.1` runtime surface contains regular-expression and
+JSON field extractions, field aliases, and calculated fields. Catalog APIs and
+snapshot metadata may ship before enrichment, but the server must not advertise
 `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` until the complete CRUD, resolution,
 snapshot, planner, executor, inspection, lifecycle, and browser family is
 configured and tested.
 
+**KO-0H readiness status:** the implemented slice is internal and deliberately
+non-shipping. Production does not configure the optional knowledge resolver,
+register the knowledge-management routes, or advertise the feature, so no
+knowledge object affects search results. KO-0H can finalize only an enabled,
+canonically empty snapshot; nonempty finalization, the knowledge prelude, and
+every knowledge-generated logical operator remain deferred to KO-1.
+
 ## Security boundary
 
-The server resolves knowledge after authenticating the principal, authorizing
-the selected app, and deriving the effective index scope. A request supplies
-authored SPL and an app intent; it cannot supply resolved object bodies,
-versions, catalog revisions, physical storage identities, or a trusted
-snapshot digest.
+When knowledge admission is enabled, the server resolves knowledge after
+authenticating the principal, authorizing the selected app, and deriving the
+effective index scope. A request supplies authored SPL and an app intent; it
+cannot supply resolved object bodies, versions, catalog revisions, physical
+storage identities, or a trusted snapshot digest.
 
 Knowledge never grants access to an app, index, event, field, or object. A
 selector can only remove rows from the set to which an object applies. It
@@ -596,15 +603,22 @@ snapshot digesting and history.
 
 ## Immutable snapshots and lifecycle
 
-After authorization and before parsing/planning that can execute enrichment,
-admission detaches a canonical snapshot containing tenant, principal, app,
-effective authorized indexes, tenant revision and its exact 32-byte catalog-
-state commitment, optional app revision, compiler compatibility version, exact
-ordered object IDs/versions/types/names/scopes, selectors, definition bytes and
-digests, dependency order, shadow warnings, and aggregate budget charges. The
-SHA-256 snapshot digest covers a versioned, length-prefixed canonical encoding
-of every field, including that commitment; map iteration, timestamps, database
-row order, and mutable ORM records are excluded.
+The KO-0H manager path is optional. A nil resolver, including a typed nil, and
+an app-less request preserve the legacy asynchronous path. For a configured
+nonempty-app request, the browser boundary first proves live app and index
+authority. The manager then captures storage visibility and synchronously
+parses, plans, resolves, compiler-seals, and finalizes the request before any
+job ID, history or audit admission, publication, or execution can exist.
+
+That knowledge-enabled admission detaches a canonical snapshot containing
+tenant, principal, app, effective authorized indexes, tenant revision and its
+exact 32-byte catalog-state commitment, optional app revision, compiler
+compatibility version, exact ordered object IDs/versions/types/names/scopes,
+selectors, definition bytes and digests, dependency order, shadow warnings,
+and aggregate budget charges. The SHA-256 snapshot digest covers a versioned,
+length-prefixed canonical encoding of every field, including that commitment;
+map iteration, timestamps, database row order, and mutable ORM records are
+excluded.
 
 All revision, current-registry, exact-version, dependency, and ACL reads for
 one snapshot occur through one SQLite read transaction. The transaction reads
@@ -660,6 +674,22 @@ rendered bind values, executor wrappers, settings, and the independent 1 MiB
 executor query-size defense are excluded. Resolution or sealed compilation
 exceeding a ceiling fails admission before a job is created.
 
+Generic lifecycle records distinguish absence from emptiness. An absent
+`KnowledgeSnapshotSummary` means knowledge resolution was disabled or the
+request followed the legacy/app-less path. A present reference with
+`object_count == 0` is the enabled, canonically empty result. One summary is
+limited to 32 KiB and contains exactly the canonical first
+`min(object_count, 64)` object summaries; `objects_truncated` is true exactly
+when `object_count` exceeds 64. The reference always retains the exact total.
+
+Every detached completed-execution snapshot is manager-minted, including the
+legacy form. Its private seal commits the explicit knowledge-enabled bit, the
+complete execution tuple, the compiled query and snapshot authority when
+enabled, and the exact result generation, schema, row count, and truncation
+state. A result lease is valid for that snapshot only when its private
+manager-owned attestation matches the seal; constructed, cross-manager, or
+mismatched pins fail closed.
+
 The physical catalog is limited to 8,192 object identities, 65,536 immutable
 versions, 512 MiB of unique definition-body bytes, and 20,480 idempotency
 records per tenant. Normal creates and edits stop at 61,440 versions and 16,384
@@ -694,20 +724,30 @@ per query. It shares the search execution deadline and memory ceilings. Crossing
 a boundary fails the query with a source-attributed resource-limit error; input
 is never truncated and an object is never silently skipped.
 
-A running or retained job executes only its detached snapshot. Updating,
-disabling, deleting, shadowing, or corrupting the current catalog cannot change
-that job's result, schema, stored provenance, stored inspection model, or
-export. Export uses the original retained snapshot. Saved-search execution and
-History **Run Again** resolve current knowledge and receive a new digest.
+The lifecycle binding is implemented for enabled-empty snapshots. Updating the
+catalog cannot change that retained authority, but KO-0H does not permit a
+nonempty snapshot to finalize or execute. KO-1 must supply and seal the
+knowledge prelude before this contract can extend to executable objects.
 
-History stores the digest and a bounded safe inventory, not definition bodies.
-Every history, diagnostics, field-provenance, and inspection response uses the
-stable object ID to reauthorize the caller against the current registry scope,
-state, ownership, and ACL policy. A retained historical scope or ACL is
-provenance only and never grants current disclosure. The immutable stored model
-does not change, but its response projection does: an unauthorized caller
-receives only stage/kind and a fixed redacted-object ordinal, with no object ID,
-name, version, app, owner, description, or definition location.
+History durably stores the exact bounded summary admitted with the queued job
+and requires the same summary at terminal publication. The search-attempt audit
+row committed with that admission stores only the compact reference, including
+the exact object count, and never stores the inventory or definition bodies.
+Current browser job, history, export, and inspection projections preserve the
+reference and canonical ordinal/type/stage inventory but redact every retained
+object identity. A future current-policy authorizer may disclose an identity
+only after checking the current registry scope, state, ownership, and ACL;
+historical scope remains provenance and never grants disclosure.
+
+Inspection opens the retained compiled authority for an enabled snapshot,
+performs a second detached sealed metadata read after `EXPLAIN`, and consumes no
+result-lease capacity. Export atomically acquires the exact execution authority
+and matching result-generation pin, retains that pin for the export lifetime,
+and uses the retained compiled authority for an enabled snapshot. Saved-search
+execution and History **Run Again** reauthorize current app/index intent and,
+when the optional resolver is configured, perform a fresh current-catalog
+resolution. A historical summary is provenance only and is never accepted as
+execution authority.
 
 Version `0.1` performs no physical garbage collection of knowledge definition
 versions. Backup and restore include registry rows, exact version bytes,
