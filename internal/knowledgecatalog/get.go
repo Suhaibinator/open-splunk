@@ -21,6 +21,19 @@ func (store *Store) Get(
 	knowledgeObjectID string,
 	version *uint64,
 ) (result Object, returnedErr error) {
+	var authorized *AuthorizedContext
+	defer func() {
+		if returnedErr == nil {
+			return
+		}
+		returnedErr = withDefaultErrorDisposition(
+			returnedErr,
+			ErrorDispositionDefinitiveRejection,
+		)
+		if authorized != nil {
+			returnedErr = withAuthorizedContext(returnedErr, *authorized)
+		}
+	}()
 	if err := validateContext(ctx); err != nil {
 		return Object{}, err
 	}
@@ -63,6 +76,8 @@ func (store *Store) Get(
 	if err := validateRegistry(registry); err != nil {
 		return Object{}, mapError(ctx.Err(), "validate current registry", err)
 	}
+	authorizedValue := authorizedObjectContext(registry)
+	authorized = &authorizedValue
 	current, err := store.objectFromCurrentRegistry(tx, registry)
 	if err != nil {
 		return Object{}, mapError(ctx.Err(), "validate current object", err)

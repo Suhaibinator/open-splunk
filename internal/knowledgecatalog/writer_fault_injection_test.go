@@ -72,6 +72,21 @@ func TestWriterRollsBackAtEveryCreatePrecommitBoundary(t *testing.T) {
 			if response != nil || !errors.Is(err, errWriterFault) {
 				t.Fatalf("Create fault at %s = (%v, %v), want nil/injected error", boundary, response, err)
 			}
+			wantDisposition := ErrorDispositionDefinitiveRejection
+			if boundary == writerHookPrepared {
+				wantDisposition = ErrorDispositionIndeterminate
+			}
+			requireCatalogDisposition(t, err, wantDisposition)
+			authorized, found := AuthorizedContextFromError(err)
+			wantAuthorized := boundary != writerHookPrepared &&
+				boundary != writerHookIdempotencyChecked &&
+				boundary != writerHookCatalogLedgersReady
+			if found != wantAuthorized {
+				t.Fatalf("Create fault at %s authorization found = %v, want %v (%#v)", boundary, found, wantAuthorized, authorized)
+			}
+			if found && (authorized.AppID != writerFaultApp || authorized.Object != nil) {
+				t.Fatalf("Create fault at %s authorization = %#v, want app-only", boundary, authorized)
+			}
 			if targetCalls != 1 {
 				t.Fatalf("Create fault hook calls at %s = %d, want 1", boundary, targetCalls)
 			}
@@ -122,6 +137,13 @@ func TestWriterExistingObjectRoutesRollbackAtBeforeCommit(t *testing.T) {
 			if version != 0 || !errors.Is(err, errWriterFault) {
 				t.Fatalf("%s fault = (version %d, %v), want zero/injected error", route, version, err)
 			}
+			requireCatalogDisposition(t, err, ErrorDispositionDefinitiveRejection)
+			authorized, found := AuthorizedContextFromError(err)
+			if !found || authorized.AppID != writerFaultApp || authorized.Object == nil ||
+				authorized.Object.KnowledgeObjectID != object.GetKnowledgeObjectId() ||
+				authorized.Object.Version != 1 {
+				t.Fatalf("%s before-commit authorization = %#v, found %v", route, authorized, found)
+			}
 			if targetCalls != 1 {
 				t.Fatalf("%s before-commit hook calls = %d, want 1", route, targetCalls)
 			}
@@ -154,6 +176,11 @@ func TestWriterAfterCommitLostResponseReplaysAfterReopen(t *testing.T) {
 	response, err := harness.writer.Create(harness.actorContext, harness.scope, request)
 	if response != nil || !errors.Is(err, errWriterFault) {
 		t.Fatalf("Create lost response = (%v, %v), want nil/injected error", response, err)
+	}
+	requireCatalogDisposition(t, err, ErrorDispositionKnownCommitted)
+	if authorized, found := AuthorizedContextFromError(err); !found ||
+		authorized.AppID != writerFaultApp || authorized.Object != nil {
+		t.Fatalf("lost-response authorization = %#v, found %v; want app-only", authorized, found)
 	}
 	if afterCommitCalls != 1 {
 		t.Fatalf("after-commit hook calls = %d, want 1", afterCommitCalls)

@@ -84,7 +84,7 @@ func (writer *Writer) replayProjectedObject(
 	if err != nil {
 		return replayObjectResponseAuthority{}, err
 	}
-	projection, err := knowledgeObjectToProto(object)
+	projection, err := ObjectToProto(object)
 	if err != nil {
 		return replayObjectResponseAuthority{}, err
 	}
@@ -152,7 +152,10 @@ func (writer *Writer) replayObject(
 	return object, nil
 }
 
-func knowledgeObjectToProto(object Object) (*opensplunkv1.KnowledgeObject, error) {
+// ObjectToProto validates and converts a detached catalog Object into a fresh
+// protobuf projection. Definition, digest, timestamps, and optional strings in
+// the result never alias caller-owned mutable storage.
+func ObjectToProto(object Object) (*opensplunkv1.KnowledgeObject, error) {
 	objectType, typeOK := objectTypeToProto(object.ObjectType)
 	sharingScope, scopeOK := knowledgeSharingScopeToProto(object.SharingScope)
 	state, stateOK := stateToProto(object.State)

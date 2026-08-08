@@ -139,8 +139,13 @@ func (writer *Writer) Create(
 	ctx context.Context,
 	scope WriteScope,
 	request *opensplunkv1.CreateKnowledgeObjectRequest,
-) (*opensplunkv1.CreateKnowledgeObjectResponse, error) {
-	return writer.create(ctx, scope, request)
+) (result *opensplunkv1.CreateKnowledgeObjectResponse, returnedErr error) {
+	result, returnedErr = writer.create(ctx, scope, request)
+	returnedErr = withDefaultErrorDisposition(
+		returnedErr,
+		ErrorDispositionDefinitiveRejection,
+	)
+	return result, returnedErr
 }
 
 // Update applies one exact, top-level KnowledgeObjectDefinition field mask
@@ -149,8 +154,13 @@ func (writer *Writer) Update(
 	ctx context.Context,
 	scope WriteScope,
 	request *opensplunkv1.UpdateKnowledgeObjectRequest,
-) (*opensplunkv1.UpdateKnowledgeObjectResponse, error) {
-	return writer.update(ctx, scope, request)
+) (result *opensplunkv1.UpdateKnowledgeObjectResponse, returnedErr error) {
+	result, returnedErr = writer.update(ctx, scope, request)
+	returnedErr = withDefaultErrorDisposition(
+		returnedErr,
+		ErrorDispositionDefinitiveRejection,
+	)
+	return result, returnedErr
 }
 
 // SetState enables or disables an object under optimistic concurrency.
@@ -158,8 +168,13 @@ func (writer *Writer) SetState(
 	ctx context.Context,
 	scope WriteScope,
 	request *opensplunkv1.SetKnowledgeObjectStateRequest,
-) (*opensplunkv1.SetKnowledgeObjectStateResponse, error) {
-	return writer.setState(ctx, scope, request)
+) (result *opensplunkv1.SetKnowledgeObjectStateResponse, returnedErr error) {
+	result, returnedErr = writer.setState(ctx, scope, request)
+	returnedErr = withDefaultErrorDisposition(
+		returnedErr,
+		ErrorDispositionDefinitiveRejection,
+	)
+	return result, returnedErr
 }
 
 // Delete appends a terminal immutable tombstone; it never removes retained
@@ -168,8 +183,13 @@ func (writer *Writer) Delete(
 	ctx context.Context,
 	scope WriteScope,
 	request *opensplunkv1.DeleteKnowledgeObjectRequest,
-) (*opensplunkv1.DeleteKnowledgeObjectResponse, error) {
-	return writer.delete(ctx, scope, request)
+) (result *opensplunkv1.DeleteKnowledgeObjectResponse, returnedErr error) {
+	result, returnedErr = writer.delete(ctx, scope, request)
+	returnedErr = withDefaultErrorDisposition(
+		returnedErr,
+		ErrorDispositionDefinitiveRejection,
+	)
+	return result, returnedErr
 }
 
 type normalizedWriteScope struct {
@@ -203,6 +223,14 @@ func normalizeWriteScope(scope WriteScope) (normalizedWriteScope, error) {
 		ownerID:        scope.OwnerID,
 		writableAppIDs: apps,
 	}, nil
+}
+
+// ValidateWriteScope verifies trusted caller-derived mutation authority using
+// the same normalization contract as Writer. It does not mutate scope or its
+// WritableAppIDs backing array.
+func ValidateWriteScope(scope WriteScope) error {
+	_, err := normalizeWriteScope(scope)
+	return err
 }
 
 func (scope normalizedWriteScope) canWriteApp(appID string) bool {

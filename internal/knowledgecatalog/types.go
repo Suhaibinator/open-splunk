@@ -14,6 +14,9 @@ import (
 const (
 	DefaultPageSize = 50
 	MaximumPageSize = 256
+	// MaximumObjectsPerTenant is the hard catalog identity ceiling. List totals
+	// can never exceed this value, including across continuation pages.
+	MaximumObjectsPerTenant = 8192
 	// MaximumListResponseCanonicalDefinitionBytes bounds definitions detached
 	// into one response page. PageSize is a row ceiling: List stops before the
 	// first object that would cross this byte ceiling and emits a continuation.

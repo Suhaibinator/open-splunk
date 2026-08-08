@@ -492,7 +492,10 @@ func (writer *Writer) commitMutation(
 	}
 	event.Boundary = writerHookBeforeCommit
 	if err := writer.callHook(ctx, event); err != nil {
-		return reconciledMutationOutcome{}, err
+		return reconciledMutationOutcome{}, withErrorDisposition(
+			err,
+			ErrorDispositionDefinitiveRejection,
+		)
 	}
 	commit := writer.commit
 	if commit == nil {
@@ -504,9 +507,12 @@ func (writer *Writer) commitMutation(
 		var reconcileErr error
 		reconciled, reconcileErr = writer.reconcileCommittedMutation(ctx, prepared, plan)
 		if reconcileErr != nil {
-			return reconciledMutationOutcome{}, errors.Join(
-				commitErr,
-				fmt.Errorf("reconcile ambiguous knowledge mutation commit: %w", reconcileErr),
+			return reconciledMutationOutcome{}, withErrorDisposition(
+				errors.Join(
+					commitErr,
+					fmt.Errorf("reconcile ambiguous knowledge mutation commit: %w", reconcileErr),
+				),
+				ErrorDispositionIndeterminate,
 			)
 		}
 	}
@@ -514,7 +520,10 @@ func (writer *Writer) commitMutation(
 	if err := writer.callHook(ctx, event); err != nil {
 		// The commit is durable. Returning the hook error intentionally models a
 		// lost response; an exact retry is resolved from the compact receipt.
-		return reconciledMutationOutcome{}, err
+		return reconciledMutationOutcome{}, withErrorDisposition(
+			err,
+			ErrorDispositionKnownCommitted,
+		)
 	}
 	return reconciled, nil
 }
@@ -524,6 +533,12 @@ func (writer *Writer) reconcileCommittedMutation(
 	prepared preparedMutation,
 	plan publicationPlan,
 ) (outcome reconciledMutationOutcome, returnedErr error) {
+	var authorized *AuthorizedContext
+	defer func() {
+		if returnedErr != nil && authorized != nil {
+			returnedErr = withAuthorizedContext(returnedErr, *authorized)
+		}
+	}()
 	if writer == nil || writer.orm == nil || !validPreparedReplayIdentity(&prepared, plan.route) {
 		return outcome, fmt.Errorf("%w: knowledge commit reconciliation authority is invalid", control.ErrInvalidArgument)
 	}
@@ -538,7 +553,7 @@ func (writer *Writer) reconcileCommittedMutation(
 		return outcome, tx.Error
 	}
 	defer finishWriterTransaction(tx, &returnedErr)
-	record, found, err := writer.readAuthorizedIdempotencyRecord(
+	record, found, replayAuthorized, err := writer.readAuthorizedIdempotencyRecord(
 		reconcileContext,
 		tx,
 		&prepared,
@@ -547,6 +562,7 @@ func (writer *Writer) reconcileCommittedMutation(
 	if err != nil {
 		return outcome, err
 	}
+	authorized = replayAuthorized
 	if !found ||
 		(plan.route != mutationRouteCreate && record.KnowledgeObjectID != plan.objectID) ||
 		record.ObjectVersion != plan.version ||

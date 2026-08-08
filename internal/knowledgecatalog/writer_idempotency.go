@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -72,6 +73,11 @@ type idempotencyObjectIdentity struct {
 	KnowledgeObjectID      string `gorm:"column:knowledge_object_id"`
 }
 
+type idempotencyRequestDigest struct {
+	RequestDigestBytes int64  `gorm:"column:request_digest_bytes"`
+	RequestDigest      []byte `gorm:"column:request_digest"`
+}
+
 // readIdempotencyObjectIdentity is the only receipt read allowed before
 // current authorization. Its projection is memory-bounded even if a damaged
 // database contains an oversized object identity; request digests, outcome
@@ -126,46 +132,153 @@ func (writer *Writer) readAuthorizedIdempotencyRecord(
 	tx *gorm.DB,
 	prepared *preparedMutation,
 	route string,
-) (idempotencyRecord, bool, error) {
+) (
+	record idempotencyRecord,
+	found bool,
+	authorized *AuthorizedContext,
+	returnedErr error,
+) {
+	defer func() {
+		if returnedErr != nil && authorized != nil {
+			returnedErr = withAuthorizedContext(returnedErr, *authorized)
+		}
+	}()
 	if err := validateContext(ctx); err != nil {
-		return idempotencyRecord{}, false, err
+		return idempotencyRecord{}, false, nil, err
 	}
 	if writer == nil || writer.reader == nil || tx == nil || prepared == nil {
-		return idempotencyRecord{}, false, fmt.Errorf(
+		return idempotencyRecord{}, false, nil, fmt.Errorf(
 			"%w: knowledge replay store is unavailable",
 			control.ErrInvalidArgument,
 		)
 	}
 	objectID, found, err := readIdempotencyObjectIdentity(tx, prepared, route)
-	if err != nil || !found {
-		return idempotencyRecord{}, found, err
+	if err != nil {
+		if errors.Is(err, control.ErrNotFound) {
+			return idempotencyRecord{}, found, nil, err
+		}
+		return idempotencyRecord{}, found, nil, withErrorDisposition(
+			err,
+			ErrorDispositionIndeterminate,
+		)
+	}
+	if !found {
+		return idempotencyRecord{}, false, nil, nil
 	}
 	database := tx.WithContext(ctx)
 	if database.Error != nil {
-		return idempotencyRecord{}, true, database.Error
+		return idempotencyRecord{}, true, nil, withErrorDisposition(
+			database.Error,
+			ErrorDispositionIndeterminate,
+		)
 	}
-	current, authorized, err := readAuthorizedReplayRegistry(database, *prepared, objectID)
+	current, isAuthorized, err := readAuthorizedReplayRegistry(database, *prepared, objectID)
 	if err != nil {
-		return idempotencyRecord{}, true, err
+		return idempotencyRecord{}, true, nil, withErrorDisposition(
+			err,
+			ErrorDispositionIndeterminate,
+		)
 	}
-	if !authorized {
-		return idempotencyRecord{}, true, control.ErrNotFound
+	if !isAuthorized {
+		return idempotencyRecord{}, true, nil, control.ErrNotFound
 	}
 	if _, err := validateAuthorizedReplayCurrent(database, *prepared, current); err != nil {
-		return idempotencyRecord{}, true, err
+		if !errors.Is(err, control.ErrNotFound) &&
+			!errors.Is(err, ErrIdempotentOutcomeRedacted) {
+			err = withErrorDisposition(err, ErrorDispositionIndeterminate)
+		}
+		return idempotencyRecord{}, true, nil, err
+	}
+	authorizedValue := authorizedReplayContext(route, current)
+	authorized = &authorizedValue
+
+	storedDigest, stillFound, err := readIdempotencyRequestDigest(
+		database,
+		prepared,
+		route,
+	)
+	if err != nil || !stillFound {
+		if err == nil {
+			err = fmt.Errorf(
+				"%w: knowledge idempotency receipt disappeared after authorization",
+				ErrCorrupt,
+			)
+		}
+		return idempotencyRecord{}, true, authorized, withErrorDisposition(
+			err,
+			ErrorDispositionIndeterminate,
+		)
+	}
+	if subtle.ConstantTimeCompare(storedDigest, prepared.requestDigest[:]) != 1 {
+		return idempotencyRecord{}, true, authorized, withErrorDisposition(
+			ErrIdempotencyConflict,
+			ErrorDispositionDefinitiveRejection,
+		)
 	}
 
-	record, stillFound, err := readIdempotencyRecord(database, prepared, route)
+	record, stillFound, err = readIdempotencyRecord(database, prepared, route)
 	if err != nil {
-		return idempotencyRecord{}, true, err
+		disposition := ErrorDispositionKnownCommitted
+		if errors.Is(err, ErrIdempotencyConflict) {
+			disposition = ErrorDispositionIndeterminate
+		}
+		return idempotencyRecord{}, true, authorized, withErrorDisposition(
+			err,
+			disposition,
+		)
 	}
 	if !stillFound || record.KnowledgeObjectID != objectID {
-		return idempotencyRecord{}, true, fmt.Errorf(
-			"%w: knowledge idempotency receipt changed after authorization",
+		return idempotencyRecord{}, true, authorized, withErrorDisposition(
+			fmt.Errorf(
+				"%w: knowledge idempotency receipt changed after authorization",
+				ErrCorrupt,
+			),
+			ErrorDispositionIndeterminate,
+		)
+	}
+	return record, true, authorized, nil
+}
+
+// readIdempotencyRequestDigest is the first receipt authority opened after
+// current-policy authorization and quarantine redaction. Its capped projection
+// lets callers distinguish a proven different request from an exact committed
+// retry without hydrating or trusting the outcome envelope first.
+func readIdempotencyRequestDigest(
+	tx *gorm.DB,
+	prepared *preparedMutation,
+	route string,
+) ([]byte, bool, error) {
+	if tx == nil || prepared == nil || !validPreparedReplayIdentity(prepared, route) {
+		return nil, false, fmt.Errorf(
+			"%w: knowledge idempotency digest lookup authority is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	var digests []idempotencyRequestDigest
+	if err := tx.Model(&idempotencyRecord{}).Where(
+		"tenant_id = ? AND actor_kind = ? AND actor_id = ? AND route = ? AND client_request_id = ?",
+		prepared.scope.tenantID,
+		prepared.actor.Kind,
+		prepared.actor.ID,
+		route,
+		prepared.clientRequestID,
+	).Select(`
+		length(request_digest) AS request_digest_bytes,
+		substr(request_digest, 1, ?) AS request_digest
+	`, sha256.Size+1).Limit(2).Find(&digests).Error; err != nil {
+		return nil, false, err
+	}
+	if len(digests) == 0 {
+		return nil, false, nil
+	}
+	if len(digests) != 1 || digests[0].RequestDigestBytes != sha256.Size ||
+		len(digests[0].RequestDigest) != sha256.Size {
+		return nil, true, fmt.Errorf(
+			"%w: knowledge idempotency request digest is invalid",
 			ErrCorrupt,
 		)
 	}
-	return record, true, nil
+	return bytes.Clone(digests[0].RequestDigest), true, nil
 }
 
 // readIdempotencyRecord performs a scalar-width preflight before detaching the

@@ -65,6 +65,11 @@ func TestWriterAmbiguousCommitWithoutReceiptDoesNotReexecute(t *testing.T) {
 	if response != nil || !errors.Is(err, errWriterAmbiguousCommit) {
 		t.Fatalf("Create() after absent ambiguous commit = %v, %v", response, err)
 	}
+	requireCatalogDisposition(t, err, ErrorDispositionIndeterminate)
+	if authorized, found := AuthorizedContextFromError(err); !found ||
+		authorized.AppID != writerFaultApp || authorized.Object != nil {
+		t.Fatalf("ambiguous Create authorization = %#v, found %v; want app-only", authorized, found)
+	}
 	assertWriterFaultSnapshotsEqual(t, readWriterFaultSnapshot(t, harness.database), before)
 
 	harness.writer.commit = nil

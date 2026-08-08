@@ -18,7 +18,7 @@ const (
 	maximumFilterBytes                      = 255
 	maximumReadableApps                     = 256
 	maximumCursorBytes                      = 4 << 10
-	maximumObjectsPerTenant                 = 8192
+	maximumObjectsPerTenant                 = MaximumObjectsPerTenant
 	maximumVersionsPerTenant                = 65536
 	maximumDefinitionBytes                  = 4 << 20
 	maximumDescriptionBytes                 = 16 << 10
@@ -80,6 +80,14 @@ func normalizeScope(scope ReadScope) (normalizedScope, error) {
 		ownerID:        strings.Clone(scope.OwnerID),
 		readableAppIDs: apps,
 	}, nil
+}
+
+// ValidateReadScope verifies trusted caller-derived read authority using the
+// same normalization contract as Get and List. It does not mutate scope or its
+// ReadableAppIDs backing array.
+func ValidateReadScope(scope ReadScope) error {
+	_, err := normalizeScope(scope)
+	return err
 }
 
 func normalizeListRequest(scope ReadScope, request ListRequest) (normalizedListRequest, error) {
@@ -164,6 +172,40 @@ func normalizeListRequest(scope ReadScope, request ListRequest) (normalizedListR
 		sortBy:              sortBy,
 		direction:           direction,
 	}, nil
+}
+
+// NormalizeListRequest verifies trusted read scope and the complete bounded
+// public List request using Store.List's exact normalization contract. The
+// returned request is canonical and fully detached from the caller: page and
+// sort defaults are explicit, optional filters are ASCII-trimmed, and filter
+// sets are sorted and compacted.
+func NormalizeListRequest(scope ReadScope, request ListRequest) (ListRequest, error) {
+	normalized, err := normalizeListRequest(scope, request)
+	if err != nil {
+		return ListRequest{}, err
+	}
+	return ListRequest{
+		PageSize:            normalized.pageSize,
+		PageToken:           strings.Clone(normalized.pageToken),
+		IncludeTotal:        normalized.includeTotal,
+		AppIDFilter:         cloneString(normalized.appIDFilter),
+		OwnerIDFilter:       cloneString(normalized.ownerIDFilter),
+		TextFilter:          cloneString(normalized.textFilter),
+		ObjectTypeFilters:   slices.Clone(normalized.objectTypeFilters),
+		StateFilters:        slices.Clone(normalized.stateFilters),
+		SharingScopeFilters: slices.Clone(normalized.sharingScopeFilters),
+		SelectorTextFilter:  cloneString(normalized.selectorTextFilter),
+		SortBy:              normalized.sortBy,
+		SortDirection:       normalized.direction,
+	}, nil
+}
+
+// ValidateListRequest verifies trusted read scope and the complete bounded
+// public List request using Store.List's exact normalization contract. It does
+// not mutate the caller's scope, filters, or pointer-backed values.
+func ValidateListRequest(scope ReadScope, request ListRequest) error {
+	_, err := NormalizeListRequest(scope, request)
+	return err
 }
 
 func normalizeFilterSet[T ~string](values []T, maximum int, kind string, valid func(T) bool) ([]T, error) {

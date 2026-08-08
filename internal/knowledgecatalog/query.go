@@ -539,7 +539,7 @@ func applyListOrder(query *gorm.DB, request normalizedListRequest) *gorm.DB {
 
 func mapError(ctxErr error, operation string, err error) error {
 	if ctxErr != nil {
-		return ctxErr
+		return copyCatalogErrorMetadata(ctxErr, err)
 	}
 	if errors.Is(err, control.ErrNotFound) || errors.Is(err, control.ErrPageInvalidated) ||
 		errors.Is(err, control.ErrCapacityExceeded) || errors.Is(err, ErrInvalidCursor) || errors.Is(err, ErrCorrupt) {

@@ -526,9 +526,9 @@ func TestKnowledgeObjectToProtoDetachesDefinitionDigestAndLifecycle(t *testing.T
 		UpdatedAt:         disabled,
 		DisabledAt:        &disabled,
 	}
-	projection, err := knowledgeObjectToProto(object)
+	projection, err := ObjectToProto(object)
 	if err != nil {
-		t.Fatalf("knowledgeObjectToProto: %v", err)
+		t.Fatalf("ObjectToProto: %v", err)
 	}
 	if projection.GetState() != opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED ||
 		projection.GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
@@ -545,7 +545,7 @@ func TestKnowledgeObjectToProtoDetachesDefinitionDigestAndLifecycle(t *testing.T
 
 	bad := object
 	bad.CreatedAt = bad.CreatedAt.Add(time.Nanosecond)
-	if _, err := knowledgeObjectToProto(bad); !errors.Is(err, ErrCorrupt) {
+	if _, err := ObjectToProto(bad); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("sub-microsecond response time = %v, want ErrCorrupt", err)
 	}
 }

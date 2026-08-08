@@ -135,6 +135,20 @@ func (writer *Writer) create(
 	scope WriteScope,
 	request *opensplunkv1.CreateKnowledgeObjectRequest,
 ) (result *opensplunkv1.CreateKnowledgeObjectResponse, returnedErr error) {
+	var authorized *AuthorizedContext
+	replayOutcomeUnknown := false
+	receiptAbsenceProven := false
+	defer func() {
+		if returnedErr != nil && replayOutcomeUnknown && !receiptAbsenceProven {
+			returnedErr = withDefaultErrorDisposition(
+				returnedErr,
+				ErrorDispositionIndeterminate,
+			)
+		}
+		if returnedErr != nil && authorized != nil {
+			returnedErr = withAuthorizedContext(returnedErr, *authorized)
+		}
+	}()
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -150,6 +164,7 @@ func (writer *Writer) create(
 	if err != nil {
 		return nil, err
 	}
+	replayOutcomeUnknown = true
 	request = prepared.createRequest
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteCreate}); err != nil {
 		return nil, err
@@ -160,25 +175,37 @@ func (writer *Writer) create(
 		return nil, writerError(ctx, "begin create", tx.Error)
 	}
 	defer finishWriterTransaction(tx, &returnedErr)
-	idempotency, found, err := writer.readAuthorizedIdempotencyRecord(
+	idempotency, found, replayAuthorized, err := writer.readAuthorizedIdempotencyRecord(
 		ctx, tx, &prepared, mutationRouteCreate,
 	)
 	if err != nil {
-		if errors.Is(err, ErrIdempotentOutcomeRedacted) {
-			return nil, err
+		if errors.Is(err, ErrIdempotentOutcomeRedacted) ||
+			errors.Is(err, control.ErrNotFound) {
+			return nil, withErrorDisposition(
+				err,
+				ErrorDispositionDefinitiveRejection,
+			)
 		}
 		return nil, writerError(ctx, "read create idempotency", err)
 	}
+	authorized = replayAuthorized
+	receiptAbsenceProven = !found
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookIdempotencyChecked, Route: mutationRouteCreate}); err != nil {
+		if found {
+			return nil, withErrorDisposition(err, ErrorDispositionKnownCommitted)
+		}
 		return nil, err
 	}
 	if found {
 		result, err = writer.replayCreate(ctx, tx, prepared, idempotency)
 		if err != nil {
-			return nil, err
+			return nil, withErrorDisposition(err, ErrorDispositionKnownCommitted)
 		}
 		if err := tx.Commit().Error; err != nil {
-			return nil, writerError(ctx, "commit create replay", err)
+			return nil, withErrorDisposition(
+				writerError(ctx, "commit create replay", err),
+				ErrorDispositionKnownCommitted,
+			)
 		}
 		return result, nil
 	}
@@ -207,6 +234,8 @@ func (writer *Writer) create(
 	if err := authorizeDefinitionApp(tx, prepared.scope, authority.appID, false); err != nil {
 		return nil, err
 	}
+	authorizedValue := authorizedAppContext(authority.appID)
+	authorized = &authorizedValue
 	if health.ProjectionBytes > 268435456-projectionCharge(authority) {
 		return nil, control.ErrCapacityExceeded
 	}
@@ -247,7 +276,7 @@ func (writer *Writer) create(
 	if err != nil {
 		return nil, err
 	}
-	projected, err := knowledgeObjectToProto(object)
+	projected, err := ObjectToProto(object)
 	if err != nil {
 		return nil, err
 	}
@@ -271,6 +300,20 @@ func (writer *Writer) update(
 	scope WriteScope,
 	request *opensplunkv1.UpdateKnowledgeObjectRequest,
 ) (result *opensplunkv1.UpdateKnowledgeObjectResponse, returnedErr error) {
+	var authorized *AuthorizedContext
+	replayOutcomeUnknown := false
+	receiptAbsenceProven := false
+	defer func() {
+		if returnedErr != nil && replayOutcomeUnknown && !receiptAbsenceProven {
+			returnedErr = withDefaultErrorDisposition(
+				returnedErr,
+				ErrorDispositionIndeterminate,
+			)
+		}
+		if returnedErr != nil && authorized != nil {
+			returnedErr = withAuthorizedContext(returnedErr, *authorized)
+		}
+	}()
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -286,6 +329,7 @@ func (writer *Writer) update(
 	if err != nil {
 		return nil, err
 	}
+	replayOutcomeUnknown = true
 	request = prepared.updateRequest
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteUpdate}); err != nil {
 		return nil, err
@@ -295,25 +339,37 @@ func (writer *Writer) update(
 		return nil, writerError(ctx, "begin update", tx.Error)
 	}
 	defer finishWriterTransaction(tx, &returnedErr)
-	idempotency, found, err := writer.readAuthorizedIdempotencyRecord(
+	idempotency, found, replayAuthorized, err := writer.readAuthorizedIdempotencyRecord(
 		ctx, tx, &prepared, mutationRouteUpdate,
 	)
 	if err != nil {
-		if errors.Is(err, ErrIdempotentOutcomeRedacted) {
-			return nil, err
+		if errors.Is(err, ErrIdempotentOutcomeRedacted) ||
+			errors.Is(err, control.ErrNotFound) {
+			return nil, withErrorDisposition(
+				err,
+				ErrorDispositionDefinitiveRejection,
+			)
 		}
 		return nil, writerError(ctx, "read update idempotency", err)
 	}
+	authorized = replayAuthorized
+	receiptAbsenceProven = !found
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookIdempotencyChecked, Route: mutationRouteUpdate}); err != nil {
+		if found {
+			return nil, withErrorDisposition(err, ErrorDispositionKnownCommitted)
+		}
 		return nil, err
 	}
 	if found {
 		result, err = writer.replayUpdate(ctx, tx, prepared, idempotency)
 		if err != nil {
-			return nil, err
+			return nil, withErrorDisposition(err, ErrorDispositionKnownCommitted)
 		}
 		if err := tx.Commit().Error; err != nil {
-			return nil, writerError(ctx, "commit update replay", err)
+			return nil, withErrorDisposition(
+				writerError(ctx, "commit update replay", err),
+				ErrorDispositionKnownCommitted,
+			)
 		}
 		return result, nil
 	}
@@ -328,6 +384,8 @@ func (writer *Writer) update(
 	if err != nil {
 		return nil, err
 	}
+	authorizedValue := authorizedObjectContext(current)
+	authorized = &authorizedValue
 	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
@@ -429,7 +487,7 @@ func (writer *Writer) update(
 	if err != nil {
 		return nil, err
 	}
-	projected, err := knowledgeObjectToProto(object)
+	projected, err := ObjectToProto(object)
 	if err != nil {
 		return nil, err
 	}
@@ -453,6 +511,20 @@ func (writer *Writer) setState(
 	scope WriteScope,
 	request *opensplunkv1.SetKnowledgeObjectStateRequest,
 ) (result *opensplunkv1.SetKnowledgeObjectStateResponse, returnedErr error) {
+	var authorized *AuthorizedContext
+	replayOutcomeUnknown := false
+	receiptAbsenceProven := false
+	defer func() {
+		if returnedErr != nil && replayOutcomeUnknown && !receiptAbsenceProven {
+			returnedErr = withDefaultErrorDisposition(
+				returnedErr,
+				ErrorDispositionIndeterminate,
+			)
+		}
+		if returnedErr != nil && authorized != nil {
+			returnedErr = withAuthorizedContext(returnedErr, *authorized)
+		}
+	}()
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -468,6 +540,7 @@ func (writer *Writer) setState(
 	if err != nil {
 		return nil, err
 	}
+	replayOutcomeUnknown = true
 	request = prepared.setStateRequest
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteSetState}); err != nil {
 		return nil, err
@@ -477,25 +550,37 @@ func (writer *Writer) setState(
 		return nil, writerError(ctx, "begin set-state", tx.Error)
 	}
 	defer finishWriterTransaction(tx, &returnedErr)
-	idempotency, found, err := writer.readAuthorizedIdempotencyRecord(
+	idempotency, found, replayAuthorized, err := writer.readAuthorizedIdempotencyRecord(
 		ctx, tx, &prepared, mutationRouteSetState,
 	)
 	if err != nil {
-		if errors.Is(err, ErrIdempotentOutcomeRedacted) {
-			return nil, err
+		if errors.Is(err, ErrIdempotentOutcomeRedacted) ||
+			errors.Is(err, control.ErrNotFound) {
+			return nil, withErrorDisposition(
+				err,
+				ErrorDispositionDefinitiveRejection,
+			)
 		}
 		return nil, writerError(ctx, "read set-state idempotency", err)
 	}
+	authorized = replayAuthorized
+	receiptAbsenceProven = !found
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookIdempotencyChecked, Route: mutationRouteSetState}); err != nil {
+		if found {
+			return nil, withErrorDisposition(err, ErrorDispositionKnownCommitted)
+		}
 		return nil, err
 	}
 	if found {
 		result, err = writer.replaySetState(ctx, tx, prepared, idempotency)
 		if err != nil {
-			return nil, err
+			return nil, withErrorDisposition(err, ErrorDispositionKnownCommitted)
 		}
 		if err := tx.Commit().Error; err != nil {
-			return nil, writerError(ctx, "commit set-state replay", err)
+			return nil, withErrorDisposition(
+				writerError(ctx, "commit set-state replay", err),
+				ErrorDispositionKnownCommitted,
+			)
 		}
 		return result, nil
 	}
@@ -510,6 +595,8 @@ func (writer *Writer) setState(
 	if err != nil {
 		return nil, err
 	}
+	authorizedValue := authorizedObjectContext(current)
+	authorized = &authorizedValue
 	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
@@ -576,7 +663,7 @@ func (writer *Writer) setState(
 	if err != nil {
 		return nil, err
 	}
-	projected, err := knowledgeObjectToProto(object)
+	projected, err := ObjectToProto(object)
 	if err != nil {
 		return nil, err
 	}
@@ -600,6 +687,20 @@ func (writer *Writer) delete(
 	scope WriteScope,
 	request *opensplunkv1.DeleteKnowledgeObjectRequest,
 ) (result *opensplunkv1.DeleteKnowledgeObjectResponse, returnedErr error) {
+	var authorized *AuthorizedContext
+	replayOutcomeUnknown := false
+	receiptAbsenceProven := false
+	defer func() {
+		if returnedErr != nil && replayOutcomeUnknown && !receiptAbsenceProven {
+			returnedErr = withDefaultErrorDisposition(
+				returnedErr,
+				ErrorDispositionIndeterminate,
+			)
+		}
+		if returnedErr != nil && authorized != nil {
+			returnedErr = withAuthorizedContext(returnedErr, *authorized)
+		}
+	}()
 	if err := validateContext(ctx); err != nil {
 		return nil, err
 	}
@@ -615,6 +716,7 @@ func (writer *Writer) delete(
 	if err != nil {
 		return nil, err
 	}
+	replayOutcomeUnknown = true
 	request = prepared.deleteRequest
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookPrepared, Route: mutationRouteDelete}); err != nil {
 		return nil, err
@@ -624,25 +726,37 @@ func (writer *Writer) delete(
 		return nil, writerError(ctx, "begin delete", tx.Error)
 	}
 	defer finishWriterTransaction(tx, &returnedErr)
-	idempotency, found, err := writer.readAuthorizedIdempotencyRecord(
+	idempotency, found, replayAuthorized, err := writer.readAuthorizedIdempotencyRecord(
 		ctx, tx, &prepared, mutationRouteDelete,
 	)
 	if err != nil {
-		if errors.Is(err, ErrIdempotentOutcomeRedacted) {
-			return nil, err
+		if errors.Is(err, ErrIdempotentOutcomeRedacted) ||
+			errors.Is(err, control.ErrNotFound) {
+			return nil, withErrorDisposition(
+				err,
+				ErrorDispositionDefinitiveRejection,
+			)
 		}
 		return nil, writerError(ctx, "read delete idempotency", err)
 	}
+	authorized = replayAuthorized
+	receiptAbsenceProven = !found
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookIdempotencyChecked, Route: mutationRouteDelete}); err != nil {
+		if found {
+			return nil, withErrorDisposition(err, ErrorDispositionKnownCommitted)
+		}
 		return nil, err
 	}
 	if found {
 		result, err = writer.replayDelete(ctx, tx, prepared, idempotency)
 		if err != nil {
-			return nil, err
+			return nil, withErrorDisposition(err, ErrorDispositionKnownCommitted)
 		}
 		if err := tx.Commit().Error; err != nil {
-			return nil, writerError(ctx, "commit delete replay", err)
+			return nil, withErrorDisposition(
+				writerError(ctx, "commit delete replay", err),
+				ErrorDispositionKnownCommitted,
+			)
 		}
 		return result, nil
 	}
@@ -657,6 +771,8 @@ func (writer *Writer) delete(
 	if err != nil {
 		return nil, err
 	}
+	authorizedValue := authorizedObjectContext(current)
+	authorized = &authorizedValue
 	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
@@ -1804,7 +1920,7 @@ func finishWriterTransaction(tx *gorm.DB, returnedErr *error) {
 
 func writerError(ctx context.Context, operation string, err error) error {
 	if ctx != nil && ctx.Err() != nil {
-		return ctx.Err()
+		return copyCatalogErrorMetadata(ctx.Err(), err)
 	}
 	if errors.Is(err, ErrCorrupt) || errors.Is(err, control.ErrNotFound) ||
 		errors.Is(err, control.ErrAlreadyExists) || errors.Is(err, control.ErrVersionConflict) ||

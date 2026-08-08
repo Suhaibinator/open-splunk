@@ -1110,7 +1110,7 @@ func assertWriterRecoveryExistingResponse(
 	if object != nil {
 		objectID = object.GetKnowledgeObjectId()
 		version = object.GetVersion()
-		projected, err := knowledgeObjectToProto(current)
+		projected, err := ObjectToProto(current)
 		if err != nil {
 			t.Fatalf("project current %s recovery object: %v", route, err)
 		}

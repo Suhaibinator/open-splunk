@@ -18,6 +18,12 @@ func (store *Store) List(
 	scope ReadScope,
 	request ListRequest,
 ) (page ListPage, returnedErr error) {
+	defer func() {
+		returnedErr = withDefaultErrorDisposition(
+			returnedErr,
+			ErrorDispositionDefinitiveRejection,
+		)
+	}()
 	if err := validateContext(ctx); err != nil {
 		return ListPage{}, err
 	}

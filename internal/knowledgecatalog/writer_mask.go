@@ -1,12 +1,15 @@
 package knowledgecatalog
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"slices"
 	"strings"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -20,6 +23,61 @@ var knowledgeUpdatePaths = map[string]struct{}{
 	"field_extraction": {},
 	"field_alias":      {},
 	"calculated_field": {},
+}
+
+// UpdateChangesSharingScope validates mask with the Writer's exact canonical
+// update-mask authority and reports whether it selects app_id or
+// sharing_scope. Callers may use the result to classify a rejected update as a
+// scope-change attempt without trusting an unvalidated request mask.
+func UpdateChangesSharingScope(mask *fieldmaskpb.FieldMask) (bool, error) {
+	paths, err := normalizeKnowledgeUpdateMask(mask)
+	if err != nil {
+		return false, err
+	}
+	for _, path := range paths {
+		if path == "app_id" || path == "sharing_scope" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// UpdateResultMatchesRequest proves that every canonical mask-selected field
+// in result agrees with the submitted definition after applying Writer's exact
+// normalization rules. Unselected fields are taken from result, so callers do
+// not need a racy pre-update read. Inactive opaque future bodies retain their
+// canonical bytes and may match only metadata-only updates.
+func UpdateResultMatchesRequest(
+	result *opensplunkv1.KnowledgeObjectDefinition,
+	submitted *opensplunkv1.KnowledgeObjectDefinition,
+	mask *fieldmaskpb.FieldMask,
+	state opensplunkv1.KnowledgeObjectState,
+) bool {
+	paths, err := normalizeKnowledgeUpdateMask(mask)
+	if err != nil {
+		return false
+	}
+	patched, err := applyKnowledgeDefinitionMask(result, submitted, paths)
+	if err != nil {
+		return false
+	}
+	resultBytes, err := (proto.MarshalOptions{Deterministic: true}).Marshal(result)
+	if err != nil || len(resultBytes) == 0 {
+		return false
+	}
+	if normalized, normalizeErr := knowledgedefinition.Normalize(patched); normalizeErr == nil {
+		return bytes.Equal(normalized.Bytes, resultBytes)
+	}
+	digest := sha256.Sum256(resultBytes)
+	if _, err := knowledgedefinition.DecodeCanonicalInactiveFutureBody(
+		resultBytes,
+		digest[:],
+		state,
+	); err != nil {
+		return false
+	}
+	patchedBytes, err := (proto.MarshalOptions{Deterministic: true}).Marshal(patched)
+	return err == nil && bytes.Equal(patchedBytes, resultBytes)
 }
 
 func normalizeKnowledgeUpdateMask(mask *fieldmaskpb.FieldMask) ([]string, error) {

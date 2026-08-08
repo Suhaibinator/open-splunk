@@ -149,6 +149,53 @@ func TestCatalogScopeAndFilterNormalizationAreCanonicalAndDetached(t *testing.T)
 	}
 }
 
+func TestPublicListRequestValidatorPinsStoreBoundsWithoutMutation(t *testing.T) {
+	t.Parallel()
+
+	appFilter := " \t" + testApp + "\r\n"
+	request := ListRequest{
+		PageSize:          MaximumPageSize,
+		AppIDFilter:       &appFilter,
+		ObjectTypeFilters: []ObjectType{ObjectTypeFieldAlias, ObjectTypeFieldAlias},
+		StateFilters:      []State{StateDisabled, StateDraft},
+	}
+	beforeApps := slices.Clone(request.ObjectTypeFilters)
+	beforeStates := slices.Clone(request.StateFilters)
+	if err := ValidateListRequest(testReadScope(), request); err != nil {
+		t.Fatalf("ValidateListRequest(valid): %v", err)
+	}
+	if !slices.Equal(request.ObjectTypeFilters, beforeApps) ||
+		!slices.Equal(request.StateFilters, beforeStates) ||
+		request.AppIDFilter == nil || *request.AppIDFilter != appFilter {
+		t.Fatalf("ValidateListRequest mutated caller authority: %#v", request)
+	}
+
+	invalid := []ListRequest{
+		{PageSize: MaximumPageSize + 1},
+		{PageToken: " cursor-with-whitespace "},
+		{AppIDFilter: stringPointer("")},
+		{TextFilter: stringPointer("\x7f")},
+		{ObjectTypeFilters: []ObjectType{
+			ObjectTypeFieldAlias,
+			ObjectTypeFieldExtraction,
+			ObjectTypeCalculatedField,
+			ObjectTypeFieldAlias,
+		}},
+	}
+	for index, candidate := range invalid {
+		if err := ValidateListRequest(testReadScope(), candidate); !errors.Is(
+			err,
+			control.ErrInvalidArgument,
+		) {
+			t.Errorf(
+				"ValidateListRequest(invalid %d) = %v, want ErrInvalidArgument",
+				index,
+				err,
+			)
+		}
+	}
+}
+
 func TestCatalogFingerprintBindsEverySemanticInputButNotToken(t *testing.T) {
 	t.Parallel()
 
