@@ -979,22 +979,20 @@ func resolutionSelectorIntersects(
 	if err != nil {
 		return false, fmt.Errorf("%w: active index selector is invalid", ErrCorrupt)
 	}
-	budget := knowledge.DefaultRuntimeBudget()
 	for _, indexName := range indexes {
-		budget, err = budget.BeginEvent()
-		if err != nil {
-			return false, fmt.Errorf("%w: active index selector budget is invalid", ErrCorrupt)
-		}
-		matched, next, matchErr := indexOnly.Match(ctx, knowledge.EventMetadata{
+		// Resolver pruning is a bounded semantic probe over at most 256 authorized
+		// index names, not event execution. Give each name an independent hard
+		// matcher budget so a conservative cross-engine execution charge cannot
+		// accumulate into a false catalog-corruption classification.
+		matched, _, matchErr := indexOnly.Match(ctx, knowledge.EventMetadata{
 			Index: knowledge.StringMetadata(indexName),
-		}, budget)
+		}, knowledge.DefaultRuntimeBudget())
 		if matchErr != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return false, ctxErr
 			}
 			return false, fmt.Errorf("%w: active index selector matching failed", ErrCorrupt)
 		}
-		budget = next
 		if matched {
 			return true, nil
 		}

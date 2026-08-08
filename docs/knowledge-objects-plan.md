@@ -373,11 +373,37 @@ Selectors are ANDed across dimensions and ORed within one dimension. Empty
 dimensions mean unrestricted. Selector count, pattern length, wildcard work,
 and normalized byte size are bounded.
 
+Runtime lowering uses one exact-literal set and at most one anchored,
+case-sensitive, dot-all RE2 alternation per constrained dimension. It must not
+rescan the value once per wildcard, install an executable UDF, or encode the Go
+NFA as array state in SQL. Dimensions are reached in the fixed order `index`,
+`host`, `source`, `sourcetype`; missing/null is a nonmatch without input charge,
+and later dimensions are not inspected after an earlier nonmatch.
+
+The runtime charge is a deterministic conservative compiler assessment, not an
+engine-specific observed transition count. For every normalized wildcard with
+`n` tokens, the initial, per-input-byte, and final coefficients are
+`1 + starts_with_star`, `3*n + 1`, and `n + 1`. After an exact miss, a reached
+value of `B` valid UTF-8 bytes charges the sums of those coefficients as
+`initial + B*per_byte + final`; an exact hit or literal-only miss charges only
+the `B` input bytes. Reached input-byte charges must remain within the 4 MiB
+per-event ceiling; input plus eight times the assessed transition bound must
+remain within the 1 GiB cumulative per-query ceiling. Using bytes rather than
+Unicode scalar count intentionally gives Go and ClickHouse the same conservative
+result. Logical matching and the static snapshot's one/two/four
+literal/`?`/`*` publication weights do not change.
+
 Cross-index searches can contain events matching different selectors. The
 resolver therefore uses the authorized index scope to eliminate impossible
 objects, but the logical plan still applies the selector per row. Catalog
 resolution must not assume that one object either applies to the entire job or
 does not apply at all.
+
+The resolver's bounded index-intersection probes use the same logical matcher
+but are not event execution and do not consume the admitted query's cumulative
+runtime charge. Each of at most 256 canonical index names gets an independent
+hard matcher budget under the resolver deadline; a conservative sum over that
+authorization inventory is not catalog corruption.
 
 ### Dependencies
 

@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -33,9 +35,11 @@ const (
 	// for one event across selector matches.
 	MaximumSelectorRuntimeEventBytes = 4 << 20
 	// MaximumSelectorRuntimeQueryUnits bounds cumulative query charging. Each
-	// inspected byte costs one unit and each matcher transition costs eight.
+	// inspected byte costs one unit and each unit in the conservative matcher-
+	// transition upper bound costs eight.
 	MaximumSelectorRuntimeQueryUnits = 1 << 30
-	// SelectorMatcherTransitionUnits is the stable query charge per transition.
+	// SelectorMatcherTransitionUnits is the stable query charge per assessed
+	// transition-upper-bound unit.
 	SelectorMatcherTransitionUnits = 8
 )
 
@@ -193,9 +197,12 @@ type globToken struct {
 }
 
 type compiledDimension struct {
-	patterns []string
-	exact    map[string]struct{}
-	wildcard *globProgram
+	patterns      []string
+	exact         map[string]struct{}
+	exactLiterals []string
+	wildcard      *globProgram
+	wildcardRE2   string
+	assessment    MatcherTransitionAssessment
 }
 
 // Selector is an immutable, race-safe compiled selector. Each constrained
@@ -213,6 +220,44 @@ type CompileStats struct {
 	Patterns          uint64
 	NormalizedBytes   uint64
 	WildcardWorkUnits uint64
+}
+
+// MatcherTransitionAssessment is the deterministic conservative wildcard
+// charge for one constrained dimension. For B valid UTF-8 input bytes, the
+// charged transition upper bound is Initial + B*PerInputByte + Final. The
+// coefficients are derived only from the canonical wildcard token streams and
+// are therefore reproducible by every compiler/runtime implementation.
+type MatcherTransitionAssessment struct {
+	Initial      uint64
+	PerInputByte uint64
+	Final        uint64
+}
+
+// UpperBound returns the assessed transition charge for inputBytes. A zero
+// assessment denotes a literal-only or unrestricted dimension.
+func (assessment MatcherTransitionAssessment) UpperBound(inputBytes uint64) (uint64, error) {
+	if assessment == (MatcherTransitionAssessment{}) {
+		return 0, nil
+	}
+	if assessment.PerInputByte != 0 && inputBytes > (math.MaxUint64-assessment.Initial)/assessment.PerInputByte {
+		return 0, fmt.Errorf("%w: matcher transition assessment overflows", ErrRuntimeLimit)
+	}
+	bound := assessment.Initial + inputBytes*assessment.PerInputByte
+	if assessment.Final > math.MaxUint64-bound {
+		return 0, fmt.Errorf("%w: matcher transition assessment overflows", ErrRuntimeLimit)
+	}
+	return bound + assessment.Final, nil
+}
+
+// DimensionRuntimeProgram is a detached compiler-facing representation of one
+// constrained dimension. ExactLiterals are sorted canonical string matches.
+// WildcardRE2 is empty for a literal-only dimension; otherwise it is one
+// anchored, case-sensitive, dot-all RE2 alternation for every wildcard. The
+// assessment charges that combined wildcard program after an exact miss.
+type DimensionRuntimeProgram struct {
+	ExactLiterals []string
+	WildcardRE2   string
+	Assessment    MatcherTransitionAssessment
 }
 
 // CompileSelector normalizes, sorts, and deduplicates patterns, then creates a
@@ -290,10 +335,12 @@ func compileDimension(inputs []string) (compiledDimension, CompileStats, error) 
 				dimension.exact = make(map[string]struct{}, len(patterns))
 			}
 			dimension.exact[literal] = struct{}{}
+			dimension.exactLiterals = append(dimension.exactLiterals, literal)
 			continue
 		}
 		wildcards = append(wildcards, pattern)
 	}
+	sort.Strings(dimension.exactLiterals)
 
 	stats := CompileStats{
 		Patterns:          uint64(len(patterns)),
@@ -303,7 +350,48 @@ func compileDimension(inputs []string) (compiledDimension, CompileStats, error) 
 		return dimension, stats, nil
 	}
 	dimension.wildcard = compileGlobProgram(wildcards)
+	dimension.wildcardRE2 = wildcardPatternsRE2(wildcards)
+	dimension.assessment = assessGlobProgram(wildcards)
 	return dimension, stats, nil
+}
+
+func wildcardPatternsRE2(patterns []Pattern) string {
+	var expression strings.Builder
+	expression.WriteString("(?s)^(?:")
+	for patternIndex, pattern := range patterns {
+		if patternIndex != 0 {
+			expression.WriteByte('|')
+		}
+		for _, token := range pattern.tokens {
+			switch token.kind {
+			case globLiteral:
+				expression.WriteString(regexp.QuoteMeta(string(token.literal)))
+			case globOne:
+				expression.WriteByte('.')
+			case globMany:
+				expression.WriteString(".*")
+			}
+		}
+	}
+	expression.WriteString(")$")
+	return expression.String()
+}
+
+func assessGlobProgram(patterns []Pattern) MatcherTransitionAssessment {
+	var assessment MatcherTransitionAssessment
+	for _, pattern := range patterns {
+		tokens := uint64(len(pattern.tokens))
+		assessment.Initial++
+		if len(pattern.tokens) != 0 && pattern.tokens[0].kind == globMany {
+			assessment.Initial++
+		}
+		// One scalar scans n+1 states. Every one of the n token states can
+		// conservatively require two epsilon-closure inspections; canonical
+		// normalization has already collapsed consecutive stars.
+		assessment.PerInputByte += 3*tokens + 1
+		assessment.Final += tokens + 1
+	}
+	return assessment
 }
 
 func patternWorkUnits(tokens []globToken) uint64 {
@@ -500,6 +588,23 @@ func (selector *Selector) Patterns(dimension Dimension) []string {
 	return slices.Clone(selector.dimensions[dimension-1].patterns)
 }
 
+// RuntimeProgram returns a detached compiler-facing program for dimension and
+// whether the dimension is constrained. Callers cannot mutate selector state.
+func (selector *Selector) RuntimeProgram(dimension Dimension) (DimensionRuntimeProgram, bool) {
+	if selector == nil || !dimension.valid() {
+		return DimensionRuntimeProgram{}, false
+	}
+	compiled := &selector.dimensions[dimension-1]
+	if len(compiled.patterns) == 0 {
+		return DimensionRuntimeProgram{}, false
+	}
+	return DimensionRuntimeProgram{
+		ExactLiterals: slices.Clone(compiled.exactLiterals),
+		WildcardRE2:   strings.Clone(compiled.wildcardRE2),
+		Assessment:    compiled.assessment,
+	}, true
+}
+
 // Stats returns immutable compile-time resource accounting.
 func (selector *Selector) Stats() CompileStats {
 	if selector == nil {
@@ -589,11 +694,12 @@ type RuntimeLimits struct {
 }
 
 // RuntimeCharge reports cumulative query usage. QueryUnits equals InputBytes
-// plus eight units for each MatcherTransition.
+// plus eight units for each MatcherTransitionUpperBound. The latter is a
+// deterministic compiler-derived charge, not an observed implementation count.
 type RuntimeCharge struct {
-	InputBytes         uint64
-	MatcherTransitions uint64
-	QueryUnits         uint64
+	InputBytes                  uint64
+	MatcherTransitionUpperBound uint64
+	QueryUnits                  uint64
 }
 
 // RuntimeRemaining reports cumulative query capacity and the current event's
@@ -665,8 +771,8 @@ func (budget RuntimeBudget) BeginEvent() (RuntimeBudget, error) {
 	return budget, nil
 }
 
-// ChargeInput validates and charges one runtime value once. Matcher transition
-// charging is separate because the combined matcher reports its actual work.
+// ChargeInput validates and charges one runtime value once. Assessed wildcard
+// charging is separate because exact literal hits do not run the matcher.
 func (budget RuntimeBudget) ChargeInput(value string) (RuntimeBudget, error) {
 	if !budget.valid {
 		return RuntimeBudget{}, fmt.Errorf("%w: invalid runtime charge", ErrRuntimeLimit)
@@ -691,20 +797,16 @@ func (budget RuntimeBudget) ChargeInput(value string) (RuntimeBudget, error) {
 	return budget, nil
 }
 
-func (budget RuntimeBudget) maximumMatcherTransitions() uint64 {
-	return (budget.maximumQueryUnits - budget.charge.QueryUnits) / SelectorMatcherTransitionUnits
-}
-
-func (budget RuntimeBudget) chargeMatcherTransitions(transitions uint64) (RuntimeBudget, error) {
+func (budget RuntimeBudget) chargeMatcherTransitionUpperBound(transitions uint64) (RuntimeBudget, error) {
 	if !budget.valid || transitions > math.MaxUint64/SelectorMatcherTransitionUnits {
 		return RuntimeBudget{}, fmt.Errorf("%w: invalid matcher transition charge", ErrRuntimeLimit)
 	}
 	units := transitions * SelectorMatcherTransitionUnits
 	if units > budget.maximumQueryUnits-budget.charge.QueryUnits ||
-		transitions > math.MaxUint64-budget.charge.MatcherTransitions {
+		transitions > math.MaxUint64-budget.charge.MatcherTransitionUpperBound {
 		return RuntimeBudget{}, fmt.Errorf("%w: matcher transition budget exhausted", ErrRuntimeLimit)
 	}
-	budget.charge.MatcherTransitions += transitions
+	budget.charge.MatcherTransitionUpperBound += transitions
 	budget.charge.QueryUnits += units
 	return budget, nil
 }
@@ -747,21 +849,28 @@ func (selector *Selector) Match(ctx context.Context, metadata EventMetadata, bud
 			}
 			return false, budget, nil
 		}
-		matched, transitions, matchErr := dimension.wildcard.match(
-			ctx,
-			value.text,
-			budget.maximumMatcherTransitions(),
-		)
-		charged, err = budget.chargeMatcherTransitions(transitions)
+		transitionBound, err := dimension.assessment.UpperBound(uint64(len(value.text)))
+		if err != nil {
+			return false, budget, err
+		}
+		charged, err = budget.chargeMatcherTransitionUpperBound(transitionBound)
 		if err != nil {
 			return false, budget, err
 		}
 		budget = charged
+		matched, transitions, matchErr := dimension.wildcard.match(
+			ctx,
+			value.text,
+			transitionBound,
+		)
 		if matchErr != nil {
 			if errors.Is(matchErr, ErrRuntimeLimit) {
-				return false, budget, fmt.Errorf("%w: matcher transition budget exhausted", ErrRuntimeLimit)
+				return false, budget, fmt.Errorf("%w: matcher exceeded its assessed transition bound", ErrRuntimeLimit)
 			}
 			return false, budget, matchErr
+		}
+		if transitions > transitionBound {
+			return false, budget, fmt.Errorf("%w: matcher exceeded its assessed transition bound", ErrRuntimeLimit)
 		}
 		if err := context.Cause(ctx); err != nil {
 			return false, budget, err

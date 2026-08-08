@@ -95,6 +95,12 @@ digesting. The digest input includes normalized binary-sorted effective
 authorized indexes, the bounded shadow and closed-code warning inventory, and
 aggregate query-budget charges. Wall-clock admission time belongs to job
 lifecycle metadata outside the digest message.
+`KnowledgeSnapshotBudgetCharges.selector_wildcard_work_units` is the static
+publication charge over canonical literal/`?`/`*` tokens with weights one, two,
+and four. It is not a runtime matcher-transition counter. Runtime execution uses
+the deterministic conservative per-dimension assessment defined by the
+knowledge compatibility contract, so Go and generated ClickHouse SQL do not
+need to expose or reproduce one engine's internal NFA transitions.
 `canonical_snapshot_bytes` is computed first as the length of deterministic
 `KnowledgeSnapshot` protobuf bytes with both `snapshot_sha256` and
 `canonical_snapshot_bytes` cleared. The charge is then populated, the digest

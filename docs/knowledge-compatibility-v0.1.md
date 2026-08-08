@@ -715,14 +715,62 @@ is bounded to 128 entries and 256 MiB of detached decoded data; eviction is LRU
 and never changes correctness. Catalog capacity and cache use are exposed as
 administrator health metrics with an 80% warning threshold.
 
-Selector patterns for one dimension are compiled into one anchored matcher so
-one value is decoded and matched at most once per dimension; sequentially
-rescanning a value for all 64 patterns is forbidden. Runtime selector input is
-charged once per canonical metadata byte plus eight units per matcher
-transition, with hard ceilings of 1 MiB per value, 4 MiB per event, and 1 GiB
-per query. It shares the search execution deadline and memory ceilings. Crossing
-a boundary fails the query with a source-attributed resource-limit error; input
-is never truncated and an object is never silently skipped.
+One object selector evaluates constrained dimensions in the fixed order
+`index`, `host`, `source`, `sourcetype` and stops at the first nonmatch. An
+unrestricted dimension is skipped. A reached missing or null value is a
+nonmatch and costs no input or wildcard work. A reached present string is valid
+only when it is valid UTF-8 and at most 1 MiB; its UTF-8 byte length `B` is
+charged once for that object/dimension application. Exact literals use one set;
+wildcard alternatives use at most one bounded anchored matcher. Sequentially
+rescanning the value once per pattern is forbidden.
+
+Runtime wildcard work uses a deterministic compiler assessment rather than an
+actual matcher-transition count. For each normalized wildcard pattern `p`, let
+`n` be its normalized token count and define:
+
+```text
+initial(p)  = 1 + (1 when the first token is `*`, otherwise 0)
+per_byte(p) = 3*n + 1
+final(p)    = n + 1
+```
+
+For the wildcard patterns in one reached dimension, the assessed transition
+bound for a present value of `B` valid UTF-8 bytes is:
+
+```text
+bound(B) = sum(initial(p)) + B*sum(per_byte(p)) + sum(final(p))
+```
+
+Using bytes rather than Unicode scalar count is deliberately conservative and
+is directly computable in generated SQL. An exact-literal hit charges only
+`B`, even when wildcard alternatives also exist. An exact miss in a
+literal-only dimension also charges only `B`. Only an exact miss with at least
+one wildcard alternative precharges the complete `bound(B)` before matching;
+that dimension contributes `B + 8*bound(B)` query units regardless of the
+wildcard result or the matcher's actual work.
+
+The 4 MiB per-event ceiling is the sum of input-byte charges across all reached
+object/dimension applications for that event. The 1 GiB per-query ceiling is
+the cumulative input-plus-assessed-wildcard charge across all processed events.
+Exactly-equal ceilings are allowed; exceeding one fails the query with a
+source-attributed resource-limit error. Input is never truncated and an object
+is never silently skipped. The accounting shares the search execution deadline
+and memory ceilings.
+
+This assessed bound replaces actual Go matcher-transition charging before
+nonempty knowledge execution is enabled in KO-1. Logical matching, the
+publication-time literal/`?`/`*` weights of one/two/four, and the canonical
+snapshot charge remain unchanged. Actual NFA state layout and transition count
+are implementation details. The ClickHouse lowering must use ordinary bounded
+SQL predicates plus compiler-derived constants; it must not require a UDF or
+encode an NFA in SQL.
+
+Resolver index pruning applies the same logical index matcher to at most 256
+authorized canonical index names, but those bounded admission probes are not
+processed events and do not consume the later query's execution charge. Each
+index probe receives an independent hard matcher budget under the resolver's
+shared deadline. A conservative cumulative assessment over the authorization
+inventory must therefore never turn a valid catalog into corruption.
 
 The lifecycle binding is implemented for enabled-empty snapshots. Updating the
 catalog cannot change that retained authority, but KO-0H does not permit a
