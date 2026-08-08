@@ -133,6 +133,13 @@ func (selector Selector) IsUnrestricted() bool {
 	return selector.compiled != nil && selector.compiled.Stats().Dimensions == 0
 }
 
+// ProvablyDisjoint reports whether the immutable selectors are conservatively
+// proven never to match the same event. The proof is intentionally exposed as
+// a boolean instead of leaking the mutable compiler representation.
+func (selector Selector) ProvablyDisjoint(other Selector) bool {
+	return knowledge.SelectorsProvablyDisjoint(selector.compiled, other.compiled)
+}
+
 // Capture is one regex output and its one-based group.
 type Capture struct {
 	name     string
