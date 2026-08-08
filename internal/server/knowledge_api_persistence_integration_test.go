@@ -181,6 +181,61 @@ func knowledgePersistenceCount(
 	return count
 }
 
+type knowledgePersistenceCatalogAuthority struct {
+	catalogRevision     int64
+	identityCount       int64
+	versionCount        int64
+	definitionBodyBytes int64
+	idempotencyCount    int64
+	activeObjectCount   int64
+	recoveryAuditCount  int64
+	headCatalogRevision int64
+	stateToken          [32]byte
+	projectionBytes     int64
+}
+
+func readKnowledgePersistenceCatalogAuthority(
+	t *testing.T,
+	database *control.DB,
+) knowledgePersistenceCatalogAuthority {
+	t.Helper()
+
+	var authority knowledgePersistenceCatalogAuthority
+	var stateToken []byte
+	if err := database.SQLDB().QueryRowContext(t.Context(), `
+		SELECT tenant.catalog_revision, tenant.identity_count,
+		       tenant.version_count, tenant.definition_body_bytes,
+		       tenant.idempotency_count, tenant.active_object_count,
+		       tenant.recovery_audit_count, head.catalog_revision,
+		       head.state_token, projection.projection_bytes
+		FROM knowledge_catalog_tenants AS tenant
+		JOIN knowledge_catalog_revision_heads AS head
+		  ON head.tenant_id = tenant.tenant_id
+		JOIN knowledge_projection_tenant_ledgers AS projection
+		  ON projection.tenant_id = tenant.tenant_id
+		WHERE tenant.tenant_id = ?`,
+		knowledgeBoundaryTenantID,
+	).Scan(
+		&authority.catalogRevision,
+		&authority.identityCount,
+		&authority.versionCount,
+		&authority.definitionBodyBytes,
+		&authority.idempotencyCount,
+		&authority.activeObjectCount,
+		&authority.recoveryAuditCount,
+		&authority.headCatalogRevision,
+		&stateToken,
+		&authority.projectionBytes,
+	); err != nil {
+		t.Fatalf("read provisioned catalog authority: %v", err)
+	}
+	if len(stateToken) != len(authority.stateToken) {
+		t.Fatalf("provisioned catalog state token length=%d", len(stateToken))
+	}
+	copy(authority.stateToken[:], stateToken)
+	return authority
+}
+
 func TestKnowledgeHTTPRealPersistenceLifecycleAndExactReplay(t *testing.T) {
 	harness := newKnowledgePersistenceHarness(t, nil)
 
@@ -620,6 +675,18 @@ func TestKnowledgeHTTPSuccessAuditFailureRollsBackAndJournalsRejection(t *testin
 	harness := newKnowledgePersistenceHarness(t, knowledgePersistenceFailingAuditAppender{
 		err: errors.New(privateFailure),
 	})
+	beforeAuthority := readKnowledgePersistenceCatalogAuthority(t, harness.database)
+	if beforeAuthority.catalogRevision != 0 ||
+		beforeAuthority.identityCount != 0 ||
+		beforeAuthority.versionCount != 0 ||
+		beforeAuthority.definitionBodyBytes != 0 ||
+		beforeAuthority.idempotencyCount != 0 ||
+		beforeAuthority.activeObjectCount != 0 ||
+		beforeAuthority.recoveryAuditCount != 0 ||
+		beforeAuthority.headCatalogRevision != 0 ||
+		beforeAuthority.projectionBytes != 0 {
+		t.Fatalf("initial provisioned catalog authority=%+v", beforeAuthority)
+	}
 	response := knowledgeHTTPPost(t, harness.http, knowledgeObjectsCreatePath, &opensplunkv1.CreateKnowledgeObjectRequest{
 		Definition:      knowledgeHTTPDefinition(opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE),
 		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DRAFT,
@@ -632,9 +699,17 @@ func TestKnowledgeHTTPSuccessAuditFailureRollsBackAndJournalsRejection(t *testin
 	}
 
 	for _, table := range []string{
-		"knowledge_catalog_tenants",
+		"knowledge_definition_blobs",
 		"knowledge_objects",
 		"knowledge_object_versions",
+		"knowledge_object_version_lifecycle",
+		"knowledge_object_dependencies",
+		"knowledge_object_dependency_seals",
+		"knowledge_object_list_projections",
+		"knowledge_object_list_selector_patterns",
+		"knowledge_object_list_projection_seals",
+		"knowledge_object_list_order_keys",
+		"knowledge_mutation_commit_authorities",
 		"knowledge_mutation_idempotency",
 		"audit_events",
 	} {
@@ -642,6 +717,9 @@ func TestKnowledgeHTTPSuccessAuditFailureRollsBackAndJournalsRejection(t *testin
 		if count := knowledgePersistenceCount(t, harness.database, query, knowledgeBoundaryTenantID); count != 0 {
 			t.Fatalf("rolled-back %s rows=%d", table, count)
 		}
+	}
+	if afterAuthority := readKnowledgePersistenceCatalogAuthority(t, harness.database); afterAuthority != beforeAuthority {
+		t.Fatalf("catalog authority changed across rollback: before=%+v after=%+v", beforeAuthority, afterAuthority)
 	}
 
 	var sequence int64
