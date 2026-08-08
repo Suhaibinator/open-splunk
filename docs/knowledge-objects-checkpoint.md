@@ -4,8 +4,7 @@
 
 **Current milestone:** KO-1 field execution
 
-**Last completed slice:** KO-0H sealed search-lifecycle attachment and hidden
-read-only shell
+**Last completed slice:** KO-1A cross-engine selector runtime contract
 
 **Evidence date:** August 8, 2026
 
@@ -21,12 +20,14 @@ read-only shell
 - KO-0H local implementation range: `441fd4d..bcf095b`
 - KO-0H implementation terminal revision:
   `bcf095bb2db19a1b8d9b1810bfd1eaed32bf11ba`
+- KO-1A selector-contract revision:
+  `03a0b3e991424ae41716a8cb36749cb3ad8aff5b`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: thirty intentional post-`c5440b9`
-  KO commits through `bcf095b` are durable locally. This checkpoint is kept as
+- Publication state before this document: thirty-two intentional post-`c5440b9`
+  KO commits through `03a0b3e` are durable locally. This checkpoint is kept as
   a separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so the terminal KO-0G
-  test-oracle commits, the KO-0G checkpoint `441fd4d`, all four KO-0H commits,
+  test-oracle commits, the KO-0G checkpoint `441fd4d`, all KO-0H work, KO-1A,
   and this checkpoint are not remotely durable. No further push was attempted
   without explicit destination approval.
 - Scope: lifecycle- and commitment-aware protobuf contracts, canonical known
@@ -48,7 +49,10 @@ read-only shell
   nonempty-app admission, compiler- and manager-private execution seals,
   durable history and attempt-audit provenance, retained inspection/export
   authority, and a hidden read-only Knowledge Manager shell with bounded
-  browser transport.
+  browser transport. KO-1A freezes one detached exact-literal/combined-RE2
+  selector program and deterministic conservative cross-engine runtime charge,
+  while keeping catalog index-pruning probes separate from event-execution
+  accounting.
 - Runtime feature state: the capability remains hard-disabled and unadvertised;
   the six knowledge-management handlers are deliberately not registered in the
   production router and their paths still return 404. Configured test/runtime
@@ -136,6 +140,12 @@ KO-0H then adds these dependency-ordered local commits:
 | `de64633` | `feat(search): retain sealed knowledge execution` | Redacted job/list/history/audit projections, retained inspection authority, atomic export result pinning, exact app/scope/result binding, and fail-closed configurable-dependency validation |
 | `bcf095b` | `feat(ui): add hidden knowledge manager shell` | Capability-gated lazy read-only list/detail UI, bounded Get/List adapter and response streaming, app filtering, continuation coherence, accessibility states, and exact absent-capability no-load/no-request behavior |
 
+KO-1A then adds the first field-execution prerequisite:
+
+| Commit | Subject | Scope |
+| --- | --- | --- |
+| `03a0b3e` | `feat(knowledge): freeze cross-engine selector charging` | Detached exact-literal plus single anchored dot-all RE2 programs; compiler-derived transition upper bounds shared by Go and future ClickHouse lowering; fixed-order/missing/null/UTF-8 charging; and independent bounded catalog-pruning probes that cannot misclassify valid high-work scopes as corruption |
+
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
 from the ranges above; no history rewrite or alternate publication branch was
@@ -147,6 +157,11 @@ used.
 - Private → current-app → tenant-global shadow precedence
 - Administrator-only, tenant-bound v0.1 management APIs
 - Server-authoritative index scope and per-row trusted metadata selectors
+- One exact-literal set and at most one anchored dot-all RE2 wildcard matcher per
+  reached selector dimension. Runtime work uses the canonical token-derived
+  `initial + UTF8_bytes*per_byte + final` upper bound rather than an engine's
+  observed NFA transitions; catalog index pruning uses independent bounded
+  probes rather than the later event-execution budget
 - Parallel extraction, alias, and calculated stages before the authored base
   predicate, with no same-stage chaining
 - `_raw`-only extraction and existing authored `rex`/`spath` typed semantics
@@ -619,6 +634,20 @@ KO-0H evidence:
 | Local durability | pass | `20a729d`, `a5ad901`, `de64633`, and `bcf095b` are separate provenance, sealed-admission, retained-consumer, and hidden-UI commits on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
+KO-1A evidence:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Logical and charge contract | pass | exact literal hit, literal-only miss, wildcard hit/miss, valid multibyte UTF-8 byte charging, universal-`*` missing/null behavior, all four fixed dimension positions, exact ceiling/exhaustion, and cancellation oracles pass; the conservative `initial`, `per_byte`, and `final` coefficients provably bound every combined-NFA state/closure inspection |
+| Compiler-facing matcher | pass | detached programs expose sorted exact literals and one deterministic anchored case-sensitive dot-all RE2 wildcard alternation; regex metacharacter, escape, Unicode-scalar, newline, and combined-alternative results match the independent closed-glob reference corpus |
+| Resolver compatibility | pass | the exact 1,024-unit selector over 256 distinct 255-byte authorized indexes has a hypothetical cumulative execution charge above 1 GiB but remains a valid bounded pruning nonmatch; each admission probe has an independent hard budget under the shared resolver context instead of producing false `ErrCorrupt` |
+| Focused and downstream tests | pass | final selector normal 0.343s and race 1.676s; exact maximum-scope pruning race 1.818s; full knowledgecatalog normal 59.335s; knowledgesnapshot normal 0.469s |
+| Static analysis and hygiene | pass | `go vet ./internal/knowledge ./internal/knowledgesnapshot ./internal/knowledgecatalog`; gofmt; `git diff --check` |
+| Independent review | pass | separate correctness, security/resource, and compatibility/test-oracle reviewers proved the assessment, resolved the event/query wording and maximum-scope pruning findings, and returned clean final verdicts |
+| Runtime activation | unchanged | production still configures no resolver, registers no knowledge-management route, advertises no capability, and rejects nonempty snapshot finalization; KO-1A changes no shipping search path |
+| Local durability | pass | `03a0b3e` is a separate selector-contract commit on `codex/knowledge-objects-runtime` |
+| Remote durability | pending | no push was attempted without explicit destination approval |
+
 The exact KO-0E final retained-log race command was:
 
 ```sh
@@ -698,9 +727,9 @@ gates rather than silently skipped acceptance evidence.
 KO-0 foundations and the hidden KO-0H lifecycle/browser readiness vertical are
 complete. The next dependency-ordered slices are:
 
-1. freeze an executable selector strategy that preserves the canonical combined
-   matcher, missing/null semantics, cancellation, and exact per-event/per-query
-   work charging in ClickHouse;
+1. finish the executable selector lowering using the now-frozen canonical
+   combined matcher, missing/null semantics, cancellation, and deterministic
+   conservative per-event/per-query charging in ClickHouse;
 2. add canonical extraction, JSON extraction, fused copy-alias, and fused
    parallel-calculated planner operators with immutable object origins, frozen
    same-stage inputs, and a private prelude commitment;

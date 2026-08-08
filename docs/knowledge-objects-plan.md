@@ -393,6 +393,12 @@ Unicode scalar count intentionally gives Go and ClickHouse the same conservative
 result. Logical matching and the static snapshot's one/two/four
 literal/`?`/`*` publication weights do not change.
 
+Generated SQL must widen byte/coefficient multiplication, the factor of eight,
+and aggregate sums to `UInt128` before comparing with the limits. A later
+dimension's match and charge expressions stay inside the earlier dimension's
+short-circuit branch; independently materializing eager aliases would inspect
+work that the contract defines as unreachable.
+
 Cross-index searches can contain events matching different selectors. The
 resolver therefore uses the authorized index scope to eliminate impossible
 objects, but the logical plan still applies the selector per row. Catalog

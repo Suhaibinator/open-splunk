@@ -763,7 +763,11 @@ publication-time literal/`?`/`*` weights of one/two/four, and the canonical
 snapshot charge remain unchanged. Actual NFA state layout and transition count
 are implementation details. The ClickHouse lowering must use ordinary bounded
 SQL predicates plus compiler-derived constants; it must not require a UDF or
-encode an NFA in SQL.
+encode an NFA in SQL. Byte/coefficient multiplication, the factor of eight, and
+event/query aggregation widen to `UInt128` before comparison. Match and charge
+expressions for a later dimension remain inside the preceding dimension's
+short-circuit branch; eager independent aliases that inspect unreachable values
+are forbidden.
 
 Resolver index pruning applies the same logical index matcher to at most 256
 authorized canonical index names, but those bounded admission probes are not
