@@ -729,12 +729,21 @@ func TestResolverConcurrentPublicationReturnsOnlyOldOrNewAuthority(t *testing.T)
 		20,
 	)
 	barrier := installIntegrationCatalogStateBarrier(t, database)
+	normalizedScope, err := normalizeResolutionScope(testResolutionScope("main"))
+	if err != nil {
+		t.Fatalf("normalize paused resolution scope: %v", err)
+	}
+	resolveContext, cancelResolve := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelResolve()
 	result := make(chan struct {
 		resolved Resolution
 		err      error
 	}, 1)
 	go func() {
-		resolved, resolveErr := resolver.Resolve(context.Background(), testResolutionScope("main"))
+		// The barrier intentionally suspends the read transaction across an
+		// external commit. Exercise the same single-attempt core without spending
+		// the public 250 ms admission budget on test synchronization.
+		resolved, resolveErr := resolver.resolveOnce(resolveContext, normalizedScope)
 		result <- struct {
 			resolved Resolution
 			err      error

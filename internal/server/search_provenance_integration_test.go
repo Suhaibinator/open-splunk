@@ -50,6 +50,18 @@ func (snapshot provenanceIntegrationSnapshotter) VisibilityCutoff(context.Contex
 	return uint64(snapshot), nil
 }
 
+type provenanceIntegrationJournal struct {
+	searchjobs.JobJournal
+	finalized chan error
+	once      sync.Once
+}
+
+func (journal *provenanceIntegrationJournal) Finalize(ctx context.Context, job searchjobs.Job) error {
+	err := journal.JobJournal.Finalize(ctx, job)
+	journal.once.Do(func() { journal.finalized <- err })
+	return err
+}
+
 func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	t.Parallel()
 
@@ -106,9 +118,13 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := searchhistory.NewJobJournal(history, "integration-test")
+	durableJournal, err := searchhistory.NewJobJournal(history, "integration-test")
 	if err != nil {
 		t.Fatal(err)
+	}
+	journal := &provenanceIntegrationJournal{
+		JobJournal: durableJournal,
+		finalized:  make(chan error, 1),
 	}
 
 	release := make(chan struct{})
@@ -196,7 +212,18 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	assertProvenanceSnapshot(t, liveResponse.GetSearchJob(), jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 	releaseOnce.Do(func() { close(release) })
 
-	historyEntry := waitForProvenanceHistory(t, history, searchhistory.AccessScope{TenantID: tenantID, OwnerID: ownerID}, jobID)
+	select {
+	case finalizeErr := <-journal.finalized:
+		if finalizeErr != nil {
+			t.Fatalf("finalize completed history: %v", finalizeErr)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("completed history finalization did not return")
+	}
+	historyEntry, err := history.Get(ctx, searchhistory.AccessScope{TenantID: tenantID, OwnerID: ownerID}, jobID)
+	if err != nil {
+		t.Fatalf("get finalized history: %v", err)
+	}
 	assertHistoryProvenanceSnapshot(t, historyEntry, jobID, appID, savedID, searchSPL, wantEarliest, anchor)
 
 	response = postProto(t, handler, "/api/v1/search/history/get", &opensplunkv1.GetSearchHistoryEntryRequest{SearchJobId: jobID})
@@ -262,28 +289,5 @@ func assertHistoryProvenanceSnapshot(
 		entry.GetResolvedTimeRange().GetTimezone() != "America/Los_Angeles" ||
 		!slices.Equal(entry.GetEffectiveIndexScope(), []string{"main"}) {
 		t.Fatalf("history provenance snapshot = %+v", entry)
-	}
-}
-
-func waitForProvenanceHistory(
-	t *testing.T,
-	store *searchhistory.Store,
-	scope searchhistory.AccessScope,
-	jobID string,
-) *opensplunkv1.SearchHistoryEntry {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		entry, err := store.Get(context.Background(), scope, jobID)
-		if err == nil {
-			return entry
-		}
-		if !errors.Is(err, control.ErrNotFound) {
-			t.Fatalf("get completed history: %v", err)
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("completed history was not persisted")
-		}
-		time.Sleep(time.Millisecond)
 	}
 }
