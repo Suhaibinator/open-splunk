@@ -22,6 +22,16 @@ type compiledKnowledgeRelation struct {
 	prelude  compiledKnowledgePrelude
 }
 
+// compiledKnowledgeStageRelation is the exact physical prefix before a
+// whole-query runtime fence is chosen. Both the inline compatibility probe and
+// the deferred top-level barrier consume this one compile-once authority.
+type compiledKnowledgeStageRelation struct {
+	relation compiledRelation
+	state    compileState
+	args     []any
+	prelude  compiledKnowledgePrelude
+}
+
 // compileKnowledgeRelation compiles the immutable prelude from the exact Scan
 // state, applies every relation-neutral stage as two SELECT levels, and closes
 // nonempty work behind the runtime guard. It is intentionally not wired into
@@ -33,44 +43,81 @@ func compileKnowledgeRelation(
 	existingArgs []any,
 	preparation preparedKnowledgeCompilation,
 ) (compiledKnowledgeRelation, error) {
-	if err := validateKnowledgeRelationInput(relation, existingArgs); err != nil {
+	staged, err := compileKnowledgeStageRelation(
+		relation,
+		scanState,
+		existingArgs,
+		preparation,
+	)
+	if err != nil {
 		return compiledKnowledgeRelation{}, err
+	}
+	guarded, err := compileKnowledgeRuntimeGuard(
+		staged.relation,
+		staged.prelude,
+		preparation,
+	)
+	if err != nil {
+		return compiledKnowledgeRelation{}, err
+	}
+	if len(guarded.suffixArgs) != 0 {
+		return compiledKnowledgeRelation{}, errors.New(
+			"compile ClickHouse knowledge relation: runtime guard introduced arguments",
+		)
+	}
+	if strings.Count(guarded.relation.sql, "?") != len(staged.args) {
+		return compiledKnowledgeRelation{}, errors.New(
+			"compile ClickHouse knowledge relation: final placeholder order is invalid",
+		)
+	}
+	result := compiledKnowledgeRelation{
+		relation: guarded.relation,
+		state:    guarded.state,
+		args:     staged.args,
+		prelude:  staged.prelude,
+	}
+	if err := validateCompiledKnowledgeRelation(
+		result,
+		relation,
+		existingArgs,
+		preparation,
+	); err != nil {
+		return compiledKnowledgeRelation{}, err
+	}
+	return result, nil
+}
+
+func compileKnowledgeStageRelation(
+	relation compiledRelation,
+	scanState compileState,
+	existingArgs []any,
+	preparation preparedKnowledgeCompilation,
+) (compiledKnowledgeStageRelation, error) {
+	if err := validateKnowledgeRelationInput(relation, existingArgs); err != nil {
+		return compiledKnowledgeStageRelation{}, err
 	}
 	args, err := cloneKnowledgeRelationArguments(existingArgs)
 	if err != nil {
-		return compiledKnowledgeRelation{}, err
+		return compiledKnowledgeStageRelation{}, err
 	}
 	prelude, err := compileKnowledgePrelude(scanState, preparation)
 	if err != nil {
-		return compiledKnowledgeRelation{}, err
+		return compiledKnowledgeStageRelation{}, err
 	}
 	if !preparation.present || preparation.program.IsEmpty() {
-		identity, guardErr := compileKnowledgeRuntimeGuard(
-			relation,
-			prelude,
-			preparation,
-		)
-		if guardErr != nil {
-			return compiledKnowledgeRelation{}, guardErr
-		}
-		if len(identity.suffixArgs) != 0 {
-			return compiledKnowledgeRelation{}, errors.New(
-				"compile ClickHouse knowledge relation: identity guard introduced arguments",
-			)
-		}
-		result := compiledKnowledgeRelation{
-			relation: identity.relation,
-			state:    identity.state,
+		result := compiledKnowledgeStageRelation{
+			relation: relation,
+			state:    cloneCompileState(prelude.state),
 			args:     args,
 			prelude:  prelude,
 		}
-		if err := validateCompiledKnowledgeRelation(
+		if err := validateCompiledKnowledgeStageRelation(
 			result,
 			relation,
 			existingArgs,
 			preparation,
 		); err != nil {
-			return compiledKnowledgeRelation{}, err
+			return compiledKnowledgeStageRelation{}, err
 		}
 		return result, nil
 	}
@@ -80,7 +127,7 @@ func compileKnowledgeRelation(
 	for stageIndex, stage := range prelude.stages {
 		spanEnd := nextOffset + len(stage.operatorKinds)
 		if spanEnd < nextOffset || spanEnd > len(preparation.operatorKinds) {
-			return compiledKnowledgeRelation{}, errors.New(
+			return compiledKnowledgeStageRelation{}, errors.New(
 				"compile ClickHouse knowledge relation: physical stage span is invalid",
 			)
 		}
@@ -89,12 +136,12 @@ func compileKnowledgeRelation(
 			nextOffset,
 			preparation.operatorKinds[nextOffset:spanEnd],
 		); err != nil {
-			return compiledKnowledgeRelation{}, err
+			return compiledKnowledgeStageRelation{}, err
 		}
 		nextOffset += len(stage.operatorKinds)
 		stageArgs, cloneErr := cloneKnowledgeRelationArguments(stage.suffixArgs)
 		if cloneErr != nil {
-			return compiledKnowledgeRelation{}, fmt.Errorf(
+			return compiledKnowledgeStageRelation{}, fmt.Errorf(
 				"compile ClickHouse knowledge relation stage %d: %w",
 				stageIndex,
 				cloneErr,
@@ -114,54 +161,39 @@ func compileKnowledgeRelation(
 			strings.Join(stage.arrayJoinBindings, ", ")
 		current = current.selectFrom(bindingSQL, relation.ownerRange)
 		if err := validateKnowledgeRelationLayer(current); err != nil {
-			return compiledKnowledgeRelation{}, err
+			return compiledKnowledgeStageRelation{}, err
 		}
 		projectionSQL := "SELECT " + strings.Join(stage.projection, ", ") +
 			" FROM (" + current.sql + ") AS " + bindingAlias
 		current = current.selectFrom(projectionSQL, relation.ownerRange)
 		if err := validateKnowledgeRelationLayer(current); err != nil {
-			return compiledKnowledgeRelation{}, err
+			return compiledKnowledgeStageRelation{}, err
 		}
 		args = append(args, stageArgs...)
 		if strings.Count(current.sql, "?") != len(args) {
-			return compiledKnowledgeRelation{}, errors.New(
+			return compiledKnowledgeStageRelation{}, errors.New(
 				"compile ClickHouse knowledge relation: stage placeholder order is invalid",
 			)
 		}
 	}
 	if nextOffset != prelude.prefixLength {
-		return compiledKnowledgeRelation{}, errors.New(
+		return compiledKnowledgeStageRelation{}, errors.New(
 			"compile ClickHouse knowledge relation: physical stages do not cover the prefix",
 		)
 	}
-
-	guarded, err := compileKnowledgeRuntimeGuard(current, prelude, preparation)
-	if err != nil {
-		return compiledKnowledgeRelation{}, err
-	}
-	if len(guarded.suffixArgs) != 0 {
-		return compiledKnowledgeRelation{}, errors.New(
-			"compile ClickHouse knowledge relation: runtime guard introduced arguments",
-		)
-	}
-	if strings.Count(guarded.relation.sql, "?") != len(args) {
-		return compiledKnowledgeRelation{}, errors.New(
-			"compile ClickHouse knowledge relation: final placeholder order is invalid",
-		)
-	}
-	result := compiledKnowledgeRelation{
-		relation: guarded.relation,
-		state:    guarded.state,
+	result := compiledKnowledgeStageRelation{
+		relation: current,
+		state:    cloneCompileState(prelude.state),
 		args:     args,
 		prelude:  prelude,
 	}
-	if err := validateCompiledKnowledgeRelation(
+	if err := validateCompiledKnowledgeStageRelation(
 		result,
 		relation,
 		existingArgs,
 		preparation,
 	); err != nil {
-		return compiledKnowledgeRelation{}, err
+		return compiledKnowledgeStageRelation{}, err
 	}
 	return result, nil
 }
@@ -264,47 +296,15 @@ func validateCompiledKnowledgeRelation(
 	existingArgs []any,
 	preparation preparedKnowledgeCompilation,
 ) error {
-	if compiled.relation.ownerRange != input.ownerRange {
-		return errors.New(
-			"compile ClickHouse knowledge relation: final owner range disagrees",
-		)
-	}
-	if !reflect.DeepEqual(compiled.state, compiled.prelude.state) {
-		return errors.New(
-			"compile ClickHouse knowledge relation: final state disagrees",
-		)
-	}
-	if strings.Count(compiled.relation.sql, "?") != len(compiled.args) {
-		return errors.New(
-			"compile ClickHouse knowledge relation: final placeholder count disagrees",
-		)
-	}
-	if len(compiled.args) < len(existingArgs) || len(existingArgs) != 0 &&
-		!reflect.DeepEqual(compiled.args[:len(existingArgs)], existingArgs) {
-		return errors.New(
-			"compile ClickHouse knowledge relation: existing argument prefix disagrees",
-		)
-	}
-	if err := validateKnowledgeRelationLayer(compiled.relation); err != nil {
+	if err := validateCompiledKnowledgeRelationAuthority(
+		compiled.relation,
+		compiled.state,
+		compiled.args,
+		compiled.prelude,
+		input,
+		existingArgs,
+	); err != nil {
 		return err
-	}
-	expectedArgs := len(existingArgs)
-	for _, stage := range compiled.prelude.stages {
-		if len(compiled.args) < expectedArgs+len(stage.suffixArgs) ||
-			!reflect.DeepEqual(
-				compiled.args[expectedArgs:expectedArgs+len(stage.suffixArgs)],
-				stage.suffixArgs,
-			) {
-			return errors.New(
-				"compile ClickHouse knowledge relation: final argument order disagrees",
-			)
-		}
-		expectedArgs += len(stage.suffixArgs)
-	}
-	if expectedArgs != len(compiled.args) {
-		return errors.New(
-			"compile ClickHouse knowledge relation: final argument count disagrees",
-		)
 	}
 	if !preparation.present || preparation.program.IsEmpty() {
 		if err := validateKnowledgeRuntimeGuardIdentityPrelude(
@@ -327,6 +327,101 @@ func validateCompiledKnowledgeRelation(
 	if compiled.relation.depth != expectedDepth {
 		return errors.New(
 			"compile ClickHouse knowledge relation: final relational depth disagrees",
+		)
+	}
+	return nil
+}
+
+func validateCompiledKnowledgeStageRelation(
+	compiled compiledKnowledgeStageRelation,
+	input compiledRelation,
+	existingArgs []any,
+	preparation preparedKnowledgeCompilation,
+) error {
+	if err := validateCompiledKnowledgeRelationAuthority(
+		compiled.relation,
+		compiled.state,
+		compiled.args,
+		compiled.prelude,
+		input,
+		existingArgs,
+	); err != nil {
+		return err
+	}
+	if !preparation.present || preparation.program.IsEmpty() {
+		if err := validateKnowledgeRuntimeGuardIdentityPrelude(
+			compiled.prelude,
+			preparation,
+		); err != nil {
+			return err
+		}
+		if compiled.relation != input {
+			return errors.New(
+				"compile ClickHouse knowledge relation: staged identity changed",
+			)
+		}
+		return nil
+	}
+	if err := validateCompiledKnowledgePrelude(compiled.prelude, preparation); err != nil {
+		return err
+	}
+	expectedDepth := input.depth + 2*len(compiled.prelude.stages)
+	if compiled.relation.depth != expectedDepth {
+		return errors.New(
+			"compile ClickHouse knowledge relation: staged relational depth disagrees",
+		)
+	}
+	return nil
+}
+
+func validateCompiledKnowledgeRelationAuthority(
+	relation compiledRelation,
+	state compileState,
+	args []any,
+	prelude compiledKnowledgePrelude,
+	input compiledRelation,
+	existingArgs []any,
+) error {
+	if relation.ownerRange != input.ownerRange {
+		return errors.New(
+			"compile ClickHouse knowledge relation: final owner range disagrees",
+		)
+	}
+	if !reflect.DeepEqual(state, prelude.state) {
+		return errors.New(
+			"compile ClickHouse knowledge relation: final state disagrees",
+		)
+	}
+	if strings.Count(relation.sql, "?") != len(args) {
+		return errors.New(
+			"compile ClickHouse knowledge relation: final placeholder count disagrees",
+		)
+	}
+	if len(args) < len(existingArgs) || len(existingArgs) != 0 &&
+		!reflect.DeepEqual(args[:len(existingArgs)], existingArgs) {
+		return errors.New(
+			"compile ClickHouse knowledge relation: existing argument prefix disagrees",
+		)
+	}
+	if err := validateKnowledgeRelationLayer(relation); err != nil {
+		return err
+	}
+	expectedArgs := len(existingArgs)
+	for _, stage := range prelude.stages {
+		if len(args) < expectedArgs+len(stage.suffixArgs) ||
+			!reflect.DeepEqual(
+				args[expectedArgs:expectedArgs+len(stage.suffixArgs)],
+				stage.suffixArgs,
+			) {
+			return errors.New(
+				"compile ClickHouse knowledge relation: final argument order disagrees",
+			)
+		}
+		expectedArgs += len(stage.suffixArgs)
+	}
+	if expectedArgs != len(args) {
+		return errors.New(
+			"compile ClickHouse knowledge relation: final argument count disagrees",
 		)
 	}
 	return nil

@@ -13,6 +13,21 @@ import (
 
 const maxCompiledKnowledgeRuntimeGuardSQLBytes = maxCompiledQueryBytes
 
+const (
+	knowledgeRuntimeGuardInputName        = `"__os_ko_guard_input"`
+	knowledgeRuntimeGuardInputAlias       = `"__os_ko_guard_event"`
+	knowledgeRuntimeGuardTotalsName       = `"__os_ko_guard_totals"`
+	knowledgeRuntimeGuardTotalsAlias      = `"__os_ko_guard_total"`
+	knowledgeRuntimeGuardViolationColumn  = `"__os_ko_guard_violation"`
+	knowledgeRuntimeGuardValidationColumn = `"__os_ko_guard_validation"`
+	knowledgeRuntimeGuardResultName       = `"__os_ko_guard_result"`
+)
+
+type compiledKnowledgeRuntimeGuardExpressions struct {
+	violation  string
+	validation string
+}
+
 // compiledKnowledgeRuntimeGuard is a pure relation wrapper. suffixArgs is
 // intentionally always empty: selector and capture limits are compile-time
 // constants, while every argument already owned by the input relation keeps
@@ -61,81 +76,40 @@ func compileKnowledgeRuntimeGuard(
 		return compiledKnowledgeRuntimeGuard{}, err
 	}
 	selectorCharges := prelude.selectorCharges
-	capturedBytes := prelude.capturedBytes
-
-	const (
-		inputName       = `"__os_ko_guard_input"`
-		inputAlias      = `"__os_ko_guard_event"`
-		totalsName      = `"__os_ko_guard_totals"`
-		totalsAlias     = `"__os_ko_guard_total"`
-		violationColumn = `"__os_ko_guard_violation"`
-	)
-
-	selectorEventMaximum := "maxOrDefault(toUInt128(" + selectorCharges.inputBytes + "))"
-	selectorQueryTotal := "sum(toUInt128(" + selectorCharges.queryUnits + "))"
-	selectorEventOver := selectorEventMaximum + " > toUInt128(" +
-		strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes) + ")"
-	selectorQueryOver := selectorQueryTotal + " > toUInt128(" +
-		strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits) + ")"
-	violation := "multiIf(" + selectorEventOver + ", toUInt8(1), "
-	if capturedBytes != "" {
-		rexMaximum := "maxOrDefault(toUInt128(" + capturedBytes + "))"
-		rexOver := rexMaximum + " > toUInt128(" +
-			strconv.FormatUint(MaximumRexCapturedBytesPerRow, 10) + ")"
-		violation += rexOver + ", toUInt8(2), "
-	}
-	violation += selectorQueryOver + ", toUInt8(3), toUInt8(0))"
-
-	violationRef := totalsAlias + "." + violationColumn
-	eventViolation := violationRef + " = toUInt8(1)"
-	queryViolation := violationRef + " = toUInt8(3)"
-	validation := "if(" + eventViolation + ", " +
-		knowledgeRuntimeGuardThrow(eventViolation, KnowledgeSelectorEventLimitMarker) + ", "
-	if capturedBytes != "" {
-		rexViolation := violationRef + " = toUInt8(2)"
-		validation += "if(" + rexViolation + ", " +
-			knowledgeRuntimeGuardThrow(rexViolation, RexCaptureLimitMarker) + ", " +
-			knowledgeRuntimeGuardThrow(queryViolation, KnowledgeSelectorQueryLimitMarker) + ")"
-	} else {
-		validation += knowledgeRuntimeGuardThrow(
-			queryViolation,
-			KnowledgeSelectorQueryLimitMarker,
-		)
-	}
-	validation += ")"
+	expressions := compileKnowledgeRuntimeGuardExpressions(prelude)
 
 	var sql strings.Builder
 	sql.Grow(len(relation.sql) + 2048)
 	sql.WriteString("WITH ")
-	sql.WriteString(inputName)
+	sql.WriteString(knowledgeRuntimeGuardInputName)
 	sql.WriteString(" AS MATERIALIZED (")
 	sql.WriteString(relation.sql)
 	sql.WriteString("), ")
-	sql.WriteString(totalsName)
+	sql.WriteString(knowledgeRuntimeGuardTotalsName)
 	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(violation)
+	sql.WriteString(expressions.violation)
 	sql.WriteString(" AS ")
-	sql.WriteString(violationColumn)
+	sql.WriteString(knowledgeRuntimeGuardViolationColumn)
 	sql.WriteString(" FROM ")
-	sql.WriteString(inputName)
+	sql.WriteString(knowledgeRuntimeGuardInputName)
 	sql.WriteString(") SELECT ")
 	sql.WriteString("* EXCEPT (")
 	sql.WriteString(selectorCharges.inputBytes)
 	sql.WriteString(", ")
 	sql.WriteString(selectorCharges.queryUnits)
 	sql.WriteString(", ")
-	sql.WriteString(violationColumn)
+	sql.WriteString(knowledgeRuntimeGuardViolationColumn)
 	sql.WriteString(")")
 	sql.WriteString(" FROM ")
-	sql.WriteString(inputName)
+	sql.WriteString(knowledgeRuntimeGuardInputName)
 	sql.WriteString(" AS ")
-	sql.WriteString(inputAlias)
+	sql.WriteString(knowledgeRuntimeGuardInputAlias)
 	sql.WriteString(" CROSS JOIN ")
-	sql.WriteString(totalsName)
+	sql.WriteString(knowledgeRuntimeGuardTotalsName)
 	sql.WriteString(" AS ")
-	sql.WriteString(totalsAlias)
+	sql.WriteString(knowledgeRuntimeGuardTotalsAlias)
 	sql.WriteString(" WHERE ")
-	sql.WriteString(validation)
+	sql.WriteString(expressions.validation)
 	sql.WriteString(" = 0")
 	sql.WriteString(materializedCTESettingsSQL)
 	guardedSQL := sql.String()
@@ -168,6 +142,49 @@ func compileKnowledgeRuntimeGuard(
 		},
 		state: cloneCompileState(prelude.state),
 	}, nil
+}
+
+func compileKnowledgeRuntimeGuardExpressions(
+	prelude compiledKnowledgePrelude,
+) compiledKnowledgeRuntimeGuardExpressions {
+	selectorCharges := prelude.selectorCharges
+	selectorEventMaximum := "maxOrDefault(toUInt128(" + selectorCharges.inputBytes + "))"
+	selectorQueryTotal := "sum(toUInt128(" + selectorCharges.queryUnits + "))"
+	selectorEventOver := selectorEventMaximum + " > toUInt128(" +
+		strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes) + ")"
+	selectorQueryOver := selectorQueryTotal + " > toUInt128(" +
+		strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits) + ")"
+	violation := "multiIf(" + selectorEventOver + ", toUInt8(1), "
+	if prelude.capturedBytes != "" {
+		rexMaximum := "maxOrDefault(toUInt128(" + prelude.capturedBytes + "))"
+		rexOver := rexMaximum + " > toUInt128(" +
+			strconv.FormatUint(MaximumRexCapturedBytesPerRow, 10) + ")"
+		violation += rexOver + ", toUInt8(2), "
+	}
+	violation += selectorQueryOver + ", toUInt8(3), toUInt8(0))"
+
+	violationRef := knowledgeRuntimeGuardTotalsAlias + "." +
+		knowledgeRuntimeGuardViolationColumn
+	eventViolation := violationRef + " = toUInt8(1)"
+	queryViolation := violationRef + " = toUInt8(3)"
+	validation := "if(" + eventViolation + ", " +
+		knowledgeRuntimeGuardThrow(eventViolation, KnowledgeSelectorEventLimitMarker) + ", "
+	if prelude.capturedBytes != "" {
+		rexViolation := violationRef + " = toUInt8(2)"
+		validation += "if(" + rexViolation + ", " +
+			knowledgeRuntimeGuardThrow(rexViolation, RexCaptureLimitMarker) + ", " +
+			knowledgeRuntimeGuardThrow(queryViolation, KnowledgeSelectorQueryLimitMarker) + ")"
+	} else {
+		validation += knowledgeRuntimeGuardThrow(
+			queryViolation,
+			KnowledgeSelectorQueryLimitMarker,
+		)
+	}
+	validation += ")"
+	return compiledKnowledgeRuntimeGuardExpressions{
+		violation:  violation,
+		validation: validation,
+	}
 }
 
 func validateKnowledgeRuntimeGuardInput(
@@ -221,7 +238,8 @@ func validateKnowledgeRuntimeGuardInput(
 		prelude.selectorCharges.inputBytes,
 		prelude.selectorCharges.queryUnits,
 		prelude.capturedBytes,
-		`"__os_ko_guard_violation"`,
+		knowledgeRuntimeGuardViolationColumn,
+		knowledgeRuntimeGuardValidationColumn,
 	) {
 		return errors.New(
 			"compile ClickHouse knowledge runtime guard: accounting entered event state",
