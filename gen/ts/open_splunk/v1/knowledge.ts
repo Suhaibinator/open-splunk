@@ -373,11 +373,11 @@ export interface JsonFieldExtractionDefinition {
 
 export interface FieldExtractionDefinition {
   inputField: string;
+  overwriteBehavior: KnowledgeOverwriteBehavior;
   extraction: { $case: "regex"; value: RegexFieldExtractionDefinition } | {
     $case: "json";
     value: JsonFieldExtractionDefinition;
   } | undefined;
-  overwriteBehavior: KnowledgeOverwriteBehavior;
 }
 
 export interface FieldAliasDefinition {
@@ -1006,13 +1006,16 @@ export const JsonFieldExtractionDefinition: MessageFns<JsonFieldExtractionDefini
 };
 
 function createBaseFieldExtractionDefinition(): FieldExtractionDefinition {
-  return { inputField: "", extraction: undefined, overwriteBehavior: 0 };
+  return { inputField: "", overwriteBehavior: 0, extraction: undefined };
 }
 
 export const FieldExtractionDefinition: MessageFns<FieldExtractionDefinition> = {
   encode(message: FieldExtractionDefinition, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     if (message.inputField !== "") {
       writer.uint32(10).string(message.inputField);
+    }
+    if (message.overwriteBehavior !== 0) {
+      writer.uint32(32).int32(message.overwriteBehavior);
     }
     switch (message.extraction?.$case) {
       case "regex":
@@ -1021,9 +1024,6 @@ export const FieldExtractionDefinition: MessageFns<FieldExtractionDefinition> = 
       case "json":
         JsonFieldExtractionDefinition.encode(message.extraction.value, writer.uint32(26).fork()).join();
         break;
-    }
-    if (message.overwriteBehavior !== 0) {
-      writer.uint32(32).int32(message.overwriteBehavior);
     }
     return writer;
   },
@@ -1041,6 +1041,14 @@ export const FieldExtractionDefinition: MessageFns<FieldExtractionDefinition> = 
           }
 
           message.inputField = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.overwriteBehavior = reader.int32() as any;
           continue;
         }
         case 2: {
@@ -1062,14 +1070,6 @@ export const FieldExtractionDefinition: MessageFns<FieldExtractionDefinition> = 
           message.extraction = { $case: "json", value: JsonFieldExtractionDefinition.decode(reader, reader.uint32()) };
           continue;
         }
-        case 4: {
-          if (tag !== 32) {
-            break;
-          }
-
-          message.overwriteBehavior = reader.int32() as any;
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1086,16 +1086,16 @@ export const FieldExtractionDefinition: MessageFns<FieldExtractionDefinition> = 
         : isSet(object.input_field)
         ? globalThis.String(object.input_field)
         : "",
-      extraction: isSet(object.regex)
-        ? { $case: "regex", value: RegexFieldExtractionDefinition.fromJSON(object.regex) }
-        : isSet(object.json)
-        ? { $case: "json", value: JsonFieldExtractionDefinition.fromJSON(object.json) }
-        : undefined,
       overwriteBehavior: isSet(object.overwriteBehavior)
         ? knowledgeOverwriteBehaviorFromJSON(object.overwriteBehavior)
         : isSet(object.overwrite_behavior)
         ? knowledgeOverwriteBehaviorFromJSON(object.overwrite_behavior)
         : 0,
+      extraction: isSet(object.regex)
+        ? { $case: "regex", value: RegexFieldExtractionDefinition.fromJSON(object.regex) }
+        : isSet(object.json)
+        ? { $case: "json", value: JsonFieldExtractionDefinition.fromJSON(object.json) }
+        : undefined,
     };
   },
 
@@ -1104,13 +1104,13 @@ export const FieldExtractionDefinition: MessageFns<FieldExtractionDefinition> = 
     if (message.inputField !== "") {
       obj.inputField = message.inputField;
     }
+    if (message.overwriteBehavior !== 0) {
+      obj.overwriteBehavior = knowledgeOverwriteBehaviorToJSON(message.overwriteBehavior);
+    }
     if (message.extraction?.$case === "regex") {
       obj.regex = RegexFieldExtractionDefinition.toJSON(message.extraction.value);
     } else if (message.extraction?.$case === "json") {
       obj.json = JsonFieldExtractionDefinition.toJSON(message.extraction.value);
-    }
-    if (message.overwriteBehavior !== 0) {
-      obj.overwriteBehavior = knowledgeOverwriteBehaviorToJSON(message.overwriteBehavior);
     }
     return obj;
   },
@@ -1121,6 +1121,7 @@ export const FieldExtractionDefinition: MessageFns<FieldExtractionDefinition> = 
   fromPartial<I extends Exact<DeepPartial<FieldExtractionDefinition>, I>>(object: I): FieldExtractionDefinition {
     const message = createBaseFieldExtractionDefinition();
     message.inputField = object.inputField ?? "";
+    message.overwriteBehavior = object.overwriteBehavior ?? 0;
     switch (object.extraction?.$case) {
       case "regex": {
         if (object.extraction?.value !== undefined && object.extraction?.value !== null) {
@@ -1141,7 +1142,6 @@ export const FieldExtractionDefinition: MessageFns<FieldExtractionDefinition> = 
         break;
       }
     }
-    message.overwriteBehavior = object.overwriteBehavior ?? 0;
     return message;
   },
 };

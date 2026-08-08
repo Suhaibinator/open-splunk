@@ -2,6 +2,9 @@ package opensplunk_test
 
 import (
 	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"os"
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -266,6 +269,127 @@ func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 	assetOrdinal := lookupAsset.Fields().ByName("asset_ordinal")
 	if assetOrdinal == nil || assetOrdinal.Number() != 1 {
 		t.Errorf("KnowledgeSnapshotLookupAsset.asset_ordinal = %v, want wire field 1", assetOrdinal)
+	}
+}
+
+func TestFieldExtractionDefinitionDeterministicWireMatchesCrossLanguageGolden(t *testing.T) {
+	t.Parallel()
+
+	descriptor := opensplunkv1.File_open_splunk_v1_knowledge_proto.Messages().ByName("FieldExtractionDefinition")
+	if descriptor == nil {
+		t.Fatal("FieldExtractionDefinition descriptor is missing")
+	}
+	wantDeclarationOrder := []struct {
+		name   protoreflect.Name
+		number protoreflect.FieldNumber
+	}{
+		{name: "input_field", number: 1},
+		{name: "overwrite_behavior", number: 4},
+		{name: "regex", number: 2},
+		{name: "json", number: 3},
+	}
+	if got := descriptor.Fields().Len(); got != len(wantDeclarationOrder) {
+		t.Fatalf("FieldExtractionDefinition field count = %d, want %d", got, len(wantDeclarationOrder))
+	}
+	for index, want := range wantDeclarationOrder {
+		field := descriptor.Fields().Get(index)
+		if field.Name() != want.name || field.Number() != want.number {
+			t.Fatalf(
+				"FieldExtractionDefinition declaration %d = %s/%d, want %s/%d",
+				index,
+				field.Name(),
+				field.Number(),
+				want.name,
+				want.number,
+			)
+		}
+	}
+
+	type regexFixture struct {
+		Pattern      string   `json:"pattern"`
+		OutputFields []string `json:"outputFields"`
+	}
+	type jsonFixture struct {
+		Path        string `json:"path"`
+		OutputField string `json:"outputField"`
+	}
+	var fixture struct {
+		Version int `json:"version"`
+		Cases   []struct {
+			Name              string        `json:"name"`
+			InputField        string        `json:"inputField"`
+			OverwriteBehavior int32         `json:"overwriteBehavior"`
+			Regex             *regexFixture `json:"regex"`
+			JSON              *jsonFixture  `json:"json"`
+			WireHex           string        `json:"wireHex"`
+		} `json:"cases"`
+	}
+	encodedFixture, err := os.ReadFile("testdata/knowledge-field-extraction-wire.json")
+	if err != nil {
+		t.Fatalf("read cross-language field-extraction fixture: %v", err)
+	}
+	if err := json.Unmarshal(encodedFixture, &fixture); err != nil {
+		t.Fatalf("decode cross-language field-extraction fixture: %v", err)
+	}
+	if fixture.Version != 1 || len(fixture.Cases) != 2 {
+		t.Fatalf("cross-language field-extraction fixture = version %d with %d cases, want version 1 with 2 cases", fixture.Version, len(fixture.Cases))
+	}
+
+	seen := make(map[string]bool, len(fixture.Cases))
+	for _, contract := range fixture.Cases {
+		contract := contract
+		t.Run(contract.Name, func(t *testing.T) {
+			if contract.Name != "regex" && contract.Name != "json" {
+				t.Fatalf("unexpected cross-language fixture case %q", contract.Name)
+			}
+			if seen[contract.Name] {
+				t.Fatalf("duplicate cross-language fixture case %q", contract.Name)
+			}
+			seen[contract.Name] = true
+
+			message := &opensplunkv1.FieldExtractionDefinition{
+				InputField:        contract.InputField,
+				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior(contract.OverwriteBehavior),
+			}
+			switch {
+			case contract.Regex != nil && contract.JSON == nil:
+				message.Extraction = &opensplunkv1.FieldExtractionDefinition_Regex{
+					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+						Pattern:      contract.Regex.Pattern,
+						OutputFields: append([]string(nil), contract.Regex.OutputFields...),
+					},
+				}
+			case contract.JSON != nil && contract.Regex == nil:
+				message.Extraction = &opensplunkv1.FieldExtractionDefinition_Json{
+					Json: &opensplunkv1.JsonFieldExtractionDefinition{
+						Path:        contract.JSON.Path,
+						OutputField: contract.JSON.OutputField,
+					},
+				}
+			default:
+				t.Fatal("cross-language fixture must contain exactly one extraction body")
+			}
+
+			wantWire, err := hex.DecodeString(contract.WireHex)
+			if err != nil {
+				t.Fatalf("decode golden wire: %v", err)
+			}
+			marshal := proto.MarshalOptions{Deterministic: true}
+			first, err := marshal.Marshal(message)
+			if err != nil {
+				t.Fatalf("marshal FieldExtractionDefinition: %v", err)
+			}
+			second, err := marshal.Marshal(message)
+			if err != nil {
+				t.Fatalf("marshal FieldExtractionDefinition again: %v", err)
+			}
+			if !bytes.Equal(first, second) {
+				t.Fatalf("deterministic Go wire changed between runs: first=%x second=%x", first, second)
+			}
+			if !bytes.Equal(first, wantWire) {
+				t.Fatalf("Go wire = %x, want shared Go/TypeScript golden %x", first, wantWire)
+			}
+		})
 	}
 }
 

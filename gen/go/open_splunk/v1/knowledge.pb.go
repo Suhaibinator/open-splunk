@@ -626,16 +626,16 @@ func (x *JsonFieldExtractionDefinition) GetOutputField() string {
 }
 
 type FieldExtractionDefinition struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	InputField string                 `protobuf:"bytes,1,opt,name=input_field,json=inputField,proto3" json:"input_field,omitempty"`
+	state             protoimpl.MessageState     `protogen:"open.v1"`
+	InputField        string                     `protobuf:"bytes,1,opt,name=input_field,json=inputField,proto3" json:"input_field,omitempty"`
+	OverwriteBehavior KnowledgeOverwriteBehavior `protobuf:"varint,4,opt,name=overwrite_behavior,json=overwriteBehavior,proto3,enum=open_splunk.v1.KnowledgeOverwriteBehavior" json:"overwrite_behavior,omitempty"`
 	// Types that are valid to be assigned to Extraction:
 	//
 	//	*FieldExtractionDefinition_Regex
 	//	*FieldExtractionDefinition_Json
-	Extraction        isFieldExtractionDefinition_Extraction `protobuf_oneof:"extraction"`
-	OverwriteBehavior KnowledgeOverwriteBehavior             `protobuf:"varint,4,opt,name=overwrite_behavior,json=overwriteBehavior,proto3,enum=open_splunk.v1.KnowledgeOverwriteBehavior" json:"overwrite_behavior,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Extraction    isFieldExtractionDefinition_Extraction `protobuf_oneof:"extraction"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FieldExtractionDefinition) Reset() {
@@ -675,6 +675,13 @@ func (x *FieldExtractionDefinition) GetInputField() string {
 	return ""
 }
 
+func (x *FieldExtractionDefinition) GetOverwriteBehavior() KnowledgeOverwriteBehavior {
+	if x != nil {
+		return x.OverwriteBehavior
+	}
+	return KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED
+}
+
 func (x *FieldExtractionDefinition) GetExtraction() isFieldExtractionDefinition_Extraction {
 	if x != nil {
 		return x.Extraction
@@ -698,13 +705,6 @@ func (x *FieldExtractionDefinition) GetJson() *JsonFieldExtractionDefinition {
 		}
 	}
 	return nil
-}
-
-func (x *FieldExtractionDefinition) GetOverwriteBehavior() KnowledgeOverwriteBehavior {
-	if x != nil {
-		return x.OverwriteBehavior
-	}
-	return KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED
 }
 
 type isFieldExtractionDefinition_Extraction interface {
@@ -2505,10 +2505,10 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\foutput_field\x18\x02 \x01(\tR\voutputField\"\xb2\x02\n" +
 	"\x19FieldExtractionDefinition\x12\x1f\n" +
 	"\vinput_field\x18\x01 \x01(\tR\n" +
-	"inputField\x12F\n" +
+	"inputField\x12Y\n" +
+	"\x12overwrite_behavior\x18\x04 \x01(\x0e2*.open_splunk.v1.KnowledgeOverwriteBehaviorR\x11overwriteBehavior\x12F\n" +
 	"\x05regex\x18\x02 \x01(\v2..open_splunk.v1.RegexFieldExtractionDefinitionH\x00R\x05regex\x12C\n" +
-	"\x04json\x18\x03 \x01(\v2-.open_splunk.v1.JsonFieldExtractionDefinitionH\x00R\x04json\x12Y\n" +
-	"\x12overwrite_behavior\x18\x04 \x01(\x0e2*.open_splunk.v1.KnowledgeOverwriteBehaviorR\x11overwriteBehaviorB\f\n" +
+	"\x04json\x18\x03 \x01(\v2-.open_splunk.v1.JsonFieldExtractionDefinitionH\x00R\x04jsonB\f\n" +
 	"\n" +
 	"extraction\"\xc1\x01\n" +
 	"\x14FieldAliasDefinition\x12!\n" +
@@ -2774,9 +2774,9 @@ var file_open_splunk_v1_knowledge_proto_depIdxs = []int32{
 	7,  // 2: open_splunk.v1.KnowledgeSelector.host_patterns:type_name -> open_splunk.v1.KnowledgeSelectorPattern
 	7,  // 3: open_splunk.v1.KnowledgeSelector.source_patterns:type_name -> open_splunk.v1.KnowledgeSelectorPattern
 	7,  // 4: open_splunk.v1.KnowledgeSelector.sourcetype_patterns:type_name -> open_splunk.v1.KnowledgeSelectorPattern
-	9,  // 5: open_splunk.v1.FieldExtractionDefinition.regex:type_name -> open_splunk.v1.RegexFieldExtractionDefinition
-	10, // 6: open_splunk.v1.FieldExtractionDefinition.json:type_name -> open_splunk.v1.JsonFieldExtractionDefinition
-	4,  // 7: open_splunk.v1.FieldExtractionDefinition.overwrite_behavior:type_name -> open_splunk.v1.KnowledgeOverwriteBehavior
+	4,  // 5: open_splunk.v1.FieldExtractionDefinition.overwrite_behavior:type_name -> open_splunk.v1.KnowledgeOverwriteBehavior
+	9,  // 6: open_splunk.v1.FieldExtractionDefinition.regex:type_name -> open_splunk.v1.RegexFieldExtractionDefinition
+	10, // 7: open_splunk.v1.FieldExtractionDefinition.json:type_name -> open_splunk.v1.JsonFieldExtractionDefinition
 	4,  // 8: open_splunk.v1.FieldAliasDefinition.overwrite_behavior:type_name -> open_splunk.v1.KnowledgeOverwriteBehavior
 	4,  // 9: open_splunk.v1.CalculatedFieldDefinition.overwrite_behavior:type_name -> open_splunk.v1.KnowledgeOverwriteBehavior
 	30, // 10: open_splunk.v1.KnowledgeObjectDefinition.sharing_scope:type_name -> open_splunk.v1.SharingScope

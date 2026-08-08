@@ -81,11 +81,11 @@ message JsonFieldExtractionDefinition {
 
 message FieldExtractionDefinition {
   string input_field = 1;
+  KnowledgeOverwriteBehavior overwrite_behavior = 4;
   oneof extraction {
     RegexFieldExtractionDefinition regex = 2;
     JsonFieldExtractionDefinition json = 3;
   }
-  KnowledgeOverwriteBehavior overwrite_behavior = 4;
 }
 
 message FieldAliasDefinition {

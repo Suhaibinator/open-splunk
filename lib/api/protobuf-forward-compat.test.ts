@@ -9,6 +9,10 @@ import * as openSplunkV1 from "@/gen/ts/index.open_splunk.v1";
 import { AppSelector } from "@/gen/ts/open_splunk/v1/app";
 import { GetAppRequest } from "@/gen/ts/open_splunk/v1/app_api";
 import {
+  FieldExtractionDefinition,
+  KnowledgeOverwriteBehavior,
+} from "@/gen/ts/open_splunk/v1/knowledge";
+import {
   CreateKnowledgeObjectResponse,
   DeleteKnowledgeObjectResponse,
   KnowledgeMutationOutcomeRecord,
@@ -39,12 +43,38 @@ interface RuntimeMessageCodec {
   decode(input: Uint8Array): unknown;
 }
 
+interface FieldExtractionWireContract {
+  name: "regex" | "json";
+  inputField: string;
+  overwriteBehavior: number;
+  regex?: {
+    pattern: string;
+    outputFields: string[];
+  };
+  json?: {
+    path: string;
+    outputField: string;
+  };
+  wireHex: string;
+}
+
+interface FieldExtractionWireFixture {
+  version: number;
+  cases: FieldExtractionWireContract[];
+}
+
 const routeFixture = JSON.parse(
   readFileSync(
     path.join(process.cwd(), "testdata", "protobuf-http-route-contracts.json"),
     "utf8",
   ),
 ) as ProtobufRouteContractFixture;
+const fieldExtractionFixture = JSON.parse(
+  readFileSync(
+    path.join(process.cwd(), "testdata", "knowledge-field-extraction-wire.json"),
+    "utf8",
+  ),
+) as FieldExtractionWireFixture;
 const futureFieldTag = (routeFixture.futureFieldNumber << 3) | 2;
 
 function registeredRoutePaths(value: unknown): string[] {
@@ -166,6 +196,43 @@ test("generated protobuf response decoders retain known fields from future serve
   const decoded = GetSystemBootstrapResponse.decode(response.finish());
   assert.equal(decoded.apiVersion, "v1");
   assert.equal(decoded.splCompatibilityVersion, "open-splunk-v0.1");
+});
+
+test("generated field extraction definitions match shared Go wire goldens", () => {
+  assert.equal(fieldExtractionFixture.version, 1);
+  assert.equal(fieldExtractionFixture.cases.length, 2);
+  assert.deepEqual(
+    fieldExtractionFixture.cases.map((contract) => contract.name).toSorted(),
+    ["json", "regex"],
+  );
+
+  for (const contract of fieldExtractionFixture.cases) {
+    assert.notEqual(contract.regex === undefined, contract.json === undefined);
+    const overwriteBehavior = contract.overwriteBehavior as KnowledgeOverwriteBehavior;
+    const message = contract.regex !== undefined
+      ? FieldExtractionDefinition.fromPartial({
+        inputField: contract.inputField,
+        overwriteBehavior,
+        extraction: { $case: "regex", value: contract.regex },
+      })
+      : FieldExtractionDefinition.fromPartial({
+        inputField: contract.inputField,
+        overwriteBehavior,
+        extraction: { $case: "json", value: contract.json },
+      });
+    const expected = Uint8Array.from(Buffer.from(contract.wireHex, "hex"));
+    assert.ok(expected.length > 0, `${contract.name} golden wire is empty`);
+
+    const first = FieldExtractionDefinition.encode(message).finish();
+    const second = FieldExtractionDefinition.encode(message).finish();
+    assert.deepEqual(first, second, `${contract.name} TypeScript wire changed between runs`);
+    assert.deepEqual(
+      first,
+      expected,
+      `${contract.name} TypeScript wire differs from the shared Go/TypeScript golden`,
+    );
+    assert.deepEqual(FieldExtractionDefinition.decode(first), message);
+  }
 });
 
 test("generated knowledge mutation responses encode paired revision state deterministically", () => {
