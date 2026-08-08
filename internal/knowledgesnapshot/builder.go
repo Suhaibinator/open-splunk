@@ -1146,14 +1146,14 @@ func finalize(authority Authority, evidence trustedCompilerEvidence) (Snapshot, 
 
 // Finalize seals this exact prepared authority against one exact compiler-
 // produced ClickHouse execution. It accepts no caller-constructible budget
-// counters. KO-0H deliberately finalizes only an empty authority because KO-1
-// has not yet introduced the generated knowledge prelude; accepting nonempty
-// authority here would pin definitions the executable SQL never applies.
+// counters and requires the exact present knowledge-program commitment even
+// for an admitted empty authority. Nonempty finalization remains disabled until
+// every KO-1 physical operator is emitted and independently sealed.
 func (authority Authority) Finalize(compiled clickhouse.CompiledQuery) (Snapshot, error) {
 	if authority.base == nil || authority.base.BudgetCharges == nil {
 		return Snapshot{}, fmt.Errorf("%w: prepared authority is absent", ErrInvalidInput)
 	}
-	compilerEvidence, ok := compiled.KnowledgeSnapshotEvidence()
+	compilerEvidence, ok := compiled.KnowledgeSnapshotEvidenceFor(authority.prelude)
 	if !ok {
 		return Snapshot{}, fmt.Errorf("%w: compiled query knowledge evidence is absent or unsealed", ErrInvalidInput)
 	}

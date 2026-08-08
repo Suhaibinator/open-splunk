@@ -16,6 +16,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -68,7 +69,7 @@ func TestResolutionFinalizeKeepsPreparedAuthorityOpaque(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve(empty): %v", err)
 	}
-	compiled := compileResolutionQuery(t, testTenant, []string{"main"}, `index=main`)
+	compiled := compileResolutionQuery(t, testTenant, []string{"main"}, `index=main`, resolved.Prelude())
 	snapshot, err := resolved.Finalize(compiled)
 	if err != nil || snapshot.IsZero() || snapshot.Proto().GetTenantId() != testTenant {
 		t.Fatalf("Finalize = (%#v, %v)", snapshot.Proto(), err)
@@ -847,6 +848,7 @@ func compileResolutionQuery(
 	tenantID string,
 	indexes []string,
 	source string,
+	prelude ...knowledgeprogram.Program,
 ) clickhouse.CompiledQuery {
 	t.Helper()
 	parsed, err := spl.Parse(source)
@@ -866,6 +868,15 @@ func compileResolutionQuery(
 	})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
+	}
+	if len(prelude) > 1 {
+		t.Fatalf("compile resolution query: %d preludes", len(prelude))
+	}
+	if len(prelude) == 1 {
+		logical, err = plan.InjectKnowledgePrelude(logical, prelude[0])
+		if err != nil {
+			t.Fatalf("InjectKnowledgePrelude: %v", err)
+		}
 	}
 	compiled, err := (clickhouse.Compiler{}).Compile(logical)
 	if err != nil {

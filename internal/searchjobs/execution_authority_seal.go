@@ -260,7 +260,9 @@ func knowledgeExecutionAuthorityDigest(
 		if !bytes.Equal(authority.GetSnapshotSha256(), snapshotDigest[:]) {
 			return [sha256.Size]byte{}, false
 		}
-		evidence, ok := snapshot.CompiledQuery.KnowledgeSnapshotEvidence()
+		evidence, ok := snapshot.CompiledQuery.KnowledgeSnapshotEvidenceFor(
+			snapshot.KnowledgeSnapshot.Prelude(),
+		)
 		if !ok || evidence.TenantID() != snapshot.TenantID ||
 			!slices.Equal(evidence.EffectiveIndexes(), snapshot.EffectiveIndexes) {
 			return [sha256.Size]byte{}, false

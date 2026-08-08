@@ -97,7 +97,7 @@ func (snapshot ExecutionSnapshot) OpenRetainedKnowledgeExecution() (*RetainedKno
 	if !ok {
 		return nil, ErrResultsUnavailable
 	}
-	evidence, ok := compiled.KnowledgeSnapshotEvidence()
+	evidence, ok := compiled.KnowledgeSnapshotEvidenceFor(snapshot.KnowledgeSnapshot.Prelude())
 	if !ok || evidence.TenantID() != snapshot.TenantID ||
 		!slices.Equal(evidence.EffectiveIndexes(), snapshot.EffectiveIndexes) ||
 		!knowledgeCompilerEvidenceMatches(

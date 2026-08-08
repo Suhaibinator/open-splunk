@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -162,6 +163,14 @@ func compileSnapshotQuery(
 	})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
+	}
+	empty, err := knowledgeprogram.Prepare(knowledgeprogram.Input{})
+	if err != nil {
+		t.Fatalf("Prepare(empty program): %v", err)
+	}
+	logical, err = plan.InjectKnowledgePrelude(logical, empty)
+	if err != nil {
+		t.Fatalf("InjectKnowledgePrelude(empty): %v", err)
 	}
 	compiled, err := (clickhouse.Compiler{}).Compile(logical)
 	if err != nil {

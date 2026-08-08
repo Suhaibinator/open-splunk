@@ -1,9 +1,13 @@
 package clickhouse
 
 import (
+	"bytes"
 	"slices"
 	"testing"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
@@ -32,6 +36,9 @@ func TestCompiledKnowledgeSnapshotEvidencePinsAuthoredWholeQueryCharges(t *testi
 	}
 	if evidence.TenantID() != "tenant-1" ||
 		!slices.Equal(evidence.EffectiveIndexes(), []string{"gradethis"}) ||
+		evidence.KnowledgeProgramPresent() ||
+		evidence.KnowledgeProgramObjectCount() != 0 ||
+		evidence.KnowledgeProgramCharges() != (knowledgeprogram.Charges{}) ||
 		evidence.GeneratedOperators() != 0 || evidence.GeneratedFields() != 0 ||
 		evidence.RegexPrograms() != 1 ||
 		evidence.RegexWorkUnits() != uint64(pattern.ProgramWorkUnits) ||
@@ -40,14 +47,127 @@ func TestCompiledKnowledgeSnapshotEvidencePinsAuthoredWholeQueryCharges(t *testi
 		evidence.JSONEvaluationWork() != uint32(splpath.EvaluationWorkUnits(steps)) ||
 		evidence.ScalarExpressions() != 0 || evidence.ScalarExpressionNodes() != 0 ||
 		evidence.ScalarPredicates() != 2 ||
+		evidence.AuthoredRegexPrograms() != 1 ||
+		evidence.AuthoredRegexWorkUnits() != uint64(pattern.ProgramWorkUnits) ||
+		evidence.AuthoredExtractionOutputs() != 2 ||
+		evidence.AuthoredJSONEvaluationWork() != uint32(splpath.EvaluationWorkUnits(steps)) ||
+		evidence.AuthoredScalarPredicates() != 2 ||
 		evidence.GeneratedSQLBytes() != uint64(len(compiled.SQL)) {
 		t.Fatalf("knowledge compiler evidence = %#v", evidence)
+	}
+	if commitment, ok := evidence.KnowledgeProgramCommitment(); ok || commitment != ([32]byte{}) {
+		t.Fatalf("legacy knowledge commitment = %x/%t", commitment, ok)
 	}
 
 	indexes := evidence.EffectiveIndexes()
 	indexes[0] = "mutated"
 	if evidence.EffectiveIndexes()[0] != "gradethis" {
 		t.Fatal("knowledge evidence indexes alias caller memory")
+	}
+}
+
+func TestCompiledKnowledgeSnapshotEvidenceDistinguishesLegacyAndPresentEmpty(t *testing.T) {
+	t.Parallel()
+
+	empty, err := knowledgeprogram.Prepare(knowledgeprogram.Input{})
+	if err != nil {
+		t.Fatalf("Prepare(empty): %v", err)
+	}
+	logical := buildPlan(t, `index=gradethis | where status=200`)
+	legacy, err := (Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatalf("Compile(legacy): %v", err)
+	}
+	admittedLogical, err := plan.InjectKnowledgePrelude(logical, empty)
+	if err != nil {
+		t.Fatalf("InjectKnowledgePrelude(empty): %v", err)
+	}
+	admitted, err := (Compiler{}).Compile(admittedLogical)
+	if err != nil {
+		t.Fatalf("Compile(present empty): %v", err)
+	}
+
+	legacyEvidence, legacyOK := legacy.KnowledgeSnapshotEvidence()
+	admittedEvidence, admittedOK := admitted.KnowledgeSnapshotEvidenceFor(empty)
+	wantCommitment, commitmentOK := empty.Commitment()
+	gotCommitment, gotCommitmentOK := admittedEvidence.KnowledgeProgramCommitment()
+	if !legacyOK || legacyEvidence.KnowledgeProgramPresent() || !admittedOK ||
+		!admittedEvidence.KnowledgeProgramPresent() ||
+		admittedEvidence.KnowledgeProgramObjectCount() != 0 ||
+		admittedEvidence.KnowledgeProgramCharges() != (knowledgeprogram.Charges{}) ||
+		!commitmentOK || !gotCommitmentOK || gotCommitment != wantCommitment {
+		t.Fatalf("legacy/admitted evidence = (%#v, %t)/(%#v, %t)", legacyEvidence, legacyOK, admittedEvidence, admittedOK)
+	}
+	if _, ok := legacy.KnowledgeSnapshotEvidenceFor(empty); ok {
+		t.Fatal("legacy compiled query satisfied a present-empty program")
+	}
+	if _, ok := admitted.KnowledgeSnapshotEvidenceFor(knowledgeprogram.Program{}); ok {
+		t.Fatal("present-empty compiled query accepted an absent supplied program")
+	}
+	if legacy.EqualForExecution(admitted) {
+		t.Fatal("absent and present-empty knowledge authority had equal execution seals")
+	}
+
+	cloned, ok := admitted.CloneForExecution()
+	retained, retainedOK := admitted.RetainedBytes()
+	clonedRetained, clonedRetainedOK := cloned.RetainedBytes()
+	if !ok || !admitted.EqualForExecution(cloned) ||
+		retained == 0 || !retainedOK || !clonedRetainedOK || retained != clonedRetained {
+		t.Fatal("present-empty execution authority did not clone and retain exactly")
+	}
+	if _, ok := cloned.KnowledgeSnapshotEvidenceFor(empty); !ok {
+		t.Fatal("detached clone lost its exact present-empty knowledge authority")
+	}
+}
+
+func TestCompiledKnowledgeSnapshotEvidenceSealsProgramIdentityAndSplitCharges(t *testing.T) {
+	t.Parallel()
+
+	firstProgram := testKnowledgeEvidenceProgram(t, "first")
+	secondProgram := testKnowledgeEvidenceProgram(t, "second")
+	if firstProgram.Charges() != secondProgram.Charges() || firstProgram.Equal(secondProgram) {
+		t.Fatalf("test programs do not have equal charges and different meaning: %+v/%+v", firstProgram.Charges(), secondProgram.Charges())
+	}
+
+	legacy := compileSPL(t,
+		`index=gradethis | rex field=_raw "(?<authored>[0-9]+)" `+
+			`| spath input=_raw output=selected path=payload.value `+
+			`| where selected="present"`,
+	)
+	first := sealTestKnowledgeProgram(t, legacy, firstProgram)
+	second := sealTestKnowledgeProgram(t, legacy, secondProgram)
+	evidence, ok := first.KnowledgeSnapshotEvidenceFor(firstProgram)
+	legacyEvidence, legacyOK := legacy.KnowledgeSnapshotEvidence()
+	if !ok || !legacyOK {
+		t.Fatal("sealed program or authored evidence is absent")
+	}
+	if _, ok := first.KnowledgeSnapshotEvidenceFor(secondProgram); ok {
+		t.Fatal("same-charge program substituted for the sealed program")
+	}
+	if first.EqualForExecution(second) {
+		t.Fatal("same-charge programs produced equal execution authority")
+	}
+	if evidence.KnowledgeProgramCharges() != firstProgram.Charges() ||
+		evidence.KnowledgeProgramObjectCount() != firstProgram.ObjectCount() ||
+		evidence.AuthoredRegexPrograms() != legacyEvidence.RegexPrograms() ||
+		evidence.AuthoredRegexWorkUnits() != legacyEvidence.RegexWorkUnits() ||
+		evidence.AuthoredExtractionOutputs() != legacyEvidence.ExtractionOutputs() ||
+		evidence.AuthoredJSONEvaluationWork() != legacyEvidence.JSONEvaluationWork() ||
+		evidence.AuthoredScalarPredicates() != legacyEvidence.ScalarPredicates() {
+		t.Fatalf("split evidence = %#v, authored = %#v", evidence, legacyEvidence)
+	}
+	knowledge := firstProgram.Charges()
+	if evidence.GeneratedOperators() != knowledge.GeneratedOperators ||
+		evidence.GeneratedFields() != knowledge.GeneratedFields ||
+		evidence.RegexPrograms() != knowledge.RegexPrograms+evidence.AuthoredRegexPrograms() ||
+		evidence.RegexWorkUnits() != knowledge.RegexWorkUnits+evidence.AuthoredRegexWorkUnits() ||
+		evidence.ExtractionOutputs() != knowledge.ExtractionOutputs+evidence.AuthoredExtractionOutputs() ||
+		evidence.JSONEvaluationWork() != knowledge.JSONEvaluationWork+evidence.AuthoredJSONEvaluationWork() ||
+		evidence.ScalarExpressions() != knowledge.ScalarExpressions ||
+		evidence.ScalarExpressionNodes() != knowledge.ScalarExpressionNodes ||
+		evidence.ScalarPredicates() != knowledge.ScalarPredicates+evidence.AuthoredScalarPredicates() ||
+		evidence.RegexCaptureBytes() != MaximumRexCapturedBytesPerRow {
+		t.Fatalf("whole-query totals = %#v, knowledge = %+v", evidence, knowledge)
 	}
 }
 
@@ -117,7 +237,12 @@ func TestCompiledKnowledgeSnapshotEvidenceRequiresParserOwnedUnmodifiedPredicate
 func TestCompiledQueryExecutionSealRejectsEveryPublicTamper(t *testing.T) {
 	t.Parallel()
 
-	compiled := compileSPL(t, `index=gradethis status=200 | table event_id status`)
+	program := testKnowledgeEvidenceProgram(t, "tamper")
+	compiled := sealTestKnowledgeProgram(
+		t,
+		compileSPL(t, `index=gradethis status=200 | table event_id status`),
+		program,
+	)
 	if _, ok := compiled.CloneForExecution(); !ok {
 		t.Fatal("compiler output is not execution sealed")
 	}
@@ -138,7 +263,25 @@ func TestCompiledQueryExecutionSealRejectsEveryPublicTamper(t *testing.T) {
 		}},
 		{name: "output", mutate: func(query *CompiledQuery) { query.OutputFields[0] = "tampered" }},
 		{name: "sparse contract", mutate: func(query *CompiledQuery) { query.SparseFields = !query.SparseFields }},
-		{name: "knowledge charge", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.regexPrograms++ }},
+		{name: "knowledge present", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.present = false }},
+		{name: "knowledge commitment", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.commitment[0] ^= 0xff }},
+		{name: "knowledge object count", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.objectCount++ }},
+		{name: "knowledge operators", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.GeneratedOperators++ }},
+		{name: "knowledge fields", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.GeneratedFields++ }},
+		{name: "knowledge regex programs", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.RegexPrograms++ }},
+		{name: "knowledge regex work", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.RegexWorkUnits++ }},
+		{name: "knowledge extraction outputs", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.ExtractionOutputs++ }},
+		{name: "knowledge JSON work", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.JSONEvaluationWork++ }},
+		{name: "knowledge scalar expressions", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.ScalarExpressions++ }},
+		{name: "knowledge scalar nodes", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.ScalarExpressionNodes++ }},
+		{name: "knowledge scalar predicates", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.prelude.charges.ScalarPredicates++ }},
+		{name: "authored regex programs", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.authored.regexPrograms++ }},
+		{name: "authored regex work", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.authored.regexWorkUnits++ }},
+		{name: "authored extraction outputs", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.authored.extractionOutputs++ }},
+		{name: "authored JSON work", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.authored.jsonEvaluationWork++ }},
+		{name: "authored scalar predicates", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.authored.scalarPredicates++ }},
+		{name: "regex capture bytes", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.regexCaptureBytes++ }},
+		{name: "generated SQL bytes", mutate: func(query *CompiledQuery) { query.knowledgeEvidence.generatedSQLBytes++ }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -158,6 +301,9 @@ func TestCompiledQueryExecutionSealRejectsEveryPublicTamper(t *testing.T) {
 			}
 			if _, ok := mutated.KnowledgeSnapshotEvidence(); ok {
 				t.Fatal("tampered query opened knowledge evidence")
+			}
+			if _, ok := mutated.KnowledgeSnapshotEvidenceFor(program); ok {
+				t.Fatal("tampered query opened exact-program knowledge evidence")
 			}
 		})
 	}
@@ -213,4 +359,114 @@ func TestSealCompiledQueryExecutionRejectsUnsupportedBindTypes(t *testing.T) {
 	if _, ok := (CompiledQuery{}).RetainedBytes(); ok {
 		t.Fatal("zero query produced retained bytes")
 	}
+}
+
+func sealTestKnowledgeProgram(
+	t *testing.T,
+	compiled CompiledQuery,
+	program knowledgeprogram.Program,
+) CompiledQuery {
+	t.Helper()
+	if compiled.knowledgeEvidence == nil {
+		t.Fatal("compiler output has no parser-owned evidence")
+	}
+	prelude, ok := compileKnowledgePreludeEvidence(program)
+	if !ok {
+		t.Fatal("test knowledge program is invalid")
+	}
+	evidence := *compiled.knowledgeEvidence
+	evidence.prelude = prelude
+	if evidence.prelude.charges.RegexPrograms+evidence.authored.regexPrograms > 0 {
+		evidence.regexCaptureBytes = MaximumRexCapturedBytesPerRow
+	} else {
+		evidence.regexCaptureBytes = 0
+	}
+	compiled.knowledgeEvidence = &evidence
+	compiled.executionSeal = nil
+	sealed, err := sealCompiledQueryExecution(compiled)
+	if err != nil {
+		t.Fatalf("sealCompiledQueryExecution(test program): %v", err)
+	}
+	return sealed
+}
+
+func testKnowledgeEvidenceProgram(t *testing.T, identity string) knowledgeprogram.Program {
+	t.Helper()
+	definitions := []*opensplunkv1.KnowledgeObjectDefinition{
+		{
+			AppId: "app-a", Name: "a-regex", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+					InputField:        "_raw",
+					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					Extraction: &opensplunkv1.FieldExtractionDefinition_Regex{
+						Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+							Pattern: `(?P<knowledge_word>[a-z]+)`, OutputFields: []string{"knowledge_word"},
+						},
+					},
+				},
+			},
+		},
+		{
+			AppId: "app-a", Name: "b-json", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunkv1.KnowledgeObjectDefinition_FieldExtraction{
+				FieldExtraction: &opensplunkv1.FieldExtractionDefinition{
+					InputField:        "_raw",
+					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					Extraction: &opensplunkv1.FieldExtractionDefinition_Json{
+						Json: &opensplunkv1.JsonFieldExtractionDefinition{
+							Path: "payload.value", OutputField: "knowledge_json",
+						},
+					},
+				},
+			},
+		},
+		{
+			AppId: "app-a", Name: "c-calculated", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+					DestinationField:  "knowledge_calculated",
+					Expression:        `if(isnull(_raw), "missing", "present")`,
+					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				},
+			},
+		},
+	}
+	objects := make([]*opensplunkv1.KnowledgeSnapshotObject, len(definitions))
+	stageOrdinals := make(map[opensplunkv1.KnowledgeSearchStage]uint32)
+	for index, definition := range definitions {
+		normalized, err := knowledgedefinition.Normalize(definition)
+		if err != nil {
+			t.Fatalf("Normalize(test definition %d): %v", index, err)
+		}
+		var stage opensplunkv1.KnowledgeSearchStage
+		switch normalized.ObjectType {
+		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION:
+			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION
+		case opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD:
+			stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+		default:
+			t.Fatalf("unexpected test object type %v", normalized.ObjectType)
+		}
+		objects[index] = &opensplunkv1.KnowledgeSnapshotObject{
+			ResolutionOrdinal: uint32(index),
+			Stage:             stage,
+			StageOrdinal:      stageOrdinals[stage],
+			KnowledgeObjectId: "evidence-" + identity + "-" + normalized.Name,
+			Version:           1,
+			ObjectType:        normalized.ObjectType,
+			Name:              normalized.Name,
+			AppId:             normalized.AppID,
+			OwnerId:           "owner-a",
+			SharingScope:      normalized.SharingScope,
+			Definition:        normalized.Definition,
+			DefinitionSha256:  bytes.Clone(normalized.Digest[:]),
+		}
+		stageOrdinals[stage]++
+	}
+	program, err := knowledgeprogram.Prepare(knowledgeprogram.Input{Objects: objects})
+	if err != nil {
+		t.Fatalf("Prepare(test evidence program): %v", err)
+	}
+	return program
 }

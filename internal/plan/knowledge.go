@@ -94,6 +94,62 @@ func (op *ParallelExtend) Assignments() []knowledgeprogram.Calculated {
 	return slices.Clone(op.assignments)
 }
 
+// ConvertKnowledgeCalculatedExpression independently reconstructs the plan
+// expression sealed by one calculated-field operation. The retained semantic
+// inventory must agree exactly with a fresh parse before any executable plan
+// value is returned.
+func ConvertKnowledgeCalculatedExpression(
+	operation knowledgeprogram.Calculated,
+) (ScalarExpression, error) {
+	return convertKnowledgeCalculatedExpression(
+		operation.Expression(),
+		operation.InputFields(),
+		operation.Nodes(),
+		operation.Predicates(),
+	)
+}
+
+func convertKnowledgeCalculatedExpression(
+	canonical string,
+	expectedInputFields []string,
+	expectedNodes uint32,
+	expectedPredicates uint32,
+) (ScalarExpression, error) {
+	parsed, err := spl.ParseScalarExpression(canonical)
+	if err != nil {
+		return nil, fmt.Errorf("convert knowledge calculated expression: parse: %w", err)
+	}
+	if spl.ScalarExpressionMayReturnBooleanFunction(parsed) {
+		return nil, errors.New(
+			"convert knowledge calculated expression: cannot directly assign a Boolean result",
+		)
+	}
+	analysis, err := spl.AnalyzeScalarExpression(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("convert knowledge calculated expression: analyze: %w", err)
+	}
+	if !slices.Equal(analysis.InputFields, expectedInputFields) {
+		return nil, errors.New(
+			"convert knowledge calculated expression: input-field inventory disagrees",
+		)
+	}
+	if analysis.Nodes != expectedNodes {
+		return nil, errors.New(
+			"convert knowledge calculated expression: node inventory disagrees",
+		)
+	}
+	if analysis.Predicates != expectedPredicates {
+		return nil, errors.New(
+			"convert knowledge calculated expression: predicate inventory disagrees",
+		)
+	}
+	expression, err := convertScalarExpressionUnchecked(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("convert knowledge calculated expression: convert: %w", err)
+	}
+	return expression, nil
+}
+
 // InjectKnowledgePrelude returns a detached query whose explicit executable
 // knowledge prefix starts immediately after Scan. A valid empty program still
 // seals the query marker, but adds no operators.

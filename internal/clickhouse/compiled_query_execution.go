@@ -13,32 +13,45 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v1"
+// v2 deliberately separates immutable knowledge-program authority from the
+// authored SPL suffix. Execution digests minted before that distinction must
+// never compare equal to the stronger contract.
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v2"
 
 var timeType = reflect.TypeFor[time.Time]()
 
 type compiledExecutionSeal [sha256.Size]byte
 
-// knowledgeCompilationEvidence is compiler-owned whole-query evidence. KO-0H
-// has no knowledge prelude, so generated knowledge operators, fields, and
-// scalar roots remain zero; nonempty prepared authority consequently cannot be
-// finalized until KO-1 supplies those operators.
+type knowledgePreludeCompilationEvidence struct {
+	present     bool
+	commitment  [sha256.Size]byte
+	objectCount uint32
+	charges     knowledgeprogram.Charges
+}
+
+type authoredKnowledgeCompilationEvidence struct {
+	regexPrograms      uint32
+	regexWorkUnits     uint64
+	extractionOutputs  uint32
+	jsonEvaluationWork uint32
+	scalarPredicates   uint32
+}
+
+// knowledgeCompilationEvidence is compiler-owned whole-query evidence. The
+// immutable prelude identity and its exact knowledge-only charges are sealed
+// separately from exact parser-authored suffix charges. This preserves
+// aggregate query ceilings without allowing equal-cost programs to substitute
+// for one another.
 type knowledgeCompilationEvidence struct {
-	generatedOperators    uint32
-	generatedFields       uint32
-	regexPrograms         uint32
-	regexWorkUnits        uint64
-	regexCaptureBytes     uint64
-	extractionOutputs     uint32
-	jsonEvaluationWork    uint32
-	scalarExpressions     uint32
-	scalarExpressionNodes uint32
-	scalarPredicates      uint32
-	generatedSQLBytes     uint64
+	prelude           knowledgePreludeCompilationEvidence
+	authored          authoredKnowledgeCompilationEvidence
+	regexCaptureBytes uint64
+	generatedSQLBytes uint64
 }
 
 // KnowledgeSnapshotEvidence is an opaque view of compiler-owned evidence. A
@@ -48,7 +61,7 @@ type knowledgeCompilationEvidence struct {
 type KnowledgeSnapshotEvidence struct {
 	tenantID string
 	indexes  []string
-	charges  knowledgeCompilationEvidence
+	compiled knowledgeCompilationEvidence
 }
 
 func (evidence KnowledgeSnapshotEvidence) TenantID() string {
@@ -59,48 +72,97 @@ func (evidence KnowledgeSnapshotEvidence) EffectiveIndexes() []string {
 	return slices.Clone(evidence.indexes)
 }
 
+// KnowledgeProgramPresent distinguishes a legacy compiled query from one that
+// deliberately crossed the knowledge-admission boundary with a valid program,
+// including a valid empty program.
+func (evidence KnowledgeSnapshotEvidence) KnowledgeProgramPresent() bool {
+	return evidence.compiled.prelude.present
+}
+
+func (evidence KnowledgeSnapshotEvidence) KnowledgeProgramCommitment() ([sha256.Size]byte, bool) {
+	if !evidence.compiled.prelude.present {
+		return [sha256.Size]byte{}, false
+	}
+	return evidence.compiled.prelude.commitment, true
+}
+
+func (evidence KnowledgeSnapshotEvidence) KnowledgeProgramObjectCount() uint32 {
+	return evidence.compiled.prelude.objectCount
+}
+
+// KnowledgeProgramCharges returns the exact compiler-independent contribution
+// of the admitted program, excluding every authored SPL suffix contribution.
+func (evidence KnowledgeSnapshotEvidence) KnowledgeProgramCharges() knowledgeprogram.Charges {
+	return evidence.compiled.prelude.charges
+}
+
+func (evidence KnowledgeSnapshotEvidence) AuthoredRegexPrograms() uint32 {
+	return evidence.compiled.authored.regexPrograms
+}
+
+func (evidence KnowledgeSnapshotEvidence) AuthoredRegexWorkUnits() uint64 {
+	return evidence.compiled.authored.regexWorkUnits
+}
+
+func (evidence KnowledgeSnapshotEvidence) AuthoredExtractionOutputs() uint32 {
+	return evidence.compiled.authored.extractionOutputs
+}
+
+func (evidence KnowledgeSnapshotEvidence) AuthoredJSONEvaluationWork() uint32 {
+	return evidence.compiled.authored.jsonEvaluationWork
+}
+
+func (evidence KnowledgeSnapshotEvidence) AuthoredScalarPredicates() uint32 {
+	return evidence.compiled.authored.scalarPredicates
+}
+
 func (evidence KnowledgeSnapshotEvidence) GeneratedOperators() uint32 {
-	return evidence.charges.generatedOperators
+	return evidence.compiled.prelude.charges.GeneratedOperators
 }
 
 func (evidence KnowledgeSnapshotEvidence) GeneratedFields() uint32 {
-	return evidence.charges.generatedFields
+	return evidence.compiled.prelude.charges.GeneratedFields
 }
 
 func (evidence KnowledgeSnapshotEvidence) RegexPrograms() uint32 {
-	return evidence.charges.regexPrograms
+	return evidence.compiled.prelude.charges.RegexPrograms +
+		evidence.compiled.authored.regexPrograms
 }
 
 func (evidence KnowledgeSnapshotEvidence) RegexWorkUnits() uint64 {
-	return evidence.charges.regexWorkUnits
+	return evidence.compiled.prelude.charges.RegexWorkUnits +
+		evidence.compiled.authored.regexWorkUnits
 }
 
 func (evidence KnowledgeSnapshotEvidence) RegexCaptureBytes() uint64 {
-	return evidence.charges.regexCaptureBytes
+	return evidence.compiled.regexCaptureBytes
 }
 
 func (evidence KnowledgeSnapshotEvidence) ExtractionOutputs() uint32 {
-	return evidence.charges.extractionOutputs
+	return evidence.compiled.prelude.charges.ExtractionOutputs +
+		evidence.compiled.authored.extractionOutputs
 }
 
 func (evidence KnowledgeSnapshotEvidence) JSONEvaluationWork() uint32 {
-	return evidence.charges.jsonEvaluationWork
+	return evidence.compiled.prelude.charges.JSONEvaluationWork +
+		evidence.compiled.authored.jsonEvaluationWork
 }
 
 func (evidence KnowledgeSnapshotEvidence) ScalarExpressions() uint32 {
-	return evidence.charges.scalarExpressions
+	return evidence.compiled.prelude.charges.ScalarExpressions
 }
 
 func (evidence KnowledgeSnapshotEvidence) ScalarExpressionNodes() uint32 {
-	return evidence.charges.scalarExpressionNodes
+	return evidence.compiled.prelude.charges.ScalarExpressionNodes
 }
 
 func (evidence KnowledgeSnapshotEvidence) ScalarPredicates() uint32 {
-	return evidence.charges.scalarPredicates
+	return evidence.compiled.prelude.charges.ScalarPredicates +
+		evidence.compiled.authored.scalarPredicates
 }
 
 func (evidence KnowledgeSnapshotEvidence) GeneratedSQLBytes() uint64 {
-	return evidence.charges.generatedSQLBytes
+	return evidence.compiled.generatedSQLBytes
 }
 
 func sealFinalCompiledQuery(
@@ -109,26 +171,63 @@ func sealFinalCompiledQuery(
 	scan *plan.Scan,
 	authored authoredKnowledgeCompilation,
 ) (CompiledQuery, error) {
+	preparation, err := prepareKnowledgeCompilation(query)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	if preparation.authored != authored {
+		return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: authored knowledge charges disagree")
+	}
+	// A nonempty program is semantic authority, not proof that its operators
+	// were emitted. Keep the seal closed until physical lowering supplies that
+	// distinct compiler-owned proof.
+	if preparation.present && preparation.program.ObjectCount() != 0 {
+		return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: nonempty knowledge lowering is absent")
+	}
 	sealed, err := sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if predicates, ok := query.AuthoredScalarPredicateCount(); ok {
-		captureBytes := uint64(0)
-		if authored.regexPrograms > 0 {
-			captureBytes = MaximumRexCapturedBytesPerRow
+	if preparation.authoredScalarPredicatesExact {
+		evidence := knowledgeCompilationEvidence{
+			authored: authoredKnowledgeCompilationEvidence{
+				regexPrograms:      preparation.authored.regexPrograms,
+				regexWorkUnits:     preparation.authored.regexWorkUnits,
+				extractionOutputs:  preparation.authored.extractionOutputs,
+				jsonEvaluationWork: preparation.authored.jsonEvaluationWork,
+				scalarPredicates:   preparation.authoredScalarPredicates,
+			},
+			generatedSQLBytes: uint64(len(sealed.SQL)),
 		}
-		sealed.knowledgeEvidence = &knowledgeCompilationEvidence{
-			regexPrograms:      authored.regexPrograms,
-			regexWorkUnits:     authored.regexWorkUnits,
-			regexCaptureBytes:  captureBytes,
-			extractionOutputs:  authored.extractionOutputs,
-			jsonEvaluationWork: authored.jsonEvaluationWork,
-			scalarPredicates:   predicates,
-			generatedSQLBytes:  uint64(len(sealed.SQL)),
+		if preparation.present {
+			prelude, valid := compileKnowledgePreludeEvidence(preparation.program)
+			if !valid || prelude.commitment != preparation.programCommitment ||
+				prelude.charges != preparation.programCharges {
+				return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: knowledge prelude is invalid")
+			}
+			evidence.prelude = prelude
 		}
+		if evidence.prelude.charges.RegexPrograms+evidence.authored.regexPrograms > 0 {
+			evidence.regexCaptureBytes = MaximumRexCapturedBytesPerRow
+		}
+		sealed.knowledgeEvidence = &evidence
 	}
 	return sealCompiledQueryExecution(sealed)
+}
+
+func compileKnowledgePreludeEvidence(
+	program knowledgeprogram.Program,
+) (knowledgePreludeCompilationEvidence, bool) {
+	commitment, ok := program.Commitment()
+	if program.IsZero() || !ok {
+		return knowledgePreludeCompilationEvidence{}, false
+	}
+	return knowledgePreludeCompilationEvidence{
+		present:     true,
+		commitment:  commitment,
+		objectCount: program.ObjectCount(),
+		charges:     program.Charges(),
+	}, true
 }
 
 func sealCompiledQueryExecution(compiled CompiledQuery) (CompiledQuery, error) {
@@ -154,8 +253,34 @@ func (compiled CompiledQuery) KnowledgeSnapshotEvidence() (KnowledgeSnapshotEvid
 	return KnowledgeSnapshotEvidence{
 		tenantID: strings.Clone(tenantID),
 		indexes:  slices.Clone(indexes),
-		charges:  *compiled.knowledgeEvidence,
+		compiled: *compiled.knowledgeEvidence,
 	}, true
+}
+
+// KnowledgeSnapshotEvidenceFor opens compiler evidence only when it is sealed
+// to the exact supplied immutable program. In particular, a legacy compiled
+// query cannot satisfy a valid empty program, and an equal-cost program with a
+// different semantic commitment cannot substitute for the admitted one.
+func (compiled CompiledQuery) KnowledgeSnapshotEvidenceFor(
+	program knowledgeprogram.Program,
+) (KnowledgeSnapshotEvidence, bool) {
+	evidence, ok := compiled.KnowledgeSnapshotEvidence()
+	if !ok || !compiled.knowledgeEvidence.matchesProgram(program) {
+		return KnowledgeSnapshotEvidence{}, false
+	}
+	return evidence, true
+}
+
+func (evidence knowledgeCompilationEvidence) matchesProgram(program knowledgeprogram.Program) bool {
+	prelude, ok := compileKnowledgePreludeEvidence(program)
+	if !ok || !evidence.prelude.present || evidence.prelude.objectCount != prelude.objectCount ||
+		evidence.prelude.charges != prelude.charges {
+		return false
+	}
+	return subtle.ConstantTimeCompare(
+		evidence.prelude.commitment[:],
+		prelude.commitment[:],
+	) == 1
 }
 
 func (compiled CompiledQuery) hasValidExecutionSeal() bool {
@@ -257,17 +382,29 @@ func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, boo
 }
 
 func writeKnowledgeEvidence(writer hash.Hash, evidence knowledgeCompilationEvidence) {
-	writeUint64(writer, uint64(evidence.generatedOperators))
-	writeUint64(writer, uint64(evidence.generatedFields))
-	writeUint64(writer, uint64(evidence.regexPrograms))
-	writeUint64(writer, evidence.regexWorkUnits)
+	writeBool(writer, evidence.prelude.present)
+	_, _ = writer.Write(evidence.prelude.commitment[:])
+	writeUint64(writer, uint64(evidence.prelude.objectCount))
+	writeKnowledgeProgramCharges(writer, evidence.prelude.charges)
+	writeUint64(writer, uint64(evidence.authored.regexPrograms))
+	writeUint64(writer, evidence.authored.regexWorkUnits)
+	writeUint64(writer, uint64(evidence.authored.extractionOutputs))
+	writeUint64(writer, uint64(evidence.authored.jsonEvaluationWork))
+	writeUint64(writer, uint64(evidence.authored.scalarPredicates))
 	writeUint64(writer, evidence.regexCaptureBytes)
-	writeUint64(writer, uint64(evidence.extractionOutputs))
-	writeUint64(writer, uint64(evidence.jsonEvaluationWork))
-	writeUint64(writer, uint64(evidence.scalarExpressions))
-	writeUint64(writer, uint64(evidence.scalarExpressionNodes))
-	writeUint64(writer, uint64(evidence.scalarPredicates))
 	writeUint64(writer, evidence.generatedSQLBytes)
+}
+
+func writeKnowledgeProgramCharges(writer hash.Hash, charges knowledgeprogram.Charges) {
+	writeUint64(writer, uint64(charges.GeneratedOperators))
+	writeUint64(writer, uint64(charges.GeneratedFields))
+	writeUint64(writer, uint64(charges.RegexPrograms))
+	writeUint64(writer, charges.RegexWorkUnits)
+	writeUint64(writer, uint64(charges.ExtractionOutputs))
+	writeUint64(writer, uint64(charges.JSONEvaluationWork))
+	writeUint64(writer, uint64(charges.ScalarExpressions))
+	writeUint64(writer, uint64(charges.ScalarExpressionNodes))
+	writeUint64(writer, uint64(charges.ScalarPredicates))
 }
 
 func writeCompiledArgument(writer hash.Hash, argument any, depth int) bool {
