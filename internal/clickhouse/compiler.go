@@ -5700,6 +5700,7 @@ type fieldState struct {
 	existsArgs                []any
 	descendantSQL             string
 	descendantArgs            []any
+	storedPath                storedPathAuthority
 	kind                      fieldKind
 	caseSensitive             bool
 	numberType                string
@@ -6485,6 +6486,7 @@ type compiledScalar struct {
 	storedTypeSQL             string
 	descendantSQL             string
 	descendantArgs            []any
+	storedPath                storedPathAuthority
 	kind                      fieldKind
 	numberType                string
 	literal                   *plan.Value
@@ -11099,6 +11101,7 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)
 	for name, field := range state.visible {
+		field.storedPath = field.storedPath.clone()
 		next.visible[name] = field
 	}
 	next.publicOrder = append([]string(nil), state.publicOrder...)
@@ -12261,6 +12264,7 @@ func cloneCompileState(state compileState) compileState {
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)
 	for name, field := range state.visible {
+		field.storedPath = field.storedPath.clone()
 		next.visible[name] = field
 	}
 	next.publicOrder = append([]string(nil), state.publicOrder...)
@@ -13444,6 +13448,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		storedTypeSQL:             field.storedTypeSQL,
 		descendantSQL:             field.descendantSQL,
 		descendantArgs:            append([]any(nil), field.descendantArgs...),
+		storedPath:                field.storedPath.clone(),
 		kind:                      field.kind,
 		numberType:                field.numberType,
 		alwaysNull:                field.alwaysNull,
@@ -13548,21 +13553,26 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 	if len(field.Path) == 0 {
 		return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: dynamic path is empty", field.Name)
 	}
-	value := quoteIdentifier(internalFieldsColumn)
-	for _, segment := range field.Path {
-		if segment == "" {
-			return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: dynamic path has empty segment", field.Name)
-		}
-		value += "." + quoteIdentifier(eventfields.EncodePhysicalPathSegment(segment))
+	storedPath, err := mintStoredPathAuthority(field.Path)
+	if err != nil {
+		return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: %w", field.Name, err)
 	}
+	if storedPath.normalizedExactPath != field.Name {
+		return fieldState{}, false, fmt.Errorf(
+			"compile ClickHouse field %q: dynamic path metadata disagrees with its name",
+			field.Name,
+		)
+	}
+	value := storedPath.valueSQL()
 	return fieldState{
 		valueSQL:       value,
 		dynamicTypeSQL: "dynamicType(" + value + ")",
 		existsSQL:      "has(" + quoteIdentifier(internalFieldNamesColumn) + ", ?)",
-		existsArgs:     []any{eventfields.NormalizeDynamicPath(field.Path)},
+		existsArgs:     []any{storedPath.normalizedExactPath},
 		descendantSQL: "arrayExists(name -> startsWith(name, ?), " +
 			quoteIdentifier(internalFieldNamesColumn) + ")",
-		descendantArgs: []any{eventfields.NormalizeDynamicPath(field.Path) + "."},
+		descendantArgs: []any{storedPath.normalizedDescendantPrefix},
+		storedPath:     storedPath,
 		kind:           fieldKindDynamic,
 	}, true, nil
 }
@@ -19568,6 +19578,7 @@ func compileWindow(operator *plan.Window, state compileState) (string, compileSt
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)
 	for name, field := range state.visible {
+		field.storedPath = field.storedPath.clone()
 		next.visible[name] = field
 	}
 	next.publicOrder = append([]string(nil), state.publicOrder...)

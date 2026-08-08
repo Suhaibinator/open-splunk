@@ -346,6 +346,7 @@ func knowledgeFieldStateFromScalar(value compiledScalar) fieldState {
 		existsArgs:              slices.Clone(value.existsArgs),
 		descendantSQL:           value.descendantSQL,
 		descendantArgs:          slices.Clone(value.descendantArgs),
+		storedPath:              value.storedPath.clone(),
 		kind:                    value.kind,
 		numberType:              value.numberType,
 		alwaysNull:              value.alwaysNull,
