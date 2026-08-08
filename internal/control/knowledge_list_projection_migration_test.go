@@ -853,13 +853,21 @@ func seedProjectionPrerequisites(t *testing.T, db *sql.DB) {
 	t.Helper()
 	seedKnowledgeMigrationApp(t, db)
 	if _, err := db.Exec(`
-		INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-a');
+		INSERT INTO knowledge_catalog_tenants (tenant_id)
+		SELECT 'tenant-a'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_catalog_tenants WHERE tenant_id = 'tenant-a'
+		);
 		INSERT INTO knowledge_definition_blobs (
 			tenant_id, definition_digest, definition_proto,
 			definition_bytes, created_at_unix_micro
 		) VALUES ('tenant-a', zeroblob(32), X'01', 1, 10);
 		INSERT INTO knowledge_projection_tenant_ledgers (tenant_id)
-		VALUES ('tenant-a')`); err != nil {
+		SELECT 'tenant-a'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_projection_tenant_ledgers
+			WHERE tenant_id = 'tenant-a'
+		)`); err != nil {
 		t.Fatalf("seed projection prerequisites: %v", err)
 	}
 }

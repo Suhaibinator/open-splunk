@@ -1117,6 +1117,8 @@ func TestAppListRejectsCorruptCatalogRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := connection.ExecContext(ctx, `
+		DROP TRIGGER app_catalog_revision_transition_is_exact;
+		DROP TRIGGER app_catalog_revision_delete_is_forbidden;
 		UPDATE app_catalog_revisions SET revision = 0 WHERE tenant_id = ?`,
 		scope.TenantID,
 	); err != nil {

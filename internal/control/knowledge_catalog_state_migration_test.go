@@ -40,7 +40,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsExactAuthorities(t *testing.T) {
 	if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply migration 0029: %v", err)
 	}
-	assertIntegerQuery(t, raw, 30, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 31, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 1, `
 		SELECT count(*) FROM knowledge_catalog_revision_heads
 		WHERE tenant_id = 'tenant-a' AND catalog_revision = 1
@@ -351,13 +351,21 @@ func seedKnowledgeStatePrerequisites(t *testing.T, db *sql.DB) {
 	t.Helper()
 	seedKnowledgeMigrationApp(t, db)
 	if _, err := db.Exec(`
-		INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-a');
+		INSERT INTO knowledge_catalog_tenants (tenant_id)
+		SELECT 'tenant-a'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_catalog_tenants WHERE tenant_id = 'tenant-a'
+		);
 		INSERT INTO knowledge_definition_blobs (
 			tenant_id, definition_digest, definition_proto,
 			definition_bytes, created_at_unix_micro
 		) VALUES ('tenant-a', zeroblob(32), X'01', 1, 1);
 		INSERT INTO knowledge_projection_tenant_ledgers (tenant_id)
-		VALUES ('tenant-a')`); err != nil {
+		SELECT 'tenant-a'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_projection_tenant_ledgers
+			WHERE tenant_id = 'tenant-a'
+		)`); err != nil {
 		t.Fatalf("seed knowledge state prerequisites: %v", err)
 	}
 }
