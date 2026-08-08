@@ -892,6 +892,22 @@ func insertProjectedKnowledgeObject(t *testing.T, db *sql.DB, fixture projection
 
 func insertKnowledgeVersion(t *testing.T, exec projectionExecer, objectID string, version int, name, mutation string, timestamp int64) {
 	t.Helper()
+	insertKnowledgeVersionWithDigest(
+		t, exec, objectID, version, name, mutation, timestamp, make([]byte, 32),
+	)
+}
+
+func insertKnowledgeVersionWithDigest(
+	t *testing.T,
+	exec projectionExecer,
+	objectID string,
+	version int,
+	name string,
+	mutation string,
+	timestamp int64,
+	digest []byte,
+) {
+	t.Helper()
 	if _, err := exec.Exec(`
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
@@ -900,12 +916,12 @@ func insertKnowledgeVersion(t *testing.T, exec projectionExecer, objectID string
 			created_at_unix_micro
 		) VALUES (
 			'tenant-a', ?, ?, ?, 'owner-a', 'field_extraction', ?,
-			'private', 'active', zeroblob(32), 0, ?, ?
+			'private', 'active', ?, 0, ?, ?
 		);
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		) VALUES ('tenant-a', ?, ?, 0)`,
-		objectID, version, knowledgeMigrationTestAppID, name, mutation, timestamp,
+		objectID, version, knowledgeMigrationTestAppID, name, digest, mutation, timestamp,
 		objectID, version); err != nil {
 		t.Fatalf("insert object version %s/%d: %v", objectID, version, err)
 	}

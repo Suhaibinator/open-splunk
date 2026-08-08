@@ -127,20 +127,26 @@ func insertIntegrationFutureObject(
 	if state == StateDisabled || state == StateDeleted {
 		currentVersion = 2
 		createdAt = timestamp - 1
-		insertIntegrationDefinitionBlob(t, tx, fixture.metadata.Bytes, fixture.metadata.Digest[:], createdAt)
+		// Future bodies may be authored while draft and then disabled/deleted
+		// without an older server decoding them. State-only versions must retain
+		// the exact opaque digest and metadata; migration 0030 rejects the older
+		// impossible known-body -> opaque-body transition fixture.
+		insertIntegrationDefinitionBlob(t, tx, fixture.bytes, fixture.digest[:], createdAt)
 		insertIntegrationVersion(
 			t,
 			tx,
 			objectID,
 			1,
-			StateActive,
+			StateDraft,
 			"create",
-			fixture.metadata.Digest[:],
+			fixture.digest[:],
 			fixture.metadata,
 			createdAt,
 		)
 	}
-	insertIntegrationDefinitionBlob(t, tx, fixture.bytes, fixture.digest[:], timestamp)
+	if currentVersion == 1 {
+		insertIntegrationDefinitionBlob(t, tx, fixture.bytes, fixture.digest[:], timestamp)
+	}
 	mutation := "create"
 	if state == StateDisabled {
 		mutation = "disable"
@@ -148,7 +154,11 @@ func insertIntegrationFutureObject(
 	if state == StateDeleted {
 		mutation = "delete"
 	}
-	insertIntegrationVersion(
+	dependencies := []fixtureDependency(nil)
+	if mutation == "enable" || mutation == "disable" || mutation == "delete" {
+		dependencies = readIntegrationCurrentDependencies(t, tx, objectID, currentVersion-1)
+	}
+	insertIntegrationVersionWithDependencies(
 		t,
 		tx,
 		objectID,
@@ -158,6 +168,7 @@ func insertIntegrationFutureObject(
 		fixture.digest[:],
 		fixture.metadata,
 		timestamp,
+		dependencies,
 	)
 	insertIntegrationProjection(t, tx, objectID, currentVersion, testOwner, state, fixture.metadata)
 
@@ -229,8 +240,12 @@ func stageIntegrationKnownPublication(
 		t.Fatalf("read staged current version: %v", err)
 	}
 	nextVersion := currentVersion + 1
-	insertIntegrationDefinitionBlob(t, tx, normalized.Bytes, normalized.Digest[:], timestamp)
-	insertIntegrationVersion(
+	ensureIntegrationDefinitionBlob(t, tx, normalized.Bytes, normalized.Digest[:], timestamp)
+	dependencies := []fixtureDependency(nil)
+	if mutation == "enable" || mutation == "disable" || mutation == "delete" {
+		dependencies = readIntegrationCurrentDependencies(t, tx, objectID, currentVersion)
+	}
+	insertIntegrationVersionWithDependencies(
 		t,
 		tx,
 		objectID,
@@ -240,6 +255,7 @@ func stageIntegrationKnownPublication(
 		normalized.Digest[:],
 		normalized,
 		timestamp,
+		dependencies,
 	)
 	insertIntegrationProjection(t, tx, objectID, nextVersion, testOwner, state, normalized)
 
@@ -250,7 +266,14 @@ func stageIntegrationKnownPublication(
 	}
 	var disabledAt, deletedAt any
 	if state == StateDisabled {
-		disabledAt = timestamp
+		if mutation == "disable" {
+			disabledAt = timestamp
+		} else if err := tx.QueryRow(`SELECT disabled_at_unix_micro
+			FROM knowledge_objects WHERE tenant_id = ? AND knowledge_object_id = ?`,
+			testTenant, objectID,
+		).Scan(&disabledAt); err != nil {
+			t.Fatalf("read staged disabled marker: %v", err)
+		}
 	}
 	if state == StateDeleted {
 		deletedAt = timestamp
@@ -311,6 +334,27 @@ func insertIntegrationDefinitionBlob(
 	}
 }
 
+func ensureIntegrationDefinitionBlob(
+	t *testing.T,
+	tx *sql.Tx,
+	definition, digest []byte,
+	timestamp int64,
+) {
+	t.Helper()
+	result, err := tx.Exec(`INSERT INTO knowledge_definition_blobs (
+		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
+	) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (
+		SELECT 1 FROM knowledge_definition_blobs
+		WHERE tenant_id = ? AND definition_digest = ?
+	)`, testTenant, digest, definition, len(definition), timestamp, testTenant, digest)
+	if err != nil {
+		t.Fatalf("ensure integration definition blob: %v", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected < 0 || affected > 1 {
+		t.Fatalf("ensure integration definition rows = %d, %v", affected, err)
+	}
+}
+
 func insertIntegrationVersion(
 	t *testing.T,
 	tx *sql.Tx,
@@ -323,6 +367,24 @@ func insertIntegrationVersion(
 	timestamp int64,
 ) {
 	t.Helper()
+	insertIntegrationVersionWithDependencies(
+		t, tx, objectID, version, state, mutation, digest, metadata, timestamp, nil,
+	)
+}
+
+func insertIntegrationVersionWithDependencies(
+	t *testing.T,
+	tx *sql.Tx,
+	objectID string,
+	version int64,
+	state State,
+	mutation string,
+	digest []byte,
+	metadata knowledgedefinition.Normalized,
+	timestamp int64,
+	dependencies []fixtureDependency,
+) {
+	t.Helper()
 	objectType, ok := objectTypeFromProto(metadata.ObjectType)
 	sharingScope, scopeOK := sharingScopeFromProto(metadata.SharingScope)
 	if !ok || !scopeOK {
@@ -332,7 +394,7 @@ func insertIntegrationVersion(
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, dependency_count, mutation_kind,
 		quarantine_reason, created_at_unix_micro
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, ?)`,
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
 		testTenant,
 		objectID,
 		version,
@@ -343,16 +405,57 @@ func insertIntegrationVersion(
 		sharingScope,
 		state,
 		digest,
+		len(dependencies),
 		mutation,
 		timestamp,
 	); err != nil {
 		t.Fatalf("insert integration version: %v", err)
 	}
+	for ordinal, dependency := range dependencies {
+		if _, err := tx.Exec(`INSERT INTO knowledge_object_dependencies (
+			tenant_id, source_object_id, source_object_version, ordinal,
+			target_kind, target_object_id, target_object_version, dependency_role
+		) VALUES (?, ?, ?, ?, 'object', ?, ?, 'field_input')`,
+			testTenant, objectID, version, ordinal,
+			dependency.targetObjectID, dependency.targetVersion,
+		); err != nil {
+			t.Fatalf("insert integration dependency: %v", err)
+		}
+	}
 	if _, err := tx.Exec(`INSERT INTO knowledge_object_dependency_seals (
 		tenant_id, knowledge_object_id, object_version, dependency_count
-	) VALUES (?, ?, ?, 0)`, testTenant, objectID, version); err != nil {
+	) VALUES (?, ?, ?, ?)`, testTenant, objectID, version, len(dependencies)); err != nil {
 		t.Fatalf("seal integration dependencies: %v", err)
 	}
+}
+
+func readIntegrationCurrentDependencies(
+	t *testing.T,
+	tx *sql.Tx,
+	objectID string,
+	currentVersion int64,
+) []fixtureDependency {
+	t.Helper()
+	rows, err := tx.Query(`SELECT target_object_id, target_object_version
+		FROM knowledge_object_dependencies
+		WHERE tenant_id = ? AND source_object_id = ? AND source_object_version = ?
+		ORDER BY ordinal`, testTenant, objectID, currentVersion)
+	if err != nil {
+		t.Fatalf("read current integration dependencies: %v", err)
+	}
+	defer rows.Close()
+	var result []fixtureDependency
+	for rows.Next() {
+		var dependency fixtureDependency
+		if err := rows.Scan(&dependency.targetObjectID, &dependency.targetVersion); err != nil {
+			t.Fatalf("scan current integration dependency: %v", err)
+		}
+		result = append(result, dependency)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate current integration dependencies: %v", err)
+	}
+	return result
 }
 
 func insertIntegrationProjection(

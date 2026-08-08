@@ -197,9 +197,10 @@ func TestIntegrationRecognizedInactiveSourcesSkipExecutableScopeAndStateSemantic
 			id: "ko-disabled-source", name: "disabled-source", state: StateDisabled,
 			versions: []fixtureVersion{
 				{definition: integrationDependencyDefinition(sourceIdentity, "disabled-source", "active-v1"), state: StateActive, mutation: "create", timestamp: 21},
+				{definition: integrationDependencyDefinition(sourceIdentity, "disabled-source", "active-v1"), state: StateDisabled, mutation: "disable", timestamp: 22},
 				{
-					definition: integrationDependencyDefinition(sourceIdentity, "disabled-source", "disabled-v2"),
-					state:      StateDisabled, mutation: "disable", timestamp: 22,
+					definition: integrationDependencyDefinition(sourceIdentity, "disabled-source", "disabled-update-v3"),
+					state:      StateDisabled, mutation: "update", timestamp: 23,
 					dependencies: []fixtureDependency{{targetObjectID: "ko-inactive-target", targetVersion: 2}},
 				},
 			},
@@ -207,10 +208,14 @@ func TestIntegrationRecognizedInactiveSourcesSkipExecutableScopeAndStateSemantic
 		{
 			id: "ko-deleted-source", name: "deleted-source", state: StateDeleted,
 			versions: []fixtureVersion{
-				{definition: integrationDependencyDefinition(sourceIdentity, "deleted-source", "active-v1"), state: StateActive, mutation: "create", timestamp: 23},
 				{
-					definition: integrationDependencyDefinition(sourceIdentity, "deleted-source", "deleted-v2"),
-					state:      StateDeleted, mutation: "delete", timestamp: 24,
+					definition: integrationDependencyDefinition(sourceIdentity, "deleted-source", "draft-v1"),
+					state:      StateDraft, mutation: "create", timestamp: 24,
+					dependencies: []fixtureDependency{{targetObjectID: "ko-inactive-target", targetVersion: 2}},
+				},
+				{
+					definition: integrationDependencyDefinition(sourceIdentity, "deleted-source", "draft-v1"),
+					state:      StateDeleted, mutation: "delete", timestamp: 25,
 					dependencies: []fixtureDependency{{targetObjectID: "ko-inactive-target", targetVersion: 2}},
 				},
 			},
@@ -243,6 +248,7 @@ func TestIntegrationRecognizedInactiveSourcesSkipExecutableScopeAndStateSemantic
 func TestIntegrationHistoricalActiveSourceRemainsReadableAfterOrderlyDisableCascade(t *testing.T) {
 	database, store := newCatalogTestStore(t)
 	identity := integrationDependencyIdentity{appID: testApp, owner: testOwner, scope: SharingScopePrivate}
+	targetActive := integrationDependencyDefinition(identity, "history-target", "active-v1")
 	insertIntegrationDependencyObject(
 		t,
 		database,
@@ -250,10 +256,11 @@ func TestIntegrationHistoricalActiveSourceRemainsReadableAfterOrderlyDisableCasc
 		"history-target",
 		identity,
 		[]fixtureVersion{{
-			definition: integrationDependencyDefinition(identity, "history-target", "active-v1"),
+			definition: targetActive,
 			state:      StateActive, mutation: "create", timestamp: 10,
 		}},
 	)
+	sourceActive := integrationDependencyDefinition(identity, "history-source", "active-v1")
 	insertIntegrationDependencyObject(
 		t,
 		database,
@@ -261,18 +268,17 @@ func TestIntegrationHistoricalActiveSourceRemainsReadableAfterOrderlyDisableCasc
 		"history-source",
 		identity,
 		[]fixtureVersion{{
-			definition: integrationDependencyDefinition(identity, "history-source", "active-v1"),
+			definition: sourceActive,
 			state:      StateActive, mutation: "create", timestamp: 11,
 			dependencies: []fixtureDependency{{targetObjectID: "ko-history-target", targetVersion: 1}},
 		}},
 	)
 
-	sourceDisabled := integrationDependencyDefinition(identity, "history-source", "disabled-v2")
 	sourceTransaction, _ := stageIntegrationKnownPublication(
 		t,
 		database,
 		"ko-history-source",
-		sourceDisabled,
+		sourceActive,
 		StateDisabled,
 		"disable",
 		20,
@@ -280,12 +286,11 @@ func TestIntegrationHistoricalActiveSourceRemainsReadableAfterOrderlyDisableCasc
 	if err := sourceTransaction.Commit(); err != nil {
 		t.Fatalf("commit source disable: %v", err)
 	}
-	targetDisabled := integrationDependencyDefinition(identity, "history-target", "disabled-v2")
 	targetTransaction, _ := stageIntegrationKnownPublication(
 		t,
 		database,
 		"ko-history-target",
-		targetDisabled,
+		targetActive,
 		StateDisabled,
 		"disable",
 		21,

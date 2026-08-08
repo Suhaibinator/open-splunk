@@ -3,8 +3,10 @@ package control
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,7 +30,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsExactAuthorities(t *testing.T) {
 	})
 	insertKnowledgeStateVersion(t, raw, stateVersionFixture{
 		objectID: "ko-lifecycle", version: 3, state: "disabled", mutation: "scope_change", timestamp: 30,
-		disabledAt: sql.NullInt64{Int64: 20, Valid: true},
+		disabledAt: sql.NullInt64{Int64: 20, Valid: true}, sharingScope: "app",
 	})
 	if _, err := raw.Exec(`UPDATE knowledge_catalog_tenants
 		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = 'tenant-a'`); err != nil {
@@ -38,7 +40,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsExactAuthorities(t *testing.T) {
 	if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply migration 0029: %v", err)
 	}
-	assertIntegerQuery(t, raw, 29, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 30, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 1, `
 		SELECT count(*) FROM knowledge_catalog_revision_heads
 		WHERE tenant_id = 'tenant-a' AND catalog_revision = 1
@@ -267,10 +269,10 @@ func TestKnowledgeVersionLifecycleAndListOrderKeysAreExactAndImmutable(t *testin
 		{objectID: "ko-history", version: 2, state: "disabled", mutation: "disable", timestamp: 20,
 			disabledAt: sql.NullInt64{Int64: 20, Valid: true}},
 		{objectID: "ko-history", version: 3, state: "disabled", mutation: "scope_change", timestamp: 30,
-			disabledAt: sql.NullInt64{Int64: 20, Valid: true}},
-		{objectID: "ko-history", version: 4, state: "active", mutation: "enable", timestamp: 40},
+			disabledAt: sql.NullInt64{Int64: 20, Valid: true}, sharingScope: "app"},
+		{objectID: "ko-history", version: 4, state: "active", mutation: "enable", timestamp: 40, sharingScope: "app"},
 		{objectID: "ko-history", version: 5, state: "deleted", mutation: "delete", timestamp: 50,
-			deletedAt: sql.NullInt64{Int64: 50, Valid: true}},
+			deletedAt: sql.NullInt64{Int64: 50, Valid: true}, sharingScope: "app"},
 		{objectID: "ko-quarantine", version: 1, state: "active", mutation: "create", timestamp: 60},
 		{objectID: "ko-quarantine", version: 2, state: "quarantined", mutation: "quarantine", timestamp: 70,
 			quarantinedAt: sql.NullInt64{Int64: 70, Valid: true}, quarantineReason: "root_corruption"},
@@ -337,6 +339,12 @@ type stateVersionFixture struct {
 	quarantinedAt    sql.NullInt64
 	deletedAt        sql.NullInt64
 	quarantineReason string
+	sharingScope     string
+}
+
+type knowledgeStateFixtureExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	QueryRow(query string, args ...any) *sql.Row
 }
 
 func seedKnowledgeStatePrerequisites(t *testing.T, db *sql.DB) {
@@ -364,15 +372,18 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 		_ = tx.Rollback()
 		t.Fatalf(format, args...)
 	}
-	digest := any(make([]byte, 32))
+	digest := knowledgeStateFixtureDefinitionDigest(t, tx, fixture)
 	canonicalSelectorBytes := 46
 	if fixture.state == "quarantined" {
-		digest = nil
 		canonicalSelectorBytes = 0
 	}
 	reason := any(nil)
 	if fixture.quarantineReason != "" {
 		reason = fixture.quarantineReason
+	}
+	sharingScope := fixture.sharingScope
+	if sharingScope == "" {
+		sharingScope = "private"
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO knowledge_object_versions (
@@ -382,12 +393,12 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 			quarantine_reason, created_at_unix_micro
 		) VALUES (
 			'tenant-a', ?, ?, ?, 'owner-a', 'field_extraction', ?,
-			'private', ?, ?, 0, ?, ?, ?
+			?, ?, ?, 0, ?, ?, ?
 		);
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		) VALUES ('tenant-a', ?, ?, 0)`,
-		fixture.objectID, fixture.version, knowledgeMigrationTestAppID, fixture.objectID,
+		fixture.objectID, fixture.version, knowledgeMigrationTestAppID, fixture.objectID, sharingScope,
 		fixture.state, digest, fixture.mutation, reason, fixture.timestamp,
 		fixture.objectID, fixture.version,
 	); err != nil {
@@ -403,7 +414,7 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 			selector_value_bytes, canonical_selector_bytes
 		) VALUES (
 			'tenant-a', ?, ?, ?, 'owner-a', 'field_extraction', ?,
-			'private', ?, 0, '', 0, 0, 0, 0, 0, ?
+			?, ?, 0, '', 0, 0, 0, 0, 0, ?
 		);
 		INSERT INTO knowledge_object_list_projection_seals (
 			tenant_id, knowledge_object_id, object_version,
@@ -413,7 +424,7 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 		    FROM knowledge_object_list_projections
 		   WHERE tenant_id = 'tenant-a' AND knowledge_object_id = ?
 		     AND object_version = ?`,
-		fixture.objectID, fixture.version, knowledgeMigrationTestAppID, fixture.objectID,
+		fixture.objectID, fixture.version, knowledgeMigrationTestAppID, fixture.objectID, sharingScope,
 		fixture.state, canonicalSelectorBytes, fixture.objectID, fixture.version,
 	); err != nil {
 		rollback("insert projection %s/%d: %v", fixture.objectID, fixture.version, err)
@@ -428,9 +439,9 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 				deleted_at_unix_micro, quarantine_reason
 			) VALUES (
 				'tenant-a', ?, 1, ?, 'owner-a', 'field_extraction', ?,
-				'private', ?, ?, ?, ?, ?, ?, ?, ?
+				?, ?, ?, ?, ?, ?, ?, ?, ?
 			)`, fixture.objectID, knowledgeMigrationTestAppID, fixture.objectID,
-			fixture.state, digest, fixture.timestamp, fixture.timestamp,
+			sharingScope, fixture.state, digest, fixture.timestamp, fixture.timestamp,
 			nullInt64Value(fixture.disabledAt), nullInt64Value(fixture.quarantinedAt),
 			nullInt64Value(fixture.deletedAt), reason,
 		); err != nil {
@@ -439,12 +450,12 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 	} else {
 		result, err := tx.Exec(`
 			UPDATE knowledge_objects SET
-				current_version = ?, state = ?, definition_digest = ?,
+				current_version = ?, sharing_scope = ?, state = ?, definition_digest = ?,
 				updated_at_unix_micro = ?, disabled_at_unix_micro = ?,
 				quarantined_at_unix_micro = ?, deleted_at_unix_micro = ?,
 				quarantine_reason = ?
 			WHERE tenant_id = 'tenant-a' AND knowledge_object_id = ?`,
-			fixture.version, fixture.state, digest, fixture.timestamp,
+			fixture.version, sharingScope, fixture.state, digest, fixture.timestamp,
 			nullInt64Value(fixture.disabledAt), nullInt64Value(fixture.quarantinedAt),
 			nullInt64Value(fixture.deletedAt), reason, fixture.objectID,
 		)
@@ -458,6 +469,48 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 	if err := tx.Commit(); err != nil {
 		t.Fatalf("commit version %s/%d: %v", fixture.objectID, fixture.version, err)
 	}
+}
+
+func knowledgeStateFixtureDefinitionDigest(
+	t *testing.T,
+	exec knowledgeStateFixtureExecer,
+	fixture stateVersionFixture,
+) any {
+	t.Helper()
+	if fixture.state == "quarantined" {
+		return nil
+	}
+	if fixture.mutation == "update" || fixture.mutation == "scope_change" {
+		body := []byte("knowledge-state-fixture/" + fixture.objectID + "/" +
+			strconv.Itoa(fixture.version))
+		digest := sha256.Sum256(body)
+		if _, err := exec.Exec(`
+			INSERT INTO knowledge_definition_blobs (
+				tenant_id, definition_digest, definition_proto,
+				definition_bytes, created_at_unix_micro
+			) VALUES ('tenant-a', ?, ?, ?, ?)`,
+			digest[:], body, len(body), fixture.timestamp,
+		); err != nil {
+			t.Fatalf("insert definition blob %s/%d: %v", fixture.objectID, fixture.version, err)
+		}
+		return digest[:]
+	}
+	if fixture.version > 1 {
+		var previousDigest []byte
+		if err := exec.QueryRow(`
+			SELECT definition_digest
+			FROM knowledge_object_versions
+			WHERE tenant_id = 'tenant-a' AND knowledge_object_id = ?
+			  AND object_version = ?`, fixture.objectID, fixture.version-1,
+		).Scan(&previousDigest); err != nil {
+			t.Fatalf("read prior definition digest %s/%d: %v", fixture.objectID, fixture.version, err)
+		}
+		if len(previousDigest) != sha256.Size {
+			t.Fatalf("prior definition digest %s/%d has %d bytes", fixture.objectID, fixture.version, len(previousDigest))
+		}
+		return previousDigest
+	}
+	return make([]byte, sha256.Size)
 }
 
 func nullInt64Value(value sql.NullInt64) any {

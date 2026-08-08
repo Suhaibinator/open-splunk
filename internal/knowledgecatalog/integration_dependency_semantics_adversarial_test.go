@@ -149,36 +149,34 @@ func TestIntegrationRecognizedInactiveDefinitionsSkipExecutableDependencySemanti
 }
 
 func recognizedInactiveSemanticVersions(name, destination string, state State, timestamp int64) []fixtureVersion {
-	definition := func(ordinal int, dependencies []fixtureDependency) fixtureVersion {
-		result := &fixtureVersion{
-			definition: dependencyAliasDefinition(
-				testApp, name, SharingScopePrivate,
-				stringPointer(fmt.Sprintf("%s v%d", name, ordinal)),
-				"inactive-*", "inactive_input", destination,
-			),
-			state: StateActive, mutation: "create", timestamp: timestamp,
-			dependencies: dependencies,
-		}
-		return *result
-	}
-	versions := []fixtureVersion{definition(1, nil)}
-	inactive := definition(2, []fixtureDependency{{
+	dependencies := []fixtureDependency{{
 		targetObjectID: "ko-inactive-semantic-target", targetVersion: 1,
-	}})
-	inactive.state = StateDisabled
-	inactive.mutation = "disable"
-	inactive.timestamp++
+	}}
+	definition := dependencyAliasDefinition(
+		testApp, name, SharingScopePrivate,
+		stringPointer(fmt.Sprintf("%s inactive", name)),
+		"inactive-*", "inactive_input", destination,
+	)
+	versions := []fixtureVersion{{
+		definition: definition,
+		state:      StateDraft, mutation: "create", timestamp: timestamp,
+		dependencies: dependencies,
+	}}
+	inactive := fixtureVersion{
+		definition: definition,
+		state:      StateDisabled, mutation: "disable", timestamp: timestamp + 1,
+		dependencies: dependencies,
+	}
 	versions = append(versions, inactive)
 	switch state {
 	case StateDisabled:
 		return versions
 	case StateDeleted:
-		deleted := definition(3, []fixtureDependency{{
-			targetObjectID: "ko-inactive-semantic-target", targetVersion: 1,
-		}})
-		deleted.state = StateDeleted
-		deleted.mutation = "delete"
-		deleted.timestamp += 2
+		deleted := fixtureVersion{
+			definition: definition,
+			state:      StateDeleted, mutation: "delete", timestamp: timestamp + 2,
+			dependencies: dependencies,
+		}
 		return append(versions, deleted)
 	default:
 		panic("recognizedInactiveSemanticVersions requires disabled or deleted state")

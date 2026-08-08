@@ -66,14 +66,29 @@ func TestIntegrationHistoricalInactiveFutureBodySurvivesKnownReenable(t *testing
 	fixture := newIntegrationFutureDefinition(t, "future-history", 0)
 	insertIntegrationFutureObject(t, database, "ko-future-history", StateDisabled, fixture, 20)
 	description := "body understood again by a newer publisher"
+	knownDefinition := aliasDefinition(
+		testApp, "future-history", SharingScopePrivate, &description, "known-again-*",
+	)
+	updated, _ := stageIntegrationKnownPublication(
+		t,
+		database,
+		"ko-future-history",
+		knownDefinition,
+		StateDisabled,
+		"update",
+		30,
+	)
+	if err := updated.Commit(); err != nil {
+		t.Fatalf("commit known disabled update: %v", err)
+	}
 	staged, _ := stageIntegrationKnownPublication(
 		t,
 		database,
 		"ko-future-history",
-		aliasDefinition(testApp, "future-history", SharingScopePrivate, &description, "known-again-*"),
+		knownDefinition,
 		StateActive,
 		"enable",
-		30,
+		31,
 	)
 	if err := staged.Commit(); err != nil {
 		t.Fatalf("commit known re-enable: %v", err)
@@ -83,7 +98,7 @@ func TestIntegrationHistoricalInactiveFutureBodySurvivesKnownReenable(t *testing
 	if err != nil {
 		t.Fatalf("Get(re-enabled current): %v", err)
 	}
-	if current.Version != 3 || current.State != StateActive || current.Definition.GetDescription() != description ||
+	if current.Version != 4 || current.State != StateActive || current.Definition.GetDescription() != description ||
 		len(integrationUnknownBody(current.Definition)) != 0 {
 		t.Fatalf("re-enabled current = %s", describeIntegrationObject(current))
 	}

@@ -3,7 +3,9 @@ package control
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -148,6 +150,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 		versionCount         = 61440
 		enableVersion        = versionCount/2 + 1
 		secondDisableVersion = enableVersion + 1
+		updateVersionCount   = versionCount - 4
 	)
 
 	raw := openKnowledgeMigrationTestDB(t, "knowledge-state-long-disabled.sqlite")
@@ -190,38 +193,72 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 	); err != nil {
 		rollback("stage long-history projection: %v", err)
 	}
-	if _, err := tx.Exec(`
-		WITH RECURSIVE sequence(object_version) AS (
-			VALUES (1)
-			UNION ALL
-			SELECT object_version + 1
-			FROM sequence
-			WHERE object_version < ?
-		)
+	blobInsert, err := tx.Prepare(`
+		INSERT INTO knowledge_definition_blobs (
+			tenant_id, definition_digest, definition_proto,
+			definition_bytes, created_at_unix_micro
+		) VALUES ('tenant-a', ?, ?, ?, ?)`)
+	if err != nil {
+		rollback("prepare long-history definition insert: %v", err)
+	}
+	versionInsert, err := tx.Prepare(`
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
 			definition_digest, dependency_count, mutation_kind,
 			quarantine_reason, created_at_unix_micro
-		)
-		SELECT 'tenant-a', 'ko-long-disabled', object_version,
-		       ?, 'owner-a', 'field_extraction', 'ko-long-disabled', 'private',
-		       CASE WHEN object_version IN (1, ?) THEN 'active' ELSE 'disabled' END,
-		       zeroblob(32), 0,
-		       CASE object_version
-		           WHEN 1 THEN 'create'
-		           WHEN 2 THEN 'disable'
-		           WHEN ? THEN 'enable'
-		           WHEN ? THEN 'disable'
-		           ELSE 'update'
-		       END,
-		       NULL, object_version
-		FROM sequence
-		ORDER BY object_version`,
-		versionCount, knowledgeMigrationTestAppID,
-		enableVersion, enableVersion, secondDisableVersion,
-	); err != nil {
-		rollback("stage long immutable history: %v", err)
+		) VALUES (
+			'tenant-a', 'ko-long-disabled', ?, ?, 'owner-a',
+			'field_extraction', 'ko-long-disabled', 'private', ?, ?, 0, ?, NULL, ?
+		)`)
+	if err != nil {
+		_ = blobInsert.Close()
+		rollback("prepare long-history version insert: %v", err)
+	}
+	previousDigest := make([]byte, sha256.Size)
+	for objectVersion := 1; objectVersion <= versionCount; objectVersion++ {
+		state := "disabled"
+		mutation := "update"
+		switch objectVersion {
+		case 1:
+			state = "active"
+			mutation = "create"
+		case 2:
+			mutation = "disable"
+		case enableVersion:
+			state = "active"
+			mutation = "enable"
+		case secondDisableVersion:
+			mutation = "disable"
+		}
+
+		digest := previousDigest
+		if mutation == "update" {
+			var body [8]byte
+			binary.BigEndian.PutUint64(body[:], uint64(objectVersion))
+			hash := sha256.Sum256(body[:])
+			if _, err := blobInsert.Exec(hash[:], body[:], len(body), objectVersion); err != nil {
+				_ = versionInsert.Close()
+				_ = blobInsert.Close()
+				rollback("stage long-history definition %d: %v", objectVersion, err)
+			}
+			digest = hash[:]
+		}
+		if _, err := versionInsert.Exec(
+			objectVersion, knowledgeMigrationTestAppID, state, digest, mutation, objectVersion,
+		); err != nil {
+			_ = versionInsert.Close()
+			_ = blobInsert.Close()
+			rollback("stage long immutable history version %d: %v", objectVersion, err)
+		}
+		previousDigest = append(previousDigest[:0], digest...)
+	}
+	if err := versionInsert.Close(); err != nil {
+		_ = blobInsert.Close()
+		rollback("close long-history version insert: %v", err)
+	}
+	if err := blobInsert.Close(); err != nil {
+		rollback("close long-history definition insert: %v", err)
 	}
 	if _, err := tx.Exec(`
 		INSERT INTO knowledge_object_dependency_seals (
@@ -241,10 +278,10 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 		) VALUES (
 			'tenant-a', 'ko-long-disabled', ?, ?, 'owner-a',
 			'field_extraction', 'ko-long-disabled', 'private', 'disabled',
-			zeroblob(32), 1, ?, ?
+			?, 1, ?, ?
 		)`,
 		versionCount, knowledgeMigrationTestAppID,
-		versionCount, secondDisableVersion,
+		previousDigest, versionCount, secondDisableVersion,
 	); err != nil {
 		rollback("stage long-history registry and seals: %v", err)
 	}
@@ -253,6 +290,12 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 	}
 	assertIntegerQuery(t, raw, versionCount, `
 		SELECT version_count FROM knowledge_catalog_tenants
+		WHERE tenant_id = 'tenant-a'`)
+	assertIntegerQuery(t, raw, updateVersionCount+1, `
+		SELECT count(*) FROM knowledge_definition_blobs
+		WHERE tenant_id = 'tenant-a'`)
+	assertIntegerQuery(t, raw, 1+8*updateVersionCount, `
+		SELECT definition_body_bytes FROM knowledge_catalog_tenants
 		WHERE tenant_id = 'tenant-a'`)
 
 	migrationContext, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -266,7 +309,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 		t.Fatalf("apply migration 0029 to long valid history: %v", err)
 	}
 	t.Logf("migration 0029 backfilled %d versions in %s", versionCount, time.Since(migrationStarted))
-	assertIntegerQuery(t, raw, 29, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 30, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, versionCount, `
 		SELECT count(*) FROM knowledge_object_version_lifecycle
 		WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-long-disabled'`)
@@ -470,7 +513,7 @@ func TestKnowledgeCatalogStateAuthoritiesSurviveBackupRestoreExactly(t *testing.
 		{objectID: "ko-restore", version: 2, state: "disabled", mutation: "disable", timestamp: 20,
 			disabledAt: sql.NullInt64{Int64: 20, Valid: true}},
 		{objectID: "ko-restore", version: 3, state: "disabled", mutation: "scope_change", timestamp: 30,
-			disabledAt: sql.NullInt64{Int64: 20, Valid: true}},
+			disabledAt: sql.NullInt64{Int64: 20, Valid: true}, sharingScope: "app"},
 	} {
 		insertKnowledgeStateVersion(t, source.SQLDB(), fixture)
 	}
@@ -613,14 +656,35 @@ func TestKnowledgeCatalogOrderKeySupportsDeferredUpdatePublication(t *testing.T)
 		t.Fatal(err)
 	}
 	fixture := projectionFixture{ObjectID: "ko-deferred-update", Version: 2, Name: "Deferred Update"}
+	definitionBody := []byte("knowledge-order-fixture/ko-deferred-update/2")
+	definitionDigest := sha256.Sum256(definitionBody)
+	if _, err := tx.Exec(`
+		INSERT INTO knowledge_definition_blobs (
+			tenant_id, definition_digest, definition_proto,
+			definition_bytes, created_at_unix_micro
+		) VALUES ('tenant-a', ?, ?, ?, 20)`,
+		definitionDigest[:], definitionBody, len(definitionBody),
+	); err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("insert deferred update definition: %v", err)
+	}
 	insertProjectionParent(t, tx, fixture)
-	insertKnowledgeVersion(t, tx, fixture.ObjectID, fixture.Version, fixture.Name, "update", 20)
+	insertKnowledgeVersionWithDigest(
+		t,
+		tx,
+		fixture.ObjectID,
+		fixture.Version,
+		fixture.Name,
+		"update",
+		20,
+		definitionDigest[:],
+	)
 	sealKnowledgeStateProjection(t, tx, fixture.ObjectID, fixture.Version)
 	if _, err := tx.Exec(`
 		UPDATE knowledge_objects
-		SET current_version = 2, updated_at_unix_micro = 20
+		SET current_version = 2, definition_digest = ?, updated_at_unix_micro = 20
 		WHERE tenant_id = 'tenant-a'
-		  AND knowledge_object_id = 'ko-deferred-update'`); err != nil {
+		  AND knowledge_object_id = 'ko-deferred-update'`, definitionDigest[:]); err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("publish deferred update: %v", err)
 	}
@@ -698,14 +762,17 @@ func stageKnowledgeStateHistory(
 		_ = tx.Rollback()
 		t.Fatalf(format, args...)
 	}
+	var currentDigest any
 	for _, fixture := range fixtures {
-		digest := any(make([]byte, 32))
-		if fixture.state == "quarantined" {
-			digest = nil
-		}
+		digest := knowledgeStateFixtureDefinitionDigest(t, tx, fixture)
+		currentDigest = digest
 		reason := any(nil)
 		if fixture.quarantineReason != "" {
 			reason = fixture.quarantineReason
+		}
+		sharingScope := fixture.sharingScope
+		if sharingScope == "" {
+			sharingScope = "private"
 		}
 		if _, err := tx.Exec(`
 			INSERT INTO knowledge_object_versions (
@@ -715,12 +782,12 @@ func stageKnowledgeStateHistory(
 				quarantine_reason, created_at_unix_micro
 			) VALUES (
 				'tenant-a', ?, ?, ?, 'owner-a', 'field_extraction', ?,
-				'private', ?, ?, 0, ?, ?, ?
+				?, ?, ?, 0, ?, ?, ?
 			);
 			INSERT INTO knowledge_object_dependency_seals (
 				tenant_id, knowledge_object_id, object_version, dependency_count
 			) VALUES ('tenant-a', ?, ?, 0)`,
-			fixture.objectID, fixture.version, knowledgeMigrationTestAppID, fixture.objectID,
+			fixture.objectID, fixture.version, knowledgeMigrationTestAppID, fixture.objectID, sharingScope,
 			fixture.state, digest, fixture.mutation, reason, fixture.timestamp,
 			fixture.objectID, fixture.version,
 		); err != nil {
@@ -732,6 +799,10 @@ func stageKnowledgeStateHistory(
 	if current.state == "quarantined" {
 		canonicalSelectorBytes = 0
 	}
+	currentSharingScope := current.sharingScope
+	if currentSharingScope == "" {
+		currentSharingScope = "private"
+	}
 	if _, err := tx.Exec(`
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
@@ -742,7 +813,7 @@ func stageKnowledgeStateHistory(
 			selector_value_bytes, canonical_selector_bytes
 		) VALUES (
 			'tenant-a', ?, ?, ?, 'owner-a', 'field_extraction', ?,
-			'private', ?, 0, '', 0, 0, 0, 0, 0, ?
+			?, ?, 0, '', 0, 0, 0, 0, 0, ?
 		);
 		INSERT INTO knowledge_object_list_projection_seals (
 			tenant_id, knowledge_object_id, object_version,
@@ -752,16 +823,12 @@ func stageKnowledgeStateHistory(
 		    FROM knowledge_object_list_projections
 		   WHERE tenant_id = 'tenant-a' AND knowledge_object_id = ?
 		     AND object_version = ?`,
-		current.objectID, current.version, knowledgeMigrationTestAppID, current.objectID,
+		current.objectID, current.version, knowledgeMigrationTestAppID, current.objectID, currentSharingScope,
 		current.state, canonicalSelectorBytes, current.objectID, current.version,
 	); err != nil {
 		rollback("stage current projection %s/%d: %v", current.objectID, current.version, err)
 	}
 
-	digest := any(make([]byte, 32))
-	if current.state == "quarantined" {
-		digest = nil
-	}
 	reason := any(nil)
 	if registryReason != "" {
 		reason = registryReason
@@ -775,9 +842,9 @@ func stageKnowledgeStateHistory(
 			deleted_at_unix_micro, quarantine_reason
 		) VALUES (
 			'tenant-a', ?, ?, ?, 'owner-a', 'field_extraction', ?,
-			'private', ?, ?, ?, ?, ?, ?, ?, ?
+			?, ?, ?, ?, ?, ?, ?, ?, ?
 		)`, current.objectID, current.version, knowledgeMigrationTestAppID, current.objectID,
-		current.state, digest, registryCreatedAt, registryUpdatedAt,
+		currentSharingScope, current.state, currentDigest, registryCreatedAt, registryUpdatedAt,
 		nullInt64Value(current.disabledAt), nullInt64Value(current.quarantinedAt),
 		nullInt64Value(current.deletedAt), reason,
 	); err != nil {
@@ -1093,11 +1160,11 @@ func TestKnowledgeObjectVersionTransitionTriggerAcceptsValidFreshMatrix(t *testi
 			fixtures: []stateVersionFixture{
 				{objectID: "ko-valid-main", version: 1, state: "active", mutation: "create", timestamp: 10},
 				{objectID: "ko-valid-main", version: 2, state: "active", mutation: "update", timestamp: 20},
-				{objectID: "ko-valid-main", version: 3, state: "active", mutation: "scope_change", timestamp: 30},
+				{objectID: "ko-valid-main", version: 3, state: "active", mutation: "scope_change", timestamp: 30, sharingScope: "app"},
 				{objectID: "ko-valid-main", version: 4, state: "disabled", mutation: "disable", timestamp: 40,
-					disabledAt: sql.NullInt64{Int64: 40, Valid: true}},
+					disabledAt: sql.NullInt64{Int64: 40, Valid: true}, sharingScope: "app"},
 				{objectID: "ko-valid-main", version: 5, state: "disabled", mutation: "update", timestamp: 50,
-					disabledAt: sql.NullInt64{Int64: 40, Valid: true}},
+					disabledAt: sql.NullInt64{Int64: 40, Valid: true}, sharingScope: "app"},
 				{objectID: "ko-valid-main", version: 6, state: "disabled", mutation: "scope_change", timestamp: 60,
 					disabledAt: sql.NullInt64{Int64: 40, Valid: true}},
 				{objectID: "ko-valid-main", version: 7, state: "active", mutation: "enable", timestamp: 70},
@@ -1110,12 +1177,12 @@ func TestKnowledgeObjectVersionTransitionTriggerAcceptsValidFreshMatrix(t *testi
 			fixtures: []stateVersionFixture{
 				{objectID: "ko-valid-draft", version: 1, state: "draft", mutation: "create", timestamp: 10},
 				{objectID: "ko-valid-draft", version: 2, state: "draft", mutation: "update", timestamp: 20},
-				{objectID: "ko-valid-draft", version: 3, state: "draft", mutation: "scope_change", timestamp: 30},
+				{objectID: "ko-valid-draft", version: 3, state: "draft", mutation: "scope_change", timestamp: 30, sharingScope: "app"},
 				{objectID: "ko-valid-draft", version: 4, state: "disabled", mutation: "disable", timestamp: 40,
-					disabledAt: sql.NullInt64{Int64: 40, Valid: true}},
-				{objectID: "ko-valid-draft", version: 5, state: "active", mutation: "enable", timestamp: 50},
+					disabledAt: sql.NullInt64{Int64: 40, Valid: true}, sharingScope: "app"},
+				{objectID: "ko-valid-draft", version: 5, state: "active", mutation: "enable", timestamp: 50, sharingScope: "app"},
 				{objectID: "ko-valid-draft", version: 6, state: "deleted", mutation: "delete", timestamp: 60,
-					deletedAt: sql.NullInt64{Int64: 60, Valid: true}},
+					deletedAt: sql.NullInt64{Int64: 60, Valid: true}, sharingScope: "app"},
 			},
 		},
 		{

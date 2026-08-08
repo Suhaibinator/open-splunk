@@ -120,25 +120,25 @@ func TestActiveDependencySQLScopeStateAndHistoricalMatrix(t *testing.T) {
 		},
 		{
 			name: "disabled source may retain forbidden inactive target", sourceScope: SharingScopeGlobal,
-			sourceApp: testApp, sourceOwner: testOwner, sourceStates: []State{StateActive, StateDisabled}, sourceTargetRefs: []int64{0, 2},
+			sourceApp: testApp, sourceOwner: testOwner, sourceStates: []State{StateActive, StateDisabled, StateDisabled}, sourceTargetRefs: []int64{0, 0, 2},
 			targetScope: SharingScopePrivate, targetApp: testAppTwo, targetOwner: "owner-b",
 			targetStates: []State{StateActive, StateDisabled},
 		},
 		{
 			name: "deleted source may retain forbidden deleted target", sourceScope: SharingScopeApp,
-			sourceApp: testApp, sourceOwner: testOwner, sourceStates: []State{StateActive, StateDeleted}, sourceTargetRefs: []int64{0, 2},
+			sourceApp: testApp, sourceOwner: testOwner, sourceStates: []State{StateDraft, StateDeleted}, sourceTargetRefs: []int64{2, 2},
 			targetScope: SharingScopePrivate, targetApp: testAppTwo, targetOwner: "owner-b",
 			targetStates: []State{StateActive, StateDeleted},
 		},
 		{
 			name: "historical active source ignores later target disable", sourceScope: SharingScopePrivate,
-			sourceApp: testApp, sourceOwner: testOwner, sourceStates: []State{StateActive, StateDisabled}, sourceTargetRefs: []int64{1, 2},
+			sourceApp: testApp, sourceOwner: testOwner, sourceStates: []State{StateActive, StateDisabled}, sourceTargetRefs: []int64{1, 1},
 			targetScope: SharingScopePrivate, targetApp: testApp, targetOwner: testOwner,
 			targetStates: []State{StateActive, StateDisabled}, requestedVersion: 1,
 		},
 		{
 			name: "historical active source still requires pinned active target", sourceScope: SharingScopePrivate,
-			sourceApp: testApp, sourceOwner: testOwner, sourceStates: []State{StateActive, StateDisabled}, sourceTargetRefs: []int64{1, 2},
+			sourceApp: testApp, sourceOwner: testOwner, sourceStates: []State{StateActive, StateDisabled}, sourceTargetRefs: []int64{1, 1},
 			targetScope: SharingScopePrivate, targetApp: testApp, targetOwner: testOwner,
 			targetStates: []State{StateDraft, StateActive}, requestedVersion: 1, wantCorrupt: true,
 		},
@@ -235,14 +235,16 @@ func dependencyPropertyVersions(
 	for index, state := range states {
 		mutation := "create"
 		if index > 0 {
-			switch state {
-			case StateActive:
+			switch {
+			case state == states[index-1]:
+				mutation = "update"
+			case state == StateActive:
 				mutation = "enable"
-			case StateDisabled:
+			case state == StateDisabled:
 				mutation = "disable"
-			case StateDeleted:
+			case state == StateDeleted:
 				mutation = "delete"
-			case StateQuarantined:
+			case state == StateQuarantined:
 				mutation = "quarantine"
 			default:
 				mutation = "update"

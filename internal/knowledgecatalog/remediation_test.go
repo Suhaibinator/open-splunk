@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 )
@@ -357,9 +358,26 @@ func execWithForeignKeysDisabled(t *testing.T, database *control.DB, query strin
 func insertOrphanVersion(t *testing.T, database *control.DB, objectID string, version, timestamp int64) {
 	t.Helper()
 	description := "orphan future version"
-	normalized, err := knowledgedefinition.Normalize(aliasDefinition(
-		testApp, "future", SharingScopePrivate, &description, "future-c",
-	))
+	var appID, ownerID, objectType, name, sharingScope string
+	if err := database.SQLDB().QueryRowContext(context.Background(), `SELECT
+		app_id, owner_id, object_type, name, sharing_scope
+		FROM knowledge_objects WHERE tenant_id = ? AND knowledge_object_id = ?`,
+		testTenant, objectID,
+	).Scan(&appID, &ownerID, &objectType, &name, &sharingScope); err != nil {
+		t.Fatalf("read orphan predecessor identity: %v", err)
+	}
+	var definition *opensplunkv1.KnowledgeObjectDefinition
+	switch ObjectType(objectType) {
+	case ObjectTypeFieldExtraction:
+		definition = dependencyExtractionDefinition(
+			appID, name, SharingScope(sharingScope), &description, "future-c", dependencyFixtureInputField,
+		)
+	case ObjectTypeFieldAlias:
+		definition = aliasDefinition(appID, name, SharingScope(sharingScope), &description, "future-c")
+	default:
+		t.Fatalf("unsupported orphan predecessor type %q", objectType)
+	}
+	normalized, err := knowledgedefinition.Normalize(definition)
 	if err != nil {
 		t.Fatalf("normalize orphan version: %v", err)
 	}
@@ -376,8 +394,8 @@ func insertOrphanVersion(t *testing.T, database *control.DB, objectID string, ve
 	if _, err := tx.Exec(`INSERT INTO knowledge_object_versions (
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, dependency_count, mutation_kind, created_at_unix_micro
-	) VALUES (?, ?, ?, ?, ?, 'field_alias', 'future', 'private', 'active', ?, 0, 'update', ?)`,
-		testTenant, objectID, version, testApp, testOwner, normalized.Digest[:], timestamp); err != nil {
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0, 'update', ?)`,
+		testTenant, objectID, version, appID, ownerID, objectType, name, sharingScope, normalized.Digest[:], timestamp); err != nil {
 		t.Fatalf("insert orphan version: %v", err)
 	}
 	if _, err := tx.Exec(`INSERT INTO knowledge_object_dependency_seals (

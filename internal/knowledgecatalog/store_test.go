@@ -444,6 +444,9 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 	}
 
 	var current knowledgedefinition.Normalized
+	var priorKnown knowledgedefinition.Normalized
+	var havePriorKnown bool
+	insertedDigests := make(map[[32]byte]struct{})
 	for index, version := range object.versions {
 		versionNumber := int64(index + 1)
 		var normalized knowledgedefinition.Normalized
@@ -453,16 +456,42 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 			if err != nil {
 				t.Fatalf("Normalize(%s v%d): %v", object.id, versionNumber, err)
 			}
+			// State-only immutable versions are exact body/metadata copies. Older
+			// read fixtures used distinct description markers merely to make rows
+			// visually distinguishable; migration 0030 correctly rejects that
+			// impossible writer history, so canonicalize those fixture versions to
+			// the prior immutable definition.
+			if index > 0 && (version.mutation == "enable" || version.mutation == "disable" || version.mutation == "delete") {
+				if !havePriorKnown {
+					t.Fatalf("state-only fixture %s v%d has no prior definition", object.id, versionNumber)
+				}
+				normalized = priorKnown
+			}
 			digest = normalized.Digest[:]
-			if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_definition_blobs (
-				tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
-			) VALUES (?, ?, ?, ?, ?)`, testTenant, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), version.timestamp); err != nil {
-				t.Fatalf("insert definition blob %s v%d: %v", object.id, versionNumber, err)
+			if _, exists := insertedDigests[normalized.Digest]; !exists {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_definition_blobs (
+					tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
+				) VALUES (?, ?, ?, ?, ?)`, testTenant, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), version.timestamp); err != nil {
+					t.Fatalf("insert definition blob %s v%d: %v", object.id, versionNumber, err)
+				}
+				insertedDigests[normalized.Digest] = struct{}{}
 			}
 		} else {
 			digest = nil
 		}
-		appID, name, scope, objectType := fixtureIdentity(object.versions, index, normalized)
+		identity := normalized
+		if version.state == StateQuarantined {
+			if !havePriorKnown {
+				t.Fatalf("quarantine fixture %s v%d has no prior definition", object.id, versionNumber)
+			}
+			identity = priorKnown
+		}
+		appID, name, scope, objectType := fixtureIdentity(
+			t,
+			object.id,
+			fmt.Sprintf("v%d", versionNumber),
+			identity,
+		)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 			sharing_scope, state, definition_digest, dependency_count, mutation_kind,
@@ -486,6 +515,10 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 		) VALUES (?, ?, ?, ?)`, testTenant, object.id, versionNumber, len(version.dependencies)); err != nil {
 			t.Fatalf("seal dependencies %s v%d: %v", object.id, versionNumber, err)
 		}
+		if version.state != StateQuarantined {
+			priorKnown = normalized
+			havePriorKnown = true
+		}
 		if index == len(object.versions)-1 {
 			current = normalized
 		}
@@ -493,7 +526,11 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 
 	last := object.versions[len(object.versions)-1]
 	currentVersion := int64(len(object.versions))
-	appID, name, scope, objectType := fixtureIdentity(object.versions, len(object.versions)-1, current)
+	identity := current
+	if last.state == StateQuarantined {
+		identity = priorKnown
+	}
+	appID, name, scope, objectType := fixtureIdentity(t, object.id, "current", identity)
 	description, descriptionPresent := "", 0
 	counts := [4]int{}
 	selectorValueBytes, canonicalSelectorBytes := 0, 0
@@ -570,21 +607,19 @@ func insertFixtureObject(t *testing.T, database *control.DB, object fixtureObjec
 	}
 }
 
-func fixtureIdentity(versions []fixtureVersion, index int, normalized knowledgedefinition.Normalized) (string, string, string, string) {
-	if versions[index].state != StateQuarantined {
-		objectType, _ := objectTypeFromProto(normalized.ObjectType)
-		sharingScope, _ := sharingScopeFromProto(normalized.SharingScope)
-		return normalized.AppID, normalized.Name, string(sharingScope), string(objectType)
+func fixtureIdentity(
+	t *testing.T,
+	objectID string,
+	versionLabel string,
+	identity knowledgedefinition.Normalized,
+) (string, string, string, string) {
+	t.Helper()
+	objectType, typeOK := objectTypeFromProto(identity.ObjectType)
+	sharingScope, scopeOK := sharingScopeFromProto(identity.SharingScope)
+	if !typeOK || !scopeOK {
+		t.Fatalf("fixture %s %s has unsupported identity", objectID, versionLabel)
 	}
-	for prior := index - 1; prior >= 0; prior-- {
-		if versions[prior].definition != nil {
-			normalized, _ := knowledgedefinition.Normalize(versions[prior].definition)
-			objectType, _ := objectTypeFromProto(normalized.ObjectType)
-			sharingScope, _ := sharingScopeFromProto(normalized.SharingScope)
-			return normalized.AppID, normalized.Name, string(sharingScope), string(objectType)
-		}
-	}
-	panic("quarantine fixture has no prior definition")
+	return identity.AppID, identity.Name, string(sharingScope), string(objectType)
 }
 
 func insertSelectorRows(t *testing.T, tx *sql.Tx, objectID string, version int64, normalized knowledgedefinition.Normalized) {
