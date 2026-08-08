@@ -530,6 +530,7 @@ type InspectSearchJobResponse struct {
 	GeneratedSql      string                        `protobuf:"bytes,4,opt,name=generated_sql,json=generatedSql,proto3" json:"generated_sql,omitempty"`
 	ExplainText       string                        `protobuf:"bytes,5,opt,name=explain_text,json=explainText,proto3" json:"explain_text,omitempty"`
 	DiagnosticQueryId string                        `protobuf:"bytes,6,opt,name=diagnostic_query_id,json=diagnosticQueryId,proto3" json:"diagnostic_query_id,omitempty"`
+	KnowledgeSnapshot *KnowledgeSnapshotSummary     `protobuf:"bytes,7,opt,name=knowledge_snapshot,json=knowledgeSnapshot,proto3,oneof" json:"knowledge_snapshot,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -606,11 +607,18 @@ func (x *InspectSearchJobResponse) GetDiagnosticQueryId() string {
 	return ""
 }
 
+func (x *InspectSearchJobResponse) GetKnowledgeSnapshot() *KnowledgeSnapshotSummary {
+	if x != nil {
+		return x.KnowledgeSnapshot
+	}
+	return nil
+}
+
 var File_open_splunk_v1_search_inspection_api_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_search_inspection_api_proto_rawDesc = "" +
 	"\n" +
-	"*open_splunk/v1/search_inspection_api.proto\x12\x0eopen_splunk.v1\x1a\x1bopen_splunk/v1/common.proto\"=\n" +
+	"*open_splunk/v1/search_inspection_api.proto\x12\x0eopen_splunk.v1\x1a\x1bopen_splunk/v1/common.proto\x1a\x1eopen_splunk/v1/knowledge.proto\"=\n" +
 	"\x17InspectSearchJobRequest\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\"\xe3\x01\n" +
 	"\x1cSearchInspectionLogicalStage\x12\x1f\n" +
@@ -642,14 +650,16 @@ const file_open_splunk_v1_search_inspection_api_proto_rawDesc = "" +
 	"\x1cSearchInspectionPhysicalPlan\x12\x1d\n" +
 	"\n" +
 	"node_types\x18\x01 \x03(\tR\tnodeTypes\x12B\n" +
-	"\x05reads\x18\x02 \x03(\v2,.open_splunk.v1.SearchInspectionPhysicalReadR\x05reads\"\xd9\x02\n" +
+	"\x05reads\x18\x02 \x03(\v2,.open_splunk.v1.SearchInspectionPhysicalReadR\x05reads\"\xce\x03\n" +
 	"\x18InspectSearchJobResponse\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12N\n" +
 	"\flogical_plan\x18\x02 \x01(\v2+.open_splunk.v1.SearchInspectionLogicalPlanR\vlogicalPlan\x12Q\n" +
 	"\rphysical_plan\x18\x03 \x01(\v2,.open_splunk.v1.SearchInspectionPhysicalPlanR\fphysicalPlan\x12#\n" +
 	"\rgenerated_sql\x18\x04 \x01(\tR\fgeneratedSql\x12!\n" +
 	"\fexplain_text\x18\x05 \x01(\tR\vexplainText\x12.\n" +
-	"\x13diagnostic_query_id\x18\x06 \x01(\tR\x11diagnosticQueryId*\xc8\x01\n" +
+	"\x13diagnostic_query_id\x18\x06 \x01(\tR\x11diagnosticQueryId\x12\\\n" +
+	"\x12knowledge_snapshot\x18\a \x01(\v2(.open_splunk.v1.KnowledgeSnapshotSummaryH\x00R\x11knowledgeSnapshot\x88\x01\x01B\x15\n" +
+	"\x13_knowledge_snapshot*\xc8\x01\n" +
 	"\x1aSearchInspectionOutputKind\x12-\n" +
 	")SEARCH_INSPECTION_OUTPUT_KIND_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"SEARCH_INSPECTION_OUTPUT_KIND_OPEN\x10\x01\x12(\n" +
@@ -681,21 +691,23 @@ var file_open_splunk_v1_search_inspection_api_proto_goTypes = []any{
 	(*SearchInspectionPhysicalPlan)(nil),  // 7: open_splunk.v1.SearchInspectionPhysicalPlan
 	(*InspectSearchJobResponse)(nil),      // 8: open_splunk.v1.InspectSearchJobResponse
 	(*SourceRange)(nil),                   // 9: open_splunk.v1.SourceRange
+	(*KnowledgeSnapshotSummary)(nil),      // 10: open_splunk.v1.KnowledgeSnapshotSummary
 }
 var file_open_splunk_v1_search_inspection_api_proto_depIdxs = []int32{
-	9, // 0: open_splunk.v1.SearchInspectionLogicalStage.source_range:type_name -> open_splunk.v1.SourceRange
-	0, // 1: open_splunk.v1.SearchInspectionOutputShape.kind:type_name -> open_splunk.v1.SearchInspectionOutputKind
-	2, // 2: open_splunk.v1.SearchInspectionLogicalPlan.stages:type_name -> open_splunk.v1.SearchInspectionLogicalStage
-	3, // 3: open_splunk.v1.SearchInspectionLogicalPlan.output:type_name -> open_splunk.v1.SearchInspectionOutputShape
-	5, // 4: open_splunk.v1.SearchInspectionPhysicalRead.indexes:type_name -> open_splunk.v1.SearchInspectionPhysicalIndex
-	6, // 5: open_splunk.v1.SearchInspectionPhysicalPlan.reads:type_name -> open_splunk.v1.SearchInspectionPhysicalRead
-	4, // 6: open_splunk.v1.InspectSearchJobResponse.logical_plan:type_name -> open_splunk.v1.SearchInspectionLogicalPlan
-	7, // 7: open_splunk.v1.InspectSearchJobResponse.physical_plan:type_name -> open_splunk.v1.SearchInspectionPhysicalPlan
-	8, // [8:8] is the sub-list for method output_type
-	8, // [8:8] is the sub-list for method input_type
-	8, // [8:8] is the sub-list for extension type_name
-	8, // [8:8] is the sub-list for extension extendee
-	0, // [0:8] is the sub-list for field type_name
+	9,  // 0: open_splunk.v1.SearchInspectionLogicalStage.source_range:type_name -> open_splunk.v1.SourceRange
+	0,  // 1: open_splunk.v1.SearchInspectionOutputShape.kind:type_name -> open_splunk.v1.SearchInspectionOutputKind
+	2,  // 2: open_splunk.v1.SearchInspectionLogicalPlan.stages:type_name -> open_splunk.v1.SearchInspectionLogicalStage
+	3,  // 3: open_splunk.v1.SearchInspectionLogicalPlan.output:type_name -> open_splunk.v1.SearchInspectionOutputShape
+	5,  // 4: open_splunk.v1.SearchInspectionPhysicalRead.indexes:type_name -> open_splunk.v1.SearchInspectionPhysicalIndex
+	6,  // 5: open_splunk.v1.SearchInspectionPhysicalPlan.reads:type_name -> open_splunk.v1.SearchInspectionPhysicalRead
+	4,  // 6: open_splunk.v1.InspectSearchJobResponse.logical_plan:type_name -> open_splunk.v1.SearchInspectionLogicalPlan
+	7,  // 7: open_splunk.v1.InspectSearchJobResponse.physical_plan:type_name -> open_splunk.v1.SearchInspectionPhysicalPlan
+	10, // 8: open_splunk.v1.InspectSearchJobResponse.knowledge_snapshot:type_name -> open_splunk.v1.KnowledgeSnapshotSummary
+	9,  // [9:9] is the sub-list for method output_type
+	9,  // [9:9] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_search_inspection_api_proto_init() }
@@ -704,6 +716,8 @@ func file_open_splunk_v1_search_inspection_api_proto_init() {
 		return
 	}
 	file_open_splunk_v1_common_proto_init()
+	file_open_splunk_v1_knowledge_proto_init()
+	file_open_splunk_v1_search_inspection_api_proto_msgTypes[7].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

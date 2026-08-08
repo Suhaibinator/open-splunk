@@ -3,6 +3,7 @@ syntax = "proto3";
 package open_splunk.v1;
 
 import "open_splunk/v1/common.proto";
+import "open_splunk/v1/knowledge.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
@@ -77,4 +78,5 @@ message InspectSearchJobResponse {
   string generated_sql = 4;
   string explain_text = 5;
   string diagnostic_query_id = 6;
+  optional KnowledgeSnapshotSummary knowledge_snapshot = 7;
 }

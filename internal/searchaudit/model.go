@@ -1,6 +1,10 @@
 package searchaudit
 
-import "github.com/Suhaibinator/open-splunk/internal/audit"
+import (
+	"database/sql"
+
+	"github.com/Suhaibinator/open-splunk/internal/audit"
+)
 
 // searchAttemptTenantStateRecord is the exact GORM projection of the allocation
 // and rolling-retention authority in migration 0023.
@@ -19,14 +23,19 @@ func (searchAttemptTenantStateRecord) TableName() string {
 // searchAttemptEventRecord is scalar-only and deliberately has no arbitrary
 // metadata or search-content field.
 type searchAttemptEventRecord struct {
-	TenantID            string          `gorm:"column:tenant_id;type:text;primaryKey;not null;index:search_attempt_audit_tenant_actor_sequence_idx,priority:1;index:search_attempt_audit_tenant_owner_sequence_idx,priority:1;uniqueIndex:search_attempt_audit_tenant_job_key,priority:1"`
-	Sequence            int64           `gorm:"column:sequence;type:integer;primaryKey;autoIncrement:false;not null;index:search_attempt_audit_tenant_actor_sequence_idx,priority:3,sort:desc;index:search_attempt_audit_tenant_owner_sequence_idx,priority:3,sort:desc"`
-	OccurredAtUnixMicro int64           `gorm:"column:occurred_at_unix_micro;type:integer;not null"`
-	ActorKind           audit.ActorKind `gorm:"column:actor_kind;type:text;not null"`
-	ActorID             string          `gorm:"column:actor_id;type:text;not null;index:search_attempt_audit_tenant_actor_sequence_idx,priority:2"`
-	ActorRole           audit.ActorRole `gorm:"column:actor_role;type:text;not null"`
-	OwnerID             string          `gorm:"column:owner_id;type:text;not null;index:search_attempt_audit_tenant_owner_sequence_idx,priority:2"`
-	SearchJobID         string          `gorm:"column:search_job_id;type:text;not null;uniqueIndex:search_attempt_audit_tenant_job_key,priority:2"`
+	TenantID                                      string          `gorm:"column:tenant_id;type:text;primaryKey;not null;index:search_attempt_audit_tenant_actor_sequence_idx,priority:1;index:search_attempt_audit_tenant_owner_sequence_idx,priority:1;uniqueIndex:search_attempt_audit_tenant_job_key,priority:1"`
+	Sequence                                      int64           `gorm:"column:sequence;type:integer;primaryKey;autoIncrement:false;not null;index:search_attempt_audit_tenant_actor_sequence_idx,priority:3,sort:desc;index:search_attempt_audit_tenant_owner_sequence_idx,priority:3,sort:desc"`
+	OccurredAtUnixMicro                           int64           `gorm:"column:occurred_at_unix_micro;type:integer;not null"`
+	ActorKind                                     audit.ActorKind `gorm:"column:actor_kind;type:text;not null"`
+	ActorID                                       string          `gorm:"column:actor_id;type:text;not null;index:search_attempt_audit_tenant_actor_sequence_idx,priority:2"`
+	ActorRole                                     audit.ActorRole `gorm:"column:actor_role;type:text;not null"`
+	OwnerID                                       string          `gorm:"column:owner_id;type:text;not null;index:search_attempt_audit_tenant_owner_sequence_idx,priority:2"`
+	SearchJobID                                   string          `gorm:"column:search_job_id;type:text;not null;uniqueIndex:search_attempt_audit_tenant_job_key,priority:2"`
+	KnowledgeSnapshotSHA256                       []byte          `gorm:"column:knowledge_snapshot_sha256;type:blob"`
+	KnowledgeSnapshotTenantCatalogRevision        sql.NullInt64   `gorm:"column:knowledge_snapshot_tenant_catalog_revision;type:integer"`
+	KnowledgeSnapshotTenantCatalogStateToken      []byte          `gorm:"column:knowledge_snapshot_tenant_catalog_state_token;type:blob"`
+	KnowledgeSnapshotObjectCount                  sql.NullInt64   `gorm:"column:knowledge_snapshot_object_count;type:integer"`
+	KnowledgeSnapshotCompilerCompatibilityVersion sql.NullString  `gorm:"column:knowledge_snapshot_compiler_compatibility_version;type:text"`
 }
 
 func (searchAttemptEventRecord) TableName() string {

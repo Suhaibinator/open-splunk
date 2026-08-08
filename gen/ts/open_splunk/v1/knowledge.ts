@@ -685,6 +685,55 @@ export interface KnowledgeSnapshot {
   tenantCatalogStateToken: Uint8Array;
 }
 
+/**
+ * KnowledgeSnapshotRef is the bounded, definition-free identity retained by
+ * generic search lifecycle records. Absence means knowledge resolution was
+ * disabled for the attempt; a present reference with object_count zero is an
+ * enabled, canonically empty knowledge snapshot.
+ */
+export interface KnowledgeSnapshotRef {
+  snapshotSha256: Uint8Array;
+  tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
+  objectCount: number;
+  compilerCompatibilityVersion: string;
+}
+
+/**
+ * KnowledgeSnapshotAuthorizedObjectSummary is current-policy-authorized
+ * diagnostic identity only. It never carries a definition body, selector,
+ * dependency, digest, or compiler output.
+ */
+export interface KnowledgeSnapshotAuthorizedObjectSummary {
+  knowledgeObjectId: string;
+  version: bigint;
+  name: string;
+}
+
+/**
+ * KnowledgeSnapshotObjectSummary preserves canonical position and execution
+ * type while allowing response projections to remove stale object identity.
+ */
+export interface KnowledgeSnapshotObjectSummary {
+  resolutionOrdinal: number;
+  objectType: KnowledgeObjectType;
+  stage: KnowledgeSearchStage;
+  disclosure: { $case: "authorizedObject"; value: KnowledgeSnapshotAuthorizedObjectSummary } | //
+  /** Must be true. Identity, name, and version are structurally absent. */
+  { $case: "redacted"; value: boolean } | undefined;
+}
+
+/**
+ * KnowledgeSnapshotSummary carries at most the canonical first 64 object
+ * summaries. object_count in ref is always the exact total; objects_truncated
+ * is true exactly when the retained prefix is shorter than that total.
+ */
+export interface KnowledgeSnapshotSummary {
+  ref: KnowledgeSnapshotRef | undefined;
+  objects: KnowledgeSnapshotObjectSummary[];
+  objectsTruncated: boolean;
+}
+
 function createBaseKnowledgeSelectorPattern(): KnowledgeSelectorPattern {
   return { matchKind: 0, value: "" };
 }
@@ -4504,6 +4553,529 @@ export const KnowledgeSnapshot: MessageFns<KnowledgeSnapshot> = {
       ? KnowledgeSnapshotBudgetCharges.fromPartial(object.budgetCharges)
       : undefined;
     message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseKnowledgeSnapshotRef(): KnowledgeSnapshotRef {
+  return {
+    snapshotSha256: new Uint8Array(0),
+    tenantCatalogRevision: 0n,
+    tenantCatalogStateToken: new Uint8Array(0),
+    objectCount: 0,
+    compilerCompatibilityVersion: "",
+  };
+}
+
+export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
+  encode(message: KnowledgeSnapshotRef, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.snapshotSha256.length !== 0) {
+      writer.uint32(10).bytes(message.snapshotSha256);
+    }
+    if (message.tenantCatalogRevision !== 0n) {
+      if (BigInt.asUintN(64, message.tenantCatalogRevision) !== message.tenantCatalogRevision) {
+        throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(26).bytes(message.tenantCatalogStateToken);
+    }
+    if (message.objectCount !== 0) {
+      writer.uint32(32).uint32(message.objectCount);
+    }
+    if (message.compilerCompatibilityVersion !== "") {
+      writer.uint32(42).string(message.compilerCompatibilityVersion);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeSnapshotRef {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeSnapshotRef();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.snapshotSha256 = reader.bytes();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.tenantCatalogRevision = reader.uint64() as bigint;
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.objectCount = reader.uint32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.compilerCompatibilityVersion = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeSnapshotRef {
+    return {
+      snapshotSha256: isSet(object.snapshotSha256)
+        ? bytesFromBase64(object.snapshotSha256)
+        : isSet(object.snapshot_sha256)
+        ? bytesFromBase64(object.snapshot_sha256)
+        : new Uint8Array(0),
+      tenantCatalogRevision: isSet(object.tenantCatalogRevision)
+        ? BigInt(object.tenantCatalogRevision)
+        : isSet(object.tenant_catalog_revision)
+        ? BigInt(object.tenant_catalog_revision)
+        : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
+      objectCount: isSet(object.objectCount)
+        ? globalThis.Number(object.objectCount)
+        : isSet(object.object_count)
+        ? globalThis.Number(object.object_count)
+        : 0,
+      compilerCompatibilityVersion: isSet(object.compilerCompatibilityVersion)
+        ? globalThis.String(object.compilerCompatibilityVersion)
+        : isSet(object.compiler_compatibility_version)
+        ? globalThis.String(object.compiler_compatibility_version)
+        : "",
+    };
+  },
+
+  toJSON(message: KnowledgeSnapshotRef): unknown {
+    const obj: any = {};
+    if (message.snapshotSha256.length !== 0) {
+      obj.snapshotSha256 = base64FromBytes(message.snapshotSha256);
+    }
+    if (message.tenantCatalogRevision !== 0n) {
+      obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
+    }
+    if (message.objectCount !== 0) {
+      obj.objectCount = Math.round(message.objectCount);
+    }
+    if (message.compilerCompatibilityVersion !== "") {
+      obj.compilerCompatibilityVersion = message.compilerCompatibilityVersion;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeSnapshotRef>, I>>(base?: I): KnowledgeSnapshotRef {
+    return KnowledgeSnapshotRef.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeSnapshotRef>, I>>(object: I): KnowledgeSnapshotRef {
+    const message = createBaseKnowledgeSnapshotRef();
+    message.snapshotSha256 = object.snapshotSha256 ?? new Uint8Array(0);
+    message.tenantCatalogRevision =
+      (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
+        ? BigInt(object.tenantCatalogRevision)
+        : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
+    message.objectCount = object.objectCount ?? 0;
+    message.compilerCompatibilityVersion = object.compilerCompatibilityVersion ?? "";
+    return message;
+  },
+};
+
+function createBaseKnowledgeSnapshotAuthorizedObjectSummary(): KnowledgeSnapshotAuthorizedObjectSummary {
+  return { knowledgeObjectId: "", version: 0n, name: "" };
+}
+
+export const KnowledgeSnapshotAuthorizedObjectSummary: MessageFns<KnowledgeSnapshotAuthorizedObjectSummary> = {
+  encode(message: KnowledgeSnapshotAuthorizedObjectSummary, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.knowledgeObjectId !== "") {
+      writer.uint32(10).string(message.knowledgeObjectId);
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.version);
+    }
+    if (message.name !== "") {
+      writer.uint32(26).string(message.name);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeSnapshotAuthorizedObjectSummary {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeSnapshotAuthorizedObjectSummary();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.knowledgeObjectId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.version = reader.uint64() as bigint;
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.name = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeSnapshotAuthorizedObjectSummary {
+    return {
+      knowledgeObjectId: isSet(object.knowledgeObjectId)
+        ? globalThis.String(object.knowledgeObjectId)
+        : isSet(object.knowledge_object_id)
+        ? globalThis.String(object.knowledge_object_id)
+        : "",
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+      name: isSet(object.name) ? globalThis.String(object.name) : "",
+    };
+  },
+
+  toJSON(message: KnowledgeSnapshotAuthorizedObjectSummary): unknown {
+    const obj: any = {};
+    if (message.knowledgeObjectId !== "") {
+      obj.knowledgeObjectId = message.knowledgeObjectId;
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    if (message.name !== "") {
+      obj.name = message.name;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeSnapshotAuthorizedObjectSummary>, I>>(
+    base?: I,
+  ): KnowledgeSnapshotAuthorizedObjectSummary {
+    return KnowledgeSnapshotAuthorizedObjectSummary.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeSnapshotAuthorizedObjectSummary>, I>>(
+    object: I,
+  ): KnowledgeSnapshotAuthorizedObjectSummary {
+    const message = createBaseKnowledgeSnapshotAuthorizedObjectSummary();
+    message.knowledgeObjectId = object.knowledgeObjectId ?? "";
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    message.name = object.name ?? "";
+    return message;
+  },
+};
+
+function createBaseKnowledgeSnapshotObjectSummary(): KnowledgeSnapshotObjectSummary {
+  return { resolutionOrdinal: 0, objectType: 0, stage: 0, disclosure: undefined };
+}
+
+export const KnowledgeSnapshotObjectSummary: MessageFns<KnowledgeSnapshotObjectSummary> = {
+  encode(message: KnowledgeSnapshotObjectSummary, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.resolutionOrdinal !== 0) {
+      writer.uint32(8).uint32(message.resolutionOrdinal);
+    }
+    if (message.objectType !== 0) {
+      writer.uint32(16).int32(message.objectType);
+    }
+    if (message.stage !== 0) {
+      writer.uint32(24).int32(message.stage);
+    }
+    switch (message.disclosure?.$case) {
+      case "authorizedObject":
+        KnowledgeSnapshotAuthorizedObjectSummary.encode(message.disclosure.value, writer.uint32(34).fork()).join();
+        break;
+      case "redacted":
+        writer.uint32(40).bool(message.disclosure.value);
+        break;
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeSnapshotObjectSummary {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeSnapshotObjectSummary();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.resolutionOrdinal = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.objectType = reader.int32() as any;
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.stage = reader.int32() as any;
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.disclosure = {
+            $case: "authorizedObject",
+            value: KnowledgeSnapshotAuthorizedObjectSummary.decode(reader, reader.uint32()),
+          };
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.disclosure = { $case: "redacted", value: reader.bool() };
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeSnapshotObjectSummary {
+    return {
+      resolutionOrdinal: isSet(object.resolutionOrdinal)
+        ? globalThis.Number(object.resolutionOrdinal)
+        : isSet(object.resolution_ordinal)
+        ? globalThis.Number(object.resolution_ordinal)
+        : 0,
+      objectType: isSet(object.objectType)
+        ? knowledgeObjectTypeFromJSON(object.objectType)
+        : isSet(object.object_type)
+        ? knowledgeObjectTypeFromJSON(object.object_type)
+        : 0,
+      stage: isSet(object.stage) ? knowledgeSearchStageFromJSON(object.stage) : 0,
+      disclosure: isSet(object.authorizedObject)
+        ? {
+          $case: "authorizedObject",
+          value: KnowledgeSnapshotAuthorizedObjectSummary.fromJSON(object.authorizedObject),
+        }
+        : isSet(object.authorized_object)
+        ? {
+          $case: "authorizedObject",
+          value: KnowledgeSnapshotAuthorizedObjectSummary.fromJSON(object.authorized_object),
+        }
+        : isSet(object.redacted)
+        ? { $case: "redacted", value: globalThis.Boolean(object.redacted) }
+        : undefined,
+    };
+  },
+
+  toJSON(message: KnowledgeSnapshotObjectSummary): unknown {
+    const obj: any = {};
+    if (message.resolutionOrdinal !== 0) {
+      obj.resolutionOrdinal = Math.round(message.resolutionOrdinal);
+    }
+    if (message.objectType !== 0) {
+      obj.objectType = knowledgeObjectTypeToJSON(message.objectType);
+    }
+    if (message.stage !== 0) {
+      obj.stage = knowledgeSearchStageToJSON(message.stage);
+    }
+    if (message.disclosure?.$case === "authorizedObject") {
+      obj.authorizedObject = KnowledgeSnapshotAuthorizedObjectSummary.toJSON(message.disclosure.value);
+    } else if (message.disclosure?.$case === "redacted") {
+      obj.redacted = message.disclosure.value;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeSnapshotObjectSummary>, I>>(base?: I): KnowledgeSnapshotObjectSummary {
+    return KnowledgeSnapshotObjectSummary.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeSnapshotObjectSummary>, I>>(
+    object: I,
+  ): KnowledgeSnapshotObjectSummary {
+    const message = createBaseKnowledgeSnapshotObjectSummary();
+    message.resolutionOrdinal = object.resolutionOrdinal ?? 0;
+    message.objectType = object.objectType ?? 0;
+    message.stage = object.stage ?? 0;
+    switch (object.disclosure?.$case) {
+      case "authorizedObject": {
+        if (object.disclosure?.value !== undefined && object.disclosure?.value !== null) {
+          message.disclosure = {
+            $case: "authorizedObject",
+            value: KnowledgeSnapshotAuthorizedObjectSummary.fromPartial(object.disclosure.value),
+          };
+        }
+        break;
+      }
+      case "redacted": {
+        if (object.disclosure?.value !== undefined && object.disclosure?.value !== null) {
+          message.disclosure = { $case: "redacted", value: object.disclosure.value };
+        }
+        break;
+      }
+    }
+    return message;
+  },
+};
+
+function createBaseKnowledgeSnapshotSummary(): KnowledgeSnapshotSummary {
+  return { ref: undefined, objects: [], objectsTruncated: false };
+}
+
+export const KnowledgeSnapshotSummary: MessageFns<KnowledgeSnapshotSummary> = {
+  encode(message: KnowledgeSnapshotSummary, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ref !== undefined) {
+      KnowledgeSnapshotRef.encode(message.ref, writer.uint32(10).fork()).join();
+    }
+    for (const v of message.objects) {
+      KnowledgeSnapshotObjectSummary.encode(v!, writer.uint32(18).fork()).join();
+    }
+    if (message.objectsTruncated !== false) {
+      writer.uint32(24).bool(message.objectsTruncated);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeSnapshotSummary {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeSnapshotSummary();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.ref = KnowledgeSnapshotRef.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.objects.push(KnowledgeSnapshotObjectSummary.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.objectsTruncated = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeSnapshotSummary {
+    return {
+      ref: isSet(object.ref) ? KnowledgeSnapshotRef.fromJSON(object.ref) : undefined,
+      objects: globalThis.Array.isArray(object?.objects)
+        ? object.objects.map((e: any) => KnowledgeSnapshotObjectSummary.fromJSON(e))
+        : [],
+      objectsTruncated: isSet(object.objectsTruncated)
+        ? globalThis.Boolean(object.objectsTruncated)
+        : isSet(object.objects_truncated)
+        ? globalThis.Boolean(object.objects_truncated)
+        : false,
+    };
+  },
+
+  toJSON(message: KnowledgeSnapshotSummary): unknown {
+    const obj: any = {};
+    if (message.ref !== undefined) {
+      obj.ref = KnowledgeSnapshotRef.toJSON(message.ref);
+    }
+    if (message.objects?.length) {
+      obj.objects = message.objects.map((e) => KnowledgeSnapshotObjectSummary.toJSON(e));
+    }
+    if (message.objectsTruncated !== false) {
+      obj.objectsTruncated = message.objectsTruncated;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeSnapshotSummary>, I>>(base?: I): KnowledgeSnapshotSummary {
+    return KnowledgeSnapshotSummary.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeSnapshotSummary>, I>>(object: I): KnowledgeSnapshotSummary {
+    const message = createBaseKnowledgeSnapshotSummary();
+    message.ref = (object.ref !== undefined && object.ref !== null)
+      ? KnowledgeSnapshotRef.fromPartial(object.ref)
+      : undefined;
+    message.objects = object.objects?.map((e) => KnowledgeSnapshotObjectSummary.fromPartial(e)) || [];
+    message.objectsTruncated = object.objectsTruncated ?? false;
     return message;
   },
 };

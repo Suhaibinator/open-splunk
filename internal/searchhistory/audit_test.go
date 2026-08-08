@@ -1,6 +1,7 @@
 package searchhistory
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -63,9 +64,10 @@ func (appender *recordingSearchAttemptAuditAppender) AppendSearchAttemptInTransa
 	recorded := recordedSearchAttemptAudit{
 		tenantID: strings.Clone(tenantID),
 		event: SearchAttemptAuditEvent{
-			OccurredAt:  event.OccurredAt,
-			SearchJobID: strings.Clone(event.SearchJobID),
-			OwnerID:     strings.Clone(event.OwnerID),
+			OccurredAt:        event.OccurredAt,
+			SearchJobID:       strings.Clone(event.SearchJobID),
+			OwnerID:           strings.Clone(event.OwnerID),
+			KnowledgeSnapshot: event.KnowledgeSnapshot,
 		},
 		insideSQL: true,
 	}
@@ -107,6 +109,9 @@ func (appender *recordingSearchAttemptAuditAppender) snapshot() []recordedSearch
 	for index := range result {
 		result[index].row.EntryProto = slices.Clone(result[index].row.EntryProto)
 		result[index].row.EntrySHA256 = slices.Clone(result[index].row.EntrySHA256)
+		result[index].event.KnowledgeSnapshot = cloneKnowledgeSnapshotRef(
+			result[index].event.KnowledgeSnapshot,
+		)
 	}
 	return result
 }
@@ -120,6 +125,15 @@ func TestSearchAttemptAuditAppendsOnceAfterPendingInsertInSameTransaction(t *tes
 	scope := AccessScope{TenantID: " tenant-a ", OwnerID: " owner-a "}
 	created := time.Date(2026, time.August, 4, 12, 34, 56, 987_654_321, time.FixedZone("test", -7*60*60))
 	input := pendingHistoryEntry(" job-a ", "index=main", created)
+	input.KnowledgeSnapshot = &opensplunkv1.KnowledgeSnapshotSummary{
+		Ref: &opensplunkv1.KnowledgeSnapshotRef{
+			SnapshotSha256:               bytes.Repeat([]byte{0x42}, 32),
+			TenantCatalogRevision:        7,
+			TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, 32),
+			ObjectCount:                  0,
+			CompilerCompatibilityVersion: "0.1",
+		},
+	}
 	original := proto.Clone(input).(*opensplunkv1.SearchHistoryEntry)
 
 	admitted, err := store.BeginAttempt(ctx, scope, input)
@@ -134,8 +148,14 @@ func TestSearchAttemptAuditAppendsOnceAfterPendingInsertInSameTransaction(t *tes
 	call := calls[0]
 	if call.tenantID != "tenant-a" || call.event.SearchJobID != "job-a" ||
 		call.event.OwnerID != "owner-a" || !call.event.OccurredAt.Equal(wantOccurredAt) ||
+		!proto.Equal(call.event.KnowledgeSnapshot, original.GetKnowledgeSnapshot().GetRef()) ||
 		!call.insideSQL || !call.rowFound {
 		t.Fatalf("audit call = %#v", call)
+	}
+	input.KnowledgeSnapshot.Ref.SnapshotSha256[0] ^= 0xff
+	input.KnowledgeSnapshot.Ref.TenantCatalogStateToken[0] ^= 0xff
+	if detached := appender.snapshot()[0].event.KnowledgeSnapshot; !proto.Equal(detached, original.GetKnowledgeSnapshot().GetRef()) {
+		t.Fatal("audit appender received caller-owned knowledge snapshot storage")
 	}
 	if call.row.TenantID != "tenant-a" || call.row.OwnerID != "owner-a" ||
 		call.row.SearchJobID != "job-a" || call.row.CreatedAtUnixMicro != wantOccurredAt.UnixMicro() {

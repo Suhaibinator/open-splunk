@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
@@ -153,7 +154,8 @@ func (store *Store) AppendSearchAttemptInTransaction(
 	tenantID string,
 	definition searchhistory.SearchAttemptAuditEvent,
 ) error {
-	if err := validateAppendInputs(ctx, store, tenantID, definition); err != nil {
+	knowledgeSnapshot, err := validateAppendInputs(ctx, store, tenantID, definition)
+	if err != nil {
 		return err
 	}
 	if tx == nil || tx.Statement == nil || tx.Config == nil {
@@ -206,6 +208,7 @@ func (store *Store) AppendSearchAttemptInTransaction(
 		OwnerID:             definition.OwnerID,
 		SearchJobID:         definition.SearchJobID,
 	}
+	setRecordKnowledgeSnapshot(&record, knowledgeSnapshot)
 	if err := database.Create(&record).Error; err != nil {
 		return mapStoreError(ctx, "append search-attempt audit event", err)
 	}
@@ -240,25 +243,25 @@ func validateAppendInputs(
 	store *Store,
 	tenantID string,
 	definition searchhistory.SearchAttemptAuditEvent,
-) error {
+) (*opensplunkv1.KnowledgeSnapshotRef, error) {
 	if ctx == nil {
-		return fmt.Errorf("%w: search-attempt audit context is nil", control.ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: search-attempt audit context is nil", control.ErrInvalidArgument)
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	if store == nil || store.orm == nil || store.sql == nil {
-		return fmt.Errorf("%w: search-attempt audit store is unavailable", control.ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: search-attempt audit store is unavailable", control.ErrInvalidArgument)
 	}
 	if !validIdentity(tenantID, maximumTenantIDBytes) {
-		return fmt.Errorf("%w: search-attempt audit tenant ID is invalid", control.ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: search-attempt audit tenant ID is invalid", control.ErrInvalidArgument)
 	}
 	if _, ok := audit.CanonicalOccurrenceTime(definition.OccurredAt); !ok ||
 		!validIdentity(definition.OwnerID, maximumOwnerIDBytes) ||
 		!validIdentity(definition.SearchJobID, maximumSearchJobIDBytes) {
-		return fmt.Errorf("%w: search-attempt audit event is invalid", control.ErrInvalidArgument)
+		return nil, fmt.Errorf("%w: search-attempt audit event is invalid", control.ErrInvalidArgument)
 	}
-	return nil
+	return normalizeKnowledgeSnapshotRef(definition.KnowledgeSnapshot)
 }
 
 func (store *Store) ensureTenantState(
@@ -437,13 +440,18 @@ func eventFromRecord(record searchAttemptEventRecord) (Event, error) {
 	if !actor.Valid() {
 		return Event{}, fmt.Errorf("%w: search-attempt audit actor is invalid", ErrCorrupt)
 	}
+	knowledgeSnapshot, err := knowledgeSnapshotFromRecord(record)
+	if err != nil {
+		return Event{}, err
+	}
 	event := Event{
-		Sequence:    uint64(record.Sequence),
-		TenantID:    record.TenantID,
-		OccurredAt:  occurredAt,
-		Actor:       actor,
-		OwnerID:     record.OwnerID,
-		SearchJobID: record.SearchJobID,
+		Sequence:          uint64(record.Sequence),
+		TenantID:          record.TenantID,
+		OccurredAt:        occurredAt,
+		Actor:             actor,
+		OwnerID:           record.OwnerID,
+		SearchJobID:       record.SearchJobID,
+		KnowledgeSnapshot: knowledgeSnapshot,
 	}.detached()
 	if err := event.ValidateForTenant(record.TenantID); err != nil {
 		return Event{}, fmt.Errorf("%w: persisted search-attempt audit event is invalid", ErrCorrupt)

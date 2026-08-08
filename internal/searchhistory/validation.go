@@ -50,7 +50,12 @@ func normalizeEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.Searc
 	if input == nil {
 		return nil, indexedEntry{}, invalid("search-history entry is required")
 	}
+	knowledgeSnapshot, err := cloneKnowledgeSnapshotSummary(input.GetKnowledgeSnapshot())
+	if err != nil {
+		return nil, indexedEntry{}, err
+	}
 	entry := proto.Clone(input).(*opensplunkv1.SearchHistoryEntry)
+	entry.KnowledgeSnapshot = knowledgeSnapshot
 	if err := rejectUnknownFields(entry.ProtoReflect()); err != nil {
 		return nil, indexedEntry{}, invalid(err.Error())
 	}

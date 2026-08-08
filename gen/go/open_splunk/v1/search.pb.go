@@ -963,8 +963,11 @@ type SearchJob struct {
 	// True means the retained page snapshot stopped at the server row boundary.
 	// The full SPL result may still be exported through bounded re-execution.
 	ResultsTruncated bool `protobuf:"varint,22,opt,name=results_truncated,json=resultsTruncated,proto3" json:"results_truncated,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Definition-free identity for the immutable knowledge authority admitted
+	// with this job. It is absent for legacy or feature-disabled attempts.
+	KnowledgeSnapshot *KnowledgeSnapshotSummary `protobuf:"bytes,23,opt,name=knowledge_snapshot,json=knowledgeSnapshot,proto3,oneof" json:"knowledge_snapshot,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SearchJob) Reset() {
@@ -1151,11 +1154,18 @@ func (x *SearchJob) GetResultsTruncated() bool {
 	return false
 }
 
+func (x *SearchJob) GetKnowledgeSnapshot() *KnowledgeSnapshotSummary {
+	if x != nil {
+		return x.KnowledgeSnapshot
+	}
+	return nil
+}
+
 var File_open_splunk_v1_search_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_search_proto_rawDesc = "" +
 	"\n" +
-	"\x1bopen_splunk/v1/search.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/v1/common.proto\x1a\x1bopen_splunk/v1/result.proto\"\x86\x03\n" +
+	"\x1bopen_splunk/v1/search.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/v1/common.proto\x1a\x1eopen_splunk/v1/knowledge.proto\x1a\x1bopen_splunk/v1/result.proto\"\x86\x03\n" +
 	"\x10SearchDefinition\x12\x10\n" +
 	"\x03spl\x18\x01 \x01(\tR\x03spl\x12<\n" +
 	"\n" +
@@ -1218,8 +1228,7 @@ const file_open_splunk_v1_search_proto_rawDesc = "" +
 	"\x16enable_field_discovery\x18\x02 \x01(\bR\x14enableFieldDiscovery\x12'\n" +
 	"\x0fenable_timeline\x18\x03 \x01(\bR\x0eenableTimeline\x123\n" +
 	"\x11preview_row_limit\x18\x04 \x01(\rB\x02\x18\x01H\x00R\x0fpreviewRowLimit\x88\x01\x01B\x14\n" +
-	"\x12_preview_row_limit\"\xd1\n" +
-	"\n" +
+	"\x12_preview_row_limit\"\xc6\v\n" +
 	"\tSearchJob\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12#\n" +
 	"\rstate_version\x18\x02 \x01(\x04R\fstateVersion\x12@\n" +
@@ -1250,13 +1259,15 @@ const file_open_splunk_v1_search_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x14 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12:\n" +
 	"\x04plan\x18\x15 \x01(\v2!.open_splunk.v1.SearchPlanSummaryH\x04R\x04plan\x88\x01\x01\x12+\n" +
-	"\x11results_truncated\x18\x16 \x01(\bR\x10resultsTruncatedB\x11\n" +
+	"\x11results_truncated\x18\x16 \x01(\bR\x10resultsTruncated\x12\\\n" +
+	"\x12knowledge_snapshot\x18\x17 \x01(\v2(.open_splunk.v1.KnowledgeSnapshotSummaryH\x05R\x11knowledgeSnapshot\x88\x01\x01B\x11\n" +
 	"\x0f_normalized_splB\x16\n" +
 	"\x14_resolved_time_rangeB\x10\n" +
 	"\x0e_result_schemaB\n" +
 	"\n" +
 	"\b_failureB\a\n" +
-	"\x05_plan*\x99\x01\n" +
+	"\x05_planB\x15\n" +
+	"\x13_knowledge_snapshot*\x99\x01\n" +
 	"\x0fSearchResultTab\x12!\n" +
 	"\x1dSEARCH_RESULT_TAB_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18SEARCH_RESULT_TAB_EVENTS\x10\x01\x12 \n" +
@@ -1319,29 +1330,30 @@ func file_open_splunk_v1_search_proto_rawDescGZIP() []byte {
 var file_open_splunk_v1_search_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
 var file_open_splunk_v1_search_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_open_splunk_v1_search_proto_goTypes = []any{
-	(SearchResultTab)(0),          // 0: open_splunk.v1.SearchResultTab
-	(SearchJobOrigin)(0),          // 1: open_splunk.v1.SearchJobOrigin
-	(SearchJobState)(0),           // 2: open_splunk.v1.SearchJobState
-	(SearchExecutionPhase)(0),     // 3: open_splunk.v1.SearchExecutionPhase
-	(SearchFailureCode)(0),        // 4: open_splunk.v1.SearchFailureCode
-	(*SearchDefinition)(nil),      // 5: open_splunk.v1.SearchDefinition
-	(*SearchJobSource)(nil),       // 6: open_splunk.v1.SearchJobSource
-	(*SearchProgress)(nil),        // 7: open_splunk.v1.SearchProgress
-	(*SearchFailure)(nil),         // 8: open_splunk.v1.SearchFailure
-	(*SearchPlanStage)(nil),       // 9: open_splunk.v1.SearchPlanStage
-	(*SearchPlanSummary)(nil),     // 10: open_splunk.v1.SearchPlanSummary
-	(*SearchJobOptions)(nil),      // 11: open_splunk.v1.SearchJobOptions
-	(*SearchJob)(nil),             // 12: open_splunk.v1.SearchJob
-	(*TimeRangeSpec)(nil),         // 13: open_splunk.v1.TimeRangeSpec
-	(*VisualizationSpec)(nil),     // 14: open_splunk.v1.VisualizationSpec
-	(*durationpb.Duration)(nil),   // 15: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
-	(*Diagnostic)(nil),            // 17: open_splunk.v1.Diagnostic
-	(*SourceRange)(nil),           // 18: open_splunk.v1.SourceRange
-	(*ResolvedTimeRange)(nil),     // 19: open_splunk.v1.ResolvedTimeRange
-	(ResultSetKind)(0),            // 20: open_splunk.v1.ResultSetKind
-	(*ResultSchema)(nil),          // 21: open_splunk.v1.ResultSchema
-	(*ApiWarning)(nil),            // 22: open_splunk.v1.ApiWarning
+	(SearchResultTab)(0),             // 0: open_splunk.v1.SearchResultTab
+	(SearchJobOrigin)(0),             // 1: open_splunk.v1.SearchJobOrigin
+	(SearchJobState)(0),              // 2: open_splunk.v1.SearchJobState
+	(SearchExecutionPhase)(0),        // 3: open_splunk.v1.SearchExecutionPhase
+	(SearchFailureCode)(0),           // 4: open_splunk.v1.SearchFailureCode
+	(*SearchDefinition)(nil),         // 5: open_splunk.v1.SearchDefinition
+	(*SearchJobSource)(nil),          // 6: open_splunk.v1.SearchJobSource
+	(*SearchProgress)(nil),           // 7: open_splunk.v1.SearchProgress
+	(*SearchFailure)(nil),            // 8: open_splunk.v1.SearchFailure
+	(*SearchPlanStage)(nil),          // 9: open_splunk.v1.SearchPlanStage
+	(*SearchPlanSummary)(nil),        // 10: open_splunk.v1.SearchPlanSummary
+	(*SearchJobOptions)(nil),         // 11: open_splunk.v1.SearchJobOptions
+	(*SearchJob)(nil),                // 12: open_splunk.v1.SearchJob
+	(*TimeRangeSpec)(nil),            // 13: open_splunk.v1.TimeRangeSpec
+	(*VisualizationSpec)(nil),        // 14: open_splunk.v1.VisualizationSpec
+	(*durationpb.Duration)(nil),      // 15: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),    // 16: google.protobuf.Timestamp
+	(*Diagnostic)(nil),               // 17: open_splunk.v1.Diagnostic
+	(*SourceRange)(nil),              // 18: open_splunk.v1.SourceRange
+	(*ResolvedTimeRange)(nil),        // 19: open_splunk.v1.ResolvedTimeRange
+	(ResultSetKind)(0),               // 20: open_splunk.v1.ResultSetKind
+	(*ResultSchema)(nil),             // 21: open_splunk.v1.ResultSchema
+	(*ApiWarning)(nil),               // 22: open_splunk.v1.ApiWarning
+	(*KnowledgeSnapshotSummary)(nil), // 23: open_splunk.v1.KnowledgeSnapshotSummary
 }
 var file_open_splunk_v1_search_proto_depIdxs = []int32{
 	13, // 0: open_splunk.v1.SearchDefinition.time_range:type_name -> open_splunk.v1.TimeRangeSpec
@@ -1372,11 +1384,12 @@ var file_open_splunk_v1_search_proto_depIdxs = []int32{
 	16, // 25: open_splunk.v1.SearchJob.finished_at:type_name -> google.protobuf.Timestamp
 	16, // 26: open_splunk.v1.SearchJob.expires_at:type_name -> google.protobuf.Timestamp
 	10, // 27: open_splunk.v1.SearchJob.plan:type_name -> open_splunk.v1.SearchPlanSummary
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	23, // 28: open_splunk.v1.SearchJob.knowledge_snapshot:type_name -> open_splunk.v1.KnowledgeSnapshotSummary
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_search_proto_init() }
@@ -1385,6 +1398,7 @@ func file_open_splunk_v1_search_proto_init() {
 		return
 	}
 	file_open_splunk_v1_common_proto_init()
+	file_open_splunk_v1_knowledge_proto_init()
 	file_open_splunk_v1_result_proto_init()
 	file_open_splunk_v1_search_proto_msgTypes[0].OneofWrappers = []any{}
 	file_open_splunk_v1_search_proto_msgTypes[1].OneofWrappers = []any{}

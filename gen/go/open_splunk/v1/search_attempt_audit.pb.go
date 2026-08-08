@@ -26,16 +26,19 @@ const (
 // admitted search attempt. It deliberately carries no query, execution, or
 // result content.
 type SearchAttemptAuditEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	OccurredAt    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
-	ActorKind     AuditActorKind         `protobuf:"varint,3,opt,name=actor_kind,json=actorKind,proto3,enum=open_splunk.v1.AuditActorKind" json:"actor_kind,omitempty"`
-	ActorId       string                 `protobuf:"bytes,4,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	ActorRole     AuditActorRole         `protobuf:"varint,5,opt,name=actor_role,json=actorRole,proto3,enum=open_splunk.v1.AuditActorRole" json:"actor_role,omitempty"`
-	OwnerId       string                 `protobuf:"bytes,6,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
-	SearchJobId   string                 `protobuf:"bytes,7,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Sequence    uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	OccurredAt  *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	ActorKind   AuditActorKind         `protobuf:"varint,3,opt,name=actor_kind,json=actorKind,proto3,enum=open_splunk.v1.AuditActorKind" json:"actor_kind,omitempty"`
+	ActorId     string                 `protobuf:"bytes,4,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	ActorRole   AuditActorRole         `protobuf:"varint,5,opt,name=actor_role,json=actorRole,proto3,enum=open_splunk.v1.AuditActorRole" json:"actor_role,omitempty"`
+	OwnerId     string                 `protobuf:"bytes,6,opt,name=owner_id,json=ownerId,proto3" json:"owner_id,omitempty"`
+	SearchJobId string                 `protobuf:"bytes,7,opt,name=search_job_id,json=searchJobId,proto3" json:"search_job_id,omitempty"`
+	// Audit retains only the compact snapshot identity and exact object count;
+	// definition and object inventory remain outside this journal.
+	KnowledgeSnapshot *KnowledgeSnapshotRef `protobuf:"bytes,8,opt,name=knowledge_snapshot,json=knowledgeSnapshot,proto3,oneof" json:"knowledge_snapshot,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SearchAttemptAuditEvent) Reset() {
@@ -117,11 +120,18 @@ func (x *SearchAttemptAuditEvent) GetSearchJobId() string {
 	return ""
 }
 
+func (x *SearchAttemptAuditEvent) GetKnowledgeSnapshot() *KnowledgeSnapshotRef {
+	if x != nil {
+		return x.KnowledgeSnapshot
+	}
+	return nil
+}
+
 var File_open_splunk_v1_search_attempt_audit_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_search_attempt_audit_proto_rawDesc = "" +
 	"\n" +
-	")open_splunk/v1/search_attempt_audit.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1aopen_splunk/v1/audit.proto\"\xca\x02\n" +
+	")open_splunk/v1/search_attempt_audit.proto\x12\x0eopen_splunk.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1aopen_splunk/v1/audit.proto\x1a\x1eopen_splunk/v1/knowledge.proto\"\xbb\x03\n" +
 	"\x17SearchAttemptAuditEvent\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12;\n" +
 	"\voccurred_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
@@ -132,7 +142,9 @@ const file_open_splunk_v1_search_attempt_audit_proto_rawDesc = "" +
 	"\n" +
 	"actor_role\x18\x05 \x01(\x0e2\x1e.open_splunk.v1.AuditActorRoleR\tactorRole\x12\x19\n" +
 	"\bowner_id\x18\x06 \x01(\tR\aownerId\x12\"\n" +
-	"\rsearch_job_id\x18\a \x01(\tR\vsearchJobIdBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"\rsearch_job_id\x18\a \x01(\tR\vsearchJobId\x12X\n" +
+	"\x12knowledge_snapshot\x18\b \x01(\v2$.open_splunk.v1.KnowledgeSnapshotRefH\x00R\x11knowledgeSnapshot\x88\x01\x01B\x15\n" +
+	"\x13_knowledge_snapshotBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_search_attempt_audit_proto_rawDescOnce sync.Once
@@ -152,16 +164,18 @@ var file_open_splunk_v1_search_attempt_audit_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil),   // 1: google.protobuf.Timestamp
 	(AuditActorKind)(0),             // 2: open_splunk.v1.AuditActorKind
 	(AuditActorRole)(0),             // 3: open_splunk.v1.AuditActorRole
+	(*KnowledgeSnapshotRef)(nil),    // 4: open_splunk.v1.KnowledgeSnapshotRef
 }
 var file_open_splunk_v1_search_attempt_audit_proto_depIdxs = []int32{
 	1, // 0: open_splunk.v1.SearchAttemptAuditEvent.occurred_at:type_name -> google.protobuf.Timestamp
 	2, // 1: open_splunk.v1.SearchAttemptAuditEvent.actor_kind:type_name -> open_splunk.v1.AuditActorKind
 	3, // 2: open_splunk.v1.SearchAttemptAuditEvent.actor_role:type_name -> open_splunk.v1.AuditActorRole
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 3: open_splunk.v1.SearchAttemptAuditEvent.knowledge_snapshot:type_name -> open_splunk.v1.KnowledgeSnapshotRef
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_search_attempt_audit_proto_init() }
@@ -170,6 +184,8 @@ func file_open_splunk_v1_search_attempt_audit_proto_init() {
 		return
 	}
 	file_open_splunk_v1_audit_proto_init()
+	file_open_splunk_v1_knowledge_proto_init()
+	file_open_splunk_v1_search_attempt_audit_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

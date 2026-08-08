@@ -62,6 +62,10 @@ func (journal *JobJournal) Finalize(ctx context.Context, job searchjobs.Job) err
 }
 
 func (journal *JobJournal) entry(job searchjobs.Job, terminal bool) (*opensplunkv1.SearchHistoryEntry, error) {
+	knowledgeSnapshot, err := cloneKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
+	if err != nil {
+		return nil, err
+	}
 	state, err := historyState(job.State)
 	if err != nil {
 		return nil, err
@@ -99,9 +103,10 @@ func (journal *JobJournal) entry(job searchjobs.Job, terminal bool) (*opensplunk
 			Latest:   timestamppb.New(job.Latest),
 			Timezone: timezone,
 		},
-		FinalState:      state,
-		CompilerVersion: journal.compilerVersion,
-		CreatedAt:       timestamppb.New(job.CreatedAt),
+		FinalState:        state,
+		CompilerVersion:   journal.compilerVersion,
+		CreatedAt:         timestamppb.New(job.CreatedAt),
+		KnowledgeSnapshot: knowledgeSnapshot,
 	}
 	if !terminal {
 		return entry, nil

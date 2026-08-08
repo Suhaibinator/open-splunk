@@ -60,9 +60,10 @@ type AccessScope struct {
 // search attempt is durably admitted. OccurredAt is the same canonical
 // microsecond timestamp persisted with the pending history row.
 type SearchAttemptAuditEvent struct {
-	OccurredAt  time.Time
-	SearchJobID string
-	OwnerID     string
+	OccurredAt        time.Time
+	SearchJobID       string
+	OwnerID           string
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotRef
 }
 
 // SearchAttemptAuditAppender publishes one admitted-search event through the

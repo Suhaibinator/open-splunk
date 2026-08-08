@@ -12,8 +12,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 )
 
 const (
@@ -25,18 +27,20 @@ const (
 	// MaximumListPageSize bounds one list result before serialization.
 	MaximumListPageSize = 200
 
-	defaultListPageSize      = 50
-	maximumTenantIDBytes     = 255
-	maximumOwnerIDBytes      = 255
-	maximumSearchJobIDBytes  = 256
-	minimumCursorKeyBytes    = 32
-	maximumCursorKeyBytes    = 4 << 10
-	maximumListCursorBytes   = 2 << 10
-	maximumIntegrityBatch    = 512
-	maximumPersistedSequence = int64(math.MaxInt64 - 1)
-	defaultSystemActorID     = "open-splunk-server"
-	searchAuditCursorVersion = 1
-	searchAuditCursorPurpose = "search-attempt-audit-list-cursor"
+	defaultListPageSize                      = 50
+	maximumTenantIDBytes                     = 255
+	maximumOwnerIDBytes                      = 255
+	maximumSearchJobIDBytes                  = 256
+	maximumKnowledgeObjects                  = knowledgesnapshot.MaximumExecutableObjects
+	maximumCompilerCompatibilityVersionBytes = knowledgesnapshot.MaximumCompilerCompatibilityVersionBytes
+	minimumCursorKeyBytes                    = 32
+	maximumCursorKeyBytes                    = 4 << 10
+	maximumListCursorBytes                   = 2 << 10
+	maximumIntegrityBatch                    = 512
+	maximumPersistedSequence                 = int64(math.MaxInt64 - 1)
+	defaultSystemActorID                     = "open-splunk-server"
+	searchAuditCursorVersion                 = 1
+	searchAuditCursorPurpose                 = "search-attempt-audit-list-cursor"
 )
 
 var (
@@ -58,12 +62,13 @@ type Options struct {
 
 // Event is one immutable, payload-free search-attempt audit projection.
 type Event struct {
-	Sequence    uint64
-	TenantID    string
-	OccurredAt  time.Time
-	Actor       audit.Actor
-	OwnerID     string
-	SearchJobID string
+	Sequence          uint64
+	TenantID          string
+	OccurredAt        time.Time
+	Actor             audit.Actor
+	OwnerID           string
+	SearchJobID       string
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotRef
 }
 
 // ValidateForTenant verifies the complete public event contract for tenantID.
@@ -85,6 +90,9 @@ func (event Event) ValidateForTenant(tenantID string) error {
 	if !ok || !occurredAt.Equal(event.OccurredAt) {
 		return fmt.Errorf("%w: search-attempt audit event timestamp is invalid", control.ErrInvalidArgument)
 	}
+	if err := validateKnowledgeSnapshotRef(event.KnowledgeSnapshot); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -97,7 +105,38 @@ func (event Event) detached() Event {
 	}
 	event.OwnerID = strings.Clone(event.OwnerID)
 	event.SearchJobID = strings.Clone(event.SearchJobID)
+	event.KnowledgeSnapshot, _ = normalizeKnowledgeSnapshotRef(event.KnowledgeSnapshot)
 	return event
+}
+
+func normalizeKnowledgeSnapshotRef(
+	input *opensplunkv1.KnowledgeSnapshotRef,
+) (*opensplunkv1.KnowledgeSnapshotRef, error) {
+	if input == nil {
+		return nil, nil
+	}
+	detached, err := knowledgesnapshot.CloneReference(input)
+	if err != nil {
+		return nil, invalidKnowledgeSnapshotReference()
+	}
+	return detached, nil
+}
+
+func validateKnowledgeSnapshotRef(input *opensplunkv1.KnowledgeSnapshotRef) error {
+	if input == nil {
+		return nil
+	}
+	if err := knowledgesnapshot.ValidateReference(input); err != nil {
+		return invalidKnowledgeSnapshotReference()
+	}
+	return nil
+}
+
+func invalidKnowledgeSnapshotReference() error {
+	return fmt.Errorf(
+		"%w: search-attempt audit knowledge snapshot reference is invalid",
+		control.ErrInvalidArgument,
+	)
 }
 
 // ListRequest selects one descending sequence-keyset page. Nil actor and owner

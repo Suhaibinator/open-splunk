@@ -7,6 +7,7 @@
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { SourceRange } from "./common";
+import { KnowledgeSnapshotSummary } from "./knowledge";
 
 export enum SearchInspectionOutputKind {
   SEARCH_INSPECTION_OUTPUT_KIND_UNSPECIFIED = 0,
@@ -127,6 +128,7 @@ export interface InspectSearchJobResponse {
   generatedSql: string;
   explainText: string;
   diagnosticQueryId: string;
+  knowledgeSnapshot?: KnowledgeSnapshotSummary | undefined;
 }
 
 function createBaseInspectSearchJobRequest(): InspectSearchJobRequest {
@@ -901,6 +903,7 @@ function createBaseInspectSearchJobResponse(): InspectSearchJobResponse {
     generatedSql: "",
     explainText: "",
     diagnosticQueryId: "",
+    knowledgeSnapshot: undefined,
   };
 }
 
@@ -923,6 +926,9 @@ export const InspectSearchJobResponse: MessageFns<InspectSearchJobResponse> = {
     }
     if (message.diagnosticQueryId !== "") {
       writer.uint32(50).string(message.diagnosticQueryId);
+    }
+    if (message.knowledgeSnapshot !== undefined) {
+      KnowledgeSnapshotSummary.encode(message.knowledgeSnapshot, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -982,6 +988,14 @@ export const InspectSearchJobResponse: MessageFns<InspectSearchJobResponse> = {
           message.diagnosticQueryId = reader.string();
           continue;
         }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.knowledgeSnapshot = KnowledgeSnapshotSummary.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1023,6 +1037,11 @@ export const InspectSearchJobResponse: MessageFns<InspectSearchJobResponse> = {
         : isSet(object.diagnostic_query_id)
         ? globalThis.String(object.diagnostic_query_id)
         : "",
+      knowledgeSnapshot: isSet(object.knowledgeSnapshot)
+        ? KnowledgeSnapshotSummary.fromJSON(object.knowledgeSnapshot)
+        : isSet(object.knowledge_snapshot)
+        ? KnowledgeSnapshotSummary.fromJSON(object.knowledge_snapshot)
+        : undefined,
     };
   },
 
@@ -1046,6 +1065,9 @@ export const InspectSearchJobResponse: MessageFns<InspectSearchJobResponse> = {
     if (message.diagnosticQueryId !== "") {
       obj.diagnosticQueryId = message.diagnosticQueryId;
     }
+    if (message.knowledgeSnapshot !== undefined) {
+      obj.knowledgeSnapshot = KnowledgeSnapshotSummary.toJSON(message.knowledgeSnapshot);
+    }
     return obj;
   },
 
@@ -1064,6 +1086,9 @@ export const InspectSearchJobResponse: MessageFns<InspectSearchJobResponse> = {
     message.generatedSql = object.generatedSql ?? "";
     message.explainText = object.explainText ?? "";
     message.diagnosticQueryId = object.diagnosticQueryId ?? "";
+    message.knowledgeSnapshot = (object.knowledgeSnapshot !== undefined && object.knowledgeSnapshot !== null)
+      ? KnowledgeSnapshotSummary.fromPartial(object.knowledgeSnapshot)
+      : undefined;
     return message;
   },
 };

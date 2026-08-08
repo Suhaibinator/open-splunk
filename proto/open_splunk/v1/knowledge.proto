@@ -374,3 +374,47 @@ message KnowledgeSnapshot {
   KnowledgeSnapshotBudgetCharges budget_charges = 15;
   bytes tenant_catalog_state_token = 16;
 }
+
+// KnowledgeSnapshotRef is the bounded, definition-free identity retained by
+// generic search lifecycle records. Absence means knowledge resolution was
+// disabled for the attempt; a present reference with object_count zero is an
+// enabled, canonically empty knowledge snapshot.
+message KnowledgeSnapshotRef {
+  bytes snapshot_sha256 = 1;
+  uint64 tenant_catalog_revision = 2;
+  bytes tenant_catalog_state_token = 3;
+  uint32 object_count = 4;
+  string compiler_compatibility_version = 5;
+}
+
+// KnowledgeSnapshotAuthorizedObjectSummary is current-policy-authorized
+// diagnostic identity only. It never carries a definition body, selector,
+// dependency, digest, or compiler output.
+message KnowledgeSnapshotAuthorizedObjectSummary {
+  string knowledge_object_id = 1;
+  uint64 version = 2;
+  string name = 3;
+}
+
+// KnowledgeSnapshotObjectSummary preserves canonical position and execution
+// type while allowing response projections to remove stale object identity.
+message KnowledgeSnapshotObjectSummary {
+  uint32 resolution_ordinal = 1;
+  KnowledgeObjectType object_type = 2;
+  KnowledgeSearchStage stage = 3;
+
+  oneof disclosure {
+    KnowledgeSnapshotAuthorizedObjectSummary authorized_object = 4;
+    // Must be true. Identity, name, and version are structurally absent.
+    bool redacted = 5;
+  }
+}
+
+// KnowledgeSnapshotSummary carries at most the canonical first 64 object
+// summaries. object_count in ref is always the exact total; objects_truncated
+// is true exactly when the retained prefix is shorter than that total.
+message KnowledgeSnapshotSummary {
+  KnowledgeSnapshotRef ref = 1;
+  repeated KnowledgeSnapshotObjectSummary objects = 2;
+  bool objects_truncated = 3;
+}

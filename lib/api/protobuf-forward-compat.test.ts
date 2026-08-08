@@ -11,8 +11,12 @@ import { AppSelector } from "@/gen/ts/open_splunk/v1/app";
 import { GetAppRequest } from "@/gen/ts/open_splunk/v1/app_api";
 import {
   FieldExtractionDefinition,
-  KnowledgeSnapshot,
+  KnowledgeObjectType,
   KnowledgeOverwriteBehavior,
+  KnowledgeSearchStage,
+  KnowledgeSnapshot,
+  KnowledgeSnapshotRef,
+  KnowledgeSnapshotSummary,
 } from "@/gen/ts/open_splunk/v1/knowledge";
 import {
   CreateKnowledgeObjectResponse,
@@ -21,6 +25,7 @@ import {
   SetKnowledgeObjectStateResponse,
   UpdateKnowledgeObjectResponse,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
+import { SearchJob } from "@/gen/ts/open_splunk/v1/search";
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/v1/system_api";
 import { openSplunkRoutes } from "@/lib/api/routes";
 
@@ -84,6 +89,45 @@ interface KnowledgeSnapshotWireFixture {
   final: SnapshotFinalWireRecord;
 }
 
+type KnowledgeSnapshotSummaryWireRecord = SnapshotFinalWireRecord;
+
+interface KnowledgeSnapshotReferenceContract {
+  snapshotSha256: string;
+  tenantCatalogRevision: string;
+  tenantCatalogStateToken: string;
+  objectCount: number;
+  compilerCompatibilityVersion: string;
+}
+
+interface KnowledgeSnapshotAuthorizedObjectContract {
+  knowledgeObjectId: string;
+  version: string;
+  name: string;
+}
+
+interface KnowledgeSnapshotObjectSummaryContract {
+  resolutionOrdinal: number;
+  objectType: number;
+  stage: number;
+  authorizedObject?: KnowledgeSnapshotAuthorizedObjectContract;
+  redacted?: boolean;
+}
+
+interface KnowledgeSnapshotSummaryWireCase {
+  name: "absent" | "enabled-empty" | "authorized-and-redacted";
+  ref: KnowledgeSnapshotReferenceContract | null;
+  objects?: KnowledgeSnapshotObjectSummaryContract[];
+  objectsTruncated?: boolean;
+  refWire: KnowledgeSnapshotSummaryWireRecord | null;
+  summaryWire: KnowledgeSnapshotSummaryWireRecord | null;
+  searchJobWire: KnowledgeSnapshotSummaryWireRecord;
+}
+
+interface KnowledgeSnapshotSummaryWireFixture {
+  version: number;
+  cases: KnowledgeSnapshotSummaryWireCase[];
+}
+
 const routeFixture = JSON.parse(
   readFileSync(
     path.join(process.cwd(), "testdata", "protobuf-http-route-contracts.json"),
@@ -102,6 +146,12 @@ const knowledgeSnapshotWireFixture = JSON.parse(
     "utf8",
   ),
 ) as KnowledgeSnapshotWireFixture;
+const knowledgeSnapshotSummaryWireFixture = JSON.parse(
+  readFileSync(
+    path.join(process.cwd(), "testdata", "knowledge-snapshot-summary-wire.json"),
+    "utf8",
+  ),
+) as KnowledgeSnapshotSummaryWireFixture;
 const futureFieldTag = (routeFixture.futureFieldNumber << 3) | 2;
 
 function assertWireHash(name: string, wire: Uint8Array, contract: SnapshotWireRecord): void {
@@ -111,6 +161,68 @@ function assertWireHash(name: string, wire: Uint8Array, contract: SnapshotWireRe
     contract.sha256,
     `${name} SHA-256 changed`,
   );
+}
+
+function assertKnowledgeSnapshotSummaryWire(
+  name: string,
+  wire: Uint8Array,
+  contract: KnowledgeSnapshotSummaryWireRecord,
+): void {
+  assertWireHash(name, wire, contract);
+  assert.deepEqual(
+    wire,
+    Uint8Array.from(Buffer.from(contract.wireBase64, "base64")),
+    `${name} exact wire changed`,
+  );
+}
+
+function knowledgeSnapshotSummaryFromContract(
+  contract: KnowledgeSnapshotSummaryWireCase,
+): ReturnType<typeof KnowledgeSnapshotSummary.fromPartial> | undefined {
+  if (contract.ref === null) {
+    return undefined;
+  }
+
+  const objects = (contract.objects ?? []).map((object, index) => {
+    assert.notEqual(
+      object.authorizedObject === undefined,
+      object.redacted === undefined,
+      `${contract.name} object ${index} must contain exactly one disclosure variant`,
+    );
+    const disclosure = object.authorizedObject !== undefined
+      ? {
+        $case: "authorizedObject" as const,
+        value: {
+          knowledgeObjectId: object.authorizedObject.knowledgeObjectId,
+          version: BigInt(object.authorizedObject.version),
+          name: object.authorizedObject.name,
+        },
+      }
+      : {
+        $case: "redacted" as const,
+        value: object.redacted!,
+      };
+    return {
+      resolutionOrdinal: object.resolutionOrdinal,
+      objectType: object.objectType as KnowledgeObjectType,
+      stage: object.stage as KnowledgeSearchStage,
+      disclosure,
+    };
+  });
+
+  return KnowledgeSnapshotSummary.fromPartial({
+    ref: KnowledgeSnapshotRef.fromPartial({
+      snapshotSha256: Uint8Array.from(Buffer.from(contract.ref.snapshotSha256, "hex")),
+      tenantCatalogRevision: BigInt(contract.ref.tenantCatalogRevision),
+      tenantCatalogStateToken: Uint8Array.from(
+        Buffer.from(contract.ref.tenantCatalogStateToken, "hex"),
+      ),
+      objectCount: contract.ref.objectCount,
+      compilerCompatibilityVersion: contract.ref.compilerCompatibilityVersion,
+    }),
+    objects,
+    objectsTruncated: contract.objectsTruncated ?? false,
+  });
 }
 
 function registeredRoutePaths(value: unknown): string[] {
@@ -317,6 +429,105 @@ test("generated knowledge snapshots match the shared Go deterministic wire and d
     reproducedFinal,
     expectedFinal,
     "TypeScript B0/B1 framing did not reproduce Go deterministic final wire",
+  );
+});
+
+test("generated knowledge snapshot references and summaries match the shared Go wire golden", () => {
+  const fixture = knowledgeSnapshotSummaryWireFixture;
+  assert.equal(fixture.version, 1);
+  assert.equal(fixture.cases.length, 3);
+  assert.deepEqual(
+    fixture.cases.map((contract) => contract.name),
+    ["absent", "enabled-empty", "authorized-and-redacted"],
+  );
+
+  const maximumSafeInteger = BigInt(Number.MAX_SAFE_INTEGER);
+  let absentWire: Uint8Array | undefined;
+  let enabledEmptyWire: Uint8Array | undefined;
+  for (const contract of fixture.cases) {
+    const summary = knowledgeSnapshotSummaryFromContract(contract);
+    if (summary === undefined) {
+      assert.equal(contract.name, "absent");
+      assert.equal(contract.refWire, null);
+      assert.equal(contract.summaryWire, null);
+      assert.deepEqual(contract.objects ?? [], []);
+      assert.equal(contract.objectsTruncated ?? false, false);
+    } else {
+      assert.notEqual(contract.refWire, null);
+      assert.notEqual(contract.summaryWire, null);
+      assert.notEqual(summary.ref, undefined);
+
+      const refWire = KnowledgeSnapshotRef.encode(summary.ref!).finish();
+      assertKnowledgeSnapshotSummaryWire(
+        `${contract.name} reference`,
+        refWire,
+        contract.refWire!,
+      );
+      assert.deepEqual(KnowledgeSnapshotRef.decode(refWire), summary.ref);
+      assert.deepEqual(KnowledgeSnapshotRef.encode(summary.ref!).finish(), refWire);
+
+      const summaryWire = KnowledgeSnapshotSummary.encode(summary).finish();
+      assertKnowledgeSnapshotSummaryWire(
+        `${contract.name} summary`,
+        summaryWire,
+        contract.summaryWire!,
+      );
+      assert.deepEqual(KnowledgeSnapshotSummary.decode(summaryWire), summary);
+      assert.deepEqual(KnowledgeSnapshotSummary.encode(summary).finish(), summaryWire);
+    }
+
+    const job = SearchJob.fromPartial({ knowledgeSnapshot: summary });
+    const jobWire = SearchJob.encode(job).finish();
+    assertKnowledgeSnapshotSummaryWire(
+      `${contract.name} SearchJob attachment`,
+      jobWire,
+      contract.searchJobWire,
+    );
+    assert.deepEqual(SearchJob.decode(jobWire), job);
+    assert.equal(SearchJob.decode(jobWire).knowledgeSnapshot !== undefined, summary !== undefined);
+
+    switch (contract.name) {
+      case "absent":
+        absentWire = jobWire;
+        break;
+      case "enabled-empty":
+        enabledEmptyWire = jobWire;
+        assert.ok(summary !== undefined);
+        assert.ok(summary.ref !== undefined);
+        assert.equal(summary.ref.tenantCatalogRevision > maximumSafeInteger, true);
+        assert.equal(summary.ref.objectCount, 0);
+        assert.deepEqual(summary.objects, []);
+        assert.equal(summary.objectsTruncated, false);
+        break;
+      case "authorized-and-redacted": {
+        assert.ok(summary !== undefined);
+        assert.ok(summary.ref !== undefined);
+        assert.equal(summary.ref.tenantCatalogRevision > maximumSafeInteger, true);
+        assert.equal(summary.ref.objectCount, 2);
+        assert.equal(summary.objects.length, 2);
+        assert.equal(summary.objectsTruncated, false);
+        const [authorized, redacted] = summary.objects;
+        assert.equal(authorized.disclosure?.$case, "authorizedObject");
+        if (authorized.disclosure?.$case !== "authorizedObject") {
+          assert.fail("authorized object disclosure is missing");
+        }
+        assert.equal(authorized.disclosure.value.knowledgeObjectId, "ko-visible");
+        assert.equal(authorized.disclosure.value.name, "visible_field");
+        assert.equal(authorized.disclosure.value.version > maximumSafeInteger, true);
+        assert.deepEqual(redacted.disclosure, { $case: "redacted", value: true });
+        break;
+      }
+    }
+  }
+
+  assert.notEqual(absentWire, undefined);
+  assert.notEqual(enabledEmptyWire, undefined);
+  assert.equal(absentWire!.length, 0);
+  assert.notEqual(enabledEmptyWire!.length, 0);
+  assert.notDeepEqual(
+    enabledEmptyWire,
+    absentWire,
+    "enabled empty knowledge authority collapsed into disabled/absent knowledge authority",
   );
 });
 

@@ -5,6 +5,7 @@ package open_splunk.v1;
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 import "open_splunk/v1/common.proto";
+import "open_splunk/v1/knowledge.proto";
 import "open_splunk/v1/result.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
@@ -166,4 +167,7 @@ message SearchJob {
   // True means the retained page snapshot stopped at the server row boundary.
   // The full SPL result may still be exported through bounded re-execution.
   bool results_truncated = 22;
+  // Definition-free identity for the immutable knowledge authority admitted
+  // with this job. It is absent for legacy or feature-disabled attempts.
+  optional KnowledgeSnapshotSummary knowledge_snapshot = 23;
 }

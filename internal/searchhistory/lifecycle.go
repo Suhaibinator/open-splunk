@@ -133,6 +133,9 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 			OccurredAt:  time.UnixMicro(indexed.createdAt).UTC(),
 			SearchJobID: strings.Clone(indexed.jobID),
 			OwnerID:     strings.Clone(scope.OwnerID),
+			KnowledgeSnapshot: cloneKnowledgeSnapshotRef(
+				entry.GetKnowledgeSnapshot().GetRef(),
+			),
 		}
 		if err := store.searchAttemptAuditAppender.AppendSearchAttemptInTransaction(
 			ctx,
@@ -147,6 +150,15 @@ func (store *Store) BeginAttempt(ctx context.Context, scope AccessScope, input *
 		return nil, fmt.Errorf("commit pending search-history record: %w", err)
 	}
 	return entry, nil
+}
+
+func cloneKnowledgeSnapshotRef(
+	input *opensplunkv1.KnowledgeSnapshotRef,
+) *opensplunkv1.KnowledgeSnapshotRef {
+	if input == nil {
+		return nil
+	}
+	return proto.Clone(input).(*opensplunkv1.KnowledgeSnapshotRef)
 }
 
 // CompleteAttempt atomically publishes a terminal entry and removes its
@@ -327,7 +339,15 @@ func normalizePendingEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv
 	if input == nil {
 		return nil, pendingIndexedEntry{}, invalid("search-history entry is required")
 	}
+	// A caller-controlled repeated inventory must be rejected before cloneEntry
+	// walks and duplicates the whole protobuf graph. cloneKnowledgeSnapshotSummary
+	// performs the fixed O(1) cardinality check before proto.Size or proto.Clone.
+	knowledgeSnapshot, err := cloneKnowledgeSnapshotSummary(input.GetKnowledgeSnapshot())
+	if err != nil {
+		return nil, pendingIndexedEntry{}, err
+	}
 	entry := cloneEntry(input)
+	entry.KnowledgeSnapshot = knowledgeSnapshot
 	if entry.FinalState != opensplunkv1.SearchJobState_SEARCH_JOB_STATE_QUEUED {
 		return nil, pendingIndexedEntry{}, invalid("pending attempt state must be queued")
 	}
@@ -411,6 +431,7 @@ func sameAdmission(pending, terminal *opensplunkv1.SearchHistoryEntry) bool {
 		proto.Equal(pending.Definition, terminal.Definition) &&
 		proto.Equal(pending.Source, terminal.Source) &&
 		proto.Equal(pending.ResolvedTimeRange, terminal.ResolvedTimeRange) &&
+		proto.Equal(pending.KnowledgeSnapshot, terminal.KnowledgeSnapshot) &&
 		pending.CompilerVersion == terminal.CompilerVersion &&
 		proto.Equal(pending.CreatedAt, terminal.CreatedAt)
 }

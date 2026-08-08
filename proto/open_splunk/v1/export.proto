@@ -4,6 +4,7 @@ package open_splunk.v1;
 
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
+import "open_splunk/v1/knowledge.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
@@ -107,4 +108,5 @@ message ExportJob {
   google.protobuf.Timestamp started_at = 10;
   google.protobuf.Timestamp finished_at = 11;
   google.protobuf.Timestamp expires_at = 12;
+  optional KnowledgeSnapshotSummary knowledge_snapshot = 13;
 }

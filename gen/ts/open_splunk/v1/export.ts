@@ -8,6 +8,7 @@
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Duration } from "../../google/protobuf/duration";
 import { Timestamp } from "../../google/protobuf/timestamp";
+import { KnowledgeSnapshotSummary } from "./knowledge";
 
 export enum ExportFormat {
   EXPORT_FORMAT_UNSPECIFIED = 0,
@@ -335,6 +336,7 @@ export interface ExportJob {
   startedAt: Date | undefined;
   finishedAt: Date | undefined;
   expiresAt: Date | undefined;
+  knowledgeSnapshot?: KnowledgeSnapshotSummary | undefined;
 }
 
 function createBaseCsvExportOptions(): CsvExportOptions {
@@ -1076,6 +1078,7 @@ function createBaseExportJob(): ExportJob {
     startedAt: undefined,
     finishedAt: undefined,
     expiresAt: undefined,
+    knowledgeSnapshot: undefined,
   };
 }
 
@@ -1119,6 +1122,9 @@ export const ExportJob: MessageFns<ExportJob> = {
     }
     if (message.expiresAt !== undefined) {
       Timestamp.encode(toTimestamp(message.expiresAt), writer.uint32(98).fork()).join();
+    }
+    if (message.knowledgeSnapshot !== undefined) {
+      KnowledgeSnapshotSummary.encode(message.knowledgeSnapshot, writer.uint32(106).fork()).join();
     }
     return writer;
   },
@@ -1226,6 +1232,14 @@ export const ExportJob: MessageFns<ExportJob> = {
           message.expiresAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
           continue;
         }
+        case 13: {
+          if (tag !== 106) {
+            break;
+          }
+
+          message.knowledgeSnapshot = KnowledgeSnapshotSummary.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1273,6 +1287,11 @@ export const ExportJob: MessageFns<ExportJob> = {
         : isSet(object.expires_at)
         ? fromJsonTimestamp(object.expires_at)
         : undefined,
+      knowledgeSnapshot: isSet(object.knowledgeSnapshot)
+        ? KnowledgeSnapshotSummary.fromJSON(object.knowledgeSnapshot)
+        : isSet(object.knowledge_snapshot)
+        ? KnowledgeSnapshotSummary.fromJSON(object.knowledge_snapshot)
+        : undefined,
     };
   },
 
@@ -1314,6 +1333,9 @@ export const ExportJob: MessageFns<ExportJob> = {
     if (message.expiresAt !== undefined) {
       obj.expiresAt = message.expiresAt.toISOString();
     }
+    if (message.knowledgeSnapshot !== undefined) {
+      obj.knowledgeSnapshot = KnowledgeSnapshotSummary.toJSON(message.knowledgeSnapshot);
+    }
     return obj;
   },
 
@@ -1344,6 +1366,9 @@ export const ExportJob: MessageFns<ExportJob> = {
     message.startedAt = object.startedAt ?? undefined;
     message.finishedAt = object.finishedAt ?? undefined;
     message.expiresAt = object.expiresAt ?? undefined;
+    message.knowledgeSnapshot = (object.knowledgeSnapshot !== undefined && object.knowledgeSnapshot !== null)
+      ? KnowledgeSnapshotSummary.fromPartial(object.knowledgeSnapshot)
+      : undefined;
     return message;
   },
 };

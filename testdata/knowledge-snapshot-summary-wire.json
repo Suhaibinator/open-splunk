@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "absent",
+      "ref": null,
+      "refWire": null,
+      "summaryWire": null,
+      "searchJobWire": {
+        "byteLength": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "wireBase64": ""
+      }
+    },
+    {
+      "name": "enabled-empty",
+      "ref": {
+        "snapshotSha256": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "tenantCatalogRevision": "9007199254740993",
+        "tenantCatalogStateToken": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "objectCount": 0,
+        "compilerCompatibilityVersion": "0.1"
+      },
+      "objects": [],
+      "objectsTruncated": false,
+      "refWire": {
+        "byteLength": 82,
+        "sha256": "e8548c75f4acdee750b9a5cd4067432e3a9f0969e5e778a2cb5b782bc3a5d0c2",
+        "wireBase64": "CiAAAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHxCBgICAgICAEBogICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8qAzAuMQ=="
+      },
+      "summaryWire": {
+        "byteLength": 84,
+        "sha256": "a2a0c8d30dc13d5615d796fa06e9ac9e339ee4d5f2e649a73d40d6c55d1c451b",
+        "wireBase64": "ClIKIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fEIGAgICAgIAQGiAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+PyoDMC4x"
+      },
+      "searchJobWire": {
+        "byteLength": 87,
+        "sha256": "7dccd876ad2c88aff9a573dab7580d65c160c8945b9689a080dcf30855465286",
+        "wireBase64": "ugFUClIKIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fEIGAgICAgIAQGiAgISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+PyoDMC4x"
+      }
+    },
+    {
+      "name": "authorized-and-redacted",
+      "ref": {
+        "snapshotSha256": "abababababababababababababababababababababababababababababababab",
+        "tenantCatalogRevision": "9007199254740995",
+        "tenantCatalogStateToken": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "objectCount": 2,
+        "compilerCompatibilityVersion": "0.1"
+      },
+      "objects": [
+        {
+          "resolutionOrdinal": 0,
+          "objectType": 1,
+          "stage": 1,
+          "authorizedObject": {
+            "knowledgeObjectId": "ko-visible",
+            "version": "9007199254740997",
+            "name": "visible_field"
+          }
+        },
+        {
+          "resolutionOrdinal": 1,
+          "objectType": 2,
+          "stage": 2,
+          "redacted": true
+        }
+      ],
+      "objectsTruncated": false,
+      "refWire": {
+        "byteLength": 84,
+        "sha256": "601111b5b244092112b76b5d222960c59dbe3854861fe54ac17c8138621c5353",
+        "wireBase64": "CiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAioDMC4x"
+      },
+      "summaryWire": {
+        "byteLength": 140,
+        "sha256": "3b569878e03a6b73500cf30f06731ab9ff6919dd9fb575f3bd8106b03b06fcf4",
+        "wireBase64": "ClQKIKurq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urEIOAgICAgIAQGiDNzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3NzSACKgMwLjESKhABGAEiJAoKa28tdmlzaWJsZRCFgICAgICAEBoNdmlzaWJsZV9maWVsZBIICAEQAhgCKAE="
+      },
+      "searchJobWire": {
+        "byteLength": 144,
+        "sha256": "3bfe2cc4ae781a983569ee65512f5c335a3a8ac2f0b3057dde3037a999ca30c6",
+        "wireBase64": "ugGMAQpUCiCrq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqxCDgICAgICAEBogzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc0gAioDMC4xEioQARgBIiQKCmtvLXZpc2libGUQhYCAgICAgBAaDXZpc2libGVfZmllbGQSCAgBEAIYAigB"
+      }
+    }
+  ]
+}
