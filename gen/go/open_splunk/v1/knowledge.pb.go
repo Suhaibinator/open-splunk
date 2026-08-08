@@ -1388,9 +1388,11 @@ func (*KnowledgeDependencyTarget_Object) isKnowledgeDependencyTarget_Target() {}
 
 func (*KnowledgeDependencyTarget_LookupAsset) isKnowledgeDependencyTarget_Target() {}
 
-// topological_depth is the bounded longest-path depth of the source object.
-// canonical_ordinal is unique and contiguous within a snapshot dependency
-// list, which is encoded in ascending ordinal.
+// topological_depth is the bounded longest outgoing-path depth of the source
+// object in edges; a leaf has depth zero. Snapshot dependencies sort by source
+// depth, explicit source stage rank, source ID/version, target kind, target
+// ID/version, then role. canonical_ordinal is the zero-based position in that
+// order and the repeated list is encoded in ascending ordinal.
 type KnowledgeObjectDependency struct {
 	state            protoimpl.MessageState           `protogen:"open.v1"`
 	Source           *KnowledgeObjectVersionReference `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
@@ -1964,7 +1966,9 @@ func (x *KnowledgeSnapshotLookupAsset) GetAsset() *KnowledgeLookupAssetVersionRe
 }
 
 // KnowledgeSnapshotShadow records a visible lower-precedence object that lost
-// whole-object resolution. Entries are ordered by contiguous shadow_ordinal.
+// whole-object resolution. Entries sort by winner resolution ordinal, losing
+// precedence nearest-first (private, app, global), then loser object ID;
+// shadow_ordinal is the zero-based position in that order.
 type KnowledgeSnapshotShadow struct {
 	state                   protoimpl.MessageState `protogen:"open.v1"`
 	ShadowOrdinal           uint32                 `protobuf:"varint,1,opt,name=shadow_ordinal,json=shadowOrdinal,proto3" json:"shadow_ordinal,omitempty"`
@@ -2151,8 +2155,12 @@ func (x *KnowledgeSnapshotWarning) GetShadowOrdinal() uint32 {
 	return 0
 }
 
-// KnowledgeSnapshotBudgetCharges contains aggregate admitted work, including
-// authored SPL where it shares a query-wide ceiling with knowledge work.
+// KnowledgeSnapshotBudgetCharges contains canonical snapshot structure, exact
+// knowledge-only semantic contributions, and the explicitly identified
+// authored-plus-knowledge compiler charges. Shared budgets which have no wire
+// field (including extraction outputs, JSON evaluation work, and predicate
+// leaves) are still enforced by the sealed compiler evidence before a snapshot
+// can be finalized.
 type KnowledgeSnapshotBudgetCharges struct {
 	state                     protoimpl.MessageState `protogen:"open.v1"`
 	ExecutableObjects         uint32                 `protobuf:"varint,1,opt,name=executable_objects,json=executableObjects,proto3" json:"executable_objects,omitempty"`
@@ -2162,19 +2170,39 @@ type KnowledgeSnapshotBudgetCharges struct {
 	// bytes after both snapshot_sha256 and this field are cleared. The charge is
 	// then set before the final digest serialization, avoiding a self-reference.
 	CanonicalSnapshotBytes uint64 `protobuf:"varint,4,opt,name=canonical_snapshot_bytes,json=canonicalSnapshotBytes,proto3" json:"canonical_snapshot_bytes,omitempty"`
-	DependencyNodes        uint32 `protobuf:"varint,5,opt,name=dependency_nodes,json=dependencyNodes,proto3" json:"dependency_nodes,omitempty"`
-	DependencyEdges        uint32 `protobuf:"varint,6,opt,name=dependency_edges,json=dependencyEdges,proto3" json:"dependency_edges,omitempty"`
-	DependencyDepth        uint32 `protobuf:"varint,7,opt,name=dependency_depth,json=dependencyDepth,proto3" json:"dependency_depth,omitempty"`
-	GeneratedOperators     uint32 `protobuf:"varint,8,opt,name=generated_operators,json=generatedOperators,proto3" json:"generated_operators,omitempty"`
-	GeneratedFields        uint32 `protobuf:"varint,9,opt,name=generated_fields,json=generatedFields,proto3" json:"generated_fields,omitempty"`
-	RegexPrograms          uint32 `protobuf:"varint,10,opt,name=regex_programs,json=regexPrograms,proto3" json:"regex_programs,omitempty"`
-	RegexWorkUnits         uint64 `protobuf:"varint,11,opt,name=regex_work_units,json=regexWorkUnits,proto3" json:"regex_work_units,omitempty"`
-	RegexCaptureBytes      uint64 `protobuf:"varint,12,opt,name=regex_capture_bytes,json=regexCaptureBytes,proto3" json:"regex_capture_bytes,omitempty"`
-	ScalarExpressions      uint32 `protobuf:"varint,13,opt,name=scalar_expressions,json=scalarExpressions,proto3" json:"scalar_expressions,omitempty"`
-	ScalarExpressionNodes  uint32 `protobuf:"varint,14,opt,name=scalar_expression_nodes,json=scalarExpressionNodes,proto3" json:"scalar_expression_nodes,omitempty"`
-	GeneratedSqlBytes      uint64 `protobuf:"varint,15,opt,name=generated_sql_bytes,json=generatedSqlBytes,proto3" json:"generated_sql_bytes,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Every executable object is one node, including isolated objects.
+	DependencyNodes uint32 `protobuf:"varint,5,opt,name=dependency_nodes,json=dependencyNodes,proto3" json:"dependency_nodes,omitempty"`
+	DependencyEdges uint32 `protobuf:"varint,6,opt,name=dependency_edges,json=dependencyEdges,proto3" json:"dependency_edges,omitempty"`
+	// Maximum longest outgoing-path depth in edges; isolated objects and leaves
+	// have depth zero.
+	DependencyDepth uint32 `protobuf:"varint,7,opt,name=dependency_depth,json=dependencyDepth,proto3" json:"dependency_depth,omitempty"`
+	// Exact knowledge-origin logical-operator occurrences in the canonical
+	// pre-optimization knowledge prelude. A fused parallel operator counts once;
+	// authored operators, scans, and SQL-only helpers do not count.
+	GeneratedOperators uint32 `protobuf:"varint,8,opt,name=generated_operators,json=generatedOperators,proto3" json:"generated_operators,omitempty"`
+	// Exact knowledge output occurrences. Every regex named capture and every
+	// JSON, alias, or calculated destination counts, even when selectors are
+	// disjoint. Authored outputs and compiler-private columns do not count.
+	GeneratedFields uint32 `protobuf:"varint,9,opt,name=generated_fields,json=generatedFields,proto3" json:"generated_fields,omitempty"`
+	// Extraction/rex program occurrences from knowledge regex definitions plus
+	// authored rex. Calculated-field match() programs are a separate budget.
+	RegexPrograms uint32 `protobuf:"varint,10,opt,name=regex_programs,json=regexPrograms,proto3" json:"regex_programs,omitempty"`
+	// Exact sum of bounded RE2 program work for precisely regex_programs.
+	RegexWorkUnits uint64 `protobuf:"varint,11,opt,name=regex_work_units,json=regexWorkUnits,proto3" json:"regex_work_units,omitempty"`
+	// The admitted cumulative per-row capture-byte guard: zero when
+	// regex_programs is zero, otherwise exactly the compatibility 4 MiB guard.
+	RegexCaptureBytes uint64 `protobuf:"varint,12,opt,name=regex_capture_bytes,json=regexCaptureBytes,proto3" json:"regex_capture_bytes,omitempty"`
+	// Exact winning knowledge calculated-field root-expression occurrences.
+	// Authored eval assignments do not count in this field.
+	ScalarExpressions uint32 `protobuf:"varint,13,opt,name=scalar_expressions,json=scalarExpressions,proto3" json:"scalar_expressions,omitempty"`
+	// Exact scalar and Boolean/predicate AST node occurrences in the field-13
+	// roots before optimization. Repeated occurrences count repeatedly.
+	ScalarExpressionNodes uint32 `protobuf:"varint,14,opt,name=scalar_expression_nodes,json=scalarExpressionNodes,proto3" json:"scalar_expression_nodes,omitempty"`
+	// Exact Go byte length of the final sealed parameterized SQL. Bind argument
+	// rendering, executor wrapper text, and ClickHouse settings are excluded.
+	GeneratedSqlBytes uint64 `protobuf:"varint,15,opt,name=generated_sql_bytes,json=generatedSqlBytes,proto3" json:"generated_sql_bytes,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *KnowledgeSnapshotBudgetCharges) Reset() {

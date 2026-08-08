@@ -221,8 +221,9 @@ func newWriterActiveOpaqueDefinition(t *testing.T, name string) integrationFutur
 		protowire.AppendTag(nil, 32, protowire.BytesType),
 		"newer-binary-metadata-"+name,
 	)
-	fixture.bytes = append(fixture.bytes, futureMetadata...)
-	fixture.bodyField = append(fixture.bodyField, futureMetadata...)
+	knownBytes := fixture.bytes[:len(fixture.bytes)-len(fixture.bodyField)]
+	fixture.bodyField = append(bytes.Clone(futureMetadata), fixture.bodyField...)
+	fixture.bytes = append(bytes.Clone(knownBytes), fixture.bodyField...)
 	fixture.digest = sha256.Sum256(fixture.bytes)
 	fixture.definition = &opensplunkv1.KnowledgeObjectDefinition{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(fixture.bytes, fixture.definition); err != nil {

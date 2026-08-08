@@ -6,6 +6,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"gorm.io/gorm"
 )
@@ -14,9 +15,6 @@ const (
 	maximumDependencyGraphNodes = 256
 	maximumDependencyGraphEdges = 1024
 	maximumDependencyGraphDepth = 16
-
-	maximumDependencyExpressionWalkNodes = 4096
-	maximumDependencyExpressionWalkDepth = 64
 )
 
 type dependencyStage uint8
@@ -29,9 +27,12 @@ const (
 )
 
 type dependencyDefinitionSemantics struct {
-	stage        dependencyStage
-	inputFields  []string
-	outputFields []string
+	stage                 dependencyStage
+	inputFields           []string
+	outputFields          []string
+	selector              *knowledge.Selector
+	scalarExpressionNodes uint32
+	scalarPredicates      uint32
 }
 
 type dependencyVersionKey struct {
@@ -172,6 +173,10 @@ func (validator *dependencySemanticValidator) seedDecodedVersion(
 	if err != nil {
 		return fmt.Errorf("%w: decoded dependency semantics are invalid: %v", ErrCorrupt, err)
 	}
+	if decoded.Selector == nil {
+		return fmt.Errorf("%w: decoded dependency selector is missing", ErrCorrupt)
+	}
+	semantics.selector = decoded.Selector
 	return validator.seedSemanticNode(version, records, semantics)
 }
 
@@ -372,6 +377,9 @@ func (validator *dependencySemanticValidator) validateGraphSemantics(
 		if !dependencyFieldsIntersect(semantics.inputFields, targetSemantics.outputFields) {
 			return fmt.Errorf("%w: dependency field identity disagrees with definitions", ErrCorrupt)
 		}
+		if !knowledge.SelectorImplies(semantics.selector, targetSemantics.selector) {
+			return fmt.Errorf("%w: dependency selector implication is unproven", ErrCorrupt)
+		}
 		if targetErr := validator.validateGraphSemantics(targetKey); targetErr != nil {
 			return targetErr
 		}
@@ -429,6 +437,11 @@ func (validator *dependencySemanticValidator) loadNodeSemantics(
 		)
 		return dependencyDefinitionSemantics{}, node.semanticsLoadErr
 	}
+	if decoded.Selector == nil {
+		node.semanticsLoadErr = fmt.Errorf("%w: decoded dependency selector is missing", ErrCorrupt)
+		return dependencyDefinitionSemantics{}, node.semanticsLoadErr
+	}
+	node.semantics.selector = decoded.Selector
 	return node.semantics, nil
 }
 
@@ -498,14 +511,16 @@ func dependencySemanticsFromDefinition(
 		if body == nil || body.CalculatedField == nil {
 			return dependencyDefinitionSemantics{}, fmt.Errorf("calculated field is nil")
 		}
-		inputs, err := calculatedDependencyInputFields(body.CalculatedField.GetExpression())
+		analysis, err := calculatedDependencyAnalysis(body.CalculatedField.GetExpression())
 		if err != nil {
 			return dependencyDefinitionSemantics{}, err
 		}
 		return dependencyDefinitionSemantics{
-			stage:        dependencyStageCalculated,
-			inputFields:  inputs,
-			outputFields: normalizedDependencyFields([]string{body.CalculatedField.GetDestinationField()}),
+			stage:                 dependencyStageCalculated,
+			inputFields:           analysis.InputFields,
+			outputFields:          normalizedDependencyFields([]string{body.CalculatedField.GetDestinationField()}),
+			scalarExpressionNodes: analysis.Nodes,
+			scalarPredicates:      analysis.Predicates,
 		}, nil
 	default:
 		return dependencyDefinitionSemantics{}, fmt.Errorf("definition body is unsupported")
@@ -545,123 +560,22 @@ func dependencyFieldsIntersect(left, right []string) bool {
 	return false
 }
 
-func calculatedDependencyInputFields(expression string) ([]string, error) {
+func calculatedDependencyAnalysis(expression string) (spl.ScalarExpressionAnalysis, error) {
 	parsed, err := spl.ParseScalarExpression(expression)
 	if err != nil {
-		return nil, fmt.Errorf("calculated expression is invalid")
+		return spl.ScalarExpressionAnalysis{}, fmt.Errorf("calculated expression is invalid")
 	}
-	collector := dependencyExpressionFieldCollector{fields: make(map[string]struct{})}
-	if err := collector.visitScalar(parsed, 1); err != nil {
+	analysis, err := spl.AnalyzeScalarExpression(parsed)
+	if err != nil {
+		return spl.ScalarExpressionAnalysis{}, err
+	}
+	return analysis, nil
+}
+
+func calculatedDependencyInputFields(expression string) ([]string, error) {
+	analysis, err := calculatedDependencyAnalysis(expression)
+	if err != nil {
 		return nil, err
 	}
-	fields := make([]string, 0, len(collector.fields))
-	for field := range collector.fields {
-		fields = append(fields, field)
-	}
-	sort.Strings(fields)
-	return fields[:len(fields):len(fields)], nil
-}
-
-type dependencyExpressionFieldCollector struct {
-	fields map[string]struct{}
-	nodes  int
-}
-
-func (collector *dependencyExpressionFieldCollector) enter(depth int) error {
-	if depth > maximumDependencyExpressionWalkDepth {
-		return fmt.Errorf("calculated expression exceeds dependency walk depth")
-	}
-	collector.nodes++
-	if collector.nodes > maximumDependencyExpressionWalkNodes {
-		return fmt.Errorf("calculated expression exceeds dependency walk nodes")
-	}
-	return nil
-}
-
-func (collector *dependencyExpressionFieldCollector) visitScalar(expression spl.ScalarExpr, depth int) error {
-	if err := collector.enter(depth); err != nil {
-		return err
-	}
-	switch expression := expression.(type) {
-	case *spl.ScalarFieldExpr:
-		if expression == nil || expression.Field == "" {
-			return fmt.Errorf("calculated expression contains an invalid field")
-		}
-		collector.fields[expression.Field] = struct{}{}
-	case *spl.ScalarLiteralExpr:
-		if expression == nil {
-			return fmt.Errorf("calculated expression contains a nil literal")
-		}
-	case *spl.ScalarCallExpr:
-		if expression == nil {
-			return fmt.Errorf("calculated expression contains a nil call")
-		}
-		for _, argument := range expression.Arguments {
-			if err := collector.visitScalar(argument, depth+1); err != nil {
-				return err
-			}
-		}
-	case *spl.ScalarIfExpr:
-		if expression == nil {
-			return fmt.Errorf("calculated expression contains a nil if")
-		}
-		if err := collector.visitWhere(expression.Condition, depth+1); err != nil {
-			return err
-		}
-		if err := collector.visitScalar(expression.True, depth+1); err != nil {
-			return err
-		}
-		return collector.visitScalar(expression.False, depth+1)
-	case *spl.ScalarCaseExpr:
-		if expression == nil {
-			return fmt.Errorf("calculated expression contains a nil case")
-		}
-		for _, branch := range expression.Branches {
-			if err := collector.visitWhere(branch.Condition, depth+1); err != nil {
-				return err
-			}
-			if err := collector.visitScalar(branch.Value, depth+1); err != nil {
-				return err
-			}
-		}
-	default:
-		return fmt.Errorf("calculated expression contains an unsupported scalar node")
-	}
-	return nil
-}
-
-func (collector *dependencyExpressionFieldCollector) visitWhere(expression spl.WhereExpr, depth int) error {
-	if err := collector.enter(depth); err != nil {
-		return err
-	}
-	switch expression := expression.(type) {
-	case *spl.WhereBoolExpr:
-		if expression == nil {
-			return fmt.Errorf("calculated expression contains a nil Boolean node")
-		}
-		if err := collector.visitWhere(expression.Left, depth+1); err != nil {
-			return err
-		}
-		return collector.visitWhere(expression.Right, depth+1)
-	case *spl.WhereNotExpr:
-		if expression == nil {
-			return fmt.Errorf("calculated expression contains a nil NOT node")
-		}
-		return collector.visitWhere(expression.Operand, depth+1)
-	case *spl.WhereComparisonExpr:
-		if expression == nil {
-			return fmt.Errorf("calculated expression contains a nil comparison")
-		}
-		if err := collector.visitScalar(expression.Left, depth+1); err != nil {
-			return err
-		}
-		return collector.visitScalar(expression.Right, depth+1)
-	case *spl.WhereScalarPredicateExpr:
-		if expression == nil {
-			return fmt.Errorf("calculated expression contains a nil predicate")
-		}
-		return collector.visitScalar(expression.Value, depth+1)
-	default:
-		return fmt.Errorf("calculated expression contains an unsupported Boolean node")
-	}
+	return analysis.InputFields, nil
 }

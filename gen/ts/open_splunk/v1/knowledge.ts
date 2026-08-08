@@ -477,9 +477,11 @@ export interface KnowledgeDependencyTarget {
 }
 
 /**
- * topological_depth is the bounded longest-path depth of the source object.
- * canonical_ordinal is unique and contiguous within a snapshot dependency
- * list, which is encoded in ascending ordinal.
+ * topological_depth is the bounded longest outgoing-path depth of the source
+ * object in edges; a leaf has depth zero. Snapshot dependencies sort by source
+ * depth, explicit source stage rank, source ID/version, target kind, target
+ * ID/version, then role. canonical_ordinal is the zero-based position in that
+ * order and the repeated list is encoded in ascending ordinal.
  */
 export interface KnowledgeObjectDependency {
   source: KnowledgeObjectVersionReference | undefined;
@@ -556,7 +558,9 @@ export interface KnowledgeSnapshotLookupAsset {
 
 /**
  * KnowledgeSnapshotShadow records a visible lower-precedence object that lost
- * whole-object resolution. Entries are ordered by contiguous shadow_ordinal.
+ * whole-object resolution. Entries sort by winner resolution ordinal, losing
+ * precedence nearest-first (private, app, global), then loser object ID;
+ * shadow_ordinal is the zero-based position in that order.
  */
 export interface KnowledgeSnapshotShadow {
   shadowOrdinal: number;
@@ -583,8 +587,12 @@ export interface KnowledgeSnapshotWarning {
 }
 
 /**
- * KnowledgeSnapshotBudgetCharges contains aggregate admitted work, including
- * authored SPL where it shares a query-wide ceiling with knowledge work.
+ * KnowledgeSnapshotBudgetCharges contains canonical snapshot structure, exact
+ * knowledge-only semantic contributions, and the explicitly identified
+ * authored-plus-knowledge compiler charges. Shared budgets which have no wire
+ * field (including extraction outputs, JSON evaluation work, and predicate
+ * leaves) are still enforced by the sealed compiler evidence before a snapshot
+ * can be finalized.
  */
 export interface KnowledgeSnapshotBudgetCharges {
   executableObjects: number;
@@ -596,16 +604,52 @@ export interface KnowledgeSnapshotBudgetCharges {
    * then set before the final digest serialization, avoiding a self-reference.
    */
   canonicalSnapshotBytes: bigint;
+  /** Every executable object is one node, including isolated objects. */
   dependencyNodes: number;
   dependencyEdges: number;
+  /**
+   * Maximum longest outgoing-path depth in edges; isolated objects and leaves
+   * have depth zero.
+   */
   dependencyDepth: number;
+  /**
+   * Exact knowledge-origin logical-operator occurrences in the canonical
+   * pre-optimization knowledge prelude. A fused parallel operator counts once;
+   * authored operators, scans, and SQL-only helpers do not count.
+   */
   generatedOperators: number;
+  /**
+   * Exact knowledge output occurrences. Every regex named capture and every
+   * JSON, alias, or calculated destination counts, even when selectors are
+   * disjoint. Authored outputs and compiler-private columns do not count.
+   */
   generatedFields: number;
+  /**
+   * Extraction/rex program occurrences from knowledge regex definitions plus
+   * authored rex. Calculated-field match() programs are a separate budget.
+   */
   regexPrograms: number;
+  /** Exact sum of bounded RE2 program work for precisely regex_programs. */
   regexWorkUnits: bigint;
+  /**
+   * The admitted cumulative per-row capture-byte guard: zero when
+   * regex_programs is zero, otherwise exactly the compatibility 4 MiB guard.
+   */
   regexCaptureBytes: bigint;
+  /**
+   * Exact winning knowledge calculated-field root-expression occurrences.
+   * Authored eval assignments do not count in this field.
+   */
   scalarExpressions: number;
+  /**
+   * Exact scalar and Boolean/predicate AST node occurrences in the field-13
+   * roots before optimization. Repeated occurrences count repeatedly.
+   */
   scalarExpressionNodes: number;
+  /**
+   * Exact Go byte length of the final sealed parameterized SQL. Bind argument
+   * rendering, executor wrapper text, and ClickHouse settings are excluded.
+   */
   generatedSqlBytes: bigint;
 }
 

@@ -31,6 +31,9 @@ func TestCompileExtractionPatternReturnsOrderedNamedCaptureIndexes(t *testing.T)
 	if compiled.GroupCount != 3 {
 		t.Fatalf("group count = %d, want 3", compiled.GroupCount)
 	}
+	if compiled.ProgramWorkUnits < 1 || compiled.ProgramWorkUnits > MaximumExtractionProgramWorkUnits {
+		t.Fatalf("program work units = %d", compiled.ProgramWorkUnits)
+	}
 	if !strings.HasPrefix(compiled.Pattern, "(?-s)") {
 		t.Fatalf("normalized pattern = %q, want explicit non-dotall prefix", compiled.Pattern)
 	}

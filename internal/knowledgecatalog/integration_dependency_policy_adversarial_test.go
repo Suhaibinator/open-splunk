@@ -347,7 +347,7 @@ func integrationDependencyDefinition(
 			name,
 			identity.scope,
 			&description,
-			marker+"-*",
+			"",
 			dependencyFixtureInputField,
 		)
 	}

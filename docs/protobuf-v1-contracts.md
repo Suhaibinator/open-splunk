@@ -95,9 +95,15 @@ form is deterministically serialized with only `snapshot_sha256` cleared, and
 the compatibility framing is hashed. This two-step definition is
 non-self-referential and is pinned by golden tests.
 Snapshot objects are encoded in ascending `resolution_ordinal`; each stage has
-its own contiguous `stage_ordinal`. Dependencies carry bounded
-`topological_depth` and are encoded by a unique contiguous
-`canonical_ordinal`. Lookup asset references use a contiguous `asset_ordinal`.
+its own contiguous `stage_ordinal`. Shadows sort by winner resolution ordinal,
+losing precedence nearest-first (private, app, global), then loser object ID;
+their `shadow_ordinal` is the zero-based position in that order. Every
+executable object counts as a dependency node even when isolated. Dependency
+depth is the longest outgoing path in edges, with leaves and isolated objects
+at zero. Edges sort by source depth, explicit source stage rank, source
+ID/version, target kind, target ID/version, then role, and carry their unique
+contiguous `canonical_ordinal`. Lookup asset references use a contiguous
+`asset_ordinal`.
 These ordering rules are part of canonical snapshot hashing, not permission to
 trust a client-authored snapshot. Search admission always creates the snapshot
 after authentication, app and index authorization, and server-side catalog

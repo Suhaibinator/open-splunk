@@ -92,7 +92,7 @@ func TestDependencyIntegrityForCurrentAndHistoricalVersions(t *testing.T) {
 		database, store := newCatalogTestStore(t)
 		insertFixtureObject(t, database, fixtureObject{id: "ko-target", owner: testOwner, versions: []fixtureVersion{{
 			definition: dependencyExtractionDefinition(
-				testApp, "target", SharingScopePrivate, nil, "target-*", dependencyFixtureInputField,
+				testApp, "target", SharingScopePrivate, nil, "", dependencyFixtureInputField,
 			),
 			state: StateActive, mutation: "create", timestamp: 10,
 		}}})

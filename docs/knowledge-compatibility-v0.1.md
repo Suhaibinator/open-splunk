@@ -147,7 +147,9 @@ user fields.
 
 Resolution may discard an object only when its `index` patterns cannot match
 any authorized effective index. Host, source, and sourcetype are still checked
-per row. Cross-index searches therefore can apply different objects to
+per row. This index-impossible pruning occurs before whole-object precedence,
+so an irrelevant private candidate cannot shadow an applicable app or global
+candidate. Cross-index searches therefore can apply different objects to
 different rows.
 
 Selector limits are 16 patterns per dimension, 64 patterns total, 255 UTF-8
@@ -227,8 +229,10 @@ allow the existing typed extraction path to be reused.
 One definition is limited to a 4 KiB source pattern, a 4 KiB normalized
 pattern, 4,096 estimated RE2 work units, 16 total capture groups, and 16 named
 outputs. Knowledge and authored `rex` share the query ceilings: 64 regex
-programs, 64 named outputs, and 4 MiB of captured bytes per event. Admission
-rejects a snapshot that cannot fit those aggregate ceilings.
+programs, 262,144 exact aggregate RE2 work units, and 4 MiB of captured bytes
+per event. Regex named outputs and JSON extraction outputs share one separate
+64-output ceiling. Admission rejects a snapshot that cannot fit those
+aggregate ceilings.
 
 ## JSON extraction
 
@@ -242,7 +246,8 @@ selected where a scalar is required produce no output. JSON String,
 number, boolean, and explicit null results retain the same typed representation
 as authored `spath`; a selected explicit JSON null is a produced present-null
 value. Runtime parse failures are bounded diagnostics, not query-wide syntax
-failures. Aggregate extraction work shares the authored query limits.
+failures. Knowledge and authored JSON paths share 32 aggregate evaluation work
+units and the 64-output extraction ceiling.
 
 ## Field aliases
 
@@ -283,10 +288,13 @@ policy.
 
 One expression is limited to 16 KiB, 32 nested scalar levels, and the existing
 64 KiB per-conditional/per-variadic generated-SQL ceilings. One snapshot is
-limited to 32 calculated fields and all knowledge expressions share the
-authored limits of 32 aggregate eval/where predicates and 256 KiB generated SQL.
-If combined authored and knowledge work exceeds a limit, search admission fails
-before execution with a source-attributed complexity diagnostic.
+limited to 32 calculated fields, 32,768 exact scalar and Boolean AST node
+occurrences, and all knowledge expressions share the authored limit of 32
+aggregate eval/where predicate leaves. Nodes and predicate leaves are counted
+before optimization, including repeated occurrences. Final authored-plus-
+knowledge parameterized SQL is limited to 256 KiB. If combined authored and
+knowledge work exceeds a limit, search admission fails before execution with a
+source-attributed complexity diagnostic.
 
 ## Publication and dependency validity
 
@@ -334,11 +342,31 @@ may depend on a private object owned by another principal, an object from
 another app outside that matrix, or any cross-tenant identity. Forbidden and
 absent targets produce the same publication error category.
 
+A declared dependency must also prove that the source selector implies the
+target selector independently in all four dimensions. An unrestricted target
+dimension accepts every source. A universal `*` target accepts every
+constrained source, but not an unrestricted source because constrained
+dimensions reject missing and null metadata. Every literal source pattern must
+match at least one target pattern, while a wildcard source pattern is proven
+only by an identical canonical target wildcard. More ambitious wildcard-
+language containment fails closed in `0.1`.
+
+The direct `FIELD_INPUT` graph is derived rather than caller-selected. For
+every winning later-stage source input that intersects an earlier-stage winner
+output and whose selectors are not provably disjoint, resolution derives one
+object edge. The source-to-target sharing matrix and selector implication must
+both hold. The immutable stored edge set and detached snapshot edge set must
+equal this derivation exactly: missing, extra, or stale-version authorities
+fail closed. Resolver input order is not authority; the detached snapshot list
+is sorted into its canonical dependency order before encoding.
+
 Every successful mutation, including a draft or disabled-object mutation,
 advances the tenant catalog revision in the same immediate SQLite transaction
-as registry/version/dependency/ACL rows and the bounded audit record. App
-revision is optional in `0.1`; when absent the snapshot carries zero and cache
-invalidation uses the mandatory tenant revision.
+as registry/version/dependency/ACL rows and the bounded audit record. A true
+selected-app revision is optional in `0.1`; when unavailable its optional
+snapshot field remains absent and cache invalidation uses the mandatory tenant
+revision and state commitment. The tenant-wide app-catalog revision is not
+misrepresented as a selected-app revision.
 
 The same transaction rotates a 32-byte catalog-state commitment stored beside
 the numeric tenant revision. An exact backup and restore preserves the
@@ -598,10 +626,39 @@ big-endian length of deterministic protobuf bytes, followed by those bytes.
 Generated field numbers and this framing are part of compatibility `0.1` and
 are pinned by cross-language golden tests.
 
-One snapshot may contain at most 256 executable objects, 512 generated fields,
-256 generated logical operators, 4 MiB canonical bytes, and the stricter
-type-specific aggregate limits above. Resolution exceeding a ceiling fails
-admission before a job is created.
+The canonical byte charge and digest are self-excluding in two explicit steps.
+First clear `snapshot_sha256`, set `canonical_snapshot_bytes` to zero, and
+deterministically marshal `B0`; `len(B0)` must not exceed 4 MiB and becomes the
+canonical byte charge. Then set that charge, leave `snapshot_sha256` absent,
+and deterministically marshal `B1`. The framed digest above hashes `B1`; only
+afterward is the 32-byte result stored in `snapshot_sha256`. Neither the final
+digest field nor the encoded nonzero charge recursively contributes to the
+charge.
+
+Shadow ordinals are assigned by winner resolution ordinal, then losing
+precedence nearest-first (private, app, global), then loser object ID. Each
+shadow produces exactly one warning with only its shadow ordinal present.
+Every executable winner counts as one dependency node even when isolated.
+Node depth is the longest outgoing dependency path in edges, so a leaf or
+isolated node has depth zero. Direct edges sort by source depth, explicit source
+stage rank, source object ID and version, target kind, target object ID and
+version, then dependency role; their zero-based canonical ordinals follow that
+order.
+
+One snapshot may contain at most 256 executable objects, 512 exact knowledge
+output occurrences, 256 knowledge-origin logical-operator occurrences, 4 MiB
+canonical bytes, and the stricter type-specific aggregate limits above.
+`generated_operators` counts the canonical pre-optimization knowledge prelude,
+so one fused parallel operator may represent multiple objects. `regex_programs`
+and `regex_work_units` combine knowledge extraction and authored `rex`
+occurrences; calculated-field `match()` work remains a separate shared budget.
+`regex_capture_bytes` is zero with no such program and otherwise exactly the
+4 MiB per-row capture guard. `scalar_expressions` and
+`scalar_expression_nodes` are exact knowledge-only occurrences. Finally,
+`generated_sql_bytes` is `len(compiled.SQL)` for the sealed parameterized SQL;
+rendered bind values, executor wrappers, settings, and the independent 1 MiB
+executor query-size defense are excluded. Resolution or sealed compilation
+exceeding a ceiling fails admission before a job is created.
 
 The physical catalog is limited to 8,192 object identities, 65,536 immutable
 versions, 512 MiB of unique definition-body bytes, and 20,480 idempotency

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +11,7 @@ import { AppSelector } from "@/gen/ts/open_splunk/v1/app";
 import { GetAppRequest } from "@/gen/ts/open_splunk/v1/app_api";
 import {
   FieldExtractionDefinition,
+  KnowledgeSnapshot,
   KnowledgeOverwriteBehavior,
 } from "@/gen/ts/open_splunk/v1/knowledge";
 import {
@@ -63,6 +65,25 @@ interface FieldExtractionWireFixture {
   cases: FieldExtractionWireContract[];
 }
 
+interface SnapshotWireRecord {
+  byteLength: number;
+  sha256: string;
+}
+
+interface SnapshotFinalWireRecord extends SnapshotWireRecord {
+  wireBase64: string;
+}
+
+interface KnowledgeSnapshotWireFixture {
+  version: number;
+  digestDomain: string;
+  canonicalSnapshotBytes: number;
+  b0: SnapshotWireRecord;
+  b1: SnapshotWireRecord;
+  snapshotSha256: string;
+  final: SnapshotFinalWireRecord;
+}
+
 const routeFixture = JSON.parse(
   readFileSync(
     path.join(process.cwd(), "testdata", "protobuf-http-route-contracts.json"),
@@ -75,7 +96,22 @@ const fieldExtractionFixture = JSON.parse(
     "utf8",
   ),
 ) as FieldExtractionWireFixture;
+const knowledgeSnapshotWireFixture = JSON.parse(
+  readFileSync(
+    path.join(process.cwd(), "testdata", "knowledge-snapshot-wire.json"),
+    "utf8",
+  ),
+) as KnowledgeSnapshotWireFixture;
 const futureFieldTag = (routeFixture.futureFieldNumber << 3) | 2;
+
+function assertWireHash(name: string, wire: Uint8Array, contract: SnapshotWireRecord): void {
+  assert.equal(wire.length, contract.byteLength, `${name} byte length changed`);
+  assert.equal(
+    createHash("sha256").update(wire).digest("hex"),
+    contract.sha256,
+    `${name} SHA-256 changed`,
+  );
+}
 
 function registeredRoutePaths(value: unknown): string[] {
   if (value === null || typeof value !== "object") {
@@ -233,6 +269,55 @@ test("generated field extraction definitions match shared Go wire goldens", () =
     );
     assert.deepEqual(FieldExtractionDefinition.decode(first), message);
   }
+});
+
+test("generated knowledge snapshots match the shared Go deterministic wire and digest golden", () => {
+  const fixture = knowledgeSnapshotWireFixture;
+  assert.equal(fixture.version, 1);
+  assert.equal(fixture.digestDomain, "open-splunk-knowledge-snapshot-v0.1\0");
+
+  const expectedFinal = Uint8Array.from(Buffer.from(fixture.final.wireBase64, "base64"));
+  assertWireHash("final snapshot", expectedFinal, fixture.final);
+  const snapshot = KnowledgeSnapshot.decode(expectedFinal);
+  assert.equal(
+    Buffer.from(snapshot.snapshotSha256).toString("hex"),
+    fixture.snapshotSha256,
+  );
+  assert.deepEqual(
+    KnowledgeSnapshot.encode(snapshot).finish(),
+    expectedFinal,
+    "TypeScript field ordering differs from Go deterministic final wire",
+  );
+
+  snapshot.snapshotSha256 = new Uint8Array(0);
+  const b1 = KnowledgeSnapshot.encode(snapshot).finish();
+  assertWireHash("B1 digest input", b1, fixture.b1);
+
+  const charges = snapshot.budgetCharges;
+  assert.ok(charges !== undefined, "snapshot fixture omitted budget charges");
+  assert.equal(charges.canonicalSnapshotBytes, BigInt(fixture.canonicalSnapshotBytes));
+  charges.canonicalSnapshotBytes = 0n;
+  const b0 = KnowledgeSnapshot.encode(snapshot).finish();
+  assertWireHash("B0 canonical charge input", b0, fixture.b0);
+  assert.equal(b0.length, fixture.canonicalSnapshotBytes);
+
+  const framedLength = Buffer.alloc(8);
+  framedLength.writeBigUInt64BE(BigInt(b1.length));
+  const digest = createHash("sha256")
+    .update(fixture.digestDomain, "utf8")
+    .update(framedLength)
+    .update(b1)
+    .digest();
+  assert.equal(digest.toString("hex"), fixture.snapshotSha256);
+
+  charges.canonicalSnapshotBytes = BigInt(fixture.canonicalSnapshotBytes);
+  snapshot.snapshotSha256 = Uint8Array.from(digest);
+  const reproducedFinal = KnowledgeSnapshot.encode(snapshot).finish();
+  assert.deepEqual(
+    reproducedFinal,
+    expectedFinal,
+    "TypeScript B0/B1 framing did not reproduce Go deterministic final wire",
+  );
 });
 
 test("generated knowledge mutation responses encode paired revision state deterministically", () => {

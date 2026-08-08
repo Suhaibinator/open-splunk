@@ -260,6 +260,10 @@ func dependencyPropertyVersions(
 		if state != StateQuarantined {
 			hostPattern := fmt.Sprintf("%s-v%d-*", name, index+1)
 			if strings.Contains(name, "target") {
+				// Keep the dependency target universal so each matrix case
+				// isolates sharing/state/version validity. Sources retain their
+				// case-specific selectors and therefore imply this target.
+				hostPattern = ""
 				version.definition = dependencyExtractionDefinition(
 					appID, name, scope, nil, hostPattern, dependencyFixtureInputField,
 				)
