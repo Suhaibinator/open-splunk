@@ -3,7 +3,10 @@ import test from "node:test";
 
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/v1/system_api";
 
-import { adaptSystemBootstrap } from "./system-bootstrap";
+import {
+  MAXIMUM_BROWSER_BOOTSTRAP_APPS,
+  adaptSystemBootstrap,
+} from "./system-bootstrap";
 
 test("system bootstrap preserves structured release identity", () => {
   const response = GetSystemBootstrapResponse.fromPartial({
@@ -37,4 +40,29 @@ test("system bootstrap keeps build metadata optional for older servers", () => {
     serverTime: new Date("2026-07-26T12:00:00Z"),
   });
   assert.equal(adaptSystemBootstrap(response).build, null);
+});
+
+test("system bootstrap rejects an oversized spoofed app catalog before mapping entries", () => {
+  const response = GetSystemBootstrapResponse.fromPartial({
+    serverTime: new Date("2026-07-26T12:00:00Z"),
+  });
+  let entryReads = 0;
+  response.apps = new Proxy(
+    Array.from({ length: MAXIMUM_BROWSER_BOOTSTRAP_APPS + 1 }, () => ({
+      appId: "must-not-be-read",
+      slug: "must-not-be-read",
+      displayName: "Must not be read",
+      defaultIndexNames: [],
+      state: 0,
+    })),
+    {
+      get(target, property, receiver) {
+        if (property !== "length") entryReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    },
+  );
+
+  assert.throws(() => adaptSystemBootstrap(response), /app catalog limit/);
+  assert.equal(entryReads, 0);
 });

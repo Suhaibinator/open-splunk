@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { BinaryWriter } from "@bufbuild/protobuf/wire";
+
 import {
   clearAdministratorBearerToken,
   getAdministratorBearerToken,
@@ -8,8 +10,19 @@ import {
   isValidAdministratorBearerToken,
   setAdministratorBearerToken,
 } from "./administrator-session";
-import { PROTOBUF_CONTENT_TYPE, ProtobufTransport, defineProtobufRoute } from "./protobuf-transport";
+import {
+  HttpError,
+  MAXIMUM_ERROR_RESPONSE_BYTES,
+  PROTOBUF_CONTENT_TYPE,
+  ProtobufResponseTooLargeError,
+  ProtobufTransport,
+  defineProtobufRoute,
+} from "./protobuf-transport";
 import { ListIndexesRequest, ListIndexesResponse } from "@/gen/ts/open_splunk/v1/index_api";
+import {
+  ListKnowledgeObjectsRequest,
+  ListKnowledgeObjectsResponse,
+} from "@/gen/ts/open_splunk/v1/knowledge_api";
 import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/v1/search_api";
 
 const administratorToken = "admin-token-0123456789-abcdefghijkl";
@@ -33,6 +46,8 @@ test("administrator bearer tokens match backend admission and remain memory-only
 test("administrator route allowlist excludes ordinary search and WebSocket paths", () => {
   assert.equal(isAdministratorRoutePath("/api/v1/indexes/list"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/audit/events/list"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/get"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/list"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/inspect"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/create"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/suggestions"), false);
@@ -46,7 +61,9 @@ test("transport attaches the memory-only token only to protected protobuf calls"
     requests.push({ url, headers: new Headers(init?.headers) });
     const body = url.endsWith("/indexes/list")
       ? ListIndexesResponse.encode(ListIndexesResponse.fromPartial({})).finish()
-      : ValidateSearchResponse.encode(ValidateSearchResponse.fromPartial({ valid: true })).finish();
+      : url.endsWith("/knowledge/objects/list")
+        ? ListKnowledgeObjectsResponse.encode(ListKnowledgeObjectsResponse.fromPartial({})).finish()
+        : ValidateSearchResponse.encode(ValidateSearchResponse.fromPartial({ valid: true })).finish();
     return new Response(body, { status: 200, headers: { "Content-Type": PROTOBUF_CONTENT_TYPE } });
   };
   const transport = new ProtobufTransport({
@@ -63,14 +80,152 @@ test("transport attaches the memory-only token only to protected protobuf calls"
     ValidateSearchRequest,
     ValidateSearchResponse,
   );
+  const knowledgeRoute = defineProtobufRoute(
+    "/api/v1/knowledge/objects/list",
+    ListKnowledgeObjectsRequest,
+    ListKnowledgeObjectsResponse,
+  );
 
   setAdministratorBearerToken(administratorToken);
   await transport.post(protectedRoute, ListIndexesRequest.fromPartial({}), {
     headers: { Authorization: "Bearer also-replaced" },
   });
+  await transport.post(knowledgeRoute, ListKnowledgeObjectsRequest.fromPartial({}));
   await transport.post(searchRoute, ValidateSearchRequest.fromPartial({}));
 
   assert.equal(requests[0]?.headers.get("Authorization"), `Bearer ${administratorToken}`);
   assert.equal(requests[0]?.headers.get("X-Test"), "present");
-  assert.equal(requests[1]?.headers.get("Authorization"), null);
+  assert.equal(requests[1]?.headers.get("Authorization"), `Bearer ${administratorToken}`);
+  assert.equal(requests[2]?.headers.get("Authorization"), null);
+});
+
+test("declared oversized unknown protobuf fields are rejected before decode", async () => {
+  const maximumResponseBytes = 8 << 20;
+  const unknownField = new BinaryWriter()
+    .uint32((100 << 3) | 2)
+    .bytes(new Uint8Array(maximumResponseBytes))
+    .finish();
+  let decodeCalls = 0;
+  const countedResponseCodec = {
+    encode: ListKnowledgeObjectsResponse.encode,
+    decode(
+      input: Parameters<typeof ListKnowledgeObjectsResponse.decode>[0],
+      length?: number,
+    ) {
+      decodeCalls += 1;
+      return ListKnowledgeObjectsResponse.decode(input, length);
+    },
+  };
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(unknownField);
+    },
+    cancel() {
+      cancelled = true;
+      return new Promise<void>(() => {
+        // A declared-size violation must not wait for an adversarial source.
+      });
+    },
+  }, { highWaterMark: 0 });
+  const route = defineProtobufRoute(
+    "/api/v1/knowledge/objects/list",
+    ListKnowledgeObjectsRequest,
+    countedResponseCodec,
+    { maximumResponseBytes },
+  );
+  const transport = new ProtobufTransport({
+    fetch: async () => new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Length": String(unknownField.byteLength),
+        "Content-Type": PROTOBUF_CONTENT_TYPE,
+      },
+    }),
+  });
+
+  await assert.rejects(
+    transport.post(route, ListKnowledgeObjectsRequest.fromPartial({})),
+    ProtobufResponseTooLargeError,
+  );
+  assert.equal(decodeCalls, 0);
+  assert.equal(cancelled, true);
+});
+
+test("many tiny oversized chunks reject before decode without awaiting cancellation", async () => {
+  const maximumResponseBytes = 4 << 10;
+  let decodeCalls = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(1));
+    },
+    cancel() {
+      cancelled = true;
+      return new Promise<void>(() => {
+        // An adversarial source may never settle cancellation.
+      });
+    },
+  }, { highWaterMark: 0 });
+  const countedResponseCodec = {
+    encode: ListKnowledgeObjectsResponse.encode,
+    decode(
+      input: Parameters<typeof ListKnowledgeObjectsResponse.decode>[0],
+      length?: number,
+    ) {
+      decodeCalls += 1;
+      return ListKnowledgeObjectsResponse.decode(input, length);
+    },
+  };
+  const route = defineProtobufRoute(
+    "/api/v1/knowledge/objects/list",
+    ListKnowledgeObjectsRequest,
+    countedResponseCodec,
+    { maximumResponseBytes },
+  );
+  const transport = new ProtobufTransport({
+    fetch: async () => new Response(body, {
+      status: 200,
+      headers: { "Content-Type": PROTOBUF_CONTENT_TYPE },
+    }),
+  });
+
+  await assert.rejects(
+    transport.post(route, ListKnowledgeObjectsRequest.fromPartial({})),
+    ProtobufResponseTooLargeError,
+  );
+  assert.equal(decodeCalls, 0);
+  assert.equal(cancelled, true);
+});
+
+test("error response bodies use a fixed global streaming cap", async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(MAXIMUM_ERROR_RESPONSE_BYTES));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  }, { highWaterMark: 0 });
+  const route = defineProtobufRoute(
+    "/api/v1/search/validate",
+    ValidateSearchRequest,
+    ValidateSearchResponse,
+  );
+  const transport = new ProtobufTransport({
+    fetch: async () => new Response(body, { status: 500, statusText: "Failure" }),
+  });
+
+  await assert.rejects(
+    transport.post(route, ValidateSearchRequest.fromPartial({})),
+    (error: unknown) => {
+      assert.ok(error instanceof HttpError);
+      assert.equal(error.status, 500);
+      assert.equal(error.message, "HTTP 500: Failure");
+      assert.equal(error.responseBody, undefined);
+      return true;
+    },
+  );
+  assert.equal(cancelled, true);
 });

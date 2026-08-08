@@ -12,6 +12,8 @@ import type { BuildMetadata } from "@/gen/ts/open_splunk/v1/common";
 import type { OpenSplunkApiClient } from "./open-splunk-client";
 import type { ProtobufRequestOptions } from "./protobuf-transport";
 
+export const MAXIMUM_BROWSER_BOOTSTRAP_APPS = 256;
+
 export interface BrowserApiLimitsModel {
   maximumPageSize: number;
   maximumPreviewRows: number;
@@ -94,6 +96,9 @@ function sameOriginPath(path: string): string | null {
 }
 
 export function adaptSystemBootstrap(response: GetSystemBootstrapResponse): SystemBootstrapModel {
+  if (response.apps.length > MAXIMUM_BROWSER_BOOTSTRAP_APPS) {
+    throw new TypeError("System bootstrap exceeds the browser app catalog limit.");
+  }
   const limits = response.limits;
   if (response.serverTime === undefined || Number.isNaN(response.serverTime.valueOf())) {
     throw new TypeError("System bootstrap did not include a valid server clock.");

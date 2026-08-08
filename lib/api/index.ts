@@ -1,8 +1,10 @@
 export {
   DEFAULT_REQUEST_TIMEOUT_MS,
   HttpError,
+  MAXIMUM_ERROR_RESPONSE_BYTES,
   PROTOBUF_CONTENT_TYPE,
   ProtobufProtocolError,
+  ProtobufResponseTooLargeError,
   ProtobufTransport,
   defineProtobufRoute,
   isHttpError,
@@ -21,6 +23,7 @@ export type {
   ProtobufCodec,
   ProtobufRequestOptions,
   ProtobufRoute,
+  ProtobufRouteOptions,
   ProtobufTransportOptions,
 } from "./protobuf-transport";
 
@@ -50,6 +53,7 @@ export {
   IndexScopeResolutionError,
   resolveExactIndexScope,
   supportsServerFeature,
+  MAXIMUM_BROWSER_BOOTSTRAP_APPS,
 } from "./system-bootstrap";
 export type {
   BrowserApiLimitsModel,

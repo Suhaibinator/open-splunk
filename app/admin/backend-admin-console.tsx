@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 import { SortDirection } from "@/gen/ts/open_splunk/v1/common";
+import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
   IngestionTokenState,
   type IngestionToken,
@@ -24,6 +25,7 @@ import {
   isHttpError,
   isHttpStatus,
   isOptionalRouteUnavailable,
+  supportsServerFeature,
   type OpenSplunkApiClient,
   type SystemBootstrapModel,
 } from "@/lib/api";
@@ -32,8 +34,13 @@ import { searchLaunchHref } from "@/lib/search/launch-url";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
 import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
+import { KnowledgeManagerGate } from "./knowledge-manager-gate";
+import {
+  backendAdminNavigation,
+  knowledgeManagerAppOptionsFromBootstrap,
+  type BackendAdminSection as AdminSection,
+} from "./knowledge-manager-feature";
 
-type AdminSection = "overview" | "apps" | "indexes" | "collector-fleet" | "collectors" | "access" | "server";
 type AdminModal = "create-index" | "edit-index" | "create-token" | "edit-token";
 type ResourceState = "loading" | "available" | "unavailable" | "error";
 
@@ -135,16 +142,6 @@ interface PersistedTokenCreateGuardV1 {
   failureMessage: string;
   knownIssuedTokenId: string | null;
 }
-
-const NAV_ITEMS: Array<{ key: AdminSection; label: string; detail: string; icon: string }> = [
-  { key: "overview", label: "System overview", detail: "Capabilities and limits", icon: "▥" },
-  { key: "apps", label: "Apps", detail: "Workspaces and defaults", icon: "◇" },
-  { key: "indexes", label: "Indexes", detail: "State and retention", icon: "▦" },
-  { key: "collector-fleet", label: "Collector fleet", detail: "Health, queues, and inputs", icon: "⌁" },
-  { key: "collectors", label: "Ingestion tokens", detail: "Credentials and scopes", icon: "⇣" },
-  { key: "access", label: "Users & access", detail: "Not exposed by this server", icon: "♙" },
-  { key: "server", label: "Server settings", detail: "Read-only limits", icon: "⚙" },
-];
 
 const TOKEN_HISTORY_GUARD_KEY = "__openSplunkTokenGuard";
 const TOKEN_CREATE_GUARD_STORAGE_PREFIX = "open-splunk.admin.token-create-guard.v1";
@@ -2732,6 +2729,18 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const tokenRevealOpen = issuedToken !== null;
   const tokenRecoveryOpen = tokenCreateRecovery !== null;
   const tokenResolutionOpen = tokenRevealOpen || tokenRecoveryOpen;
+  const knowledgeFeatureAdvertised = bootstrap !== null && supportsServerFeature(
+    bootstrap,
+    ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+  );
+  const knowledgeApps = knowledgeFeatureAdvertised && bootstrap !== null
+    ? knowledgeManagerAppOptionsFromBootstrap(bootstrap.apps)
+    : null;
+  const knowledgeAdvertised = knowledgeFeatureAdvertised && knowledgeApps !== null;
+  const navigationItems = backendAdminNavigation(knowledgeAdvertised);
+  useEffect(() => {
+    if (section === "knowledge" && !knowledgeAdvertised) setSection("overview");
+  }, [knowledgeAdvertised, section]);
   const hasAvailableAdminRoute = indexState === "available" || tokenState === "available";
   const adminRoutesLoading = indexState === "loading" || tokenState === "loading";
   const connectionStatus = bootstrap !== null
@@ -2785,14 +2794,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       <div className="admin-mobile-section-picker">
         <label htmlFor="admin-section">Administration section</label>
         <select id="admin-section" value={section} onChange={(event) => setSection(event.target.value as AdminSection)}>
-          {NAV_ITEMS.map((item) => <option value={item.key} key={item.key}>{item.label}</option>)}
+          {navigationItems.map((item) => <option value={item.key} key={item.key}>{item.label}</option>)}
         </select>
       </div>
 
       <div className="admin-layout">
         <aside className="admin-sidebar" aria-label="Administration navigation">
           <span className="admin-sidebar-label">SETTINGS</span>
-          {NAV_ITEMS.map((item) => (
+          {navigationItems.map((item) => (
             <button className={section === item.key ? "active" : undefined} type="button" onClick={() => setSection(item.key)} key={item.key}>
               <i aria-hidden="true">{item.icon}</i><span><strong>{item.label}</strong><small>{item.detail}</small></span><b aria-hidden="true">›</b>
             </button>
@@ -2851,6 +2860,15 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           ) : null}
           {section === "collector-fleet" ? (
             <CollectorFleetPanel apiBaseUrl={apiBaseUrl} bootstrap={bootstrap} />
+          ) : null}
+          {section === "knowledge" && knowledgeAdvertised && bootstrap !== null && knowledgeApps !== null ? (
+            <KnowledgeManagerGate
+              enabled
+              apiBaseUrl={apiBaseUrl}
+              apps={knowledgeApps}
+              initialAppId={bootstrap.selectedAppId}
+              maximumPageSize={bootstrap.limits.maximumPageSize}
+            />
           ) : null}
           {section === "collectors" ? (
             <BackendTokens
