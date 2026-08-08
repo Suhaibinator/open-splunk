@@ -36,6 +36,7 @@ type Query struct {
 	// before opening the provenance, so mutation cannot preserve the evidence.
 	parsedEvalPredicates uint32
 	parsedSPL            bool
+	knowledgePrelude     queryKnowledgePrelude
 }
 
 // AuthoredScalarPredicateCount opens parser-owned whole-query provenance only

@@ -23,6 +23,9 @@ func ValidateTimelineEligibility(query *Query) error {
 	if query == nil || len(query.Operators) == 0 {
 		return timelinePipelineDiagnostic(spl.Range{})
 	}
+	if err := ValidateKnowledgePreludeIntegrity(query); err != nil {
+		return timelinePipelineDiagnostic(operatorRange(query.Operators[0]))
+	}
 	if query.DynamicOutput != nil {
 		return timelinePipelineDiagnostic(operatorRange(query.Operators[0]))
 	}
@@ -70,6 +73,28 @@ func ValidateTimelineEligibility(query *Query) error {
 		case *ExtractJSON:
 			if operator.Output.Name == "_time" {
 				return timelineTimeDiagnostic(operator.Range)
+			}
+		case *ConditionalExtract:
+			for _, capture := range operator.Extraction().Captures() {
+				if capture.Name() == "_time" {
+					return timelineTimeDiagnostic(operator.SourceRange())
+				}
+			}
+		case *ConditionalExtractJSON:
+			if operator.Extraction().Output() == "_time" {
+				return timelineTimeDiagnostic(operator.SourceRange())
+			}
+		case *CopyFieldAlias:
+			for _, assignment := range operator.Assignments() {
+				if assignment.Destination() == "_time" {
+					return timelineTimeDiagnostic(operator.SourceRange())
+				}
+			}
+		case *ParallelExtend:
+			for _, assignment := range operator.Assignments() {
+				if assignment.Destination() == "_time" {
+					return timelineTimeDiagnostic(operator.SourceRange())
+				}
 			}
 		case *Rename:
 			for _, assignment := range operator.Assignments {

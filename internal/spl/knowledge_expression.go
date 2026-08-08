@@ -83,6 +83,44 @@ func AnalyzeScalarExpression(expression ScalarExpr) (ScalarExpressionAnalysis, e
 	}, nil
 }
 
+// ScalarExpressionMayReturnBooleanFunction reports the exact authored-eval
+// restriction used for a direct assignment: Boolean-returning functions are
+// not storable values, including through coalesce/if/case value branches.
+// Parse and Analyze must still be called separately for syntax and bounds.
+func ScalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
+	switch expression := expression.(type) {
+	case *ScalarCallExpr:
+		if expression == nil {
+			return false
+		}
+		if expression.Function.ReturnsBoolean() {
+			return true
+		}
+		if expression.Function == ScalarFunctionCoalesce {
+			for _, argument := range expression.Arguments {
+				if ScalarExpressionMayReturnBooleanFunction(argument) {
+					return true
+				}
+			}
+		}
+		return false
+	case *ScalarIfExpr:
+		return expression != nil &&
+			(ScalarExpressionMayReturnBooleanFunction(expression.True) ||
+				ScalarExpressionMayReturnBooleanFunction(expression.False))
+	case *ScalarCaseExpr:
+		if expression == nil {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if ScalarExpressionMayReturnBooleanFunction(branch.Value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 type scalarExpressionAnalyzer struct {
 	fields     map[string]struct{}
 	nodes      int

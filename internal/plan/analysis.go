@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	maximumAnalysisNodes = 4_096
-	maximumAnalysisDepth = 1_024
+	maximumAnalysisNodes          = 4_096
+	maximumKnowledgeAnalysisNodes = 36_000
+	maximumAnalysisDepth          = 1_024
 )
 
 // Analysis is bounded metadata derived from a fully accepted logical plan.
@@ -38,6 +39,9 @@ func analyze(query *Query) (internalAnalysis, error) {
 	if query == nil {
 		return internalAnalysis{}, errors.New("analyze logical query: query is nil")
 	}
+	if err := ValidateKnowledgePreludeIntegrity(query); err != nil {
+		return internalAnalysis{}, fmt.Errorf("analyze logical query: %w", err)
+	}
 	analyzer := queryAnalyzer{
 		fields: make(map[string]struct{}),
 	}
@@ -60,6 +64,7 @@ func analyze(query *Query) (internalAnalysis, error) {
 type queryAnalyzer struct {
 	fields           map[string]struct{}
 	nodes            int
+	knowledgeNodes   int
 	scalarPredicates uint32
 }
 
@@ -70,6 +75,24 @@ func (analyzer *queryAnalyzer) enter(depth int) error {
 	analyzer.nodes++
 	if analyzer.nodes > maximumAnalysisNodes {
 		return fmt.Errorf("analyze logical query: tree exceeds %d nodes", maximumAnalysisNodes)
+	}
+	return nil
+}
+
+// enterKnowledge keeps the parser-authored analysis ceiling unchanged while
+// admitting the separately bounded flattened knowledge inventory. The limit
+// covers 32,768 scalar AST occurrences plus generated fields, object inputs,
+// selector dimensions, and explicit prelude operators at their shared maxima.
+func (analyzer *queryAnalyzer) enterKnowledge(depth int) error {
+	if depth > maximumAnalysisDepth {
+		return fmt.Errorf("analyze logical query: tree exceeds depth %d", maximumAnalysisDepth)
+	}
+	analyzer.knowledgeNodes++
+	if analyzer.knowledgeNodes > maximumKnowledgeAnalysisNodes {
+		return fmt.Errorf(
+			"analyze logical query: knowledge prelude exceeds %d nodes",
+			maximumKnowledgeAnalysisNodes,
+		)
 	}
 	return nil
 }
@@ -155,7 +178,11 @@ func (analyzer *queryAnalyzer) visitAggregateMeasure(
 }
 
 func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error {
-	if err := analyzer.enter(depth); err != nil {
+	enter := analyzer.enter
+	if isKnowledgePreludeOperator(operator) {
+		enter = analyzer.enterKnowledge
+	}
+	if err := enter(depth); err != nil {
 		return err
 	}
 	if operator == nil || isNilOperator(operator) {
@@ -200,6 +227,75 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			return err
 		}
 		return analyzer.addField(operator.Input, depth+1)
+	case *ConditionalExtract:
+		extraction := operator.Extraction()
+		if err := analyzer.visitKnowledgeSelector(extraction.Selector(), depth+1); err != nil {
+			return err
+		}
+		captures := extraction.Captures()
+		if len(captures) == 0 {
+			return errors.New("analyze logical query: knowledge regex has no captures")
+		}
+		for _, capture := range captures {
+			if capture.Group() == 0 {
+				return errors.New("analyze logical query: knowledge regex capture is invalid")
+			}
+			if err := analyzer.validateKnowledgeField(capture.Name(), depth+1); err != nil {
+				return err
+			}
+		}
+		return analyzer.addKnowledgeField(extraction.Input(), depth+1)
+	case *ConditionalExtractJSON:
+		extraction := operator.Extraction()
+		if err := analyzer.visitKnowledgeSelector(extraction.Selector(), depth+1); err != nil {
+			return err
+		}
+		if len(extraction.Steps()) == 0 {
+			return errors.New("analyze logical query: knowledge JSON path is empty")
+		}
+		if err := analyzer.validateKnowledgeField(extraction.Output(), depth+1); err != nil {
+			return err
+		}
+		return analyzer.addKnowledgeField(extraction.Input(), depth+1)
+	case *CopyFieldAlias:
+		assignments := operator.Assignments()
+		if len(assignments) == 0 {
+			return errors.New("analyze logical query: knowledge alias stage is empty")
+		}
+		for _, assignment := range assignments {
+			if err := analyzer.visitKnowledgeSelector(assignment.Selector(), depth+1); err != nil {
+				return err
+			}
+			if err := analyzer.validateKnowledgeField(assignment.Destination(), depth+1); err != nil {
+				return err
+			}
+			if err := analyzer.addKnowledgeField(assignment.Source(), depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *ParallelExtend:
+		assignments := operator.Assignments()
+		if len(assignments) == 0 {
+			return errors.New("analyze logical query: knowledge calculated stage is empty")
+		}
+		for _, assignment := range assignments {
+			if assignment.Expression() == "" || assignment.Nodes() == 0 {
+				return errors.New("analyze logical query: knowledge calculated expression is invalid")
+			}
+			if err := analyzer.visitKnowledgeSelector(assignment.Selector(), depth+1); err != nil {
+				return err
+			}
+			if err := analyzer.validateKnowledgeField(assignment.Destination(), depth+1); err != nil {
+				return err
+			}
+			for _, input := range assignment.InputFields() {
+				if err := analyzer.addKnowledgeField(input, depth+1); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	case *Rename:
 		for _, assignment := range operator.Assignments {
 			if err := analyzer.validateField(assignment.Destination, depth+1); err != nil {

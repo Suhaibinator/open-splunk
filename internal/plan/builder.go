@@ -3390,39 +3390,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 }
 
 func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
-	switch expression := expression.(type) {
-	case *spl.ScalarCallExpr:
-		if expression == nil {
-			return false
-		}
-		if expression.Function.ReturnsBoolean() {
-			return true
-		}
-		if expression.Function == spl.ScalarFunctionCoalesce {
-			for _, argument := range expression.Arguments {
-				if splScalarMayReturnBooleanFunction(argument) {
-					return true
-				}
-			}
-		}
-		return false
-	case *spl.ScalarIfExpr:
-		return expression != nil &&
-			(splScalarMayReturnBooleanFunction(expression.True) ||
-				splScalarMayReturnBooleanFunction(expression.False))
-	case *spl.ScalarCaseExpr:
-		if expression == nil {
-			return false
-		}
-		for _, branch := range expression.Branches {
-			if splScalarMayReturnBooleanFunction(branch.Value) {
-				return true
-			}
-		}
-		return false
-	default:
-		return false
-	}
+	return spl.ScalarExpressionMayReturnBooleanFunction(expression)
 }
 
 func splScalarMayReturnBooleanValue(expression spl.ScalarExpr) bool {
