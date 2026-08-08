@@ -289,7 +289,7 @@ func explainSQLiteQueryPlan(
 	t.Helper()
 	rows, err := database.Query("EXPLAIN QUERY PLAN "+query, arguments...)
 	if err != nil {
-		t.Fatalf("explain full List query: %v\n%s", err, query)
+		t.Fatalf("explain SQLite query: %v\n%s", err, query)
 	}
 	defer rows.Close()
 	var details []string
@@ -297,12 +297,12 @@ func explainSQLiteQueryPlan(
 		var id, parent, unused int
 		var detail string
 		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-			t.Fatal(err)
+			t.Fatalf("scan SQLite query plan: %v", err)
 		}
 		details = append(details, detail)
 	}
 	if err := rows.Err(); err != nil {
-		t.Fatal(err)
+		t.Fatalf("read SQLite query plan: %v", err)
 	}
 	return details
 }
