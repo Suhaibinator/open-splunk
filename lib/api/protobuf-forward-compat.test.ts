@@ -235,13 +235,17 @@ test("generated knowledge mutation outcome authority pins canonical wire", () =>
     tenantCatalogRevision: 9n,
     tenantCatalogStateToken: Uint8Array.of(0xaa, 0xbb),
     auditAuthority: { $case: "successfulAuditSequence", value: 11n },
+    occurredAtUnixMicro: 13n,
+    retentionAnchorUnixMicro: 17n,
+    retainUntilUnixMicro: 19n,
   });
   const expected = Uint8Array.from([
     0x0a, 0x0e, ...Buffer.from("objects.update"),
     0x12, 0x0c, ...Buffer.from("scope_change"),
     0x1a, 0x0c, 0x0a, 0x04, ...Buffer.from("ko-1"),
     0x10, 0x07, 0x1a, 0x02, 0x01, 0x02,
-    0x20, 0x09, 0x2a, 0x02, 0xaa, 0xbb, 0x30, 0x0b,
+    0x20, 0x09, 0x2a, 0x02, 0xaa, 0xbb,
+    0x40, 0x0d, 0x48, 0x11, 0x50, 0x13, 0x30, 0x0b,
   ]);
   const first = KnowledgeMutationOutcomeRecord.encode(message).finish();
   const second = KnowledgeMutationOutcomeRecord.encode(message).finish();

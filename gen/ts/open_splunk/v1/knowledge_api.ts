@@ -273,6 +273,20 @@ export interface KnowledgeMutationOutcomeRecord {
   object: KnowledgeObjectVersionReference | undefined;
   tenantCatalogRevision: bigint;
   tenantCatalogStateToken: Uint8Array;
+  /**
+   * Immutable mutation occurrence and retention authorities. Reclamation
+   * validates these canonical microsecond values against the receipt row so a
+   * damaged or shortened fence cannot make an idempotent outcome disappear.
+   */
+  occurredAtUnixMicro: bigint;
+  retentionAnchorUnixMicro: bigint;
+  retainUntilUnixMicro: bigint;
+  /**
+   * Keep the oneof declaration after the ordinary scalar fields. The Go
+   * runtime emits oneofs after ordinary fields, while the TypeScript runtime
+   * follows declaration order; this ordering makes their canonical v1 wire
+   * bytes identical without changing any established field number.
+   */
   auditAuthority: { $case: "successfulAuditSequence"; value: bigint } | {
     $case: "recoveryAuditSequence";
     value: bigint;
@@ -1949,6 +1963,9 @@ function createBaseKnowledgeMutationOutcomeRecord(): KnowledgeMutationOutcomeRec
     object: undefined,
     tenantCatalogRevision: 0n,
     tenantCatalogStateToken: new Uint8Array(0),
+    occurredAtUnixMicro: 0n,
+    retentionAnchorUnixMicro: 0n,
+    retainUntilUnixMicro: 0n,
     auditAuthority: undefined,
   };
 }
@@ -1972,6 +1989,24 @@ export const KnowledgeMutationOutcomeRecord: MessageFns<KnowledgeMutationOutcome
     }
     if (message.tenantCatalogStateToken.length !== 0) {
       writer.uint32(42).bytes(message.tenantCatalogStateToken);
+    }
+    if (message.occurredAtUnixMicro !== 0n) {
+      if (BigInt.asIntN(64, message.occurredAtUnixMicro) !== message.occurredAtUnixMicro) {
+        throw new globalThis.Error("value provided for field message.occurredAtUnixMicro of type int64 too large");
+      }
+      writer.uint32(64).int64(message.occurredAtUnixMicro);
+    }
+    if (message.retentionAnchorUnixMicro !== 0n) {
+      if (BigInt.asIntN(64, message.retentionAnchorUnixMicro) !== message.retentionAnchorUnixMicro) {
+        throw new globalThis.Error("value provided for field message.retentionAnchorUnixMicro of type int64 too large");
+      }
+      writer.uint32(72).int64(message.retentionAnchorUnixMicro);
+    }
+    if (message.retainUntilUnixMicro !== 0n) {
+      if (BigInt.asIntN(64, message.retainUntilUnixMicro) !== message.retainUntilUnixMicro) {
+        throw new globalThis.Error("value provided for field message.retainUntilUnixMicro of type int64 too large");
+      }
+      writer.uint32(80).int64(message.retainUntilUnixMicro);
     }
     switch (message.auditAuthority?.$case) {
       case "successfulAuditSequence":
@@ -2037,6 +2072,30 @@ export const KnowledgeMutationOutcomeRecord: MessageFns<KnowledgeMutationOutcome
           message.tenantCatalogStateToken = reader.bytes();
           continue;
         }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.occurredAtUnixMicro = reader.int64() as bigint;
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.retentionAnchorUnixMicro = reader.int64() as bigint;
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.retainUntilUnixMicro = reader.int64() as bigint;
+          continue;
+        }
         case 6: {
           if (tag !== 48) {
             break;
@@ -2081,6 +2140,21 @@ export const KnowledgeMutationOutcomeRecord: MessageFns<KnowledgeMutationOutcome
         : isSet(object.tenant_catalog_state_token)
         ? bytesFromBase64(object.tenant_catalog_state_token)
         : new Uint8Array(0),
+      occurredAtUnixMicro: isSet(object.occurredAtUnixMicro)
+        ? BigInt(object.occurredAtUnixMicro)
+        : isSet(object.occurred_at_unix_micro)
+        ? BigInt(object.occurred_at_unix_micro)
+        : 0n,
+      retentionAnchorUnixMicro: isSet(object.retentionAnchorUnixMicro)
+        ? BigInt(object.retentionAnchorUnixMicro)
+        : isSet(object.retention_anchor_unix_micro)
+        ? BigInt(object.retention_anchor_unix_micro)
+        : 0n,
+      retainUntilUnixMicro: isSet(object.retainUntilUnixMicro)
+        ? BigInt(object.retainUntilUnixMicro)
+        : isSet(object.retain_until_unix_micro)
+        ? BigInt(object.retain_until_unix_micro)
+        : 0n,
       auditAuthority: isSet(object.successfulAuditSequence)
         ? { $case: "successfulAuditSequence", value: BigInt(object.successfulAuditSequence) }
         : isSet(object.successful_audit_sequence)
@@ -2110,6 +2184,15 @@ export const KnowledgeMutationOutcomeRecord: MessageFns<KnowledgeMutationOutcome
     if (message.tenantCatalogStateToken.length !== 0) {
       obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
+    if (message.occurredAtUnixMicro !== 0n) {
+      obj.occurredAtUnixMicro = message.occurredAtUnixMicro.toString();
+    }
+    if (message.retentionAnchorUnixMicro !== 0n) {
+      obj.retentionAnchorUnixMicro = message.retentionAnchorUnixMicro.toString();
+    }
+    if (message.retainUntilUnixMicro !== 0n) {
+      obj.retainUntilUnixMicro = message.retainUntilUnixMicro.toString();
+    }
     if (message.auditAuthority?.$case === "successfulAuditSequence") {
       obj.successfulAuditSequence = message.auditAuthority.value.toString();
     } else if (message.auditAuthority?.$case === "recoveryAuditSequence") {
@@ -2135,6 +2218,16 @@ export const KnowledgeMutationOutcomeRecord: MessageFns<KnowledgeMutationOutcome
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
     message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
+    message.occurredAtUnixMicro = (object.occurredAtUnixMicro !== undefined && object.occurredAtUnixMicro !== null)
+      ? BigInt(object.occurredAtUnixMicro)
+      : 0n;
+    message.retentionAnchorUnixMicro =
+      (object.retentionAnchorUnixMicro !== undefined && object.retentionAnchorUnixMicro !== null)
+        ? BigInt(object.retentionAnchorUnixMicro)
+        : 0n;
+    message.retainUntilUnixMicro = (object.retainUntilUnixMicro !== undefined && object.retainUntilUnixMicro !== null)
+      ? BigInt(object.retainUntilUnixMicro)
+      : 0n;
     switch (object.auditAuthority?.$case) {
       case "successfulAuditSequence": {
         if (object.auditAuthority?.value !== undefined && object.auditAuthority?.value !== null) {

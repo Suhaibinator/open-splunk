@@ -533,6 +533,9 @@ func TestKnowledgeMutationOutcomeRecordPinsCanonicalAuthorityWire(t *testing.T) 
 		{"tenant_catalog_state_token", 5, protoreflect.BytesKind},
 		{"successful_audit_sequence", 6, protoreflect.Uint64Kind},
 		{"recovery_audit_sequence", 7, protoreflect.Uint64Kind},
+		{"occurred_at_unix_micro", 8, protoreflect.Int64Kind},
+		{"retention_anchor_unix_micro", 9, protoreflect.Int64Kind},
+		{"retain_until_unix_micro", 10, protoreflect.Int64Kind},
 	}
 	if descriptor.Fields().Len() != len(fields) || descriptor.Oneofs().Len() != 1 {
 		t.Fatalf("outcome descriptor shape = %d fields/%d oneofs, want %d/1",
@@ -546,7 +549,7 @@ func TestKnowledgeMutationOutcomeRecordPinsCanonicalAuthorityWire(t *testing.T) 
 				want.name, field, want.kind, want.number)
 			continue
 		}
-		if want.number >= 6 && field.ContainingOneof() != auditAuthority {
+		if (want.number == 6 || want.number == 7) && field.ContainingOneof() != auditAuthority {
 			t.Errorf("KnowledgeMutationOutcomeRecord.%s is not in audit_authority", want.name)
 		}
 	}
@@ -564,13 +567,17 @@ func TestKnowledgeMutationOutcomeRecordPinsCanonicalAuthorityWire(t *testing.T) 
 		AuditAuthority: &opensplunkv1.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
 			SuccessfulAuditSequence: 11,
 		},
+		OccurredAtUnixMicro:      13,
+		RetentionAnchorUnixMicro: 17,
+		RetainUntilUnixMicro:     19,
 	}
 	wantWire := append([]byte{0x0a, 0x0e}, []byte("objects.update")...)
 	wantWire = append(wantWire, 0x12, 0x0c)
 	wantWire = append(wantWire, []byte("scope_change")...)
 	wantWire = append(wantWire,
 		0x1a, 0x0c, 0x0a, 0x04, 'k', 'o', '-', '1', 0x10, 0x07, 0x1a, 0x02, 0x01, 0x02,
-		0x20, 0x09, 0x2a, 0x02, 0xaa, 0xbb, 0x30, 0x0b,
+		0x20, 0x09, 0x2a, 0x02, 0xaa, 0xbb,
+		0x40, 0x0d, 0x48, 0x11, 0x50, 0x13, 0x30, 0x0b,
 	)
 	first, err := (proto.MarshalOptions{Deterministic: true}).Marshal(message)
 	if err != nil {

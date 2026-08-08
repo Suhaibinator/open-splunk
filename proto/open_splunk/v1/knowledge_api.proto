@@ -144,6 +144,16 @@ message KnowledgeMutationOutcomeRecord {
   KnowledgeObjectVersionReference object = 3;
   uint64 tenant_catalog_revision = 4;
   bytes tenant_catalog_state_token = 5;
+  // Immutable mutation occurrence and retention authorities. Reclamation
+  // validates these canonical microsecond values against the receipt row so a
+  // damaged or shortened fence cannot make an idempotent outcome disappear.
+  int64 occurred_at_unix_micro = 8;
+  int64 retention_anchor_unix_micro = 9;
+  int64 retain_until_unix_micro = 10;
+  // Keep the oneof declaration after the ordinary scalar fields. The Go
+  // runtime emits oneofs after ordinary fields, while the TypeScript runtime
+  // follows declaration order; this ordering makes their canonical v1 wire
+  // bytes identical without changing any established field number.
   oneof audit_authority {
     uint64 successful_audit_sequence = 6;
     uint64 recovery_audit_sequence = 7;

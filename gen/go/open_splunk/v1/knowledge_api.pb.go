@@ -953,6 +953,17 @@ type KnowledgeMutationOutcomeRecord struct {
 	Object                  *KnowledgeObjectVersionReference `protobuf:"bytes,3,opt,name=object,proto3" json:"object,omitempty"`
 	TenantCatalogRevision   uint64                           `protobuf:"varint,4,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`
 	TenantCatalogStateToken []byte                           `protobuf:"bytes,5,opt,name=tenant_catalog_state_token,json=tenantCatalogStateToken,proto3" json:"tenant_catalog_state_token,omitempty"`
+	// Immutable mutation occurrence and retention authorities. Reclamation
+	// validates these canonical microsecond values against the receipt row so a
+	// damaged or shortened fence cannot make an idempotent outcome disappear.
+	OccurredAtUnixMicro      int64 `protobuf:"varint,8,opt,name=occurred_at_unix_micro,json=occurredAtUnixMicro,proto3" json:"occurred_at_unix_micro,omitempty"`
+	RetentionAnchorUnixMicro int64 `protobuf:"varint,9,opt,name=retention_anchor_unix_micro,json=retentionAnchorUnixMicro,proto3" json:"retention_anchor_unix_micro,omitempty"`
+	RetainUntilUnixMicro     int64 `protobuf:"varint,10,opt,name=retain_until_unix_micro,json=retainUntilUnixMicro,proto3" json:"retain_until_unix_micro,omitempty"`
+	// Keep the oneof declaration after the ordinary scalar fields. The Go
+	// runtime emits oneofs after ordinary fields, while the TypeScript runtime
+	// follows declaration order; this ordering makes their canonical v1 wire
+	// bytes identical without changing any established field number.
+	//
 	// Types that are valid to be assigned to AuditAuthority:
 	//
 	//	*KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence
@@ -1025,6 +1036,27 @@ func (x *KnowledgeMutationOutcomeRecord) GetTenantCatalogStateToken() []byte {
 		return x.TenantCatalogStateToken
 	}
 	return nil
+}
+
+func (x *KnowledgeMutationOutcomeRecord) GetOccurredAtUnixMicro() int64 {
+	if x != nil {
+		return x.OccurredAtUnixMicro
+	}
+	return 0
+}
+
+func (x *KnowledgeMutationOutcomeRecord) GetRetentionAnchorUnixMicro() int64 {
+	if x != nil {
+		return x.RetentionAnchorUnixMicro
+	}
+	return 0
+}
+
+func (x *KnowledgeMutationOutcomeRecord) GetRetainUntilUnixMicro() int64 {
+	if x != nil {
+		return x.RetainUntilUnixMicro
+	}
+	return 0
 }
 
 func (x *KnowledgeMutationOutcomeRecord) GetAuditAuthority() isKnowledgeMutationOutcomeRecord_AuditAuthority {
@@ -2230,13 +2262,17 @@ const file_open_splunk_v1_knowledge_api_proto_rawDesc = "" +
 	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12'\n" +
 	"\x0fdeleted_version\x18\x02 \x01(\x04R\x0edeletedVersion\x126\n" +
 	"\x17tenant_catalog_revision\x18\x03 \x01(\x04R\x15tenantCatalogRevision\x12;\n" +
-	"\x1atenant_catalog_state_token\x18\x04 \x01(\fR\x17tenantCatalogStateToken\"\xa4\x03\n" +
+	"\x1atenant_catalog_state_token\x18\x04 \x01(\fR\x17tenantCatalogStateToken\"\xcf\x04\n" +
 	"\x1eKnowledgeMutationOutcomeRecord\x12\x14\n" +
 	"\x05route\x18\x01 \x01(\tR\x05route\x12#\n" +
 	"\rmutation_kind\x18\x02 \x01(\tR\fmutationKind\x12G\n" +
 	"\x06object\x18\x03 \x01(\v2/.open_splunk.v1.KnowledgeObjectVersionReferenceR\x06object\x126\n" +
 	"\x17tenant_catalog_revision\x18\x04 \x01(\x04R\x15tenantCatalogRevision\x12;\n" +
-	"\x1atenant_catalog_state_token\x18\x05 \x01(\fR\x17tenantCatalogStateToken\x12<\n" +
+	"\x1atenant_catalog_state_token\x18\x05 \x01(\fR\x17tenantCatalogStateToken\x123\n" +
+	"\x16occurred_at_unix_micro\x18\b \x01(\x03R\x13occurredAtUnixMicro\x12=\n" +
+	"\x1bretention_anchor_unix_micro\x18\t \x01(\x03R\x18retentionAnchorUnixMicro\x125\n" +
+	"\x17retain_until_unix_micro\x18\n" +
+	" \x01(\x03R\x14retainUntilUnixMicro\x12<\n" +
 	"\x19successful_audit_sequence\x18\x06 \x01(\x04H\x00R\x17successfulAuditSequence\x128\n" +
 	"\x17recovery_audit_sequence\x18\a \x01(\x04H\x00R\x15recoveryAuditSequenceB\x11\n" +
 	"\x0faudit_authority\"\x97\x02\n" +
