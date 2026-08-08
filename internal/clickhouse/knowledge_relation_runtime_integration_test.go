@@ -1,0 +1,539 @@
+package clickhouse
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
+	"github.com/Suhaibinator/open-splunk/internal/testsupport"
+)
+
+// TestKnowledgeRelationAndRuntimeGuardAgainstClickHouse is opt-in because it
+// starts the repository's digest-pinned ClickHouse image. It is intentionally
+// table-free: the fixture proves the generated knowledge relation and its
+// whole-relation runtime fence without migrations or a mutable catalog.
+func TestKnowledgeRelationAndRuntimeGuardAgainstClickHouse(t *testing.T) {
+	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
+		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker CLI is unavailable: %v", err)
+	}
+
+	image, err := testsupport.ResolvePinnedClickHouseImage(
+		os.Getenv("OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"),
+	)
+	if err != nil {
+		t.Fatalf("resolve pinned ClickHouse image: %v", err)
+	}
+	overallContext, cancelOverall := context.WithTimeout(
+		context.Background(),
+		50*time.Second,
+	)
+	defer cancelOverall()
+	startupContext, cancelStartup := context.WithTimeout(overallContext, 20*time.Second)
+	defer cancelStartup()
+	if err := exec.CommandContext(
+		startupContext,
+		"docker",
+		"image",
+		"inspect",
+		image,
+	).Run(); err != nil {
+		t.Fatalf(
+			"digest-pinned ClickHouse image must be cached before this bounded test runs: %v",
+			err,
+		)
+	}
+
+	container, err := testsupport.StartClickHouse(startupContext, image)
+	if err != nil {
+		t.Fatalf("start pinned ClickHouse fixture: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupContext, cleanupCancel := context.WithTimeout(
+			context.Background(),
+			8*time.Second,
+		)
+		defer cleanupCancel()
+		if closeErr := container.Close(cleanupContext); closeErr != nil {
+			t.Errorf("close knowledge relation ClickHouse fixture: %v", closeErr)
+		}
+	})
+	if container.Image != image {
+		t.Fatalf("started ClickHouse image = %q, want %q", container.Image, image)
+	}
+
+	connection, err := clickhousedriver.Open(&clickhousedriver.Options{
+		Protocol: clickhousedriver.Native,
+		Addr:     []string{container.Address},
+		Auth: clickhousedriver.Auth{
+			Database: container.Database,
+			Username: container.Username,
+			Password: container.Password,
+		},
+		DialTimeout: 5 * time.Second,
+		ReadTimeout: 15 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("open knowledge relation ClickHouse connection: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := connection.Close(); closeErr != nil {
+			t.Errorf("close knowledge relation ClickHouse connection: %v", closeErr)
+		}
+	})
+	if err := connection.Ping(startupContext); err != nil {
+		t.Fatalf("ping knowledge relation ClickHouse fixture: %v", err)
+	}
+
+	if !t.Run("deferred composed relation executes", func(t *testing.T) {
+		program := deferredMixedKnowledgeProgramForTest(t)
+		deferred, compileErr := compileDeferredKnowledgeRelation(
+			compiledRelation{
+				sql:   knowledgeRuntimeSyntheticEventSQL,
+				depth: 1,
+			},
+			knowledgeExtractionStageState(),
+			nil,
+			knowledgePreludePreparationForTest(program),
+		)
+		if compileErr != nil {
+			t.Fatalf("compile deferred knowledge relation: %v", compileErr)
+		}
+		if deferred.args != nil || len(deferred.state.chronologicalBarriers) != 1 {
+			t.Fatalf("deferred relation authority = %#v", deferred)
+		}
+
+		consumerSQL := `SELECT ` +
+			`dynamicElement("regex_value", 'String') AS "regex_value", ` +
+			`dynamicElement("alias_value", 'String') AS "alias_value", ` +
+			`dynamicElement("calculated_value", 'String') AS "calculated_value" ` +
+			`FROM (` + deferred.relation.sql + `) AS "__os_ko_fixture_consumer"`
+		consumer := deferred.relation.selectFrom(consumerSQL, deferred.relation.ownerRange)
+		compiled, wrapErr := wrapChronologicalValidation(
+			consumer.sql,
+			consumer.depth,
+			consumer.ownerRange,
+			deferred.state.chronologicalBarriers,
+			[]string{`"regex_value"`, `"alias_value"`, `"calculated_value"`},
+			[]string{"regex_value", "alias_value", "calculated_value"},
+			"",
+			eventStatsOrdinarySourceFanout,
+			CompiledQuery{Args: deferred.args},
+			0,
+		)
+		if wrapErr != nil {
+			t.Fatalf("render deferred knowledge validation graph: %v", wrapErr)
+		}
+		queryContext, cancelQuery := knowledgeRuntimeIntegrationQueryContext(overallContext)
+		defer cancelQuery()
+		rows, queryErr := connection.Query(queryContext, compiled.SQL, compiled.Args...)
+		if queryErr != nil {
+			t.Fatalf(
+				"execute deferred knowledge relation: %v\nSQL: %s\nargs: %#v",
+				queryErr,
+				compiled.SQL,
+				compiled.Args,
+			)
+		}
+		defer func() {
+			if closeErr := rows.Close(); closeErr != nil {
+				t.Errorf("close deferred knowledge relation rows: %v", closeErr)
+			}
+		}()
+		columnTypes := rows.ColumnTypes()
+		wantColumns := []string{"regex_value", "alias_value", "calculated_value"}
+		if len(columnTypes) != len(wantColumns) {
+			t.Fatalf("deferred knowledge relation columns = %d, want %d", len(columnTypes), len(wantColumns))
+		}
+		for index, want := range wantColumns {
+			if columnTypes[index].Name() != want {
+				t.Fatalf(
+					"deferred knowledge relation column %d = %q, want %q",
+					index,
+					columnTypes[index].Name(),
+					want,
+				)
+			}
+		}
+		if !rows.Next() {
+			if rowErr := rows.Err(); rowErr != nil {
+				t.Fatalf("read deferred knowledge relation: %v", rowErr)
+			}
+			t.Fatal("deferred knowledge relation returned no row")
+		}
+		var regexValue, aliasValue, calculatedValue string
+		if scanErr := rows.Scan(&regexValue, &aliasValue, &calculatedValue); scanErr != nil {
+			t.Fatalf("scan deferred knowledge relation: %v", scanErr)
+		}
+		if rows.Next() {
+			t.Fatal("deferred knowledge relation returned more than one row")
+		}
+		if rowErr := rows.Err(); rowErr != nil {
+			t.Fatalf("consume deferred knowledge relation: %v", rowErr)
+		}
+		if regexValue != "alpha" || aliasValue != "FixtureHost" ||
+			calculatedValue != "fixturesource" {
+			t.Fatalf(
+				"knowledge values = (%q, %q, %q), want (alpha, FixtureHost, fixturesource)",
+				regexValue,
+				aliasValue,
+				calculatedValue,
+			)
+		}
+	}) {
+		return
+	}
+
+	if !t.Run("deferred validation survives an empty consumer", func(t *testing.T) {
+		definition := knowledgePreludeCalculatedDefinition(
+			"runtime-query-limit",
+			"calculated_value",
+			"lower(source)",
+		)
+		definition.Selector = &opensplunkv1.KnowledgeSelector{
+			IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{
+				Value: strings.Repeat("x", 250) + "*",
+			}},
+		}
+		program := knowledgePreludeProgram(
+			t,
+			[]*opensplunkv1.KnowledgeObjectDefinition{definition},
+		)
+		calculated := program.CalculatedFields()
+		if len(calculated) != 1 {
+			t.Fatalf("query-limit calculated fields = %d, want 1", len(calculated))
+		}
+		runtimeProgram, ok := calculated[0].Selector().RuntimeProgram(
+			knowledge.DimensionIndex,
+		)
+		if !ok {
+			t.Fatal("query-limit selector has no index runtime program")
+		}
+		transitionBound, boundErr := runtimeProgram.Assessment.UpperBound(200000)
+		if boundErr != nil {
+			t.Fatalf("query-limit selector assessment: %v", boundErr)
+		}
+		assessedUnits := uint64(200000) +
+			knowledge.SelectorMatcherTransitionUnits*transitionBound
+		if assessedUnits <= knowledge.MaximumSelectorRuntimeQueryUnits {
+			t.Fatalf(
+				"query-limit selector assessment = %d, want > %d",
+				assessedUnits,
+				knowledge.MaximumSelectorRuntimeQueryUnits,
+			)
+		}
+		syntheticEvent := strings.Replace(
+			knowledgeRuntimeSyntheticEventSQL,
+			`CAST('west' AS String) AS "index"`,
+			`repeat('x', 200000) AS "index"`,
+			1,
+		)
+		deferred, compileErr := compileDeferredKnowledgeRelation(
+			compiledRelation{sql: syntheticEvent, depth: 1},
+			knowledgeExtractionStageState(),
+			nil,
+			knowledgePreludePreparationForTest(program),
+		)
+		if compileErr != nil {
+			t.Fatalf("compile query-limit knowledge relation: %v", compileErr)
+		}
+		consumerSQL := `SELECT dynamicElement("calculated_value", 'String') AS ` +
+			`"calculated_value" FROM (` + deferred.relation.sql +
+			`) AS "__os_ko_hidden_fixture" WHERE 0`
+		consumer := deferred.relation.selectFrom(consumerSQL, deferred.relation.ownerRange)
+		compiled, wrapErr := wrapChronologicalValidation(
+			consumer.sql,
+			consumer.depth,
+			consumer.ownerRange,
+			deferred.state.chronologicalBarriers,
+			[]string{`"calculated_value"`},
+			[]string{"calculated_value"},
+			"",
+			eventStatsOrdinarySourceFanout,
+			CompiledQuery{Args: deferred.args},
+			0,
+		)
+		if wrapErr != nil {
+			t.Fatalf("render hidden query-limit validation graph: %v", wrapErr)
+		}
+		queryContext, cancelQuery := knowledgeRuntimeIntegrationQueryContext(overallContext)
+		defer cancelQuery()
+		queryErr := knowledgeRuntimeQueryError(
+			queryContext,
+			connection,
+			compiled.SQL,
+			compiled.Args...,
+		)
+		knowledgeRuntimeRequireMarker(
+			t,
+			queryErr,
+			KnowledgeSelectorQueryLimitMarker,
+		)
+	}) {
+		return
+	}
+
+	t.Run("runtime guard boundaries and precedence", func(t *testing.T) {
+		program := deferredMixedKnowledgeProgramForTest(t)
+		preparation := knowledgePreludePreparationForTest(program)
+		prelude, compileErr := compileKnowledgePrelude(
+			knowledgeExtractionStageState(),
+			preparation,
+		)
+		if compileErr != nil {
+			t.Fatalf("compile knowledge prelude: %v", compileErr)
+		}
+		if prelude.capturedBytes == "" {
+			t.Fatal("runtime guard fixture has no regex capture accounting")
+		}
+
+		const halfQueryLimit = knowledge.MaximumSelectorRuntimeQueryUnits / 2
+		tests := []struct {
+			name         string
+			rows         uint64
+			inputBytes   string
+			queryUnits   string
+			captureBytes string
+			wantRows     int
+			wantMarker   string
+		}{
+			{
+				name: "empty", rows: 0,
+				inputBytes: "0", queryUnits: "0", captureBytes: "0",
+			},
+			{
+				name: "event exact", rows: 1,
+				inputBytes: strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes),
+				queryUnits: "0", captureBytes: "0", wantRows: 1,
+			},
+			{
+				name: "event over", rows: 1,
+				inputBytes: strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes + 1),
+				queryUnits: "0", captureBytes: "0",
+				wantMarker: KnowledgeSelectorEventLimitMarker,
+			},
+			{
+				name: "query exact", rows: 2,
+				inputBytes: "0", queryUnits: strconv.Itoa(halfQueryLimit),
+				captureBytes: "0", wantRows: 2,
+			},
+			{
+				name: "query over", rows: 2,
+				inputBytes: "0",
+				queryUnits: strconv.Itoa(halfQueryLimit) +
+					" + if(number = 0, 1, 0)",
+				captureBytes: "0", wantMarker: KnowledgeSelectorQueryLimitMarker,
+			},
+			{
+				name: "capture exact", rows: 1,
+				inputBytes: "0", queryUnits: "0",
+				captureBytes: strconv.FormatUint(MaximumRexCapturedBytesPerRow, 10),
+				wantRows:     1,
+			},
+			{
+				name: "capture over", rows: 1,
+				inputBytes: "0", queryUnits: "0",
+				captureBytes: strconv.FormatUint(MaximumRexCapturedBytesPerRow+1, 10),
+				wantMarker:   RexCaptureLimitMarker,
+			},
+			{
+				name: "event precedes capture and query", rows: 1,
+				inputBytes:   strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes + 1),
+				queryUnits:   strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits + 1),
+				captureBytes: strconv.FormatUint(MaximumRexCapturedBytesPerRow+1, 10),
+				wantMarker:   KnowledgeSelectorEventLimitMarker,
+			},
+			{
+				name: "capture precedes query", rows: 1,
+				inputBytes:   strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes),
+				queryUnits:   strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits + 1),
+				captureBytes: strconv.FormatUint(MaximumRexCapturedBytesPerRow+1, 10),
+				wantMarker:   RexCaptureLimitMarker,
+			},
+		}
+		for _, test := range tests {
+			if ok := t.Run(test.name, func(t *testing.T) {
+				relationSQL := "SELECT toUInt128(" + test.inputBytes + ") AS " +
+					prelude.selectorCharges.inputBytes + ", toUInt128(" +
+					test.queryUnits + ") AS " + prelude.selectorCharges.queryUnits +
+					", toUInt128(" + test.captureBytes + ") AS " +
+					prelude.capturedBytes + " FROM numbers(" +
+					strconv.FormatUint(test.rows, 10) + ")"
+				guard, guardErr := compileKnowledgeRuntimeGuard(
+					compiledRelation{sql: relationSQL, depth: 1},
+					prelude,
+					preparation,
+				)
+				if guardErr != nil {
+					t.Fatalf("compile knowledge runtime guard: %v", guardErr)
+				}
+				queryContext, cancelQuery := knowledgeRuntimeIntegrationQueryContext(overallContext)
+				defer cancelQuery()
+				if test.wantMarker == "" {
+					knowledgeRuntimeRequireRows(
+						t,
+						queryContext,
+						connection,
+						guard.relation.sql,
+						prelude.capturedBytes,
+						test.wantRows,
+					)
+					return
+				}
+				queryErr := knowledgeRuntimeQueryError(
+					queryContext,
+					connection,
+					guard.relation.sql,
+				)
+				knowledgeRuntimeRequireMarker(t, queryErr, test.wantMarker)
+			}); !ok {
+				return
+			}
+		}
+	})
+}
+
+const knowledgeRuntimeSyntheticEventSQL = `SELECT
+    CAST('alpha' AS String) AS "_raw",
+    CAST('FixtureHost' AS String) AS "host",
+    CAST('FixtureSource' AS String) AS "source",
+    CAST('west' AS String) AS "index",
+    CAST('fixture' AS String) AS "sourcetype",
+    CAST(
+        '{"alias_value":"old","calculated_value":"old","regex_value":"old"}',
+        'JSON(max_dynamic_paths=256, max_dynamic_types=16)'
+    ) AS "__os_fields",
+    CAST(['alias_value','calculated_value','regex_value'], 'Array(String)')
+        AS "__os_field_names",
+    CAST([2,2,2], 'Array(UInt8)') AS "__os_field_types",
+    toUInt8(1) AS "__os_field_metadata_version",
+    toUInt8(1) AS "__os_raw_encoding",
+    toDateTime64('2026-01-01 00:00:00', 9, 'UTC') AS "__os_sort_time",
+    CAST('fixture-event-1' AS String) AS "__os_sort_event_id",
+    toUInt64(1) AS "__os_sort_visibility_seq",
+    tuple(
+        CAST('west' AS String),
+        CAST('fixture-collector' AS String),
+        toUInt64(1),
+        CAST('fixture-batch' AS String)
+    ) AS "__os_sort_source_identity"`
+
+func knowledgeRuntimeIntegrationQueryContext(
+	parent context.Context,
+) (context.Context, context.CancelFunc) {
+	queryContext, cancel := context.WithTimeout(parent, 5*time.Second)
+	queryContext = clickhousedriver.Context(
+		queryContext,
+		clickhousedriver.WithSettings(clickhousedriver.Settings{
+			"readonly":                          uint8(2),
+			"max_execution_time":                uint64(10),
+			"timeout_overflow_mode":             "throw",
+			"max_memory_usage":                  uint64(256 << 20),
+			"max_threads":                       uint64(1),
+			"max_query_size":                    uint64(1 << 20),
+			"max_subquery_depth":                uint64(100),
+			"enable_materialized_cte":           uint8(1),
+			"short_circuit_function_evaluation": "enable",
+		}),
+	)
+	return queryContext, cancel
+}
+
+func knowledgeRuntimeRequireRows(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	sql string,
+	capturedColumn string,
+	wantRows int,
+) {
+	t.Helper()
+	rows, err := connection.Query(ctx, sql)
+	if err != nil {
+		t.Fatalf("execute knowledge runtime guard: %v\nSQL: %s", err, sql)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close knowledge runtime guard rows: %v", closeErr)
+		}
+	}()
+	types := rows.ColumnTypes()
+	if len(types) != 1 || types[0].Name() != strings.Trim(capturedColumn, `"`) ||
+		types[0].DatabaseTypeName() != "UInt128" {
+		names := make([]string, len(types))
+		for index, columnType := range types {
+			names[index] = columnType.Name() + ":" + columnType.DatabaseTypeName()
+		}
+		t.Fatalf("knowledge runtime guard columns = %#v", names)
+	}
+	gotRows := 0
+	for rows.Next() {
+		var captured any
+		if scanErr := rows.Scan(&captured); scanErr != nil {
+			t.Fatalf("scan knowledge runtime guard row: %v", scanErr)
+		}
+		gotRows++
+	}
+	if rowErr := rows.Err(); rowErr != nil {
+		t.Fatalf("consume knowledge runtime guard rows: %v", rowErr)
+	}
+	if gotRows != wantRows {
+		t.Fatalf("knowledge runtime guard rows = %d, want %d", gotRows, wantRows)
+	}
+}
+
+func knowledgeRuntimeQueryError(
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	sql string,
+	args ...any,
+) (resultErr error) {
+	rows, err := connection.Query(ctx, sql, args...)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := rows.Close(); resultErr == nil && closeErr != nil {
+			resultErr = fmt.Errorf("close knowledge runtime guard rows: %w", closeErr)
+		}
+	}()
+	for rows.Next() {
+		var captured any
+		if scanErr := rows.Scan(&captured); scanErr != nil {
+			return scanErr
+		}
+	}
+	if rowErr := rows.Err(); rowErr != nil {
+		return rowErr
+	}
+	return errors.New("knowledge runtime guard unexpectedly succeeded")
+}
+
+func knowledgeRuntimeRequireMarker(t *testing.T, err error, want string) {
+	t.Helper()
+	var exception *clickhousedriver.Exception
+	if !errors.As(err, &exception) || exception.Code != 395 ||
+		!strings.Contains(exception.Message, want) {
+		t.Fatalf("knowledge runtime guard error = %v, want code 395 marker %q", err, want)
+	}
+	for _, marker := range []string{
+		KnowledgeSelectorEventLimitMarker,
+		RexCaptureLimitMarker,
+		KnowledgeSelectorQueryLimitMarker,
+	} {
+		if marker != want && strings.Contains(exception.Message, marker) {
+			t.Fatalf("knowledge runtime guard error contains competing marker %q: %v", marker, err)
+		}
+	}
+}
