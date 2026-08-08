@@ -169,20 +169,33 @@ func sealFinalCompiledQuery(
 	compiled CompiledQuery,
 	query *plan.Query,
 	scan *plan.Scan,
-	authored authoredKnowledgeCompilation,
+	preparation preparedKnowledgeCompilation,
+	prelude compiledKnowledgePrelude,
 ) (CompiledQuery, error) {
-	preparation, err := prepareKnowledgeCompilation(query)
+	if err := validateKnowledgePreludePreparation(preparation); err != nil {
+		return CompiledQuery{}, err
+	}
+	finalPreparation, err := prepareKnowledgeCompilation(query)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if preparation.authored != authored {
-		return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: authored knowledge charges disagree")
+	if !preparedKnowledgeCompilationEqual(preparation, finalPreparation) {
+		return CompiledQuery{}, errors.New(
+			"seal compiled ClickHouse execution: knowledge authority changed during compilation",
+		)
 	}
+	preparation = finalPreparation
 	// A nonempty program is semantic authority, not proof that its operators
-	// were emitted. Keep the seal closed until physical lowering supplies that
-	// distinct compiler-owned proof.
+	// were emitted. Validate the distinct compiler-owned physical proof, but
+	// keep the seal closed until the runtime compatibility gate is opened.
 	if preparation.present && preparation.program.ObjectCount() != 0 {
+		if err := validateCompiledKnowledgePrelude(prelude, preparation); err != nil {
+			return CompiledQuery{}, err
+		}
 		return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: nonempty knowledge lowering is absent")
+	}
+	if err := validateKnowledgeRuntimeGuardIdentityPrelude(prelude, preparation); err != nil {
+		return CompiledQuery{}, err
 	}
 	sealed, err := sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
 	if err != nil {
@@ -200,12 +213,12 @@ func sealFinalCompiledQuery(
 			generatedSQLBytes: uint64(len(sealed.SQL)),
 		}
 		if preparation.present {
-			prelude, valid := compileKnowledgePreludeEvidence(preparation.program)
-			if !valid || prelude.commitment != preparation.programCommitment ||
-				prelude.charges != preparation.programCharges {
+			preludeEvidence, valid := compileKnowledgePreludeEvidence(preparation.program)
+			if !valid || preludeEvidence.commitment != preparation.programCommitment ||
+				preludeEvidence.charges != preparation.programCharges {
 				return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: knowledge prelude is invalid")
 			}
-			evidence.prelude = prelude
+			evidence.prelude = preludeEvidence
 		}
 		if evidence.prelude.charges.RegexPrograms+evidence.authored.regexPrograms > 0 {
 			evidence.regexCaptureBytes = MaximumRexCapturedBytesPerRow
@@ -213,6 +226,22 @@ func sealFinalCompiledQuery(
 		sealed.knowledgeEvidence = &evidence
 	}
 	return sealCompiledQueryExecution(sealed)
+}
+
+func preparedKnowledgeCompilationEqual(
+	left preparedKnowledgeCompilation,
+	right preparedKnowledgeCompilation,
+) bool {
+	return left.present == right.present &&
+		left.prefixLength == right.prefixLength &&
+		slices.Equal(left.operatorKinds, right.operatorKinds) &&
+		left.program.Equal(right.program) &&
+		left.program.ObjectCount() == right.program.ObjectCount() &&
+		left.programCharges == right.programCharges &&
+		left.programCommitment == right.programCommitment &&
+		left.authored == right.authored &&
+		left.authoredScalarPredicates == right.authoredScalarPredicates &&
+		left.authoredScalarPredicatesExact == right.authoredScalarPredicatesExact
 }
 
 func compileKnowledgePreludeEvidence(

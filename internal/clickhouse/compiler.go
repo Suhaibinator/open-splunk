@@ -642,7 +642,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if !ok {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: first operator must be Scan")
 	}
-	authoredKnowledge, err := validateCompiledExtractionBudgets(query.Operators[1:])
+	preparation, err := prepareKnowledgeCompilation(query)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
@@ -657,12 +657,27 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 		return CompiledQuery{}, err
 	}
 	relation := newScanRelation(fragment, scan.Range)
+	knowledge, err := compileDeferredKnowledgeRelation(
+		relation,
+		state,
+		args,
+		preparation,
+	)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	relation = knowledge.relation
+	state = knowledge.state
+	args = knowledge.args
 
 	aliasSequence := 0
-	remainingOperators := query.Operators[1:]
+	remainingOperators := query.Operators[1+preparation.prefixLength:]
 	for operatorIndex, operator := range remainingOperators {
 		if isNilPlanOperator(operator) {
-			return CompiledQuery{}, fmt.Errorf("compile ClickHouse query: operator %d is nil", operatorIndex+1)
+			return CompiledQuery{}, fmt.Errorf(
+				"compile ClickHouse query: operator %d is nil",
+				operatorIndex+1+preparation.prefixLength,
+			)
 		}
 		aliasSequence++
 		alias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
@@ -1155,7 +1170,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					Range:   operator.Range,
 				}
 			}
-			return sealFinalCompiledQuery(compiled, query, scan, authoredKnowledge)
+			return sealFinalCompiledQuery(compiled, query, scan, preparation, knowledge.prelude)
 		case *plan.Chart:
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: chart is unavailable for event analysis")
@@ -1187,7 +1202,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					Range:   operator.Range,
 				}
 			}
-			return sealFinalCompiledQuery(compiled, query, scan, authoredKnowledge)
+			return sealFinalCompiledQuery(compiled, query, scan, preparation, knowledge.prelude)
 		case *plan.Window:
 			expression, nextState, compileErr := compileWindow(operator, state)
 			if compileErr != nil {
@@ -1270,7 +1285,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			Range:   scan.Range,
 		}
 	}
-	return sealFinalCompiledQuery(compiled, query, scan, authoredKnowledge)
+	return sealFinalCompiledQuery(compiled, query, scan, preparation, knowledge.prelude)
 }
 
 type authoredKnowledgeCompilation struct {

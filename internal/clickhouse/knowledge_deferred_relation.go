@@ -20,11 +20,11 @@ type compiledDeferredKnowledgeRelation struct {
 	prelude  compiledKnowledgePrelude
 }
 
-// compileDeferredKnowledgeRelation is intentionally unreachable from the
-// central compiler. It proves the graph representation needed to avoid
-// burying a MATERIALIZED knowledge guard inside later authored CTEs. Runtime
-// finalization remains closed until the digest-pinned ClickHouse matrix proves
-// this graph alongside every supported suffix shape.
+// compileDeferredKnowledgeRelation lowers the generated prefix into the
+// central compiler's flat validation graph so later authored CTEs never bury
+// its MATERIALIZED input. Runtime finalization remains closed until the
+// digest-pinned ClickHouse matrix proves this graph alongside every supported
+// suffix shape.
 func compileDeferredKnowledgeRelation(
 	relation compiledRelation,
 	scanState compileState,
