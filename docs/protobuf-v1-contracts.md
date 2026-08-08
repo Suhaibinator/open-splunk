@@ -53,7 +53,10 @@ unknown fields recursively, including nested messages and unknown future
 `oneof` bodies, before any generic decoder can discard those bytes. The route
 rejects such a definition as invalid instead of silently accepting a meaning
 an older server cannot validate. Read-only response evolution retains the
-ordinary known-field decodability rule.
+ordinary known-field decodability rule. Selector-pattern and extraction-output
+cardinality is preflighted before either reflection walker, `proto.Size`, clone,
+or deterministic marshal so repeated empty messages cannot amplify the raw
+wire ceiling into an unbounded traversal allocation.
 
 ### Reserved knowledge-object contracts
 
@@ -65,8 +68,8 @@ the browser workflow are all configured. Merely generating the messages does
 not create a route or advertise a capability.
 
 Knowledge definitions deliberately repeat their indexed app, name, sharing,
-and type identity in the registry projection. A future storage boundary must
-require exact agreement after decoding; it must report corruption rather than
+and type identity in the registry projection. The catalog storage boundary
+requires exact agreement after decoding and reports corruption rather than
 repairing one representation during a request. Definition and snapshot SHA-256
 fields are raw 32-byte digests and must be length-checked.
 
@@ -121,12 +124,31 @@ definition location.
 
 The route comments in `knowledge_api.proto` reserve the intended endpoint
 names only. They are intentionally absent from the browser-route table below
-until handlers are registered. List and dependency continuations use bounded
-`PageRequest`/`PageResponse` contracts; the future signed cursor must bind all
+until handlers are registered. The first six object-management handlers and
+codec implementations may exist internally and be assembled by tests without
+changing that fact: production `NewHandler`, its exact route inventory,
+bootstrap capability advertisement, and public 404 behavior remain the
+availability authority. List and dependency continuations use bounded
+`PageRequest`/`PageResponse` contracts. The implemented List cursor binds all
 normalized filters, ordering, caller scope, page bound, and the first-page
-catalog revision. Preview accepts only a retained server-authorized search-job
-identity plus a candidate definition. It never accepts raw events, physical
-table names, index authority, asset paths, or SQL.
+catalog revision plus state commitment; future dependency cursors must provide
+equivalent binding. Preview accepts only a retained server-authorized
+search-job identity plus a candidate definition. It never accepts raw events,
+physical table names, index authority, asset paths, or SQL.
+
+The unregistered management boundary authenticates before reading a protobuf
+body and derives tenant, owner, and complete manageable-app scope only from the
+detached browser principal plus the trusted app catalog. An authenticated
+definitive rejection triggers exactly one synchronous append attempt to the
+separate bounded attempt journal. Its underlying response is exposed only after
+that append succeeds; append or journal-gate failure instead returns the fixed
+unavailable response. A pre-decode Update or SetState rejection uses the
+conservative `update` action; only a fully validated mask or state may refine
+it to `scope_change`, `enable`, or `disable`. A known-committed mutation failure
+or an indeterminate outcome never creates a second rejected-attempt row. New
+ACTIVE publication remains unavailable, but an exact retained ACTIVE result
+from the concrete receipt-first catalog Writer remains replayable after
+downgrade only when the retained outcome is still recognized and canonical.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.

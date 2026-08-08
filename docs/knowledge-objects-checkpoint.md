@@ -2,7 +2,7 @@
 
 **Goal status:** active
 **Current milestone:** KO-0 catalog runtime prerequisites
-**Last completed slice:** KO-0E atomic inactive catalog Writer foundation
+**Last completed slice:** KO-0F unregistered management-route boundary
 **Evidence date:** August 7, 2026
 
 ## Durable checkpoint
@@ -10,11 +10,12 @@
 - Published KO-0 foundation: inclusive `00c88c1` through `b7ac77b`
 - KO-0D local implementation and checkpoint range: `c5440b9..e9af86d`
 - KO-0E local implementation range: `e9af86d..a8000e7`
-- KO-0E implementation terminal revision:
-  `a8000e7ebd0b118ad313c3315cc16e18ae62f44f`
+- KO-0F local implementation range: `e78d60b..d6e767d`
+- KO-0F implementation terminal revision:
+  `d6e767dfd5f6319b2d5399558bf7b33dfcd97977`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: thirteen intentional post-`c5440b9`
-  KO commits through `a8000e7` are durable locally. This checkpoint is kept as
+- Publication state before this document: seventeen intentional post-`c5440b9`
+  KO commits through `d6e767d` are durable locally. This checkpoint is kept as
   a separate documentation commit. An
   attempted push to `git@github.com:Suhaibinator/open-splunk.git` was blocked
   by the execution environment's unverified-destination egress policy. No
@@ -27,12 +28,15 @@
   draft/active/disabled delete with exact replay,
   optimistic versions, immutable bodies/versions/dependencies/projections,
   successful audit, revision/state-token rotation, bounded health/reclamation,
-  and crash-safe recovery.
+  and crash-safe recovery. KO-0F adds six administrator-only protobuf handler
+  implementations, bounded codecs, trusted app-scope derivation, detached
+  request/response authority, and synchronous rejected-attempt journaling with
+  exact known-committed/indeterminate suppression.
 - Runtime feature state: the capability remains hard-disabled and unadvertised;
-  knowledge-management routes are not implemented or registered.
-  Rejected-attempt integration, resolver/snapshot construction, search
-  admission, UI, ACTIVE publication, and ClickHouse knowledge execution are not
-  implemented.
+  the six knowledge-management handlers are deliberately not registered in the
+  production router and their paths still return 404. Resolver/snapshot
+  construction, search admission, UI, ACTIVE publication, and ClickHouse
+  knowledge execution are not implemented.
 
 ## KO-0 durable commits
 
@@ -80,6 +84,15 @@ local commits:
 | `d2704dd` | `feat(knowledge): add atomic catalog writer` | Trusted-scope Writer for draft Create, inactive Update, disable SetState, and Delete; detached request authority, exact idempotency replay, bounded publication/health/reclamation, successful audit, commit reconciliation, forward-compatible state-only preservation, and transaction batching |
 | `9195313` | `test(knowledge): harden writer publication and recovery` | Public black-box, concurrency, state-machine, capacity, migration, query-plan, corruption, forward-compatibility, real SIGKILL/reopen, ambiguous-commit, panic rollback, batching, and fuzz coverage |
 | `a8000e7` | `ci(knowledge): fuzz and budget writer verification` | Four exact Writer fuzz targets and a measured 30-minute package timeout for the enlarged race/coverage suite; no test or assertion was removed to meet the budget |
+
+The KO-0E checkpoint is durable as `e78d60b` (`docs(knowledge): checkpoint
+KO-0E catalog writer`). KO-0F then adds these dependency-ordered local commits:
+
+| Commit | Subject | Scope |
+| --- | --- | --- |
+| `049f749` | `feat(knowledge): expose route-safe catalog outcomes` | Detached authorized rejection context, definitive/known-committed/indeterminate error disposition, exact receipt-digest replay classification, public non-mutating mutation/read/List preflights, canonical List normalization, response conversion, and update-result binding |
+| `51b7ff4` | `feat(server): stage knowledge management boundary` | Six unregistered administrator handlers, protobuf codecs, authentication/authorization split, trusted app-scope derivation, bounded response authority, synchronous rejected-attempt journaling, stable error redaction, request detachment, and recognized canonical ACTIVE replay preservation for the concrete catalog Writer |
+| `d6e767d` | `test(server): harden knowledge management boundary` | Public-404/capability-negative contracts, real SQLite Writer/Store/audit integration, all-six HTTP matrices, attempt-journal failures, authorization/error nondisclosure, request/response detachment, List coherence, definition authority, resource ceilings, and focused race coverage |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -130,6 +143,26 @@ used.
   definition redaction while the current identity is quarantined
 - Atomic successful-mutation audit metadata and a separate fail-closed rejected
   privileged-attempt journal that retains no unauthorized object metadata
+- Authentication-before-decode for all six management operations, followed by
+  tenant/owner-bound administrator authorization and trusted complete app-scope
+  derivation; every authenticated definitive rejection attempts exactly one
+  synchronous journal append, exposes the underlying rejection only after that
+  append succeeds, and otherwise returns the fixed unavailable response, while
+  known-committed and indeterminate outcomes suppress a false rejected-attempt
+  row
+- Request-authority snapshots and configurable-dependency response validation:
+  canonical definitions, lifecycle markers, filters, ordering, pagination,
+  revision/token shape and continuation metadata, aggregate byte/node ceilings,
+  and authorized error context are validated and bound before bytes or metadata
+  cross the HTTP boundary
+- A conservative `update` action for pre-decode Update/SetState rejection,
+  refined only after complete request validation to `scope_change`, `enable`,
+  or `disable`; journal tails have an independent concurrency gate and bounded
+  deadline outside client cancellation
+- New ACTIVE publication remains unavailable, but the exact concrete catalog
+  Writer may replay a previously committed, still-recognized canonical ACTIVE
+  Create/Update/SetState receipt after downgrade without being mislabeled as a
+  new rejection
 - Catalog, resolver, cache, selector, expression, snapshot, and audit ceilings
 - Terminal corruption quarantine with bounded dependent closure, protected
   version/idempotency capacity, and one recovery-audit slot for every lifetime
@@ -307,6 +340,20 @@ contains the formal scan's implementation payload plus the separately reviewed
 timeout-only change, has SHA-256
 `cdb3f9afb82e64e55f2444be85dac2d4beff0f3e967d654f57a4dab449c66e4c`.
 
+KO-0F used independent handler-architecture, catalog-context, authentication,
+attempt-boundary, real-persistence, HTTP-matrix, read-contract, authorization,
+resource, correctness, and simplification lanes. Resolved findings included
+cross-tenant principals, authentication outside the route deadline,
+request-pointer mutation, Unicode identity drift, unbound rejection metadata,
+false rejection of committed or indeterminate mutations, journal-tail
+concurrency escape, ACTIVE publication bypass and downgrade replay loss, List
+request/response/filter/pagination mismatch, impossible dependency errors,
+canonical definition and opaque-body gaps, and repeated-message allocation
+amplification before sanitization or response validation. The final frozen
+adversarial pass reported no remaining concrete finding. The exact
+three-commit KO-0F binary diff `e78d60b..d6e767d` has SHA-256
+`c075ea32554144a036de277953746fa9282c9d3d7291d739cd63eea90ac335e3`.
+
 ## Verification evidence
 
 All commands ran from `/Users/suhaib/code/open-splunk`.
@@ -398,7 +445,23 @@ KO-0E evidence:
 | Local durability | pass | six KO-0E implementation commits, inclusive `f9df615` through `a8000e7`, plus the prior KO-0D checkpoint are on `codex/knowledge-objects-runtime`; implementation worktree was clean before this checkpoint edit |
 | Remote durability | pending | `origin/main` remains `c5440b9`; the exact GitHub push is still blocked pending explicit destination approval, so no remote KO-0D/KO-0E durability is claimed |
 
-The exact final retained-log race command was:
+KO-0F evidence:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Public disablement contract | pass | `TestConfiguredKnowledgeManagementRemainsPubliclyUnregisteredAndUnadvertised` configures all four hidden dependencies, then proves the production Create path remains 404, no Writer, app-catalog, or attempt-journal call occurs, and bootstrap omits `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS`; the exact route-inventory and baseline handler tests preserve the absence of all six paths |
+| All-six HTTP matrix | pass | the test-only SRouter exercises Get/List/Create/Update/SetState/Delete success, pre-decode authentication/administrator rejection, exact fallback/refined actions, bounded codecs, stable error bodies, scope derivation, cancellation, and journal failure without adding a production route |
+| Real persistence boundary | pass | five focused HTTP integration tests use the migrated SQLite Store, Writer, successful audit, and rejected-attempt journal through create/update/disable/delete/replay, stale versions, hidden outcomes, success-audit rollback, and attempt-journal failure |
+| Full catalog package | pass | `GOCACHE=/private/tmp/open-splunk-ko-go-cache go test ./internal/knowledgecatalog -count=1`, 45.283s on the final implementation tree |
+| Full server package | pass | `GOCACHE=/private/tmp/open-splunk-ko-go-cache go test ./internal/server -count=1`, 16.911s outside the sandbox for existing localhost listener tests |
+| Focused race | pass | catalog error/preflight/result contracts 3.648s; server Knowledge/ACTIVE-replay matrix 12.287s |
+| Full non-race backend | pass | `GOCACHE=/private/tmp/open-splunk-ko-go-cache go test ./... -count=1`; catalog 69.157s, control 60.172s, server 20.821s, and every package passed including integration and ClickHouse |
+| Static analysis and hygiene | pass | `go vet ./internal/knowledgecatalog`; `go vet ./internal/server`; all package Go files were gofmt-clean; `git diff --check` and every staged diff check passed |
+| Independent review | pass | final security/correctness/resource adversarial review returned clean; the simplify pass removed duplicate full definition normalization and a throwaway maximum-size request clone/marshal before commit |
+| Local durability | pass | `049f749`, `51b7ff4`, and `d6e767d` are separate catalog, production-server, and test-matrix commits on `codex/knowledge-objects-runtime` |
+| Remote durability | pending | no push was attempted without explicit destination approval; no new remote durability is claimed |
+
+The exact KO-0E final retained-log race command was:
 
 ```sh
 zsh -o pipefail -c 'GOCACHE=/private/tmp/open-splunk-ko-go-race-cache go test -json -race -shuffle=on -covermode=atomic -coverprofile=/private/tmp/open-splunk-ko-writer-final-coverage.out -timeout=30m ./... 2>&1 | tee /private/tmp/open-splunk-ko-writer-final-race.jsonl'
@@ -435,41 +498,37 @@ KO-0E adds an internal Writer library but still registers no production route,
 advertises no capability, renders no Knowledge Manager UI, constructs no search
 snapshot, and executes no ClickHouse knowledge operator. Browser and
 Docker-backed knowledge verticals therefore remain inapplicable to this slice,
-not silently waived. The next route slice must add authenticated rejected-attempt
-journaling before any management API can become reachable.
+not silently waived.
+
+KO-0F implements and integration-tests the six management handlers, codecs,
+authentication split, and rejected-attempt boundary but deliberately keeps
+their route registrations in test code only. The production router, exact API
+inventory, capability response, and browser navigation remain unchanged; real
+public browser and ClickHouse knowledge verticals are therefore still future
+hard gates rather than claimed evidence.
 
 ## Next dependency-ordered work
 
-The migration, audit schema/primitives, definition, read-only catalog, and
-internal pre-compiler Writer hard gates are complete. Route-level rejected
-audit, resolver/snapshot construction, and active compilation remain required.
-The next slice continues KO-0 in dependency order:
+The migration, audit schema/primitives, definition, read-only catalog, Writer,
+and unregistered management-route hard gates are complete. Resolver/snapshot
+construction, search lifecycle attachment, UI, and active compilation remain
+required. The next slice continues KO-0 in dependency order:
 
-1. implement administrator-only protobuf HTTP handlers/codecs for `Get`,
-   `List`, `Create`, `Update`, `SetState`, and `Delete` behind disabled route
-   registration; split authentication from administrator
-   authorization so every authenticated rejection receives an explicit actor,
-   derive tenant/owner/app only from the validated principal and trusted app
-   catalog, carry detached authorized rejection context from the Writer, and
-   return a generic unavailable response whenever the separate rejected-attempt journal
-   cannot commit;
-2. add route-level matrices for unauthenticated access, non-administrator
-   attempts, hidden/missing/corrupt objects, stale versions, idempotency
-   conflicts, capacity failures, malformed bodies, rejected-read and
-   rejected-mutation journal exhaustion/failure, successful-audit rollback,
-   and stable protobuf HTTP error mappings while keeping route registration and
-   capability advertisement disabled;
-3. implement the one-transaction resolver and detached immutable snapshot
+1. implement the one-transaction resolver and detached immutable snapshot
    builder, including precedence, shadow inventory, authorized-index pinning,
    canonical cross-language digest framing, cache bounds, and old-or-new
    admission races;
-4. add the hidden Knowledge Manager list/detail shell plus negative API,
+2. persist the immutable snapshot and its authorized catalog/index authority in
+   search lifecycle, inspection, history, and export before query execution;
+3. add the hidden Knowledge Manager list/detail shell plus negative API,
    capability-advertisement, route-registration, and navigation tests; keep the
    feature unadvertised and navigation absent while the runtime is incomplete;
    and
-5. integrate snapshot persistence into search lifecycle/provenance before
-   beginning KO-1 field execution; then supply the executable publication
-   compiler and dependency derivation required to replace
-   `ErrActivePublicationUnavailable`. Keep ACTIVE publication and the feature
-   flag disabled until the complete Tier-1 vertical and its browser and
-   ClickHouse acceptance tests pass.
+4. implement KO-1 field execution and supply the executable publication
+   compiler and dependency derivation needed to replace
+   `ErrActivePublicationUnavailable`, while keeping the handlers unregistered,
+   the capability unadvertised, and ACTIVE publication disabled through the
+   complete hidden Tier-1 browser and ClickHouse acceptance vertical; and
+5. only after that vertical passes, register the six handlers, advertise the
+   capability, and enable the supported ACTIVE publication transitions
+   together.

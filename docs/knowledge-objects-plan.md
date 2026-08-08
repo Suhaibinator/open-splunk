@@ -819,6 +819,17 @@ POST /api/v1/knowledge/lookups/get
 POST /api/v1/knowledge/lookups/preview
 ```
 
+As of KO-0F, the first six object-management handlers and bounded protobuf
+codecs exist behind a test-only route assembly with real Store/Writer/audit
+integration. Production `NewHandler` intentionally registers none of those
+paths, and bootstrap continues to advertise no knowledge capability. The
+boundary authenticates before decoding and attempts exactly one synchronous
+journal append for every authenticated definitive rejection. It exposes that
+rejection only after the append succeeds, returns the fixed unavailable
+response if the append cannot complete, and suppresses false rejection rows for
+committed or indeterminate mutation outcomes; this is readiness work, not
+public API availability.
+
 The first bounded lookup upload can carry CSV bytes in protobuf if the product
 limit stays small enough for safe browser and Go memory use. Larger assets
 should use a two-step upload grant plus a raw streaming route, analogous to the
@@ -1073,7 +1084,11 @@ pinned without affecting search results.
 
 **Implementation checkpoint (August 7, 2026):** contracts, migrations 0024
 through 0030, canonical definition handling, the bounded authorization-first
-reader, and the atomic catalog Writer are complete. The Writer currently
+reader, the atomic catalog Writer, and the six administrator-only management
+handlers/codecs with their synchronous rejected-attempt boundary are complete.
+Their registrations remain intentionally absent from the production router and
+exact API inventory, so their paths still return 404 and the capability is not
+advertised. The Writer currently
 publishes draft creates, draft/disabled definition updates (opaque future
 bodies: metadata-only), draft/active disable transitions, and
 draft/active/disabled delete tombstones with exact idempotency replay,
@@ -1081,11 +1096,14 @@ revision/state-token rotation, successful audit, immutable commit authority,
 bounded health/reclamation, and crash recovery. `Create` with ACTIVE, `Update`
 of an ACTIVE object, and `SetState` to ACTIVE deliberately return
 `ErrActivePublicationUnavailable` until KO-1 supplies the publication compiler
-and dependency derivation. Remaining KO-0 work is the authenticated
-read/mutation routes and their rejected-attempt journal boundary, resolver and
-immutable snapshot builder, search-lifecycle attachment, negative feature/API
-contracts, and the hidden Knowledge Manager list/detail shell. The capability
-remains disabled and unadvertised.
+and dependency derivation; an exact retained ACTIVE receipt from a newer binary
+remains replayable through the concrete Writer only when its outcome is still
+recognized and canonical, without becoming a false rejected attempt after
+downgrade. Remaining KO-0 work is the resolver and immutable snapshot builder,
+search-lifecycle attachment, and the hidden Knowledge Manager list/detail shell.
+Existing negative production registration/capability contracts remain hard
+gates while that work proceeds. The capability remains disabled and
+unadvertised.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and

@@ -41,6 +41,12 @@ publish app-shared and tenant-global objects. Supplied tenant or owner identity
 is never authority. A forbidden or cross-tenant object selector returns the
 same not-found response as an absent object.
 
+The first six object-management handlers and codecs may be implemented and
+tested before they are reachable. Until the production router registers them
+and bootstrap advertises the complete Tier-1 capability, their paths return 404
+without authentication, body decoding, catalog access, or attempt journaling.
+Test-only route assembly is readiness evidence, not public API availability.
+
 The schema is ACL-ready, but role-grant enforcement and cross-app export grants
 are not claimed until multi-user RBAC is implemented. Within one tenant, a
 global object is visible in every readable app. This is an explicit Open
@@ -429,6 +435,9 @@ reject unknown future `oneof` bodies. Exact field-mask updates are applied to
 the current stored message on the server; omitted fields are not replacement
 authority. A state-only disable or delete may preserve an unreadable future
 body byte-for-byte, but an older server cannot enable, publish, or body-edit it.
+Selector and extraction-output cardinality is checked in constant time before
+either recursive unknown-field walker, protobuf sizing, cloning, or canonical
+marshaling so repeated empty submessages cannot amplify the request byte limit.
 
 `KnowledgeObjectDefinition` field numbers 13 through 31 are permanently
 allocated exclusively to future length-delimited `body` oneof alternatives.
@@ -521,6 +530,17 @@ number after restore. One response
 detaches at most 4 MiB of canonical definition bytes and validates at most
 65,536 dependency edges; it stops at the preceding object and emits a cursor
 when either ceiling would be crossed. One maximum-sized object always fits.
+
+The HTTP boundary canonicalizes and detaches the List request before invoking a
+configurable catalog. It validates every returned object against the complete
+normalized filter and authorization scope, requires unique IDs and canonical
+ordering with object-ID tie breaks, and checks bounded page/token/total/revision
+continuation shape, the reported exact-total 8,192-identity ceiling, and
+per-definition, aggregate-definition, and response byte budgets. A global
+object is visible regardless of its provenance app; app membership remains
+mandatory for app-shared and private objects. An impossible
+dependency-conflict error from the catalog fails with one generic unavailable
+response rather than leaking a partial page.
 
 Description and selector filtering trusts projected membership only after the
 complete authorized, scalar-filtered candidate set has been decoded and
@@ -667,6 +687,50 @@ separate bounded attempt journal before responding; if that journal is
 unavailable the route fails closed with the same generic unavailable response.
 Unauthenticated traffic remains in the server access-security log because no
 trusted tenant or actor exists to bind a knowledge audit record.
+
+For the six management operations, the route deadline encloses authentication,
+authorization, body handling, catalog work, and response validation.
+Authentication accepts a valid browser user or administrator and installs a
+detached principal and audit actor while removing the bearer credential; only
+then does the knowledge boundary require the administrator role plus exact
+handler tenant/owner agreement. A non-administrator or principal mismatch
+attempts its journal append before any body byte is read and exposes that
+rejection only when the append succeeds. Tenant, owner, and the complete
+bounded manageable-app set come only from that principal and the trusted app
+catalog.
+
+A pre-decode rejection on Update or SetState uses the conservative `update`
+action. After complete request validation, a mask selecting `app_id` or
+`sharing_scope` refines Update to `scope_change`, while SetState refines to
+`enable` or `disable`. Rejection context is accepted only when its app lies in
+the derived scope and, except for an idempotency key reused across targets, its
+object/app identity binds the submitted operation. Supported absent or hidden
+Get outcomes retain the uniform `not_found_or_forbidden` response. Impossible
+or unbound configured-dependency errors collapse to `service_unavailable` with
+no context; a post-authorization corruption or infrastructure failure may
+retain only correctly bound scalar context.
+
+Catalog errors carry one of three dispositions. A definitive pre-commit
+rejection triggers one synchronous journal append attempt and is exposed only
+after that append succeeds. A proven exact receipt whose mutation is already
+committed suppresses a second rejected row even if response reconstruction or
+delivery fails. An infrastructure failure before receipt absence/digest
+relationship is proven is indeterminate and likewise suppresses a false
+rejection. A proven different digest is the definitive
+`idempotency_conflict`. The synchronous journal tail ignores client
+cancellation but has its own five-second deadline and concurrency gate; gate
+exhaustion or append failure returns only the fixed unavailable response.
+
+Mutation requests are validated and snapshotted before a configurable Writer
+can mutate caller memory. Each success is rebound to its applicable submitted
+authorities—normalized definition or mask, target ID, expected version,
+lifecycle marker, and derived tenant/owner/app scope—while its catalog revision
+and 32-byte state token are relationship- and shape-checked. Definitions are
+shape-preflighted before reflection, sizing, clone, or marshal. New ACTIVE
+publication remains disabled. The concrete receipt-first catalog Writer may
+nevertheless replay a previously committed ACTIVE outcome after downgrade when
+that outcome remains recognized and canonical; no other Writer implementation
+can opt into that exception.
 
 The rejected-attempt journal retains at most 100,000 rows per tenant and
 atomically evicts the oldest row before appending the next one. Its sequence is
