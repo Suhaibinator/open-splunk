@@ -292,6 +292,148 @@ func TestCompileKnowledgeFieldAssignmentKeepsPresentNullSeparate(t *testing.T) {
 	}
 }
 
+func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) {
+	aliasProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "alias-proof", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			SourceField: "host", DestinationField: "alias_host",
+			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		}},
+	}})
+	aliasOperation := aliasProgram.Aliases()[0]
+	aliasAssignment, err := compileKnowledgeAliasAssignment(aliasOperation, knowledgeFusedFieldState())
+	if err != nil {
+		t.Fatalf("compile alias assignment: %v", err)
+	}
+	if aliasAssignment.alias.Origin() != aliasOperation.Origin() ||
+		aliasAssignment.alias.Source() != aliasOperation.Source() ||
+		aliasAssignment.alias.Destination() != aliasOperation.Destination() ||
+		aliasAssignment.calculated.Origin() != (knowledgeprogram.Origin{}) {
+		t.Fatalf("alias lowering proof = %#v", aliasAssignment)
+	}
+	aliasStage, err := compileKnowledgeFusedFieldProjection(
+		knowledgeFusedFieldState(),
+		[]compiledKnowledgeFieldAssignment{aliasAssignment},
+		0,
+		"alias",
+		compiledKnowledgeSelectorChargeColumns{},
+	)
+	if err != nil {
+		t.Fatalf("compile alias projection: %v", err)
+	}
+	if len(aliasStage.aliases) != 1 || aliasStage.aliases[0].Origin() != aliasOperation.Origin() ||
+		len(aliasStage.calculated) != 0 {
+		t.Fatalf("alias stage lowering proof = %#v", aliasStage)
+	}
+	otherAliasProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "other-alias-proof", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{FieldAlias: &opensplunkv1.FieldAliasDefinition{
+			SourceField: "source", DestinationField: "other_alias",
+			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		}},
+	}})
+	otherAliasAssignment, err := compileKnowledgeAliasAssignment(
+		otherAliasProgram.Aliases()[0],
+		knowledgeFusedFieldState(),
+	)
+	if err != nil {
+		t.Fatalf("compile other alias assignment: %v", err)
+	}
+	forgedAliasAssignment := aliasAssignment
+	forgedAliasAssignment.alias = otherAliasAssignment.alias
+	if _, err := compileKnowledgeFusedFieldProjection(
+		knowledgeFusedFieldState(),
+		[]compiledKnowledgeFieldAssignment{forgedAliasAssignment},
+		0,
+		"alias",
+		compiledKnowledgeSelectorChargeColumns{},
+	); err == nil {
+		t.Fatal("alias projection accepted mismatched retained authority")
+	}
+	aliasAssignment.alias = knowledgeprogram.Alias{}
+	if _, err := compileKnowledgeFusedFieldProjection(
+		knowledgeFusedFieldState(),
+		[]compiledKnowledgeFieldAssignment{aliasAssignment},
+		0,
+		"alias",
+		compiledKnowledgeSelectorChargeColumns{},
+	); err == nil {
+		t.Fatal("alias projection accepted an assignment without lowerer-retained authority")
+	}
+
+	calculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "calculated-proof", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			DestinationField: "lower_host", Expression: "lower(host)",
+			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		}},
+	}})
+	calculatedOperation := calculatedProgram.CalculatedFields()[0]
+	calculatedAssignment, err := compileKnowledgeCalculatedAssignment(
+		calculatedOperation,
+		knowledgeFusedFieldState(),
+	)
+	if err != nil {
+		t.Fatalf("compile calculated assignment: %v", err)
+	}
+	if calculatedAssignment.calculated.Origin() != calculatedOperation.Origin() ||
+		calculatedAssignment.calculated.Expression() != calculatedOperation.Expression() ||
+		calculatedAssignment.calculated.Destination() != calculatedOperation.Destination() ||
+		calculatedAssignment.alias.Origin() != (knowledgeprogram.Origin{}) {
+		t.Fatalf("calculated lowering proof = %#v", calculatedAssignment)
+	}
+	calculatedStage, err := compileKnowledgeFusedFieldProjection(
+		knowledgeFusedFieldState(),
+		[]compiledKnowledgeFieldAssignment{calculatedAssignment},
+		0,
+		"calculated",
+		compiledKnowledgeSelectorChargeColumns{},
+	)
+	if err != nil {
+		t.Fatalf("compile calculated projection: %v", err)
+	}
+	if len(calculatedStage.calculated) != 1 ||
+		calculatedStage.calculated[0].Origin() != calculatedOperation.Origin() ||
+		len(calculatedStage.aliases) != 0 {
+		t.Fatalf("calculated stage lowering proof = %#v", calculatedStage)
+	}
+	otherCalculatedProgram := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
+		AppId: "app", Name: "other-calculated-proof", SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+			DestinationField: "upper_source", Expression: "upper(source)",
+			OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+		}},
+	}})
+	otherCalculatedAssignment, err := compileKnowledgeCalculatedAssignment(
+		otherCalculatedProgram.CalculatedFields()[0],
+		knowledgeFusedFieldState(),
+	)
+	if err != nil {
+		t.Fatalf("compile other calculated assignment: %v", err)
+	}
+	forgedCalculatedAssignment := calculatedAssignment
+	forgedCalculatedAssignment.calculated = otherCalculatedAssignment.calculated
+	if _, err := compileKnowledgeFusedFieldProjection(
+		knowledgeFusedFieldState(),
+		[]compiledKnowledgeFieldAssignment{forgedCalculatedAssignment},
+		0,
+		"calculated",
+		compiledKnowledgeSelectorChargeColumns{},
+	); err == nil {
+		t.Fatal("calculated projection accepted mismatched retained authority")
+	}
+	calculatedAssignment.calculated = knowledgeprogram.Calculated{}
+	if _, err := compileKnowledgeFusedFieldProjection(
+		knowledgeFusedFieldState(),
+		[]compiledKnowledgeFieldAssignment{calculatedAssignment},
+		0,
+		"calculated",
+		compiledKnowledgeSelectorChargeColumns{},
+	); err == nil {
+		t.Fatal("calculated projection accepted an assignment without lowerer-retained authority")
+	}
+}
+
 func knowledgeFusedFieldState() compileState {
 	return compileState{
 		visible: map[string]fieldState{

@@ -46,6 +46,8 @@ type compiledKnowledgeFieldAssignment struct {
 	overwrite      knowledgeprogram.OverwriteBehavior
 	origin         knowledgeprogram.Origin
 	maxStringBytes uint64
+	alias          knowledgeprogram.Alias
+	calculated     knowledgeprogram.Calculated
 }
 
 func (compiled compiledKnowledgeFieldAssignment) producedSQL(resultSQL string) string {
@@ -128,13 +130,18 @@ func compileKnowledgeAliasAssignment(
 	if present {
 		value = compiledScalarFromField(field)
 	}
-	return compileKnowledgeFieldAssignment(
+	compiled, err := compileKnowledgeFieldAssignment(
 		operation.Selector(),
 		operation.Destination(),
 		operation.Overwrite(),
 		operation.Origin(),
 		value,
 	)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
+	compiled.alias = operation
+	return compiled, nil
 }
 
 // compileKnowledgeCalculatedAssignment reconstructs and recompiles the exact
@@ -162,13 +169,18 @@ func compileKnowledgeCalculatedAssignment(
 	if err != nil {
 		return compiledKnowledgeFieldAssignment{}, err
 	}
-	return compileKnowledgeFieldAssignment(
+	compiled, err := compileKnowledgeFieldAssignment(
 		operation.Selector(),
 		operation.Destination(),
 		operation.Overwrite(),
 		operation.Origin(),
 		value,
 	)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
+	compiled.calculated = operation
+	return compiled, nil
 }
 
 func compileKnowledgeFieldAssignment(
@@ -411,7 +423,6 @@ func compileKnowledgeAliasStage(
 	if err != nil {
 		return compiledKnowledgeFusedFieldProjection{}, err
 	}
-	result.aliases = slices.Clone(assignments)
 	return result, nil
 }
 
@@ -446,7 +457,6 @@ func compileKnowledgeCalculatedStage(
 	if err != nil {
 		return compiledKnowledgeFusedFieldProjection{}, err
 	}
-	result.calculated = slices.Clone(assignments)
 	return result, nil
 }
 
@@ -506,9 +516,31 @@ func compileKnowledgeFusedFieldProjection(
 		dropRawFieldsPayload(&next)
 	}
 	merges := make([]compiledKnowledgeFieldMerge, 0, len(assignments))
+	aliases := make([]knowledgeprogram.Alias, 0, len(assignments))
+	calculated := make([]knowledgeprogram.Calculated, 0, len(assignments))
 	groups := make([]compiledKnowledgeFieldDestinationMerge, 0, len(assignments))
 	groupByDestination := make(map[string]int, len(assignments))
 	for index, assignment := range assignments {
+		switch label {
+		case "alias":
+			if !knowledgeAliasLoweringProofMatches(assignment) {
+				return compiledKnowledgeFusedFieldProjection{}, errors.New(
+					"compile ClickHouse knowledge fused field stage: alias lowering proof is invalid",
+				)
+			}
+			aliases = append(aliases, assignment.alias)
+		case "calculated":
+			if !knowledgeCalculatedLoweringProofMatches(assignment) {
+				return compiledKnowledgeFusedFieldProjection{}, errors.New(
+					"compile ClickHouse knowledge fused field stage: calculated lowering proof is invalid",
+				)
+			}
+			calculated = append(calculated, assignment.calculated)
+		default:
+			return compiledKnowledgeFusedFieldProjection{}, errors.New(
+				"compile ClickHouse knowledge fused field stage: lowering proof kind is invalid",
+			)
+		}
 		if assignment.origin.StageOrdinal() != uint32(index) {
 			return compiledKnowledgeFusedFieldProjection{}, errors.New(
 				"compile ClickHouse knowledge fused field stage: assignment order disagrees with provenance",
@@ -661,7 +693,29 @@ func compileKnowledgeFusedFieldProjection(
 		suffixArgs:         args,
 		selectorCharges:    chargeColumns,
 		emittedAssignments: uint32(len(assignments)),
+		aliases:            aliases,
+		calculated:         calculated,
 	}, nil
+}
+
+func knowledgeAliasLoweringProofMatches(assignment compiledKnowledgeFieldAssignment) bool {
+	proof := assignment.alias
+	return proof.Origin() != (knowledgeprogram.Origin{}) &&
+		assignment.calculated.Origin() == (knowledgeprogram.Origin{}) &&
+		proof.Origin() == assignment.origin &&
+		proof.Overwrite() == assignment.overwrite &&
+		proof.Destination() == assignment.destination.Name &&
+		slices.Equal(proof.Selector().CanonicalBytes(), assignment.selector.CanonicalBytes())
+}
+
+func knowledgeCalculatedLoweringProofMatches(assignment compiledKnowledgeFieldAssignment) bool {
+	proof := assignment.calculated
+	return proof.Origin() != (knowledgeprogram.Origin{}) &&
+		assignment.alias.Origin() == (knowledgeprogram.Origin{}) &&
+		proof.Origin() == assignment.origin &&
+		proof.Overwrite() == assignment.overwrite &&
+		proof.Destination() == assignment.destination.Name &&
+		slices.Equal(proof.Selector().CanonicalBytes(), assignment.selector.CanonicalBytes())
 }
 
 func validateKnowledgePriorSelectorCharges(
