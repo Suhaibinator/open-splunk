@@ -21,6 +21,9 @@ import {
   sortDirectionToJSON,
 } from "./common";
 import {
+  KnowledgeDependencyRole,
+  knowledgeDependencyRoleFromJSON,
+  knowledgeDependencyRoleToJSON,
   KnowledgeObject,
   KnowledgeObjectDefinition,
   KnowledgeObjectDependency,
@@ -382,7 +385,42 @@ export interface ValidateKnowledgeObjectResponse {
   tenantCatalogRevision: bigint;
 }
 
-/** POST /api/v1/knowledge/objects/dependencies */
+/**
+ * KnowledgeManagementObjectVersionIdentity identifies one exact immutable
+ * object version without exposing its definition digest. Definition digests
+ * remain subject to the containing object's current disclosure policy.
+ */
+export interface KnowledgeManagementObjectVersionIdentity {
+  knowledgeObjectId: string;
+  version: bigint;
+}
+
+/**
+ * KnowledgeManagementDependencyEdge is one direct persisted object-to-object
+ * edge. Snapshot-global stage, topological-depth, and canonical-order metadata
+ * deliberately do not belong to this management projection.
+ */
+export interface KnowledgeManagementDependencyEdge {
+  source: KnowledgeManagementObjectVersionIdentity | undefined;
+  target: KnowledgeManagementObjectVersionIdentity | undefined;
+  role: KnowledgeDependencyRole;
+}
+
+/**
+ * POST /api/v1/knowledge/objects/dependencies
+ * The current registry identity authorizes the requested source; selecting a
+ * historical version never grants authority. The response lists the exact
+ * direct outgoing edges persisted for that selected source version. An edge
+ * whose target is not currently disclosable is omitted before pagination and
+ * total counting, without a redacted placeholder or hidden count. A currently
+ * quarantined requested source is reported through the uniform not-found-or-
+ * forbidden response and exposes no current or historical dependency data.
+ * Disclosed edges use fixed ascending binary target ID, target version, then
+ * role order. The signed continuation binds this route, caller scope, request
+ * version presence and value, resolved source, page bound and total-count
+ * choice, and the first page's catalog revision plus exact state commitment.
+ * Any later catalog identity invalidates the continuation.
+ */
 export interface ListKnowledgeObjectDependenciesRequest {
   knowledgeObjectId: string;
   version?: bigint | undefined;
@@ -390,12 +428,33 @@ export interface ListKnowledgeObjectDependenciesRequest {
 }
 
 export interface ListKnowledgeObjectDependenciesResponse {
-  dependencies: KnowledgeObjectDependency[];
+  dependencies: KnowledgeManagementDependencyEdge[];
   page: PageResponse | undefined;
   tenantCatalogRevision: bigint;
+  /**
+   * resolved_object is the exact source selected by the request, including on
+   * an empty page when request.version was absent.
+   */
+  resolvedObject: KnowledgeManagementObjectVersionIdentity | undefined;
 }
 
-/** POST /api/v1/knowledge/objects/dependents */
+/**
+ * POST /api/v1/knowledge/objects/dependents
+ * The current registry identity authorizes the requested target; selecting a
+ * historical version never grants authority. The response lists exact incoming
+ * edges to that target version only from source versions which are their
+ * objects' current registry versions. Every source lifecycle state is eligible,
+ * but a source which is not currently disclosable is omitted before pagination
+ * and total counting, without a redacted placeholder or hidden count. A
+ * currently quarantined requested target is reported through the uniform not-
+ * found-or-forbidden response and exposes no current or historical dependency
+ * data.
+ * Disclosed edges use fixed ascending binary source ID, source version, then
+ * role order. The signed continuation binds this route, caller scope, request
+ * version presence and value, resolved target, page bound and total-count
+ * choice, and the first page's catalog revision plus exact state commitment.
+ * Any later catalog identity invalidates the continuation.
+ */
 export interface ListKnowledgeObjectDependentsRequest {
   knowledgeObjectId: string;
   version?: bigint | undefined;
@@ -403,9 +462,14 @@ export interface ListKnowledgeObjectDependentsRequest {
 }
 
 export interface ListKnowledgeObjectDependentsResponse {
-  dependents: KnowledgeObjectDependency[];
+  dependents: KnowledgeManagementDependencyEdge[];
   page: PageResponse | undefined;
   tenantCatalogRevision: bigint;
+  /**
+   * resolved_object is the exact target selected by the request, including on
+   * an empty page when request.version was absent.
+   */
+  resolvedObject: KnowledgeManagementObjectVersionIdentity | undefined;
 }
 
 /**
@@ -3548,6 +3612,193 @@ export const ValidateKnowledgeObjectResponse: MessageFns<ValidateKnowledgeObject
   },
 };
 
+function createBaseKnowledgeManagementObjectVersionIdentity(): KnowledgeManagementObjectVersionIdentity {
+  return { knowledgeObjectId: "", version: 0n };
+}
+
+export const KnowledgeManagementObjectVersionIdentity: MessageFns<KnowledgeManagementObjectVersionIdentity> = {
+  encode(message: KnowledgeManagementObjectVersionIdentity, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.knowledgeObjectId !== "") {
+      writer.uint32(10).string(message.knowledgeObjectId);
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.version);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeManagementObjectVersionIdentity {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeManagementObjectVersionIdentity();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.knowledgeObjectId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.version = reader.uint64() as bigint;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeManagementObjectVersionIdentity {
+    return {
+      knowledgeObjectId: isSet(object.knowledgeObjectId)
+        ? globalThis.String(object.knowledgeObjectId)
+        : isSet(object.knowledge_object_id)
+        ? globalThis.String(object.knowledge_object_id)
+        : "",
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+    };
+  },
+
+  toJSON(message: KnowledgeManagementObjectVersionIdentity): unknown {
+    const obj: any = {};
+    if (message.knowledgeObjectId !== "") {
+      obj.knowledgeObjectId = message.knowledgeObjectId;
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeManagementObjectVersionIdentity>, I>>(
+    base?: I,
+  ): KnowledgeManagementObjectVersionIdentity {
+    return KnowledgeManagementObjectVersionIdentity.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeManagementObjectVersionIdentity>, I>>(
+    object: I,
+  ): KnowledgeManagementObjectVersionIdentity {
+    const message = createBaseKnowledgeManagementObjectVersionIdentity();
+    message.knowledgeObjectId = object.knowledgeObjectId ?? "";
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    return message;
+  },
+};
+
+function createBaseKnowledgeManagementDependencyEdge(): KnowledgeManagementDependencyEdge {
+  return { source: undefined, target: undefined, role: 0 };
+}
+
+export const KnowledgeManagementDependencyEdge: MessageFns<KnowledgeManagementDependencyEdge> = {
+  encode(message: KnowledgeManagementDependencyEdge, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.source !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.source, writer.uint32(10).fork()).join();
+    }
+    if (message.target !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.target, writer.uint32(18).fork()).join();
+    }
+    if (message.role !== 0) {
+      writer.uint32(24).int32(message.role);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeManagementDependencyEdge {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeManagementDependencyEdge();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.source = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.target = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.role = reader.int32() as any;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeManagementDependencyEdge {
+    return {
+      source: isSet(object.source) ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.source) : undefined,
+      target: isSet(object.target) ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.target) : undefined,
+      role: isSet(object.role) ? knowledgeDependencyRoleFromJSON(object.role) : 0,
+    };
+  },
+
+  toJSON(message: KnowledgeManagementDependencyEdge): unknown {
+    const obj: any = {};
+    if (message.source !== undefined) {
+      obj.source = KnowledgeManagementObjectVersionIdentity.toJSON(message.source);
+    }
+    if (message.target !== undefined) {
+      obj.target = KnowledgeManagementObjectVersionIdentity.toJSON(message.target);
+    }
+    if (message.role !== 0) {
+      obj.role = knowledgeDependencyRoleToJSON(message.role);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeManagementDependencyEdge>, I>>(
+    base?: I,
+  ): KnowledgeManagementDependencyEdge {
+    return KnowledgeManagementDependencyEdge.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeManagementDependencyEdge>, I>>(
+    object: I,
+  ): KnowledgeManagementDependencyEdge {
+    const message = createBaseKnowledgeManagementDependencyEdge();
+    message.source = (object.source !== undefined && object.source !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.source)
+      : undefined;
+    message.target = (object.target !== undefined && object.target !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.target)
+      : undefined;
+    message.role = object.role ?? 0;
+    return message;
+  },
+};
+
 function createBaseListKnowledgeObjectDependenciesRequest(): ListKnowledgeObjectDependenciesRequest {
   return { knowledgeObjectId: "", version: undefined, page: undefined };
 }
@@ -3654,13 +3905,13 @@ export const ListKnowledgeObjectDependenciesRequest: MessageFns<ListKnowledgeObj
 };
 
 function createBaseListKnowledgeObjectDependenciesResponse(): ListKnowledgeObjectDependenciesResponse {
-  return { dependencies: [], page: undefined, tenantCatalogRevision: 0n };
+  return { dependencies: [], page: undefined, tenantCatalogRevision: 0n, resolvedObject: undefined };
 }
 
 export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeObjectDependenciesResponse> = {
   encode(message: ListKnowledgeObjectDependenciesResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     for (const v of message.dependencies) {
-      KnowledgeObjectDependency.encode(v!, writer.uint32(10).fork()).join();
+      KnowledgeManagementDependencyEdge.encode(v!, writer.uint32(10).fork()).join();
     }
     if (message.page !== undefined) {
       PageResponse.encode(message.page, writer.uint32(18).fork()).join();
@@ -3670,6 +3921,9 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(24).uint64(message.tenantCatalogRevision);
+    }
+    if (message.resolvedObject !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.resolvedObject, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -3686,7 +3940,7 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
             break;
           }
 
-          message.dependencies.push(KnowledgeObjectDependency.decode(reader, reader.uint32()));
+          message.dependencies.push(KnowledgeManagementDependencyEdge.decode(reader, reader.uint32()));
           continue;
         }
         case 2: {
@@ -3705,6 +3959,14 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.resolvedObject = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3717,7 +3979,7 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
   fromJSON(object: any): ListKnowledgeObjectDependenciesResponse {
     return {
       dependencies: globalThis.Array.isArray(object?.dependencies)
-        ? object.dependencies.map((e: any) => KnowledgeObjectDependency.fromJSON(e))
+        ? object.dependencies.map((e: any) => KnowledgeManagementDependencyEdge.fromJSON(e))
         : [],
       page: isSet(object.page) ? PageResponse.fromJSON(object.page) : undefined,
       tenantCatalogRevision: isSet(object.tenantCatalogRevision)
@@ -3725,19 +3987,27 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      resolvedObject: isSet(object.resolvedObject)
+        ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.resolvedObject)
+        : isSet(object.resolved_object)
+        ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.resolved_object)
+        : undefined,
     };
   },
 
   toJSON(message: ListKnowledgeObjectDependenciesResponse): unknown {
     const obj: any = {};
     if (message.dependencies?.length) {
-      obj.dependencies = message.dependencies.map((e) => KnowledgeObjectDependency.toJSON(e));
+      obj.dependencies = message.dependencies.map((e) => KnowledgeManagementDependencyEdge.toJSON(e));
     }
     if (message.page !== undefined) {
       obj.page = PageResponse.toJSON(message.page);
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.resolvedObject !== undefined) {
+      obj.resolvedObject = KnowledgeManagementObjectVersionIdentity.toJSON(message.resolvedObject);
     }
     return obj;
   },
@@ -3751,7 +4021,7 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
     object: I,
   ): ListKnowledgeObjectDependenciesResponse {
     const message = createBaseListKnowledgeObjectDependenciesResponse();
-    message.dependencies = object.dependencies?.map((e) => KnowledgeObjectDependency.fromPartial(e)) || [];
+    message.dependencies = object.dependencies?.map((e) => KnowledgeManagementDependencyEdge.fromPartial(e)) || [];
     message.page = (object.page !== undefined && object.page !== null)
       ? PageResponse.fromPartial(object.page)
       : undefined;
@@ -3759,6 +4029,9 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.resolvedObject = (object.resolvedObject !== undefined && object.resolvedObject !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.resolvedObject)
+      : undefined;
     return message;
   },
 };
@@ -3869,13 +4142,13 @@ export const ListKnowledgeObjectDependentsRequest: MessageFns<ListKnowledgeObjec
 };
 
 function createBaseListKnowledgeObjectDependentsResponse(): ListKnowledgeObjectDependentsResponse {
-  return { dependents: [], page: undefined, tenantCatalogRevision: 0n };
+  return { dependents: [], page: undefined, tenantCatalogRevision: 0n, resolvedObject: undefined };
 }
 
 export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObjectDependentsResponse> = {
   encode(message: ListKnowledgeObjectDependentsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     for (const v of message.dependents) {
-      KnowledgeObjectDependency.encode(v!, writer.uint32(10).fork()).join();
+      KnowledgeManagementDependencyEdge.encode(v!, writer.uint32(10).fork()).join();
     }
     if (message.page !== undefined) {
       PageResponse.encode(message.page, writer.uint32(18).fork()).join();
@@ -3885,6 +4158,9 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(24).uint64(message.tenantCatalogRevision);
+    }
+    if (message.resolvedObject !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.resolvedObject, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -3901,7 +4177,7 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
             break;
           }
 
-          message.dependents.push(KnowledgeObjectDependency.decode(reader, reader.uint32()));
+          message.dependents.push(KnowledgeManagementDependencyEdge.decode(reader, reader.uint32()));
           continue;
         }
         case 2: {
@@ -3920,6 +4196,14 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.resolvedObject = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3932,7 +4216,7 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
   fromJSON(object: any): ListKnowledgeObjectDependentsResponse {
     return {
       dependents: globalThis.Array.isArray(object?.dependents)
-        ? object.dependents.map((e: any) => KnowledgeObjectDependency.fromJSON(e))
+        ? object.dependents.map((e: any) => KnowledgeManagementDependencyEdge.fromJSON(e))
         : [],
       page: isSet(object.page) ? PageResponse.fromJSON(object.page) : undefined,
       tenantCatalogRevision: isSet(object.tenantCatalogRevision)
@@ -3940,19 +4224,27 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      resolvedObject: isSet(object.resolvedObject)
+        ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.resolvedObject)
+        : isSet(object.resolved_object)
+        ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.resolved_object)
+        : undefined,
     };
   },
 
   toJSON(message: ListKnowledgeObjectDependentsResponse): unknown {
     const obj: any = {};
     if (message.dependents?.length) {
-      obj.dependents = message.dependents.map((e) => KnowledgeObjectDependency.toJSON(e));
+      obj.dependents = message.dependents.map((e) => KnowledgeManagementDependencyEdge.toJSON(e));
     }
     if (message.page !== undefined) {
       obj.page = PageResponse.toJSON(message.page);
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.resolvedObject !== undefined) {
+      obj.resolvedObject = KnowledgeManagementObjectVersionIdentity.toJSON(message.resolvedObject);
     }
     return obj;
   },
@@ -3966,7 +4258,7 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
     object: I,
   ): ListKnowledgeObjectDependentsResponse {
     const message = createBaseListKnowledgeObjectDependentsResponse();
-    message.dependents = object.dependents?.map((e) => KnowledgeObjectDependency.fromPartial(e)) || [];
+    message.dependents = object.dependents?.map((e) => KnowledgeManagementDependencyEdge.fromPartial(e)) || [];
     message.page = (object.page !== undefined && object.page !== null)
       ? PageResponse.fromPartial(object.page)
       : undefined;
@@ -3974,6 +4266,9 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.resolvedObject = (object.resolvedObject !== undefined && object.resolvedObject !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.resolvedObject)
+      : undefined;
     return message;
   },
 };

@@ -11,6 +11,7 @@ import { AppSelector } from "@/gen/ts/open_splunk/v1/app";
 import { GetAppRequest } from "@/gen/ts/open_splunk/v1/app_api";
 import {
   FieldExtractionDefinition,
+  KnowledgeDependencyRole,
   KnowledgeObjectType,
   KnowledgeOverwriteBehavior,
   KnowledgeSearchStage,
@@ -21,7 +22,11 @@ import {
 import {
   CreateKnowledgeObjectResponse,
   DeleteKnowledgeObjectResponse,
+  KnowledgeManagementDependencyEdge,
+  KnowledgeManagementObjectVersionIdentity,
   KnowledgeMutationOutcomeRecord,
+  ListKnowledgeObjectDependenciesResponse,
+  ListKnowledgeObjectDependentsResponse,
   SetKnowledgeObjectStateResponse,
   UpdateKnowledgeObjectResponse,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
@@ -128,6 +133,25 @@ interface KnowledgeSnapshotSummaryWireFixture {
   cases: KnowledgeSnapshotSummaryWireCase[];
 }
 
+interface KnowledgeManagementDependencyWireFixture {
+  version: number;
+  source: {
+    knowledgeObjectId: string;
+    version: number;
+  };
+  target: {
+    knowledgeObjectId: string;
+    version: number;
+  };
+  role: number;
+  nextPageToken: string;
+  totalSize: number;
+  tenantCatalogRevision: number;
+  edgeWireHex: string;
+  dependenciesResponseWireHex: string;
+  dependentsResponseWireHex: string;
+}
+
 const routeFixture = JSON.parse(
   readFileSync(
     path.join(process.cwd(), "testdata", "protobuf-http-route-contracts.json"),
@@ -152,6 +176,12 @@ const knowledgeSnapshotSummaryWireFixture = JSON.parse(
     "utf8",
   ),
 ) as KnowledgeSnapshotSummaryWireFixture;
+const knowledgeManagementDependencyWireFixture = JSON.parse(
+  readFileSync(
+    path.join(process.cwd(), "testdata", "knowledge-management-dependency-wire.json"),
+    "utf8",
+  ),
+) as KnowledgeManagementDependencyWireFixture;
 const futureFieldTag = (routeFixture.futureFieldNumber << 3) | 2;
 
 function assertWireHash(name: string, wire: Uint8Array, contract: SnapshotWireRecord): void {
@@ -583,6 +613,69 @@ test("generated knowledge mutation responses encode paired revision state determ
     const second = contract.encode();
     assert.deepEqual(first, second, `${contract.name} response encoding changed between runs`);
     assert.deepEqual(first, contract.expected, `${contract.name} response wire fields changed`);
+  }
+});
+
+test("generated management dependency edges keep a digestless direct cross-runtime wire", () => {
+  const fixture = knowledgeManagementDependencyWireFixture;
+  assert.equal(fixture.version, 1);
+
+  const source = KnowledgeManagementObjectVersionIdentity.fromPartial({
+    knowledgeObjectId: fixture.source.knowledgeObjectId,
+    version: BigInt(fixture.source.version),
+  });
+  const target = KnowledgeManagementObjectVersionIdentity.fromPartial({
+    knowledgeObjectId: fixture.target.knowledgeObjectId,
+    version: BigInt(fixture.target.version),
+  });
+  const edge = KnowledgeManagementDependencyEdge.fromPartial({
+    source,
+    target,
+    role: fixture.role as KnowledgeDependencyRole,
+  });
+  const edgeWire = KnowledgeManagementDependencyEdge.encode(edge).finish();
+  assert.deepEqual(edgeWire, Uint8Array.from(Buffer.from(fixture.edgeWireHex, "hex")));
+  assert.deepEqual(KnowledgeManagementDependencyEdge.decode(edgeWire), edge);
+
+  const page = {
+    nextPageToken: fixture.nextPageToken,
+    totalSize: BigInt(fixture.totalSize),
+    totalSizeExact: true,
+  };
+  const dependencies = ListKnowledgeObjectDependenciesResponse.fromPartial({
+    dependencies: [edge],
+    page,
+    tenantCatalogRevision: BigInt(fixture.tenantCatalogRevision),
+    resolvedObject: source,
+  });
+  const dependents = ListKnowledgeObjectDependentsResponse.fromPartial({
+    dependents: [edge],
+    page,
+    tenantCatalogRevision: BigInt(fixture.tenantCatalogRevision),
+    resolvedObject: target,
+  });
+  const cases = [
+    {
+      name: "dependencies",
+      message: dependencies,
+      encode: () => ListKnowledgeObjectDependenciesResponse.encode(dependencies).finish(),
+      decode: ListKnowledgeObjectDependenciesResponse.decode,
+      wireHex: fixture.dependenciesResponseWireHex,
+    },
+    {
+      name: "dependents",
+      message: dependents,
+      encode: () => ListKnowledgeObjectDependentsResponse.encode(dependents).finish(),
+      decode: ListKnowledgeObjectDependentsResponse.decode,
+      wireHex: fixture.dependentsResponseWireHex,
+    },
+  ];
+  for (const contract of cases) {
+    const first = contract.encode();
+    const second = contract.encode();
+    assert.deepEqual(first, second, `${contract.name} response encoding changed between runs`);
+    assert.deepEqual(first, Uint8Array.from(Buffer.from(contract.wireHex, "hex")));
+    assert.deepEqual(contract.decode(first), contract.message);
   }
 });
 

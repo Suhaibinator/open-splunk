@@ -1767,7 +1767,137 @@ func (x *ValidateKnowledgeObjectResponse) GetTenantCatalogRevision() uint64 {
 	return 0
 }
 
+// KnowledgeManagementObjectVersionIdentity identifies one exact immutable
+// object version without exposing its definition digest. Definition digests
+// remain subject to the containing object's current disclosure policy.
+type KnowledgeManagementObjectVersionIdentity struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	KnowledgeObjectId string                 `protobuf:"bytes,1,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3" json:"knowledge_object_id,omitempty"`
+	Version           uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *KnowledgeManagementObjectVersionIdentity) Reset() {
+	*x = KnowledgeManagementObjectVersionIdentity{}
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KnowledgeManagementObjectVersionIdentity) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KnowledgeManagementObjectVersionIdentity) ProtoMessage() {}
+
+func (x *KnowledgeManagementObjectVersionIdentity) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KnowledgeManagementObjectVersionIdentity.ProtoReflect.Descriptor instead.
+func (*KnowledgeManagementObjectVersionIdentity) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *KnowledgeManagementObjectVersionIdentity) GetKnowledgeObjectId() string {
+	if x != nil {
+		return x.KnowledgeObjectId
+	}
+	return ""
+}
+
+func (x *KnowledgeManagementObjectVersionIdentity) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+// KnowledgeManagementDependencyEdge is one direct persisted object-to-object
+// edge. Snapshot-global stage, topological-depth, and canonical-order metadata
+// deliberately do not belong to this management projection.
+type KnowledgeManagementDependencyEdge struct {
+	state         protoimpl.MessageState                    `protogen:"open.v1"`
+	Source        *KnowledgeManagementObjectVersionIdentity `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	Target        *KnowledgeManagementObjectVersionIdentity `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`
+	Role          KnowledgeDependencyRole                   `protobuf:"varint,3,opt,name=role,proto3,enum=open_splunk.v1.KnowledgeDependencyRole" json:"role,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KnowledgeManagementDependencyEdge) Reset() {
+	*x = KnowledgeManagementDependencyEdge{}
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KnowledgeManagementDependencyEdge) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KnowledgeManagementDependencyEdge) ProtoMessage() {}
+
+func (x *KnowledgeManagementDependencyEdge) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KnowledgeManagementDependencyEdge.ProtoReflect.Descriptor instead.
+func (*KnowledgeManagementDependencyEdge) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *KnowledgeManagementDependencyEdge) GetSource() *KnowledgeManagementObjectVersionIdentity {
+	if x != nil {
+		return x.Source
+	}
+	return nil
+}
+
+func (x *KnowledgeManagementDependencyEdge) GetTarget() *KnowledgeManagementObjectVersionIdentity {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
+func (x *KnowledgeManagementDependencyEdge) GetRole() KnowledgeDependencyRole {
+	if x != nil {
+		return x.Role
+	}
+	return KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED
+}
+
 // POST /api/v1/knowledge/objects/dependencies
+// The current registry identity authorizes the requested source; selecting a
+// historical version never grants authority. The response lists the exact
+// direct outgoing edges persisted for that selected source version. An edge
+// whose target is not currently disclosable is omitted before pagination and
+// total counting, without a redacted placeholder or hidden count. A currently
+// quarantined requested source is reported through the uniform not-found-or-
+// forbidden response and exposes no current or historical dependency data.
+// Disclosed edges use fixed ascending binary target ID, target version, then
+// role order. The signed continuation binds this route, caller scope, request
+// version presence and value, resolved source, page bound and total-count
+// choice, and the first page's catalog revision plus exact state commitment.
+// Any later catalog identity invalidates the continuation.
 type ListKnowledgeObjectDependenciesRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	KnowledgeObjectId string                 `protobuf:"bytes,1,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3" json:"knowledge_object_id,omitempty"`
@@ -1779,7 +1909,7 @@ type ListKnowledgeObjectDependenciesRequest struct {
 
 func (x *ListKnowledgeObjectDependenciesRequest) Reset() {
 	*x = ListKnowledgeObjectDependenciesRequest{}
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[22]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1791,7 +1921,7 @@ func (x *ListKnowledgeObjectDependenciesRequest) String() string {
 func (*ListKnowledgeObjectDependenciesRequest) ProtoMessage() {}
 
 func (x *ListKnowledgeObjectDependenciesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[22]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1804,7 +1934,7 @@ func (x *ListKnowledgeObjectDependenciesRequest) ProtoReflect() protoreflect.Mes
 
 // Deprecated: Use ListKnowledgeObjectDependenciesRequest.ProtoReflect.Descriptor instead.
 func (*ListKnowledgeObjectDependenciesRequest) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{22}
+	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListKnowledgeObjectDependenciesRequest) GetKnowledgeObjectId() string {
@@ -1829,17 +1959,20 @@ func (x *ListKnowledgeObjectDependenciesRequest) GetPage() *PageRequest {
 }
 
 type ListKnowledgeObjectDependenciesResponse struct {
-	state                 protoimpl.MessageState       `protogen:"open.v1"`
-	Dependencies          []*KnowledgeObjectDependency `protobuf:"bytes,1,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
-	Page                  *PageResponse                `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
-	TenantCatalogRevision uint64                       `protobuf:"varint,3,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state                 protoimpl.MessageState               `protogen:"open.v1"`
+	Dependencies          []*KnowledgeManagementDependencyEdge `protobuf:"bytes,1,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
+	Page                  *PageResponse                        `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	TenantCatalogRevision uint64                               `protobuf:"varint,3,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`
+	// resolved_object is the exact source selected by the request, including on
+	// an empty page when request.version was absent.
+	ResolvedObject *KnowledgeManagementObjectVersionIdentity `protobuf:"bytes,4,opt,name=resolved_object,json=resolvedObject,proto3" json:"resolved_object,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ListKnowledgeObjectDependenciesResponse) Reset() {
 	*x = ListKnowledgeObjectDependenciesResponse{}
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[23]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1851,7 +1984,7 @@ func (x *ListKnowledgeObjectDependenciesResponse) String() string {
 func (*ListKnowledgeObjectDependenciesResponse) ProtoMessage() {}
 
 func (x *ListKnowledgeObjectDependenciesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[23]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1864,10 +1997,10 @@ func (x *ListKnowledgeObjectDependenciesResponse) ProtoReflect() protoreflect.Me
 
 // Deprecated: Use ListKnowledgeObjectDependenciesResponse.ProtoReflect.Descriptor instead.
 func (*ListKnowledgeObjectDependenciesResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{23}
+	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{25}
 }
 
-func (x *ListKnowledgeObjectDependenciesResponse) GetDependencies() []*KnowledgeObjectDependency {
+func (x *ListKnowledgeObjectDependenciesResponse) GetDependencies() []*KnowledgeManagementDependencyEdge {
 	if x != nil {
 		return x.Dependencies
 	}
@@ -1888,7 +2021,28 @@ func (x *ListKnowledgeObjectDependenciesResponse) GetTenantCatalogRevision() uin
 	return 0
 }
 
+func (x *ListKnowledgeObjectDependenciesResponse) GetResolvedObject() *KnowledgeManagementObjectVersionIdentity {
+	if x != nil {
+		return x.ResolvedObject
+	}
+	return nil
+}
+
 // POST /api/v1/knowledge/objects/dependents
+// The current registry identity authorizes the requested target; selecting a
+// historical version never grants authority. The response lists exact incoming
+// edges to that target version only from source versions which are their
+// objects' current registry versions. Every source lifecycle state is eligible,
+// but a source which is not currently disclosable is omitted before pagination
+// and total counting, without a redacted placeholder or hidden count. A
+// currently quarantined requested target is reported through the uniform not-
+// found-or-forbidden response and exposes no current or historical dependency
+// data.
+// Disclosed edges use fixed ascending binary source ID, source version, then
+// role order. The signed continuation binds this route, caller scope, request
+// version presence and value, resolved target, page bound and total-count
+// choice, and the first page's catalog revision plus exact state commitment.
+// Any later catalog identity invalidates the continuation.
 type ListKnowledgeObjectDependentsRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	KnowledgeObjectId string                 `protobuf:"bytes,1,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3" json:"knowledge_object_id,omitempty"`
@@ -1900,7 +2054,7 @@ type ListKnowledgeObjectDependentsRequest struct {
 
 func (x *ListKnowledgeObjectDependentsRequest) Reset() {
 	*x = ListKnowledgeObjectDependentsRequest{}
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[24]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1912,7 +2066,7 @@ func (x *ListKnowledgeObjectDependentsRequest) String() string {
 func (*ListKnowledgeObjectDependentsRequest) ProtoMessage() {}
 
 func (x *ListKnowledgeObjectDependentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[24]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1925,7 +2079,7 @@ func (x *ListKnowledgeObjectDependentsRequest) ProtoReflect() protoreflect.Messa
 
 // Deprecated: Use ListKnowledgeObjectDependentsRequest.ProtoReflect.Descriptor instead.
 func (*ListKnowledgeObjectDependentsRequest) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{24}
+	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListKnowledgeObjectDependentsRequest) GetKnowledgeObjectId() string {
@@ -1950,17 +2104,20 @@ func (x *ListKnowledgeObjectDependentsRequest) GetPage() *PageRequest {
 }
 
 type ListKnowledgeObjectDependentsResponse struct {
-	state                 protoimpl.MessageState       `protogen:"open.v1"`
-	Dependents            []*KnowledgeObjectDependency `protobuf:"bytes,1,rep,name=dependents,proto3" json:"dependents,omitempty"`
-	Page                  *PageResponse                `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
-	TenantCatalogRevision uint64                       `protobuf:"varint,3,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	state                 protoimpl.MessageState               `protogen:"open.v1"`
+	Dependents            []*KnowledgeManagementDependencyEdge `protobuf:"bytes,1,rep,name=dependents,proto3" json:"dependents,omitempty"`
+	Page                  *PageResponse                        `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
+	TenantCatalogRevision uint64                               `protobuf:"varint,3,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`
+	// resolved_object is the exact target selected by the request, including on
+	// an empty page when request.version was absent.
+	ResolvedObject *KnowledgeManagementObjectVersionIdentity `protobuf:"bytes,4,opt,name=resolved_object,json=resolvedObject,proto3" json:"resolved_object,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ListKnowledgeObjectDependentsResponse) Reset() {
 	*x = ListKnowledgeObjectDependentsResponse{}
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[25]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1972,7 +2129,7 @@ func (x *ListKnowledgeObjectDependentsResponse) String() string {
 func (*ListKnowledgeObjectDependentsResponse) ProtoMessage() {}
 
 func (x *ListKnowledgeObjectDependentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[25]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1985,10 +2142,10 @@ func (x *ListKnowledgeObjectDependentsResponse) ProtoReflect() protoreflect.Mess
 
 // Deprecated: Use ListKnowledgeObjectDependentsResponse.ProtoReflect.Descriptor instead.
 func (*ListKnowledgeObjectDependentsResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{25}
+	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{27}
 }
 
-func (x *ListKnowledgeObjectDependentsResponse) GetDependents() []*KnowledgeObjectDependency {
+func (x *ListKnowledgeObjectDependentsResponse) GetDependents() []*KnowledgeManagementDependencyEdge {
 	if x != nil {
 		return x.Dependents
 	}
@@ -2009,6 +2166,13 @@ func (x *ListKnowledgeObjectDependentsResponse) GetTenantCatalogRevision() uint6
 	return 0
 }
 
+func (x *ListKnowledgeObjectDependentsResponse) GetResolvedObject() *KnowledgeManagementObjectVersionIdentity {
+	if x != nil {
+		return x.ResolvedObject
+	}
+	return nil
+}
+
 // POST /api/v1/knowledge/objects/preview
 // retained_search_job_id selects a server-authorized immutable event snapshot.
 // A browser cannot submit events, index scope, a physical table, or SQL.
@@ -2027,7 +2191,7 @@ type PreviewKnowledgeObjectRequest struct {
 
 func (x *PreviewKnowledgeObjectRequest) Reset() {
 	*x = PreviewKnowledgeObjectRequest{}
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[26]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2039,7 +2203,7 @@ func (x *PreviewKnowledgeObjectRequest) String() string {
 func (*PreviewKnowledgeObjectRequest) ProtoMessage() {}
 
 func (x *PreviewKnowledgeObjectRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[26]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2052,7 +2216,7 @@ func (x *PreviewKnowledgeObjectRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreviewKnowledgeObjectRequest.ProtoReflect.Descriptor instead.
 func (*PreviewKnowledgeObjectRequest) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{26}
+	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *PreviewKnowledgeObjectRequest) GetRetainedSearchJobId() string {
@@ -2112,7 +2276,7 @@ type PreviewKnowledgeObjectResponse struct {
 
 func (x *PreviewKnowledgeObjectResponse) Reset() {
 	*x = PreviewKnowledgeObjectResponse{}
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[27]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2124,7 +2288,7 @@ func (x *PreviewKnowledgeObjectResponse) String() string {
 func (*PreviewKnowledgeObjectResponse) ProtoMessage() {}
 
 func (x *PreviewKnowledgeObjectResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[27]
+	mi := &file_open_splunk_v1_knowledge_api_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2137,7 +2301,7 @@ func (x *PreviewKnowledgeObjectResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PreviewKnowledgeObjectResponse.ProtoReflect.Descriptor instead.
 func (*PreviewKnowledgeObjectResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{27}
+	return file_open_splunk_v1_knowledge_api_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *PreviewKnowledgeObjectResponse) GetValidation() *KnowledgeValidationResult {
@@ -2335,29 +2499,38 @@ const file_open_splunk_v1_knowledge_api_proto_rawDesc = "" +
 	"\x11_expected_version\"\x9c\x01\n" +
 	"\x1fValidateKnowledgeObjectResponse\x12A\n" +
 	"\x06result\x18\x01 \x01(\v2).open_splunk.v1.KnowledgeValidationResultR\x06result\x126\n" +
-	"\x17tenant_catalog_revision\x18\x02 \x01(\x04R\x15tenantCatalogRevision\"\xb4\x01\n" +
+	"\x17tenant_catalog_revision\x18\x02 \x01(\x04R\x15tenantCatalogRevision\"t\n" +
+	"(KnowledgeManagementObjectVersionIdentity\x12.\n" +
+	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\"\x84\x02\n" +
+	"!KnowledgeManagementDependencyEdge\x12P\n" +
+	"\x06source\x18\x01 \x01(\v28.open_splunk.v1.KnowledgeManagementObjectVersionIdentityR\x06source\x12P\n" +
+	"\x06target\x18\x02 \x01(\v28.open_splunk.v1.KnowledgeManagementObjectVersionIdentityR\x06target\x12;\n" +
+	"\x04role\x18\x03 \x01(\x0e2'.open_splunk.v1.KnowledgeDependencyRoleR\x04role\"\xb4\x01\n" +
 	"&ListKnowledgeObjectDependenciesRequest\x12.\n" +
 	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12\x1d\n" +
 	"\aversion\x18\x02 \x01(\x04H\x00R\aversion\x88\x01\x01\x12/\n" +
 	"\x04page\x18\x03 \x01(\v2\x1b.open_splunk.v1.PageRequestR\x04pageB\n" +
 	"\n" +
-	"\b_version\"\xe2\x01\n" +
-	"'ListKnowledgeObjectDependenciesResponse\x12M\n" +
-	"\fdependencies\x18\x01 \x03(\v2).open_splunk.v1.KnowledgeObjectDependencyR\fdependencies\x120\n" +
+	"\b_version\"\xcd\x02\n" +
+	"'ListKnowledgeObjectDependenciesResponse\x12U\n" +
+	"\fdependencies\x18\x01 \x03(\v21.open_splunk.v1.KnowledgeManagementDependencyEdgeR\fdependencies\x120\n" +
 	"\x04page\x18\x02 \x01(\v2\x1c.open_splunk.v1.PageResponseR\x04page\x126\n" +
-	"\x17tenant_catalog_revision\x18\x03 \x01(\x04R\x15tenantCatalogRevision\"\xb2\x01\n" +
+	"\x17tenant_catalog_revision\x18\x03 \x01(\x04R\x15tenantCatalogRevision\x12a\n" +
+	"\x0fresolved_object\x18\x04 \x01(\v28.open_splunk.v1.KnowledgeManagementObjectVersionIdentityR\x0eresolvedObject\"\xb2\x01\n" +
 	"$ListKnowledgeObjectDependentsRequest\x12.\n" +
 	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12\x1d\n" +
 	"\aversion\x18\x02 \x01(\x04H\x00R\aversion\x88\x01\x01\x12/\n" +
 	"\x04page\x18\x03 \x01(\v2\x1b.open_splunk.v1.PageRequestR\x04pageB\n" +
 	"\n" +
-	"\b_version\"\xdc\x01\n" +
-	"%ListKnowledgeObjectDependentsResponse\x12I\n" +
+	"\b_version\"\xc7\x02\n" +
+	"%ListKnowledgeObjectDependentsResponse\x12Q\n" +
 	"\n" +
-	"dependents\x18\x01 \x03(\v2).open_splunk.v1.KnowledgeObjectDependencyR\n" +
+	"dependents\x18\x01 \x03(\v21.open_splunk.v1.KnowledgeManagementDependencyEdgeR\n" +
 	"dependents\x120\n" +
 	"\x04page\x18\x02 \x01(\v2\x1c.open_splunk.v1.PageResponseR\x04page\x126\n" +
-	"\x17tenant_catalog_revision\x18\x03 \x01(\x04R\x15tenantCatalogRevision\"\xa7\x03\n" +
+	"\x17tenant_catalog_revision\x18\x03 \x01(\x04R\x15tenantCatalogRevision\x12a\n" +
+	"\x0fresolved_object\x18\x04 \x01(\v28.open_splunk.v1.KnowledgeManagementObjectVersionIdentityR\x0eresolvedObject\"\xa7\x03\n" +
 	"\x1dPreviewKnowledgeObjectRequest\x123\n" +
 	"\x16retained_search_job_id\x18\x01 \x01(\tR\x13retainedSearchJobId\x12I\n" +
 	"\n" +
@@ -2407,7 +2580,7 @@ func file_open_splunk_v1_knowledge_api_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_v1_knowledge_api_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_open_splunk_v1_knowledge_api_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
+var file_open_splunk_v1_knowledge_api_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_open_splunk_v1_knowledge_api_proto_goTypes = []any{
 	(KnowledgeObjectSortBy)(0),                       // 0: open_splunk.v1.KnowledgeObjectSortBy
 	(KnowledgeQuarantineReason)(0),                   // 1: open_splunk.v1.KnowledgeQuarantineReason
@@ -2433,78 +2606,86 @@ var file_open_splunk_v1_knowledge_api_proto_goTypes = []any{
 	(*KnowledgeValidationResult)(nil),                // 21: open_splunk.v1.KnowledgeValidationResult
 	(*ValidateKnowledgeObjectRequest)(nil),           // 22: open_splunk.v1.ValidateKnowledgeObjectRequest
 	(*ValidateKnowledgeObjectResponse)(nil),          // 23: open_splunk.v1.ValidateKnowledgeObjectResponse
-	(*ListKnowledgeObjectDependenciesRequest)(nil),   // 24: open_splunk.v1.ListKnowledgeObjectDependenciesRequest
-	(*ListKnowledgeObjectDependenciesResponse)(nil),  // 25: open_splunk.v1.ListKnowledgeObjectDependenciesResponse
-	(*ListKnowledgeObjectDependentsRequest)(nil),     // 26: open_splunk.v1.ListKnowledgeObjectDependentsRequest
-	(*ListKnowledgeObjectDependentsResponse)(nil),    // 27: open_splunk.v1.ListKnowledgeObjectDependentsResponse
-	(*PreviewKnowledgeObjectRequest)(nil),            // 28: open_splunk.v1.PreviewKnowledgeObjectRequest
-	(*PreviewKnowledgeObjectResponse)(nil),           // 29: open_splunk.v1.PreviewKnowledgeObjectResponse
-	(*KnowledgeObjectDefinition)(nil),                // 30: open_splunk.v1.KnowledgeObjectDefinition
-	(KnowledgeObjectState)(0),                        // 31: open_splunk.v1.KnowledgeObjectState
-	(*KnowledgeObject)(nil),                          // 32: open_splunk.v1.KnowledgeObject
-	(*PageRequest)(nil),                              // 33: open_splunk.v1.PageRequest
-	(KnowledgeObjectType)(0),                         // 34: open_splunk.v1.KnowledgeObjectType
-	(SharingScope)(0),                                // 35: open_splunk.v1.SharingScope
-	(SortDirection)(0),                               // 36: open_splunk.v1.SortDirection
-	(*PageResponse)(nil),                             // 37: open_splunk.v1.PageResponse
-	(*fieldmaskpb.FieldMask)(nil),                    // 38: google.protobuf.FieldMask
-	(*KnowledgeObjectVersionReference)(nil),          // 39: open_splunk.v1.KnowledgeObjectVersionReference
-	(*timestamppb.Timestamp)(nil),                    // 40: google.protobuf.Timestamp
-	(*FieldViolation)(nil),                           // 41: open_splunk.v1.FieldViolation
-	(*Diagnostic)(nil),                               // 42: open_splunk.v1.Diagnostic
-	(*KnowledgeObjectDependency)(nil),                // 43: open_splunk.v1.KnowledgeObjectDependency
-	(*ResultSchema)(nil),                             // 44: open_splunk.v1.ResultSchema
-	(*ResultRow)(nil),                                // 45: open_splunk.v1.ResultRow
+	(*KnowledgeManagementObjectVersionIdentity)(nil), // 24: open_splunk.v1.KnowledgeManagementObjectVersionIdentity
+	(*KnowledgeManagementDependencyEdge)(nil),        // 25: open_splunk.v1.KnowledgeManagementDependencyEdge
+	(*ListKnowledgeObjectDependenciesRequest)(nil),   // 26: open_splunk.v1.ListKnowledgeObjectDependenciesRequest
+	(*ListKnowledgeObjectDependenciesResponse)(nil),  // 27: open_splunk.v1.ListKnowledgeObjectDependenciesResponse
+	(*ListKnowledgeObjectDependentsRequest)(nil),     // 28: open_splunk.v1.ListKnowledgeObjectDependentsRequest
+	(*ListKnowledgeObjectDependentsResponse)(nil),    // 29: open_splunk.v1.ListKnowledgeObjectDependentsResponse
+	(*PreviewKnowledgeObjectRequest)(nil),            // 30: open_splunk.v1.PreviewKnowledgeObjectRequest
+	(*PreviewKnowledgeObjectResponse)(nil),           // 31: open_splunk.v1.PreviewKnowledgeObjectResponse
+	(*KnowledgeObjectDefinition)(nil),                // 32: open_splunk.v1.KnowledgeObjectDefinition
+	(KnowledgeObjectState)(0),                        // 33: open_splunk.v1.KnowledgeObjectState
+	(*KnowledgeObject)(nil),                          // 34: open_splunk.v1.KnowledgeObject
+	(*PageRequest)(nil),                              // 35: open_splunk.v1.PageRequest
+	(KnowledgeObjectType)(0),                         // 36: open_splunk.v1.KnowledgeObjectType
+	(SharingScope)(0),                                // 37: open_splunk.v1.SharingScope
+	(SortDirection)(0),                               // 38: open_splunk.v1.SortDirection
+	(*PageResponse)(nil),                             // 39: open_splunk.v1.PageResponse
+	(*fieldmaskpb.FieldMask)(nil),                    // 40: google.protobuf.FieldMask
+	(*KnowledgeObjectVersionReference)(nil),          // 41: open_splunk.v1.KnowledgeObjectVersionReference
+	(*timestamppb.Timestamp)(nil),                    // 42: google.protobuf.Timestamp
+	(*FieldViolation)(nil),                           // 43: open_splunk.v1.FieldViolation
+	(*Diagnostic)(nil),                               // 44: open_splunk.v1.Diagnostic
+	(*KnowledgeObjectDependency)(nil),                // 45: open_splunk.v1.KnowledgeObjectDependency
+	(KnowledgeDependencyRole)(0),                     // 46: open_splunk.v1.KnowledgeDependencyRole
+	(*ResultSchema)(nil),                             // 47: open_splunk.v1.ResultSchema
+	(*ResultRow)(nil),                                // 48: open_splunk.v1.ResultRow
 }
 var file_open_splunk_v1_knowledge_api_proto_depIdxs = []int32{
-	30, // 0: open_splunk.v1.CreateKnowledgeObjectRequest.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
-	31, // 1: open_splunk.v1.CreateKnowledgeObjectRequest.initial_state:type_name -> open_splunk.v1.KnowledgeObjectState
-	32, // 2: open_splunk.v1.CreateKnowledgeObjectResponse.knowledge_object:type_name -> open_splunk.v1.KnowledgeObject
-	32, // 3: open_splunk.v1.GetKnowledgeObjectResponse.knowledge_object:type_name -> open_splunk.v1.KnowledgeObject
-	33, // 4: open_splunk.v1.ListKnowledgeObjectsRequest.page:type_name -> open_splunk.v1.PageRequest
-	34, // 5: open_splunk.v1.ListKnowledgeObjectsRequest.object_type_filters:type_name -> open_splunk.v1.KnowledgeObjectType
-	31, // 6: open_splunk.v1.ListKnowledgeObjectsRequest.state_filters:type_name -> open_splunk.v1.KnowledgeObjectState
-	35, // 7: open_splunk.v1.ListKnowledgeObjectsRequest.sharing_scope_filters:type_name -> open_splunk.v1.SharingScope
+	32, // 0: open_splunk.v1.CreateKnowledgeObjectRequest.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
+	33, // 1: open_splunk.v1.CreateKnowledgeObjectRequest.initial_state:type_name -> open_splunk.v1.KnowledgeObjectState
+	34, // 2: open_splunk.v1.CreateKnowledgeObjectResponse.knowledge_object:type_name -> open_splunk.v1.KnowledgeObject
+	34, // 3: open_splunk.v1.GetKnowledgeObjectResponse.knowledge_object:type_name -> open_splunk.v1.KnowledgeObject
+	35, // 4: open_splunk.v1.ListKnowledgeObjectsRequest.page:type_name -> open_splunk.v1.PageRequest
+	36, // 5: open_splunk.v1.ListKnowledgeObjectsRequest.object_type_filters:type_name -> open_splunk.v1.KnowledgeObjectType
+	33, // 6: open_splunk.v1.ListKnowledgeObjectsRequest.state_filters:type_name -> open_splunk.v1.KnowledgeObjectState
+	37, // 7: open_splunk.v1.ListKnowledgeObjectsRequest.sharing_scope_filters:type_name -> open_splunk.v1.SharingScope
 	0,  // 8: open_splunk.v1.ListKnowledgeObjectsRequest.sort_by:type_name -> open_splunk.v1.KnowledgeObjectSortBy
-	36, // 9: open_splunk.v1.ListKnowledgeObjectsRequest.sort_direction:type_name -> open_splunk.v1.SortDirection
-	32, // 10: open_splunk.v1.ListKnowledgeObjectsResponse.knowledge_objects:type_name -> open_splunk.v1.KnowledgeObject
-	37, // 11: open_splunk.v1.ListKnowledgeObjectsResponse.page:type_name -> open_splunk.v1.PageResponse
-	30, // 12: open_splunk.v1.UpdateKnowledgeObjectRequest.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
-	38, // 13: open_splunk.v1.UpdateKnowledgeObjectRequest.update_mask:type_name -> google.protobuf.FieldMask
-	32, // 14: open_splunk.v1.UpdateKnowledgeObjectResponse.knowledge_object:type_name -> open_splunk.v1.KnowledgeObject
-	31, // 15: open_splunk.v1.SetKnowledgeObjectStateRequest.state:type_name -> open_splunk.v1.KnowledgeObjectState
-	32, // 16: open_splunk.v1.SetKnowledgeObjectStateResponse.knowledge_object:type_name -> open_splunk.v1.KnowledgeObject
-	39, // 17: open_splunk.v1.KnowledgeMutationOutcomeRecord.object:type_name -> open_splunk.v1.KnowledgeObjectVersionReference
+	38, // 9: open_splunk.v1.ListKnowledgeObjectsRequest.sort_direction:type_name -> open_splunk.v1.SortDirection
+	34, // 10: open_splunk.v1.ListKnowledgeObjectsResponse.knowledge_objects:type_name -> open_splunk.v1.KnowledgeObject
+	39, // 11: open_splunk.v1.ListKnowledgeObjectsResponse.page:type_name -> open_splunk.v1.PageResponse
+	32, // 12: open_splunk.v1.UpdateKnowledgeObjectRequest.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
+	40, // 13: open_splunk.v1.UpdateKnowledgeObjectRequest.update_mask:type_name -> google.protobuf.FieldMask
+	34, // 14: open_splunk.v1.UpdateKnowledgeObjectResponse.knowledge_object:type_name -> open_splunk.v1.KnowledgeObject
+	33, // 15: open_splunk.v1.SetKnowledgeObjectStateRequest.state:type_name -> open_splunk.v1.KnowledgeObjectState
+	34, // 16: open_splunk.v1.SetKnowledgeObjectStateResponse.knowledge_object:type_name -> open_splunk.v1.KnowledgeObject
+	41, // 17: open_splunk.v1.KnowledgeMutationOutcomeRecord.object:type_name -> open_splunk.v1.KnowledgeObjectVersionReference
 	1,  // 18: open_splunk.v1.KnowledgeQuarantineTransition.reason:type_name -> open_splunk.v1.KnowledgeQuarantineReason
-	40, // 19: open_splunk.v1.PrepareKnowledgeObjectQuarantineResponse.expires_at:type_name -> google.protobuf.Timestamp
+	42, // 19: open_splunk.v1.PrepareKnowledgeObjectQuarantineResponse.expires_at:type_name -> google.protobuf.Timestamp
 	15, // 20: open_splunk.v1.QuarantineKnowledgeObjectResponse.transitions:type_name -> open_splunk.v1.KnowledgeQuarantineTransition
-	34, // 21: open_splunk.v1.KnowledgeValidationResult.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
-	30, // 22: open_splunk.v1.KnowledgeValidationResult.normalized_definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
-	41, // 23: open_splunk.v1.KnowledgeValidationResult.field_violations:type_name -> open_splunk.v1.FieldViolation
-	42, // 24: open_splunk.v1.KnowledgeValidationResult.diagnostics:type_name -> open_splunk.v1.Diagnostic
-	43, // 25: open_splunk.v1.KnowledgeValidationResult.dependencies:type_name -> open_splunk.v1.KnowledgeObjectDependency
+	36, // 21: open_splunk.v1.KnowledgeValidationResult.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
+	32, // 22: open_splunk.v1.KnowledgeValidationResult.normalized_definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
+	43, // 23: open_splunk.v1.KnowledgeValidationResult.field_violations:type_name -> open_splunk.v1.FieldViolation
+	44, // 24: open_splunk.v1.KnowledgeValidationResult.diagnostics:type_name -> open_splunk.v1.Diagnostic
+	45, // 25: open_splunk.v1.KnowledgeValidationResult.dependencies:type_name -> open_splunk.v1.KnowledgeObjectDependency
 	20, // 26: open_splunk.v1.KnowledgeValidationResult.resources:type_name -> open_splunk.v1.KnowledgeResourceEstimate
-	30, // 27: open_splunk.v1.ValidateKnowledgeObjectRequest.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
-	38, // 28: open_splunk.v1.ValidateKnowledgeObjectRequest.update_mask:type_name -> google.protobuf.FieldMask
+	32, // 27: open_splunk.v1.ValidateKnowledgeObjectRequest.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
+	40, // 28: open_splunk.v1.ValidateKnowledgeObjectRequest.update_mask:type_name -> google.protobuf.FieldMask
 	21, // 29: open_splunk.v1.ValidateKnowledgeObjectResponse.result:type_name -> open_splunk.v1.KnowledgeValidationResult
-	33, // 30: open_splunk.v1.ListKnowledgeObjectDependenciesRequest.page:type_name -> open_splunk.v1.PageRequest
-	43, // 31: open_splunk.v1.ListKnowledgeObjectDependenciesResponse.dependencies:type_name -> open_splunk.v1.KnowledgeObjectDependency
-	37, // 32: open_splunk.v1.ListKnowledgeObjectDependenciesResponse.page:type_name -> open_splunk.v1.PageResponse
-	33, // 33: open_splunk.v1.ListKnowledgeObjectDependentsRequest.page:type_name -> open_splunk.v1.PageRequest
-	43, // 34: open_splunk.v1.ListKnowledgeObjectDependentsResponse.dependents:type_name -> open_splunk.v1.KnowledgeObjectDependency
-	37, // 35: open_splunk.v1.ListKnowledgeObjectDependentsResponse.page:type_name -> open_splunk.v1.PageResponse
-	30, // 36: open_splunk.v1.PreviewKnowledgeObjectRequest.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
-	38, // 37: open_splunk.v1.PreviewKnowledgeObjectRequest.update_mask:type_name -> google.protobuf.FieldMask
-	21, // 38: open_splunk.v1.PreviewKnowledgeObjectResponse.validation:type_name -> open_splunk.v1.KnowledgeValidationResult
-	44, // 39: open_splunk.v1.PreviewKnowledgeObjectResponse.before_schema:type_name -> open_splunk.v1.ResultSchema
-	44, // 40: open_splunk.v1.PreviewKnowledgeObjectResponse.after_schema:type_name -> open_splunk.v1.ResultSchema
-	45, // 41: open_splunk.v1.PreviewKnowledgeObjectResponse.before_rows:type_name -> open_splunk.v1.ResultRow
-	45, // 42: open_splunk.v1.PreviewKnowledgeObjectResponse.after_rows:type_name -> open_splunk.v1.ResultRow
-	43, // [43:43] is the sub-list for method output_type
-	43, // [43:43] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	24, // 30: open_splunk.v1.KnowledgeManagementDependencyEdge.source:type_name -> open_splunk.v1.KnowledgeManagementObjectVersionIdentity
+	24, // 31: open_splunk.v1.KnowledgeManagementDependencyEdge.target:type_name -> open_splunk.v1.KnowledgeManagementObjectVersionIdentity
+	46, // 32: open_splunk.v1.KnowledgeManagementDependencyEdge.role:type_name -> open_splunk.v1.KnowledgeDependencyRole
+	35, // 33: open_splunk.v1.ListKnowledgeObjectDependenciesRequest.page:type_name -> open_splunk.v1.PageRequest
+	25, // 34: open_splunk.v1.ListKnowledgeObjectDependenciesResponse.dependencies:type_name -> open_splunk.v1.KnowledgeManagementDependencyEdge
+	39, // 35: open_splunk.v1.ListKnowledgeObjectDependenciesResponse.page:type_name -> open_splunk.v1.PageResponse
+	24, // 36: open_splunk.v1.ListKnowledgeObjectDependenciesResponse.resolved_object:type_name -> open_splunk.v1.KnowledgeManagementObjectVersionIdentity
+	35, // 37: open_splunk.v1.ListKnowledgeObjectDependentsRequest.page:type_name -> open_splunk.v1.PageRequest
+	25, // 38: open_splunk.v1.ListKnowledgeObjectDependentsResponse.dependents:type_name -> open_splunk.v1.KnowledgeManagementDependencyEdge
+	39, // 39: open_splunk.v1.ListKnowledgeObjectDependentsResponse.page:type_name -> open_splunk.v1.PageResponse
+	24, // 40: open_splunk.v1.ListKnowledgeObjectDependentsResponse.resolved_object:type_name -> open_splunk.v1.KnowledgeManagementObjectVersionIdentity
+	32, // 41: open_splunk.v1.PreviewKnowledgeObjectRequest.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
+	40, // 42: open_splunk.v1.PreviewKnowledgeObjectRequest.update_mask:type_name -> google.protobuf.FieldMask
+	21, // 43: open_splunk.v1.PreviewKnowledgeObjectResponse.validation:type_name -> open_splunk.v1.KnowledgeValidationResult
+	47, // 44: open_splunk.v1.PreviewKnowledgeObjectResponse.before_schema:type_name -> open_splunk.v1.ResultSchema
+	47, // 45: open_splunk.v1.PreviewKnowledgeObjectResponse.after_schema:type_name -> open_splunk.v1.ResultSchema
+	48, // 46: open_splunk.v1.PreviewKnowledgeObjectResponse.before_rows:type_name -> open_splunk.v1.ResultRow
+	48, // 47: open_splunk.v1.PreviewKnowledgeObjectResponse.after_rows:type_name -> open_splunk.v1.ResultRow
+	48, // [48:48] is the sub-list for method output_type
+	48, // [48:48] is the sub-list for method input_type
+	48, // [48:48] is the sub-list for extension type_name
+	48, // [48:48] is the sub-list for extension extendee
+	0,  // [0:48] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_knowledge_api_proto_init() }
@@ -2523,16 +2704,16 @@ func file_open_splunk_v1_knowledge_api_proto_init() {
 	}
 	file_open_splunk_v1_knowledge_api_proto_msgTypes[19].OneofWrappers = []any{}
 	file_open_splunk_v1_knowledge_api_proto_msgTypes[20].OneofWrappers = []any{}
-	file_open_splunk_v1_knowledge_api_proto_msgTypes[22].OneofWrappers = []any{}
 	file_open_splunk_v1_knowledge_api_proto_msgTypes[24].OneofWrappers = []any{}
 	file_open_splunk_v1_knowledge_api_proto_msgTypes[26].OneofWrappers = []any{}
+	file_open_splunk_v1_knowledge_api_proto_msgTypes[28].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_v1_knowledge_api_proto_rawDesc), len(file_open_splunk_v1_knowledge_api_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   28,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

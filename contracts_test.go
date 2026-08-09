@@ -654,6 +654,174 @@ func TestFieldExtractionDefinitionDeterministicWireMatchesCrossLanguageGolden(t 
 	}
 }
 
+func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *testing.T) {
+	t.Parallel()
+
+	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	identity := file.Messages().ByName("KnowledgeManagementObjectVersionIdentity")
+	if identity == nil || identity.Fields().Len() != 2 {
+		t.Fatalf("management object-version identity descriptor = %v", identity)
+	}
+	if field := identity.Fields().ByName("knowledge_object_id"); field == nil ||
+		field.Number() != 1 || field.Kind() != protoreflect.StringKind {
+		t.Errorf("management identity object field = %v, want string field 1", field)
+	}
+	if field := identity.Fields().ByName("version"); field == nil ||
+		field.Number() != 2 || field.Kind() != protoreflect.Uint64Kind {
+		t.Errorf("management identity version field = %v, want uint64 field 2", field)
+	}
+	if field := identity.Fields().ByName("definition_sha256"); field != nil {
+		t.Errorf("management identity unexpectedly exposes definition digest at field %d", field.Number())
+	}
+
+	edgeDescriptor := file.Messages().ByName("KnowledgeManagementDependencyEdge")
+	if edgeDescriptor == nil || edgeDescriptor.Fields().Len() != 3 {
+		t.Fatalf("management dependency edge descriptor = %v", edgeDescriptor)
+	}
+	for name, number := range map[protoreflect.Name]protoreflect.FieldNumber{
+		"source": 1,
+		"target": 2,
+	} {
+		field := edgeDescriptor.Fields().ByName(name)
+		if field == nil || field.Number() != number || field.Kind() != protoreflect.MessageKind ||
+			field.Message() == nil || field.Message().FullName() != identity.FullName() {
+			t.Errorf("management edge %s = %v, want identity message field %d", name, field, number)
+		}
+	}
+	if field := edgeDescriptor.Fields().ByName("role"); field == nil ||
+		field.Number() != 3 || field.Kind() != protoreflect.EnumKind || field.Enum() == nil ||
+		field.Enum().FullName() != "open_splunk.v1.KnowledgeDependencyRole" {
+		t.Errorf("management edge role = %v, want KnowledgeDependencyRole field 3", field)
+	}
+	for _, forbidden := range []protoreflect.Name{
+		"source_stage", "target_stage", "topological_depth", "canonical_ordinal",
+	} {
+		if field := edgeDescriptor.Fields().ByName(forbidden); field != nil {
+			t.Errorf("management edge unexpectedly carries snapshot field %s at %d", forbidden, field.Number())
+		}
+	}
+
+	for responseName, repeatedName := range map[protoreflect.Name]protoreflect.Name{
+		"ListKnowledgeObjectDependenciesResponse": "dependencies",
+		"ListKnowledgeObjectDependentsResponse":   "dependents",
+	} {
+		response := file.Messages().ByName(responseName)
+		if response == nil || response.Fields().Len() != 4 {
+			t.Fatalf("%s descriptor = %v", responseName, response)
+		}
+		repeated := response.Fields().ByName(repeatedName)
+		if repeated == nil || repeated.Number() != 1 || !repeated.IsList() ||
+			repeated.Kind() != protoreflect.MessageKind || repeated.Message() == nil ||
+			repeated.Message().FullName() != edgeDescriptor.FullName() {
+			t.Errorf("%s.%s = %v, want repeated management edge field 1", responseName, repeatedName, repeated)
+		}
+		resolved := response.Fields().ByName("resolved_object")
+		if resolved == nil || resolved.Number() != 4 || resolved.Kind() != protoreflect.MessageKind ||
+			resolved.Message() == nil || resolved.Message().FullName() != identity.FullName() {
+			t.Errorf("%s.resolved_object = %v, want identity message field 4", responseName, resolved)
+		}
+	}
+
+	type identityFixture struct {
+		KnowledgeObjectID string `json:"knowledgeObjectId"`
+		Version           uint64 `json:"version"`
+	}
+	var fixture struct {
+		Version                     int             `json:"version"`
+		Source                      identityFixture `json:"source"`
+		Target                      identityFixture `json:"target"`
+		Role                        int32           `json:"role"`
+		NextPageToken               string          `json:"nextPageToken"`
+		TotalSize                   uint64          `json:"totalSize"`
+		TenantCatalogRevision       uint64          `json:"tenantCatalogRevision"`
+		EdgeWireHex                 string          `json:"edgeWireHex"`
+		DependenciesResponseWireHex string          `json:"dependenciesResponseWireHex"`
+		DependentsResponseWireHex   string          `json:"dependentsResponseWireHex"`
+	}
+	encodedFixture, err := os.ReadFile("testdata/knowledge-management-dependency-wire.json")
+	if err != nil {
+		t.Fatalf("read management-dependency fixture: %v", err)
+	}
+	if err := json.Unmarshal(encodedFixture, &fixture); err != nil {
+		t.Fatalf("decode management-dependency fixture: %v", err)
+	}
+	if fixture.Version != 1 || fixture.Source.KnowledgeObjectID == "" ||
+		fixture.Target.KnowledgeObjectID == "" || fixture.Source.Version == 0 ||
+		fixture.Target.Version == 0 || fixture.TotalSize == 0 ||
+		fixture.TenantCatalogRevision == 0 {
+		t.Fatalf("management-dependency fixture is invalid: %+v", fixture)
+	}
+
+	source := &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+		KnowledgeObjectId: fixture.Source.KnowledgeObjectID,
+		Version:           fixture.Source.Version,
+	}
+	target := &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+		KnowledgeObjectId: fixture.Target.KnowledgeObjectID,
+		Version:           fixture.Target.Version,
+	}
+	edge := &opensplunkv1.KnowledgeManagementDependencyEdge{
+		Source: source,
+		Target: target,
+		Role:   opensplunkv1.KnowledgeDependencyRole(fixture.Role),
+	}
+	nextPageToken := fixture.NextPageToken
+	totalSize := fixture.TotalSize
+	page := &opensplunkv1.PageResponse{
+		NextPageToken:  &nextPageToken,
+		TotalSize:      &totalSize,
+		TotalSizeExact: true,
+	}
+	cases := []struct {
+		name    string
+		message proto.Message
+		wireHex string
+	}{
+		{name: "edge", message: edge, wireHex: fixture.EdgeWireHex},
+		{
+			name: "dependencies response",
+			message: &opensplunkv1.ListKnowledgeObjectDependenciesResponse{
+				Dependencies:          []*opensplunkv1.KnowledgeManagementDependencyEdge{edge},
+				Page:                  page,
+				TenantCatalogRevision: fixture.TenantCatalogRevision,
+				ResolvedObject:        source,
+			},
+			wireHex: fixture.DependenciesResponseWireHex,
+		},
+		{
+			name: "dependents response",
+			message: &opensplunkv1.ListKnowledgeObjectDependentsResponse{
+				Dependents:            []*opensplunkv1.KnowledgeManagementDependencyEdge{edge},
+				Page:                  page,
+				TenantCatalogRevision: fixture.TenantCatalogRevision,
+				ResolvedObject:        target,
+			},
+			wireHex: fixture.DependentsResponseWireHex,
+		},
+	}
+	marshal := proto.MarshalOptions{Deterministic: true}
+	for _, contract := range cases {
+		contract := contract
+		t.Run(contract.name, func(t *testing.T) {
+			want, err := hex.DecodeString(contract.wireHex)
+			if err != nil {
+				t.Fatalf("decode golden wire: %v", err)
+			}
+			first, err := marshal.Marshal(contract.message)
+			if err != nil {
+				t.Fatalf("marshal management dependency contract: %v", err)
+			}
+			second, err := marshal.Marshal(contract.message)
+			if err != nil {
+				t.Fatalf("marshal management dependency contract again: %v", err)
+			}
+			if !bytes.Equal(first, second) || !bytes.Equal(first, want) {
+				t.Fatalf("deterministic wire = %x/%x, want %x", first, second, want)
+			}
+		})
+	}
+}
+
 func TestTierOneKnowledgeDefinitionBodiesKeepStableWireNumbers(t *testing.T) {
 	t.Parallel()
 

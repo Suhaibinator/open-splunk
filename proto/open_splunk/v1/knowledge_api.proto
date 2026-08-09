@@ -247,7 +247,36 @@ message ValidateKnowledgeObjectResponse {
   uint64 tenant_catalog_revision = 2;
 }
 
+// KnowledgeManagementObjectVersionIdentity identifies one exact immutable
+// object version without exposing its definition digest. Definition digests
+// remain subject to the containing object's current disclosure policy.
+message KnowledgeManagementObjectVersionIdentity {
+  string knowledge_object_id = 1;
+  uint64 version = 2;
+}
+
+// KnowledgeManagementDependencyEdge is one direct persisted object-to-object
+// edge. Snapshot-global stage, topological-depth, and canonical-order metadata
+// deliberately do not belong to this management projection.
+message KnowledgeManagementDependencyEdge {
+  KnowledgeManagementObjectVersionIdentity source = 1;
+  KnowledgeManagementObjectVersionIdentity target = 2;
+  KnowledgeDependencyRole role = 3;
+}
+
 // POST /api/v1/knowledge/objects/dependencies
+// The current registry identity authorizes the requested source; selecting a
+// historical version never grants authority. The response lists the exact
+// direct outgoing edges persisted for that selected source version. An edge
+// whose target is not currently disclosable is omitted before pagination and
+// total counting, without a redacted placeholder or hidden count. A currently
+// quarantined requested source is reported through the uniform not-found-or-
+// forbidden response and exposes no current or historical dependency data.
+// Disclosed edges use fixed ascending binary target ID, target version, then
+// role order. The signed continuation binds this route, caller scope, request
+// version presence and value, resolved source, page bound and total-count
+// choice, and the first page's catalog revision plus exact state commitment.
+// Any later catalog identity invalidates the continuation.
 message ListKnowledgeObjectDependenciesRequest {
   string knowledge_object_id = 1;
   optional uint64 version = 2;
@@ -255,12 +284,29 @@ message ListKnowledgeObjectDependenciesRequest {
 }
 
 message ListKnowledgeObjectDependenciesResponse {
-  repeated KnowledgeObjectDependency dependencies = 1;
+  repeated KnowledgeManagementDependencyEdge dependencies = 1;
   PageResponse page = 2;
   uint64 tenant_catalog_revision = 3;
+  // resolved_object is the exact source selected by the request, including on
+  // an empty page when request.version was absent.
+  KnowledgeManagementObjectVersionIdentity resolved_object = 4;
 }
 
 // POST /api/v1/knowledge/objects/dependents
+// The current registry identity authorizes the requested target; selecting a
+// historical version never grants authority. The response lists exact incoming
+// edges to that target version only from source versions which are their
+// objects' current registry versions. Every source lifecycle state is eligible,
+// but a source which is not currently disclosable is omitted before pagination
+// and total counting, without a redacted placeholder or hidden count. A
+// currently quarantined requested target is reported through the uniform not-
+// found-or-forbidden response and exposes no current or historical dependency
+// data.
+// Disclosed edges use fixed ascending binary source ID, source version, then
+// role order. The signed continuation binds this route, caller scope, request
+// version presence and value, resolved target, page bound and total-count
+// choice, and the first page's catalog revision plus exact state commitment.
+// Any later catalog identity invalidates the continuation.
 message ListKnowledgeObjectDependentsRequest {
   string knowledge_object_id = 1;
   optional uint64 version = 2;
@@ -268,9 +314,12 @@ message ListKnowledgeObjectDependentsRequest {
 }
 
 message ListKnowledgeObjectDependentsResponse {
-  repeated KnowledgeObjectDependency dependents = 1;
+  repeated KnowledgeManagementDependencyEdge dependents = 1;
   PageResponse page = 2;
   uint64 tenant_catalog_revision = 3;
+  // resolved_object is the exact target selected by the request, including on
+  // an empty page when request.version was absent.
+  KnowledgeManagementObjectVersionIdentity resolved_object = 4;
 }
 
 // POST /api/v1/knowledge/objects/preview
