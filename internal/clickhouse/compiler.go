@@ -802,7 +802,17 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				// Sequential assignments add another outer SELECT and therefore
 				// prepend in reverse nesting order as well.
 				args = prependArguments(value.valueArgs, args)
-				state = extendCompileState(state, assignment.Output, value)
+				_, directField := assignment.Expression.(*plan.ScalarFieldExpression)
+				nextState, stateErr := extendCompileState(
+					state,
+					assignment.Output,
+					value,
+					directField,
+				)
+				if stateErr != nil {
+					return CompiledQuery{}, stateErr
+				}
+				state = nextState
 				if index+1 < len(operator.Assignments) {
 					aliasSequence++
 					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
@@ -11103,7 +11113,29 @@ func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) 
 	}
 }
 
-func extendCompileState(state compileState, output plan.FieldRef, value compiledScalar) compileState {
+func extendCompileState(
+	state compileState,
+	output plan.FieldRef,
+	value compiledScalar,
+	retainDirectSidecars bool,
+) (compileState, error) {
+	if err := validateKnowledgeFieldSidecars(
+		value.relativeFieldNamesSQL,
+		value.relativeFieldTypesSQL,
+		value.fieldMetadataVersionSQL,
+	); err != nil {
+		return compileState{}, fmt.Errorf(
+			"compile ClickHouse extend output %q: %w",
+			output.Name,
+			err,
+		)
+	}
+	if !retainDirectSidecars {
+		value.storedPath = storedPathAuthority{}
+		value.relativeFieldNamesSQL = ""
+		value.relativeFieldTypesSQL = ""
+		value.fieldMetadataVersionSQL = ""
+	}
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)
 	for name, field := range state.visible {
@@ -11132,17 +11164,20 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		existsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
 	}
 	field := fieldState{
-		valueSQL:         quoteIdentifier(output.Name),
-		maxStringBytes:   value.maxStringBytes,
-		textEligibleSQL:  value.textEligibleSQL,
-		dynamicDomain:    value.dynamicDomain,
-		numericIntegral:  value.numericIntegral,
-		mvCountOneOrNull: value.mvCountOneOrNull,
-		existsSQL:        existsSQL,
-		descendantSQL:    value.descendantSQL,
-		descendantArgs:   append([]any(nil), value.descendantArgs...),
-		storedTypeSQL:    value.storedTypeSQL,
-		kind:             value.kind,
+		valueSQL:                quoteIdentifier(output.Name),
+		maxStringBytes:          value.maxStringBytes,
+		textEligibleSQL:         value.textEligibleSQL,
+		dynamicDomain:           value.dynamicDomain,
+		numericIntegral:         value.numericIntegral,
+		mvCountOneOrNull:        value.mvCountOneOrNull,
+		existsSQL:               existsSQL,
+		descendantSQL:           value.descendantSQL,
+		descendantArgs:          append([]any(nil), value.descendantArgs...),
+		storedTypeSQL:           value.storedTypeSQL,
+		relativeFieldNamesSQL:   value.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:   value.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL: value.fieldMetadataVersionSQL,
+		kind:                    value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
 		caseSensitive:           false,
@@ -11155,7 +11190,7 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 	}
 	next.visible[output.Name] = field
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
-	return next
+	return next, nil
 }
 
 type compiledExtractCapture struct {
@@ -12233,6 +12268,17 @@ func compileRenameAssignment(assignment plan.RenameAssignment, state compileStat
 			alwaysNull: true,
 		}
 	}
+	if err := validateKnowledgeFieldSidecars(
+		source.relativeFieldNamesSQL,
+		source.relativeFieldTypesSQL,
+		source.fieldMetadataVersionSQL,
+	); err != nil {
+		return nil, compileState{}, false, fmt.Errorf(
+			"compile ClickHouse rename source %q: %w",
+			assignment.Source.Name,
+			err,
+		)
+	}
 
 	next := cloneCompileState(state)
 	delete(next.visible, assignment.Source.Name)
@@ -12342,18 +12388,21 @@ func renamePublicOrder(current []string, source, destination string, sourceIsPub
 func projectedRenameField(source fieldState, destination string) fieldState {
 	value := quoteIdentifier(destination)
 	result := fieldState{
-		valueSQL:             value,
-		maxStringBytes:       source.maxStringBytes,
-		textEligibleSQL:      source.textEligibleSQL,
-		rawTextIndexEligible: source.rawTextIndexEligible,
-		dynamicDomain:        source.dynamicDomain,
-		numericIntegral:      source.numericIntegral,
-		storedTypeSQL:        source.storedTypeSQL,
-		existsSQL:            rewriteExistenceForProjection(source, destination),
-		existsArgs:           append([]any(nil), source.existsArgs...),
-		descendantSQL:        source.descendantSQL,
-		descendantArgs:       append([]any(nil), source.descendantArgs...),
-		kind:                 source.kind,
+		valueSQL:                value,
+		maxStringBytes:          source.maxStringBytes,
+		textEligibleSQL:         source.textEligibleSQL,
+		rawTextIndexEligible:    source.rawTextIndexEligible,
+		dynamicDomain:           source.dynamicDomain,
+		numericIntegral:         source.numericIntegral,
+		storedTypeSQL:           source.storedTypeSQL,
+		existsSQL:               rewriteExistenceForProjection(source, destination),
+		existsArgs:              append([]any(nil), source.existsArgs...),
+		descendantSQL:           source.descendantSQL,
+		descendantArgs:          append([]any(nil), source.descendantArgs...),
+		relativeFieldNamesSQL:   source.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:   source.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL: source.fieldMetadataVersionSQL,
+		kind:                    source.kind,
 		// A field renamed to index is calculated pipeline data, not the
 		// authorization-constrained physical index selector.
 		caseSensitive:           false,
@@ -13670,6 +13719,17 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 				alwaysNull: true,
 			}
 		}
+		if err := validateKnowledgeFieldSidecars(
+			compiled.relativeFieldNamesSQL,
+			compiled.relativeFieldTypesSQL,
+			compiled.fieldMetadataVersionSQL,
+		); err != nil {
+			return nil, compileState{}, nil, fmt.Errorf(
+				"compile ClickHouse projection field %q: %w",
+				name,
+				err,
+			)
+		}
 		publicName := quoteIdentifier(name)
 		if compiled.valueSQL == publicName {
 			projection = append(projection, publicName)
@@ -13689,6 +13749,9 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			existsArgs:              append([]any(nil), compiled.existsArgs...),
 			descendantSQL:           compiled.descendantSQL,
 			descendantArgs:          append([]any(nil), compiled.descendantArgs...),
+			relativeFieldNamesSQL:   compiled.relativeFieldNamesSQL,
+			relativeFieldTypesSQL:   compiled.relativeFieldTypesSQL,
+			fieldMetadataVersionSQL: compiled.fieldMetadataVersionSQL,
 			kind:                    compiled.kind,
 			caseSensitive:           compiled.caseSensitive,
 			numberType:              compiled.numberType,

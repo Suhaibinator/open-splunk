@@ -342,7 +342,8 @@ func TestCompileKnowledgeAliasSourceRejectsForgeryAndDetaches(t *testing.T) {
 						valueSQL: "toInt64(1)", kind: fieldKindNumber,
 						numberType: "Int64",
 					},
-				), nil
+					false,
+				)
 			},
 		},
 		{
