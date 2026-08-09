@@ -41,22 +41,23 @@ type publicationDependency struct {
 }
 
 type publicationPlan struct {
-	route           string
-	mutationKind    string
-	auditAction     audit.Action
-	objectID        string
-	version         int64
-	state           State
-	definition      definitionAuthority
-	dependencies    []publicationDependency
-	ownerID         string
-	createdAt       time.Time
-	updatedAt       time.Time
-	disabledAt      *time.Time
-	deletedAt       *time.Time
-	current         *registryRecord
-	idAttempt       int
-	oldCatalogState catalogState
+	route            string
+	mutationKind     string
+	auditAction      audit.Action
+	objectID         string
+	version          int64
+	state            State
+	definition       definitionAuthority
+	dependencies     []publicationDependency
+	activeTransition publicationTransitionPersistenceAuthority
+	ownerID          string
+	createdAt        time.Time
+	updatedAt        time.Time
+	disabledAt       *time.Time
+	deletedAt        *time.Time
+	current          *registryRecord
+	idAttempt        int
+	oldCatalogState  catalogState
 }
 
 type mutationTenantHealth struct {

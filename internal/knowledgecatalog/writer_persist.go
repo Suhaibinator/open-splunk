@@ -3,6 +3,7 @@ package knowledgecatalog
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -99,6 +100,23 @@ func (writer *Writer) publishMutation(
 	if err := validatePublicationInputs(writer, ctx, tx, prepared, plan); err != nil {
 		return Object{}, 0, nil, err
 	}
+	dependencies, err := canonicalPublicationDependencies(plan)
+	if err != nil {
+		return Object{}, 0, nil, err
+	}
+	if !plan.activeTransition.IsZero() {
+		dependencies, err = plan.activeTransition.validateAndProject(
+			ctx,
+			tx,
+			plan.oldCatalogState,
+			prepared.scope.tenantID,
+			plan,
+			dependencies,
+		)
+		if err != nil {
+			return Object{}, 0, nil, err
+		}
+	}
 	hookEvent := func(boundary writerHookBoundary) writerHookEvent {
 		return writerHookEvent{
 			Boundary:          boundary,
@@ -139,7 +157,7 @@ func (writer *Writer) publishMutation(
 		SharingScope:       plan.definition.sharingScope,
 		State:              plan.state,
 		DefinitionDigest:   bytes.Clone(plan.definition.digest),
-		DependencyCount:    int64(len(plan.dependencies)),
+		DependencyCount:    int64(len(dependencies)),
 		MutationKind:       plan.mutationKind,
 		CreatedAtUnixMicro: plan.updatedAt.UnixMicro(),
 	}
@@ -150,10 +168,6 @@ func (writer *Writer) publishMutation(
 		return Object{}, 0, nil, err
 	}
 
-	dependencies, err := canonicalPublicationDependencies(plan)
-	if err != nil {
-		return Object{}, 0, nil, err
-	}
 	persistedDependencies := make([]persistedPublicationDependency, len(dependencies))
 	for ordinal, dependency := range dependencies {
 		persistedDependencies[ordinal] = persistedPublicationDependency{
@@ -618,6 +632,9 @@ func validatePublicationInputs(
 	if len(plan.dependencies) > maximumDependencyGraphEdges {
 		return invalid("dependency count is invalid")
 	}
+	if plan.state == StateActive && plan.activeTransition.IsZero() {
+		return invalid("ACTIVE transition authority is absent")
+	}
 	if !plan.state.valid() || plan.state == StateQuarantined {
 		return invalid("state is invalid")
 	}
@@ -656,22 +673,242 @@ func validatePublicationInputs(
 }
 
 func canonicalPublicationDependencies(plan publicationPlan) ([]publicationDependency, error) {
-	result := append([]publicationDependency(nil), plan.dependencies...)
+	invalid := func() ([]publicationDependency, error) {
+		return nil, fmt.Errorf(
+			"%w: knowledge publication dependency set is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	if len(plan.dependencies) > maximumDependencyGraphEdges {
+		return invalid()
+	}
+	result := make([]publicationDependency, len(plan.dependencies))
+	for index, dependency := range plan.dependencies {
+		if !validIdentity(dependency.targetObjectID, maximumObjectIDBytes) ||
+			dependency.targetVersion < 1 ||
+			(dependency.targetObjectID == plan.objectID && dependency.targetVersion == plan.version) {
+			return invalid()
+		}
+		result[index] = publicationDependency{
+			targetObjectID: strings.Clone(dependency.targetObjectID),
+			targetVersion:  dependency.targetVersion,
+		}
+	}
 	sort.Slice(result, func(left, right int) bool {
 		if result[left].targetObjectID != result[right].targetObjectID {
 			return result[left].targetObjectID < result[right].targetObjectID
 		}
 		return result[left].targetVersion < result[right].targetVersion
 	})
-	for index, dependency := range result {
-		if !validIdentity(dependency.targetObjectID, maximumObjectIDBytes) ||
-			dependency.targetVersion < 1 ||
-			(dependency.targetObjectID == plan.objectID && dependency.targetVersion == plan.version) ||
-			index > 0 && dependency == result[index-1] {
-			return nil, fmt.Errorf("%w: knowledge publication dependency set is invalid", control.ErrInvalidArgument)
+	for index := 1; index < len(result); index++ {
+		if result[index] == result[index-1] {
+			return invalid()
 		}
 	}
 	return result, nil
+}
+
+func publicationTransitionPersistenceBindingFromPlan(
+	ctx context.Context,
+	tx *gorm.DB,
+	tenantID string,
+	plan publicationPlan,
+	dependencies []publicationDependency,
+) (publicationTransitionPersistenceBinding, error) {
+	if err := validateContext(ctx); err != nil {
+		return publicationTransitionPersistenceBinding{}, err
+	}
+	after, err := publicationTransitionPersistenceEndpointFromPlan(plan, dependencies)
+	if err != nil {
+		return publicationTransitionPersistenceBinding{}, err
+	}
+	binding := publicationTransitionPersistenceBinding{
+		tenantID:     strings.Clone(tenantID),
+		after:        after,
+		dependencies: dependencies,
+	}
+	database := tx.WithContext(ctx)
+	registryQuery := database.Model(&registryRecord{}).Where(
+		"tenant_id = ? AND knowledge_object_id = ?",
+		tenantID,
+		plan.objectID,
+	)
+	current, found, err := readRegistryRecord(registryQuery)
+	if err != nil {
+		return publicationTransitionPersistenceBinding{}, err
+	}
+	if plan.current == nil {
+		if found {
+			return publicationTransitionPersistenceBinding{}, fmt.Errorf(
+				"%w: publication transition create identity is already current",
+				control.ErrDependencyConflict,
+			)
+		}
+		return binding, nil
+	}
+	if !found {
+		return publicationTransitionPersistenceBinding{}, fmt.Errorf(
+			"%w: publication transition current registry is missing",
+			ErrCorrupt,
+		)
+	}
+	if err := validateRegistry(current); err != nil {
+		return publicationTransitionPersistenceBinding{}, err
+	}
+	version, found, err := readVersionRecord(
+		database,
+		current.TenantID,
+		current.KnowledgeObjectID,
+		current.CurrentVersion,
+	)
+	if err != nil {
+		return publicationTransitionPersistenceBinding{}, err
+	}
+	if !found || validateCurrentVersion(current, version) != nil {
+		return publicationTransitionPersistenceBinding{}, fmt.Errorf(
+			"%w: publication transition current registry and version disagree",
+			ErrCorrupt,
+		)
+	}
+	if !publicationTransitionPlanCurrentEqual(*plan.current, current) {
+		return publicationTransitionPersistenceBinding{}, fmt.Errorf(
+			"%w: publication transition plan current endpoint changed",
+			control.ErrDependencyConflict,
+		)
+	}
+	records, err := readValidatedVersionDependencies(database, version)
+	if err != nil {
+		return publicationTransitionPersistenceBinding{}, err
+	}
+	before, err := publicationTransitionPersistenceEndpointFromCurrent(current, records)
+	if err != nil {
+		return publicationTransitionPersistenceBinding{}, err
+	}
+	binding.before = before
+	return binding, nil
+}
+
+func publicationTransitionPersistenceEndpointFromPlan(
+	plan publicationPlan,
+	dependencies []publicationDependency,
+) (publicationTransitionPersistenceEndpoint, error) {
+	objectType, typeValid := objectTypeToProto(plan.definition.objectType)
+	sharingScope, scopeValid := knowledgeSharingScopeToProto(plan.definition.sharingScope)
+	if !typeValid || !scopeValid || len(plan.definition.digest) != sha256.Size {
+		return publicationTransitionPersistenceEndpoint{}, fmt.Errorf(
+			"%w: publication transition plan endpoint is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	if plan.state == StateActive && len(dependencies) != 0 {
+		return publicationTransitionPersistenceEndpoint{}, fmt.Errorf(
+			"%w: ACTIVE publication transition plan submits dependency rows",
+			control.ErrInvalidArgument,
+		)
+	}
+	result := publicationTransitionPersistenceEndpoint{
+		present:      true,
+		state:        plan.state,
+		objectID:     strings.Clone(plan.objectID),
+		version:      plan.version,
+		objectType:   objectType,
+		name:         strings.Clone(plan.definition.name),
+		appID:        strings.Clone(plan.definition.appID),
+		ownerID:      strings.Clone(plan.ownerID),
+		sharingScope: sharingScope,
+	}
+	copy(result.definitionDigest[:], plan.definition.digest)
+	if plan.state != StateActive {
+		result.existingDependenciesPresent = true
+		result.existingDependencies = publicationTransitionPersistedDependencies(dependencies)
+	}
+	if !validPublicationTransitionPersistenceEndpoint(result) {
+		return publicationTransitionPersistenceEndpoint{}, fmt.Errorf(
+			"%w: publication transition plan endpoint is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	return result, nil
+}
+
+func publicationTransitionPersistenceEndpointFromCurrent(
+	current registryRecord,
+	dependencies []dependencyRecord,
+) (publicationTransitionPersistenceEndpoint, error) {
+	objectType, typeValid := objectTypeToProto(current.ObjectType)
+	sharingScope, scopeValid := knowledgeSharingScopeToProto(current.SharingScope)
+	if !typeValid || !scopeValid || len(current.DefinitionDigest) != sha256.Size {
+		return publicationTransitionPersistenceEndpoint{}, fmt.Errorf(
+			"%w: publication transition current endpoint is invalid",
+			ErrCorrupt,
+		)
+	}
+	result := publicationTransitionPersistenceEndpoint{
+		present:                     true,
+		state:                       current.State,
+		objectID:                    strings.Clone(current.KnowledgeObjectID),
+		version:                     current.CurrentVersion,
+		objectType:                  objectType,
+		name:                        strings.Clone(current.Name),
+		appID:                       strings.Clone(current.AppID),
+		ownerID:                     strings.Clone(current.OwnerID),
+		sharingScope:                sharingScope,
+		existingDependenciesPresent: true,
+		existingDependencies: make(
+			[]publicationPersistedDependency,
+			len(dependencies),
+		),
+	}
+	copy(result.definitionDigest[:], current.DefinitionDigest)
+	for index, dependency := range dependencies {
+		result.existingDependencies[index] = publicationPersistedDependency{
+			ordinal:        dependency.Ordinal,
+			targetObjectID: strings.Clone(dependency.TargetObjectID),
+			targetVersion:  dependency.TargetObjectVersion,
+			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+		}
+	}
+	if !validPublicationTransitionPersistenceEndpoint(result) {
+		return publicationTransitionPersistenceEndpoint{}, fmt.Errorf(
+			"%w: publication transition current endpoint is invalid",
+			ErrCorrupt,
+		)
+	}
+	return result, nil
+}
+
+func publicationTransitionPersistedDependencies(
+	dependencies []publicationDependency,
+) []publicationPersistedDependency {
+	result := make([]publicationPersistedDependency, len(dependencies))
+	for index, dependency := range dependencies {
+		result[index] = publicationPersistedDependency{
+			ordinal:        int64(index),
+			targetObjectID: strings.Clone(dependency.targetObjectID),
+			targetVersion:  dependency.targetVersion,
+			role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+		}
+	}
+	return result
+}
+
+func publicationTransitionPlanCurrentEqual(left, right registryRecord) bool {
+	return left.TenantID == right.TenantID &&
+		left.KnowledgeObjectID == right.KnowledgeObjectID &&
+		left.CurrentVersion == right.CurrentVersion &&
+		left.AppID == right.AppID &&
+		left.OwnerID == right.OwnerID &&
+		left.ObjectType == right.ObjectType &&
+		left.Name == right.Name &&
+		left.SharingScope == right.SharingScope &&
+		left.State == right.State &&
+		bytes.Equal(left.DefinitionDigest, right.DefinitionDigest) &&
+		left.CreatedAtUnixMicro == right.CreatedAtUnixMicro &&
+		left.UpdatedAtUnixMicro == right.UpdatedAtUnixMicro &&
+		equalOptionalInt64(left.DisabledAtUnixMicro, right.DisabledAtUnixMicro) &&
+		equalOptionalInt64(left.QuarantinedAtUnixMicro, right.QuarantinedAtUnixMicro) &&
+		equalOptionalInt64(left.DeletedAtUnixMicro, right.DeletedAtUnixMicro) &&
+		equalOptionalString(left.QuarantineReason, right.QuarantineReason)
 }
 
 func publicationSelectorRows(

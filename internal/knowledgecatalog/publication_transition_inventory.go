@@ -16,10 +16,11 @@ import (
 )
 
 // publicationActiveTransitionInventoryRead carries an inventory alongside the
-// catalog facts observed in the same write transaction. These revision facts
-// are not yet included in the transition commitment or matchesPersistence;
-// future Writer wiring must add that binding before opening any ACTIVE gate.
+// catalog facts and exact SQL transaction that observed it. It is not itself
+// persistence authority: only the private persistence-authority mint may
+// validate and retain these facts.
 type publicationActiveTransitionInventoryRead struct {
+	transaction               *sql.Tx
 	inventory                 publicationActiveTransitionInventory
 	catalog                   catalogState
 	appCatalogRevision        int64
@@ -91,7 +92,8 @@ func (store *Store) readPublicationActiveTransitionInventory(
 			control.ErrInvalidArgument,
 		)
 	}
-	if _, transactional := tx.Statement.ConnPool.(*sql.Tx); !transactional {
+	transaction, transactional := tx.Statement.ConnPool.(*sql.Tx)
+	if !transactional || transaction == nil {
 		return publicationActiveTransitionInventoryRead{}, fmt.Errorf(
 			"%w: publication transition inventory requires one fixed transaction snapshot",
 			control.ErrInvalidArgument,
@@ -178,6 +180,7 @@ func (store *Store) readPublicationActiveTransitionInventory(
 		potentiallySearchableIndexNames:         indexNames,
 	}
 	return publicationActiveTransitionInventoryRead{
+		transaction:               transaction,
 		inventory:                 inventory,
 		catalog:                   catalog,
 		appCatalogRevision:        appRevision,
