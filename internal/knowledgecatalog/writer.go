@@ -73,6 +73,7 @@ type WriterOptions struct {
 type Writer struct {
 	orm                  *gorm.DB
 	reader               *Store
+	validationGate       *control.AdmissionGate
 	auditAppender        audit.TransactionAppender
 	clock                func() time.Time
 	idGenerator          func() (string, error)
@@ -89,6 +90,7 @@ func (writer *Writer) ReadyForManagement() bool {
 		writer.orm != nil &&
 		writer.reader != nil &&
 		writer.reader.orm == writer.orm &&
+		writer.validationGate != nil &&
 		!isNilAuditAppender(writer.auditAppender) &&
 		writer.clock != nil &&
 		writer.idGenerator != nil &&
@@ -141,9 +143,17 @@ func NewWriter(
 	// persisted replay fence is never shorter than a caller's configured retry
 	// window; the validated maximum is itself microsecond-aligned.
 	retention = ((retention + time.Microsecond - 1) / time.Microsecond) * time.Microsecond
+	validationGate, err := database.SharedAdmissionGate(
+		"knowledge-catalog-validation",
+		MaximumConcurrentValidations,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("construct knowledge validation admission: %w", err)
+	}
 	return &Writer{
 		orm:                  database.GORMDB(),
 		reader:               &Store{orm: database.GORMDB()},
+		validationGate:       validationGate,
 		auditAppender:        auditAppender,
 		clock:                clock,
 		idGenerator:          idGenerator,
