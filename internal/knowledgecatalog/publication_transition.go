@@ -132,6 +132,95 @@ type publicationActiveTransitionAuthorityState struct {
 	candidateDependencies candidateDependencyAuthority
 }
 
+// publicationActiveValidationConflict is deliberately package-private and
+// carries no diagnostic text or target identity. Only the cohort-local target
+// absence kind is eligible for translation into one generic in-band
+// diagnostic; all other conflicts and every storage, catalog, and resource
+// failure remain ordinary errors at the future service boundary.
+type publicationActiveValidationConflict uint8
+
+const (
+	publicationActiveValidationCandidatePostConflict publicationActiveValidationConflict = iota + 1
+	publicationActiveValidationCrossCohortDependencyMismatch
+	publicationActiveValidationCohortDependencyTargetAbsent
+	publicationActiveValidationNoWinningWitness
+)
+
+// publicationActiveValidationDecision is pointer-backed so a valid candidate
+// with a present-empty dependency authority cannot collapse into either an
+// uninitialized value or a conflict. Exactly one of conflict and
+// candidateDependencies is present in every constructed decision.
+type publicationActiveValidationDecision struct {
+	state *publicationActiveValidationDecisionState
+}
+
+type publicationActiveValidationDecisionState struct {
+	conflict              publicationActiveValidationConflict
+	candidateDependencies candidateDependencyAuthority
+}
+
+func (decision publicationActiveValidationDecision) IsZero() bool {
+	return decision.state == nil
+}
+
+func (decision publicationActiveValidationDecision) valid() bool {
+	if decision.state == nil {
+		return false
+	}
+	dependenciesPresent := !decision.state.candidateDependencies.IsZero()
+	if decision.state.conflict == 0 {
+		return dependenciesPresent
+	}
+	if dependenciesPresent {
+		return false
+	}
+	switch decision.state.conflict {
+	case publicationActiveValidationCandidatePostConflict,
+		publicationActiveValidationCrossCohortDependencyMismatch,
+		publicationActiveValidationCohortDependencyTargetAbsent,
+		publicationActiveValidationNoWinningWitness:
+		return true
+	default:
+		return false
+	}
+}
+
+func (decision publicationActiveValidationDecision) conflict() (
+	publicationActiveValidationConflict,
+	bool,
+) {
+	if !decision.valid() || decision.state.conflict == 0 {
+		return 0, false
+	}
+	return decision.state.conflict, true
+}
+
+func (decision publicationActiveValidationDecision) candidateDependencies() (
+	candidateDependencyAuthority,
+	bool,
+) {
+	if !decision.valid() || decision.state.conflict != 0 {
+		return candidateDependencyAuthority{}, false
+	}
+	return decision.state.candidateDependencies.detached(), true
+}
+
+func publicationActiveValidationConflictDecision(
+	conflict publicationActiveValidationConflict,
+) publicationActiveValidationDecision {
+	return publicationActiveValidationDecision{state: &publicationActiveValidationDecisionState{
+		conflict: conflict,
+	}}
+}
+
+func publicationActiveValidationValidDecision(
+	dependencies candidateDependencyAuthority,
+) publicationActiveValidationDecision {
+	return publicationActiveValidationDecision{state: &publicationActiveValidationDecisionState{
+		candidateDependencies: dependencies.detached(),
+	}}
+}
+
 func (authority publicationActiveTransitionAuthority) IsZero() bool {
 	return authority.state == nil
 }
@@ -302,6 +391,7 @@ type publicationTransitionValidatedCohort struct {
 	winners           []*publicationTransitionCanonicalObject
 	candidateWins     bool
 	programCommitment [sha256.Size]byte
+	targetAbsent      bool
 }
 
 // publicationTransitionEvaluator owns the bounded class-by-signature
@@ -310,6 +400,7 @@ type publicationTransitionValidatedCohort struct {
 // cross-cohort candidate dependency authority it proves.
 type publicationTransitionEvaluator struct {
 	ctx                  context.Context
+	validation           bool
 	classes              []publicationTransitionPrincipalClass
 	signatures           []publicationIndexORSignature
 	preSlots             []*publicationTransitionCanonicalObject
@@ -321,6 +412,7 @@ type publicationTransitionEvaluator struct {
 	classHydration       []publicationTransitionClassHydration
 	semanticHasher       hash.Hash
 	seenChangedCohorts   map[[sha256.Size]byte][]publicationTransitionValidatedCohort
+	seenBaselineCohorts  map[[sha256.Size]byte][]publicationTransitionValidatedCohort
 	winnerKeyCommitments map[*publicationTransitionCanonicalObject][sha256.Size]byte
 	work                 publicationTransitionWork
 }
@@ -328,13 +420,25 @@ type publicationTransitionEvaluator struct {
 func (evaluator *publicationTransitionEvaluator) evaluate() (
 	candidateDependencyAuthority,
 	uint64,
+	publicationActiveValidationConflict,
 	error,
 ) {
 	var candidateDependencies candidateDependencyAuthority
 	candidateWinningWitnesses := uint64(0)
+	cohortTargetAbsent := false
+	if evaluator.validation {
+		candidateSelectionConflict, err := evaluator.validateAllBaselineCohorts()
+		if err != nil {
+			return candidateDependencyAuthority{}, 0, 0, err
+		}
+		if candidateSelectionConflict {
+			return candidateDependencyAuthority{}, 0,
+				publicationActiveValidationCandidatePostConflict, nil
+		}
+	}
 	for classIndex, class := range evaluator.classes {
 		if err := evaluator.ctx.Err(); err != nil {
-			return candidateDependencyAuthority{}, 0, err
+			return candidateDependencyAuthority{}, 0, 0, err
 		}
 		publicationTransitionHashPrincipalClass(evaluator.semanticHasher, class)
 		publicationTransitionHashHydration(
@@ -344,7 +448,7 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 		for signatureIndex := range evaluator.signatures {
 			signature := &evaluator.signatures[signatureIndex]
 			if err := evaluator.ctx.Err(); err != nil {
-				return candidateDependencyAuthority{}, 0, err
+				return candidateDependencyAuthority{}, 0, 0, err
 			}
 			beforeWinners, err := selectPublicationTransitionWinners(
 				evaluator.ctx,
@@ -356,7 +460,7 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 				&evaluator.work,
 			)
 			if err != nil {
-				return candidateDependencyAuthority{}, 0, err
+				return candidateDependencyAuthority{}, 0, 0, err
 			}
 			var proposedCandidate *publicationTransitionCanonicalObject
 			if evaluator.afterActive {
@@ -372,7 +476,16 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 				&evaluator.work,
 			)
 			if err != nil {
-				return candidateDependencyAuthority{}, 0, err
+				if evaluator.validation &&
+					(errors.Is(err, control.ErrAlreadyExists) ||
+						errors.Is(err, control.ErrDependencyConflict)) {
+					if baselineErr := evaluator.validateBaselineCohort(beforeWinners); baselineErr != nil {
+						return candidateDependencyAuthority{}, 0, 0, baselineErr
+					}
+					return candidateDependencyAuthority{}, 0,
+						publicationActiveValidationCandidatePostConflict, nil
+				}
+				return candidateDependencyAuthority{}, 0, 0, err
 			}
 
 			candidateWins := publicationTransitionWinnersContain(
@@ -399,6 +512,11 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 			if !changed {
 				continue
 			}
+			if evaluator.validation {
+				if err := evaluator.validateBaselineCohort(beforeWinners); err != nil {
+					return candidateDependencyAuthority{}, 0, 0, err
+				}
+			}
 
 			cohortCommitment := publicationTransitionCohortCommitment(
 				afterWinners,
@@ -415,11 +533,15 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 				}
 			}
 			if prior != nil {
+				if prior.targetAbsent {
+					cohortTargetAbsent = true
+					continue
+				}
 				_, _ = evaluator.semanticHasher.Write(prior.programCommitment[:])
 				continue
 			}
 			if err := evaluator.work.chargeChangedCohort(afterWinners); err != nil {
-				return candidateDependencyAuthority{}, 0, err
+				return candidateDependencyAuthority{}, 0, 0, err
 			}
 			cohort := publicationWinnerCohort{
 				expectedWinnerCount: uint32(len(afterWinners)),
@@ -438,11 +560,34 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 				candidateWins,
 			)
 			if err != nil {
-				return candidateDependencyAuthority{}, 0, err
+				if evaluator.validation {
+					var absentTarget *publicationCohortDependencyTargetAbsentError
+					switch {
+					case errors.As(err, &absentTarget):
+						// Target absence is the sole conflict kind eligible for
+						// generic in-band reporting. Keep it provisional until
+						// every remaining post cohort has ruled out a stronger
+						// semantic, resource, or catalog failure.
+						cohortTargetAbsent = true
+						evaluator.seenChangedCohorts[cohortCommitment] = append(
+							evaluator.seenChangedCohorts[cohortCommitment],
+							publicationTransitionValidatedCohort{
+								winners:       slices.Clone(afterWinners),
+								candidateWins: candidateWins,
+								targetAbsent:  true,
+							},
+						)
+						continue
+					case errors.Is(err, control.ErrDependencyConflict):
+						return candidateDependencyAuthority{}, 0,
+							publicationActiveValidationCandidatePostConflict, nil
+					}
+				}
+				return candidateDependencyAuthority{}, 0, 0, err
 			}
 			programCommitment, present := cohortAuthority.programCommitment()
 			if !present || programCommitment == ([sha256.Size]byte{}) {
-				return candidateDependencyAuthority{}, 0, invalidPublicationTransition(
+				return candidateDependencyAuthority{}, 0, 0, invalidPublicationTransition(
 					"changed cohort program commitment is absent",
 				)
 			}
@@ -459,7 +604,7 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 				continue
 			}
 			if cohortAuthority.state == nil {
-				return candidateDependencyAuthority{}, 0, invalidPublicationTransition(
+				return candidateDependencyAuthority{}, 0, 0, invalidPublicationTransition(
 					"changed cohort candidate authority is absent",
 				)
 			}
@@ -467,21 +612,156 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 			if err := evaluator.work.chargeDerivedDependencies(
 				publicationTransitionDerivedTargetCount(derived),
 			); err != nil {
-				return candidateDependencyAuthority{}, 0, err
+				return candidateDependencyAuthority{}, 0, 0, err
 			}
-			if candidateDependencies.IsZero() {
-				candidateDependencies = derived
-				continue
-			}
-			if !candidateDependencies.Equal(derived) {
-				return candidateDependencyAuthority{}, 0, fmt.Errorf(
-					"%w: publication candidate dependency authority differs across winner cohorts",
-					control.ErrDependencyConflict,
-				)
+			conflict, err := evaluator.mergeCandidateDependencies(
+				&candidateDependencies,
+				derived,
+			)
+			if err != nil || conflict != 0 {
+				return candidateDependencyAuthority{}, 0, conflict, err
 			}
 		}
 	}
-	return candidateDependencies, candidateWinningWitnesses, nil
+	if evaluator.validation && cohortTargetAbsent && candidateWinningWitnesses > 0 {
+		return candidateDependencyAuthority{}, candidateWinningWitnesses,
+			publicationActiveValidationCohortDependencyTargetAbsent, nil
+	}
+	return candidateDependencies, candidateWinningWitnesses, 0, nil
+}
+
+func (evaluator *publicationTransitionEvaluator) mergeCandidateDependencies(
+	current *candidateDependencyAuthority,
+	derived candidateDependencyAuthority,
+) (publicationActiveValidationConflict, error) {
+	if current == nil || derived.IsZero() {
+		return 0, invalidPublicationTransition(
+			"changed cohort candidate dependency authority is absent",
+		)
+	}
+	if current.IsZero() {
+		*current = derived
+		return 0, nil
+	}
+	if current.Equal(derived) {
+		return 0, nil
+	}
+	if evaluator.validation {
+		return publicationActiveValidationCrossCohortDependencyMismatch, nil
+	}
+	return 0, fmt.Errorf(
+		"%w: publication candidate dependency authority differs across winner cohorts",
+		control.ErrDependencyConflict,
+	)
+}
+
+// validateAllBaselineCohorts is a first semantic pass for validation only.
+// It completes every affected candidate-absent baseline compile before the
+// evaluator is allowed to classify any post-candidate conflict. Winner
+// selection and compilation use the same validation-owned work counters as
+// the later post pass.
+func (evaluator *publicationTransitionEvaluator) validateAllBaselineCohorts() (
+	candidateSelectionConflict bool,
+	err error,
+) {
+	for _, class := range evaluator.classes {
+		if err := evaluator.ctx.Err(); err != nil {
+			return false, err
+		}
+		for signatureIndex := range evaluator.signatures {
+			if err := evaluator.ctx.Err(); err != nil {
+				return false, err
+			}
+			signature := &evaluator.signatures[signatureIndex]
+			beforeWinners, err := selectPublicationTransitionWinners(
+				evaluator.ctx,
+				class,
+				&signature.before,
+				evaluator.preSlots,
+				nil,
+				false,
+				&evaluator.work,
+			)
+			if err != nil {
+				return false, err
+			}
+			afterWinners, err := selectPublicationTransitionWinners(
+				evaluator.ctx,
+				class,
+				&signature.after,
+				evaluator.postSlots,
+				evaluator.candidateAfter,
+				evaluator.beforeActive,
+				&evaluator.work,
+			)
+			if err != nil {
+				if errors.Is(err, control.ErrAlreadyExists) ||
+					errors.Is(err, control.ErrDependencyConflict) {
+					if err := evaluator.validateBaselineCohort(beforeWinners); err != nil {
+						return false, err
+					}
+					candidateSelectionConflict = true
+					continue
+				}
+				return false, err
+			}
+			if slices.Equal(beforeWinners, afterWinners) {
+				continue
+			}
+			if err := evaluator.validateBaselineCohort(beforeWinners); err != nil {
+				return false, err
+			}
+		}
+	}
+	return candidateSelectionConflict, nil
+}
+
+// validateBaselineCohort recompiles a pre-mutation cohort without treating any
+// object as the transition candidate. Its work is charged to the same counters
+// as post-candidate compilation, and pointer-equal winner cohorts are compiled
+// at most once across equivalent visibility states.
+func (evaluator *publicationTransitionEvaluator) validateBaselineCohort(
+	winners []*publicationTransitionCanonicalObject,
+) error {
+	commitment := publicationTransitionCohortCommitment(
+		winners,
+		false,
+		evaluator.winnerKeyCommitments,
+	)
+	bucket := evaluator.seenBaselineCohorts[commitment]
+	for index := range bucket {
+		if slices.Equal(bucket[index].winners, winners) {
+			return nil
+		}
+	}
+	if err := evaluator.work.chargeSemanticCohort(winners); err != nil {
+		return err
+	}
+	cohort := publicationWinnerCohort{
+		expectedWinnerCount: uint32(len(winners)),
+		winners:             make([]publicationWinner, len(winners)),
+	}
+	for index, winner := range winners {
+		cohort.winners[index] = winner.winner
+	}
+	programCommitment, err := validatePublicationExistingWinnerCohort(
+		evaluator.ctx,
+		cohort,
+	)
+	if err != nil {
+		return err
+	}
+	if programCommitment == ([sha256.Size]byte{}) {
+		return invalidPublicationTransition("baseline cohort program commitment is absent")
+	}
+	evaluator.seenBaselineCohorts[commitment] = append(
+		evaluator.seenBaselineCohorts[commitment],
+		publicationTransitionValidatedCohort{
+			winners:           slices.Clone(winners),
+			programCommitment: programCommitment,
+		},
+	)
+	return nil
 }
 
 // validatePublicationActiveTransition proves every reachable post-mutation
@@ -497,6 +777,36 @@ func validatePublicationActiveTransition(
 	ctx context.Context,
 	input publicationActiveTransitionInventory,
 ) (publicationActiveTransitionAuthority, error) {
+	return validatePublicationActiveTransitionMode(ctx, input, nil)
+}
+
+// validatePublicationActiveCandidate evaluates an ACTIVE publication proposal
+// without minting persistence authority. Candidate-attributable conflicts are
+// returned only as an opaque decision after every affected persisted baseline
+// cohort has independently compiled. Catalog, resource, and cancellation
+// failures remain errors.
+func validatePublicationActiveCandidate(
+	ctx context.Context,
+	input publicationActiveTransitionInventory,
+) (publicationActiveValidationDecision, error) {
+	var decision publicationActiveValidationDecision
+	_, err := validatePublicationActiveTransitionMode(ctx, input, &decision)
+	if err != nil {
+		return publicationActiveValidationDecision{}, err
+	}
+	if !decision.valid() {
+		return publicationActiveValidationDecision{}, invalidPublicationTransition(
+			"ACTIVE validation decision is absent or malformed",
+		)
+	}
+	return decision, nil
+}
+
+func validatePublicationActiveTransitionMode(
+	ctx context.Context,
+	input publicationActiveTransitionInventory,
+	validationOutput *publicationActiveValidationDecision,
+) (publicationActiveTransitionAuthority, error) {
 	if ctx == nil {
 		return publicationActiveTransitionAuthority{}, fmt.Errorf(
 			"%w: publication transition context is nil",
@@ -505,6 +815,13 @@ func validatePublicationActiveTransition(
 	}
 	if err := preflightPublicationActiveTransition(input); err != nil {
 		return publicationActiveTransitionAuthority{}, err
+	}
+	validation := validationOutput != nil
+	if validation && input.candidateAfter.state != StateActive {
+		return publicationActiveTransitionAuthority{}, fmt.Errorf(
+			"%w: ACTIVE validation requires an ACTIVE candidate endpoint",
+			control.ErrInvalidArgument,
+		)
 	}
 
 	// Admission normalizes and detaches every bounded definition, selector,
@@ -543,6 +860,11 @@ func validatePublicationActiveTransition(
 		return publicationActiveTransitionAuthority{}, invalidPublicationTransition(
 			"candidate pre-ACTIVE presence disagrees",
 		)
+	}
+	if validation {
+		if err := validatePersistedPublicationActiveClosure(current); err != nil {
+			return publicationActiveTransitionAuthority{}, err
+		}
 	}
 	candidateBefore, candidateAfter, err := validatePublicationTransitionDisposition(
 		preCandidate,
@@ -663,6 +985,7 @@ func validatePublicationActiveTransition(
 	publicationTransitionHashUint64(semanticCommitment, classStates)
 	evaluator := publicationTransitionEvaluator{
 		ctx:                  ctx,
+		validation:           validation,
 		classes:              classes,
 		signatures:           signatures,
 		preSlots:             preSlots,
@@ -674,13 +997,29 @@ func validatePublicationActiveTransition(
 		classHydration:       classHydration,
 		semanticHasher:       semanticCommitment,
 		seenChangedCohorts:   make(map[[sha256.Size]byte][]publicationTransitionValidatedCohort),
+		seenBaselineCohorts:  make(map[[sha256.Size]byte][]publicationTransitionValidatedCohort),
 		winnerKeyCommitments: make(map[*publicationTransitionCanonicalObject][sha256.Size]byte),
 	}
-	candidateDependencies, candidateWinningWitnesses, err := evaluator.evaluate()
+	candidateDependencies, candidateWinningWitnesses, conflict, err := evaluator.evaluate()
 	if err != nil {
 		return publicationActiveTransitionAuthority{}, err
 	}
+	if conflict != 0 {
+		if !validation {
+			return publicationActiveTransitionAuthority{}, invalidPublicationTransition(
+				"mutation evaluator returned a validation conflict",
+			)
+		}
+		*validationOutput = publicationActiveValidationConflictDecision(conflict)
+		return publicationActiveTransitionAuthority{}, nil
+	}
 	if afterActive && candidateWinningWitnesses == 0 {
+		if validation {
+			*validationOutput = publicationActiveValidationConflictDecision(
+				publicationActiveValidationNoWinningWitness,
+			)
+			return publicationActiveTransitionAuthority{}, nil
+		}
 		return publicationActiveTransitionAuthority{}, fmt.Errorf(
 			"%w: publication candidate has no current-index winning witness",
 			control.ErrDependencyConflict,
@@ -716,6 +1055,10 @@ func validatePublicationActiveTransition(
 	}
 	if err := ctx.Err(); err != nil {
 		return publicationActiveTransitionAuthority{}, err
+	}
+	if validation {
+		*validationOutput = publicationActiveValidationValidDecision(candidateDependencies)
+		return publicationActiveTransitionAuthority{}, nil
 	}
 	publicationTransitionHashCandidateDependencies(semanticCommitment, candidateDependencies)
 	var commitment [sha256.Size]byte
@@ -908,6 +1251,50 @@ func publicationTransitionWinnerIsZero(winner publicationWinner) bool {
 		object.OwnerID == "" && object.SharingScope == 0 &&
 		object.Definition == nil && object.DefinitionSHA256 == nil &&
 		!winner.existingDependenciesPresent && winner.existingDependencies == nil
+}
+
+// validatePersistedPublicationActiveClosure proves persisted endpoint and
+// stage closure against one complete detached ACTIVE inventory before
+// visibility and index pruning. A target that is absent here is corrupt
+// catalog authority; only a globally present target omitted from an affected
+// cohort may later become a candidate-attributable topology conflict. Both
+// transition validation and index-name admission share this exact proof.
+func validatePersistedPublicationActiveClosure(
+	current []*publicationTransitionCanonicalObject,
+) error {
+	ordered := slices.Clone(current)
+	sort.Slice(ordered, func(left, right int) bool {
+		if ordered[left] == nil || ordered[right] == nil {
+			return ordered[left] != nil
+		}
+		if ordered[left].canonical.key.objectID != ordered[right].canonical.key.objectID {
+			return ordered[left].canonical.key.objectID < ordered[right].canonical.key.objectID
+		}
+		return ordered[left].canonical.key.version < ordered[right].canonical.key.version
+	})
+	byKey := make(
+		map[dependencyVersionKey]*canonicalPublicationWinner,
+		len(ordered),
+	)
+	for _, object := range ordered {
+		if object == nil {
+			return invalidPublicationWinnerCohort("contains an absent current ACTIVE object")
+		}
+		if _, duplicate := byKey[object.canonical.key]; duplicate {
+			return invalidPublicationWinnerCohort("duplicates a current ACTIVE object version")
+		}
+		byKey[object.canonical.key] = &object.canonical
+	}
+	for _, object := range ordered {
+		if err := validatePersistedPublicationDependencies(
+			&object.canonical,
+			object.winner.existingDependencies,
+			byKey,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validatePublicationTransitionCandidateDependencyScalars(
@@ -2111,13 +2498,26 @@ func (work *publicationTransitionWork) chargeChangedCohort(
 			control.ErrCapacityExceeded,
 		)
 	}
-	if work.semanticPrograms >= maximumPublicationTransitionSemanticPrograms {
+	if err := work.chargeSemanticCohort(winners); err != nil {
+		return err
+	}
+	work.changedCohorts++
+	return nil
+}
+
+// chargeSemanticCohort bounds every normalization and compiler charge for one
+// independently checked cohort. Validation baseline and post-candidate
+// recompiles share these counters; the mutation path still calls it exactly
+// once per unique changed post cohort through chargeChangedCohort.
+func (work *publicationTransitionWork) chargeSemanticCohort(
+	winners []*publicationTransitionCanonicalObject,
+) error {
+	if work == nil || work.semanticPrograms >= maximumPublicationTransitionSemanticPrograms {
 		return fmt.Errorf(
 			"%w: publication transition exceeds its semantic-program limit",
 			control.ErrCapacityExceeded,
 		)
 	}
-	work.changedCohorts++
 	work.semanticPrograms++
 	if !addPublicationResource(
 		&work.winnerRevisits,

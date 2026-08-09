@@ -392,10 +392,6 @@ func admitPublicationIndexNameAdmissionInventory(
 		map[string]*publicationTransitionCanonicalObject,
 		len(input.currentActive),
 	)
-	byKey := make(
-		map[dependencyVersionKey]*canonicalPublicationWinner,
-		len(input.currentActive),
-	)
 	var aggregate publicationTransitionAggregateCharge
 	for index := range input.currentActive {
 		object, err := canonicalizePublicationTransitionObject(
@@ -432,7 +428,6 @@ func admitPublicationIndexNameAdmissionInventory(
 				)
 		}
 		byID[objectID] = object
-		byKey[object.canonical.key] = &object.canonical
 	}
 	if aggregate.definitionBytes != input.expectedDefinitionBytes ||
 		aggregate.projectionBytes != input.expectedProjectionBytes ||
@@ -452,24 +447,12 @@ func admitPublicationIndexNameAdmissionInventory(
 		objectIDs = append(objectIDs, objectID)
 	}
 	slices.Sort(objectIDs)
-	// Establish durable endpoint and stage closure against the complete ACTIVE
-	// inventory before any cohort-local validation. A missing global endpoint,
-	// self-edge, or forward-stage edge remains corrupt persistence authority;
-	// only an endpoint absent from a later newly reachable cohort is a topology
-	// conflict.
-	for _, objectID := range objectIDs {
-		object := byID[objectID]
-		if err := validatePersistedPublicationDependencies(
-			&object.canonical,
-			object.winner.existingDependencies,
-			byKey,
-		); err != nil {
-			return publicationIndexNameAdmissionInventory{}, nil, err
-		}
-	}
 	slots := make([]*publicationTransitionCanonicalObject, len(objectIDs))
 	for index, objectID := range objectIDs {
 		slots[index] = byID[objectID]
+	}
+	if err := validatePersistedPublicationActiveClosure(slots); err != nil {
+		return publicationIndexNameAdmissionInventory{}, nil, err
 	}
 	return detached, slots, nil
 }
