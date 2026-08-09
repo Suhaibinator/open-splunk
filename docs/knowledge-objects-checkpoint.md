@@ -4,7 +4,7 @@
 
 **Current milestone:** KO-1 ACTIVE publication validation (closed gates)
 
-**Last completed slice:** transaction-bound ACTIVE publication persistence authority
+**Last completed slice:** proven recognized ACTIVE disable/delete publication
 
 **Evidence date:** August 9, 2026
 
@@ -27,8 +27,8 @@
 - KO-1C closed-gate retained-prelude revision:
   `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: eighty-two intentional post-`c5440b9`
-  KO commits through `9662dda` are durable locally. This checkpoint is kept as
+- Publication state before this document: eighty-four intentional post-`c5440b9`
+  KO commits through `70b9ef6` are durable locally. This checkpoint is kept as
   a separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so the terminal KO-0G
   test-oracle commits, the KO-0G checkpoint `441fd4d`, all KO-0H work, KO-1A,
@@ -97,9 +97,11 @@
   endpoint, rechecks all revision domains, rejects caller-supplied ACTIVE
   dependencies, and uses only a fresh private projection for the version
   count, dependency rows, and seal. A zero authority cannot publish an ACTIVE
-  endpoint. The next Writer slice must mint the proof for recognized ACTIVE
-  disable/delete while preserving only the explicit opaque future-body
-  emergency removal path; new index-name creation remains separately gated.
+  endpoint. Recognized ACTIVE disable/delete now mint the proof from the exact
+  live object and retained graph, while the sole zero-proof emergency removal
+  path re-decodes and exact-matches a genuinely opaque stored future body and
+  its dependencies before any write or hook. New index-name creation remains
+  separately gated.
 - Runtime feature state: the capability remains hard-disabled and unadvertised;
   the six knowledge-management handlers are deliberately not registered in the
   production router and their paths still return 404. Configured test/runtime
@@ -730,9 +732,9 @@ KO-1C closed-gate evidence:
 | Independent review | pass | independent reviewers found the unsigned reconstructed-downgrade and unsigned search-analysis fixture gaps; both were fixed with universal Manager-seal validation and Manager-minted test snapshots, then two final reviewers returned clean verdicts |
 | Digest-pinned ClickHouse acceptance | pending | the opt-in fixture covers Dynamic `byteSize`, alias-copy exact/+1, losing-branch laziness, all five guard markers, and deferred hidden-failure atomicity. A driver query-parameter false positive in its synthetic JSON literal was corrected in `98b7a15`, but the subsequent Docker run was canceled; no green pinned runtime result or broader authored-suffix/finalizer matrix is claimed |
 | ACTIVE dependency schema prerequisite | pass, publication closed | migration 0033 SHA-256 `171c5b390d1033a48405ab5953131c312a2fed5ba09a22bd7b8a58f62cba9f7f`; enable may seal a rederived dependency set, disable/delete retain exact predecessor identity, stale ACTIVE pins reject upgrade atomically, and advancement is blocked only while a current ACTIVE dependent retains another target pin. The schema supports a bounded disable/advance/re-enable cascade; Writer create/active-update/enable gates remain closed |
-| Publication transition authority | pass, route activation pending | strict and candidate-absent cohort validation bind exact candidate identity, winner mode, canonical program commitment, rich derived edges, and every retained winner's persisted edge authority. Paired before/after index atoms produce exact minimum-witness OR closure under 1,024-atom, 1,024-state, 256-index, and independent 65,536-probe ceilings. The pure transition derives symbolic visibility and one candidate graph across every win. Its same-transaction reader proves bounded object/app/index inventories and exact revision facts; an opaque transaction-bound wrapper revalidates rich current ACTIVE targets and makes `publishMutation` use only its detached projection for version, rows, and seal before any persistence write or hook. ACTIVE endpoints reject zero authority and caller-supplied dependency rows. Recognized ACTIVE disable/delete route minting, future index-name validation, opaque emergency-removal isolation, and the create/active-update/enable gates remain pending |
+| Publication transition authority | pass for recognized removal; activation closed | strict and candidate-absent cohort validation bind exact candidate identity, winner mode, canonical program commitment, rich derived edges, and every retained winner's persisted edge authority. Paired before/after index atoms produce exact minimum-witness OR closure under 1,024-atom, 1,024-state, 256-index, and independent 65,536-probe ceilings. The pure transition derives symbolic visibility and one candidate graph across every win. Its same-transaction reader proves bounded object/app/index inventories and exact revision facts; an opaque transaction-bound wrapper revalidates rich current ACTIVE targets and makes `publishMutation` use only its detached projection for version, rows, and seal before any persistence write or hook. Recognized ACTIVE disable/delete now mint and consume that proof with exact replay and dependency retention. The separate zero-proof emergency path proves a genuinely opaque live body and exact retained authority. Future index-name validation and the create/active-update/enable gates remain pending |
 | Runtime activation | unchanged | `compiled_query_execution.go` and `knowledgesnapshot.Authority.Finalize` retain separate nonempty hard gates; production still supplies no resolver, routes, capability, navigation, or supported ACTIVE publication |
-| Local durability | pass | forty-seven intentional KO-1C commits from `5088427` through `9662dda` inclusive are separate and locally durable on `codex/knowledge-objects-runtime`; this checkpoint update is a separate documentation commit |
+| Local durability | pass | forty-nine intentional KO-1C commits from `5088427` through `70b9ef6` inclusive are separate and locally durable on `codex/knowledge-objects-runtime`; this checkpoint update is a separate documentation commit |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:

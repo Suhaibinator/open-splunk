@@ -1356,9 +1356,12 @@ dependency rows; rechecks the transaction and catalog facts; and uses only a
 fresh detached projection from the authority for the version count, dependency
 rows, and dependency seal. ACTIVE plans cannot submit dependency rows or use a
 zero authority, while existing non-ACTIVE paths retain their prior hook order.
-The next Writer slice must mint this authority for recognized ACTIVE
-disable/delete transitions while leaving only the explicit opaque future-body
-emergency removal path outside it. Create, active-update, and enable remain
+Recognized ACTIVE disable/delete routes now mint that authority from the exact
+hydrated current object and retained graph immediately before publication.
+Replay and active-dependent rejection still precede inventory work. The sole
+zero-proof exception reopens the live stored definition and proves a genuinely
+opaque future body plus exact scalar, selector, digest, and dependency identity
+before any write or persistence hook. Create, active-update, and enable remain
 closed, and future index-name creation still requires its own atomic catalog
 validation before any ACTIVE publication gate can open.
 
