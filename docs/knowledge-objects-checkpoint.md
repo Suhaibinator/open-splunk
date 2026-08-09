@@ -4,7 +4,7 @@
 
 **Current milestone:** KO-1 field execution
 
-**Last completed slice:** KO-1B immutable field-prelude IR
+**Last completed slice:** KO-1C closed-gate retained-prelude reconstruction
 
 **Evidence date:** August 8, 2026
 
@@ -24,14 +24,16 @@
   `03a0b3e991424ae41716a8cb36749cb3ad8aff5b`
 - KO-1B immutable-prelude revision:
   `3278018fd5bd989b630e3c722f658177a6192c42`
+- KO-1C closed-gate retained-prelude revision:
+  `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: thirty-four intentional post-`c5440b9`
-  KO commits through `3278018` are durable locally. This checkpoint is kept as
+- Publication state before this document: sixty-two intentional post-`c5440b9`
+  KO commits through `1a30afc` are durable locally. This checkpoint is kept as
   a separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so the terminal KO-0G
   test-oracle commits, the KO-0G checkpoint `441fd4d`, all KO-0H work, KO-1A,
-  KO-1B, and this checkpoint are not remotely durable. No further push was
-  attempted without explicit destination approval.
+  KO-1B, all current KO-1C work, and this checkpoint are not remotely durable.
+  No further push was attempted without explicit destination approval.
 - Scope: lifecycle- and commitment-aware protobuf contracts, canonical known
   and inactive-future definitions, migrations 0029–0031 state/commit/tenant
   authorities, a bounded read-only `Get`/`List` catalog, and an atomic Writer
@@ -58,15 +60,24 @@
   explicit plan-native extraction/JSON/alias/calculated operators, private
   object and output provenance, exact dependency/collision revalidation,
   aggregate semantic ceilings, and prefix-integrity validation for analysis.
+  KO-1C now stages the exact selector and Tier-1 field operators in ClickHouse,
+  composes one frozen prelude before authored SPL, carries container metadata
+  through conditional and authored identity stages, reconstructs hidden
+  container result sidecars, enforces atomic selector/capture/alias-copy
+  runtime guards, preserves an exact authored/knowledge compiler-evidence
+  split, and re-injects the manager-sealed retained program for postflight
+  inspection and completed-search analysis.
 - Runtime feature state: the capability remains hard-disabled and unadvertised;
   the six knowledge-management handlers are deliberately not registered in the
   production router and their paths still return 404. Configured test/runtime
   seams can admit and retain a canonically empty enabled snapshot, but
-  `cmd/open-splunk-server` does not configure the resolver. The new prelude is
-  not yet lowered or sealed by the ClickHouse compiler, so a nonempty authority
-  still fails before job creation. Accordingly, nonempty finalization, new
-  ACTIVE publication, and ClickHouse knowledge execution remain unavailable,
-  and the hidden UI remains unreachable in production.
+  `cmd/open-splunk-server` does not configure the resolver. The compiler now
+  lowers and independently proves a nonempty prelude, but deliberately returns
+  `seal compiled ClickHouse execution: nonempty knowledge lowering is absent`
+  before producing an executable query; `knowledgesnapshot.Authority.Finalize`
+  separately rejects nonempty authorities. Accordingly, nonempty finalization,
+  new ACTIVE publication, and ClickHouse knowledge execution remain
+  unavailable, and the hidden UI remains unreachable in production.
 
 ## KO-0 durable commits
 
@@ -673,6 +684,22 @@ KO-1B evidence:
 | Local durability | pass | `3278018` is a separate immutable-prelude implementation commit on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | no push was attempted without explicit destination approval |
 
+KO-1C closed-gate evidence:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Physical field prelude | pass, execution closed | one anchored selector matcher per constrained dimension; exact regex/JSON extraction tuples; canonical interleaved extraction publication; frozen-input alias and calculated stages; disjoint repeated-destination arbitration; deterministic argument order; and one central relation composer before authored operators are implemented and unit-tested |
+| Runtime resource graph | pass, pinned acceptance pending | selector input/query, cumulative regex capture, and alias-copy event/query accounting use UInt128, strict ceilings, stable precedence markers, and one deferred materialized validation branch that compiler/unit tests structurally force ahead of authored filtering; pinned engine proof remains pending, and the exact alias-copy formula and saturation authority live in `internal/knowledge` |
+| Container fidelity | pass, runtime acceptance pending | stored-path authority, relative name/type/version sidecars, exact-leaf precedence, conditional-writer preservation, compiler-sealed hidden result descriptors, exact driver header checks, explicit-null/escaped-path reconstruction, and future metadata-version rejection are implemented; the nonempty gate remains closed until the digest-pinned engine matrix proves native Dynamic sizing and branch laziness |
+| Compiler/snapshot evidence | pass, execution closed | the physical lowering proof derives exact object/charge totals; the semantic program supplies the independently compared commitment; authored regex/extraction/JSON/predicate charges remain separate; `knowledgesnapshot` checked-adds shared ceilings and emits exact knowledge-only versus combined wire charges. The shared deterministic fixture remains schema/version/length stable with SHA-256 `ea3c774af5dcf6f3c684e4c0769fc01cb224f71725deb325d7fae5e3be69db0c` and snapshot digest `6d7a0758742fbec7123dfc45afffd6dbfa8784d3ecf86527a1a8e2294f5a1231` |
+| Retained plan reconstruction | pass for sealed legacy/enabled-empty; nonempty staged | `ExecutionSnapshot.OpenRetainedKnowledgePrelude` accepts only a valid Manager signature, rejects half-pairs, in-place stripping, and fresh public-field reconstruction, preserves legacy absence versus enabled-empty presence, and returns a detached program. `searchsnapshot.BuildExecutionPlan` injects that exact program for postflight inspection, field catalog/summary, and timeline; knowledge export continues to use the exact retained compiled execution instead of recompiling |
+| Focused verification | pass | affected-package normal gate: `go test ./internal/searchjobs ./internal/searchsnapshot ./internal/searchinspection ./internal/searchanalysis ./internal/export -count=1 -timeout=30s` (all five packages passed in 2.5s or less each); focused race across retained authority, downgrade, inspection, analysis concurrency, and export tamper tests passed in 7.7s; focused vet and `git diff --check` passed |
+| Independent review | pass | independent reviewers found the unsigned reconstructed-downgrade and unsigned search-analysis fixture gaps; both were fixed with universal Manager-seal validation and Manager-minted test snapshots, then two final reviewers returned clean verdicts |
+| Digest-pinned ClickHouse acceptance | pending | the opt-in fixture covers Dynamic `byteSize`, alias-copy exact/+1, losing-branch laziness, all five guard markers, and deferred hidden-failure atomicity. A driver query-parameter false positive in its synthetic JSON literal was corrected in `98b7a15`, but the subsequent Docker run was canceled; no green pinned runtime result or broader authored-suffix/finalizer matrix is claimed |
+| Runtime activation | unchanged | `compiled_query_execution.go` and `knowledgesnapshot.Authority.Finalize` retain separate nonempty hard gates; production still supplies no resolver, routes, capability, navigation, or supported ACTIVE publication |
+| Local durability | pass | twenty-seven intentional KO-1C commits from `5088427` through `1a30afc` inclusive are separate and locally durable on `codex/knowledge-objects-runtime` |
+| Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |
+
 The exact KO-0E final retained-log race command was:
 
 ```sh
@@ -750,17 +777,25 @@ gates rather than silently skipped acceptance evidence.
 ## Next dependency-ordered work
 
 KO-0 foundations and the hidden KO-0H lifecycle/browser readiness vertical are
-complete, and KO-1A/KO-1B have frozen the selector and backend-neutral field
-program contracts. The next dependency-ordered slices are:
+complete. KO-1A/KO-1B freeze the selector and backend-neutral program, and the
+current closed-gate KO-1C slice now lowers, accounts, seals, retains, and
+reconstructs that program without making it executable. The next
+dependency-ordered slices are:
 
-1. lower the canonical selector and Tier-1 field operators with exact
-   missing/null, frozen-input, overwrite, cancellation, and deterministic
-   conservative per-event/per-query semantics in ClickHouse;
-2. combine authored and knowledge semantic ceilings, seal the exact prelude
-   into compiler evidence, and only then permit nonempty snapshot finalization;
-3. rebuild the retained prelude for inspection/field analysis, add bounded
-   redacted provenance, and prove one hidden seeded-ACTIVE lifecycle across
-   search, history rerun, inspection, and export;
+1. extend inspection projection to the four generated operator types with
+   bounded redacted object/output provenance and an explicit absent authored
+   source range, then prove nonempty field catalog, suggestions, summary, and
+   timeline consume the retained program instead of an authored-only rebuild;
+2. split the digest-pinned ClickHouse acceptance matrix into bounded named
+   gates covering ordinary filter/project/eval/rex/spath/sort/limit/stats,
+   eventstats/streamstats and stacked chronological barriers, chart/timechart,
+   every event-analysis finalizer, empty/pruned consumers, exact argument
+   order, resource boundaries, container decoding, and hidden-failure
+   atomicity;
+3. only after those runtime gates pass, remove the compiler and snapshot
+   nonempty gates together, then prove one hidden seeded-ACTIVE lifecycle
+   across search, history rerun, inspection, and export with exact retained
+   compiler/program equality;
 4. add transactional ACTIVE publication compilation plus exact dependency
    derivation while retaining `ErrActivePublicationUnavailable` until the full
    hidden Tier-1 browser/ClickHouse vertical passes; and
