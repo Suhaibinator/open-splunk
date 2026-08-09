@@ -14,11 +14,14 @@ import (
 
 const knowledgeCatalogCursorKeyPurpose = "knowledge-catalog-cursors"
 
-// runtimeKnowledgeManagement groups the same-control-database authorities for
-// the management API. These stores borrow the process database and need no
-// independent shutdown path.
+// runtimeKnowledgeManagement groups the same-control-database catalog
+// authorities, including the resolver retained for a later search-admission
+// composition. These stores borrow the process database and need no independent
+// shutdown path. configureRuntimeKnowledgeManagement deliberately exposes only
+// the management authorities today.
 type runtimeKnowledgeManagement struct {
 	catalog  *knowledgecatalog.Store
+	resolver *knowledgecatalog.Resolver
 	writer   *knowledgecatalog.Writer
 	attempts *knowledgeattemptaudit.Store
 }
@@ -61,6 +64,13 @@ func newRuntimeKnowledgeManagement(
 			err,
 		)
 	}
+	resolver, err := catalog.NewResolver(knowledgecatalog.ResolverOptions{})
+	if err != nil {
+		return runtimeKnowledgeManagement{}, fmt.Errorf(
+			"create knowledge resolver: %w",
+			err,
+		)
+	}
 	attempts, err := knowledgeattemptaudit.NewWithContext(ctx, database)
 	if err != nil {
 		return runtimeKnowledgeManagement{}, fmt.Errorf(
@@ -81,6 +91,7 @@ func newRuntimeKnowledgeManagement(
 	}
 	return runtimeKnowledgeManagement{
 		catalog:  catalog,
+		resolver: resolver,
 		writer:   writer,
 		attempts: attempts,
 	}, nil
@@ -99,7 +110,8 @@ func configureRuntimeKnowledgeManagement(
 	runtime runtimeKnowledgeManagement,
 	apps *runtimeAppCatalog,
 ) error {
-	if config == nil || runtime.catalog == nil || runtime.writer == nil ||
+	if config == nil || runtime.catalog == nil || runtime.resolver == nil ||
+		runtime.writer == nil ||
 		!runtime.writer.ReadyForManagement() || runtime.attempts == nil || apps == nil ||
 		nilRuntimeDependency(apps.catalog) {
 		return errors.New(
