@@ -206,10 +206,80 @@ message QuarantineKnowledgeObjectResponse {
   uint64 tenant_catalog_revision = 3;
 }
 
+// KnowledgeValidationIntent selects the lifecycle authority which validation
+// proves. The request must contain exactly one of the two defined nonzero
+// values. UNSPECIFIED and every unknown numeric enum value are request-envelope
+// errors rather than in-band candidate validation results.
+enum KnowledgeValidationIntent {
+  KNOWLEDGE_VALIDATION_INTENT_UNSPECIFIED = 0;
+  // INACTIVE_STORAGE proves that the candidate is canonical and bounded for
+  // persistence in a non-ACTIVE lifecycle state. It performs no publication-
+  // readiness derivation, does not claim that the candidate is currently
+  // publishable, and returns no derived dependencies.
+  KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE = 1;
+  // ACTIVE_PUBLICATION evaluates the candidate as the proposed ACTIVE version
+  // against the exact catalog authority identified by the response revision.
+  KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION = 2;
+}
+
+// KnowledgeValidationDependency is one direct dependency of only the applied
+// candidate. It deliberately excludes a source identity, definition digests,
+// snapshot stages, global depth, and canonical snapshot ordinals. target is an
+// exact currently authorized object identity. Only ACTIVE_PUBLICATION may
+// return these entries, and KO-1 emits only FIELD_INPUT. Missing and
+// unauthorized dependency targets are indistinguishable and never produce an
+// entry: candidate invalidity uses only the static diagnostic code
+// KNOWLEDGE_DEPENDENCY_UNAVAILABLE, while boundary failures use a uniform
+// non-2xx response.
+message KnowledgeValidationDependency {
+  KnowledgeManagementObjectVersionIdentity target = 1;
+  KnowledgeDependencyRole role = 2;
+}
+
+// KnowledgeValidationDiagnostic locates a compiler diagnostic within the
+// applied candidate. field_path is a path in KnowledgeObjectDefinition and is
+// at most 1 KiB of UTF-8. When diagnostic.source_range is present, its byte
+// offsets are relative to the UTF-8 scalar value at field_path, never to the
+// encoded request or the complete definition. A present source_range requires
+// nonnil start and end positions and denotes a half-open range with start byte
+// offset less than or equal to end. Both offsets are at most the exact scalar
+// UTF-8 byte length and fall on code-point boundaries. Source line and column
+// values must equal the uniquely derived one-based coordinates: offset zero is
+// line 1, column 1; LF increments line and resets column to 1; every other
+// Unicode scalar, including CR, increments column. UNSPECIFIED and unknown
+// diagnostic severities are invalid service output.
+// diagnostic.code is at most 128 UTF-8 bytes, diagnostic.message is at most
+// 4 KiB, and diagnostic.suggestions contains at most 32 unique values of at
+// most 1 KiB each in ascending binary UTF-8 order. field_path, code, message,
+// and suggestions may contain only stable static templates plus exact source
+// text already present in the applied candidate scalar. They must never expose
+// any other catalog object, app, owner, name, ID, version, digest, definition,
+// index inventory beyond candidate-authored text, cohort or global count,
+// generated SQL, or hidden authority.
+message KnowledgeValidationDiagnostic {
+  string field_path = 1;
+  Diagnostic diagnostic = 2;
+}
+
+// Every charge is attributable only to the applied candidate, never to the
+// complete tenant catalog or an affected publication cohort. A present report
+// is complete; partial resource estimates are forbidden. INACTIVE_STORAGE
+// reports exact selector_patterns and normalized_definition_bytes structural
+// normalization charges; dependency_nodes, dependency_edges, and every compile-
+// derived field from generated_operators through scalar_expression_nodes are
+// zero because publication compilation does not occur. ACTIVE_PUBLICATION
+// reports the complete candidate publication-compilation charges.
 message KnowledgeResourceEstimate {
   uint32 selector_patterns = 1;
+  // Exact deterministic protobuf size of the normalized candidate definition.
   uint64 normalized_definition_bytes = 2;
+  // Distinct exact direct targets in result.dependencies, excluding the
+  // candidate itself. This is zero for INACTIVE_STORAGE; for a valid
+  // ACTIVE_PUBLICATION it derives only from returned authorized dependencies.
   uint32 dependency_nodes = 3;
+  // Direct candidate dependency edges; this equals result.dependencies size
+  // and is zero for INACTIVE_STORAGE. For a valid ACTIVE_PUBLICATION it derives
+  // only from returned authorized dependencies.
   uint32 dependency_edges = 4;
   uint32 generated_operators = 5;
   uint32 generated_fields = 6;
@@ -217,33 +287,131 @@ message KnowledgeResourceEstimate {
   uint64 estimated_regex_work_units = 8;
   uint32 scalar_expressions = 9;
   uint32 scalar_expression_nodes = 10;
-  uint64 estimated_generated_sql_bytes = 11;
+  // Intentional pre-route FILE compatibility waiver: an unimplemented draft
+  // exposed an undefined backend-specific SQL-size estimate, but neither the
+  // validate nor preview route has ever been registered or served. Old and new
+  // peers may drop this unserved field. Reserving its number and name prevents
+  // reinterpretation; this change must not be described as schema non-breaking.
+  reserved 11;
+  reserved "estimated_generated_sql_bytes";
 }
 
+// KnowledgeValidationResult reports candidate-authored validity in-band with
+// HTTP 200. Request-envelope, authentication, authorization-to-the-requested
+// object, catalog-integrity, and service failures remain ordinary non-2xx API
+// errors and never appear as valid=false.
+//
+// valid=false requires at least one retained field violation or ERROR
+// diagnostic even when either issue list is truncated, and requires
+// normalized_definition, definition_sha256, dependencies, and resources to be
+// absent. valid=true requires a normalized_definition, an exact 32-byte SHA-256
+// digest of its deterministic protobuf encoding, a complete resources report, no
+// field violations, no ERROR diagnostics, and field_violations_truncated=false.
+// object_type is UNSPECIFIED only when an invalid candidate's body cannot be
+// identified; otherwise it is the applied candidate's exact body type.
+// Persisted corruption and hidden inventory failures are always uniform non-2xx
+// service failures and must not be converted into candidate issues.
+// Before issue canonicalization or serialization, the response boundary
+// recursively rejects unknown protobuf fields in this result and every nested
+// message. The violation and diagnostic keys cover every currently recognized
+// nested field; any future appended issue field must extend per-entry
+// validation, deduplication, and comparison before it may be emitted.
 message KnowledgeValidationResult {
   bool valid = 1;
   KnowledgeObjectType object_type = 2;
   optional KnowledgeObjectDefinition normalized_definition = 3;
   optional bytes definition_sha256 = 4;
+  // Validate every candidate-authored value against its per-entry limits,
+  // deduplicate exact full values, sort by ascending binary UTF-8 field_path,
+  // code, then message, and retain the longest prefix bounded by both 256
+  // values and a 256 KiB (262144-byte)
+  // aggregate UTF-8 text charge. One value's charge is the sum of the UTF-8
+  // byte lengths of field_path, code, and message, without separators or wire
+  // framing. Each field_path is at most 1 KiB, code at most 128 bytes, and
+  // message at most 4 KiB. Once the next sorted value would exceed either
+  // bound, it and every later value are omitted. field_path, code, and message
+  // obey the same static-template, candidate-source-only nondisclosure rule as
+  // KnowledgeValidationDiagnostic. field_violations_truncated records omission
+  // by either the field_violations count or aggregate-text bound.
   repeated FieldViolation field_violations = 5;
-  repeated Diagnostic diagnostics = 6;
-  repeated KnowledgeObjectDependency dependencies = 7;
+  // Intentional pre-route FILE compatibility waiver: unimplemented drafts
+  // carried an unlocated Diagnostic and snapshot-global
+  // KnowledgeObjectDependency, but neither the validate nor preview route has
+  // ever been registered or served. Old and new peers may drop these unserved
+  // fields. Reserving their tags prevents reinterpretation; this change must
+  // not be described as schema non-breaking.
+  reserved 6, 7;
   KnowledgeResourceEstimate resources = 8;
+  // ACTIVE_PUBLICATION returns at most 1024 unique values, sorted by ascending
+  // binary UTF-8 target object ID, target version, then numeric role. role must
+  // be FIELD_INPUT. INACTIVE_STORAGE always returns an empty list.
+  repeated KnowledgeValidationDependency dependencies = 9;
+  // Validate every candidate-authored value against its per-entry limits, then
+  // deduplicate exact full values and sort first by explicit severity rank
+  // ERROR, WARNING, INFO. UNSPECIFIED and unknown severities are invalid. The
+  // remaining keys are field_path, absent source range before a present range,
+  // start byte offset, end byte offset, code, message, canonical derived start
+  // and end line/column coordinates, then the complete suggestions sequence
+  // lexicographically. Sequence comparison is elementwise ascending binary
+  // UTF-8 with a shorter equal-prefix sequence first. This is a total key.
+  // Retain the longest prefix bounded by both 256 values and a 768 KiB
+  // (786432-byte) aggregate UTF-8 text charge. One value's charge is the sum of
+  // the UTF-8 byte lengths of its field_path, diagnostic code, diagnostic
+  // message, and every suggestion, without separators or wire framing. Once
+  // the next sorted value would exceed either bound, it and every later value
+  // are omitted. ERROR-first ordering and the per-entry limit guarantee that
+  // valid=false retains at least one ERROR diagnostic even when warnings alone
+  // would otherwise fill the aggregate budget. diagnostics_truncated records
+  // omission by either the diagnostics count or aggregate-text bound.
+  repeated KnowledgeValidationDiagnostic diagnostics = 10;
+  // True exactly when one or more otherwise-valid sorted field violations were
+  // omitted by the field_violations count or aggregate-text bound; false means
+  // the returned list is complete. Per-entry validation failures are service
+  // failures, never truncation. This must be false when valid=true.
+  bool field_violations_truncated = 11;
+  // True exactly when one or more otherwise-valid sorted diagnostics were
+  // omitted by the diagnostics count or aggregate-text bound; false means the
+  // returned list is complete. Per-entry validation failures are service
+  // failures, never truncation.
+  bool diagnostics_truncated = 12;
 }
 
 // POST /api/v1/knowledge/objects/validate
-// When knowledge_object_id is present, expected_version and update_mask are
-// required and validation applies the masked candidate to that exact version.
+// This message defines a future route contract; declaring it does not register
+// the route or advertise a knowledge-management capability.
+//
+// definition message presence is required. A missing top-level definition is
+// a request-envelope error; a present definition whose body is missing or
+// unknown is candidate-authored invalidity reported in-band. intent must be
+// exactly INACTIVE_STORAGE or ACTIVE_PUBLICATION; UNSPECIFIED and unknown
+// numeric values are request-envelope errors. Create mode is selected only when
+// knowledge_object_id is absent and requires expected_version and update_mask
+// message to both be absent, not merely zero or empty. Update mode is selected
+// only when knowledge_object_id is present; that ID must be nonempty,
+// expected_version must be present in the inclusive range 1 through MaxInt64
+// (9223372036854775807), and update_mask must be a present message with at
+// least one canonical path. Update validation applies the masked candidate to
+// that exact current version.
+// Violations of these rules are request-envelope errors, never an in-band
+// valid=false candidate result.
 message ValidateKnowledgeObjectRequest {
   KnowledgeObjectDefinition definition = 1;
   optional string knowledge_object_id = 2;
   optional uint64 expected_version = 3;
   // Paths are relative to KnowledgeObjectDefinition, never this request.
   google.protobuf.FieldMask update_mask = 4;
+  KnowledgeValidationIntent intent = 5;
 }
 
+// The deterministic protobuf encoding of this complete response is at most
+// 8 MiB (8388608 bytes), including result framing and tenant_catalog_revision.
+// The boundary recursively rejects unknown protobuf fields in the response,
+// result, and every nested message before deterministic serialization.
 message ValidateKnowledgeObjectResponse {
+  // Required by the response boundary; an absent result is invalid.
   KnowledgeValidationResult result = 1;
+  // Exact catalog authority used by validation; zero denotes a proven empty
+  // knowledge catalog.
   uint64 tenant_catalog_revision = 2;
 }
 
@@ -335,6 +503,12 @@ message PreviewKnowledgeObjectRequest {
   optional uint32 maximum_rows = 6;
 }
 
+// This future unregistered route has no independent validation intent.
+// validation always uses ACTIVE_PUBLICATION and applies the same create/update
+// candidate-envelope semantics as ValidateKnowledgeObjectRequest. It proves
+// full publication readiness at tenant_catalog_revision and obeys every
+// candidate dependency, resource, truncation, and nondisclosure invariant of
+// KnowledgeValidationResult before preview execution.
 message PreviewKnowledgeObjectResponse {
   KnowledgeValidationResult validation = 1;
   ResultSchema before_schema = 2;

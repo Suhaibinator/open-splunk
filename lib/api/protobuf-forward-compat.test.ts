@@ -4,17 +4,19 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 
-import { BinaryWriter } from "@bufbuild/protobuf/wire";
+import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 
 import * as openSplunkV1 from "@/gen/ts/index.open_splunk.v1";
 import { AppSelector } from "@/gen/ts/open_splunk/v1/app";
 import { GetAppRequest } from "@/gen/ts/open_splunk/v1/app_api";
+import { DiagnosticSeverity, SharingScope } from "@/gen/ts/open_splunk/v1/common";
 import {
   FieldExtractionDefinition,
   KnowledgeDependencyRole,
   KnowledgeObjectType,
   KnowledgeOverwriteBehavior,
   KnowledgeSearchStage,
+  KnowledgeSelectorMatchKind,
   KnowledgeSnapshot,
   KnowledgeSnapshotRef,
   KnowledgeSnapshotSummary,
@@ -25,10 +27,14 @@ import {
   KnowledgeManagementDependencyEdge,
   KnowledgeManagementObjectVersionIdentity,
   KnowledgeMutationOutcomeRecord,
+  KnowledgeValidationIntent,
+  KnowledgeValidationResult,
   ListKnowledgeObjectDependenciesResponse,
   ListKnowledgeObjectDependentsResponse,
   SetKnowledgeObjectStateResponse,
   UpdateKnowledgeObjectResponse,
+  ValidateKnowledgeObjectRequest,
+  ValidateKnowledgeObjectResponse,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import { SearchJob } from "@/gen/ts/open_splunk/v1/search";
 import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/v1/system_api";
@@ -677,6 +683,98 @@ test("generated management dependency edges keep a digestless direct cross-runti
     assert.deepEqual(first, Uint8Array.from(Buffer.from(contract.wireHex, "hex")));
     assert.deepEqual(contract.decode(first), contract.message);
   }
+});
+
+function protobufTopLevelFieldNumbers(wire: Uint8Array): number[] {
+  const reader = new BinaryReader(wire);
+  const fields: number[] = [];
+  while (reader.pos < reader.len) {
+    const tag = reader.uint32();
+    fields.push(tag >>> 3);
+    reader.skip(tag & 7);
+  }
+  return fields;
+}
+
+test("generated knowledge validation keeps append-only intent and candidate projection wire tags", () => {
+  const create = ValidateKnowledgeObjectRequest.fromPartial({
+    definition: {
+      appId: "app_AAAAAAAAAAAAAAAAAAAAAA",
+      name: "revenue",
+      sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+      selector: {
+        indexPatterns: [{
+          matchKind: KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+          value: "main",
+        }],
+      },
+      body: {
+        $case: "fieldAlias",
+        value: {
+          sourceField: "source.value",
+          destinationField: "derived.value",
+          overwriteBehavior: KnowledgeOverwriteBehavior.KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+        },
+      },
+    },
+    intent: KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+  });
+  const createWire = ValidateKnowledgeObjectRequest.encode(create).finish();
+  assert.deepEqual(protobufTopLevelFieldNumbers(createWire), [1, 5]);
+  assert.deepEqual(ValidateKnowledgeObjectRequest.decode(createWire), create);
+
+  const presentEmptyUpdate = ValidateKnowledgeObjectRequest.fromPartial({
+    knowledgeObjectId: "",
+    expectedVersion: 0n,
+    updateMask: [],
+    intent: KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION,
+  });
+  const presentEmptyUpdateWire = Uint8Array.of(
+    0x12, 0x00,
+    0x18, 0x00,
+    0x22, 0x00,
+    0x28, 0x02,
+  );
+  assert.deepEqual(ValidateKnowledgeObjectRequest.encode(presentEmptyUpdate).finish(), presentEmptyUpdateWire);
+  assert.deepEqual(ValidateKnowledgeObjectRequest.decode(presentEmptyUpdateWire), presentEmptyUpdate);
+
+  // This partial fixture intentionally isolates the replacement repeated-field
+  // tags. Semantic result invariants are pinned by the Go descriptor/source
+  // contract test and will be enforced by the future route boundary.
+  const result = KnowledgeValidationResult.fromPartial({
+    dependencies: [{
+      target: { knowledgeObjectId: "ko-target", version: 7n },
+      role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+    }],
+    diagnostics: [{
+      fieldPath: "field_extraction.regex.pattern",
+      diagnostic: {
+        code: "SPL_EXAMPLE",
+        severity: DiagnosticSeverity.DIAGNOSTIC_SEVERITY_WARNING,
+        message: "example",
+        suggestions: [],
+      },
+    }],
+    fieldViolationsTruncated: true,
+    diagnosticsTruncated: true,
+  });
+  const resultWire = KnowledgeValidationResult.encode(result).finish();
+  assert.deepEqual(protobufTopLevelFieldNumbers(resultWire), [9, 10, 11, 12]);
+  assert.deepEqual(KnowledgeValidationResult.decode(resultWire), result);
+
+  const response = ValidateKnowledgeObjectResponse.fromPartial({
+    result,
+    tenantCatalogRevision: 7n,
+  });
+  const responseWire = ValidateKnowledgeObjectResponse.encode(response).finish();
+  assert.deepEqual(protobufTopLevelFieldNumbers(responseWire), [1, 2]);
+  assert.deepEqual(ValidateKnowledgeObjectResponse.decode(responseWire), response);
+
+  const retiredDraftWire = Uint8Array.of(0x32, 0x00, 0x3a, 0x00);
+  const retiredDraft = KnowledgeValidationResult.decode(retiredDraftWire);
+  assert.deepEqual(retiredDraft.dependencies, []);
+  assert.deepEqual(retiredDraft.diagnostics, []);
+  assert.deepEqual(KnowledgeValidationResult.encode(retiredDraft).finish(), Uint8Array.of());
 });
 
 test("generated knowledge mutation outcome authority pins canonical wire", () => {
