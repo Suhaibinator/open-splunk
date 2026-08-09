@@ -126,6 +126,237 @@ func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 	}
 }
 
+func TestFieldServiceRejectsInvalidManagerAuthorityBeforeCacheOrCursorReuse(t *testing.T) {
+	template := fieldTestSnapshot("field-invalid-authority")
+	signed, err := sealSearchAnalysisSnapshot(template)
+	if err != nil {
+		t.Fatalf("sealSearchAnalysisSnapshot(): %v", err)
+	}
+	tampered := signed
+	tampered.AppID = "app_000000000200000000002A"
+	tests := []struct {
+		name    string
+		invalid searchjobs.ExecutionSnapshot
+	}{
+		{name: "unsigned", invalid: unsignedSearchAnalysisSnapshot(signed)},
+		{name: "tampered signed AppID", invalid: tampered},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name+" cache hit", func(t *testing.T) {
+			searches := &rawSearchAnalysisSnapshots{
+				snapshots: []searchjobs.ExecutionSnapshot{signed, test.invalid},
+			}
+			compiler := &fakeFieldCompiler{}
+			executor := &fakeFieldExecutor{result: twoFieldCatalog()}
+			service := newFieldTestService(t, FieldConfig{
+				Searches: searches,
+				Compiler: compiler,
+				Executor: executor,
+			})
+			request := ListFieldsRequest{SearchJobID: signed.ID, PageSize: fieldUint32Pointer(2)}
+			if _, err := service.ListFields(
+				context.Background(),
+				fieldAccess(signed),
+				request,
+			); err != nil {
+				t.Fatalf("prime ListFields() error = %v", err)
+			}
+			got, err := service.ListFields(context.Background(), fieldAccess(signed), request)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) {
+				t.Fatalf("cached ListFields() = (%#v, %v), want zero/ErrInvalidResult", got, err)
+			}
+			if len(got.Fields) != 0 || got.TotalFields != 0 || got.NextPageToken != "" {
+				t.Fatalf("invalid-authority cached page = %#v, want zero", got)
+			}
+			if compiler.Calls() != 1 || executor.Calls() != 1 || searches.Calls() != 2 {
+				t.Fatalf(
+					"calls = compiler %d executor %d snapshots %d, want 1/1/2",
+					compiler.Calls(),
+					executor.Calls(),
+					searches.Calls(),
+				)
+			}
+		})
+
+		t.Run(test.name+" cursor", func(t *testing.T) {
+			searches := &rawSearchAnalysisSnapshots{
+				snapshots: []searchjobs.ExecutionSnapshot{signed, test.invalid},
+			}
+			compiler := &fakeFieldCompiler{}
+			executor := &fakeFieldExecutor{result: twoFieldCatalog()}
+			service := newFieldTestService(t, FieldConfig{
+				Searches:        searches,
+				Compiler:        compiler,
+				Executor:        executor,
+				DefaultPageSize: 1,
+			})
+			first, err := service.ListFields(
+				context.Background(),
+				fieldAccess(signed),
+				ListFieldsRequest{SearchJobID: signed.ID},
+			)
+			if err != nil || first.NextPageToken == "" {
+				t.Fatalf("prime cursor page = (%#v, %v), want token", first, err)
+			}
+			got, err := service.ListFields(
+				context.Background(),
+				fieldAccess(signed),
+				ListFieldsRequest{SearchJobID: signed.ID, PageToken: first.NextPageToken},
+			)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) {
+				t.Fatalf("cursor ListFields() = (%#v, %v), want zero/ErrInvalidResult", got, err)
+			}
+			if len(got.Fields) != 0 || got.TotalFields != 0 || got.NextPageToken != "" {
+				t.Fatalf("invalid-authority cursor page = %#v, want zero", got)
+			}
+			if compiler.Calls() != 1 || executor.Calls() != 1 || searches.Calls() != 2 {
+				t.Fatalf(
+					"calls = compiler %d executor %d snapshots %d, want 1/1/2",
+					compiler.Calls(),
+					executor.Calls(),
+					searches.Calls(),
+				)
+			}
+		})
+	}
+}
+
+func TestFieldServiceBindsChangedEnabledEmptyAuthorityInCacheAndCursor(t *testing.T) {
+	first, second := changedEnabledEmptySearchAnalysisSnapshots(
+		t,
+		fieldTestSnapshot("field-enabled-empty-authority"),
+	)
+
+	t.Run("cache key", func(t *testing.T) {
+		searches := &rawSearchAnalysisSnapshots{
+			snapshots: []searchjobs.ExecutionSnapshot{first, second},
+		}
+		compiler := &fakeFieldCompiler{}
+		executor := &fakeFieldExecutor{result: twoFieldCatalog()}
+		service := newFieldTestService(t, FieldConfig{
+			Searches: searches,
+			Compiler: compiler,
+			Executor: executor,
+		})
+		request := ListFieldsRequest{SearchJobID: first.ID, PageSize: fieldUint32Pointer(2)}
+		for attempt := range 2 {
+			if _, err := service.ListFields(
+				context.Background(),
+				fieldAccess(first),
+				request,
+			); err != nil {
+				t.Fatalf("ListFields(attempt %d) error = %v", attempt, err)
+			}
+		}
+		if compiler.Calls() != 2 || executor.Calls() != 2 || searches.Calls() != 2 {
+			t.Fatalf(
+				"calls = compiler %d executor %d snapshots %d, want 2/2/2",
+				compiler.Calls(),
+				executor.Calls(),
+				searches.Calls(),
+			)
+		}
+	})
+
+	t.Run("cursor", func(t *testing.T) {
+		searches := &rawSearchAnalysisSnapshots{
+			snapshots: []searchjobs.ExecutionSnapshot{first, second},
+		}
+		compiler := &fakeFieldCompiler{}
+		executor := &fakeFieldExecutor{result: twoFieldCatalog()}
+		service := newFieldTestService(t, FieldConfig{
+			Searches:        searches,
+			Compiler:        compiler,
+			Executor:        executor,
+			DefaultPageSize: 1,
+		})
+		page, err := service.ListFields(
+			context.Background(),
+			fieldAccess(first),
+			ListFieldsRequest{SearchJobID: first.ID},
+		)
+		if err != nil || page.NextPageToken == "" {
+			t.Fatalf("first authority page = (%#v, %v), want token", page, err)
+		}
+		got, err := service.ListFields(
+			context.Background(),
+			fieldAccess(second),
+			ListFieldsRequest{SearchJobID: second.ID, PageToken: page.NextPageToken},
+		)
+		if !errors.Is(err, ErrInvalidFieldCursor) {
+			t.Fatalf("changed-authority cursor page = (%#v, %v), want zero/ErrInvalidFieldCursor", got, err)
+		}
+		if len(got.Fields) != 0 || got.TotalFields != 0 || got.NextPageToken != "" {
+			t.Fatalf("changed-authority cursor page = %#v, want zero", got)
+		}
+		if compiler.Calls() != 1 || executor.Calls() != 1 || searches.Calls() != 2 {
+			t.Fatalf(
+				"calls = compiler %d executor %d snapshots %d, want 1/1/2",
+				compiler.Calls(),
+				executor.Calls(),
+				searches.Calls(),
+			)
+		}
+	})
+}
+
+func TestFieldSnapshotFingerprintBindsIndependentRetainedAuthorityDimensions(t *testing.T) {
+	t.Run("snapshot-only rotation", func(t *testing.T) {
+		first, second := changedEnabledEmptySearchAnalysisSnapshots(
+			t,
+			fieldTestSnapshot("field-fingerprint-snapshot-only"),
+		)
+		firstFingerprint, firstErr := fieldSnapshotFingerprint(first)
+		secondFingerprint, secondErr := fieldSnapshotFingerprint(second)
+		if firstErr != nil || secondErr != nil || firstFingerprint == secondFingerprint {
+			t.Fatalf(
+				"snapshot-only fingerprints = (%x, %v) / (%x, %v), want distinct",
+				firstFingerprint,
+				firstErr,
+				secondFingerprint,
+				secondErr,
+			)
+		}
+	})
+
+	t.Run("compiled-only rotation", func(t *testing.T) {
+		first, second := changedCompiledEnabledEmptySearchAnalysisSnapshots(
+			t,
+			fieldTestSnapshot("field-fingerprint-compiled-only"),
+		)
+		firstFingerprint, firstErr := fieldSnapshotFingerprint(first)
+		secondFingerprint, secondErr := fieldSnapshotFingerprint(second)
+		if firstErr != nil || secondErr != nil || firstFingerprint == secondFingerprint {
+			t.Fatalf(
+				"compiled-only fingerprints = (%x, %v) / (%x, %v), want distinct",
+				firstFingerprint,
+				firstErr,
+				secondFingerprint,
+				secondErr,
+			)
+		}
+	})
+
+	t.Run("legacy versus enabled-empty presence", func(t *testing.T) {
+		legacy, enabled := legacyAndEnabledEmptySearchAnalysisSnapshots(
+			t,
+			fieldTestSnapshot("field-fingerprint-presence"),
+		)
+		legacyFingerprint, legacyErr := fieldSnapshotFingerprint(legacy)
+		enabledFingerprint, enabledErr := fieldSnapshotFingerprint(enabled)
+		if legacyErr != nil || enabledErr != nil || legacyFingerprint == enabledFingerprint {
+			t.Fatalf(
+				"presence fingerprints = (%x, %v) / (%x, %v), want distinct",
+				legacyFingerprint,
+				legacyErr,
+				enabledFingerprint,
+				enabledErr,
+			)
+		}
+	})
+}
+
 func TestFieldServiceFilteredCursorAdvancesRawScanPosition(t *testing.T) {
 	t.Parallel()
 

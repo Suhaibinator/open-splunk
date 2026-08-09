@@ -1,8 +1,8 @@
 package searchjobs
 
 import (
-	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"slices"
 	"strings"
@@ -56,72 +56,128 @@ type RetainedKnowledgeExecution struct {
 	KnowledgePrelude knowledgeprogram.Program
 }
 
+// RetainedKnowledgeAuthorityDigests is the fixed-size identity of the exact
+// retained knowledge pair committed by one Manager-minted execution. Present
+// distinguishes a valid legacy execution from a knowledge-enabled execution,
+// including an enabled execution whose program contains no objects. The two
+// digests are zero when Present is false.
+type RetainedKnowledgeAuthorityDigests struct {
+	Present        bool
+	SnapshotDigest [sha256.Size]byte
+	CompiledDigest [sha256.Size]byte
+}
+
+type knowledgeExecutionAuthorityFacts struct {
+	digests       RetainedKnowledgeAuthorityDigests
+	snapshotFacts knowledgesnapshot.RetainedExecutionAuthorityFacts
+}
+
+type retainedKnowledgeAuthorityValidation struct {
+	digests  RetainedKnowledgeAuthorityDigests
+	compiled clickhouse.CompiledQuery
+	summary  *opensplunkv1.KnowledgeSnapshotSummary
+	prelude  knowledgeprogram.Program
+}
+
+type retainedKnowledgePayloadMode uint8
+
+const (
+	retainedKnowledgePayloadNone retainedKnowledgePayloadMode = iota
+	retainedKnowledgePayloadPrelude
+	retainedKnowledgePayloadExecution
+)
+
+// ValidateRetainedKnowledgeAuthority verifies the Manager signature and the
+// complete retained knowledge contract without returning variable-size
+// execution, summary, or program payloads. A valid legacy execution returns a
+// zero-digest result with Present false. Invalid, incomplete, incompatible, or
+// internally inconsistent authority fails closed.
+func (snapshot ExecutionSnapshot) ValidateRetainedKnowledgeAuthority() (
+	RetainedKnowledgeAuthorityDigests,
+	error,
+) {
+	validated, err := snapshot.validateRetainedKnowledgeAuthority(
+		retainedKnowledgePayloadNone,
+	)
+	if err != nil {
+		return RetainedKnowledgeAuthorityDigests{}, err
+	}
+	return validated.digests, nil
+}
+
 // OpenRetainedKnowledgeExecution verifies and opens the exact knowledge
 // authority committed by this manager-minted execution snapshot. A nil result
 // with a nil error identifies a valid legacy execution with no retained
 // knowledge authority. Invalid, incomplete, or internally inconsistent
 // authorities fail closed.
 func (snapshot ExecutionSnapshot) OpenRetainedKnowledgeExecution() (*RetainedKnowledgeExecution, error) {
-	if !snapshot.ValidKnowledgeAuthority() {
-		return nil, ErrResultsUnavailable
+	validated, err := snapshot.validateRetainedKnowledgeAuthority(
+		retainedKnowledgePayloadExecution,
+	)
+	if err != nil {
+		return nil, err
 	}
-	if snapshot.KnowledgeSnapshot.IsZero() {
-		if snapshot.CompiledQuery != nil {
-			return nil, ErrResultsUnavailable
-		}
+	if !validated.digests.Present {
 		return nil, nil
 	}
-	if snapshot.CompiledQuery == nil {
-		return nil, ErrResultsUnavailable
-	}
+	return &RetainedKnowledgeExecution{
+		CompiledQuery:    validated.compiled,
+		KnowledgeSummary: validated.summary,
+		KnowledgePrelude: validated.prelude,
+	}, nil
+}
 
-	authority := snapshot.KnowledgeSnapshot.Proto()
-	if authority == nil ||
-		authority.GetFormatVersion() != knowledgesnapshot.FormatVersion ||
-		authority.GetCompilerCompatibilityVersion() !=
-			knowledgesnapshot.CompilerCompatibilityVersion ||
-		authority.GetTenantId() != snapshot.TenantID ||
-		authority.GetPrincipalId() != snapshot.OwnerID ||
-		authority.GetAppId() == "" ||
-		authority.GetAppId() != snapshot.AppID ||
-		!slices.Equal(
-			authority.GetEffectiveAuthorizedIndexes(),
-			snapshot.EffectiveIndexes,
-		) ||
-		authority.GetBudgetCharges() == nil {
-		return nil, ErrResultsUnavailable
+func (snapshot ExecutionSnapshot) validateRetainedKnowledgeAuthority(
+	payloadMode retainedKnowledgePayloadMode,
+) (retainedKnowledgeAuthorityValidation, error) {
+	facts, ok := snapshot.validatedKnowledgeAuthoritySeal()
+	if !ok {
+		return retainedKnowledgeAuthorityValidation{}, ErrResultsUnavailable
 	}
-	digest := snapshot.KnowledgeSnapshot.Digest()
-	if !bytes.Equal(authority.GetSnapshotSha256(), digest[:]) {
-		return nil, ErrResultsUnavailable
+	validated := retainedKnowledgeAuthorityValidation{digests: facts.digests}
+	if !facts.digests.Present {
+		return validated, nil
 	}
-
+	if payloadMode == retainedKnowledgePayloadNone {
+		return validated, nil
+	}
 	prelude := snapshot.KnowledgeSnapshot.Prelude()
-	if prelude.IsZero() {
-		return nil, ErrResultsUnavailable
+	commitment, commitmentOK := prelude.Commitment()
+	if !commitmentOK || !facts.snapshotFacts.MatchesPreludeAuthority(
+		commitment,
+		prelude.ObjectCount(),
+		prelude.Charges(),
+	) {
+		return retainedKnowledgeAuthorityValidation{}, ErrResultsUnavailable
+	}
+	validated.prelude = prelude
+	if payloadMode == retainedKnowledgePayloadPrelude {
+		return validated, nil
+	}
+	if payloadMode != retainedKnowledgePayloadExecution {
+		return retainedKnowledgeAuthorityValidation{}, ErrResultsUnavailable
 	}
 	compiled, ok := snapshot.CompiledQuery.CloneForExecution()
 	if !ok {
-		return nil, ErrResultsUnavailable
+		return retainedKnowledgeAuthorityValidation{}, ErrResultsUnavailable
+	}
+	compiledDigest, ok := compiled.ExecutionAuthorityDigest()
+	if !ok || compiledDigest != facts.digests.CompiledDigest {
+		return retainedKnowledgeAuthorityValidation{}, ErrResultsUnavailable
 	}
 	evidence, ok := compiled.KnowledgeSnapshotEvidenceFor(prelude)
 	if !ok || evidence.TenantID() != snapshot.TenantID ||
 		!slices.Equal(evidence.EffectiveIndexes(), snapshot.EffectiveIndexes) ||
-		!knowledgeCompilerEvidenceMatches(
-			authority.GetBudgetCharges(),
-			evidence,
-		) {
-		return nil, ErrResultsUnavailable
+		!knowledgeCompilerEvidenceMatches(facts.snapshotFacts, evidence) {
+		return retainedKnowledgeAuthorityValidation{}, ErrResultsUnavailable
 	}
-	summary, err := knowledgesnapshot.CloneSummary(snapshot.KnowledgeSnapshot.Summary())
-	if err != nil {
-		return nil, ErrResultsUnavailable
+	summary := snapshot.KnowledgeSnapshot.Summary()
+	if err := knowledgesnapshot.ValidateSummary(summary); err != nil {
+		return retainedKnowledgeAuthorityValidation{}, ErrResultsUnavailable
 	}
-	return &RetainedKnowledgeExecution{
-		CompiledQuery:    compiled,
-		KnowledgeSummary: summary,
-		KnowledgePrelude: prelude.Clone(),
-	}, nil
+	validated.compiled = compiled
+	validated.summary = summary
+	return validated, nil
 }
 
 // OpenRetainedKnowledgePrelude verifies and opens the exact backend-neutral
@@ -134,32 +190,42 @@ func (snapshot ExecutionSnapshot) OpenRetainedKnowledgePrelude() (
 	bool,
 	error,
 ) {
-	retained, err := snapshot.OpenRetainedKnowledgeExecution()
+	validated, err := snapshot.validateRetainedKnowledgeAuthority(
+		retainedKnowledgePayloadPrelude,
+	)
 	if err != nil {
 		return knowledgeprogram.Program{}, false, err
 	}
-	if retained == nil {
+	if !validated.digests.Present {
 		return knowledgeprogram.Program{}, false, nil
 	}
-	if retained.KnowledgePrelude.IsZero() {
+	if validated.prelude.IsZero() {
 		return knowledgeprogram.Program{}, false, ErrResultsUnavailable
 	}
-	return retained.KnowledgePrelude.Clone(), true, nil
+	return validated.prelude, true, nil
 }
 
 func knowledgeCompilerEvidenceMatches(
-	charges *opensplunkv1.KnowledgeSnapshotBudgetCharges,
+	facts knowledgesnapshot.RetainedExecutionAuthorityFacts,
 	evidence clickhouse.KnowledgeSnapshotEvidence,
 ) bool {
-	return charges != nil &&
-		charges.GetGeneratedOperators() == evidence.GeneratedOperators() &&
-		charges.GetGeneratedFields() == evidence.GeneratedFields() &&
-		charges.GetRegexPrograms() == evidence.RegexPrograms() &&
-		charges.GetRegexWorkUnits() == evidence.RegexWorkUnits() &&
-		charges.GetRegexCaptureBytes() == evidence.RegexCaptureBytes() &&
-		charges.GetScalarExpressions() == evidence.ScalarExpressions() &&
-		charges.GetScalarExpressionNodes() == evidence.ScalarExpressionNodes() &&
-		charges.GetGeneratedSqlBytes() == evidence.GeneratedSQLBytes()
+	commitment, commitmentOK := evidence.KnowledgeProgramCommitment()
+	return evidence.KnowledgeProgramPresent() && commitmentOK &&
+		facts.MatchesPreludeAuthority(
+			commitment,
+			evidence.KnowledgeProgramObjectCount(),
+			evidence.KnowledgeProgramCharges(),
+		) &&
+		facts.MatchesRetainedCompilerBudget(
+			evidence.GeneratedOperators(),
+			evidence.GeneratedFields(),
+			evidence.RegexPrograms(),
+			evidence.RegexWorkUnits(),
+			evidence.RegexCaptureBytes(),
+			evidence.ScalarExpressions(),
+			evidence.ScalarExpressionNodes(),
+			evidence.GeneratedSQLBytes(),
+		)
 }
 
 // Equal reports whether other identifies the same immutable completed-search

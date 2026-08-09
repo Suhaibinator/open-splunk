@@ -247,10 +247,11 @@ func (authority Authority) Prelude() knowledgeprogram.Program {
 // Snapshot is an opaque, immutable finalized snapshot. KO-0G deliberately
 // exposes no public constructor or finalization method for a nonzero value.
 type Snapshot struct {
-	message *opensplunkv1.KnowledgeSnapshot
-	encoded []byte
-	digest  [sha256.Size]byte
-	prelude knowledgeprogram.Program
+	message                *opensplunkv1.KnowledgeSnapshot
+	encoded                []byte
+	digest                 [sha256.Size]byte
+	prelude                knowledgeprogram.Program
+	retainedExecutionFacts RetainedExecutionAuthorityFacts
 }
 
 // Proto returns a detached protobuf representation.
@@ -290,10 +291,11 @@ func (snapshot Snapshot) Clone() Snapshot {
 		return Snapshot{}
 	}
 	return Snapshot{
-		message: message,
-		encoded: bytes.Clone(snapshot.encoded),
-		digest:  snapshot.digest,
-		prelude: snapshot.prelude.Clone(),
+		message:                message,
+		encoded:                bytes.Clone(snapshot.encoded),
+		digest:                 snapshot.digest,
+		prelude:                snapshot.prelude.Clone(),
+		retainedExecutionFacts: snapshot.retainedExecutionFacts,
 	}
 }
 
@@ -1359,12 +1361,18 @@ func digestSnapshot(
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], digestBytes)
-	return Snapshot{
+	result := Snapshot{
 		message: snapshot,
 		encoded: bytes.Clone(encoded),
 		digest:  digest,
 		prelude: prelude.Clone(),
-	}, nil
+	}
+	facts, err := mintRetainedExecutionAuthorityFacts(result)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	result.retainedExecutionFacts = facts
+	return result, nil
 }
 
 func stageForObjectType(objectType opensplunkv1.KnowledgeObjectType) (opensplunkv1.KnowledgeSearchStage, uint8, error) {

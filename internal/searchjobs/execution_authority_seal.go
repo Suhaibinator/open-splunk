@@ -1,7 +1,6 @@
 package searchjobs
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -11,11 +10,13 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 )
 
 const (
 	knowledgeExecutionSigningKeyDomain  = "open-splunk-search-job-knowledge-signing-key-v1"
-	knowledgeExecutionAuthorityDomain   = "open-splunk-search-job-knowledge-execution-authority-v1"
+	knowledgeExecutionAuthorityDomain   = "open-splunk-search-job-knowledge-execution-authority-v2"
 	knowledgeExecutionResultDomain      = "open-splunk-search-job-result-generation-v1"
 	knowledgeExecutionResultNonceDomain = "open-splunk-search-job-result-generation-nonce-v1"
 )
@@ -81,27 +82,28 @@ func deriveKnowledgeExecutionSigningKey(
 // Result-generation metadata is committed here and matched to an acquired pin
 // by ValidFor.
 func (snapshot ExecutionSnapshot) ValidKnowledgeAuthority() bool {
-	hasKnowledge := !snapshot.KnowledgeSnapshot.IsZero()
-	hasCompiled := snapshot.CompiledQuery != nil
-	if hasKnowledge != hasCompiled || snapshot.knowledgeAuthoritySeal.isZero() ||
-		snapshot.knowledgeAuthoritySeal.knowledgeEnabled != hasKnowledge {
-		return false
+	_, valid := snapshot.validatedKnowledgeAuthoritySeal()
+	return valid
+}
+
+func (snapshot ExecutionSnapshot) validatedKnowledgeAuthoritySeal() (
+	knowledgeExecutionAuthorityFacts,
+	bool,
+) {
+	facts, ok := retainedKnowledgeAuthorityFacts(snapshot)
+	if !ok || snapshot.knowledgeAuthoritySeal.isZero() ||
+		snapshot.knowledgeAuthoritySeal.knowledgeEnabled != facts.digests.Present {
+		return knowledgeExecutionAuthorityFacts{}, false
 	}
 	expected, ok := knowledgeExecutionAuthorityDigest(
 		snapshot,
 		snapshot.knowledgeAuthoritySeal.resultDigest,
+		facts,
 	)
-	if !ok || subtle.ConstantTimeCompare(
-		expected[:],
-		snapshot.knowledgeAuthoritySeal.authorityDigest[:],
-	) != 1 {
-		return false
+	if !ok || !snapshot.knowledgeAuthoritySeal.validates(expected) {
+		return knowledgeExecutionAuthorityFacts{}, false
 	}
-	return ed25519.Verify(
-		ed25519.PublicKey(snapshot.knowledgeAuthoritySeal.publicKey[:]),
-		expected[:],
-		snapshot.knowledgeAuthoritySeal.signature[:],
-	)
+	return facts, true
 }
 
 // ValidFor verifies that an acquired result pin is the exact generation,
@@ -158,13 +160,18 @@ func (manager *Manager) sealExecutionSnapshot(
 		resultMetadata.jobID != snapshot.ID || resultMetadata.generation == 0 {
 		return executionResultAuthority{}, false
 	}
-	hasKnowledge := !snapshot.KnowledgeSnapshot.IsZero()
-	if hasKnowledge != (snapshot.CompiledQuery != nil) {
+	facts, ok := retainedKnowledgeAuthorityFacts(*snapshot)
+	if !ok || (facts.digests.Present &&
+		!validRetainedKnowledgeExecutionPair(*snapshot, facts.snapshotFacts)) {
 		return executionResultAuthority{}, false
 	}
 	resultAuthority := manager.mintExecutionResultAuthority(resultMetadata)
 	resultDigest := knowledgeExecutionResultDigest(resultAuthority)
-	authorityDigest, ok := knowledgeExecutionAuthorityDigest(*snapshot, resultDigest)
+	authorityDigest, ok := knowledgeExecutionAuthorityDigest(
+		*snapshot,
+		resultDigest,
+		facts,
+	)
 	if !ok {
 		return executionResultAuthority{}, false
 	}
@@ -177,14 +184,14 @@ func (manager *Manager) sealExecutionSnapshot(
 		return executionResultAuthority{}, false
 	}
 	seal := knowledgeExecutionAuthoritySeal{
-		knowledgeEnabled: hasKnowledge,
+		knowledgeEnabled: facts.digests.Present,
 		authorityDigest:  authorityDigest,
 		resultDigest:     resultDigest,
 	}
 	copy(seal.publicKey[:], publicKey)
 	copy(seal.signature[:], signature)
 	snapshot.knowledgeAuthoritySeal = seal
-	return resultAuthority, snapshot.ValidKnowledgeAuthority()
+	return resultAuthority, seal.validates(authorityDigest)
 }
 
 func (manager *Manager) mintExecutionResultAuthority(
@@ -211,9 +218,11 @@ func cloneExecutionResultAuthority(authority executionResultAuthority) execution
 func knowledgeExecutionAuthorityDigest(
 	snapshot ExecutionSnapshot,
 	resultDigest [sha256.Size]byte,
+	facts knowledgeExecutionAuthorityFacts,
 ) ([sha256.Size]byte, bool) {
 	hasKnowledge := !snapshot.KnowledgeSnapshot.IsZero()
-	if hasKnowledge != (snapshot.CompiledQuery != nil) {
+	if facts.digests.Present != hasKnowledge ||
+		hasKnowledge != (snapshot.CompiledQuery != nil) {
 		return [sha256.Size]byte{}, false
 	}
 
@@ -241,41 +250,61 @@ func knowledgeExecutionAuthorityDigest(
 	}
 	writeKnowledgeSealBool(digest, hasKnowledge)
 	if hasKnowledge {
-		compiledDigest, ok := snapshot.CompiledQuery.ExecutionAuthorityDigest()
-		if !ok {
-			return [sha256.Size]byte{}, false
-		}
-		authority := snapshot.KnowledgeSnapshot.Proto()
-		if authority == nil || authority.GetAppId() == "" ||
-			authority.GetAppId() != snapshot.AppID ||
-			authority.GetTenantId() != snapshot.TenantID ||
-			authority.GetPrincipalId() != snapshot.OwnerID ||
-			!slices.Equal(
-				authority.GetEffectiveAuthorizedIndexes(),
-				snapshot.EffectiveIndexes,
-			) {
-			return [sha256.Size]byte{}, false
-		}
-		snapshotDigest := snapshot.KnowledgeSnapshot.Digest()
-		if !bytes.Equal(authority.GetSnapshotSha256(), snapshotDigest[:]) {
-			return [sha256.Size]byte{}, false
-		}
-		evidence, ok := snapshot.CompiledQuery.KnowledgeSnapshotEvidenceFor(
-			snapshot.KnowledgeSnapshot.Prelude(),
-		)
-		if !ok || evidence.TenantID() != snapshot.TenantID ||
-			!slices.Equal(evidence.EffectiveIndexes(), snapshot.EffectiveIndexes) {
-			return [sha256.Size]byte{}, false
-		}
-		writeKnowledgeSealString(digest, authority.GetAppId())
-		writeKnowledgeSealBytes(digest, compiledDigest[:])
-		writeKnowledgeSealBytes(digest, snapshotDigest[:])
-		writeKnowledgeSealBytes(digest, snapshot.KnowledgeSnapshot.Encoded())
+		writeKnowledgeSealString(digest, snapshot.AppID)
+		writeKnowledgeSealBytes(digest, facts.digests.CompiledDigest[:])
+		writeKnowledgeSealBytes(digest, facts.digests.SnapshotDigest[:])
+		encodedDigest := facts.snapshotFacts.EncodedDigest()
+		writeKnowledgeSealBytes(digest, encodedDigest[:])
 	}
 	writeKnowledgeSealBytes(digest, resultDigest[:])
 	var result [sha256.Size]byte
 	digest.Sum(result[:0])
 	return result, true
+}
+
+func retainedKnowledgeAuthorityFacts(
+	snapshot ExecutionSnapshot,
+) (knowledgeExecutionAuthorityFacts, bool) {
+	hasKnowledge := !snapshot.KnowledgeSnapshot.IsZero()
+	if hasKnowledge != (snapshot.CompiledQuery != nil) {
+		return knowledgeExecutionAuthorityFacts{}, false
+	}
+	facts := knowledgeExecutionAuthorityFacts{
+		digests: RetainedKnowledgeAuthorityDigests{Present: hasKnowledge},
+	}
+	if !hasKnowledge {
+		return facts, true
+	}
+	snapshotFacts, ok := snapshot.KnowledgeSnapshot.ValidateRetainedExecutionAuthority(
+		snapshot.TenantID,
+		snapshot.OwnerID,
+		snapshot.AppID,
+		snapshot.EffectiveIndexes,
+	)
+	if !ok {
+		return knowledgeExecutionAuthorityFacts{}, false
+	}
+	compiledDigest, ok := snapshot.CompiledQuery.ExecutionAuthorityDigest()
+	if !ok {
+		return knowledgeExecutionAuthorityFacts{}, false
+	}
+	facts.snapshotFacts = snapshotFacts
+	facts.digests.SnapshotDigest = snapshotFacts.SnapshotDigest()
+	facts.digests.CompiledDigest = compiledDigest
+	return facts, true
+}
+
+func validRetainedKnowledgeExecutionPair(
+	snapshot ExecutionSnapshot,
+	facts knowledgesnapshot.RetainedExecutionAuthorityFacts,
+) bool {
+	if snapshot.CompiledQuery == nil {
+		return false
+	}
+	evidence, ok := snapshot.CompiledQuery.KnowledgeSnapshotEvidence()
+	return ok && evidence.TenantID() == snapshot.TenantID &&
+		slices.Equal(evidence.EffectiveIndexes(), snapshot.EffectiveIndexes) &&
+		knowledgeCompilerEvidenceMatches(facts, evidence)
 }
 
 func knowledgeExecutionResultDigest(authority executionResultAuthority) [sha256.Size]byte {
@@ -326,6 +355,21 @@ func (seal knowledgeExecutionAuthoritySeal) equal(other knowledgeExecutionAuthor
 		subtle.ConstantTimeCompare(seal.signature[:], other.signature[:]) == 1 &&
 		subtle.ConstantTimeCompare(seal.authorityDigest[:], other.authorityDigest[:]) == 1 &&
 		subtle.ConstantTimeCompare(seal.resultDigest[:], other.resultDigest[:]) == 1
+}
+
+func (seal knowledgeExecutionAuthoritySeal) validates(
+	expected [sha256.Size]byte,
+) bool {
+	return !seal.isZero() &&
+		subtle.ConstantTimeCompare(
+			expected[:],
+			seal.authorityDigest[:],
+		) == 1 &&
+		ed25519.Verify(
+			ed25519.PublicKey(seal.publicKey[:]),
+			expected[:],
+			seal.signature[:],
+		)
 }
 
 func writeKnowledgeSealTime(writer hash.Hash, value time.Time) bool {

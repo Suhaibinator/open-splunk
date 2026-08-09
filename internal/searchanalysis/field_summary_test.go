@@ -117,6 +117,100 @@ func TestFieldServiceSummaryBuildsAtomicExactResultAndCachesMaximumPrefix(t *tes
 	}
 }
 
+func TestFieldServiceSummaryRejectsInvalidManagerAuthorityBeforeCacheReuse(t *testing.T) {
+	template := fieldTestSnapshot("summary-invalid-authority")
+	signed, err := sealSearchAnalysisSnapshot(template)
+	if err != nil {
+		t.Fatalf("sealSearchAnalysisSnapshot(): %v", err)
+	}
+	tampered := signed
+	tampered.AppID = "app_000000000200000000002A"
+	tests := []struct {
+		name    string
+		invalid searchjobs.ExecutionSnapshot
+	}{
+		{name: "unsigned", invalid: unsignedSearchAnalysisSnapshot(signed)},
+		{name: "tampered signed AppID", invalid: tampered},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			searches := &rawSearchAnalysisSnapshots{
+				snapshots: []searchjobs.ExecutionSnapshot{signed, test.invalid},
+			}
+			compiler := &fakeFieldSummaryCompiler{fieldKnown: true}
+			executor := &fakeFieldSummaryExecutor{result: zeroFieldSummaryResult("field")}
+			service := newFieldSummaryTestService(t, signed, FieldConfig{
+				Searches: searches,
+				Compiler: compiler,
+				Executor: executor,
+			})
+			request := GetFieldSummaryRequest{SearchJobID: signed.ID, FieldName: "field"}
+			if _, err := service.GetFieldSummary(
+				context.Background(),
+				fieldAccess(signed),
+				request,
+			); err != nil {
+				t.Fatalf("prime GetFieldSummary() error = %v", err)
+			}
+			got, err := service.GetFieldSummary(
+				context.Background(),
+				fieldAccess(signed),
+				request,
+			)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) {
+				t.Fatalf("cached GetFieldSummary() = (%#v, %v), want zero/ErrInvalidResult", got, err)
+			}
+			if !reflect.DeepEqual(got, FieldSummary{}) {
+				t.Fatalf("invalid-authority summary = %#v, want zero", got)
+			}
+			if compiler.Calls() != 1 || executor.Calls() != 1 || searches.Calls() != 2 {
+				t.Fatalf(
+					"calls = compiler %d executor %d snapshots %d, want 1/1/2",
+					compiler.Calls(),
+					executor.Calls(),
+					searches.Calls(),
+				)
+			}
+		})
+	}
+}
+
+func TestFieldServiceSummaryBindsChangedEnabledEmptyAuthorityInCacheKey(t *testing.T) {
+	first, second := changedEnabledEmptySearchAnalysisSnapshots(
+		t,
+		fieldTestSnapshot("summary-enabled-empty-authority"),
+	)
+	searches := &rawSearchAnalysisSnapshots{
+		snapshots: []searchjobs.ExecutionSnapshot{first, second},
+	}
+	compiler := &fakeFieldSummaryCompiler{fieldKnown: true}
+	executor := &fakeFieldSummaryExecutor{result: zeroFieldSummaryResult("field")}
+	service := newFieldSummaryTestService(t, first, FieldConfig{
+		Searches: searches,
+		Compiler: compiler,
+		Executor: executor,
+	})
+	request := GetFieldSummaryRequest{SearchJobID: first.ID, FieldName: "field"}
+	for attempt := range 2 {
+		if _, err := service.GetFieldSummary(
+			context.Background(),
+			fieldAccess(first),
+			request,
+		); err != nil {
+			t.Fatalf("GetFieldSummary(attempt %d) error = %v", attempt, err)
+		}
+	}
+	if compiler.Calls() != 2 || executor.Calls() != 2 || searches.Calls() != 2 {
+		t.Fatalf(
+			"calls = compiler %d executor %d snapshots %d, want 2/2/2",
+			compiler.Calls(),
+			executor.Calls(),
+			searches.Calls(),
+		)
+	}
+}
+
 func TestFieldServiceSummaryValidatesRequestBeforeLookupAndPreservesExactFieldName(t *testing.T) {
 	snapshot := fieldTestSnapshot("summary-validation")
 	searches := &fakeFieldSearches{snapshot: snapshot}

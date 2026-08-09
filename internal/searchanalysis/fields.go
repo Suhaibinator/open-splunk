@@ -603,7 +603,10 @@ func (service *FieldService) ListFields(ctx context.Context, access searchjobs.A
 	if snapshot.ID != normalized.jobID || snapshot.TenantID != access.TenantID || snapshot.OwnerID != access.OwnerID {
 		return FieldPage{}, fmt.Errorf("%w: completed execution snapshot identity changed", searchjobs.ErrInvalidResult)
 	}
-	fingerprint := fieldSnapshotFingerprint(snapshot)
+	fingerprint, err := fieldSnapshotFingerprint(snapshot)
+	if err != nil {
+		return FieldPage{}, err
+	}
 	key := fieldCacheKey{
 		domain: fieldCatalogCompletedSearch, tenantID: strings.Clone(access.TenantID),
 		ownerID: strings.Clone(access.OwnerID), jobID: strings.Clone(normalized.jobID),
@@ -1361,12 +1364,21 @@ func (service *FieldService) decodeFieldCursor(token string) (fieldCursorPayload
 	return cursor, nil
 }
 
-func fieldSnapshotFingerprint(snapshot searchjobs.ExecutionSnapshot) [sha256.Size]byte {
+func fieldSnapshotFingerprint(snapshot searchjobs.ExecutionSnapshot) ([sha256.Size]byte, error) {
+	authority, err := snapshot.ValidateRetainedKnowledgeAuthority()
+	if err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf(
+			"%w: completed execution snapshot authority is invalid",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+
 	hasher := sha256.New()
-	writeFingerprintString(hasher, "open-splunk/field-snapshot/v1")
+	writeFingerprintString(hasher, "open-splunk/field-snapshot/v2")
 	writeFingerprintString(hasher, snapshot.ID)
 	writeFingerprintString(hasher, snapshot.TenantID)
 	writeFingerprintString(hasher, snapshot.OwnerID)
+	writeFingerprintString(hasher, snapshot.AppID)
 	writeFingerprintString(hasher, snapshot.SPL)
 	indexes := slices.Clone(snapshot.EffectiveIndexes)
 	sort.Strings(indexes)
@@ -1383,9 +1395,14 @@ func fieldSnapshotFingerprint(snapshot searchjobs.ExecutionSnapshot) [sha256.Siz
 	writeFingerprintUint64(hasher, snapshot.VisibilityCutoff)
 	writeFingerprintTime(hasher, snapshot.FinishedAt)
 	writeFingerprintTime(hasher, snapshot.ExpiresAt)
+	writeFingerprintBool(hasher, authority.Present)
+	if authority.Present {
+		writeFingerprintBytes(hasher, authority.SnapshotDigest[:])
+		writeFingerprintBytes(hasher, authority.CompiledDigest[:])
+	}
 	var result [sha256.Size]byte
 	copy(result[:], hasher.Sum(nil))
-	return result
+	return result, nil
 }
 
 func fieldAccessFingerprint(tenantID, ownerID string) string {
@@ -1414,8 +1431,12 @@ type fingerprintWriter interface {
 }
 
 func writeFingerprintString(writer fingerprintWriter, value string) {
+	writeFingerprintBytes(writer, []byte(value))
+}
+
+func writeFingerprintBytes(writer fingerprintWriter, value []byte) {
 	writeFingerprintUint64(writer, uint64(len(value)))
-	_, _ = writer.Write([]byte(value))
+	_, _ = writer.Write(value)
 }
 
 func writeFingerprintTime(writer fingerprintWriter, value time.Time) {
@@ -1426,4 +1447,12 @@ func writeFingerprintUint64(writer fingerprintWriter, value uint64) {
 	var encoded [8]byte
 	binary.BigEndian.PutUint64(encoded[:], value)
 	_, _ = writer.Write(encoded[:])
+}
+
+func writeFingerprintBool(writer fingerprintWriter, value bool) {
+	if value {
+		writeFingerprintUint64(writer, 1)
+		return
+	}
+	writeFingerprintUint64(writer, 0)
 }

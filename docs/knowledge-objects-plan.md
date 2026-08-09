@@ -1266,6 +1266,17 @@ race tests prove that mutations of actual lowered knowledge regex and selector
 arguments fail before those boundaries while both global nonempty gates remain
 closed.
 
+Completed-search field catalog and field-summary cache keys now validate the
+Manager-signed retained authority before any cache or cursor reuse and bind the
+app, explicit legacy-versus-enabled presence bit, snapshot digest, and compiled
+execution digest. Finalized snapshots mint an opaque fixed-size retention fact
+set once; the version-two Manager seal commits those facts, the complete public
+execution tuple, and the result generation. Repeated facts-only validation no
+longer clones the snapshot protobuf, program, summary, or up-to-4-MiB wire
+encoding. Named allocation, tamper, snapshot-only rotation, compiled-only
+rotation, enabled-empty, cache, and cursor tests pass; nonempty gates remain
+unchanged.
+
 The backend-neutral knowledge program now also exposes a publication-facing
 compiler that derives the exact canonical `FIELD_INPUT` graph from a complete
 winner set instead of accepting dependency claims. The existing snapshot-facing

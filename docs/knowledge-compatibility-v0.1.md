@@ -410,6 +410,16 @@ pagination cursors, snapshot caches, and retained-job admission compare the
 revision and commitment together; the numeric revision alone is never a
 snapshot identity.
 
+Completed-search analysis caches additionally verify the private Manager seal
+before lookup and bind the exact application, an explicit knowledge-presence
+bit, the finalized snapshot digest, and the compiler execution digest. A valid
+legacy snapshot and an enabled snapshot with an empty program are distinct.
+Finalization reduces the immutable snapshot, program, retained compiler
+counters, and deterministic encoding to fixed-size retention facts; repeated
+cache and cursor checks validate those signed facts without cloning the
+variable-size snapshot payload. Invalid, unsigned, stripped, or independently
+rotated snapshot/compiler pairs fail before cached analysis can be reused.
+
 Every immutable object version has one immutable lifecycle record. Draft and
 active versions carry no transition marker. A disabled version carries the
 exact time of the disable transition; later body, metadata, or scope mutations
