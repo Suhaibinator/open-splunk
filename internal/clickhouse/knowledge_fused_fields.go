@@ -1,8 +1,11 @@
 package clickhouse
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,52 +18,137 @@ import (
 )
 
 const (
-	// A field assignment keeps produced presence separate from its Dynamic
-	// value. Dynamic null is a present value; only the first element says that
-	// the assignment produced nothing and therefore may not erase a prior
-	// destination.
-	knowledgeFieldAssignmentProducedElement           = 1
-	knowledgeFieldAssignmentValueElement              = 2
-	knowledgeFieldAssignmentStoredTypeElement         = 3
-	knowledgeFieldAssignmentSelectorInputBytesElement = 4
-	knowledgeFieldAssignmentSelectorQueryUnitsElement = 5
+	compiledKnowledgeFieldInputStateDomain = "open-splunk/clickhouse/knowledge-field-input-state/v1"
 
-	knowledgeFieldBindingAssignmentElement         = 1
-	knowledgeFieldBindingPreviousValueElement      = 2
-	knowledgeFieldBindingPreviousPresentElement    = 3
-	knowledgeFieldBindingPreviousStoredTypeElement = 4
-	knowledgeFieldBindingPreviousDescendantElement = 5
+	// A field candidate keeps the canonical six-element source tuple separate
+	// from its selector charges. The nested source tuple distinguishes missing
+	// from present Dynamic null without conflating either with overwrite state.
+	knowledgeFieldAssignmentSourceElement             = 1
+	knowledgeFieldAssignmentSelectorInputBytesElement = 2
+	knowledgeFieldAssignmentSelectorQueryUnitsElement = 3
+
+	knowledgeFieldBindingSourceElement             = 1
+	knowledgeFieldBindingWroteElement              = 2
+	knowledgeFieldBindingSelectorInputBytesElement = 3
+	knowledgeFieldBindingSelectorQueryUnitsElement = 4
 
 	maxCompiledKnowledgeFieldAssignmentSQLBytes = 64 << 10
 )
+
+func compileKnowledgeFieldInputStateAuthority(
+	state compileState,
+	inputFields []string,
+) ([sha256.Size]byte, error) {
+	if len(inputFields) > knowledgeprogram.MaximumGeneratedFields {
+		return [sha256.Size]byte{}, errors.New(
+			"compile ClickHouse knowledge field input authority: too many inputs",
+		)
+	}
+	digest := sha256.New()
+	writeTokenPart(digest, compiledKnowledgeFieldInputStateDomain)
+	if state.context == nil {
+		writeBool(digest, false)
+	} else {
+		writeBool(digest, true)
+		writeInt64(digest, state.context.searchStartUnix)
+		writeTokenPart(digest, state.context.searchTimezone)
+	}
+	writeUint64(digest, uint64(len(inputFields)))
+	for _, name := range inputFields {
+		writeTokenPart(digest, name)
+		fieldRef, err := plan.ResolveField(name, spl.Range{})
+		if err != nil {
+			return [sha256.Size]byte{}, fmt.Errorf(
+				"compile ClickHouse knowledge field input authority for %q: %w",
+				name,
+				err,
+			)
+		}
+		field, present, err := resolveCompiledField(fieldRef, state)
+		if err != nil {
+			return [sha256.Size]byte{}, err
+		}
+		writeBool(digest, present)
+		if present && !writeKnowledgeFieldStateAuthority(digest, field) {
+			return [sha256.Size]byte{}, errors.New(
+				"compile ClickHouse knowledge field input authority: unsupported field argument",
+			)
+		}
+	}
+	var authority [sha256.Size]byte
+	digest.Sum(authority[:0])
+	return authority, nil
+}
+
+func writeKnowledgeFieldStateAuthority(writer hash.Hash, field fieldState) bool {
+	writeTokenPart(writer, field.valueSQL)
+	writeTokenPart(writer, field.exactNumericKeySQL)
+	writeTokenPart(writer, field.dynamicNumericEligibleSQL)
+	writeUint64(writer, field.maxStringBytes)
+	writeTokenPart(writer, field.textEligibleSQL)
+	writeBool(writer, field.rawTextIndexEligible)
+	writeUint64(writer, uint64(field.dynamicDomain))
+	writeBool(writer, field.numericIntegral)
+	writeBool(writer, field.mvCountOneOrNull)
+	writeTokenPart(writer, field.dynamicTypeSQL)
+	writeTokenPart(writer, field.storedTypeSQL)
+	writeTokenPart(writer, field.existsSQL)
+	if !writeKnowledgeFieldStateArguments(writer, field.existsArgs) {
+		return false
+	}
+	writeTokenPart(writer, field.descendantSQL)
+	if !writeKnowledgeFieldStateArguments(writer, field.descendantArgs) {
+		return false
+	}
+	writeStringSlice(writer, field.storedPath.logicalSegments)
+	writeTokenPart(writer, field.storedPath.normalizedExactPath)
+	writeTokenPart(writer, field.storedPath.normalizedDescendantPrefix)
+	writeStringSlice(writer, field.storedPath.physicalSegments)
+	writeTokenPart(writer, field.relativeFieldNamesSQL)
+	writeTokenPart(writer, field.relativeFieldTypesSQL)
+	writeTokenPart(writer, field.fieldMetadataVersionSQL)
+	writeUint64(writer, uint64(field.kind))
+	writeBool(writer, field.caseSensitive)
+	writeTokenPart(writer, field.numberType)
+	writeBool(writer, field.numericSort)
+	writeBool(writer, field.canonicalTime)
+	writeBool(writer, field.alwaysNull)
+	writeBool(writer, field.materializeForPredicate)
+	return true
+}
+
+func writeKnowledgeFieldStateArguments(writer hash.Hash, arguments []any) bool {
+	writeBool(writer, arguments == nil)
+	writeUint64(writer, uint64(len(arguments)))
+	for _, argument := range arguments {
+		if !writeCompiledArgument(writer, argument, 0) {
+			return false
+		}
+	}
+	return true
+}
 
 // compiledKnowledgeFieldAssignment is one selector-guarded, row-local
 // assignment. The tuple is independent of destination overwrite state, so a
 // fused stage can compile every assignment against exactly the same frozen
 // input and publish all destinations atomically.
 type compiledKnowledgeFieldAssignment struct {
-	sql            string
-	args           []any
-	destination    plan.FieldRef
-	selector       knowledgeprogram.Selector
-	overwrite      knowledgeprogram.OverwriteBehavior
-	origin         knowledgeprogram.Origin
-	maxStringBytes uint64
-	alias          knowledgeprogram.Alias
-	calculated     knowledgeprogram.Calculated
+	selectorSQL compiledKnowledgeSelector
+	destination plan.FieldRef
+	selector    knowledgeprogram.Selector
+	overwrite   knowledgeprogram.OverwriteBehavior
+	origin      knowledgeprogram.Origin
+	source      compiledKnowledgeFieldSource
+	alias       knowledgeprogram.Alias
+	calculated  knowledgeprogram.Calculated
 }
 
 func (compiled compiledKnowledgeFieldAssignment) producedSQL(resultSQL string) string {
-	return knowledgeTupleElementUInt8(resultSQL, knowledgeFieldAssignmentProducedElement)
+	return compiled.source.producedSQL(compiled.sourceResultSQL(resultSQL))
 }
 
-func (compiled compiledKnowledgeFieldAssignment) valueSQL(resultSQL string) string {
-	return "tupleElement(" + resultSQL + ", " +
-		strconv.Itoa(knowledgeFieldAssignmentValueElement) + ")"
-}
-
-func (compiled compiledKnowledgeFieldAssignment) storedTypeSQL(resultSQL string) string {
-	return knowledgeTupleElementUInt8(resultSQL, knowledgeFieldAssignmentStoredTypeElement)
+func (compiled compiledKnowledgeFieldAssignment) sourceResultSQL(resultSQL string) string {
+	return knowledgeTupleElement(resultSQL, knowledgeFieldAssignmentSourceElement)
 }
 
 func (compiled compiledKnowledgeFieldAssignment) selectorInputBytesSQL(resultSQL string) string {
@@ -97,11 +185,10 @@ type compiledKnowledgeFusedFieldProjection struct {
 }
 
 // compileKnowledgeAliasAssignment lowers one immutable alias against the
-// frozen extraction-stage state. Direct scalar, array, and empty-object values
-// remain exact Dynamic values. Non-empty object parents are flattened in the
-// source JSON representation; the central nonempty-finalization gate must stay
-// closed until its object materializer remaps the retained descendants to the
-// destination instead of publishing the parent's Dynamic None value.
+// frozen extraction-stage state. Exact leaves retain their Dynamic value;
+// flattened object parents retain a lazy materializer plus relative metadata
+// sidecars. The central nonempty-finalization gate remains closed until result
+// transport and runtime copy accounting consume that authority end to end.
 func compileKnowledgeAliasAssignment(
 	operation knowledgeprogram.Alias,
 	state compileState,
@@ -130,12 +217,33 @@ func compileKnowledgeAliasAssignment(
 	if present {
 		value = compiledScalarFromField(field)
 	}
+	sourceValue, err := compileKnowledgeFieldSourceFromScalar(value, true)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
+	inputStateAuthority, err := compileKnowledgeFieldInputStateAuthority(
+		state,
+		[]string{operation.Source()},
+	)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
+	maxStringBytes := compiledScalarStringByteBound(value)
+	sourceValue, err = authorizeCompiledKnowledgeFieldSource(
+		sourceValue,
+		"field:"+operation.Source(),
+		inputStateAuthority,
+		maxStringBytes,
+	)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
 	compiled, err := compileKnowledgeFieldAssignment(
 		operation.Selector(),
 		operation.Destination(),
 		operation.Overwrite(),
 		operation.Origin(),
-		value,
+		sourceValue,
 	)
 	if err != nil {
 		return compiledKnowledgeFieldAssignment{}, err
@@ -169,12 +277,34 @@ func compileKnowledgeCalculatedAssignment(
 	if err != nil {
 		return compiledKnowledgeFieldAssignment{}, err
 	}
+	_, directField := expression.(*plan.ScalarFieldExpression)
+	sourceValue, err := compileKnowledgeFieldSourceFromScalar(value, directField)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
+	inputStateAuthority, err := compileKnowledgeFieldInputStateAuthority(
+		state,
+		operation.InputFields(),
+	)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
+	maxStringBytes := compiledScalarStringByteBound(value)
+	sourceValue, err = authorizeCompiledKnowledgeFieldSource(
+		sourceValue,
+		"expression:"+operation.Expression(),
+		inputStateAuthority,
+		maxStringBytes,
+	)
+	if err != nil {
+		return compiledKnowledgeFieldAssignment{}, err
+	}
 	compiled, err := compileKnowledgeFieldAssignment(
 		operation.Selector(),
 		operation.Destination(),
 		operation.Overwrite(),
 		operation.Origin(),
-		value,
+		sourceValue,
 	)
 	if err != nil {
 		return compiledKnowledgeFieldAssignment{}, err
@@ -188,7 +318,7 @@ func compileKnowledgeFieldAssignment(
 	destinationName string,
 	overwrite knowledgeprogram.OverwriteBehavior,
 	origin knowledgeprogram.Origin,
-	value compiledScalar,
+	source compiledKnowledgeFieldSource,
 ) (compiledKnowledgeFieldAssignment, error) {
 	destination, err := plan.ResolveField(destinationName, spl.Range{})
 	if err != nil || destination.Canonical || destination.Name != destinationName {
@@ -208,73 +338,73 @@ func compileKnowledgeFieldAssignment(
 		)
 	}
 
-	const (
-		selectorVariable = "__os_ko_field_selector"
-		valueVariable    = "__os_ko_field_value"
-		presentVariable  = "__os_ko_field_present"
-		typeVariable     = "__os_ko_field_type"
-	)
-	presenceSQL, presenceArgs := knowledgeScalarPresenceSQL(value)
-	typeSQL, typeArgs, err := knowledgeScalarStoredTypeSQL(value, valueVariable)
-	if err != nil {
-		return compiledKnowledgeFieldAssignment{}, err
-	}
-
-	selected := "tuple(" +
-		"toUInt8(ifNull(" + presentVariable + ", 0)), " +
-		"if(ifNull(" + presentVariable + ", 0), " + valueVariable +
-		", CAST(NULL AS Dynamic)), " +
-		"toUInt8(if(ifNull(" + presentVariable + ", 0), " + typeVariable + ", 0)), " +
-		"toUInt128(tupleElement(" + selectorVariable + ", 2)), " +
-		"toUInt128(tupleElement(" + selectorVariable + ", 3)))"
-	selected = bindSQLExpressions(
-		[]string{presentVariable, typeVariable},
-		[]string{presenceSQL, typeSQL},
-		selected,
-	)
-	selected = bindSQLExpressions(
-		[]string{valueVariable},
-		[]string{"CAST(" + value.valueSQL + " AS Dynamic)"},
-		selected,
-	)
-	result := "if(tupleElement(" + selectorVariable + ", 1) != 0, " + selected +
-		", " + knowledgeFieldNoAssignmentTuple(selectorVariable) + ")"
-	result = bindSQLExpressions(
-		[]string{selectorVariable},
-		[]string{selector.sql},
-		result,
-	)
-	if len(result) > maxCompiledKnowledgeFieldAssignmentSQLBytes {
-		return compiledKnowledgeFieldAssignment{}, errors.New(
-			"compile ClickHouse knowledge field assignment: generated SQL exceeds the per-object limit",
-		)
-	}
-
-	// Lambda bodies precede bound values. Presence and semantic-type
-	// placeholders occur inside the value lambda body, followed by the scalar
-	// value itself and finally the selector authority.
-	args := make([]any, 0,
-		len(presenceArgs)+len(typeArgs)+len(value.valueArgs)+len(selector.args),
-	)
-	args = append(args, presenceArgs...)
-	args = append(args, typeArgs...)
-	args = append(args, value.valueArgs...)
-	args = append(args, selector.args...)
 	return compiledKnowledgeFieldAssignment{
-		sql:            result,
-		args:           args,
-		destination:    destination,
-		selector:       selectorAuthority,
-		overwrite:      overwrite,
-		origin:         origin,
-		maxStringBytes: compiledScalarStringByteBound(value),
+		selectorSQL: selector,
+		destination: destination,
+		selector:    selectorAuthority,
+		overwrite:   overwrite,
+		origin:      origin,
+		source:      source,
 	}, nil
 }
 
-func knowledgeFieldNoAssignmentTuple(selectorVariable string) string {
-	return "tuple(toUInt8(0), CAST(NULL AS Dynamic), toUInt8(0), " +
+type compiledKnowledgeFieldCandidate struct {
+	sql  string
+	args []any
+}
+
+// compileKnowledgeFieldCandidate keeps the expensive source tuple behind both
+// selector and overwrite eligibility. The returned expression is always
+// evaluated so its selector charges remain authoritative, but selector-false
+// and PreserveExisting-blocked rows return the typed missing tuple without
+// evaluating a calculated value or stored-container materializer.
+func compileKnowledgeFieldCandidate(
+	assignment compiledKnowledgeFieldAssignment,
+	previous compiledKnowledgeFieldSource,
+) (compiledKnowledgeFieldCandidate, error) {
+	if assignment.selectorSQL.sql == "" || assignment.source.sql == "" {
+		return compiledKnowledgeFieldCandidate{}, errors.New(
+			"compile ClickHouse knowledge field candidate: authority is incomplete",
+		)
+	}
+
+	selectedSource := assignment.source.sql
+	args := make([]any, 0,
+		len(assignment.source.args)+len(previous.presenceArgs)+
+			len(assignment.selectorSQL.args),
+	)
+	args = append(args, assignment.source.args...)
+	if assignment.overwrite == knowledgeprogram.PreserveExisting {
+		const previousPresentVariable = "__os_ko_field_previous_present"
+		selectedSource = "if(toUInt8(ifNull(" + previousPresentVariable +
+			", 0)) = 0, " + selectedSource + ", " +
+			knowledgeMissingFieldSourceSQL() + ")"
+		selectedSource = bindSQLExpressions(
+			[]string{previousPresentVariable},
+			[]string{previous.presenceSQL},
+			selectedSource,
+		)
+		args = append(args, previous.presenceArgs...)
+	}
+
+	const selectorVariable = "__os_ko_field_selector"
+	result := "tuple(if(tupleElement(" + selectorVariable + ", 1) != 0, " +
+		selectedSource + ", " + knowledgeMissingFieldSourceSQL() + "), " +
 		"toUInt128(tupleElement(" + selectorVariable + ", 2)), " +
 		"toUInt128(tupleElement(" + selectorVariable + ", 3)))"
+	result = bindSQLExpressions(
+		[]string{selectorVariable},
+		[]string{assignment.selectorSQL.sql},
+		result,
+	)
+	args = append(args, assignment.selectorSQL.args...)
+	if len(result) > maxCompiledKnowledgeFieldAssignmentSQLBytes ||
+		strings.Count(result, "?") != len(args) {
+		return compiledKnowledgeFieldCandidate{}, errors.New(
+			"compile ClickHouse knowledge field candidate: generated SQL or arguments are invalid",
+		)
+	}
+	return compiledKnowledgeFieldCandidate{sql: result, args: args}, nil
 }
 
 func knowledgeScalarPresenceSQL(value compiledScalar) (string, []any) {
@@ -347,6 +477,9 @@ func knowledgeFieldStateFromScalar(value compiledScalar) fieldState {
 		descendantSQL:           value.descendantSQL,
 		descendantArgs:          slices.Clone(value.descendantArgs),
 		storedPath:              value.storedPath.clone(),
+		relativeFieldNamesSQL:   value.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:   value.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL: value.fieldMetadataVersionSQL,
 		kind:                    value.kind,
 		numberType:              value.numberType,
 		alwaysNull:              value.alwaysNull,
@@ -461,26 +594,12 @@ func compileKnowledgeCalculatedStage(
 	return result, nil
 }
 
-type compiledKnowledgeFieldMerge struct {
-	assignment            compiledKnowledgeFieldAssignment
-	bindingAlias          string
-	bindingSQL            string
-	args                  []any
-	writeSQL              string
-	writtenValueSQL       string
-	writtenTypeSQL        string
-	previousValueSQL      string
-	previousPresentSQL    string
-	previousTypeSQL       string
-	previousDescendantSQL string
-	maxStringBytes        uint64
-	stage                 int
-	index                 int
-}
-
 type compiledKnowledgeFieldDestinationMerge struct {
 	destination          plan.FieldRef
-	candidates           []compiledKnowledgeFieldMerge
+	candidates           []compiledKnowledgeFieldAssignment
+	bindingAlias         string
+	bindingSQL           string
+	args                 []any
 	outputValueSQL       string
 	existsAlias          string
 	existsProjection     string
@@ -488,6 +607,12 @@ type compiledKnowledgeFieldDestinationMerge struct {
 	typeProjection       string
 	descendantAlias      string
 	descendantProjection string
+	namesAlias           string
+	namesProjection      string
+	typesAlias           string
+	typesProjection      string
+	metadataAlias        string
+	metadataProjection   string
 	maxStringBytes       uint64
 }
 
@@ -516,7 +641,6 @@ func compileKnowledgeFusedFieldProjection(
 	if exposesRawFieldsPayload(state) {
 		dropRawFieldsPayload(&next)
 	}
-	merges := make([]compiledKnowledgeFieldMerge, 0, len(assignments))
 	aliases := make([]knowledgeprogram.Alias, 0, len(assignments))
 	calculated := make([]knowledgeprogram.Calculated, 0, len(assignments))
 	groups := make([]compiledKnowledgeFieldDestinationMerge, 0, len(assignments))
@@ -524,14 +648,14 @@ func compileKnowledgeFusedFieldProjection(
 	for index, assignment := range assignments {
 		switch label {
 		case "alias":
-			if !knowledgeAliasLoweringProofMatches(assignment) {
+			if !knowledgeAliasLoweringProofMatches(assignment, state) {
 				return compiledKnowledgeFusedFieldProjection{}, errors.New(
 					"compile ClickHouse knowledge fused field stage: alias lowering proof is invalid",
 				)
 			}
 			aliases = append(aliases, assignment.alias)
 		case "calculated":
-			if !knowledgeCalculatedLoweringProofMatches(assignment) {
+			if !knowledgeCalculatedLoweringProofMatches(assignment, state) {
 				return compiledKnowledgeFusedFieldProjection{}, errors.New(
 					"compile ClickHouse knowledge fused field stage: calculated lowering proof is invalid",
 				)
@@ -548,11 +672,6 @@ func compileKnowledgeFusedFieldProjection(
 			)
 		}
 		name := assignment.destination.Name
-		merge, err := compileKnowledgeFieldMerge(assignment, state, stage, index)
-		if err != nil {
-			return compiledKnowledgeFusedFieldProjection{}, err
-		}
-		merges = append(merges, merge)
 		groupIndex, grouped := groupByDestination[name]
 		if !grouped {
 			groupIndex = len(groups)
@@ -562,17 +681,22 @@ func compileKnowledgeFusedFieldProjection(
 			})
 		}
 		for _, existing := range groups[groupIndex].candidates {
-			if !existing.assignment.selector.ProvablyDisjoint(merge.assignment.selector) {
+			if !existing.selector.ProvablyDisjoint(assignment.selector) {
 				return compiledKnowledgeFusedFieldProjection{}, fmt.Errorf(
 					"compile ClickHouse knowledge fused field stage: repeated destination %q is not provably disjoint",
 					name,
 				)
 			}
 		}
-		groups[groupIndex].candidates = append(groups[groupIndex].candidates, merge)
+		groups[groupIndex].candidates = append(groups[groupIndex].candidates, assignment)
 	}
 	for index := range groups {
-		if err := finalizeKnowledgeFieldDestinationMerge(&groups[index]); err != nil {
+		if err := compileKnowledgeFieldDestinationMerge(
+			&groups[index],
+			state,
+			stage,
+			index,
+		); err != nil {
 			return compiledKnowledgeFusedFieldProjection{}, err
 		}
 
@@ -590,6 +714,9 @@ func compileKnowledgeFusedFieldProjection(
 			storedTypeSQL:           groups[index].typeAlias,
 			existsSQL:               groups[index].existsAlias,
 			descendantSQL:           groups[index].descendantAlias,
+			relativeFieldNamesSQL:   groups[index].namesAlias,
+			relativeFieldTypesSQL:   groups[index].typesAlias,
+			fieldMetadataVersionSQL: groups[index].metadataAlias,
 			kind:                    fieldKindDynamic,
 			caseSensitive:           false,
 			materializeForPredicate: true,
@@ -604,13 +731,16 @@ func compileKnowledgeFusedFieldProjection(
 			merge.existsAlias,
 			merge.typeAlias,
 			merge.descendantAlias,
+			merge.namesAlias,
+			merge.typesAlias,
+			merge.metadataAlias,
 		)
 	}
 	chargeColumns := compiledKnowledgeSelectorChargeColumns{
 		inputBytes: quoteIdentifier(fmt.Sprintf("__os_ko_selector_input_bytes_%d", stage)),
 		queryUnits: quoteIdentifier(fmt.Sprintf("__os_ko_selector_query_units_%d", stage)),
 	}
-	bindingProjection := make([]string, 0, len(state.visible)+len(merges)+12)
+	bindingProjection := make([]string, 0, len(state.visible)+len(groups)+12)
 	for _, name := range orderedVisibleNames(state) {
 		field := state.visible[name]
 		publicName := quoteIdentifier(name)
@@ -629,11 +759,11 @@ func compileKnowledgeFusedFieldProjection(
 			bindingProjection = append(bindingProjection, priorCharges.queryUnits)
 		}
 	}
-	for _, merge := range merges {
+	for _, merge := range groups {
 		bindingProjection = append(bindingProjection, merge.bindingAlias)
 	}
 
-	projection := make([]string, 0, len(next.visible)+len(groups)*3+12)
+	projection := make([]string, 0, len(next.visible)+len(groups)*6+12)
 	mergeByDestination := make(map[string]compiledKnowledgeFieldDestinationMerge, len(groups))
 	for _, merge := range groups {
 		mergeByDestination[merge.destination.Name] = merge
@@ -661,23 +791,28 @@ func compileKnowledgeFusedFieldProjection(
 			merge.existsProjection,
 			merge.typeProjection,
 			merge.descendantProjection,
+			merge.namesProjection,
+			merge.typesProjection,
+			merge.metadataProjection,
 		)
 	}
-	inputCharges := make([]string, 0, len(merges)+1)
-	queryCharges := make([]string, 0, len(merges)+1)
+	inputCharges := make([]string, 0, len(groups)+1)
+	queryCharges := make([]string, 0, len(groups)+1)
 	if priorCharges.inputBytes != "" {
 		inputCharges = append(inputCharges, "toUInt128("+priorCharges.inputBytes+")")
 		queryCharges = append(queryCharges, "toUInt128("+priorCharges.queryUnits+")")
 	}
-	bindings := make([]string, 0, len(merges))
+	bindings := make([]string, 0, len(groups))
 	args := make([]any, 0)
-	for _, merge := range merges {
-		assignmentResult := knowledgeTupleElement(
+	for _, merge := range groups {
+		inputCharges = append(inputCharges, knowledgeTupleElementUInt128(
 			merge.bindingAlias,
-			knowledgeFieldBindingAssignmentElement,
-		)
-		inputCharges = append(inputCharges, merge.assignment.selectorInputBytesSQL(assignmentResult))
-		queryCharges = append(queryCharges, merge.assignment.selectorQueryUnitsSQL(assignmentResult))
+			knowledgeFieldBindingSelectorInputBytesElement,
+		))
+		queryCharges = append(queryCharges, knowledgeTupleElementUInt128(
+			merge.bindingAlias,
+			knowledgeFieldBindingSelectorQueryUnitsElement,
+		))
 		bindings = append(bindings, "["+merge.bindingSQL+"] AS "+merge.bindingAlias)
 		args = append(args, merge.args...)
 	}
@@ -699,24 +834,61 @@ func compileKnowledgeFusedFieldProjection(
 	}, nil
 }
 
-func knowledgeAliasLoweringProofMatches(assignment compiledKnowledgeFieldAssignment) bool {
+func knowledgeAliasLoweringProofMatches(
+	assignment compiledKnowledgeFieldAssignment,
+	state compileState,
+) bool {
 	proof := assignment.alias
+	inputStateAuthority, err := compileKnowledgeFieldInputStateAuthority(
+		state,
+		[]string{proof.Source()},
+	)
 	return proof.Origin() != (knowledgeprogram.Origin{}) &&
+		err == nil &&
 		assignment.calculated.Origin() == (knowledgeprogram.Origin{}) &&
 		proof.Origin() == assignment.origin &&
 		proof.Overwrite() == assignment.overwrite &&
+		validCompiledKnowledgeFieldSourceAuthority(
+			assignment.source,
+			"field:"+proof.Source(),
+			inputStateAuthority,
+		) &&
 		proof.Destination() == assignment.destination.Name &&
-		slices.Equal(proof.Selector().CanonicalBytes(), assignment.selector.CanonicalBytes())
+		slices.Equal(proof.Selector().CanonicalBytes(), assignment.selector.CanonicalBytes()) &&
+		knowledgeCompiledSelectorMatches(assignment.selectorSQL, assignment.selector)
 }
 
-func knowledgeCalculatedLoweringProofMatches(assignment compiledKnowledgeFieldAssignment) bool {
+func knowledgeCalculatedLoweringProofMatches(
+	assignment compiledKnowledgeFieldAssignment,
+	state compileState,
+) bool {
 	proof := assignment.calculated
+	inputStateAuthority, err := compileKnowledgeFieldInputStateAuthority(
+		state,
+		proof.InputFields(),
+	)
 	return proof.Origin() != (knowledgeprogram.Origin{}) &&
+		err == nil &&
 		assignment.alias.Origin() == (knowledgeprogram.Origin{}) &&
 		proof.Origin() == assignment.origin &&
 		proof.Overwrite() == assignment.overwrite &&
+		validCompiledKnowledgeFieldSourceAuthority(
+			assignment.source,
+			"expression:"+proof.Expression(),
+			inputStateAuthority,
+		) &&
 		proof.Destination() == assignment.destination.Name &&
-		slices.Equal(proof.Selector().CanonicalBytes(), assignment.selector.CanonicalBytes())
+		slices.Equal(proof.Selector().CanonicalBytes(), assignment.selector.CanonicalBytes()) &&
+		knowledgeCompiledSelectorMatches(assignment.selectorSQL, assignment.selector)
+}
+
+func knowledgeCompiledSelectorMatches(
+	compiled compiledKnowledgeSelector,
+	authority knowledgeprogram.Selector,
+) bool {
+	expected, err := compileKnowledgeSelector(authority)
+	return err == nil && compiled.sql == expected.sql &&
+		reflect.DeepEqual(compiled.args, expected.args)
 }
 
 func validateKnowledgePriorSelectorCharges(
@@ -734,118 +906,160 @@ func validateKnowledgePriorSelectorCharges(
 	return nil
 }
 
-func finalizeKnowledgeFieldDestinationMerge(
+func compileKnowledgeFieldDestinationMerge(
 	group *compiledKnowledgeFieldDestinationMerge,
+	state compileState,
+	stage int,
+	index int,
 ) error {
-	if group == nil || group.destination.Name == "" || len(group.candidates) == 0 {
+	if group == nil || group.destination.Name == "" ||
+		len(group.candidates) == 0 || stage < 0 || index < 0 {
 		return errors.New(
 			"compile ClickHouse knowledge fused field stage: destination group is invalid",
 		)
 	}
-	first := group.candidates[0]
-	value := first.previousValueSQL
-	present := first.previousPresentSQL
-	storedType := first.previousTypeSQL
-	descendant := first.previousDescendantSQL
-	for index := len(group.candidates) - 1; index >= 0; index-- {
-		candidate := group.candidates[index]
-		value = "if(" + candidate.writeSQL + ", " + candidate.writtenValueSQL + ", " + value + ")"
-		present = "toUInt8(if(" + candidate.writeSQL + ", 1, " + present + "))"
-		storedType = "toUInt8(if(" + candidate.writeSQL + ", " + candidate.writtenTypeSQL +
-			", " + storedType + "))"
-		descendant = "toUInt8(if(" + candidate.writeSQL + ", 0, " + descendant + "))"
-		group.maxStringBytes = max(group.maxStringBytes, candidate.maxStringBytes)
+	previous, previousKnown, err := resolveCompiledField(group.destination, state)
+	if err != nil {
+		return err
 	}
-	group.outputValueSQL = value
+	previousSource, err := compileKnowledgeFieldSourceFromField(previous, previousKnown)
+	if err != nil {
+		return fmt.Errorf(
+			"compile ClickHouse knowledge field destination source for %q: %w",
+			group.destination.Name,
+			err,
+		)
+	}
+
+	candidates := make([]compiledKnowledgeFieldCandidate, len(group.candidates))
+	candidateSQL := make([]string, len(group.candidates))
+	args := make([]any, 0, len(previousSource.args))
+	group.maxStringBytes = 0
+	for candidateIndex, assignment := range group.candidates {
+		candidate, candidateErr := compileKnowledgeFieldCandidate(
+			assignment,
+			previousSource,
+		)
+		if candidateErr != nil {
+			return candidateErr
+		}
+		candidates[candidateIndex] = candidate
+		candidateSQL[candidateIndex] = candidate.sql
+		group.maxStringBytes = max(group.maxStringBytes, assignment.source.maxStringBytes)
+	}
+	if previousKnown {
+		group.maxStringBytes = max(
+			group.maxStringBytes,
+			fieldStateStringByteBound(previous),
+		)
+	}
+
+	const (
+		candidatesVariable = "__os_ko_field_candidates"
+		candidateVariable  = "__os_ko_field_candidate"
+	)
+	candidateSource := func(candidateSQL string) string {
+		return knowledgeTupleElement(
+			candidateSQL,
+			knowledgeFieldAssignmentSourceElement,
+		)
+	}
+	produced := func(candidateSQL string) string {
+		return previousSource.producedSQL(candidateSource(candidateSQL)) + " != 0"
+	}
+	wroteSQL := "arrayExists(" + candidateVariable + " -> " +
+		produced(candidateVariable) + ", " + candidatesVariable + ")"
+	winnerSourceSQL := candidateSource(
+		"arrayFirst(" + candidateVariable + " -> " +
+			produced(candidateVariable) + ", " + candidatesVariable + ")",
+	)
+	chosenSourceSQL := "if(" + wroteSQL + ", " + winnerSourceSQL + ", " +
+		previousSource.sql + ")"
+	inputBytesSQL := "arrayFold((__os_ko_sum, " + candidateVariable + ") -> " +
+		"__os_ko_sum + " + knowledgeTupleElementUInt128(
+		candidateVariable,
+		knowledgeFieldAssignmentSelectorInputBytesElement,
+	) + ", " + candidatesVariable + ", toUInt128(0))"
+	queryUnitsSQL := "arrayFold((__os_ko_sum, " + candidateVariable + ") -> " +
+		"__os_ko_sum + " + knowledgeTupleElementUInt128(
+		candidateVariable,
+		knowledgeFieldAssignmentSelectorQueryUnitsElement,
+	) + ", " + candidatesVariable + ", toUInt128(0))"
+	body := "tuple(" + chosenSourceSQL + ", toUInt8(" + wroteSQL + "), " +
+		inputBytesSQL + ", " + queryUnitsSQL + ")"
+	bindingSQL := bindSQLExpressions(
+		[]string{candidatesVariable},
+		[]string{"[" + strings.Join(candidateSQL, ", ") + "]"},
+		body,
+	)
+	// bindSQLExpressions writes the body before its bound value. The full prior
+	// fallback therefore owns the first arguments, followed by candidates in
+	// canonical program order.
+	args = append(args, previousSource.args...)
+	for _, candidate := range candidates {
+		args = append(args, candidate.args...)
+	}
+	if len(bindingSQL) > maxCompiledQueryBytes || strings.Count(bindingSQL, "?") != len(args) {
+		return errors.New(
+			"compile ClickHouse knowledge fused field stage: destination SQL or arguments are invalid",
+		)
+	}
+
+	group.bindingAlias = quoteIdentifier(fmt.Sprintf(
+		"__os_ko_field_binding_%d_%d",
+		stage,
+		index,
+	))
+	group.bindingSQL = bindingSQL
+	group.args = args
+	resultSource := knowledgeTupleElement(
+		group.bindingAlias,
+		knowledgeFieldBindingSourceElement,
+	)
+	group.outputValueSQL = previousSource.valueSQL(resultSource)
 	group.existsAlias = quoteIdentifier(fmt.Sprintf(
 		"__os_ko_field_exists_%d_%d",
-		first.stage,
-		first.index,
+		stage,
+		index,
 	))
 	group.typeAlias = quoteIdentifier(fmt.Sprintf(
 		"__os_ko_field_type_%d_%d",
-		first.stage,
-		first.index,
+		stage,
+		index,
 	))
 	group.descendantAlias = quoteIdentifier(fmt.Sprintf(
 		"__os_ko_field_descendant_%d_%d",
-		first.stage,
-		first.index,
+		stage,
+		index,
 	))
-	group.existsProjection = present + " AS " + group.existsAlias
-	group.typeProjection = storedType + " AS " + group.typeAlias
-	group.descendantProjection = descendant + " AS " + group.descendantAlias
+	group.namesAlias = quoteIdentifier(fmt.Sprintf(
+		"__os_ko_field_names_%d_%d",
+		stage,
+		index,
+	))
+	group.typesAlias = quoteIdentifier(fmt.Sprintf(
+		"__os_ko_field_types_%d_%d",
+		stage,
+		index,
+	))
+	group.metadataAlias = quoteIdentifier(fmt.Sprintf(
+		"__os_ko_field_metadata_version_%d_%d",
+		stage,
+		index,
+	))
+	group.existsProjection = previousSource.producedSQL(resultSource) + " AS " +
+		group.existsAlias
+	group.typeProjection = previousSource.storedTypeSQL(resultSource) + " AS " +
+		group.typeAlias
+	group.descendantProjection = "toUInt8(notEmpty(" +
+		previousSource.namesSQL(resultSource) + ")) AS " + group.descendantAlias
+	group.namesProjection = previousSource.namesSQL(resultSource) + " AS " +
+		group.namesAlias
+	group.typesProjection = previousSource.typesSQL(resultSource) + " AS " +
+		group.typesAlias
+	group.metadataProjection = previousSource.metadataVersionSQL(resultSource) +
+		" AS " + group.metadataAlias
 	return nil
-}
-
-func compileKnowledgeFieldMerge(
-	assignment compiledKnowledgeFieldAssignment,
-	state compileState,
-	stage int,
-	index int,
-) (compiledKnowledgeFieldMerge, error) {
-	previous, previousKnown, err := resolveCompiledField(assignment.destination, state)
-	if err != nil {
-		return compiledKnowledgeFieldMerge{}, err
-	}
-	previousValue := "CAST(NULL AS Dynamic)"
-	previousPresent := "toUInt8(0)"
-	previousType := "toUInt8(0)"
-	previousDescendant := "toUInt8(0)"
-	args := append([]any(nil), assignment.args...)
-	maxStringBytes := assignment.maxStringBytes
-	if previousKnown {
-		previousValue = "CAST(" + previous.valueSQL + " AS Dynamic)"
-		var presenceArgs, typeArgs []any
-		previousPresent, presenceArgs = knownFieldPresenceSQL(previous)
-		previousType, typeArgs, err = knownFieldStoredTypeSQL(previous)
-		if err != nil {
-			return compiledKnowledgeFieldMerge{}, fmt.Errorf(
-				"compile ClickHouse knowledge field destination type for %q: %w",
-				assignment.destination.Name,
-				err,
-			)
-		}
-		args = append(args, presenceArgs...)
-		args = append(args, typeArgs...)
-		if previous.descendantSQL != "" {
-			previousDescendant = previous.descendantSQL
-			args = append(args, previous.descendantArgs...)
-		}
-		maxStringBytes = max(maxStringBytes, fieldStateStringByteBound(previous))
-	}
-	assignment.maxStringBytes = maxStringBytes
-
-	bindingAlias := quoteIdentifier(fmt.Sprintf("__os_ko_field_binding_%d_%d", stage, index))
-	bindingSQL := "tuple(" + assignment.sql + ", " + previousValue + ", " +
-		"toUInt8(ifNull(" + previousPresent + ", 0)), toUInt8(" + previousType + "), " +
-		"toUInt8(ifNull(" + previousDescendant + ", 0)))"
-	assignmentResult := knowledgeTupleElement(bindingAlias, knowledgeFieldBindingAssignmentElement)
-	produced := assignment.producedSQL(assignmentResult) + " != 0"
-	previousPresentBound := knowledgeTupleElementUInt8(
-		bindingAlias,
-		knowledgeFieldBindingPreviousPresentElement,
-	)
-	write := produced
-	if assignment.overwrite == knowledgeprogram.PreserveExisting {
-		write += " AND " + previousPresentBound + " = 0"
-	}
-	return compiledKnowledgeFieldMerge{
-		assignment:            assignment,
-		bindingAlias:          bindingAlias,
-		bindingSQL:            bindingSQL,
-		args:                  args,
-		writeSQL:              write,
-		writtenValueSQL:       assignment.valueSQL(assignmentResult),
-		writtenTypeSQL:        assignment.storedTypeSQL(assignmentResult),
-		previousValueSQL:      knowledgeTupleElement(bindingAlias, knowledgeFieldBindingPreviousValueElement),
-		previousPresentSQL:    previousPresentBound,
-		previousTypeSQL:       knowledgeTupleElementUInt8(bindingAlias, knowledgeFieldBindingPreviousStoredTypeElement),
-		previousDescendantSQL: knowledgeTupleElementUInt8(bindingAlias, knowledgeFieldBindingPreviousDescendantElement),
-		maxStringBytes:        maxStringBytes,
-		stage:                 stage,
-		index:                 index,
-	}, nil
 }
 
 func knowledgeTupleElement(tupleSQL string, element int) string {

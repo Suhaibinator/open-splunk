@@ -55,7 +55,7 @@ func TestCompileKnowledgeAliasStageBuildsOneFrozenProjection(t *testing.T) {
 		`"__os_ko_field_binding_7_1"`,
 		`"__os_ko_selector_input_bytes_7"`,
 		`"__os_ko_selector_query_units_7"`,
-		`AND toUInt8(tupleElement("__os_ko_field_binding_7_0", 3)) = 0`,
+		`__os_ko_field_previous_present`,
 	} {
 		combined := strings.Join(append(slices.Clone(compiled.projection), compiled.arrayJoinBindings...), " ")
 		if !strings.Contains(combined, required) {
@@ -124,8 +124,16 @@ func TestCompileKnowledgeCalculatedStageUsesFrozenInputAndExactConversion(t *tes
 	if err != nil {
 		t.Fatalf("compile second assignment: %v", err)
 	}
-	if strings.Contains(second.sql, "calculated_host") {
-		t.Fatalf("second assignment observed same-stage output:\n%s", second.sql)
+	missingPrevious, err := compileKnowledgeFieldSourceFromField(fieldState{}, false)
+	if err != nil {
+		t.Fatalf("compile missing previous: %v", err)
+	}
+	secondCandidate, err := compileKnowledgeFieldCandidate(second, missingPrevious)
+	if err != nil {
+		t.Fatalf("compile second candidate: %v", err)
+	}
+	if strings.Contains(secondCandidate.sql, "calculated_host") {
+		t.Fatalf("second assignment observed same-stage output:\n%s", secondCandidate.sql)
 	}
 	compiled, err := compileKnowledgeCalculatedStage(
 		state,
@@ -179,7 +187,7 @@ func TestCompileKnowledgeAliasStageGroupsDisjointDestinationWriters(t *testing.T
 	if err != nil {
 		t.Fatalf("compileKnowledgeAliasStage: %v", err)
 	}
-	if compiled.emittedAssignments != 2 || len(compiled.arrayJoinBindings) != 2 {
+	if compiled.emittedAssignments != 2 || len(compiled.arrayJoinBindings) != 1 {
 		t.Fatalf("emission = %d assignments / %d bindings", compiled.emittedAssignments, len(compiled.arrayJoinBindings))
 	}
 	joined := strings.Join(compiled.projection, " ")
@@ -187,8 +195,12 @@ func TestCompileKnowledgeAliasStageGroupsDisjointDestinationWriters(t *testing.T
 		t.Fatalf("destination projections = %d, want one:\n%s", got, joined)
 	}
 	if !strings.Contains(joined, `"__os_ko_field_binding_4_0"`) ||
-		!strings.Contains(joined, `"__os_ko_field_binding_4_1"`) {
-		t.Fatalf("grouped merge does not consume both bound writers:\n%s", joined)
+		strings.Contains(joined, `"__os_ko_field_binding_4_1"`) {
+		t.Fatalf("grouped merge did not publish one destination binding:\n%s", joined)
+	}
+	bindings := strings.Join(compiled.arrayJoinBindings, " ")
+	if strings.Count(bindings, `__os_ko_field_selector`) < 2 {
+		t.Fatalf("grouped merge does not evaluate both writers:\n%s", bindings)
 	}
 }
 
@@ -283,11 +295,19 @@ func TestCompileKnowledgeFieldAssignmentKeepsPresentNullSeparate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compileKnowledgeCalculatedAssignment: %v", err)
 	}
-	if !strings.Contains(compiled.sql, "toUInt8(ifNull(__os_ko_field_present, 0))") ||
-		!strings.Contains(compiled.sql, "CAST(NULL AS Dynamic)") {
-		t.Fatalf("present-null tuple is not explicit:\n%s", compiled.sql)
+	missingPrevious, err := compileKnowledgeFieldSourceFromField(fieldState{}, false)
+	if err != nil {
+		t.Fatalf("compile missing previous: %v", err)
 	}
-	if compiled.producedSQL("result") == compiled.valueSQL("result") {
+	candidate, err := compileKnowledgeFieldCandidate(compiled, missingPrevious)
+	if err != nil {
+		t.Fatalf("compile present-null candidate: %v", err)
+	}
+	if !strings.Contains(candidate.sql, "CAST(NULL AS Dynamic)") {
+		t.Fatalf("present-null tuple is not explicit:\n%s", candidate.sql)
+	}
+	if compiled.producedSQL("result") ==
+		compiled.source.valueSQL(compiled.sourceResultSQL("result")) {
 		t.Fatal("produced presence and Dynamic value use the same tuple element")
 	}
 }

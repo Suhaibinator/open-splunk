@@ -5,18 +5,12 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
-)
-
-const (
-	knowledgeExtractionPreviousValueElement      = 1
-	knowledgeExtractionPreviousPresentElement    = 2
-	knowledgeExtractionPreviousStoredTypeElement = 3
-	knowledgeExtractionPreviousDescendantElement = 4
 )
 
 // compiledKnowledgeExtractionOperation proves the exact interleaved typed
@@ -70,12 +64,22 @@ type compiledKnowledgeExtractionObject struct {
 	jsonEvaluationWork uint32
 }
 
+type compiledKnowledgeExtractionPrevious struct {
+	valueSQL            string
+	presentSQL          string
+	storedTypeSQL       string
+	namesSQL            string
+	typesSQL            string
+	metadataVersionSQL  string
+	authorityAlias      string
+	authorityBindingSQL string
+	args                []any
+}
+
 type compiledKnowledgeExtractionDestination struct {
 	destination          plan.FieldRef
 	candidates           []compiledKnowledgeExtractionOutput
-	previousAlias        string
-	previousSQL          string
-	previousArgs         []any
+	previous             compiledKnowledgeExtractionPrevious
 	valueSQL             string
 	existsAlias          string
 	existsProjection     string
@@ -83,6 +87,12 @@ type compiledKnowledgeExtractionDestination struct {
 	typeProjection       string
 	descendantAlias      string
 	descendantProjection string
+	namesAlias           string
+	namesProjection      string
+	typesAlias           string
+	typesProjection      string
+	metadataAlias        string
+	metadataProjection   string
 	maxStringBytes       uint64
 }
 
@@ -154,18 +164,17 @@ func compileKnowledgeExtractionStage(
 		}
 	}
 	for index := range groups {
-		_, previousSQL, previousArgs, previousBound, previousErr :=
-			compileKnowledgeExtractionPrevious(groups[index].destination.Name, state)
+		_, previous, previousBound, previousErr :=
+			compileKnowledgeExtractionPrevious(
+				groups[index].destination.Name,
+				state,
+				stage,
+				index,
+			)
 		if previousErr != nil {
 			return compiledKnowledgeFusedExtractionProjection{}, previousErr
 		}
-		groups[index].previousAlias = quoteIdentifier(fmt.Sprintf(
-			"__os_ko_extract_previous_%d_%d",
-			stage,
-			index,
-		))
-		groups[index].previousSQL = previousSQL
-		groups[index].previousArgs = previousArgs
+		groups[index].previous = previous
 		groups[index].maxStringBytes = previousBound
 		finalizeKnowledgeExtractionDestination(&groups[index], stage, index)
 		name := groups[index].destination.Name
@@ -182,6 +191,9 @@ func compileKnowledgeExtractionStage(
 			storedTypeSQL:           groups[index].typeAlias,
 			existsSQL:               groups[index].existsAlias,
 			descendantSQL:           groups[index].descendantAlias,
+			relativeFieldNamesSQL:   groups[index].namesAlias,
+			relativeFieldTypesSQL:   groups[index].typesAlias,
+			fieldMetadataVersionSQL: groups[index].metadataAlias,
 			kind:                    fieldKindDynamic,
 			materializeForPredicate: true,
 		}
@@ -190,7 +202,15 @@ func compileKnowledgeExtractionStage(
 	liveOldPrivate := livePrivateColumns(state.privateColumns, next.visible)
 	next.privateColumns = append([]string(nil), liveOldPrivate...)
 	for _, group := range groups {
-		next.privateColumns = append(next.privateColumns, group.existsAlias, group.typeAlias, group.descendantAlias)
+		next.privateColumns = append(
+			next.privateColumns,
+			group.existsAlias,
+			group.typeAlias,
+			group.descendantAlias,
+			group.namesAlias,
+			group.typesAlias,
+			group.metadataAlias,
+		)
 	}
 
 	bindingProjection := make([]string, 0, len(state.visible)+len(objects)+12)
@@ -244,12 +264,18 @@ func compileKnowledgeExtractionStage(
 		proof = append(proof, object.proof)
 	}
 	for _, group := range groups {
-		bindingProjection = append(bindingProjection, group.previousAlias)
-		bindings = append(bindings, "["+group.previousSQL+"] AS "+group.previousAlias)
-		suffixArgs = append(suffixArgs, group.previousArgs...)
+		if group.previous.authorityBindingSQL == "" {
+			continue
+		}
+		bindingProjection = append(
+			bindingProjection,
+			group.previous.authorityAlias,
+		)
+		bindings = append(bindings, group.previous.authorityBindingSQL)
+		suffixArgs = append(suffixArgs, group.previous.args...)
 	}
 
-	projection := make([]string, 0, len(next.visible)+len(groups)*3+4)
+	projection := make([]string, 0, len(next.visible)+len(groups)*6+4)
 	groupByDestination := make(map[string]compiledKnowledgeExtractionDestination, len(groups))
 	for _, group := range groups {
 		groupByDestination[group.destination.Name] = group
@@ -275,7 +301,15 @@ func compileKnowledgeExtractionStage(
 	}
 	projection = appendPrivateEventProjection(projection, projectionState)
 	for _, group := range groups {
-		projection = append(projection, group.existsProjection, group.typeProjection, group.descendantProjection)
+		projection = append(
+			projection,
+			group.existsProjection,
+			group.typeProjection,
+			group.descendantProjection,
+			group.namesProjection,
+			group.typesProjection,
+			group.metadataProjection,
+		)
 	}
 	chargeColumns := compiledKnowledgeSelectorChargeColumns{
 		inputBytes: quoteIdentifier(fmt.Sprintf("__os_ko_selector_input_bytes_%d", stage)),
@@ -454,47 +488,131 @@ func resolveKnowledgeExtractionDestination(name string) (plan.FieldRef, error) {
 func compileKnowledgeExtractionPrevious(
 	name string,
 	state compileState,
-) (plan.FieldRef, string, []any, uint64, error) {
+	stage int,
+	index int,
+) (plan.FieldRef, compiledKnowledgeExtractionPrevious, uint64, error) {
 	destination, err := resolveKnowledgeExtractionDestination(name)
 	if err != nil {
-		return plan.FieldRef{}, "", nil, 0, err
+		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, err
 	}
 	field, present, err := resolveCompiledField(destination, state)
 	if err != nil {
-		return plan.FieldRef{}, "", nil, 0, err
+		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, err
 	}
-	valueSQL, presentSQL, typeSQL, descendantSQL := "CAST(NULL AS Dynamic)", "toUInt8(0)", "toUInt8(0)", "toUInt8(0)"
-	var args []any
-	var bound uint64
-	if present {
-		valueSQL = "CAST(" + field.valueSQL + " AS Dynamic)"
-		var presentArgs, typeArgs []any
-		presentSQL, presentArgs = knownFieldPresenceSQL(field)
-		typeSQL, typeArgs, err = knownFieldStoredTypeSQL(field)
-		if err != nil {
-			return plan.FieldRef{}, "", nil, 0, fmt.Errorf("compile ClickHouse knowledge extraction prior type for %q: %w", name, err)
-		}
-		args = append(args, presentArgs...)
-		args = append(args, typeArgs...)
-		if field.descendantSQL != "" {
-			descendantSQL = field.descendantSQL
-			args = append(args, field.descendantArgs...)
-		}
-		bound = fieldStateStringByteBound(field)
+	if !present {
+		return destination, compiledKnowledgeExtractionPrevious{
+			valueSQL:           "CAST(NULL AS Dynamic)",
+			presentSQL:         "toUInt8(0)",
+			storedTypeSQL:      "toUInt8(0)",
+			namesSQL:           knowledgeEmptyRelativeFieldNamesSQL(),
+			typesSQL:           knowledgeEmptyRelativeFieldTypesSQL(),
+			metadataVersionSQL: "toUInt8(0)",
+		}, 0, nil
 	}
-	previousSQL := "tuple(" + valueSQL + ", toUInt8(ifNull(" + presentSQL + ", 0)), toUInt8(" + typeSQL + "), toUInt8(ifNull(" + descendantSQL + ", 0)))"
-	return destination, previousSQL, args, bound, nil
+	bound := fieldStateStringByteBound(field)
+	if !field.storedPath.isZero() {
+		authority := field.storedPath
+		if err := validateKnowledgeAliasSourceField(field); err != nil {
+			return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, fmt.Errorf(
+				"compile ClickHouse knowledge extraction prior source for %q: %w",
+				name,
+				err,
+			)
+		}
+		authorityAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_ko_extract_previous_authority_%d_%d",
+			stage,
+			index,
+		))
+		values := make([]string, 0, len(authority.physicalSegments)+2)
+		args := make([]any, 0, len(authority.physicalSegments)+2)
+		for _, value := range append(
+			[]string{
+				authority.normalizedExactPath,
+				authority.normalizedDescendantPrefix,
+			},
+			authority.physicalSegments...,
+		) {
+			values = append(values, "CAST(? AS String)")
+			args = append(args, strings.Clone(value))
+		}
+		tupleSQL := "tuple(" + strings.Join(values, ", ") + ")"
+		exactPathSQL := knowledgeTupleElement(authorityAlias, 1)
+		descendantPrefixSQL := knowledgeTupleElement(authorityAlias, 2)
+		physicalSQL := make([]string, len(authority.physicalSegments))
+		for segmentIndex := range physicalSQL {
+			physicalSQL[segmentIndex] = knowledgeTupleElement(
+				authorityAlias,
+				segmentIndex+3,
+			)
+		}
+		expressions, expressionErr := buildKnowledgeAliasSourceExpressions(
+			authority,
+			exactPathSQL,
+			descendantPrefixSQL,
+			physicalSQL,
+		)
+		if expressionErr != nil {
+			return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, expressionErr
+		}
+		return destination, compiledKnowledgeExtractionPrevious{
+			valueSQL:            expressions.valueSQL,
+			presentSQL:          expressions.producedSQL,
+			storedTypeSQL:       expressions.storedTypeSQL,
+			namesSQL:            expressions.namesSQL,
+			typesSQL:            expressions.typesSQL,
+			metadataVersionSQL:  expressions.metadataVersionSQL,
+			authorityAlias:      authorityAlias,
+			authorityBindingSQL: "[" + tupleSQL + "] AS " + authorityAlias,
+			args:                args,
+		}, bound, nil
+	}
+	if err := validateKnowledgeFieldSidecars(
+		field.relativeFieldNamesSQL,
+		field.relativeFieldTypesSQL,
+		field.fieldMetadataVersionSQL,
+	); err != nil {
+		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, err
+	}
+	presentSQL, presentArgs := knownFieldPresenceSQL(field)
+	typeSQL, typeArgs, typeErr := knownFieldStoredTypeSQL(field)
+	if typeErr != nil {
+		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, typeErr
+	}
+	if len(presentArgs) != 0 || len(typeArgs) != 0 {
+		return plan.FieldRef{}, compiledKnowledgeExtractionPrevious{}, 0, errors.New(
+			"compile ClickHouse knowledge extraction prior source retains unbound arguments",
+		)
+	}
+	namesSQL := knowledgeEmptyRelativeFieldNamesSQL()
+	typesSQL := knowledgeEmptyRelativeFieldTypesSQL()
+	metadataVersionSQL := "toUInt8(0)"
+	if field.relativeFieldNamesSQL != "" {
+		namesSQL = field.relativeFieldNamesSQL
+		typesSQL = field.relativeFieldTypesSQL
+		metadataVersionSQL = "toUInt8(" + field.fieldMetadataVersionSQL + ")"
+	}
+	return destination, compiledKnowledgeExtractionPrevious{
+		valueSQL:           "CAST(" + field.valueSQL + " AS Dynamic)",
+		presentSQL:         "toUInt8(ifNull(" + presentSQL + ", 0))",
+		storedTypeSQL:      "toUInt8(" + typeSQL + ")",
+		namesSQL:           namesSQL,
+		typesSQL:           typesSQL,
+		metadataVersionSQL: metadataVersionSQL,
+	}, bound, nil
 }
 
 func finalizeKnowledgeExtractionDestination(
 	group *compiledKnowledgeExtractionDestination,
 	stage, groupIndex int,
 ) {
-	value := knowledgeTupleElement(group.previousAlias, knowledgeExtractionPreviousValueElement)
-	previousPresent := knowledgeTupleElementUInt8(group.previousAlias, knowledgeExtractionPreviousPresentElement)
+	value := group.previous.valueSQL
+	previousPresent := group.previous.presentSQL
 	present := previousPresent
-	storedType := knowledgeTupleElementUInt8(group.previousAlias, knowledgeExtractionPreviousStoredTypeElement)
-	descendant := knowledgeTupleElementUInt8(group.previousAlias, knowledgeExtractionPreviousDescendantElement)
+	storedType := group.previous.storedTypeSQL
+	names := group.previous.namesSQL
+	types := group.previous.typesSQL
+	metadataVersion := group.previous.metadataVersionSQL
 	for index := len(group.candidates) - 1; index >= 0; index-- {
 		candidate := group.candidates[index]
 		write := candidate.producedSQL + " != 0"
@@ -504,14 +622,24 @@ func finalizeKnowledgeExtractionDestination(
 		value = "if(" + write + ", " + candidate.valueSQL + ", " + value + ")"
 		present = "toUInt8(if(" + write + ", 1, " + present + "))"
 		storedType = "toUInt8(if(" + write + ", " + candidate.storedTypeSQL + ", " + storedType + "))"
-		descendant = "toUInt8(if(" + write + ", 0, " + descendant + "))"
+		names = "if(" + write + ", " + knowledgeEmptyRelativeFieldNamesSQL() +
+			", " + names + ")"
+		types = "if(" + write + ", " + knowledgeEmptyRelativeFieldTypesSQL() +
+			", " + types + ")"
+		metadataVersion = "toUInt8(if(" + write + ", 0, " + metadataVersion + "))"
 		group.maxStringBytes = max(group.maxStringBytes, candidate.maxStringBytes)
 	}
 	group.valueSQL = value
 	group.existsAlias = quoteIdentifier(fmt.Sprintf("__os_ko_extract_exists_%d_%d", stage, groupIndex))
 	group.typeAlias = quoteIdentifier(fmt.Sprintf("__os_ko_extract_type_%d_%d", stage, groupIndex))
 	group.descendantAlias = quoteIdentifier(fmt.Sprintf("__os_ko_extract_descendant_%d_%d", stage, groupIndex))
+	group.namesAlias = quoteIdentifier(fmt.Sprintf("__os_ko_extract_names_%d_%d", stage, groupIndex))
+	group.typesAlias = quoteIdentifier(fmt.Sprintf("__os_ko_extract_types_%d_%d", stage, groupIndex))
+	group.metadataAlias = quoteIdentifier(fmt.Sprintf("__os_ko_extract_metadata_version_%d_%d", stage, groupIndex))
 	group.existsProjection = present + " AS " + group.existsAlias
 	group.typeProjection = storedType + " AS " + group.typeAlias
-	group.descendantProjection = descendant + " AS " + group.descendantAlias
+	group.descendantProjection = "toUInt8(notEmpty(" + names + ")) AS " + group.descendantAlias
+	group.namesProjection = names + " AS " + group.namesAlias
+	group.typesProjection = types + " AS " + group.typesAlias
+	group.metadataProjection = metadataVersion + " AS " + group.metadataAlias
 }

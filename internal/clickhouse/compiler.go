@@ -5701,6 +5701,9 @@ type fieldState struct {
 	descendantSQL             string
 	descendantArgs            []any
 	storedPath                storedPathAuthority
+	relativeFieldNamesSQL     string
+	relativeFieldTypesSQL     string
+	fieldMetadataVersionSQL   string
 	kind                      fieldKind
 	caseSensitive             bool
 	numberType                string
@@ -6487,6 +6490,9 @@ type compiledScalar struct {
 	descendantSQL             string
 	descendantArgs            []any
 	storedPath                storedPathAuthority
+	relativeFieldNamesSQL     string
+	relativeFieldTypesSQL     string
+	fieldMetadataVersionSQL   string
 	kind                      fieldKind
 	numberType                string
 	literal                   *plan.Value
@@ -12435,7 +12441,10 @@ func livePrivateColumns(columns []string, visible map[string]fieldState) []strin
 	for _, column := range columns {
 		for _, field := range visible {
 			if field.existsSQL == column || field.storedTypeSQL == column ||
-				field.textEligibleSQL == column || field.descendantSQL == column {
+				field.textEligibleSQL == column || field.descendantSQL == column ||
+				field.relativeFieldNamesSQL == column ||
+				field.relativeFieldTypesSQL == column ||
+				field.fieldMetadataVersionSQL == column {
 				live = append(live, column)
 				break
 			}
@@ -13449,6 +13458,9 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		descendantSQL:             field.descendantSQL,
 		descendantArgs:            append([]any(nil), field.descendantArgs...),
 		storedPath:                field.storedPath.clone(),
+		relativeFieldNamesSQL:     field.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:     field.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL:   field.fieldMetadataVersionSQL,
 		kind:                      field.kind,
 		numberType:                field.numberType,
 		alwaysNull:                field.alwaysNull,

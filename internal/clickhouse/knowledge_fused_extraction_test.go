@@ -53,7 +53,7 @@ func TestCompileKnowledgeExtractionStagePreservesOrderFrozenBindingsAndCharges(t
 	bindings := strings.Join(compiled.arrayJoinBindings, " ")
 	if strings.Count(bindings, "extractGroups(") != 1 ||
 		strings.Count(bindings, `AS "__os_ko_extract_binding_12_`) != 3 ||
-		strings.Count(bindings, `AS "__os_ko_extract_previous_12_`) != 4 {
+		strings.Count(bindings, `AS "__os_ko_extract_previous_authority_12_`) != 4 {
 		t.Fatalf("object bindings are not singleton and exact:\n%s", bindings)
 	}
 	inner := strings.Join(compiled.bindingProjection, " ")
@@ -91,12 +91,17 @@ func TestCompileKnowledgeExtractionStagePreservesOrderFrozenBindingsAndCharges(t
 	for _, object := range objects {
 		wantArgs = append(wantArgs, object.args...)
 	}
-	for _, destination := range []string{"json_a", "first", "second", "json_c"} {
-		_, _, previousArgs, _, previousErr := compileKnowledgeExtractionPrevious(destination, state)
+	for index, destination := range []string{"json_a", "first", "second", "json_c"} {
+		_, previous, _, previousErr := compileKnowledgeExtractionPrevious(
+			destination,
+			state,
+			12,
+			index,
+		)
 		if previousErr != nil {
 			t.Fatalf("compile previous %q: %v", destination, previousErr)
 		}
-		wantArgs = append(wantArgs, previousArgs...)
+		wantArgs = append(wantArgs, previous.args...)
 	}
 	if !reflect.DeepEqual(compiled.suffixArgs, wantArgs) {
 		t.Fatalf("suffix argument partition = %#v, want %#v", compiled.suffixArgs, wantArgs)
@@ -128,10 +133,11 @@ func TestCompileKnowledgeExtractionStageGroupsDisjointDestinations(t *testing.T)
 	}
 	bindings := strings.Join(compiled.arrayJoinBindings, " ")
 	if len(compiled.arrayJoinBindings) != 3 ||
-		strings.Count(bindings, `AS "__os_ko_extract_previous_4_0"`) != 1 {
+		strings.Count(bindings, `AS "__os_ko_extract_previous_authority_4_0"`) != 1 {
 		t.Fatalf("shared prior destination was not bound exactly once:\n%s", bindings)
 	}
-	if !strings.Contains(projection, `AND toUInt8(tupleElement("__os_ko_extract_previous_4_0", 2)) = 0`) {
+	if !strings.Contains(projection, `"__os_ko_extract_previous_authority_4_0"`) ||
+		!strings.Contains(projection, ` = 0`) {
 		t.Fatalf("preserve policy does not use immutable prior presence:\n%s", projection)
 	}
 }

@@ -1,6 +1,8 @@
 package clickhouse
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +14,7 @@ import (
 
 const (
 	maxCompiledKnowledgeAliasSourceSQLBytes = 64 << 10
+	compiledKnowledgeFieldSourceSealDomain  = "open-splunk/clickhouse/knowledge-field-source/v2"
 
 	knowledgeAliasSourceProducedElement   = 1
 	knowledgeAliasSourceValueElement      = 2
@@ -118,6 +121,13 @@ func (authority storedPathAuthority) equal(other storedPathAuthority) bool {
 		slices.Equal(authority.physicalSegments, other.physicalSegments)
 }
 
+func (authority storedPathAuthority) isZero() bool {
+	return len(authority.logicalSegments) == 0 &&
+		authority.normalizedExactPath == "" &&
+		authority.normalizedDescendantPrefix == "" &&
+		len(authority.physicalSegments) == 0
+}
+
 func (authority storedPathAuthority) valueSQL() string {
 	value := quoteIdentifier(internalFieldsColumn)
 	for _, segment := range authority.physicalSegments {
@@ -146,6 +156,290 @@ type compiledKnowledgeAliasSource struct {
 	proof compiledKnowledgeAliasSourceProof
 }
 
+// compiledKnowledgeFieldSource is the canonical frozen representation used by
+// every field assignment and prior-destination binding. The tuple layout is
+// shared with compiledKnowledgeAliasSource so a direct stored path can retain
+// that descriptor's stronger path authority without being lowered twice.
+type compiledKnowledgeFieldSource struct {
+	sql                 string
+	args                []any
+	presenceSQL         string
+	presenceArgs        []any
+	authority           string
+	inputStateAuthority [sha256.Size]byte
+	maxStringBytes      uint64
+	seal                [sha256.Size]byte
+}
+
+func authorizeCompiledKnowledgeFieldSource(
+	compiled compiledKnowledgeFieldSource,
+	authority string,
+	inputStateAuthority [sha256.Size]byte,
+	maxStringBytes uint64,
+) (compiledKnowledgeFieldSource, error) {
+	if authority == "" || inputStateAuthority == ([sha256.Size]byte{}) ||
+		compiled.authority != "" || compiled.seal != ([sha256.Size]byte{}) {
+		return compiledKnowledgeFieldSource{}, errors.New(
+			"compile ClickHouse knowledge field source: authority is invalid",
+		)
+	}
+	compiled.authority = authority
+	compiled.inputStateAuthority = inputStateAuthority
+	compiled.maxStringBytes = maxStringBytes
+	seal, ok := compiledKnowledgeFieldSourceDigest(compiled)
+	if !ok {
+		return compiledKnowledgeFieldSource{}, errors.New(
+			"compile ClickHouse knowledge field source: authority cannot be sealed",
+		)
+	}
+	compiled.seal = seal
+	return compiled, nil
+}
+
+func validCompiledKnowledgeFieldSourceAuthority(
+	compiled compiledKnowledgeFieldSource,
+	authority string,
+	inputStateAuthority [sha256.Size]byte,
+) bool {
+	if authority == "" || compiled.authority != authority ||
+		compiled.seal == ([sha256.Size]byte{}) ||
+		subtle.ConstantTimeCompare(
+			compiled.inputStateAuthority[:],
+			inputStateAuthority[:],
+		) != 1 {
+		return false
+	}
+	expected, ok := compiledKnowledgeFieldSourceDigest(compiled)
+	return ok && subtle.ConstantTimeCompare(compiled.seal[:], expected[:]) == 1
+}
+
+func compiledKnowledgeFieldSourceDigest(
+	compiled compiledKnowledgeFieldSource,
+) ([sha256.Size]byte, bool) {
+	digest := sha256.New()
+	writeTokenPart(digest, compiledKnowledgeFieldSourceSealDomain)
+	writeTokenPart(digest, compiled.sql)
+	writeTokenPart(digest, compiled.presenceSQL)
+	writeTokenPart(digest, compiled.authority)
+	_, _ = digest.Write(compiled.inputStateAuthority[:])
+	writeUint64(digest, compiled.maxStringBytes)
+	writeUint64(digest, uint64(len(compiled.args)))
+	for _, argument := range compiled.args {
+		if !writeCompiledArgument(digest, argument, 0) {
+			return [sha256.Size]byte{}, false
+		}
+	}
+	writeUint64(digest, uint64(len(compiled.presenceArgs)))
+	for _, argument := range compiled.presenceArgs {
+		if !writeCompiledArgument(digest, argument, 0) {
+			return [sha256.Size]byte{}, false
+		}
+	}
+	var result [sha256.Size]byte
+	digest.Sum(result[:0])
+	return result, true
+}
+
+func (compiled compiledKnowledgeFieldSource) producedSQL(resultSQL string) string {
+	return knowledgeTupleElementUInt8(resultSQL, knowledgeAliasSourceProducedElement)
+}
+
+func (compiled compiledKnowledgeFieldSource) valueSQL(resultSQL string) string {
+	return knowledgeTupleElement(resultSQL, knowledgeAliasSourceValueElement)
+}
+
+func (compiled compiledKnowledgeFieldSource) storedTypeSQL(resultSQL string) string {
+	return knowledgeTupleElementUInt8(resultSQL, knowledgeAliasSourceStoredTypeElement)
+}
+
+func (compiled compiledKnowledgeFieldSource) namesSQL(resultSQL string) string {
+	return knowledgeTupleElement(resultSQL, knowledgeAliasSourceNamesElement)
+}
+
+func (compiled compiledKnowledgeFieldSource) typesSQL(resultSQL string) string {
+	return knowledgeTupleElement(resultSQL, knowledgeAliasSourceTypesElement)
+}
+
+func (compiled compiledKnowledgeFieldSource) metadataVersionSQL(resultSQL string) string {
+	return knowledgeTupleElementUInt8(resultSQL, knowledgeAliasSourceMetadataElement)
+}
+
+func compileKnowledgeFieldSourceFromField(
+	field fieldState,
+	present bool,
+) (compiledKnowledgeFieldSource, error) {
+	if !present {
+		return newCompiledKnowledgeFieldSource(
+			knowledgeMissingFieldSourceSQL(),
+			nil,
+			"0",
+			nil,
+		)
+	}
+	return compileKnowledgeFieldSourceFromScalar(compiledScalarFromField(field), true)
+}
+
+func compileKnowledgeFieldSourceFromScalar(
+	value compiledScalar,
+	retainDirectSidecars bool,
+) (compiledKnowledgeFieldSource, error) {
+	if !retainDirectSidecars {
+		value.storedPath = storedPathAuthority{}
+		value.relativeFieldNamesSQL = ""
+		value.relativeFieldTypesSQL = ""
+		value.fieldMetadataVersionSQL = ""
+	}
+	if err := validateKnowledgeFieldSidecars(
+		value.relativeFieldNamesSQL,
+		value.relativeFieldTypesSQL,
+		value.fieldMetadataVersionSQL,
+	); err != nil {
+		return compiledKnowledgeFieldSource{}, err
+	}
+	if !value.storedPath.isZero() {
+		if value.relativeFieldNamesSQL != "" {
+			return compiledKnowledgeFieldSource{}, errors.New(
+				"compile ClickHouse knowledge field source: stored path overlaps materialized sidecars",
+			)
+		}
+		if len(value.valueArgs) != 0 {
+			return compiledKnowledgeFieldSource{}, errors.New(
+				"compile ClickHouse knowledge field source: stored path has value arguments",
+			)
+		}
+		field := knowledgeFieldStateFromScalar(value)
+		direct, err := compileKnowledgeAliasSource(field)
+		if err != nil {
+			return compiledKnowledgeFieldSource{}, err
+		}
+		presenceSQL, presenceArgs := knownFieldPresenceSQL(field)
+		return newCompiledKnowledgeFieldSource(
+			direct.sql,
+			direct.args,
+			presenceSQL,
+			presenceArgs,
+		)
+	}
+
+	const (
+		valueVariable   = "__os_ko_source_value"
+		presentVariable = "__os_ko_source_present"
+		typeVariable    = "__os_ko_source_type"
+	)
+	presenceSQL, presenceArgs := knowledgeScalarPresenceSQL(value)
+	typeSQL, typeArgs, err := knowledgeScalarStoredTypeSQL(value, valueVariable)
+	if err != nil {
+		return compiledKnowledgeFieldSource{}, err
+	}
+	namesSQL := knowledgeEmptyRelativeFieldNamesSQL()
+	typesSQL := knowledgeEmptyRelativeFieldTypesSQL()
+	metadataVersionSQL := "toUInt8(0)"
+	if value.relativeFieldNamesSQL != "" {
+		namesSQL = value.relativeFieldNamesSQL
+		typesSQL = value.relativeFieldTypesSQL
+		metadataVersionSQL = "toUInt8(" + value.fieldMetadataVersionSQL + ")"
+	}
+	source := "tuple(" +
+		"toUInt8(ifNull(" + presentVariable + ", 0)), " +
+		"if(ifNull(" + presentVariable + ", 0), " + valueVariable +
+		", CAST(NULL AS Dynamic)), " +
+		"toUInt8(if(ifNull(" + presentVariable + ", 0), " + typeVariable + ", 0)), " +
+		"if(ifNull(" + presentVariable + ", 0), " + namesSQL + ", " +
+		knowledgeEmptyRelativeFieldNamesSQL() + "), " +
+		"if(ifNull(" + presentVariable + ", 0), " + typesSQL + ", " +
+		knowledgeEmptyRelativeFieldTypesSQL() + "), " +
+		"toUInt8(if(ifNull(" + presentVariable + ", 0), " +
+		metadataVersionSQL + ", 0)))"
+	source = bindSQLExpressions(
+		[]string{presentVariable, typeVariable},
+		[]string{presenceSQL, typeSQL},
+		source,
+	)
+	source = bindSQLExpressions(
+		[]string{valueVariable},
+		[]string{"CAST(" + value.valueSQL + " AS Dynamic)"},
+		source,
+	)
+	args := make([]any, 0,
+		len(presenceArgs)+len(typeArgs)+len(value.valueArgs),
+	)
+	args = append(args, presenceArgs...)
+	args = append(args, typeArgs...)
+	args = append(args, value.valueArgs...)
+	return newCompiledKnowledgeFieldSource(source, args, presenceSQL, presenceArgs)
+}
+
+func newCompiledKnowledgeFieldSource(
+	sql string,
+	args []any,
+	presenceSQL string,
+	presenceArgs []any,
+) (compiledKnowledgeFieldSource, error) {
+	if sql == "" || len(sql) > maxCompiledKnowledgeAliasSourceSQLBytes ||
+		strings.Count(sql, "?") != len(args) || presenceSQL == "" ||
+		strings.Count(presenceSQL, "?") != len(presenceArgs) {
+		return compiledKnowledgeFieldSource{}, errors.New(
+			"compile ClickHouse knowledge field source: SQL or arguments are invalid",
+		)
+	}
+	cloneArguments := func(arguments []any) ([]any, error) {
+		cloned := make([]any, len(arguments))
+		for index, argument := range arguments {
+			value, ok := cloneCompiledArgument(argument)
+			if !ok {
+				return nil, errors.New(
+					"compile ClickHouse knowledge field source: argument is unsupported",
+				)
+			}
+			cloned[index] = value
+		}
+		return cloned, nil
+	}
+	clonedArgs, err := cloneArguments(args)
+	if err != nil {
+		return compiledKnowledgeFieldSource{}, err
+	}
+	clonedPresenceArgs, err := cloneArguments(presenceArgs)
+	if err != nil {
+		return compiledKnowledgeFieldSource{}, err
+	}
+	return compiledKnowledgeFieldSource{
+		sql:          sql,
+		args:         clonedArgs,
+		presenceSQL:  presenceSQL,
+		presenceArgs: clonedPresenceArgs,
+	}, nil
+}
+
+func validateKnowledgeFieldSidecars(namesSQL, typesSQL, metadataVersionSQL string) error {
+	count := 0
+	for _, expression := range []string{namesSQL, typesSQL, metadataVersionSQL} {
+		if expression != "" {
+			count++
+		}
+	}
+	if count != 0 && count != 3 {
+		return errors.New(
+			"compile ClickHouse knowledge field source: container sidecars are incomplete",
+		)
+	}
+	return nil
+}
+
+func knowledgeEmptyRelativeFieldNamesSQL() string {
+	return "CAST([], 'Array(String)')"
+}
+
+func knowledgeEmptyRelativeFieldTypesSQL() string {
+	return "CAST([], 'Array(UInt8)')"
+}
+
+func knowledgeMissingFieldSourceSQL() string {
+	return "tuple(toUInt8(0), CAST(NULL AS Dynamic), toUInt8(0), " +
+		knowledgeEmptyRelativeFieldNamesSQL() + ", " +
+		knowledgeEmptyRelativeFieldTypesSQL() + ", toUInt8(0))"
+}
+
 func (compiled compiledKnowledgeAliasSource) producedSQL(resultSQL string) string {
 	return knowledgeTupleElementUInt8(resultSQL, knowledgeAliasSourceProducedElement)
 }
@@ -170,10 +464,10 @@ func (compiled compiledKnowledgeAliasSource) metadataVersionSQL(resultSQL string
 	return knowledgeTupleElementUInt8(resultSQL, knowledgeAliasSourceMetadataElement)
 }
 
-// compileKnowledgeAliasSource lowers only a direct stored Dynamic source. It
-// is intentionally not called by compileKnowledgeAliasAssignment: the
-// nonempty execution gate stays closed until the result-side sidecar decoder
-// and runtime copy budget have their pinned ClickHouse evidence.
+// compileKnowledgeAliasSource lowers only a direct stored Dynamic source for
+// the lossless field-assignment merge. The nonempty execution gate stays
+// closed until the result-side sidecar decoder and runtime copy budget have
+// their pinned ClickHouse evidence.
 func compileKnowledgeAliasSource(field fieldState) (compiledKnowledgeAliasSource, error) {
 	if err := validateKnowledgeAliasSourceField(field); err != nil {
 		return compiledKnowledgeAliasSource{}, err
@@ -310,6 +604,90 @@ func buildKnowledgeAliasSourceSQL(
 		authority.normalizedDescendantPrefix,
 	)
 	return sql, args
+}
+
+type knowledgeAliasSourceExpressions struct {
+	producedSQL        string
+	valueSQL           string
+	storedTypeSQL      string
+	namesSQL           string
+	typesSQL           string
+	metadataVersionSQL string
+}
+
+// buildKnowledgeAliasSourceExpressions is the component form of the direct
+// stored-path materializer. Callers provide compiler-owned SQL expressions for
+// path values, allowing a prior destination to bind those values cheaply in an
+// inner layer while leaving JSONExtract exclusively in an outer no-write
+// fallback.
+func buildKnowledgeAliasSourceExpressions(
+	authority storedPathAuthority,
+	exactPathSQL string,
+	descendantPrefixSQL string,
+	physicalSegmentSQL []string,
+) (knowledgeAliasSourceExpressions, error) {
+	if err := validateStoredPathAuthority(authority); err != nil {
+		return knowledgeAliasSourceExpressions{}, err
+	}
+	if exactPathSQL == "" || descendantPrefixSQL == "" ||
+		len(physicalSegmentSQL) != len(authority.physicalSegments) {
+		return knowledgeAliasSourceExpressions{}, errors.New(
+			"compile ClickHouse knowledge alias source expressions: path authority is incomplete",
+		)
+	}
+	for _, expression := range physicalSegmentSQL {
+		if expression == "" {
+			return knowledgeAliasSourceExpressions{}, errors.New(
+				"compile ClickHouse knowledge alias source expressions: physical path is incomplete",
+			)
+		}
+	}
+
+	q := quoteIdentifier
+	fields := q(internalFieldsColumn)
+	names := q(internalFieldNamesColumn)
+	types := q(internalFieldTypesColumn)
+	metadataVersion := knowledgeAliasSourceMetadataVersionSQL()
+	alignedMetadata := "length(" + types + ") = length(" + names + ")"
+	emptyNames := knowledgeEmptyRelativeFieldNamesSQL()
+	emptyTypes := knowledgeEmptyRelativeFieldTypesSQL()
+
+	materialized := "JSONExtract(" + fields
+	for _, segmentSQL := range physicalSegmentSQL {
+		materialized += ", CAST(" + segmentSQL + " AS String)"
+	}
+	materialized += ", 'Dynamic')"
+	exact := "has(" + names + ", CAST(" + exactPathSQL + " AS String))"
+	descendant := "arrayExists(field_name -> startsWith(field_name, CAST(" +
+		descendantPrefixSQL + " AS String)), " + names + ")"
+	container := "NOT (" + exact + ") AND (" + descendant + ")"
+	relativeNames := "arrayMap(field_name -> substring(field_name, length(CAST(" +
+		descendantPrefixSQL + " AS String)) + 1), arrayFilter(field_name -> startsWith(field_name, CAST(" +
+		descendantPrefixSQL + " AS String)), " + names + "))"
+	relativeTypes := "if(" + alignedMetadata +
+		", arrayMap(field_index -> toUInt8(arrayElement(" + types +
+		", field_index)), arrayFilter(field_index -> startsWith(arrayElement(" +
+		names + ", field_index), CAST(" + descendantPrefixSQL +
+		" AS String)), arrayEnumerate(" + names + "))), " + emptyTypes + ")"
+	exactType := "if(" + alignedMetadata +
+		", toUInt8(arrayElement(" + types + ", indexOf(" + names + ", CAST(" +
+		exactPathSQL + " AS String)))), " + knowledgeDynamicStoredTypeSQL(
+		authority.valueSQL(),
+	) + ")"
+	return knowledgeAliasSourceExpressions{
+		producedSQL: "toUInt8(" + exact + " OR " + descendant + ")",
+		valueSQL: "multiIf(" + exact + ", CAST(" + authority.valueSQL() +
+			" AS Dynamic), " + descendant + ", " + materialized +
+			", CAST(NULL AS Dynamic))",
+		storedTypeSQL: "toUInt8(multiIf(" + exact + ", " + exactType +
+			", " + descendant + ", toUInt8(" +
+			strconv.Itoa(int(eventfields.StoredValueTypeObject)) + "), 0))",
+		namesSQL: "if(" + container + ", " + relativeNames + ", " +
+			emptyNames + ")",
+		typesSQL: "if(" + container + ", " + relativeTypes + ", " +
+			emptyTypes + ")",
+		metadataVersionSQL: metadataVersion,
+	}, nil
 }
 
 func knowledgeAliasSourceExactPresenceSQL() string {
