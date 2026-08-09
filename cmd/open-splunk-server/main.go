@@ -668,6 +668,16 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
+	knowledgeManagement, err := newRuntimeKnowledgeManagement(
+		startupContext,
+		controlDB,
+		config.masterKeyPath,
+		securityStores.auditEvents,
+	)
+	if err != nil {
+		clear(appCursorKey)
+		return err
+	}
 	collectorAdministration, err := newRuntimeCollectorAdministration(
 		startupContext,
 		controlDB,
@@ -679,7 +689,7 @@ func runWithOptions(config options) error {
 		clear(appCursorKey)
 		return err
 	}
-	handler, err := newRuntimeHTTPHandler(server.Config{
+	httpConfig := server.Config{
 		SearchJobs:                 jobs,
 		RuntimeReadiness:           connection,
 		SearchInspections:          inspection.service,
@@ -712,7 +722,16 @@ func runWithOptions(config options) error {
 			MaximumExportRows:       exportSettings.maximumRowLimit,
 			MaximumExportBytes:      exportSettings.maximumByteLimit,
 		},
-	}, analysis)
+	}
+	if err := configureRuntimeKnowledgeManagement(
+		&httpConfig,
+		knowledgeManagement,
+		appCatalog,
+	); err != nil {
+		clear(appCursorKey)
+		return err
+	}
+	handler, err := newRuntimeHTTPHandler(httpConfig, analysis)
 	// NewHandler clones the key before returning. Erase this temporary caller
 	// copy immediately on both success and failure.
 	clear(appCursorKey)
