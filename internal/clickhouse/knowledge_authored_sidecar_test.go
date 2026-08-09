@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -167,6 +168,96 @@ func TestAuthoredSidecarConsumersRejectPartialAuthority(t *testing.T) {
 	}
 }
 
+func TestAuthoredRexConditionallyMergesKnowledgeSidecars(t *testing.T) {
+	program := authoredSidecarProgram(t)
+	baseline := captureAuthoredSidecarState(t, program, `index=gradethis`)
+	capture := captureAuthoredSidecarState(
+		t,
+		program,
+		`index=gradethis | rex field=_raw "(?<copied_payload>[a-z]+)" | table copied_payload`,
+	)
+	requireConditionalAuthoredSidecars(
+		t,
+		capture,
+		baseline.state.visible["copied_payload"],
+		"copied_payload",
+		"__os_rex_matched_",
+	)
+}
+
+func TestAuthoredSpathConditionallyMergesKnowledgeSidecars(t *testing.T) {
+	program := authoredSidecarProgram(t)
+	baseline := captureAuthoredSidecarState(t, program, `index=gradethis`)
+	capture := captureAuthoredSidecarState(
+		t,
+		program,
+		`index=gradethis | spath input=_raw output=copied_payload path=value | table copied_payload`,
+	)
+	requireConditionalAuthoredSidecars(
+		t,
+		capture,
+		baseline.state.visible["copied_payload"],
+		"copied_payload",
+		"__os_spath_matched_",
+	)
+}
+
+func TestAuthoredDynamicBinConditionallyMergesKnowledgeSidecars(t *testing.T) {
+	program := authoredSidecarProgram(t)
+	baseline := captureAuthoredSidecarState(t, program, `index=gradethis`)
+	capture := captureAuthoredSidecarState(
+		t,
+		program,
+		`index=gradethis | bin metric span=10 AS copied_payload | table copied_payload`,
+	)
+	got, ok := capture.state.visible["copied_payload"]
+	if !ok || got.relativeFieldNamesSQL == "" || got.relativeFieldTypesSQL == "" ||
+		got.fieldMetadataVersionSQL == "" {
+		t.Fatalf("dynamic bin sidecars are incomplete: %#v", got)
+	}
+	for _, column := range knowledgeSidecarColumns(
+		baseline.state.visible["copied_payload"],
+	) {
+		if !strings.Contains(capture.relation.sql, column) {
+			t.Fatalf("dynamic bin dropped prior sidecar %q", column)
+		}
+	}
+	for _, marker := range []string{
+		"__os_numeric_bin_output_names_",
+		"__os_numeric_bin_output_types_",
+		"__os_numeric_bin_output_metadata_version_",
+		knowledgeEmptyRelativeFieldNamesSQL(),
+		knowledgeEmptyRelativeFieldTypesSQL(),
+	} {
+		if !strings.Contains(capture.relation.sql, marker) {
+			t.Fatalf("dynamic bin merge omits %q", marker)
+		}
+	}
+	requirePrivateSidecars(t, capture, got)
+}
+
+func TestAuthoredDynamicBinInPlaceClearsKnowledgeSidecars(t *testing.T) {
+	program := authoredSidecarProgram(t)
+	baseline := captureAuthoredSidecarState(t, program, `index=gradethis`)
+	capture := captureAuthoredSidecarState(
+		t,
+		program,
+		`index=gradethis | bin copied_payload span=10 | table copied_payload`,
+	)
+	got := capture.state.visible["copied_payload"]
+	if got.relativeFieldNamesSQL != "" || got.relativeFieldTypesSQL != "" ||
+		got.fieldMetadataVersionSQL != "" {
+		t.Fatalf("in-place bin retained container sidecars: %#v", got)
+	}
+	for _, column := range knowledgeSidecarColumns(
+		baseline.state.visible["copied_payload"],
+	) {
+		if slices.Contains(capture.state.privateColumns, column) {
+			t.Fatalf("in-place bin retained prior sidecar %q", column)
+		}
+	}
+}
+
 func authoredSidecarProgram(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
 	return knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
@@ -224,6 +315,38 @@ func requirePrivateSidecars(
 			slices.Contains(capture.compiled.OutputFields, column) {
 			t.Fatalf("sidecar %q leaked into the public result", column)
 		}
+	}
+}
+
+func requireConditionalAuthoredSidecars(
+	t *testing.T,
+	capture centralKnowledgeFinalizerCapture,
+	previous fieldState,
+	output string,
+	matchedMarker string,
+) {
+	t.Helper()
+	got, ok := capture.state.visible[output]
+	if !ok {
+		t.Fatalf("conditional writer omitted %q", output)
+	}
+	if got.relativeFieldNamesSQL == "" || got.relativeFieldTypesSQL == "" ||
+		got.fieldMetadataVersionSQL == "" || got.descendantSQL == "" {
+		t.Fatalf("conditional sidecars are incomplete: %#v", got)
+	}
+	for _, column := range knowledgeSidecarColumns(previous) {
+		if !strings.Contains(capture.relation.sql, column) {
+			t.Fatalf("conditional writer dropped prior sidecar %q", column)
+		}
+	}
+	if !strings.Contains(capture.relation.sql, matchedMarker) ||
+		!strings.Contains(capture.relation.sql, knowledgeEmptyRelativeFieldNamesSQL()) ||
+		!strings.Contains(capture.relation.sql, knowledgeEmptyRelativeFieldTypesSQL()) {
+		t.Fatalf("conditional merge SQL is incomplete:\n%s", capture.relation.sql)
+	}
+	requirePrivateSidecars(t, capture, got)
+	if !slices.Equal(capture.compiled.OutputFields, []string{output}) {
+		t.Fatalf("conditional outputs = %#v", capture.compiled.OutputFields)
 	}
 }
 

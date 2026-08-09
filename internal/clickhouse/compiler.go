@@ -2320,6 +2320,17 @@ func compileDynamicNumericBucket(
 	alias string,
 	stage int,
 ) (compiledRelation, compileState, []any, error) {
+	if err := validateKnowledgeFieldSidecars(
+		field.relativeFieldNamesSQL,
+		field.relativeFieldTypesSQL,
+		field.fieldMetadataVersionSQL,
+	); err != nil {
+		return compiledRelation{}, compileState{}, nil, fmt.Errorf(
+			"compile ClickHouse numeric bucket input %q: %w",
+			operator.Input.Name,
+			err,
+		)
+	}
 	spanAlias := numericBinStageAlias("span", stage)
 	physicalTypeAlias := numericBinStageAlias("physical_type", stage)
 	signedValueAlias := numericBinStageAlias("signed_value", stage)
@@ -2340,6 +2351,9 @@ func compileDynamicNumericBucket(
 	supportedAlias := numericBinStageAlias("supported", stage)
 	outputExistsAlias := numericBinStageAlias("output_exists", stage)
 	outputTypeAlias := numericBinStageAlias("output_type", stage)
+	outputNamesAlias := ""
+	outputTypesAlias := ""
+	outputMetadataAlias := ""
 	stateSourceField := field
 
 	// ClickHouse's analyzer substitutes ordinary projection aliases through
@@ -2383,6 +2397,22 @@ func compileDynamicNumericBucket(
 		return compiledRelation{}, compileState{}, nil, err
 	}
 	preserve := previousKnown && operator.Output.Name != operator.Input.Name
+	if err := validateKnowledgeFieldSidecars(
+		previous.relativeFieldNamesSQL,
+		previous.relativeFieldTypesSQL,
+		previous.fieldMetadataVersionSQL,
+	); err != nil {
+		return compiledRelation{}, compileState{}, nil, fmt.Errorf(
+			"compile ClickHouse numeric bucket destination %q: %w",
+			operator.Output.Name,
+			err,
+		)
+	}
+	if preserve && previous.relativeFieldNamesSQL != "" {
+		outputNamesAlias = numericBinStageAlias("output_names", stage)
+		outputTypesAlias = numericBinStageAlias("output_types", stage)
+		outputMetadataAlias = numericBinStageAlias("output_metadata_version", stage)
+	}
 	var (
 		preserveWith        []string
 		preserveBaseAliases []string
@@ -2663,11 +2693,28 @@ func compileDynamicNumericBucket(
 		outputExistsSQL = "if(" + metadata.existsAlias + " != 0, 1, " + previousExistsAlias + ")"
 		outputTypeSQL = "if(" + metadata.existsAlias + " != 0, " + bucketTypeSQL + ", " + previousTypeAlias + ")"
 	}
-	supportedProjectionSQL := dynamicNumericBinProjectionLayer(relation.sql, stage, layer, []string{
+	supportedExpressions := []string{
 		supportedSQL + " AS " + supportedAlias,
 		"toUInt8(" + outputExistsSQL + ") AS " + outputExistsAlias,
 		"toUInt8(" + outputTypeSQL + ") AS " + outputTypeAlias,
-	})
+	}
+	if outputNamesAlias != "" {
+		supportedExpressions = append(
+			supportedExpressions,
+			"if("+missingCondition+", "+previous.relativeFieldNamesSQL+", "+
+				knowledgeEmptyRelativeFieldNamesSQL()+") AS "+outputNamesAlias,
+			"if("+missingCondition+", "+previous.relativeFieldTypesSQL+", "+
+				knowledgeEmptyRelativeFieldTypesSQL()+") AS "+outputTypesAlias,
+			"toUInt8(if("+missingCondition+", "+
+				previous.fieldMetadataVersionSQL+", 0)) AS "+outputMetadataAlias,
+		)
+	}
+	supportedProjectionSQL := dynamicNumericBinProjectionLayer(
+		relation.sql,
+		stage,
+		layer,
+		supportedExpressions,
+	)
 	relation = relation.selectFrom(supportedProjectionSQL, operator.Range)
 	privateAliases = append(privateAliases, supportedAlias)
 
@@ -2720,6 +2767,9 @@ func compileDynamicNumericBucket(
 		stateSourceField,
 		outputExistsAlias,
 		outputTypeAlias,
+		outputNamesAlias,
+		outputTypesAlias,
+		outputMetadataAlias,
 	)
 	args := make([]any, 0, 1+len(metadata.args)+len(preserveArgs))
 	args = append(args, preserveArgs...)
@@ -2972,6 +3022,7 @@ func updateDynamicBucketCompileState(
 	output plan.FieldRef,
 	source fieldState,
 	existsAlias, typeAlias string,
+	namesAlias, typesAlias, metadataAlias string,
 ) compileState {
 	next := prepareBucketCompileState(state, inputName, output)
 	if inputName != output.Name {
@@ -2985,12 +3036,23 @@ func updateDynamicBucketCompileState(
 		dynamicTypeSQL:          "dynamicType(" + outputName + ")",
 		storedTypeSQL:           typeAlias,
 		existsSQL:               existsAlias,
+		relativeFieldNamesSQL:   namesAlias,
+		relativeFieldTypesSQL:   typesAlias,
+		fieldMetadataVersionSQL: metadataAlias,
 		kind:                    fieldKindDynamic,
 		caseSensitive:           false,
 		materializeForPredicate: true,
 	}
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
 	next.privateColumns = append(next.privateColumns, existsAlias, typeAlias)
+	if namesAlias != "" {
+		next.privateColumns = append(
+			next.privateColumns,
+			namesAlias,
+			typesAlias,
+			metadataAlias,
+		)
+	}
 	return next
 }
 
@@ -11204,10 +11266,16 @@ type compiledExtractCapture struct {
 	textProjection       string
 	descendantColumn     string
 	descendantProjection string
+	namesColumn          string
+	namesProjection      string
+	typesColumn          string
+	typesProjection      string
+	metadataColumn       string
+	metadataProjection   string
 }
 
 func extractPrivateColumns(captures []compiledExtractCapture) []string {
-	columns := make([]string, 0, len(captures)*4)
+	columns := make([]string, 0, len(captures)*7)
 	for _, capture := range captures {
 		columns = append(columns, capture.existsColumn, capture.typeColumn)
 		if capture.textColumn != "" {
@@ -11215,6 +11283,14 @@ func extractPrivateColumns(captures []compiledExtractCapture) []string {
 		}
 		if capture.descendantColumn != "" {
 			columns = append(columns, capture.descendantColumn)
+		}
+		if capture.namesColumn != "" {
+			columns = append(
+				columns,
+				capture.namesColumn,
+				capture.typesColumn,
+				capture.metadataColumn,
+			)
 		}
 	}
 	return columns
@@ -11315,6 +11391,17 @@ func compileExtract(
 		if resolveErr != nil {
 			return compiledRelation{}, compileState{}, nil, 0, resolveErr
 		}
+		if err := validateKnowledgeFieldSidecars(
+			previous.relativeFieldNamesSQL,
+			previous.relativeFieldTypesSQL,
+			previous.fieldMetadataVersionSQL,
+		); err != nil {
+			return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf(
+				"compile ClickHouse extract prior output %q: %w",
+				capture.Output.Name,
+				err,
+			)
+		}
 
 		capturedValue := "arrayElement(" + groupsAlias + ", " + strconv.Itoa(int(capture.Group)) + ")"
 		valueSQL := ""
@@ -11379,6 +11466,30 @@ func compileExtract(
 				previous.descendantSQL + ")) AS " + descendantColumn
 			descendantArgs = append(descendantArgs, previous.descendantArgs...)
 		}
+		namesColumn := ""
+		namesProjection := ""
+		typesColumn := ""
+		typesProjection := ""
+		metadataColumn := ""
+		metadataProjection := ""
+		if previousKnown && previous.relativeFieldNamesSQL != "" {
+			namesColumn = quoteIdentifier(fmt.Sprintf("__os_rex_names_%d_%d", stage, index))
+			typesColumn = quoteIdentifier(fmt.Sprintf("__os_rex_types_%d_%d", stage, index))
+			metadataColumn = quoteIdentifier(fmt.Sprintf(
+				"__os_rex_metadata_version_%d_%d",
+				stage,
+				index,
+			))
+			namesProjection = "if(" + matchedAlias + " != 0, " +
+				knowledgeEmptyRelativeFieldNamesSQL() + ", " +
+				previous.relativeFieldNamesSQL + ") AS " + namesColumn
+			typesProjection = "if(" + matchedAlias + " != 0, " +
+				knowledgeEmptyRelativeFieldTypesSQL() + ", " +
+				previous.relativeFieldTypesSQL + ") AS " + typesColumn
+			metadataProjection = "toUInt8(if(" + matchedAlias +
+				" != 0, 0, " + previous.fieldMetadataVersionSQL + ")) AS " +
+				metadataColumn
+		}
 		captures = append(captures, compiledExtractCapture{
 			planCapture:          capture,
 			valueSQL:             valueSQL,
@@ -11390,6 +11501,12 @@ func compileExtract(
 			textProjection:       textProjection,
 			descendantColumn:     descendantColumn,
 			descendantProjection: descendantProjection,
+			namesColumn:          namesColumn,
+			namesProjection:      namesProjection,
+			typesColumn:          typesColumn,
+			typesProjection:      typesProjection,
+			metadataColumn:       metadataColumn,
+			metadataProjection:   metadataProjection,
 		})
 
 		delete(next.blocked, capture.Output.Name)
@@ -11402,13 +11519,16 @@ func compileExtract(
 			maxStringBytes = max(maxStringBytes, fieldStateStringByteBound(previous))
 		}
 		field := fieldState{
-			valueSQL:        output,
-			maxStringBytes:  maxStringBytes,
-			textEligibleSQL: textColumn,
-			existsSQL:       existsAlias,
-			storedTypeSQL:   typeAlias,
-			descendantSQL:   descendantColumn,
-			kind:            kind,
+			valueSQL:                output,
+			maxStringBytes:          maxStringBytes,
+			textEligibleSQL:         textColumn,
+			existsSQL:               existsAlias,
+			storedTypeSQL:           typeAlias,
+			descendantSQL:           descendantColumn,
+			relativeFieldNamesSQL:   namesColumn,
+			relativeFieldTypesSQL:   typesColumn,
+			fieldMetadataVersionSQL: metadataColumn,
+			kind:                    kind,
 			// A capture named index is calculated data and never regains the
 			// physical scan selector's case or authorization semantics.
 			caseSensitive: false,
@@ -11428,6 +11548,9 @@ func compileExtract(
 	typeExpressions := make([]string, 0, len(captures))
 	textExpressions := make([]string, 0, len(captures))
 	descendantExpressions := make([]string, 0, len(captures))
+	namesExpressions := make([]string, 0, len(captures))
+	typesExpressions := make([]string, 0, len(captures))
+	metadataExpressions := make([]string, 0, len(captures))
 	for _, capture := range captures {
 		valueByName[capture.planCapture.Output.Name] = capture.valueSQL
 		existenceExpressions = append(existenceExpressions, capture.existsProjection)
@@ -11437,6 +11560,11 @@ func compileExtract(
 		}
 		if capture.descendantProjection != "" {
 			descendantExpressions = append(descendantExpressions, capture.descendantProjection)
+		}
+		if capture.namesProjection != "" {
+			namesExpressions = append(namesExpressions, capture.namesProjection)
+			typesExpressions = append(typesExpressions, capture.typesProjection)
+			metadataExpressions = append(metadataExpressions, capture.metadataProjection)
 		}
 	}
 	liveOldPrivateColumns := livePrivateColumns(state.privateColumns, next.visible)
@@ -11468,6 +11596,9 @@ func compileExtract(
 	projection = append(projection, typeExpressions...)
 	projection = append(projection, textExpressions...)
 	projection = append(projection, descendantExpressions...)
+	projection = append(projection, namesExpressions...)
+	projection = append(projection, typesExpressions...)
+	projection = append(projection, metadataExpressions...)
 	outerAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
 	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + outerAlias
 	relation = relation.selectFrom(outputFragment, operator.Range)
@@ -12034,6 +12165,17 @@ func compileExtractJSON(
 	if err != nil {
 		return compiledRelation{}, compileState{}, nil, 0, err
 	}
+	if err := validateKnowledgeFieldSidecars(
+		previous.relativeFieldNamesSQL,
+		previous.relativeFieldTypesSQL,
+		previous.fieldMetadataVersionSQL,
+	); err != nil {
+		return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf(
+			"compile ClickHouse spath prior output %q: %w",
+			operator.Output.Name,
+			err,
+		)
+	}
 	previousValue := "CAST(NULL AS Dynamic)"
 	previousExists := "0"
 	var existenceArgs, typeArgs []any
@@ -12083,6 +12225,28 @@ func compileExtractJSON(
 			previous.descendantSQL + ")) AS " + descendantAlias
 		descendantArgs = append(descendantArgs, previous.descendantArgs...)
 	}
+	namesAlias := ""
+	namesProjection := ""
+	typesAlias := ""
+	typesProjection := ""
+	metadataAlias := ""
+	metadataProjection := ""
+	if previousKnown && previous.relativeFieldNamesSQL != "" {
+		namesAlias = quoteIdentifier(fmt.Sprintf("__os_spath_names_%d", stage))
+		typesAlias = quoteIdentifier(fmt.Sprintf("__os_spath_types_%d", stage))
+		metadataAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_spath_metadata_version_%d",
+			stage,
+		))
+		namesProjection = "if(" + matchedAlias + " != 0, " +
+			knowledgeEmptyRelativeFieldNamesSQL() + ", " +
+			previous.relativeFieldNamesSQL + ") AS " + namesAlias
+		typesProjection = "if(" + matchedAlias + " != 0, " +
+			knowledgeEmptyRelativeFieldTypesSQL() + ", " +
+			previous.relativeFieldTypesSQL + ") AS " + typesAlias
+		metadataProjection = "toUInt8(if(" + matchedAlias + " != 0, 0, " +
+			previous.fieldMetadataVersionSQL + ")) AS " + metadataAlias
+	}
 	outputValue := "if(" + matchedAlias + " != 0, " + valueAlias + ", " + previousValue + ")"
 
 	next := cloneCompileState(state)
@@ -12106,6 +12270,9 @@ func compileExtractJSON(
 		storedTypeSQL:           typeAlias,
 		existsSQL:               existsAlias,
 		descendantSQL:           descendantAlias,
+		relativeFieldNamesSQL:   namesAlias,
+		relativeFieldTypesSQL:   typesAlias,
+		fieldMetadataVersionSQL: metadataAlias,
 		kind:                    fieldKindDynamic,
 		caseSensitive:           false,
 		materializeForPredicate: sourceMayExtract || previous.materializeForPredicate,
@@ -12118,6 +12285,14 @@ func compileExtractJSON(
 	}
 	if descendantAlias != "" {
 		next.privateColumns = append(next.privateColumns, descendantAlias)
+	}
+	if namesAlias != "" {
+		next.privateColumns = append(
+			next.privateColumns,
+			namesAlias,
+			typesAlias,
+			metadataAlias,
+		)
 	}
 	projection := make([]string, 0, len(next.visible)+8)
 	for _, name := range orderedVisibleNames(next) {
@@ -12148,6 +12323,14 @@ func compileExtractJSON(
 	}
 	if descendantProjection != "" {
 		projection = append(projection, descendantProjection)
+	}
+	if namesProjection != "" {
+		projection = append(
+			projection,
+			namesProjection,
+			typesProjection,
+			metadataProjection,
+		)
 	}
 	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
 		relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
