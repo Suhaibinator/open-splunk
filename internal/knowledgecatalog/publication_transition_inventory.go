@@ -493,7 +493,7 @@ func readPublicationTransitionActiveApps(
 	if len(active) == 0 {
 		return nil, 0, fmt.Errorf(
 			"%w: publication transition has no active app authority",
-			control.ErrCapacityExceeded,
+			ErrCorrupt,
 		)
 	}
 	return active[:len(active):len(active)], revisions[0].Revision, nil

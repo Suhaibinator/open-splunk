@@ -1,6 +1,7 @@
 package knowledgecatalog
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -404,7 +405,22 @@ func createPublicationTransitionTestIndex(
 	name string,
 ) control.Index {
 	t.Helper()
-	index, err := database.CreateIndex(t.Context(), control.IndexDefinition{
+	validator, err := NewIndexNameAdmissionValidator(database)
+	if err != nil {
+		t.Fatalf("construct test index-name validator: %v", err)
+	}
+	administration, err := control.NewAuditedIndexAdministration(
+		database,
+		control.AuditedIndexAdministrationOptions{
+			TenantID:  testTenant,
+			Appender:  publicationTransitionTestIndexAuditAppender{},
+			Validator: validator,
+		},
+	)
+	if err != nil {
+		t.Fatalf("construct test index administration: %v", err)
+	}
+	index, err := administration.CreateIndex(t.Context(), control.IndexDefinition{
 		Name:             name,
 		DisplayName:      name,
 		IngestionEnabled: true,
@@ -414,4 +430,15 @@ func createPublicationTransitionTestIndex(
 		t.Fatalf("create test index %q: %v", name, err)
 	}
 	return index
+}
+
+type publicationTransitionTestIndexAuditAppender struct{}
+
+func (publicationTransitionTestIndexAuditAppender) AppendIndexMutationInTransaction(
+	context.Context,
+	*gorm.DB,
+	string,
+	control.IndexMutationAuditEvent,
+) error {
+	return nil
 }
