@@ -1243,6 +1243,17 @@ deliberately impossible while snapshot finalization is closed. Focused normal
 and race tests, `go vet`, protobuf generation/lint, the Go descriptor contract,
 and TypeScript type checking pass. The pinned ClickHouse/Docker runtime matrix
 was not rerun and remains required before either nonempty execution gate opens.
+An opt-in production-path KO-1C matrix is now staged in `internal/queryexec`:
+it uses the public planner/compiler/executor surfaces, the migrated event table,
+all specialized derived execution seals, independently falsifiable selector
+dimensions, cross-tenant decoys, exact typed container and overwrite results,
+authored suffixes and aggregations, analysis finalizers, and atomic alias-copy
+limit attribution. It requires a cached digest-pinned ClickHouse image and an
+exact `26.3.17.4` server version. Its non-Docker construction, classifier,
+formatting, and vet checks pass, but the opt-in ClickHouse run was deliberately
+not completed; the test still reaches the intentional nonempty compiler gate
+before container startup. This staged fixture is therefore not runtime
+acceptance evidence and does not change either gate.
 
 The KO-1C compiler now also preserves complete execution authority when an
 ordinary sealed query is projected into timeline, field-catalog,

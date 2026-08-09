@@ -1012,3 +1012,11 @@ strict structural test is only a contract inventory. Before field knowledge is
 advertised, every case must contain executable inputs and exact typed outputs
 or diagnostics and must run through the relevant production normalization,
 resolution, planner, compiler, and pinned ClickHouse paths.
+
+The repository also contains an opt-in public compiler/executor matrix for the
+KO-1C field subset. A successful default or non-Docker run proves only fixture
+construction and private-limit classification; it skips the container path.
+Only a completed run against the required digest-pinned ClickHouse image and
+exact certified server version counts as runtime evidence. A cancellation,
+compiler-gate stop, skipped test, or table-free SQL probe must be recorded as
+pending evidence rather than compatibility acceptance.
