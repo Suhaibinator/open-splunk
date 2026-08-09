@@ -903,9 +903,19 @@ func knowledgeRejectionContextSatisfies(
 	authorized *knowledgecatalog.AuthorizedContext,
 	bindings []knowledgeRejectionBinding,
 ) bool {
+	validationCreateDependency := false
+	if reason == knowledgeattemptaudit.ReasonForbiddenDependency &&
+		len(bindings) == 1 &&
+		bindings[0].kind == knowledgeRejectionBindingCreate {
+		action, found := knowledgeAttemptActionFromRequest(request)
+		validationCreateDependency = found &&
+			action == knowledgeattemptaudit.ActionValidate
+	}
 	requiresObject := reason == knowledgeattemptaudit.ReasonVersionConflict ||
-		reason == knowledgeattemptaudit.ReasonForbiddenDependency
+		reason == knowledgeattemptaudit.ReasonForbiddenDependency &&
+			!validationCreateDependency
 	requiresContext := requiresObject ||
+		validationCreateDependency ||
 		reason == knowledgeattemptaudit.ReasonIdempotencyConflict
 	if authorized == nil {
 		return !requiresContext
@@ -949,8 +959,12 @@ func knowledgeRejectionContextSatisfies(
 		return false
 	}
 	switch reason {
-	case knowledgeattemptaudit.ReasonVersionConflict,
-		knowledgeattemptaudit.ReasonForbiddenDependency:
+	case knowledgeattemptaudit.ReasonVersionConflict:
+		return authorized.Object != nil
+	case knowledgeattemptaudit.ReasonForbiddenDependency:
+		if validationCreateDependency {
+			return authorized.Object == nil
+		}
 		return authorized.Object != nil
 	case knowledgeattemptaudit.ReasonIdempotencyConflict:
 		action, found := knowledgeAttemptActionFromRequest(request)
