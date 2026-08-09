@@ -20,7 +20,6 @@ func TestSnapshotReferenceSummaryEqualityRetentionAndDetachment(t *testing.T) {
 		t.Fatalf("Prepare(): %v", err)
 	}
 	evidence := evidenceFor(authority)
-	evidence.generatedOperators = 4
 	evidence.generatedSQLBytes = 128
 	snapshot, err := finalize(authority, evidence)
 	if err != nil {
@@ -122,7 +121,7 @@ func TestSnapshotReferenceSummaryForEnabledEmptyAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare(): %v", err)
 	}
-	snapshot, err := finalize(authority, trustedCompilerEvidence{})
+	snapshot, err := finalize(authority, evidenceFor(authority))
 	if err != nil {
 		t.Fatalf("finalize(): %v", err)
 	}

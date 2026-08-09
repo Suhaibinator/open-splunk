@@ -330,21 +330,34 @@ type canonicalDependency struct {
 	sourceDepth uint32
 }
 
-// trustedCompilerEvidence is intentionally package-private and provisional.
-// Tests use it to pin canonical digest behavior; production finalization must
-// wait for KO-0H's sealed evidence, including budgets absent from protobuf v0.1.
+type trustedAuthoredCompilerEvidence struct {
+	regexPrograms      uint32
+	regexWorkUnits     uint64
+	extractionOutputs  uint32
+	jsonEvaluationWork uint32
+	scalarPredicates   uint32
+}
+
+// trustedCompilerEvidence is the package-private detached form of the exact
+// compiler seal. Knowledge-program identity and charges stay separate from the
+// authored suffix so finalization cannot accept an equal aggregate assembled
+// from different authorities.
 type trustedCompilerEvidence struct {
-	generatedOperators    uint32
-	generatedFields       uint32
-	regexPrograms         uint32
-	regexWorkUnits        uint64
-	regexCaptureBytes     uint64
-	extractionOutputs     uint32
-	jsonEvaluationWork    uint32
-	scalarExpressions     uint32
-	scalarExpressionNodes uint32
-	scalarPredicates      uint32
-	generatedSQLBytes     uint64
+	knowledgeProgramPresent    bool
+	knowledgeProgramCommitment [sha256.Size]byte
+	knowledgeProgramObjects    uint32
+	knowledgeProgramCharges    knowledgeprogram.Charges
+	authored                   trustedAuthoredCompilerEvidence
+	regexCaptureBytes          uint64
+	generatedSQLBytes          uint64
+}
+
+type trustedCompilerTotals struct {
+	regexPrograms      uint32
+	regexWorkUnits     uint64
+	extractionOutputs  uint32
+	jsonEvaluationWork uint32
+	scalarPredicates   uint32
 }
 
 // Prepare validates, semantically compiles, orders, and detaches one complete
@@ -1126,20 +1139,22 @@ func finalize(authority Authority, evidence trustedCompilerEvidence) (Snapshot, 
 	if authority.base == nil || authority.base.BudgetCharges == nil {
 		return Snapshot{}, fmt.Errorf("%w: prepared authority is absent", ErrInvalidInput)
 	}
-	if err := validateTrustedCompilerEvidence(authority.static, uint32(len(authority.objects)), evidence); err != nil {
+	totals, err := validateTrustedCompilerEvidence(authority, evidence)
+	if err != nil {
 		return Snapshot{}, err
 	}
 	snapshot, ok := proto.Clone(authority.base).(*opensplunkv1.KnowledgeSnapshot)
 	if !ok || snapshot == nil || snapshot.BudgetCharges == nil {
 		return Snapshot{}, fmt.Errorf("%w: prepared authority cannot be detached", ErrInvalidInput)
 	}
-	snapshot.BudgetCharges.GeneratedOperators = evidence.generatedOperators
-	snapshot.BudgetCharges.GeneratedFields = evidence.generatedFields
-	snapshot.BudgetCharges.RegexPrograms = evidence.regexPrograms
-	snapshot.BudgetCharges.RegexWorkUnits = evidence.regexWorkUnits
+	knowledge := evidence.knowledgeProgramCharges
+	snapshot.BudgetCharges.GeneratedOperators = knowledge.GeneratedOperators
+	snapshot.BudgetCharges.GeneratedFields = knowledge.GeneratedFields
+	snapshot.BudgetCharges.RegexPrograms = totals.regexPrograms
+	snapshot.BudgetCharges.RegexWorkUnits = totals.regexWorkUnits
 	snapshot.BudgetCharges.RegexCaptureBytes = evidence.regexCaptureBytes
-	snapshot.BudgetCharges.ScalarExpressions = evidence.scalarExpressions
-	snapshot.BudgetCharges.ScalarExpressionNodes = evidence.scalarExpressionNodes
+	snapshot.BudgetCharges.ScalarExpressions = knowledge.ScalarExpressions
+	snapshot.BudgetCharges.ScalarExpressionNodes = knowledge.ScalarExpressionNodes
 	snapshot.BudgetCharges.GeneratedSqlBytes = evidence.generatedSQLBytes
 	return digestSnapshot(snapshot, authority.prelude)
 }
@@ -1164,69 +1179,150 @@ func (authority Authority) Finalize(compiled clickhouse.CompiledQuery) (Snapshot
 	if len(authority.objects) != 0 {
 		return Snapshot{}, fmt.Errorf("%w: nonempty authority requires the KO-1 knowledge prelude", ErrInvalidInput)
 	}
+	commitment, commitmentOK := compilerEvidence.KnowledgeProgramCommitment()
+	if !commitmentOK {
+		return Snapshot{}, fmt.Errorf("%w: compiled query knowledge commitment is absent", ErrInvalidInput)
+	}
 	return finalize(authority, trustedCompilerEvidence{
-		generatedOperators:    compilerEvidence.GeneratedOperators(),
-		generatedFields:       compilerEvidence.GeneratedFields(),
-		regexPrograms:         compilerEvidence.RegexPrograms(),
-		regexWorkUnits:        compilerEvidence.RegexWorkUnits(),
-		regexCaptureBytes:     compilerEvidence.RegexCaptureBytes(),
-		extractionOutputs:     compilerEvidence.ExtractionOutputs(),
-		jsonEvaluationWork:    compilerEvidence.JSONEvaluationWork(),
-		scalarExpressions:     compilerEvidence.ScalarExpressions(),
-		scalarExpressionNodes: compilerEvidence.ScalarExpressionNodes(),
-		scalarPredicates:      compilerEvidence.ScalarPredicates(),
-		generatedSQLBytes:     compilerEvidence.GeneratedSQLBytes(),
+		knowledgeProgramPresent:    compilerEvidence.KnowledgeProgramPresent(),
+		knowledgeProgramCommitment: commitment,
+		knowledgeProgramObjects:    compilerEvidence.KnowledgeProgramObjectCount(),
+		knowledgeProgramCharges:    compilerEvidence.KnowledgeProgramCharges(),
+		authored: trustedAuthoredCompilerEvidence{
+			regexPrograms:      compilerEvidence.AuthoredRegexPrograms(),
+			regexWorkUnits:     compilerEvidence.AuthoredRegexWorkUnits(),
+			extractionOutputs:  compilerEvidence.AuthoredExtractionOutputs(),
+			jsonEvaluationWork: compilerEvidence.AuthoredJSONEvaluationWork(),
+			scalarPredicates:   compilerEvidence.AuthoredScalarPredicates(),
+		},
+		regexCaptureBytes: compilerEvidence.RegexCaptureBytes(),
+		generatedSQLBytes: compilerEvidence.GeneratedSQLBytes(),
 	})
 }
 
 func validateTrustedCompilerEvidence(
-	static StaticCharges,
-	executableObjects uint32,
+	authority Authority,
 	evidence trustedCompilerEvidence,
-) error {
-	if evidence.generatedOperators > MaximumGeneratedOperators ||
-		evidence.generatedFields > MaximumGeneratedFields ||
-		evidence.regexPrograms > MaximumRegexPrograms ||
-		evidence.regexWorkUnits > MaximumRegexWorkUnits ||
-		evidence.extractionOutputs > MaximumExtractionOutputs ||
-		evidence.jsonEvaluationWork > MaximumJSONEvaluationWorkUnits ||
-		evidence.scalarExpressions > MaximumScalarExpressions ||
-		evidence.scalarExpressionNodes > MaximumScalarExpressionNodes ||
-		evidence.scalarPredicates > MaximumScalarPredicates ||
+) (trustedCompilerTotals, error) {
+	invalid := func(message string) (trustedCompilerTotals, error) {
+		return trustedCompilerTotals{}, fmt.Errorf("%w: %s", ErrInvalidInput, message)
+	}
+	resource := func() (trustedCompilerTotals, error) {
+		return trustedCompilerTotals{}, fmt.Errorf(
+			"%w: trusted compiler evidence exceeds compatibility limits",
+			ErrResourceLimit,
+		)
+	}
+	if authority.base == nil || authority.base.BudgetCharges == nil {
+		return invalid("prepared authority is absent")
+	}
+	objects := uint32(len(authority.objects))
+	if err := validatePreludeAuthority(authority.prelude, authority.static, objects); err != nil {
+		return trustedCompilerTotals{}, err
+	}
+	commitment, commitmentOK := authority.prelude.Commitment()
+	knowledge := evidence.knowledgeProgramCharges
+	if !commitmentOK || !evidence.knowledgeProgramPresent ||
+		evidence.knowledgeProgramCommitment != commitment ||
+		evidence.knowledgeProgramObjects != objects ||
+		knowledge != authority.prelude.Charges() {
+		return invalid("trusted compiler knowledge authority disagrees")
+	}
+	if knowledge.GeneratedFields != authority.static.GeneratedFields ||
+		knowledge.RegexPrograms != authority.static.ExtractionRegexPrograms ||
+		knowledge.RegexWorkUnits != authority.static.ExtractionRegexWorkUnits ||
+		knowledge.ExtractionOutputs != authority.static.ExtractionOutputs ||
+		knowledge.JSONEvaluationWork != authority.static.JSONEvaluationWorkUnits ||
+		knowledge.ScalarExpressions != authority.static.ScalarExpressions ||
+		knowledge.ScalarExpressionNodes != authority.static.ScalarExpressionNodes ||
+		knowledge.ScalarPredicates != authority.static.ScalarPredicates {
+		return invalid("trusted compiler knowledge charges disagree with static semantics")
+	}
+	if knowledge.GeneratedOperators > MaximumGeneratedOperators ||
+		knowledge.GeneratedFields > MaximumGeneratedFields ||
+		knowledge.ScalarExpressions > MaximumScalarExpressions ||
+		knowledge.ScalarExpressionNodes > MaximumScalarExpressionNodes ||
 		evidence.generatedSQLBytes > MaximumGeneratedSQLBytes {
-		return fmt.Errorf("%w: trusted compiler evidence exceeds compatibility limits", ErrResourceLimit)
+		return resource()
 	}
-	if evidence.generatedFields != static.GeneratedFields ||
-		evidence.regexPrograms < static.ExtractionRegexPrograms ||
-		evidence.regexWorkUnits < static.ExtractionRegexWorkUnits ||
-		evidence.extractionOutputs < static.ExtractionOutputs ||
-		evidence.jsonEvaluationWork < static.JSONEvaluationWorkUnits ||
-		evidence.scalarExpressions != static.ScalarExpressions ||
-		evidence.scalarExpressionNodes != static.ScalarExpressionNodes ||
-		evidence.scalarPredicates < static.ScalarPredicates {
-		return fmt.Errorf("%w: trusted compiler evidence disagrees with static semantics", ErrInvalidInput)
-	}
-	if (executableObjects == 0) != (evidence.generatedOperators == 0) {
-		return fmt.Errorf("%w: generated operator evidence disagrees with executable objects", ErrInvalidInput)
-	}
-	if evidence.regexPrograms == 0 {
-		if evidence.regexWorkUnits != 0 || evidence.regexCaptureBytes != 0 {
-			return fmt.Errorf("%w: zero regex programs require zero regex work and capture bytes", ErrInvalidInput)
+
+	addUint32 := func(knowledgeValue, authoredValue, maximum uint32) (uint32, bool) {
+		if knowledgeValue > maximum || authoredValue > maximum-knowledgeValue {
+			return 0, false
 		}
-	} else if extraPrograms := evidence.regexPrograms - static.ExtractionRegexPrograms; evidence.regexWorkUnits < static.ExtractionRegexWorkUnits+uint64(extraPrograms) ||
-		evidence.regexWorkUnits > static.ExtractionRegexWorkUnits+
-			uint64(extraPrograms)*splregex.MaximumExtractionProgramWorkUnits ||
-		evidence.regexWorkUnits < uint64(evidence.regexPrograms) ||
-		evidence.regexWorkUnits > uint64(evidence.regexPrograms)*splregex.MaximumExtractionProgramWorkUnits ||
-		evidence.regexCaptureBytes != MaximumRegexCaptureBytes ||
-		evidence.extractionOutputs < evidence.regexPrograms {
-		return fmt.Errorf("%w: regex compiler evidence is incoherent", ErrInvalidInput)
+		return knowledgeValue + authoredValue, true
 	}
-	if evidence.scalarExpressions == 0 && evidence.scalarExpressionNodes != 0 ||
-		evidence.scalarExpressionNodes < evidence.scalarExpressions {
-		return fmt.Errorf("%w: scalar compiler evidence is incoherent", ErrInvalidInput)
+	addUint64 := func(knowledgeValue, authoredValue, maximum uint64) (uint64, bool) {
+		if knowledgeValue > maximum || authoredValue > maximum-knowledgeValue {
+			return 0, false
+		}
+		return knowledgeValue + authoredValue, true
 	}
-	return nil
+	authored := evidence.authored
+	var totals trustedCompilerTotals
+	var ok bool
+	if totals.regexPrograms, ok = addUint32(
+		knowledge.RegexPrograms,
+		authored.regexPrograms,
+		MaximumRegexPrograms,
+	); !ok {
+		return resource()
+	}
+	if totals.regexWorkUnits, ok = addUint64(
+		knowledge.RegexWorkUnits,
+		authored.regexWorkUnits,
+		MaximumRegexWorkUnits,
+	); !ok {
+		return resource()
+	}
+	if totals.extractionOutputs, ok = addUint32(
+		knowledge.ExtractionOutputs,
+		authored.extractionOutputs,
+		MaximumExtractionOutputs,
+	); !ok {
+		return resource()
+	}
+	if totals.jsonEvaluationWork, ok = addUint32(
+		knowledge.JSONEvaluationWork,
+		authored.jsonEvaluationWork,
+		MaximumJSONEvaluationWorkUnits,
+	); !ok {
+		return resource()
+	}
+	if totals.scalarPredicates, ok = addUint32(
+		knowledge.ScalarPredicates,
+		authored.scalarPredicates,
+		MaximumScalarPredicates,
+	); !ok {
+		return resource()
+	}
+
+	if authored.regexPrograms == 0 {
+		if authored.regexWorkUnits != 0 {
+			return invalid("zero authored regex programs require zero work")
+		}
+	} else if authored.regexWorkUnits < uint64(authored.regexPrograms) ||
+		authored.regexWorkUnits > uint64(authored.regexPrograms)*
+			splregex.MaximumExtractionProgramWorkUnits ||
+		authored.extractionOutputs < authored.regexPrograms {
+		return invalid("authored regex compiler evidence is incoherent")
+	}
+	if totals.regexPrograms == 0 {
+		if totals.regexWorkUnits != 0 || evidence.regexCaptureBytes != 0 {
+			return invalid("zero regex programs require zero work and capture bytes")
+		}
+	} else if totals.regexWorkUnits < uint64(totals.regexPrograms) ||
+		totals.regexWorkUnits > uint64(totals.regexPrograms)*
+			splregex.MaximumExtractionProgramWorkUnits ||
+		totals.extractionOutputs < totals.regexPrograms ||
+		evidence.regexCaptureBytes != MaximumRegexCaptureBytes {
+		return invalid("regex compiler evidence is incoherent")
+	}
+	if knowledge.ScalarExpressions == 0 && knowledge.ScalarExpressionNodes != 0 ||
+		knowledge.ScalarExpressionNodes < knowledge.ScalarExpressions {
+		return invalid("scalar compiler evidence is incoherent")
+	}
+	return totals, nil
 }
 
 func digestSnapshot(

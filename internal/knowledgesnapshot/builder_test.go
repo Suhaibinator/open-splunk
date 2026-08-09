@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -126,7 +128,6 @@ func TestPrepareCanonicalAuthorityOrderChargesDigestAndDetachment(t *testing.T) 
 	}
 
 	evidence := evidenceFor(first)
-	evidence.generatedOperators = 7
 	evidence.generatedSQLBytes = 2048
 	firstSnapshot, err := finalize(first, evidence)
 	if err != nil {
@@ -145,7 +146,8 @@ func TestPrepareCanonicalAuthorityOrderChargesDigestAndDetachment(t *testing.T) 
 		t.Fatal("finalized snapshot changed prelude authority")
 	}
 	finalCharges := firstSnapshot.Proto().GetBudgetCharges()
-	if finalCharges.GetGeneratedOperators() != 7 || finalCharges.GetGeneratedFields() != 4 ||
+	if finalCharges.GetGeneratedOperators() != preludeCharges.GeneratedOperators ||
+		finalCharges.GetGeneratedFields() != 4 ||
 		finalCharges.GetRegexPrograms() != 1 || finalCharges.GetRegexWorkUnits() != uint64(compiled.ProgramWorkUnits) ||
 		finalCharges.GetRegexCaptureBytes() != MaximumRegexCaptureBytes ||
 		finalCharges.GetScalarExpressions() != 1 || finalCharges.GetScalarExpressionNodes() != 2 ||
@@ -154,7 +156,7 @@ func TestPrepareCanonicalAuthorityOrderChargesDigestAndDetachment(t *testing.T) 
 	}
 	assertSnapshotDigest(t, firstSnapshot.Proto())
 	digest := firstSnapshot.Digest()
-	const wantDigest = "6fcdd1f6c4cf324be700f3b5ea07507ce8cdd644e49602fd4778aa2acfe9c404"
+	const wantDigest = "6d7a0758742fbec7123dfc45afffd6dbfa8784d3ecf86527a1a8e2294f5a1231"
 	if firstSnapshot.CanonicalBytes() != 1272 || hex.EncodeToString(digest[:]) != wantDigest {
 		t.Fatalf("nonzero golden = canonical %d digest %x, want 1272/%s", firstSnapshot.CanonicalBytes(), digest, wantDigest)
 	}
@@ -249,7 +251,7 @@ func TestPrepareEmptyAuthorityAbsentAndPresentRevisionGoldens(t *testing.T) {
 			if prelude := authority.Prelude(); prelude.IsZero() || !prelude.IsEmpty() || prelude.ObjectCount() != 0 {
 				t.Fatalf("empty prelude = zero:%t empty:%t objects:%d", prelude.IsZero(), prelude.IsEmpty(), prelude.ObjectCount())
 			}
-			snapshot, err := finalize(authority, trustedCompilerEvidence{})
+			snapshot, err := finalize(authority, evidenceFor(authority))
 			if err != nil {
 				t.Fatalf("finalize(): %v", err)
 			}
@@ -261,7 +263,9 @@ func TestPrepareEmptyAuthorityAbsentAndPresentRevisionGoldens(t *testing.T) {
 				t.Fatal("empty finalized snapshot changed prelude authority")
 			}
 			assertSnapshotDigest(t, snapshot.Proto())
-			if impossible, impossibleErr := finalize(authority, trustedCompilerEvidence{generatedOperators: 1}); !impossible.IsZero() || !errors.Is(impossibleErr, ErrInvalidInput) {
+			impossibleEvidence := evidenceFor(authority)
+			impossibleEvidence.knowledgeProgramCharges.GeneratedOperators++
+			if impossible, impossibleErr := finalize(authority, impossibleEvidence); !impossible.IsZero() || !errors.Is(impossibleErr, ErrInvalidInput) {
 				t.Fatalf(
 					"finalize(empty with operator) = (%+v, %v), want zero/ErrInvalidInput",
 					impossible,
@@ -278,31 +282,46 @@ func TestFinalizeRequiresCoherentPackagePrivateCompilerEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := evidenceFor(authority)
-	valid.generatedOperators = 1
 	tests := []struct {
 		name   string
 		mutate func(*trustedCompilerEvidence)
 		want   error
 	}{
-		{name: "generated fields are exact", mutate: func(value *trustedCompilerEvidence) { value.generatedFields++ }, want: ErrInvalidInput},
-		{name: "regex programs understate", mutate: func(value *trustedCompilerEvidence) { value.regexPrograms = 0 }, want: ErrInvalidInput},
-		{name: "regex work understate", mutate: func(value *trustedCompilerEvidence) { value.regexWorkUnits = 0 }, want: ErrInvalidInput},
-		{name: "added regex omits its work", mutate: func(value *trustedCompilerEvidence) {
-			value.regexPrograms++
-			value.extractionOutputs++
+		{name: "program absent", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramPresent = false }, want: ErrInvalidInput},
+		{name: "program commitment", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCommitment[0] ^= 0xff }, want: ErrInvalidInput},
+		{name: "program object count", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramObjects++ }, want: ErrInvalidInput},
+		{name: "generated operators are exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.GeneratedOperators++ }, want: ErrInvalidInput},
+		{name: "generated fields are exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.GeneratedFields++ }, want: ErrInvalidInput},
+		{name: "knowledge regex programs are exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.RegexPrograms++ }, want: ErrInvalidInput},
+		{name: "knowledge regex work is exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.RegexWorkUnits++ }, want: ErrInvalidInput},
+		{name: "knowledge extraction outputs are exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.ExtractionOutputs++ }, want: ErrInvalidInput},
+		{name: "knowledge JSON work is exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.JSONEvaluationWork++ }, want: ErrInvalidInput},
+		{name: "knowledge scalar expressions are exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.ScalarExpressions++ }, want: ErrInvalidInput},
+		{name: "knowledge scalar nodes are exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.ScalarExpressionNodes++ }, want: ErrInvalidInput},
+		{name: "knowledge scalar predicates are exact", mutate: func(value *trustedCompilerEvidence) { value.knowledgeProgramCharges.ScalarPredicates++ }, want: ErrInvalidInput},
+		{name: "equal aggregate redistribution", mutate: func(value *trustedCompilerEvidence) {
+			value.knowledgeProgramCharges.RegexPrograms--
+			value.knowledgeProgramCharges.RegexWorkUnits--
+			value.knowledgeProgramCharges.ExtractionOutputs--
+			value.authored.regexPrograms++
+			value.authored.regexWorkUnits++
+			value.authored.extractionOutputs++
 		}, want: ErrInvalidInput},
-		{name: "regex work exceeds programs", mutate: func(value *trustedCompilerEvidence) {
-			value.regexWorkUnits = uint64(value.regexPrograms)*splregex.MaximumExtractionProgramWorkUnits + 1
+		{name: "added authored regex omits its work", mutate: func(value *trustedCompilerEvidence) {
+			value.authored.regexPrograms++
+			value.authored.extractionOutputs++
+		}, want: ErrInvalidInput},
+		{name: "authored regex work exceeds programs", mutate: func(value *trustedCompilerEvidence) {
+			value.authored.regexPrograms = 1
+			value.authored.regexWorkUnits = splregex.MaximumExtractionProgramWorkUnits + 1
+			value.authored.extractionOutputs = 1
+		}, want: ErrInvalidInput},
+		{name: "authored regex omits output", mutate: func(value *trustedCompilerEvidence) {
+			value.authored.regexPrograms = 1
+			value.authored.regexWorkUnits = 1
 		}, want: ErrInvalidInput},
 		{name: "regex capture absent", mutate: func(value *trustedCompilerEvidence) { value.regexCaptureBytes = 0 }, want: ErrInvalidInput},
 		{name: "regex capture estimate", mutate: func(value *trustedCompilerEvidence) { value.regexCaptureBytes = 1024 }, want: ErrInvalidInput},
-		{name: "extraction outputs understate", mutate: func(value *trustedCompilerEvidence) { value.extractionOutputs = 0 }, want: ErrInvalidInput},
-		{name: "hidden output bound", mutate: func(value *trustedCompilerEvidence) { value.extractionOutputs = MaximumExtractionOutputs + 1 }, want: ErrResourceLimit},
-		{name: "scalar expressions are exact", mutate: func(value *trustedCompilerEvidence) { value.scalarExpressions++ }, want: ErrInvalidInput},
-		{name: "scalar nodes are exact", mutate: func(value *trustedCompilerEvidence) { value.scalarExpressionNodes++ }, want: ErrInvalidInput},
-		{name: "hidden predicate bound", mutate: func(value *trustedCompilerEvidence) { value.scalarPredicates = MaximumScalarPredicates + 1 }, want: ErrResourceLimit},
-		{name: "operator absent for executable objects", mutate: func(value *trustedCompilerEvidence) { value.generatedOperators = 0 }, want: ErrInvalidInput},
-		{name: "operator bound", mutate: func(value *trustedCompilerEvidence) { value.generatedOperators = MaximumGeneratedOperators + 1 }, want: ErrResourceLimit},
 		{name: "SQL bound", mutate: func(value *trustedCompilerEvidence) { value.generatedSQLBytes = MaximumGeneratedSQLBytes + 1 }, want: ErrResourceLimit},
 	}
 	for _, test := range tests {
@@ -319,14 +338,12 @@ func TestFinalizeRequiresCoherentPackagePrivateCompilerEvidence(t *testing.T) {
 	}
 
 	firstEvidence := valid
-	firstEvidence.generatedOperators = 1
 	firstEvidence.generatedSQLBytes = 1
 	first, err := finalize(authority, firstEvidence)
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondEvidence := firstEvidence
-	secondEvidence.generatedOperators++
 	secondEvidence.generatedSQLBytes++
 	second, err := finalize(authority, secondEvidence)
 	if err != nil {
@@ -334,6 +351,152 @@ func TestFinalizeRequiresCoherentPackagePrivateCompilerEvidence(t *testing.T) {
 	}
 	if first.Digest() == second.Digest() {
 		t.Fatal("final compiler evidence did not alter snapshot digest")
+	}
+}
+
+func TestTrustedCompilerEvidenceExhaustivelyMapsKnowledgeProgramCharges(t *testing.T) {
+	t.Parallel()
+
+	typeOfCharges := reflect.TypeFor[knowledgeprogram.Charges]()
+	fields := make([]string, typeOfCharges.NumField())
+	for index := range fields {
+		fields[index] = typeOfCharges.Field(index).Name
+	}
+	want := []string{
+		"GeneratedOperators",
+		"GeneratedFields",
+		"RegexPrograms",
+		"RegexWorkUnits",
+		"ExtractionOutputs",
+		"JSONEvaluationWork",
+		"ScalarExpressions",
+		"ScalarExpressionNodes",
+		"ScalarPredicates",
+	}
+	if !slices.Equal(fields, want) {
+		t.Fatalf(
+			"knowledgeprogram.Charges fields = %#v; update snapshot static, limit, wire, and mutation coverage for %#v",
+			fields,
+			want,
+		)
+	}
+}
+
+func TestFinalizePreservesExactKnowledgeAndAuthoredChargeSplit(t *testing.T) {
+	authority, err := Prepare(snapshotGoldenInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := evidenceFor(authority)
+	evidence.authored = trustedAuthoredCompilerEvidence{
+		regexPrograms:      1,
+		regexWorkUnits:     1,
+		extractionOutputs:  2,
+		jsonEvaluationWork: 3,
+		scalarPredicates:   4,
+	}
+	evidence.regexCaptureBytes = MaximumRegexCaptureBytes
+	evidence.generatedSQLBytes = 99
+
+	snapshot, err := finalize(authority, evidence)
+	if err != nil {
+		t.Fatalf("finalize(): %v", err)
+	}
+	charges := snapshot.Proto().GetBudgetCharges()
+	knowledge := authority.Prelude().Charges()
+	if charges.GetGeneratedOperators() != knowledge.GeneratedOperators ||
+		charges.GetGeneratedFields() != knowledge.GeneratedFields ||
+		charges.GetRegexPrograms() != knowledge.RegexPrograms+1 ||
+		charges.GetRegexWorkUnits() != knowledge.RegexWorkUnits+1 ||
+		charges.GetRegexCaptureBytes() != MaximumRegexCaptureBytes ||
+		charges.GetScalarExpressions() != knowledge.ScalarExpressions ||
+		charges.GetScalarExpressionNodes() != knowledge.ScalarExpressionNodes ||
+		charges.GetGeneratedSqlBytes() != 99 {
+		t.Fatalf("split final charges = %#v, knowledge = %+v", charges, knowledge)
+	}
+}
+
+func TestFinalizeChecksEverySharedCompilerCeiling(t *testing.T) {
+	authority, err := Prepare(Input{
+		TenantID: "tenant-a", PrincipalID: "principal-a", AppID: "app-a",
+		TenantCatalogRevision:      1,
+		TenantCatalogStateToken:    bytes.Repeat([]byte{0x77}, sha256.Size),
+		EffectiveAuthorizedIndexes: []string{"main"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name  string
+		exact func(*trustedCompilerEvidence)
+		over  func(*trustedCompilerEvidence)
+	}{
+		{
+			name: "regex programs",
+			exact: func(value *trustedCompilerEvidence) {
+				value.authored.regexPrograms = MaximumRegexPrograms
+				value.authored.regexWorkUnits = uint64(MaximumRegexPrograms)
+				value.authored.extractionOutputs = MaximumRegexPrograms
+				value.regexCaptureBytes = MaximumRegexCaptureBytes
+			},
+			over: func(value *trustedCompilerEvidence) {
+				value.authored.regexPrograms = MaximumRegexPrograms + 1
+			},
+		},
+		{
+			name: "regex work",
+			exact: func(value *trustedCompilerEvidence) {
+				value.authored.regexPrograms = MaximumRegexPrograms
+				value.authored.regexWorkUnits = MaximumRegexWorkUnits
+				value.authored.extractionOutputs = MaximumRegexPrograms
+				value.regexCaptureBytes = MaximumRegexCaptureBytes
+			},
+			over: func(value *trustedCompilerEvidence) {
+				value.authored.regexWorkUnits = MaximumRegexWorkUnits + 1
+			},
+		},
+		{
+			name: "extraction outputs",
+			exact: func(value *trustedCompilerEvidence) {
+				value.authored.extractionOutputs = MaximumExtractionOutputs
+			},
+			over: func(value *trustedCompilerEvidence) {
+				value.authored.extractionOutputs = MaximumExtractionOutputs + 1
+			},
+		},
+		{
+			name: "JSON work",
+			exact: func(value *trustedCompilerEvidence) {
+				value.authored.jsonEvaluationWork = MaximumJSONEvaluationWorkUnits
+			},
+			over: func(value *trustedCompilerEvidence) {
+				value.authored.jsonEvaluationWork = MaximumJSONEvaluationWorkUnits + 1
+			},
+		},
+		{
+			name: "scalar predicates",
+			exact: func(value *trustedCompilerEvidence) {
+				value.authored.scalarPredicates = MaximumScalarPredicates
+			},
+			over: func(value *trustedCompilerEvidence) {
+				value.authored.scalarPredicates = MaximumScalarPredicates + 1
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			exact := evidenceFor(authority)
+			test.exact(&exact)
+			if snapshot, exactErr := finalize(authority, exact); exactErr != nil || snapshot.IsZero() {
+				t.Fatalf("exact ceiling = (%#v, %v)", snapshot, exactErr)
+			}
+			over := exact
+			test.over(&over)
+			if snapshot, overErr := finalize(authority, over); !snapshot.IsZero() ||
+				!errors.Is(overErr, ErrResourceLimit) {
+				t.Fatalf("over ceiling = (%#v, %v), want zero/ErrResourceLimit", snapshot, overErr)
+			}
+		})
 	}
 }
 
@@ -1006,18 +1169,18 @@ func cloneSnapshotInput(input Input) Input {
 }
 
 func evidenceFor(authority Authority) trustedCompilerEvidence {
-	static := authority.StaticCharges()
-	evidence := trustedCompilerEvidence{
-		generatedFields:       static.GeneratedFields,
-		regexPrograms:         static.ExtractionRegexPrograms,
-		regexWorkUnits:        static.ExtractionRegexWorkUnits,
-		extractionOutputs:     static.ExtractionOutputs,
-		jsonEvaluationWork:    static.JSONEvaluationWorkUnits,
-		scalarExpressions:     static.ScalarExpressions,
-		scalarExpressionNodes: static.ScalarExpressionNodes,
-		scalarPredicates:      static.ScalarPredicates,
+	prelude := authority.Prelude()
+	commitment, ok := prelude.Commitment()
+	if !ok {
+		panic("test authority has no knowledge program commitment")
 	}
-	if evidence.regexPrograms > 0 {
+	evidence := trustedCompilerEvidence{
+		knowledgeProgramPresent:    true,
+		knowledgeProgramCommitment: commitment,
+		knowledgeProgramObjects:    prelude.ObjectCount(),
+		knowledgeProgramCharges:    prelude.Charges(),
+	}
+	if evidence.knowledgeProgramCharges.RegexPrograms > 0 {
 		evidence.regexCaptureBytes = MaximumRegexCaptureBytes
 	}
 	return evidence

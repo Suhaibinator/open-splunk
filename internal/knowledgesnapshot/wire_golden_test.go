@@ -53,7 +53,6 @@ func TestKnowledgeSnapshotSharedGoTypeScriptWireGolden(t *testing.T) {
 		t.Fatalf("Prepare(): %v", err)
 	}
 	evidence := evidenceFor(authority)
-	evidence.generatedOperators = 7
 	evidence.generatedSQLBytes = 2048
 	snapshot, err := finalize(authority, evidence)
 	if err != nil {

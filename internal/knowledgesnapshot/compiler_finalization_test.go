@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,10 +117,20 @@ func TestAuthorityFinalizeRejectsNonemptyAuthorityUntilKnowledgePreludeExists(t 
 	if err != nil {
 		t.Fatalf("Prepare: %v", err)
 	}
-	compiled, _ := compileSnapshotQuery(t, "tenant-a", []string{"alpha", "zeta"}, `*`)
-	if snapshot, finalizeErr := authority.Finalize(compiled); !snapshot.IsZero() ||
+	logical := buildSnapshotQuery(t, "tenant-a", []string{"alpha", "zeta"}, `*`)
+	logical, err = plan.InjectKnowledgePrelude(logical, authority.Prelude())
+	if err != nil {
+		t.Fatalf("InjectKnowledgePrelude(nonempty): %v", err)
+	}
+	if compiled, compileErr := (clickhouse.Compiler{}).Compile(logical); compileErr == nil ||
+		!strings.Contains(compileErr.Error(), "nonempty knowledge lowering is absent") {
+		t.Fatalf("Compile(nonempty) = (%#v, %v), want closed seal", compiled, compileErr)
+	}
+
+	emptyCompiled, _ := compileSnapshotQuery(t, "tenant-a", []string{"alpha", "zeta"}, `*`)
+	if snapshot, finalizeErr := authority.Finalize(emptyCompiled); !snapshot.IsZero() ||
 		!errors.Is(finalizeErr, ErrInvalidInput) {
-		t.Fatalf("Finalize(nonempty) = (%#v, %v), want zero/ErrInvalidInput", snapshot, finalizeErr)
+		t.Fatalf("Finalize(mismatched empty) = (%#v, %v), want zero/ErrInvalidInput", snapshot, finalizeErr)
 	}
 }
 
@@ -146,6 +157,29 @@ func compileSnapshotQuery(
 	source string,
 ) (clickhouse.CompiledQuery, *plan.Query) {
 	t.Helper()
+	logical := buildSnapshotQuery(t, tenantID, indexes, source)
+	empty, err := knowledgeprogram.Prepare(knowledgeprogram.Input{})
+	if err != nil {
+		t.Fatalf("Prepare(empty program): %v", err)
+	}
+	logical, err = plan.InjectKnowledgePrelude(logical, empty)
+	if err != nil {
+		t.Fatalf("InjectKnowledgePrelude(empty): %v", err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	return compiled, logical
+}
+
+func buildSnapshotQuery(
+	t *testing.T,
+	tenantID string,
+	indexes []string,
+	source string,
+) *plan.Query {
+	t.Helper()
 	parsed, err := spl.Parse(source)
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -164,17 +198,5 @@ func compileSnapshotQuery(
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	empty, err := knowledgeprogram.Prepare(knowledgeprogram.Input{})
-	if err != nil {
-		t.Fatalf("Prepare(empty program): %v", err)
-	}
-	logical, err = plan.InjectKnowledgePrelude(logical, empty)
-	if err != nil {
-		t.Fatalf("InjectKnowledgePrelude(empty): %v", err)
-	}
-	compiled, err := (clickhouse.Compiler{}).Compile(logical)
-	if err != nil {
-		t.Fatalf("Compile: %v", err)
-	}
-	return compiled, logical
+	return logical
 }
