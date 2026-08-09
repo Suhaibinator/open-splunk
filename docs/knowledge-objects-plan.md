@@ -1338,8 +1338,7 @@ matches a future write plan on tenant, full body-free before/after scalar
 endpoints, retained ordered dependency rows, and the exact derived-or-retained
 database projection. It intentionally rejects opaque future bodies; the
 existing projection-only emergency removal path remains separate until it has
-its own transactional proof. Route activation and future index-name admission
-remain closed.
+its own transactional proof. Route activation remains closed.
 
 The transaction and persistence boundary is now implemented without changing
 the public ACTIVE gates. It accepts only the Writer's existing fixed `*sql.Tx`,
@@ -1362,8 +1361,27 @@ Replay and active-dependent rejection still precede inventory work. The sole
 zero-proof exception reopens the live stored definition and proves a genuinely
 opaque future body plus exact scalar, selector, digest, and dependency identity
 before any write or persistence hook. Create, active-update, and enable remain
-closed, and future index-name creation still requires its own atomic catalog
-validation before any ACTIVE publication gate can open.
+closed.
+
+Immutable index-name creation now has its own atomic global admission boundary.
+Migration 0034 supplies sparse covering drivers for every nonempty ACTIVE
+knowledge tenant and every current ACTIVE registry identity. Before the first
+index write or audit append, the control transaction passes the canonical new
+name and exact pre-insert index facts to a knowledge-catalog validator on the
+same fixed `*sql.Tx`. The validator reconciles every tenant ledger with the
+global ACTIVE registry, captures catalog tokens and app revisions, preflights
+all tenants' aggregate projection/definition/selector/dependency scalars before
+hydrating any payload, and then recompiles every newly reachable candidate-free
+winner cohort. Matcher, multi-index OR-closure, visibility, compiler, and
+revisit budgets are shared across the complete tenant batch while retained
+caches remain tenant-local. A final fact-vector recheck precedes the index
+insert. The raw/nil path fails closed if either sparse ACTIVE driver has any
+evidence, and `cmd/open-splunk-server` always injects the full validator.
+Focused normal/race tests cover safe and conflicting foreign knowledge tenants,
+exact transaction use, clipped and bounded query plans, aggregate failure before
+hydration, malformed catalog/app/projection/dependency authority, cancellation,
+fact drift, atomic rollback, and audit ordering. This closes the future-index
+lifecycle prerequisite without opening ACTIVE create, update, or enable.
 
 Migration 0033 prepares that atomic publication boundary without opening it.
 An enable may append a newly derived dependency set instead of copying its
