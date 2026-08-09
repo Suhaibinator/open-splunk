@@ -776,7 +776,11 @@ const knowledgeRuntimeSyntheticEventSQL = `SELECT
     CAST('west' AS String) AS "index",
     CAST('fixture' AS String) AS "sourcetype",
     CAST(
-        '{"alias_value":"old","calculated_value":"old","regex_value":"old"}',
+        map(
+            'alias_value', 'old',
+            'calculated_value', 'old',
+            'regex_value', 'old'
+        ),
         'JSON(max_dynamic_paths=256, max_dynamic_types=16)'
     ) AS "__os_fields",
     CAST(['alias_value','calculated_value','regex_value'], 'Array(String)')
