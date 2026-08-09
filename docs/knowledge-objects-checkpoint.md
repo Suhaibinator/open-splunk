@@ -6,9 +6,11 @@
 
 **Last completed slice:** shared bounded candidate request decoding, an
 unregistered request-only Preview codec, and a structural Preview envelope
-validator which forces ACTIVE validation while leaving row policy
-uninterpreted; Preview service, response codec, handler, route, browser/runtime,
-and every nonempty execution gate remain closed
+validator plus wire-neutral protobuf contract hardening which pins its canonical
+six-field authority, exact bounds, forced-ACTIVE view, and full optional uint32
+row-scalar presence without assigning row policy; Preview service, response
+codec, handler, route, browser/runtime, and every nonempty execution gate remain
+closed
 
 **Evidence date:** August 9, 2026
 
@@ -35,10 +37,10 @@ and every nonempty execution gate remain closed
 - Validation-route terminal revision:
   `2aa51384ead0be6482a1e9ea3ce85fbeed1777f9`
 - Preview request-boundary terminal revision:
-  `ca9c2aaff267d50affc8f46895f4c775e14d29d0`
+  `74df953f6f317b651f7bde97c0370fc37822a756`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 127 intentional post-`c5440b9` KO
-  commits through `ca9c2aa` are durable locally. This update is prepared as a
+- Publication state before this document: 129 intentional post-`c5440b9` KO
+  commits through `74df953` are durable locally. This update is prepared as a
   separate documentation change. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -152,8 +154,9 @@ and every nonempty execution gate remain closed
   opaque to this typed compiler-issue seam. Legacy error/sentinel behavior is
   preserved; the registered handler never maps the raw seam directly, and the
   result layer consumes only its closed typed projection.
-- The Validate/Preview wire contract pins explicit inactive-storage
-  versus active-publication intent, presence-sensitive create/update envelopes,
+- The Validate wire contract pins two explicit intents, `INACTIVE_STORAGE` and
+  `ACTIVE_PUBLICATION`, while Preview accepts no intent and is forced active. The
+  combined contracts pin presence-sensitive create/update envelopes,
   update versions through MaxInt64, candidate-only in-band invalidity, exact
   successful normalized/digest/resource shape, inactive structural-only versus
   active singleton intrinsic charges (including extraction outputs, JSON work,
@@ -236,31 +239,40 @@ and every nonempty execution gate remain closed
   capability changed.
 - Validate and the unregistered request-only Preview codec now share an
   extracted layout-parameterized candidate raw-wire decoder. Both enforce the
-  mutation-request ceiling, read at most one byte beyond it solely as an
-  overflow witness, and use bounded two-pass projection instead of generic
-  protobuf materialization. Correct-wire object-ID presence selects update
-  projection; duplicate messages and masks merge, scalars are last-wins, and
-  empty/zero optional presence is retained. The decoder keeps only the
-  canonical mask inventory plus one and selected selector/output ceilings plus
-  one, validates every recognized UTF-8 string even when unselected,
-  overwritten, or cleared, and bounds unknown-group depth at 32. Outer unknowns
-  (including wrong-wire envelope fields) and mask unknowns remain envelope
-  errors; create and mask-selected nested candidate unknowns remain candidate
-  authority; update top-level and unselected candidate unknowns are discarded.
-  Million-entry mask, selected/unselected repetition, job-ID,
-  extraction-output, and alternating-body tests prove bounded retention and
-  allocation behavior.
-- Preview's request codec additionally retains the last UTF-8 search-job ID
-  through its 256-byte ceiling or a detached 257-byte over-limit witness, while
-  validating every occurrence as UTF-8. It preserves `maximum_rows` presence
-  and decoded value. Its structural envelope validator rejects nil, outer
-  unknown or wrong-wire envelope-field authority, and noncanonical retained job
-  IDs, then passes
-  a synchronous nonescaping candidate view through the exact Validate
-  create/update envelope with `ACTIVE_PUBLICATION` forced by the server.
-  `maximum_rows` is deliberately not defaulted, bounded, or interpreted. No
-  Preview response codec, handler, catalog/search service, retained-job
-  acquisition, route, manifest/bearer entry, capability, browser surface,
+  4 MiB-plus-64-KiB (`4259840`-byte) request ceiling, read at most one byte
+  beyond it solely as an overflow witness, and use bounded two-pass projection
+  instead of generic protobuf materialization. Correct-wire object-ID presence
+  selects update projection; duplicate messages and masks merge, scalars are
+  last-wins, and empty/zero optional presence is retained. The decoder keeps at
+  most 9 mask paths, 17 entries in each selected selector dimension, and 17
+  selected regex outputs, validates every recognized string occurrence as
+  UTF-8 even when unselected, overwritten, or cleared, and rejects malformed
+  wire or unknown-group depth above 32. Outer unknowns, including wrong-wire
+  envelope fields, and mask unknowns remain envelope errors; the full create
+  candidate and update mask-selected nested unknowns remain candidate authority;
+  update candidate top-level and unselected nested unknowns are discarded.
+  Million-entry mask, selected/unselected repetition, job-ID, extraction-output,
+  and alternating-body tests prove bounded retention and allocation behavior.
+- Preview's canonical request authority is `retained_search_job_id = 1`,
+  `definition = 2`, optional `knowledge_object_id = 3`, optional
+  `expected_version = 4`, `update_mask = 5`, and optional uint32
+  `maximum_rows = 6`, with no independent intent. The ID names future
+  owner-scoped retained execution authority that a service must reacquire under
+  the authenticated caller; it is not an immutable-event-snapshot identity and
+  grants no access by itself. The codec retains the last UTF-8 ID through the
+  256-byte ceiling or a detached 257-byte over-limit witness while validating
+  every occurrence. The validator requires a nonempty valid-UTF-8 ID unchanged
+  by whitespace trimming and free of Unicode control code points, rejects nil
+  and outer/mask unknown authority, and passes the exact Validate create/update view
+  with `ACTIVE_PUBLICATION` forced by the server. It performs no retained-job
+  lookup or authorization and never mutates or normalizes the decoded request.
+  `maximum_rows` preserves absence, explicit zero, and every exact uint32 value
+  through `4294967295`; this boundary assigns no default, bound, or execution
+  meaning. Go/TypeScript contract oracles pin tags and presence, the Go
+  structural and TypeScript wire oracles preserve MaxUint32, and no field
+  number, type, or presence encoding changed. No Preview response codec,
+  handler, catalog/search service, retained-execution acquisition, caller-auth
+  integration, route, manifest/bearer entry, capability, browser surface,
   Resolver attachment, or execution path exists.
 - The HTTP adapter requires the exact ready concrete Writer, acquires response-
   serialization capacity before retained request authority, detaches binding
@@ -398,7 +410,9 @@ Later local commits anchoring the reconciled current state include:
 | `eec63ee` | `docs(knowledge): checkpoint validation route` | Reconciled the registered ninth route, bounded transport/handler proofs, exact compatibility history, preserved browser/runtime closure, and 123-commit terminal state |
 | `d2a57cd` | `docs(proto): clarify validation compatibility waiver` | Historical FILE-waiver comments now state that the draft fields were retired before Validate registration and were never served by either Validate or Preview |
 | `2db17c3` | `feat(knowledge): bound preview requests` | Behavior-preserving extraction of the shared bounded candidate wire decoder plus an unregistered request-only Preview codec with exact projection, UTF-8, unknown-authority, raw-cap, detachment, and allocation proofs |
-| `ca9c2aa` | `feat(knowledge): validate preview envelopes` | Structural Preview request validation with a canonical retained-job identity, exact Validate create/update envelope reuse, server-forced ACTIVE publication, and deliberately uninterpreted `maximum_rows`, without a response codec, handler, service, or route |
+| `ca9c2aa` | `feat(knowledge): validate preview envelopes` | Structural Preview request validation with a canonical retained-job identity, exact Validate create/update envelope reuse, server-forced ACTIVE publication, preserved optional uint32 `maximum_rows` without assigning policy, and no response codec, handler, service, or route |
+| `da56ce4` | `docs(knowledge): checkpoint preview requests` | Reconciled the shared candidate decoder, dormant Preview codec and structural validator, bounded evidence, route/runtime closure, and 127-commit terminal state |
+| `74df953` | `fix(proto): bind preview request authority` | Wire-neutral Preview request contract hardening for owner-scoped retained-execution reacquisition, literal parser bounds, forced ACTIVE validation without lookup/authorization, exact optional uint32 row presence, generated Go/TypeScript comments, and cross-runtime oracle coverage |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -578,18 +592,21 @@ used.
   raw-wire authority for Validate and the request-only Preview codec. Correct-wire
   object-ID presence controls full-create versus mask-selected-update
   projection; protobuf duplicate merge, last-scalar, optional-presence, and
-  oneof reset semantics are preserved. Every recognized string is UTF-8-checked
-  regardless of selection or overwrite, dangerous repeated fields are
-  retained only through their semantic maximum plus one, unknown authority is
-  preserved or discarded according to the exact create/update split, and both
-  envelopes retain the same mutation raw-body and 32-group-depth ceilings
-- Preview request structure is valid only with a canonical retained search-job
-  ID and the exact Validate create/update envelope viewed under server-forced
-  `ACTIVE_PUBLICATION`. The request codec preserves optional `maximum_rows`,
-  but the structural validator deliberately assigns it no default, maximum, or
-  execution meaning. These internal request boundaries add no Preview response
-  codec, service, handler, route, browser/capability surface,
-  retained-job application, or runtime gate
+  oneof reset semantics are preserved. The exact request bounds are `4259840`
+  raw bytes, a 256-byte job ID, 9 retained mask paths, 17 entries per selected
+  selector dimension, 17 selected regex outputs, and unknown-group depth 32.
+  Every recognized string occurrence is UTF-8-checked regardless of selection,
+  overwrite, or clearing; unknown authority follows the exact outer/mask,
+  create, and mask-selected versus unselected update split
+- Preview request structure is valid only with the canonical six-field wire
+  authority and exact Validate create/update envelope under server-forced
+  `ACTIVE_PUBLICATION`. The canonical retained-execution ID is not an access
+  grant, and this structural boundary performs no lookup or authorization.
+  Optional uint32 `maximum_rows` preserves absence, explicit zero, and every
+  value through `4294967295` while assigning no default, bound, or execution
+  meaning. These internal request boundaries add no Preview response codec,
+  retained-execution reacquisition/application or caller-authorization service,
+  handler, route, browser/capability surface, or runtime gate
 - Pure result construction owns no catalog/database/transition/authorization or
   HTTP policy. Inactive normalization and active singleton preparation return
   opaque detached states; only exact typed definition/compiler issues map to
@@ -1047,20 +1064,20 @@ Current candidate-validation and dormant Preview request-boundary evidence:
 | --- | --- | --- |
 | Candidate normalization issue seam | pass | focused `internal/knowledgedefinition` normal, race, and vet gates plus its `knowledgeprogram` consumer passed; tests pin fail-fast field paths/codes, recursive unknown fields, every structural preflight, exact canonical-size boundary, detachment, wrapping, legacy text, and `errors.Is` parity |
 | Candidate semantic issue seam | pass | focused `internal/knowledgeprogram` tests pin index-bound detachment/wrapping, regex syntax/resource/capture issues, UTF-8 JSON ranges, calculated `SPL_*` diagnostics, Boolean-result attribution, legacy error/sentinel parity, singleton guidance, and opaque Prepare/authority/aggregate/cohort failures |
-| Validation protobuf generation and wire | pass with declared compatibility waiver | `make proto` ran twice with stable output; root Go validation-contract tests, TypeScript typecheck, lint, and the frontend protobuf compatibility suite passed. The comments now pin the exact history: draft result fields 6/7 and resource field 11 were retired before Validate registration and were never served by either Validate or Preview. Their FILE-level removal is intentionally not claimed schema-nonbreaking; all removed tags and the resource name are reserved |
+| Validation/Preview protobuf generation and wire | pass with declared compatibility waiver | `make proto` produced the generated Go/TypeScript request comments without changing Preview field numbers, types, or presence encoding; descriptor/source tests pin canonical fields 1–6. Go and TypeScript contract oracles preserve create tags `[1, 2]` and all six present-empty update tags, while the Go structural and TypeScript wire oracles preserve MaxUint32. Root Go contracts, TypeScript typecheck/lint, and the frontend compatibility suite passed. The historical FILE waiver remains exact: draft result fields 6/7 and resource field 11 were retired before Validate registration, never served by either route, and remain reserved |
 | Pure validation result construction | pass | focused `internal/knowledgevalidation` tests pin typed-only closed issue mapping, opaque inactive/active states, submitted-scalar range rebasing and private provenance, transition-supplied dependency canonicalization, exact inactive/active resources, recursive unknown-field rejection, detachment, exact deterministic wire-size comparison at an injected test bound, and the production 8 MiB cap |
 | ACTIVE candidate transition | pass | focused normal and race coverage plus the three-second alpha-invariance fuzz gate pin complete candidate-absent baseline validation before conflict attribution, deterministic stronger-conflict precedence, opaque non-target conflicts, generic target absence, detached candidate dependencies, index-admission closure reuse, and response invariance across fresh evaluation-ID renames |
 | Rollback-only Writer validation | pass | focused `ValidateKnowledgeObjectRequest`/`WriterValidate`/`ValidationBoundary`/`FinishValidation` normal and race tests, the full `internal/knowledgecatalog` package, `internal/knowledgevalidation`, and `go vet` pass. Tests pin independent read/write app authority, shared fail-fast admission, selected-view/witness amplification bounds, root/version/lifecycle/opaque precedence, inactive versus active inventory behavior, deterministic fresh identities, authorization-safe target projection, revision-zero physical emptiness, strict rollback-before-seal, cancellation, response taxonomy, detachment, and absence of mutation collaborators or DML |
 | Bounded validation transport | pass | focused normal/race tests and bounded differential fuzzing pin protobuf merge/oneof equivalence, exact raw N/N+1 body limits, body close and input detachment, UTF-8 and 32-level group policy, authority-sensitive unknown retention, exact sealed bytes, context/permit failure handling, and bounded retention/allocation for one million mask paths, selected/unselected selector patterns, regex outputs, and body alternations |
 | Shared candidate request decoder | pass, Validate behavior preserved | the candidate walker/builders are extracted behind envelope-specific field layouts. Existing Validate normal/race/fuzz coverage and Preview differential tests pin correct-wire object-ID mode selection, duplicate definition/mask merge, last-scalar and optional-presence semantics, selected/unselected projection, UTF-8 checks after caps or overwrites, the create/update unknown-authority split, malformed wire, and group depth 32/33 |
-| Bounded Preview request transport | pass, unregistered | focused tests and bounded differential fuzzing pin the same mutation raw N/N+1 limit, body close, input detachment, last retained-job scalar with a 256-byte exact value or detached 257-byte over-limit witness, optional `maximum_rows` presence/value, million job-ID/mask/selector/output cardinalities, alternating oneofs, and bounded outer-unknown copies. A real handler fixture proves the route count stays nine and `/api/v1/knowledge/objects/preview` returns 404 without authentication, body read, or attempt journal activity |
-| Preview structural envelope | pass, no service | focused tests prove nil-request rejection, outer-unknown rejection including wrong-wire envelope fields, canonical 256-byte retained-job identity, exact parity with the Validate create/update envelope under server-forced `ACTIVE_PUBLICATION`, candidate-unknown authority preservation, and no mutation of caller protobufs. Absent, zero, one, and MaxUint32 `maximum_rows` values remain untouched and deliberately uninterpreted |
+| Bounded Preview request transport | pass, unregistered | focused tests and bounded differential fuzzing pin the literal `4259840`-byte raw N/N+1 limit, body close, input detachment, retained-job scalar with a 256-byte exact value or detached 257-byte over-limit witness, at most 9 mask paths, 17 entries per selected selector dimension, and 17 selected regex outputs, depth 32/33 behavior, every-recognized-string UTF-8 validation, exact unknown-authority split, million-entry cardinalities, alternating oneofs, and bounded outer-unknown copies. A real handler fixture proves the route count stays nine and `/api/v1/knowledge/objects/preview` returns 404 without authentication, body read, or attempt journal activity |
+| Preview structural envelope | pass, no service | focused tests prove nil-request rejection, outer/mask unknown rejection including wrong-wire envelope fields, a nonempty valid-UTF-8 job ID of at most 256 bytes unchanged by whitespace trimming and free of Unicode control code points, exact Validate create/update parity under server-forced `ACTIVE_PUBLICATION`, candidate-unknown authority preservation, no retained-job lookup or authorization, and no caller-protobuf mutation or normalization. `maximum_rows` preserves absent, zero, one, and MaxUint32 as full optional uint32 wire authority while assigning no default, bound, or execution meaning |
 | Validation HTTP adapter | pass | focused normal/race tests pin exact-ready-Writer enforcement, serialization admission before retained authority, detached request binding, cloned read/write scope, valid HTTP 200 seals, closed error/disposition classification, create/update authorization context, cancellation, response-too-large handling, permit transfer/release, and request mutation isolation |
 | Registered validation route | pass, exposure closed | real HTTP tests pin ninth-route all-or-none configuration, authentication and administrator rejection before body read, `ActionValidate` journaling/fail-closed journal failures, shared Writer-gate 429 behavior, million-entry selected versus unselected outcomes, outer/mask/selected-nested/unselected unknown semantics, exact sealed responses, and no side effects. The exact protobuf route fixture now contains 60 routes; TypeScript declares Validate with an 8 MiB response cap while explicitly keeping it outside browser bearer attachment, and the backend generic outer administrator map remains unchanged |
 | Validation result bounds and privacy | service and route pass | descriptor/comment, Go/TypeScript wire, catalog-service, codec, handler, and HTTP tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
-| Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-job acquisition, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Validate remains outside the browser bearer allowlist and generic outer administrator map; nonempty search execution gates remain closed |
-| Docker-backed acceptance | not run; prior cancellation preserved | these commits refactor bounded request decoding and add dormant Preview request validation without ClickHouse execution. The previously canceled digest-pinned Docker matrix remains canceled; no Docker command was invoked and no ClickHouse runtime claim is made |
-| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview request transport `2db17c3`, and structural envelope validation `ca9c2aa` is separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..ca9c2aa` is exactly 127 and the terminal revision is `ca9c2aaff267d50affc8f46895f4c775e14d29d0` |
+| Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-execution acquisition or caller-auth integration, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Service work remains blocked on owner-scoped retained-execution reacquisition, fixed-catalog ACTIVE evaluation and program application, row-limit default/bound/execution policy, paired schema-row/truncation and response resource semantics, plus the closed nonempty compiler, snapshot-finalization, and digest-pinned ClickHouse gates. Validate remains outside the browser bearer allowlist and generic outer administrator map |
+| Docker-backed acceptance | not run; prior cancellation preserved | these commits refactor bounded request decoding, add dormant Preview request validation, and harden its wire-neutral request contract without ClickHouse execution. The previously canceled digest-pinned Docker matrix remains canceled; no Docker command was invoked and no ClickHouse runtime claim is made |
+| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoint `da56ce4`, and request-authority hardening `74df953` is separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..74df953` is exactly 129 and the terminal revision is `74df953f6f317b651f7bde97c0370fc37822a756` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:
@@ -1153,8 +1170,9 @@ and inspects that program without making it executable. Recognized ACTIVE
 publication and the nine management routes are now implemented independently of
 search-time capability exposure. The dormant Preview request codec and
 structural forced-ACTIVE envelope validator do not alter that order: without a
-retained-job acquisition/application service, response codec, handler, route,
-or open execution gates they authorize no preview behavior. The next
+retained-execution reacquisition/application and caller-authorization service,
+frozen row/response policy, response codec, handler, route, or open execution
+gates they authorize no preview behavior. The next
 dependency-ordered slices are:
 
 1. complete the digest-pinned ClickHouse acceptance matrix as bounded named
@@ -1174,6 +1192,9 @@ dependency-ordered slices are:
    four catalog/graph read routes are browser bearer-allowlisted, while Validate
    and all mutation routes remain excluded, and the dormant read-only UI remains
    hidden until that exposure decision. Preview service, response codec, and
-   route work
-   remains deferred until retained search authority and the hidden nonempty
-   runtime can be applied without reopening any execution or disclosure gate.
+   route work remain deferred until owner-scoped retained execution can be
+   reacquired under the authenticated caller; forced-ACTIVE validation can
+   yield and apply the exact candidate program; row-limit, paired schema/row,
+   truncation, response-byte, deadline, and concurrency policy is frozen; and
+   the hidden nonempty compiler, snapshot-finalization, and digest-pinned
+   ClickHouse gates pass without reopening any execution or disclosure gate.

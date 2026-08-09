@@ -88,11 +88,13 @@ change Validate behavior. Correct-wire object-ID presence, including empty,
 selects update/mask projection while absence selects the complete create
 definition. Duplicate definitions and masks merge, scalars are last-wins,
 optional empty/zero presence is preserved, and nested `oneof` merge/reset
-behavior matches protobuf decoding. The Preview codec uses the same mutation
-raw-body and group-depth ceilings. It validates every retained-job-ID occurrence
-as UTF-8 without retaining attacker-sized overwritten values, retains the last
-UTF-8 value through the 256-byte job-ID ceiling or a detached 257-byte over-limit
-witness, and preserves optional `maximum_rows` presence and decoded value.
+behavior matches protobuf decoding. The Preview codec accepts at most 4 MiB
+plus 64 KiB (`4259840` bytes), retains at most 9 update-mask paths, 17 entries
+in each selected selector dimension, and 17 selected regex outputs, and rejects
+malformed wire or unknown-group nesting deeper than 32. It validates every
+recognized string occurrence as UTF-8, including values later overwritten,
+unselected, or cleared. It retains the last UTF-8 job-ID value through the
+256-byte ceiling or a detached 257-byte over-limit witness.
 
 For both candidate request codecs, outer-request unknowns—including wrong-wire
 envelope fields—and field-mask unknowns are retained so structural envelope
@@ -445,25 +447,48 @@ mutable protobuf authority. Validate remains absent from the browser bearer
 allowlist and capability advertisement.
 
 Preview's internal request-only codec accepts the retained-search-job scalar
-plus the same create/update candidate fields. Its structural validator requires
-a canonical nonempty retained job ID of at most 256 UTF-8 bytes, rejects outer
-unknown authority (including wrong-wire envelope fields), and synchronously
-passes the candidate through the exact Validate create/update envelope with the
-server forcing `ACTIVE_PUBLICATION`. Candidate unknowns retain the same create
-or mask-selected authority for later Preview service evaluation. `maximum_rows` is
-preserved, including absent versus explicit zero and the full uint32 value, but
-is deliberately not defaulted, bounded, or interpreted by this structural
-boundary.
+plus the same create/update candidate fields. The canonical field authority is
+`retained_search_job_id = 1`, `definition = 2`, optional
+`knowledge_object_id = 3`, optional `expected_version = 4`,
+`update_mask = 5`, and optional uint32 `maximum_rows = 6`; Preview accepts no
+independent intent. The retained job ID names future owner-scoped retained
+execution authority which a service must reacquire under the authenticated
+caller. It is not an immutable-event-snapshot identity and does not itself
+grant access.
+
+The structural validator requires a nonempty valid-UTF-8 job ID of at most 256
+bytes, unchanged by whitespace trimming and containing no Unicode control code
+point. It rejects outer unknown authority, including wrong-wire envelope
+fields, and mask unknowns, then synchronously passes the candidate through the
+exact Validate create/update envelope with the server forcing
+`ACTIVE_PUBLICATION`. It performs no retained-job lookup or authorization and
+never mutates or normalizes the decoded request. Create full-candidate unknowns
+and update mask-selected nested unknowns remain candidate authority for future
+service evaluation; update candidate top-level and unselected nested unknowns
+are outside the mask authority and are discarded.
+
+`maximum_rows` preserves full optional uint32 wire authority: absence,
+explicit zero, and every value through `4294967295` remain distinct and
+unchanged. This request boundary assigns no default, bound, or execution
+meaning. Generated Go and TypeScript contract oracles independently preserve
+the create tags `[1, 2]` and all six present-empty update tags; the Go
+structural oracle and TypeScript wire oracle additionally preserve the maximum
+uint32 value. The frozen request comments and oracle coverage are wire-neutral:
+no field number, type, or presence encoding changed.
 
 Preview remains unregistered and unadvertised. There is no Preview response
-codec, handler, catalog/search service, retained-job acquisition, route,
-TypeScript route entry, browser bearer attachment, capability, UI/navigation
-request, Resolver attachment, or search execution. A future service must first
+codec, handler, catalog/search service, retained-execution acquisition or
+caller-authorization integration, route, TypeScript route entry, browser bearer
+attachment, capability, UI/navigation request, Resolver attachment, or search
+execution. A future service must reacquire the owner-scoped retained execution,
 evaluate definition validity in one fixed knowledge/app/index transaction,
-then apply the validated candidate to a retained server-authorized snapshot and
-retain the advisory-only revision semantics. It must never accept raw events,
-physical table names, index authority, asset paths, or SQL. Validate remains
-registered but unadvertised.
+apply the validated candidate program to that retained server-authorized
+execution, and freeze row-limit, paired before/after schema-row, truncation,
+response-byte, deadline, and concurrency semantics while retaining the
+advisory-only revision contract. The nonempty compiler, snapshot-finalization,
+and digest-pinned ClickHouse acceptance gates remain closed. Preview must never
+accept raw events, physical table names, index authority, asset paths, or SQL.
+Validate remains registered but unadvertised.
 
 This validation redesign intentionally uses a historical FILE-compatibility
 waiver. The earlier draft result fields 6 (`diagnostics`) and 7

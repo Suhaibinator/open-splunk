@@ -1045,14 +1045,15 @@ Validate does not use the ordinary read-all-plus-`proto.Unmarshal` request
 path. Its codec and the dormant Preview request codec now share one extracted,
 layout-parameterized candidate wire decoder. The extraction preserves
 Validate's existing behavior while letting both envelopes enforce the mutation
-raw-body ceiling by reading at most one byte beyond it solely as an overflow
-witness. The bounded two-pass projection preserves protobuf duplicate-message
+raw-body ceiling of 4 MiB plus 64 KiB (`4259840` bytes) by reading at most one
+byte beyond it solely as an overflow witness. The bounded two-pass projection
+preserves protobuf duplicate-message
 merge, last-scalar, optional-presence, and `oneof` merge/reset semantics without
 materializing attacker-sized repetitions. Correct-wire object-ID presence,
 including an explicitly empty value, selects update/mask projection; absence
-selects the complete create definition. The decoder retains at most the
-canonical mask-path count plus one and at most each selected selector/output
-ceiling plus one; validates UTF-8 in every recognized string even when that
+selects the complete create definition. The decoder retains at most 9 mask
+paths, 17 entries in each selected selector dimension, and 17 selected regex
+outputs; validates UTF-8 in every recognized string occurrence even when that
 field is unselected, overwritten, or later cleared; and rejects malformed wire
 or unknown-group nesting beyond 32 levels. Tests drive one million mask paths,
 selected and unselected selector entries, extraction outputs, job-ID scalars,
@@ -1210,28 +1211,51 @@ context and writes the seal's exact deterministic bytes—never a fresh mutable
 protobuf marshal—while holding and then releasing the serialization permit.
 
 Preview now has an internal request-only codec and structural envelope
-validator, but remains unregistered and unadvertised. The codec shares the
-bounded candidate decoder and exact raw ceiling above, validates every retained
-search-job-ID occurrence as UTF-8, retains the last UTF-8 value through the
-256-byte job-ID ceiling or a detached 257-byte over-limit witness, and preserves
-the optional presence and decoded scalar of `maximum_rows`. The structural
-validator rejects nil requests, outer unknown or wrong-wire envelope-field
-authority, and a noncanonical retained job ID, then synchronously views the
-candidate through
-the exact Validate create/update envelope with the server forcing
-`ACTIVE_PUBLICATION`. It deliberately does not default, cap, or otherwise
-interpret `maximum_rows`; that remains future service policy.
+validator, but remains unregistered and unadvertised. Its canonical request
+wire authority is `retained_search_job_id = 1`, `definition = 2`, optional
+`knowledge_object_id = 3`, optional `expected_version = 4`, `update_mask = 5`,
+and optional uint32 `maximum_rows = 6`; there is no client-authored validation
+intent. The retained job ID names future owner-scoped retained execution
+authority which a service must reacquire under the authenticated caller. It is
+not an immutable-event-snapshot identity and grants no access by itself.
 
-There is still no Preview response codec, handler, retained-job acquisition,
-catalog/search service, route, route-manifest or browser-bearer entry,
-capability, UI/navigation request, Resolver attachment, or search execution.
-A future service must evaluate definition validity in one fixed
-knowledge/app/index transaction before applying the candidate to a bounded
-retained, server-authorized search snapshot. Its revision remains advisory
-knowledge-ledger correlation metadata, not mutation acceptability, reservation,
-or reusable publication proof. It may return before/after schema and sample
-rows and must never let a browser submit events, raw ClickHouse SQL, physical
-scope, or bypass index authorization.
+The codec enforces the exact 4 MiB-plus-64-KiB (`4259840`-byte) raw ceiling,
+validates every recognized string occurrence as UTF-8, retains at most 9 mask
+paths, 17 entries in each selected selector dimension, and 17 selected regex
+outputs, and rejects malformed wire or unknown-group nesting deeper than 32.
+It retains the last UTF-8 job-ID value through the 256-byte ceiling or a
+detached 257-byte over-limit witness. The structural validator requires that ID
+to be nonempty, unchanged by whitespace trimming, and free of Unicode control
+code points; rejects outer unknown or wrong-wire envelope authority and mask
+unknowns; and synchronously views the exact Validate create/update envelope
+with the server forcing `ACTIVE_PUBLICATION`. It performs no retained-job
+lookup or authorization and never mutates or normalizes the decoded request.
+Create full-candidate unknowns and update mask-selected nested unknowns remain
+candidate authority; update candidate top-level and unselected nested unknowns
+are discarded.
+
+`maximum_rows` has full optional uint32 wire authority: absence, explicit zero,
+and every value through `4294967295` remain distinct and unchanged. The request
+boundary assigns it no default, bound, or execution meaning. Generated Go and
+TypeScript contract oracles independently preserve create tags `[1, 2]` and
+all six present-empty update tags; the Go structural oracle and TypeScript wire
+oracle additionally preserve the maximum uint32 value. The contract hardening
+therefore changes no request field number, type, or presence encoding.
+
+There is still no Preview response codec, handler, retained-execution
+acquisition or caller authorization, catalog/search service, route,
+route-manifest or browser-bearer entry, capability, UI/navigation request,
+Resolver attachment, or search execution. Before registration, the service
+must define and implement owner-scoped retained-execution reacquisition,
+evaluate the forced-ACTIVE candidate in one fixed knowledge/app/index
+transaction, apply the resulting program to the retained server-authorized
+execution, and freeze `maximum_rows` default/bound/execution policy plus paired
+before/after schema-row, truncation, response-byte, deadline, and concurrency
+semantics. Its revision remains advisory knowledge-ledger correlation metadata,
+not mutation acceptability, reservation, or reusable publication proof. It
+must never let a browser submit events, raw ClickHouse SQL, physical scope, or
+bypass index authorization. The nonempty compiler, snapshot-finalization, and
+digest-pinned ClickHouse acceptance gates remain closed independently.
 
 The validation wire redesign carries an intentional historical protobuf
 FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
@@ -1753,12 +1777,15 @@ The custom decoder's candidate wire core is now shared with an unregistered,
 request-only Preview codec; million-entry oracles prove bounded selected
 overflow, unselected projection, job-ID handling, and alternating-`oneof`
 behavior without generic protobuf materialization. A structural Preview
-envelope validator rejects untrusted outer/job authority and forces the exact
-Validate envelope to `ACTIVE_PUBLICATION` while deliberately leaving
-`maximum_rows` uninterpreted. Validate remains outside the generic outer
+envelope validator rejects untrusted outer/job authority, performs no lookup or
+authorization of retained execution, and forces the exact Validate envelope to
+`ACTIVE_PUBLICATION`. Its optional uint32 `maximum_rows` authority preserves
+absence, explicit zero, and the full value through `4294967295` without a
+default, bound, or execution meaning. Validate remains outside the generic outer
 administrator map and browser bearer allowlist; Preview still has no response
-codec, handler, service, route, manifest/bearer entry, capability, browser
-surface, retained-job execution, or runtime gate; and no bootstrap capability,
+codec, handler, retained-execution acquisition/caller-auth service, route,
+manifest/bearer entry, capability, browser surface, or runtime gate; and no
+bootstrap capability,
 Resolver attachment, or nonempty execution gate changed.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;

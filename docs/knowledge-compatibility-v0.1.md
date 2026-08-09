@@ -42,11 +42,11 @@ updated or enabled as ACTIVE. A dedicated bounded raw decoder, handler, and
 exact sealed-response encoder now expose the Writer's rollback-only candidate-
 validation service at the Validate route. Preview now has only an internal
 request-only codec and structural forced-ACTIVE envelope validator. It still has
-no response codec, handler, catalog/search service, retained-job acquisition,
-route or manifest/bearer entry, capability, navigation/UI request, Resolver
-attachment, or execution path. The nonempty compiler, snapshot-finalization,
-and execution gates remain closed, so no knowledge object affects search
-results.
+no response codec, handler, catalog/search service, retained-execution
+acquisition or caller-authorization integration, route or manifest/bearer
+entry, capability, navigation/UI request, Resolver attachment, or execution
+path. The nonempty compiler, snapshot-finalization, and execution gates remain
+closed, so no knowledge object affects search results.
 
 ## Security boundary
 
@@ -89,9 +89,11 @@ The schema is ACL-ready, but role-grant enforcement and cross-app export grants
 are not claimed until multi-user RBAC is implemented. Within one tenant, a
 global object is visible in every readable app. This is an explicit Open
 Splunk deviation, not an assertion about Splunk configuration-layer
-permissions. Preview uses a server-retained authorized search snapshot and
-inherits its app, index, time, visibility, row, byte, duration, and concurrency
-limits; draft content never supplies or widens those boundaries.
+permissions. Preview's request identifies future owner-scoped retained
+execution authority, not an immutable event-snapshot identity or access grant.
+A future service must reacquire that authority under the authenticated caller
+and preserve its app, index, time, visibility, row, byte, duration, and
+concurrency boundaries; draft content must never supply or widen them.
 
 ## Text, identity, and case
 
@@ -602,15 +604,16 @@ Validate uses a dedicated raw-wire codec rather than the generic read-all-plus-
 `proto.Unmarshal` path. Its candidate walker/builders are now shared with the
 unregistered request-only Preview codec through envelope-specific field
 layouts; the extraction preserves Validate behavior. Both enforce the ordinary
-mutation raw-body ceiling by reading at most one byte beyond it solely as an
-overflow witness, then perform a bounded two-pass projection with
+mutation raw-body ceiling of 4 MiB plus 64 KiB (`4259840` bytes) by reading at
+most one byte beyond it solely as an overflow witness, then perform a bounded
+two-pass projection with
 protobuf-compatible duplicate-message merge, last-scalar, optional-presence, and
 `oneof` merge/reset semantics. Correct-wire object-ID presence, including
 empty, selects update/mask projection; absence selects the complete create
-definition. The decoder retains at most the canonical mask-path inventory plus
-one and, for selected selector or extraction-output repetitions, at most the
-semantic ceiling plus one. Every recognized string is still UTF-8-validated
-even when unselected, overwritten, or cleared. Malformed wire or unknown-group
+definition. The decoder retains at most 9 update-mask paths, 17 entries in each
+selected selector dimension, and 17 selected regex outputs. Every recognized
+string occurrence is still UTF-8-validated even when unselected, overwritten,
+or cleared. Malformed wire or unknown-group
 nesting beyond 32 levels is rejected. Bounded oracles cover one million
 mask paths, selected and unselected selector entries, job-ID scalars, regex
 outputs, and alternating body choices without materializing those repetitions.
@@ -781,27 +784,49 @@ live request context and writes its exact deterministic bytes without a fresh
 mutable protobuf marshal; the route remains unadvertised.
 
 Preview has no independent intent. Its internal request-only codec shares the
-bounded candidate decoder and additionally validates every retained-job-ID
-occurrence as UTF-8, retains the last UTF-8 value through the 256-byte ceiling or a
-detached 257-byte over-limit witness, and preserves the optional presence and
-decoded uint32 value of `maximum_rows`. Its structural validator requires a
-canonical retained job ID, rejects outer unknown authority including wrong-wire
-envelope fields, and passes a synchronous nonescaping candidate view through
-the exact Validate create/update envelope with `ACTIVE_PUBLICATION` forced by
-the server. Candidate unknowns retain the create/mask-selected split for later
-Preview service evaluation. `maximum_rows` is deliberately not defaulted, bounded, or
-otherwise interpreted at this boundary.
+bounded candidate decoder. Its canonical request fields are
+`retained_search_job_id = 1`, `definition = 2`, optional
+`knowledge_object_id = 3`, optional `expected_version = 4`,
+`update_mask = 5`, and optional uint32 `maximum_rows = 6`. The retained job ID
+names future owner-scoped retained execution authority which a service must
+reacquire under the authenticated caller; it is not an immutable-event-snapshot
+identity and grants no access by itself.
+
+The codec validates every recognized string occurrence as UTF-8, including
+overwritten, unselected, or cleared values, and retains the last UTF-8 job ID
+through the 256-byte ceiling or a detached 257-byte over-limit witness. The
+structural validator requires a nonempty job ID unchanged by whitespace
+trimming and free of Unicode control code points, rejects outer unknown
+authority including wrong-wire envelope fields plus mask unknowns, and passes a
+synchronous nonescaping candidate view through the exact Validate create/update
+envelope with `ACTIVE_PUBLICATION` forced by the server. It never mutates or
+normalizes the decoded request and performs no retained-job lookup or
+authorization. The full create candidate and update mask-selected nested
+unknowns remain candidate authority; update candidate top-level and unselected
+nested unknowns are discarded.
+
+`maximum_rows` has full optional uint32 wire authority: absence, explicit zero,
+and every value through `4294967295` remain distinct and unchanged. The request
+boundary assigns no default, bound, or execution meaning. Generated Go and
+TypeScript contract oracles independently preserve create tags `[1, 2]` and
+all six present-empty update tags; the Go structural oracle and TypeScript wire
+oracle additionally preserve the maximum uint32 value. This contract hardening
+changes no field number, type, or presence encoding.
 
 Preview remains unregistered and unadvertised. It has no response codec,
-handler, catalog/search service, retained-job acquisition, route, TypeScript
-manifest or browser-bearer entry, capability, UI/navigation request, Resolver
-attachment, or execution path. A future service must first perform
+handler, catalog/search service, caller-authorization integration, acquisition
+of retained execution, route, TypeScript manifest or browser-bearer entry,
+capability, UI/navigation request, Resolver attachment, or execution path. A
+future service must reacquire the owner-scoped retained execution, perform
 `ACTIVE_PUBLICATION` evaluation in one fixed knowledge/app/index transaction,
-then apply the validated candidate to a retained, server-authorized search
-snapshot. Its revision remains advisory knowledge-ledger correlation metadata,
+apply the resulting candidate program to that retained server-authorized
+execution, and freeze the row-limit default/bound/execution policy plus paired
+before/after schema-row, truncation, response-byte, deadline, and concurrency
+semantics. Its revision remains advisory knowledge-ledger correlation metadata,
 not mutation acceptability, a reservation, or reusable publication proof;
-later Writer operations revalidate live authority. It accepts no raw events,
-physical scope, asset path, or SQL.
+later Writer operations revalidate live authority. The nonempty compiler,
+snapshot-finalization, and digest-pinned ClickHouse acceptance gates remain
+closed. Preview accepts no raw events, physical scope, asset path, or SQL.
 
 The validation wire redesign has an intentional historical protobuf
 FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
