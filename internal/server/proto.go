@@ -328,6 +328,12 @@ func forwardCompatibleProtoSanitizer[T proto.Message](request T) (T, error) {
 		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
 			return request, err
 		}
+	case *opensplunkv1.ValidateKnowledgeObjectRequest:
+		// Validate distinguishes unknown request and mask fields (envelope
+		// errors) from unknown applied-definition fields (in-band candidate
+		// invalidity). Its dedicated decoder has already projected updates and
+		// bounded dangerous repetitions, so no generic clearing is safe here.
+		return request, nil
 	}
 
 	pending := []protoreflect.Message{request.ProtoReflect()}
