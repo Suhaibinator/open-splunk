@@ -729,9 +729,20 @@ it derives version- and definition-digest-pinned `FIELD_INPUT` edges, source
 depths, and canonical ordinals before producing the immutable program. Snapshot
 preparation remains the independent persisted-authority oracle: its submitted
 dependency list must be byte-for-byte equal to the compiler-derived result.
-ACTIVE catalog publication remains disabled until the transactional catalog
-adapter validates every affected visibility cohort and persists those derived
-edges atomically.
+A publication candidate is first evaluated against an explicitly complete
+post-publication winner cohort. Its exact candidate key binds owner, identity,
+version, and definition digest. The derived authority distinguishes a successful
+empty edge set from missing derivation and retains each target's identity,
+owner, version, digest, role, and stage. Every other immutable winner's
+persisted outgoing rows must already be present, in per-source database order,
+and exactly equal the newly derived target set; program-global canonical
+ordinals and depths are never mistaken for database row ordinals. This pure
+cohort check does not establish visibility completeness from a count, one
+principal's `Resolution`, or a winners-plus-shadows mixture. ACTIVE catalog
+publication remains disabled until a transactional layer enumerates and bounds
+all affected private/app/global and index-intersection cohorts, proves latent
+unshadowing coverage, requires one exact candidate authority across them, and
+persists those derived edges atomically.
 
 The versioned program commitment length-frames the exact typed operator order,
 object origin and definition digest, per-output definition location, selector

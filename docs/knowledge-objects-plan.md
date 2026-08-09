@@ -1286,9 +1286,21 @@ oracle. Derived edges are pinned to object version, definition digest, stages,
 longest-path source depth, and canonical ordinal; selector implication,
 disjointness, sharing scope, same-stage conflicts, graph ceilings, deterministic
 ordering, detachment, and concurrent immutable access have focused normal and
-race coverage. Writer ACTIVE gates remain closed until a transactional catalog
-adapter validates every affected private/app/global cohort and stores only these
-derived edges.
+race coverage. A pure catalog adapter now consumes one explicitly complete
+post-publication winner cohort, regenerates its stage/resolution ordinals, calls
+only that compiler, binds the candidate owner alongside ID/version/digest,
+returns a present-even-when-empty candidate dependency authority, and rejects
+any drift in the already-persisted outgoing edges of
+every other winner. Its result retains target owner, version, digest, role, and
+stage separately from the smaller database projection; input rows are detached before
+compilation, and canonical definition bytes, selector work, static charges,
+objects, and edges are bounded before retention can amplify malformed input.
+The helper deliberately cannot prove cohort enumeration from a caller-supplied
+count or one search `Resolution`. Writer ACTIVE gates remain closed until a
+transactional catalog layer enumerates every affected private/app/global and
+index-intersection cohort, proves shadow/unshadow coverage, applies aggregate
+cross-cohort work bounds, requires identical candidate authority in every cohort
+where it wins, and stores only those derived edges atomically.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and

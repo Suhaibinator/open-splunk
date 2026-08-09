@@ -565,6 +565,11 @@ func calculatedDependencyAnalysis(expression string) (spl.ScalarExpressionAnalys
 	if err != nil {
 		return spl.ScalarExpressionAnalysis{}, fmt.Errorf("calculated expression is invalid")
 	}
+	if spl.ScalarExpressionMayReturnBooleanFunction(parsed) {
+		return spl.ScalarExpressionAnalysis{}, fmt.Errorf(
+			"calculated expression cannot directly assign a Boolean function result",
+		)
+	}
 	analysis, err := spl.AnalyzeScalarExpression(parsed)
 	if err != nil {
 		return spl.ScalarExpressionAnalysis{}, err
