@@ -60,6 +60,13 @@ type publicationCandidateAuthority struct {
 	ownerID          string
 }
 
+type publicationCohortCandidateMode uint8
+
+const (
+	publicationCohortCandidatePresent publicationCohortCandidateMode = iota
+	publicationCohortCandidateAbsent
+)
+
 // candidateDependencyAuthority is pointer-backed so an absent result remains
 // distinct from a successfully compiled candidate with zero dependencies.
 // Its private state retains richer compiler authority separately from the
@@ -272,6 +279,47 @@ func compilePublicationWinnerCohortTransition(
 	candidateWins bool,
 	programCommitmentOutput *[sha256.Size]byte,
 ) (candidateDependencyAuthority, error) {
+	return compilePublicationWinnerCohortMode(
+		ctx,
+		cohort,
+		candidate,
+		candidateWins,
+		publicationCohortCandidatePresent,
+		programCommitmentOutput,
+	)
+}
+
+// validatePublicationExistingWinnerCohort recompiles one complete cohort with
+// no transition candidate. Every winner must therefore carry exact persisted
+// dependency authority. The explicit absent mode prevents topology validators
+// from fabricating a sentinel candidate identity merely to reach that path.
+func validatePublicationExistingWinnerCohort(
+	ctx context.Context,
+	cohort publicationWinnerCohort,
+) ([sha256.Size]byte, error) {
+	var commitment [sha256.Size]byte
+	_, err := compilePublicationWinnerCohortMode(
+		ctx,
+		cohort,
+		publicationCandidateAuthority{},
+		false,
+		publicationCohortCandidateAbsent,
+		&commitment,
+	)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return commitment, nil
+}
+
+func compilePublicationWinnerCohortMode(
+	ctx context.Context,
+	cohort publicationWinnerCohort,
+	candidate publicationCandidateAuthority,
+	candidateWins bool,
+	candidateMode publicationCohortCandidateMode,
+	programCommitmentOutput *[sha256.Size]byte,
+) (candidateDependencyAuthority, error) {
 	if programCommitmentOutput != nil {
 		*programCommitmentOutput = [sha256.Size]byte{}
 	}
@@ -285,6 +333,20 @@ func compilePublicationWinnerCohortTransition(
 		return candidateDependencyAuthority{}, err
 	}
 	candidateValue := candidate
+	candidatePresent := candidateMode == publicationCohortCandidatePresent
+	if candidateMode != publicationCohortCandidatePresent &&
+		candidateMode != publicationCohortCandidateAbsent {
+		return candidateDependencyAuthority{}, fmt.Errorf(
+			"%w: publication cohort candidate mode is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	if !candidatePresent && (candidateWins || candidateValue != (publicationCandidateAuthority{})) {
+		return candidateDependencyAuthority{}, fmt.Errorf(
+			"%w: candidate-absent publication cohort carries candidate authority",
+			control.ErrInvalidArgument,
+		)
+	}
 	if int(cohort.expectedWinnerCount) != len(cohort.winners) ||
 		(candidateWins && cohort.expectedWinnerCount == 0) {
 		return candidateDependencyAuthority{}, invalidPublicationWinnerCohort("is incomplete")
@@ -295,10 +357,10 @@ func compilePublicationWinnerCohortTransition(
 			control.ErrCapacityExceeded,
 		)
 	}
-	if !validIdentity(candidateValue.objectID, maximumObjectIDBytes) ||
+	if candidatePresent && (!validIdentity(candidateValue.objectID, maximumObjectIDBytes) ||
 		candidateValue.version < 1 || candidateValue.version > math.MaxInt64 ||
 		candidateValue.definitionDigest == ([sha256.Size]byte{}) ||
-		!validIdentity(candidateValue.ownerID, maximumOwnerIDBytes) {
+		!validIdentity(candidateValue.ownerID, maximumOwnerIDBytes)) {
 		return candidateDependencyAuthority{}, fmt.Errorf(
 			"%w: publication candidate authority is invalid",
 			control.ErrInvalidArgument,
@@ -306,7 +368,7 @@ func compilePublicationWinnerCohortTransition(
 	}
 	candidateMatches := 0
 	for index := range cohort.winners {
-		if publicationWinnerMatchesCandidate(cohort.winners[index].object, candidateValue) {
+		if candidatePresent && publicationWinnerMatchesCandidate(cohort.winners[index].object, candidateValue) {
 			candidateMatches++
 		}
 	}
@@ -332,6 +394,7 @@ func compilePublicationWinnerCohortTransition(
 		cohort,
 		candidateValue,
 		candidateWins,
+		candidateMode,
 	); err != nil {
 		return candidateDependencyAuthority{}, err
 	}
@@ -346,7 +409,8 @@ func compilePublicationWinnerCohortTransition(
 	var candidateWinner *canonicalPublicationWinner
 	for index := range cohort.winners {
 		input := cohort.winners[index]
-		isCandidate := candidateWins && publicationWinnerMatchesCandidate(input.object, candidateValue)
+		isCandidate := candidatePresent && candidateWins &&
+			publicationWinnerMatchesCandidate(input.object, candidateValue)
 		winner, err := canonicalizePublicationWinner(
 			input,
 			isCandidate,
@@ -554,18 +618,25 @@ func preflightPublicationWinnerCohort(
 	cohort publicationWinnerCohort,
 	candidate publicationCandidateAuthority,
 ) error {
-	return preflightPublicationWinnerCohortTransition(cohort, candidate, true)
+	return preflightPublicationWinnerCohortTransition(
+		cohort,
+		candidate,
+		true,
+		publicationCohortCandidatePresent,
+	)
 }
 
 func preflightPublicationWinnerCohortTransition(
 	cohort publicationWinnerCohort,
 	candidate publicationCandidateAuthority,
 	candidateWins bool,
+	candidateMode publicationCohortCandidateMode,
 ) error {
 	var existingDependencies uint64
 	for index := range cohort.winners {
 		winner := cohort.winners[index]
-		isCandidate := candidateWins && publicationWinnerMatchesCandidate(winner.object, candidate)
+		isCandidate := candidateMode == publicationCohortCandidatePresent &&
+			candidateWins && publicationWinnerMatchesCandidate(winner.object, candidate)
 		if isCandidate {
 			if winner.existingDependenciesPresent || winner.existingDependencies != nil {
 				return invalidPublicationWinnerCohort("submits candidate dependency rows")
@@ -722,6 +793,21 @@ func publicationStageForObjectType(
 	}
 }
 
+// publicationCohortDependencyTargetAbsentError distinguishes a well-formed
+// persisted endpoint that is absent from one compiled winner cohort. It still
+// unwraps to ErrCorrupt for general cohort callers; topology admission may
+// reclassify it only after independently validating the endpoint against the
+// complete durable ACTIVE inventory.
+type publicationCohortDependencyTargetAbsentError struct{}
+
+func (*publicationCohortDependencyTargetAbsentError) Error() string {
+	return "publication winner cohort has an incomplete existing dependency closure"
+}
+
+func (*publicationCohortDependencyTargetAbsentError) Unwrap() error {
+	return ErrCorrupt
+}
+
 func validatePersistedPublicationDependencies(
 	source *canonicalPublicationWinner,
 	dependencies []publicationPersistedDependency,
@@ -738,7 +824,10 @@ func validatePersistedPublicationDependencies(
 			objectID: dependency.targetObjectID,
 			version:  dependency.targetVersion,
 		}]
-		if target == nil || source.key == target.key || source.stageRank <= target.stageRank {
+		if target == nil {
+			return &publicationCohortDependencyTargetAbsentError{}
+		}
+		if source.key == target.key || source.stageRank <= target.stageRank {
 			return invalidPublicationWinnerCohort("has an incomplete existing dependency closure")
 		}
 	}

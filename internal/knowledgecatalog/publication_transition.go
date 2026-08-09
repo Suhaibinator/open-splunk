@@ -252,6 +252,7 @@ type publicationTransitionWinnerKey struct {
 type publicationTransitionWork struct {
 	membershipVisits        uint64
 	changedCohorts          uint64
+	semanticPrograms        uint64
 	winnerRevisits          uint64
 	dependencyRevisits      uint64
 	definitionRevisits      uint64
@@ -1666,7 +1667,13 @@ func validatePublicationTransitionClassHydration(
 				control.ErrCapacityExceeded,
 			)
 		}
-		_, candidateVisible := publicationTransitionVisibilityRank(class, candidateAfter.canonical.object)
+		candidateVisible := false
+		if candidateAfter != nil {
+			_, candidateVisible = publicationTransitionVisibilityRank(
+				class,
+				candidateAfter.canonical.object,
+			)
+		}
 		result[index] = publicationTransitionClassHydration{
 			preCharge:        preCharge,
 			postCharge:       postCharge,
@@ -2077,7 +2084,14 @@ func (work *publicationTransitionWork) chargeChangedCohort(
 			control.ErrCapacityExceeded,
 		)
 	}
+	if work.semanticPrograms >= maximumPublicationTransitionSemanticPrograms {
+		return fmt.Errorf(
+			"%w: publication transition exceeds its semantic-program limit",
+			control.ErrCapacityExceeded,
+		)
+	}
 	work.changedCohorts++
+	work.semanticPrograms++
 	if !addPublicationResource(
 		&work.winnerRevisits,
 		uint64(len(winners)),
