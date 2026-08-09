@@ -519,6 +519,132 @@ replay hydration or receipt reclamation. Noncanonical encoding, duplicate
 known fields, nested or top-level unknown fields, wrong audit choice, or any
 same-width disagreement fails closed as catalog corruption.
 
+## Candidate validation and preview contract
+
+The protobuf definitions freeze future validation and preview behavior, but the
+production router registers neither route and bootstrap advertises neither
+capability. The normalizer currently provides only an internal bridge:
+`Normalize` remains fail-fast and `IssueFromError` may extract one detached,
+definition-relative candidate issue with code
+`KNOWLEDGE_DEFINITION_INVALID`, `KNOWLEDGE_DEFINITION_UNKNOWN_FIELD`, or
+`KNOWLEDGE_DEFINITION_RESOURCE_LIMIT`. An empty path identifies the definition
+message. Existing error text and `errors.Is` roots are preserved, lower causes
+are not newly exposed, and infrastructure, invariant, canonical-storage, and
+other non-candidate failures have no issue. No HTTP mapping consumes this seam.
+
+The semantic compiler has a separate internal-only seam. Fail-fast
+`knowledgeprogram.Compile` may bind one detached issue to the exact input index
+responsible for an intrinsic regex syntax/resource/capture-shape, JSON-path
+syntax/unsupported/resource, calculated-expression `SPL_*`, or direct-Boolean-
+result failure. A validation adapter must independently prove that index is the
+submitted candidate, should prefer singleton Compile at index zero, and must
+never project a winner-cohort issue. `Prepare` and object/definition authority,
+aggregate resource, cohort/collision/selector, and dependency failures remain
+opaque. Error text and sentinel behavior stay compatible. No HTTP mapping
+consumes this seam either.
+
+A Validate request requires definition message presence and exactly one intent.
+`INACTIVE_STORAGE` proves only bounded canonical inactive persistence and does
+not compile publication semantics. `ACTIVE_PUBLICATION` evaluates the candidate
+as a proposed ACTIVE version in one fixed knowledge/app/index catalog
+transaction. The response revision is only the exact knowledge-ledger component
+of that advisory evaluation; zero proves that ledger is empty. It is not
+complete reusable transaction authority, a reservation, mutation proof, or
+promise that later validation will agree. `UNSPECIFIED` and unknown numeric
+intent values are envelope errors. Create
+mode requires absent object ID, expected version, and update-mask message.
+Update mode requires a present nonempty ID, a present expected version from 1
+through MaxInt64 (`9223372036854775807`), and a present nonempty canonical mask
+relative to `KnowledgeObjectDefinition`; validation applies it to that exact
+current version. A missing definition message is an envelope error, while a
+present definition with a missing or unknown body is candidate invalidity.
+
+For ACTIVE create validation, the service chooses a deterministic non-persisted
+candidate ID and proves it fresh against the same bounded transactional
+inventory. This identity is only a derivation device: the response reserves or
+authorizes no ID, and semantic validity, diagnostics, resource charges, and the
+target-only dependency projection must be invariant under every fresh
+candidate-ID rename. A later Create generates its own ID and revalidates the
+then-current catalog, app, and index facts, so intervening changes may alter the
+outcome.
+
+Only candidate-authored invalidity may return HTTP 200 with `valid=false`. Such
+a result retains at least one field violation or ERROR diagnostic even after
+truncation and omits normalized definition, digest, dependencies, and resource
+estimates. A valid result carries the normalized definition, exact 32-byte
+digest of its deterministic encoding, and a complete candidate-only resource
+report; it has no field violations or ERROR diagnostics and no field-violation
+truncation. Request, authentication, requested-object authorization,
+catalog-integrity, hidden-inventory, and service failures are uniform non-2xx
+outcomes rather than candidate diagnostics. `object_type` is unspecified only
+when an invalid candidate's body cannot be identified; otherwise it is the
+exact applied body type.
+
+`valid` is advisory definition validity under the selected intent, never
+mutation acceptability, reservation, or a promise. An applied masked update
+identical to the current definition may be valid. `INACTIVE_STORAGE` against a
+currently ACTIVE object proves only hypothetical non-ACTIVE storage validity,
+never ACTIVE Update admissibility. Every later Writer independently revalidates
+then-current authorization, version, lifecycle, capacity, app, index, and
+publication authority.
+
+For `INACTIVE_STORAGE`, resources contain only exact selector-pattern and
+normalized-definition-byte charges; dependencies and every dependency or
+compile-derived counter are zero. For `ACTIVE_PUBLICATION`, resources are the
+intrinsic charges from a canonical singleton program whose only object is the
+normalized candidate and whose dependency list is empty: generated
+operators/fields, regex programs/work, scalar expressions/nodes, extraction
+outputs, JSON evaluation work, and scalar predicates. They are neither cohort
+totals nor marginal post-fusion deltas. `extraction_outputs = 12`,
+`json_evaluation_work_units = 13`, and `scalar_predicates = 14` complete the
+append-only resource shape; waived draft SQL-size tag/name 11 remains reserved.
+The complete set of at most 1,024 unique authorized direct candidate
+`FIELD_INPUT` dependencies is returned in binary target-ID/version/role order.
+Nodes count distinct exact returned targets excluding the candidate, and edges
+equal the returned list size; those counts come from the full ACTIVE transition,
+not the singleton compile. Missing and unauthorized targets are
+indistinguishable and produce only the static
+`KNOWLEDGE_DEPENDENCY_UNAVAILABLE` diagnostic with no target identity.
+
+Field violations and located diagnostics are separately limited to 256 exact-
+deduplicated values and longest deterministic prefixes of 256 KiB and 768 KiB
+aggregate UTF-8 text. A path is at most 1 KiB, a code 128 bytes, and a message
+4 KiB; a diagnostic has at most 32 unique binary-sorted suggestions of at most
+1 KiB. Aggregate charges sum the UTF-8 byte lengths of path, code, message, and
+all diagnostic suggestions without separators or wire framing. Truncation
+flags state whether each list is complete. Violations sort by binary
+path/code/message. Diagnostics sort ERROR before WARNING before INFO, then by
+path, absent range before present range, offsets, code/message, canonical
+coordinates, and suggestion sequence. Unknown or unspecified severity is
+invalid service output. A present range requires nonnil start and end, is
+half-open inside the exact candidate field scalar, lands on UTF-8 code-point
+boundaries, and has uniquely derived one-based coordinates: LF advances the
+line and resets column to one; every other Unicode scalar, including CR,
+advances the column. Any future issue field must extend validation,
+deduplication, and the total comparison key before emission.
+
+Issue text may contain only fixed templates and exact source text already in
+the applied candidate scalar. It never exposes another catalog object, app,
+owner, name, ID, version, digest, definition, index inventory beyond candidate
+text, cohort/global counts, generated SQL, or hidden authority. The response
+boundary recursively rejects unknown result fields and all unknown nested
+fields before deterministic serialization; the complete Validate response is
+at most 8 MiB.
+
+Preview has no independent intent. It uses the same create/update candidate
+envelope and always performs `ACTIVE_PUBLICATION` evaluation in one fixed
+knowledge/app/index transaction before applying the candidate to a retained,
+server-authorized search snapshot. Its revision is advisory knowledge-ledger
+correlation metadata, not mutation acceptability, a reservation, or reusable
+publication proof; later Writer operations revalidate live authority. It
+accepts no raw events, physical scope, asset path, or SQL.
+
+The validation wire redesign has an intentional pre-route protobuf FILE-
+compatibility waiver. Unserved draft result tags 6 and 7 and resource tag/name
+11 (`estimated_generated_sql_bytes`) were removed and reserved. Old and new
+peers may drop those never-served values, but this is not a schema-nonbreaking
+change and no reserved tag or name may be reused.
+
 ## Protobuf forward compatibility and corruption
 
 Mutation routes reject unknown fields anywhere in a submitted definition and

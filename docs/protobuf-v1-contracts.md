@@ -24,7 +24,7 @@ This directory is the source of truth shared by the Go server, Go collector, and
   validation, dependency, and bounded preview messages. The eight
   create/get/list/dependencies/dependents/update/set-state/delete routes are
   registered as one complete administrator-only management unit. Validation,
-  quarantine, and preview remain additive unregistered contracts, and none of
+  quarantine, and preview remain unregistered message contracts, and none of
   this advertises the Tier-1 capability.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
@@ -190,9 +190,124 @@ caller scope, page bound, and the
 first-page catalog revision plus state commitment. Each implemented graph
 cursor additionally binds its direction, requested-version presence and value,
 resolved root identity, and total-count choice; a catalog revision or state-
-commitment change invalidates continuation. Preview accepts only a retained
-server-authorized search-job identity plus a candidate definition. It never
-accepts raw events, physical table names, index authority, asset paths, or SQL.
+commitment change invalidates continuation.
+
+Two typed candidate-issue seams exist only inside the Go implementation; no
+HTTP mapping or route consumes them. Definition normalization remains fail-fast
+and exposes only detached `KNOWLEDGE_DEFINITION_INVALID`,
+`KNOWLEDGE_DEFINITION_UNKNOWN_FIELD`, or
+`KNOWLEDGE_DEFINITION_RESOURCE_LIMIT` issues. Separately,
+`knowledgeprogram.Compile` may bind one detached semantic issue to the exact
+input index responsible for an intrinsic regex syntax/resource/capture-shape,
+JSON-path syntax/unsupported/resource, calculated-expression `SPL_*`, or
+direct-Boolean-result failure. An adapter must independently prove that index
+is the submitted candidate, should compile a singleton candidate at index zero,
+and must never project an issue from a winner cohort. `Prepare` and authority,
+aggregate, cohort/collision/selector, and dependency failures stay opaque;
+legacy error text and sentinel behavior remain unchanged.
+
+The future validation request requires a present definition and exactly one
+nonzero `KnowledgeValidationIntent`. `INACTIVE_STORAGE` proves only bounded
+canonical persistence in an inactive state; `ACTIVE_PUBLICATION` evaluates the
+candidate as a proposed ACTIVE version in one fixed knowledge/app/index catalog
+transaction. The returned revision identifies only the advisory knowledge-
+ledger component; zero proves that ledger is empty. It is not complete
+transaction authority, a reservation, mutation proof, or promise that later
+validation will agree. Unspecified and unknown intent values are request-
+envelope errors. Create mode
+is selected only by an absent object ID and requires both expected version and
+the update-mask message to be absent. Update mode requires a present nonempty
+ID, a present expected version in the inclusive range 1 through MaxInt64
+(`9223372036854775807`), and a present nonempty canonical field mask relative
+to `KnowledgeObjectDefinition`; it applies that mask to the exact current
+version. A missing top-level definition is an envelope error, while a present
+definition with no recognized body is candidate-authored invalidity.
+
+ACTIVE create validation uses a deterministic non-persisted candidate ID proven
+fresh against the same bounded transactional catalog inventory. That identity
+is evaluation-local: the response neither returns, reserves, nor authorizes an
+object ID. Validity, diagnostics, candidate resources, and the target-only
+dependency projection must be invariant under every fresh candidate-ID alpha-
+renaming. A later Create generates its own ID and revalidates the then-current
+catalog, app, and index facts; intervening facts may therefore change its
+outcome.
+
+Only candidate-authored invalidity is returned in-band as HTTP 200 with
+`valid=false`; it retains at least one field violation or ERROR diagnostic and
+omits normalized definition, digest, dependencies, and resources. A valid
+result requires the normalized definition, its exact 32-byte deterministic
+protobuf digest, complete resources, no field violations or ERROR diagnostics,
+and a false field-violation truncation flag. Request, authentication,
+authorization-to-the-requested-object, catalog-integrity, hidden-inventory, and
+service failures remain uniform non-2xx outcomes. Result and response unknown
+fields are rejected recursively before issue canonicalization and deterministic
+serialization; the complete response is capped at 8 MiB.
+`object_type` is unspecified only when an invalid candidate's body cannot be
+identified; every other result carries the exact applied body type.
+
+`valid` is advisory definition validity under the selected intent, not mutation
+acceptability, a reservation, or a promise. A masked no-op update may be valid;
+`INACTIVE_STORAGE` against a current ACTIVE object proves only hypothetical
+non-ACTIVE storage validity and never ACTIVE Update admissibility. A later
+Writer independently revalidates then-current authorization, version,
+lifecycle, capacity, app, index, and publication authority.
+
+Every resource charge describes only the applied candidate. An inactive result
+reports exact selector-pattern and normalized-definition-byte charges, with an
+empty dependency list and zero dependency and compile-derived charges. An
+active result derives its intrinsic compile fields from a canonical singleton
+program whose only object is the normalized candidate and whose dependency list
+is empty. These exact fields are generated operators/fields, regex
+programs/work, scalar expressions/nodes, extraction outputs, JSON evaluation
+work, and scalar predicates; they are neither affected-cohort totals nor
+marginal post-fusion deltas. The last three are append-only fields 12, 13, and
+14; waived draft SQL-size field/name 11 remains reserved. The complete set of
+at most 1,024 unique, authorized direct `FIELD_INPUT` dependencies is ordered
+by binary target ID, version, and role. Dependency nodes are the distinct exact
+returned targets excluding the candidate, and dependency edges equal the
+returned list size; both derive from the full ACTIVE transition rather than the
+singleton program. A missing or unauthorized target produces only the
+static `KNOWLEDGE_DEPENDENCY_UNAVAILABLE` candidate diagnostic; it exposes no
+target identity, and missing and forbidden are indistinguishable.
+
+Field violations and located diagnostics each admit at most 256 exact-deduped
+entries. Their longest deterministic prefixes have aggregate UTF-8 text budgets
+of 256 KiB and 768 KiB respectively, with explicit truncation flags. Each path
+is at most 1 KiB, code 128 bytes, and message 4 KiB; diagnostics permit at most
+32 unique binary-sorted 1 KiB suggestions. Aggregate charges sum the UTF-8
+lengths of path, code, message, and—for diagnostics—every suggestion, without
+separators or wire framing. Field violations sort by binary path/code/message.
+Diagnostics use the total order ERROR, WARNING, INFO, then path, absent range
+before present range, offsets, code/message, derived coordinates, and suggestion
+sequence; unspecified or unknown severity is invalid service output. A present
+source range requires nonnil start and end positions, is half-open within the
+exact field scalar, lands on UTF-8 code-point boundaries, and carries uniquely
+derived one-based coordinates where LF starts a new line and every other
+Unicode scalar, including CR, advances the column. Any future issue field must
+extend entry validation, deduplication, and this total comparison key before it
+may be emitted. All issue text is limited to stable static
+templates plus exact source text already in the applied candidate scalar; it
+cannot expose another object, app, owner, name, ID, version, digest,
+definition, non-candidate index inventory, cohort/global count, generated SQL,
+or hidden authority.
+
+Preview accepts only a retained server-authorized search-job identity plus a
+candidate definition. The future preview route has no independent intent: it
+always applies the same create/update envelope using `ACTIVE_PUBLICATION` and
+evaluates definition validity in one fixed knowledge/app/index transaction
+before execution. Its revision is advisory knowledge-ledger correlation
+metadata, not mutation acceptability, a reservation, or reusable publication
+proof; every later Writer revalidates live authority. It never accepts raw
+events, physical table names, index authority, asset paths, or SQL. Validate and
+Preview are both unregistered and unadvertised.
+
+This validation redesign intentionally uses a pre-route FILE-compatibility
+waiver. The earlier unserved draft result fields 6 (`diagnostics`) and 7
+(`dependencies`) and resource field/name 11
+(`estimated_generated_sql_bytes`) were removed; all tags and the resource name
+are reserved against reinterpretation. Because neither validate nor preview
+has ever been registered or served, peers may drop those draft unknown values,
+but the change must not be described as schema non-breaking.
 
 The dependency routes expose only direct persisted object-to-object edges and
 never snapshot-global stage, depth, ordinal, or definition-digest authority.

@@ -4,8 +4,8 @@
 
 **Current milestone:** KO-1 search-time runtime acceptance (closed gates)
 
-**Last completed slice:** dormant exact-version dependency/dependent inspection
-in the hidden Knowledge Manager detail
+**Last completed slice:** typed candidate normalization/semantic issues and the
+complete advisory validation/preview resource contract, with both routes closed
 
 **Evidence date:** August 9, 2026
 
@@ -28,8 +28,8 @@ in the hidden Knowledge Manager detail
 - KO-1C closed-gate retained-prelude revision:
   `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 108 intentional post-`c5440b9` KO
-  commits through `1fd8c12` are durable locally. This checkpoint is kept as a
+- Publication state before this document: 114 intentional post-`c5440b9` KO
+  commits through `5057a67` are durable locally. This checkpoint is kept as a
   separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -121,6 +121,40 @@ in the hidden Knowledge Manager detail
   and displays only visible opposite ID/version/`FIELD_INPUT` rows. Capability-
   gated navigation and dynamic loading remain absent, so production bootstrap
   still makes no knowledge request.
+- Candidate normalization now has a detached, fail-fast typed `Issue` seam for
+  invalid definitions, recursive unknown fields, and definition resource
+  limits. It preserves legacy error text and `errors.Is` roots, exposes at most
+  one definition-relative issue, and deliberately excludes infrastructure,
+  invariant, canonical-storage, and other non-candidate failures. No HTTP
+  boundary maps the seam.
+- Semantic `Compile` now has a separate detached, fail-fast issue seam for an
+  exact candidate input index's intrinsic regex, JSON-path, calculated `SPL_*`,
+  and Boolean-result failures. An adapter must prove the submitted candidate
+  and use singleton/index-zero attribution; `Prepare`, winner-cohort,
+  authority, aggregate, collision/selector, and dependency failures remain
+  opaque. Legacy error/sentinel behavior is preserved and there is no HTTP
+  mapping.
+- The future Validate/Preview wire contract now pins explicit inactive-storage
+  versus active-publication intent, presence-sensitive create/update envelopes,
+  update versions through MaxInt64, candidate-only in-band invalidity, exact
+  successful normalized/digest/resource shape, inactive structural-only versus
+  active singleton intrinsic charges (including extraction outputs, JSON work,
+  and scalar predicates), full-transition authorized candidate dependencies,
+  deterministic bounded located diagnostics and violations, UTF-8 source
+  coordinates, privacy, truncation, recursive unknown-output rejection, and an
+  8 MiB response maximum. ACTIVE create uses a fresh deterministic
+  non-persisted evaluation ID, reserves no identity, and requires validity,
+  diagnostics, resources, and target dependencies to be invariant under every
+  fresh-ID rename; a later Create allocates and revalidates its own ID. A valid
+  result is advisory definition validity, not mutation acceptability: no-op
+  updates may be valid and inactive validation of an ACTIVE object is only
+  hypothetical. The fixed transaction also reads app/index authority, while
+  `tenant_catalog_revision` names only its knowledge-ledger component (zero
+  proves an empty ledger) and is no reservation, mutation proof, or reusable
+  authority. Preview always uses `ACTIVE_PUBLICATION`. Neither route is
+  registered or advertised. Draft result tags 6/7 and resource tag/name 11 are
+  reserved under an intentional pre-route FILE compatibility waiver; the
+  change is not claimed schema-nonbreaking.
 
 ## KO-0 durable commits
 
@@ -228,6 +262,12 @@ Later local commits anchoring the reconciled current state include:
 | `a4e1a0f` | `feat(knowledge): inspect dependency relationships` | Same-WAL direct outgoing and authorization-leading current-source inverse reads, omission-before-page/count privacy, optional exact totals, signed state-bound cursors, and bounded hydration/query plans |
 | `7540804` | `feat(knowledge): expose dependency graph reads` | Two bounded graph codecs/handlers, all-or-none eight-route production registration, trusted-scope response validation, rejected-attempt actions, a 128 KiB response ceiling, and unadvertised route-manifest entries |
 | `1fd8c12` | `feat(web): inspect knowledge relationships` | Dormant exact-version dependency/dependent consumers, independently validated pagination/revision state, visible opposite-ID/version/role-only presentation, and a read-only four-route knowledge bearer allowlist |
+| `8dfa3bc` | `docs(knowledge): checkpoint graph browser inspection` | Reconciled exact-version graph Store/API/browser readiness while preserving absent navigation/chunk/capability and closed nonempty execution gates |
+| `0636d9d` | `refactor(knowledge): report definition issues` | Detached fail-fast candidate normalization issue extraction with definition-relative paths and three stable codes, preserving legacy text/`errors.Is` taxonomy while excluding non-candidate failures; no HTTP mapping |
+| `0c31de0` | `feat(proto): define knowledge validation contract` | Future unregistered Validate/Preview envelope, intent, result, resource, dependency, located-diagnostic, privacy, deterministic-bound, and 8 MiB response contracts; Preview is always ACTIVE publication and reserved draft fields use an explicit pre-route FILE waiver |
+| `392577a` | `fix(proto): bind advisory create validation` | Deterministic transaction-fresh non-persisted ACTIVE-create evaluation identity, fresh-ID alpha-invariance, no ID reservation/authorization, and mandatory later Create allocation plus live authority revalidation |
+| `97651f9` | `refactor(knowledge): report semantic issues` | Detached index-bound fail-fast Compile issues for intrinsic regex, JSON-path, calculated SPL, and Boolean-result failures while Prepare, authority, aggregate, cohort, and dependency failures remain opaque; no HTTP mapping |
+| `5057a67` | `fix(proto): complete validation resource authority` | Append-only extraction-output/JSON-work/scalar-predicate resource fields, singleton intrinsic compile charges versus full-transition dependency counts, advisory valid/no-op/hypothetical-inactive semantics, and knowledge-revision-only correlation metadata |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -363,6 +403,39 @@ used.
 - Terminal corruption quarantine with bounded dependent closure, protected
   version/idempotency capacity, and one recovery-audit slot for every lifetime
   physical identity
+- Fail-fast candidate definition issues are detached and definition-relative,
+  use only `KNOWLEDGE_DEFINITION_INVALID`,
+  `KNOWLEDGE_DEFINITION_UNKNOWN_FIELD`, and
+  `KNOWLEDGE_DEFINITION_RESOURCE_LIMIT`, preserve legacy text and `errors.Is`
+  roots, and exclude infrastructure/invariant/canonical-storage failures. This
+  is an internal seam, not a registered validation handler
+- Candidate semantic issues are detached and bound to one exact `Compile`
+  input index for intrinsic regex, JSON-path, calculated `SPL_*`, and direct-
+  Boolean-result failures. Validation must prove the submitted candidate and
+  use singleton/index-zero attribution; `Prepare` plus authority, aggregate,
+  winner-cohort/collision/selector, and dependency failures remain opaque. This
+  seam also preserves legacy error/sentinel behavior and has no HTTP mapping
+- Future validation requires exactly one inactive-storage or active-publication
+  intent and a presence-sensitive create/update envelope. Update versions are
+  1 through MaxInt64; only candidate invalidity is an in-band `valid=false`
+  result. Successful output binds normalized bytes, a 32-byte digest, complete
+  candidate-only singleton intrinsic resources, full-transition authorized
+  direct dependencies, deterministic bounded source-located diagnostics,
+  privacy, explicit truncation, recursive unknown-field rejection, and an
+  8 MiB response maximum. Intrinsic resources explicitly include extraction
+  outputs, JSON evaluation work, and scalar predicates. ACTIVE create uses a
+  deterministic transaction-fresh non-persisted evaluation ID, returns/reserves
+  no identity, and requires validity, diagnostics, resources, and target-only
+  dependencies to be invariant under fresh-ID alpha-renaming; a later Create
+  allocates and revalidates its own identity and live facts. `valid` is advisory
+  definition validity rather than mutation acceptance: a no-op masked update
+  may be valid and inactive validation of a current ACTIVE object is only
+  hypothetical. One fixed transaction observes knowledge/app/index facts, but
+  the response revision identifies only its advisory knowledge-ledger
+  component and is no reservation or reusable proof. Preview always uses
+  active-publication semantics. Both routes remain unregistered/unadvertised,
+  and reserved draft fields carry an intentional pre-route FILE compatibility
+  waiver rather than a schema-nonbreaking claim
 
 The compatibility inventory contains 55 hash-pinned cases. It is explicitly a
 strict contract inventory, not yet runtime semantic evidence. Before the field
@@ -779,6 +852,19 @@ KO-1C closed-gate evidence:
 | Runtime activation at this checkpoint | unchanged in that slice | `compiled_query_execution.go` and `knowledgesnapshot.Authority.Finalize` retained separate nonempty hard gates; production still supplied no resolver, routes, capability, navigation, or supported ACTIVE publication at this checkpoint |
 | Local durability | pass | forty-nine intentional KO-1C commits from `5088427` through `70b9ef6` inclusive are separate and locally durable on `codex/knowledge-objects-runtime`; this checkpoint update is a separate documentation commit |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |
+
+Current candidate-diagnostic and future-validation contract evidence:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Candidate normalization issue seam | pass | focused `internal/knowledgedefinition` normal, race, and vet gates plus its `knowledgeprogram` consumer passed; tests pin fail-fast field paths/codes, recursive unknown fields, every structural preflight, exact canonical-size boundary, detachment, wrapping, legacy text, and `errors.Is` parity |
+| Candidate semantic issue seam | pass | focused `internal/knowledgeprogram` tests pin index-bound detachment/wrapping, regex syntax/resource/capture issues, UTF-8 JSON ranges, calculated `SPL_*` diagnostics, Boolean-result attribution, legacy error/sentinel parity, singleton guidance, and opaque Prepare/authority/aggregate/cohort failures |
+| Validation protobuf generation and wire | pass with declared compatibility waiver | `make proto` ran twice with stable output; root Go validation-contract tests, TypeScript typecheck, lint, and the frontend protobuf compatibility suite passed. FILE-level removal of the never-served draft result fields 6/7 and resource field 11 is intentionally not claimed schema-nonbreaking; all removed tags and the resource name are reserved |
+| Validation result bounds and privacy | pass as contract, service pending | descriptor/comment and Go/TypeScript wire tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
+| Runtime activation | unchanged | Validate and Preview handlers/routes do not exist in production registration or the browser allowlist, bootstrap advertises no knowledge capability, Preview is contractually always `ACTIVE_PUBLICATION`, and nonempty search execution gates remain closed |
+| Docker-backed acceptance | not run | these commits add internal candidate issue seams and an unserved protobuf contract only; no Docker command was invoked and no ClickHouse runtime claim is made |
+| Local durability | pass | `0636d9d`, `0c31de0`, `392577a`, `97651f9`, and `5057a67` are separate locally durable implementation commits on `codex/knowledge-objects-runtime`; the post-`c5440b9` count through `5057a67` is 114 |
+| Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:
 
