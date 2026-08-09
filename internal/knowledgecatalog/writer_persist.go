@@ -17,6 +17,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
 
@@ -104,7 +105,18 @@ func (writer *Writer) publishMutation(
 	if err != nil {
 		return Object{}, 0, nil, err
 	}
-	if !plan.activeTransition.IsZero() {
+	if plan.current != nil && plan.current.State == StateActive &&
+		plan.activeTransition.IsZero() {
+		if err := validateOpaqueActiveRemovalPersistence(
+			ctx,
+			tx,
+			prepared.scope.tenantID,
+			plan,
+			dependencies,
+		); err != nil {
+			return Object{}, 0, nil, err
+		}
+	} else if !plan.activeTransition.IsZero() {
 		dependencies, err = plan.activeTransition.validateAndProject(
 			ctx,
 			tx,
@@ -669,7 +681,137 @@ func validatePublicationInputs(
 		plan.createdAt.UnixMicro() != plan.current.CreatedAtUnixMicro {
 		return fmt.Errorf("%w: knowledge update plan is invalid", control.ErrInvalidArgument)
 	}
+	if plan.current != nil && plan.current.State == StateActive &&
+		plan.activeTransition.IsZero() && !validOpaqueActiveRemovalPlan(plan) {
+		return invalid("ACTIVE transition authority is absent")
+	}
 	return nil
+}
+
+func validOpaqueActiveRemovalPlan(plan publicationPlan) bool {
+	current := plan.current
+	if current == nil || current.State != StateActive || !plan.definition.opaque ||
+		current.DisabledAtUnixMicro != nil || current.QuarantinedAtUnixMicro != nil ||
+		current.DeletedAtUnixMicro != nil || current.QuarantineReason != nil ||
+		current.ObjectType != plan.definition.objectType ||
+		current.AppID != plan.definition.appID || current.Name != plan.definition.name ||
+		current.SharingScope != plan.definition.sharingScope ||
+		!bytes.Equal(current.DefinitionDigest, plan.definition.digest) {
+		return false
+	}
+	switch plan.state {
+	case StateDisabled:
+		return plan.route == mutationRouteSetState && plan.mutationKind == "disable" &&
+			plan.auditAction == audit.ActionKnowledgeObjectDisable &&
+			plan.disabledAt != nil && plan.disabledAt.Equal(plan.updatedAt) &&
+			plan.deletedAt == nil
+	case StateDeleted:
+		return plan.route == mutationRouteDelete && plan.mutationKind == "delete" &&
+			plan.auditAction == audit.ActionKnowledgeObjectDelete &&
+			plan.disabledAt == nil && plan.deletedAt != nil &&
+			plan.deletedAt.Equal(plan.updatedAt)
+	default:
+		return false
+	}
+}
+
+func validateOpaqueActiveRemovalPersistence(
+	ctx context.Context,
+	tx *gorm.DB,
+	tenantID string,
+	plan publicationPlan,
+	dependencies []publicationDependency,
+) error {
+	if !validOpaqueActiveRemovalPlan(plan) {
+		return fmt.Errorf(
+			"%w: opaque ACTIVE removal plan is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	binding, err := publicationTransitionPersistenceBindingFromPlan(
+		ctx,
+		tx,
+		tenantID,
+		plan,
+		dependencies,
+	)
+	if err != nil {
+		return err
+	}
+	if !validPublicationTransitionPersistenceBinding(binding) ||
+		!binding.before.present || binding.before.state != StateActive {
+		return fmt.Errorf(
+			"%w: opaque ACTIVE removal binding is malformed",
+			control.ErrInvalidArgument,
+		)
+	}
+	expectedAfter := binding.before
+	expectedAfter.state = plan.state
+	if expectedAfter.version >= math.MaxInt64 {
+		return control.ErrCapacityExceeded
+	}
+	expectedAfter.version++
+	if !publicationTransitionPersistenceEndpointEqual(expectedAfter, binding.after) {
+		return fmt.Errorf(
+			"%w: opaque ACTIVE removal changes immutable authority",
+			control.ErrDependencyConflict,
+		)
+	}
+
+	database := tx.WithContext(ctx)
+	version, found, err := readVersionRecord(
+		database,
+		tenantID,
+		binding.before.objectID,
+		binding.before.version,
+	)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("%w: opaque ACTIVE current version is missing", ErrCorrupt)
+	}
+	decoded, blob, err := decodeVersionDefinitionForStateOnly(database, version)
+	if err != nil {
+		return err
+	}
+	if decoded.ObjectTypeKnown {
+		return fmt.Errorf(
+			"%w: zero-proof ACTIVE removal definition is recognized",
+			control.ErrInvalidArgument,
+		)
+	}
+	if err := validateDecodedIdentity(decoded, version); err != nil {
+		return err
+	}
+	live, err := definitionAuthorityFromDecodedStored(decoded, version, blob)
+	if err != nil {
+		return err
+	}
+	if !opaqueRemovalDefinitionAuthorityEqual(plan.definition, live) {
+		return fmt.Errorf(
+			"%w: opaque ACTIVE removal definition authority changed",
+			control.ErrDependencyConflict,
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func opaqueRemovalDefinitionAuthorityEqual(left, right definitionAuthority) bool {
+	if !left.opaque || !right.opaque || left.definition == nil || right.definition == nil ||
+		left.selector == nil || right.selector == nil {
+		return false
+	}
+	return proto.Equal(left.definition, right.definition) &&
+		bytes.Equal(left.bytes, right.bytes) && bytes.Equal(left.digest, right.digest) &&
+		left.objectType == right.objectType && left.appID == right.appID &&
+		left.name == right.name && left.sharingScope == right.sharingScope &&
+		equalOptionalString(left.description, right.description) &&
+		left.selector.Stats() == right.selector.Stats() &&
+		bytes.Equal(left.selector.CanonicalBytes(), right.selector.CanonicalBytes())
 }
 
 func canonicalPublicationDependencies(plan publicationPlan) ([]publicationDependency, error) {

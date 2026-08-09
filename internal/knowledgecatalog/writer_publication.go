@@ -616,7 +616,7 @@ func (writer *Writer) setState(
 	if current.State != StateDraft && current.State != StateActive {
 		return nil, control.ErrVersionConflict
 	}
-	_, currentVersion, authority, err := writer.hydrateAuthorizedCurrentStateOnly(tx, current)
+	currentObject, currentVersion, authority, err := writer.hydrateAuthorizedCurrentStateOnly(tx, current)
 	if err != nil {
 		return nil, err
 	}
@@ -644,21 +644,36 @@ func (writer *Writer) setState(
 	if err != nil {
 		return nil, err
 	}
+	activeTransition := publicationTransitionPersistenceAuthority{}
+	if current.State == StateActive && !authority.opaque {
+		activeTransition, err = writer.mintRecognizedActiveRemovalTransition(
+			ctx,
+			tx,
+			currentObject,
+			authority,
+			dependencies,
+			StateDisabled,
+		)
+		if err != nil {
+			return nil, writerError(ctx, "validate disable publication transition", err)
+		}
+	}
 	plan := publicationPlan{
-		route:           mutationRouteSetState,
-		mutationKind:    "disable",
-		auditAction:     audit.ActionKnowledgeObjectDisable,
-		objectID:        current.KnowledgeObjectID,
-		version:         current.CurrentVersion + 1,
-		state:           StateDisabled,
-		definition:      authority,
-		dependencies:    dependencies,
-		ownerID:         current.OwnerID,
-		createdAt:       time.UnixMicro(current.CreatedAtUnixMicro).UTC(),
-		updatedAt:       now,
-		disabledAt:      &now,
-		current:         &current,
-		oldCatalogState: state,
+		route:            mutationRouteSetState,
+		mutationKind:     "disable",
+		auditAction:      audit.ActionKnowledgeObjectDisable,
+		objectID:         current.KnowledgeObjectID,
+		version:          current.CurrentVersion + 1,
+		state:            StateDisabled,
+		definition:       authority,
+		dependencies:     dependencies,
+		activeTransition: activeTransition,
+		ownerID:          current.OwnerID,
+		createdAt:        time.UnixMicro(current.CreatedAtUnixMicro).UTC(),
+		updatedAt:        now,
+		disabledAt:       &now,
+		current:          &current,
+		oldCatalogState:  state,
 	}
 	object, revision, token, err := writer.publishMutation(ctx, tx, prepared, plan, true)
 	if err != nil {
@@ -780,7 +795,7 @@ func (writer *Writer) delete(
 	if current.State == StateQuarantined || current.State == StateDeleted {
 		return nil, control.ErrVersionConflict
 	}
-	_, currentVersion, authority, err := writer.hydrateAuthorizedCurrentStateOnly(tx, current)
+	currentObject, currentVersion, authority, err := writer.hydrateAuthorizedCurrentStateOnly(tx, current)
 	if err != nil {
 		return nil, err
 	}
@@ -808,21 +823,36 @@ func (writer *Writer) delete(
 	if err != nil {
 		return nil, err
 	}
+	activeTransition := publicationTransitionPersistenceAuthority{}
+	if current.State == StateActive && !authority.opaque {
+		activeTransition, err = writer.mintRecognizedActiveRemovalTransition(
+			ctx,
+			tx,
+			currentObject,
+			authority,
+			dependencies,
+			StateDeleted,
+		)
+		if err != nil {
+			return nil, writerError(ctx, "validate delete publication transition", err)
+		}
+	}
 	plan := publicationPlan{
-		route:           mutationRouteDelete,
-		mutationKind:    "delete",
-		auditAction:     audit.ActionKnowledgeObjectDelete,
-		objectID:        current.KnowledgeObjectID,
-		version:         current.CurrentVersion + 1,
-		state:           StateDeleted,
-		definition:      authority,
-		dependencies:    dependencies,
-		ownerID:         current.OwnerID,
-		createdAt:       time.UnixMicro(current.CreatedAtUnixMicro).UTC(),
-		updatedAt:       now,
-		deletedAt:       &now,
-		current:         &current,
-		oldCatalogState: state,
+		route:            mutationRouteDelete,
+		mutationKind:     "delete",
+		auditAction:      audit.ActionKnowledgeObjectDelete,
+		objectID:         current.KnowledgeObjectID,
+		version:          current.CurrentVersion + 1,
+		state:            StateDeleted,
+		definition:       authority,
+		dependencies:     dependencies,
+		activeTransition: activeTransition,
+		ownerID:          current.OwnerID,
+		createdAt:        time.UnixMicro(current.CreatedAtUnixMicro).UTC(),
+		updatedAt:        now,
+		deletedAt:        &now,
+		current:          &current,
+		oldCatalogState:  state,
 	}
 	_, revision, token, err := writer.publishMutation(ctx, tx, prepared, plan, true)
 	if err != nil {
@@ -1851,6 +1881,81 @@ func dependenciesFromCurrent(tx *gorm.DB, version versionRecord) ([]publicationD
 		}
 	}
 	return result, nil
+}
+
+// mintRecognizedActiveRemovalTransition binds one recognized ACTIVE current
+// object and its exact retained dependency rows to a DISABLED or DELETED
+// successor. Opaque future definitions deliberately remain on the separate
+// state-only emergency path and must never enter the semantic compiler.
+func (writer *Writer) mintRecognizedActiveRemovalTransition(
+	ctx context.Context,
+	tx *gorm.DB,
+	current Object,
+	authority definitionAuthority,
+	dependencies []publicationDependency,
+	afterState State,
+) (publicationTransitionPersistenceAuthority, error) {
+	if writer == nil || writer.reader == nil || tx == nil || authority.opaque ||
+		current.State != StateActive ||
+		(afterState != StateDisabled && afterState != StateDeleted) {
+		return publicationTransitionPersistenceAuthority{}, fmt.Errorf(
+			"%w: recognized ACTIVE removal input is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	if current.Version >= math.MaxInt64 {
+		return publicationTransitionPersistenceAuthority{}, control.ErrCapacityExceeded
+	}
+	if current.ObjectType != authority.objectType || current.AppID != authority.appID ||
+		current.Name != authority.name || current.SharingScope != authority.sharingScope ||
+		!bytes.Equal(current.DefinitionSHA256, authority.digest) {
+		return publicationTransitionPersistenceAuthority{}, fmt.Errorf(
+			"%w: recognized ACTIVE removal definition authority disagrees",
+			ErrCorrupt,
+		)
+	}
+
+	beforeObject, err := resolutionSnapshotObject(current)
+	if err != nil {
+		return publicationTransitionPersistenceAuthority{}, err
+	}
+	afterObject, err := resolutionSnapshotObject(current)
+	if err != nil {
+		return publicationTransitionPersistenceAuthority{}, err
+	}
+	afterObject.Version = beforeObject.Version + 1
+	before := publicationTransitionEndpoint{
+		present: true,
+		state:   StateActive,
+		winner: publicationWinner{
+			object:                      beforeObject,
+			existingDependenciesPresent: true,
+			existingDependencies: publicationTransitionPersistedDependencies(
+				dependencies,
+			),
+		},
+	}
+	after := publicationTransitionEndpoint{
+		present: true,
+		state:   afterState,
+		winner: publicationWinner{
+			object:                      afterObject,
+			existingDependenciesPresent: true,
+			existingDependencies: publicationTransitionPersistedDependencies(
+				dependencies,
+			),
+		},
+	}
+	read, err := writer.reader.readPublicationActiveTransitionInventory(
+		tx,
+		current.TenantID,
+		before,
+		after,
+	)
+	if err != nil {
+		return publicationTransitionPersistenceAuthority{}, err
+	}
+	return mintPublicationTransitionPersistenceAuthority(ctx, tx, read)
 }
 
 func hasActiveDependents(tx *gorm.DB, tenantID, objectID string) (bool, error) {
