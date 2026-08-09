@@ -13,7 +13,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -270,7 +269,7 @@ func TestProjectLogicalPlanProjectsStaticTimechartCount(t *testing.T) {
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 		" | timechart span=5m count"
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}
@@ -331,7 +330,7 @@ func TestProjectLogicalPlanCoversProjectModesFromAcceptedSPL(t *testing.T) {
 			fixture := snapshot
 			fixture.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 				" | " + test.command
-			logical, err := searchsnapshot.BuildExecutionPlan(fixture)
+			logical, err := buildInspectionAuthoredPlan(fixture)
 			if err != nil {
 				t.Fatalf("BuildExecutionPlan: %v", err)
 			}
@@ -369,7 +368,7 @@ func TestProjectLogicalPlanOmitsAcceptedTextAndCountPredicateValues(t *testing.T
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 		` "private-text-filter" | stats count(eval(status=418)) AS matches`
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}
@@ -558,7 +557,7 @@ func TestProjectLogicalPlanAcceptsAccumulatedOutputExpansion(t *testing.T) {
 	}
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = source.String()
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}

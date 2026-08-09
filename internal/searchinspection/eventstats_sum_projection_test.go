@@ -4,8 +4,6 @@ import (
 	"context"
 	"slices"
 	"testing"
-
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
 
 func TestProjectLogicalPlanProjectsEventStatsNumericAggregateInputsAndOutput(t *testing.T) {
@@ -27,7 +25,7 @@ func TestProjectLogicalPlanProjectsEventStatsNumericAggregateInputsAndOutput(t *
 			snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 				" | table _time,host," + test.input +
 				" | eventstats " + test.function + "(" + test.input + ") AS " + test.output + " BY host"
-			logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+			logical, err := buildInspectionAuthoredPlan(snapshot)
 			if err != nil {
 				t.Fatalf("BuildExecutionPlan: %v", err)
 			}

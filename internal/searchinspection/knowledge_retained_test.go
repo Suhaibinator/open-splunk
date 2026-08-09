@@ -55,6 +55,11 @@ func TestInspectKnowledgeExecutionUsesExactRetainedCompilerAuthority(t *testing.
 	if err != nil {
 		t.Fatalf("fixture BuildExecutionPlan(): %v", err)
 	}
+	retainedPrelude, retainedPreludePresent := logical.KnowledgePrelude()
+	if !retainedPreludePresent ||
+		!retainedPrelude.Equal(snapshot.KnowledgeSnapshot.Prelude()) {
+		t.Fatal("fixture BuildExecutionPlan omitted or changed the retained knowledge prelude")
+	}
 	if _, err := projectLogicalPlan(context.Background(), logical, snapshot.SPL); err != nil {
 		t.Fatalf("fixture projectLogicalPlan(): %v", err)
 	}

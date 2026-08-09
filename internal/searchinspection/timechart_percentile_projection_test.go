@@ -4,8 +4,6 @@ import (
 	"context"
 	"slices"
 	"testing"
-
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
 
 func TestProjectLogicalPlanProjectsStaticTimechartPercentile(t *testing.T) {
@@ -14,7 +12,7 @@ func TestProjectLogicalPlanProjectsStaticTimechartPercentile(t *testing.T) {
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 		" | timechart span=5m p95(http.duration) AS latency_p95"
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}
@@ -42,7 +40,7 @@ func TestProjectLogicalPlanProjectsSplitTimechartPercentile(t *testing.T) {
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 		" | timechart span=5m perc95(http.duration) AS ignored BY service"
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}

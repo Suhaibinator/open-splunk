@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
 
 func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testing.T) {
@@ -53,6 +54,15 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 	snapshot, err := manager.CompletedExecutionSnapshotFor(context.Background(), access, job.ID)
 	if err != nil {
 		t.Fatalf("CompletedExecutionSnapshotFor() error = %v", err)
+	}
+	legacyPrelude, legacyPreludePresent, openPreludeErr := snapshot.OpenRetainedKnowledgePrelude()
+	if openPreludeErr != nil || legacyPreludePresent || !legacyPrelude.IsZero() {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude(sealed legacy) = (%#v, %t, %v)",
+			legacyPrelude,
+			legacyPreludePresent,
+			openPreludeErr,
+		)
 	}
 	want := ExecutionSnapshot{
 		ID:               completed.ID,
@@ -117,16 +127,23 @@ func TestOpenRetainedKnowledgeExecutionValidatesAppAndDetaches(t *testing.T) {
 
 	retained, err := snapshot.OpenRetainedKnowledgeExecution()
 	if err != nil || retained == nil || retained.KnowledgeSummary == nil ||
-		len(retained.CompiledQuery.OutputFields) == 0 {
+		len(retained.CompiledQuery.OutputFields) == 0 || retained.KnowledgePrelude.IsZero() ||
+		!retained.KnowledgePrelude.IsEmpty() {
 		t.Fatalf("OpenRetainedKnowledgeExecution() = (%#v, %v)", retained, err)
+	}
+	wantPrelude := snapshot.KnowledgeSnapshot.Prelude()
+	if wantPrelude.IsZero() || !retained.KnowledgePrelude.Equal(wantPrelude) {
+		t.Fatal("opened knowledge execution prelude disagrees with retained snapshot")
 	}
 	wantFields := slices.Clone(retained.CompiledQuery.OutputFields)
 	wantDigest := bytes.Clone(retained.KnowledgeSummary.GetRef().GetSnapshotSha256())
 	retained.CompiledQuery.OutputFields[0] = "mutated"
 	retained.KnowledgeSummary.Ref.SnapshotSha256[0] ^= 0xff
+	retained.KnowledgePrelude = knowledgeprogram.Program{}
 
 	fresh, err := snapshot.OpenRetainedKnowledgeExecution()
-	if err != nil || fresh == nil || fresh.KnowledgeSummary == nil {
+	if err != nil || fresh == nil || fresh.KnowledgeSummary == nil ||
+		!fresh.KnowledgePrelude.Equal(wantPrelude) {
 		t.Fatalf("OpenRetainedKnowledgeExecution(fresh) = (%#v, %v)", fresh, err)
 	}
 	if !slices.Equal(fresh.CompiledQuery.OutputFields, wantFields) ||
@@ -138,6 +155,113 @@ func TestOpenRetainedKnowledgeExecutionValidatesAppAndDetaches(t *testing.T) {
 	drifted.AppID = "app_bbbbbbbbbbbbbbbbbbbbbB"
 	if opened, openErr := drifted.OpenRetainedKnowledgeExecution(); opened != nil || !errors.Is(openErr, ErrResultsUnavailable) {
 		t.Fatalf("OpenRetainedKnowledgeExecution(AppID drift) = (%#v, %v)", opened, openErr)
+	}
+
+	prelude, present, err := snapshot.OpenRetainedKnowledgePrelude()
+	if err != nil || !present || prelude.IsZero() || !prelude.IsEmpty() ||
+		!prelude.Equal(wantPrelude) {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude() = (zero:%t empty:%t present:%t, %v)",
+			prelude.IsZero(),
+			prelude.IsEmpty(),
+			present,
+			err,
+		)
+	}
+	prelude = knowledgeprogram.Program{}
+	freshPrelude, present, err := snapshot.OpenRetainedKnowledgePrelude()
+	if err != nil || !present || !freshPrelude.Equal(wantPrelude) {
+		t.Fatalf("OpenRetainedKnowledgePrelude(fresh) = (%#v, %t, %v)", freshPrelude, present, err)
+	}
+
+	unsignedLegacy := ExecutionSnapshot{
+		ID:       "unsigned-legacy",
+		TenantID: "legacy-tenant",
+		SPL:      "index=legacy",
+	}
+	legacyPrelude, present, err := unsignedLegacy.OpenRetainedKnowledgePrelude()
+	if !legacyPrelude.IsZero() || present || !errors.Is(err, ErrResultsUnavailable) {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude(unsigned legacy) = (%#v, %t, %v), want unavailable",
+			legacyPrelude,
+			present,
+			err,
+		)
+	}
+
+	reconstructed := ExecutionSnapshot{
+		ID:               snapshot.ID,
+		OwnerID:          snapshot.OwnerID,
+		TenantID:         snapshot.TenantID,
+		AppID:            snapshot.AppID,
+		SPL:              snapshot.SPL,
+		EffectiveIndexes: slices.Clone(snapshot.EffectiveIndexes),
+		Earliest:         snapshot.Earliest,
+		Latest:           snapshot.Latest,
+		SearchStart:      snapshot.SearchStart,
+		SearchTimezone:   snapshot.SearchTimezone,
+		IndexTimeCutoff:  snapshot.IndexTimeCutoff,
+		VisibilityCutoff: snapshot.VisibilityCutoff,
+		FinishedAt:       snapshot.FinishedAt,
+		ExpiresAt:        snapshot.ExpiresAt,
+	}
+	reconstructedPrelude, present, err := reconstructed.OpenRetainedKnowledgePrelude()
+	if !reconstructedPrelude.IsZero() || present || !errors.Is(err, ErrResultsUnavailable) {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude(reconstructed downgrade) = (%#v, %t, %v), want unavailable",
+			reconstructedPrelude,
+			present,
+			err,
+		)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*ExecutionSnapshot)
+	}{
+		{
+			name: "compiled only",
+			mutate: func(value *ExecutionSnapshot) {
+				value.KnowledgeSnapshot = ExecutionSnapshot{}.KnowledgeSnapshot
+			},
+		},
+		{
+			name: "snapshot only",
+			mutate: func(value *ExecutionSnapshot) {
+				value.CompiledQuery = nil
+			},
+		},
+		{name: "both nonzero"},
+	} {
+		t.Run("unsigned "+test.name, func(t *testing.T) {
+			unsigned := snapshot
+			unsigned.knowledgeAuthoritySeal = knowledgeExecutionAuthoritySeal{}
+			if test.mutate != nil {
+				test.mutate(&unsigned)
+			}
+			opened, openedPresent, openErr := unsigned.OpenRetainedKnowledgePrelude()
+			if !opened.IsZero() || openedPresent || !errors.Is(openErr, ErrResultsUnavailable) {
+				t.Fatalf(
+					"OpenRetainedKnowledgePrelude() = (%#v, %t, %v), want unavailable",
+					opened,
+					openedPresent,
+					openErr,
+				)
+			}
+		})
+	}
+
+	stripped := snapshot
+	stripped.KnowledgeSnapshot = ExecutionSnapshot{}.KnowledgeSnapshot
+	stripped.CompiledQuery = nil
+	strippedPrelude, present, err := stripped.OpenRetainedKnowledgePrelude()
+	if !strippedPrelude.IsZero() || present || !errors.Is(err, ErrResultsUnavailable) {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude(stripped sealed authority) = (%#v, %t, %v), want unavailable",
+			strippedPrelude,
+			present,
+			err,
+		)
 	}
 }
 

@@ -16,7 +16,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
@@ -26,7 +25,7 @@ var _ clickhouse.Compiler = Config{}.Compiler
 
 func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	snapshot := validInspectionSnapshot()
-	logicalFixture, fixtureErr := searchsnapshot.BuildExecutionPlan(snapshot)
+	logicalFixture, fixtureErr := buildInspectionAuthoredPlan(snapshot)
 	if fixtureErr != nil {
 		t.Fatalf("build fixture: %v", fixtureErr)
 	}
@@ -200,7 +199,7 @@ func TestInspectRejectsGenuineSealedCompilerScopeSubstitutionBeforeExplain(t *te
 			alternate := base
 			alternate.EffectiveIndexes = slices.Clone(base.EffectiveIndexes)
 			test.change(&alternate)
-			logical, err := searchsnapshot.BuildExecutionPlan(alternate)
+			logical, err := buildInspectionAuthoredPlan(alternate)
 			if err != nil {
 				t.Fatalf("BuildExecutionPlan(alternate): %v", err)
 			}
@@ -1079,7 +1078,7 @@ func TestPublicConfigRejectsSameScopeCompilerSubstitutionByType(t *testing.T) {
 	if alternate.SPL == base.SPL {
 		t.Fatal("same-scope substitution fixture did not change the logical source")
 	}
-	logical, err := searchsnapshot.BuildExecutionPlan(alternate)
+	logical, err := buildInspectionAuthoredPlan(alternate)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan(same-scope alternate): %v", err)
 	}

@@ -6,6 +6,7 @@ package searchsnapshot
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
@@ -36,7 +37,11 @@ func BuildPlan(job searchjobs.Job) (*plan.Query, error) {
 // BuildExecutionPlan rebuilds a logical plan from Manager's lightweight,
 // completed execution snapshot without acquiring or copying result rows.
 func BuildExecutionPlan(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, error) {
-	return buildPlan(planSnapshot{
+	prelude, preludePresent, err := snapshot.OpenRetainedKnowledgePrelude()
+	if err != nil {
+		return nil, fmt.Errorf("rebuild immutable search plan: open retained knowledge prelude: %w", err)
+	}
+	logical, err := buildPlan(planSnapshot{
 		spl:              snapshot.SPL,
 		tenantID:         snapshot.TenantID,
 		effectiveIndexes: snapshot.EffectiveIndexes,
@@ -47,6 +52,17 @@ func BuildExecutionPlan(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, err
 		indexTimeCutoff:  snapshot.IndexTimeCutoff,
 		visibilityCutoff: snapshot.VisibilityCutoff,
 	})
+	if err != nil {
+		return nil, err
+	}
+	if !preludePresent {
+		return logical, nil
+	}
+	logical, err = plan.InjectKnowledgePrelude(logical, prelude)
+	if err != nil {
+		return nil, fmt.Errorf("rebuild immutable search plan: inject retained knowledge prelude: %w", err)
+	}
+	return logical, nil
 }
 
 type planSnapshot struct {

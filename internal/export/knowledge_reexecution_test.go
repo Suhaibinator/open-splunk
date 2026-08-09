@@ -115,7 +115,22 @@ func TestReexecutionSourceRejectsIncompleteOrTamperedKnowledgeAuthorityAndCloses
 	}
 	chargedExecution := base
 	chargedExecution.SPL = `index=main | rex field=status "(?<captured>[0-9]+)" | table status`
-	chargedLogical, err := searchsnapshot.BuildExecutionPlan(chargedExecution)
+	chargedLogical, err := searchsnapshot.BuildPlan(searchjobs.Job{
+		ID:               chargedExecution.ID,
+		OwnerID:          chargedExecution.OwnerID,
+		TenantID:         chargedExecution.TenantID,
+		AppID:            chargedExecution.AppID,
+		SPL:              chargedExecution.SPL,
+		EffectiveIndexes: slices.Clone(chargedExecution.EffectiveIndexes),
+		Earliest:         chargedExecution.Earliest,
+		Latest:           chargedExecution.Latest,
+		CreatedAt:        chargedExecution.SearchStart,
+		TimeRange: searchtime.Intent{
+			Timezone: chargedExecution.SearchTimezone,
+		},
+		IndexTimeCutoff:  chargedExecution.IndexTimeCutoff,
+		VisibilityCutoff: chargedExecution.VisibilityCutoff,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

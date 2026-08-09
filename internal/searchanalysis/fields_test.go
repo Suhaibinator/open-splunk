@@ -1170,9 +1170,12 @@ func (searches *fakeFieldSearches) CompletedExecutionSnapshotFor(ctx context.Con
 	err := searches.err
 	searches.mu.Unlock()
 	if lookup != nil {
-		return lookup(ctx, access, id)
+		snapshot, err = lookup(ctx, access, id)
 	}
-	return snapshot, err
+	if err != nil {
+		return searchjobs.ExecutionSnapshot{}, err
+	}
+	return sealSearchAnalysisSnapshot(snapshot)
 }
 
 func (searches *fakeFieldSearches) Calls() int {

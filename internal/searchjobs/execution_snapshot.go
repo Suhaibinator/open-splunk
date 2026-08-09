@@ -10,6 +10,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 )
 
@@ -46,11 +47,13 @@ type ExecutionSnapshot struct {
 	knowledgeAuthoritySeal knowledgeExecutionAuthoritySeal
 }
 
-// RetainedKnowledgeExecution is the fully detached compiler and summary
-// authority retained for one knowledge-enabled execution.
+// RetainedKnowledgeExecution is the fully detached compiler, summary, and
+// backend-neutral prelude authority retained for one knowledge-enabled
+// execution.
 type RetainedKnowledgeExecution struct {
 	CompiledQuery    clickhouse.CompiledQuery
 	KnowledgeSummary *opensplunkv1.KnowledgeSnapshotSummary
+	KnowledgePrelude knowledgeprogram.Program
 }
 
 // OpenRetainedKnowledgeExecution verifies and opens the exact knowledge
@@ -93,11 +96,15 @@ func (snapshot ExecutionSnapshot) OpenRetainedKnowledgeExecution() (*RetainedKno
 		return nil, ErrResultsUnavailable
 	}
 
+	prelude := snapshot.KnowledgeSnapshot.Prelude()
+	if prelude.IsZero() {
+		return nil, ErrResultsUnavailable
+	}
 	compiled, ok := snapshot.CompiledQuery.CloneForExecution()
 	if !ok {
 		return nil, ErrResultsUnavailable
 	}
-	evidence, ok := compiled.KnowledgeSnapshotEvidenceFor(snapshot.KnowledgeSnapshot.Prelude())
+	evidence, ok := compiled.KnowledgeSnapshotEvidenceFor(prelude)
 	if !ok || evidence.TenantID() != snapshot.TenantID ||
 		!slices.Equal(evidence.EffectiveIndexes(), snapshot.EffectiveIndexes) ||
 		!knowledgeCompilerEvidenceMatches(
@@ -113,7 +120,31 @@ func (snapshot ExecutionSnapshot) OpenRetainedKnowledgeExecution() (*RetainedKno
 	return &RetainedKnowledgeExecution{
 		CompiledQuery:    compiled,
 		KnowledgeSummary: summary,
+		KnowledgePrelude: prelude.Clone(),
 	}, nil
+}
+
+// OpenRetainedKnowledgePrelude verifies and opens the exact backend-neutral
+// knowledge program retained for this execution. Every snapshot is delegated
+// to the complete retained-execution boundary, so unsigned values fail closed
+// while a valid manager-sealed legacy execution returns an absent program. The
+// returned program is detached.
+func (snapshot ExecutionSnapshot) OpenRetainedKnowledgePrelude() (
+	knowledgeprogram.Program,
+	bool,
+	error,
+) {
+	retained, err := snapshot.OpenRetainedKnowledgeExecution()
+	if err != nil {
+		return knowledgeprogram.Program{}, false, err
+	}
+	if retained == nil {
+		return knowledgeprogram.Program{}, false, nil
+	}
+	if retained.KnowledgePrelude.IsZero() {
+		return knowledgeprogram.Program{}, false, ErrResultsUnavailable
+	}
+	return retained.KnowledgePrelude.Clone(), true, nil
 }
 
 func knowledgeCompilerEvidenceMatches(

@@ -4,8 +4,6 @@ import (
 	"context"
 	"slices"
 	"testing"
-
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
 
 func TestProjectLogicalPlanProjectsFixedTimechartCountFieldSchemas(t *testing.T) {
@@ -33,7 +31,7 @@ func TestProjectLogicalPlanProjectsFixedTimechartCountFieldSchemas(t *testing.T)
 
 			snapshot := validInspectionSnapshot()
 			snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] + test.suffix
-			logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+			logical, err := buildInspectionAuthoredPlan(snapshot)
 			if err != nil {
 				t.Fatalf("BuildExecutionPlan: %v", err)
 			}
@@ -69,7 +67,7 @@ func TestProjectLogicalPlanProjectsSplitTimechartCountFieldSchema(t *testing.T) 
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 		" | timechart span=5m count(http.status) AS ignored BY Service"
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}

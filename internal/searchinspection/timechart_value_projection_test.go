@@ -4,8 +4,6 @@ import (
 	"context"
 	"slices"
 	"testing"
-
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
 
 func TestProjectLogicalPlanProjectsStaticTimechartSumAndAverage(t *testing.T) {
@@ -37,7 +35,7 @@ func TestProjectLogicalPlanProjectsStaticTimechartSumAndAverage(t *testing.T) {
 
 			snapshot := validInspectionSnapshot()
 			snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] + test.spl
-			logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+			logical, err := buildInspectionAuthoredPlan(snapshot)
 			if err != nil {
 				t.Fatalf("BuildExecutionPlan: %v", err)
 			}
