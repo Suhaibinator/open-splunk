@@ -1255,6 +1255,19 @@ race tests prove that mutations of actual lowered knowledge regex and selector
 arguments fail before those boundaries while both global nonempty gates remain
 closed.
 
+The backend-neutral knowledge program now also exposes a publication-facing
+compiler that derives the exact canonical `FIELD_INPUT` graph from a complete
+winner set instead of accepting dependency claims. The existing snapshot-facing
+preparation path shares the object compiler but still independently requires an
+exact submitted dependency list, preserving a separate persisted-authority
+oracle. Derived edges are pinned to object version, definition digest, stages,
+longest-path source depth, and canonical ordinal; selector implication,
+disjointness, sharing scope, same-stage conflicts, graph ceilings, deterministic
+ordering, detachment, and concurrent immutable access have focused normal and
+race coverage. Writer ACTIVE gates remain closed until a transactional catalog
+adapter validates every affected private/app/global cohort and stores only these
+derived edges.
+
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and
   provenance contracts;

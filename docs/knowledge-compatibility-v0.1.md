@@ -713,6 +713,16 @@ write collisions or chains unless selectors are provably disjoint, and requires
 the submitted `FIELD_INPUT` list to equal the independently derived closure,
 including canonical order and longest-path source depth.
 
+Publication uses that same backend-neutral semantic compiler without accepting
+caller-supplied dependency authority. Given one complete canonical winner set,
+it derives version- and definition-digest-pinned `FIELD_INPUT` edges, source
+depths, and canonical ordinals before producing the immutable program. Snapshot
+preparation remains the independent persisted-authority oracle: its submitted
+dependency list must be byte-for-byte equal to the compiler-derived result.
+ACTIVE catalog publication remains disabled until the transactional catalog
+adapter validates every affected visibility cohort and persists those derived
+edges atomically.
+
 The versioned program commitment length-frames the exact typed operator order,
 object origin and definition digest, per-output definition location, selector
 canonical bytes and runtime assessment, overwrite behavior, executable body,

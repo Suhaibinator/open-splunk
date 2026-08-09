@@ -2,6 +2,7 @@ package knowledgeprogram
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -156,12 +157,17 @@ func TestPrepareRequiresExactDerivedDependencies(t *testing.T) {
 		},
 	}
 	base := inputFromDefinitions(t, definitions)
-	base.Dependencies = []*opensplunkv1.KnowledgeObjectDependency{
-		testDependency(base.Objects[1], base.Objects[0], 1, 0),
-		testDependency(base.Objects[2], base.Objects[1], 2, 1),
+	compiled, err := Compile(base.Objects)
+	if err != nil {
+		t.Fatalf("Compile(chain): %v", err)
 	}
-	if _, err := Prepare(cloneProgramInput(base)); err != nil {
+	base.Dependencies = compiled.Dependencies()
+	prepared, err := Prepare(cloneProgramInput(base))
+	if err != nil {
 		t.Fatalf("Prepare(exact dependencies): %v", err)
+	}
+	if !prepared.Equal(compiled) {
+		t.Fatal("Prepare(exact dependencies) disagrees with Compile")
 	}
 
 	tests := []struct {
@@ -189,13 +195,43 @@ func TestPrepareRequiresExactDerivedDependencies(t *testing.T) {
 				input.Dependencies[1].TopologicalDepth = 1
 			},
 		},
+		{
+			name: "wrong source version",
+			mutate: func(input *Input) {
+				input.Dependencies[0].Source.Version++
+			},
+		},
+		{
+			name: "wrong target digest",
+			mutate: func(input *Input) {
+				input.Dependencies[0].Target.GetObject().DefinitionSha256[0] ^= 0xff
+			},
+		},
+		{
+			name: "wrong role",
+			mutate: func(input *Input) {
+				input.Dependencies[0].Role = opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_UNSPECIFIED
+			},
+		},
+		{
+			name: "reordered",
+			mutate: func(input *Input) {
+				input.Dependencies[0], input.Dependencies[1] = input.Dependencies[1], input.Dependencies[0]
+			},
+		},
+		{
+			name: "nested unknown field",
+			mutate: func(input *Input) {
+				input.Dependencies[0].Target.GetObject().ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			input := cloneProgramInput(base)
 			test.mutate(&input)
-			if _, err := Prepare(input); err == nil {
-				t.Fatal("Prepare(invalid dependency closure) succeeded")
+			if _, err := Prepare(input); !errors.Is(err, ErrInvalidProgram) {
+				t.Fatalf("Prepare(invalid dependency closure) error = %v, want ErrInvalidProgram", err)
 			}
 		})
 	}
@@ -242,9 +278,14 @@ func TestPrepareValidatesParallelStageSemantics(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := Prepare(inputFromDefinitions(t, test.definitions))
-			if (err != nil) != test.wantError {
-				t.Fatalf("Prepare() error = %v, wantError %t", err, test.wantError)
+			input := inputFromDefinitions(t, test.definitions)
+			_, compileErr := Compile(input.Objects)
+			_, prepareErr := Prepare(input)
+			if (compileErr != nil) != test.wantError || (prepareErr != nil) != test.wantError {
+				t.Fatalf("Compile/Prepare errors = %v/%v, wantError %t", compileErr, prepareErr, test.wantError)
+			}
+			if test.wantError && (!errors.Is(compileErr, ErrInvalidProgram) || !errors.Is(prepareErr, ErrInvalidProgram)) {
+				t.Fatalf("Compile/Prepare errors = %v/%v, want ErrInvalidProgram", compileErr, prepareErr)
 			}
 		})
 	}

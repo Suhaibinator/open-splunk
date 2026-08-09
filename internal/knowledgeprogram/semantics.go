@@ -1,11 +1,13 @@
 package knowledgeprogram
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/knowledge"
+	"google.golang.org/protobuf/proto"
 )
 
 type semanticObjectKey struct {
@@ -36,72 +38,95 @@ func validateProgramSemantics(
 	state *programState,
 	dependencies []*opensplunkv1.KnowledgeObjectDependency,
 ) error {
-	objects, err := semanticObjects(state)
+	expected, err := deriveCanonicalDependencies(state)
 	if err != nil {
 		return err
 	}
-	if err := validateParallelSemantics(objects); err != nil {
-		return err
-	}
-
-	expected, err := deriveSemanticEdges(objects)
-	if err != nil {
-		return err
-	}
-	if len(expected) > MaximumDependencies {
-		return fmt.Errorf(
-			"%w: derived dependencies exceed %d",
-			ErrResourceLimit,
-			MaximumDependencies,
-		)
-	}
-
-	submitted := make(map[semanticEdgeKey]*opensplunkv1.KnowledgeObjectDependency, len(dependencies))
-	for _, dependency := range dependencies {
-		key := semanticEdgeKey{
-			source: semanticReferenceKey(dependency.GetSource()),
-			target: semanticReferenceKey(dependency.GetTarget().GetObject()),
-			role:   dependency.GetRole(),
-		}
-		submitted[key] = dependency
-	}
-	if len(submitted) != len(expected) {
+	if len(dependencies) != len(expected) {
 		return fmt.Errorf(
 			"%w: submitted dependencies do not equal derived FIELD_INPUT edges",
 			ErrInvalidProgram,
 		)
 	}
-	for edge := range expected {
-		if submitted[edge] == nil {
+	for index := range expected {
+		if !proto.Equal(dependencies[index], expected[index]) {
 			return fmt.Errorf(
-				"%w: a derived FIELD_INPUT edge is missing",
-				ErrInvalidProgram,
-			)
-		}
-	}
-
-	depths, err := semanticDepths(objects, expected)
-	if err != nil {
-		return err
-	}
-	for index, dependency := range dependencies {
-		source := semanticReferenceKey(dependency.GetSource())
-		if dependency.GetTopologicalDepth() != depths[source] {
-			return fmt.Errorf(
-				"%w: dependency %d topological depth disagrees",
-				ErrInvalidProgram,
-				index,
-			)
-		}
-		if index > 0 && !dependencyAfter(dependencies[index-1], dependency) {
-			return fmt.Errorf(
-				"%w: dependency %d is not in canonical order",
+				"%w: submitted dependency %d disagrees with canonical derivation",
 				ErrInvalidProgram,
 				index,
 			)
 		}
 	}
 	return nil
+}
+
+func deriveCanonicalDependencies(
+	state *programState,
+) ([]*opensplunkv1.KnowledgeObjectDependency, error) {
+	objects, err := semanticObjects(state)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateParallelSemantics(objects); err != nil {
+		return nil, err
+	}
+
+	edges, err := deriveSemanticEdges(objects)
+	if err != nil {
+		return nil, err
+	}
+	if len(edges) > MaximumDependencies {
+		return nil, fmt.Errorf(
+			"%w: derived dependencies exceed %d",
+			ErrResourceLimit,
+			MaximumDependencies,
+		)
+	}
+	depths, err := semanticDepths(objects, edges)
+	if err != nil {
+		return nil, err
+	}
+	byKey := make(map[semanticObjectKey]semanticObject, len(objects))
+	for _, object := range objects {
+		byKey[object.key] = object
+	}
+	dependencies := make([]*opensplunkv1.KnowledgeObjectDependency, 0, len(edges))
+	for edge := range edges {
+		source, sourceFound := byKey[edge.source]
+		target, targetFound := byKey[edge.target]
+		if !sourceFound || !targetFound {
+			return nil, fmt.Errorf("%w: derived dependency endpoint is absent", ErrInvalidProgram)
+		}
+		dependencies = append(dependencies, &opensplunkv1.KnowledgeObjectDependency{
+			Source: semanticVersionReference(source),
+			Target: &opensplunkv1.KnowledgeDependencyTarget{
+				Target: &opensplunkv1.KnowledgeDependencyTarget_Object{
+					Object: semanticVersionReference(target),
+				},
+			},
+			Role:             edge.role,
+			SourceStage:      source.origin.stage,
+			TargetStage:      target.origin.stage,
+			TopologicalDepth: depths[source.key],
+		})
+	}
+	sort.Slice(dependencies, func(left, right int) bool {
+		return dependencyAfter(dependencies[left], dependencies[right])
+	})
+	for index := range dependencies {
+		dependencies[index].CanonicalOrdinal = uint32(index)
+	}
+	return dependencies, nil
+}
+
+func semanticVersionReference(
+	object semanticObject,
+) *opensplunkv1.KnowledgeObjectVersionReference {
+	return &opensplunkv1.KnowledgeObjectVersionReference{
+		KnowledgeObjectId: object.origin.objectID,
+		Version:           object.origin.version,
+		DefinitionSha256:  bytes.Clone(object.origin.definitionDigest[:]),
+	}
 }
 
 func semanticObjects(state *programState) ([]semanticObject, error) {
@@ -310,13 +335,6 @@ func semanticDependencyScopeAllows(source, target Origin) bool {
 		return target.sharingScope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
 	default:
 		return false
-	}
-}
-
-func semanticReferenceKey(reference *opensplunkv1.KnowledgeObjectVersionReference) semanticObjectKey {
-	return semanticObjectKey{
-		id:      reference.GetKnowledgeObjectId(),
-		version: reference.GetVersion(),
 	}
 }
 

@@ -255,7 +255,7 @@ type programState struct {
 }
 
 // Program is a pointer-backed immutable authority. Its zero value is absent;
-// Prepare with an empty input returns a present, valid empty program.
+// Compile or Prepare with an empty input returns a present, valid empty program.
 type Program struct{ state *programState }
 
 func (program Program) IsZero() bool { return program.state == nil }
@@ -364,51 +364,88 @@ func (program Program) RetainedBytes() uint64 {
 		uint64(cap(program.state.operatorKinds))*retainedOperatorSlotCharge
 }
 
-// Prepare revalidates canonical snapshot objects and creates one immutable
-// semantic program. It does not trust caller-owned protobuf bytes or digests.
-func Prepare(input Input) (Program, error) {
-	if len(input.Objects) > MaximumObjects {
-		return Program{}, fmt.Errorf("%w: more than %d objects", ErrResourceLimit, MaximumObjects)
+// Compile revalidates one complete canonical winner set, independently derives
+// its exact FIELD_INPUT graph, and returns one immutable semantic program. It
+// is the publication-facing boundary: callers provide object authorities, not
+// dependency authority. Every returned dependency is version- and
+// definition-digest-pinned and is available through Program.Dependencies.
+func Compile(objects []*opensplunkv1.KnowledgeSnapshotObject) (Program, error) {
+	state, _, err := compileObjects(objects)
+	if err != nil {
+		return Program{}, err
 	}
+	dependencies, err := deriveCanonicalDependencies(state)
+	if err != nil {
+		return Program{}, err
+	}
+	return sealProgram(state, dependencies), nil
+}
+
+// Prepare revalidates canonical snapshot objects and a separately submitted
+// dependency authority before creating one immutable semantic program. It
+// derives the graph through the same compiler as Compile and requires exact
+// protobuf equality, so persisted or detached dependencies remain an
+// independently checked authority rather than input to semantic derivation.
+func Prepare(input Input) (Program, error) {
 	if len(input.Dependencies) > MaximumDependencies {
 		return Program{}, fmt.Errorf("%w: more than %d dependencies", ErrResourceLimit, MaximumDependencies)
 	}
+	state, objects, err := compileObjects(input.Objects)
+	if err != nil {
+		return Program{}, err
+	}
+	dependencies, err := prepareDependencies(input.Dependencies, objects)
+	if err != nil {
+		return Program{}, err
+	}
+	if err := validateProgramSemantics(state, dependencies); err != nil {
+		return Program{}, err
+	}
+	return sealProgram(state, dependencies), nil
+}
+
+func compileObjects(
+	input []*opensplunkv1.KnowledgeSnapshotObject,
+) (*programState, map[string]*opensplunkv1.KnowledgeSnapshotObject, error) {
+	if len(input) > MaximumObjects {
+		return nil, nil, fmt.Errorf("%w: more than %d objects", ErrResourceLimit, MaximumObjects)
+	}
 	state := &programState{}
-	state.objectCount = uint32(len(input.Objects))
+	state.objectCount = uint32(len(input))
 	stageOrdinals := map[opensplunkv1.KnowledgeSearchStage]uint32{}
 	var previous *opensplunkv1.KnowledgeSnapshotObject
-	objects := make(map[string]*opensplunkv1.KnowledgeSnapshotObject, len(input.Objects))
-	names := make(map[string]struct{}, len(input.Objects))
+	objects := make(map[string]*opensplunkv1.KnowledgeSnapshotObject, len(input))
+	names := make(map[string]struct{}, len(input))
 	var definitionBytes uint64
 	var selectorWork uint64
-	for index, object := range input.Objects {
+	for index, object := range input {
 		// Definition normalization performs its own repeated-shape/size preflight
 		// before recursive unknown-field inspection. Do not walk that definition
 		// here first and reintroduce malformed-input amplification.
 		if object == nil || len(object.ProtoReflect().GetUnknown()) != 0 {
-			return Program{}, invalid(index, "object is nil or contains unknown fields")
+			return nil, nil, invalid(index, "object is nil or contains unknown fields")
 		}
 		if object.GetResolutionOrdinal() != uint32(index) || object.GetVersion() == 0 ||
 			object.GetVersion() > math.MaxInt64 || !validIdentity(object.GetKnowledgeObjectId(), 128) ||
 			!validIdentity(object.GetAppId(), 128) || !validIdentity(object.GetOwnerId(), 255) ||
 			len(object.GetDefinitionSha256()) != sha256.Size {
-			return Program{}, invalid(index, "object authority is invalid")
+			return nil, nil, invalid(index, "object authority is invalid")
 		}
 		expectedStage, _, err := stageForType(object.GetObjectType())
 		if err != nil || object.GetStage() != expectedStage ||
 			object.GetStageOrdinal() != stageOrdinals[expectedStage] {
-			return Program{}, invalid(index, "stage or stage ordinal is invalid")
+			return nil, nil, invalid(index, "stage or stage ordinal is invalid")
 		}
 		stageOrdinals[expectedStage]++
 		if previous != nil && !objectAfter(previous, object) {
-			return Program{}, invalid(index, "objects are not in canonical stage/name/ID order")
+			return nil, nil, invalid(index, "objects are not in canonical stage/name/ID order")
 		}
 		if _, duplicate := objects[object.GetKnowledgeObjectId()]; duplicate {
-			return Program{}, invalid(index, "object ID is duplicated")
+			return nil, nil, invalid(index, "object ID is duplicated")
 		}
 		nameKey := fmt.Sprintf("%d\x00%s", object.GetObjectType(), object.GetName())
 		if _, duplicate := names[nameKey]; duplicate {
-			return Program{}, invalid(index, "resolved object name is ambiguous")
+			return nil, nil, invalid(index, "resolved object name is ambiguous")
 		}
 		normalized, err := knowledgedefinition.Normalize(object.GetDefinition())
 		if err != nil || normalized.ObjectType != object.GetObjectType() ||
@@ -416,15 +453,15 @@ func Prepare(input Input) (Program, error) {
 			normalized.SharingScope != object.GetSharingScope() ||
 			!bytes.Equal(normalized.Digest[:], object.GetDefinitionSha256()) ||
 			!proto.Equal(normalized.Definition, object.GetDefinition()) {
-			return Program{}, invalid(index, "definition authority disagrees")
+			return nil, nil, invalid(index, "definition authority disagrees")
 		}
 		if uint64(len(normalized.Bytes)) > MaximumDefinitionBytes-definitionBytes {
-			return Program{}, fmt.Errorf("%w: canonical definitions exceed %d bytes", ErrResourceLimit, MaximumDefinitionBytes)
+			return nil, nil, fmt.Errorf("%w: canonical definitions exceed %d bytes", ErrResourceLimit, MaximumDefinitionBytes)
 		}
 		definitionBytes += uint64(len(normalized.Bytes))
 		work := normalized.Selector.Stats().WildcardWorkUnits
 		if work > knowledge.MaximumSelectorWildcardWorkUnits-selectorWork {
-			return Program{}, fmt.Errorf("%w: selector work exceeds %d", ErrResourceLimit, knowledge.MaximumSelectorWildcardWorkUnits)
+			return nil, nil, fmt.Errorf("%w: selector work exceeds %d", ErrResourceLimit, knowledge.MaximumSelectorWildcardWorkUnits)
 		}
 		selectorWork += work
 		canonicalObject := &opensplunkv1.KnowledgeSnapshotObject{
@@ -444,7 +481,7 @@ func Prepare(input Input) (Program, error) {
 		origin := originFor(canonicalObject, expectedStage, locationForType(object.GetObjectType()))
 		selector := Selector{compiled: normalized.Selector}
 		if err := appendObject(state, normalized, origin, selector); err != nil {
-			return Program{}, invalid(index, err.Error())
+			return nil, nil, invalid(index, err.Error())
 		}
 		objects[canonicalObject.GetKnowledgeObjectId()] = canonicalObject
 		names[nameKey] = struct{}{}
@@ -459,22 +496,22 @@ func Prepare(input Input) (Program, error) {
 		state.operatorKinds = append(state.operatorKinds, OperatorParallelExtend)
 	}
 	if state.charges.GeneratedOperators > MaximumObjects {
-		return Program{}, fmt.Errorf("%w: more than %d generated operators", ErrResourceLimit, MaximumObjects)
+		return nil, nil, fmt.Errorf("%w: more than %d generated operators", ErrResourceLimit, MaximumObjects)
 	}
 	if err := validateCharges(state.charges); err != nil {
-		return Program{}, err
+		return nil, nil, err
 	}
-	dependencies, err := prepareDependencies(input.Dependencies, objects)
-	if err != nil {
-		return Program{}, err
-	}
-	if err := validateProgramSemantics(state, dependencies); err != nil {
-		return Program{}, err
-	}
+	return state, objects, nil
+}
+
+func sealProgram(
+	state *programState,
+	dependencies []*opensplunkv1.KnowledgeObjectDependency,
+) Program {
 	state.dependencies = dependencies
 	state.canonical = canonicalProgram(state)
 	state.commitment = sha256.Sum256(state.canonical)
-	return Program{state: state}, nil
+	return Program{state: state}
 }
 
 func appendObject(state *programState, normalized knowledgedefinition.Normalized, origin Origin, selector Selector) error {
