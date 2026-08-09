@@ -1026,6 +1026,59 @@ func TestKnowledgeProvenanceVariantsCannotMixIdentityAndRedaction(t *testing.T) 
 	}
 }
 
+func TestSearchInspectionProvenanceKeepsAppendOnlyWireContract(t *testing.T) {
+	t.Parallel()
+
+	file := opensplunkv1.File_open_splunk_v1_search_inspection_api_proto
+	stage := file.Messages().ByName("SearchInspectionLogicalStage")
+	if stage == nil {
+		t.Fatal("SearchInspectionLogicalStage descriptor is missing")
+	}
+	for name, contract := range map[protoreflect.Name]struct {
+		number  protoreflect.FieldNumber
+		message protoreflect.FullName
+	}{
+		"operator_provenance": {6, "open_splunk.v1.KnowledgeProvenance"},
+		"output_provenance":   {7, "open_splunk.v1.SearchInspectionOutputProvenance"},
+	} {
+		field := stage.Fields().ByName(name)
+		if field == nil || field.Number() != contract.number ||
+			field.Kind() != protoreflect.MessageKind ||
+			field.Cardinality() != protoreflect.Repeated ||
+			field.HasPresence() || field.HasOptionalKeyword() ||
+			field.Message() == nil || field.Message().FullName() != contract.message {
+			t.Errorf(
+				"SearchInspectionLogicalStage.%s = %+v, want repeated message field %d of %s",
+				name,
+				field,
+				contract.number,
+				contract.message,
+			)
+		}
+	}
+
+	output := file.Messages().ByName("SearchInspectionOutputProvenance")
+	if output == nil || output.Fields().Len() != 2 {
+		t.Fatalf("SearchInspectionOutputProvenance descriptor = %+v, want two fields", output)
+	}
+	outputField := output.Fields().ByName("output_field")
+	if outputField == nil || outputField.Number() != 1 ||
+		outputField.Kind() != protoreflect.StringKind ||
+		outputField.Cardinality() != protoreflect.Optional ||
+		outputField.HasPresence() || outputField.HasOptionalKeyword() {
+		t.Errorf("SearchInspectionOutputProvenance.output_field = %+v, want scalar string field 1", outputField)
+	}
+	provenance := output.Fields().ByName("provenance")
+	if provenance == nil || provenance.Number() != 2 ||
+		provenance.Kind() != protoreflect.MessageKind ||
+		provenance.Cardinality() != protoreflect.Optional ||
+		!provenance.HasPresence() || provenance.HasOptionalKeyword() ||
+		provenance.Message() == nil ||
+		provenance.Message().FullName() != "open_splunk.v1.KnowledgeProvenance" {
+		t.Errorf("SearchInspectionOutputProvenance.provenance = %+v, want present message field 2", provenance)
+	}
+}
+
 func TestKnowledgeApiFamiliesExposeOptimisticAndBoundedContracts(t *testing.T) {
 	t.Parallel()
 

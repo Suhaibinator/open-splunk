@@ -121,14 +121,24 @@ func (x *InspectSearchJobRequest) GetSearchJobId() string {
 }
 
 type SearchInspectionLogicalStage struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StageIndex    uint32                 `protobuf:"varint,1,opt,name=stage_index,json=stageIndex,proto3" json:"stage_index,omitempty"`
-	Operator      string                 `protobuf:"bytes,2,opt,name=operator,proto3" json:"operator,omitempty"`
-	InputFields   []string               `protobuf:"bytes,3,rep,name=input_fields,json=inputFields,proto3" json:"input_fields,omitempty"`
-	OutputFields  []string               `protobuf:"bytes,4,rep,name=output_fields,json=outputFields,proto3" json:"output_fields,omitempty"`
-	SourceRange   *SourceRange           `protobuf:"bytes,5,opt,name=source_range,json=sourceRange,proto3" json:"source_range,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	StageIndex   uint32                 `protobuf:"varint,1,opt,name=stage_index,json=stageIndex,proto3" json:"stage_index,omitempty"`
+	Operator     string                 `protobuf:"bytes,2,opt,name=operator,proto3" json:"operator,omitempty"`
+	InputFields  []string               `protobuf:"bytes,3,rep,name=input_fields,json=inputFields,proto3" json:"input_fields,omitempty"`
+	OutputFields []string               `protobuf:"bytes,4,rep,name=output_fields,json=outputFields,proto3" json:"output_fields,omitempty"`
+	// Present only for authored SPL stages. Generated knowledge stages have no
+	// authored source coordinate and leave this message absent.
+	SourceRange *SourceRange `protobuf:"bytes,5,opt,name=source_range,json=sourceRange,proto3" json:"source_range,omitempty"`
+	// One entry per canonical knowledge object represented by this physical
+	// logical stage, ordered by ascending redacted object ordinal. Current
+	// browser responses use only redacted_object.
+	OperatorProvenance []*KnowledgeProvenance `protobuf:"bytes,6,rep,name=operator_provenance,json=operatorProvenance,proto3" json:"operator_provenance,omitempty"`
+	// Output occurrences remain distinct because selector-disjoint objects may
+	// legitimately target the same field. Entries are ordered by output field,
+	// then by ascending redacted object ordinal.
+	OutputProvenance []*SearchInspectionOutputProvenance `protobuf:"bytes,7,rep,name=output_provenance,json=outputProvenance,proto3" json:"output_provenance,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SearchInspectionLogicalStage) Reset() {
@@ -196,6 +206,72 @@ func (x *SearchInspectionLogicalStage) GetSourceRange() *SourceRange {
 	return nil
 }
 
+func (x *SearchInspectionLogicalStage) GetOperatorProvenance() []*KnowledgeProvenance {
+	if x != nil {
+		return x.OperatorProvenance
+	}
+	return nil
+}
+
+func (x *SearchInspectionLogicalStage) GetOutputProvenance() []*SearchInspectionOutputProvenance {
+	if x != nil {
+		return x.OutputProvenance
+	}
+	return nil
+}
+
+type SearchInspectionOutputProvenance struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	OutputField   string                 `protobuf:"bytes,1,opt,name=output_field,json=outputField,proto3" json:"output_field,omitempty"`
+	Provenance    *KnowledgeProvenance   `protobuf:"bytes,2,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SearchInspectionOutputProvenance) Reset() {
+	*x = SearchInspectionOutputProvenance{}
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SearchInspectionOutputProvenance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SearchInspectionOutputProvenance) ProtoMessage() {}
+
+func (x *SearchInspectionOutputProvenance) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SearchInspectionOutputProvenance.ProtoReflect.Descriptor instead.
+func (*SearchInspectionOutputProvenance) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *SearchInspectionOutputProvenance) GetOutputField() string {
+	if x != nil {
+		return x.OutputField
+	}
+	return ""
+}
+
+func (x *SearchInspectionOutputProvenance) GetProvenance() *KnowledgeProvenance {
+	if x != nil {
+		return x.Provenance
+	}
+	return nil
+}
+
 // SearchInspectionOutputShape describes the final logical relation. fields is
 // the complete ordered schema for STATIC output and the fixed prefix for
 // DYNAMIC output; max_dynamic_fields is nonzero only for DYNAMIC output.
@@ -210,7 +286,7 @@ type SearchInspectionOutputShape struct {
 
 func (x *SearchInspectionOutputShape) Reset() {
 	*x = SearchInspectionOutputShape{}
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[2]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -222,7 +298,7 @@ func (x *SearchInspectionOutputShape) String() string {
 func (*SearchInspectionOutputShape) ProtoMessage() {}
 
 func (x *SearchInspectionOutputShape) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[2]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -235,7 +311,7 @@ func (x *SearchInspectionOutputShape) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchInspectionOutputShape.ProtoReflect.Descriptor instead.
 func (*SearchInspectionOutputShape) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{2}
+	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SearchInspectionOutputShape) GetKind() SearchInspectionOutputKind {
@@ -270,7 +346,7 @@ type SearchInspectionLogicalPlan struct {
 
 func (x *SearchInspectionLogicalPlan) Reset() {
 	*x = SearchInspectionLogicalPlan{}
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[3]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -282,7 +358,7 @@ func (x *SearchInspectionLogicalPlan) String() string {
 func (*SearchInspectionLogicalPlan) ProtoMessage() {}
 
 func (x *SearchInspectionLogicalPlan) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[3]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -295,7 +371,7 @@ func (x *SearchInspectionLogicalPlan) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchInspectionLogicalPlan.ProtoReflect.Descriptor instead.
 func (*SearchInspectionLogicalPlan) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{3}
+	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SearchInspectionLogicalPlan) GetStages() []*SearchInspectionLogicalStage {
@@ -336,7 +412,7 @@ type SearchInspectionPhysicalIndex struct {
 
 func (x *SearchInspectionPhysicalIndex) Reset() {
 	*x = SearchInspectionPhysicalIndex{}
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[4]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -348,7 +424,7 @@ func (x *SearchInspectionPhysicalIndex) String() string {
 func (*SearchInspectionPhysicalIndex) ProtoMessage() {}
 
 func (x *SearchInspectionPhysicalIndex) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[4]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -361,7 +437,7 @@ func (x *SearchInspectionPhysicalIndex) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchInspectionPhysicalIndex.ProtoReflect.Descriptor instead.
 func (*SearchInspectionPhysicalIndex) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{4}
+	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SearchInspectionPhysicalIndex) GetType() string {
@@ -423,7 +499,7 @@ type SearchInspectionPhysicalRead struct {
 
 func (x *SearchInspectionPhysicalRead) Reset() {
 	*x = SearchInspectionPhysicalRead{}
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[5]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -435,7 +511,7 @@ func (x *SearchInspectionPhysicalRead) String() string {
 func (*SearchInspectionPhysicalRead) ProtoMessage() {}
 
 func (x *SearchInspectionPhysicalRead) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[5]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -448,7 +524,7 @@ func (x *SearchInspectionPhysicalRead) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchInspectionPhysicalRead.ProtoReflect.Descriptor instead.
 func (*SearchInspectionPhysicalRead) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{5}
+	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SearchInspectionPhysicalRead) GetColumns() []string {
@@ -477,7 +553,7 @@ type SearchInspectionPhysicalPlan struct {
 
 func (x *SearchInspectionPhysicalPlan) Reset() {
 	*x = SearchInspectionPhysicalPlan{}
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[6]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -489,7 +565,7 @@ func (x *SearchInspectionPhysicalPlan) String() string {
 func (*SearchInspectionPhysicalPlan) ProtoMessage() {}
 
 func (x *SearchInspectionPhysicalPlan) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[6]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -502,7 +578,7 @@ func (x *SearchInspectionPhysicalPlan) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchInspectionPhysicalPlan.ProtoReflect.Descriptor instead.
 func (*SearchInspectionPhysicalPlan) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{6}
+	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *SearchInspectionPhysicalPlan) GetNodeTypes() []string {
@@ -537,7 +613,7 @@ type InspectSearchJobResponse struct {
 
 func (x *InspectSearchJobResponse) Reset() {
 	*x = InspectSearchJobResponse{}
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[7]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -549,7 +625,7 @@ func (x *InspectSearchJobResponse) String() string {
 func (*InspectSearchJobResponse) ProtoMessage() {}
 
 func (x *InspectSearchJobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[7]
+	mi := &file_open_splunk_v1_search_inspection_api_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -562,7 +638,7 @@ func (x *InspectSearchJobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InspectSearchJobResponse.ProtoReflect.Descriptor instead.
 func (*InspectSearchJobResponse) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{7}
+	return file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *InspectSearchJobResponse) GetSearchJobId() string {
@@ -620,14 +696,21 @@ const file_open_splunk_v1_search_inspection_api_proto_rawDesc = "" +
 	"\n" +
 	"*open_splunk/v1/search_inspection_api.proto\x12\x0eopen_splunk.v1\x1a\x1bopen_splunk/v1/common.proto\x1a\x1eopen_splunk/v1/knowledge.proto\"=\n" +
 	"\x17InspectSearchJobRequest\x12\"\n" +
-	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\"\xe3\x01\n" +
+	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\"\x98\x03\n" +
 	"\x1cSearchInspectionLogicalStage\x12\x1f\n" +
 	"\vstage_index\x18\x01 \x01(\rR\n" +
 	"stageIndex\x12\x1a\n" +
 	"\boperator\x18\x02 \x01(\tR\boperator\x12!\n" +
 	"\finput_fields\x18\x03 \x03(\tR\vinputFields\x12#\n" +
 	"\routput_fields\x18\x04 \x03(\tR\foutputFields\x12>\n" +
-	"\fsource_range\x18\x05 \x01(\v2\x1b.open_splunk.v1.SourceRangeR\vsourceRange\"\xa3\x01\n" +
+	"\fsource_range\x18\x05 \x01(\v2\x1b.open_splunk.v1.SourceRangeR\vsourceRange\x12T\n" +
+	"\x13operator_provenance\x18\x06 \x03(\v2#.open_splunk.v1.KnowledgeProvenanceR\x12operatorProvenance\x12]\n" +
+	"\x11output_provenance\x18\a \x03(\v20.open_splunk.v1.SearchInspectionOutputProvenanceR\x10outputProvenance\"\x8a\x01\n" +
+	" SearchInspectionOutputProvenance\x12!\n" +
+	"\foutput_field\x18\x01 \x01(\tR\voutputField\x12C\n" +
+	"\n" +
+	"provenance\x18\x02 \x01(\v2#.open_splunk.v1.KnowledgeProvenanceR\n" +
+	"provenance\"\xa3\x01\n" +
 	"\x1bSearchInspectionOutputShape\x12>\n" +
 	"\x04kind\x18\x01 \x01(\x0e2*.open_splunk.v1.SearchInspectionOutputKindR\x04kind\x12\x16\n" +
 	"\x06fields\x18\x02 \x03(\tR\x06fields\x12,\n" +
@@ -679,35 +762,40 @@ func file_open_splunk_v1_search_inspection_api_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_v1_search_inspection_api_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_open_splunk_v1_search_inspection_api_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_open_splunk_v1_search_inspection_api_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_open_splunk_v1_search_inspection_api_proto_goTypes = []any{
-	(SearchInspectionOutputKind)(0),       // 0: open_splunk.v1.SearchInspectionOutputKind
-	(*InspectSearchJobRequest)(nil),       // 1: open_splunk.v1.InspectSearchJobRequest
-	(*SearchInspectionLogicalStage)(nil),  // 2: open_splunk.v1.SearchInspectionLogicalStage
-	(*SearchInspectionOutputShape)(nil),   // 3: open_splunk.v1.SearchInspectionOutputShape
-	(*SearchInspectionLogicalPlan)(nil),   // 4: open_splunk.v1.SearchInspectionLogicalPlan
-	(*SearchInspectionPhysicalIndex)(nil), // 5: open_splunk.v1.SearchInspectionPhysicalIndex
-	(*SearchInspectionPhysicalRead)(nil),  // 6: open_splunk.v1.SearchInspectionPhysicalRead
-	(*SearchInspectionPhysicalPlan)(nil),  // 7: open_splunk.v1.SearchInspectionPhysicalPlan
-	(*InspectSearchJobResponse)(nil),      // 8: open_splunk.v1.InspectSearchJobResponse
-	(*SourceRange)(nil),                   // 9: open_splunk.v1.SourceRange
-	(*KnowledgeSnapshotSummary)(nil),      // 10: open_splunk.v1.KnowledgeSnapshotSummary
+	(SearchInspectionOutputKind)(0),          // 0: open_splunk.v1.SearchInspectionOutputKind
+	(*InspectSearchJobRequest)(nil),          // 1: open_splunk.v1.InspectSearchJobRequest
+	(*SearchInspectionLogicalStage)(nil),     // 2: open_splunk.v1.SearchInspectionLogicalStage
+	(*SearchInspectionOutputProvenance)(nil), // 3: open_splunk.v1.SearchInspectionOutputProvenance
+	(*SearchInspectionOutputShape)(nil),      // 4: open_splunk.v1.SearchInspectionOutputShape
+	(*SearchInspectionLogicalPlan)(nil),      // 5: open_splunk.v1.SearchInspectionLogicalPlan
+	(*SearchInspectionPhysicalIndex)(nil),    // 6: open_splunk.v1.SearchInspectionPhysicalIndex
+	(*SearchInspectionPhysicalRead)(nil),     // 7: open_splunk.v1.SearchInspectionPhysicalRead
+	(*SearchInspectionPhysicalPlan)(nil),     // 8: open_splunk.v1.SearchInspectionPhysicalPlan
+	(*InspectSearchJobResponse)(nil),         // 9: open_splunk.v1.InspectSearchJobResponse
+	(*SourceRange)(nil),                      // 10: open_splunk.v1.SourceRange
+	(*KnowledgeProvenance)(nil),              // 11: open_splunk.v1.KnowledgeProvenance
+	(*KnowledgeSnapshotSummary)(nil),         // 12: open_splunk.v1.KnowledgeSnapshotSummary
 }
 var file_open_splunk_v1_search_inspection_api_proto_depIdxs = []int32{
-	9,  // 0: open_splunk.v1.SearchInspectionLogicalStage.source_range:type_name -> open_splunk.v1.SourceRange
-	0,  // 1: open_splunk.v1.SearchInspectionOutputShape.kind:type_name -> open_splunk.v1.SearchInspectionOutputKind
-	2,  // 2: open_splunk.v1.SearchInspectionLogicalPlan.stages:type_name -> open_splunk.v1.SearchInspectionLogicalStage
-	3,  // 3: open_splunk.v1.SearchInspectionLogicalPlan.output:type_name -> open_splunk.v1.SearchInspectionOutputShape
-	5,  // 4: open_splunk.v1.SearchInspectionPhysicalRead.indexes:type_name -> open_splunk.v1.SearchInspectionPhysicalIndex
-	6,  // 5: open_splunk.v1.SearchInspectionPhysicalPlan.reads:type_name -> open_splunk.v1.SearchInspectionPhysicalRead
-	4,  // 6: open_splunk.v1.InspectSearchJobResponse.logical_plan:type_name -> open_splunk.v1.SearchInspectionLogicalPlan
-	7,  // 7: open_splunk.v1.InspectSearchJobResponse.physical_plan:type_name -> open_splunk.v1.SearchInspectionPhysicalPlan
-	10, // 8: open_splunk.v1.InspectSearchJobResponse.knowledge_snapshot:type_name -> open_splunk.v1.KnowledgeSnapshotSummary
-	9,  // [9:9] is the sub-list for method output_type
-	9,  // [9:9] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	10, // 0: open_splunk.v1.SearchInspectionLogicalStage.source_range:type_name -> open_splunk.v1.SourceRange
+	11, // 1: open_splunk.v1.SearchInspectionLogicalStage.operator_provenance:type_name -> open_splunk.v1.KnowledgeProvenance
+	3,  // 2: open_splunk.v1.SearchInspectionLogicalStage.output_provenance:type_name -> open_splunk.v1.SearchInspectionOutputProvenance
+	11, // 3: open_splunk.v1.SearchInspectionOutputProvenance.provenance:type_name -> open_splunk.v1.KnowledgeProvenance
+	0,  // 4: open_splunk.v1.SearchInspectionOutputShape.kind:type_name -> open_splunk.v1.SearchInspectionOutputKind
+	2,  // 5: open_splunk.v1.SearchInspectionLogicalPlan.stages:type_name -> open_splunk.v1.SearchInspectionLogicalStage
+	4,  // 6: open_splunk.v1.SearchInspectionLogicalPlan.output:type_name -> open_splunk.v1.SearchInspectionOutputShape
+	6,  // 7: open_splunk.v1.SearchInspectionPhysicalRead.indexes:type_name -> open_splunk.v1.SearchInspectionPhysicalIndex
+	7,  // 8: open_splunk.v1.SearchInspectionPhysicalPlan.reads:type_name -> open_splunk.v1.SearchInspectionPhysicalRead
+	5,  // 9: open_splunk.v1.InspectSearchJobResponse.logical_plan:type_name -> open_splunk.v1.SearchInspectionLogicalPlan
+	8,  // 10: open_splunk.v1.InspectSearchJobResponse.physical_plan:type_name -> open_splunk.v1.SearchInspectionPhysicalPlan
+	12, // 11: open_splunk.v1.InspectSearchJobResponse.knowledge_snapshot:type_name -> open_splunk.v1.KnowledgeSnapshotSummary
+	12, // [12:12] is the sub-list for method output_type
+	12, // [12:12] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_search_inspection_api_proto_init() }
@@ -717,14 +805,14 @@ func file_open_splunk_v1_search_inspection_api_proto_init() {
 	}
 	file_open_splunk_v1_common_proto_init()
 	file_open_splunk_v1_knowledge_proto_init()
-	file_open_splunk_v1_search_inspection_api_proto_msgTypes[7].OneofWrappers = []any{}
+	file_open_splunk_v1_search_inspection_api_proto_msgTypes[8].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_v1_search_inspection_api_proto_rawDesc), len(file_open_splunk_v1_search_inspection_api_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

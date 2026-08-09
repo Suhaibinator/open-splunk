@@ -7,7 +7,7 @@
 /* eslint-disable */
 import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { SourceRange } from "./common";
-import { KnowledgeSnapshotSummary } from "./knowledge";
+import { KnowledgeProvenance, KnowledgeSnapshotSummary } from "./knowledge";
 
 export enum SearchInspectionOutputKind {
   SEARCH_INSPECTION_OUTPUT_KIND_UNSPECIFIED = 0,
@@ -68,7 +68,30 @@ export interface SearchInspectionLogicalStage {
   operator: string;
   inputFields: string[];
   outputFields: string[];
-  sourceRange: SourceRange | undefined;
+  /**
+   * Present only for authored SPL stages. Generated knowledge stages have no
+   * authored source coordinate and leave this message absent.
+   */
+  sourceRange:
+    | SourceRange
+    | undefined;
+  /**
+   * One entry per canonical knowledge object represented by this physical
+   * logical stage, ordered by ascending redacted object ordinal. Current
+   * browser responses use only redacted_object.
+   */
+  operatorProvenance: KnowledgeProvenance[];
+  /**
+   * Output occurrences remain distinct because selector-disjoint objects may
+   * legitimately target the same field. Entries are ordered by output field,
+   * then by ascending redacted object ordinal.
+   */
+  outputProvenance: SearchInspectionOutputProvenance[];
+}
+
+export interface SearchInspectionOutputProvenance {
+  outputField: string;
+  provenance: KnowledgeProvenance | undefined;
 }
 
 /**
@@ -196,7 +219,15 @@ export const InspectSearchJobRequest: MessageFns<InspectSearchJobRequest> = {
 };
 
 function createBaseSearchInspectionLogicalStage(): SearchInspectionLogicalStage {
-  return { stageIndex: 0, operator: "", inputFields: [], outputFields: [], sourceRange: undefined };
+  return {
+    stageIndex: 0,
+    operator: "",
+    inputFields: [],
+    outputFields: [],
+    sourceRange: undefined,
+    operatorProvenance: [],
+    outputProvenance: [],
+  };
 }
 
 export const SearchInspectionLogicalStage: MessageFns<SearchInspectionLogicalStage> = {
@@ -215,6 +246,12 @@ export const SearchInspectionLogicalStage: MessageFns<SearchInspectionLogicalSta
     }
     if (message.sourceRange !== undefined) {
       SourceRange.encode(message.sourceRange, writer.uint32(42).fork()).join();
+    }
+    for (const v of message.operatorProvenance) {
+      KnowledgeProvenance.encode(v!, writer.uint32(50).fork()).join();
+    }
+    for (const v of message.outputProvenance) {
+      SearchInspectionOutputProvenance.encode(v!, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -266,6 +303,22 @@ export const SearchInspectionLogicalStage: MessageFns<SearchInspectionLogicalSta
           message.sourceRange = SourceRange.decode(reader, reader.uint32());
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.operatorProvenance.push(KnowledgeProvenance.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.outputProvenance.push(SearchInspectionOutputProvenance.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -298,6 +351,16 @@ export const SearchInspectionLogicalStage: MessageFns<SearchInspectionLogicalSta
         : isSet(object.source_range)
         ? SourceRange.fromJSON(object.source_range)
         : undefined,
+      operatorProvenance: globalThis.Array.isArray(object?.operatorProvenance)
+        ? object.operatorProvenance.map((e: any) => KnowledgeProvenance.fromJSON(e))
+        : globalThis.Array.isArray(object?.operator_provenance)
+        ? object.operator_provenance.map((e: any) => KnowledgeProvenance.fromJSON(e))
+        : [],
+      outputProvenance: globalThis.Array.isArray(object?.outputProvenance)
+        ? object.outputProvenance.map((e: any) => SearchInspectionOutputProvenance.fromJSON(e))
+        : globalThis.Array.isArray(object?.output_provenance)
+        ? object.output_provenance.map((e: any) => SearchInspectionOutputProvenance.fromJSON(e))
+        : [],
     };
   },
 
@@ -318,6 +381,12 @@ export const SearchInspectionLogicalStage: MessageFns<SearchInspectionLogicalSta
     if (message.sourceRange !== undefined) {
       obj.sourceRange = SourceRange.toJSON(message.sourceRange);
     }
+    if (message.operatorProvenance?.length) {
+      obj.operatorProvenance = message.operatorProvenance.map((e) => KnowledgeProvenance.toJSON(e));
+    }
+    if (message.outputProvenance?.length) {
+      obj.outputProvenance = message.outputProvenance.map((e) => SearchInspectionOutputProvenance.toJSON(e));
+    }
     return obj;
   },
 
@@ -332,6 +401,95 @@ export const SearchInspectionLogicalStage: MessageFns<SearchInspectionLogicalSta
     message.outputFields = object.outputFields?.map((e) => e) || [];
     message.sourceRange = (object.sourceRange !== undefined && object.sourceRange !== null)
       ? SourceRange.fromPartial(object.sourceRange)
+      : undefined;
+    message.operatorProvenance = object.operatorProvenance?.map((e) => KnowledgeProvenance.fromPartial(e)) || [];
+    message.outputProvenance = object.outputProvenance?.map((e) => SearchInspectionOutputProvenance.fromPartial(e)) ||
+      [];
+    return message;
+  },
+};
+
+function createBaseSearchInspectionOutputProvenance(): SearchInspectionOutputProvenance {
+  return { outputField: "", provenance: undefined };
+}
+
+export const SearchInspectionOutputProvenance: MessageFns<SearchInspectionOutputProvenance> = {
+  encode(message: SearchInspectionOutputProvenance, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.outputField !== "") {
+      writer.uint32(10).string(message.outputField);
+    }
+    if (message.provenance !== undefined) {
+      KnowledgeProvenance.encode(message.provenance, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SearchInspectionOutputProvenance {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSearchInspectionOutputProvenance();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.outputField = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.provenance = KnowledgeProvenance.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SearchInspectionOutputProvenance {
+    return {
+      outputField: isSet(object.outputField)
+        ? globalThis.String(object.outputField)
+        : isSet(object.output_field)
+        ? globalThis.String(object.output_field)
+        : "",
+      provenance: isSet(object.provenance) ? KnowledgeProvenance.fromJSON(object.provenance) : undefined,
+    };
+  },
+
+  toJSON(message: SearchInspectionOutputProvenance): unknown {
+    const obj: any = {};
+    if (message.outputField !== "") {
+      obj.outputField = message.outputField;
+    }
+    if (message.provenance !== undefined) {
+      obj.provenance = KnowledgeProvenance.toJSON(message.provenance);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SearchInspectionOutputProvenance>, I>>(
+    base?: I,
+  ): SearchInspectionOutputProvenance {
+    return SearchInspectionOutputProvenance.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SearchInspectionOutputProvenance>, I>>(
+    object: I,
+  ): SearchInspectionOutputProvenance {
+    const message = createBaseSearchInspectionOutputProvenance();
+    message.outputField = object.outputField ?? "";
+    message.provenance = (object.provenance !== undefined && object.provenance !== null)
+      ? KnowledgeProvenance.fromPartial(object.provenance)
       : undefined;
     return message;
   },

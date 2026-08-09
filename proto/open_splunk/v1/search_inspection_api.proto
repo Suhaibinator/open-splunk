@@ -26,7 +26,22 @@ message SearchInspectionLogicalStage {
   string operator = 2;
   repeated string input_fields = 3;
   repeated string output_fields = 4;
+  // Present only for authored SPL stages. Generated knowledge stages have no
+  // authored source coordinate and leave this message absent.
   SourceRange source_range = 5;
+  // One entry per canonical knowledge object represented by this physical
+  // logical stage, ordered by ascending redacted object ordinal. Current
+  // browser responses use only redacted_object.
+  repeated KnowledgeProvenance operator_provenance = 6;
+  // Output occurrences remain distinct because selector-disjoint objects may
+  // legitimately target the same field. Entries are ordered by output field,
+  // then by ascending redacted object ordinal.
+  repeated SearchInspectionOutputProvenance output_provenance = 7;
+}
+
+message SearchInspectionOutputProvenance {
+  string output_field = 1;
+  KnowledgeProvenance provenance = 2;
 }
 
 // SearchInspectionOutputShape describes the final logical relation. fields is
