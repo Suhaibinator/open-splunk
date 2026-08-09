@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
-	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -62,8 +61,10 @@ func TestCompileDeferredKnowledgeRelationBuildsFlatGuardBarrier(t *testing.T) {
 		t.Fatalf("guard barrier = %#v", barrier)
 	}
 	hiddenValidation := barrier.validationColumns[0]
-	wantPublication := "SELECT * EXCEPT (" + compiled.prelude.selectorCharges.inputBytes +
-		", " + compiled.prelude.selectorCharges.queryUnits +
+	wantPublication := "SELECT * EXCEPT (" + strings.Join(
+		knowledgeRuntimeGuardAccountingColumns(compiled.prelude),
+		", ",
+	) +
 		`, "__os_ko_guard_violation"), toUInt8(` + validation + ") AS " + hiddenValidation
 	for _, fragment := range []string{
 		wantPublication,
@@ -311,20 +312,39 @@ func TestCompileDeferredKnowledgeRelationMarkerPrecedenceAndIdentity(t *testing.
 				barrier.sql,
 			)
 		}
-		for _, code := range []string{" = toUInt8(1)", " = toUInt8(2)", " = toUInt8(3)"} {
+		for _, code := range []string{
+			" = toUInt8(1)",
+			" = toUInt8(2)",
+			" = toUInt8(4)",
+			" = toUInt8(3)",
+			" = toUInt8(5)",
+		} {
 			if !strings.Contains(barrier.sql, code) {
 				t.Fatalf("guard validation omits exact code predicate %q:\n%s", code, barrier.sql)
 			}
 		}
 		eventMarker := strings.Index(barrier.sql, KnowledgeSelectorEventLimitMarker)
 		rexMarker := strings.Index(barrier.sql, RexCaptureLimitMarker)
-		queryMarker := strings.Index(barrier.sql, KnowledgeSelectorQueryLimitMarker)
-		if eventMarker < 0 || !(eventMarker < rexMarker && rexMarker < queryMarker) ||
+		aliasEventMarker := strings.Index(barrier.sql, KnowledgeAliasCopyEventLimitMarker)
+		selectorQueryMarker := strings.Index(barrier.sql, KnowledgeSelectorQueryLimitMarker)
+		aliasQueryMarker := strings.Index(barrier.sql, KnowledgeAliasCopyQueryLimitMarker)
+		if eventMarker < 0 || !(eventMarker < rexMarker && rexMarker < aliasEventMarker &&
+			aliasEventMarker < selectorQueryMarker && selectorQueryMarker < aliasQueryMarker) ||
 			strings.Count(barrier.sql, KnowledgeSelectorEventLimitMarker) != 1 ||
 			strings.Count(barrier.sql, RexCaptureLimitMarker) != 1 ||
+			strings.Count(barrier.sql, KnowledgeAliasCopyEventLimitMarker) != 1 ||
 			strings.Count(barrier.sql, KnowledgeSelectorQueryLimitMarker) != 1 ||
+			strings.Count(barrier.sql, KnowledgeAliasCopyQueryLimitMarker) != 1 ||
 			strings.Contains(barrier.sql, " WHERE ") || strings.Contains(barrier.sql, ">=") {
-			t.Fatalf("guard marker precedence = %d, %d, %d\n%s", eventMarker, rexMarker, queryMarker, barrier.sql)
+			t.Fatalf(
+				"guard marker precedence = %d, %d, %d, %d, %d\n%s",
+				eventMarker,
+				rexMarker,
+				aliasEventMarker,
+				selectorQueryMarker,
+				aliasQueryMarker,
+				barrier.sql,
+			)
 		}
 	})
 
@@ -528,37 +548,6 @@ func composeDeferredKnowledgeStagesForTest(
 func deferredKnowledgeGuardExpressionsForTest(
 	prelude compiledKnowledgePrelude,
 ) (string, string) {
-	selectorEventMaximum := "maxOrDefault(toUInt128(" +
-		prelude.selectorCharges.inputBytes + "))"
-	selectorQueryTotal := "sum(toUInt128(" + prelude.selectorCharges.queryUnits + "))"
-	selectorEventOver := selectorEventMaximum + " > toUInt128(" +
-		strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes) + ")"
-	selectorQueryOver := selectorQueryTotal + " > toUInt128(" +
-		strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits) + ")"
-	violation := "multiIf(" + selectorEventOver + ", toUInt8(1), "
-	if prelude.capturedBytes != "" {
-		rexMaximum := "maxOrDefault(toUInt128(" + prelude.capturedBytes + "))"
-		rexOver := rexMaximum + " > toUInt128(" +
-			strconv.FormatUint(MaximumRexCapturedBytesPerRow, 10) + ")"
-		violation += rexOver + ", toUInt8(2), "
-	}
-	violation += selectorQueryOver + ", toUInt8(3), toUInt8(0))"
-
-	violationRef := `"__os_ko_guard_total"."__os_ko_guard_violation"`
-	eventViolation := violationRef + " = toUInt8(1)"
-	queryViolation := violationRef + " = toUInt8(3)"
-	validation := "if(" + eventViolation + ", " +
-		knowledgeRuntimeGuardThrow(eventViolation, KnowledgeSelectorEventLimitMarker) + ", "
-	if prelude.capturedBytes != "" {
-		rexViolation := violationRef + " = toUInt8(2)"
-		validation += "if(" + rexViolation + ", " +
-			knowledgeRuntimeGuardThrow(rexViolation, RexCaptureLimitMarker) + ", " +
-			knowledgeRuntimeGuardThrow(queryViolation, KnowledgeSelectorQueryLimitMarker) + ")"
-	} else {
-		validation += knowledgeRuntimeGuardThrow(
-			queryViolation,
-			KnowledgeSelectorQueryLimitMarker,
-		)
-	}
-	return violation, validation + ")"
+	expressions := compileKnowledgeRuntimeGuardExpressions(prelude)
+	return expressions.violation, expressions.validation
 }

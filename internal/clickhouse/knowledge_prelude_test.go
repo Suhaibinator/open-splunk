@@ -97,6 +97,7 @@ func TestCompileKnowledgePreludeDistinguishesAbsentEmptyAndDerivesMixedProof(t *
 		t.Fatalf("mixed lowering proof = %#v, program charges = %#v", compiled.proof, program.Charges())
 	}
 	if compiled.selectorCharges.inputBytes == "" || compiled.selectorCharges.queryUnits == "" ||
+		compiled.aliasCopyCharges.eventBytes == "" || compiled.aliasCopyCharges.queryUnits == "" ||
 		compiled.capturedBytes == "" || compiled.capturedBytes != compiled.state.rexCapturedBytesSQL {
 		t.Fatalf("mixed accounting = %#v", compiled)
 	}
@@ -106,8 +107,10 @@ func TestCompileKnowledgePreludeDistinguishesAbsentEmptyAndDerivesMixedProof(t *
 		}
 	}
 	if slices.Contains(compiled.state.privateColumns, compiled.selectorCharges.inputBytes) ||
-		slices.Contains(compiled.state.privateColumns, compiled.selectorCharges.queryUnits) {
-		t.Fatalf("selector charges entered private field metadata: %#v", compiled.state.privateColumns)
+		slices.Contains(compiled.state.privateColumns, compiled.selectorCharges.queryUnits) ||
+		slices.Contains(compiled.state.privateColumns, compiled.aliasCopyCharges.eventBytes) ||
+		slices.Contains(compiled.state.privateColumns, compiled.aliasCopyCharges.queryUnits) {
+		t.Fatalf("runtime charges entered private field metadata: %#v", compiled.state.privateColumns)
 	}
 
 	relation := "SELECT ? AS input_seed"
@@ -176,7 +179,9 @@ func TestCompileKnowledgePreludeSupportsEveryOptionalStageCombination(t *testing
 			}
 			if !slices.Equal(gotKinds, test.stageKinds) ||
 				compiled.proof.charges != program.Charges() ||
-				compiled.proof.objectCount != program.ObjectCount() {
+				compiled.proof.objectCount != program.ObjectCount() ||
+				(len(program.Aliases()) != 0) !=
+					(compiled.aliasCopyCharges != (compiledKnowledgeAliasCopyChargeColumns{})) {
 				t.Fatalf("compiled optional stages = %#v", compiled)
 			}
 		})

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgedefinition"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 )
@@ -55,6 +56,8 @@ func TestCompileKnowledgeAliasStageBuildsOneFrozenProjection(t *testing.T) {
 		`"__os_ko_field_binding_7_1"`,
 		`"__os_ko_selector_input_bytes_7"`,
 		`"__os_ko_selector_query_units_7"`,
+		`"__os_ko_alias_copy_bytes_7"`,
+		`"__os_ko_alias_copy_units_7"`,
 		`__os_ko_field_previous_present`,
 	} {
 		combined := strings.Join(append(slices.Clone(compiled.projection), compiled.arrayJoinBindings...), " ")
@@ -70,8 +73,21 @@ func TestCompileKnowledgeAliasStageBuildsOneFrozenProjection(t *testing.T) {
 		t.Fatalf("alias_host state = %#v", got)
 	}
 	if slices.Contains(compiled.state.privateColumns, compiled.selectorCharges.inputBytes) ||
-		slices.Contains(compiled.state.privateColumns, compiled.selectorCharges.queryUnits) {
-		t.Fatalf("selector charges leaked into generic private columns: %#v", compiled.state.privateColumns)
+		slices.Contains(compiled.state.privateColumns, compiled.selectorCharges.queryUnits) ||
+		slices.Contains(compiled.state.privateColumns, compiled.aliasCopyCharges.eventBytes) ||
+		slices.Contains(compiled.state.privateColumns, compiled.aliasCopyCharges.queryUnits) {
+		t.Fatalf("runtime charges leaked into generic private columns: %#v", compiled.state.privateColumns)
+	}
+	projectionSQL := strings.Join(compiled.projection, " ")
+	for _, fragment := range []string{
+		"byteSize(",
+		"least(",
+		fmt.Sprintf("toUInt128(%d)) AS %s", knowledge.MaximumAliasCopyRuntimeEventBytes+1, compiled.aliasCopyCharges.eventBytes),
+		fmt.Sprintf("toUInt128(%d)) AS %s", knowledge.MaximumAliasCopyRuntimeQueryUnits+1, compiled.aliasCopyCharges.queryUnits),
+	} {
+		if !strings.Contains(projectionSQL, fragment) {
+			t.Fatalf("alias-copy projection omits %q:\n%s", fragment, projectionSQL)
+		}
 	}
 	firstSelector := slices.IndexFunc(compiled.suffixArgs, func(value any) bool {
 		patterns, ok := value.([]string)
@@ -140,6 +156,7 @@ func TestCompileKnowledgeCalculatedStageUsesFrozenInputAndExactConversion(t *tes
 		assignments,
 		11,
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	)
 	if err != nil {
 		t.Fatalf("compileKnowledgeCalculatedStage: %v", err)
@@ -202,6 +219,13 @@ func TestCompileKnowledgeAliasStageGroupsDisjointDestinationWriters(t *testing.T
 	if strings.Count(bindings, `__os_ko_field_selector`) < 2 {
 		t.Fatalf("grouped merge does not evaluate both writers:\n%s", bindings)
 	}
+	if got := strings.Count(joined, "byteSize("); got != 6 {
+		t.Fatalf("grouped destination charge evaluated %d byte-size terms, want 6 for one winner:\n%s", got, joined)
+	}
+	wrote := `if(toUInt8(tupleElement("__os_ko_field_binding_4_0", 2)) != 0, `
+	if got := strings.Count(joined, wrote); got != 2 {
+		t.Fatalf("winner-only payload/work guards = %d, want 2:\n%s", got, joined)
+	}
 }
 
 func TestCompileKnowledgeAliasStageAcceptsProgramMaximumBeyondAuthoredWidth(t *testing.T) {
@@ -260,19 +284,24 @@ func TestCompileKnowledgeFusedStagesCarryCumulativeSelectorCharges(t *testing.T)
 		calculatedProgram.CalculatedFields(),
 		9,
 		first.selectorCharges,
+		first.aliasCopyCharges,
 	)
 	if err != nil {
 		t.Fatalf("compile calculated stage: %v", err)
 	}
 	projection := strings.Join(second.projection, " ")
 	if !strings.Contains(projection, "toUInt128("+first.selectorCharges.inputBytes+")") ||
-		!strings.Contains(projection, "toUInt128("+first.selectorCharges.queryUnits+")") {
-		t.Fatalf("second stage dropped prior selector charges:\n%s", projection)
+		!strings.Contains(projection, "toUInt128("+first.selectorCharges.queryUnits+")") ||
+		!strings.Contains(projection, "toUInt128("+first.aliasCopyCharges.eventBytes+") AS "+second.aliasCopyCharges.eventBytes) ||
+		!strings.Contains(projection, "toUInt128("+first.aliasCopyCharges.queryUnits+") AS "+second.aliasCopyCharges.queryUnits) {
+		t.Fatalf("second stage dropped prior runtime charges:\n%s", projection)
 	}
 	bindingProjection := strings.Join(second.bindingProjection, " ")
 	if !strings.Contains(bindingProjection, first.selectorCharges.inputBytes) ||
-		!strings.Contains(bindingProjection, first.selectorCharges.queryUnits) {
-		t.Fatalf("second binding layer dropped prior selector columns:\n%s", bindingProjection)
+		!strings.Contains(bindingProjection, first.selectorCharges.queryUnits) ||
+		!strings.Contains(bindingProjection, first.aliasCopyCharges.eventBytes) ||
+		!strings.Contains(bindingProjection, first.aliasCopyCharges.queryUnits) {
+		t.Fatalf("second binding layer dropped prior runtime columns:\n%s", bindingProjection)
 	}
 	if slices.Contains(second.state.privateColumns, first.selectorCharges.inputBytes) ||
 		slices.Contains(second.state.privateColumns, first.selectorCharges.queryUnits) {
@@ -337,6 +366,7 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		0,
 		"alias",
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	)
 	if err != nil {
 		t.Fatalf("compile alias projection: %v", err)
@@ -367,6 +397,7 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		0,
 		"alias",
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	); err == nil {
 		t.Fatal("alias projection accepted mismatched retained authority")
 	}
@@ -377,6 +408,7 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		0,
 		"alias",
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	); err == nil {
 		t.Fatal("alias projection accepted an assignment without lowerer-retained authority")
 	}
@@ -408,6 +440,7 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		0,
 		"calculated",
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	)
 	if err != nil {
 		t.Fatalf("compile calculated projection: %v", err)
@@ -439,6 +472,7 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		0,
 		"calculated",
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	); err == nil {
 		t.Fatal("calculated projection accepted mismatched retained authority")
 	}
@@ -449,6 +483,7 @@ func TestCompileKnowledgeFieldAssignmentsRetainTypedLoweringProof(t *testing.T) 
 		0,
 		"calculated",
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	); err == nil {
 		t.Fatal("calculated projection accepted an assignment without lowerer-retained authority")
 	}

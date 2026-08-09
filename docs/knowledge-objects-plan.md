@@ -756,6 +756,19 @@ or tags because those stages run later. Alias cycles and multiple competing
 sources for one destination are rejected unless a deterministic compatibility
 rule is explicitly adopted.
 
+Alias copying is bounded independently of selector work. After selector,
+presence, overwrite, and disjoint-writer arbitration choose a successful write,
+the runtime charges the native byte size of the copied Dynamic value, relative
+container-name and type sidecars, one metadata-version byte, one unit per
+descendant, and one copy unit. Losing, missing, selector-false, and
+preserve-blocked writes charge zero; copying to multiple destinations charges
+once per destination. UInt128 row sums saturate at a 4 MiB-plus-one event
+sentinel and a 1 GiB-plus-one query-work sentinel before the top-level atomic
+guard. The generated SQL must keep materialization and `byteSize` inside the
+winning branch, remove its private accounting columns before authored SPL, and
+remain disabled until digest-pinned ClickHouse tests prove Dynamic sizing and
+branch laziness for every supported value shape.
+
 ### Calculated fields
 
 A calculated field contains selector, destination name, and one expression from

@@ -2259,6 +2259,8 @@ ORDER BY grid.number`,
 			clickhouse.EventStatsListLimitMarker,
 			clickhouse.StatsListBytesLimitMarker,
 			clickhouse.StatsListLimitMarker,
+			clickhouse.KnowledgeAliasCopyEventLimitMarker,
+			clickhouse.KnowledgeAliasCopyQueryLimitMarker,
 		} {
 			err := diagnosticExecutor.Execute(ctx, clickhouse.CompiledQuery{
 				SQL: `SELECT throwIf(toUInt8(1), '` + marker +

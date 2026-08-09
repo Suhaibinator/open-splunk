@@ -271,6 +271,33 @@ destination is invalid.
 Alias cycles, alias-to-alias chains, and multiple possibly overlapping writers
 for one destination are rejected before publication.
 
+Every successful alias write is runtime-accounted after selector evaluation,
+source-presence validation, overwrite arbitration, and disjoint-writer winner
+selection. A missing source, false selector, preserve-existing write blocked by
+any present destination (including present null or a container), and a losing
+writer charge zero. Copying one source to two destinations charges twice. For
+the one winning value tuple `W`, ClickHouse widens every operand to `UInt128`
+and computes:
+
+```text
+payload = byteSize(W.value)
+        + byteSize(W.relative_names)
+        + byteSize(W.relative_types)
+        + 1
+work    = payload + length(W.relative_names) + 1
+```
+
+The final `1` values account for the metadata-version byte and the copy
+operation. Per-destination charges are summed once per event, then independently
+saturated at 4 MiB plus one payload byte and 1 GiB plus one work unit. The 4 MiB
+per-event payload ceiling and 1 GiB cumulative per-query work ceiling admit
+equality and fail atomically when exceeded; no alias output is partially
+published. Compiler-private charge columns are removed before authored SPL or
+result decoding. This accounting does not make nonempty execution available by
+itself: the pinned ClickHouse acceptance matrix must prove row-local `byteSize`
+for every admitted Dynamic/container representation and lazy non-evaluation of
+false, blocked, and losing branches before the finalization gate opens.
+
 ## Calculated fields
 
 A calculated field has one exact non-reserved destination and one expression accepted by

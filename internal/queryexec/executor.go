@@ -2597,6 +2597,8 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.KnowledgeSelectorValueLimitMarker, "knowledge selector value bytes exceeded the per-value limit"},
 	{clickhouse.KnowledgeSelectorEventLimitMarker, "knowledge selector input bytes exceeded the per-event limit"},
 	{clickhouse.KnowledgeSelectorQueryLimitMarker, "knowledge selector work exceeded the per-query limit"},
+	{clickhouse.KnowledgeAliasCopyEventLimitMarker, "knowledge alias copy bytes exceeded the per-event limit"},
+	{clickhouse.KnowledgeAliasCopyQueryLimitMarker, "knowledge alias copy work exceeded the per-query limit"},
 }
 
 func classifyQueryError(ctx context.Context, err error) error {

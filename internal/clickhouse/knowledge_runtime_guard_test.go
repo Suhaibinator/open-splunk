@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strconv"
@@ -290,4 +291,129 @@ func TestCompileKnowledgeRuntimeGuard(t *testing.T) {
 			t.Fatalf("depth error = %#v", depthErr)
 		}
 	})
+}
+
+func TestCompileKnowledgeRuntimeGuardAccountsAliasCopies(t *testing.T) {
+	program := knowledgePreludeProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{{
+		AppId:        "app",
+		Name:         "guard-alias",
+		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+		Body: &opensplunkv1.KnowledgeObjectDefinition_FieldAlias{
+			FieldAlias: &opensplunkv1.FieldAliasDefinition{
+				SourceField:       "host",
+				DestinationField:  "copied_host",
+				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			},
+		},
+	}})
+	preparation := knowledgePreludePreparationForTest(program)
+	prelude, err := compileKnowledgePrelude(
+		knowledgeExtractionStageState(),
+		preparation,
+	)
+	if err != nil {
+		t.Fatalf("compile alias prelude: %v", err)
+	}
+	guarded, err := compileKnowledgeRuntimeGuard(
+		compiledRelation{sql: "SELECT 1", depth: 1},
+		prelude,
+		preparation,
+	)
+	if err != nil {
+		t.Fatalf("compile alias runtime guard: %v", err)
+	}
+	eventMaximum := "maxOrDefault(toUInt128(" + prelude.aliasCopyCharges.eventBytes + "))"
+	queryTotal := "sum(toUInt128(" + prelude.aliasCopyCharges.queryUnits + "))"
+	wantExcept := "* EXCEPT (" + strings.Join(
+		knowledgeRuntimeGuardAccountingColumns(prelude),
+		", ",
+	) + `, "__os_ko_guard_violation")`
+	for _, fragment := range []string{
+		eventMaximum,
+		queryTotal,
+		fmt.Sprintf(
+			"%s > toUInt128(%d)",
+			eventMaximum,
+			knowledge.MaximumAliasCopyRuntimeEventBytes,
+		),
+		fmt.Sprintf(
+			"%s > toUInt128(%d)",
+			queryTotal,
+			knowledge.MaximumAliasCopyRuntimeQueryUnits,
+		),
+		` = toUInt8(4)`,
+		` = toUInt8(5)`,
+		KnowledgeAliasCopyEventLimitMarker,
+		KnowledgeAliasCopyQueryLimitMarker,
+		wantExcept,
+	} {
+		if !strings.Contains(guarded.relation.sql, fragment) {
+			t.Fatalf("alias guard omits %q:\n%s", fragment, guarded.relation.sql)
+		}
+	}
+	selectorEvent := strings.Index(guarded.relation.sql, KnowledgeSelectorEventLimitMarker)
+	aliasEvent := strings.Index(guarded.relation.sql, KnowledgeAliasCopyEventLimitMarker)
+	selectorQuery := strings.Index(guarded.relation.sql, KnowledgeSelectorQueryLimitMarker)
+	aliasQuery := strings.Index(guarded.relation.sql, KnowledgeAliasCopyQueryLimitMarker)
+	if !(selectorEvent >= 0 && selectorEvent < aliasEvent && aliasEvent < selectorQuery &&
+		selectorQuery < aliasQuery) {
+		t.Fatalf(
+			"alias guard marker precedence = %d, %d, %d, %d\n%s",
+			selectorEvent,
+			aliasEvent,
+			selectorQuery,
+			aliasQuery,
+			guarded.relation.sql,
+		)
+	}
+
+	clonePrelude := func() compiledKnowledgePrelude {
+		candidate := prelude
+		candidate.state = cloneCompileState(prelude.state)
+		candidate.stages = slices.Clone(prelude.stages)
+		last := len(candidate.stages) - 1
+		candidate.stages[last].projection = slices.Clone(candidate.stages[last].projection)
+		return candidate
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*compiledKnowledgePrelude)
+	}{
+		{"partial pair", func(candidate *compiledKnowledgePrelude) {
+			candidate.aliasCopyCharges.queryUnits = ""
+		}},
+		{"overlap selector", func(candidate *compiledKnowledgePrelude) {
+			candidate.aliasCopyCharges.eventBytes = candidate.selectorCharges.inputBytes
+		}},
+		{"published leak", func(candidate *compiledKnowledgePrelude) {
+			candidate.state.visible["leak"] = fieldState{
+				valueSQL: candidate.aliasCopyCharges.eventBytes,
+				kind:     fieldKindNumber,
+			}
+		}},
+		{"definition removed", func(candidate *compiledKnowledgePrelude) {
+			last := len(candidate.stages) - 1
+			candidate.stages[last].projection = slices.DeleteFunc(
+				candidate.stages[last].projection,
+				func(value string) bool {
+					return strings.HasSuffix(
+						value,
+						" AS "+candidate.aliasCopyCharges.eventBytes,
+					)
+				},
+			)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := clonePrelude()
+			test.mutate(&candidate)
+			if _, compileErr := compileKnowledgeRuntimeGuard(
+				compiledRelation{sql: "SELECT 1", depth: 1},
+				candidate,
+				preparation,
+			); compileErr == nil {
+				t.Fatal("forged alias-copy accounting compiled")
+			}
+		})
+	}
 }

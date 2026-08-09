@@ -62,14 +62,14 @@ func compileDeferredKnowledgeRelation(
 	}
 
 	expressions := compileKnowledgeRuntimeGuardExpressions(staged.prelude)
-	selectorCharges := staged.prelude.selectorCharges
+	accountingColumns := knowledgeRuntimeGuardAccountingColumns(staged.prelude)
 	inputDefinition := knowledgeRuntimeGuardInputName + " AS MATERIALIZED (" +
 		staged.relation.sql + ")"
 	totalsDefinition := knowledgeRuntimeGuardTotalsName + " AS (SELECT " +
 		expressions.violation + " AS " + knowledgeRuntimeGuardViolationColumn +
 		" FROM " + knowledgeRuntimeGuardInputName + ")"
-	barrierSQL := "SELECT * EXCEPT (" + selectorCharges.inputBytes + ", " +
-		selectorCharges.queryUnits + ", " + knowledgeRuntimeGuardViolationColumn +
+	barrierSQL := "SELECT * EXCEPT (" + strings.Join(accountingColumns, ", ") +
+		", " + knowledgeRuntimeGuardViolationColumn +
 		"), toUInt8(" + expressions.validation + ") AS " +
 		knowledgeRuntimeGuardValidationColumn + " FROM " +
 		knowledgeRuntimeGuardInputName + " AS " + knowledgeRuntimeGuardInputAlias +

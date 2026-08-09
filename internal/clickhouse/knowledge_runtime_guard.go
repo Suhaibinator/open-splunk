@@ -14,6 +14,11 @@ import (
 const maxCompiledKnowledgeRuntimeGuardSQLBytes = maxCompiledQueryBytes
 
 const (
+	KnowledgeAliasCopyEventLimitMarker = "open-splunk: knowledge alias copy exceeds the per-event limit"
+	KnowledgeAliasCopyQueryLimitMarker = "open-splunk: knowledge alias copy work exceeds the per-query limit"
+)
+
+const (
 	knowledgeRuntimeGuardInputName        = `"__os_ko_guard_input"`
 	knowledgeRuntimeGuardInputAlias       = `"__os_ko_guard_event"`
 	knowledgeRuntimeGuardTotalsName       = `"__os_ko_guard_totals"`
@@ -75,7 +80,7 @@ func compileKnowledgeRuntimeGuard(
 	if err := validateKnowledgeRuntimeGuardInput(prelude); err != nil {
 		return compiledKnowledgeRuntimeGuard{}, err
 	}
-	selectorCharges := prelude.selectorCharges
+	accountingColumns := knowledgeRuntimeGuardAccountingColumns(prelude)
 	expressions := compileKnowledgeRuntimeGuardExpressions(prelude)
 
 	var sql strings.Builder
@@ -94,9 +99,7 @@ func compileKnowledgeRuntimeGuard(
 	sql.WriteString(knowledgeRuntimeGuardInputName)
 	sql.WriteString(") SELECT ")
 	sql.WriteString("* EXCEPT (")
-	sql.WriteString(selectorCharges.inputBytes)
-	sql.WriteString(", ")
-	sql.WriteString(selectorCharges.queryUnits)
+	sql.WriteString(strings.Join(accountingColumns, ", "))
 	sql.WriteString(", ")
 	sql.WriteString(knowledgeRuntimeGuardViolationColumn)
 	sql.WriteString(")")
@@ -147,6 +150,11 @@ func compileKnowledgeRuntimeGuard(
 func compileKnowledgeRuntimeGuardExpressions(
 	prelude compiledKnowledgePrelude,
 ) compiledKnowledgeRuntimeGuardExpressions {
+	type orderedViolation struct {
+		over   string
+		code   uint8
+		marker string
+	}
 	selectorCharges := prelude.selectorCharges
 	selectorEventMaximum := "maxOrDefault(toUInt128(" + selectorCharges.inputBytes + "))"
 	selectorQueryTotal := "sum(toUInt128(" + selectorCharges.queryUnits + "))"
@@ -154,35 +162,60 @@ func compileKnowledgeRuntimeGuardExpressions(
 		strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes) + ")"
 	selectorQueryOver := selectorQueryTotal + " > toUInt128(" +
 		strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits) + ")"
-	violation := "multiIf(" + selectorEventOver + ", toUInt8(1), "
+	violations := []orderedViolation{{
+		over: selectorEventOver, code: 1, marker: KnowledgeSelectorEventLimitMarker,
+	}}
 	if prelude.capturedBytes != "" {
 		rexMaximum := "maxOrDefault(toUInt128(" + prelude.capturedBytes + "))"
 		rexOver := rexMaximum + " > toUInt128(" +
 			strconv.FormatUint(MaximumRexCapturedBytesPerRow, 10) + ")"
-		violation += rexOver + ", toUInt8(2), "
+		violations = append(violations, orderedViolation{
+			over: rexOver, code: 2, marker: RexCaptureLimitMarker,
+		})
 	}
-	violation += selectorQueryOver + ", toUInt8(3), toUInt8(0))"
+	if prelude.aliasCopyCharges.eventBytes != "" {
+		aliasEventMaximum := "maxOrDefault(toUInt128(" +
+			prelude.aliasCopyCharges.eventBytes + "))"
+		aliasEventOver := aliasEventMaximum + " > toUInt128(" +
+			strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeEventBytes, 10) + ")"
+		violations = append(violations, orderedViolation{
+			over: aliasEventOver, code: 4, marker: KnowledgeAliasCopyEventLimitMarker,
+		})
+	}
+	violations = append(violations, orderedViolation{
+		over: selectorQueryOver, code: 3, marker: KnowledgeSelectorQueryLimitMarker,
+	})
+	if prelude.aliasCopyCharges.queryUnits != "" {
+		aliasQueryTotal := "sum(toUInt128(" + prelude.aliasCopyCharges.queryUnits + "))"
+		aliasQueryOver := aliasQueryTotal + " > toUInt128(" +
+			strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeQueryUnits, 10) + ")"
+		violations = append(violations, orderedViolation{
+			over: aliasQueryOver, code: 5, marker: KnowledgeAliasCopyQueryLimitMarker,
+		})
+	}
+	var violation strings.Builder
+	violation.WriteString("multiIf(")
+	for _, candidate := range violations {
+		violation.WriteString(candidate.over)
+		violation.WriteString(", toUInt8(")
+		violation.WriteString(strconv.Itoa(int(candidate.code)))
+		violation.WriteString("), ")
+	}
+	violation.WriteString("toUInt8(0))")
 
 	violationRef := knowledgeRuntimeGuardTotalsAlias + "." +
 		knowledgeRuntimeGuardViolationColumn
-	eventViolation := violationRef + " = toUInt8(1)"
-	queryViolation := violationRef + " = toUInt8(3)"
-	validation := "if(" + eventViolation + ", " +
-		knowledgeRuntimeGuardThrow(eventViolation, KnowledgeSelectorEventLimitMarker) + ", "
-	if prelude.capturedBytes != "" {
-		rexViolation := violationRef + " = toUInt8(2)"
-		validation += "if(" + rexViolation + ", " +
-			knowledgeRuntimeGuardThrow(rexViolation, RexCaptureLimitMarker) + ", " +
-			knowledgeRuntimeGuardThrow(queryViolation, KnowledgeSelectorQueryLimitMarker) + ")"
-	} else {
-		validation += knowledgeRuntimeGuardThrow(
-			queryViolation,
-			KnowledgeSelectorQueryLimitMarker,
-		)
+	last := violations[len(violations)-1]
+	lastCondition := violationRef + " = toUInt8(" + strconv.Itoa(int(last.code)) + ")"
+	validation := knowledgeRuntimeGuardThrow(lastCondition, last.marker)
+	for index := len(violations) - 2; index >= 0; index-- {
+		candidate := violations[index]
+		condition := violationRef + " = toUInt8(" + strconv.Itoa(int(candidate.code)) + ")"
+		validation = "if(" + condition + ", " +
+			knowledgeRuntimeGuardThrow(condition, candidate.marker) + ", " + validation + ")"
 	}
-	validation += ")"
 	return compiledKnowledgeRuntimeGuardExpressions{
-		violation:  violation,
+		violation:  violation.String(),
 		validation: validation,
 	}
 }
@@ -217,6 +250,27 @@ func validateKnowledgeRuntimeGuardInput(
 			"compile ClickHouse knowledge runtime guard: selector charge columns are invalid",
 		)
 	}
+	hasAliases := len(prelude.proof.aliases) != 0
+	if hasAliases {
+		if !validKnowledgeRuntimeGuardAliasCopyChargePair(
+			prelude.aliasCopyCharges,
+			lastStage.operatorOffset,
+		) || !knowledgeRuntimeGuardProjectionDefinesExactlyOnce(
+			lastStage.projection,
+			prelude.aliasCopyCharges.eventBytes,
+		) || !knowledgeRuntimeGuardProjectionDefinesExactlyOnce(
+			lastStage.projection,
+			prelude.aliasCopyCharges.queryUnits,
+		) {
+			return errors.New(
+				"compile ClickHouse knowledge runtime guard: alias copy charge columns are invalid",
+			)
+		}
+	} else if prelude.aliasCopyCharges != (compiledKnowledgeAliasCopyChargeColumns{}) {
+		return errors.New(
+			"compile ClickHouse knowledge runtime guard: alias copy charges exist without aliases",
+		)
+	}
 	if prelude.capturedBytes != state.rexCapturedBytesSQL ||
 		prelude.capturedBytes != "" && !validKnowledgeRuntimeGuardGeneratedColumn(
 			prelude.capturedBytes,
@@ -227,7 +281,17 @@ func validateKnowledgeRuntimeGuardInput(
 		)
 	}
 	if prelude.capturedBytes == prelude.selectorCharges.inputBytes ||
-		prelude.capturedBytes == prelude.selectorCharges.queryUnits {
+		prelude.capturedBytes == prelude.selectorCharges.queryUnits ||
+		prelude.capturedBytes != "" &&
+			(prelude.capturedBytes == prelude.aliasCopyCharges.eventBytes ||
+				prelude.capturedBytes == prelude.aliasCopyCharges.queryUnits) ||
+		prelude.aliasCopyCharges.eventBytes != "" &&
+			(prelude.aliasCopyCharges.eventBytes == prelude.selectorCharges.inputBytes ||
+				prelude.aliasCopyCharges.eventBytes == prelude.selectorCharges.queryUnits ||
+				prelude.aliasCopyCharges.eventBytes == prelude.aliasCopyCharges.queryUnits) ||
+		prelude.aliasCopyCharges.queryUnits != "" &&
+			(prelude.aliasCopyCharges.queryUnits == prelude.selectorCharges.inputBytes ||
+				prelude.aliasCopyCharges.queryUnits == prelude.selectorCharges.queryUnits) {
 		return errors.New(
 			"compile ClickHouse knowledge runtime guard: accounting columns overlap",
 		)
@@ -237,6 +301,8 @@ func validateKnowledgeRuntimeGuardInput(
 		state,
 		prelude.selectorCharges.inputBytes,
 		prelude.selectorCharges.queryUnits,
+		prelude.aliasCopyCharges.eventBytes,
+		prelude.aliasCopyCharges.queryUnits,
 		prelude.capturedBytes,
 		knowledgeRuntimeGuardViolationColumn,
 		knowledgeRuntimeGuardValidationColumn,
@@ -323,6 +389,7 @@ func validateKnowledgeRuntimeGuardIdentityPrelude(
 	if prelude.present != preparation.present || prelude.prefixLength != 0 ||
 		len(prelude.stages) != 0 ||
 		prelude.selectorCharges != (compiledKnowledgeSelectorChargeColumns{}) ||
+		prelude.aliasCopyCharges != (compiledKnowledgeAliasCopyChargeColumns{}) ||
 		prelude.capturedBytes != "" || len(prelude.proof.operatorKinds) != 0 ||
 		len(prelude.proof.extractions) != 0 || len(prelude.proof.aliases) != 0 ||
 		len(prelude.proof.calculated) != 0 || prelude.proof.objectCount != 0 ||
@@ -354,6 +421,23 @@ func validateKnowledgeRuntimeGuardIdentityPrelude(
 	return nil
 }
 
+func knowledgeRuntimeGuardAccountingColumns(
+	prelude compiledKnowledgePrelude,
+) []string {
+	columns := []string{
+		prelude.selectorCharges.inputBytes,
+		prelude.selectorCharges.queryUnits,
+	}
+	if prelude.aliasCopyCharges.eventBytes != "" {
+		columns = append(
+			columns,
+			prelude.aliasCopyCharges.eventBytes,
+			prelude.aliasCopyCharges.queryUnits,
+		)
+	}
+	return columns
+}
+
 func knowledgeRuntimeGuardStateHasDeferredAnalysis(state compileState) bool {
 	return len(state.preAggregateValidationColumns) != 0 ||
 		len(state.preAggregateValidationArgs) != 0 ||
@@ -380,6 +464,19 @@ func validKnowledgeRuntimeGuardSelectorChargePair(
 	stage := strings.TrimSuffix(strings.TrimPrefix(charges.inputBytes, inputPrefix), `"`)
 	return stage == strconv.Itoa(expectedStage) &&
 		charges.queryUnits == `"__os_ko_selector_query_units_`+stage+`"`
+}
+
+func validKnowledgeRuntimeGuardAliasCopyChargePair(
+	charges compiledKnowledgeAliasCopyChargeColumns,
+	expectedStage int,
+) bool {
+	const eventPrefix = `"__os_ko_alias_copy_bytes_`
+	if !validKnowledgeRuntimeGuardGeneratedColumn(charges.eventBytes, eventPrefix) {
+		return false
+	}
+	stage := strings.TrimSuffix(strings.TrimPrefix(charges.eventBytes, eventPrefix), `"`)
+	return stage == strconv.Itoa(expectedStage) &&
+		charges.queryUnits == `"__os_ko_alias_copy_units_`+stage+`"`
 }
 
 func knowledgeRuntimeGuardProjectionDefinesExactlyOnce(

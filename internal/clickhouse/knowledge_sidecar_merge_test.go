@@ -206,6 +206,7 @@ func TestCompileKnowledgeCalculatedSidecarsRetainOnlyDirectFieldsAndRejectForger
 				0,
 				"calculated",
 				compiledKnowledgeSelectorChargeColumns{},
+				compiledKnowledgeAliasCopyChargeColumns{},
 			); compileErr == nil {
 				t.Fatal("forged assignment compiled")
 			}
@@ -248,6 +249,7 @@ func TestCompileKnowledgeSidecarMergeRejectsReferencedStateReplay(t *testing.T) 
 		0,
 		"alias",
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	); err == nil {
 		t.Fatal("source authority replayed across a changed referenced field")
 	}
@@ -266,6 +268,7 @@ func TestCompileKnowledgeSidecarMergeRejectsReferencedStateReplay(t *testing.T) 
 		0,
 		"alias",
 		compiledKnowledgeSelectorChargeColumns{},
+		compiledKnowledgeAliasCopyChargeColumns{},
 	); err != nil {
 		t.Fatalf("unrelated field change invalidated source authority: %v", err)
 	}

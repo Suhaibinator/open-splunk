@@ -12,6 +12,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -164,6 +165,11 @@ type compiledKnowledgeSelectorChargeColumns struct {
 	queryUnits string
 }
 
+type compiledKnowledgeAliasCopyChargeColumns struct {
+	eventBytes string
+	queryUnits string
+}
+
 // compiledKnowledgeFusedFieldProjection is a relation-neutral plan for one
 // physical alias or calculated projection. The central compiler first emits
 // bindingProjection and arrayJoinBindings over the frozen input, then emits
@@ -179,6 +185,7 @@ type compiledKnowledgeFusedFieldProjection struct {
 	state              compileState
 	suffixArgs         []any
 	selectorCharges    compiledKnowledgeSelectorChargeColumns
+	aliasCopyCharges   compiledKnowledgeAliasCopyChargeColumns
 	emittedAssignments uint32
 	aliases            []knowledgeprogram.Alias
 	calculated         []knowledgeprogram.Calculated
@@ -553,6 +560,7 @@ func compileKnowledgeAliasStage(
 		stage,
 		"alias",
 		priorCharges,
+		compiledKnowledgeAliasCopyChargeColumns{},
 	)
 	if err != nil {
 		return compiledKnowledgeFusedFieldProjection{}, err
@@ -567,6 +575,7 @@ func compileKnowledgeCalculatedStage(
 	assignments []knowledgeprogram.Calculated,
 	stage int,
 	priorCharges compiledKnowledgeSelectorChargeColumns,
+	priorAliasCopyCharges compiledKnowledgeAliasCopyChargeColumns,
 ) (compiledKnowledgeFusedFieldProjection, error) {
 	if len(assignments) > knowledgeprogram.MaximumScalarExpressions {
 		return compiledKnowledgeFusedFieldProjection{}, errors.New(
@@ -587,6 +596,7 @@ func compileKnowledgeCalculatedStage(
 		stage,
 		"calculated",
 		priorCharges,
+		priorAliasCopyCharges,
 	)
 	if err != nil {
 		return compiledKnowledgeFusedFieldProjection{}, err
@@ -613,6 +623,8 @@ type compiledKnowledgeFieldDestinationMerge struct {
 	typesProjection      string
 	metadataAlias        string
 	metadataProjection   string
+	aliasCopyBytesSQL    string
+	aliasCopyUnitsSQL    string
 	maxStringBytes       uint64
 }
 
@@ -622,6 +634,7 @@ func compileKnowledgeFusedFieldProjection(
 	stage int,
 	label string,
 	priorCharges compiledKnowledgeSelectorChargeColumns,
+	priorAliasCopyCharges compiledKnowledgeAliasCopyChargeColumns,
 ) (compiledKnowledgeFusedFieldProjection, error) {
 	if stage < 0 || label == "" {
 		return compiledKnowledgeFusedFieldProjection{}, errors.New(
@@ -635,6 +648,14 @@ func compileKnowledgeFusedFieldProjection(
 	}
 	if err := validateKnowledgePriorSelectorCharges(priorCharges); err != nil {
 		return compiledKnowledgeFusedFieldProjection{}, err
+	}
+	if err := validateKnowledgePriorAliasCopyCharges(priorAliasCopyCharges); err != nil {
+		return compiledKnowledgeFusedFieldProjection{}, err
+	}
+	if label == "alias" && priorAliasCopyCharges != (compiledKnowledgeAliasCopyChargeColumns{}) {
+		return compiledKnowledgeFusedFieldProjection{}, errors.New(
+			"compile ClickHouse knowledge fused field stage: alias copy charges are duplicated",
+		)
 	}
 
 	next := cloneCompileState(state)
@@ -759,6 +780,14 @@ func compileKnowledgeFusedFieldProjection(
 			bindingProjection = append(bindingProjection, priorCharges.queryUnits)
 		}
 	}
+	if priorAliasCopyCharges.eventBytes != "" {
+		if !slices.Contains(bindingProjection, priorAliasCopyCharges.eventBytes) {
+			bindingProjection = append(bindingProjection, priorAliasCopyCharges.eventBytes)
+		}
+		if !slices.Contains(bindingProjection, priorAliasCopyCharges.queryUnits) {
+			bindingProjection = append(bindingProjection, priorAliasCopyCharges.queryUnits)
+		}
+	}
 	for _, merge := range groups {
 		bindingProjection = append(bindingProjection, merge.bindingAlias)
 	}
@@ -821,6 +850,41 @@ func compileKnowledgeFusedFieldProjection(
 		knowledgeUInt128Sum(inputCharges)+" AS "+chargeColumns.inputBytes,
 		knowledgeUInt128Sum(queryCharges)+" AS "+chargeColumns.queryUnits,
 	)
+	aliasCopyCharges := compiledKnowledgeAliasCopyChargeColumns{}
+	switch label {
+	case "alias":
+		aliasCopyCharges = compiledKnowledgeAliasCopyChargeColumns{
+			eventBytes: quoteIdentifier(fmt.Sprintf("__os_ko_alias_copy_bytes_%d", stage)),
+			queryUnits: quoteIdentifier(fmt.Sprintf("__os_ko_alias_copy_units_%d", stage)),
+		}
+		copyBytes := make([]string, 0, len(groups))
+		copyUnits := make([]string, 0, len(groups))
+		for _, merge := range groups {
+			copyBytes = append(copyBytes, merge.aliasCopyBytesSQL)
+			copyUnits = append(copyUnits, merge.aliasCopyUnitsSQL)
+		}
+		projection = append(
+			projection,
+			"least("+knowledgeUInt128Sum(copyBytes)+", toUInt128("+
+				strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeEventBytes+1, 10)+")) AS "+
+				aliasCopyCharges.eventBytes,
+			"least("+knowledgeUInt128Sum(copyUnits)+", toUInt128("+
+				strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeQueryUnits+1, 10)+")) AS "+
+				aliasCopyCharges.queryUnits,
+		)
+	case "calculated":
+		if priorAliasCopyCharges.eventBytes != "" {
+			aliasCopyCharges = compiledKnowledgeAliasCopyChargeColumns{
+				eventBytes: quoteIdentifier(fmt.Sprintf("__os_ko_alias_copy_bytes_%d", stage)),
+				queryUnits: quoteIdentifier(fmt.Sprintf("__os_ko_alias_copy_units_%d", stage)),
+			}
+			projection = append(
+				projection,
+				"toUInt128("+priorAliasCopyCharges.eventBytes+") AS "+aliasCopyCharges.eventBytes,
+				"toUInt128("+priorAliasCopyCharges.queryUnits+") AS "+aliasCopyCharges.queryUnits,
+			)
+		}
+	}
 	return compiledKnowledgeFusedFieldProjection{
 		bindingProjection:  bindingProjection,
 		projection:         projection,
@@ -828,6 +892,7 @@ func compileKnowledgeFusedFieldProjection(
 		state:              next,
 		suffixArgs:         args,
 		selectorCharges:    chargeColumns,
+		aliasCopyCharges:   aliasCopyCharges,
 		emittedAssignments: uint32(len(assignments)),
 		aliases:            aliases,
 		calculated:         calculated,
@@ -901,6 +966,21 @@ func validateKnowledgePriorSelectorCharges(
 		charges.inputBytes == charges.queryUnits {
 		return errors.New(
 			"compile ClickHouse knowledge fused field stage: prior selector charges are invalid",
+		)
+	}
+	return nil
+}
+
+func validateKnowledgePriorAliasCopyCharges(
+	charges compiledKnowledgeAliasCopyChargeColumns,
+) error {
+	if charges.eventBytes == "" && charges.queryUnits == "" {
+		return nil
+	}
+	if charges.eventBytes == "" || charges.queryUnits == "" ||
+		charges.eventBytes == charges.queryUnits {
+		return errors.New(
+			"compile ClickHouse knowledge fused field stage: prior alias copy charges are invalid",
 		)
 	}
 	return nil
@@ -1059,6 +1139,21 @@ func compileKnowledgeFieldDestinationMerge(
 		group.typesAlias
 	group.metadataProjection = previousSource.metadataVersionSQL(resultSource) +
 		" AS " + group.metadataAlias
+	wroteSQL = knowledgeTupleElementUInt8(
+		group.bindingAlias,
+		knowledgeFieldBindingWroteElement,
+	) + " != 0"
+	valueBytesSQL := "toUInt128(byteSize(" + previousSource.valueSQL(resultSource) + "))"
+	namesBytesSQL := "toUInt128(byteSize(" + previousSource.namesSQL(resultSource) + "))"
+	typesBytesSQL := "toUInt128(byteSize(" + previousSource.typesSQL(resultSource) + "))"
+	payloadSQL := valueBytesSQL + " + " + namesBytesSQL + " + " + typesBytesSQL +
+		" + toUInt128(1)"
+	workSQL := payloadSQL + " + toUInt128(length(" +
+		previousSource.namesSQL(resultSource) + ")) * toUInt128(" +
+		strconv.FormatUint(knowledge.AliasCopyDescendantWorkUnits, 10) +
+		") + toUInt128(" + strconv.FormatUint(knowledge.AliasCopyWorkUnits, 10) + ")"
+	group.aliasCopyBytesSQL = "if(" + wroteSQL + ", " + payloadSQL + ", toUInt128(0))"
+	group.aliasCopyUnitsSQL = "if(" + wroteSQL + ", " + workSQL + ", toUInt128(0))"
 	return nil
 }
 

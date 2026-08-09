@@ -50,13 +50,14 @@ type compiledKnowledgePreludeLoweringProof struct {
 // central compiler explicitly consumes it. present keeps an admitted empty
 // program distinct from a legacy query that never crossed knowledge admission.
 type compiledKnowledgePrelude struct {
-	present         bool
-	prefixLength    int
-	stages          []compiledKnowledgePreludeStage
-	state           compileState
-	selectorCharges compiledKnowledgeSelectorChargeColumns
-	capturedBytes   string
-	proof           compiledKnowledgePreludeLoweringProof
+	present          bool
+	prefixLength     int
+	stages           []compiledKnowledgePreludeStage
+	state            compileState
+	selectorCharges  compiledKnowledgeSelectorChargeColumns
+	aliasCopyCharges compiledKnowledgeAliasCopyChargeColumns
+	capturedBytes    string
+	proof            compiledKnowledgePreludeLoweringProof
 }
 
 // compileKnowledgePrelude composes the complete Tier-1 generated prefix in
@@ -101,6 +102,7 @@ func compileKnowledgePrelude(
 	}
 	current := cloneCompileState(state)
 	charges := compiledKnowledgeSelectorChargeColumns{}
+	aliasCopyCharges := compiledKnowledgeAliasCopyChargeColumns{}
 	offset := 0
 
 	if extractionCount > 0 {
@@ -168,6 +170,7 @@ func compileKnowledgePrelude(
 		result.proof.charges.GeneratedFields += compiled.emittedAssignments
 		current = compiled.state
 		charges = compiled.selectorCharges
+		aliasCopyCharges = compiled.aliasCopyCharges
 		offset++
 	}
 
@@ -177,6 +180,7 @@ func compileKnowledgePrelude(
 			preparation.program.CalculatedFields(),
 			offset,
 			charges,
+			aliasCopyCharges,
 		)
 		if compileErr != nil {
 			return compiledKnowledgePrelude{}, compileErr
@@ -203,10 +207,12 @@ func compileKnowledgePrelude(
 		}
 		current = compiled.state
 		charges = compiled.selectorCharges
+		aliasCopyCharges = compiled.aliasCopyCharges
 	}
 
 	result.state = current
 	result.selectorCharges = charges
+	result.aliasCopyCharges = aliasCopyCharges
 	result.capturedBytes = current.rexCapturedBytesSQL
 	if err := validateCompiledKnowledgePrelude(result, preparation); err != nil {
 		return compiledKnowledgePrelude{}, err
@@ -384,6 +390,8 @@ func validateCompiledKnowledgePrelude(
 		len(compiled.stages) == 0 ||
 		compiled.selectorCharges.inputBytes == "" ||
 		compiled.selectorCharges.queryUnits == "" ||
+		(len(proof.aliases) != 0) !=
+			(compiled.aliasCopyCharges != (compiledKnowledgeAliasCopyChargeColumns{})) ||
 		compiled.capturedBytes != compiled.state.rexCapturedBytesSQL ||
 		(proof.charges.RegexPrograms != 0) != (compiled.capturedBytes != "") {
 		return errors.New(
@@ -394,11 +402,30 @@ func validateCompiledKnowledgePrelude(
 		compiled.state,
 		compiled.selectorCharges.inputBytes,
 		compiled.selectorCharges.queryUnits,
+		compiled.aliasCopyCharges.eventBytes,
+		compiled.aliasCopyCharges.queryUnits,
 		compiled.capturedBytes,
 	) {
 		return errors.New(
 			"compile ClickHouse knowledge prelude: runtime accounting entered generic state",
 		)
+	}
+	if len(proof.aliases) != 0 {
+		lastStage := compiled.stages[len(compiled.stages)-1]
+		if !validKnowledgeRuntimeGuardAliasCopyChargePair(
+			compiled.aliasCopyCharges,
+			lastStage.operatorOffset,
+		) || !knowledgeRuntimeGuardProjectionDefinesExactlyOnce(
+			lastStage.projection,
+			compiled.aliasCopyCharges.eventBytes,
+		) || !knowledgeRuntimeGuardProjectionDefinesExactlyOnce(
+			lastStage.projection,
+			compiled.aliasCopyCharges.queryUnits,
+		) {
+			return errors.New(
+				"compile ClickHouse knowledge prelude: alias copy accounting is invalid",
+			)
+		}
 	}
 	nextOffset := 0
 	for _, stage := range compiled.stages {
