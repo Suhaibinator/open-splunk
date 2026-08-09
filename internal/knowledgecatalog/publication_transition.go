@@ -249,6 +249,11 @@ type publicationTransitionWinnerKey struct {
 	name             string
 }
 
+type publicationTransitionIndexMatcherBudget struct {
+	selectorProbes uint64
+	matcherWork    uint64
+}
+
 type publicationTransitionWork struct {
 	membershipVisits        uint64
 	changedCohorts          uint64
@@ -1726,6 +1731,28 @@ func publicationTransitionIndexAtoms(
 	indexNames []string,
 	preSlots, postSlots []*publicationTransitionCanonicalObject,
 ) ([]publicationIndexAtom, error) {
+	var budget publicationTransitionIndexMatcherBudget
+	return publicationTransitionIndexAtomsWithBudget(
+		ctx,
+		indexNames,
+		preSlots,
+		postSlots,
+		&budget,
+	)
+}
+
+func publicationTransitionIndexAtomsWithBudget(
+	ctx context.Context,
+	indexNames []string,
+	preSlots, postSlots []*publicationTransitionCanonicalObject,
+	budget *publicationTransitionIndexMatcherBudget,
+) ([]publicationIndexAtom, error) {
+	if budget == nil {
+		return nil, fmt.Errorf(
+			"%w: publication transition index matcher budget is nil",
+			control.ErrInvalidArgument,
+		)
+	}
 	names := slices.Clone(indexNames)
 	for index, name := range names {
 		canonical, err := control.NormalizeIndexName(name)
@@ -1753,8 +1780,6 @@ func publicationTransitionIndexAtoms(
 		after   publicationIndexMembership
 	}
 	wildcardCache := make(map[string]*wildcardResult)
-	var wildcardProbes uint64
-	var wildcardWork uint64
 	apply := func(
 		object *publicationTransitionCanonicalObject,
 		ordinal int,
@@ -1796,7 +1821,8 @@ func publicationTransitionIndexAtoms(
 			if found {
 				matchedIndexes = cached.indexes
 			} else {
-				if uint64(len(names)) > maximumPublicationTransitionIndexSelectorProbes-wildcardProbes {
+				if budget.selectorProbes > maximumPublicationTransitionIndexSelectorProbes ||
+					uint64(len(names)) > maximumPublicationTransitionIndexSelectorProbes-budget.selectorProbes {
 					return fmt.Errorf(
 						"%w: publication transition exceeds its wildcard index probe limit",
 						control.ErrCapacityExceeded,
@@ -1818,14 +1844,15 @@ func publicationTransitionIndexAtoms(
 						uint64(len(name)),
 					)
 					if assessmentErr != nil ||
-						charge > maximumPublicationTransitionIndexMatcherWork-wildcardWork {
+						budget.matcherWork > maximumPublicationTransitionIndexMatcherWork ||
+						charge > maximumPublicationTransitionIndexMatcherWork-budget.matcherWork {
 						return fmt.Errorf(
 							"%w: publication transition exceeds its wildcard matcher work limit",
 							control.ErrCapacityExceeded,
 						)
 					}
-					wildcardWork += charge
-					wildcardProbes++
+					budget.matcherWork += charge
+					budget.selectorProbes++
 					matched, _, matchErr := indexOnly.Match(ctx, knowledge.EventMetadata{
 						Index: knowledge.StringMetadata(name),
 					}, knowledge.DefaultRuntimeBudget())

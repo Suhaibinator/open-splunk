@@ -74,9 +74,24 @@ func enumeratePublicationIndexORSignatures(
 	ctx context.Context,
 	atoms []publicationIndexAtom,
 ) ([]publicationIndexORSignature, error) {
+	var budget publicationIndexClosureBudget
+	return enumeratePublicationIndexORSignaturesWithBudget(ctx, atoms, &budget)
+}
+
+func enumeratePublicationIndexORSignaturesWithBudget(
+	ctx context.Context,
+	atoms []publicationIndexAtom,
+	budget *publicationIndexClosureBudget,
+) ([]publicationIndexORSignature, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf(
 			"%w: publication index closure context is nil",
+			control.ErrInvalidArgument,
+		)
+	}
+	if budget == nil {
+		return nil, fmt.Errorf(
+			"%w: publication index closure budget is nil",
 			control.ErrInvalidArgument,
 		)
 	}
@@ -110,7 +125,6 @@ func enumeratePublicationIndexORSignatures(
 		len(canonicalAtoms),
 	)
 	queue := make([]publicationIndexORPair, 0, len(canonicalAtoms))
-	var budget publicationIndexClosureBudget
 	oneIndex, ok := nextPublicationIndexWitness(0)
 	if !ok {
 		return nil, fmt.Errorf(

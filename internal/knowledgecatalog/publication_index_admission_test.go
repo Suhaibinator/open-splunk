@@ -152,6 +152,193 @@ func TestPublicationTransitionSemanticProgramLimitPropagates(t *testing.T) {
 	})
 }
 
+func TestValidatePublicationIndexNameAdmissionSharesBatchBudget(t *testing.T) {
+	exactInputs := publicationIndexAdmissionBatchInputs(t, "audit", "audit")
+	wildcardInputs := publicationIndexAdmissionBatchInputs(t, "audit-*", "audit-prod")
+
+	t.Run("fresh budget preserves semantic commitment", func(t *testing.T) {
+		want, err := validatePublicationIndexNameAdmission(t.Context(), exactInputs[0])
+		if err != nil || want.IsZero() {
+			t.Fatalf("fresh wrapper authority = %#v, %v", want, err)
+		}
+		var budget publicationIndexNameAdmissionBatchBudget
+		got, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(),
+			exactInputs[0],
+			&budget,
+		)
+		if err != nil || got.IsZero() {
+			t.Fatalf("explicit fresh-budget authority = %#v, %v", got, err)
+		}
+		if !got.Equal(want) {
+			t.Fatalf("fresh-budget authority drifted: got %#v, want %#v", got, want)
+		}
+		if _, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(),
+			exactInputs[0],
+			nil,
+		); !errors.Is(err, control.ErrInvalidArgument) {
+			t.Fatalf("nil batch budget error = %v, want InvalidArgument", err)
+		}
+	})
+
+	exactCharge := publicationIndexAdmissionMeasureBatchCharge(t, exactInputs[0])
+	wildcardCharge := publicationIndexAdmissionMeasureBatchCharge(t, wildcardInputs[0])
+	if exactCharge.classStates == 0 ||
+		exactCharge.work.semanticPrograms == 0 ||
+		exactCharge.work.changedCohorts == 0 ||
+		exactCharge.work.membershipVisits == 0 ||
+		exactCharge.closure.probes == 0 ||
+		exactCharge.closure.wordOperations == 0 {
+		t.Fatalf("exact fixture omitted a required batch charge: %#v", exactCharge)
+	}
+	if wildcardCharge.matcher.selectorProbes == 0 ||
+		wildcardCharge.matcher.matcherWork == 0 {
+		t.Fatalf("wildcard fixture omitted matcher charges: %#v", wildcardCharge.matcher)
+	}
+
+	t.Run("wildcard probe exact across two tenants and plus one", func(t *testing.T) {
+		charge := wildcardCharge.matcher.selectorProbes
+		budget := publicationIndexNameAdmissionBatchBudget{}
+		budget.matcher.selectorProbes = publicationIndexAdmissionBatchStart(
+			t,
+			maximumPublicationTransitionIndexSelectorProbes,
+			charge,
+		)
+		publicationIndexAdmissionValidateBatchTenants(t, wildcardInputs[:2], &budget)
+		if budget.matcher.selectorProbes != maximumPublicationTransitionIndexSelectorProbes {
+			t.Fatalf("exact shared wildcard probes = %d, want %d", budget.matcher.selectorProbes, maximumPublicationTransitionIndexSelectorProbes)
+		}
+		if _, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(), wildcardInputs[2], &budget,
+		); !errors.Is(err, control.ErrCapacityExceeded) ||
+			!strings.Contains(err.Error(), "wildcard index probe limit") {
+			t.Fatalf("third-tenant wildcard probe error = %v, want probe CapacityExceeded", err)
+		}
+	})
+
+	t.Run("wildcard matcher work exact across two tenants and plus one", func(t *testing.T) {
+		charge := wildcardCharge.matcher.matcherWork
+		budget := publicationIndexNameAdmissionBatchBudget{}
+		budget.matcher.matcherWork = publicationIndexAdmissionBatchStart(
+			t,
+			maximumPublicationTransitionIndexMatcherWork,
+			charge,
+		)
+		publicationIndexAdmissionValidateBatchTenants(t, wildcardInputs[:2], &budget)
+		if budget.matcher.matcherWork != maximumPublicationTransitionIndexMatcherWork {
+			t.Fatalf("exact shared wildcard work = %d, want %d", budget.matcher.matcherWork, maximumPublicationTransitionIndexMatcherWork)
+		}
+		if _, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(), wildcardInputs[2], &budget,
+		); !errors.Is(err, control.ErrCapacityExceeded) ||
+			!strings.Contains(err.Error(), "wildcard matcher work limit") {
+			t.Fatalf("third-tenant wildcard work error = %v, want matcher-work CapacityExceeded", err)
+		}
+	})
+
+	t.Run("closure work exact across two tenants and plus one", func(t *testing.T) {
+		budget := publicationIndexNameAdmissionBatchBudget{}
+		budget.closure.probes = publicationIndexAdmissionBatchStart(
+			t,
+			maximumPublicationIndexClosureProbes,
+			exactCharge.closure.probes,
+		)
+		budget.closure.wordOperations = publicationIndexAdmissionBatchStart(
+			t,
+			maximumPublicationIndexClosureWordOperations,
+			exactCharge.closure.wordOperations,
+		)
+		publicationIndexAdmissionValidateBatchTenants(t, exactInputs[:2], &budget)
+		if budget.closure.probes != maximumPublicationIndexClosureProbes ||
+			budget.closure.wordOperations != maximumPublicationIndexClosureWordOperations {
+			t.Fatalf("exact shared closure work = %#v", budget.closure)
+		}
+		if _, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(), exactInputs[2], &budget,
+		); !errors.Is(err, control.ErrCapacityExceeded) ||
+			!strings.Contains(err.Error(), "publication index closure exceeds its work limit") {
+			t.Fatalf("third-tenant closure error = %v, want work CapacityExceeded", err)
+		}
+	})
+
+	t.Run("class states exact across two tenants and plus one", func(t *testing.T) {
+		budget := publicationIndexNameAdmissionBatchBudget{}
+		budget.classStates = publicationIndexAdmissionBatchStart(
+			t,
+			maximumPublicationTransitionClassStates,
+			exactCharge.classStates,
+		)
+		publicationIndexAdmissionValidateBatchTenants(t, exactInputs[:2], &budget)
+		if budget.classStates != maximumPublicationTransitionClassStates {
+			t.Fatalf("exact shared class states = %d, want %d", budget.classStates, maximumPublicationTransitionClassStates)
+		}
+		if _, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(), exactInputs[2], &budget,
+		); !errors.Is(err, control.ErrCapacityExceeded) ||
+			!strings.Contains(err.Error(), "batch exceeds its visibility-state limit") {
+			t.Fatalf("third-tenant class-state error = %v, want batch CapacityExceeded", err)
+		}
+	})
+
+	t.Run("semantic programs exact across two tenants and plus one", func(t *testing.T) {
+		budget := publicationIndexNameAdmissionBatchBudget{}
+		budget.work.semanticPrograms = publicationIndexAdmissionBatchStart(
+			t,
+			maximumPublicationTransitionSemanticPrograms,
+			exactCharge.work.semanticPrograms,
+		)
+		publicationIndexAdmissionValidateBatchTenants(t, exactInputs[:2], &budget)
+		if budget.work.semanticPrograms != maximumPublicationTransitionSemanticPrograms {
+			t.Fatalf("exact shared semantic programs = %d, want %d", budget.work.semanticPrograms, maximumPublicationTransitionSemanticPrograms)
+		}
+		if _, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(), exactInputs[2], &budget,
+		); !errors.Is(err, control.ErrCapacityExceeded) ||
+			!strings.Contains(err.Error(), "semantic-program limit") {
+			t.Fatalf("third-tenant semantic-program error = %v, want CapacityExceeded", err)
+		}
+	})
+
+	t.Run("changed cohorts exact across two tenants and plus one", func(t *testing.T) {
+		budget := publicationIndexNameAdmissionBatchBudget{}
+		budget.work.changedCohorts = publicationIndexAdmissionBatchStart(
+			t,
+			maximumPublicationTransitionChangedCohorts,
+			exactCharge.work.changedCohorts,
+		)
+		publicationIndexAdmissionValidateBatchTenants(t, exactInputs[:2], &budget)
+		if budget.work.changedCohorts != maximumPublicationTransitionChangedCohorts {
+			t.Fatalf("exact shared changed cohorts = %d, want %d", budget.work.changedCohorts, maximumPublicationTransitionChangedCohorts)
+		}
+		if _, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(), exactInputs[2], &budget,
+		); !errors.Is(err, control.ErrCapacityExceeded) ||
+			!strings.Contains(err.Error(), "changed-cohort limit") {
+			t.Fatalf("third-tenant changed-cohort error = %v, want CapacityExceeded", err)
+		}
+	})
+
+	t.Run("membership work exact across two tenants and plus one", func(t *testing.T) {
+		budget := publicationIndexNameAdmissionBatchBudget{}
+		budget.work.membershipVisits = publicationIndexAdmissionBatchStart(
+			t,
+			maximumPublicationTransitionMembershipVisits,
+			exactCharge.work.membershipVisits,
+		)
+		publicationIndexAdmissionValidateBatchTenants(t, exactInputs[:2], &budget)
+		if budget.work.membershipVisits != maximumPublicationTransitionMembershipVisits {
+			t.Fatalf("exact shared membership visits = %d, want %d", budget.work.membershipVisits, maximumPublicationTransitionMembershipVisits)
+		}
+		if _, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(), exactInputs[2], &budget,
+		); !errors.Is(err, control.ErrCapacityExceeded) ||
+			!strings.Contains(err.Error(), "candidate-membership work limit") {
+			t.Fatalf("third-tenant membership-work error = %v, want CapacityExceeded", err)
+		}
+	})
+}
+
 func TestValidatePublicationIndexNameAdmissionMatchingModes(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -1043,6 +1230,84 @@ func publicationIndexAdmissionTestExtraction(
 	return publicationWinner{
 		object:                      object,
 		existingDependenciesPresent: true,
+	}
+}
+
+func publicationIndexAdmissionBatchInputs(
+	t *testing.T,
+	pattern string,
+	newName string,
+) []publicationIndexNameAdmissionInventory {
+	t.Helper()
+	winner := publicationIndexAdmissionTestExtraction(
+		t,
+		"ko-batch-budget",
+		1,
+		"app-a",
+		"owner-a",
+		SharingScopeApp,
+		"batch-budget",
+		pattern,
+		"batch_budget_output",
+	)
+	result := make([]publicationIndexNameAdmissionInventory, 3)
+	for index, tenantID := range []string{"tenant-a", "tenant-b", "tenant-c"} {
+		result[index] = publicationIndexAdmissionTestInventory(
+			t,
+			[]publicationWinner{winner},
+			[]string{"app-a"},
+			[]string{"main"},
+			newName,
+		)
+		result[index].tenantID = tenantID
+	}
+	return result
+}
+
+func publicationIndexAdmissionMeasureBatchCharge(
+	t *testing.T,
+	input publicationIndexNameAdmissionInventory,
+) publicationIndexNameAdmissionBatchBudget {
+	t.Helper()
+	var budget publicationIndexNameAdmissionBatchBudget
+	authority, err := validatePublicationIndexNameAdmissionWithBudget(
+		t.Context(),
+		input,
+		&budget,
+	)
+	if err != nil || authority.IsZero() {
+		t.Fatalf("measure batch charge authority = %#v, %v", authority, err)
+	}
+	return budget
+}
+
+func publicationIndexAdmissionBatchStart(
+	t *testing.T,
+	maximum uint64,
+	perTenant uint64,
+) uint64 {
+	t.Helper()
+	if perTenant == 0 || perTenant > maximum/2 {
+		t.Fatalf("invalid two-tenant batch charge %d for maximum %d", perTenant, maximum)
+	}
+	return maximum - 2*perTenant
+}
+
+func publicationIndexAdmissionValidateBatchTenants(
+	t *testing.T,
+	inputs []publicationIndexNameAdmissionInventory,
+	budget *publicationIndexNameAdmissionBatchBudget,
+) {
+	t.Helper()
+	for index, input := range inputs {
+		authority, err := validatePublicationIndexNameAdmissionWithBudget(
+			t.Context(),
+			input,
+			budget,
+		)
+		if err != nil || authority.IsZero() {
+			t.Fatalf("batch tenant %d authority = %#v, %v", index, authority, err)
+		}
 	}
 }
 

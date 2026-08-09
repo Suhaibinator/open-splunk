@@ -51,6 +51,16 @@ type publicationIndexNameAdmissionAuthorityState struct {
 	indexName  string
 }
 
+// publicationIndexNameAdmissionBatchBudget bounds the total semantic work of
+// a sequence of tenant proofs while every retained closure, cohort, and
+// compilation cache remains scoped to one invocation.
+type publicationIndexNameAdmissionBatchBudget struct {
+	matcher     publicationTransitionIndexMatcherBudget
+	closure     publicationIndexClosureBudget
+	classStates uint64
+	work        publicationTransitionWork
+}
+
 func (authority publicationIndexNameAdmissionAuthority) IsZero() bool {
 	return authority.state == nil
 }
@@ -75,9 +85,24 @@ func validatePublicationIndexNameAdmission(
 	ctx context.Context,
 	input publicationIndexNameAdmissionInventory,
 ) (publicationIndexNameAdmissionAuthority, error) {
+	var budget publicationIndexNameAdmissionBatchBudget
+	return validatePublicationIndexNameAdmissionWithBudget(ctx, input, &budget)
+}
+
+func validatePublicationIndexNameAdmissionWithBudget(
+	ctx context.Context,
+	input publicationIndexNameAdmissionInventory,
+	budget *publicationIndexNameAdmissionBatchBudget,
+) (publicationIndexNameAdmissionAuthority, error) {
 	if ctx == nil {
 		return publicationIndexNameAdmissionAuthority{}, fmt.Errorf(
 			"%w: publication index-name admission context is nil",
+			control.ErrInvalidArgument,
+		)
+	}
+	if budget == nil {
+		return publicationIndexNameAdmissionAuthority{}, fmt.Errorf(
+			"%w: publication index-name admission batch budget is nil",
 			control.ErrInvalidArgument,
 		)
 	}
@@ -114,16 +139,21 @@ func validatePublicationIndexNameAdmission(
 	if err != nil {
 		return publicationIndexNameAdmissionAuthority{}, err
 	}
-	atoms, err := publicationIndexNameAdmissionAtoms(
+	atoms, err := publicationIndexNameAdmissionAtomsWithBudget(
 		ctx,
 		detached.potentiallySearchableIndexNames,
 		detached.newlyPotentiallySearchableIndexName,
 		slots,
+		&budget.matcher,
 	)
 	if err != nil {
 		return publicationIndexNameAdmissionAuthority{}, err
 	}
-	signatures, err := enumeratePublicationIndexORSignatures(ctx, atoms)
+	signatures, err := enumeratePublicationIndexORSignaturesWithBudget(
+		ctx,
+		atoms,
+		&budget.closure,
+	)
 	if err != nil {
 		return publicationIndexNameAdmissionAuthority{}, err
 	}
@@ -135,6 +165,16 @@ func validatePublicationIndexNameAdmission(
 	if !ok {
 		return publicationIndexNameAdmissionAuthority{}, fmt.Errorf(
 			"%w: publication index-name admission exceeds its visibility-state limit",
+			control.ErrCapacityExceeded,
+		)
+	}
+	if !addPublicationResource(
+		&budget.classStates,
+		classStates,
+		maximumPublicationTransitionClassStates,
+	) {
+		return publicationIndexNameAdmissionAuthority{}, fmt.Errorf(
+			"%w: publication index-name admission batch exceeds its visibility-state limit",
 			control.ErrCapacityExceeded,
 		)
 	}
@@ -157,6 +197,7 @@ func validatePublicationIndexNameAdmission(
 		signatures,
 		slots,
 		semanticHasher,
+		&budget.work,
 	); err != nil {
 		return publicationIndexNameAdmissionAuthority{}, err
 	}
@@ -439,6 +480,23 @@ func publicationIndexNameAdmissionAtoms(
 	newName string,
 	slots []*publicationTransitionCanonicalObject,
 ) ([]publicationIndexAtom, error) {
+	var budget publicationTransitionIndexMatcherBudget
+	return publicationIndexNameAdmissionAtomsWithBudget(
+		ctx,
+		existingNames,
+		newName,
+		slots,
+		&budget,
+	)
+}
+
+func publicationIndexNameAdmissionAtomsWithBudget(
+	ctx context.Context,
+	existingNames []string,
+	newName string,
+	slots []*publicationTransitionCanonicalObject,
+	budget *publicationTransitionIndexMatcherBudget,
+) ([]publicationIndexAtom, error) {
 	names := make([]string, 0, len(existingNames)+1)
 	names = append(names, existingNames...)
 	names = append(names, newName)
@@ -449,7 +507,13 @@ func publicationIndexNameAdmissionAtoms(
 			"lost the newly potentially-searchable index name",
 		)
 	}
-	atoms, err := publicationTransitionIndexAtoms(ctx, names, slots, slots)
+	atoms, err := publicationTransitionIndexAtomsWithBudget(
+		ctx,
+		names,
+		slots,
+		slots,
+		budget,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -472,8 +536,9 @@ func validatePublicationIndexNameAdmissionCohorts(
 	signatures []publicationIndexORSignature,
 	slots []*publicationTransitionCanonicalObject,
 	semanticHasher hash.Hash,
+	work *publicationTransitionWork,
 ) error {
-	if len(classes) != len(classHydration) || semanticHasher == nil {
+	if len(classes) != len(classHydration) || semanticHasher == nil || work == nil {
 		return invalidPublicationIndexNameAdmission(
 			"semantic traversal authority is incomplete",
 		)
@@ -484,7 +549,6 @@ func validatePublicationIndexNameAdmissionCohorts(
 	winnerCommitments := make(
 		map[*publicationTransitionCanonicalObject][sha256.Size]byte,
 	)
-	var work publicationTransitionWork
 	for classIndex, class := range classes {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -506,7 +570,7 @@ func validatePublicationIndexNameAdmissionCohorts(
 				slots,
 				nil,
 				false,
-				&work,
+				work,
 			)
 			if err != nil {
 				return err
@@ -518,7 +582,7 @@ func validatePublicationIndexNameAdmissionCohorts(
 				slots,
 				nil,
 				true,
-				&work,
+				work,
 			)
 			if err != nil {
 				return err
