@@ -1302,6 +1302,25 @@ index-intersection cohort, proves shadow/unshadow coverage, applies aggregate
 cross-cohort work bounds, requires identical candidate authority in every cohort
 where it wins, and stores only those derived edges atomically.
 
+The cohort validator now also covers transitions in which the exact candidate
+does not win. Every result binds the transition candidate ID, version,
+definition digest, owner, an explicit winner/non-winner mode, and the canonical
+program commitment. A candidate-winning cohort requires exactly one exact
+candidate and derives its present-even-when-empty edge authority; a
+candidate-absent cohort requires zero exact matches and revalidates the sealed
+outgoing rows of every remaining winner. This prevents an empty or unshadowed
+post-state proof from being replayed for a different candidate transition.
+
+Effective index scopes are modeled as paired before/after applicability
+signatures, not as singleton indexes. The bounded closure enumerator deduplicates
+physical-index atoms, computes component-wise OR closure, and retains the exact
+minimum index count for each reachable signature. It uses a fixed 4,096-object
+bit universe, admits at most 1,024 physical atoms and 1,024 retained states, and
+has an independent 65,536-probe work ceiling so a join-closed inventory cannot
+force the full quadratic product while an immediate publication transaction is
+held. The future transactional layer still must prove that its atom inventory
+covers every durable index transition which can become searchable.
+
 Migration 0033 prepares that atomic publication boundary without opening it.
 An enable may append a newly derived dependency set instead of copying its
 draft or disabled predecessor, while disable and delete still require exact

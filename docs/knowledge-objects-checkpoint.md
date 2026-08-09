@@ -4,7 +4,7 @@
 
 **Current milestone:** KO-1 ACTIVE publication validation (closed gates)
 
-**Last completed slice:** transactional ACTIVE dependency schema prerequisite
+**Last completed slice:** bounded post-transition cohort and index closure authority
 
 **Evidence date:** August 9, 2026
 
@@ -68,7 +68,11 @@
   split, and re-injects the manager-sealed retained program for postflight
   inspection and completed-search analysis.
 - ACTIVE publication preparation now includes the backend-neutral dependency
-  compiler, the complete-winner-cohort adapter, and migration 0033. The
+  compiler, the complete-winner-cohort adapter, candidate-present and
+  candidate-absent post-transition validation, paired multi-index OR closure,
+  and migration 0033. Cohort authority binds the exact transition candidate,
+  winner mode, and program commitment; index closure retains exact minimum
+  witnesses under separate atom, state, and 65,536-probe work ceilings. The
   migration permits enable to persist a newly derived graph, preserves exact
   disable/delete graph identity, rejects stale ACTIVE pins during upgrade, and
   blocks target version advancement while a current ACTIVE dependent retains
@@ -706,6 +710,7 @@ KO-1C closed-gate evidence:
 | Independent review | pass | independent reviewers found the unsigned reconstructed-downgrade and unsigned search-analysis fixture gaps; both were fixed with universal Manager-seal validation and Manager-minted test snapshots, then two final reviewers returned clean verdicts |
 | Digest-pinned ClickHouse acceptance | pending | the opt-in fixture covers Dynamic `byteSize`, alias-copy exact/+1, losing-branch laziness, all five guard markers, and deferred hidden-failure atomicity. A driver query-parameter false positive in its synthetic JSON literal was corrected in `98b7a15`, but the subsequent Docker run was canceled; no green pinned runtime result or broader authored-suffix/finalizer matrix is claimed |
 | ACTIVE dependency schema prerequisite | pass, publication closed | migration 0033 SHA-256 `171c5b390d1033a48405ab5953131c312a2fed5ba09a22bd7b8a58f62cba9f7f`; enable may seal a rederived dependency set, disable/delete retain exact predecessor identity, stale ACTIVE pins reject upgrade atomically, and advancement is blocked only while a current ACTIVE dependent retains another target pin. The schema supports a bounded disable/advance/re-enable cascade; Writer create/active-update/enable gates remain closed |
+| Publication cohort and index authority | pass, transaction wiring pending | strict and candidate-absent cohort validation bind exact candidate identity, winner mode, canonical program commitment, rich derived edges, and every retained winner's persisted edge authority. Paired before/after index atoms produce exact minimum-witness OR closure under 1,024-atom, 1,024-state, 256-index, and independent 65,536-probe ceilings. Transactional active-inventory enumeration, symbolic principal/app visibility, cross-cohort aggregation, index lifecycle hooks, and Writer wiring remain closed |
 | Runtime activation | unchanged | `compiled_query_execution.go` and `knowledgesnapshot.Authority.Finalize` retain separate nonempty hard gates; production still supplies no resolver, routes, capability, navigation, or supported ACTIVE publication |
 | Local durability | pass | twenty-seven intentional KO-1C commits from `5088427` through `1a30afc` inclusive are separate and locally durable on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |

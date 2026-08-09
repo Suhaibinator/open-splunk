@@ -744,6 +744,18 @@ all affected private/app/global and index-intersection cohorts, proves latent
 unshadowing coverage, requires one exact candidate authority across them, and
 persists those derived edges atomically.
 
+Each validated cohort authority is transition-specific even when the candidate
+is absent from its winners. It binds the exact candidate owner, identity,
+version, definition digest, an explicit winner/non-winner mode, and the
+canonical program commitment. Winner mode requires exactly one candidate;
+non-winner mode requires none and independently revalidates every retained
+winner's persisted edges. Multi-index scopes use a paired before/after
+component-wise OR closure with exact minimum witness counts. The closure admits
+at most 1,024 physical applicability atoms and 1,024 retained signatures and
+stops after 65,536 charged atom/join probes, independently of those structural
+ceilings. Singleton-index checks are not publication authority because a
+combined scope can produce a winner or dependency absent from each singleton.
+
 Enabling a retained draft or disabled definition rederives its complete edge
 set against that transaction's post-publication winners; it never copies the
 predecessor's edges as semantic authority. Disable and delete remain
