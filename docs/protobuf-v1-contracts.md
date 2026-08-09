@@ -203,8 +203,30 @@ JSON-path syntax/unsupported/resource, calculated-expression `SPL_*`, or
 direct-Boolean-result failure. An adapter must independently prove that index
 is the submitted candidate, should compile a singleton candidate at index zero,
 and must never project an issue from a winner cohort. `Prepare` and authority,
-aggregate, cohort/collision/selector, and dependency failures stay opaque;
-legacy error text and sentinel behavior remain unchanged.
+aggregate, cohort/collision/selector, and dependency failures stay opaque to
+this typed compiler-issue seam; legacy error text and sentinel behavior remain
+unchanged.
+
+`internal/knowledgevalidation` now implements a pure result-construction layer,
+not a service. It owns no catalog, database, transaction, transition,
+authorization, routing, or HTTP policy. Inactive construction only normalizes
+and returns an opaque detached `Result`; active preparation normalizes and
+singleton-compiles into either an opaque terminal invalid result or an opaque
+candidate carrying no catalog authority. It maps only the typed definition and
+compiler issues above, checks their exact code/path/body/range/suggestion
+shape, and converts untyped or malformed local failures into opaque invariant
+errors. Authority, cohort, aggregate, dependency, and transition failures
+receive no typed issue mapping through inactive/active preparation; the sole
+result-layer exception is the caller-selected, target-free
+`BuildDependencyUnavailable` generic diagnostic below.
+
+A full ACTIVE-transition caller must supply the complete already-authorized
+direct target projection plus an evaluation-local candidate identity. The layer
+validates and canonicalizes the target-only shape, bound, `FIELD_INPUT` role,
+versions, duplicates, and self-reference and seals exact dependency charges; it
+cannot prove catalog completeness or visibility. Its sole transition-adjacent
+exception, `BuildDependencyUnavailable`, accepts no target identity and emits
+the generic `KNOWLEDGE_DEPENDENCY_UNAVAILABLE` diagnostic.
 
 The future validation request requires a present definition and exactly one
 nonzero `KnowledgeValidationIntent`. `INACTIVE_STORAGE` proves only bounded
@@ -290,6 +312,23 @@ templates plus exact source text already in the applied candidate scalar; it
 cannot expose another object, app, owner, name, ID, version, digest,
 definition, non-candidate index inventory, cohort/global count, generated SQL,
 or hidden authority.
+
+For ranged typed diagnostics, the internal result layer re-normalizes a
+detached submitted definition before rebasing canonical scalar offsets. A JSON
+path must remain byte-identical; a calculated expression is mapped through its
+exact ASCII trim, including canonical EOF after submitted trailing trim. Each
+range retains a private field-path/source-scalar provenance sidecar. Projection
+and sealing rederive code-point boundaries and the one-based LF/Unicode-scalar
+coordinates from that sidecar, rejecting missing, relabelled, or altered
+provenance rather than sanitizing it.
+
+The opaque `SealValidateResponse` boundary revalidates result kind, normalized
+definition/digest, inactive zeros or a fresh active singleton compilation,
+transition-supplied dependencies and exact resource formulas, issue ordering
+and private range provenance, recursive unknown-field absence, and a revision
+at most MaxInt64. It retains and returns detached copies of the exact
+deterministic encoding only when the complete response is at most 8 MiB. No
+database read, catalog proof, route registration, or HTTP mapping occurs there.
 
 Preview accepts only a retained server-authorized search-job identity plus a
 candidate definition. The future preview route has no independent intent: it

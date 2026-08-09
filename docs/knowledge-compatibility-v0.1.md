@@ -540,8 +540,30 @@ result failure. A validation adapter must independently prove that index is the
 submitted candidate, should prefer singleton Compile at index zero, and must
 never project a winner-cohort issue. `Prepare` and object/definition authority,
 aggregate resource, cohort/collision/selector, and dependency failures remain
-opaque. Error text and sentinel behavior stay compatible. No HTTP mapping
-consumes this seam either.
+opaque to this typed compiler-issue seam. Error text and sentinel behavior stay
+compatible. No HTTP mapping consumes this seam either.
+
+The pure `internal/knowledgevalidation` package now constructs bounded results
+from those typed seams without owning a catalog, database, transaction,
+transition, authorization, route, or HTTP policy. Inactive construction only
+normalizes into an opaque detached result and performs no publication compile
+or dependency derivation. Active preparation normalizes and singleton-compiles
+into exactly one opaque terminal invalid result or one opaque candidate with no
+catalog authority. It maps only recognized typed definition/compiler issues
+whose exact code, field path, candidate body, range, and suggestion shape agree.
+Untyped or malformed local failures become opaque invariants. Authority, cohort,
+aggregate, dependency, and transition failures receive no typed issue mapping
+through inactive/active preparation; the sole result-layer exception is the
+caller-selected, target-free `BuildDependencyUnavailable` generic diagnostic
+below.
+
+For a valid ACTIVE result, a full transition supplies an evaluation-local
+candidate identity and the complete already-authorized direct target
+projection. The package bounds, detaches, binary-sorts, and rejects malformed,
+duplicate, non-`FIELD_INPUT`, over-version, and self dependencies, but cannot
+prove completeness or visibility. Its sole transition-adjacent exception,
+`BuildDependencyUnavailable`, accepts no target identity and emits the fixed
+`KNOWLEDGE_DEPENDENCY_UNAVAILABLE` diagnostic.
 
 A Validate request requires definition message presence and exactly one intent.
 `INACTIVE_STORAGE` proves only bounded canonical inactive persistence and does
@@ -630,6 +652,23 @@ text, cohort/global counts, generated SQL, or hidden authority. The response
 boundary recursively rejects unknown result fields and all unknown nested
 fields before deterministic serialization; the complete Validate response is
 at most 8 MiB.
+
+Ranged typed diagnostics are rebound to the exact submitted source, not trusted
+from canonical offsets alone. The package re-normalizes a detached definition;
+JSON-path text must be byte-identical, while calculated-expression ranges are
+rebased through the exact ASCII trim, including canonical EOF after submitted
+trailing trim. A private sidecar binds field path and submitted scalar.
+Projection and every seal rederive UTF-8 boundaries and one-based coordinates
+from it, so missing, relabelled, mid-rune, out-of-scalar, or forged-coordinate
+provenance fails closed.
+
+`SealValidateResponse` revalidates the opaque result kind, canonical definition
+and digest, inactive resource zeros or a fresh active singleton compile,
+transition-supplied dependencies and their exact resource counts, issue
+ordering and private range provenance, recursive unknown-field absence, and a
+revision through MaxInt64. It retains the exact deterministic encoding only at
+or below 8 MiB, and all protobuf/byte projections detach. This is an internal
+result boundary, not a database read, catalog proof, route, or HTTP service.
 
 Preview has no independent intent. It uses the same create/update candidate
 envelope and always performs `ACTIVE_PUBLICATION` evaluation in one fixed

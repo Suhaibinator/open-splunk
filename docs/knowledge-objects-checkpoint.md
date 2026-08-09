@@ -4,8 +4,8 @@
 
 **Current milestone:** KO-1 search-time runtime acceptance (closed gates)
 
-**Last completed slice:** typed candidate normalization/semantic issues and the
-complete advisory validation/preview resource contract, with both routes closed
+**Last completed slice:** pure bounded knowledge-validation result construction,
+with database, catalog-service, and HTTP route integration still closed
 
 **Evidence date:** August 9, 2026
 
@@ -28,8 +28,8 @@ complete advisory validation/preview resource contract, with both routes closed
 - KO-1C closed-gate retained-prelude revision:
   `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 114 intentional post-`c5440b9` KO
-  commits through `5057a67` are durable locally. This checkpoint is kept as a
+- Publication state before this document: 116 intentional post-`c5440b9` KO
+  commits through `350e6d7` are durable locally. This checkpoint is kept as a
   separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -132,8 +132,8 @@ complete advisory validation/preview resource contract, with both routes closed
   and Boolean-result failures. An adapter must prove the submitted candidate
   and use singleton/index-zero attribution; `Prepare`, winner-cohort,
   authority, aggregate, collision/selector, and dependency failures remain
-  opaque. Legacy error/sentinel behavior is preserved and there is no HTTP
-  mapping.
+  opaque to this typed compiler-issue seam. Legacy error/sentinel behavior is
+  preserved and there is no HTTP mapping.
 - The future Validate/Preview wire contract now pins explicit inactive-storage
   versus active-publication intent, presence-sensitive create/update envelopes,
   update versions through MaxInt64, candidate-only in-band invalidity, exact
@@ -155,6 +155,22 @@ complete advisory validation/preview resource contract, with both routes closed
   registered or advertised. Draft result tags 6/7 and resource tag/name 11 are
   reserved under an intentional pre-route FILE compatibility waiver; the
   change is not claimed schema-nonbreaking.
+- `internal/knowledgevalidation` now implements that result shape as a pure,
+  context-aware layer with no database, catalog reader, transition engine,
+  authorization, router, or HTTP policy. Inactive construction normalizes only;
+  active preparation singleton-compiles into one opaque terminal invalid result
+  or one opaque candidate. Only exact typed normalization/compiler issues map
+  in-band through preparation; the sole transition/dependency exception is the
+  caller-selected, target-free `BuildDependencyUnavailable` generic diagnostic.
+  Ranged diagnostics are rebound to the detached submitted scalar and retain
+  private field-path/source provenance. A full transition must supply
+  the complete already-authorized target projection; the layer validates its
+  shape but cannot prove completeness or visibility. Result projection and the
+  8 MiB deterministic response seal revalidate kind, digest, exact intrinsic
+  and dependency resources, issue/range provenance, recursive unknown-field
+  absence, and MaxInt64 revision bounds. This adds no Validate/Preview route and
+  does not change the capability, browser, resolver, or nonempty execution
+  gates.
 
 ## KO-0 durable commits
 
@@ -266,8 +282,10 @@ Later local commits anchoring the reconciled current state include:
 | `0636d9d` | `refactor(knowledge): report definition issues` | Detached fail-fast candidate normalization issue extraction with definition-relative paths and three stable codes, preserving legacy text/`errors.Is` taxonomy while excluding non-candidate failures; no HTTP mapping |
 | `0c31de0` | `feat(proto): define knowledge validation contract` | Future unregistered Validate/Preview envelope, intent, result, resource, dependency, located-diagnostic, privacy, deterministic-bound, and 8 MiB response contracts; Preview is always ACTIVE publication and reserved draft fields use an explicit pre-route FILE waiver |
 | `392577a` | `fix(proto): bind advisory create validation` | Deterministic transaction-fresh non-persisted ACTIVE-create evaluation identity, fresh-ID alpha-invariance, no ID reservation/authorization, and mandatory later Create allocation plus live authority revalidation |
-| `97651f9` | `refactor(knowledge): report semantic issues` | Detached index-bound fail-fast Compile issues for intrinsic regex, JSON-path, calculated SPL, and Boolean-result failures while Prepare, authority, aggregate, cohort, and dependency failures remain opaque; no HTTP mapping |
+| `97651f9` | `refactor(knowledge): report semantic issues` | Detached index-bound fail-fast Compile issues for intrinsic regex, JSON-path, calculated SPL, and Boolean-result failures while Prepare, authority, aggregate, cohort, and dependency failures remain opaque to that typed semantic seam; no HTTP mapping |
 | `5057a67` | `fix(proto): complete validation resource authority` | Append-only extraction-output/JSON-work/scalar-predicate resource fields, singleton intrinsic compile charges versus full-transition dependency counts, advisory valid/no-op/hypothetical-inactive semantics, and knowledge-revision-only correlation metadata |
+| `593ab31` | `docs(knowledge): checkpoint validation contracts` | Reconciled typed issue seams, advisory create/revision validity, complete intrinsic resource fields, intentional pre-route FILE waiver, and still-closed Validate/Preview/runtime gates |
+| `350e6d7` | `feat(knowledge): build validation results` | Pure opaque inactive/active result construction, typed-only issue projection, submitted-scalar range provenance, transition-supplied authorized dependencies, exact resource revalidation, and deterministic 8 MiB response sealing without a database or route |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -413,8 +431,9 @@ used.
   input index for intrinsic regex, JSON-path, calculated `SPL_*`, and direct-
   Boolean-result failures. Validation must prove the submitted candidate and
   use singleton/index-zero attribution; `Prepare` plus authority, aggregate,
-  winner-cohort/collision/selector, and dependency failures remain opaque. This
-  seam also preserves legacy error/sentinel behavior and has no HTTP mapping
+  winner-cohort/collision/selector, and dependency failures remain opaque to
+  this typed compiler-issue seam. It also preserves legacy error/sentinel
+  behavior and has no HTTP mapping
 - Future validation requires exactly one inactive-storage or active-publication
   intent and a presence-sensitive create/update envelope. Update versions are
   1 through MaxInt64; only candidate invalidity is an in-band `valid=false`
@@ -436,6 +455,22 @@ used.
   active-publication semantics. Both routes remain unregistered/unadvertised,
   and reserved draft fields carry an intentional pre-route FILE compatibility
   waiver rather than a schema-nonbreaking claim
+- Pure result construction owns no catalog/database/transition/authorization or
+  HTTP policy. Inactive normalization and active singleton preparation return
+  opaque detached states; only exact typed definition/compiler issues map to
+  closed in-band output, while untyped or malformed local failures are opaque
+  invariants. External authority/cohort/dependency/transition failures receive
+  no typed mapping through preparation; the sole result-layer exception is the
+  caller-selected, target-free `BuildDependencyUnavailable` generic diagnostic.
+  Ranged semantic issues are proven against and rebased to the exact submitted
+  scalar with private provenance retained for every later projection/seal. A
+  full transition supplies the already-authorized direct target list; the layer
+  validates shape/order/bounds and rejects duplicate/self edges but cannot prove
+  completeness or visibility. Result projection re-normalizes, re-digests, and
+  for ACTIVE re-compiles singleton charges; the final Validate seal recursively
+  rejects unknown fields, verifies exact dependency resources and range
+  coordinates, limits the revision to MaxInt64, and retains at most 8 MiB of
+  exact deterministic bytes. This internal boundary registers no route
 
 The compatibility inventory contains 55 hash-pinned cases. It is explicitly a
 strict contract inventory, not yet runtime semantic evidence. Before the field
@@ -860,10 +895,11 @@ Current candidate-diagnostic and future-validation contract evidence:
 | Candidate normalization issue seam | pass | focused `internal/knowledgedefinition` normal, race, and vet gates plus its `knowledgeprogram` consumer passed; tests pin fail-fast field paths/codes, recursive unknown fields, every structural preflight, exact canonical-size boundary, detachment, wrapping, legacy text, and `errors.Is` parity |
 | Candidate semantic issue seam | pass | focused `internal/knowledgeprogram` tests pin index-bound detachment/wrapping, regex syntax/resource/capture issues, UTF-8 JSON ranges, calculated `SPL_*` diagnostics, Boolean-result attribution, legacy error/sentinel parity, singleton guidance, and opaque Prepare/authority/aggregate/cohort failures |
 | Validation protobuf generation and wire | pass with declared compatibility waiver | `make proto` ran twice with stable output; root Go validation-contract tests, TypeScript typecheck, lint, and the frontend protobuf compatibility suite passed. FILE-level removal of the never-served draft result fields 6/7 and resource field 11 is intentionally not claimed schema-nonbreaking; all removed tags and the resource name are reserved |
-| Validation result bounds and privacy | pass as contract, service pending | descriptor/comment and Go/TypeScript wire tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
+| Pure validation result construction | pass | focused `internal/knowledgevalidation` tests pin typed-only closed issue mapping, opaque inactive/active states, submitted-scalar range rebasing and private provenance, transition-supplied dependency canonicalization, exact inactive/active resources, recursive unknown-field rejection, detachment, exact deterministic wire-size comparison at an injected test bound, and the production 8 MiB cap |
+| Validation result bounds and privacy | result layer pass, service pending | descriptor/comment and Go/TypeScript wire tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
 | Runtime activation | unchanged | Validate and Preview handlers/routes do not exist in production registration or the browser allowlist, bootstrap advertises no knowledge capability, Preview is contractually always `ACTIVE_PUBLICATION`, and nonempty search execution gates remain closed |
-| Docker-backed acceptance | not run | these commits add internal candidate issue seams and an unserved protobuf contract only; no Docker command was invoked and no ClickHouse runtime claim is made |
-| Local durability | pass | `0636d9d`, `0c31de0`, `392577a`, `97651f9`, and `5057a67` are separate locally durable implementation commits on `codex/knowledge-objects-runtime`; the post-`c5440b9` count through `5057a67` is 114 |
+| Docker-backed acceptance | not run | these commits add internal candidate issue seams, an unserved protobuf contract, and a pure result-construction layer only; no Docker command was invoked and no ClickHouse runtime claim is made |
+| Local durability | pass | `0636d9d`, `0c31de0`, `392577a`, `97651f9`, `5057a67`, and `350e6d7` are separate locally durable implementation commits, with `593ab31` preserving the intervening documentation checkpoint on `codex/knowledge-objects-runtime`; the post-`c5440b9` count through `350e6d7` is 116 |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:

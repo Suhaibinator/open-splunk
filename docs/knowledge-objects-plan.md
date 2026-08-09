@@ -376,8 +376,32 @@ direct-Boolean-result failure. A validation adapter must independently prove
 that index is the submitted candidate and should use singleton Compile at index
 zero; it must never project an issue from a winner-cohort compilation. `Prepare`
 and object/definition authority, aggregate-limit, cohort/collision/selector, and
-dependency failures remain opaque. Legacy error text and sentinel behavior are
-preserved, and no HTTP handler maps this semantic seam either.
+dependency failures remain opaque to this typed compiler-issue seam. Legacy
+error text and sentinel behavior are preserved, and no HTTP handler maps this
+semantic seam either.
+
+The pure `internal/knowledgevalidation` layer now consumes those two typed
+seams to build bounded results, but owns no catalog, database, transition,
+authorization, route, or HTTP policy. `BuildInactive` only normalizes and
+returns an opaque detached result; it never compiles or derives dependencies.
+`PrepareActive` normalizes and singleton-compiles into exactly one opaque
+terminal invalid result or one opaque `ActiveCandidate` with no catalog
+authority. Only recognized typed definition/compiler issues are mapped
+in-band—definition messages use closed static templates, and semantic issues
+must match the candidate body plus exact code/path/range/suggestion shape.
+Untyped or malformed local failures become opaque invariant errors. Authority,
+cohort, aggregate, dependency, and transition failures receive no typed issue
+mapping through inactive/active preparation; the sole result-layer exception
+is the caller-selected, target-free `BuildDependencyUnavailable` generic
+diagnostic described below.
+
+A caller which already proved the full ACTIVE transition supplies the complete
+authorized direct target projection and an evaluation-local candidate identity
+to `ActiveCandidate.BuildValid`. The pure layer bounds, detaches, sorts, rejects
+duplicates/self-edges, and seals that projection, but cannot prove catalog
+completeness or visibility. Its target-free `BuildDependencyUnavailable`
+constructor is that sole transition-adjacent exception: it emits only the
+generic closed diagnostic and never accepts a hidden identity.
 
 ### Selectors
 
@@ -1057,6 +1081,21 @@ already present in that candidate; it cannot disclose other catalog identity,
 inventory, definitions, generated SQL, or hidden authority. The complete
 deterministic validation response is capped at 8 MiB and recursively rejects
 unknown response fields before serialization.
+
+For ranged typed diagnostics, the result layer re-normalizes a detached copy of
+the submitted source before rebasing canonical byte offsets. JSON-path bytes
+must be unchanged; calculated-expression offsets are mapped through the exact
+ASCII trim, including canonical EOF after submitted trailing trim. A private
+sidecar binds each public range to its exact field path and submitted scalar;
+projection and every later seal rederive UTF-8 boundaries and LF/Unicode-scalar
+line/column coordinates, so range or provenance tampering fails closed.
+
+`SealValidateResponse` revalidates the opaque result kind, normalized digest,
+singleton intrinsic charges, transition-supplied dependency counts/order,
+issue provenance, recursive unknown-field absence, and a revision no greater
+than MaxInt64. It retains the exact deterministic protobuf bytes only when the
+complete response is at most 8 MiB; its protobuf and byte accessors detach.
+This is still an internal construction boundary, not a registered handler.
 
 The future `preview` contract also remains unregistered and unadvertised. It
 applies the same create/update candidate envelope and always validates with
