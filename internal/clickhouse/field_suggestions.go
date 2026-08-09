@@ -38,7 +38,8 @@ type CompiledFieldSuggestions struct {
 	Args []any
 	Spec FieldSuggestionSpec
 
-	readScope compiledReadScope
+	readScope          compiledReadScope
+	executionAuthority *derivedExecutionAuthority
 }
 
 // CompileFieldSuggestions compiles a name-only lookup over the final event
@@ -90,12 +91,17 @@ func (c Compiler) CompileFieldSuggestions(
 	if err != nil {
 		return CompiledFieldSuggestions{}, err
 	}
-	return CompiledFieldSuggestions{
+	result := CompiledFieldSuggestions{
 		SQL:       compiled.SQL,
 		Args:      compiled.Args,
 		Spec:      spec,
 		readScope: compiled.readScope,
-	}, nil
+	}
+	result.executionAuthority, err = sealCompiledFieldSuggestionsExecution(compiled, result)
+	if err != nil {
+		return CompiledFieldSuggestions{}, err
+	}
+	return result, nil
 }
 
 func fieldSuggestionResultContract() eventAnalysisResultContract {

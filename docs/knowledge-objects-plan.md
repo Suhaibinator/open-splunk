@@ -1244,6 +1244,17 @@ and race tests, `go vet`, protobuf generation/lint, the Go descriptor contract,
 and TypeScript type checking pass. The pinned ClickHouse/Docker runtime matrix
 was not rerun and remains required before either nonempty execution gate opens.
 
+The KO-1C compiler now also preserves complete execution authority when an
+ordinary sealed query is projected into timeline, field-catalog,
+field-summary, or field-suggestion SQL. One kind-separated derived seal binds
+the source execution digest (including knowledge evidence), final SQL, every
+typed bind argument, the complete specialized result contract, and the final
+read scope. Production executors validate and deeply detach that authority
+before read admission, query-ID creation, or driver access. Focused normal and
+race tests prove that mutations of actual lowered knowledge regex and selector
+arguments fail before those boundaries while both global nonempty gates remain
+closed.
+
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and
   provenance contracts;

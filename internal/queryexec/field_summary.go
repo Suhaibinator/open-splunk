@@ -89,6 +89,16 @@ func (executor *Executor) ExecuteFieldSummary(
 	if executor.newQueryID == nil {
 		return FieldSummaryResult{}, errors.New("execute ClickHouse field summary: query ID generator is required")
 	}
+	if executor.readAdmission != nil {
+		detached, ok := query.CloneForExecution()
+		if !ok {
+			return FieldSummaryResult{}, fmt.Errorf(
+				"%w: compiled field summary execution authority is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		query = detached
+	}
 	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledFieldSummary(query); err != nil {
 		return FieldSummaryResult{}, err

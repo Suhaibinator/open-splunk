@@ -40,7 +40,8 @@ type CompiledFieldCatalog struct {
 	Args []any
 	Spec FieldCatalogSpec
 
-	readScope compiledReadScope
+	readScope          compiledReadScope
+	executionAuthority *derivedExecutionAuthority
 }
 
 // CompileFieldCatalog compiles an exact catalog over the final event relation.
@@ -80,12 +81,17 @@ func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) 
 	if err != nil {
 		return CompiledFieldCatalog{}, err
 	}
-	return CompiledFieldCatalog{
+	result := CompiledFieldCatalog{
 		SQL:       compiled.SQL,
 		Args:      compiled.Args,
 		Spec:      spec,
 		readScope: compiled.readScope,
-	}, nil
+	}
+	result.executionAuthority, err = sealCompiledFieldCatalogExecution(compiled, result)
+	if err != nil {
+		return CompiledFieldCatalog{}, err
+	}
+	return result, nil
 }
 
 func fieldCatalogResultContract() eventAnalysisResultContract {

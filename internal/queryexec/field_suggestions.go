@@ -65,6 +65,16 @@ func (executor *Executor) ExecuteFieldSuggestions(
 			"execute ClickHouse field suggestions: query ID generator is required",
 		)
 	}
+	if executor.readAdmission != nil {
+		detached, ok := query.CloneForExecution()
+		if !ok {
+			return FieldSuggestionResult{}, fmt.Errorf(
+				"%w: compiled field suggestions execution authority is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		query = detached
+	}
 	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledFieldSuggestions(query); err != nil {
 		return FieldSuggestionResult{}, err

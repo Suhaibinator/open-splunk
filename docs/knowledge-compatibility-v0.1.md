@@ -718,8 +718,11 @@ object origin and definition digest, per-output definition location, selector
 canonical bytes and runtime assessment, overwrite behavior, executable body,
 static charges, and canonical dependency authorities. Logical-plan consumers
 must prove the explicit contiguous prefix still equals that retained program;
-equal counters alone are not authority. KO-1B does not yet lower these
-operators to ClickHouse or permit nonempty snapshot finalization.
+equal counters alone are not authority. KO-1B itself did not lower these
+operators. KO-1C now constructs their bounded ClickHouse stages, runtime
+accounting barriers, sealed result sidecars, and specialized derived execution
+authority, but the final nonempty compiler seal and snapshot finalization gates
+remain closed until the digest-pinned runtime compatibility matrix passes.
 
 Generic lifecycle records distinguish absence from emptiness. An absent
 `KnowledgeSnapshotSummary` means knowledge resolution was disabled or the

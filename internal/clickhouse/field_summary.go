@@ -62,7 +62,8 @@ type CompiledFieldSummary struct {
 	Spec       FieldSummarySpec
 	FieldKnown bool
 
-	readScope compiledReadScope
+	readScope          compiledReadScope
+	executionAuthority *derivedExecutionAuthority
 }
 
 const (
@@ -139,13 +140,18 @@ func (c Compiler) CompileFieldSummary(query *plan.Query, spec FieldSummarySpec) 
 	if err != nil {
 		return CompiledFieldSummary{}, err
 	}
-	return CompiledFieldSummary{
+	result := CompiledFieldSummary{
 		SQL:        compiled.SQL,
 		Args:       compiled.Args,
 		Spec:       spec,
 		FieldKnown: fieldKnown,
 		readScope:  compiled.readScope,
-	}, nil
+	}
+	result.executionAuthority, err = sealCompiledFieldSummaryExecution(compiled, result)
+	if err != nil {
+		return CompiledFieldSummary{}, err
+	}
+	return result, nil
 }
 
 func fieldSummaryResultContract() eventAnalysisResultContract {

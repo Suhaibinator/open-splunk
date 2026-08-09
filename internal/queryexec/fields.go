@@ -59,6 +59,16 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	if executor.newQueryID == nil {
 		return FieldCatalogResult{}, errors.New("execute ClickHouse field catalog: query ID generator is required")
 	}
+	if executor.readAdmission != nil {
+		detached, ok := query.CloneForExecution()
+		if !ok {
+			return FieldCatalogResult{}, fmt.Errorf(
+				"%w: compiled field catalog execution authority is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		query = detached
+	}
 	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledFieldCatalog(query); err != nil {
 		return FieldCatalogResult{}, err

@@ -41,7 +41,8 @@ type CompiledTimeline struct {
 	Args []any
 	Spec TimelineSpec
 
-	readScope compiledReadScope
+	readScope          compiledReadScope
+	executionAuthority *derivedExecutionAuthority
 }
 
 // CompileTimeline preserves the complete ordinary event pipeline, then counts
@@ -183,6 +184,10 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, spec.BucketCount)
 	compiled := CompiledTimeline{SQL: sql.String(), Args: args, Spec: spec}
 	compiled.readScope = ordinary.readScope.sealedForSQL(compiled.SQL)
+	compiled.executionAuthority, err = sealCompiledTimelineExecution(ordinary, compiled)
+	if err != nil {
+		return CompiledTimeline{}, err
+	}
 	return compiled, nil
 }
 
