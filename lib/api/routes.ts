@@ -4,6 +4,7 @@ import * as IndexApi from "@/gen/ts/open_splunk/v1/index_api";
 import * as AppApi from "@/gen/ts/open_splunk/v1/app_api";
 import * as AuditApi from "@/gen/ts/open_splunk/v1/audit_api";
 import * as CollectorAdminApi from "@/gen/ts/open_splunk/v1/collector_admin_api";
+import * as KnowledgeApi from "@/gen/ts/open_splunk/v1/knowledge_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/v1/saved_search_api";
 import * as SearchApi from "@/gen/ts/open_splunk/v1/search_api";
 import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/v1/search_attempt_audit_api";
@@ -11,6 +12,8 @@ import * as SearchInspectionApi from "@/gen/ts/open_splunk/v1/search_inspection_
 import * as SystemApi from "@/gen/ts/open_splunk/v1/system_api";
 
 import { defineProtobufRoute, type ProtobufRoute } from "./protobuf-transport";
+
+export const MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES = 8 << 20;
 
 /** Derives a generated request type from a route without duplicating contracts. */
 export type RouteRequest<TRoute> = TRoute extends ProtobufRoute<infer TRequest, unknown> ? TRequest : never;
@@ -99,6 +102,41 @@ export const appRoutes = {
     "/api/v1/apps/delete",
     AppApi.DeleteAppRequest,
     AppApi.DeleteAppResponse,
+  ),
+} as const;
+
+export const knowledgeRoutes = {
+  create: defineProtobufRoute(
+    "/api/v1/knowledge/objects/create",
+    KnowledgeApi.CreateKnowledgeObjectRequest,
+    KnowledgeApi.CreateKnowledgeObjectResponse,
+  ),
+  get: defineProtobufRoute(
+    "/api/v1/knowledge/objects/get",
+    KnowledgeApi.GetKnowledgeObjectRequest,
+    KnowledgeApi.GetKnowledgeObjectResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  list: defineProtobufRoute(
+    "/api/v1/knowledge/objects/list",
+    KnowledgeApi.ListKnowledgeObjectsRequest,
+    KnowledgeApi.ListKnowledgeObjectsResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  update: defineProtobufRoute(
+    "/api/v1/knowledge/objects/update",
+    KnowledgeApi.UpdateKnowledgeObjectRequest,
+    KnowledgeApi.UpdateKnowledgeObjectResponse,
+  ),
+  setState: defineProtobufRoute(
+    "/api/v1/knowledge/objects/set-state",
+    KnowledgeApi.SetKnowledgeObjectStateRequest,
+    KnowledgeApi.SetKnowledgeObjectStateResponse,
+  ),
+  delete: defineProtobufRoute(
+    "/api/v1/knowledge/objects/delete",
+    KnowledgeApi.DeleteKnowledgeObjectRequest,
+    KnowledgeApi.DeleteKnowledgeObjectResponse,
   ),
 } as const;
 
@@ -313,6 +351,7 @@ export const openSplunkRoutes = {
   auditEvents: auditEventRoutes,
   searchAttemptAudit: searchAttemptAuditRoutes,
   indexes: indexRoutes,
+  knowledge: knowledgeRoutes,
   ingestionTokens: ingestionTokenRoutes,
   search: searchRoutes,
   savedSearches: savedSearchRoutes,
