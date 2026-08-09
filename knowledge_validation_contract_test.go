@@ -91,6 +91,56 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		"valid=false candidate result",
 	)
 
+	previewRequest := file.Messages().ByName("PreviewKnowledgeObjectRequest")
+	if previewRequest == nil || previewRequest.Fields().Len() != 6 {
+		t.Fatalf("PreviewKnowledgeObjectRequest descriptor = %v, want six fields", previewRequest)
+	}
+	retainedJobID := validationContractRequireField(t, previewRequest, "retained_search_job_id", 1, protoreflect.StringKind, "")
+	previewDefinition := validationContractRequireField(t, previewRequest, "definition", 2, protoreflect.MessageKind, "open_splunk.v1.KnowledgeObjectDefinition")
+	previewObjectID := validationContractRequireField(t, previewRequest, "knowledge_object_id", 3, protoreflect.StringKind, "")
+	previewExpectedVersion := validationContractRequireField(t, previewRequest, "expected_version", 4, protoreflect.Uint64Kind, "")
+	previewUpdateMask := validationContractRequireField(t, previewRequest, "update_mask", 5, protoreflect.MessageKind, "google.protobuf.FieldMask")
+	previewMaximumRows := validationContractRequireField(t, previewRequest, "maximum_rows", 6, protoreflect.Uint32Kind, "")
+	if retainedJobID.HasPresence() || retainedJobID.HasOptionalKeyword() {
+		t.Error("retained_search_job_id must remain a required-by-validation proto3 scalar")
+	}
+	if !previewDefinition.HasPresence() || previewDefinition.HasOptionalKeyword() ||
+		!previewUpdateMask.HasPresence() || previewUpdateMask.HasOptionalKeyword() {
+		t.Error("Preview definition and update_mask must retain ordinary message presence")
+	}
+	if !previewObjectID.HasPresence() || !previewObjectID.HasOptionalKeyword() ||
+		!previewExpectedVersion.HasPresence() || !previewExpectedVersion.HasOptionalKeyword() ||
+		!previewMaximumRows.HasPresence() || !previewMaximumRows.HasOptionalKeyword() {
+		t.Error("Preview create/update and maximum_rows scalar presence is not pinned by proto3 optional fields")
+	}
+	validationContractRequireProtoComments(t, "message PreviewKnowledgeObjectRequest {",
+		"future route remains unregistered",
+		"internal request codec accepts a raw protobuf request body of at most 4 MiB plus 64 KiB (4259840 bytes)",
+		"future owner-scoped retained execution authority",
+		"reacquire under the authenticated caller",
+		"not an immutable event snapshot identity",
+		"does not itself grant access",
+		"nonempty valid UTF-8 of at most 256 bytes",
+		"unchanged by whitespace trimming",
+		"no Unicode control code point",
+		"rejects malformed wire and unknown-group nesting deeper than 32",
+		"retains at most 9 update-mask paths and 17 entries in each selected selector dimension or regex output list",
+		"validating UTF-8 in every recognized string occurrence",
+		"including values later overwritten, unselected, or cleared",
+		"outer and wrong-wire envelope unknowns plus update-mask unknowns for structural rejection",
+		"Create full-candidate unknowns and update mask-selected nested unknowns are retained",
+		"update candidate top-level and unselected nested unknowns are discarded",
+		"exact create/update envelope of ValidateKnowledgeObjectRequest",
+		"server forcing ACTIVE_PUBLICATION",
+		"structural envelope validator performs no retained-job lookup or authorization",
+		"never mutates or normalizes the decoded request",
+	)
+	validationContractRequireNestedProtoComments(t, "message PreviewKnowledgeObjectRequest {", "optional uint32 maximum_rows = 6;",
+		"preserves only presence and the exact uint32 value",
+		"no default, bound, or execution meaning",
+		"future Preview service contract",
+	)
+
 	dependency := file.Messages().ByName("KnowledgeValidationDependency")
 	if dependency == nil || dependency.Fields().Len() != 2 {
 		t.Fatalf("KnowledgeValidationDependency descriptor = %v, want two fields", dependency)
@@ -338,12 +388,12 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		"reservation, mutation proof, or promise",
 	)
 
-	preview := file.Messages().ByName("PreviewKnowledgeObjectResponse")
-	if preview == nil {
+	previewResponse := file.Messages().ByName("PreviewKnowledgeObjectResponse")
+	if previewResponse == nil {
 		t.Fatal("PreviewKnowledgeObjectResponse descriptor is missing")
 	}
-	validationContractRequireField(t, preview, "validation", 1, protoreflect.MessageKind, "open_splunk.v1.KnowledgeValidationResult")
-	validationContractRequireField(t, preview, "tenant_catalog_revision", 7, protoreflect.Uint64Kind, "")
+	validationContractRequireField(t, previewResponse, "validation", 1, protoreflect.MessageKind, "open_splunk.v1.KnowledgeValidationResult")
+	validationContractRequireField(t, previewResponse, "tenant_catalog_revision", 7, protoreflect.Uint64Kind, "")
 	validationContractRequireProtoComments(t, "message PreviewKnowledgeObjectResponse {",
 		"future unregistered route",
 		"no independent validation intent",
@@ -383,7 +433,7 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	if decodedUpdate.KnowledgeObjectId == nil || *decodedUpdate.KnowledgeObjectId != "" ||
 		decodedUpdate.ExpectedVersion == nil || *decodedUpdate.ExpectedVersion != 0 ||
 		decodedUpdate.UpdateMask == nil || len(decodedUpdate.UpdateMask.GetPaths()) != 0 {
-		t.Fatalf("present-empty update envelope lost presence: %+v", decodedUpdate)
+		t.Fatalf("present-empty update envelope lost presence: %+v", &decodedUpdate)
 	}
 
 	create := &opensplunkv1.ValidateKnowledgeObjectRequest{
@@ -403,7 +453,59 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	}
 	if decodedCreate.GetDefinition() == nil || decodedCreate.GetDefinition().GetFieldAlias() == nil ||
 		decodedCreate.KnowledgeObjectId != nil || decodedCreate.ExpectedVersion != nil || decodedCreate.UpdateMask != nil {
-		t.Fatalf("create envelope acquired update presence: %+v", decodedCreate)
+		t.Fatalf("create envelope acquired update presence: %+v", &decodedCreate)
+	}
+
+	previewCreate := &opensplunkv1.PreviewKnowledgeObjectRequest{
+		RetainedSearchJobId: "job-preview-create",
+		Definition:          validationContractMinimalDefinition(),
+	}
+	previewCreateWire, err := proto.MarshalOptions{Deterministic: true}.Marshal(previewCreate)
+	if err != nil {
+		t.Fatalf("marshal Preview create envelope: %v", err)
+	}
+	if got := validationContractWireFieldNumbers(t, previewCreateWire); !slices.Equal(got, []protowire.Number{1, 2}) {
+		t.Fatalf("Preview create wire fields = %v, want retained job/definition fields [1 2]", got)
+	}
+	var decodedPreviewCreate opensplunkv1.PreviewKnowledgeObjectRequest
+	if err := proto.Unmarshal(previewCreateWire, &decodedPreviewCreate); err != nil {
+		t.Fatalf("unmarshal Preview create envelope: %v", err)
+	}
+	if decodedPreviewCreate.GetRetainedSearchJobId() != "job-preview-create" ||
+		decodedPreviewCreate.GetDefinition() == nil || decodedPreviewCreate.KnowledgeObjectId != nil ||
+		decodedPreviewCreate.ExpectedVersion != nil || decodedPreviewCreate.UpdateMask != nil ||
+		decodedPreviewCreate.MaximumRows != nil {
+		t.Fatalf("Preview create envelope presence changed: %+v", &decodedPreviewCreate)
+	}
+
+	zeroRows := uint32(0)
+	previewPresentEmptyUpdate := &opensplunkv1.PreviewKnowledgeObjectRequest{
+		RetainedSearchJobId: "job-preview-update",
+		Definition:          validationContractMinimalDefinition(),
+		KnowledgeObjectId:   &emptyID,
+		ExpectedVersion:     &zeroVersion,
+		UpdateMask:          &fieldmaskpb.FieldMask{},
+		MaximumRows:         &zeroRows,
+	}
+	previewPresentEmptyUpdateWire, err := proto.MarshalOptions{Deterministic: true}.Marshal(previewPresentEmptyUpdate)
+	if err != nil {
+		t.Fatalf("marshal present-empty Preview update envelope: %v", err)
+	}
+	if got := validationContractWireFieldNumbers(t, previewPresentEmptyUpdateWire); !slices.Equal(
+		got,
+		[]protowire.Number{1, 2, 3, 4, 5, 6},
+	) {
+		t.Fatalf("present-empty Preview update wire fields = %v, want [1 2 3 4 5 6]", got)
+	}
+	var decodedPreviewUpdate opensplunkv1.PreviewKnowledgeObjectRequest
+	if err := proto.Unmarshal(previewPresentEmptyUpdateWire, &decodedPreviewUpdate); err != nil {
+		t.Fatalf("unmarshal present-empty Preview update envelope: %v", err)
+	}
+	if decodedPreviewUpdate.KnowledgeObjectId == nil || *decodedPreviewUpdate.KnowledgeObjectId != "" ||
+		decodedPreviewUpdate.ExpectedVersion == nil || *decodedPreviewUpdate.ExpectedVersion != 0 ||
+		decodedPreviewUpdate.UpdateMask == nil || len(decodedPreviewUpdate.UpdateMask.GetPaths()) != 0 ||
+		decodedPreviewUpdate.MaximumRows == nil || *decodedPreviewUpdate.MaximumRows != 0 {
+		t.Fatalf("present-empty Preview update envelope lost presence: %+v", &decodedPreviewUpdate)
 	}
 
 	resourceEstimate := &opensplunkv1.KnowledgeResourceEstimate{

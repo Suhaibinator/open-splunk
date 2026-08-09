@@ -32,6 +32,7 @@ import {
   KnowledgeValidationResult,
   ListKnowledgeObjectDependenciesResponse,
   ListKnowledgeObjectDependentsResponse,
+  PreviewKnowledgeObjectRequest,
   SetKnowledgeObjectStateResponse,
   UpdateKnowledgeObjectResponse,
   ValidateKnowledgeObjectRequest,
@@ -738,6 +739,36 @@ test("generated knowledge validation keeps append-only intent and candidate proj
   );
   assert.deepEqual(ValidateKnowledgeObjectRequest.encode(presentEmptyUpdate).finish(), presentEmptyUpdateWire);
   assert.deepEqual(ValidateKnowledgeObjectRequest.decode(presentEmptyUpdateWire), presentEmptyUpdate);
+
+  const previewCreate = PreviewKnowledgeObjectRequest.fromPartial({
+    retainedSearchJobId: "job-preview-create",
+    definition: create.definition,
+  });
+  const previewCreateWire = PreviewKnowledgeObjectRequest.encode(previewCreate).finish();
+  assert.deepEqual(protobufTopLevelFieldNumbers(previewCreateWire), [1, 2]);
+  assert.deepEqual(PreviewKnowledgeObjectRequest.decode(previewCreateWire), previewCreate);
+  assert.equal(previewCreate.maximumRows, undefined);
+
+  const previewPresentEmptyUpdate = PreviewKnowledgeObjectRequest.fromPartial({
+    retainedSearchJobId: "job-preview-update",
+    definition: create.definition,
+    knowledgeObjectId: "",
+    expectedVersion: 0n,
+    updateMask: [],
+    maximumRows: 0,
+  });
+  const previewPresentEmptyUpdateWire = PreviewKnowledgeObjectRequest.encode(previewPresentEmptyUpdate).finish();
+  assert.deepEqual(protobufTopLevelFieldNumbers(previewPresentEmptyUpdateWire), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(
+    PreviewKnowledgeObjectRequest.decode(previewPresentEmptyUpdateWire),
+    previewPresentEmptyUpdate,
+  );
+  assert.equal(PreviewKnowledgeObjectRequest.decode(previewPresentEmptyUpdateWire).maximumRows, 0);
+
+  const previewMaximumRows = PreviewKnowledgeObjectRequest.fromPartial({ maximumRows: 0xffff_ffff });
+  const previewMaximumRowsWire = PreviewKnowledgeObjectRequest.encode(previewMaximumRows).finish();
+  assert.deepEqual(protobufTopLevelFieldNumbers(previewMaximumRowsWire), [6]);
+  assert.equal(PreviewKnowledgeObjectRequest.decode(previewMaximumRowsWire).maximumRows, 0xffff_ffff);
 
   const resources = KnowledgeResourceEstimate.fromPartial({
     selectorPatterns: 1,

@@ -2540,8 +2540,29 @@ func (x *ListKnowledgeObjectDependentsResponse) GetResolvedObject() *KnowledgeMa
 }
 
 // POST /api/v1/knowledge/objects/preview
-// retained_search_job_id selects a server-authorized immutable event snapshot.
-// A browser cannot submit events, index scope, a physical table, or SQL.
+// This future route remains unregistered. The internal request codec accepts a
+// raw protobuf request body of at most 4 MiB plus 64 KiB (4259840 bytes). The
+// retained_search_job_id selects a future owner-scoped retained execution
+// authority which the service must reacquire under the authenticated caller;
+// it is not an immutable event snapshot identity and does not itself grant
+// access. The ID must be nonempty valid UTF-8 of at most 256 bytes, unchanged by
+// whitespace trimming, and contain no Unicode control code point. A browser
+// cannot submit events, index scope, a physical table, or SQL.
+//
+// The internal codec rejects malformed wire and unknown-group nesting deeper
+// than 32. Its bounded projection retains at most 9 update-mask paths and 17
+// entries in each selected selector dimension or regex output list while
+// validating UTF-8 in every recognized string occurrence, including values
+// later overwritten, unselected, or cleared. It retains outer and wrong-wire
+// envelope unknowns plus update-mask unknowns for structural rejection. Create
+// full-candidate unknowns and update mask-selected nested unknowns are retained;
+// update candidate top-level and unselected nested unknowns are discarded.
+//
+// definition, knowledge_object_id, expected_version, and update_mask obey the
+// exact create/update envelope of ValidateKnowledgeObjectRequest, with the
+// server forcing ACTIVE_PUBLICATION and accepting no independent intent. This
+// structural envelope validator performs no retained-job lookup or
+// authorization and never mutates or normalizes the decoded request.
 type PreviewKnowledgeObjectRequest struct {
 	state               protoimpl.MessageState     `protogen:"open.v1"`
 	RetainedSearchJobId string                     `protobuf:"bytes,1,opt,name=retained_search_job_id,json=retainedSearchJobId,proto3" json:"retained_search_job_id,omitempty"`
@@ -2549,8 +2570,11 @@ type PreviewKnowledgeObjectRequest struct {
 	KnowledgeObjectId   *string                    `protobuf:"bytes,3,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3,oneof" json:"knowledge_object_id,omitempty"`
 	ExpectedVersion     *uint64                    `protobuf:"varint,4,opt,name=expected_version,json=expectedVersion,proto3,oneof" json:"expected_version,omitempty"`
 	// Paths are relative to KnowledgeObjectDefinition, never this request.
-	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,5,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	MaximumRows   *uint32                `protobuf:"varint,6,opt,name=maximum_rows,json=maximumRows,proto3,oneof" json:"maximum_rows,omitempty"`
+	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,5,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
+	// The structural request boundary preserves only presence and the exact
+	// uint32 value. It assigns no default, bound, or execution meaning; those
+	// remain part of the future Preview service contract.
+	MaximumRows   *uint32 `protobuf:"varint,6,opt,name=maximum_rows,json=maximumRows,proto3,oneof" json:"maximum_rows,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

@@ -11,8 +11,8 @@ import (
 // validatePreviewKnowledgeObjectRequestEnvelope checks only Preview's
 // structural request authority. Candidate semantics are delegated to the
 // registered Validate envelope with ACTIVE_PUBLICATION forced by the server.
-// Row-limit policy remains a later service concern and is deliberately not
-// inspected here.
+// It performs no retained-job lookup or authorization, and maximum_rows is
+// preserved without assigning a default, bound, or execution meaning.
 func validatePreviewKnowledgeObjectRequestEnvelope(
 	request *opensplunkv1.PreviewKnowledgeObjectRequest,
 ) error {

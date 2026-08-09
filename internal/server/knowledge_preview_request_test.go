@@ -21,6 +21,25 @@ func TestPreviewKnowledgeObjectEnvelopeRejectsNilRequest(t *testing.T) {
 	}
 }
 
+func TestPreviewKnowledgeObjectRequestPinsContractBounds(t *testing.T) {
+	tests := []struct {
+		name string
+		got  int64
+		want int64
+	}{
+		{name: "raw request bytes", got: maximumKnowledgeMutationRequestBytes, want: 4_259_840},
+		{name: "retained job ID bytes", got: int64(searchjobs.MaximumJobIDBytes), want: 256},
+		{name: "retained mask paths", got: int64(maximumValidateRetainedMaskPaths), want: 9},
+		{name: "retained selector patterns", got: int64(maximumValidateRetainedSelectorPatterns), want: 17},
+		{name: "retained extraction outputs", got: int64(maximumValidateRetainedExtractionOutputs), want: 17},
+	}
+	for _, test := range tests {
+		if test.got != test.want {
+			t.Errorf("Preview %s = %d, want contract value %d", test.name, test.got, test.want)
+		}
+	}
+}
+
 func TestPreviewKnowledgeObjectEnvelopeMatchesActiveValidation(t *testing.T) {
 	objectID := "ko-preview"
 	version := uint64(7)
@@ -283,7 +302,7 @@ func TestPreviewKnowledgeObjectEnvelopeLeavesMaximumRowsUntouched(t *testing.T) 
 		{name: "absent"},
 		{name: "explicit zero", rows: &zero},
 		{name: "one", rows: &one},
-		{name: "maximum", rows: &maximum},
+		{name: "maximum uint32", rows: &maximum},
 	}
 
 	for _, test := range tests {
