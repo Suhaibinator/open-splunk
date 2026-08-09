@@ -19,6 +19,46 @@ type Analysis struct {
 	ReferencedFields []string
 }
 
+// StagedAnalysis contains the whole-query read-set and one aligned read-set
+// for every operator in the validated pipeline.
+type StagedAnalysis struct {
+	ReferencedFields []string
+	Stages           []Analysis
+}
+
+// AnalyzeStages derives one detached read-set per operator after first proving
+// that the complete query is valid. Whole-query validation is essential for
+// knowledge operators: an isolated generated operator has no private prelude
+// marker and must never be accepted as independent authority.
+func AnalyzeStages(query *Query) (StagedAnalysis, error) {
+	full, err := analyze(query)
+	if err != nil {
+		return StagedAnalysis{}, err
+	}
+
+	stages := make([]Analysis, len(query.Operators))
+	for index, operator := range query.Operators {
+		analyzer := queryAnalyzer{fields: make(map[string]struct{})}
+		if err := analyzer.visitOperator(operator, 1); err != nil {
+			return StagedAnalysis{}, fmt.Errorf(
+				"analyze logical query stage %d: %w",
+				index,
+				err,
+			)
+		}
+		fields := make([]string, 0, len(analyzer.fields))
+		for field := range analyzer.fields {
+			fields = append(fields, field)
+		}
+		sort.Strings(fields)
+		stages[index] = Analysis{ReferencedFields: fields}
+	}
+	return StagedAnalysis{
+		ReferencedFields: full.referencedFields,
+		Stages:           stages,
+	}, nil
+}
+
 // Analyze derives safe public metadata from query. It fails closed for typed
 // nils, unknown future nodes, malformed field references, excessive depth, and
 // excessive work so forged plans cannot yield incomplete dependency metadata.

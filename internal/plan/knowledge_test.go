@@ -252,6 +252,65 @@ func TestAnalyzeKnowledgePreludeTracksInputsButNotKnowledgePredicates(t *testing
 	}
 }
 
+func TestAnalyzeStagesRequiresAndPreservesCompleteKnowledgePrelude(t *testing.T) {
+	authored := testKnowledgeAuthoredQuery()
+	program := testKnowledgeProgram(t)
+	logical, err := InjectKnowledgePrelude(authored, program)
+	if err != nil {
+		t.Fatalf("InjectKnowledgePrelude: %v", err)
+	}
+
+	analysis, err := AnalyzeStages(logical)
+	if err != nil {
+		t.Fatalf("AnalyzeStages: %v", err)
+	}
+	stages := analysis.Stages
+	want := [][]string{
+		nil,
+		{"_raw", "index"},
+		{"_raw"},
+		{"host", "status"},
+		{"host", "source", "sourcetype"},
+		{"source"},
+	}
+	if len(stages) != len(want) {
+		t.Fatalf("stage count = %d, want %d", len(stages), len(want))
+	}
+	for index := range want {
+		if !slices.Equal(stages[index].ReferencedFields, want[index]) {
+			t.Fatalf(
+				"stage %d referenced fields = %v, want %v",
+				index,
+				stages[index].ReferencedFields,
+				want[index],
+			)
+		}
+	}
+
+	analysis.ReferencedFields[0] = "mutated"
+	stages[1].ReferencedFields[0] = "mutated"
+	again, err := AnalyzeStages(logical)
+	if err != nil {
+		t.Fatalf("AnalyzeStages(second): %v", err)
+	}
+	if !slices.Equal(again.Stages[1].ReferencedFields, want[1]) ||
+		slices.Contains(again.ReferencedFields, "mutated") {
+		t.Fatalf("stage analysis was not detached: %#v", again)
+	}
+
+	forged := *logical
+	forged.Operators = slices.Clone(logical.Operators)
+	forged.Operators[1], forged.Operators[2] = forged.Operators[2], forged.Operators[1]
+	if got, err := AnalyzeStages(&forged); err == nil || len(got.Stages) != 0 {
+		t.Fatalf("AnalyzeStages accepted reordered prelude: (%#v, %v)", got, err)
+	}
+	if got, err := AnalyzeStages(&Query{Operators: []Operator{
+		logical.Operators[1],
+	}}); err == nil || len(got.Stages) != 0 {
+		t.Fatalf("AnalyzeStages accepted isolated knowledge operator: (%#v, %v)", got, err)
+	}
+}
+
 func testKnowledgeAuthoredQuery() *Query {
 	return &Query{
 		Operators: []Operator{
