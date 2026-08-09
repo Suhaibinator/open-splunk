@@ -4,10 +4,11 @@
 
 **Current milestone:** KO-1 search-time runtime acceptance (closed gates)
 
-**Last completed slice:** bounded administrator-only Validate transport and HTTP
-route over rollback-only inactive/active catalog evaluation, with browser
-bearer/UI/navigation, Preview, capability, and search-runtime integration still
-closed
+**Last completed slice:** shared bounded candidate request decoding, an
+unregistered request-only Preview codec, and a structural Preview envelope
+validator which forces ACTIVE validation while leaving row policy
+uninterpreted; Preview service, response codec, handler, route, browser/runtime,
+and every nonempty execution gate remain closed
 
 **Evidence date:** August 9, 2026
 
@@ -33,9 +34,11 @@ closed
   `7d54c01172f74b097d05d09df4652c28c94a29c0`
 - Validation-route terminal revision:
   `2aa51384ead0be6482a1e9ea3ce85fbeed1777f9`
+- Preview request-boundary terminal revision:
+  `ca9c2aaff267d50affc8f46895f4c775e14d29d0`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 123 intentional post-`c5440b9` KO
-  commits through `2aa5138` are durable locally. This update is prepared as a
+- Publication state before this document: 127 intentional post-`c5440b9` KO
+  commits through `ca9c2aa` are durable locally. This update is prepared as a
   separate documentation change. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -125,8 +128,12 @@ closed
   Validate is absent from the backend's generic outer `administratorRoutes` map
   because the inner knowledge-attempt boundary owns its administrator
   authentication and `ActionValidate` journaling before decode. The dormant
+  Preview request codec and structural forced-ACTIVE envelope validator are
+  internal only; neither is installed in this route unit, manifest, or bearer
+  policy, and no Preview response codec or service authority exists. The dormant
   read-only Knowledge Manager detail consumes both graph routes for the selected
-  exact object version, independently pages and labels each direction's catalog revision,
+  exact object version, independently pages and labels each direction's catalog
+  revision,
   and displays only visible opposite ID/version/`FIELD_INPUT` rows. Capability-
   gated navigation and dynamic loading remain absent, so production bootstrap
   still makes no knowledge request.
@@ -164,9 +171,10 @@ closed
   proves an empty ledger) and is no reservation, mutation proof, or reusable
   authority. Preview always uses `ACTIVE_PUBLICATION`. Validate is registered
   but unadvertised; Preview remains unregistered and unadvertised. Draft result
-  tags 6/7 and resource tag/name 11 are
-  reserved under an intentional pre-route FILE compatibility waiver; the
-  change is not claimed schema-nonbreaking.
+  tags 6/7 and resource tag/name 11 were retired before Validate registration,
+  were never served by either route, and remain reserved under an intentional
+  historical FILE compatibility waiver; the change is not claimed
+  schema-nonbreaking.
 - `internal/knowledgevalidation` now implements that result shape as a pure,
   context-aware layer with no database, catalog reader, transition engine,
   authorization, router, or HTTP policy. Inactive construction normalizes only;
@@ -225,18 +233,35 @@ closed
   audit append, idempotency path, publication hook, clock, mutation ID
   generator, or commit. The dedicated handler and codec now consume this service
   through the ninth all-or-none route, but no browser path or bootstrap
-  capability changed and Preview remains contract-only.
-- Validate's custom raw decoder enforces the mutation-request wire ceiling by
-  reading at most one byte beyond it solely as an overflow witness and performs
-  a bounded two-pass projection instead of generic protobuf
-  materialization. It retains only the canonical mask inventory plus one and
-  selected selector/output ceilings plus one, preserves protobuf merge and
-  `oneof` behavior, validates recognized UTF-8 even outside the selected view,
-  and bounds unknown-group depth at 32. Outer and mask unknowns remain envelope
-  errors; create and mask-selected nested candidate unknowns remain in-band
-  invalidity; update top-level and unselected candidate unknowns are discarded.
-  Million-entry mask, selected/unselected repetition, extraction-output, and
-  alternating-body tests prove bounded projection and allocation behavior.
+  capability changed.
+- Validate and the unregistered request-only Preview codec now share an
+  extracted layout-parameterized candidate raw-wire decoder. Both enforce the
+  mutation-request ceiling, read at most one byte beyond it solely as an
+  overflow witness, and use bounded two-pass projection instead of generic
+  protobuf materialization. Correct-wire object-ID presence selects update
+  projection; duplicate messages and masks merge, scalars are last-wins, and
+  empty/zero optional presence is retained. The decoder keeps only the
+  canonical mask inventory plus one and selected selector/output ceilings plus
+  one, validates every recognized UTF-8 string even when unselected,
+  overwritten, or cleared, and bounds unknown-group depth at 32. Outer unknowns
+  (including wrong-wire envelope fields) and mask unknowns remain envelope
+  errors; create and mask-selected nested candidate unknowns remain candidate
+  authority; update top-level and unselected candidate unknowns are discarded.
+  Million-entry mask, selected/unselected repetition, job-ID,
+  extraction-output, and alternating-body tests prove bounded retention and
+  allocation behavior.
+- Preview's request codec additionally retains the last UTF-8 search-job ID
+  through its 256-byte ceiling or a detached 257-byte over-limit witness, while
+  validating every occurrence as UTF-8. It preserves `maximum_rows` presence
+  and decoded value. Its structural envelope validator rejects nil, outer
+  unknown or wrong-wire envelope-field authority, and noncanonical retained job
+  IDs, then passes
+  a synchronous nonescaping candidate view through the exact Validate
+  create/update envelope with `ACTIVE_PUBLICATION` forced by the server.
+  `maximum_rows` is deliberately not defaulted, bounded, or interpreted. No
+  Preview response codec, handler, catalog/search service, retained-job
+  acquisition, route, manifest/bearer entry, capability, browser surface,
+  Resolver attachment, or execution path exists.
 - The HTTP adapter requires the exact ready concrete Writer, acquires response-
   serialization capacity before retained request authority, detaches binding
   fields, independently clones read/write scope, and admits only the closed
@@ -370,6 +395,10 @@ Later local commits anchoring the reconciled current state include:
 | `1e06e86` | `feat(knowledge): bound validation transport` | Dedicated raw-wire request decoder with bounded projection, semantic unknown split, million-entry allocation oracles, and exact sealed deterministic responses capped at 8 MiB |
 | `ceb3b85` | `feat(knowledge): adapt validation service` | Exact-ready-Writer HTTP adapter, detached request binding and cloned scope authority, serialization-permit transfer, closed error/disposition sanitization, and `ActionValidate`-safe rejection context |
 | `2aa5138` | `feat(knowledge): expose validation route` | Ninth all-or-none administrator management route, inner attempt-boundary authentication and journaling, central route-manifest/contract registration, real rollback-only HTTP oracles, and preserved browser/capability/runtime closure |
+| `eec63ee` | `docs(knowledge): checkpoint validation route` | Reconciled the registered ninth route, bounded transport/handler proofs, exact compatibility history, preserved browser/runtime closure, and 123-commit terminal state |
+| `d2a57cd` | `docs(proto): clarify validation compatibility waiver` | Historical FILE-waiver comments now state that the draft fields were retired before Validate registration and were never served by either Validate or Preview |
+| `2db17c3` | `feat(knowledge): bound preview requests` | Behavior-preserving extraction of the shared bounded candidate wire decoder plus an unregistered request-only Preview codec with exact projection, UTF-8, unknown-authority, raw-cap, detachment, and allocation proofs |
+| `ca9c2aa` | `feat(knowledge): validate preview envelopes` | Structural Preview request validation with a canonical retained-job identity, exact Validate create/update envelope reuse, server-forced ACTIVE publication, and deliberately uninterpreted `maximum_rows`, without a response codec, handler, service, or route |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -542,8 +571,25 @@ used.
   component and is no reservation or reusable proof. Preview always uses
   active-publication semantics. Validate is registered but unadvertised;
   Preview remains unregistered and unadvertised. Reserved draft fields carry an
-  intentional, historically pre-route FILE compatibility waiver rather than a
-  schema-nonbreaking claim
+  intentional historical FILE compatibility waiver: they were retired before
+  Validate registration and never served by either route, and the change is
+  not claimed schema-nonbreaking
+- Candidate request decoding is one shared, layout-parameterized bounded
+  raw-wire authority for Validate and the request-only Preview codec. Correct-wire
+  object-ID presence controls full-create versus mask-selected-update
+  projection; protobuf duplicate merge, last-scalar, optional-presence, and
+  oneof reset semantics are preserved. Every recognized string is UTF-8-checked
+  regardless of selection or overwrite, dangerous repeated fields are
+  retained only through their semantic maximum plus one, unknown authority is
+  preserved or discarded according to the exact create/update split, and both
+  envelopes retain the same mutation raw-body and 32-group-depth ceilings
+- Preview request structure is valid only with a canonical retained search-job
+  ID and the exact Validate create/update envelope viewed under server-forced
+  `ACTIVE_PUBLICATION`. The request codec preserves optional `maximum_rows`,
+  but the structural validator deliberately assigns it no default, maximum, or
+  execution meaning. These internal request boundaries add no Preview response
+  codec, service, handler, route, browser/capability surface,
+  retained-job application, or runtime gate
 - Pure result construction owns no catalog/database/transition/authorization or
   HTTP policy. Inactive normalization and active singleton preparation return
   opaque detached states; only exact typed definition/compiler issues map to
@@ -995,23 +1041,26 @@ KO-1C closed-gate evidence:
 | Local durability | pass | forty-nine intentional KO-1C commits from `5088427` through `70b9ef6` inclusive are separate and locally durable on `codex/knowledge-objects-runtime`; this checkpoint update is a separate documentation commit |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |
 
-Current candidate-diagnostic and validation-route contract evidence:
+Current candidate-validation and dormant Preview request-boundary evidence:
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
 | Candidate normalization issue seam | pass | focused `internal/knowledgedefinition` normal, race, and vet gates plus its `knowledgeprogram` consumer passed; tests pin fail-fast field paths/codes, recursive unknown fields, every structural preflight, exact canonical-size boundary, detachment, wrapping, legacy text, and `errors.Is` parity |
 | Candidate semantic issue seam | pass | focused `internal/knowledgeprogram` tests pin index-bound detachment/wrapping, regex syntax/resource/capture issues, UTF-8 JSON ranges, calculated `SPL_*` diagnostics, Boolean-result attribution, legacy error/sentinel parity, singleton guidance, and opaque Prepare/authority/aggregate/cohort failures |
-| Validation protobuf generation and wire | pass with declared compatibility waiver | `make proto` ran twice with stable output; root Go validation-contract tests, TypeScript typecheck, lint, and the frontend protobuf compatibility suite passed. FILE-level removal of the never-served draft result fields 6/7 and resource field 11 is intentionally not claimed schema-nonbreaking; all removed tags and the resource name are reserved |
+| Validation protobuf generation and wire | pass with declared compatibility waiver | `make proto` ran twice with stable output; root Go validation-contract tests, TypeScript typecheck, lint, and the frontend protobuf compatibility suite passed. The comments now pin the exact history: draft result fields 6/7 and resource field 11 were retired before Validate registration and were never served by either Validate or Preview. Their FILE-level removal is intentionally not claimed schema-nonbreaking; all removed tags and the resource name are reserved |
 | Pure validation result construction | pass | focused `internal/knowledgevalidation` tests pin typed-only closed issue mapping, opaque inactive/active states, submitted-scalar range rebasing and private provenance, transition-supplied dependency canonicalization, exact inactive/active resources, recursive unknown-field rejection, detachment, exact deterministic wire-size comparison at an injected test bound, and the production 8 MiB cap |
 | ACTIVE candidate transition | pass | focused normal and race coverage plus the three-second alpha-invariance fuzz gate pin complete candidate-absent baseline validation before conflict attribution, deterministic stronger-conflict precedence, opaque non-target conflicts, generic target absence, detached candidate dependencies, index-admission closure reuse, and response invariance across fresh evaluation-ID renames |
 | Rollback-only Writer validation | pass | focused `ValidateKnowledgeObjectRequest`/`WriterValidate`/`ValidationBoundary`/`FinishValidation` normal and race tests, the full `internal/knowledgecatalog` package, `internal/knowledgevalidation`, and `go vet` pass. Tests pin independent read/write app authority, shared fail-fast admission, selected-view/witness amplification bounds, root/version/lifecycle/opaque precedence, inactive versus active inventory behavior, deterministic fresh identities, authorization-safe target projection, revision-zero physical emptiness, strict rollback-before-seal, cancellation, response taxonomy, detachment, and absence of mutation collaborators or DML |
 | Bounded validation transport | pass | focused normal/race tests and bounded differential fuzzing pin protobuf merge/oneof equivalence, exact raw N/N+1 body limits, body close and input detachment, UTF-8 and 32-level group policy, authority-sensitive unknown retention, exact sealed bytes, context/permit failure handling, and bounded retention/allocation for one million mask paths, selected/unselected selector patterns, regex outputs, and body alternations |
+| Shared candidate request decoder | pass, Validate behavior preserved | the candidate walker/builders are extracted behind envelope-specific field layouts. Existing Validate normal/race/fuzz coverage and Preview differential tests pin correct-wire object-ID mode selection, duplicate definition/mask merge, last-scalar and optional-presence semantics, selected/unselected projection, UTF-8 checks after caps or overwrites, the create/update unknown-authority split, malformed wire, and group depth 32/33 |
+| Bounded Preview request transport | pass, unregistered | focused tests and bounded differential fuzzing pin the same mutation raw N/N+1 limit, body close, input detachment, last retained-job scalar with a 256-byte exact value or detached 257-byte over-limit witness, optional `maximum_rows` presence/value, million job-ID/mask/selector/output cardinalities, alternating oneofs, and bounded outer-unknown copies. A real handler fixture proves the route count stays nine and `/api/v1/knowledge/objects/preview` returns 404 without authentication, body read, or attempt journal activity |
+| Preview structural envelope | pass, no service | focused tests prove nil-request rejection, outer-unknown rejection including wrong-wire envelope fields, canonical 256-byte retained-job identity, exact parity with the Validate create/update envelope under server-forced `ACTIVE_PUBLICATION`, candidate-unknown authority preservation, and no mutation of caller protobufs. Absent, zero, one, and MaxUint32 `maximum_rows` values remain untouched and deliberately uninterpreted |
 | Validation HTTP adapter | pass | focused normal/race tests pin exact-ready-Writer enforcement, serialization admission before retained authority, detached request binding, cloned read/write scope, valid HTTP 200 seals, closed error/disposition classification, create/update authorization context, cancellation, response-too-large handling, permit transfer/release, and request mutation isolation |
 | Registered validation route | pass, exposure closed | real HTTP tests pin ninth-route all-or-none configuration, authentication and administrator rejection before body read, `ActionValidate` journaling/fail-closed journal failures, shared Writer-gate 429 behavior, million-entry selected versus unselected outcomes, outer/mask/selected-nested/unselected unknown semantics, exact sealed responses, and no side effects. The exact protobuf route fixture now contains 60 routes; TypeScript declares Validate with an 8 MiB response cap while explicitly keeping it outside browser bearer attachment, and the backend generic outer administrator map remains unchanged |
 | Validation result bounds and privacy | service and route pass | descriptor/comment, Go/TypeScript wire, catalog-service, codec, handler, and HTTP tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
-| Runtime activation | Validate route only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview remains without a handler or route; Validate remains outside the browser bearer allowlist and generic outer administrator map; bootstrap advertises no knowledge capability; the hidden UI/navigation issues no request; the Resolver remains unattached; and nonempty search execution gates remain closed |
-| Docker-backed acceptance | not run | these commits add the bounded Validate transport/HTTP boundary over rollback-only catalog evaluation without ClickHouse execution; no Docker command was invoked and no ClickHouse runtime claim is made |
-| Local durability | pass | validation commits through `7d54c01`, checkpoint `df7044b`, bounded transport `1e06e86`, service adapter `ceb3b85`, and route activation `2aa5138` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..2aa5138` is exactly 123 and the terminal revision is `2aa51384ead0be6482a1e9ea3ce85fbeed1777f9` |
+| Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-job acquisition, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Validate remains outside the browser bearer allowlist and generic outer administrator map; nonempty search execution gates remain closed |
+| Docker-backed acceptance | not run; prior cancellation preserved | these commits refactor bounded request decoding and add dormant Preview request validation without ClickHouse execution. The previously canceled digest-pinned Docker matrix remains canceled; no Docker command was invoked and no ClickHouse runtime claim is made |
+| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview request transport `2db17c3`, and structural envelope validation `ca9c2aa` is separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..ca9c2aa` is exactly 127 and the terminal revision is `ca9c2aaff267d50affc8f46895f4c775e14d29d0` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:
@@ -1102,7 +1151,11 @@ complete. KO-1A/KO-1B freeze the selector and backend-neutral program, and the
 current closed-gate KO-1C slice lowers, accounts, seals, retains, reconstructs,
 and inspects that program without making it executable. Recognized ACTIVE
 publication and the nine management routes are now implemented independently of
-search-time capability exposure. The next dependency-ordered slices are:
+search-time capability exposure. The dormant Preview request codec and
+structural forced-ACTIVE envelope validator do not alter that order: without a
+retained-job acquisition/application service, response codec, handler, route,
+or open execution gates they authorize no preview behavior. The next
+dependency-ordered slices are:
 
 1. complete the digest-pinned ClickHouse acceptance matrix as bounded named
    gates covering ordinary filter/project/eval/rex/spath/sort/limit/stats,
@@ -1120,4 +1173,7 @@ search-time capability exposure. The next dependency-ordered slices are:
    mutation workflows. The nine administrator routes remain registered; the
    four catalog/graph read routes are browser bearer-allowlisted, while Validate
    and all mutation routes remain excluded, and the dormant read-only UI remains
-   hidden until that exposure decision.
+   hidden until that exposure decision. Preview service, response codec, and
+   route work
+   remains deferred until retained search authority and the hidden nonempty
+   runtime can be applied without reopening any execution or disclosure gate.

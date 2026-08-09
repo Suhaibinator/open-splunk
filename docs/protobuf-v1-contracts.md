@@ -25,8 +25,9 @@ This directory is the source of truth shared by the Go server, Go collector, and
   create/get/list/dependencies/dependents/validate/update/set-state/delete routes
   are registered as one complete administrator-only management unit. Validate
   uses a dedicated bounded decoder and the rollback-only catalog service;
-  quarantine and preview remain unregistered route contracts, and none of this
-  advertises the Tier-1 capability.
+  Preview has only an internal bounded request codec and structural envelope
+  validator. Quarantine and Preview remain unregistered route contracts, and
+  none of this advertises the Tier-1 capability.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
@@ -81,14 +82,28 @@ maximum plus one; and rejects malformed wire or unknown-group depth above 32.
 Million-entry mask, selected/unselected repetition, and alternating-body oracles
 pin bounded retention and allocation behavior.
 
-Outer-request and field-mask unknowns are retained so the envelope rejects them.
-Create retains all candidate unknowns, and update retains unknowns inside mask-
-selected nested values, so candidate-authored future meaning is reported as
-in-band invalidity. Candidate top-level unknowns on update and unknowns solely
-inside unselected values are discarded because they are outside the exact mask
-authority. Successful responses bypass a new `proto.Marshal`: the transport
-revalidates and writes the service seal's exact deterministic bytes, whose
-complete response bound is 8 MiB.
+The candidate wire walker/builders are shared with an internal request-only
+Preview codec through envelope-specific field layouts; this extraction does not
+change Validate behavior. Correct-wire object-ID presence, including empty,
+selects update/mask projection while absence selects the complete create
+definition. Duplicate definitions and masks merge, scalars are last-wins,
+optional empty/zero presence is preserved, and nested `oneof` merge/reset
+behavior matches protobuf decoding. The Preview codec uses the same mutation
+raw-body and group-depth ceilings. It validates every retained-job-ID occurrence
+as UTF-8 without retaining attacker-sized overwritten values, retains the last
+UTF-8 value through the 256-byte job-ID ceiling or a detached 257-byte over-limit
+witness, and preserves optional `maximum_rows` presence and decoded value.
+
+For both candidate request codecs, outer-request unknowns—including wrong-wire
+envelope fields—and field-mask unknowns are retained so structural envelope
+validation rejects them. Create retains all candidate unknowns, and update
+retains unknowns inside mask-selected nested values, so Validate—and a future
+Preview service—treat candidate-authored meaning as invalidity. Candidate
+top-level unknowns on update and unknowns solely inside unselected values are
+discarded because they are outside the exact mask authority. Both types bypass
+generic unknown clearing. Validate's successful responses additionally bypass a new
+`proto.Marshal`: its transport revalidates and writes the service seal's exact
+deterministic bytes, whose complete response bound is 8 MiB.
 
 ### Knowledge-object contracts
 
@@ -207,6 +222,9 @@ object-management routes currently registered by `NewHandler` when its complete
 management dependency unit, including a constructor-ready concrete Writer, is
 present. Registration is all-or-none and independent of bootstrap feature
 advertisement. The quarantine and preview messages do not create routes.
+Preview's internal request codec and structural validator likewise do not
+register a route, install a response codec, or add the message to the route
+manifest or browser bearer policy.
 Validate is registered but deliberately absent from the browser administrator-
 bearer allowlist and the backend's generic outer administrator-route map; its
 inner knowledge-attempt boundary authenticates and authorizes the administrator
@@ -426,25 +444,36 @@ registered handler and custom encoder consume the seal without reopening its
 mutable protobuf authority. Validate remains absent from the browser bearer
 allowlist and capability advertisement.
 
-Preview accepts only a retained server-authorized search-job identity plus a
-candidate definition. The future preview route has no independent intent: it
-always applies the same create/update envelope using `ACTIVE_PUBLICATION` and
-evaluates definition validity in one fixed knowledge/app/index transaction
-before execution. Its revision is advisory knowledge-ledger correlation
-metadata, not mutation acceptability, a reservation, or reusable publication
-proof; every later Writer revalidates live authority. It never accepts raw
-events, physical table names, index authority, asset paths, or SQL. Preview is
-unregistered and unadvertised; Validate is registered but unadvertised.
+Preview's internal request-only codec accepts the retained-search-job scalar
+plus the same create/update candidate fields. Its structural validator requires
+a canonical nonempty retained job ID of at most 256 UTF-8 bytes, rejects outer
+unknown authority (including wrong-wire envelope fields), and synchronously
+passes the candidate through the exact Validate create/update envelope with the
+server forcing `ACTIVE_PUBLICATION`. Candidate unknowns retain the same create
+or mask-selected authority for later Preview service evaluation. `maximum_rows` is
+preserved, including absent versus explicit zero and the full uint32 value, but
+is deliberately not defaulted, bounded, or interpreted by this structural
+boundary.
 
-This validation redesign intentionally uses a pre-route FILE-compatibility
-waiver. When the redesign landed, neither Validate nor Preview had been
-registered or served. The earlier unserved draft result fields 6 (`diagnostics`)
-and 7 (`dependencies`) and resource field/name 11
-(`estimated_generated_sql_bytes`) were removed; all tags and the resource name
-are reserved against reinterpretation. Peers may drop those draft unknown
-values, but the change must not be described as schema non-breaking. Validate's
-later registration does not retroactively change that historical
-classification; Preview remains unregistered.
+Preview remains unregistered and unadvertised. There is no Preview response
+codec, handler, catalog/search service, retained-job acquisition, route,
+TypeScript route entry, browser bearer attachment, capability, UI/navigation
+request, Resolver attachment, or search execution. A future service must first
+evaluate definition validity in one fixed knowledge/app/index transaction,
+then apply the validated candidate to a retained server-authorized snapshot and
+retain the advisory-only revision semantics. It must never accept raw events,
+physical table names, index authority, asset paths, or SQL. Validate remains
+registered but unadvertised.
+
+This validation redesign intentionally uses a historical FILE-compatibility
+waiver. The earlier draft result fields 6 (`diagnostics`) and 7
+(`dependencies`) and resource field/name 11
+(`estimated_generated_sql_bytes`) were retired before Validate was registered
+and were never served by either the Validate or Preview route; all tags and the
+resource name remain reserved against reinterpretation. Peers may drop those
+never-served draft unknown values, but the change must not be described as
+schema non-breaking. Validate's later registration does not retroactively
+change that historical classification; Preview remains unregistered.
 
 The dependency routes expose only direct persisted object-to-object edges and
 never snapshot-global stage, depth, ordinal, or definition-digest authority.
@@ -486,9 +515,12 @@ readiness but intentionally does not attach it to `searchjobs.Manager`, and it
 does not advertise the capability. The dependency, dependent, and Validate
 routes are represented in the central TypeScript route manifest. Only the graph
 routes join Get/List in the browser administrator-bearer allowlist; Validate and
-every knowledge mutation remain excluded. The hidden read-only Knowledge
-Manager is still omitted from navigation, is not dynamically loaded, and
-therefore issues no production-bootstrap knowledge API request. Its dormant
+every knowledge mutation remain excluded. Preview is absent from the manifest,
+bearer allowlist, handler route set, and capability response; its internal
+request boundaries do not acquire a retained job or read a catalog. The hidden
+read-only Knowledge Manager is still omitted from navigation, is not dynamically
+loaded, and therefore issues no production-bootstrap knowledge API request. Its
+dormant
 surface is app/object-type/lifecycle-state filter-ready with name-ascending, updated-time-
 descending, created-time-descending, and object-type-ascending sorts plus exact
 continuation reuse. Its detail view now requests the selected exact version's

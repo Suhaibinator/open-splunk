@@ -40,9 +40,11 @@ ACTIVE, updated while ACTIVE, or enabled from DRAFT/DISABLED through the
 transactional, compiler-proven Writer path; opaque future definitions cannot be
 updated or enabled as ACTIVE. A dedicated bounded raw decoder, handler, and
 exact sealed-response encoder now expose the Writer's rollback-only candidate-
-validation service at the Validate route. Preview remains contract-only, and no
-browser allowlist entry, bootstrap capability, navigation/UI, or search-runtime
-gate consumes either contract. The nonempty compiler, snapshot-finalization,
+validation service at the Validate route. Preview now has only an internal
+request-only codec and structural forced-ACTIVE envelope validator. It still has
+no response codec, handler, catalog/search service, retained-job acquisition,
+route or manifest/bearer entry, capability, navigation/UI request, Resolver
+attachment, or execution path. The nonempty compiler, snapshot-finalization,
 and execution gates remain closed, so no knowledge object affects search
 results.
 
@@ -69,8 +71,9 @@ are bound to the authenticated tenant and owner. Browser transport attaches its
 memory-only administrator bearer only to the four read paths: get, list,
 dependencies, and dependents. Validate, create, update, change-state, and delete
 remain outside that allowlist. The reserved Preview route must preserve the same
-boundary when implemented. The local administrator may publish app-
-shared and tenant-global objects. Supplied tenant
+boundary when implemented; its current internal request codec and envelope
+validator install no route or browser authority. The local administrator may
+publish app-shared and tenant-global objects. Supplied tenant
 or owner identity is never authority. A forbidden or cross-tenant object
 selector returns the same not-found response as an absent object.
 
@@ -596,26 +599,32 @@ current version. A missing definition message is an envelope error, while a
 present definition with a missing or unknown body is candidate invalidity.
 
 Validate uses a dedicated raw-wire codec rather than the generic read-all-plus-
-`proto.Unmarshal` path. It enforces the ordinary mutation raw-body ceiling by
-reading at most one byte beyond it solely as an overflow witness, then performs
-a bounded two-pass projection with protobuf-compatible
-duplicate-message, last-scalar, and `oneof` merge/reset semantics. It retains at
-most the canonical mask-path inventory plus one and, for selected selector or
-extraction-output repetitions, at most the semantic ceiling plus one. Every
-recognized string is still UTF-8-validated even when unselected or cleared, and
-malformed wire or unknown-group nesting beyond 32 levels is rejected. Bounded
-oracles cover one million mask paths, selected and unselected selector entries,
-regex outputs, and alternating body choices without materializing those
-repetitions.
+`proto.Unmarshal` path. Its candidate walker/builders are now shared with the
+unregistered request-only Preview codec through envelope-specific field
+layouts; the extraction preserves Validate behavior. Both enforce the ordinary
+mutation raw-body ceiling by reading at most one byte beyond it solely as an
+overflow witness, then perform a bounded two-pass projection with
+protobuf-compatible duplicate-message merge, last-scalar, optional-presence, and
+`oneof` merge/reset semantics. Correct-wire object-ID presence, including
+empty, selects update/mask projection; absence selects the complete create
+definition. The decoder retains at most the canonical mask-path inventory plus
+one and, for selected selector or extraction-output repetitions, at most the
+semantic ceiling plus one. Every recognized string is still UTF-8-validated
+even when unselected, overwritten, or cleared. Malformed wire or unknown-group
+nesting beyond 32 levels is rejected. Bounded oracles cover one million
+mask paths, selected and unselected selector entries, job-ID scalars, regex
+outputs, and alternating body choices without materializing those repetitions.
 
-The decoder preserves unknown fields only where they carry validation
-authority. Request-envelope and field-mask unknowns remain present so envelope
-validation rejects them. A create retains the complete candidate's unknowns;
-an update retains unknowns nested in mask-selected values, so those candidate-
-authored meanings produce an in-band invalid result. Candidate top-level
-unknowns on update and unknowns nested solely in unselected fields are discarded
-because they are outside that exact field mask. This split deliberately differs
-from the generic request sanitizer without weakening mutation semantics.
+Both candidate codecs preserve unknown fields only where they carry validation
+authority. Request-envelope unknowns, including wrong-wire envelope fields, and
+field-mask unknowns remain present so structural envelope validation rejects
+them. A create retains the complete candidate's unknowns; an update retains
+unknowns nested in mask-selected values, so Validate—and a later Preview
+service—treat those authored meanings as candidate invalidity. Candidate
+top-level unknowns on update
+and unknowns nested solely in unselected fields are discarded because they are
+outside that exact field mask. Both request types bypass generic unknown
+clearing; this split does not weaken mutation semantics.
 
 Internal `Writer.Validate` takes a `ValidationScope` split between read and
 write authority. Both scopes must identify the same authenticated tenant and
@@ -771,22 +780,36 @@ capacity through a custom encoder. That encoder revalidates the seal under the
 live request context and writes its exact deterministic bytes without a fresh
 mutable protobuf marshal; the route remains unadvertised.
 
-Preview has no independent intent. It uses the same create/update candidate
-envelope and always performs `ACTIVE_PUBLICATION` evaluation in one fixed
-knowledge/app/index transaction before applying the candidate to a retained,
-server-authorized search snapshot. Its revision is advisory knowledge-ledger
-correlation metadata, not mutation acceptability, a reservation, or reusable
-publication proof; later Writer operations revalidate live authority. It
-accepts no raw events, physical scope, asset path, or SQL.
+Preview has no independent intent. Its internal request-only codec shares the
+bounded candidate decoder and additionally validates every retained-job-ID
+occurrence as UTF-8, retains the last UTF-8 value through the 256-byte ceiling or a
+detached 257-byte over-limit witness, and preserves the optional presence and
+decoded uint32 value of `maximum_rows`. Its structural validator requires a
+canonical retained job ID, rejects outer unknown authority including wrong-wire
+envelope fields, and passes a synchronous nonescaping candidate view through
+the exact Validate create/update envelope with `ACTIVE_PUBLICATION` forced by
+the server. Candidate unknowns retain the create/mask-selected split for later
+Preview service evaluation. `maximum_rows` is deliberately not defaulted, bounded, or
+otherwise interpreted at this boundary.
 
-The validation wire redesign has an intentional pre-route protobuf FILE-
-compatibility waiver. At the time of that redesign, neither Validate nor
-Preview had ever been registered or served. Unserved draft result tags 6 and 7
-and resource tag/name 11 (`estimated_generated_sql_bytes`) were removed and
-reserved. Old and new peers may drop those never-served values, but this is not
-a schema-nonbreaking change and no reserved tag or name may be reused.
-Validate's later registration does not retroactively alter that classification;
-Preview remains unregistered.
+Preview remains unregistered and unadvertised. It has no response codec,
+handler, catalog/search service, retained-job acquisition, route, TypeScript
+manifest or browser-bearer entry, capability, UI/navigation request, Resolver
+attachment, or execution path. A future service must first perform
+`ACTIVE_PUBLICATION` evaluation in one fixed knowledge/app/index transaction,
+then apply the validated candidate to a retained, server-authorized search
+snapshot. Its revision remains advisory knowledge-ledger correlation metadata,
+not mutation acceptability, a reservation, or reusable publication proof;
+later Writer operations revalidate live authority. It accepts no raw events,
+physical scope, asset path, or SQL.
+
+The validation wire redesign has an intentional historical protobuf
+FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
+(`estimated_generated_sql_bytes`) were retired before Validate was registered
+and were never served by either the Validate or Preview route. They remain
+reserved against reuse. Old and new peers may drop those never-served values,
+but this is not a schema-nonbreaking change. Validate's later registration does
+not retroactively alter that classification; Preview remains unregistered.
 
 ## Protobuf forward compatibility and corruption
 
@@ -801,7 +824,9 @@ marshaling so repeated empty submessages cannot amplify the request byte limit.
 Validate additionally applies the authority-sensitive unknown split above: its
 envelope and mask unknowns are out-of-band request failures, selected nested
 candidate unknowns are in-band invalidity, and unselected update unknowns are
-ignored.
+ignored. Preview's dormant request boundary retains the same wire split, but
+with no service or route it classifies only structural envelope authority;
+candidate invalidity remains a future service result.
 
 `KnowledgeObjectDefinition` field numbers 13 through 31 are permanently
 allocated exclusively to future length-delimited `body` oneof alternatives.
