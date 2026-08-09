@@ -64,6 +64,26 @@ type AppListResult struct {
 	CatalogRevision uint64
 }
 
+// AppIdentityListResult is one bounded identity snapshot. Complete is false
+// when at least one additional tenant app exists beyond the requested bound.
+type AppIdentityListResult struct {
+	AppIDs   []string
+	Complete bool
+}
+
+type appIdentityRecord struct {
+	AppID string   `gorm:"column:app_id"`
+	State AppState `gorm:"column:state"`
+}
+
+const listAppIdentitiesSQL = `
+SELECT
+	substr(app_id, 1, ?) AS app_id,
+	substr(state, 1, ?) AS state
+FROM app_workspaces INDEXED BY app_workspaces_tenant_display_id_idx
+WHERE tenant_id = ?
+LIMIT ?`
+
 type normalizedAppListRequest struct {
 	tenantID                string
 	pageSize                uint32
@@ -94,6 +114,63 @@ type appListFingerprint struct {
 	Text      *string  `json:"x"`
 	SortBy    string   `json:"b"`
 	Direction string   `json:"d"`
+}
+
+// ListAppIdentities reads only stable app identity and lifecycle authority.
+// One statement supplies the complete snapshot decision, so no cursor,
+// catalog-revision read, definition conversion, or default-index hydration is
+// required.
+func (catalog *AppCatalog) ListAppIdentities(
+	ctx context.Context,
+	scope AppAccessScope,
+	maximum uint32,
+) (AppIdentityListResult, error) {
+	if err := validateAppContext(ctx); err != nil {
+		return AppIdentityListResult{}, err
+	}
+	tenantID, err := normalizeAppScope(scope)
+	if err != nil {
+		return AppIdentityListResult{}, err
+	}
+	if maximum == 0 || maximum > MaximumAppsPerTenant {
+		return AppIdentityListResult{}, fmt.Errorf(
+			"%w: app identity list bound is invalid",
+			ErrInvalidArgument,
+		)
+	}
+
+	records := make([]appIdentityRecord, 0, int(maximum)+1)
+	query := catalog.orm.WithContext(ctx).Raw(
+		listAppIdentitiesSQL,
+		canonicalAppIDBytes+1,
+		len(AppStateArchived)+1,
+		tenantID,
+		int64(maximum)+1,
+	).Scan(&records)
+	if query.Error != nil {
+		return AppIdentityListResult{}, appContextError(
+			ctx,
+			"list app identities",
+			query.Error,
+		)
+	}
+	if len(records) > int(maximum) {
+		return AppIdentityListResult{Complete: false}, nil
+	}
+	appIDs := make([]string, len(records))
+	for index, record := range records {
+		if !ValidCanonicalAppID(record.AppID) || !validAppState(record.State) {
+			return AppIdentityListResult{}, invalidAppRecordError()
+		}
+		appIDs[index] = record.AppID
+	}
+	slices.Sort(appIDs)
+	for index := 1; index < len(appIDs); index++ {
+		if appIDs[index-1] == appIDs[index] {
+			return AppIdentityListResult{}, invalidAppRecordError()
+		}
+	}
+	return AppIdentityListResult{AppIDs: appIDs, Complete: true}, nil
 }
 
 // ListApps returns one bounded page. Page-one rows, exact count, and catalog
@@ -522,7 +599,7 @@ func decodeAppListCursor(
 	if cursor.Version != appListCursorVersion ||
 		cursor.FilterHash != filterHash ||
 		cursor.Revision < 1 ||
-		!validCanonicalAppID(cursor.AppID) {
+		!ValidCanonicalAppID(cursor.AppID) {
 		return invalid()
 	}
 	if sortBy == AppSortByDisplayName {

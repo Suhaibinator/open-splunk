@@ -136,6 +136,13 @@ func TestAuditedAppCatalogPublishesSuccessfulLifecycleInMutationTransactions(
 	if err != nil || len(listed.Apps) != 1 || !reflect.DeepEqual(listed.Apps[0], created) {
 		t.Fatalf("ListApps() = %#v, %v", listed, err)
 	}
+	identities, err := audited.ListAppIdentities(ctx, scope, 1)
+	if err != nil ||
+		!identities.Complete ||
+		len(identities.AppIDs) != 1 ||
+		identities.AppIDs[0] != created.ID {
+		t.Fatalf("ListAppIdentities() = %#v, %v", identities, err)
+	}
 	if calls := appender.snapshot(); len(calls) != 1 {
 		t.Fatalf("delegated reads emitted audit events: %#v", calls)
 	}
