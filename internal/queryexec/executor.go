@@ -469,21 +469,14 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		}
 		return publishChart(executionContext, sink, *query.Chart, buffered)
 	}
-	expectedColumns := query.OutputFields
-	if sparseFieldIndex >= 0 {
-		expectedColumns = append(slices.Clone(expectedColumns), clickhouse.SparseEventFieldNamesColumn)
-	}
-	if len(columns) != len(expectedColumns) || len(columnTypes) != len(columns) ||
-		!slices.Equal(columns, expectedColumns) {
-		return fmt.Errorf("%w: ClickHouse result columns do not match the compiled output", searchjobs.ErrInvalidResult)
-	}
-	if sparseFieldIndex >= 0 {
-		hiddenType := columnTypes[len(query.OutputFields)]
-		if hiddenType.Nullable() || unwrapType(hiddenType.DatabaseTypeName()) != "Array(String)" ||
-			hiddenType.ScanType() != reflect.TypeOf([]string{}) ||
-			!strings.HasPrefix(unwrapType(columnTypes[sparseFieldIndex].DatabaseTypeName()), "JSON") {
-			return fmt.Errorf("%w: sparse event fields transport has invalid column types", searchjobs.ErrInvalidResult)
-		}
+	containerTransports, err := validateOrdinaryResultColumns(
+		query,
+		columns,
+		columnTypes,
+		sparseFieldIndex,
+	)
+	if err != nil {
+		return err
 	}
 	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(query.OutputFields))}
 	for index, columnType := range columnTypes[:len(query.OutputFields)] {
@@ -524,7 +517,26 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		values := make([]searchjobs.Value, len(query.OutputFields))
 		for index, destination := range destinations[:len(query.OutputFields)] {
 			var value searchjobs.Value
-			if index == sparseFieldIndex {
+			if containerTransports[index].valid {
+				names, types, version, metadataErr := scannedContainerMetadata(
+					destinations,
+					containerTransports[index],
+				)
+				if metadataErr != nil {
+					return fmt.Errorf(
+						"%w: convert ClickHouse column %q: %w",
+						searchjobs.ErrInvalidResult,
+						columns[index],
+						metadataErr,
+					)
+				}
+				value, err = convertContainerOutput(
+					scannedValue(destination),
+					names,
+					types,
+					version,
+				)
+			} else if index == sparseFieldIndex {
 				value, err = convertSparseEventFields(scannedValue(destination), fieldNames)
 			} else {
 				value, err = convertValue(scannedValue(destination))
