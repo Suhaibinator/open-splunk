@@ -670,7 +670,8 @@ func validatePublicationInputs(
 		return fmt.Errorf("%w: knowledge publication chronology is invalid", control.ErrInvalidArgument)
 	}
 	if plan.current == nil {
-		if plan.version != 1 || plan.mutationKind != "create" || plan.state != StateDraft ||
+		if plan.version != 1 || plan.mutationKind != "create" ||
+			(plan.state != StateDraft && plan.state != StateActive) ||
 			!plan.createdAt.Equal(plan.updatedAt) || plan.disabledAt != nil || plan.deletedAt != nil {
 			return fmt.Errorf("%w: knowledge create plan is invalid", control.ErrInvalidArgument)
 		}

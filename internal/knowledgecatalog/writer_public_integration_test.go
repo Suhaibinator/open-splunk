@@ -204,7 +204,7 @@ func TestWriterLargeDraftReplayReconstructsResponseFromCompactReference(t *testi
 	assertWriterCatalogIntegrity(t, harness.database)
 }
 
-func TestWriterActivePublicationFailsClosedUntilValidatorConfigured(t *testing.T) {
+func TestWriterActivePublicationRequiresCurrentIndexWinningWitness(t *testing.T) {
 	harness := newWriterBlackboxHarness(t)
 	_, draft := harness.createDraft(t, "active-fail-closed", "active-draft-request-0001")
 	stable := readWriterAuthoritySnapshot(t, harness.database)
@@ -222,8 +222,8 @@ func TestWriterActivePublicationFailsClosedUntilValidatorConfigured(t *testing.T
 		),
 		InitialState:    opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId: "active-create-request-0001",
-	}); !errors.Is(err, knowledgecatalog.ErrActivePublicationUnavailable) {
-		t.Fatalf("Create(ACTIVE) error = %v, want ErrActivePublicationUnavailable", err)
+	}); !errors.Is(err, control.ErrDependencyConflict) {
+		t.Fatalf("Create(ACTIVE) error = %v, want dependency conflict", err)
 	}
 	assertWriterAuthoritySnapshotsEqual(t, readWriterAuthoritySnapshot(t, harness.database), stable)
 
@@ -232,8 +232,8 @@ func TestWriterActivePublicationFailsClosedUntilValidatorConfigured(t *testing.T
 		ExpectedVersion:   1,
 		State:             opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE,
 		ClientRequestId:   "active-enable-request-0001",
-	}); !errors.Is(err, knowledgecatalog.ErrActivePublicationUnavailable) {
-		t.Fatalf("SetState(ACTIVE) error = %v, want ErrActivePublicationUnavailable", err)
+	}); !errors.Is(err, control.ErrDependencyConflict) {
+		t.Fatalf("SetState(ACTIVE) error = %v, want dependency conflict", err)
 	}
 	assertWriterAuthoritySnapshotsEqual(t, readWriterAuthoritySnapshot(t, harness.database), stable)
 	assertWriterCatalogIntegrity(t, harness.database)

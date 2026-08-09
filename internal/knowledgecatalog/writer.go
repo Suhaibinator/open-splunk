@@ -35,8 +35,9 @@ var (
 		"%w: knowledge mutation idempotency identity was reused",
 		control.ErrAlreadyExists,
 	)
-	// ErrActivePublicationUnavailable keeps ACTIVE definitions fail-closed
-	// until the Tier-1 publication compiler and dependency resolver are wired.
+	// ErrActivePublicationUnavailable keeps ACTIVE definitions fail-closed at a
+	// management boundary that lacks the concrete receipt-first Writer and its
+	// same-transaction publication authority.
 	ErrActivePublicationUnavailable = errors.New(
 		"knowledgecatalog: active publication is unavailable",
 	)

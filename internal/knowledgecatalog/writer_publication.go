@@ -131,6 +131,18 @@ type activeCounterPreflightRecord struct {
 	CounterValue   int64  `gorm:"column:counter_value"`
 }
 
+type activePublicationCounterRecord struct {
+	App     int64 `gorm:"column:app_count"`
+	Type    int64 `gorm:"column:type_count"`
+	AppType int64 `gorm:"column:app_type_count"`
+	Owner   int64 `gorm:"column:owner_count"`
+}
+
+type activePublicationNameRecord struct {
+	ObjectIDBytes int64  `gorm:"column:object_id_bytes"`
+	ObjectID      string `gorm:"column:object_id"`
+}
+
 func (writer *Writer) create(
 	ctx context.Context,
 	scope WriteScope,
@@ -210,10 +222,6 @@ func (writer *Writer) create(
 		}
 		return result, nil
 	}
-	if request.GetInitialState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
-		return nil, ErrActivePublicationUnavailable
-	}
-
 	health, state, err := writer.prepareMutationTenant(tx, prepared.scope.tenantID)
 	if err != nil {
 		return nil, err
@@ -232,7 +240,16 @@ func (writer *Writer) create(
 	if err != nil {
 		return nil, err
 	}
-	if err := authorizeDefinitionApp(tx, prepared.scope, authority.appID, false); err != nil {
+	publicationState := StateDraft
+	if request.GetInitialState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
+		publicationState = StateActive
+	}
+	if err := authorizeDefinitionApp(
+		tx,
+		prepared.scope,
+		authority.appID,
+		publicationState == StateActive,
+	); err != nil {
 		return nil, err
 	}
 	authorizedValue := authorizedAppContext(authority.appID)
@@ -247,31 +264,90 @@ func (writer *Writer) create(
 	if !blobExists && health.DefinitionBytes > 536870912-int64(len(authority.bytes)) {
 		return nil, control.ErrCapacityExceeded
 	}
+	var (
+		objectID         string
+		idAttempt        int
+		now              time.Time
+		activeTransition publicationTransitionPersistenceAuthority
+	)
+	if publicationState == StateActive {
+		if err := preflightActivePublicationName(
+			tx,
+			prepared.scope.tenantID,
+			"",
+			prepared.scope.ownerID,
+			authority,
+		); err != nil {
+			return nil, err
+		}
+		if err := preflightActivePublicationCapacity(
+			tx,
+			health,
+			prepared.scope.tenantID,
+			nil,
+			authority,
+			prepared.scope.ownerID,
+		); err != nil {
+			return nil, err
+		}
+		objectID, idAttempt, err = writer.selectCreateObjectID(tx, prepared.scope.tenantID)
+		if err != nil {
+			return nil, err
+		}
+		afterObject, objectErr := recognizedPublicationObjectFromAuthority(
+			prepared.scope.tenantID,
+			objectID,
+			1,
+			prepared.scope.ownerID,
+			StateActive,
+			authority,
+		)
+		if objectErr != nil {
+			return nil, objectErr
+		}
+		activeTransition, err = writer.mintRecognizedPublicationTransition(
+			ctx,
+			tx,
+			prepared.scope.tenantID,
+			nil,
+			State(""),
+			nil,
+			afterObject,
+			StateActive,
+			nil,
+		)
+		if err != nil {
+			return nil, writerError(ctx, "validate create publication transition", err)
+		}
+	}
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteCreate}); err != nil {
 		return nil, err
 	}
 
-	objectID, idAttempt, err := writer.selectCreateObjectID(tx, prepared.scope.tenantID)
-	if err != nil {
-		return nil, err
+	if publicationState != StateActive {
+		objectID, idAttempt, err = writer.selectCreateObjectID(tx, prepared.scope.tenantID)
+		if err != nil {
+			return nil, err
+		}
 	}
-	now, err := normalizeWriterClock(writer.clock())
+	now, err = normalizeWriterClock(writer.clock())
 	if err != nil {
 		return nil, err
 	}
 	plan := publicationPlan{
-		route:           mutationRouteCreate,
-		mutationKind:    "create",
-		auditAction:     audit.ActionKnowledgeObjectCreate,
-		objectID:        objectID,
-		version:         1,
-		state:           StateDraft,
-		definition:      authority,
-		ownerID:         prepared.scope.ownerID,
-		createdAt:       now,
-		updatedAt:       now,
-		idAttempt:       idAttempt,
-		oldCatalogState: state,
+		route:            mutationRouteCreate,
+		mutationKind:     "create",
+		auditAction:      audit.ActionKnowledgeObjectCreate,
+		objectID:         objectID,
+		version:          1,
+		state:            publicationState,
+		definition:       authority,
+		activeTransition: activeTransition,
+		ownerID:          prepared.scope.ownerID,
+		createdAt:        now,
+		updatedAt:        now,
+		idAttempt:        idAttempt,
+		oldCatalogState:  state,
 	}
 	object, revision, token, err := writer.publishMutation(ctx, tx, prepared, plan, blobExists)
 	if err != nil {
@@ -393,12 +469,23 @@ func (writer *Writer) update(
 	if current.State == StateQuarantined || current.State == StateDeleted {
 		return nil, control.ErrVersionConflict
 	}
-	if current.State == StateActive {
-		return nil, ErrActivePublicationUnavailable
-	}
-	currentObject, currentVersion, currentDefinition, err := writer.hydrateAuthorizedCurrent(tx, current)
+	currentObject, currentVersion, currentDefinition, err := writer.hydrateAuthorizedCurrentStateOnly(tx, current)
 	if err != nil {
 		return nil, err
+	}
+	if current.State == StateActive {
+		if currentDefinition.opaque {
+			return nil, invalidMutation("opaque future ACTIVE definitions cannot be updated by this server")
+		}
+		if blocked, dependentErr := hasActiveDependents(
+			tx,
+			current.TenantID,
+			current.KnowledgeObjectID,
+		); dependentErr != nil {
+			return nil, writerError(ctx, "check update dependents", dependentErr)
+		} else if blocked {
+			return nil, control.ErrDependencyConflict
+		}
 	}
 	patched, err := applyKnowledgeDefinitionMask(currentObject.Definition, request.GetDefinition(), prepared.updatePaths)
 	if err != nil {
@@ -436,7 +523,12 @@ func (writer *Writer) update(
 	if bytes.Equal(authority.bytes, currentDefinition.bytes) {
 		return nil, invalidMutation("update mask does not change the stored definition")
 	}
-	if err := authorizeDefinitionApp(tx, prepared.scope, authority.appID, false); err != nil {
+	if err := authorizeDefinitionApp(
+		tx,
+		prepared.scope,
+		authority.appID,
+		current.State == StateActive,
+	); err != nil {
 		return nil, err
 	}
 	if health.IdempotencyCount >= normalIdempotencyCapacity || health.VersionCount >= 61440 || currentVersion.ObjectVersion >= math.MaxInt64 {
@@ -452,6 +544,57 @@ func (writer *Writer) update(
 	if !blobExists && health.DefinitionBytes > 536870912-int64(len(authority.bytes)) {
 		return nil, control.ErrCapacityExceeded
 	}
+	activeTransition := publicationTransitionPersistenceAuthority{}
+	if current.State == StateActive {
+		if err := preflightActivePublicationName(
+			tx,
+			current.TenantID,
+			current.KnowledgeObjectID,
+			current.OwnerID,
+			authority,
+		); err != nil {
+			return nil, err
+		}
+		if err := preflightActivePublicationCapacity(
+			tx,
+			health,
+			current.TenantID,
+			&current,
+			authority,
+			current.OwnerID,
+		); err != nil {
+			return nil, err
+		}
+		predecessorDependencies, dependencyErr := dependenciesFromCurrent(tx, currentVersion)
+		if dependencyErr != nil {
+			return nil, dependencyErr
+		}
+		afterObject, objectErr := recognizedPublicationObjectFromAuthority(
+			current.TenantID,
+			current.KnowledgeObjectID,
+			current.CurrentVersion+1,
+			current.OwnerID,
+			StateActive,
+			authority,
+		)
+		if objectErr != nil {
+			return nil, objectErr
+		}
+		activeTransition, err = writer.mintRecognizedPublicationTransition(
+			ctx,
+			tx,
+			current.TenantID,
+			&currentObject,
+			StateActive,
+			predecessorDependencies,
+			afterObject,
+			StateActive,
+			nil,
+		)
+		if err != nil {
+			return nil, writerError(ctx, "validate update publication transition", err)
+		}
+	}
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteUpdate, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
 		return nil, err
 	}
@@ -466,19 +609,20 @@ func (writer *Writer) update(
 		auditAction = audit.ActionKnowledgeObjectScopeChange
 	}
 	plan := publicationPlan{
-		route:           mutationRouteUpdate,
-		mutationKind:    mutationKind,
-		auditAction:     auditAction,
-		objectID:        current.KnowledgeObjectID,
-		version:         current.CurrentVersion + 1,
-		state:           current.State,
-		definition:      authority,
-		dependencies:    dependencies,
-		ownerID:         current.OwnerID,
-		createdAt:       time.UnixMicro(current.CreatedAtUnixMicro).UTC(),
-		updatedAt:       now,
-		current:         &current,
-		oldCatalogState: state,
+		route:            mutationRouteUpdate,
+		mutationKind:     mutationKind,
+		auditAction:      auditAction,
+		objectID:         current.KnowledgeObjectID,
+		version:          current.CurrentVersion + 1,
+		state:            current.State,
+		definition:       authority,
+		dependencies:     dependencies,
+		activeTransition: activeTransition,
+		ownerID:          current.OwnerID,
+		createdAt:        time.UnixMicro(current.CreatedAtUnixMicro).UTC(),
+		updatedAt:        now,
+		current:          &current,
+		oldCatalogState:  state,
 	}
 	if current.DisabledAtUnixMicro != nil {
 		disabled := time.UnixMicro(*current.DisabledAtUnixMicro).UTC()
@@ -601,26 +745,35 @@ func (writer *Writer) setState(
 	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
-	if request.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
+	enabling := request.GetState() == opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
+	if enabling {
 		if current.State == StateActive {
 			return nil, invalidMutation("state transition is a no-op")
 		}
 		if current.State != StateDraft && current.State != StateDisabled {
 			return nil, control.ErrVersionConflict
 		}
-		return nil, ErrActivePublicationUnavailable
-	}
-	if current.State == StateDisabled {
-		return nil, invalidMutation("state transition is a no-op")
-	}
-	if current.State != StateDraft && current.State != StateActive {
-		return nil, control.ErrVersionConflict
+	} else {
+		if current.State == StateDisabled {
+			return nil, invalidMutation("state transition is a no-op")
+		}
+		if current.State != StateDraft && current.State != StateActive {
+			return nil, control.ErrVersionConflict
+		}
 	}
 	currentObject, currentVersion, authority, err := writer.hydrateAuthorizedCurrentStateOnly(tx, current)
 	if err != nil {
 		return nil, err
 	}
-	if current.State == StateActive {
+	if enabling && authority.opaque {
+		return nil, invalidMutation("opaque future definitions cannot be enabled by this server")
+	}
+	if enabling {
+		if err := authorizeDefinitionApp(tx, prepared.scope, authority.appID, true); err != nil {
+			return nil, err
+		}
+	}
+	if !enabling && current.State == StateActive {
 		if blocked, err := hasActiveDependents(tx, current.TenantID, current.KnowledgeObjectID); err != nil {
 			return nil, writerError(ctx, "check disable dependents", err)
 		} else if blocked {
@@ -633,19 +786,59 @@ func (writer *Writer) setState(
 	if health.ProjectionBytes > 268435456-projectionCharge(authority) {
 		return nil, control.ErrCapacityExceeded
 	}
+	if enabling {
+		if err := preflightActivePublicationName(
+			tx,
+			current.TenantID,
+			current.KnowledgeObjectID,
+			current.OwnerID,
+			authority,
+		); err != nil {
+			return nil, err
+		}
+		if err := preflightActivePublicationCapacity(
+			tx,
+			health,
+			current.TenantID,
+			&current,
+			authority,
+			current.OwnerID,
+		); err != nil {
+			return nil, err
+		}
+	}
 	dependencies, err := dependenciesFromCurrent(tx, currentVersion)
 	if err != nil {
 		return nil, err
 	}
-	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteSetState, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
-		return nil, err
-	}
-	now, err := nextWriterTime(writer.clock(), current.UpdatedAtUnixMicro)
-	if err != nil {
-		return nil, err
-	}
 	activeTransition := publicationTransitionPersistenceAuthority{}
-	if current.State == StateActive && !authority.opaque {
+	if enabling {
+		afterObject, objectErr := recognizedPublicationObjectFromAuthority(
+			current.TenantID,
+			current.KnowledgeObjectID,
+			current.CurrentVersion+1,
+			current.OwnerID,
+			StateActive,
+			authority,
+		)
+		if objectErr != nil {
+			return nil, objectErr
+		}
+		activeTransition, err = writer.mintRecognizedPublicationTransition(
+			ctx,
+			tx,
+			current.TenantID,
+			&currentObject,
+			current.State,
+			dependencies,
+			afterObject,
+			StateActive,
+			nil,
+		)
+		if err != nil {
+			return nil, writerError(ctx, "validate enable publication transition", err)
+		}
+	} else if current.State == StateActive && !authority.opaque {
 		activeTransition, err = writer.mintRecognizedActiveRemovalTransition(
 			ctx,
 			tx,
@@ -658,20 +851,40 @@ func (writer *Writer) setState(
 			return nil, writerError(ctx, "validate disable publication transition", err)
 		}
 	}
+	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteSetState, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
+		return nil, err
+	}
+	now, err := nextWriterTime(writer.clock(), current.UpdatedAtUnixMicro)
+	if err != nil {
+		return nil, err
+	}
+	mutationKind := "disable"
+	auditAction := audit.ActionKnowledgeObjectDisable
+	publicationState := StateDisabled
+	publicationDependencies := dependencies
+	var disabledAt *time.Time
+	if enabling {
+		mutationKind = "enable"
+		auditAction = audit.ActionKnowledgeObjectEnable
+		publicationState = StateActive
+		publicationDependencies = nil
+	} else {
+		disabledAt = &now
+	}
 	plan := publicationPlan{
 		route:            mutationRouteSetState,
-		mutationKind:     "disable",
-		auditAction:      audit.ActionKnowledgeObjectDisable,
+		mutationKind:     mutationKind,
+		auditAction:      auditAction,
 		objectID:         current.KnowledgeObjectID,
 		version:          current.CurrentVersion + 1,
-		state:            StateDisabled,
+		state:            publicationState,
 		definition:       authority,
-		dependencies:     dependencies,
+		dependencies:     publicationDependencies,
 		activeTransition: activeTransition,
 		ownerID:          current.OwnerID,
 		createdAt:        time.UnixMicro(current.CreatedAtUnixMicro).UTC(),
 		updatedAt:        now,
-		disabledAt:       &now,
+		disabledAt:       disabledAt,
 		current:          &current,
 		oldCatalogState:  state,
 	}
@@ -1486,6 +1699,163 @@ func validateActiveCounterPreflight(
 	return nil
 }
 
+// preflightActivePublicationName mirrors the three partial ACTIVE namespace
+// indexes in migration 0024 before the ACTIVE capacity hook and persistence
+// writes. It is intentionally independent of selector reachability: a dormant
+// selector still owns its ACTIVE name slot.
+func preflightActivePublicationName(
+	tx *gorm.DB,
+	tenantID string,
+	excludedObjectID string,
+	ownerID string,
+	authority definitionAuthority,
+) error {
+	if tx == nil || tx.Statement == nil ||
+		!validIdentity(tenantID, maximumTenantIDBytes) ||
+		(excludedObjectID != "" && !validIdentity(excludedObjectID, maximumObjectIDBytes)) ||
+		!validIdentity(ownerID, maximumOwnerIDBytes) || authority.opaque ||
+		!validCanonicalAppID(authority.appID) || !authority.objectType.Valid() ||
+		!authority.sharingScope.Valid() || !validIdentity(authority.name, maximumFilterBytes) {
+		return fmt.Errorf(
+			"%w: ACTIVE publication name authority is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+
+	selection := `length(CAST(knowledge_object_id AS BLOB)) AS object_id_bytes,
+		CASE WHEN length(CAST(knowledge_object_id AS BLOB)) BETWEEN 1 AND ?
+			THEN knowledge_object_id ELSE '' END AS object_id`
+	var query *gorm.DB
+	switch authority.sharingScope {
+	case SharingScopePrivate:
+		query = tx.Raw(`SELECT `+selection+`
+			FROM knowledge_objects INDEXED BY knowledge_objects_active_private_name_idx
+			WHERE tenant_id = ? AND app_id = ? AND owner_id = ?
+			  AND object_type = ? AND name = ?
+			  AND state = 'active' AND sharing_scope = 'private'
+			  AND knowledge_object_id <> ? LIMIT 2`,
+			maximumObjectIDBytes,
+			tenantID, authority.appID, ownerID, authority.objectType, authority.name,
+			excludedObjectID,
+		)
+	case SharingScopeApp:
+		query = tx.Raw(`SELECT `+selection+`
+			FROM knowledge_objects INDEXED BY knowledge_objects_active_app_name_idx
+			WHERE tenant_id = ? AND app_id = ? AND object_type = ? AND name = ?
+			  AND state = 'active' AND sharing_scope = 'app'
+			  AND knowledge_object_id <> ? LIMIT 2`,
+			maximumObjectIDBytes,
+			tenantID, authority.appID, authority.objectType, authority.name,
+			excludedObjectID,
+		)
+	case SharingScopeGlobal:
+		query = tx.Raw(`SELECT `+selection+`
+			FROM knowledge_objects INDEXED BY knowledge_objects_active_global_name_idx
+			WHERE tenant_id = ? AND object_type = ? AND name = ?
+			  AND state = 'active' AND sharing_scope = 'global'
+			  AND knowledge_object_id <> ? LIMIT 2`,
+			maximumObjectIDBytes,
+			tenantID, authority.objectType, authority.name,
+			excludedObjectID,
+		)
+	default:
+		return fmt.Errorf("%w: ACTIVE publication scope is invalid", control.ErrInvalidArgument)
+	}
+	var records []activePublicationNameRecord
+	if err := query.Scan(&records).Error; err != nil {
+		return writerError(tx.Statement.Context, "read ACTIVE publication name", err)
+	}
+	if len(records) > 1 || len(records) == 1 &&
+		(records[0].ObjectIDBytes < 1 || records[0].ObjectIDBytes > maximumObjectIDBytes ||
+			!validIdentity(records[0].ObjectID, maximumObjectIDBytes)) {
+		return fmt.Errorf("%w: ACTIVE publication name authority is invalid", ErrCorrupt)
+	}
+	if len(records) == 1 {
+		return control.ErrAlreadyExists
+	}
+	return nil
+}
+
+// preflightActivePublicationCapacity mirrors the prospective cohort checks in
+// migration 0024 before the ACTIVE capacity hook and persistence writes.
+// readMutationTenantHealth has already proved the counter tables exactly match
+// the current registry; this exact lookup only decides which target cohorts
+// the proposed ACTIVE row would enter.
+func preflightActivePublicationCapacity(
+	tx *gorm.DB,
+	health mutationTenantHealth,
+	tenantID string,
+	current *registryRecord,
+	authority definitionAuthority,
+	ownerID string,
+) error {
+	if tx == nil || tx.Statement == nil || authority.opaque ||
+		!validIdentity(tenantID, maximumTenantIDBytes) ||
+		!validIdentity(ownerID, maximumOwnerIDBytes) ||
+		!validCanonicalAppID(authority.appID) || !authority.objectType.Valid() ||
+		!authority.sharingScope.Valid() {
+		return fmt.Errorf(
+			"%w: ACTIVE publication capacity authority is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	if current != nil && (current.TenantID != tenantID || current.OwnerID != ownerID) {
+		return fmt.Errorf(
+			"%w: ACTIVE publication predecessor authority is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+
+	addsTenant := current == nil || current.State != StateActive
+	addsApp := addsTenant || current.AppID != authority.appID
+	addsType := addsTenant || current.ObjectType != authority.objectType
+	addsAppType := addsTenant || current.AppID != authority.appID ||
+		current.ObjectType != authority.objectType
+	addsOwner := authority.sharingScope == SharingScopePrivate &&
+		(addsTenant || current.SharingScope != SharingScopePrivate || current.OwnerID != ownerID)
+	if addsTenant && health.ActiveObjectCount >= 4096 {
+		return control.ErrCapacityExceeded
+	}
+	if !addsApp && !addsType && !addsAppType && !addsOwner {
+		return nil
+	}
+
+	var records []activePublicationCounterRecord
+	if err := tx.Raw(`SELECT
+		coalesce((SELECT active_object_count
+			FROM knowledge_app_active_counters
+			WHERE tenant_id = ? AND app_id = ?), 0) AS app_count,
+		coalesce((SELECT active_object_count
+			FROM knowledge_type_active_counters
+			WHERE tenant_id = ? AND object_type = ?), 0) AS type_count,
+		coalesce((SELECT active_object_count
+			FROM knowledge_app_type_active_counters
+			WHERE tenant_id = ? AND app_id = ? AND object_type = ?), 0) AS app_type_count,
+		coalesce((SELECT active_private_object_count
+			FROM knowledge_owner_active_counters
+			WHERE tenant_id = ? AND owner_id = ?), 0) AS owner_count`,
+		tenantID, authority.appID,
+		tenantID, authority.objectType,
+		tenantID, authority.appID, authority.objectType,
+		tenantID, ownerID,
+	).Scan(&records).Error; err != nil {
+		return writerError(tx.Statement.Context, "read ACTIVE publication counters", err)
+	}
+	if len(records) != 1 || records[0].App < 0 || records[0].App > 1024 ||
+		records[0].Type < 0 || records[0].Type > 2048 ||
+		records[0].AppType < 0 || records[0].AppType > 512 ||
+		records[0].Owner < 0 || records[0].Owner > 512 {
+		return fmt.Errorf("%w: ACTIVE publication counter authority is invalid", ErrCorrupt)
+	}
+	if addsApp && records[0].App >= 1024 ||
+		addsType && records[0].Type >= 2048 ||
+		addsAppType && records[0].AppType >= 512 ||
+		addsOwner && records[0].Owner >= 512 {
+		return control.ErrCapacityExceeded
+	}
+	return nil
+}
+
 func (writer *Writer) selectCreateObjectID(tx *gorm.DB, tenantID string) (string, int, error) {
 	for attempt := 0; attempt < maximumWriterIDAttempts; attempt++ {
 		objectID, err := writer.idGenerator()
@@ -1883,6 +2253,151 @@ func dependenciesFromCurrent(tx *gorm.DB, version versionRecord) ([]publicationD
 	return result, nil
 }
 
+func recognizedPublicationObjectFromAuthority(
+	tenantID string,
+	objectID string,
+	version int64,
+	ownerID string,
+	state State,
+	authority definitionAuthority,
+) (Object, error) {
+	if !validIdentity(tenantID, maximumTenantIDBytes) ||
+		!validIdentity(objectID, maximumObjectIDBytes) ||
+		!validIdentity(ownerID, maximumOwnerIDBytes) || version < 1 ||
+		authority.opaque || authority.definition == nil ||
+		len(authority.digest) != persistedKnowledgeDefinitionDigestBytes ||
+		!state.valid() || state == StateQuarantined {
+		return Object{}, fmt.Errorf(
+			"%w: recognized publication candidate authority is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	return Object{
+		KnowledgeObjectID: strings.Clone(objectID),
+		TenantID:          strings.Clone(tenantID),
+		AppID:             strings.Clone(authority.appID),
+		OwnerID:           strings.Clone(ownerID),
+		ObjectType:        authority.objectType,
+		Name:              strings.Clone(authority.name),
+		Version:           uint64(version),
+		SharingScope:      authority.sharingScope,
+		State:             state,
+		Definition:        proto.Clone(authority.definition).(*opensplunkv1.KnowledgeObjectDefinition),
+		DefinitionSHA256:  bytes.Clone(authority.digest),
+	}, nil
+}
+
+func recognizedPublicationTransitionEndpoint(
+	object Object,
+	state State,
+	dependencies []publicationDependency,
+	retainDependencies bool,
+) (publicationTransitionEndpoint, error) {
+	snapshot, err := resolutionSnapshotObject(object)
+	if err != nil {
+		return publicationTransitionEndpoint{}, err
+	}
+	winner := publicationWinner{
+		object:                      snapshot,
+		existingDependenciesPresent: retainDependencies,
+	}
+	if retainDependencies {
+		winner.existingDependencies = publicationTransitionPersistedDependencies(
+			dependencies,
+		)
+	}
+	return publicationTransitionEndpoint{
+		present: true,
+		state:   state,
+		winner:  winner,
+	}, nil
+}
+
+// mintRecognizedPublicationTransition is the shared Writer boundary for every
+// recognized mutation that adds, changes, or removes an ACTIVE winner. A
+// durable predecessor always carries its sealed dependency rows. An ACTIVE
+// successor deliberately carries no submitted rows: the validated authority
+// owns the only dependency projection that publishMutation may persist.
+func (writer *Writer) mintRecognizedPublicationTransition(
+	ctx context.Context,
+	tx *gorm.DB,
+	tenantID string,
+	beforeObject *Object,
+	beforeState State,
+	beforeDependencies []publicationDependency,
+	afterObject Object,
+	afterState State,
+	afterDependencies []publicationDependency,
+) (publicationTransitionPersistenceAuthority, error) {
+	if writer == nil || writer.reader == nil || tx == nil ||
+		!validIdentity(tenantID, maximumTenantIDBytes) ||
+		!afterState.valid() || afterState == StateQuarantined ||
+		(beforeObject == nil && beforeState != State("")) ||
+		(beforeObject == nil && beforeDependencies != nil) ||
+		(beforeObject != nil && (!beforeState.valid() || beforeState == StateQuarantined)) ||
+		(afterState == StateActive && afterDependencies != nil) ||
+		(beforeState != StateActive && afterState != StateActive) {
+		return publicationTransitionPersistenceAuthority{}, fmt.Errorf(
+			"%w: recognized publication transition input is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	if afterObject.TenantID != tenantID || afterObject.State != afterState {
+		return publicationTransitionPersistenceAuthority{}, fmt.Errorf(
+			"%w: recognized publication successor authority is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	if beforeObject == nil {
+		if afterObject.Version != 1 {
+			return publicationTransitionPersistenceAuthority{}, fmt.Errorf(
+				"%w: recognized publication create chronology is invalid",
+				control.ErrInvalidArgument,
+			)
+		}
+	} else if beforeObject.TenantID != tenantID || beforeObject.State != beforeState ||
+		beforeObject.KnowledgeObjectID != afterObject.KnowledgeObjectID ||
+		beforeObject.Version >= math.MaxInt64 ||
+		afterObject.Version != beforeObject.Version+1 {
+		return publicationTransitionPersistenceAuthority{}, fmt.Errorf(
+			"%w: recognized publication successor chronology is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+	before := publicationTransitionEndpoint{}
+	var err error
+	if beforeObject != nil {
+		before, err = recognizedPublicationTransitionEndpoint(
+			*beforeObject,
+			beforeState,
+			beforeDependencies,
+			true,
+		)
+		if err != nil {
+			return publicationTransitionPersistenceAuthority{}, err
+		}
+	}
+	after, err := recognizedPublicationTransitionEndpoint(
+		afterObject,
+		afterState,
+		afterDependencies,
+		afterState != StateActive,
+	)
+	if err != nil {
+		return publicationTransitionPersistenceAuthority{}, err
+	}
+	read, err := writer.reader.readPublicationActiveTransitionInventory(
+		tx,
+		tenantID,
+		before,
+		after,
+	)
+	if err != nil {
+		return publicationTransitionPersistenceAuthority{}, err
+	}
+	return mintPublicationTransitionPersistenceAuthority(ctx, tx, read)
+}
+
 // mintRecognizedActiveRemovalTransition binds one recognized ACTIVE current
 // object and its exact retained dependency rows to a DISABLED or DELETED
 // successor. Opaque future definitions deliberately remain on the separate
@@ -1914,48 +2429,28 @@ func (writer *Writer) mintRecognizedActiveRemovalTransition(
 			ErrCorrupt,
 		)
 	}
-
-	beforeObject, err := resolutionSnapshotObject(current)
-	if err != nil {
-		return publicationTransitionPersistenceAuthority{}, err
-	}
-	afterObject, err := resolutionSnapshotObject(current)
-	if err != nil {
-		return publicationTransitionPersistenceAuthority{}, err
-	}
-	afterObject.Version = beforeObject.Version + 1
-	before := publicationTransitionEndpoint{
-		present: true,
-		state:   StateActive,
-		winner: publicationWinner{
-			object:                      beforeObject,
-			existingDependenciesPresent: true,
-			existingDependencies: publicationTransitionPersistedDependencies(
-				dependencies,
-			),
-		},
-	}
-	after := publicationTransitionEndpoint{
-		present: true,
-		state:   afterState,
-		winner: publicationWinner{
-			object:                      afterObject,
-			existingDependenciesPresent: true,
-			existingDependencies: publicationTransitionPersistedDependencies(
-				dependencies,
-			),
-		},
-	}
-	read, err := writer.reader.readPublicationActiveTransitionInventory(
-		tx,
+	afterObject, err := recognizedPublicationObjectFromAuthority(
 		current.TenantID,
-		before,
-		after,
+		current.KnowledgeObjectID,
+		int64(current.Version)+1,
+		current.OwnerID,
+		afterState,
+		authority,
 	)
 	if err != nil {
 		return publicationTransitionPersistenceAuthority{}, err
 	}
-	return mintPublicationTransitionPersistenceAuthority(ctx, tx, read)
+	return writer.mintRecognizedPublicationTransition(
+		ctx,
+		tx,
+		current.TenantID,
+		&current,
+		StateActive,
+		dependencies,
+		afterObject,
+		afterState,
+		dependencies,
+	)
 }
 
 func hasActiveDependents(tx *gorm.DB, tenantID, objectID string) (bool, error) {

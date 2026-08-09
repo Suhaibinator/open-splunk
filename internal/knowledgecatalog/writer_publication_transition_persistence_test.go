@@ -313,7 +313,7 @@ func TestPublishMutationRejectsZeroAuthorityForACTIVEPlan(t *testing.T) {
 	}
 }
 
-func TestWriterTransitionPlumbingLeavesPublicACTIVEGateClosed(t *testing.T) {
+func TestWriterActiveEnableRequiresCurrentIndexWinningWitness(t *testing.T) {
 	harness := newWriterFaultHarness(t)
 	created, err := harness.writer.Create(
 		harness.actorContext,
@@ -333,8 +333,8 @@ func TestWriterTransitionPlumbingLeavesPublicACTIVEGateClosed(t *testing.T) {
 			ClientRequestId:   "transition-gate-enable-0001",
 		},
 	)
-	if !errors.Is(err, ErrActivePublicationUnavailable) {
-		t.Fatalf("public ACTIVE gate error = %v, want unavailable", err)
+	if !errors.Is(err, control.ErrDependencyConflict) {
+		t.Fatalf("ACTIVE enable witness error = %v, want dependency conflict", err)
 	}
 }
 
