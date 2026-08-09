@@ -1928,8 +1928,15 @@ func (x *KnowledgeValidationResult) GetDiagnosticsTruncated() bool {
 // exactly INACTIVE_STORAGE or ACTIVE_PUBLICATION; UNSPECIFIED and unknown
 // numeric values are request-envelope errors. Create mode is selected only when
 // knowledge_object_id is absent and requires expected_version and update_mask
-// message to both be absent, not merely zero or empty. Update mode is selected
-// only when knowledge_object_id is present; that ID must be nonempty,
+// message to both be absent, not merely zero or empty. ACTIVE_PUBLICATION
+// create validation evaluates the candidate under a deterministic,
+// non-persisted object ID proven fresh in the same catalog transaction. Its
+// validity, diagnostics, resources, and target-only dependency projection must
+// be invariant under alpha-renaming that ID to any other fresh valid ID. The
+// result neither reserves that ID nor authorizes a later Create: Create
+// generates its own ID and revalidates the then-current catalog, app, and index
+// authority, so intervening changes may alter the outcome. Update mode is
+// selected only when knowledge_object_id is present; that ID must be nonempty,
 // expected_version must be present in the inclusive range 1 through MaxInt64
 // (9223372036854775807), and update_mask must be a present message with at
 // least one canonical path. Update validation applies the masked candidate to
