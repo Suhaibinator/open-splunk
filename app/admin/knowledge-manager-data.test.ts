@@ -28,10 +28,15 @@ import {
   KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES,
   adaptKnowledgeObject,
   adaptKnowledgePage,
+  knowledgeLifecycleStateFilterFromControlValue,
   knowledgeListRequest,
+  knowledgeObjectTypeFilterFromControlValue,
+  knowledgeSortChoiceFromControlValue,
   loadKnowledgeDetail,
   loadKnowledgePage,
   mergeKnowledgeContinuation,
+  type KnowledgeLifecycleStateFilter,
+  type KnowledgeListQuery,
   type KnowledgeReadClient,
 } from "./knowledge-manager-data";
 import {
@@ -44,7 +49,10 @@ import {
 import {
   KnowledgeDetail,
   KnowledgeManagerPanel,
+  KnowledgeManagerWorkspace,
+  commitKnowledgeManagerQueryChange,
   knowledgeManagerUnmountCleanup,
+  resetKnowledgeManagerQuery,
 } from "./knowledge-manager-panel";
 
 const pageSize = 50;
@@ -138,13 +146,47 @@ function listResponse(options: {
   });
 }
 
-function query(pageToken: string | null = null) {
-  return { appId: "app-observability", pageSize, pageToken };
+function query(
+  pageToken: string | null = null,
+  overrides: Partial<KnowledgeListQuery> = {},
+): KnowledgeListQuery {
+  return {
+    appId: "app-observability",
+    objectType: "all",
+    lifecycleState: "all",
+    sort: "name-ascending",
+    pageSize,
+    pageToken,
+    ...overrides,
+  };
 }
 
 function jsonWithoutBigInt(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) =>
     typeof item === "bigint" ? item.toString() : item);
+}
+
+function mediaRuleBodies(css: string, condition: string): string[] {
+  const marker = `@media (${condition})`;
+  const bodies: string[] = [];
+  let cursor = 0;
+  while (cursor < css.length) {
+    const ruleStart = css.indexOf(marker, cursor);
+    if (ruleStart < 0) break;
+    const bodyStart = css.indexOf("{", ruleStart + marker.length);
+    assert.notEqual(bodyStart, -1, `missing body for ${marker}`);
+    let depth = 1;
+    let bodyEnd = bodyStart + 1;
+    while (bodyEnd < css.length && depth > 0) {
+      if (css[bodyEnd] === "{") depth += 1;
+      else if (css[bodyEnd] === "}") depth -= 1;
+      bodyEnd += 1;
+    }
+    assert.equal(depth, 0, `unterminated body for ${marker}`);
+    bodies.push(css.slice(bodyStart + 1, bodyEnd - 1));
+    cursor = bodyEnd;
+  }
+  return bodies;
 }
 
 test("feature-absent navigation is unchanged and invokes no knowledge chunk importer", async () => {
@@ -239,6 +281,75 @@ test("unmount cleanup aborts continuation and detail controllers assigned after 
   assert.equal(detailRequest.current, null);
 });
 
+test("query changes abort requests and reset list, detail, and continuation state", () => {
+  const continuation = new AbortController();
+  const detail = new AbortController();
+  const listRequest = { current: continuation as AbortController | null };
+  const detailRequest = { current: detail as AbortController | null };
+  const priorTokens = new Set(["consumed-cursor"]);
+  const consumedPageTokens = { current: priorTokens };
+  let page: object | null = { stale: true };
+  let continuationStale = true;
+  let selectedObjectId: string | null = "ko-stale";
+  let detailValue: object | null = { stale: true };
+
+  resetKnowledgeManagerQuery(
+    listRequest,
+    detailRequest,
+    consumedPageTokens,
+    () => {
+      page = null;
+      continuationStale = false;
+    },
+    () => {
+      selectedObjectId = null;
+      detailValue = null;
+    },
+  );
+
+  assert.equal(continuation.signal.aborted, true);
+  assert.equal(detail.signal.aborted, true);
+  assert.equal(listRequest.current, null);
+  assert.equal(detailRequest.current, null);
+  assert.notEqual(consumedPageTokens.current, priorTokens);
+  assert.equal(consumedPageTokens.current.size, 0);
+  assert.equal(page, null);
+  assert.equal(continuationStale, false);
+  assert.equal(selectedObjectId, null);
+  assert.equal(detailValue, null);
+});
+
+test("closed query changes reset before update and invalid values fail closed", () => {
+  const events: string[] = [];
+  commitKnowledgeManagerQueryChange<KnowledgeLifecycleStateFilter>(
+    "all",
+    "active",
+    () => events.push("reset"),
+    (value) => events.push(`update:${value}`),
+    () => events.push("unavailable"),
+  );
+  assert.equal(events.join(","), "reset,update:active");
+
+  events.length = 0;
+  commitKnowledgeManagerQueryChange<KnowledgeLifecycleStateFilter>(
+    "active",
+    "active",
+    () => events.push("reset"),
+    (value) => events.push(`update:${value}`),
+    () => events.push("unavailable"),
+  );
+  assert.equal(events.length, 0);
+
+  commitKnowledgeManagerQueryChange<KnowledgeLifecycleStateFilter>(
+    "active",
+    undefined,
+    () => events.push("reset"),
+    (value) => events.push(`update:${value}`),
+    () => events.push("unavailable"),
+  );
+  assert.equal(events.join(","), "reset,unavailable");
+});
+
 test("enabled list and detail fixtures use bounded generated protobuf requests", async () => {
   const listRequests: ListKnowledgeObjectsRequest[] = [];
   const getRequests: string[] = [];
@@ -271,6 +382,111 @@ test("enabled list and detail fixtures use bounded generated protobuf requests",
   const detail = await loadKnowledgeDetail(client, fixture.knowledgeObjectId);
   assert.equal(detail.status, "available");
   assert.deepEqual(getRequests, [fixture.knowledgeObjectId]);
+});
+
+test("filter and sort choices encode exact canonical List request enums", () => {
+  assert.deepEqual(knowledgeListRequest(query("cursor-safe", {
+    appId: null,
+    objectType: "field-alias",
+    lifecycleState: "quarantined",
+    sort: "updated-descending",
+    pageSize: 17,
+  })), {
+    page: { pageSize: 17, pageToken: "cursor-safe", includeTotalSize: true },
+    appIdFilter: undefined,
+    ownerIdFilter: undefined,
+    textFilter: undefined,
+    objectTypeFilters: [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS],
+    stateFilters: [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_QUARANTINED],
+    sharingScopeFilters: [],
+    selectorTextFilter: undefined,
+    sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT,
+    sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
+  });
+
+  const objectTypes = [
+    ["field-extraction", KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION],
+    ["field-alias", KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS],
+    ["calculated-field", KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD],
+  ] as const;
+  for (const [objectType, expected] of objectTypes) {
+    assert.deepEqual(
+      knowledgeListRequest(query(null, { objectType })).objectTypeFilters,
+      [expected],
+    );
+  }
+
+  const lifecycleStates = [
+    ["draft", KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT],
+    ["active", KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE],
+    ["disabled", KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED],
+    ["quarantined", KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_QUARANTINED],
+    ["deleted", KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DELETED],
+  ] as const;
+  for (const [lifecycleState, expected] of lifecycleStates) {
+    assert.deepEqual(
+      knowledgeListRequest(query(null, { lifecycleState })).stateFilters,
+      [expected],
+    );
+  }
+
+  const sorts = [
+    [
+      "name-ascending",
+      KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_NAME,
+      SortDirection.SORT_DIRECTION_ASCENDING,
+    ],
+    [
+      "updated-descending",
+      KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT,
+      SortDirection.SORT_DIRECTION_DESCENDING,
+    ],
+    [
+      "created-descending",
+      KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT,
+      SortDirection.SORT_DIRECTION_DESCENDING,
+    ],
+    [
+      "object-type-ascending",
+      KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE,
+      SortDirection.SORT_DIRECTION_ASCENDING,
+    ],
+  ] as const;
+  for (const [sort, sortBy, sortDirection] of sorts) {
+    const request = knowledgeListRequest(query(null, { sort }));
+    assert.equal(request.sortBy, sortBy);
+    assert.equal(request.sortDirection, sortDirection);
+  }
+});
+
+test("unknown control and query enums fail closed before a List request", async () => {
+  assert.equal(knowledgeObjectTypeFilterFromControlValue("field-alias"), "field-alias");
+  assert.equal(knowledgeObjectTypeFilterFromControlValue("future-type"), undefined);
+  assert.equal(knowledgeLifecycleStateFilterFromControlValue("deleted"), "deleted");
+  assert.equal(knowledgeLifecycleStateFilterFromControlValue("UNRECOGNIZED"), undefined);
+  assert.equal(knowledgeSortChoiceFromControlValue("created-descending"), "created-descending");
+  assert.equal(knowledgeSortChoiceFromControlValue("name-sideways"), undefined);
+
+  const invalidQueries: KnowledgeListQuery[] = [
+    { ...query(), objectType: "future-object-type" as never },
+    { ...query(), lifecycleState: "future-state" as never },
+    { ...query(), sort: "future-sort" as never },
+  ];
+  await Promise.all(invalidQueries.map(async (invalidQuery) => {
+    assert.throws(() => knowledgeListRequest(invalidQuery), TypeError);
+    let listCalls = 0;
+    const client: KnowledgeReadClient = {
+      async list() {
+        listCalls += 1;
+        return listResponse();
+      },
+      async get() {
+        throw new Error("get must not be called");
+      },
+    };
+    assert.deepEqual(await loadKnowledgePage(client, invalidQuery), { status: "unavailable" });
+    assert.equal(listCalls, 0);
+  }));
 });
 
 test("an empty revision-zero catalog is a valid bounded first page", () => {
@@ -460,16 +676,14 @@ test("short byte-budget pages merge while stale revisions, identities, and token
 });
 
 test("page, cursor, total, revision, and nested definition bounds fail closed", () => {
-  assert.throws(() => knowledgeListRequest({
+  assert.throws(() => knowledgeListRequest(query(null, {
     appId: null,
     pageSize: 257,
-    pageToken: null,
-  }), RangeError);
-  assert.throws(() => knowledgeListRequest({
-    appId: null,
-    pageSize: 50,
-    pageToken: "x".repeat(KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES + 1),
-  }), TypeError);
+  })), RangeError);
+  assert.throws(() => knowledgeListRequest(query(
+    "x".repeat(KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES + 1),
+    { appId: null },
+  )), TypeError);
   assert.throws(() => adaptKnowledgePage(listResponse({
     totalSize: KNOWLEDGE_MANAGER_MAXIMUM_OBJECTS + 1n,
   }), query()), TypeError);
@@ -500,7 +714,7 @@ test("detail markup is read-only, body-safe, keyboard-addressable, and labelled"
   assert.doesNotMatch(markup, /Create|Edit|Delete|Enable|Disable|Save/);
 });
 
-test("the panel loading shell is labelled, read-only, and exposes no mutation control", () => {
+test("the panel loading shell labels every closed filter and exposes no mutation control", () => {
   const markup = renderToStaticMarkup(createElement(KnowledgeManagerPanel, {
     apiBaseUrl: "",
     apps: [{ appId: "app-observability", label: "Observability" }],
@@ -510,14 +724,73 @@ test("the panel loading shell is labelled, read-only, and exposes no mutation co
   assert.match(markup, /id="knowledge-manager-title"/);
   assert.match(markup, /Read only/);
   assert.match(markup, /Loading knowledge objects/);
-  assert.match(markup, /id="knowledge-app-filter"/);
+  assert.match(markup, /<label for="knowledge-app-filter"><span>App scope<\/span>/);
+  assert.match(markup, /<select id="knowledge-app-filter"/);
+  assert.match(markup, /<label for="knowledge-object-type-filter"><span>Object type<\/span>/);
+  assert.match(markup, /<select id="knowledge-object-type-filter"/);
+  assert.match(markup, /All object types/);
+  assert.match(markup, /Field extraction/);
+  assert.match(markup, /Field alias/);
+  assert.match(markup, /Calculated field/);
+  assert.match(markup, /<label for="knowledge-lifecycle-state-filter"><span>Lifecycle state<\/span>/);
+  assert.match(markup, /<select id="knowledge-lifecycle-state-filter"/);
+  assert.match(markup, /All lifecycle states/);
+  assert.match(markup, /Draft/);
+  assert.match(markup, /Active/);
+  assert.match(markup, /Disabled/);
+  assert.match(markup, /Quarantined/);
+  assert.match(markup, /Deleted/);
+  assert.match(markup, /<label for="knowledge-sort-choice"><span>Sort by<\/span>/);
+  assert.match(markup, /<select id="knowledge-sort-choice"/);
+  assert.match(markup, /Name A–Z/);
+  assert.match(markup, /Updated newest/);
+  assert.match(markup, /Created newest/);
+  assert.match(markup, /Type A–Z/);
   assert.doesNotMatch(markup, />Create<|>Edit<|>Delete<|>Enable<|>Disable<|>Save</);
 });
 
-test("responsive and focus-visible style contracts cover list/detail collapse", () => {
+test("the available list and detail presentation expose no mutation control", () => {
+  const page = adaptKnowledgePage(listResponse(), query());
+  const detail = page.objects[0];
+  assert.equal(detail?.disclosure, "available");
+  if (detail?.disclosure !== "available") return;
+  const markup = renderToStaticMarkup(createElement(KnowledgeManagerWorkspace, {
+    page,
+    selectedObjectId: detail.knowledgeObjectId,
+    loadingMore: false,
+    continuationStale: false,
+    detailState: "available",
+    detail,
+    onOpen: () => undefined,
+    onRowKeyDown: () => undefined,
+    registerRow: () => undefined,
+    onReloadFirstPage: () => undefined,
+    onLoadMore: () => undefined,
+    onCloseDetail: () => undefined,
+  }));
+  assert.match(markup, /aria-label="Knowledge objects"/);
+  assert.match(markup, /id="knowledge-object-detail-title"/);
+  assert.match(markup, /aria-label="Close knowledge object details"/);
+  assert.doesNotMatch(markup, />Create<|>Edit<|>Delete<|>Enable<|>Disable<|>Save</);
+});
+
+test("responsive and focus-visible styles cover filters and list/detail collapse", () => {
   const css = readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8");
-  assert.match(css, /@media \(max-width: 980px\)[\s\S]*?\.knowledge-manager__workspace--detail \{ grid-template-columns: 1fr; \}/);
-  assert.match(css, /@media \(max-width: 760px\)[\s\S]*?\.knowledge-manager__row \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
+  const compactBodies = mediaRuleBodies(css, "max-width: 980px");
+  const mobileBodies = mediaRuleBodies(css, "max-width: 760px");
+  const narrowBodies = mediaRuleBodies(css, "max-width: 480px");
+  assert.match(css, /\.knowledge-manager__filters \{[^}]*grid-template-columns: minmax\(170px, 1\.35fr\) repeat\(3, minmax\(125px, 1fr\)\);/);
+  assert.ok(compactBodies.some((body) => (
+    /\.knowledge-manager__filters \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/.test(body)
+    && /\.knowledge-manager__workspace--detail \{ grid-template-columns: 1fr; \}/.test(body)
+  )));
+  assert.ok(mobileBodies.some((body) => (
+    /\.knowledge-manager__row \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/.test(body)
+  )));
+  assert.ok(narrowBodies.some((body) => (
+    /\.knowledge-manager__filters \{ grid-template-columns: 1fr; \}/.test(body)
+  )));
   assert.match(css, /\.knowledge-manager button:focus-visible/);
+  assert.match(css, /\.knowledge-manager select:focus-visible/);
   assert.match(css, /\.knowledge-manager__detail:focus-visible/);
 });

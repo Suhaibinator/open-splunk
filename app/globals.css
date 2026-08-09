@@ -5290,9 +5290,10 @@ pre {
 .knowledge-manager__eyebrow { color: #688159; font-size: 9px; font-weight: 700; letter-spacing: 0.12em; }
 .knowledge-manager__readonly { background: #edf4e9; border: 1px solid #b6cda9; border-radius: 12px; color: #47772e; font-size: 9px; font-weight: 700; letter-spacing: 0.04em; padding: 5px 9px; text-transform: uppercase; }
 .knowledge-manager__toolbar { align-items: end; background: #f8faf9; border: 1px solid #d1d8db; display: flex; gap: 12px; justify-content: space-between; padding: 10px 12px; }
-.knowledge-manager__toolbar label { display: grid; gap: 5px; min-width: min(320px, 55%); }
-.knowledge-manager__toolbar label > span { color: #5f6e76; font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
-.knowledge-manager__toolbar select { background: white; border: 1px solid #adb8bd; font-size: 10px; height: 34px; padding: 0 9px; }
+.knowledge-manager__filters { display: grid; flex: 1; gap: 10px; grid-template-columns: minmax(170px, 1.35fr) repeat(3, minmax(125px, 1fr)); min-width: 0; }
+.knowledge-manager__filters label { display: grid; gap: 5px; min-width: 0; }
+.knowledge-manager__filters label > span { color: #5f6e76; font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.knowledge-manager__filters select { background: white; border: 1px solid #adb8bd; font-size: 10px; height: 34px; min-width: 0; padding: 0 9px; width: 100%; }
 .knowledge-manager__toolbar > p { align-items: flex-end; display: flex; flex-direction: column; font-size: 10px; gap: 2px; margin: 0; }
 .knowledge-manager__toolbar > p strong { color: #34454e; font-size: 12px; font-weight: 600; }
 .knowledge-manager__toolbar > p span { color: #748188; }
@@ -6748,6 +6749,9 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .app-launch-card { border-bottom: 0; border-right: 1px solid #e1e5e7; min-height: 132px; }
   .admin-layout { grid-template-columns: 205px minmax(0, 1fr); }
   .admin-overview-grid { grid-template-columns: 1fr; }
+  .knowledge-manager__toolbar { align-items: stretch; flex-direction: column; }
+  .knowledge-manager__filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .knowledge-manager__toolbar > p { align-items: flex-start; }
   .knowledge-manager__workspace--detail { grid-template-columns: 1fr; }
   .knowledge-manager__detail { position: static; }
   .collector-grid { grid-template-columns: 1fr; }
@@ -7198,6 +7202,7 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .collector-card header .status-label { grid-column: 2; }
   .permission-grid { padding-inline: 10px; }
   .knowledge-manager__header { flex-direction: column; }
+  .knowledge-manager__filters { grid-template-columns: 1fr; }
   .knowledge-manager__metadata { grid-template-columns: 1fr; }
   .knowledge-manager__row { grid-template-columns: 1fr; }
   .knowledge-manager__row > span,

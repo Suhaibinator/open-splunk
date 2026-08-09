@@ -10,25 +10,27 @@ import {
 } from "@/gen/ts/open_splunk/v1/knowledge";
 import {
   GetKnowledgeObjectRequest,
-  GetKnowledgeObjectResponse,
   KnowledgeObjectSortBy,
   ListKnowledgeObjectsRequest,
-  ListKnowledgeObjectsResponse,
   type GetKnowledgeObjectResponse as GetKnowledgeObjectResponseMessage,
   type ListKnowledgeObjectsResponse as ListKnowledgeObjectsResponseMessage,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import {
   ProtobufTransport,
-  defineProtobufRoute,
   type ProtobufRequestOptions,
   type ProtobufTransportOptions,
 } from "@/lib/api/protobuf-transport";
+import {
+  MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES,
+  knowledgeRoutes,
+} from "@/lib/api/routes";
 
 export const KNOWLEDGE_MANAGER_DEFAULT_PAGE_SIZE = 50;
 export const KNOWLEDGE_MANAGER_MAXIMUM_PAGE_SIZE = 256;
 export const KNOWLEDGE_MANAGER_MAXIMUM_OBJECTS = 8_192n;
 export const KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES = 4 << 10;
-export const KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES = 8 << 20;
+export const KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES =
+  MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES;
 
 const MAXIMUM_IDENTITY_BYTES = 255;
 const MAXIMUM_APP_ID_BYTES = 128;
@@ -41,21 +43,6 @@ const MAXIMUM_BODY_TEXT_BYTES = 16 << 10;
 const MAXIMUM_REGEX_OR_PATH_BYTES = 4 << 10;
 const MAXIMUM_DISPLAY_DESCRIPTION_CODE_POINTS = 480;
 const MAXIMUM_SIGNED_REVISION = 9_223_372_036_854_775_807n;
-
-const knowledgeReadRoutes = {
-  get: defineProtobufRoute(
-    "/api/v1/knowledge/objects/get",
-    GetKnowledgeObjectRequest,
-    GetKnowledgeObjectResponse,
-    { maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES },
-  ),
-  list: defineProtobufRoute(
-    "/api/v1/knowledge/objects/list",
-    ListKnowledgeObjectsRequest,
-    ListKnowledgeObjectsResponse,
-    { maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES },
-  ),
-} as const;
 
 export interface KnowledgeReadClient {
   get(
@@ -74,12 +61,12 @@ export function createKnowledgeReadClient(
   const transport = new ProtobufTransport(options);
   return {
     get: (request, requestOptions) => transport.post(
-      knowledgeReadRoutes.get,
+      knowledgeRoutes.get,
       request,
       requestOptions,
     ),
     list: (request, requestOptions) => transport.post(
-      knowledgeReadRoutes.list,
+      knowledgeRoutes.list,
       request,
       requestOptions,
     ),
@@ -148,10 +135,100 @@ export type KnowledgeDetailLoadResult =
   | { status: "available"; object: KnowledgeObjectDisplay }
   | { status: "unavailable" };
 
+export type KnowledgeObjectTypeFilter =
+  | "all"
+  | "field-extraction"
+  | "field-alias"
+  | "calculated-field";
+
+export const KNOWLEDGE_OBJECT_TYPE_FILTER_OPTIONS = [
+  { value: "all", label: "All object types" },
+  { value: "field-extraction", label: "Field extraction" },
+  { value: "field-alias", label: "Field alias" },
+  { value: "calculated-field", label: "Calculated field" },
+] as const satisfies ReadonlyArray<{ value: KnowledgeObjectTypeFilter; label: string }>;
+
+export type KnowledgeLifecycleStateFilter =
+  | "all"
+  | "draft"
+  | "active"
+  | "disabled"
+  | "quarantined"
+  | "deleted";
+
+export const KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS = [
+  { value: "all", label: "All lifecycle states" },
+  { value: "draft", label: "Draft" },
+  { value: "active", label: "Active" },
+  { value: "disabled", label: "Disabled" },
+  { value: "quarantined", label: "Quarantined" },
+  { value: "deleted", label: "Deleted" },
+] as const satisfies ReadonlyArray<{ value: KnowledgeLifecycleStateFilter; label: string }>;
+
+export type KnowledgeSortChoice =
+  | "name-ascending"
+  | "updated-descending"
+  | "created-descending"
+  | "object-type-ascending";
+
+export const KNOWLEDGE_SORT_OPTIONS = [
+  { value: "name-ascending", label: "Name A–Z" },
+  { value: "updated-descending", label: "Updated newest" },
+  { value: "created-descending", label: "Created newest" },
+  { value: "object-type-ascending", label: "Type A–Z" },
+] as const satisfies ReadonlyArray<{ value: KnowledgeSortChoice; label: string }>;
+
 export interface KnowledgeListQuery {
   appId: string | null;
+  objectType: KnowledgeObjectTypeFilter;
+  lifecycleState: KnowledgeLifecycleStateFilter;
+  sort: KnowledgeSortChoice;
   pageSize: number;
   pageToken: string | null;
+}
+
+export function knowledgeObjectTypeFilterFromControlValue(
+  value: string,
+): KnowledgeObjectTypeFilter | undefined {
+  switch (value) {
+    case "all":
+    case "field-extraction":
+    case "field-alias":
+    case "calculated-field":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+export function knowledgeLifecycleStateFilterFromControlValue(
+  value: string,
+): KnowledgeLifecycleStateFilter | undefined {
+  switch (value) {
+    case "all":
+    case "draft":
+    case "active":
+    case "disabled":
+    case "quarantined":
+    case "deleted":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+export function knowledgeSortChoiceFromControlValue(
+  value: string,
+): KnowledgeSortChoice | undefined {
+  switch (value) {
+    case "name-ascending":
+    case "updated-descending":
+    case "created-descending":
+    case "object-type-ascending":
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 export function boundedKnowledgePageSize(configuredMaximum: number): number {
@@ -182,6 +259,9 @@ export function knowledgeListRequest(query: KnowledgeListQuery) {
   ) {
     throw new TypeError("Knowledge page token is outside the browser contract.");
   }
+  const objectTypeFilters = canonicalKnowledgeObjectTypeFilter(query.objectType);
+  const stateFilters = canonicalKnowledgeLifecycleStateFilter(query.lifecycleState);
+  const sort = canonicalKnowledgeSort(query.sort);
   return ListKnowledgeObjectsRequest.fromPartial({
     page: {
       pageSize: query.pageSize,
@@ -189,9 +269,79 @@ export function knowledgeListRequest(query: KnowledgeListQuery) {
       includeTotalSize: true,
     },
     appIdFilter: query.appId ?? undefined,
-    sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_NAME,
-    sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
+    objectTypeFilters,
+    stateFilters,
+    sortBy: sort.sortBy,
+    sortDirection: sort.sortDirection,
   });
+}
+
+function canonicalKnowledgeObjectTypeFilter(
+  value: KnowledgeObjectTypeFilter,
+): KnowledgeObjectType[] {
+  switch (value) {
+    case "all":
+      return [];
+    case "field-extraction":
+      return [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION];
+    case "field-alias":
+      return [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS];
+    case "calculated-field":
+      return [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD];
+    default:
+      throw new TypeError("Knowledge object type filter is outside the browser contract.");
+  }
+}
+
+function canonicalKnowledgeLifecycleStateFilter(
+  value: KnowledgeLifecycleStateFilter,
+): KnowledgeObjectState[] {
+  switch (value) {
+    case "all":
+      return [];
+    case "draft":
+      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT];
+    case "active":
+      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE];
+    case "disabled":
+      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED];
+    case "quarantined":
+      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_QUARANTINED];
+    case "deleted":
+      return [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DELETED];
+    default:
+      throw new TypeError("Knowledge lifecycle state filter is outside the browser contract.");
+  }
+}
+
+function canonicalKnowledgeSort(value: KnowledgeSortChoice): {
+  sortBy: KnowledgeObjectSortBy;
+  sortDirection: SortDirection;
+} {
+  switch (value) {
+    case "name-ascending":
+      return {
+        sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_NAME,
+        sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
+      };
+    case "updated-descending":
+      return {
+        sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT,
+        sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
+      };
+    case "created-descending":
+      return {
+        sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_CREATED_AT,
+        sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
+      };
+    case "object-type-ascending":
+      return {
+        sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_OBJECT_TYPE,
+        sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
+      };
+    default:
+      throw new TypeError("Knowledge sort choice is outside the browser contract.");
+  }
 }
 
 export async function loadKnowledgePage(

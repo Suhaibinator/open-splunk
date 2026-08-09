@@ -3,14 +3,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS,
+  KNOWLEDGE_OBJECT_TYPE_FILTER_OPTIONS,
+  KNOWLEDGE_SORT_OPTIONS,
   boundedKnowledgePageSize,
   createKnowledgeReadClient,
+  knowledgeLifecycleStateFilterFromControlValue,
+  knowledgeObjectTypeFilterFromControlValue,
+  knowledgeSortChoiceFromControlValue,
   loadKnowledgeDetail,
   loadKnowledgePage,
   mergeKnowledgeContinuation,
+  type KnowledgeLifecycleStateFilter,
   type KnowledgeListItem,
   type KnowledgeObjectDisplay,
+  type KnowledgeObjectTypeFilter,
   type KnowledgePageDisplay,
+  type KnowledgeSortChoice,
 } from "./knowledge-manager-data";
 import {
   safeKnowledgeManagerAppOptions,
@@ -24,17 +33,58 @@ interface AbortControllerReference {
   current: AbortController | null;
 }
 
+interface ConsumedPageTokensReference {
+  current: Set<string>;
+}
+
+function abortKnowledgeManagerRequests(
+  listRequest: AbortControllerReference,
+  detailRequest: AbortControllerReference,
+): void {
+  listRequest.current?.abort();
+  detailRequest.current?.abort();
+  listRequest.current = null;
+  detailRequest.current = null;
+}
+
 /** Late-bound cleanup also owns continuation/detail requests started after mount. */
 export function knowledgeManagerUnmountCleanup(
   listRequest: AbortControllerReference,
   detailRequest: AbortControllerReference,
 ): () => void {
-  return () => {
-    listRequest.current?.abort();
-    detailRequest.current?.abort();
-    listRequest.current = null;
-    detailRequest.current = null;
-  };
+  return () => abortKnowledgeManagerRequests(listRequest, detailRequest);
+}
+
+/** Query identity changes discard every view derived from the prior cursor. */
+export function resetKnowledgeManagerQuery(
+  listRequest: AbortControllerReference,
+  detailRequest: AbortControllerReference,
+  consumedPageTokens: ConsumedPageTokensReference,
+  resetList: () => void,
+  resetDetail: () => void,
+): void {
+  abortKnowledgeManagerRequests(listRequest, detailRequest);
+  consumedPageTokens.current = new Set();
+  resetList();
+  resetDetail();
+}
+
+/** Invalid DOM values fail closed; repeated values do not discard a valid page. */
+export function commitKnowledgeManagerQueryChange<T>(
+  current: T,
+  next: T | undefined,
+  reset: () => void,
+  update: (value: T) => void,
+  failClosed: () => void,
+): void {
+  if (next === undefined) {
+    reset();
+    failClosed();
+    return;
+  }
+  if (Object.is(current, next)) return;
+  reset();
+  update(next);
 }
 
 export function KnowledgeManagerPanel({
@@ -53,6 +103,10 @@ export function KnowledgeManagerPanel({
     ? initialAppId
     : null;
   const [appId, setAppId] = useState<string | null>(initialFilter);
+  const [objectType, setObjectType] = useState<KnowledgeObjectTypeFilter>("all");
+  const [lifecycleState, setLifecycleState] =
+    useState<KnowledgeLifecycleStateFilter>("all");
+  const [sort, setSort] = useState<KnowledgeSortChoice>("name-ascending");
   const [listState, setListState] = useState<ListState>("loading");
   const [page, setPage] = useState<KnowledgePageDisplay | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -73,6 +127,31 @@ export function KnowledgeManagerPanel({
     [],
   );
 
+  const resetForQueryChange = useCallback(() => {
+    resetKnowledgeManagerQuery(
+      listRequestRef,
+      detailRequestRef,
+      consumedPageTokensRef,
+      () => {
+        setListState("loading");
+        setPage(null);
+        setLoadingMore(false);
+        setContinuationStale(false);
+      },
+      () => {
+        setSelectedObjectId(null);
+        setDetailState("closed");
+        setDetail(null);
+        rowRefs.current.clear();
+        focusDetailWhenReadyRef.current = false;
+      },
+    );
+  }, []);
+
+  const failClosedQueryControl = useCallback(() => {
+    setListState("unavailable");
+  }, []);
+
   const closeDetail = useCallback((restoreFocus: boolean) => {
     const priorId = selectedObjectId;
     detailRequestRef.current?.abort();
@@ -87,22 +166,15 @@ export function KnowledgeManagerPanel({
   }, [selectedObjectId]);
 
   useEffect(() => {
+    resetForQueryChange();
     const controller = new AbortController();
-    listRequestRef.current?.abort();
     listRequestRef.current = controller;
-    detailRequestRef.current?.abort();
-    detailRequestRef.current = null;
-    consumedPageTokensRef.current = new Set();
-    setListState("loading");
-    setPage(null);
-    setLoadingMore(false);
-    setContinuationStale(false);
-    setSelectedObjectId(null);
-    setDetailState("closed");
-    setDetail(null);
 
     void loadKnowledgePage(client, {
       appId,
+      objectType,
+      lifecycleState,
+      sort,
       pageSize,
       pageToken: null,
     }, { signal: controller.signal }).then((result) => {
@@ -116,7 +188,16 @@ export function KnowledgeManagerPanel({
       setListState("available");
     });
     return () => controller.abort();
-  }, [appId, client, pageSize, reloadGeneration]);
+  }, [
+    appId,
+    client,
+    lifecycleState,
+    objectType,
+    pageSize,
+    reloadGeneration,
+    resetForQueryChange,
+    sort,
+  ]);
 
   useEffect(() => {
     if (
@@ -175,6 +256,9 @@ export function KnowledgeManagerPanel({
     setLoadingMore(true);
     const result = await loadKnowledgePage(client, {
       appId,
+      objectType,
+      lifecycleState,
+      sort,
       pageSize,
       pageToken: requestedToken,
     }, { signal: controller.signal });
@@ -197,7 +281,60 @@ export function KnowledgeManagerPanel({
     }
     consumedPageTokensRef.current.add(requestedToken);
     setPage(merged.page);
-  }, [appId, client, continuationStale, loadingMore, page, pageSize]);
+  }, [
+    appId,
+    client,
+    continuationStale,
+    lifecycleState,
+    loadingMore,
+    objectType,
+    page,
+    pageSize,
+    sort,
+  ]);
+
+  const changeApp = useCallback((value: string) => {
+    const next = value === ""
+      ? null
+      : appOptions.some((app) => app.appId === value) ? value : undefined;
+    commitKnowledgeManagerQueryChange(
+      appId,
+      next,
+      resetForQueryChange,
+      (accepted) => setAppId(accepted),
+      failClosedQueryControl,
+    );
+  }, [appId, appOptions, failClosedQueryControl, resetForQueryChange]);
+
+  const changeObjectType = useCallback((value: string) => {
+    commitKnowledgeManagerQueryChange(
+      objectType,
+      knowledgeObjectTypeFilterFromControlValue(value),
+      resetForQueryChange,
+      (accepted) => setObjectType(accepted),
+      failClosedQueryControl,
+    );
+  }, [failClosedQueryControl, objectType, resetForQueryChange]);
+
+  const changeLifecycleState = useCallback((value: string) => {
+    commitKnowledgeManagerQueryChange(
+      lifecycleState,
+      knowledgeLifecycleStateFilterFromControlValue(value),
+      resetForQueryChange,
+      (accepted) => setLifecycleState(accepted),
+      failClosedQueryControl,
+    );
+  }, [failClosedQueryControl, lifecycleState, resetForQueryChange]);
+
+  const changeSort = useCallback((value: string) => {
+    commitKnowledgeManagerQueryChange(
+      sort,
+      knowledgeSortChoiceFromControlValue(value),
+      resetForQueryChange,
+      (accepted) => setSort(accepted),
+      failClosedQueryControl,
+    );
+  }, [failClosedQueryControl, resetForQueryChange, sort]);
 
   const availableObjects = page?.objects.filter(
     (object): object is KnowledgeObjectDisplay => object.disclosure === "available",
@@ -229,20 +366,61 @@ export function KnowledgeManagerPanel({
       </header>
 
       <div className="knowledge-manager__toolbar">
-        <label htmlFor="knowledge-app-filter">
-          <span>App scope</span>
-          <select
-            id="knowledge-app-filter"
-            value={appId ?? ""}
-            onChange={(event) => setAppId(event.target.value || null)}
-            disabled={listState === "loading"}
-          >
-            <option value="">All readable apps</option>
-            {appOptions.map((app) => (
-              <option value={app.appId} key={app.appId}>{app.label}</option>
-            ))}
-          </select>
-        </label>
+        <div className="knowledge-manager__filters">
+          <label htmlFor="knowledge-app-filter">
+            <span>App scope</span>
+            <select
+              id="knowledge-app-filter"
+              value={appId ?? ""}
+              onChange={(event) => changeApp(event.currentTarget.value)}
+              disabled={listState === "loading"}
+            >
+              <option value="">All readable apps</option>
+              {appOptions.map((app) => (
+                <option value={app.appId} key={app.appId}>{app.label}</option>
+              ))}
+            </select>
+          </label>
+          <label htmlFor="knowledge-object-type-filter">
+            <span>Object type</span>
+            <select
+              id="knowledge-object-type-filter"
+              value={objectType}
+              onChange={(event) => changeObjectType(event.currentTarget.value)}
+              disabled={listState === "loading"}
+            >
+              {KNOWLEDGE_OBJECT_TYPE_FILTER_OPTIONS.map((option) => (
+                <option value={option.value} key={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label htmlFor="knowledge-lifecycle-state-filter">
+            <span>Lifecycle state</span>
+            <select
+              id="knowledge-lifecycle-state-filter"
+              value={lifecycleState}
+              onChange={(event) => changeLifecycleState(event.currentTarget.value)}
+              disabled={listState === "loading"}
+            >
+              {KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS.map((option) => (
+                <option value={option.value} key={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label htmlFor="knowledge-sort-choice">
+            <span>Sort by</span>
+            <select
+              id="knowledge-sort-choice"
+              value={sort}
+              onChange={(event) => changeSort(event.currentTarget.value)}
+              disabled={listState === "loading"}
+            >
+              {KNOWLEDGE_SORT_OPTIONS.map((option) => (
+                <option value={option.value} key={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
         {page === null ? null : (
           <p aria-live="polite">
             <strong>{page.totalSize.toLocaleString()}</strong> visible object{page.totalSize === 1n ? "" : "s"}
@@ -268,92 +446,143 @@ export function KnowledgeManagerPanel({
       ) : null}
 
       {listState === "available" && page !== null ? (
-        <div className={`knowledge-manager__workspace${selectedObjectId === null ? "" : " knowledge-manager__workspace--detail"}`}>
-          <div className="knowledge-manager__list-panel" aria-busy={loadingMore}>
-            <div className="knowledge-manager__list-heading" aria-hidden="true">
-              <span>Object</span><span>Type</span><span>State</span><span>Scope</span>
-            </div>
-            {page.objects.length === 0 ? (
-              <div className="knowledge-manager__empty" aria-live="polite">
-                <span aria-hidden="true">◇</span>
-                <h3>No knowledge objects</h3>
-                <p>No objects are visible in this app scope.</p>
-              </div>
-            ) : (
-              <ol className="knowledge-manager__list" aria-label="Knowledge objects">
-                {page.objects.map((object) => (
-                  <KnowledgeListRow
-                    object={object}
-                    selected={object.disclosure === "available" && object.knowledgeObjectId === selectedObjectId}
-                    onOpen={openDetail}
-                    onKeyDown={handleRowKeyDown}
-                    registerRow={(objectId, element) => {
-                      if (element === null) rowRefs.current.delete(objectId);
-                      else rowRefs.current.set(objectId, element);
-                    }}
-                    key={object.key}
-                  />
-                ))}
-              </ol>
-            )}
-
-            {continuationStale ? (
-              <div className="knowledge-manager__stale" role="alert">
-                <div>
-                  <strong>Catalog page changed</strong>
-                  <p>The continuation is no longer safe to combine with this snapshot.</p>
-                </div>
-                <button type="button" onClick={() => setReloadGeneration((value) => value + 1)}>
-                  Reload first page
-                </button>
-              </div>
-            ) : page.nextPageToken === null ? null : (
-              <div className="knowledge-manager__pagination">
-                <p>{page.objects.length.toLocaleString()} of {page.totalSize.toLocaleString()} loaded</p>
-                <button type="button" onClick={() => void loadMore()} disabled={loadingMore}>
-                  {loadingMore ? "Loading next page…" : "Load next page"}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {selectedObjectId === null ? null : (
-            <section
-              className="knowledge-manager__detail"
-              id="knowledge-object-detail"
-              ref={detailRef}
-              aria-labelledby={detailState === "available" ? "knowledge-object-detail-title" : undefined}
-              aria-label={detailState === "available" ? undefined : "Knowledge object details"}
-              tabIndex={-1}
-            >
-              <button
-                className="knowledge-manager__detail-close"
-                type="button"
-                aria-label="Close knowledge object details"
-                onClick={() => closeDetail(true)}
-              >×</button>
-              {detailState === "loading" ? (
-                <KnowledgeStatus
-                  kind="loading"
-                  title="Loading object details"
-                  message="Reading the authorized object projection…"
-                />
-              ) : null}
-              {detailState === "unavailable" ? (
-                <KnowledgeStatus
-                  kind="unavailable"
-                  title="Knowledge object unavailable"
-                  message="This object cannot be inspected. Missing, forbidden, corrupt, and unavailable outcomes reveal no additional detail."
-                />
-              ) : null}
-              {detailState === "available" && detail !== null ? (
-                <KnowledgeDetail object={detail} />
-              ) : null}
-            </section>
-          )}
-        </div>
+        <KnowledgeManagerWorkspace
+          page={page}
+          selectedObjectId={selectedObjectId}
+          loadingMore={loadingMore}
+          continuationStale={continuationStale}
+          detailState={detailState}
+          detail={detail}
+          detailRef={detailRef}
+          onOpen={openDetail}
+          onRowKeyDown={handleRowKeyDown}
+          registerRow={(objectId, element) => {
+            if (element === null) rowRefs.current.delete(objectId);
+            else rowRefs.current.set(objectId, element);
+          }}
+          onReloadFirstPage={() => setReloadGeneration((value) => value + 1)}
+          onLoadMore={() => void loadMore()}
+          onCloseDetail={() => closeDetail(true)}
+        />
       ) : null}
     </section>
+  );
+}
+
+interface KnowledgeManagerWorkspaceProps {
+  page: KnowledgePageDisplay;
+  selectedObjectId: string | null;
+  loadingMore: boolean;
+  continuationStale: boolean;
+  detailState: DetailState;
+  detail: KnowledgeObjectDisplay | null;
+  detailRef?: React.Ref<HTMLElement>;
+  onOpen: (object: KnowledgeObjectDisplay) => void;
+  onRowKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, objectId: string) => void;
+  registerRow: (objectId: string, element: HTMLButtonElement | null) => void;
+  onReloadFirstPage: () => void;
+  onLoadMore: () => void;
+  onCloseDetail: () => void;
+}
+
+/** Pure read-only presentation kept separate so every rendered state is directly testable. */
+export function KnowledgeManagerWorkspace({
+  page,
+  selectedObjectId,
+  loadingMore,
+  continuationStale,
+  detailState,
+  detail,
+  detailRef,
+  onOpen,
+  onRowKeyDown,
+  registerRow,
+  onReloadFirstPage,
+  onLoadMore,
+  onCloseDetail,
+}: KnowledgeManagerWorkspaceProps) {
+  return (
+    <div className={`knowledge-manager__workspace${selectedObjectId === null ? "" : " knowledge-manager__workspace--detail"}`}>
+      <div className="knowledge-manager__list-panel" aria-busy={loadingMore}>
+        <div className="knowledge-manager__list-heading" aria-hidden="true">
+          <span>Object</span><span>Type</span><span>State</span><span>Scope</span>
+        </div>
+        {page.objects.length === 0 ? (
+          <div className="knowledge-manager__empty" aria-live="polite">
+            <span aria-hidden="true">◇</span>
+            <h3>No knowledge objects</h3>
+            <p>No objects match the selected filters.</p>
+          </div>
+        ) : (
+          <ol className="knowledge-manager__list" aria-label="Knowledge objects">
+            {page.objects.map((object) => (
+              <KnowledgeListRow
+                object={object}
+                selected={object.disclosure === "available" && object.knowledgeObjectId === selectedObjectId}
+                onOpen={onOpen}
+                onKeyDown={onRowKeyDown}
+                registerRow={registerRow}
+                key={object.key}
+              />
+            ))}
+          </ol>
+        )}
+
+        {continuationStale ? (
+          <div className="knowledge-manager__stale" role="alert">
+            <div>
+              <strong>Catalog page changed</strong>
+              <p>The continuation is no longer safe to combine with this snapshot.</p>
+            </div>
+            <button type="button" onClick={onReloadFirstPage}>
+              Reload first page
+            </button>
+          </div>
+        ) : page.nextPageToken === null ? null : (
+          <div className="knowledge-manager__pagination">
+            <p>{page.objects.length.toLocaleString()} of {page.totalSize.toLocaleString()} loaded</p>
+            <button type="button" onClick={onLoadMore} disabled={loadingMore}>
+              {loadingMore ? "Loading next page…" : "Load next page"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {selectedObjectId === null ? null : (
+        <section
+          className="knowledge-manager__detail"
+          id="knowledge-object-detail"
+          ref={detailRef}
+          aria-labelledby={detailState === "available" ? "knowledge-object-detail-title" : undefined}
+          aria-label={detailState === "available" ? undefined : "Knowledge object details"}
+          tabIndex={-1}
+        >
+          <button
+            className="knowledge-manager__detail-close"
+            type="button"
+            aria-label="Close knowledge object details"
+            onClick={onCloseDetail}
+          >×</button>
+          {detailState === "loading" ? (
+            <KnowledgeStatus
+              kind="loading"
+              title="Loading object details"
+              message="Reading the authorized object projection…"
+            />
+          ) : null}
+          {detailState === "unavailable" ? (
+            <KnowledgeStatus
+              kind="unavailable"
+              title="Knowledge object unavailable"
+              message="This object cannot be inspected. Missing, forbidden, corrupt, and unavailable outcomes reveal no additional detail."
+            />
+          ) : null}
+          {detailState === "available" && detail !== null ? (
+            <KnowledgeDetail object={detail} />
+          ) : null}
+        </section>
+      )}
+    </div>
   );
 }
 
