@@ -390,21 +390,15 @@ func validateCompiledKnowledgePrelude(
 			"compile ClickHouse knowledge prelude: physical lowering proof disagrees",
 		)
 	}
-	if slices.Contains(compiled.state.privateColumns, compiled.selectorCharges.inputBytes) ||
-		slices.Contains(compiled.state.privateColumns, compiled.selectorCharges.queryUnits) ||
-		(compiled.capturedBytes != "" &&
-			slices.Contains(compiled.state.privateColumns, compiled.capturedBytes)) {
+	if knowledgeRuntimeGuardStateLeaksAccounting(
+		compiled.state,
+		compiled.selectorCharges.inputBytes,
+		compiled.selectorCharges.queryUnits,
+		compiled.capturedBytes,
+	) {
 		return errors.New(
-			"compile ClickHouse knowledge prelude: selector charges entered generic private state",
+			"compile ClickHouse knowledge prelude: runtime accounting entered generic state",
 		)
-	}
-	for _, field := range compiled.state.visible {
-		if field.valueSQL == compiled.selectorCharges.inputBytes ||
-			field.valueSQL == compiled.selectorCharges.queryUnits {
-			return errors.New(
-				"compile ClickHouse knowledge prelude: selector charges became public",
-			)
-		}
 	}
 	nextOffset := 0
 	for _, stage := range compiled.stages {

@@ -231,6 +231,24 @@ func TestCompileKnowledgeRuntimeGuard(t *testing.T) {
 			{"charge in order", func(p *compiledKnowledgePrelude, _ *preparedKnowledgeCompilation, _ *compiledRelation) {
 				p.state.order = append(p.state.order, compiledSortKey{valueSQL: p.selectorCharges.inputBytes})
 			}},
+			{"charge in container sidecar", func(p *compiledKnowledgePrelude, _ *preparedKnowledgeCompilation, _ *compiledRelation) {
+				p.state.visible["leak"] = fieldState{
+					valueSQL:                quoteIdentifier("leak"),
+					kind:                    fieldKindDynamic,
+					relativeFieldNamesSQL:   p.selectorCharges.inputBytes,
+					relativeFieldTypesSQL:   quoteIdentifier("leak_types"),
+					fieldMetadataVersionSQL: quoteIdentifier("leak_version"),
+				}
+			}},
+			{"capture in container metadata", func(p *compiledKnowledgePrelude, _ *preparedKnowledgeCompilation, _ *compiledRelation) {
+				p.state.visible["leak"] = fieldState{
+					valueSQL:                quoteIdentifier("leak"),
+					kind:                    fieldKindDynamic,
+					relativeFieldNamesSQL:   quoteIdentifier("leak_names"),
+					relativeFieldTypesSQL:   quoteIdentifier("leak_types"),
+					fieldMetadataVersionSQL: p.capturedBytes,
+				}
+			}},
 			{"charge definition removed", func(p *compiledKnowledgePrelude, _ *preparedKnowledgeCompilation, _ *compiledRelation) {
 				last := len(p.stages) - 1
 				p.stages[last].projection = slices.DeleteFunc(p.stages[last].projection, func(value string) bool {

@@ -288,7 +288,10 @@ func knowledgeRuntimeGuardStateLeaksAccounting(
 			references(field.dynamicNumericEligibleSQL) ||
 			references(field.textEligibleSQL) || references(field.dynamicTypeSQL) ||
 			references(field.storedTypeSQL) || references(field.existsSQL) ||
-			references(field.descendantSQL) {
+			references(field.descendantSQL) ||
+			references(field.relativeFieldNamesSQL) ||
+			references(field.relativeFieldTypesSQL) ||
+			references(field.fieldMetadataVersionSQL) {
 			return true
 		}
 	}
