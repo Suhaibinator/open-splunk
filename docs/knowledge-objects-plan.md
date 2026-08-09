@@ -1193,18 +1193,23 @@ one-read-transaction active resolver, and opaque immutable snapshot preparation
 are complete.
 Their registrations remain intentionally absent from the production router and
 exact API inventory, so their paths still return 404 and the capability is not
-advertised. The Writer currently
-publishes draft creates, draft/disabled definition updates (opaque future
-bodies: metadata-only), draft/active disable transitions, and
-draft/active/disabled delete tombstones with exact idempotency replay,
+advertised. The concrete Writer now publishes DRAFT or recognized ACTIVE
+creates, DRAFT/DISABLED and recognized ACTIVE definition updates,
+DRAFT/DISABLED-to-ACTIVE enables, DRAFT/ACTIVE disables, and
+DRAFT/ACTIVE/DISABLED delete tombstones with exact idempotency replay,
 revision/state-token rotation, successful audit, immutable commit authority,
-bounded health/reclamation, and crash recovery. `Create` with ACTIVE, `Update`
-of an ACTIVE object, and `SetState` to ACTIVE deliberately return
-`ErrActivePublicationUnavailable` until KO-1 supplies the publication compiler
-and dependency derivation; an exact retained ACTIVE receipt from a newer binary
-remains replayable through the concrete Writer only when its outcome is still
-recognized and canonical, without becoming a false rejected attempt after
-downgrade. The resolver now authorizes and validates every visible ACTIVE
+bounded health/reclamation, and crash recovery. Every recognized ACTIVE
+create, update, or enable proves an exact current-index winning witness,
+selector-independent namespace uniqueness, migration-aligned active capacity,
+complete transactional catalog/app/index authority, and compiler-derived
+dependency closure before its first publication hook or durable write. ACTIVE
+updates reject inbound pins that cannot be atomically repinned and reject any
+new outgoing-edge drift in another immutable winner. Opaque future bodies keep
+their metadata-only DRAFT/DISABLED update and state-only emergency removal
+paths, but cannot be created, updated, or enabled as ACTIVE by this binary. An
+exact retained ACTIVE receipt remains replayable before all new admission work,
+including after later app/catalog facts change. The resolver now authorizes and
+validates every visible ACTIVE
 candidate inside one SQLite read transaction, prunes against trusted effective
 indexes, applies private/app/global precedence, proves exact winning dependency
 closure, and returns a detached opaque authority. Snapshot preparation derives
@@ -1334,14 +1339,17 @@ but revalidate every unshadowed winner. Post-tenant and per-class hydration,
 matcher, cohort, revisit, dependency, and repeated semantic-compiler work are
 independently bounded before persistence, including both selector-normalization
 passes for every changed-cohort compilation. The resulting opaque authority
-matches a future write plan on tenant, full body-free before/after scalar
+matches a write plan on tenant, full body-free before/after scalar
 endpoints, retained ordered dependency rows, and the exact derived-or-retained
 database projection. It intentionally rejects opaque future bodies; the
 existing projection-only emergency removal path remains separate until it has
-its own transactional proof. Route activation remains closed.
+its own transactional proof. The concrete Writer now consumes this authority
+for recognized ACTIVE create, update, enable, disable, and delete mutations;
+production HTTP route registration remains separate and closed.
 
-The transaction and persistence boundary is now implemented without changing
-the public ACTIVE gates. It accepts only the Writer's existing fixed `*sql.Tx`,
+The transaction and persistence boundary is now implemented and wired into the
+concrete Writer without registering the management HTTP routes. It accepts only
+the Writer's existing fixed `*sql.Tx`,
 proves exact knowledge revision/token and ACTIVE rows, tenant app revision and
 bounded app inventory, and global index revision/physical rows before hydrating
 definitions, selectors, or dependencies. Its object, app, and index drivers are
@@ -1360,8 +1368,9 @@ hydrated current object and retained graph immediately before publication.
 Replay and active-dependent rejection still precede inventory work. The sole
 zero-proof exception reopens the live stored definition and proves a genuinely
 opaque future body plus exact scalar, selector, digest, and dependency identity
-before any write or persistence hook. Create, active-update, and enable remain
-closed.
+before any write or persistence hook. Recognized ACTIVE create, ACTIVE update,
+and enable now mint and consume the nonzero proof; opaque ACTIVE update/enable
+and all production management HTTP routes remain closed.
 
 Immutable index-name creation now has its own atomic global admission boundary.
 Migration 0034 supplies sparse covering drivers for every nonempty ACTIVE
@@ -1381,9 +1390,10 @@ Focused normal/race tests cover safe and conflicting foreign knowledge tenants,
 exact transaction use, clipped and bounded query plans, aggregate failure before
 hydration, malformed catalog/app/projection/dependency authority, cancellation,
 fact drift, atomic rollback, and audit ordering. This closes the future-index
-lifecycle prerequisite without opening ACTIVE create, update, or enable.
+lifecycle prerequisite and is now consumed by recognized ACTIVE Writer
+publication without advertising or registering the management API.
 
-Migration 0033 prepares that atomic publication boundary without opening it.
+Migration 0033 prepares that atomic publication boundary.
 An enable may append a newly derived dependency set instead of copying its
 draft or disabled predecessor, while disable and delete still require exact
 state-only graph identity. A current ACTIVE target cannot advance to a new
@@ -1392,9 +1402,10 @@ target version; a future bounded batch publication may append exact state-only
 disabled versions for those dependents, advance the target, and then enable
 them with newly derived edges inside one immediate transaction. The migration
 rejects a catalog that already violates this invariant before replacing any
-trigger. Create,
-active-update, and enable publication gates remain closed until the complete
-transactional inventory and persistence authority described above is wired.
+trigger. Recognized ACTIVE create, one-object ACTIVE update, and enable now use
+the complete transactional inventory and persistence authority described
+above; updates with current inbound pins remain fail-closed until a bounded
+batch repin transaction exists.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and
