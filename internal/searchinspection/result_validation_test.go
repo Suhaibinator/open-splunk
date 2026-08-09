@@ -1,15 +1,21 @@
 package searchinspection
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestValidateResultAcceptsServiceOutput(t *testing.T) {
@@ -60,7 +66,7 @@ func TestValidateResultAcceptsCanonicalResultAndExactBounds(t *testing.T) {
 			name: "maximum stages",
 			mutate: func(result *Result) {
 				result.Plan.Stages = validResultStages(
-					int(maximumPlanStages),
+					int(maximumAuthoredPlanStages),
 				)
 			},
 		},
@@ -125,10 +131,10 @@ func TestValidateResultRejectsMalformedLogicalProjection(t *testing.T) {
 			},
 		},
 		{
-			name: "too many stages",
+			name: "too many authored stages",
 			mutate: func(result *Result) {
 				result.Plan.Stages = validResultStages(
-					int(maximumPlanStages) + 1,
+					int(maximumAuthoredPlanStages) + 1,
 				)
 			},
 		},
@@ -283,7 +289,7 @@ func TestValidateResultRejectsMalformedLogicalProjection(t *testing.T) {
 			name: "source byte range is backward",
 			mutate: func(result *Result) {
 				result.Plan.Stages[0].SourceRange =
-					SourceRange{
+					&SourceRange{
 						Start: SourcePosition{
 							ByteOffset: 2, Line: 1, Column: 3,
 						},
@@ -297,7 +303,7 @@ func TestValidateResultRejectsMalformedLogicalProjection(t *testing.T) {
 			name: "source coordinate is backward",
 			mutate: func(result *Result) {
 				result.Plan.Stages[0].SourceRange =
-					SourceRange{
+					&SourceRange{
 						Start: SourcePosition{
 							ByteOffset: 1, Line: 2, Column: 1,
 						},
@@ -311,7 +317,7 @@ func TestValidateResultRejectsMalformedLogicalProjection(t *testing.T) {
 			name: "same source byte has two coordinates",
 			mutate: func(result *Result) {
 				result.Plan.Stages[0].SourceRange =
-					SourceRange{
+					&SourceRange{
 						Start: SourcePosition{
 							ByteOffset: 1, Line: 1, Column: 2,
 						},
@@ -441,6 +447,511 @@ func TestValidateResultRejectsMalformedLogicalProjection(t *testing.T) {
 			assertInvalidInspectionResult(t, result, private)
 		})
 	}
+}
+
+func TestValidateResultAcceptsGeneratedKnowledgeProvenance(t *testing.T) {
+	t.Run("legacy has authored ranges and no summary", func(t *testing.T) {
+		result := validResultForValidation(t)
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("ValidateResult(legacy) error = %v", err)
+		}
+	})
+
+	t.Run("enabled empty has authored ranges and an empty summary", func(t *testing.T) {
+		result := validResultForValidation(t)
+		result.KnowledgeSnapshot = resultValidationKnowledgeSummary(nil)
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("ValidateResult(enabled empty) error = %v", err)
+		}
+	})
+
+	operatorPairs := []struct {
+		operator   string
+		objectType opensplunkv1.KnowledgeObjectType
+		stage      opensplunkv1.KnowledgeSearchStage
+	}{
+		{
+			operator:   "ConditionalExtract",
+			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+		},
+		{
+			operator:   "ConditionalExtractJSON",
+			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+		},
+		{
+			operator:   "CopyFieldAlias",
+			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+		},
+		{
+			operator:   "ParallelExtend",
+			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+		},
+	}
+	for _, pair := range operatorPairs {
+		t.Run(pair.operator+" exact type and stage", func(t *testing.T) {
+			object := RedactedObjectProvenance{
+				ObjectType: pair.objectType,
+				Stage:      pair.stage,
+			}
+			result := resultValidationKnowledgeResult(
+				t,
+				resultValidationGeneratedStage(
+					pair.operator,
+					[]RedactedObjectProvenance{object},
+					[]OutputProvenance{{Field: "generated", ObjectOrdinal: object.Ordinal}},
+				),
+			)
+			if err := ValidateResult(result); err != nil {
+				t.Fatalf("ValidateResult(%s) error = %v", pair.operator, err)
+			}
+		})
+	}
+
+	t.Run("complete ordered generated prefix", func(t *testing.T) {
+		result := resultValidationFourOperatorResult(t)
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("ValidateResult(four operators) error = %v", err)
+		}
+	})
+
+	t.Run("same field has distinct selector disjoint origins", func(t *testing.T) {
+		objects := []RedactedObjectProvenance{
+			{
+				Ordinal:    0,
+				ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+				Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			},
+			{
+				Ordinal:    1,
+				ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+				Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			},
+		}
+		result := resultValidationKnowledgeResult(
+			t,
+			resultValidationGeneratedStage(
+				"CopyFieldAlias",
+				objects,
+				[]OutputProvenance{
+					{Field: "shared", ObjectOrdinal: objects[0].Ordinal},
+					{Field: "shared", ObjectOrdinal: objects[1].Ordinal},
+				},
+			),
+		)
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("ValidateResult(shared destination) error = %v", err)
+		}
+	})
+}
+
+func TestValidateResultRejectsGeneratedRangeAndPrefixForgery(t *testing.T) {
+	private := "private-result-value-7f2c"
+	tests := []struct {
+		name   string
+		mutate func(*Result)
+	}{
+		{
+			name: "authored stage has nil range",
+			mutate: func(result *Result) {
+				result.Plan.Stages[0].SourceRange = nil
+			},
+		},
+		{
+			name: "generated stage has authored range",
+			mutate: func(result *Result) {
+				sourceRange := *result.Plan.Stages[0].SourceRange
+				result.Plan.Stages[1].SourceRange = &sourceRange
+			},
+		},
+		{
+			name: "generated stage replaces scan",
+			mutate: func(result *Result) {
+				result.Plan.Stages[0], result.Plan.Stages[1] =
+					result.Plan.Stages[1], result.Plan.Stages[0]
+				resultValidationResetStageIndexes(result.Plan.Stages)
+			},
+		},
+		{
+			name: "generated stage follows authored suffix",
+			mutate: func(result *Result) {
+				generated := result.Plan.Stages[1]
+				copy(result.Plan.Stages[1:], result.Plan.Stages[2:])
+				result.Plan.Stages[len(result.Plan.Stages)-1] = generated
+				resultValidationResetStageIndexes(result.Plan.Stages)
+			},
+		},
+		{
+			name: "authored stage carries knowledge provenance",
+			mutate: func(result *Result) {
+				result.Plan.Stages[0].KnowledgeObjects = slices.Clone(
+					result.Plan.Stages[1].KnowledgeObjects,
+				)
+				result.Plan.Stages[0].OutputProvenance = slices.Clone(
+					result.Plan.Stages[1].OutputProvenance,
+				)
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := resultValidationTwoOriginAliasResult(t)
+			test.mutate(&result)
+			assertInvalidInspectionResult(t, result, private)
+		})
+	}
+
+	for _, operators := range [][]string{
+		{"CopyFieldAlias", "CopyFieldAlias"},
+		{"ParallelExtend", "ParallelExtend"},
+		{"ParallelExtend", "CopyFieldAlias"},
+		{"CopyFieldAlias", "ConditionalExtract"},
+	} {
+		name := strings.Join(operators, " then ")
+		t.Run(name, func(t *testing.T) {
+			stages := make([]PlanStage, len(operators))
+			for index, operator := range operators {
+				contract, ok := inspectionKnowledgeOperator(operator)
+				if !ok {
+					t.Fatalf("missing knowledge operator contract for %q", operator)
+				}
+				object := RedactedObjectProvenance{
+					Ordinal:    uint32(index),
+					ObjectType: contract.objectType,
+					Stage:      contract.stage,
+				}
+				stages[index] = resultValidationGeneratedStage(
+					operator,
+					[]RedactedObjectProvenance{object},
+					[]OutputProvenance{{
+						Field:         fmt.Sprintf("generated_%d", index),
+						ObjectOrdinal: object.Ordinal,
+					}},
+				)
+			}
+			assertInvalidInspectionResult(
+				t,
+				resultValidationKnowledgeResult(t, stages...),
+				private,
+			)
+		})
+	}
+}
+
+func TestValidateResultRejectsGeneratedProvenanceForgery(t *testing.T) {
+	private := "private-result-value-7f2c"
+	tests := []struct {
+		name   string
+		mutate func(*PlanStage)
+	}{
+		{
+			name: "missing object",
+			mutate: func(stage *PlanStage) {
+				stage.KnowledgeObjects = stage.KnowledgeObjects[:1]
+			},
+		},
+		{
+			name: "extra unused object",
+			mutate: func(stage *PlanStage) {
+				stage.KnowledgeObjects = append(
+					stage.KnowledgeObjects,
+					RedactedObjectProvenance{
+						Ordinal:    2,
+						ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+						Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+					},
+				)
+			},
+		},
+		{
+			name: "duplicate object",
+			mutate: func(stage *PlanStage) {
+				stage.KnowledgeObjects = append(
+					stage.KnowledgeObjects,
+					stage.KnowledgeObjects[1],
+				)
+			},
+		},
+		{
+			name: "reordered objects",
+			mutate: func(stage *PlanStage) {
+				stage.KnowledgeObjects[0], stage.KnowledgeObjects[1] =
+					stage.KnowledgeObjects[1], stage.KnowledgeObjects[0]
+			},
+		},
+		{
+			name: "missing output provenance",
+			mutate: func(stage *PlanStage) {
+				stage.OutputProvenance = stage.OutputProvenance[:1]
+			},
+		},
+		{
+			name: "extra output provenance",
+			mutate: func(stage *PlanStage) {
+				stage.OutputProvenance = append(
+					stage.OutputProvenance,
+					OutputProvenance{
+						Field:         "field_c",
+						ObjectOrdinal: stage.KnowledgeObjects[0].Ordinal,
+					},
+				)
+			},
+		},
+		{
+			name: "duplicate output provenance",
+			mutate: func(stage *PlanStage) {
+				stage.OutputProvenance = append(
+					stage.OutputProvenance,
+					stage.OutputProvenance[1],
+				)
+			},
+		},
+		{
+			name: "reordered output provenance",
+			mutate: func(stage *PlanStage) {
+				stage.OutputProvenance[0], stage.OutputProvenance[1] =
+					stage.OutputProvenance[1], stage.OutputProvenance[0]
+			},
+		},
+		{
+			name: "output object ordinal is absent from inventory",
+			mutate: func(stage *PlanStage) {
+				stage.OutputProvenance[0].ObjectOrdinal = 99
+			},
+		},
+		{
+			name: "operator type mismatches provenance",
+			mutate: func(stage *PlanStage) {
+				stage.Operator = "ParallelExtend"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := resultValidationTwoOriginAliasResult(t)
+			test.mutate(&result.Plan.Stages[1])
+			assertInvalidInspectionResult(t, result, private)
+		})
+	}
+
+	t.Run("global provenance ordinals are reordered", func(t *testing.T) {
+		result := resultValidationFourOperatorResult(t)
+		first := &result.Plan.Stages[1]
+		second := &result.Plan.Stages[2]
+		first.KnowledgeObjects[0].Ordinal = 1
+		first.OutputProvenance[0].ObjectOrdinal = 1
+		second.KnowledgeObjects[0].Ordinal = 0
+		second.OutputProvenance[0].ObjectOrdinal = 0
+		assertInvalidInspectionResult(t, result, private)
+	})
+}
+
+func TestValidateResultBindsKnowledgeSummaryToLogicalProvenance(t *testing.T) {
+	private := "private-result-value-7f2c"
+
+	t.Run("nonempty exact binding", func(t *testing.T) {
+		result := resultValidationTwoOriginAliasResult(t)
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("ValidateResult(nonempty) error = %v", err)
+		}
+	})
+
+	tests := []struct {
+		name   string
+		result func(*testing.T) Result
+		mutate func(*Result)
+	}{
+		{
+			name:   "nonempty plan has missing summary",
+			result: resultValidationTwoOriginAliasResult,
+			mutate: func(result *Result) {
+				result.KnowledgeSnapshot = nil
+			},
+		},
+		{
+			name:   "legacy plan has nonempty summary",
+			result: validResultForValidation,
+			mutate: func(result *Result) {
+				objects := resultValidationAliasObjects(2)
+				result.KnowledgeSnapshot = resultValidationKnowledgeSummary(objects)
+			},
+		},
+		{
+			name:   "nonempty plan has enabled empty summary",
+			result: resultValidationTwoOriginAliasResult,
+			mutate: func(result *Result) {
+				result.KnowledgeSnapshot = resultValidationKnowledgeSummary(nil)
+			},
+		},
+		{
+			name: "summary has extra object",
+			result: func(t *testing.T) Result {
+				object := resultValidationAliasObjects(1)
+				return resultValidationKnowledgeResult(
+					t,
+					resultValidationGeneratedStage(
+						"CopyFieldAlias",
+						object,
+						[]OutputProvenance{{Field: "field_a", ObjectOrdinal: object[0].Ordinal}},
+					),
+				)
+			},
+			mutate: func(result *Result) {
+				result.KnowledgeSnapshot = resultValidationKnowledgeSummary(
+					resultValidationAliasObjects(2),
+				)
+			},
+		},
+		{
+			name:   "summary type and stage mismatch",
+			result: resultValidationTwoOriginAliasResult,
+			mutate: func(result *Result) {
+				object := result.KnowledgeSnapshot.Objects[0]
+				object.ObjectType = opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD
+				object.Stage = opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := test.result(t)
+			test.mutate(&result)
+			assertInvalidInspectionResult(t, result, private)
+		})
+	}
+}
+
+func TestValidateResultGeneratedProvenanceExactBounds(t *testing.T) {
+	t.Run("combined stage N and N plus one", func(t *testing.T) {
+		generated := make([]PlanStage, maximumProjectedKnowledgeObjects)
+		for index := range generated {
+			object := RedactedObjectProvenance{
+				Ordinal:    uint32(index),
+				ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+				Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			}
+			generated[index] = resultValidationGeneratedStage(
+				"ConditionalExtract",
+				[]RedactedObjectProvenance{object},
+				[]OutputProvenance{{
+					Field:         fmt.Sprintf("generated_%03d", index),
+					ObjectOrdinal: object.Ordinal,
+				}},
+			)
+		}
+		result := resultValidationKnowledgeResult(t, generated...)
+		authoredRange := *result.Plan.Stages[len(result.Plan.Stages)-1].SourceRange
+		for len(result.Plan.Stages) < int(maximumPlanStages) {
+			result.Plan.Stages = append(result.Plan.Stages, PlanStage{
+				Operator:    "Limit",
+				SourceRange: &authoredRange,
+			})
+		}
+		resultValidationResetStageIndexes(result.Plan.Stages)
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("ValidateResult(exact combined stage ceiling) error = %v", err)
+		}
+
+		over := cloneResultValidationFixture(result)
+		over.Plan.Stages = append(over.Plan.Stages, PlanStage{
+			Index:       uint32(len(over.Plan.Stages)),
+			Operator:    "Limit",
+			SourceRange: &authoredRange,
+		})
+		assertInvalidInspectionResult(t, over, "private-result-value-7f2c")
+	})
+
+	t.Run("object N and N plus one", func(t *testing.T) {
+		objects := resultValidationAliasObjects(
+			int(maximumProjectedKnowledgeObjects),
+		)
+		outputs := make([]OutputProvenance, len(objects))
+		for index, object := range objects {
+			outputs[index] = OutputProvenance{
+				Field:         fmt.Sprintf("object_%03d", index),
+				ObjectOrdinal: object.Ordinal,
+			}
+		}
+		result := resultValidationKnowledgeResult(
+			t,
+			resultValidationGeneratedStage(
+				"CopyFieldAlias",
+				objects,
+				outputs,
+			),
+		)
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("ValidateResult(exact object ceiling) error = %v", err)
+		}
+
+		overObjects := slices.Clone(objects)
+		overObjects = append(overObjects, RedactedObjectProvenance{
+			Ordinal:    maximumProjectedKnowledgeObjects,
+			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+		})
+		overObjectOutputs := make([]OutputProvenance, len(overObjects))
+		for index, object := range overObjects {
+			overObjectOutputs[index] = OutputProvenance{
+				Field:         fmt.Sprintf("object_%03d", index),
+				ObjectOrdinal: object.Ordinal,
+			}
+		}
+		overObjectPlan := resultValidationKnowledgeResult(
+			t,
+			resultValidationGeneratedStage(
+				"CopyFieldAlias",
+				overObjects,
+				overObjectOutputs,
+			),
+		).Plan
+		if got, ok := validInspectionLogicalPlan(overObjectPlan); ok || got != nil {
+			t.Fatalf(
+				"validInspectionLogicalPlan accepted %d knowledge objects",
+				len(overObjects),
+			)
+		}
+	})
+
+	t.Run("output N and N plus one", func(t *testing.T) {
+		stages := make([]PlanStage, maximumProjectedKnowledgeObjects)
+		for index := range stages {
+			object := RedactedObjectProvenance{
+				Ordinal:    uint32(index),
+				ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+				Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			}
+			stages[index] = resultValidationGeneratedStage(
+				"ConditionalExtract",
+				[]RedactedObjectProvenance{object},
+				[]OutputProvenance{
+					{Field: fmt.Sprintf("field_%03d_a", index), ObjectOrdinal: object.Ordinal},
+					{Field: fmt.Sprintf("field_%03d_b", index), ObjectOrdinal: object.Ordinal},
+				},
+			)
+		}
+		result := resultValidationKnowledgeResult(t, stages...)
+		if err := ValidateResult(result); err != nil {
+			t.Fatalf("ValidateResult(exact output ceiling) error = %v", err)
+		}
+
+		overOutputs := cloneResultValidationFixture(result)
+		last := &overOutputs.Plan.Stages[len(overOutputs.Plan.Stages)-2]
+		extra := OutputProvenance{
+			Field:         "field_zzz",
+			ObjectOrdinal: last.KnowledgeObjects[0].Ordinal,
+		}
+		last.OutputFields = append(last.OutputFields, extra.Field)
+		last.OutputProvenance = append(last.OutputProvenance, extra)
+		assertInvalidInspectionResult(
+			t,
+			overOutputs,
+			"private-result-value-7f2c",
+		)
+	})
 }
 
 func TestValidateResultRejectsMalformedSensitiveAndPhysicalValues(
@@ -682,7 +1193,7 @@ func validResultForValidation(t *testing.T) Result {
 		Plan: LogicalPlan{
 			Stages: []PlanStage{{
 				Operator: "Scan",
-				SourceRange: SourceRange{
+				SourceRange: &SourceRange{
 					Start: SourcePosition{
 						Line: 1, Column: 1,
 					},
@@ -704,10 +1215,14 @@ func validResultForValidation(t *testing.T) Result {
 func validResultStages(count int) []PlanStage {
 	stages := make([]PlanStage, count)
 	for index := range stages {
+		operator := "Limit"
+		if index == 0 {
+			operator = "Scan"
+		}
 		stages[index] = PlanStage{
 			Index:    uint32(index),
-			Operator: "Limit",
-			SourceRange: SourceRange{
+			Operator: operator,
+			SourceRange: &SourceRange{
 				Start: SourcePosition{Line: 1, Column: 1},
 				End: SourcePosition{
 					ByteOffset: 1, Line: 1, Column: 2,
@@ -716,6 +1231,166 @@ func validResultStages(count int) []PlanStage {
 		}
 	}
 	return stages
+}
+
+func resultValidationFourOperatorResult(t *testing.T) Result {
+	t.Helper()
+	objects := []RedactedObjectProvenance{
+		{
+			Ordinal:    0,
+			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+		},
+		{
+			Ordinal:    1,
+			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+		},
+		{
+			Ordinal:    2,
+			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+		},
+		{
+			Ordinal:    3,
+			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+		},
+	}
+	operators := []string{
+		"ConditionalExtract",
+		"ConditionalExtractJSON",
+		"CopyFieldAlias",
+		"ParallelExtend",
+	}
+	stages := make([]PlanStage, len(operators))
+	for index, operator := range operators {
+		stages[index] = resultValidationGeneratedStage(
+			operator,
+			[]RedactedObjectProvenance{objects[index]},
+			[]OutputProvenance{{
+				Field:         fmt.Sprintf("generated_%d", index),
+				ObjectOrdinal: objects[index].Ordinal,
+			}},
+		)
+	}
+	return resultValidationKnowledgeResult(t, stages...)
+}
+
+func resultValidationTwoOriginAliasResult(t *testing.T) Result {
+	t.Helper()
+	objects := resultValidationAliasObjects(2)
+	return resultValidationKnowledgeResult(
+		t,
+		resultValidationGeneratedStage(
+			"CopyFieldAlias",
+			objects,
+			[]OutputProvenance{
+				{Field: "field_a", ObjectOrdinal: objects[0].Ordinal},
+				{Field: "field_b", ObjectOrdinal: objects[1].Ordinal},
+			},
+		),
+	)
+}
+
+func resultValidationAliasObjects(count int) []RedactedObjectProvenance {
+	objects := make([]RedactedObjectProvenance, count)
+	for index := range objects {
+		objects[index] = RedactedObjectProvenance{
+			Ordinal:    uint32(index),
+			ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+		}
+	}
+	return objects
+}
+
+func resultValidationGeneratedStage(
+	operator string,
+	objects []RedactedObjectProvenance,
+	outputs []OutputProvenance,
+) PlanStage {
+	stage := PlanStage{
+		Operator:         operator,
+		KnowledgeObjects: slices.Clone(objects),
+		OutputProvenance: slices.Clone(outputs),
+	}
+	slices.SortFunc(stage.OutputProvenance, compareOutputProvenance)
+	stage.OutputFields = make([]string, 0, len(outputs))
+	for _, output := range stage.OutputProvenance {
+		stage.OutputFields = append(stage.OutputFields, output.Field)
+	}
+	slices.Sort(stage.OutputFields)
+	stage.OutputFields = slices.Compact(stage.OutputFields)
+	return stage
+}
+
+func resultValidationKnowledgeResult(
+	t *testing.T,
+	generated ...PlanStage,
+) Result {
+	t.Helper()
+	result := validResultForValidation(t)
+	stages := make([]PlanStage, 0, len(generated)+2)
+	stages = append(stages, result.Plan.Stages[0])
+	stages = append(stages, generated...)
+	stages = append(stages, PlanStage{
+		Operator: "Limit",
+		SourceRange: &SourceRange{
+			Start: SourcePosition{Line: 1, Column: 1},
+			End: SourcePosition{
+				ByteOffset: 1,
+				Line:       1,
+				Column:     2,
+			},
+		},
+	})
+	resultValidationResetStageIndexes(stages)
+	result.Plan.Stages = stages
+
+	objects := make([]RedactedObjectProvenance, 0)
+	for _, stage := range generated {
+		objects = append(objects, stage.KnowledgeObjects...)
+	}
+	result.KnowledgeSnapshot = resultValidationKnowledgeSummary(objects)
+	return result
+}
+
+func resultValidationResetStageIndexes(stages []PlanStage) {
+	for index := range stages {
+		stages[index].Index = uint32(index)
+	}
+}
+
+func resultValidationKnowledgeSummary(
+	objects []RedactedObjectProvenance,
+) *opensplunkv1.KnowledgeSnapshotSummary {
+	prefixCount := min(len(objects), knowledgesnapshot.MaximumSummaryObjects)
+	prefix := make(
+		[]*opensplunkv1.KnowledgeSnapshotObjectSummary,
+		prefixCount,
+	)
+	for index, object := range objects[:prefixCount] {
+		prefix[index] = &opensplunkv1.KnowledgeSnapshotObjectSummary{
+			ResolutionOrdinal: object.Ordinal,
+			ObjectType:        object.ObjectType,
+			Stage:             object.Stage,
+			Disclosure: &opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted{
+				Redacted: true,
+			},
+		}
+	}
+	return &opensplunkv1.KnowledgeSnapshotSummary{
+		Ref: &opensplunkv1.KnowledgeSnapshotRef{
+			SnapshotSha256:               bytes.Repeat([]byte{0x11}, sha256.Size),
+			TenantCatalogRevision:        1,
+			TenantCatalogStateToken:      bytes.Repeat([]byte{0x22}, sha256.Size),
+			ObjectCount:                  uint32(len(objects)),
+			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
+		},
+		Objects:          prefix,
+		ObjectsTruncated: len(objects) > knowledgesnapshot.MaximumSummaryObjects,
+	}
 }
 
 func resultValidationFieldNames(
@@ -737,20 +1412,9 @@ func assertInvalidInspectionResult(
 	sensitive string,
 ) {
 	t.Helper()
-	before := Result{
-		Plan: LogicalPlan{
-			Stages: append([]PlanStage(nil), result.Plan.Stages...),
-			ReferencedFields: append(
-				[]string(nil),
-				result.Plan.ReferencedFields...,
-			),
-			Output: result.Plan.Output,
-		},
-		PhysicalPlan:      result.PhysicalPlan,
-		GeneratedSQL:      result.GeneratedSQL,
-		ExplainText:       result.ExplainText,
-		DiagnosticQueryID: result.DiagnosticQueryID,
-	}
+	before := cloneResultValidationFixture(result)
+	beforeSummary := before.KnowledgeSnapshot
+	before.KnowledgeSnapshot = nil
 	err := ValidateResult(result)
 	if !errors.Is(err, ErrInspectionFailed) {
 		t.Fatalf(
@@ -761,7 +1425,34 @@ func assertInvalidInspectionResult(
 	if strings.Contains(err.Error(), sensitive) {
 		t.Fatalf("ValidateResult() leaked sensitive result content: %v", err)
 	}
-	if !reflect.DeepEqual(result, before) {
+	resultSummary := result.KnowledgeSnapshot
+	result.KnowledgeSnapshot = nil
+	if !reflect.DeepEqual(result, before) ||
+		!proto.Equal(resultSummary, beforeSummary) {
 		t.Fatal("ValidateResult() mutated its rejected input")
 	}
+}
+
+func cloneResultValidationFixture(result Result) Result {
+	cloned := result
+	cloned.Plan.Stages = slices.Clone(result.Plan.Stages)
+	for index := range cloned.Plan.Stages {
+		stage := &cloned.Plan.Stages[index]
+		stage.InputFields = slices.Clone(stage.InputFields)
+		stage.OutputFields = slices.Clone(stage.OutputFields)
+		stage.KnowledgeObjects = slices.Clone(stage.KnowledgeObjects)
+		stage.OutputProvenance = slices.Clone(stage.OutputProvenance)
+		if stage.SourceRange != nil {
+			sourceRange := *stage.SourceRange
+			stage.SourceRange = &sourceRange
+		}
+	}
+	cloned.Plan.ReferencedFields = slices.Clone(result.Plan.ReferencedFields)
+	cloned.Plan.Output.Fields = slices.Clone(result.Plan.Output.Fields)
+	if result.KnowledgeSnapshot != nil {
+		cloned.KnowledgeSnapshot = proto.Clone(
+			result.KnowledgeSnapshot,
+		).(*opensplunkv1.KnowledgeSnapshotSummary)
+	}
+	return cloned
 }

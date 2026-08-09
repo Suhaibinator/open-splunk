@@ -9,14 +9,21 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 const (
-	maximumPlanStages  = uint32(256)
+	maximumAuthoredPlanStages = uint32(256)
+	// The authored inspection ceiling predates the knowledge prelude. A valid
+	// query may now contain the complete 256-operator generated prefix in
+	// addition to every formerly admitted authored stage.
+	maximumPlanStages = maximumAuthoredPlanStages +
+		uint32(knowledgeprogram.MaximumObjects)
 	maximumStageFields = uint32(1_024)
 	// A static schema may accumulate fields across otherwise bounded stages.
 	// Every planner-built final field is represented by one of plan.Analyze's
@@ -30,6 +37,8 @@ const (
 	maximumOperatorNameBytes         = 32
 	maximumDynamicFields             = uint16(1_024)
 	maximumProjectionSourceBytes     = 16 << 10
+	maximumProjectedKnowledgeObjects = uint32(knowledgeprogram.MaximumObjects)
+	maximumProjectedKnowledgeOutputs = uint32(knowledgeprogram.MaximumGeneratedFields)
 )
 
 // OutputKind describes whether the final logical relation has an open,
@@ -57,15 +66,35 @@ type SourceRange struct {
 	End   SourcePosition
 }
 
+// RedactedObjectProvenance is the complete safe identity for one knowledge
+// object in an inspection response before a current-policy provenance
+// authorizer exists. Ordinal is response-local and carries no catalog ID,
+// version, name, owner, app, digest, selector, or definition location.
+type RedactedObjectProvenance struct {
+	Ordinal    uint32
+	ObjectType opensplunkv1.KnowledgeObjectType
+	Stage      opensplunkv1.KnowledgeSearchStage
+}
+
+// OutputProvenance associates one generated output occurrence with its
+// redacted object. The same Field may appear more than once when distinct
+// selector-disjoint objects legitimately target one destination.
+type OutputProvenance struct {
+	Field         string
+	ObjectOrdinal uint32
+}
+
 // PlanStage is one safe logical stage summary. InputFields contains only
 // sorted logical field reads. OutputFields contains only names produced or
 // selected by the stage; expressions and literal values are never projected.
 type PlanStage struct {
-	Index        uint32
-	Operator     string
-	InputFields  []string
-	OutputFields []string
-	SourceRange  SourceRange
+	Index            uint32
+	Operator         string
+	InputFields      []string
+	OutputFields     []string
+	SourceRange      *SourceRange
+	KnowledgeObjects []RedactedObjectProvenance
+	OutputProvenance []OutputProvenance
 }
 
 // OutputShape is the final relation's bounded public schema. Fields preserves
@@ -87,6 +116,79 @@ type LogicalPlan struct {
 type projectionBudget struct {
 	fieldOccurrences uint64
 	stringBytes      uint64
+	knowledgeObjects uint32
+	knowledgeOutputs uint32
+}
+
+type operatorDescription struct {
+	name             string
+	outputs          []string
+	sourceRange      *spl.Range
+	knowledgeObjects []RedactedObjectProvenance
+	outputProvenance []OutputProvenance
+}
+
+type knowledgeOperatorShape uint8
+
+const (
+	knowledgeOperatorShapeOneToMany knowledgeOperatorShape = iota + 1
+	knowledgeOperatorShapeOneToOne
+	knowledgeOperatorShapeFusedOneToOne
+)
+
+type knowledgeOperatorRank uint8
+
+const (
+	knowledgeOperatorRankExtraction knowledgeOperatorRank = iota + 1
+	knowledgeOperatorRankAlias
+	knowledgeOperatorRankCalculated
+)
+
+type knowledgeOperatorContract struct {
+	objectType opensplunkv1.KnowledgeObjectType
+	stage      opensplunkv1.KnowledgeSearchStage
+	shape      knowledgeOperatorShape
+	rank       knowledgeOperatorRank
+	repeatable bool
+}
+
+func inspectionKnowledgeOperator(
+	value string,
+) (knowledgeOperatorContract, bool) {
+	switch value {
+	case "ConditionalExtract":
+		return knowledgeOperatorContract{
+			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			shape:      knowledgeOperatorShapeOneToMany,
+			rank:       knowledgeOperatorRankExtraction,
+			repeatable: true,
+		}, true
+	case "ConditionalExtractJSON":
+		return knowledgeOperatorContract{
+			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+			shape:      knowledgeOperatorShapeOneToOne,
+			rank:       knowledgeOperatorRankExtraction,
+			repeatable: true,
+		}, true
+	case "CopyFieldAlias":
+		return knowledgeOperatorContract{
+			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+			shape:      knowledgeOperatorShapeFusedOneToOne,
+			rank:       knowledgeOperatorRankAlias,
+		}, true
+	case "ParallelExtend":
+		return knowledgeOperatorContract{
+			objectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+			stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+			shape:      knowledgeOperatorShapeFusedOneToOne,
+			rank:       knowledgeOperatorRankCalculated,
+		}, true
+	default:
+		return knowledgeOperatorContract{}, false
+	}
 }
 
 func projectLogicalPlan(
@@ -106,14 +208,31 @@ func projectLogicalPlan(
 	if len(logical.Operators) > int(maximumPlanStages) {
 		return LogicalPlan{}, invalidProjection("logical plan has too many stages")
 	}
+	authoredStages := 0
+	for _, operator := range logical.Operators {
+		if operator == nil {
+			return LogicalPlan{}, invalidProjection("logical operator is nil")
+		}
+		if _, knowledge := inspectionKnowledgeOperator(operator.LogicalName()); !knowledge {
+			authoredStages++
+			if authoredStages > int(maximumAuthoredPlanStages) {
+				return LogicalPlan{}, invalidProjection(
+					"logical plan has too many authored stages",
+				)
+			}
+		}
+	}
 	if len(source) > maximumProjectionSourceBytes ||
 		!utf8.ValidString(source) {
 		return LogicalPlan{}, invalidProjection("SPL source is not valid UTF-8")
 	}
 
-	fullAnalysis, err := plan.Analyze(logical)
+	analysis, err := plan.AnalyzeStages(logical)
 	if err != nil {
 		return LogicalPlan{}, invalidProjection("logical plan analysis failed")
+	}
+	if len(analysis.Stages) != len(logical.Operators) {
+		return LogicalPlan{}, invalidProjection("logical stage analysis is incomplete")
 	}
 	if err := ctx.Err(); err != nil {
 		return LogicalPlan{}, err
@@ -121,7 +240,7 @@ func projectLogicalPlan(
 
 	budget := projectionBudget{}
 	referencedFields, err := budget.projectFields(
-		fullAnalysis.ReferencedFields,
+		analysis.ReferencedFields,
 		maximumStageFields,
 	)
 	if err != nil {
@@ -137,47 +256,56 @@ func projectLogicalPlan(
 		if err := ctx.Err(); err != nil {
 			return LogicalPlan{}, err
 		}
-		operatorName, stageOutputs, sourceRange, err :=
-			describeOperator(operator)
+		description, err := describeOperator(operator)
 		if err != nil {
 			return LogicalPlan{}, err
 		}
-		if err := budget.addString(operatorName, maximumOperatorNameBytes); err != nil {
+		if err := budget.addString(description.name, maximumOperatorNameBytes); err != nil {
 			return LogicalPlan{}, err
 		}
-		projectedRange, err := projectSourceRange(source, sourceRange)
-		if err != nil {
-			return LogicalPlan{}, err
+		var projectedRange *SourceRange
+		if description.sourceRange != nil {
+			value, err := projectSourceRange(source, *description.sourceRange)
+			if err != nil {
+				return LogicalPlan{}, err
+			}
+			projectedRange = &value
 		}
 
-		stageAnalysis, err := plan.Analyze(&plan.Query{
-			Operators: []plan.Operator{operator},
-		})
-		if err != nil {
-			return LogicalPlan{}, invalidProjection("logical stage analysis failed")
-		}
 		inputFields, err := budget.projectFields(
-			stageAnalysis.ReferencedFields,
+			analysis.Stages[index].ReferencedFields,
 			maximumStageFields,
 		)
 		if err != nil {
 			return LogicalPlan{}, err
 		}
-		slices.Sort(stageOutputs)
-		stageOutputs = slices.Compact(stageOutputs)
+		slices.Sort(description.outputs)
+		description.outputs = slices.Compact(description.outputs)
 		outputFields, err := budget.projectFields(
-			stageOutputs,
+			description.outputs,
 			maximumStageFields,
 		)
+		if err != nil {
+			return LogicalPlan{}, err
+		}
+		knowledgeObjects, outputProvenance, err :=
+			budget.projectKnowledgeProvenance(
+				description.name,
+				description.knowledgeObjects,
+				description.outputProvenance,
+				outputFields,
+			)
 		if err != nil {
 			return LogicalPlan{}, err
 		}
 		stages[index] = PlanStage{
-			Index:        uint32(index),
-			Operator:     operatorName,
-			InputFields:  inputFields,
-			OutputFields: outputFields,
-			SourceRange:  projectedRange,
+			Index:            uint32(index),
+			Operator:         description.name,
+			InputFields:      inputFields,
+			OutputFields:     outputFields,
+			SourceRange:      projectedRange,
+			KnowledgeObjects: knowledgeObjects,
+			OutputProvenance: outputProvenance,
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -190,7 +318,139 @@ func projectLogicalPlan(
 	}, nil
 }
 
-func describeOperator(
+func describeOperator(operator plan.Operator) (operatorDescription, error) {
+	if operator == nil {
+		return operatorDescription{}, invalidProjection("logical operator is nil")
+	}
+
+	description := operatorDescription{name: operator.LogicalName()}
+	switch concrete := operator.(type) {
+	case *plan.ConditionalExtract:
+		if concrete == nil {
+			return operatorDescription{}, invalidProjection("logical operator is nil")
+		}
+		extraction := concrete.Extraction()
+		captures := extraction.Captures()
+		if len(captures) == 0 || len(captures) > int(maximumStageFields) {
+			return operatorDescription{}, invalidProjection(
+				"logical ConditionalExtract has an invalid output inventory",
+			)
+		}
+		description.outputs = make([]string, len(captures))
+		for index, capture := range captures {
+			description.outputs[index] = capture.Name()
+		}
+		if err := appendKnowledgeOrigin(
+			&description,
+			extraction.Origin(),
+			description.outputs,
+		); err != nil {
+			return operatorDescription{}, err
+		}
+		return description, nil
+	case *plan.ConditionalExtractJSON:
+		if concrete == nil {
+			return operatorDescription{}, invalidProjection("logical operator is nil")
+		}
+		extraction := concrete.Extraction()
+		description.outputs = []string{extraction.Output()}
+		if err := appendKnowledgeOrigin(
+			&description,
+			extraction.Origin(),
+			description.outputs,
+		); err != nil {
+			return operatorDescription{}, err
+		}
+		return description, nil
+	case *plan.CopyFieldAlias:
+		if concrete == nil {
+			return operatorDescription{}, invalidProjection("logical operator is nil")
+		}
+		assignments := concrete.Assignments()
+		if len(assignments) == 0 || len(assignments) > int(maximumStageFields) {
+			return operatorDescription{}, invalidProjection(
+				"logical CopyFieldAlias has an invalid output inventory",
+			)
+		}
+		description.outputs = make([]string, len(assignments))
+		for index, assignment := range assignments {
+			description.outputs[index] = assignment.Destination()
+			if err := appendKnowledgeOrigin(
+				&description,
+				assignment.Origin(),
+				[]string{description.outputs[index]},
+			); err != nil {
+				return operatorDescription{}, err
+			}
+		}
+		return description, nil
+	case *plan.ParallelExtend:
+		if concrete == nil {
+			return operatorDescription{}, invalidProjection("logical operator is nil")
+		}
+		assignments := concrete.Assignments()
+		if len(assignments) == 0 || len(assignments) > int(maximumStageFields) {
+			return operatorDescription{}, invalidProjection(
+				"logical ParallelExtend has an invalid output inventory",
+			)
+		}
+		description.outputs = make([]string, len(assignments))
+		for index, assignment := range assignments {
+			description.outputs[index] = assignment.Destination()
+			if err := appendKnowledgeOrigin(
+				&description,
+				assignment.Origin(),
+				[]string{description.outputs[index]},
+			); err != nil {
+				return operatorDescription{}, err
+			}
+		}
+		return description, nil
+	default:
+		name, outputs, sourceRange, err := describeAuthoredOperator(operator)
+		if err != nil {
+			return operatorDescription{}, err
+		}
+		description.name = name
+		description.outputs = outputs
+		description.sourceRange = &sourceRange
+		return description, nil
+	}
+}
+
+func appendKnowledgeOrigin(
+	description *operatorDescription,
+	origin knowledgeprogram.Origin,
+	outputs []string,
+) error {
+	if description == nil || len(outputs) == 0 {
+		return invalidProjection("logical knowledge provenance is invalid")
+	}
+	contract, ok := inspectionKnowledgeOperator(description.name)
+	if !ok ||
+		origin.ResolutionOrdinal() >= maximumProjectedKnowledgeObjects ||
+		origin.ObjectType() != contract.objectType || origin.Stage() != contract.stage {
+		return invalidProjection("logical knowledge provenance is invalid")
+	}
+	object := RedactedObjectProvenance{
+		Ordinal:    origin.ResolutionOrdinal(),
+		ObjectType: origin.ObjectType(),
+		Stage:      origin.Stage(),
+	}
+	description.knowledgeObjects = append(description.knowledgeObjects, object)
+	for _, output := range outputs {
+		description.outputProvenance = append(
+			description.outputProvenance,
+			OutputProvenance{
+				Field:         output,
+				ObjectOrdinal: object.Ordinal,
+			},
+		)
+	}
+	return nil
+}
+
+func describeAuthoredOperator(
 	operator plan.Operator,
 ) (string, []string, spl.Range, error) {
 	if operator == nil {
@@ -426,6 +686,128 @@ func (budget *projectionBudget) projectFields(
 	}
 	budget.fieldOccurrences += uint64(len(fields))
 	return projected, nil
+}
+
+func (budget *projectionBudget) projectKnowledgeProvenance(
+	operator string,
+	objects []RedactedObjectProvenance,
+	outputs []OutputProvenance,
+	outputFields []string,
+) ([]RedactedObjectProvenance, []OutputProvenance, error) {
+	if budget == nil {
+		return nil, nil, invalidProjection("projection budget is nil")
+	}
+	if len(objects) == 0 && len(outputs) == 0 {
+		return nil, nil, nil
+	}
+	projectedObjects := slices.Clone(objects)
+	slices.SortFunc(projectedObjects, func(left, right RedactedObjectProvenance) int {
+		return int(left.Ordinal) - int(right.Ordinal)
+	})
+	projectedOutputs := slices.Clone(outputs)
+	slices.SortFunc(projectedOutputs, compareOutputProvenance)
+	contract, ok := inspectionKnowledgeOperator(operator)
+	if !ok || !validateCanonicalKnowledgeProvenance(
+		budget,
+		projectedObjects,
+		projectedOutputs,
+		outputFields,
+		contract,
+	) {
+		return nil, nil, invalidProjection(
+			"logical knowledge provenance is invalid",
+		)
+	}
+	return projectedObjects, projectedOutputs, nil
+}
+
+func validateCanonicalKnowledgeProvenance(
+	budget *projectionBudget,
+	objects []RedactedObjectProvenance,
+	outputs []OutputProvenance,
+	outputFields []string,
+	contract knowledgeOperatorContract,
+) bool {
+	if budget == nil || len(objects) == 0 || len(outputs) == 0 ||
+		budget.knowledgeObjects > maximumProjectedKnowledgeObjects ||
+		budget.knowledgeOutputs > maximumProjectedKnowledgeOutputs ||
+		uint64(len(objects)) > uint64(maximumProjectedKnowledgeObjects-budget.knowledgeObjects) ||
+		uint64(len(outputs)) > uint64(maximumProjectedKnowledgeOutputs-budget.knowledgeOutputs) {
+		return false
+	}
+	for index, object := range objects {
+		if object.Ordinal >= maximumProjectedKnowledgeObjects ||
+			object.ObjectType != contract.objectType || object.Stage != contract.stage ||
+			(index > 0 && objects[index-1].Ordinal >= object.Ordinal) {
+			return false
+		}
+	}
+
+	var usedObjects []bool
+	if len(objects) > 1 {
+		usedObjects = make([]bool, len(objects))
+	}
+	fieldIndex := 0
+	for index, output := range outputs {
+		if budget.addString(
+			output.Field,
+			eventfields.MaximumNormalizedFieldNameBytes,
+		) != nil ||
+			(index > 0 && compareOutputProvenance(outputs[index-1], output) >= 0) {
+			return false
+		}
+		objectIndex, found := slices.BinarySearchFunc(
+			objects,
+			output.ObjectOrdinal,
+			func(object RedactedObjectProvenance, ordinal uint32) int {
+				if object.Ordinal < ordinal {
+					return -1
+				}
+				if object.Ordinal > ordinal {
+					return 1
+				}
+				return 0
+			},
+		)
+		if !found {
+			return false
+		}
+		if usedObjects != nil {
+			usedObjects[objectIndex] = true
+		}
+		if index == 0 || outputs[index-1].Field != output.Field {
+			if fieldIndex >= len(outputFields) ||
+				outputFields[fieldIndex] != output.Field {
+				return false
+			}
+			fieldIndex++
+		}
+	}
+	if fieldIndex != len(outputFields) {
+		return false
+	}
+	for _, used := range usedObjects {
+		if !used {
+			return false
+		}
+	}
+
+	budget.knowledgeObjects += uint32(len(objects))
+	budget.knowledgeOutputs += uint32(len(outputs))
+	return true
+}
+
+func compareOutputProvenance(left, right OutputProvenance) int {
+	if comparison := strings.Compare(left.Field, right.Field); comparison != 0 {
+		return comparison
+	}
+	if left.ObjectOrdinal < right.ObjectOrdinal {
+		return -1
+	}
+	if left.ObjectOrdinal > right.ObjectOrdinal {
+		return 1
+	}
+	return 0
 }
 
 func (budget *projectionBudget) addString(value string, maximum int) error {

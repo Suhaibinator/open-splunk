@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -162,19 +163,55 @@ func searchInspectionResultToProto(
 		len(result.Plan.Stages),
 	)
 	for index, stage := range result.Plan.Stages {
-		stages[index] = &opensplunkv1.SearchInspectionLogicalStage{
-			StageIndex:   stage.Index,
-			Operator:     strings.Clone(stage.Operator),
-			InputFields:  slices.Clone(stage.InputFields),
-			OutputFields: slices.Clone(stage.OutputFields),
-			SourceRange: &opensplunkv1.SourceRange{
+		var sourceRange *opensplunkv1.SourceRange
+		if stage.SourceRange != nil {
+			sourceRange = &opensplunkv1.SourceRange{
 				Start: searchInspectionSourcePositionToProto(
 					stage.SourceRange.Start,
 				),
 				End: searchInspectionSourcePositionToProto(
 					stage.SourceRange.End,
 				),
-			},
+			}
+		}
+		operatorProvenance := make(
+			[]*opensplunkv1.KnowledgeProvenance,
+			len(stage.KnowledgeObjects),
+		)
+		for provenanceIndex, provenance := range stage.KnowledgeObjects {
+			operatorProvenance[provenanceIndex] =
+				searchInspectionRedactedProvenanceToProto(provenance)
+		}
+		outputProvenance := make(
+			[]*opensplunkv1.SearchInspectionOutputProvenance,
+			len(stage.OutputProvenance),
+		)
+		for provenanceIndex, provenance := range stage.OutputProvenance {
+			object, ok := searchInspectionRedactedProvenanceByOrdinal(
+				stage.KnowledgeObjects,
+				provenance.ObjectOrdinal,
+			)
+			if !ok {
+				return nil, fmt.Errorf(
+					"project search inspection result: output provenance is invalid",
+				)
+			}
+			outputProvenance[provenanceIndex] =
+				&opensplunkv1.SearchInspectionOutputProvenance{
+					OutputField: strings.Clone(provenance.Field),
+					Provenance: searchInspectionRedactedProvenanceToProto(
+						object,
+					),
+				}
+		}
+		stages[index] = &opensplunkv1.SearchInspectionLogicalStage{
+			StageIndex:         stage.Index,
+			Operator:           strings.Clone(stage.Operator),
+			InputFields:        slices.Clone(stage.InputFields),
+			OutputFields:       slices.Clone(stage.OutputFields),
+			SourceRange:        sourceRange,
+			OperatorProvenance: operatorProvenance,
+			OutputProvenance:   outputProvenance,
 		}
 	}
 	reads := make(
@@ -217,6 +254,49 @@ func searchInspectionResultToProto(
 		DiagnosticQueryId: strings.Clone(result.DiagnosticQueryID),
 		KnowledgeSnapshot: knowledgeSnapshot,
 	}, nil
+}
+
+func searchInspectionRedactedProvenanceToProto(
+	value searchinspection.RedactedObjectProvenance,
+) *opensplunkv1.KnowledgeProvenance {
+	return &opensplunkv1.KnowledgeProvenance{
+		Source: &opensplunkv1.KnowledgeProvenance_RedactedObject{
+			RedactedObject: &opensplunkv1.KnowledgeRedactedObjectProvenance{
+				RedactedObjectOrdinal: value.Ordinal,
+				ObjectType:            value.ObjectType,
+				Stage:                 value.Stage,
+			},
+		},
+	}
+}
+
+func searchInspectionRedactedProvenanceByOrdinal(
+	objects []searchinspection.RedactedObjectProvenance,
+	ordinal uint32,
+) (searchinspection.RedactedObjectProvenance, bool) {
+	if len(objects) == 1 {
+		return objects[0], objects[0].Ordinal == ordinal
+	}
+	index, found := slices.BinarySearchFunc(
+		objects,
+		ordinal,
+		func(
+			object searchinspection.RedactedObjectProvenance,
+			want uint32,
+		) int {
+			if object.Ordinal < want {
+				return -1
+			}
+			if object.Ordinal > want {
+				return 1
+			}
+			return 0
+		},
+	)
+	if !found {
+		return searchinspection.RedactedObjectProvenance{}, false
+	}
+	return objects[index], true
 }
 
 func searchInspectionSourcePositionToProto(

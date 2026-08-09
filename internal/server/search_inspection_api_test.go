@@ -159,6 +159,7 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 
 	result := validServerSearchInspectionResult(t)
 	result.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
+	result = withServerKnowledgeInspectionProvenance(t, result)
 	service := &fakeSearchInspections{result: result}
 	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
 	requestMessage := &opensplunkv1.InspectSearchJobRequest{
@@ -195,8 +196,62 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 		"inspection-job",
 		result,
 	)
+	for _, secret := range []string{
+		"extract-secret-id",
+		"Secret Extraction",
+		"alias-secret-id",
+		"Secret Alias",
+	} {
+		if bytes.Contains(response.Body.Bytes(), []byte(secret)) {
+			t.Fatalf("inspection response leaked retained identity %q", secret)
+		}
+	}
 	if result.KnowledgeSnapshot.GetObjects()[0].GetAuthorizedObject() == nil {
 		t.Fatal("inspection response projection mutated service-owned knowledge summary")
+	}
+}
+
+func TestSearchInspectionResultProjectionDetachesRangesAndRedactedProvenance(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	result := validServerSearchInspectionResult(t)
+	result.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
+	result = withServerKnowledgeInspectionProvenance(t, result)
+	projected, err := searchInspectionResultToProto("inspection-job", result)
+	if err != nil {
+		t.Fatalf("searchInspectionResultToProto() error = %v", err)
+	}
+	assertSearchInspectionProtoMatchesResult(
+		t,
+		projected,
+		"inspection-job",
+		result,
+	)
+
+	authored := projected.GetLogicalPlan().GetStages()[0]
+	generated := projected.GetLogicalPlan().GetStages()[1]
+	if authored.GetSourceRange() == nil || generated.GetSourceRange() != nil {
+		t.Fatalf(
+			"authored/generated source ranges = (%+v, %+v), want present/absent",
+			authored.GetSourceRange(),
+			generated.GetSourceRange(),
+		)
+	}
+	authored.SourceRange.Start.Line = 99
+	generated.OperatorProvenance[0].GetRedactedObject().RedactedObjectOrdinal = 99
+	generated.OutputProvenance[0].OutputField = "mutated_output"
+	generated.OutputProvenance[0].GetProvenance().GetRedactedObject().Stage =
+		opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+
+	if result.Plan.Stages[0].SourceRange == nil ||
+		result.Plan.Stages[0].SourceRange.Start.Line == 99 ||
+		result.Plan.Stages[1].KnowledgeObjects[0].Ordinal == 99 ||
+		result.Plan.Stages[1].OutputProvenance[0].Field == "mutated_output" ||
+		result.Plan.Stages[1].KnowledgeObjects[0].Stage !=
+			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION {
+		t.Fatal("protobuf projection aliases service-owned logical provenance")
 	}
 }
 
@@ -1267,6 +1322,65 @@ func validServerSearchInspectionResult(
 	return result
 }
 
+func withServerKnowledgeInspectionProvenance(
+	t *testing.T,
+	result searchinspection.Result,
+) searchinspection.Result {
+	t.Helper()
+	if len(result.Plan.Stages) == 0 || result.Plan.Stages[0].Operator != "Scan" {
+		t.Fatal("inspection provenance fixture has no leading Scan")
+	}
+	extraction := searchinspection.RedactedObjectProvenance{
+		Ordinal:    0,
+		ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+		Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+	}
+	alias := searchinspection.RedactedObjectProvenance{
+		Ordinal:    1,
+		ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+	}
+	authored := slices.Clone(result.Plan.Stages)
+	stages := make([]searchinspection.PlanStage, 0, len(authored)+2)
+	stages = append(stages, authored[0])
+	stages = append(stages,
+		searchinspection.PlanStage{
+			Operator:         "ConditionalExtract",
+			InputFields:      []string{"_raw"},
+			OutputFields:     []string{"extracted_status"},
+			KnowledgeObjects: []searchinspection.RedactedObjectProvenance{extraction},
+			OutputProvenance: []searchinspection.OutputProvenance{{
+				Field: "extracted_status", ObjectOrdinal: extraction.Ordinal,
+			}},
+		},
+		searchinspection.PlanStage{
+			Operator:         "CopyFieldAlias",
+			InputFields:      []string{"extracted_status"},
+			OutputFields:     []string{"status_alias"},
+			KnowledgeObjects: []searchinspection.RedactedObjectProvenance{alias},
+			OutputProvenance: []searchinspection.OutputProvenance{{
+				Field: "status_alias", ObjectOrdinal: alias.Ordinal,
+			}},
+		},
+	)
+	stages = append(stages, authored[1:]...)
+	for index := range stages {
+		stages[index].Index = uint32(index)
+	}
+	result.Plan.Stages = stages
+	result.Plan.ReferencedFields = append(
+		slices.Clone(result.Plan.ReferencedFields),
+		"_raw",
+		"extracted_status",
+	)
+	slices.Sort(result.Plan.ReferencedFields)
+	result.Plan.ReferencedFields = slices.Compact(result.Plan.ReferencedFields)
+	if err := searchinspection.ValidateResult(result); err != nil {
+		t.Fatalf("knowledge inspection provenance fixture is invalid: %v", err)
+	}
+	return result
+}
+
 func assertSearchInspectionProtoMatchesResult(
 	t *testing.T,
 	actual *opensplunkv1.InspectSearchJobResponse,
@@ -1320,8 +1434,19 @@ func assertSearchInspectionProtoMatchesResult(
 			!slices.Equal(
 				actualStage.GetOutputFields(),
 				expectedStage.OutputFields,
-			) ||
-			actualStage.GetSourceRange() == nil ||
+			) {
+			t.Fatalf(
+				"logical stage %d = %#v, want %#v",
+				index,
+				actualStage,
+				expectedStage,
+			)
+		}
+		if expectedStage.SourceRange == nil {
+			if actualStage.GetSourceRange() != nil {
+				t.Fatalf("generated stage %d invented authored source range: %#v", index, actualStage.GetSourceRange())
+			}
+		} else if actualStage.GetSourceRange() == nil ||
 			actualStage.GetSourceRange().GetStart() == nil ||
 			actualStage.GetSourceRange().GetEnd() == nil ||
 			actualStage.GetSourceRange().GetStart().GetByteOffset() !=
@@ -1336,12 +1461,36 @@ func assertSearchInspectionProtoMatchesResult(
 				expectedStage.SourceRange.End.Line ||
 			actualStage.GetSourceRange().GetEnd().GetColumn() !=
 				expectedStage.SourceRange.End.Column {
-			t.Fatalf(
-				"logical stage %d = %#v, want %#v",
-				index,
-				actualStage,
-				expectedStage,
+			t.Fatalf("authored stage %d source range = %#v, want %#v", index, actualStage.GetSourceRange(), expectedStage.SourceRange)
+		}
+		if len(actualStage.GetOperatorProvenance()) != len(expectedStage.KnowledgeObjects) ||
+			len(actualStage.GetOutputProvenance()) != len(expectedStage.OutputProvenance) {
+			t.Fatalf("stage %d provenance counts = %d/%d, want %d/%d", index, len(actualStage.GetOperatorProvenance()), len(actualStage.GetOutputProvenance()), len(expectedStage.KnowledgeObjects), len(expectedStage.OutputProvenance))
+		}
+		for provenanceIndex, want := range expectedStage.KnowledgeObjects {
+			assertSearchInspectionRedactedProvenance(
+				t,
+				actualStage.GetOperatorProvenance()[provenanceIndex],
+				want,
 			)
+		}
+		for provenanceIndex, want := range expectedStage.OutputProvenance {
+			got := actualStage.GetOutputProvenance()[provenanceIndex]
+			if got.GetOutputField() != want.Field {
+				t.Fatalf("stage %d output provenance %d field = %q, want %q", index, provenanceIndex, got.GetOutputField(), want.Field)
+			}
+			var object searchinspection.RedactedObjectProvenance
+			found := false
+			for _, candidate := range expectedStage.KnowledgeObjects {
+				if candidate.Ordinal == want.ObjectOrdinal {
+					object, found = candidate, true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("stage %d output provenance %d has unknown object ordinal %d", index, provenanceIndex, want.ObjectOrdinal)
+			}
+			assertSearchInspectionRedactedProvenance(t, got.GetProvenance(), object)
 		}
 	}
 
@@ -1419,6 +1568,24 @@ func assertSearchInspectionProtoMatchesResult(
 				got,
 			)
 		}
+	}
+}
+
+func assertSearchInspectionRedactedProvenance(
+	t *testing.T,
+	actual *opensplunkv1.KnowledgeProvenance,
+	expected searchinspection.RedactedObjectProvenance,
+) {
+	t.Helper()
+	if actual == nil || actual.GetAuthored() != nil ||
+		actual.GetAuthorizedObject() != nil || actual.GetRedactedObject() == nil {
+		t.Fatalf("inspection provenance = %+v, want redacted-only", actual)
+	}
+	redacted := actual.GetRedactedObject()
+	if redacted.GetRedactedObjectOrdinal() != expected.Ordinal ||
+		redacted.GetObjectType() != expected.ObjectType ||
+		redacted.GetStage() != expected.Stage {
+		t.Fatalf("redacted inspection provenance = %+v, want %+v", redacted, expected)
 	}
 }
 

@@ -165,7 +165,7 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 			)
 		}
 		wantRange := sourceRangeProjection(canonical.SourceRange())
-		if stage.SourceRange != wantRange {
+		if stage.SourceRange == nil || *stage.SourceRange != wantRange {
 			t.Fatalf(
 				"stage %d source range = %#v, want canonical range %#v",
 				index,
@@ -488,7 +488,14 @@ func TestProjectLogicalPlanFailsClosedAndReturnsNoPartialPlan(t *testing.T) {
 			},
 		},
 		{
-			name: "too many stages",
+			name: "too many authored stages",
+			query: &plan.Query{Operators: repeatLimitOperators(
+				int(maximumAuthoredPlanStages)+1,
+				validRange,
+			)},
+		},
+		{
+			name: "too many absolute stages",
 			query: &plan.Query{Operators: repeatLimitOperators(
 				int(maximumPlanStages)+1,
 				validRange,

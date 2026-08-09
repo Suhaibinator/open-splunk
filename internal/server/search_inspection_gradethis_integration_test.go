@@ -489,7 +489,7 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 					Operator:     "Scan",
 					InputFields:  []string{"input"},
 					OutputFields: []string{"output"},
-					SourceRange: searchinspection.SourceRange{
+					SourceRange: &searchinspection.SourceRange{
 						Start: searchinspection.SourcePosition{
 							ByteOffset: 0,
 							Line:       1,
