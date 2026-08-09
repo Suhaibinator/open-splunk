@@ -370,7 +370,7 @@ func (program Program) RetainedBytes() uint64 {
 // dependency authority. Every returned dependency is version- and
 // definition-digest-pinned and is available through Program.Dependencies.
 func Compile(objects []*opensplunkv1.KnowledgeSnapshotObject) (Program, error) {
-	state, _, err := compileObjects(objects)
+	state, _, err := compileObjects(objects, true)
 	if err != nil {
 		return Program{}, err
 	}
@@ -390,7 +390,7 @@ func Prepare(input Input) (Program, error) {
 	if len(input.Dependencies) > MaximumDependencies {
 		return Program{}, fmt.Errorf("%w: more than %d dependencies", ErrResourceLimit, MaximumDependencies)
 	}
-	state, objects, err := compileObjects(input.Objects)
+	state, objects, err := compileObjects(input.Objects, false)
 	if err != nil {
 		return Program{}, err
 	}
@@ -406,6 +406,7 @@ func Prepare(input Input) (Program, error) {
 
 func compileObjects(
 	input []*opensplunkv1.KnowledgeSnapshotObject,
+	reportCandidateIssues bool,
 ) (*programState, map[string]*opensplunkv1.KnowledgeSnapshotObject, error) {
 	if len(input) > MaximumObjects {
 		return nil, nil, fmt.Errorf("%w: more than %d objects", ErrResourceLimit, MaximumObjects)
@@ -481,6 +482,10 @@ func compileObjects(
 		origin := originFor(canonicalObject, expectedStage, locationForType(object.GetObjectType()))
 		selector := Selector{compiled: normalized.Selector}
 		if err := appendObject(state, normalized, origin, selector); err != nil {
+			var authored *authoredSemanticError
+			if reportCandidateIssues && errors.As(err, &authored) && authored != nil {
+				return nil, nil, candidateInvalid(index, authored)
+			}
 			return nil, nil, invalid(index, err.Error())
 		}
 		objects[canonicalObject.GetKnowledgeObjectId()] = canonicalObject
@@ -527,14 +532,46 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 		switch extraction := body.FieldExtraction.GetExtraction().(type) {
 		case *opensplunkv1.FieldExtractionDefinition_Regex:
 			compiled, err := splregex.CompileExtractionPattern(extraction.Regex.GetPattern())
-			if err != nil || compiled.GroupCount != len(compiled.Captures) ||
-				len(compiled.Captures) != len(extraction.Regex.GetOutputFields()) {
+			if err != nil {
+				if issue, ok := regexCompilationIssue(err); ok {
+					return newAuthoredSemanticError("regex extraction is not executable", issue)
+				}
 				return errors.New("regex extraction is not executable")
+			}
+			if compiled.GroupCount != len(compiled.Captures) {
+				return newAuthoredSemanticError(
+					"regex extraction is not executable",
+					Issue{
+						FieldPath: "field_extraction.regex.pattern",
+						Code:      IssueCodeRegexCaptureMismatch,
+						Message:   "every capture group must be named",
+					},
+				)
+			}
+			if len(compiled.Captures) != len(extraction.Regex.GetOutputFields()) {
+				return newAuthoredSemanticError(
+					"regex extraction is not executable",
+					Issue{
+						FieldPath: "field_extraction.regex.output_fields",
+						Code:      IssueCodeRegexCaptureMismatch,
+						Message:   "output fields must exactly match named captures",
+					},
+				)
 			}
 			captures := make([]Capture, len(compiled.Captures))
 			for index, capture := range compiled.Captures {
-				if capture.Name != extraction.Regex.GetOutputFields()[index] || capture.Group <= 0 || capture.Group > math.MaxUint16 {
+				if capture.Group <= 0 || capture.Group > math.MaxUint16 {
 					return errors.New("regex captures disagree with declared outputs")
+				}
+				if capture.Name != extraction.Regex.GetOutputFields()[index] {
+					return newAuthoredSemanticError(
+						"regex captures disagree with declared outputs",
+						Issue{
+							FieldPath: fmt.Sprintf("field_extraction.regex.output_fields[%d]", index),
+							Code:      IssueCodeRegexCaptureMismatch,
+							Message:   "output field must match the named capture at the same position",
+						},
+					)
 				}
 				captures[index] = Capture{
 					name:     capture.Name,
@@ -553,6 +590,9 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 		case *opensplunkv1.FieldExtractionDefinition_Json:
 			steps, err := splpath.ParseJSON(extraction.Json.GetPath())
 			if err != nil {
+				if issue, ok := jsonPathCompilationIssue(extraction.Json.GetPath(), err); ok {
+					return newAuthoredSemanticError("JSON extraction is not executable", issue)
+				}
 				return errors.New("JSON extraction is not executable")
 			}
 			origin.location = "field_extraction.json.path"
@@ -591,10 +631,23 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 		}
 		parsed, err := spl.ParseScalarExpression(body.CalculatedField.GetExpression())
 		if err != nil {
+			if issue, ok := calculatedExpressionCompilationIssue(body.CalculatedField.GetExpression(), err); ok {
+				return newAuthoredSemanticError("calculated expression is not executable", issue)
+			}
 			return errors.New("calculated expression is not executable")
 		}
 		if spl.ScalarExpressionMayReturnBooleanFunction(parsed) {
-			return errors.New("calculated expression cannot directly assign a Boolean function result")
+			return newAuthoredSemanticError(
+				"calculated expression cannot directly assign a Boolean function result",
+				Issue{
+					FieldPath: "calculated_field.expression",
+					Code:      IssueCodeCalculatedBoolean,
+					Message:   "calculated expression cannot directly assign a Boolean function result",
+					Range: &ScalarRange{
+						EndByteOffset: uint32(len(body.CalculatedField.GetExpression())),
+					},
+				},
+			)
 		}
 		analysis, err := spl.AnalyzeScalarExpression(parsed)
 		if err != nil || analysis.Nodes == 0 {
