@@ -195,6 +195,304 @@ func TestKnowledgeRelationAndRuntimeGuardAgainstClickHouse(t *testing.T) {
 		return
 	}
 
+	if !t.Run("alias byteSize Dynamic contract", func(t *testing.T) {
+		queryContext, cancelQuery := knowledgeRuntimeIntegrationQueryContext(overallContext)
+		defer cancelQuery()
+		sql := `SELECT
+    n,
+    dynamicType(value),
+    toUInt64(byteSize(value)),
+    toUInt64(byteSize(CAST([], 'Array(String)'))),
+    toUInt64(byteSize(CAST([], 'Array(UInt8)')))
+FROM (
+    SELECT n, CAST(repeat('x', n) AS Dynamic) AS value
+    FROM (
+        SELECT arrayJoin([toUInt64(0), toUInt64(1), toUInt64(` +
+			strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeEventBytes-1, 10) +
+			`), toUInt64(` + strconv.FormatUint(
+			knowledge.MaximumAliasCopyRuntimeEventBytes,
+			10,
+		) + `)]) AS n
+    )
+)
+ORDER BY n`
+		rows, queryErr := connection.Query(queryContext, sql)
+		if queryErr != nil {
+			t.Fatalf("execute alias byteSize contract: %v\nSQL: %s", queryErr, sql)
+		}
+		defer func() {
+			if closeErr := rows.Close(); closeErr != nil {
+				t.Errorf("close alias byteSize rows: %v", closeErr)
+			}
+		}()
+		wantLengths := []uint64{
+			0,
+			1,
+			knowledge.MaximumAliasCopyRuntimeEventBytes - 1,
+			knowledge.MaximumAliasCopyRuntimeEventBytes,
+		}
+		index := 0
+		for rows.Next() {
+			var length, valueBytes, namesBytes, typesBytes uint64
+			var dynamicType string
+			if scanErr := rows.Scan(
+				&length,
+				&dynamicType,
+				&valueBytes,
+				&namesBytes,
+				&typesBytes,
+			); scanErr != nil {
+				t.Fatalf("scan alias byteSize row: %v", scanErr)
+			}
+			if index >= len(wantLengths) || length != wantLengths[index] ||
+				dynamicType != "String" || valueBytes != length ||
+				namesBytes != 0 || typesBytes != 0 {
+				t.Fatalf(
+					"alias byteSize row %d = (%d, %q, %d, %d, %d)",
+					index,
+					length,
+					dynamicType,
+					valueBytes,
+					namesBytes,
+					typesBytes,
+				)
+			}
+			index++
+		}
+		if rowErr := rows.Err(); rowErr != nil {
+			t.Fatalf("consume alias byteSize rows: %v", rowErr)
+		}
+		if index != len(wantLengths) {
+			t.Fatalf("alias byteSize rows = %d, want %d", index, len(wantLengths))
+		}
+	}) {
+		return
+	}
+
+	if !t.Run("generated alias event boundary", func(t *testing.T) {
+		program := knowledgePreludeProgram(
+			t,
+			[]*opensplunkv1.KnowledgeObjectDefinition{
+				knowledgePreludeAliasDefinition(
+					"runtime-alias-boundary",
+					"host",
+					"copied_host",
+				),
+			},
+		)
+		for _, test := range []struct {
+			name       string
+			valueBytes uint64
+			wantMarker string
+		}{
+			{
+				name:       "exact",
+				valueBytes: knowledge.MaximumAliasCopyRuntimeEventBytes - 1,
+			},
+			{
+				name:       "over",
+				valueBytes: knowledge.MaximumAliasCopyRuntimeEventBytes,
+				wantMarker: KnowledgeAliasCopyEventLimitMarker,
+			},
+		} {
+			if ok := t.Run(test.name, func(t *testing.T) {
+				syntheticEvent := strings.Replace(
+					knowledgeRuntimeSyntheticEventSQL,
+					`CAST('FixtureHost' AS String) AS "host"`,
+					"repeat('x', "+strconv.FormatUint(test.valueBytes, 10)+`) AS "host"`,
+					1,
+				)
+				deferred, compileErr := compileDeferredKnowledgeRelation(
+					compiledRelation{sql: syntheticEvent, depth: 1},
+					knowledgeExtractionStageState(),
+					nil,
+					knowledgePreludePreparationForTest(program),
+				)
+				if compileErr != nil {
+					t.Fatalf("compile alias boundary relation: %v", compileErr)
+				}
+				consumerSQL := `SELECT toUInt64(length(dynamicElement("copied_host", 'String'))) AS ` +
+					`"probe" FROM (` + deferred.relation.sql + `) AS "__os_ko_alias_boundary"`
+				consumer := deferred.relation.selectFrom(
+					consumerSQL,
+					deferred.relation.ownerRange,
+				)
+				compiled, wrapErr := wrapChronologicalValidation(
+					consumer.sql,
+					consumer.depth,
+					consumer.ownerRange,
+					deferred.state.chronologicalBarriers,
+					[]string{`"probe"`},
+					[]string{"probe"},
+					"",
+					eventStatsOrdinarySourceFanout,
+					CompiledQuery{Args: deferred.args},
+					0,
+				)
+				if wrapErr != nil {
+					t.Fatalf("render alias boundary graph: %v", wrapErr)
+				}
+				queryContext, cancelQuery := knowledgeRuntimeIntegrationQueryContext(overallContext)
+				defer cancelQuery()
+				if test.wantMarker == "" {
+					knowledgeRuntimeRequireOneUint64(
+						t,
+						queryContext,
+						connection,
+						compiled.SQL,
+						compiled.Args,
+						test.valueBytes,
+					)
+					return
+				}
+				queryErr := knowledgeRuntimeQueryError(
+					queryContext,
+					connection,
+					compiled.SQL,
+					compiled.Args...,
+				)
+				knowledgeRuntimeRequireMarker(t, queryErr, test.wantMarker)
+			}); !ok {
+				return
+			}
+		}
+	}) {
+		return
+	}
+
+	if !t.Run("alias losing branches stay lazy", func(t *testing.T) {
+		const poisonMarker = "OS_KO_EAGER_ALIAS_SOURCE"
+		state := knowledgeExtractionStageState()
+		state.visible["danger"] = fieldState{
+			valueSQL:        quoteIdentifier("host"),
+			maxStringBytes:  1,
+			textEligibleSQL: "1",
+			dynamicTypeSQL:  "dynamicType(" + quoteIdentifier("host") + ")",
+			storedTypeSQL: "toUInt8(throwIf(toUInt8(1), '" +
+				poisonMarker + "'))",
+			existsSQL: "1",
+			kind:      fieldKindDynamic,
+		}
+		state.publicOrder = append(state.publicOrder, "danger")
+		aliasDefinition := func(
+			name string,
+			source string,
+			destination string,
+			index string,
+			overwrite opensplunkv1.KnowledgeOverwriteBehavior,
+		) *opensplunkv1.KnowledgeObjectDefinition {
+			definition := knowledgePreludeAliasDefinition(name, source, destination)
+			definition.Body.(*opensplunkv1.KnowledgeObjectDefinition_FieldAlias).
+				FieldAlias.OverwriteBehavior = overwrite
+			if index != "" {
+				definition.Selector = &opensplunkv1.KnowledgeSelector{
+					IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: index}},
+				}
+			}
+			return definition
+		}
+		tests := []struct {
+			name        string
+			definitions []*opensplunkv1.KnowledgeObjectDefinition
+			probe       string
+		}{
+			{
+				name: "selector false",
+				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+					aliasDefinition(
+						"a-false-danger",
+						"danger",
+						"false_out",
+						"east",
+						opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+					),
+				},
+				probe: `dynamicType("false_out") = 'None'`,
+			},
+			{
+				name: "preserve blocked",
+				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+					aliasDefinition(
+						"a-preserve-danger",
+						"danger",
+						"alias_value",
+						"",
+						opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+					),
+				},
+				probe: `dynamicElement("alias_value", 'String') = 'old'`,
+			},
+			{
+				name: "disjoint losing writer",
+				definitions: []*opensplunkv1.KnowledgeObjectDefinition{
+					aliasDefinition(
+						"a-east-danger",
+						"danger",
+						"shared_out",
+						"east",
+						opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+					),
+					aliasDefinition(
+						"b-west-host",
+						"host",
+						"shared_out",
+						"west",
+						opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+					),
+				},
+				probe: `dynamicElement("shared_out", 'String') = 'FixtureHost'`,
+			},
+		}
+		for _, test := range tests {
+			if ok := t.Run(test.name, func(t *testing.T) {
+				program := knowledgePreludeProgram(t, test.definitions)
+				preparation := knowledgePreludePreparationForTest(program)
+				prelude, preludeErr := compileKnowledgePrelude(state, preparation)
+				if preludeErr != nil {
+					t.Fatalf("compile lazy alias prelude: %v", preludeErr)
+				}
+				if len(prelude.stages) != 1 ||
+					strings.Contains(
+						strings.Join(prelude.stages[0].bindingProjection, " "),
+						poisonMarker,
+					) ||
+					!strings.Contains(
+						strings.Join(prelude.stages[0].arrayJoinBindings, " "),
+						poisonMarker,
+					) {
+					t.Fatalf(
+						"poison must exist only in the guarded candidate binding: %#v",
+						prelude.stages,
+					)
+				}
+				compiled := knowledgeRuntimeCompileDeferredProbe(
+					t,
+					knowledgeRuntimeSyntheticEventSQL,
+					state,
+					preparation,
+					test.probe,
+				)
+				if strings.Count(compiled.SQL, poisonMarker) == 0 {
+					t.Fatalf("lazy fixture dropped poison source:\n%s", compiled.SQL)
+				}
+				queryContext, cancelQuery := knowledgeRuntimeIntegrationQueryContext(overallContext)
+				defer cancelQuery()
+				knowledgeRuntimeRequireOneUint64(
+					t,
+					queryContext,
+					connection,
+					compiled.SQL,
+					compiled.Args,
+					1,
+				)
+			}); !ok {
+				return
+			}
+		}
+	}) {
+		return
+	}
+
 	if !t.Run("deferred validation survives an empty consumer", func(t *testing.T) {
 		definition := knowledgePreludeCalculatedDefinition(
 			"runtime-query-limit",
@@ -305,6 +603,8 @@ func TestKnowledgeRelationAndRuntimeGuardAgainstClickHouse(t *testing.T) {
 			inputBytes   string
 			queryUnits   string
 			captureBytes string
+			aliasBytes   string
+			aliasUnits   string
 			wantRows     int
 			wantMarker   string
 		}{
@@ -348,27 +648,92 @@ func TestKnowledgeRelationAndRuntimeGuardAgainstClickHouse(t *testing.T) {
 				wantMarker:   RexCaptureLimitMarker,
 			},
 			{
-				name: "event precedes capture and query", rows: 1,
+				name: "alias event exact", rows: 1,
+				inputBytes: "0", queryUnits: "0", captureBytes: "0",
+				aliasBytes: strconv.FormatUint(
+					knowledge.MaximumAliasCopyRuntimeEventBytes,
+					10,
+				),
+				wantRows: 1,
+			},
+			{
+				name: "alias event over", rows: 1,
+				inputBytes: "0", queryUnits: "0", captureBytes: "0",
+				aliasBytes: strconv.FormatUint(
+					knowledge.MaximumAliasCopyRuntimeEventBytes+1,
+					10,
+				),
+				wantMarker: KnowledgeAliasCopyEventLimitMarker,
+			},
+			{
+				name: "alias query exact", rows: 2,
+				inputBytes: "0", queryUnits: "0", captureBytes: "0",
+				aliasUnits: strconv.FormatUint(
+					knowledge.MaximumAliasCopyRuntimeQueryUnits/2,
+					10,
+				),
+				wantRows: 2,
+			},
+			{
+				name: "alias query over", rows: 2,
+				inputBytes: "0", queryUnits: "0", captureBytes: "0",
+				aliasUnits: strconv.FormatUint(
+					knowledge.MaximumAliasCopyRuntimeQueryUnits/2,
+					10,
+				) + " + if(number = 0, 1, 0)",
+				wantMarker: KnowledgeAliasCopyQueryLimitMarker,
+			},
+			{
+				name: "selector event precedes every later limit", rows: 1,
 				inputBytes:   strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes + 1),
 				queryUnits:   strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits + 1),
 				captureBytes: strconv.FormatUint(MaximumRexCapturedBytesPerRow+1, 10),
+				aliasBytes:   strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeEventBytes+1, 10),
+				aliasUnits:   strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeQueryUnits+1, 10),
 				wantMarker:   KnowledgeSelectorEventLimitMarker,
 			},
 			{
-				name: "capture precedes query", rows: 1,
+				name: "capture precedes alias event and query limits", rows: 1,
 				inputBytes:   strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes),
 				queryUnits:   strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits + 1),
 				captureBytes: strconv.FormatUint(MaximumRexCapturedBytesPerRow+1, 10),
+				aliasBytes:   strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeEventBytes+1, 10),
+				aliasUnits:   strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeQueryUnits+1, 10),
 				wantMarker:   RexCaptureLimitMarker,
+			},
+			{
+				name: "alias event precedes query limits", rows: 1,
+				inputBytes: "0", captureBytes: "0",
+				queryUnits: strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits + 1),
+				aliasBytes: strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeEventBytes+1, 10),
+				aliasUnits: strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeQueryUnits+1, 10),
+				wantMarker: KnowledgeAliasCopyEventLimitMarker,
+			},
+			{
+				name: "selector query precedes alias query", rows: 1,
+				inputBytes: "0", captureBytes: "0", aliasBytes: "0",
+				queryUnits: strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits + 1),
+				aliasUnits: strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeQueryUnits+1, 10),
+				wantMarker: KnowledgeSelectorQueryLimitMarker,
 			},
 		}
 		for _, test := range tests {
 			if ok := t.Run(test.name, func(t *testing.T) {
+				aliasBytes := test.aliasBytes
+				if aliasBytes == "" {
+					aliasBytes = "0"
+				}
+				aliasUnits := test.aliasUnits
+				if aliasUnits == "" {
+					aliasUnits = "0"
+				}
 				relationSQL := "SELECT toUInt128(" + test.inputBytes + ") AS " +
 					prelude.selectorCharges.inputBytes + ", toUInt128(" +
 					test.queryUnits + ") AS " + prelude.selectorCharges.queryUnits +
 					", toUInt128(" + test.captureBytes + ") AS " +
-					prelude.capturedBytes + " FROM numbers(" +
+					prelude.capturedBytes + ", toUInt128(" + aliasBytes + ") AS " +
+					prelude.aliasCopyCharges.eventBytes + ", toUInt128(" + aliasUnits + ") AS " +
+					prelude.aliasCopyCharges.queryUnits + " FROM numbers(" +
 					strconv.FormatUint(test.rows, 10) + ")"
 				guard, guardErr := compileKnowledgeRuntimeGuard(
 					compiledRelation{sql: relationSQL, depth: 1},
@@ -493,6 +858,86 @@ func knowledgeRuntimeRequireRows(
 	}
 }
 
+func knowledgeRuntimeCompileDeferredProbe(
+	t *testing.T,
+	inputSQL string,
+	state compileState,
+	preparation preparedKnowledgeCompilation,
+	probeSQL string,
+) CompiledQuery {
+	t.Helper()
+	deferred, err := compileDeferredKnowledgeRelation(
+		compiledRelation{sql: inputSQL, depth: 1},
+		state,
+		nil,
+		preparation,
+	)
+	if err != nil {
+		t.Fatalf("compile deferred knowledge probe: %v", err)
+	}
+	consumerSQL := `SELECT toUInt64(` + probeSQL + `) AS "probe" FROM (` +
+		deferred.relation.sql + `) AS "__os_ko_runtime_probe"`
+	consumer := deferred.relation.selectFrom(
+		consumerSQL,
+		deferred.relation.ownerRange,
+	)
+	compiled, err := wrapChronologicalValidation(
+		consumer.sql,
+		consumer.depth,
+		consumer.ownerRange,
+		deferred.state.chronologicalBarriers,
+		[]string{`"probe"`},
+		[]string{"probe"},
+		"",
+		eventStatsOrdinarySourceFanout,
+		CompiledQuery{Args: deferred.args},
+		0,
+	)
+	if err != nil {
+		t.Fatalf("render deferred knowledge probe: %v", err)
+	}
+	return compiled
+}
+
+func knowledgeRuntimeRequireOneUint64(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	sql string,
+	args []any,
+	want uint64,
+) {
+	t.Helper()
+	rows, err := connection.Query(ctx, sql, args...)
+	if err != nil {
+		t.Fatalf("execute knowledge runtime scalar: %v\nSQL: %s\nargs: %#v", err, sql, args)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close knowledge runtime scalar rows: %v", closeErr)
+		}
+	}()
+	if !rows.Next() {
+		if rowErr := rows.Err(); rowErr != nil {
+			t.Fatalf("read knowledge runtime scalar: %v", rowErr)
+		}
+		t.Fatal("knowledge runtime scalar returned no row")
+	}
+	var got uint64
+	if scanErr := rows.Scan(&got); scanErr != nil {
+		t.Fatalf("scan knowledge runtime scalar: %v", scanErr)
+	}
+	if rows.Next() {
+		t.Fatal("knowledge runtime scalar returned more than one row")
+	}
+	if rowErr := rows.Err(); rowErr != nil {
+		t.Fatalf("consume knowledge runtime scalar: %v", rowErr)
+	}
+	if got != want {
+		t.Fatalf("knowledge runtime scalar = %d, want %d", got, want)
+	}
+}
+
 func knowledgeRuntimeQueryError(
 	ctx context.Context,
 	connection clickhousedriver.Conn,
@@ -508,16 +953,27 @@ func knowledgeRuntimeQueryError(
 			resultErr = fmt.Errorf("close knowledge runtime guard rows: %w", closeErr)
 		}
 	}()
+	rowsRead := 0
 	for rows.Next() {
 		var captured any
 		if scanErr := rows.Scan(&captured); scanErr != nil {
 			return scanErr
 		}
+		rowsRead++
 	}
 	if rowErr := rows.Err(); rowErr != nil {
+		if rowsRead != 0 {
+			return fmt.Errorf(
+				"knowledge runtime guard published %d rows before failing",
+				rowsRead,
+			)
+		}
 		return rowErr
 	}
-	return errors.New("knowledge runtime guard unexpectedly succeeded")
+	return fmt.Errorf(
+		"knowledge runtime guard unexpectedly succeeded with %d rows",
+		rowsRead,
+	)
 }
 
 func knowledgeRuntimeRequireMarker(t *testing.T, err error, want string) {
@@ -530,7 +986,9 @@ func knowledgeRuntimeRequireMarker(t *testing.T, err error, want string) {
 	for _, marker := range []string{
 		KnowledgeSelectorEventLimitMarker,
 		RexCaptureLimitMarker,
+		KnowledgeAliasCopyEventLimitMarker,
 		KnowledgeSelectorQueryLimitMarker,
+		KnowledgeAliasCopyQueryLimitMarker,
 	} {
 		if marker != want && strings.Contains(exception.Message, marker) {
 			t.Fatalf("knowledge runtime guard error contains competing marker %q: %v", marker, err)
