@@ -334,6 +334,11 @@ func forwardCompatibleProtoSanitizer[T proto.Message](request T) (T, error) {
 		// invalidity). Its dedicated decoder has already projected updates and
 		// bounded dangerous repetitions, so no generic clearing is safe here.
 		return request, nil
+	case *opensplunkv1.PreviewKnowledgeObjectRequest:
+		// Preview shares Validate's candidate-envelope unknown authority. Its
+		// request-only decoder applies the same bounded update projection before
+		// this sanitizer can ever be used by a future route.
+		return request, nil
 	}
 
 	pending := []protoreflect.Message{request.ProtoReflect()}
