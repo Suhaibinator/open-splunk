@@ -2,11 +2,11 @@
 
 **Goal status:** active
 
-**Current milestone:** KO-1 field execution
+**Current milestone:** KO-1 ACTIVE publication validation (closed gates)
 
-**Last completed slice:** KO-1C closed-gate retained-prelude reconstruction
+**Last completed slice:** transactional ACTIVE dependency schema prerequisite
 
-**Evidence date:** August 8, 2026
+**Evidence date:** August 9, 2026
 
 ## Durable checkpoint
 
@@ -67,6 +67,15 @@
   runtime guards, preserves an exact authored/knowledge compiler-evidence
   split, and re-injects the manager-sealed retained program for postflight
   inspection and completed-search analysis.
+- ACTIVE publication preparation now includes the backend-neutral dependency
+  compiler, the complete-winner-cohort adapter, and migration 0033. The
+  migration permits enable to persist a newly derived graph, preserves exact
+  disable/delete graph identity, rejects stale ACTIVE pins during upgrade, and
+  blocks target version advancement while a current ACTIVE dependent retains
+  an old pin. A future atomic cascade disables dependents state-only, advances
+  the target, and re-enables them with derived edges. All Writer ACTIVE gates
+  remain closed pending bounded cross-principal/app/index-intersection
+  enumeration and transaction wiring.
 - Runtime feature state: the capability remains hard-disabled and unadvertised;
   the six knowledge-management handlers are deliberately not registered in the
   production router and their paths still return 404. Configured test/runtime
@@ -696,6 +705,7 @@ KO-1C closed-gate evidence:
 | Focused verification | pass | affected-package normal gate: `go test ./internal/searchjobs ./internal/searchsnapshot ./internal/searchinspection ./internal/searchanalysis ./internal/export -count=1 -timeout=30s` (all five packages passed in 2.5s or less each); focused race across retained authority, downgrade, inspection, analysis concurrency, and export tamper tests passed in 7.7s; focused vet and `git diff --check` passed |
 | Independent review | pass | independent reviewers found the unsigned reconstructed-downgrade and unsigned search-analysis fixture gaps; both were fixed with universal Manager-seal validation and Manager-minted test snapshots, then two final reviewers returned clean verdicts |
 | Digest-pinned ClickHouse acceptance | pending | the opt-in fixture covers Dynamic `byteSize`, alias-copy exact/+1, losing-branch laziness, all five guard markers, and deferred hidden-failure atomicity. A driver query-parameter false positive in its synthetic JSON literal was corrected in `98b7a15`, but the subsequent Docker run was canceled; no green pinned runtime result or broader authored-suffix/finalizer matrix is claimed |
+| ACTIVE dependency schema prerequisite | pass, publication closed | migration 0033 SHA-256 `171c5b390d1033a48405ab5953131c312a2fed5ba09a22bd7b8a58f62cba9f7f`; enable may seal a rederived dependency set, disable/delete retain exact predecessor identity, stale ACTIVE pins reject upgrade atomically, and advancement is blocked only while a current ACTIVE dependent retains another target pin. The schema supports a bounded disable/advance/re-enable cascade; Writer create/active-update/enable gates remain closed |
 | Runtime activation | unchanged | `compiled_query_execution.go` and `knowledgesnapshot.Authority.Finalize` retain separate nonempty hard gates; production still supplies no resolver, routes, capability, navigation, or supported ACTIVE publication |
 | Local durability | pass | twenty-seven intentional KO-1C commits from `5088427` through `1a30afc` inclusive are separate and locally durable on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |

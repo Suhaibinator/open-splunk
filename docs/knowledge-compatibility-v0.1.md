@@ -744,6 +744,21 @@ all affected private/app/global and index-intersection cohorts, proves latent
 unshadowing coverage, requires one exact candidate authority across them, and
 persists those derived edges atomically.
 
+Enabling a retained draft or disabled definition rederives its complete edge
+set against that transaction's post-publication winners; it never copies the
+predecessor's edges as semantic authority. Disable and delete remain
+state-only versions and retain their predecessor's exact ordered edge set.
+Advancing the immutable version of an ACTIVE target is allowed only when no
+current ACTIVE dependent still pins another target version. A bounded atomic
+cascade may disable those dependents with exact state-only edges, advance the
+target, and then re-enable them with newly derived edges before commit.
+Historical and inactive source edges do not block that transition. A schema
+upgrade fails atomically if a current ACTIVE
+edge already targets an absent, inactive, or noncurrent target version. This
+target-transition guard is not source-publication authority: the still-closed
+Writer gate must validate every new ACTIVE source edge against the complete
+post-publication cohort before its registry row can advance.
+
 The versioned program commitment length-frames the exact typed operator order,
 object origin and definition digest, per-output definition location, selector
 canonical bytes and runtime assessment, overwrite behavior, executable body,

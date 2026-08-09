@@ -309,7 +309,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 		t.Fatalf("apply migration 0029 to long valid history: %v", err)
 	}
 	t.Logf("migration 0029 backfilled %d versions in %s", versionCount, time.Since(migrationStarted))
-	assertIntegerQuery(t, raw, 32, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 33, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, versionCount, `
 		SELECT count(*) FROM knowledge_object_version_lifecycle
 		WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-long-disabled'`)

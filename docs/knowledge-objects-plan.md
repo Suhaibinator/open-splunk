@@ -1185,8 +1185,8 @@ with an executable Open Splunk fixture.
 **Outcome:** knowledge definitions can be persisted, authorized, resolved, and
 pinned without affecting search results.
 
-**Implementation checkpoint (August 8, 2026):** contracts, migrations 0024
-through 0032, canonical definition handling, the bounded authorization-first
+**Implementation checkpoint (August 9, 2026):** contracts, migrations 0024
+through 0033, canonical definition handling, the bounded authorization-first
 reader, the atomic catalog Writer, the six administrator-only management
 handlers/codecs with their synchronous rejected-attempt boundary, the
 one-read-transaction active resolver, and opaque immutable snapshot preparation
@@ -1301,6 +1301,19 @@ transactional catalog layer enumerates every affected private/app/global and
 index-intersection cohort, proves shadow/unshadow coverage, applies aggregate
 cross-cohort work bounds, requires identical candidate authority in every cohort
 where it wins, and stores only those derived edges atomically.
+
+Migration 0033 prepares that atomic publication boundary without opening it.
+An enable may append a newly derived dependency set instead of copying its
+draft or disabled predecessor, while disable and delete still require exact
+state-only graph identity. A current ACTIVE target cannot advance to a new
+immutable version while any current ACTIVE dependent still pins an older
+target version; a future bounded batch publication may append exact state-only
+disabled versions for those dependents, advance the target, and then enable
+them with newly derived edges inside one immediate transaction. The migration
+rejects a catalog that already violates this invariant before replacing any
+trigger. Create,
+active-update, and enable publication gates remain closed until the complete
+transactional cohort authority described above is implemented.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and

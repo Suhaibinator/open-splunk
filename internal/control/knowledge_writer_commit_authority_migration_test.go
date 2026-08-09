@@ -21,7 +21,7 @@ func TestKnowledgeWriterCommitAuthorityMigrationPinsReplaySchema(t *testing.T) {
 		t.Fatalf("apply migrations: %v", err)
 	}
 
-	assertIntegerQuery(t, raw, 32, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 33, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 1, `
 		SELECT count(*) FROM pragma_table_list
 		WHERE name = 'knowledge_mutation_idempotency'
@@ -407,7 +407,6 @@ func TestKnowledgeWriterVersionSemanticTriggerRejectsAuthorityDrift(t *testing.T
 		{name: "no-op update", appID: knowledgeMigrationTestAppID, ownerID: "owner-a", objectType: "field_extraction", objectName: "ko-writer-semantics", scope: "private", state: "draft", mutation: "update"},
 		{name: "scope change reuses definition", appID: knowledgeMigrationTestAppID, ownerID: "owner-a", objectType: "field_extraction", objectName: "ko-writer-semantics", scope: "app", state: "draft", mutation: "scope_change"},
 		{name: "state only changes name", appID: knowledgeMigrationTestAppID, ownerID: "owner-a", objectType: "field_extraction", objectName: "changed-name", scope: "private", state: "disabled", mutation: "disable"},
-		{name: "enable changes dependencies", appID: knowledgeMigrationTestAppID, ownerID: "owner-a", objectType: "field_extraction", objectName: "ko-writer-semantics", scope: "private", state: "active", mutation: "enable", dependency: 1},
 		{name: "disable changes dependencies", appID: knowledgeMigrationTestAppID, ownerID: "owner-a", objectType: "field_extraction", objectName: "ko-writer-semantics", scope: "private", state: "disabled", mutation: "disable", dependency: 1},
 		{name: "delete changes dependencies", appID: knowledgeMigrationTestAppID, ownerID: "owner-a", objectType: "field_extraction", objectName: "ko-writer-semantics", scope: "private", state: "deleted", mutation: "delete", dependency: 1},
 	}
@@ -428,13 +427,15 @@ func TestKnowledgeWriterVersionSemanticTriggerRejectsAuthorityDrift(t *testing.T
 	}
 
 	for _, valid := range []struct {
-		name     string
-		scope    string
-		state    string
-		mutation string
+		name       string
+		scope      string
+		state      string
+		mutation   string
+		dependency int
 	}{
 		{name: "ordinary update", scope: "private", state: "draft", mutation: "update"},
 		{name: "app scope change", scope: "app", state: "draft", mutation: "scope_change"},
+		{name: "enable with rederived dependencies", scope: "private", state: "active", mutation: "enable", dependency: 1},
 		{name: "state only disable", scope: "private", state: "disabled", mutation: "disable"},
 	} {
 		t.Run("accepts "+valid.name, func(t *testing.T) {
@@ -443,7 +444,7 @@ func TestKnowledgeWriterVersionSemanticTriggerRejectsAuthorityDrift(t *testing.T
 				t.Fatalf("begin accepted transition: %v", err)
 			}
 			digest := distinctDigest
-			if valid.mutation == "disable" {
+			if valid.mutation == "disable" || valid.mutation == "enable" {
 				digest = make([]byte, 32)
 			}
 			if _, err := tx.Exec(`
@@ -455,8 +456,8 @@ func TestKnowledgeWriterVersionSemanticTriggerRejectsAuthorityDrift(t *testing.T
 				) VALUES (
 					'tenant-a', 'ko-writer-semantics', 2, ?, 'owner-a',
 					'field_extraction', 'ko-writer-semantics', ?, ?,
-					?, 0, ?, NULL, 20
-				)`, knowledgeMigrationTestAppID, valid.scope, valid.state, digest, valid.mutation); err != nil {
+					?, ?, ?, NULL, 20
+				)`, knowledgeMigrationTestAppID, valid.scope, valid.state, digest, valid.dependency, valid.mutation); err != nil {
 				_ = tx.Rollback()
 				t.Fatalf("accepted transition insert: %v", err)
 			}
