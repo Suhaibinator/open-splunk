@@ -1012,8 +1012,9 @@ bounded inverse result and must be detected when its source graph is read or
 revalidated; supporting another target kind requires a new bounded current-
 inverse authority and index contract first.
 
-The protobuf now freezes a future `validate` contract, but no validate handler
-or route is registered or advertised. Definition message presence and one
+The protobuf freezes the `validate` contract and the concrete catalog Writer now
+implements its internal service boundary, but no Validate handler or route is
+registered or advertised. Definition message presence and one
 explicit intent are required. `INACTIVE_STORAGE` proves only bounded canonical
 inactive persistence; `ACTIVE_PUBLICATION` evaluates the candidate as a
 proposed ACTIVE version in one fixed knowledge/app/index catalog transaction.
@@ -1030,16 +1031,76 @@ mask applied to that exact current version. A missing top-level definition is
 also an envelope error, while a present definition with a missing or unknown
 body is candidate invalidity.
 
-ACTIVE create validation does not reserve or predict the ID which a later
-Create mutation will allocate. It evaluates with a deterministic non-persisted
-candidate ID proven fresh against the same bounded transactional inventory, and
-validity, diagnostics, resource charges, and the target-only dependency
-projection must be invariant under every fresh candidate-ID rename. The result
-authorizes or reserves no ID. A later Create generates its own ID and
-revalidates all live catalog, app, and index facts, so intervening changes may
-alter the outcome.
+`Writer.Validate` accepts a `ValidationScope` with separate read and write
+authority. The scopes must agree on the authenticated tenant and owner, but
+their app sets are intentionally independent: `WriteScope` controls the root
+object and candidate app, while `ReadScope` controls which derived dependency
+targets may be disclosed. The process-local admission limit is one validation
+per control database and is shared by every Writer over that database; a full
+gate fails fast instead of queueing. The request envelope is checked before
+admission without cloning the candidate. Under the gate, create selects the
+whole definition and update constructs a shallow view containing only mask-
+selected top-level fields. Unselected update payload does not contribute to the
+validation byte authority and is never cloned.
 
-Only candidate-authored invalidity is an HTTP-200 `valid=false` result. It must
+Selected selector dimensions and regex output lists are cardinality-checked in
+the normalizer's fail-fast order before any exact size walk. Each is limited to
+16 entries. On overflow, the service replaces the caller-owned repetition with
+a newly allocated 17-entry witness carrying only the applicable body kind, so
+the normalizer emits its ordinary typed `KNOWLEDGE_DEFINITION_RESOURCE_LIMIT`
+issue without traversing or cloning an attacker-sized list. If no selected list
+overflows, only the bounded selected request view is measured against the
+mutation-request byte ceiling and then detached. The witness path deliberately
+does not perform a full request-size walk because candidate cardinality is the
+earlier typed failure; every later result still passes the independent 8 MiB
+response seal.
+
+Every admitted request evaluates inside one fixed, always-rolled-back
+`BEGIN IMMEDIATE` transaction. Update first authorizes the requested root, then
+checks expected version, lifecycle and current storage integrity, and rejects a
+current opaque future definition out-of-band before applying the candidate
+mask. These root/version/lifecycle/opaque outcomes therefore cannot be replaced
+by a candidate issue. For a create, or after the update root is established,
+local candidate invalidity precedes candidate-app/index inventory work. A valid
+candidate app is authorized through `WriteScope`; error context may identify
+only that authorized root or app and never a dependency target. Every service
+error defaults to definitive rejection.
+
+`INACTIVE_STORAGE` normalizes the applied definition, authorizes its app only
+when valid, and bookends the tenant knowledge revision. It does not singleton-
+compile publication semantics, read the ACTIVE publication inventory, or
+derive dependencies. `ACTIVE_PUBLICATION` first performs candidate singleton
+preparation, then reads the complete bounded knowledge/app/index inventory and
+uses the ACTIVE transition evaluator. Validation compiles every affected
+candidate-absent baseline before attributing a post-candidate conflict, so an
+invalid persisted baseline remains an out-of-band catalog error. Candidate
+conflicts are opaque and deterministically prefer stronger topology failures;
+only cohort-local target absence may become the target-free generic dependency
+diagnostic. Rich derived targets are first integrity-checked against the exact
+current ACTIVE registry/version and only then projected through `ReadScope`.
+A missing or unauthorized target produces the same generic in-band result;
+target identity and authorization context are never exposed. Other transition,
+integrity, catalog, resource, and infrastructure failures remain errors.
+
+ACTIVE create chooses the first deterministic
+`knowledge-validation-candidate-%04x` value absent from the complete tenant
+inventory after reconciling the tenant identity ledger and physical row count.
+It neither invokes the mutation ID generator nor reserves or returns the
+evaluation identity. Both intents return the exact same-transaction knowledge-
+ledger revision. A zero revision is accepted only after proving the physical
+object ledger empty, and every revision path matches an end bookend. The
+transaction is rolled back before `SealValidateResponse`; any rollback failure
+invalidates the request. Validation commits no data and invokes no DML, audit,
+idempotency, publication hook, clock, or mutation-ID authority.
+
+The evaluation-local create identity is alpha-invariant: validity, diagnostics,
+resource charges, and the target-only dependency projection must be unchanged
+under every other fresh candidate-ID choice. A later Create generates its own
+ID and revalidates all live catalog, app, and index facts, so intervening
+changes may alter the outcome.
+
+Only candidate-authored invalidity is an in-band `valid=false` result; a future
+HTTP handler would map that sealed result to HTTP 200. It must
 retain a field violation or ERROR diagnostic and omit normalized definition,
 digest, dependencies, and resources. A valid result carries the normalized
 definition,
@@ -1054,8 +1115,9 @@ affected-cohort totals or marginal post-fusion deltas. Dependency nodes/edges
 instead derive from the full ACTIVE transition and the complete set of at most
 1,024 direct authorized candidate `FIELD_INPUT` dependencies. Hidden and
 missing targets are indistinguishable. Authentication, request authorization,
-catalog corruption, hidden-inventory, and service failures remain uniform
-non-2xx outcomes rather than candidate issues.
+catalog corruption, hidden-inventory, and service failures remain out-of-band
+rather than candidate issues; a future handler maps them to uniform non-2xx
+outcomes.
 
 The three formerly missing intrinsic counters are append-only resource fields:
 `extraction_outputs = 12`, `json_evaluation_work_units = 13`, and
@@ -1095,7 +1157,10 @@ singleton intrinsic charges, transition-supplied dependency counts/order,
 issue provenance, recursive unknown-field absence, and a revision no greater
 than MaxInt64. It retains the exact deterministic protobuf bytes only when the
 complete response is at most 8 MiB; its protobuf and byte accessors detach.
-This is still an internal construction boundary, not a registered handler.
+This remains the pure internal construction boundary. `Writer.Validate` now
+supplies its catalog/transaction/authorization adapter and returns only the
+sealed projection after successful rollback, but it is not a registered
+handler.
 
 The future `preview` contract also remains unregistered and unadvertised. It
 applies the same create/update candidate envelope and always validates with
@@ -1602,6 +1667,22 @@ trigger. Recognized ACTIVE create, one-object ACTIVE update, and enable now use
 the complete transactional inventory and persistence authority described
 above; updates with current inbound pins remain fail-closed until a bounded
 batch repin transaction exists.
+
+The same catalog primitives now support advisory validation without opening a
+mutation path. An internal `Writer.Validate` separates read disclosure from
+write admission, shares a fail-fast one-slot gate per control database, detaches
+only the selected create/update definition view, and uses bounded cardinality
+witnesses for selected repeated-field amplification. Both intents run in a
+fresh immediate transaction which is always rolled back before the response is
+sealed. Inactive validation stops after structural result construction, app
+authorization, and revision bookends; active validation uses the complete
+baseline-first transition and separately authorizes its integrity-checked
+targets. Deterministic fresh create IDs are transaction-local and unreserved,
+revision zero proves physical catalog emptiness, and no mutation collaborator,
+DML, audit, idempotency record, hook, or commit can run. The service remains an
+internal Writer method: no Validate/Preview handler, route, browser allowlist
+entry, bootstrap capability, resolver attachment, or nonempty execution gate
+changed.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and

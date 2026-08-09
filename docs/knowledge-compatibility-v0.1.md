@@ -34,8 +34,11 @@ ascending, updated-time-descending, created-time-descending, and object-type-
 ascending sort readiness. Recognized definitions can be created
 ACTIVE, updated while ACTIVE, or enabled from DRAFT/DISABLED through the
 transactional, compiler-proven Writer path; opaque future definitions cannot be
-updated or enabled as ACTIVE. The nonempty compiler, snapshot-finalization, and
-execution gates remain closed, so no knowledge object affects search results.
+updated or enabled as ACTIVE. The Writer also exposes an internal rollback-only
+candidate-validation service, but no Validate/Preview handler, route, browser
+allowlist entry, or bootstrap capability consumes it. The nonempty compiler,
+snapshot-finalization, and execution gates remain closed, so no knowledge
+object affects search results.
 
 ## Security boundary
 
@@ -521,9 +524,10 @@ same-width disagreement fails closed as catalog corruption.
 
 ## Candidate validation and preview contract
 
-The protobuf definitions freeze future validation and preview behavior, but the
-production router registers neither route and bootstrap advertises neither
-capability. The normalizer currently provides only an internal bridge:
+The protobuf definitions freeze validation and preview behavior. The concrete
+catalog Writer now implements internal validation, but the production router
+registers neither route and bootstrap advertises neither capability. The pure
+normalizer provides one internal bridge:
 `Normalize` remains fail-fast and `IssueFromError` may extract one detached,
 definition-relative candidate issue with code
 `KNOWLEDGE_DEFINITION_INVALID`, `KNOWLEDGE_DEFINITION_UNKNOWN_FIELD`, or
@@ -581,24 +585,78 @@ relative to `KnowledgeObjectDefinition`; validation applies it to that exact
 current version. A missing definition message is an envelope error, while a
 present definition with a missing or unknown body is candidate invalidity.
 
-For ACTIVE create validation, the service chooses a deterministic non-persisted
-candidate ID and proves it fresh against the same bounded transactional
-inventory. This identity is only a derivation device: the response reserves or
-authorizes no ID, and semantic validity, diagnostics, resource charges, and the
-target-only dependency projection must be invariant under every fresh
-candidate-ID rename. A later Create generates its own ID and revalidates the
-then-current catalog, app, and index facts, so intervening changes may alter the
-outcome.
+Internal `Writer.Validate` takes a `ValidationScope` split between read and
+write authority. Both scopes must identify the same authenticated tenant and
+owner, but their app sets are independent: write authority controls the
+requested root and candidate app, while read authority independently controls
+dependency disclosure. A process-local one-slot gate is shared by every Writer
+using the same control database and fails fast rather than queueing. Before that
+gate, only the bounded request envelope is inspected. Once admitted, create
+selects the complete definition and update makes a shallow mask-selected view;
+unselected update fields are omitted from the request byte charge and clone.
 
-Only candidate-authored invalidity may return HTTP 200 with `valid=false`. Such
-a result retains at least one field violation or ERROR diagnostic even after
+The selected selector dimensions and regex output list are each capped at 16
+entries. The service checks those list lengths in the normalizer's established
+fail-fast order before walking exact request bytes. For overflow, it substitutes
+a newly allocated 17-entry witness containing no caller scalar and only the
+applicable body kind. Normalization therefore emits the same typed resource
+issue without traversing or cloning an attacker-sized repetition. A nonoverflow
+selected view must fit the normal mutation-request byte ceiling before it is
+detached. Every result, including the witness path, still passes the separate
+8 MiB deterministic response seal.
+
+Both intents run inside one fresh `BEGIN IMMEDIATE` transaction that is always
+rolled back before response sealing. An update first authorizes the requested
+root, then checks its exact expected version, lifecycle, stored integrity, and
+whether its current definition is opaque; only after those out-of-band checks
+does it apply and inspect the candidate. Local candidate invalidity precedes
+candidate-app/index inventory work once the root is established. Errors may
+carry only an already-authorized root or candidate-app context, never a
+dependency target, and default to definitive rejection.
+
+`INACTIVE_STORAGE` performs structural normalization, authorizes the app of a
+valid applied definition, and bookends the knowledge revision. It does not
+compile publication semantics, read the ACTIVE transition inventory, or derive
+dependencies. `ACTIVE_PUBLICATION` singleton-prepares the candidate and then
+evaluates the complete bounded knowledge/app/index transition. Before
+classifying any post-candidate conflict, it compiles all affected
+candidate-absent baseline cohorts; persisted baseline faults therefore remain
+catalog errors instead of candidate diagnostics. Conflict decisions expose no
+identity and deterministically retain stronger topology failures. Only
+cohort-local target absence may become the generic target-free dependency
+diagnostic. Derived targets are first integrity-checked against their exact
+current ACTIVE registry/version and then filtered through read authority;
+missing and forbidden produce the same generic in-band outcome, while all other
+transition, target-integrity, catalog, resource, and infrastructure failures
+remain out-of-band.
+
+For ACTIVE create, the service selects the first deterministic
+`knowledge-validation-candidate-%04x` identity absent from the complete tenant
+inventory after matching the identity ledger to the physical row count. The
+identity is neither returned nor reserved, and the mutation ID generator is not
+called. Both intents return the exact knowledge-ledger revision observed in the
+transaction; revision zero additionally requires the physical knowledge object
+ledger to be empty, and every revision path is bookended. Rollback failure
+invalidates the request. Validation performs no DML, commit, mutation audit,
+idempotency operation, publication hook, clock read, or mutation-ID allocation.
+
+The evaluation-local create identity is alpha-invariant: semantic validity,
+diagnostics, resource charges, and the target-only dependency projection must
+be unchanged under every other fresh candidate-ID choice. A later Create
+generates its own ID and revalidates the then-current catalog, app, and index
+facts, so intervening changes may alter the outcome.
+
+Only candidate-authored invalidity may return an in-band `valid=false`; a
+future HTTP adapter would map that sealed result to HTTP 200. Such a result
+retains at least one field violation or ERROR diagnostic even after
 truncation and omits normalized definition, digest, dependencies, and resource
 estimates. A valid result carries the normalized definition, exact 32-byte
 digest of its deterministic encoding, and a complete candidate-only resource
 report; it has no field violations or ERROR diagnostics and no field-violation
 truncation. Request, authentication, requested-object authorization,
-catalog-integrity, hidden-inventory, and service failures are uniform non-2xx
-outcomes rather than candidate diagnostics. `object_type` is unspecified only
+catalog-integrity, hidden-inventory, and service failures remain out-of-band;
+a future handler maps them to uniform non-2xx outcomes rather than candidate
+diagnostics. `object_type` is unspecified only
 when an invalid candidate's body cannot be identified; otherwise it is the
 exact applied body type.
 
@@ -669,6 +727,9 @@ ordering and private range provenance, recursive unknown-field absence, and a
 revision through MaxInt64. It retains the exact deterministic encoding only at
 or below 8 MiB, and all protobuf/byte projections detach. This is an internal
 result boundary, not a database read, catalog proof, route, or HTTP service.
+The Writer adapter now supplies the database, transition, and authorization
+proofs and calls the seal only after successful rollback. It remains an
+internal method rather than a registered route or advertised capability.
 
 Preview has no independent intent. It uses the same create/update candidate
 envelope and always performs `ACTIVE_PUBLICATION` evaluation in one fixed

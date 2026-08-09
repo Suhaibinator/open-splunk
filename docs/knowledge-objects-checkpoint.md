@@ -4,8 +4,9 @@
 
 **Current milestone:** KO-1 search-time runtime acceptance (closed gates)
 
-**Last completed slice:** pure bounded knowledge-validation result construction,
-with database, catalog-service, and HTTP route integration still closed
+**Last completed slice:** rollback-only internal catalog validation for inactive
+and active object candidates, with handler, HTTP route, browser, and capability
+integration still closed
 
 **Evidence date:** August 9, 2026
 
@@ -27,9 +28,11 @@ with database, catalog-service, and HTTP route integration still closed
   `3278018fd5bd989b630e3c722f658177a6192c42`
 - KO-1C closed-gate retained-prelude revision:
   `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
+- Internal validation-service terminal revision:
+  `7d54c01172f74b097d05d09df4652c28c94a29c0`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 116 intentional post-`c5440b9` KO
-  commits through `350e6d7` are durable locally. This checkpoint is kept as a
+- Publication state before this document: 119 intentional post-`c5440b9` KO
+  commits through `7d54c01` are durable locally. This checkpoint is kept as a
   separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -134,7 +137,7 @@ with database, catalog-service, and HTTP route integration still closed
   authority, aggregate, collision/selector, and dependency failures remain
   opaque to this typed compiler-issue seam. Legacy error/sentinel behavior is
   preserved and there is no HTTP mapping.
-- The future Validate/Preview wire contract now pins explicit inactive-storage
+- The Validate/Preview wire contract pins explicit inactive-storage
   versus active-publication intent, presence-sensitive create/update envelopes,
   update versions through MaxInt64, candidate-only in-band invalidity, exact
   successful normalized/digest/resource shape, inactive structural-only versus
@@ -171,6 +174,47 @@ with database, catalog-service, and HTTP route integration still closed
   absence, and MaxInt64 revision bounds. This adds no Validate/Preview route and
   does not change the capability, browser, resolver, or nonempty execution
   gates.
+- The concrete catalog Writer now exposes an internal, unregistered
+  `Validate` service. `ValidationScope` deliberately splits `ReadScope`, which
+  controls dependency disclosure, from `WriteScope`, which controls candidate
+  object/app admission; both must carry the same authenticated tenant and
+  owner, while their app sets remain independent. A shared per-control-database
+  one-slot gate fails fast before the rollback-only transaction. Once admitted,
+  create treats the full definition as selected and update constructs only a
+  shallow view of mask-selected top-level fields. Selected selector/output
+  over-cardinality is detected without traversing or cloning the repeated
+  payload and is represented by a bounded `maximum+1` witness so normalizer
+  ordering still produces the typed in-band resource issue. Otherwise only the
+  bounded selected request view is sized and detached; unselected update data
+  cannot consume byte or clone authority.
+- Every admitted evaluation uses one fixed `BEGIN IMMEDIATE` knowledge/app/index
+  snapshot and always rolls it back before sealing. Update root authorization,
+  expected version, lifecycle, current storage integrity, and rejection of an
+  opaque current definition precede candidate issue construction. After a root
+  or create app is authorized, only its context may be attached to an error;
+  dependency targets never become authorization context, and every error
+  defaults to definitive rejection. `INACTIVE_STORAGE`
+  performs structural normalization, authorizes a valid applied app, and
+  bookends the knowledge revision without publication compilation or inventory.
+  `ACTIVE_PUBLICATION` singleton-compiles and then uses the complete ACTIVE
+  transition inventory. Its validation mode compiles every affected
+  candidate-absent baseline before classifying candidate conflicts, so stored
+  baseline failures remain out-of-band. Only a cohort-local missing target or a
+  target hidden by `ReadScope` becomes the target-free generic dependency
+  diagnostic; other conflicts, target-integrity failures, and infrastructure
+  faults stay out-of-band service errors.
+- ACTIVE create chooses the first deterministic
+  `knowledge-validation-candidate-%04x` identity absent from the complete
+  tenant inventory after reconciling the identity ledger and physical row
+  count. It never calls the mutation ID generator and neither reserves nor
+  returns that identity. Both intents return the exact same-transaction
+  knowledge revision; revision zero additionally proves the physical object
+  ledger empty, and all revision paths use matching bookends. A rollback error
+  invalidates the evaluation, and only after successful rollback does the
+  existing deterministic 8 MiB response seal run. Validation executes no DML,
+  audit append, idempotency path, publication hook, clock, mutation ID
+  generator, or commit. No handler or route consumes this service, no browser
+  path or bootstrap capability changed, and Preview remains contract-only.
 
 ## KO-0 durable commits
 
@@ -286,6 +330,9 @@ Later local commits anchoring the reconciled current state include:
 | `5057a67` | `fix(proto): complete validation resource authority` | Append-only extraction-output/JSON-work/scalar-predicate resource fields, singleton intrinsic compile charges versus full-transition dependency counts, advisory valid/no-op/hypothetical-inactive semantics, and knowledge-revision-only correlation metadata |
 | `593ab31` | `docs(knowledge): checkpoint validation contracts` | Reconciled typed issue seams, advisory create/revision validity, complete intrinsic resource fields, intentional pre-route FILE waiver, and still-closed Validate/Preview/runtime gates |
 | `350e6d7` | `feat(knowledge): build validation results` | Pure opaque inactive/active result construction, typed-only issue projection, submitted-scalar range provenance, transition-supplied authorized dependencies, exact resource revalidation, and deterministic 8 MiB response sealing without a database or route |
+| `af95866` | `docs(knowledge): checkpoint validation results` | Reconciled pure result construction, sealing, privacy, wire bounds, and still-closed service/route/runtime gates |
+| `f0748f5` | `feat(knowledge): validate active publication candidates` | Complete ACTIVE candidate validation mode with candidate-absent baseline prepass, opaque conflict decisions, deterministic conflict precedence, target-absence privacy, shared index-admission closure, and fresh-ID alpha-invariance |
+| `7d54c01` | `feat(knowledge): validate object candidates` | Internal rollback-only `Writer.Validate`, split read/write authority, one-slot database gate, bounded selected-view/witness admission, inactive revision proof, complete ACTIVE transition and target authorization, deterministic unreserved create identity, strict rollback, and sealed side-effect-free responses without a route |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -434,8 +481,9 @@ used.
   winner-cohort/collision/selector, and dependency failures remain opaque to
   this typed compiler-issue seam. It also preserves legacy error/sentinel
   behavior and has no HTTP mapping
-- Future validation requires exactly one inactive-storage or active-publication
-  intent and a presence-sensitive create/update envelope. Update versions are
+- Internal catalog validation requires exactly one inactive-storage or active-
+  publication intent and a presence-sensitive create/update envelope. Update
+  versions are
   1 through MaxInt64; only candidate invalidity is an in-band `valid=false`
   result. Successful output binds normalized bytes, a 32-byte digest, complete
   candidate-only singleton intrinsic resources, full-transition authorized
@@ -471,6 +519,22 @@ used.
   rejects unknown fields, verifies exact dependency resources and range
   coordinates, limits the revision to MaxInt64, and retains at most 8 MiB of
   exact deterministic bytes. This internal boundary registers no route
+- `Writer.Validate` is the catalog-owning adapter over that pure boundary. It
+  requires matching tenant/owner identities but deliberately independent read
+  and write app sets, admits at most one evaluation per control database, and
+  snapshots only the create-all or update-mask-selected request view. Selected
+  repeated-field overflow uses a bounded witness so the candidate receives the
+  normalizer's typed resource issue without an unbounded size walk or clone.
+  Both intents run in an always-rolled-back immediate transaction. Inactive
+  validation performs no publication transition; active validation compiles
+  candidate-absent baselines before opaque candidate conflict classification,
+  authorizes the root/app before exposing only a generic hidden-or-missing
+  target diagnostic, and never discloses target context. Fresh create IDs are
+  deterministic, transaction-local, ledger-reconciled, and unreserved.
+  Revision-zero responses prove physical catalog emptiness and all revisions
+  are bookended. Rollback precedes sealing and any rollback error fails the
+  request. No DML, mutation ID, clock, hook, audit, idempotency, commit, route,
+  browser transport, or feature advertisement is part of this boundary
 
 The compatibility inventory contains 55 hash-pinned cases. It is explicitly a
 strict contract inventory, not yet runtime semantic evidence. Before the field
@@ -888,7 +952,7 @@ KO-1C closed-gate evidence:
 | Local durability | pass | forty-nine intentional KO-1C commits from `5088427` through `70b9ef6` inclusive are separate and locally durable on `codex/knowledge-objects-runtime`; this checkpoint update is a separate documentation commit |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |
 
-Current candidate-diagnostic and future-validation contract evidence:
+Current candidate-diagnostic and internal-validation contract evidence:
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
@@ -896,10 +960,12 @@ Current candidate-diagnostic and future-validation contract evidence:
 | Candidate semantic issue seam | pass | focused `internal/knowledgeprogram` tests pin index-bound detachment/wrapping, regex syntax/resource/capture issues, UTF-8 JSON ranges, calculated `SPL_*` diagnostics, Boolean-result attribution, legacy error/sentinel parity, singleton guidance, and opaque Prepare/authority/aggregate/cohort failures |
 | Validation protobuf generation and wire | pass with declared compatibility waiver | `make proto` ran twice with stable output; root Go validation-contract tests, TypeScript typecheck, lint, and the frontend protobuf compatibility suite passed. FILE-level removal of the never-served draft result fields 6/7 and resource field 11 is intentionally not claimed schema-nonbreaking; all removed tags and the resource name are reserved |
 | Pure validation result construction | pass | focused `internal/knowledgevalidation` tests pin typed-only closed issue mapping, opaque inactive/active states, submitted-scalar range rebasing and private provenance, transition-supplied dependency canonicalization, exact inactive/active resources, recursive unknown-field rejection, detachment, exact deterministic wire-size comparison at an injected test bound, and the production 8 MiB cap |
-| Validation result bounds and privacy | result layer pass, service pending | descriptor/comment and Go/TypeScript wire tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
-| Runtime activation | unchanged | Validate and Preview handlers/routes do not exist in production registration or the browser allowlist, bootstrap advertises no knowledge capability, Preview is contractually always `ACTIVE_PUBLICATION`, and nonempty search execution gates remain closed |
-| Docker-backed acceptance | not run | these commits add internal candidate issue seams, an unserved protobuf contract, and a pure result-construction layer only; no Docker command was invoked and no ClickHouse runtime claim is made |
-| Local durability | pass | `0636d9d`, `0c31de0`, `392577a`, `97651f9`, `5057a67`, and `350e6d7` are separate locally durable implementation commits, with `593ab31` preserving the intervening documentation checkpoint on `codex/knowledge-objects-runtime`; the post-`c5440b9` count through `350e6d7` is 116 |
+| ACTIVE candidate transition | pass | focused normal and race coverage plus the three-second alpha-invariance fuzz gate pin complete candidate-absent baseline validation before conflict attribution, deterministic stronger-conflict precedence, opaque non-target conflicts, generic target absence, detached candidate dependencies, index-admission closure reuse, and response invariance across fresh evaluation-ID renames |
+| Rollback-only Writer validation | pass | focused `ValidateKnowledgeObjectRequest`/`WriterValidate`/`ValidationBoundary`/`FinishValidation` normal and race tests, the full `internal/knowledgecatalog` package, `internal/knowledgevalidation`, and `go vet` pass. Tests pin independent read/write app authority, shared fail-fast admission, selected-view/witness amplification bounds, root/version/lifecycle/opaque precedence, inactive versus active inventory behavior, deterministic fresh identities, authorization-safe target projection, revision-zero physical emptiness, strict rollback-before-seal, cancellation, response taxonomy, detachment, and absence of mutation collaborators or DML |
+| Validation result bounds and privacy | service pass, route pending | descriptor/comment and Go/TypeScript wire tests plus catalog-service tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
+| Runtime activation | unchanged | the internal Writer service exists, but Validate and Preview handlers/routes do not exist in production registration or the browser allowlist, bootstrap advertises no knowledge capability, Preview is contractually always `ACTIVE_PUBLICATION`, and nonempty search execution gates remain closed |
+| Docker-backed acceptance | not run | these commits add internal candidate issue/result/transition seams and a rollback-only catalog service without ClickHouse execution; no Docker command was invoked and no ClickHouse runtime claim is made |
+| Local durability | pass | validation implementation commits `0636d9d`, `0c31de0`, `392577a`, `97651f9`, `5057a67`, `350e6d7`, `f0748f5`, and `7d54c01` are separately durable, with `593ab31` and `af95866` preserving intervening documentation checkpoints on `codex/knowledge-objects-runtime`; the post-`c5440b9` count through `7d54c01` is 119 |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:

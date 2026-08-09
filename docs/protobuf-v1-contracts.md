@@ -23,8 +23,9 @@ This directory is the source of truth shared by the Go server, Go collector, and
   search snapshot. `knowledge_api.proto` reserves the protobuf CRUD,
   validation, dependency, and bounded preview messages. The eight
   create/get/list/dependencies/dependents/update/set-state/delete routes are
-  registered as one complete administrator-only management unit. Validation,
-  quarantine, and preview remain unregistered message contracts, and none of
+  registered as one complete administrator-only management unit. Validation
+  now has an internal rollback-only catalog service, but validation,
+  quarantine, and preview remain unregistered route contracts, and none of
   this advertises the Tier-1 capability.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
@@ -228,7 +229,7 @@ cannot prove catalog completeness or visibility. Its sole transition-adjacent
 exception, `BuildDependencyUnavailable`, accepts no target identity and emits
 the generic `KNOWLEDGE_DEPENDENCY_UNAVAILABLE` diagnostic.
 
-The future validation request requires a present definition and exactly one
+The internal validation request requires a present definition and exactly one
 nonzero `KnowledgeValidationIntent`. `INACTIVE_STORAGE` proves only bounded
 canonical persistence in an inactive state; `ACTIVE_PUBLICATION` evaluates the
 candidate as a proposed ACTIVE version in one fixed knowledge/app/index catalog
@@ -245,23 +246,75 @@ to `KnowledgeObjectDefinition`; it applies that mask to the exact current
 version. A missing top-level definition is an envelope error, while a present
 definition with no recognized body is candidate-authored invalidity.
 
-ACTIVE create validation uses a deterministic non-persisted candidate ID proven
-fresh against the same bounded transactional catalog inventory. That identity
-is evaluation-local: the response neither returns, reserves, nor authorizes an
-object ID. Validity, diagnostics, candidate resources, and the target-only
-dependency projection must be invariant under every fresh candidate-ID alpha-
-renaming. A later Create generates its own ID and revalidates the then-current
-catalog, app, and index facts; intervening facts may therefore change its
-outcome.
+The concrete `knowledgecatalog.Writer.Validate` adapter accepts a
+`ValidationScope` whose `ReadScope` and `WriteScope` must have the same
+authenticated tenant and owner but may carry independent app sets. Write scope
+authorizes the requested root and applied candidate app; read scope separately
+filters which derived dependency targets may be returned. The adapter uses a
+shared per-control-database, one-slot fail-fast admission gate. Before admission
+it validates only the bounded envelope. Under the gate, create selects the
+whole definition, while update builds a shallow view of only mask-selected
+top-level fields; unselected payload is neither byte-charged nor cloned.
 
-Only candidate-authored invalidity is returned in-band as HTTP 200 with
-`valid=false`; it retains at least one field violation or ERROR diagnostic and
+Each selected selector dimension and a selected regex output list have a
+16-entry ceiling. Cardinality is checked in definition-normalization order
+before an exact byte-size traversal. An overflow is replaced with a detached,
+newly allocated 17-entry witness retaining only the applicable body kind, so
+normalization yields its standard typed resource issue without cloning or
+walking the caller's repeated list. Otherwise the selected request view must
+fit the ordinary mutation-request byte bound before it is cloned. This witness
+does not waive the independently sealed 8 MiB response limit.
+
+Every admitted validation runs in one fresh `BEGIN IMMEDIATE` transaction and
+always rolls it back before response sealing. For update, requested-root
+authorization precedes expected-version, lifecycle, current-record integrity,
+and opaque-current rejection, which in turn precede applied-candidate issue
+construction. Candidate-local invalidity precedes app/index inventory after
+that root is established. Only an authorized root or candidate app may appear
+in service error context; dependency targets never do. Every service error
+defaults to definitive rejection.
+
+`INACTIVE_STORAGE` normalizes only, authorizes the app of a valid applied
+definition, and bookends the knowledge revision; it performs no publication
+compile, ACTIVE inventory read, or dependency derivation.
+`ACTIVE_PUBLICATION` performs singleton candidate preparation and then the
+complete transactional ACTIVE transition. Every affected candidate-absent
+baseline cohort is compiled before a post-candidate conflict can be classified,
+preventing stored baseline invalidity from becoming a candidate diagnostic.
+Opaque conflict decisions have deterministic stronger-conflict precedence.
+Only cohort-local target absence is eligible for the generic target-free
+dependency diagnostic. Rich targets are integrity-checked against the exact
+current ACTIVE registry/version before `ReadScope` projection; a missing or
+unauthorized target produces that same generic result, while all other
+transition, integrity, catalog, resource, and infrastructure failures remain
+out-of-band errors.
+
+ACTIVE create chooses the first deterministic
+`knowledge-validation-candidate-%04x` value absent from the complete bounded
+tenant inventory after reconciling the identity ledger and physical row count.
+It calls no mutation ID generator and reserves or returns no identity. The
+response carries the same transaction's exact knowledge-ledger revision. Zero
+is permitted only with a physically empty knowledge object ledger, and all
+revision paths are bookended. Rollback failure invalidates the request. The
+adapter performs no DML, commit, audit, idempotency operation, publication hook,
+clock read, or mutation-ID allocation.
+
+The evaluation-local create identity is alpha-invariant: validity, diagnostics,
+candidate resources, and the target-only dependency projection must be
+unchanged under every other fresh candidate-ID choice. A later Create generates
+its own ID and revalidates the then-current catalog, app, and index facts;
+intervening facts may therefore change its outcome.
+
+Only candidate-authored invalidity is returned in-band as `valid=false`; a
+future HTTP adapter would map that sealed result to HTTP 200. It retains at
+least one field violation or ERROR diagnostic and
 omits normalized definition, digest, dependencies, and resources. A valid
 result requires the normalized definition, its exact 32-byte deterministic
 protobuf digest, complete resources, no field violations or ERROR diagnostics,
 and a false field-violation truncation flag. Request, authentication,
 authorization-to-the-requested-object, catalog-integrity, hidden-inventory, and
-service failures remain uniform non-2xx outcomes. Result and response unknown
+service failures remain out-of-band; a future handler maps them to uniform
+non-2xx outcomes. Result and response unknown
 fields are rejected recursively before issue canonicalization and deterministic
 serialization; the complete response is capped at 8 MiB.
 `object_type` is unspecified only when an invalid candidate's body cannot be
@@ -329,6 +382,10 @@ and private range provenance, recursive unknown-field absence, and a revision
 at most MaxInt64. It retains and returns detached copies of the exact
 deterministic encoding only when the complete response is at most 8 MiB. No
 database read, catalog proof, route registration, or HTTP mapping occurs there.
+The Writer adapter now supplies those catalog, transaction, transition, and
+authorization proofs and calls this seal only after successful rollback. It is
+still internal: no handler, route, browser allowlist entry, or capability
+consumes it.
 
 Preview accepts only a retained server-authorized search-job identity plus a
 candidate definition. The future preview route has no independent intent: it
