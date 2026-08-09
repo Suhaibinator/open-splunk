@@ -21,14 +21,17 @@ configured and tested.
 create/get/list/dependencies/dependents/update/set-state/delete routes as one
 complete management unit and composes their Store, concrete ready Writer, app
 authority, and attempt journal. The two graph routes are registered but remain
-unadvertised, excluded from the browser administrator-bearer allowlist, and
-unused by the hidden UI. Production also constructs and retains a concrete
-Resolver, but intentionally does not attach it to production
+capability-unadvertised. They join Get/List as the only knowledge paths in the
+browser administrator-bearer allowlist, while every mutation remains excluded.
+The dormant hidden detail view consumes both graph routes for an exact object
+version, but production bootstrap still omits navigation and the dynamic chunk,
+so it issues no knowledge request. Production also constructs and retains a
+concrete Resolver, but intentionally does not attach it to production
 `searchjobs.Manager`. Bootstrap does not advertise the feature, so the
 read-only Knowledge Manager stays out of
-navigation and issues no request despite its app/object-type/lifecycle-state
-filters and name-ascending, updated-time-descending, created-time-descending,
-and object-type-ascending sort readiness. Recognized definitions can be created
+navigation despite its app/object-type/lifecycle-state filters and name-
+ascending, updated-time-descending, created-time-descending, and object-type-
+ascending sort readiness. Recognized definitions can be created
 ACTIVE, updated while ACTIVE, or enabled from DRAFT/DISABLED through the
 transactional, compiler-proven Writer path; opaque future definitions cannot be
 updated or enabled as ACTIVE. The nonempty compiler, snapshot-finalization, and
@@ -53,9 +56,11 @@ never silently omitted or partially applied.
 Version `0.1` targets the existing trusted single-user deployment. The eight
 registered knowledge management routes—get, list, dependencies, dependents,
 create, update, change state, and delete—are administrator-only and are bound
-to the authenticated tenant and owner. The graph routes are not yet exposed to
-the browser application. Reserved validation and preview routes must preserve
-the same boundary when implemented. The local administrator may publish app-
+to the authenticated tenant and owner. Browser transport attaches its memory-
+only administrator bearer only to the four read paths: get, list, dependencies,
+and dependents. Create, update, change-state, and delete remain outside that
+allowlist. Reserved validation and preview routes must preserve the same
+boundary when implemented. The local administrator may publish app-
 shared and tenant-global objects. Supplied tenant
 or owner identity is never authority. A forbidden or cross-tenant object
 selector returns the same not-found response as an absent object.
@@ -696,6 +701,16 @@ constraint-bypassed non-object target row is outside this bounded inverse
 projection and is detected when the authoritative source graph is read or
 revalidated. Supporting another target kind requires a new bounded current-
 inverse authority/index contract before that kind may appear in `dependents`.
+
+The dormant Knowledge Manager detail binds both relationship requests to the
+exact ID and version returned by Get. Dependencies and dependents maintain
+independent continuations, exact visible totals, failure/retry state, and
+catalog-revision labels. A displayed edge contains only the currently visible
+opposite endpoint's object ID and version plus the fixed `Field input` role
+label; it does not recover an omitted endpoint or expose definition metadata.
+This consumer is readiness evidence only: while the capability is absent, the
+navigation entry and dynamic chunk are absent and production bootstrap causes
+no knowledge request.
 
 ## Immutable snapshots and lifecycle
 

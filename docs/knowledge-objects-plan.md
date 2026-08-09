@@ -988,7 +988,11 @@ KO-0H supplies only a feature-gated read-only list/detail shell. The hidden
 readiness surface now supports app, object-type, and lifecycle-state filters;
 name-ascending, updated-time-descending, created-time-descending, and object-
 type-ascending sorting; and exact bounded continuation reuse for that complete
-query tuple. It has no mutation controls.
+query tuple. The dormant detail view also has exact-version consumers for both
+direct dependencies and direct dependents. Each direction owns its request,
+continuation, exact visible total, stale/retry state, and displayed catalog
+revision independently, and each row shows only the visible opposite endpoint's
+object ID, version, and `FIELD_INPUT` label. It has no mutation controls.
 When the trusted bootstrap capability is absent, Knowledge Manager is omitted
 from navigation, its chunk is not imported, and it issues no knowledge API
 request.
@@ -1411,9 +1415,13 @@ opaque future body plus exact scalar, selector, digest, and dependency identity
 before any write or persistence hook. Recognized ACTIVE create, ACTIVE update,
 and enable now mint and consume the nonzero proof; opaque ACTIVE update/enable
 remain closed. The eight supported production management routes are
-registered. The two graph routes remain unadvertised and have no browser
-bearer-allowlist or UI caller, while search resolution, nonempty execution,
-browser navigation, and feature advertisement remain closed.
+registered. The two graph routes remain capability-unadvertised but now join
+Get/List as the only knowledge paths in the browser bearer allowlist and have
+exact-version consumers in the dormant hidden detail view; Create/Update/
+SetState/Delete remain excluded. Because bootstrap still hard-disables the
+capability, production browser navigation, dynamic chunk loading, and knowledge
+API requests remain absent, while search resolution and nonempty execution also
+remain closed.
 
 Immutable index-name creation now has its own atomic global admission boundary.
 Migration 0034 supplies sparse covering drivers for every nonempty ACTIVE

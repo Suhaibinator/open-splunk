@@ -228,13 +228,17 @@ Production composes the management Store, concrete ready Writer, attempt
 journal, app authority, and a concrete Resolver. It retains that Resolver for
 readiness but intentionally does not attach it to `searchjobs.Manager`, and it
 does not advertise the capability. The dependency and dependent routes are
-represented in the central TypeScript route manifest but deliberately excluded
-from the browser administrator-bearer allowlist until a graph UI is exposed.
-The hidden read-only Knowledge Manager is therefore omitted from navigation,
-is not dynamically loaded, and issues no
-knowledge API request; its dormant surface is app/object-type/lifecycle-state
-filter-ready with name-ascending, updated-time-descending, created-time-
-descending, and object-type-ascending sorts plus exact continuation reuse.
+represented in the central TypeScript route manifest and join Get/List as the
+only knowledge paths in the browser administrator-bearer allowlist; every
+knowledge mutation remains excluded. The hidden read-only Knowledge Manager is
+still omitted from navigation, is not dynamically loaded, and therefore issues
+no production-bootstrap knowledge API request. Its dormant surface is app/
+object-type/lifecycle-state filter-ready with name-ascending, updated-time-
+descending, created-time-descending, and object-type-ascending sorts plus exact
+continuation reuse. Its detail view now requests the selected exact version's
+dependencies and dependents independently, pages and labels each direction at
+its own catalog revision, and displays only each visible opposite endpoint's
+object ID, version, and `FIELD_INPUT` role.
 Nonempty compiler, snapshot-finalization, and execution gates remain closed, so
 no shipping knowledge execution is claimed.
 

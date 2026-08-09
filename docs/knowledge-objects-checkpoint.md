@@ -4,8 +4,8 @@
 
 **Current milestone:** KO-1 search-time runtime acceptance (closed gates)
 
-**Last completed slice:** bounded direct dependency graph inspection and the
-eight-route management boundary
+**Last completed slice:** dormant exact-version dependency/dependent inspection
+in the hidden Knowledge Manager detail
 
 **Evidence date:** August 9, 2026
 
@@ -28,8 +28,8 @@ eight-route management boundary
 - KO-1C closed-gate retained-prelude revision:
   `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 106 intentional post-`c5440b9` KO
-  commits through `7540804` are durable locally. This checkpoint is kept as a
+- Publication state before this document: 108 intentional post-`c5440b9` KO
+  commits through `1fd8c12` are durable locally. This checkpoint is kept as a
   separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -113,12 +113,14 @@ eight-route management boundary
   it to production `searchjobs.Manager`. The compiler and snapshot finalizer
   retain independent nonempty gates, so ClickHouse knowledge execution remains
   unavailable. The dependency/dependent routes are registered but
-  unadvertised, represented in the central route manifest, and excluded from
-  the browser administrator-bearer allowlist. The read-only Knowledge Manager
-  therefore remains absent from navigation and makes no request, although its
-  dormant list/detail surface is
-  app/object-type/lifecycle-state filter- and stable-sort-ready with exact
-  continuation reuse.
+  capability-unadvertised and represented in the central route manifest. They
+  join Get/List as the only knowledge paths in the browser administrator-bearer
+  allowlist; every mutation remains excluded. The dormant read-only Knowledge
+  Manager detail consumes both graph routes for the selected exact object
+  version, independently pages and labels each direction's catalog revision,
+  and displays only visible opposite ID/version/`FIELD_INPUT` rows. Capability-
+  gated navigation and dynamic loading remain absent, so production bootstrap
+  still makes no knowledge request.
 
 ## KO-0 durable commits
 
@@ -225,6 +227,7 @@ Later local commits anchoring the reconciled current state include:
 | `b8cd2c4` | `feat(proto): define management dependency edges` | Direct exact-version management edge identity without snapshot-global depth/ordinal/digest authority, plus dependency/dependent response roots and a shared Go/TypeScript wire golden |
 | `a4e1a0f` | `feat(knowledge): inspect dependency relationships` | Same-WAL direct outgoing and authorization-leading current-source inverse reads, omission-before-page/count privacy, optional exact totals, signed state-bound cursors, and bounded hydration/query plans |
 | `7540804` | `feat(knowledge): expose dependency graph reads` | Two bounded graph codecs/handlers, all-or-none eight-route production registration, trusted-scope response validation, rejected-attempt actions, a 128 KiB response ceiling, and unadvertised route-manifest entries |
+| `1fd8c12` | `feat(web): inspect knowledge relationships` | Dormant exact-version dependency/dependent consumers, independently validated pagination/revision state, visible opposite-ID/version/role-only presentation, and a read-only four-route knowledge bearer allowlist |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -311,7 +314,11 @@ used.
   detached data. Its dormant controls support app, object-type, and lifecycle-
   state filters plus name-ascending, updated-time-descending, created-time-
   descending, and object-type-ascending sorting; every continuation reuses the
-  exact query tuple
+  exact query tuple. Its exact-version detail consumers independently page
+  dependencies and dependents, label each direction's own catalog revision,
+  and expose only the visible opposite object ID/version and fixed field-input
+  role. Browser bearer attachment is limited to Get/List and those two graph
+  reads; all knowledge mutation paths remain excluded
 - Current-policy response redaction for retained provenance and inspection
 - Binary UTF-8 substring and individual-selector-pattern filters applied before
   keyset `LIMIT` at one catalog revision
@@ -877,5 +884,6 @@ search-time capability exposure. The next dependency-ordered slices are:
 3. only after the complete hidden Tier-1 browser/ClickHouse vertical passes,
    advertise the capability and enable Knowledge Manager navigation and
    mutation workflows. The eight administrator routes remain registered; the
-   two graph routes remain outside the browser bearer allowlist and the dormant
-   read-only UI remains hidden until that exposure decision.
+   four read routes are browser bearer-allowlisted, all mutation routes remain
+   excluded, and the dormant read-only UI remains hidden until that exposure
+   decision.
