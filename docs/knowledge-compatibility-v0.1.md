@@ -2,7 +2,7 @@
 
 **Status:** normative implementation contract; executable runtime corpus pending
 **Compatibility version:** `0.1`
-**Last updated:** August 8, 2026
+**Last updated:** August 9, 2026
 
 This contract defines the first Open Splunk search-time knowledge surface. It
 is intentionally narrower than Splunk Enterprise knowledge behavior. Anything
@@ -17,12 +17,19 @@ snapshot metadata may ship before enrichment, but the server must not advertise
 snapshot, planner, executor, inspection, lifecycle, and browser family is
 configured and tested.
 
-**KO-0H readiness status:** the implemented slice is internal and deliberately
-non-shipping. Production does not configure the optional knowledge resolver,
-register the knowledge-management routes, or advertise the feature, so no
-knowledge object affects search results. KO-0H can finalize only an enabled,
-canonically empty snapshot; nonempty finalization, the knowledge prelude, and
-every knowledge-generated logical operator remain deferred to KO-1.
+**Current readiness status:** production registers the six administrator-only
+create/get/list/update/set-state/delete routes as one complete management unit
+and composes their Store, concrete ready Writer, app authority, and attempt
+journal. It also constructs and retains a concrete Resolver, but intentionally
+does not attach it to production `searchjobs.Manager`. Bootstrap does not
+advertise the feature, so the read-only Knowledge Manager stays out of
+navigation and issues no request despite its app/object-type/lifecycle-state
+filters and name-ascending, updated-time-descending, created-time-descending,
+and object-type-ascending sort readiness. Recognized definitions can be created
+ACTIVE, updated while ACTIVE, or enabled from DRAFT/DISABLED through the
+transactional, compiler-proven Writer path; opaque future definitions cannot be
+updated or enabled as ACTIVE. The nonempty compiler, snapshot-finalization, and
+execution gates remain closed, so no knowledge object affects search results.
 
 ## Security boundary
 
@@ -40,19 +47,22 @@ disclosing private object existence. A visible active object that is corrupt or
 unsupported fails admission with a payload-free corruption category; it is
 never silently omitted or partially applied.
 
-Version `0.1` targets the existing trusted single-user deployment. Every
-knowledge management route—get, list, create, update, change state, delete,
-validate, dependency inspection, and preview—is browser-administrator-only and
-is bound to the authenticated tenant and owner. The local administrator may
-publish app-shared and tenant-global objects. Supplied tenant or owner identity
-is never authority. A forbidden or cross-tenant object selector returns the
-same not-found response as an absent object.
+Version `0.1` targets the existing trusted single-user deployment. The six
+registered knowledge management routes—get, list, create, update, change state,
+and delete—are browser-administrator-only and are bound to the authenticated
+tenant and owner. Reserved validation, dependency-inspection, and preview
+routes must preserve the same boundary when implemented. The local
+administrator may publish app-shared and tenant-global objects. Supplied tenant
+or owner identity is never authority. A forbidden or cross-tenant object
+selector returns the same not-found response as an absent object.
 
-The first six object-management handlers and codecs may be implemented and
-tested before they are reachable. Until the production router registers them
-and bootstrap advertises the complete Tier-1 capability, their paths return 404
-without authentication, body decoding, catalog access, or attempt journaling.
-Test-only route assembly is readiness evidence, not public API availability.
+The production router registers the first six object-management handlers only
+when their complete dependency unit and constructor-ready concrete Writer are
+present; partial configuration registers none of them. This route availability
+is independent of the absent Tier-1 bootstrap capability. Each registered path
+authenticates before decoding, requires the administrator role, derives scope
+from the detached principal and trusted app catalog, and uses the fail-closed
+attempt-journal boundary described below.
 
 The schema is ACL-ready, but role-grant enforcement and cross-app export grants
 are not claimed until multi-user RBAC is implemented. Within one tenant, a
@@ -737,11 +747,11 @@ owner, version, digest, role, and stage. Every other immutable winner's
 persisted outgoing rows must already be present, in per-source database order,
 and exactly equal the newly derived target set; program-global canonical
 ordinals and depths are never mistaken for database row ordinals. This pure
-cohort check does not establish visibility completeness from a count, one
-principal's `Resolution`, or a winners-plus-shadows mixture. ACTIVE catalog
-publication remains disabled until a transactional layer proves the complete
-tenant object, app, and durable-index inventories and persists the resulting
-derived edges atomically.
+cohort check alone does not establish visibility completeness from a count, one
+principal's `Resolution`, or a winners-plus-shadows mixture. The concrete
+Writer therefore consumes it only through the transaction-bound authority
+below, which proves complete tenant object, app, and durable-index inventories
+and persists the resulting derived edges atomically.
 
 Each validated cohort authority is transition-specific even when the candidate
 is absent from its winners. It binds the exact candidate owner, identity,
@@ -771,9 +781,9 @@ wildcard matching, membership, cohort revisits, graph work, and repeated
 selector and semantic compiler charges are bounded separately. The issued body-free
 persistence authority matches tenant, exact before/after scalar endpoints,
 retained ordered rows, and the derived-or-retained database projection. Opaque
-future bodies are not admitted by this semantic validator; their emergency
-state-only removal path remains separately closed pending a projection-only
-transaction proof.
+future bodies are not admitted by this semantic validator. Their separate
+state-only emergency removal path reopens and exact-matches the stored body and
+retained dependency authority; it does not permit ACTIVE update or enable.
 
 The transactional prerequisite now reads the exact current-ACTIVE object,
 tenant app, and physical-index inventories only from the Writer's existing
@@ -781,10 +791,12 @@ tenant app, and physical-index inventories only from the Writer's existing
 ACTIVE ledger, app revision, and index revision/physical count before bounded
 definition, selector, or dependency hydration. A separate preflight validates
 each rich derived target against its exact current ACTIVE registry/version and
-returns a detached database projection. These helpers are not publication
-authority by themselves: their catalog facts are not yet sealed into the
-transition or matched by `publishMutation`, so every ACTIVE publication gate
-remains closed.
+returns a detached database projection. An opaque authority binds those facts,
+the exact transaction, and the transition proof. Immediately before its first
+write or persistence hook, `publishMutation` rechecks that authority and uses
+only its detached projection for the version count, dependency rows, and seal.
+Recognized definitions use this path for ACTIVE create, ACTIVE update, enable,
+disable, and delete; opaque ACTIVE update and enable remain closed.
 
 Enabling a retained draft or disabled definition rederives its complete edge
 set against that transaction's post-publication winners; it never copies the
@@ -795,11 +807,11 @@ current ACTIVE dependent still pins another target version. A bounded atomic
 cascade may disable those dependents with exact state-only edges, advance the
 target, and then re-enable them with newly derived edges before commit.
 Historical and inactive source edges do not block that transition. A schema
-upgrade fails atomically if a current ACTIVE
-edge already targets an absent, inactive, or noncurrent target version. This
-target-transition guard is not source-publication authority: the still-closed
-Writer gate must validate every new ACTIVE source edge against the complete
-post-publication cohort before its registry row can advance.
+upgrade fails atomically if a current ACTIVE edge already targets an absent,
+inactive, or noncurrent target version. This target-transition guard is not
+source-publication authority by itself: the Writer validates every new ACTIVE
+source edge against the complete post-publication cohort before its registry
+row can advance.
 
 The versioned program commitment length-frames the exact typed operator order,
 object origin and definition digest, per-output definition location, selector

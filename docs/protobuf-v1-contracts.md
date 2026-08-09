@@ -21,9 +21,10 @@ This directory is the source of truth shared by the Go server, Go collector, and
 - `knowledge.proto` defines the common registry projection, authorized selectors,
   Tier-1 typed definitions, versioned dependencies, provenance, and immutable
   search snapshot. `knowledge_api.proto` reserves the protobuf CRUD,
-  validation, dependency, and bounded preview messages. These contracts are
-  additive but deliberately unregistered and unadvertised until the complete
-  Tier-1 API and runtime family exists.
+  validation, dependency, and bounded preview messages. The first six
+  create/get/list/update/set-state/delete routes are registered as one complete
+  administrator-only management unit. The remaining knowledge contracts are
+  additive but unregistered, and none of this advertises the Tier-1 capability.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
@@ -65,7 +66,7 @@ cardinality is preflighted before either reflection walker, `proto.Size`, clone,
 or deterministic marshal so repeated empty messages cannot amplify the raw
 wire ceiling into an unbounded traversal allocation.
 
-### Reserved knowledge-object contracts
+### Knowledge-object contracts
 
 The `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` enum value is reserved for the
 complete Tier-1 field-knowledge family. A server must not include it in
@@ -177,20 +178,20 @@ redacted wire variant cannot retain an object ID, name, version, owner, app, or
 definition location.
 
 The route comments in `knowledge_api.proto` reserve the intended endpoint
-names only. They are intentionally absent from the browser-route table below
-until handlers are registered. The first six object-management handlers and
-codec implementations may exist internally and be assembled by tests without
-changing that fact: production `NewHandler`, its exact route inventory,
-bootstrap capability advertisement, and public 404 behavior remain the
-availability authority. List and dependency continuations use bounded
-`PageRequest`/`PageResponse` contracts. The implemented List cursor binds all
-normalized filters, ordering, caller scope, page bound, and the first-page
-catalog revision plus state commitment; future dependency cursors must provide
-equivalent binding. Preview accepts only a retained server-authorized
-search-job identity plus a candidate definition. It never accepts raw events,
-physical table names, index authority, asset paths, or SQL.
+names. The browser-route table below contains exactly the six production
+object-management routes currently registered by `NewHandler` when its complete
+management dependency unit, including a constructor-ready concrete Writer, is
+present. Registration is all-or-none and independent of bootstrap feature
+advertisement. The quarantine, validation, dependency, dependent, and preview
+messages do not create routes. List and future dependency continuations use
+bounded `PageRequest`/`PageResponse` contracts. The implemented List cursor
+binds all normalized filters, ordering, caller scope, page bound, and the
+first-page catalog revision plus state commitment; future dependency cursors
+must provide equivalent binding. Preview accepts only a retained
+server-authorized search-job identity plus a candidate definition. It never
+accepts raw events, physical table names, index authority, asset paths, or SQL.
 
-The unregistered management boundary authenticates before reading a protobuf
+The registered management boundary authenticates before reading a protobuf
 body and derives tenant, owner, and complete manageable-app scope only from the
 detached browser principal plus the trusted app catalog. An authenticated
 definitive rejection triggers exactly one synchronous append attempt to the
@@ -199,18 +200,24 @@ that append succeeds; append or journal-gate failure instead returns the fixed
 unavailable response. A pre-decode Update or SetState rejection uses the
 conservative `update` action; only a fully validated mask or state may refine
 it to `scope_change`, `enable`, or `disable`. A known-committed mutation failure
-or an indeterminate outcome never creates a second rejected-attempt row. New
-ACTIVE publication remains unavailable, but an exact retained ACTIVE result
-from the concrete receipt-first catalog Writer remains replayable after
-downgrade only when the retained outcome is still recognized and canonical.
+or an indeterminate outcome never creates a second rejected-attempt row.
+Recognized definitions may be created ACTIVE, updated while ACTIVE, or enabled
+from DRAFT/DISABLED only after the concrete Writer proves the complete
+transactional catalog/app/index authority and compiler-derived dependency
+closure. Opaque future definitions cannot be updated or enabled as ACTIVE. An
+exact retained ACTIVE result remains replayable after downgrade only when the
+retained outcome is still recognized and canonical.
 
-KO-0H adds only internal lifecycle and browser readiness. Production does not
-configure the optional knowledge resolver, register any knowledge-management
-route, or advertise the capability. The hidden read-only Knowledge Manager is
+Production composes the management Store, concrete ready Writer, attempt
+journal, app authority, and a concrete Resolver. It retains that Resolver for
+readiness but intentionally does not attach it to `searchjobs.Manager`, and it
+does not advertise the capability. The hidden read-only Knowledge Manager is
 therefore omitted from navigation, is not dynamically loaded, and issues no
-knowledge API request. KO-0H finalizes only an enabled-empty snapshot;
-nonempty finalization, the knowledge prelude, and knowledge-generated operators
-remain KO-1 work, so no shipping knowledge execution is claimed.
+knowledge API request; its dormant surface is app/object-type/lifecycle-state
+filter-ready with name-ascending, updated-time-descending, created-time-
+descending, and object-type-ascending sorts plus exact continuation reuse.
+Nonempty compiler, snapshot-finalization, and execution gates remain closed, so
+no shipping knowledge execution is claimed.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.
@@ -223,6 +230,12 @@ projection.
 | Path | Request | Response |
 | --- | --- | --- |
 | `/system/bootstrap` | `GetSystemBootstrapRequest` | `GetSystemBootstrapResponse` |
+| `/knowledge/objects/create` | `CreateKnowledgeObjectRequest` | `CreateKnowledgeObjectResponse` |
+| `/knowledge/objects/get` | `GetKnowledgeObjectRequest` | `GetKnowledgeObjectResponse` |
+| `/knowledge/objects/list` | `ListKnowledgeObjectsRequest` | `ListKnowledgeObjectsResponse` |
+| `/knowledge/objects/update` | `UpdateKnowledgeObjectRequest` | `UpdateKnowledgeObjectResponse` |
+| `/knowledge/objects/set-state` | `SetKnowledgeObjectStateRequest` | `SetKnowledgeObjectStateResponse` |
+| `/knowledge/objects/delete` | `DeleteKnowledgeObjectRequest` | `DeleteKnowledgeObjectResponse` |
 | `/search/jobs/create` | `CreateSearchJobRequest` | `CreateSearchJobResponse` |
 | `/search/jobs/get` | `GetSearchJobRequest` | `GetSearchJobResponse` |
 | `/search/jobs/list` | `ListSearchJobsRequest` | `ListSearchJobsResponse` |

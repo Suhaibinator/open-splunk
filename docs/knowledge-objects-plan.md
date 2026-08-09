@@ -955,10 +955,14 @@ SERVER_FEATURE_KNOWLEDGE_WORKFLOW_ACTIONS
 
 ## Browser application
 
-KO-0H supplies only a feature-gated read-only list/detail shell with app
-filtering and bounded continuation handling. It has no mutation controls. When
-the trusted bootstrap capability is absent, Knowledge Manager is omitted from
-navigation, its chunk is not imported, and it issues no knowledge API request.
+KO-0H supplies only a feature-gated read-only list/detail shell. The hidden
+readiness surface now supports app, object-type, and lifecycle-state filters;
+name-ascending, updated-time-descending, created-time-descending, and object-
+type-ascending sorting; and exact bounded continuation reuse for that complete
+query tuple. It has no mutation controls.
+When the trusted bootstrap capability is absent, Knowledge Manager is omitted
+from navigation, its chunk is not imported, and it issues no knowledge API
+request.
 
 ### Knowledge Manager
 
@@ -1194,10 +1198,13 @@ all-or-none production registration, the
 one-read-transaction active resolver, and opaque immutable snapshot preparation
 are complete.
 `cmd/open-splunk-server` composes their bounded app authority, catalog Store,
-attempt journal, and concrete ready Writer on the shared control database. The
-capability is still not advertised. The concrete Writer now publishes DRAFT or
-recognized ACTIVE creates, DRAFT/DISABLED and recognized ACTIVE definition updates,
-DRAFT/DISABLED-to-ACTIVE enables, DRAFT/ACTIVE disables, and
+attempt journal, concrete ready Writer, and concrete Resolver on the shared
+control database. The management runtime retains that Resolver for staged
+readiness but intentionally does not attach it to the production
+`searchjobs.Manager`. The capability is still not advertised. The concrete
+Writer now publishes DRAFT or recognized ACTIVE creates, DRAFT/DISABLED and
+recognized ACTIVE definition updates, DRAFT/DISABLED-to-ACTIVE enables,
+DRAFT/ACTIVE disables, and
 DRAFT/ACTIVE/DISABLED delete tombstones with exact idempotency replay,
 revision/state-token rotation, successful audit, immutable commit authority,
 bounded health/reclamation, and crash recovery. Every recognized ACTIVE
@@ -1226,11 +1233,13 @@ app-less searches preserve the legacy path. A configured request is parsed,
 planned, resolved, compiled, and finalized before any job ID, journal
 admission, publication, or execution.
 
-KO-0H deliberately finalizes only a canonically empty enabled snapshot. Any
-resolution containing an executable object fails before job creation because
-the knowledge prelude and knowledge-generated operators remain KO-1 work. No
-shipping search-time knowledge runtime is claimed: `cmd/open-splunk-server`
-composes the management catalog but does not configure the search resolver,
+The retained admission path deliberately finalizes only a canonically empty
+enabled snapshot. Although the knowledge prelude and generated operators are
+implemented and inspectable behind closed gates, any resolution containing an
+executable object still fails before job creation at the independent compiler
+and snapshot-finalization boundaries. No shipping search-time knowledge runtime
+is claimed: `cmd/open-splunk-server` retains the concrete Resolver in its
+management runtime but does not configure it on production search admission,
 bootstrap hard-disables the capability, and the hidden UI therefore remains
 unreachable.
 
@@ -1396,8 +1405,9 @@ hydration, malformed catalog/app/projection/dependency authority, cancellation,
 fact drift, atomic rollback, and audit ordering. This closes the future-index
 lifecycle prerequisite and is now consumed by recognized ACTIVE Writer
 publication. The server registers the management API through its complete
-concrete configuration, but advertises no search-time knowledge capability and
-configures no search resolver.
+concrete configuration and retains a concrete Resolver for readiness, but
+advertises no search-time knowledge capability and does not attach that
+Resolver to production search jobs.
 
 Migration 0033 prepares that atomic publication boundary.
 An enable may append a newly derived dependency set instead of copying its

@@ -2,9 +2,9 @@
 
 **Goal status:** active
 
-**Current milestone:** KO-1 ACTIVE publication validation (closed gates)
+**Current milestone:** KO-1 search-time runtime acceptance (closed gates)
 
-**Last completed slice:** proven recognized ACTIVE disable/delete publication
+**Last completed slice:** staged Resolver authority and hidden manager filters/sorts
 
 **Evidence date:** August 9, 2026
 
@@ -27,18 +27,17 @@
 - KO-1C closed-gate retained-prelude revision:
   `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: eighty-four intentional post-`c5440b9`
-  KO commits through `70b9ef6` are durable locally. This checkpoint is kept as
-  a separate documentation commit. `origin/main` remains `c5440b9`; the local
-  remote-tracking feature branch ends at `7503246`, so the terminal KO-0G
-  test-oracle commits, the KO-0G checkpoint `441fd4d`, all KO-0H work, KO-1A,
-  KO-1B, all current KO-1C work, and this checkpoint are not remotely durable.
-  No further push was attempted without explicit destination approval.
+- Publication state before this document: 102 intentional post-`c5440b9` KO
+  commits through `0ccd2f5` are durable locally. This checkpoint is kept as a
+  separate documentation commit. `origin/main` remains `c5440b9`; the local
+  remote-tracking feature branch ends at `7503246`, so all later work remains
+  local. No further push was attempted without explicit destination approval.
 - Scope: lifecycle- and commitment-aware protobuf contracts, canonical known
-  and inactive-future definitions, migrations 0029–0031 state/commit/tenant
+  and inactive-future definitions, migrations 0029–0034 state/commit/tenant
   authorities, a bounded read-only `Get`/`List` catalog, and an atomic Writer
-  for draft create, draft/disabled definition update, draft/active disable, and
-  draft/active/disabled delete with exact replay,
+  for DRAFT or recognized ACTIVE create, DRAFT/DISABLED or recognized ACTIVE
+  definition update, DRAFT/DISABLED-to-ACTIVE enable, DRAFT/ACTIVE disable, and
+  DRAFT/ACTIVE/DISABLED delete with exact replay,
   optimistic versions, immutable bodies/versions/dependencies/projections,
   successful audit, revision/state-token rotation, bounded health/reclamation,
   and crash-safe recovery. KO-0F adds six administrator-only protobuf handler
@@ -84,9 +83,11 @@
   disable/delete graph identity, rejects stale ACTIVE pins during upgrade, and
   blocks target version advancement while a current ACTIVE dependent retains
   an old pin. A future atomic cascade disables dependents state-only, advances
-  the target, and re-enables them with derived edges. Create, active-update,
-  and enable remain closed pending index-creation validation and the retained
-  runtime gates.
+  the target, and re-enables them with derived edges. Migration 0034 and the
+  same-transaction global index validator close the future-index prerequisite.
+  Recognized definitions now use the complete authority for ACTIVE create,
+  ACTIVE update, enable, disable, and delete; opaque ACTIVE update and enable
+  remain closed.
 - The transaction boundary now requires the existing Writer
   `BEGIN IMMEDIATE` snapshot, proves exact knowledge/app/index catalog facts,
   preflights all aggregate object resources before hydration, and validates rich
@@ -100,19 +101,20 @@
   endpoint. Recognized ACTIVE disable/delete now mint the proof from the exact
   live object and retained graph, while the sole zero-proof emergency removal
   path re-decodes and exact-matches a genuinely opaque stored future body and
-  its dependencies before any write or hook. New index-name creation remains
-  separately gated.
-- Runtime feature state: the capability remains hard-disabled and unadvertised;
-  the six knowledge-management handlers are deliberately not registered in the
-  production router and their paths still return 404. Configured test/runtime
-  seams can admit and retain a canonically empty enabled snapshot, but
-  `cmd/open-splunk-server` does not configure the resolver. The compiler now
-  lowers and independently proves a nonempty prelude, but deliberately returns
-  `seal compiled ClickHouse execution: nonempty knowledge lowering is absent`
-  before producing an executable query; `knowledgesnapshot.Authority.Finalize`
-  separately rejects nonempty authorities. Accordingly, nonempty finalization,
-  new ACTIVE publication, and ClickHouse knowledge execution remain
-  unavailable, and the hidden UI remains unreachable in production.
+  its dependencies before any write or hook. New index-name creation now
+  revalidates every affected ACTIVE tenant in the index transaction before its
+  first write.
+- Runtime feature state: the capability remains hard-disabled and unadvertised.
+  Production registers exactly the six knowledge-management routes as one
+  complete administrator-only unit and composes their Store, concrete ready
+  Writer, app authority, and attempt journal. The management runtime also
+  constructs and retains a concrete Resolver, but intentionally does not attach
+  it to production `searchjobs.Manager`. The compiler and snapshot finalizer
+  retain independent nonempty gates, so ClickHouse knowledge execution remains
+  unavailable. The read-only Knowledge Manager therefore remains absent from
+  navigation and makes no request, although its dormant list/detail surface is
+  app/object-type/lifecycle-state filter- and stable-sort-ready with exact
+  continuation reuse.
 
 ## KO-0 durable commits
 
@@ -204,6 +206,19 @@ KO-1B then adds the backend-neutral Tier-1 field program:
 | --- | --- | --- |
 | `3278018` | `feat(knowledge): add immutable prelude program` | Cycle-neutral immutable typed program; explicit extraction, JSON, fused alias, and fused calculated plan operators; exact dependency and parallel-stage revalidation; aggregate charges; private operation/output provenance and commitment; and analysis-time contiguous-prefix integrity |
 
+Later local commits anchoring the reconciled current state include:
+
+| Commit | Subject | Scope |
+| --- | --- | --- |
+| `7c6890a` | `feat(knowledge): publish active objects` | Transaction- and compiler-proven recognized ACTIVE create/update/enable plus retained disable/delete authority; opaque ACTIVE update/enable remain closed |
+| `5961233` | `feat(control): expose bounded app identities` | Bounded trusted app authority for concrete management composition |
+| `5c16a50` | `feat(knowledge): seal management writer readiness` | Exact concrete Writer construction-readiness contract for all-or-none route registration |
+| `0bdb516` | `feat(server): register knowledge management routes` | Six production administrator-only management routes registered only as one complete dependency unit, independently of capability advertisement |
+| `a3b4cbf` | `feat(server): compose knowledge management runtime` | Shared-control-database Store, Writer, app authority, and attempt-journal production composition |
+| `d846dc2` | `feat(knowledge): stage runtime resolver authority` | Concrete Resolver retained by the management runtime without attachment to production search admission; nonempty requests still fail before side effects |
+| `597dfb6` | `fix(web): align knowledge route manifest` | Six management routes represented in the central TypeScript route manifest with bounded Get/List responses |
+| `0ccd2f5` | `feat(web): filter hidden knowledge manager` | Dormant read-only app/object-type/lifecycle-state filters, four stable sorts, exact continuation reuse, and synchronous query-reset behavior |
+
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
 from the ranges above; no history rewrite or alternate publication branch was
@@ -286,7 +301,10 @@ used.
   capability it is absent from navigation, its chunk is not imported, and it
   issues no knowledge request. Its adapter bounds bootstrap apps, pages,
   continuations, totals, success responses, and error bodies before exposing
-  detached data
+  detached data. Its dormant controls support app, object-type, and lifecycle-
+  state filters plus name-ascending, updated-time-descending, created-time-
+  descending, and object-type-ascending sorting; every continuation reuses the
+  exact query tuple
 - Current-policy response redaction for retained provenance and inspection
 - Binary UTF-8 substring and individual-selector-pattern filters applied before
   keyset `LIMIT` at one catalog revision
@@ -312,10 +330,12 @@ used.
   refined only after complete request validation to `scope_change`, `enable`,
   or `disable`; journal tails have an independent concurrency gate and bounded
   deadline outside client cancellation
-- New ACTIVE publication remains unavailable, but the exact concrete catalog
-  Writer may replay a previously committed, still-recognized canonical ACTIVE
-  Create/Update/SetState receipt after downgrade without being mislabeled as a
-  new rejection
+- Recognized definitions may now be created ACTIVE, updated while ACTIVE, or
+  enabled from DRAFT/DISABLED through the complete transactional and compiler-
+  derived publication authority. Opaque ACTIVE update and enable remain closed.
+  The concrete catalog Writer may replay a previously committed,
+  still-recognized canonical ACTIVE Create/Update/SetState receipt after
+  downgrade without being mislabeled as a new rejection
 - Catalog, resolver, cache, selector, expression, snapshot, and audit ceilings
 - Terminal corruption quarantine with bounded dependent closure, protected
   version/idempotency capacity, and one recovery-audit slot for every lifetime
@@ -643,8 +663,8 @@ KO-0F evidence:
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Public disablement contract | pass | `TestConfiguredKnowledgeManagementRemainsPubliclyUnregisteredAndUnadvertised` configures all four hidden dependencies, then proves the production Create path remains 404, no Writer, app-catalog, or attempt-journal call occurs, and bootstrap omits `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS`; the exact route-inventory and baseline handler tests preserve the absence of all six paths |
-| All-six HTTP matrix | pass | the test-only SRouter exercises Get/List/Create/Update/SetState/Delete success, pre-decode authentication/administrator rejection, exact fallback/refined actions, bounded codecs, stable error bodies, scope derivation, cancellation, and journal failure without adding a production route |
+| Historical KO-0F public-disablement contract | pass for that slice | At the KO-0F checkpoint, `TestConfiguredKnowledgeManagementRemainsPubliclyUnregisteredAndUnadvertised` configured all four hidden dependencies and proved the then-production Create path remained 404 with no Writer, app-catalog, or attempt-journal call while bootstrap omitted `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS`; later management-runtime work intentionally replaced only the route-absence part of this historical boundary |
+| Historical all-six HTTP matrix | pass for that slice | The KO-0F test-only SRouter exercised Get/List/Create/Update/SetState/Delete success, pre-decode authentication/administrator rejection, exact fallback/refined actions, bounded codecs, stable error bodies, scope derivation, cancellation, and journal failure without adding a then-production route |
 | Real persistence boundary | pass | five focused HTTP integration tests use the migrated SQLite Store, Writer, successful audit, and rejected-attempt journal through create/update/disable/delete/replay, stale versions, hidden outcomes, success-audit rollback, and attempt-journal failure |
 | Full catalog package | pass | `GOCACHE=/private/tmp/open-splunk-ko-go-cache go test ./internal/knowledgecatalog -count=1`, 45.283s on the final implementation tree |
 | Full server package | pass | `GOCACHE=/private/tmp/open-splunk-ko-go-cache go test ./internal/server -count=1`, 16.911s outside the sandbox for existing localhost listener tests |
@@ -702,7 +722,7 @@ KO-1A evidence:
 | Focused and downstream tests | pass | final selector normal 0.343s and race 1.676s; exact maximum-scope pruning race 1.818s; full knowledgecatalog normal 59.335s; knowledgesnapshot normal 0.469s |
 | Static analysis and hygiene | pass | `go vet ./internal/knowledge ./internal/knowledgesnapshot ./internal/knowledgecatalog`; gofmt; `git diff --check` |
 | Independent review | pass | separate correctness, security/resource, and compatibility/test-oracle reviewers proved the assessment, resolved the event/query wording and maximum-scope pruning findings, and returned clean final verdicts |
-| Runtime activation | unchanged | production still configures no resolver, registers no knowledge-management route, advertises no capability, and rejects nonempty snapshot finalization; KO-1A changes no shipping search path |
+| Runtime activation at KO-1A | unchanged in that slice | At the KO-1A checkpoint, production configured no search resolver or management route, advertised no capability, and rejected nonempty snapshot finalization; KO-1A changed no shipping search path |
 | Local durability | pass | `03a0b3e` is a separate selector-contract commit on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | no push was attempted without explicit destination approval |
 
@@ -715,7 +735,7 @@ KO-1B evidence:
 | Plan integrity | pass | prelude placement immediately after detached `Scan`, exact drop/reorder/substitute/duplicate/marker-removal rejection, authored predicate separation, and valid empty/nonempty field-analysis and timeline eligibility pass |
 | Focused verification | pass | `go test ./internal/spl ./internal/knowledgeprogram ./internal/plan -count=1` passed in 1.2s; `go test -race ./internal/knowledgeprogram ./internal/plan -count=1` passed in 3.0s; focused vet passed in 1.2s; `git diff --check` was clean |
 | Independent review | pass | separate semantic-mapping and program/plan adversarial reviews found commitment reconstruction, dependency completeness, same-stage semantics, capture shape, aggregate bounds, ordering, detachment, eligibility, Boolean-result, and provenance gaps; every concrete finding selected for this slice was fixed and covered before the focused rerun |
-| Runtime activation | unchanged | the program is not yet consumed by ClickHouse, sealed into compiler evidence, rebuilt by retained consumers, or accepted by nonempty finalization; production composition/routes/capability/UI remain disabled |
+| Runtime activation at KO-1B | unchanged in that slice | At the KO-1B checkpoint, the program was not yet consumed by ClickHouse, sealed into compiler evidence, rebuilt by retained consumers, or accepted by nonempty finalization; production composition, routes, capability, and UI remained disabled |
 | Local durability | pass | `3278018` is a separate immutable-prelude implementation commit on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | no push was attempted without explicit destination approval |
 
@@ -731,9 +751,9 @@ KO-1C closed-gate evidence:
 | Focused verification | pass | affected-package normal gate: `go test ./internal/searchjobs ./internal/searchsnapshot ./internal/searchinspection ./internal/searchanalysis ./internal/export -count=1 -timeout=30s` (all five packages passed in 2.5s or less each); focused race across retained authority, downgrade, inspection, analysis concurrency, and export tamper tests passed in 7.7s; focused vet and `git diff --check` passed |
 | Independent review | pass | independent reviewers found the unsigned reconstructed-downgrade and unsigned search-analysis fixture gaps; both were fixed with universal Manager-seal validation and Manager-minted test snapshots, then two final reviewers returned clean verdicts |
 | Digest-pinned ClickHouse acceptance | pending | the opt-in fixture covers Dynamic `byteSize`, alias-copy exact/+1, losing-branch laziness, all five guard markers, and deferred hidden-failure atomicity. A driver query-parameter false positive in its synthetic JSON literal was corrected in `98b7a15`, but the subsequent Docker run was canceled; no green pinned runtime result or broader authored-suffix/finalizer matrix is claimed |
-| ACTIVE dependency schema prerequisite | pass, publication closed | migration 0033 SHA-256 `171c5b390d1033a48405ab5953131c312a2fed5ba09a22bd7b8a58f62cba9f7f`; enable may seal a rederived dependency set, disable/delete retain exact predecessor identity, stale ACTIVE pins reject upgrade atomically, and advancement is blocked only while a current ACTIVE dependent retains another target pin. The schema supports a bounded disable/advance/re-enable cascade; Writer create/active-update/enable gates remain closed |
-| Publication transition authority | pass for recognized removal; activation closed | strict and candidate-absent cohort validation bind exact candidate identity, winner mode, canonical program commitment, rich derived edges, and every retained winner's persisted edge authority. Paired before/after index atoms produce exact minimum-witness OR closure under 1,024-atom, 1,024-state, 256-index, and independent 65,536-probe ceilings. The pure transition derives symbolic visibility and one candidate graph across every win. Its same-transaction reader proves bounded object/app/index inventories and exact revision facts; an opaque transaction-bound wrapper revalidates rich current ACTIVE targets and makes `publishMutation` use only its detached projection for version, rows, and seal before any persistence write or hook. Recognized ACTIVE disable/delete now mint and consume that proof with exact replay and dependency retention. The separate zero-proof emergency path proves a genuinely opaque live body and exact retained authority. Future index-name validation and the create/active-update/enable gates remain pending |
-| Runtime activation | unchanged | `compiled_query_execution.go` and `knowledgesnapshot.Authority.Finalize` retain separate nonempty hard gates; production still supplies no resolver, routes, capability, navigation, or supported ACTIVE publication |
+| ACTIVE dependency schema prerequisite at this checkpoint | pass, publication then closed | Migration 0033 SHA-256 `171c5b390d1033a48405ab5953131c312a2fed5ba09a22bd7b8a58f62cba9f7f`; enable could seal a rederived dependency set, disable/delete retained exact predecessor identity, stale ACTIVE pins rejected upgrade atomically, and advancement was blocked only while a current ACTIVE dependent retained another target pin. The schema supported a bounded disable/advance/re-enable cascade; Writer create/active-update/enable gates were still closed at this checkpoint |
+| Publication transition authority at this checkpoint | pass for recognized removal; activation then closed | Strict and candidate-absent cohort validation bound exact candidate identity, winner mode, canonical program commitment, rich derived edges, and every retained winner's persisted edge authority. Paired before/after index atoms produced exact minimum-witness OR closure under 1,024-atom, 1,024-state, 256-index, and independent 65,536-probe ceilings. The pure transition derived symbolic visibility and one candidate graph across every win. Its same-transaction reader proved bounded object/app/index inventories and exact revision facts; an opaque transaction-bound wrapper revalidated rich current ACTIVE targets and made `publishMutation` use only its detached projection for version, rows, and seal before any persistence write or hook. Recognized ACTIVE disable/delete minted and consumed that proof with exact replay and dependency retention. The separate zero-proof emergency path proved a genuinely opaque live body and exact retained authority. Future index-name validation and the create/active-update/enable gates were still pending at this checkpoint |
+| Runtime activation at this checkpoint | unchanged in that slice | `compiled_query_execution.go` and `knowledgesnapshot.Authority.Finalize` retained separate nonempty hard gates; production still supplied no resolver, routes, capability, navigation, or supported ACTIVE publication at this checkpoint |
 | Local durability | pass | forty-nine intentional KO-1C commits from `5088427` through `70b9ef6` inclusive are separate and locally durable on `codex/knowledge-objects-runtime`; this checkpoint update is a separate documentation commit |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |
 
@@ -775,67 +795,74 @@ or ClickHouse runtime behavior, so Docker-backed ClickHouse and browser
 verticals were not applicable. No licensed Splunk oracle was available or
 used; this checkpoint makes no differential-equivalence claim.
 
-KO-0D likewise adds no server route, browser surface, resolver, search
-admission, or ClickHouse knowledge execution. Browser and Docker-backed
-knowledge verticals therefore remain future hard gates rather than skipped
-acceptance evidence. Existing frontend tests and ClickHouse package tests pass,
-the feature stays hard-disabled, and no licensed Splunk oracle was available.
+The following KO-0D through KO-0H paragraphs preserve the evidence boundary at
+each historical checkpoint. Their then-current route, resolver, and publication
+state is superseded by the current-state summary at the top of this document.
 
-KO-0E adds an internal Writer library but still registers no production route,
-advertises no capability, renders no Knowledge Manager UI, constructs no search
-snapshot, and executes no ClickHouse knowledge operator. Browser and
-Docker-backed knowledge verticals therefore remain inapplicable to this slice,
-not silently waived.
+At the KO-0D checkpoint, that slice added no server route, browser surface,
+resolver, search admission, or ClickHouse knowledge execution. Browser and
+Docker-backed knowledge verticals were therefore future hard gates rather than
+skipped acceptance evidence. Existing frontend tests and ClickHouse package
+tests passed, the feature stayed hard-disabled, and no licensed Splunk oracle
+was available.
 
-KO-0F implements and integration-tests the six management handlers, codecs,
-authentication split, and rejected-attempt boundary but deliberately keeps
-their route registrations in test code only. The production router, exact API
-inventory, capability response, and browser navigation remain unchanged; real
-public browser and ClickHouse knowledge verticals are therefore still future
-hard gates rather than claimed evidence.
+At the KO-0E checkpoint, that slice added an internal Writer library but
+registered no production route, advertised no capability, rendered no
+Knowledge Manager UI, constructed no search snapshot, and executed no
+ClickHouse knowledge operator. Browser and Docker-backed knowledge verticals
+were therefore inapplicable to that slice, not silently waived.
 
-KO-0G constructs and validates the internal active resolver and opaque snapshot
-authority but does not attach either to `searchjobs.Manager`, persist snapshot
-metadata in history/inspection/export, compile a knowledge prelude, register a
-management route, or advertise the capability. Browser and Docker-backed
-knowledge-execution verticals therefore remain future hard gates; the shared
-Go/TypeScript snapshot fixture is wire/digest evidence, not a claim that the
-browser can yet request or execute knowledge.
+At the KO-0F checkpoint, that slice implemented and integration-tested the six
+management handlers, codecs, authentication split, and rejected-attempt
+boundary but deliberately kept their route registrations in test code only.
+The production router, exact API inventory, capability response, and browser
+navigation were unchanged; real public browser and ClickHouse knowledge
+verticals were therefore still future hard gates rather than claimed evidence.
 
-KO-0H implements the optional manager seam, enabled-empty sealing, lifecycle
-provenance, retained inspection/export authority, and hidden browser shell, but
-production composition still supplies no resolver, registers no management
-route, and advertises no capability. The shell's component/static tests are
-readiness evidence, not a live browser vertical. Because nonempty finalization
-is rejected and there is no knowledge prelude, Docker-backed ClickHouse
-knowledge execution and licensed-Splunk differential tests remain KO-1 hard
-gates rather than silently skipped acceptance evidence.
+At the KO-0G checkpoint, that slice constructed and validated the internal
+active resolver and opaque snapshot authority but did not attach either to
+`searchjobs.Manager`, persist snapshot metadata in history/inspection/export,
+compile a knowledge prelude, register a management route, or advertise the
+capability. Browser and Docker-backed knowledge-execution verticals were
+therefore future hard gates; the shared Go/TypeScript snapshot fixture was
+wire/digest evidence, not a claim that the browser could request or execute
+knowledge.
+
+At the KO-0H checkpoint, that slice implemented the optional manager seam,
+enabled-empty sealing, lifecycle provenance, retained inspection/export
+authority, and hidden browser shell, while production composition supplied no
+resolver, registered no management route, and advertised no capability. The
+shell's component/static tests were readiness evidence, not a live browser
+vertical. Because nonempty finalization was rejected and there was no knowledge
+prelude, Docker-backed ClickHouse knowledge execution and licensed-Splunk
+differential tests remained KO-1 hard gates rather than silently skipped
+acceptance evidence.
 
 ## Next dependency-ordered work
 
 KO-0 foundations and the hidden KO-0H lifecycle/browser readiness vertical are
 complete. KO-1A/KO-1B freeze the selector and backend-neutral program, and the
-current closed-gate KO-1C slice now lowers, accounts, seals, retains, and
-reconstructs that program without making it executable. The next
-dependency-ordered slices are:
+current closed-gate KO-1C slice lowers, accounts, seals, retains, reconstructs,
+and inspects that program without making it executable. Recognized ACTIVE
+publication and the six management routes are now implemented independently of
+search-time capability exposure. The next dependency-ordered slices are:
 
-1. extend inspection projection to the four generated operator types with
-   bounded redacted object/output provenance and an explicit absent authored
-   source range, then prove nonempty field catalog, suggestions, summary, and
-   timeline consume the retained program instead of an authored-only rebuild;
-2. split the digest-pinned ClickHouse acceptance matrix into bounded named
+1. replace snapshot-global depth/ordinal dependency projections in the reserved
+   management API with a direct exact-version edge contract, then add bounded
+   same-WAL dependency/dependent reads and signed cursors before registering
+   either route;
+2. complete the digest-pinned ClickHouse acceptance matrix as bounded named
    gates covering ordinary filter/project/eval/rex/spath/sort/limit/stats,
    eventstats/streamstats and stacked chronological barriers, chart/timechart,
    every event-analysis finalizer, empty/pruned consumers, exact argument
    order, resource boundaries, container decoding, and hidden-failure
    atomicity;
 3. only after those runtime gates pass, remove the compiler and snapshot
-   nonempty gates together, then prove one hidden seeded-ACTIVE lifecycle
+   nonempty gates together and attach the retained concrete Resolver to
+   production search admission, then prove one hidden seeded-ACTIVE lifecycle
    across search, history rerun, inspection, and export with exact retained
-   compiler/program equality;
-4. add transactional ACTIVE publication compilation plus exact dependency
-   derivation while retaining `ErrActivePublicationUnavailable` until the full
-   hidden Tier-1 browser/ClickHouse vertical passes; and
-5. only after that vertical passes, compose the resolver into production,
-   register the six handlers, advertise the capability, enable navigation, and
-   permit the supported ACTIVE transitions atomically.
+   compiler/program equality; and
+4. only after the complete hidden Tier-1 browser/ClickHouse vertical passes,
+   advertise the capability and enable Knowledge Manager navigation and
+   mutation workflows. The six administrator routes remain registered and the
+   dormant read-only UI remains hidden until that exposure decision.
