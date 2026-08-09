@@ -47,10 +47,13 @@ type IndexMutationAuditAppender interface {
 }
 
 // AuditedIndexAdministrationOptions binds the production mutation surface to
-// one trusted deployment tenant and one same-database transaction appender.
+// one trusted deployment tenant, one same-database transaction appender, and
+// an optional higher-level index-name validator. A nil Validator is safe only
+// when both sparse ACTIVE-knowledge drivers prove there is no ACTIVE object.
 type AuditedIndexAdministrationOptions struct {
-	TenantID string
-	Appender IndexMutationAuditAppender
+	TenantID  string
+	Appender  IndexMutationAuditAppender
+	Validator IndexNameAdmissionValidator
 }
 
 // AuditedIndexAdministration delegates index reads to DB and makes every
@@ -58,9 +61,10 @@ type AuditedIndexAdministrationOptions struct {
 // SQLite transaction. Raw DB methods remain available for internal setup and
 // tests that do not represent production administrative mutations.
 type AuditedIndexAdministration struct {
-	db       *DB
-	tenantID string
-	appender IndexMutationAuditAppender
+	db        *DB
+	tenantID  string
+	appender  IndexMutationAuditAppender
+	validator IndexNameAdmissionValidator
 }
 
 // NewAuditedIndexAdministration constructs the fail-closed production index
@@ -87,10 +91,17 @@ func NewAuditedIndexAdministration(
 			ErrInvalidArgument,
 		)
 	}
+	if options.Validator != nil && isNilMutationAuditAppender(options.Validator) {
+		return nil, fmt.Errorf(
+			"%w: index-name admission validator is nil",
+			ErrInvalidArgument,
+		)
+	}
 	return &AuditedIndexAdministration{
-		db:       db,
-		tenantID: strings.Clone(options.TenantID),
-		appender: options.Appender,
+		db:        db,
+		tenantID:  strings.Clone(options.TenantID),
+		appender:  options.Appender,
+		validator: options.Validator,
 	}, nil
 }
 
@@ -123,7 +134,12 @@ func (administration *AuditedIndexAdministration) CreateIndex(
 	ctx context.Context,
 	definition IndexDefinition,
 ) (Index, error) {
-	return administration.db.createIndex(ctx, definition, administration.publish)
+	return administration.db.createIndex(
+		ctx,
+		definition,
+		administration.publish,
+		administration.validator,
+	)
 }
 
 // GetIndex delegates one stable-ID lookup to the underlying catalog.
