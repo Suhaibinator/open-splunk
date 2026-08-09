@@ -16,7 +16,7 @@ const (
 	maximumAppIDBytes                       = 128
 	maximumObjectIDBytes                    = 128
 	maximumFilterBytes                      = 255
-	maximumReadableApps                     = 256
+	maximumReadableApps                     = control.MaximumAppsPerTenant
 	maximumCursorBytes                      = 4 << 10
 	maximumObjectsPerTenant                 = MaximumObjectsPerTenant
 	maximumVersionsPerTenant                = 65536

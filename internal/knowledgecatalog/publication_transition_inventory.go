@@ -468,7 +468,7 @@ func readPublicationTransitionActiveApps(
 	}
 	seen := make(map[string]struct{}, len(records))
 	for _, record := range records {
-		if record.AppIDBytes != int64(len(record.AppID)) || !validCanonicalAppID(record.AppID) ||
+		if record.AppIDBytes != int64(len(record.AppID)) || !control.ValidCanonicalAppID(record.AppID) ||
 			record.TenantID != tenantID || record.TenantIDBytes != int64(len(tenantID)) ||
 			record.StateBytes != int64(len(record.State)) ||
 			(record.State != string(control.AppStateActive) && record.State != string(control.AppStateArchived)) {

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"time"
 
@@ -80,6 +81,22 @@ type Writer struct {
 	commit               writerCommit
 }
 
+// ReadyForManagement reports whether writer retains the complete
+// constructor-established authority required by public mutation routes. It is
+// side-effect free and does not probe the continued availability of storage.
+func (writer *Writer) ReadyForManagement() bool {
+	return writer != nil &&
+		writer.orm != nil &&
+		writer.reader != nil &&
+		writer.reader.orm == writer.orm &&
+		!isNilAuditAppender(writer.auditAppender) &&
+		writer.clock != nil &&
+		writer.idGenerator != nil &&
+		writer.idempotencyRetention >= minimumIdempotencyRetention &&
+		writer.idempotencyRetention <= maximumIdempotencyRetention &&
+		writer.idempotencyRetention%time.Microsecond == 0
+}
+
 // NewWriter constructs a mutation writer without changing schema. Successful
 // audit append is mandatory because catalog publication and its journal event
 // are one atomic control-plane authority.
@@ -94,7 +111,7 @@ func NewWriter(
 			control.ErrInvalidArgument,
 		)
 	}
-	if auditAppender == nil {
+	if isNilAuditAppender(auditAppender) {
 		return nil, fmt.Errorf(
 			"%w: knowledge writer audit appender is required",
 			control.ErrInvalidArgument,
@@ -132,6 +149,19 @@ func NewWriter(
 		idGenerator:          idGenerator,
 		idempotencyRetention: retention,
 	}, nil
+}
+
+func isNilAuditAppender(appender audit.TransactionAppender) bool {
+	if appender == nil {
+		return true
+	}
+	value := reflect.ValueOf(appender)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // Create commits immutable version one or returns a previously committed
@@ -210,7 +240,7 @@ func normalizeWriteScope(scope WriteScope) (normalizedWriteScope, error) {
 	}
 	apps := slices.Clone(scope.WritableAppIDs)
 	for _, appID := range apps {
-		if !validCanonicalAppID(appID) {
+		if !control.ValidCanonicalAppID(appID) {
 			return normalizedWriteScope{}, fmt.Errorf(
 				"%w: knowledge writable app identity is invalid",
 				control.ErrInvalidArgument,
@@ -249,26 +279,6 @@ func requireMutationActor(ctx context.Context) (audit.Actor, error) {
 		)
 	}
 	return actor, nil
-}
-
-func validCanonicalAppID(value string) bool {
-	if len(value) != 26 || value[:4] != "app_" {
-		return false
-	}
-	for _, character := range value[4:25] {
-		if character >= 'a' && character <= 'z' ||
-			character >= 'A' && character <= 'Z' ||
-			character >= '0' && character <= '9' || character == '_' || character == '-' {
-			continue
-		}
-		return false
-	}
-	switch value[25] {
-	case 'A', 'Q', 'g', 'w':
-		return true
-	default:
-		return false
-	}
 }
 
 func newKnowledgeObjectID() (string, error) {

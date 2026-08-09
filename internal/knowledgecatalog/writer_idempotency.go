@@ -355,7 +355,7 @@ func validPreparedReplayIdentity(prepared *preparedMutation, route string) bool 
 		return false
 	}
 	for index, appID := range prepared.scope.writableAppIDs {
-		if !validCanonicalAppID(appID) || index > 0 && prepared.scope.writableAppIDs[index-1] >= appID {
+		if !control.ValidCanonicalAppID(appID) || index > 0 && prepared.scope.writableAppIDs[index-1] >= appID {
 			return false
 		}
 	}

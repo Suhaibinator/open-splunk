@@ -514,7 +514,7 @@ func validPublicationTransitionPersistenceEndpoint(
 	if !validIdentity(endpoint.objectID, maximumObjectIDBytes) ||
 		endpoint.version < 1 || endpoint.version > math.MaxInt64 ||
 		!typeValid || nameErr != nil || canonicalName.String() != endpoint.name ||
-		!validCanonicalAppID(endpoint.appID) ||
+		!control.ValidCanonicalAppID(endpoint.appID) ||
 		!validIdentity(endpoint.ownerID, maximumOwnerIDBytes) || !scopeValid || !stateValid ||
 		endpoint.definitionDigest == ([sha256.Size]byte{}) ||
 		!endpoint.existingDependenciesPresent && endpoint.existingDependencies != nil {

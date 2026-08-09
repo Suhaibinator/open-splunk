@@ -1675,7 +1675,7 @@ func validateActiveCounterPreflight(
 		}
 		switch kind {
 		case activeAppCounterPreflight:
-			if !validCanonicalAppID(record.FirstKey) || record.SecondKeyBytes != 0 || record.SecondKey != "" {
+			if !control.ValidCanonicalAppID(record.FirstKey) || record.SecondKeyBytes != 0 || record.SecondKey != "" {
 				return corrupt()
 			}
 		case activeOwnerCounterPreflight:
@@ -1687,7 +1687,7 @@ func validateActiveCounterPreflight(
 				return corrupt()
 			}
 		case activeAppTypeCounterPreflight:
-			if !validCanonicalAppID(record.FirstKey) ||
+			if !control.ValidCanonicalAppID(record.FirstKey) ||
 				record.SecondKeyBytes < 1 || record.SecondKeyBytes > int64(spec.maximumSecondKeyBytes) ||
 				!ObjectType(record.SecondKey).Valid() {
 				return corrupt()
@@ -1714,7 +1714,7 @@ func preflightActivePublicationName(
 		!validIdentity(tenantID, maximumTenantIDBytes) ||
 		(excludedObjectID != "" && !validIdentity(excludedObjectID, maximumObjectIDBytes)) ||
 		!validIdentity(ownerID, maximumOwnerIDBytes) || authority.opaque ||
-		!validCanonicalAppID(authority.appID) || !authority.objectType.Valid() ||
+		!control.ValidCanonicalAppID(authority.appID) || !authority.objectType.Valid() ||
 		!authority.sharingScope.Valid() || !validIdentity(authority.name, maximumFilterBytes) {
 		return fmt.Errorf(
 			"%w: ACTIVE publication name authority is invalid",
@@ -1792,7 +1792,7 @@ func preflightActivePublicationCapacity(
 	if tx == nil || tx.Statement == nil || authority.opaque ||
 		!validIdentity(tenantID, maximumTenantIDBytes) ||
 		!validIdentity(ownerID, maximumOwnerIDBytes) ||
-		!validCanonicalAppID(authority.appID) || !authority.objectType.Valid() ||
+		!control.ValidCanonicalAppID(authority.appID) || !authority.objectType.Valid() ||
 		!authority.sharingScope.Valid() {
 		return fmt.Errorf(
 			"%w: ACTIVE publication capacity authority is invalid",
