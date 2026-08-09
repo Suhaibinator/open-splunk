@@ -1968,8 +1968,8 @@ func (x *KnowledgeValidationResult) GetDiagnosticsTruncated() bool {
 }
 
 // POST /api/v1/knowledge/objects/validate
-// This message defines a future route contract; declaring it does not register
-// the route or advertise a knowledge-management capability.
+// The route is registered only with the complete knowledge-management
+// dependency unit; route presence does not advertise a capability.
 //
 // definition message presence is required. A missing top-level definition is
 // a request-envelope error; a present definition whose body is missing or

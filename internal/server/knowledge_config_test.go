@@ -207,6 +207,7 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 			knowledgeObjectsListPath,
 			knowledgeObjectsDependenciesPath,
 			knowledgeObjectsDependentsPath,
+			knowledgeObjectsValidatePath,
 			knowledgeObjectsUpdatePath,
 			knowledgeObjectsSetStatePath,
 			knowledgeObjectsDeletePath,
@@ -224,8 +225,8 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 				t.Fatalf("route %q status=%d body=%q reads=%d", path, response.Code, response.Body.String(), body.reads())
 			}
 		}
-		if authenticator.callCount() != 8 || apps.callCount() != 0 ||
-			len(appender.snapshot()) != 8 {
+		if authenticator.callCount() != 9 || apps.callCount() != 0 ||
+			len(appender.snapshot()) != 9 {
 			t.Fatalf("auth=%d apps=%d attempts=%+v", authenticator.callCount(), apps.callCount(), appender.snapshot())
 		}
 
@@ -255,6 +256,7 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 			knowledgeObjectsListPath,
 			knowledgeObjectsDependenciesPath,
 			knowledgeObjectsDependentsPath,
+			knowledgeObjectsValidatePath,
 			knowledgeObjectsUpdatePath,
 			knowledgeObjectsSetStatePath,
 			knowledgeObjectsDeletePath,

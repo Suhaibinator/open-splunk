@@ -136,6 +136,12 @@ export const knowledgeRoutes = {
     KnowledgeApi.ListKnowledgeObjectDependentsResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES },
   ),
+  validate: defineProtobufRoute(
+    "/api/v1/knowledge/objects/validate",
+    KnowledgeApi.ValidateKnowledgeObjectRequest,
+    KnowledgeApi.ValidateKnowledgeObjectResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
   update: defineProtobufRoute(
     "/api/v1/knowledge/objects/update",
     KnowledgeApi.UpdateKnowledgeObjectRequest,

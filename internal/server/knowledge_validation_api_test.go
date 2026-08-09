@@ -25,8 +25,6 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
-const knowledgeValidationUnregisteredPath = "/api/v1/knowledge/objects/validate"
-
 type knowledgeValidationAttemptLog struct {
 	mu          sync.Mutex
 	definitions []knowledgeattemptaudit.Definition
@@ -64,7 +62,7 @@ func knowledgeValidationDirectRequest(
 	t.Helper()
 	request := knowledgeHTTPDirectAdministratorRequest(
 		t,
-		knowledgeValidationUnregisteredPath,
+		knowledgeObjectsValidatePath,
 	)
 	ctx, err := audit.WithActor(request.Context(), audit.Actor{
 		Kind: audit.ActorKindBrowser,
@@ -734,7 +732,7 @@ func TestKnowledgeValidationCreateDependencyContextExceptionIsNarrow(
 		},
 	}
 	requestForAction := func(action knowledgeattemptaudit.Action) *http.Request {
-		request := httptest.NewRequest(http.MethodPost, knowledgeValidationUnregisteredPath, nil)
+		request := httptest.NewRequest(http.MethodPost, knowledgeObjectsValidatePath, nil)
 		return request.WithContext(context.WithValue(
 			request.Context(),
 			knowledgeAttemptStateContextKey{},
@@ -785,7 +783,7 @@ func TestKnowledgeValidationCreateDependencyContextExceptionIsNarrow(
 	}
 }
 
-func TestKnowledgeValidationPathRemainsUnregistered(t *testing.T) {
+func TestKnowledgeValidationPathIsRegisteredInExactManagementBoundary(t *testing.T) {
 	appender := &knowledgeBoundaryAppender{}
 	handler, httpHandler := newKnowledgeHTTPHandler(
 		t,
@@ -795,29 +793,32 @@ func TestKnowledgeValidationPathRemainsUnregistered(t *testing.T) {
 		knowledgeHTTPApps(),
 		appender,
 	)
-	if routes := handler.knowledgeManagementRoutes(router.NoAuth); len(routes) != 8 {
-		t.Fatalf("management routes=%d, want exactly the existing eight", len(routes))
+	if routes := handler.knowledgeManagementRoutes(router.NoAuth); len(routes) != 9 {
+		t.Fatalf("management routes=%d, want exactly nine", len(routes))
 	}
 	request := httptest.NewRequest(
 		http.MethodPost,
-		knowledgeValidationUnregisteredPath,
+		knowledgeObjectsValidatePath,
 		bytes.NewReader(nil),
 	)
-	if action, protected := knowledgeAttemptFallbackAction(request); protected || action != "" {
-		t.Fatalf("unregistered fallback action=%q protected=%t", action, protected)
+	if action, protected := knowledgeAttemptFallbackAction(request); !protected ||
+		action != knowledgeattemptaudit.ActionValidate {
+		t.Fatalf("Validate fallback action=%q protected=%t", action, protected)
 	}
 	response := knowledgeHTTPPost(
 		t,
 		httpHandler,
-		knowledgeValidationUnregisteredPath,
+		knowledgeObjectsValidatePath,
 		knowledgeValidationCreateRequest(knowledgeHTTPDefinition(
 			opensplunkv1.SharingScope_SHARING_SCOPE_PRIVATE,
 		)),
 	)
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("unregistered Validate status=%d body=%q", response.Code, response.Body.String())
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Validate with nonconcrete test Writer status=%d body=%q", response.Code, response.Body.String())
 	}
-	if got := appender.snapshot(); len(got) != 0 {
-		t.Fatalf("unregistered Validate attempts=%+v, want none", got)
+	if got := appender.snapshot(); len(got) != 1 ||
+		got[0].definition.Action != knowledgeattemptaudit.ActionValidate ||
+		got[0].definition.Reason != knowledgeattemptaudit.ReasonServiceUnavailable {
+		t.Fatalf("Validate attempts=%+v", got)
 	}
 }

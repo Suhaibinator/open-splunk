@@ -294,6 +294,7 @@ func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
 		knowledgeObjectsListPath,
 		knowledgeObjectsDependenciesPath,
 		knowledgeObjectsDependentsPath,
+		knowledgeObjectsValidatePath,
 		knowledgeObjectsUpdatePath,
 		knowledgeObjectsSetStatePath,
 		knowledgeObjectsDeletePath,
@@ -389,7 +390,7 @@ func knowledgeHTTPScopeChangeMask() *fieldmaskpb.FieldMask {
 	return &fieldmaskpb.FieldMask{Paths: []string{"sharing_scope"}}
 }
 
-func TestKnowledgeHTTPTestRouterServesAllEightManagementHandlers(
+func TestKnowledgeHTTPTestRouterServesExistingEightManagementHandlers(
 	t *testing.T,
 ) {
 	t.Parallel()

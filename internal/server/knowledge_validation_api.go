@@ -16,9 +16,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgevalidation"
 )
 
-// validateKnowledgeObject is deliberately not registered on an HTTP route
-// yet. The Validate-specific codec must own the request allocation boundary
-// before this handler can safely become reachable from untrusted protobuf.
+// validateKnowledgeObject consumes only the bounded projection produced by
+// the Validate-specific codec before it reaches catalog authority.
 func (handler *apiHandler) validateKnowledgeObject(
 	request *http.Request,
 	input *opensplunkv1.ValidateKnowledgeObjectRequest,

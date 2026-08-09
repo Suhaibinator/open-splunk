@@ -38,9 +38,9 @@ var validateDefinitionProjectionFields = [...]struct {
 	{path: "sharing_scope", number: 4},
 }
 
-// validateKnowledgeObjectCodec is deliberately not installed on a route yet.
-// Its request decoder owns the Validate-specific allocation boundary which the
-// general protobuf codec cannot provide for attacker-controlled repetitions.
+// validateKnowledgeObjectCodec owns the Validate-specific allocation boundary
+// which the general protobuf codec cannot provide for attacker-controlled
+// repetitions.
 type validateKnowledgeObjectCodec struct{}
 
 func newValidateKnowledgeObjectCodec() *validateKnowledgeObjectCodec {
@@ -85,13 +85,17 @@ func (*validateKnowledgeObjectCodec) DecodeBytes(
 	return builder.finish(), nil
 }
 
-// serializedValidateKnowledgeObjectResponse is the only transport value which
-// may carry a service seal and one serialization permit into Encode.
-type serializedValidateKnowledgeObjectResponse struct {
+// sealedValidateKnowledgeObjectResponse is the only transport value which may
+// carry a service seal and one serialization permit into Encode. The phantom
+// protobuf parameter keeps the registered response contract statically
+// discoverable without retaining a second mutable response representation.
+type sealedValidateKnowledgeObjectResponse[Message proto.Message] struct {
 	sealed  knowledgevalidation.SealedValidateResponse
 	ctx     context.Context
 	release func()
 }
+
+type serializedValidateKnowledgeObjectResponse = sealedValidateKnowledgeObjectResponse[*opensplunkv1.ValidateKnowledgeObjectResponse]
 
 func newSerializedValidateKnowledgeObjectResponse(
 	sealed knowledgevalidation.SealedValidateResponse,

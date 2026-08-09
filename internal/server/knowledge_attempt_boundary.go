@@ -150,6 +150,8 @@ func knowledgeAttemptFallbackAction(
 		return knowledgeattemptaudit.ActionDependencies, true
 	case knowledgeObjectsDependentsPath:
 		return knowledgeattemptaudit.ActionDependents, true
+	case knowledgeObjectsValidatePath:
+		return knowledgeattemptaudit.ActionValidate, true
 	case knowledgeObjectsUpdatePath,
 		knowledgeObjectsSetStatePath:
 		return knowledgeattemptaudit.ActionUpdate, true

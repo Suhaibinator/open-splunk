@@ -309,6 +309,15 @@
       "responseFutureWire": "CikvYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL2RlbGV0ZTpyZXNwb25zZfp/MGZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL2RlbGV0ZTpyZXNwb25zZQ=="
     },
     {
+      "path": "/api/v1/knowledge/objects/validate",
+      "requestType": "ValidateKnowledgeObjectRequest",
+      "responseType": "ValidateKnowledgeObjectResponse",
+      "requestKnownWire": "CiwKKi9hcGkvdjEva25vd2xlZGdlL29iamVjdHMvdmFsaWRhdGU6cmVxdWVzdA==",
+      "requestFutureWire": "CiwKKi9hcGkvdjEva25vd2xlZGdlL29iamVjdHMvdmFsaWRhdGU6cmVxdWVzdPp/MWZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL3ZhbGlkYXRlOnJlcXVlc3Q=",
+      "responseKnownWire": "CgIIAQ==",
+      "responseFutureWire": "CgIIAfp/MmZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL3ZhbGlkYXRlOnJlc3BvbnNl"
+    },
+    {
       "path": "/api/v1/indexes/create",
       "requestType": "CreateIndexRequest",
       "responseType": "CreateIndexResponse",

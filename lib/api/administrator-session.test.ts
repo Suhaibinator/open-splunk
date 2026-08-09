@@ -54,12 +54,15 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependencies"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependents"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/create"), false);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/validate"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/update"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/delete"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/inspect"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/create"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/suggestions"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/ws"), false);
+  assert.equal(knowledgeRoutes.validate.path, "/api/v1/knowledge/objects/validate");
+  assert.equal(knowledgeRoutes.validate.maximumResponseBytes, 8 << 20);
 });
 
 test("transport attaches the memory-only token only to protected protobuf calls", async () => {

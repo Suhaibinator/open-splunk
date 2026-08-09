@@ -27,6 +27,7 @@ const (
 	knowledgeObjectsListRoute         = "/knowledge/objects/list"
 	knowledgeObjectsDependenciesRoute = "/knowledge/objects/dependencies"
 	knowledgeObjectsDependentsRoute   = "/knowledge/objects/dependents"
+	knowledgeObjectsValidateRoute     = "/knowledge/objects/validate"
 	knowledgeObjectsUpdateRoute       = "/knowledge/objects/update"
 	knowledgeObjectsSetStateRoute     = "/knowledge/objects/set-state"
 	knowledgeObjectsDeleteRoute       = "/knowledge/objects/delete"
@@ -36,6 +37,7 @@ const (
 	knowledgeObjectsListPath         = apiV1PathPrefix + knowledgeObjectsListRoute
 	knowledgeObjectsDependenciesPath = apiV1PathPrefix + knowledgeObjectsDependenciesRoute
 	knowledgeObjectsDependentsPath   = apiV1PathPrefix + knowledgeObjectsDependentsRoute
+	knowledgeObjectsValidatePath     = apiV1PathPrefix + knowledgeObjectsValidateRoute
 	knowledgeObjectsUpdatePath       = apiV1PathPrefix + knowledgeObjectsUpdateRoute
 	knowledgeObjectsSetStatePath     = apiV1PathPrefix + knowledgeObjectsSetStateRoute
 	knowledgeObjectsDeletePath       = apiV1PathPrefix + knowledgeObjectsDeleteRoute
@@ -66,7 +68,7 @@ type KnowledgeGraphCatalog interface {
 }
 
 // KnowledgeCatalog is the complete bounded read-only surface used by the
-// management handlers. Embedding graph inspection keeps all eight routes on
+// management handlers. Embedding graph inspection keeps all nine routes on
 // one catalog authority and one all-or-none configuration boundary.
 type KnowledgeCatalog interface {
 	KnowledgeGraphCatalog
@@ -164,6 +166,12 @@ func (handler *apiHandler) knowledgeManagementRoutes(
 			Codec: newSerializedListKnowledgeObjectDependentsCodec(), Handler: handler.listKnowledgeObjectDependents,
 			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectDependentsRequest],
 			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.ValidateKnowledgeObjectRequest, *serializedValidateKnowledgeObjectResponse]{
+			Path: knowledgeObjectsValidateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newValidateKnowledgeObjectCodec(), Handler: handler.validateKnowledgeObject,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ValidateKnowledgeObjectRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsUpdateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,

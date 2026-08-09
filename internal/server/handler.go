@@ -1064,6 +1064,7 @@ func NewHandler(config Config) (*Handler, error) {
 			knowledgeObjectsListPath,
 			knowledgeObjectsDependenciesPath,
 			knowledgeObjectsDependentsPath,
+			knowledgeObjectsValidatePath,
 			knowledgeObjectsUpdatePath,
 			knowledgeObjectsSetStatePath,
 			knowledgeObjectsDeletePath,
