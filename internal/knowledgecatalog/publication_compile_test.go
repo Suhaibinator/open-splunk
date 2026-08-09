@@ -120,6 +120,327 @@ func TestCompilePublicationWinnerCohortDistinguishesAbsentAndPresentEmpty(t *tes
 	}
 }
 
+func TestValidatePublicationWinnerCohortRetainsCandidateAbsentProof(t *testing.T) {
+	empty := publicationWinnerCohort{}
+	absentCandidate := publicationTestAbsentCandidate(t)
+	emptyAuthority, err := validatePublicationWinnerCohort(
+		t.Context(), empty, absentCandidate, false,
+	)
+	if err != nil {
+		t.Fatalf("validatePublicationWinnerCohort(empty): %v", err)
+	}
+	emptyCommitment, present := emptyAuthority.programCommitment()
+	emptyProgram, compileErr := knowledgeprogram.Compile(nil)
+	if compileErr != nil {
+		t.Fatalf("knowledgeprogram.Compile(empty): %v", compileErr)
+	}
+	wantEmptyCommitment, wantPresent := emptyProgram.Commitment()
+	boundCandidate, candidateWins, candidatePresent := emptyAuthority.candidateBinding()
+	if emptyAuthority.IsZero() || !present || emptyCommitment == ([32]byte{}) ||
+		!wantPresent || emptyCommitment != wantEmptyCommitment ||
+		!emptyAuthority.candidateDependencies().IsZero() || !candidatePresent || candidateWins ||
+		boundCandidate != absentCandidate {
+		t.Fatalf(
+			"empty authority = zero:%t commitment:%x/%t candidate-zero:%t binding:%#v/%t/%t",
+			emptyAuthority.IsZero(),
+			emptyCommitment,
+			present,
+			emptyAuthority.candidateDependencies().IsZero(),
+			boundCandidate,
+			candidateWins,
+			candidatePresent,
+		)
+	}
+	emptyAgain, err := validatePublicationWinnerCohort(
+		t.Context(), empty, absentCandidate, false,
+	)
+	if err != nil {
+		t.Fatalf("validatePublicationWinnerCohort(empty again): %v", err)
+	}
+	if !emptyAuthority.Equal(emptyAgain) || emptyAuthority.Equal(publicationWinnerCohortAuthority{}) {
+		t.Fatal("validated empty cohort equality collapsed present and absent authority")
+	}
+	if _, present := (publicationWinnerCohortAuthority{}).programCommitment(); present {
+		t.Fatal("absent cohort authority exposed a program commitment")
+	}
+	if _, _, present := (publicationWinnerCohortAuthority{}).candidateBinding(); present {
+		t.Fatal("absent cohort authority exposed a candidate binding")
+	}
+
+	replayMutations := []struct {
+		name   string
+		mutate func(*publicationCandidateAuthority)
+	}{
+		{name: "object ID", mutate: func(candidate *publicationCandidateAuthority) {
+			candidate.objectID = "ko-transition-replay"
+		}},
+		{name: "version", mutate: func(candidate *publicationCandidateAuthority) {
+			candidate.version++
+		}},
+		{name: "definition digest", mutate: func(candidate *publicationCandidateAuthority) {
+			candidate.definitionDigest[0] ^= 0xff
+		}},
+		{name: "owner ID", mutate: func(candidate *publicationCandidateAuthority) {
+			candidate.ownerID = "owner-replay"
+		}},
+	}
+	for _, replayMutation := range replayMutations {
+		t.Run("binds "+replayMutation.name, func(t *testing.T) {
+			replayCandidate := absentCandidate
+			replayMutation.mutate(&replayCandidate)
+			replay, replayErr := validatePublicationWinnerCohort(
+				t.Context(), empty, replayCandidate, false,
+			)
+			if replayErr != nil {
+				t.Fatalf("validatePublicationWinnerCohort(replay candidate): %v", replayErr)
+			}
+			if emptyAuthority.Equal(replay) {
+				t.Fatal("candidate-absent authority can be replayed for another transition identity")
+			}
+		})
+	}
+	oppositeMode := emptyAuthority
+	oppositeModeState := *emptyAuthority.state
+	oppositeModeState.candidateWins = true
+	oppositeMode.state = &oppositeModeState
+	if emptyAuthority.Equal(oppositeMode) {
+		t.Fatal("cohort authority equality does not bind candidate winner mode")
+	}
+
+	cohort := publicationTestExistingChain(t)
+	fullAuthority, err := validatePublicationWinnerCohort(
+		t.Context(), cohort, absentCandidate, false,
+	)
+	if err != nil {
+		t.Fatalf("validatePublicationWinnerCohort(existing chain): %v", err)
+	}
+	reordered := publicationCloneCohort(cohort)
+	reordered.winners[0], reordered.winners[2] = reordered.winners[2], reordered.winners[0]
+	reorderedAuthority, err := validatePublicationWinnerCohort(
+		t.Context(), reordered, absentCandidate, false,
+	)
+	if err != nil {
+		t.Fatalf("validatePublicationWinnerCohort(reordered existing chain): %v", err)
+	}
+	if fullAuthority.IsZero() || !fullAuthority.candidateDependencies().IsZero() ||
+		!fullAuthority.Equal(reorderedAuthority) || fullAuthority.Equal(emptyAuthority) {
+		t.Fatal("candidate-absent cohort proof does not bind its canonical program")
+	}
+	_, exactWinner := publicationTestChain(t)
+	if _, err := validatePublicationWinnerCohort(
+		t.Context(), cohort, exactWinner, false,
+	); !errors.Is(err, control.ErrDependencyConflict) {
+		t.Fatalf("false candidate-absent assertion error = %v, want DependencyConflict", err)
+	}
+	if _, err := validatePublicationWinnerCohort(
+		t.Context(), cohort, absentCandidate, true,
+	); !errors.Is(err, control.ErrDependencyConflict) {
+		t.Fatalf("false candidate-winner assertion error = %v, want DependencyConflict", err)
+	}
+	duplicateCandidate := publicationCloneCohort(cohort)
+	duplicateCandidate.winners = append(
+		duplicateCandidate.winners,
+		publicationCloneWinner(publicationTestWinnerByID(cohort, "ko-alias")),
+	)
+	duplicateCandidate.expectedWinnerCount++
+	if _, err := validatePublicationWinnerCohort(
+		t.Context(), duplicateCandidate, exactWinner, false,
+	); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("duplicate candidate error = %v, want ErrCorrupt", err)
+	}
+}
+
+func TestValidatePublicationWinnerCohortCandidateProofIsDetached(t *testing.T) {
+	cohort, candidate := publicationTestChain(t)
+	authority, err := validatePublicationWinnerCohort(t.Context(), cohort, candidate, true)
+	if err != nil {
+		t.Fatalf("validatePublicationWinnerCohort(candidate): %v", err)
+	}
+	strict, err := compilePublicationWinnerCohort(t.Context(), cohort, candidate)
+	if err != nil {
+		t.Fatalf("compilePublicationWinnerCohort(candidate): %v", err)
+	}
+	boundCandidate, candidateWins, candidatePresent := authority.candidateBinding()
+	if authority.IsZero() || !authority.candidateDependencies().Equal(strict) ||
+		!candidatePresent || !candidateWins || boundCandidate != candidate {
+		t.Fatal("generalized validator changed strict candidate dependency authority")
+	}
+
+	reordered := publicationCloneCohort(cohort)
+	reordered.winners[0], reordered.winners[2] = reordered.winners[2], reordered.winners[0]
+	reorderedAuthority, err := validatePublicationWinnerCohort(
+		t.Context(), reordered, candidate, true,
+	)
+	if err != nil {
+		t.Fatalf("validatePublicationWinnerCohort(reordered candidate): %v", err)
+	}
+	if !authority.Equal(reorderedAuthority) {
+		t.Fatal("winner input order changed cohort authority")
+	}
+
+	detached := authority.candidateDependencies()
+	detached.state.candidate.objectID = "mutated-candidate"
+	detached.state.targets[0].objectID = "mutated-target"
+	detached.state.projection[0].targetObjectID = "mutated-projection"
+	got := authority.candidateDependencies()
+	if got.candidateAuthority() != candidate || got.derivedTargets()[0].objectID != "ko-extraction" ||
+		got.databaseProjection()[0].targetObjectID != "ko-extraction" {
+		t.Fatal("cohort candidate accessor aliases retained authority")
+	}
+
+	mutableCandidate := candidate
+	mutation := &publicationMutationContext{
+		Context:  t.Context(),
+		mutateAt: 2,
+		mutate: func() {
+			mutableCandidate.objectID = "caller-mutated"
+			mutableCandidate.ownerID = "caller-mutated"
+		},
+	}
+	detachedIngress, err := validatePublicationWinnerCohort(
+		mutation, cohort, mutableCandidate, true,
+	)
+	if err != nil {
+		t.Fatalf("validatePublicationWinnerCohort(candidate mutation): %v", err)
+	}
+	detachedCandidate, detachedWins, detachedPresent := detachedIngress.candidateBinding()
+	if !mutation.mutated || !authority.Equal(detachedIngress) ||
+		!detachedPresent || !detachedWins || detachedCandidate != candidate {
+		t.Fatalf(
+			"candidate ingress detachment = mutated:%t equal:%t binding:%#v/%t/%t",
+			mutation.mutated,
+			authority.Equal(detachedIngress),
+			detachedCandidate,
+			detachedWins,
+			detachedPresent,
+		)
+	}
+}
+
+func TestValidatePublicationWinnerCohortRequiresExactExistingAuthority(t *testing.T) {
+	base := publicationTestExistingChain(t)
+	absentCandidate := publicationTestAbsentCandidate(t)
+	tests := []struct {
+		name    string
+		mutate  func(*publicationWinnerCohort)
+		wantErr error
+	}{
+		{
+			name: "missing present marker",
+			mutate: func(cohort *publicationWinnerCohort) {
+				alias := publicationTestWinnerIndex(cohort, "ko-alias")
+				cohort.winners[alias].existingDependenciesPresent = false
+			},
+			wantErr: ErrCorrupt,
+		},
+		{
+			name: "stale exact-shape rows",
+			mutate: func(cohort *publicationWinnerCohort) {
+				alias := publicationTestWinnerIndex(cohort, "ko-alias")
+				cohort.winners[alias].existingDependencies = nil
+			},
+			wantErr: control.ErrDependencyConflict,
+		},
+		{
+			name: "malformed existing definition",
+			mutate: func(cohort *publicationWinnerCohort) {
+				alias := publicationTestWinnerIndex(cohort, "ko-alias")
+				cohort.winners[alias].object.Definition = nil
+			},
+			wantErr: ErrCorrupt,
+		},
+		{
+			name: "incomplete count",
+			mutate: func(cohort *publicationWinnerCohort) {
+				cohort.expectedWinnerCount--
+			},
+			wantErr: ErrCorrupt,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cohort := publicationCloneCohort(base)
+			test.mutate(&cohort)
+			if _, err := validatePublicationWinnerCohort(
+				t.Context(), cohort, absentCandidate, false,
+			); !errors.Is(err, test.wantErr) {
+				t.Fatalf("validatePublicationWinnerCohort() error = %v, want %v", err, test.wantErr)
+			}
+		})
+	}
+
+	presentNonNilEmpty := publicationCloneCohort(base)
+	extraction := publicationTestWinnerIndex(&presentNonNilEmpty, "ko-extraction")
+	presentNonNilEmpty.winners[extraction].existingDependencies = make(
+		[]publicationPersistedDependency,
+		0,
+	)
+	if _, err := validatePublicationWinnerCohort(
+		t.Context(), presentNonNilEmpty, absentCandidate, false,
+	); err != nil {
+		t.Fatalf("present non-nil empty persisted authority: %v", err)
+	}
+
+	_, candidate := publicationTestChain(t)
+	if _, err := validatePublicationWinnerCohort(
+		t.Context(), publicationWinnerCohort{}, candidate, true,
+	); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("candidate with zero winners error = %v, want ErrCorrupt", err)
+	}
+
+	colliding := publicationWinnerCohort{
+		expectedWinnerCount: 2,
+		winners: []publicationWinner{
+			{
+				object: publicationTestObject(t, "ko-collision-a", 1, dependencyExtractionDefinition(
+					"app-a", "collision-a", SharingScopeApp, nil, "", "same_output",
+				)),
+				existingDependenciesPresent: true,
+			},
+			{
+				object: publicationTestObject(t, "ko-collision-b", 1, dependencyExtractionDefinition(
+					"app-a", "collision-b", SharingScopeApp, nil, "", "same_output",
+				)),
+				existingDependenciesPresent: true,
+			},
+		},
+	}
+	if _, err := validatePublicationWinnerCohort(
+		t.Context(), colliding, absentCandidate, false,
+	); !errors.Is(err, control.ErrDependencyConflict) {
+		t.Fatalf("candidate-absent semantic conflict error = %v, want DependencyConflict", err)
+	}
+
+	over := publicationWinnerCohort{
+		expectedWinnerCount: knowledgeprogram.MaximumObjects + 1,
+		winners:             make([]publicationWinner, knowledgeprogram.MaximumObjects+1),
+	}
+	if _, err := validatePublicationWinnerCohort(
+		t.Context(), over, absentCandidate, false,
+	); !errors.Is(err, control.ErrCapacityExceeded) {
+		t.Fatalf("candidate-absent object capacity error = %v, want CapacityExceeded", err)
+	}
+	invalidCandidate := absentCandidate
+	invalidCandidate.objectID = ""
+	if _, err := validatePublicationWinnerCohort(
+		t.Context(), publicationWinnerCohort{}, invalidCandidate, false,
+	); !errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf("invalid non-winning candidate error = %v, want InvalidArgument", err)
+	}
+	if _, err := validatePublicationWinnerCohort(
+		nil, base, absentCandidate, false,
+	); !errors.Is(err, control.ErrInvalidArgument) {
+		t.Fatalf("nil context error = %v, want InvalidArgument", err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := validatePublicationWinnerCohort(
+		canceled, base, absentCandidate, false,
+	); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled context error = %v, want context.Canceled", err)
+	}
+}
+
 func TestCompilePublicationWinnerCohortRejectsMalformedAuthority(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -724,6 +1045,37 @@ func publicationTestChain(t *testing.T) (publicationWinnerCohort, publicationCan
 			{object: alias},
 		},
 	}, publicationTestCandidate(alias)
+}
+
+func publicationTestExistingChain(t *testing.T) publicationWinnerCohort {
+	t.Helper()
+	cohort, _ := publicationTestChain(t)
+	alias := publicationTestWinnerIndex(&cohort, "ko-alias")
+	cohort.winners[alias].existingDependenciesPresent = true
+	cohort.winners[alias].existingDependencies = []publicationPersistedDependency{{
+		ordinal:        0,
+		targetObjectID: "ko-extraction",
+		targetVersion:  3,
+		role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+	}}
+	return cohort
+}
+
+func publicationTestAbsentCandidate(t *testing.T) publicationCandidateAuthority {
+	t.Helper()
+	return publicationTestCandidate(publicationTestObject(
+		t,
+		"ko-transition-absent",
+		13,
+		dependencyExtractionDefinition(
+			"app-a",
+			"transition-absent",
+			SharingScopeApp,
+			nil,
+			"",
+			"transition_absent_output",
+		),
+	))
 }
 
 func publicationDependencyBoundaryCohort(

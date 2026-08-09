@@ -75,6 +75,22 @@ type candidateDependencyAuthorityState struct {
 	projection  []publicationDependency
 }
 
+// publicationWinnerCohortAuthority is pointer-backed so a successfully
+// validated cohort in which the transition candidate does not win remains
+// distinct from an uninitialized result. candidateDependencies is itself
+// pointer-backed, preserving the further distinction between a non-winning
+// candidate and an exact winning candidate with zero edges.
+type publicationWinnerCohortAuthority struct {
+	state *publicationWinnerCohortAuthorityState
+}
+
+type publicationWinnerCohortAuthorityState struct {
+	programCommitment     [sha256.Size]byte
+	transitionCandidate   publicationCandidateAuthority
+	candidateWins         bool
+	candidateDependencies candidateDependencyAuthority
+}
+
 type publicationDerivedDependencyTarget struct {
 	objectID         string
 	version          int64
@@ -138,6 +154,60 @@ func (authority candidateDependencyAuthority) databaseProjection() []publication
 	return result
 }
 
+func (authority candidateDependencyAuthority) detached() candidateDependencyAuthority {
+	if authority.state == nil {
+		return candidateDependencyAuthority{}
+	}
+	return candidateDependencyAuthority{state: &candidateDependencyAuthorityState{
+		candidate:   authority.candidateAuthority(),
+		sourceStage: authority.sourceStage(),
+		targets:     authority.derivedTargets(),
+		projection:  authority.databaseProjection(),
+	}}
+}
+
+func (authority publicationWinnerCohortAuthority) IsZero() bool {
+	return authority.state == nil
+}
+
+func (authority publicationWinnerCohortAuthority) Equal(other publicationWinnerCohortAuthority) bool {
+	if authority.state == nil || other.state == nil {
+		return authority.state == nil && other.state == nil
+	}
+	return authority.state.programCommitment == other.state.programCommitment &&
+		authority.state.transitionCandidate == other.state.transitionCandidate &&
+		authority.state.candidateWins == other.state.candidateWins &&
+		authority.state.candidateDependencies.Equal(other.state.candidateDependencies)
+}
+
+func (authority publicationWinnerCohortAuthority) candidateDependencies() candidateDependencyAuthority {
+	if authority.state == nil {
+		return candidateDependencyAuthority{}
+	}
+	return authority.state.candidateDependencies.detached()
+}
+
+func (authority publicationWinnerCohortAuthority) candidateBinding() (
+	candidate publicationCandidateAuthority,
+	wins bool,
+	present bool,
+) {
+	if authority.state == nil {
+		return publicationCandidateAuthority{}, false, false
+	}
+	result := authority.state.transitionCandidate
+	result.objectID = strings.Clone(result.objectID)
+	result.ownerID = strings.Clone(result.ownerID)
+	return result, authority.state.candidateWins, true
+}
+
+func (authority publicationWinnerCohortAuthority) programCommitment() ([sha256.Size]byte, bool) {
+	if authority.state == nil {
+		return [sha256.Size]byte{}, false
+	}
+	return authority.state.programCommitment, true
+}
+
 type canonicalPublicationWinner struct {
 	existingDependenciesPresent bool
 	existingDependencies        []publicationPersistedDependency
@@ -157,6 +227,54 @@ func compilePublicationWinnerCohort(
 	cohort publicationWinnerCohort,
 	candidate publicationCandidateAuthority,
 ) (candidateDependencyAuthority, error) {
+	return compilePublicationWinnerCohortTransition(ctx, cohort, candidate, true, nil)
+}
+
+// validatePublicationWinnerCohort validates one complete post-publication
+// winner cohort. candidateWins is an assertion that this helper verifies: the
+// exact transition candidate must occur once when true and must not occur when
+// false. When false, every winner must carry exact persisted dependency
+// authority, including an explicit present marker for an empty set.
+func validatePublicationWinnerCohort(
+	ctx context.Context,
+	cohort publicationWinnerCohort,
+	candidate publicationCandidateAuthority,
+	candidateWins bool,
+) (publicationWinnerCohortAuthority, error) {
+	var programCommitment [sha256.Size]byte
+	compiled, err := compilePublicationWinnerCohortTransition(
+		ctx,
+		cohort,
+		candidate,
+		candidateWins,
+		&programCommitment,
+	)
+	if err != nil {
+		return publicationWinnerCohortAuthority{}, err
+	}
+	return publicationWinnerCohortAuthority{state: &publicationWinnerCohortAuthorityState{
+		programCommitment: programCommitment,
+		transitionCandidate: publicationCandidateAuthority{
+			objectID:         strings.Clone(candidate.objectID),
+			version:          candidate.version,
+			definitionDigest: candidate.definitionDigest,
+			ownerID:          strings.Clone(candidate.ownerID),
+		},
+		candidateWins:         candidateWins,
+		candidateDependencies: compiled.detached(),
+	}}, nil
+}
+
+func compilePublicationWinnerCohortTransition(
+	ctx context.Context,
+	cohort publicationWinnerCohort,
+	candidate publicationCandidateAuthority,
+	candidateWins bool,
+	programCommitmentOutput *[sha256.Size]byte,
+) (candidateDependencyAuthority, error) {
+	if programCommitmentOutput != nil {
+		*programCommitmentOutput = [sha256.Size]byte{}
+	}
 	if ctx == nil {
 		return candidateDependencyAuthority{}, fmt.Errorf(
 			"%w: publication compilation context is nil",
@@ -166,7 +284,9 @@ func compilePublicationWinnerCohort(
 	if err := ctx.Err(); err != nil {
 		return candidateDependencyAuthority{}, err
 	}
-	if cohort.expectedWinnerCount == 0 || int(cohort.expectedWinnerCount) != len(cohort.winners) {
+	candidateValue := candidate
+	if int(cohort.expectedWinnerCount) != len(cohort.winners) ||
+		(candidateWins && cohort.expectedWinnerCount == 0) {
 		return candidateDependencyAuthority{}, invalidPublicationWinnerCohort("is incomplete")
 	}
 	if cohort.expectedWinnerCount > knowledgeprogram.MaximumObjects {
@@ -175,10 +295,10 @@ func compilePublicationWinnerCohort(
 			control.ErrCapacityExceeded,
 		)
 	}
-	if !validIdentity(candidate.objectID, maximumObjectIDBytes) ||
-		candidate.version < 1 || candidate.version > math.MaxInt64 ||
-		candidate.definitionDigest == ([sha256.Size]byte{}) ||
-		!validIdentity(candidate.ownerID, maximumOwnerIDBytes) {
+	if !validIdentity(candidateValue.objectID, maximumObjectIDBytes) ||
+		candidateValue.version < 1 || candidateValue.version > math.MaxInt64 ||
+		candidateValue.definitionDigest == ([sha256.Size]byte{}) ||
+		!validIdentity(candidateValue.ownerID, maximumOwnerIDBytes) {
 		return candidateDependencyAuthority{}, fmt.Errorf(
 			"%w: publication candidate authority is invalid",
 			control.ErrInvalidArgument,
@@ -186,22 +306,33 @@ func compilePublicationWinnerCohort(
 	}
 	candidateMatches := 0
 	for index := range cohort.winners {
-		if publicationWinnerMatchesCandidate(cohort.winners[index].object, candidate) {
+		if publicationWinnerMatchesCandidate(cohort.winners[index].object, candidateValue) {
 			candidateMatches++
 		}
 	}
-	if candidateMatches == 0 {
-		return candidateDependencyAuthority{}, fmt.Errorf(
-			"%w: publication candidate is not the exact cohort winner",
-			control.ErrDependencyConflict,
-		)
-	}
-	if candidateMatches != 1 {
+	if candidateMatches > 1 {
 		return candidateDependencyAuthority{}, invalidPublicationWinnerCohort(
 			"duplicates the publication candidate",
 		)
 	}
-	if err := preflightPublicationWinnerCohort(cohort, candidate); err != nil {
+	if candidateWins {
+		if candidateMatches == 0 {
+			return candidateDependencyAuthority{}, fmt.Errorf(
+				"%w: publication candidate is not the exact cohort winner",
+				control.ErrDependencyConflict,
+			)
+		}
+	} else if candidateMatches != 0 {
+		return candidateDependencyAuthority{}, fmt.Errorf(
+			"%w: publication candidate unexpectedly wins its cohort",
+			control.ErrDependencyConflict,
+		)
+	}
+	if err := preflightPublicationWinnerCohortTransition(
+		cohort,
+		candidateValue,
+		candidateWins,
+	); err != nil {
 		return candidateDependencyAuthority{}, err
 	}
 
@@ -215,9 +346,10 @@ func compilePublicationWinnerCohort(
 	var candidateWinner *canonicalPublicationWinner
 	for index := range cohort.winners {
 		input := cohort.winners[index]
+		isCandidate := candidateWins && publicationWinnerMatchesCandidate(input.object, candidateValue)
 		winner, err := canonicalizePublicationWinner(
 			input,
-			publicationWinnerMatchesCandidate(input.object, candidate),
+			isCandidate,
 		)
 		if err != nil {
 			return candidateDependencyAuthority{}, err
@@ -251,20 +383,18 @@ func compilePublicationWinnerCohort(
 		semanticWinners = append(semanticWinners, resolutionCandidate{semantics: stored.semantics})
 		byKey[stored.key] = stored
 
-		if stored.key.objectID == candidate.objectID &&
-			stored.key.version == candidate.version &&
-			bytes.Equal(stored.object.GetDefinitionSha256(), candidate.definitionDigest[:]) {
+		if isCandidate && stored.key.objectID == candidateValue.objectID &&
+			stored.key.version == candidateValue.version &&
+			bytes.Equal(stored.object.GetDefinitionSha256(), candidateValue.definitionDigest[:]) {
 			candidateWinner = stored
 		}
 	}
-	// No caller-controlled context callback occurs between the resource
-	// preflight and this point. Every persisted row and executable definition is
-	// now detached, so later cancellation cannot mutate the authority reread
-	// after compilation.
+	// Every persisted row and executable definition is detached before the next
+	// caller-controlled context callback.
 	if err := ctx.Err(); err != nil {
 		return candidateDependencyAuthority{}, err
 	}
-	if candidateWinner == nil {
+	if candidateWins && candidateWinner == nil {
 		return candidateDependencyAuthority{}, fmt.Errorf(
 			"%w: publication candidate is not the exact cohort winner",
 			control.ErrDependencyConflict,
@@ -335,9 +465,21 @@ func compilePublicationWinnerCohort(
 				control.ErrCapacityExceeded,
 			)
 		}
+		if candidateWins {
+			return candidateDependencyAuthority{}, fmt.Errorf(
+				"%w: publication candidate conflicts with its winner cohort",
+				control.ErrDependencyConflict,
+			)
+		}
 		return candidateDependencyAuthority{}, fmt.Errorf(
-			"%w: publication candidate conflicts with its winner cohort",
+			"%w: publication transition conflicts with its winner cohort",
 			control.ErrDependencyConflict,
+		)
+	}
+	programCommitment, present := program.Commitment()
+	if !present || programCommitment == ([sha256.Size]byte{}) {
+		return candidateDependencyAuthority{}, invalidPublicationWinnerCohort(
+			"compiler program commitment is absent",
 		)
 	}
 
@@ -357,16 +499,28 @@ func compilePublicationWinnerCohort(
 			winner.existingDependencies,
 			derived[winner.key],
 		) {
+			if candidateWins {
+				return candidateDependencyAuthority{}, fmt.Errorf(
+					"%w: candidate changes an existing winner dependency authority",
+					control.ErrDependencyConflict,
+				)
+			}
 			return candidateDependencyAuthority{}, fmt.Errorf(
-				"%w: candidate changes an existing winner dependency authority",
+				"%w: publication transition changes an existing winner dependency authority",
 				control.ErrDependencyConflict,
 			)
 		}
 	}
+	if !candidateWins {
+		if programCommitmentOutput != nil {
+			*programCommitmentOutput = programCommitment
+		}
+		return candidateDependencyAuthority{}, nil
+	}
 
 	candidateDerived := derived[dependencyVersionKey{
-		objectID: candidate.objectID,
-		version:  candidate.version,
+		objectID: candidateValue.objectID,
+		version:  candidateValue.version,
 	}]
 	targets := make([]publicationDerivedDependencyTarget, len(candidateDerived))
 	projection := make([]publicationDependency, len(candidateDerived))
@@ -379,27 +533,40 @@ func compilePublicationWinnerCohort(
 			targetVersion:  dependency.version,
 		}
 	}
-	return candidateDependencyAuthority{state: &candidateDependencyAuthorityState{
+	result := candidateDependencyAuthority{state: &candidateDependencyAuthorityState{
 		candidate: publicationCandidateAuthority{
-			objectID:         strings.Clone(candidate.objectID),
-			version:          candidate.version,
-			definitionDigest: candidate.definitionDigest,
-			ownerID:          strings.Clone(candidate.ownerID),
+			objectID:         strings.Clone(candidateValue.objectID),
+			version:          candidateValue.version,
+			definitionDigest: candidateValue.definitionDigest,
+			ownerID:          strings.Clone(candidateValue.ownerID),
 		},
 		sourceStage: candidateWinner.object.GetStage(),
 		targets:     targets,
 		projection:  projection,
-	}}, nil
+	}}
+	if programCommitmentOutput != nil {
+		*programCommitmentOutput = programCommitment
+	}
+	return result, nil
 }
 
 func preflightPublicationWinnerCohort(
 	cohort publicationWinnerCohort,
 	candidate publicationCandidateAuthority,
 ) error {
+	return preflightPublicationWinnerCohortTransition(cohort, candidate, true)
+}
+
+func preflightPublicationWinnerCohortTransition(
+	cohort publicationWinnerCohort,
+	candidate publicationCandidateAuthority,
+	candidateWins bool,
+) error {
 	var existingDependencies uint64
 	for index := range cohort.winners {
 		winner := cohort.winners[index]
-		if publicationWinnerMatchesCandidate(winner.object, candidate) {
+		isCandidate := candidateWins && publicationWinnerMatchesCandidate(winner.object, candidate)
+		if isCandidate {
 			if winner.existingDependenciesPresent || winner.existingDependencies != nil {
 				return invalidPublicationWinnerCohort("submits candidate dependency rows")
 			}
