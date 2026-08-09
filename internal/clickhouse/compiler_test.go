@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -4152,29 +4153,43 @@ func TestCompileRejectsOversizedGeneratedSQL(t *testing.T) {
 	t.Parallel()
 
 	logical := buildPlan(t, `index=gradethis`)
-	fieldName := strings.Repeat("oversized", 1_800)
+	fieldName := strings.Repeat("x", eventfields.MaximumDynamicPathSegmentBytes)
 	field := plan.FieldRef{Name: fieldName, Path: []string{fieldName}}
-	for range 16 {
-		logical.Operators = append(logical.Operators, &plan.Filter{
-			Expression: &plan.EvalComparisonExpression{
-				Left: &plan.ScalarFieldExpression{
-					Field: field,
-				},
-				Op: plan.ComparisonOpEqual,
-				Right: &plan.ScalarLiteralExpression{
-					Value: plan.Value{
-						Kind:  plan.ValueKindInt64,
-						Int64: 1,
-					},
-				},
-			},
-		})
+	expressions := make([]plan.Expression, (maxCompiledPredicateNodes+1)/2)
+	for index := range expressions {
+		expressions[index] = &plan.ComparisonExpression{
+			Field: field,
+			Op:    plan.ComparisonOpEqual,
+			Value: plan.Value{Kind: plan.ValueKindInt64, Int64: 1},
+		}
 	}
+	for len(expressions) > 1 {
+		next := make([]plan.Expression, 0, (len(expressions)+1)/2)
+		for index := 0; index < len(expressions); index += 2 {
+			if index+1 == len(expressions) {
+				next = append(next, expressions[index])
+				continue
+			}
+			next = append(next, &plan.BooleanExpression{
+				Op:    plan.BooleanOpAnd,
+				Left:  expressions[index],
+				Right: expressions[index+1],
+			})
+		}
+		expressions = next
+	}
+	logical.Operators = append(logical.Operators, &plan.Filter{
+		Expression: expressions[0],
+	})
 	_, err := (Compiler{}).Compile(logical)
 	diagnostic := &plan.Diagnostic{}
 	ok := errors.As(err, &diagnostic)
-	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
-		t.Fatalf("Compile error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
+	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+		!strings.Contains(diagnostic.Message, "compiled query exceeds") {
+		t.Fatalf(
+			"Compile error = %#v, want compiled-query SPL_QUERY_TOO_COMPLEX",
+			err,
+		)
 	}
 }
 
