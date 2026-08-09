@@ -17,6 +17,9 @@ const (
 	// MaximumObjectsPerTenant is the hard catalog identity ceiling. List totals
 	// can never exceed this value, including across continuation pages.
 	MaximumObjectsPerTenant = 8192
+	// MaximumDependencyEdgesPerVersion is the sealed direct-edge ceiling for
+	// one immutable source version. It also bounds an outgoing graph total.
+	MaximumDependencyEdgesPerVersion = 1024
 	// MaximumListResponseCanonicalDefinitionBytes bounds definitions detached
 	// into one response page. PageSize is a row ceiling: List stops before the
 	// first object that would cross this byte ceiling and emits a continuation.
@@ -149,6 +152,63 @@ type ListRequest struct {
 
 type ListPage struct {
 	Objects         []Object
+	NextPageToken   string
+	TotalSize       *uint64
+	TotalSizeExact  bool
+	CatalogRevision uint64
+}
+
+// ObjectVersionIdentity is a detached exact immutable catalog identity. It
+// deliberately carries no definition digest or current-registry metadata.
+type ObjectVersionIdentity struct {
+	KnowledgeObjectID string
+	Version           uint64
+}
+
+// CurrentRegistryAuthority is the detached, definition-free disclosure
+// authority used by trusted converters to independently recheck a Store graph
+// result without another database read. Name and digest are intentionally not
+// included because neither is needed for that check.
+type CurrentRegistryAuthority struct {
+	TenantID          string
+	KnowledgeObjectID string
+	CurrentVersion    uint64
+	AppID             string
+	OwnerID           string
+	ObjectType        ObjectType
+	SharingScope      SharingScope
+	State             State
+}
+
+type DependencyRole = opensplunkv1.KnowledgeDependencyRole
+
+const (
+	DependencyRoleFieldInput = opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
+)
+
+// DependencyEdge is one direct persisted object-to-object edge. Ordinal is a
+// storage-integrity authority and is intentionally absent from this management
+// projection.
+type DependencyEdge struct {
+	Source        ObjectVersionIdentity
+	Target        ObjectVersionIdentity
+	Role          DependencyRole
+	SourceCurrent CurrentRegistryAuthority
+	TargetCurrent CurrentRegistryAuthority
+}
+
+type DependencyListRequest struct {
+	KnowledgeObjectID string
+	Version           *uint64
+	PageSize          uint32
+	PageToken         string
+	IncludeTotal      bool
+}
+
+type DependencyPage struct {
+	Edges           []DependencyEdge
+	ResolvedObject  ObjectVersionIdentity
+	ResolvedCurrent CurrentRegistryAuthority
 	NextPageToken   string
 	TotalSize       *uint64
 	TotalSizeExact  bool

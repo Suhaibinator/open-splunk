@@ -2,6 +2,7 @@ package knowledgecatalog
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -28,7 +29,7 @@ const (
 	maximumSelectorAggregateValueBytes      = knowledge.MaximumSelectorNormalizedBytes
 	maximumCanonicalSelectorBytes           = knowledge.MaximumSelectorNormalizedBytes
 	maximumProjectionBytes                  = maximumDescriptionBytes + maximumSelectorAggregateValueBytes
-	maximumDependenciesPerVersion           = 1024
+	maximumDependenciesPerVersion           = MaximumDependencyEdgesPerVersion
 	minimumPersistedMutationKindBytes       = 4
 	maximumPersistedMutationKindBytes       = int64(len("scope_change"))
 	minimumPersistedSelectorDimensionBytes  = int64(len("host"))
@@ -59,6 +60,24 @@ type normalizedListRequest struct {
 	selectorTextFilter  *string
 	sortBy              SortBy
 	direction           SortDirection
+}
+
+type graphDirection string
+
+const (
+	graphDirectionDependencies graphDirection = "dependencies"
+	graphDirectionDependents   graphDirection = "dependents"
+)
+
+type normalizedDependencyListRequest struct {
+	scope                   normalizedScope
+	direction               graphDirection
+	knowledgeObjectID       string
+	requestedVersion        int64
+	requestedVersionPresent bool
+	pageSize                uint32
+	pageToken               string
+	includeTotal            bool
 }
 
 func normalizeScope(scope ReadScope) (normalizedScope, error) {
@@ -172,6 +191,72 @@ func normalizeListRequest(scope ReadScope, request ListRequest) (normalizedListR
 		sortBy:              sortBy,
 		direction:           direction,
 	}, nil
+}
+
+func normalizeDependencyListRequest(
+	scope ReadScope,
+	request DependencyListRequest,
+	direction graphDirection,
+) (normalizedDependencyListRequest, error) {
+	normalizedScope, err := normalizeScope(scope)
+	if err != nil {
+		return normalizedDependencyListRequest{}, err
+	}
+	if direction != graphDirectionDependencies && direction != graphDirectionDependents {
+		return normalizedDependencyListRequest{}, fmt.Errorf("%w: knowledge graph direction is invalid", control.ErrInvalidArgument)
+	}
+	if !validIdentity(request.KnowledgeObjectID, maximumObjectIDBytes) {
+		return normalizedDependencyListRequest{}, fmt.Errorf("%w: knowledge object identity is invalid", control.ErrInvalidArgument)
+	}
+	pageSize := request.PageSize
+	if pageSize == 0 {
+		pageSize = DefaultPageSize
+	}
+	if pageSize > MaximumPageSize || len(request.PageToken) > maximumCursorBytes ||
+		strings.TrimSpace(request.PageToken) != request.PageToken {
+		return normalizedDependencyListRequest{}, fmt.Errorf("%w: knowledge graph page is invalid", control.ErrInvalidArgument)
+	}
+	var requestedVersion int64
+	if request.Version != nil {
+		if *request.Version == 0 || *request.Version > math.MaxInt64 {
+			return normalizedDependencyListRequest{}, fmt.Errorf("%w: knowledge object version is invalid", control.ErrInvalidArgument)
+		}
+		requestedVersion = int64(*request.Version)
+	}
+	return normalizedDependencyListRequest{
+		scope:                   normalizedScope,
+		direction:               direction,
+		knowledgeObjectID:       strings.Clone(request.KnowledgeObjectID),
+		requestedVersion:        requestedVersion,
+		requestedVersionPresent: request.Version != nil,
+		pageSize:                pageSize,
+		pageToken:               strings.Clone(request.PageToken),
+		includeTotal:            request.IncludeTotal,
+	}, nil
+}
+
+// NormalizeDependencyListRequest applies the shared dependency/dependent page
+// contract and returns a fully detached public request. Direction is bound only
+// by the selected Store method and its signed continuation.
+func NormalizeDependencyListRequest(
+	scope ReadScope,
+	request DependencyListRequest,
+) (DependencyListRequest, error) {
+	normalized, err := normalizeDependencyListRequest(scope, request, graphDirectionDependencies)
+	if err != nil {
+		return DependencyListRequest{}, err
+	}
+	result := DependencyListRequest{
+		KnowledgeObjectID: normalized.knowledgeObjectID,
+		PageSize:          normalized.pageSize,
+		PageToken:         normalized.pageToken,
+		IncludeTotal:      normalized.includeTotal,
+	}
+	if normalized.requestedVersionPresent {
+		value := uint64(normalized.requestedVersion)
+		result.Version = &value
+	}
+	return result, nil
 }
 
 // NormalizeListRequest verifies trusted read scope and the complete bounded
