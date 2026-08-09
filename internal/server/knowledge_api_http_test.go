@@ -72,8 +72,20 @@ type knowledgeHTTPCatalog struct {
 		knowledgecatalog.ReadScope,
 		knowledgecatalog.ListRequest,
 	) (knowledgecatalog.ListPage, error)
-	getCalls  int
-	listCalls int
+	dependenciesFn func(
+		context.Context,
+		knowledgecatalog.ReadScope,
+		knowledgecatalog.DependencyListRequest,
+	) (knowledgecatalog.DependencyPage, error)
+	dependentsFn func(
+		context.Context,
+		knowledgecatalog.ReadScope,
+		knowledgecatalog.DependencyListRequest,
+	) (knowledgecatalog.DependencyPage, error)
+	getCalls          int
+	listCalls         int
+	dependenciesCalls int
+	dependentsCalls   int
 }
 
 func (catalog *knowledgeHTTPCatalog) Get(
@@ -107,10 +119,46 @@ func (catalog *knowledgeHTTPCatalog) List(
 	return fn(ctx, scope, request)
 }
 
+func (catalog *knowledgeHTTPCatalog) ListDependencies(
+	ctx context.Context,
+	scope knowledgecatalog.ReadScope,
+	request knowledgecatalog.DependencyListRequest,
+) (knowledgecatalog.DependencyPage, error) {
+	catalog.mu.Lock()
+	catalog.dependenciesCalls++
+	fn := catalog.dependenciesFn
+	catalog.mu.Unlock()
+	if fn == nil {
+		return knowledgecatalog.DependencyPage{}, errors.New("unexpected knowledge ListDependencies")
+	}
+	return fn(ctx, scope, request)
+}
+
+func (catalog *knowledgeHTTPCatalog) ListDependents(
+	ctx context.Context,
+	scope knowledgecatalog.ReadScope,
+	request knowledgecatalog.DependencyListRequest,
+) (knowledgecatalog.DependencyPage, error) {
+	catalog.mu.Lock()
+	catalog.dependentsCalls++
+	fn := catalog.dependentsFn
+	catalog.mu.Unlock()
+	if fn == nil {
+		return knowledgecatalog.DependencyPage{}, errors.New("unexpected knowledge ListDependents")
+	}
+	return fn(ctx, scope, request)
+}
+
 func (catalog *knowledgeHTTPCatalog) calls() (int, int) {
 	catalog.mu.Lock()
 	defer catalog.mu.Unlock()
 	return catalog.getCalls, catalog.listCalls
+}
+
+func (catalog *knowledgeHTTPCatalog) graphCalls() (int, int) {
+	catalog.mu.Lock()
+	defer catalog.mu.Unlock()
+	return catalog.dependenciesCalls, catalog.dependentsCalls
 }
 
 type knowledgeHTTPWriter struct {
@@ -244,6 +292,8 @@ func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
 		knowledgeObjectsCreatePath,
 		knowledgeObjectsGetPath,
 		knowledgeObjectsListPath,
+		knowledgeObjectsDependenciesPath,
+		knowledgeObjectsDependentsPath,
 		knowledgeObjectsUpdatePath,
 		knowledgeObjectsSetStatePath,
 		knowledgeObjectsDeletePath,
@@ -339,7 +389,7 @@ func knowledgeHTTPScopeChangeMask() *fieldmaskpb.FieldMask {
 	return &fieldmaskpb.FieldMask{Paths: []string{"sharing_scope"}}
 }
 
-func TestKnowledgeHTTPTestRouterServesAllSixManagementHandlers(
+func TestKnowledgeHTTPTestRouterServesAllEightManagementHandlers(
 	t *testing.T,
 ) {
 	t.Parallel()
@@ -372,6 +422,35 @@ func TestKnowledgeHTTPTestRouterServesAllSixManagementHandlers(
 	}
 	token := bytes.Repeat([]byte{0x71}, 32)
 	total := uint64(1)
+	rootCurrent := knowledgecatalog.CurrentRegistryAuthority{
+		TenantID:          knowledgeBoundaryTenantID,
+		KnowledgeObjectID: object.KnowledgeObjectID,
+		CurrentVersion:    object.Version,
+		AppID:             object.AppID,
+		OwnerID:           object.OwnerID,
+		ObjectType:        object.ObjectType,
+		SharingScope:      object.SharingScope,
+		State:             object.State,
+	}
+	graphPage := func(
+		scope knowledgecatalog.ReadScope,
+		request knowledgecatalog.DependencyListRequest,
+	) (knowledgecatalog.DependencyPage, error) {
+		if scope.TenantID != knowledgeBoundaryTenantID ||
+			scope.OwnerID != knowledgeBoundaryOwnerID ||
+			!slices.Equal(scope.ReadableAppIDs, []string{knowledgeHTTPAppID}) ||
+			request.KnowledgeObjectID != object.KnowledgeObjectID ||
+			request.Version != nil || request.PageSize != knowledgecatalog.DefaultPageSize ||
+			request.PageToken != "" || request.IncludeTotal {
+			t.Fatalf("graph scope=%+v request=%+v", scope, request)
+		}
+		return knowledgecatalog.DependencyPage{
+			Edges:           []knowledgecatalog.DependencyEdge{},
+			ResolvedObject:  knowledgecatalog.ObjectVersionIdentity{KnowledgeObjectID: object.KnowledgeObjectID, Version: object.Version},
+			ResolvedCurrent: rootCurrent,
+			CatalogRevision: 7,
+		}, nil
+	}
 	catalog := &knowledgeHTTPCatalog{
 		getFn: func(
 			_ context.Context,
@@ -403,6 +482,20 @@ func TestKnowledgeHTTPTestRouterServesAllSixManagementHandlers(
 				TotalSizeExact:  true,
 				CatalogRevision: 7,
 			}, nil
+		},
+		dependenciesFn: func(
+			_ context.Context,
+			scope knowledgecatalog.ReadScope,
+			request knowledgecatalog.DependencyListRequest,
+		) (knowledgecatalog.DependencyPage, error) {
+			return graphPage(scope, request)
+		},
+		dependentsFn: func(
+			_ context.Context,
+			scope knowledgecatalog.ReadScope,
+			request knowledgecatalog.DependencyListRequest,
+		) (knowledgecatalog.DependencyPage, error) {
+			return graphPage(scope, request)
 		},
 	}
 	validateWrite := func(scope knowledgecatalog.WriteScope) {
@@ -463,6 +556,16 @@ func TestKnowledgeHTTPTestRouterServesAllSixManagementHandlers(
 			response: &opensplunkv1.ListKnowledgeObjectsResponse{},
 		},
 		{
+			name: "dependencies", path: knowledgeObjectsDependenciesPath,
+			request:  &opensplunkv1.ListKnowledgeObjectDependenciesRequest{KnowledgeObjectId: object.KnowledgeObjectID},
+			response: &opensplunkv1.ListKnowledgeObjectDependenciesResponse{},
+		},
+		{
+			name: "dependents", path: knowledgeObjectsDependentsPath,
+			request:  &opensplunkv1.ListKnowledgeObjectDependentsRequest{KnowledgeObjectId: object.KnowledgeObjectID},
+			response: &opensplunkv1.ListKnowledgeObjectDependentsResponse{},
+		},
+		{
 			name: "update", path: knowledgeObjectsUpdatePath,
 			request: &opensplunkv1.UpdateKnowledgeObjectRequest{
 				KnowledgeObjectId: object.KnowledgeObjectID,
@@ -502,10 +605,13 @@ func TestKnowledgeHTTPTestRouterServesAllSixManagementHandlers(
 	if getCalls, listCalls := catalog.calls(); getCalls != 1 || listCalls != 1 {
 		t.Fatalf("catalog calls get=%d list=%d", getCalls, listCalls)
 	}
+	if dependencies, dependents := catalog.graphCalls(); dependencies != 1 || dependents != 1 {
+		t.Fatalf("catalog graph calls dependencies=%d dependents=%d", dependencies, dependents)
+	}
 	if calls := writer.callCounts(); calls != [4]int{1, 1, 1, 1} {
 		t.Fatalf("writer calls=%v", calls)
 	}
-	if calls := apps.callCount(); calls != 6 {
+	if calls := apps.callCount(); calls != 8 {
 		t.Fatalf("app catalog calls=%d", calls)
 	}
 	if calls := appender.snapshot(); len(calls) != 0 {
@@ -1405,28 +1511,41 @@ func TestKnowledgeHTTPExactRouteAndOriginChecksPrecedeAuthentication(t *testing.
 	}
 }
 
-func TestKnowledgeHTTPSmallRouteBodyLimitIsAuditedBeforeScope(t *testing.T) {
+func TestKnowledgeHTTPSmallRouteBodyLimitsAreAuditedBeforeScope(t *testing.T) {
 	t.Parallel()
 
-	appender := &knowledgeBoundaryAppender{}
-	apps := knowledgeHTTPApps()
-	_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, &knowledgeHTTPWriter{}, apps, appender)
-	request := httptest.NewRequest(
-		http.MethodPost,
-		knowledgeObjectsGetPath,
-		bytes.NewReader(bytes.Repeat([]byte{0xff}, int(maximumKnowledgeSmallRequestBytes)+1)),
-	)
-	request.Host = "example.com"
-	request.Header.Set("Origin", "http://example.com")
-	request.Header.Set("Authorization", "Bearer "+knowledgeBoundaryToken)
-	request.Header.Set("Content-Type", "application/x-protobuf")
-	response := httptest.NewRecorder()
-	httpHandler.ServeHTTP(response, request)
-	calls := appender.snapshot()
-	if response.Code != http.StatusRequestEntityTooLarge || apps.callCount() != 0 ||
-		len(calls) != 1 || calls[0].definition.Action != knowledgeattemptaudit.ActionGet ||
-		calls[0].definition.Reason != knowledgeattemptaudit.ReasonResourceLimit {
-		t.Fatalf("status=%d body=%q apps=%d attempts=%+v", response.Code, response.Body.String(), apps.callCount(), calls)
+	for _, test := range []struct {
+		path   string
+		action knowledgeattemptaudit.Action
+	}{
+		{path: knowledgeObjectsGetPath, action: knowledgeattemptaudit.ActionGet},
+		{path: knowledgeObjectsDependenciesPath, action: knowledgeattemptaudit.ActionDependencies},
+		{path: knowledgeObjectsDependentsPath, action: knowledgeattemptaudit.ActionDependents},
+	} {
+		test := test
+		t.Run(string(test.action), func(t *testing.T) {
+			t.Parallel()
+			appender := &knowledgeBoundaryAppender{}
+			apps := knowledgeHTTPApps()
+			_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, &knowledgeHTTPWriter{}, apps, appender)
+			request := httptest.NewRequest(
+				http.MethodPost,
+				test.path,
+				bytes.NewReader(bytes.Repeat([]byte{0xff}, int(maximumKnowledgeSmallRequestBytes)+1)),
+			)
+			request.Host = "example.com"
+			request.Header.Set("Origin", "http://example.com")
+			request.Header.Set("Authorization", "Bearer "+knowledgeBoundaryToken)
+			request.Header.Set("Content-Type", "application/x-protobuf")
+			response := httptest.NewRecorder()
+			httpHandler.ServeHTTP(response, request)
+			calls := appender.snapshot()
+			if response.Code != http.StatusRequestEntityTooLarge || apps.callCount() != 0 ||
+				len(calls) != 1 || calls[0].definition.Action != test.action ||
+				calls[0].definition.Reason != knowledgeattemptaudit.ReasonResourceLimit {
+				t.Fatalf("status=%d body=%q apps=%d attempts=%+v", response.Code, response.Body.String(), apps.callCount(), calls)
+			}
+		})
 	}
 }
 

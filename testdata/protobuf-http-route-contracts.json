@@ -264,6 +264,24 @@
       "responseFutureWire": "CikKJy9hcGkvdjEva25vd2xlZGdlL29iamVjdHMvbGlzdDpyZXNwb25zZfp/LmZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL2xpc3Q6cmVzcG9uc2U="
     },
     {
+      "path": "/api/v1/knowledge/objects/dependencies",
+      "requestType": "ListKnowledgeObjectDependenciesRequest",
+      "responseType": "ListKnowledgeObjectDependenciesResponse",
+      "requestKnownWire": "Ci4vYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL2RlcGVuZGVuY2llczpyZXF1ZXN0",
+      "requestFutureWire": "Ci4vYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL2RlcGVuZGVuY2llczpyZXF1ZXN0+n81ZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL29iamVjdHMvZGVwZW5kZW5jaWVzOnJlcXVlc3Q=",
+      "responseKnownWire": "CjMKMQovL2FwaS92MS9rbm93bGVkZ2Uvb2JqZWN0cy9kZXBlbmRlbmNpZXM6cmVzcG9uc2U=",
+      "responseFutureWire": "CjMKMQovL2FwaS92MS9rbm93bGVkZ2Uvb2JqZWN0cy9kZXBlbmRlbmNpZXM6cmVzcG9uc2X6fzZmdXR1cmU6L2FwaS92MS9rbm93bGVkZ2Uvb2JqZWN0cy9kZXBlbmRlbmNpZXM6cmVzcG9uc2U="
+    },
+    {
+      "path": "/api/v1/knowledge/objects/dependents",
+      "requestType": "ListKnowledgeObjectDependentsRequest",
+      "responseType": "ListKnowledgeObjectDependentsResponse",
+      "requestKnownWire": "CiwvYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL2RlcGVuZGVudHM6cmVxdWVzdA==",
+      "requestFutureWire": "CiwvYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL2RlcGVuZGVudHM6cmVxdWVzdPp/M2Z1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL2RlcGVuZGVudHM6cmVxdWVzdA==",
+      "responseKnownWire": "CjEKLwotL2FwaS92MS9rbm93bGVkZ2Uvb2JqZWN0cy9kZXBlbmRlbnRzOnJlc3BvbnNl",
+      "responseFutureWire": "CjEKLwotL2FwaS92MS9rbm93bGVkZ2Uvb2JqZWN0cy9kZXBlbmRlbnRzOnJlc3BvbnNl+n80ZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL29iamVjdHMvZGVwZW5kZW50czpyZXNwb25zZQ=="
+    },
+    {
       "path": "/api/v1/knowledge/objects/update",
       "requestType": "UpdateKnowledgeObjectRequest",
       "responseType": "UpdateKnowledgeObjectResponse",

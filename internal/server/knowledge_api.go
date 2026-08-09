@@ -22,19 +22,23 @@ import (
 )
 
 const (
-	knowledgeObjectsCreateRoute   = "/knowledge/objects/create"
-	knowledgeObjectsGetRoute      = "/knowledge/objects/get"
-	knowledgeObjectsListRoute     = "/knowledge/objects/list"
-	knowledgeObjectsUpdateRoute   = "/knowledge/objects/update"
-	knowledgeObjectsSetStateRoute = "/knowledge/objects/set-state"
-	knowledgeObjectsDeleteRoute   = "/knowledge/objects/delete"
+	knowledgeObjectsCreateRoute       = "/knowledge/objects/create"
+	knowledgeObjectsGetRoute          = "/knowledge/objects/get"
+	knowledgeObjectsListRoute         = "/knowledge/objects/list"
+	knowledgeObjectsDependenciesRoute = "/knowledge/objects/dependencies"
+	knowledgeObjectsDependentsRoute   = "/knowledge/objects/dependents"
+	knowledgeObjectsUpdateRoute       = "/knowledge/objects/update"
+	knowledgeObjectsSetStateRoute     = "/knowledge/objects/set-state"
+	knowledgeObjectsDeleteRoute       = "/knowledge/objects/delete"
 
-	knowledgeObjectsCreatePath   = apiV1PathPrefix + knowledgeObjectsCreateRoute
-	knowledgeObjectsGetPath      = apiV1PathPrefix + knowledgeObjectsGetRoute
-	knowledgeObjectsListPath     = apiV1PathPrefix + knowledgeObjectsListRoute
-	knowledgeObjectsUpdatePath   = apiV1PathPrefix + knowledgeObjectsUpdateRoute
-	knowledgeObjectsSetStatePath = apiV1PathPrefix + knowledgeObjectsSetStateRoute
-	knowledgeObjectsDeletePath   = apiV1PathPrefix + knowledgeObjectsDeleteRoute
+	knowledgeObjectsCreatePath       = apiV1PathPrefix + knowledgeObjectsCreateRoute
+	knowledgeObjectsGetPath          = apiV1PathPrefix + knowledgeObjectsGetRoute
+	knowledgeObjectsListPath         = apiV1PathPrefix + knowledgeObjectsListRoute
+	knowledgeObjectsDependenciesPath = apiV1PathPrefix + knowledgeObjectsDependenciesRoute
+	knowledgeObjectsDependentsPath   = apiV1PathPrefix + knowledgeObjectsDependentsRoute
+	knowledgeObjectsUpdatePath       = apiV1PathPrefix + knowledgeObjectsUpdateRoute
+	knowledgeObjectsSetStatePath     = apiV1PathPrefix + knowledgeObjectsSetStateRoute
+	knowledgeObjectsDeletePath       = apiV1PathPrefix + knowledgeObjectsDeleteRoute
 
 	maximumKnowledgeApps                 = control.MaximumAppsPerTenant
 	maximumKnowledgeSmallRequestBytes    = int64(16 << 10)
@@ -46,9 +50,26 @@ const (
 	maximumKnowledgeNameBytes            = 255
 )
 
-// KnowledgeCatalog is the bounded read-only surface used by the management
-// handlers. Store satisfies it directly.
+// KnowledgeGraphCatalog is the bounded direct-edge inspection surface used by
+// the management handlers. Store satisfies it directly.
+type KnowledgeGraphCatalog interface {
+	ListDependencies(
+		context.Context,
+		knowledgecatalog.ReadScope,
+		knowledgecatalog.DependencyListRequest,
+	) (knowledgecatalog.DependencyPage, error)
+	ListDependents(
+		context.Context,
+		knowledgecatalog.ReadScope,
+		knowledgecatalog.DependencyListRequest,
+	) (knowledgecatalog.DependencyPage, error)
+}
+
+// KnowledgeCatalog is the complete bounded read-only surface used by the
+// management handlers. Embedding graph inspection keeps all eight routes on
+// one catalog authority and one all-or-none configuration boundary.
 type KnowledgeCatalog interface {
+	KnowledgeGraphCatalog
 	Get(
 		context.Context,
 		knowledgecatalog.ReadScope,
@@ -61,6 +82,8 @@ type KnowledgeCatalog interface {
 		knowledgecatalog.ListRequest,
 	) (knowledgecatalog.ListPage, error)
 }
+
+var _ KnowledgeGraphCatalog = (*knowledgecatalog.Store)(nil)
 
 // KnowledgeWriter is the atomic mutation surface used by the management
 // handlers. knowledgecatalog.Writer satisfies it directly.
@@ -128,6 +151,18 @@ func (handler *apiHandler) knowledgeManagementRoutes(
 			Path: knowledgeObjectsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedListKnowledgeObjectsCodec(), Handler: handler.listKnowledgeObjects,
 			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectsRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectDependenciesRequest, *serializedListKnowledgeObjectDependenciesResponse]{
+			Path: knowledgeObjectsDependenciesRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedListKnowledgeObjectDependenciesCodec(), Handler: handler.listKnowledgeObjectDependencies,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectDependenciesRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectDependentsRequest, *serializedListKnowledgeObjectDependentsResponse]{
+			Path: knowledgeObjectsDependentsRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedListKnowledgeObjectDependentsCodec(), Handler: handler.listKnowledgeObjectDependents,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectDependentsRequest],
 			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{

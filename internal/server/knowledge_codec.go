@@ -13,12 +13,15 @@ const (
 	// timestamps, digests, list paging, and protobuf framing.
 	maximumKnowledgeObjectResponseBytes = 8 << 20
 	maximumKnowledgeListResponseBytes   = 8 << 20
+	maximumKnowledgeGraphResponseBytes  = 128 << 10
 	maximumKnowledgeUnknownDepth        = 32
 )
 
 type serializedCreateKnowledgeObjectResponse = boundedProtoResponse[*opensplunkv1.CreateKnowledgeObjectResponse]
 type serializedGetKnowledgeObjectResponse = boundedProtoResponse[*opensplunkv1.GetKnowledgeObjectResponse]
 type serializedListKnowledgeObjectsResponse = boundedProtoResponse[*opensplunkv1.ListKnowledgeObjectsResponse]
+type serializedListKnowledgeObjectDependenciesResponse = boundedProtoResponse[*opensplunkv1.ListKnowledgeObjectDependenciesResponse]
+type serializedListKnowledgeObjectDependentsResponse = boundedProtoResponse[*opensplunkv1.ListKnowledgeObjectDependentsResponse]
 type serializedUpdateKnowledgeObjectResponse = boundedProtoResponse[*opensplunkv1.UpdateKnowledgeObjectResponse]
 type serializedSetKnowledgeObjectStateResponse = boundedProtoResponse[*opensplunkv1.SetKnowledgeObjectStateResponse]
 type serializedDeleteKnowledgeObjectResponse = boundedProtoResponse[*opensplunkv1.DeleteKnowledgeObjectResponse]
@@ -34,6 +37,14 @@ type serializedGetKnowledgeObjectCodec = boundedProtoCodec[
 type serializedListKnowledgeObjectsCodec = boundedProtoCodec[
 	*opensplunkv1.ListKnowledgeObjectsRequest,
 	*opensplunkv1.ListKnowledgeObjectsResponse,
+]
+type serializedListKnowledgeObjectDependenciesCodec = boundedProtoCodec[
+	*opensplunkv1.ListKnowledgeObjectDependenciesRequest,
+	*opensplunkv1.ListKnowledgeObjectDependenciesResponse,
+]
+type serializedListKnowledgeObjectDependentsCodec = boundedProtoCodec[
+	*opensplunkv1.ListKnowledgeObjectDependentsRequest,
+	*opensplunkv1.ListKnowledgeObjectDependentsResponse,
 ]
 type serializedUpdateKnowledgeObjectCodec = boundedProtoCodec[
 	*opensplunkv1.UpdateKnowledgeObjectRequest,
@@ -78,6 +89,28 @@ func newSerializedListKnowledgeObjectsCodec() *serializedListKnowledgeObjectsCod
 		](),
 		maximumKnowledgeListResponseBytes,
 		"list",
+	)
+}
+
+func newSerializedListKnowledgeObjectDependenciesCodec() *serializedListKnowledgeObjectDependenciesCodec {
+	return newKnowledgeBoundedProtoCodec(
+		codec.NewProtoCodec[
+			*opensplunkv1.ListKnowledgeObjectDependenciesRequest,
+			*opensplunkv1.ListKnowledgeObjectDependenciesResponse,
+		](),
+		maximumKnowledgeGraphResponseBytes,
+		"dependencies",
+	)
+}
+
+func newSerializedListKnowledgeObjectDependentsCodec() *serializedListKnowledgeObjectDependentsCodec {
+	return newKnowledgeBoundedProtoCodec(
+		codec.NewProtoCodec[
+			*opensplunkv1.ListKnowledgeObjectDependentsRequest,
+			*opensplunkv1.ListKnowledgeObjectDependentsResponse,
+		](),
+		maximumKnowledgeGraphResponseBytes,
+		"dependents",
 	)
 }
 

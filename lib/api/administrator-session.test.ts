@@ -48,6 +48,8 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/v1/audit/events/list"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/get"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/list"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependencies"), false);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependents"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/inspect"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/create"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/suggestions"), false);

@@ -14,6 +14,7 @@ import * as SystemApi from "@/gen/ts/open_splunk/v1/system_api";
 import { defineProtobufRoute, type ProtobufRoute } from "./protobuf-transport";
 
 export const MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES = 8 << 20;
+export const MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES = 128 << 10;
 
 /** Derives a generated request type from a route without duplicating contracts. */
 export type RouteRequest<TRoute> = TRoute extends ProtobufRoute<infer TRequest, unknown> ? TRequest : never;
@@ -122,6 +123,18 @@ export const knowledgeRoutes = {
     KnowledgeApi.ListKnowledgeObjectsRequest,
     KnowledgeApi.ListKnowledgeObjectsResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  dependencies: defineProtobufRoute(
+    "/api/v1/knowledge/objects/dependencies",
+    KnowledgeApi.ListKnowledgeObjectDependenciesRequest,
+    KnowledgeApi.ListKnowledgeObjectDependenciesResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES },
+  ),
+  dependents: defineProtobufRoute(
+    "/api/v1/knowledge/objects/dependents",
+    KnowledgeApi.ListKnowledgeObjectDependentsRequest,
+    KnowledgeApi.ListKnowledgeObjectDependentsResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES },
   ),
   update: defineProtobufRoute(
     "/api/v1/knowledge/objects/update",
