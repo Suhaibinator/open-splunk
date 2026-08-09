@@ -916,15 +916,16 @@ POST /api/v1/knowledge/lookups/preview
 ```
 
 Since KO-0F, the first six object-management handlers and bounded protobuf
-codecs exist behind a test-only route assembly with real Store/Writer/audit
-integration. Production `NewHandler` intentionally registers none of those
-paths, and bootstrap continues to advertise no knowledge capability. The
-boundary authenticates before decoding and attempts exactly one synchronous
-journal append for every authenticated definitive rejection. It exposes that
-rejection only after the append succeeds, returns the fixed unavailable
-response if the append cannot complete, and suppresses false rejection rows for
-committed or indeterminate mutation outcomes; this is readiness work, not
-public API availability.
+codecs have real Store/Writer/audit integration. Production `NewHandler` now
+registers exactly those six routes only when the complete management dependency
+unit and an exact constructor-ready concrete Writer are present, and
+`cmd/open-splunk-server` supplies that unit. Registration remains independent
+from feature advertisement: bootstrap continues to advertise no knowledge
+capability. The boundary authenticates before decoding and attempts exactly one
+synchronous journal append for every authenticated definitive rejection. It
+exposes that rejection only after the append succeeds, returns the fixed
+unavailable response if the append cannot complete, and suppresses false
+rejection rows for committed or indeterminate mutation outcomes.
 
 The first bounded lookup upload can carry CSV bytes in protobuf if the product
 limit stays small enough for safe browser and Go memory use. Larger assets
@@ -1188,13 +1189,14 @@ pinned without affecting search results.
 **Implementation checkpoint (August 9, 2026):** contracts, migrations 0024
 through 0034, canonical definition handling, the bounded authorization-first
 reader, the atomic catalog Writer, the six administrator-only management
-handlers/codecs with their synchronous rejected-attempt boundary, the
+handlers/codecs with their synchronous rejected-attempt boundary and exact
+all-or-none production registration, the
 one-read-transaction active resolver, and opaque immutable snapshot preparation
 are complete.
-Their registrations remain intentionally absent from the production router and
-exact API inventory, so their paths still return 404 and the capability is not
-advertised. The concrete Writer now publishes DRAFT or recognized ACTIVE
-creates, DRAFT/DISABLED and recognized ACTIVE definition updates,
+`cmd/open-splunk-server` composes their bounded app authority, catalog Store,
+attempt journal, and concrete ready Writer on the shared control database. The
+capability is still not advertised. The concrete Writer now publishes DRAFT or
+recognized ACTIVE creates, DRAFT/DISABLED and recognized ACTIVE definition updates,
 DRAFT/DISABLED-to-ACTIVE enables, DRAFT/ACTIVE disables, and
 DRAFT/ACTIVE/DISABLED delete tombstones with exact idempotency replay,
 revision/state-token rotation, successful audit, immutable commit authority,
@@ -1227,10 +1229,10 @@ admission, publication, or execution.
 KO-0H deliberately finalizes only a canonically empty enabled snapshot. Any
 resolution containing an executable object fails before job creation because
 the knowledge prelude and knowledge-generated operators remain KO-1 work. No
-shipping knowledge runtime is claimed: `cmd/open-splunk-server` does not
-configure the resolver, production `NewHandler` still registers no
-knowledge-management route, bootstrap hard-disables the capability, and the
-hidden UI therefore remains unreachable.
+shipping search-time knowledge runtime is claimed: `cmd/open-splunk-server`
+composes the management catalog but does not configure the search resolver,
+bootstrap hard-disables the capability, and the hidden UI therefore remains
+unreachable.
 
 The KO-1C inspection slice now analyzes the complete sealed knowledge prelude
 once and projects all four generated logical operator kinds. Generated stages
@@ -1301,9 +1303,10 @@ stage separately from the smaller database projection; input rows are detached b
 compilation, and canonical definition bytes, selector work, static charges,
 objects, and edges are bounded before retention can amplify malformed input.
 The helper deliberately cannot prove catalog completeness from a caller-supplied
-count or one search `Resolution`. Writer ACTIVE gates remain closed until a
-transactional catalog reader proves the complete tenant object, app, and durable
-index inventories and stores only the resulting derived edges atomically.
+count or one search `Resolution`. The later transactional catalog reader and
+opaque persistence authority now prove the complete tenant object, app, and
+durable index inventories before the concrete Writer admits a recognized ACTIVE
+mutation and stores only the resulting derived edges atomically.
 
 The cohort validator now also covers transitions in which the exact candidate
 does not win. Every result binds the transition candidate ID, version,
@@ -1344,11 +1347,10 @@ endpoints, retained ordered dependency rows, and the exact derived-or-retained
 database projection. It intentionally rejects opaque future bodies; the
 existing projection-only emergency removal path remains separate until it has
 its own transactional proof. The concrete Writer now consumes this authority
-for recognized ACTIVE create, update, enable, disable, and delete mutations;
-production HTTP route registration remains separate and closed.
+for recognized ACTIVE create, update, enable, disable, and delete mutations.
 
 The transaction and persistence boundary is now implemented and wired into the
-concrete Writer without registering the management HTTP routes. It accepts only
+concrete Writer. It accepts only
 the Writer's existing fixed `*sql.Tx`,
 proves exact knowledge revision/token and ACTIVE rows, tenant app revision and
 bounded app inventory, and global index revision/physical rows before hydrating
@@ -1370,7 +1372,9 @@ zero-proof exception reopens the live stored definition and proves a genuinely
 opaque future body plus exact scalar, selector, digest, and dependency identity
 before any write or persistence hook. Recognized ACTIVE create, ACTIVE update,
 and enable now mint and consume the nonzero proof; opaque ACTIVE update/enable
-and all production management HTTP routes remain closed.
+remain closed. The six supported production management routes are registered,
+while search resolution, nonempty execution, browser navigation, and feature
+advertisement remain closed.
 
 Immutable index-name creation now has its own atomic global admission boundary.
 Migration 0034 supplies sparse covering drivers for every nonempty ACTIVE
@@ -1391,7 +1395,9 @@ exact transaction use, clipped and bounded query plans, aggregate failure before
 hydration, malformed catalog/app/projection/dependency authority, cancellation,
 fact drift, atomic rollback, and audit ordering. This closes the future-index
 lifecycle prerequisite and is now consumed by recognized ACTIVE Writer
-publication without advertising or registering the management API.
+publication. The server registers the management API through its complete
+concrete configuration, but advertises no search-time knowledge capability and
+configures no search resolver.
 
 Migration 0033 prepares that atomic publication boundary.
 An enable may append a newly derived dependency set instead of copying its
@@ -1417,8 +1423,8 @@ batch repin transaction exists.
 - implement private/app/global resolution and explicit precedence;
 - implement immutable snapshot creation and digesting;
 - attach snapshot metadata to search jobs, inspection, history, and export;
-- preserve negative feature-advertisement, API-registration, and capability
-  contract tests; and
+- preserve negative feature-advertisement and capability contracts plus exact
+  all-or-none management API-registration tests; and
 - add the initial Knowledge Manager list/detail shell.
 
 ### Phase KO-1 — Field knowledge
@@ -1437,8 +1443,10 @@ results predictably.
 - integrate field discovery, suggestions, inspection, history, and export;
 - add create/edit/validate/preview UI; and
 - add ClickHouse, lifecycle, browser, fuzz, and differential tests; then only
-  after the complete hidden acceptance vertical passes, register the management
-  APIs and advertise the capability.
+  after the complete hidden search-time acceptance vertical passes, configure
+  the resolver and generated operators and advertise the capability. The
+  administrator-only management routes may remain registered before that
+  feature exposure.
 
 ### Phase KO-2 — Exact CSV lookups
 
