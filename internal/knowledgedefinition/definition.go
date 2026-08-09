@@ -98,18 +98,20 @@ type ForwardCompatible struct {
 // compile and budget the body and dependency graph.
 func Normalize(input *opensplunkv1.KnowledgeObjectDefinition) (Normalized, error) {
 	if input == nil {
-		return Normalized{}, invalid("definition", errors.New("is required"))
+		return Normalized{}, invalidDefinitionRoot("definition", errors.New("is required"))
 	}
 	if err := preflightInput(input); err != nil {
 		return Normalized{}, err
 	}
-	if err := rejectUnknownFields(input.ProtoReflect(), "definition"); err != nil {
+	if err := rejectUnknownFields(input.ProtoReflect(), rootDefinitionIssuePath()); err != nil {
 		return Normalized{}, err
 	}
 
 	definition, ok := proto.Clone(input).(*opensplunkv1.KnowledgeObjectDefinition)
 	if !ok || definition == nil {
-		return Normalized{}, invalid("definition", errors.New("could not be cloned"))
+		// This is an invariant/infrastructure failure, not candidate-authored
+		// invalidity which a validation endpoint may safely report in-band.
+		return Normalized{}, fmt.Errorf("%w: definition: could not be cloned", ErrInvalidDefinition)
 	}
 
 	description, selector, err := normalizeMetadata(definition)
@@ -126,12 +128,8 @@ func Normalize(input *opensplunkv1.KnowledgeObjectDefinition) (Normalized, error
 	if err != nil {
 		return Normalized{}, fmt.Errorf("%w: deterministic marshal: %v", ErrInvalidDefinition, err)
 	}
-	if len(encoded) == 0 || len(encoded) > MaximumCanonicalBytes {
-		return Normalized{}, fmt.Errorf(
-			"%w: canonical bytes must be between 1 and %d",
-			ErrDefinitionTooLarge,
-			MaximumCanonicalBytes,
-		)
+	if err := validateCanonicalBytes(encoded); err != nil {
+		return Normalized{}, err
 	}
 	digest := sha256.Sum256(encoded)
 
@@ -164,29 +162,53 @@ func preflightInput(input *opensplunkv1.KnowledgeObjectDefinition) error {
 		}
 		for _, candidate := range counts {
 			if candidate.count > knowledge.MaximumSelectorPatternsPerDimension {
-				return fmt.Errorf(
-					"%w: %s exceeds %d entries",
-					ErrDefinitionTooLarge,
+				return resourceLimit(
 					candidate.path,
-					knowledge.MaximumSelectorPatternsPerDimension,
+					fmt.Sprintf(
+						"exceeds %d entries",
+						knowledge.MaximumSelectorPatternsPerDimension,
+					),
 				)
 			}
 		}
 	}
 	if extraction := input.GetFieldExtraction(); extraction != nil && extraction.GetRegex() != nil &&
 		len(extraction.GetRegex().GetOutputFields()) > MaximumFieldExtractionOutputs {
-		return fmt.Errorf(
-			"%w: field_extraction.regex.output_fields exceeds %d entries",
-			ErrDefinitionTooLarge,
-			MaximumFieldExtractionOutputs,
+		return resourceLimit(
+			"field_extraction.regex.output_fields",
+			fmt.Sprintf("exceeds %d entries", MaximumFieldExtractionOutputs),
 		)
 	}
 	if size := proto.Size(input); size > MaximumCanonicalBytes {
+		return resourceLimit(
+			"",
+			fmt.Sprintf(
+				"submitted protobuf contains %d bytes, maximum is %d",
+				size,
+				MaximumCanonicalBytes,
+			),
+		)
+	}
+	return nil
+}
+
+func validateCanonicalBytes(encoded []byte) error {
+	if len(encoded) == 0 {
+		// A successfully normalized definition always has required metadata and
+		// one body, so an empty deterministic encoding is an invariant failure.
 		return fmt.Errorf(
-			"%w: submitted protobuf contains %d bytes, maximum is %d",
+			"%w: canonical bytes must be between 1 and %d",
 			ErrDefinitionTooLarge,
-			size,
 			MaximumCanonicalBytes,
+		)
+	}
+	if len(encoded) > MaximumCanonicalBytes {
+		return resourceLimit(
+			"",
+			fmt.Sprintf(
+				"canonical bytes must be between 1 and %d",
+				MaximumCanonicalBytes,
+			),
 		)
 	}
 	return nil
@@ -265,7 +287,7 @@ func decodeCanonicalFutureBody(data, expectedDigest []byte) (ForwardCompatible, 
 	if err := validateFutureBodyUnknown(definition.ProtoReflect().GetUnknown()); err != nil {
 		return ForwardCompatible{}, err
 	}
-	if err := rejectNestedUnknownFields(definition.ProtoReflect(), "definition"); err != nil {
+	if err := rejectNestedUnknownFields(definition.ProtoReflect(), rootDefinitionIssuePath()); err != nil {
 		return ForwardCompatible{}, fmt.Errorf("%w: %v", ErrNonCanonical, err)
 	}
 
@@ -678,53 +700,97 @@ func validSharingScope(scope opensplunkv1.SharingScope) bool {
 		scope == opensplunkv1.SharingScope_SHARING_SCOPE_GLOBAL
 }
 
-func rejectUnknownFields(message protoreflect.Message, path string) error {
+type definitionIssuePath struct {
+	display string
+	field   string
+}
+
+func rootDefinitionIssuePath() definitionIssuePath {
+	return definitionIssuePath{display: "definition"}
+}
+
+func (path definitionIssuePath) child(name string) definitionIssuePath {
+	field := name
+	if path.field != "" {
+		field = path.field + "." + name
+	}
+	return definitionIssuePath{
+		display: path.display + "." + name,
+		field:   field,
+	}
+}
+
+func (path definitionIssuePath) index(value any) definitionIssuePath {
+	suffix := fmt.Sprintf("[%v]", value)
+	return definitionIssuePath{
+		display: path.display + suffix,
+		field:   path.field + suffix,
+	}
+}
+
+func rejectUnknownFields(message protoreflect.Message, path definitionIssuePath) error {
 	if !message.IsValid() {
 		return nil
 	}
 	if len(message.GetUnknown()) != 0 {
-		return fmt.Errorf("%w: %s", ErrUnknownFields, path)
+		return newIssueError(
+			ErrUnknownFields,
+			fmt.Sprintf("%v: %s", ErrUnknownFields, path.display),
+			Issue{
+				FieldPath: path.field,
+				Code:      IssueCodeUnknownField,
+				Message:   "contains an unknown protobuf field",
+			},
+		)
 	}
 	return rejectNestedUnknownFields(message, path)
 }
 
-func rejectNestedUnknownFields(message protoreflect.Message, path string) error {
+func rejectNestedUnknownFields(message protoreflect.Message, path definitionIssuePath) error {
 	if !message.IsValid() {
 		return nil
 	}
-	var nestedErr error
-	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
-		fieldPath := path + "." + string(field.Name())
+	fields := message.Descriptor().Fields()
+	for index := 0; index < fields.Len(); index++ {
+		field := fields.Get(index)
+		if !message.Has(field) {
+			continue
+		}
+		value := message.Get(field)
+		fieldPath := path.child(string(field.Name()))
 		if field.IsMap() {
 			if field.MapValue().Kind() != protoreflect.MessageKind && field.MapValue().Kind() != protoreflect.GroupKind {
-				return true
+				continue
 			}
+			var nestedErr error
 			value.Map().Range(func(key protoreflect.MapKey, mapValue protoreflect.Value) bool {
-				nestedErr = rejectUnknownFields(mapValue.Message(), fmt.Sprintf("%s[%v]", fieldPath, key.Interface()))
+				nestedErr = rejectUnknownFields(mapValue.Message(), fieldPath.index(key.Interface()))
 				return nestedErr == nil
 			})
-			return nestedErr == nil
+			if nestedErr != nil {
+				return nestedErr
+			}
+			continue
 		}
 		if field.IsList() {
 			if field.Kind() != protoreflect.MessageKind && field.Kind() != protoreflect.GroupKind {
-				return true
+				continue
 			}
 			list := value.List()
-			for index := 0; index < list.Len(); index++ {
-				nestedErr = rejectUnknownFields(list.Get(index).Message(), fmt.Sprintf("%s[%d]", fieldPath, index))
-				if nestedErr != nil {
-					return false
+			for position := 0; position < list.Len(); position++ {
+				if err := rejectUnknownFields(list.Get(position).Message(), fieldPath.index(position)); err != nil {
+					return err
 				}
 			}
-			return true
+			continue
 		}
 		if field.Kind() == protoreflect.MessageKind || field.Kind() == protoreflect.GroupKind {
-			nestedErr = rejectUnknownFields(value.Message(), fieldPath)
-			return nestedErr == nil
+			if err := rejectUnknownFields(value.Message(), fieldPath); err != nil {
+				return err
+			}
 		}
-		return true
-	})
-	return nestedErr
+	}
+	return nil
 }
 
 func validateFutureBodyUnknown(raw []byte) error {
@@ -810,5 +876,40 @@ func trimASCIIWhitespace(value string) string {
 }
 
 func invalid(path string, err error) error {
-	return fmt.Errorf("%w: %s: %v", ErrInvalidDefinition, path, err)
+	return newIssueError(
+		ErrInvalidDefinition,
+		fmt.Sprintf("%v: %s: %v", ErrInvalidDefinition, path, err),
+		Issue{
+			FieldPath: path,
+			Code:      IssueCodeInvalidDefinition,
+			Message:   err.Error(),
+		},
+	)
+}
+
+func invalidDefinitionRoot(displayPath string, err error) error {
+	return newIssueError(
+		ErrInvalidDefinition,
+		fmt.Sprintf("%v: %s: %v", ErrInvalidDefinition, displayPath, err),
+		Issue{
+			Code:    IssueCodeInvalidDefinition,
+			Message: err.Error(),
+		},
+	)
+}
+
+func resourceLimit(fieldPath, message string) error {
+	text := fmt.Sprintf("%v: %s", ErrDefinitionTooLarge, message)
+	if fieldPath != "" {
+		text = fmt.Sprintf("%v: %s %s", ErrDefinitionTooLarge, fieldPath, message)
+	}
+	return newIssueError(
+		ErrDefinitionTooLarge,
+		text,
+		Issue{
+			FieldPath: fieldPath,
+			Code:      IssueCodeResourceLimit,
+			Message:   message,
+		},
+	)
 }
