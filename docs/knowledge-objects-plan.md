@@ -1338,21 +1338,29 @@ matches a future write plan on tenant, full body-free before/after scalar
 endpoints, retained ordered dependency rows, and the exact derived-or-retained
 database projection. It intentionally rejects opaque future bodies; the
 existing projection-only emergency removal path remains separate until it has
-its own transactional proof. Database inventory admission, catalog revision
-binding, index-creation validation, and Writer persistence wiring remain
-closed.
+its own transactional proof. Route activation and future index-name admission
+remain closed.
 
-The first transaction layer is now implemented without changing those gates.
-It accepts only the Writer's existing fixed `*sql.Tx`, proves exact knowledge
-revision/token and ACTIVE rows, tenant app revision and bounded app inventory,
-and global index revision/physical rows before hydrating definitions, selectors,
-or dependencies. Its object, app, and index drivers are explicitly bounded and
-query-plan tested. A separate target preflight bounds private compiler authority
-before detachment, then verifies every rich target against the exact current
-ACTIVE registry/version and returns a detached ID/version projection. The next
-step is an opaque wrapper that seals these catalog facts with the transition,
-matches the exact persistence plan, and makes `publishMutation` consume only
-the validated projection; no zero-authority ACTIVE fallback is permitted.
+The transaction and persistence boundary is now implemented without changing
+the public ACTIVE gates. It accepts only the Writer's existing fixed `*sql.Tx`,
+proves exact knowledge revision/token and ACTIVE rows, tenant app revision and
+bounded app inventory, and global index revision/physical rows before hydrating
+definitions, selectors, or dependencies. Its object, app, and index drivers are
+explicitly bounded and query-plan tested. An opaque authority binds that exact
+transaction and all three revision domains to the pure transition proof. Rich
+compiler targets are revalidated against the exact current ACTIVE registry and
+version before their smaller database projection is retained. Immediately
+before its first persistence write or hook, `publishMutation` reconstructs the
+before endpoint from the live registry, immutable version, and sealed ordered
+dependency rows; rechecks the transaction and catalog facts; and uses only a
+fresh detached projection from the authority for the version count, dependency
+rows, and dependency seal. ACTIVE plans cannot submit dependency rows or use a
+zero authority, while existing non-ACTIVE paths retain their prior hook order.
+The next Writer slice must mint this authority for recognized ACTIVE
+disable/delete transitions while leaving only the explicit opaque future-body
+emergency removal path outside it. Create, active-update, and enable remain
+closed, and future index-name creation still requires its own atomic catalog
+validation before any ACTIVE publication gate can open.
 
 Migration 0033 prepares that atomic publication boundary without opening it.
 An enable may append a newly derived dependency set instead of copying its
