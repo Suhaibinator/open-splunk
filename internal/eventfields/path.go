@@ -203,6 +203,14 @@ func NormalizePhysicalDynamicPath(path string) (string, error) {
 // returns its decoded logical paths. The array is the authoritative per-row
 // presence set for ClickHouse JSON results.
 func ParseStoredFieldNames(names []string) ([][]string, error) {
+	return parseStoredFieldNames(names, false)
+}
+
+// parseStoredFieldNames applies the durable flattened-path bounds shared by
+// absolute event metadata and relative container metadata. Reserved roots are
+// rejected only for absolute event fields: a nested object may legitimately
+// contain keys such as index, tenant_id, or __os_private.
+func parseStoredFieldNames(names []string, allowReservedRoots bool) ([][]string, error) {
 	if len(names) > MaximumStoredFieldsPerEvent {
 		return nil, errors.New("stored field names exceed the field-count limit")
 	}
@@ -211,12 +219,13 @@ func ParseStoredFieldNames(names []string) ([][]string, error) {
 	totalBytes := 0
 	previous := ""
 	for index, name := range names {
-		totalBytes += len(name)
-		if totalBytes > MaximumStoredFieldNamesBytes || index > 0 && previous >= name {
+		if len(name) > MaximumStoredFieldNamesBytes-totalBytes ||
+			index > 0 && previous >= name {
 			return nil, errors.New("stored field names are not bounded and strictly sorted")
 		}
+		totalBytes += len(name)
 		segments, err := ParseNormalizedDynamicPath(name)
-		if err != nil || IsReservedDynamicRoot(segments[0]) {
+		if err != nil || !allowReservedRoots && IsReservedDynamicRoot(segments[0]) {
 			return nil, errors.New("stored field name is invalid")
 		}
 		if err := root.insert(segments); err != nil {
