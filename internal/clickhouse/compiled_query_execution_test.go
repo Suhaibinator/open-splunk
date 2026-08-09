@@ -2,6 +2,8 @@ package clickhouse
 
 import (
 	"bytes"
+	"errors"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -12,6 +14,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
+
+const testNonemptyKnowledgeSealError = "seal compiled ClickHouse execution: nonempty knowledge lowering is absent"
 
 func TestCompiledKnowledgeSnapshotEvidencePinsAuthoredWholeQueryCharges(t *testing.T) {
 	t.Parallel()
@@ -168,6 +172,315 @@ func TestCompiledKnowledgeSnapshotEvidenceSealsProgramIdentityAndSplitCharges(t 
 		evidence.ScalarPredicates() != knowledge.ScalarPredicates+evidence.AuthoredScalarPredicates() ||
 		evidence.RegexCaptureBytes() != MaximumRexCapturedBytesPerRow {
 		t.Fatalf("whole-query totals = %#v, knowledge = %+v", evidence, knowledge)
+	}
+}
+
+func TestCompileKnowledgeCompilationEvidenceDerivesExactNonemptyProof(t *testing.T) {
+	t.Parallel()
+
+	program := testKnowledgeEvidenceProgram(t, "derived")
+	query, preparation, prelude := testKnowledgeCompilationEvidenceFixture(
+		t,
+		program,
+		`index=gradethis | rex field=_raw "(?<authored>[0-9]+)" `+
+			`| spath input=_raw output=selected path=payload.value `+
+			`| where selected="present"`,
+	)
+	const generatedSQLBytes = 12345
+	evidence, err := compileKnowledgeCompilationEvidence(
+		preparation,
+		prelude,
+		generatedSQLBytes,
+	)
+	if err != nil {
+		t.Fatalf("compile knowledge evidence: %v", err)
+	}
+	commitment, ok := program.Commitment()
+	wantAuthored := authoredKnowledgeCompilationEvidence{
+		regexPrograms:      preparation.authored.regexPrograms,
+		regexWorkUnits:     preparation.authored.regexWorkUnits,
+		extractionOutputs:  preparation.authored.extractionOutputs,
+		jsonEvaluationWork: preparation.authored.jsonEvaluationWork,
+		scalarPredicates:   preparation.authoredScalarPredicates,
+	}
+	if evidence == nil || !ok || !evidence.prelude.present ||
+		evidence.prelude.commitment != commitment ||
+		evidence.prelude.objectCount != prelude.proof.objectCount ||
+		evidence.prelude.objectCount != program.ObjectCount() ||
+		evidence.prelude.charges != prelude.proof.charges ||
+		evidence.prelude.charges != program.Charges() ||
+		evidence.authored != wantAuthored ||
+		evidence.regexCaptureBytes != MaximumRexCapturedBytesPerRow ||
+		evidence.generatedSQLBytes != generatedSQLBytes {
+		t.Fatalf("derived nonempty evidence = %#v", evidence)
+	}
+
+	scan, ok := query.Operators[0].(*plan.Scan)
+	if !ok || scan == nil {
+		t.Fatalf("fixture scan = %T", query.Operators[0])
+	}
+	if _, sealErr := sealFinalCompiledQuery(
+		CompiledQuery{SQL: "SELECT 1"},
+		query,
+		scan,
+		preparation,
+		prelude,
+	); sealErr == nil || sealErr.Error() != testNonemptyKnowledgeSealError {
+		t.Fatalf("nonempty seal error = %v", sealErr)
+	}
+}
+
+func TestCompileKnowledgeCompilationEvidenceRejectsSameChargeProgramSubstitution(t *testing.T) {
+	t.Parallel()
+
+	firstProgram := testKnowledgeEvidenceProgram(t, "derived-first")
+	secondProgram := testKnowledgeEvidenceProgram(t, "derived-second")
+	if firstProgram.Charges() != secondProgram.Charges() || firstProgram.Equal(secondProgram) {
+		t.Fatalf(
+			"test programs are not equal-cost distinct authority: %+v/%+v",
+			firstProgram.Charges(),
+			secondProgram.Charges(),
+		)
+	}
+	_, firstPreparation, firstPrelude := testKnowledgeCompilationEvidenceFixture(
+		t,
+		firstProgram,
+		`index=gradethis | where status=200`,
+	)
+	secondQuery, secondPreparation, _ := testKnowledgeCompilationEvidenceFixture(
+		t,
+		secondProgram,
+		`index=gradethis | where status=200`,
+	)
+	firstEvidence, err := compileKnowledgeCompilationEvidence(
+		firstPreparation,
+		firstPrelude,
+		1,
+	)
+	if err != nil || firstEvidence == nil {
+		t.Fatalf("compile first evidence = (%#v, %v)", firstEvidence, err)
+	}
+	if firstEvidence.matchesProgram(secondProgram) {
+		t.Fatal("same-charge program matched the first physical evidence")
+	}
+	if _, err := compileKnowledgeCompilationEvidence(
+		secondPreparation,
+		firstPrelude,
+		1,
+	); err == nil {
+		t.Fatal("first physical prelude derived evidence for the second program")
+	}
+
+	scan, ok := secondQuery.Operators[0].(*plan.Scan)
+	if !ok || scan == nil {
+		t.Fatalf("fixture scan = %T", secondQuery.Operators[0])
+	}
+	if _, err := sealFinalCompiledQuery(
+		CompiledQuery{SQL: "SELECT 1"},
+		secondQuery,
+		scan,
+		secondPreparation,
+		firstPrelude,
+	); err == nil || err.Error() == testNonemptyKnowledgeSealError {
+		t.Fatalf("same-charge substituted seal error = %v", err)
+	}
+}
+
+func TestCompileKnowledgeCompilationEvidenceRejectsEmittedProofMismatch(t *testing.T) {
+	t.Parallel()
+
+	program := testKnowledgeEvidenceProgram(t, "derived-forged")
+	query, preparation, prelude := testKnowledgeCompilationEvidenceFixture(
+		t,
+		program,
+		`index=gradethis | where status=200`,
+	)
+	if len(prelude.proof.calculated) == 0 {
+		t.Fatal("fixture has no emitted calculated proof")
+	}
+	forged := prelude
+	forged.proof.calculated = nil
+	if _, err := compileKnowledgeCompilationEvidence(
+		preparation,
+		forged,
+		1,
+	); err == nil {
+		t.Fatal("mismatched emitted proof derived evidence")
+	}
+
+	scan, ok := query.Operators[0].(*plan.Scan)
+	if !ok || scan == nil {
+		t.Fatalf("fixture scan = %T", query.Operators[0])
+	}
+	if _, err := sealFinalCompiledQuery(
+		CompiledQuery{SQL: "SELECT 1"},
+		query,
+		scan,
+		preparation,
+		forged,
+	); err == nil || err.Error() == testNonemptyKnowledgeSealError {
+		t.Fatalf("forged emitted-proof seal error = %v", err)
+	}
+}
+
+func TestCompileKnowledgeCompilationEvidencePreservesAuthoredSplitAndCeilings(t *testing.T) {
+	t.Parallel()
+
+	program := testKnowledgeEvidenceProgram(t, "derived-ceilings")
+	_, preparation, prelude := testKnowledgeCompilationEvidenceFixture(
+		t,
+		program,
+		`index=gradethis`,
+	)
+	charges := prelude.proof.charges
+	preparation.authored = authoredKnowledgeCompilation{
+		regexPrograms:      knowledgeprogram.MaximumRegexPrograms - charges.RegexPrograms,
+		regexWorkUnits:     knowledgeprogram.MaximumRegexWorkUnits - charges.RegexWorkUnits,
+		extractionOutputs:  knowledgeprogram.MaximumExtractionOutputs - charges.ExtractionOutputs,
+		jsonEvaluationWork: knowledgeprogram.MaximumJSONEvaluationWork - charges.JSONEvaluationWork,
+	}
+	preparation.authoredScalarPredicates =
+		knowledgeprogram.MaximumScalarPredicates - charges.ScalarPredicates
+	preparation.authoredScalarPredicatesExact = true
+	evidence, err := compileKnowledgeCompilationEvidence(preparation, prelude, 7)
+	if err != nil {
+		t.Fatalf("compile evidence at shared ceilings: %v", err)
+	}
+	if evidence == nil || evidence.prelude.charges != charges ||
+		evidence.authored.regexPrograms != preparation.authored.regexPrograms ||
+		evidence.authored.regexWorkUnits != preparation.authored.regexWorkUnits ||
+		evidence.authored.extractionOutputs != preparation.authored.extractionOutputs ||
+		evidence.authored.jsonEvaluationWork != preparation.authored.jsonEvaluationWork ||
+		evidence.authored.scalarPredicates != preparation.authoredScalarPredicates {
+		t.Fatalf("split ceiling evidence = %#v", evidence)
+	}
+	snapshot := KnowledgeSnapshotEvidence{compiled: *evidence}
+	if snapshot.RegexPrograms() != knowledgeprogram.MaximumRegexPrograms ||
+		snapshot.RegexWorkUnits() != knowledgeprogram.MaximumRegexWorkUnits ||
+		snapshot.ExtractionOutputs() != knowledgeprogram.MaximumExtractionOutputs ||
+		snapshot.JSONEvaluationWork() != knowledgeprogram.MaximumJSONEvaluationWork ||
+		snapshot.ScalarPredicates() != knowledgeprogram.MaximumScalarPredicates {
+		t.Fatalf("combined ceiling evidence = %#v", snapshot)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*preparedKnowledgeCompilation)
+	}{
+		{name: "regex programs", mutate: func(value *preparedKnowledgeCompilation) {
+			value.authored.regexPrograms++
+		}},
+		{name: "regex work", mutate: func(value *preparedKnowledgeCompilation) {
+			value.authored.regexWorkUnits++
+		}},
+		{name: "extraction outputs", mutate: func(value *preparedKnowledgeCompilation) {
+			value.authored.extractionOutputs++
+		}},
+		{name: "JSON work", mutate: func(value *preparedKnowledgeCompilation) {
+			value.authored.jsonEvaluationWork++
+		}},
+		{name: "scalar predicates", mutate: func(value *preparedKnowledgeCompilation) {
+			value.authoredScalarPredicates++
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := preparation
+			test.mutate(&candidate)
+			_, err := compileKnowledgeCompilationEvidence(candidate, prelude, 7)
+			var diagnostic *plan.Diagnostic
+			if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
+				t.Fatalf("overflow evidence error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCompileKnowledgeCompilationEvidencePreservesPresentEmptyParity(t *testing.T) {
+	t.Parallel()
+
+	source := `index=gradethis | rex field=_raw "(?<word>[a-z]+)" ` +
+		`| spath input=_raw output=selected path=payload.value ` +
+		`| where selected="present"`
+	legacyQuery := buildPlan(t, source)
+	legacyPreparation, err := prepareKnowledgeCompilation(legacyQuery)
+	if err != nil {
+		t.Fatalf("prepare legacy: %v", err)
+	}
+	legacyPrelude, err := compileKnowledgePrelude(
+		knowledgeExtractionStageState(),
+		legacyPreparation,
+	)
+	if err != nil {
+		t.Fatalf("compile legacy identity prelude: %v", err)
+	}
+	legacy, err := (Compiler{}).Compile(legacyQuery)
+	if err != nil {
+		t.Fatalf("compile legacy: %v", err)
+	}
+	legacyEvidence, err := compileKnowledgeCompilationEvidence(
+		legacyPreparation,
+		legacyPrelude,
+		uint64(len(legacy.SQL)),
+	)
+	if err != nil {
+		t.Fatalf("derive legacy evidence: %v", err)
+	}
+
+	empty, err := knowledgeprogram.Prepare(knowledgeprogram.Input{})
+	if err != nil {
+		t.Fatalf("prepare empty program: %v", err)
+	}
+	presentEmptyQuery, err := plan.InjectKnowledgePrelude(legacyQuery, empty)
+	if err != nil {
+		t.Fatalf("inject empty prelude: %v", err)
+	}
+	presentEmptyPreparation, err := prepareKnowledgeCompilation(presentEmptyQuery)
+	if err != nil {
+		t.Fatalf("prepare present-empty: %v", err)
+	}
+	presentEmptyPrelude, err := compileKnowledgePrelude(
+		knowledgeExtractionStageState(),
+		presentEmptyPreparation,
+	)
+	if err != nil {
+		t.Fatalf("compile present-empty identity prelude: %v", err)
+	}
+	presentEmpty, err := (Compiler{}).Compile(presentEmptyQuery)
+	if err != nil {
+		t.Fatalf("compile present-empty: %v", err)
+	}
+	presentEmptyEvidence, err := compileKnowledgeCompilationEvidence(
+		presentEmptyPreparation,
+		presentEmptyPrelude,
+		uint64(len(presentEmpty.SQL)),
+	)
+	if err != nil {
+		t.Fatalf("derive present-empty evidence: %v", err)
+	}
+
+	if legacyEvidence == nil || presentEmptyEvidence == nil ||
+		legacyEvidence.prelude.present || !presentEmptyEvidence.prelude.present ||
+		legacyEvidence.authored != presentEmptyEvidence.authored ||
+		legacyEvidence.regexCaptureBytes != presentEmptyEvidence.regexCaptureBytes ||
+		legacyEvidence.generatedSQLBytes != presentEmptyEvidence.generatedSQLBytes ||
+		legacy.SQL != presentEmpty.SQL ||
+		!reflect.DeepEqual(legacy.knowledgeEvidence, legacyEvidence) ||
+		!reflect.DeepEqual(presentEmpty.knowledgeEvidence, presentEmptyEvidence) {
+		t.Fatalf(
+			"identity evidence parity = legacy:%#v/%#v empty:%#v/%#v",
+			legacy.knowledgeEvidence,
+			legacyEvidence,
+			presentEmpty.knowledgeEvidence,
+			presentEmptyEvidence,
+		)
+	}
+	commitment, ok := empty.Commitment()
+	if !ok || presentEmptyEvidence.prelude.commitment != commitment ||
+		presentEmptyEvidence.prelude.objectCount != 0 ||
+		presentEmptyEvidence.prelude.charges != (knowledgeprogram.Charges{}) ||
+		legacy.EqualForExecution(presentEmpty) {
+		t.Fatalf("present-empty authority = %#v / equal=%v", presentEmptyEvidence, legacy.EqualForExecution(presentEmpty))
 	}
 }
 
@@ -388,6 +701,30 @@ func sealTestKnowledgeProgram(
 		t.Fatalf("sealCompiledQueryExecution(test program): %v", err)
 	}
 	return sealed
+}
+
+func testKnowledgeCompilationEvidenceFixture(
+	t *testing.T,
+	program knowledgeprogram.Program,
+	source string,
+) (*plan.Query, preparedKnowledgeCompilation, compiledKnowledgePrelude) {
+	t.Helper()
+	query, err := plan.InjectKnowledgePrelude(buildPlan(t, source), program)
+	if err != nil {
+		t.Fatalf("InjectKnowledgePrelude: %v", err)
+	}
+	preparation, err := prepareKnowledgeCompilation(query)
+	if err != nil {
+		t.Fatalf("prepareKnowledgeCompilation: %v", err)
+	}
+	prelude, err := compileKnowledgePrelude(
+		knowledgeExtractionStageState(),
+		preparation,
+	)
+	if err != nil {
+		t.Fatalf("compileKnowledgePrelude: %v", err)
+	}
+	return query, preparation, prelude
 }
 
 func testKnowledgeEvidenceProgram(t *testing.T, identity string) knowledgeprogram.Program {

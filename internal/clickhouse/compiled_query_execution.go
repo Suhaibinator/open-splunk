@@ -185,47 +185,107 @@ func sealFinalCompiledQuery(
 		)
 	}
 	preparation = finalPreparation
-	// A nonempty program is semantic authority, not proof that its operators
-	// were emitted. Validate the distinct compiler-owned physical proof, but
-	// keep the seal closed until the runtime compatibility gate is opened.
-	if preparation.present && preparation.program.ObjectCount() != 0 {
-		if err := validateCompiledKnowledgePrelude(prelude, preparation); err != nil {
-			return CompiledQuery{}, err
-		}
-		return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: nonempty knowledge lowering is absent")
-	}
-	if err := validateKnowledgeRuntimeGuardIdentityPrelude(prelude, preparation); err != nil {
+	evidence, err := compileKnowledgeCompilationEvidence(
+		preparation,
+		prelude,
+		uint64(len(compiled.SQL)),
+	)
+	if err != nil {
 		return CompiledQuery{}, err
+	}
+	// The exact semantic commitment, physical lowering proof, authored split,
+	// and whole-query ceilings are now staged above. Keep only the runtime
+	// compatibility gate closed; removing this return opens no new evidence
+	// implementation path.
+	if preparation.present && preparation.program.ObjectCount() != 0 {
+		return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: nonempty knowledge lowering is absent")
 	}
 	sealed, err := sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if preparation.authoredScalarPredicatesExact {
-		evidence := knowledgeCompilationEvidence{
-			authored: authoredKnowledgeCompilationEvidence{
-				regexPrograms:      preparation.authored.regexPrograms,
-				regexWorkUnits:     preparation.authored.regexWorkUnits,
-				extractionOutputs:  preparation.authored.extractionOutputs,
-				jsonEvaluationWork: preparation.authored.jsonEvaluationWork,
-				scalarPredicates:   preparation.authoredScalarPredicates,
-			},
-			generatedSQLBytes: uint64(len(sealed.SQL)),
-		}
-		if preparation.present {
-			preludeEvidence, valid := compileKnowledgePreludeEvidence(preparation.program)
-			if !valid || preludeEvidence.commitment != preparation.programCommitment ||
-				preludeEvidence.charges != preparation.programCharges {
-				return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: knowledge prelude is invalid")
-			}
-			evidence.prelude = preludeEvidence
-		}
-		if evidence.prelude.charges.RegexPrograms+evidence.authored.regexPrograms > 0 {
-			evidence.regexCaptureBytes = MaximumRexCapturedBytesPerRow
-		}
-		sealed.knowledgeEvidence = &evidence
+	if evidence != nil {
+		sealed.knowledgeEvidence = evidence
 	}
 	return sealCompiledQueryExecution(sealed)
+}
+
+// compileKnowledgeCompilationEvidence derives the exact evidence that will be
+// sealed into the final executable. A nonempty prelude contributes object and
+// charge totals only through its validated physical lowering proof; the
+// immutable program contributes the semantic commitment that prevents an
+// equal-cost program from substituting for it. Identity preludes retain the
+// legacy absent/present-empty distinction without inventing physical work.
+func compileKnowledgeCompilationEvidence(
+	preparation preparedKnowledgeCompilation,
+	prelude compiledKnowledgePrelude,
+	generatedSQLBytes uint64,
+) (*knowledgeCompilationEvidence, error) {
+	if err := validateKnowledgePreludePreparation(preparation); err != nil {
+		return nil, err
+	}
+	nonempty := preparation.present && preparation.program.ObjectCount() != 0
+	if nonempty {
+		if err := validateCompiledKnowledgePrelude(prelude, preparation); err != nil {
+			return nil, err
+		}
+	} else if err := validateKnowledgeRuntimeGuardIdentityPrelude(
+		prelude,
+		preparation,
+	); err != nil {
+		return nil, err
+	}
+
+	result := knowledgeCompilationEvidence{
+		authored: authoredKnowledgeCompilationEvidence{
+			regexPrograms:      preparation.authored.regexPrograms,
+			regexWorkUnits:     preparation.authored.regexWorkUnits,
+			extractionOutputs:  preparation.authored.extractionOutputs,
+			jsonEvaluationWork: preparation.authored.jsonEvaluationWork,
+			scalarPredicates:   preparation.authoredScalarPredicates,
+		},
+		generatedSQLBytes: generatedSQLBytes,
+	}
+	if preparation.present {
+		semantic, valid := compileKnowledgePreludeEvidence(preparation.program)
+		if !valid || semantic.commitment != preparation.programCommitment ||
+			semantic.objectCount != preparation.program.ObjectCount() ||
+			semantic.charges != preparation.programCharges {
+			return nil, errors.New(
+				"seal compiled ClickHouse execution: knowledge prelude is invalid",
+			)
+		}
+		result.prelude = semantic
+		if nonempty {
+			result.prelude.objectCount = prelude.proof.objectCount
+			result.prelude.charges = prelude.proof.charges
+			if result.prelude.objectCount != semantic.objectCount ||
+				result.prelude.charges != semantic.charges {
+				return nil, errors.New(
+					"seal compiled ClickHouse execution: physical knowledge evidence disagrees",
+				)
+			}
+		}
+	}
+	if err := validateSharedKnowledgeCompilationBudgets(
+		result.prelude.charges,
+		preparation.authored,
+		preparation.authoredScalarPredicates,
+	); err != nil {
+		return nil, err
+	}
+	if !preparation.authoredScalarPredicatesExact {
+		if preparation.present {
+			return nil, errors.New(
+				"seal compiled ClickHouse execution: authored predicate evidence is inexact",
+			)
+		}
+		return nil, nil
+	}
+	if result.prelude.charges.RegexPrograms+result.authored.regexPrograms > 0 {
+		result.regexCaptureBytes = MaximumRexCapturedBytesPerRow
+	}
+	return &result, nil
 }
 
 func preparedKnowledgeCompilationEqual(
