@@ -4,7 +4,8 @@
 
 **Current milestone:** KO-1 search-time runtime acceptance (closed gates)
 
-**Last completed slice:** staged Resolver authority and hidden manager filters/sorts
+**Last completed slice:** bounded direct dependency graph inspection and the
+eight-route management boundary
 
 **Evidence date:** August 9, 2026
 
@@ -27,8 +28,8 @@
 - KO-1C closed-gate retained-prelude revision:
   `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 102 intentional post-`c5440b9` KO
-  commits through `0ccd2f5` are durable locally. This checkpoint is kept as a
+- Publication state before this document: 106 intentional post-`c5440b9` KO
+  commits through `7540804` are durable locally. This checkpoint is kept as a
   separate documentation commit. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -105,14 +106,17 @@
   revalidates every affected ACTIVE tenant in the index transaction before its
   first write.
 - Runtime feature state: the capability remains hard-disabled and unadvertised.
-  Production registers exactly the six knowledge-management routes as one
+  Production registers exactly the eight knowledge-management routes as one
   complete administrator-only unit and composes their Store, concrete ready
   Writer, app authority, and attempt journal. The management runtime also
   constructs and retains a concrete Resolver, but intentionally does not attach
   it to production `searchjobs.Manager`. The compiler and snapshot finalizer
   retain independent nonempty gates, so ClickHouse knowledge execution remains
-  unavailable. The read-only Knowledge Manager therefore remains absent from
-  navigation and makes no request, although its dormant list/detail surface is
+  unavailable. The dependency/dependent routes are registered but
+  unadvertised, represented in the central route manifest, and excluded from
+  the browser administrator-bearer allowlist. The read-only Knowledge Manager
+  therefore remains absent from navigation and makes no request, although its
+  dormant list/detail surface is
   app/object-type/lifecycle-state filter- and stable-sort-ready with exact
   continuation reuse.
 
@@ -218,6 +222,9 @@ Later local commits anchoring the reconciled current state include:
 | `d846dc2` | `feat(knowledge): stage runtime resolver authority` | Concrete Resolver retained by the management runtime without attachment to production search admission; nonempty requests still fail before side effects |
 | `597dfb6` | `fix(web): align knowledge route manifest` | Six management routes represented in the central TypeScript route manifest with bounded Get/List responses |
 | `0ccd2f5` | `feat(web): filter hidden knowledge manager` | Dormant read-only app/object-type/lifecycle-state filters, four stable sorts, exact continuation reuse, and synchronous query-reset behavior |
+| `b8cd2c4` | `feat(proto): define management dependency edges` | Direct exact-version management edge identity without snapshot-global depth/ordinal/digest authority, plus dependency/dependent response roots and a shared Go/TypeScript wire golden |
+| `a4e1a0f` | `feat(knowledge): inspect dependency relationships` | Same-WAL direct outgoing and authorization-leading current-source inverse reads, omission-before-page/count privacy, optional exact totals, signed state-bound cursors, and bounded hydration/query plans |
+| `7540804` | `feat(knowledge): expose dependency graph reads` | Two bounded graph codecs/handlers, all-or-none eight-route production registration, trusted-scope response validation, rejected-attempt actions, a 128 KiB response ceiling, and unadvertised route-manifest entries |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -312,9 +319,18 @@ used.
   framing, and a 256 MiB per-tenant projection byte ceiling
 - Historical Get authorized from the current identity, with permanent
   definition redaction while the current identity is quarantined
+- Direct exact-version dependency inspection authorized only from the current
+  root registry identity; outgoing reads may select historical source versions,
+  while inverse reads admit only current source versions across every
+  nonquarantined lifecycle state. Hidden or quarantined opposite endpoints are
+  omitted before page/count, and exact totals are optional
+- Authorization-leading inverse traversal over bounded current registry
+  identities and exact `knowledge_object_dependencies_source_target_idx`
+  probes. The v0.1 inverse recognizes only `target_kind = 'object'`; another
+  target kind requires a new bounded current-inverse authority/index contract
 - Atomic successful-mutation audit metadata and a separate fail-closed rejected
   privileged-attempt journal that retains no unauthorized object metadata
-- Authentication-before-decode for all six management operations, followed by
+- Authentication-before-decode for all eight management operations, followed by
   tenant/owner-bound administrator authorization and trusted complete app-scope
   derivation; every authenticated definitive rejection attempts exactly one
   synchronous journal append, exposes the underlying rejection only after that
@@ -844,25 +860,22 @@ KO-0 foundations and the hidden KO-0H lifecycle/browser readiness vertical are
 complete. KO-1A/KO-1B freeze the selector and backend-neutral program, and the
 current closed-gate KO-1C slice lowers, accounts, seals, retains, reconstructs,
 and inspects that program without making it executable. Recognized ACTIVE
-publication and the six management routes are now implemented independently of
+publication and the eight management routes are now implemented independently of
 search-time capability exposure. The next dependency-ordered slices are:
 
-1. replace snapshot-global depth/ordinal dependency projections in the reserved
-   management API with a direct exact-version edge contract, then add bounded
-   same-WAL dependency/dependent reads and signed cursors before registering
-   either route;
-2. complete the digest-pinned ClickHouse acceptance matrix as bounded named
+1. complete the digest-pinned ClickHouse acceptance matrix as bounded named
    gates covering ordinary filter/project/eval/rex/spath/sort/limit/stats,
    eventstats/streamstats and stacked chronological barriers, chart/timechart,
    every event-analysis finalizer, empty/pruned consumers, exact argument
    order, resource boundaries, container decoding, and hidden-failure
    atomicity;
-3. only after those runtime gates pass, remove the compiler and snapshot
+2. only after those runtime gates pass, remove the compiler and snapshot
    nonempty gates together and attach the retained concrete Resolver to
    production search admission, then prove one hidden seeded-ACTIVE lifecycle
    across search, history rerun, inspection, and export with exact retained
    compiler/program equality; and
-4. only after the complete hidden Tier-1 browser/ClickHouse vertical passes,
+3. only after the complete hidden Tier-1 browser/ClickHouse vertical passes,
    advertise the capability and enable Knowledge Manager navigation and
-   mutation workflows. The six administrator routes remain registered and the
-   dormant read-only UI remains hidden until that exposure decision.
+   mutation workflows. The eight administrator routes remain registered; the
+   two graph routes remain outside the browser bearer allowlist and the dormant
+   read-only UI remains hidden until that exposure decision.

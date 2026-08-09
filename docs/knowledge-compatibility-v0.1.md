@@ -17,12 +17,15 @@ snapshot metadata may ship before enrichment, but the server must not advertise
 snapshot, planner, executor, inspection, lifecycle, and browser family is
 configured and tested.
 
-**Current readiness status:** production registers the six administrator-only
-create/get/list/update/set-state/delete routes as one complete management unit
-and composes their Store, concrete ready Writer, app authority, and attempt
-journal. It also constructs and retains a concrete Resolver, but intentionally
-does not attach it to production `searchjobs.Manager`. Bootstrap does not
-advertise the feature, so the read-only Knowledge Manager stays out of
+**Current readiness status:** production registers the eight administrator-only
+create/get/list/dependencies/dependents/update/set-state/delete routes as one
+complete management unit and composes their Store, concrete ready Writer, app
+authority, and attempt journal. The two graph routes are registered but remain
+unadvertised, excluded from the browser administrator-bearer allowlist, and
+unused by the hidden UI. Production also constructs and retains a concrete
+Resolver, but intentionally does not attach it to production
+`searchjobs.Manager`. Bootstrap does not advertise the feature, so the
+read-only Knowledge Manager stays out of
 navigation and issues no request despite its app/object-type/lifecycle-state
 filters and name-ascending, updated-time-descending, created-time-descending,
 and object-type-ascending sort readiness. Recognized definitions can be created
@@ -47,16 +50,17 @@ disclosing private object existence. A visible active object that is corrupt or
 unsupported fails admission with a payload-free corruption category; it is
 never silently omitted or partially applied.
 
-Version `0.1` targets the existing trusted single-user deployment. The six
-registered knowledge management routes—get, list, create, update, change state,
-and delete—are browser-administrator-only and are bound to the authenticated
-tenant and owner. Reserved validation, dependency-inspection, and preview
-routes must preserve the same boundary when implemented. The local
-administrator may publish app-shared and tenant-global objects. Supplied tenant
+Version `0.1` targets the existing trusted single-user deployment. The eight
+registered knowledge management routes—get, list, dependencies, dependents,
+create, update, change state, and delete—are administrator-only and are bound
+to the authenticated tenant and owner. The graph routes are not yet exposed to
+the browser application. Reserved validation and preview routes must preserve
+the same boundary when implemented. The local administrator may publish app-
+shared and tenant-global objects. Supplied tenant
 or owner identity is never authority. A forbidden or cross-tenant object
 selector returns the same not-found response as an absent object.
 
-The production router registers the first six object-management handlers only
+The production router registers all eight object-management handlers only
 when their complete dependency unit and constructor-ready concrete Writer are
 present; partial configuration registers none of them. This route availability
 is independent of the absent Tier-1 bootstrap capability. Each registered path
@@ -648,6 +652,51 @@ be preserved by the Go runtime but are not promised to browser clients. The
 stored canonical bytes, rather than a browser round trip, are the authority for
 snapshot digesting and history.
 
+Store `ListDependencies` and `ListDependents`, exposed as `dependencies` and
+`dependents`, inspect only direct persisted object-to-object `FIELD_INPUT`
+edges. Their wire projection contains exact source and target object IDs and
+versions plus role; it deliberately omits definition digests
+and snapshot-global stage, longest-path depth, and canonical ordinal. An
+omitted request version selects the current root version. An explicit
+historical root version never grants authority: current registry identity and
+current policy authorize every current or historical graph read. A missing,
+hidden, or currently quarantined root returns the uniform not-found-or-
+forbidden response and exposes no current or historical graph.
+
+Outgoing inspection lists the selected source version's exact direct edges.
+Inverse inspection lists edges to the selected target version only when the
+source edge belongs to that source object's current registry version; DRAFT,
+ACTIVE, DISABLED, and DELETED current sources are eligible, while quarantined
+or otherwise hidden sources are not. In either direction a hidden or
+quarantined opposite endpoint is omitted before ordering, keyset pagination,
+and total counting. There is no redacted placeholder, ordinal gap, or hidden
+count. Pages contain at most 256 disclosed edges. `total_size` is an exact
+disclosed-edge count only when `include_total_size` requests it and is otherwise
+absent; outgoing totals are bounded by 1,024 edges and inverse totals by the
+8,192 current-object identity ceiling. The protobuf HTTP response is capped at
+128 KiB and uses the management boundary's fail-fast serialization capacity.
+
+Each graph continuation is an authenticated opaque token no larger than 4 KiB.
+It binds the route direction, tenant, owner, readable-app set, root object,
+requested-version presence and value, resolved root version, page size, total-
+count choice, last disclosed edge key, and first-page catalog revision plus
+state commitment. A change to either catalog identity invalidates the token.
+Outgoing order is binary target ID, target version, then role; inverse order is
+binary source ID, source version, then role. Storage ordinal never enters the
+cursor or response because gaps could disclose omitted edges.
+
+Inverse reads are authorization-leading: the implementation first bounds the
+currently authorized registry source set, then probes each exact current source
+version with `knowledge_object_dependencies_source_target_idx` and
+`target_kind = 'object'`. It must not drive the query from the retained target
+index `knowledge_object_dependencies_target_idx`, because historical or hidden
+source rows are not disclosure authority. The v0.1 management inverse therefore
+recognizes object targets only. A
+constraint-bypassed non-object target row is outside this bounded inverse
+projection and is detected when the authoritative source graph is read or
+revalidated. Supporting another target kind requires a new bounded current-
+inverse authority/index contract before that kind may appear in `dependents`.
+
 ## Immutable snapshots and lifecycle
 
 The KO-0H manager path is optional. A nil resolver, including a typed nil, and
@@ -1002,7 +1051,7 @@ unavailable the route fails closed with the same generic unavailable response.
 Unauthenticated traffic remains in the server access-security log because no
 trusted tenant or actor exists to bind a knowledge audit record.
 
-For the six management operations, the route deadline encloses authentication,
+For the eight management operations, the route deadline encloses authentication,
 authorization, body handling, catalog work, and response validation.
 Authentication accepts a valid browser user or administrator and installs a
 detached principal and audit actor while removing the bearer credential; only

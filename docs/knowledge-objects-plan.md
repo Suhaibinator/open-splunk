@@ -916,9 +916,11 @@ POST /api/v1/knowledge/lookups/preview
 ```
 
 Since KO-0F, the first six object-management handlers and bounded protobuf
-codecs have real Store/Writer/audit integration. Production `NewHandler` now
-registers exactly those six routes only when the complete management dependency
-unit and an exact constructor-ready concrete Writer are present, and
+codecs have real Store/Writer/audit integration. The direct-edge inspection
+slice adds bounded `dependencies` and `dependents` handlers over the same Store
+and rejected-attempt boundary. Production `NewHandler` now registers exactly
+those eight routes only when the complete management dependency unit and an
+exact constructor-ready concrete Writer are present, and
 `cmd/open-splunk-server` supplies that unit. Registration remains independent
 from feature advertisement: bootstrap continues to advertise no knowledge
 capability. The boundary authenticates before decoding and attempts exactly one
@@ -936,6 +938,33 @@ Every mutation includes expected version, idempotency identity where needed,
 and an exact field mask. Mutation responses return the committed object and new
 catalog revision. List routes use signed, owner/tenant-scoped keyset cursors and
 may filter by app, object type, state, scope, selector summary, or text.
+
+Store `ListDependencies` and `ListDependents` back the graph routes with only
+direct persisted object-to-object `FIELD_INPUT` edges and exact source and
+target versions. They do not reuse snapshot-global depth, stage, canonical
+ordinal, or digest fields. An omitted version selects
+the current root version; an explicit historical root version is authorized
+only through that object's current registry identity. Outgoing inspection
+returns the selected source version's exact edges. Inverse inspection returns
+edges to the selected target version only from source versions which are still
+their objects' current registry versions, including nonquarantined DRAFT,
+ACTIVE, DISABLED, and DELETED sources. A hidden or quarantined root returns the
+uniform not-found-or-forbidden result, and a hidden or quarantined opposite
+endpoint is omitted before keyset pagination and optional exact total counting.
+Signed continuations bind direction, caller scope, requested-version presence
+and value, resolved root, page size, total-count choice, and the first page's
+revision plus state commitment.
+
+Inverse traversal is deliberately authorization-leading. It enumerates
+currently authorized registry source identities and probes their exact current
+version through `knowledge_object_dependencies_source_target_idx`, including
+the `target_kind = 'object'` predicate, rather than driving from retained
+target-side history through `knowledge_object_dependencies_target_idx`. The
+v0.1 management graph therefore recognizes only
+object targets. A constraint-bypassed non-object target row is outside the
+bounded inverse result and must be detected when its source graph is read or
+revalidated; supporting another target kind requires a new bounded current-
+inverse authority and index contract first.
 
 `validate` performs syntax, schema, dependency, budget, and permission checks
 without publishing. `preview` applies a draft definition to a bounded retained
@@ -1192,7 +1221,7 @@ pinned without affecting search results.
 
 **Implementation checkpoint (August 9, 2026):** contracts, migrations 0024
 through 0034, canonical definition handling, the bounded authorization-first
-reader, the atomic catalog Writer, the six administrator-only management
+reader, the atomic catalog Writer, the eight administrator-only management
 handlers/codecs with their synchronous rejected-attempt boundary and exact
 all-or-none production registration, the
 one-read-transaction active resolver, and opaque immutable snapshot preparation
@@ -1381,9 +1410,10 @@ zero-proof exception reopens the live stored definition and proves a genuinely
 opaque future body plus exact scalar, selector, digest, and dependency identity
 before any write or persistence hook. Recognized ACTIVE create, ACTIVE update,
 and enable now mint and consume the nonzero proof; opaque ACTIVE update/enable
-remain closed. The six supported production management routes are registered,
-while search resolution, nonempty execution, browser navigation, and feature
-advertisement remain closed.
+remain closed. The eight supported production management routes are
+registered. The two graph routes remain unadvertised and have no browser
+bearer-allowlist or UI caller, while search resolution, nonempty execution,
+browser navigation, and feature advertisement remain closed.
 
 Immutable index-name creation now has its own atomic global admission boundary.
 Migration 0034 supplies sparse covering drivers for every nonempty ACTIVE

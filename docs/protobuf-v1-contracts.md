@@ -21,10 +21,11 @@ This directory is the source of truth shared by the Go server, Go collector, and
 - `knowledge.proto` defines the common registry projection, authorized selectors,
   Tier-1 typed definitions, versioned dependencies, provenance, and immutable
   search snapshot. `knowledge_api.proto` reserves the protobuf CRUD,
-  validation, dependency, and bounded preview messages. The first six
-  create/get/list/update/set-state/delete routes are registered as one complete
-  administrator-only management unit. The remaining knowledge contracts are
-  additive but unregistered, and none of this advertises the Tier-1 capability.
+  validation, dependency, and bounded preview messages. The eight
+  create/get/list/dependencies/dependents/update/set-state/delete routes are
+  registered as one complete administrator-only management unit. Validation,
+  quarantine, and preview remain additive unregistered contracts, and none of
+  this advertises the Tier-1 capability.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
@@ -178,18 +179,33 @@ redacted wire variant cannot retain an object ID, name, version, owner, app, or
 definition location.
 
 The route comments in `knowledge_api.proto` reserve the intended endpoint
-names. The browser-route table below contains exactly the six production
+names. The browser-route table below contains exactly the eight production
 object-management routes currently registered by `NewHandler` when its complete
 management dependency unit, including a constructor-ready concrete Writer, is
 present. Registration is all-or-none and independent of bootstrap feature
-advertisement. The quarantine, validation, dependency, dependent, and preview
-messages do not create routes. List and future dependency continuations use
-bounded `PageRequest`/`PageResponse` contracts. The implemented List cursor
-binds all normalized filters, ordering, caller scope, page bound, and the
-first-page catalog revision plus state commitment; future dependency cursors
-must provide equivalent binding. Preview accepts only a retained
+advertisement. The quarantine, validation, and preview messages do not create
+routes. List and graph continuations use bounded `PageRequest`/`PageResponse`
+contracts. The implemented List cursor binds all normalized filters, ordering,
+caller scope, page bound, and the
+first-page catalog revision plus state commitment. Each implemented graph
+cursor additionally binds its direction, requested-version presence and value,
+resolved root identity, and total-count choice; a catalog revision or state-
+commitment change invalidates continuation. Preview accepts only a retained
 server-authorized search-job identity plus a candidate definition. It never
 accepts raw events, physical table names, index authority, asset paths, or SQL.
+
+The dependency routes expose only direct persisted object-to-object edges and
+never snapshot-global stage, depth, ordinal, or definition-digest authority.
+`dependencies` resolves one exact source version, including an authorized
+historical version, but authorizes it solely through the source's current
+registry identity. `dependents` resolves one exact target version but admits
+edges only from source versions which are those objects' current registry
+versions; every nonquarantined source lifecycle state is eligible. Both routes
+authorize the root from its current registry identity, return the uniform not-
+found-or-forbidden result for a missing, hidden, or currently quarantined root,
+and omit a hidden or quarantined opposite endpoint before pagination and total
+counting. Exact totals are returned only when `include_total_size` requests
+them; no hidden count or redacted edge placeholder is emitted.
 
 The registered management boundary authenticates before reading a protobuf
 body and derives tenant, owner, and complete manageable-app scope only from the
@@ -211,8 +227,11 @@ retained outcome is still recognized and canonical.
 Production composes the management Store, concrete ready Writer, attempt
 journal, app authority, and a concrete Resolver. It retains that Resolver for
 readiness but intentionally does not attach it to `searchjobs.Manager`, and it
-does not advertise the capability. The hidden read-only Knowledge Manager is
-therefore omitted from navigation, is not dynamically loaded, and issues no
+does not advertise the capability. The dependency and dependent routes are
+represented in the central TypeScript route manifest but deliberately excluded
+from the browser administrator-bearer allowlist until a graph UI is exposed.
+The hidden read-only Knowledge Manager is therefore omitted from navigation,
+is not dynamically loaded, and issues no
 knowledge API request; its dormant surface is app/object-type/lifecycle-state
 filter-ready with name-ascending, updated-time-descending, created-time-
 descending, and object-type-ascending sorts plus exact continuation reuse.
@@ -233,6 +252,8 @@ projection.
 | `/knowledge/objects/create` | `CreateKnowledgeObjectRequest` | `CreateKnowledgeObjectResponse` |
 | `/knowledge/objects/get` | `GetKnowledgeObjectRequest` | `GetKnowledgeObjectResponse` |
 | `/knowledge/objects/list` | `ListKnowledgeObjectsRequest` | `ListKnowledgeObjectsResponse` |
+| `/knowledge/objects/dependencies` | `ListKnowledgeObjectDependenciesRequest` | `ListKnowledgeObjectDependenciesResponse` |
+| `/knowledge/objects/dependents` | `ListKnowledgeObjectDependentsRequest` | `ListKnowledgeObjectDependentsResponse` |
 | `/knowledge/objects/update` | `UpdateKnowledgeObjectRequest` | `UpdateKnowledgeObjectResponse` |
 | `/knowledge/objects/set-state` | `SetKnowledgeObjectStateRequest` | `SetKnowledgeObjectStateResponse` |
 | `/knowledge/objects/delete` | `DeleteKnowledgeObjectRequest` | `DeleteKnowledgeObjectResponse` |
