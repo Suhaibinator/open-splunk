@@ -17,12 +17,16 @@ snapshot metadata may ship before enrichment, but the server must not advertise
 snapshot, planner, executor, inspection, lifecycle, and browser family is
 configured and tested.
 
-**Current readiness status:** production registers the eight administrator-only
-create/get/list/dependencies/dependents/update/set-state/delete routes as one
-complete management unit and composes their Store, concrete ready Writer, app
-authority, and attempt journal. The two graph routes are registered but remain
-capability-unadvertised. They join Get/List as the only knowledge paths in the
-browser administrator-bearer allowlist, while every mutation remains excluded.
+**Current readiness status:** production registers the nine administrator-only
+create/get/list/dependencies/dependents/validate/update/set-state/delete routes
+as one complete management unit and composes their Store, concrete ready Writer,
+app authority, and attempt journal. The two graph routes and Validate are
+registered but remain capability-unadvertised. Get/List and the two graph reads
+remain the only knowledge paths in the browser administrator-bearer allowlist;
+Validate and every mutation are excluded. Validate is also absent from the
+backend's generic outer administrator-route map because the inner knowledge-
+attempt boundary owns its authentication, administrator authorization, and
+`ActionValidate` journaling before body decode.
 The dormant hidden detail view consumes both graph routes for an exact object
 version, but production bootstrap still omits navigation and the dynamic chunk,
 so it issues no knowledge request. Production also constructs and retains a
@@ -34,11 +38,13 @@ ascending, updated-time-descending, created-time-descending, and object-type-
 ascending sort readiness. Recognized definitions can be created
 ACTIVE, updated while ACTIVE, or enabled from DRAFT/DISABLED through the
 transactional, compiler-proven Writer path; opaque future definitions cannot be
-updated or enabled as ACTIVE. The Writer also exposes an internal rollback-only
-candidate-validation service, but no Validate/Preview handler, route, browser
-allowlist entry, or bootstrap capability consumes it. The nonempty compiler,
-snapshot-finalization, and execution gates remain closed, so no knowledge
-object affects search results.
+updated or enabled as ACTIVE. A dedicated bounded raw decoder, handler, and
+exact sealed-response encoder now expose the Writer's rollback-only candidate-
+validation service at the Validate route. Preview remains contract-only, and no
+browser allowlist entry, bootstrap capability, navigation/UI, or search-runtime
+gate consumes either contract. The nonempty compiler, snapshot-finalization,
+and execution gates remain closed, so no knowledge object affects search
+results.
 
 ## Security boundary
 
@@ -56,19 +62,19 @@ disclosing private object existence. A visible active object that is corrupt or
 unsupported fails admission with a payload-free corruption category; it is
 never silently omitted or partially applied.
 
-Version `0.1` targets the existing trusted single-user deployment. The eight
+Version `0.1` targets the existing trusted single-user deployment. The nine
 registered knowledge management routes—get, list, dependencies, dependents,
-create, update, change state, and delete—are administrator-only and are bound
-to the authenticated tenant and owner. Browser transport attaches its memory-
-only administrator bearer only to the four read paths: get, list, dependencies,
-and dependents. Create, update, change-state, and delete remain outside that
-allowlist. Reserved validation and preview routes must preserve the same
+validate, create, update, change state, and delete—are administrator-only and
+are bound to the authenticated tenant and owner. Browser transport attaches its
+memory-only administrator bearer only to the four read paths: get, list,
+dependencies, and dependents. Validate, create, update, change-state, and delete
+remain outside that allowlist. The reserved Preview route must preserve the same
 boundary when implemented. The local administrator may publish app-
 shared and tenant-global objects. Supplied tenant
 or owner identity is never authority. A forbidden or cross-tenant object
 selector returns the same not-found response as an absent object.
 
-The production router registers all eight object-management handlers only
+The production router registers all nine object-management handlers only
 when their complete dependency unit and constructor-ready concrete Writer are
 present; partial configuration registers none of them. This route availability
 is independent of the absent Tier-1 bootstrap capability. Each registered path
@@ -525,16 +531,19 @@ same-width disagreement fails closed as catalog corruption.
 ## Candidate validation and preview contract
 
 The protobuf definitions freeze validation and preview behavior. The concrete
-catalog Writer now implements internal validation, but the production router
-registers neither route and bootstrap advertises neither capability. The pure
-normalizer provides one internal bridge:
+catalog Writer implements rollback-only validation and the production router
+registers Validate as the ninth all-or-none management route; Preview remains
+unregistered and bootstrap advertises neither capability. The pure normalizer
+provides one internal bridge:
 `Normalize` remains fail-fast and `IssueFromError` may extract one detached,
 definition-relative candidate issue with code
 `KNOWLEDGE_DEFINITION_INVALID`, `KNOWLEDGE_DEFINITION_UNKNOWN_FIELD`, or
 `KNOWLEDGE_DEFINITION_RESOURCE_LIMIT`. An empty path identifies the definition
 message. Existing error text and `errors.Is` roots are preserved, lower causes
 are not newly exposed, and infrastructure, invariant, canonical-storage, and
-other non-candidate failures have no issue. No HTTP mapping consumes this seam.
+other non-candidate failures have no issue. The registered handler never maps
+the raw seam directly; Writer result construction consumes only its closed typed
+projection.
 
 The semantic compiler has a separate internal-only seam. Fail-fast
 `knowledgeprogram.Compile` may bind one detached issue to the exact input index
@@ -545,7 +554,8 @@ submitted candidate, should prefer singleton Compile at index zero, and must
 never project a winner-cohort issue. `Prepare` and object/definition authority,
 aggregate resource, cohort/collision/selector, and dependency failures remain
 opaque to this typed compiler-issue seam. Error text and sentinel behavior stay
-compatible. No HTTP mapping consumes this seam either.
+compatible. The registered handler likewise never maps the raw seam directly;
+the result layer consumes only its closed typed projection.
 
 The pure `internal/knowledgevalidation` package now constructs bounded results
 from those typed seams without owning a catalog, database, transaction,
@@ -584,6 +594,28 @@ through MaxInt64 (`9223372036854775807`), and a present nonempty canonical mask
 relative to `KnowledgeObjectDefinition`; validation applies it to that exact
 current version. A missing definition message is an envelope error, while a
 present definition with a missing or unknown body is candidate invalidity.
+
+Validate uses a dedicated raw-wire codec rather than the generic read-all-plus-
+`proto.Unmarshal` path. It enforces the ordinary mutation raw-body ceiling by
+reading at most one byte beyond it solely as an overflow witness, then performs
+a bounded two-pass projection with protobuf-compatible
+duplicate-message, last-scalar, and `oneof` merge/reset semantics. It retains at
+most the canonical mask-path inventory plus one and, for selected selector or
+extraction-output repetitions, at most the semantic ceiling plus one. Every
+recognized string is still UTF-8-validated even when unselected or cleared, and
+malformed wire or unknown-group nesting beyond 32 levels is rejected. Bounded
+oracles cover one million mask paths, selected and unselected selector entries,
+regex outputs, and alternating body choices without materializing those
+repetitions.
+
+The decoder preserves unknown fields only where they carry validation
+authority. Request-envelope and field-mask unknowns remain present so envelope
+validation rejects them. A create retains the complete candidate's unknowns;
+an update retains unknowns nested in mask-selected values, so those candidate-
+authored meanings produce an in-band invalid result. Candidate top-level
+unknowns on update and unknowns nested solely in unselected fields are discarded
+because they are outside that exact field mask. This split deliberately differs
+from the generic request sanitizer without weakening mutation semantics.
 
 Internal `Writer.Validate` takes a `ValidationScope` split between read and
 write authority. Both scopes must identify the same authenticated tenant and
@@ -646,8 +678,8 @@ be unchanged under every other fresh candidate-ID choice. A later Create
 generates its own ID and revalidates the then-current catalog, app, and index
 facts, so intervening changes may alter the outcome.
 
-Only candidate-authored invalidity may return an in-band `valid=false`; a
-future HTTP adapter would map that sealed result to HTTP 200. Such a result
+Only candidate-authored invalidity may return an in-band `valid=false`; the
+registered HTTP adapter maps that sealed result to HTTP 200. Such a result
 retains at least one field violation or ERROR diagnostic even after
 truncation and omits normalized definition, digest, dependencies, and resource
 estimates. A valid result carries the normalized definition, exact 32-byte
@@ -655,8 +687,12 @@ digest of its deterministic encoding, and a complete candidate-only resource
 report; it has no field violations or ERROR diagnostics and no field-violation
 truncation. Request, authentication, requested-object authorization,
 catalog-integrity, hidden-inventory, and service failures remain out-of-band;
-a future handler maps them to uniform non-2xx outcomes rather than candidate
-diagnostics. `object_type` is unspecified only
+the handler maps only the closed, definitive validation error taxonomy to
+uniform non-2xx outcomes. The sole admitted join is the exact
+`control.ErrCapacityExceeded` plus `knowledgevalidation.ErrResponseTooLarge`
+pair; impossible or every other joined authority collapses to the generic
+unavailable response rather than candidate diagnostics.
+`object_type` is unspecified only
 when an invalid candidate's body cannot be identified; otherwise it is the
 exact applied body type.
 
@@ -727,9 +763,13 @@ ordering and private range provenance, recursive unknown-field absence, and a
 revision through MaxInt64. It retains the exact deterministic encoding only at
 or below 8 MiB, and all protobuf/byte projections detach. This is an internal
 result boundary, not a database read, catalog proof, route, or HTTP service.
-The Writer adapter now supplies the database, transition, and authorization
-proofs and calls the seal only after successful rollback. It remains an
-internal method rather than a registered route or advertised capability.
+The Writer adapter supplies the database, transition, and authorization proofs
+and calls the seal only after successful rollback. The registered handler
+requires that exact ready concrete Writer, detaches request authority, derives
+independently cloned read/write scopes, and holds response-serialization
+capacity through a custom encoder. That encoder revalidates the seal under the
+live request context and writes its exact deterministic bytes without a fresh
+mutable protobuf marshal; the route remains unadvertised.
 
 Preview has no independent intent. It uses the same create/update candidate
 envelope and always performs `ACTIVE_PUBLICATION` evaluation in one fixed
@@ -740,10 +780,13 @@ publication proof; later Writer operations revalidate live authority. It
 accepts no raw events, physical scope, asset path, or SQL.
 
 The validation wire redesign has an intentional pre-route protobuf FILE-
-compatibility waiver. Unserved draft result tags 6 and 7 and resource tag/name
-11 (`estimated_generated_sql_bytes`) were removed and reserved. Old and new
-peers may drop those never-served values, but this is not a schema-nonbreaking
-change and no reserved tag or name may be reused.
+compatibility waiver. At the time of that redesign, neither Validate nor
+Preview had ever been registered or served. Unserved draft result tags 6 and 7
+and resource tag/name 11 (`estimated_generated_sql_bytes`) were removed and
+reserved. Old and new peers may drop those never-served values, but this is not
+a schema-nonbreaking change and no reserved tag or name may be reused.
+Validate's later registration does not retroactively alter that classification;
+Preview remains unregistered.
 
 ## Protobuf forward compatibility and corruption
 
@@ -755,6 +798,10 @@ body byte-for-byte, but an older server cannot enable, publish, or body-edit it.
 Selector and extraction-output cardinality is checked in constant time before
 either recursive unknown-field walker, protobuf sizing, cloning, or canonical
 marshaling so repeated empty submessages cannot amplify the request byte limit.
+Validate additionally applies the authority-sensitive unknown split above: its
+envelope and mask unknowns are out-of-band request failures, selected nested
+candidate unknowns are in-band invalidity, and unselected update unknowns are
+ignored.
 
 `KnowledgeObjectDefinition` field numbers 13 through 31 are permanently
 allocated exclusively to future length-delimited `body` oneof alternatives.
@@ -1292,7 +1339,7 @@ unavailable the route fails closed with the same generic unavailable response.
 Unauthenticated traffic remains in the server access-security log because no
 trusted tenant or actor exists to bind a knowledge audit record.
 
-For the eight management operations, the route deadline encloses authentication,
+For the nine management operations, the route deadline encloses authentication,
 authorization, body handling, catalog work, and response validation.
 Authentication accepts a valid browser user or administrator and installs a
 detached principal and audit actor while removing the bearer credential; only
@@ -1302,6 +1349,13 @@ attempts its journal append before any body byte is read and exposes that
 rejection only when the append succeeds. Tenant, owner, and the complete
 bounded manageable-app set come only from that principal and the trusted app
 catalog.
+
+Validate enters that boundary as `ActionValidate` before decode. Every
+authenticated definitive envelope, authorization, resource, catalog, or
+serialization rejection therefore follows the same single synchronous append
+rule, while a successful sealed HTTP 200 response writes no rejected-attempt
+row. The route is intentionally not duplicated in the generic outer
+administrator map; that omission does not relax its inner administrator check.
 
 A pre-decode rejection on Update or SetState uses the conservative `update`
 action. After complete request validation, a mask selecting `app_id` or

@@ -142,9 +142,10 @@ func normalizeValidationScope(scope ValidationScope) (normalizedValidationScope,
 	return normalizedValidationScope{read: read, write: write}, nil
 }
 
-// ValidateKnowledgeObjectRequest checks only the future route's request
-// envelope. It performs no clone or candidate definition validation; candidate
-// issues deliberately remain for the in-band knowledgevalidation builders.
+// ValidateKnowledgeObjectRequest checks only the registered Validate route's
+// request envelope. It performs no clone or candidate definition validation;
+// candidate issues deliberately remain for the in-band knowledgevalidation
+// builders.
 func ValidateKnowledgeObjectRequest(request *opensplunkv1.ValidateKnowledgeObjectRequest) error {
 	return validateValidationRequestEnvelope(request)
 }

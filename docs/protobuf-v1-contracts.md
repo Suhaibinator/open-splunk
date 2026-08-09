@@ -21,12 +21,12 @@ This directory is the source of truth shared by the Go server, Go collector, and
 - `knowledge.proto` defines the common registry projection, authorized selectors,
   Tier-1 typed definitions, versioned dependencies, provenance, and immutable
   search snapshot. `knowledge_api.proto` reserves the protobuf CRUD,
-  validation, dependency, and bounded preview messages. The eight
-  create/get/list/dependencies/dependents/update/set-state/delete routes are
-  registered as one complete administrator-only management unit. Validation
-  now has an internal rollback-only catalog service, but validation,
-  quarantine, and preview remain unregistered route contracts, and none of
-  this advertises the Tier-1 capability.
+  validation, dependency, and bounded preview messages. The nine
+  create/get/list/dependencies/dependents/validate/update/set-state/delete routes
+  are registered as one complete administrator-only management unit. Validate
+  uses a dedicated bounded decoder and the rollback-only catalog service;
+  quarantine and preview remain unregistered route contracts, and none of this
+  advertises the Tier-1 capability.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
@@ -35,13 +35,14 @@ Persistent database rows and ClickHouse table definitions are deliberately not p
 
 Every route below is `POST`, relative to `/api/v1`, and uses `application/x-protobuf` for successful request and response bodies. Non-2xx errors use the standard SRouter/go-common transport error shape. Authentication can be added by SRouter middleware without changing these messages.
 
-Binary protobuf version skew follows the normal ignore-unknown contract. Every
-syntactically valid request may contain fields that this server version does
-not recognize, including within populated known submessages. Those fields
-count toward the route's raw body limit and are discarded at the HTTP
-transport boundary before known-field validation or persistence. They cannot
-change authentication, authorization, target selection, confirmation,
-optimistic versions, update masks, quotas, stored objects, or responses.
+Binary protobuf version skew normally follows the ignore-unknown contract.
+Unless an authority-sensitive knowledge operation below defines a stricter
+rule, a syntactically valid request may contain fields that this server version
+does not recognize, including within populated known submessages. Those fields
+count toward the route's raw body limit and are discarded at the HTTP transport
+boundary before known-field validation or persistence. They cannot change
+authentication, authorization, target selection, confirmation, optimistic
+versions, update masks, quotas, stored objects, or responses.
 
 Recognized fields keep their complete validation contract. In particular, an
 unsupported numeric value in a known enum is not an unknown field and remains
@@ -67,6 +68,27 @@ ordinary known-field decodability rule. Selector-pattern and extraction-output
 cardinality is preflighted before either reflection walker, `proto.Size`, clone,
 or deterministic marshal so repeated empty messages cannot amplify the raw
 wire ceiling into an unbounded traversal allocation.
+
+Validate is a second, read-only exception with authority-sensitive rather than
+uniform unknown handling. Its dedicated codec enforces the mutation raw-body
+ceiling by reading at most one byte beyond it solely as an overflow witness and
+performs a bounded two-pass wire projection instead of the
+generic `proto.Unmarshal` allocation path. It preserves protobuf duplicate-
+message, last-scalar, and `oneof` merge/reset semantics; validates every known
+string as UTF-8 even when unselected or cleared; caps retained mask paths,
+selected selector entries, and selected extraction outputs at each semantic
+maximum plus one; and rejects malformed wire or unknown-group depth above 32.
+Million-entry mask, selected/unselected repetition, and alternating-body oracles
+pin bounded retention and allocation behavior.
+
+Outer-request and field-mask unknowns are retained so the envelope rejects them.
+Create retains all candidate unknowns, and update retains unknowns inside mask-
+selected nested values, so candidate-authored future meaning is reported as
+in-band invalidity. Candidate top-level unknowns on update and unknowns solely
+inside unselected values are discarded because they are outside the exact mask
+authority. Successful responses bypass a new `proto.Marshal`: the transport
+revalidates and writes the service seal's exact deterministic bytes, whose
+complete response bound is 8 MiB.
 
 ### Knowledge-object contracts
 
@@ -180,12 +202,16 @@ redacted wire variant cannot retain an object ID, name, version, owner, app, or
 definition location.
 
 The route comments in `knowledge_api.proto` reserve the intended endpoint
-names. The browser-route table below contains exactly the eight production
+names. The browser-route table below contains exactly the nine production
 object-management routes currently registered by `NewHandler` when its complete
 management dependency unit, including a constructor-ready concrete Writer, is
 present. Registration is all-or-none and independent of bootstrap feature
-advertisement. The quarantine, validation, and preview messages do not create
-routes. List and graph continuations use bounded `PageRequest`/`PageResponse`
+advertisement. The quarantine and preview messages do not create routes.
+Validate is registered but deliberately absent from the browser administrator-
+bearer allowlist and the backend's generic outer administrator-route map; its
+inner knowledge-attempt boundary authenticates and authorizes the administrator
+before its dedicated decoder runs. List and graph continuations use bounded
+`PageRequest`/`PageResponse`
 contracts. The implemented List cursor binds all normalized filters, ordering,
 caller scope, page bound, and the
 first-page catalog revision plus state commitment. Each implemented graph
@@ -193,8 +219,10 @@ cursor additionally binds its direction, requested-version presence and value,
 resolved root identity, and total-count choice; a catalog revision or state-
 commitment change invalidates continuation.
 
-Two typed candidate-issue seams exist only inside the Go implementation; no
-HTTP mapping or route consumes them. Definition normalization remains fail-fast
+Two typed candidate-issue seams exist inside the Go implementation; the HTTP
+handler never maps arbitrary normalizer/compiler errors directly. The Writer
+consumes only their closed typed projection while constructing its sealed
+result. Definition normalization remains fail-fast
 and exposes only detached `KNOWLEDGE_DEFINITION_INVALID`,
 `KNOWLEDGE_DEFINITION_UNKNOWN_FIELD`, or
 `KNOWLEDGE_DEFINITION_RESOURCE_LIMIT` issues. Separately,
@@ -229,7 +257,7 @@ cannot prove catalog completeness or visibility. Its sole transition-adjacent
 exception, `BuildDependencyUnavailable`, accepts no target identity and emits
 the generic `KNOWLEDGE_DEPENDENCY_UNAVAILABLE` diagnostic.
 
-The internal validation request requires a present definition and exactly one
+The Validate request requires a present definition and exactly one
 nonzero `KnowledgeValidationIntent`. `INACTIVE_STORAGE` proves only bounded
 canonical persistence in an inactive state; `ACTIVE_PUBLICATION` evaluates the
 candidate as a proposed ACTIVE version in one fixed knowledge/app/index catalog
@@ -245,6 +273,16 @@ ID, a present expected version in the inclusive range 1 through MaxInt64
 to `KnowledgeObjectDefinition`; it applies that mask to the exact current
 version. A missing top-level definition is an envelope error, while a present
 definition with no recognized body is candidate-authored invalidity.
+
+The HTTP adapter first consumes only the bounded request projected by the
+Validate-specific codec. It requires the exact ready concrete catalog Writer,
+holds response-serialization capacity across service and encoding work, detaches
+request binding authority, and derives independent cloned read/write scopes from
+the authenticated principal and trusted app catalog. Only the closed definitive
+validation error taxonomy may cross as a specific non-2xx result. Its sole
+admitted join is the exact `control.ErrCapacityExceeded` plus
+`knowledgevalidation.ErrResponseTooLarge` pair; impossible or every other
+joined authority collapses to the generic unavailable response.
 
 The concrete `knowledgecatalog.Writer.Validate` adapter accepts a
 `ValidationScope` whose `ReadScope` and `WriteScope` must have the same
@@ -305,16 +343,16 @@ unchanged under every other fresh candidate-ID choice. A later Create generates
 its own ID and revalidates the then-current catalog, app, and index facts;
 intervening facts may therefore change its outcome.
 
-Only candidate-authored invalidity is returned in-band as `valid=false`; a
-future HTTP adapter would map that sealed result to HTTP 200. It retains at
+Only candidate-authored invalidity is returned in-band as `valid=false`; the
+registered HTTP adapter maps that sealed result to HTTP 200. It retains at
 least one field violation or ERROR diagnostic and
 omits normalized definition, digest, dependencies, and resources. A valid
 result requires the normalized definition, its exact 32-byte deterministic
 protobuf digest, complete resources, no field violations or ERROR diagnostics,
 and a false field-violation truncation flag. Request, authentication,
 authorization-to-the-requested-object, catalog-integrity, hidden-inventory, and
-service failures remain out-of-band; a future handler maps them to uniform
-non-2xx outcomes. Result and response unknown
+service failures remain out-of-band; the handler maps only its closed service-
+error authority to uniform non-2xx outcomes. Result and response unknown
 fields are rejected recursively before issue canonicalization and deterministic
 serialization; the complete response is capped at 8 MiB.
 `object_type` is unspecified only when an invalid candidate's body cannot be
@@ -382,10 +420,11 @@ and private range provenance, recursive unknown-field absence, and a revision
 at most MaxInt64. It retains and returns detached copies of the exact
 deterministic encoding only when the complete response is at most 8 MiB. No
 database read, catalog proof, route registration, or HTTP mapping occurs there.
-The Writer adapter now supplies those catalog, transaction, transition, and
-authorization proofs and calls this seal only after successful rollback. It is
-still internal: no handler, route, browser allowlist entry, or capability
-consumes it.
+The Writer adapter supplies those catalog, transaction, transition, and
+authorization proofs and calls this seal only after successful rollback. The
+registered handler and custom encoder consume the seal without reopening its
+mutable protobuf authority. Validate remains absent from the browser bearer
+allowlist and capability advertisement.
 
 Preview accepts only a retained server-authorized search-job identity plus a
 candidate definition. The future preview route has no independent intent: it
@@ -394,16 +433,18 @@ evaluates definition validity in one fixed knowledge/app/index transaction
 before execution. Its revision is advisory knowledge-ledger correlation
 metadata, not mutation acceptability, a reservation, or reusable publication
 proof; every later Writer revalidates live authority. It never accepts raw
-events, physical table names, index authority, asset paths, or SQL. Validate and
-Preview are both unregistered and unadvertised.
+events, physical table names, index authority, asset paths, or SQL. Preview is
+unregistered and unadvertised; Validate is registered but unadvertised.
 
 This validation redesign intentionally uses a pre-route FILE-compatibility
-waiver. The earlier unserved draft result fields 6 (`diagnostics`) and 7
-(`dependencies`) and resource field/name 11
+waiver. When the redesign landed, neither Validate nor Preview had been
+registered or served. The earlier unserved draft result fields 6 (`diagnostics`)
+and 7 (`dependencies`) and resource field/name 11
 (`estimated_generated_sql_bytes`) were removed; all tags and the resource name
-are reserved against reinterpretation. Because neither validate nor preview
-has ever been registered or served, peers may drop those draft unknown values,
-but the change must not be described as schema non-breaking.
+are reserved against reinterpretation. Peers may drop those draft unknown
+values, but the change must not be described as schema non-breaking. Validate's
+later registration does not retroactively change that historical
+classification; Preview remains unregistered.
 
 The dependency routes expose only direct persisted object-to-object edges and
 never snapshot-global stage, depth, ordinal, or definition-digest authority.
@@ -428,6 +469,10 @@ unavailable response. A pre-decode Update or SetState rejection uses the
 conservative `update` action; only a fully validated mask or state may refine
 it to `scope_change`, `enable`, or `disable`. A known-committed mutation failure
 or an indeterminate outcome never creates a second rejected-attempt row.
+Validate enters this same boundary as `ActionValidate` before decode and is not
+duplicated in the generic outer administrator map. Its authenticated definitive
+rejections follow the same single synchronous append-attempt rule, while an
+HTTP 200 sealed result appends no rejected-attempt row.
 Recognized definitions may be created ACTIVE, updated while ACTIVE, or enabled
 from DRAFT/DISABLED only after the concrete Writer proves the complete
 transactional catalog/app/index authority and compiler-derived dependency
@@ -438,13 +483,13 @@ retained outcome is still recognized and canonical.
 Production composes the management Store, concrete ready Writer, attempt
 journal, app authority, and a concrete Resolver. It retains that Resolver for
 readiness but intentionally does not attach it to `searchjobs.Manager`, and it
-does not advertise the capability. The dependency and dependent routes are
-represented in the central TypeScript route manifest and join Get/List as the
-only knowledge paths in the browser administrator-bearer allowlist; every
-knowledge mutation remains excluded. The hidden read-only Knowledge Manager is
-still omitted from navigation, is not dynamically loaded, and therefore issues
-no production-bootstrap knowledge API request. Its dormant surface is app/
-object-type/lifecycle-state filter-ready with name-ascending, updated-time-
+does not advertise the capability. The dependency, dependent, and Validate
+routes are represented in the central TypeScript route manifest. Only the graph
+routes join Get/List in the browser administrator-bearer allowlist; Validate and
+every knowledge mutation remain excluded. The hidden read-only Knowledge
+Manager is still omitted from navigation, is not dynamically loaded, and
+therefore issues no production-bootstrap knowledge API request. Its dormant
+surface is app/object-type/lifecycle-state filter-ready with name-ascending, updated-time-
 descending, created-time-descending, and object-type-ascending sorts plus exact
 continuation reuse. Its detail view now requests the selected exact version's
 dependencies and dependents independently, pages and labels each direction at
@@ -469,6 +514,7 @@ projection.
 | `/knowledge/objects/list` | `ListKnowledgeObjectsRequest` | `ListKnowledgeObjectsResponse` |
 | `/knowledge/objects/dependencies` | `ListKnowledgeObjectDependenciesRequest` | `ListKnowledgeObjectDependenciesResponse` |
 | `/knowledge/objects/dependents` | `ListKnowledgeObjectDependentsRequest` | `ListKnowledgeObjectDependentsResponse` |
+| `/knowledge/objects/validate` | `ValidateKnowledgeObjectRequest` | `ValidateKnowledgeObjectResponse` |
 | `/knowledge/objects/update` | `UpdateKnowledgeObjectRequest` | `UpdateKnowledgeObjectResponse` |
 | `/knowledge/objects/set-state` | `SetKnowledgeObjectStateRequest` | `SetKnowledgeObjectStateResponse` |
 | `/knowledge/objects/delete` | `DeleteKnowledgeObjectRequest` | `DeleteKnowledgeObjectResponse` |

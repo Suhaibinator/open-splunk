@@ -4,9 +4,10 @@
 
 **Current milestone:** KO-1 search-time runtime acceptance (closed gates)
 
-**Last completed slice:** rollback-only internal catalog validation for inactive
-and active object candidates, with handler, HTTP route, browser, and capability
-integration still closed
+**Last completed slice:** bounded administrator-only Validate transport and HTTP
+route over rollback-only inactive/active catalog evaluation, with browser
+bearer/UI/navigation, Preview, capability, and search-runtime integration still
+closed
 
 **Evidence date:** August 9, 2026
 
@@ -30,10 +31,12 @@ integration still closed
   `1a30afc9cbbac466e698bf19199ebdcc8927ff4d`
 - Internal validation-service terminal revision:
   `7d54c01172f74b097d05d09df4652c28c94a29c0`
+- Validation-route terminal revision:
+  `2aa51384ead0be6482a1e9ea3ce85fbeed1777f9`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 119 intentional post-`c5440b9` KO
-  commits through `7d54c01` are durable locally. This checkpoint is kept as a
-  separate documentation commit. `origin/main` remains `c5440b9`; the local
+- Publication state before this document: 123 intentional post-`c5440b9` KO
+  commits through `2aa5138` are durable locally. This update is prepared as a
+  separate documentation change. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
 - Scope: lifecycle- and commitment-aware protobuf contracts, canonical known
@@ -109,18 +112,21 @@ integration still closed
   revalidates every affected ACTIVE tenant in the index transaction before its
   first write.
 - Runtime feature state: the capability remains hard-disabled and unadvertised.
-  Production registers exactly the eight knowledge-management routes as one
+  Production registers exactly the nine knowledge-management routes as one
   complete administrator-only unit and composes their Store, concrete ready
   Writer, app authority, and attempt journal. The management runtime also
   constructs and retains a concrete Resolver, but intentionally does not attach
   it to production `searchjobs.Manager`. The compiler and snapshot finalizer
   retain independent nonempty gates, so ClickHouse knowledge execution remains
-  unavailable. The dependency/dependent routes are registered but
-  capability-unadvertised and represented in the central route manifest. They
-  join Get/List as the only knowledge paths in the browser administrator-bearer
-  allowlist; every mutation remains excluded. The dormant read-only Knowledge
-  Manager detail consumes both graph routes for the selected exact object
-  version, independently pages and labels each direction's catalog revision,
+  unavailable. The dependency/dependent and Validate routes are registered but
+  capability-unadvertised and represented in the central route manifest. The
+  graph routes join Get/List as the only knowledge paths in the browser
+  administrator-bearer allowlist; Validate and every mutation remain excluded.
+  Validate is absent from the backend's generic outer `administratorRoutes` map
+  because the inner knowledge-attempt boundary owns its administrator
+  authentication and `ActionValidate` journaling before decode. The dormant
+  read-only Knowledge Manager detail consumes both graph routes for the selected
+  exact object version, independently pages and labels each direction's catalog revision,
   and displays only visible opposite ID/version/`FIELD_INPUT` rows. Capability-
   gated navigation and dynamic loading remain absent, so production bootstrap
   still makes no knowledge request.
@@ -129,14 +135,16 @@ integration still closed
   limits. It preserves legacy error text and `errors.Is` roots, exposes at most
   one definition-relative issue, and deliberately excludes infrastructure,
   invariant, canonical-storage, and other non-candidate failures. No HTTP
-  boundary maps the seam.
+  boundary maps the raw seam directly; Writer result construction consumes only
+  its closed typed projection.
 - Semantic `Compile` now has a separate detached, fail-fast issue seam for an
   exact candidate input index's intrinsic regex, JSON-path, calculated `SPL_*`,
   and Boolean-result failures. An adapter must prove the submitted candidate
   and use singleton/index-zero attribution; `Prepare`, winner-cohort,
   authority, aggregate, collision/selector, and dependency failures remain
   opaque to this typed compiler-issue seam. Legacy error/sentinel behavior is
-  preserved and there is no HTTP mapping.
+  preserved; the registered handler never maps the raw seam directly, and the
+  result layer consumes only its closed typed projection.
 - The Validate/Preview wire contract pins explicit inactive-storage
   versus active-publication intent, presence-sensitive create/update envelopes,
   update versions through MaxInt64, candidate-only in-band invalidity, exact
@@ -154,8 +162,9 @@ integration still closed
   hypothetical. The fixed transaction also reads app/index authority, while
   `tenant_catalog_revision` names only its knowledge-ledger component (zero
   proves an empty ledger) and is no reservation, mutation proof, or reusable
-  authority. Preview always uses `ACTIVE_PUBLICATION`. Neither route is
-  registered or advertised. Draft result tags 6/7 and resource tag/name 11 are
+  authority. Preview always uses `ACTIVE_PUBLICATION`. Validate is registered
+  but unadvertised; Preview remains unregistered and unadvertised. Draft result
+  tags 6/7 and resource tag/name 11 are
   reserved under an intentional pre-route FILE compatibility waiver; the
   change is not claimed schema-nonbreaking.
 - `internal/knowledgevalidation` now implements that result shape as a pure,
@@ -171,11 +180,12 @@ integration still closed
   shape but cannot prove completeness or visibility. Result projection and the
   8 MiB deterministic response seal revalidate kind, digest, exact intrinsic
   and dependency resources, issue/range provenance, recursive unknown-field
-  absence, and MaxInt64 revision bounds. This adds no Validate/Preview route and
-  does not change the capability, browser, resolver, or nonempty execution
-  gates.
-- The concrete catalog Writer now exposes an internal, unregistered
-  `Validate` service. `ValidationScope` deliberately splits `ReadScope`, which
+  absence, and MaxInt64 revision bounds. That pure result layer itself owns no
+  route and does not change the capability, browser, resolver, or nonempty
+  execution gates.
+- The concrete catalog Writer exposes the internal `Validate` service now
+  consumed by the registered HTTP adapter. `ValidationScope` deliberately
+  splits `ReadScope`, which
   controls dependency disclosure, from `WriteScope`, which controls candidate
   object/app admission; both must carry the same authenticated tenant and
   owner, while their app sets remain independent. A shared per-control-database
@@ -213,8 +223,31 @@ integration still closed
   invalidates the evaluation, and only after successful rollback does the
   existing deterministic 8 MiB response seal run. Validation executes no DML,
   audit append, idempotency path, publication hook, clock, mutation ID
-  generator, or commit. No handler or route consumes this service, no browser
-  path or bootstrap capability changed, and Preview remains contract-only.
+  generator, or commit. The dedicated handler and codec now consume this service
+  through the ninth all-or-none route, but no browser path or bootstrap
+  capability changed and Preview remains contract-only.
+- Validate's custom raw decoder enforces the mutation-request wire ceiling by
+  reading at most one byte beyond it solely as an overflow witness and performs
+  a bounded two-pass projection instead of generic protobuf
+  materialization. It retains only the canonical mask inventory plus one and
+  selected selector/output ceilings plus one, preserves protobuf merge and
+  `oneof` behavior, validates recognized UTF-8 even outside the selected view,
+  and bounds unknown-group depth at 32. Outer and mask unknowns remain envelope
+  errors; create and mask-selected nested candidate unknowns remain in-band
+  invalidity; update top-level and unselected candidate unknowns are discarded.
+  Million-entry mask, selected/unselected repetition, extraction-output, and
+  alternating-body tests prove bounded projection and allocation behavior.
+- The HTTP adapter requires the exact ready concrete Writer, acquires response-
+  serialization capacity before retained request authority, detaches binding
+  fields, independently clones read/write scope, and admits only the closed
+  definitive service-error taxonomy, including only the exact
+  `control.ErrCapacityExceeded` plus `knowledgevalidation.ErrResponseTooLarge`
+  join and no other joined authority. The response codec revalidates the seal
+  under the live request context and writes its exact deterministic bytes at or
+  below 8 MiB without a fresh mutable protobuf marshal. The route enters the
+  authenticated attempt boundary as `ActionValidate`; every definitive
+  rejection follows the single synchronous append rule, while HTTP 200 in-band
+  results append no rejected-attempt row.
 
 ## KO-0 durable commits
 
@@ -333,6 +366,10 @@ Later local commits anchoring the reconciled current state include:
 | `af95866` | `docs(knowledge): checkpoint validation results` | Reconciled pure result construction, sealing, privacy, wire bounds, and still-closed service/route/runtime gates |
 | `f0748f5` | `feat(knowledge): validate active publication candidates` | Complete ACTIVE candidate validation mode with candidate-absent baseline prepass, opaque conflict decisions, deterministic conflict precedence, target-absence privacy, shared index-admission closure, and fresh-ID alpha-invariance |
 | `7d54c01` | `feat(knowledge): validate object candidates` | Internal rollback-only `Writer.Validate`, split read/write authority, one-slot database gate, bounded selected-view/witness admission, inactive revision proof, complete ACTIVE transition and target authorization, deterministic unreserved create identity, strict rollback, and sealed side-effect-free responses without a route |
+| `df7044b` | `docs(knowledge): checkpoint validation service` | Reconciled the rollback-only Writer service, selected-view amplification bounds, revision and privacy proofs, verification evidence, and then-still-closed transport/route/runtime gates |
+| `1e06e86` | `feat(knowledge): bound validation transport` | Dedicated raw-wire request decoder with bounded projection, semantic unknown split, million-entry allocation oracles, and exact sealed deterministic responses capped at 8 MiB |
+| `ceb3b85` | `feat(knowledge): adapt validation service` | Exact-ready-Writer HTTP adapter, detached request binding and cloned scope authority, serialization-permit transfer, closed error/disposition sanitization, and `ActionValidate`-safe rejection context |
+| `2aa5138` | `feat(knowledge): expose validation route` | Ninth all-or-none administrator management route, inner attempt-boundary authentication and journaling, central route-manifest/contract registration, real rollback-only HTTP oracles, and preserved browser/capability/runtime closure |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -442,13 +479,15 @@ used.
   target kind requires a new bounded current-inverse authority/index contract
 - Atomic successful-mutation audit metadata and a separate fail-closed rejected
   privileged-attempt journal that retains no unauthorized object metadata
-- Authentication-before-decode for all eight management operations, followed by
+- Authentication-before-decode for all nine management operations, followed by
   tenant/owner-bound administrator authorization and trusted complete app-scope
   derivation; every authenticated definitive rejection attempts exactly one
   synchronous journal append, exposes the underlying rejection only after that
   append succeeds, and otherwise returns the fixed unavailable response, while
   known-committed and indeterminate outcomes suppress a false rejected-attempt
-  row
+  row. Validate enters this boundary as `ActionValidate`, remains outside the
+  generic outer administrator map, and writes no rejected-attempt row for a
+  successful sealed HTTP 200 result
 - Request-authority snapshots and configurable-dependency response validation:
   canonical definitions, lifecycle markers, filters, ordering, pagination,
   revision/token shape and continuation metadata, aggregate byte/node ceilings,
@@ -473,14 +512,15 @@ used.
   `KNOWLEDGE_DEFINITION_UNKNOWN_FIELD`, and
   `KNOWLEDGE_DEFINITION_RESOURCE_LIMIT`, preserve legacy text and `errors.Is`
   roots, and exclude infrastructure/invariant/canonical-storage failures. This
-  is an internal seam, not a registered validation handler
+  remains an internal seam consumed only through Writer result construction;
+  the registered handler never maps its raw errors directly
 - Candidate semantic issues are detached and bound to one exact `Compile`
   input index for intrinsic regex, JSON-path, calculated `SPL_*`, and direct-
   Boolean-result failures. Validation must prove the submitted candidate and
   use singleton/index-zero attribution; `Prepare` plus authority, aggregate,
   winner-cohort/collision/selector, and dependency failures remain opaque to
   this typed compiler-issue seam. It also preserves legacy error/sentinel
-  behavior and has no HTTP mapping
+  behavior; the registered handler never maps its raw errors directly
 - Internal catalog validation requires exactly one inactive-storage or active-
   publication intent and a presence-sensitive create/update envelope. Update
   versions are
@@ -500,9 +540,10 @@ used.
   hypothetical. One fixed transaction observes knowledge/app/index facts, but
   the response revision identifies only its advisory knowledge-ledger
   component and is no reservation or reusable proof. Preview always uses
-  active-publication semantics. Both routes remain unregistered/unadvertised,
-  and reserved draft fields carry an intentional pre-route FILE compatibility
-  waiver rather than a schema-nonbreaking claim
+  active-publication semantics. Validate is registered but unadvertised;
+  Preview remains unregistered and unadvertised. Reserved draft fields carry an
+  intentional, historically pre-route FILE compatibility waiver rather than a
+  schema-nonbreaking claim
 - Pure result construction owns no catalog/database/transition/authorization or
   HTTP policy. Inactive normalization and active singleton preparation return
   opaque detached states; only exact typed definition/compiler issues map to
@@ -533,8 +574,10 @@ used.
   deterministic, transaction-local, ledger-reconciled, and unreserved.
   Revision-zero responses prove physical catalog emptiness and all revisions
   are bookended. Rollback precedes sealing and any rollback error fails the
-  request. No DML, mutation ID, clock, hook, audit, idempotency, commit, route,
-  browser transport, or feature advertisement is part of this boundary
+  request. No DML, mutation ID, clock, hook, audit, idempotency, commit, HTTP
+  transport, browser transport, or feature advertisement is part of the Writer
+  boundary; the registered adapter surrounds it without changing those service
+  guarantees
 
 The compatibility inventory contains 55 hash-pinned cases. It is explicitly a
 strict contract inventory, not yet runtime semantic evidence. Before the field
@@ -952,7 +995,7 @@ KO-1C closed-gate evidence:
 | Local durability | pass | forty-nine intentional KO-1C commits from `5088427` through `70b9ef6` inclusive are separate and locally durable on `codex/knowledge-objects-runtime`; this checkpoint update is a separate documentation commit |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |
 
-Current candidate-diagnostic and internal-validation contract evidence:
+Current candidate-diagnostic and validation-route contract evidence:
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
@@ -962,10 +1005,13 @@ Current candidate-diagnostic and internal-validation contract evidence:
 | Pure validation result construction | pass | focused `internal/knowledgevalidation` tests pin typed-only closed issue mapping, opaque inactive/active states, submitted-scalar range rebasing and private provenance, transition-supplied dependency canonicalization, exact inactive/active resources, recursive unknown-field rejection, detachment, exact deterministic wire-size comparison at an injected test bound, and the production 8 MiB cap |
 | ACTIVE candidate transition | pass | focused normal and race coverage plus the three-second alpha-invariance fuzz gate pin complete candidate-absent baseline validation before conflict attribution, deterministic stronger-conflict precedence, opaque non-target conflicts, generic target absence, detached candidate dependencies, index-admission closure reuse, and response invariance across fresh evaluation-ID renames |
 | Rollback-only Writer validation | pass | focused `ValidateKnowledgeObjectRequest`/`WriterValidate`/`ValidationBoundary`/`FinishValidation` normal and race tests, the full `internal/knowledgecatalog` package, `internal/knowledgevalidation`, and `go vet` pass. Tests pin independent read/write app authority, shared fail-fast admission, selected-view/witness amplification bounds, root/version/lifecycle/opaque precedence, inactive versus active inventory behavior, deterministic fresh identities, authorization-safe target projection, revision-zero physical emptiness, strict rollback-before-seal, cancellation, response taxonomy, detachment, and absence of mutation collaborators or DML |
-| Validation result bounds and privacy | service pass, route pending | descriptor/comment and Go/TypeScript wire tests plus catalog-service tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
-| Runtime activation | unchanged | the internal Writer service exists, but Validate and Preview handlers/routes do not exist in production registration or the browser allowlist, bootstrap advertises no knowledge capability, Preview is contractually always `ACTIVE_PUBLICATION`, and nonempty search execution gates remain closed |
-| Docker-backed acceptance | not run | these commits add internal candidate issue/result/transition seams and a rollback-only catalog service without ClickHouse execution; no Docker command was invoked and no ClickHouse runtime claim is made |
-| Local durability | pass | validation implementation commits `0636d9d`, `0c31de0`, `392577a`, `97651f9`, `5057a67`, `350e6d7`, `f0748f5`, and `7d54c01` are separately durable, with `593ab31` and `af95866` preserving intervening documentation checkpoints on `codex/knowledge-objects-runtime`; the post-`c5440b9` count through `7d54c01` is 119 |
+| Bounded validation transport | pass | focused normal/race tests and bounded differential fuzzing pin protobuf merge/oneof equivalence, exact raw N/N+1 body limits, body close and input detachment, UTF-8 and 32-level group policy, authority-sensitive unknown retention, exact sealed bytes, context/permit failure handling, and bounded retention/allocation for one million mask paths, selected/unselected selector patterns, regex outputs, and body alternations |
+| Validation HTTP adapter | pass | focused normal/race tests pin exact-ready-Writer enforcement, serialization admission before retained authority, detached request binding, cloned read/write scope, valid HTTP 200 seals, closed error/disposition classification, create/update authorization context, cancellation, response-too-large handling, permit transfer/release, and request mutation isolation |
+| Registered validation route | pass, exposure closed | real HTTP tests pin ninth-route all-or-none configuration, authentication and administrator rejection before body read, `ActionValidate` journaling/fail-closed journal failures, shared Writer-gate 429 behavior, million-entry selected versus unselected outcomes, outer/mask/selected-nested/unselected unknown semantics, exact sealed responses, and no side effects. The exact protobuf route fixture now contains 60 routes; TypeScript declares Validate with an 8 MiB response cap while explicitly keeping it outside browser bearer attachment, and the backend generic outer administrator map remains unchanged |
+| Validation result bounds and privacy | service and route pass | descriptor/comment, Go/TypeScript wire, catalog-service, codec, handler, and HTTP tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
+| Runtime activation | Validate route only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview remains without a handler or route; Validate remains outside the browser bearer allowlist and generic outer administrator map; bootstrap advertises no knowledge capability; the hidden UI/navigation issues no request; the Resolver remains unattached; and nonempty search execution gates remain closed |
+| Docker-backed acceptance | not run | these commits add the bounded Validate transport/HTTP boundary over rollback-only catalog evaluation without ClickHouse execution; no Docker command was invoked and no ClickHouse runtime claim is made |
+| Local durability | pass | validation commits through `7d54c01`, checkpoint `df7044b`, bounded transport `1e06e86`, service adapter `ceb3b85`, and route activation `2aa5138` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..2aa5138` is exactly 123 and the terminal revision is `2aa51384ead0be6482a1e9ea3ce85fbeed1777f9` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:
@@ -1055,7 +1101,7 @@ KO-0 foundations and the hidden KO-0H lifecycle/browser readiness vertical are
 complete. KO-1A/KO-1B freeze the selector and backend-neutral program, and the
 current closed-gate KO-1C slice lowers, accounts, seals, retains, reconstructs,
 and inspects that program without making it executable. Recognized ACTIVE
-publication and the eight management routes are now implemented independently of
+publication and the nine management routes are now implemented independently of
 search-time capability exposure. The next dependency-ordered slices are:
 
 1. complete the digest-pinned ClickHouse acceptance matrix as bounded named
@@ -1071,7 +1117,7 @@ search-time capability exposure. The next dependency-ordered slices are:
    compiler/program equality; and
 3. only after the complete hidden Tier-1 browser/ClickHouse vertical passes,
    advertise the capability and enable Knowledge Manager navigation and
-   mutation workflows. The eight administrator routes remain registered; the
-   four read routes are browser bearer-allowlisted, all mutation routes remain
-   excluded, and the dormant read-only UI remains hidden until that exposure
-   decision.
+   mutation workflows. The nine administrator routes remain registered; the
+   four catalog/graph read routes are browser bearer-allowlisted, while Validate
+   and all mutation routes remain excluded, and the dormant read-only UI remains
+   hidden until that exposure decision.

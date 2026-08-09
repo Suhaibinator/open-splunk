@@ -773,7 +773,7 @@ test("generated knowledge validation keeps append-only intent and candidate proj
 
   // This partial fixture intentionally isolates the replacement repeated-field
   // tags. Semantic result invariants are pinned by the Go descriptor/source
-  // contract test and will be enforced by the future route boundary.
+  // contract test and are enforced by the registered Validate route boundary.
   const result = KnowledgeValidationResult.fromPartial({
     dependencies: [{
       target: { knowledgeObjectId: "ko-target", version: 7n },
