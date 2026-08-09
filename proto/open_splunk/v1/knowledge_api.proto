@@ -305,10 +305,11 @@ message KnowledgeResourceEstimate {
   uint64 estimated_regex_work_units = 8;
   uint32 scalar_expressions = 9;
   uint32 scalar_expression_nodes = 10;
-  // Intentional pre-route FILE compatibility waiver: an unimplemented draft
-  // exposed an undefined backend-specific SQL-size estimate, but neither the
-  // validate nor preview route has ever been registered or served. Old and new
-  // peers may drop this unserved field. Reserving its number and name prevents
+  // Intentional historical FILE compatibility waiver: an unimplemented
+  // pre-route draft exposed an undefined backend-specific SQL-size estimate,
+  // but the field was retired before Validate was registered and was never
+  // served by either the validate or preview route. Old and new peers may drop
+  // this never-served field. Reserving its number and name prevents
   // reinterpretation; this change must not be described as schema non-breaking.
   reserved 11;
   reserved "estimated_generated_sql_bytes";
@@ -362,12 +363,13 @@ message KnowledgeValidationResult {
   // KnowledgeValidationDiagnostic. field_violations_truncated records omission
   // by either the field_violations count or aggregate-text bound.
   repeated FieldViolation field_violations = 5;
-  // Intentional pre-route FILE compatibility waiver: unimplemented drafts
-  // carried an unlocated Diagnostic and snapshot-global
-  // KnowledgeObjectDependency, but neither the validate nor preview route has
-  // ever been registered or served. Old and new peers may drop these unserved
-  // fields. Reserving their tags prevents reinterpretation; this change must
-  // not be described as schema non-breaking.
+  // Intentional historical FILE compatibility waiver: unimplemented pre-route
+  // drafts carried an unlocated Diagnostic and snapshot-global
+  // KnowledgeObjectDependency, but those fields were retired before Validate
+  // was registered and were never served by either the validate or preview
+  // route. Old and new peers may drop these never-served fields. Reserving their
+  // tags prevents reinterpretation; this change must not be described as schema
+  // non-breaking.
   reserved 6, 7;
   KnowledgeResourceEstimate resources = 8;
   // ACTIVE_PUBLICATION returns at most 1024 unique values, sorted by ascending

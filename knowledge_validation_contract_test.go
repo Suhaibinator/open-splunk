@@ -193,9 +193,10 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		"Exact number of normalized selector patterns in the applied candidate",
 	)
 	validationContractRequireProtoComments(t, "reserved 11;",
-		"Intentional pre-route FILE compatibility waiver",
-		"validate nor preview route has ever been registered or served",
-		"may drop this unserved field",
+		"Intentional historical FILE compatibility waiver",
+		"field was retired before Validate was registered",
+		"never served by either the validate or preview route",
+		"may drop this never-served field",
 		"must not be described as schema non-breaking",
 	)
 
@@ -260,9 +261,10 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		"static-template, candidate-source-only nondisclosure rule",
 	)
 	validationContractRequireProtoComments(t, "reserved 6, 7;",
-		"Intentional pre-route FILE compatibility waiver",
-		"validate nor preview route has ever been registered or served",
-		"may drop these unserved fields",
+		"Intentional historical FILE compatibility waiver",
+		"fields were retired before Validate",
+		"never served by either the validate or preview route",
+		"may drop these never-served fields",
 		"must not be described as schema non-breaking",
 	)
 	validationContractRequireProtoComments(t, "repeated KnowledgeValidationDependency dependencies = 9;",
