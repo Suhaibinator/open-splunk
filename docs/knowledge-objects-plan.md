@@ -1342,6 +1342,18 @@ its own transactional proof. Database inventory admission, catalog revision
 binding, index-creation validation, and Writer persistence wiring remain
 closed.
 
+The first transaction layer is now implemented without changing those gates.
+It accepts only the Writer's existing fixed `*sql.Tx`, proves exact knowledge
+revision/token and ACTIVE rows, tenant app revision and bounded app inventory,
+and global index revision/physical rows before hydrating definitions, selectors,
+or dependencies. Its object, app, and index drivers are explicitly bounded and
+query-plan tested. A separate target preflight bounds private compiler authority
+before detachment, then verifies every rich target against the exact current
+ACTIVE registry/version and returns a detached ID/version projection. The next
+step is an opaque wrapper that seals these catalog facts with the transition,
+matches the exact persistence plan, and makes `publishMutation` consume only
+the validated projection; no zero-authority ACTIVE fallback is permitted.
+
 Migration 0033 prepares that atomic publication boundary without opening it.
 An enable may append a newly derived dependency set instead of copying its
 draft or disabled predecessor, while disable and delete still require exact

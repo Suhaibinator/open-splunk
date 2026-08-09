@@ -775,6 +775,17 @@ future bodies are not admitted by this semantic validator; their emergency
 state-only removal path remains separately closed pending a projection-only
 transaction proof.
 
+The transactional prerequisite now reads the exact current-ACTIVE object,
+tenant app, and physical-index inventories only from the Writer's existing
+`BEGIN IMMEDIATE` transaction. It reconciles the knowledge revision/token and
+ACTIVE ledger, app revision, and index revision/physical count before bounded
+definition, selector, or dependency hydration. A separate preflight validates
+each rich derived target against its exact current ACTIVE registry/version and
+returns a detached database projection. These helpers are not publication
+authority by themselves: their catalog facts are not yet sealed into the
+transition or matched by `publishMutation`, so every ACTIVE publication gate
+remains closed.
+
 Enabling a retained draft or disabled definition rederives its complete edge
 set against that transaction's post-publication winners; it never copies the
 predecessor's edges as semantic authority. Disable and delete remain
