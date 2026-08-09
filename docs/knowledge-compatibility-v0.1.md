@@ -739,10 +739,9 @@ and exactly equal the newly derived target set; program-global canonical
 ordinals and depths are never mistaken for database row ordinals. This pure
 cohort check does not establish visibility completeness from a count, one
 principal's `Resolution`, or a winners-plus-shadows mixture. ACTIVE catalog
-publication remains disabled until a transactional layer enumerates and bounds
-all affected private/app/global and index-intersection cohorts, proves latent
-unshadowing coverage, requires one exact candidate authority across them, and
-persists those derived edges atomically.
+publication remains disabled until a transactional layer proves the complete
+tenant object, app, and durable-index inventories and persists the resulting
+derived edges atomically.
 
 Each validated cohort authority is transition-specific even when the candidate
 is absent from its winners. It binds the exact candidate owner, identity,
@@ -755,6 +754,26 @@ at most 1,024 physical applicability atoms and 1,024 retained signatures and
 stops after 65,536 charged atom/join probes, independently of those structural
 ceilings. Singleton-index checks are not publication authority because a
 combined scope can produce a winner or dependency absent from each singleton.
+
+One ACTIVE transition is validated from an exact tenant-wide current-ACTIVE
+inventory, the exact active-app inventory, and every live ACTIVE or ARCHIVED
+index name that may become searchable. The validator derives the post inventory
+from explicit before/after endpoints; it does not trust caller-built winner
+cohorts. It evaluates tagged generic future-app, generic-principal, and exact
+private-principal classes across pre/post visibility, applies unique-highest
+precedence to every reachable multi-index signature, and independently compiles
+each distinct changed post cohort. An ACTIVE candidate must win at least one
+durable-index witness, and its version/digest/owner/stage/role-pinned dependency
+authority must be identical in every cohort where it wins. Disable/delete may
+have no surviving witness, but every newly unshadowed winner must retain its
+exact sealed outgoing rows. Post-tenant resources, per-class hydration,
+wildcard matching, membership, cohort revisits, graph work, and repeated
+selector and semantic compiler charges are bounded separately. The issued body-free
+persistence authority matches tenant, exact before/after scalar endpoints,
+retained ordered rows, and the derived-or-retained database projection. Opaque
+future bodies are not admitted by this semantic validator; their emergency
+state-only removal path remains separately closed pending a projection-only
+transaction proof.
 
 Enabling a retained draft or disabled definition rederives its complete edge
 set against that transaction's post-publication winners; it never copies the

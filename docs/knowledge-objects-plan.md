@@ -1295,12 +1295,10 @@ every other winner. Its result retains target owner, version, digest, role, and
 stage separately from the smaller database projection; input rows are detached before
 compilation, and canonical definition bytes, selector work, static charges,
 objects, and edges are bounded before retention can amplify malformed input.
-The helper deliberately cannot prove cohort enumeration from a caller-supplied
+The helper deliberately cannot prove catalog completeness from a caller-supplied
 count or one search `Resolution`. Writer ACTIVE gates remain closed until a
-transactional catalog layer enumerates every affected private/app/global and
-index-intersection cohort, proves shadow/unshadow coverage, applies aggregate
-cross-cohort work bounds, requires identical candidate authority in every cohort
-where it wins, and stores only those derived edges atomically.
+transactional catalog reader proves the complete tenant object, app, and durable
+index inventories and stores only the resulting derived edges atomically.
 
 The cohort validator now also covers transitions in which the exact candidate
 does not win. Every result binds the transition candidate ID, version,
@@ -1321,6 +1319,29 @@ force the full quadratic product while an immediate publication transaction is
 held. The future transactional layer still must prove that its atom inventory
 covers every durable index transition which can become searchable.
 
+A pure ACTIVE-transition authority now derives every affected cohort from one
+exact tenant inventory rather than accepting caller-built before/after winner
+lists. It binds explicit absent/DRAFT/DISABLED/ACTIVE/DELETED endpoints,
+constructs the post-state by exact object identity, validates every recognized
+definition before pruning, and enumerates tagged generic-app,
+generic-principal, and exact private-principal visibility classes across the
+union of the pre/post state. Each class is paired with the multi-index OR
+signatures above; unique-highest precedence is order-independent, every
+distinct changed post cohort is independently compiled, an ACTIVE candidate
+must have a durable winning witness, and its rich dependency authority must be
+identical across all winning cohorts. Disable/delete need no surviving witness
+but revalidate every unshadowed winner. Post-tenant and per-class hydration,
+matcher, cohort, revisit, dependency, and repeated semantic-compiler work are
+independently bounded before persistence, including both selector-normalization
+passes for every changed-cohort compilation. The resulting opaque authority
+matches a future write plan on tenant, full body-free before/after scalar
+endpoints, retained ordered dependency rows, and the exact derived-or-retained
+database projection. It intentionally rejects opaque future bodies; the
+existing projection-only emergency removal path remains separate until it has
+its own transactional proof. Database inventory admission, catalog revision
+binding, index-creation validation, and Writer persistence wiring remain
+closed.
+
 Migration 0033 prepares that atomic publication boundary without opening it.
 An enable may append a newly derived dependency set instead of copying its
 draft or disabled predecessor, while disable and delete still require exact
@@ -1332,7 +1353,7 @@ them with newly derived edges inside one immediate transaction. The migration
 rejects a catalog that already violates this invariant before replacing any
 trigger. Create,
 active-update, and enable publication gates remain closed until the complete
-transactional cohort authority described above is implemented.
+transactional inventory and persistence authority described above is wired.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and
