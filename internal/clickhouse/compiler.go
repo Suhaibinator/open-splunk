@@ -418,8 +418,12 @@ type CompiledQuery struct {
 	SQL          string
 	Args         []any
 	OutputFields []string
-	Timechart    *TimechartOutput
-	Chart        *ChartOutput
+	// ContainerOutputs maps selected public Dynamic ordinals to deterministic
+	// trailing metadata columns. The executor consumes those columns without
+	// exposing them in the public schema.
+	ContainerOutputs []ResultContainerOutput
+	Timechart        *TimechartOutput
+	Chart            *ChartOutput
 	// SparseFields marks ordinary raw-event output whose public fields object
 	// must be reconstructed from the appended private presence column.
 	SparseFields bool
@@ -1431,6 +1435,13 @@ func finalizeOrdinaryQuery(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	containerOutputs, containerProjection, err := compileResultContainerOutputs(
+		state,
+		outputFields,
+	)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	sparseFields := exposesRawFieldsPayload(state)
 	if sparseFields {
 		if !slices.Contains(outputFields, "fields") {
@@ -1441,6 +1452,7 @@ func finalizeOrdinaryQuery(
 			quoteIdentifier(internalFieldNamesColumn)+" AS "+quoteIdentifier(SparseEventFieldNamesColumn),
 		)
 	}
+	projection = append(projection, containerProjection...)
 	if len(state.chronologicalBarriers) > 0 {
 		return finalizeChronologicallyValidatedQuery(
 			relation,
@@ -1449,6 +1461,7 @@ func finalizeOrdinaryQuery(
 			projection,
 			outputFields,
 			sparseFields,
+			containerOutputs,
 			aliasSequence,
 		)
 	}
@@ -1465,8 +1478,11 @@ func finalizeOrdinaryQuery(
 	relation = relation.selectFrom(fragment, relation.ownerRange)
 	return withCompiledRelationalDepth(
 		CompiledQuery{
-			SQL: relation.sql, Args: args, OutputFields: outputFields,
-			SparseFields: sparseFields,
+			SQL:              relation.sql,
+			Args:             args,
+			OutputFields:     outputFields,
+			ContainerOutputs: containerOutputs,
+			SparseFields:     sparseFields,
 		},
 		relation.depth,
 		relation.ownerRange,
@@ -1480,6 +1496,7 @@ func finalizeChronologicallyValidatedQuery(
 	projection []string,
 	outputFields []string,
 	sparseFields bool,
+	containerOutputs []ResultContainerOutput,
 	aliasSequence int,
 ) (CompiledQuery, error) {
 	order := ""
@@ -1496,6 +1513,14 @@ func finalizeChronologicallyValidatedQuery(
 	if sparseFields {
 		resultColumns = append(resultColumns, SparseEventFieldNamesColumn)
 	}
+	for _, output := range containerOutputs {
+		resultColumns = append(
+			resultColumns,
+			output.NamesColumn(),
+			output.TypesColumn(),
+			output.MetadataVersionColumn(),
+		)
+	}
 	return wrapChronologicalValidation(
 		relation.sql,
 		relation.depth,
@@ -1506,9 +1531,10 @@ func finalizeChronologicallyValidatedQuery(
 		order,
 		eventStatsOrdinarySourceFanout,
 		CompiledQuery{
-			Args:         args,
-			OutputFields: outputFields,
-			SparseFields: sparseFields,
+			Args:             args,
+			OutputFields:     outputFields,
+			ContainerOutputs: containerOutputs,
+			SparseFields:     sparseFields,
 		},
 		aliasSequence,
 	)

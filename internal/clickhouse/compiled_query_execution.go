@@ -18,10 +18,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v2 deliberately separates immutable knowledge-program authority from the
-// authored SPL suffix. Execution digests minted before that distinction must
+// v3 additionally binds the hidden ordinary-result container transport.
+// Execution digests minted before that transport became authoritative must
 // never compare equal to the stronger contract.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v2"
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v3"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -354,10 +354,18 @@ func (compiled CompiledQuery) EqualForExecution(other CompiledQuery) bool {
 }
 
 func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, bool) {
+	if !validResultContainerOutputs(compiled) {
+		return compiledExecutionSeal{}, false
+	}
 	digest := sha256.New()
 	writeTokenPart(digest, compiledExecutionSealDomain)
 	writeTokenPart(digest, compiled.SQL)
 	writeStringSlice(digest, compiled.OutputFields)
+	writeBool(digest, compiled.ContainerOutputs == nil)
+	writeUint64(digest, uint64(len(compiled.ContainerOutputs)))
+	for _, output := range compiled.ContainerOutputs {
+		writeUint64(digest, uint64(output.OutputIndex))
+	}
 	writeBool(digest, compiled.SparseFields)
 	writeInt64(digest, int64(compiled.relationalDepth))
 	writeRange(digest, compiled.relationalDepthRange)
@@ -552,6 +560,7 @@ func (compiled CompiledQuery) CloneForExecution() (CompiledQuery, bool) {
 	cloned := compiled
 	cloned.SQL = strings.Clone(compiled.SQL)
 	cloned.OutputFields = cloneStrings(compiled.OutputFields)
+	cloned.ContainerOutputs = slices.Clone(compiled.ContainerOutputs)
 	if compiled.Args == nil {
 		cloned.Args = nil
 	} else {
@@ -663,6 +672,13 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 		return 0, false
 	}
 	total, ok = retainedStringSlice(total, compiled.OutputFields)
+	if !ok {
+		return 0, false
+	}
+	total, ok = retainedAdd(
+		total,
+		uint64(cap(compiled.ContainerOutputs))*uint64(unsafe.Sizeof(ResultContainerOutput{})),
+	)
 	if !ok {
 		return 0, false
 	}
