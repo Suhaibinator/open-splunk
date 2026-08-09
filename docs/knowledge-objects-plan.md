@@ -1186,7 +1186,7 @@ with an executable Open Splunk fixture.
 pinned without affecting search results.
 
 **Implementation checkpoint (August 9, 2026):** contracts, migrations 0024
-through 0033, canonical definition handling, the bounded authorization-first
+through 0034, canonical definition handling, the bounded authorization-first
 reader, the atomic catalog Writer, the six administrator-only management
 handlers/codecs with their synchronous rejected-attempt boundary, the
 one-read-transaction active resolver, and opaque immutable snapshot preparation
