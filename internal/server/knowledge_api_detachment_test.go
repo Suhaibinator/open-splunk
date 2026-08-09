@@ -116,7 +116,12 @@ func TestUnavailableActiveReplayCapabilityIsSealedToCatalogWriter(t *testing.T) 
 	if replaysUnavailableActiveMutations(&knowledgeHTTPWriter{}) {
 		t.Fatal("external Writer fake acquired the sealed ACTIVE replay capability")
 	}
-	if !replaysUnavailableActiveMutations(&knowledgecatalog.Writer{}) {
+	if replaysUnavailableActiveMutations(&knowledgecatalog.Writer{}) {
+		t.Fatal("zero catalog Writer acquired the sealed ACTIVE replay capability")
+	}
+	if !replaysUnavailableActiveMutations(
+		newReadyKnowledgeWriter(t),
+	) {
 		t.Fatal("catalog Writer lost its sealed ACTIVE replay capability")
 	}
 	var typedNil *knowledgecatalog.Writer

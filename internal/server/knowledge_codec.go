@@ -130,33 +130,6 @@ func newKnowledgeBoundedProtoCodec[Request any, Message proto.Message](
 	)
 }
 
-// sanitizeCreateKnowledgeObjectRequest and sanitizeUpdateKnowledgeObjectRequest
-// implement the knowledge-definition exception to the ordinary protobuf
-// ignore-unknown rule. Unknown fields inside the submitted definition are
-// rejected before the generic boundary can discard them. Unknown fields
-// elsewhere in the request retain the normal forward-compatible behavior.
-func sanitizeCreateKnowledgeObjectRequest(
-	request *opensplunkv1.CreateKnowledgeObjectRequest,
-) (*opensplunkv1.CreateKnowledgeObjectRequest, error) {
-	if request != nil && request.GetDefinition() != nil {
-		if err := rejectUnknownKnowledgeDefinition(request.GetDefinition()); err != nil {
-			return nil, err
-		}
-	}
-	return forwardCompatibleProtoSanitizer(request)
-}
-
-func sanitizeUpdateKnowledgeObjectRequest(
-	request *opensplunkv1.UpdateKnowledgeObjectRequest,
-) (*opensplunkv1.UpdateKnowledgeObjectRequest, error) {
-	if request != nil && request.GetDefinition() != nil {
-		if err := rejectUnknownKnowledgeDefinition(request.GetDefinition()); err != nil {
-			return nil, err
-		}
-	}
-	return forwardCompatibleProtoSanitizer(request)
-}
-
 func rejectUnknownKnowledgeDefinition(
 	definition *opensplunkv1.KnowledgeObjectDefinition,
 ) error {

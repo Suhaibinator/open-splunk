@@ -443,9 +443,9 @@ type Config struct {
 	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
-	// Knowledge-management dependencies are accepted and validated as one
-	// complete unit, but their routes remain deliberately unregistered until
-	// the Tier-1 runtime vertical is ready for capability advertisement.
+	// Knowledge-management routes are registered only for one complete unit
+	// backed by the concrete catalog Writer. Public feature advertisement stays
+	// disabled until the complete Tier-1 runtime family is ready.
 	KnowledgeCatalog           KnowledgeCatalog
 	KnowledgeWriter            KnowledgeWriter
 	KnowledgeApps              KnowledgeAppCatalog
@@ -652,20 +652,28 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(knowledgeAttempts) {
 		knowledgeAttempts = nil
 	}
-	configuredKnowledgeDependencies := 0
-	for _, configured := range []bool{
+	knowledgeDependenciesConfigured := []bool{
 		knowledgeCatalog != nil,
 		knowledgeWriter != nil,
 		knowledgeApps != nil,
 		knowledgeAttempts != nil,
-	} {
+	}
+	configuredKnowledgeDependencies := 0
+	for _, configured := range knowledgeDependenciesConfigured {
 		if configured {
 			configuredKnowledgeDependencies++
 		}
 	}
-	if configuredKnowledgeDependencies != 0 && configuredKnowledgeDependencies != 4 {
+	if configuredKnowledgeDependencies != 0 &&
+		configuredKnowledgeDependencies != len(knowledgeDependenciesConfigured) {
 		return nil, errors.New(
 			"create server handler: knowledge management dependencies must be configured together",
+		)
+	}
+	if configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
+		!replaysUnavailableActiveMutations(knowledgeWriter) {
+		return nil, errors.New(
+			"create server handler: knowledge management requires the concrete catalog writer",
 		)
 	}
 	browserAuthenticator := config.BrowserAuthenticator
@@ -1049,6 +1057,18 @@ func NewHandler(config Config) (*Handler, error) {
 			administratorRoutes[path] = struct{}{}
 		}
 	}
+	if api.knowledgeManagementConfigured() {
+		for _, path := range []string{
+			knowledgeObjectsCreatePath,
+			knowledgeObjectsGetPath,
+			knowledgeObjectsListPath,
+			knowledgeObjectsUpdatePath,
+			knowledgeObjectsSetStatePath,
+			knowledgeObjectsDeletePath,
+		} {
+			apiRoutes[path] = http.MethodPost
+		}
+	}
 	if api.exports != nil {
 		for _, path := range []string{
 			"/api/v1/search/exports/create",
@@ -1078,7 +1098,12 @@ func NewHandler(config Config) (*Handler, error) {
 		apiRoutes[searchWebSocketPath] = http.MethodGet
 	}
 	api.administratorRoutes = administratorRoutes
-	apiBoundary := exactAPIRoutes(api.protectBrowserAPIRoutes(apiRouter), apiRoutes)
+	apiBoundary := exactAPIRoutes(
+		api.protectBrowserAPIRoutes(
+			api.protectKnowledgeManagementRoutes(apiRouter),
+		),
+		apiRoutes,
+	)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
@@ -1384,6 +1409,12 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 				maximumRequestBytes,
 				smallRequestBytes,
 			)...,
+		)
+	}
+	if handler.knowledgeManagementConfigured() {
+		routes = append(
+			routes,
+			handler.knowledgeManagementRoutes(noAuth)...,
 		)
 	}
 	if handler.searchHistory != nil {

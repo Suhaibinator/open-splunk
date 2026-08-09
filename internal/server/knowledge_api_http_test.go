@@ -216,48 +216,11 @@ func newKnowledgeHTTPHandler(
 }
 
 // newKnowledgeHTTPRouter deliberately lives in a _test.go file: it exercises
-// the completed handlers and codecs without registering or advertising the
-// reserved production surface.
+// the management handlers, codecs, and middleware in isolation from the full
+// production API router.
 func newKnowledgeHTTPRouter(handler *apiHandler) http.Handler {
 	noAuth := router.NoAuth
-	routes := []router.RouteDefinition{
-		router.NewGenericRouteDefinition[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse, string, struct{}](router.RouteConfig[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
-			Path: "/knowledge/objects/create", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedCreateKnowledgeObjectCodec(), Handler: handler.createKnowledgeObject,
-			SourceType: router.Body, Sanitizer: sanitizeCreateKnowledgeObjectRequest,
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse, string, struct{}](router.RouteConfig[*opensplunkv1.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse]{
-			Path: "/knowledge/objects/get", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedGetKnowledgeObjectCodec(), Handler: handler.getKnowledgeObject,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetKnowledgeObjectRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse, string, struct{}](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse]{
-			Path: "/knowledge/objects/list", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedListKnowledgeObjectsCodec(), Handler: handler.listKnowledgeObjects,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectsRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse, string, struct{}](router.RouteConfig[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
-			Path: "/knowledge/objects/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedUpdateKnowledgeObjectCodec(), Handler: handler.updateKnowledgeObject,
-			SourceType: router.Body, Sanitizer: sanitizeUpdateKnowledgeObjectRequest,
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
-		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse, string, struct{}](router.RouteConfig[*opensplunkv1.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse]{
-			Path: "/knowledge/objects/set-state", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedSetKnowledgeObjectStateCodec(), Handler: handler.setKnowledgeObjectState,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.SetKnowledgeObjectStateRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-		router.NewGenericRouteDefinition[*opensplunkv1.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse, string, struct{}](router.RouteConfig[*opensplunkv1.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse]{
-			Path: "/knowledge/objects/delete", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
-			Codec: newSerializedDeleteKnowledgeObjectCodec(), Handler: handler.deleteKnowledgeObject,
-			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.DeleteKnowledgeObjectRequest],
-			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
-		}),
-	}
+	routes := unwrapProtobufRoutes(handler.knowledgeManagementRoutes(noAuth))
 	inner := router.NewRouter[string, struct{}](router.RouterConfig{
 		ServiceName:       "open-splunk-knowledge-http-test",
 		GlobalTimeout:     0,
@@ -376,7 +339,7 @@ func knowledgeHTTPScopeChangeMask() *fieldmaskpb.FieldMask {
 	return &fieldmaskpb.FieldMask{Paths: []string{"sharing_scope"}}
 }
 
-func TestKnowledgeHTTPTestRouterServesAllSixHandlersWithoutRegistration(
+func TestKnowledgeHTTPTestRouterServesAllSixManagementHandlers(
 	t *testing.T,
 ) {
 	t.Parallel()

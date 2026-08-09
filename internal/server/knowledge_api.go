@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	sroutercommon "github.com/Suhaibinator/SRouter/pkg/common"
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -21,14 +22,21 @@ import (
 )
 
 const (
-	knowledgeObjectsCreatePath   = "/api/v1/knowledge/objects/create"
-	knowledgeObjectsGetPath      = "/api/v1/knowledge/objects/get"
-	knowledgeObjectsListPath     = "/api/v1/knowledge/objects/list"
-	knowledgeObjectsUpdatePath   = "/api/v1/knowledge/objects/update"
-	knowledgeObjectsSetStatePath = "/api/v1/knowledge/objects/set-state"
-	knowledgeObjectsDeletePath   = "/api/v1/knowledge/objects/delete"
+	knowledgeObjectsCreateRoute   = "/knowledge/objects/create"
+	knowledgeObjectsGetRoute      = "/knowledge/objects/get"
+	knowledgeObjectsListRoute     = "/knowledge/objects/list"
+	knowledgeObjectsUpdateRoute   = "/knowledge/objects/update"
+	knowledgeObjectsSetStateRoute = "/knowledge/objects/set-state"
+	knowledgeObjectsDeleteRoute   = "/knowledge/objects/delete"
 
-	maximumKnowledgeApps                 = 256
+	knowledgeObjectsCreatePath   = apiV1PathPrefix + knowledgeObjectsCreateRoute
+	knowledgeObjectsGetPath      = apiV1PathPrefix + knowledgeObjectsGetRoute
+	knowledgeObjectsListPath     = apiV1PathPrefix + knowledgeObjectsListRoute
+	knowledgeObjectsUpdatePath   = apiV1PathPrefix + knowledgeObjectsUpdateRoute
+	knowledgeObjectsSetStatePath = apiV1PathPrefix + knowledgeObjectsSetStateRoute
+	knowledgeObjectsDeletePath   = apiV1PathPrefix + knowledgeObjectsDeleteRoute
+
+	maximumKnowledgeApps                 = control.MaximumAppsPerTenant
 	maximumKnowledgeSmallRequestBytes    = int64(16 << 10)
 	maximumKnowledgeMutationRequestBytes = int64(4<<20 + 64<<10)
 	maximumKnowledgePageTokenBytes       = 4 << 10
@@ -38,8 +46,8 @@ const (
 	maximumKnowledgeNameBytes            = 255
 )
 
-// KnowledgeCatalog is the bounded read-only surface used by the unregistered
-// management handlers. Store satisfies it directly.
+// KnowledgeCatalog is the bounded read-only surface used by the management
+// handlers. Store satisfies it directly.
 type KnowledgeCatalog interface {
 	Get(
 		context.Context,
@@ -54,8 +62,8 @@ type KnowledgeCatalog interface {
 	) (knowledgecatalog.ListPage, error)
 }
 
-// KnowledgeWriter is the atomic mutation surface used by the unregistered
-// management handlers. knowledgecatalog.Writer satisfies it directly.
+// KnowledgeWriter is the atomic mutation surface used by the management
+// handlers. knowledgecatalog.Writer satisfies it directly.
 type KnowledgeWriter interface {
 	Create(
 		context.Context,
@@ -81,6 +89,14 @@ type KnowledgeWriter interface {
 
 var _ KnowledgeWriter = (*knowledgecatalog.Writer)(nil)
 
+func (handler *apiHandler) knowledgeManagementConfigured() bool {
+	return handler != nil &&
+		!isNilDependency(handler.knowledgeCatalog) &&
+		replaysUnavailableActiveMutations(handler.knowledgeWriter) &&
+		!isNilDependency(handler.knowledgeApps) &&
+		!isNilDependency(handler.knowledgeAttempts)
+}
+
 func replaysUnavailableActiveMutations(writer KnowledgeWriter) bool {
 	if isNilDependency(writer) {
 		return false
@@ -88,8 +104,51 @@ func replaysUnavailableActiveMutations(writer KnowledgeWriter) bool {
 	// Keep the exception exact-type-only. A marker interface can be forged by
 	// embedding its implementation and overriding mutation methods; only the
 	// catalog's concrete Writer owns the receipt-first ACTIVE replay guarantee.
-	_, ok := writer.(*knowledgecatalog.Writer)
-	return ok
+	concrete, ok := writer.(*knowledgecatalog.Writer)
+	return ok && concrete.ReadyForManagement()
+}
+
+func (handler *apiHandler) knowledgeManagementRoutes(
+	noAuth router.AuthLevel,
+) []protobufRouteDefinition {
+	return []protobufRouteDefinition{
+		newForwardCompatibleProtoRoute[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
+			Path: knowledgeObjectsCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedCreateKnowledgeObjectCodec(), Handler: handler.createKnowledgeObject,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.CreateKnowledgeObjectRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.GetKnowledgeObjectRequest, *serializedGetKnowledgeObjectResponse]{
+			Path: knowledgeObjectsGetRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedGetKnowledgeObjectCodec(), Handler: handler.getKnowledgeObject,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.GetKnowledgeObjectRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse](router.RouteConfig[*opensplunkv1.ListKnowledgeObjectsRequest, *serializedListKnowledgeObjectsResponse]{
+			Path: knowledgeObjectsListRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedListKnowledgeObjectsCodec(), Handler: handler.listKnowledgeObjects,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.ListKnowledgeObjectsRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.UpdateKnowledgeObjectRequest, *serializedUpdateKnowledgeObjectResponse]{
+			Path: knowledgeObjectsUpdateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedUpdateKnowledgeObjectCodec(), Handler: handler.updateKnowledgeObject,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateKnowledgeObjectRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse](router.RouteConfig[*opensplunkv1.SetKnowledgeObjectStateRequest, *serializedSetKnowledgeObjectStateResponse]{
+			Path: knowledgeObjectsSetStateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedSetKnowledgeObjectStateCodec(), Handler: handler.setKnowledgeObjectState,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.SetKnowledgeObjectStateRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.DeleteKnowledgeObjectRequest, *serializedDeleteKnowledgeObjectResponse]{
+			Path: knowledgeObjectsDeleteRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: newSerializedDeleteKnowledgeObjectCodec(), Handler: handler.deleteKnowledgeObject,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.DeleteKnowledgeObjectRequest],
+			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
+		}),
+	}
 }
 
 // KnowledgeAppCatalogResult is one complete, bounded snapshot of every app in
@@ -178,9 +237,6 @@ func (handler *apiHandler) knowledgeScopes(
 		TenantID:       principal.TenantID(),
 		OwnerID:        principal.OwnerID(),
 		WritableAppIDs: slices.Clone(apps),
-	}
-	if err := knowledgecatalog.ValidateReadScope(read); err != nil {
-		return knowledgeScopes{}, errors.New("knowledge app catalog read scope is invalid")
 	}
 	if err := knowledgecatalog.ValidateWriteScope(write); err != nil {
 		return knowledgeScopes{}, errors.New("knowledge app catalog write scope is invalid")

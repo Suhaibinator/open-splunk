@@ -311,11 +311,23 @@ func unwrapProtobufRoutes(routes []protobufRouteDefinition) []router.RouteDefini
 }
 
 // forwardCompatibleProtoSanitizer discards fields unknown to this server before
-// request validation or persistence. SRouter has already enforced the raw body
-// limit, so discarded bytes still consume the caller's request budget.
+// request validation or persistence. Create and update knowledge requests are
+// the exception: unknown fields inside their persisted definitions are rejected
+// before ordinary unknown fields are cleared. SRouter has already enforced the
+// raw body limit, so discarded bytes still consume the caller's request budget.
 func forwardCompatibleProtoSanitizer[T proto.Message](request T) (T, error) {
 	if isNilDependency(request) {
 		return request, nil
+	}
+	switch knowledgeRequest := any(request).(type) {
+	case *opensplunkv1.CreateKnowledgeObjectRequest:
+		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
+			return request, err
+		}
+	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
+			return request, err
+		}
 	}
 
 	pending := []protoreflect.Message{request.ProtoReflect()}

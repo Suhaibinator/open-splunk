@@ -10,10 +10,10 @@ import "open_splunk/v1/result.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
-// These messages reserve the KO-0 browser contract. Catalog management routes
-// may be registered before enrichment execution, but ACTIVE publication and
-// server feature advertisement remain disabled until the complete Tier-1
-// family exists.
+// These messages define the KO-0 browser contract. Catalog management routes
+// and recognized ACTIVE publication may be enabled before enrichment
+// execution, while server feature advertisement remains disabled until the
+// complete Tier-1 family exists.
 
 // POST /api/v1/knowledge/objects/create
 message CreateKnowledgeObjectRequest {

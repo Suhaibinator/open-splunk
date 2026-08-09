@@ -38,7 +38,7 @@ func TestKnowledgeDefinitionSanitizersRejectRepeatedShapeBeforeUnknownWalks(
 		{
 			name: "create",
 			sanitize: func(definition *opensplunkv1.KnowledgeObjectDefinition) error {
-				_, err := sanitizeCreateKnowledgeObjectRequest(
+				_, err := forwardCompatibleProtoSanitizer(
 					&opensplunkv1.CreateKnowledgeObjectRequest{Definition: definition},
 				)
 				return err
@@ -47,7 +47,7 @@ func TestKnowledgeDefinitionSanitizersRejectRepeatedShapeBeforeUnknownWalks(
 		{
 			name: "update",
 			sanitize: func(definition *opensplunkv1.KnowledgeObjectDefinition) error {
-				_, err := sanitizeUpdateKnowledgeObjectRequest(
+				_, err := forwardCompatibleProtoSanitizer(
 					&opensplunkv1.UpdateKnowledgeObjectRequest{Definition: definition},
 				)
 				return err
