@@ -20,10 +20,13 @@ import {
 } from "./protobuf-transport";
 import { ListIndexesRequest, ListIndexesResponse } from "@/gen/ts/open_splunk/v1/index_api";
 import {
+  ListKnowledgeObjectDependenciesRequest,
+  ListKnowledgeObjectDependenciesResponse,
   ListKnowledgeObjectsRequest,
   ListKnowledgeObjectsResponse,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/v1/search_api";
+import { knowledgeRoutes } from "./routes";
 
 const administratorToken = "admin-token-0123456789-abcdefghijkl";
 
@@ -48,8 +51,11 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/v1/audit/events/list"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/get"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/list"), true);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependencies"), false);
-  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependents"), false);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependencies"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependents"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/create"), false);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/update"), false);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/delete"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/inspect"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/create"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/suggestions"), false);
@@ -63,6 +69,10 @@ test("transport attaches the memory-only token only to protected protobuf calls"
     requests.push({ url, headers: new Headers(init?.headers) });
     const body = url.endsWith("/indexes/list")
       ? ListIndexesResponse.encode(ListIndexesResponse.fromPartial({})).finish()
+      : url.endsWith("/knowledge/objects/dependencies")
+        ? ListKnowledgeObjectDependenciesResponse.encode(
+          ListKnowledgeObjectDependenciesResponse.fromPartial({}),
+        ).finish()
       : url.endsWith("/knowledge/objects/list")
         ? ListKnowledgeObjectsResponse.encode(ListKnowledgeObjectsResponse.fromPartial({})).finish()
         : ValidateSearchResponse.encode(ValidateSearchResponse.fromPartial({ valid: true })).finish();
@@ -93,12 +103,17 @@ test("transport attaches the memory-only token only to protected protobuf calls"
     headers: { Authorization: "Bearer also-replaced" },
   });
   await transport.post(knowledgeRoute, ListKnowledgeObjectsRequest.fromPartial({}));
+  await transport.post(
+    knowledgeRoutes.dependencies,
+    ListKnowledgeObjectDependenciesRequest.fromPartial({}),
+  );
   await transport.post(searchRoute, ValidateSearchRequest.fromPartial({}));
 
   assert.equal(requests[0]?.headers.get("Authorization"), `Bearer ${administratorToken}`);
   assert.equal(requests[0]?.headers.get("X-Test"), "present");
   assert.equal(requests[1]?.headers.get("Authorization"), `Bearer ${administratorToken}`);
-  assert.equal(requests[2]?.headers.get("Authorization"), null);
+  assert.equal(requests[2]?.headers.get("Authorization"), `Bearer ${administratorToken}`);
+  assert.equal(requests[3]?.headers.get("Authorization"), null);
 });
 
 test("declared oversized unknown protobuf fields are rejected before decode", async () => {

@@ -13,12 +13,17 @@ import {
   knowledgeSortChoiceFromControlValue,
   loadKnowledgeDetail,
   loadKnowledgePage,
+  loadKnowledgeRelationshipPage,
   mergeKnowledgeContinuation,
+  mergeKnowledgeRelationshipContinuation,
   type KnowledgeLifecycleStateFilter,
   type KnowledgeListItem,
   type KnowledgeObjectDisplay,
   type KnowledgeObjectTypeFilter,
   type KnowledgePageDisplay,
+  type KnowledgeReadClient,
+  type KnowledgeRelationshipDirection,
+  type KnowledgeRelationshipPageDisplay,
   type KnowledgeSortChoice,
 } from "./knowledge-manager-data";
 import {
@@ -35,6 +40,25 @@ interface AbortControllerReference {
 
 interface ConsumedPageTokensReference {
   current: Set<string>;
+}
+
+/** Aborts the request current at cleanup time, including a later continuation. */
+export function knowledgeRelationshipUnmountCleanup(
+  request: AbortControllerReference,
+): () => void {
+  return () => {
+    request.current?.abort();
+    request.current = null;
+  };
+}
+
+/** Forces exact-root relationship state to remount before a new detail paints. */
+export function knowledgeRelationshipSectionKey(
+  direction: KnowledgeRelationshipDirection,
+  knowledgeObjectId: string,
+  version: bigint,
+): string {
+  return `${direction}:${knowledgeObjectId}\0${version.toString()}`;
 }
 
 function abortKnowledgeManagerRequests(
@@ -454,6 +478,13 @@ export function KnowledgeManagerPanel({
           detailState={detailState}
           detail={detail}
           detailRef={detailRef}
+          detailExtension={detailState === "available" && detail !== null ? (
+            <KnowledgeRelationships
+              client={client}
+              object={detail}
+              pageSize={pageSize}
+            />
+          ) : null}
           onOpen={openDetail}
           onRowKeyDown={handleRowKeyDown}
           registerRow={(objectId, element) => {
@@ -477,6 +508,7 @@ interface KnowledgeManagerWorkspaceProps {
   detailState: DetailState;
   detail: KnowledgeObjectDisplay | null;
   detailRef?: React.Ref<HTMLElement>;
+  detailExtension?: React.ReactNode;
   onOpen: (object: KnowledgeObjectDisplay) => void;
   onRowKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, objectId: string) => void;
   registerRow: (objectId: string, element: HTMLButtonElement | null) => void;
@@ -494,6 +526,7 @@ export function KnowledgeManagerWorkspace({
   detailState,
   detail,
   detailRef,
+  detailExtension,
   onOpen,
   onRowKeyDown,
   registerRow,
@@ -578,7 +611,7 @@ export function KnowledgeManagerWorkspace({
             />
           ) : null}
           {detailState === "available" && detail !== null ? (
-            <KnowledgeDetail object={detail} />
+            <KnowledgeDetail object={detail}>{detailExtension}</KnowledgeDetail>
           ) : null}
         </section>
       )}
@@ -631,7 +664,13 @@ function KnowledgeListRow({
   );
 }
 
-export function KnowledgeDetail({ object }: { object: KnowledgeObjectDisplay }) {
+export function KnowledgeDetail({
+  object,
+  children,
+}: {
+  object: KnowledgeObjectDisplay;
+  children?: React.ReactNode;
+}) {
   return (
     <div className="knowledge-manager__detail-body">
       <header>
@@ -684,7 +723,250 @@ export function KnowledgeDetail({ object }: { object: KnowledgeObjectDisplay }) 
           ))
         )}
       </section>
+      {children}
     </div>
+  );
+}
+
+type KnowledgeRelationshipState = "loading" | "available" | "unavailable" | "stale";
+
+function KnowledgeRelationships({
+  client,
+  object,
+  pageSize,
+}: {
+  client: KnowledgeReadClient;
+  object: KnowledgeObjectDisplay;
+  pageSize: number;
+}) {
+  return (
+    <section
+      className="knowledge-manager__relationships"
+      aria-labelledby="knowledge-relationships-title"
+    >
+      <header>
+        <h4 id="knowledge-relationships-title">Direct relationships</h4>
+        <p>Counts include only currently visible direct relationships.</p>
+      </header>
+      <KnowledgeRelationshipSection
+        key={knowledgeRelationshipSectionKey(
+          "dependencies",
+          object.knowledgeObjectId,
+          object.version,
+        )}
+        client={client}
+        direction="dependencies"
+        knowledgeObjectId={object.knowledgeObjectId}
+        version={object.version}
+        pageSize={pageSize}
+      />
+      <KnowledgeRelationshipSection
+        key={knowledgeRelationshipSectionKey(
+          "dependents",
+          object.knowledgeObjectId,
+          object.version,
+        )}
+        client={client}
+        direction="dependents"
+        knowledgeObjectId={object.knowledgeObjectId}
+        version={object.version}
+        pageSize={pageSize}
+      />
+    </section>
+  );
+}
+
+function KnowledgeRelationshipSection({
+  client,
+  direction,
+  knowledgeObjectId,
+  version,
+  pageSize,
+}: {
+  client: KnowledgeReadClient;
+  direction: KnowledgeRelationshipDirection;
+  knowledgeObjectId: string;
+  version: bigint;
+  pageSize: number;
+}) {
+  const [state, setState] = useState<KnowledgeRelationshipState>("loading");
+  const [page, setPage] = useState<KnowledgeRelationshipPageDisplay | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [reloadGeneration, setReloadGeneration] = useState(0);
+  const requestRef = useRef<AbortController | null>(null);
+  const consumedPageTokensRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    const cleanup = knowledgeRelationshipUnmountCleanup(requestRef);
+    requestRef.current?.abort();
+    consumedPageTokensRef.current = new Set();
+    setState("loading");
+    setPage(null);
+    setLoadingMore(false);
+    const controller = new AbortController();
+    requestRef.current = controller;
+    void loadKnowledgeRelationshipPage(client, {
+      direction,
+      knowledgeObjectId,
+      version,
+      pageSize,
+      pageToken: null,
+    }, { signal: controller.signal }).then((result) => {
+      if (controller.signal.aborted || requestRef.current !== controller) return;
+      requestRef.current = null;
+      if (result.status === "unavailable") {
+        setState("unavailable");
+        return;
+      }
+      setPage(result.page);
+      setState("available");
+    });
+    return cleanup;
+  }, [client, direction, knowledgeObjectId, pageSize, reloadGeneration, version]);
+
+  const loadMore = useCallback(async () => {
+    const requestedPageToken = page?.nextPageToken;
+    if (
+      state !== "available"
+      || page === null
+      || typeof requestedPageToken !== "string"
+      || loadingMore
+      || requestRef.current !== null
+      || consumedPageTokensRef.current.has(requestedPageToken)
+    ) return;
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setLoadingMore(true);
+    const result = await loadKnowledgeRelationshipPage(client, {
+      direction,
+      knowledgeObjectId,
+      version,
+      pageSize,
+      pageToken: requestedPageToken,
+    }, { signal: controller.signal });
+    if (controller.signal.aborted || requestRef.current !== controller) return;
+    requestRef.current = null;
+    setLoadingMore(false);
+    if (result.status === "unavailable") {
+      setState("stale");
+      return;
+    }
+    const merged = mergeKnowledgeRelationshipContinuation(
+      page,
+      result.page,
+      requestedPageToken,
+      consumedPageTokensRef.current,
+    );
+    if (merged.status === "stale") {
+      setState("stale");
+      return;
+    }
+    consumedPageTokensRef.current.add(requestedPageToken);
+    setPage(merged.page);
+  }, [
+    client,
+    direction,
+    knowledgeObjectId,
+    loadingMore,
+    page,
+    pageSize,
+    state,
+    version,
+  ]);
+
+  return (
+    <KnowledgeRelationshipSectionView
+      direction={direction}
+      state={state}
+      page={page}
+      loadingMore={loadingMore}
+      onRetry={() => setReloadGeneration((value) => value + 1)}
+      onLoadMore={() => void loadMore()}
+    />
+  );
+}
+
+export function KnowledgeRelationshipSectionView({
+  direction,
+  state,
+  page,
+  loadingMore,
+  onRetry,
+  onLoadMore,
+}: {
+  direction: KnowledgeRelationshipDirection;
+  state: KnowledgeRelationshipState;
+  page: KnowledgeRelationshipPageDisplay | null;
+  loadingMore: boolean;
+  onRetry: () => void;
+  onLoadMore: () => void;
+}) {
+  const dependencies = direction === "dependencies";
+  const title = dependencies ? "Dependencies" : "Dependents";
+  const headingId = `knowledge-${direction}-title`;
+  return (
+    <section
+      className="knowledge-manager__relationship-section"
+      aria-labelledby={headingId}
+      aria-busy={state === "loading" || loadingMore}
+    >
+      <header>
+        <h5 id={headingId}>{title}</h5>
+        {page === null ? null : (
+          <span>
+            {page.totalSize.toLocaleString()} visible · revision {page.tenantCatalogRevision.toLocaleString()}
+          </span>
+        )}
+      </header>
+      <p>
+        {dependencies
+          ? "Exact object versions read directly by this version."
+          : "Current object versions that refer directly to this version."}
+      </p>
+      {state === "loading" ? (
+        <output className="knowledge-manager__relationship-message">
+          Loading visible {direction}…
+        </output>
+      ) : null}
+      {state === "unavailable" ? (
+        <output className="knowledge-manager__relationship-message">
+          <span>Relationship data is unavailable.</span>
+          <button type="button" onClick={onRetry}>Retry</button>
+        </output>
+      ) : null}
+      {page !== null && page.edges.length === 0 && state !== "loading" ? (
+        <p className="knowledge-manager__relationship-message" aria-live="polite">
+          No visible direct {direction}.
+        </p>
+      ) : null}
+      {page === null || page.edges.length === 0 ? null : (
+        <ol
+          className="knowledge-manager__relationship-list"
+          aria-label={`Visible direct ${direction}`}
+        >
+          {page.edges.map((edge) => (
+            <li key={edge.key}>
+              <code>{edge.knowledgeObjectId}</code>
+              <span>v{edge.version.toLocaleString()}</span>
+              <span>{edge.roleLabel}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+      {state === "stale" ? (
+        <div className="knowledge-manager__relationship-stale" role="alert">
+          <span>This relationship page cannot be safely continued.</span>
+          <button type="button" onClick={onRetry}>Reload {title.toLowerCase()}</button>
+        </div>
+      ) : page?.nextPageToken === null || page === null ? null : (
+        <div className="knowledge-manager__relationship-pagination" aria-live="polite">
+          <span>{page.edges.length.toLocaleString()} of {page.totalSize.toLocaleString()} loaded</span>
+          <button type="button" onClick={onLoadMore} disabled={loadingMore}>
+            {loadingMore ? "Loading…" : `Load more ${direction}`}
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 

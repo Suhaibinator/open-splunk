@@ -5367,6 +5367,28 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
 .knowledge-manager__selectors strong { color: #5d6d75; font-size: 9px; text-transform: uppercase; }
 .knowledge-manager__selectors ul { display: flex; flex-wrap: wrap; gap: 5px; list-style: none; margin: 0; padding: 0; }
 .knowledge-manager__selectors code { background: #eef1f2; color: #35464f; display: block; font-size: 9px; max-width: 100%; overflow-wrap: anywhere; padding: 4px 6px; }
+.knowledge-manager__relationships { border-top: 1px solid #e1e6e8; display: grid; gap: 10px; padding-top: 12px; }
+.knowledge-manager__relationships > header { display: grid; gap: 3px; }
+.knowledge-manager__relationships > header h4 { color: #34454e; font-size: 11px; margin: 0; }
+.knowledge-manager__relationships > header p { color: #6d7a82; font-size: 9px; line-height: 1.45; margin: 0; }
+.knowledge-manager__relationship-section { border: 1px solid #d8dfe1; display: grid; gap: 8px; min-width: 0; padding: 10px; }
+.knowledge-manager__relationship-section > header { align-items: baseline; display: flex; gap: 8px; justify-content: space-between; }
+.knowledge-manager__relationship-section h5 { color: #34454e; font-size: 10px; margin: 0; }
+.knowledge-manager__relationship-section > header span,
+.knowledge-manager__relationship-section > p { color: #748188; font-size: 9px; line-height: 1.4; margin: 0; }
+.knowledge-manager__relationship-list { display: grid; gap: 1px; list-style: none; margin: 0; padding: 0; }
+.knowledge-manager__relationship-list li { align-items: center; background: #f5f7f7; display: grid; gap: 3px 8px; grid-template-columns: minmax(0, 1fr) auto; min-width: 0; padding: 7px 8px; }
+.knowledge-manager__relationship-list code { color: #314650; font-size: 9px; min-width: 0; overflow-wrap: anywhere; }
+.knowledge-manager__relationship-list li > span { color: #69777e; font-size: 9px; }
+.knowledge-manager__relationship-list li > span:last-child { grid-column: 1 / -1; }
+.knowledge-manager__relationship-message,
+.knowledge-manager__relationship-stale,
+.knowledge-manager__relationship-pagination { align-items: center; background: #f8faf9; color: #68767e; display: flex; font-size: 9px; gap: 8px; justify-content: space-between; margin: 0; min-height: 34px; padding: 7px 8px; }
+.knowledge-manager__relationship-stale { background: #fff8e9; color: #795817; }
+.knowledge-manager__relationship-message button,
+.knowledge-manager__relationship-stale button,
+.knowledge-manager__relationship-pagination button { background: white; border: 1px solid #aeb9be; color: #2e6f91; font-size: 9px; min-height: 28px; padding: 0 8px; }
+.knowledge-manager__relationship-pagination button:disabled { color: #89949a; }
 .knowledge-manager__status { align-items: center; background: white; border: 1px solid #ccd4d7; display: grid; gap: 10px; grid-template-columns: auto minmax(0, 1fr) auto; min-height: 76px; padding: 12px 14px; }
 .knowledge-manager__status > span:first-child { align-items: center; background: #e7eef1; border-radius: 50%; color: #56717f; display: flex; height: 28px; justify-content: center; width: 28px; }
 .knowledge-manager__status > .knowledge-manager__status-copy { align-items: flex-start; background: transparent; border-radius: 0; color: inherit; display: flex; flex-direction: column; height: auto; justify-content: flex-start; width: auto; }
@@ -6881,9 +6903,15 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .knowledge-manager__status { grid-template-columns: auto minmax(0, 1fr); }
   .knowledge-manager__status > button { grid-column: 1 / -1; min-height: 42px; width: 100%; }
   .knowledge-manager__pagination,
-  .knowledge-manager__stale { align-items: stretch; flex-direction: column; }
+  .knowledge-manager__stale,
+  .knowledge-manager__relationship-message,
+  .knowledge-manager__relationship-stale,
+  .knowledge-manager__relationship-pagination { align-items: stretch; flex-direction: column; }
   .knowledge-manager__pagination button,
-  .knowledge-manager__stale button { min-height: 42px; width: 100%; }
+  .knowledge-manager__stale button,
+  .knowledge-manager__relationship-message button,
+  .knowledge-manager__relationship-stale button,
+  .knowledge-manager__relationship-pagination button { min-height: 42px; width: 100%; }
   .admin-summary-grid { grid-template-columns: 1fr; }
   .admin-summary-grid article { min-height: 74px; }
   .admin-section-header { align-items: flex-start; flex-direction: column; gap: 10px; }

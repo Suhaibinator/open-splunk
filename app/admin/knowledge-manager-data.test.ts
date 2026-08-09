@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { SharingScope, SortDirection } from "@/gen/ts/open_splunk/v1/common";
 import {
+  KnowledgeDependencyRole,
   KnowledgeObject,
   KnowledgeObjectState,
   KnowledgeObjectType,
@@ -15,29 +16,46 @@ import {
   KnowledgeSelectorMatchKind,
 } from "@/gen/ts/open_splunk/v1/knowledge";
 import {
+  ListKnowledgeObjectDependenciesResponse,
+  ListKnowledgeObjectDependentsResponse,
   KnowledgeObjectSortBy,
   ListKnowledgeObjectsResponse,
   type GetKnowledgeObjectResponse,
+  type KnowledgeManagementDependencyEdge,
+  type ListKnowledgeObjectDependenciesRequest,
+  type ListKnowledgeObjectDependenciesResponse as ListKnowledgeObjectDependenciesResponseMessage,
+  type ListKnowledgeObjectDependentsRequest,
+  type ListKnowledgeObjectDependentsResponse as ListKnowledgeObjectDependentsResponseMessage,
   type ListKnowledgeObjectsRequest,
   type ListKnowledgeObjectsResponse as ListKnowledgeObjectsResponseMessage,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import { HttpError } from "@/lib/api/protobuf-transport";
+import { knowledgeRoutes } from "@/lib/api/routes";
 
 import {
+  KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENCIES,
+  KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENTS,
+  KNOWLEDGE_MANAGER_MAXIMUM_GRAPH_RESPONSE_BYTES,
   KNOWLEDGE_MANAGER_MAXIMUM_OBJECTS,
   KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES,
   adaptKnowledgeObject,
   adaptKnowledgePage,
+  adaptKnowledgeRelationshipPage,
   knowledgeLifecycleStateFilterFromControlValue,
   knowledgeListRequest,
   knowledgeObjectTypeFilterFromControlValue,
+  knowledgeRelationshipRequest,
   knowledgeSortChoiceFromControlValue,
   loadKnowledgeDetail,
   loadKnowledgePage,
+  loadKnowledgeRelationshipPage,
   mergeKnowledgeContinuation,
+  mergeKnowledgeRelationshipContinuation,
   type KnowledgeLifecycleStateFilter,
   type KnowledgeListQuery,
   type KnowledgeReadClient,
+  type KnowledgeRelationshipPageDisplay,
+  type KnowledgeRelationshipQuery,
 } from "./knowledge-manager-data";
 import {
   KNOWLEDGE_MANAGER_MAXIMUM_BOOTSTRAP_APPS,
@@ -49,14 +67,26 @@ import {
 import {
   KnowledgeDetail,
   KnowledgeManagerPanel,
+  KnowledgeRelationshipSectionView,
   KnowledgeManagerWorkspace,
   commitKnowledgeManagerQueryChange,
   knowledgeManagerUnmountCleanup,
+  knowledgeRelationshipSectionKey,
+  knowledgeRelationshipUnmountCleanup,
   resetKnowledgeManagerQuery,
 } from "./knowledge-manager-panel";
 
 const pageSize = 50;
 const TestKnowledgePanel = () => null;
+
+const unavailableGraphReads = {
+  async dependencies(): Promise<ListKnowledgeObjectDependenciesResponseMessage> {
+    throw new Error("dependencies must not be called");
+  },
+  async dependents(): Promise<ListKnowledgeObjectDependentsResponseMessage> {
+    throw new Error("dependents must not be called");
+  },
+};
 
 function fieldAliasObject(options: {
   id?: string;
@@ -159,6 +189,68 @@ function query(
     pageToken,
     ...overrides,
   };
+}
+
+function relationshipQuery(
+  direction: KnowledgeRelationshipQuery["direction"],
+  pageToken: string | null = null,
+  overrides: Partial<KnowledgeRelationshipQuery> = {},
+): KnowledgeRelationshipQuery {
+  return {
+    direction,
+    knowledgeObjectId: "ko-root",
+    version: 3n,
+    pageSize: 2,
+    pageToken,
+    ...overrides,
+  };
+}
+
+function relationshipEdge(
+  direction: KnowledgeRelationshipQuery["direction"],
+  neighborId: string,
+  neighborVersion: bigint,
+): KnowledgeManagementDependencyEdge {
+  const root = { knowledgeObjectId: "ko-root", version: 3n };
+  const neighbor = { knowledgeObjectId: neighborId, version: neighborVersion };
+  return {
+    source: direction === "dependencies" ? root : neighbor,
+    target: direction === "dependencies" ? neighbor : root,
+    role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+  };
+}
+
+function relationshipResponse(
+  queryValue: KnowledgeRelationshipQuery,
+  options: {
+    edges?: KnowledgeManagementDependencyEdge[];
+    nextPageToken?: string;
+    totalSize?: bigint;
+    revision?: bigint;
+  } = {},
+): ListKnowledgeObjectDependenciesResponseMessage | ListKnowledgeObjectDependentsResponseMessage {
+  const edges = options.edges ?? [];
+  const common = {
+    page: {
+      nextPageToken: options.nextPageToken,
+      totalSize: options.totalSize ?? BigInt(edges.length),
+      totalSizeExact: true,
+    },
+    tenantCatalogRevision: options.revision ?? 9n,
+    resolvedObject: {
+      knowledgeObjectId: queryValue.knowledgeObjectId,
+      version: queryValue.version,
+    },
+  };
+  return queryValue.direction === "dependencies"
+    ? ListKnowledgeObjectDependenciesResponse.fromPartial({
+      ...common,
+      dependencies: edges,
+    })
+    : ListKnowledgeObjectDependentsResponse.fromPartial({
+      ...common,
+      dependents: edges,
+    });
 }
 
 function jsonWithoutBigInt(value: unknown): string {
@@ -355,6 +447,7 @@ test("enabled list and detail fixtures use bounded generated protobuf requests",
   const getRequests: string[] = [];
   const fixture = fieldAliasObject();
   const client: KnowledgeReadClient = {
+    ...unavailableGraphReads,
     async list(request) {
       listRequests.push(request);
       return listResponse({ objects: [fixture], revision: 8n });
@@ -382,6 +475,260 @@ test("enabled list and detail fixtures use bounded generated protobuf requests",
   const detail = await loadKnowledgeDetail(client, fixture.knowledgeObjectId);
   assert.equal(detail.status, "available");
   assert.deepEqual(getRequests, [fixture.knowledgeObjectId]);
+});
+
+test("relationship reads pin the exact detail version and use independently bounded routes", async () => {
+  const dependencyRequests: ListKnowledgeObjectDependenciesRequest[] = [];
+  const dependentRequests: ListKnowledgeObjectDependentsRequest[] = [];
+  const dependenciesQuery = relationshipQuery("dependencies");
+  const dependentsQuery = relationshipQuery("dependents");
+  const client: KnowledgeReadClient = {
+    async get() { throw new Error("get must not be called"); },
+    async list() { throw new Error("list must not be called"); },
+    async dependencies(request) {
+      dependencyRequests.push(request);
+      return relationshipResponse(dependenciesQuery, {
+        edges: [relationshipEdge("dependencies", "ko-target", 2n)],
+      }) as ListKnowledgeObjectDependenciesResponseMessage;
+    },
+    async dependents(request) {
+      dependentRequests.push(request);
+      return relationshipResponse(dependentsQuery, {
+        edges: [relationshipEdge("dependents", "ko-source", 4n)],
+      }) as ListKnowledgeObjectDependentsResponseMessage;
+    },
+  };
+
+  const [dependencies, dependents] = await Promise.all([
+    loadKnowledgeRelationshipPage(client, dependenciesQuery),
+    loadKnowledgeRelationshipPage(client, dependentsQuery),
+  ]);
+  assert.equal(dependencies.status, "available");
+  assert.equal(dependents.status, "available");
+  assert.deepEqual(dependencyRequests, [{
+    knowledgeObjectId: "ko-root",
+    version: 3n,
+    page: { pageSize: 2, pageToken: undefined, includeTotalSize: true },
+  }]);
+  assert.deepEqual(dependentRequests, dependencyRequests);
+  if (dependencies.status === "available" && dependents.status === "available") {
+    assert.deepEqual(dependencies.page.edges.map((edge) => ({
+      id: edge.knowledgeObjectId,
+      version: edge.version,
+      role: edge.roleLabel,
+    })), [{ id: "ko-target", version: 2n, role: "Field input" }]);
+    assert.deepEqual(dependents.page.edges.map((edge) => ({
+      id: edge.knowledgeObjectId,
+      version: edge.version,
+      role: edge.roleLabel,
+    })), [{ id: "ko-source", version: 4n, role: "Field input" }]);
+  }
+  assert.equal(
+    knowledgeRoutes.dependencies.maximumResponseBytes,
+    KNOWLEDGE_MANAGER_MAXIMUM_GRAPH_RESPONSE_BYTES,
+  );
+  assert.equal(
+    knowledgeRoutes.dependents.maximumResponseBytes,
+    KNOWLEDGE_MANAGER_MAXIMUM_GRAPH_RESPONSE_BYTES,
+  );
+});
+
+test("relationship page validation preserves direction-specific progress and UTF-8 binary order", () => {
+  const dependencyQuery = relationshipQuery("dependencies");
+  const fullOutgoing = adaptKnowledgeRelationshipPage(relationshipResponse(dependencyQuery, {
+    edges: [
+      relationshipEdge("dependencies", `ko-\ue000`, 1n),
+      relationshipEdge("dependencies", `ko-\u{10000}`, 1n),
+    ],
+    nextPageToken: "outgoing-next",
+    totalSize: 3n,
+  }), dependencyQuery);
+  assert.equal(fullOutgoing.nextPageToken, "outgoing-next");
+  assert.deepEqual(
+    fullOutgoing.edges.map((edge) => edge.knowledgeObjectId),
+    [`ko-\ue000`, `ko-\u{10000}`],
+  );
+
+  assert.throws(() => adaptKnowledgeRelationshipPage(relationshipResponse(dependencyQuery, {
+    edges: [relationshipEdge("dependencies", "ko-only", 1n)],
+    nextPageToken: "short-outgoing-next",
+    totalSize: 2n,
+  }), dependencyQuery), TypeError);
+  assert.throws(() => adaptKnowledgeRelationshipPage(relationshipResponse(dependencyQuery, {
+    edges: [
+      relationshipEdge("dependencies", `ko-\u{10000}`, 1n),
+      relationshipEdge("dependencies", `ko-\ue000`, 1n),
+    ],
+    nextPageToken: "wrong-order-next",
+    totalSize: 3n,
+  }), dependencyQuery), TypeError);
+
+  const dependentQuery = relationshipQuery("dependents");
+  const shortIncoming = adaptKnowledgeRelationshipPage(relationshipResponse(dependentQuery, {
+    edges: [relationshipEdge("dependents", "ko-source", 4n)],
+    nextPageToken: "incoming-next",
+    totalSize: 2n,
+  }), dependentQuery);
+  assert.equal(shortIncoming.edges.length, 1);
+  assert.equal(shortIncoming.nextPageToken, "incoming-next");
+});
+
+test("relationship responses fail closed on roots, edges, totals, and continuations", () => {
+  const queryValue = relationshipQuery("dependencies");
+  const malformed: Array<
+    ListKnowledgeObjectDependenciesResponseMessage | ListKnowledgeObjectDependentsResponseMessage
+  > = [];
+
+  const missingEndpoint = relationshipResponse(queryValue, {
+    edges: [relationshipEdge("dependencies", "ko-target", 2n)],
+  }) as ListKnowledgeObjectDependenciesResponseMessage;
+  missingEndpoint.dependencies[0]!.target = undefined;
+  malformed.push(missingEndpoint);
+
+  const wrongRoot = relationshipResponse(queryValue, {
+    edges: [relationshipEdge("dependencies", "ko-target", 2n)],
+  });
+  wrongRoot.resolvedObject!.version = 4n;
+  malformed.push(wrongRoot);
+
+  const futureRole = relationshipResponse(queryValue, {
+    edges: [relationshipEdge("dependencies", "ko-target", 2n)],
+  }) as ListKnowledgeObjectDependenciesResponseMessage;
+  futureRole.dependencies[0]!.role = KnowledgeDependencyRole.UNRECOGNIZED;
+  malformed.push(futureRole);
+
+  const hiddenCountLeak = relationshipResponse(queryValue, {
+    edges: [
+      relationshipEdge("dependencies", "ko-a", 1n),
+      relationshipEdge("dependencies", "ko-b", 1n),
+    ],
+    nextPageToken: "outgoing-cap-next",
+    totalSize: KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENCIES + 1n,
+  });
+  malformed.push(hiddenCountLeak);
+
+  const loopingCursor = relationshipResponse(
+    relationshipQuery("dependencies", "same-cursor"),
+    {
+      edges: [
+        relationshipEdge("dependencies", "ko-a", 1n),
+        relationshipEdge("dependencies", "ko-b", 1n),
+      ],
+      nextPageToken: "same-cursor",
+      totalSize: 4n,
+    },
+  );
+  malformed.push(loopingCursor);
+
+  for (const response of malformed) {
+    const responseQuery = response === loopingCursor
+      ? relationshipQuery("dependencies", "same-cursor")
+      : queryValue;
+    assert.throws(() => adaptKnowledgeRelationshipPage(response, responseQuery), TypeError);
+  }
+
+  assert.throws(() => knowledgeRelationshipRequest({
+    ...queryValue,
+    pageToken: "x".repeat(KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES + 1),
+  }), TypeError);
+  const dependentOverflow = relationshipResponse(relationshipQuery("dependents"), {
+    edges: [relationshipEdge("dependents", "ko-source", 1n)],
+    nextPageToken: "incoming-cap-next",
+    totalSize: KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENTS + 1n,
+  });
+  assert.throws(() => adaptKnowledgeRelationshipPage(
+    dependentOverflow,
+    relationshipQuery("dependents"),
+  ), TypeError);
+});
+
+test("relationship continuations retain exact direction, root, revision, total, and edge order", () => {
+  const firstQuery = relationshipQuery("dependencies");
+  const first = adaptKnowledgeRelationshipPage(relationshipResponse(firstQuery, {
+    edges: [
+      relationshipEdge("dependencies", "ko-a", 1n),
+      relationshipEdge("dependencies", "ko-b", 2n),
+    ],
+    nextPageToken: "relationship-next",
+    totalSize: 3n,
+  }), firstQuery);
+  const nextQuery = relationshipQuery("dependencies", "relationship-next");
+  const continuation = adaptKnowledgeRelationshipPage(relationshipResponse(nextQuery, {
+    edges: [relationshipEdge("dependencies", "ko-c", 3n)],
+    totalSize: 3n,
+  }), nextQuery);
+  const merged = mergeKnowledgeRelationshipContinuation(
+    first,
+    continuation,
+    "relationship-next",
+    new Set(),
+  );
+  assert.equal(merged.status, "merged");
+  if (merged.status === "merged") {
+    assert.deepEqual(merged.page.edges.map((edge) => edge.knowledgeObjectId), [
+      "ko-a",
+      "ko-b",
+      "ko-c",
+    ]);
+    assert.equal(merged.page.nextPageToken, null);
+  }
+
+  const staleCases: KnowledgeRelationshipPageDisplay[] = [
+    { ...continuation, tenantCatalogRevision: continuation.tenantCatalogRevision + 1n },
+    { ...continuation, totalSize: continuation.totalSize + 1n },
+    { ...continuation, direction: "dependents" },
+    { ...continuation, resolvedObject: { ...continuation.resolvedObject, version: 2n } },
+    { ...continuation, edges: [first.edges[1]!] },
+  ];
+  for (const stale of staleCases) {
+    assert.deepEqual(
+      mergeKnowledgeRelationshipContinuation(
+        first,
+        stale,
+        "relationship-next",
+        new Set(),
+      ),
+      { status: "stale" },
+    );
+  }
+});
+
+test("relationship failures are uniform and late-bound cleanup aborts continuation work", async () => {
+  const failures: unknown[] = [
+    new HttpError({ status: 404, message: "secret hidden root", url: "/knowledge" }),
+    new HttpError({ status: 409, message: "secret stale cursor", url: "/knowledge" }),
+    new HttpError({ status: 503, message: "secret dependency failure", url: "/knowledge" }),
+    new Error("secret decoder failure"),
+  ];
+  await Promise.all(failures.map(async (failure) => {
+    const client: KnowledgeReadClient = {
+      async get() { throw new Error("get must not be called"); },
+      async list() { throw new Error("list must not be called"); },
+      async dependencies() { throw failure; },
+      async dependents() { throw failure; },
+    };
+    assert.deepEqual(
+      await loadKnowledgeRelationshipPage(client, relationshipQuery("dependencies")),
+      { status: "unavailable" },
+    );
+  }));
+
+  const request = { current: null as AbortController | null };
+  const cleanup = knowledgeRelationshipUnmountCleanup(request);
+  const continuation = new AbortController();
+  request.current = continuation;
+  cleanup();
+  assert.equal(continuation.signal.aborted, true);
+  assert.equal(request.current, null);
+
+  assert.notEqual(
+    knowledgeRelationshipSectionKey("dependencies", "ko-root", 3n),
+    knowledgeRelationshipSectionKey("dependencies", "ko-root", 4n),
+  );
+  assert.notEqual(
+    knowledgeRelationshipSectionKey("dependencies", "ko-root", 3n),
+    knowledgeRelationshipSectionKey("dependents", "ko-root", 3n),
+  );
 });
 
 test("filter and sort choices encode exact canonical List request enums", () => {
@@ -476,6 +823,7 @@ test("unknown control and query enums fail closed before a List request", async 
     assert.throws(() => knowledgeListRequest(invalidQuery), TypeError);
     let listCalls = 0;
     const client: KnowledgeReadClient = {
+      ...unavailableGraphReads,
       async list() {
         listCalls += 1;
         return listResponse();
@@ -577,6 +925,7 @@ test("404, route absence, decoder failure, and server failure are uniformly unav
   ];
   await Promise.all(failures.map(async (failure) => {
     const client: KnowledgeReadClient = {
+      ...unavailableGraphReads,
       async list() { throw failure; },
       async get() { throw failure; },
     };
@@ -714,6 +1063,39 @@ test("detail markup is read-only, body-safe, keyboard-addressable, and labelled"
   assert.doesNotMatch(markup, /Create|Edit|Delete|Enable|Disable|Save/);
 });
 
+test("relationship presentation is independently labelled, escaped, and read-only", () => {
+  const queryValue = relationshipQuery("dependencies");
+  const page = adaptKnowledgeRelationshipPage(relationshipResponse(queryValue, {
+    edges: [relationshipEdge("dependencies", "ko-<script>", 2n)],
+  }), queryValue);
+  const markup = renderToStaticMarkup(createElement(KnowledgeRelationshipSectionView, {
+    direction: "dependencies",
+    state: "available",
+    page,
+    loadingMore: false,
+    onRetry: () => undefined,
+    onLoadMore: () => undefined,
+  }));
+  assert.match(markup, /id="knowledge-dependencies-title"/);
+  assert.match(markup, /aria-label="Visible direct dependencies"/);
+  assert.match(markup, /ko-&lt;script&gt;/);
+  assert.match(markup, /Field input/);
+  assert.match(markup, /revision 9/);
+  assert.doesNotMatch(markup, /<script>|href=|>Create<|>Edit<|>Delete<|>Enable<|>Disable<|>Save</);
+
+  const staleMarkup = renderToStaticMarkup(createElement(KnowledgeRelationshipSectionView, {
+    direction: "dependents",
+    state: "stale",
+    page: { ...page, direction: "dependents" },
+    loadingMore: false,
+    onRetry: () => undefined,
+    onLoadMore: () => undefined,
+  }));
+  assert.match(staleMarkup, /role="alert"/);
+  assert.match(staleMarkup, /Reload dependents/);
+  assert.doesNotMatch(staleMarkup, /Load more dependents/);
+});
+
 test("the panel loading shell labels every closed filter and exposes no mutation control", () => {
   const markup = renderToStaticMarkup(createElement(KnowledgeManagerPanel, {
     apiBaseUrl: "",
@@ -793,4 +1175,9 @@ test("responsive and focus-visible styles cover filters and list/detail collapse
   assert.match(css, /\.knowledge-manager button:focus-visible/);
   assert.match(css, /\.knowledge-manager select:focus-visible/);
   assert.match(css, /\.knowledge-manager__detail:focus-visible/);
+  assert.match(css, /\.knowledge-manager__relationship-list li \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.ok(mobileBodies.some((body) => (
+    /\.knowledge-manager__relationship-pagination \{ align-items: stretch; flex-direction: column; \}/.test(body)
+    && /\.knowledge-manager__relationship-pagination button \{ min-height: 42px; width: 100%; \}/.test(body)
+  )));
 });

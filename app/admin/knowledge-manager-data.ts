@@ -1,5 +1,6 @@
 import { SortDirection, SharingScope } from "@/gen/ts/open_splunk/v1/common";
 import {
+  KnowledgeDependencyRole,
   KnowledgeObjectState,
   KnowledgeObjectType,
   KnowledgeOverwriteBehavior,
@@ -11,8 +12,14 @@ import {
 import {
   GetKnowledgeObjectRequest,
   KnowledgeObjectSortBy,
+  ListKnowledgeObjectDependenciesRequest,
+  ListKnowledgeObjectDependentsRequest,
   ListKnowledgeObjectsRequest,
   type GetKnowledgeObjectResponse as GetKnowledgeObjectResponseMessage,
+  type KnowledgeManagementDependencyEdge,
+  type KnowledgeManagementObjectVersionIdentity,
+  type ListKnowledgeObjectDependenciesResponse as ListKnowledgeObjectDependenciesResponseMessage,
+  type ListKnowledgeObjectDependentsResponse as ListKnowledgeObjectDependentsResponseMessage,
   type ListKnowledgeObjectsResponse as ListKnowledgeObjectsResponseMessage,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import {
@@ -21,6 +28,7 @@ import {
   type ProtobufTransportOptions,
 } from "@/lib/api/protobuf-transport";
 import {
+  MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES,
   MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES,
   knowledgeRoutes,
 } from "@/lib/api/routes";
@@ -28,9 +36,13 @@ import {
 export const KNOWLEDGE_MANAGER_DEFAULT_PAGE_SIZE = 50;
 export const KNOWLEDGE_MANAGER_MAXIMUM_PAGE_SIZE = 256;
 export const KNOWLEDGE_MANAGER_MAXIMUM_OBJECTS = 8_192n;
+export const KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENCIES = 1_024n;
+export const KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENTS = 8_192n;
 export const KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES = 4 << 10;
 export const KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES =
   MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES;
+export const KNOWLEDGE_MANAGER_MAXIMUM_GRAPH_RESPONSE_BYTES =
+  MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES;
 
 const MAXIMUM_IDENTITY_BYTES = 255;
 const MAXIMUM_APP_ID_BYTES = 128;
@@ -53,6 +65,14 @@ export interface KnowledgeReadClient {
     request: ReturnType<typeof ListKnowledgeObjectsRequest.fromPartial>,
     options?: ProtobufRequestOptions,
   ): Promise<ListKnowledgeObjectsResponseMessage>;
+  dependencies(
+    request: ReturnType<typeof ListKnowledgeObjectDependenciesRequest.fromPartial>,
+    options?: ProtobufRequestOptions,
+  ): Promise<ListKnowledgeObjectDependenciesResponseMessage>;
+  dependents(
+    request: ReturnType<typeof ListKnowledgeObjectDependentsRequest.fromPartial>,
+    options?: ProtobufRequestOptions,
+  ): Promise<ListKnowledgeObjectDependentsResponseMessage>;
 }
 
 export function createKnowledgeReadClient(
@@ -67,6 +87,16 @@ export function createKnowledgeReadClient(
     ),
     list: (request, requestOptions) => transport.post(
       knowledgeRoutes.list,
+      request,
+      requestOptions,
+    ),
+    dependencies: (request, requestOptions) => transport.post(
+      knowledgeRoutes.dependencies,
+      request,
+      requestOptions,
+    ),
+    dependents: (request, requestOptions) => transport.post(
+      knowledgeRoutes.dependents,
       request,
       requestOptions,
     ),
@@ -133,6 +163,39 @@ export type KnowledgePageLoadResult =
 
 export type KnowledgeDetailLoadResult =
   | { status: "available"; object: KnowledgeObjectDisplay }
+  | { status: "unavailable" };
+
+export type KnowledgeRelationshipDirection = "dependencies" | "dependents";
+
+export interface KnowledgeRelationshipEdgeDisplay {
+  key: string;
+  knowledgeObjectId: string;
+  version: bigint;
+  roleLabel: "Field input";
+}
+
+export interface KnowledgeRelationshipPageDisplay {
+  direction: KnowledgeRelationshipDirection;
+  resolvedObject: {
+    knowledgeObjectId: string;
+    version: bigint;
+  };
+  edges: KnowledgeRelationshipEdgeDisplay[];
+  nextPageToken: string | null;
+  totalSize: bigint;
+  tenantCatalogRevision: bigint;
+}
+
+export interface KnowledgeRelationshipQuery {
+  direction: KnowledgeRelationshipDirection;
+  knowledgeObjectId: string;
+  version: bigint;
+  pageSize: number;
+  pageToken: string | null;
+}
+
+export type KnowledgeRelationshipPageLoadResult =
+  | { status: "available"; page: KnowledgeRelationshipPageDisplay }
   | { status: "unavailable" };
 
 export type KnowledgeObjectTypeFilter =
@@ -387,6 +450,309 @@ export async function loadKnowledgeDetail(
   } catch {
     return { status: "unavailable" };
   }
+}
+
+function assertKnowledgeRelationshipQuery(
+  query: KnowledgeRelationshipQuery,
+): void {
+  if (
+    (query.direction !== "dependencies" && query.direction !== "dependents")
+    || !validIdentity(query.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+    || typeof query.version !== "bigint"
+    || query.version < 1n
+    || query.version > MAXIMUM_SIGNED_REVISION
+    || !Number.isSafeInteger(query.pageSize)
+    || query.pageSize < 1
+    || query.pageSize > KNOWLEDGE_MANAGER_MAXIMUM_PAGE_SIZE
+    || (
+      query.pageToken !== null
+      && !validOpaqueToken(
+        query.pageToken,
+        KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES,
+      )
+    )
+  ) {
+    throw new TypeError("Knowledge relationship query is outside the browser contract.");
+  }
+}
+
+export function knowledgeRelationshipRequest(
+  query: KnowledgeRelationshipQuery,
+) {
+  assertKnowledgeRelationshipQuery(query);
+  const value = {
+    knowledgeObjectId: query.knowledgeObjectId,
+    version: query.version,
+    page: {
+      pageSize: query.pageSize,
+      pageToken: query.pageToken ?? undefined,
+      includeTotalSize: true,
+    },
+  };
+  return query.direction === "dependencies"
+    ? ListKnowledgeObjectDependenciesRequest.fromPartial(value)
+    : ListKnowledgeObjectDependentsRequest.fromPartial(value);
+}
+
+export async function loadKnowledgeRelationshipPage(
+  client: KnowledgeReadClient,
+  query: KnowledgeRelationshipQuery,
+  options?: ProtobufRequestOptions,
+): Promise<KnowledgeRelationshipPageLoadResult> {
+  try {
+    const request = knowledgeRelationshipRequest(query);
+    const response = query.direction === "dependencies"
+      ? await client.dependencies(request, options)
+      : await client.dependents(request, options);
+    return {
+      status: "available",
+      page: adaptKnowledgeRelationshipPage(response, query),
+    };
+  } catch {
+    // Missing, forbidden, stale, malformed, and unavailable graph reads are
+    // intentionally indistinguishable in the dormant administrator surface.
+    return { status: "unavailable" };
+  }
+}
+
+export function adaptKnowledgeRelationshipPage(
+  response:
+    | ListKnowledgeObjectDependenciesResponseMessage
+    | ListKnowledgeObjectDependentsResponseMessage,
+  query: KnowledgeRelationshipQuery,
+): KnowledgeRelationshipPageDisplay {
+  assertKnowledgeRelationshipQuery(query);
+  const edges = query.direction === "dependencies"
+    ? (response as ListKnowledgeObjectDependenciesResponseMessage).dependencies
+    : (response as ListKnowledgeObjectDependentsResponseMessage).dependents;
+  if (!Array.isArray(edges) || edges.length > query.pageSize || response.page === undefined) {
+    throw new TypeError("Knowledge relationship response has an invalid page shape.");
+  }
+
+  const revision = response.tenantCatalogRevision;
+  const resolvedObject = response.resolvedObject;
+  if (
+    typeof revision !== "bigint"
+    || revision < 1n
+    || revision > MAXIMUM_SIGNED_REVISION
+    || !validKnowledgeRelationshipIdentity(resolvedObject, revision)
+    || resolvedObject.knowledgeObjectId !== query.knowledgeObjectId
+    || resolvedObject.version !== query.version
+  ) {
+    throw new TypeError("Knowledge relationship response has an invalid root.");
+  }
+
+  const nextPageToken = response.page.nextPageToken?.length
+    ? response.page.nextPageToken
+    : null;
+  if (
+    nextPageToken !== null
+    && (
+      edges.length === 0
+      || (query.direction === "dependencies" && edges.length !== query.pageSize)
+      || !validOpaqueToken(
+        nextPageToken,
+        KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES,
+      )
+      || nextPageToken === query.pageToken
+    )
+  ) {
+    throw new TypeError("Knowledge relationship response has an invalid continuation.");
+  }
+  if (query.pageToken !== null && edges.length === 0) {
+    throw new TypeError("Knowledge relationship continuation made no progress.");
+  }
+
+  const maximumTotal = query.direction === "dependencies"
+    ? KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENCIES
+    : KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENTS;
+  const totalSize = response.page.totalSize;
+  const minimumTotal = BigInt(edges.length)
+    + (query.pageToken === null ? 0n : 1n)
+    + (nextPageToken === null ? 0n : 1n);
+  if (
+    typeof totalSize !== "bigint"
+    || !response.page.totalSizeExact
+    || totalSize < minimumTotal
+    || totalSize > maximumTotal
+    || (
+      query.pageToken === null
+      && nextPageToken === null
+      && totalSize !== BigInt(edges.length)
+    )
+  ) {
+    throw new TypeError("Knowledge relationship response has an invalid total.");
+  }
+
+  const adaptedEdges: KnowledgeRelationshipEdgeDisplay[] = [];
+  let previous: KnowledgeRelationshipEdgeDisplay | undefined;
+  for (const edge of edges) {
+    const adapted = adaptKnowledgeRelationshipEdge(
+      edge,
+      query.direction,
+      resolvedObject,
+      revision,
+    );
+    if (
+      previous !== undefined
+      && !knowledgeRelationshipEdgeFollows(previous, adapted, query.direction)
+    ) {
+      throw new TypeError("Knowledge relationship response has invalid edge order.");
+    }
+    adaptedEdges.push(adapted);
+    previous = adapted;
+  }
+
+  return {
+    direction: query.direction,
+    resolvedObject: {
+      knowledgeObjectId: `${resolvedObject.knowledgeObjectId}`,
+      version: resolvedObject.version,
+    },
+    edges: adaptedEdges,
+    nextPageToken,
+    totalSize,
+    tenantCatalogRevision: revision,
+  };
+}
+
+function adaptKnowledgeRelationshipEdge(
+  edge: KnowledgeManagementDependencyEdge,
+  direction: KnowledgeRelationshipDirection,
+  resolvedObject: KnowledgeManagementObjectVersionIdentity,
+  revision: bigint,
+): KnowledgeRelationshipEdgeDisplay {
+  if (
+    edge.role !== KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
+    || !validKnowledgeRelationshipIdentity(edge.source, revision)
+    || !validKnowledgeRelationshipIdentity(edge.target, revision)
+    || sameKnowledgeRelationshipIdentity(edge.source, edge.target)
+  ) {
+    throw new TypeError("Knowledge relationship response has an invalid edge.");
+  }
+  const fixed = direction === "dependencies" ? edge.source : edge.target;
+  const opposite = direction === "dependencies" ? edge.target : edge.source;
+  if (!sameKnowledgeRelationshipIdentity(fixed, resolvedObject)) {
+    throw new TypeError("Knowledge relationship edge disagrees with its root.");
+  }
+  return {
+    key: `${direction}:${opposite.knowledgeObjectId}\0${opposite.version.toString()}\0field-input`,
+    knowledgeObjectId: `${opposite.knowledgeObjectId}`,
+    version: opposite.version,
+    roleLabel: "Field input",
+  };
+}
+
+function validKnowledgeRelationshipIdentity(
+  identity: KnowledgeManagementObjectVersionIdentity | undefined,
+  revision: bigint,
+): identity is KnowledgeManagementObjectVersionIdentity {
+  return identity !== undefined
+    && validIdentity(identity.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+    && typeof identity.version === "bigint"
+    && identity.version >= 1n
+    && identity.version <= revision;
+}
+
+function sameKnowledgeRelationshipIdentity(
+  left: KnowledgeManagementObjectVersionIdentity,
+  right: KnowledgeManagementObjectVersionIdentity,
+): boolean {
+  return left.knowledgeObjectId === right.knowledgeObjectId
+    && left.version === right.version;
+}
+
+function knowledgeRelationshipEdgeFollows(
+  previous: KnowledgeRelationshipEdgeDisplay,
+  current: KnowledgeRelationshipEdgeDisplay,
+  direction: KnowledgeRelationshipDirection,
+): boolean {
+  const identityOrder = compareUTF8Binary(
+    previous.knowledgeObjectId,
+    current.knowledgeObjectId,
+  );
+  if (direction === "dependents") return identityOrder < 0;
+  if (identityOrder !== 0) return identityOrder < 0;
+  return previous.version < current.version;
+}
+
+function compareUTF8Binary(left: string, right: string): number {
+  const encoder = new TextEncoder();
+  const leftBytes = encoder.encode(left);
+  const rightBytes = encoder.encode(right);
+  const shared = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < shared; index += 1) {
+    const difference = (leftBytes[index] ?? 0) - (rightBytes[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+export function mergeKnowledgeRelationshipContinuation(
+  current: KnowledgeRelationshipPageDisplay,
+  continuation: KnowledgeRelationshipPageDisplay,
+  requestedPageToken: string,
+  consumedPageTokens: ReadonlySet<string>,
+): { status: "merged"; page: KnowledgeRelationshipPageDisplay } | { status: "stale" } {
+  if (
+    !validOpaqueToken(requestedPageToken, KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES)
+    || consumedPageTokens.has(requestedPageToken)
+    || current.nextPageToken !== requestedPageToken
+    || continuation.direction !== current.direction
+    || !sameKnowledgeRelationshipIdentity(
+      continuation.resolvedObject,
+      current.resolvedObject,
+    )
+    || continuation.tenantCatalogRevision !== current.tenantCatalogRevision
+    || continuation.totalSize !== current.totalSize
+    || (
+      continuation.nextPageToken !== null
+      && (
+        continuation.nextPageToken === requestedPageToken
+        || consumedPageTokens.has(continuation.nextPageToken)
+      )
+    )
+  ) {
+    return { status: "stale" };
+  }
+
+  const lastCurrent = current.edges.at(-1);
+  const firstContinuation = continuation.edges[0];
+  if (
+    lastCurrent !== undefined
+    && firstContinuation !== undefined
+    && !knowledgeRelationshipEdgeFollows(
+      lastCurrent,
+      firstContinuation,
+      current.direction,
+    )
+  ) {
+    return { status: "stale" };
+  }
+  const seen = new Set(current.edges.map((edge) => edge.key));
+  for (const edge of continuation.edges) {
+    if (seen.has(edge.key)) return { status: "stale" };
+    seen.add(edge.key);
+  }
+  const edges = [...current.edges, ...continuation.edges];
+  const exactTotalReached = BigInt(edges.length) === current.totalSize;
+  if (
+    BigInt(edges.length) > current.totalSize
+    || (continuation.nextPageToken === null) !== exactTotalReached
+  ) {
+    return { status: "stale" };
+  }
+  return {
+    status: "merged",
+    page: {
+      direction: current.direction,
+      resolvedObject: { ...current.resolvedObject },
+      edges,
+      nextPageToken: continuation.nextPageToken,
+      totalSize: current.totalSize,
+      tenantCatalogRevision: current.tenantCatalogRevision,
+    },
+  };
 }
 
 export function adaptKnowledgePage(

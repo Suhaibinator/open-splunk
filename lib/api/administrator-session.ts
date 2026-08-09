@@ -35,6 +35,8 @@ const ADMINISTRATOR_ROUTE_PATHS: ReadonlySet<string> = new Set([
   "/api/v1/ingestion-tokens/list",
   "/api/v1/ingestion-tokens/revoke",
   "/api/v1/ingestion-tokens/update",
+  "/api/v1/knowledge/objects/dependencies",
+  "/api/v1/knowledge/objects/dependents",
   "/api/v1/knowledge/objects/get",
   "/api/v1/knowledge/objects/list",
   "/api/v1/search/jobs/inspect",
