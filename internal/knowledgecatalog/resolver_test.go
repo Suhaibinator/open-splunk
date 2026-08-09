@@ -25,6 +25,43 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestUniqueHighestResolutionCandidateIsOrderIndependent(t *testing.T) {
+	high := resolutionCandidate{
+		object: Object{KnowledgeObjectID: "private"},
+		rank:   3,
+	}
+	lowA := resolutionCandidate{
+		object: Object{KnowledgeObjectID: "global-a"},
+		rank:   1,
+	}
+	lowB := resolutionCandidate{
+		object: Object{KnowledgeObjectID: "global-b"},
+		rank:   1,
+	}
+	for _, group := range [][]resolutionCandidate{
+		{high, lowA, lowB},
+		{lowA, high, lowB},
+		{lowA, lowB, high},
+	} {
+		winner, err := uniqueHighestResolutionCandidate(group)
+		if err != nil {
+			t.Fatalf("uniqueHighestResolutionCandidate(%v): %v", group, err)
+		}
+		if winner.object.KnowledgeObjectID != high.object.KnowledgeObjectID {
+			t.Fatalf("winner = %q, want %q", winner.object.KnowledgeObjectID, high.object.KnowledgeObjectID)
+		}
+	}
+
+	for _, group := range [][]resolutionCandidate{
+		nil,
+		{high, {object: Object{KnowledgeObjectID: "private-duplicate"}, rank: 3}},
+	} {
+		if _, err := uniqueHighestResolutionCandidate(group); !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("ambiguous group error = %v, want ErrCorrupt", err)
+		}
+	}
+}
+
 func TestResolverEmptyCatalogRetainsDurableRevisionZero(t *testing.T) {
 	_, store := newCatalogTestStore(t)
 	resolver := mustTestResolver(t, store)

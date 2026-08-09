@@ -584,18 +584,9 @@ func resolveCandidatePrecedence(
 	winners := make([]resolutionCandidate, 0, len(groups))
 	losers := make([]resolutionShadowCandidate, 0)
 	for _, group := range groups {
-		if len(group) == 0 {
-			continue
-		}
-		winner := group[0]
-		for index := 1; index < len(group); index++ {
-			candidate := group[index]
-			if candidate.rank == winner.rank {
-				return knowledgesnapshot.Input{}, fmt.Errorf("%w: active precedence slot is ambiguous", ErrCorrupt)
-			}
-			if candidate.rank > winner.rank {
-				winner = candidate
-			}
+		winner, err := uniqueHighestResolutionCandidate(group)
+		if err != nil {
+			return knowledgesnapshot.Input{}, err
 		}
 		winners = append(winners, winner)
 		for _, candidate := range group {
@@ -745,6 +736,36 @@ func resolveCandidatePrecedence(
 	}
 	*staticCharges = winningCharges
 	return input, nil
+}
+
+func uniqueHighestResolutionCandidate(
+	group []resolutionCandidate,
+) (resolutionCandidate, error) {
+	if len(group) == 0 {
+		return resolutionCandidate{}, fmt.Errorf(
+			"%w: active precedence slot is empty",
+			ErrCorrupt,
+		)
+	}
+	winner := group[0]
+	highestCount := 1
+	for index := 1; index < len(group); index++ {
+		candidate := group[index]
+		switch {
+		case candidate.rank > winner.rank:
+			winner = candidate
+			highestCount = 1
+		case candidate.rank == winner.rank:
+			highestCount++
+		}
+	}
+	if highestCount != 1 {
+		return resolutionCandidate{}, fmt.Errorf(
+			"%w: active precedence slot is ambiguous",
+			ErrCorrupt,
+		)
+	}
+	return winner, nil
 }
 
 func validateParallelResolutionSemantics(ctx context.Context, winners []resolutionCandidate) error {
