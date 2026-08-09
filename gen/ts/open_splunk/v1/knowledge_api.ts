@@ -143,7 +143,9 @@ export enum KnowledgeValidationIntent {
   KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE = 1,
   /**
    * KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION - ACTIVE_PUBLICATION evaluates the candidate as the proposed ACTIVE version
-   * against the exact catalog authority identified by the response revision.
+   * in one fixed knowledge, app, and index catalog transaction. The response
+   * revision identifies only the knowledge-ledger component of that advisory
+   * evaluation; it is not the complete transaction authority.
    */
   KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION = 2,
   UNRECOGNIZED = -1,
@@ -440,14 +442,30 @@ export interface KnowledgeValidationDiagnostic {
 /**
  * Every charge is attributable only to the applied candidate, never to the
  * complete tenant catalog or an affected publication cohort. A present report
- * is complete; partial resource estimates are forbidden. INACTIVE_STORAGE
- * reports exact selector_patterns and normalized_definition_bytes structural
- * normalization charges; dependency_nodes, dependency_edges, and every compile-
- * derived field from generated_operators through scalar_expression_nodes are
- * zero because publication compilation does not occur. ACTIVE_PUBLICATION
- * reports the complete candidate publication-compilation charges.
+ * is complete; partial resource estimates are forbidden. selector_patterns is
+ * the exact number of normalized selector patterns in the applied candidate,
+ * and normalized_definition_bytes is its exact deterministic protobuf size.
+ *
+ * INACTIVE_STORAGE sets dependency_nodes, dependency_edges, and every compile-
+ * derived field -- generated_operators, generated_fields, regex_programs,
+ * estimated_regex_work_units, scalar_expressions, scalar_expression_nodes,
+ * extraction_outputs, json_evaluation_work_units, and scalar_predicates -- to
+ * exactly zero because publication compilation does not occur.
+ *
+ * ACTIVE_PUBLICATION obtains compile-derived fields by compiling a canonical
+ * knowledge program input whose only object is the applied normalized
+ * candidate and whose dependency list is empty. The fields equal, respectively,
+ * that singleton program's intrinsic Charges.GeneratedOperators,
+ * Charges.GeneratedFields, Charges.RegexPrograms, Charges.RegexWorkUnits,
+ * Charges.ScalarExpressions, Charges.ScalarExpressionNodes,
+ * Charges.ExtractionOutputs, Charges.JSONEvaluationWork, and
+ * Charges.ScalarPredicates. They are neither affected-cohort totals nor
+ * marginal deltas after cohort operator fusion. dependency_nodes and
+ * dependency_edges remain derived from the full ACTIVE transition and the
+ * returned authorized result.dependencies, not from the singleton program.
  */
 export interface KnowledgeResourceEstimate {
+  /** Exact number of normalized selector patterns in the applied candidate. */
   selectorPatterns: number;
   /** Exact deterministic protobuf size of the normalized candidate definition. */
   normalizedDefinitionBytes: bigint;
@@ -469,13 +487,23 @@ export interface KnowledgeResourceEstimate {
   estimatedRegexWorkUnits: bigint;
   scalarExpressions: number;
   scalarExpressionNodes: number;
+  extractionOutputs: number;
+  jsonEvaluationWorkUnits: number;
+  scalarPredicates: number;
 }
 
 /**
- * KnowledgeValidationResult reports candidate-authored validity in-band with
- * HTTP 200. Request-envelope, authentication, authorization-to-the-requested
- * object, catalog-integrity, and service failures remain ordinary non-2xx API
- * errors and never appear as valid=false.
+ * KnowledgeValidationResult reports candidate-authored definition validity
+ * under the selected intent in-band with HTTP 200. valid is not mutation
+ * acceptability, a reservation, or a promise that a later Writer operation
+ * will succeed. An applied masked update that is identical to the current
+ * definition may be valid. INACTIVE_STORAGE against a currently ACTIVE object
+ * proves only hypothetical non-ACTIVE storage validity and never ACTIVE Update
+ * admissibility. Every later Writer operation independently revalidates its
+ * then-current authorization, version, lifecycle, capacity, app, index, and
+ * publication authority. Request-envelope, authentication, authorization-to-
+ * the-requested object, catalog-integrity, and service failures remain ordinary
+ * non-2xx API errors and never appear as valid=false.
  *
  * valid=false requires at least one retained field violation or ERROR
  * diagnostic even when either issue list is truncated, and requires
@@ -599,10 +627,12 @@ export interface ValidateKnowledgeObjectRequest {
 }
 
 /**
- * The deterministic protobuf encoding of this complete response is at most
- * 8 MiB (8388608 bytes), including result framing and tenant_catalog_revision.
- * The boundary recursively rejects unknown protobuf fields in the response,
- * result, and every nested message before deterministic serialization.
+ * Validation observes the knowledge, app, and index catalogs in one fixed
+ * transaction. The deterministic protobuf encoding of this complete response
+ * is at most 8 MiB (8388608 bytes), including result framing and
+ * tenant_catalog_revision. The boundary recursively rejects unknown protobuf
+ * fields in the response, result, and every nested message before deterministic
+ * serialization.
  */
 export interface ValidateKnowledgeObjectResponse {
   /** Required by the response boundary; an absent result is invalid. */
@@ -610,8 +640,11 @@ export interface ValidateKnowledgeObjectResponse {
     | KnowledgeValidationResult
     | undefined;
   /**
-   * Exact catalog authority used by validation; zero denotes a proven empty
-   * knowledge catalog.
+   * Exact knowledge-ledger revision observed in the fixed transaction; zero
+   * denotes a proven empty knowledge ledger. It identifies only the knowledge-
+   * ledger component, not the app or index authority which also affected the
+   * result. It is advisory correlation metadata, not a reusable full authority,
+   * reservation, mutation proof, or promise that later validation will agree.
    */
   tenantCatalogRevision: bigint;
 }
@@ -723,10 +756,14 @@ export interface PreviewKnowledgeObjectRequest {
 /**
  * This future unregistered route has no independent validation intent.
  * validation always uses ACTIVE_PUBLICATION and applies the same create/update
- * candidate-envelope semantics as ValidateKnowledgeObjectRequest. It proves
- * full publication readiness at tenant_catalog_revision and obeys every
- * candidate dependency, resource, truncation, and nondisclosure invariant of
- * KnowledgeValidationResult before preview execution.
+ * candidate-envelope semantics as ValidateKnowledgeObjectRequest. It evaluates
+ * definition validity in one fixed knowledge, app, and index catalog
+ * transaction and obeys every candidate dependency, resource, truncation, and
+ * nondisclosure invariant of KnowledgeValidationResult before preview
+ * execution. Its tenant_catalog_revision identifies only the advisory
+ * knowledge-ledger component; it is not mutation acceptability, a reservation,
+ * or a reusable publication proof, and every later Writer operation revalidates
+ * its then-current authority.
  */
 export interface PreviewKnowledgeObjectResponse {
   validation: KnowledgeValidationResult | undefined;
@@ -3305,6 +3342,9 @@ function createBaseKnowledgeResourceEstimate(): KnowledgeResourceEstimate {
     estimatedRegexWorkUnits: 0n,
     scalarExpressions: 0,
     scalarExpressionNodes: 0,
+    extractionOutputs: 0,
+    jsonEvaluationWorkUnits: 0,
+    scalarPredicates: 0,
   };
 }
 
@@ -3347,6 +3387,15 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
     }
     if (message.scalarExpressionNodes !== 0) {
       writer.uint32(80).uint32(message.scalarExpressionNodes);
+    }
+    if (message.extractionOutputs !== 0) {
+      writer.uint32(96).uint32(message.extractionOutputs);
+    }
+    if (message.jsonEvaluationWorkUnits !== 0) {
+      writer.uint32(104).uint32(message.jsonEvaluationWorkUnits);
+    }
+    if (message.scalarPredicates !== 0) {
+      writer.uint32(112).uint32(message.scalarPredicates);
     }
     return writer;
   },
@@ -3438,6 +3487,30 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
           message.scalarExpressionNodes = reader.uint32();
           continue;
         }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.extractionOutputs = reader.uint32();
+          continue;
+        }
+        case 13: {
+          if (tag !== 104) {
+            break;
+          }
+
+          message.jsonEvaluationWorkUnits = reader.uint32();
+          continue;
+        }
+        case 14: {
+          if (tag !== 112) {
+            break;
+          }
+
+          message.scalarPredicates = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3499,6 +3572,21 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
         : isSet(object.scalar_expression_nodes)
         ? globalThis.Number(object.scalar_expression_nodes)
         : 0,
+      extractionOutputs: isSet(object.extractionOutputs)
+        ? globalThis.Number(object.extractionOutputs)
+        : isSet(object.extraction_outputs)
+        ? globalThis.Number(object.extraction_outputs)
+        : 0,
+      jsonEvaluationWorkUnits: isSet(object.jsonEvaluationWorkUnits)
+        ? globalThis.Number(object.jsonEvaluationWorkUnits)
+        : isSet(object.json_evaluation_work_units)
+        ? globalThis.Number(object.json_evaluation_work_units)
+        : 0,
+      scalarPredicates: isSet(object.scalarPredicates)
+        ? globalThis.Number(object.scalarPredicates)
+        : isSet(object.scalar_predicates)
+        ? globalThis.Number(object.scalar_predicates)
+        : 0,
     };
   },
 
@@ -3534,6 +3622,15 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
     if (message.scalarExpressionNodes !== 0) {
       obj.scalarExpressionNodes = Math.round(message.scalarExpressionNodes);
     }
+    if (message.extractionOutputs !== 0) {
+      obj.extractionOutputs = Math.round(message.extractionOutputs);
+    }
+    if (message.jsonEvaluationWorkUnits !== 0) {
+      obj.jsonEvaluationWorkUnits = Math.round(message.jsonEvaluationWorkUnits);
+    }
+    if (message.scalarPredicates !== 0) {
+      obj.scalarPredicates = Math.round(message.scalarPredicates);
+    }
     return obj;
   },
 
@@ -3558,6 +3655,9 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
         : 0n;
     message.scalarExpressions = object.scalarExpressions ?? 0;
     message.scalarExpressionNodes = object.scalarExpressionNodes ?? 0;
+    message.extractionOutputs = object.extractionOutputs ?? 0;
+    message.jsonEvaluationWorkUnits = object.jsonEvaluationWorkUnits ?? 0;
+    message.scalarPredicates = object.scalarPredicates ?? 0;
     return message;
   },
 };

@@ -45,6 +45,13 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		"KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE = 1;",
 		"returns no derived dependencies",
 	)
+	validationContractRequireProtoComments(
+		t,
+		"KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION = 2;",
+		"one fixed knowledge, app, and index catalog transaction",
+		"only the knowledge-ledger component",
+		"not the complete transaction authority",
+	)
 
 	request := file.Messages().ByName("ValidateKnowledgeObjectRequest")
 	if request == nil || request.Fields().Len() != 5 {
@@ -124,12 +131,32 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 	)
 
 	resources := file.Messages().ByName("KnowledgeResourceEstimate")
-	if resources == nil || resources.Fields().Len() != 10 {
-		t.Fatalf("KnowledgeResourceEstimate descriptor = %v, want ten fields", resources)
+	if resources == nil || resources.Fields().Len() != 13 {
+		t.Fatalf("KnowledgeResourceEstimate descriptor = %v, want thirteen fields", resources)
 	}
-	for number := protoreflect.FieldNumber(1); number <= 10; number++ {
-		if field := resources.Fields().ByNumber(number); field == nil || field.Number() != number {
-			t.Errorf("KnowledgeResourceEstimate field %d = %v", number, field)
+	resourceFields := []struct {
+		name   protoreflect.Name
+		number protoreflect.FieldNumber
+		kind   protoreflect.Kind
+	}{
+		{name: "selector_patterns", number: 1, kind: protoreflect.Uint32Kind},
+		{name: "normalized_definition_bytes", number: 2, kind: protoreflect.Uint64Kind},
+		{name: "dependency_nodes", number: 3, kind: protoreflect.Uint32Kind},
+		{name: "dependency_edges", number: 4, kind: protoreflect.Uint32Kind},
+		{name: "generated_operators", number: 5, kind: protoreflect.Uint32Kind},
+		{name: "generated_fields", number: 6, kind: protoreflect.Uint32Kind},
+		{name: "regex_programs", number: 7, kind: protoreflect.Uint32Kind},
+		{name: "estimated_regex_work_units", number: 8, kind: protoreflect.Uint64Kind},
+		{name: "scalar_expressions", number: 9, kind: protoreflect.Uint32Kind},
+		{name: "scalar_expression_nodes", number: 10, kind: protoreflect.Uint32Kind},
+		{name: "extraction_outputs", number: 12, kind: protoreflect.Uint32Kind},
+		{name: "json_evaluation_work_units", number: 13, kind: protoreflect.Uint32Kind},
+		{name: "scalar_predicates", number: 14, kind: protoreflect.Uint32Kind},
+	}
+	for _, expected := range resourceFields {
+		field := validationContractRequireField(t, resources, expected.name, expected.number, expected.kind, "")
+		if field.HasPresence() || field.HasOptionalKeyword() {
+			t.Errorf("KnowledgeResourceEstimate.%s must remain a zero-default proto3 scalar", expected.name)
 		}
 	}
 	if resources.Fields().ByNumber(11) != nil || !validationContractNumberReserved(resources, 11) ||
@@ -139,13 +166,31 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 	validationContractRequireProtoComments(t, "message KnowledgeResourceEstimate {",
 		"only to the applied candidate",
 		"partial resource estimates are forbidden",
+		"exact number of normalized selector patterns",
+		"exact deterministic protobuf size",
 		"INACTIVE_STORAGE",
-		"exact selector_patterns and normalized_definition_bytes",
-		"every compile-",
-		"derived field from generated_operators through scalar_expression_nodes",
-		"zero because publication compilation does not occur",
+		"dependency_nodes, dependency_edges, and every compile-",
+		"extraction_outputs, json_evaluation_work_units, and scalar_predicates",
+		"exactly zero because publication compilation does not occur",
 		"ACTIVE_PUBLICATION",
-		"complete candidate publication-compilation charges",
+		"only object is the applied normalized",
+		"dependency list is empty",
+		"Charges.GeneratedOperators",
+		"Charges.GeneratedFields",
+		"Charges.RegexPrograms",
+		"Charges.RegexWorkUnits",
+		"Charges.ScalarExpressions",
+		"Charges.ScalarExpressionNodes",
+		"Charges.ExtractionOutputs",
+		"Charges.JSONEvaluationWork",
+		"Charges.ScalarPredicates",
+		"neither affected-cohort totals nor",
+		"marginal deltas after cohort operator fusion",
+		"remain derived from the full ACTIVE transition",
+		"not from the singleton program",
+	)
+	validationContractRequireProtoComments(t, "uint32 selector_patterns = 1;",
+		"Exact number of normalized selector patterns in the applied candidate",
 	)
 	validationContractRequireProtoComments(t, "reserved 11;",
 		"Intentional pre-route FILE compatibility waiver",
@@ -188,6 +233,16 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		t.Error("truncation flags must retain ordinary false-when-complete proto3 bool semantics")
 	}
 	validationContractRequireProtoComments(t, "message KnowledgeValidationResult {",
+		"definition validity",
+		"valid is not mutation",
+		"acceptability, a reservation, or a promise",
+		"masked update that is identical to the current",
+		"may be valid",
+		"INACTIVE_STORAGE against a currently ACTIVE object",
+		"hypothetical non-ACTIVE storage validity",
+		"never ACTIVE Update",
+		"Every later Writer operation independently revalidates",
+		"then-current authorization, version, lifecycle, capacity, app, index, and",
 		"valid=false requires at least one retained field violation or ERROR",
 		"valid=true requires a normalized_definition, an exact 32-byte SHA-256 digest",
 		"dependencies, and resources to be",
@@ -260,6 +315,7 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		t.Error("validation response must retain boundary-required result presence and scalar revision")
 	}
 	validationContractRequireProtoComments(t, "message ValidateKnowledgeObjectResponse {",
+		"knowledge, app, and index catalogs in one fixed",
 		"deterministic protobuf encoding of this complete response",
 		"8 MiB (8388608 bytes)",
 		"recursively rejects unknown protobuf fields in the response",
@@ -270,8 +326,14 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		"absent result is invalid",
 	)
 	validationContractRequireNestedProtoComments(t, "message ValidateKnowledgeObjectResponse {", "uint64 tenant_catalog_revision = 2;",
-		"Exact catalog authority used by validation",
-		"zero denotes a proven empty",
+		"Exact knowledge-ledger revision observed in the fixed transaction",
+		"zero",
+		"proven empty knowledge ledger",
+		"only the knowledge-",
+		"not the app or index authority",
+		"advisory correlation metadata",
+		"not a reusable full authority",
+		"reservation, mutation proof, or promise",
 	)
 
 	preview := file.Messages().ByName("PreviewKnowledgeObjectResponse")
@@ -285,8 +347,12 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		"no independent validation intent",
 		"always uses ACTIVE_PUBLICATION",
 		"same create/update candidate-envelope semantics as ValidateKnowledgeObjectRequest",
-		"full publication readiness at tenant_catalog_revision",
+		"definition validity in one fixed knowledge, app, and index catalog",
 		"dependency, resource, truncation, and nondisclosure invariant",
+		"tenant_catalog_revision identifies only the advisory",
+		"not mutation acceptability, a reservation",
+		"reusable publication proof",
+		"every later Writer operation revalidates",
 	)
 }
 
@@ -336,6 +402,48 @@ func TestKnowledgeValidationContractPreservesPresenceAndReservedDraftWire(t *tes
 	if decodedCreate.GetDefinition() == nil || decodedCreate.GetDefinition().GetFieldAlias() == nil ||
 		decodedCreate.KnowledgeObjectId != nil || decodedCreate.ExpectedVersion != nil || decodedCreate.UpdateMask != nil {
 		t.Fatalf("create envelope acquired update presence: %+v", decodedCreate)
+	}
+
+	resourceEstimate := &opensplunkv1.KnowledgeResourceEstimate{
+		SelectorPatterns:          1,
+		NormalizedDefinitionBytes: 2,
+		DependencyNodes:           3,
+		DependencyEdges:           4,
+		GeneratedOperators:        5,
+		GeneratedFields:           6,
+		RegexPrograms:             7,
+		EstimatedRegexWorkUnits:   8,
+		ScalarExpressions:         9,
+		ScalarExpressionNodes:     10,
+		ExtractionOutputs:         12,
+		JsonEvaluationWorkUnits:   13,
+		ScalarPredicates:          14,
+	}
+	resourceWire, err := proto.MarshalOptions{Deterministic: true}.Marshal(resourceEstimate)
+	if err != nil {
+		t.Fatalf("marshal complete candidate resource estimate: %v", err)
+	}
+	if got := validationContractWireFieldNumbers(t, resourceWire); !slices.Equal(
+		got,
+		[]protowire.Number{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14},
+	) {
+		t.Fatalf("candidate resource wire fields = %v, want append-only [1..10 12 13 14]", got)
+	}
+	var decodedResources opensplunkv1.KnowledgeResourceEstimate
+	if err := proto.Unmarshal(resourceWire, &decodedResources); err != nil {
+		t.Fatalf("unmarshal complete candidate resource estimate: %v", err)
+	}
+	if !proto.Equal(&decodedResources, resourceEstimate) {
+		t.Fatalf("candidate resource wire round trip = %+v, want %+v", &decodedResources, resourceEstimate)
+	}
+	emptyResourceWire, err := proto.MarshalOptions{Deterministic: true}.Marshal(
+		&opensplunkv1.KnowledgeResourceEstimate{},
+	)
+	if err != nil {
+		t.Fatalf("marshal empty candidate resource estimate: %v", err)
+	}
+	if len(emptyResourceWire) != 0 {
+		t.Fatalf("zero-default candidate resource wire = %x, want empty", emptyResourceWire)
 	}
 
 	legacyDiagnostic, err := proto.Marshal(&opensplunkv1.Diagnostic{Code: "LEGACY_UNLOCATED"})

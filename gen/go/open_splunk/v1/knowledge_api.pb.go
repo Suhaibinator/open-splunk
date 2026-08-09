@@ -141,7 +141,9 @@ const (
 	// publishable, and returns no derived dependencies.
 	KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE KnowledgeValidationIntent = 1
 	// ACTIVE_PUBLICATION evaluates the candidate as the proposed ACTIVE version
-	// against the exact catalog authority identified by the response revision.
+	// in one fixed knowledge, app, and index catalog transaction. The response
+	// revision identifies only the knowledge-ledger component of that advisory
+	// evaluation; it is not the complete transaction authority.
 	KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION KnowledgeValidationIntent = 2
 )
 
@@ -1613,15 +1615,31 @@ func (x *KnowledgeValidationDiagnostic) GetDiagnostic() *Diagnostic {
 
 // Every charge is attributable only to the applied candidate, never to the
 // complete tenant catalog or an affected publication cohort. A present report
-// is complete; partial resource estimates are forbidden. INACTIVE_STORAGE
-// reports exact selector_patterns and normalized_definition_bytes structural
-// normalization charges; dependency_nodes, dependency_edges, and every compile-
-// derived field from generated_operators through scalar_expression_nodes are
-// zero because publication compilation does not occur. ACTIVE_PUBLICATION
-// reports the complete candidate publication-compilation charges.
+// is complete; partial resource estimates are forbidden. selector_patterns is
+// the exact number of normalized selector patterns in the applied candidate,
+// and normalized_definition_bytes is its exact deterministic protobuf size.
+//
+// INACTIVE_STORAGE sets dependency_nodes, dependency_edges, and every compile-
+// derived field -- generated_operators, generated_fields, regex_programs,
+// estimated_regex_work_units, scalar_expressions, scalar_expression_nodes,
+// extraction_outputs, json_evaluation_work_units, and scalar_predicates -- to
+// exactly zero because publication compilation does not occur.
+//
+// ACTIVE_PUBLICATION obtains compile-derived fields by compiling a canonical
+// knowledge program input whose only object is the applied normalized
+// candidate and whose dependency list is empty. The fields equal, respectively,
+// that singleton program's intrinsic Charges.GeneratedOperators,
+// Charges.GeneratedFields, Charges.RegexPrograms, Charges.RegexWorkUnits,
+// Charges.ScalarExpressions, Charges.ScalarExpressionNodes,
+// Charges.ExtractionOutputs, Charges.JSONEvaluationWork, and
+// Charges.ScalarPredicates. They are neither affected-cohort totals nor
+// marginal deltas after cohort operator fusion. dependency_nodes and
+// dependency_edges remain derived from the full ACTIVE transition and the
+// returned authorized result.dependencies, not from the singleton program.
 type KnowledgeResourceEstimate struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	SelectorPatterns uint32                 `protobuf:"varint,1,opt,name=selector_patterns,json=selectorPatterns,proto3" json:"selector_patterns,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exact number of normalized selector patterns in the applied candidate.
+	SelectorPatterns uint32 `protobuf:"varint,1,opt,name=selector_patterns,json=selectorPatterns,proto3" json:"selector_patterns,omitempty"`
 	// Exact deterministic protobuf size of the normalized candidate definition.
 	NormalizedDefinitionBytes uint64 `protobuf:"varint,2,opt,name=normalized_definition_bytes,json=normalizedDefinitionBytes,proto3" json:"normalized_definition_bytes,omitempty"`
 	// Distinct exact direct targets in result.dependencies, excluding the
@@ -1638,6 +1656,9 @@ type KnowledgeResourceEstimate struct {
 	EstimatedRegexWorkUnits uint64 `protobuf:"varint,8,opt,name=estimated_regex_work_units,json=estimatedRegexWorkUnits,proto3" json:"estimated_regex_work_units,omitempty"`
 	ScalarExpressions       uint32 `protobuf:"varint,9,opt,name=scalar_expressions,json=scalarExpressions,proto3" json:"scalar_expressions,omitempty"`
 	ScalarExpressionNodes   uint32 `protobuf:"varint,10,opt,name=scalar_expression_nodes,json=scalarExpressionNodes,proto3" json:"scalar_expression_nodes,omitempty"`
+	ExtractionOutputs       uint32 `protobuf:"varint,12,opt,name=extraction_outputs,json=extractionOutputs,proto3" json:"extraction_outputs,omitempty"`
+	JsonEvaluationWorkUnits uint32 `protobuf:"varint,13,opt,name=json_evaluation_work_units,json=jsonEvaluationWorkUnits,proto3" json:"json_evaluation_work_units,omitempty"`
+	ScalarPredicates        uint32 `protobuf:"varint,14,opt,name=scalar_predicates,json=scalarPredicates,proto3" json:"scalar_predicates,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -1742,10 +1763,38 @@ func (x *KnowledgeResourceEstimate) GetScalarExpressionNodes() uint32 {
 	return 0
 }
 
-// KnowledgeValidationResult reports candidate-authored validity in-band with
-// HTTP 200. Request-envelope, authentication, authorization-to-the-requested
-// object, catalog-integrity, and service failures remain ordinary non-2xx API
-// errors and never appear as valid=false.
+func (x *KnowledgeResourceEstimate) GetExtractionOutputs() uint32 {
+	if x != nil {
+		return x.ExtractionOutputs
+	}
+	return 0
+}
+
+func (x *KnowledgeResourceEstimate) GetJsonEvaluationWorkUnits() uint32 {
+	if x != nil {
+		return x.JsonEvaluationWorkUnits
+	}
+	return 0
+}
+
+func (x *KnowledgeResourceEstimate) GetScalarPredicates() uint32 {
+	if x != nil {
+		return x.ScalarPredicates
+	}
+	return 0
+}
+
+// KnowledgeValidationResult reports candidate-authored definition validity
+// under the selected intent in-band with HTTP 200. valid is not mutation
+// acceptability, a reservation, or a promise that a later Writer operation
+// will succeed. An applied masked update that is identical to the current
+// definition may be valid. INACTIVE_STORAGE against a currently ACTIVE object
+// proves only hypothetical non-ACTIVE storage validity and never ACTIVE Update
+// admissibility. Every later Writer operation independently revalidates its
+// then-current authorization, version, lifecycle, capacity, app, index, and
+// publication authority. Request-envelope, authentication, authorization-to-
+// the-requested object, catalog-integrity, and service failures remain ordinary
+// non-2xx API errors and never appear as valid=false.
 //
 // valid=false requires at least one retained field violation or ERROR
 // diagnostic even when either issue list is truncated, and requires
@@ -2020,16 +2069,21 @@ func (x *ValidateKnowledgeObjectRequest) GetIntent() KnowledgeValidationIntent {
 	return KnowledgeValidationIntent_KNOWLEDGE_VALIDATION_INTENT_UNSPECIFIED
 }
 
-// The deterministic protobuf encoding of this complete response is at most
-// 8 MiB (8388608 bytes), including result framing and tenant_catalog_revision.
-// The boundary recursively rejects unknown protobuf fields in the response,
-// result, and every nested message before deterministic serialization.
+// Validation observes the knowledge, app, and index catalogs in one fixed
+// transaction. The deterministic protobuf encoding of this complete response
+// is at most 8 MiB (8388608 bytes), including result framing and
+// tenant_catalog_revision. The boundary recursively rejects unknown protobuf
+// fields in the response, result, and every nested message before deterministic
+// serialization.
 type ValidateKnowledgeObjectResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Required by the response boundary; an absent result is invalid.
 	Result *KnowledgeValidationResult `protobuf:"bytes,1,opt,name=result,proto3" json:"result,omitempty"`
-	// Exact catalog authority used by validation; zero denotes a proven empty
-	// knowledge catalog.
+	// Exact knowledge-ledger revision observed in the fixed transaction; zero
+	// denotes a proven empty knowledge ledger. It identifies only the knowledge-
+	// ledger component, not the app or index authority which also affected the
+	// result. It is advisory correlation metadata, not a reusable full authority,
+	// reservation, mutation proof, or promise that later validation will agree.
 	TenantCatalogRevision uint64 `protobuf:"varint,2,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
@@ -2575,10 +2629,14 @@ func (x *PreviewKnowledgeObjectRequest) GetMaximumRows() uint32 {
 
 // This future unregistered route has no independent validation intent.
 // validation always uses ACTIVE_PUBLICATION and applies the same create/update
-// candidate-envelope semantics as ValidateKnowledgeObjectRequest. It proves
-// full publication readiness at tenant_catalog_revision and obeys every
-// candidate dependency, resource, truncation, and nondisclosure invariant of
-// KnowledgeValidationResult before preview execution.
+// candidate-envelope semantics as ValidateKnowledgeObjectRequest. It evaluates
+// definition validity in one fixed knowledge, app, and index catalog
+// transaction and obeys every candidate dependency, resource, truncation, and
+// nondisclosure invariant of KnowledgeValidationResult before preview
+// execution. Its tenant_catalog_revision identifies only the advisory
+// knowledge-ledger component; it is not mutation acceptability, a reservation,
+// or a reusable publication proof, and every later Writer operation revalidates
+// its then-current authority.
 type PreviewKnowledgeObjectResponse struct {
 	state                 protoimpl.MessageState     `protogen:"open.v1"`
 	Validation            *KnowledgeValidationResult `protobuf:"bytes,1,opt,name=validation,proto3" json:"validation,omitempty"`
@@ -2788,7 +2846,7 @@ const file_open_splunk_v1_knowledge_api_proto_rawDesc = "" +
 	"field_path\x18\x01 \x01(\tR\tfieldPath\x12:\n" +
 	"\n" +
 	"diagnostic\x18\x02 \x01(\v2\x1a.open_splunk.v1.DiagnosticR\n" +
-	"diagnostic\"\xaa\x04\n" +
+	"diagnostic\"\xc3\x05\n" +
 	"\x19KnowledgeResourceEstimate\x12+\n" +
 	"\x11selector_patterns\x18\x01 \x01(\rR\x10selectorPatterns\x12>\n" +
 	"\x1bnormalized_definition_bytes\x18\x02 \x01(\x04R\x19normalizedDefinitionBytes\x12)\n" +
@@ -2800,7 +2858,10 @@ const file_open_splunk_v1_knowledge_api_proto_rawDesc = "" +
 	"\x1aestimated_regex_work_units\x18\b \x01(\x04R\x17estimatedRegexWorkUnits\x12-\n" +
 	"\x12scalar_expressions\x18\t \x01(\rR\x11scalarExpressions\x126\n" +
 	"\x17scalar_expression_nodes\x18\n" +
-	" \x01(\rR\x15scalarExpressionNodesJ\x04\b\v\x10\fR\x1destimated_generated_sql_bytes\"\xf5\x05\n" +
+	" \x01(\rR\x15scalarExpressionNodes\x12-\n" +
+	"\x12extraction_outputs\x18\f \x01(\rR\x11extractionOutputs\x12;\n" +
+	"\x1ajson_evaluation_work_units\x18\r \x01(\rR\x17jsonEvaluationWorkUnits\x12+\n" +
+	"\x11scalar_predicates\x18\x0e \x01(\rR\x10scalarPredicatesJ\x04\b\v\x10\fR\x1destimated_generated_sql_bytes\"\xf5\x05\n" +
 	"\x19KnowledgeValidationResult\x12\x14\n" +
 	"\x05valid\x18\x01 \x01(\bR\x05valid\x12D\n" +
 	"\vobject_type\x18\x02 \x01(\x0e2#.open_splunk.v1.KnowledgeObjectTypeR\n" +

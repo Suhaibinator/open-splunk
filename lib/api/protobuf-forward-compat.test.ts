@@ -27,6 +27,7 @@ import {
   KnowledgeManagementDependencyEdge,
   KnowledgeManagementObjectVersionIdentity,
   KnowledgeMutationOutcomeRecord,
+  KnowledgeResourceEstimate,
   KnowledgeValidationIntent,
   KnowledgeValidationResult,
   ListKnowledgeObjectDependenciesResponse,
@@ -737,6 +738,38 @@ test("generated knowledge validation keeps append-only intent and candidate proj
   );
   assert.deepEqual(ValidateKnowledgeObjectRequest.encode(presentEmptyUpdate).finish(), presentEmptyUpdateWire);
   assert.deepEqual(ValidateKnowledgeObjectRequest.decode(presentEmptyUpdateWire), presentEmptyUpdate);
+
+  const resources = KnowledgeResourceEstimate.fromPartial({
+    selectorPatterns: 1,
+    normalizedDefinitionBytes: 2n,
+    dependencyNodes: 3,
+    dependencyEdges: 4,
+    generatedOperators: 5,
+    generatedFields: 6,
+    regexPrograms: 7,
+    estimatedRegexWorkUnits: 8n,
+    scalarExpressions: 9,
+    scalarExpressionNodes: 10,
+    extractionOutputs: 12,
+    jsonEvaluationWorkUnits: 13,
+    scalarPredicates: 14,
+  });
+  const resourceWire = KnowledgeResourceEstimate.encode(resources).finish();
+  assert.deepEqual(
+    protobufTopLevelFieldNumbers(resourceWire),
+    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14],
+  );
+  assert.deepEqual(KnowledgeResourceEstimate.decode(resourceWire), resources);
+  assert.deepEqual(
+    KnowledgeResourceEstimate.encode(KnowledgeResourceEstimate.fromPartial({})).finish(),
+    Uint8Array.of(),
+  );
+
+  // The removed, never-served generated-SQL estimate remains reserved at tag
+  // 11. A current TS peer drops that pre-route draft value instead of
+  // reinterpreting it as one of the append-only intrinsic charge fields.
+  const retiredResource = KnowledgeResourceEstimate.decode(Uint8Array.of(0x58, 0x63));
+  assert.deepEqual(KnowledgeResourceEstimate.encode(retiredResource).finish(), Uint8Array.of());
 
   // This partial fixture intentionally isolates the replacement repeated-field
   // tags. Semantic result invariants are pinned by the Go descriptor/source
