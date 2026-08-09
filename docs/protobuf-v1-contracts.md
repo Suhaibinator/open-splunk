@@ -552,7 +552,7 @@ for one retained, completed search job. Its request contains only
 browser principal and cannot be selected on the wire.
 
 The response contains a bounded logical projection (ordered stages, safe field
-names, exact source ranges, and final output shape), a bounded physical
+names, authored-stage source ranges, and final output shape), a bounded physical
 projection (allowlisted ClickHouse node types, read columns, index names and
 keys, and initial/selected part and granule counts), the generated SQL, raw
 structured `EXPLAIN PLAN` text, the diagnostic ClickHouse query ID, and the
@@ -560,6 +560,14 @@ optional bounded knowledge summary.
 `OPEN`, `STATIC`, and `DYNAMIC` output kinds distinguish an unknown schema, a
 complete ordered schema, and a fixed prefix with a maximum number of dynamic
 fields.
+
+Generated knowledge stages omit `source_range`. Their additive
+`operator_provenance` entries are canonical-ordinal ordered redacted
+ordinal/type/stage values, and `output_provenance` associates each output
+occurrence with one such ordinal in output-field/ordinal order. Distinct
+selector-disjoint objects may therefore target the same output without
+collapsing provenance. These fields never disclose object identity or
+definition content.
 
 Generated SQL and raw EXPLAIN text are administrator-sensitive and are not
 returned by ordinary search-job reads. Compiler arguments are never separate

@@ -838,6 +838,15 @@ object identity. A future current-policy authorizer may disclose an identity
 only after checking the current registry scope, state, ownership, and ACL;
 historical scope remains provenance and never grants disclosure.
 
+Inspection additionally associates each generated logical stage and output
+occurrence with that redacted inventory. Operator provenance is ordered by
+ascending canonical ordinal; output provenance is ordered by output field and
+then ordinal, so selector-disjoint objects targeting one destination remain
+distinct. Generated stages omit the authored source-range message instead of
+inventing a coordinate. The projection never carries object IDs, names,
+versions, owners, apps, sharing, definition digests or locations, selectors,
+patterns, paths, expressions, or overwrite policy.
+
 Inspection opens the retained compiled authority for an enabled snapshot,
 performs a second detached sealed metadata read after `EXPLAIN`, and consumes no
 result-lease capacity. Export atomically acquires the exact execution authority

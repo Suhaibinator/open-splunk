@@ -1227,6 +1227,23 @@ configure the resolver, production `NewHandler` still registers no
 knowledge-management route, bootstrap hard-disables the capability, and the
 hidden UI therefore remains unreachable.
 
+The KO-1C inspection slice now analyzes the complete sealed knowledge prelude
+once and projects all four generated logical operator kinds. Generated stages
+have no authored source range; they expose only canonical ordinal/type/stage
+provenance, plus output-field-to-ordinal associations, while object identity,
+definition, selector, overwrite policy, expression, path, and pattern remain
+redacted. Result validation independently enforces the exact
+`extraction* -> alias? -> calculated?` prefix grammar, the 256 generated and
+256 authored stage ceilings, the 256-object/512-output provenance ceilings,
+canonical ordering, and exact binding to the retained bounded snapshot
+summary. The protobuf additions are append-only fields 6 and 7 on logical
+stages. A direct prepared nonempty-program fixture proves projection and
+redaction, but a Manager-sealed nonempty retained service fixture remains
+deliberately impossible while snapshot finalization is closed. Focused normal
+and race tests, `go vet`, protobuf generation/lint, the Go descriptor contract,
+and TypeScript type checking pass. The pinned ClickHouse/Docker runtime matrix
+was not rerun and remains required before either nonempty execution gate opens.
+
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and
   provenance contracts;
