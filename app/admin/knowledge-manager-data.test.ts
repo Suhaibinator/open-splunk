@@ -73,6 +73,7 @@ import {
 import {
   KnowledgeDetail,
   KnowledgeManagerPanel,
+  KnowledgeRelatedObjectInspectorView,
   KnowledgeRelationshipSectionView,
   KnowledgeManagerWorkspace,
   commitKnowledgeManagerQueryChange,
@@ -796,12 +797,17 @@ test("relationship failures are uniform and late-bound cleanup aborts continuati
   }));
 
   const request = { current: null as AbortController | null };
-  const cleanup = knowledgeRelationshipUnmountCleanup(request);
+  const inspectorRequest = { current: null as AbortController | null };
+  const cleanup = knowledgeRelationshipUnmountCleanup(request, inspectorRequest);
   const continuation = new AbortController();
+  const replacementInspector = new AbortController();
   request.current = continuation;
+  inspectorRequest.current = replacementInspector;
   cleanup();
   assert.equal(continuation.signal.aborted, true);
+  assert.equal(replacementInspector.signal.aborted, true);
   assert.equal(request.current, null);
+  assert.equal(inspectorRequest.current, null);
 
   assert.notEqual(
     knowledgeRelationshipSectionKey("dependencies", "ko-root", 3n),
@@ -1229,13 +1235,19 @@ test("relationship presentation is independently labelled, escaped, and read-onl
     state: "available",
     page,
     loadingMore: false,
+    inspector: { state: "closed" },
     onRetry: () => undefined,
     onLoadMore: () => undefined,
+    onInspect: () => undefined,
+    onRetryInspector: () => undefined,
   }));
   assert.match(markup, /id="knowledge-dependencies-title"/);
   assert.match(markup, /aria-label="Visible direct dependencies"/);
   assert.match(markup, /ko-&lt;script&gt;/);
   assert.match(markup, /Field input/);
+  assert.match(markup, /aria-label="Inspect dependency ko-&lt;script&gt;, version 2"/);
+  assert.doesNotMatch(markup, /aria-controls="knowledge-dependencies-related-object-inspector"/);
+  assert.match(markup, /aria-expanded="false"/);
   assert.match(markup, /revision 9/);
   assert.doesNotMatch(markup, /<script>|href=|>Create<|>Edit<|>Delete<|>Enable<|>Disable<|>Save</);
 
@@ -1244,12 +1256,140 @@ test("relationship presentation is independently labelled, escaped, and read-onl
     state: "stale",
     page: { ...page, direction: "dependents" },
     loadingMore: false,
+    inspector: { state: "closed" },
     onRetry: () => undefined,
     onLoadMore: () => undefined,
+    onInspect: () => undefined,
+    onRetryInspector: () => undefined,
   }));
   assert.match(staleMarkup, /role="alert"/);
   assert.match(staleMarkup, /Reload dependents/);
   assert.doesNotMatch(staleMarkup, /Load more dependents/);
+});
+
+test("related-object inspector states are direction-labelled, exact, escaped, and compact", () => {
+  const queryValue = relationshipQuery("dependencies");
+  const page = adaptKnowledgeRelationshipPage(relationshipResponse(queryValue, {
+    edges: [relationshipEdge("dependencies", "ko-<script>", 2n)],
+  }), queryValue);
+  const edge = page.edges[0]!;
+  const relatedWireObject = fieldAliasObject({
+    id: edge.knowledgeObjectId,
+    name: "<img src=x onerror=globalThis.__relatedInspectorExecuted=true>",
+    version: edge.version,
+  });
+  relatedWireObject.definition!.description = "Description <script>unsafe()</script> stays text.";
+  relatedWireObject.definition!.body = {
+    $case: "fieldAlias",
+    value: {
+      sourceField: "TOP_SECRET_RELATED_SELECTOR_OR_EXPRESSION",
+      destinationField: "safe_field",
+      overwriteBehavior: KnowledgeOverwriteBehavior.KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+    },
+  };
+  const relatedObject = adaptKnowledgeObject(relatedWireObject, 0);
+  assert.equal(relatedObject.disclosure, "available");
+  if (relatedObject.disclosure !== "available") return;
+
+  const availableMarkup = renderToStaticMarkup(createElement(
+    KnowledgeRelatedObjectInspectorView,
+    {
+      direction: "dependencies",
+      inspector: { state: "available", edge, object: relatedObject },
+      onRetry: () => undefined,
+    },
+  ));
+  assert.match(availableMarkup, /id="knowledge-dependencies-related-object-inspector"/);
+  assert.match(availableMarkup, /id="knowledge-dependencies-related-object-inspector-title"/);
+  assert.match(availableMarkup, /<section[^>]*aria-labelledby="knowledge-dependencies-related-object-inspector-title"/);
+  assert.match(availableMarkup, /aria-busy="false"/);
+  assert.match(availableMarkup, /aria-live="polite"/);
+  assert.match(availableMarkup, /Dependency object inspector/);
+  assert.match(availableMarkup, /ko-&lt;script&gt;/);
+  assert.match(availableMarkup, /&lt;img src=x onerror=globalThis.__relatedInspectorExecuted=true&gt;/);
+  assert.match(availableMarkup, /Description &lt;script&gt;unsafe\(\)&lt;\/script&gt; stays text\./);
+  assert.match(availableMarkup, /<dt>Type<\/dt>/);
+  assert.match(availableMarkup, /<dt>Updated<\/dt>/);
+  assert.doesNotMatch(
+    availableMarkup,
+    /TOP_SECRET_RELATED_SELECTOR_OR_EXPRESSION|Selectors|Definition summary|Direct relationships/,
+  );
+  assert.doesNotMatch(
+    availableMarkup,
+    /<script>|<img|href=|>Create<|>Edit<|>Delete<|>Enable<|>Disable<|>Save/,
+  );
+
+  const activeSectionMarkup = renderToStaticMarkup(createElement(
+    KnowledgeRelationshipSectionView,
+    {
+      direction: "dependencies",
+      state: "available",
+      page,
+      loadingMore: false,
+      inspector: { state: "available", edge, object: relatedObject },
+      onRetry: () => undefined,
+      onLoadMore: () => undefined,
+      onInspect: () => undefined,
+      onRetryInspector: () => undefined,
+    },
+  ));
+  assert.match(activeSectionMarkup, /aria-label="Close dependency ko-&lt;script&gt;, version 2"/);
+  assert.match(activeSectionMarkup, /aria-controls="knowledge-dependencies-related-object-inspector"/);
+  assert.match(activeSectionMarkup, /aria-expanded="true"/);
+
+  const loadingMarkup = renderToStaticMarkup(createElement(
+    KnowledgeRelatedObjectInspectorView,
+    {
+      direction: "dependents",
+      inspector: { state: "loading", edge },
+      onRetry: () => undefined,
+    },
+  ));
+  assert.match(loadingMarkup, /id="knowledge-dependents-related-object-inspector"/);
+  assert.match(loadingMarkup, /Dependent object inspector/);
+  assert.match(loadingMarkup, /aria-busy="true"/);
+  assert.match(loadingMarkup, /Loading related object/);
+  assert.doesNotMatch(loadingMarkup, />Retry<|Related object unavailable/);
+
+  const unavailableMarkup = renderToStaticMarkup(createElement(
+    KnowledgeRelatedObjectInspectorView,
+    {
+      direction: "dependents",
+      inspector: { state: "unavailable", edge },
+      onRetry: () => undefined,
+    },
+  ));
+  assert.match(unavailableMarkup, /Related object unavailable\. This object cannot be inspected\./);
+  assert.match(unavailableMarkup, /aria-label="Retry dependent ko-&lt;script&gt;, version 2"/);
+  assert.match(unavailableMarkup, />Retry<\/button>/);
+  assert.doesNotMatch(unavailableMarkup, /forbidden|missing|decoder|route|backend|status 404/i);
+
+  const mismatched = adaptKnowledgeObject(fieldAliasObject({
+    id: "ko-mismatch-secret",
+    name: "SECRET_MISMATCHED_RELATED_OBJECT",
+    version: 9n,
+  }), 0);
+  assert.equal(mismatched.disclosure, "available");
+  const mismatchedMarkup = renderToStaticMarkup(createElement(
+    KnowledgeRelatedObjectInspectorView,
+    {
+      direction: "dependencies",
+      inspector: {
+        state: "available",
+        edge,
+        object: mismatched.disclosure === "available" ? mismatched : relatedObject,
+      },
+      onRetry: () => undefined,
+    },
+  ));
+  assert.match(mismatchedMarkup, /Related object unavailable/);
+  assert.doesNotMatch(mismatchedMarkup, /SECRET_MISMATCHED_RELATED_OBJECT/);
+
+  assert.equal(renderToStaticMarkup(createElement(KnowledgeRelatedObjectInspectorView, {
+    direction: "dependencies",
+    inspector: { state: "closed" },
+    onRetry: () => undefined,
+  })), "");
 });
 
 test("the panel loading shell labels every closed filter and exposes no mutation control", () => {
@@ -1353,9 +1493,12 @@ test("responsive and focus-visible styles cover filters and list/detail collapse
   assert.match(css, /\.knowledge-manager input:focus-visible/);
   assert.match(css, /\.knowledge-manager select:focus-visible/);
   assert.match(css, /\.knowledge-manager__detail:focus-visible/);
-  assert.match(css, /\.knowledge-manager__relationship-list li \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
+  assert.match(css, /\.knowledge-manager__relationship-list li \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto auto;/);
+  assert.match(css, /\.knowledge-manager__related-inspector \{[^}]*display: grid;/);
+  assert.match(css, /\.knowledge-manager__related-object dl \{[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
   assert.ok(mobileBodies.some((body) => (
-    /\.knowledge-manager__relationship-pagination \{ align-items: stretch; flex-direction: column; \}/.test(body)
-    && /\.knowledge-manager__relationship-pagination button \{ min-height: 42px; width: 100%; \}/.test(body)
+    /\.knowledge-manager__relationship-pagination,\s*\.knowledge-manager__related-status \{ align-items: stretch; flex-direction: column; \}/.test(body)
+    && /\.knowledge-manager__relationship-inspect,\s*\.knowledge-manager__related-status button \{ min-height: 42px; width: 100%; \}/.test(body)
+    && /\.knowledge-manager__related-object dl \{ grid-template-columns: 1fr; \}/.test(body)
   )));
 });

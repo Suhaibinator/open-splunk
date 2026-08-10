@@ -112,6 +112,26 @@ const maximumRecordedBrowserFrameBytes = 16_384;
 const maximumRecordedBrowserFrames = 64;
 let browserRecorderSelfTestCompleted = false;
 
+interface RequestGate {
+  release: (() => void) | null;
+  started: boolean;
+  settled: Promise<void>;
+  markSettled: () => void;
+}
+
+function createRequestGate(): RequestGate {
+  let resolveSettled: (() => void) | null = null;
+  const settled = new Promise<void>((resolve) => {
+    resolveSettled = resolve;
+  });
+  return {
+    release: null,
+    started: false,
+    settled,
+    markSettled: () => resolveSettled?.(),
+  };
+}
+
 test.use({
   launchOptions: browserExecutable ? { executablePath: browserExecutable } : {},
   ignoreHTTPSErrors,
@@ -177,12 +197,23 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   const cursor = "knowledge-cursor-1";
   const dependencyCursor = "knowledge-dependencies-cursor-1";
   const dependentCursor = "knowledge-dependents-cursor-1";
+  const maliciousDependencyId = "ko-dependency-<script>";
+  const dependencyBId = "ko-dependency-b";
+  const maliciousDependentId =
+    "ko-dependent-<img onerror=globalThis.__knowledgeScriptExecuted=true>";
   const maliciousName = "<script>globalThis.__knowledgeScriptExecuted=true</script>";
   let knowledgeAdvertised = false;
   let serveMismatchedDetail = true;
+  let serveMismatchedRelatedObject = true;
+  let maliciousDependencyGetCount = 0;
+  let holdNextDependencyB = true;
+  const dependencyRetryGate = createRequestGate();
+  const heldDependencyB = createRequestGate();
+  let heldDependencyBReplacementStarted = false;
   const requestedURLs: string[] = [];
   const listRequests: ListKnowledgeObjectsRequest[] = [];
-  const getRequests: GetKnowledgeObjectRequest[] = [];
+  const rootGetRequests: GetKnowledgeObjectRequest[] = [];
+  const relatedGetRequests: GetKnowledgeObjectRequest[] = [];
   const dependencyRequests: ListKnowledgeObjectDependenciesRequest[] = [];
   const dependentRequests: ListKnowledgeObjectDependentsRequest[] = [];
 
@@ -225,6 +256,22 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   const firstObject = knowledgeObject("ko-malicious", maliciousName, 2n);
   const mismatchedDetailObject = knowledgeObject("ko-malicious", maliciousName, 3n);
   const continuationObject = knowledgeObject("ko-continuation", "continued_alias", 3n);
+  const maliciousDependencyObject = knowledgeObject(
+    maliciousDependencyId,
+    "<img src=x onerror=globalThis.__knowledgeScriptExecuted=true>",
+    1n,
+  );
+  const dependencyBObject = knowledgeObject(dependencyBId, "dependency_b", 3n);
+  const maliciousDependentObject = knowledgeObject(
+    maliciousDependentId,
+    "<script>globalThis.__knowledgeScriptExecuted=true</script>",
+    3n,
+  );
+  const mismatchedRelatedObject = knowledgeObject(
+    maliciousDependencyId,
+    "SECRET_MISMATCHED_RELATED_OBJECT",
+    9n,
+  );
 
   page.on("request", (request) => requestedURLs.push(request.url()));
   await page.route(
@@ -310,16 +357,77 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Get request omitted its protobuf body");
       const request = GetKnowledgeObjectRequest.decode(wire);
-      getRequests.push(request);
-      await route.fulfill({
+      let responseObject: KnowledgeObject | undefined;
+      let requestGate: ReturnType<typeof createRequestGate> | null = null;
+      if (request.knowledgeObjectId === firstObject.knowledgeObjectId) {
+        rootGetRequests.push(request);
+        responseObject = serveMismatchedDetail ? mismatchedDetailObject : firstObject;
+      } else {
+        relatedGetRequests.push(request);
+        if (
+          request.knowledgeObjectId === maliciousDependencyId
+          && request.version === maliciousDependencyObject.version
+        ) {
+          maliciousDependencyGetCount += 1;
+          responseObject = serveMismatchedRelatedObject
+            ? mismatchedRelatedObject
+            : maliciousDependencyObject;
+          serveMismatchedRelatedObject = false;
+          if (maliciousDependencyGetCount === 2) {
+            const gate = dependencyRetryGate;
+            requestGate = gate;
+            gate.started = true;
+            await new Promise<void>((resolve) => {
+              gate.release = resolve;
+            });
+            gate.release = null;
+          }
+        } else if (
+          request.knowledgeObjectId === dependencyBId
+          && request.version === dependencyBObject.version
+        ) {
+          responseObject = dependencyBObject;
+          if (holdNextDependencyB) {
+            holdNextDependencyB = false;
+            const gate = heldDependencyB;
+            requestGate = gate;
+            gate.started = true;
+            await new Promise<void>((resolve) => {
+              gate.release = resolve;
+            });
+            gate.release = null;
+          }
+        } else if (
+          request.knowledgeObjectId === maliciousDependentId
+          && request.version === maliciousDependentObject.version
+        ) {
+          responseObject = maliciousDependentObject;
+        }
+      }
+      const response = {
         status: 200,
         headers: protobufHeaders,
         body: Buffer.from(GetKnowledgeObjectResponse.encode(
           GetKnowledgeObjectResponse.fromPartial({
-            knowledgeObject: serveMismatchedDetail ? mismatchedDetailObject : firstObject,
+            knowledgeObject: responseObject,
           }),
         ).finish()),
-      });
+      };
+      if (requestGate !== null) {
+        try {
+          await route.fulfill(response);
+        } catch (error) {
+          if (
+            requestGate !== heldDependencyB
+            || !heldDependencyBReplacementStarted
+          ) throw error;
+          // Replacing inspector A aborts this deliberately held transport.
+        } finally {
+          requestGate.markSettled();
+        }
+        return;
+      }
+      await route.fulfill(response);
     },
   );
   await page.route(
@@ -338,11 +446,11 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
         }]
         : [{
           source: { knowledgeObjectId: firstObject.knowledgeObjectId, version: firstObject.version },
-          target: { knowledgeObjectId: "ko-dependency-<script>", version: 1n },
+          target: { knowledgeObjectId: maliciousDependencyId, version: 1n },
           role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
         }, {
           source: { knowledgeObjectId: firstObject.knowledgeObjectId, version: firstObject.version },
-          target: { knowledgeObjectId: "ko-dependency-b", version: 3n },
+          target: { knowledgeObjectId: dependencyBId, version: 3n },
           role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
         }];
       await route.fulfill({
@@ -383,7 +491,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
               source: {
                 knowledgeObjectId: continuation
                   ? "ko-dependent-z"
-                  : "ko-dependent-<img onerror=globalThis.__knowledgeScriptExecuted=true>",
+                  : maliciousDependentId,
                 version: continuation ? 5n : 3n,
               },
               target: {
@@ -469,6 +577,21 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     }));
   }
+  let expectedRelatedGetRequestCount = 0;
+  async function expectNextRelatedGetRequest(
+    phase: string,
+    expected: GetKnowledgeObjectRequest,
+  ): Promise<void> {
+    expectedRelatedGetRequestCount += 1;
+    await expect.poll(() => relatedGetRequests.length, {
+      message: `${phase} issued exactly one endpoint Get request`,
+      timeout,
+    }).toBe(expectedRelatedGetRequestCount);
+    expect(relatedGetRequests.at(-1), `${phase} endpoint Get tuple`).toEqual(expected);
+    await waitForTwoRenderedTurns();
+    expect(relatedGetRequests, `${phase} emitted no delayed endpoint Get request`)
+      .toHaveLength(expectedRelatedGetRequestCount);
+  }
   await expect(manager.getByLabel("Read-only surface")).toBeVisible();
   await Promise.all(["Create", "Edit", "Delete", "Enable", "Disable", "Save"].map(
     (mutationLabel) => expect(manager.getByRole("button", {
@@ -532,7 +655,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   await maliciousRow.press("Enter");
   await expect(manager.getByText("Knowledge object unavailable", { exact: true }))
     .toBeVisible({ timeout });
-  expect(getRequests).toEqual([{
+  expect(rootGetRequests).toEqual([{
     knowledgeObjectId: "ko-malicious",
     version: 2n,
   }]);
@@ -544,7 +667,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   serveMismatchedDetail = false;
   await maliciousRow.press("Enter");
   await expect(manager.getByRole("heading", { name: maliciousName })).toBeVisible({ timeout });
-  expect(getRequests).toEqual(Array.from({ length: 2 }, () => ({
+  expect(rootGetRequests).toEqual(Array.from({ length: 2 }, () => ({
     knowledgeObjectId: "ko-malicious",
     version: 2n,
   })));
@@ -598,6 +721,147 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   expect(escapedRelationshipsMarkup).toContain("ko-dependency-&lt;script&gt;");
   expect(escapedRelationshipsMarkup).toContain("ko-dependent-&lt;img");
   await expect(manager.locator("script, img")).toHaveCount(0);
+  await waitForTwoRenderedTurns();
+  expect(relatedGetRequests, "relationship paint never inspects an endpoint automatically")
+    .toHaveLength(0);
+  const inspectorURL = page.url();
+  const inspectorStorage = await page.evaluate(() => ({
+    local: Object.entries(localStorage),
+    session: Object.entries(sessionStorage),
+  }));
+  const dependencyInspector = dependenciesSection.getByRole("region", {
+    name: "Dependency object inspector",
+  });
+  await test.step("endpoint inspection is explicit, exact, uniform, and escaped", async () => {
+    await dependenciesSection.getByRole("button", {
+      name: `Inspect dependency ${maliciousDependencyId}, version 1`,
+    }).click();
+    await expectNextRelatedGetRequest("mismatched dependency inspection", {
+      knowledgeObjectId: maliciousDependencyId,
+      version: 1n,
+    });
+    await expect(dependencyInspector).toContainText(
+      "Related object unavailable. This object cannot be inspected.",
+      { timeout },
+    );
+    await expect(dependencyInspector).not.toContainText("SECRET_MISMATCHED_RELATED_OBJECT");
+    const dependencyTrigger = dependenciesSection.getByRole("button", {
+      name: `Close dependency ${maliciousDependencyId}, version 1`,
+    });
+    await expect(dependencyTrigger).toBeFocused();
+    try {
+      await dependencyInspector.getByRole("button", {
+        name: `Retry dependency ${maliciousDependencyId}, version 1`,
+      }).click();
+      await expectNextRelatedGetRequest("dependency inspection retry", {
+        knowledgeObjectId: maliciousDependencyId,
+        version: 1n,
+      });
+      await expect(dependencyInspector).toContainText("Loading related object…", { timeout });
+      await expect(dependencyTrigger).toBeFocused();
+    } finally {
+      dependencyRetryGate.release?.();
+      if (dependencyRetryGate.started) await dependencyRetryGate.settled;
+    }
+    await expect(dependencyInspector.getByText(
+      maliciousDependencyObject.name,
+      { exact: true },
+    )).toBeVisible({ timeout });
+    await expect(dependencyTrigger).toBeFocused();
+    await expect(manager.locator("script, img")).toHaveCount(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "__knowledgeScriptExecuted")))
+      .toBeUndefined();
+  });
+
+  await test.step("late dependency A completion cannot replace disclosed B", async () => {
+    try {
+      await dependenciesSection.getByRole("button", {
+        name: `Inspect dependency ${dependencyBId}, version 3`,
+      }).click();
+      await expectNextRelatedGetRequest("held dependency A inspection", {
+        knowledgeObjectId: dependencyBId,
+        version: 3n,
+      });
+      await expect(dependencyInspector).toContainText("Loading related object…", { timeout });
+      await dependenciesSection.getByRole("button", {
+        name: `Inspect dependency ${maliciousDependencyId}, version 1`,
+      }).click();
+      heldDependencyBReplacementStarted = true;
+      await expectNextRelatedGetRequest("dependency A-to-B replacement", {
+        knowledgeObjectId: maliciousDependencyId,
+        version: 1n,
+      });
+      await expect(dependencyInspector.getByText(
+        maliciousDependencyObject.name,
+        { exact: true },
+      )).toBeVisible({ timeout });
+    } finally {
+      heldDependencyB.release?.();
+      if (heldDependencyB.started) await heldDependencyB.settled;
+    }
+  });
+  await waitForTwoRenderedTurns();
+  await expect(dependencyInspector.getByText(
+    maliciousDependencyObject.name,
+    { exact: true },
+  )).toBeVisible();
+  await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+    .toHaveCount(0);
+  expect(relatedGetRequests).toHaveLength(expectedRelatedGetRequestCount);
+
+  const dependentInspector = dependentsSection.getByRole("region", {
+    name: "Dependent object inspector",
+  });
+  await test.step("each direction owns one responsive inspector without storage or URL state", async () => {
+    await dependenciesSection.getByRole("button", {
+      name: `Inspect dependency ${dependencyBId}, version 3`,
+    }).click();
+    await expectNextRelatedGetRequest("dependency replacement", {
+      knowledgeObjectId: dependencyBId,
+      version: 3n,
+    });
+    await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+      .toBeVisible({ timeout });
+    await expect(dependenciesSection.locator(".knowledge-manager__related-inspector"))
+      .toHaveCount(1);
+
+    await dependentsSection.getByRole("button", {
+      name: `Inspect dependent ${maliciousDependentId}, version 3`,
+    }).click();
+    await expectNextRelatedGetRequest("simultaneous dependent inspection", {
+      knowledgeObjectId: maliciousDependentId,
+      version: 3n,
+    });
+    await expect(dependentInspector.getByText(
+      maliciousDependentObject.name,
+      { exact: true },
+    )).toBeVisible({ timeout });
+    await expect(manager.locator(".knowledge-manager__related-inspector")).toHaveCount(2);
+    await expect(dependenciesSection.locator(".knowledge-manager__related-inspector"))
+      .toHaveCount(1);
+    await expect(dependentsSection.locator(".knowledge-manager__related-inspector"))
+      .toHaveCount(1);
+    expect(new Set(await manager.locator(".knowledge-manager__related-inspector").evaluateAll(
+      (elements) => elements.map((element) => element.id),
+    )).size).toBe(2);
+    expect(page.url()).toBe(inspectorURL);
+    expect(await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }))).toEqual(inspectorStorage);
+
+    expect((await dependencyInspector.locator("dl").evaluate(
+      (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+    ))).toBe(2);
+    await page.setViewportSize({ width: 375, height: 812 });
+    expect((await dependencyInspector.locator("dl").evaluate(
+      (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+    ))).toBe(1);
+    expect(await dependenciesSection.getByRole("button", {
+      name: `Close dependency ${dependencyBId}, version 3`,
+    }).evaluate((element) => getComputedStyle(element).minHeight)).toBe("42px");
+    await page.setViewportSize({ width: 1280, height: 800 });
+  });
 
   await dependenciesSection.getByRole("button", { name: "Load more dependencies" }).click();
   await expect.poll(() => dependencyRequests.length, {
@@ -613,6 +877,9 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   await expect(dependenciesSection.getByText("ko-dependency-z", { exact: true })).toBeVisible();
   await expect(dependenciesSection.getByRole("button", { name: "Load more dependencies" }))
     .toHaveCount(0);
+  await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+    .toBeVisible();
+  expect(relatedGetRequests).toHaveLength(expectedRelatedGetRequestCount);
 
   await dependentsSection.getByRole("button", { name: "Load more dependents" }).click();
   await expect.poll(() => dependentRequests.length, {
@@ -633,6 +900,11 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   await expect(dependenciesSection).toContainText("3 visible · revision 11");
   await expect(dependenciesSection.getByRole("list", { name: "Visible direct dependencies" })
     .getByRole("listitem")).toHaveCount(3);
+  await expect(dependentInspector.getByText(
+    maliciousDependentObject.name,
+    { exact: true },
+  )).toBeVisible();
+  expect(relatedGetRequests).toHaveLength(expectedRelatedGetRequestCount);
   await dependentsSection.getByRole("button", { name: "Reload dependents" }).click();
   await expect.poll(() => dependentRequests.length, {
     message: "dependent retry issued exactly one fresh first-page request",
@@ -646,6 +918,61 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   await expect(dependenciesSection).toContainText("3 visible · revision 11");
   await expect(dependenciesSection.getByRole("list", { name: "Visible direct dependencies" })
     .getByRole("listitem")).toHaveCount(3);
+  await expect(dependentsSection.locator(".knowledge-manager__related-inspector"))
+    .toHaveCount(0);
+  await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+    .toBeVisible();
+  expect(relatedGetRequests).toHaveLength(expectedRelatedGetRequestCount);
+
+  const relatedGetsBeforeToggle = relatedGetRequests.length;
+  await dependenciesSection.getByRole("button", {
+    name: `Close dependency ${dependencyBId}, version 3`,
+  }).click();
+  await expect(dependenciesSection.locator(".knowledge-manager__related-inspector"))
+    .toHaveCount(0);
+  const collapsedDependencyB = dependenciesSection.getByRole("button", {
+    name: `Inspect dependency ${dependencyBId}, version 3`,
+  });
+  await expect(collapsedDependencyB).toBeFocused();
+  expect(relatedGetRequests).toHaveLength(relatedGetsBeforeToggle);
+  await collapsedDependencyB.click();
+  await expectNextRelatedGetRequest("dependency toggle reopen", {
+    knowledgeObjectId: dependencyBId,
+    version: 3n,
+  });
+  await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+    .toBeVisible({ timeout });
+  await dependentsSection.getByRole("button", {
+    name: `Inspect dependent ${maliciousDependentId}, version 3`,
+  }).click();
+  await expectNextRelatedGetRequest("dependent reopen before parent reset", {
+    knowledgeObjectId: maliciousDependentId,
+    version: 3n,
+  });
+  await expect(dependentInspector.getByText(
+    maliciousDependentObject.name,
+    { exact: true },
+  )).toBeVisible({ timeout });
+  await expect(manager.locator(".knowledge-manager__related-inspector")).toHaveCount(2);
+
+  await manager.getByRole("button", { name: "Close knowledge object details" }).click();
+  await expect(manager.locator(".knowledge-manager__related-inspector")).toHaveCount(0);
+  await expect(manager.locator(".knowledge-manager__detail")).toHaveCount(0);
+  const relatedGetsBeforeParentReopen = relatedGetRequests.length;
+  await maliciousRow.press("Enter");
+  await expect.poll(() => rootGetRequests.length, {
+    message: "parent-detail reopen issued one exact root Get",
+    timeout,
+  }).toBe(3);
+  expect(rootGetRequests.at(-1)).toEqual({
+    knowledgeObjectId: "ko-malicious",
+    version: 2n,
+  });
+  await expect(manager.getByRole("heading", { name: maliciousName })).toBeVisible({ timeout });
+  await expect(manager.getByText(maliciousDependencyId, { exact: true })).toBeVisible({ timeout });
+  await waitForTwoRenderedTurns();
+  expect(relatedGetRequests).toHaveLength(relatedGetsBeforeParentReopen);
+  expect(page.url()).toBe(inspectorURL);
 
   await textFilter.evaluate((element) => {
     const input = element as HTMLInputElement;

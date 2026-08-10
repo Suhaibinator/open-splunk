@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS,
@@ -27,6 +27,7 @@ import {
   type KnowledgePageDisplay,
   type KnowledgeReadClient,
   type KnowledgeRelationshipDirection,
+  type KnowledgeRelationshipEdgeDisplay,
   type KnowledgeRelationshipPageDisplay,
   type KnowledgeSharingScopeFilter,
   type KnowledgeSortChoice,
@@ -113,14 +114,12 @@ export function normalizeAdvancedFilterDrafts(
   };
 }
 
-/** Aborts the request current at cleanup time, including a later continuation. */
+/** Aborts both requests current at cleanup time, including later replacements. */
 export function knowledgeRelationshipUnmountCleanup(
-  request: AbortControllerReference,
+  relationshipRequest: AbortControllerReference,
+  inspectorRequest: AbortControllerReference,
 ): () => void {
-  return () => {
-    request.current?.abort();
-    request.current = null;
-  };
+  return () => abortKnowledgeRequests(relationshipRequest, inspectorRequest);
 }
 
 /** Forces exact-root relationship state to remount before a new detail paints. */
@@ -132,14 +131,14 @@ export function knowledgeRelationshipSectionKey(
   return `${direction}:${knowledgeObjectId}\0${version.toString()}`;
 }
 
-function abortKnowledgeManagerRequests(
-  listRequest: AbortControllerReference,
-  detailRequest: AbortControllerReference,
+function abortKnowledgeRequests(
+  firstRequest: AbortControllerReference,
+  secondRequest: AbortControllerReference,
 ): void {
-  listRequest.current?.abort();
-  detailRequest.current?.abort();
-  listRequest.current = null;
-  detailRequest.current = null;
+  firstRequest.current?.abort();
+  secondRequest.current?.abort();
+  firstRequest.current = null;
+  secondRequest.current = null;
 }
 
 /** Late-bound cleanup also owns continuation/detail requests started after mount. */
@@ -147,7 +146,7 @@ export function knowledgeManagerUnmountCleanup(
   listRequest: AbortControllerReference,
   detailRequest: AbortControllerReference,
 ): () => void {
-  return () => abortKnowledgeManagerRequests(listRequest, detailRequest);
+  return () => abortKnowledgeRequests(listRequest, detailRequest);
 }
 
 /** Query identity changes discard every view derived from the prior cursor. */
@@ -158,7 +157,7 @@ export function resetKnowledgeManagerQuery(
   resetList: () => void,
   resetDetail: () => void,
 ): void {
-  abortKnowledgeManagerRequests(listRequest, detailRequest);
+  abortKnowledgeRequests(listRequest, detailRequest);
   consumedPageTokens.current = new Set();
   resetList();
   resetDetail();
@@ -1018,6 +1017,22 @@ export function KnowledgeDetail({
 }
 
 type KnowledgeRelationshipState = "loading" | "available" | "unavailable" | "stale";
+export type KnowledgeRelatedObjectInspector =
+  | { state: "closed" }
+  | { state: "loading" | "unavailable"; edge: KnowledgeRelationshipEdgeDisplay }
+  | {
+    state: "available";
+    edge: KnowledgeRelationshipEdgeDisplay;
+    object: KnowledgeObjectDisplay;
+  };
+
+function sameKnowledgeRelationshipEdge(
+  left: KnowledgeRelationshipEdgeDisplay,
+  right: KnowledgeRelationshipEdgeDisplay,
+): boolean {
+  return left.knowledgeObjectId === right.knowledgeObjectId
+    && left.version === right.version;
+}
 
 function KnowledgeRelationships({
   client,
@@ -1083,15 +1098,75 @@ function KnowledgeRelationshipSection({
   const [loadingMore, setLoadingMore] = useState(false);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   const requestRef = useRef<AbortController | null>(null);
+  const inspectorRequestRef = useRef<AbortController | null>(null);
+  const inspectorEdgeRef = useRef<KnowledgeRelationshipEdgeDisplay | null>(null);
+  const inspectorTriggerRef = useRef<HTMLButtonElement | null>(null);
   const consumedPageTokensRef = useRef(new Set<string>());
+  const [inspector, setInspector] = useState<KnowledgeRelatedObjectInspector>({
+    state: "closed",
+  });
+
+  const closeInspector = useCallback(() => {
+    inspectorRequestRef.current?.abort();
+    inspectorRequestRef.current = null;
+    inspectorEdgeRef.current = null;
+    inspectorTriggerRef.current = null;
+    setInspector({ state: "closed" });
+  }, []);
+
+  const startInspectorRequest = useCallback((edge: KnowledgeRelationshipEdgeDisplay) => {
+    inspectorRequestRef.current?.abort();
+    const controller = new AbortController();
+    inspectorRequestRef.current = controller;
+    inspectorEdgeRef.current = edge;
+    setInspector({ state: "loading", edge });
+    void loadKnowledgeDetail(client, {
+      knowledgeObjectId: edge.knowledgeObjectId,
+      version: edge.version,
+    }, { signal: controller.signal }).then((result) => {
+      if (
+        controller.signal.aborted
+        || inspectorRequestRef.current !== controller
+      ) return;
+      inspectorRequestRef.current = null;
+      if (result.status === "unavailable") {
+        setInspector({ state: "unavailable", edge });
+        return;
+      }
+      setInspector({ state: "available", edge, object: result.object });
+    });
+  }, [client]);
+
+  const inspectEdge = useCallback((
+    edge: KnowledgeRelationshipEdgeDisplay,
+    trigger: HTMLButtonElement,
+  ) => {
+    inspectorTriggerRef.current = trigger;
+    const current = inspectorEdgeRef.current;
+    if (current !== null && sameKnowledgeRelationshipEdge(current, edge)) {
+      closeInspector();
+      return;
+    }
+    startInspectorRequest(edge);
+  }, [closeInspector, startInspectorRequest]);
+
+  const retryInspector = useCallback(() => {
+    const edge = inspectorEdgeRef.current;
+    if (edge === null) return;
+    inspectorTriggerRef.current?.focus();
+    startInspectorRequest(edge);
+  }, [startInspectorRequest]);
 
   useEffect(() => {
-    const cleanup = knowledgeRelationshipUnmountCleanup(requestRef);
-    requestRef.current?.abort();
+    const cleanup = knowledgeRelationshipUnmountCleanup(requestRef, inspectorRequestRef);
+    abortKnowledgeRequests(requestRef, inspectorRequestRef);
+    inspectorEdgeRef.current = null;
+    inspectorTriggerRef.current = null;
     consumedPageTokensRef.current = new Set();
     setState("loading");
     setPage(null);
     setLoadingMore(false);
+    setInspector({ state: "closed" });
     const controller = new AbortController();
     requestRef.current = controller;
     void loadKnowledgeRelationshipPage(client, {
@@ -1169,8 +1244,11 @@ function KnowledgeRelationshipSection({
       state={state}
       page={page}
       loadingMore={loadingMore}
+      inspector={inspector}
       onRetry={() => setReloadGeneration((value) => value + 1)}
       onLoadMore={() => void loadMore()}
+      onInspect={inspectEdge}
+      onRetryInspector={retryInspector}
     />
   );
 }
@@ -1180,15 +1258,21 @@ export function KnowledgeRelationshipSectionView({
   state,
   page,
   loadingMore,
+  inspector,
   onRetry,
   onLoadMore,
+  onInspect,
+  onRetryInspector,
 }: {
   direction: KnowledgeRelationshipDirection;
   state: KnowledgeRelationshipState;
   page: KnowledgeRelationshipPageDisplay | null;
   loadingMore: boolean;
+  inspector: KnowledgeRelatedObjectInspector;
   onRetry: () => void;
   onLoadMore: () => void;
+  onInspect: (edge: KnowledgeRelationshipEdgeDisplay, trigger: HTMLButtonElement) => void;
+  onRetryInspector: () => void;
 }) {
   const dependencies = direction === "dependencies";
   const title = dependencies ? "Dependencies" : "Dependents";
@@ -1229,19 +1313,18 @@ export function KnowledgeRelationshipSectionView({
         </p>
       ) : null}
       {page === null || page.edges.length === 0 ? null : (
-        <ol
-          className="knowledge-manager__relationship-list"
-          aria-label={`Visible direct ${direction}`}
-        >
-          {page.edges.map((edge) => (
-            <li key={edge.key}>
-              <code>{edge.knowledgeObjectId}</code>
-              <span>v{edge.version.toLocaleString()}</span>
-              <span>{edge.roleLabel}</span>
-            </li>
-          ))}
-        </ol>
+        <KnowledgeRelationshipList
+          direction={direction}
+          edges={page.edges}
+          inspectedEdge={inspector.state === "closed" ? null : inspector.edge}
+          onInspect={onInspect}
+        />
       )}
+      <KnowledgeRelatedObjectInspectorView
+        direction={direction}
+        inspector={inspector}
+        onRetry={onRetryInspector}
+      />
       {state === "stale" ? (
         <div className="knowledge-manager__relationship-stale" role="alert">
           <span>This relationship page cannot be safely continued.</span>
@@ -1253,6 +1336,125 @@ export function KnowledgeRelationshipSectionView({
           <button type="button" onClick={onLoadMore} disabled={loadingMore}>
             {loadingMore ? "Loading…" : `Load more ${direction}`}
           </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+const KnowledgeRelationshipList = memo(function KnowledgeRelationshipList({
+  direction,
+  edges,
+  inspectedEdge,
+  onInspect,
+}: {
+  direction: KnowledgeRelationshipDirection;
+  edges: KnowledgeRelationshipEdgeDisplay[];
+  inspectedEdge: KnowledgeRelationshipEdgeDisplay | null;
+  onInspect: (edge: KnowledgeRelationshipEdgeDisplay, trigger: HTMLButtonElement) => void;
+}) {
+  const inspectorId = `knowledge-${direction}-related-object-inspector`;
+  const endpointLabel = direction === "dependencies" ? "dependency" : "dependent";
+  return (
+    <ol
+      className="knowledge-manager__relationship-list"
+      aria-label={`Visible direct ${direction}`}
+    >
+      {edges.map((edge) => {
+        const expanded = inspectedEdge !== null
+          && sameKnowledgeRelationshipEdge(inspectedEdge, edge);
+        return (
+          <li key={edge.key}>
+            <code>{edge.knowledgeObjectId}</code>
+            <span>v{edge.version.toLocaleString()}</span>
+            <button
+              className="knowledge-manager__relationship-inspect"
+              type="button"
+              aria-label={`${expanded ? "Close" : "Inspect"} ${endpointLabel} ${edge.knowledgeObjectId}, version ${edge.version.toString()}`}
+              aria-controls={expanded ? inspectorId : undefined}
+              aria-expanded={expanded}
+              onClick={(event) => onInspect(edge, event.currentTarget)}
+            >
+              {expanded ? "Close" : "Inspect"}
+            </button>
+            <span className="knowledge-manager__relationship-role">{edge.roleLabel}</span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+});
+
+/** Compact projection for one explicitly requested endpoint; it never nests graph state. */
+export function KnowledgeRelatedObjectInspectorView({
+  direction,
+  inspector,
+  onRetry,
+}: {
+  direction: KnowledgeRelationshipDirection;
+  inspector: KnowledgeRelatedObjectInspector;
+  onRetry: () => void;
+}) {
+  if (inspector.state === "closed") return null;
+  const { edge } = inspector;
+  const inspectorId = `knowledge-${direction}-related-object-inspector`;
+  const headingId = `${inspectorId}-title`;
+  const exactObject = inspector.state === "available"
+    && inspector.object.knowledgeObjectId === edge.knowledgeObjectId
+    && inspector.object.version === edge.version
+    ? inspector.object
+    : null;
+  const unavailable = inspector.state === "unavailable"
+    || (inspector.state === "available" && exactObject === null);
+  const relationshipLabel = direction === "dependencies" ? "Dependency" : "Dependent";
+  return (
+    <section
+      className="knowledge-manager__related-inspector"
+      id={inspectorId}
+      aria-labelledby={headingId}
+      aria-busy={inspector.state === "loading"}
+      aria-live="polite"
+    >
+      <header>
+        <span>{relationshipLabel}</span>
+        <h6 id={headingId}>{relationshipLabel} object inspector</h6>
+      </header>
+      <p className="knowledge-manager__related-identity">
+        <code>{edge.knowledgeObjectId}</code>
+        <span>v{edge.version.toLocaleString()}</span>
+      </p>
+      {inspector.state === "loading" ? (
+        <output className="knowledge-manager__related-status">
+          Loading related object…
+        </output>
+      ) : null}
+      {unavailable ? (
+        <output className="knowledge-manager__related-status knowledge-manager__related-status--unavailable">
+          <span>Related object unavailable. This object cannot be inspected.</span>
+          <button
+            type="button"
+            aria-label={`Retry ${relationshipLabel.toLowerCase()} ${edge.knowledgeObjectId}, version ${edge.version.toString()}`}
+            onClick={onRetry}
+          >
+            Retry
+          </button>
+        </output>
+      ) : null}
+      {exactObject === null ? null : (
+        <div className="knowledge-manager__related-object">
+          <strong>{exactObject.name}</strong>
+          <p>{exactObject.definition.description ?? "No description provided."}</p>
+          {exactObject.definition.descriptionTruncated ? (
+            <small>Description shortened for display.</small>
+          ) : null}
+          <dl>
+            <div><dt>Type</dt><dd>{exactObject.objectTypeLabel}</dd></div>
+            <div><dt>State</dt><dd>{exactObject.stateLabel}</dd></div>
+            <div><dt>Sharing</dt><dd>{exactObject.sharingScopeLabel}</dd></div>
+            <div><dt>App</dt><dd>{exactObject.appId}</dd></div>
+            <div><dt>Owner</dt><dd>{exactObject.ownerId}</dd></div>
+            <div><dt>Updated</dt><dd>{exactObject.updatedAt.toLocaleString()}</dd></div>
+          </dl>
         </div>
       )}
     </section>
