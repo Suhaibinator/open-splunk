@@ -239,6 +239,41 @@ cursor additionally binds its direction, requested-version presence and value,
 resolved root identity, and total-count choice; a catalog revision or state-
 commitment change invalidates continuation.
 
+The dormant browser's complete List request tuple contains page size/token and
+total-size choice; app, owner, name/description text, object-type, lifecycle-
+state, sharing-scope, and selector-text filters; and sort field/direction. App,
+type, state, and sort remain immediate controls. Owner, text, sharing, and
+selector text are one submitted child-local advanced tuple: typing sends no
+request and does not rerender the parent workspace (bounded at 8,192 rows), a
+changed valid Apply commits all four atomically, aborts list/detail work, and
+clears the page, token, consumed-token, stale, and selected-detail state. Clear
+restores owner/text/selector absent plus sharing `all`. A continuation
+reproduces the entire committed request and changes only `page_token`. The
+unchanged signed server cursor binds
+trusted tenant/owner/readable-app scope, page size and `include_total_size`, all
+seven filter families (app/owner/text/type/state/sharing/selector), sort and
+direction, and the first-page catalog revision and state commitment.
+
+Advanced text submission trims only ASCII TAB, LF, VT, FF, CR, and SPACE
+(`U+0009..U+000D`, `U+0020`) from the edges. Blank becomes absent; a committed
+value must otherwise be nonempty, valid UTF-8, free of C0
+`U+0000..U+001F` and C1 `U+007F..U+009F` controls, and at most 255 UTF-8
+bytes. NBSP and other non-ASCII edge whitespace remain data. Sharing is the
+closed browser enum `all`/`private`/`app`/`global`; `all` encodes an empty
+`sharing_scope_filters`, while another choice encodes exactly one protobuf
+enum. The request builder independently validates the committed tuple and emits
+generated TypeScript fields `ownerIdFilter`, `textFilter`,
+`sharingScopeFilters`, and `selectorTextFilter` (wire fields
+`owner_id_filter`, `text_filter`, `sharing_scope_filters`, and
+`selector_text_filter`); it does not normalize a malformed committed value.
+An invalid submitted draft on Apply, or a forged sharing control value, aborts
+and removes prior list/detail state and sends no List. The fail-closed latch
+keeps Retry hidden until a valid Apply or Clear; ordinary backend Retry is
+available only when valid normalized
+drafts exactly match the committed tuple. A repeated valid Apply is otherwise a
+no-op, while applying the same tuple after fail-closed unavailability issues
+exactly one new token-null request.
+
 Two typed candidate-issue seams exist inside the Go implementation; the HTTP
 handler never maps arbitrary normalizer/compiler errors directly. The Writer
 consumes only their closed typed projection while constructing its sealed
@@ -547,12 +582,14 @@ routes join Get/List in the browser administrator-bearer allowlist; Validate and
 every knowledge mutation remain excluded. Preview is absent from the manifest,
 bearer allowlist, handler route set, and capability response; its internal
 request boundaries do not acquire a retained job or read a catalog. The hidden
-read-only Knowledge Manager is still omitted from navigation, is not dynamically
-loaded, and therefore issues no production-bootstrap knowledge API request. Its
-dormant
-surface is app/object-type/lifecycle-state filter-ready with name-ascending, updated-time-
-descending, created-time-descending, and object-type-ascending sorts plus exact
-continuation reuse. Its detail view now requests the selected exact version's
+read-only Knowledge Manager is still omitted from navigation; its feature-gate
+importer is not invoked, and it therefore issues no production-bootstrap
+knowledge API request. Development bundler prefetch of an emitted chunk is not
+an importer-invocation or production-exposure oracle. Its dormant surface has
+immediate app/object-type/lifecycle-state/sort controls plus the submitted
+owner, name/description text, closed sharing-scope, and selector-text tuple
+described above, with exact first-page and continuation reproduction. Its detail
+view now requests the selected exact version's
 dependencies and dependents independently, pages and labels each direction at
 its own catalog revision, and displays only each visible opposite endpoint's
 object ID, version, and `FIELD_INPUT` role.
@@ -619,6 +656,38 @@ ClickHouse row, and digest-pinned knowledge runtime acceptance remains
 pending. The protected untracked probe remained excluded and untouched without
 opening or hashing it.
 
+The intervening documentation checkpoint is
+`14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at 138 post-`c5440b9`
+commits. At the current frontend milestone
+`c22df67cc0e65a7d5b250331e3ed30ca74863926`, exactly 139 post-`c5440b9`
+commits, the dormant browser consumes the four already-defined List fields; it
+does not change a protobuf schema, generated artifact, Go or backend handler,
+registered route, browser bearer policy, capability response, Resolver
+attachment, compiler/finalizer gate, or execution path. Production
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` remains hard-false, so a normal
+bootstrap provides no Knowledge Manager navigation, feature-gate importer
+invocation, or browser Knowledge request. The nine production management routes
+remain their unchanged configuration-dependent, all-or-none unit; the injected
+advertised-bootstrap oracle exposes only the dormant read-only panel.
+
+Focused unit tests pin request-builder field mapping and fail-closed committed
+validation, normalization boundaries, reset helpers, form/privacy markup, CSS,
+and the fake-importer feature-off boundary. The mocked-protobuf Playwright test
+pins the exact initial, applied, continuation, default Clear, same-tuple
+recovery, and forged-sharing recovery messages, plus no request while typing,
+fail-closed list/detail removal and recovery, per-field accessibility, keyboard
+flow, URL privacy, escaped malicious text, desktop/mobile layout, and zero
+mutation controls or route traffic. Unit/source audit also pins React text
+rendering without `dangerouslySetInnerHTML` and the two-column compact CSS
+breakpoint. Its request counter awaits two rendered animation frames after each
+expected tuple and then reasserts the exact count,
+catching effect/render-delayed duplicates within that deterministic barrier.
+The focused browser scenario
+passes 1/1 without Docker; `npm run test:frontend` passes 66 build/tool and 198
+frontend tests, and typecheck, strict no-warning lint, and `git diff --check`
+pass. The protected pre-existing untracked ClickHouse probe remained excluded
+and untouched without opening or hashing it.
+
 The three added `Compile` cases prove relationships rather than one full SQL
 golden: one physical scan, placeholder/argument equality with the exact ordered
 authored suffix, and exact program/scope evidence for each; paired and
@@ -635,7 +704,8 @@ probe in an ordinary binary observed only the private snapshot helper returning
 did not dynamically call public `Authority.Finalize`, whose compiler path would
 stop first at its own test-process guard. This is not a claim of adversarial
 linker resistance. Docker acceptance was **NOT RUN** and is still
-paused/canceled, including for the signed analysis-fixture repair.
+paused/canceled, including for the signed analysis-fixture repair and dormant
+browser-filter slice.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.

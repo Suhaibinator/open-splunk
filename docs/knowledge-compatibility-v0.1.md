@@ -28,14 +28,16 @@ backend's generic outer administrator-route map because the inner knowledge-
 attempt boundary owns its authentication, administrator authorization, and
 `ActionValidate` journaling before body decode.
 The dormant hidden detail view consumes both graph routes for an exact object
-version, but production bootstrap still omits navigation and the dynamic chunk,
-so it issues no knowledge request. Production also constructs and retains a
+version, but production bootstrap still omits navigation, does not invoke the
+feature-gate importer, and issues no knowledge request. Development bundler
+prefetch of an emitted chunk is not importer invocation or production feature
+exposure. Production also constructs and retains a
 concrete Resolver, but intentionally does not attach it to production
 `searchjobs.Manager`. Bootstrap does not advertise the feature, so the
 read-only Knowledge Manager stays out of
-navigation despite its app/object-type/lifecycle-state filters and name-
-ascending, updated-time-descending, created-time-descending, and object-type-
-ascending sort readiness. Recognized definitions can be created
+navigation despite its immediate app/object-type/lifecycle-state/sort controls
+and its submitted owner, name/description text, closed sharing-scope, and
+selector-text tuple. Recognized definitions can be created
 ACTIVE, updated while ACTIVE, or enabled from DRAFT/DISABLED through the
 transactional, compiler-proven Writer path; opaque future definitions cannot be
 updated or enabled as ACTIVE. A dedicated bounded raw decoder, handler, and
@@ -145,6 +147,39 @@ be nonempty after trimming and are limited to 255 UTF-8 bytes. All visibility,
 state, type, scope, text, and selector predicates are applied to one catalog
 revision before keyset ordering and `LIMIT`; filtering a page after retrieval
 is invalid.
+
+The dormant browser consumes these existing List fields through four submitted
+advanced controls: optional owner ID, optional name/description text, the
+closed sharing value `all`/`private`/`app`/`global`, and optional selector text.
+Text submission trims exactly TAB/LF/VT/FF/CR/SPACE (`U+0009..U+000D`,
+`U+0020`) from the edges; blank becomes absent. A committed value must otherwise
+be nonempty, valid UTF-8, control-free across C0 `U+0000..U+001F` and C1
+`U+007F..U+009F`, and no longer than 255 UTF-8 bytes. NBSP and other
+non-ASCII edge whitespace are preserved. The browser request builder validates
+the already-committed canonical values again and emits `ownerIdFilter`,
+`textFilter`, `sharingScopeFilters` (empty for `all`, otherwise one enum), and
+`selectorTextFilter`.
+
+Those four drafts live in a child form, so typing issues no request and does not
+rerender the parent workspace, whose response bound permits up to 8,192 rows.
+A changed valid Apply commits the complete tuple atomically, aborts list/detail
+work, clears page/token/consumed-token/stale/detail state, and starts one fresh
+token-null List. Clear restores owner/text/selector absent with sharing `all`;
+when changed or recovering, it commits that tuple and starts a fresh page. Both
+the first page and every continuation reproduce the complete committed
+tuple with only the page token changing. The unchanged signed server cursor
+binds trusted tenant/owner/readable-app scope, page size and total-size choice,
+all app/owner/text/type/state/sharing/selector filters, sort/direction, and the
+first-page catalog revision plus state commitment.
+
+An invalid submitted draft on Apply, or a forged sharing control value, fails
+closed: in-flight work is aborted, the old list and detail are removed, no List
+is sent, and the Retry path stays hidden until a valid Apply or Clear clears the
+latch. Ordinary backend Retry is available only when valid normalized drafts
+exactly equal the committed tuple. A repeated valid Apply is a no-op while
+available; the same valid committed tuple after fail-closed unavailability
+instead issues exactly one fresh first-page recovery request. Per-field derived invalid state survives
+edits to a different control, and unapplied edits are announced as drafts.
 
 These predicates use a current-version-only derived projection rather than
 decoding definition blobs during traversal. Its definition-derived portion
@@ -1046,8 +1081,9 @@ catalog-revision labels. A displayed edge contains only the currently visible
 opposite endpoint's object ID and version plus the fixed `Field input` role
 label; it does not recover an omitted endpoint or expose definition metadata.
 This consumer is readiness evidence only: while the capability is absent, the
-navigation entry and dynamic chunk are absent and production bootstrap causes
-no knowledge request.
+navigation entry is absent, the feature-gate importer is not invoked, and
+production bootstrap causes no knowledge request. Development bundler prefetch
+of an emitted chunk does not establish importer invocation or exposure.
 
 ## Immutable snapshots and lifecycle
 
@@ -1599,10 +1635,46 @@ ClickHouse row, and digest-pinned knowledge runtime acceptance remains
 pending. The protected untracked probe remained excluded and untouched without
 opening or hashing it.
 
+The intervening documentation checkpoint is
+`14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at exactly 138 post-`c5440b9`
+commits. The current dormant frontend milestone is
+`c22df67cc0e65a7d5b250331e3ed30ca74863926`, for which
+`git rev-list --count c5440b9..c22df67` is exactly 139. It changes only
+`app/admin/knowledge-manager-data.ts`,
+`app/admin/knowledge-manager-panel.tsx`, and `app/globals.css`, with focused
+tests in `app/admin/knowledge-manager-data.test.ts` and
+`integration/browser_vertical.spec.ts`. There are no Go, protobuf, generated,
+backend, route, handler, administrator-bearer, capability, or navigation-
+production-logic edits. The nine production routes remain their unchanged
+configuration-dependent all-or-none unit, and
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` remains hard-false: no production
+Knowledge Manager navigation, feature-gate importer invocation, or browser
+Knowledge request occurs.
+
+The injected advertised-bootstrap test is a mocked dormant read-only vertical,
+not production activation. It proves exact initial, applied, continuation,
+stale-reset, default Clear, same-tuple fail-closed recovery, and forged-sharing
+recovery protobuf messages; no per-keystroke traffic; and deterministic request
+counts after two animation-frame turns without arbitrary sleeps, after first
+awaiting the rendered object before measuring the possible development
+StrictMode replay. It also proves escaped malicious server
+text in the DOM with no script/image execution, no mutation controls or route
+traffic, the read-only badge, labeled controls and status/alert/keyboard flow,
+URL-safe unnamed/autocomplete-off form controls, per-field invalid state, and a
+four-column desktop and one-column mobile layout. Child-local draft state
+isolates parent/workspace rendering. Source/static audit pins React text
+rendering and the absence of `dangerouslySetInnerHTML`; focused CSS/unit
+evidence pins the intervening two-column compact breakpoint. `npm run
+test:frontend` passes 66 build/tool plus 198 frontend tests; typecheck, strict
+no-warning lint,
+`git diff --check`, and the focused no-Docker Playwright scenario (1/1) pass.
+The protected pre-existing untracked ClickHouse probe remained excluded and
+untouched without opening or hashing it.
+
 Only a completed run against the required digest-pinned ClickHouse image and
 exact certified server version counts as runtime evidence. Docker execution for
-the compiler, snapshot-lifecycle staging, and signed-fixture-repair slices was
-**NOT RUN** and remains explicitly paused/canceled. The
+the compiler, snapshot-lifecycle staging, signed-fixture-repair, and dormant
+browser-filter slices was **NOT RUN** and remains explicitly paused/canceled. The
 stacked, pruned, and runtime-empty additions are compile-only and were not added
 to the Docker executor rows. A cancellation, skipped container test,
 compiler-only success, or table-free SQL probe must be recorded as pending

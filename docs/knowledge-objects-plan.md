@@ -988,7 +988,7 @@ intentional raw-download exception used by exports.
 Every mutation includes expected version, idempotency identity where needed,
 and an exact field mask. Mutation responses return the committed object and new
 catalog revision. List routes use signed, owner/tenant-scoped keyset cursors and
-may filter by app, object type, state, scope, selector summary, or text.
+may filter by app, object type, state, scope, selector text/patterns, or text.
 
 Store `ListDependencies` and `ListDependents` back the graph routes with only
 direct persisted object-to-object `FIELD_INPUT` edges and exact source and
@@ -1282,23 +1282,52 @@ SERVER_FEATURE_KNOWLEDGE_WORKFLOW_ACTIONS
 ## Browser application
 
 KO-0H supplies only a feature-gated read-only list/detail shell. The hidden
-readiness surface now supports app, object-type, and lifecycle-state filters;
-name-ascending, updated-time-descending, created-time-descending, and object-
-type-ascending sorting; and exact bounded continuation reuse for that complete
-query tuple. The dormant detail view also has exact-version consumers for both
-direct dependencies and direct dependents. Each direction owns its request,
+readiness surface has immediate app, object-type, lifecycle-state, and sort
+controls plus a submitted advanced-filter form for optional owner ID, optional
+name/description text, one sharing scope (`all`, `private`, `app`, or `global`),
+and optional selector text. Drafts live in a child component, so typing causes
+no request and does not rerender the parent workspace, which may contain up to
+8,192 rows. A changed valid Apply commits all four advanced values atomically
+and clears the page, continuation and consumed-token state, stale state,
+selected detail, and in-flight list/detail work before a fresh first-page
+request; the same reset occurs for valid fail-closed recovery. Clear restores
+the default tuple: owner/text/selector absent and sharing `all`, encoded as an
+empty `sharingScopeFilters`. Both first-page and continuation List requests carry the
+exact committed advanced tuple together with the immediate controls; only
+`pageToken` changes on continuation. The unchanged signed server cursor binds
+trusted tenant, owner, readable-app scope, page size and total-size choice, all
+app/owner/text/type/state/sharing/selector filters, sort/direction, and the
+first-page catalog revision plus state commitment.
+
+Advanced text submission trims only ASCII TAB/LF/VT/FF/CR/SPACE
+(`U+0009..U+000D`, `U+0020`) at the edges; blank becomes absent. A committed
+value is nonempty, valid UTF-8, free of C0 `U+0000..U+001F` and C1
+`U+007F..U+009F` controls, and no longer than 255 UTF-8 bytes. Non-ASCII edge
+whitespace such as NBSP is preserved. The request builder independently
+validates that exact canonical form and emits `ownerIdFilter`, `textFilter`,
+`sharingScopeFilters` (empty for `all`, otherwise one closed enum), and
+`selectorTextFilter`. An invalid submitted draft on Apply, or a forged sharing
+control value, aborts and removes the old list/detail, keeps Retry hidden until
+a valid Apply or Clear releases the fail-closed latch, and sends no List. A
+corrected Apply of the same committed tuple performs one fresh token-null
+recovery request. Repeated valid Apply is otherwise a no-op.
+
+The dormant detail view has exact-version consumers for both direct
+dependencies and direct dependents. Each direction owns its request,
 continuation, exact visible total, stale/retry state, and displayed catalog
 revision independently, and each row shows only the visible opposite endpoint's
-object ID, version, and `FIELD_INPUT` label. It has no mutation controls.
-When the trusted bootstrap capability is absent, Knowledge Manager is omitted
-from navigation, its chunk is not imported, and it issues no knowledge API
-request.
+object ID, version, and `FIELD_INPUT` label. It has no mutation controls. When
+the trusted bootstrap capability is absent, Knowledge Manager is omitted from
+navigation, its feature-gate importer is not invoked, and it issues no knowledge
+API request. Development bundlers may prefetch an emitted chunk independently;
+that is not importer invocation or production feature exposure.
 
 ### Knowledge Manager
 
-Add an app-aware Knowledge Manager with:
+Continue the app-aware Knowledge Manager with:
 
-- type, app, owner, sharing, state, and text filters;
+- the completed type, app, owner, sharing, state, name/description, and
+  selector-text filters;
 - stable pagination and sorting;
 - create, edit, duplicate, enable/disable, and delete actions;
 - definition validation with source-located errors;
@@ -1679,6 +1708,41 @@ unadvertised. This slice executes no ClickHouse row, and digest-pinned
 knowledge runtime acceptance remains pending. The protected untracked probe
 remained excluded and untouched without opening or hashing it.
 
+The intervening documentation checkpoint is
+`14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at exactly 138 post-`c5440b9`
+commits. The current frontend milestone is
+`c22df67cc0e65a7d5b250331e3ed30ca74863926`, for which
+`git rev-list --count c5440b9..c22df67` is exactly 139. It changes only the
+three Knowledge Manager frontend production files and their focused unit and
+mocked-protobuf Playwright tests. No Go, protobuf, generated, backend, route,
+handler, administrator-bearer, capability, or navigation-production logic is
+changed. The hard-false `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` boundary still
+means no production Knowledge Manager navigation, feature-gate importer
+invocation, or browser Knowledge request; the existing nine server management
+routes remain registered only as their unchanged, configuration-dependent,
+all-or-none unit.
+
+The hidden browser vertical proves exact initial, applied, continuation,
+stale-reset, Clear, invalid same-tuple recovery, and forged-sharing recovery
+List messages. It uses a monotonically counted, phase-labelled request oracle;
+after each expected protobuf tuple it waits two animation frames and reasserts
+the exact count, catching effect/render-delayed duplicates within that barrier.
+Typing-only phases use the same
+two-frame barrier with no arbitrary sleep, and the test waits for the first
+rendered object before measuring the permitted development StrictMode initial
+replay. Unit and browser evidence also pins ASCII-edge-only trim including
+NBSP preservation, UTF-8/control/255-byte rejection, per-field invalid state,
+fail-closed page/detail removal, successful Apply/Clear recovery, no query-
+string form leakage, escaped malicious server text with no script/image
+execution, keyboard and status semantics, the read-only badge, four-/two-/one-
+column responsive layout, and absence of mutation controls and requests. Source
+audit also pins React text rendering without `dangerouslySetInnerHTML`. The
+focused scenario passes 1/1 without Docker; `npm run test:frontend` passes 66
+build/tool plus 198
+frontend tests, and typecheck, strict no-warning lint, and diff hygiene pass.
+The protected untracked probe remained excluded and untouched without opening
+or hashing it.
+
 The three added `Compile` cases use relationship-based construction oracles.
 Each proves one physical event-table scan, placeholder count equal to
 bound-argument count, its exact ordered authored argument suffix, and exact
@@ -1703,7 +1767,8 @@ ClickHouse image and exact `26.3.17.4` server version. Stacked chronology,
 pruned consumption, and runtime-empty consumption are compile-only additions;
 they were not added as Docker executor rows. Docker acceptance remains
 explicitly paused/canceled and was **NOT RUN** for the compiler,
-snapshot-lifecycle, or signed-fixture-repair slices; there is no green
+snapshot-lifecycle, signed-fixture-repair, or dormant browser-filter slices;
+there is no green
 container result, engine-compatibility claim, or
 opening of a production compiler, snapshot, Resolver-attachment, capability,
 or browser gate.
@@ -1826,9 +1891,10 @@ detail view; Create/Validate/Update/SetState/Delete remain excluded. Validate is
 also absent from the backend's generic outer administrator-route map because the
 inner knowledge attempt boundary performs its administrator authentication and
 `ActionValidate` journaling. Because bootstrap still hard-disables the
-capability, production browser navigation, dynamic chunk loading, and knowledge
-API requests remain absent, while production search resolution and nonempty
-execution also remain closed.
+capability, production browser navigation and Knowledge API requests remain
+absent and the feature-gate importer is not invoked, while production search
+resolution and nonempty execution also remain closed. Development bundler
+prefetch of an emitted chunk is not a production exposure or importer oracle.
 
 Immutable index-name creation now has its own atomic global admission boundary.
 Migration 0034 supplies sparse covering drivers for every nonempty ACTIVE
