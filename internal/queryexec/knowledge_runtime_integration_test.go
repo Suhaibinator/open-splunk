@@ -215,18 +215,15 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	if exactVersion != 1 {
 		t.Fatalf("ClickHouse version is not exactly %s", knowledgeRuntimeExpectedClickHouseVersion)
 	}
-	insertKnowledgeRuntimeEvents(
-		t,
-		overallContext,
-		connection,
-		knowledgeRuntimeFixtures(
-			tenantID,
-			indexName,
-			selectorIndexName,
-			base,
-			indexTime,
-		),
+	fixtures := knowledgeRuntimeFixtures(
+		tenantID,
+		indexName,
+		selectorIndexName,
+		base,
+		indexTime,
 	)
+	matrixFixtures := knowledgeRuntimeMatrixFixtures(t, fixtures)
+	insertKnowledgeRuntimeEvents(t, overallContext, connection, fixtures)
 	insertKnowledgeRuntimeOverflowEvent(
 		t,
 		overallContext,
@@ -290,6 +287,30 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 			t.Fatalf("execute knowledge stats: %v", err)
 		}
 		knowledgeRuntimeAssertStats(t, sink)
+	})
+
+	t.Run("stacked chronological barriers", func(t *testing.T) {
+		sink := &fakeSink{}
+		if err := executor.Execute(overallContext, matrix.chronological, sink); err != nil {
+			t.Fatalf("execute stacked chronological knowledge query: %v", err)
+		}
+		knowledgeRuntimeAssertChronological(t, sink, matrixFixtures)
+	})
+
+	t.Run("pruned consumer", func(t *testing.T) {
+		sink := &fakeSink{}
+		if err := executor.Execute(overallContext, matrix.pruned, sink); err != nil {
+			t.Fatalf("execute pruned knowledge consumer: %v", err)
+		}
+		knowledgeRuntimeAssertProjectedEventIDs(t, sink, matrixFixtures)
+	})
+
+	t.Run("runtime-empty consumer", func(t *testing.T) {
+		sink := &fakeSink{}
+		if err := executor.Execute(overallContext, matrix.runtimeEmpty, sink); err != nil {
+			t.Fatalf("execute runtime-empty knowledge consumer: %v", err)
+		}
+		knowledgeRuntimeAssertProjectedEventIDs(t, sink, nil)
 	})
 
 	t.Run("timeline", func(t *testing.T) {
@@ -356,6 +377,9 @@ type compiledKnowledgeRuntimeMatrix struct {
 	chart         clickhouse.CompiledQuery
 	timechart     clickhouse.CompiledQuery
 	stats         clickhouse.CompiledQuery
+	chronological clickhouse.CompiledQuery
+	pruned        clickhouse.CompiledQuery
+	runtimeEmpty  clickhouse.CompiledQuery
 	timeline      clickhouse.CompiledTimeline
 	catalog       clickhouse.CompiledFieldCatalog
 	summary       clickhouse.CompiledFieldSummary
@@ -786,6 +810,9 @@ func compileKnowledgeRuntimeMatrix(
 	chart := compiledCase("chart")
 	timechart := compiledCase("timechart")
 	stats := compiledCase("stats")
+	chronological := compiledCase("stacked chronological barriers")
+	pruned := compiledCase("pruned consumer")
+	runtimeEmpty := compiledCase("runtime-empty consumer")
 
 	timeline, err := compiler.CompileTimeline(plans.timeline, plans.timelineSpec)
 	if err != nil {
@@ -829,6 +856,9 @@ func compileKnowledgeRuntimeMatrix(
 		chart:         chart,
 		timechart:     timechart,
 		stats:         stats,
+		chronological: chronological,
+		pruned:        pruned,
+		runtimeEmpty:  runtimeEmpty,
 		timeline:      timeline,
 		catalog:       catalog,
 		summary:       summary,
@@ -1888,16 +1918,46 @@ func knowledgeRuntimeFixtures(
 		}
 	}
 	return []knowledgeRuntimeFixture{
-		fixture("knowledge-event-a", knowledgeRuntimeRoleMatrix, tenantID, indexName, 10*time.Second, "fixture-a", "AlphaSource", "knowledge:fixture", "matrix", "alpha"),
-		fixture("knowledge-event-b", knowledgeRuntimeRoleMatrix, tenantID, indexName, 40*time.Second, "fixture-b", "BetaSource", "knowledge:fixture", "matrix", "beta"),
-		fixture("knowledge-event-c", knowledgeRuntimeRoleMatrix, tenantID, indexName, 70*time.Second, "fixture-c", "AlphaSource", "knowledge:fixture", "matrix", "alpha"),
-		fixture("knowledge-event-d", knowledgeRuntimeRoleMatrix, tenantID, indexName, 100*time.Second, "fixture-d", "BetaSource", "knowledge:fixture", "matrix", "beta"),
+		fixture("knowledge-event-a", knowledgeRuntimeRoleMatrix, tenantID, indexName, 100*time.Second, "fixture-a", "AlphaSource", "knowledge:fixture", "matrix", "alpha"),
+		fixture("knowledge-event-b", knowledgeRuntimeRoleMatrix, tenantID, indexName, 10*time.Second, "fixture-b", "BetaSource", "knowledge:fixture", "matrix", "beta"),
+		fixture("knowledge-event-c", knowledgeRuntimeRoleMatrix, tenantID, indexName, 40*time.Second, "fixture-c", "AlphaSource", "knowledge:fixture", "matrix", "alpha"),
+		fixture("knowledge-event-d", knowledgeRuntimeRoleMatrix, tenantID, indexName, 70*time.Second, "fixture-d", "BetaSource", "knowledge:fixture", "matrix", "beta"),
 		fixture("knowledge-control-index", knowledgeRuntimeRoleIndexControl, tenantID, selectorIndexName, 15*time.Second, "fixture-index", "IndexSource", "knowledge:fixture", "selector-control", "index"),
 		fixture("knowledge-control-host", knowledgeRuntimeRoleHostControl, tenantID, indexName, 25*time.Second, "control-host", "HostSource", "knowledge:fixture", "selector-control", "host"),
 		fixture("knowledge-control-source", knowledgeRuntimeRoleSourceControl, tenantID, indexName, 35*time.Second, "fixture-source", "control-source", "knowledge:fixture", "selector-control", "source"),
 		fixture("knowledge-control-sourcetype", knowledgeRuntimeRoleSourcetypeControl, tenantID, indexName, 45*time.Second, "fixture-sourcetype", "SourcetypeSource", "control:fixture", "selector-control", "sourcetype"),
 		fixture("knowledge-cross-tenant-decoy", knowledgeRuntimeRoleTenantDecoy, tenantID+"-decoy", indexName, 50*time.Second, "fixture-decoy", "DecoySource", "knowledge:fixture", "matrix", "decoy"),
 	}
+}
+
+func knowledgeRuntimeMatrixFixtures(
+	t *testing.T,
+	fixtures []knowledgeRuntimeFixture,
+) []knowledgeRuntimeFixture {
+	t.Helper()
+	result := make([]knowledgeRuntimeFixture, 0, 4)
+	for _, fixture := range fixtures {
+		if fixture.role == knowledgeRuntimeRoleMatrix {
+			result = append(result, fixture)
+		}
+	}
+	slices.SortFunc(result, func(left, right knowledgeRuntimeFixture) int {
+		return strings.Compare(left.id, right.id)
+	})
+	gotIDs := make([]string, len(result))
+	for index, fixture := range result {
+		gotIDs[index] = fixture.id
+	}
+	wantIDs := []string{
+		"knowledge-event-a",
+		"knowledge-event-b",
+		"knowledge-event-c",
+		"knowledge-event-d",
+	}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("knowledge runtime matrix fixtures = %#v, want %#v", gotIDs, wantIDs)
+	}
+	return result
 }
 
 func insertKnowledgeRuntimeEvents(
@@ -2306,6 +2366,162 @@ func knowledgeRuntimeAssertStats(t *testing.T, sink *fakeSink) {
 	}{{kind: "alpha", count: 2}, {kind: "beta", count: 2}} {
 		knowledgeRuntimeRequireStringValue(t, sink.rows[index][0], want.kind, "stats group")
 		knowledgeRuntimeRequireUnsignedValue(t, sink.rows[index][1], want.count, "stats total")
+	}
+}
+
+func knowledgeRuntimeAssertChronological(
+	t *testing.T,
+	sink *fakeSink,
+	fixtures []knowledgeRuntimeFixture,
+) {
+	t.Helper()
+	wantSchema := []searchjobs.Column{
+		{Name: "event_id", Kind: searchjobs.ValueKindString},
+		{Name: "event_first", Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: "event_last", Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: "stream_first", Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: "stream_last", Kind: searchjobs.ValueKindMixed, Nullable: true},
+	}
+	if len(fixtures) != 4 {
+		t.Fatalf("stacked chronological fixtures = %d, want 4", len(fixtures))
+	}
+	if sink.setCalls != 1 || !slices.Equal(sink.schema.Columns, wantSchema) ||
+		len(sink.rows) != len(fixtures) {
+		t.Fatalf(
+			"stacked chronological result = schema %#v calls %d rows %#v, want schema %#v and %d rows",
+			sink.schema,
+			sink.setCalls,
+			sink.rows,
+			wantSchema,
+			len(fixtures),
+		)
+	}
+	eventFirst := fixtures[0]
+	eventLast := fixtures[0]
+	for _, fixture := range fixtures[1:] {
+		if fixture.eventTime.Before(eventFirst.eventTime) {
+			eventFirst = fixture
+		}
+		if fixture.eventTime.After(eventLast.eventTime) {
+			eventLast = fixture
+		}
+	}
+	const (
+		wantEventFirstID    = "knowledge-event-b"
+		wantEventFirstValue = "beta"
+		wantEventLastID     = "knowledge-event-a"
+		wantEventLastValue  = "json-alpha"
+	)
+	if eventFirst.id != wantEventFirstID || eventFirst.kind != wantEventFirstValue ||
+		eventLast.id != wantEventLastID || eventLast.jsonValue != wantEventLastValue {
+		t.Fatalf(
+			"chronological fixture extrema = first %q/%q last %q/%q, want %q/%q and %q/%q",
+			eventFirst.id,
+			eventFirst.kind,
+			eventLast.id,
+			eventLast.jsonValue,
+			wantEventFirstID,
+			wantEventFirstValue,
+			wantEventLastID,
+			wantEventLastValue,
+		)
+	}
+	wantStreamFirstIDs := []string{
+		"knowledge-event-a",
+		"knowledge-event-b",
+		"knowledge-event-b",
+		"knowledge-event-b",
+	}
+	wantStreamFirstValues := []string{
+		"alphasource",
+		"betasource",
+		"betasource",
+		"betasource",
+	}
+	wantStreamLastIDs := []string{
+		"knowledge-event-a",
+		"knowledge-event-a",
+		"knowledge-event-a",
+		"knowledge-event-a",
+	}
+	wantStreamLastValues := []string{"alpha", "alpha", "alpha", "alpha"}
+	streamFirst := fixtures[0]
+	streamLast := fixtures[0]
+	for index, fixture := range fixtures {
+		if fixture.eventTime.Before(streamFirst.eventTime) {
+			streamFirst = fixture
+		}
+		if fixture.eventTime.After(streamLast.eventTime) {
+			streamLast = fixture
+		}
+		streamFirstValue := strings.ToLower(streamFirst.source)
+		streamLastValue := streamLast.kind
+		if streamFirst.id != wantStreamFirstIDs[index] ||
+			streamFirstValue != wantStreamFirstValues[index] ||
+			streamLast.id != wantStreamLastIDs[index] ||
+			streamLastValue != wantStreamLastValues[index] {
+			t.Fatalf(
+				"chronological stream extrema %d = first %q/%q last %q/%q, want %q/%q and %q/%q",
+				index,
+				streamFirst.id,
+				streamFirstValue,
+				streamLast.id,
+				streamLastValue,
+				wantStreamFirstIDs[index],
+				wantStreamFirstValues[index],
+				wantStreamLastIDs[index],
+				wantStreamLastValues[index],
+			)
+		}
+		row := sink.rows[index]
+		if len(row) != len(wantSchema) {
+			t.Fatalf("stacked chronological row %d = %#v, want %d columns", index, row, len(wantSchema))
+		}
+		knowledgeRuntimeRequireStringValue(t, row[0], fixture.id, "chronological event_id")
+		knowledgeRuntimeRequireStringValue(t, row[1], wantEventFirstValue, "chronological event_first")
+		knowledgeRuntimeRequireStringValue(t, row[2], wantEventLastValue, "chronological event_last")
+		knowledgeRuntimeRequireStringValue(t, row[3], wantStreamFirstValues[index], "chronological stream_first")
+		knowledgeRuntimeRequireStringValue(t, row[4], wantStreamLastValues[index], "chronological stream_last")
+	}
+}
+
+func knowledgeRuntimeAssertProjectedEventIDs(
+	t *testing.T,
+	sink *fakeSink,
+	fixtures []knowledgeRuntimeFixture,
+) {
+	t.Helper()
+	wantSchema := []searchjobs.Column{{Name: "event_id", Kind: searchjobs.ValueKindString}}
+	if sink.setCalls != 1 || !slices.Equal(sink.schema.Columns, wantSchema) ||
+		len(sink.rows) != len(fixtures) {
+		t.Fatalf(
+			"projected knowledge result = schema %#v calls %d rows %#v, want schema %#v and %d rows",
+			sink.schema,
+			sink.setCalls,
+			sink.rows,
+			wantSchema,
+			len(fixtures),
+		)
+	}
+	gotIDs := make([]string, len(sink.rows))
+	for index := range sink.rows {
+		if len(sink.rows[index]) != 1 {
+			t.Fatalf("projected knowledge row %d = %#v, want event_id only", index, sink.rows[index])
+		}
+		eventID, ok := sink.rows[index][0].String()
+		if !ok {
+			t.Fatalf("projected event_id %d = %#v, want String", index, sink.rows[index][0])
+		}
+		gotIDs[index] = eventID
+	}
+	wantIDs := make([]string, len(fixtures))
+	for index, fixture := range fixtures {
+		wantIDs[index] = fixture.id
+	}
+	slices.Sort(gotIDs)
+	slices.Sort(wantIDs)
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Fatalf("projected event_ids = %#v, want %#v", gotIDs, wantIDs)
 	}
 }
 
