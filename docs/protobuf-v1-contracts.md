@@ -589,10 +589,13 @@ an importer-invocation or production-exposure oracle. Its dormant surface has
 immediate app/object-type/lifecycle-state/sort controls plus the submitted
 owner, name/description text, closed sharing-scope, and selector-text tuple
 described above, with exact first-page and continuation reproduction. Its detail
-view now requests the selected exact version's
-dependencies and dependents independently, pages and labels each direction at
-its own catalog revision, and displays only each visible opposite endpoint's
-object ID, version, and `FIELD_INPUT` role.
+view validates the immutable ID/version selected from List before I/O, sends
+both fields in Get, and accepts only a returned object with that exact identity.
+Invalid input or an ID/version mismatch becomes the uniform unavailable state
+and starts zero graph requests. After an exact Get it requests dependencies and
+dependents for that same ID/version independently, pages and labels each
+direction at its own catalog revision, and displays only each visible opposite
+endpoint's object ID, version, and `FIELD_INPUT` role.
 Production nonempty compiler, snapshot-finalization, and execution gates remain
 closed, so no shipping knowledge execution is claimed. The acceptance bridges
 are deliberately outside the protobuf/runtime capability. Let A mean
@@ -656,9 +659,9 @@ ClickHouse row, and digest-pinned knowledge runtime acceptance remains
 pending. The protected untracked probe remained excluded and untouched without
 opening or hashing it.
 
-The intervening documentation checkpoint is
+The intervening signed-fixture documentation checkpoint is
 `14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at 138 post-`c5440b9`
-commits. At the current frontend milestone
+commits. At the advanced-filter frontend milestone
 `c22df67cc0e65a7d5b250331e3ed30ca74863926`, exactly 139 post-`c5440b9`
 commits, the dormant browser consumes the four already-defined List fields; it
 does not change a protobuf schema, generated artifact, Go or backend handler,
@@ -685,8 +688,26 @@ catching effect/render-delayed duplicates within that deterministic barrier.
 The focused browser scenario
 passes 1/1 without Docker; `npm run test:frontend` passes 66 build/tool and 198
 frontend tests, and typecheck, strict no-warning lint, and `git diff --check`
-pass. The protected pre-existing untracked ClickHouse probe remained excluded
-and untouched without opening or hashing it.
+pass. Its documentation checkpoint is
+`d1d8e9cc3b6a14e030237957af8b4824874b6382`, exactly 140
+post-`c5440b9` commits.
+
+At exact-detail revision `4717c243ff2f162e034b84dc9c8cc63524a153b3`,
+exactly 141 post-`c5440b9` commits, the browser sends the immutable List-selected
+ID and version in the generated `GetKnowledgeObjectRequest`. It rejects an
+invalid ID or non-bigint/out-of-range version before I/O and rejects a returned
+object whose ID or version differs from the frozen request. Both outcomes use
+the same unavailable projection, and a mismatch sends neither graph request.
+The generated-protobuf Playwright vertical then proves both successful initial
+relationship requests have the exact root ID/version/page tuple, maintains
+their revisions and state independently, accepts one dependency continuation,
+rejects one dependent continuation as stale before a dependent-only first-page
+retry, and escapes malicious endpoint IDs. Feature-off, read-only, and zero-
+mutation boundaries remain unchanged. The frontend gate now passes 66
+build/tool plus 200 frontend tests; typecheck, strict no-warning lint,
+`git diff --check`, and the focused no-Docker Playwright scenario pass. The
+protected pre-existing untracked ClickHouse probe remained excluded and
+untouched without opening or hashing it.
 
 The three added `Compile` cases prove relationships rather than one full SQL
 golden: one physical scan, placeholder/argument equality with the exact ordered
@@ -696,16 +717,27 @@ source/direction/measure/aggregate/output binding, immutable chronology versus
 authored sort, and live validation for stacked chronology; and `event_id`-only
 valid empty container authority plus retained guards/validation for pruned and
 runtime-empty consumers. Only the runtime-empty predicate precedes its
-still-live validation union. These are compile-only additions, not Docker
-executor rows. Default and either single-tag mode remain closed. A supported
-dual-tag server `go build` remains closed; a separate disposable tracked-source
+still-live validation union. Revision
+`922e6eee2b2ec5c554d876a1a08568fbca3d096c`, exactly 142
+post-`c5440b9` commits and immediately following `4717c24`, now wires all three
+compiled queries into named test-only Docker executor rows. The chronology
+fixtures make event-ID order diverge from event-time order and hard-pin the
+global earliest `knowledge-event-b`/`beta`, global latest
+`knowledge-event-a`/`json-alpha`, and every prefix-stream extremum. The pruned
+row requires exactly `knowledge-event-a`, `knowledge-event-b`,
+`knowledge-event-c`, and `knowledge-event-d`; the runtime-empty row requires
+the typed `event_id` schema and zero rows. Default and either single-tag mode
+remain closed. A supported dual-tag server `go build` remains closed; a
+separate disposable tracked-source
 probe in an ordinary binary observed only the private snapshot helper returning
 `false` and
 did not dynamically call public `Authority.Finalize`, whose compiler path would
 stop first at its own test-process guard. This is not a claim of adversarial
-linker resistance. Docker acceptance was **NOT RUN** and is still
-paused/canceled, including for the signed analysis-fixture repair and dormant
-browser-filter slice.
+linker resistance. Docker acceptance was **NOT RUN** and remains explicitly
+paused/canceled, including for the source-complete matrix at `922e6ee`; the new
+assertions therefore have no engine result. The next runtime action is to run
+the paused digest-pinned ClickHouse `26.3.17.4` matrix, not add another executor
+row.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.

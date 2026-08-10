@@ -1312,15 +1312,22 @@ a valid Apply or Clear releases the fail-closed latch, and sends no List. A
 corrected Apply of the same committed tuple performs one fresh token-null
 recovery request. Repeated valid Apply is otherwise a no-op.
 
-The dormant detail view has exact-version consumers for both direct
-dependencies and direct dependents. Each direction owns its request,
-continuation, exact visible total, stale/retry state, and displayed catalog
-revision independently, and each row shows only the visible opposite endpoint's
-object ID, version, and `FIELD_INPUT` label. It has no mutation controls. When
-the trusted bootstrap capability is absent, Knowledge Manager is omitted from
-navigation, its feature-gate importer is not invoked, and it issues no knowledge
-API request. Development bundlers may prefetch an emitted chunk independently;
-that is not importer invocation or production feature exposure.
+The dormant detail view treats the immutable ID and version selected from List
+as one exact identity. It validates a nonempty, valid-UTF-8, C0/C1-control-free,
+ASCII-edge-trimmed ID of at most 128 bytes and the bigint version range 1
+through MaxInt64 before I/O, sends both fields in Get, and accepts only a
+returned object with that exact ID and version. Invalid input or a response
+mismatch becomes the same unavailable
+state and starts neither graph read. After an exact Get, the view has exact-
+version consumers for both direct dependencies and direct dependents. Each
+direction owns its request, continuation, exact visible total, stale/retry
+state, and displayed catalog revision independently, and each row shows only
+the visible opposite endpoint's object ID, version, and `FIELD_INPUT` label. It
+has no mutation controls. When the trusted bootstrap capability is absent,
+Knowledge Manager is omitted from navigation, its feature-gate importer is not
+invoked, and it issues no knowledge API request. Development bundlers may
+prefetch an emitted chunk independently; that is not importer invocation or
+production feature exposure.
 
 ### Knowledge Manager
 
@@ -1708,9 +1715,9 @@ unadvertised. This slice executes no ClickHouse row, and digest-pinned
 knowledge runtime acceptance remains pending. The protected untracked probe
 remained excluded and untouched without opening or hashing it.
 
-The intervening documentation checkpoint is
+The intervening signed-fixture documentation checkpoint is
 `14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at exactly 138 post-`c5440b9`
-commits. The current frontend milestone is
+commits. The advanced-filter frontend milestone is
 `c22df67cc0e65a7d5b250331e3ed30ca74863926`, for which
 `git rev-list --count c5440b9..c22df67` is exactly 139. It changes only the
 three Knowledge Manager frontend production files and their focused unit and
@@ -1737,9 +1744,24 @@ string form leakage, escaped malicious server text with no script/image
 execution, keyboard and status semantics, the read-only badge, four-/two-/one-
 column responsive layout, and absence of mutation controls and requests. Source
 audit also pins React text rendering without `dangerouslySetInnerHTML`. The
-focused scenario passes 1/1 without Docker; `npm run test:frontend` passes 66
-build/tool plus 198
-frontend tests, and typecheck, strict no-warning lint, and diff hygiene pass.
+focused scenario passes 1/1 without Docker. That slice's documentation
+checkpoint is `d1d8e9cc3b6a14e030237957af8b4824874b6382`, exactly 140
+post-`c5440b9` commits.
+
+The subsequent exact-detail hardening revision is
+`4717c243ff2f162e034b84dc9c8cc63524a153b3`, exactly 141
+post-`c5440b9` commits. List-selected immutable ID and version now form the Get
+request and must match the returned object exactly before either graph route
+can run. Generated-protobuf unit coverage proves invalid ID/version rejection
+before I/O and uniform mismatch unavailability. The expanded Playwright
+vertical proves the exact successful dependency and dependent roots, versions,
+and first pages; independent catalog revisions and failure states; one
+successful dependency continuation; one stale dependent continuation with a
+fresh first-page retry; and escaped malicious endpoint IDs with no executable
+nodes. Feature-off, read-only, and zero-mutation boundaries remain unchanged.
+At this revision `npm run test:frontend` passes 66 build/tool plus 200 frontend
+tests; typecheck, strict no-warning lint, diff hygiene, and the focused no-
+Docker Playwright scenario pass.
 The protected untracked probe remained excluded and untouched without opening
 or hashing it.
 
@@ -1759,19 +1781,27 @@ both publish only `event_id`, expose valid empty container authority, and retain
 the live knowledge guard and final validation. Only the runtime-empty form
 binds its impossible Boolean predicate once, before the validation union.
 
-The Docker executor matrix still uses the migrated event table, independently
-falsifiable selector dimensions, cross-tenant decoys, exact typed container and
-overwrite results, authored suffixes and aggregations, analysis finalizers, and
-atomic alias-copy limit attribution. It requires the cached digest-pinned
-ClickHouse image and exact `26.3.17.4` server version. Stacked chronology,
-pruned consumption, and runtime-empty consumption are compile-only additions;
-they were not added as Docker executor rows. Docker acceptance remains
-explicitly paused/canceled and was **NOT RUN** for the compiler,
-snapshot-lifecycle, signed-fixture-repair, or dormant browser-filter slices;
-there is no green
-container result, engine-compatibility claim, or
-opening of a production compiler, snapshot, Resolver-attachment, capability,
-or browser gate.
+The Docker executor matrix definition uses the migrated event table,
+independently falsifiable selector dimensions, cross-tenant decoys, exact typed
+container and overwrite results, authored suffixes and aggregations, analysis
+finalizers, and atomic alias-copy limit attribution. It requires the cached
+digest-pinned ClickHouse image and exact `26.3.17.4` server version. Revision
+`922e6eee2b2ec5c554d876a1a08568fbca3d096c`, exactly 142
+post-`c5440b9` commits and immediately following `4717c24`, completes the
+matrix definition by wiring the three previously compile-only queries into
+named test-only Docker executor rows. Their source assertions deliberately make
+event-ID order diverge from event-time chronology; hard-pin the global earliest
+`knowledge-event-b`/`beta` and latest `knowledge-event-a`/`json-alpha` extrema
+plus every prefix-stream extremum; require the pruned result's exact
+`knowledge-event-a`/`knowledge-event-b`/`knowledge-event-c`/
+`knowledge-event-d` set; and require the runtime-empty result to publish the
+typed `event_id` schema exactly once with zero rows. Docker acceptance remains
+explicitly paused/canceled and was **NOT RUN** for this matrix-definition
+revision or the preceding compiler, snapshot-lifecycle, signed-fixture-repair,
+and dormant browser slices. The next runtime action is to run this complete
+paused digest-pinned matrix, not add another row. There is no green container
+result, engine-compatibility claim, opening of a production compiler or snapshot
+gate, Resolver attachment, capability advertisement, or browser gate.
 
 The KO-1C compiler now also preserves complete execution authority when an
 ordinary sealed query is projected into timeline, field-catalog,

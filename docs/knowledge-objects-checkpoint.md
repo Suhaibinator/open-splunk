@@ -2,30 +2,29 @@
 
 **Goal status:** active
 
-**Current milestone:** KO-1 dormant Knowledge Manager advanced List controls
-(production gates closed)
+**Current milestone:** KO-1 digest-pinned runtime executor matrix definition
+complete (Docker paused; production gates closed)
 
-**Last completed slice:** revision `c22df67` adds the already-supported List
-filters for optional owner ID, optional name/description text, one closed
-sharing scope (`all`, `private`, `app`, or `global`), and optional selector text
-to the hidden read-only Knowledge Manager. The four values are one atomic
-submitted query/cursor tuple: typing remains child-local and sends no request;
-a changed valid Apply, or valid fail-closed recovery, commits the complete
-normalized tuple and resets list/detail/cursor state; Clear restores the default
-tuple (owner/text/selector absent and sharing `all`); and continuations
-reproduce the exact committed tuple. Invalid submitted drafts, or a forged
-sharing control value, fail closed without a List request or stale page/detail
-disclosure, and a successful same-tuple Apply can recover with exactly one fresh
-first-page request.
+**Last completed slice:** revision `922e6ee` promotes the existing stacked-
+chronology, pruned-consumer, and runtime-empty compiler cases into named test-
+only rows of the Docker executor matrix. Their result oracles deliberately
+separate event-ID order from event chronology, pin the global and prefix
+extrema, require the pruned exact event-ID set, and require a typed `event_id`
+schema with zero rows
+for the runtime-empty case. This completes the matrix definition; it is not a
+runtime result. The digest-pinned ClickHouse `26.3.17.4` matrix remains paused
+and was **NOT RUN**.
 
-The production capability remains hard-false. A normal production bootstrap
-therefore exposes no Knowledge Manager navigation, does not invoke the feature-
-gate importer, and sends no browser knowledge request. The nine server management
-routes remain registered only as their unchanged, configuration-dependent,
-all-or-none unit. This frontend-only slice changes no Go, protobuf, generated,
-backend, route, handler, administrator-bearer, or capability logic; it opens no
-mutation surface and executes no ClickHouse row. Docker remains paused and was
-not run.
+The immediately preceding browser revision `4717c24` pins detail reads to the
+immutable ID and version selected from List. It rejects invalid identities
+before I/O, accepts only an exact Get response identity, starts zero graph reads
+after a mismatch, and adds generated-protobuf Playwright coverage for successful
+dependency/dependent pages, independent revisions and states, one successful
+continuation, one stale/retry path, and escaped malicious endpoint IDs. The
+production capability remains hard-false: no navigation, importer invocation,
+browser knowledge request, mutation surface, Resolver attachment, or nonempty
+compiler/snapshot gate opens. The nine management routes remain their unchanged
+configuration-dependent all-or-none unit.
 
 **Evidence date:** August 9, 2026
 
@@ -69,9 +68,15 @@ not run.
   `14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63`
 - Dormant Knowledge Manager advanced-filter revision:
   `c22df67cc0e65a7d5b250331e3ed30ca74863926`
+- Dormant Knowledge Manager advanced-filter documentation revision:
+  `d1d8e9cc3b6a14e030237957af8b4824874b6382`
+- Exact-version Knowledge Manager detail revision:
+  `4717c243ff2f162e034b84dc9c8cc63524a153b3`
+- Complete runtime executor-matrix definition revision:
+  `922e6eee2b2ec5c554d876a1a08568fbca3d096c`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 139 intentional post-`c5440b9` KO
-  commits through `c22df67` are durable locally. This update is prepared as a
+- Publication state before this document: 142 intentional post-`c5440b9` KO
+  commits through `922e6ee` are durable locally. This update is prepared as a
   separate documentation change. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -471,6 +476,9 @@ Later local commits anchoring the reconciled current state include:
 | `81c6412` | `test(server): mint signed analysis snapshots` | Replaced handcrafted unsigned analysis fixtures with real Manager-minted completed legacy snapshots, repairing the four historical server-package failures while preserving retained-authority validation, route registration, and the closed production activation gates |
 | `14c6944` | `docs(knowledge): checkpoint signed analysis fixtures` | Reconciled the signed retained-analysis fixture repair, preserved the time-scoped `9f8c8ac` failures, recorded the now-green full server package, and retained the paused Docker/runtime boundary at the 138-commit documentation checkpoint |
 | `c22df67` | `feat(admin): add dormant knowledge filters` | Added the four submitted List filters, exact browser request/continuation tuple proof, child-local draft isolation, atomic Apply/Clear/reset and fail-closed recovery, responsive and accessible read-only rendering, and a deterministic mocked-protobuf browser vertical while the production capability remains hard-false |
+| `d1d8e9c` | `docs(knowledge): checkpoint dormant browser filters` | Reconciled the advanced-filter tuple, deterministic browser evidence, feature-off/read-only boundary, paused Docker evidence, and the 140-commit checkpoint |
+| `4717c24` | `fix(admin): pin knowledge detail versions` | Bound Get and both graph consumers to the immutable List-selected ID/version, rejected invalid identity before I/O and mismatched response identity before graph I/O, and expanded the generated-protobuf browser vertical across successful/stale independent relationship states without opening exposure or mutation |
+| `922e6ee` | `test(knowledge): complete runtime executor matrix` | Added Docker executor rows and exact result/source assertions for the existing stacked chronology, pruned consumer, and runtime-empty cases; completed matrix definition without running Docker or changing production behavior |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -1138,7 +1146,7 @@ checkpoint. The initial test-only compiler-acceptance staging evidence through
 | Independent snapshot-finalization closure | pass | A tagged test prepares a real nonempty snapshot authority, injects its prelude, obtains a valid public Compiler seal and matching evidence, and then proves `Authority.Finalize` still returns a zero snapshot with `ErrInvalidInput` and the exact closed-gate reason. Compiler acceptance cannot mint a shipping snapshot |
 | Initial bridge focused verification | pass without Docker | Exact retained commands below cover default closure plus canonical construction, tagged compiler sealing, tagged independent snapshot closure, all three corresponding race variants, default and tagged vet, and a tagged server build at `db8fe6c`. The build produced a valid Mach-O binary and its `/private/tmp` artifact was removed after inspection; none of these commands invoked Docker |
 | Expanded matrix focused verification | pass without Docker | At `11364ae`, full `go test ./internal/queryexec -count=1` and its tagged equivalent passed; full default and tagged `-race` queryexec runs passed; and default plus tagged `go vet ./internal/queryexec` passed. Production files did not change, so no snapshot or server-build rerun is claimed for this expansion. No command invoked Docker |
-| Digest-pinned ClickHouse acceptance | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked for `db8fe6c` or `11364ae`. The existing Docker executor still has no stacked-chronological, pruned-consumer, or runtime-empty-consumer row. The digest-pinned `26.3.17.4` typed row/result, Dynamic sizing, branch-laziness, resource-limit, empty-result, chronology, and hidden-failure-atomicity matrix remains required before runtime acceptance; compiler construction is not engine or compatibility acceptance |
+| Digest-pinned ClickHouse acceptance | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked for `db8fe6c` or `11364ae`. At that historical revision, the Docker executor still had no stacked-chronological, pruned-consumer, or runtime-empty-consumer row. The digest-pinned `26.3.17.4` typed row/result, Dynamic sizing, branch-laziness, resource-limit, empty-result, chronology, and hidden-failure-atomicity matrix remained required before runtime acceptance; compiler construction was not engine or compatibility acceptance |
 | Runtime activation | closed | Production still omits Resolver attachment, capability advertisement, browser navigation/chunk loading, and nonempty compiler/snapshot finalization. No knowledge object can affect a shipping search result |
 | Local durability | pass | `dbb5df7` reconciles the Preview contract, `db8fe6c` stages the compiler bridge, `2656f6e` checkpoints that bridge, and `11364ae` expands its construction matrix; `git rev-list --count c5440b9..11364ae` is exactly 133 and terminal revision `11364ae18fac0e2594a9a3e6e0ac71095530b9a7` is locally durable on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
@@ -1203,11 +1211,11 @@ Current signed retained-analysis fixture evidence at `81c6412`:
 | Local durability | pass | `git rev-list --count c5440b9..81c6412` is exactly 137; terminal revision `81c64122fb8be4a98ab42ecb5e3e23772827c208` is locally durable on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | No push was attempted without explicit destination approval |
 
-Current dormant Knowledge Manager advanced-filter evidence at `c22df67`:
+Historical dormant Knowledge Manager advanced-filter evidence at `c22df67`:
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Revision and history | pass | `HEAD` is `c22df67cc0e65a7d5b250331e3ed30ca74863926`; `git rev-list --count c5440b9..c22df67` is exactly 139. Its immediate history is the documentation checkpoint `14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at count 138 and the signed fixture `81c64122fb8be4a98ab42ecb5e3e23772827c208` at count 137. The historical `9f8c8ac` failure evidence and `81c6412` repair evidence above remain time-scoped and unchanged |
+| Revision and history | pass | At this revision, `HEAD` was `c22df67cc0e65a7d5b250331e3ed30ca74863926`; `git rev-list --count c5440b9..c22df67` is exactly 139. Its immediate history is the documentation checkpoint `14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at count 138 and the signed fixture `81c64122fb8be4a98ab42ecb5e3e23772827c208` at count 137. The historical `9f8c8ac` failure evidence and `81c6412` repair evidence above remain time-scoped and unchanged |
 | Frontend-only scope | pass | Production edits are limited to `app/admin/knowledge-manager-data.ts`, `app/admin/knowledge-manager-panel.tsx`, and `app/globals.css`; tests are in `app/admin/knowledge-manager-data.test.ts` and `integration/browser_vertical.spec.ts`. There are no Go, protobuf, generated, backend, route, handler, administrator-bearer, capability, or navigation-production-logic edits |
 | Exact four-filter contract | pass | The optional owner ID, optional name/description text, closed sharing scope (`all`, `private`, `app`, `global`), and optional selector text are committed as one tuple. Submission trims only ASCII TAB/LF/VT/FF/CR/SPACE (`U+0009..U+000D`, `U+0020`) from text edges; a blank result becomes absent. A committed value must be nonempty, valid UTF-8, free of C0 `U+0000..U+001F` and C1 `U+007F..U+009F` controls, and at most 255 UTF-8 bytes. Non-ASCII edge whitespace such as NBSP is retained. The request builder independently rejects any noncanonical committed value and emits `ownerIdFilter`, `textFilter`, `sharingScopeFilters` (empty for `all`, otherwise one enum), and `selectorTextFilter` exactly |
 | Atomic draft, Apply, Clear, and request tuple | pass | The advanced form owns drafts locally, so keystrokes send no request and do not rerender the parent workspace, which may contain up to 8,192 rows. A changed valid Apply, or valid fail-closed recovery, normalizes and commits all four values together, aborts list/detail work, clears pages, token and consumed-token state, stale state, and selection/detail, then issues one token-null List. Clear restores the default tuple: owner/text/selector absent and sharing `all` (an empty `sharingScopeFilters`). Both first-page and continuation requests carry the exact committed advanced tuple alongside the existing immediate app/type/state/sort controls; only `pageToken` changes on continuation. The unchanged signed server cursor still binds trusted tenant/owner/readable-app scope, page size and total-size choice, all seven UI filter families (app/owner/text/type/state/sharing/selector), sort/direction, and the first-page catalog revision/state commitment |
@@ -1218,6 +1226,24 @@ Current dormant Knowledge Manager advanced-filter evidence at `c22df67`:
 | Production exposure boundary | closed | `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` remains hard-false. A production feature-off bootstrap exposes no Knowledge Manager navigation, does not invoke its feature-gated importer, and sends no browser Knowledge request. The authoritative no-import oracle is the fake-importer unit test; development Turbopack may prefetch an emitted chunk and is not evidence of importer invocation. An injected advertised bootstrap exposes only the dormant read-only panel. The nine server routes remain registered as the unchanged configuration-dependent all-or-none unit, and no mutation route becomes browser-authorized |
 | Hygiene and runtime evidence | pass / runtime pending | No Docker command was run. The loopback development server used for the focused browser test was stopped and its generated artifacts were cleaned. The protected pre-existing untracked ClickHouse probe remained excluded and untouched without opening or hashing. No ClickHouse runtime or compatibility acceptance is claimed |
 | Local durability | pass | Terminal frontend revision `c22df67cc0e65a7d5b250331e3ed30ca74863926` is locally durable on `codex/knowledge-objects-runtime`; the count after `c5440b9` is exactly 139 |
+| Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
+
+Current exact-detail and completed runtime-matrix-definition evidence at
+`922e6ee`:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Exact revision and history | pass | `HEAD` is `922e6eee2b2ec5c554d876a1a08568fbca3d096c`; `git rev-list --count c5440b9..922e6ee` is exactly 142. Its immediate history is exact-detail hardening `4717c243ff2f162e034b84dc9c8cc63524a153b3` at count 141, advanced-filter documentation `d1d8e9cc3b6a14e030237957af8b4824874b6382` at count 140, and advanced-filter implementation `c22df67cc0e65a7d5b250331e3ed30ca74863926` at count 139 |
+| Immutable detail identity | pass | The selected List row supplies one immutable ID/version tuple. Before any Get I/O, the browser requires a nonempty, valid-UTF-8, C0/C1-control-free, ASCII-edge-trimmed ID of at most 128 bytes and a bigint version in `[1, MaxInt64]`; it then sends both exact generated-protobuf fields. Get success requires a disclosed response object whose ID and version both equal the frozen request. Invalid input, route/decoder/backend failure, or either response mismatch produces the same unavailable state. A client-side mutation of the caller's query after request construction cannot change the accepted identity |
+| Graph fail-closed boundary | pass | Both relationship routes start only after exact Get identity acceptance. The mismatched-response Playwright phase shows the uniform unavailable detail and exactly zero dependency/dependent requests. Closing and reopening the same row after an exact response issues the same pinned Get ID/version and then starts both graph reads. Feature-off remains zero Knowledge requests |
+| Generated-protobuf graph vertical | pass without Docker | The advertised-bootstrap Playwright scenario decodes exact Get, dependency, and dependent protobuf requests. Get sends `ko-malicious` at version 2; the deliberate response at version 3 fails closed before graph I/O, and the matching retry repeats `ko-malicious`/2. Both graph directions then send root `ko-malicious`/2 with page size 2, absent first-page token, and `include_total_size = true`. They retain independent first-page revisions 11 and 12, exact visible totals, and states. The dependency continuation sends `knowledge-dependencies-cursor-1`, preserves revision 11, and appends the exact third endpoint. The dependent continuation sends `knowledge-dependents-cursor-1`; its revision 13 response is rejected as stale while preserving the revision-12 page, and a dependent-only retry repeats the exact token-absent first page. The successful dependency state is unchanged by the dependent stale/retry flow |
+| Endpoint disclosure and read-only boundary | pass | Malicious dependency and dependent endpoint IDs render only as escaped React text; no script or image node executes. Rows disclose only opposite endpoint ID/version and `Field input`. Existing feature-off navigation/importer/API, immutable URL, read-only badge, no mutation controls, and zero mutation-route traffic assertions remain unchanged |
+| Frontend gates | pass | `npm run test:frontend` passes 66 build/tool tests plus 200 frontend tests. `npm run typecheck`, `npm run lint -- --deny-warnings`, `git diff --check`, and the focused loopback generated-protobuf Playwright scenario pass without Docker |
+| Runtime matrix definition | complete; engine result pending | `922e6ee` changes only `internal/queryexec/knowledge_runtime_integration_test.go`. The compiled stacked chronology, pruned consumer, and runtime-empty consumer are now carried in the executor matrix and wired as named Docker subtests. The fixture event times deliberately diverge from event-ID order. Assertions hard-pin global event-time earliest `knowledge-event-b`/`beta` and latest `knowledge-event-a`/`json-alpha`; ID-ordered prefix earliest ID-suffix sequence `a,b,b,b` with values `alphasource,betasource,betasource,betasource`; prefix latest ID-suffix sequence `a,a,a,a` with value `alpha`; the pruned exact `knowledge-event-a`/`knowledge-event-b`/`knowledge-event-c`/`knowledge-event-d` set; and the runtime-empty typed `event_id` schema with one schema publication and zero rows |
+| Docker-backed acceptance | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked for `4717c24` or `922e6ee`. Matrix definition is complete, but no assertion added by `922e6ee` has an engine result. The next runtime action is to run the paused `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49` matrix; until then ClickHouse and compatibility acceptance remain pending |
+| Production activation | closed | Neither slice changes Go production code, protobuf/generated contracts, route registration, capability or bearer policy, production Resolver attachment, the compiler/finalizer gates, or mutation authority. No shipping knowledge object affects a search result |
+| Protected workspace state | pass | The pre-existing untracked `internal/clickhouse/knowledge_alias_container_integration_test.go` probe remained excluded and untouched without opening or hashing it |
+| Local durability | pass | Terminal revision `922e6eee2b2ec5c554d876a1a08568fbca3d096c` is locally durable on `codex/knowledge-objects-runtime`; the count after `c5440b9` is exactly 142 |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 Current candidate-validation and dormant Preview request-boundary evidence:
@@ -1238,8 +1264,8 @@ Current candidate-validation and dormant Preview request-boundary evidence:
 | Registered validation route | pass, exposure closed | real HTTP tests pin ninth-route all-or-none configuration, authentication and administrator rejection before body read, `ActionValidate` journaling/fail-closed journal failures, shared Writer-gate 429 behavior, million-entry selected versus unselected outcomes, outer/mask/selected-nested/unselected unknown semantics, exact sealed responses, and no side effects. The exact protobuf route fixture now contains 60 routes; TypeScript declares Validate with an 8 MiB response cap while explicitly keeping it outside browser bearer attachment, and the backend generic outer administrator map remains unchanged |
 | Validation result bounds and privacy | service and route pass | descriptor/comment, Go/TypeScript wire, catalog-service, codec, handler, and HTTP tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
 | Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-execution acquisition or caller-auth integration, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Service work remains blocked on owner-scoped retained-execution reacquisition, fixed-catalog ACTIVE evaluation and program application, row-limit default/bound/execution policy, paired schema-row/truncation and response resource semantics, plus the closed production nonempty compiler, snapshot-finalization, and digest-pinned ClickHouse gates. The compiler-only and dual-tag snapshot lifecycle bridges open none of those service or production boundaries. Validate remains outside the browser bearer allowlist and generic outer administrator map |
-| Docker-backed acceptance | **NOT RUN; prior cancellation and current pause preserved** | Preview request work, both acceptance bridges, and the three compile-only case additions execute no ClickHouse query. No Docker command was invoked for either compiler staging commit or `9f8c8ac`; the previously canceled digest-pinned matrix remains paused, and no ClickHouse runtime claim is made |
-| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints through signed fixtures `14c6944`, request-authority hardening `74df953`, compiler and snapshot staging through `9f8c8ac`, signed retained-analysis fixture repair `81c6412`, and the dormant frontend filter slice `c22df67` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..c22df67` is exactly 139 and the terminal revision is `c22df67cc0e65a7d5b250331e3ed30ca74863926` |
+| Docker-backed acceptance | **NOT RUN; prior cancellation and current pause preserved** | Preview request work and both acceptance bridges execute no ClickHouse query. The three formerly compile-only cases now have executor rows at `922e6ee`, but no Docker command was invoked, so they have no engine result. The previously canceled digest-pinned matrix remains paused, and no ClickHouse runtime claim is made |
+| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints through signed fixtures `14c6944`, request-authority hardening `74df953`, compiler and snapshot staging through `9f8c8ac`, signed retained-analysis fixture repair `81c6412`, dormant frontend filters and docs through `d1d8e9c`, exact-detail hardening `4717c24`, and the complete executor-matrix definition `922e6ee` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..922e6ee` is exactly 142 and the terminal revision is `922e6eee2b2ec5c554d876a1a08568fbca3d096c` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:
@@ -1344,22 +1370,23 @@ retained-execution reacquisition/application and caller-authorization service,
 frozen row/response policy, response codec, handler, route, or open execution
 gates they authorize no preview behavior.
 
-The `c22df67` Playwright evidence is a mocked hidden browser/control vertical;
-it proves the frontend contract and negative production feature boundary, not a
-real server or ClickHouse activation vertical. The next
+The `c22df67` advanced-filter and `4717c24` exact-detail/graph Playwright
+evidence forms one mocked hidden browser/control vertical. It proves the
+frontend contract and negative production feature boundary, not a real server
+or ClickHouse activation vertical. The next
 dependency-ordered slices are:
 
-1. execute the already-constructed thirteen-surface matrix against the
+1. run the now-complete thirteen-surface and executor-row matrix against the
    still-paused digest-pinned ClickHouse image as bounded named gates. The
-   existing executor rows must prove ordinary filter/project/eval/rex/spath/sort/limit,
+   defined rows must prove ordinary filter/project/eval/rex/spath/sort/limit,
    stats, chart/timechart, every event-analysis finalizer, resource boundaries,
-   container decoding, and hidden-failure atomicity. New executor rows must run
-   the compile-only stacked eventstats/streamstats chronology,
-   generated-field-pruned consumer, and runtime-empty consumer and prove their
-   exact typed or empty results plus live failure validation. Their one-scan,
-   argument/evidence,
-   chronology-binding, CTE-order, and empty-container construction proofs are
-   complete; no engine result is yet acceptance evidence;
+   container decoding, and hidden-failure atomicity. The newly wired stacked
+   eventstats/streamstats chronology, generated-field-pruned consumer, and
+   runtime-empty consumer rows must produce their exact typed or empty engine
+   results plus live failure validation. Their one-scan, argument/evidence,
+   chronology-binding, CTE-order, empty-container construction, and executor
+   result-oracle definitions are complete; no engine result is yet acceptance
+   evidence;
 2. only after those runtime gates pass, remove the production compiler and
    snapshot nonempty gates together and attach the retained concrete Resolver to
    production search admission, then prove one hidden seeded-ACTIVE lifecycle

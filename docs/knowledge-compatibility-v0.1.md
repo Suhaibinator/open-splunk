@@ -27,11 +27,14 @@ Validate and every mutation are excluded. Validate is also absent from the
 backend's generic outer administrator-route map because the inner knowledge-
 attempt boundary owns its authentication, administrator authorization, and
 `ActionValidate` journaling before body decode.
-The dormant hidden detail view consumes both graph routes for an exact object
-version, but production bootstrap still omits navigation, does not invoke the
-feature-gate importer, and issues no knowledge request. Development bundler
-prefetch of an emitted chunk is not importer invocation or production feature
-exposure. Production also constructs and retains a
+The dormant hidden detail view validates the immutable ID/version selected from
+List before I/O, sends both in Get, and accepts only an exact response identity
+before consuming either graph route. Invalid input or a response mismatch is
+uniformly unavailable and starts zero graph requests. Production bootstrap
+still omits navigation, does not invoke the feature-gate importer, and issues no
+knowledge request. Development bundler prefetch of an emitted chunk is not
+importer invocation or production feature exposure. Production also constructs
+and retains a
 concrete Resolver, but intentionally does not attach it to production
 `searchjobs.Manager`. Bootstrap does not advertise the feature, so the
 read-only Knowledge Manager stays out of
@@ -1074,12 +1077,18 @@ projection and is detected when the authoritative source graph is read or
 revalidated. Supporting another target kind requires a new bounded current-
 inverse authority/index contract before that kind may appear in `dependents`.
 
-The dormant Knowledge Manager detail binds both relationship requests to the
-exact ID and version returned by Get. Dependencies and dependents maintain
-independent continuations, exact visible totals, failure/retry state, and
-catalog-revision labels. A displayed edge contains only the currently visible
-opposite endpoint's object ID and version plus the fixed `Field input` role
-label; it does not recover an omitted endpoint or expose definition metadata.
+The dormant Knowledge Manager detail freezes the immutable ID/version selected
+from List. Before Get I/O it requires a nonempty, valid-UTF-8, C0/C1-control-
+free, ASCII-edge-trimmed ID of at most 128 bytes and a bigint version in
+`[1, MaxInt64]`; Get carries both fields and must return that exact disclosed
+identity. Invalid input, a missing object, or either identity mismatch produces
+the same unavailable state and starts neither relationship route. After exact
+Get acceptance, dependencies and dependents bind that same ID/version and
+maintain independent continuations, exact visible totals, failure/retry state,
+and catalog-revision labels. A displayed edge contains only the currently
+visible opposite endpoint's object ID and version plus the fixed `Field input`
+role label; it does not recover an omitted endpoint or expose definition
+metadata.
 This consumer is readiness evidence only: while the capability is absent, the
 navigation entry is absent, the feature-gate importer is not invoked, and
 production bootstrap causes no knowledge request. Development bundler prefetch
@@ -1635,9 +1644,9 @@ ClickHouse row, and digest-pinned knowledge runtime acceptance remains
 pending. The protected untracked probe remained excluded and untouched without
 opening or hashing it.
 
-The intervening documentation checkpoint is
+The intervening signed-fixture documentation checkpoint is
 `14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at exactly 138 post-`c5440b9`
-commits. The current dormant frontend milestone is
+commits. The advanced-filter frontend milestone is
 `c22df67cc0e65a7d5b250331e3ed30ca74863926`, for which
 `git rev-list --count c5440b9..c22df67` is exactly 139. It changes only
 `app/admin/knowledge-manager-data.ts`,
@@ -1668,14 +1677,45 @@ evidence pins the intervening two-column compact breakpoint. `npm run
 test:frontend` passes 66 build/tool plus 198 frontend tests; typecheck, strict
 no-warning lint,
 `git diff --check`, and the focused no-Docker Playwright scenario (1/1) pass.
-The protected pre-existing untracked ClickHouse probe remained excluded and
-untouched without opening or hashing it.
+Its documentation checkpoint is
+`d1d8e9cc3b6a14e030237957af8b4824874b6382`, exactly 140
+post-`c5440b9` commits.
+
+The exact-detail hardening revision is
+`4717c243ff2f162e034b84dc9c8cc63524a153b3`, exactly 141
+post-`c5440b9` commits. Generated-protobuf unit tests prove invalid List-
+selected ID/version tuples stop before Get I/O; the Get message carries both
+fields; and a returned ID or version mismatch produces the uniform unavailable
+result. The Playwright vertical proves a mismatch starts zero graph reads, then
+proves successful dependency and dependent requests with the exact same root,
+version, and bounded first-page tuple. The directions retain independent
+catalog revisions and state: one dependency continuation succeeds and appends
+its exact endpoint, while one dependent continuation is rejected as stale and
+one dependent-only first-page retry recovers without disturbing dependencies.
+Malicious endpoint IDs remain escaped text with no executable node. Feature-
+off, read-only, and zero-mutation behavior is unchanged. `npm run
+test:frontend` passes 66 build/tool plus 200 frontend tests; typecheck, strict
+no-warning lint, `git diff --check`, and the focused no-Docker Playwright
+scenario pass. The protected pre-existing untracked ClickHouse probe remained
+excluded and untouched without opening or hashing it.
+
+Revision `922e6eee2b2ec5c554d876a1a08568fbca3d096c`, exactly 142
+post-`c5440b9` commits and immediately following `4717c24`, completes the
+runtime matrix definition. The existing compiled stacked, pruned, and runtime-
+empty queries are now wired into named test-only Docker executor rows. Source
+assertions make event-ID order diverge from event-time order and hard-pin the
+global earliest `knowledge-event-b`/`beta`, global latest
+`knowledge-event-a`/`json-alpha`, and every ID-ordered prefix-stream extremum;
+the pruned row requires exactly `knowledge-event-a`, `knowledge-event-b`,
+`knowledge-event-c`, and `knowledge-event-d`, and the runtime-empty row requires
+one typed `event_id` schema publication with zero rows.
 
 Only a completed run against the required digest-pinned ClickHouse image and
-exact certified server version counts as runtime evidence. Docker execution for
-the compiler, snapshot-lifecycle staging, signed-fixture-repair, and dormant
-browser-filter slices was **NOT RUN** and remains explicitly paused/canceled. The
-stacked, pruned, and runtime-empty additions are compile-only and were not added
-to the Docker executor rows. A cancellation, skipped container test,
-compiler-only success, or table-free SQL probe must be recorded as pending
-evidence rather than compatibility acceptance.
+exact certified `26.3.17.4` server version counts as runtime evidence. Docker
+execution for `922e6ee` and the preceding compiler, snapshot-lifecycle, signed-
+fixture-repair, and dormant browser slices was **NOT RUN** and remains
+explicitly paused/canceled. Matrix definition is complete, but every newly
+defined engine result remains pending. The next runtime action is to run the
+paused digest-pinned matrix, not add rows. A cancellation, skipped container
+test, compiler-only success, or table-free SQL probe must be recorded as
+pending evidence rather than compatibility acceptance.
