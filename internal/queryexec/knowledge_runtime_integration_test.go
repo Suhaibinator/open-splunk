@@ -114,7 +114,8 @@ func TestKnowledgeRuntimeIntegrationProgramsAreCanonical(t *testing.T) {
 //
 // Run only this test with:
 //
-//	OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test -v ./internal/queryexec \
+//	OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test \
+//	  -tags=open_splunk_knowledge_runtime_acceptance -v ./internal/queryexec \
 //	  -run '^TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse$' \
 //	  -count=1 -timeout=90s
 func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
@@ -131,9 +132,10 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		t.Fatalf("resolve pinned ClickHouse image: %v", err)
 	}
 
-	// Compile before starting the container. While the intentional nonempty
-	// compiler gate remains closed, an opt-in run stops here without consuming
-	// Docker startup time. Removing that gate makes this exact matrix executable.
+	// Compile before starting the container so an invalid matrix fails without
+	// consuming Docker startup time. The explicit acceptance build tag crosses
+	// the compiler-only boundary inside go test; snapshot finalization remains
+	// independently closed.
 	const (
 		indexName         = "knowledge-runtime"
 		selectorIndexName = "selector-runtime"
@@ -359,6 +361,128 @@ type compiledKnowledgeRuntimeMatrix struct {
 	overflow    clickhouse.CompiledQuery
 }
 
+type knowledgeRuntimeMatrixPlans struct {
+	ordinary       *plan.Query
+	controls       *plan.Query
+	chart          *plan.Query
+	timechart      *plan.Query
+	stats          *plan.Query
+	timeline       *plan.Query
+	analysis       *plan.Query
+	overflow       *plan.Query
+	timelineSpec   clickhouse.TimelineSpec
+	catalogSpec    clickhouse.FieldCatalogSpec
+	summarySpec    clickhouse.FieldSummarySpec
+	suggestionSpec clickhouse.FieldSuggestionSpec
+}
+
+func buildKnowledgeRuntimeMatrixPlans(
+	t *testing.T,
+	program knowledgeprogram.Program,
+	tenantID string,
+	indexName string,
+	selectorIndexName string,
+	base time.Time,
+	indexTime time.Time,
+	earliest time.Time,
+	latest time.Time,
+) knowledgeRuntimeMatrixPlans {
+	t.Helper()
+	build := func(
+		source string,
+		admitted knowledgeprogram.Program,
+		indexes ...string,
+	) *plan.Query {
+		t.Helper()
+		return knowledgeRuntimePlan(
+			t,
+			source,
+			admitted,
+			tenantID,
+			indexes,
+			indexTime,
+			earliest,
+			latest,
+		)
+	}
+
+	overflowIndex := indexName + "-overflow"
+	return knowledgeRuntimeMatrixPlans{
+		ordinary: build(
+			`index=`+indexName+` service=matrix`+
+				` | where isnotnull(regex_value)`+
+				` | rex field=_raw "(?<authored_rex>alpha|beta)"`+
+				` | spath input=_raw output=authored_spath path=nested.value`+
+				` | eval authored_value=upper(calculated_value)`+
+				` | eventstats count AS cohort | sort 0 -event_id`+
+				` | streamstats count AS ordinal | head 3`+
+				` | table event_id regex_value json_value calculated_value payload_copy numbers_copy`+
+				` signed_copy unsigned_copy float_copy bytes_copy null_copy empty_list_copy`+
+				` preserved_value replaced_value authored_rex authored_spath authored_value cohort ordinal`,
+			program,
+			indexName,
+		),
+		controls: build(
+			`index=`+indexName+` OR index=`+selectorIndexName+
+				` | search service=selector-control | sort 0 +event_id`+
+				` | table event_id regex_value json_value calculated_value signed_copy`,
+			program,
+			indexName,
+			selectorIndexName,
+		),
+		chart: build(
+			`index=`+indexName+` service=matrix | eventstats count AS cohort`+
+				` | chart count OVER calculated_value BY regex_value`,
+			program,
+			indexName,
+		),
+		timechart: build(
+			`index=`+indexName+` service=matrix | timechart span=1m count BY regex_value`,
+			program,
+			indexName,
+		),
+		stats: build(
+			`index=`+indexName+` service=matrix`+
+				` | stats count AS total BY regex_value | sort 0 +regex_value`,
+			program,
+			indexName,
+		),
+		timeline: build(
+			`index=`+indexName+` service=matrix | where isnotnull(regex_value)`,
+			program,
+			indexName,
+		),
+		analysis: build(
+			`index=`+indexName+` service=matrix | eventstats count AS cohort`,
+			program,
+			indexName,
+		),
+		overflow: build(
+			`index=`+overflowIndex+` | table event_id`,
+			knowledgeRuntimeOverflowProgram(t),
+			overflowIndex,
+		),
+		timelineSpec: clickhouse.TimelineSpec{
+			FirstBucket: base,
+			SpanSeconds: 60,
+			BucketCount: 2,
+			Earliest:    earliest,
+			Latest:      latest,
+		},
+		catalogSpec: clickhouse.FieldCatalogSpec{MaximumFields: 64},
+		summarySpec: clickhouse.FieldSummarySpec{
+			FieldName:             "calculated_value",
+			MaximumValues:         8,
+			MaximumDistinctValues: 32,
+			MaximumValueBytes:     4 << 10,
+		},
+		suggestionSpec: clickhouse.FieldSuggestionSpec{
+			Prefix:        "payload_copy",
+			MaximumFields: 16,
+		},
+	}
+}
+
 func compileKnowledgeRuntimeMatrix(
 	t *testing.T,
 	program knowledgeprogram.Program,
@@ -372,96 +496,143 @@ func compileKnowledgeRuntimeMatrix(
 ) compiledKnowledgeRuntimeMatrix {
 	t.Helper()
 	compiler := clickhouse.Compiler{}
-	compile := func(
-		source string,
-		admitted knowledgeprogram.Program,
-		indexes ...string,
-	) clickhouse.CompiledQuery {
-		t.Helper()
-		logical := knowledgeRuntimePlan(
-			t,
-			source,
-			admitted,
-			tenantID,
-			indexes,
-			indexTime,
-			earliest,
-			latest,
-		)
-		compiled, err := compiler.Compile(logical)
-		if err != nil {
-			t.Fatalf("compile production knowledge query %q: %v", source, err)
-		}
-		if !compiled.HasValidExecutionSeal() {
-			t.Fatalf("production knowledge query has no valid execution seal: %q", source)
-		}
-		return compiled
-	}
-
-	ordinary := compile(
-		`index=`+indexName+` service=matrix`+
-			` | where regex_value=*`+
-			` | rex field=_raw "(?<authored_rex>alpha|beta)"`+
-			` | spath input=_raw output=authored_spath path=nested.value`+
-			` | eval authored_value=upper(calculated_value)`+
-			` | eventstats count AS cohort | sort 0 -event_id`+
-			` | streamstats count AS ordinal | head 3`+
-			` | table event_id regex_value json_value calculated_value payload_copy numbers_copy`+
-			` signed_copy unsigned_copy float_copy bytes_copy null_copy empty_list_copy`+
-			` preserved_value replaced_value authored_rex authored_spath authored_value cohort ordinal`,
-		program,
-		indexName,
-	)
-	if len(ordinary.ContainerOutputs) != 1 ||
-		ordinary.OutputFields[ordinary.ContainerOutputs[0].OutputIndex] != "payload_copy" {
-		t.Fatalf("ordinary container transport = %#v outputs %#v", ordinary.ContainerOutputs, ordinary.OutputFields)
-	}
-	knowledgeRuntimeRequireKnowledgeArguments(t, ordinary, program)
-
-	controls := compile(
-		`index=`+indexName+` OR index=`+selectorIndexName+
-			` | search service=selector-control | sort 0 +event_id`+
-			` | table event_id regex_value json_value calculated_value signed_copy`,
-		program,
-		indexName,
-		selectorIndexName,
-	)
-
-	chart := compile(
-		`index=`+indexName+` service=matrix | eventstats count AS cohort`+
-			` | chart count OVER calculated_value BY regex_value`,
-		program,
-		indexName,
-	)
-	timechart := compile(
-		`index=`+indexName+` service=matrix | timechart span=1m count BY regex_value`,
-		program,
-		indexName,
-	)
-	stats := compile(
-		`index=`+indexName+` service=matrix`+
-			` | stats count AS total BY regex_value | sort 0 +regex_value`,
-		program,
-		indexName,
-	)
-
-	timelinePlan := knowledgeRuntimePlan(
+	plans := buildKnowledgeRuntimeMatrixPlans(
 		t,
-		`index=`+indexName+` service=matrix | where regex_value=*`,
 		program,
 		tenantID,
-		[]string{indexName},
+		indexName,
+		selectorIndexName,
+		base,
 		indexTime,
 		earliest,
 		latest,
 	)
-	timeline, err := compiler.CompileTimeline(timelinePlan, clickhouse.TimelineSpec{
-		FirstBucket: base,
-		SpanSeconds: 60,
-		BucketCount: 2,
-		Earliest:    earliest,
-		Latest:      latest,
-	})
+	compile := func(name string, logical *plan.Query) clickhouse.CompiledQuery {
+		t.Helper()
+		compiled, err := compiler.Compile(logical)
+		if err != nil {
+			t.Fatalf("compile production knowledge query %q: %v", name, err)
+		}
+		if !compiled.HasValidExecutionSeal() {
+			t.Fatalf("production knowledge query has no valid execution seal: %q", name)
+		}
+		return compiled
+	}
+
+	ordinary := compile("ordinary", plans.ordinary)
+	wantOutputFields := []string{
+		"event_id",
+		"regex_value",
+		"json_value",
+		"calculated_value",
+		"payload_copy",
+		"numbers_copy",
+		"signed_copy",
+		"unsigned_copy",
+		"float_copy",
+		"bytes_copy",
+		"null_copy",
+		"empty_list_copy",
+		"preserved_value",
+		"replaced_value",
+		"authored_rex",
+		"authored_spath",
+		"authored_value",
+		"cohort",
+		"ordinal",
+	}
+	if !slices.Equal(ordinary.OutputFields, wantOutputFields) {
+		t.Fatalf(
+			"ordinary public outputs = %#v, want %#v",
+			ordinary.OutputFields,
+			wantOutputFields,
+		)
+	}
+	wantContainerFields := []string{
+		"regex_value",
+		"json_value",
+		"calculated_value",
+		"payload_copy",
+		"numbers_copy",
+		"signed_copy",
+		"unsigned_copy",
+		"float_copy",
+		"bytes_copy",
+		"null_copy",
+		"empty_list_copy",
+		"preserved_value",
+		"replaced_value",
+	}
+	if len(ordinary.ContainerOutputs) != len(wantContainerFields) {
+		t.Fatalf(
+			"ordinary container transport = %#v outputs %#v",
+			ordinary.ContainerOutputs,
+			ordinary.OutputFields,
+		)
+	}
+	for index, output := range ordinary.ContainerOutputs {
+		wantOutputIndex := uint16(index + 1)
+		if output.OutputIndex != wantOutputIndex ||
+			int(output.OutputIndex) >= len(ordinary.OutputFields) ||
+			ordinary.OutputFields[int(output.OutputIndex)] != wantContainerFields[index] {
+			t.Fatalf(
+				"ordinary container transport %d = %#v outputs %#v, want index %d field %q",
+				index,
+				output,
+				ordinary.OutputFields,
+				wantOutputIndex,
+				wantContainerFields[index],
+			)
+		}
+	}
+	validatedContainers, validContainers := ordinary.ValidatedResultContainerOutputs()
+	if !validContainers || !slices.Equal(validatedContainers, ordinary.ContainerOutputs) {
+		t.Fatalf(
+			"ordinary validated container transport = (%#v, %t), want %#v",
+			validatedContainers,
+			validContainers,
+			ordinary.ContainerOutputs,
+		)
+	}
+	if len(validatedContainers) == 0 {
+		t.Fatal("ordinary validated container transport is empty")
+	}
+	validatedContainers[0].OutputIndex = 0
+	if ordinary.ContainerOutputs[0].OutputIndex != 1 {
+		t.Fatal("validated container transport aliases compiled authority")
+	}
+	hiddenColumns := make(map[string]struct{}, len(ordinary.ContainerOutputs)*3)
+	for _, output := range ordinary.ContainerOutputs {
+		for _, hidden := range []string{
+			output.NamesColumn(),
+			output.TypesColumn(),
+			output.MetadataVersionColumn(),
+		} {
+			quotedHidden := `"` + hidden + `"`
+			if slices.Contains(ordinary.OutputFields, hidden) ||
+				!strings.Contains(ordinary.SQL, quotedHidden) {
+				t.Fatalf(
+					"ordinary hidden container column %q has invalid visibility",
+					hidden,
+				)
+			}
+			if _, duplicate := hiddenColumns[hidden]; duplicate {
+				t.Fatalf("ordinary hidden container column %q is duplicated", hidden)
+			}
+			hiddenColumns[hidden] = struct{}{}
+		}
+	}
+	if len(hiddenColumns) != 39 {
+		t.Fatalf("ordinary hidden container columns = %d, want 39", len(hiddenColumns))
+	}
+	knowledgeRuntimeRequireKnowledgeArguments(t, ordinary, program)
+
+	controls := compile("selector controls", plans.controls)
+	chart := compile("chart", plans.chart)
+	timechart := compile("timechart", plans.timechart)
+	stats := compile("stats", plans.stats)
+
+	timeline, err := compiler.CompileTimeline(plans.timeline, plans.timelineSpec)
 	if err != nil {
 		t.Fatalf("compile production knowledge timeline: %v", err)
 	}
@@ -469,36 +640,21 @@ func compileKnowledgeRuntimeMatrix(
 		t.Fatal("production knowledge timeline has no valid execution seal")
 	}
 
-	analysisPlan := knowledgeRuntimePlan(
-		t,
-		`index=`+indexName+` service=matrix | eventstats count AS cohort`,
-		program,
-		tenantID,
-		[]string{indexName},
-		indexTime,
-		earliest,
-		latest,
-	)
 	catalog, err := compiler.CompileFieldCatalog(
-		analysisPlan,
-		clickhouse.FieldCatalogSpec{MaximumFields: 64},
+		plans.analysis,
+		plans.catalogSpec,
 	)
 	if err != nil {
 		t.Fatalf("compile production knowledge field catalog: %v", err)
 	}
-	summary, err := compiler.CompileFieldSummary(analysisPlan, clickhouse.FieldSummarySpec{
-		FieldName:             "calculated_value",
-		MaximumValues:         8,
-		MaximumDistinctValues: 32,
-		MaximumValueBytes:     4 << 10,
-	})
+	summary, err := compiler.CompileFieldSummary(plans.analysis, plans.summarySpec)
 	if err != nil {
 		t.Fatalf("compile production knowledge field summary: %v", err)
 	}
-	suggestions, err := compiler.CompileFieldSuggestions(analysisPlan, clickhouse.FieldSuggestionSpec{
-		Prefix:        "payload_copy",
-		MaximumFields: 16,
-	})
+	suggestions, err := compiler.CompileFieldSuggestions(
+		plans.analysis,
+		plans.suggestionSpec,
+	)
 	if err != nil {
 		t.Fatalf("compile production knowledge field suggestions: %v", err)
 	}
@@ -507,13 +663,7 @@ func compileKnowledgeRuntimeMatrix(
 		t.Fatal("production knowledge field analysis has no valid execution seal")
 	}
 
-	overflowIndex := indexName + "-overflow"
-	overflowProgram := knowledgeRuntimeOverflowProgram(t)
-	overflow := compile(
-		`index=`+overflowIndex+` | table event_id`,
-		overflowProgram,
-		overflowIndex,
-	)
+	overflow := compile("alias event overflow", plans.overflow)
 	if !strings.Contains(overflow.SQL, clickhouse.KnowledgeAliasCopyEventLimitMarker) {
 		t.Fatal("compiled overflow query omits the alias-copy event guard")
 	}
