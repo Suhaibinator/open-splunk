@@ -1254,8 +1254,10 @@ before/after schema-row, truncation, response-byte, deadline, and concurrency
 semantics. Its revision remains advisory knowledge-ledger correlation metadata,
 not mutation acceptability, reservation, or reusable publication proof. It
 must never let a browser submit events, raw ClickHouse SQL, physical scope, or
-bypass index authorization. The nonempty compiler, snapshot-finalization, and
-digest-pinned ClickHouse acceptance gates remain closed independently.
+bypass index authorization. The production nonempty compiler,
+snapshot-finalization, and digest-pinned ClickHouse acceptance gates remain
+closed independently. The explicitly tagged `go test` compiler bridge described
+below opens none of those Preview or production boundaries.
 
 The validation wire redesign carries an intentional historical protobuf
 FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
@@ -1561,12 +1563,13 @@ app-less searches preserve the legacy path. A configured request is parsed,
 planned, resolved, compiled, and finalized before any job ID, journal
 admission, publication, or execution.
 
-The retained admission path deliberately finalizes only a canonically empty
-enabled snapshot. Although the knowledge prelude and generated operators are
-implemented and inspectable behind closed gates, any resolution containing an
-executable object still fails before job creation at the independent compiler
-and snapshot-finalization boundaries. No shipping search-time knowledge runtime
-is claimed: `cmd/open-splunk-server` retains the concrete Resolver in its
+The production retained-admission path deliberately finalizes only a
+canonically empty enabled snapshot. Although the knowledge prelude and
+generated operators are implemented and inspectable behind closed gates, any
+production resolution containing an executable object still fails before job
+creation at the independent compiler and snapshot-finalization boundaries. No
+shipping search-time knowledge runtime is claimed: `cmd/open-splunk-server`
+retains the concrete Resolver in its
 management runtime but does not configure it on production search admission,
 bootstrap hard-disables the capability, and the hidden UI therefore remains
 unreachable.
@@ -1586,18 +1589,43 @@ redaction, but a Manager-sealed nonempty retained service fixture remains
 deliberately impossible while snapshot finalization is closed. Focused normal
 and race tests, `go vet`, protobuf generation/lint, the Go descriptor contract,
 and TypeScript type checking pass. The pinned ClickHouse/Docker runtime matrix
-was not rerun and remains required before either nonempty execution gate opens.
-An opt-in production-path KO-1C matrix is now staged in `internal/queryexec`:
-it uses the public planner/compiler/executor surfaces, the migrated event table,
-all specialized derived execution seals, independently falsifiable selector
-dimensions, cross-tenant decoys, exact typed container and overwrite results,
-authored suffixes and aggregations, analysis finalizers, and atomic alias-copy
-limit attribution. It requires a cached digest-pinned ClickHouse image and an
-exact `26.3.17.4` server version. Its non-Docker construction, classifier,
-formatting, and vet checks pass, but the opt-in ClickHouse run was deliberately
-not completed; the test still reaches the intentional nonempty compiler gate
-before container startup. This staged fixture is therefore not runtime
-acceptance evidence and does not change either gate.
+was not rerun and remains required before the production compiler and snapshot
+gates open.
+
+The public production-path KO-1C matrix in `internal/queryexec` now shares one
+exact plan set between a default closure proof and an explicitly tagged
+test-process-only acceptance bridge. Without the tag, ordinary,
+selector-control, chart, timechart, stats, alias-event-overflow, timeline,
+field-catalog, field-summary, and field-suggestion compilation all reach the
+intentional nonempty compiler seal, return the exact closed-gate error, and
+leave their typed results zero. With
+`open_splunk_knowledge_runtime_acceptance`, the alternate gate additionally
+requires `testing.Testing()`, so only a tagged `go test` binary can seal those
+ten public compiler/derived surfaces; adding the tag to `go build` remains
+closed.
+
+That tagged non-Docker proof pins the ordinary query's exact 19 public outputs,
+13 container descriptors, and 39 unique private name/type/metadata-version
+sidecar columns, including detached validated descriptors. It also reopens the
+seal only for the exact program commitment, object count, charges, tenant,
+effective indexes, and generated SQL byte count, and proves detached execution
+clones lose equality and their seal after public-output or container mutation.
+The earlier parser-invalid wildcard-shaped predicate is replaced by executable
+`where isnotnull(regex_value)` in the ordinary and timeline fixtures; this does
+not claim authored wildcard-predicate coverage. A separately tagged test then
+uses a real nonempty prepared authority and valid public Compiler seal to prove
+that `Authority.Finalize` still returns a zero snapshot at its independent hard
+gate.
+
+The eventual executor matrix still uses the migrated event table, independently
+falsifiable selector dimensions, cross-tenant decoys, exact typed container and
+overwrite results, authored suffixes and aggregations, analysis finalizers, and
+atomic alias-copy limit attribution. It requires the cached digest-pinned
+ClickHouse image and exact `26.3.17.4` server version. Docker acceptance remains
+explicitly paused/canceled and was **NOT RUN** for this compiler-staging slice;
+there is no green container result, engine-compatibility claim, or opening of a
+production compiler, snapshot, Resolver-attachment, capability, or browser
+gate.
 
 The KO-1C compiler now also preserves complete execution authority when an
 ordinary sealed query is projected into timeline, field-catalog,
@@ -1607,8 +1635,8 @@ typed bind argument, the complete specialized result contract, and the final
 read scope. Production executors validate and deeply detach that authority
 before read admission, query-ID creation, or driver access. Focused normal and
 race tests prove that mutations of actual lowered knowledge regex and selector
-arguments fail before those boundaries while both global nonempty gates remain
-closed.
+arguments fail before those boundaries while both production global nonempty
+gates remain closed.
 
 Completed-search field catalog and field-summary cache keys now validate the
 Manager-signed retained authority before any cache or cursor reuse and bind the
@@ -1718,8 +1746,8 @@ also absent from the backend's generic outer administrator-route map because the
 inner knowledge attempt boundary performs its administrator authentication and
 `ActionValidate` journaling. Because bootstrap still hard-disables the
 capability, production browser navigation, dynamic chunk loading, and knowledge
-API requests remain absent, while search resolution and nonempty execution also
-remain closed.
+API requests remain absent, while production search resolution and nonempty
+execution also remain closed.
 
 Immutable index-name creation now has its own atomic global admission boundary.
 Migration 0034 supplies sparse covering drivers for every nonempty ACTIVE
@@ -1786,7 +1814,9 @@ administrator map and browser bearer allowlist; Preview still has no response
 codec, handler, retained-execution acquisition/caller-auth service, route,
 manifest/bearer entry, capability, browser surface, or runtime gate; and no
 bootstrap capability,
-Resolver attachment, or nonempty execution gate changed.
+Resolver attachment, or production nonempty execution gate changed. The later
+test-process-only compiler bridge changes none of these validation/Preview
+claims.
 
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and

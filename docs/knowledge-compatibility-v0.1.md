@@ -45,8 +45,12 @@ request-only codec and structural forced-ACTIVE envelope validator. It still has
 no response codec, handler, catalog/search service, retained-execution
 acquisition or caller-authorization integration, route or manifest/bearer
 entry, capability, navigation/UI request, Resolver attachment, or execution
-path. The nonempty compiler, snapshot-finalization, and execution gates remain
-closed, so no knowledge object affects search results.
+path. The production nonempty compiler, snapshot-finalization, and execution
+gates remain closed, so no knowledge object affects search results. An
+explicitly tagged `go test`-only bridge now seals the shared ten-surface public
+Compiler matrix for construction evidence, but it additionally requires
+`testing.Testing()`: tagged production builds stay closed, and a real tagged
+compiler seal still cannot cross `Authority.Finalize`.
 
 ## Security boundary
 
@@ -326,10 +330,11 @@ saturated at 4 MiB plus one payload byte and 1 GiB plus one work unit. The 4 MiB
 per-event payload ceiling and 1 GiB cumulative per-query work ceiling admit
 equality and fail atomically when exceeded; no alias output is partially
 published. Compiler-private charge columns are removed before authored SPL or
-result decoding. This accounting does not make nonempty execution available by
-itself: the pinned ClickHouse acceptance matrix must prove row-local `byteSize`
-for every admitted Dynamic/container representation and lazy non-evaluation of
-false, blocked, and losing branches before the finalization gate opens.
+result decoding. This accounting does not make production nonempty execution
+available by itself: the pinned ClickHouse acceptance matrix must prove
+row-local `byteSize` for every admitted Dynamic/container representation and
+lazy non-evaluation of false, blocked, and losing branches before the
+finalization gate opens.
 
 ## Calculated fields
 
@@ -824,9 +829,11 @@ execution, and freeze the row-limit default/bound/execution policy plus paired
 before/after schema-row, truncation, response-byte, deadline, and concurrency
 semantics. Its revision remains advisory knowledge-ledger correlation metadata,
 not mutation acceptability, a reservation, or reusable publication proof;
-later Writer operations revalidate live authority. The nonempty compiler,
-snapshot-finalization, and digest-pinned ClickHouse acceptance gates remain
-closed. Preview accepts no raw events, physical scope, asset path, or SQL.
+later Writer operations revalidate live authority. The production nonempty
+compiler, snapshot-finalization, and digest-pinned ClickHouse acceptance gates
+remain closed. The test-only compiler bridge grants Preview no service or
+execution authority. Preview accepts no raw events, physical scope, asset path,
+or SQL.
 
 The validation wire redesign has an intentional historical protobuf
 FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
@@ -1208,8 +1215,11 @@ must prove the explicit contiguous prefix still equals that retained program;
 equal counters alone are not authority. KO-1B itself did not lower these
 operators. KO-1C now constructs their bounded ClickHouse stages, runtime
 accounting barriers, sealed result sidecars, and specialized derived execution
-authority, but the final nonempty compiler seal and snapshot finalization gates
-remain closed until the digest-pinned runtime compatibility matrix passes.
+authority. The production nonempty compiler seal and snapshot finalization
+gates remain closed until the digest-pinned runtime compatibility matrix passes.
+The explicitly tagged test-process bridge can mint the compiler seal only while
+`testing.Testing()` is true and leaves finalization independently closed; that
+construction proof is not runtime compatibility evidence.
 
 Generic lifecycle records distinguish absence from emptiness. An absent
 `KnowledgeSnapshotSummary` means knowledge resolution was disabled or the
@@ -1434,11 +1444,12 @@ can mutate caller memory. Each success is rebound to its applicable submitted
 authorities—normalized definition or mask, target ID, expected version,
 lifecycle marker, and derived tenant/owner/app scope—while its catalog revision
 and 32-byte state token are relationship- and shape-checked. Definitions are
-shape-preflighted before reflection, sizing, clone, or marshal. New ACTIVE
-publication remains disabled. The concrete receipt-first catalog Writer may
-nevertheless replay a previously committed ACTIVE outcome after downgrade when
-that outcome remains recognized and canonical; no other Writer implementation
-can opt into that exception.
+shape-preflighted before reflection, sizing, clone, or marshal. The configured
+server admits new ACTIVE publication only through the exact concrete ready,
+receipt-first catalog Writer. That Writer publishes recognized canonical ACTIVE
+create, update, and enable outcomes and may replay a previously committed ACTIVE
+outcome after downgrade when it remains recognized and canonical; no alternate
+Writer implementation may mint or replay that authority.
 
 The rejected-attempt journal retains at most 100,000 rows per tenant and
 atomically evicts the oldest row before appending the next one. Its sequence is
@@ -1497,10 +1508,25 @@ advertised, every case must contain executable inputs and exact typed outputs
 or diagnostics and must run through the relevant production normalization,
 resolution, planner, compiler, and pinned ClickHouse paths.
 
-The repository also contains an opt-in public compiler/executor matrix for the
-KO-1C field subset. A successful default or non-Docker run proves only fixture
-construction and private-limit classification; it skips the container path.
+The repository also contains a public compiler/executor matrix for the KO-1C
+field subset. One shared plan set covers ordinary, selector-control, chart,
+timechart, stats, alias-event-overflow, timeline, field-catalog, field-summary,
+and field-suggestion compilation. The default test proves all ten surfaces stop
+at the exact nonempty seal with zero typed results. The explicitly tagged
+`go test` bridge instead seals all ten while `testing.Testing()` is true; the
+same tagged `go build` remains closed.
+
+That non-Docker compiler proof pins 19 public ordinary outputs, 13 container
+descriptors, 39 unique private name/type/metadata-version sidecar columns,
+exact program evidence, and detached execution-clone behavior. The ordinary
+and timeline fixtures use executable `where isnotnull(regex_value)` predicates;
+this correction of the earlier parser-invalid wildcard-shaped predicate is not
+authored wildcard-predicate coverage. A real tagged compiler seal is still
+rejected by `Authority.Finalize` at the independent nonempty snapshot gate.
+
 Only a completed run against the required digest-pinned ClickHouse image and
-exact certified server version counts as runtime evidence. A cancellation,
-compiler-gate stop, skipped test, or table-free SQL probe must be recorded as
-pending evidence rather than compatibility acceptance.
+exact certified server version counts as runtime evidence. Docker execution for
+this staging slice was **NOT RUN** and remains explicitly paused/canceled. A
+cancellation, skipped container test, compiler-only success, or table-free SQL
+probe must be recorded as pending evidence rather than compatibility
+acceptance.

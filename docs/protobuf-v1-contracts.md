@@ -485,10 +485,13 @@ evaluate definition validity in one fixed knowledge/app/index transaction,
 apply the validated candidate program to that retained server-authorized
 execution, and freeze row-limit, paired before/after schema-row, truncation,
 response-byte, deadline, and concurrency semantics while retaining the
-advisory-only revision contract. The nonempty compiler, snapshot-finalization,
-and digest-pinned ClickHouse acceptance gates remain closed. Preview must never
-accept raw events, physical table names, index authority, asset paths, or SQL.
-Validate remains registered but unadvertised.
+advisory-only revision contract. The production nonempty compiler,
+snapshot-finalization, and digest-pinned ClickHouse acceptance gates remain
+closed. An explicitly tagged `go test`-only compiler bridge opens no Preview
+service or wire authority, and its real sealed result remains insufficient for
+`Authority.Finalize`. Preview must never accept raw events, physical table
+names, index authority, asset paths, or SQL. Validate remains registered but
+unadvertised.
 
 This validation redesign intentionally uses a historical FILE-compatibility
 waiver. The earlier draft result fields 6 (`diagnostics`) and 7
@@ -552,8 +555,20 @@ continuation reuse. Its detail view now requests the selected exact version's
 dependencies and dependents independently, pages and labels each direction at
 its own catalog revision, and displays only each visible opposite endpoint's
 object ID, version, and `FIELD_INPUT` role.
-Nonempty compiler, snapshot-finalization, and execution gates remain closed, so
-no shipping knowledge execution is claimed.
+Production nonempty compiler, snapshot-finalization, and execution gates remain
+closed, so no shipping knowledge execution is claimed. The current acceptance
+bridge is deliberately outside the protobuf/runtime capability: one shared
+plan matrix reaches the exact seal with zero typed results by default, while an
+explicitly tagged test binary additionally requires `testing.Testing()` and
+seals the ten public compiler/derived surfaces only for non-Docker construction
+evidence. That proof pins 19 public ordinary output fields, 13 detached
+container descriptors, 39 private sidecar columns, exact admitted-program
+evidence, and detached clone invalidation; ordinary and timeline use executable
+`where isnotnull(regex_value)` rather than the former parser-invalid
+wildcard-shaped predicate, without claiming authored wildcard-predicate
+coverage. Tagged `go build` remains closed, `Authority.Finalize` remains
+independently closed, and Docker acceptance was **NOT RUN** and is still
+paused/canceled.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.

@@ -2,15 +2,19 @@
 
 **Goal status:** active
 
-**Current milestone:** KO-1 search-time runtime acceptance (closed gates)
+**Current milestone:** KO-1 public-compiler acceptance staging (production
+gates closed)
 
-**Last completed slice:** shared bounded candidate request decoding, an
-unregistered request-only Preview codec, and a structural Preview envelope
-validator plus wire-neutral protobuf contract hardening which pins its canonical
-six-field authority, exact bounds, forced-ACTIVE view, and full optional uint32
-row-scalar presence without assigning row policy; Preview service, response
-codec, handler, route, browser/runtime, and every nonempty execution gate remain
-closed
+**Last completed slice:** a test-process-only, explicitly tagged public
+Compiler acceptance bridge over the shared ten-surface KO-1C matrix. Default
+tests still reach the exact nonempty compiler seal and return zero typed
+outputs. The tagged test binary seals every ordinary and derived compiler
+surface, pins 19 public outputs, 13 container descriptors, 39 private sidecar
+columns, knowledge evidence, and detached execution clones, and still proves
+that a real sealed nonempty result cannot cross `Authority.Finalize`. The tag
+does not open a `go build` binary, Docker acceptance remains paused and was not
+run, and production Resolver attachment, capability advertisement, compiler,
+snapshot-finalization, and browser gates remain closed.
 
 **Evidence date:** August 9, 2026
 
@@ -38,9 +42,11 @@ closed
   `2aa51384ead0be6482a1e9ea3ce85fbeed1777f9`
 - Preview request-boundary terminal revision:
   `74df953f6f317b651f7bde97c0370fc37822a756`
+- Test-only compiler-acceptance terminal revision:
+  `db8fe6cd48d91b2c4649f0c21623b1fcd2be5669`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 129 intentional post-`c5440b9` KO
-  commits through `74df953` are durable locally. This update is prepared as a
+- Publication state before this document: 131 intentional post-`c5440b9` KO
+  commits through `db8fe6c` are durable locally. This update is prepared as a
   separate documentation change. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -77,7 +83,9 @@ closed
   container result sidecars, enforces atomic selector/capture/alias-copy
   runtime guards, preserves an exact authored/knowledge compiler-evidence
   split, and re-injects the manager-sealed retained program for postflight
-  inspection and completed-search analysis.
+  inspection and completed-search analysis. The current test-only acceptance
+  bridge now lets an explicitly tagged `go test` binary seal that same public
+  compiler matrix without opening any production or snapshot gate.
 - ACTIVE publication preparation now includes the backend-neutral dependency
   compiler, the complete-winner-cohort adapter, candidate-present and
   candidate-absent post-transition validation, paired multi-index OR closure,
@@ -121,9 +129,14 @@ closed
   complete administrator-only unit and composes their Store, concrete ready
   Writer, app authority, and attempt journal. The management runtime also
   constructs and retains a concrete Resolver, but intentionally does not attach
-  it to production `searchjobs.Manager`. The compiler and snapshot finalizer
-  retain independent nonempty gates, so ClickHouse knowledge execution remains
-  unavailable. The dependency/dependent and Validate routes are registered but
+  it to production `searchjobs.Manager`. The default public compiler and
+  snapshot finalizer retain independent nonempty gates, so ClickHouse knowledge
+  execution remains unavailable. An explicitly tagged test implementation
+  additionally requires `testing.Testing()`, allowing only a `go test` process
+  to mint compiler seals for acceptance construction; the same tag on a
+  production `go build` remains closed, and `Authority.Finalize` rejects the
+  resulting real nonempty sealed compiler authority. The dependency/dependent
+  and Validate routes are registered but
   capability-unadvertised and represented in the central route manifest. The
   graph routes join Get/List as the only knowledge paths in the browser
   administrator-bearer allowlist; Validate and every mutation remain excluded.
@@ -413,6 +426,8 @@ Later local commits anchoring the reconciled current state include:
 | `ca9c2aa` | `feat(knowledge): validate preview envelopes` | Structural Preview request validation with a canonical retained-job identity, exact Validate create/update envelope reuse, server-forced ACTIVE publication, preserved optional uint32 `maximum_rows` without assigning policy, and no response codec, handler, service, or route |
 | `da56ce4` | `docs(knowledge): checkpoint preview requests` | Reconciled the shared candidate decoder, dormant Preview codec and structural validator, bounded evidence, route/runtime closure, and 127-commit terminal state |
 | `74df953` | `fix(proto): bind preview request authority` | Wire-neutral Preview request contract hardening for owner-scoped retained-execution reacquisition, literal parser bounds, forced ACTIVE validation without lookup/authorization, exact optional uint32 row presence, generated Go/TypeScript comments, and cross-runtime oracle coverage |
+| `dbb5df7` | `docs(knowledge): checkpoint preview contract` | Reconciled the exact six-field Preview authority and bounds across all four knowledge contracts while preserving its unregistered service/runtime boundary and the then-closed compiler matrix |
+| `db8fe6c` | `test(knowledge): stage runtime compiler acceptance` | Test-process-only tagged public Compiler bridge, shared default/tagged ten-surface matrix, exact output/container/private-sidecar authority, compiler evidence and clone proofs, independently closed snapshot finalization, and no Docker execution |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -1058,6 +1073,37 @@ KO-1C closed-gate evidence:
 | Local durability | pass | forty-nine intentional KO-1C commits from `5088427` through `70b9ef6` inclusive are separate and locally durable on `codex/knowledge-objects-runtime`; this checkpoint update is a separate documentation commit |
 | Remote durability | pending | `origin/main` remains `c5440b9` and `origin/codex/knowledge-objects-runtime` remains `7503246`; no push was attempted without explicit destination approval |
 
+The preceding table preserves the closed-gate state at that historical KO-1C
+checkpoint. The current test-only compiler-acceptance staging evidence is:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Default public Compiler closure | pass | One shared plan set drives ordinary, selector-control, chart, timechart, stats, alias-event-overflow, timeline, field-catalog, field-summary, and field-suggestion compilation. Without the acceptance tag, all ten public surfaces return zero typed results and the exact `seal compiled ClickHouse execution: nonempty knowledge lowering is absent` error; no partial SQL, argument, result, or private seal authority escapes |
+| Tagged `go test` compiler bridge | pass without Docker | `open_splunk_knowledge_runtime_acceptance` selects a bridge that additionally requires `testing.Testing()`. The tagged test seals all ten ordinary/derived public surfaces from the exact shared plans. The ordinary fixture uses executable `where isnotnull(regex_value)` predicates rather than the earlier parser-invalid wildcard-shaped predicate; this is not a claim of authored wildcard-predicate coverage |
+| Result and container authority | pass without Docker | The tagged ordinary compiler proof pins the exact 19 public output fields, 13 container descriptors at output indexes 1 through 13, and 39 unique private names/type/metadata-version sidecar columns. Every private column is absent from the public schema and present in parameterized SQL; `ValidatedResultContainerOutputs` returns an exact detached copy |
+| Compiler evidence and execution cloning | pass without Docker | The tagged ordinary seal reopens only for the exact admitted program and binds its commitment, object count, charges, tenant, effective index, and generated SQL byte count. `CloneForExecution` preserves equality and a valid seal without aliasing public outputs or container descriptors; mutating either detached clone invalidates equality and the clone seal |
+| Tagged production build closure | pass by construction | The tagged implementation returns `testing.Testing()`, which is false outside a test binary. Adding the build tag to `go build` therefore cannot open nonempty compiler sealing; no environment variable, exported hook, mutable package global, Resolver attachment, or production capability was added |
+| Independent snapshot-finalization closure | pass | A tagged test prepares a real nonempty snapshot authority, injects its prelude, obtains a valid public Compiler seal and matching evidence, and then proves `Authority.Finalize` still returns a zero snapshot with `ErrInvalidInput` and the exact closed-gate reason. Compiler acceptance cannot mint a shipping snapshot |
+| Focused verification | pass without Docker | Exact retained commands below cover default closure plus canonical construction, tagged compiler sealing, tagged independent snapshot closure, all three corresponding race variants, default and tagged vet, and a tagged server build. The build produced a valid Mach-O binary and its `/private/tmp` artifact was removed after inspection; none of these commands invoked Docker |
+| Digest-pinned ClickHouse acceptance | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked for `db8fe6c`. The digest-pinned `26.3.17.4` row/result, Dynamic sizing, branch-laziness, resource-limit, and hidden-failure-atomicity matrix remains required before runtime acceptance; this test-only bridge is compiler construction evidence, not engine or compatibility acceptance |
+| Runtime activation | closed | Production still omits Resolver attachment, capability advertisement, browser navigation/chunk loading, and nonempty compiler/snapshot finalization. No knowledge object can affect a shipping search result |
+| Local durability | pass | `dbb5df7` separately reconciles the Preview contract and `db8fe6c` separately stages the compiler bridge; `git rev-list --count c5440b9..db8fe6c` is exactly 131 and terminal revision `db8fe6cd48d91b2c4649f0c21623b1fcd2be5669` is locally durable on `codex/knowledge-objects-runtime` |
+| Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
+
+The exact focused compiler-acceptance commands were:
+
+```sh
+go test ./internal/queryexec -run '^TestKnowledgeRuntime(CompilerMatrixStopsOnlyAtDefaultSeal|IntegrationProgramsAreCanonical)$' -count=1
+go test -tags=open_splunk_knowledge_runtime_acceptance ./internal/queryexec -run '^TestKnowledgeRuntimeAcceptanceCompilerMatrixSealsWithoutDocker$' -count=1
+go test -tags=open_splunk_knowledge_runtime_acceptance ./internal/knowledgesnapshot -run '^TestKnowledgeRuntimeAcceptanceCompilerCannotFinalizeNonemptySnapshot$' -count=1
+go test -race ./internal/queryexec -run '^TestKnowledgeRuntime(CompilerMatrixStopsOnlyAtDefaultSeal|IntegrationProgramsAreCanonical)$' -count=1
+go test -race -tags=open_splunk_knowledge_runtime_acceptance ./internal/queryexec -run '^TestKnowledgeRuntimeAcceptanceCompilerMatrixSealsWithoutDocker$' -count=1
+go test -race -tags=open_splunk_knowledge_runtime_acceptance ./internal/knowledgesnapshot -run '^TestKnowledgeRuntimeAcceptanceCompilerCannotFinalizeNonemptySnapshot$' -count=1
+go vet ./internal/queryexec ./internal/knowledgesnapshot
+go vet -tags=open_splunk_knowledge_runtime_acceptance ./internal/queryexec ./internal/knowledgesnapshot
+go build -tags=open_splunk_knowledge_runtime_acceptance -o /private/tmp/open-splunk-ko1-tagged-server ./cmd/open-splunk-server
+```
+
 Current candidate-validation and dormant Preview request-boundary evidence:
 
 | Gate | Result | Evidence |
@@ -1075,9 +1121,9 @@ Current candidate-validation and dormant Preview request-boundary evidence:
 | Validation HTTP adapter | pass | focused normal/race tests pin exact-ready-Writer enforcement, serialization admission before retained authority, detached request binding, cloned read/write scope, valid HTTP 200 seals, closed error/disposition classification, create/update authorization context, cancellation, response-too-large handling, permit transfer/release, and request mutation isolation |
 | Registered validation route | pass, exposure closed | real HTTP tests pin ninth-route all-or-none configuration, authentication and administrator rejection before body read, `ActionValidate` journaling/fail-closed journal failures, shared Writer-gate 429 behavior, million-entry selected versus unselected outcomes, outer/mask/selected-nested/unselected unknown semantics, exact sealed responses, and no side effects. The exact protobuf route fixture now contains 60 routes; TypeScript declares Validate with an 8 MiB response cap while explicitly keeping it outside browser bearer attachment, and the backend generic outer administrator map remains unchanged |
 | Validation result bounds and privacy | service and route pass | descriptor/comment, Go/TypeScript wire, catalog-service, codec, handler, and HTTP tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
-| Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-execution acquisition or caller-auth integration, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Service work remains blocked on owner-scoped retained-execution reacquisition, fixed-catalog ACTIVE evaluation and program application, row-limit default/bound/execution policy, paired schema-row/truncation and response resource semantics, plus the closed nonempty compiler, snapshot-finalization, and digest-pinned ClickHouse gates. Validate remains outside the browser bearer allowlist and generic outer administrator map |
-| Docker-backed acceptance | not run; prior cancellation preserved | these commits refactor bounded request decoding, add dormant Preview request validation, and harden its wire-neutral request contract without ClickHouse execution. The previously canceled digest-pinned Docker matrix remains canceled; no Docker command was invoked and no ClickHouse runtime claim is made |
-| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoint `da56ce4`, and request-authority hardening `74df953` is separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..74df953` is exactly 129 and the terminal revision is `74df953f6f317b651f7bde97c0370fc37822a756` |
+| Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-execution acquisition or caller-auth integration, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Service work remains blocked on owner-scoped retained-execution reacquisition, fixed-catalog ACTIVE evaluation and program application, row-limit default/bound/execution policy, paired schema-row/truncation and response resource semantics, plus the closed production nonempty compiler, snapshot-finalization, and digest-pinned ClickHouse gates. The tagged `go test` compiler bridge opens none of those service or production boundaries. Validate remains outside the browser bearer allowlist and generic outer administrator map |
+| Docker-backed acceptance | **NOT RUN; prior cancellation and current pause preserved** | Preview request work and the later compiler bridge execute no ClickHouse query. No Docker command was invoked for the acceptance staging commit, the previously canceled digest-pinned matrix remains paused, and no ClickHouse runtime claim is made |
+| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints `da56ce4` and `dbb5df7`, request-authority hardening `74df953`, and test-only compiler acceptance staging `db8fe6c` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..db8fe6c` is exactly 131 and the terminal revision is `db8fe6cd48d91b2c4649f0c21623b1fcd2be5669` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:
@@ -1166,7 +1212,12 @@ acceptance evidence.
 KO-0 foundations and the hidden KO-0H lifecycle/browser readiness vertical are
 complete. KO-1A/KO-1B freeze the selector and backend-neutral program, and the
 current closed-gate KO-1C slice lowers, accounts, seals, retains, reconstructs,
-and inspects that program without making it executable. Recognized ACTIVE
+and inspects that program without making it executable. The current
+test-process-only bridge proves that the exact public Compiler and derived
+surfaces can seal this matrix when an explicit build tag and
+`testing.Testing()` are both present, while default tests, tagged production
+builds, snapshot finalization, Docker execution, and every shipping activation
+path remain closed. Recognized ACTIVE
 publication and the nine management routes are now implemented independently of
 search-time capability exposure. The dormant Preview request codec and
 structural forced-ACTIVE envelope validator do not alter that order: without a
@@ -1175,12 +1226,14 @@ frozen row/response policy, response codec, handler, route, or open execution
 gates they authorize no preview behavior. The next
 dependency-ordered slices are:
 
-1. complete the digest-pinned ClickHouse acceptance matrix as bounded named
+1. complete the still-paused digest-pinned ClickHouse acceptance matrix as
+   bounded named
    gates covering ordinary filter/project/eval/rex/spath/sort/limit/stats,
    eventstats/streamstats and stacked chronological barriers, chart/timechart,
    every event-analysis finalizer, empty/pruned consumers, exact argument
    order, resource boundaries, container decoding, and hidden-failure
-   atomicity;
+   atomicity; the shared ten-surface compiler construction proof is complete,
+   but no container result is yet acceptance evidence;
 2. only after those runtime gates pass, remove the compiler and snapshot
    nonempty gates together and attach the retained concrete Resolver to
    production search admission, then prove one hidden seeded-ACTIVE lifecycle
@@ -1196,5 +1249,5 @@ dependency-ordered slices are:
    reacquired under the authenticated caller; forced-ACTIVE validation can
    yield and apply the exact candidate program; row-limit, paired schema/row,
    truncation, response-byte, deadline, and concurrency policy is frozen; and
-   the hidden nonempty compiler, snapshot-finalization, and digest-pinned
+   the production nonempty compiler, snapshot-finalization, and digest-pinned
    ClickHouse gates pass without reopening any execution or disclosure gate.
