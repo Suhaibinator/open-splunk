@@ -487,9 +487,10 @@ execution, and freeze row-limit, paired before/after schema-row, truncation,
 response-byte, deadline, and concurrency semantics while retaining the
 advisory-only revision contract. The production nonempty compiler,
 snapshot-finalization, and digest-pinned ClickHouse acceptance gates remain
-closed. An explicitly tagged `go test`-only compiler bridge opens no Preview
-service or wire authority, and its real sealed result remains insufficient for
-`Authority.Finalize`. Preview must never accept raw events, physical table
+closed. The compiler-only and dual-tag snapshot lifecycle test bridges open no
+Preview service or wire authority. The runtime tag alone remains insufficient
+for `Authority.Finalize`; the dual-tag test finalizer grants no route or
+production authority. Preview must never accept raw events, physical table
 names, index authority, asset paths, or SQL. Validate remains registered but
 unadvertised.
 
@@ -556,20 +557,48 @@ dependencies and dependents independently, pages and labels each direction at
 its own catalog revision, and displays only each visible opposite endpoint's
 object ID, version, and `FIELD_INPUT` role.
 Production nonempty compiler, snapshot-finalization, and execution gates remain
-closed, so no shipping knowledge execution is claimed. The current acceptance
-bridge is deliberately outside the protobuf/runtime capability: one shared
-plan matrix reaches the exact seal with zero typed results by default, while an
-explicitly tagged test binary additionally requires `testing.Testing()` and
-seals thirteen public compiler/derived surfaces only for non-Docker construction
-evidence: nine shared `Compile` cases—ordinary, selector controls, chart,
-timechart, stats, stacked chronology, pruned consumer, runtime-empty consumer,
-and alias overflow—plus timeline, field catalog, field summary, and field
-suggestions. The ordinary proof pins 19 public output fields, 13 detached
-container descriptors, 39 private sidecar columns, exact admitted-program
-evidence, and detached clone invalidation; ordinary and timeline use executable
-`where isnotnull(regex_value)` rather than the former parser-invalid
-wildcard-shaped predicate, without claiming authored wildcard-predicate
-coverage.
+closed, so no shipping knowledge execution is claimed. The acceptance bridges
+are deliberately outside the protobuf/runtime capability. Let A mean
+`open_splunk_knowledge_runtime_acceptance` and B mean
+`open_splunk_knowledge_snapshot_acceptance`. A additionally requires
+`testing.Testing()` before the public Compiler can seal. B is conjoined with A
+and an independent `testing.Testing()` check at finalization. Thus default mode
+keeps both gates closed, A alone seals but cannot finalize, B alone cannot seal,
+and A+B lets the A-enabled test-only Compiler cross finalization only inside
+`go test`.
+
+One shared plan matrix reaches the exact seal with zero typed results by
+default, while the A-tagged test binary seals thirteen public compiler/derived
+surfaces only for non-Docker construction evidence: nine shared `Compile`
+cases—ordinary, selector controls, chart, timechart, stats, stacked chronology,
+pruned consumer, runtime-empty consumer, and alias overflow—plus timeline,
+field catalog, field summary, and field suggestions. The ordinary proof pins 19
+public output fields, 13 detached container descriptors, 39 private sidecar
+columns, exact admitted-program evidence, and detached clone invalidation;
+ordinary and timeline use executable `where isnotnull(regex_value)` rather than
+the former parser-invalid wildcard-shaped predicate, without claiming authored
+wildcard-predicate coverage.
+
+The A+B direct test sends a real public Compiler seal through
+`Authority.Finalize` and pins exact scope/count/budget fields plus summary,
+digest, encoding, prelude commitment, retained compiler budgets, detachment,
+tamper, scope, and equal-charge program-substitution rejection. A second A+B
+test uses the real Writer, Resolver, and Manager to retain distinct ACTIVE v1
+and v2 snapshot/prelude/compiler authority across fake dispatch and owner-
+scoped access. This is lifecycle/identity staging only: it executes no
+ClickHouse row and adds no production Resolver attachment, route, capability,
+browser request, protobuf behavior, or runtime acceptance.
+
+At `9f8c8ace0da51b837ebccc0eca1e61db8e9c2dcf` (exactly 135
+post-`c5440b9` commits), all four full `internal/knowledgesnapshot` modes and
+the four named Manager entrypoint modes pass. The direct snapshot and Manager
+lifecycle tests pass together under `-race`; default and dual-tag vet pass; and
+isolated tracked-only ClickHouse default/A full plus A-tagged race runs pass.
+The full server package is not claimed green: the same two pre-existing field-
+catalog/field-summary HTTP tests and two blocked-worker search-analysis tests
+fail identically in every mode. `gofmt` and `git diff --check` pass. The
+protected pre-existing untracked ClickHouse probe
+was excluded and left untouched without opening or hashing it.
 
 The three added `Compile` cases prove relationships rather than one full SQL
 golden: one physical scan, placeholder/argument equality with the exact ordered
@@ -580,8 +609,13 @@ authored sort, and live validation for stacked chronology; and `event_id`-only
 valid empty container authority plus retained guards/validation for pruned and
 runtime-empty consumers. Only the runtime-empty predicate precedes its
 still-live validation union. These are compile-only additions, not Docker
-executor rows. Tagged `go build` remains closed, `Authority.Finalize` remains
-independently closed, and Docker acceptance was **NOT RUN** and is still
+executor rows. Default and either single-tag mode remain closed. A supported
+dual-tag server `go build` remains closed; a separate disposable tracked-source
+probe in an ordinary binary observed only the private snapshot helper returning
+`false` and
+did not dynamically call public `Authority.Finalize`, whose compiler path would
+stop first at its own test-process guard. This is not a claim of adversarial
+linker resistance. Docker acceptance was **NOT RUN** and is still
 paused/canceled.
 
 Collector display-name and enabled-state mutations return a

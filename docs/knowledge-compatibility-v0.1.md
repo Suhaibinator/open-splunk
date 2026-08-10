@@ -47,10 +47,17 @@ acquisition or caller-authorization integration, route or manifest/bearer
 entry, capability, navigation/UI request, Resolver attachment, or execution
 path. The production nonempty compiler, snapshot-finalization, and execution
 gates remain closed, so no knowledge object affects search results. An
-explicitly tagged `go test`-only bridge now seals the shared thirteen-surface
-public Compiler matrix for construction evidence, but it additionally requires
-`testing.Testing()`: tagged production builds stay closed, and a real tagged
-compiler seal still cannot cross `Authority.Finalize`.
+explicit runtime acceptance tag seals the shared thirteen-surface public
+Compiler matrix only while `testing.Testing()` is true, but cannot cross
+`Authority.Finalize` by itself. A second snapshot tag, conjoined with the
+runtime tag and its own `testing.Testing()` check, opens finalization only in
+the dual-tag test process for the runtime-tag-enabled test-only Compiler. That
+process proves direct snapshot construction and a real Writer-to-Resolver-to-
+Manager ACTIVE v1/v2 retained-authority lifecycle
+through fake dispatch. Default, either single-tag mode, and ordinary dual-tag
+production builds stay closed; no ClickHouse row, production attachment, new
+route or API activation, browser behavior, protobuf behavior, or runtime
+acceptance is claimed.
 
 ## Security boundary
 
@@ -831,9 +838,9 @@ semantics. Its revision remains advisory knowledge-ledger correlation metadata,
 not mutation acceptability, a reservation, or reusable publication proof;
 later Writer operations revalidate live authority. The production nonempty
 compiler, snapshot-finalization, and digest-pinned ClickHouse acceptance gates
-remain closed. The test-only compiler bridge grants Preview no service or
-execution authority. Preview accepts no raw events, physical scope, asset path,
-or SQL.
+remain closed. The compiler-only and dual-tag snapshot lifecycle test bridges
+grant Preview no service or execution authority. Preview accepts no raw events,
+physical scope, asset path, or SQL.
 
 The validation wire redesign has an intentional historical protobuf
 FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
@@ -1217,9 +1224,11 @@ operators. KO-1C now constructs their bounded ClickHouse stages, runtime
 accounting barriers, sealed result sidecars, and specialized derived execution
 authority. The production nonempty compiler seal and snapshot finalization
 gates remain closed until the digest-pinned runtime compatibility matrix passes.
-The explicitly tagged test-process bridge can mint the compiler seal only while
-`testing.Testing()` is true and leaves finalization independently closed; that
-construction proof is not runtime compatibility evidence.
+The runtime tag can mint the compiler seal only while `testing.Testing()` is
+true and still leaves finalization closed by itself. The second snapshot tag is
+effective only with the runtime tag and a separate `testing.Testing()` result;
+the resulting dual-tag finalization and Manager-retention proofs are test-only
+lifecycle staging, not runtime compatibility evidence.
 
 Generic lifecycle records distinguish absence from emptiness. An absent
 `KnowledgeSnapshotSummary` means knowledge resolution was disabled or the
@@ -1514,17 +1523,35 @@ selector controls, chart, timechart, stats, stacked chronological barriers,
 generated-field-pruned consumer, runtime-empty consumer, and alias overflow—
 plus timeline, field catalog, field summary, and field suggestions. The default
 test proves all thirteen surfaces stop at the exact nonempty seal with zero
-typed results. The explicitly tagged `go test` bridge instead seals all
-thirteen while `testing.Testing()` is true; the same tagged `go build` remains
-closed.
+typed results. With only `open_splunk_knowledge_runtime_acceptance`, the
+`go test` bridge instead seals all thirteen while `testing.Testing()` is true,
+but snapshot finalization still rejects the seal. With only
+`open_splunk_knowledge_snapshot_acceptance`, the Compiler remains closed. Both
+tags and the finalizer's independent `testing.Testing()` check are required to
+construct a nonempty snapshot in a test process.
 
 That non-Docker compiler proof pins 19 public ordinary outputs, 13 container
 descriptors, 39 unique private name/type/metadata-version sidecar columns,
 exact program evidence, and detached execution-clone behavior. The ordinary
 and timeline fixtures use executable `where isnotnull(regex_value)` predicates;
 this correction of the earlier parser-invalid wildcard-shaped predicate is not
-authored wildcard-predicate coverage. A real tagged compiler seal is still
-rejected by `Authority.Finalize` at the independent nonempty snapshot gate.
+authored wildcard-predicate coverage. A runtime-tag-only compiler seal is still
+rejected by `Authority.Finalize` at the independent nonempty snapshot gate. The
+dual-tag direct test instead pins exact scope/count/budget fields plus summary,
+digest, encoding, prelude commitment, retained compiler budgets, detachment,
+tamper, scope, and equal-charge program-substitution rejection.
+
+The dual-tag Manager fixture publishes ACTIVE v1 through the real Writer,
+resolves and admits it through the real Resolver and Manager, pauses fake
+dispatch while ACTIVE v2 is published, and proves both completed jobs retain
+their distinct exact snapshot, prelude, and compiler identities under owner-
+scoped access. It proves lifecycle/identity staging only, not ClickHouse rows,
+production Resolver attachment, routes, capability, browser behavior, protobuf
+behavior, or runtime acceptance. A supported dual-tag server build remains
+closed. A disposable tracked-source probe in an ordinary binary observed only
+the private snapshot helper returning `false`; it did not dynamically call
+public `Authority.Finalize`, whose compiler path would stop first at its independent
+test-process guard. No adversarial linker-resistance claim is made.
 
 The three newer `Compile` cases add relationship-based construction evidence,
 not complete SQL goldens. Each binds one physical scan, placeholder/argument
@@ -1539,9 +1566,23 @@ validation authority while publishing only `event_id` with a valid empty
 container descriptor set; only the runtime-empty case places its single
 impossible predicate before the validation union.
 
+At `9f8c8ace0da51b837ebccc0eca1e61db8e9c2dcf`, for which
+`git rev-list --count c5440b9..9f8c8ac` is exactly 135, full
+`internal/knowledgesnapshot` tests and the named Manager entrypoints passed in
+all four no-tag/runtime-only/snapshot-only/dual-tag modes;
+the direct snapshot and Manager lifecycle passed together under `-race`;
+default and dual-tag vet passed; and full default/runtime-tagged plus tagged
+race `internal/clickhouse` tests passed in an isolated tracked-only copy. The
+full `cmd/open-splunk-server` package is not claimed green: the same two
+pre-existing field-catalog/field-summary HTTP tests and two blocked-worker
+search-analysis tests failed identically in every mode. `gofmt` and
+`git diff --check` passed. The protected pre-existing untracked ClickHouse probe
+was excluded and left untouched without opening or hashing it.
+
 Only a completed run against the required digest-pinned ClickHouse image and
 exact certified server version counts as runtime evidence. Docker execution for
-both staging slices was **NOT RUN** and remains explicitly paused/canceled. The
+the compiler and snapshot-lifecycle staging slices was **NOT RUN** and remains
+explicitly paused/canceled. The
 stacked, pruned, and runtime-empty additions are compile-only and were not added
 to the Docker executor rows. A cancellation, skipped container test,
 compiler-only success, or table-free SQL probe must be recorded as pending
