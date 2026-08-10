@@ -79,7 +79,7 @@ func TestCentralKnowledgeCompositionPreservesAbsentAndPresentEmptyParity(t *test
 	}
 }
 
-func TestCentralKnowledgeCompositionLowersOnceBeforeAuthoredSuffixAndStopsAtSeal(t *testing.T) {
+func TestCentralKnowledgeCompositionLowersOnceBeforeAuthoredSuffixAtCompilerBoundary(t *testing.T) {
 	program := deferredMixedKnowledgeProgramForTest(t)
 	authored := buildPlan(t,
 		`index=gradethis | where calculated_value="fixturesource" | eval authored_value=lower(alias_value)`,
@@ -89,8 +89,8 @@ func TestCentralKnowledgeCompositionLowersOnceBeforeAuthoredSuffixAndStopsAtSeal
 		t.Fatalf("inject mixed knowledge prelude: %v", err)
 	}
 
-	capture, _, compileErr := compileCentralKnowledgeCapture(logical)
-	requireCentralKnowledgeClosedSeal(t, compileErr)
+	capture, compiled, compileErr := compileCentralKnowledgeCapture(logical)
+	requireCentralKnowledgeCompilerBoundary(t, compiled.HasValidExecutionSeal(), compileErr)
 	if !capture.called {
 		t.Fatal("central finalizer was not reached after knowledge and authored lowering")
 	}
@@ -276,7 +276,7 @@ func TestCentralKnowledgeCompositionSealRejectsPostLoweringAuthoredMutation(t *t
 	}
 }
 
-func TestCentralKnowledgeCompositionTerminalAndAnalysisPathsReachSealGate(t *testing.T) {
+func TestCentralKnowledgeCompositionTerminalAndAnalysisPathsReachCompilerBoundary(t *testing.T) {
 	program := deferredMixedKnowledgeProgramForTest(t)
 	for _, test := range []struct {
 		name   string
@@ -290,39 +290,39 @@ func TestCentralKnowledgeCompositionTerminalAndAnalysisPathsReachSealGate(t *tes
 			if err != nil {
 				t.Fatalf("inject mixed knowledge prelude: %v", err)
 			}
-			_, compileErr := (Compiler{}).Compile(logical)
-			requireCentralKnowledgeClosedSeal(t, compileErr)
+			compiled, compileErr := (Compiler{}).Compile(logical)
+			requireCentralKnowledgeCompilerBoundary(t, compiled.HasValidExecutionSeal(), compileErr)
 		})
 	}
 
 	for _, test := range []struct {
 		name    string
-		compile func(*plan.Query) error
+		compile func(*plan.Query) (bool, error)
 	}{
 		{
 			name: "field catalog",
-			compile: func(logical *plan.Query) error {
-				_, err := (Compiler{}).CompileFieldCatalog(
+			compile: func(logical *plan.Query) (bool, error) {
+				compiled, err := (Compiler{}).CompileFieldCatalog(
 					logical,
 					FieldCatalogSpec{MaximumFields: 32},
 				)
-				return err
+				return compiled.HasValidExecutionSeal(), err
 			},
 		},
 		{
 			name: "field suggestions",
-			compile: func(logical *plan.Query) error {
-				_, err := (Compiler{}).CompileFieldSuggestions(
+			compile: func(logical *plan.Query) (bool, error) {
+				compiled, err := (Compiler{}).CompileFieldSuggestions(
 					logical,
 					FieldSuggestionSpec{Prefix: "cal", MaximumFields: 16},
 				)
-				return err
+				return compiled.HasValidExecutionSeal(), err
 			},
 		},
 		{
 			name: "field summary",
-			compile: func(logical *plan.Query) error {
-				_, err := (Compiler{}).CompileFieldSummary(
+			compile: func(logical *plan.Query) (bool, error) {
+				compiled, err := (Compiler{}).CompileFieldSummary(
 					logical,
 					FieldSummarySpec{
 						FieldName:             "calculated_value",
@@ -331,7 +331,7 @@ func TestCentralKnowledgeCompositionTerminalAndAnalysisPathsReachSealGate(t *tes
 						MaximumValueBytes:     4_096,
 					},
 				)
-				return err
+				return compiled.HasValidExecutionSeal(), err
 			},
 		},
 	} {
@@ -343,7 +343,8 @@ func TestCentralKnowledgeCompositionTerminalAndAnalysisPathsReachSealGate(t *tes
 			if err != nil {
 				t.Fatalf("inject mixed knowledge prelude: %v", err)
 			}
-			requireCentralKnowledgeClosedSeal(t, test.compile(logical))
+			validSeal, compileErr := test.compile(logical)
+			requireCentralKnowledgeCompilerBoundary(t, validSeal, compileErr)
 		})
 	}
 }
@@ -393,10 +394,21 @@ func compileCentralKnowledgeCapture(
 	return capture, compiled, err
 }
 
-func requireCentralKnowledgeClosedSeal(t *testing.T, err error) {
+func requireCentralKnowledgeCompilerBoundary(t *testing.T, validSeal bool, err error) {
 	t.Helper()
-	if err == nil || err.Error() != centralKnowledgeClosedSealError {
-		t.Fatalf("central knowledge compile error = %v, want %q", err, centralKnowledgeClosedSealError)
+	if knowledgeRuntimeAcceptanceEnabled() {
+		if err != nil || !validSeal {
+			t.Fatalf("central knowledge acceptance compile = (sealed:%t, error:%v)", validSeal, err)
+		}
+		return
+	}
+	if validSeal || err == nil || err.Error() != centralKnowledgeClosedSealError {
+		t.Fatalf(
+			"central knowledge default compile = (sealed:%t, error:%v), want zero/%q",
+			validSeal,
+			err,
+			centralKnowledgeClosedSealError,
+		)
 	}
 	if strings.Contains(err.Error(), "unsupported logical operator") {
 		t.Fatalf("central knowledge prefix reached generic operator lowering: %v", err)

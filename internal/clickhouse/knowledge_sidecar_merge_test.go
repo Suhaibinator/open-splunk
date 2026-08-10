@@ -386,7 +386,7 @@ func TestCompileKnowledgeExtractionSidecarsPreservePriorAndClearScalarWrites(t *
 	}
 }
 
-func TestCompileKnowledgeContainerSidecarPathRemainsClosedAtSeal(t *testing.T) {
+func TestCompileKnowledgeContainerSidecarPathReachesCompilerBoundary(t *testing.T) {
 	program := knowledgeFusedFieldProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
 		knowledgeAliasSidecarDefinition(
 			"container-alias",
@@ -400,11 +400,11 @@ func TestCompileKnowledgeContainerSidecarPathRemainsClosedAtSeal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("inject container knowledge prelude: %v", err)
 	}
-	capture, _, compileErr := compileCentralKnowledgeCapture(logical)
-	requireCentralKnowledgeClosedSeal(t, compileErr)
+	capture, compiled, compileErr := compileCentralKnowledgeCapture(logical)
+	requireCentralKnowledgeCompilerBoundary(t, compiled.HasValidExecutionSeal(), compileErr)
 	_, visible := capture.state.visible["copied_payload"]
 	if !capture.called || !visible {
-		t.Fatalf("container alias did not reach the closed final seal: %#v", capture)
+		t.Fatalf("container alias did not reach the final compiler boundary: %#v", capture)
 	}
 }
 

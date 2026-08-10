@@ -110,7 +110,7 @@ func TestAuthorityFinalizeRejectsForgeryTamperAndScopeMismatch(t *testing.T) {
 	}
 }
 
-func TestAuthorityFinalizeRejectsNonemptyAuthorityUntilKnowledgePreludeExists(t *testing.T) {
+func TestAuthorityFinalizeNonemptyAcceptanceModes(t *testing.T) {
 	t.Parallel()
 
 	authority, err := Prepare(snapshotGoldenInput(t))
@@ -122,9 +122,25 @@ func TestAuthorityFinalizeRejectsNonemptyAuthorityUntilKnowledgePreludeExists(t 
 	if err != nil {
 		t.Fatalf("InjectKnowledgePrelude(nonempty): %v", err)
 	}
-	if compiled, compileErr := (clickhouse.Compiler{}).Compile(logical); compileErr == nil ||
-		!strings.Contains(compileErr.Error(), "nonempty knowledge lowering is absent") {
-		t.Fatalf("Compile(nonempty) = (%#v, %v), want closed seal", compiled, compileErr)
+	compiled, compileErr := (clickhouse.Compiler{}).Compile(logical)
+	if compileErr != nil {
+		if knowledgeSnapshotAcceptanceEnabled() ||
+			!strings.Contains(compileErr.Error(), "nonempty knowledge lowering is absent") {
+			t.Fatalf("Compile(nonempty) = (%#v, %v), want default compiler closure", compiled, compileErr)
+		}
+	} else {
+		if !compiled.HasValidExecutionSeal() {
+			t.Fatal("Compile(nonempty) returned an unsealed result")
+		}
+		snapshot, finalizeErr := authority.Finalize(compiled)
+		if knowledgeSnapshotAcceptanceEnabled() {
+			if finalizeErr != nil || snapshot.IsZero() {
+				t.Fatalf("Finalize(dual-tag nonempty) = (%#v, %v), want sealed snapshot", snapshot, finalizeErr)
+			}
+		} else if !snapshot.IsZero() || !errors.Is(finalizeErr, ErrInvalidInput) ||
+			!strings.Contains(finalizeErr.Error(), "nonempty authority requires the KO-1 knowledge prelude") {
+			t.Fatalf("Finalize(compiler-only nonempty) = (%#v, %v), want closed snapshot gate", snapshot, finalizeErr)
+		}
 	}
 
 	emptyCompiled, _ := compileSnapshotQuery(t, "tenant-a", []string{"alpha", "zeta"}, `*`)
@@ -157,14 +173,25 @@ func compileSnapshotQuery(
 	source string,
 ) (clickhouse.CompiledQuery, *plan.Query) {
 	t.Helper()
-	logical := buildSnapshotQuery(t, tenantID, indexes, source)
 	empty, err := knowledgeprogram.Prepare(knowledgeprogram.Input{})
 	if err != nil {
 		t.Fatalf("Prepare(empty program): %v", err)
 	}
-	logical, err = plan.InjectKnowledgePrelude(logical, empty)
+	return compileSnapshotQueryWithPrelude(t, tenantID, indexes, source, empty)
+}
+
+func compileSnapshotQueryWithPrelude(
+	t *testing.T,
+	tenantID string,
+	indexes []string,
+	source string,
+	prelude knowledgeprogram.Program,
+) (clickhouse.CompiledQuery, *plan.Query) {
+	t.Helper()
+	logical := buildSnapshotQuery(t, tenantID, indexes, source)
+	logical, err := plan.InjectKnowledgePrelude(logical, prelude)
 	if err != nil {
-		t.Fatalf("InjectKnowledgePrelude(empty): %v", err)
+		t.Fatalf("InjectKnowledgePrelude: %v", err)
 	}
 	compiled, err := (clickhouse.Compiler{}).Compile(logical)
 	if err != nil {

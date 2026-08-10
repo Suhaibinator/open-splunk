@@ -291,8 +291,8 @@ func TestDerivedExecutionRejectsLoweredKnowledgeArgumentMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InjectKnowledgePrelude: %v", err)
 	}
-	capture, _, compileErr := compileCentralKnowledgeCapture(logical)
-	requireCentralKnowledgeClosedSeal(t, compileErr)
+	capture, compiled, compileErr := compileCentralKnowledgeCapture(logical)
+	requireCentralKnowledgeCompilerBoundary(t, compiled.HasValidExecutionSeal(), compileErr)
 	if !capture.called {
 		t.Fatal("knowledge compilation did not reach the captured finalizer")
 	}

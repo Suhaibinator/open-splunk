@@ -281,10 +281,10 @@ func captureAuthoredSidecarState(
 	if err != nil {
 		t.Fatalf("inject knowledge prelude: %v", err)
 	}
-	capture, _, compileErr := compileCentralKnowledgeCapture(logical)
-	requireCentralKnowledgeClosedSeal(t, compileErr)
+	capture, compiled, compileErr := compileCentralKnowledgeCapture(logical)
+	requireCentralKnowledgeCompilerBoundary(t, compiled.HasValidExecutionSeal(), compileErr)
 	if !capture.called {
-		t.Fatal("authored suffix did not reach the closed final seal")
+		t.Fatal("authored suffix did not reach the final compiler boundary")
 	}
 	return capture
 }

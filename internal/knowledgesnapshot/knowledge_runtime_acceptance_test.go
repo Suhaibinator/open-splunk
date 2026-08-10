@@ -1,4 +1,4 @@
-//go:build open_splunk_knowledge_runtime_acceptance
+//go:build open_splunk_knowledge_runtime_acceptance && !open_splunk_knowledge_snapshot_acceptance
 
 package knowledgesnapshot
 
@@ -6,9 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
-	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
 func TestKnowledgeRuntimeAcceptanceCompilerCannotFinalizeNonemptySnapshot(t *testing.T) {
@@ -16,23 +13,20 @@ func TestKnowledgeRuntimeAcceptanceCompilerCannotFinalizeNonemptySnapshot(t *tes
 	if err != nil {
 		t.Fatalf("Prepare(): %v", err)
 	}
-	logical := buildSnapshotQuery(
+	prelude := authority.Prelude()
+	compiled, _ := compileSnapshotQueryWithPrelude(
 		t,
 		"tenant-a",
 		[]string{"alpha", "zeta"},
 		`index=alpha OR index=zeta | table event_id alias_field calculated_field`,
+		prelude,
 	)
-	logical, err = plan.InjectKnowledgePrelude(logical, authority.Prelude())
-	if err != nil {
-		t.Fatalf("InjectKnowledgePrelude(): %v", err)
+	if !compiled.HasValidExecutionSeal() {
+		t.Fatalf("tagged Compile(nonempty) = %#v", compiled)
 	}
-	compiled, err := (clickhouse.Compiler{}).Compile(logical)
-	if err != nil || !compiled.HasValidExecutionSeal() {
-		t.Fatalf("tagged Compile(nonempty) = (%#v, %v)", compiled, err)
-	}
-	evidence, ok := compiled.KnowledgeSnapshotEvidenceFor(authority.Prelude())
-	if !ok || evidence.KnowledgeProgramObjectCount() != authority.Prelude().ObjectCount() ||
-		evidence.KnowledgeProgramCharges() != authority.Prelude().Charges() {
+	evidence, ok := compiled.KnowledgeSnapshotEvidenceFor(prelude)
+	if !ok || evidence.KnowledgeProgramObjectCount() != prelude.ObjectCount() ||
+		evidence.KnowledgeProgramCharges() != prelude.Charges() {
 		t.Fatalf("tagged compiler evidence = (%#v, %t)", evidence, ok)
 	}
 

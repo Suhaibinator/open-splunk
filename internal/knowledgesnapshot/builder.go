@@ -1164,8 +1164,9 @@ func finalize(authority Authority, evidence trustedCompilerEvidence) (Snapshot, 
 // Finalize seals this exact prepared authority against one exact compiler-
 // produced ClickHouse execution. It accepts no caller-constructible budget
 // counters and requires the exact present knowledge-program commitment even
-// for an admitted empty authority. Nonempty finalization remains disabled until
-// every KO-1 physical operator is emitted and independently sealed.
+// for an admitted empty authority. Production nonempty finalization remains
+// disabled until the pinned KO-1 engine matrix passes; an explicitly dual-
+// tagged go-test process may cross only this final gate for lifecycle staging.
 func (authority Authority) Finalize(compiled clickhouse.CompiledQuery) (Snapshot, error) {
 	if authority.base == nil || authority.base.BudgetCharges == nil {
 		return Snapshot{}, fmt.Errorf("%w: prepared authority is absent", ErrInvalidInput)
@@ -1178,7 +1179,7 @@ func (authority Authority) Finalize(compiled clickhouse.CompiledQuery) (Snapshot
 		!slices.Equal(compilerEvidence.EffectiveIndexes(), authority.base.GetEffectiveAuthorizedIndexes()) {
 		return Snapshot{}, fmt.Errorf("%w: compiled query read scope disagrees with prepared authority", ErrInvalidInput)
 	}
-	if len(authority.objects) != 0 {
+	if len(authority.objects) != 0 && !knowledgeSnapshotAcceptanceEnabled() {
 		return Snapshot{}, fmt.Errorf("%w: nonempty authority requires the KO-1 knowledge prelude", ErrInvalidInput)
 	}
 	commitment, commitmentOK := compilerEvidence.KnowledgeProgramCommitment()

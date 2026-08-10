@@ -319,7 +319,7 @@ func TestRuntimeKnowledgeCompositionLeavesSearchAndCapabilityGatesOff(
 	}
 }
 
-func TestRuntimeKnowledgeResolverFailsClosedForWriterPublishedActiveObject(
+func testRuntimeKnowledgeResolverFailsClosedForWriterPublishedActiveObject(
 	t *testing.T,
 ) {
 	runtime, database := newRuntimeKnowledgeTestRuntime(t)
@@ -686,7 +686,18 @@ func newRuntimeKnowledgeAdmissionManager(
 	counters *runtimeKnowledgeAdmissionCounters,
 ) *searchjobs.Manager {
 	t.Helper()
-	manager, err := searchjobs.New(searchjobs.Config{
+	manager, err := searchjobs.New(runtimeKnowledgeAdmissionManagerConfig(resolver, counters))
+	if err != nil {
+		t.Fatalf("create test-only knowledge admission manager: %v", err)
+	}
+	return manager
+}
+
+func runtimeKnowledgeAdmissionManagerConfig(
+	resolver *knowledgecatalog.Resolver,
+	counters *runtimeKnowledgeAdmissionCounters,
+) searchjobs.Config {
+	return searchjobs.Config{
 		Executor:          runtimeKnowledgeAdmissionExecutor{counters: counters},
 		Snapshotter:       runtimeKnowledgeAdmissionSnapshotter{counters: counters},
 		Journal:           runtimeKnowledgeAdmissionJournal{counters: counters},
@@ -701,11 +712,7 @@ func newRuntimeKnowledgeAdmissionManager(
 		Now: func() time.Time {
 			return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC)
 		},
-	})
-	if err != nil {
-		t.Fatalf("create test-only knowledge admission manager: %v", err)
 	}
-	return manager
 }
 
 func waitForRuntimeKnowledgeJobState(

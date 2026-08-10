@@ -216,17 +216,32 @@ func TestCompileKnowledgeCompilationEvidenceDerivesExactNonemptyProof(t *testing
 	}
 
 	scan, ok := query.Operators[0].(*plan.Scan)
-	if !ok || scan == nil {
+	if !ok || scan == nil || len(scan.Indexes) != 1 {
 		t.Fatalf("fixture scan = %T", query.Operators[0])
 	}
-	if _, sealErr := sealFinalCompiledQuery(
-		CompiledQuery{SQL: "SELECT 1"},
+	sealed, sealErr := sealFinalCompiledQuery(
+		CompiledQuery{
+			SQL: "SELECT ?, ?",
+			Args: []any{
+				compiledReadScopeArgument{ordinal: 0, value: scan.TenantID},
+				compiledReadScopeArgument{ordinal: 1, value: scan.Indexes[0]},
+			},
+		},
 		query,
 		scan,
 		preparation,
 		prelude,
-	); sealErr == nil || sealErr.Error() != testNonemptyKnowledgeSealError {
-		t.Fatalf("nonempty seal error = %v", sealErr)
+	)
+	if knowledgeRuntimeAcceptanceEnabled() {
+		if sealErr != nil || !sealed.HasValidExecutionSeal() {
+			t.Fatalf("acceptance-mode nonempty seal = (%#v, %v), want trusted execution", sealed, sealErr)
+		}
+		if sealedEvidence, sealedOK := sealed.KnowledgeSnapshotEvidenceFor(program); !sealedOK ||
+			sealedEvidence.KnowledgeProgramObjectCount() != program.ObjectCount() {
+			t.Fatalf("acceptance-mode sealed evidence = (%#v, %t)", sealedEvidence, sealedOK)
+		}
+	} else if sealErr == nil || sealErr.Error() != testNonemptyKnowledgeSealError {
+		t.Fatalf("default nonempty seal error = %v", sealErr)
 	}
 }
 
