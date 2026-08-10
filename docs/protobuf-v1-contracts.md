@@ -560,13 +560,27 @@ closed, so no shipping knowledge execution is claimed. The current acceptance
 bridge is deliberately outside the protobuf/runtime capability: one shared
 plan matrix reaches the exact seal with zero typed results by default, while an
 explicitly tagged test binary additionally requires `testing.Testing()` and
-seals the ten public compiler/derived surfaces only for non-Docker construction
-evidence. That proof pins 19 public ordinary output fields, 13 detached
+seals thirteen public compiler/derived surfaces only for non-Docker construction
+evidence: nine shared `Compile` cases—ordinary, selector controls, chart,
+timechart, stats, stacked chronology, pruned consumer, runtime-empty consumer,
+and alias overflow—plus timeline, field catalog, field summary, and field
+suggestions. The ordinary proof pins 19 public output fields, 13 detached
 container descriptors, 39 private sidecar columns, exact admitted-program
 evidence, and detached clone invalidation; ordinary and timeline use executable
 `where isnotnull(regex_value)` rather than the former parser-invalid
 wildcard-shaped predicate, without claiming authored wildcard-predicate
-coverage. Tagged `go build` remains closed, `Authority.Finalize` remains
+coverage.
+
+The three added `Compile` cases prove relationships rather than one full SQL
+golden: one physical scan, placeholder/argument equality with the exact ordered
+authored suffix, and exact program/scope evidence for each; paired and
+increasing CTE stages, materialization/terminal-setting authority, exact
+source/direction/measure/aggregate/output binding, immutable chronology versus
+authored sort, and live validation for stacked chronology; and `event_id`-only
+valid empty container authority plus retained guards/validation for pruned and
+runtime-empty consumers. Only the runtime-empty predicate precedes its
+still-live validation union. These are compile-only additions, not Docker
+executor rows. Tagged `go build` remains closed, `Authority.Finalize` remains
 independently closed, and Docker acceptance was **NOT RUN** and is still
 paused/canceled.
 

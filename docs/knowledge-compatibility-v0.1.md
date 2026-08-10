@@ -47,8 +47,8 @@ acquisition or caller-authorization integration, route or manifest/bearer
 entry, capability, navigation/UI request, Resolver attachment, or execution
 path. The production nonempty compiler, snapshot-finalization, and execution
 gates remain closed, so no knowledge object affects search results. An
-explicitly tagged `go test`-only bridge now seals the shared ten-surface public
-Compiler matrix for construction evidence, but it additionally requires
+explicitly tagged `go test`-only bridge now seals the shared thirteen-surface
+public Compiler matrix for construction evidence, but it additionally requires
 `testing.Testing()`: tagged production builds stay closed, and a real tagged
 compiler seal still cannot cross `Authority.Finalize`.
 
@@ -1509,12 +1509,14 @@ or diagnostics and must run through the relevant production normalization,
 resolution, planner, compiler, and pinned ClickHouse paths.
 
 The repository also contains a public compiler/executor matrix for the KO-1C
-field subset. One shared plan set covers ordinary, selector-control, chart,
-timechart, stats, alias-event-overflow, timeline, field-catalog, field-summary,
-and field-suggestion compilation. The default test proves all ten surfaces stop
-at the exact nonempty seal with zero typed results. The explicitly tagged
-`go test` bridge instead seals all ten while `testing.Testing()` is true; the
-same tagged `go build` remains closed.
+field subset. One shared plan set contains nine `Compile` cases—ordinary,
+selector controls, chart, timechart, stats, stacked chronological barriers,
+generated-field-pruned consumer, runtime-empty consumer, and alias overflow—
+plus timeline, field catalog, field summary, and field suggestions. The default
+test proves all thirteen surfaces stop at the exact nonempty seal with zero
+typed results. The explicitly tagged `go test` bridge instead seals all
+thirteen while `testing.Testing()` is true; the same tagged `go build` remains
+closed.
 
 That non-Docker compiler proof pins 19 public ordinary outputs, 13 container
 descriptors, 39 unique private name/type/metadata-version sidecar columns,
@@ -1524,9 +1526,23 @@ this correction of the earlier parser-invalid wildcard-shaped predicate is not
 authored wildcard-predicate coverage. A real tagged compiler seal is still
 rejected by `Authority.Finalize` at the independent nonempty snapshot gate.
 
+The three newer `Compile` cases add relationship-based construction evidence,
+not complete SQL goldens. Each binds one physical scan, placeholder/argument
+cardinality, its exact ordered authored argument suffix, and exact program/scope
+evidence. The stacked case proves unique paired and strictly increasing barrier
+stages, guard-input materialization plus the terminal setting, exact source and
+first/last direction through each immutable measure/aggregate/output binding,
+immutable time/event/visibility/source chronology despite an authored
+`sort +event_id`, and exactly five `UNION ALL` links in the live final
+validation chain. The pruned and runtime-empty cases retain live guard and
+validation authority while publishing only `event_id` with a valid empty
+container descriptor set; only the runtime-empty case places its single
+impossible predicate before the validation union.
+
 Only a completed run against the required digest-pinned ClickHouse image and
 exact certified server version counts as runtime evidence. Docker execution for
-this staging slice was **NOT RUN** and remains explicitly paused/canceled. A
-cancellation, skipped container test, compiler-only success, or table-free SQL
-probe must be recorded as pending evidence rather than compatibility
-acceptance.
+both staging slices was **NOT RUN** and remains explicitly paused/canceled. The
+stacked, pruned, and runtime-empty additions are compile-only and were not added
+to the Docker executor rows. A cancellation, skipped container test,
+compiler-only success, or table-free SQL probe must be recorded as pending
+evidence rather than compatibility acceptance.

@@ -1594,14 +1594,16 @@ gates open.
 
 The public production-path KO-1C matrix in `internal/queryexec` now shares one
 exact plan set between a default closure proof and an explicitly tagged
-test-process-only acceptance bridge. Without the tag, ordinary,
-selector-control, chart, timechart, stats, alias-event-overflow, timeline,
-field-catalog, field-summary, and field-suggestion compilation all reach the
+test-process-only acceptance bridge. Its nine `Compile` cases are ordinary,
+selector controls, chart, timechart, stats, stacked chronological barriers,
+generated-field-pruned consumer, runtime-empty consumer, and alias overflow;
+timeline, field catalog, field summary, and field suggestions bring the total
+to thirteen public surfaces. Without the tag, all thirteen reach the
 intentional nonempty compiler seal, return the exact closed-gate error, and
 leave their typed results zero. With
 `open_splunk_knowledge_runtime_acceptance`, the alternate gate additionally
 requires `testing.Testing()`, so only a tagged `go test` binary can seal those
-ten public compiler/derived surfaces; adding the tag to `go build` remains
+thirteen public compiler/derived surfaces; adding the tag to `go build` remains
 closed.
 
 That tagged non-Docker proof pins the ordinary query's exact 19 public outputs,
@@ -1617,15 +1619,33 @@ uses a real nonempty prepared authority and valid public Compiler seal to prove
 that `Authority.Finalize` still returns a zero snapshot at its independent hard
 gate.
 
-The eventual executor matrix still uses the migrated event table, independently
+The three added `Compile` cases use relationship-based construction oracles.
+Each proves one physical event-table scan, placeholder count equal to
+bound-argument count, its exact ordered authored argument suffix, and exact
+program, tenant, effective-index, object, charge, and generated-SQL-byte evidence. Stacked
+chronology proves unique CTE identities; same-stage input/result pairs at
+strictly increasing stages; only the guard input materialized among those
+barrier CTEs plus the one terminal materialized-CTE setting; and four one-to-one
+bindings from exact source and first/last direction through immutable measure
+and chronological aggregate to the authored output. Those aggregates retain the immutable
+time/event/visibility/source chronology while the authored `sort +event_id`
+uses a separate pipeline-order key. Exactly five `UNION ALL` links keep the
+final guard-consuming validation chain live. The pruned and runtime-empty cases
+both publish only `event_id`, expose valid empty container authority, and retain
+the live knowledge guard and final validation. Only the runtime-empty form
+binds its impossible Boolean predicate once, before the validation union.
+
+The Docker executor matrix still uses the migrated event table, independently
 falsifiable selector dimensions, cross-tenant decoys, exact typed container and
 overwrite results, authored suffixes and aggregations, analysis finalizers, and
 atomic alias-copy limit attribution. It requires the cached digest-pinned
-ClickHouse image and exact `26.3.17.4` server version. Docker acceptance remains
-explicitly paused/canceled and was **NOT RUN** for this compiler-staging slice;
-there is no green container result, engine-compatibility claim, or opening of a
-production compiler, snapshot, Resolver-attachment, capability, or browser
-gate.
+ClickHouse image and exact `26.3.17.4` server version. Stacked chronology,
+pruned consumption, and runtime-empty consumption are compile-only additions;
+they were not added as Docker executor rows. Docker acceptance remains
+explicitly paused/canceled and was **NOT RUN** for either compiler-staging
+slice; there is no green container result, engine-compatibility claim, or
+opening of a production compiler, snapshot, Resolver-attachment, capability,
+or browser gate.
 
 The KO-1C compiler now also preserves complete execution authority when an
 ordinary sealed query is projected into timeline, field-catalog,
