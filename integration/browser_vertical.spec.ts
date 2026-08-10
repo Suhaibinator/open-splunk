@@ -22,6 +22,16 @@ import {
   GetSearchResultsRequest,
   GetSearchResultsResponse,
 } from "../gen/ts/open_splunk/v1/search_api";
+import {
+  AuditAction,
+  AuditActorKind,
+  AuditActorRole,
+  AuditTargetKind,
+} from "../gen/ts/open_splunk/v1/audit";
+import {
+  ListAuditEventsRequest,
+  ListAuditEventsResponse,
+} from "../gen/ts/open_splunk/v1/audit_api";
 import { AppState } from "../gen/ts/open_splunk/v1/app";
 import { IndexAccessState, IndexState } from "../gen/ts/open_splunk/v1/index";
 import {
@@ -187,6 +197,152 @@ test("collector event is visible through the compiled backend UI", async ({ page
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
   assertBrowserSafety(safety);
+});
+
+test("Mutation Audit renders historical Knowledge events without the Knowledge feature", async ({
+  page,
+}) => {
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const maliciousTargetId = "ko-<script>globalThis.__auditScriptExecuted=true</script>";
+  const maliciousAppId = "app-<img src=x onerror=globalThis.__auditScriptExecuted=true>";
+  const legacyTargetId = "saved-search-legacy";
+  const auditRequests: ListAuditEventsRequest[] = [];
+  const apiTraffic: Array<{ method: string; pathname: string }> = [];
+
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.origin === origin && url.pathname.startsWith("/api/v1/")) {
+      apiTraffic.push({ method: request.method(), pathname: url.pathname });
+    }
+  });
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(GetSystemBootstrapResponse.encode(
+        GetSystemBootstrapResponse.fromPartial({
+          serverVersion: "knowledge-audit-browser-test",
+          apiVersion: "v1",
+          splCompatibilityVersion: "open-splunk-v0.1",
+          searchWebsocketPath: "/api/v1/search/ws",
+          // Historical journal visibility deliberately omits the dormant Knowledge feature.
+          features: [ServerFeature.SERVER_FEATURE_AUDIT_SEARCH],
+          limits: { maximumPageSize: 25 },
+          serverTime: new Date("2026-08-09T12:00:00.000Z"),
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/audit/events/list",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("audit List request omitted its protobuf body");
+      auditRequests.push(ListAuditEventsRequest.decode(wire));
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ListAuditEventsResponse.encode(
+          ListAuditEventsResponse.fromPartial({
+            auditEvents: [{
+              sequence: 2n,
+              occurredAt: new Date("2026-08-09T11:59:00.000Z"),
+              actorKind: AuditActorKind.AUDIT_ACTOR_KIND_BROWSER,
+              actorId: "admin-audit",
+              actorRole: AuditActorRole.AUDIT_ACTOR_ROLE_ADMINISTRATOR,
+              action: AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE,
+              targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT,
+              targetId: maliciousTargetId,
+              targetVersion: 2n,
+              appId: maliciousAppId,
+              objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+              sharingScope: SharingScope.SHARING_SCOPE_APP,
+            }, {
+              sequence: 1n,
+              occurredAt: new Date("2026-08-09T11:58:00.000Z"),
+              actorKind: AuditActorKind.AUDIT_ACTOR_KIND_BROWSER,
+              actorId: "admin-audit",
+              actorRole: AuditActorRole.AUDIT_ACTOR_ROLE_ADMINISTRATOR,
+              action: AuditAction.AUDIT_ACTION_SAVED_SEARCH_UPDATE,
+              targetKind: AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH,
+              targetId: legacyTargetId,
+              targetVersion: 2n,
+            }],
+            page: { totalSize: 2n, totalSizeExact: true },
+          }),
+        ).finish()),
+      });
+    },
+  );
+
+  let activityURL = "";
+  let storageBefore: { local: [string, string][]; session: [string, string][] };
+  let trafficBeforeAudit = 0;
+  await test.step("audit-only bootstrap exposes the Mutation Audit tab", async () => {
+    activityURL = new URL("/activity/", origin).href;
+    await page.goto(activityURL, { waitUntil: "domcontentloaded", timeout });
+    const mutationTab = page.getByRole("tab", { name: /Mutation audit/ });
+    await expect(mutationTab).toBeVisible({ timeout });
+    await expect(page.getByRole("tab", { name: /Search attempts/ })).toHaveCount(0);
+    storageBefore = await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }));
+    trafficBeforeAudit = apiTraffic.length;
+    await mutationTab.click();
+  });
+
+  const mutationPanel = page.locator("#activity-mutations-panel");
+  await test.step("Knowledge metadata is escaped into the read-only journal", async () => {
+    const row = mutationPanel.getByRole("row").filter({ hasText: maliciousTargetId });
+    await expect(row.getByText("Knowledge object · scope change", { exact: true }))
+      .toBeVisible({ timeout });
+    await expect(row).toContainText(`App: ${maliciousAppId}`);
+    await expect(row).toContainText("Type: Field alias");
+    await expect(row).toContainText("Sharing: App");
+    await expect(row.locator("script, img, a, button, input, textarea, select")).toHaveCount(0);
+    const legacyRow = mutationPanel.getByRole("row").filter({ hasText: legacyTargetId });
+    await expect(legacyRow).toContainText("Saved search");
+    await expect(legacyRow).not.toContainText(/App:|Type:|Sharing:/);
+    await expect(mutationPanel.getByLabel("Target kind").locator("option").filter({
+      hasText: "Knowledge object",
+    })).toHaveCount(1);
+    await expect(mutationPanel.getByLabel("Actions").locator("option").filter({
+      hasText: /^Knowledge object ·/,
+    })).toHaveCount(6);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "__auditScriptExecuted")))
+      .toBeUndefined();
+  });
+
+  await test.step("the read-only projection emits only exact audit List traffic", async () => {
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    expect(auditRequests.length).toBeGreaterThan(0);
+    expect(auditRequests.length).toBeLessThanOrEqual(2);
+    const expectedRequest: ListAuditEventsRequest = {
+      page: { pageSize: 25, pageToken: undefined, includeTotalSize: true },
+      actionFilters: [],
+      actorIdFilter: undefined,
+      targetKindFilter: undefined,
+    };
+    expect(auditRequests).toEqual(Array.from(
+      { length: auditRequests.length },
+      () => expectedRequest,
+    ));
+    expect(apiTraffic.slice(trafficBeforeAudit)).toEqual(Array.from(
+      { length: auditRequests.length },
+      () => ({ method: "POST", pathname: "/api/v1/audit/events/list" }),
+    ));
+    expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+      .toEqual([]);
+    expect(page.url()).toBe(activityURL);
+    expect(await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }))).toEqual(storageBefore);
+  });
 });
 
 test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-only cursor tuple", async ({
