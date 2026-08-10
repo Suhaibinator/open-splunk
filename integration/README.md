@@ -73,6 +73,22 @@ The default image is
 Set `OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE` to exercise another digest-pinned image
 deliberately.
 
+## HEC ingestion-to-SPL vertical
+
+`backend_hec_test.go` builds the shipped server, enables the default-off HEC
+surface, provisions an administrator-created HEC token, and sends concatenated
+JSON and raw events over TLS. It pauses ClickHouse to prove ACKs remain pending,
+then verifies exact typed/provenance projection, public SPL base search,
+grouped `stats`, and `timechart`. A hard server restart proves retained ACK
+state; an independent retry proves documented at-least-once behavior without
+assuming ACK IDs are sequential. The test also checks logs and audit output for
+credential leakage.
+
+```sh
+OPEN_SPLUNK_BACKEND_INTEGRATION=1 \
+  go test ./integration -run '^TestBackendHECVertical$' -count=1 -timeout=8m -v
+```
+
 ## Release OCI and full-stack Compose
 
 `release_oci_integration_test.go` builds the production `server` and

@@ -43,6 +43,51 @@ func TestStoreOutboxRoundTripPreservesExactNormalizedBlock(t *testing.T) {
 	}
 }
 
+func TestStoreOutboxRoundTripPreservesHECSource(t *testing.T) {
+	t.Parallel()
+	batch := validStoreBatch()
+	batch.Source = ingest.HECSource("ingestion-token-record")
+	batch.CollectorID = ""
+	batch.Events[0].Source = batch.Source
+	batch.Events[0].CollectorID = ""
+
+	encoded, err := encodeStoreOutbox(batch)
+	if err != nil {
+		t.Fatalf("encodeStoreOutbox: %v", err)
+	}
+	if !slices.Equal(encoded[:len(storeOutboxHeader)], storeOutboxHeader[:]) {
+		t.Fatalf("outbox header = %v, want %v", encoded[:len(storeOutboxHeader)], storeOutboxHeader)
+	}
+	decoded, err := decodeStoreOutbox(encoded)
+	if err != nil {
+		t.Fatalf("decodeStoreOutbox: %v", err)
+	}
+	if decoded.Source != batch.Source || decoded.CollectorID != "" || decoded.Events[0].Source != batch.Source ||
+		decoded.Events[0].CollectorID != "" {
+		t.Fatalf("decoded HEC provenance = batch %+v event %+v", decoded.Source, decoded.Events[0].Source)
+	}
+}
+
+func TestStoreOutboxDecodesLegacyNativeSource(t *testing.T) {
+	t.Parallel()
+	batch := validStoreBatch()
+	encoded, err := encodeLegacyStoreOutboxForTest(batch)
+	if err != nil {
+		t.Fatalf("encode legacy outbox: %v", err)
+	}
+	decoded, err := decodeStoreOutbox(encoded)
+	if err != nil {
+		t.Fatalf("decode legacy outbox: %v", err)
+	}
+	want := ingest.NativeCollectorSource(batch.CollectorID)
+	if decoded.Source != want || decoded.Events[0].Source != want {
+		t.Fatalf("decoded legacy source = batch %+v event %+v, want %+v", decoded.Source, decoded.Events[0].Source, want)
+	}
+	if deduplicationToken(decoded) != deduplicationToken(batch) {
+		t.Fatal("legacy outbox replay changed the native deduplication identity")
+	}
+}
+
 func TestStoreOutboxRejectsCorruptionAndInconsistentDisposition(t *testing.T) {
 	t.Parallel()
 	batch := validStoreBatch()
@@ -114,7 +159,7 @@ func TestReservationMetadataRoundTripPreservesOriginalRejections(t *testing.T) {
 	row := make([]any, len(eventInsertColumns))
 	row[2] = "main"
 	row[4] = indexTime
-	row[23] = indexTime.Add(72 * time.Hour)
+	row[eventExpiresAtColumn] = indexTime.Add(72 * time.Hour)
 	rejection := &opensplunkv1.EventRejection{
 		EventIndex: 1,
 		EventId:    "rejected",
@@ -147,4 +192,27 @@ func TestReservationMetadataRoundTripPreservesOriginalRejections(t *testing.T) {
 	if _, err := decodeReservationMetadata(corrupted); err == nil {
 		t.Fatal("metadata checksum corruption was accepted")
 	}
+}
+
+func encodeLegacyStoreOutboxForTest(batch ingest.StoreBatch) ([]byte, error) {
+	var body bytes.Buffer
+	writeOutboxBytes(&body, []byte(batch.TenantID))
+	writeOutboxBytes(&body, []byte(batch.CollectorID))
+	writeOutboxBytes(&body, []byte(batch.BatchID))
+	writeOutboxUint64(&body, batch.BatchSequence)
+	_, _ = body.Write(batch.SourceBatchSHA256[:])
+	writeOutboxUint64(&body, uint64(batch.ReceivedAt.UTC().UnixMilli()))
+	writeOutboxUint32(&body, batch.OriginalEventCount)
+	writeOutboxUint32(&body, uint32(len(batch.Events))) // #nosec G115 -- bounded test fixture.
+	marshal := proto.MarshalOptions{Deterministic: true}
+	for _, stored := range batch.Events {
+		encoded, err := marshal.Marshal(stored.Event)
+		if err != nil {
+			return nil, err
+		}
+		writeOutboxBytes(&body, encoded)
+	}
+	digest := sha256.Sum256(body.Bytes())
+	result := append(slices.Clone(legacyStoreOutboxHeader[:]), digest[:]...)
+	return append(result, body.Bytes()...), nil
 }

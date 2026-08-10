@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,6 +18,7 @@ type trackedHandler struct {
 	active   sync.WaitGroup
 
 	drainStarted chan struct{}
+	drained      chan struct{}
 	drainOnce    sync.Once
 }
 
@@ -24,6 +26,7 @@ func newTrackedHandler(next http.Handler) *trackedHandler {
 	return &trackedHandler{
 		next:         next,
 		drainStarted: make(chan struct{}),
+		drained:      make(chan struct{}),
 	}
 }
 
@@ -31,6 +34,12 @@ func (handler *trackedHandler) ServeHTTP(response http.ResponseWriter, request *
 	handler.mu.Lock()
 	if handler.stopping {
 		handler.mu.Unlock()
+		if ownsHECNamespace(request) {
+			// HEC owns its shutdown response taxonomy and health surface. The
+			// HEC lifecycle is already closed before tracked shutdown begins.
+			handler.next.ServeHTTP(response, request)
+			return
+		}
 		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		response.Header().Set("Retry-After", "1")
 		http.Error(response, "server is shutting down", http.StatusServiceUnavailable)
@@ -49,10 +58,35 @@ func (handler *trackedHandler) stopAccepting() {
 }
 
 func (handler *trackedHandler) wait() {
+	_ = handler.waitContext(context.Background())
+}
+
+func (handler *trackedHandler) waitContext(ctx context.Context) error {
 	handler.drainOnce.Do(func() {
 		close(handler.drainStarted)
+		go func() {
+			handler.active.Wait()
+			close(handler.drained)
+		}()
 	})
-	handler.active.Wait()
+	select {
+	case <-handler.drained:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func ownsHECNamespace(request *http.Request) bool {
+	if request == nil || request.URL == nil {
+		return false
+	}
+	for _, path := range []string{request.URL.EscapedPath(), request.URL.Path} {
+		if path == "/services/collector" || strings.HasPrefix(path, "/services/collector/") {
+			return true
+		}
+	}
+	return false
 }
 
 type shutdownServer interface {
@@ -64,12 +98,30 @@ type webSocketShutdown interface {
 	Close(context.Context) error
 }
 
+type httpAdmissionShutdown interface {
+	BeginShutdown()
+	Shutdown(context.Context) error
+}
+
 // shutdownHTTPServer first permits graceful completion, then force-closes
-// connections at the deadline. In either case it waits for every handler to
-// return before run() closes the search manager or its databases.
-func shutdownHTTPServer(server shutdownServer, requests *trackedHandler, webSockets webSocketShutdown, timeout time.Duration) error {
+// connections at the deadline. Admission and handler drains share that bound;
+// a handler that ignores cancellation must not make first-signal shutdown
+// unbounded.
+func shutdownHTTPServer(
+	server shutdownServer,
+	requests *trackedHandler,
+	webSockets webSocketShutdown,
+	timeout time.Duration,
+	admissions ...httpAdmissionShutdown,
+) error {
 	if nilRuntimeDependency(webSockets) {
 		return errors.New("shutdown HTTP server: websocket service is required")
+	}
+	if len(admissions) > 1 || len(admissions) == 1 && nilRuntimeDependency(admissions[0]) {
+		return errors.New("shutdown HTTP server: admission lifecycle is invalid")
+	}
+	if len(admissions) == 1 {
+		admissions[0].BeginShutdown()
 	}
 	requests.stopAccepting()
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -89,6 +141,15 @@ func shutdownHTTPServer(server shutdownServer, requests *trackedHandler, webSock
 		}
 		shutdownErr = errors.Join(fmt.Errorf("graceful HTTP shutdown: %w", shutdownErr), closeErr)
 	}
-	requests.wait()
-	return errors.Join(webSocketErr, shutdownErr)
+	var admissionErr error
+	if len(admissions) == 1 {
+		if err := admissions[0].Shutdown(ctx); err != nil {
+			admissionErr = fmt.Errorf("drain HTTP admission lifecycle: %w", err)
+		}
+	}
+	requestDrainErr := requests.waitContext(ctx)
+	if requestDrainErr != nil {
+		requestDrainErr = fmt.Errorf("drain HTTP handlers: %w", requestDrainErr)
+	}
+	return errors.Join(webSocketErr, shutdownErr, admissionErr, requestDrainErr)
 }

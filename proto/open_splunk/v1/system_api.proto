@@ -33,6 +33,9 @@ enum ServerFeature {
   // validation, resolution, snapshot, execution, and browser family exists.
   // Declaring the wire value alone does not advertise the feature.
   SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS = 15;
+  // The complete configured HEC v0.1 family is available: JSON, raw,
+  // acknowledgment, health, purpose isolation, and durable staging.
+  SERVER_FEATURE_HEC_INGESTION = 16;
 }
 
 message BrowserApiLimits {

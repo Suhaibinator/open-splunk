@@ -7,8 +7,10 @@ import Link from "next/link";
 import { SortDirection } from "@/gen/ts/open_splunk/v1/common";
 import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
+  IngestionTokenPurpose,
   IngestionTokenState,
   type IngestionToken,
+  type IngestionTokenHecProfile,
 } from "@/gen/ts/open_splunk/v1/collector_admin";
 import { IngestionTokenSortBy } from "@/gen/ts/open_splunk/v1/collector_admin_api";
 import {
@@ -93,6 +95,8 @@ interface TokenCreateDefinitionSnapshot {
   description: string;
   boundCollectorId: string;
   allowedIndexNames: string[];
+  purpose: IngestionTokenPurpose;
+  hecProfile: IngestionTokenHecProfile | undefined;
   expiresAt: Date | undefined;
   armedServerTimeMs: number;
   dispatchedServerTimeMs: number | null;
@@ -128,6 +132,14 @@ interface PersistedTokenCreateGuardV1 {
     description: string;
     boundCollectorId: string;
     allowedIndexNames: string[];
+    purpose?: IngestionTokenPurpose;
+    hecProfile?: {
+      defaultIndexName: string | null;
+      defaultHost: string | null;
+      defaultSource: string | null;
+      defaultSourcetype: string | null;
+      indexerAcknowledgment: boolean;
+    } | null;
     expiresAt: string | null;
     armedServerTimeMs: number;
     dispatchedServerTimeMs: number | null;
@@ -178,11 +190,127 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
 function validCollectorId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
 }
 
-function serializeTokenCreateGuard(
+function tokenUsesHEC(purpose: IngestionTokenPurpose): boolean {
+  return purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC;
+}
+
+export function tokenPurposeLabel(purpose: IngestionTokenPurpose): string {
+  if (purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC) return "HEC";
+  if (purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR) {
+    return "Native collector";
+  }
+  return "Unknown";
+}
+
+function hecProfileSummary(profile: IngestionTokenHecProfile | undefined): string {
+  if (profile === undefined) return "Profile unavailable";
+  const defaults = [
+    profile.defaultIndexName ? `index ${profile.defaultIndexName}` : null,
+    profile.defaultHost ? `host ${profile.defaultHost}` : null,
+    profile.defaultSource ? `source ${profile.defaultSource}` : null,
+    profile.defaultSourcetype ? `sourcetype ${profile.defaultSourcetype}` : null,
+  ].filter((value): value is string => value !== null);
+  return defaults.length === 0 ? "No token defaults" : `Defaults: ${defaults.join(" · ")}`;
+}
+
+function isASCIIWhitespaceCodeUnit(codeUnit: number): boolean {
+  return codeUnit === 0x20 || (codeUnit >= 0x09 && codeUnit <= 0x0d);
+}
+
+export function validHECMetadataDefault(value: string): boolean {
+  if (value.length === 0) return true;
+  const byteLength = new TextEncoder().encode(value).byteLength;
+  const hasInvalidScalar = [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f
+      || (codePoint >= 0x7f && codePoint <= 0x9f)
+      || (codePoint >= 0xd800 && codePoint <= 0xdfff);
+  });
+  return byteLength <= 255
+    && !hasInvalidScalar
+    && !isASCIIWhitespaceCodeUnit(value.charCodeAt(0))
+    && !isASCIIWhitespaceCodeUnit(value.charCodeAt(value.length - 1));
+}
+
+interface HECProfileFormValue {
+  defaultIndexName: string;
+  defaultHost: string;
+  defaultSource: string;
+  defaultSourcetype: string;
+  indexerAcknowledgment: boolean;
+}
+
+export function hecProfileFromForm(value: HECProfileFormValue): IngestionTokenHecProfile {
+  return {
+    defaultIndexName: value.defaultIndexName || undefined,
+    defaultHost: value.defaultHost || undefined,
+    defaultSource: value.defaultSource || undefined,
+    defaultSourcetype: value.defaultSourcetype || undefined,
+    indexerAcknowledgment: value.indexerAcknowledgment,
+  };
+}
+
+function hecProfilesMatch(
+  left: IngestionTokenHecProfile | undefined,
+  right: IngestionTokenHecProfile | undefined,
+): boolean {
+  return left?.defaultIndexName === right?.defaultIndexName
+    && left?.defaultHost === right?.defaultHost
+    && left?.defaultSource === right?.defaultSource
+    && left?.defaultSourcetype === right?.defaultSourcetype
+    && left?.indexerAcknowledgment === right?.indexerAcknowledgment;
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+export function hecCurlExample(
+  normalizedApiBaseUrl: string | null,
+  purpose: IngestionTokenPurpose,
+  plaintextToken: string | null,
+  indexName: string | null,
+): string | null {
+  if (
+    normalizedApiBaseUrl === null
+    || !tokenUsesHEC(purpose)
+    || plaintextToken === null
+    || plaintextToken.length === 0
+    || indexName === null
+    || indexName.length === 0
+  ) {
+    return null;
+  }
+  const endpoint = `${normalizedApiBaseUrl.replace(/\/+$/, "")}/services/collector/event`;
+  const body = JSON.stringify({ event: "hello from Open Splunk", index: indexName });
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "umask 077",
+    "read -r -s -p 'HEC token: ' OPEN_SPLUNK_HEC_TOKEN",
+    "printf '\\n' >&2",
+    'OPEN_SPLUNK_HEC_CONFIG="$(mktemp "${TMPDIR:-/tmp}/open-splunk-hec.XXXXXX")"',
+    'trap \'rm -f -- "$OPEN_SPLUNK_HEC_CONFIG"\' EXIT',
+    "trap 'exit 1' HUP INT TERM",
+    'chmod 600 "$OPEN_SPLUNK_HEC_CONFIG"',
+    'printf \'header = "Authorization: Splunk %s"\\n\' "$OPEN_SPLUNK_HEC_TOKEN" > "$OPEN_SPLUNK_HEC_CONFIG"',
+    "unset OPEN_SPLUNK_HEC_TOKEN",
+    `curl --fail-with-body --request POST --config "$OPEN_SPLUNK_HEC_CONFIG" ${shellSingleQuote(endpoint)} \\`,
+    `  --header 'Content-Type: application/json' \\`,
+    `  --header 'X-Splunk-Request-Channel: 00000000-0000-0000-0000-000000000001' \\`,
+    `  --data ${shellSingleQuote(body)}`,
+  ].join("\n");
+}
+
+export function serializeTokenCreateGuard(
   normalizedApiBaseUrl: string,
   recovery: TokenCreateRecovery,
   knownIssuedTokenId: string | null,
@@ -198,6 +326,14 @@ function serializeTokenCreateGuard(
       description: recovery.definition.description,
       boundCollectorId: recovery.definition.boundCollectorId,
       allowedIndexNames: [...recovery.definition.allowedIndexNames],
+      purpose: recovery.definition.purpose,
+      hecProfile: recovery.definition.hecProfile === undefined ? null : {
+        defaultIndexName: recovery.definition.hecProfile.defaultIndexName ?? null,
+        defaultHost: recovery.definition.hecProfile.defaultHost ?? null,
+        defaultSource: recovery.definition.hecProfile.defaultSource ?? null,
+        defaultSourcetype: recovery.definition.hecProfile.defaultSourcetype ?? null,
+        indexerAcknowledgment: recovery.definition.hecProfile.indexerAcknowledgment,
+      },
       expiresAt: recovery.definition.expiresAt?.toISOString() ?? null,
       armedServerTimeMs: recovery.definition.armedServerTimeMs,
       dispatchedServerTimeMs: recovery.definition.dispatchedServerTimeMs,
@@ -216,7 +352,7 @@ function serializeTokenCreateGuard(
   };
 }
 
-function parsePersistedTokenCreateGuard(
+export function parsePersistedTokenCreateGuard(
   raw: string,
   normalizedApiBaseUrl: string,
 ): { recovery: TokenCreateRecovery; knownIssuedTokenId: string | null } | null {
@@ -229,6 +365,47 @@ function parsePersistedTokenCreateGuard(
   if (typeof value !== "object" || value === null) return null;
   const record = value as Partial<PersistedTokenCreateGuardV1>;
   const definition = record.definition;
+  const persistedPurpose = definition?.purpose
+    ?? IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
+  const persistedHECProfile = definition?.hecProfile ?? null;
+  const allowedIndexNames = isStringArray(definition?.allowedIndexNames)
+    ? definition.allowedIndexNames
+    : [];
+  const validPersistedHECProfile = typeof persistedHECProfile === "object"
+    && persistedHECProfile !== null
+    && isNullableString(persistedHECProfile.defaultIndexName)
+    && (
+      persistedHECProfile.defaultIndexName === null
+      || (
+        persistedHECProfile.defaultIndexName.length > 0
+        && allowedIndexNames.includes(persistedHECProfile.defaultIndexName)
+      )
+    )
+    && isNullableString(persistedHECProfile.defaultHost)
+    && (
+      persistedHECProfile.defaultHost === null
+      || (
+        persistedHECProfile.defaultHost.length > 0
+        && validHECMetadataDefault(persistedHECProfile.defaultHost)
+      )
+    )
+    && isNullableString(persistedHECProfile.defaultSource)
+    && (
+      persistedHECProfile.defaultSource === null
+      || (
+        persistedHECProfile.defaultSource.length > 0
+        && validHECMetadataDefault(persistedHECProfile.defaultSource)
+      )
+    )
+    && isNullableString(persistedHECProfile.defaultSourcetype)
+    && (
+      persistedHECProfile.defaultSourcetype === null
+      || (
+        persistedHECProfile.defaultSourcetype.length > 0
+        && validHECMetadataDefault(persistedHECProfile.defaultSourcetype)
+      )
+    )
+    && typeof persistedHECProfile.indexerAcknowledgment === "boolean";
   if (
     record.schemaVersion !== 1
     || record.apiBaseUrl !== normalizedApiBaseUrl
@@ -243,10 +420,21 @@ function parsePersistedTokenCreateGuard(
     || definition.name.length === 0
     || typeof definition.description !== "string"
     || typeof definition.boundCollectorId !== "string"
-    || !validCollectorId(definition.boundCollectorId)
     || !isStringArray(definition.allowedIndexNames)
     || definition.allowedIndexNames.length === 0
     || new Set(definition.allowedIndexNames).size !== definition.allowedIndexNames.length
+    || (
+      persistedPurpose !== IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR
+      && persistedPurpose !== IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC
+    )
+    || (
+      persistedPurpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR
+      && (!validCollectorId(definition.boundCollectorId) || persistedHECProfile !== null)
+    )
+    || (
+      persistedPurpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC
+      && (definition.boundCollectorId.length !== 0 || !validPersistedHECProfile)
+    )
     || !(definition.expiresAt === null || typeof definition.expiresAt === "string")
     || !isFiniteNumber(definition.armedServerTimeMs)
     || !(definition.dispatchedServerTimeMs === null
@@ -286,6 +474,17 @@ function parsePersistedTokenCreateGuard(
         description: definition.description,
         boundCollectorId: definition.boundCollectorId,
         allowedIndexNames: [...new Set(definition.allowedIndexNames)].toSorted(),
+        purpose: persistedPurpose,
+        hecProfile: persistedPurpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC
+          && validPersistedHECProfile
+          ? {
+              defaultIndexName: persistedHECProfile.defaultIndexName ?? undefined,
+              defaultHost: persistedHECProfile.defaultHost ?? undefined,
+              defaultSource: persistedHECProfile.defaultSource ?? undefined,
+              defaultSourcetype: persistedHECProfile.defaultSourcetype ?? undefined,
+              indexerAcknowledgment: persistedHECProfile.indexerAcknowledgment,
+            }
+          : undefined,
         expiresAt,
         armedServerTimeMs: definition.armedServerTimeMs,
         dispatchedServerTimeMs: definition.dispatchedServerTimeMs,
@@ -407,6 +606,11 @@ function tokenCanBeRevoked(token: IngestionToken): boolean {
     || token.state === IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED;
 }
 
+export function tokenCanSetEnabled(token: IngestionToken): boolean {
+  return token.state === IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE
+    || token.state === IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED;
+}
+
 function tokenIsTerminallySafe(token: IngestionToken): boolean {
   return token.state === IngestionTokenState.INGESTION_TOKEN_STATE_REVOKED
     || token.state === IngestionTokenState.INGESTION_TOKEN_STATE_EXPIRED;
@@ -463,7 +667,9 @@ function tokenMatchesCreateMetadata(
     || !hasSameStrings(constraints.allowedIndexNames, definition.allowedIndexNames)
     || constraints.allowedHostRegexes.length !== 0
     || constraints.allowedSourceRegexes.length !== 0
-    || constraints.boundCollectorId !== definition.boundCollectorId
+    || (constraints.boundCollectorId ?? "") !== definition.boundCollectorId
+    || token.purpose !== definition.purpose
+    || !hecProfilesMatch(token.hecProfile, definition.hecProfile)
     || (token.expiresAt?.valueOf() ?? null) !== (definition.expiresAt?.valueOf() ?? null)
   ) {
     return false;
@@ -699,6 +905,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const [tokenDescription, setTokenDescription] = useState("");
   const [tokenCollectorId, setTokenCollectorId] = useState("");
   const [tokenIndexes, setTokenIndexes] = useState<Set<string>>(new Set());
+  const [tokenPurpose, setTokenPurpose] = useState(
+    IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR,
+  );
+  const [tokenHECDefaultIndex, setTokenHECDefaultIndex] = useState("");
+  const [tokenHECDefaultHost, setTokenHECDefaultHost] = useState("");
+  const [tokenHECDefaultSource, setTokenHECDefaultSource] = useState("");
+  const [tokenHECDefaultSourcetype, setTokenHECDefaultSourcetype] = useState("");
+  const [tokenHECIndexerAcknowledgment, setTokenHECIndexerAcknowledgment] = useState(false);
   const [tokenExpiration, setTokenExpiration] = useState("");
   const [tokenSecret, setTokenSecret] = useState<string | null>(null);
   const [issuedToken, setIssuedToken] = useState<IngestionToken | null>(null);
@@ -1387,6 +1601,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     setTokenDescription("");
     setTokenCollectorId("");
     setTokenIndexes(new Set(ingestibleTokenScopes.slice(0, 1).map((scope) => scope.name)));
+    setTokenPurpose(IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR);
+    setTokenHECDefaultIndex("");
+    setTokenHECDefaultHost("");
+    setTokenHECDefaultSource("");
+    setTokenHECDefaultSourcetype("");
+    setTokenHECIndexerAcknowledgment(false);
     setTokenExpiration("");
     setTokenSecret(null);
     setIssuedToken(null);
@@ -1498,6 +1718,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       setTokenDescription(current.description ?? "");
       setTokenCollectorId(current.constraints?.boundCollectorId ?? "");
       setTokenIndexes(new Set(current.constraints?.allowedIndexNames ?? []));
+      setTokenPurpose(current.purpose);
+      setTokenHECDefaultIndex(current.hecProfile?.defaultIndexName ?? "");
+      setTokenHECDefaultHost(current.hecProfile?.defaultHost ?? "");
+      setTokenHECDefaultSource(current.hecProfile?.defaultSource ?? "");
+      setTokenHECDefaultSourcetype(current.hecProfile?.defaultSourcetype ?? "");
+      setTokenHECIndexerAcknowledgment(current.hecProfile?.indexerAcknowledgment ?? false);
       setTokenExpiration(dateTimeLocalValue(current.expiresAt));
       setTokenSecret(null);
       setModal("edit-token");
@@ -1905,7 +2131,11 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
 
   async function createToken(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (tokenName.trim().length === 0 || !validCollectorId(tokenCollectorId)) return;
+    const creatingHECToken = tokenUsesHEC(tokenPurpose);
+    if (
+      tokenName.trim().length === 0
+      || (!creatingHECToken && !validCollectorId(tokenCollectorId))
+    ) return;
     if (serverClockAnchor === null) {
       setToast({
         message: "Token generation is disabled until system bootstrap supplies an authoritative server clock.",
@@ -1982,11 +2212,20 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
         throw new Error("System bootstrap no longer supplies an authoritative server clock.");
       }
       const expiresAt = expirationFromForm(tokenExpiration, initialServerTimeMs);
+      const hecProfile = creatingHECToken ? hecProfileFromForm({
+        defaultIndexName: tokenHECDefaultIndex,
+        defaultHost: tokenHECDefaultHost,
+        defaultSource: tokenHECDefaultSource,
+        defaultSourcetype: tokenHECDefaultSourcetype,
+        indexerAcknowledgment: tokenHECIndexerAcknowledgment,
+      }) : undefined;
       const definition: TokenCreateDefinitionSnapshot = {
         name: tokenName.trim(),
         description: tokenDescription.trim(),
-        boundCollectorId: tokenCollectorId,
+        boundCollectorId: creatingHECToken ? "" : tokenCollectorId,
         allowedIndexNames: [...tokenIndexes].toSorted(),
+        purpose: tokenPurpose,
+        hecProfile,
         expiresAt,
         armedServerTimeMs: initialServerTimeMs,
         dispatchedServerTimeMs: null,
@@ -2042,10 +2281,12 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             allowedIndexNames: definition.allowedIndexNames,
             allowedHostRegexes: [],
             allowedSourceRegexes: [],
-            boundCollectorId: definition.boundCollectorId,
+            boundCollectorId: definition.boundCollectorId || undefined,
           },
           expiresAt: definition.expiresAt,
           ingestionRateLimits: undefined,
+          purpose: definition.purpose,
+          hecProfile: definition.hecProfile,
         },
         clientRequestId: undefined,
       });
@@ -2213,11 +2454,36 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     event.preventDefault();
     const target = tokenEditTarget;
     if (target === null || tokenName.trim().length === 0 || tokenIndexes.size === 0) return;
+    const targetUsesHEC = tokenUsesHEC(target.purpose);
+    if (targetUsesHEC && tokenHECProfileInvalid) return;
+    const updatedHECProfile = targetUsesHEC ? hecProfileFromForm({
+      defaultIndexName: tokenHECDefaultIndex,
+      defaultHost: tokenHECDefaultHost,
+      defaultSource: tokenHECDefaultSource,
+      defaultSourcetype: tokenHECDefaultSourcetype,
+      indexerAcknowledgment: tokenHECIndexerAcknowledgment,
+    }) : undefined;
+    const hecProfileChanged = targetUsesHEC
+      && !hecProfilesMatch(updatedHECProfile, target.hecProfile);
+    const scopeChanged = !hasSameStrings(
+      tokenIndexes,
+      target.constraints?.allowedIndexNames ?? [],
+    );
     const updateMask: string[] = [];
     if (tokenName.trim() !== target.name) updateMask.push("name");
     if (tokenDescription !== (target.description ?? "")) updateMask.push("description");
-    if (!hasSameStrings(tokenIndexes, target.constraints?.allowedIndexNames ?? [])) {
+    const profileCanBeAppliedBeforeScope = updatedHECProfile?.defaultIndexName === undefined
+      || (target.constraints?.allowedIndexNames ?? []).includes(
+        updatedHECProfile.defaultIndexName,
+      );
+    if (hecProfileChanged && profileCanBeAppliedBeforeScope) {
+      updateMask.push("hec_profile");
+    }
+    if (scopeChanged) {
       updateMask.push("constraints");
+    }
+    if (hecProfileChanged && !profileCanBeAppliedBeforeScope) {
+      updateMask.push("hec_profile");
     }
     if (
       target.constraints?.boundCollectorId === undefined
@@ -2242,10 +2508,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             allowedSourceRegexes: [],
             ...target.constraints,
             allowedIndexNames: [...tokenIndexes].toSorted(),
-            boundCollectorId: tokenCollectorId || target.constraints?.boundCollectorId,
+            boundCollectorId: targetUsesHEC
+              ? undefined
+              : tokenCollectorId || target.constraints?.boundCollectorId,
           },
           expiresAt: expirationFromForm(tokenExpiration, authoritativeServerNowMs()),
           ingestionRateLimits: target.ingestionRateLimits,
+          purpose: target.purpose,
+          hecProfile: updatedHECProfile,
         },
         updateMask,
       });
@@ -2296,6 +2566,60 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       throw new Error("The server did not return the requested token.");
     }
     return current;
+  }
+
+  async function setTokenEnabled(token: IngestionToken, enabled: boolean) {
+    cancelTokenLoadMoreRequest();
+    const targetState = enabled
+      ? IngestionTokenState.INGESTION_TOKEN_STATE_ACTIVE
+      : IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED;
+    const operation = enabled ? "re-enable" : "disable";
+    setBusy(`token-state-${token.ingestionTokenId}`);
+    try {
+      const response = await client.ingestionTokens.setState({
+        ingestionTokenId: token.ingestionTokenId,
+        expectedVersion: token.version,
+        enabled,
+      });
+      const updated = response.ingestionToken;
+      if (
+        updated === undefined
+        || updated.ingestionTokenId !== token.ingestionTokenId
+        || updated.version !== token.version + 1n
+        || updated.state !== targetState
+        || updated.revokedAt !== undefined
+      ) {
+        throw new Error(`The server did not confirm token ${operation}.`);
+      }
+      storeTokenSnapshot(updated);
+      setToast({
+        message: `Token “${updated.name}” was ${enabled ? "re-enabled" : "disabled"}.`,
+        kind: "success",
+      });
+    } catch (stateError) {
+      try {
+        const current = await readCurrentToken(token);
+        storeTokenSnapshot(current);
+        if (current.state === targetState) {
+          setToast({
+            message: `Token “${current.name}” is confirmed ${enabled ? "active" : "disabled"}.`,
+            kind: "success",
+          });
+        } else {
+          setToast({
+            message: `Token ${operation} was not confirmed: ${errorMessage(stateError)} The latest ${tokenStateLabel(current.state).toLowerCase()} token version was loaded.`,
+            kind: "warning",
+          });
+        }
+      } catch (refreshError) {
+        setToast({
+          message: `Token ${operation} was not confirmed: ${errorMessage(stateError)} The token could not be reconciled: ${errorMessage(refreshError)}`,
+          kind: "warning",
+        });
+      }
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function reconcileNormalRevoke(token: IngestionToken, revokeError: unknown) {
@@ -2681,14 +3005,34 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       : [];
   const ingestibleTokenScopes = tokenScopeOptions.filter((option) => option.ingestible);
   const ingestibleIndexNames = new Set(ingestibleTokenScopes.map((option) => option.name));
+  const creatingHECToken = tokenUsesHEC(tokenPurpose);
+  const editingHECToken = tokenEditTarget !== null && tokenUsesHEC(tokenEditTarget.purpose);
+  const editingNativeToken = tokenEditTarget?.purpose
+    === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
   const tokenScopeChanged = tokenEditTarget !== null
     && !hasSameStrings(tokenIndexes, tokenEditTarget.constraints?.allowedIndexNames ?? []);
   const tokenBindingChanged = tokenEditTarget !== null
+    && editingNativeToken
     && tokenEditTarget.constraints?.boundCollectorId === undefined
     && validCollectorId(tokenCollectorId);
   const tokenHasUnavailableScope = [...tokenIndexes].some((name) => !ingestibleIndexNames.has(name));
   const tokenScopeInvalid = tokenScopeChanged && tokenHasUnavailableScope;
   const tokenCollectorIdInvalid = !validCollectorId(tokenCollectorId);
+  const tokenHECDefaultIndexInvalid = tokenHECDefaultIndex.length > 0
+    && !tokenIndexes.has(tokenHECDefaultIndex);
+  const tokenHECMetadataInvalid = !validHECMetadataDefault(tokenHECDefaultHost)
+    || !validHECMetadataDefault(tokenHECDefaultSource)
+    || !validHECMetadataDefault(tokenHECDefaultSourcetype);
+  const tokenHECProfileInvalid = tokenHECDefaultIndexInvalid || tokenHECMetadataInvalid;
+  const tokenHECProfile = hecProfileFromForm({
+    defaultIndexName: tokenHECDefaultIndex,
+    defaultHost: tokenHECDefaultHost,
+    defaultSource: tokenHECDefaultSource,
+    defaultSourcetype: tokenHECDefaultSourcetype,
+    indexerAcknowledgment: tokenHECIndexerAcknowledgment,
+  });
+  const tokenHECProfileChanged = editingHECToken
+    && !hecProfilesMatch(tokenHECProfile, tokenEditTarget.hecProfile);
   const tokenCreationBlockReason = serverClockAnchor === null
     ? "System bootstrap has not supplied an authoritative server clock. Token generation is disabled so a one-time credential can always be reconciled safely."
     : normalizedApiBaseUrl === null
@@ -2707,7 +3051,8 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const tokenCreateScopeInvalid = tokenScopeSource === "unavailable"
     || tokenIndexes.size === 0
     || tokenHasUnavailableScope
-    || tokenCollectorIdInvalid
+    || (!creatingHECToken && tokenCollectorIdInvalid)
+    || (creatingHECToken && tokenHECProfileInvalid)
     || tokenCreationBlockReason !== null;
   const indexDefinition = indexEditTarget?.definition;
   const indexHasChanges = indexDefinition !== undefined && (
@@ -2722,6 +3067,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     || tokenDescription !== (tokenEditTarget.description ?? "")
     || tokenScopeChanged
     || tokenBindingChanged
+    || tokenHECProfileChanged
     || tokenExpiration !== dateTimeLocalValue(tokenEditTarget.expiresAt)
   );
   const activeIndexes = indexes.filter((index) => index.state === IndexState.INDEX_STATE_ACTIVE).length;
@@ -2729,6 +3075,16 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const tokenRevealOpen = issuedToken !== null;
   const tokenRecoveryOpen = tokenCreateRecovery !== null;
   const tokenResolutionOpen = tokenRevealOpen || tokenRecoveryOpen;
+  const issuedHECCurlExample = issuedToken === null
+    ? null
+    : hecCurlExample(
+        normalizedApiBaseUrl,
+        issuedToken.purpose,
+        tokenSecret,
+        issuedToken.hecProfile?.defaultIndexName
+          ?? issuedToken.constraints?.allowedIndexNames[0]
+          ?? null,
+      );
   const knowledgeFeatureAdvertised = bootstrap !== null && supportsServerFeature(
     bootstrap,
     ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
@@ -2886,6 +3242,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               onReload={load}
               onLoadMore={() => void loadMoreTokens()}
               onRevoke={setRevokeTarget}
+              onSetEnabled={(token, enabled) => void setTokenEnabled(token, enabled)}
               canCreate={ingestibleTokenScopes.length > 0 && tokenCreationBlockReason === null}
               createBlockReason={tokenCreationBlockReason}
               indexState={indexState}
@@ -3088,9 +3445,31 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             <form className="admin-form" id="create-token-form" onSubmit={(event) => void createToken(event)}>
               <label htmlFor="new-token-name"><span>Token name</span><input id="new-token-name" value={tokenName} onChange={(event) => setTokenName(event.target.value)} placeholder="prod-api-collector" autoComplete="off" /></label>
               <label htmlFor="new-token-description"><span>Description <small>(optional)</small></span><input id="new-token-description" value={tokenDescription} onChange={(event) => setTokenDescription(event.target.value)} placeholder="Production collector credential" /></label>
-              <label htmlFor="new-token-collector-id"><span>Collector ID</span><input id="new-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} placeholder="Paste the collector’s stable ID" autoComplete="off" aria-invalid={tokenCollectorId.length > 0 && tokenCollectorIdInvalid} /><small>Run <code>open-splunk-collector identity -config PATH</code> against the collector’s final state directory, then paste the printed ID. The binding cannot be changed after creation.</small></label>
-              {tokenCollectorId.length > 0 && tokenCollectorIdInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Collector ID is invalid</strong><p>Use 1–128 ASCII characters: start with a letter or number, then use letters, numbers, dot, underscore, colon, or hyphen.</p></div></div> : null}
+              <label htmlFor="new-token-purpose"><span>Purpose</span><select id="new-token-purpose" value={tokenPurpose} onChange={(event) => { const next = Number(event.target.value) as IngestionTokenPurpose; setTokenPurpose(next); if (tokenUsesHEC(next)) setTokenCollectorId(""); }}><option value={IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR}>Native collector</option><option value={IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC}>HTTP Event Collector (HEC)</option></select><small>Purpose is an immutable transport boundary. Rotate the credential to use a different ingestion surface.</small></label>
+              {creatingHECToken ? null : (
+                <>
+                  <label htmlFor="new-token-collector-id"><span>Collector ID</span><input id="new-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} placeholder="Paste the collector’s stable ID" autoComplete="off" aria-invalid={tokenCollectorIdInvalid} /><small>Run <code>open-splunk-collector identity -config PATH</code> against the collector’s final state directory, then paste the printed ID. The binding cannot be changed after creation.</small></label>
+                  {tokenCollectorIdInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Collector ID is invalid</strong><p>Use 1–128 ASCII characters: start with a letter or number, then use letters, numbers, dot, underscore, colon, or hyphen.</p></div></div> : null}
+                </>
+              )}
               <TokenScopePicker idPrefix="new-token" options={tokenScopeOptions} selected={tokenIndexes} onChange={setTokenIndexes} disabled={tokenScopeSource === "unavailable"} />
+              {creatingHECToken ? (
+                <HECTokenProfileFields
+                  idPrefix="new-token"
+                  selectedIndexes={tokenIndexes}
+                  defaultIndex={tokenHECDefaultIndex}
+                  onDefaultIndexChange={setTokenHECDefaultIndex}
+                  defaultHost={tokenHECDefaultHost}
+                  onDefaultHostChange={setTokenHECDefaultHost}
+                  defaultSource={tokenHECDefaultSource}
+                  onDefaultSourceChange={setTokenHECDefaultSource}
+                  defaultSourcetype={tokenHECDefaultSourcetype}
+                  onDefaultSourcetypeChange={setTokenHECDefaultSourcetype}
+                  indexerAcknowledgment={tokenHECIndexerAcknowledgment}
+                  onIndexerAcknowledgmentChange={setTokenHECIndexerAcknowledgment}
+                />
+              ) : null}
+              {creatingHECToken && tokenHECProfileInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>HEC defaults are invalid</strong><p>The default index must remain in the allowed scope. Metadata defaults must contain 1–255 UTF-8 bytes without control characters or surrounding ASCII whitespace.</p></div></div> : null}
               {tokenHasUnavailableScope ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Choose an available scope</strong><p>Tokens can only be generated for active, ingestion-enabled indexes. Remove the unavailable scope before continuing.</p></div></div> : null}
               {tokenScopeSource === "unavailable" ? <div className="access-mode-notice" role="note"><span>i</span><div><strong>Index scopes are unavailable</strong><p>Token generation is disabled until the server returns an authoritative index summary.</p></div></div> : null}
               {tokenCreationBlockReason === null ? null : <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Token generation is locked</strong><p>{tokenCreationBlockReason}</p></div></div>}
@@ -3107,6 +3486,14 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
                 <>
                   <p>Copy this credential now. Closing, reloading, or navigating away cannot reveal it again.</p>
                   <div><code>{tokenSecret}</code><button id="copy-issued-token" type="button" onClick={() => void navigator.clipboard.writeText(tokenSecret).then(() => setToast({ message: "Token copied to the clipboard.", kind: "success" }), () => setToast({ message: "Copy failed. Select the token text and copy it manually.", kind: "warning" }))}>Copy token</button></div>
+                  {issuedHECCurlExample === null ? null : (
+                    <section className="token-recovery-summary" aria-label="HEC curl example" style={{ gridColumn: "1 / -1" }}>
+                      <strong>Send a test HEC event</strong>
+                      <p>This command contains the one-time credential and disappears permanently when this dialog is dismissed.</p>
+                      <pre style={{ overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}><code>{issuedHECCurlExample}</code></pre>
+                      <button type="button" onClick={() => void navigator.clipboard.writeText(issuedHECCurlExample).then(() => setToast({ message: "HEC curl example copied to the clipboard.", kind: "success" }), () => setToast({ message: "Copy failed. Select the curl command and copy it manually.", kind: "warning" }))}>Copy curl example</button>
+                    </section>
+                  )}
                   <label className="admin-checkbox" htmlFor="token-secret-acknowledgement" aria-label="I stored this ingestion token securely">
                     <input
                       id="token-secret-acknowledgement"
@@ -3132,13 +3519,32 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             setTokenEditTarget(null);
             setModal(null);
           }}
-          footer={<><button className="button secondary" type="button" onClick={() => { setTokenEditTarget(null); setModal(null); }} disabled={busy !== null}>Cancel</button><button className="button primary" type="submit" form="edit-token-form" disabled={busy !== null || !tokenHasChanges || tokenName.trim().length === 0 || tokenIndexes.size === 0 || tokenScopeInvalid || (tokenCollectorId.length > 0 && tokenCollectorIdInvalid)}>{busy === `update-token-${tokenEditTarget.ingestionTokenId}` ? "Saving…" : "Save changes"}</button></>}
+          footer={<><button className="button secondary" type="button" onClick={() => { setTokenEditTarget(null); setModal(null); }} disabled={busy !== null}>Cancel</button><button className="button primary" type="submit" form="edit-token-form" disabled={busy !== null || !tokenHasChanges || tokenName.trim().length === 0 || tokenIndexes.size === 0 || tokenScopeInvalid || (editingHECToken ? tokenHECProfileInvalid : editingNativeToken ? tokenCollectorId.length > 0 && tokenCollectorIdInvalid : true)}>{busy === `update-token-${tokenEditTarget.ingestionTokenId}` ? "Saving…" : "Save changes"}</button></>}
         >
           <form className="admin-form" id="edit-token-form" onSubmit={(event) => void updateToken(event)}>
             <label htmlFor="edit-token-name"><span>Token name</span><input id="edit-token-name" value={tokenName} onChange={(event) => setTokenName(event.target.value)} autoComplete="off" /></label>
             <label htmlFor="edit-token-description"><span>Description <small>(optional)</small></span><input id="edit-token-description" value={tokenDescription} onChange={(event) => setTokenDescription(event.target.value)} placeholder="Production collector credential" /></label>
-            <label htmlFor="edit-token-collector-id"><span>Collector ID</span><input id="edit-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} readOnly={tokenEditTarget.constraints?.boundCollectorId !== undefined} placeholder="Bind this legacy token once" autoComplete="off" aria-invalid={tokenCollectorId.length > 0 && tokenCollectorIdInvalid} /><small>{tokenEditTarget.constraints?.boundCollectorId === undefined ? "This upgraded legacy token cannot use native gRPC until it is bound. Binding is one-way." : "This security binding is immutable. Rotate the token to use a different collector ID."}</small></label>
+            <div className="access-mode-notice" role="note"><span>i</span><div><strong>{tokenPurposeLabel(tokenEditTarget.purpose)} purpose</strong><p>The token purpose is immutable. {editingHECToken ? "Indexer acknowledgment mode is also fixed at creation." : editingNativeToken ? "This credential can authorize only the native collector transport." : "The server returned an unknown purpose, so transport-specific settings are unavailable."}</p></div></div>
+            {editingNativeToken ? <label htmlFor="edit-token-collector-id"><span>Collector ID</span><input id="edit-token-collector-id" value={tokenCollectorId} onChange={(event) => setTokenCollectorId(event.target.value)} readOnly={tokenEditTarget.constraints?.boundCollectorId !== undefined} placeholder="Bind this legacy token once" autoComplete="off" aria-invalid={tokenCollectorId.length > 0 && tokenCollectorIdInvalid} /><small>{tokenEditTarget.constraints?.boundCollectorId === undefined ? "This upgraded legacy token cannot use native gRPC until it is bound. Binding is one-way." : "This security binding is immutable. Rotate the token to use a different collector ID."}</small></label> : null}
             <TokenScopePicker idPrefix="edit-token" options={tokenScopeOptions} selected={tokenIndexes} onChange={setTokenIndexes} disabled={tokenScopeSource === "unavailable"} />
+            {editingHECToken ? (
+              <HECTokenProfileFields
+                idPrefix="edit-token"
+                selectedIndexes={tokenIndexes}
+                defaultIndex={tokenHECDefaultIndex}
+                onDefaultIndexChange={setTokenHECDefaultIndex}
+                defaultHost={tokenHECDefaultHost}
+                onDefaultHostChange={setTokenHECDefaultHost}
+                defaultSource={tokenHECDefaultSource}
+                onDefaultSourceChange={setTokenHECDefaultSource}
+                defaultSourcetype={tokenHECDefaultSourcetype}
+                onDefaultSourcetypeChange={setTokenHECDefaultSourcetype}
+                indexerAcknowledgment={tokenHECIndexerAcknowledgment}
+                onIndexerAcknowledgmentChange={setTokenHECIndexerAcknowledgment}
+                acknowledgmentReadOnly
+              />
+            ) : null}
+            {editingHECToken && tokenHECProfileInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>HEC defaults are invalid</strong><p>The default index must remain in the allowed scope. Metadata defaults must contain 1–255 UTF-8 bytes without control characters or surrounding ASCII whitespace.</p></div></div> : null}
             {tokenScopeInvalid ? <div className="access-mode-notice" role="alert"><span>!</span><div><strong>Remove unavailable scopes</strong><p>Tokens can only be saved with active, ingestion-enabled indexes. Uncheck the unavailable scope before saving.</p></div></div> : null}
             {tokenScopeSource === "unavailable" ? <div className="access-mode-notice" role="note"><span>i</span><div><strong>Index scopes are read-only</strong><p>No authoritative index summary is available. Other token metadata can still be saved while the existing scope is preserved.</p></div></div> : null}
             {tokenScopeSource === "bootstrap" ? <div className="access-mode-notice" role="note"><span>i</span><div><strong>Using the complete bootstrap scope catalog</strong><p>The server&apos;s complete eligibility summary supplies unloaded indexes; loaded versioned definitions override matching entries.</p></div></div> : null}
@@ -3150,7 +3556,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       {revokeTarget !== null ? (
         <Modal
           title="Revoke ingestion token"
-          subtitle="Collectors using this credential will no longer be able to ingest data."
+          subtitle="Clients using this credential will no longer be able to ingest data."
           onClose={() => busy === null && setRevokeTarget(null)}
           footer={<><button className="button secondary" type="button" onClick={() => setRevokeTarget(null)} disabled={busy !== null}>Keep token</button><button className="button danger" type="button" disabled={busy !== null || !tokenCanBeRevoked(revokeTarget)} onClick={() => void revokeToken(revokeTarget)}>{busy === `token-${revokeTarget.ingestionTokenId}` ? "Revoking…" : tokenCanBeRevoked(revokeTarget) ? "Revoke token" : `Token is ${tokenStateLabel(revokeTarget.state).toLowerCase()}`}</button></>}
         >
@@ -3169,6 +3575,76 @@ interface TokenScopePickerProps {
   selected: Set<string>;
   onChange: (value: Set<string>) => void;
   disabled?: boolean;
+}
+
+interface HECTokenProfileFieldsProps {
+  idPrefix: string;
+  selectedIndexes: Set<string>;
+  defaultIndex: string;
+  onDefaultIndexChange: (value: string) => void;
+  defaultHost: string;
+  onDefaultHostChange: (value: string) => void;
+  defaultSource: string;
+  onDefaultSourceChange: (value: string) => void;
+  defaultSourcetype: string;
+  onDefaultSourcetypeChange: (value: string) => void;
+  indexerAcknowledgment: boolean;
+  onIndexerAcknowledgmentChange: (value: boolean) => void;
+  acknowledgmentReadOnly?: boolean;
+}
+
+function HECTokenProfileFields(props: HECTokenProfileFieldsProps) {
+  const metadataFields = [
+    {
+      key: "host",
+      label: "Default host",
+      value: props.defaultHost,
+      placeholder: "api.example.com",
+      onChange: props.onDefaultHostChange,
+    },
+    {
+      key: "source",
+      label: "Default source",
+      value: props.defaultSource,
+      placeholder: "http:orders",
+      onChange: props.onDefaultSourceChange,
+    },
+    {
+      key: "sourcetype",
+      label: "Default sourcetype",
+      value: props.defaultSourcetype,
+      placeholder: "_json",
+      onChange: props.onDefaultSourcetypeChange,
+    },
+  ] as const;
+  return (
+    <fieldset>
+      <legend>HEC profile</legend>
+      <label htmlFor={`${props.idPrefix}-hec-default-index`}>
+        <span>Default index <small>(optional)</small></span>
+        <select id={`${props.idPrefix}-hec-default-index`} value={props.defaultIndex} onChange={(event) => props.onDefaultIndexChange(event.target.value)} aria-invalid={props.defaultIndex.length > 0 && !props.selectedIndexes.has(props.defaultIndex)}>
+          <option value="">No token default (requests must provide an index)</option>
+          {[...props.selectedIndexes].toSorted().map((name) => <option value={name} key={name}>{name}</option>)}
+        </select>
+        <small>When set, this index must remain in the token&apos;s allowed scope. Allowed scope alone is never an implicit default.</small>
+      </label>
+      {metadataFields.map((field) => {
+        const valid = validHECMetadataDefault(field.value);
+        const bytes = new TextEncoder().encode(field.value).byteLength;
+        return (
+          <label htmlFor={`${props.idPrefix}-hec-default-${field.key}`} key={field.key}>
+            <span>{field.label} <small>(optional)</small></span>
+            <input id={`${props.idPrefix}-hec-default-${field.key}`} value={field.value} onChange={(event) => field.onChange(event.target.value)} placeholder={field.placeholder} autoComplete="off" spellCheck={false} aria-invalid={!valid} />
+            <small>{bytes.toLocaleString()} / 255 UTF-8 bytes. Values are preserved exactly and cannot contain controls or surrounding ASCII whitespace.</small>
+          </label>
+        );
+      })}
+      <label className="admin-checkbox" htmlFor={`${props.idPrefix}-hec-indexer-acknowledgment`} aria-label="Enable HEC indexer acknowledgment">
+        <input id={`${props.idPrefix}-hec-indexer-acknowledgment`} type="checkbox" checked={props.indexerAcknowledgment} disabled={props.acknowledgmentReadOnly} onChange={(event) => props.onIndexerAcknowledgmentChange(event.target.checked)} />
+        <span><strong>Indexer acknowledgment</strong><small>{props.acknowledgmentReadOnly ? "This setting is immutable. Rotate the token to change acknowledgment mode." : "Enable channel-scoped acknowledgment IDs. This choice cannot be changed after creation."}</small></span>
+      </label>
+    </fieldset>
+  );
 }
 
 function TokenScopePicker({ idPrefix, options, selected, onChange, disabled = false }: TokenScopePickerProps) {
@@ -3416,6 +3892,7 @@ interface BackendTokensProps {
   onLoadMore: () => void;
   onReload: () => void;
   onRevoke: (token: IngestionToken) => void;
+  onSetEnabled: (token: IngestionToken, enabled: boolean) => void;
 }
 
 function BackendTokens(props: BackendTokensProps) {
@@ -3468,11 +3945,15 @@ function BackendTokens(props: BackendTokensProps) {
                 : "The token route is available, but generation is disabled until an authoritative index summary loads."}
           />
         ) : (
-          <div className="responsive-table-wrap"><table className="product-table"><thead><tr><th scope="col">Name</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{props.tokens.map((token) => {
+          <div className="responsive-table-wrap"><table className="product-table"><thead><tr><th scope="col">Name</th><th scope="col">Purpose</th><th scope="col">Prefix</th><th scope="col">Allowed indexes</th><th scope="col">Expires</th><th scope="col">Last used</th><th scope="col">State</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead><tbody>{props.tokens.map((token) => {
             const state = tokenStateLabel(token.state);
             const canRevoke = tokenCanBeRevoked(token);
-            const canEdit = canRevoke;
-            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td>{token.constraints?.allowedIndexNames.join(", ") || "None"}<small className="table-secondary">{token.constraints?.boundCollectorId === undefined ? "Native collector binding required" : `Collector ${token.constraints.boundCollectorId}`}</small></td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><span className={`status-label status-label--${statusClass(state)}`}><i />{state}</span></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(token)}>{props.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || props.busy !== null} onClick={() => props.onRevoke(token)}>{props.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
+            const canSetEnabled = tokenCanSetEnabled(token);
+            const enable = token.state === IngestionTokenState.INGESTION_TOKEN_STATE_DISABLED;
+            const hecToken = tokenUsesHEC(token.purpose);
+            const nativeToken = token.purpose === IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
+            const canEdit = canRevoke && (hecToken || nativeToken);
+            return <tr key={token.ingestionTokenId}><td><strong>{token.name}</strong>{token.description ? <small className="table-secondary">{token.description}</small> : null}</td><td><strong>{tokenPurposeLabel(token.purpose)}</strong><small className="table-secondary">{hecToken ? `Indexer ACK ${token.hecProfile?.indexerAcknowledgment ? "enabled" : "disabled"}` : nativeToken ? "gRPC ingestion" : "Transport unavailable"}</small>{hecToken ? <small className="table-secondary">{hecProfileSummary(token.hecProfile)}</small> : null}</td><td><code>{token.tokenPrefix}</code></td><td>{token.constraints?.allowedIndexNames.join(", ") || "None"}<small className="table-secondary">{hecToken ? token.hecProfile?.defaultIndexName ? `Default ${token.hecProfile.defaultIndexName}` : "No token default index" : nativeToken ? token.constraints?.boundCollectorId === undefined ? "Native collector binding required" : `Collector ${token.constraints.boundCollectorId}` : "Purpose unavailable"}</small></td><td>{formatDate(token.expiresAt)}</td><td>{formatDate(token.lastUsedAt)}</td><td><span className={`status-label status-label--${statusClass(state)}`}><i />{state}</span></td><td><div className="row-actions"><button className="table-action" type="button" aria-label={`Edit token ${token.name}`} disabled={!canEdit || props.busy !== null} onClick={() => props.onEdit(token)}>{props.busy === `read-token-${token.ingestionTokenId}` ? "Loading…" : "Edit"}</button><button className="table-action" type="button" aria-label={`${enable ? "Enable" : "Disable"} token ${token.name}`} disabled={!canSetEnabled || props.busy !== null} onClick={() => props.onSetEnabled(token, enable)}>{props.busy === `token-state-${token.ingestionTokenId}` ? enable ? "Enabling…" : "Disabling…" : canSetEnabled ? enable ? "Enable" : "Disable" : "—"}</button><button className="table-action" type="button" aria-label={`Revoke token ${token.name}`} disabled={!canRevoke || props.busy !== null} onClick={() => props.onRevoke(token)}>{props.busy === `token-${token.ingestionTokenId}` ? "Revoking…" : canRevoke ? "Revoke" : "—"}</button></div></td></tr>;
           })}</tbody></table></div>
         )}
         <div className="admin-pagination-footer" aria-live="polite">

@@ -39,6 +39,11 @@ export enum ServerFeature {
    * Declaring the wire value alone does not advertise the feature.
    */
   SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS = 15,
+  /**
+   * SERVER_FEATURE_HEC_INGESTION - The complete configured HEC v0.1 family is available: JSON, raw,
+   * acknowledgment, health, purpose isolation, and durable staging.
+   */
+  SERVER_FEATURE_HEC_INGESTION = 16,
   UNRECOGNIZED = -1,
 }
 
@@ -92,6 +97,9 @@ export function serverFeatureFromJSON(object: any): ServerFeature {
     case 15:
     case "SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS":
       return ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS;
+    case 16:
+    case "SERVER_FEATURE_HEC_INGESTION":
+      return ServerFeature.SERVER_FEATURE_HEC_INGESTION;
     case -1:
     case "UNRECOGNIZED":
     default:
@@ -133,6 +141,8 @@ export function serverFeatureToJSON(object: ServerFeature): string {
       return "SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT";
     case ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS:
       return "SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS";
+    case ServerFeature.SERVER_FEATURE_HEC_INGESTION:
+      return "SERVER_FEATURE_HEC_INGESTION";
     case ServerFeature.UNRECOGNIZED:
     default:
       return "UNRECOGNIZED";

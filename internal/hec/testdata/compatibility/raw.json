@@ -1,0 +1,192 @@
+{
+  "format_version": "hec-compatibility-fixture-v0.1",
+  "cases": [
+    {
+      "id": "raw.fixed-breaker-skips-empty-lines",
+      "rule": "LF and CRLF break events, exactly one pre-LF CR is removed, empty segments are skipped, and a final segment is emitted",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/raw",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"},
+          {"name": "Content-Type", "value": "text/plain; charset=utf-8"}
+        ],
+        "query": [],
+        "body": {"kind": "utf8", "value": "\nalpha\r\n\nbeta\r\r\ngamma"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 200, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Success\",\"code\":0}"},
+        "durable": {"quota": "charged", "request": "staged", "ack": "absent", "outbox": "pending", "visibility": "reserved"},
+        "events": [
+          {"ordinal": 0, "index": "main", "time_unix_nanos": "1786363200000000000", "time_source": "received_at_fallback", "host": "hec", "source": "http:hec", "sourcetype": "httpevent", "raw": "alpha", "message": "alpha", "fields": []},
+          {"ordinal": 1, "index": "main", "time_unix_nanos": "1786363200000000000", "time_source": "received_at_fallback", "host": "hec", "source": "http:hec", "sourcetype": "httpevent", "raw": "beta\r", "message": "beta\r", "fields": []},
+          {"ordinal": 2, "index": "main", "time_unix_nanos": "1786363200000000000", "time_source": "received_at_fallback", "host": "hec", "source": "http:hec", "sourcetype": "httpevent", "raw": "gamma", "message": "gamma", "fields": []}
+        ],
+        "spl": {"query": "index=main source=http:hec | fields _raw", "rows": [{"_raw": "alpha"}, {"_raw": "beta\r"}, {"_raw": "gamma"}]}
+      }
+    },
+    {
+      "id": "raw.query-metadata-and-time",
+      "rule": "raw query metadata applies to every line and exact request time overrides receive time",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/raw/1.0",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [
+          {"name": "channel", "value": "fe0ecfad-13d5-401b-847d-77833bd77131"},
+          {"name": "index", "value": "main"},
+          {"name": "host", "value": "raw-host"},
+          {"name": "source", "value": "/var/log/raw.log"},
+          {"name": "sourcetype", "value": "raw:test"},
+          {"name": "time", "value": "1786323296.123456789"}
+        ],
+        "body": {"kind": "utf8", "value": "one\ntwo\n"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 200, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Success\",\"code\":0}"},
+        "durable": {"quota": "charged", "request": "staged", "ack": "absent", "outbox": "pending", "visibility": "reserved"},
+        "events": [
+          {"ordinal": 0, "index": "main", "time_unix_nanos": "1786323296123456789", "time_source": "explicit", "host": "raw-host", "source": "/var/log/raw.log", "sourcetype": "raw:test", "raw": "one", "message": "one", "fields": []},
+          {"ordinal": 1, "index": "main", "time_unix_nanos": "1786323296123456789", "time_source": "explicit", "host": "raw-host", "source": "/var/log/raw.log", "sourcetype": "raw:test", "raw": "two", "message": "two", "fields": []}
+        ],
+        "spl": {"query": "index=main sourcetype=raw:test | stats count", "rows": [{"count": 2}]}
+      }
+    },
+    {
+      "id": "raw.all-empty-is-no-data",
+      "rule": "skipped empty raw segments cannot turn an all-empty body into an accepted request",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/raw",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"}
+        ],
+        "query": [],
+        "body": {"kind": "utf8", "value": "\n\r\n\n"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"No data\",\"code\":5}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "raw.channel-required-without-ack",
+      "rule": "raw requires a channel even when the token does not allocate acknowledgments",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/raw",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "one"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Data channel is missing\",\"code\":10}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "raw.non-guid-channel-rejected",
+      "rule": "the bounded raw channel is a canonical hyphenated GUID rather than an arbitrary opaque string",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/raw",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "client-one"}
+        ],
+        "query": [],
+        "body": {"kind": "utf8", "value": "one"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data channel\",\"code\":11}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "raw.fields-query-rejected",
+      "rule": "dynamic fields require a JSON envelope and are not parsed from raw query parameters",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/raw",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [
+          {"name": "channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"},
+          {"name": "fields", "value": "status=200"}
+        ],
+        "body": {"kind": "utf8", "value": "one"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "raw.invalid-utf8-rejected",
+      "rule": "application/octet-stream does not make binary raw payloads valid",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/raw",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"},
+          {"name": "Content-Type", "value": "application/octet-stream"}
+        ],
+        "query": [],
+        "body": {"kind": "base64", "value": "//4="}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    }
+  ]
+}

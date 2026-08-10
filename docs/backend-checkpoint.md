@@ -7,7 +7,78 @@ with:
 - `docs/spl-compatibility-v0.1.md`
 - the latest `main` commit
 
-## Latest checkpoint: bounded conditional `streamstats` count
+## Latest checkpoint: HEC v0.1 release candidate (default off)
+
+Date: 2026-08-10
+
+This shared-worktree checkpoint implements the bounded Splunk-compatible HTTP
+Event Collector vertical described by
+[`hec-compatibility-plan.md`](hec-compatibility-plan.md). It remains disabled
+by default until the two 24-hour release-soak executions named below pass.
+
+1. The exact JSON, raw, ACK, and health behavior is fixed by the normative
+   [`hec-compatibility-v0.1.md`](hec-compatibility-v0.1.md) contract and 52
+   executable HTTP-boundary fixtures. Streaming body, JSON-structure, numeric,
+   event, field, query, channel, concurrency, and response limits fail closed.
+2. Ingestion tokens now have immutable native/HEC purposes, purpose-isolated
+   authentication, bounded HEC defaults, immutable ACK mode, enable/disable,
+   revoke, optimistic versioning, one-time secret display, last-use tracking,
+   and secret-free transactional audit.
+3. HEC uses the shared transport-neutral admission, quota, redaction,
+   retention, visibility, and ClickHouse outbox authority. Stored provenance
+   identifies the HEC token without inventing a collector-fleet identity.
+   Independent HTTP requests remain at-least-once; one staged request's retry
+   is deduplicated.
+4. ACK state is tenant/token/channel isolated and becomes true only after
+   committed ClickHouse visibility. Public IDs are opaque positive exact JSON
+   integers through `2^53-1`; keyed per-process allocation makes snapshot-
+   branch aliasing cryptographically negligible while live uniqueness remains
+   transactional. Ambiguous sends stay false until reconciliation.
+5. SQLite migrations `0035` and `0036` add token purpose/profile and bounded
+   HEC request/channel/ACK state. ClickHouse migration `0005` adds exact source
+   kind/ID columns and constraints. The pinned post-HEC `events` physical-
+   schema digest is
+   `616df71621140192ee7c8e1e3c328219c8e9c7600a23f7b4458aebed7640f719`.
+6. Runtime composition is guarded by `-hec-enabled` (and
+   `OPEN_SPLUNK_HEC_ENABLED` in Compose), tracks the complete routed surface,
+   performs bounded cancellation/drain, cleans terminal state, and exposes
+   bounded administrator operational metrics without payloads, secrets, or
+   identity labels.
+7. Administration supports purpose/profile creation and editing, native/HEC
+   enable/disable/revoke actions, and a one-time HEC example that keeps the
+   secret out of command history and process arguments. The operator runbook
+   is [`hec-deployment.md`](hec-deployment.md).
+8. Recovery gates cover fresh/upgrade/rollback migrations, SQLite backup and
+   restore, keyed discarded-branch ACK isolation, real ambiguous-send
+   reconciliation, and a packaged paired SQLite/ClickHouse restore followed by
+   public SPL search.
+
+Release evidence completed on this checkpoint includes:
+
+- full HTTPS JSON/raw/ACK ingestion through the shipped process and public SPL
+  base, field, `stats`, and `timechart` searches against pinned ClickHouse;
+- the packaged paired product restore (`TestReleaseOCIComposeContract`) in
+  156.760 seconds;
+- the 30-second 1,000 aggregate events/second durable gate (50 one-event
+  requests/second plus 950 batched events/second), exact 28,252-row
+  convergence, native/control-plane contention, a 64-request ClickHouse outage
+  backlog, and bounded 21 MiB heap / 57 goroutines / 21 threads;
+- batch-only 1,000 EPS and observational small-request saturation profiles;
+- sixteen shipped TLS/gzip slow clients held through the 30-second read
+  deadline with 49/65/49 baseline/held/post goroutines, 27 MiB peak heap, and
+  zero retained heap growth; and
+- normal and race suites for HEC protocol, adapter, HTTP, admission, auth,
+  visibility, migrations, ClickHouse reconciliation, runtime, shutdown, and
+  recovery; all ten HEC fuzz targets; protobuf lint; Go vet; frontend
+  type-check/tests/build; and live pinned physical-schema validation.
+
+The executable commands and evidence format are in
+[`hec-load-and-soak.md`](hec-load-and-soak.md). Two elapsed-time release
+qualifications remain intentionally unclaimed: the 24-hour live transport soak
+and the 24-hour shipped native+HEC durable soak. HEC must stay default-off in a
+release until both complete on the selected release revision and machine size.
+
+## Previous checkpoint: bounded conditional `streamstats` count
 
 Date: 2026-08-06
 
@@ -463,7 +534,9 @@ ClickHouse path:
    rename overwrites conservatively clear it.
 4. The greenfield authoritative ClickHouse migration and runtime physical
    schema contract use the same array-token expression. The pinned release
-   schema digest is `7cfc0676530898bd585e38d8c6fb60426df5cdf8c692d9f2ae38addd87c9b629`,
+   pre-HEC schema digest was `7cfc0676530898bd585e38d8c6fb60426df5cdf8c692d9f2ae38addd87c9b629`;
+   the post-HEC provenance schema digest is
+   `616df71621140192ee7c8e1e3c328219c8e9c7600a23f7b4458aebed7640f719`,
    and the service-principal lifecycle proves the live canonical `SHOW CREATE`
    serialization agrees.
 5. Production read-only execution pins `enable_full_text_index`,

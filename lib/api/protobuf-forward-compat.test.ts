@@ -295,9 +295,15 @@ function assertRuntimeWireContract(
   const codec = runtimeMessageCodec(typeName);
   const known = Buffer.from(knownBase64, "base64");
   const future = Buffer.from(futureBase64, "base64");
-  assert.ok(known.length > 0, `${typeName} known fixture is empty`);
 
   const decodedKnown = codec.decode(known);
+  if (known.length === 0) {
+    assert.deepEqual(
+      decodedKnown,
+      {},
+      `${typeName} may use an empty known fixture only for a fieldless message`,
+    );
+  }
   assert.deepEqual(
     codec.decode(codec.encode(decodedKnown).finish()),
     decodedKnown,
@@ -325,8 +331,8 @@ function assertRuntimeWireContract(
 
 test("every protobuf HTTP route round-trips generated TypeScript messages across version skew", () => {
   assert.equal(routeFixture.version, 1);
-  assert.equal(routeFixture.routes.length, 60);
-  assert.equal(new Set(routeFixture.routes.map((route) => route.path)).size, 60);
+  assert.equal(routeFixture.routes.length, 62);
+  assert.equal(new Set(routeFixture.routes.map((route) => route.path)).size, 62);
 
   for (const route of routeFixture.routes) {
     assertRuntimeWireContract(

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/indexname"
 	"github.com/Suhaibinator/open-splunk/internal/ingestquota"
 	"modernc.org/sqlite"
 )
@@ -114,8 +115,10 @@ func (leases *processLeases) clear() {
 // physical SQLite file. All callers sharing that file must share one
 // sequencer.
 type SQLiteSequencer struct {
-	db     *sql.DB
-	leases *processLeases
+	db                   *sql.DB
+	leases               *processLeases
+	now                  func() time.Time
+	hecAcknowledgmentIDs hecAcknowledgmentIDSource
 
 	lifecycleMu sync.Mutex
 	closed      bool
@@ -141,10 +144,16 @@ func NewSQLite(ctx context.Context, db *control.DB) (*SQLiteSequencer, error) {
 	if db == nil || db.SQLDB() == nil {
 		return nil, fmt.Errorf("%w: control database is required", ErrInvalidArgument)
 	}
+	hecAcknowledgmentIDs, err := newKeyedHECAcknowledgmentIDSource()
+	if err != nil {
+		return nil, err
+	}
 	sequencer := &SQLiteSequencer{
-		db:           db.SQLDB(),
-		leases:       &processLeases{active: make(map[string]uint64)},
-		terminalDone: make(chan struct{}),
+		db:                   db.SQLDB(),
+		leases:               &processLeases{active: make(map[string]uint64)},
+		now:                  time.Now,
+		hecAcknowledgmentIDs: hecAcknowledgmentIDs,
+		terminalDone:         make(chan struct{}),
 	}
 	if !registerSQLiteOwner(db, sequencer) {
 		sequencer.db = nil
@@ -523,6 +532,19 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 	if barrier {
 		return Reservation{}, ErrAmbiguousBarrier
 	}
+	checkedAt := time.Now().UTC()
+	if sequencer.now != nil {
+		checkedAt = sequencer.now().Round(0).UTC()
+	}
+	if err := preflightHECAdmission(ctx, tx, request.HECAdmission, checkedAt); err != nil {
+		return Reservation{}, err
+	}
+	if request.HECAdmission != nil {
+		// Quota scheduling is an admission-time decision, not an event-time
+		// decision. A client that starts before expiry and trickles a body must
+		// neither extend token authority nor backdate its durable quota charge.
+		request.QuotaEvaluatedAt = checkedAt
+	}
 	if capacityErr := ensurePendingCapacity(ctx, tx, len(request.Outbox)); capacityErr != nil {
 		return Reservation{}, capacityErr
 	}
@@ -573,19 +595,31 @@ func (sequencer *SQLiteSequencer) Reserve(ctx context.Context, request ReserveRe
 			return Reservation{}, err
 		}
 	}
+	hecRequestSequence, hecAcknowledgmentID, err := persistHECAdmission(
+		ctx,
+		tx,
+		request.HECAdmission,
+		sequence,
+		sequencer.hecAcknowledgmentIDs,
+	)
+	if err != nil {
+		return Reservation{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return Reservation{}, fmt.Errorf("commit visibility reservation: %w", err)
 	}
 	sequencer.leases.bind(request.AttemptID, storedSequence)
 	retainLease = true
 	return Reservation{
-		BatchKey:      request.BatchKey,
-		SequenceKey:   request.SequenceKey,
-		Sequence:      storedSequence,
-		IndexTime:     time.UnixMilli(indexTimeMillis).UTC(),
-		PayloadSHA256: request.PayloadSHA256,
-		Metadata:      slices.Clone(metadata),
-		Outbox:        slices.Clone(request.Outbox),
+		BatchKey:            request.BatchKey,
+		SequenceKey:         request.SequenceKey,
+		Sequence:            storedSequence,
+		IndexTime:           time.UnixMilli(indexTimeMillis).UTC(),
+		PayloadSHA256:       request.PayloadSHA256,
+		Metadata:            slices.Clone(metadata),
+		Outbox:              slices.Clone(request.Outbox),
+		HECRequestSequence:  hecRequestSequence,
+		HECAcknowledgmentID: hecAcknowledgmentID,
 	}, nil
 }
 
@@ -1043,6 +1077,55 @@ func validateReserveRequest(ctx context.Context, request ReserveRequest) error {
 	}
 	if len(request.Outbox) == 0 || len(request.Outbox) > MaxOutboxBytes {
 		return fmt.Errorf("%w: outbox must contain 1 to %d bytes", ErrInvalidArgument, MaxOutboxBytes)
+	}
+	if err := validateHECAdmissionRequest(request.HECAdmission); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateHECAdmissionRequest(request *HECAdmissionRequest) error {
+	if request == nil {
+		return nil
+	}
+	if request.TenantID == "" || len(request.TenantID) > 255 || !utf8.ValidString(request.TenantID) ||
+		strings.TrimSpace(request.TenantID) != request.TenantID || strings.IndexByte(request.TenantID, 0) >= 0 {
+		return fmt.Errorf("%w: HEC acknowledgment tenant ID is invalid", ErrInvalidArgument)
+	}
+	if request.TokenID == "" || len(request.TokenID) > 128 || !utf8.ValidString(request.TokenID) ||
+		strings.TrimSpace(request.TokenID) != request.TokenID || strings.IndexByte(request.TokenID, 0) >= 0 {
+		return fmt.Errorf("%w: HEC acknowledgment token ID is invalid", ErrInvalidArgument)
+	}
+	if request.TokenVersion == 0 {
+		return fmt.Errorf("%w: HEC token version is invalid", ErrInvalidArgument)
+	}
+	if len(request.AuthorizedIndexes) == 0 || len(request.AuthorizedIndexes) > MaxHECAcknowledgmentsPerQuery {
+		return fmt.Errorf("%w: HEC selected index authority is invalid", ErrInvalidArgument)
+	}
+	previous := ""
+	for _, selected := range request.AuthorizedIndexes {
+		if !indexname.ValidCanonical(selected.Name) || selected.Version == 0 ||
+			selected.Version > math.MaxInt64 || previous >= selected.Name && previous != "" {
+			return fmt.Errorf("%w: HEC selected index authority is invalid", ErrInvalidArgument)
+		}
+		previous = selected.Name
+	}
+	if request.Acknowledgment &&
+		(request.AcknowledgmentChannel == "" || len(request.AcknowledgmentChannel) > 128 ||
+			!utf8.ValidString(request.AcknowledgmentChannel) ||
+			strings.TrimSpace(request.AcknowledgmentChannel) != request.AcknowledgmentChannel ||
+			strings.IndexByte(request.AcknowledgmentChannel, 0) >= 0) {
+		return fmt.Errorf("%w: HEC acknowledgment channel is invalid", ErrInvalidArgument)
+	}
+	if !request.Acknowledgment && request.AcknowledgmentChannel != "" {
+		return fmt.Errorf("%w: HEC acknowledgment channel is not enabled", ErrInvalidArgument)
+	}
+	if request.RequestID == "" || len(request.RequestID) > 128 || !utf8.ValidString(request.RequestID) ||
+		strings.TrimSpace(request.RequestID) != request.RequestID || strings.IndexByte(request.RequestID, 0) >= 0 {
+		return fmt.Errorf("%w: HEC acknowledgment request ID is invalid", ErrInvalidArgument)
+	}
+	if request.CreatedAt.IsZero() || request.CreatedAt.UnixMicro() < 0 {
+		return fmt.Errorf("%w: HEC acknowledgment creation time is invalid", ErrInvalidArgument)
 	}
 	return nil
 }

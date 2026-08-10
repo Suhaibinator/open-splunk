@@ -87,7 +87,7 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	if got, ok := conn.batch.rows[0][14].([]byte); !ok || !slices.Equal(got, first.Event.Raw) {
 		t.Fatalf("raw = %#v (%T), want byte-safe []byte", conn.batch.rows[0][14], conn.batch.rows[0][14])
 	}
-	for _, column := range []int{3, 4, 5, 23} {
+	for _, column := range []int{3, 4, 5, eventExpiresAtColumn} {
 		value, ok := conn.batch.rows[0][column].(time.Time)
 		if !ok || value.Location() != time.UTC {
 			t.Errorf("time column %d = %#v (%T), want UTC time.Time", column, conn.batch.rows[0][column], conn.batch.rows[0][column])
@@ -102,16 +102,16 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	if got := conn.batch.rows[0][4]; got != wantIndexTime {
 		t.Fatalf("index_time = %v, want %v", got, wantIndexTime)
 	}
-	if got := conn.batch.rows[0][23]; got != wantIndexTime.Add(72*time.Hour) {
+	if got := conn.batch.rows[0][eventExpiresAtColumn]; got != wantIndexTime.Add(72*time.Hour) {
 		t.Fatalf("expires_at = %v", got)
 	}
-	if got := conn.batch.rows[0][24]; got != uint64(1) {
+	if got := conn.batch.rows[0][eventVisibilitySequenceColumn]; got != uint64(1) {
 		t.Fatalf("visibility_seq = %#v, want 1", got)
 	}
-	if got, ok := conn.batch.rows[0][25].([]uint8); !ok || !slices.Equal(got, []uint8{uint8(eventfields.StoredValueTypeUint64)}) {
-		t.Fatalf("field_types = %#v (%T), want [uint64]", conn.batch.rows[0][25], conn.batch.rows[0][25])
+	if got, ok := conn.batch.rows[0][27].([]uint8); !ok || !slices.Equal(got, []uint8{uint8(eventfields.StoredValueTypeUint64)}) {
+		t.Fatalf("field_types = %#v (%T), want [uint64]", conn.batch.rows[0][27], conn.batch.rows[0][27])
 	}
-	if got := conn.batch.rows[0][26]; got != eventfields.CurrentFieldMetadataVersion {
+	if got := conn.batch.rows[0][28]; got != eventfields.CurrentFieldMetadataVersion {
 		t.Fatalf("field_metadata_version = %#v, want 1", got)
 	}
 	if got := eventInsertColumns[eventVisibilitySequenceColumn:]; !slices.Equal(got, []string{"visibility_seq", "field_types", "field_metadata_version"}) {
@@ -144,6 +144,160 @@ func TestStoreNativeBatchContractAndEventOrder(t *testing.T) {
 	}
 }
 
+func TestStageDurablyQueuesHECWithoutSynchronousClickHouseWrite(t *testing.T) {
+	t.Parallel()
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	sequencer := &fakeVisibilitySequencer{
+		reservation: visibility.Reservation{
+			Sequence:            17,
+			HECRequestSequence:  4,
+			HECAcknowledgmentID: 9,
+		},
+	}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	batch := validStoreBatch()
+	batch.Source = ingest.HECSource("ingestion-token-record")
+	batch.CollectorID = ""
+	batch.Events[0].Source = batch.Source
+	batch.Events[0].CollectorID = ""
+	batch.HECAdmission = &ingest.HECStageAdmission{
+		TokenID:               "ingestion-token-record",
+		TokenVersion:          3,
+		RequestID:             batch.BatchID,
+		AcknowledgmentEnabled: true,
+		Channel:               "channel-a",
+		CreatedAt:             batch.ReceivedAt,
+	}
+
+	staged, err := store.Stage(context.Background(), batch)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	if staged.State != ingest.StoredBatchPending || staged.VisibilitySequence != 17 ||
+		staged.HECRequestSequence != 4 || staged.HECAcknowledgmentID != 9 ||
+		!reflect.DeepEqual(staged.Outcome, ingest.StoreResult{}) {
+		t.Fatalf("staged result = %+v", staged)
+	}
+	if connection.prepareCalls != 0 || len(connection.batch.rows) != 0 {
+		t.Fatalf("Stage wrote ClickHouse synchronously: prepares=%d rows=%d", connection.prepareCalls, len(connection.batch.rows))
+	}
+	if !slices.Equal(sequencer.released, []uint64{17}) || len(sequencer.reservation.Outbox) == 0 {
+		t.Fatalf("durable stage release/outbox = %v/%d", sequencer.released, len(sequencer.reservation.Outbox))
+	}
+	if len(sequencer.reserveRequests) != 1 || sequencer.reserveRequests[0].HECAdmission == nil ||
+		sequencer.reserveRequests[0].HECAdmission.TokenID != "ingestion-token-record" ||
+		sequencer.reserveRequests[0].HECAdmission.TokenVersion != 3 ||
+		sequencer.reserveRequests[0].HECAdmission.AcknowledgmentChannel != "channel-a" {
+		t.Fatalf("staged HEC admission = %+v", sequencer.reserveRequests)
+	}
+
+	if err := store.ReconcilePending(context.Background()); err != nil {
+		t.Fatalf("ReconcilePending: %v", err)
+	}
+	if connection.prepareCalls != 1 || len(connection.batch.rows) != 1 ||
+		!slices.Equal(sequencer.committed, []uint64{17}) {
+		t.Fatalf("reconciliation prepares=%d rows=%d commits=%v", connection.prepareCalls, len(connection.batch.rows), sequencer.committed)
+	}
+	telemetry := store.HECReconciliationTelemetry()
+	if !telemetry.Available || telemetry.Successes != 1 || telemetry.Retries != 0 ||
+		telemetry.Ambiguities != 0 {
+		t.Fatalf("HEC reconciliation telemetry = %+v", telemetry)
+	}
+}
+
+func TestStageAcceptsIndependentHECRequestsFromOneToken(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	controlDB, err := control.Open(ctx, filepath.Join(t.TempDir(), "control.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = controlDB.Close() })
+	sequencer, err := visibility.NewSQLite(ctx, controlDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sequencer.Close() })
+	nowMicros := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC).UnixMicro()
+	tokenDigest := sha256.Sum256([]byte("HEC independent request token"))
+	for _, statement := range []struct {
+		query     string
+		arguments []any
+	}{
+		{`
+			INSERT INTO indexes (
+				index_id, version, name, display_name, ingestion_enabled,
+				search_enabled, state, created_at_unix_micro, updated_at_unix_micro
+			) VALUES ('hec-index', 1, 'main', 'Main', 1, 1, 'active', ?, ?)`, []any{nowMicros, nowMicros}},
+		{`
+			INSERT INTO ingestion_tokens (
+				ingestion_token_id, version, name, description,
+				token_prefix, token_digest, state,
+				created_at_unix_micro, updated_at_unix_micro,
+				expires_at_unix_micro, revoked_at_unix_micro,
+				last_used_at_unix_micro, bound_collector_id,
+				max_ingest_events_per_second,
+				max_ingest_uncompressed_bytes_per_second, purpose
+			) VALUES (
+				'hec-token', 1, 'HEC', '', 'hectest0', ?, 'active',
+				?, ?, NULL, NULL, NULL, NULL, 0, 0, 'hec'
+			)`, []any{tokenDigest[:], nowMicros, nowMicros}},
+		{`
+			INSERT INTO ingestion_token_indexes (ingestion_token_id, index_id)
+			VALUES ('hec-token', 'hec-index')`, nil},
+		{`
+			INSERT INTO ingestion_token_hec_profiles (
+				ingestion_token_id, default_index_id, default_host,
+				default_source, default_sourcetype, indexer_acknowledgment
+			) VALUES ('hec-token', 'hec-index', NULL, NULL, NULL, 0)`, nil},
+	} {
+		if _, err := controlDB.SQLDB().ExecContext(ctx, statement.query, statement.arguments...); err != nil {
+			t.Fatalf("seed HEC authority: %v", err)
+		}
+	}
+
+	connection := &fakeStoreConnection{batch: &fakeWriteBatch{}}
+	store := mustTestStoreWithVisibility(t, connection, fixedRetention(time.Hour), sequencer)
+	request := func(id string) ingest.StoreBatch {
+		batch := validStoreBatch()
+		batch.Source = ingest.HECSource("hec-token")
+		batch.CollectorID = ""
+		batch.BatchID = id
+		batch.BatchSequence = 1
+		batch.SourceBatchSHA256 = testSourceBatchDigest(id)
+		batch.ReceivedAt = time.Date(2026, time.July, 21, 1, 2, 3, 0, time.UTC)
+		batch.Events[0].Source = batch.Source
+		batch.Events[0].CollectorID = ""
+		batch.Events[0].BatchID = id
+		batch.Events[0].Event.EventId = id + "-0"
+		batch.HECAdmission = &ingest.HECStageAdmission{
+			TokenID:      "hec-token",
+			TokenVersion: 1,
+			RequestID:    id,
+			CreatedAt:    batch.ReceivedAt,
+			AuthorizedIndexes: []ingest.HECIndexAuthority{{
+				Name: "main", Version: 1,
+			}},
+		}
+		return batch
+	}
+	first, err := store.Stage(ctx, request("hec-request-one"))
+	if err != nil {
+		t.Fatalf("Stage(first HEC request): %v", err)
+	}
+	second, err := store.Stage(ctx, request("hec-request-two"))
+	if err != nil {
+		t.Fatalf("Stage(second HEC request): %v", err)
+	}
+	if first.HECRequestSequence != 1 || second.HECRequestSequence != 2 ||
+		first.VisibilitySequence == 0 || second.VisibilitySequence <= first.VisibilitySequence {
+		t.Fatalf("independent HEC staging = first %+v second %+v", first, second)
+	}
+	if connection.prepareCalls != 0 {
+		t.Fatalf("HEC Stage wrote ClickHouse synchronously %d times", connection.prepareCalls)
+	}
+}
+
 func TestStoreAssignsCommitOrderedVisibilityAndCapturesCutoff(t *testing.T) {
 	t.Parallel()
 	conn := &fakeStoreConnection{batch: &fakeWriteBatch{}}
@@ -153,7 +307,7 @@ func TestStoreAssignsCommitOrderedVisibilityAndCapturesCutoff(t *testing.T) {
 	if _, err := store.Store(context.Background(), validStoreBatch()); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	if got := conn.batch.rows[0][24]; got != uint64(10) {
+	if got := conn.batch.rows[0][eventVisibilitySequenceColumn]; got != uint64(10) {
 		t.Fatalf("stored visibility = %#v, want 10", got)
 	}
 	cutoff, err := store.VisibilityCutoff(context.Background())
@@ -225,7 +379,7 @@ func TestStorePreservesAmbiguousReservationAndRecognizesCommittedRetry(t *testin
 	if _, err := store.Store(context.Background(), batch); err != nil {
 		t.Fatalf("retry Store: %v", err)
 	}
-	if got := connection.batch.rows[0][24]; got != uint64(7) {
+	if got := connection.batch.rows[0][eventVisibilitySequenceColumn]; got != uint64(7) {
 		t.Fatalf("retry visibility = %#v, want stable 7", got)
 	}
 	if got := connection.batch.rows[0][4]; got != time.Date(2026, 7, 21, 1, 2, 3, 0, time.UTC) {
@@ -429,7 +583,12 @@ func TestServerOwnedReconcilerResolvesGapAndAdvancesCommittedFrontier(t *testing
 	if err := first.ReconcilePending(ctx); err != nil {
 		t.Fatalf("ReconcilePending: %v", err)
 	}
-	if len(firstConnection.batch.rows) != 1 || firstConnection.batch.rows[0][24] != uint64(1) {
+	telemetry := first.HECReconciliationTelemetry()
+	if !telemetry.Available || telemetry.Successes != 1 || telemetry.Retries != 0 ||
+		telemetry.Ambiguities != 1 {
+		t.Fatalf("ambiguous reconciliation telemetry = %+v", telemetry)
+	}
+	if len(firstConnection.batch.rows) != 1 || firstConnection.batch.rows[0][eventVisibilitySequenceColumn] != uint64(1) {
 		t.Fatalf("reconciled rows = %#v, want original sequence 1", firstConnection.batch.rows)
 	}
 	if got := firstConnection.batch.rows[0][14]; !slices.Equal(got.([]byte), firstBatch.Events[0].Event.Raw) {
@@ -493,8 +652,48 @@ func TestBackgroundReconcilerDrainsOutboxWithoutCollectorRetry(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if len(connection.batch.rows) != 1 || connection.batch.rows[0][24] != uint64(1) {
+	if len(connection.batch.rows) != 1 || connection.batch.rows[0][eventVisibilitySequenceColumn] != uint64(1) {
 		t.Fatalf("background replay rows = %#v", connection.batch.rows)
+	}
+}
+
+func TestBackgroundReconcilerCountsScheduledRetries(t *testing.T) {
+	t.Parallel()
+	pruned := make(chan struct{}, 2)
+	sequencer := &fakeVisibilitySequencer{
+		pruneErrors: []error{io.ErrUnexpectedEOF, nil},
+		pruneNotify: pruned,
+	}
+	store := mustTestStoreWithVisibility(
+		t,
+		&fakeStoreConnection{},
+		fixedRetention(time.Hour),
+		sequencer,
+	)
+	store.retryAfter = time.Millisecond
+	store.startReconciler()
+	defer store.Close()
+
+	for attempt := 0; attempt < 2; attempt++ {
+		select {
+		case <-pruned:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("background reconciliation attempt %d did not run", attempt+1)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		telemetry := store.HECReconciliationTelemetry()
+		if telemetry.Available && telemetry.Retries == 1 {
+			if telemetry.Successes != 0 || telemetry.Ambiguities != 0 {
+				t.Fatalf("retry reconciliation telemetry = %+v", telemetry)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retry reconciliation telemetry did not settle: %+v", telemetry)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -922,8 +1121,8 @@ func TestStoreAttemptLeaseFencesConcurrentWriters(t *testing.T) {
 	if _, err := second.Store(ctx, different); err != nil {
 		t.Fatalf("different batch behind first attempt: %v", err)
 	}
-	if secondConnection.prepareCalls != 1 || secondConnection.batch.rows[0][24] != uint64(2) {
-		t.Fatalf("independent batch prepare=%d sequence=%#v, want one insert at sequence 2", secondConnection.prepareCalls, secondConnection.batch.rows[0][24])
+	if secondConnection.prepareCalls != 1 || secondConnection.batch.rows[0][eventVisibilitySequenceColumn] != uint64(2) {
+		t.Fatalf("independent batch prepare=%d sequence=%#v, want one insert at sequence 2", secondConnection.prepareCalls, secondConnection.batch.rows[0][eventVisibilitySequenceColumn])
 	}
 	if cutoff, err := second.VisibilityCutoff(ctx); err != nil || cutoff != 0 {
 		t.Fatalf("cutoff behind unresolved sequence 1 = %d, err=%v", cutoff, err)
@@ -944,7 +1143,7 @@ func TestStoreAttemptLeaseFencesConcurrentWriters(t *testing.T) {
 	if _, err := retry.Store(ctx, validStoreBatch()); err != nil {
 		t.Fatalf("retry Store: %v", err)
 	}
-	if got := retryConnection.batch.rows[0][24]; got != uint64(1) {
+	if got := retryConnection.batch.rows[0][eventVisibilitySequenceColumn]; got != uint64(1) {
 		t.Fatalf("retry visibility sequence = %#v, want durable outbox sequence 1", got)
 	}
 	cutoff, err := retry.VisibilityCutoff(ctx)
@@ -986,7 +1185,7 @@ func TestStorePermanentPreSendFailureDoesNotBlockLaterBatch(t *testing.T) {
 	if _, err := next.Store(ctx, nextBatch); err != nil {
 		t.Fatalf("next Store: %v", err)
 	}
-	if got := nextConnection.batch.rows[0][24]; got != uint64(2) {
+	if got := nextConnection.batch.rows[0][eventVisibilitySequenceColumn]; got != uint64(2) {
 		t.Fatalf("next visibility sequence = %#v, want 2", got)
 	}
 }
@@ -1026,7 +1225,7 @@ func TestStoreRetryUsesPersistedRetentionBeforeLivePolicy(t *testing.T) {
 	if len(unavailablePolicy.calls) != 0 {
 		t.Fatalf("pending retry consulted live retention: %v", unavailablePolicy.calls)
 	}
-	if got := retryConnection.batch.rows[0][23]; got != batch.ReceivedAt.UTC().Add(72*time.Hour) {
+	if got := retryConnection.batch.rows[0][eventExpiresAtColumn]; got != batch.ReceivedAt.UTC().Add(72*time.Hour) {
 		t.Fatalf("retried expires_at = %v, want persisted retention", got)
 	}
 
@@ -1353,6 +1552,55 @@ func TestStorePayloadDigestUsesOriginalCollectorBatchIdentity(t *testing.T) {
 	}
 }
 
+func TestHECSourceUsesIndependentDurableIdentityAndStorageProvenance(t *testing.T) {
+	t.Parallel()
+	native := validStoreBatch()
+	hec := validStoreBatch()
+	hec.Source = ingest.HECSource("ingestion-token-record")
+	hec.CollectorID = ""
+	hec.Events[0].Source = hec.Source
+	hec.Events[0].CollectorID = ""
+
+	if deduplicationToken(hec) == deduplicationToken(native) ||
+		sequenceIdentityKey(hec) == sequenceIdentityKey(native) {
+		t.Fatal("HEC and native identities collided")
+	}
+	if !strings.HasPrefix(deduplicationToken(hec), "open-splunk-ingest-hec-v1-") {
+		t.Fatalf("HEC deduplication identity = %q", deduplicationToken(hec))
+	}
+	independent := hec
+	independent.BatchID = "second-independent-request"
+	if sequenceIdentityKey(independent) == sequenceIdentityKey(hec) {
+		t.Fatal("independent HEC request IDs reused one visibility sequence identity")
+	}
+	nativeDigest, err := storePayloadDigest(native)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hecDigest, err := storePayloadDigest(hec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nativeDigest == hecDigest {
+		t.Fatal("HEC and native payload identities collided")
+	}
+
+	store := mustTestStore(t, &fakeStoreConnection{}, fixedRetention(time.Hour))
+	rows, err := store.rowsForBatch(context.Background(), hec, nil)
+	if err != nil {
+		t.Fatalf("rowsForBatch: %v", err)
+	}
+	if got := rows[0][20]; got != "" {
+		t.Fatalf("collector_id = %#v, want empty", got)
+	}
+	if got := rows[0][21]; got != uint8(ingest.IngestionSourceKindHEC) {
+		t.Fatalf("ingest_source_kind = %#v", got)
+	}
+	if got := rows[0][22]; got != "ingestion-token-record" {
+		t.Fatalf("ingest_source_id = %#v", got)
+	}
+}
+
 func TestStoreRetentionLookupIsCachedPerIndex(t *testing.T) {
 	t.Parallel()
 	conn := &fakeStoreConnection{batch: &fakeWriteBatch{}}
@@ -1381,7 +1629,7 @@ func TestStoreRetentionLookupIsCachedPerIndex(t *testing.T) {
 		base.Truncate(time.Millisecond).Add(time.Hour),
 	}
 	for i, want := range wants {
-		if got := conn.batch.rows[i][23]; got != want {
+		if got := conn.batch.rows[i][eventExpiresAtColumn]; got != want {
 			t.Errorf("row %d expires_at = %v, want %v", i, got, want)
 		}
 	}
@@ -1980,34 +2228,36 @@ func mustTestStoreWithVisibility(t *testing.T, conn storeConnection, retention R
 }
 
 type fakeVisibilitySequencer struct {
-	reservation    visibility.Reservation
-	hasReservation bool
-	lookupErr      error
-	reserveErr     error
-	commitErr      error
-	releaseErr     error
-	markErr        error
-	abandonErr     error
-	pendingUsage   *visibility.PendingUsage
-	pendingErr     error
-	acquireBlocked bool
-	cutoff         uint64
-	cutoffErr      error
-	reserveKeys    []string
-	committed      []uint64
-	released       []uint64
-	marked         []uint64
-	abandoned      []uint64
-	lookupCalls    int
-	cutoffCalls    int
-	acquireCalls   int
-	pendingCalls   int
-	pruneRetention visibility.TerminalRetention
-	pruneLimit     uint32
-	pruneDeleted   uint32
-	pruneErr       error
-	pruneCalls     int
-	pruneNotify    chan<- struct{}
+	reservation     visibility.Reservation
+	hasReservation  bool
+	lookupErr       error
+	reserveErr      error
+	commitErr       error
+	releaseErr      error
+	markErr         error
+	abandonErr      error
+	pendingUsage    *visibility.PendingUsage
+	pendingErr      error
+	acquireBlocked  bool
+	cutoff          uint64
+	cutoffErr       error
+	reserveKeys     []string
+	reserveRequests []visibility.ReserveRequest
+	committed       []uint64
+	released        []uint64
+	marked          []uint64
+	abandoned       []uint64
+	lookupCalls     int
+	cutoffCalls     int
+	acquireCalls    int
+	pendingCalls    int
+	pruneRetention  visibility.TerminalRetention
+	pruneLimit      uint32
+	pruneDeleted    uint32
+	pruneErr        error
+	pruneErrors     []error
+	pruneCalls      int
+	pruneNotify     chan<- struct{}
 }
 
 type abandonBeforeExistingReserveSequencer struct {
@@ -2058,6 +2308,12 @@ func (sequencer *fakeVisibilitySequencer) Lookup(_ context.Context, _, _ string,
 
 func (sequencer *fakeVisibilitySequencer) Reserve(_ context.Context, request visibility.ReserveRequest) (visibility.Reservation, error) {
 	sequencer.reserveKeys = append(sequencer.reserveKeys, request.BatchKey)
+	captured := request
+	if request.HECAdmission != nil {
+		cloned := *request.HECAdmission
+		captured.HECAdmission = &cloned
+	}
+	sequencer.reserveRequests = append(sequencer.reserveRequests, captured)
 	reservation := sequencer.reservation
 	if len(sequencer.reserveKeys) > 1 && !reservation.AlreadyCommitted {
 		reservation.PreviouslyReserved = true
@@ -2171,6 +2427,9 @@ func (sequencer *fakeVisibilitySequencer) PruneTerminal(_ context.Context, reten
 	sequencer.pruneLimit = limit
 	if sequencer.pruneNotify != nil {
 		sequencer.pruneNotify <- struct{}{}
+	}
+	if len(sequencer.pruneErrors) >= sequencer.pruneCalls {
+		return sequencer.pruneDeleted, sequencer.pruneErrors[sequencer.pruneCalls-1]
 	}
 	return sequencer.pruneDeleted, sequencer.pruneErr
 }

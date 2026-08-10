@@ -12,6 +12,15 @@
       "responseFutureWire": "CiEvYXBpL3YxL3N5c3RlbS9ib290c3RyYXA6cmVzcG9uc2X6fyhmdXR1cmU6L2FwaS92MS9zeXN0ZW0vYm9vdHN0cmFwOnJlc3BvbnNl"
     },
     {
+      "path": "/api/v1/hec/operations/get",
+      "requestType": "GetHECOperationalSnapshotRequest",
+      "responseType": "GetHECOperationalSnapshotResponse",
+      "requestKnownWire": "",
+      "requestFutureWire": "+n8pZnV0dXJlOi9hcGkvdjEvaGVjL29wZXJhdGlvbnMvZ2V0OnJlcXVlc3Q=",
+      "responseKnownWire": "CgIIAQ==",
+      "responseFutureWire": "CgIIAfp/KmZ1dHVyZTovYXBpL3YxL2hlYy9vcGVyYXRpb25zL2dldDpyZXNwb25zZQ=="
+    },
+    {
       "path": "/api/v1/search/jobs/create",
       "requestType": "CreateSearchJobRequest",
       "responseType": "CreateSearchJobResponse",
@@ -532,6 +541,15 @@
       "requestFutureWire": "CicvYXBpL3YxL2luZ2VzdGlvbi10b2tlbnMvdXBkYXRlOnJlcXVlc3T6fy5mdXR1cmU6L2FwaS92MS9pbmdlc3Rpb24tdG9rZW5zL3VwZGF0ZTpyZXF1ZXN0",
       "responseKnownWire": "CioKKC9hcGkvdjEvaW5nZXN0aW9uLXRva2Vucy91cGRhdGU6cmVzcG9uc2U=",
       "responseFutureWire": "CioKKC9hcGkvdjEvaW5nZXN0aW9uLXRva2Vucy91cGRhdGU6cmVzcG9uc2X6fy9mdXR1cmU6L2FwaS92MS9pbmdlc3Rpb24tdG9rZW5zL3VwZGF0ZTpyZXNwb25zZQ=="
+    },
+    {
+      "path": "/api/v1/ingestion-tokens/state/set",
+      "requestType": "SetIngestionTokenEnabledRequest",
+      "responseType": "SetIngestionTokenEnabledResponse",
+      "requestKnownWire": "CiovYXBpL3YxL2luZ2VzdGlvbi10b2tlbnMvc3RhdGUvc2V0OnJlcXVlc3Q=",
+      "requestFutureWire": "CiovYXBpL3YxL2luZ2VzdGlvbi10b2tlbnMvc3RhdGUvc2V0OnJlcXVlc3T6fzFmdXR1cmU6L2FwaS92MS9pbmdlc3Rpb24tdG9rZW5zL3N0YXRlL3NldDpyZXF1ZXN0",
+      "responseKnownWire": "Ci0KKy9hcGkvdjEvaW5nZXN0aW9uLXRva2Vucy9zdGF0ZS9zZXQ6cmVzcG9uc2U=",
+      "responseFutureWire": "Ci0KKy9hcGkvdjEvaW5nZXN0aW9uLXRva2Vucy9zdGF0ZS9zZXQ6cmVzcG9uc2X6fzJmdXR1cmU6L2FwaS92MS9pbmdlc3Rpb24tdG9rZW5zL3N0YXRlL3NldDpyZXNwb25zZQ=="
     },
     {
       "path": "/api/v1/ingestion-tokens/revoke",

@@ -20,13 +20,17 @@ import {
 } from "./protobuf-transport";
 import { ListIndexesRequest, ListIndexesResponse } from "@/gen/ts/open_splunk/v1/index_api";
 import {
+  SetIngestionTokenEnabledRequest,
+  SetIngestionTokenEnabledResponse,
+} from "@/gen/ts/open_splunk/v1/collector_admin_api";
+import {
   ListKnowledgeObjectDependenciesRequest,
   ListKnowledgeObjectDependenciesResponse,
   ListKnowledgeObjectsRequest,
   ListKnowledgeObjectsResponse,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/v1/search_api";
-import { knowledgeRoutes, searchRoutes } from "./routes";
+import { ingestionTokenRoutes, knowledgeRoutes, searchRoutes } from "./routes";
 
 const administratorToken = "admin-token-0123456789-abcdefghijkl";
 
@@ -49,6 +53,8 @@ test("administrator bearer tokens match backend admission and remain memory-only
 test("administrator route allowlist excludes ordinary search and WebSocket paths", () => {
   assert.equal(isAdministratorRoutePath("/api/v1/indexes/list"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/audit/events/list"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/ingestion-tokens/state/set"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/hec/operations/get"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/get"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/list"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/dependencies"), true);
@@ -64,6 +70,45 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(knowledgeRoutes.validate.path, "/api/v1/knowledge/objects/validate");
   assert.equal(knowledgeRoutes.validate.maximumResponseBytes, 8 << 20);
   assert.equal(searchRoutes.inspect.maximumResponseBytes, 8 << 20);
+});
+
+test("token state route is administrator-authenticated and protobuf-bound", async () => {
+  let requestPath = "";
+  let authorization: string | null = null;
+  let decoded: SetIngestionTokenEnabledRequest | undefined;
+  const transport = new ProtobufTransport({
+    fetch: async (input, init) => {
+      requestPath = new URL(String(input), "https://example.test").pathname;
+      authorization = new Headers(init?.headers).get("Authorization");
+      const bytes = init?.body;
+      assert.ok(bytes instanceof Uint8Array);
+      decoded = SetIngestionTokenEnabledRequest.decode(bytes);
+      return new Response(
+        SetIngestionTokenEnabledResponse.encode(
+          SetIngestionTokenEnabledResponse.fromPartial({}),
+        ).finish(),
+        { status: 200, headers: { "Content-Type": PROTOBUF_CONTENT_TYPE } },
+      );
+    },
+  });
+
+  setAdministratorBearerToken(administratorToken);
+  await transport.post(
+    ingestionTokenRoutes.setState,
+    SetIngestionTokenEnabledRequest.fromPartial({
+      ingestionTokenId: "token-1",
+      expectedVersion: 7n,
+      enabled: false,
+    }),
+  );
+
+  assert.equal(requestPath, "/api/v1/ingestion-tokens/state/set");
+  assert.equal(authorization, `Bearer ${administratorToken}`);
+  assert.deepEqual(decoded, {
+    ingestionTokenId: "token-1",
+    expectedVersion: 7n,
+    enabled: false,
+  });
 });
 
 test("transport attaches the memory-only token only to protected protobuf calls", async () => {

@@ -57,7 +57,11 @@ const (
 	maximumBrowserAllowedHosts    = 32
 )
 
-var errImmutableTokenCollectorBinding = errors.New("ingestion token collector binding is immutable")
+var (
+	errImmutableTokenCollectorBinding  = errors.New("ingestion token collector binding is immutable")
+	errImmutableTokenPurpose           = errors.New("ingestion token purpose is immutable")
+	errImmutableTokenHECAcknowledgment = errors.New("HEC token acknowledgment mode is immutable")
+)
 
 var indexUpdatePaths = map[string]string{
 	"display_name":                                            "display_name",
@@ -100,7 +104,17 @@ var tokenUpdatePaths = map[string]string{
 	"constraints":                    "constraints",
 	"definition.constraints":         "constraints",
 	"constraints.bound_collector_id": "constraints.bound_collector_id",
-	"definition.constraints.bound_collector_id":                          "constraints.bound_collector_id",
+	"definition.constraints.bound_collector_id": "constraints.bound_collector_id",
+	"hec_profile":                                                        "hec_profile",
+	"definition.hec_profile":                                             "hec_profile",
+	"hec_profile.default_index_name":                                     "hec_profile.default_index_name",
+	"definition.hec_profile.default_index_name":                          "hec_profile.default_index_name",
+	"hec_profile.default_host":                                           "hec_profile.default_host",
+	"definition.hec_profile.default_host":                                "hec_profile.default_host",
+	"hec_profile.default_source":                                         "hec_profile.default_source",
+	"definition.hec_profile.default_source":                              "hec_profile.default_source",
+	"hec_profile.default_sourcetype":                                     "hec_profile.default_sourcetype",
+	"definition.hec_profile.default_sourcetype":                          "hec_profile.default_sourcetype",
 	"ingestion_rate_limits":                                              "ingestion_rate_limits",
 	"definition.ingestion_rate_limits":                                   "ingestion_rate_limits",
 	"ingestion_rate_limits.max_events_per_second":                        "ingestion_rate_limits.max_events_per_second",
@@ -328,6 +342,11 @@ func (handler *apiHandler) ingestionTokenRoutes(noAuth router.AuthLevel, request
 			Path: "/ingestion-tokens/update", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: codec.NewProtoCodec[*opensplunkv1.UpdateIngestionTokenRequest, *opensplunkv1.UpdateIngestionTokenResponse](), Handler: handler.updateIngestionToken,
 			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.UpdateIngestionTokenRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: requestBytes},
+		}),
+		newForwardCompatibleProtoRoute[*opensplunkv1.SetIngestionTokenEnabledRequest, *opensplunkv1.SetIngestionTokenEnabledResponse](router.RouteConfig[*opensplunkv1.SetIngestionTokenEnabledRequest, *opensplunkv1.SetIngestionTokenEnabledResponse]{
+			Path: "/ingestion-tokens/state/set", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+			Codec: codec.NewProtoCodec[*opensplunkv1.SetIngestionTokenEnabledRequest, *opensplunkv1.SetIngestionTokenEnabledResponse](), Handler: handler.setIngestionTokenEnabled,
+			SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.SetIngestionTokenEnabledRequest], Overrides: sroutercommon.RouteOverrides{MaxBodySize: smallRequestBytes},
 		}),
 		newForwardCompatibleProtoRoute[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse](router.RouteConfig[*opensplunkv1.RevokeIngestionTokenRequest, *opensplunkv1.RevokeIngestionTokenResponse]{
 			Path: "/ingestion-tokens/revoke", Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
@@ -1534,8 +1553,13 @@ func (handler *apiHandler) updateIngestionToken(request *http.Request, input *op
 	}
 	replacement, err := applyTokenUpdate(current, input.GetDefinition(), input.GetUpdateMask())
 	if err != nil {
-		if errors.Is(err, errImmutableTokenCollectorBinding) {
+		switch {
+		case errors.Is(err, errImmutableTokenCollectorBinding):
 			return nil, router.NewHTTPError(http.StatusConflict, "ingestion token collector binding is immutable")
+		case errors.Is(err, errImmutableTokenPurpose):
+			return nil, router.NewHTTPError(http.StatusConflict, "ingestion token purpose is immutable")
+		case errors.Is(err, errImmutableTokenHECAcknowledgment):
+			return nil, router.NewHTTPError(http.StatusConflict, "HEC token acknowledgment mode is immutable")
 		}
 		return nil, badRequestError(err.Error())
 	}
@@ -1548,6 +1572,51 @@ func (handler *apiHandler) updateIngestionToken(request *http.Request, input *op
 		return nil, internalError()
 	}
 	return &opensplunkv1.UpdateIngestionTokenResponse{IngestionToken: converted}, nil
+}
+
+func (handler *apiHandler) setIngestionTokenEnabled(
+	request *http.Request,
+	input *opensplunkv1.SetIngestionTokenEnabledRequest,
+) (*opensplunkv1.SetIngestionTokenEnabledResponse, error) {
+	id, err := adminObjectID(
+		input.GetIngestionTokenId(),
+		maximumTokenIDBytes,
+		"ingestion token ID",
+	)
+	if err != nil {
+		return nil, badRequestError(err.Error())
+	}
+	if err := administrationExpectedVersion(input.GetExpectedVersion()); err != nil {
+		return nil, badRequestError(err.Error())
+	}
+	record, err := handler.ingestionTokens.SetCollectorTokenEnabled(
+		request.Context(),
+		id,
+		input.GetExpectedVersion(),
+		input.GetEnabled(),
+	)
+	if err := mapAdministrativeCallError(
+		request.Context(),
+		err,
+		"ingestion token",
+	); err != nil {
+		return nil, err
+	}
+	targetState := auth.CollectorTokenStateDisabled
+	if input.GetEnabled() {
+		targetState = auth.CollectorTokenStateActive
+	}
+	converted, err := tokenToProto(record)
+	if err != nil ||
+		record.ID != id ||
+		record.Version != input.GetExpectedVersion()+1 ||
+		record.State != targetState ||
+		!record.RevokedAt.IsZero() {
+		return nil, internalError()
+	}
+	return &opensplunkv1.SetIngestionTokenEnabledResponse{
+		IngestionToken: converted,
+	}, nil
 }
 
 func (handler *apiHandler) revokeIngestionToken(request *http.Request, input *opensplunkv1.RevokeIngestionTokenRequest) (*opensplunkv1.RevokeIngestionTokenResponse, error) {
@@ -1898,13 +1967,17 @@ func ingestionRateLimitsToProto(
 }
 
 func tokenDefinitionFromProto(input *opensplunkv1.IngestionTokenDefinition) (auth.UpdateCollectorTokenRequest, error) {
-	return tokenDefinitionFromProtoWithCurrentBinding(input, "", true)
+	return tokenDefinitionFromProtoWithCurrent(
+		input,
+		auth.CollectorToken{},
+		true,
+	)
 }
 
-func tokenDefinitionFromProtoWithCurrentBinding(
+func tokenDefinitionFromProtoWithCurrent(
 	input *opensplunkv1.IngestionTokenDefinition,
-	currentBinding string,
-	requireBinding bool,
+	current auth.CollectorToken,
+	creating bool,
 ) (auth.UpdateCollectorTokenRequest, error) {
 	if input == nil {
 		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token definition is required")
@@ -1921,6 +1994,18 @@ func tokenDefinitionFromProtoWithCurrentBinding(
 	if constraints == nil {
 		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token constraints are required")
 	}
+	purpose, err := tokenPurposeFromProto(
+		input.GetPurpose(),
+		constraints.BoundCollectorId != nil,
+		current.Purpose,
+		creating,
+	)
+	if err != nil {
+		return auth.UpdateCollectorTokenRequest{}, err
+	}
+	if !creating && purpose != current.Purpose {
+		return auth.UpdateCollectorTokenRequest{}, errImmutableTokenPurpose
+	}
 	allowedHostRegexes, err := normalizeTokenConstraintRegexes(
 		constraints.GetAllowedHostRegexes(),
 		"host",
@@ -1935,7 +2020,12 @@ func tokenDefinitionFromProtoWithCurrentBinding(
 	if err != nil {
 		return auth.UpdateCollectorTokenRequest{}, err
 	}
-	boundCollectorID, err := tokenCollectorBinding(constraints, currentBinding, requireBinding)
+	boundCollectorID, err := tokenCollectorBinding(
+		constraints,
+		purpose,
+		current.BoundCollectorID,
+		creating,
+	)
 	if err != nil {
 		return auth.UpdateCollectorTokenRequest{}, err
 	}
@@ -1955,6 +2045,16 @@ func tokenDefinitionFromProtoWithCurrentBinding(
 		}
 	}
 	slices.Sort(allowedIndexes)
+	hecProfile, err := tokenHECProfileFromProto(
+		input.HecProfile,
+		purpose,
+		allowedIndexes,
+		current.HECProfile,
+		creating,
+	)
+	if err != nil {
+		return auth.UpdateCollectorTokenRequest{}, err
+	}
 	var expiresAt time.Time
 	if input.GetExpiresAt() != nil {
 		if err := input.GetExpiresAt().CheckValid(); err != nil {
@@ -1968,11 +2068,158 @@ func tokenDefinitionFromProtoWithCurrentBinding(
 	}
 	return auth.UpdateCollectorTokenRequest{
 		Name: name, Description: description, BoundCollectorID: boundCollectorID,
+		Purpose:            purpose,
+		HECProfile:         hecProfile,
 		AllowedIndexNames:  allowedIndexes,
 		AllowedHostRegexes: allowedHostRegexes, AllowedSourceRegexes: allowedSourceRegexes,
 		ExpiresAt:           expiresAt,
 		IngestionRateLimits: rateLimits,
 	}, nil
+}
+
+func tokenPurposeFromProto(
+	input opensplunkv1.IngestionTokenPurpose,
+	hasCollectorBinding bool,
+	current auth.IngestionTokenPurpose,
+	creating bool,
+) (auth.IngestionTokenPurpose, error) {
+	switch input {
+	case opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR:
+		return auth.IngestionTokenPurposeNativeCollector, nil
+	case opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC:
+		return auth.IngestionTokenPurposeHEC, nil
+	case opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_UNSPECIFIED:
+		// Older native administration clients predate the purpose field. Their
+		// required immutable collector binding makes the legacy intent
+		// unambiguous, so retain wire compatibility without ever inferring HEC.
+		if creating && hasCollectorBinding ||
+			!creating && current == auth.IngestionTokenPurposeNativeCollector {
+			return auth.IngestionTokenPurposeNativeCollector, nil
+		}
+		return "", errors.New("ingestion token purpose is required")
+	default:
+		return "", errors.New("ingestion token purpose is invalid")
+	}
+}
+
+func tokenPurposeToProto(
+	input auth.IngestionTokenPurpose,
+) opensplunkv1.IngestionTokenPurpose {
+	switch input {
+	case auth.IngestionTokenPurposeNativeCollector:
+		return opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR
+	case auth.IngestionTokenPurposeHEC:
+		return opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC
+	default:
+		return opensplunkv1.IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_UNSPECIFIED
+	}
+}
+
+func tokenHECProfileFromProto(
+	input *opensplunkv1.IngestionTokenHecProfile,
+	purpose auth.IngestionTokenPurpose,
+	allowedIndexNames []string,
+	current auth.HECTokenProfile,
+	creating bool,
+) (auth.HECTokenProfile, error) {
+	if purpose == auth.IngestionTokenPurposeNativeCollector {
+		if input != nil {
+			return auth.HECTokenProfile{}, errors.New(
+				"native collector tokens cannot have a HEC profile",
+			)
+		}
+		return auth.HECTokenProfile{}, nil
+	}
+	if purpose != auth.IngestionTokenPurposeHEC || input == nil {
+		return auth.HECTokenProfile{}, errors.New(
+			"HEC tokens require a HEC profile",
+		)
+	}
+	profile := auth.HECTokenProfile{
+		IndexerAcknowledgment: input.GetIndexerAcknowledgment(),
+	}
+	if !creating && profile.IndexerAcknowledgment != current.IndexerAcknowledgment {
+		return auth.HECTokenProfile{}, errImmutableTokenHECAcknowledgment
+	}
+	if input.DefaultIndexName != nil {
+		candidate := input.GetDefaultIndexName()
+		canonical, err := control.NormalizeIndexName(candidate)
+		_, allowed := slices.BinarySearch(allowedIndexNames, candidate)
+		if err != nil || canonical != candidate || !allowed {
+			return auth.HECTokenProfile{}, errors.New(
+				"HEC default index must be a canonical allowed index",
+			)
+		}
+		profile.DefaultIndexName = strings.Clone(candidate)
+	}
+	var err error
+	profile.DefaultHost, err = tokenHECMetadataDefault(
+		input.DefaultHost,
+		"host",
+	)
+	if err != nil {
+		return auth.HECTokenProfile{}, err
+	}
+	profile.DefaultSource, err = tokenHECMetadataDefault(
+		input.DefaultSource,
+		"source",
+	)
+	if err != nil {
+		return auth.HECTokenProfile{}, err
+	}
+	profile.DefaultSourcetype, err = tokenHECMetadataDefault(
+		input.DefaultSourcetype,
+		"sourcetype",
+	)
+	if err != nil {
+		return auth.HECTokenProfile{}, err
+	}
+	return profile, nil
+}
+
+func tokenHECMetadataDefault(input *string, field string) (string, error) {
+	if input == nil {
+		return "", nil
+	}
+	value := *input
+	if len(value) == 0 || len(value) > 255 || !utf8.ValidString(value) ||
+		tokenHECASCIIEdgeWhitespace(value[0]) ||
+		tokenHECASCIIEdgeWhitespace(value[len(value)-1]) ||
+		strings.IndexByte(value, 0) >= 0 ||
+		strings.ContainsFunc(value, unicode.IsControl) {
+		return "", fmt.Errorf("HEC default %s is invalid", field)
+	}
+	return strings.Clone(value), nil
+}
+
+func tokenHECASCIIEdgeWhitespace(value byte) bool {
+	switch value {
+	case '\t', '\n', '\v', '\f', '\r', ' ':
+		return true
+	default:
+		return false
+	}
+}
+
+func tokenHECProfileToProto(
+	profile auth.HECTokenProfile,
+) *opensplunkv1.IngestionTokenHecProfile {
+	result := &opensplunkv1.IngestionTokenHecProfile{
+		IndexerAcknowledgment: profile.IndexerAcknowledgment,
+	}
+	if profile.DefaultIndexName != "" {
+		result.DefaultIndexName = stringPointer(profile.DefaultIndexName)
+	}
+	if profile.DefaultHost != "" {
+		result.DefaultHost = stringPointer(profile.DefaultHost)
+	}
+	if profile.DefaultSource != "" {
+		result.DefaultSource = stringPointer(profile.DefaultSource)
+	}
+	if profile.DefaultSourcetype != "" {
+		result.DefaultSourcetype = stringPointer(profile.DefaultSourcetype)
+	}
+	return result
 }
 
 func normalizeTokenConstraintRegexes(input []string, dimension string) ([]string, error) {
@@ -1985,9 +2232,19 @@ func normalizeTokenConstraintRegexes(input []string, dimension string) ([]string
 
 func tokenCollectorBinding(
 	constraints *opensplunkv1.IngestionTokenConstraints,
+	purpose auth.IngestionTokenPurpose,
 	currentBinding string,
 	requireBinding bool,
 ) (string, error) {
+	if purpose == auth.IngestionTokenPurposeHEC {
+		if constraints.BoundCollectorId != nil || currentBinding != "" {
+			return "", errors.New("HEC tokens cannot have a bound collector ID")
+		}
+		return "", nil
+	}
+	if purpose != auth.IngestionTokenPurposeNativeCollector {
+		return "", errors.New("ingestion token purpose is invalid")
+	}
 	if constraints.BoundCollectorId == nil {
 		if requireBinding {
 			return "", errors.New("ingestion token bound collector ID is required")
@@ -2026,15 +2283,20 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 	if input == nil {
 		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token definition is required")
 	}
+	if current.Purpose == "" {
+		current.Purpose = auth.IngestionTokenPurposeNativeCollector
+	}
 	paths, full, err := normalizeUpdateMask(mask, tokenUpdatePaths)
 	if err != nil {
 		return auth.UpdateCollectorTokenRequest{}, err
 	}
 	if full {
-		return tokenDefinitionFromProtoWithCurrentBinding(input, current.BoundCollectorID, false)
+		return tokenDefinitionFromProtoWithCurrent(input, current, false)
 	}
 	result := auth.UpdateCollectorTokenRequest{
 		Name: current.Name, Description: current.Description,
+		Purpose:              current.Purpose,
+		HECProfile:           current.HECProfile,
 		BoundCollectorID:     current.BoundCollectorID,
 		AllowedIndexNames:    slices.Clone(current.AllowedIndexNames),
 		AllowedHostRegexes:   slices.Clone(current.AllowedHostRegexes),
@@ -2055,8 +2317,28 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 				return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token description is invalid")
 			}
 		case "constraints":
-			partial := &opensplunkv1.IngestionTokenDefinition{Name: result.Name, Constraints: input.GetConstraints()}
-			parsed, err := tokenDefinitionFromProtoWithCurrentBinding(partial, current.BoundCollectorID, false)
+			partial := &opensplunkv1.IngestionTokenDefinition{
+				Name:        result.Name,
+				Constraints: input.GetConstraints(),
+				Purpose:     tokenPurposeToProto(result.Purpose),
+			}
+			if result.Purpose == auth.IngestionTokenPurposeHEC {
+				// Scope and default-index changes are one logical update. Do not
+				// validate the old default against the replacement scope while the
+				// field mask is still being assembled; the complete final profile is
+				// validated below against the complete final scope.
+				profileWithoutDefault := result.HECProfile
+				profileWithoutDefault.DefaultIndexName = ""
+				partial.HecProfile = tokenHECProfileToProto(profileWithoutDefault)
+			}
+			currentDefinition := current
+			currentDefinition.BoundCollectorID = result.BoundCollectorID
+			currentDefinition.HECProfile = result.HECProfile
+			parsed, err := tokenDefinitionFromProtoWithCurrent(
+				partial,
+				currentDefinition,
+				false,
+			)
 			if err != nil {
 				return auth.UpdateCollectorTokenRequest{}, err
 			}
@@ -2069,10 +2351,51 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 			if constraints == nil || constraints.BoundCollectorId == nil {
 				return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token bound collector ID is required for update")
 			}
-			result.BoundCollectorID, err = tokenCollectorBinding(constraints, current.BoundCollectorID, false)
+			result.BoundCollectorID, err = tokenCollectorBinding(
+				constraints,
+				result.Purpose,
+				current.BoundCollectorID,
+				false,
+			)
 			if err != nil {
 				return auth.UpdateCollectorTokenRequest{}, err
 			}
+		case "hec_profile":
+			result.HECProfile, err = tokenHECProfileFromProto(
+				input.HecProfile,
+				result.Purpose,
+				result.AllowedIndexNames,
+				current.HECProfile,
+				false,
+			)
+		case "hec_profile.default_index_name",
+			"hec_profile.default_host",
+			"hec_profile.default_source",
+			"hec_profile.default_sourcetype":
+			if result.Purpose != auth.IngestionTokenPurposeHEC ||
+				input.HecProfile == nil {
+				return auth.UpdateCollectorTokenRequest{}, errors.New(
+					"HEC token profile is required for update",
+				)
+			}
+			candidate := tokenHECProfileToProto(result.HECProfile)
+			switch path {
+			case "hec_profile.default_index_name":
+				candidate.DefaultIndexName = input.HecProfile.DefaultIndexName
+			case "hec_profile.default_host":
+				candidate.DefaultHost = input.HecProfile.DefaultHost
+			case "hec_profile.default_source":
+				candidate.DefaultSource = input.HecProfile.DefaultSource
+			case "hec_profile.default_sourcetype":
+				candidate.DefaultSourcetype = input.HecProfile.DefaultSourcetype
+			}
+			result.HECProfile, err = tokenHECProfileFromProto(
+				candidate,
+				result.Purpose,
+				result.AllowedIndexNames,
+				current.HECProfile,
+				false,
+			)
 		case "expires_at":
 			result.ExpiresAt = time.Time{}
 			if input.GetExpiresAt() != nil {
@@ -2096,6 +2419,18 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 			return auth.UpdateCollectorTokenRequest{}, err
 		}
 	}
+	if result.Purpose == auth.IngestionTokenPurposeHEC {
+		result.HECProfile, err = tokenHECProfileFromProto(
+			tokenHECProfileToProto(result.HECProfile),
+			result.Purpose,
+			result.AllowedIndexNames,
+			current.HECProfile,
+			false,
+		)
+		if err != nil {
+			return auth.UpdateCollectorTokenRequest{}, err
+		}
+	}
 	if err := result.IngestionRateLimits.Validate(); err != nil {
 		return auth.UpdateCollectorTokenRequest{}, errors.New("ingestion token rate limits are invalid")
 	}
@@ -2103,6 +2438,12 @@ func applyTokenUpdate(current auth.CollectorToken, input *opensplunkv1.Ingestion
 }
 
 func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, error) {
+	purpose := record.Purpose
+	if purpose == "" {
+		// Test doubles and older internal adapters predate the domain field. The
+		// migrated production store always returns an explicit canonical value.
+		purpose = auth.IngestionTokenPurposeNativeCollector
+	}
 	if validateBoundedIdentifier(record.ID, maximumTokenIDBytes, false) != nil || record.Version == 0 ||
 		validateAdminText(record.Name, maximumTokenNameBytes, false, false) != nil ||
 		validateAdminText(record.Description, maximumDescriptionBytes, true, true) != nil ||
@@ -2121,6 +2462,29 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 			return nil, errors.New("invalid ingestion token scopes")
 		}
 		previousScope = scope
+	}
+	var hecProfile *opensplunkv1.IngestionTokenHecProfile
+	switch purpose {
+	case auth.IngestionTokenPurposeNativeCollector:
+		if record.HECProfile != (auth.HECTokenProfile{}) {
+			return nil, errors.New("invalid native ingestion token profile")
+		}
+	case auth.IngestionTokenPurposeHEC:
+		if record.BoundCollectorID != "" {
+			return nil, errors.New("invalid HEC ingestion token binding")
+		}
+		hecProfile = tokenHECProfileToProto(record.HECProfile)
+		if _, err := tokenHECProfileFromProto(
+			hecProfile,
+			purpose,
+			record.AllowedIndexNames,
+			record.HECProfile,
+			false,
+		); err != nil {
+			return nil, errors.New("invalid HEC ingestion token profile")
+		}
+	default:
+		return nil, errors.New("invalid ingestion token purpose")
 	}
 	if err := tokenconstraint.ValidateNormalized(record.AllowedHostRegexes); err != nil {
 		return nil, errors.New("invalid ingestion token host constraints")
@@ -2150,6 +2514,7 @@ func tokenToProto(record auth.CollectorToken) (*opensplunkv1.IngestionToken, err
 	result := &opensplunkv1.IngestionToken{
 		IngestionTokenId: record.ID, Version: record.Version, Name: record.Name,
 		TokenPrefix: record.Prefix, State: state,
+		Purpose: tokenPurposeToProto(purpose), HecProfile: hecProfile,
 		Constraints: &opensplunkv1.IngestionTokenConstraints{
 			AllowedIndexNames:    slices.Clone(record.AllowedIndexNames),
 			AllowedHostRegexes:   slices.Clone(record.AllowedHostRegexes),
@@ -2261,6 +2626,7 @@ func normalizeUpdateMask(mask *fieldmaskpb.FieldMask, allowed map[string]string)
 		seen[canonical] = struct{}{}
 		paths = append(paths, canonical)
 	}
+	sort.Strings(paths)
 	return paths, false, nil
 }
 

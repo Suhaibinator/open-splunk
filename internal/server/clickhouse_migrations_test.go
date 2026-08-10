@@ -279,14 +279,14 @@ func TestLoadShippedClickHouseMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadClickHouseMigrations(shipped) error = %v", err)
 	}
-	if len(loaded) != 4 {
-		t.Fatalf("shipped migration count = %d, want 4", len(loaded))
+	if len(loaded) != 5 {
+		t.Fatalf("shipped migration count = %d, want 5", len(loaded))
 	}
-	if loaded[0].name != "create_events" || loaded[1].name != "add_visibility_sequence" || loaded[2].name != "add_field_metadata" || loaded[3].name != "create_recovery_sets" {
-		t.Fatalf("shipped migration names = %q, %q, %q, %q", loaded[0].name, loaded[1].name, loaded[2].name, loaded[3].name)
+	if loaded[0].name != "create_events" || loaded[1].name != "add_visibility_sequence" || loaded[2].name != "add_field_metadata" || loaded[3].name != "create_recovery_sets" || loaded[4].name != "add_ingest_source" {
+		t.Fatalf("shipped migration names = %q, %q, %q, %q, %q", loaded[0].name, loaded[1].name, loaded[2].name, loaded[3].name, loaded[4].name)
 	}
-	if len(loaded[0].statements) != 4 || len(loaded[1].statements) != 4 || len(loaded[2].statements) != 5 || len(loaded[3].statements) != 3 {
-		t.Fatalf("shipped statement counts = %d, %d, %d, %d; want 4, 4, 5, 3", len(loaded[0].statements), len(loaded[1].statements), len(loaded[2].statements), len(loaded[3].statements))
+	if len(loaded[0].statements) != 4 || len(loaded[1].statements) != 4 || len(loaded[2].statements) != 5 || len(loaded[3].statements) != 3 || len(loaded[4].statements) != 5 {
+		t.Fatalf("shipped statement counts = %d, %d, %d, %d, %d; want 4, 4, 5, 3, 5", len(loaded[0].statements), len(loaded[1].statements), len(loaded[2].statements), len(loaded[3].statements), len(loaded[4].statements))
 	}
 }
 
@@ -302,12 +302,13 @@ func TestApplyShippedClickHouseMigrationsThroughNativeInterface(t *testing.T) {
 		{Version: 2, Name: "add_visibility_sequence", RowCount: 1},
 		{Version: 3, Name: "add_field_metadata", RowCount: 1},
 		{Version: 4, Name: "create_recovery_sets", RowCount: 1},
+		{Version: 5, Name: "add_ingest_source", RowCount: 1},
 	}
 	if got := connection.historySnapshot(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("shipped migration history = %#v, want %#v", got, want)
 	}
-	if got := len(connection.statementsSnapshot()); got != 16 {
-		t.Fatalf("shipped executed statement count = %d, want 16", got)
+	if got := len(connection.statementsSnapshot()); got != 21 {
+		t.Fatalf("shipped executed statement count = %d, want 21", got)
 	}
 }
 

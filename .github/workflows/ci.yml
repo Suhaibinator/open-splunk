@@ -211,6 +211,20 @@ jobs:
             fuzztime: 15s
             targets: |
               ^FuzzParseDoesNotPanic$
+          - label: hec-protocol
+            package: ./internal/hec
+            fuzztime: 15s
+            targets: |
+              ^FuzzDecodeAcknowledgmentRequest$
+              ^FuzzParseAuthorization$
+              ^FuzzParseChannel$
+              ^FuzzGzipLimitEnforcement$
+              ^FuzzClassifyFieldNumber$
+              ^FuzzEnvelopeDecoder$
+              ^FuzzParseEpochNanoseconds$
+              ^FuzzParseRawQuery$
+              ^FuzzRawBreaker$
+              ^FuzzMarshalResponse$
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -329,8 +343,9 @@ jobs:
   backend-vertical:
     name: Backend vertical
     runs-on: ubuntu-latest
-    # Leave setup and artifact headroom above the 30-minute Go test deadline.
-    timeout-minutes: 35
+    # Leave setup, the 30-minute general vertical, and the isolated HEC
+    # vertical enough headroom to fail on their own bounded deadlines.
+    timeout-minutes: 45
     env:
       OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
     steps:
@@ -394,6 +409,36 @@ jobs:
           -count=1
           -timeout=30m
           -p=1
+          -v
+
+      - name: Test HEC ingestion-to-SPL vertical
+        env:
+          OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
+        run: >-
+          go test ./integration
+          -run '^TestBackendHECVertical$'
+          -count=1
+          -timeout=8m
+          -v
+
+      - name: Test HEC durable throughput and outage recovery
+        env:
+          OPEN_SPLUNK_HEC_LOAD: "1"
+        run: >-
+          go test ./integration
+          -run '^TestBackendHECDurableLoad$'
+          -count=1
+          -timeout=15m
+          -v
+
+      - name: Test HEC slow compressed read deadline
+        env:
+          OPEN_SPLUNK_HEC_SLOW_CLIENT: "1"
+        run: >-
+          go test ./integration
+          -run '^TestBackendHECSlowCompressedReadDeadline$'
+          -count=1
+          -timeout=15m
           -v
 
       - name: Upload browser failure artifacts

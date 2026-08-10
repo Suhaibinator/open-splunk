@@ -34,10 +34,10 @@ type protobufHTTPRouteContractRecord struct {
 	Path               string `json:"path"`
 	RequestType        string `json:"requestType"`
 	ResponseType       string `json:"responseType"`
-	RequestKnownWire   string `json:"requestKnownWire,omitempty"`
-	RequestFutureWire  string `json:"requestFutureWire,omitempty"`
-	ResponseKnownWire  string `json:"responseKnownWire,omitempty"`
-	ResponseFutureWire string `json:"responseFutureWire,omitempty"`
+	RequestKnownWire   string `json:"requestKnownWire"`
+	RequestFutureWire  string `json:"requestFutureWire"`
+	ResponseKnownWire  string `json:"responseKnownWire"`
+	ResponseFutureWire string `json:"responseFutureWire"`
 }
 
 type protobufHTTPRouteSignature struct {
@@ -55,8 +55,8 @@ func TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility(t *testing.T)
 	if err := json.Unmarshal(encoded, &fixture); err != nil {
 		t.Fatalf("decode route fixture: %v", err)
 	}
-	if fixture.Version != 1 || len(fixture.Routes) != 60 {
-		t.Fatalf("route fixture version/count = %d/%d, want 1/60", fixture.Version, len(fixture.Routes))
+	if fixture.Version != 1 || len(fixture.Routes) != 62 {
+		t.Fatalf("route fixture version/count = %d/%d, want 1/62", fixture.Version, len(fixture.Routes))
 	}
 	assertProtobufRouteFixtureInventory(t, fixture.Routes)
 	futureFieldNumber := protowire.Number(fixture.FutureFieldNumber)
@@ -901,6 +901,7 @@ func protobufRouteFixtureWire(
 		t.Fatalf("find %s: %v", typeName, err)
 	}
 	message := messageType.New()
+	emptyMessage := message.Descriptor().Fields().Len() == 0
 	if message.Descriptor().Fields().ByNumber(futureFieldNumber) != nil {
 		t.Fatalf("%s already defines future field %d", typeName, futureFieldNumber)
 	}
@@ -911,7 +912,7 @@ func protobufRouteFixtureWire(
 	if err != nil {
 		t.Fatalf("marshal %s: %v", typeName, err)
 	}
-	if len(known) == 0 {
+	if len(known) == 0 && !emptyMessage {
 		t.Fatalf("%s fixture has no non-default known field", typeName)
 	}
 	future := bytes.Clone(known)
@@ -932,7 +933,7 @@ func populateProtobufRouteFixture(
 	}
 	fields := message.Descriptor().Fields()
 	if fields.Len() == 0 {
-		return errors.New("fixture message has no fields")
+		return nil
 	}
 	field := fields.Get(0)
 	switch {

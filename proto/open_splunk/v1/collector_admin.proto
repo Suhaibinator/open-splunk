@@ -64,6 +64,14 @@ enum IngestionTokenState {
   INGESTION_TOKEN_STATE_EXPIRED = 4;
 }
 
+// IngestionTokenPurpose is an immutable transport boundary. A credential for
+// one ingestion surface must never authorize the other surface.
+enum IngestionTokenPurpose {
+  INGESTION_TOKEN_PURPOSE_UNSPECIFIED = 0;
+  INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR = 1;
+  INGESTION_TOKEN_PURPOSE_HEC = 2;
+}
+
 message IngestionTokenConstraints {
   repeated string allowed_index_names = 1;
   // Regexes use Go/RE2 syntax and must match the complete host/source value.
@@ -72,6 +80,17 @@ message IngestionTokenConstraints {
   repeated string allowed_host_regexes = 2;
   repeated string allowed_source_regexes = 3;
   optional string bound_collector_id = 4;
+}
+
+// IngestionTokenHecProfile contains the HEC-only metadata defaults. Presence
+// is required for HEC-purpose tokens and forbidden for native collector
+// tokens. indexer_acknowledgment is immutable after creation.
+message IngestionTokenHecProfile {
+  optional string default_index_name = 1;
+  optional string default_host = 2;
+  optional string default_source = 3;
+  optional string default_sourcetype = 4;
+  bool indexer_acknowledgment = 5;
 }
 
 // IngestionToken never contains the secret or its hash. token_prefix is a safe
@@ -90,4 +109,6 @@ message IngestionToken {
   google.protobuf.Timestamp expires_at = 11;
   google.protobuf.Timestamp revoked_at = 12;
   IngestionRateLimits ingestion_rate_limits = 13;
+  IngestionTokenPurpose purpose = 14;
+  IngestionTokenHecProfile hec_profile = 15;
 }

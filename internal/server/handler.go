@@ -158,6 +158,51 @@ type RuntimeReadiness interface {
 	Ping(context.Context) error
 }
 
+// HECOperationalSnapshot is the fixed-shape, administrator-only HEC
+// projection. It deliberately has no string, byte, map, or slice fields which
+// could carry token, channel, index, request, or event identity.
+type HECOperationalSnapshot struct {
+	ObservedAt                time.Time
+	Requests                  uint64
+	Events                    uint64
+	UncompressedBytes         uint64
+	AuthenticationFailures    uint64
+	DecodeFailures            uint64
+	EventPolicyFailures       uint64
+	AcceptedRequests          uint64
+	RateLimitedRequests       uint64
+	StagingFailures           uint64
+	StagingDuration           time.Duration
+	PendingOutboxReservations uint64
+	PendingOutboxBytes        uint64
+	OldestPendingOutboxAge    time.Duration
+	RequestCapacityAvailable  bool
+	RetainedRequests          uint64
+	QueueAvailable            bool
+	ReconciliationAvailable   bool
+	ReconciliationSuccesses   uint64
+	ReconciliationRetries     uint64
+	ReconciliationAmbiguities uint64
+	ActiveChannels            uint64
+	RetainedChannels          uint64
+	PendingAcknowledgments    uint64
+	IndexedAcknowledgments    uint64
+	ExpiredAcknowledgments    uint64
+	TerminalFailedRequests    uint64
+	AcknowledgmentAvailable   bool
+	AcknowledgmentQueries     uint64
+	AcknowledgmentIDsQueried  uint64
+	AcknowledgmentMisses      uint64
+	ShutdownRejections        uint64
+	ProtocolFailures          [28]uint64
+}
+
+// HECOperationalSnapshotter reads one bounded aggregate without returning
+// per-token or request-scoped telemetry.
+type HECOperationalSnapshotter interface {
+	HECOperationalSnapshot(context.Context) (HECOperationalSnapshot, error)
+}
+
 // IndexDataDeletionAdmission durably admits one physical index deletion in
 // the trusted control plane. The tenant scope must be supplied by the server,
 // never by browser input.
@@ -186,6 +231,7 @@ type IngestionTokenAdministration interface {
 	GetCollectorToken(context.Context, string) (auth.CollectorToken, error)
 	ListCollectorTokens(context.Context) ([]auth.CollectorToken, error)
 	UpdateCollectorToken(context.Context, string, uint64, auth.UpdateCollectorTokenRequest) (auth.CollectorToken, error)
+	SetCollectorTokenEnabled(context.Context, string, uint64, bool) (auth.CollectorToken, error)
 	RevokeCollectorToken(context.Context, string, uint64) (auth.CollectorToken, error)
 }
 
@@ -438,6 +484,7 @@ type Config struct {
 	IndexDataDeletionAdmission IndexDataDeletionAdmission
 	IndexDataDeletionWaker     IndexDataDeletionWaker
 	IngestionTokens            IngestionTokenAdministration
+	HECOperations              HECOperationalSnapshotter
 	AuditEvents                AuditEvents
 	SearchAttemptAuditEvents   SearchAttemptAuditEvents
 	CollectorAdmin             CollectorAdministration
@@ -490,6 +537,7 @@ type apiHandler struct {
 	indexDataDeletionAdmission IndexDataDeletionAdmission
 	indexDataDeletionWaker     IndexDataDeletionWaker
 	ingestionTokens            IngestionTokenAdministration
+	hecOperations              HECOperationalSnapshotter
 	auditEvents                AuditEvents
 	searchAttemptAuditEvents   SearchAttemptAuditEvents
 	collectorAdmin             CollectorAdministration
@@ -605,6 +653,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(ingestionTokens) {
 		ingestionTokens = nil
 	}
+	hecOperations := config.HECOperations
+	if isNilDependency(hecOperations) {
+		hecOperations = nil
+	}
 	auditEvents := config.AuditEvents
 	if isNilDependency(auditEvents) {
 		auditEvents = nil
@@ -688,6 +740,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexStatistics != nil ||
 		indexFields != nil ||
 		ingestionTokens != nil ||
+		hecOperations != nil ||
 		auditEvents != nil ||
 		searchAttemptAuditEvents != nil ||
 		collectorAdmin != nil ||
@@ -924,6 +977,7 @@ func NewHandler(config Config) (*Handler, error) {
 		indexDataDeletionAdmission: indexDataDeletionAdmission,
 		indexDataDeletionWaker:     indexDataDeletionWaker,
 		ingestionTokens:            ingestionTokens,
+		hecOperations:              hecOperations,
 		auditEvents:                auditEvents,
 		searchAttemptAuditEvents:   searchAttemptAuditEvents,
 		collectorAdmin:             collectorAdmin,
@@ -1019,11 +1073,16 @@ func NewHandler(config Config) (*Handler, error) {
 			"/api/v1/ingestion-tokens/get",
 			"/api/v1/ingestion-tokens/list",
 			"/api/v1/ingestion-tokens/update",
+			"/api/v1/ingestion-tokens/state/set",
 			"/api/v1/ingestion-tokens/revoke",
 		} {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}
 		}
+	}
+	if api.hecOperations != nil {
+		apiRoutes[hecOperationsPath] = http.MethodPost
+		administratorRoutes[hecOperationsPath] = struct{}{}
 	}
 	if api.auditEvents != nil {
 		apiRoutes[auditEventsListPath] = http.MethodPost
@@ -1385,6 +1444,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	}
 	if handler.ingestionTokens != nil {
 		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
+	}
+	if handler.hecOperations != nil {
+		routes = append(routes, handler.hecOperationalRoutes(noAuth, smallRequestBytes)...)
 	}
 	if handler.auditEvents != nil {
 		routes = append(

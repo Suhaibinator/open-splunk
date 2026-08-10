@@ -44,7 +44,7 @@ func TestSearchAttemptKnowledgeSnapshotMigrationPreservesAndConstrainsJournal(t 
 	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply migrations through 0034: %v", err)
 	}
-	assertIntegerQuery(t, raw, 34, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 36, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 5, `
 		SELECT count(*)
 		FROM pragma_table_info('search_attempt_audit_events')

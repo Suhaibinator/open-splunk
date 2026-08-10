@@ -1,5 +1,6 @@
 import * as ExportApi from "@/gen/ts/open_splunk/v1/export_api";
 import * as HistoryApi from "@/gen/ts/open_splunk/v1/history_api";
+import * as HecAdminApi from "@/gen/ts/open_splunk/v1/hec_admin_api";
 import * as IndexApi from "@/gen/ts/open_splunk/v1/index_api";
 import * as AppApi from "@/gen/ts/open_splunk/v1/app_api";
 import * as AuditApi from "@/gen/ts/open_splunk/v1/audit_api";
@@ -220,10 +221,23 @@ export const ingestionTokenRoutes = {
     CollectorAdminApi.UpdateIngestionTokenRequest,
     CollectorAdminApi.UpdateIngestionTokenResponse,
   ),
+  setState: defineProtobufRoute(
+    "/api/v1/ingestion-tokens/state/set",
+    CollectorAdminApi.SetIngestionTokenEnabledRequest,
+    CollectorAdminApi.SetIngestionTokenEnabledResponse,
+  ),
   revoke: defineProtobufRoute(
     "/api/v1/ingestion-tokens/revoke",
     CollectorAdminApi.RevokeIngestionTokenRequest,
     CollectorAdminApi.RevokeIngestionTokenResponse,
+  ),
+} as const;
+
+export const hecOperationsRoutes = {
+  get: defineProtobufRoute(
+    "/api/v1/hec/operations/get",
+    HecAdminApi.GetHECOperationalSnapshotRequest,
+    HecAdminApi.GetHECOperationalSnapshotResponse,
   ),
 } as const;
 
@@ -374,6 +388,7 @@ export const openSplunkRoutes = {
   indexes: indexRoutes,
   knowledge: knowledgeRoutes,
   ingestionTokens: ingestionTokenRoutes,
+  hec: hecOperationsRoutes,
   search: searchRoutes,
   savedSearches: savedSearchRoutes,
   history: historyRoutes,

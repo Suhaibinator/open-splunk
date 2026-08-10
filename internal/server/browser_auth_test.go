@@ -36,7 +36,9 @@ var browserGateAdministratorPaths = []string{
 	"/api/v1/ingestion-tokens/get",
 	"/api/v1/ingestion-tokens/list",
 	"/api/v1/ingestion-tokens/update",
+	"/api/v1/ingestion-tokens/state/set",
 	"/api/v1/ingestion-tokens/revoke",
+	hecOperationsPath,
 	"/api/v1/collectors/get",
 	"/api/v1/collectors/list",
 	"/api/v1/collectors/update",
@@ -306,6 +308,16 @@ func (administration *browserGateTokenAdministration) UpdateCollectorToken(
 ) (auth.CollectorToken, error) {
 	administration.record()
 	return auth.CollectorToken{}, errors.New("unexpected token update")
+}
+
+func (administration *browserGateTokenAdministration) SetCollectorTokenEnabled(
+	context.Context,
+	string,
+	uint64,
+	bool,
+) (auth.CollectorToken, error) {
+	administration.record()
+	return auth.CollectorToken{}, errors.New("unexpected token state update")
 }
 
 func (administration *browserGateTokenAdministration) RevokeCollectorToken(
@@ -1384,6 +1396,7 @@ func newBrowserGateHandler(
 		Indexes:                    indexes,
 		IndexAdmin:                 indexes,
 		IngestionTokens:            tokens,
+		HECOperations:              &staticHECOperationalSnapshotter{},
 		CollectorAdmin:             browserGateCollectorAdministration{},
 		AppAdmin:                   &fakeAppAdministration{},
 		AppCursorKey:               appAdministrationCursorKey,

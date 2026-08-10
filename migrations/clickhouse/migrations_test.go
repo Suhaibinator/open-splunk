@@ -153,6 +153,28 @@ func TestRecoverySetsMigrationContract(t *testing.T) {
 	}
 }
 
+func TestIngestSourceMigrationContract(t *testing.T) {
+	t.Parallel()
+	sql := readFile(t, "0005_add_ingest_source.sql")
+	for _, fragment := range []string{
+		"ADD COLUMN IF NOT EXISTS `ingest_source_kind` UInt8",
+		"DEFAULT if(empty(`collector_id`), 0, 1)",
+		"ADD COLUMN IF NOT EXISTS `ingest_source_id` String",
+		"DEFAULT if(`ingest_source_kind` = 1, `collector_id`, '')",
+		"ADD CONSTRAINT IF NOT EXISTS ingest_source_kind_is_supported",
+		"CHECK `ingest_source_kind` IN (1, 2)",
+		"ADD CONSTRAINT IF NOT EXISTS ingest_source_shape_is_valid",
+		"`ingest_source_id` = `collector_id`",
+		"empty(`collector_id`)",
+		"SELECT 5, 'add_ingest_source'",
+		"WHERE `version` = 5",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("ingest source migration is missing contract fragment %q", fragment)
+		}
+	}
+}
+
 func TestComposeFullStackSecurityContract(t *testing.T) {
 	compose := readFile(t, filepath.Join("..", "..", "deploy", "docker-compose.yaml"))
 

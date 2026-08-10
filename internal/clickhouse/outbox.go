@@ -19,7 +19,10 @@ import (
 
 const maxDurableBatchEvents = 1000
 
-var storeOutboxHeader = [5]byte{'O', 'S', 'O', 'B', 2}
+var (
+	legacyStoreOutboxHeader = [5]byte{'O', 'S', 'O', 'B', 2}
+	storeOutboxHeader       = [5]byte{'O', 'S', 'O', 'B', 3}
+)
 
 // encodeStoreOutbox persists the exact normalized/redacted protobuf block
 // which the ClickHouse writer will replay after an ambiguous failure. It does
@@ -28,9 +31,12 @@ func encodeStoreOutbox(batch ingest.StoreBatch) ([]byte, error) {
 	if err := validateOutboxBatch(batch); err != nil {
 		return nil, err
 	}
+	source, _ := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
 	var body bytes.Buffer
 	writeOutboxBytes(&body, []byte(batch.TenantID))
 	writeOutboxBytes(&body, []byte(batch.CollectorID))
+	_ = body.WriteByte(byte(source.Kind))
+	writeOutboxBytes(&body, []byte(source.ID))
 	writeOutboxBytes(&body, []byte(batch.BatchID))
 	writeOutboxUint64(&body, batch.BatchSequence)
 	_, _ = body.Write(batch.SourceBatchSHA256[:])
@@ -65,7 +71,11 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 	}
 	reader := bytes.NewReader(encoded)
 	header := make([]byte, len(storeOutboxHeader))
-	if _, err := io.ReadFull(reader, header); err != nil || !bytes.Equal(header, storeOutboxHeader[:]) {
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return ingest.StoreBatch{}, errors.New("ClickHouse outbox has an invalid version")
+	}
+	legacy := bytes.Equal(header, legacyStoreOutboxHeader[:])
+	if !legacy && !bytes.Equal(header, storeOutboxHeader[:]) {
 		return ingest.StoreBatch{}, errors.New("ClickHouse outbox has an invalid version")
 	}
 	var storedDigest [sha256.Size]byte
@@ -84,9 +94,33 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 	if err != nil {
 		return ingest.StoreBatch{}, fmt.Errorf("decode ClickHouse outbox tenant: %w", err)
 	}
-	collectorID, err := readOutboxString(reader, 128)
+	collectorID, err := readOutboxOptionalString(reader, 128)
 	if err != nil {
 		return ingest.StoreBatch{}, fmt.Errorf("decode ClickHouse outbox collector: %w", err)
+	}
+	var source ingest.IngestionSource
+	if legacy {
+		if collectorID == "" {
+			return ingest.StoreBatch{}, errors.New("decode ClickHouse outbox collector: empty legacy collector")
+		}
+		source = ingest.NativeCollectorSource(collectorID)
+	} else {
+		kind, readErr := reader.ReadByte()
+		if readErr != nil {
+			return ingest.StoreBatch{}, errors.New("ClickHouse outbox is truncated at ingestion source kind")
+		}
+		sourceID, readErr := readOutboxString(reader, uint64(ingest.HardMaxIDBytes))
+		if readErr != nil {
+			return ingest.StoreBatch{}, fmt.Errorf("decode ClickHouse outbox ingestion source: %w", readErr)
+		}
+		source = ingest.IngestionSource{
+			Kind:        ingest.IngestionSourceKind(kind),
+			ID:          sourceID,
+			CollectorID: collectorID,
+		}
+		if _, sourceErr := ingest.CanonicalIngestionSource(source, collectorID); sourceErr != nil {
+			return ingest.StoreBatch{}, fmt.Errorf("decode ClickHouse outbox ingestion source: %w", sourceErr)
+		}
 	}
 	batchID, err := readOutboxString(reader, 128)
 	if err != nil {
@@ -117,6 +151,7 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 	receivedAt := time.UnixMilli(int64(receivedMillis)).UTC()
 	batch := ingest.StoreBatch{
 		TenantID:           tenantID,
+		Source:             source,
 		CollectorID:        collectorID,
 		BatchID:            batchID,
 		BatchSequence:      batchSequence,
@@ -137,6 +172,7 @@ func decodeStoreOutbox(encoded []byte) (ingest.StoreBatch, error) {
 		batch.Events = append(batch.Events, &ingest.StoredEvent{
 			Event:       event,
 			TenantID:    tenantID,
+			Source:      source,
 			CollectorID: collectorID,
 			BatchID:     batchID,
 			IndexTime:   receivedAt,
@@ -165,7 +201,11 @@ func cloneEventRejections(values []*opensplunkv1.EventRejection) []*opensplunkv1
 }
 
 func validateOutboxBatch(batch ingest.StoreBatch) error {
-	if batch.TenantID == "" || batch.CollectorID == "" || batch.BatchID == "" ||
+	source, sourceErr := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
+	if sourceErr != nil {
+		return fmt.Errorf("store ClickHouse outbox: invalid ingestion source: %w", sourceErr)
+	}
+	if batch.TenantID == "" || batch.BatchID == "" ||
 		!utf8.ValidString(batch.TenantID) || !utf8.ValidString(batch.CollectorID) || !utf8.ValidString(batch.BatchID) ||
 		len(batch.TenantID) > 255 || len(batch.CollectorID) > 128 || len(batch.BatchID) > 128 ||
 		batch.BatchSequence == 0 || batch.SourceBatchSHA256 == ([sha256.Size]byte{}) || batch.ReceivedAt.IsZero() ||
@@ -179,6 +219,10 @@ func validateOutboxBatch(batch ingest.StoreBatch) error {
 	for index, stored := range batch.Events {
 		if stored == nil || stored.Event == nil {
 			return fmt.Errorf("store ClickHouse outbox: event %d is nil", index)
+		}
+		storedSource, err := ingest.CanonicalIngestionSource(stored.Source, stored.CollectorID)
+		if err != nil || stored.TenantID != batch.TenantID || storedSource != source || stored.BatchID != batch.BatchID {
+			return fmt.Errorf("store ClickHouse outbox: event %d server metadata does not match its batch", index)
 		}
 	}
 	return nil
@@ -204,6 +248,14 @@ func writeOutboxUint64(output *bytes.Buffer, value uint64) {
 func readOutboxString(reader *bytes.Reader, maximum uint64) (string, error) {
 	value, err := readOutboxBytes(reader, maximum)
 	if err != nil || len(value) == 0 || !utf8.Valid(value) {
+		return "", errors.New("invalid UTF-8 string")
+	}
+	return string(value), nil
+}
+
+func readOutboxOptionalString(reader *bytes.Reader, maximum uint64) (string, error) {
+	value, err := readOutboxBytes(reader, maximum)
+	if err != nil || !utf8.Valid(value) {
 		return "", errors.New("invalid UTF-8 string")
 	}
 	return string(value), nil

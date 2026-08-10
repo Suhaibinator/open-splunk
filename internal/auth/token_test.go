@@ -638,6 +638,7 @@ func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
 		{table: "ingestion_tokens", model: &collectorTokenRecord{}},
 		{table: "ingestion_token_indexes", model: &collectorTokenIndexRecord{}},
 		{table: "ingestion_token_constraints", model: &collectorTokenConstraintRecord{}},
+		{table: "ingestion_token_hec_profiles", model: &collectorTokenHECProfileRecord{}},
 	}
 	for _, test := range tests {
 		t.Run(test.table, func(t *testing.T) {
@@ -694,6 +695,7 @@ func TestCollectorTokenGORMModelsMatchMigratedSQLiteSchema(t *testing.T) {
 					"ingestion_tokens_max_ingest_uncompressed_bytes_per_second_bounded",
 					"ingestion_tokens_name_length",
 					"ingestion_tokens_prefix_length",
+					"ingestion_tokens_purpose_supported",
 					"ingestion_tokens_revocation_consistency",
 					"ingestion_tokens_state",
 					"ingestion_tokens_update_not_before_create",

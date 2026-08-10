@@ -157,6 +157,49 @@ export function ingestionTokenStateToJSON(object: IngestionTokenState): string {
   }
 }
 
+/**
+ * IngestionTokenPurpose is an immutable transport boundary. A credential for
+ * one ingestion surface must never authorize the other surface.
+ */
+export enum IngestionTokenPurpose {
+  INGESTION_TOKEN_PURPOSE_UNSPECIFIED = 0,
+  INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR = 1,
+  INGESTION_TOKEN_PURPOSE_HEC = 2,
+  UNRECOGNIZED = -1,
+}
+
+export function ingestionTokenPurposeFromJSON(object: any): IngestionTokenPurpose {
+  switch (object) {
+    case 0:
+    case "INGESTION_TOKEN_PURPOSE_UNSPECIFIED":
+      return IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_UNSPECIFIED;
+    case 1:
+    case "INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR":
+      return IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR;
+    case 2:
+    case "INGESTION_TOKEN_PURPOSE_HEC":
+      return IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return IngestionTokenPurpose.UNRECOGNIZED;
+  }
+}
+
+export function ingestionTokenPurposeToJSON(object: IngestionTokenPurpose): string {
+  switch (object) {
+    case IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_UNSPECIFIED:
+      return "INGESTION_TOKEN_PURPOSE_UNSPECIFIED";
+    case IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR:
+      return "INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR";
+    case IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC:
+      return "INGESTION_TOKEN_PURPOSE_HEC";
+    case IngestionTokenPurpose.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
 export interface CollectorRecord {
   collectorId: string;
   version: bigint;
@@ -206,6 +249,19 @@ export interface IngestionTokenConstraints {
 }
 
 /**
+ * IngestionTokenHecProfile contains the HEC-only metadata defaults. Presence
+ * is required for HEC-purpose tokens and forbidden for native collector
+ * tokens. indexer_acknowledgment is immutable after creation.
+ */
+export interface IngestionTokenHecProfile {
+  defaultIndexName?: string | undefined;
+  defaultHost?: string | undefined;
+  defaultSource?: string | undefined;
+  defaultSourcetype?: string | undefined;
+  indexerAcknowledgment: boolean;
+}
+
+/**
  * IngestionToken never contains the secret or its hash. token_prefix is a safe
  * short identifier for operator recognition.
  */
@@ -223,6 +279,8 @@ export interface IngestionToken {
   expiresAt: Date | undefined;
   revokedAt: Date | undefined;
   ingestionRateLimits: IngestionRateLimits | undefined;
+  purpose: IngestionTokenPurpose;
+  hecProfile: IngestionTokenHecProfile | undefined;
 }
 
 function createBaseCollectorRecord(): CollectorRecord {
@@ -941,6 +999,156 @@ export const IngestionTokenConstraints: MessageFns<IngestionTokenConstraints> = 
   },
 };
 
+function createBaseIngestionTokenHecProfile(): IngestionTokenHecProfile {
+  return {
+    defaultIndexName: undefined,
+    defaultHost: undefined,
+    defaultSource: undefined,
+    defaultSourcetype: undefined,
+    indexerAcknowledgment: false,
+  };
+}
+
+export const IngestionTokenHecProfile: MessageFns<IngestionTokenHecProfile> = {
+  encode(message: IngestionTokenHecProfile, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.defaultIndexName !== undefined) {
+      writer.uint32(10).string(message.defaultIndexName);
+    }
+    if (message.defaultHost !== undefined) {
+      writer.uint32(18).string(message.defaultHost);
+    }
+    if (message.defaultSource !== undefined) {
+      writer.uint32(26).string(message.defaultSource);
+    }
+    if (message.defaultSourcetype !== undefined) {
+      writer.uint32(34).string(message.defaultSourcetype);
+    }
+    if (message.indexerAcknowledgment !== false) {
+      writer.uint32(40).bool(message.indexerAcknowledgment);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): IngestionTokenHecProfile {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseIngestionTokenHecProfile();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.defaultIndexName = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.defaultHost = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.defaultSource = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.defaultSourcetype = reader.string();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.indexerAcknowledgment = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): IngestionTokenHecProfile {
+    return {
+      defaultIndexName: isSet(object.defaultIndexName)
+        ? globalThis.String(object.defaultIndexName)
+        : isSet(object.default_index_name)
+        ? globalThis.String(object.default_index_name)
+        : undefined,
+      defaultHost: isSet(object.defaultHost)
+        ? globalThis.String(object.defaultHost)
+        : isSet(object.default_host)
+        ? globalThis.String(object.default_host)
+        : undefined,
+      defaultSource: isSet(object.defaultSource)
+        ? globalThis.String(object.defaultSource)
+        : isSet(object.default_source)
+        ? globalThis.String(object.default_source)
+        : undefined,
+      defaultSourcetype: isSet(object.defaultSourcetype)
+        ? globalThis.String(object.defaultSourcetype)
+        : isSet(object.default_sourcetype)
+        ? globalThis.String(object.default_sourcetype)
+        : undefined,
+      indexerAcknowledgment: isSet(object.indexerAcknowledgment)
+        ? globalThis.Boolean(object.indexerAcknowledgment)
+        : isSet(object.indexer_acknowledgment)
+        ? globalThis.Boolean(object.indexer_acknowledgment)
+        : false,
+    };
+  },
+
+  toJSON(message: IngestionTokenHecProfile): unknown {
+    const obj: any = {};
+    if (message.defaultIndexName !== undefined) {
+      obj.defaultIndexName = message.defaultIndexName;
+    }
+    if (message.defaultHost !== undefined) {
+      obj.defaultHost = message.defaultHost;
+    }
+    if (message.defaultSource !== undefined) {
+      obj.defaultSource = message.defaultSource;
+    }
+    if (message.defaultSourcetype !== undefined) {
+      obj.defaultSourcetype = message.defaultSourcetype;
+    }
+    if (message.indexerAcknowledgment !== false) {
+      obj.indexerAcknowledgment = message.indexerAcknowledgment;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<IngestionTokenHecProfile>, I>>(base?: I): IngestionTokenHecProfile {
+    return IngestionTokenHecProfile.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<IngestionTokenHecProfile>, I>>(object: I): IngestionTokenHecProfile {
+    const message = createBaseIngestionTokenHecProfile();
+    message.defaultIndexName = object.defaultIndexName ?? undefined;
+    message.defaultHost = object.defaultHost ?? undefined;
+    message.defaultSource = object.defaultSource ?? undefined;
+    message.defaultSourcetype = object.defaultSourcetype ?? undefined;
+    message.indexerAcknowledgment = object.indexerAcknowledgment ?? false;
+    return message;
+  },
+};
+
 function createBaseIngestionToken(): IngestionToken {
   return {
     ingestionTokenId: "",
@@ -956,6 +1164,8 @@ function createBaseIngestionToken(): IngestionToken {
     expiresAt: undefined,
     revokedAt: undefined,
     ingestionRateLimits: undefined,
+    purpose: 0,
+    hecProfile: undefined,
   };
 }
 
@@ -1002,6 +1212,12 @@ export const IngestionToken: MessageFns<IngestionToken> = {
     }
     if (message.ingestionRateLimits !== undefined) {
       IngestionRateLimits.encode(message.ingestionRateLimits, writer.uint32(106).fork()).join();
+    }
+    if (message.purpose !== 0) {
+      writer.uint32(112).int32(message.purpose);
+    }
+    if (message.hecProfile !== undefined) {
+      IngestionTokenHecProfile.encode(message.hecProfile, writer.uint32(122).fork()).join();
     }
     return writer;
   },
@@ -1117,6 +1333,22 @@ export const IngestionToken: MessageFns<IngestionToken> = {
           message.ingestionRateLimits = IngestionRateLimits.decode(reader, reader.uint32());
           continue;
         }
+        case 14: {
+          if (tag !== 112) {
+            break;
+          }
+
+          message.purpose = reader.int32() as any;
+          continue;
+        }
+        case 15: {
+          if (tag !== 122) {
+            break;
+          }
+
+          message.hecProfile = IngestionTokenHecProfile.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1173,6 +1405,12 @@ export const IngestionToken: MessageFns<IngestionToken> = {
         : isSet(object.ingestion_rate_limits)
         ? IngestionRateLimits.fromJSON(object.ingestion_rate_limits)
         : undefined,
+      purpose: isSet(object.purpose) ? ingestionTokenPurposeFromJSON(object.purpose) : 0,
+      hecProfile: isSet(object.hecProfile)
+        ? IngestionTokenHecProfile.fromJSON(object.hecProfile)
+        : isSet(object.hec_profile)
+        ? IngestionTokenHecProfile.fromJSON(object.hec_profile)
+        : undefined,
     };
   },
 
@@ -1217,6 +1455,12 @@ export const IngestionToken: MessageFns<IngestionToken> = {
     if (message.ingestionRateLimits !== undefined) {
       obj.ingestionRateLimits = IngestionRateLimits.toJSON(message.ingestionRateLimits);
     }
+    if (message.purpose !== 0) {
+      obj.purpose = ingestionTokenPurposeToJSON(message.purpose);
+    }
+    if (message.hecProfile !== undefined) {
+      obj.hecProfile = IngestionTokenHecProfile.toJSON(message.hecProfile);
+    }
     return obj;
   },
 
@@ -1241,6 +1485,10 @@ export const IngestionToken: MessageFns<IngestionToken> = {
     message.revokedAt = object.revokedAt ?? undefined;
     message.ingestionRateLimits = (object.ingestionRateLimits !== undefined && object.ingestionRateLimits !== null)
       ? IngestionRateLimits.fromPartial(object.ingestionRateLimits)
+      : undefined;
+    message.purpose = object.purpose ?? 0;
+    message.hecProfile = (object.hecProfile !== undefined && object.hecProfile !== null)
+      ? IngestionTokenHecProfile.fromPartial(object.hecProfile)
       : undefined;
     return message;
   },

@@ -107,6 +107,33 @@ generic unknown clearing. Validate's successful responses additionally bypass a 
 `proto.Marshal`: its transport revalidates and writes the service seal's exact
 deterministic bytes, whose complete response bound is 8 MiB.
 
+### HEC capability and token administration
+
+`SERVER_FEATURE_HEC_INGESTION = 16` advertises the complete external HTTP
+Event Collector v0.1 surface. The server includes it in
+`GetSystemBootstrapResponse.features` only when JSON event, raw event,
+acknowledgment, health, HEC authentication, durable admission, and recovery
+dependencies are registered together. The enum does not turn a partial route
+set into a supported capability.
+
+HEC request and response bodies are bounded JSON, not protobuf. The existing
+administrator ingestion-token messages carry the control-plane additions:
+`IngestionTokenPurpose` is an immutable transport boundary, with
+`INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR = 1` and
+`INGESTION_TOKEN_PURPOSE_HEC = 2`, and HEC-purpose tokens require an
+`IngestionTokenHecProfile`. Its optional index/host/source/sourcetype defaults
+remain mutable, while `indexer_acknowledgment` is fixed at creation. HEC tokens
+forbid `bound_collector_id`; native tokens require it and forbid a HEC profile.
+`INGESTION_TOKEN_PURPOSE_UNSPECIFIED` is accepted only for legacy
+native-creation compatibility when a valid collector binding makes the purpose
+unambiguous. It can never infer HEC.
+
+Create continues to return the plaintext credential exactly once. Get, list,
+update, and revoke return only the safe prefix and metadata. No protobuf route
+emulates Splunk management-port token APIs. External protocol behavior is
+normative in the [HEC compatibility contract](hec-compatibility-v0.1.md), and
+deployment behavior is in the [HEC operator runbook](hec-deployment.md).
+
 ### Knowledge-object contracts
 
 The `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` enum value is reserved for the
@@ -1047,7 +1074,9 @@ projection.
 | `/ingestion-tokens/get` | `GetIngestionTokenRequest` | `GetIngestionTokenResponse` |
 | `/ingestion-tokens/list` | `ListIngestionTokensRequest` | `ListIngestionTokensResponse` |
 | `/ingestion-tokens/update` | `UpdateIngestionTokenRequest` | `UpdateIngestionTokenResponse` |
+| `/ingestion-tokens/state/set` | `SetIngestionTokenEnabledRequest` | `SetIngestionTokenEnabledResponse` |
 | `/ingestion-tokens/revoke` | `RevokeIngestionTokenRequest` | `RevokeIngestionTokenResponse` |
+| `/hec/operations/get` | `GetHECOperationalSnapshotRequest` | `GetHECOperationalSnapshotResponse` |
 
 ### Audit events
 
@@ -1432,6 +1461,27 @@ token returns `404` from get, is absent from list totals and filters, and
 invalidates a list cursor whose snapshot included it. Its former plaintext
 credential remains indistinguishable from every other unauthorized credential
 at the collector boundary.
+
+`POST /api/v1/ingestion-tokens/state/set` changes an active token to disabled
+or a disabled token back to active under `expected_version` optimistic
+locking. Every accepted call advances the token version and appends the
+existing secret-free `ingestion_token.update` successful-audit action in the
+same transaction. Authentication observes a committed disable immediately.
+Revoked tokens are irreversible, and a token whose stored expiration has
+passed cannot be re-enabled. State changes never set or clear `revoked_at`;
+that timestamp remains exclusive to irreversible revocation.
+
+`POST /api/v1/hec/operations/get` is an administrator-only, process-wide HEC
+operational projection. Its request is empty and the response contains only
+fixed-shape counters, availability bits, and bounded durations. It has no
+per-token selector and never returns token, channel, index, request, event,
+payload, address, or error-detail fields. The protocol-failure list has the
+fixed non-success Splunk-compatible code domain 1 through 27. Pending outbox age and
+pending/indexed/expired acknowledgment counts are observations at
+`observed_at`; expired terminal rows may remain until bounded cleanup deletes
+them. `request_capacity_available` is false when any token has reached the
+100,000-row retained request-ledger ceiling; `retained_requests` is the
+process-wide bounded aggregate and does not identify the affected token.
 
 `IngestionRateLimits` is shared by `IndexDefinition` and
 `IngestionTokenDefinition`; returned `Index` and `IngestionToken` records expose

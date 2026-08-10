@@ -33,3 +33,27 @@ func TestClickHouseSkipMigrationsFlag(t *testing.T) {
 		})
 	}
 }
+
+func TestHECEnabledFlagIsExplicitlyOptIn(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "disabled by default", want: false},
+		{name: "enabled", args: []string{"-hec-enabled"}, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			flags := flag.NewFlagSet("open-splunk-server", flag.ContinueOnError)
+			flags.SetOutput(io.Discard)
+			var config options
+			registerHECEnabledFlag(flags, &config)
+			if err := flags.Parse(test.args); err != nil {
+				t.Fatal(err)
+			}
+			if config.hecEnabled != test.want {
+				t.Fatalf("-hec-enabled = %t, want %t", config.hecEnabled, test.want)
+			}
+		})
+	}
+}

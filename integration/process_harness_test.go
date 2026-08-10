@@ -181,6 +181,29 @@ func createBackendIndex(
 	displayName string,
 ) *opensplunkv1.Index {
 	t.Helper()
+	return createBackendIndexWithRetention(
+		t,
+		ctx,
+		client,
+		baseURL,
+		administratorToken,
+		name,
+		displayName,
+		24*time.Hour,
+	)
+}
+
+func createBackendIndexWithRetention(
+	t *testing.T,
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	administratorToken string,
+	name string,
+	displayName string,
+	retention time.Duration,
+) *opensplunkv1.Index {
+	t.Helper()
 	var created opensplunkv1.CreateIndexResponse
 	postAdministratorProto(
 		t,
@@ -192,7 +215,7 @@ func createBackendIndex(
 			Definition: &opensplunkv1.IndexDefinition{
 				Name:            name,
 				DisplayName:     displayName,
-				RetentionPeriod: durationpb.New(24 * time.Hour),
+				RetentionPeriod: durationpb.New(retention),
 				IngestionAccess: opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 				SearchAccess:    opensplunkv1.IndexAccessState_INDEX_ACCESS_STATE_ENABLED,
 			},
@@ -203,6 +226,8 @@ func createBackendIndex(
 	if index.GetIndexId() == "" ||
 		index.GetVersion() != 1 ||
 		index.GetDefinition().GetName() != name ||
+		index.GetDefinition().GetRetentionPeriod() == nil ||
+		index.GetDefinition().GetRetentionPeriod().AsDuration() != retention ||
 		index.GetState() !=
 			opensplunkv1.IndexState_INDEX_STATE_ACTIVE {
 		t.Fatalf("created index %q = %+v", name, index)

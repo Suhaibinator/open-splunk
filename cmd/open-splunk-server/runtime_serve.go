@@ -34,6 +34,7 @@ func serveRuntime(
 	collectorListener net.Listener,
 	httpShutdownTimeout time.Duration,
 	collectorShutdownGraceTimeout time.Duration,
+	admissions ...httpAdmissionShutdown,
 ) error {
 	if ctx == nil || httpServer == nil || requests == nil || nilRuntimeDependency(webSockets) {
 		return errors.New("serve runtime: context, HTTP server, request tracker, and websocket service are required")
@@ -48,6 +49,9 @@ func serveRuntime(
 	}
 	if (collectorServer == nil) != (collectorListener == nil) {
 		return errors.New("serve runtime: collector server and listener must be configured together")
+	}
+	if len(admissions) > 1 || len(admissions) == 1 && nilRuntimeDependency(admissions[0]) {
+		return errors.New("serve runtime: admission lifecycle is invalid")
 	}
 
 	httpResults := make(chan error, 1)
@@ -81,6 +85,7 @@ func serveRuntime(
 			requests,
 			webSockets,
 			httpShutdownTimeout,
+			admissions...,
 		)
 	}()
 	var collectorShutdown chan error

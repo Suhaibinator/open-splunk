@@ -46,7 +46,7 @@ func TestKnowledgeActivePublicationDependenciesMigrationPinsSchemaAndAccessPath(
 		t.Fatalf("migration authority = (%d, %q, %x), want (33, %q, %x)",
 			version, name, checksum, knowledgeActivePublicationDependenciesMigration, wantChecksum)
 	}
-	assertIntegerQuery(t, raw, 34, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 36, `SELECT count(*) FROM schema_migrations`)
 
 	triggerSQL := knowledge0033SchemaSQL(
 		t,

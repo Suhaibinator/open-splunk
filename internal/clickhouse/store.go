@@ -53,8 +53,8 @@ const (
 
 	eventIndexNameColumn          = 2
 	eventIndexTimeColumn          = 4
-	eventExpiresAtColumn          = 23
-	eventVisibilitySequenceColumn = 24
+	eventExpiresAtColumn          = 25
+	eventVisibilitySequenceColumn = 26
 
 	legacyReservationMetadataVersion = byte(3)
 	reservationMetadataVersion       = byte(4)
@@ -67,7 +67,7 @@ var (
 		"collected_at", "event_time_source", "host", "source", "sourcetype",
 		"service", "severity", "level", "body", "raw", "raw_encoding",
 		"trace_id", "span_id", "fields", "field_names", "collector_id",
-		"batch_id", "batch_sequence", "expires_at", "visibility_seq",
+		"ingest_source_kind", "ingest_source_id", "batch_id", "batch_sequence", "expires_at", "visibility_seq",
 		"field_types", "field_metadata_version",
 	}
 	eventsInsertSQL = buildEventsInsertSQL(defaultDatabase, defaultTable)
@@ -234,34 +234,51 @@ func NewStoreWithDeletionConnection(
 // Store implements ingest.EventStore using one synchronous native insert per
 // accepted protocol batch.
 type Store struct {
-	connection         storeConnection
-	deletionConnection storeConnection
-	database           string
-	table              string
-	insertSQL          string
-	retention          RetentionProvider
-	visibility         visibility.Sequencer
-	attemptID          func() (string, error)
-	clock              func() time.Time
-	retryAfter         time.Duration
-	writeAdmission     *writeAdmission
-	reconcileSlot      chan struct{}
-	lifecycleMu        sync.Mutex
-	lifecycleContext   context.Context
-	lifecycleCancel    context.CancelFunc
-	operations         sync.WaitGroup
-	reconcileWake      chan struct{}
-	reconcileDone      chan struct{}
-	reconcileCancel    context.CancelFunc
-	reconcileErr       error
-	closed             bool
-	closeOnce          sync.Once
-	closeErr           error
-	terminalCount      atomic.Uint64
-	rejectionWakeBytes atomic.Uint64
+	connection                storeConnection
+	deletionConnection        storeConnection
+	database                  string
+	table                     string
+	insertSQL                 string
+	retention                 RetentionProvider
+	visibility                visibility.Sequencer
+	attemptID                 func() (string, error)
+	clock                     func() time.Time
+	retryAfter                time.Duration
+	writeAdmission            *writeAdmission
+	reconcileSlot             chan struct{}
+	lifecycleMu               sync.Mutex
+	lifecycleContext          context.Context
+	lifecycleCancel           context.CancelFunc
+	operations                sync.WaitGroup
+	reconcileWake             chan struct{}
+	reconcileDone             chan struct{}
+	reconcileCancel           context.CancelFunc
+	reconcileErr              error
+	closed                    bool
+	closeOnce                 sync.Once
+	closeErr                  error
+	terminalCount             atomic.Uint64
+	rejectionWakeBytes        atomic.Uint64
+	reconciliationSuccesses   atomic.Uint64
+	reconciliationRetries     atomic.Uint64
+	reconciliationAmbiguities atomic.Uint64
+}
+
+// HECReconciliationSnapshot is a constant-shape aggregate view of the
+// background outbox authority. It contains no error text or durable identity.
+type HECReconciliationSnapshot struct {
+	Available   bool
+	Successes   uint64
+	Retries     uint64
+	Ambiguities uint64
+}
+
+type hecTerminalPruner interface {
+	PruneHECTerminalRequests(context.Context, time.Time, uint32) (uint32, error)
 }
 
 var _ ingest.EventStore = (*Store)(nil)
+var _ ingest.StagingEventStore = (*Store)(nil)
 var _ ingest.RecoverableEventStore = (*Store)(nil)
 
 func newStore(
@@ -428,6 +445,144 @@ func (s *Store) ResumeBatch(ctx context.Context, identity ingest.StoreBatchIdent
 // outbox and the exact per-source-event acknowledgment disposition.
 func (s *Store) Store(ctx context.Context, batch ingest.StoreBatch) (ingest.StoreResult, error) {
 	return s.store(ctx, batch, false)
+}
+
+// Stage commits the immutable replay outbox, quota charge, and visibility
+// reservation without waiting for ClickHouse. It releases the request-scoped
+// attempt lease before returning so the existing reconciler is the sole
+// completion authority.
+func (s *Store) Stage(
+	ctx context.Context,
+	batch ingest.StoreBatch,
+) (result ingest.StageResult, resultErr error) {
+	if frozenCallbackActive(ctx, s) {
+		return ingest.StageResult{}, ErrWriteFreezeReentrant
+	}
+	operationContext, finishOperation, err := s.beginOperation(ctx, &resultErr)
+	if err != nil {
+		return ingest.StageResult{}, err
+	}
+	defer finishOperation()
+	if err := s.writeAdmission.enter(operationContext); err != nil {
+		return ingest.StageResult{}, err
+	}
+	defer s.writeAdmission.leave()
+	return s.stageAdmitted(operationContext, batch)
+}
+
+func (s *Store) stageAdmitted(ctx context.Context, batch ingest.StoreBatch) (ingest.StageResult, error) {
+	source, sourceErr := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
+	if sourceErr != nil {
+		return ingest.StageResult{}, fmt.Errorf("stage ClickHouse batch: %w", sourceErr)
+	}
+	if batch.HECAdmission != nil {
+		if source.Kind != ingest.IngestionSourceKindHEC ||
+			batch.HECAdmission.TokenID != source.ID ||
+			batch.HECAdmission.RequestID != batch.BatchID {
+			return ingest.StageResult{}, errors.New("stage ClickHouse batch: HEC admission identity does not match batch source")
+		}
+	}
+	deduplicationKey := deduplicationToken(batch)
+	sequenceKey := sequenceIdentityKey(batch)
+	payloadDigest, err := storePayloadDigest(batch)
+	if err != nil {
+		return ingest.StageResult{}, err
+	}
+	prior, found, err := s.visibility.Lookup(ctx, deduplicationKey, sequenceKey, payloadDigest)
+	if err != nil {
+		return ingest.StageResult{}, s.visibilityFailure("lookup staged ClickHouse visibility reservation", err)
+	}
+	if found {
+		return stageResultForReservation(prior)
+	}
+
+	metadata, outbox, indexTime, err := s.freshReservationPayload(ctx, batch)
+	if err != nil {
+		return ingest.StageResult{}, err
+	}
+	attemptID, err := s.attemptID()
+	if err != nil {
+		return ingest.StageResult{}, s.classifyError(fmt.Errorf("create staged ClickHouse visibility attempt: %w", err))
+	}
+	reservation, err := s.visibility.Reserve(ctx, visibility.ReserveRequest{
+		BatchKey:         deduplicationKey,
+		SequenceKey:      sequenceKey,
+		AttemptID:        attemptID,
+		IndexTime:        indexTime,
+		PayloadSHA256:    payloadDigest,
+		Metadata:         metadata,
+		Outbox:           outbox,
+		QuotaAdmission:   batch.QuotaAdmission,
+		QuotaEvaluatedAt: batch.QuotaEvaluatedAt,
+		HECAdmission:     visibilityHECAdmission(batch),
+	})
+	if err != nil {
+		var quotaExceeded *ingestquota.ExceededError
+		if !errors.As(err, &quotaExceeded) {
+			s.wakeReconciler()
+		}
+		return ingest.StageResult{}, s.visibilityFailure("stage ClickHouse visibility reservation", err)
+	}
+	if reservation.AlreadyCommitted || reservation.Rejected {
+		return stageResultForReservation(reservation)
+	}
+	if err := s.releaseAttempt(reservation.Sequence, attemptID, nil); err != nil {
+		return ingest.StageResult{}, err
+	}
+	return ingest.StageResult{
+		VisibilitySequence:  reservation.Sequence,
+		State:               ingest.StoredBatchPending,
+		HECRequestSequence:  reservation.HECRequestSequence,
+		HECAcknowledgmentID: reservation.HECAcknowledgmentID,
+	}, nil
+}
+
+func visibilityHECAdmission(batch ingest.StoreBatch) *visibility.HECAdmissionRequest {
+	if batch.HECAdmission == nil {
+		return nil
+	}
+	return &visibility.HECAdmissionRequest{
+		TenantID:              batch.TenantID,
+		TokenID:               batch.HECAdmission.TokenID,
+		TokenVersion:          batch.HECAdmission.TokenVersion,
+		AuthorizedIndexes:     visibilityHECIndexAuthorities(batch.HECAdmission.AuthorizedIndexes),
+		RequestID:             batch.HECAdmission.RequestID,
+		Acknowledgment:        batch.HECAdmission.AcknowledgmentEnabled,
+		AcknowledgmentChannel: batch.HECAdmission.Channel,
+		CreatedAt:             batch.HECAdmission.CreatedAt,
+	}
+}
+
+func visibilityHECIndexAuthorities(source []ingest.HECIndexAuthority) []visibility.HECIndexAuthority {
+	result := make([]visibility.HECIndexAuthority, len(source))
+	for index, authority := range source {
+		result[index] = visibility.HECIndexAuthority{Name: authority.Name, Version: authority.Version}
+	}
+	return result
+}
+
+func stageResultForReservation(reservation visibility.Reservation) (ingest.StageResult, error) {
+	if !reservation.AlreadyCommitted && !reservation.Rejected {
+		return ingest.StageResult{
+			VisibilitySequence: reservation.Sequence,
+			State:              ingest.StoredBatchPending,
+		}, nil
+	}
+	outcome, err := resultForReservation(reservation, true)
+	if err != nil {
+		return ingest.StageResult{}, err
+	}
+	state := ingest.StoredBatchCommitted
+	if reservation.Rejected {
+		state = ingest.StoredBatchRejected
+	}
+	return ingest.StageResult{
+		VisibilitySequence:  reservation.Sequence,
+		State:               state,
+		Outcome:             outcome,
+		HECRequestSequence:  reservation.HECRequestSequence,
+		HECAcknowledgmentID: reservation.HECAcknowledgmentID,
+	}, nil
 }
 
 // RejectBatch atomically records a terminal whole-batch response in the
@@ -790,6 +945,9 @@ func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
 			}
 			return s.pruneTerminal(ctx)
 		}
+		if reservation.MayHaveReachedStorage {
+			s.reconciliationAmbiguities.Add(1)
+		}
 		if proveDrained && replayed == visibility.MaxPendingReservations {
 			invariantErr := fmt.Errorf(
 				"%w: acquired more than %d reservations during one exclusive drain",
@@ -815,10 +973,24 @@ func (s *Store) reconcilePending(ctx context.Context, proveDrained bool) error {
 			}
 			return replayErr
 		}
+		s.reconciliationSuccesses.Add(1)
 	}
 }
 
 func (s *Store) pruneTerminal(ctx context.Context) error {
+	if pruner, ok := s.visibility.(hecTerminalPruner); ok {
+		deleted, err := pruner.PruneHECTerminalRequests(
+			ctx,
+			s.clock().UTC().Add(-visibility.HECTerminalRetention),
+			visibilityPruneBatch,
+		)
+		if err != nil {
+			return s.visibilityFailure("prune terminal HEC requests", err)
+		}
+		if deleted == visibilityPruneBatch {
+			s.wakeReconciler()
+		}
+	}
 	deleted, err := s.visibility.PruneTerminal(ctx, visibility.TerminalRetention{
 		Committed:             durableClickHouseIdempotencyWindow,
 		Rejected:              durableBatchRejectWindow,
@@ -874,6 +1046,7 @@ func (s *Store) runReconciler(ctx context.Context, wake <-chan struct{}, done ch
 		}
 		s.lifecycleMu.Unlock()
 		if err != nil && !errors.Is(err, context.Canceled) {
+			s.reconciliationRetries.Add(1)
 			timer.Reset(s.retryAfter)
 			retry = timer.C
 		}
@@ -895,6 +1068,7 @@ func (s *Store) wakeReconciler() {
 func storeBatchFromIdentity(identity ingest.StoreBatchIdentity) ingest.StoreBatch {
 	return ingest.StoreBatch{
 		TenantID:          identity.TenantID,
+		Source:            identity.Source,
 		CollectorID:       identity.CollectorID,
 		BatchID:           identity.BatchID,
 		BatchSequence:     identity.BatchSequence,
@@ -1146,6 +1320,35 @@ func (s *Store) Ping(ctx context.Context) (resultErr error) {
 	return errors.Join(pingErrors...)
 }
 
+// HECReconciliationAvailable returns a constant-shape, non-writing readiness
+// signal for the background outbox authority. It intentionally exposes no
+// error text, address, sequence, tenant, or request identity.
+func (s *Store) HECReconciliationAvailable() bool {
+	if s == nil {
+		return false
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return !s.closed && s.reconcileErr == nil
+}
+
+// HECReconciliationTelemetry returns detached bounded counters together with
+// the same readiness bit used by the public HEC health projection.
+func (s *Store) HECReconciliationTelemetry() HECReconciliationSnapshot {
+	if s == nil {
+		return HECReconciliationSnapshot{}
+	}
+	s.lifecycleMu.Lock()
+	available := !s.closed && s.reconcileErr == nil
+	s.lifecycleMu.Unlock()
+	return HECReconciliationSnapshot{
+		Available:   available,
+		Successes:   s.reconciliationSuccesses.Load(),
+		Retries:     s.reconciliationRetries.Load(),
+		Ambiguities: s.reconciliationAmbiguities.Load(),
+	}
+}
+
 // Close releases all pooled ClickHouse connections.
 func (s *Store) Close() error {
 	s.closeOnce.Do(func() {
@@ -1191,8 +1394,12 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior *visibility.Reservation) ([][]any, error) {
-	if batch.TenantID == "" || batch.CollectorID == "" || batch.BatchID == "" {
-		return nil, errors.New("store ClickHouse batch: tenant, collector, and batch IDs are required")
+	source, err := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
+	if err != nil {
+		return nil, fmt.Errorf("store ClickHouse batch: invalid ingestion source: %w", err)
+	}
+	if batch.TenantID == "" || batch.BatchID == "" {
+		return nil, errors.New("store ClickHouse batch: tenant, ingestion source, and batch IDs are required")
 	}
 	if batch.BatchSequence == 0 {
 		return nil, errors.New("store ClickHouse batch: batch sequence must be positive")
@@ -1245,7 +1452,11 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 		if stored == nil || stored.Event == nil {
 			return nil, fmt.Errorf("store ClickHouse batch: event %d is nil", i)
 		}
-		if stored.TenantID != batch.TenantID || stored.CollectorID != batch.CollectorID || stored.BatchID != batch.BatchID {
+		storedSource, sourceErr := ingest.CanonicalIngestionSource(stored.Source, stored.CollectorID)
+		if sourceErr != nil {
+			return nil, fmt.Errorf("store ClickHouse batch: event %d has invalid ingestion source: %w", i, sourceErr)
+		}
+		if stored.TenantID != batch.TenantID || storedSource != source || stored.BatchID != batch.BatchID {
 			return nil, fmt.Errorf("store ClickHouse batch: event %d server metadata does not match its batch", i)
 		}
 		event := stored.Event
@@ -1334,6 +1545,8 @@ func (s *Store) rowsForBatch(ctx context.Context, batch ingest.StoreBatch, prior
 			fields,
 			fieldNames,
 			batch.CollectorID,
+			uint8(source.Kind),
+			source.ID,
 			batch.BatchID,
 			batch.BatchSequence,
 			expiresAt,
@@ -1699,6 +1912,16 @@ func randomAttemptID() (string, error) {
 }
 
 func deduplicationToken(batch ingest.StoreBatch) string {
+	source, err := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
+	if err == nil && source.Kind == ingest.IngestionSourceKindHEC {
+		hash := sha256.New()
+		writeTokenPart(hash, "open-splunk-hec-request")
+		writeTokenPart(hash, "1")
+		writeTokenPart(hash, batch.TenantID)
+		writeTokenPart(hash, source.ID)
+		writeTokenPart(hash, batch.BatchID)
+		return "open-splunk-ingest-hec-v1-" + hex.EncodeToString(hash.Sum(nil))
+	}
 	hash := sha256.New()
 	writeTokenPart(hash, "open-splunk-collector-protocol")
 	writeTokenPart(hash, "1")
@@ -1709,6 +1932,20 @@ func deduplicationToken(batch ingest.StoreBatch) string {
 }
 
 func sequenceIdentityKey(batch ingest.StoreBatch) string {
+	source, err := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
+	if err == nil && source.Kind == ingest.IngestionSourceKindHEC {
+		hash := sha256.New()
+		writeTokenPart(hash, "open-splunk-hec-request-sequence")
+		writeTokenPart(hash, "1")
+		writeTokenPart(hash, batch.TenantID)
+		writeTokenPart(hash, source.ID)
+		// HEC has no client-authored monotonic batch sequence. The server's
+		// random request ID is the stable identity for one staged request;
+		// using the adapter's placeholder BatchSequence would make every
+		// independent request from one token collide in the visibility ledger.
+		writeTokenPart(hash, batch.BatchID)
+		return "open-splunk-sequence-hec-v1-" + hex.EncodeToString(hash.Sum(nil))
+	}
 	hash := sha256.New()
 	writeTokenPart(hash, "open-splunk-collector-sequence")
 	writeTokenPart(hash, "1")
@@ -1740,11 +1977,29 @@ func buildEventsInsertSQL(database, table string) string {
 }
 
 func storePayloadDigest(batch ingest.StoreBatch) ([sha256.Size]byte, error) {
-	if batch.TenantID == "" || batch.CollectorID == "" || batch.BatchID == "" || batch.BatchSequence == 0 ||
+	source, err := ingest.CanonicalIngestionSource(batch.Source, batch.CollectorID)
+	if err != nil {
+		return [sha256.Size]byte{}, fmt.Errorf("store ClickHouse batch: invalid ingestion source: %w", err)
+	}
+	if batch.TenantID == "" || batch.BatchID == "" || batch.BatchSequence == 0 ||
 		batch.SourceBatchSHA256 == ([sha256.Size]byte{}) {
 		return [sha256.Size]byte{}, errors.New("store ClickHouse batch: complete source identity is required")
 	}
 	hash := sha256.New()
+	if source.Kind == ingest.IngestionSourceKindHEC {
+		_, _ = hash.Write([]byte("open-splunk-store-payload-v2\x00"))
+		writeTokenPart(hash, batch.TenantID)
+		_, _ = hash.Write([]byte{byte(source.Kind)})
+		writeTokenPart(hash, source.ID)
+		writeTokenPart(hash, batch.BatchID)
+		var number [8]byte
+		binary.BigEndian.PutUint64(number[:], batch.BatchSequence)
+		_, _ = hash.Write(number[:])
+		_, _ = hash.Write(batch.SourceBatchSHA256[:])
+		var digest [sha256.Size]byte
+		copy(digest[:], hash.Sum(nil))
+		return digest, nil
+	}
 	_, _ = hash.Write([]byte("open-splunk-store-payload-v1\x00"))
 	writeTokenPart(hash, batch.TenantID)
 	writeTokenPart(hash, batch.CollectorID)

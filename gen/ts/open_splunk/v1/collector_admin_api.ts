@@ -19,6 +19,10 @@ import {
   CollectorRecord,
   IngestionToken,
   IngestionTokenConstraints,
+  IngestionTokenHecProfile,
+  IngestionTokenPurpose,
+  ingestionTokenPurposeFromJSON,
+  ingestionTokenPurposeToJSON,
   IngestionTokenState,
   ingestionTokenStateFromJSON,
   ingestionTokenStateToJSON,
@@ -180,7 +184,17 @@ export interface IngestionTokenDefinition {
   description?: string | undefined;
   constraints: IngestionTokenConstraints | undefined;
   expiresAt?: Date | undefined;
-  ingestionRateLimits: IngestionRateLimits | undefined;
+  ingestionRateLimits:
+    | IngestionRateLimits
+    | undefined;
+  /**
+   * New clients must set purpose on creation, and it is immutable thereafter.
+   * For wire compatibility only, UNSPECIFIED plus a valid bound_collector_id
+   * is inferred as NATIVE_COLLECTOR; UNSPECIFIED can never create HEC.
+   */
+  purpose: IngestionTokenPurpose;
+  /** Required only when purpose is INGESTION_TOKEN_PURPOSE_HEC. */
+  hecProfile: IngestionTokenHecProfile | undefined;
 }
 
 /** POST /api/v1/ingestion-tokens/create */
@@ -231,6 +245,17 @@ export interface UpdateIngestionTokenRequest {
 }
 
 export interface UpdateIngestionTokenResponse {
+  ingestionToken: IngestionToken | undefined;
+}
+
+/** POST /api/v1/ingestion-tokens/state/set */
+export interface SetIngestionTokenEnabledRequest {
+  ingestionTokenId: string;
+  expectedVersion: bigint;
+  enabled: boolean;
+}
+
+export interface SetIngestionTokenEnabledResponse {
   ingestionToken: IngestionToken | undefined;
 }
 
@@ -999,6 +1024,8 @@ function createBaseIngestionTokenDefinition(): IngestionTokenDefinition {
     constraints: undefined,
     expiresAt: undefined,
     ingestionRateLimits: undefined,
+    purpose: 0,
+    hecProfile: undefined,
   };
 }
 
@@ -1018,6 +1045,12 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
     }
     if (message.ingestionRateLimits !== undefined) {
       IngestionRateLimits.encode(message.ingestionRateLimits, writer.uint32(42).fork()).join();
+    }
+    if (message.purpose !== 0) {
+      writer.uint32(48).int32(message.purpose);
+    }
+    if (message.hecProfile !== undefined) {
+      IngestionTokenHecProfile.encode(message.hecProfile, writer.uint32(58).fork()).join();
     }
     return writer;
   },
@@ -1069,6 +1102,22 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
           message.ingestionRateLimits = IngestionRateLimits.decode(reader, reader.uint32());
           continue;
         }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.purpose = reader.int32() as any;
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.hecProfile = IngestionTokenHecProfile.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1093,6 +1142,12 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
         : isSet(object.ingestion_rate_limits)
         ? IngestionRateLimits.fromJSON(object.ingestion_rate_limits)
         : undefined,
+      purpose: isSet(object.purpose) ? ingestionTokenPurposeFromJSON(object.purpose) : 0,
+      hecProfile: isSet(object.hecProfile)
+        ? IngestionTokenHecProfile.fromJSON(object.hecProfile)
+        : isSet(object.hec_profile)
+        ? IngestionTokenHecProfile.fromJSON(object.hec_profile)
+        : undefined,
     };
   },
 
@@ -1113,6 +1168,12 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
     if (message.ingestionRateLimits !== undefined) {
       obj.ingestionRateLimits = IngestionRateLimits.toJSON(message.ingestionRateLimits);
     }
+    if (message.purpose !== 0) {
+      obj.purpose = ingestionTokenPurposeToJSON(message.purpose);
+    }
+    if (message.hecProfile !== undefined) {
+      obj.hecProfile = IngestionTokenHecProfile.toJSON(message.hecProfile);
+    }
     return obj;
   },
 
@@ -1129,6 +1190,10 @@ export const IngestionTokenDefinition: MessageFns<IngestionTokenDefinition> = {
     message.expiresAt = object.expiresAt ?? undefined;
     message.ingestionRateLimits = (object.ingestionRateLimits !== undefined && object.ingestionRateLimits !== null)
       ? IngestionRateLimits.fromPartial(object.ingestionRateLimits)
+      : undefined;
+    message.purpose = object.purpose ?? 0;
+    message.hecProfile = (object.hecProfile !== undefined && object.hecProfile !== null)
+      ? IngestionTokenHecProfile.fromPartial(object.hecProfile)
       : undefined;
     return message;
   },
@@ -1881,6 +1946,183 @@ export const UpdateIngestionTokenResponse: MessageFns<UpdateIngestionTokenRespon
   },
   fromPartial<I extends Exact<DeepPartial<UpdateIngestionTokenResponse>, I>>(object: I): UpdateIngestionTokenResponse {
     const message = createBaseUpdateIngestionTokenResponse();
+    message.ingestionToken = (object.ingestionToken !== undefined && object.ingestionToken !== null)
+      ? IngestionToken.fromPartial(object.ingestionToken)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseSetIngestionTokenEnabledRequest(): SetIngestionTokenEnabledRequest {
+  return { ingestionTokenId: "", expectedVersion: 0n, enabled: false };
+}
+
+export const SetIngestionTokenEnabledRequest: MessageFns<SetIngestionTokenEnabledRequest> = {
+  encode(message: SetIngestionTokenEnabledRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ingestionTokenId !== "") {
+      writer.uint32(10).string(message.ingestionTokenId);
+    }
+    if (message.expectedVersion !== 0n) {
+      if (BigInt.asUintN(64, message.expectedVersion) !== message.expectedVersion) {
+        throw new globalThis.Error("value provided for field message.expectedVersion of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.expectedVersion);
+    }
+    if (message.enabled !== false) {
+      writer.uint32(24).bool(message.enabled);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetIngestionTokenEnabledRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetIngestionTokenEnabledRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.ingestionTokenId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.expectedVersion = reader.uint64() as bigint;
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.enabled = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetIngestionTokenEnabledRequest {
+    return {
+      ingestionTokenId: isSet(object.ingestionTokenId)
+        ? globalThis.String(object.ingestionTokenId)
+        : isSet(object.ingestion_token_id)
+        ? globalThis.String(object.ingestion_token_id)
+        : "",
+      expectedVersion: isSet(object.expectedVersion)
+        ? BigInt(object.expectedVersion)
+        : isSet(object.expected_version)
+        ? BigInt(object.expected_version)
+        : 0n,
+      enabled: isSet(object.enabled) ? globalThis.Boolean(object.enabled) : false,
+    };
+  },
+
+  toJSON(message: SetIngestionTokenEnabledRequest): unknown {
+    const obj: any = {};
+    if (message.ingestionTokenId !== "") {
+      obj.ingestionTokenId = message.ingestionTokenId;
+    }
+    if (message.expectedVersion !== 0n) {
+      obj.expectedVersion = message.expectedVersion.toString();
+    }
+    if (message.enabled !== false) {
+      obj.enabled = message.enabled;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SetIngestionTokenEnabledRequest>, I>>(base?: I): SetIngestionTokenEnabledRequest {
+    return SetIngestionTokenEnabledRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SetIngestionTokenEnabledRequest>, I>>(
+    object: I,
+  ): SetIngestionTokenEnabledRequest {
+    const message = createBaseSetIngestionTokenEnabledRequest();
+    message.ingestionTokenId = object.ingestionTokenId ?? "";
+    message.expectedVersion = (object.expectedVersion !== undefined && object.expectedVersion !== null)
+      ? BigInt(object.expectedVersion)
+      : 0n;
+    message.enabled = object.enabled ?? false;
+    return message;
+  },
+};
+
+function createBaseSetIngestionTokenEnabledResponse(): SetIngestionTokenEnabledResponse {
+  return { ingestionToken: undefined };
+}
+
+export const SetIngestionTokenEnabledResponse: MessageFns<SetIngestionTokenEnabledResponse> = {
+  encode(message: SetIngestionTokenEnabledResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.ingestionToken !== undefined) {
+      IngestionToken.encode(message.ingestionToken, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): SetIngestionTokenEnabledResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseSetIngestionTokenEnabledResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.ingestionToken = IngestionToken.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): SetIngestionTokenEnabledResponse {
+    return {
+      ingestionToken: isSet(object.ingestionToken)
+        ? IngestionToken.fromJSON(object.ingestionToken)
+        : isSet(object.ingestion_token)
+        ? IngestionToken.fromJSON(object.ingestion_token)
+        : undefined,
+    };
+  },
+
+  toJSON(message: SetIngestionTokenEnabledResponse): unknown {
+    const obj: any = {};
+    if (message.ingestionToken !== undefined) {
+      obj.ingestionToken = IngestionToken.toJSON(message.ingestionToken);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<SetIngestionTokenEnabledResponse>, I>>(
+    base?: I,
+  ): SetIngestionTokenEnabledResponse {
+    return SetIngestionTokenEnabledResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<SetIngestionTokenEnabledResponse>, I>>(
+    object: I,
+  ): SetIngestionTokenEnabledResponse {
+    const message = createBaseSetIngestionTokenEnabledResponse();
     message.ingestionToken = (object.ingestionToken !== undefined && object.ingestionToken !== null)
       ? IngestionToken.fromPartial(object.ingestionToken)
       : undefined;

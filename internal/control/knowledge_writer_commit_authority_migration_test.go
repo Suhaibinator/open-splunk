@@ -21,7 +21,7 @@ func TestKnowledgeWriterCommitAuthorityMigrationPinsReplaySchema(t *testing.T) {
 		t.Fatalf("apply migrations: %v", err)
 	}
 
-	assertIntegerQuery(t, raw, 34, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 36, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 1, `
 		SELECT count(*) FROM pragma_table_list
 		WHERE name = 'knowledge_mutation_idempotency'

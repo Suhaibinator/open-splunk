@@ -176,14 +176,19 @@ func TestShutdownDrainsDeletionAdmissionWakeBeforeRuntimeClose(t *testing.T) {
 	}
 }
 
-func TestShutdownHTTPServerForceClosesThenWaitsForHandlers(t *testing.T) {
+func TestShutdownHTTPServerBoundsActiveHandlerDrain(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{})
 	release := make(chan struct{})
+	handlerDone := make(chan struct{})
 	tracked := newTrackedHandler(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		defer close(handlerDone)
 		close(entered)
 		<-release
 	}))
+	var releaseOnce sync.Once
+	releaseHandler := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseHandler)
 	go tracked.ServeHTTP(
 		httptest.NewRecorder(),
 		httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil),
@@ -200,13 +205,23 @@ func TestShutdownHTTPServerForceClosesThenWaitsForHandlers(t *testing.T) {
 		t.Fatal("server was not force-closed after its shutdown deadline")
 	}
 	select {
-	case <-shutdownDone:
-		t.Fatal("shutdown returned before the active handler completed")
+	case err := <-shutdownDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error = %v, want context deadline exceeded", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown remained blocked on a handler that ignored cancellation")
+	}
+	select {
+	case <-handlerDone:
+		t.Fatal("force-closing the server unexpectedly released the synthetic handler")
 	default:
 	}
-	close(release)
-	if err := <-shutdownDone; !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("shutdown error = %v, want context deadline exceeded", err)
+	releaseHandler()
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("active handler did not return after release")
 	}
 }
 
