@@ -4,13 +4,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS,
+  KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES,
   KNOWLEDGE_OBJECT_TYPE_FILTER_OPTIONS,
+  KNOWLEDGE_SHARING_SCOPE_FILTER_OPTIONS,
   KNOWLEDGE_SORT_OPTIONS,
   boundedKnowledgePageSize,
   createKnowledgeReadClient,
   knowledgeLifecycleStateFilterFromControlValue,
   knowledgeObjectTypeFilterFromControlValue,
+  knowledgeSharingScopeFilterFromControlValue,
   knowledgeSortChoiceFromControlValue,
+  knowledgeTextFilterFromDraft,
   loadKnowledgeDetail,
   loadKnowledgePage,
   loadKnowledgeRelationshipPage,
@@ -24,6 +28,7 @@ import {
   type KnowledgeReadClient,
   type KnowledgeRelationshipDirection,
   type KnowledgeRelationshipPageDisplay,
+  type KnowledgeSharingScopeFilter,
   type KnowledgeSortChoice,
 } from "./knowledge-manager-data";
 import {
@@ -40,6 +45,72 @@ interface AbortControllerReference {
 
 interface ConsumedPageTokensReference {
   current: Set<string>;
+}
+
+export interface KnowledgeAdvancedFilters {
+  ownerId: string | null;
+  text: string | null;
+  sharingScope: KnowledgeSharingScopeFilter;
+  selectorText: string | null;
+}
+
+export interface KnowledgeAdvancedFilterDrafts {
+  ownerId: string;
+  text: string;
+  sharingScope: string;
+  selectorText: string;
+}
+
+export interface KnowledgeAdvancedFilterDraftNormalization {
+  filters: KnowledgeAdvancedFilters | null;
+  invalid: {
+    ownerId: boolean;
+    text: boolean;
+    sharingScope: boolean;
+    selectorText: boolean;
+  };
+}
+
+const EMPTY_KNOWLEDGE_ADVANCED_FILTERS: KnowledgeAdvancedFilters = {
+  ownerId: null,
+  text: null,
+  sharingScope: "all",
+  selectorText: null,
+};
+
+function sameKnowledgeAdvancedFilters(
+  left: KnowledgeAdvancedFilters,
+  right: KnowledgeAdvancedFilters,
+): boolean {
+  return left.ownerId === right.ownerId
+    && left.text === right.text
+    && left.sharingScope === right.sharingScope
+    && left.selectorText === right.selectorText;
+}
+
+export function normalizeAdvancedFilterDrafts(
+  drafts: KnowledgeAdvancedFilterDrafts,
+): KnowledgeAdvancedFilterDraftNormalization {
+  const ownerId = knowledgeTextFilterFromDraft(drafts.ownerId);
+  const text = knowledgeTextFilterFromDraft(drafts.text);
+  const sharingScope = knowledgeSharingScopeFilterFromControlValue(drafts.sharingScope);
+  const selectorText = knowledgeTextFilterFromDraft(drafts.selectorText);
+  const invalid = {
+    ownerId: ownerId === undefined,
+    text: text === undefined,
+    sharingScope: sharingScope === undefined,
+    selectorText: selectorText === undefined,
+  };
+  if (
+    ownerId === undefined
+    || text === undefined
+    || sharingScope === undefined
+    || selectorText === undefined
+  ) return { filters: null, invalid };
+  return {
+    filters: { ownerId, text, sharingScope, selectorText },
+    invalid,
+  };
 }
 
 /** Aborts the request current at cleanup time, including a later continuation. */
@@ -131,6 +202,9 @@ export function KnowledgeManagerPanel({
   const [lifecycleState, setLifecycleState] =
     useState<KnowledgeLifecycleStateFilter>("all");
   const [sort, setSort] = useState<KnowledgeSortChoice>("name-ascending");
+  const [advancedFilters, setAdvancedFilters] = useState<KnowledgeAdvancedFilters>(
+    EMPTY_KNOWLEDGE_ADVANCED_FILTERS,
+  );
   const [listState, setListState] = useState<ListState>("loading");
   const [page, setPage] = useState<KnowledgePageDisplay | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -145,6 +219,7 @@ export function KnowledgeManagerPanel({
   const rowRefs = useRef(new Map<string, HTMLButtonElement>());
   const detailRef = useRef<HTMLElement>(null);
   const focusDetailWhenReadyRef = useRef(false);
+  const advancedFilterRequestAllowedRef = useRef(true);
 
   useEffect(
     () => knowledgeManagerUnmountCleanup(listRequestRef, detailRequestRef),
@@ -191,11 +266,16 @@ export function KnowledgeManagerPanel({
 
   useEffect(() => {
     resetForQueryChange();
+    if (!advancedFilterRequestAllowedRef.current) {
+      setListState("unavailable");
+      return;
+    }
     const controller = new AbortController();
     listRequestRef.current = controller;
 
     void loadKnowledgePage(client, {
       appId,
+      ...advancedFilters,
       objectType,
       lifecycleState,
       sort,
@@ -214,6 +294,7 @@ export function KnowledgeManagerPanel({
     return () => controller.abort();
   }, [
     appId,
+    advancedFilters,
     client,
     lifecycleState,
     objectType,
@@ -280,6 +361,7 @@ export function KnowledgeManagerPanel({
     setLoadingMore(true);
     const result = await loadKnowledgePage(client, {
       appId,
+      ...advancedFilters,
       objectType,
       lifecycleState,
       sort,
@@ -307,6 +389,7 @@ export function KnowledgeManagerPanel({
     setPage(merged.page);
   }, [
     appId,
+    advancedFilters,
     client,
     continuationStale,
     lifecycleState,
@@ -359,6 +442,24 @@ export function KnowledgeManagerPanel({
       failClosedQueryControl,
     );
   }, [failClosedQueryControl, resetForQueryChange, sort]);
+
+  const commitAdvancedFilters = useCallback((next: KnowledgeAdvancedFilters) => {
+    advancedFilterRequestAllowedRef.current = true;
+    resetForQueryChange();
+    setAdvancedFilters(next);
+  }, [resetForQueryChange]);
+
+  const failClosedAdvancedFilters = useCallback(() => {
+    advancedFilterRequestAllowedRef.current = false;
+    resetForQueryChange();
+    failClosedQueryControl();
+  }, [failClosedQueryControl, resetForQueryChange]);
+
+  const retryAdvancedFilters = useCallback(() => {
+    advancedFilterRequestAllowedRef.current = true;
+    resetForQueryChange();
+    setReloadGeneration((value) => value + 1);
+  }, [resetForQueryChange]);
 
   const availableObjects = page?.objects.filter(
     (object): object is KnowledgeObjectDisplay => object.disclosure === "available",
@@ -453,19 +554,19 @@ export function KnowledgeManagerPanel({
         )}
       </div>
 
+      <KnowledgeAdvancedFilterForm
+        committed={advancedFilters}
+        unavailable={listState === "unavailable"}
+        onCommit={commitAdvancedFilters}
+        onFailClosed={failClosedAdvancedFilters}
+        onRetry={retryAdvancedFilters}
+      />
+
       {listState === "loading" ? (
         <KnowledgeStatus
           kind="loading"
           title="Loading knowledge objects"
           message="Reading the first bounded catalog page…"
-        />
-      ) : null}
-      {listState === "unavailable" ? (
-        <KnowledgeStatus
-          kind="unavailable"
-          title="Knowledge Manager unavailable"
-          message="The advertised read-only knowledge service is not available. No catalog detail was returned."
-          action={<button type="button" onClick={() => setReloadGeneration((value) => value + 1)}>Retry</button>}
         />
       ) : null}
 
@@ -497,6 +598,191 @@ export function KnowledgeManagerPanel({
         />
       ) : null}
     </section>
+  );
+}
+
+interface KnowledgeAdvancedFilterFormProps {
+  committed: KnowledgeAdvancedFilters;
+  unavailable: boolean;
+  onCommit: (filters: KnowledgeAdvancedFilters) => void;
+  onFailClosed: () => void;
+  onRetry: () => void;
+}
+
+function knowledgeAdvancedFilterDraftsFromCommitted(
+  filters: KnowledgeAdvancedFilters,
+): KnowledgeAdvancedFilterDrafts {
+  return {
+    ownerId: filters.ownerId ?? "",
+    text: filters.text ?? "",
+    sharingScope: filters.sharingScope,
+    selectorText: filters.selectorText ?? "",
+  };
+}
+
+function KnowledgeAdvancedFilterForm({
+  committed,
+  unavailable,
+  onCommit,
+  onFailClosed,
+  onRetry,
+}: KnowledgeAdvancedFilterFormProps) {
+  const [drafts, setDrafts] = useState<KnowledgeAdvancedFilterDrafts>(
+    () => knowledgeAdvancedFilterDraftsFromCommitted(committed),
+  );
+  const [status, setStatus] = useState("No advanced filters applied.");
+  const [validationAttempted, setValidationAttempted] = useState(false);
+  const [failClosed, setFailClosed] = useState(false);
+  const normalized = normalizeAdvancedFilterDrafts(drafts);
+  const invalidAttempt = validationAttempted && normalized.filters === null;
+  const draftMatchesCommitted = !failClosed
+    && normalized.filters !== null
+    && sameKnowledgeAdvancedFilters(committed, normalized.filters);
+
+  function updateTextDraft(
+    field: "ownerId" | "text" | "selectorText",
+    value: string,
+  ): void {
+    setDrafts((current) => ({ ...current, [field]: value }));
+    setStatus("Draft filters not applied.");
+  }
+
+  function updateSharingScopeDraft(value: string): void {
+    setDrafts((current) => ({ ...current, sharingScope: value }));
+    if (knowledgeSharingScopeFilterFromControlValue(value) === undefined) {
+      setValidationAttempted(true);
+      setFailClosed(true);
+      setStatus("The sharing scope filter is invalid.");
+      onFailClosed();
+      return;
+    }
+    setStatus("Draft filters not applied.");
+  }
+
+  function apply(event: React.FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    setValidationAttempted(true);
+    if (normalized.filters === null) {
+      setFailClosed(true);
+      setStatus(
+        `Advanced filters must be valid, control-free UTF-8 text no longer than ${KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES} bytes.`,
+      );
+      onFailClosed();
+      return;
+    }
+    const next = normalized.filters;
+    setDrafts(knowledgeAdvancedFilterDraftsFromCommitted(next));
+    setValidationAttempted(false);
+    setFailClosed(false);
+    setStatus("Advanced filters applied.");
+    if (sameKnowledgeAdvancedFilters(committed, next)) {
+      if (unavailable) onRetry();
+      return;
+    }
+    onCommit(next);
+  }
+
+  function clear(): void {
+    setDrafts(knowledgeAdvancedFilterDraftsFromCommitted(
+      EMPTY_KNOWLEDGE_ADVANCED_FILTERS,
+    ));
+    setValidationAttempted(false);
+    setFailClosed(false);
+    setStatus("Advanced filters cleared.");
+    if (sameKnowledgeAdvancedFilters(committed, EMPTY_KNOWLEDGE_ADVANCED_FILTERS)) {
+      if (unavailable) onRetry();
+      return;
+    }
+    onCommit(EMPTY_KNOWLEDGE_ADVANCED_FILTERS);
+  }
+
+  return (
+    <>
+      <form
+        className="knowledge-manager__advanced-filters"
+        aria-labelledby="knowledge-advanced-filters-title"
+        onSubmit={apply}
+        autoComplete="off"
+        noValidate
+      >
+        <fieldset>
+          <legend id="knowledge-advanced-filters-title">Advanced filters</legend>
+          <div className="knowledge-manager__advanced-filter-grid">
+            <label htmlFor="knowledge-owner-filter">
+              <span>Owner ID</span>
+              <input
+                id="knowledge-owner-filter"
+                value={drafts.ownerId}
+                maxLength={KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES}
+                autoComplete="off"
+                aria-describedby="knowledge-advanced-filter-status"
+                aria-invalid={validationAttempted && normalized.invalid.ownerId || undefined}
+                onChange={(event) => updateTextDraft("ownerId", event.currentTarget.value)}
+              />
+            </label>
+            <label htmlFor="knowledge-text-filter">
+              <span>Name or description</span>
+              <input
+                id="knowledge-text-filter"
+                value={drafts.text}
+                maxLength={KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES}
+                autoComplete="off"
+                aria-describedby="knowledge-advanced-filter-status"
+                aria-invalid={validationAttempted && normalized.invalid.text || undefined}
+                onChange={(event) => updateTextDraft("text", event.currentTarget.value)}
+              />
+            </label>
+            <label htmlFor="knowledge-sharing-scope-filter">
+              <span>Sharing scope</span>
+              <select
+                id="knowledge-sharing-scope-filter"
+                value={drafts.sharingScope}
+                aria-describedby="knowledge-advanced-filter-status"
+                aria-invalid={validationAttempted && normalized.invalid.sharingScope || undefined}
+                onChange={(event) => updateSharingScopeDraft(event.currentTarget.value)}
+              >
+                {KNOWLEDGE_SHARING_SCOPE_FILTER_OPTIONS.map((option) => (
+                  <option value={option.value} key={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label htmlFor="knowledge-selector-text-filter">
+              <span>Selector text</span>
+              <input
+                id="knowledge-selector-text-filter"
+                value={drafts.selectorText}
+                maxLength={KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES}
+                autoComplete="off"
+                aria-describedby="knowledge-advanced-filter-status"
+                aria-invalid={validationAttempted && normalized.invalid.selectorText || undefined}
+                onChange={(event) => updateTextDraft("selectorText", event.currentTarget.value)}
+              />
+            </label>
+          </div>
+          <div className="knowledge-manager__advanced-filter-actions">
+            <output
+              id="knowledge-advanced-filter-status"
+              role={invalidAttempt ? "alert" : "status"}
+              aria-live="polite"
+            >{status}</output>
+            <span>
+              <button type="submit">Apply filters</button>
+              <button type="button" onClick={clear}>Clear filters</button>
+            </span>
+          </div>
+        </fieldset>
+      </form>
+      {unavailable ? (
+        <KnowledgeStatus
+          kind="unavailable"
+          title="Knowledge Manager unavailable"
+          message="The advertised read-only knowledge service is not available. No catalog detail was returned."
+          action={draftMatchesCommitted ? (
+            <button type="button" onClick={onRetry}>Retry</button>
+          ) : undefined}
+        />
+      ) : null}
+    </>
   );
 }
 

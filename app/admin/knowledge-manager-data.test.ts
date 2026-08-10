@@ -35,6 +35,7 @@ import { knowledgeRoutes } from "@/lib/api/routes";
 import {
   KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENCIES,
   KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENTS,
+  KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES,
   KNOWLEDGE_MANAGER_MAXIMUM_GRAPH_RESPONSE_BYTES,
   KNOWLEDGE_MANAGER_MAXIMUM_OBJECTS,
   KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES,
@@ -44,8 +45,10 @@ import {
   knowledgeLifecycleStateFilterFromControlValue,
   knowledgeListRequest,
   knowledgeObjectTypeFilterFromControlValue,
+  knowledgeSharingScopeFilterFromControlValue,
   knowledgeRelationshipRequest,
   knowledgeSortChoiceFromControlValue,
+  knowledgeTextFilterFromDraft,
   loadKnowledgeDetail,
   loadKnowledgePage,
   loadKnowledgeRelationshipPage,
@@ -73,6 +76,7 @@ import {
   knowledgeManagerUnmountCleanup,
   knowledgeRelationshipSectionKey,
   knowledgeRelationshipUnmountCleanup,
+  normalizeAdvancedFilterDrafts,
   resetKnowledgeManagerQuery,
 } from "./knowledge-manager-panel";
 
@@ -182,8 +186,12 @@ function query(
 ): KnowledgeListQuery {
   return {
     appId: "app-observability",
+    ownerId: null,
+    text: null,
     objectType: "all",
     lifecycleState: "all",
+    sharingScope: "all",
+    selectorText: null,
     sort: "name-ascending",
     pageSize,
     pageToken,
@@ -734,19 +742,23 @@ test("relationship failures are uniform and late-bound cleanup aborts continuati
 test("filter and sort choices encode exact canonical List request enums", () => {
   assert.deepEqual(knowledgeListRequest(query("cursor-safe", {
     appId: null,
+    ownerId: "owner-7",
+    text: "latency error",
     objectType: "field-alias",
     lifecycleState: "quarantined",
+    sharingScope: "private",
+    selectorText: "source::api",
     sort: "updated-descending",
     pageSize: 17,
   })), {
     page: { pageSize: 17, pageToken: "cursor-safe", includeTotalSize: true },
     appIdFilter: undefined,
-    ownerIdFilter: undefined,
-    textFilter: undefined,
+    ownerIdFilter: "owner-7",
+    textFilter: "latency error",
     objectTypeFilters: [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS],
     stateFilters: [KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_QUARANTINED],
-    sharingScopeFilters: [],
-    selectorTextFilter: undefined,
+    sharingScopeFilters: [SharingScope.SHARING_SCOPE_PRIVATE],
+    selectorTextFilter: "source::api",
     sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_UPDATED_AT,
     sortDirection: SortDirection.SORT_DIRECTION_DESCENDING,
   });
@@ -773,6 +785,18 @@ test("filter and sort choices encode exact canonical List request enums", () => 
   for (const [lifecycleState, expected] of lifecycleStates) {
     assert.deepEqual(
       knowledgeListRequest(query(null, { lifecycleState })).stateFilters,
+      [expected],
+    );
+  }
+
+  const sharingScopes = [
+    ["private", SharingScope.SHARING_SCOPE_PRIVATE],
+    ["app", SharingScope.SHARING_SCOPE_APP],
+    ["global", SharingScope.SHARING_SCOPE_GLOBAL],
+  ] as const;
+  for (const [sharingScope, expected] of sharingScopes) {
+    assert.deepEqual(
+      knowledgeListRequest(query(null, { sharingScope })).sharingScopeFilters,
       [expected],
     );
   }
@@ -806,17 +830,72 @@ test("filter and sort choices encode exact canonical List request enums", () => 
   }
 });
 
+test("advanced text filters trim ASCII edges and enforce the committed UTF-8 contract", () => {
+  assert.equal(KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES, 255);
+  assert.equal(knowledgeTextFilterFromDraft(" \towner-7\r\n"), "owner-7");
+  assert.equal(knowledgeTextFilterFromDraft("\u00a0owner-7\u00a0"), "\u00a0owner-7\u00a0");
+  assert.equal(knowledgeTextFilterFromDraft("\t\n\v\f\r "), null);
+  assert.equal(knowledgeTextFilterFromDraft(` ${"é".repeat(127)}a `), `${"é".repeat(127)}a`);
+  assert.equal(knowledgeTextFilterFromDraft("é".repeat(128)), undefined);
+  assert.equal(knowledgeTextFilterFromDraft("owner\u0000secret"), undefined);
+  assert.equal(knowledgeTextFilterFromDraft("owner\u0085secret"), undefined);
+  assert.equal(knowledgeTextFilterFromDraft("owner\ud800secret"), undefined);
+
+  assert.throws(() => knowledgeListRequest(query(null, { ownerId: " owner-7" })), TypeError);
+  assert.throws(() => knowledgeListRequest(query(null, { text: "" })), TypeError);
+  assert.throws(() => knowledgeListRequest(query(null, { selectorText: "bad\u007ftext" })), TypeError);
+});
+
+test("advanced draft normalization reports each invalid field and one atomic tuple", () => {
+  assert.deepEqual(normalizeAdvancedFilterDrafts({
+    ownerId: " owner-7 ",
+    text: " latency error ",
+    sharingScope: "private",
+    selectorText: " source::api ",
+  }), {
+    filters: {
+      ownerId: "owner-7",
+      text: "latency error",
+      sharingScope: "private",
+      selectorText: "source::api",
+    },
+    invalid: {
+      ownerId: false,
+      text: false,
+      sharingScope: false,
+      selectorText: false,
+    },
+  });
+  assert.deepEqual(normalizeAdvancedFilterDrafts({
+    ownerId: "owner\u0000secret",
+    text: "ok",
+    sharingScope: "future-sharing",
+    selectorText: "é".repeat(128),
+  }), {
+    filters: null,
+    invalid: {
+      ownerId: true,
+      text: false,
+      sharingScope: true,
+      selectorText: true,
+    },
+  });
+});
+
 test("unknown control and query enums fail closed before a List request", async () => {
   assert.equal(knowledgeObjectTypeFilterFromControlValue("field-alias"), "field-alias");
   assert.equal(knowledgeObjectTypeFilterFromControlValue("future-type"), undefined);
   assert.equal(knowledgeLifecycleStateFilterFromControlValue("deleted"), "deleted");
   assert.equal(knowledgeLifecycleStateFilterFromControlValue("UNRECOGNIZED"), undefined);
+  assert.equal(knowledgeSharingScopeFilterFromControlValue("global"), "global");
+  assert.equal(knowledgeSharingScopeFilterFromControlValue("shared"), undefined);
   assert.equal(knowledgeSortChoiceFromControlValue("created-descending"), "created-descending");
   assert.equal(knowledgeSortChoiceFromControlValue("name-sideways"), undefined);
 
   const invalidQueries: KnowledgeListQuery[] = [
     { ...query(), objectType: "future-object-type" as never },
     { ...query(), lifecycleState: "future-state" as never },
+    { ...query(), sharingScope: "future-sharing" as never },
     { ...query(), sort: "future-sort" as never },
   ];
   await Promise.all(invalidQueries.map(async (invalidQuery) => {
@@ -1128,6 +1207,20 @@ test("the panel loading shell labels every closed filter and exposes no mutation
   assert.match(markup, /Updated newest/);
   assert.match(markup, /Created newest/);
   assert.match(markup, /Type A–Z/);
+  assert.match(markup, /<legend id="knowledge-advanced-filters-title">Advanced filters<\/legend>/);
+  assert.match(markup, /<label for="knowledge-owner-filter"><span>Owner ID<\/span>/);
+  assert.match(markup, /<input id="knowledge-owner-filter"[^>]*autoComplete="off"/);
+  assert.match(markup, /<label for="knowledge-text-filter"><span>Name or description<\/span>/);
+  assert.match(markup, /<input id="knowledge-text-filter"[^>]*autoComplete="off"/);
+  assert.match(markup, /<label for="knowledge-sharing-scope-filter"><span>Sharing scope<\/span>/);
+  assert.match(markup, /All sharing scopes/);
+  assert.match(markup, /Private/);
+  assert.match(markup, /Global/);
+  assert.match(markup, /<label for="knowledge-selector-text-filter"><span>Selector text<\/span>/);
+  assert.match(markup, /No advanced filters applied\./);
+  assert.match(markup, />Apply filters<\/button>/);
+  assert.match(markup, />Clear filters<\/button>/);
+  assert.doesNotMatch(markup, /name="(?:ownerId|text|sharingScope|selectorText)"/);
   assert.doesNotMatch(markup, />Create<|>Edit<|>Delete<|>Enable<|>Disable<|>Save</);
 });
 
@@ -1162,17 +1255,25 @@ test("responsive and focus-visible styles cover filters and list/detail collapse
   const mobileBodies = mediaRuleBodies(css, "max-width: 760px");
   const narrowBodies = mediaRuleBodies(css, "max-width: 480px");
   assert.match(css, /\.knowledge-manager__filters \{[^}]*grid-template-columns: minmax\(170px, 1\.35fr\) repeat\(3, minmax\(125px, 1fr\)\);/);
+  assert.match(css, /\.knowledge-manager__advanced-filter-grid \{[^}]*grid-template-columns: repeat\(4, minmax\(125px, 1fr\)\);/);
+  assert.match(css, /\.knowledge-manager__filters label,\n\.knowledge-manager__advanced-filter-grid label \{/);
+  assert.match(css, /\.knowledge-manager__filters label > span,\n\.knowledge-manager__advanced-filter-grid label > span \{/);
+  assert.match(css, /\.knowledge-manager__filters select,\n\.knowledge-manager__advanced-filter-grid input,\n\.knowledge-manager__advanced-filter-grid select \{/);
   assert.ok(compactBodies.some((body) => (
     /\.knowledge-manager__filters \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/.test(body)
+    && /\.knowledge-manager__advanced-filter-grid \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}/.test(body)
     && /\.knowledge-manager__workspace--detail \{ grid-template-columns: 1fr; \}/.test(body)
   )));
   assert.ok(mobileBodies.some((body) => (
     /\.knowledge-manager__row \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/.test(body)
+    && /\.knowledge-manager__toolbar select,\s*\.knowledge-manager__advanced-filter-grid input,\s*\.knowledge-manager__advanced-filter-grid select \{ font-size: 16px; height: 44px; \}/.test(body)
   )));
   assert.ok(narrowBodies.some((body) => (
     /\.knowledge-manager__filters \{ grid-template-columns: 1fr; \}/.test(body)
+    && /\.knowledge-manager__advanced-filter-grid \{ grid-template-columns: 1fr; \}/.test(body)
   )));
   assert.match(css, /\.knowledge-manager button:focus-visible/);
+  assert.match(css, /\.knowledge-manager input:focus-visible/);
   assert.match(css, /\.knowledge-manager select:focus-visible/);
   assert.match(css, /\.knowledge-manager__detail:focus-visible/);
   assert.match(css, /\.knowledge-manager__relationship-list li \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);

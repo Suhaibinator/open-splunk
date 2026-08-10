@@ -39,6 +39,7 @@ export const KNOWLEDGE_MANAGER_MAXIMUM_OBJECTS = 8_192n;
 export const KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENCIES = 1_024n;
 export const KNOWLEDGE_MANAGER_MAXIMUM_DEPENDENTS = 8_192n;
 export const KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES = 4 << 10;
+export const KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES = 255;
 export const KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES =
   MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES;
 export const KNOWLEDGE_MANAGER_MAXIMUM_GRAPH_RESPONSE_BYTES =
@@ -228,6 +229,15 @@ export const KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS = [
   { value: "deleted", label: "Deleted" },
 ] as const satisfies ReadonlyArray<{ value: KnowledgeLifecycleStateFilter; label: string }>;
 
+export type KnowledgeSharingScopeFilter = "all" | "private" | "app" | "global";
+
+export const KNOWLEDGE_SHARING_SCOPE_FILTER_OPTIONS = [
+  { value: "all", label: "All sharing scopes" },
+  { value: "private", label: "Private" },
+  { value: "app", label: "App" },
+  { value: "global", label: "Global" },
+] as const satisfies ReadonlyArray<{ value: KnowledgeSharingScopeFilter; label: string }>;
+
 export type KnowledgeSortChoice =
   | "name-ascending"
   | "updated-descending"
@@ -243,8 +253,12 @@ export const KNOWLEDGE_SORT_OPTIONS = [
 
 export interface KnowledgeListQuery {
   appId: string | null;
+  ownerId: string | null;
+  text: string | null;
   objectType: KnowledgeObjectTypeFilter;
   lifecycleState: KnowledgeLifecycleStateFilter;
+  sharingScope: KnowledgeSharingScopeFilter;
+  selectorText: string | null;
   sort: KnowledgeSortChoice;
   pageSize: number;
   pageToken: string | null;
@@ -278,6 +292,29 @@ export function knowledgeLifecycleStateFilterFromControlValue(
     default:
       return undefined;
   }
+}
+
+export function knowledgeSharingScopeFilterFromControlValue(
+  value: string,
+): KnowledgeSharingScopeFilter | undefined {
+  switch (value) {
+    case "all":
+    case "private":
+    case "app":
+    case "global":
+      return value;
+    default:
+      return undefined;
+  }
+}
+
+/** Trims only the protocol-pinned ASCII edge whitespace before commit. */
+export function knowledgeTextFilterFromDraft(
+  value: string,
+): string | null | undefined {
+  const trimmed = trimPinnedASCIIWhitespace(value);
+  if (trimmed.length === 0) return null;
+  return validCommittedKnowledgeFilter(trimmed) ? trimmed : undefined;
 }
 
 export function knowledgeSortChoiceFromControlValue(
@@ -317,6 +354,13 @@ export function knowledgeListRequest(query: KnowledgeListQuery) {
     throw new TypeError("Knowledge app filter is outside the browser contract.");
   }
   if (
+    (query.ownerId !== null && !validCommittedKnowledgeFilter(query.ownerId))
+    || (query.text !== null && !validCommittedKnowledgeFilter(query.text))
+    || (query.selectorText !== null && !validCommittedKnowledgeFilter(query.selectorText))
+  ) {
+    throw new TypeError("Knowledge text filter is outside the browser contract.");
+  }
+  if (
     query.pageToken !== null
     && !validOpaqueToken(query.pageToken, KNOWLEDGE_MANAGER_MAXIMUM_PAGE_TOKEN_BYTES)
   ) {
@@ -324,6 +368,7 @@ export function knowledgeListRequest(query: KnowledgeListQuery) {
   }
   const objectTypeFilters = canonicalKnowledgeObjectTypeFilter(query.objectType);
   const stateFilters = canonicalKnowledgeLifecycleStateFilter(query.lifecycleState);
+  const sharingScopeFilters = canonicalKnowledgeSharingScopeFilter(query.sharingScope);
   const sort = canonicalKnowledgeSort(query.sort);
   return ListKnowledgeObjectsRequest.fromPartial({
     page: {
@@ -332,11 +377,32 @@ export function knowledgeListRequest(query: KnowledgeListQuery) {
       includeTotalSize: true,
     },
     appIdFilter: query.appId ?? undefined,
+    ownerIdFilter: query.ownerId ?? undefined,
+    textFilter: query.text ?? undefined,
     objectTypeFilters,
     stateFilters,
+    sharingScopeFilters,
+    selectorTextFilter: query.selectorText ?? undefined,
     sortBy: sort.sortBy,
     sortDirection: sort.sortDirection,
   });
+}
+
+function canonicalKnowledgeSharingScopeFilter(
+  value: KnowledgeSharingScopeFilter,
+): SharingScope[] {
+  switch (value) {
+    case "all":
+      return [];
+    case "private":
+      return [SharingScope.SHARING_SCOPE_PRIVATE];
+    case "app":
+      return [SharingScope.SHARING_SCOPE_APP];
+    case "global":
+      return [SharingScope.SHARING_SCOPE_GLOBAL];
+    default:
+      throw new TypeError("Knowledge sharing scope filter is outside the browser contract.");
+  }
 }
 
 function canonicalKnowledgeObjectTypeFilter(
@@ -1235,6 +1301,11 @@ function validKnowledgeLifecycle(object: KnowledgeObject): boolean {
 
 function validIdentity(value: string, maximumBytes: number): boolean {
   return validRequiredText(value, maximumBytes)
+    && trimPinnedASCIIWhitespace(value) === value;
+}
+
+function validCommittedKnowledgeFilter(value: string): boolean {
+  return validRequiredText(value, KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES)
     && trimPinnedASCIIWhitespace(value) === value;
 }
 

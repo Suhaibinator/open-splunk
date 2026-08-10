@@ -33,6 +33,23 @@ import {
   GetSystemBootstrapResponse,
   ServerFeature,
 } from "../gen/ts/open_splunk/v1/system_api";
+import { SharingScope, SortDirection } from "../gen/ts/open_splunk/v1/common";
+import {
+  KnowledgeObject,
+  KnowledgeObjectState,
+  KnowledgeObjectType,
+  KnowledgeOverwriteBehavior,
+  KnowledgeSelectorMatchKind,
+} from "../gen/ts/open_splunk/v1/knowledge";
+import {
+  GetKnowledgeObjectRequest,
+  GetKnowledgeObjectResponse,
+  KnowledgeObjectSortBy,
+  ListKnowledgeObjectsRequest,
+  ListKnowledgeObjectsResponse,
+} from "../gen/ts/open_splunk/v1/knowledge_api";
+import { ListIndexesResponse } from "../gen/ts/open_splunk/v1/index_api";
+import { ListIngestionTokensResponse } from "../gen/ts/open_splunk/v1/collector_admin_api";
 import {
   SearchExecutionPhase,
   SearchFailureCode,
@@ -145,6 +162,352 @@ test("collector event is visible through the compiled backend UI", async ({ page
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
   assertBrowserSafety(safety);
+});
+
+test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-only cursor tuple", async ({
+  page,
+}) => {
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const appId = "app-observability";
+  const cursor = "knowledge-cursor-1";
+  const maliciousName = "<script>globalThis.__knowledgeScriptExecuted=true</script>";
+  let knowledgeAdvertised = false;
+  const requestedURLs: string[] = [];
+  const listRequests: ListKnowledgeObjectsRequest[] = [];
+  const getRequests: string[] = [];
+
+  const knowledgeObject = (id: string, name: string, version: bigint): KnowledgeObject =>
+    KnowledgeObject.fromPartial({
+      knowledgeObjectId: id,
+      tenantId: "tenant-local",
+      appId,
+      ownerId: "owner-7",
+      objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+      name,
+      version,
+      sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+      state: KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE,
+      definition: {
+        appId,
+        name,
+        description: "Rendered text only: <img src=x onerror=globalThis.__knowledgeScriptExecuted=true>",
+        sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+        selector: {
+          sourcePatterns: [{
+            matchKind: KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+            value: "source::api",
+          }],
+        },
+        body: {
+          $case: "fieldAlias",
+          value: {
+            sourceField: "status",
+            destinationField: "http_status",
+            overwriteBehavior:
+              KnowledgeOverwriteBehavior.KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+          },
+        },
+      },
+      definitionSha256: new Uint8Array(32).fill(7),
+      createdAt: new Date("2026-08-08T10:00:00.000Z"),
+      updatedAt: new Date("2026-08-08T10:01:00.000Z"),
+    });
+  const firstObject = knowledgeObject("ko-malicious", maliciousName, 2n);
+  const continuationObject = knowledgeObject("ko-continuation", "continued_alias", 3n);
+
+  page.on("request", (request) => requestedURLs.push(request.url()));
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(GetSystemBootstrapResponse.encode(
+        GetSystemBootstrapResponse.fromPartial({
+          serverVersion: "knowledge-browser-test",
+          apiVersion: "v1",
+          splCompatibilityVersion: "open-splunk-v0.1",
+          searchWebsocketPath: "/api/v1/search/ws",
+          features: knowledgeAdvertised
+            ? [ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS]
+            : [],
+          limits: { maximumPageSize: 2 },
+          apps: [{
+            appId,
+            slug: "observability",
+            displayName: "Observability",
+            state: AppState.APP_STATE_ACTIVE,
+          }],
+          selectedAppId: appId,
+          serverTime: new Date("2026-08-08T12:00:00.000Z"),
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/indexes/list",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(ListIndexesResponse.encode(
+        ListIndexesResponse.fromPartial({
+          page: { totalSize: 0n, totalSizeExact: true },
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/ingestion-tokens/list",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(ListIngestionTokensResponse.encode(
+        ListIngestionTokensResponse.fromPartial({
+          page: { totalSize: 0n, totalSizeExact: true },
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/list",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge List request omitted its protobuf body");
+      const request = ListKnowledgeObjectsRequest.decode(wire);
+      listRequests.push(request);
+      const continuation = request.page?.pageToken === cursor;
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ListKnowledgeObjectsResponse.encode(
+          ListKnowledgeObjectsResponse.fromPartial({
+            knowledgeObjects: continuation ? [continuationObject] : [firstObject],
+            page: {
+              nextPageToken: continuation ? undefined : cursor,
+              totalSize: 2n,
+              totalSizeExact: true,
+            },
+            // Continuations deliberately become stale; Apply/Clear must discard them.
+            tenantCatalogRevision: continuation ? 8n : 7n,
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/get",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Get request omitted its protobuf body");
+      const request = GetKnowledgeObjectRequest.decode(wire);
+      getRequests.push(request.knowledgeObjectId);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(GetKnowledgeObjectResponse.encode(
+          GetKnowledgeObjectResponse.fromPartial({ knowledgeObject: firstObject }),
+        ).finish()),
+      });
+    },
+  );
+  await Promise.all([
+    "/api/v1/knowledge/objects/dependencies",
+    "/api/v1/knowledge/objects/dependents",
+  ].map((routePath) => page.route(
+      (url) => url.origin === origin && url.pathname === routePath,
+      (route) => route.fulfill({ status: 404, body: "unavailable" }),
+    )));
+
+  const adminURL = new URL("/admin/", origin).href;
+  await page.goto(adminURL, { waitUntil: "domcontentloaded", timeout });
+  await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible({ timeout });
+  await expect(page.locator(".admin-sidebar")).toBeVisible({ timeout });
+  await expect(page.getByText("API connected", { exact: true })).toBeVisible({ timeout });
+  await expect(page.locator(".admin-sidebar button").filter({ hasText: "Knowledge Manager" }))
+    .toHaveCount(0);
+  expect(requestedURLs.filter((value) => value.includes("/api/v1/knowledge/"))).toEqual([]);
+
+  knowledgeAdvertised = true;
+  await page.reload({ waitUntil: "domcontentloaded", timeout });
+  const knowledgeNavigation = page.locator(".admin-sidebar button").filter({
+    hasText: "Knowledge Manager",
+  });
+  await expect(knowledgeNavigation).toBeVisible({ timeout });
+  await knowledgeNavigation.click();
+  const manager = page.locator(".knowledge-manager");
+  await expect(manager.getByRole("heading", { name: "Knowledge Manager" })).toBeVisible({ timeout });
+  await expect(manager.getByText(maliciousName, { exact: true })).toBeVisible({ timeout });
+  // React development strict effects may replay only the initial mount request.
+  const initialListRequestCount = listRequests.length;
+  expect(initialListRequestCount).toBeGreaterThan(0);
+  expect(initialListRequestCount).toBeLessThanOrEqual(2);
+  const initialListRequest: ListKnowledgeObjectsRequest = {
+    page: { pageSize: 2, pageToken: undefined, includeTotalSize: true },
+    appIdFilter: appId,
+    ownerIdFilter: undefined,
+    textFilter: undefined,
+    objectTypeFilters: [],
+    stateFilters: [],
+    sharingScopeFilters: [],
+    selectorTextFilter: undefined,
+    sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_NAME,
+    sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
+  };
+  expect(listRequests).toEqual(Array.from(
+    { length: initialListRequestCount },
+    () => initialListRequest,
+  ));
+  let expectedListRequestCount = initialListRequestCount;
+  async function expectNextListRequest(
+    phase: string,
+    expected: ListKnowledgeObjectsRequest,
+  ): Promise<void> {
+    expectedListRequestCount += 1;
+    await expect.poll(() => listRequests.length, {
+      message: `${phase} issued exactly one List request`,
+      timeout,
+    }).toBe(expectedListRequestCount);
+    expect(listRequests.at(-1), `${phase} List request tuple`).toEqual(expected);
+    await waitForTwoRenderedTurns();
+    expect(listRequests, `${phase} emitted no delayed duplicate List request`)
+      .toHaveLength(expectedListRequestCount);
+  }
+  async function waitForTwoRenderedTurns(): Promise<void> {
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+  }
+  await expect(manager.getByLabel("Read-only surface")).toBeVisible();
+  await Promise.all(["Create", "Edit", "Delete", "Enable", "Disable", "Save"].map(
+    (mutationLabel) => expect(manager.getByRole("button", {
+      name: new RegExp(`^${mutationLabel}(?:\\s|$)`, "i"),
+    })).toHaveCount(0),
+  ));
+  await expect(manager.locator("script, img")).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "__knowledgeScriptExecuted")))
+    .toBeUndefined();
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  expect((await manager.locator(".knowledge-manager__advanced-filter-grid").evaluate(
+    (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+  ))).toBe(4);
+
+  const ownerFilter = manager.getByLabel("Owner ID");
+  const textFilter = manager.getByLabel("Name or description");
+  const sharingFilter = manager.getByLabel("Sharing scope");
+  const selectorFilter = manager.getByLabel("Selector text");
+  await ownerFilter.fill(" \towner-7 ");
+  await textFilter.fill(" latency error ");
+  await sharingFilter.selectOption("private");
+  await selectorFilter.fill(" source::api ");
+  await waitForTwoRenderedTurns();
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  const appliedListRequest: ListKnowledgeObjectsRequest = {
+    ...initialListRequest,
+    ownerIdFilter: "owner-7",
+    textFilter: "latency error",
+    sharingScopeFilters: [SharingScope.SHARING_SCOPE_PRIVATE],
+    selectorTextFilter: "source::api",
+  };
+  await selectorFilter.press("Enter");
+  await expectNextListRequest("advanced-filter Apply", appliedListRequest);
+  await expect(ownerFilter).toHaveValue("owner-7");
+  await expect(textFilter).toHaveValue("latency error");
+  await expect(selectorFilter).toHaveValue("source::api");
+  expect(new URL(page.url()).search).toBe("");
+
+  const continuationListRequest: ListKnowledgeObjectsRequest = {
+    ...appliedListRequest,
+    page: { pageSize: 2, pageToken: cursor, includeTotalSize: true },
+  };
+  await manager.getByRole("button", { name: "Load next page" }).click();
+  await expectNextListRequest("continuation", continuationListRequest);
+  await expect(manager.getByRole("alert")).toContainText("Catalog page changed", { timeout });
+
+  await textFilter.fill("latency warning");
+  await waitForTwoRenderedTurns();
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  const committedListRequest: ListKnowledgeObjectsRequest = {
+    ...appliedListRequest,
+    textFilter: "latency warning",
+  };
+  await manager.getByRole("button", { name: "Apply filters" }).click();
+  await expectNextListRequest("stale-state reset Apply", committedListRequest);
+  await expect(manager.getByText("Catalog page changed")).toHaveCount(0);
+
+  const maliciousRow = manager.getByRole("button", { name: new RegExp("globalThis") });
+  await maliciousRow.focus();
+  await maliciousRow.press("Enter");
+  await expect(manager.getByRole("heading", { name: maliciousName })).toBeVisible({ timeout });
+  expect(getRequests).toEqual(["ko-malicious"]);
+  await expect(manager.locator("script, img")).toHaveCount(0);
+  const escapedDetailMarkup = await manager.locator(".knowledge-manager__detail").evaluate(
+    (element) => element.innerHTML,
+  );
+  expect(escapedDetailMarkup).toContain("&lt;img");
+
+  await textFilter.evaluate((element) => {
+    const input = element as HTMLInputElement;
+    input.removeAttribute("maxlength");
+  });
+  await textFilter.fill("é".repeat(128));
+  await manager.getByRole("button", { name: "Apply filters" }).click();
+  await expect(manager.getByText("Knowledge Manager unavailable")).toBeVisible({ timeout });
+  await expect(manager.locator(".knowledge-manager__workspace")).toHaveCount(0);
+  await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await expect(textFilter).toHaveAttribute("aria-invalid", "true");
+  await expect(ownerFilter).not.toHaveAttribute("aria-invalid", "true");
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+
+  await ownerFilter.fill("owner-8");
+  await waitForTwoRenderedTurns();
+  await expect(textFilter).toHaveAttribute("aria-invalid", "true");
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  await ownerFilter.fill("owner-7");
+  await textFilter.fill("different unapplied draft");
+  await waitForTwoRenderedTurns();
+  await expect(manager.locator("#knowledge-advanced-filter-status"))
+    .toContainText("Draft filters not applied.");
+  await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  await textFilter.fill("latency warning");
+  await textFilter.press("Enter");
+  await expectNextListRequest("same-tuple fail-closed recovery", committedListRequest);
+  await expect(manager.getByText(maliciousName, { exact: true })).toBeVisible({ timeout });
+
+  await manager.getByRole("button", { name: "Clear filters" }).click();
+  await expectNextListRequest("Clear", initialListRequest);
+  await expect(ownerFilter).toHaveValue("");
+  await expect(textFilter).toHaveValue("");
+  await expect(sharingFilter).toHaveValue("all");
+  await expect(selectorFilter).toHaveValue("");
+
+  await sharingFilter.evaluate((element) => {
+    const select = element as HTMLSelectElement;
+    select.add(new Option("Forged", "future-sharing"));
+  });
+  await sharingFilter.selectOption("future-sharing");
+  await expect(manager.getByText("Knowledge Manager unavailable")).toBeVisible({ timeout });
+  await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await waitForTwoRenderedTurns();
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  await sharingFilter.selectOption("all");
+  await manager.getByRole("button", { name: "Apply filters" }).click();
+  await expectNextListRequest("forged-sharing recovery", initialListRequest);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect((await manager.locator(".knowledge-manager__advanced-filter-grid").evaluate(
+    (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+  ))).toBe(1);
+  expect(new URL(page.url()).search).toBe("");
+  expect(requestedURLs.filter((value) => {
+    const pathname = new URL(value).pathname;
+    return pathname.startsWith("/api/v1/knowledge/") && !new Set([
+      "/api/v1/knowledge/objects/list",
+      "/api/v1/knowledge/objects/get",
+      "/api/v1/knowledge/objects/dependencies",
+      "/api/v1/knowledge/objects/dependents",
+    ]).has(pathname);
+  })).toEqual([]);
 });
 
 test("history Run again delegates persisted intent with source-only rerun provenance", async ({
