@@ -614,6 +614,11 @@ summaries, with `objects_truncated` true exactly when the total exceeds 64.
 Browser search-job, history, export, and inspection projections currently
 preserve the reference and ordinal/type/stage while redacting every retained
 object identity.
+At browser revision `e18e58f`, the existing administrator Search Job Inspector
+adapts that redacted projection only when the unchanged Knowledge feature is
+advertised. Without that feature, its adapter keeps the ordinary
+logical/physical plan but does not traverse the summary or nested provenance
+fields.
 
 Every completed execution snapshot returned by the manager, including a legacy
 snapshot, is manager-minted with a private seal over the explicit
@@ -1935,6 +1940,104 @@ pre-existing probe remained excluded and untouched without opening or hashing
 it. The next runtime action remains the complete digest-pinned ClickHouse
 matrix; historical audit rendering is not Knowledge capability or engine
 acceptance.
+
+The Mutation Audit documentation checkpoint is
+`8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`, exactly 147 post-`c5440b9`
+commits. The current dormant redacted Search Job Inspector revision is
+`e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, repository commit count 686 and
+exactly 148 post-`c5440b9` commits. It changes only
+`app/search-workspace.tsx`,
+`app/search-workspace/components/workspace-dialogs.module.css`,
+`app/search-workspace/components/workspace-dialogs.tsx`,
+`integration/browser_vertical.spec.ts`,
+`lib/api/administrator-session.test.ts`, `lib/api/routes.ts`,
+`lib/search/server-inspection.ts`, `lib/search/server-inspection.test.ts`, and
+`scripts/test-frontend.mjs`.
+
+The inspect protobuf, completed-job service/route, administrator bearer
+attachment, and `SERVER_FEATURE_PLAN_INSPECTION` request gate all predate this
+slice. The existing PLAN capability still gates the one explicit
+`/api/v1/search/jobs/inspect` POST. The unchanged
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` value only gates whether the browser
+adapter traverses/retains and the UI displays decoded Knowledge authority, and
+remains hard-false in production.
+No second request, Knowledge endpoint, or background effect was added. The
+frontend route manifest now gives the existing inspect response the same 8 MiB
+ceiling as the server so transport rejects an oversized body before decode.
+
+The workspace retains the existing inspection request, abort-controller, and
+15-second timeout flow while replacing raw-response state with a detached
+discriminated display model. Each activation captures the exact displayed job
+ID, sends it once, requires the response ID to match before nested
+traversal/adaptation, and commits only while the signal, controller-reference
+identity, and displayed job are all current. Modal close,
+job/result reset or replacement, draft/root clearing, app/client replacement,
+and unmount abort and clear the request. Reopen supersedes the old controller,
+so a deterministically released late response cannot replace the new result.
+Transport, response, and adaptation failures use one generic non-disclosing
+message.
+
+One closed adapter validates and copies the complete response into a detached
+display model. The capability-off path still validates the ordinary plan's
+nonnested structure and renders its logical, physical, SQL, EXPLAIN, and
+diagnostic fields, but short-circuits before reading or traversing the Knowledge
+summary, operator provenance, or output provenance. Capability-on distinguishes
+absent from enabled-empty and enabled-nonempty authority. A present reference
+requires exact 32-byte digest and state-token commitments, catalog revision no
+greater than MaxInt64-1, total `0..256`, and exactly `min(total, 64)` ordered
+redacted summary entries with coherent truncation. Compiler compatibility must
+be nonempty, well-formed UTF-8 of at most 128 bytes, with no ASCII-edge SPACE or
+TAB-through-CR and no C0/C1 control; non-ASCII edge whitespace such as NBSP is
+retained. Only redacted disclosure, contiguous ordinals, closed
+extraction/alias/calculated stage/type/operator mappings, canonical rank and
+shape, bounded canonical inputs, and exact operator/output-provenance bindings
+are accepted.
+
+Raw arrays are bounded before mapping. The adapter mirrors canonical field
+spelling and UTF-8/control rules with an 8,720-byte name, 17 path segments, and
+256-byte decoded segment ceiling. Logical plans allow at most 256 authored plus
+256 generated stages, 1,024 fields per stage, 16,384 field occurrences, 1 MiB
+of strings, 256 operator-provenance entries, and 512 output-provenance entries.
+Physical projections allow 4,096 nodes, 256 reads, 4,096 cumulative headers and
+indexes, 64 index keys, 16 KiB per metadata string, and 1 MiB total. SQL is
+bounded at 256 KiB; EXPLAIN at 1 MiB, 4,096 nonempty lines, and 16 KiB per line;
+the diagnostic ID is at most 128 bytes. Each bounded string is UTF-8 encoded
+once, canonical comparison walks scalars without allocation while preserving Go
+byte order, and EXPLAIN validation is one byte pass.
+
+The compact view shows only the snapshot digest, catalog revision, exact total,
+compiler identity, redacted ordinal/type prefix, and generated stage input,
+operator, output-field, and redacted provenance annotations. It never retains
+or displays object IDs, names, versions, definitions, selectors, state token,
+deep links, or mutation controls, and it does not invent exact type totals from
+a truncated prefix. React text escaping, generic failures, labelled semantic
+regions, the existing modal focus trap/restoration, Escape/Close/Done behavior,
+and wrapping for long fields/SQL/EXPLAIN preserve XSS, keyboard, and 375-pixel
+mobile containment.
+
+The generated-protobuf browser scenario creates genuinely completed statistics
+jobs, waits for exactly one bounded job-bound Results request per job, and then
+proves zero automatic Inspect or Knowledge traffic. Feature-off forged
+authorized identity is ignored while the ordinary plan remains visible. A foreign
+response/job identity fails generically; the next explicit activation renders
+valid redacted authority. Exact counters and two-rendered-turn barriers prove
+one Inspect per activation, no duplicate Results or Inspect traffic, no
+Knowledge or mutation call, unchanged URL and local/session storage, and inert
+hostile text. A held modal-close/reopen race proves transport abort and stale-
+completion exclusion.
+
+At `e18e58f`, `npm run test:frontend` passes 66 build/tool plus 230 frontend
+tests; `npm run typecheck`, strict `npm run lint -- --deny-warnings`, and
+`git diff --check` pass. Exact post-amend focused Playwright passes 1/1 in 4.2
+seconds from an isolated `git-archive` snapshot. The simplify/efficiency pass
+and three final independent implementation reviews are CLEAN. No Go,
+protobuf/generated, backend route,
+bearer, capability, Resolver, compiler/finalizer, execution authority, or
+runtime gate changed.
+Docker was **NOT RUN** and remains paused/canceled; the protected pre-existing
+probe remained excluded and untouched without opening or hashing it. The next
+runtime action remains the complete digest-pinned 13-surface ClickHouse
+`26.3.17.4` matrix, not another browser or compiler-only substitute.
 
 The KO-1C compiler now also preserves complete execution authority when an
 ordinary sealed query is projected into timeline, field-catalog,

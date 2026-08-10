@@ -833,6 +833,102 @@ probe remained excluded and untouched without opening or hashing it. These are
 consumer-compatibility oracles for an existing wire contract, not a schema,
 backend, capability, Knowledge execution, or ClickHouse acceptance change.
 
+The Mutation Audit documentation checkpoint is
+`8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`, exactly 147 post-`c5440b9`
+commits. The current dormant Search Job Inspector consumer revision is
+`e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, repository commit count 686 and
+exactly 148 post-`c5440b9` commits. Its nine-file scope is
+`app/search-workspace.tsx`,
+`app/search-workspace/components/workspace-dialogs.module.css`,
+`app/search-workspace/components/workspace-dialogs.tsx`,
+`integration/browser_vertical.spec.ts`,
+`lib/api/administrator-session.test.ts`, `lib/api/routes.ts`,
+`lib/search/server-inspection.ts`, `lib/search/server-inspection.test.ts`, and
+`scripts/test-frontend.mjs`.
+
+The `InspectSearchJobRequest`/`InspectSearchJobResponse` messages, completed-job
+inspection service and route, administrator bearer attachment, and
+`SERVER_FEATURE_PLAN_INSPECTION` gate all predate `e18e58f`. That unchanged PLAN
+capability alone gates the existing explicit inspect POST. The unchanged
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` value gates only adapter
+traversal/retention and presentation of decoded Knowledge fields and remains
+hard-false in production. This slice changes no
+protobuf or generated file, Go handler, server route, bearer policy, or feature
+value. Its route-manifest-only contract addition is an 8 MiB browser response
+ceiling matching the existing server, applied by transport before protobuf
+decode.
+
+The browser captures the exact displayed search-job ID for the single existing
+request, requires `response.search_job_id` to equal it before nested
+traversal/adaptation, and admits a completion only while its signal, controller
+reference, and current job ID all remain live. It retains the existing request,
+controller, and 15-second timeout flow while replacing raw-response state with
+a detached discriminated display model; modal close, reopen, new-job/result
+reset, app/client replacement, and unmount abort or replace that controller.
+The frontend never retains the generated response. One closed adapter
+reconstructs a fresh allowlisted logical plan, physical plan, SQL, EXPLAIN,
+diagnostic identifier, and optional Knowledge display model.
+
+When Knowledge is not advertised, the adapter still validates and renders the
+ordinary plan and nonnested generated-stage shape, then returns without reading
+or traversing `knowledge_snapshot`, `operator_provenance`, or
+`output_provenance`. When advertised, summary absence remains distinct from a
+present enabled-empty reference. A present reference requires 32-byte snapshot
+and state-token commitments, revision through MaxInt64-1, exact total no greater
+than 256, an ordered prefix of exactly `min(total, 64)`, and a truncation bit
+equal to `total > 64`. Compiler compatibility is nonempty, well-formed UTF-8 of
+at most 128 bytes, has no ASCII-edge SPACE or TAB-through-CR and no C0/C1
+control; non-ASCII edge whitespace such as NBSP is retained. Every
+summary/provenance disclosure must use the redacted arm;
+authored, authorized-object, absent, or false-redacted identity fails closed.
+
+The closed stage map binds `ConditionalExtract` and
+`ConditionalExtractJSON` to extraction, `CopyFieldAlias` to alias, and
+`ParallelExtend` to calculated-field provenance. The adapter validates
+`ConditionalExtract` one-to-many, `ConditionalExtractJSON` one-to-one, and
+fused one-to-one `CopyFieldAlias`/`ParallelExtend` shapes; contiguous
+response-local ordinals; stage rank/repeatability; operator-to-type/stage
+coherence; every operator/output binding; canonical output order; and duplicate
+output occurrences without collapsing them. The
+display retains only digest, revision, exact total, compiler text, redacted
+ordinal/type prefix, generated inputs, operator annotations, output field, and
+redacted provenance. It validates but discards the state token and never retains
+or renders object IDs, names, versions, definition locations/bodies, selectors,
+deep links, or mutation authority.
+
+Raw arrays are bounded before traversal. Canonical fields have an 8,720-byte
+UTF-8 spelling ceiling, at most 17 path segments and 256 bytes per decoded
+segment. Logical projection allows at most 512 stages split into 256 authored
+and 256 generated, 1,024 fields per stage, 16,384 field occurrences, 1 MiB of
+strings, 256 operator-provenance entries, and 512 output-provenance entries.
+Physical projection allows 4,096 nodes, 256 reads, 4,096 cumulative headers and
+indexes, 64 index keys, 16 KiB per metadata string, and 1 MiB total. Generated
+SQL is bounded at 256 KiB, EXPLAIN at 1 MiB/4,096 nonempty lines/16 KiB per
+line, and diagnostic query ID at most 128 bytes. Browser comparison uses an
+allocation-free scalar walk equivalent to Go's raw UTF-8 ordering; each bounded
+string is encoded once, and EXPLAIN validation uses one pass over those bytes.
+
+The generated-protobuf browser proof first completes a statistics job and
+serves exactly one matching bounded Results page. It then proves no automatic
+Inspect, one exact Inspect POST per activation, feature-off suppression of
+forged authorized identity while the ordinary plan stays visible, generic
+foreign-job rejection, a successful redacted retry, inert hostile text,
+responsive and accessible read-only rendering, unchanged URL/storage, and zero
+Knowledge or mutation calls. A held request is closed/aborted and superseded on
+reopen; its released completion cannot commit. Stable counters after rendered-
+turn barriers rule out duplicate Results or Inspect traffic.
+
+At `e18e58f`, the frontend gate passes 66 build/tool plus 230 frontend tests,
+typecheck, strict no-warning lint, and `git diff --check`. Exact post-amend
+focused Playwright passes 1/1 in 4.2 seconds from an isolated `git-archive`
+snapshot. The simplify/efficiency pass and three final independent
+implementation reviews are CLEAN. Docker was **NOT RUN** and remains
+paused/canceled; the protected pre-existing probe remained excluded and
+untouched without opening or hashing it. No Resolver, compiler/finalizer,
+execution authority, production runtime gate, or ClickHouse behavior changed.
+The complete digest-pinned 13-surface `26.3.17.4` matrix remains the next
+runtime action.
+
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.
 The snapshot is the exact durable result of the optimistic update and contains
