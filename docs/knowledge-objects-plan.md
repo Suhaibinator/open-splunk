@@ -1659,6 +1659,26 @@ fail identically in every mode. Formatting and diff hygiene pass. The protected
 pre-existing untracked ClickHouse probe was excluded and left untouched without
 opening or hashing it.
 
+That full-server result is time-scoped to `9f8c8ac`. At subsequent revision
+`81c64122fb8be4a98ab42ecb5e3e23772827c208`, for which
+`git rev-list --count c5440b9..81c6412` is exactly 137, the shared analysis
+fixture no longer handcrafts an unsigned legacy `ExecutionSnapshot`. It creates
+and completes a legacy search through a real `searchjobs.Manager`, reacquires
+the owner-scoped completed snapshot, and supplies that Manager-sealed retained
+authority to field analysis. The exact legacy tuple validates before and after
+Manager closure, so the repair preserves `ValidateRetainedKnowledgeAuthority`
+rather than bypassing it. The four recorded field-catalog, field-summary, and
+blocked-worker failures now pass; the affected focused fixture cohort passes in
+all four no-tag/runtime-only/snapshot-only/dual-tag modes. Full
+`cmd/open-splunk-server` default and dual-tag normal and race runs plus default
+and dual-tag vet pass. Revision `81c6412` changes test fixture construction
+only: production Manager composition, Resolver attachment, browser behavior,
+protobuf behavior, and route registration remain unchanged; the production
+compiler and snapshot gates stay closed and the capability remains
+unadvertised. This slice executes no ClickHouse row, and digest-pinned
+knowledge runtime acceptance remains pending. The protected untracked probe
+remained excluded and untouched without opening or hashing it.
+
 The three added `Compile` cases use relationship-based construction oracles.
 Each proves one physical event-table scan, placeholder count equal to
 bound-argument count, its exact ordered authored argument suffix, and exact
@@ -1682,9 +1702,9 @@ atomic alias-copy limit attribution. It requires the cached digest-pinned
 ClickHouse image and exact `26.3.17.4` server version. Stacked chronology,
 pruned consumption, and runtime-empty consumption are compile-only additions;
 they were not added as Docker executor rows. Docker acceptance remains
-explicitly paused/canceled and was **NOT RUN** for the compiler or
-snapshot-lifecycle staging slices; there is no green container result,
-engine-compatibility claim, or
+explicitly paused/canceled and was **NOT RUN** for the compiler,
+snapshot-lifecycle, or signed-fixture-repair slices; there is no green
+container result, engine-compatibility claim, or
 opening of a production compiler, snapshot, Resolver-attachment, capability,
 or browser gate.
 

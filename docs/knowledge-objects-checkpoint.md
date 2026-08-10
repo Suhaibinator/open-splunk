@@ -2,22 +2,22 @@
 
 **Goal status:** active
 
-**Current milestone:** KO-1 dual-tag snapshot-authority lifecycle staging
+**Current milestone:** KO-1 signed retained-analysis fixture reconciliation
 (production gates closed)
 
-**Last completed slice:** a second explicit
-`open_splunk_knowledge_snapshot_acceptance` tag now combines with
-`open_splunk_knowledge_runtime_acceptance` only in a `go test` process. The
-runtime tag alone can seal the already-proven thirteen-surface public Compiler
-matrix, but the snapshot finalizer still rejects it; the snapshot tag alone
-cannot cross the compiler gate. With both tags, the runtime-tag-enabled
-test-only Compiler crosses finalization in a direct public
-Compiler-to-`Authority.Finalize` test and a real Writer-to-Resolver-to-Manager
-v1/v2 retained-authority lifecycle pass through fake dispatch. This is
-test-only lifecycle and identity staging: it proves no ClickHouse row,
-production Resolver attachment, route, capability, browser, protobuf, or
-runtime acceptance. Default, either single-tag mode, and ordinary supported
-dual-tag server builds remain closed. Docker remains paused and was not run.
+**Last completed slice:** the server analysis fixtures now acquire completed
+legacy `ExecutionSnapshot` authority from a real `searchjobs.Manager` lifecycle
+instead of handcrafting an unsigned snapshot. This repairs the four previously
+recorded field-catalog, field-summary, and blocked-worker baseline failures
+without weakening retained-authority validation or changing production code.
+The focused fixtures pass in all four no-tag/runtime-only/snapshot-only/dual-tag
+modes; full server-package default and dual-tag normal and race runs plus both
+vet modes pass. The earlier `9f8c8ac` failure row remains historical evidence
+of that revision. The production compiler and snapshot-finalization gates stay
+closed; Resolver attachment, route registration, and protobuf behavior are
+unchanged; the capability remains unadvertised and browser loading remains
+absent. This slice executes no ClickHouse row, and digest-pinned knowledge
+runtime acceptance remains pending. Docker remains paused and was not run.
 
 **Evidence date:** August 9, 2026
 
@@ -53,9 +53,13 @@ dual-tag server builds remain closed. Docker remains paused and was not run.
   `cc58e05169174887357b812c3a94602a59ec97e0`
 - Dual-tag snapshot-authority lifecycle revision:
   `9f8c8ace0da51b837ebccc0eca1e61db8e9c2dcf`
+- Snapshot-lifecycle documentation revision:
+  `14560f392b4487559252d8f2cd1f1bef1ceb012a`
+- Signed retained-analysis fixture revision:
+  `81c64122fb8be4a98ab42ecb5e3e23772827c208`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 135 intentional post-`c5440b9` KO
-  commits through `9f8c8ac` are durable locally. This update is prepared as a
+- Publication state before this document: 137 intentional post-`c5440b9` KO
+  commits through `81c6412` are durable locally. This update is prepared as a
   separate documentation change. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -447,6 +451,8 @@ Later local commits anchoring the reconciled current state include:
 | `11364ae` | `test(knowledge): expand compiler acceptance matrix` | Thirteen-surface shared matrix with relationship-based stacked chronological, generated-field-pruned, and runtime-empty Compiler proofs; the three additions are compile-only and add no Docker executor row |
 | `cc58e05` | `docs(knowledge): checkpoint compiler matrix` | Reconciled the thirteen-surface construction matrix, relationship oracles, compile-only additions, paused Docker evidence, and the 134-commit terminal state |
 | `9f8c8ac` | `test(knowledge): stage snapshot authority lifecycle` | Independent dual-tag, `go test`-only snapshot-finalization gate; direct exact public Compiler-to-Finalize authority proof; real Writer-to-Resolver-to-Manager ACTIVE v1/v2 retention and fake-dispatch identity; preserved default, single-tag, ordinary-build, production, ClickHouse, route, capability, and browser closure |
+| `14560f3` | `docs(knowledge): checkpoint snapshot lifecycle` | Reconciled the dual-tag authority lifecycle, four-mode closure, bounded ordinary-build evidence, historical full-server baseline failures, paused Docker matrix, and 136-commit terminal state |
+| `81c6412` | `test(server): mint signed analysis snapshots` | Replaced handcrafted unsigned analysis fixtures with real Manager-minted completed legacy snapshots, repairing the four historical server-package failures while preserving retained-authority validation, route registration, and the closed production activation gates |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -1139,7 +1145,7 @@ go vet ./internal/queryexec
 go vet -tags=open_splunk_knowledge_runtime_acceptance ./internal/queryexec
 ```
 
-Current dual-tag snapshot-authority lifecycle staging evidence at `9f8c8ac`:
+Historical dual-tag snapshot-authority lifecycle staging evidence at `9f8c8ac`:
 
 Let **A** mean `open_splunk_knowledge_runtime_acceptance` and **B** mean
 `open_splunk_knowledge_snapshot_acceptance`.
@@ -1161,6 +1167,19 @@ Let **A** mean `open_splunk_knowledge_runtime_acceptance` and **B** mean
 | Local durability | pass | `git rev-list --count c5440b9..9f8c8ac` is exactly 135; terminal revision `9f8c8ace0da51b837ebccc0eca1e61db8e9c2dcf` is locally durable on `codex/knowledge-objects-runtime` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
+Current signed retained-analysis fixture evidence at `81c6412`:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Real retained authority | pass without Docker | The shared server analysis fixture now creates and completes a legacy search through a real `searchjobs.Manager`, reacquires its owner-scoped `CompletedExecutionSnapshotFor`, and uses that Manager-sealed authority for analysis. It validates the exact legacy tuple and proves the retained seal remains valid before and after Manager closure; no handcrafted unsigned `ExecutionSnapshot` is promoted into success authority |
+| Historical four-failure repair | pass | `TestRuntimeHTTPHandlerServesConfiguredFieldCatalog`, `TestRuntimeHTTPHandlerServesConfiguredFieldSummary`, `TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldWorker`, and `TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldSummaryWorker` now pass with the signed fixture. The affected focused fixture cohort passed in `00`, `A`, `B`, and `A+B`; the single-tag modes remain closed rather than acquiring knowledge authority |
+| Full server package | pass without Docker | Full `cmd/open-splunk-server` runs pass by default and with `A+B`. Full default and dual-tag package runs also pass under `-race`, and default plus dual-tag `go vet` pass. This supersedes only the historical baseline result at `9f8c8ac`; it does not rewrite that time-scoped evidence |
+| Scope of change | test-only; production gates closed | Revision `81c6412` changes only the server timeline runtime test fixture. It does not bypass `ValidateRetainedKnowledgeAuthority`, alter production Manager composition, attach a Resolver, open either nonempty gate, advertise a capability, issue a browser request, or change protobuf behavior or route registration. This slice executes no ClickHouse row, and digest-pinned knowledge runtime acceptance remains pending |
+| Hygiene and protected workspace state | pass | `gofmt -d` and `git diff --check` passed. The pre-existing untracked `internal/clickhouse/knowledge_alias_container_integration_test.go` probe remained excluded and untouched without opening or hashing it |
+| Docker-backed acceptance | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked for the fixture repair. The digest-pinned runtime matrix remains pending and paused |
+| Local durability | pass | `git rev-list --count c5440b9..81c6412` is exactly 137; terminal revision `81c64122fb8be4a98ab42ecb5e3e23772827c208` is locally durable on `codex/knowledge-objects-runtime` |
+| Remote durability | pending | No push was attempted without explicit destination approval |
+
 Current candidate-validation and dormant Preview request-boundary evidence:
 
 | Gate | Result | Evidence |
@@ -1180,7 +1199,7 @@ Current candidate-validation and dormant Preview request-boundary evidence:
 | Validation result bounds and privacy | service and route pass | descriptor/comment, Go/TypeScript wire, catalog-service, codec, handler, and HTTP tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
 | Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-execution acquisition or caller-auth integration, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Service work remains blocked on owner-scoped retained-execution reacquisition, fixed-catalog ACTIVE evaluation and program application, row-limit default/bound/execution policy, paired schema-row/truncation and response resource semantics, plus the closed production nonempty compiler, snapshot-finalization, and digest-pinned ClickHouse gates. The compiler-only and dual-tag snapshot lifecycle bridges open none of those service or production boundaries. Validate remains outside the browser bearer allowlist and generic outer administrator map |
 | Docker-backed acceptance | **NOT RUN; prior cancellation and current pause preserved** | Preview request work, both acceptance bridges, and the three compile-only case additions execute no ClickHouse query. No Docker command was invoked for either compiler staging commit or `9f8c8ac`; the previously canceled digest-pinned matrix remains paused, and no ClickHouse runtime claim is made |
-| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints `da56ce4`, `dbb5df7`, `2656f6e`, and `cc58e05`, request-authority hardening `74df953`, initial test-only compiler acceptance `db8fe6c`, its compile-only expansion `11364ae`, and dual-tag lifecycle staging `9f8c8ac` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..9f8c8ac` is exactly 135 and the terminal revision is `9f8c8ace0da51b837ebccc0eca1e61db8e9c2dcf` |
+| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints through snapshot lifecycle `14560f3`, request-authority hardening `74df953`, compiler staging through `9f8c8ac`, and signed retained-analysis fixture repair `81c6412` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..81c6412` is exactly 137 and the terminal revision is `81c64122fb8be4a98ab42ecb5e3e23772827c208` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:

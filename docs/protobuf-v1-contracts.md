@@ -600,6 +600,25 @@ fail identically in every mode. `gofmt` and `git diff --check` pass. The
 protected pre-existing untracked ClickHouse probe
 was excluded and left untouched without opening or hashing it.
 
+That full-server result is historical evidence at `9f8c8ac`. At
+`81c64122fb8be4a98ab42ecb5e3e23772827c208` (exactly 137
+post-`c5440b9` commits), the shared analysis fixture creates and completes a
+legacy search through a real `searchjobs.Manager`, reacquires the owner-scoped
+completed `ExecutionSnapshot`, and uses that Manager-sealed retained authority
+instead of a handcrafted unsigned snapshot. The exact legacy tuple validates
+before and after Manager closure, preserving
+`ValidateRetainedKnowledgeAuthority`. The four formerly failing field-catalog,
+field-summary, and blocked-worker tests now pass; the affected focused fixture
+cohort passes in all four no-tag/runtime-only/snapshot-only/dual-tag modes. Full
+`cmd/open-splunk-server` default and dual-tag normal and race runs plus default
+and dual-tag vet pass. This is a test-fixture repair only: production Manager
+composition, Resolver attachment, browser behavior, protobuf behavior, and
+route registration remain unchanged; both nonempty gates stay closed in
+production and the capability remains unadvertised. This slice executes no
+ClickHouse row, and digest-pinned knowledge runtime acceptance remains
+pending. The protected untracked probe remained excluded and untouched without
+opening or hashing it.
+
 The three added `Compile` cases prove relationships rather than one full SQL
 golden: one physical scan, placeholder/argument equality with the exact ordered
 authored suffix, and exact program/scope evidence for each; paired and
@@ -616,7 +635,7 @@ probe in an ordinary binary observed only the private snapshot helper returning
 did not dynamically call public `Authority.Finalize`, whose compiler path would
 stop first at its own test-process guard. This is not a claim of adversarial
 linker resistance. Docker acceptance was **NOT RUN** and is still
-paused/canceled.
+paused/canceled, including for the signed analysis-fixture repair.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.

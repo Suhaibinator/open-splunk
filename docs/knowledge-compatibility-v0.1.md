@@ -1579,10 +1579,30 @@ search-analysis tests failed identically in every mode. `gofmt` and
 `git diff --check` passed. The protected pre-existing untracked ClickHouse probe
 was excluded and left untouched without opening or hashing it.
 
+That full-server result remains historical evidence for `9f8c8ac`. At
+`81c64122fb8be4a98ab42ecb5e3e23772827c208`, for which
+`git rev-list --count c5440b9..81c6412` is exactly 137, the shared analysis
+fixture instead creates and completes a legacy search through a real
+`searchjobs.Manager`, reacquires its owner-scoped completed
+`ExecutionSnapshot`, and uses the Manager-sealed authority for analysis. It
+validates the exact legacy tuple before and after Manager closure; no
+handcrafted unsigned snapshot is treated as success authority, and
+`ValidateRetainedKnowledgeAuthority` remains intact. The four formerly failing
+field-catalog, field-summary, and blocked-worker tests now pass, and the affected
+focused fixture cohort passes in all four no-tag/runtime-only/snapshot-only/
+dual-tag modes. Full `cmd/open-splunk-server` default and dual-tag normal and
+race runs plus default and dual-tag vet pass. The revision is test-only and
+changes no production Manager composition, Resolver attachment, browser or
+protobuf behavior, or route registration; both nonempty gates stay closed in
+production and the capability remains unadvertised. This slice executes no
+ClickHouse row, and digest-pinned knowledge runtime acceptance remains
+pending. The protected untracked probe remained excluded and untouched without
+opening or hashing it.
+
 Only a completed run against the required digest-pinned ClickHouse image and
 exact certified server version counts as runtime evidence. Docker execution for
-the compiler and snapshot-lifecycle staging slices was **NOT RUN** and remains
-explicitly paused/canceled. The
+the compiler, snapshot-lifecycle staging, and signed-fixture-repair slices was
+**NOT RUN** and remains explicitly paused/canceled. The
 stacked, pruned, and runtime-empty additions are compile-only and were not added
 to the Docker executor rows. A cancellation, skipped container test,
 compiler-only success, or table-free SQL probe must be recorded as pending
