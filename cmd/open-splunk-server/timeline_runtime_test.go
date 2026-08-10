@@ -468,7 +468,7 @@ func TestRuntimeHTTPHandlerServesComposedSearchSuggestionsWithoutCreatingJob(t *
 }
 
 func TestRuntimeHTTPHandlerServesConfiguredFieldCatalog(t *testing.T) {
-	snapshot := runtimeFieldExecutionSnapshot()
+	snapshot := runtimeFieldExecutionSnapshot(t)
 	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
 		Searches: runtimeSnapshotSearches{snapshot: snapshot}, Compiler: runtimeTimelineCompiler{}, Executor: runtimeTimelineExecutor{},
 	})
@@ -513,7 +513,7 @@ func TestRuntimeHTTPHandlerServesConfiguredFieldCatalog(t *testing.T) {
 }
 
 func TestRuntimeHTTPHandlerServesConfiguredIndexFieldCatalog(t *testing.T) {
-	snapshot := runtimeFieldExecutionSnapshot()
+	snapshot := runtimeFieldExecutionSnapshot(t)
 	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
 		Searches: runtimeSnapshotSearches{snapshot: snapshot},
 		Compiler: runtimeTimelineCompiler{},
@@ -586,7 +586,7 @@ func TestRuntimeHTTPHandlerServesConfiguredIndexFieldCatalog(t *testing.T) {
 }
 
 func TestRuntimeHTTPHandlerServesConfiguredFieldSummary(t *testing.T) {
-	snapshot := runtimeFieldExecutionSnapshot()
+	snapshot := runtimeFieldExecutionSnapshot(t)
 	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
 		Searches: runtimeSnapshotSearches{snapshot: snapshot},
 		Compiler: runtimeFieldSummaryCompiler{},
@@ -764,7 +764,7 @@ func TestRuntimeSearchAnalysisCloseIsIdempotent(t *testing.T) {
 }
 
 func TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldWorker(t *testing.T) {
-	snapshot := runtimeFieldExecutionSnapshot()
+	snapshot := runtimeFieldExecutionSnapshot(t)
 	executor := &runtimeBlockingFieldExecutor{
 		entered: make(chan struct{}),
 		exited:  make(chan struct{}),
@@ -895,7 +895,7 @@ func TestRuntimeSearchAnalysisCloseWaitsForBlockedSuggestion(t *testing.T) {
 }
 
 func TestRuntimeSearchAnalysisCloseWaitsForBlockedFieldSummaryWorker(t *testing.T) {
-	snapshot := runtimeFieldExecutionSnapshot()
+	snapshot := runtimeFieldExecutionSnapshot(t)
 	executor := &runtimeBlockingFieldSummaryExecutor{
 		entered: make(chan struct{}),
 		exited:  make(chan struct{}),
@@ -998,19 +998,127 @@ type runtimeSnapshotSearches struct {
 	snapshot searchjobs.ExecutionSnapshot
 }
 
-func runtimeFieldExecutionSnapshot() searchjobs.ExecutionSnapshot {
-	return searchjobs.ExecutionSnapshot{
-		ID: "job", TenantID: "tenant", OwnerID: "owner", SPL: "index=main level=error",
-		EffectiveIndexes: []string{"main"},
-		Earliest:         time.Date(2026, 7, 22, 1, 0, 0, 0, time.UTC),
-		Latest:           time.Date(2026, 7, 22, 2, 0, 0, 0, time.UTC),
-		SearchStart:      time.Date(2026, 7, 22, 2, 0, 59, 0, time.UTC),
-		SearchTimezone:   "UTC",
-		IndexTimeCutoff:  time.Date(2026, 7, 22, 2, 1, 0, 0, time.UTC),
-		VisibilityCutoff: 1,
-		FinishedAt:       time.Date(2026, 7, 22, 2, 2, 0, 0, time.UTC),
-		ExpiresAt:        time.Date(2099, 7, 22, 2, 2, 0, 0, time.UTC),
+func runtimeFieldExecutionSnapshot(t *testing.T) searchjobs.ExecutionSnapshot {
+	t.Helper()
+
+	const (
+		jobID    = "job"
+		tenantID = "tenant"
+		ownerID  = "owner"
+		source   = "index=main level=error"
+	)
+	searchStart := time.Date(2026, 7, 22, 2, 2, 0, 0, time.UTC)
+	expiresAt := time.Date(2099, 7, 22, 2, 2, 0, 0, time.UTC)
+	earliest := time.Date(2026, 7, 22, 1, 0, 0, 0, time.UTC)
+	latest := time.Date(2026, 7, 22, 2, 0, 0, 0, time.UTC)
+	resolvedRange, err := searchtime.NewAbsoluteRange(earliest, latest)
+	if err != nil {
+		t.Fatalf("resolve field execution range: %v", err)
 	}
+	manager, err := searchjobs.New(searchjobs.Config{
+		Executor:          runtimeFieldExecutionExecutor{},
+		Snapshotter:       runtimeFieldExecutionSnapshotter{},
+		Compiler:          clickhouse.Compiler{Database: "open_splunk", Table: "events"},
+		KnowledgeResolver: nil,
+		MaxConcurrent:     1,
+		RetentionTTL:      expiresAt.Sub(searchStart),
+		CleanupInterval:   -1,
+		Now:               func() time.Time { return searchStart },
+		NewID:             func() string { return jobID },
+	})
+	if err != nil {
+		t.Fatalf("create field execution manager: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close field execution manager: %v", err)
+		}
+	})
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+		SPL:               source,
+		OwnerID:           ownerID,
+		TenantID:          tenantID,
+		AuthorizedIndexes: []string{"main"},
+		RequestedIndexes:  []string{"main"},
+		TimeRange:         resolvedRange,
+		AppID:             "",
+	})
+	if err != nil {
+		t.Fatalf("create field execution: %v", err)
+	}
+	waitForRuntimeKnowledgeJobState(t, manager, created.ID, searchjobs.StateCompleted)
+	snapshot, err := manager.CompletedExecutionSnapshotFor(
+		context.Background(),
+		searchjobs.AccessScope{TenantID: tenantID, OwnerID: ownerID},
+		created.ID,
+	)
+	if err != nil {
+		t.Fatalf("read completed field execution: %v", err)
+	}
+	if snapshot.ID != jobID || snapshot.TenantID != tenantID || snapshot.OwnerID != ownerID ||
+		snapshot.AppID != "" || snapshot.SPL != source ||
+		!slices.Equal(snapshot.EffectiveIndexes, []string{"main"}) ||
+		!snapshot.Earliest.Equal(earliest) || !snapshot.Latest.Equal(latest) ||
+		!snapshot.SearchStart.Equal(searchStart) || snapshot.SearchTimezone != "UTC" ||
+		!snapshot.IndexTimeCutoff.Equal(searchStart) || snapshot.VisibilityCutoff != 1 ||
+		!snapshot.FinishedAt.Equal(searchStart) || !snapshot.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("completed field execution scope = %#v", snapshot)
+	}
+	if snapshot.CompiledQuery != nil || !snapshot.KnowledgeSnapshot.IsZero() {
+		t.Fatalf(
+			"legacy field execution retained knowledge authority = compiled:%#v snapshot-zero:%t",
+			snapshot.CompiledQuery,
+			snapshot.KnowledgeSnapshot.IsZero(),
+		)
+	}
+	if authority, validateErr := snapshot.ValidateRetainedKnowledgeAuthority(); validateErr != nil || authority != (searchjobs.RetainedKnowledgeAuthorityDigests{}) {
+		t.Fatalf(
+			"ValidateRetainedKnowledgeAuthority(legacy) = (%#v, %v), want Present=false",
+			authority,
+			validateErr,
+		)
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatalf("close field execution manager before returning snapshot: %v", err)
+	}
+	if authority, validateErr := snapshot.ValidateRetainedKnowledgeAuthority(); validateErr != nil || authority != (searchjobs.RetainedKnowledgeAuthorityDigests{}) {
+		t.Fatalf(
+			"ValidateRetainedKnowledgeAuthority(after manager close) = (%#v, %v), want Present=false",
+			authority,
+			validateErr,
+		)
+	}
+	return snapshot
+}
+
+type runtimeFieldExecutionSnapshotter struct{}
+
+func (runtimeFieldExecutionSnapshotter) VisibilityCutoff(ctx context.Context) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	return 1, nil
+}
+
+type runtimeFieldExecutionExecutor struct{}
+
+func (runtimeFieldExecutionExecutor) Execute(
+	ctx context.Context,
+	compiled clickhouse.CompiledQuery,
+	sink searchjobs.ResultSink,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	columns := make([]searchjobs.Column, len(compiled.OutputFields))
+	for index, field := range compiled.OutputFields {
+		columns[index] = searchjobs.Column{
+			Name:     field,
+			Kind:     searchjobs.ValueKindMixed,
+			Nullable: true,
+		}
+	}
+	return sink.SetSchema(searchjobs.Schema{Columns: columns})
 }
 
 func (searches runtimeSnapshotSearches) CompletedExecutionSnapshotFor(_ context.Context, _ searchjobs.AccessScope, _ string) (searchjobs.ExecutionSnapshot, error) {
