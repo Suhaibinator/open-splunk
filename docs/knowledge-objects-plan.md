@@ -1691,8 +1691,9 @@ stages. A direct prepared nonempty-program fixture proves projection and
 redaction. A production Manager-sealed nonempty retained service fixture
 remains deliberately impossible while production snapshot finalization is
 closed; the later dual-tag test-only fixture stages retained identity with fake
-dispatch and makes no inspection-service or ClickHouse-row claim. Focused normal
-and race tests, `go vet`, protobuf generation/lint, the Go descriptor contract,
+dispatch. At its `9f8c8ac` checkpoint it made no inspection-service or
+ClickHouse-row claim; `b3c40886` later adds the test-only internal service seam
+described below. Focused normal and race tests, `go vet`, protobuf generation/lint, the Go descriptor contract,
 and TypeScript type checking pass. The pinned ClickHouse/Docker runtime matrix
 was not rerun and remains required before the production compiler and snapshot
 gates open.
@@ -1745,8 +1746,10 @@ The same dual-tag test process now stages one complete identity lifecycle
 through the real Writer, Resolver, and `searchjobs.Manager`: ACTIVE v1 is
 resolved, admitted, retained, and paused at fake dispatch while ACTIVE v2 is
 published and resolved; the two completed jobs then reopen their distinct exact
-snapshot, prelude, and compiler authorities under owner-scoped access. This is
-lifecycle/identity staging only. It executes no ClickHouse row and adds no
+snapshot, prelude, and compiler authorities under owner-scoped access. At the
+`9f8c8ac` checkpoint this was lifecycle/identity staging only; `b3c40886` later
+carries the retained authority through the internal inspection service. Neither
+test executes a ClickHouse row or adds
 production Resolver attachment, route, capability, browser request, protobuf
 behavior, or runtime acceptance.
 
@@ -1943,7 +1946,7 @@ acceptance.
 
 The Mutation Audit documentation checkpoint is
 `8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`, exactly 147 post-`c5440b9`
-commits. The current dormant redacted Search Job Inspector revision is
+commits. The historical dormant redacted Search Job Inspector revision is
 `e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, repository commit count 686 and
 exactly 148 post-`c5440b9` commits. It changes only
 `app/search-workspace.tsx`,
@@ -2038,6 +2041,62 @@ Docker was **NOT RUN** and remains paused/canceled; the protected pre-existing
 probe remained excluded and untouched without opening or hashing it. The next
 runtime action remains the complete digest-pinned 13-surface ClickHouse
 `26.3.17.4` matrix, not another browser or compiler-only substitute.
+
+The dormant browser implementation
+`e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, count 148, and documentation
+checkpoint `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, count 149, remain durable
+historical milestones. The current test-only retained-inspection revision is
+`b3c40886f9fade0818d78975e9486e96e02414e3`, parent
+`6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, repository commit count 688 and
+exactly 150 commits after `c5440b9`. Its exact scope is one file,
+`cmd/open-splunk-server/knowledge_runtime_snapshot_acceptance_test.go`, with
+311 insertions and two deletions.
+
+The existing dual-tag acceptance lifecycle now carries real ACTIVE alias v1
+and v2 from Writer through Resolver and Manager into the real
+`searchinspection.Service`. V1 execution remains paused while v2 is published
+and resolved, then each completed job proves its separately sealed prelude,
+compiled query, authorized summary, and snapshot digest. The inspection service
+is configured with a deliberately different but valid Compiler database/table.
+Its deterministic fake Explainer accepts only an exact `EqualForExecution`
+match to the Manager-retained v1 or v2 query, proving the Knowledge path does
+not rebuild or recompile from current mutable catalog state.
+
+A transparent Manager adapter records exactly two completed-snapshot reads per
+successful inspection, including the authoritative postflight equality check.
+A wrong-owner request performs one Manager lookup, returns the generic
+`searchjobs.ErrNotFound` and a zero result, and never reaches Explain. The fake
+returns one valid deterministic `ReadNothing` plan, so this is real service
+control-flow and validation evidence but not real ClickHouse EXPLAIN or row
+evidence.
+
+The internal service result intentionally retains the authorized summary with
+exact object ID, version, alias type/stage, and digest. Its logical
+`CopyFieldAlias` projection carries only response-local ordinal zero, closed
+alias type/stage, canonical input fields, generated destination, and the
+destination-to-ordinal output occurrence. The test therefore pins the internal
+authorized-summary versus redacted logical-provenance separation without
+crossing or claiming the HTTP/server projection boundary or releasing that
+identity to a browser.
+
+V1 and v2 retain distinct summaries, digests, generated destinations, output
+provenance, compiled authorities, and diagnostic query IDs while preserving
+the same ordinal/type/stage-only logical identity shape. Caller mutation of the
+returned v1 summary, logical stage collections, output shape, physical node,
+and generated SQL cannot change the already-returned v2 result or a fresh v1
+inspection. The fresh result remains exactly bound to Manager-retained v1,
+proving stable detached publication.
+
+Default (`00`), runtime-tag-only (`A`), and snapshot-tag-only (`B`) focused
+tests retain the Writer-published-ACTIVE fail-closed oracle. The conjoined
+`A+B` focused test passes normally and under the race detector, tagged-package
+`go vet` passes, and final independent review is CLEAN. This one-file test
+change adds no production wiring, HTTP/server projection or route, protobuf or
+generated artifact, browser bearer, capability advertisement, frontend,
+Resolver/compiler/finalizer behavior, runtime gate, identity disclosure, or
+ClickHouse query. Docker was **NOT RUN** and remains paused/canceled. The next
+runtime action remains the complete digest-pinned 13-surface ClickHouse
+`26.3.17.4` matrix.
 
 The KO-1C compiler now also preserves complete execution authority when an
 ordinary sealed query is projected into timeline, field-catalog,

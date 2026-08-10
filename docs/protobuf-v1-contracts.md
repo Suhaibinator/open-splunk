@@ -649,9 +649,11 @@ digest, encoding, prelude commitment, retained compiler budgets, detachment,
 tamper, scope, and equal-charge program-substitution rejection. A second A+B
 test uses the real Writer, Resolver, and Manager to retain distinct ACTIVE v1
 and v2 snapshot/prelude/compiler authority across fake dispatch and owner-
-scoped access. This is lifecycle/identity staging only: it executes no
-ClickHouse row and adds no production Resolver attachment, route, capability,
-browser request, protobuf behavior, or runtime acceptance.
+scoped access. At its `9f8c8ac` checkpoint this was lifecycle/identity staging
+only; `b3c40886` later carries the retained authority through the internal
+inspection service. Neither test executes a ClickHouse row or adds production
+Resolver attachment, route, capability, browser request, protobuf behavior, or
+runtime acceptance.
 
 At `9f8c8ace0da51b837ebccc0eca1e61db8e9c2dcf` (exactly 135
 post-`c5440b9` commits), all four full `internal/knowledgesnapshot` modes and
@@ -835,7 +837,7 @@ backend, capability, Knowledge execution, or ClickHouse acceptance change.
 
 The Mutation Audit documentation checkpoint is
 `8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`, exactly 147 post-`c5440b9`
-commits. The current dormant Search Job Inspector consumer revision is
+commits. The historical dormant Search Job Inspector consumer revision is
 `e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, repository commit count 686 and
 exactly 148 post-`c5440b9` commits. Its nine-file scope is
 `app/search-workspace.tsx`,
@@ -928,6 +930,53 @@ untouched without opening or hashing it. No Resolver, compiler/finalizer,
 execution authority, production runtime gate, or ClickHouse behavior changed.
 The complete digest-pinned 13-surface `26.3.17.4` matrix remains the next
 runtime action.
+
+The browser implementation
+`e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, count 148, and documentation
+checkpoint `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, count 149, remain historical.
+Current test-only revision `b3c40886f9fade0818d78975e9486e96e02414e3`
+has parent `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, repository commit count 688,
+and exactly 150 commits after `c5440b9`. It changes only
+`cmd/open-splunk-server/knowledge_runtime_snapshot_acceptance_test.go`
+(311 insertions, two deletions). No protobuf or generated artifact changes.
+
+The existing conjoined runtime/snapshot-tag acceptance test now sends the real
+Writer→Resolver→Manager-retained ACTIVE v1 and v2 authorities through the real
+internal `searchinspection.Service`. The service receives a deliberately
+different valid Compiler; its Knowledge path must ignore that compiler. A
+deterministic fake Explainer accepts only a compiled query exactly
+`EqualForExecution` to the Manager-retained v1 or v2 query, preventing a
+rebuild/recompile regression from passing as retained authority.
+
+Each successful Inspect performs exactly two Manager completed-snapshot reads,
+including postflight identity/equality validation, and one fake Explain. A
+wrong-owner Inspect performs one delegated Manager lookup, returns the generic
+`searchjobs.ErrNotFound` with a zero result, and performs no Explain. The fake
+returns a canonical `ReadNothing` plan, so result parsing and service
+publication are real while ClickHouse EXPLAIN and rows are not exercised.
+
+The internal `searchinspection.Result.KnowledgeSnapshot` intentionally remains
+an authorized summary with exact object ID, version, alias type/stage, and
+snapshot digest. Only the logical generated-stage provenance is redacted: its
+`CopyFieldAlias` stage contains response-local ordinal zero, closed alias
+type/stage, canonical input fields, generated destination, and one
+destination-to-ordinal output occurrence. This is not an HTTP/protobuf server
+projection or browser disclosure claim; the existing separate server
+projection remains the authority that redacts the summary before transport.
+
+V1 and v2 prove distinct summaries, digests, destinations, output provenance,
+compiled queries, and diagnostic query IDs. Mutating the returned v1 summary,
+logical arrays, output shape, physical node, and SQL does not change the
+already-returned v2 result or a fresh v1 inspection. The final call remains
+exactly bound to Manager-retained v1, pinning stable detached service results.
+
+Default (`00`), runtime-only (`A`), and snapshot-only (`B`) modes retain the
+fail-closed Writer-published-ACTIVE test. Conjoined `A+B` focused normal/race
+tests and tagged `go vet` pass; independent final review is CLEAN. This test
+adds no HTTP/server route or projection, browser bearer, capability value,
+production Resolver/wiring/runtime gate, identity release, or ClickHouse
+behavior. Docker was **NOT RUN** and remains paused/canceled. The complete
+digest-pinned 13-surface `26.3.17.4` matrix remains the next runtime action.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.

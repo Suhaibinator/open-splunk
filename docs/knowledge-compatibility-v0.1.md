@@ -74,10 +74,13 @@ runtime tag and its own `testing.Testing()` check, opens finalization only in
 the dual-tag test process for the runtime-tag-enabled test-only Compiler. That
 process proves direct snapshot construction and a real Writer-to-Resolver-to-
 Manager ACTIVE v1/v2 retained-authority lifecycle
-through fake dispatch. Default, either single-tag mode, and ordinary dual-tag
+through fake dispatch. Revision `b3c40886` extends that same test-only lifecycle
+through the real internal inspection service, using a deliberately different
+unused Compiler and a deterministic fake Explainer to pin exact consumption of
+the Manager-retained query. Default, either single-tag mode, and ordinary dual-tag
 production builds stay closed; no ClickHouse row, production attachment, new
-route or API activation, browser behavior, protobuf behavior, or runtime
-acceptance is claimed.
+route or server projection, API activation, browser behavior, protobuf behavior,
+or runtime acceptance is claimed.
 
 ## Security boundary
 
@@ -1655,9 +1658,11 @@ The dual-tag Manager fixture publishes ACTIVE v1 through the real Writer,
 resolves and admits it through the real Resolver and Manager, pauses fake
 dispatch while ACTIVE v2 is published, and proves both completed jobs retain
 their distinct exact snapshot, prelude, and compiler identities under owner-
-scoped access. It proves lifecycle/identity staging only, not ClickHouse rows,
-production Resolver attachment, routes, capability, browser behavior, protobuf
-behavior, or runtime acceptance. A supported dual-tag server build remains
+scoped access. At its `9f8c8ac` checkpoint it proved lifecycle/identity staging
+only; `b3c40886` later carries the retained authority through the internal
+inspection service. Neither test proves ClickHouse rows, production Resolver
+attachment, routes, capability, browser behavior, protobuf behavior, or runtime
+acceptance. A supported dual-tag server build remains
 closed. A disposable tracked-source probe in an ordinary binary observed only
 the private snapshot helper returning `false`; it did not dynamically call
 public `Authority.Finalize`, whose compiler path would stop first at its independent
@@ -1864,7 +1869,7 @@ The complete digest-pinned ClickHouse matrix remains the next runtime step.
 
 The Mutation Audit documentation checkpoint is
 `8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`, exactly 147 post-`c5440b9`
-commits. The current dormant Search Job Inspector implementation is
+commits. The historical dormant Search Job Inspector implementation is
 `e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, repository commit count 686 and
 exactly 148 post-`c5440b9` commits. It changes exactly nine frontend/test files:
 `app/search-workspace.tsx`,
@@ -1968,3 +1973,53 @@ probe remained excluded and untouched without opening or hashing it. This
 browser compatibility proof is
 not Tier-1 activation or ClickHouse acceptance. The complete digest-pinned
 13-surface ClickHouse `26.3.17.4` matrix remains the next runtime step.
+
+The dormant browser implementation
+`e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, count 148, and documentation
+checkpoint `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, count 149, remain durable
+historical compatibility milestones. Current test-only revision
+`b3c40886f9fade0818d78975e9486e96e02414e3` has parent
+`6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, repository commit count 688 and
+exactly 150 commits after `c5440b9`. It changes one build-tagged test file,
+`cmd/open-splunk-server/knowledge_runtime_snapshot_acceptance_test.go`, by 311
+insertions and two deletions.
+
+The real ACTIVE alias v1/v2 Writer→Resolver→Manager acceptance lifecycle now
+continues through the real internal `searchinspection.Service`. A deliberately
+different valid service Compiler must remain unused; the deterministic fake
+Explainer accepts only the exact Manager-retained v1 or v2 compiled query. This
+closes the compatibility distinction between consuming retained execution
+authority and reconstructing a query from current mutable catalog state.
+
+The service's first and postflight completed-snapshot reads are both recorded,
+so every successful Inspect has exactly two Manager reads and one fake Explain.
+Wrong owner is delegated once to Manager and returns generic
+`searchjobs.ErrNotFound`, a zero result, and no Explain call. The deterministic
+`ReadNothing` result exercises real service parsing/validation/publication but
+is not ClickHouse EXPLAIN or row evidence.
+
+The internal Knowledge summary remains authorized and proves the exact object
+ID, version, alias type/stage, and snapshot digest retained with each completed
+job. The corresponding logical `CopyFieldAlias` stage deliberately carries
+only response-local ordinal zero, closed alias type/stage, canonical inputs,
+generated destination, and destination-to-ordinal output provenance. This
+authorized-summary/redacted-logical split is internal compatibility evidence;
+it neither crosses nor substitutes for the separate HTTP/server redaction
+projection and does not disclose identity to a browser.
+
+V1 and v2 retain distinct summaries, digests, generated outputs, output
+provenance, compiled authorities, and diagnostic IDs. After the caller mutates
+the returned v1 summary, logical collections, output shape, physical plan, and
+SQL, the already-returned v2 result and a fresh v1 result remain canonical and
+exact. This pins stable detachment from both other calls and Manager retention.
+
+Default (`00`), runtime-tag-only (`A`), and snapshot-tag-only (`B`) modes retain
+the fail-closed Writer-published-ACTIVE oracle. Conjoined `A+B` focused normal
+and race tests plus tagged `go vet` pass, and independent review is CLEAN. This
+one-file test changes no HTTP/server projection or route, protobuf/generated
+artifact, production Resolver/composition, bearer, feature value, runtime gate,
+frontend, browser behavior, identity disclosure, or ClickHouse behavior.
+Docker was **NOT RUN** and remains paused/canceled; the complete digest-pinned
+13-surface ClickHouse `26.3.17.4` matrix remains the next runtime step before
+any production dual-gate/Resolver lifecycle or capability/navigation/mutation
+activation.

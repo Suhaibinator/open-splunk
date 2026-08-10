@@ -2,10 +2,39 @@
 
 **Goal status:** active
 
-**Current milestone:** dormant Search Job Inspector renders redacted retained
-Knowledge authority (Docker paused; Knowledge production gate closed)
+**Current milestone:** test-only retained Knowledge authority reaches the real
+search-inspection service (Docker paused; production gates closed)
 
 **Last completed slice:** revision
+`b3c40886f9fade0818d78975e9486e96e02414e3` extends the existing dual-tag
+ACTIVE v1/v2 Writer→Resolver→Manager lifecycle through the real
+`searchinspection.Service` and a deterministic fake Explainer. The test passes
+a deliberately different valid Compiler to the service; each successful
+Knowledge inspection still sends the exact Manager-retained compiled query to
+Explain, proving the retained path does not rebuild or recompile against
+mutable catalog state.
+
+The transparent Manager adapter pins two authoritative completed-snapshot
+reads per success, including the service postflight equality check. A
+wrong-owner request returns the generic `searchjobs.ErrNotFound` after one
+Manager lookup and before any Explain call. The internal result retains the
+authorized summary needed to prove exact object ID/version/digest authority,
+while its logical `CopyFieldAlias` provenance exposes only response-local
+ordinal, closed object type/stage, and the generated output occurrence. ACTIVE
+v1 and v2 keep distinct summaries, snapshot digests, generated destinations,
+and output provenance; repeated v1 inspection remains stable after the caller
+mutates representative mutable fields across an earlier returned result.
+
+This is a test-only internal service conformance bridge. It does not cross the
+HTTP or server-projection boundary, does not release authorized identity, and
+does not add or change a route, bearer, protobuf/generated artifact, feature
+value, production runtime gate, or wiring. The deterministic fake returns a
+valid `ReadNothing` plan; it proves neither real ClickHouse EXPLAIN nor event
+rows. Default, runtime-tag-only, and snapshot-tag-only tests remain fail closed;
+the conjoined A+B test passes normally and under the race detector, and tagged
+`go vet` passes. Docker was **NOT RUN** and remains paused.
+
+**Preceding browser milestone:** revision
 `e18e58f67b9da87a2f3fc8724da491f7e1d42beb` extends the existing administrator
 Search Job Inspector using only its existing `/api/v1/search/jobs/inspect`
 response. The pre-existing `SERVER_FEATURE_PLAN_INSPECTION` still gates the one
@@ -54,10 +83,11 @@ post-amend focused Playwright passes 1/1 in 4.2 seconds from an isolated
 `git-archive` snapshot; simplify and three final implementation review passes
 are CLEAN.
 
-The preceding Mutation Audit implementation `7b6e825` and documentation
-checkpoint `8dcd289` remain separately durable historical milestones. Revision
-`922e6ee` completes the source definition of the digest-pinned 13-surface
-runtime executor matrix; it is not an engine result. The ClickHouse
+The preceding browser implementation `e18e58f` and documentation checkpoint
+`6c3c423` remain separately durable historical milestones, as do the Mutation
+Audit implementation `7b6e825` and checkpoint `8dcd289`. Revision `922e6ee`
+completes the source definition of the digest-pinned 13-surface runtime
+executor matrix; it is not an engine result. The ClickHouse
 `26.3.17.4` matrix remains paused and was **NOT RUN**. No Go, protobuf/generated,
 backend route, bearer, capability, Resolver, compiler/finalizer, runtime gate,
 or Docker behavior changed, and no production knowledge object affects a
@@ -123,9 +153,13 @@ search result.
   `8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`
 - Dormant redacted Search Job Inspector revision:
   `e18e58f67b9da87a2f3fc8724da491f7e1d42beb`
+- Redacted Search Job Inspector documentation revision:
+  `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`
+- Test-only retained-inspection service revision:
+  `b3c40886f9fade0818d78975e9486e96e02414e3`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 148 intentional post-`c5440b9` KO
-  commits through `e18e58f` are durable locally. This update is prepared as a
+- Publication state before this document: 150 intentional post-`c5440b9` KO
+  commits through `b3c40886` are durable locally. This update is prepared as a
   separate documentation change. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -168,7 +202,9 @@ search result.
   projected/empty consumers. A second snapshot tag, conjoined with the runtime
   tag and its own `testing.Testing()` check, now lets that runtime-tag-enabled
   test-only Compiler cross the final snapshot gate for direct and Manager
-  lifecycle staging; no production gate opens.
+  lifecycle staging. Revision `b3c40886` carries those retained v1/v2 Manager
+  authorities through the real internal inspection service and fake Explainer
+  without recompilation; no production gate opens.
 - ACTIVE publication preparation now includes the backend-neutral dependency
   compiler, the complete-winner-cohort adapter, candidate-present and
   candidate-absent post-transition validation, paired multi-index OR closure,
@@ -534,6 +570,8 @@ Later local commits anchoring the reconciled current state include:
 | `7b6e825` | `fix(activity): render knowledge audit history` | Repaired the live Mutation Audit frontend for the existing six-action Knowledge taxonomy, closed metadata and page adaptation, safe mixed historical rendering, feature-independent browser evidence, and no backend, protobuf, generated, route, capability, or production-knowledge activation change |
 | `8dcd289` | `docs(knowledge): checkpoint mutation audit history` | Reconciled the live historical audit consumer, exact closed adapter and generated-protobuf evidence, preserved production closure and paused Docker truth, and recorded the 147-commit documentation checkpoint |
 | `e18e58f` | `feat(search): surface redacted knowledge inspection` | Added a detached, capability-gated redacted Knowledge view to the existing Search Job Inspector, an 8 MiB frontend response cap, exact job/controller race closure, bounded safe presentation, adversarial unit/browser proof, and no backend, protobuf/generated, bearer, capability, Resolver, runtime-gate, or Docker change |
+| `6c3c423` | `docs(knowledge): checkpoint redacted search inspection` | Reconciled the dormant browser adapter/view, exact generated-protobuf lifecycle and privacy evidence, unchanged production gates, paused Docker truth, and the 149-commit documentation checkpoint |
+| `b3c40886` | `test(search): inspect retained knowledge authority` | Extended the real dual-tag ACTIVE v1/v2 Writer→Resolver→Manager lifecycle through `searchinspection.Service` with a distinct unused compiler, exact retained-query fake Explain proof, two-read postflight, owner nondisclosure, internal-authorized/redacted-logical provenance separation, and detached stable results without production or Docker change |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -1337,11 +1375,12 @@ Historical live Mutation Audit knowledge-history evidence at `7b6e825`:
 | Local durability | pass | Terminal revision `7b6e825807aaf50250b97cff642e461c57308da7` is locally durable on `codex/knowledge-objects-runtime`; the count after `c5440b9` is exactly 146 |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
-Current dormant Search Job Inspector evidence at `e18e58f`:
+Historical dormant Search Job Inspector browser evidence at `e18e58f`,
+documented by `6c3c423`:
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Exact revision and history | pass | Mutation Audit implementation remains `7b6e825807aaf50250b97cff642e461c57308da7`, count 146, and its documentation checkpoint is `8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`, count 147. The current inspector revision is `e18e58f67b9da87a2f3fc8724da491f7e1d42beb`; the repository commit count is 686 and `git rev-list --count c5440b9..e18e58f` is exactly 148. The remote-tracking feature branch remains `7503246`, 125 commits behind `HEAD` |
+| Exact revision and history | pass | Mutation Audit implementation remains `7b6e825807aaf50250b97cff642e461c57308da7`, count 146, and its documentation checkpoint is `8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`, count 147. The browser inspector revision is `e18e58f67b9da87a2f3fc8724da491f7e1d42beb`; the repository commit count there is 686 and `git rev-list --count c5440b9..e18e58f` is exactly 148. Documentation revision `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83` is count 149. The remote-tracking feature branch `7503246` was 125 commits behind `e18e58f` at that implementation checkpoint |
 | Exact nine-file frontend/test scope | pass | `e18e58f` changes only `app/search-workspace.tsx`, `app/search-workspace/components/workspace-dialogs.module.css`, `app/search-workspace/components/workspace-dialogs.tsx`, `integration/browser_vertical.spec.ts`, `lib/api/administrator-session.test.ts`, `lib/api/routes.ts`, `lib/search/server-inspection.ts`, `lib/search/server-inspection.test.ts`, and `scripts/test-frontend.mjs` |
 | Existing capability and request boundary | closed and unchanged | `SERVER_FEATURE_PLAN_INSPECTION` alone gates the existing explicit `/api/v1/search/jobs/inspect` POST. `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` gates only browser-adapter traversal/retention and presentation of decoded Knowledge fields and remains hard-false in production. The inspect protobuf, server route, administrator bearer attachment, and both capability values predate and are unchanged by this slice. Frontend route metadata now adds the server-matching 8 MiB maximum response size, so transport rejects an oversized body before decode |
 | Exact job identity, cancellation, and reset | pass | The workspace captures the displayed job ID and retains the existing inspection request, `AbortController`, and timeout flow while replacing raw-response state with a detached discriminated display state. It requires an exact response `search_job_id` before nested traversal/adaptation, then rechecks live signal, current controller identity, and current displayed job before commit. Reopen replaces and aborts the old request; modal close, fresh job/result reset, draft/root clear, app/client replacement, and unmount abort and clear it. Late held completion cannot replace a newer disclosure |
@@ -1354,6 +1393,23 @@ Current dormant Search Job Inspector evidence at `e18e58f`:
 | Production activation and contract scope | closed | This slice changes no Go, protobuf/generated artifact, backend handler/route, browser bearer policy, capability value, Resolver, compiler/finalizer, execution authority, or runtime gate. The pre-existing inspect endpoint remains administrator-only and completed-job-bound. Knowledge remains unadvertised/hard-false and no shipping knowledge object affects a result |
 | Docker and protected workspace state | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked. The complete digest-pinned 13-surface `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49` matrix remains the next runtime action. The pre-existing untracked `internal/clickhouse/knowledge_alias_container_integration_test.go` probe remained excluded and untouched without opening or hashing it |
 | Local durability | pass | Terminal revision `e18e58f67b9da87a2f3fc8724da491f7e1d42beb` is locally durable on `codex/knowledge-objects-runtime`; the count after `c5440b9` is exactly 148 |
+| Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
+
+Current test-only retained-inspection evidence at `b3c40886`:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Exact revision and history | pass | Browser implementation `e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, count 148, and documentation checkpoint `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, count 149, remain durable historical milestones. Current revision `b3c40886f9fade0818d78975e9486e96e02414e3` has parent `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, repository commit count 688, and exactly 150 commits after `c5440b9`. Remote-tracking `7503246` is 127 commits behind current `HEAD` |
+| Exact one-file scope | pass | `b3c40886` changes only `cmd/open-splunk-server/knowledge_runtime_snapshot_acceptance_test.go`, with 311 insertions and two deletions. There is no production, protobuf/generated, route, capability, browser, or backend implementation change |
+| Real dual-tag authority lifecycle | pass, test-only | The existing conjoined runtime-plus-snapshot acceptance test publishes ACTIVE alias v1 through the real Writer and Resolver, admits it through the real Manager, publishes and resolves ACTIVE v2 while v1 execution is paused, then proves each completed job retains its own sealed prelude, compiled query, authorized summary, and digest |
+| Real inspection service and no recompile | pass | The completed Manager is consumed through the real `searchinspection.Service`. Its configured Compiler deliberately uses a different valid database/table and must remain unused. The deterministic fake Explainer accepts only an exact `EqualForExecution` match to the Manager-retained v1 or v2 query, so a rebuild/recompile regression fails rather than reproducing the expected authority |
+| Exact lookup and postflight reads | pass | A transparent Manager adapter records one wrong-owner lookup and exactly two completed-snapshot reads for each successful Inspect, pinning the service's authoritative postflight equality check. Wrong owner returns the generic `searchjobs.ErrNotFound`, a zero result, and zero Explain calls |
+| Internal authority versus safe logical provenance | pass | The internal service result keeps the authorized one-object summary with exact object ID, version, type, stage, and snapshot digest. The logical generated `CopyFieldAlias` stage has no source range and carries only ordinal zero, closed alias type/stage, its canonical input fields, generated destination, and destination-to-ordinal output provenance. This test does not cross or claim the HTTP/server redaction projection |
+| v1/v2 distinction, stability, and detachment | pass | v1 and v2 have different authorized summaries, snapshot digests, generated destination fields, output-provenance occurrences, compiled authorities, and query IDs while retaining the same safe ordinal/type/stage provenance shape. The test mutates the returned v1 summary, logical collections, output shape, physical node, and SQL; the already-returned v2 and a fresh v1 inspection remain canonical, exact, and Manager-retained |
+| Four-mode and tooling gates | pass without Docker | Default (`00`), runtime-tag-only (`A`), and snapshot-tag-only (`B`) focused tests still execute the fail-closed Writer-published-ACTIVE oracle. Conjoined `A+B` focused normal and race tests pass, and tagged-package `go vet` is clean. Implementer final runs report normal 1.123 seconds and race 4.758 seconds; independent review reproduced normal/race and returned CLEAN |
+| Explicit proof boundary | closed | The fake Explainer emits one valid deterministic `ReadNothing` physical plan. It does not execute ClickHouse EXPLAIN or return rows. The test does not change or exercise HTTP/server projection, route registration, browser bearer, capability advertisement, frontend rendering, production runtime wiring/gates, or identity disclosure. Existing server redaction tests remain separate authority |
+| Docker and protected workspace state | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked. The complete digest-pinned 13-surface `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49` matrix remains the next runtime action. The protected pre-existing probe remained excluded from this implementation and documentation work |
+| Local durability | pass | Terminal revision `b3c40886f9fade0818d78975e9486e96e02414e3` is locally durable on `codex/knowledge-objects-runtime`; the count after `c5440b9` is exactly 150 |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 Current candidate-validation and dormant Preview request-boundary evidence:
@@ -1375,7 +1431,7 @@ Current candidate-validation and dormant Preview request-boundary evidence:
 | Validation result bounds and privacy | service and route pass | descriptor/comment, Go/TypeScript wire, catalog-service, codec, handler, and HTTP tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
 | Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-execution acquisition or caller-auth integration, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Service work remains blocked on owner-scoped retained-execution reacquisition, fixed-catalog ACTIVE evaluation and program application, row-limit default/bound/execution policy, paired schema-row/truncation and response resource semantics, plus the closed production nonempty compiler, snapshot-finalization, and digest-pinned ClickHouse gates. The compiler-only and dual-tag snapshot lifecycle bridges open none of those service or production boundaries. Validate remains outside the browser bearer allowlist and generic outer administrator map |
 | Docker-backed acceptance | **NOT RUN; prior cancellation and current pause preserved** | Preview request work and both acceptance bridges execute no ClickHouse query. The three formerly compile-only cases now have executor rows at `922e6ee`, but no Docker command was invoked, so they have no engine result. The previously canceled digest-pinned matrix remains paused, and no ClickHouse runtime claim is made |
-| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints through signed fixtures `14c6944`, request-authority hardening `74df953`, compiler and snapshot staging through `9f8c8ac`, signed retained-analysis fixture repair `81c6412`, dormant frontend filters and docs through `d1d8e9c`, exact-detail hardening `4717c24`, the complete executor-matrix definition `922e6ee`, exact-detail documentation `8644642`, related-object inspection and docs through `c54392d`, live Mutation Audit implementation/docs through `8dcd289`, and dormant redacted Search Job Inspector `e18e58f` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..e18e58f` is exactly 148 and the terminal revision is `e18e58f67b9da87a2f3fc8724da491f7e1d42beb` |
+| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints through signed fixtures `14c6944`, request-authority hardening `74df953`, compiler and snapshot staging through `9f8c8ac`, signed retained-analysis fixture repair `81c6412`, dormant frontend filters and docs through `d1d8e9c`, exact-detail hardening `4717c24`, the complete executor-matrix definition `922e6ee`, exact-detail documentation `8644642`, related-object inspection and docs through `c54392d`, live Mutation Audit implementation/docs through `8dcd289`, dormant redacted Search Job Inspector implementation/docs through `6c3c423`, and the test-only retained-inspection bridge `b3c40886` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..b3c40886` is exactly 150 and the terminal revision is `b3c40886f9fade0818d78975e9486e96e02414e3` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:
