@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -17,6 +19,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+	"github.com/Suhaibinator/open-splunk/internal/queryexec"
+	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -28,11 +32,91 @@ type runtimeKnowledgeSnapshotExecution struct {
 	valid    bool
 }
 
+const runtimeKnowledgeSnapshotExplainText = `[{"Plan":{"Node Type":"ReadNothing"}}]`
+
 type runtimeKnowledgeSnapshotExecutor struct {
 	counters     *runtimeKnowledgeAdmissionCounters
 	observations chan<- runtimeKnowledgeSnapshotExecution
 	releaseFirst <-chan struct{}
 	ordinal      atomic.Int32
+}
+
+type runtimeKnowledgeSnapshotExplainer struct {
+	mu      sync.Mutex
+	wantV1  clickhouse.CompiledQuery
+	wantV2  clickhouse.CompiledQuery
+	queries []clickhouse.CompiledQuery
+}
+
+type runtimeKnowledgeSnapshotSearches struct {
+	manager *searchjobs.Manager
+	calls   atomic.Int32
+}
+
+func (searches *runtimeKnowledgeSnapshotSearches) CompletedExecutionSnapshotFor(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	jobID string,
+) (searchjobs.ExecutionSnapshot, error) {
+	searches.calls.Add(1)
+	return searches.manager.CompletedExecutionSnapshotFor(ctx, access, jobID)
+}
+
+func (explainer *runtimeKnowledgeSnapshotExplainer) Explain(
+	ctx context.Context,
+	query clickhouse.CompiledQuery,
+) (queryexec.ExplainResult, error) {
+	if ctx == nil {
+		return queryexec.ExplainResult{}, errors.New("runtime snapshot Explainer context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return queryexec.ExplainResult{}, err
+	}
+	detached, ok := query.CloneForExecution()
+	if !ok {
+		return queryexec.ExplainResult{}, errors.New("runtime snapshot Explainer query is invalid")
+	}
+
+	explainer.mu.Lock()
+	explainer.queries = append(explainer.queries, detached)
+	var version uint64
+	switch {
+	case detached.EqualForExecution(explainer.wantV1):
+		version = 1
+	case detached.EqualForExecution(explainer.wantV2):
+		version = 2
+	}
+	explainer.mu.Unlock()
+	if version == 0 {
+		return queryexec.ExplainResult{}, errors.New("runtime snapshot Explainer received unexpected authority")
+	}
+	if err := ctx.Err(); err != nil {
+		return queryexec.ExplainResult{}, err
+	}
+	return queryexec.ExplainResult{
+		Text:    runtimeKnowledgeSnapshotExplainText,
+		QueryID: fmt.Sprintf("open-splunk-explain-runtime-knowledge-v%d", version),
+	}, nil
+}
+
+func (explainer *runtimeKnowledgeSnapshotExplainer) callCount() int {
+	explainer.mu.Lock()
+	defer explainer.mu.Unlock()
+	return len(explainer.queries)
+}
+
+func (explainer *runtimeKnowledgeSnapshotExplainer) recordedQueries() []clickhouse.CompiledQuery {
+	explainer.mu.Lock()
+	defer explainer.mu.Unlock()
+	queries := make([]clickhouse.CompiledQuery, len(explainer.queries))
+	for index := range explainer.queries {
+		clone, ok := explainer.queries[index].CloneForExecution()
+		if !ok {
+			return nil
+		}
+		queries[index] = clone
+	}
+	return queries
 }
 
 func waitForRuntimeKnowledgeSnapshotExecution(
@@ -73,6 +157,11 @@ func requireRuntimeKnowledgeSnapshotSummary(
 	if summary == nil || summary.GetRef() == nil ||
 		summary.GetRef().GetObjectCount() != 1 ||
 		len(summary.GetObjects()) != 1 || summary.GetObjects()[0] == nil ||
+		summary.GetObjects()[0].GetResolutionOrdinal() != 0 ||
+		summary.GetObjects()[0].GetObjectType() !=
+			opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS ||
+		summary.GetObjects()[0].GetStage() !=
+			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS ||
 		summary.GetObjects()[0].GetAuthorizedObject() == nil ||
 		summary.GetObjects()[0].GetAuthorizedObject().GetKnowledgeObjectId() != objectID ||
 		summary.GetObjects()[0].GetAuthorizedObject().GetVersion() != version ||
@@ -81,6 +170,66 @@ func requireRuntimeKnowledgeSnapshotSummary(
 		t.Fatalf("ACTIVE v%d knowledge summary = %v", version, summary)
 	}
 	return slices.Clone(summary.GetRef().GetSnapshotSha256())
+}
+
+func requireRuntimeKnowledgeInspectionResult(
+	t *testing.T,
+	result searchinspection.Result,
+	wantCompiled clickhouse.CompiledQuery,
+	objectID string,
+	version uint64,
+	destination string,
+	wantDigest []byte,
+) searchinspection.PlanStage {
+	t.Helper()
+	if err := searchinspection.ValidateResult(result); err != nil {
+		t.Fatalf("ACTIVE v%d inspection validation: %v", version, err)
+	}
+	if result.GeneratedSQL != wantCompiled.SQL ||
+		result.DiagnosticQueryID !=
+			fmt.Sprintf("open-splunk-explain-runtime-knowledge-v%d", version) ||
+		result.ExplainText != runtimeKnowledgeSnapshotExplainText ||
+		!slices.Equal(result.PhysicalPlan.NodeTypes, []string{"ReadNothing"}) ||
+		len(result.PhysicalPlan.Reads) != 0 ||
+		result.Plan.Output.Kind != searchinspection.OutputKindStatic ||
+		!slices.Equal(result.Plan.Output.Fields, []string{"message"}) ||
+		result.Plan.Output.MaxDynamicFields != 0 {
+		t.Fatalf("ACTIVE v%d inspection result = %#v", version, result)
+	}
+	requireRuntimeKnowledgeSnapshotSummary(
+		t,
+		result.KnowledgeSnapshot,
+		objectID,
+		version,
+		wantDigest,
+	)
+
+	var generated *searchinspection.PlanStage
+	for index := range result.Plan.Stages {
+		stage := &result.Plan.Stages[index]
+		if stage.Operator != "CopyFieldAlias" {
+			continue
+		}
+		if generated != nil {
+			t.Fatalf("ACTIVE v%d inspection has multiple alias stages: %#v", version, result.Plan)
+		}
+		generated = stage
+	}
+	wantObject := searchinspection.RedactedObjectProvenance{
+		Ordinal:    0,
+		ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+	}
+	if generated == nil || generated.Index != 1 || generated.SourceRange != nil ||
+		!slices.Equal(generated.InputFields, []string{"index", "source_field"}) ||
+		!slices.Equal(generated.OutputFields, []string{destination}) ||
+		!slices.Equal(generated.KnowledgeObjects, []searchinspection.RedactedObjectProvenance{wantObject}) ||
+		!slices.Equal(generated.OutputProvenance, []searchinspection.OutputProvenance{{
+			Field: destination, ObjectOrdinal: 0,
+		}}) {
+		t.Fatalf("ACTIVE v%d generated alias stage = %#v", version, generated)
+	}
+	return *generated
 }
 
 func (executor *runtimeKnowledgeSnapshotExecutor) Execute(
@@ -112,8 +261,9 @@ func (executor *runtimeKnowledgeSnapshotExecutor) Execute(
 }
 
 // TestKnowledgeSnapshotAcceptanceManagerRetainsWriterResolvedActiveVersions proves
-// only test-only Writer→Resolver→Manager admission, retention, and fake-dispatch
-// identity; it does not prove ClickHouse rows, production wiring, routes, capability,
+// test-only Writer→Resolver→Manager retention and real searchinspection.Service
+// consumption through a deterministic fake Explainer. It does not prove ClickHouse
+// EXPLAIN or rows, production wiring, HTTP/server projection or route, capability,
 // or browser behavior.
 func TestKnowledgeSnapshotAcceptanceManagerRetainsWriterResolvedActiveVersions(t *testing.T) {
 	runtime, database := newRuntimeKnowledgeTestRuntime(t)
@@ -393,6 +543,165 @@ func TestKnowledgeSnapshotAcceptanceManagerRetainsWriterResolvedActiveVersions(t
 	if opened, openErr := rotated.OpenRetainedKnowledgeExecution(); opened != nil ||
 		!errors.Is(openErr, searchjobs.ErrResultsUnavailable) {
 		t.Fatalf("cross-job v2 rotation onto v1 seal opened = (%#v, %v)", opened, openErr)
+	}
+
+	wantInspectionV1, ok := freshV1.CompiledQuery.CloneForExecution()
+	if !ok {
+		t.Fatal("ACTIVE v1 Manager-retained compiler authority cannot be inspected")
+	}
+	wantInspectionV2, ok := retainedV2.CompiledQuery.CloneForExecution()
+	if !ok {
+		t.Fatal("ACTIVE v2 Manager-retained compiler authority cannot be inspected")
+	}
+	inspectionSearches := &runtimeKnowledgeSnapshotSearches{manager: manager}
+	inspectionExplainer := &runtimeKnowledgeSnapshotExplainer{
+		wantV1: wantInspectionV1,
+		wantV2: wantInspectionV2,
+	}
+	// A retained Knowledge inspection must ignore this deliberately distinct
+	// compiler and send the Manager-minted authority directly to Explain.
+	inspectionCompiler := clickhouse.Compiler{
+		Database: "inspection_recompile_forbidden",
+		Table:    "inspection_recompile_forbidden",
+	}
+	inspectionService, err := searchinspection.New(searchinspection.Config{
+		Searches:      inspectionSearches,
+		Compiler:      inspectionCompiler,
+		Explainer:     inspectionExplainer,
+		MaxConcurrent: 1,
+		MaxRuntime:    time.Second,
+	})
+	if err != nil {
+		t.Fatalf("create retained search inspection service: %v", err)
+	}
+	defer func() {
+		closeContext, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if closeErr := inspectionService.Close(closeContext); closeErr != nil {
+			t.Errorf("close retained search inspection service: %v", closeErr)
+		}
+	}()
+
+	wrongInspection, wrongInspectionErr := inspectionService.Inspect(
+		t.Context(),
+		wrongAccess,
+		searchinspection.Request{SearchJobID: jobV1.ID},
+	)
+	if !errors.Is(wrongInspectionErr, searchjobs.ErrNotFound) ||
+		wrongInspectionErr.Error() != searchjobs.ErrNotFound.Error() ||
+		!reflect.DeepEqual(wrongInspection, searchinspection.Result{}) ||
+		inspectionSearches.calls.Load() != 1 ||
+		inspectionExplainer.callCount() != 0 {
+		t.Fatalf(
+			"wrong-owner inspection = (%#v, %v), reads/explains=%d/%d",
+			wrongInspection,
+			wrongInspectionErr,
+			inspectionSearches.calls.Load(),
+			inspectionExplainer.callCount(),
+		)
+	}
+
+	inspect := func(jobID string) searchinspection.Result {
+		t.Helper()
+		beforeReads := inspectionSearches.calls.Load()
+		beforeExplains := inspectionExplainer.callCount()
+		result, inspectErr := inspectionService.Inspect(
+			t.Context(),
+			access,
+			searchinspection.Request{SearchJobID: jobID},
+		)
+		if inspectErr != nil {
+			t.Fatalf("inspect retained job %q: %v", jobID, inspectErr)
+		}
+		if got := inspectionSearches.calls.Load(); got != beforeReads+2 {
+			t.Fatalf("inspection metadata reads = %d, want %d", got, beforeReads+2)
+		}
+		if got := inspectionExplainer.callCount(); got != beforeExplains+1 {
+			t.Fatalf("inspection Explainer calls = %d, want %d", got, beforeExplains+1)
+		}
+		return result
+	}
+
+	inspectionV1 := inspect(jobV1.ID)
+	stageV1 := requireRuntimeKnowledgeInspectionResult(
+		t,
+		inspectionV1,
+		wantInspectionV1,
+		objectV1.GetKnowledgeObjectId(),
+		1,
+		"destination_snapshot_alias",
+		wantV1SummaryDigest,
+	)
+	inspectionV2 := inspect(jobV2.ID)
+	stageV2 := requireRuntimeKnowledgeInspectionResult(
+		t,
+		inspectionV2,
+		wantInspectionV2,
+		objectV2.GetKnowledgeObjectId(),
+		2,
+		"destination_snapshot_alias_v2",
+		wantV2SummaryDigest,
+	)
+	if proto.Equal(inspectionV1.KnowledgeSnapshot, inspectionV2.KnowledgeSnapshot) ||
+		bytes.Equal(
+			inspectionV1.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
+			inspectionV2.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
+		) ||
+		slices.Equal(stageV1.OutputFields, stageV2.OutputFields) ||
+		slices.Equal(stageV1.OutputProvenance, stageV2.OutputProvenance) ||
+		!slices.Equal(stageV1.KnowledgeObjects, stageV2.KnowledgeObjects) {
+		t.Fatalf(
+			"ACTIVE inspection rotation = v1:%#v v2:%#v",
+			inspectionV1.KnowledgeSnapshot,
+			inspectionV2.KnowledgeSnapshot,
+		)
+	}
+
+	inspectionV1.KnowledgeSnapshot.Ref.SnapshotSha256[0] ^= 0xff
+	inspectionV1.KnowledgeSnapshot.Objects[0].GetAuthorizedObject().Version = 99
+	inspectionV1.Plan.Stages[stageV1.Index].InputFields[0] = "caller_input"
+	inspectionV1.Plan.Stages[stageV1.Index].OutputFields[0] = "caller_output"
+	inspectionV1.Plan.Stages[stageV1.Index].KnowledgeObjects[0].Ordinal = 99
+	inspectionV1.Plan.Stages[stageV1.Index].OutputProvenance[0].Field = "caller_output"
+	inspectionV1.Plan.Output.Fields[0] = "caller_output"
+	inspectionV1.PhysicalPlan.NodeTypes[0] = "CallerMutation"
+	inspectionV1.GeneratedSQL += " -- caller mutation"
+	requireRuntimeKnowledgeInspectionResult(
+		t,
+		inspectionV2,
+		wantInspectionV2,
+		objectV2.GetKnowledgeObjectId(),
+		2,
+		"destination_snapshot_alias_v2",
+		wantV2SummaryDigest,
+	)
+	freshInspectionV1 := inspect(jobV1.ID)
+	requireRuntimeKnowledgeInspectionResult(
+		t,
+		freshInspectionV1,
+		wantInspectionV1,
+		objectV1.GetKnowledgeObjectId(),
+		1,
+		"destination_snapshot_alias",
+		wantV1SummaryDigest,
+	)
+
+	recordedQueries := inspectionExplainer.recordedQueries()
+	wantQueries := []clickhouse.CompiledQuery{
+		wantInspectionV1,
+		wantInspectionV2,
+		wantInspectionV1,
+	}
+	if len(recordedQueries) != len(wantQueries) {
+		t.Fatalf("recorded inspection queries = %d, want %d", len(recordedQueries), len(wantQueries))
+	}
+	for index := range wantQueries {
+		if !recordedQueries[index].EqualForExecution(wantQueries[index]) {
+			t.Fatalf("inspection query %d did not equal Manager-retained authority", index)
+		}
+	}
+	if inspectionSearches.calls.Load() != 1+2*int32(len(wantQueries)) {
+		t.Fatalf("total inspection metadata reads = %d", inspectionSearches.calls.Load())
 	}
 
 	for ordinal := 1; ordinal <= 2; ordinal++ {
