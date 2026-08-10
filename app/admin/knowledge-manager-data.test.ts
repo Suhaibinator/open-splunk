@@ -20,6 +20,7 @@ import {
   ListKnowledgeObjectDependentsResponse,
   KnowledgeObjectSortBy,
   ListKnowledgeObjectsResponse,
+  type GetKnowledgeObjectRequest,
   type GetKnowledgeObjectResponse,
   type KnowledgeManagementDependencyEdge,
   type ListKnowledgeObjectDependenciesRequest,
@@ -42,6 +43,7 @@ import {
   adaptKnowledgeObject,
   adaptKnowledgePage,
   adaptKnowledgeRelationshipPage,
+  knowledgeDetailRequest,
   knowledgeLifecycleStateFilterFromControlValue,
   knowledgeListRequest,
   knowledgeObjectTypeFilterFromControlValue,
@@ -55,6 +57,7 @@ import {
   mergeKnowledgeContinuation,
   mergeKnowledgeRelationshipContinuation,
   type KnowledgeLifecycleStateFilter,
+  type KnowledgeDetailQuery,
   type KnowledgeListQuery,
   type KnowledgeReadClient,
   type KnowledgeRelationshipPageDisplay,
@@ -452,7 +455,7 @@ test("closed query changes reset before update and invalid values fail closed", 
 
 test("enabled list and detail fixtures use bounded generated protobuf requests", async () => {
   const listRequests: ListKnowledgeObjectsRequest[] = [];
-  const getRequests: string[] = [];
+  const getRequests: GetKnowledgeObjectRequest[] = [];
   const fixture = fieldAliasObject();
   const client: KnowledgeReadClient = {
     ...unavailableGraphReads,
@@ -461,7 +464,7 @@ test("enabled list and detail fixtures use bounded generated protobuf requests",
       return listResponse({ objects: [fixture], revision: 8n });
     },
     async get(request): Promise<GetKnowledgeObjectResponse> {
-      getRequests.push(request.knowledgeObjectId);
+      getRequests.push(request);
       return { knowledgeObject: fixture };
     },
   };
@@ -480,9 +483,80 @@ test("enabled list and detail fixtures use bounded generated protobuf requests",
     sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_NAME,
     sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
   }]);
-  const detail = await loadKnowledgeDetail(client, fixture.knowledgeObjectId);
+  const detail = await loadKnowledgeDetail(client, {
+    knowledgeObjectId: fixture.knowledgeObjectId,
+    version: fixture.version,
+  });
   assert.equal(detail.status, "available");
-  assert.deepEqual(getRequests, [fixture.knowledgeObjectId]);
+  assert.deepEqual(getRequests, [{
+    knowledgeObjectId: fixture.knowledgeObjectId,
+    version: fixture.version,
+  }]);
+  assert.deepEqual(knowledgeDetailRequest({
+    knowledgeObjectId: fixture.knowledgeObjectId,
+    version: fixture.version,
+  }), getRequests[0]);
+});
+
+test("detail reads reject invalid exact identities before I/O", async () => {
+  let calls = 0;
+  const client: KnowledgeReadClient = {
+    ...unavailableGraphReads,
+    async list() { throw new Error("list must not be called"); },
+    async get() {
+      calls += 1;
+      return { knowledgeObject: fieldAliasObject() };
+    },
+  };
+  const invalidQueries = [
+    { knowledgeObjectId: "", version: 1n },
+    { knowledgeObjectId: "ko-\u0000unsafe", version: 1n },
+    { knowledgeObjectId: "x".repeat(129), version: 1n },
+    { knowledgeObjectId: "ko-safe", version: 0n },
+    { knowledgeObjectId: "ko-safe", version: 9_223_372_036_854_775_808n },
+    { knowledgeObjectId: "ko-safe", version: 1 as unknown as bigint },
+  ] satisfies KnowledgeDetailQuery[];
+  const invalidResults = await Promise.all(
+    invalidQueries.map((queryValue) => loadKnowledgeDetail(client, queryValue)),
+  );
+  for (const result of invalidResults) {
+    assert.deepEqual(result, { status: "unavailable" });
+  }
+  assert.equal(calls, 0);
+});
+
+test("detail reads fail closed when the returned exact identity differs", async () => {
+  const queryValue = { knowledgeObjectId: "ko-exact", version: 4n };
+  const mismatches = [
+    fieldAliasObject({ id: "ko-other", version: 4n }),
+    fieldAliasObject({ id: "ko-exact", version: 5n }),
+  ];
+  const mismatchResults = await Promise.all(mismatches.map((knowledgeObject) => {
+    const client: KnowledgeReadClient = {
+      ...unavailableGraphReads,
+      async list() { throw new Error("list must not be called"); },
+      async get() { return { knowledgeObject }; },
+    };
+    return loadKnowledgeDetail(client, queryValue);
+  }));
+  for (const result of mismatchResults) {
+    assert.deepEqual(result, { status: "unavailable" });
+  }
+
+  const mutableQuery = { ...queryValue };
+  const mutatingClient: KnowledgeReadClient = {
+    ...unavailableGraphReads,
+    async list() { throw new Error("list must not be called"); },
+    async get() {
+      mutableQuery.knowledgeObjectId = "ko-other";
+      mutableQuery.version = 5n;
+      return { knowledgeObject: fieldAliasObject({ id: "ko-other", version: 5n }) };
+    },
+  };
+  assert.deepEqual(
+    await loadKnowledgeDetail(mutatingClient, mutableQuery),
+    { status: "unavailable" },
+  );
 });
 
 test("relationship reads pin the exact detail version and use independently bounded routes", async () => {
@@ -1009,7 +1083,10 @@ test("404, route absence, decoder failure, and server failure are uniformly unav
       async get() { throw failure; },
     };
     assert.deepEqual(await loadKnowledgePage(client, query()), { status: "unavailable" });
-    assert.deepEqual(await loadKnowledgeDetail(client, "ko-safe"), { status: "unavailable" });
+    assert.deepEqual(await loadKnowledgeDetail(client, {
+      knowledgeObjectId: "ko-safe",
+      version: 1n,
+    }), { status: "unavailable" });
   }));
 });
 

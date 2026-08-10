@@ -166,6 +166,11 @@ export type KnowledgeDetailLoadResult =
   | { status: "available"; object: KnowledgeObjectDisplay }
   | { status: "unavailable" };
 
+export interface KnowledgeDetailQuery {
+  knowledgeObjectId: string;
+  version: bigint;
+}
+
 export type KnowledgeRelationshipDirection = "dependencies" | "dependents";
 
 export interface KnowledgeRelationshipEdgeDisplay {
@@ -491,24 +496,35 @@ export async function loadKnowledgePage(
   }
 }
 
+export function knowledgeDetailRequest(query: KnowledgeDetailQuery) {
+  if (
+    !validIdentity(query.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+    || typeof query.version !== "bigint"
+    || query.version < 1n
+    || query.version > MAXIMUM_SIGNED_REVISION
+  ) {
+    throw new TypeError("Knowledge detail query is outside the browser contract.");
+  }
+  return GetKnowledgeObjectRequest.fromPartial({
+    knowledgeObjectId: query.knowledgeObjectId,
+    version: query.version,
+  });
+}
+
 export async function loadKnowledgeDetail(
   client: KnowledgeReadClient,
-  knowledgeObjectId: string,
+  query: KnowledgeDetailQuery,
   options?: ProtobufRequestOptions,
 ): Promise<KnowledgeDetailLoadResult> {
-  if (!validIdentity(knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)) {
-    return { status: "unavailable" };
-  }
   try {
-    const response = await client.get(
-      GetKnowledgeObjectRequest.fromPartial({ knowledgeObjectId }),
-      options,
-    );
+    const request = knowledgeDetailRequest(query);
+    const response = await client.get(request, options);
     if (response.knowledgeObject === undefined) return { status: "unavailable" };
     const object = adaptKnowledgeObject(response.knowledgeObject, 0);
     if (
       object.disclosure !== "available"
-      || object.knowledgeObjectId !== knowledgeObjectId
+      || object.knowledgeObjectId !== request.knowledgeObjectId
+      || object.version !== request.version
     ) {
       return { status: "unavailable" };
     }

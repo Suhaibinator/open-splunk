@@ -35,6 +35,7 @@ import {
 } from "../gen/ts/open_splunk/v1/system_api";
 import { SharingScope, SortDirection } from "../gen/ts/open_splunk/v1/common";
 import {
+  KnowledgeDependencyRole,
   KnowledgeObject,
   KnowledgeObjectState,
   KnowledgeObjectType,
@@ -45,6 +46,10 @@ import {
   GetKnowledgeObjectRequest,
   GetKnowledgeObjectResponse,
   KnowledgeObjectSortBy,
+  ListKnowledgeObjectDependenciesRequest,
+  ListKnowledgeObjectDependenciesResponse,
+  ListKnowledgeObjectDependentsRequest,
+  ListKnowledgeObjectDependentsResponse,
   ListKnowledgeObjectsRequest,
   ListKnowledgeObjectsResponse,
 } from "../gen/ts/open_splunk/v1/knowledge_api";
@@ -170,11 +175,16 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   const protobufHeaders = { "content-type": "application/x-protobuf" };
   const appId = "app-observability";
   const cursor = "knowledge-cursor-1";
+  const dependencyCursor = "knowledge-dependencies-cursor-1";
+  const dependentCursor = "knowledge-dependents-cursor-1";
   const maliciousName = "<script>globalThis.__knowledgeScriptExecuted=true</script>";
   let knowledgeAdvertised = false;
+  let serveMismatchedDetail = true;
   const requestedURLs: string[] = [];
   const listRequests: ListKnowledgeObjectsRequest[] = [];
-  const getRequests: string[] = [];
+  const getRequests: GetKnowledgeObjectRequest[] = [];
+  const dependencyRequests: ListKnowledgeObjectDependenciesRequest[] = [];
+  const dependentRequests: ListKnowledgeObjectDependentsRequest[] = [];
 
   const knowledgeObject = (id: string, name: string, version: bigint): KnowledgeObject =>
     KnowledgeObject.fromPartial({
@@ -213,6 +223,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
       updatedAt: new Date("2026-08-08T10:01:00.000Z"),
     });
   const firstObject = knowledgeObject("ko-malicious", maliciousName, 2n);
+  const mismatchedDetailObject = knowledgeObject("ko-malicious", maliciousName, 3n);
   const continuationObject = knowledgeObject("ko-continuation", "continued_alias", 3n);
 
   page.on("request", (request) => requestedURLs.push(request.url()));
@@ -299,23 +310,105 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
       const wire = route.request().postDataBuffer();
       if (wire === null) throw new Error("knowledge Get request omitted its protobuf body");
       const request = GetKnowledgeObjectRequest.decode(wire);
-      getRequests.push(request.knowledgeObjectId);
+      getRequests.push(request);
       await route.fulfill({
         status: 200,
         headers: protobufHeaders,
         body: Buffer.from(GetKnowledgeObjectResponse.encode(
-          GetKnowledgeObjectResponse.fromPartial({ knowledgeObject: firstObject }),
+          GetKnowledgeObjectResponse.fromPartial({
+            knowledgeObject: serveMismatchedDetail ? mismatchedDetailObject : firstObject,
+          }),
         ).finish()),
       });
     },
   );
-  await Promise.all([
-    "/api/v1/knowledge/objects/dependencies",
-    "/api/v1/knowledge/objects/dependents",
-  ].map((routePath) => page.route(
-      (url) => url.origin === origin && url.pathname === routePath,
-      (route) => route.fulfill({ status: 404, body: "unavailable" }),
-    )));
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/dependencies",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Dependencies request omitted its protobuf body");
+      const request = ListKnowledgeObjectDependenciesRequest.decode(wire);
+      dependencyRequests.push(request);
+      const continuation = request.page?.pageToken === dependencyCursor;
+      const dependencies = continuation
+        ? [{
+          source: { knowledgeObjectId: firstObject.knowledgeObjectId, version: firstObject.version },
+          target: { knowledgeObjectId: "ko-dependency-z", version: 4n },
+          role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+        }]
+        : [{
+          source: { knowledgeObjectId: firstObject.knowledgeObjectId, version: firstObject.version },
+          target: { knowledgeObjectId: "ko-dependency-<script>", version: 1n },
+          role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+        }, {
+          source: { knowledgeObjectId: firstObject.knowledgeObjectId, version: firstObject.version },
+          target: { knowledgeObjectId: "ko-dependency-b", version: 3n },
+          role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+        }];
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ListKnowledgeObjectDependenciesResponse.encode(
+          ListKnowledgeObjectDependenciesResponse.fromPartial({
+            dependencies,
+            page: {
+              nextPageToken: continuation ? undefined : dependencyCursor,
+              totalSize: 3n,
+              totalSizeExact: true,
+            },
+            tenantCatalogRevision: 11n,
+            resolvedObject: {
+              knowledgeObjectId: firstObject.knowledgeObjectId,
+              version: firstObject.version,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/dependents",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Dependents request omitted its protobuf body");
+      const request = ListKnowledgeObjectDependentsRequest.decode(wire);
+      dependentRequests.push(request);
+      const continuation = request.page?.pageToken === dependentCursor;
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ListKnowledgeObjectDependentsResponse.encode(
+          ListKnowledgeObjectDependentsResponse.fromPartial({
+            dependents: [{
+              source: {
+                knowledgeObjectId: continuation
+                  ? "ko-dependent-z"
+                  : "ko-dependent-<img onerror=globalThis.__knowledgeScriptExecuted=true>",
+                version: continuation ? 5n : 3n,
+              },
+              target: {
+                knowledgeObjectId: firstObject.knowledgeObjectId,
+                version: firstObject.version,
+              },
+              role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+            }],
+            page: {
+              nextPageToken: continuation ? undefined : dependentCursor,
+              totalSize: 2n,
+              totalSizeExact: true,
+            },
+            // The continuation is well-formed but belongs to a newer catalog,
+            // so the UI must keep the first page and offer a bounded retry.
+            tenantCatalogRevision: continuation ? 13n : 12n,
+            resolvedObject: {
+              knowledgeObjectId: firstObject.knowledgeObjectId,
+              version: firstObject.version,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
 
   const adminURL = new URL("/admin/", origin).href;
   await page.goto(adminURL, { waitUntil: "domcontentloaded", timeout });
@@ -437,13 +530,122 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   const maliciousRow = manager.getByRole("button", { name: new RegExp("globalThis") });
   await maliciousRow.focus();
   await maliciousRow.press("Enter");
+  await expect(manager.getByText("Knowledge object unavailable", { exact: true }))
+    .toBeVisible({ timeout });
+  expect(getRequests).toEqual([{
+    knowledgeObjectId: "ko-malicious",
+    version: 2n,
+  }]);
+  await waitForTwoRenderedTurns();
+  expect(dependencyRequests).toHaveLength(0);
+  expect(dependentRequests).toHaveLength(0);
+
+  await manager.getByRole("button", { name: "Close knowledge object details" }).click();
+  serveMismatchedDetail = false;
+  await maliciousRow.press("Enter");
   await expect(manager.getByRole("heading", { name: maliciousName })).toBeVisible({ timeout });
-  expect(getRequests).toEqual(["ko-malicious"]);
+  expect(getRequests).toEqual(Array.from({ length: 2 }, () => ({
+    knowledgeObjectId: "ko-malicious",
+    version: 2n,
+  })));
   await expect(manager.locator("script, img")).toHaveCount(0);
   const escapedDetailMarkup = await manager.locator(".knowledge-manager__detail").evaluate(
     (element) => element.innerHTML,
   );
   expect(escapedDetailMarkup).toContain("&lt;img");
+
+  const dependenciesSection = manager.locator(
+    '.knowledge-manager__relationship-section[aria-labelledby="knowledge-dependencies-title"]',
+  );
+  const dependentsSection = manager.locator(
+    '.knowledge-manager__relationship-section[aria-labelledby="knowledge-dependents-title"]',
+  );
+  const initialRelationshipPage = {
+    pageSize: 2,
+    pageToken: undefined,
+    includeTotalSize: true,
+  };
+  const initialRelationshipRequest = {
+    knowledgeObjectId: "ko-malicious",
+    version: 2n,
+    page: initialRelationshipPage,
+  };
+  await expect(dependenciesSection.getByText("ko-dependency-<script>", { exact: true }))
+    .toBeVisible({ timeout });
+  await expect(dependentsSection.getByText(
+    "ko-dependent-<img onerror=globalThis.__knowledgeScriptExecuted=true>",
+    { exact: true },
+  )).toBeVisible({ timeout });
+  await expect(dependenciesSection).toContainText("3 visible · revision 11");
+  await expect(dependentsSection).toContainText("2 visible · revision 12");
+  const initialDependencyRequestCount = dependencyRequests.length;
+  const initialDependentRequestCount = dependentRequests.length;
+  expect(initialDependencyRequestCount).toBeGreaterThan(0);
+  expect(initialDependencyRequestCount).toBeLessThanOrEqual(2);
+  expect(initialDependentRequestCount).toBeGreaterThan(0);
+  expect(initialDependentRequestCount).toBeLessThanOrEqual(2);
+  expect(dependencyRequests).toEqual(Array.from(
+    { length: initialDependencyRequestCount },
+    () => initialRelationshipRequest,
+  ));
+  expect(dependentRequests).toEqual(Array.from(
+    { length: initialDependentRequestCount },
+    () => initialRelationshipRequest,
+  ));
+  const escapedRelationshipsMarkup = await manager.locator(
+    ".knowledge-manager__relationships",
+  ).evaluate((element) => element.innerHTML);
+  expect(escapedRelationshipsMarkup).toContain("ko-dependency-&lt;script&gt;");
+  expect(escapedRelationshipsMarkup).toContain("ko-dependent-&lt;img");
+  await expect(manager.locator("script, img")).toHaveCount(0);
+
+  await dependenciesSection.getByRole("button", { name: "Load more dependencies" }).click();
+  await expect.poll(() => dependencyRequests.length, {
+    message: "dependency continuation issued exactly once",
+    timeout,
+  }).toBe(initialDependencyRequestCount + 1);
+  expect(dependencyRequests.at(-1)).toEqual({
+    ...initialRelationshipRequest,
+    page: { ...initialRelationshipPage, pageToken: dependencyCursor },
+  });
+  await expect(dependenciesSection.getByRole("list", { name: "Visible direct dependencies" })
+    .getByRole("listitem")).toHaveCount(3, { timeout });
+  await expect(dependenciesSection.getByText("ko-dependency-z", { exact: true })).toBeVisible();
+  await expect(dependenciesSection.getByRole("button", { name: "Load more dependencies" }))
+    .toHaveCount(0);
+
+  await dependentsSection.getByRole("button", { name: "Load more dependents" }).click();
+  await expect.poll(() => dependentRequests.length, {
+    message: "dependent continuation issued exactly once",
+    timeout,
+  }).toBe(initialDependentRequestCount + 1);
+  expect(dependentRequests.at(-1)).toEqual({
+    ...initialRelationshipRequest,
+    page: { ...initialRelationshipPage, pageToken: dependentCursor },
+  });
+  await expect(dependentsSection.getByRole("alert")).toContainText(
+    "This relationship page cannot be safely continued.",
+    { timeout },
+  );
+  await expect(dependentsSection).toContainText("2 visible · revision 12");
+  await expect(dependentsSection.getByText("ko-dependent-z", { exact: true })).toHaveCount(0);
+  expect(dependencyRequests).toHaveLength(initialDependencyRequestCount + 1);
+  await expect(dependenciesSection).toContainText("3 visible · revision 11");
+  await expect(dependenciesSection.getByRole("list", { name: "Visible direct dependencies" })
+    .getByRole("listitem")).toHaveCount(3);
+  await dependentsSection.getByRole("button", { name: "Reload dependents" }).click();
+  await expect.poll(() => dependentRequests.length, {
+    message: "dependent retry issued exactly one fresh first-page request",
+    timeout,
+  }).toBe(initialDependentRequestCount + 2);
+  expect(dependentRequests.at(-1)).toEqual(initialRelationshipRequest);
+  await expect(dependentsSection.getByRole("alert")).toHaveCount(0, { timeout });
+  await expect(dependentsSection.getByRole("button", { name: "Load more dependents" }))
+    .toBeVisible({ timeout });
+  expect(dependencyRequests).toHaveLength(initialDependencyRequestCount + 1);
+  await expect(dependenciesSection).toContainText("3 visible · revision 11");
+  await expect(dependenciesSection.getByRole("list", { name: "Visible direct dependencies" })
+    .getByRole("listitem")).toHaveCount(3);
 
   await textFilter.evaluate((element) => {
     const input = element as HTMLInputElement;

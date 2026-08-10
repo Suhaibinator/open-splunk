@@ -332,7 +332,10 @@ export function KnowledgeManagerPanel({
     setDetailState("loading");
     setDetail(null);
     focusDetailWhenReadyRef.current = true;
-    void loadKnowledgeDetail(client, object.knowledgeObjectId, {
+    void loadKnowledgeDetail(client, {
+      knowledgeObjectId: object.knowledgeObjectId,
+      version: object.version,
+    }, {
       signal: controller.signal,
     }).then((result) => {
       if (controller.signal.aborted || detailRequestRef.current !== controller) return;
