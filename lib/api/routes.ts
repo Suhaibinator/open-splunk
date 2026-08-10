@@ -15,6 +15,7 @@ import { defineProtobufRoute, type ProtobufRoute } from "./protobuf-transport";
 
 export const MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES = 8 << 20;
 export const MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES = 128 << 10;
+export const MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES = 8 << 20;
 
 /** Derives a generated request type from a route without duplicating contracts. */
 export type RouteRequest<TRoute> = TRoute extends ProtobufRoute<infer TRequest, unknown> ? TRequest : never;
@@ -281,6 +282,7 @@ export const searchRoutes = {
     "/api/v1/search/jobs/inspect",
     SearchInspectionApi.InspectSearchJobRequest,
     SearchInspectionApi.InspectSearchJobResponse,
+    { maximumResponseBytes: MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES },
   ),
 } as const;
 

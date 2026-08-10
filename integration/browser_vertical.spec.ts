@@ -21,6 +21,8 @@ import {
   GetSearchJobResponse,
   GetSearchResultsRequest,
   GetSearchResultsResponse,
+  ValidateSearchRequest,
+  ValidateSearchResponse,
 } from "../gen/ts/open_splunk/v1/search_api";
 import {
   AuditAction,
@@ -50,8 +52,14 @@ import {
   KnowledgeObjectState,
   KnowledgeObjectType,
   KnowledgeOverwriteBehavior,
+  KnowledgeSearchStage,
   KnowledgeSelectorMatchKind,
 } from "../gen/ts/open_splunk/v1/knowledge";
+import {
+  InspectSearchJobRequest,
+  InspectSearchJobResponse,
+  SearchInspectionOutputKind,
+} from "../gen/ts/open_splunk/v1/search_inspection_api";
 import {
   GetKnowledgeObjectRequest,
   GetKnowledgeObjectResponse,
@@ -72,7 +80,12 @@ import {
   SearchJobState,
   type SearchProgress,
 } from "../gen/ts/open_splunk/v1/search";
-import type { ResultRow } from "../gen/ts/open_splunk/v1/result";
+import {
+  ColumnSemanticType,
+  ResultSetKind,
+  type ResultRow,
+} from "../gen/ts/open_splunk/v1/result";
+import { ValueType } from "../gen/ts/open_splunk/v1/value";
 import {
   ResynchronizationReason,
   SearchWebSocketCommand,
@@ -197,6 +210,558 @@ test("collector event is visible through the compiled backend UI", async ({ page
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
   assertBrowserSafety(safety);
+});
+
+test("Search Job Inspector renders only capability-gated redacted Knowledge authority", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const safety = observeBrowserSafety(page);
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const selectedAppId = "inspection-app";
+  const indexMatch = /\bindex=(?:"([^"]+)"|([^\s|]+))/u.exec(searchSPL);
+  const indexName = indexMatch?.[1] ?? indexMatch?.[2] ?? "main";
+  const maliciousField =
+    "generated-<img src=x onerror=globalThis.__inspectionExecuted=true>";
+  const maliciousCompiler =
+    "compiler-<script>globalThis.__inspectionExecuted=true</script>";
+  const longGeneratedSQL = `SELECT ${"x".repeat(4_096)}`;
+  const capabilityOffSecret = "SECRET_CAPABILITY_OFF_KNOWLEDGE_IDENTITY";
+  const foreignSecret = "SECRET_FOREIGN_KNOWLEDGE_IDENTITY";
+  const staleCompiler = "STALE_ABORTED_INSPECTION_COMPILER";
+  const resultSchema = {
+    schemaId: "inspection-statistics-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [{
+      fieldName: "message",
+      displayName: "Message",
+      valueType: ValueType.VALUE_TYPE_STRING,
+      semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_DIMENSION,
+      nullable: false,
+      multivalue: false,
+      hiddenByDefault: false,
+    }],
+  };
+  const inspectRequests: InspectSearchJobRequest[] = [];
+  const resultRequests: GetSearchResultsRequest[] = [];
+  const apiTraffic: Array<{ method: string; pathname: string }> = [];
+  const heldInspection = createRequestGate();
+  let knowledgeAdvertised = false;
+  let serveForeignIdentity = true;
+  let holdNextInspection = false;
+  let createdJobs = 0;
+
+  const expectCompletedResultRequest = async (
+    expectedCount: number,
+    searchJobId: string,
+  ): Promise<void> => {
+    await expect.poll(() => resultRequests.length, {
+      message: `completed job ${searchJobId} loaded one authoritative result snapshot`,
+      timeout,
+    }).toBe(expectedCount);
+    expect(resultRequests[expectedCount - 1]).toEqual({
+      searchJobId,
+      page: { pageSize: 20, pageToken: undefined, includeTotalSize: true },
+      columns: [],
+      allowPartialResults: false,
+    });
+    await waitForBrowserRender(page);
+    expect(resultRequests).toHaveLength(expectedCount);
+  };
+
+  const inspectionResponse = (responseJobId: string): InspectSearchJobResponse => {
+    const provenance = {
+      source: {
+        $case: "redactedObject" as const,
+        value: {
+          redactedObjectOrdinal: 0,
+          objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+          stage: KnowledgeSearchStage.KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+        },
+      },
+    };
+    return InspectSearchJobResponse.fromPartial({
+      searchJobId: responseJobId,
+      logicalPlan: {
+        stages: [{
+          stageIndex: 0,
+          operator: "Scan",
+          inputFields: ["message"],
+          outputFields: ["message"],
+          sourceRange: {
+            start: { byteOffset: 0n, line: 1, column: 1 },
+            end: { byteOffset: 1n, line: 1, column: 2 },
+          },
+          operatorProvenance: [],
+          outputProvenance: [],
+        }, {
+          stageIndex: 1,
+          operator: "ParallelExtend",
+          inputFields: ["message"],
+          outputFields: [maliciousField],
+          operatorProvenance: [provenance],
+          outputProvenance: [{ outputField: maliciousField, provenance }],
+        }],
+        referencedFields: ["message"],
+        output: {
+          kind: SearchInspectionOutputKind.SEARCH_INSPECTION_OUTPUT_KIND_STATIC,
+          fields: ["message"],
+        },
+      },
+      physicalPlan: {
+        nodeTypes: ["ReadFromMergeTree"],
+        reads: [],
+      },
+      generatedSql: longGeneratedSQL,
+      explainText: "ReadFromMergeTree",
+      diagnosticQueryId: "inspection-diagnostic-query",
+      knowledgeSnapshot: {
+        ref: {
+          snapshotSha256: new Uint8Array(32).fill(0x42),
+          tenantCatalogRevision: 7n,
+          tenantCatalogStateToken: new Uint8Array(32).fill(0x24),
+          objectCount: 1,
+          compilerCompatibilityVersion: maliciousCompiler,
+        },
+        objects: [{
+          resolutionOrdinal: 0,
+          objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+          stage: KnowledgeSearchStage.KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+          disclosure: { $case: "redacted", value: true },
+        }],
+        objectsTruncated: false,
+      },
+    });
+  };
+
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.origin === origin && url.pathname.startsWith("/api/v1/")) {
+      apiTraffic.push({ method: request.method(), pathname: url.pathname });
+    }
+  });
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(GetSystemBootstrapResponse.encode(
+        GetSystemBootstrapResponse.fromPartial({
+          serverVersion: "search-inspection-browser-test",
+          apiVersion: "v1",
+          splCompatibilityVersion: "open-splunk-v0.1",
+          searchWebsocketPath: "/api/v1/search/ws",
+          features: [
+            ServerFeature.SERVER_FEATURE_SEARCH,
+            ServerFeature.SERVER_FEATURE_PLAN_INSPECTION,
+            ...(knowledgeAdvertised
+              ? [ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS]
+              : []),
+          ],
+          limits: { maximumPageSize: 20 },
+          apps: [{
+            appId: selectedAppId,
+            slug: "inspection-app",
+            displayName: "Inspection app",
+            defaultIndexNames: [indexName],
+            state: AppState.APP_STATE_ACTIVE,
+          }],
+          indexes: [{
+            indexId: "inspection-index-id",
+            name: indexName,
+            displayName: "Inspection index",
+            state: IndexState.INDEX_STATE_ACTIVE,
+            ingestionAccess: IndexAccessState.INDEX_ACCESS_STATE_ENABLED,
+            searchAccess: IndexAccessState.INDEX_ACCESS_STATE_ENABLED,
+          }],
+          selectedAppId,
+          serverTime: new Date("2026-08-10T12:00:00.000Z"),
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("inspection search Validate omitted its protobuf body");
+      const request = ValidateSearchRequest.decode(wire);
+      if (request.definition === undefined) {
+        throw new Error("inspection search Validate omitted its definition");
+      }
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ValidateSearchResponse.encode(
+          ValidateSearchResponse.fromPartial({
+            valid: true,
+            normalizedSpl: request.definition.spl,
+            referencedIndexes: [indexName],
+            referencedFields: ["message"],
+            predictedResultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/create",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("inspection search Create omitted its protobuf body");
+      const request = CreateSearchJobRequest.decode(wire);
+      if (request.definition === undefined) {
+        throw new Error("inspection search Create omitted its definition");
+      }
+      createdJobs += 1;
+      const searchJobId = `inspection-job-${createdJobs}`;
+      const completedAt = new Date(`2026-08-10T12:00:0${createdJobs}.000Z`);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(CreateSearchJobResponse.encode(
+          CreateSearchJobResponse.fromPartial({
+            searchJob: {
+              searchJobId,
+              stateVersion: 1n,
+              definition: request.definition,
+              source: { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
+              compilerVersion: "open-splunk-v0.1",
+              effectiveIndexScope: [indexName],
+              resolvedTimeRange: {
+                earliest: new Date("2026-08-10T11:00:00.000Z"),
+                latest: completedAt,
+                timezone: "UTC",
+              },
+              state: SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+              resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+              resultSchema,
+              progress: {
+                phase: SearchExecutionPhase.SEARCH_EXECUTION_PHASE_COMPLETE,
+                percentComplete: 100,
+                elapsed: { seconds: 0n, nanos: 1_000_000 },
+                queueWait: { seconds: 0n, nanos: 0 },
+                updatedAt: completedAt,
+                stateVersion: 1n,
+              },
+              createdAt: completedAt,
+              startedAt: completedAt,
+              finishedAt: completedAt,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/results",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("inspection search Results omitted its protobuf body");
+      const request = GetSearchResultsRequest.decode(wire);
+      resultRequests.push(request);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(GetSearchResultsResponse.encode(
+          GetSearchResultsResponse.fromPartial({
+            searchJobId: request.searchJobId,
+            resultPage: {
+              schema: resultSchema,
+              rows: [],
+              page: {
+                totalSize: 0n,
+                totalSizeExact: true,
+              },
+              snapshotComplete: true,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/inspect",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("inspection request omitted its protobuf body");
+      const request = InspectSearchJobRequest.decode(wire);
+      inspectRequests.push(request);
+      if (holdNextInspection) {
+        holdNextInspection = false;
+        heldInspection.started = true;
+        await new Promise<void>((resolve) => {
+          heldInspection.release = resolve;
+        });
+        heldInspection.release = null;
+        const staleResponse = inspectionResponse(request.searchJobId);
+        staleResponse.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = staleCompiler;
+        try {
+          await route.fulfill({
+            status: 200,
+            headers: protobufHeaders,
+            body: Buffer.from(InspectSearchJobResponse.encode(staleResponse).finish()),
+          });
+        } catch {
+          // The superseding inspection intentionally aborts only this held request.
+        } finally {
+          heldInspection.markSettled();
+        }
+        return;
+      }
+      const response = inspectionResponse(
+        knowledgeAdvertised && serveForeignIdentity
+          ? `foreign-${foreignSecret}`
+          : request.searchJobId,
+      );
+      if (!knowledgeAdvertised) {
+        const authorizedProvenance = {
+          source: {
+            $case: "authorizedObject" as const,
+            value: {
+              knowledgeObjectId: capabilityOffSecret,
+              knowledgeObjectVersion: 8n,
+              objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+              objectName: capabilityOffSecret,
+              definitionLocation: capabilityOffSecret,
+              stage: KnowledgeSearchStage.KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+            },
+          },
+        };
+        response.logicalPlan!.stages[1]!.operatorProvenance = [authorizedProvenance];
+        response.logicalPlan!.stages[1]!.outputProvenance = [{
+          outputField: maliciousField,
+          provenance: authorizedProvenance,
+        }];
+        response.knowledgeSnapshot!.objects[0]!.disclosure = {
+          $case: "authorizedObject",
+          value: {
+            knowledgeObjectId: capabilityOffSecret,
+            version: 8n,
+            name: capabilityOffSecret,
+          },
+        };
+      }
+      if (knowledgeAdvertised && serveForeignIdentity) {
+        serveForeignIdentity = false;
+        response.knowledgeSnapshot!.objects[0]!.disclosure = {
+          $case: "authorizedObject",
+          value: {
+            knowledgeObjectId: foreignSecret,
+            version: 9n,
+            name: foreignSecret,
+          },
+        };
+      }
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(InspectSearchJobResponse.encode(response).finish()),
+      });
+    },
+  );
+
+  let inspectorURL = "";
+  let inspectorStorage: { local: [string, string][]; session: [string, string][] };
+  await test.step("capability-off strips forged Knowledge from one exact inspect response", async () => {
+    const runSearch = await openSearchWorkspace(page);
+    await runSearch.click();
+    await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
+    await expectCompletedResultRequest(1, "inspection-job-1");
+    expect(inspectRequests, "inspection must not start automatically").toHaveLength(0);
+    const inspectTrigger = page.getByRole("button", { name: "Inspect search job" });
+    inspectorURL = page.url();
+    inspectorStorage = await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }));
+    const trafficBeforeInspect = apiTraffic.length;
+    await inspectTrigger.click();
+    const dialog = page.getByRole("dialog", { name: "Search job inspector" });
+    await expect(dialog.getByText("ParallelExtend", { exact: true })).toBeVisible({ timeout });
+    await expect(dialog).toContainText(maliciousField);
+    await expect(dialog.getByRole("region", { name: "Knowledge authority" })).toHaveCount(0);
+    await expect(dialog).not.toContainText(maliciousCompiler);
+    await expect(dialog).not.toContainText(capabilityOffSecret);
+    await expect(page.locator("body")).not.toContainText(capabilityOffSecret);
+    await expect(dialog).not.toContainText("Calculated field");
+    await expect(dialog).not.toContainText(/redacted ordinal/iu);
+    await expect(dialog.locator("script, img")).toHaveCount(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "__inspectionExecuted")))
+      .toBeUndefined();
+    await waitForBrowserRender(page);
+    expect(inspectRequests).toEqual([{ searchJobId: "inspection-job-1" }]);
+    expect(apiTraffic.slice(trafficBeforeInspect)).toEqual([{
+      method: "POST",
+      pathname: "/api/v1/search/jobs/inspect",
+    }]);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(inspectTrigger).toBeFocused();
+  });
+
+  await test.step("foreign identity fails generically before a valid redacted retry", async () => {
+    knowledgeAdvertised = true;
+    const runSearch = await openSearchWorkspace(page);
+    await runSearch.click();
+    await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
+    await expectCompletedResultRequest(2, "inspection-job-2");
+    expect(inspectRequests, "the second job must not be inspected automatically").toHaveLength(1);
+    const inspectTrigger = page.getByRole("button", { name: "Inspect search job" });
+    const trafficBeforeInspect = apiTraffic.length;
+    await inspectTrigger.click();
+    let dialog = page.getByRole("dialog", { name: "Search job inspector" });
+    await expect(dialog.getByRole("alert")).toHaveText(
+      "Inspection unavailable: The server could not inspect this search job.",
+      { timeout },
+    );
+    await expect(dialog).not.toContainText(foreignSecret);
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(inspectTrigger).toBeFocused();
+
+    await inspectTrigger.click();
+    dialog = page.getByRole("dialog", { name: "Search job inspector" });
+    const knowledgeRegion = dialog.getByRole("region", { name: "Knowledge authority" });
+    await expect(knowledgeRegion).toContainText("42".repeat(32), { timeout });
+    await expect(knowledgeRegion).toContainText("Catalog revision7");
+    await expect(knowledgeRegion).toContainText("Applicable objects1");
+    await expect(knowledgeRegion).toContainText(maliciousCompiler);
+    await expect(knowledgeRegion).toContainText("Redacted ordinal 0 · Calculated field");
+    await expect(dialog).toContainText("Calculated field · ordinal 0");
+    await expect(dialog).toContainText(
+      `${maliciousField} ← redacted ordinal 0`,
+    );
+    await expect(dialog.getByText("Generated SQL", { exact: true }).locator("..")).toContainText(
+      longGeneratedSQL,
+    );
+    await expect(dialog).not.toContainText(foreignSecret);
+    await expect(dialog).not.toContainText("24".repeat(32));
+    await expect(dialog.locator("script, img, a[href]")).toHaveCount(0);
+    await expect(dialog.getByRole("button", {
+      name: /create|update|enable|disable|delete knowledge/i,
+    })).toHaveCount(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "__inspectionExecuted")))
+      .toBeUndefined();
+    await waitForBrowserRender(page);
+    expect(inspectRequests.slice(1)).toEqual([
+      { searchJobId: "inspection-job-2" },
+      { searchJobId: "inspection-job-2" },
+    ]);
+    expect(apiTraffic.slice(trafficBeforeInspect)).toEqual([
+      { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+      { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+    ]);
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    expect(await dialog.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const body = element.querySelector<HTMLElement>(".modal-body");
+      const knowledge = element.querySelector<HTMLElement>("[aria-label='Knowledge authority']");
+      const logicalLabel = Array.from(element.querySelectorAll("strong"))
+        .find((candidate) => candidate.textContent === "Logical plan");
+      const logical = logicalLabel?.parentElement ?? null;
+      if (body === null) {
+        return {
+          bodyNoHorizontalOverflow: false,
+          dialogContained: false,
+          dialogNoHorizontalOverflow: false,
+          knowledgeContained: false,
+          logicalContained: false,
+        };
+      }
+      const bodyBounds = body.getBoundingClientRect();
+      const horizontallyContained = (candidate: HTMLElement | null): boolean => {
+        if (candidate === null) return false;
+        const candidateBounds = candidate.getBoundingClientRect();
+        return candidateBounds.left >= bodyBounds.left - 1
+          && candidateBounds.right <= bodyBounds.right + 1;
+      };
+      return {
+        bodyNoHorizontalOverflow: body.scrollWidth <= body.clientWidth,
+        dialogContained: bounds.left >= -1
+          && bounds.right <= window.innerWidth + 1
+          && bounds.top >= -1
+          && bounds.bottom <= window.innerHeight + 1,
+        dialogNoHorizontalOverflow: element.scrollWidth <= element.clientWidth,
+        knowledgeContained: horizontallyContained(knowledge),
+        logicalContained: horizontallyContained(logical),
+      };
+    })).toEqual({
+      bodyNoHorizontalOverflow: true,
+      dialogContained: true,
+      dialogNoHorizontalOverflow: true,
+      knowledgeContained: true,
+      logicalContained: true,
+    });
+    expect(page.url()).toBe(inspectorURL);
+    expect(await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }))).toEqual(inspectorStorage);
+    expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+      .toEqual([]);
+    assertBrowserSafety(safety);
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(dialog).toHaveCount(0);
+    await page.setViewportSize({ width: 1_280, height: 720 });
+    await expect(inspectTrigger).toBeVisible();
+  });
+
+  await test.step("a superseding inspection prevents a held stale response from committing", async () => {
+    const inspectTrigger = page.getByRole("button", { name: "Inspect search job" });
+    const trafficBeforeRace = apiTraffic.length;
+    const requestCountBeforeRace = inspectRequests.length;
+    holdNextInspection = true;
+    let dialog = page.getByRole("dialog", { name: "Search job inspector" });
+    try {
+      await inspectTrigger.click();
+      await expect.poll(() => heldInspection.started, {
+        message: "the first racing inspection reached its deterministic response barrier",
+        timeout,
+      }).toBe(true);
+      await expect(dialog).toContainText("Loading the administrator inspection plan…");
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(inspectTrigger).toBeFocused();
+
+      await inspectTrigger.click();
+      dialog = page.getByRole("dialog", { name: "Search job inspector" });
+      const knowledgeRegion = dialog.getByRole("region", { name: "Knowledge authority" });
+      await expect(knowledgeRegion).toContainText(maliciousCompiler, { timeout });
+      await expect(dialog).not.toContainText(staleCompiler);
+
+      heldInspection.release?.();
+      await heldInspection.settled;
+      await waitForBrowserRender(page);
+      await expect(knowledgeRegion).toContainText(maliciousCompiler);
+      await expect(dialog).not.toContainText(staleCompiler);
+      expect(inspectRequests.slice(requestCountBeforeRace)).toEqual([
+        { searchJobId: "inspection-job-2" },
+        { searchJobId: "inspection-job-2" },
+      ]);
+      expect(apiTraffic.slice(trafficBeforeRace)).toEqual([
+        { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+        { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+      ]);
+      expect(page.url()).toBe(inspectorURL);
+      expect(await page.evaluate(() => ({
+        local: Object.entries(localStorage),
+        session: Object.entries(sessionStorage),
+      }))).toEqual(inspectorStorage);
+      expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+        .toEqual([]);
+      assertBrowserSafety(safety, [
+        /^POST \/api\/v1\/search\/jobs\/inspect: net::ERR_ABORTED$/u,
+      ]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(inspectTrigger).toBeFocused();
+    } finally {
+      heldInspection.release?.();
+      if (heldInspection.started) await heldInspection.settled;
+    }
+  });
 });
 
 test("Mutation Audit renders historical Knowledge events without the Knowledge feature", async ({
@@ -724,14 +1289,9 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
       timeout,
     }).toBe(expectedListRequestCount);
     expect(listRequests.at(-1), `${phase} List request tuple`).toEqual(expected);
-    await waitForTwoRenderedTurns();
+    await waitForBrowserRender(page);
     expect(listRequests, `${phase} emitted no delayed duplicate List request`)
       .toHaveLength(expectedListRequestCount);
-  }
-  async function waitForTwoRenderedTurns(): Promise<void> {
-    await page.evaluate(() => new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    }));
   }
   let expectedRelatedGetRequestCount = 0;
   async function expectNextRelatedGetRequest(
@@ -744,7 +1304,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
       timeout,
     }).toBe(expectedRelatedGetRequestCount);
     expect(relatedGetRequests.at(-1), `${phase} endpoint Get tuple`).toEqual(expected);
-    await waitForTwoRenderedTurns();
+    await waitForBrowserRender(page);
     expect(relatedGetRequests, `${phase} emitted no delayed endpoint Get request`)
       .toHaveLength(expectedRelatedGetRequestCount);
   }
@@ -771,7 +1331,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   await textFilter.fill(" latency error ");
   await sharingFilter.selectOption("private");
   await selectorFilter.fill(" source::api ");
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   expect(listRequests).toHaveLength(expectedListRequestCount);
   const appliedListRequest: ListKnowledgeObjectsRequest = {
     ...initialListRequest,
@@ -796,7 +1356,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   await expect(manager.getByRole("alert")).toContainText("Catalog page changed", { timeout });
 
   await textFilter.fill("latency warning");
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   expect(listRequests).toHaveLength(expectedListRequestCount);
   const committedListRequest: ListKnowledgeObjectsRequest = {
     ...appliedListRequest,
@@ -815,7 +1375,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
     knowledgeObjectId: "ko-malicious",
     version: 2n,
   }]);
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   expect(dependencyRequests).toHaveLength(0);
   expect(dependentRequests).toHaveLength(0);
 
@@ -877,7 +1437,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   expect(escapedRelationshipsMarkup).toContain("ko-dependency-&lt;script&gt;");
   expect(escapedRelationshipsMarkup).toContain("ko-dependent-&lt;img");
   await expect(manager.locator("script, img")).toHaveCount(0);
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   expect(relatedGetRequests, "relationship paint never inspects an endpoint automatically")
     .toHaveLength(0);
   const inspectorURL = page.url();
@@ -956,7 +1516,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
       if (heldDependencyB.started) await heldDependencyB.settled;
     }
   });
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   await expect(dependencyInspector.getByText(
     maliciousDependencyObject.name,
     { exact: true },
@@ -1126,7 +1686,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   });
   await expect(manager.getByRole("heading", { name: maliciousName })).toBeVisible({ timeout });
   await expect(manager.getByText(maliciousDependencyId, { exact: true })).toBeVisible({ timeout });
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   expect(relatedGetRequests).toHaveLength(relatedGetsBeforeParentReopen);
   expect(page.url()).toBe(inspectorURL);
 
@@ -1144,12 +1704,12 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   expect(listRequests).toHaveLength(expectedListRequestCount);
 
   await ownerFilter.fill("owner-8");
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   await expect(textFilter).toHaveAttribute("aria-invalid", "true");
   expect(listRequests).toHaveLength(expectedListRequestCount);
   await ownerFilter.fill("owner-7");
   await textFilter.fill("different unapplied draft");
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   await expect(manager.locator("#knowledge-advanced-filter-status"))
     .toContainText("Draft filters not applied.");
   await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
@@ -1173,7 +1733,7 @@ test("bootstrap-advertised Knowledge Manager keeps advanced filters in one read-
   await sharingFilter.selectOption("future-sharing");
   await expect(manager.getByText("Knowledge Manager unavailable")).toBeVisible({ timeout });
   await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
-  await waitForTwoRenderedTurns();
+  await waitForBrowserRender(page);
   expect(listRequests).toHaveLength(expectedListRequestCount);
   await sharingFilter.selectOption("all");
   await manager.getByRole("button", { name: "Apply filters" }).click();
@@ -4152,9 +4712,18 @@ function observeBrowserSafety(page: Page): BrowserSafetyObservation {
   };
 }
 
-function assertBrowserSafety(observation: BrowserSafetyObservation): void {
+function assertBrowserSafety(
+  observation: BrowserSafetyObservation,
+  expectedFailedAPIRequests: readonly RegExp[] = [],
+): void {
   expect(observation.pageErrors.snapshot(), "uncaught browser errors").toEqual([]);
-  expect(observation.failedAPIRequests.snapshot(), "failed same-origin API requests").toEqual([]);
+  const failedAPIRequests = observation.failedAPIRequests.snapshot();
+  expect(failedAPIRequests, "failed same-origin API request count")
+    .toHaveLength(expectedFailedAPIRequests.length);
+  expectedFailedAPIRequests.forEach((expected, index) => {
+    expect(failedAPIRequests[index], `failed same-origin API request ${index + 1}`)
+      .toMatch(expected);
+  });
   expect(observation.externalRequests.snapshot(), "external browser resources").toEqual([]);
   expect(observation.externalWebSockets.snapshot(), "external browser WebSockets").toEqual([]);
 }
@@ -4193,6 +4762,9 @@ async function installBrowserHarnessRuntime(page: Page): Promise<void> {
     maximumDiagnosticBytes,
     truncationSuffix,
   }) => {
+    if ((window as BrowserHarnessRuntimeWindow).openSplunkBrowserHarnessRuntime !== undefined) {
+      return;
+    }
     const boundedPageDiagnostic = (value: string): string => {
       const prefixByteLimit = maximumDiagnosticBytes - truncationSuffix.length;
       let byteLength = 0;

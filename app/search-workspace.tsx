@@ -22,7 +22,6 @@ import {
   type ExportJob,
 } from "@/gen/ts/open_splunk/v1/export";
 import type { SearchHistoryFilter } from "@/gen/ts/open_splunk/v1/history_api";
-import type { InspectSearchJobResponse } from "@/gen/ts/open_splunk/v1/search_inspection_api";
 import {
   DEMO_EVENTS,
   DEMO_FIELDS,
@@ -93,6 +92,10 @@ import {
   type WorkspaceStatisticsSort,
   type WorkspaceStatisticsTable,
 } from "@/lib/search/backend-data";
+import {
+  adaptSearchJobInspection,
+  type ServerSearchJobInspectionState,
+} from "@/lib/search/server-inspection";
 import { applyFieldPivot, type PivotMode } from "@/lib/search/query-pivots";
 import { splFromFindInput } from "@/lib/search/launch-url";
 import {
@@ -621,11 +624,9 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const [backendResultsExpired, setBackendResultsExpired] = useState(false);
   const [backendExpiresAt, setBackendExpiresAt] = useState<Date | null>(null);
   const [backendNotices, setBackendNotices] = useState<string[]>([]);
-  const [backendInspection, setBackendInspection] = useState<{
-    status: "idle" | "loading" | "available" | "error";
-    response?: InspectSearchJobResponse;
-    error?: string;
-  }>({ status: "idle" });
+  const [backendInspection, setBackendInspection] = useState<ServerSearchJobInspectionState>({
+    status: "idle",
+  });
   const [backendResultPageSize, setBackendResultPageSize] = useState(20);
   const [backendFieldsLoading, setBackendFieldsLoading] = useState(false);
   const [backendFieldsLoadingMore, setBackendFieldsLoadingMore] = useState(false);
@@ -759,6 +760,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendExportDownloadAbortRef = useRef<AbortController | null>(null);
   const backendExportCancelAbortRef = useRef<AbortController | null>(null);
   const backendInspectionAbortRef = useRef<AbortController | null>(null);
+  const backendInspectionClientRef = useRef(apiClient);
   const serverExportJobRef = useRef<ExportJob | null>(null);
   const exportEpochRef = useRef(0);
   const backendSavedSearchesRef = useRef<Map<string, ServerSavedSearch>>(new Map());
@@ -1868,7 +1870,14 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     updateBackendPreviewStatus(status, announcement);
   }
 
+  function resetBackendInspection() {
+    backendInspectionAbortRef.current?.abort();
+    backendInspectionAbortRef.current = null;
+    setBackendInspection({ status: "idle" });
+  }
+
   function resetBackendResultState() {
+    resetBackendInspection();
     backendProgressRevisionRef.current = null;
     backendResultPagesRef.current.clear();
     backendAuthoritativeResultSchemaRef.current = null;
@@ -2010,6 +2019,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   useEffect(() => {
     serverExportJobRef.current = serverExportJob;
   }, [serverExportJob]);
+
+  useEffect(() => {
+    if (backendInspectionClientRef.current === apiClient) return;
+    backendInspectionClientRef.current = apiClient;
+    resetBackendInspection();
+  }, [apiClient]);
 
   useEffect(() => {
     if (modal !== "export" || exportStage !== "ready") return;
@@ -4203,19 +4218,30 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendInspectionAbortRef.current?.abort();
     const controller = new AbortController();
     backendInspectionAbortRef.current = controller;
+    const isCurrentInspection = () => (
+      !controller.signal.aborted
+      && backendInspectionAbortRef.current === controller
+      && backendJobIdRef.current === searchJobId
+    );
+    const exposeKnowledge = supportsServerFeature(
+      backendBootstrapModel,
+      ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+    );
     setBackendInspection({ status: "loading" });
     void apiClient.search.inspect(
       { searchJobId },
       { signal: controller.signal, timeoutMs: 15_000 },
-    ).then((response) => {
-      if (!controller.signal.aborted && backendJobIdRef.current === searchJobId) {
+    ).then((rawResponse) => {
+      if (!isCurrentInspection()) return;
+      const response = adaptSearchJobInspection(rawResponse, searchJobId, exposeKnowledge);
+      if (isCurrentInspection()) {
         setBackendInspection({ status: "available", response });
       }
-    }).catch((error: unknown) => {
-      if (!controller.signal.aborted) {
+    }).catch(() => {
+      if (isCurrentInspection()) {
         setBackendInspection({
           status: "error",
-          error: error instanceof Error ? error.message : "The server could not inspect this search job.",
+          error: "The server could not inspect this search job.",
         });
       }
     }).finally(() => {
@@ -6664,7 +6690,12 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         onHistoryFilterChange={setHistoryFilter}
         onLoadMoreHistory={() => void loadMoreBackendHistory()}
         onLoadMoreSavedSearches={() => void loadMoreBackendSavedSearches()}
-        onModalChange={setModal}
+        onModalChange={(nextModal) => {
+          if (modal === "inspect" && nextModal !== "inspect") {
+            resetBackendInspection();
+          }
+          setModal(nextModal);
+        }}
         onOpenSavedSearch={openSavedSearch}
         onPrepareExport={() => void prepareExport()}
         onResetExport={resetExport}

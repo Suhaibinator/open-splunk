@@ -26,7 +26,7 @@ import {
   ListKnowledgeObjectsResponse,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/v1/search_api";
-import { knowledgeRoutes } from "./routes";
+import { knowledgeRoutes, searchRoutes } from "./routes";
 
 const administratorToken = "admin-token-0123456789-abcdefghijkl";
 
@@ -63,6 +63,7 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/v1/search/ws"), false);
   assert.equal(knowledgeRoutes.validate.path, "/api/v1/knowledge/objects/validate");
   assert.equal(knowledgeRoutes.validate.maximumResponseBytes, 8 << 20);
+  assert.equal(searchRoutes.inspect.maximumResponseBytes, 8 << 20);
 });
 
 test("transport attaches the memory-only token only to protected protobuf calls", async () => {
