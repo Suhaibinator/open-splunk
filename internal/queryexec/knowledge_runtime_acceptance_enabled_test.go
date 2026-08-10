@@ -28,6 +28,16 @@ func TestKnowledgeRuntimeAcceptanceCompilerMatrixSealsWithoutDocker(t *testing.T
 		base,
 		base.Add(2*time.Minute),
 	)
+	if len(matrix.compilerCases)+4 != 13 {
+		t.Fatalf("tagged compiler matrix cases = %d, want 13", len(matrix.compilerCases)+4)
+	}
+	for _, test := range matrix.compilerCases {
+		t.Run(test.name, func(t *testing.T) {
+			if !test.compiled.HasValidExecutionSeal() {
+				t.Fatal("tagged public compiler case has no valid execution seal")
+			}
+		})
+	}
 
 	if !matrix.ordinary.HasValidExecutionSeal() ||
 		!matrix.controls.HasValidExecutionSeal() ||

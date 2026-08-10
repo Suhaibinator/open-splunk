@@ -6,7 +6,9 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -349,31 +351,135 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 }
 
 type compiledKnowledgeRuntimeMatrix struct {
-	ordinary    clickhouse.CompiledQuery
-	controls    clickhouse.CompiledQuery
-	chart       clickhouse.CompiledQuery
-	timechart   clickhouse.CompiledQuery
-	stats       clickhouse.CompiledQuery
-	timeline    clickhouse.CompiledTimeline
-	catalog     clickhouse.CompiledFieldCatalog
-	summary     clickhouse.CompiledFieldSummary
-	suggestions clickhouse.CompiledFieldSuggestions
-	overflow    clickhouse.CompiledQuery
+	ordinary      clickhouse.CompiledQuery
+	controls      clickhouse.CompiledQuery
+	chart         clickhouse.CompiledQuery
+	timechart     clickhouse.CompiledQuery
+	stats         clickhouse.CompiledQuery
+	timeline      clickhouse.CompiledTimeline
+	catalog       clickhouse.CompiledFieldCatalog
+	summary       clickhouse.CompiledFieldSummary
+	suggestions   clickhouse.CompiledFieldSuggestions
+	overflow      clickhouse.CompiledQuery
+	compilerCases []compiledKnowledgeRuntimePublicCompilerCase
+}
+
+type compiledKnowledgeRuntimePublicCompilerCase struct {
+	name     string
+	compiled clickhouse.CompiledQuery
 }
 
 type knowledgeRuntimeMatrixPlans struct {
-	ordinary       *plan.Query
-	controls       *plan.Query
-	chart          *plan.Query
-	timechart      *plan.Query
-	stats          *plan.Query
-	timeline       *plan.Query
-	analysis       *plan.Query
-	overflow       *plan.Query
-	timelineSpec   clickhouse.TimelineSpec
-	catalogSpec    clickhouse.FieldCatalogSpec
-	summarySpec    clickhouse.FieldSummarySpec
-	suggestionSpec clickhouse.FieldSuggestionSpec
+	ordinary        *plan.Query
+	controls        *plan.Query
+	chart           *plan.Query
+	timechart       *plan.Query
+	stats           *plan.Query
+	chronological   *plan.Query
+	pruned          *plan.Query
+	runtimeEmpty    *plan.Query
+	timeline        *plan.Query
+	analysis        *plan.Query
+	overflow        *plan.Query
+	overflowProgram knowledgeprogram.Program
+	timelineSpec    clickhouse.TimelineSpec
+	catalogSpec     clickhouse.FieldCatalogSpec
+	summarySpec     clickhouse.FieldSummarySpec
+	suggestionSpec  clickhouse.FieldSuggestionSpec
+}
+
+type knowledgeRuntimePublicCompilerCase struct {
+	name    string
+	logical *plan.Query
+	program knowledgeprogram.Program
+	verify  func(*testing.T, clickhouse.CompiledQuery, knowledgeprogram.Program)
+}
+
+func knowledgeRuntimePublicCompilerCases(
+	t *testing.T,
+	plans knowledgeRuntimeMatrixPlans,
+	program knowledgeprogram.Program,
+	tenantID string,
+	indexName string,
+) []knowledgeRuntimePublicCompilerCase {
+	t.Helper()
+	return []knowledgeRuntimePublicCompilerCase{
+		{name: "ordinary", logical: plans.ordinary, program: program},
+		{name: "selector controls", logical: plans.controls, program: program},
+		{name: "chart", logical: plans.chart, program: program},
+		{name: "timechart", logical: plans.timechart, program: program},
+		{name: "stats", logical: plans.stats, program: program},
+		{
+			name: "stacked chronological barriers", logical: plans.chronological, program: program,
+			verify: func(t *testing.T, compiled clickhouse.CompiledQuery, caseProgram knowledgeprogram.Program) {
+				knowledgeRuntimeRequireStackedChronologicalCompilerCase(
+					t,
+					compiled,
+					caseProgram,
+					tenantID,
+					indexName,
+				)
+			},
+		},
+		{
+			name: "pruned consumer", logical: plans.pruned, program: program,
+			verify: func(t *testing.T, compiled clickhouse.CompiledQuery, caseProgram knowledgeprogram.Program) {
+				knowledgeRuntimeRequireProjectedCompilerCase(
+					t,
+					compiled,
+					caseProgram,
+					tenantID,
+					[]string{indexName},
+					[]any{indexName, "matrix"},
+					false,
+				)
+			},
+		},
+		{
+			name: "runtime-empty consumer", logical: plans.runtimeEmpty, program: program,
+			verify: func(t *testing.T, compiled clickhouse.CompiledQuery, caseProgram knowledgeprogram.Program) {
+				knowledgeRuntimeRequireProjectedCompilerCase(
+					t,
+					compiled,
+					caseProgram,
+					tenantID,
+					[]string{indexName},
+					[]any{indexName, "matrix", true, false},
+					true,
+				)
+			},
+		},
+		{
+			name:    "alias event overflow",
+			logical: plans.overflow,
+			program: plans.overflowProgram,
+		},
+	}
+}
+
+func knowledgeRuntimeRequirePublicCompilerCaseNames(
+	t *testing.T,
+	cases []knowledgeRuntimePublicCompilerCase,
+) {
+	t.Helper()
+	want := []string{
+		"ordinary",
+		"selector controls",
+		"chart",
+		"timechart",
+		"stats",
+		"stacked chronological barriers",
+		"pruned consumer",
+		"runtime-empty consumer",
+		"alias event overflow",
+	}
+	got := make([]string, len(cases))
+	for index, descriptor := range cases {
+		got[index] = descriptor.name
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("knowledge public compiler cases = %#v, want %#v", got, want)
+	}
 }
 
 func buildKnowledgeRuntimeMatrixPlans(
@@ -407,6 +513,7 @@ func buildKnowledgeRuntimeMatrixPlans(
 	}
 
 	overflowIndex := indexName + "-overflow"
+	overflowProgram := knowledgeRuntimeOverflowProgram(t)
 	return knowledgeRuntimeMatrixPlans{
 		ordinary: build(
 			`index=`+indexName+` service=matrix`+
@@ -447,6 +554,27 @@ func buildKnowledgeRuntimeMatrixPlans(
 			program,
 			indexName,
 		),
+		chronological: build(
+			`index=`+indexName+` service=matrix`+
+				` | eventstats earliest(regex_value) AS event_first`+
+				` | eventstats latest(json_value) AS event_last`+
+				` | sort 0 +event_id`+
+				` | streamstats earliest(calculated_value) AS stream_first`+
+				` | streamstats latest(regex_value) AS stream_last`+
+				` | table event_id event_first event_last stream_first stream_last`,
+			program,
+			indexName,
+		),
+		pruned: build(
+			`index=`+indexName+` service=matrix | table event_id`,
+			program,
+			indexName,
+		),
+		runtimeEmpty: build(
+			`index=`+indexName+` service=matrix | where true=false | table event_id`,
+			program,
+			indexName,
+		),
 		timeline: build(
 			`index=`+indexName+` service=matrix | where isnotnull(regex_value)`,
 			program,
@@ -459,9 +587,10 @@ func buildKnowledgeRuntimeMatrixPlans(
 		),
 		overflow: build(
 			`index=`+overflowIndex+` | table event_id`,
-			knowledgeRuntimeOverflowProgram(t),
+			overflowProgram,
 			overflowIndex,
 		),
+		overflowProgram: overflowProgram,
 		timelineSpec: clickhouse.TimelineSpec{
 			FirstBucket: base,
 			SpanSeconds: 60,
@@ -518,8 +647,34 @@ func compileKnowledgeRuntimeMatrix(
 		}
 		return compiled
 	}
+	compilerCases := make([]compiledKnowledgeRuntimePublicCompilerCase, 0, 9)
+	compiledByName := make(map[string]clickhouse.CompiledQuery, cap(compilerCases))
+	descriptors := knowledgeRuntimePublicCompilerCases(t, plans, program, tenantID, indexName)
+	knowledgeRuntimeRequirePublicCompilerCaseNames(t, descriptors)
+	for _, descriptor := range descriptors {
+		if _, duplicate := compiledByName[descriptor.name]; duplicate {
+			t.Fatalf("duplicate production knowledge query %q", descriptor.name)
+		}
+		compiled := compile(descriptor.name, descriptor.logical)
+		if descriptor.verify != nil {
+			descriptor.verify(t, compiled, descriptor.program)
+		}
+		compilerCases = append(compilerCases, compiledKnowledgeRuntimePublicCompilerCase{
+			name:     descriptor.name,
+			compiled: compiled,
+		})
+		compiledByName[descriptor.name] = compiled
+	}
+	compiledCase := func(name string) clickhouse.CompiledQuery {
+		t.Helper()
+		compiled, ok := compiledByName[name]
+		if !ok {
+			t.Fatalf("missing production knowledge query %q", name)
+		}
+		return compiled
+	}
 
-	ordinary := compile("ordinary", plans.ordinary)
+	ordinary := compiledCase("ordinary")
 	wantOutputFields := []string{
 		"event_id",
 		"regex_value",
@@ -627,10 +782,10 @@ func compileKnowledgeRuntimeMatrix(
 	}
 	knowledgeRuntimeRequireKnowledgeArguments(t, ordinary, program)
 
-	controls := compile("selector controls", plans.controls)
-	chart := compile("chart", plans.chart)
-	timechart := compile("timechart", plans.timechart)
-	stats := compile("stats", plans.stats)
+	controls := compiledCase("selector controls")
+	chart := compiledCase("chart")
+	timechart := compiledCase("timechart")
+	stats := compiledCase("stats")
 
 	timeline, err := compiler.CompileTimeline(plans.timeline, plans.timelineSpec)
 	if err != nil {
@@ -663,22 +818,23 @@ func compileKnowledgeRuntimeMatrix(
 		t.Fatal("production knowledge field analysis has no valid execution seal")
 	}
 
-	overflow := compile("alias event overflow", plans.overflow)
+	overflow := compiledCase("alias event overflow")
 	if !strings.Contains(overflow.SQL, clickhouse.KnowledgeAliasCopyEventLimitMarker) {
 		t.Fatal("compiled overflow query omits the alias-copy event guard")
 	}
 
 	return compiledKnowledgeRuntimeMatrix{
-		ordinary:    ordinary,
-		controls:    controls,
-		chart:       chart,
-		timechart:   timechart,
-		stats:       stats,
-		timeline:    timeline,
-		catalog:     catalog,
-		summary:     summary,
-		suggestions: suggestions,
-		overflow:    overflow,
+		ordinary:      ordinary,
+		controls:      controls,
+		chart:         chart,
+		timechart:     timechart,
+		stats:         stats,
+		timeline:      timeline,
+		catalog:       catalog,
+		summary:       summary,
+		suggestions:   suggestions,
+		overflow:      overflow,
+		compilerCases: compilerCases,
 	}
 }
 
@@ -946,8 +1102,724 @@ func knowledgeRuntimeRequireKnowledgeArguments(
 	}
 	for _, want := range wants {
 		if !slices.Contains(compiled.Args, any(want)) {
-			t.Fatalf("compiled knowledge arguments omit %q: %#v", want, compiled.Args)
+			t.Fatalf("compiled knowledge arguments omit %q (arguments=%d)", want, len(compiled.Args))
 		}
+	}
+}
+
+var (
+	knowledgeRuntimeCompilerBarrierCTEPattern = regexp.MustCompile(
+		`"(__os_ko_guard_input|__os_(eventstats_input|eventstats_result|` +
+			`streamstats_result_input|streamstats_result|chronological_final_input|` +
+			`chronological_validation)_([0-9]+))" AS (MATERIALIZED )?\(`,
+	)
+	knowledgeRuntimeImmutableMeasurePattern = regexp.MustCompile(
+		`tuple\("__os_sort_time", "__os_sort_event_id", ` +
+			`"__os_sort_visibility_seq", "__os_sort_source_identity"\)\) AS ` +
+			`"(__os_(eventstats|streamstats)_measure_([0-9]+))"`,
+	)
+)
+
+type knowledgeRuntimeCompilerBarrierCTE struct {
+	name         string
+	class        string
+	stage        int
+	materialized bool
+}
+
+func knowledgeRuntimeRequirePublicCompilerEvidence(
+	t *testing.T,
+	compiled clickhouse.CompiledQuery,
+	program knowledgeprogram.Program,
+	tenantID string,
+	effectiveIndexes []string,
+	wantArgumentSuffix []any,
+) {
+	t.Helper()
+	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+		t.Fatalf("knowledge public compiler physical scans = %d, want 1", got)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf(
+			"knowledge public compiler placeholders = %d, arguments = %d (SQL bytes=%d)",
+			got,
+			want,
+			len(compiled.SQL),
+		)
+	}
+	if len(compiled.Args) < len(wantArgumentSuffix) ||
+		!slices.Equal(compiled.Args[len(compiled.Args)-len(wantArgumentSuffix):], wantArgumentSuffix) {
+		gotSuffix := compiled.Args
+		if len(gotSuffix) > len(wantArgumentSuffix) {
+			gotSuffix = gotSuffix[len(gotSuffix)-len(wantArgumentSuffix):]
+		}
+		t.Fatalf(
+			"knowledge public compiler argument suffix = %#v, want %#v",
+			gotSuffix,
+			wantArgumentSuffix,
+		)
+	}
+	commitment, commitmentOK := program.Commitment()
+	evidence, evidenceOK := compiled.KnowledgeSnapshotEvidenceFor(program)
+	evidenceCommitment, evidenceCommitmentOK := evidence.KnowledgeProgramCommitment()
+	if !commitmentOK || !evidenceOK || !evidenceCommitmentOK ||
+		evidenceCommitment != commitment ||
+		evidence.KnowledgeProgramObjectCount() != program.ObjectCount() ||
+		evidence.KnowledgeProgramCharges() != program.Charges() ||
+		evidence.GeneratedSQLBytes() != uint64(len(compiled.SQL)) ||
+		evidence.TenantID() != tenantID ||
+		!slices.Equal(evidence.EffectiveIndexes(), effectiveIndexes) {
+		t.Fatalf(
+			"knowledge public compiler evidence = (%#v, %t), commitment=%x/%x",
+			evidence,
+			evidenceOK,
+			evidenceCommitment,
+			commitment,
+		)
+	}
+	knowledgeRuntimeRequireKnowledgeArguments(t, compiled, program)
+}
+
+func knowledgeRuntimeRequireGuardValidation(
+	t *testing.T,
+	compiled clickhouse.CompiledQuery,
+) {
+	t.Helper()
+	required := []string{
+		`WITH "__os_ko_guard_input" AS MATERIALIZED (`,
+		`"__os_ko_guard_totals" AS (`,
+		`"__os_ko_guard_result" AS (`,
+		`AS "__os_ko_guard_validation"`,
+		`"__os_chronological_final_input_`,
+		`"__os_chronological_validation_`,
+		clickhouse.KnowledgeSelectorInvalidUTF8Marker,
+		clickhouse.RexCaptureLimitMarker,
+	}
+	required = append(required, knowledgeRuntimePrivateLimitMarkers()...)
+	for _, fragment := range required {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Fatalf("knowledge validation envelope is missing %q", fragment)
+		}
+	}
+	ordered := []string{
+		`WITH "__os_ko_guard_input" AS MATERIALIZED (`,
+		`"__os_ko_guard_totals" AS (`,
+		`"__os_ko_guard_result" AS (`,
+		`"__os_chronological_final_input_`,
+		`"__os_chronological_validation_`,
+		"UNION ALL",
+	}
+	previous := -1
+	for _, fragment := range ordered {
+		position := strings.Index(compiled.SQL, fragment)
+		if position <= previous {
+			t.Fatalf(
+				"knowledge validation envelope order %q at %d after %d",
+				fragment,
+				position,
+				previous,
+			)
+		}
+		previous = position
+	}
+	if strings.Count(compiled.SQL, "SETTINGS enable_materialized_cte = 1") != 1 ||
+		!strings.HasSuffix(compiled.SQL, " SETTINGS enable_materialized_cte = 1") {
+		t.Fatal("knowledge validation envelope is missing the terminal materialized-CTE setting")
+	}
+	validationName := ""
+	for _, cte := range knowledgeRuntimeCompilerBarrierCTEs(compiled.SQL) {
+		if cte.class != "chronological validation" {
+			continue
+		}
+		if validationName != "" {
+			t.Fatal("knowledge validation envelope has multiple final validation CTEs")
+		}
+		validationName = cte.name
+	}
+	if validationName == "" {
+		t.Fatal("knowledge validation envelope has no final validation CTE")
+	}
+	validationReference := `"` + validationName + `"`
+	crossJoins := strings.Count(compiled.SQL, `CROSS JOIN `+validationReference)
+	validBranches := strings.Count(compiled.SQL, `"__os_chronological_valid" = 0`)
+	invalidBranches := strings.Count(compiled.SQL, `"__os_chronological_valid" != 0`)
+	if crossJoins != 2 || validBranches != 1 || invalidBranches != 1 {
+		t.Fatalf(
+			"knowledge validation CTE %q consumers = cross joins %d valid %d invalid %d, want 2/1/1",
+			validationName,
+			crossJoins,
+			validBranches,
+			invalidBranches,
+		)
+	}
+	validationDefinition := strings.Index(compiled.SQL, validationReference+` AS (`)
+	guardValidationInput := -1
+	if validationDefinition >= 0 {
+		guardValidationInput = strings.Index(
+			compiled.SQL[validationDefinition:],
+			`FROM "__os_ko_guard_result"`,
+		)
+	}
+	if validationDefinition < 0 || guardValidationInput < 0 {
+		t.Fatalf("knowledge validation CTE %q does not consume the guard result", validationName)
+	}
+}
+
+func knowledgeRuntimeCompilerBarrierCTEs(sql string) []knowledgeRuntimeCompilerBarrierCTE {
+	matches := knowledgeRuntimeCompilerBarrierCTEPattern.FindAllStringSubmatch(sql, -1)
+	result := make([]knowledgeRuntimeCompilerBarrierCTE, 0, len(matches))
+	for _, match := range matches {
+		stage := -1
+		if match[3] != "" {
+			stage, _ = strconv.Atoi(match[3])
+		}
+		class := "knowledge guard input"
+		switch match[2] {
+		case "eventstats_input":
+			class = "eventstats input"
+		case "eventstats_result":
+			class = "eventstats result"
+		case "streamstats_result_input":
+			class = "streamstats result input"
+		case "streamstats_result":
+			class = "streamstats result"
+		case "chronological_final_input":
+			class = "chronological final input"
+		case "chronological_validation":
+			class = "chronological validation"
+		}
+		result = append(result, knowledgeRuntimeCompilerBarrierCTE{
+			name:         match[1],
+			class:        class,
+			stage:        stage,
+			materialized: match[4] != "",
+		})
+	}
+	return result
+}
+
+func knowledgeRuntimeRequireCompilerBarrierCTEs(
+	t *testing.T,
+	sql string,
+	want []string,
+) []knowledgeRuntimeCompilerBarrierCTE {
+	t.Helper()
+	ctes := knowledgeRuntimeCompilerBarrierCTEs(sql)
+	got := make([]string, len(ctes))
+	seen := make(map[string]struct{}, len(ctes))
+	for index, cte := range ctes {
+		materialization := "ordinary"
+		if cte.materialized {
+			materialization = "materialized"
+		}
+		got[index] = cte.class + " " + materialization
+		if _, duplicate := seen[cte.name]; duplicate {
+			t.Fatalf("knowledge compiler barrier CTE %q is duplicated", cte.name)
+		}
+		seen[cte.name] = struct{}{}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("knowledge compiler CTE order/materialization = %#v, want %#v", got, want)
+	}
+	return ctes
+}
+
+func knowledgeRuntimeChronologicalAggregateCallAfter(
+	sql string,
+	function string,
+	after int,
+) (string, int, bool) {
+	relativeStart := strings.Index(sql[after:], function)
+	if relativeStart < 0 {
+		return "", after, false
+	}
+	start := after + relativeStart
+	depth := 0
+	for index := start + len(function) - 1; index < len(sql); index++ {
+		switch sql[index] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return sql[start : index+1], index + 1, true
+			}
+		}
+	}
+	return "", after, false
+}
+
+func knowledgeRuntimeBalancedParenthesizedSQL(
+	sql string,
+	open int,
+) (string, int, bool) {
+	if open < 0 || open >= len(sql) || sql[open] != '(' {
+		return "", open, false
+	}
+	depth := 0
+	inSingleQuote := false
+	inDoubleQuote := false
+	for index := open; index < len(sql); index++ {
+		current := sql[index]
+		if inSingleQuote {
+			if current == '\\' && index+1 < len(sql) {
+				index++
+				continue
+			}
+			if current == '\'' {
+				if index+1 < len(sql) && sql[index+1] == '\'' {
+					index++
+					continue
+				}
+				inSingleQuote = false
+			}
+			continue
+		}
+		if inDoubleQuote {
+			if current == '"' {
+				if index+1 < len(sql) && sql[index+1] == '"' {
+					index++
+					continue
+				}
+				inDoubleQuote = false
+			}
+			continue
+		}
+		switch current {
+		case '\'':
+			inSingleQuote = true
+		case '"':
+			inDoubleQuote = true
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return sql[open : index+1], index + 1, true
+			}
+		}
+	}
+	return "", open, false
+}
+
+func knowledgeRuntimeAssignedCall(
+	sql string,
+	alias string,
+	function string,
+) (string, bool) {
+	assignment := ` AS "` + alias + `"`
+	if strings.Count(sql, assignment) != 1 {
+		return "", false
+	}
+	boundary := strings.Index(sql, assignment)
+	token := function + "("
+	for searchEnd := boundary; searchEnd > 0; {
+		start := strings.LastIndex(sql[:searchEnd], token)
+		if start < 0 {
+			return "", false
+		}
+		parenthesized, end, ok := knowledgeRuntimeBalancedParenthesizedSQL(
+			sql,
+			start+len(function),
+		)
+		if ok && end == boundary {
+			return function + parenthesized, true
+		}
+		searchEnd = start
+	}
+	return "", false
+}
+
+func knowledgeRuntimeCompilerCTEBody(
+	sql string,
+	cte knowledgeRuntimeCompilerBarrierCTE,
+) (string, bool) {
+	clause := `"` + cte.name + `" AS `
+	if cte.materialized {
+		clause += "MATERIALIZED "
+	}
+	clause += "("
+	if strings.Count(sql, clause) != 1 {
+		return "", false
+	}
+	open := strings.Index(sql, clause) + len(clause) - 1
+	parenthesized, _, ok := knowledgeRuntimeBalancedParenthesizedSQL(sql, open)
+	if !ok || len(parenthesized) < 2 {
+		return "", false
+	}
+	return parenthesized[1 : len(parenthesized)-1], true
+}
+
+func knowledgeRuntimeRequireStackedChronologicalCompilerCase(
+	t *testing.T,
+	compiled clickhouse.CompiledQuery,
+	program knowledgeprogram.Program,
+	tenantID string,
+	indexName string,
+) {
+	t.Helper()
+	wantOutputs := []string{"event_id", "event_first", "event_last", "stream_first", "stream_last"}
+	if !slices.Equal(compiled.OutputFields, wantOutputs) || len(compiled.ContainerOutputs) != 0 {
+		t.Fatalf(
+			"stacked chronological public outputs = %#v containers %#v, want %#v/no containers",
+			compiled.OutputFields,
+			compiled.ContainerOutputs,
+			wantOutputs,
+		)
+	}
+	validatedContainers, validContainers := compiled.ValidatedResultContainerOutputs()
+	if !validContainers || len(validatedContainers) != 0 {
+		t.Fatalf(
+			"stacked chronological validated containers = (%#v, %t), want empty/valid",
+			validatedContainers,
+			validContainers,
+		)
+	}
+	knowledgeRuntimeRequirePublicCompilerEvidence(
+		t,
+		compiled,
+		program,
+		tenantID,
+		[]string{indexName},
+		[]any{indexName, "matrix"},
+	)
+	knowledgeRuntimeRequireGuardValidation(t, compiled)
+
+	wantCTEs := []string{
+		"knowledge guard input materialized",
+		"eventstats input ordinary",
+		"eventstats result ordinary",
+		"eventstats input ordinary",
+		"eventstats result ordinary",
+		"streamstats result input ordinary",
+		"streamstats result ordinary",
+		"streamstats result input ordinary",
+		"streamstats result ordinary",
+		"chronological final input ordinary",
+		"chronological validation ordinary",
+	}
+	ctes := knowledgeRuntimeRequireCompilerBarrierCTEs(t, compiled.SQL, wantCTEs)
+	for _, pair := range [][2]int{{1, 2}, {3, 4}, {5, 6}, {7, 8}, {9, 10}} {
+		if ctes[pair[0]].stage != ctes[pair[1]].stage {
+			t.Fatalf(
+				"stacked chronological CTE stages %q/%q = %d/%d, want paired",
+				ctes[pair[0]].name,
+				ctes[pair[1]].name,
+				ctes[pair[0]].stage,
+				ctes[pair[1]].stage,
+			)
+		}
+	}
+	previousStage := -1
+	for _, index := range []int{1, 3, 5, 7, 9} {
+		if ctes[index].stage <= previousStage {
+			t.Fatalf(
+				"stacked chronological CTE stage %q = %d after %d",
+				ctes[index].name,
+				ctes[index].stage,
+				previousStage,
+			)
+		}
+		previousStage = ctes[index].stage
+	}
+	if got := strings.Count(compiled.SQL, "UNION ALL"); got != 5 {
+		t.Fatalf("stacked chronological validation unions = %d, want 5", got)
+	}
+	if got := strings.Count(compiled.SQL, "argMinOrNullIf("); got != 2 {
+		t.Fatalf("stacked chronological earliest states = %d, want 2", got)
+	}
+	if got := strings.Count(compiled.SQL, "argMaxOrNullIf("); got != 2 {
+		t.Fatalf("stacked chronological latest states = %d, want 2", got)
+	}
+	measureAssignments := knowledgeRuntimeImmutableMeasurePattern.FindAllStringSubmatch(
+		compiled.SQL,
+		-1,
+	)
+	if len(measureAssignments) != 4 {
+		t.Fatalf(
+			"stacked chronological immutable measure assignments = %d, want 4 (SQL bytes=%d)",
+			len(measureAssignments),
+			len(compiled.SQL),
+		)
+	}
+	wantMeasureClasses := []string{"eventstats", "eventstats", "streamstats", "streamstats"}
+	wantMeasureStages := []int{ctes[1].stage, ctes[3].stage, ctes[5].stage, ctes[7].stage}
+	measureAliases := make([]string, len(measureAssignments))
+	seenMeasures := make(map[string]struct{}, len(measureAssignments))
+	for index, assignment := range measureAssignments {
+		stage, _ := strconv.Atoi(assignment[3])
+		measureAliases[index] = assignment[1]
+		if assignment[2] != wantMeasureClasses[index] || stage != wantMeasureStages[index] {
+			t.Fatalf(
+				"stacked chronological measure %d = %q class %q stage %d, want %q stage %d",
+				index,
+				assignment[1],
+				assignment[2],
+				stage,
+				wantMeasureClasses[index],
+				wantMeasureStages[index],
+			)
+		}
+		if _, duplicate := seenMeasures[assignment[1]]; duplicate {
+			t.Fatalf("stacked chronological measure %q is duplicated", assignment[1])
+		}
+		seenMeasures[assignment[1]] = struct{}{}
+	}
+	measureSources := []string{"regex_value", "json_value", "calculated_value", "regex_value"}
+	measureSelectors := []string{"arrayFirstIndex(", "arrayLastIndex(", "arrayFirstIndex(", "arrayLastIndex("}
+	for index, measure := range measureAliases {
+		expression, ok := knowledgeRuntimeAssignedCall(compiled.SQL, measure, "tuple")
+		if !ok {
+			t.Fatalf(
+				"stacked chronological measure %q has no complete tuple projection (SQL bytes=%d)",
+				measure,
+				len(compiled.SQL),
+			)
+		}
+		wantSource := measureSources[index]
+		wantSelector := measureSelectors[index]
+		forbiddenSelector := "arrayLastIndex("
+		if wantSelector == forbiddenSelector {
+			forbiddenSelector = "arrayFirstIndex("
+		}
+		if !strings.Contains(expression, `"`+wantSource+`"`) ||
+			strings.Count(expression, wantSelector) != 1 ||
+			strings.Contains(expression, forbiddenSelector) {
+			t.Fatalf(
+				"stacked chronological measure %q is not bound to %q via %q",
+				measure,
+				wantSource,
+				wantSelector,
+			)
+		}
+		for _, otherSource := range []string{"regex_value", "json_value", "calculated_value"} {
+			if otherSource != wantSource && strings.Contains(expression, `"`+otherSource+`"`) {
+				t.Fatalf(
+					"stacked chronological measure %q also consumes source %q",
+					measure,
+					otherSource,
+				)
+			}
+		}
+	}
+	functions := []string{
+		"argMinOrNullIf(",
+		"argMaxOrNullIf(",
+		"argMinOrNullIf(",
+		"argMaxOrNullIf(",
+	}
+	after := 0
+	for index, function := range functions {
+		call, next, ok := knowledgeRuntimeChronologicalAggregateCallAfter(
+			compiled.SQL,
+			function,
+			after,
+		)
+		if !ok {
+			t.Fatalf(
+				"stacked chronological aggregate %d %q is missing or unterminated (SQL bytes=%d)",
+				index,
+				function,
+				len(compiled.SQL),
+			)
+		}
+		after = next
+		measure := measureAliases[index]
+		wantPrefix := function + `tupleElement(tupleElement("` + measure + `", 1), 1)`
+		wantChronology := `tupleElement("` + measure + `", 2)`
+		if !strings.HasPrefix(call, wantPrefix) || !strings.Contains(call, wantChronology) {
+			t.Fatalf(
+				"stacked chronological aggregate %d does not consume measure %q value/chronology",
+				index,
+				measure,
+			)
+		}
+		for otherIndex, otherMeasure := range measureAliases {
+			if otherIndex != index && strings.Contains(call, `"`+otherMeasure+`"`) {
+				t.Fatalf(
+					"stacked chronological aggregate %d also consumes measure %q",
+					index,
+					otherMeasure,
+				)
+			}
+		}
+		for _, forbidden := range []string{"__os_order_", "__os_streamstats_order_"} {
+			if strings.Contains(call, forbidden) {
+				t.Fatalf(
+					"stacked chronological aggregate %d consumes pipeline order %q",
+					index,
+					forbidden,
+				)
+			}
+		}
+	}
+	authoredOutputs := []string{"event_first", "event_last", "stream_first", "stream_last"}
+	for index, binding := range []struct {
+		inputCTE  int
+		resultCTE int
+		output    string
+	}{
+		{inputCTE: 1, resultCTE: 2, output: "event_first"},
+		{inputCTE: 3, resultCTE: 4, output: "event_last"},
+	} {
+		body, ok := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[binding.resultCTE])
+		if !ok {
+			t.Fatalf("stacked eventstats result CTE %q has no bounded body", ctes[binding.resultCTE].name)
+		}
+		stage := strconv.Itoa(ctes[binding.resultCTE].stage)
+		wantInput := `FROM "` + ctes[binding.inputCTE].name + `" AS `
+		wantAggregate := `"__os_eventstats_total_row_` + stage + `".` +
+			`"__os_eventstats_published_value_` + stage + `"`
+		wantPublication := wantAggregate + ` AS "` + binding.output + `"`
+		if !strings.Contains(body, wantInput) || strings.Count(body, wantPublication) != 1 {
+			t.Fatalf(
+				"stacked eventstats result CTE %q does not publish %q from its stage aggregate (input=%t publication=%d body bytes=%d)",
+				ctes[binding.resultCTE].name,
+				binding.output,
+				strings.Contains(body, wantInput),
+				strings.Count(body, wantPublication),
+				len(body),
+			)
+		}
+		for otherIndex, otherOutput := range authoredOutputs {
+			if otherIndex != index && strings.Contains(body, ` AS "`+otherOutput+`"`) {
+				t.Fatalf(
+					"stacked eventstats result CTE %q also authors output %q",
+					ctes[binding.resultCTE].name,
+					otherOutput,
+				)
+			}
+		}
+	}
+	for index, binding := range []struct {
+		inputCTE  int
+		resultCTE int
+		output    string
+	}{
+		{inputCTE: 5, resultCTE: 6, output: "stream_first"},
+		{inputCTE: 7, resultCTE: 8, output: "stream_last"},
+	} {
+		inputBody, inputOK := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[binding.inputCTE])
+		resultBody, resultOK := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[binding.resultCTE])
+		outputExpression, outputOK := knowledgeRuntimeAssignedCall(inputBody, binding.output, "if")
+		stage := strconv.Itoa(ctes[binding.inputCTE].stage)
+		wantWindow := `"__os_streamstats_window_` + stage + `".` +
+			`"__os_streamstats_value_` + stage + `"`
+		wantPassThrough := `SELECT * FROM "` + ctes[binding.inputCTE].name + `"`
+		if !inputOK || !resultOK || !outputOK ||
+			!strings.Contains(outputExpression, wantWindow) ||
+			strings.TrimSpace(resultBody) != wantPassThrough {
+			t.Fatalf(
+				"stacked streamstats CTE pair %q/%q does not publish %q from its stage window",
+				ctes[binding.inputCTE].name,
+				ctes[binding.resultCTE].name,
+				binding.output,
+			)
+		}
+		for otherIndex, otherOutput := range authoredOutputs[2:] {
+			if otherIndex != index && strings.Contains(inputBody, ` AS "`+otherOutput+`"`) {
+				t.Fatalf(
+					"stacked streamstats result input %q also authors output %q",
+					ctes[binding.inputCTE].name,
+					otherOutput,
+				)
+			}
+		}
+	}
+	for _, fragment := range []string{
+		`"__os_sort_time"`,
+		`"__os_sort_event_id"`,
+		`"__os_sort_visibility_seq"`,
+		`"__os_sort_source_identity"`,
+		clickhouse.UnsupportedStatsMeasureValueMarker,
+	} {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Fatalf("stacked chronological compiler SQL is missing %q", fragment)
+		}
+	}
+	for _, pattern := range []*regexp.Regexp{
+		regexp.MustCompile(`"event_id" AS "__os_order_[0-9]+_0"`),
+		regexp.MustCompile(`ORDER BY "__os_order_[0-9]+_0" ASC NULLS LAST`),
+	} {
+		if !pattern.MatchString(compiled.SQL) {
+			t.Fatalf("stacked chronological compiler SQL is missing %q", pattern)
+		}
+	}
+}
+
+func knowledgeRuntimeRequireProjectedCompilerCase(
+	t *testing.T,
+	compiled clickhouse.CompiledQuery,
+	program knowledgeprogram.Program,
+	tenantID string,
+	effectiveIndexes []string,
+	wantArgumentSuffix []any,
+	runtimeEmpty bool,
+) {
+	t.Helper()
+	if !slices.Equal(compiled.OutputFields, []string{"event_id"}) ||
+		len(compiled.ContainerOutputs) != 0 {
+		t.Fatalf(
+			"projected knowledge public outputs = %#v containers %#v, want event_id/no containers",
+			compiled.OutputFields,
+			compiled.ContainerOutputs,
+		)
+	}
+	validatedContainers, validContainers := compiled.ValidatedResultContainerOutputs()
+	if !validContainers || len(validatedContainers) != 0 {
+		t.Fatalf(
+			"projected knowledge validated containers = (%#v, %t), want empty/valid",
+			validatedContainers,
+			validContainers,
+		)
+	}
+	for _, generated := range []string{
+		"regex_value", "json_value", "calculated_value", "payload_copy", "numbers_copy",
+		"signed_copy", "unsigned_copy", "float_copy", "bytes_copy", "null_copy",
+		"empty_list_copy", "preserved_value", "replaced_value",
+	} {
+		if slices.Contains(compiled.OutputFields, generated) {
+			t.Fatalf("projected knowledge result retained generated field %q", generated)
+		}
+	}
+	knowledgeRuntimeRequirePublicCompilerEvidence(
+		t,
+		compiled,
+		program,
+		tenantID,
+		effectiveIndexes,
+		wantArgumentSuffix,
+	)
+	knowledgeRuntimeRequireGuardValidation(t, compiled)
+	wantCTEs := []string{
+		"knowledge guard input materialized",
+		"chronological final input ordinary",
+		"chronological validation ordinary",
+	}
+	ctes := knowledgeRuntimeRequireCompilerBarrierCTEs(t, compiled.SQL, wantCTEs)
+	if ctes[1].stage != ctes[2].stage {
+		t.Fatalf(
+			"projected knowledge final CTE stages %q/%q = %d/%d, want paired",
+			ctes[1].name,
+			ctes[2].name,
+			ctes[1].stage,
+			ctes[2].stage,
+		)
+	}
+	if got := strings.Count(compiled.SQL, "UNION ALL"); got != 1 {
+		t.Fatalf("projected knowledge validation unions = %d, want 1", got)
+	}
+
+	impossibleEquality := `CAST(? AS Bool) = CAST(? AS Bool)`
+	if !runtimeEmpty {
+		if strings.Contains(compiled.SQL, impossibleEquality) {
+			t.Fatal("pruned knowledge consumer unexpectedly contains the impossible predicate")
+		}
+		return
+	}
+	if strings.Count(compiled.SQL, impossibleEquality) != 1 ||
+		strings.LastIndex(compiled.SQL, "UNION ALL") < strings.LastIndex(compiled.SQL, impossibleEquality) {
+		t.Fatal("runtime-empty consumer can prune knowledge validation")
 	}
 }
 

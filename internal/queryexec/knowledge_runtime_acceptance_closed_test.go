@@ -22,9 +22,10 @@ func TestKnowledgeRuntimeCompilerMatrixStopsOnlyAtDefaultSeal(t *testing.T) {
 	indexTime := base.Add(10 * time.Minute)
 	earliest := base
 	latest := base.Add(2 * time.Minute)
+	program := knowledgeRuntimeProgram(t)
 	plans := buildKnowledgeRuntimeMatrixPlans(
 		t,
-		knowledgeRuntimeProgram(t),
+		program,
 		tenantID,
 		indexName,
 		selectorIndexName,
@@ -35,53 +36,43 @@ func TestKnowledgeRuntimeCompilerMatrixStopsOnlyAtDefaultSeal(t *testing.T) {
 	)
 	compiler := clickhouse.Compiler{}
 
-	tests := []struct {
+	type compilerSealTest struct {
 		name string
 		run  func() (bool, error)
-	}{
-		{name: "ordinary", run: func() (bool, error) {
-			compiled, err := compiler.Compile(plans.ordinary)
+	}
+	tests := make([]compilerSealTest, 0, 13)
+	descriptors := knowledgeRuntimePublicCompilerCases(t, plans, program, tenantID, indexName)
+	knowledgeRuntimeRequirePublicCompilerCaseNames(t, descriptors)
+	for _, descriptor := range descriptors {
+		descriptor := descriptor
+		tests = append(tests, compilerSealTest{name: descriptor.name, run: func() (bool, error) {
+			compiled, err := compiler.Compile(descriptor.logical)
 			return !reflect.DeepEqual(compiled, clickhouse.CompiledQuery{}), err
-		}},
-		{name: "selector controls", run: func() (bool, error) {
-			compiled, err := compiler.Compile(plans.controls)
-			return !reflect.DeepEqual(compiled, clickhouse.CompiledQuery{}), err
-		}},
-		{name: "chart", run: func() (bool, error) {
-			compiled, err := compiler.Compile(plans.chart)
-			return !reflect.DeepEqual(compiled, clickhouse.CompiledQuery{}), err
-		}},
-		{name: "timechart", run: func() (bool, error) {
-			compiled, err := compiler.Compile(plans.timechart)
-			return !reflect.DeepEqual(compiled, clickhouse.CompiledQuery{}), err
-		}},
-		{name: "stats", run: func() (bool, error) {
-			compiled, err := compiler.Compile(plans.stats)
-			return !reflect.DeepEqual(compiled, clickhouse.CompiledQuery{}), err
-		}},
-		{name: "alias event overflow", run: func() (bool, error) {
-			compiled, err := compiler.Compile(plans.overflow)
-			return !reflect.DeepEqual(compiled, clickhouse.CompiledQuery{}), err
-		}},
-		{name: "timeline", run: func() (bool, error) {
+		}})
+	}
+	tests = append(tests,
+		compilerSealTest{name: "timeline", run: func() (bool, error) {
 			compiled, err := compiler.CompileTimeline(plans.timeline, plans.timelineSpec)
 			return !reflect.DeepEqual(compiled, clickhouse.CompiledTimeline{}), err
 		}},
-		{name: "field catalog", run: func() (bool, error) {
+		compilerSealTest{name: "field catalog", run: func() (bool, error) {
 			compiled, err := compiler.CompileFieldCatalog(plans.analysis, plans.catalogSpec)
 			return !reflect.DeepEqual(compiled, clickhouse.CompiledFieldCatalog{}), err
 		}},
-		{name: "field summary", run: func() (bool, error) {
+		compilerSealTest{name: "field summary", run: func() (bool, error) {
 			compiled, err := compiler.CompileFieldSummary(plans.analysis, plans.summarySpec)
 			return !reflect.DeepEqual(compiled, clickhouse.CompiledFieldSummary{}), err
 		}},
-		{name: "field suggestions", run: func() (bool, error) {
+		compilerSealTest{name: "field suggestions", run: func() (bool, error) {
 			compiled, err := compiler.CompileFieldSuggestions(
 				plans.analysis,
 				plans.suggestionSpec,
 			)
 			return !reflect.DeepEqual(compiled, clickhouse.CompiledFieldSuggestions{}), err
 		}},
+	)
+	if len(tests) != 13 {
+		t.Fatalf("default compiler matrix cases = %d, want 13", len(tests))
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
