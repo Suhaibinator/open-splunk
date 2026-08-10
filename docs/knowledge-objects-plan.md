@@ -1357,6 +1357,39 @@ invoked, and it issues no knowledge API request. Development bundlers may
 prefetch an emitted chunk independently; that is not importer invocation or
 production feature exposure.
 
+The live administrator Mutation Audit is a separate historical-read surface
+gated by the existing `SERVER_FEATURE_AUDIT_SEARCH`, not by
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS`. Before revision `7b6e825`, the wire
+and server already exposed 24 successful actions, five target kinds, six
+Knowledge actions, and optional Knowledge app/object-type/sharing metadata.
+The frontend now consumes that existing contract without making a Knowledge
+API request or opening Knowledge Manager.
+
+One closed action specification supplies each option label, exact target kind,
+and action-specific version policy. Response adaptation validates runtime
+primitive types, sequence `1..100000`, target version through MaxInt64, exact
+action/target and actor-role/action correlations, canonical bounded actor,
+target, and Knowledge app identities, and the closed Knowledge metadata triple.
+Knowledge targets require app plus extraction/alias/calculated type plus
+private/app/global sharing; legacy targets require all three fields absent.
+Accepted events are reconstructed from an allowlist with a cloned timestamp,
+so response extras and later caller mutation cannot enter display state.
+
+Page adaptation bounds the raw row count before per-row work, requires exact
+totals no greater than 100,000, validates the 200-row page and 2 KiB opaque-
+cursor contracts, and preserves descending sequence. Continuation retains the
+first exact total and rejects repeated or out-of-order sequences, impossible
+cumulative counts, terminal underfill, nonterminal exhaustion, repeated
+cursors, and non-adjacent cursor cycles. Next-token validation precedes every
+retained sequence or item mutation, keeping a rejected page atomic.
+
+The Activity filter derives all action and target labels in enum order while
+leaving action and target predicates intentionally independent. A Knowledge
+row displays only escaped target identity and safe app, closed type, and closed
+sharing labels; a legacy row has no Knowledge metadata. It adds no selector,
+definition body, expression, graph, navigation, link, or mutation control and
+does not write URL or browser storage state.
+
 ### Knowledge Manager
 
 Continue the app-aware Knowledge Manager with:
@@ -1870,6 +1903,38 @@ generated-protobuf Playwright scenario pass. Docker was **NOT RUN** and remains
 paused/canceled; the protected pre-existing untracked ClickHouse probe remained
 excluded and untouched without opening or hashing it. This browser readiness
 evidence does not supply a ClickHouse result or open a shipping feature.
+
+The related-inspection documentation checkpoint is
+`c54392ddfdc5a09e0f241b80b30c1ac9588a78d8`, exactly 145 post-`c5440b9`
+commits. The distinct live Mutation Audit compatibility repair is
+`7b6e825807aaf50250b97cff642e461c57308da7`, exactly 146. That implementation
+changes only `app/activity/backend-audit-data.ts`,
+`app/activity/backend-audit-views.tsx`,
+`app/activity/backend-audit-data.test.ts`, and
+`integration/browser_vertical.spec.ts`. It changes no Go or backend code,
+protobuf schema or generated output, route or bearer policy, capability,
+Resolver, compiler/finalizer gate, mutation authority, or execution behavior.
+
+Unit and source evidence cover all 24 action/target/version policies, every
+wrong target and version boundary, valid and invalid actor authority, maximum
+identities and integers, exact Knowledge-triple/legacy-absence behavior,
+detachment, page-level nondisclosure, pre-adaptation row bounds, exact total and
+cursor relations, and atomic continuation commit ordering. Static rendering
+proves hostile target/app text is escaped and the safe Knowledge metadata has
+no link or mutation control. The generated-protobuf Activity scenario omits
+the Knowledge feature while advertising audit search, returns mixed Knowledge
+and legacy rows, decodes the exact List tuple, and observes only audit List
+traffic after activation with no Knowledge API, mutation, URL, or storage side
+effect.
+
+At `7b6e825`, `npm run test:frontend` passes 66 build/tool plus 211 frontend
+tests. Typecheck, strict no-warning lint, `git diff --check`, and focused
+Playwright 1/1 pass. The simplify/efficiency and final independent review are
+CLEAN. Docker was **NOT RUN** and remains paused/canceled, and the protected
+pre-existing probe remained excluded and untouched without opening or hashing
+it. The next runtime action remains the complete digest-pinned ClickHouse
+matrix; historical audit rendering is not Knowledge capability or engine
+acceptance.
 
 The KO-1C compiler now also preserves complete execution authority when an
 ordinary sealed query is projected into timeline, field-catalog,

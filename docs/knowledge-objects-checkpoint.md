@@ -2,35 +2,45 @@
 
 **Goal status:** active
 
-**Current milestone:** KO-1 dormant related-object inspection complete
-(Docker paused; production gates closed)
+**Current milestone:** live Mutation Audit knowledge-history compatibility
+repaired (Docker paused; Knowledge production gates closed)
 
 **Last completed slice:** revision
-`8f7fd018ddc7d6f2e76dbb26072784be5c63920e` adds an explicitly requested,
-read-only inspector for each visible dependency and dependent edge. It sends no
-automatic related-object Get: an Inspect activation validates and requests only
-that edge's exact disclosed object ID and version through the existing detail
-loader. Each direction owns at most one inspector and one dedicated request
-controller, so at most two inspectors can exist. Same-edge activation closes
-without I/O; replacement aborts and clears the prior direction; Retry repeats
-the exact stored request and synchronously returns focus to its row trigger.
-Controller-reference identity plus the abort signal rejects every late
-completion.
+`7b6e825807aaf50250b97cff642e461c57308da7` repairs the live, read-only
+Mutation Audit consumer for the knowledge taxonomy already present in the
+protobuf and server. Before this frontend slice, that contract already had all
+24 successful mutation actions, all five target kinds, the six
+knowledge-object actions, and the optional knowledge app/type/sharing metadata.
+No Go, protobuf, generated artifact, route, capability, or backend behavior
+changes here.
 
-Relationship continuation, including a stale continuation, may retain the
-already disclosed inspector. A fresh relationship first page or Reload clears
-only that direction; root-detail replacement, client replacement, parent close,
-and unmount abort and clear both directions. The compact projection renders
-only adapted identity, name, description, and ordinary metadata. It renders no
-raw selector or authored body, nested graph, navigation or mutation control,
-and writes no URL or storage state. Missing, failed, or mismatched results share
-one non-disclosing unavailable message. Direction-, ID-, and version-specific
-labels, unique regions, busy/live state, retry focus continuity, 42-pixel mobile
-row controls, and a two-to-one-column metadata breakpoint are pinned. Memoized
-relationship lists isolate up to 8,192 rows from inspector completion and Retry
-renders.
+One canonical frontend action map now owns label, exact target kind, and
+action-specific version policy for every action. The closed adapter validates
+sequence and version bounds, exact action-to-target pairing, actor kind/role/
+action authority, canonical bounded actor/target/app identities, the complete
+closed object-type/sharing-scope triple for knowledge targets, and exact
+metadata absence for every legacy target. It reconstructs a fresh allowlisted
+event and cloned occurrence time. Raw page length is bounded before per-row
+adaptation; exact totals, page size, descending sequence, canonical bounded
+opaque cursors, stable continuation totals, cumulative counts, and cross-page
+sequence/order/cursor uniqueness all fail closed. A continuation validates and
+records its next token before mutating any retained sequence or row state, so a
+non-adjacent cursor cycle cannot partially commit.
 
-The preceding revision `922e6ee` completes the source definition of the
+The Activity filter now exposes all 24 actions and five targets in canonical
+enum order while intentionally keeping independent action and target filters
+independent. Knowledge rows render escaped target identity plus safe app,
+closed type, and closed sharing labels only; legacy rows retain no knowledge
+metadata. Historical visibility depends on the existing `AUDIT_SEARCH`
+feature, not the hard-false Knowledge feature. A generated-protobuf browser
+oracle bootstraps only audit search, returns mixed hostile Knowledge and legacy
+rows, observes only the exact audit List request after tab activation, and
+proves no Knowledge API, mutation, URL, storage, script, image, link, or control
+side effect.
+
+The preceding related-object implementation `8f7fd01` and documentation
+checkpoint `c54392d` remain separately durable historical milestones. Revision
+`922e6ee` completes the source definition of the
 digest-pinned runtime executor matrix; it is not an engine result. The
 ClickHouse `26.3.17.4` matrix remains paused and was **NOT RUN**. The earlier
 browser revision `4717c24` pins the root detail and graph reads to the immutable
@@ -40,7 +50,7 @@ Resolver attachment, or nonempty compiler/snapshot gate opens. The nine
 management routes remain their unchanged configuration-dependent all-or-none
 unit.
 
-**Evidence date:** August 9, 2026
+**Evidence date:** August 10, 2026
 
 ## Durable checkpoint
 
@@ -92,9 +102,13 @@ unit.
   `86446423b2999df83373e9ba42a4bab565e429bc`
 - Dormant related-object inspector revision:
   `8f7fd018ddc7d6f2e76dbb26072784be5c63920e`
+- Related-object inspector documentation revision:
+  `c54392ddfdc5a09e0f241b80b30c1ac9588a78d8`
+- Live Mutation Audit knowledge-history revision:
+  `7b6e825807aaf50250b97cff642e461c57308da7`
 - Branch: `codex/knowledge-objects-runtime`
-- Publication state before this document: 144 intentional post-`c5440b9` KO
-  commits through `8f7fd01` are durable locally. This update is prepared as a
+- Publication state before this document: 146 intentional post-`c5440b9` KO
+  commits through `7b6e825` are durable locally. This update is prepared as a
   separate documentation change. `origin/main` remains `c5440b9`; the local
   remote-tracking feature branch ends at `7503246`, so all later work remains
   local. No further push was attempted without explicit destination approval.
@@ -499,6 +513,8 @@ Later local commits anchoring the reconciled current state include:
 | `922e6ee` | `test(knowledge): complete runtime executor matrix` | Added Docker executor rows and exact result/source assertions for the existing stacked chronology, pruned consumer, and runtime-empty cases; completed matrix definition without running Docker or changing production behavior |
 | `8644642` | `docs(knowledge): checkpoint exact detail matrix` | Reconciled the exact-version detail/graph browser evidence and complete source-defined runtime matrix while preserving the paused Docker and closed-production boundaries at the 143-commit checkpoint |
 | `8f7fd01` | `feat(admin): inspect related knowledge objects` | Added explicit exact-edge related-object inspection with one independently abortable inspector per direction, safe compact rendering, deterministic lifecycle/focus/privacy/browser proof, and no backend, protobuf, route, bearer, capability, mutation, or production-exposure change |
+| `c54392d` | `docs(knowledge): checkpoint related inspection` | Reconciled the dormant per-direction inspector, exact lifecycle and browser evidence, preserved production closure, paused Docker truth, and the 145-commit documentation checkpoint |
+| `7b6e825` | `fix(activity): render knowledge audit history` | Repaired the live Mutation Audit frontend for the existing six-action Knowledge taxonomy, closed metadata and page adaptation, safe mixed historical rendering, feature-independent browser evidence, and no backend, protobuf, generated, route, capability, or production-knowledge activation change |
 
 The separate pre-existing dependency commit `fdcc17e` is also present in the
 published `main` history. Unrelated commits between KO checkpoints are excluded
@@ -1266,7 +1282,7 @@ Historical exact-detail and completed runtime-matrix-definition evidence at
 | Local durability | pass | At this historical gate, terminal revision `922e6eee2b2ec5c554d876a1a08568fbca3d096c` was locally durable on `codex/knowledge-objects-runtime`, and `git rev-list --count c5440b9..922e6ee` was exactly 142 |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
-Current dormant related-object inspector evidence at `8f7fd01`:
+Historical dormant related-object inspector evidence at `8f7fd01`:
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
@@ -1283,6 +1299,23 @@ Current dormant related-object inspector evidence at `8f7fd01`:
 | Docker and protected workspace state | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked. The digest-pinned runtime matrix remains pending. The pre-existing untracked `internal/clickhouse/knowledge_alias_container_integration_test.go` probe remained excluded and untouched without opening or hashing it |
 | Production activation | closed | No backend, protobuf, generated, route, capability, bearer, Resolver, compiler/finalizer, or production mutation path changed. No shipping knowledge object affects a search result |
 | Local durability | pass | Terminal revision `8f7fd018ddc7d6f2e76dbb26072784be5c63920e` is locally durable on `codex/knowledge-objects-runtime`; the count after `c5440b9` is exactly 144 |
+| Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
+
+Current live Mutation Audit knowledge-history evidence at `7b6e825`:
+
+| Gate | Result | Evidence |
+| --- | --- | --- |
+| Exact revision and history | pass | Related-object inspection remains at `8f7fd018ddc7d6f2e76dbb26072784be5c63920e`, count 144. Its documentation checkpoint is `c54392ddfdc5a09e0f241b80b30c1ac9588a78d8`, count 145. The current implementation revision is `7b6e825807aaf50250b97cff642e461c57308da7`; `git rev-list --count c5440b9..7b6e825` is exactly 146 |
+| Existing wire/server taxonomy | unchanged and now fully consumed | Before `7b6e825`, `audit.proto`, the generated clients, and the server already defined 24 ordered actions, five target kinds, the six Knowledge actions, and optional `app_id`, `object_type`, and `sharing_scope`. This slice changes none of them and adds no route or backend semantics |
+| Closed event adapter | pass | One action-spec map owns label, exact target kind, and version policy. Runtime validation pins bigint sequence `1..100000`, bigint target version through MaxInt64, exact action-specific version rules, action-to-target correlation, `system/system` or valid browser role, browser-user saved-search-only authority, valid `Date`, and canonical actor ID at 255 bytes, target ID at 128 bytes, and Knowledge app ID at 128 bytes. Canonical text is nonempty, well-formed UTF-8, Go-`TrimSpace` stable, and free of Unicode controls |
+| Knowledge triple and legacy compatibility | pass | `KNOWLEDGE_OBJECT` requires a complete app/type/scope triple. Type is exactly extraction, alias, or calculated field; sharing is exactly private, app, or global. Every legacy target requires all three fields to be literally absent. The adapter rebuilds a fresh allowlisted event with a cloned date and drops unknown response properties; one malformed row rejects the complete page with generic non-disclosing text |
+| Exact page and atomic continuation | pass | Page size is `1..200`; raw item count is checked before row adaptation; mutation and search-attempt totals are exact bigint values no greater than 100,000. The adapter checks descending sequences, a canonical opaque token no larger than 2 KiB, full-page token issuance, first-page and total relationships, and immediate-token mismatch. The traversal retains the first exact total, rejects changed totals, duplicate or out-of-order sequences, impossible cumulative counts, terminal underfill, and nonterminal exhaustion. It validates/records the next token before committing sequences or rows, so an `A → B → A` cursor cycle cannot partially append |
+| Filter and safe row projection | pass | The Activity filter derives all 24 action options and all five target options in enum order. Action and target filters remain intentionally independent server predicates. Knowledge rows render only escaped target ID, target label, app ID, closed type label, and closed sharing label. Legacy rows render no Knowledge detail. No selector, definition body, expression, nested graph, link, navigation, or mutation control is introduced |
+| Feature-independent mixed-history browser proof | pass without Docker | The focused generated-protobuf Playwright scenario advertises `SERVER_FEATURE_AUDIT_SEARCH` while omitting `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS`, then returns one hostile Knowledge row and one legacy saved-search row from `/api/v1/audit/events/list`. It proves the live journal and six Knowledge action options remain visible, text is escaped, legacy metadata stays absent, every decoded List tuple is exact, and post-tab API traffic is List-only. There are zero Knowledge API calls, mutation requests/controls, executable script/image nodes, URL changes, or local/session-storage changes |
+| Frontend and review gates | pass | `npm run test:frontend` passes 66 build/tool plus 211 frontend tests. `npm run typecheck`, strict `npm run lint -- --deny-warnings`, `git diff --check`, and the focused Playwright scenario pass; Playwright reports 1/1. Dedicated simplify/efficiency review and the final independent correctness review are CLEAN after the raw-length and continuation-commit-order hardening |
+| Scope and production activation | closed | `7b6e825` changes only `app/activity/backend-audit-data.ts`, `app/activity/backend-audit-views.tsx`, `app/activity/backend-audit-data.test.ts`, and `integration/browser_vertical.spec.ts`. There is no Go, protobuf/generated, backend, route, browser-bearer, capability, Resolver, compiler/finalizer, Knowledge mutation, or execution change. Historical audit visibility does not activate Knowledge Manager or make any Knowledge object affect a search result |
+| Docker and protected workspace state | **NOT RUN; paused/canceled** | No Docker command or ClickHouse container was invoked. The complete digest-pinned runtime matrix remains the next runtime step. The pre-existing untracked `internal/clickhouse/knowledge_alias_container_integration_test.go` probe remained excluded and untouched without opening or hashing it |
+| Local durability | pass | Terminal revision `7b6e825807aaf50250b97cff642e461c57308da7` is locally durable on `codex/knowledge-objects-runtime`; the count after `c5440b9` is exactly 146 |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 Current candidate-validation and dormant Preview request-boundary evidence:
@@ -1304,7 +1337,7 @@ Current candidate-validation and dormant Preview request-boundary evidence:
 | Validation result bounds and privacy | service and route pass | descriptor/comment, Go/TypeScript wire, catalog-service, codec, handler, and HTTP tests pin presence-sensitive create/update mode, MaxInt64, explicit intent, no create-ID reservation, fresh-ID alpha-invariance with later Create revalidation, advisory valid/no-op/hypothetical-inactive semantics, knowledge-ledger-only revision correlation, singleton intrinsic charges including fields 12/13/14, full-transition candidate dependencies, exact count/text/8 MiB ceilings, error-first deterministic diagnostics, Unicode source coordinates, recursive unknown-output rejection, and nondisclosure rules |
 | Runtime activation | Validate route plus dormant Preview request boundary only | Validate is the ninth registered administrator route and is capability-unadvertised. Preview has only an internal request codec and envelope validator: it has no response codec, handler, service, retained-execution acquisition or caller-auth integration, route, manifest/bearer entry, capability, browser UI/navigation, Resolver attachment, or execution path. Service work remains blocked on owner-scoped retained-execution reacquisition, fixed-catalog ACTIVE evaluation and program application, row-limit default/bound/execution policy, paired schema-row/truncation and response resource semantics, plus the closed production nonempty compiler, snapshot-finalization, and digest-pinned ClickHouse gates. The compiler-only and dual-tag snapshot lifecycle bridges open none of those service or production boundaries. Validate remains outside the browser bearer allowlist and generic outer administrator map |
 | Docker-backed acceptance | **NOT RUN; prior cancellation and current pause preserved** | Preview request work and both acceptance bridges execute no ClickHouse query. The three formerly compile-only cases now have executor rows at `922e6ee`, but no Docker command was invoked, so they have no engine result. The previously canceled digest-pinned matrix remains paused, and no ClickHouse runtime claim is made |
-| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints through signed fixtures `14c6944`, request-authority hardening `74df953`, compiler and snapshot staging through `9f8c8ac`, signed retained-analysis fixture repair `81c6412`, dormant frontend filters and docs through `d1d8e9c`, exact-detail hardening `4717c24`, the complete executor-matrix definition `922e6ee`, exact-detail documentation `8644642`, and related-object inspection `8f7fd01` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..8f7fd01` is exactly 144 and the terminal revision is `8f7fd018ddc7d6f2e76dbb26072784be5c63920e` |
+| Local durability | pass | validation work through route checkpoint `eec63ee`, historical waiver clarification `d2a57cd`, bounded Preview transport `2db17c3`, structural envelope validation `ca9c2aa`, documentation checkpoints through signed fixtures `14c6944`, request-authority hardening `74df953`, compiler and snapshot staging through `9f8c8ac`, signed retained-analysis fixture repair `81c6412`, dormant frontend filters and docs through `d1d8e9c`, exact-detail hardening `4717c24`, the complete executor-matrix definition `922e6ee`, exact-detail documentation `8644642`, related-object inspection and docs through `c54392d`, and the live Mutation Audit compatibility repair `7b6e825` are separately durable on `codex/knowledge-objects-runtime`; `git rev-list --count c5440b9..7b6e825` is exactly 146 and the terminal revision is `7b6e825807aaf50250b97cff642e461c57308da7` |
 | Remote durability | pending | `origin/main` remains `c5440b9` and the remote feature branch remains `7503246`; no push was attempted without explicit destination approval |
 
 The exact KO-0E final retained-log race command was:
@@ -1413,7 +1446,10 @@ The `c22df67` advanced-filter, `4717c24` exact-detail/graph, and `8f7fd01`
 explicit related-object inspector Playwright evidence form one mocked hidden
 browser/control vertical. They prove the frontend contract and negative
 production feature boundary, not a real server or ClickHouse activation
-vertical. The next
+vertical. The separate `7b6e825` Activity proof shows that the already-live
+Mutation Audit journal can safely render the existing historical Knowledge
+taxonomy while the Knowledge capability is absent; it neither joins that
+hidden control vertical nor opens a Knowledge API or execution path. The next
 dependency-ordered slices are:
 
 1. run the now-complete thirteen-surface and executor-row matrix against the

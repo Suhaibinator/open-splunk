@@ -797,6 +797,42 @@ protected pre-existing untracked ClickHouse probe remained excluded and
 untouched without opening or hashing it. These are browser-consumer oracles,
 not new protobuf or runtime acceptance.
 
+The related-inspection documentation checkpoint is
+`c54392ddfdc5a09e0f241b80b30c1ac9588a78d8`, exactly 145 post-`c5440b9`
+commits. The following live Mutation Audit compatibility repair is
+`7b6e825807aaf50250b97cff642e461c57308da7`, exactly 146. It modifies only the
+two Activity audit frontend files, their existing frontend test, and the
+focused browser spec. In particular, it does not change `audit.proto`,
+`audit_api.proto`, generated Go or TypeScript, the Go store/server projection,
+the audit route, browser bearer policy, either feature enum, or any Knowledge
+route or runtime gate.
+
+The closed frontend tests cover all 24 valid action/target/version tuples,
+every action with a wrong target, every invalid version boundary, valid
+system/system and browser-user/saved-search authority, adversarial runtime
+types and identity bounds, the required Knowledge metadata triple, literal
+legacy absence, response detachment, atomic page nondisclosure, and exact page,
+total, and cursor relationships. Source structure pins next-token validation
+before continuation row mutation. Static React rendering pins escaped hostile
+target/app text, exact type/scope labels, and absence of script, image, link, or
+mutation nodes.
+
+The generated-protobuf Playwright scenario supplies a bootstrap containing
+only `SERVER_FEATURE_AUDIT_SEARCH`, then returns one hostile Knowledge event
+and one metadata-free legacy saved-search event. It proves six Knowledge action
+options and the Knowledge target option are live without the Knowledge feature,
+the exact List request is the only post-activation API traffic, legacy and
+Knowledge projections remain distinct, and there is no Knowledge API,
+mutation, URL, storage, or executable-content side effect. Focused Playwright
+passes 1/1; the frontend suite passes 66 build/tool plus 211 frontend tests;
+typecheck, strict lint, and diff-check pass; simplify/efficiency and final
+independent review are CLEAN.
+
+Docker was **NOT RUN** and remains paused/canceled. The protected pre-existing
+probe remained excluded and untouched without opening or hashing it. These are
+consumer-compatibility oracles for an existing wire contract, not a schema,
+backend, capability, Knowledge execution, or ClickHouse acceptance change.
+
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.
 The snapshot is the exact durable result of the optimistic update and contains
@@ -872,15 +908,25 @@ projection.
 
 `POST /api/v1/audit/events/list` is administrator-only. Tenant and owner scope
 come from the authenticated browser principal and cannot be supplied on the
-wire. The first contract contains successful ingestion-token, index, app, and
-saved-search mutations. Actor kind, actor role, action, and target kind are
-fixed enums; the projection contains no arbitrary payload, saved-search
-definition, or credential material. Administrative token, index, and app
-mutations require a system or browser-administrator actor. Saved-search
-mutations also accept an authenticated browser-user actor; the current trusted
-single-user saved-search routes record the system actor when no browser
-principal is present. App deletion reports the final archived app version
-rather than a fictitious post-delete generation.
+wire. The original legacy contract covered successful ingestion-token, index,
+app, and saved-search mutations. Before frontend revision `7b6e825`, the
+existing protobuf and server had already extended that append-only taxonomy to
+24 ordered actions and five targets: the six Knowledge actions are create,
+update, scope change, enable, disable, and delete, all correlated exactly with
+the `KNOWLEDGE_OBJECT` target. A Knowledge event may additionally carry
+`app_id`, the closed extraction/alias/calculated `object_type`, and the closed
+private/app/global `sharing_scope`; those optional fields remain absent for
+legacy records.
+
+Actor kind, actor role, action, and target kind are fixed enums; the projection
+contains no arbitrary payload, definition, selector, expression, or credential
+material. System actors require the system role. Browser administrators may
+perform every supported action, while a browser user is restricted to saved-
+search actions. Creates and saved-search duplicate use version one; ordinary
+updates and state changes use version two or later, index delete-data uses
+version three or later, and saved-search delete accepts version one or later.
+Every target version is at most MaxInt64. App deletion reports the final
+archived app version rather than a fictitious post-delete generation.
 
 Pages are ordered by descending tenant-local sequence and capped at 200 rows.
 The opaque HMAC-authenticated cursor binds tenant, exact normalized filters,
@@ -890,6 +936,26 @@ cursor from a database state newer than a restored snapshot fails instead of
 silently traversing the wrong prefix. See
 [Audit events v0.1](audit-events-v0.1.md) for storage, atomicity, capacity,
 redaction, and frontend requirements.
+
+The browser adapter treats this decoded protobuf as untrusted runtime input.
+It validates the complete action/target/version and actor correlations,
+canonical bounded identities, and exact Knowledge-triple-versus-legacy-
+absence rule before reconstructing a fresh closed event. It checks raw page
+length before adapting rows, requires exact totals no greater than 100,000,
+and accepts only canonical opaque tokens no larger than 2 KiB with the exact
+first-page, continuation, and total relationships. One traversal retains the
+first exact total, enforces descending unique sequence and cumulative-count
+relations, and validates a next token before committing any disclosed row. A
+malformed row, changed total, repeated sequence, or adjacent/non-adjacent
+cursor cycle rejects the page without partially rendering it.
+
+Mutation Audit historical visibility is gated by
+`SERVER_FEATURE_AUDIT_SEARCH`, not the Tier-1 Knowledge capability. The action
+and target filters remain independent exact server predicates, so an
+intentionally mismatched filter tuple is valid and may return zero rows. The
+current read-only target cell displays only escaped target identity and target
+label, plus app/type/sharing labels for a validated Knowledge event. It adds no
+Knowledge API call, selector/body disclosure, link, graph, or mutation control.
 
 ### Search-attempt audit
 

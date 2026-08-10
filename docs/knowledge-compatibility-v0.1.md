@@ -2,7 +2,7 @@
 
 **Status:** normative implementation contract; executable runtime corpus pending
 **Compatibility version:** `0.1`
-**Last updated:** August 9, 2026
+**Last updated:** August 10, 2026
 
 This contract defines the first Open Splunk search-time knowledge surface. It
 is intentionally narrower than Splunk Enterprise knowledge behavior. Anything
@@ -55,7 +55,12 @@ acquisition or caller-authorization integration, route or manifest/bearer
 entry, capability, navigation/UI request, Resolver attachment, or execution
 path. The production nonempty compiler, snapshot-finalization, and execution
 gates remain closed, so no knowledge object affects search results. An
-explicit runtime acceptance tag seals the shared thirteen-surface public
+independent live Activity surface now renders the existing successful Knowledge
+mutation taxonomy when `SERVER_FEATURE_AUDIT_SEARCH` is advertised, even while
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` is absent. That read-only historical
+visibility uses only the existing audit List route and does not expose
+Knowledge Manager, issue a Knowledge request, or activate a Knowledge runtime
+gate. The explicit runtime acceptance tag seals the shared thirteen-surface public
 Compiler matrix only while `testing.Testing()` is true, but cannot cross
 `Authority.Finalize` by itself. A second snapshot tag, conjoined with the
 runtime tag and its own `testing.Testing()` check, opens finalization only in
@@ -487,6 +492,34 @@ selected-app revision is optional in `0.1`; when unavailable its optional
 snapshot field remains absent and cache invalidation uses the mandatory tenant
 revision and state commitment. The tenant-wide app-catalog revision is not
 misrepresented as a selected-app revision.
+
+The general successful-mutation journal's existing append-only protobuf
+taxonomy contains 24 actions and five targets. Its Knowledge target uses six
+actions—create, update, scope change, enable, disable, and delete—and carries
+only app ID, the closed extraction/alias/calculated type, and the closed
+private/app/global sharing scope in addition to ordinary target identity and
+version. Legacy target records carry none of those three optional fields. This
+compact historical projection contains no selector, authored definition body,
+expression, dependency graph, event value, or generated execution material.
+
+The live Activity consumer treats every decoded event and page as untrusted.
+It requires the exact action-to-target and action-specific version rules,
+system/browser kind-role/action authority, sequence and MaxInt64 bounds,
+canonical bounded actor/target/app identities, a complete valid Knowledge
+metadata triple, and literal metadata absence for legacy targets. It rebuilds
+accepted rows from an allowlist and clones the timestamp. Pages are bounded
+before row adaptation, have an exact total no greater than 100,000, preserve
+descending unique sequence, and use canonical bounded opaque cursor text no
+larger than 2 KiB. Continuations retain the first total, enforce cumulative count and
+cross-page ordering, and validate the next cursor before mutating retained row
+state; any malformed row or cursor cycle rejects the whole page.
+
+Action and target filters remain independent exact server predicates. A valid
+Knowledge audit row renders only escaped target/app text and closed target,
+type, and sharing labels. A legacy row cannot acquire Knowledge metadata. This
+read-only display is gated by audit search rather than the Knowledge feature
+and adds no Knowledge call, navigation, link, graph, mutation control, URL
+state, or browser storage state.
 
 The same transaction rotates a 32-byte catalog-state commitment stored beside
 the numeric tenant revision. An exact backup and restore preserves the
@@ -1783,3 +1816,41 @@ Docker was **NOT RUN** and remains explicitly paused/canceled. The protected
 pre-existing untracked ClickHouse probe remained excluded and untouched without
 opening or hashing it. This inspector evidence is not engine or compatibility
 acceptance and does not alter the pending digest-pinned runtime requirement.
+
+The related-inspection documentation checkpoint is
+`c54392ddfdc5a09e0f241b80b30c1ac9588a78d8`, exactly 145 post-`c5440b9`
+commits. The distinct live Mutation Audit compatibility repair is
+`7b6e825807aaf50250b97cff642e461c57308da7`, exactly 146. Its production and
+test edits are confined to the two Activity audit frontend files, their
+existing test, and the focused browser vertical. The six Knowledge actions,
+five target kinds, optional metadata fields, generated messages, store/server
+validation, and List route all predate this repair and are unchanged.
+
+Unit coverage accepts all 24 canonical action/target/version tuples and valid
+system and browser-user authority, then adversarially rejects every wrong
+target, invalid version boundary, forged primitive, oversized or noncanonical
+identity, incomplete or unknown Knowledge triple, legacy metadata presence,
+oversized/raw-invalid page, inexact or impossible total, and invalid cursor
+relationship. It proves detached allowlisted rows, atomic whole-page
+nondisclosure, the 100,000-record boundary for both audit journals, and source-
+ordered cursor validation before continuation commit. Static React evidence
+pins escaped hostile target and app text, exact type/scope labels, and no link,
+script, image, input, or mutation control.
+
+The focused generated-protobuf browser bootstrap advertises audit search but
+omits the Knowledge feature. One response mixes a hostile Knowledge scope-
+change event with a metadata-free legacy saved-search event. The browser shows
+the six Knowledge action options and Knowledge target, renders both rows
+safely, decodes only the exact audit List tuple after tab activation, and emits
+no Knowledge API or mutation traffic. URL and local/session storage remain
+unchanged and hostile text creates no executable node. Playwright passes 1/1;
+the full frontend gate passes 66 build/tool plus 211 frontend tests; typecheck,
+strict lint, and diff-check pass; simplify/efficiency and final independent
+review are CLEAN.
+
+This is a live historical-read compatibility repair, not Tier-1 production
+activation. It changes no Go, backend, protobuf/generated artifact, route,
+bearer policy, capability, Resolver, compiler/finalizer, Knowledge mutation,
+or execution behavior. Docker was **NOT RUN** and remains paused/canceled; the
+protected probe remained excluded and untouched without opening or hashing it.
+The complete digest-pinned ClickHouse matrix remains the next runtime step.
