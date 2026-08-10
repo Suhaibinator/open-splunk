@@ -595,7 +595,31 @@ Invalid input or an ID/version mismatch becomes the uniform unavailable state
 and starts zero graph requests. After an exact Get it requests dependencies and
 dependents for that same ID/version independently, pages and labels each
 direction at its own catalog revision, and displays only each visible opposite
-endpoint's object ID, version, and `FIELD_INPUT` role.
+endpoint's object ID, version, and `FIELD_INPUT` role. Each direction also has
+one dormant compact related-object inspector. Relationship paint sends no
+endpoint Get; only explicit Inspect validates the visible edge and reuses the
+existing Get loader with that exact disclosed ID/version. Dependencies and
+dependents own independent exact-edge, originating-trigger, and
+`AbortController` state, for at most two simultaneous inspectors. Same-edge
+activation closes without I/O, replacement aborts the prior direction, Retry
+focuses the exact row and repeats its stored request, and a completion is
+accepted only while its signal and current-controller identity remain valid.
+Continuation, including stale continuation, may retain an already disclosed
+inspector. A fresh first page or Reload clears that direction; root or client
+replacement, parent close, and unmount abort and clear both directions.
+
+The inspector projects only adapted identity, bounded name/description, and
+ordinary type/state/sharing/app/owner/update metadata. It does not expose raw
+selectors, authored body or expression data, nested graphs, navigation,
+mutation controls, URL state, or browser storage. Missing, failed, and
+identity-mismatched results share one non-disclosing unavailable projection.
+Direction/ID/version labels, unique busy/live regions, focus continuity,
+mobile-sized row actions, responsive two-to-one-column metadata, and memoized
+relationship lists preserve accessibility and keep result/Retry transitions
+from remapping the 8,192-row bound. This is a consumer of the existing
+contracts, not a protobuf, generated, route, bearer, capability, backend, or Go
+contract change.
+
 Production nonempty compiler, snapshot-finalization, and execution gates remain
 closed, so no shipping knowledge execution is claimed. The acceptance bridges
 are deliberately outside the protobuf/runtime capability. Let A mean
@@ -738,6 +762,40 @@ paused/canceled, including for the source-complete matrix at `922e6ee`; the new
 assertions therefore have no engine result. The next runtime action is to run
 the paused digest-pinned ClickHouse `26.3.17.4` matrix, not add another executor
 row.
+
+The intervening exact-detail/runtime-matrix documentation checkpoint is
+`86446423b2999df83373e9ba42a4bab565e429bc`, exactly 143 post-`c5440b9`
+commits. Dormant related-object inspection lands at
+`8f7fd018ddc7d6f2e76dbb26072784be5c63920e`, exactly 144
+post-`c5440b9` commits. It changes only
+`app/admin/knowledge-manager-panel.tsx`,
+`app/admin/knowledge-manager-data.test.ts`, `app/globals.css`, and
+`integration/browser_vertical.spec.ts`; no backend, Go, schema, generated,
+route, bearer, capability, Resolver, production gate, or mutation contract
+changes.
+
+Static/unit tests pin the four inspector projections, escaped adapted fields,
+unique direction-labelled regions, exact direction/ID/version Inspect, Close,
+and Retry labels, conditional `aria-controls`, focus-visible and responsive CSS
+rules, and two-controller cleanup. Production-source audit pins the memoized
+relationship list and reuse of the adapter-owned edge on Retry, isolating
+result/Retry renders from up to 8,192 relationship rows.
+The deterministic generated-protobuf browser scenario separately decodes root
+and related Gets and proves zero automatic endpoint traffic; exact edge tuples
+and one request per Inspect/Retry; one inspector per direction and two maximum;
+uniform mismatch plus exact Retry; a held and settled replacement whose late
+completion cannot overwrite the newer edge; continuation/stale retention;
+direction-only fresh Reload clearing; same-edge toggle-close without I/O; and
+parent reset of both inspectors without another endpoint Get until explicit
+reinspection. It also proves Retry focus before loading and after resolution,
+escaped malicious data, unchanged URL and storage, zero mutation controls or
+requests, and desktop/mobile projections without arbitrary sleep. At this
+revision the frontend gates pass 66 build/tool plus 201 frontend tests,
+typecheck, strict no-warning lint, `git diff --check`, and the focused
+Playwright scenario. Docker was **NOT RUN** and remains paused/canceled; the
+protected pre-existing untracked ClickHouse probe remained excluded and
+untouched without opening or hashing it. These are browser-consumer oracles,
+not new protobuf or runtime acceptance.
 
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.

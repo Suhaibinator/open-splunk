@@ -1323,7 +1323,35 @@ version consumers for both direct dependencies and direct dependents. Each
 direction owns its request, continuation, exact visible total, stale/retry
 state, and displayed catalog revision independently, and each row shows only
 the visible opposite endpoint's object ID, version, and `FIELD_INPUT` label. It
-has no mutation controls. When the trusted bootstrap capability is absent,
+has no mutation controls.
+
+Revision `8f7fd01` adds a compact related-object inspector to each direction,
+still inside this dormant read-only boundary. Relationship paint sends no
+endpoint Get. Only an explicit native Inspect activation validates the visible
+edge and calls the existing detail loader with that edge's exact disclosed ID
+and version. Dependencies and dependents each own at most one inspector, exact
+edge identity, originating trigger, and dedicated `AbortController`, for a
+maximum of two simultaneous inspectors. Activating the same row closes it with
+no request; replacing it aborts and clears that direction; Retry focuses the
+same expanded row before repeating the exact stored request. A response may
+commit only while its signal is live and its controller remains the current
+reference, so late completion cannot replace a newer disclosure.
+
+A continuation, including one rejected as stale, may retain the already
+disclosed inspector. A fresh first page or Reload clears that direction, while
+root-detail or client replacement, parent close, and unmount abort and clear
+both sections. The compact view uses only adapted identity, bounded name and
+description, and ordinary type/state/sharing/app/owner/update metadata. It
+never exposes raw selectors, authored body or expression data, nested graphs,
+navigation, or mutation controls, and it writes neither URL nor browser
+storage. Missing, failed, and mismatched results share one non-disclosing
+unavailable message. Direction/ID/version labels, unique busy/live regions,
+focus continuity across Close and Retry, mobile 42-pixel row controls, and a
+two-to-one-column metadata layout preserve keyboard and responsive behavior.
+Memoized relationship lists keep inspector result and Retry transitions from
+remapping as many as 8,192 rows once the expanded edge is unchanged.
+
+When the trusted bootstrap capability is absent,
 Knowledge Manager is omitted from navigation, its feature-gate importer is not
 invoked, and it issues no knowledge API request. Development bundlers may
 prefetch an emitted chunk independently; that is not importer invocation or
@@ -1339,7 +1367,8 @@ Continue the app-aware Knowledge Manager with:
 - create, edit, duplicate, enable/disable, and delete actions;
 - definition validation with source-located errors;
 - selector builder for index, host, source, and sourcetype;
-- dependency and dependent-object views;
+- the completed direct dependency/dependent rows and explicit read-only
+  related-object inspection, followed by richer impact views;
 - permission and sharing controls;
 - lookup upload and bounded data preview;
 - “test against recent events” using an authorized search snapshot;
@@ -1802,6 +1831,45 @@ and dormant browser slices. The next runtime action is to run this complete
 paused digest-pinned matrix, not add another row. There is no green container
 result, engine-compatibility claim, opening of a production compiler or snapshot
 gate, Resolver attachment, capability advertisement, or browser gate.
+
+The exact-detail/runtime-matrix documentation checkpoint is
+`86446423b2999df83373e9ba42a4bab565e429bc`, exactly 143 post-`c5440b9`
+commits. The following dormant related-object inspector revision is
+`8f7fd018ddc7d6f2e76dbb26072784be5c63920e`, exactly 144
+post-`c5440b9` commits. It changes only the panel, its CSS, and the focused
+frontend/browser tests. It reuses the existing generated-protobuf Get path and
+changes no backend or Go code, protobuf schema or generated artifact, route,
+browser bearer policy, capability response, production feature logic, Resolver,
+compiler/finalizer gate, or mutation authority.
+
+Static/unit evidence freezes the closed/loading/available/unavailable
+projections, escaping, per-direction unique IDs and exact accessible labels,
+conditional `aria-controls`, uniform nondisclosure, mobile control sizing,
+two-to-one-column metadata, and cleanup of both relationship and inspector
+controllers. Production-source audit pins the memoized relationship list and
+reuse of the adapter-owned edge on Retry, isolating result/Retry renders from
+the 8,192-row list. The deterministic generated-protobuf Playwright vertical
+counts root-detail Gets separately from related endpoint Gets. It proves zero
+endpoint Get after graph paint; exact
+edge ID/version and one request per explicit Inspect or Retry; one inspector per
+direction and at most two simultaneously; a held, released, and settled A-to-B
+replacement whose late A cannot replace visible B; uniform mismatch and exact
+Retry; dependency continuation and stale dependent continuation retention;
+dependent-only clearing on fresh Reload while dependency remains; same-row
+toggle-close without I/O; and parent close/reopen clearing both without an
+endpoint Get until a new explicit activation. It also pins focus on the exact
+row during Retry loading and after resolution, escaped malicious content, an
+unchanged URL and local/session storage, responsive rendering, and zero
+mutation controls or requests. Deterministic barriers and request counters use
+no arbitrary sleep, and route cleanup awaits the intentionally aborted held
+request before the stale-result oracle.
+
+At `8f7fd01`, `npm run test:frontend` passes 66 build/tool plus 201 frontend
+tests; typecheck, strict no-warning lint, `git diff --check`, and the focused
+generated-protobuf Playwright scenario pass. Docker was **NOT RUN** and remains
+paused/canceled; the protected pre-existing untracked ClickHouse probe remained
+excluded and untouched without opening or hashing it. This browser readiness
+evidence does not supply a ClickHouse result or open a shipping feature.
 
 The KO-1C compiler now also preserves complete execution authority when an
 ordinary sealed query is projected into timeline, field-catalog,

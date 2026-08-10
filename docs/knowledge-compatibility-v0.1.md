@@ -30,7 +30,10 @@ attempt boundary owns its authentication, administrator authorization, and
 The dormant hidden detail view validates the immutable ID/version selected from
 List before I/O, sends both in Get, and accepts only an exact response identity
 before consuming either graph route. Invalid input or a response mismatch is
-uniformly unavailable and starts zero graph requests. Production bootstrap
+uniformly unavailable and starts zero graph requests. Its visible graph rows
+now offer explicit exact-edge related-object inspection, with zero automatic
+endpoint Get, at most one independently abortable inspector per direction, and
+only a compact adapted read-only projection. Production bootstrap
 still omits navigation, does not invoke the feature-gate importer, and issues no
 knowledge request. Development bundler prefetch of an emitted chunk is not
 importer invocation or production feature exposure. Production also constructs
@@ -1089,6 +1092,28 @@ and catalog-revision labels. A displayed edge contains only the currently
 visible opposite endpoint's object ID and version plus the fixed `Field input`
 role label; it does not recover an omitted endpoint or expose definition
 metadata.
+Each direction also owns one compact related-object inspector inside the same
+dormant read-only surface. Graph paint performs no endpoint Get. Only explicit
+Inspect validates the visible edge and calls the existing detail loader with
+that exact disclosed ID/version. Dependencies and dependents each retain one
+exact edge identity, originating row trigger, and dedicated `AbortController`,
+so the combined maximum is two inspectors. Same-edge activation closes without
+traffic; replacement aborts and clears that direction; Retry returns focus to
+the exact row and directly repeats its stored request. The abort signal and
+current controller-reference identity jointly reject late completion.
+
+Continuation, including a stale continuation, may retain an already disclosed
+inspector. A fresh first page or Reload clears only its direction; root-detail
+or client replacement, parent close, and unmount abort and clear both. The safe
+projection contains adapted identity, bounded name/description, and ordinary
+type/state/sharing/app/owner/update metadata only. It contains no raw selector,
+authored body or expression, nested graph, navigation, mutation control, URL
+state, or storage state. Missing, failed, and mismatched reads share a uniform
+non-disclosing unavailable result. Direction/ID/version labels, unique
+busy/live regions, focus continuity, mobile-sized row controls, responsive
+two-to-one-column metadata, and list memoization preserve accessibility and
+avoid remapping up to 8,192 rows during inspector result and Retry transitions.
+
 This consumer is readiness evidence only: while the capability is absent, the
 navigation entry is absent, the feature-gate importer is not invoked, and
 production bootstrap causes no knowledge request. Development bundler prefetch
@@ -1719,3 +1744,42 @@ defined engine result remains pending. The next runtime action is to run the
 paused digest-pinned matrix, not add rows. A cancellation, skipped container
 test, compiler-only success, or table-free SQL probe must be recorded as
 pending evidence rather than compatibility acceptance.
+
+The exact-detail/runtime-matrix documentation checkpoint is
+`86446423b2999df83373e9ba42a4bab565e429bc`, exactly 143 post-`c5440b9`
+commits. The following dormant related-object inspector revision is
+`8f7fd018ddc7d6f2e76dbb26072784be5c63920e`, exactly 144
+post-`c5440b9` commits. Its implementation and tests are confined to
+`app/admin/knowledge-manager-panel.tsx`,
+`app/admin/knowledge-manager-data.test.ts`, `app/globals.css`, and
+`integration/browser_vertical.spec.ts`. It changes no backend or Go code,
+protobuf schema or generated artifact, route, bearer allowlist, capability,
+Resolver attachment, compiler/finalizer gate, or mutation authority. The
+production feature remains hard-false and the injected advertised bootstrap is
+only a dormant read-only oracle.
+
+Static/unit proof covers closed, loading, available, and unavailable states;
+safe escaping and uniform nondisclosure; unique per-direction region IDs;
+direction/ID/version-specific Inspect, Close, and Retry labels; conditional
+`aria-controls`; focus-visible CSS; cleanup of both request controllers;
+and responsive mobile sizing and metadata columns. Production-source audit pins
+the memoized relationship list and reuse of the adapter-owned edge on Retry,
+isolating result/Retry renders from the 8,192-row bound.
+The deterministic generated-protobuf Playwright vertical decodes the root Get
+separately and observes zero automatic related Gets, then pins exact endpoint
+ID/version and exactly one request for each explicit Inspect or Retry. It proves
+one inspector per direction and two maximum, uniform mismatch/retry, a held and
+settled A-to-B replacement immune to late A completion, continuation/stale
+retention, direction-only fresh Reload clearing, toggle-close without traffic,
+and parent close/reopen clearing both without endpoint traffic until a new
+Inspect. It also proves focus continuity during and after Retry, escaped
+malicious content, unchanged URL and local/session storage, responsive layout,
+and zero mutation controls or requests without arbitrary sleeps. At `8f7fd01`,
+`npm run test:frontend` passes 66 build/tool plus 201 frontend tests; typecheck,
+strict no-warning lint, `git diff --check`, and the focused Playwright scenario
+pass.
+
+Docker was **NOT RUN** and remains explicitly paused/canceled. The protected
+pre-existing untracked ClickHouse probe remained excluded and untouched without
+opening or hashing it. This inspector evidence is not engine or compatibility
+acceptance and does not alter the pending digest-pinned runtime requirement.
