@@ -37,9 +37,12 @@ const (
 	// Retain a fixed per-query bound with enough allocator headroom to keep that
 	// platform-sensitive peak from making the acceptance matrix flaky.
 	knowledgeRuntimeMaxMemoryBytes = uint64(384 << 20)
-	// The dedicated process deadline is 3m30s, leaving thirty seconds for the
-	// independent cleanup context and Go test shutdown after a cold runner.
-	knowledgeRuntimeOverallTimeout = 3 * time.Minute
+	// Keep the suite below the dedicated 4m30s process deadline, leaving thirty
+	// seconds for the independent cleanup context and Go test shutdown. Each
+	// expensive subtest also receives its own wall-clock bound so one slow query
+	// cannot silently consume the complete suite budget before later coverage.
+	knowledgeRuntimeOverallTimeout = 4 * time.Minute
+	knowledgeRuntimeSubtestTimeout = time.Minute
 	// On the pinned server, a String read from the event table and converted to
 	// Dynamic contributes seventeen native framing bytes to byteSize. The exact
 	// overflow fixture subtracts that framing from its inserted String payload;
@@ -133,7 +136,7 @@ func TestKnowledgeRuntimeIntegrationProgramsAreCanonical(t *testing.T) {
 //
 //	OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test -v ./internal/queryexec \
 //	  -run '^TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse$' \
-//	  -count=1 -timeout=3m30s
+//	  -count=1 -timeout=4m30s
 func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	phaseStarted := time.Now()
 	logPhase := func(name string) {
@@ -323,10 +326,34 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		t:          t,
 	}
 
-	t.Run("compatibility v0.1 runtime edges", func(t *testing.T) {
+	runSubtest := func(name string, run func(*testing.T, context.Context)) {
+		t.Helper()
+		if err := overallContext.Err(); err != nil {
+			t.Fatalf("knowledge runtime overall deadline exceeded before %s: %v", name, err)
+		}
+		deadline, _ := overallContext.Deadline()
+		t.Logf(
+			"knowledge runtime subtest %s starting with %s overall budget remaining",
+			name,
+			time.Until(deadline).Round(time.Millisecond),
+		)
+		t.Run(name, func(t *testing.T) {
+			subtestContext, cancelSubtest := context.WithTimeout(
+				overallContext,
+				knowledgeRuntimeSubtestTimeout,
+			)
+			defer cancelSubtest()
+			run(t, subtestContext)
+		})
+		if err := overallContext.Err(); err != nil {
+			t.Fatalf("knowledge runtime overall deadline exceeded during %s: %v", name, err)
+		}
+	}
+
+	runSubtest("compatibility v0.1 runtime edges", func(t *testing.T, ctx context.Context) {
 		runKnowledgeCompatibilityRuntime(
 			t,
-			overallContext,
+			ctx,
 			connection,
 			executor,
 			tenantID,
@@ -334,72 +361,72 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		)
 	})
 
-	t.Run("ordinary authored suffix and container decoding", func(t *testing.T) {
+	runSubtest("ordinary authored suffix and container decoding", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(overallContext, matrix.ordinary, sink); err != nil {
+		if err := executor.Execute(ctx, matrix.ordinary, sink); err != nil {
 			t.Fatalf("execute ordinary knowledge query: %v", err)
 		}
 		knowledgeRuntimeAssertOrdinary(t, sink)
 	})
 
-	t.Run("selector dimensions independently reject controls", func(t *testing.T) {
+	runSubtest("selector dimensions independently reject controls", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(overallContext, matrix.controls, sink); err != nil {
+		if err := executor.Execute(ctx, matrix.controls, sink); err != nil {
 			t.Fatalf("execute knowledge selector controls: %v", err)
 		}
 		knowledgeRuntimeAssertSelectorControls(t, sink)
 	})
 
-	t.Run("chart", func(t *testing.T) {
+	runSubtest("chart", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(overallContext, matrix.chart, sink); err != nil {
+		if err := executor.Execute(ctx, matrix.chart, sink); err != nil {
 			t.Fatalf("execute knowledge chart: %v", err)
 		}
 		knowledgeRuntimeAssertChart(t, sink)
 	})
 
-	t.Run("timechart", func(t *testing.T) {
+	runSubtest("timechart", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(overallContext, matrix.timechart, sink); err != nil {
+		if err := executor.Execute(ctx, matrix.timechart, sink); err != nil {
 			t.Fatalf("execute knowledge timechart: %v", err)
 		}
 		knowledgeRuntimeAssertTimechart(t, sink, base)
 	})
 
-	t.Run("stats", func(t *testing.T) {
+	runSubtest("stats", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(overallContext, matrix.stats, sink); err != nil {
+		if err := executor.Execute(ctx, matrix.stats, sink); err != nil {
 			t.Fatalf("execute knowledge stats: %v", err)
 		}
 		knowledgeRuntimeAssertStats(t, sink)
 	})
 
-	t.Run("stacked chronological barriers", func(t *testing.T) {
+	runSubtest("stacked chronological barriers", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(overallContext, matrix.chronological, sink); err != nil {
+		if err := executor.Execute(ctx, matrix.chronological, sink); err != nil {
 			t.Fatalf("execute stacked chronological knowledge query: %v", err)
 		}
 		knowledgeRuntimeAssertChronological(t, sink, matrixFixtures)
 	})
 
-	t.Run("pruned consumer", func(t *testing.T) {
+	runSubtest("pruned consumer", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(overallContext, matrix.pruned, sink); err != nil {
+		if err := executor.Execute(ctx, matrix.pruned, sink); err != nil {
 			t.Fatalf("execute pruned knowledge consumer: %v", err)
 		}
 		knowledgeRuntimeAssertProjectedEventIDs(t, sink, matrixFixtures)
 	})
 
-	t.Run("runtime-empty consumer", func(t *testing.T) {
+	runSubtest("runtime-empty consumer", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		if err := executor.Execute(overallContext, matrix.runtimeEmpty, sink); err != nil {
+		if err := executor.Execute(ctx, matrix.runtimeEmpty, sink); err != nil {
 			t.Fatalf("execute runtime-empty knowledge consumer: %v", err)
 		}
 		knowledgeRuntimeAssertProjectedEventIDs(t, sink, nil)
 	})
 
-	t.Run("timeline", func(t *testing.T) {
-		buckets, err := executor.ExecuteTimeline(overallContext, matrix.timeline)
+	runSubtest("timeline", func(t *testing.T, ctx context.Context) {
+		buckets, err := executor.ExecuteTimeline(ctx, matrix.timeline)
 		if err != nil {
 			t.Fatalf("execute knowledge timeline: %v", err)
 		}
@@ -409,18 +436,18 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("field catalog", func(t *testing.T) {
-		knowledgeRuntimeRequireFieldCatalogMaskPrimitive(t, overallContext, connection)
-		catalog, err := executor.ExecuteFieldCatalog(overallContext, matrix.catalog)
+	runSubtest("field catalog", func(t *testing.T, ctx context.Context) {
+		knowledgeRuntimeRequireFieldCatalogMaskPrimitive(t, ctx, connection)
+		catalog, err := executor.ExecuteFieldCatalog(ctx, matrix.catalog)
 		if err != nil {
 			t.Fatalf("execute knowledge field catalog: %v", err)
 		}
-		if err := connection.Exec(overallContext, "SYSTEM FLUSH LOGS"); err != nil {
+		if err := connection.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 			t.Fatalf("flush catalog query log: %v", err)
 		}
 		var peakMemory, durationMillis, readRows, resultRows, selectedRows uint64
 		if err := connection.QueryRow(
-			overallContext,
+			ctx,
 			`SELECT toUInt64(memory_usage), toUInt64(query_duration_ms), read_rows, result_rows, toUInt64(ProfileEvents['SelectedRows']) FROM system.query_log WHERE type = 'QueryFinish' AND startsWith(query_id, 'open-splunk-search-') ORDER BY event_time_microseconds DESC LIMIT 1`,
 		).Scan(&peakMemory, &durationMillis, &readRows, &resultRows, &selectedRows); err != nil {
 			t.Fatalf("read catalog query log: %v", err)
@@ -437,13 +464,13 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		knowledgeRuntimeAssertCatalog(t, catalog)
 	})
 
-	t.Run("field_catalog_maximum_generated_fields", func(t *testing.T) {
-		catalog, err := executor.ExecuteFieldCatalog(overallContext, maximumFieldCatalog)
+	runSubtest("field_catalog_maximum_generated_fields", func(t *testing.T, ctx context.Context) {
+		catalog, err := executor.ExecuteFieldCatalog(ctx, maximumFieldCatalog)
 		if err != nil {
 			t.Fatalf("execute maximum-generated-field knowledge catalog: %v", err)
 		}
 		peakMemory, durationMillis, readRows, resultRows, selectedRows :=
-			knowledgeRuntimeCatalogQueryLog(t, overallContext, connection)
+			knowledgeRuntimeCatalogQueryLog(t, ctx, connection)
 		t.Logf(
 			"maximum knowledge catalog query log: peak_memory=%d duration_ms=%d read_rows=%d result_rows=%d selected_rows=%d",
 			peakMemory,
@@ -456,7 +483,7 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		knowledgeRuntimeAssertMaximumFieldCatalog(t, catalog)
 	})
 
-	t.Run("field_catalog_maximum_generated_fields_concurrent", func(t *testing.T) {
+	runSubtest("field_catalog_maximum_generated_fields_concurrent", func(t *testing.T, ctx context.Context) {
 		type outcome struct {
 			catalog FieldCatalogResult
 			err     error
@@ -466,7 +493,7 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		for range 2 {
 			go func() {
 				<-start
-				catalog, err := executor.ExecuteFieldCatalog(overallContext, maximumFieldCatalog)
+				catalog, err := executor.ExecuteFieldCatalog(ctx, maximumFieldCatalog)
 				outcomes <- outcome{catalog: catalog, err: err}
 			}()
 		}
@@ -479,7 +506,7 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 			knowledgeRuntimeAssertMaximumFieldCatalog(t, result.catalog)
 		}
 
-		metrics := knowledgeRuntimeCatalogQueryLogs(t, overallContext, connection, 2)
+		metrics := knowledgeRuntimeCatalogQueryLogs(t, ctx, connection, 2)
 		if metrics[0].queryID == metrics[1].queryID {
 			t.Fatalf("concurrent maximum catalogs reused query ID %q", metrics[0].queryID)
 		}
@@ -504,16 +531,16 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		t.Logf("concurrent maximum knowledge catalog summed per-query peaks=%d", summedPeaks)
 	})
 
-	t.Run("field summary", func(t *testing.T) {
-		summary, err := executor.ExecuteFieldSummary(overallContext, matrix.summary)
+	runSubtest("field summary", func(t *testing.T, ctx context.Context) {
+		summary, err := executor.ExecuteFieldSummary(ctx, matrix.summary)
 		if err != nil {
 			t.Fatalf("execute knowledge field summary: %v", err)
 		}
 		knowledgeRuntimeAssertSummary(t, summary)
 	})
 
-	t.Run("field suggestions", func(t *testing.T) {
-		suggestions, err := executor.ExecuteFieldSuggestions(overallContext, matrix.suggestions)
+	runSubtest("field suggestions", func(t *testing.T, ctx context.Context) {
+		suggestions, err := executor.ExecuteFieldSuggestions(ctx, matrix.suggestions)
 		if err != nil {
 			t.Fatalf("execute knowledge field suggestions: %v", err)
 		}
@@ -526,9 +553,9 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("runtime guard failure is atomic", func(t *testing.T) {
+	runSubtest("runtime guard failure is atomic", func(t *testing.T, ctx context.Context) {
 		sink := &fakeSink{}
-		err := executor.Execute(overallContext, matrix.overflow, sink)
+		err := executor.Execute(ctx, matrix.overflow, sink)
 		wantError := searchjobs.ErrExecutionLimit.Error() +
 			": knowledge alias copy bytes exceeded the per-event limit"
 		if !errors.Is(err, searchjobs.ErrExecutionLimit) || err.Error() != wantError ||
@@ -542,10 +569,10 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("writer resolver manager export and history lifecycle", func(t *testing.T) {
+	runSubtest("writer resolver manager export and history lifecycle", func(t *testing.T, ctx context.Context) {
 		runKnowledgeLifecycleVertical(
 			t,
-			overallContext,
+			ctx,
 			connection,
 			executor,
 			tenantID,

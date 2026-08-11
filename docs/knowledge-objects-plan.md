@@ -2452,15 +2452,15 @@ Knowledge traffic.
 
 The final pinned production matrix rerun passed on
 `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`
-in 72.07 seconds at package level (71.67 seconds for the top-level test). It
+in 72.78 seconds at package level (72.36 seconds for the top-level test). It
 covers ordinary enrichment and authored suffixes, all four selector dimensions,
-all 16 executable compatibility runtime-edge IDs in a 3.40-second subtest,
+all 16 executable compatibility runtime-edge IDs in a 3.33-second subtest,
 chart, timechart, stats, fused chronology, pruned and runtime-empty consumers,
 timeline, field catalog, exact maximum generated fields, two concurrent
 maximum catalogs, field summary, field suggestions, atomic overflow, and a
 real Writer→Resolver→Manager→history/export v1/v2 lifecycle. CI runs the same
-untagged test with a 3m30s process deadline in the dedicated
-`knowledge-runtime-clickhouse` job.
+untagged test with one-minute subtest bounds, a four-minute suite watchdog, and
+a 4m30s process deadline in the dedicated `knowledge-runtime-clickhouse` job.
 
 | # | Acceptance authority | Result |
 |---:|---|---|
