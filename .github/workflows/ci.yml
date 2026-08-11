@@ -209,6 +209,7 @@ jobs:
               ^FuzzApplyKnowledgeDefinitionMaskIsDetachedAndStable$
               ^FuzzPrepareCreateMutationCanonicalDigest$
               ^FuzzKnowledgeOutcomeReferenceStrictDecode$
+              ^FuzzValidatePublicationActiveCandidateAlphaRename$
           - label: spl-parser
             package: ./internal/spl
             fuzztime: 15s
