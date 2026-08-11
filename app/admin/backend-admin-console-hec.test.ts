@@ -11,6 +11,7 @@ import {
   parsePersistedTokenCreateGuard,
   serializeTokenCreateGuard,
   tokenCanSetEnabled,
+  tokenPatternsFromForm,
   tokenPurposeLabel,
   validHECMetadataDefault,
 } from "./backend-admin-console";
@@ -153,6 +154,29 @@ test("purpose labels distinguish native and HEC credentials", () => {
   assert.equal(tokenPurposeLabel(IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC), "HEC");
 });
 
+test("token policy patterns preserve RE2 source text and enforce transport bounds", () => {
+  assert.deepEqual(tokenPatternsFromForm(
+    "worker-[0-9]+\napi-[0-9]+\nworker-[0-9]+",
+    "Allowed host",
+  ), ["api-[0-9]+", "worker-[0-9]+"]);
+  assert.deepEqual(tokenPatternsFromForm("", "Allowed source"), []);
+  assert.throws(
+    () => tokenPatternsFromForm(
+      Array.from({ length: 17 }, (_, index) => `host-${index}`).join("\n"),
+      "Allowed host",
+    ),
+    /at most 16 unique patterns/,
+  );
+  assert.throws(
+    () => tokenPatternsFromForm("x".repeat(513), "Allowed source"),
+    /512 UTF-8 bytes/,
+  );
+  assert.throws(
+    () => tokenPatternsFromForm("bad\0pattern", "Allowed source"),
+    /NUL/,
+  );
+});
+
 test("ambiguous-create guard round-trips HEC identity without a secret", () => {
   const apiBaseUrl = "https://splunk.example";
   const serialized = serializeTokenCreateGuard(apiBaseUrl, {
@@ -163,6 +187,10 @@ test("ambiguous-create guard round-trips HEC identity without a secret", () => {
       description: "Orders API",
       boundCollectorId: "",
       allowedIndexNames: ["main", "orders"],
+      allowedHostRegexes: ["api-[0-9]+"],
+      allowedSourceRegexes: ["http:orders"],
+      maxEventsPerSecond: 500n,
+      maxUncompressedBytesPerSecond: 1_048_576n,
       purpose: IngestionTokenPurpose.INGESTION_TOKEN_PURPOSE_HEC,
       hecProfile: {
         defaultIndexName: "orders",
@@ -202,6 +230,13 @@ test("ambiguous-create guard round-trips HEC identity without a secret", () => {
     defaultSourcetype: "_json",
     indexerAcknowledgment: true,
   });
+  assert.deepEqual(
+    restored?.recovery.definition.allowedHostRegexes,
+    ["api-[0-9]+"],
+  );
+  assert.deepEqual(restored?.recovery.definition.allowedSourceRegexes, ["http:orders"]);
+  assert.equal(restored?.recovery.definition.maxEventsPerSecond, 500n);
+  assert.equal(restored?.recovery.definition.maxUncompressedBytesPerSecond, 1_048_576n);
 });
 
 test("pre-HEC native create guards remain readable", () => {

@@ -5248,6 +5248,9 @@ pre {
 .settings-form-grid select,
 .admin-form input,
 .admin-form select { background: white; border: 1px solid #aeb8bd; height: 34px; padding: 0 9px; }
+.admin-form textarea { background: white; border: 1px solid #aeb8bd; font: inherit; line-height: 1.45; min-height: 70px; padding: 7px 9px; resize: vertical; width: 100%; }
+.admin-policy-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.admin-policy-grid > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .settings-form-grid label > small,
 .admin-form label > small { color: #64717a; font-size: 10px; }
 .input-with-unit { align-items: center; display: flex; }
@@ -6985,10 +6988,12 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .permission-grid { grid-template-columns: 1fr; }
   .permission-grid > span:nth-child(odd) { border-right: 0; margin-right: 0; padding-right: 0; }
   .settings-form-grid { grid-template-columns: 1fr; }
+  .admin-policy-grid { grid-template-columns: 1fr; }
   .settings-form-grid input,
   .settings-form-grid select,
   .admin-form input,
   .admin-form select { font-size: 16px; height: 44px; }
+  .admin-form textarea { font-size: 16px; }
   .token-reveal { grid-template-columns: auto 1fr; }
   .token-reveal > div { align-items: stretch; flex-direction: column; grid-column: 1 / -1; }
   .token-reveal > .admin-checkbox { grid-column: 1 / -1; }

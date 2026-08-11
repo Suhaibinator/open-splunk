@@ -10,7 +10,7 @@ import {
 } from "./knowledge-manager-feature";
 
 const importKnowledgeManagerPanel: KnowledgeManagerPanelImporter = () =>
-  import("./knowledge-manager-panel");
+  import("./knowledge-manager-panel" as string);
 
 interface KnowledgeManagerGateProps extends KnowledgeManagerPanelProps {
   enabled: boolean;
