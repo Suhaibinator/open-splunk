@@ -1118,6 +1118,12 @@ Some of the hardest compatibility work is not grammar; it is behavior:
 
 These rules should live in a versioned **SPL compatibility specification** and executable conformance tests.
 
+The selected post-`0.1` language program is the bounded arithmetic, grouping,
+quoted-scalar-field, and eval-membership foundation in
+[`spl-roadmap.md`](spl-roadmap.md). That plan owns the next implementation
+sequence and activation gates; the command inventory below remains the original
+first-release scope.
+
 ### Recommended first command set
 
 The first useful compatibility tier should support:
