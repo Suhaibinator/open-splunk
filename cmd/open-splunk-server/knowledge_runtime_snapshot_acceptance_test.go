@@ -33,6 +33,10 @@ type runtimeKnowledgeSnapshotExecution struct {
 
 const runtimeKnowledgeSnapshotExplainText = `[{"Plan":{"Node Type":"ReadNothing"}}]`
 
+// Eight production-bounded attempts provide a finite two-second aggregate
+// resolver deadline budget for transient CI starvation.
+const runtimeKnowledgeSnapshotResolutionMaximumAttempts = 8
+
 type runtimeKnowledgeSnapshotExecutor struct {
 	counters     *runtimeKnowledgeAdmissionCounters
 	observations chan<- runtimeKnowledgeSnapshotExecution
@@ -88,6 +92,77 @@ type runtimeKnowledgeSnapshotExplainer struct {
 type runtimeKnowledgeSnapshotSearches struct {
 	manager *searchjobs.Manager
 	calls   atomic.Int32
+}
+
+// runtimeKnowledgeSnapshotResolver preserves the production Resolver's fixed
+// per-attempt deadline while allowing this CPU-heavy acceptance test to survive
+// transient scheduler starvation under repository-wide race/coverage runs. It
+// retries only the original deadline error, never Manager's deliberately broad
+// ErrKnowledgeUnavailable category, and performs no additional waiting between
+// already deadline-bounded attempts.
+type runtimeKnowledgeSnapshotResolver struct {
+	delegate         searchjobs.KnowledgeResolver
+	maximumAttempts  int
+	logicalCalls     atomic.Int32
+	attempts         atomic.Int32
+	deadlineFailures atomic.Int32
+}
+
+func (resolver *runtimeKnowledgeSnapshotResolver) Resolve(
+	ctx context.Context,
+	scope knowledgecatalog.ResolutionScope,
+) (knowledgecatalog.Resolution, error) {
+	resolver.logicalCalls.Add(1)
+	maximumAttempts := resolver.maximumAttempts
+	if maximumAttempts < 1 {
+		maximumAttempts = 1
+	}
+	for attempt := 1; attempt <= maximumAttempts; attempt++ {
+		resolver.attempts.Add(1)
+		resolution, err := resolver.delegate.Resolve(ctx, scope)
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+			return resolution, err
+		}
+		resolver.deadlineFailures.Add(1)
+		if ctx != nil && ctx.Err() != nil {
+			return resolution, err
+		}
+		if attempt == maximumAttempts {
+			return resolution, fmt.Errorf(
+				"runtime knowledge resolver exhausted %d deadline-limited attempts: %w",
+				maximumAttempts,
+				err,
+			)
+		}
+	}
+	panic("unreachable runtime knowledge resolver retry loop")
+}
+
+func (resolver *runtimeKnowledgeSnapshotResolver) diagnostic() string {
+	return fmt.Sprintf(
+		"logical_calls=%d attempts=%d deadline_failures=%d maximum_attempts=%d",
+		resolver.logicalCalls.Load(),
+		resolver.attempts.Load(),
+		resolver.deadlineFailures.Load(),
+		resolver.maximumAttempts,
+	)
+}
+
+type runtimeKnowledgeSnapshotScriptedResolver struct {
+	outcomes []error
+	calls    int
+}
+
+func (resolver *runtimeKnowledgeSnapshotScriptedResolver) Resolve(
+	context.Context,
+	knowledgecatalog.ResolutionScope,
+) (knowledgecatalog.Resolution, error) {
+	call := resolver.calls
+	resolver.calls++
+	if call >= len(resolver.outcomes) {
+		return knowledgecatalog.Resolution{}, nil
+	}
+	return knowledgecatalog.Resolution{}, resolver.outcomes[call]
 }
 
 func (searches *runtimeKnowledgeSnapshotSearches) CompletedExecutionSnapshotFor(
@@ -297,6 +372,63 @@ func (executor *runtimeKnowledgeSnapshotExecutor) Execute(
 	)
 }
 
+func TestRuntimeKnowledgeSnapshotResolverRetriesOnlyDeadlineFailures(t *testing.T) {
+	t.Run("deadline then success", func(t *testing.T) {
+		delegate := &runtimeKnowledgeSnapshotScriptedResolver{
+			outcomes: []error{context.DeadlineExceeded, nil},
+		}
+		resolver := &runtimeKnowledgeSnapshotResolver{
+			delegate: delegate, maximumAttempts: 3,
+		}
+		if _, err := resolver.Resolve(t.Context(), knowledgecatalog.ResolutionScope{}); err != nil {
+			t.Fatalf("Resolve() after transient deadline: %v (%s)", err, resolver.diagnostic())
+		}
+		if delegate.calls != 2 || resolver.logicalCalls.Load() != 1 ||
+			resolver.attempts.Load() != 2 || resolver.deadlineFailures.Load() != 1 {
+			t.Fatalf("deadline retry = delegate_calls:%d %s", delegate.calls, resolver.diagnostic())
+		}
+	})
+
+	t.Run("broad knowledge unavailable failure", func(t *testing.T) {
+		wantErr := searchjobs.ErrKnowledgeUnavailable
+		delegate := &runtimeKnowledgeSnapshotScriptedResolver{
+			outcomes: []error{wantErr, context.DeadlineExceeded},
+		}
+		resolver := &runtimeKnowledgeSnapshotResolver{
+			delegate: delegate, maximumAttempts: 3,
+		}
+		if _, err := resolver.Resolve(t.Context(), knowledgecatalog.ResolutionScope{}); !errors.Is(err, wantErr) {
+			t.Fatalf("Resolve() error = %v, want %v (%s)", err, wantErr, resolver.diagnostic())
+		}
+		if delegate.calls != 1 || resolver.logicalCalls.Load() != 1 ||
+			resolver.attempts.Load() != 1 || resolver.deadlineFailures.Load() != 0 {
+			t.Fatalf("non-deadline retry = delegate_calls:%d %s", delegate.calls, resolver.diagnostic())
+		}
+	})
+
+	t.Run("deadline exhaustion", func(t *testing.T) {
+		delegate := &runtimeKnowledgeSnapshotScriptedResolver{
+			outcomes: []error{
+				context.DeadlineExceeded,
+				context.DeadlineExceeded,
+				context.DeadlineExceeded,
+			},
+		}
+		resolver := &runtimeKnowledgeSnapshotResolver{
+			delegate: delegate, maximumAttempts: 3,
+		}
+		_, err := resolver.Resolve(t.Context(), knowledgecatalog.ResolutionScope{})
+		wantMessage := "runtime knowledge resolver exhausted 3 deadline-limited attempts: context deadline exceeded"
+		if !errors.Is(err, context.DeadlineExceeded) || err.Error() != wantMessage {
+			t.Fatalf("Resolve() exhaustion = %v, want %q (%s)", err, wantMessage, resolver.diagnostic())
+		}
+		if delegate.calls != 3 || resolver.logicalCalls.Load() != 1 ||
+			resolver.attempts.Load() != 3 || resolver.deadlineFailures.Load() != 3 {
+			t.Fatalf("deadline exhaustion = delegate_calls:%d %s", delegate.calls, resolver.diagnostic())
+		}
+	})
+}
+
 // TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions proves
 // ordinary Writer→Resolver→Manager retention and real searchinspection.Service
 // consumption through a deterministic fake Explainer. It does not prove ClickHouse
@@ -307,6 +439,9 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 	defer func() { _ = database.Close() }()
 	createRuntimeKnowledgeTestApp(t, database)
 	createRuntimeKnowledgeTestIndex(t, database)
+	retryingResolver := &runtimeKnowledgeSnapshotResolver{
+		delegate: runtime.resolver, maximumAttempts: runtimeKnowledgeSnapshotResolutionMaximumAttempts,
+	}
 
 	actorContext, err := audit.WithActor(t.Context(), audit.Actor{
 		Kind: audit.ActorKindBrowser,
@@ -345,9 +480,9 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 		AppID:                      runtimeKnowledgeTestApp,
 		EffectiveAuthorizedIndexes: []string{"main"},
 	}
-	resolvedV1, err := runtime.resolver.Resolve(t.Context(), resolutionScope)
+	resolvedV1, err := retryingResolver.Resolve(t.Context(), resolutionScope)
 	if err != nil {
-		t.Fatalf("resolve ACTIVE v1: %v", err)
+		t.Fatalf("resolve ACTIVE v1: %v (%s)", err, retryingResolver.diagnostic())
 	}
 	preludeV1 := resolvedV1.Prelude()
 	if preludeV1.IsZero() || preludeV1.ObjectCount() != 1 {
@@ -361,6 +496,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 		counters: counters, observations: observations, releaseFirst: releaseFirst,
 	}
 	managerConfig := runtimeKnowledgeAdmissionManagerConfig(runtime.resolver, counters)
+	managerConfig.KnowledgeResolver = retryingResolver
 	managerConfig.Executor = executor
 	managerConfig.NewID = func() string {
 		return fmt.Sprintf("runtime-knowledge-snapshot-%04d", counters.ids.Add(1))
@@ -381,7 +517,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 	request := runtimeKnowledgeSearchRequest(t)
 	jobV1, err := manager.Create(t.Context(), request)
 	if err != nil {
-		t.Fatalf("admit ACTIVE v1: %v", err)
+		t.Fatalf("admit ACTIVE v1: %v (%s)", err, retryingResolver.diagnostic())
 	}
 	jobV1Summary := jobV1.KnowledgeSnapshot
 	wantV1SummaryDigest := requireRuntimeKnowledgeSnapshotSummary(
@@ -423,9 +559,9 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 			"destination_snapshot_alias_v2" {
 		t.Fatalf("published ACTIVE v2 = %v", objectV2)
 	}
-	resolvedV2, err := runtime.resolver.Resolve(t.Context(), resolutionScope)
+	resolvedV2, err := retryingResolver.Resolve(t.Context(), resolutionScope)
 	if err != nil {
-		t.Fatalf("resolve ACTIVE v2: %v", err)
+		t.Fatalf("resolve ACTIVE v2: %v (%s)", err, retryingResolver.diagnostic())
 	}
 	preludeV2 := resolvedV2.Prelude()
 	commitmentV1, commitmentV1OK := preludeV1.Commitment()
@@ -520,7 +656,7 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 
 	jobV2, err := manager.Create(t.Context(), request)
 	if err != nil {
-		t.Fatalf("admit ACTIVE v2: %v", err)
+		t.Fatalf("admit ACTIVE v2: %v (%s)", err, retryingResolver.diagnostic())
 	}
 	jobV2Summary := jobV2.KnowledgeSnapshot
 	if jobV2.ID == jobV1.ID {
@@ -801,5 +937,14 @@ func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.
 			counters.snapshots.Load(), counters.journalAdmissions.Load(),
 			counters.journalFinalizations.Load(), counters.executions.Load(), len(manager.List()),
 		)
+	}
+	logicalCalls := retryingResolver.logicalCalls.Load()
+	attempts := retryingResolver.attempts.Load()
+	deadlineFailures := retryingResolver.deadlineFailures.Load()
+	if logicalCalls != 4 || attempts != logicalCalls+deadlineFailures {
+		t.Fatalf("resolver retry accounting = %s", retryingResolver.diagnostic())
+	}
+	if deadlineFailures != 0 {
+		t.Logf("acceptance resolver recovered from scheduler contention: %s", retryingResolver.diagnostic())
 	}
 }
