@@ -568,9 +568,20 @@ test("reference commitments, revision, count, and compiler canonicality fail clo
     mutate(response);
     assertInvalid(response);
   }
-
-
-  for (const edge of [" ", "\t", "\n", "\v", "\f", "\r"]) {
+  for (const edge of [
+    " ",
+    "\t",
+    "\n",
+    "\v",
+    "\f",
+    "\r",
+    "\u00a0",
+    "\u1680",
+    "\u2000",
+    "\u202f",
+    "\u205f",
+    "\u3000",
+  ]) {
     for (const compiler of [`${edge}compiler`, `compiler${edge}`]) {
       const response = addKnowledge(baseResponse(), 1);
       response.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = compiler;
@@ -583,15 +594,14 @@ test("reference commitments, revision, count, and compiler canonicality fail clo
     assertInvalid(response);
   }
 
-  const unicodeEdgeSpace = addKnowledge(baseResponse(), 1);
-  unicodeEdgeSpace.knowledgeSnapshot!.ref!.compilerCompatibilityVersion =
-    "\u00a0compiler\u00a0";
-  const accepted = adaptSearchJobInspection(unicodeEdgeSpace, jobId, true);
+  const byteOrderMark = addKnowledge(baseResponse(), 1);
+  byteOrderMark.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = "\ufeffcompiler";
+  const accepted = adaptSearchJobInspection(byteOrderMark, jobId, true);
   assert.equal(
     accepted.knowledge?.state === "enabled"
       ? accepted.knowledge.compilerCompatibilityVersion
       : null,
-    "\u00a0compiler\u00a0",
+    "\ufeffcompiler",
   );
 });
 

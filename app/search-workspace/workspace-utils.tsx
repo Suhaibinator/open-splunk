@@ -3,8 +3,9 @@ import type { PointerEvent, ReactNode } from "react";
 import { SearchJobState, type SearchJob } from "@/gen/ts/open_splunk/v1/search";
 import { DEMO_EVENTS, type DemoEvent, type DemoScalar } from "@/lib/demo/search-data";
 import {
-  isSplOffsetInDoubleQuotedValue,
+  isSplOffsetInQuotedValue,
   isSupportedSplPipelineCommand,
+  scanSplStructure,
   SPL_FUNCTIONS,
   SPL_KEYWORDS,
   SPL_PIPELINE_COMMANDS,
@@ -43,7 +44,7 @@ const SPL_KEYWORD_SET = new Set<string>(
   SPL_HIGHLIGHTED_KEYWORDS.map((keyword) => keyword.toLowerCase()),
 );
 const SYNTAX_TOKEN_PATTERN = new RegExp(
-  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:${SPL_FUNCTION_PATTERN})\\b|\\b(?:${SPL_KEYWORD_PATTERN})\\b|"(?:\\\\.|[^"\\\\])*"|\\|)`,
+  `(\\b(?:index|host|source|sourcetype|level|status|trace_id|message|path)\\b(?=\\s*=)|\\b(?:${PIPELINE_COMMAND_PATTERN})\\b|\\b(?:${SPL_FUNCTION_PATTERN})\\b|\\b(?:${SPL_KEYWORD_PATTERN})\\b|"(?:\\\\.|[^"\\\\])*"|==|!=|<=|>=|[+\\-*/%=<>]|\\|)`,
   "gi",
 );
 const UNSUPPORTED_PIPELINE_COMMAND_SET = new Set<string>(UNSUPPORTED_SPL_PIPELINE_COMMANDS);
@@ -63,7 +64,7 @@ interface DemoFieldPredicate {
 }
 
 function offsetIsOutsideQuotes(query: string, targetOffset: number): boolean {
-  return !isSplOffsetInDoubleQuotedValue(query, targetOffset);
+  return !isSplOffsetInQuotedValue(query, targetOffset);
 }
 
 function demoFieldPredicates(query: string): DemoFieldPredicate[] {
@@ -106,17 +107,57 @@ function matchesDemoValue(actualValue: unknown, queryValue: string): boolean {
   return wildcard.test(actual);
 }
 
+function nextNonWhitespaceIsLeftParenthesis(query: string, offset: number): boolean {
+  for (let cursor = offset; cursor < query.length;) {
+    const codePoint = query.codePointAt(cursor)!;
+    const character = String.fromCodePoint(codePoint);
+    if (!/\p{White_Space}/u.test(character)) return character === "(";
+    cursor += codePoint > 0xffff ? 2 : 1;
+  }
+  return false;
+}
+
 export function syntaxTokens(query: string): ReactNode[] {
-  const parts = query.split(SYNTAX_TOKEN_PATTERN).filter((part) => part !== undefined && part.length > 0);
+  const structure = scanSplStructure(query);
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const quoted of structure.quotes) {
+    if (quoted.quote !== "'") continue;
+    parts.push(...query.slice(cursor, quoted.offset)
+      .split(SYNTAX_TOKEN_PATTERN)
+      .filter((part) => part !== undefined && part.length > 0));
+    parts.push(query.slice(quoted.offset, quoted.endOffset));
+    cursor = quoted.endOffset;
+  }
+  parts.push(...query.slice(cursor)
+    .split(SYNTAX_TOKEN_PATTERN)
+    .filter((part) => part !== undefined && part.length > 0));
 
   let sourceOffset = 0;
+  let scalarStageIndex = 0;
   return parts.map((part) => {
+    const partOffset = sourceOffset;
     sourceOffset += part.length;
+    while (
+      scalarStageIndex < structure.scalarStageRanges.length
+      && structure.scalarStageRanges[scalarStageIndex]!.endOffset <= partOffset
+    ) {
+      scalarStageIndex += 1;
+    }
+    const scalarStage = structure.scalarStageRanges[scalarStageIndex];
+    const inScalarStage = scalarStage !== undefined
+      && scalarStage.startOffset <= partOffset
+      && partOffset < scalarStage.endOffset;
     const lower = part.toLowerCase();
-    const followedByLeftParenthesis = /^\s*\(/.test(query.slice(sourceOffset));
+    const followedByLeftParenthesis = nextNonWhitespaceIsLeftParenthesis(query, sourceOffset);
     let className = "spl-plain";
     if (part === "|") className = "spl-pipe";
     else if (part.startsWith('"')) className = "spl-string";
+    else if (part.startsWith("'") && inScalarStage) className = "spl-field";
+    else if (
+      (/^(?:==|!=|<=|>=|[+\-*/%=<>])$/.test(part) || lower === "in")
+      && inScalarStage
+    ) className = "spl-operator";
     else if (SPL_KEYWORD_SET.has(lower)) className = "spl-boolean";
     else if (UNSUPPORTED_PIPELINE_COMMAND_SET.has(lower)) className = "spl-error-token";
     else if ((lower === "eval" && followedByLeftParenthesis) ||

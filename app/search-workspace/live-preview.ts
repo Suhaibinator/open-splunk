@@ -151,9 +151,6 @@ function validateTypedValue(root: TypedValue | undefined, path: string): string 
         }
         break;
       case "doubleValue":
-        if (!Number.isFinite(kind.value)) {
-          return `${current.path} contains a non-finite number.`;
-        }
         break;
       case "boolValue":
       case "bytesValue":

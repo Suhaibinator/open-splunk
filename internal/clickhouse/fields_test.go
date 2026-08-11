@@ -808,7 +808,6 @@ func TestCompileFieldCatalogPreservesKnownScalarTypeCodes(t *testing.T) {
 	for _, code := range []eventfields.StoredValueType{
 		eventfields.StoredValueTypeNull,
 		eventfields.StoredValueTypeString,
-		eventfields.StoredValueTypeSint64,
 		eventfields.StoredValueTypeUint64,
 		eventfields.StoredValueTypeDouble,
 		eventfields.StoredValueTypeBool,
@@ -829,8 +828,8 @@ func TestCompileFieldCatalogAnalyzesNumericBinFinalType(t *testing.T) {
 		10,
 	)
 	if !strings.Contains(compiled.SQL, UnsupportedNumericBinValueMarker) ||
-		!containsArgument(compiled.Args, uint8(eventfields.StoredValueTypeSint64)) {
-		t.Fatalf("numeric-bin catalog lost its guarded Int64 final type:\n%s\nargs: %#v", compiled.SQL, compiled.Args)
+		!containsArgument(compiled.Args, uint8(eventfields.StoredValueTypeDouble)) {
+		t.Fatalf("numeric-bin catalog lost its guarded Float64 final type:\n%s\nargs: %#v", compiled.SQL, compiled.Args)
 	}
 	if known := catalogStringArguments(compiled.Args); !slices.Contains(known, "band") {
 		t.Fatalf("known catalog fields = %v, want band", known)

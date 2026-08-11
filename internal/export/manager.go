@@ -818,6 +818,12 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		}
 		return Job{}, ErrInvalidColumns
 	}
+	compilerVersion, err := admittedCompilerVersion(lease)
+	if err != nil {
+		stopRequestCancellation()
+		jobCancel()
+		return Job{}, ErrSourceUnavailable
+	}
 	knowledgeSnapshot, err := admittedKnowledgeSnapshot(lease)
 	if err != nil {
 		stopRequestCancellation()
@@ -853,6 +859,12 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		jobCancel()
 		return Job{}, ErrCapacity
 	}
+	resolvedMetadata, ok = checkedAddUint64(resolvedMetadata, uint64(len(compilerVersion)))
+	if !ok {
+		stopRequestCancellation()
+		jobCancel()
+		return Job{}, ErrCapacity
+	}
 	if err := manager.reconcileAdmissionMetadata(id, resolvedMetadata); err != nil {
 		stopRequestCancellation()
 		jobCancel()
@@ -883,6 +895,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 			ID:                id,
 			Version:           1,
 			SearchJobID:       strings.Clone(normalized.SearchJobID),
+			CompilerVersion:   compilerVersion,
 			Format:            normalized.Format,
 			Columns:           append([]string(nil), normalized.Columns...),
 			RowLimit:          normalized.RowLimit,

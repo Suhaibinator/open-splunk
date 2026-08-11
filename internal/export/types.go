@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -275,20 +276,24 @@ type Job struct {
 	ID          string
 	Version     uint64
 	SearchJobID string
-	Format      Format
-	Columns     []string
-	RowLimit    uint64
-	ByteLimit   uint64
-	CSV         CSVOptions
-	JSONLines   JSONLinesOptions
-	State       State
-	Progress    Progress
-	Artifact    *Artifact
-	Failure     *Failure
-	CreatedAt   time.Time
-	StartedAt   time.Time
-	FinishedAt  time.Time
-	ExpiresAt   time.Time
+	// CompilerVersion is the immutable authored-SPL compatibility identity of
+	// the source execution. Empty is retained only for legacy/custom result
+	// sources that predate compatibility provenance.
+	CompilerVersion string
+	Format          Format
+	Columns         []string
+	RowLimit        uint64
+	ByteLimit       uint64
+	CSV             CSVOptions
+	JSONLines       JSONLinesOptions
+	State           State
+	Progress        Progress
+	Artifact        *Artifact
+	Failure         *Failure
+	CreatedAt       time.Time
+	StartedAt       time.Time
+	FinishedAt      time.Time
+	ExpiresAt       time.Time
 	// KnowledgeSnapshot is the bounded, definition-free admission provenance
 	// of the source execution. Nil identifies a legacy knowledge-disabled
 	// search. Public transports must apply current-policy redaction.
@@ -337,6 +342,24 @@ func cloneJob(source Job) Job {
 // the sole producer; legacy and test sources simply omit it.
 type knowledgeSnapshotResultLease interface {
 	knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error)
+}
+
+// compilerVersionResultLease is package-private so only the trusted
+// ReexecutionSource can attach compatibility provenance to an export.
+type compilerVersionResultLease interface {
+	compilerVersion() string
+}
+
+func admittedCompilerVersion(lease searchjobs.ResultLease) (string, error) {
+	provider, ok := lease.(compilerVersionResultLease)
+	if !ok {
+		return "", nil
+	}
+	version := provider.compilerVersion()
+	if !searchjobs.ValidCompilerVersion(version) {
+		return "", errors.New("source compiler version is invalid")
+	}
+	return strings.Clone(version), nil
 }
 
 func admittedKnowledgeSnapshot(lease searchjobs.ResultLease) (*opensplunkv1.KnowledgeSnapshotSummary, error) {

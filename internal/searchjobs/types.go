@@ -244,6 +244,7 @@ type JobListItem struct {
 	TenantID          string
 	SPL               string
 	NormalizedSPL     string
+	CompilerVersion   string
 	RequestedIndexes  []string
 	EffectiveIndexes  []string
 	TimeRange         searchtime.Intent
@@ -295,6 +296,7 @@ type Job struct {
 	OwnerID          string
 	SPL              string
 	NormalizedSPL    string
+	CompilerVersion  string
 	TenantID         string
 	RequestedIndexes []string
 	EffectiveIndexes []string
@@ -840,6 +842,16 @@ func retainedNormalizedJobMetadataReservation(id string, request CreateRequest) 
 func validateValue(value Value, depth int) error {
 	_, _, err := measureValue(value, depth)
 	return err
+}
+
+// RetainedSizeBytes returns the search-job layer's exact modeled heap
+// retention for this immutable value, including every nested Value,
+// ObjectField, payload byte, and container backing element. Executors that
+// temporarily buffer values use this same accounting as the durable result
+// sink so recursive containers cannot evade a private memory ceiling.
+func (value Value) RetainedSizeBytes() (uint64, error) {
+	_, retained, err := measureValue(value, 0)
+	return retained, err
 }
 
 func measureValue(value Value, depth int) (uint64, uint64, error) {

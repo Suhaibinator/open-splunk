@@ -150,6 +150,7 @@ func searchJobListItemAsJob(item searchjobs.JobListItem) searchjobs.Job {
 		TenantID:          item.TenantID,
 		SPL:               item.SPL,
 		NormalizedSPL:     item.NormalizedSPL,
+		CompilerVersion:   item.CompilerVersion,
 		RequestedIndexes:  slices.Clone(item.RequestedIndexes),
 		EffectiveIndexes:  slices.Clone(item.EffectiveIndexes),
 		TimeRange:         item.TimeRange,
@@ -257,7 +258,8 @@ func validSearchJobListItem(
 	if job.OwnerID != scope.OwnerID || job.TenantID != scope.TenantID ||
 		job.Schema != nil || job.CreatedAt.IsZero() ||
 		strings.TrimSpace(job.ID) != job.ID ||
-		validateBoundedIdentifier(job.ID, maximumSearchJobListJobIDBytes, false) != nil {
+		validateBoundedIdentifier(job.ID, maximumSearchJobListJobIDBytes, false) != nil ||
+		!searchjobs.ValidCompilerVersion(job.CompilerVersion) {
 		return false
 	}
 	if !validSearchJobListFailure(job.State, job.Failure) {

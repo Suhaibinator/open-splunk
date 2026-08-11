@@ -92,7 +92,7 @@ func TestJobJournalRoundTripsMaximumHistoryRerunProvenanceID(t *testing.T) {
 	}
 	historyID := strings.Repeat("h", maximumSearchJobIDBytes)
 	now := time.Date(2026, time.July, 24, 12, 0, 0, 0, time.UTC)
-	pending := journalJob("journal-history-rerun", searchjobs.StateQueued, now)
+	pending := journalJob("journal-history-rerun", searchjobs.StateQueued, "history-source-boundary", now)
 	pending.Source = searchjobs.JobSource{
 		Origin:   searchjobs.JobOriginHistoryRerun,
 		ObjectID: historyID,
@@ -101,7 +101,7 @@ func TestJobJournalRoundTripsMaximumHistoryRerunProvenanceID(t *testing.T) {
 		t.Fatalf("Admit(maximum history provenance ID) error = %v", err)
 	}
 
-	terminal := journalJob("journal-history-rerun", searchjobs.StateCompleted, now)
+	terminal := journalJob("journal-history-rerun", searchjobs.StateCompleted, "history-source-boundary", now)
 	terminal.Source = pending.Source
 	terminal.EffectiveIndexes = []string{"main"}
 	terminal.StartedAt = now.Add(-30 * time.Second)

@@ -122,9 +122,16 @@ In VS Code, **Run Build Task** (`Cmd+Shift+B` on macOS or `Ctrl+Shift+B` elsewhe
 The backend includes the protobuf HTTP API, authenticated gRPC ingestion, an
 optional HEC compatibility facade, collector WAL and file tailing, the SQLite
 control plane, ClickHouse storage, bounded search jobs, and the executable SPL
-subset documented in
-[`docs/spl-compatibility-v0.1.md`](docs/spl-compatibility-v0.1.md). The default
-Go test suite is self-contained. The pinned ClickHouse and full
+authored-search subset documented in
+[`docs/spl-compatibility-v0.2.md`](docs/spl-compatibility-v0.2.md). Tier-1
+calculated-field knowledge expressions deliberately remain on their closed
+v0.1 profile, documented in
+[`docs/knowledge-compatibility-v0.1.md`](docs/knowledge-compatibility-v0.1.md).
+Before upgrading retained searches, follow the
+[`v0.2 migration and read-only audit guide`](docs/spl-compatibility-v0.2-migration.md).
+Release evidence is organized in the
+[`v0.2 acceptance report`](docs/spl-compatibility-v0.2-acceptance.md).
+The default Go test suite is self-contained. The pinned ClickHouse and full
 collector-to-browser tests are opt-in because they start ephemeral Docker
 containers; the browser vertical also requires the pinned Playwright browser:
 

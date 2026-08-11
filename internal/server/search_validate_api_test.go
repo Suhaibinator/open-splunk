@@ -112,6 +112,61 @@ func TestValidateSearchReportsReadFieldsRatherThanResultColumns(t *testing.T) {
 	assertNoSearchValidationJobCreated(t, jobs)
 }
 
+func TestValidateSearchExpressionV02UsesTheProductionParserPlannerAndCompiler(t *testing.T) {
+	t.Parallel()
+
+	jobs := newValidationSearchJobs(t)
+	handler := newTestHandler(t, Config{
+		SearchJobs: jobs,
+		Indexes: fakeIndexCatalog{indexes: []control.Index{
+			validationTestIndex("main"),
+		}},
+		WebUI:    testUI(),
+		TenantID: "tenant-1",
+		Now:      func() time.Time { return testNow },
+	})
+	source := " \nindex=main | eval adjusted='request-bytes'/1024 | where adjusted IN (1, 2, 3) | table adjusted\t "
+	response := postProto(t, handler, testSearchValidatePath, newValidationAPIRequest(source, "main"))
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	decoded := &opensplunkv1.ValidateSearchResponse{}
+	unmarshalResponse(t, response, decoded)
+	if !decoded.GetValid() || len(decoded.GetDiagnostics()) != 0 ||
+		decoded.GetNormalizedSpl() != strings.TrimSpace(source) {
+		t.Fatalf("v0.2 validation = %+v", decoded)
+	}
+	if !slices.Equal(decoded.GetReferencedIndexes(), []string{"main"}) ||
+		!slices.Equal(decoded.GetReferencedFields(), []string{"adjusted", "index", "request-bytes"}) ||
+		decoded.GetPredictedResultKind() != opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS {
+		t.Fatalf(
+			"v0.2 analysis = indexes %v fields %v kind %s",
+			decoded.GetReferencedIndexes(),
+			decoded.GetReferencedFields(),
+			decoded.GetPredictedResultKind(),
+		)
+	}
+
+	invalidSource := `index=main | eval leaked=request_bytes IN (1, 2)`
+	invalidResponse := postProto(
+		t,
+		handler,
+		testSearchValidatePath,
+		newValidationAPIRequest(invalidSource, "main"),
+	)
+	if invalidResponse.Code != http.StatusOK {
+		t.Fatalf("invalid status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
+	}
+	invalid := &opensplunkv1.ValidateSearchResponse{}
+	unmarshalResponse(t, invalidResponse, invalid)
+	if invalid.GetValid() || invalid.NormalizedSpl != nil || len(invalid.GetDiagnostics()) != 1 ||
+		invalid.GetDiagnostics()[0].GetCode() != "SPL_UNSUPPORTED_EVAL_EXPRESSION" ||
+		len(invalid.GetReferencedIndexes()) != 0 || len(invalid.GetReferencedFields()) != 0 {
+		t.Fatalf("Boolean assignment validation = %+v", invalid)
+	}
+	assertNoSearchValidationJobCreated(t, jobs)
+}
+
 func TestValidateSearchReturnsSourceLocatedParsePlanningAndCompilerDiagnostics(t *testing.T) {
 	t.Parallel()
 

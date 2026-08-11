@@ -350,13 +350,19 @@ func (service *Service) dynamicFieldCandidates(
 		return nil, false, err
 	}
 
+	command := activeSuggestionCommand(request.source, suggestionContext)
+	allowQuotedFields := command == "eval" || command == "where"
 	candidates := make([]spl.SuggestionCandidate, 0, len(fieldResult.FieldNames))
 	for _, name := range fieldResult.FieldNames {
 		name = strings.Clone(name)
+		insertion, ok := fieldSuggestionInsertion(name, allowQuotedFields)
+		if !ok {
+			continue
+		}
 		candidates = append(candidates, spl.SuggestionCandidate{
 			Kind:      spl.SuggestionKindField,
 			Label:     name,
-			Insertion: name,
+			Insertion: insertion,
 			Detail:    "Field",
 		})
 	}
@@ -709,13 +715,64 @@ func validateFieldResult(
 			!utf8.ValidString(name) ||
 			strings.IndexByte(name, 0) >= 0 ||
 			!strings.HasPrefix(name, spec.Prefix) ||
-			!representableFieldName(name) ||
+			!validSuggestionFieldName(name) ||
 			(index > 0 && !fieldSuggestionNameBefore(previous, name)) {
 			return searchjobs.ErrInvalidResult
 		}
 		previous = name
 	}
 	return nil
+}
+
+func fieldSuggestionInsertion(name string, allowQuoted bool) (string, bool) {
+	if representableFieldName(name) &&
+		(!allowQuoted || !requiresQuotedV02ScalarField(name)) {
+		return strings.Clone(name), true
+	}
+	if !allowQuoted || !validSuggestionFieldName(name) {
+		return "", false
+	}
+	var builder strings.Builder
+	builder.Grow(len(name) + 2)
+	builder.WriteByte('\'')
+	for _, character := range name {
+		if character == '\\' || character == '\'' {
+			builder.WriteByte('\\')
+		}
+		builder.WriteRune(character)
+	}
+	builder.WriteByte('\'')
+	return builder.String(), true
+}
+
+func requiresQuotedV02ScalarField(name string) bool {
+	if strings.ContainsAny(name, "+-*/%'") {
+		return true
+	}
+	for _, character := range name {
+		if unicode.IsSpace(character) {
+			return true
+		}
+	}
+	return false
+}
+
+func validSuggestionFieldName(name string) bool {
+	if name == "" || !utf8.ValidString(name) {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(name)
+	last, _ := utf8.DecodeLastRuneInString(name)
+	if unicode.IsSpace(first) || unicode.IsSpace(last) {
+		return false
+	}
+	for _, character := range name {
+		if unicode.IsControl(character) || !unicode.IsGraphic(character) {
+			return false
+		}
+	}
+	resolved, err := plan.ResolveField(name, spl.Range{})
+	return err == nil && resolved.Name == name
 }
 
 func fieldSuggestionNameBefore(left, right string) bool {
@@ -741,8 +798,7 @@ func foldASCII(value string) string {
 }
 
 func representableFieldName(name string) bool {
-	if name == "" || !utf8.ValidString(name) ||
-		name[0] == '+' || name[0] == '-' ||
+	if !validSuggestionFieldName(name) || name[0] == '+' || name[0] == '-' ||
 		strings.ContainsAny(name, "|(),=!<>\"*") {
 		return false
 	}
@@ -751,8 +807,7 @@ func representableFieldName(name string) bool {
 			return false
 		}
 	}
-	resolved, err := plan.ResolveField(name, spl.Range{})
-	return err == nil && resolved.Name == name
+	return true
 }
 
 func representableIndexName(name string) bool {

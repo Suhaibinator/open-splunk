@@ -1287,9 +1287,13 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	if result.APIVersion == "" {
 		result.APIVersion = "v1"
 	}
-	result.SPLCompatibilityVersion = strings.TrimSpace(result.SPLCompatibilityVersion)
 	if result.SPLCompatibilityVersion == "" {
-		result.SPLCompatibilityVersion = "tier-1-dev"
+		result.SPLCompatibilityVersion = spl.CompatibilityVersion
+	}
+	if !searchjobs.ValidCompilerVersion(result.SPLCompatibilityVersion) {
+		return BootstrapConfig{}, errors.New(
+			"create server handler: SPL compatibility version is invalid",
+		)
 	}
 	if result.Build != nil {
 		clonedBuild, serverVersion, err := buildmetadata.Normalize(result.Build, result.ServerVersion)

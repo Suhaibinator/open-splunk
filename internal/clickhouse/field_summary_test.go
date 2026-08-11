@@ -345,7 +345,7 @@ func TestCompileFieldSummaryUsesFinalFieldSemantics(t *testing.T) {
 			name:   "numeric bin output",
 			source: `index=gradethis | eval signed=-11 | bin signed span=10 AS band | table band`,
 			field:  "band", wantKnown: true,
-			fragments: []string{UnsupportedNumericBinValueMarker, `accurateCastOrNull(`},
+			fragments: []string{UnsupportedNumericBinValueMarker, `floor(`, `isFinite(`},
 		},
 		{
 			name: "exclude blocks exact", source: `index=gradethis | fields - status`,

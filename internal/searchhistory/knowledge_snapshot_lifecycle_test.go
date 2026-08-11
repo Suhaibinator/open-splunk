@@ -24,7 +24,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 	}
 	now := time.Date(2026, time.August, 8, 12, 0, 0, 123_456_789, time.UTC)
 	want := historyKnowledgeSnapshotSummary(2)
-	queued := journalJob("journal-knowledge", searchjobs.StateQueued, now)
+	queued := journalJob("journal-knowledge", searchjobs.StateQueued, "snapshot-journal", now)
 	queued.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
 	if err := journal.Admit(context.Background(), queued); err != nil {
 		t.Fatalf("Admit() error = %v", err)
@@ -32,7 +32,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 	queued.KnowledgeSnapshot.Ref.SnapshotSha256[0] ^= 0xff
 	queued.KnowledgeSnapshot.Objects[0].GetAuthorizedObject().KnowledgeObjectId = "mutated"
 
-	terminal := journalJob("journal-knowledge", searchjobs.StateCompleted, now)
+	terminal := journalJob("journal-knowledge", searchjobs.StateCompleted, "snapshot-journal", now)
 	terminal.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
 	terminal.EffectiveIndexes = []string{"main"}
 	terminal.StartedAt = now.Add(-30 * time.Second)

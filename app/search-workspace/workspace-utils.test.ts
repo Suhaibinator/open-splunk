@@ -363,3 +363,24 @@ test("nested stats eval highlights as a function without relabeling the eval com
   );
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
+
+test("v0.2 field quotes and expression operators highlight only in scalar stages", () => {
+  const query = `index=main source=/var/log/app-1.log O'Reilly | eval 'request-bytes'=duration_ms+1 | where 'HTTP Status' IN (200, 204) | search literal=1+2`;
+  const tokens = classifiedTokens(query);
+
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-field" && token.text.startsWith("'"))
+      .map((token) => token.text),
+    ["'request-bytes'", "'HTTP Status'"],
+  );
+  assert.deepEqual(
+    tokens.filter((token) => token.className === "spl-operator").map((token) => token.text.toUpperCase()),
+    ["=", "+", "IN"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+  assert.equal(
+    tokens.some((token) => token.className === "spl-operator" && token.text === "-"),
+    false,
+  );
+});

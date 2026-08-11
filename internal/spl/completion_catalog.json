@@ -220,6 +220,13 @@
       "highlight_requires_call": true
     },
     {
+      "name": "in",
+      "insertion": "in(",
+      "detail": "Test one scalar value against one through 32 exact candidates.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
       "name": "now",
       "insertion": "now()",
       "detail": "Return the fixed search-start Unix second.",
@@ -391,6 +398,12 @@
       "name": "NOT",
       "insertion": "NOT ",
       "detail": "Negate the following predicate.",
+      "highlight": true
+    },
+    {
+      "name": "IN",
+      "insertion": "IN (",
+      "detail": "Test a scalar value against a bounded exact candidate list.",
       "highlight": true
     },
     {

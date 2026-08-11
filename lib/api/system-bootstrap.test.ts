@@ -5,6 +5,7 @@ import { GetSystemBootstrapResponse } from "@/gen/ts/open_splunk/v1/system_api";
 
 import {
   MAXIMUM_BROWSER_BOOTSTRAP_APPS,
+  MAXIMUM_SPL_COMPATIBILITY_VERSION_BYTES,
   adaptSystemBootstrap,
 } from "./system-bootstrap";
 
@@ -40,6 +41,36 @@ test("system bootstrap keeps build metadata optional for older servers", () => {
     serverTime: new Date("2026-07-26T12:00:00Z"),
   });
   assert.equal(adaptSystemBootstrap(response).build, null);
+  assert.equal(adaptSystemBootstrap(response).splCompatibilityVersion, "");
+});
+
+test("system bootstrap accepts only a canonical bounded SPL compatibility identity", () => {
+  for (const compatibility of ["0.2", "", "\ufeff0.2"]) {
+    const response = GetSystemBootstrapResponse.fromPartial({
+      splCompatibilityVersion: compatibility,
+      serverTime: new Date("2026-07-26T12:00:00Z"),
+    });
+    assert.equal(adaptSystemBootstrap(response).splCompatibilityVersion, compatibility);
+  }
+
+  for (const compatibility of [
+    " 0.2",
+    "0.2\u00a0",
+    "0.\u00002",
+    "x".repeat(MAXIMUM_SPL_COMPATIBILITY_VERSION_BYTES + 1),
+    "😀".repeat(MAXIMUM_SPL_COMPATIBILITY_VERSION_BYTES / 2),
+    "\ud800",
+  ]) {
+    const response = GetSystemBootstrapResponse.fromPartial({
+      splCompatibilityVersion: compatibility,
+      serverTime: new Date("2026-07-26T12:00:00Z"),
+    });
+    assert.throws(
+      () => adaptSystemBootstrap(response),
+      /noncanonical SPL compatibility identity/,
+      JSON.stringify(compatibility),
+    );
+  }
 });
 
 test("system bootstrap rejects an oversized spoofed app catalog before mapping entries", () => {

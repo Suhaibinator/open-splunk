@@ -48,6 +48,7 @@ const (
 	defaultRetentionTTL           = 15 * time.Minute
 	defaultExpiredRetention       = 5 * time.Minute
 	defaultCleanupInterval        = time.Minute
+	defaultCompilerVersion        = spl.CompatibilityVersion
 	minimumCursorKeyBytes         = 32
 	maximumConcurrent             = 256
 	maximumConcurrentReads        = 256
@@ -71,6 +72,9 @@ const (
 	// MaximumScopeIndexes is the hard manager-wide ceiling for authorized and
 	// requested index-scope entries retained with one search.
 	MaximumScopeIndexes = 256
+	// MaximumCompilerVersionBytes bounds the immutable compatibility identity
+	// retained with each authored search and projected by public transports.
+	MaximumCompilerVersionBytes = 128
 )
 
 var (
@@ -192,6 +196,10 @@ type Config struct {
 	Snapshotter Snapshotter
 	Journal     JobJournal
 	Compiler    clickhouse.Compiler
+	// CompilerVersion is the immutable authored-SPL compatibility identity
+	// retained with every admitted job. Empty selects the legacy development
+	// identity for embedders that have not supplied a product version.
+	CompilerVersion string
 	// KnowledgeResolver enables sealed pre-journal admission only for requests
 	// with a nonempty AppID. App-less searches deliberately remain legacy.
 	KnowledgeResolver KnowledgeResolver
@@ -261,6 +269,7 @@ type Manager struct {
 	onJournalError           func(error)
 	onExecutionError         func(string, FailureCode, error)
 	compiler                 clickhouse.Compiler
+	compilerVersion          string
 	knowledgeResolver        KnowledgeResolver
 	maxRows                  uint64
 	maxBytes                 uint64
@@ -464,6 +473,13 @@ func New(config Config) (*Manager, error) {
 	if maxScopeIndexes == 0 {
 		maxScopeIndexes = MaximumScopeIndexes
 	}
+	compilerVersion := config.CompilerVersion
+	if compilerVersion == "" {
+		compilerVersion = defaultCompilerVersion
+	}
+	if !ValidCompilerVersion(compilerVersion) {
+		return nil, errors.New("create search job manager: compiler version is invalid")
+	}
 	retentionTTL := config.RetentionTTL
 	if retentionTTL == 0 {
 		retentionTTL = defaultRetentionTTL
@@ -526,6 +542,7 @@ func New(config Config) (*Manager, error) {
 		journalErrorHookGate:     make(chan struct{}, 1),
 		executionErrorHookGate:   make(chan struct{}, 1),
 		compiler:                 config.Compiler,
+		compilerVersion:          strings.Clone(compilerVersion),
 		knowledgeResolver:        normalizedKnowledgeResolver(config.KnowledgeResolver),
 		maxRows:                  maxRows,
 		maxBytes:                 maxBytes,
@@ -664,6 +681,10 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
 	}
+	metadataBytes, err = checkedAdd(metadataBytes, uint64(len(manager.compilerVersion)))
+	if err != nil || metadataBytes > manager.maxMetadataBytes {
+		return Job{}, ErrCapacity
+	}
 	if prepared != nil {
 		metadataBytes, err = checkedAdd(metadataBytes, prepared.metadataBytes)
 		if err != nil || metadataBytes > manager.maxMetadataBytes {
@@ -705,6 +726,7 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 			Latest:           request.TimeRange.Latest(),
 			IndexTimeCutoff:  now,
 			VisibilityCutoff: visibilityCutoff,
+			CompilerVersion:  strings.Clone(manager.compilerVersion),
 			State:            StateQueued,
 			CreatedAt:        now,
 		},
@@ -1128,6 +1150,13 @@ func canonicalJobMetadataIdentifier(value string, maximumBytes int, allowEmpty b
 		}
 	}
 	return true
+}
+
+// ValidCompilerVersion reports whether value is a non-empty canonical
+// authored-SPL compatibility identity. Boundaries that retain an empty value
+// solely for legacy records must handle that exception explicitly.
+func ValidCompilerVersion(value string) bool {
+	return canonicalJobMetadataIdentifier(value, MaximumCompilerVersionBytes, false)
 }
 
 func validAccessScope(access AccessScope) bool {

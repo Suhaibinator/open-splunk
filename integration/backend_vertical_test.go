@@ -53,10 +53,10 @@ const (
 	redactionCredentialMarker      = "[CREDENTIAL-MASKED]"
 	redactionPINMarker             = "[PIN-MASKED]"
 	verticalSentinelMessage        = "typed redaction sentinel"
-	verticalSearchSPL              = " \nindex=vertical | dedup event_id | table _time message status duration_ms api_key customer_credential customer_pin _raw\t"
-	browserVerticalSearchSPL       = "index=vertical | dedup event_id"
+	verticalSearchSPL              = " \nindex=vertical | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id | table _time message status duration_ms adjusted_duration api_key customer_credential customer_pin _raw\t"
+	browserVerticalSearchSPL       = "index=vertical | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id"
 	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
-	splCompatibilityVersionForTest = "tier-1-dev"
+	splCompatibilityVersionForTest = "0.2"
 	clickHouseEventInsertSQL       = "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
 		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +
@@ -385,7 +385,7 @@ func TestBackendVertical(t *testing.T) {
 	}
 	completedExport, artifact, downloadToken := exportAndDownloadJSONLines(t, ctx, httpClient, baseURL, search.jobID,
 		[]string{
-			"message", "status", "duration_ms", "api_key",
+			"message", "status", "duration_ms", "adjusted_duration", "api_key",
 			"customer_credential", "customer_pin", "_raw",
 		},
 		verticalEventCount,
@@ -563,6 +563,7 @@ func assertBrowserVisibleResults(
 	t.Helper()
 	runBrowserVerticalSpec(t, ctx, repository, browserVerticalSpecConfig{
 		grepPattern: "collector event is visible through the compiled backend UI|" +
+			"backend v0.2 diagnostics remain authoritative and prevent browser dispatch|" +
 			"history Run again delegates persisted intent with source-only rerun provenance|" +
 			"failed search terminal rejects without waiting for results",
 		outputDirectory:    "backend-vertical",
@@ -1185,13 +1186,15 @@ func createCompletedJSONLinesExport(
 	}, &created)
 	exportID := created.GetExportJob().GetExportJobId()
 	if exportID == "" || created.GetExportJob().GetDefinition().GetSearchJobId() != searchJobID ||
-		created.GetExportJob().GetFormat() != opensplunkv1.ExportFormat_EXPORT_FORMAT_JSON_LINES {
+		created.GetExportJob().GetFormat() != opensplunkv1.ExportFormat_EXPORT_FORMAT_JSON_LINES ||
+		created.GetExportJob().GetCompilerVersion() != splCompatibilityVersionForTest {
 		t.Fatalf("created export job = %+v", created.GetExportJob())
 	}
 
 	completed := waitForCompletedExport(t, ctx, client, baseURL, exportID)
 	if completed.GetArtifact().GetRowCount() != expectedRows || completed.GetProgress().GetRowsWritten() != expectedRows ||
-		completed.GetArtifact().GetSizeBytes() == 0 || completed.GetProgress().GetBytesWritten() != completed.GetArtifact().GetSizeBytes() {
+		completed.GetArtifact().GetSizeBytes() == 0 || completed.GetProgress().GetBytesWritten() != completed.GetArtifact().GetSizeBytes() ||
+		completed.GetCompilerVersion() != splCompatibilityVersionForTest {
 		t.Fatalf("completed export job = %+v", completed)
 	}
 	return completed
@@ -1483,6 +1486,7 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 		"message",
 		"status",
 		"duration_ms",
+		"adjusted_duration",
 		"api_key",
 		"customer_credential",
 		"customer_pin",
@@ -1504,8 +1508,10 @@ func assertDownloadedRedactedResults(t *testing.T, completed *opensplunkv1.Expor
 		found = true
 		status, statusOK := row["status"].(json.Number)
 		duration, durationOK := row["duration_ms"].(json.Number)
+		adjustedDuration, adjustedDurationOK := row["adjusted_duration"].(json.Number)
 		raw, rawOK := row["_raw"].(string)
 		if !statusOK || status.String() != "201" || !durationOK || duration.String() != "12.5" ||
+			!adjustedDurationOK || adjustedDuration.String() != "13.5" ||
 			row["api_key"] != "[REDACTED]" ||
 			row["customer_credential"] != redactionCredentialMarker ||
 			row["customer_pin"] != redactionPINMarker ||
@@ -2868,7 +2874,7 @@ func assertTruncatedPreviewExportsAllRows(
 		},
 	}, &created)
 	jobID := created.GetSearchJob().GetSearchJobId()
-	if jobID == "" {
+	if jobID == "" || created.GetSearchJob().GetCompilerVersion() != splCompatibilityVersionForTest {
 		t.Fatalf("created bulk search job = %+v", created.GetSearchJob())
 	}
 	completed := waitForCompletedSearch(t, ctx, client, baseURL, jobID, 60*time.Second)
@@ -3045,7 +3051,8 @@ func runSearch(
 		job.GetStateVersion() != terminal.GetStateVersion() ||
 		job.GetProgress().GetStateVersion() != job.GetStateVersion() ||
 		terminal.GetFinalProgress().GetStateVersion() != terminal.GetStateVersion() ||
-		job.GetProgress().GetProducedRows() != terminal.GetFinalProgress().GetProducedRows() {
+		job.GetProgress().GetProducedRows() != terminal.GetFinalProgress().GetProducedRows() ||
+		job.GetCompilerVersion() != splCompatibilityVersionForTest {
 		t.Fatalf("authoritative search job = %+v, websocket terminal = %+v", job, terminal)
 	}
 	t.Logf("completed search scope: indexes=%v range=%v cutoff=%v rows=%d",
@@ -3143,7 +3150,7 @@ func assertBackendHistoryRerun(
 	latest := "now"
 	timezone := "UTC"
 	source := "index=" + historyRerunIndexName +
-		` source="history-rerun.log" | table message`
+		` source="history-rerun.log" | eval message_length=len(message)+1 | where message_length IN (message_length) | table message`
 	var originalCreate opensplunkv1.CreateSearchJobResponse
 	postProto(
 		t,
@@ -3162,13 +3169,16 @@ func assertBackendHistoryRerun(
 		&originalCreate,
 	)
 	originalID := originalCreate.GetSearchJob().GetSearchJobId()
-	if originalID == "" {
+	if originalID == "" ||
+		originalCreate.GetSearchJob().GetCompilerVersion() != splCompatibilityVersionForTest {
 		t.Fatalf("created history-rerun source job = %+v", originalCreate.GetSearchJob())
 	}
 	original := waitForCompletedSearch(t, ctx, client, baseURL, originalID, 30*time.Second)
 	originalHistory := waitForSearchHistoryEntry(t, ctx, client, baseURL, originalID)
 	if original.GetProgress().GetProducedRows() != 1 ||
 		originalHistory.GetProducedRows() != 1 ||
+		original.GetCompilerVersion() != splCompatibilityVersionForTest ||
+		originalHistory.GetCompilerVersion() != splCompatibilityVersionForTest ||
 		originalHistory.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_AD_HOC {
 		t.Fatalf("history-rerun source search = job %+v history %+v", original, originalHistory)
 	}
@@ -3250,7 +3260,8 @@ func assertBackendHistoryRerun(
 		&rerunCreate,
 	)
 	rerunID := rerunCreate.GetSearchJob().GetSearchJobId()
-	if rerunID == "" || rerunID == originalID {
+	if rerunID == "" || rerunID == originalID ||
+		rerunCreate.GetSearchJob().GetCompilerVersion() != splCompatibilityVersionForTest {
 		t.Fatalf("created history rerun = %+v", rerunCreate.GetSearchJob())
 	}
 	var deleted opensplunkv1.DeleteSearchHistoryEntryResponse
@@ -3275,6 +3286,7 @@ func assertBackendHistoryRerun(
 		!slices.Equal(rerun.GetEffectiveIndexScope(), []string{historyRerunIndexName}) ||
 		rerun.GetSource().GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN ||
 		rerun.GetSource().GetHistorySearchId() != originalID ||
+		rerun.GetCompilerVersion() != splCompatibilityVersionForTest ||
 		rerun.GetProgress().GetProducedRows() != 2 ||
 		rerun.GetResolvedTimeRange().GetLatest() == nil ||
 		!rerun.GetResolvedTimeRange().GetLatest().AsTime().After(
@@ -4201,6 +4213,7 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 		"message",
 		"status",
 		"duration_ms",
+		"adjusted_duration",
 		"api_key",
 		"customer_credential",
 		"customer_pin",
@@ -4211,7 +4224,9 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 		}
 	}
 	if results.schema.GetColumns()[columns["status"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
-		results.schema.GetColumns()[columns["duration_ms"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED {
+		results.schema.GetColumns()[columns["duration_ms"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_MIXED ||
+		results.schema.GetColumns()[columns["adjusted_duration"]].GetValueType() != opensplunkv1.ValueType_VALUE_TYPE_DOUBLE ||
+		!results.schema.GetColumns()[columns["adjusted_duration"]].GetNullable() {
 		t.Fatalf("dynamic numeric schema did not retain mixed typing: %+v", results.schema)
 	}
 	var sentinel *opensplunkv1.ResultRow
@@ -4231,6 +4246,11 @@ func assertTypedRedactedResults(t *testing.T, results *collectedVerticalSearchRe
 	duration := sentinel.GetCells()[columns["duration_ms"]]
 	if _, ok := duration.GetKind().(*opensplunkv1.TypedValue_DoubleValue); !ok || duration.GetDoubleValue() != 12.5 {
 		t.Fatalf("duration_ms cell = %+v, want typed double(12.5)", duration)
+	}
+	adjustedDuration := sentinel.GetCells()[columns["adjusted_duration"]]
+	if _, ok := adjustedDuration.GetKind().(*opensplunkv1.TypedValue_DoubleValue); !ok ||
+		adjustedDuration.GetDoubleValue() != 13.5 {
+		t.Fatalf("adjusted_duration cell = %+v, want typed double(13.5)", adjustedDuration)
 	}
 	redacted := sentinel.GetCells()[columns["api_key"]]
 	if _, ok := redacted.GetKind().(*opensplunkv1.TypedValue_StringValue); !ok || redacted.GetStringValue() != "[REDACTED]" {

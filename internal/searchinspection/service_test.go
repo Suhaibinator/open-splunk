@@ -183,6 +183,60 @@ func TestInspectBuildsProjectsCompilesOnceAndExplainsExactQuery(t *testing.T) {
 	}
 }
 
+func TestInspectExpressionV02BuildsCompilesProjectsAndRedacts(t *testing.T) {
+	const source = `index=sensitive-index-7f2c | eval adjusted='request-bytes'/314159 | where adjusted>0 AND service IN ("private-member-alpha", "private-member-beta") | table adjusted`
+	snapshot := validInspectionSnapshotForSource(source)
+	searches := &inspectionSearches{snapshots: []searchjobs.ExecutionSnapshot{snapshot, snapshot}}
+	compiler := &inspectionCompiler{}
+	explainer := &inspectionExplainer{
+		result: inspectionExplainResult("open-splunk-explain-v0.2"),
+	}
+	service := newInspectionTestService(t, inspectionTestConfig{
+		Searches: searches, Compiler: compiler, Explainer: explainer,
+	})
+
+	result, err := service.Inspect(
+		context.Background(),
+		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		Request{SearchJobID: snapshot.ID},
+	)
+	if err != nil {
+		t.Fatalf("Inspect(v0.2) error = %v", err)
+	}
+	if searches.callCount() != 2 || compiler.callCount() != 1 || explainer.callCount() != 1 {
+		t.Fatalf(
+			"v0.2 inspection calls = snapshots %d compiler %d explainer %d",
+			searches.callCount(), compiler.callCount(), explainer.callCount(),
+		)
+	}
+	if got := stageOperators(result.Plan); !slices.Equal(got, []string{
+		"Scan", "Filter", "Extend", "Filter", "Project",
+	}) {
+		t.Fatalf("v0.2 inspection operators = %v", got)
+	}
+	if !slices.Equal(result.Plan.Stages[2].InputFields, []string{"request-bytes"}) ||
+		!slices.Equal(result.Plan.Stages[2].OutputFields, []string{"adjusted"}) ||
+		!slices.Equal(result.Plan.Stages[3].InputFields, []string{"adjusted", "service"}) ||
+		!slices.Equal(result.Plan.ReferencedFields, []string{
+			"adjusted", "index", "request-bytes", "service",
+		}) ||
+		result.Plan.Output.Kind != OutputKindStatic ||
+		!slices.Equal(result.Plan.Output.Fields, []string{"adjusted"}) {
+		t.Fatalf("v0.2 logical projection = %#v", result.Plan)
+	}
+	compiled := compiler.lastQuery()
+	if !compiled.HasValidExecutionSeal() || !compiled.EqualForExecution(explainer.lastQuery()) ||
+		result.GeneratedSQL != compiled.SQL {
+		t.Fatal("v0.2 inspection did not explain the exact compiler authority")
+	}
+	rendered := fmt.Sprintf("%#v %s", result.Plan, result.GeneratedSQL)
+	for _, literal := range []string{"private-member-alpha", "private-member-beta"} {
+		if strings.Contains(rendered, literal) {
+			t.Fatalf("v0.2 inspection leaked authored literal %q: %s", literal, rendered)
+		}
+	}
+}
+
 func TestInspectRejectsGenuineSealedCompilerScopeSubstitutionBeforeExplain(t *testing.T) {
 	base := validInspectionSnapshot()
 	for _, test := range []struct {
@@ -1431,13 +1485,18 @@ func (explainer *inspectionExplainer) lastQuery() clickhouse.CompiledQuery {
 }
 
 func validInspectionSnapshot() searchjobs.ExecutionSnapshot {
+	return validInspectionSnapshotForSource(
+		`index=sensitive-index-7f2c status="sensitive-literal-7f2c" | stats count AS events BY host | sort -events | head 10`,
+	)
+}
+
+func validInspectionSnapshotForSource(source string) searchjobs.ExecutionSnapshot {
 	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 	const (
 		jobID    = "019fa490-d629-7203-899e-3fcd0fa18cd1"
 		ownerID  = "sensitive-owner-7f2c"
 		tenantID = "sensitive-tenant-7f2c"
 		index    = "sensitive-index-7f2c"
-		source   = `index=sensitive-index-7f2c status="sensitive-literal-7f2c" | stats count AS events BY host | sort -events | head 10`
 	)
 	managerNow := now.Add(-30 * time.Minute)
 	manager, err := searchjobs.New(searchjobs.Config{

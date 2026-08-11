@@ -169,6 +169,36 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	earliest := base
 	latest := base.Add(2 * time.Minute)
 	program := knowledgeRuntimeProgram(t)
+	v02CompositionProgram := knowledgeRuntimeV02CompositionProgram(t)
+	v02CompositionCommitment, ok := v02CompositionProgram.Commitment()
+	if !ok {
+		t.Fatal("v0.1 knowledge composition program has no commitment")
+	}
+	v02CompositionProgramBeforeCompile := v02CompositionProgram.Clone()
+	v02CompositionPlan := knowledgeRuntimePlan(
+		t,
+		`index=`+indexName+` service=matrix`+
+			` | eval adjusted=calculated_number+1`+
+			` | sort 0 +event_id | table event_id calculated_number adjusted`,
+		v02CompositionProgram,
+		tenantID,
+		[]string{indexName},
+		indexTime,
+		earliest,
+		latest,
+	)
+	v02Composition, err := (clickhouse.Compiler{}).Compile(v02CompositionPlan)
+	if err != nil {
+		t.Fatalf("compile v0.1 knowledge plus authored v0.2 arithmetic: %v", err)
+	}
+	if !v02Composition.RequiresAtomicResult() || !v02Composition.HasValidExecutionSeal() {
+		t.Fatal("knowledge/v0.2 composition lacks atomic execution authority")
+	}
+	commitmentAfterCompile, ok := v02CompositionProgram.Commitment()
+	if !ok || commitmentAfterCompile != v02CompositionCommitment ||
+		!v02CompositionProgram.Equal(v02CompositionProgramBeforeCompile) {
+		t.Fatal("authored v0.2 compilation changed the retained v0.1 knowledge identity")
+	}
 	matrix := compileKnowledgeRuntimeMatrix(
 		t,
 		program,
@@ -367,6 +397,30 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 			t.Fatalf("execute ordinary knowledge query: %v", err)
 		}
 		knowledgeRuntimeAssertOrdinary(t, sink)
+	})
+
+	runSubtest("authored v0.2 arithmetic consumes retained v0.1 calculated field", func(t *testing.T, ctx context.Context) {
+		sink := &fakeSink{}
+		if err := executor.Execute(ctx, v02Composition, sink); err != nil {
+			t.Fatalf("execute knowledge/v0.2 composition: %v", err)
+		}
+		wantSchema := []searchjobs.Column{
+			{Name: "event_id", Kind: searchjobs.ValueKindString},
+			{Name: "calculated_number", Kind: searchjobs.ValueKindMixed, Nullable: true},
+			{Name: "adjusted", Kind: searchjobs.ValueKindDouble, Nullable: true},
+		}
+		if sink.setCalls != 1 || !slices.Equal(sink.schema.Columns, wantSchema) || len(sink.rows) != 4 {
+			t.Fatalf("knowledge/v0.2 result = schema %#v calls %d rows %#v, want schema %#v and 4 rows",
+				sink.schema, sink.setCalls, sink.rows, wantSchema)
+		}
+		wantIDs := []string{"knowledge-event-a", "knowledge-event-b", "knowledge-event-c", "knowledge-event-d"}
+		for index, row := range sink.rows {
+			knowledgeRuntimeRequireStringValue(t, row[0], wantIDs[index], "knowledge/v0.2 event_id")
+			knowledgeRuntimeRequireUnsignedValue(t, row[1], 1, "v0.1 calculated_number")
+			if value, ok := row[2].Double(); !ok || value != 2 {
+				t.Fatalf("knowledge/v0.2 adjusted row %d = %#v, want Double(2)", index, row[2])
+			}
+		}
 	})
 
 	runSubtest("selector dimensions independently reject controls", func(t *testing.T, ctx context.Context) {
@@ -1344,6 +1398,28 @@ func knowledgeRuntimePlan(
 		t.Fatalf("inject production knowledge query %q: %v", source, err)
 	}
 	return logical
+}
+
+func knowledgeRuntimeV02CompositionProgram(t *testing.T) knowledgeprogram.Program {
+	t.Helper()
+	return knowledgeRuntimePrepareProgram(t, []*opensplunkv1.KnowledgeObjectDefinition{
+		{
+			AppId:        "knowledge-app",
+			Name:         "v01-calculated-number",
+			SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+			Selector:     &opensplunkv1.KnowledgeSelector{},
+			Body: &opensplunkv1.KnowledgeObjectDefinition_CalculatedField{
+				CalculatedField: &opensplunkv1.CalculatedFieldDefinition{
+					DestinationField: "calculated_number",
+					// The retained Knowledge compiler deliberately remains on
+					// the v0.1 scalar profile. Authored v0.2 arithmetic consumes
+					// this numeric result only after the prelude is sealed.
+					Expression:        "severity",
+					OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+				},
+			},
+		},
+	})
 }
 
 func knowledgeRuntimeProgram(t *testing.T) knowledgeprogram.Program {

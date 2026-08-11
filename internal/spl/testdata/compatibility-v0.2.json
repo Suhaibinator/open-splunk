@@ -1,0 +1,220 @@
+{
+  "format_version": "open-splunk-spl-compatibility-v0.2",
+  "compatibility_version": "0.2",
+  "rules": [
+    {
+      "id": "SPL-V02-PROFILE-001",
+      "summary": "Authored searches use v0.2 while knowledge calculated fields remain v0.1.",
+      "cases": [
+        {"name": "authored arithmetic", "profile": "SPLExpressionV02", "source": "index=main | eval value=1+2", "expect": {"parse": "accept"}},
+        {"name": "knowledge arithmetic remains closed", "profile": "SPLExpressionV01", "source": "1+2", "expect": {"diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-ACTIVATION-001",
+      "summary": "Compatibility identity changes atomically after complete acceptance.",
+      "cases": [
+        {"name": "complete runtime identity", "evidence": "bootstrap-job-history-export-browser", "expect": {"compatibility": "0.2"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-GRAMMAR-001",
+      "summary": "One eval grammar serves every existing predicate consumer.",
+      "cases": [
+        {"name": "eval", "source": "index=main | eval value=(left+right)*2", "expect": {"parse": "accept"}},
+        {"name": "where", "source": "index=main | where (left+right)*2>=10", "expect": {"parse": "accept"}},
+        {"name": "if", "source": "index=main | eval value=if(status IN (500,503), used/capacity, 0)", "expect": {"parse": "accept"}},
+        {"name": "case", "source": "index=main | eval value=case(status==200, bytes/1024, status==500, -1)", "expect": {"parse": "accept"}},
+        {"name": "conditional count", "source": "index=main | stats count(eval(status IN (500,502,503))) AS failures", "expect": {"parse": "accept"}},
+        {"name": "base search membership excluded", "source": "index=main status IN (500,503)", "expect": {"diagnostic": "SPL_UNSUPPORTED_EXPRESSION"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-PRECEDENCE-001",
+      "summary": "Arithmetic, concatenation, comparison, and Boolean precedence is fixed.",
+      "cases": [
+        {"name": "multiplication before addition", "expression": "1+2*3", "expect": {"value": {"double": 7}}},
+        {"name": "group before multiplication", "expression": "(1+2)*3", "expect": {"value": {"double": 9}}},
+        {"name": "division associates left", "expression": "20/5/2", "expect": {"value": {"double": 2}}},
+        {"name": "unary associates right", "expression": "- - 2", "expect": {"value": {"double": 2}}},
+        {"name": "arithmetic before concatenation prefix", "expression": "\"value=\" . 1+2", "expect": {"value": {"string": "value=3"}}},
+        {"name": "arithmetic before concatenation suffix", "expression": "1+2 . \"ms\"", "expect": {"value": {"string": "3ms"}}},
+        {"name": "equality synonym", "source": "index=main | where status==200", "expect": {"parse": "accept"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-GROUPING-001",
+      "summary": "Scalar and Boolean grouping cannot introduce truthiness or Boolean assignment.",
+      "cases": [
+        {"name": "scalar group", "source": "index=main | eval value=(bytes+overhead)/1024", "expect": {"parse": "accept"}},
+        {"name": "Boolean group", "source": "index=main | where (status=500 OR status=503) AND attempts>1", "expect": {"parse": "accept"}},
+        {"name": "grouped scalar is not predicate", "source": "index=main | where (bytes+1)", "expect": {"diagnostic": "SPL_EXPECTED_COMPARISON"}},
+        {"name": "grouped Boolean is not scalar", "source": "index=main | eval value=(status=500 OR status=503)", "expect": {"diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-LEXER-001",
+      "summary": "Operators tokenize in scalar contexts without changing base-search words.",
+      "cases": [
+        {"name": "unspaced division", "source": "index=main | eval kib=bytes/1024", "expect": {"parse": "accept"}},
+        {"name": "unspaced subtraction", "source": "index=main | eval delta=used-capacity", "expect": {"parse": "accept"}},
+        {"name": "signed exponent", "source": "index=main | eval value=1e-3*1000", "expect": {"parse": "accept"}},
+        {"name": "hyphenated base value preserved", "source": "index=main host=api-west-1 | table host", "expect": {"parse": "accept"}},
+        {"name": "ambiguous legacy spelling is subtraction", "source": "index=main | eval value=request-bytes", "expect": {"parse": "accept"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-QUOTED-FIELD-001",
+      "summary": "Single quotes name exact scalar fields and eval destinations only.",
+      "cases": [
+        {"name": "operator field", "source": "index=main | eval value='request-bytes'/1024", "expect": {"parse": "accept"}},
+        {"name": "space field", "source": "index=main | where 'HTTP Status' IN (500,502)", "expect": {"parse": "accept"}},
+        {"name": "quoted destination", "source": "index=main | eval 'error-rate'=errors/requests", "expect": {"parse": "accept"}},
+        {"name": "escaped quote", "source": "index=main | eval value='owner\\'s field'", "expect": {"parse": "accept"}},
+        {"name": "quote and path escaped backslash", "source": "index=main | eval value='path\\\\\\\\leaf'", "expect": {"parse": "accept"}},
+        {"name": "invalid escape", "source": "index=main | eval value='bad\\nfield'", "expect": {"diagnostic": "SPL_INVALID_FIELD_QUOTE_ESCAPE"}},
+        {"name": "unterminated", "source": "index=main | eval value='field", "expect": {"diagnostic": "SPL_UNTERMINATED_FIELD_QUOTE"}},
+        {"name": "empty", "source": "index=main | eval value=''", "expect": {"diagnostic": "SPL_EXPECTED_FIELD"}},
+        {"name": "quoted aggregate excluded", "source": "index=main | stats avg('request-bytes')", "expect": {"diagnostic": "SPL_UNSUPPORTED_STATS_AGGREGATE"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-ARITHMETIC-TYPE-001",
+      "summary": "Arithmetic is nullable Float64 and rejects statically unsupported domains.",
+      "cases": [
+        {"name": "unary plus", "expression": "+2", "expect": {"value": {"double": 2}}},
+        {"name": "unary minus", "expression": "-2", "expect": {"value": {"double": -2}}},
+        {"name": "all binary operators", "expression": "((8+2)-1)*3/9%4", "expect": {"value": {"double": 3}}},
+        {"name": "string plus excluded", "source": "index=main | eval value=\"a\"+\"b\"", "expect": {"diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE", "suggestion": "period"}},
+        {"name": "numeric-looking fixed String excluded", "source": "index=main | eval value=\"12\"+1", "expect": {"diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE"}},
+        {"name": "canonical time excluded", "source": "index=main | eval value=_time+1", "expect": {"diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE"}},
+        {"name": "Boolean excluded", "source": "index=main | eval value=true+1", "expect": {"diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-ARITHMETIC-NULL-001",
+      "summary": "Missing and incompatible runtime values produce present null; malformed tags fail atomically.",
+      "cases": [
+        {"name": "missing", "expression": "missing+1", "row": {}, "expect": {"value": {"null": true, "present": true}}},
+        {"name": "explicit null", "expression": "value+1", "row": {"value": null}, "expect": {"value": {"null": true, "present": true}}},
+        {"name": "numeric String", "expression": "value+1", "row": {"value": "2.5"}, "expect": {"value": {"double": 3.5}}},
+        {"name": "String whitespace", "expression": "value+1", "row": {"value": " 2.5 "}, "expect": {"value": {"null": true}}},
+        {"name": "String nonfinite", "expression": "value+1", "row": {"value": "NaN"}, "expect": {"value": {"null": true}}},
+        {"name": "String too large", "expression": "value+1", "row_fixture": "numeric-string-4097-bytes", "expect": {"value": {"null": true}}},
+        {"name": "integer precision boundary", "expression": "value+0", "row": {"value": 9007199254740993}, "expect": {"value": {"double_text": "9007199254740992"}}},
+        {"name": "malformed decimal tag", "expression": "value+1", "row_fixture": "malformed-decimal-v1", "expect": {"job_failure": "unsupported-value-sanitized"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-ARITHMETIC-EXCEPTION-001",
+      "summary": "Zero divisors are null and computed IEEE non-finite values are transported.",
+      "cases": [
+        {"name": "positive zero division", "expression": "1/0", "expect": {"value": {"null": true}}},
+        {"name": "negative zero division", "expression": "1/-0.0", "expect": {"value": {"null": true}}},
+        {"name": "zero remainder", "expression": "1%0", "expect": {"value": {"null": true}}},
+        {"name": "negative remainder", "expression": "-5%2", "expect": {"value": {"double": -1}}},
+        {"name": "negative divisor remainder", "expression": "5%-2", "expect": {"value": {"double": 1}}},
+        {"name": "both negative remainder", "expression": "-5%-2", "expect": {"value": {"double": -1}}},
+        {"name": "finite remainder infinity", "expression": "5%inf", "row": {"inf": {"positive_infinity": true}}, "expect": {"value": {"double": 5}}},
+        {"name": "infinity remainder finite", "expression": "inf%5", "row": {"inf": {"positive_infinity": true}}, "expect": {"value": {"nan": true}}},
+        {"name": "negative zero normalized", "expression": "-0.0+0", "expect": {"value": {"double": 0, "negative_zero": false}}},
+        {"name": "division retains negative zero", "expression": "0/-2", "expect": {"value": {"double": 0, "negative_zero": true}}},
+        {"name": "overflow", "expression": "1e308*1e308", "expect": {"value": {"positive_infinity": true}}},
+        {"name": "NaN publication", "expression": "inf-inf", "row": {"inf": {"positive_infinity": true}}, "expect": {"value": {"nan": true}}},
+        {"name": "NaN equality false", "expression": "nan=nan", "row": {"nan": {"nan": true}}, "expect": {"boolean": false}},
+        {"name": "NaN inequality true", "expression": "nan!=nan", "row": {"nan": {"nan": true}}, "expect": {"boolean": true}},
+        {"name": "NaN ordered false", "expression": "nan>0", "row": {"nan": {"nan": true}}, "expect": {"boolean": false}}
+      ]
+    },
+    {
+      "id": "SPL-V02-ARITHMETIC-EVALUATION-001",
+      "summary": "Operands are source ordered, single occurrence, row preserving, and conditionally short circuited.",
+      "cases": [
+        {"name": "left associative occurrence", "source": "index=main | eval value=dynamic/2/3", "expect": {"explain": {"source_occurrences": 1, "event_scans": 1, "array_join": false}}},
+        {"name": "unselected malformed branch", "source": "index=main | eval value=if(status=200, 1, malformed+1)", "row_fixture": "status-200-malformed-tag", "expect": {"value": {"double": 1}}},
+        {"name": "arithmetic conditional needs Float branch", "source": "index=main | eval value=if(status=200, used+1, 0.0)", "expect": {"parse": "accept"}},
+        {"name": "arithmetic conditional integer branch rejected", "source": "index=main | eval value=if(status=200, used+1, 0)", "expect": {"diagnostic_phase": "compile", "diagnostic": "SPL_UNSUPPORTED_IF_BRANCH_TYPE"}},
+        {"name": "row cardinality", "source": "index=main | eval value=(a+b)*c", "expect": {"relation": {"fanout": 1}}}
+      ]
+    },
+    {
+      "id": "SPL-V02-MEMBERSHIP-001",
+      "summary": "Function and infix membership reuse eval equality without backend IN coercion.",
+      "cases": [
+        {"name": "function", "source": "index=main | where in(status,400,401,403)", "expect": {"parse": "accept"}},
+        {"name": "infix", "source": "index=main | where status IN (400,401,403)", "expect": {"parse": "accept"}},
+        {"name": "not infix", "source": "index=main | where status NOT IN (200,201)", "expect": {"parse": "accept"}},
+        {"name": "field candidates", "source": "index=main | where needle IN (left,right)", "expect": {"parse": "accept"}},
+        {"name": "expression candidates", "source": "index=main | where value IN (base+1,(base+2)*2)", "expect": {"parse": "accept"}},
+        {"name": "String case sensitive", "expression": "value IN (\"prod\")", "row": {"value": "Prod"}, "expect": {"boolean": false}},
+        {"name": "wildcard literal", "expression": "value IN (\"5*\")", "row": {"value": "500"}, "expect": {"boolean": false}},
+        {"name": "NaN never matches", "expression": "value IN (candidate)", "row": {"value": {"nan": true}, "candidate": {"nan": true}}, "expect": {"boolean": false}},
+        {"name": "later malformed candidate still fails", "expression": "value IN (1,bad)", "row_fixture": "value-1-malformed-decimal-candidate", "expect": {"job_failure": "unsupported-value-sanitized"}},
+        {"name": "empty", "source": "index=main | where status IN ()", "expect": {"diagnostic": "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX"}},
+        {"name": "trailing comma", "source": "index=main | where status IN (500,)", "expect": {"diagnostic": "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX"}},
+        {"name": "thirty third candidate", "row_fixture": "membership-33-candidates", "expect": {"diagnostic": "SPL_QUERY_TOO_COMPLEX"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-MEMBERSHIP-NULL-001",
+      "summary": "Membership and NOT IN use exact three-valued logic.",
+      "cases": [
+        {"name": "earlier match before null", "expression": "value IN (1,null)", "row": {"value": 1}, "expect": {"boolean": true}},
+        {"name": "no match plus null", "expression": "value IN (1,null)", "row": {"value": 2}, "expect": {"boolean": null}},
+        {"name": "null input", "expression": "value IN (1,2)", "row": {"value": null}, "expect": {"boolean": null}},
+        {"name": "not true", "expression": "value NOT IN (1,2)", "row": {"value": 1}, "expect": {"boolean": false}},
+        {"name": "not null", "expression": "value NOT IN (1,null)", "row": {"value": 2}, "expect": {"boolean": null}},
+        {"name": "direct assignment rejected", "source": "index=main | eval selected=status IN (200,201)", "expect": {"diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"}},
+        {"name": "explicit Boolean comparison excluded", "source": "index=main | where (status IN (200,201))=true", "expect": {"diagnostic": "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX"}},
+        {"name": "if consumer", "source": "index=main | eval selected=if(status IN (200,201),\"yes\",\"no\")", "expect": {"parse": "accept"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-LIMITS-001",
+      "summary": "Parser, planner, and compiler enforce independent expression ceilings.",
+      "cases": [
+        {"name": "operator 256", "row_fixture": "arithmetic-256-operators", "expect": {"parse": "accept"}},
+        {"name": "operator 257", "row_fixture": "arithmetic-257-operators", "expect": {"diagnostic": "SPL_QUERY_TOO_COMPLEX"}},
+        {"name": "unary chain 33", "row_fixture": "unary-33", "expect": {"diagnostic": "SPL_QUERY_TOO_COMPLEX"}},
+        {"name": "membership aggregate 257", "row_fixture": "membership-query-257-candidates", "expect": {"diagnostic": "SPL_QUERY_TOO_COMPLEX"}},
+        {"name": "forged cycle", "row_fixture": "forged-arithmetic-cycle", "expect": {"diagnostic": "SPL_QUERY_TOO_COMPLEX", "phase": "planner-and-compiler"}},
+        {"name": "node SQL 64KiB", "row_fixture": "arithmetic-sql-overflow", "expect": {"diagnostic": "SPL_QUERY_TOO_COMPLEX"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-SECURITY-001",
+      "summary": "Expressions cannot widen authority, author SQL, expand rows, or disclose payloads.",
+      "cases": [
+        {"name": "calculated index does not widen", "source": "index=authorized | eval index=\"unauthorized\" | where index=\"unauthorized\"", "expect": {"authorized_indexes": ["authorized"]}},
+        {"name": "private quoted field rejected", "source": "index=main | eval value='__os_private'+1", "expect": {"diagnostic": "SPL_INVALID_FIELD"}},
+        {"name": "bound literal", "source": "index=main | where value IN (\"'); DROP TABLE events; --\")", "expect": {"sql_literal_fragments": 0, "bound_arguments": 1}},
+        {"name": "no expansion", "source": "index=main | eval value=(a+b)*c | where value IN (1,2,3)", "expect": {"explain": {"event_scans": 1, "array_join": false, "fanout": 1}}}
+      ]
+    },
+    {
+      "id": "SPL-V02-SURFACES-001",
+      "summary": "All retained-search and browser surfaces accept the same v0.2 source.",
+      "cases": [
+        {"name": "production vertical", "source": "index=api | eval ratio=(used/capacity)*100 | where environment IN (\"production\",\"staging\") AND ratio>90 | stats avg(ratio) AS mean_ratio BY route", "expect": {"surfaces": ["validation", "job", "paging", "inspection", "history", "rerun", "saved-search", "csv", "jsonl", "field-catalog", "field-summary", "browser"]}},
+        {"name": "downstream composition", "source": "index=api | eval weighted=(request_bytes+response_bytes)*retry_count | eventstats avg(weighted) AS mean | streamstats sum(weighted) AS running | bin weighted span=10 | chart avg(weighted) OVER route BY status", "expect": {"parse": "accept"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-AUDIT-001",
+      "summary": "The punctuation compatibility audit is explicit, read-only, and source-redacted.",
+      "cases": [
+        {"name": "affected saved search", "row_fixture": "saved-search-legacy-operator-field", "expect": {"audit": {"object_id": true, "source_location": true, "spl_text": false, "mutations": 0}}}
+      ]
+    },
+    {
+      "id": "SPL-V02-DIAGNOSTICS-001",
+      "summary": "Failures have stable codes, minimal ranges, and payload-free suggestions.",
+      "cases": [
+        {"name": "string plus", "source": "index=main | eval value=\"a\"+\"b\"", "expect": {"diagnostic": "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE", "range_text": "\"a\""}},
+        {"name": "unterminated field quote", "source": "index=main | eval value='field", "expect": {"diagnostic": "SPL_UNTERMINATED_FIELD_QUOTE", "range_text": "'"}},
+        {"name": "candidate overflow", "row_fixture": "membership-33-candidates", "expect": {"diagnostic": "SPL_QUERY_TOO_COMPLEX", "range": "membership-list"}},
+        {"name": "Boolean assignment", "source": "index=main | eval value=in(status,200)", "expect": {"diagnostic": "SPL_UNSUPPORTED_EVAL_EXPRESSION"}}
+      ]
+    }
+  ]
+}

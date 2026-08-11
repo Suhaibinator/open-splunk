@@ -247,7 +247,66 @@ const (
 	// operand occurrences across all period-concatenation expressions in one
 	// parsed query. Nested expressions are charged independently.
 	MaximumConcatenationOperandsPerQuery = 256
+
+	// MaximumArithmeticOperatorsPerQuery bounds authored unary and binary
+	// arithmetic occurrences across one parsed query.
+	MaximumArithmeticOperatorsPerQuery = 256
+
+	// MaximumUnaryOperatorChain bounds one right-associative unary chain.
+	MaximumUnaryOperatorChain = 32
+
+	// MaximumMembershipCandidates bounds one function or infix membership
+	// candidate list.
+	MaximumMembershipCandidates = 32
+
+	// MaximumMembershipCandidatesPerQuery bounds candidate occurrences across
+	// all membership predicates in one parsed query.
+	MaximumMembershipCandidatesPerQuery = 256
 )
+
+// ScalarUnaryOp identifies one supported unary arithmetic operator.
+type ScalarUnaryOp uint8
+
+const (
+	ScalarUnaryOpInvalid ScalarUnaryOp = iota
+	ScalarUnaryOpPositive
+	ScalarUnaryOpNegative
+	ScalarUnaryOpCount
+)
+
+// ScalarUnaryExpr applies a unary arithmetic operator to one scalar value.
+type ScalarUnaryExpr struct {
+	Op      ScalarUnaryOp
+	Operand ScalarExpr
+	Range   Range
+}
+
+func (*ScalarUnaryExpr) scalarExpression()    {}
+func (e *ScalarUnaryExpr) SourceRange() Range { return e.Range }
+
+// ScalarBinaryOp identifies one supported binary arithmetic operator.
+type ScalarBinaryOp uint8
+
+const (
+	ScalarBinaryOpInvalid ScalarBinaryOp = iota
+	ScalarBinaryOpMultiply
+	ScalarBinaryOpDivide
+	ScalarBinaryOpRemainder
+	ScalarBinaryOpAdd
+	ScalarBinaryOpSubtract
+	ScalarBinaryOpCount
+)
+
+// ScalarBinaryExpr applies a binary arithmetic operator to two scalar values.
+type ScalarBinaryExpr struct {
+	Op    ScalarBinaryOp
+	Left  ScalarExpr
+	Right ScalarExpr
+	Range Range
+}
+
+func (*ScalarBinaryExpr) scalarExpression()    {}
+func (e *ScalarBinaryExpr) SourceRange() Range { return e.Range }
 
 const (
 	ScalarFunctionInvalid ScalarFunction = iota
@@ -365,6 +424,18 @@ type WhereComparisonExpr struct {
 
 func (*WhereComparisonExpr) whereExpression()     {}
 func (e *WhereComparisonExpr) SourceRange() Range { return e.Range }
+
+// WhereMembershipExpr compares one scalar value with a bounded, ordered list
+// of scalar candidates using eval-language equality semantics.
+type WhereMembershipExpr struct {
+	Value      ScalarExpr
+	Candidates []ScalarExpr
+	Negated    bool
+	Range      Range
+}
+
+func (*WhereMembershipExpr) whereExpression()     {}
+func (e *WhereMembershipExpr) SourceRange() Range { return e.Range }
 
 // WhereScalarPredicateExpr consumes a scalar function whose result is
 // statically Boolean. The parser admits only functions with an explicit

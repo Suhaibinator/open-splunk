@@ -129,6 +129,7 @@ import {
   getQueryDiagnostic,
   isCursorInQuotedValue,
   type SplDiagnostic,
+  utf16OffsetsForUtf8ByteOffsets,
 } from "@/lib/search/spl-editor";
 
 import { installModalSurface } from "./_components/modal-surface";
@@ -453,20 +454,6 @@ function randomDuplicateSavedSearchName(name: string): string {
 
 function currentBackendServerTime(bootstrap: BackendBootstrapState): Date {
   return new Date(bootstrap.response.serverTime.getTime() + Math.max(0, Date.now() - bootstrap.receivedAt));
-}
-
-function stringIndexForUtf8ByteOffset(value: string, byteOffset: bigint): number {
-  if (byteOffset <= 0n) return 0;
-  const target = Number(byteOffset);
-  let bytes = 0;
-  let index = 0;
-  for (const character of value) {
-    const width = new TextEncoder().encode(character).length;
-    if (bytes + width > target) break;
-    bytes += width;
-    index += character.length;
-  }
-  return index;
 }
 
 function backendIndexScope(spl: string, bootstrap: BackendBootstrapState): string[] {
@@ -879,16 +866,23 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
         maxSuggestions: 50,
       }, { signal: controller.signal, timeoutMs: 5_000 }).then((response) => {
         if (controller.signal.aborted) return;
+        const replacementOffsets = utf16OffsetsForUtf8ByteOffsets(
+          query,
+          response.suggestions.flatMap((suggestion) => [
+            suggestion.replacementRange?.start?.byteOffset ?? 0n,
+            suggestion.replacementRange?.end?.byteOffset ?? 0n,
+          ]),
+        );
         setCompletionIndex(0);
-        setBackendCompletions(response.suggestions.map((suggestion) => {
+        setBackendCompletions(response.suggestions.map((suggestion, index) => {
           const start = suggestion.replacementRange?.start?.byteOffset;
           const end = suggestion.replacementRange?.end?.byteOffset;
           return {
             label: suggestion.label,
             insertion: suggestion.insertionText,
             detail: suggestion.detail ?? suggestion.documentation ?? "Server suggestion",
-            replaceStart: start === undefined ? undefined : stringIndexForUtf8ByteOffset(query, start),
-            replaceEnd: end === undefined ? undefined : stringIndexForUtf8ByteOffset(query, end),
+            replaceStart: start === undefined ? undefined : replacementOffsets[index * 2],
+            replaceEnd: end === undefined ? undefined : replacementOffsets[index * 2 + 1],
           };
         }));
       }).catch(() => {

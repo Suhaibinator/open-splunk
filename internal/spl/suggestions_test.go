@@ -972,7 +972,7 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 
 	wantFunctions := []string{
 		"count", "p50", "p95", "c", "dc", "distinct_count", "values", "list", "min", "max",
-		"earliest", "latest", "sum", "avg", "if", "case", "now", "strftime",
+		"earliest", "latest", "sum", "avg", "if", "case", "in", "now", "strftime",
 		"strptime", "relative_time", "tonumber", "tostring", "replace", "isnull",
 		"isnotnull", "coalesce", "lower", "upper", "len", "length", "round",
 		"ceil", "ceiling", "floor", "mvcount", "match", "like", "substr",

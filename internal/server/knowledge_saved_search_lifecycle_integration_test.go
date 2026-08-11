@@ -34,9 +34,11 @@ const (
 	knowledgeSavedSearchID       = "saved-knowledge-lifecycle"
 	knowledgeSavedSearchObjectID = "ko_saved_search_lifecycle"
 	knowledgeSavedSearchField    = "saved_lifecycle_kind"
+	knowledgeSavedSearchScore    = "saved_lifecycle_score"
 	knowledgeSavedSearchV1       = "alpha"
 	knowledgeSavedSearchV2       = "beta"
-	knowledgeSavedSearchSPL      = "index=main | where isnotnull(saved_lifecycle_kind) | table saved_lifecycle_kind"
+	knowledgeSavedSearchCompiler = "knowledge-saved-search-lifecycle"
+	knowledgeSavedSearchSPL      = "index=main | eval saved_lifecycle_score=len(saved_lifecycle_kind)+1 | where saved_lifecycle_score IN (5, 6) | table saved_lifecycle_kind saved_lifecycle_score"
 )
 
 var knowledgeSavedSearchCursorKey = []byte(
@@ -83,12 +85,16 @@ func (executor *knowledgeSavedSearchExecutor) Execute(
 			return ctx.Err()
 		}
 	}
-	if err := sink.SetSchema(searchjobs.Schema{Columns: []searchjobs.Column{{
-		Name: knowledgeSavedSearchField, Kind: searchjobs.ValueKindMixed, Nullable: true,
-	}}}); err != nil {
+	if err := sink.SetSchema(searchjobs.Schema{Columns: []searchjobs.Column{
+		{Name: knowledgeSavedSearchField, Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: knowledgeSavedSearchScore, Kind: searchjobs.ValueKindDouble, Nullable: true},
+	}}); err != nil {
 		return err
 	}
-	return sink.AddRow([]searchjobs.Value{searchjobs.StringValue("retained")})
+	return sink.AddRow([]searchjobs.Value{
+		searchjobs.StringValue("retained"),
+		searchjobs.DoubleValue(6),
+	})
 }
 
 func (executor *knowledgeSavedSearchExecutor) Release() {
@@ -255,6 +261,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		Executor:          executor,
 		Snapshotter:       provenanceIntegrationSnapshotter(17),
 		Journal:           journal,
+		CompilerVersion:   knowledgeSavedSearchCompiler,
 		KnowledgeResolver: resolver,
 		Compiler:          clickhouse.Compiler{Database: "open_splunk", Table: "events"},
 		MaxConcurrent:     1,
@@ -325,6 +332,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	}
 	original := createKnowledgeSavedSearchJob(t, handler, manager, savedRun, jobIDs[0])
 	requireKnowledgeSavedSearchSummary(t, original.KnowledgeSnapshot, 1)
+	requireKnowledgeSavedSearchCompilerVersion(t, original.CompilerVersion, "original saved-search job")
 	savedSource := searchjobs.JobSource{
 		Origin: searchjobs.JobOriginSavedSearch, ObjectID: knowledgeSavedSearchID,
 	}
@@ -363,6 +371,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 
 	freshSaved := createKnowledgeSavedSearchJob(t, handler, manager, savedRun, jobIDs[1])
 	requireKnowledgeSavedSearchSummary(t, freshSaved.KnowledgeSnapshot, 2)
+	requireKnowledgeSavedSearchCompilerVersion(t, freshSaved.CompilerVersion, "fresh saved-search job")
 	if freshSaved.Source != savedSource {
 		t.Fatalf("fresh saved-search source = %#v, want %#v", freshSaved.Source, savedSource)
 	}
@@ -380,6 +389,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	freshSaved = waitKnowledgeSavedSearchJob(t, manager, access, freshSaved.ID)
 	originalHistory := waitKnowledgeSavedSearchHistory(t, history, original.ID)
 	requireKnowledgeSavedSearchSummary(t, originalHistory.GetKnowledgeSnapshot(), 1)
+	requireKnowledgeSavedSearchCompilerVersion(t, originalHistory.GetCompilerVersion(), "original history")
 	if originalHistory.GetSource().GetOrigin() !=
 		opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
 		originalHistory.GetSource().GetSavedSearchId() != knowledgeSavedSearchID ||
@@ -398,6 +408,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		jobIDs[2],
 	)
 	requireKnowledgeSavedSearchSummary(t, historyRerun.KnowledgeSnapshot, 2)
+	requireKnowledgeSavedSearchCompilerVersion(t, historyRerun.CompilerVersion, "history rerun job")
 	historySource := searchjobs.JobSource{
 		Origin: searchjobs.JobOriginHistoryRerun, ObjectID: original.ID,
 	}
@@ -411,6 +422,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	historyRerun = waitKnowledgeSavedSearchJob(t, manager, access, historyRerun.ID)
 	rererunHistory := waitKnowledgeSavedSearchHistory(t, history, historyRerun.ID)
 	requireKnowledgeSavedSearchSummary(t, rererunHistory.GetKnowledgeSnapshot(), 2)
+	requireKnowledgeSavedSearchCompilerVersion(t, rererunHistory.GetCompilerVersion(), "history rerun journal")
 
 	executionV1 := knowledgeSavedSearchExecution(t, manager, access, original.ID)
 	executionSavedV2 := knowledgeSavedSearchExecution(t, manager, access, freshSaved.ID)
@@ -425,6 +437,21 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		!retainedSavedV2.KnowledgePrelude.Equal(retainedHistoryV2.KnowledgePrelude) ||
 		!retainedSavedV2.CompiledQuery.EqualForExecution(retainedHistoryV2.CompiledQuery) {
 		t.Fatal("saved-search and history reruns did not share the exact current v2 authority")
+	}
+	for _, test := range []struct {
+		name     string
+		retained *searchjobs.RetainedKnowledgeExecution
+	}{
+		{name: "saved v1", retained: retainedV1},
+		{name: "saved v2", retained: retainedSavedV2},
+		{name: "history v2", retained: retainedHistoryV2},
+	} {
+		if !slices.Equal(test.retained.CompiledQuery.OutputFields, []string{
+			knowledgeSavedSearchField,
+			knowledgeSavedSearchScore,
+		}) {
+			t.Fatalf("%s output fields = %v, want v0.1-prelude/v0.2 composition outputs", test.name, test.retained.CompiledQuery.OutputFields)
+		}
 	}
 	if retainedV1.KnowledgePrelude.Equal(retainedSavedV2.KnowledgePrelude) ||
 		retainedV1.CompiledQuery.EqualForExecution(retainedSavedV2.CompiledQuery) ||
@@ -469,6 +496,7 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 	}
 	exportJob = waitKnowledgeSavedSearchExport(t, exports, access, exportJob.ID)
 	requireKnowledgeSavedSearchSummary(t, exportJob.KnowledgeSnapshot, 1)
+	requireKnowledgeSavedSearchCompilerVersion(t, exportJob.CompilerVersion, "retained export")
 	if !bytes.Equal(
 		exportJob.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
 		original.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
@@ -482,6 +510,13 @@ func TestSavedSearchAndHistoryRerunResolveCurrentKnowledgeWhileExportRetainsOrig
 		!queries[2].EqualForExecution(retainedHistoryV2.CompiledQuery) ||
 		!queries[3].EqualForExecution(retainedV1.CompiledQuery) {
 		t.Fatalf("saved-search lifecycle executor authorities = %d calls", len(queries))
+	}
+}
+
+func requireKnowledgeSavedSearchCompilerVersion(t *testing.T, got, surface string) {
+	t.Helper()
+	if got != knowledgeSavedSearchCompiler {
+		t.Fatalf("%s compiler version = %q, want %q", surface, got, knowledgeSavedSearchCompiler)
 	}
 }
 

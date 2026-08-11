@@ -213,6 +213,8 @@ jobs:
             fuzztime: 15s
             targets: |
               ^FuzzParseDoesNotPanic$
+              ^FuzzParseV02ExpressionFragmentsCanonicalize$
+              ^FuzzParseV02ExpressionsAreDeterministicAndAtomic$
           - label: hec-protocol
             package: ./internal/hec
             fuzztime: 15s

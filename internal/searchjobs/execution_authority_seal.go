@@ -16,7 +16,7 @@ import (
 
 const (
 	knowledgeExecutionSigningKeyDomain  = "open-splunk-search-job-knowledge-signing-key-v1"
-	knowledgeExecutionAuthorityDomain   = "open-splunk-search-job-knowledge-execution-authority-v2"
+	knowledgeExecutionAuthorityDomain   = "open-splunk-search-job-knowledge-execution-authority-v3"
 	knowledgeExecutionResultDomain      = "open-splunk-search-job-result-generation-v1"
 	knowledgeExecutionResultNonceDomain = "open-splunk-search-job-result-generation-nonce-v1"
 )
@@ -220,6 +220,9 @@ func knowledgeExecutionAuthorityDigest(
 	resultDigest [sha256.Size]byte,
 	facts knowledgeExecutionAuthorityFacts,
 ) ([sha256.Size]byte, bool) {
+	if !ValidCompilerVersion(snapshot.CompilerVersion) {
+		return [sha256.Size]byte{}, false
+	}
 	hasKnowledge := !snapshot.KnowledgeSnapshot.IsZero()
 	if facts.digests.Present != hasKnowledge ||
 		hasKnowledge != (snapshot.CompiledQuery != nil) {
@@ -233,6 +236,7 @@ func knowledgeExecutionAuthorityDigest(
 	writeKnowledgeSealString(digest, snapshot.TenantID)
 	writeKnowledgeSealString(digest, snapshot.AppID)
 	writeKnowledgeSealString(digest, snapshot.SPL)
+	writeKnowledgeSealString(digest, snapshot.CompilerVersion)
 	writeKnowledgeSealStrings(digest, snapshot.EffectiveIndexes)
 	if !writeKnowledgeSealTime(digest, snapshot.Earliest) ||
 		!writeKnowledgeSealTime(digest, snapshot.Latest) ||

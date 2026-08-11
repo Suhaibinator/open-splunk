@@ -1,6 +1,6 @@
 # Open Splunk SPL expansion plan: compatibility v0.2 expression foundation
 
-**Status:** proposed next implementation program
+**Status:** completed and acceptance-verified on August 11, 2026
 **Date:** August 10, 2026
 **Selected compatibility target:** bounded SPL1 arithmetic, scalar grouping,
 quoted scalar field references, and eval-language membership
@@ -586,8 +586,8 @@ predicate behavior.
 
 The result cannot be assigned directly by `eval`, matching the existing
 search-mode Boolean-result restriction. It can be consumed by `if`, `case`,
-`where`, `count(eval(...))`, an explicit Boolean comparison, or the existing
-supported Boolean composition.
+`where`, `count(eval(...))`, or the existing supported Boolean composition.
+It cannot be explicitly compared with a Boolean literal in v0.2.
 
 ## Result shape and downstream composition
 
@@ -1264,52 +1264,52 @@ Compatibility v0.2 is complete only when all of the following are true:
 
 ### Language and semantics
 
-- [ ] The normative v0.2 contract and machine-readable inventory agree.
-- [ ] Quoted scalar fields and quoted eval destinations obey exact field bounds.
-- [ ] Parenthesized scalar and Boolean expressions cannot be confused.
-- [ ] Unary and binary arithmetic obey the pinned precedence and type matrix.
-- [ ] Division/remainder by zero, negative zero, overflow, `NaN`, and infinity
+- [x] The normative v0.2 contract and machine-readable inventory agree.
+- [x] Quoted scalar fields and quoted eval destinations obey exact field bounds.
+- [x] Parenthesized scalar and Boolean expressions cannot be confused.
+- [x] Unary and binary arithmetic obey the pinned precedence and type matrix.
+- [x] Division/remainder by zero, negative zero, overflow, `NaN`, and infinity
       match the contract.
-- [ ] Function, infix, and `NOT IN` membership obey the same equality and null
+- [x] Function, infix, and `NOT IN` membership obey the same equality and null
       semantics.
-- [ ] Direct Boolean assignment, string `+`, multivalue arithmetic, base-search
+- [x] Direct Boolean assignment, string `+`, multivalue arithmetic, base-search
       `IN`, and every other excluded form fail explicitly.
 
 ### Safety and resources
 
-- [ ] Tenant/index/time/visibility/knowledge authority cannot be widened.
-- [ ] Every value remains parameterized and every field identifier is
+- [x] Tenant/index/time/visibility/knowledge authority cannot be widened.
+- [x] Every value remains parameterized and every field identifier is
       compiler-quoted.
-- [ ] Parser, planner, and compiler independently reject forged and oversized
+- [x] Parser, planner, and compiler independently reject forged and oversized
       structures.
-- [ ] Operator, candidate, SQL, depth, token, and backend budgets are enforced.
-- [ ] No arithmetic or membership path expands rows, emits `ARRAY JOIN`, scans
+- [x] Operator, candidate, SQL, depth, token, and backend budgets are enforced.
+- [x] No arithmetic or membership path expands rows, emits `ARRAY JOIN`, scans
       events twice, or performs external work.
-- [ ] Malformed semantic tags fail atomically without payload disclosure.
-- [ ] Cancellation, deadlines, and memory limits remain effective.
+- [x] Malformed semantic tags fail atomically without payload disclosure.
+- [x] Cancellation, deadlines, and memory limits remain effective.
 
 ### Product completeness
 
-- [ ] Validation, job creation, paging, inspection, history, rerun, saved
+- [x] Validation, job creation, paging, inspection, history, rerun, saved
       searches, export, field discovery, and field summary accept the same
       surface.
-- [ ] Browser highlighting, completion, quoting, and diagnostics match the
+- [x] Browser highlighting, completion, quoting, and diagnostics match the
       backend.
-- [ ] Authored v0.2 expressions compose with v0.1 knowledge preludes without
+- [x] Authored v0.2 expressions compose with v0.1 knowledge preludes without
       changing knowledge snapshot identity.
-- [ ] The production collector-to-browser vertical executes representative
+- [x] The production collector-to-browser vertical executes representative
       arithmetic and membership searches against pinned ClickHouse.
-- [ ] Compatibility `0.2` is advertised only by a completely composed runtime.
+- [x] Compatibility `0.2` is advertised only by a completely composed runtime.
 
 ### Quality evidence
 
-- [ ] Focused, repository-wide, race, fuzz, vet, lint, build, protobuf, and
+- [x] Focused, repository-wide, race, fuzz, vet, lint, build, protobuf, and
       frontend gates pass.
-- [ ] Pinned ClickHouse integration and `EXPLAIN` evidence pass.
-- [ ] Benchmarks show linear bounded work and no unexplained material regression.
-- [ ] Independent correctness, security, reuse, and efficiency reviews have no
+- [x] Pinned ClickHouse integration and `EXPLAIN` evidence pass.
+- [x] Benchmarks show linear bounded work and no unexplained material regression.
+- [x] Independent correctness, security, reuse, and efficiency reviews have no
       unresolved concrete findings.
-- [ ] Release evidence names the exact Git revision, ClickHouse digest, Go/Node
+- [x] Release evidence names the exact Git revision, ClickHouse digest, Go/Node
       toolchain, and test commands.
 
 ## Required validation commands
@@ -1334,8 +1334,8 @@ npm run build
 
 make proto
 make proto-lint
-BUF_CACHE_DIR="$PWD/.cache/buf" npx --no-install buf breaking \
-  --against '.git#branch=main'
+BUF_CACHE_DIR="$PWD/.cache/buf" \
+  node scripts/check-buf-breaking.mjs --against-ref main
 go test . -count=1
 
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \

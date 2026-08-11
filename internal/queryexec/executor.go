@@ -81,6 +81,11 @@ const (
 	// would otherwise enforce incrementally. The guard trips on the offending
 	// row, so at most one row beyond the ceiling is ever resident.
 	maximumChartResultBytes = uint64(48 << 20)
+	// Expression v0.2 queries that can raise a sanitized runtime scalar error
+	// are consumed completely before any schema or row is published. Keep that
+	// private buffer independently bounded even if a forged driver ignores the
+	// ClickHouse max_result_bytes setting.
+	maximumAtomicResultBytes = uint64(128 << 20)
 	// A buffered row is stored by value in a growing slice. Reserving two
 	// complete slots per logical row conservatively covers both the Value and
 	// cell-slice headers in the struct plus the slice's unused growth capacity.
@@ -502,6 +507,8 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	}
 
 	schemaPublished := false
+	atomicResult := query.RequiresAtomicResult()
+	var atomicRows atomicResultBuffer
 	for rows.Next() {
 		if err := executionContext.Err(); err != nil {
 			return err
@@ -553,6 +560,12 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			}
 			values[index] = value
 		}
+		if atomicResult {
+			if err := atomicRows.append(values); err != nil {
+				return err
+			}
+			continue
+		}
 		if !schemaPublished {
 			if err := executionContext.Err(); err != nil {
 				return err
@@ -572,10 +585,106 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err := executionContext.Err(); err != nil {
 		return err
 	}
+	if atomicResult {
+		closeErr := rows.Close()
+		rowsClosed = true
+		if closeErr != nil {
+			return classifyQueryError(
+				executionContext,
+				fmt.Errorf("close ClickHouse atomic result stream: %w", closeErr),
+			)
+		}
+		if err := executionContext.Err(); err != nil {
+			return err
+		}
+		if err := sink.SetSchema(schema); err != nil {
+			return err
+		}
+		for block := atomicRows.first; block != nil; block = block.next {
+			for index := 0; index < block.count; index++ {
+				if err := executionContext.Err(); err != nil {
+					return err
+				}
+				if err := sink.AddRow(block.rows[index]); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
 	if !schemaPublished {
 		return sink.SetSchema(schema)
 	}
 	return nil
+}
+
+const atomicRowsPerBlock = 256
+
+// atomicBufferedRowBlock retains a fixed number of outer row-slice headers in
+// one allocation. Charging the complete block before allocating it accounts
+// for unused capacity exactly while avoiding one heap allocation per result
+// row on large atomic Dynamic-expression searches.
+type atomicBufferedRowBlock struct {
+	rows  [atomicRowsPerBlock][]searchjobs.Value
+	count int
+	next  *atomicBufferedRowBlock
+}
+
+type atomicResultBuffer struct {
+	first *atomicBufferedRowBlock
+	last  *atomicBufferedRowBlock
+	bytes uint64
+}
+
+func (buffer *atomicResultBuffer) append(values []searchjobs.Value) error {
+	newBlock := buffer.last == nil || buffer.last.count == atomicRowsPerBlock
+	structural := uint64(0)
+	if newBlock {
+		structural = uint64(unsafe.Sizeof(atomicBufferedRowBlock{}))
+	}
+	nextBytes, err := chargeAtomicResultRow(buffer.bytes, structural, values)
+	if err != nil {
+		return err
+	}
+	if newBlock {
+		block := new(atomicBufferedRowBlock)
+		if buffer.last == nil {
+			buffer.first = block
+		} else {
+			buffer.last.next = block
+		}
+		buffer.last = block
+	}
+	buffer.last.rows[buffer.last.count] = values
+	buffer.last.count++
+	buffer.bytes = nextBytes
+	return nil
+}
+
+func chargeAtomicResultRow(current, structural uint64, values []searchjobs.Value) (uint64, error) {
+	if current > maximumAtomicResultBytes {
+		return 0, searchjobs.ErrByteLimit
+	}
+	if structural > maximumAtomicResultBytes-current {
+		return 0, searchjobs.ErrByteLimit
+	}
+	current += structural
+	for _, value := range values {
+		remaining := maximumAtomicResultBytes - current
+		size, err := value.RetainedSizeBytes()
+		if err != nil {
+			return 0, fmt.Errorf(
+				"%w: size retained atomic ClickHouse result value: %w",
+				searchjobs.ErrInvalidResult,
+				err,
+			)
+		}
+		if size > remaining {
+			return 0, searchjobs.ErrByteLimit
+		}
+		current += size
+	}
+	return current, nil
 }
 
 func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {

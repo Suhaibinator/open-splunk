@@ -166,6 +166,7 @@ func TestRuntimeSavedSearchAuditSurvivesStoreReopen(t *testing.T) {
 		Executor:        runtimeSavedSearchRerunExecutor{},
 		Snapshotter:     runtimeSavedSearchRerunSnapshotter(17),
 		Journal:         journal,
+		CompilerVersion: "saved-search-runtime-rerun-test",
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
 		Now:             func() time.Time { return rerunServerTime },

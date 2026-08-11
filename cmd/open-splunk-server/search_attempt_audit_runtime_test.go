@@ -317,6 +317,7 @@ func openRuntimeSearchAttemptAuditFixture(
 		Executor:        runtimeSearchAttemptAuditExecutor{},
 		Snapshotter:     runtimeSearchAttemptAuditSnapshotter(23),
 		Journal:         journal,
+		CompilerVersion: "runtime-search-attempt-audit-test",
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
 		Now: func() time.Time {

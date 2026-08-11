@@ -197,6 +197,9 @@ func TestRecordValidationRejectsUnsafeOrIncompleteEntries(t *testing.T) {
 		{name: "too many indexes", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
 			entry.EffectiveIndexScope = make([]string, maximumIndexScope+1)
 		}},
+		{name: "noncanonical compiler version", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
+			entry.CompilerVersion = " 0.2 "
+		}},
 		{name: "failure secret-sized", mutate: func(entry *opensplunkv1.SearchHistoryEntry) {
 			entry.Failure = &opensplunkv1.SearchFailure{
 				Code:    opensplunkv1.SearchFailureCode_SEARCH_FAILURE_CODE_EXECUTION,

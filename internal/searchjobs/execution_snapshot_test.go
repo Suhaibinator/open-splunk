@@ -82,6 +82,7 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		OwnerID:          request.OwnerID,
 		TenantID:         request.TenantID,
 		SPL:              request.SPL,
+		CompilerVersion:  defaultCompilerVersion,
 		EffectiveIndexes: []string{"alpha"},
 		Earliest:         earliest.UTC(),
 		Latest:           latest.UTC(),
@@ -422,6 +423,7 @@ func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 		OwnerID:          "owner",
 		TenantID:         "tenant",
 		SPL:              "index=alpha",
+		CompilerVersion:  defaultCompilerVersion,
 		EffectiveIndexes: []string{"alpha", "beta"},
 		Earliest:         baseTime,
 		Latest:           baseTime.Add(time.Hour),
@@ -463,6 +465,9 @@ func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 		{name: "tenant ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.TenantID += "-changed" }},
 		{name: "app ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.AppID = "changed-app" }},
 		{name: "SPL", mutate: func(snapshot *ExecutionSnapshot) { snapshot.SPL += " | head 1" }},
+		{name: "compiler version", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.CompilerVersion = "changed-compiler-version"
+		}},
 		{name: "effective index order", mutate: func(snapshot *ExecutionSnapshot) {
 			snapshot.EffectiveIndexes = []string{"beta", "alpha"}
 		}},

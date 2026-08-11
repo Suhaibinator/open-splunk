@@ -7,7 +7,9 @@ import (
 
 const (
 	maximumKnowledgeExpressionAnalysisNodes = maxSPLTokens * 4
-	maximumKnowledgeExpressionAnalysisDepth = maxScalarNestingDepth * 2
+	// A legal left-associative arithmetic chain contains up to 256 binary AST
+	// nodes even though it consumes no scalar-grouping recursion while parsing.
+	maximumKnowledgeExpressionAnalysisDepth = MaximumArithmeticOperatorsPerQuery + maxScalarNestingDepth*2
 )
 
 // ScalarExpressionAnalysis is the bounded semantic inventory of one parsed
@@ -37,7 +39,10 @@ func ParseScalarExpression(source string) (ScalarExpr, error) {
 			Range:   Range{Start: start, End: end},
 		}
 	}
-	tokens, err := lex(source)
+	// The standalone knowledge boundary is pinned to the exact v0.1 token
+	// stream; v0.2 single-quote/composite recognition is not enabled and cannot
+	// leak through as a caller-selectable sub-feature.
+	tokens, err := lexWithQuotedFields(source, false)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +53,7 @@ func ParseScalarExpression(source string) (ScalarExpr, error) {
 			Range:   tokens[maxSPLTokens].sourceRange,
 		}
 	}
-	parser := parser{tokens: tokens}
+	parser := parser{source: source, tokens: tokens, profile: expressionProfileV01}
 	expression, err := parser.parseScalarExpression()
 	if err != nil {
 		return nil, err
@@ -122,9 +127,11 @@ func ScalarExpressionMayReturnBooleanFunction(expression ScalarExpr) bool {
 }
 
 type scalarExpressionAnalyzer struct {
-	fields     map[string]struct{}
-	nodes      int
-	predicates int
+	fields               map[string]struct{}
+	nodes                int
+	predicates           int
+	arithmeticOperators  int
+	membershipCandidates int
 }
 
 func (analyzer *scalarExpressionAnalyzer) enter(depth int) error {
@@ -149,9 +156,46 @@ func (analyzer *scalarExpressionAnalyzer) visitScalar(expression ScalarExpr, dep
 		}
 		analyzer.fields[expression.Field] = struct{}{}
 	case *ScalarLiteralExpr:
-		if expression == nil {
+		if expression == nil || expression.Value.Kind <= LiteralKindInvalid || expression.Value.Kind > LiteralKindNull {
 			return fmt.Errorf("scalar expression contains a nil literal")
 		}
+	case *ScalarUnaryExpr:
+		if expression == nil || expression.Op <= ScalarUnaryOpInvalid || expression.Op >= ScalarUnaryOpCount {
+			return fmt.Errorf("scalar expression contains an invalid unary arithmetic node")
+		}
+		if !validAnalysisRangeOrZero(expression.Range) {
+			return fmt.Errorf("scalar expression contains an invalid unary arithmetic range")
+		}
+		chain := 0
+		for current := expression; current != nil; {
+			chain++
+			if chain > MaximumUnaryOperatorChain {
+				return fmt.Errorf("scalar expression unary chain exceeds %d operators", MaximumUnaryOperatorChain)
+			}
+			next, ok := current.Operand.(*ScalarUnaryExpr)
+			if !ok {
+				break
+			}
+			current = next
+		}
+		if err := analyzer.countArithmeticOperator(); err != nil {
+			return err
+		}
+		return analyzer.visitScalar(expression.Operand, depth+1)
+	case *ScalarBinaryExpr:
+		if expression == nil || expression.Op <= ScalarBinaryOpInvalid || expression.Op >= ScalarBinaryOpCount {
+			return fmt.Errorf("scalar expression contains an invalid binary arithmetic node")
+		}
+		if !validAnalysisRangeOrZero(expression.Range) {
+			return fmt.Errorf("scalar expression contains an invalid binary arithmetic range")
+		}
+		if err := analyzer.countArithmeticOperator(); err != nil {
+			return err
+		}
+		if err := analyzer.visitScalar(expression.Left, depth+1); err != nil {
+			return err
+		}
+		return analyzer.visitScalar(expression.Right, depth+1)
 	case *ScalarCallExpr:
 		if expression == nil || expression.Function <= ScalarFunctionInvalid || expression.Function >= ScalarFunctionCount {
 			return fmt.Errorf("scalar expression contains an invalid call")
@@ -218,8 +262,28 @@ func (analyzer *scalarExpressionAnalyzer) visitWhere(expression WhereExpr, depth
 		if err := analyzer.visitScalar(expression.Right, depth+1); err != nil {
 			return err
 		}
-		analyzer.predicates++
-		return nil
+		return analyzer.countPredicate()
+	case *WhereMembershipExpr:
+		if expression == nil || len(expression.Candidates) == 0 ||
+			len(expression.Candidates) > MaximumMembershipCandidates {
+			return fmt.Errorf("scalar expression contains an invalid membership predicate")
+		}
+		if !validAnalysisRangeOrZero(expression.Range) {
+			return fmt.Errorf("scalar expression contains an invalid membership range")
+		}
+		if analyzer.membershipCandidates > MaximumMembershipCandidatesPerQuery-len(expression.Candidates) {
+			return fmt.Errorf("scalar expression contains more than %d membership candidates", MaximumMembershipCandidatesPerQuery)
+		}
+		analyzer.membershipCandidates += len(expression.Candidates)
+		if err := analyzer.visitScalar(expression.Value, depth+1); err != nil {
+			return err
+		}
+		for _, candidate := range expression.Candidates {
+			if err := analyzer.visitScalar(candidate, depth+1); err != nil {
+				return err
+			}
+		}
+		return analyzer.countPredicate()
 	case *WhereScalarPredicateExpr:
 		if expression == nil {
 			return fmt.Errorf("scalar expression contains a nil predicate")
@@ -227,9 +291,40 @@ func (analyzer *scalarExpressionAnalyzer) visitWhere(expression WhereExpr, depth
 		if err := analyzer.visitScalar(expression.Value, depth+1); err != nil {
 			return err
 		}
-		analyzer.predicates++
-		return nil
+		return analyzer.countPredicate()
 	default:
 		return fmt.Errorf("scalar expression contains an unsupported Boolean node")
 	}
+}
+
+func (analyzer *scalarExpressionAnalyzer) countArithmeticOperator() error {
+	if analyzer.arithmeticOperators >= MaximumArithmeticOperatorsPerQuery {
+		return fmt.Errorf("scalar expression contains more than %d arithmetic operators", MaximumArithmeticOperatorsPerQuery)
+	}
+	analyzer.arithmeticOperators++
+	return nil
+}
+
+func (analyzer *scalarExpressionAnalyzer) countPredicate() error {
+	if analyzer.predicates >= maxEvalPredicates {
+		return fmt.Errorf("scalar expression contains more than %d predicate leaves", maxEvalPredicates)
+	}
+	analyzer.predicates++
+	return nil
+}
+
+// validAnalysisRangeOrZero preserves the zero-range convention used by
+// directly assembled internal fixtures while rejecting contradictory authored
+// provenance on the v0.2 nodes added to this defensive trust-boundary walk.
+func validAnalysisRangeOrZero(sourceRange Range) bool {
+	if sourceRange == (Range{}) {
+		return true
+	}
+	if sourceRange.Start.Offset < 0 || sourceRange.Start.Line < 1 || sourceRange.Start.Column < 1 ||
+		sourceRange.End.Line < 1 || sourceRange.End.Column < 1 ||
+		sourceRange.End.Offset <= sourceRange.Start.Offset || sourceRange.End.Line < sourceRange.Start.Line {
+		return false
+	}
+	return sourceRange.End.Line != sourceRange.Start.Line ||
+		sourceRange.End.Column > sourceRange.Start.Column
 }

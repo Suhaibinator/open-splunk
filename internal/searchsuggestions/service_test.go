@@ -596,6 +596,82 @@ func TestRepresentableFieldNameMatchesCurrentSingleTokenGrammar(t *testing.T) {
 	}
 }
 
+func TestFieldSuggestionInsertionQuotesV02ScalarFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		allowQuoted bool
+		want        string
+		wantOK      bool
+	}{
+		{name: "host", want: "host", wantOK: true},
+		{name: "request-bytes", allowQuoted: true, want: "'request-bytes'", wantOK: true},
+		{name: "HTTP Status", allowQuoted: true, want: "'HTTP Status'", wantOK: true},
+		{name: "owner's field", allowQuoted: true, want: "'owner\\'s field'", wantOK: true},
+		{name: `path\\owner's field`, allowQuoted: true, want: `'path\\\\owner\'s field'`, wantOK: true},
+		{name: "request-bytes", want: "request-bytes", wantOK: true},
+		{name: " trailing", allowQuoted: true},
+		{name: "__os_private", allowQuoted: true},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name+test.want, func(t *testing.T) {
+			t.Parallel()
+			got, ok := fieldSuggestionInsertion(test.name, test.allowQuoted)
+			if got != test.want || ok != test.wantOK {
+				t.Fatalf("fieldSuggestionInsertion(%q, %t) = (%q, %t), want (%q, %t)",
+					test.name, test.allowQuoted, got, ok, test.want, test.wantOK)
+			}
+		})
+	}
+}
+
+func TestSuggestQuotesOperatorFieldsOnlyInV02ScalarContexts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		source        string
+		wantInsertion string
+	}{
+		{name: "eval", source: "index=main | eval copy=req", wantInsertion: "'request-bytes'"},
+		{name: "where", source: "index=main | where req", wantInsertion: "'request-bytes'"},
+		{name: "fields remains command grammar", source: "index=main | fields req", wantInsertion: "request-bytes"},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			request := validSuggestionRequest(test.source)
+			service := mustSuggestionService(t, Config{
+				Validator: validSuggestionValidator(),
+				Scopes: &suggestionTestScopes{
+					snapshot: validSuggestionSnapshot(t, request),
+				},
+				Compiler: &suggestionTestCompiler{},
+				Executor: &suggestionTestExecutor{result: queryexec.FieldSuggestionResult{
+					FieldNames: []string{"request-bytes"},
+				}},
+			})
+			result, err := service.Suggest(context.Background(), request)
+			if err != nil {
+				t.Fatalf("Suggest(): %v", err)
+			}
+			var got string
+			for _, suggestion := range result.Suggestions {
+				if suggestion.Kind == spl.SuggestionKindField && suggestion.Label == "request-bytes" {
+					got = suggestion.Insertion
+					break
+				}
+			}
+			if got != test.wantInsertion {
+				t.Fatalf("request-bytes insertion = %q, want %q; suggestions=%#v", got, test.wantInsertion, result.Suggestions)
+			}
+		})
+	}
+}
+
 func TestValidateFieldResultAcceptsSeventeenSegmentQueryField(t *testing.T) {
 	t.Parallel()
 
@@ -866,7 +942,7 @@ func TestSuggestRejectsChangedDependencyContractsAtomically(t *testing.T) {
 			FieldNames: []string{"hoa", "ho"},
 		}},
 		{name: "field outside prefix", result: queryexec.FieldSuggestionResult{FieldNames: []string{"status"}}},
-		{name: "field with whitespace", result: queryexec.FieldSuggestionResult{FieldNames: []string{"ho bad"}}},
+		{name: "field with trailing whitespace", result: queryexec.FieldSuggestionResult{FieldNames: []string{"ho "}}},
 		{name: "field with operator", result: queryexec.FieldSuggestionResult{FieldNames: []string{"ho*bad"}}},
 		{name: "field with Unicode format", result: queryexec.FieldSuggestionResult{
 			FieldNames: []string{"ho\u200bbad"},

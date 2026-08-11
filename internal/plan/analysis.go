@@ -3,7 +3,10 @@ package plan
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
+
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 const (
@@ -102,10 +105,13 @@ func analyze(query *Query) (internalAnalysis, error) {
 }
 
 type queryAnalyzer struct {
-	fields           map[string]struct{}
-	nodes            int
-	knowledgeNodes   int
-	scalarPredicates uint32
+	fields                map[string]struct{}
+	nodes                 int
+	knowledgeNodes        int
+	scalarPredicates      uint32
+	arithmeticOperators   int
+	membershipCandidates  int
+	activeExpressionNodes map[any]struct{}
 }
 
 func (analyzer *queryAnalyzer) enter(depth int) error {
@@ -134,6 +140,59 @@ func (analyzer *queryAnalyzer) enterKnowledge(depth int) error {
 			maximumKnowledgeAnalysisNodes,
 		)
 	}
+	return nil
+}
+
+func (analyzer *queryAnalyzer) enterExpressionNode(node any, depth int) error {
+	if node == nil {
+		return errors.New("analyze logical query: expression is nil")
+	}
+	if !reflect.TypeOf(node).Comparable() {
+		return fmt.Errorf("analyze logical query: unsupported expression %T", node)
+	}
+	if err := analyzer.enter(depth); err != nil {
+		return err
+	}
+	if analyzer.activeExpressionNodes == nil {
+		analyzer.activeExpressionNodes = make(map[any]struct{})
+	}
+	if _, cyclic := analyzer.activeExpressionNodes[node]; cyclic {
+		return errors.New("analyze logical query: expression graph contains a cycle")
+	}
+	analyzer.activeExpressionNodes[node] = struct{}{}
+	return nil
+}
+
+func (analyzer *queryAnalyzer) leaveExpressionNode(node any) {
+	delete(analyzer.activeExpressionNodes, node)
+}
+
+func (analyzer *queryAnalyzer) chargeArithmeticOperator() error {
+	if analyzer.arithmeticOperators >= spl.MaximumArithmeticOperatorsPerQuery {
+		return fmt.Errorf(
+			"analyze logical query: arithmetic exceeds %d operators per query",
+			spl.MaximumArithmeticOperatorsPerQuery,
+		)
+	}
+	analyzer.arithmeticOperators++
+	return nil
+}
+
+func (analyzer *queryAnalyzer) chargeMembershipCandidates(count int) error {
+	if count < 1 || count > spl.MaximumMembershipCandidates {
+		return fmt.Errorf(
+			"analyze logical query: membership candidate count must be from 1 through %d",
+			spl.MaximumMembershipCandidates,
+		)
+	}
+	if analyzer.membershipCandidates >
+		spl.MaximumMembershipCandidatesPerQuery-count {
+		return fmt.Errorf(
+			"analyze logical query: membership exceeds %d candidates per query",
+			spl.MaximumMembershipCandidatesPerQuery,
+		)
+	}
+	analyzer.membershipCandidates += count
 	return nil
 }
 
@@ -436,9 +495,10 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 }
 
 func (analyzer *queryAnalyzer) visitExpression(expression Expression, depth int) error {
-	if err := analyzer.enter(depth); err != nil {
+	if err := analyzer.enterExpressionNode(expression, depth); err != nil {
 		return err
 	}
+	defer analyzer.leaveExpressionNode(expression)
 	switch expression := expression.(type) {
 	case *BooleanExpression:
 		if expression == nil {
@@ -478,32 +538,125 @@ func (analyzer *queryAnalyzer) visitExpression(expression Expression, depth int)
 		}
 		analyzer.scalarPredicates++
 		return analyzer.visitScalarExpression(expression.Value, depth+1)
+	case *MembershipExpression:
+		if expression == nil {
+			return errors.New("analyze logical query: membership expression is nil")
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return errors.New("analyze logical query: membership expression range is invalid")
+		}
+		if err := analyzer.chargeMembershipCandidates(len(expression.Candidates)); err != nil {
+			return err
+		}
+		analyzer.scalarPredicates++
+		if err := analyzer.visitScalarExpressionStrict(expression.Value, depth+1); err != nil {
+			return err
+		}
+		for _, candidate := range expression.Candidates {
+			if err := analyzer.visitScalarExpressionStrict(candidate, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
 	default:
 		return fmt.Errorf("analyze logical query: unsupported expression %T", expression)
 	}
 }
 
 func (analyzer *queryAnalyzer) visitScalarExpression(expression ScalarExpression, depth int) error {
-	if err := analyzer.enter(depth); err != nil {
+	return analyzer.visitScalarExpressionWithContext(expression, depth, 0, false)
+}
+
+func (analyzer *queryAnalyzer) visitScalarExpressionStrict(
+	expression ScalarExpression,
+	depth int,
+) error {
+	return analyzer.visitScalarExpressionWithContext(expression, depth, 0, true)
+}
+
+func (analyzer *queryAnalyzer) visitScalarExpressionWithContext(
+	expression ScalarExpression,
+	depth int,
+	unaryChain int,
+	strict bool,
+) error {
+	if err := analyzer.enterExpressionNode(expression, depth); err != nil {
 		return err
 	}
+	defer analyzer.leaveExpressionNode(expression)
 	switch expression := expression.(type) {
+	case *ScalarUnaryExpression:
+		if expression == nil {
+			return errors.New("analyze logical query: scalar unary expression is nil")
+		}
+		if !validScalarUnaryOp(expression.Op) {
+			return errors.New("analyze logical query: scalar unary operator is invalid")
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return errors.New("analyze logical query: scalar unary expression range is invalid")
+		}
+		if unaryChain >= spl.MaximumUnaryOperatorChain {
+			return fmt.Errorf(
+				"analyze logical query: unary operator chain exceeds %d",
+				spl.MaximumUnaryOperatorChain,
+			)
+		}
+		if err := analyzer.chargeArithmeticOperator(); err != nil {
+			return err
+		}
+		return analyzer.visitScalarExpressionWithContext(
+			expression.Operand,
+			depth+1,
+			unaryChain+1,
+			true,
+		)
+	case *ScalarBinaryExpression:
+		if expression == nil {
+			return errors.New("analyze logical query: scalar binary expression is nil")
+		}
+		if !validScalarBinaryOp(expression.Op) {
+			return errors.New("analyze logical query: scalar binary operator is invalid")
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return errors.New("analyze logical query: scalar binary expression range is invalid")
+		}
+		if err := analyzer.chargeArithmeticOperator(); err != nil {
+			return err
+		}
+		if err := analyzer.visitScalarExpressionStrict(expression.Left, depth+1); err != nil {
+			return err
+		}
+		return analyzer.visitScalarExpressionStrict(expression.Right, depth+1)
 	case *ScalarFieldExpression:
 		if expression == nil {
 			return errors.New("analyze logical query: scalar field expression is nil")
+		}
+		if strict && !validResolvedEventAggregateField(expression.Field) {
+			return errors.New("analyze logical query: scalar field metadata is invalid")
 		}
 		return analyzer.addField(expression.Field, depth+1)
 	case *ScalarLiteralExpression:
 		if expression == nil {
 			return errors.New("analyze logical query: scalar literal expression is nil")
 		}
+		if strict && !validEventAggregateLiteralKind(expression.Value.Kind) {
+			return errors.New("analyze logical query: scalar literal kind is invalid")
+		}
 		return nil
 	case *ScalarCallExpression:
 		if expression == nil {
 			return errors.New("analyze logical query: scalar call expression is nil")
 		}
+		if strict && !validEventAggregateScalarFunction(expression.Function) {
+			return errors.New("analyze logical query: scalar function is invalid")
+		}
 		for _, argument := range expression.Arguments {
-			if err := analyzer.visitScalarExpression(argument, depth+1); err != nil {
+			if err := analyzer.visitScalarExpressionWithContext(
+				argument,
+				depth+1,
+				0,
+				strict,
+			); err != nil {
 				return err
 			}
 		}
@@ -515,10 +668,20 @@ func (analyzer *queryAnalyzer) visitScalarExpression(expression ScalarExpression
 		if err := analyzer.visitExpression(expression.Condition, depth+1); err != nil {
 			return err
 		}
-		if err := analyzer.visitScalarExpression(expression.True, depth+1); err != nil {
+		if err := analyzer.visitScalarExpressionWithContext(
+			expression.True,
+			depth+1,
+			0,
+			strict,
+		); err != nil {
 			return err
 		}
-		return analyzer.visitScalarExpression(expression.False, depth+1)
+		return analyzer.visitScalarExpressionWithContext(
+			expression.False,
+			depth+1,
+			0,
+			strict,
+		)
 	case *ScalarCaseExpression:
 		if expression == nil {
 			return errors.New("analyze logical query: scalar case expression is nil")
@@ -527,7 +690,12 @@ func (analyzer *queryAnalyzer) visitScalarExpression(expression ScalarExpression
 			if err := analyzer.visitExpression(branch.Condition, depth+1); err != nil {
 				return err
 			}
-			if err := analyzer.visitScalarExpression(branch.Value, depth+1); err != nil {
+			if err := analyzer.visitScalarExpressionWithContext(
+				branch.Value,
+				depth+1,
+				0,
+				strict,
+			); err != nil {
 				return err
 			}
 		}

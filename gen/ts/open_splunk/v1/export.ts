@@ -336,7 +336,14 @@ export interface ExportJob {
   startedAt: Date | undefined;
   finishedAt: Date | undefined;
   expiresAt: Date | undefined;
-  knowledgeSnapshot?: KnowledgeSnapshotSummary | undefined;
+  knowledgeSnapshot?:
+    | KnowledgeSnapshotSummary
+    | undefined;
+  /**
+   * Immutable authored-SPL compatibility identity of the source execution.
+   * Empty is reserved for legacy exports created before this field existed.
+   */
+  compilerVersion: string;
 }
 
 function createBaseCsvExportOptions(): CsvExportOptions {
@@ -1079,6 +1086,7 @@ function createBaseExportJob(): ExportJob {
     finishedAt: undefined,
     expiresAt: undefined,
     knowledgeSnapshot: undefined,
+    compilerVersion: "",
   };
 }
 
@@ -1125,6 +1133,9 @@ export const ExportJob: MessageFns<ExportJob> = {
     }
     if (message.knowledgeSnapshot !== undefined) {
       KnowledgeSnapshotSummary.encode(message.knowledgeSnapshot, writer.uint32(106).fork()).join();
+    }
+    if (message.compilerVersion !== "") {
+      writer.uint32(114).string(message.compilerVersion);
     }
     return writer;
   },
@@ -1240,6 +1251,14 @@ export const ExportJob: MessageFns<ExportJob> = {
           message.knowledgeSnapshot = KnowledgeSnapshotSummary.decode(reader, reader.uint32());
           continue;
         }
+        case 14: {
+          if (tag !== 114) {
+            break;
+          }
+
+          message.compilerVersion = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1292,6 +1311,11 @@ export const ExportJob: MessageFns<ExportJob> = {
         : isSet(object.knowledge_snapshot)
         ? KnowledgeSnapshotSummary.fromJSON(object.knowledge_snapshot)
         : undefined,
+      compilerVersion: isSet(object.compilerVersion)
+        ? globalThis.String(object.compilerVersion)
+        : isSet(object.compiler_version)
+        ? globalThis.String(object.compiler_version)
+        : "",
     };
   },
 
@@ -1336,6 +1360,9 @@ export const ExportJob: MessageFns<ExportJob> = {
     if (message.knowledgeSnapshot !== undefined) {
       obj.knowledgeSnapshot = KnowledgeSnapshotSummary.toJSON(message.knowledgeSnapshot);
     }
+    if (message.compilerVersion !== "") {
+      obj.compilerVersion = message.compilerVersion;
+    }
     return obj;
   },
 
@@ -1369,6 +1396,7 @@ export const ExportJob: MessageFns<ExportJob> = {
     message.knowledgeSnapshot = (object.knowledgeSnapshot !== undefined && object.knowledgeSnapshot !== null)
       ? KnowledgeSnapshotSummary.fromPartial(object.knowledgeSnapshot)
       : undefined;
+    message.compilerVersion = object.compilerVersion ?? "";
     return message;
   },
 };

@@ -741,8 +741,11 @@ type ExportJob struct {
 	FinishedAt        *timestamppb.Timestamp    `protobuf:"bytes,11,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
 	ExpiresAt         *timestamppb.Timestamp    `protobuf:"bytes,12,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	KnowledgeSnapshot *KnowledgeSnapshotSummary `protobuf:"bytes,13,opt,name=knowledge_snapshot,json=knowledgeSnapshot,proto3,oneof" json:"knowledge_snapshot,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Immutable authored-SPL compatibility identity of the source execution.
+	// Empty is reserved for legacy exports created before this field existed.
+	CompilerVersion string `protobuf:"bytes,14,opt,name=compiler_version,json=compilerVersion,proto3" json:"compiler_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ExportJob) Reset() {
@@ -866,6 +869,13 @@ func (x *ExportJob) GetKnowledgeSnapshot() *KnowledgeSnapshotSummary {
 	return nil
 }
 
+func (x *ExportJob) GetCompilerVersion() string {
+	if x != nil {
+		return x.CompilerVersion
+	}
+	return ""
+}
+
 var File_open_splunk_v1_export_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_export_proto_rawDesc = "" +
@@ -911,7 +921,7 @@ const file_open_splunk_v1_export_proto_rawDesc = "" +
 	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\x12\x1b\n" +
 	"\trow_count\x18\x04 \x01(\x04R\browCount\x129\n" +
 	"\n" +
-	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xb9\x06\n" +
+	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xe4\x06\n" +
 	"\tExportJob\x12\"\n" +
 	"\rexport_job_id\x18\x01 \x01(\tR\vexportJobId\x12#\n" +
 	"\rstate_version\x18\x02 \x01(\x04R\fstateVersion\x12@\n" +
@@ -932,7 +942,8 @@ const file_open_splunk_v1_export_proto_rawDesc = "" +
 	"finishedAt\x129\n" +
 	"\n" +
 	"expires_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\\\n" +
-	"\x12knowledge_snapshot\x18\r \x01(\v2(.open_splunk.v1.KnowledgeSnapshotSummaryH\x02R\x11knowledgeSnapshot\x88\x01\x01B\v\n" +
+	"\x12knowledge_snapshot\x18\r \x01(\v2(.open_splunk.v1.KnowledgeSnapshotSummaryH\x02R\x11knowledgeSnapshot\x88\x01\x01\x12)\n" +
+	"\x10compiler_version\x18\x0e \x01(\tR\x0fcompilerVersionB\v\n" +
 	"\t_artifactB\n" +
 	"\n" +
 	"\b_failureB\x15\n" +

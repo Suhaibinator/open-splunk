@@ -17,6 +17,9 @@ import (
 )
 
 func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJob, error) {
+	if !searchjobs.ValidCompilerVersion(job.CompilerVersion) {
+		return nil, errors.New("search job contains an invalid compiler version")
+	}
 	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
 	if err != nil {
 		return nil, err
@@ -67,6 +70,7 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		Definition:          definition,
 		Source:              source,
 		NormalizedSpl:       optionalString(job.NormalizedSPL),
+		CompilerVersion:     job.CompilerVersion,
 		EffectiveIndexScope: slices.Clone(job.EffectiveIndexes),
 		ResolvedTimeRange: &opensplunkv1.ResolvedTimeRange{
 			Earliest: earliest,

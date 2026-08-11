@@ -1490,6 +1490,10 @@ func TestMetadataBudgetRejectsBeforeStorageAndIsReclaimedWithTombstone(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
+		metadataLimit, err = checkedAdd(metadataLimit, uint64(len(defaultCompilerVersion)))
+		if err != nil {
+			t.Fatal(err)
+		}
 		manager := newTestManager(t, Config{
 			Executor: executorFunc(func(_ context.Context, _ clickhouse.CompiledQuery, sink ResultSink) error {
 				return sink.SetSchema(messageSchema())

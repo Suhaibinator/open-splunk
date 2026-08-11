@@ -1,5 +1,5 @@
 import {
-  isSplOffsetInDoubleQuotedValue,
+  isSplOffsetInQuotedValue,
   isSupportedSplPipelineCommand,
   scanSplStructure,
 } from "./spl-syntax";
@@ -26,6 +26,57 @@ export interface CompletionContext {
   followsPipeline: boolean;
 }
 
+// Backend diagnostics and completion replacements use UTF-8 byte offsets,
+// while JavaScript string slicing uses UTF-16 code-unit offsets. If a forged
+// or stale backend offset lands inside a code point, stop before that code
+// point so the editor never splits a surrogate pair.
+export function utf16OffsetsForUtf8ByteOffsets(
+  value: string,
+  byteOffsets: readonly bigint[],
+): number[] {
+  const converted = Array.from<number>({ length: byteOffsets.length });
+  const pending = byteOffsets.map((byteOffset, index) => ({
+    byteOffset: byteOffset < 0n ? 0n : byteOffset,
+    index,
+  })).toSorted((left, right) => left.byteOffset < right.byteOffset
+    ? -1
+    : left.byteOffset > right.byteOffset
+      ? 1
+      : left.index - right.index);
+
+  let pendingIndex = 0;
+  let consumedBytes = 0n;
+  let utf16Offset = 0;
+  for (const character of value) {
+    while (
+      pendingIndex < pending.length
+      && pending[pendingIndex]!.byteOffset <= consumedBytes
+    ) {
+      converted[pending[pendingIndex]!.index] = utf16Offset;
+      pendingIndex += 1;
+    }
+    const codePoint = character.codePointAt(0)!;
+    const width = BigInt(
+      codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4,
+    );
+    const nextBytes = consumedBytes + width;
+    while (
+      pendingIndex < pending.length
+      && pending[pendingIndex]!.byteOffset < nextBytes
+    ) {
+      converted[pending[pendingIndex]!.index] = utf16Offset;
+      pendingIndex += 1;
+    }
+    consumedBytes += width;
+    utf16Offset += character.length;
+  }
+  while (pendingIndex < pending.length) {
+    converted[pending[pendingIndex]!.index] = utf16Offset;
+    pendingIndex += 1;
+  }
+  return converted;
+}
+
 function sourceLocation(spl: string, offset: number): { line: number; column: number } {
   const before = spl.slice(0, Math.max(0, offset));
   const lines = before.split("\n");
@@ -36,7 +87,7 @@ function sourceLocation(spl: string, offset: number): { line: number; column: nu
 }
 
 function pipelineCommandToken(stage: string): { token: string; offset: number } | null {
-  const match = /^(\p{White_Space}*)([^\p{White_Space}|(),=!<>"]+)/u.exec(stage);
+  const match = /^(\p{White_Space}*)([^\p{White_Space}|(),=!<>"']+)/u.exec(stage);
   const token = match?.[2];
   return token === undefined
     ? null
@@ -57,17 +108,19 @@ export function getQueryDiagnostic(spl: string): SplDiagnostic | null {
 
   const structure = scanSplStructure(spl);
   if (structure.unclosedQuote !== null) {
-    const { offset } = structure.unclosedQuote;
+    const { offset, quote } = structure.unclosedQuote;
     const location = sourceLocation(spl, offset);
+    const quoteName = quote === '"' ? "double" : "single";
+    const tokenKind = quote === '"' ? "value" : "field identifier";
     return {
       kind: "unclosed-quote",
-      token: '"',
-      message: "Expected a closing double quotation mark.",
+      token: quote,
+      message: `Expected a closing ${quoteName} quotation mark.`,
       line: location.line,
       column: location.column,
-      suggestion: "Close the quoted value before running the search.",
-      actionLabel: 'Add closing "',
-      quote: '"',
+      suggestion: `Close the quoted ${tokenKind} before running the search.`,
+      actionLabel: `Add closing ${quote}`,
+      quote,
     };
   }
 
@@ -148,5 +201,5 @@ export function completionContextAt(spl: string, cursor: number): CompletionCont
 }
 
 export function isCursorInQuotedValue(spl: string, cursor: number): boolean {
-  return isSplOffsetInDoubleQuotedValue(spl, cursor);
+  return isSplOffsetInQuotedValue(spl, cursor);
 }

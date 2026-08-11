@@ -46,7 +46,11 @@ import {
   GetSystemBootstrapResponse,
   ServerFeature,
 } from "../gen/ts/open_splunk/v1/system_api";
-import { SharingScope, SortDirection } from "../gen/ts/open_splunk/v1/common";
+import {
+  DiagnosticSeverity,
+  SharingScope,
+  SortDirection,
+} from "../gen/ts/open_splunk/v1/common";
 import {
   KnowledgeDependencyRole,
   KnowledgeObject,
@@ -240,6 +244,65 @@ test("collector event is visible through the compiled backend UI", async ({ page
   await expect(page.locator("body")).not.toContainText(
     /Live job updates failed|Live job updates skipped a sequence|resynchronizing from the server/i,
   );
+  assertBrowserSafety(safety);
+});
+
+test("backend v0.2 diagnostics remain authoritative and prevent browser dispatch", async ({
+  page,
+}) => {
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const indexMatch = /\bindex=(?:"([^"]+)"|([^\s|]+))/u.exec(searchSPL);
+  const indexName = indexMatch?.[1] ?? indexMatch?.[2] ?? "main";
+  const source = `index=${JSON.stringify(indexName)} message="🟢" | eval rejected=status IN (500, 503)`;
+  const membershipOffset = source.indexOf("IN (500");
+  if (membershipOffset < 0) throw new Error("diagnostic membership operator is missing");
+  const startByteOffset = BigInt(Buffer.byteLength(source.slice(0, membershipOffset), "utf8"));
+  const startColumn = Array.from(source.slice(0, membershipOffset)).length + 1;
+  const diagnosticMessage =
+    "SPL v0.2 membership is Boolean and cannot be assigned directly by eval.";
+  const validated: ValidateSearchRequest[] = [];
+  const safety = observeBrowserSafety(page);
+
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("diagnostic Validate omitted its protobuf body");
+      const request = ValidateSearchRequest.decode(wire);
+      if (request.definition?.spl !== source) {
+        throw new Error("diagnostic Validate did not preserve the authored v0.2 source");
+      }
+      validated.push(request);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ValidateSearchResponse.encode(
+          ValidateSearchResponse.fromPartial({
+            valid: false,
+            diagnostics: [{
+              code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+              severity: DiagnosticSeverity.DIAGNOSTIC_SEVERITY_ERROR,
+              message: diagnosticMessage,
+              sourceRange: {
+                start: { byteOffset: startByteOffset, line: 1, column: startColumn },
+                end: { byteOffset: startByteOffset + 2n, line: 1, column: startColumn + 2 },
+              },
+              suggestions: ["Use membership inside where, if, or case."],
+            }],
+          }),
+        ).finish()),
+      });
+    },
+  );
+
+  await openSearchWorkspace(page);
+  await page.getByTestId("search-input").fill(source);
+  await page.getByTestId("run-search").click();
+
+  await expect(page.getByTestId("toast")).toContainText(diagnosticMessage, { timeout });
+  expect(validated).toHaveLength(1);
+  expect(safety.createRequests()).toBe(0);
+  expect(safety.resultsRequests()).toBe(0);
   assertBrowserSafety(safety);
 });
 
@@ -2285,7 +2348,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
   const selectedAppId = "history-rerun-current-app";
   const retainedAppId = "history-rerun-stale-app";
   const indexName = "history-rerun-index";
-  const historySPL = `index=${JSON.stringify(indexName)} level=ERROR | table _time message`;
+  const historySPL = `index=${JSON.stringify(indexName)} | eval adjusted=duration_ms+1 | where status IN (500, 503) | table _time message adjusted`;
   const deletedHistorySPL = `index=${JSON.stringify(indexName)} level=WARN | table _time message`;
   const historyTimeRange = {
     earliest: "server-owned-relative-expression",

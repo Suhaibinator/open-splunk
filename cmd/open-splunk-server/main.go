@@ -36,6 +36,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
 	"github.com/Suhaibinator/open-splunk/internal/server"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
@@ -45,7 +46,7 @@ const (
 	shutdownTimeout                    = 35 * time.Second
 	defaultIndexRetention              = ingest.DefaultIndexRetention
 	defaultOwnerID                     = "single-user"
-	splCompatibility                   = "tier-1-dev"
+	splCompatibility                   = spl.CompatibilityVersion
 	auditCursorKeyPurpose              = "audit-event-cursors"
 	searchAttemptAuditCursorKeyPurpose = "search-attempt-audit-cursors"
 	collectorHeartbeatFlushInterval    = time.Second
@@ -606,7 +607,8 @@ func runWithOptions(config options) error {
 		OnExecutionError: func(jobID string, code searchjobs.FailureCode, cause error) {
 			log.Print(formatSearchExecutionFailure(jobID, code, cause))
 		},
-		Compiler: compiler,
+		Compiler:        compiler,
+		CompilerVersion: splCompatibility,
 	})
 	if err != nil {
 		return fmt.Errorf("create search job manager: %w", err)

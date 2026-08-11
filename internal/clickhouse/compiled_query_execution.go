@@ -18,10 +18,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v3 additionally binds the hidden ordinary-result container transport.
-// Execution digests minted before that transport became authoritative must
-// never compare equal to the stronger contract.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v3"
+// v4 additionally binds the atomic-result publication contract. Execution
+// digests minted before that barrier became authoritative must never compare
+// equal to the stronger contract.
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v4"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -420,6 +420,7 @@ func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, boo
 		writeUint64(digest, uint64(output.OutputIndex))
 	}
 	writeBool(digest, compiled.SparseFields)
+	writeBool(digest, compiled.atomicResult)
 	writeInt64(digest, int64(compiled.relationalDepth))
 	writeRange(digest, compiled.relationalDepthRange)
 	writeUint64(digest, compiled.sourceFanout)

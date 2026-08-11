@@ -14,6 +14,7 @@ import (
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -116,9 +117,8 @@ func normalizeEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplunkv1.Searc
 	if entry.MatchedEvents > math.MaxInt64 {
 		return nil, indexedEntry{}, invalid("matched event count is outside the supported range")
 	}
-	entry.CompilerVersion = strings.TrimSpace(entry.CompilerVersion)
-	if err := validateText("compiler version", entry.CompilerVersion, maximumCompilerVersionBytes, false); err != nil {
-		return nil, indexedEntry{}, err
+	if !searchjobs.ValidCompilerVersion(entry.CompilerVersion) {
+		return nil, indexedEntry{}, invalid("compiler version is invalid")
 	}
 	if err := validateWarnings(entry.Warnings); err != nil {
 		return nil, indexedEntry{}, err

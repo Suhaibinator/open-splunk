@@ -556,6 +556,69 @@ type ScalarExpression interface {
 	scalarExpression()
 }
 
+// ScalarUnaryOp identifies one closed unary arithmetic operation.
+type ScalarUnaryOp uint8
+
+const (
+	ScalarUnaryOpInvalid ScalarUnaryOp = iota
+	ScalarUnaryOpPositive
+	ScalarUnaryOpNegative
+	ScalarUnaryOpCount
+)
+
+func validScalarUnaryOp(op ScalarUnaryOp) bool {
+	return op == ScalarUnaryOpPositive || op == ScalarUnaryOpNegative
+}
+
+// ScalarUnaryExpression applies one unary arithmetic operation. Accepted
+// plans normalize the operand and result to the v0.2 nullable-Double domain.
+type ScalarUnaryExpression struct {
+	Op      ScalarUnaryOp
+	Operand ScalarExpression
+	Range   spl.Range
+}
+
+func (*ScalarUnaryExpression) scalarExpression()        {}
+func (e *ScalarUnaryExpression) SourceRange() spl.Range { return e.Range }
+
+// ScalarBinaryOp identifies one closed binary arithmetic operation.
+type ScalarBinaryOp uint8
+
+const (
+	ScalarBinaryOpInvalid ScalarBinaryOp = iota
+	ScalarBinaryOpMultiply
+	ScalarBinaryOpDivide
+	ScalarBinaryOpRemainder
+	ScalarBinaryOpAdd
+	ScalarBinaryOpSubtract
+	ScalarBinaryOpCount
+)
+
+func validScalarBinaryOp(op ScalarBinaryOp) bool {
+	switch op {
+	case ScalarBinaryOpMultiply,
+		ScalarBinaryOpDivide,
+		ScalarBinaryOpRemainder,
+		ScalarBinaryOpAdd,
+		ScalarBinaryOpSubtract:
+		return true
+	default:
+		return false
+	}
+}
+
+// ScalarBinaryExpression applies one binary arithmetic operation. Left and
+// Right preserve authored evaluation and dependency order.
+type ScalarBinaryExpression struct {
+	Op    ScalarBinaryOp
+	Left  ScalarExpression
+	Right ScalarExpression
+	Range spl.Range
+}
+
+func (*ScalarBinaryExpression) scalarExpression()        {}
+func (e *ScalarBinaryExpression) SourceRange() spl.Range { return e.Range }
+
 // ScalarFieldExpression reads one field from the current pipeline row.
 type ScalarFieldExpression struct {
 	Field FieldRef
@@ -667,6 +730,19 @@ type EvalComparisonExpression struct {
 func (*EvalComparisonExpression) expression()              {}
 func (e *EvalComparisonExpression) SourceRange() spl.Range { return e.Range }
 
+// MembershipExpression compares Value with each candidate in source order
+// using eval-comparison three-valued semantics. Candidates is detached from
+// the source AST during planning.
+type MembershipExpression struct {
+	Value      ScalarExpression
+	Candidates []ScalarExpression
+	Negated    bool
+	Range      spl.Range
+}
+
+func (*MembershipExpression) expression()              {}
+func (e *MembershipExpression) SourceRange() spl.Range { return e.Range }
+
 // ScalarPredicateExpression consumes one statically Boolean scalar in a where
 // predicate. Backends must reject non-Boolean forged inputs rather than
 // inventing general scalar truthiness.
@@ -677,6 +753,26 @@ type ScalarPredicateExpression struct {
 
 func (*ScalarPredicateExpression) expression()              {}
 func (e *ScalarPredicateExpression) SourceRange() spl.Range { return e.Range }
+
+// validExpressionRangeOrZero accepts the zero range used by directly
+// assembled backend fixtures, while rejecting internally inconsistent source
+// provenance on authored nodes.
+func validExpressionRangeOrZero(sourceRange spl.Range) bool {
+	if sourceRange == (spl.Range{}) {
+		return true
+	}
+	if sourceRange.Start.Offset < 0 ||
+		sourceRange.Start.Line < 1 || sourceRange.Start.Column < 1 ||
+		sourceRange.End.Line < 1 || sourceRange.End.Column < 1 ||
+		sourceRange.End.Offset <= sourceRange.Start.Offset {
+		return false
+	}
+	if sourceRange.End.Line < sourceRange.Start.Line {
+		return false
+	}
+	return sourceRange.End.Line != sourceRange.Start.Line ||
+		sourceRange.End.Column > sourceRange.Start.Column
+}
 
 // Diagnostic is a source-located semantic/planning error.
 type Diagnostic struct {

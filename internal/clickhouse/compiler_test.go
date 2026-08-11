@@ -660,17 +660,15 @@ func TestCompileNumericBinUsesExactStreamingArithmetic(t *testing.T) {
 		required   []string
 	}{
 		{
-			name:       "signed integer",
+			name:       "authored negative integer normalizes to float",
 			source:     `index=gradethis | eval latency=-11 | bin latency span=10 | table latency`,
 			output:     "latency",
-			numberType: "Int64",
+			numberType: "Float64",
 			guarded:    true,
 			required: []string{
-				`toInt128("latency")`,
-				`intDiv(`,
-				`%`,
-				`accurateCastOrNull(`,
-				`'Int64'`,
+				`floor(`,
+				`toFloat64(`,
+				`isFinite(`,
 			},
 		},
 		{
@@ -2859,12 +2857,13 @@ func TestCompileEvalAssignmentsAreSequentialAndOverwriteWithoutDuplicateColumns(
 	}
 }
 
-func TestCompileEvalLiteralsRetainNativeTypesAndCalculatedIndexSemantics(t *testing.T) {
+func TestCompileEvalLiteralsUseNativeTypesExceptAuthoredSignedNumbers(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | eval signed=-7,unsigned=18446744073709551615,ratio=1.25,ok=true,text="x" | table signed,unsigned,ratio,ok,text`)
 	for _, required := range []string{
-		`CAST(? AS Int64) AS "signed"`,
+		`[toFloat64(CAST(? AS Int64))]), 1) AS "signed"`,
+		`negate(__os_arithmetic_operand)`,
 		`CAST(? AS UInt64) AS "unsigned"`,
 		`CAST(? AS Float64) AS "ratio"`,
 		`CAST(? AS Bool) AS "ok"`,
@@ -4791,9 +4790,9 @@ func TestCompileChartRowColumnMatchesStatsGroupColumn(t *testing.T) {
 		{
 			name:         "signed row axis",
 			source:       `index=gradethis | eval offset=-3 | chart count OVER offset BY level`,
-			kind:         ChartRowKindSigned,
-			databaseType: "Int64",
-			required:     `CAST(assumeNotNull("__os_ch_row_value") AS Int64) AS "__os_ch_row"`,
+			kind:         ChartRowKindDouble,
+			databaseType: "Float64",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS Float64) AS "__os_ch_row"`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -5113,12 +5112,12 @@ func assertFinalOrderDirections(t *testing.T, sql string, want ...string) {
 	}
 }
 
-func compileSPL(t *testing.T, source string) CompiledQuery {
+func compileSPL(t testing.TB, source string) CompiledQuery {
 	t.Helper()
 	return compileSPLWithScope(t, source, testChartScope())
 }
 
-func compileSPLWithScope(t *testing.T, source string, scope plan.Scope) CompiledQuery {
+func compileSPLWithScope(t testing.TB, source string, scope plan.Scope) CompiledQuery {
 	t.Helper()
 	logical := buildPlanWithScope(t, source, scope)
 	compiled, err := (Compiler{}).Compile(logical)
@@ -5128,12 +5127,12 @@ func compileSPLWithScope(t *testing.T, source string, scope plan.Scope) Compiled
 	return compiled
 }
 
-func buildPlan(t *testing.T, source string) *plan.Query {
+func buildPlan(t testing.TB, source string) *plan.Query {
 	t.Helper()
 	return buildPlanWithScope(t, source, testChartScope())
 }
 
-func buildPlanWithScope(t *testing.T, source string, scope plan.Scope) *plan.Query {
+func buildPlanWithScope(t testing.TB, source string, scope plan.Scope) *plan.Query {
 	t.Helper()
 	parsed, err := spl.Parse(source)
 	if err != nil {

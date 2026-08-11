@@ -427,6 +427,11 @@ type CompiledQuery struct {
 	// SparseFields marks ordinary raw-event output whose public fields object
 	// must be reconstructed from the appended private presence column.
 	SparseFields bool
+	// atomicResult is compiler-owned evidence that the query may surface a
+	// sanitized runtime expression-value failure. The executor must consume and
+	// close the complete result before publishing schema or rows so a failure on
+	// a later row cannot leak a successful prefix.
+	atomicResult bool
 
 	// relationalDepth is compiler evidence, not part of the execution
 	// contract. Keeping it private prevents callers from treating the guard as
@@ -446,6 +451,13 @@ type CompiledQuery struct {
 	// parser-owned plan.Build query and is covered by the same seal.
 	executionSeal     *compiledExecutionSeal
 	knowledgeEvidence *knowledgeCompilationEvidence
+}
+
+// RequiresAtomicResult reports whether execution must validate the complete
+// backend stream before making any result visible. The value is covered by the
+// compiled execution seal and cannot be enabled or disabled by callers.
+func (compiled CompiledQuery) RequiresAtomicResult() bool {
+	return compiled.atomicResult
 }
 
 // ChartOutput describes the bounded runtime-wide pivot contract. Both axes are
@@ -1349,6 +1361,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	compiled.atomicResult = state.context != nil && state.context.atomicResult
 	if err := validateFinalizedRelationalDepth(relation, compiled); err != nil {
 		return CompiledQuery{}, err
 	}
@@ -5881,6 +5894,9 @@ type compileContext struct {
 	unixTimestampBudget               compiledUnixTimestampBudget
 	concatenationBudget               compiledConcatenationBudget
 	stringConversionBudget            compiledStringConversionBudget
+	arithmeticOperators               int
+	membershipCandidates              int
+	atomicResult                      bool
 	searchStartUnix                   int64
 	searchTimezone                    string
 	searchLocalMinimumUnixNanoseconds int64
@@ -6092,6 +6108,7 @@ type fieldState struct {
 	numericSort               bool
 	canonicalTime             bool
 	alwaysNull                bool
+	ieeeComparison            bool
 	materializeForPredicate   bool
 }
 
@@ -6330,6 +6347,8 @@ func compileExpressionWithRawTextIndex(
 		return compileComparison(expression, field)
 	case *plan.EvalComparisonExpression:
 		return compileEvalComparison(expression, state)
+	case *plan.MembershipExpression:
+		return compileMembershipExpression(expression, state)
 	case *plan.ScalarPredicateExpression:
 		if expression == nil || expression.Value == nil {
 			return "", nil, errors.New("compile ClickHouse predicate: missing Boolean scalar expression")
@@ -6373,6 +6392,15 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 	var visitScalar func(plan.ScalarExpression)
 	visitScalar = func(expression plan.ScalarExpression) {
 		switch expression := expression.(type) {
+		case *plan.ScalarUnaryExpression:
+			if expression != nil {
+				visitScalar(expression.Operand)
+			}
+		case *plan.ScalarBinaryExpression:
+			if expression != nil {
+				visitScalar(expression.Left)
+				visitScalar(expression.Right)
+			}
 		case *plan.ScalarFieldExpression:
 			if expression != nil {
 				add(expression.Field.Name)
@@ -6425,6 +6453,13 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 			if expression != nil {
 				visitScalar(expression.Left)
 				visitScalar(expression.Right)
+			}
+		case *plan.MembershipExpression:
+			if expression != nil {
+				visitScalar(expression.Value)
+				for _, candidate := range expression.Candidates {
+					visitScalar(candidate)
+				}
 			}
 		case *plan.ScalarPredicateExpression:
 			if expression != nil {
@@ -6523,6 +6558,11 @@ func repeatedExactNumericPredicateFields(
 			if rightField && (leftField || numericLiteral(expression.Left)) {
 				add(rightReference)
 			}
+		case *plan.MembershipExpression:
+			// Membership binds its left value and every candidate once before
+			// comparing them, so it never benefits from the separate repeated-key
+			// projection used by independent comparison leaves.
+			return
 		}
 	}
 	visit(expression)
@@ -6668,6 +6708,18 @@ func predicateFieldSourceRange(
 	var visitScalar func(plan.ScalarExpression) (spl.Range, bool)
 	visitScalar = func(expression plan.ScalarExpression) (spl.Range, bool) {
 		switch expression := expression.(type) {
+		case *plan.ScalarUnaryExpression:
+			if expression != nil {
+				return visitScalar(expression.Operand)
+			}
+		case *plan.ScalarBinaryExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, found := visitScalar(expression.Left); found {
+				return sourceRange, true
+			}
+			return visitScalar(expression.Right)
 		case *plan.ScalarFieldExpression:
 			if expression != nil && expression.Field.Name == name {
 				return expression.Field.Range, true
@@ -6729,6 +6781,18 @@ func predicateFieldSourceRange(
 				return sourceRange, true
 			}
 			return visitScalar(expression.Right)
+		case *plan.MembershipExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, found := visitScalar(expression.Value); found {
+				return sourceRange, true
+			}
+			for _, candidate := range expression.Candidates {
+				if sourceRange, found := visitScalar(candidate); found {
+					return sourceRange, true
+				}
+			}
 		case *plan.ScalarPredicateExpression:
 			if expression != nil {
 				return visitScalar(expression.Value)
@@ -6880,7 +6944,32 @@ type compiledScalar struct {
 	literal                   *plan.Value
 	alwaysNull                bool
 	comparisonAtomic          bool
-	materializeForPredicate   bool
+	// ieeeComparison marks values produced by v0.2 arithmetic. Comparisons
+	// involving one of these values apply the release's explicit NaN rules
+	// instead of inheriting ClickHouse's ordered-NaN behavior.
+	ieeeComparison          bool
+	materializeForPredicate bool
+}
+
+// bindCompiledScalarForComparison replaces the authored value and presence
+// expressions with compiler-owned bindings. Comparison-derived SQL caches must
+// be cleared together because each cache was computed from the authored value;
+// semantic metadata such as kind, literal, Dynamic domain, and IEEE behavior is
+// deliberately retained for comparison dispatch.
+func bindCompiledScalarForComparison(
+	value compiledScalar,
+	valueSQL string,
+	existsSQL string,
+) compiledScalar {
+	value.valueSQL = valueSQL
+	value.valueArgs = nil
+	value.existsSQL = existsSQL
+	value.existsArgs = nil
+	value.dynamicTypeSQL = ""
+	value.exactNumericKeySQL = ""
+	value.dynamicNumericEligibleSQL = ""
+	value.comparisonAtomic = true
+	return value
 }
 
 func booleanScalarConsumerError(operation string) error {
@@ -6967,6 +7056,10 @@ func saturatingStringByteSum(left, right uint64) uint64 {
 
 func compileScalarValue(expression plan.ScalarExpression, state compileState) (compiledScalar, error) {
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		return compileArithmeticUnary(expression, state)
+	case *plan.ScalarBinaryExpression:
+		return compileArithmeticBinary(expression, state)
 	case *plan.ScalarFieldExpression:
 		if expression == nil {
 			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: missing field expression")
@@ -8539,6 +8632,7 @@ func compileCoalesceScalar(
 
 	values := make([]compiledScalar, 0, len(expression.Arguments))
 	alwaysNull := true
+	ieeeComparison := false
 	materializeForPredicate := false
 	sqlBytes := len("coalesce()")
 	for _, argument := range expression.Arguments {
@@ -8551,6 +8645,7 @@ func compileCoalesceScalar(
 		}
 		values = append(values, value)
 		alwaysNull = alwaysNull && compiledScalarIsAlwaysNull(value)
+		ieeeComparison = ieeeComparison || value.ieeeComparison
 		materializeForPredicate = materializeForPredicate || value.materializeForPredicate
 		sqlBytes += len(value.valueSQL) + len(", ")
 		if err := validateCoalesceScalarSQLBytes(sqlBytes, expression.Range); err != nil {
@@ -8591,6 +8686,7 @@ func compileCoalesceScalar(
 		kind:                    kind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
+		ieeeComparison:          ieeeComparison,
 		materializeForPredicate: materializeForPredicate,
 	}, nil
 }
@@ -8774,6 +8870,7 @@ func compileCaseScalar(
 	conditionArgs := make([][]any, 0, len(expression.Branches))
 	values := make([]compiledScalar, 0, len(expression.Branches))
 	alwaysNull := true
+	ieeeComparison := false
 	materializeForPredicate := false
 	sqlBytes := len("multiIf()")
 	for _, branch := range expression.Branches {
@@ -8801,6 +8898,7 @@ func compileCaseScalar(
 		conditionArgs = append(conditionArgs, compiledConditionArgs)
 		values = append(values, compiledValue)
 		alwaysNull = alwaysNull && compiledScalarIsAlwaysNull(compiledValue)
+		ieeeComparison = ieeeComparison || compiledValue.ieeeComparison
 		materializeForPredicate = materializeForPredicate ||
 			len(predicateMaterializationFields(branch.Condition, state)) > 0 ||
 			compiledValue.materializeForPredicate
@@ -8852,6 +8950,7 @@ func compileCaseScalar(
 		kind:                    kind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
+		ieeeComparison:          ieeeComparison,
 		materializeForPredicate: materializeForPredicate,
 	}, nil
 }
@@ -9034,6 +9133,7 @@ func compileIfScalar(expression *plan.ScalarIfExpression, state compileState) (c
 		kind:            kind,
 		numberType:      numberType,
 		alwaysNull:      alwaysNull,
+		ieeeComparison:  trueValue.ieeeComparison || falseValue.ieeeComparison,
 		materializeForPredicate: len(predicateMaterializationFields(expression.Condition, state)) > 0 ||
 			trueValue.materializeForPredicate ||
 			falseValue.materializeForPredicate,
@@ -9103,6 +9203,8 @@ func validateIfConditionStructure(expression plan.Expression) error {
 			return err
 		}
 		return nil
+	case *plan.MembershipExpression:
+		return validateMembershipStructure("if", expression)
 	case *plan.ScalarPredicateExpression:
 		if nilScalarExpression(expression.Value) {
 			return errors.New("compile ClickHouse if: scalar condition is missing")
@@ -9162,6 +9264,8 @@ func validateCaseConditionStructure(expression plan.Expression) error {
 			return err
 		}
 		return validatePredicateScalarStructure(expression.Right)
+	case *plan.MembershipExpression:
+		return validateMembershipStructure("case", expression)
 	case *plan.ScalarPredicateExpression:
 		if nilScalarExpression(expression.Value) {
 			return errors.New("compile ClickHouse case: scalar condition is missing")
@@ -9182,8 +9286,10 @@ func validateCaseConditionStructure(expression plan.Expression) error {
 }
 
 type predicateComplexityValidator struct {
-	nodes  int
-	active map[any]struct{}
+	nodes                int
+	arithmeticOperators  int
+	membershipCandidates int
+	active               map[any]struct{}
 }
 
 func validateCompiledPredicateComplexity(expression plan.Expression) error {
@@ -9225,6 +9331,37 @@ func (v *predicateComplexityValidator) validateExpression(
 			return err
 		}
 		return v.validateScalar(expression.Right, depth+1)
+	case *plan.MembershipExpression:
+		if len(expression.Candidates) < 1 ||
+			len(expression.Candidates) > spl.MaximumMembershipCandidates {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"membership requires 1 through %d candidates",
+					spl.MaximumMembershipCandidates,
+				),
+				expression.Range,
+			)
+		}
+		if v.membershipCandidates >
+			spl.MaximumMembershipCandidatesPerQuery-len(expression.Candidates) {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"predicate contains more than %d membership candidates",
+					spl.MaximumMembershipCandidatesPerQuery,
+				),
+				expression.Range,
+			)
+		}
+		v.membershipCandidates += len(expression.Candidates)
+		if err := v.validateScalar(expression.Value, depth+1); err != nil {
+			return err
+		}
+		for _, candidate := range expression.Candidates {
+			if err := v.validateScalar(candidate, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
 	case *plan.ScalarPredicateExpression:
 		return v.validateScalar(expression.Value, depth+1)
 	default:
@@ -9245,6 +9382,48 @@ func (v *predicateComplexityValidator) validateScalar(
 	defer v.leave(expression)
 
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		if !validCompiledScalarUnaryOp(expression.Op) {
+			return errors.New("compile ClickHouse predicate: invalid unary arithmetic operator")
+		}
+		v.arithmeticOperators++
+		if v.arithmeticOperators > spl.MaximumArithmeticOperatorsPerQuery {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"predicate contains more than %d arithmetic operators",
+					spl.MaximumArithmeticOperatorsPerQuery,
+				),
+				expression.Range,
+			)
+		}
+		if compiledUnaryArithmeticChainLength(expression) > spl.MaximumUnaryOperatorChain {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"unary arithmetic nesting exceeds %d operators",
+					spl.MaximumUnaryOperatorChain,
+				),
+				expression.Range,
+			)
+		}
+		return v.validateScalar(expression.Operand, depth+1)
+	case *plan.ScalarBinaryExpression:
+		if !validCompiledScalarBinaryOp(expression.Op) {
+			return errors.New("compile ClickHouse predicate: invalid binary arithmetic operator")
+		}
+		v.arithmeticOperators++
+		if v.arithmeticOperators > spl.MaximumArithmeticOperatorsPerQuery {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"predicate contains more than %d arithmetic operators",
+					spl.MaximumArithmeticOperatorsPerQuery,
+				),
+				expression.Range,
+			)
+		}
+		if err := v.validateScalar(expression.Left, depth+1); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.Right, depth+1)
 	case *plan.ScalarCallExpression:
 		if len(expression.Arguments) > maxCompiledPredicateNodes {
 			return predicateComplexityError(
@@ -9349,6 +9528,19 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 		return errors.New("compile ClickHouse predicate: missing scalar expression")
 	}
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		if !validCompiledScalarUnaryOp(expression.Op) {
+			return errors.New("compile ClickHouse predicate: invalid unary arithmetic operator")
+		}
+		return validatePredicateScalarStructure(expression.Operand)
+	case *plan.ScalarBinaryExpression:
+		if !validCompiledScalarBinaryOp(expression.Op) {
+			return errors.New("compile ClickHouse predicate: invalid binary arithmetic operator")
+		}
+		if err := validatePredicateScalarStructure(expression.Left); err != nil {
+			return err
+		}
+		return validatePredicateScalarStructure(expression.Right)
 	case *plan.ScalarFieldExpression:
 		return validateCanonicalFieldRef("predicate", "scalar", expression.Field)
 	case *plan.ScalarLiteralExpression:
@@ -9595,6 +9787,8 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 
 func scalarExpressionReturnsBoolean(expression plan.ScalarExpression) bool {
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression, *plan.ScalarBinaryExpression:
+		return false
 	case *plan.ScalarCallExpression:
 		if expression == nil {
 			return false
@@ -9667,6 +9861,8 @@ func nilPlanExpression(expression plan.Expression) bool {
 		return expression == nil
 	case *plan.EvalComparisonExpression:
 		return expression == nil
+	case *plan.MembershipExpression:
+		return expression == nil
 	case *plan.ScalarPredicateExpression:
 		return expression == nil
 	default:
@@ -9679,6 +9875,10 @@ func nilScalarExpression(expression plan.ScalarExpression) bool {
 		return true
 	}
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		return expression == nil
+	case *plan.ScalarBinaryExpression:
+		return expression == nil
 	case *plan.ScalarFieldExpression:
 		return expression == nil
 	case *plan.ScalarLiteralExpression:
@@ -11109,6 +11309,7 @@ func compileNumericRoundingInput(
 			numberType:      "Float64",
 			numericIntegral: numericIntegral,
 			alwaysNull:      true,
+			ieeeComparison:  input.ieeeComparison,
 		}, nil
 	}
 	if input.numericIntegral &&
@@ -11227,6 +11428,7 @@ func compileNumericRoundingInput(
 		kind:                    resultKind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
+		ieeeComparison:          input.ieeeComparison,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
 }
@@ -11451,6 +11653,12 @@ func scalarQuotedStringLiteral(expression plan.ScalarExpression) (string, bool) 
 
 func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) bool {
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression, *plan.ScalarBinaryExpression:
+		// Arithmetic has a fixed numeric result. Its operands are validated by
+		// arithmetic lowering so a nested Boolean receives the source-located
+		// unsupported-arithmetic diagnostic instead of being mistaken for a
+		// directly assigned Boolean result here.
+		return false
 	case *plan.ScalarCallExpression:
 		if expression == nil {
 			return false
@@ -11555,6 +11763,7 @@ func extendCompileState(
 		caseSensitive:           false,
 		numberType:              value.numberType,
 		alwaysNull:              value.alwaysNull,
+		ieeeComparison:          value.ieeeComparison,
 		materializeForPredicate: value.materializeForPredicate,
 	}
 	if value.kind == fieldKindDynamic {
@@ -12906,6 +13115,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 		numberType:              source.numberType,
 		numericSort:             source.numericSort,
 		alwaysNull:              source.alwaysNull,
+		ieeeComparison:          source.ieeeComparison,
 		materializeForPredicate: source.materializeForPredicate,
 	}
 	if source.kind == fieldKindDynamic {
@@ -13084,6 +13294,42 @@ func compileComparisonScalar(expression plan.ScalarExpression, state compileStat
 }
 
 func evalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
+	if !left.ieeeComparison && !right.ieeeComparison {
+		return evalComparisonCoreWithoutIEEE(left, right, operator)
+	}
+
+	originalLeft := left
+	originalRight := right
+	left = bindCompiledScalarForComparison(left, "__os_ieee_left", "1")
+	right = bindCompiledScalarForComparison(right, "__os_ieee_right", "1")
+
+	core, coreArgs := evalComparisonCoreWithoutIEEE(left, right, operator)
+	if len(coreArgs) != 0 {
+		panic("IEEE comparison over bound scalar retained arguments")
+	}
+	nanTerms := make([]string, 0, 2)
+	if term := scalarNaNPredicateSQL(left); term != "" {
+		nanTerms = append(nanTerms, term)
+	}
+	if term := scalarNaNPredicateSQL(right); term != "" {
+		nanTerms = append(nanTerms, term)
+	}
+	if len(nanTerms) > 0 {
+		nanResult := "CAST(0 AS Nullable(Bool))"
+		if operator == "!=" {
+			nanResult = "CAST(1 AS Nullable(Bool))"
+		}
+		core = "if((" + strings.Join(nanTerms, " OR ") + "), " +
+			nanResult + ", " + core + ")"
+	}
+	return bindSQLExpressions(
+		[]string{"__os_ieee_left", "__os_ieee_right"},
+		[]string{originalLeft.valueSQL, originalRight.valueSQL},
+		core,
+	), comparisonValueArgs(originalLeft, originalRight)
+}
+
+func evalComparisonCoreWithoutIEEE(left, right compiledScalar, operator string) (string, []any) {
 	if comparisonOperatorIsOrdered(operator) && (left.kind == fieldKindBool || right.kind == fieldKindBool) {
 		return "CAST(NULL AS Nullable(Bool))", nil
 	}
@@ -13114,6 +13360,19 @@ func evalComparisonCore(left, right compiledScalar, operator string) (string, []
 		rightSQL = stringScalarSQL(right)
 	}
 	return leftSQL + " " + operator + " " + rightSQL, comparisonValueArgs(left, right)
+}
+
+func scalarNaNPredicateSQL(value compiledScalar) string {
+	switch value.kind {
+	case fieldKindNumber:
+		return "ifNull(isNaN(toFloat64(" + value.valueSQL + ")), 0)"
+	case fieldKindDynamic:
+		typeSQL := dynamicScalarTypeSQL(value)
+		return "(" + typeSQL + " LIKE 'Float%' AND ifNull(isNaN(" +
+			"accurateCastOrNull(" + value.valueSQL + ", 'Float64')), 0))"
+	default:
+		return ""
+	}
 }
 
 func dynamicTextEvalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
@@ -14014,6 +14273,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		kind:                      field.kind,
 		numberType:                field.numberType,
 		alwaysNull:                field.alwaysNull,
+		ieeeComparison:            field.ieeeComparison,
 		comparisonAtomic:          true,
 		materializeForPredicate:   field.materializeForPredicate,
 	}

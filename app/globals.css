@@ -789,6 +789,11 @@ pre {
   font-weight: 700;
 }
 
+.spl-operator {
+  color: #b04c38;
+  font-weight: 650;
+}
+
 .spl-error-token {
   background: #ffe3df;
   color: #b52927;

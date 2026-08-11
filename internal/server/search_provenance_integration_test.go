@@ -134,6 +134,7 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 		Executor:        executor,
 		Snapshotter:     provenanceIntegrationSnapshotter(17),
 		Journal:         journal,
+		CompilerVersion: "integration-test",
 		MaxConcurrent:   1,
 		CleanupInterval: -1,
 		Now:             func() time.Time { return anchor },

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -2223,7 +2224,7 @@ func convertExpression(expression spl.Expr) (Expression, error) {
 		}
 		return &ComparisonExpression{Field: field, Op: convertComparisonOp(expression.Op), Value: value, Range: expression.Range}, nil
 	default:
-		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EXPRESSION", Message: fmt.Sprintf("unsupported expression type %T", expression), Range: expression.SourceRange()}
+		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EXPRESSION", Message: fmt.Sprintf("unsupported expression type %T", expression), Range: safeSPLNodeRange(expression)}
 	}
 }
 
@@ -2318,6 +2319,54 @@ func convertWhereExpressionUnchecked(expression spl.WhereExpr) (Expression, erro
 			Right: right,
 			Range: expression.Range,
 		}, nil
+	case *spl.WhereMembershipExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership expression is missing",
+			}
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Candidates) < 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership requires at least one candidate",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Candidates) > spl.MaximumMembershipCandidates {
+			return nil, splExpressionComplexityError(
+				fmt.Sprintf(
+					"membership contains more than %d candidates",
+					spl.MaximumMembershipCandidates,
+				),
+				expression.Range,
+			)
+		}
+		value, err := convertScalarExpressionUnchecked(expression.Value)
+		if err != nil {
+			return nil, err
+		}
+		candidates := make([]ScalarExpression, len(expression.Candidates))
+		for index, candidate := range expression.Candidates {
+			converted, candidateErr := convertScalarExpressionUnchecked(candidate)
+			if candidateErr != nil {
+				return nil, candidateErr
+			}
+			candidates[index] = converted
+		}
+		return &MembershipExpression{
+			Value:      value,
+			Candidates: candidates,
+			Negated:    expression.Negated,
+			Range:      expression.Range,
+		}, nil
 	case *spl.WhereScalarPredicateExpr:
 		if expression == nil {
 			return nil, &Diagnostic{
@@ -2338,7 +2387,7 @@ func convertWhereExpressionUnchecked(expression spl.WhereExpr) (Expression, erro
 		}
 		return &ScalarPredicateExpression{Value: value, Range: expression.Range}, nil
 	default:
-		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_WHERE_EXPRESSION", Message: fmt.Sprintf("unsupported where expression type %T", expression), Range: expression.SourceRange()}
+		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_WHERE_EXPRESSION", Message: fmt.Sprintf("unsupported where expression type %T", expression), Range: safeSPLNodeRange(expression)}
 	}
 }
 
@@ -2353,10 +2402,12 @@ func nilSPLWhereExpression(expression spl.WhereExpr) bool {
 		return expression == nil
 	case *spl.WhereComparisonExpr:
 		return expression == nil
+	case *spl.WhereMembershipExpr:
+		return expression == nil
 	case *spl.WhereScalarPredicateExpr:
 		return expression == nil
 	default:
-		return false
+		return nilInterfaceValue(expression)
 	}
 }
 
@@ -2369,6 +2420,10 @@ func nilSPLScalarExpression(expression spl.ScalarExpr) bool {
 		return expression == nil
 	case *spl.ScalarLiteralExpr:
 		return expression == nil
+	case *spl.ScalarUnaryExpr:
+		return expression == nil
+	case *spl.ScalarBinaryExpr:
+		return expression == nil
 	case *spl.ScalarCallExpr:
 		return expression == nil
 	case *spl.ScalarIfExpr:
@@ -2376,8 +2431,29 @@ func nilSPLScalarExpression(expression spl.ScalarExpr) bool {
 	case *spl.ScalarCaseExpr:
 		return expression == nil
 	default:
+		return nilInterfaceValue(expression)
+	}
+}
+
+func nilInterfaceValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
 		return false
 	}
+}
+
+func safeSPLNodeRange(node spl.Node) spl.Range {
+	if nilInterfaceValue(node) {
+		return spl.Range{}
+	}
+	return node.SourceRange()
 }
 
 func splQuotedStringLiteral(
@@ -2405,6 +2481,8 @@ type splExpressionComplexityValidator struct {
 
 type splExpressionResourceBudget struct {
 	concatenationOperands int
+	arithmeticOperators   int
+	membershipCandidates  int
 }
 
 func validateSPLWhereExpressionComplexity(
@@ -2426,7 +2504,7 @@ func validateSPLScalarExpressionComplexity(
 		active: make(map[any]struct{}),
 		budget: budget,
 	}
-	return validator.validateScalar(expression, 1)
+	return validator.validateScalar(expression, 1, 0)
 }
 
 func (v *splExpressionComplexityValidator) validateWhere(
@@ -2436,7 +2514,7 @@ func (v *splExpressionComplexityValidator) validateWhere(
 	if nilSPLWhereExpression(expression) {
 		return nil
 	}
-	if err := v.enter(expression, depth, expression.SourceRange()); err != nil {
+	if err := v.enter(expression, depth, safeSPLNodeRange(expression)); err != nil {
 		return err
 	}
 	defer v.leave(expression)
@@ -2450,30 +2528,126 @@ func (v *splExpressionComplexityValidator) validateWhere(
 	case *spl.WhereNotExpr:
 		return v.validateWhere(expression.Operand, depth+1)
 	case *spl.WhereComparisonExpr:
-		if err := v.validateScalar(expression.Left, depth+1); err != nil {
+		if err := v.validateScalar(expression.Left, depth+1, 0); err != nil {
 			return err
 		}
-		return v.validateScalar(expression.Right, depth+1)
-	case *spl.WhereScalarPredicateExpr:
-		return v.validateScalar(expression.Value, depth+1)
-	default:
+		return v.validateScalar(expression.Right, depth+1, 0)
+	case *spl.WhereMembershipExpr:
+		if !validExpressionRangeOrZero(expression.Range) {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Candidates) < 1 {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership requires at least one candidate",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Candidates) > spl.MaximumMembershipCandidates {
+			return splExpressionComplexityError(
+				fmt.Sprintf(
+					"membership contains more than %d candidates",
+					spl.MaximumMembershipCandidates,
+				),
+				expression.Range,
+			)
+		}
+		if err := v.chargeMembershipCandidates(
+			len(expression.Candidates),
+			expression.Range,
+		); err != nil {
+			return err
+		}
+		if err := v.validateScalar(expression.Value, depth+1, 0); err != nil {
+			return err
+		}
+		for _, candidate := range expression.Candidates {
+			if err := v.validateScalar(candidate, depth+1, 0); err != nil {
+				return err
+			}
+		}
 		return nil
+	case *spl.WhereScalarPredicateExpr:
+		return v.validateScalar(expression.Value, depth+1, 0)
+	default:
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+			Message: fmt.Sprintf("unsupported where expression type %T", expression),
+			Range:   safeSPLNodeRange(expression),
+		}
 	}
 }
 
 func (v *splExpressionComplexityValidator) validateScalar(
 	expression spl.ScalarExpr,
 	depth int,
+	unaryChain int,
 ) error {
 	if nilSPLScalarExpression(expression) {
 		return nil
 	}
-	if err := v.enter(expression, depth, expression.SourceRange()); err != nil {
+	if err := v.enter(expression, depth, safeSPLNodeRange(expression)); err != nil {
 		return err
 	}
 	defer v.leave(expression)
 
 	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr, *spl.ScalarLiteralExpr:
+		return nil
+	case *spl.ScalarUnaryExpr:
+		if !validExpressionRangeOrZero(expression.Range) {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		if convertScalarUnaryOp(expression.Op) == ScalarUnaryOpInvalid {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		if unaryChain >= spl.MaximumUnaryOperatorChain {
+			return splExpressionComplexityError(
+				fmt.Sprintf(
+					"unary arithmetic chain exceeds %d operators",
+					spl.MaximumUnaryOperatorChain,
+				),
+				expression.Range,
+			)
+		}
+		if err := v.chargeArithmeticOperator(expression.Range); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.Operand, depth+1, unaryChain+1)
+	case *spl.ScalarBinaryExpr:
+		if !validExpressionRangeOrZero(expression.Range) {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		if convertScalarBinaryOp(expression.Op) == ScalarBinaryOpInvalid {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		if err := v.chargeArithmeticOperator(expression.Range); err != nil {
+			return err
+		}
+		if err := v.validateScalar(expression.Left, depth+1, 0); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.Right, depth+1, 0)
 	case *spl.ScalarCallExpr:
 		if expression.Function == spl.ScalarFunctionCoalesce &&
 			len(expression.Arguments) > spl.MaximumCoalesceArguments {
@@ -2516,18 +2690,19 @@ func (v *splExpressionComplexityValidator) validateScalar(
 			)
 		}
 		for _, argument := range expression.Arguments {
-			if err := v.validateScalar(argument, depth+1); err != nil {
+			if err := v.validateScalar(argument, depth+1, 0); err != nil {
 				return err
 			}
 		}
+		return nil
 	case *spl.ScalarIfExpr:
 		if err := v.validateWhere(expression.Condition, depth+1); err != nil {
 			return err
 		}
-		if err := v.validateScalar(expression.True, depth+1); err != nil {
+		if err := v.validateScalar(expression.True, depth+1, 0); err != nil {
 			return err
 		}
-		return v.validateScalar(expression.False, depth+1)
+		return v.validateScalar(expression.False, depth+1, 0)
 	case *spl.ScalarCaseExpr:
 		if len(expression.Branches) > spl.MaximumCaseBranches {
 			return splExpressionComplexityError(
@@ -2542,11 +2717,57 @@ func (v *splExpressionComplexityValidator) validateScalar(
 			if err := v.validateWhere(branch.Condition, depth+1); err != nil {
 				return err
 			}
-			if err := v.validateScalar(branch.Value, depth+1); err != nil {
+			if err := v.validateScalar(branch.Value, depth+1, 0); err != nil {
 				return err
 			}
 		}
+		return nil
+	default:
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message: fmt.Sprintf("unsupported scalar expression type %T", expression),
+			Range:   safeSPLNodeRange(expression),
+		}
 	}
+}
+
+func (v *splExpressionComplexityValidator) chargeArithmeticOperator(
+	sourceRange spl.Range,
+) error {
+	if v.budget == nil {
+		return nil
+	}
+	if v.budget.arithmeticOperators >= spl.MaximumArithmeticOperatorsPerQuery {
+		return splExpressionComplexityError(
+			fmt.Sprintf(
+				"arithmetic contains more than %d operator occurrences per query",
+				spl.MaximumArithmeticOperatorsPerQuery,
+			),
+			sourceRange,
+		)
+	}
+	v.budget.arithmeticOperators++
+	return nil
+}
+
+func (v *splExpressionComplexityValidator) chargeMembershipCandidates(
+	count int,
+	sourceRange spl.Range,
+) error {
+	if v.budget == nil {
+		return nil
+	}
+	if v.budget.membershipCandidates >
+		spl.MaximumMembershipCandidatesPerQuery-count {
+		return splExpressionComplexityError(
+			fmt.Sprintf(
+				"membership contains more than %d candidate occurrences per query",
+				spl.MaximumMembershipCandidatesPerQuery,
+			),
+			sourceRange,
+		)
+	}
+	v.budget.membershipCandidates += count
 	return nil
 }
 
@@ -2563,6 +2784,13 @@ func (v *splExpressionComplexityValidator) enter(
 			),
 			sourceRange,
 		)
+	}
+	if node == nil || !reflect.TypeOf(node).Comparable() {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message: fmt.Sprintf("unsupported expression node %T", node),
+			Range:   sourceRange,
+		}
 	}
 	if _, cyclic := v.active[node]; cyclic {
 		return splExpressionComplexityError(
@@ -2674,7 +2902,14 @@ func buildCountPredicateMeasure(
 		return AggregateMeasure{}, err
 	}
 	if !outputSchemaKnown {
-		if fieldRange, referencesReserved := predicateFieldRange(predicate, "fields"); referencesReserved {
+		fieldRange, referencesReserved, inventoryErr := predicateFieldRange(
+			predicate,
+			"fields",
+		)
+		if inventoryErr != nil {
+			return AggregateMeasure{}, inventoryErr
+		}
+		if referencesReserved {
 			return AggregateMeasure{}, &Diagnostic{
 				Code:    diagnostics.ambiguousCode,
 				Message: diagnostics.reservedMessage,
@@ -2693,78 +2928,144 @@ func buildCountPredicateMeasure(
 // expression order. Conditional aggregate planning uses it to preserve the
 // reserved open-event "fields" payload boundary just as it does for exact
 // inputs.
-func predicateFieldRange(expression Expression, name string) (spl.Range, bool) {
-	var visitExpression func(Expression) (spl.Range, bool)
-	var visitScalar func(ScalarExpression) (spl.Range, bool)
-	visitScalar = func(expression ScalarExpression) (spl.Range, bool) {
+func predicateFieldRange(
+	expression Expression,
+	name string,
+) (spl.Range, bool, error) {
+	var visitExpression func(Expression) (spl.Range, bool, error)
+	var visitScalar func(ScalarExpression) (spl.Range, bool, error)
+	visitScalar = func(expression ScalarExpression) (spl.Range, bool, error) {
 		switch expression := expression.(type) {
 		case *ScalarFieldExpression:
-			if expression != nil && expression.Field.Name == name {
-				return expression.Field.Range, true
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar field expression is nil")
 			}
+			if expression.Field.Name == name {
+				return expression.Field.Range, true, nil
+			}
+			return spl.Range{}, false, nil
+		case *ScalarLiteralExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar literal expression is nil")
+			}
+			return spl.Range{}, false, nil
+		case *ScalarUnaryExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar unary expression is nil")
+			}
+			return visitScalar(expression.Operand)
+		case *ScalarBinaryExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar binary expression is nil")
+			}
+			if sourceRange, ok, err := visitScalar(expression.Left); ok || err != nil {
+				return sourceRange, ok, err
+			}
+			return visitScalar(expression.Right)
 		case *ScalarCallExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar call expression is nil")
 			}
 			for _, argument := range expression.Arguments {
-				if sourceRange, ok := visitScalar(argument); ok {
-					return sourceRange, true
+				if sourceRange, ok, err := visitScalar(argument); ok || err != nil {
+					return sourceRange, ok, err
 				}
 			}
+			return spl.Range{}, false, nil
 		case *ScalarIfExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar if expression is nil")
 			}
-			if sourceRange, ok := visitExpression(expression.Condition); ok {
-				return sourceRange, true
+			if sourceRange, ok, err := visitExpression(expression.Condition); ok || err != nil {
+				return sourceRange, ok, err
 			}
-			if sourceRange, ok := visitScalar(expression.True); ok {
-				return sourceRange, true
+			if sourceRange, ok, err := visitScalar(expression.True); ok || err != nil {
+				return sourceRange, ok, err
 			}
 			return visitScalar(expression.False)
 		case *ScalarCaseExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar case expression is nil")
 			}
 			for _, branch := range expression.Branches {
-				if sourceRange, ok := visitExpression(branch.Condition); ok {
-					return sourceRange, true
+				if sourceRange, ok, err := visitExpression(branch.Condition); ok || err != nil {
+					return sourceRange, ok, err
 				}
-				if sourceRange, ok := visitScalar(branch.Value); ok {
-					return sourceRange, true
+				if sourceRange, ok, err := visitScalar(branch.Value); ok || err != nil {
+					return sourceRange, ok, err
 				}
 			}
+			return spl.Range{}, false, nil
+		default:
+			return spl.Range{}, false, fmt.Errorf(
+				"inspect predicate fields: unsupported scalar expression %T",
+				expression,
+			)
 		}
-		return spl.Range{}, false
 	}
-	visitExpression = func(expression Expression) (spl.Range, bool) {
+	visitExpression = func(expression Expression) (spl.Range, bool, error) {
 		switch expression := expression.(type) {
 		case *BooleanExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: Boolean expression is nil")
 			}
-			if sourceRange, ok := visitExpression(expression.Left); ok {
-				return sourceRange, true
+			if sourceRange, ok, err := visitExpression(expression.Left); ok || err != nil {
+				return sourceRange, ok, err
 			}
 			return visitExpression(expression.Right)
 		case *NotExpression:
-			if expression != nil {
-				return visitExpression(expression.Operand)
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: not expression is nil")
 			}
+			return visitExpression(expression.Operand)
+		case *TextExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: text expression is nil")
+			}
+			if name == "_raw" {
+				return expression.Range, true, nil
+			}
+			return spl.Range{}, false, nil
+		case *ComparisonExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: comparison expression is nil")
+			}
+			if expression.Field.Name == name {
+				return expression.Field.Range, true, nil
+			}
+			return spl.Range{}, false, nil
 		case *EvalComparisonExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: eval comparison expression is nil")
 			}
-			if sourceRange, ok := visitScalar(expression.Left); ok {
-				return sourceRange, true
+			if sourceRange, ok, err := visitScalar(expression.Left); ok || err != nil {
+				return sourceRange, ok, err
 			}
 			return visitScalar(expression.Right)
 		case *ScalarPredicateExpression:
-			if expression != nil {
-				return visitScalar(expression.Value)
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar predicate expression is nil")
 			}
+			return visitScalar(expression.Value)
+		case *MembershipExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: membership expression is nil")
+			}
+			if sourceRange, ok, err := visitScalar(expression.Value); ok || err != nil {
+				return sourceRange, ok, err
+			}
+			for _, candidate := range expression.Candidates {
+				if sourceRange, ok, err := visitScalar(candidate); ok || err != nil {
+					return sourceRange, ok, err
+				}
+			}
+			return spl.Range{}, false, nil
+		default:
+			return spl.Range{}, false, fmt.Errorf(
+				"inspect predicate fields: unsupported expression %T",
+				expression,
+			)
 		}
-		return spl.Range{}, false
 	}
 	return visitExpression(expression)
 }
@@ -2801,6 +3102,89 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			return nil, err
 		}
 		return &ScalarLiteralExpression{Value: value, Range: expression.Range}, nil
+	case *spl.ScalarUnaryExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression is missing",
+			}
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		op := convertScalarUnaryOp(expression.Op)
+		if op == ScalarUnaryOpInvalid {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		if splScalarHasStaticallyUnsupportedArithmeticType(expression.Operand) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE",
+				Message: "arithmetic cannot consume the statically known operand type",
+				Range:   splScalarExpressionRange(expression.Operand, expression.Range),
+			}
+		}
+		operand, err := convertScalarExpressionUnchecked(expression.Operand)
+		if err != nil {
+			return nil, err
+		}
+		return &ScalarUnaryExpression{
+			Op:      op,
+			Operand: operand,
+			Range:   expression.Range,
+		}, nil
+	case *spl.ScalarBinaryExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression is missing",
+			}
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		op := convertScalarBinaryOp(expression.Op)
+		if op == ScalarBinaryOpInvalid {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		for _, operand := range []spl.ScalarExpr{expression.Left, expression.Right} {
+			if splScalarHasStaticallyUnsupportedArithmeticType(operand) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE",
+					Message: "arithmetic cannot consume the statically known operand type",
+					Range:   splScalarExpressionRange(operand, expression.Range),
+				}
+			}
+		}
+		left, err := convertScalarExpressionUnchecked(expression.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := convertScalarExpressionUnchecked(expression.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &ScalarBinaryExpression{
+			Op:    op,
+			Left:  left,
+			Right: right,
+			Range: expression.Range,
+		}, nil
 	case *spl.ScalarCallExpr:
 		if expression == nil {
 			return nil, &Diagnostic{
@@ -3385,7 +3769,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			Range:    expression.Range,
 		}, nil
 	default:
-		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION", Message: fmt.Sprintf("unsupported scalar expression type %T", expression), Range: expression.SourceRange()}
+		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION", Message: fmt.Sprintf("unsupported scalar expression type %T", expression), Range: safeSPLNodeRange(expression)}
 	}
 }
 
@@ -3395,6 +3779,8 @@ func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
 
 func splScalarMayReturnBooleanValue(expression spl.ScalarExpr) bool {
 	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr, *spl.ScalarUnaryExpr, *spl.ScalarBinaryExpr:
+		return false
 	case *spl.ScalarLiteralExpr:
 		return expression != nil &&
 			expression.Value.Kind == spl.LiteralKindBool
@@ -3432,8 +3818,85 @@ func splScalarMayReturnBooleanValue(expression spl.ScalarExpr) bool {
 	}
 }
 
+func splScalarExpressionRange(
+	expression spl.ScalarExpr,
+	fallback spl.Range,
+) spl.Range {
+	if nilSPLScalarExpression(expression) {
+		return fallback
+	}
+	return expression.SourceRange()
+}
+
+func splScalarHasStaticallyUnsupportedArithmeticType(
+	expression spl.ScalarExpr,
+) bool {
+	if nilSPLScalarExpression(expression) ||
+		splScalarMayReturnBooleanValue(expression) {
+		return !nilSPLScalarExpression(expression)
+	}
+	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr:
+		// Field type and canonical-time lineage are properties of the current
+		// pipeline state. The backend validator owns that evidence so a field
+		// overwritten by an earlier eval is not misclassified from its name.
+		return false
+	case *spl.ScalarLiteralExpr:
+		return expression != nil && expression.Value.Kind == spl.LiteralKindString
+	case *spl.ScalarCallExpr:
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case spl.ScalarFunctionReplace,
+			spl.ScalarFunctionLower,
+			spl.ScalarFunctionUpper,
+			spl.ScalarFunctionSubstring,
+			spl.ScalarFunctionToString,
+			spl.ScalarFunctionStrftime,
+			spl.ScalarFunctionConcat:
+			return true
+		case spl.ScalarFunctionCoalesce:
+			foundValue := false
+			for _, argument := range expression.Arguments {
+				if literal, ok := argument.(*spl.ScalarLiteralExpr); ok &&
+					literal != nil && literal.Value.Kind == spl.LiteralKindNull {
+					continue
+				}
+				foundValue = true
+				if !splScalarHasStaticallyUnsupportedArithmeticType(argument) {
+					return false
+				}
+			}
+			return foundValue
+		default:
+			return false
+		}
+	case *spl.ScalarIfExpr:
+		return expression != nil &&
+			splScalarHasStaticallyUnsupportedArithmeticType(expression.True) &&
+			splScalarHasStaticallyUnsupportedArithmeticType(expression.False)
+	case *spl.ScalarCaseExpr:
+		if expression == nil || len(expression.Branches) == 0 {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if !splScalarHasStaticallyUnsupportedArithmeticType(branch.Value) {
+				return false
+			}
+		}
+		return true
+	case *spl.ScalarUnaryExpr, *spl.ScalarBinaryExpr:
+		return false
+	default:
+		return false
+	}
+}
+
 func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
 	switch expression := expression.(type) {
+	case *ScalarFieldExpression, *ScalarUnaryExpression, *ScalarBinaryExpression:
+		return false
 	case *ScalarCallExpression:
 		if expression == nil {
 			return false
@@ -3461,6 +3924,11 @@ func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
 
 func scalarExpressionCanBeDirectPredicate(expression ScalarExpression) bool {
 	switch expression := expression.(type) {
+	case *ScalarFieldExpression,
+		*ScalarLiteralExpression,
+		*ScalarUnaryExpression,
+		*ScalarBinaryExpression:
+		return false
 	case *ScalarCallExpression:
 		if expression == nil {
 			return false
@@ -3529,6 +3997,34 @@ func convertComparisonOp(op spl.CompareOp) ComparisonOp {
 		return ComparisonOpGreaterEqual
 	default:
 		return ComparisonOpInvalid
+	}
+}
+
+func convertScalarUnaryOp(op spl.ScalarUnaryOp) ScalarUnaryOp {
+	switch op {
+	case spl.ScalarUnaryOpPositive:
+		return ScalarUnaryOpPositive
+	case spl.ScalarUnaryOpNegative:
+		return ScalarUnaryOpNegative
+	default:
+		return ScalarUnaryOpInvalid
+	}
+}
+
+func convertScalarBinaryOp(op spl.ScalarBinaryOp) ScalarBinaryOp {
+	switch op {
+	case spl.ScalarBinaryOpMultiply:
+		return ScalarBinaryOpMultiply
+	case spl.ScalarBinaryOpDivide:
+		return ScalarBinaryOpDivide
+	case spl.ScalarBinaryOpRemainder:
+		return ScalarBinaryOpRemainder
+	case spl.ScalarBinaryOpAdd:
+		return ScalarBinaryOpAdd
+	case spl.ScalarBinaryOpSubtract:
+		return ScalarBinaryOpSubtract
+	default:
+		return ScalarBinaryOpInvalid
 	}
 }
 

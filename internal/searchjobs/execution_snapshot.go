@@ -23,6 +23,7 @@ type ExecutionSnapshot struct {
 	TenantID         string
 	AppID            string
 	SPL              string
+	CompilerVersion  string
 	EffectiveIndexes []string
 	Earliest         time.Time
 	Latest           time.Time
@@ -240,6 +241,7 @@ func (snapshot ExecutionSnapshot) Equal(other ExecutionSnapshot) bool {
 		snapshot.TenantID == other.TenantID &&
 		snapshot.AppID == other.AppID &&
 		snapshot.SPL == other.SPL &&
+		snapshot.CompilerVersion == other.CompilerVersion &&
 		slices.Equal(snapshot.EffectiveIndexes, other.EffectiveIndexes) &&
 		snapshot.Earliest.Equal(other.Earliest) &&
 		snapshot.Latest.Equal(other.Latest) &&
@@ -333,6 +335,7 @@ func (manager *Manager) executionSnapshotLocked(
 		TenantID:          strings.Clone(entry.job.TenantID),
 		AppID:             strings.Clone(entry.job.AppID),
 		SPL:               strings.Clone(entry.job.SPL),
+		CompilerVersion:   strings.Clone(entry.job.CompilerVersion),
 		EffectiveIndexes:  cloneStrings(entry.job.EffectiveIndexes),
 		Earliest:          entry.job.Earliest,
 		Latest:            entry.job.Latest,

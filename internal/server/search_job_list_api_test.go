@@ -732,6 +732,7 @@ func listItem(job searchjobs.Job) searchjobs.JobListItem {
 		TenantID:          job.TenantID,
 		SPL:               job.SPL,
 		NormalizedSPL:     job.NormalizedSPL,
+		CompilerVersion:   job.CompilerVersion,
 		RequestedIndexes:  slices.Clone(job.RequestedIndexes),
 		EffectiveIndexes:  slices.Clone(job.EffectiveIndexes),
 		TimeRange:         job.TimeRange,

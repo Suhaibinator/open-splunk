@@ -589,6 +589,37 @@ test("event adaptation builds only the event projection", () => {
   assert.equal(adapted.statisticsTable, null);
 });
 
+test("event adaptation preserves non-finite doubles as non-pivotable table values", () => {
+  const schema: ResultSchema = {
+    schemaId: "event-ieee-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_EVENTS,
+    columns: [
+      column("_raw", ValueType.VALUE_TYPE_STRING, ColumnSemanticType.COLUMN_SEMANTIC_TYPE_RAW),
+      column("nan_value", ValueType.VALUE_TYPE_DOUBLE),
+      column("positive_infinity", ValueType.VALUE_TYPE_DOUBLE),
+      column("negative_infinity", ValueType.VALUE_TYPE_DOUBLE),
+    ],
+  };
+  const adapted = adaptSearchResults(schema, [
+    row("ieee", 0n, [
+      stringValue("computed IEEE values"),
+      doubleValue(Number.NaN),
+      doubleValue(Number.POSITIVE_INFINITY),
+      doubleValue(Number.NEGATIVE_INFINITY),
+    ]),
+  ]);
+
+  const event = adapted.events[0];
+  assert.ok(event);
+  assert.ok(Object.is(event.fields.nan_value, Number.NaN));
+  assert.equal(event.fields.positive_infinity, Number.POSITIVE_INFINITY);
+  assert.equal(event.fields.negative_infinity, Number.NEGATIVE_INFINITY);
+  assert.equal(event.pivotableFields?.nan_value, false);
+  assert.equal(event.pivotableFields?.positive_infinity, false);
+  assert.equal(event.pivotableFields?.negative_infinity, false);
+});
+
 test("event adaptation decodes each nested timestamp value once", () => {
   const schema: ResultSchema = {
     schemaId: "event-single-decode-v1",

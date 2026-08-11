@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/Suhaibinator/open-splunk/internal/searchjobproto"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
@@ -86,5 +87,36 @@ func TestValueProtoSizeLowerBoundCountsDeepEmptyContainers(t *testing.T) {
 	size, exceeded, err = value.ProtoSizeLowerBound(want - 1)
 	if err != nil || !exceeded || size != want {
 		t.Fatalf("saturated deep-empty lower bound = (%d, %v, %v), want (%d, true, nil)", size, exceeded, err, want)
+	}
+}
+
+func TestValueRetainedSizeBytesCountsEveryNestedStructure(t *testing.T) {
+	children := make([]searchjobs.Value, 1_024)
+	for index := range children {
+		children[index] = searchjobs.NullValue()
+	}
+	const fieldName = "nested"
+	value, err := searchjobs.ObjectValue(searchjobs.ObjectField{
+		Name:  fieldName,
+		Value: searchjobs.ListValue(children...),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	size, err := value.RetainedSizeBytes()
+	if err != nil {
+		t.Fatalf("RetainedSizeBytes(): %v", err)
+	}
+	want := uint64(unsafe.Sizeof(searchjobs.ObjectField{})) + uint64(len(fieldName)) +
+		1_025*uint64(unsafe.Sizeof(searchjobs.Value{}))
+	if size != want {
+		t.Fatalf("RetainedSizeBytes() = %d, want %d", size, want)
+	}
+	lower, exceeded, err := value.ProtoSizeLowerBound(math.MaxUint64)
+	if err != nil || exceeded {
+		t.Fatalf("ProtoSizeLowerBound() = (%d, %t, %v)", lower, exceeded, err)
+	}
+	if size <= lower*16 {
+		t.Fatalf("nested retained size %d did not materially exceed wire lower bound %d", size, lower)
 	}
 }

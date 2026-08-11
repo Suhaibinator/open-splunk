@@ -9,6 +9,10 @@ import {
   KnowledgeSearchStage,
   type KnowledgeSnapshotSummary,
 } from "@/gen/ts/open_splunk/v1/knowledge";
+import {
+  canonicalBoundedServerText,
+  isGoUnicodeSpace,
+} from "@/lib/search/server-text";
 
 const UTF8 = new TextEncoder();
 const CONTROL_CHARACTER = /\p{Cc}/u;
@@ -346,15 +350,6 @@ function booleanValue(value: unknown): boolean {
   return value;
 }
 
-function asciiWhitespace(codePoint: number): boolean {
-  return codePoint === 0x20 || (codePoint >= 0x09 && codePoint <= 0x0d);
-}
-
-function hasAsciiEdgeWhitespace(value: string): boolean {
-  return asciiWhitespace(value.codePointAt(0)!)
-    || asciiWhitespace(value.codePointAt(value.length - 1)!);
-}
-
 function sqlForbiddenControl(value: string): boolean {
   for (const character of value) {
     const codePoint = character.codePointAt(0)!;
@@ -368,23 +363,9 @@ function sqlForbiddenControl(value: string): boolean {
   return false;
 }
 
-function goWhitespace(codePoint: number): boolean {
-  return (codePoint >= 0x09 && codePoint <= 0x0d)
-    || codePoint === 0x20
-    || codePoint === 0x85
-    || codePoint === 0xa0
-    || codePoint === 0x1680
-    || (codePoint >= 0x2000 && codePoint <= 0x200a)
-    || codePoint === 0x2028
-    || codePoint === 0x2029
-    || codePoint === 0x202f
-    || codePoint === 0x205f
-    || codePoint === 0x3000;
-}
-
 function hasNonGoWhitespace(value: string): boolean {
   for (const character of value) {
-    if (!goWhitespace(character.codePointAt(0)!)) return true;
+    if (!isGoUnicodeSpace(character.codePointAt(0)!)) return true;
   }
   return false;
 }
@@ -814,11 +795,8 @@ function adaptPhysicalPlan(value: unknown): ServerInspectionPhysicalPlanView {
 }
 
 function canonicalCompiler(value: unknown): string {
-  const compiler = boundedUtf8(value, MAXIMUM_COMPILER_BYTES);
-  if (hasAsciiEdgeWhitespace(compiler) || CONTROL_CHARACTER.test(compiler)) {
-    return invalidInspection();
-  }
-  return compiler;
+  return canonicalBoundedServerText(value, MAXIMUM_COMPILER_BYTES)
+    ?? invalidInspection();
 }
 
 function digestHex(value: unknown): string {

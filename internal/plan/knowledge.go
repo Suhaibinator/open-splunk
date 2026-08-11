@@ -119,6 +119,11 @@ func convertKnowledgeCalculatedExpression(
 	if err != nil {
 		return nil, fmt.Errorf("convert knowledge calculated expression: parse: %w", err)
 	}
+	if knowledgeExpressionUsesAuthoredV02Syntax(parsed) {
+		return nil, errors.New(
+			"convert knowledge calculated expression: arithmetic and membership require the authored v0.2 profile",
+		)
+	}
 	if spl.ScalarExpressionMayReturnBooleanFunction(parsed) {
 		return nil, errors.New(
 			"convert knowledge calculated expression: cannot directly assign a Boolean result",
@@ -148,6 +153,61 @@ func convertKnowledgeCalculatedExpression(
 		return nil, fmt.Errorf("convert knowledge calculated expression: convert: %w", err)
 	}
 	return expression, nil
+}
+
+func knowledgeExpressionUsesAuthoredV02Syntax(expression spl.ScalarExpr) bool {
+	if nilSPLScalarExpression(expression) {
+		return true
+	}
+	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr, *spl.ScalarLiteralExpr:
+		return false
+	case *spl.ScalarUnaryExpr, *spl.ScalarBinaryExpr:
+		return true
+	case *spl.ScalarCallExpr:
+		for _, argument := range expression.Arguments {
+			if knowledgeExpressionUsesAuthoredV02Syntax(argument) {
+				return true
+			}
+		}
+		return false
+	case *spl.ScalarIfExpr:
+		return knowledgeWhereUsesAuthoredV02Syntax(expression.Condition) ||
+			knowledgeExpressionUsesAuthoredV02Syntax(expression.True) ||
+			knowledgeExpressionUsesAuthoredV02Syntax(expression.False)
+	case *spl.ScalarCaseExpr:
+		for _, branch := range expression.Branches {
+			if knowledgeWhereUsesAuthoredV02Syntax(branch.Condition) ||
+				knowledgeExpressionUsesAuthoredV02Syntax(branch.Value) {
+				return true
+			}
+		}
+		return false
+	default:
+		return true
+	}
+}
+
+func knowledgeWhereUsesAuthoredV02Syntax(expression spl.WhereExpr) bool {
+	if nilSPLWhereExpression(expression) {
+		return true
+	}
+	switch expression := expression.(type) {
+	case *spl.WhereBoolExpr:
+		return knowledgeWhereUsesAuthoredV02Syntax(expression.Left) ||
+			knowledgeWhereUsesAuthoredV02Syntax(expression.Right)
+	case *spl.WhereNotExpr:
+		return knowledgeWhereUsesAuthoredV02Syntax(expression.Operand)
+	case *spl.WhereComparisonExpr:
+		return knowledgeExpressionUsesAuthoredV02Syntax(expression.Left) ||
+			knowledgeExpressionUsesAuthoredV02Syntax(expression.Right)
+	case *spl.WhereMembershipExpr:
+		return true
+	case *spl.WhereScalarPredicateExpr:
+		return knowledgeExpressionUsesAuthoredV02Syntax(expression.Value)
+	default:
+		return true
+	}
 }
 
 // InjectKnowledgePrelude returns a detached query whose explicit executable
