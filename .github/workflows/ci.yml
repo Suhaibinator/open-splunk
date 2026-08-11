@@ -172,63 +172,64 @@ jobs:
   knowledge-object-fuzz:
     name: Knowledge object fuzz (${{ matrix.label }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Catalog's complete deterministic campaign is approximately nine minutes
+    # on the calibrated runner; individual targets remain bounded at two.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         include:
+          # Go 1.26.5 can retain a wall-clock fuzz deadline if child-context
+          # cancellation lags during coordinator shutdown (golang/go#75804).
+          # Pair every exact target with a slow-runner-calibrated execution
+          # limit so shutdown uses the coordinator's clean limit path.
           - label: selectors
             package: ./internal/knowledge
-            fuzztime: 15s
-            targets: |
-              ^FuzzNormalizePattern$
-              ^FuzzSelectorMatchReference$
-              ^FuzzSelectorMultiPatternORReference$
-              ^FuzzSelectorCanonicalOrder$
+            target_budgets: |
+              ^FuzzNormalizePattern$ 500000x
+              ^FuzzSelectorMatchReference$ 300000x
+              ^FuzzSelectorMultiPatternORReference$ 300000x
+              ^FuzzSelectorCanonicalOrder$ 500000x
           - label: definitions
             package: ./internal/knowledgedefinition
-            fuzztime: 30s
-            targets: |
-              ^FuzzDecodeCanonicalNeverPanicsAndSuccessIsStable$
-              ^FuzzNormalizeNeverPanicsAndSuccessIsIdempotent$
-              ^FuzzDecodeCanonicalFutureBodyNeverPanicsAndSuccessIsStable$
-              ^FuzzInactiveFutureBodyCanonicalWireRoundTrip$
-              ^FuzzInactiveFutureBodyDisallowedStateAlwaysWins$
+            target_budgets: |
+              ^FuzzDecodeCanonicalNeverPanicsAndSuccessIsStable$ 250000x
+              ^FuzzNormalizeNeverPanicsAndSuccessIsIdempotent$ 275000x
+              ^FuzzDecodeCanonicalFutureBodyNeverPanicsAndSuccessIsStable$ 200000x
+              ^FuzzInactiveFutureBodyCanonicalWireRoundTrip$ 250000x
+              ^FuzzInactiveFutureBodyDisallowedStateAlwaysWins$ 250000x
           - label: catalog
             package: ./internal/knowledgecatalog
-            fuzztime: 30s
-            targets: |
-              ^FuzzCalculatedDependencyInputFields$
-              ^FuzzCatalogFingerprintCanonicalizesSetLikeInputs$
-              ^FuzzCatalogCursorRoundTripPreservesTypedKeyset$
-              ^FuzzBoundedListResponseRecordsMatchesReferenceModel$
-              ^FuzzDecodeCursorRejectsMalformedOrReboundInput$
-              ^FuzzKnowledgeUpdateMaskCanonicalization$
-              ^FuzzApplyKnowledgeDefinitionMaskIsDetachedAndStable$
-              ^FuzzPrepareCreateMutationCanonicalDigest$
-              ^FuzzKnowledgeOutcomeReferenceStrictDecode$
-              ^FuzzValidatePublicationActiveCandidateAlphaRename$
+            target_budgets: |
+              ^FuzzCalculatedDependencyInputFields$ 60000x
+              ^FuzzCatalogFingerprintCanonicalizesSetLikeInputs$ 80000x
+              ^FuzzCatalogCursorRoundTripPreservesTypedKeyset$ 70000x
+              ^FuzzBoundedListResponseRecordsMatchesReferenceModel$ 70000x
+              ^FuzzDecodeCursorRejectsMalformedOrReboundInput$ 120000x
+              ^FuzzKnowledgeUpdateMaskCanonicalization$ 100000x
+              ^FuzzApplyKnowledgeDefinitionMaskIsDetachedAndStable$ 80000x
+              ^FuzzPrepareCreateMutationCanonicalDigest$ 75000x
+              ^FuzzKnowledgeOutcomeReferenceStrictDecode$ 100000x
+              ^FuzzValidatePublicationActiveCandidateAlphaRename$ 40000x
           - label: spl-parser
             package: ./internal/spl
-            fuzztime: 15s
-            targets: |
-              ^FuzzParseDoesNotPanic$
-              ^FuzzParseV02ExpressionFragmentsCanonicalize$
-              ^FuzzParseV02ExpressionsAreDeterministicAndAtomic$
+            target_budgets: |
+              ^FuzzParseDoesNotPanic$ 350000x
+              ^FuzzParseV02ExpressionFragmentsCanonicalize$ 150000x
+              ^FuzzParseV02ExpressionsAreDeterministicAndAtomic$ 250000x
           - label: hec-protocol
             package: ./internal/hec
-            fuzztime: 15s
-            targets: |
-              ^FuzzDecodeAcknowledgmentRequest$
-              ^FuzzParseAuthorization$
-              ^FuzzParseChannel$
-              ^FuzzGzipLimitEnforcement$
-              ^FuzzClassifyFieldNumber$
-              ^FuzzEnvelopeDecoder$
-              ^FuzzParseEpochNanoseconds$
-              ^FuzzParseRawQuery$
-              ^FuzzRawBreaker$
-              ^FuzzMarshalResponse$
+            target_budgets: |
+              ^FuzzDecodeAcknowledgmentRequest$ 150000x
+              ^FuzzParseAuthorization$ 50000x
+              ^FuzzParseChannel$ 450000x
+              ^FuzzGzipLimitEnforcement$ 100000x
+              ^FuzzClassifyFieldNumber$ 400000x
+              ^FuzzEnvelopeDecoder$ 150000x
+              ^FuzzParseEpochNanoseconds$ 425000x
+              ^FuzzParseRawQuery$ 125000x
+              ^FuzzRawBreaker$ 100000x
+              ^FuzzMarshalResponse$ 400000x
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -243,18 +244,33 @@ jobs:
       - name: Verify exact fuzz target inventory
         env:
           FUZZ_PACKAGE: ${{ matrix.package }}
-          FUZZ_TARGETS: ${{ matrix.targets }}
+          FUZZ_TARGET_BUDGETS: ${{ matrix.target_budgets }}
         run: |
           set -euo pipefail
           artifact_dir="fuzz-artifacts/${{ matrix.label }}"
           mkdir -p "$artifact_dir"
-          printf '%s\n' "$FUZZ_TARGETS" > "$artifact_dir/exact-target-regexes.txt"
-          sed \
-            -e '/^[[:space:]]*$/d' \
-            -e 's/^\^//' \
-            -e 's/\$$//' \
-            "$artifact_dir/exact-target-regexes.txt" |
-            LC_ALL=C sort > "$artifact_dir/declared-targets.txt"
+          printf '%s\n' "$FUZZ_TARGET_BUDGETS" > "$artifact_dir/exact-target-budgets.txt"
+          : > "$artifact_dir/exact-target-regexes.txt"
+          : > "$artifact_dir/declared-targets.txt"
+          while read -r target_regex target_fuzz_time extra; do
+            if [[ -z "$target_regex" ]]; then
+              continue
+            fi
+            target_name="${target_regex#^}"
+            target_name="${target_name%$}"
+            if [[ -z "$target_fuzz_time" || -n "$extra" ||
+              "$target_regex" != "^${target_name}$" ||
+              ! "$target_name" =~ ^Fuzz[A-Za-z0-9_]+$ ||
+              ! "$target_fuzz_time" =~ ^[1-9][0-9]*x$ ]]; then
+              echo "::error::Invalid fuzz target budget: $target_regex $target_fuzz_time $extra"
+              exit 1
+            fi
+            printf '%s\n' "$target_regex" >> "$artifact_dir/exact-target-regexes.txt"
+            printf '%s\n' "$target_name" >> "$artifact_dir/declared-targets.txt"
+          done < "$artifact_dir/exact-target-budgets.txt"
+          LC_ALL=C sort -o \
+            "$artifact_dir/declared-targets.txt" \
+            "$artifact_dir/declared-targets.txt"
           go test "$FUZZ_PACKAGE" -list '^Fuzz' |
             sed -n '/^Fuzz/p' |
             LC_ALL=C sort > "$artifact_dir/discovered-targets.txt"
@@ -265,14 +281,13 @@ jobs:
       - name: Fuzz every declared target within its own budget
         env:
           FUZZ_PACKAGE: ${{ matrix.package }}
-          FUZZ_TARGETS: ${{ matrix.targets }}
-          FUZZ_TIME: ${{ matrix.fuzztime }}
+          FUZZ_TARGET_BUDGETS: ${{ matrix.target_budgets }}
           GOMAXPROCS: "2"
         run: |
           set -euo pipefail
           artifact_dir="fuzz-artifacts/${{ matrix.label }}"
           status=0
-          while IFS= read -r target_regex; do
+          while read -r target_regex target_fuzz_time; do
             if [[ -z "$target_regex" ]]; then
               continue
             fi
@@ -281,7 +296,7 @@ jobs:
             if ! go test "$FUZZ_PACKAGE" \
               -run '^$' \
               -fuzz "$target_regex" \
-              -fuzztime "$FUZZ_TIME" \
+              -fuzztime "$target_fuzz_time" \
               -fuzzminimizetime 10s \
               -timeout 2m \
               -parallel 2 \
@@ -289,7 +304,7 @@ jobs:
               tee "$artifact_dir/${target_name}.log"; then
               status=1
             fi
-          done <<< "$FUZZ_TARGETS"
+          done <<< "$FUZZ_TARGET_BUDGETS"
           exit "$status"
 
       - name: Upload fuzz failure evidence
@@ -385,11 +400,78 @@ jobs:
           -p=1
           -v
 
+  hec-durable-load:
+    name: HEC durable throughput and outage recovery
+    runs-on: ubuntu-latest
+    # The throughput contract needs an otherwise idle runner. Running it after
+    # the exhaustive backend/browser matrix makes shared-runner history part of
+    # the measured acceptance rate instead of measuring the shipped HEC path.
+    timeout-minutes: 20
+    env:
+      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download Go modules with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Pre-pull pinned ClickHouse image with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+
+      - name: Test HEC durable throughput and outage recovery
+        env:
+          OPEN_SPLUNK_HEC_LOAD: "1"
+        run: >-
+          go test ./integration
+          -run '^TestBackendHECDurableLoad$'
+          -count=1
+          -timeout=15m
+          -p=1
+          -v
+
   backend-vertical:
     name: Backend vertical
     runs-on: ubuntu-latest
     # Leave setup, the 30-minute general vertical, and the isolated HEC
-    # vertical enough headroom to fail on their own bounded deadlines.
+    # functional checks enough headroom to fail on their own bounded deadlines.
     timeout-minutes: 45
     env:
       OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
@@ -464,16 +546,6 @@ jobs:
           -run '^TestBackendHECVertical$'
           -count=1
           -timeout=8m
-          -v
-
-      - name: Test HEC durable throughput and outage recovery
-        env:
-          OPEN_SPLUNK_HEC_LOAD: "1"
-        run: >-
-          go test ./integration
-          -run '^TestBackendHECDurableLoad$'
-          -count=1
-          -timeout=15m
           -v
 
       - name: Test HEC slow compressed read deadline
@@ -631,6 +703,7 @@ jobs:
       - gradethis-corpus
       - go-lint
       - go-test
+      - hec-durable-load
       - knowledge-object-fuzz
       - knowledge-runtime-clickhouse
       - go-vulnerability
