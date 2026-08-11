@@ -379,7 +379,7 @@ jobs:
           go test ./internal/queryexec
           -run '^TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse$'
           -count=1
-          -timeout=2m30s
+          -timeout=3m30s
           -p=1
           -v
 

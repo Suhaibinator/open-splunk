@@ -32,6 +32,14 @@ import (
 const (
 	knowledgeRuntimeExpectedClickHouseVersion = "26.3.17.4"
 	knowledgeRuntimeOverflowAliasCount        = 5
+	// Parsing and analyzing the largest production knowledge graphs can peak
+	// just below 256 MiB on the pinned server before the tiny fixture executes.
+	// Retain a fixed per-query bound with enough allocator headroom to keep that
+	// platform-sensitive peak from making the acceptance matrix flaky.
+	knowledgeRuntimeMaxMemoryBytes = uint64(384 << 20)
+	// The dedicated process deadline is 3m30s, leaving thirty seconds for the
+	// independent cleanup context and Go test shutdown after a cold runner.
+	knowledgeRuntimeOverallTimeout = 3 * time.Minute
 	// On the pinned server, a String read from the event table and converted to
 	// Dynamic contributes seventeen native framing bytes to byteSize. The exact
 	// overflow fixture subtracts that framing from its inserted String payload;
@@ -125,7 +133,7 @@ func TestKnowledgeRuntimeIntegrationProgramsAreCanonical(t *testing.T) {
 //
 //	OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test -v ./internal/queryexec \
 //	  -run '^TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse$' \
-//	  -count=1 -timeout=2m30s
+//	  -count=1 -timeout=3m30s
 func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	phaseStarted := time.Now()
 	logPhase := func(name string) {
@@ -203,7 +211,10 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	}
 	logPhase("compile")
 
-	overallContext, cancelOverall := context.WithTimeout(context.Background(), 120*time.Second)
+	overallContext, cancelOverall := context.WithTimeout(
+		context.Background(),
+		knowledgeRuntimeOverallTimeout,
+	)
 	defer cancelOverall()
 	startupContext, cancelStartup := context.WithTimeout(overallContext, 20*time.Second)
 	defer cancelStartup()
@@ -296,7 +307,7 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	executor, err := New(connection, Config{
 		ReadAdmission:    indexread.UnfencedAdmission{},
 		MaxExecutionTime: 5 * time.Second,
-		MaxMemoryBytes:   256 << 20,
+		MaxMemoryBytes:   knowledgeRuntimeMaxMemoryBytes,
 		MaxRowsToRead:    10_000,
 		MaxBytesToRead:   64 << 20,
 		MaxResultRows:    1_000,

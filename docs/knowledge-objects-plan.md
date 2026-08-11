@@ -2459,7 +2459,7 @@ chart, timechart, stats, fused chronology, pruned and runtime-empty consumers,
 timeline, field catalog, exact maximum generated fields, two concurrent
 maximum catalogs, field summary, field suggestions, atomic overflow, and a
 real Writer→Resolver→Manager→history/export v1/v2 lifecycle. CI runs the same
-untagged test with a 2m30s process deadline in the dedicated
+untagged test with a 3m30s process deadline in the dedicated
 `knowledge-runtime-clickhouse` job.
 
 | # | Acceptance authority | Result |
