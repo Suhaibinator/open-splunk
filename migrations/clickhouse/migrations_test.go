@@ -430,6 +430,65 @@ func mustGenerateDeploymentEnvironment(
 	return parseDeploymentEnvironment(t, readFile(t, envFile))
 }
 
+func TestGenerateEnvAcceptsUTCCommitTimestamp(t *testing.T) {
+	for _, dependency := range []string{"git", "openssl"} {
+		if _, err := exec.LookPath(dependency); err != nil {
+			t.Skipf("%s is unavailable: %v", dependency, err)
+		}
+	}
+
+	repository := t.TempDir()
+	deployDirectory := filepath.Join(repository, "deploy")
+	if err := os.Mkdir(deployDirectory, 0o755); err != nil {
+		t.Fatalf("create temporary deployment directory: %v", err)
+	}
+	generatorPath := filepath.Join(deployDirectory, "generate-env.sh")
+	generator, err := os.ReadFile(filepath.Join(deploymentDirectory(t), "generate-env.sh"))
+	if err != nil {
+		t.Fatalf("read deployment environment generator: %v", err)
+	}
+	if err := os.WriteFile(generatorPath, generator, 0o755); err != nil {
+		t.Fatalf("copy deployment environment generator: %v", err)
+	}
+
+	for _, arguments := range [][]string{
+		{"init", "--quiet"},
+		{"add", "deploy/generate-env.sh"},
+	} {
+		command := exec.Command("git", arguments...)
+		command.Dir = repository
+		if output, commandErr := command.CombinedOutput(); commandErr != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(arguments, " "), commandErr, output)
+		}
+	}
+	commit := exec.Command("git", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "UTC timestamp")
+	commit.Dir = repository
+	commit.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Open Splunk Test",
+		"GIT_AUTHOR_EMAIL=open-splunk-test@example.com",
+		"GIT_AUTHOR_DATE=2026-08-11T05:29:10+00:00",
+		"GIT_COMMITTER_NAME=Open Splunk Test",
+		"GIT_COMMITTER_EMAIL=open-splunk-test@example.com",
+		"GIT_COMMITTER_DATE=2026-08-11T05:29:10+00:00",
+	)
+	if output, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("commit UTC fixture: %v: %s", err, output)
+	}
+
+	commandContext, cancelCommand := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelCommand()
+	envFile := filepath.Join(repository, "deployment.env")
+	values := mustGenerateDeploymentEnvironment(
+		t,
+		commandContext,
+		deployDirectory,
+		envFile,
+	)
+	if got := values["OPEN_SPLUNK_IMAGE_CREATED"]; got != "2026-08-11T05:29:10Z" {
+		t.Fatalf("generated UTC OCI creation time = %q, want %q", got, "2026-08-11T05:29:10Z")
+	}
+}
+
 func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {
 	if _, err := exec.LookPath("openssl"); err != nil {
 		t.Skipf("openssl is unavailable: %v", err)
