@@ -6151,15 +6151,17 @@ caller-written SPL:
    header, row ordering, result schema, and overflow sentinel all fail closed.
    Known canonical fields remain visible with zero counts for an empty index.
 7. Catalogs admit at most 10,000 profiles and request one extra ordered group
-   as a truncation sentinel. A query is capped at 15 seconds, 128 MiB memory,
-   five million source rows, 1 GiB source bytes, 10,001 groups, two threads,
+   as a truncation sentinel. A query is capped at 15 seconds, a sealed 384 MiB
+   standard memory tier or 448 MiB tier for 14–16 generated knowledge fields,
+   five million source rows, 1 GiB source bytes, 10,002 groups, two threads,
    32 MiB result data, and the existing bounded query/subquery sizes. Overflow
    modes throw, materialized CTE and short-circuit behavior are required, and
    async insertion plus ClickHouse query caching are explicitly disabled.
 8. Index and completed-search catalogs share one `FieldService` lifecycle,
-   fail-fast four-slot computation gate, coalescing, and bounded LRU while
-   retaining explicit cache and cursor domains. The default catalog cache is
-   128 entries and 64 MiB with a five-minute absolute TTL.
+   fail-fast two-slot computation gate, a 1 GiB aggregate catalog envelope,
+   coalescing, and bounded LRU while retaining explicit cache and cursor
+   domains. The default catalog cache is 128 entries and 64 MiB with a
+   five-minute absolute TTL.
 9. A miss captures and executes one immutable catalog. Continuations perform
    neither snapshot nor native work and require the exact live cache
    generation. Their domain-separated HMAC cursors bind service instance,

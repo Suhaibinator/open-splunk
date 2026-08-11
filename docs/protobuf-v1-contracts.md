@@ -1352,10 +1352,13 @@ The complete catalog is stored in the bounded field-analysis LRU and
 computations for the same exact snapshot key coalesce, so a cache miss performs
 one ClickHouse query and continuations perform none. The default cache admits
 at most 128 entries and 64 MiB for five minutes. A shared fail-fast
-field-analysis gate defaults to four concurrent native computations. The
-catalog query is hard-capped at fifteen seconds, 128 MiB memory, five million
-source rows, 1 GiB source bytes, two threads, and a 32 MiB result; the protobuf
-response has a separate 32 MiB ceiling.
+field-analysis gate admits two concurrent native computations. A catalog query
+is hard-capped at fifteen seconds and uses a sealed 384 MiB standard memory
+tier or a 448 MiB tier for 14–16 generated knowledge fields. The two-query
+production envelope is 1 GiB, including 128 MiB outside the per-query trackers.
+Each query also admits at most five million source rows, 1 GiB source bytes,
+two threads, and a 32 MiB result; the protobuf response has a separate 32 MiB
+ceiling.
 
 The persistence boundary is deliberate: GORM is used only to resolve the
 control-plane index record, while compilation and event reads use the native

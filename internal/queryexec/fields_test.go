@@ -397,8 +397,15 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 	if !reflect.DeepEqual(base, before) {
 		t.Fatalf("base settings mutated: got %#v, want %#v", base, before)
 	}
-	if MaximumFieldCatalogMemoryBytes != uint64(224<<20) {
-		t.Fatalf("maximum field catalog memory = %d, want %d", MaximumFieldCatalogMemoryBytes, uint64(224<<20))
+	if maximumFieldCatalogMemoryBytes != uint64(384<<20) ||
+		MaximumFieldCatalogMemoryBytes != uint64(448<<20) {
+		t.Fatalf(
+			"field catalog memory tiers = standard %d maximum %d, want %d/%d",
+			maximumFieldCatalogMemoryBytes,
+			MaximumFieldCatalogMemoryBytes,
+			uint64(384<<20),
+			uint64(448<<20),
+		)
 	}
 	for _, test := range []struct {
 		name                     string

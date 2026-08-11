@@ -746,7 +746,8 @@ func TestRuntimeSearchAnalysisRejectsTypedNilDependencies(t *testing.T) {
 
 func TestRuntimeFieldCatalogMemoryContract(t *testing.T) {
 	if runtimeFieldAnalysisMaxConcurrent != 2 ||
-		queryexec.MaximumFieldCatalogMemoryBytes != uint64(224<<20) ||
+		queryexec.MaximumFieldCatalogMemoryBytes != uint64(448<<20) ||
+		runtimeFieldCatalogMemoryEnvelopeBytes != uint64(1<<30) ||
 		!runtimeFieldCatalogMemoryContractValid() {
 		t.Fatalf(
 			"runtime field-catalog memory contract = shared concurrency %d cap %d envelope %d valid %t",

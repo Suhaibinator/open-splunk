@@ -977,12 +977,14 @@ The complete immutable catalog, rather than individual pages, is held in the
 bounded field-analysis LRU. Exact-key computations coalesce behind one flight;
 the first miss uses one ClickHouse query, while continuations page the retained
 memory without native reads. Defaults are 128 entries, 64 MiB, and a five
-minute absolute TTL. A shared nonblocking computation gate defaults to four
-slots and fails saturation fast. Native settings further cap a catalog query
-at fifteen seconds, 128 MiB, five million source rows, 1 GiB read, two threads,
-10,001 groups, and 32 MiB of result data. Query/snapshot work is completed
-before acquiring the global large-response serialization permit, and the
-protobuf response has its own 32 MiB limit.
+minute absolute TTL. A shared nonblocking computation gate admits two slots and
+fails saturation fast. Native settings further cap a catalog query
+at fifteen seconds, a sealed 384 MiB standard memory tier or 448 MiB tier for
+14–16 generated knowledge fields, five million source rows, 1 GiB read, two
+threads, 10,002 groups, and 32 MiB of result data. The production runtime
+admits two such computations within a 1 GiB aggregate envelope. Query/snapshot
+work is completed before acquiring the global large-response serialization
+permit, and the protobuf response has its own 32 MiB limit.
 
 Filtering is a case-sensitive UTF-8 field-name substring applied to the
 validated in-memory catalog. Pages default to 100 and are capped at 1,000;

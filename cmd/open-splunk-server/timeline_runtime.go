@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	runtimeFieldAnalysisMaxConcurrent      = 2
-	runtimeFieldCatalogMemoryEnvelopeBytes = uint64(512 << 20)
+	runtimeFieldAnalysisMaxConcurrent = 2
+	// Two maximum-width catalogs remain admissible together. The extra 128 MiB
+	// is an explicit process-level reserve outside their per-query ClickHouse
+	// trackers; a third maximum catalog is rejected by the shared service gate.
+	runtimeFieldCatalogMemoryEnvelopeBytes = uint64(1 << 30)
 )
 
 // The field-analysis gate is shared by catalog and summary work. This contract

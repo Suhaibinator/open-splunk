@@ -19,11 +19,16 @@ import (
 
 const (
 	maximumFieldCatalogExecutionTime = 15 * time.Second
-	maximumFieldCatalogMemoryBytes   = uint64(128 << 20)
+	// The pinned production knowledge matrix peaks near 331 MiB while parsing,
+	// analyzing, and executing a standard-width catalog. Keep fixed allocator
+	// headroom without falling back to the executor's much larger ordinary-query
+	// default.
+	maximumFieldCatalogMemoryBytes = uint64(384 << 20)
 	// MaximumFieldCatalogMemoryBytes is the largest sealed per-query catalog
-	// memory class. Production admission uses this exported worst case to bound
-	// concurrent catalog work. Field summaries have an independent query cap.
-	MaximumFieldCatalogMemoryBytes             = uint64(224 << 20)
+	// memory class. The maximum generated-field matrix peaks near 379 MiB on the
+	// pinned server. Production admission uses this exported worst case to bound
+	// concurrent catalog work; field summaries have an independent query cap.
+	MaximumFieldCatalogMemoryBytes             = uint64(448 << 20)
 	maximumStandardFieldCatalogKnowledgeFields = uint32(13)
 	maximumFieldCatalogRowsToRead              = uint64(5_000_000)
 	maximumFieldCatalogBytesToRead             = uint64(1 << 30)
