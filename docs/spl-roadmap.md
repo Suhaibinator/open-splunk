@@ -1,6 +1,7 @@
 # Open Splunk SPL expansion plan: compatibility v0.2 expression foundation
 
-**Status:** completed and acceptance-verified on August 11, 2026
+**Status:** implementation completed; final clean-revision revalidation and
+acceptance provenance pending as of August 11, 2026
 **Date:** August 10, 2026
 **Selected compatibility target:** bounded SPL1 arithmetic, scalar grouping,
 quoted scalar field references, and eval-language membership
@@ -16,17 +17,18 @@ a licensed Splunk differential environment
 
 ## Executive summary
 
-Open Splunk already has the right search architecture: a bounded lexer and
-source-located parser, a semantic planner, a typed logical pipeline, a
-parameterized ClickHouse compiler, immutable search-job authority, completed-job
-analysis, inspection, history, export, suggestions, and an executable
-compatibility contract. The current language is useful for operational log
-search, but its scalar grammar is deliberately narrow. It accepts scalar
-primaries and SPL1 period concatenation, while arithmetic, scalar grouping,
-quoted field references, and membership remain unsupported.
+Open Splunk entered this work with the right search architecture: a bounded
+lexer and source-located parser, a semantic planner, a typed logical pipeline,
+a parameterized ClickHouse compiler, immutable search-job authority,
+completed-job analysis, inspection, history, export, suggestions, and an
+executable compatibility contract. The v0.1 language was useful for
+operational log search, but its scalar grammar was deliberately narrow. It
+accepted scalar primaries and SPL1 period concatenation while arithmetic,
+scalar grouping, quoted field references, and membership were unsupported.
+The completed v0.2 implementation adds that expression foundation.
 
-That missing expression foundation is now the highest-leverage bounded SPL
-unit. It unlocks ordinary searches such as:
+That expression foundation was the highest-leverage bounded SPL unit. It
+unlocks ordinary searches such as:
 
 ```spl
 index=api
@@ -84,7 +86,8 @@ This document is subordinate to, and does not replace:
 - [`product-architecture-plan.md`](product-architecture-plan.md), which owns
   the product shape and parser/planner/compiler separation;
 - [`spl-compatibility-v0.1.md`](spl-compatibility-v0.1.md), which remains the
-  normative contract for the currently implemented language;
+  incorporated baseline for unchanged v0.1 behavior and the closed Tier-1
+  knowledge-expression profile;
 - [`knowledge-objects-plan.md`](knowledge-objects-plan.md), which owns exact
   CSV lookups, event types, tags, macros, workflow actions, data models, and
   acceleration;

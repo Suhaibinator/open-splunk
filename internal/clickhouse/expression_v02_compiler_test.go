@@ -525,6 +525,44 @@ func TestCompileExpressionV02ParserPlanCompilerPipeline(t *testing.T) {
 	}
 }
 
+func TestCompileExpressionV02TerminalConsumersRetainAtomicResult(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		source string
+	}{
+		{
+			name: "chart after chronological and bin consumers",
+			source: `index=gradethis` +
+				` | eval weighted=duration_ms+1` +
+				` | eventstats avg(weighted) AS mean` +
+				` | streamstats sum(mean) AS running` +
+				` | bin running span=2` +
+				` | chart avg(running) OVER path BY service`,
+		},
+		{
+			name: "timechart",
+			source: `index=gradethis` +
+				` | eval weighted=duration_ms+1` +
+				` | timechart span=5m avg(weighted) AS mean`,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			compiled := compileSPL(t, test.source)
+			if !compiled.RequiresAtomicResult() {
+				t.Fatal("terminal consumer lost arithmetic atomic-result authority")
+			}
+			if !compiled.HasValidExecutionSeal() {
+				t.Fatal("terminal consumer did not seal arithmetic atomic-result authority")
+			}
+		})
+	}
+}
+
 func TestCompileExpressionV02MaximumAuthoredShapesStayWithinSQLBudget(t *testing.T) {
 	t.Parallel()
 

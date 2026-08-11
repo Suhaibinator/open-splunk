@@ -47,7 +47,7 @@ func TestParseEvalConcatenationFlattensOperandsAndPreservesRanges(t *testing.T) 
 	}
 }
 
-func TestParseConcatenationDeliberatelyRejectsFixedStringPlus(t *testing.T) {
+func TestParseConcatenationKeepsFixedStringPlusInArithmeticGrammar(t *testing.T) {
 	t.Parallel()
 
 	const periodSource = `index=main | eval value="left" . "right"`
@@ -73,14 +73,26 @@ func TestParseConcatenationDeliberatelyRejectsFixedStringPlus(t *testing.T) {
 		}
 	}
 
-	// SPL2 overloads + for String concatenation. Version 0.1 deliberately
-	// keeps that spelling out of the grammar so period remains the only
-	// supported and unambiguous concatenation operator.
-	assertParseDiagnosticCode(
-		t,
-		`index=main | eval value="left"+"right"`,
-		"SPL_UNSUPPORTED_EVAL_EXPRESSION",
-	)
+	// Authored v0.2 accepts + only as numeric arithmetic. The parser must not
+	// silently reinterpret fixed String operands as SPL2 concatenation; the
+	// semantic planner owns their source-located unsupported-type diagnostic.
+	const plusSource = `index=main | eval value="left"+"right"`
+	query, err = Parse(plusSource)
+	if err != nil {
+		t.Fatalf("Parse fixed String arithmetic: %v", err)
+	}
+	addition, ok := query.Commands[0].(*EvalCommand).Assignments[0].Expression.(*ScalarBinaryExpr)
+	if !ok || addition.Op != ScalarBinaryOpAdd {
+		t.Fatalf("fixed String plus expression = %#v, want numeric addition", query.Commands[0])
+	}
+	for index, want := range []string{"left", "right"} {
+		operand := []ScalarExpr{addition.Left, addition.Right}[index]
+		literal, ok := operand.(*ScalarLiteralExpr)
+		if !ok || literal.Value.Kind != LiteralKindString ||
+			literal.Value.Text != want || !literal.Value.Quoted {
+			t.Fatalf("fixed String plus operand %d = %#v, want %q", index, operand, want)
+		}
+	}
 }
 
 func TestParseConcatenationRecognizesUnspacedQuotedBoundaries(t *testing.T) {

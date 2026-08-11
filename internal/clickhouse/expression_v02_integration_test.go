@@ -88,6 +88,28 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 		membershipCaseMismatch,
 		membershipNull,
 	)
+	assertPhysicalContract := func(t *testing.T, label string, compiled CompiledQuery) {
+		t.Helper()
+		if !compiled.RequiresAtomicResult() {
+			t.Fatalf("%s did not retain atomic-result evidence", label)
+		}
+		if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
+			t.Fatalf("%s storage scans = %d, want 1:\n%s", label, got, compiled.SQL)
+		}
+		if strings.Contains(strings.ToUpper(compiled.SQL), " ARRAY JOIN ") {
+			t.Fatalf("%s generated row expansion:\n%s", label, compiled.SQL)
+		}
+		actions := explainCompiledQuery(
+			t,
+			queryContext,
+			connection,
+			"EXPLAIN actions=1 ",
+			compiled,
+		)
+		if strings.Contains(actions, "ArrayJoin") {
+			t.Fatalf("%s physical actions expand rows:\n%s", label, actions)
+		}
+	}
 
 	t.Run("fixed and Dynamic arithmetic edge matrix", func(t *testing.T) {
 		compiled := compile(
@@ -95,19 +117,7 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 				` | eval literal_result=2+3*4, int_result=dyn_int+1, float_result=dyn_float*2, string_result=dyn_string/2, decimal_result=dyn_decimal+0.75, null_result=dyn_null+1, bool_result=dyn_bool+1, zero_divisor=1/0, negative_zero=0.0/-2.0, negative_remainder=-5%2, positive_negative_remainder=5%-2, overflow_result=1e308*1e308, nan_result=(1e308*1e308)-(1e308*1e308)` +
 				` | table literal_result,int_result,float_result,string_result,decimal_result,null_result,bool_result,zero_divisor,negative_zero,negative_remainder,positive_negative_remainder,overflow_result,nan_result`,
 		)
-		if !compiled.RequiresAtomicResult() {
-			t.Fatal("arithmetic query did not retain atomic-result evidence")
-		}
-		if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
-			t.Fatalf("arithmetic storage scans = %d, want 1:\n%s", got, compiled.SQL)
-		}
-		if strings.Contains(strings.ToUpper(compiled.SQL), " ARRAY JOIN ") {
-			t.Fatalf("arithmetic generated row expansion:\n%s", compiled.SQL)
-		}
-		actions := explainCompiledQuery(t, queryContext, connection, "EXPLAIN actions=1 ", compiled)
-		if strings.Contains(actions, "ArrayJoin") {
-			t.Fatalf("arithmetic physical actions expand rows:\n%s", actions)
-		}
+		assertPhysicalContract(t, "arithmetic", compiled)
 
 		var literalResult, intResult, floatResult, stringResult, decimalResult float64
 		var nullResult, boolResult, zeroDivisor *float64
@@ -185,28 +195,91 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 		}
 	})
 
+	t.Run("arithmetic composes through downstream numeric consumers", func(t *testing.T) {
+		t.Run("eventstats streamstats bin and chart", func(t *testing.T) {
+			compiled := compile(
+				`index=expression-v02 event_id="arithmetic"` +
+					` | eval weighted=dyn_int+1` +
+					` | eventstats avg(weighted) AS mean` +
+					` | streamstats sum(mean) AS running` +
+					` | bin running span=2` +
+					` | chart avg(running) OVER event_id BY status`,
+			)
+			if compiled.Chart == nil || compiled.Timechart != nil {
+				t.Fatalf("arithmetic chart contract = %#v", compiled)
+			}
+			assertPhysicalContract(t, "arithmetic chart", compiled)
+
+			query := `SELECT count(), sum(arraySum(` + quoteIdentifier(ChartValuesColumn) +
+				`)), sum(arraySum(` + quoteIdentifier(ChartValuePresentColumn) +
+				`)), max(` + quoteIdentifier(ChartInvalidColumn) + `) FROM (` +
+				compiled.SQL + `)`
+			var rows, present uint64
+			var total float64
+			var invalid uint8
+			if err := connection.QueryRow(
+				queryContext,
+				query,
+				compiled.Args...,
+			).Scan(&rows, &total, &present, &invalid); err != nil {
+				t.Fatalf("execute arithmetic chart composition: %v\nSQL: %s", err, query)
+			}
+			if rows != 1 || total != 6 || present != 1 || invalid != 0 {
+				t.Fatalf(
+					"arithmetic chart composition = rows %d total %v present %d invalid %d",
+					rows,
+					total,
+					present,
+					invalid,
+				)
+			}
+		})
+
+		t.Run("timechart", func(t *testing.T) {
+			compiled := compile(
+				`index=expression-v02 event_id="arithmetic"` +
+					` | eval weighted=dyn_int+1` +
+					` | timechart span=1h avg(weighted) AS mean`,
+			)
+			if compiled.Timechart == nil || compiled.Chart != nil {
+				t.Fatalf("arithmetic timechart contract = %#v", compiled)
+			}
+			assertPhysicalContract(t, "arithmetic timechart", compiled)
+
+			query := `SELECT count(), sumOrNull(` + quoteIdentifier(TimechartValueColumn) +
+				`), max(` + quoteIdentifier(TimechartInputPresentColumn) + `) FROM (` +
+				compiled.SQL + `)`
+			var rows uint64
+			var inputPresent uint8
+			var total *float64
+			if err := connection.QueryRow(
+				queryContext,
+				query,
+				compiled.Args...,
+			).Scan(&rows, &total, &inputPresent); err != nil {
+				t.Fatalf("execute arithmetic timechart composition: %v\nSQL: %s", err, query)
+			}
+			if rows == 0 || total == nil || *total != 6 || inputPresent != 1 {
+				t.Fatalf(
+					"arithmetic timechart composition = rows %d total %v input-present %d",
+					rows,
+					total,
+					inputPresent,
+				)
+			}
+		})
+	})
+
 	t.Run("membership equality and null truth table", func(t *testing.T) {
 		queryIDs := func(source string) []string {
 			t.Helper()
 			compiled := compile(source + ` | sort event_id | table event_id`)
-			if !compiled.RequiresAtomicResult() {
-				t.Fatal("membership query did not retain atomic-result evidence")
+			assertPhysicalContract(t, "membership", compiled)
+			if got := strings.Count(compiled.SQL, "?"); got != len(compiled.Args) {
+				t.Fatalf("membership placeholders = %d, arguments = %d", got, len(compiled.Args))
 			}
-			if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
-				t.Fatalf("membership storage scans = %d, want 1:\n%s", got, compiled.SQL)
-			}
-			if strings.Contains(strings.ToUpper(compiled.SQL), " ARRAY JOIN ") {
-				t.Fatalf("membership generated row expansion:\n%s", compiled.SQL)
-			}
-			actions := explainCompiledQuery(
-				t,
-				queryContext,
-				connection,
-				"EXPLAIN actions=1 ",
-				compiled,
-			)
-			if strings.Contains(actions, "ArrayJoin") {
-				t.Fatalf("membership physical actions expand rows:\n%s", actions)
+			if strings.Contains(compiled.SQL, "DROP TABLE events") {
+				t.Fatalf("membership literal entered generated SQL:\n%s", compiled.SQL)
 			}
 			rows, queryErr := connection.Query(
 				queryContext,
@@ -256,31 +329,20 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 		); len(got) != 0 {
 			t.Fatalf("rounded arithmetic NaN equality matched events = %v", got)
 		}
+		if got := queryIDs(
+			`index=expression-v02 | where status IN ("'); DROP TABLE events; --")`,
+		); len(got) != 0 {
+			t.Fatalf("injection-shaped membership matched events = %v", got)
+		}
 	})
 
 	t.Run("membership predicate consumers preserve Dynamic null and NOT semantics", func(t *testing.T) {
 		compileConsumer := func(t *testing.T, source string) CompiledQuery {
 			t.Helper()
 			compiled := compile(source)
-			if !compiled.RequiresAtomicResult() {
-				t.Fatal("membership consumer did not retain atomic-result evidence")
-			}
-			if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
-				t.Fatalf("membership consumer storage scans = %d, want 1:\n%s", got, compiled.SQL)
-			}
-			if strings.Contains(strings.ToUpper(compiled.SQL), " ARRAY JOIN ") ||
-				strings.Contains(compiled.SQL, "status IN (") {
-				t.Fatalf("membership consumer used backend IN or row expansion:\n%s", compiled.SQL)
-			}
-			actions := explainCompiledQuery(
-				t,
-				queryContext,
-				connection,
-				"EXPLAIN actions=1 ",
-				compiled,
-			)
-			if strings.Contains(actions, "ArrayJoin") {
-				t.Fatalf("membership consumer physical actions expand rows:\n%s", actions)
+			assertPhysicalContract(t, "membership consumer", compiled)
+			if strings.Contains(compiled.SQL, "status IN (") {
+				t.Fatalf("membership consumer used backend IN:\n%s", compiled.SQL)
 			}
 			return compiled
 		}
@@ -428,13 +490,7 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 			fixture := fixture
 			t.Run(fixture.name+" arithmetic", func(t *testing.T) {
 				compiled := compile(fixture.source)
-				if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
-					t.Fatalf("maximum arithmetic scans = %d, want 1", got)
-				}
-				actions := explainCompiledQuery(t, queryContext, connection, "EXPLAIN actions=1 ", compiled)
-				if strings.Contains(actions, "ArrayJoin") {
-					t.Fatalf("maximum arithmetic physical actions expand rows:\n%s", actions)
-				}
+				assertPhysicalContract(t, fixture.name+" maximum arithmetic", compiled)
 				var rows, present uint64
 				var sum *float64
 				query := `SELECT count(), countIf(isNotNull("result")), sumOrNull("result") FROM (` + compiled.SQL + `)`
@@ -455,13 +511,7 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 			"status", "dyn_int",
 		)
 		compiled := compile(membershipSource)
-		if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
-			t.Fatalf("maximum membership scans = %d, want 1", got)
-		}
-		actions := explainCompiledQuery(t, queryContext, connection, "EXPLAIN actions=1 ", compiled)
-		if strings.Contains(actions, "ArrayJoin") {
-			t.Fatalf("maximum membership physical actions expand rows:\n%s", actions)
-		}
+		assertPhysicalContract(t, "maximum membership", compiled)
 		var matching uint64
 		if err := connection.QueryRow(
 			queryContext,
@@ -491,9 +541,7 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 		if !strings.Contains(compiled.SQL, "arrayFold(") {
 			t.Fatalf("maximum arithmetic did not select bounded fold lowering:\n%s", compiled.SQL)
 		}
-		if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
-			t.Fatalf("folded arithmetic scans = %d, want 1", got)
-		}
+		assertPhysicalContract(t, "folded arithmetic", compiled)
 		var mixed, negativeZero float64
 		var nullResult *float64
 		if err := connection.QueryRow(
@@ -557,6 +605,33 @@ func TestExpressionV02AgainstClickHouse(t *testing.T) {
 		}
 		if strings.Contains(queryErr.Error(), "malformed-secret-1e") {
 			t.Fatalf("malformed semantic value disclosed payload: %v", queryErr)
+		}
+
+		membership := compileIntegrationSPLForIndex(
+			t,
+			`index=expression-v02 event_id="malformed-expression"`+
+				` | where event_id IN ("malformed-expression", malformed)`+
+				` | table event_id`,
+			indexTime.Add(10*time.Second),
+			visibilityCutoff,
+			"expression-v02",
+		)
+		var matches uint64
+		membershipErr := connection.QueryRow(
+			queryContext,
+			`SELECT count() FROM (`+membership.SQL+`)`,
+			membership.Args...,
+		).Scan(&matches)
+		if membershipErr == nil ||
+			!strings.Contains(membershipErr.Error(), UnsupportedExpressionValueMarker) {
+			t.Fatalf(
+				"later malformed membership candidate error = %v (matches %d)",
+				membershipErr,
+				matches,
+			)
+		}
+		if strings.Contains(membershipErr.Error(), "malformed-secret-1e") {
+			t.Fatalf("malformed membership candidate disclosed payload: %v", membershipErr)
 		}
 	})
 }

@@ -21,6 +21,17 @@ test("editor diagnoses and repairs unclosed single-quoted fields", () => {
   assert.equal(diagnostic === null ? source : applyDiagnosticFix(source, diagnostic), `${source}'`);
 });
 
+test("editor diagnoses an unclosed field inside count eval without splitting its pipe", () => {
+  const source = `index=main\n| stats count(eval('HTTP|Status`;
+  const diagnostic = getQueryDiagnostic(source);
+
+  assert.equal(diagnostic?.kind, "unclosed-quote");
+  assert.equal(diagnostic?.token, "'");
+  assert.equal(diagnostic?.line, 2);
+  assert.equal(diagnostic?.column, 20);
+  assert.equal(diagnostic === null ? source : applyDiagnosticFix(source, diagnostic), `${source}'`);
+});
+
 test("editor keeps value and identifier quote contexts out of completions", () => {
   const fieldSource = `index=main | eval 'HTTP`;
   const valueSource = `index=main | search message="serv`;

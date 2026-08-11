@@ -50,6 +50,12 @@ const SINGLE_QUOTED_SCALAR_COMMAND_SET = new Set([
   "where",
 ]);
 
+const COUNT_EVAL_SCALAR_COMMAND_SET = new Set([
+  "stats",
+  "eventstats",
+  "streamstats",
+]);
+
 const UNICODE_WHITESPACE = /\p{White_Space}/u;
 
 export function isSupportedSplPipelineCommand(command: string): boolean {
@@ -72,14 +78,21 @@ export interface SplStructure {
   unclosedQuote: { offset: number; quote: '"' | "'" } | null;
 }
 
+type CountEvalScanState =
+  | {
+      kind: "aggregate";
+      parenthesisDepth: number;
+      pendingPredicateOpening: number | null;
+    }
+  | {
+      kind: "predicate";
+      aggregateParenthesisDepth: number;
+      parenthesisDepth: number;
+      startOffset: number;
+    };
+
 function pipelineCommandAt(spl: string, stageStart: number): string | null {
-  let offset = stageStart;
-  while (offset < spl.length) {
-    const codePoint = spl.codePointAt(offset)!;
-    const character = String.fromCodePoint(codePoint);
-    if (!UNICODE_WHITESPACE.test(character)) break;
-    offset += codePoint > 0xffff ? 2 : 1;
-  }
+  let offset = skipUnicodeWhitespace(spl, stageStart);
   const commandStart = offset;
   if (offset >= spl.length || !/[A-Za-z]/.test(spl[offset]!)) return null;
   offset += 1;
@@ -90,6 +103,59 @@ function pipelineCommandAt(spl: string, stageStart: number): string | null {
 function singleQuoteStartsScalarField(spl: string, offset: number): boolean {
   const previous = spl[offset - 1];
   return previous === undefined || /[\p{White_Space}(,=+\-*/%!<>]/u.test(previous);
+}
+
+function skipUnicodeWhitespace(spl: string, startOffset: number): number {
+  let offset = startOffset;
+  while (offset < spl.length) {
+    const codePoint = spl.codePointAt(offset)!;
+    const character = String.fromCodePoint(codePoint);
+    if (!UNICODE_WHITESPACE.test(character)) break;
+    offset += codePoint > 0xffff ? 2 : 1;
+  }
+  return offset;
+}
+
+function isAsciiWordCodeUnit(codeUnit: number): boolean {
+  return (
+    (codeUnit >= 0x30 && codeUnit <= 0x39)
+    || (codeUnit >= 0x41 && codeUnit <= 0x5a)
+    || codeUnit === 0x5f
+    || (codeUnit >= 0x61 && codeUnit <= 0x7a)
+  );
+}
+
+function asciiCaseInsensitiveWordEnd(
+  spl: string,
+  offset: number,
+  lowercaseWord: string,
+): number | null {
+  for (let index = 0; index < lowercaseWord.length; index += 1) {
+    const codeUnit = spl.charCodeAt(offset + index);
+    const lowercaseCodeUnit = codeUnit >= 0x41 && codeUnit <= 0x5a
+      ? codeUnit + 0x20
+      : codeUnit;
+    if (lowercaseCodeUnit !== lowercaseWord.charCodeAt(index)) return null;
+  }
+
+  const endOffset = offset + lowercaseWord.length;
+  return isAsciiWordCodeUnit(spl.charCodeAt(endOffset)) ? null : endOffset;
+}
+
+function countEvalPredicateOpeningAt(spl: string, offset: number): number | null {
+  const firstCodeUnit = spl.charCodeAt(offset);
+  if (firstCodeUnit !== 0x43 && firstCodeUnit !== 0x63) return null;
+  if (isAsciiWordCodeUnit(spl.charCodeAt(offset - 1))) return null;
+
+  const countEnd = asciiCaseInsensitiveWordEnd(spl, offset, "count");
+  if (countEnd === null) return null;
+  let cursor = skipUnicodeWhitespace(spl, countEnd);
+  if (spl[cursor] !== "(") return null;
+  cursor = skipUnicodeWhitespace(spl, cursor + 1);
+  const evalEnd = asciiCaseInsensitiveWordEnd(spl, cursor, "eval");
+  if (evalEnd === null) return null;
+  cursor = skipUnicodeWhitespace(spl, evalEnd);
+  return spl[cursor] === "(" ? cursor : null;
 }
 
 /**
@@ -104,6 +170,7 @@ export function scanSplStructure(spl: string): SplStructure {
   let activeQuote: '"' | "'" | null = null;
   let quoteOffset = -1;
   let scalarStageStart: number | null = null;
+  const countEvalScan: { state: CountEvalScanState | null } = { state: null };
 
   for (let offset = 0; offset < spl.length; offset += 1) {
     const character = spl[offset];
@@ -125,7 +192,7 @@ export function scanSplStructure(spl: string): SplStructure {
       character === '"'
       || (
         character === "'"
-        && scalarStageStart !== null
+        && (scalarStageStart !== null || countEvalScan.state?.kind === "predicate")
         && singleQuoteStartsScalarField(spl, offset)
       )
     ) {
@@ -133,15 +200,63 @@ export function scanSplStructure(spl: string): SplStructure {
       quoteOffset = offset;
       continue;
     }
+    const currentCountEvalState = countEvalScan.state;
+    if (currentCountEvalState?.kind === "predicate") {
+      if (character === "(") {
+        currentCountEvalState.parenthesisDepth += 1;
+        continue;
+      }
+      if (character === ")") {
+        currentCountEvalState.parenthesisDepth -= 1;
+        if (currentCountEvalState.parenthesisDepth === 0) {
+          scalarStageRanges.push({
+            startOffset: currentCountEvalState.startOffset,
+            endOffset: offset,
+          });
+          countEvalScan.state = {
+            kind: "aggregate",
+            parenthesisDepth: currentCountEvalState.aggregateParenthesisDepth,
+            pendingPredicateOpening: null,
+          };
+        }
+        continue;
+      }
+    } else if (currentCountEvalState?.kind === "aggregate") {
+      if (currentCountEvalState.pendingPredicateOpening === offset) {
+        countEvalScan.state = {
+          kind: "predicate",
+          aggregateParenthesisDepth: currentCountEvalState.parenthesisDepth,
+          parenthesisDepth: 1,
+          startOffset: offset + 1,
+        };
+        continue;
+      }
+      if (
+        currentCountEvalState.pendingPredicateOpening === null
+        && currentCountEvalState.parenthesisDepth === 0
+      ) {
+        currentCountEvalState.pendingPredicateOpening = countEvalPredicateOpeningAt(spl, offset);
+      }
+      if (character === "(") currentCountEvalState.parenthesisDepth += 1;
+      else if (character === ")" && currentCountEvalState.parenthesisDepth > 0) {
+        currentCountEvalState.parenthesisDepth -= 1;
+      }
+    }
     if (character === "|") {
       if (scalarStageStart !== null) {
         scalarStageRanges.push({ startOffset: scalarStageStart, endOffset: offset });
+      }
+      if (countEvalScan.state?.kind === "predicate") {
+        scalarStageRanges.push({ startOffset: countEvalScan.state.startOffset, endOffset: offset });
       }
       pipes.push(offset);
       const nextStageStart = offset + 1;
       const command = pipelineCommandAt(spl, nextStageStart);
       scalarStageStart = command !== null && isScalarExpressionPipelineCommand(command)
         ? nextStageStart
+        : null;
+      countEvalScan.state = command !== null && COUNT_EVAL_SCALAR_COMMAND_SET.has(command)
+        ? { kind: "aggregate", parenthesisDepth: 0, pendingPredicateOpening: null }
         : null;
     }
   }
@@ -151,6 +266,9 @@ export function scanSplStructure(spl: string): SplStructure {
   }
   if (scalarStageStart !== null) {
     scalarStageRanges.push({ startOffset: scalarStageStart, endOffset: spl.length });
+  }
+  if (countEvalScan.state?.kind === "predicate") {
+    scalarStageRanges.push({ startOffset: countEvalScan.state.startOffset, endOffset: spl.length });
   }
   return {
     pipes,

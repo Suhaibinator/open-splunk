@@ -1,12 +1,39 @@
 package plan
 
 import (
+	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
+
+func TestBuildArithmeticRejectsFixedStringPlusAtOperandRange(t *testing.T) {
+	t.Parallel()
+
+	const source = `index=gradethis | eval value="left"+"right"`
+	parsed := mustParse(t, source)
+	assignment := parsed.Commands[0].(*spl.EvalCommand).Assignments[0]
+	addition, ok := assignment.Expression.(*spl.ScalarBinaryExpr)
+	if !ok || addition.Op != spl.ScalarBinaryOpAdd {
+		t.Fatalf("parsed expression = %#v, want numeric addition", assignment.Expression)
+	}
+
+	_, err := Build(parsed, testScope([]string{"gradethis"}, nil))
+	assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE")
+	var diagnostic *Diagnostic
+	if !errors.As(err, &diagnostic) {
+		t.Fatalf("Build error = %T, want *Diagnostic", err)
+	}
+	wantRange := addition.Left.SourceRange()
+	if diagnostic.Range != wantRange {
+		t.Fatalf("diagnostic range = %#v, want left operand %#v", diagnostic.Range, wantRange)
+	}
+	if got := source[diagnostic.Range.Start.Offset:diagnostic.Range.End.Offset]; got != `"left"` {
+		t.Fatalf("diagnostic range text = %q, want quoted left operand", got)
+	}
+}
 
 func TestBuildArithmeticAndMembershipPreservesClosedIRRangesAndReadOrder(t *testing.T) {
 	t.Parallel()

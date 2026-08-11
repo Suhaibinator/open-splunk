@@ -637,6 +637,9 @@ func TestSuggestQuotesOperatorFieldsOnlyInV02ScalarContexts(t *testing.T) {
 	}{
 		{name: "eval", source: "index=main | eval copy=req", wantInsertion: "'request-bytes'"},
 		{name: "where", source: "index=main | where req", wantInsertion: "'request-bytes'"},
+		{name: "stats count eval", source: "index=main | stats count(eval(req", wantInsertion: "'request-bytes'"},
+		{name: "eventstats count eval", source: "index=main | eventstats count(eval(req", wantInsertion: "'request-bytes'"},
+		{name: "streamstats count eval", source: "index=main | streamstats count(eval(req", wantInsertion: "'request-bytes'"},
 		{name: "fields remains command grammar", source: "index=main | fields req", wantInsertion: "request-bytes"},
 	}
 	for _, test := range tests {

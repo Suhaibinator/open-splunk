@@ -49,8 +49,11 @@ type SuggestionContext struct {
 	FunctionNames []string
 	Keywords      []string
 	Exclusions    []SuggestionExclusion
-	Prefix        string
-	Replacement   Range
+	// AllowsQuotedScalarFields is true only where the v0.2 scalar grammar
+	// accepts exact single-quoted field references.
+	AllowsQuotedScalarFields bool
+	Prefix                   string
+	Replacement              Range
 	// PipelinePrefixEnd is the byte offset immediately before the real pipe
 	// that introduces the active stage. source[:PipelinePrefixEnd] is the
 	// preceding pipeline, and the value is zero for the base-search stage.
@@ -173,6 +176,10 @@ func AnalyzeSuggestionContext(source string, cursorByteOffset int) (SuggestionCo
 	if scan.blocked {
 		return SuggestionContext{Prefix: scan.prefix, Replacement: scan.replacement}, nil
 	}
+	scan, diagnostic = prepareScalarSuggestionScan(source, cursorByteOffset, scan)
+	if diagnostic != nil {
+		return SuggestionContext{}, diagnostic
+	}
 
 	context := classifySuggestionContext(scan.tokens, scan.prefix, scan.replacement)
 	if scan.activeWord && suggestionStageCommand(scan.tokens) == "sort" &&
@@ -194,17 +201,19 @@ func AnalyzeSuggestionContext(source string, cursorByteOffset int) (SuggestionCo
 }
 
 type suggestionCursorScan struct {
-	tokens      []token
-	prefix      string
-	replacement Range
-	activeWord  bool
-	blocked     bool
+	tokens         []token
+	prefix         string
+	replacement    Range
+	cursorPosition Position
+	activeWord     bool
+	blocked        bool
 }
 
 func scanSuggestionCursor(source string, cursor int) (suggestionCursorScan, *Diagnostic) {
 	position := sourcePositionAtOffset(source, cursor)
 	scan := suggestionCursorScan{
-		replacement: Range{Start: position, End: position},
+		replacement:    Range{Start: position, End: position},
+		cursorPosition: position,
 	}
 	l := lexer{source: source, line: 1, column: 1}
 	parenthesisDepth := 0
@@ -235,7 +244,7 @@ func scanSuggestionCursor(source string, cursor int) (suggestionCursorScan, *Dia
 		end := tok.sourceRange.End.Offset
 
 		if cursor < end {
-			if tok.kind == tokenWord && cursor >= start {
+			if (tok.kind == tokenWord || tok.kind == tokenScalarComposite) && cursor >= start {
 				if len(scan.tokens) >= maxSPLTokens {
 					return suggestionCursorScan{}, tooManySuggestionTokens(tok.sourceRange)
 				}
@@ -247,7 +256,8 @@ func scanSuggestionCursor(source string, cursor int) (suggestionCursorScan, *Dia
 			scan.blocked = true
 			return scan, nil
 		}
-		if cursor == end && tok.kind == tokenWord {
+		if cursor == end &&
+			(tok.kind == tokenWord || tok.kind == tokenScalarComposite) {
 			if len(scan.tokens) >= maxSPLTokens {
 				return suggestionCursorScan{}, tooManySuggestionTokens(tok.sourceRange)
 			}
@@ -296,6 +306,215 @@ func scanSuggestionCursor(source string, cursor int) (suggestionCursorScan, *Dia
 	}
 }
 
+func prepareScalarSuggestionScan(
+	source string,
+	cursor int,
+	scan suggestionCursorScan,
+) (suggestionCursorScan, *Diagnostic) {
+	scalarStart, scalar := scalarSuggestionTokenStart(scan.tokens)
+	if !scalar {
+		return scan, nil
+	}
+
+	activeStart := scan.replacement.Start.Offset
+	activeEnd := scan.replacement.End.Offset
+	normalizationStart := scan.cursorPosition
+	if scalarStart < len(scan.tokens) {
+		normalizationStart = scan.tokens[scalarStart].sourceRange.Start
+	} else if scan.activeWord {
+		normalizationStart = scan.replacement.Start
+	}
+	capacity := scalarStart + activeEnd - normalizationStart.Offset
+	if capacity > maxSPLTokens {
+		capacity = maxSPLTokens
+	}
+	tokens := make([]token, 0, capacity)
+	tokens = append(tokens, scan.tokens[:scalarStart]...)
+
+	if normalizationStart.Offset < activeEnd {
+		l := lexer{
+			source:       source[:activeEnd],
+			offset:       normalizationStart.Offset,
+			line:         normalizationStart.Line,
+			column:       normalizationStart.Column,
+			quotedFields: true,
+		}
+		for {
+			tok, err := l.next()
+			if err != nil {
+				var diagnostic *Diagnostic
+				if errors.As(err, &diagnostic) && diagnostic != nil {
+					return suggestionCursorScan{}, diagnostic
+				}
+				return suggestionCursorScan{}, &Diagnostic{
+					Code:    "SPL_UNEXPECTED_TOKEN",
+					Message: err.Error(),
+					Range:   Range{Start: scan.cursorPosition, End: scan.cursorPosition},
+				}
+			}
+			if tok.kind == tokenEOF {
+				break
+			}
+			firstPrepared := len(tokens)
+			tokens, err = appendScalarSuggestionToken(tokens, source, tok)
+			if err != nil {
+				var diagnostic *Diagnostic
+				if errors.As(err, &diagnostic) && diagnostic != nil {
+					return suggestionCursorScan{}, diagnostic
+				}
+				return suggestionCursorScan{}, &Diagnostic{
+					Code:    "SPL_UNEXPECTED_TOKEN",
+					Message: err.Error(),
+					Range:   tok.sourceRange,
+				}
+			}
+			if len(tokens) > maxSPLTokens {
+				return suggestionCursorScan{}, tooManySuggestionTokens(tok.sourceRange)
+			}
+			if !scan.activeWord {
+				continue
+			}
+			for index := firstPrepared; index < len(tokens); index++ {
+				prepared := tokens[index]
+				if prepared.kind != tokenWord ||
+					prepared.sourceRange.Start.Offset < activeStart ||
+					prepared.sourceRange.End.Offset > activeEnd ||
+					cursor < prepared.sourceRange.Start.Offset ||
+					cursor > prepared.sourceRange.End.Offset {
+					continue
+				}
+				scan.prefix = source[prepared.sourceRange.Start.Offset:cursor]
+				scan.replacement = prepared.sourceRange
+				scan.tokens = tokens[:index]
+				return scan, nil
+			}
+		}
+	}
+	scan.tokens = tokens
+	if !scan.activeWord {
+		return scan, nil
+	}
+
+	completed := 0
+	for completed < len(scan.tokens) &&
+		scan.tokens[completed].sourceRange.End.Offset <= cursor {
+		completed++
+	}
+	scan.tokens = scan.tokens[:completed]
+	scan.prefix = ""
+	scan.replacement = Range{Start: scan.cursorPosition, End: scan.cursorPosition}
+	scan.activeWord = false
+	return scan, nil
+}
+
+func appendScalarSuggestionToken(
+	tokens []token,
+	source string,
+	tok token,
+) ([]token, error) {
+	switch tok.kind {
+	case tokenWord:
+		return appendScalarSuggestionWord(tokens, tok), nil
+	case tokenScalarComposite:
+		return appendScalarSuggestionComposite(tokens, source, tok)
+	default:
+		return append(tokens, tok), nil
+	}
+}
+
+func appendScalarSuggestionWord(tokens []token, tok token) []token {
+	prepared, split := appendV02ScalarWord(tokens, tok)
+	if !split {
+		return append(tokens, tok)
+	}
+	return prepared
+}
+
+func appendScalarSuggestionComposite(
+	tokens []token,
+	source string,
+	composite token,
+) ([]token, error) {
+	text := composite.text
+	position := composite.sourceRange.Start
+	fragmentStart := 0
+	fragmentPosition := position
+	scalarSegmentStart := 0
+
+	for offset := 0; offset < len(text); {
+		value := text[offset]
+		if value == '\'' && offset == scalarSegmentStart && offset > 0 {
+			if fragmentStart < offset {
+				tokens = appendScalarSuggestionWord(tokens, token{
+					kind: tokenWord,
+					text: text[fragmentStart:offset],
+					sourceRange: Range{
+						Start: fragmentPosition,
+						End:   position,
+					},
+				})
+			}
+
+			quoteLexer := lexer{
+				source:       source,
+				offset:       position.Offset,
+				line:         position.Line,
+				column:       position.Column,
+				quotedFields: true,
+			}
+			if !quoteLexer.hasClosingSingleQuote() {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNTERMINATED_FIELD_QUOTE",
+					Message: "unterminated single-quoted field reference",
+					Range: Range{
+						Start: position,
+						End:   advanceSourcePosition(position, "'"),
+					},
+				}
+			}
+			quoted, err := quoteLexer.scanQuotedField(position)
+			if err != nil {
+				return nil, err
+			}
+			if quoted.sourceRange.End.Offset > composite.sourceRange.End.Offset {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNTERMINATED_FIELD_QUOTE",
+					Message: "unterminated single-quoted field reference",
+					Range: Range{
+						Start: position,
+						End:   advanceSourcePosition(position, "'"),
+					},
+				}
+			}
+			tokens = append(tokens, quoted)
+			offset += quoted.sourceRange.End.Offset - position.Offset
+			position = quoted.sourceRange.End
+			fragmentStart = offset
+			fragmentPosition = position
+			scalarSegmentStart = -1
+			continue
+		}
+
+		r, width := utf8.DecodeRuneInString(text[offset:])
+		if _, operator := scalarOperatorToken(value); operator {
+			scalarSegmentStart = offset + width
+		}
+		position = advancePositionByRune(position, r, width)
+		offset += width
+	}
+	if fragmentStart < len(text) {
+		tokens = appendScalarSuggestionWord(tokens, token{
+			kind: tokenWord,
+			text: text[fragmentStart:],
+			sourceRange: Range{
+				Start: fragmentPosition,
+				End:   position,
+			},
+		})
+	}
+	return tokens, nil
+}
+
 func tooManySuggestionTokens(sourceRange Range) *Diagnostic {
 	return &Diagnostic{
 		Code:    "SPL_QUERY_TOO_COMPLEX",
@@ -306,18 +525,12 @@ func tooManySuggestionTokens(sourceRange Range) *Diagnostic {
 
 func classifySuggestionContext(tokens []token, prefix string, replacement Range) SuggestionContext {
 	base := SuggestionContext{Prefix: prefix, Replacement: replacement}
-	lastPipe := -1
-	for index, tok := range tokens {
-		if tok.kind == tokenPipe {
-			lastPipe = index
-		}
+	stage, stageStart, followsPipeline := activeSuggestionStage(tokens)
+	if !followsPipeline {
+		return classifySearchSuggestion(base, stage)
 	}
-	if lastPipe < 0 {
-		return classifySearchSuggestion(base, tokens)
-	}
-	base.PipelinePrefixEnd = tokens[lastPipe].sourceRange.Start.Offset
+	base.PipelinePrefixEnd = tokens[stageStart-1].sourceRange.Start.Offset
 
-	stage := tokens[lastPipe+1:]
 	if len(stage) == 0 {
 		base.Kinds = []SuggestionKind{SuggestionKindCommand}
 		return base
@@ -331,8 +544,10 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 	case "search":
 		return classifySearchSuggestion(base, body)
 	case "where":
+		base.AllowsQuotedScalarFields = true
 		return classifyWhereSuggestion(base, body)
 	case "eval":
+		base.AllowsQuotedScalarFields = true
 		return classifyEvalSuggestion(base, body)
 	case "fields", "table", "sort", "dedup":
 		base.Kinds = []SuggestionKind{SuggestionKindField}
@@ -399,20 +614,28 @@ func classifyWhereSuggestion(context SuggestionContext, tokens []token) Suggesti
 		return scalarSuggestionContext(context, true)
 	}
 	last := tokens[len(tokens)-1]
-	if isComparisonToken(last.kind) || last.kind == tokenComma || last.kind == tokenConcat {
+	if isScalarOperandBoundaryToken(last.kind) {
 		return scalarSuggestionContext(context, false)
 	}
 	if last.kind == tokenLeftParen {
 		includeNot := len(tokens) < 2 || tokens[len(tokens)-2].kind != tokenWord
 		return scalarSuggestionContext(context, includeNot)
 	}
+	if last.kind == tokenWord && tokenWordEqual(last, "NOT") {
+		if len(tokens) > 1 && !startsPredicateOperand(tokens[len(tokens)-2]) {
+			context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+			context.Keywords = []string{"IN"}
+			return context
+		}
+		return scalarSuggestionContext(context, true)
+	}
 	if last.kind == tokenWord &&
-		(tokenWordEqual(last, "AND") || tokenWordEqual(last, "OR") || tokenWordEqual(last, "NOT")) {
+		(tokenWordEqual(last, "AND") || tokenWordEqual(last, "OR")) {
 		return scalarSuggestionContext(context, true)
 	}
 	if last.kind == tokenWord || last.kind == tokenString || last.kind == tokenRightParen {
 		context.Kinds = []SuggestionKind{SuggestionKindKeyword}
-		context.Keywords = []string{"AND", "OR"}
+		context.Keywords = []string{"AND", "OR", "IN", "NOT"}
 	}
 	return context
 }
@@ -429,10 +652,8 @@ func classifyEvalSuggestion(context SuggestionContext, tokens []token) Suggestio
 		return scalarSuggestionContext(context, false)
 	}
 	last := expression[len(expression)-1]
-	if isComparisonToken(last.kind) ||
-		last.kind == tokenComma ||
+	if isScalarOperandBoundaryToken(last.kind) ||
 		last.kind == tokenLeftParen ||
-		last.kind == tokenConcat ||
 		(last.kind == tokenWord &&
 			(tokenWordEqual(last, "AND") || tokenWordEqual(last, "OR") || tokenWordEqual(last, "NOT"))) {
 		return scalarSuggestionContext(context, false)
@@ -462,8 +683,11 @@ func classifyStatsSuggestion(context SuggestionContext, tokens []token) Suggesti
 		return context
 	}
 	if parenthesisDepth(tokens) > 0 {
-		if insideStatsEval(tokens) {
-			return scalarSuggestionContext(context, false)
+		if predicateContext, active := classifyActiveCountEvalPredicateSuggestion(
+			context,
+			tokens,
+		); active {
+			return predicateContext
 		}
 		context.Kinds = []SuggestionKind{SuggestionKindField}
 		return context
@@ -492,8 +716,11 @@ func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) Sug
 		return context
 	}
 	if parenthesisDepth(tokens) > 0 {
-		if insideEventStatsCountEval(tokens) {
-			return scalarSuggestionContext(context, false)
+		if predicateContext, active := classifyActiveCountEvalPredicateSuggestion(
+			context,
+			tokens,
+		); active {
+			return predicateContext
 		}
 		context.Kinds = []SuggestionKind{SuggestionKindField}
 		return context
@@ -533,8 +760,13 @@ func classifyStreamStatsSuggestion(context SuggestionContext, tokens []token) Su
 		return context
 	}
 	if parenthesisDepth(tokens) > 0 {
-		if countPredicate && insideStatsEval(aggregateTokens) {
-			return scalarSuggestionContext(context, false)
+		if countPredicate {
+			if predicateContext, active := classifyActiveCountEvalPredicateSuggestion(
+				context,
+				aggregateTokens,
+			); active {
+				return predicateContext
+			}
 		}
 		if aggregateIndex >= 0 && aggregateIndex+1 < len(tokens) &&
 			tokens[aggregateIndex+1].kind == tokenLeftParen {
@@ -636,15 +868,6 @@ func streamStatsSuggestionOptions(tokens []token) ([]string, bool) {
 		}
 	}
 	return keywords, byClosed
-}
-
-func insideEventStatsCountEval(tokens []token) bool {
-	return len(tokens) >= 4 &&
-		tokenWordEqual(tokens[0], "count") &&
-		tokens[1].kind == tokenLeftParen &&
-		tokenWordEqual(tokens[2], "eval") &&
-		tokens[3].kind == tokenLeftParen &&
-		insideStatsEval(tokens)
 }
 
 func eventStatsMeasureRequiresAlias(tokens []token) bool {
@@ -1297,26 +1520,67 @@ func parenthesisDepth(tokens []token) int {
 	return depth
 }
 
-func insideStatsEval(tokens []token) bool {
-	depth := 0
-	evalDepth := -1
-	for index, tok := range tokens {
-		switch tok.kind {
-		case tokenLeftParen:
-			depth++
-			if index > 0 && tokenWordEqual(tokens[index-1], "eval") {
-				evalDepth = depth
-			}
-		case tokenRightParen:
-			if evalDepth == depth {
-				evalDepth = -1
-			}
-			if depth > 0 {
+func classifyActiveCountEvalPredicateSuggestion(
+	context SuggestionContext,
+	tokens []token,
+) (SuggestionContext, bool) {
+	start := activeCountEvalPredicateStart(tokens)
+	if start < 0 {
+		return context, false
+	}
+	context.AllowsQuotedScalarFields = true
+	predicate := tokens[start:]
+	if len(predicate) == 0 {
+		return scalarSuggestionContext(context, false), true
+	}
+	return classifyWhereSuggestion(context, predicate), true
+}
+
+func activeCountEvalPredicateStart(tokens []token) int {
+	activeStart := -1
+	for index := 0; index+3 < len(tokens); index++ {
+		if !startsCountEvalCall(tokens, index) {
+			continue
+		}
+		depth := 1
+		closed := false
+		for _, tok := range tokens[index+4:] {
+			switch tok.kind {
+			case tokenLeftParen:
+				depth++
+			case tokenRightParen:
 				depth--
+				if depth == 0 {
+					closed = true
+				}
+			}
+			if closed {
+				break
 			}
 		}
+		if !closed {
+			activeStart = index + 4
+		}
 	}
-	return evalDepth > 0
+	return activeStart
+}
+
+func scalarSuggestionTokenStart(tokens []token) (int, bool) {
+	stage, stageStart, followsPipeline := activeSuggestionStage(tokens)
+	if !followsPipeline || len(stage) == 0 || stage[0].kind != tokenWord {
+		return 0, false
+	}
+	switch asciiFold(stage[0].text) {
+	case "eval", "where":
+		return stageStart + 1, true
+	case "stats", "eventstats", "streamstats":
+		bodyStart := stageStart + 1
+		predicateStart := activeCountEvalPredicateStart(stage[1:])
+		if predicateStart >= 0 {
+			return bodyStart + predicateStart, true
+		}
+	}
+	return 0, false
 }
 
 func endsOptionEqual(tokens []token, name string) bool {
@@ -1338,17 +1602,44 @@ func isComparisonToken(kind tokenKind) bool {
 	}
 }
 
-func suggestionStageCommand(tokens []token) string {
+func isScalarOperandBoundaryToken(kind tokenKind) bool {
+	if _, comparison := evalComparisonOperator(kind, expressionProfileV02); comparison {
+		return true
+	}
+	return kind == tokenComma ||
+		kind == tokenConcat ||
+		kind == tokenPlus ||
+		kind == tokenMinus ||
+		kind == tokenMultiply ||
+		kind == tokenDivide ||
+		kind == tokenRemainder
+}
+
+func startsPredicateOperand(tok token) bool {
+	return tok.kind == tokenLeftParen ||
+		(tok.kind == tokenWord &&
+			(tokenWordEqual(tok, "AND") ||
+				tokenWordEqual(tok, "OR") ||
+				tokenWordEqual(tok, "NOT")))
+}
+
+func activeSuggestionStage(tokens []token) (stage []token, start int, followsPipeline bool) {
 	lastPipe := -1
 	for index, tok := range tokens {
 		if tok.kind == tokenPipe {
 			lastPipe = index
 		}
 	}
-	if lastPipe < 0 || lastPipe+1 >= len(tokens) || tokens[lastPipe+1].kind != tokenWord {
+	start = lastPipe + 1
+	return tokens[start:], start, lastPipe >= 0
+}
+
+func suggestionStageCommand(tokens []token) string {
+	stage, _, followsPipeline := activeSuggestionStage(tokens)
+	if !followsPipeline || len(stage) == 0 || stage[0].kind != tokenWord {
 		return ""
 	}
-	return asciiFold(tokens[lastPipe+1].text)
+	return asciiFold(stage[0].text)
 }
 
 func removeLiteralSuggestionKinds(kinds []SuggestionKind) []SuggestionKind {

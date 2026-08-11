@@ -1,6 +1,7 @@
 # SPL compatibility v0.2 acceptance report
 
-**Status:** accepted
+**Status:** implementation completed; final clean-revision revalidation and
+provenance closeout pending
 
 **Target authored-search identity:** `0.2`
 
@@ -8,13 +9,19 @@
 
 **Prepared:** August 11, 2026
 
-The authored-search runtime now advertises `0.2`. The final command sheet ran
-against one clean, committed materialization of the exact activated source
-tree. That isolated validation commit deliberately avoided staging or
-overwriting pre-existing changes in the shared development worktree. This
-report was populated after the run; its evidence-only edits therefore postdate
-the named activation snapshot without changing runtime, contract, or corpus
-bytes.
+The authored-search runtime now advertises `0.2`. The closeout target will be
+the next clean, committed, reachable revision after the final quality fixes:
+`<reachable-closeout-revision>`. The command receipts below were captured
+during implementation on a clean isolated materialization, but the report
+previously named an unattached snapshot and a local evidence archive that were
+not retained. Those receipts remain useful regression evidence; their old log
+digests are not final provenance for the closeout target.
+
+This report returns to final `accepted` status only after the final command
+sheet is rerun against the target revision, or an explicitly named superseding
+reachable revision, with a clean tree before and after every mutating gate.
+The rerun must replace the pending audit and release identities below and must
+not rely on the missing local archive.
 
 Normative and operator documents:
 
@@ -34,35 +41,35 @@ Normative and operator documents:
   browser, and release gate passes on one exact clean revision.
 - A failed or incomplete gate keeps the prior development identity.
 
-## Exact evidence identity
+## Target closeout identity
 
 | Field | Value |
 | --- | --- |
-| Activation Git revision | `31d483c53c69a51b7481925af213e85d1dddbcd0` |
-| Activation tree state | clean isolated materialization; empty `git status --porcelain` before and after every mutating generator/release gate |
-| Activation UTC interval | `2026-08-11T10:14:58Z`–`2026-08-11T10:38:05Z` |
-| Runner/CPU/OS | Apple M4 Max, 16 logical CPUs, Darwin 25.6.0 arm64 |
-| Go | `go1.26.5` |
-| Node.js | `v24.18.0` |
-| npm | `11.16.0` |
-| Playwright | `1.62.1` |
-| ClickHouse | `26.3.17.4` |
-| ClickHouse image | `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49` |
+| Target activation Git revision | `<reachable-closeout-revision>` |
+| Reachability | pending closeout commit, push, and remote readback |
+| Required activation tree state | clean committed materialization; empty `git status --porcelain` before and after every mutating generator/release gate |
+| Final activation UTC interval | pending final clean-revision rerun |
+| Final runner/CPU/OS | pending final rerun; historical receipts used Apple M4 Max, 16 logical CPUs, Darwin 25.6.0 arm64 |
+| Required Go | `go1.26.5` |
+| Required Node.js | `v24.18.0` |
+| Required npm | `11.16.0` |
+| Required Playwright | `1.62.1` |
+| Required ClickHouse | `26.3.17.4` |
+| Required ClickHouse image | `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49` |
 | Contract SHA-256 | `2f1e7c9f2fb3902908bf328a135112b7acf20024796ce39179c486737c6eca7e` |
 | Corpus SHA-256 | `613ee59ce81252f733399ffa7d69487d37648b22052cbf6118fced51c39512b3` |
-| Redacted audit report SHA-256 | `60fdaedfee2068d4ddd874299f5112895fd84f08df33c9d1703bebd67fdab2d9` (three byte-identical runs) |
-| Release artifact identity/readback | application `0.1.0`, source `31d483c53c69a51b7481925af213e85d1dddbcd0`, UI SHA-256 `def273f2b32850d74c751395b055403da956de78d1aadbe7c4abbd74de2c4815`; server binary SHA-256 `d97b97e9bfd143693a883111d3691bd82aa3c93c3186c1bb14e7c169e9647d47` |
-| Complete evidence bundle | local acceptance artifact `spl-v02-acceptance-evidence.tar.gz`, SHA-256 `a859364cea7e4f7c73dfc5add97fed0df76e16f04091156b42e4cb96b278ad88` |
+| Final redacted audit report SHA-256 | pending final clean-revision rerun |
+| Final release artifact identity/readback | pending final clean-revision release build with source identity equal to the target revision |
 
 ## Development evidence already recorded
 
 The following results were obtained while implementing v0.2. They are retained
-as additional regression evidence; every required surface was repeated on the
-final activation revision below.
+as additional regression evidence, but do not substitute for the final
+clean-revision rerun against the reachable target.
 
 The working tree was based on
 `97401955e3739f50ac7bee7c1ea1fee9e60fb661` and contained uncommitted changes,
-so that hash is not the activation revision.
+so that hash is not the target activation revision.
 
 | Surface | Command/evidence | Development result |
 | --- | --- | --- |
@@ -97,26 +104,31 @@ with exact result checks unchanged. Parser, compiler, and audit microbenchmarks
 also retained linear time, SQL-size, and allocation growth through 256
 operators, 32 candidates, and 100,000 audit operators.
 
-## Compatibility-audit release record
+## Recorded compatibility-audit evidence
 
-Run the audit as described in the migration guide against a quiesced,
-sanitized control-database copy and the exact activation checkout. The tool
-reports identities and locations but never authored SPL or field values.
+The following audit receipt came from the prior isolated implementation run.
+Its temporary database path and unattached source snapshot are no longer
+available, so it is retained as regression context rather than final activation
+evidence. The closeout rerun must generate a fresh deterministic fixture and
+run the audit as described in the migration guide against that sanitized copy
+and the exact reachable target checkout. The tool reports identities and
+locations but never authored SPL or field values.
 
 | Field | Value |
 | --- | --- |
 | Sanitized control-database source/digest | deterministic four-object synthetic saved-search fixture generated by `TestGenerateCompatibilityAuditAcceptanceFixture`; SHA-256 `a3217421b6858599ba495302f29d9b0ba7936e2afe1b6ff3d972a13784247ed0` |
-| Repository revision/root | `31d483c53c69a51b7481925af213e85d1dddbcd0`; isolated clean acceptance root |
-| Exact audit command | `./build/open-splunk-server audit-spl-v0.2 -control-db /tmp/open-splunk-v02-acceptance.TsdTsf/sanitized-control.db -repository "$PWD"` |
+| Recorded repository root | prior isolated implementation materialization; not final activation provenance |
+| Recorded audit command | `./build/open-splunk-server audit-spl-v0.2 -control-db /tmp/open-splunk-v02-acceptance.TsdTsf/sanitized-control.db -repository "$PWD"` |
 | Scanned objects | 186 (4 control-database saved searches plus 182 repository sources) |
 | Findings by kind | 198 `ambiguous_unspaced_scalar_operator` candidates |
 | Finding dispositions | control DB: one synthetic legacy-field positive control and one intended subtraction; repository: 25 audit/migration controls, 46 host-language formatting artifacts in 17 files, 124 intentional v0.2 conformance/vertical/benchmark cases in 15 files, and one pre-existing intended comparison; zero unresolved production sources |
 | Second-run report digest | `60fdaedfee2068d4ddd874299f5112895fd84f08df33c9d1703bebd67fdab2d9`; runs 1, 2, and 3 byte-identical |
 | Input database digest before/after | `a3217421b6858599ba495302f29d9b0ba7936e2afe1b6ff3d972a13784247ed0` / same |
+| Target-revision audit | pending final clean-revision rerun and fresh digest |
 
 A finding is a review candidate, not proof of an incompatible field. Any
-unresolved finding blocks activation. A zero-finding report applies only to the
-explicit sources and revision named above.
+unresolved finding blocks activation. An audit disposition applies only to the
+explicit sources and exact source revision recorded with that run.
 
 ## Independent review record
 
@@ -131,11 +143,13 @@ explicit sources and revision named above.
 Record concrete resolved findings as test names or commit references. “Reviewed”
 without a reproducible run identity and disposition is not acceptance evidence.
 
-## Final activation command sheet
+## Final closeout command sheet
 
-All commands in this section ran from the same clean activation revision after
-the public identity changed to `0.2`. Complete logs are in the evidence bundle;
-the table records each SHA-256 log digest.
+The tables in this section preserve the prior isolated-run receipts and their
+SHA-256 log digests. The same commands must be rerun from one clean checkout of
+the reachable target after the public identity changed to `0.2`. Until that
+rerun is recorded, the listed pass results are regression evidence rather than
+final activation provenance.
 
 ### Toolchain and source identity
 
@@ -150,7 +164,7 @@ shasum -a 256 \
   internal/spl/testdata/compatibility-v0.2.json
 ```
 
-| Command group | Exit/status | Log digest |
+| Command group | Historical result | Historical log digest; not authoritative for closeout |
 | --- | --- | --- |
 | Toolchain and source identity | pass | `77dfe48eae6ccd0d16e5a21be213cb0d7b91fb69257e8b91f704f8ba65c9e7ae` |
 
@@ -175,7 +189,7 @@ BUF_CACHE_DIR="$PWD/.cache/buf" \
 go test . -count=1
 ```
 
-| Command group | Exit/status | Log digest |
+| Command group | Historical result | Historical log digest; not authoritative for closeout |
 | --- | --- | --- |
 | Repository-wide Go tests | pass | `a55fdb010686733adb27233b96f75037c9f5ae651109f6064dbf3de0c3938ede` |
 | Focused race tests | pass | `f1492fc2b9165051b22f4abf986114f74ca2bfc51a478eafa7d255dd77ed9923` |
@@ -194,7 +208,7 @@ npm run build
 npx --no-install playwright install chromium
 ```
 
-| Command group | Exit/status | Log digest |
+| Command group | Historical result | Historical log digest; not authoritative for closeout |
 | --- | --- | --- |
 | npm clean install and toolchain readback | pass; 44 packages, zero vulnerabilities | `53052113dd4707f4771f03306e0f70ffa761213c67851964072d2a006529c959` |
 | Typecheck/lint/frontend tests/build | pass; 70 script tests, 285 frontend tests, production build | `7be290c84e7ac451b845b27337cf0c8a24ac727a30acbfb98c33f8e0ec2df89e` |
@@ -226,7 +240,7 @@ go test ./integration -run '^TestBackendVertical$' \
   -count=1 -timeout=15m -v
 ```
 
-| Command group | Exit/status | Log digest |
+| Command group | Historical result | Historical log digest; not authoritative for closeout |
 | --- | --- | --- |
 | Compiler, real ClickHouse, and pinned EXPLAIN | pass in 9.72 s; every predicate consumer, 256-op fixed/Dynamic, one scan/no `ArrayJoin` | `4a0aeca94a01f292159acbb30bca55748844e658f746c356378105e6c6bfd009` |
 | Executor/manager real-data vertical | pass in 7.83 s; native cancel 47.75 µs, 32-candidate limit atomic | `09cd0b912f44941f41d37ab1033451507f3e5a8e543117a366578e84f88bf0bf` |
@@ -253,7 +267,7 @@ test -z "$(git status --porcelain)"
 OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
 ```
 
-| Command group | Exit/status | Log digest |
+| Command group | Historical result | Historical log digest; not authoritative for closeout |
 | --- | --- | --- |
 | Recorded fuzz campaigns | pass; three independent 60 s campaigns, 2,169,260 + 1,515,077 + 4,090,302 executions | `1077a140184e9c0dcd54b21f33acd42d9a5239af906abafdcfe0cd88394474c3`, `b62505e94ccad60ccdd01d9130233b6a1f787eb4bd98e5da1bc6f13637a335ae`, `a70a55c10548bf5ef181b70deb1760f8521c35f2576b25f498bcdfa7a25504a8` |
 | Parser/compiler/audit benchmarks | pass; linear bounded scaling | `eb1f0969713214d0cd147cfdc5e1631a8cdd250aba1c37e73fccf4b4870f587d` |
@@ -261,18 +275,19 @@ OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
 | Diff/clean-tree proof | pass before and after generation, audit, and release | manifest `9755ec9cad4e4bc6b5d555958939314bdd32c0680f5392bb66ae1de2bfc191bb` |
 | Clean-snapshot release build and identity readback | pass; committed snapshot identity matched all embedded artifacts | `38dda9e479571bb38f027d5e18db63d2e5335907865617d47ffe948b526bdc17` |
 
-## Final acceptance decision
+## Closeout decision
 
 | Decision field | Value |
 | --- | --- |
-| All roadmap language/semantic criteria pass | yes |
-| All authority/resource criteria pass | yes |
-| All product/browser/retained-search surfaces pass | yes |
-| All quality, review, audit, and release gates pass | yes |
-| Unresolved findings | zero |
-| Accepted activation revision | `31d483c53c69a51b7481925af213e85d1dddbcd0` |
-| Decision and approver/run identity | accepted by the Codex `/root` implementation acceptance run ending `2026-08-11T10:38:05Z`; this records engineering acceptance, not a separate deployment approval |
+| Implementation roadmap language/semantic criteria | passed in the recorded implementation receipts |
+| Authority/resource criteria | passed in the recorded implementation receipts |
+| Product/browser/retained-search surfaces | passed in the recorded implementation receipts |
+| Target clean-revision quality, audit, and release rerun | pending |
+| Unresolved implementation findings | zero in the recorded implementation review |
+| Target activation revision | `<reachable-closeout-revision>` |
+| Final accepted activation revision | pending successful clean-revision closeout |
+| Decision and approver/run identity | implementation review receipts recorded by the Codex `/root` run ending `2026-08-11T10:38:05Z`; final provenance closeout pending and not a separate deployment approval |
 
-Every required command passed on the named clean revision, the audit has no
-unresolved candidate, and runtime, export, job, and browser surfaces all read
-back compatibility identity `0.2`.
+The implementation receipts show the required behavior and compatibility
+identity. Final release acceptance remains open until the reachable target's
+clean-tree command, audit, and release identities are recorded here.

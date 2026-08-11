@@ -384,3 +384,22 @@ test("v0.2 field quotes and expression operators highlight only in scalar stages
     false,
   );
 });
+
+test("v0.2 count eval predicates highlight nested fields and operators", () => {
+  const query = `index=main | stats count(eval('HTTP Status' IN (500, 503))) AS errors | eventstats count(eval('request-bytes'/2>100)) AS large | streamstats count(eval(status==503)) AS unavailable`;
+  const tokens = classifiedTokens(query);
+
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-field" && token.text.startsWith("'"))
+      .map((token) => token.text),
+    ["'HTTP Status'", "'request-bytes'"],
+  );
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-operator")
+      .map((token) => token.text.toUpperCase()),
+    ["IN", "/", ">", "=="],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});

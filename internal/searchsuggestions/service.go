@@ -350,12 +350,13 @@ func (service *Service) dynamicFieldCandidates(
 		return nil, false, err
 	}
 
-	command := activeSuggestionCommand(request.source, suggestionContext)
-	allowQuotedFields := command == "eval" || command == "where"
 	candidates := make([]spl.SuggestionCandidate, 0, len(fieldResult.FieldNames))
 	for _, name := range fieldResult.FieldNames {
 		name = strings.Clone(name)
-		insertion, ok := fieldSuggestionInsertion(name, allowQuotedFields)
+		insertion, ok := fieldSuggestionInsertion(
+			name,
+			suggestionContext.AllowsQuotedScalarFields,
+		)
 		if !ok {
 			continue
 		}

@@ -5513,20 +5513,34 @@ func (p *parser) prepareScalarQuotedOperand() (bool, error) {
 }
 
 func splitV02ScalarWord(tok token) []token {
-	if tok.kind != tokenWord || !strings.ContainsAny(tok.text, "+-*/%") {
+	parts, split := appendV02ScalarWord(nil, tok)
+	if !split {
 		return nil
 	}
-	parts := make([]token, 0, 4)
+	return parts
+}
+
+func appendV02ScalarWord(parts []token, tok token) ([]token, bool) {
+	if tok.kind != tokenWord || !strings.ContainsAny(tok.text, "+-*/%") {
+		return parts, false
+	}
+	start := len(parts)
 	segmentStart := 0
-	for offset := 0; offset < len(tok.text); offset++ {
-		kind, operator := scalarOperatorToken(tok.text[offset])
+	segmentPosition := tok.sourceRange.Start
+	position := segmentPosition
+	for offset := 0; offset < len(tok.text); {
+		value := tok.text[offset]
+		r, width := utf8.DecodeRuneInString(tok.text[offset:])
+		kind, operator := scalarOperatorToken(value)
 		if !operator {
+			position = advancePositionByRune(position, r, width)
+			offset += width
 			continue
 		}
 		// A sign directly following e/E belongs to a numeric exponent only when
 		// the complete current segment is a Float literal. Prefix probing would
 		// misclassify field-like spellings such as 1e-foo and 1e--3.
-		if (tok.text[offset] == '+' || tok.text[offset] == '-') &&
+		if (value == '+' || value == '-') &&
 			offset > segmentStart &&
 			(tok.text[offset-1] == 'e' || tok.text[offset-1] == 'E') {
 			segmentEnd := len(tok.text)
@@ -5537,26 +5551,58 @@ func splitV02ScalarWord(tok token) []token {
 				}
 			}
 			if classifyLiteral(tok.text[segmentStart:segmentEnd], false) == LiteralKindFloat {
+				position = advancePositionByRune(position, r, width)
+				offset += width
 				continue
 			}
 		}
 		if offset > segmentStart {
-			parts = appendScalarWordFragment(parts, tok, segmentStart, offset)
+			parts = appendScalarWordFragment(
+				parts,
+				tok.text[segmentStart:offset],
+				segmentPosition,
+				position,
+			)
 		}
-		parts = append(parts, scalarWordPart(tok, offset, offset+1, kind))
-		segmentStart = offset + 1
+		operatorEnd := advancePositionByRune(position, r, width)
+		parts = append(parts, token{
+			kind: kind,
+			text: tok.text[offset : offset+width],
+			sourceRange: Range{
+				Start: position,
+				End:   operatorEnd,
+			},
+		})
+		offset += width
+		position = operatorEnd
+		segmentStart = offset
+		segmentPosition = position
 	}
 	if segmentStart < len(tok.text) {
-		parts = appendScalarWordFragment(parts, tok, segmentStart, len(tok.text))
+		parts = appendScalarWordFragment(
+			parts,
+			tok.text[segmentStart:],
+			segmentPosition,
+			position,
+		)
 	}
-	if len(parts) == 1 && parts[0].kind == tokenWord {
-		return nil
+	if len(parts) == start+1 && parts[start].kind == tokenWord {
+		return parts[:start], false
 	}
-	return parts
+	return parts, true
 }
 
-func appendScalarWordFragment(parts []token, original token, start, end int) []token {
-	fragment := scalarWordPart(original, start, end, tokenWord)
+func appendScalarWordFragment(
+	parts []token,
+	text string,
+	start Position,
+	end Position,
+) []token {
+	fragment := token{
+		kind:        tokenWord,
+		text:        text,
+		sourceRange: Range{Start: start, End: end},
+	}
 	// Arithmetic splitting removes only operator bytes from one legacy word.
 	// With no whitespace, quote, or delimiter introduced, the sole fragment
 	// whose isolated legacy token kind can differ is ".": both of its dot
@@ -5586,19 +5632,6 @@ func scalarOperatorToken(value byte) (tokenKind, bool) {
 		return tokenRemainder, true
 	default:
 		return tokenInvalid, false
-	}
-}
-
-func scalarWordPart(original token, start, end int, kind tokenKind) token {
-	startPosition := advanceSourcePosition(original.sourceRange.Start, original.text[:start])
-	endPosition := advanceSourcePosition(startPosition, original.text[start:end])
-	return token{
-		kind: kind,
-		text: original.text[start:end],
-		sourceRange: Range{
-			Start: startPosition,
-			End:   endPosition,
-		},
 	}
 }
 

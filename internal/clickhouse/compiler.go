@@ -688,6 +688,45 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	args = knowledge.args
 
 	aliasSequence := 0
+	finishCompiled := func(
+		compiled CompiledQuery,
+		complexityRange spl.Range,
+	) (CompiledQuery, error) {
+		compiled.atomicResult = state.context != nil && state.context.atomicResult
+		terminalWide := compiled.Chart != nil || compiled.Timechart != nil
+		if terminalWide && len(state.chronologicalBarriers) > 0 {
+			var wrapErr error
+			compiled, wrapErr = wrapCompiledChronologicalValidation(
+				compiled,
+				state,
+				aliasSequence,
+			)
+			if wrapErr != nil {
+				return CompiledQuery{}, wrapErr
+			}
+		}
+		if terminalWide {
+			if depthErr := validateCompiledRelationalDepth(compiled); depthErr != nil {
+				return CompiledQuery{}, depthErr
+			}
+		} else if depthErr := validateFinalizedRelationalDepth(relation, compiled); depthErr != nil {
+			return CompiledQuery{}, depthErr
+		}
+		if len(compiled.SQL) > maxCompiledQueryBytes {
+			return CompiledQuery{}, &plan.Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
+				Range:   complexityRange,
+			}
+		}
+		return sealFinalCompiledQuery(
+			compiled,
+			query,
+			scan,
+			preparation,
+			knowledge.prelude,
+		)
+	}
 	remainingOperators := query.Operators[1+preparation.prefixLength:]
 	for operatorIndex := 0; operatorIndex < len(remainingOperators); operatorIndex++ {
 		operator := remainingOperators[operatorIndex]
@@ -1236,27 +1275,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			if len(state.chronologicalBarriers) > 0 {
-				compiled, compileErr = wrapCompiledChronologicalValidation(
-					compiled,
-					state,
-					aliasSequence,
-				)
-				if compileErr != nil {
-					return CompiledQuery{}, compileErr
-				}
-			}
-			if compileErr = validateCompiledRelationalDepth(compiled); compileErr != nil {
-				return CompiledQuery{}, compileErr
-			}
-			if len(compiled.SQL) > maxCompiledQueryBytes {
-				return CompiledQuery{}, &plan.Diagnostic{
-					Code:    "SPL_QUERY_TOO_COMPLEX",
-					Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
-					Range:   operator.Range,
-				}
-			}
-			return sealFinalCompiledQuery(compiled, query, scan, preparation, knowledge.prelude)
+			return finishCompiled(compiled, operator.Range)
 		case *plan.Chart:
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: chart is unavailable for event analysis")
@@ -1268,27 +1287,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			if len(state.chronologicalBarriers) > 0 {
-				compiled, compileErr = wrapCompiledChronologicalValidation(
-					compiled,
-					state,
-					aliasSequence,
-				)
-				if compileErr != nil {
-					return CompiledQuery{}, compileErr
-				}
-			}
-			if compileErr = validateCompiledRelationalDepth(compiled); compileErr != nil {
-				return CompiledQuery{}, compileErr
-			}
-			if len(compiled.SQL) > maxCompiledQueryBytes {
-				return CompiledQuery{}, &plan.Diagnostic{
-					Code:    "SPL_QUERY_TOO_COMPLEX",
-					Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
-					Range:   operator.Range,
-				}
-			}
-			return sealFinalCompiledQuery(compiled, query, scan, preparation, knowledge.prelude)
+			return finishCompiled(compiled, operator.Range)
 		case *plan.Window:
 			expression, nextState, compileErr := compileWindow(operator, state)
 			if compileErr != nil {
@@ -1361,18 +1360,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	compiled.atomicResult = state.context != nil && state.context.atomicResult
-	if err := validateFinalizedRelationalDepth(relation, compiled); err != nil {
-		return CompiledQuery{}, err
-	}
-	if len(compiled.SQL) > maxCompiledQueryBytes {
-		return CompiledQuery{}, &plan.Diagnostic{
-			Code:    "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
-			Range:   scan.Range,
-		}
-	}
-	return sealFinalCompiledQuery(compiled, query, scan, preparation, knowledge.prelude)
+	return finishCompiled(compiled, scan.Range)
 }
 
 type authoredKnowledgeCompilation struct {
