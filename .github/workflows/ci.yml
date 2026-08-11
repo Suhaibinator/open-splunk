@@ -51,10 +51,13 @@ jobs:
 
       - name: Check API compatibility
         if: github.event_name == 'pull_request'
-        run: >-
-          npx --no-install buf breaking
-          --against ".git#branch=${{ github.base_ref }}"
-          --error-format github-actions
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git branch --force "${BASE_REF}" "origin/${BASE_REF}"
+          npx --no-install buf breaking \
+            --against ".git#branch=${BASE_REF}" \
+            --error-format github-actions
 
       - name: Verify generated code is current
         run: |
