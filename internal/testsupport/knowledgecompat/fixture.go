@@ -10,7 +10,6 @@ package knowledgecompat
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -245,7 +244,7 @@ func validVector(vector Vector) bool {
 func fixturePath() string {
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
-		panic(fmt.Sprintf("knowledge compatibility fixture source path is unavailable"))
+		panic("knowledge compatibility fixture source path is unavailable")
 	}
 	return filepath.Clean(filepath.Join(
 		filepath.Dir(source),
