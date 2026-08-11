@@ -692,6 +692,13 @@ export interface ListKnowledgeObjectDependenciesRequest {
 }
 
 export interface ListKnowledgeObjectDependenciesResponse {
+  /**
+   * Intentional historical compatibility waiver: the unregistered draft used
+   * KnowledgeObjectDependency at tag 1. The management-only edge replaced it
+   * before this graph route was registered or advertised. The migration is
+   * intentionally breaking and is allowlisted only against its exact draft
+   * baseline; it must not be described as schema non-breaking.
+   */
   dependencies: KnowledgeManagementDependencyEdge[];
   page: PageResponse | undefined;
   tenantCatalogRevision: bigint;
@@ -726,6 +733,13 @@ export interface ListKnowledgeObjectDependentsRequest {
 }
 
 export interface ListKnowledgeObjectDependentsResponse {
+  /**
+   * Intentional historical compatibility waiver: the unregistered draft used
+   * KnowledgeObjectDependency at tag 1. The management-only edge replaced it
+   * before this graph route was registered or advertised. The migration is
+   * intentionally breaking and is allowlisted only against its exact draft
+   * baseline; it must not be described as schema non-breaking.
+   */
   dependents: KnowledgeManagementDependencyEdge[];
   page: PageResponse | undefined;
   tenantCatalogRevision: bigint;

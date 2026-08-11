@@ -53,6 +53,7 @@ try {
   await run(process.execPath, [
     "--test",
     path.join(workspace, "scripts", "build-ui-output.test.mjs"),
+    path.join(workspace, "scripts", "check-buf-breaking.test.mjs"),
     path.join(workspace, "scripts", "compile-protos.test.mjs"),
     path.join(workspace, "scripts", "materialize-git-snapshot.test.mjs"),
     path.join(workspace, "scripts", "build-release.test.mjs"),

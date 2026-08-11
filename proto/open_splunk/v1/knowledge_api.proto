@@ -494,6 +494,11 @@ message ListKnowledgeObjectDependenciesRequest {
 }
 
 message ListKnowledgeObjectDependenciesResponse {
+  // Intentional historical compatibility waiver: the unregistered draft used
+  // KnowledgeObjectDependency at tag 1. The management-only edge replaced it
+  // before this graph route was registered or advertised. The migration is
+  // intentionally breaking and is allowlisted only against its exact draft
+  // baseline; it must not be described as schema non-breaking.
   repeated KnowledgeManagementDependencyEdge dependencies = 1;
   PageResponse page = 2;
   uint64 tenant_catalog_revision = 3;
@@ -524,6 +529,11 @@ message ListKnowledgeObjectDependentsRequest {
 }
 
 message ListKnowledgeObjectDependentsResponse {
+  // Intentional historical compatibility waiver: the unregistered draft used
+  // KnowledgeObjectDependency at tag 1. The management-only edge replaced it
+  // before this graph route was registered or advertised. The migration is
+  // intentionally breaking and is allowlisted only against its exact draft
+  // baseline; it must not be described as schema non-breaking.
   repeated KnowledgeManagementDependencyEdge dependents = 1;
   PageResponse page = 2;
   uint64 tenant_catalog_revision = 3;

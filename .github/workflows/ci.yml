@@ -55,9 +55,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           git branch --force "${BASE_REF}" "origin/${BASE_REF}"
-          npx --no-install buf breaking \
-            --against ".git#branch=${BASE_REF}" \
-            --error-format github-actions
+          node scripts/check-buf-breaking.mjs --against-ref "${BASE_REF}"
 
       - name: Verify generated code is current
         run: |

@@ -2325,7 +2325,12 @@ func (x *ListKnowledgeObjectDependenciesRequest) GetPage() *PageRequest {
 }
 
 type ListKnowledgeObjectDependenciesResponse struct {
-	state                 protoimpl.MessageState               `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Intentional historical compatibility waiver: the unregistered draft used
+	// KnowledgeObjectDependency at tag 1. The management-only edge replaced it
+	// before this graph route was registered or advertised. The migration is
+	// intentionally breaking and is allowlisted only against its exact draft
+	// baseline; it must not be described as schema non-breaking.
 	Dependencies          []*KnowledgeManagementDependencyEdge `protobuf:"bytes,1,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
 	Page                  *PageResponse                        `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
 	TenantCatalogRevision uint64                               `protobuf:"varint,3,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`
@@ -2470,7 +2475,12 @@ func (x *ListKnowledgeObjectDependentsRequest) GetPage() *PageRequest {
 }
 
 type ListKnowledgeObjectDependentsResponse struct {
-	state                 protoimpl.MessageState               `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Intentional historical compatibility waiver: the unregistered draft used
+	// KnowledgeObjectDependency at tag 1. The management-only edge replaced it
+	// before this graph route was registered or advertised. The migration is
+	// intentionally breaking and is allowlisted only against its exact draft
+	// baseline; it must not be described as schema non-breaking.
 	Dependents            []*KnowledgeManagementDependencyEdge `protobuf:"bytes,1,rep,name=dependents,proto3" json:"dependents,omitempty"`
 	Page                  *PageResponse                        `protobuf:"bytes,2,opt,name=page,proto3" json:"page,omitempty"`
 	TenantCatalogRevision uint64                               `protobuf:"varint,3,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`

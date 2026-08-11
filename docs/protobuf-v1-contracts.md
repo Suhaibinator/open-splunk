@@ -561,6 +561,15 @@ never-served draft unknown values, but the change must not be described as
 schema non-breaking. Validate's and Preview's later registration do not
 retroactively change that historical classification.
 
+The management dependency responses carry the same pre-registration
+compatibility classification. Their draft tag 1 fields used
+`KnowledgeObjectDependency`; before either graph route was registered or
+advertised, the fields changed to `KnowledgeManagementDependencyEdge` so the
+management API could not expose snapshot-global stage, depth, ordinal, or
+digest authority. Both type changes are intentional breaking migrations. CI
+waives these two changes and the three validation changes only for the exact
+pre-activation `main` commit; all other Buf `FILE` violations remain fatal.
+
 The dependency routes expose only direct persisted object-to-object edges and
 never snapshot-global stage, depth, ordinal, or definition-digest authority.
 `dependencies` resolves one exact source version, including an authorized
