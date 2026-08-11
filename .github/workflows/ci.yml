@@ -134,7 +134,10 @@ jobs:
   go-test:
     name: Go tests (${{ matrix.label }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The serialized race row traverses every package process and needs a
+    # larger aggregate envelope; the 40-minute per-package bound below remains
+    # unchanged. Coverage retains the smaller aggregate budget.
+    timeout-minutes: ${{ matrix.job_timeout_minutes }}
     # Race instrumentation and atomic coverage each retain a full-tree gate.
     # Running them independently avoids compounding both overheads into
     # deadline starvation on the two-vCPU hosted runner. The race row also
@@ -147,9 +150,11 @@ jobs:
           - label: race detector
             test_flags: "-p=1 -race -shuffle=on"
             upload_coverage: false
+            job_timeout_minutes: 90
           - label: atomic coverage
             test_flags: "-shuffle=on -covermode=atomic -coverprofile=coverage.out"
             upload_coverage: true
+            job_timeout_minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
