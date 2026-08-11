@@ -45,7 +45,7 @@ func TestIngestionTokenPurposeMigrationPinsFreshSchemaAndChecksum(t *testing.T) 
 	var version int
 	var name string
 	var checksum []byte
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT version, name, checksum
 		FROM schema_migrations
 		WHERE version = 35`).Scan(&version, &name, &checksum); err != nil {

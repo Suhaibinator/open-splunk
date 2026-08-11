@@ -194,7 +194,8 @@ func postHECOperations(
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		hecOperationsPath,
 		bytes.NewReader(payload),

@@ -421,9 +421,9 @@ func (decoder *EnvelopeDecoder) eventDecodeError(err error, eventNumber int) err
 			failure.Kind != ErrorCompressedBodyTooLarge && failure.Kind != ErrorDecompressedBodyTooLarge &&
 			failure.Kind != ErrorNormalizedBodyTooLarge && failure.Kind != ErrorInvalidCompressedBody &&
 			failure.Kind != ErrorInvalidUTF8 {
-			copy := *failure
-			copy.InvalidEventNumber = &eventNumber
-			return &copy
+			cloned := *failure
+			cloned.InvalidEventNumber = &eventNumber
+			return &cloned
 		}
 		return failure
 	}

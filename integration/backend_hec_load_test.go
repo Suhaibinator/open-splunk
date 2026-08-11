@@ -219,7 +219,7 @@ func (plan backendHECLoadPlan) schedules() []backendHECLoadSchedule {
 		// One small request each second retains continuous small-shape coverage
 		// while the lower-rate lifecycle-soak default stays below the fixed
 		// 100,000 request/ACK rows per token. Batched traffic supplies the rest.
-		fullRate := plan.EventsPerSecond - 1
+		fullRate = plan.EventsPerSecond - 1
 		return []backendHECLoadSchedule{
 			{
 				shape:              backendHECLoadShapeSmall,

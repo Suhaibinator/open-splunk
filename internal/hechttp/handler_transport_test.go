@@ -119,7 +119,7 @@ func TestHealthRejectsChunkedBodyFramingWithoutReading(t *testing.T) {
 	t.Parallel()
 	body := newTrackingBody("private-slow-health-body")
 	harness := newHandlerHarness(t, nil)
-	request := httptest.NewRequest(http.MethodGet, "/services/collector/health", body)
+	request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/services/collector/health", body)
 	request.ContentLength = -1
 	request.TransferEncoding = []string{"chunked"}
 	response := perform(harness.handler, request)

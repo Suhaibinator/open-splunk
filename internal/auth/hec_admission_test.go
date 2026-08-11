@@ -278,7 +278,11 @@ func TestRevalidateHECAdmissionInTransactionRejectsMalformedSnapshots(t *testing
 	if err != nil {
 		t.Fatalf("begin HEC admission transaction: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			t.Errorf("rollback HEC admission transaction: %v", rollbackErr)
+		}
+	}()
 	valid := HECAdmissionAuthority{
 		TokenID:      "tok_valid",
 		TokenVersion: 1,

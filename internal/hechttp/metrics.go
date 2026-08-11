@@ -24,7 +24,7 @@ type Metrics struct {
 	acceptedRequests         atomic.Uint64
 	rateLimitedRequests      atomic.Uint64
 	stagingFailures          atomic.Uint64
-	stagingNanoseconds       atomic.Uint64
+	stagingNanoseconds       atomic.Int64
 	acknowledgmentQueries    atomic.Uint64
 	acknowledgmentIDsQueried atomic.Uint64
 	acknowledgmentMisses     atomic.Uint64
@@ -119,7 +119,7 @@ func (metrics *Metrics) observeShutdownRejection() {
 func (metrics *Metrics) observeStagingLatency(duration time.Duration) {
 	if duration > 0 {
 		metrics.observationMu.RLock()
-		metrics.stagingNanoseconds.Add(uint64(duration))
+		metrics.stagingNanoseconds.Add(duration.Nanoseconds())
 		metrics.observationMu.RUnlock()
 	}
 }

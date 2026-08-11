@@ -560,7 +560,7 @@ func decodeAdapterEnvelopes(t *testing.T, body string) []hec.Envelope {
 	var envelopes []hec.Envelope
 	for {
 		envelope, nextErr := decoder.Next()
-		if nextErr == io.EOF {
+		if errors.Is(nextErr, io.EOF) {
 			return envelopes
 		}
 		if nextErr != nil {

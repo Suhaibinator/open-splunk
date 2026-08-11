@@ -60,7 +60,7 @@ func TestRawDecoderLimitsUTF8AndStickyFailure(t *testing.T) {
 		_, firstErr := decoder.Next()
 		assertRequestFailure(t, firstErr, ErrorInvalidUTF8)
 		_, secondErr := decoder.Next()
-		if firstErr != secondErr {
+		if !errors.Is(secondErr, firstErr) {
 			t.Fatalf("failure not sticky: %p != %p", firstErr, secondErr)
 		}
 	})
@@ -98,7 +98,11 @@ func TestRawDecoderLimitsUTF8AndStickyFailure(t *testing.T) {
 		}
 		_, err = decoder.Next()
 		assertEventFailure(t, err, ErrorEventTooLarge, 0)
-		if failure := err.(*ProtocolError); failure.HTTPStatus() != 413 {
+		var failure *ProtocolError
+		if !errors.As(err, &failure) {
+			t.Fatalf("raw event limit error = %T, want *ProtocolError", err)
+		}
+		if failure.HTTPStatus() != 413 {
 			t.Fatalf("raw event limit HTTP status = %d, want 413", failure.HTTPStatus())
 		}
 	})

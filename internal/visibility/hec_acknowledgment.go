@@ -358,7 +358,7 @@ func allocateHECAcknowledgment(
 	); err != nil {
 		return 0, fmt.Errorf("persist HEC acknowledgment: %w", err)
 	}
-	return uint64(acknowledgmentID), nil
+	return acknowledgmentID, nil
 }
 
 func newKeyedHECAcknowledgmentIDSource() (*keyedHECAcknowledgmentIDSource, error) {
@@ -410,7 +410,7 @@ func (source *keyedHECAcknowledgmentIDSource) ID(
 func writeHECAcknowledgmentIDScope(hash hash.Hash, scope hecAcknowledgmentScope) {
 	var length [4]byte
 	for _, value := range []string{scope.tenantID, scope.tokenID, scope.channel} {
-		binary.BigEndian.PutUint32(length[:], uint32(len(value)))
+		binary.BigEndian.PutUint32(length[:], uint32(len(value))) // #nosec G115 -- scope components are admission-bounded far below MaxUint32.
 		_, _ = hash.Write(length[:])
 		_, _ = hash.Write([]byte(value))
 	}
@@ -617,7 +617,7 @@ func (sequencer *SQLiteSequencer) PruneHECTerminalRequests(
 	if err != nil || count < 0 || count > int64(limit) {
 		return 0, errors.New("prune terminal HEC requests returned an invalid row count")
 	}
-	return uint32(count), nil
+	return uint32(count), nil // #nosec G115 -- count is nonnegative and bounded by the uint32 limit above.
 }
 
 var _ HECAcknowledgmentReader = (*SQLiteSequencer)(nil)

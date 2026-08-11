@@ -263,8 +263,8 @@ func (handler *Handler) ServeHTTP(response http.ResponseWriter, request *http.Re
 		return
 	}
 	protectedContext, release, err := handler.beginToken(
-		authentication.TokenID,
 		request.Context(),
+		authentication.TokenID,
 	)
 	if err != nil {
 		handler.writeError(response, err, 0)
@@ -310,13 +310,11 @@ func (handler *Handler) authenticate(request *http.Request) (auth.Authentication
 		handler.limits.MaximumHeaderBytes,
 	)
 	request.Header.Del("Authorization")
-	values = nil
 	if err != nil {
 		handler.metrics.observeAuthenticationFailure()
 		return auth.Authentication{}, err
 	}
 	authentication, err := handler.authenticator.AuthenticateHEC(request.Context(), plaintext)
-	plaintext = ""
 	if err == nil {
 		return authentication, nil
 	}
@@ -341,8 +339,8 @@ func (handler *Handler) beginGlobal() (func(), error) {
 }
 
 func (handler *Handler) beginToken(
-	tokenID string,
 	parent context.Context,
+	tokenID string,
 ) (context.Context, func(), error) {
 	requestContext, lifecycleID, accepted := handler.lifecycle.begin(parent)
 	if !accepted {
@@ -521,7 +519,7 @@ func (handler *Handler) stage(
 			transient.Reason == opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
 			handler.metrics.observeRateLimitedRequest()
 		}
-		failure, status, retryAfter := mapStageError(err)
+		status, retryAfter, failure := mapStageError(err)
 		handler.writeErrorWithStatus(response, failure, status, retryAfter)
 		return
 	}
@@ -575,14 +573,14 @@ func (handler *Handler) serveAcknowledgment(
 		ids,
 	)
 	if err != nil {
-		failure, status, retryAfter := mapStageError(err)
+		status, retryAfter, failure := mapStageError(err)
 		handler.writeErrorWithStatus(response, failure, status, retryAfter)
 		return
 	}
 	results := make([]hec.AcknowledgmentResult, len(decoded.IDs))
 	var misses uint64
 	for index, id := range decoded.IDs {
-		indexed := statuses[uint64(id)]
+		indexed := statuses[ids[index]]
 		results[index] = hec.AcknowledgmentResult{ID: id, Indexed: indexed}
 		if !indexed {
 			misses++
@@ -597,9 +595,9 @@ func (handler *Handler) serveAcknowledgment(
 	writeJSON(response, http.StatusOK, encoded, 0)
 }
 
-func mapStageError(err error) (error, int, time.Duration) {
+func mapStageError(err error) (int, time.Duration, error) {
 	if err == nil {
-		return hec.NewProtocolError(hec.ErrorInternal, nil), 0, 0
+		return 0, 0, hec.NewProtocolError(hec.ErrorInternal, nil)
 	}
 	var admissionFailure *ingest.AdmissionFailure
 	if errors.As(err, &admissionFailure) {
@@ -621,33 +619,33 @@ func mapStageError(err error) (error, int, time.Duration) {
 				}
 			}
 		}
-		return hec.NewEventError(kind, int(admissionFailure.EventIndex), err), 0, 0
+		return 0, 0, hec.NewEventError(kind, int(admissionFailure.EventIndex), err)
 	}
 	if errors.Is(err, visibility.ErrHECAcknowledgmentCapacity) {
-		return hec.NewProtocolError(hec.ErrorAcknowledgmentCapacity, err), 0, 0
+		return 0, 0, hec.NewProtocolError(hec.ErrorAcknowledgmentCapacity, err)
 	}
 	if errors.Is(err, visibility.ErrPendingCapacity) || errors.Is(err, visibility.ErrHECRequestCapacity) ||
 		errors.Is(err, visibility.ErrExhausted) {
-		return hec.NewProtocolError(hec.ErrorQueueCapacity, err), 0, 0
+		return 0, 0, hec.NewProtocolError(hec.ErrorQueueCapacity, err)
 	}
 	if errors.Is(err, visibility.ErrHECAdmissionStale) {
-		return hec.NewProtocolError(hec.ErrorInvalidToken, err), 0, 0
+		return 0, 0, hec.NewProtocolError(hec.ErrorInvalidToken, err)
 	}
 	if errors.Is(err, ingest.ErrAdmissionRequestTooLarge) {
-		return hec.NewProtocolError(hec.ErrorNormalizedBodyTooLarge, err), 0, 0
+		return 0, 0, hec.NewProtocolError(hec.ErrorNormalizedBodyTooLarge, err)
 	}
 	var transient *ingest.TransientStoreError
 	if errors.As(err, &transient) {
 		if transient.Reason == opensplunkv1.RetryBatchReason_RETRY_BATCH_REASON_RATE_LIMITED {
-			return hec.NewProtocolError(hec.ErrorServerBusy, err), http.StatusTooManyRequests, transient.RetryAfter
+			return http.StatusTooManyRequests, transient.RetryAfter, hec.NewProtocolError(hec.ErrorServerBusy, err)
 		}
-		return hec.NewProtocolError(hec.ErrorServerBusy, err), 0, transient.RetryAfter
+		return 0, transient.RetryAfter, hec.NewProtocolError(hec.ErrorServerBusy, err)
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
 		errors.Is(err, visibility.ErrClosed) {
-		return hec.NewProtocolError(hec.ErrorServerBusy, err), 0, 0
+		return 0, 0, hec.NewProtocolError(hec.ErrorServerBusy, err)
 	}
-	return hec.NewProtocolError(hec.ErrorInternal, err), 0, 0
+	return 0, 0, hec.NewProtocolError(hec.ErrorInternal, err)
 }
 
 func (handler *Handler) writeError(response http.ResponseWriter, err error, retryAfter time.Duration) {
@@ -705,7 +703,7 @@ func writeJSON(response http.ResponseWriter, status int, body []byte, retryAfter
 		response.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 	}
 	response.WriteHeader(status)
-	_, _ = response.Write(body)
+	_, _ = response.Write(body) // #nosec G705 -- body is bounded JSON produced by the HEC serializers.
 }
 
 type endpointQuery struct {
@@ -828,7 +826,7 @@ func (gate *lifecycleGate) begin(parent context.Context) (context.Context, uint6
 	if gate.nextID == 0 {
 		return nil, 0, false
 	}
-	requestContext, cancel := context.WithCancel(parent)
+	requestContext, cancel := context.WithCancel(parent) // #nosec G118 -- end retains and invokes cancel for every accepted request.
 	gate.active[gate.nextID] = cancel
 	return requestContext, gate.nextID, true
 }

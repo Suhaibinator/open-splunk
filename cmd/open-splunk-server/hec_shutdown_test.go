@@ -124,7 +124,7 @@ func TestShutdownHTTPServerClosesHECAdmissionBeforeTransportDrain(t *testing.T) 
 	response := httptest.NewRecorder()
 	requests.ServeHTTP(
 		response,
-		httptest.NewRequest(http.MethodGet, "/after-shutdown", nil),
+		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/after-shutdown", nil),
 	)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("post-shutdown tracker status = %d, want 503", response.Code)

@@ -261,7 +261,7 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	delegated := httptest.NewRecorder()
 	handler.ServeHTTP(
 		delegated,
-		httptest.NewRequest(http.MethodPost, "/api/v1/system/bootstrap", nil),
+		httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/system/bootstrap", nil),
 	)
 	if delegated.Code != 299 || delegated.Header().Get("X-Delegated") != "true" ||
 		delegated.Body.String() != "browser" {
@@ -275,7 +275,7 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	unknown := httptest.NewRecorder()
 	handler.ServeHTTP(
 		unknown,
-		httptest.NewRequest(http.MethodPost, "/services/collector/unknown", nil),
+		httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/services/collector/unknown", nil),
 	)
 	if unknown.Code != http.StatusNotFound ||
 		unknown.Header().Get("Content-Type") != "application/json; charset=utf-8" ||
@@ -289,7 +289,7 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	health := httptest.NewRecorder()
 	handler.ServeHTTP(
 		health,
-		httptest.NewRequest(http.MethodGet, "/services/collector/health", nil),
+		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/services/collector/health", nil),
 	)
 	if health.Code != http.StatusOK ||
 		health.Body.String() != `{"text":"HEC is healthy","code":17}` {
@@ -303,7 +303,7 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	ackHealth := httptest.NewRecorder()
 	handler.ServeHTTP(
 		ackHealth,
-		httptest.NewRequest(http.MethodGet, "/services/collector/health?ack=true", nil),
+		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/services/collector/health?ack=true", nil),
 	)
 	if ackHealth.Code != http.StatusServiceUnavailable ||
 		ackHealth.Body.String() != `{"text":"HEC is unhealthy, ack service unavailable","code":19}` {
@@ -317,7 +317,7 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	bothHealth := httptest.NewRecorder()
 	handler.ServeHTTP(
 		bothHealth,
-		httptest.NewRequest(http.MethodGet, "/services/collector/health?ack=1", nil),
+		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/services/collector/health?ack=1", nil),
 	)
 	if bothHealth.Code != http.StatusServiceUnavailable ||
 		bothHealth.Body.String() != `{"text":"HEC is unhealthy, queues are full, ack service unavailable","code":20}` {
@@ -332,7 +332,7 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	restoredHealth := httptest.NewRecorder()
 	handler.ServeHTTP(
 		restoredHealth,
-		httptest.NewRequest(http.MethodGet, "/services/collector/health?ack=true", nil),
+		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/services/collector/health?ack=true", nil),
 	)
 	if restoredHealth.Code != http.StatusOK ||
 		restoredHealth.Body.String() != `{"text":"HEC is healthy","code":17}` {
@@ -340,7 +340,8 @@ func TestRuntimeHECHandlerOwnsNamespaceDelegatesBrowserAndStagesDurably(t *testi
 	}
 
 	event := httptest.NewRecorder()
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/services/collector/event",
 		strings.NewReader(`{"event":"hello from HEC"}`),

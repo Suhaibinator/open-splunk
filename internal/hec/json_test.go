@@ -120,14 +120,15 @@ func TestEnvelopeDecoderRejectsUnknownDuplicateAndNonObjectFraming(t *testing.T)
 				t.Fatal(err)
 			}
 			_, err = decoder.Next()
-			if test.name == "invalid UTF-8" {
+			switch test.name {
+			case "invalid UTF-8":
 				assertRequestFailure(t, err, ErrorInvalidUTF8)
-			} else if test.name == "duplicate fields member" {
+			case "duplicate fields member":
 				assertEventFailure(t, err, ErrorIndexedFields, 0)
-			} else {
+			default:
 				assertEventFailure(t, err, ErrorInvalidDataFormat, 0)
 			}
-			if _, secondErr := decoder.Next(); secondErr != err {
+			if _, secondErr := decoder.Next(); !errors.Is(secondErr, err) {
 				t.Fatalf("decoder failure was not sticky: first %p second %p (%v)", err, secondErr, secondErr)
 			}
 		})

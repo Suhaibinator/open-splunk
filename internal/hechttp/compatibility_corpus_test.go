@@ -461,7 +461,12 @@ func (environment *compatibilityEnvironment) request(fixture compatibilityReques
 	if query.Len() != 0 {
 		target += "?" + query.String()
 	}
-	request, err := http.NewRequest(fixture.Method, "http://hec.invalid"+target, bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(
+		context.Background(),
+		fixture.Method,
+		"http://hec.invalid"+target,
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -526,10 +531,10 @@ func compatibilityBodyBytes(body compatibilityBody) ([]byte, error) {
 func deterministicCompatibilityGZIP(value string) ([]byte, error) {
 	var buffer bytes.Buffer
 	writer := gzip.NewWriter(&buffer)
-	writer.Header.ModTime = time.Time{}
-	writer.Header.Name = ""
-	writer.Header.Comment = ""
-	writer.Header.OS = 255
+	writer.ModTime = time.Time{}
+	writer.Name = ""
+	writer.Comment = ""
+	writer.OS = 255
 	if _, err := writer.Write([]byte(value)); err != nil {
 		return nil, err
 	}

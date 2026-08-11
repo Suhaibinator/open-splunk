@@ -181,7 +181,7 @@ func (handler *recordingHandler) ServeHTTP(response http.ResponseWriter, request
 	handler.mu.Unlock()
 	response.Header().Set("X-Next-Handler", "true")
 	response.WriteHeader(299)
-	_, _ = io.WriteString(response, body)
+	_, _ = io.WriteString(response, body) // #nosec G705 -- test handler deliberately echoes configured fixture data.
 }
 
 func (handler *recordingHandler) snapshot() (int, string, string) {
@@ -241,7 +241,7 @@ func testAuthentication(tokenID string, acknowledgment bool) auth.Authentication
 }
 
 func hecRequest(method, target, contentType, credential, channel, body string) *http.Request {
-	request := httptest.NewRequest(method, target, strings.NewReader(body))
+	request := httptest.NewRequestWithContext(context.Background(), method, target, strings.NewReader(body))
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
@@ -424,7 +424,12 @@ func TestHandlerAuthenticatesBeforeReadingBodyAndMapsTokenFailures(t *testing.T)
 				}
 			})
 			body := newTrackingBody(`{"event":`)
-			request := httptest.NewRequest(http.MethodPost, "/services/collector/event", body)
+			request := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/services/collector/event",
+				body,
+			)
 			request.Header.Set("Content-Type", "application/json")
 			if test.header != "" {
 				request.Header.Set("Authorization", test.header)
@@ -563,7 +568,12 @@ func TestHandlerCapturesReceiveBoundaryBeforeBodyDecode(t *testing.T) {
 			return testAuthentication("boundary-token-id", false), nil
 		}
 	})
-	request := httptest.NewRequest(http.MethodPost, "/services/collector/event", body)
+	request := httptest.NewRequestWithContext(
+		context.Background(),
+		http.MethodPost,
+		"/services/collector/event",
+		body,
+	)
 	request.Header.Set("Authorization", "Splunk private-boundary-secret")
 	request.Header.Set("Content-Type", "application/json")
 	response := perform(harness.handler, request)
@@ -821,7 +831,7 @@ func TestHandlerHealthAuthPrecedenceNeverReadsBody(t *testing.T) {
 					return auth.Authentication{}, test.authError
 				}
 			})
-			request := httptest.NewRequest(http.MethodGet, test.target, body)
+			request := httptest.NewRequestWithContext(context.Background(), http.MethodGet, test.target, body)
 			if test.authorization != "" {
 				request.Header.Set("Authorization", test.authorization)
 			}
@@ -985,7 +995,8 @@ func TestHandlerConcurrencyGatesGloballyAndPerToken(t *testing.T) {
 			}
 
 			secondBody := newTrackingBody(`{"event":"second"}`)
-			secondRequest := httptest.NewRequest(
+			secondRequest := httptest.NewRequestWithContext(
+				context.Background(),
 				http.MethodPost,
 				"/services/collector/event",
 				secondBody,

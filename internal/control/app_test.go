@@ -931,7 +931,7 @@ func TestListAppIdentitiesUsesBoundedIdentityOnlyTenantPlan(t *testing.T) {
 		ctx,
 		`PRAGMA ignore_check_constraints = ON`,
 	); err != nil {
-		connection.Close()
+		_ = connection.Close()
 		t.Fatalf("ignore test-only constraints: %v", err)
 	}
 	privateState := strings.Repeat("private-state-sentinel", 4_096)
@@ -941,7 +941,7 @@ func TestListAppIdentitiesUsesBoundedIdentityOnlyTenantPlan(t *testing.T) {
 		privateState,
 		created[0].ID,
 	); err != nil {
-		connection.Close()
+		_ = connection.Close()
 		t.Fatalf("create oversized persisted-state corruption: %v", err)
 	}
 	if err := connection.Close(); err != nil {

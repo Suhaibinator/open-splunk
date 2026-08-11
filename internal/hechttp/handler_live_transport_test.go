@@ -718,7 +718,8 @@ func doLiveRequest(
 			},
 		}))
 	}
-	response, err := client.Do(request)
+	// Every caller supplies a request targeting the loopback httptest server created by this test.
+	response, err := client.Do(request) // #nosec G704 -- controlled local transport fixture, not an application URL fetch.
 	if err != nil {
 		return liveHTTPResult{err: err}
 	}

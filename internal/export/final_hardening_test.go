@@ -49,7 +49,7 @@ func TestReexecutionLeaseRejectsConcurrentCallsRetainedByReturningExecutor(t *te
 	<-executorReturned
 	close(releaseCallbacks)
 	for range callbackCount * 2 {
-		if callbackErr := <-callbackResults; callbackErr != errReexecutionSinkClosed ||
+		if callbackErr := <-callbackResults; !errors.Is(callbackErr, errReexecutionSinkClosed) ||
 			!errors.Is(callbackErr, searchjobs.ErrInvalidResult) {
 			t.Fatalf("retained callback error = %v, want fixed invalid-result closure", callbackErr)
 		}

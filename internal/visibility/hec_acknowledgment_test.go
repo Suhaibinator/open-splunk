@@ -444,7 +444,7 @@ func TestHECSequenceExhaustionIsAtomic(t *testing.T) {
 			name: "request sequence",
 			prepare: func(t *testing.T, database *sql.DB, nowMicros int64) {
 				t.Helper()
-				if _, err := database.Exec(`
+				if _, err := database.ExecContext(t.Context(), `
 					INSERT INTO hec_source_sequences (
 						tenant_id, ingestion_token_id, next_request_sequence,
 						updated_at_unix_micro
@@ -458,7 +458,7 @@ func TestHECSequenceExhaustionIsAtomic(t *testing.T) {
 			name: "acknowledgment sequence",
 			prepare: func(t *testing.T, database *sql.DB, nowMicros int64) {
 				t.Helper()
-				if _, err := database.Exec(`
+				if _, err := database.ExecContext(t.Context(), `
 					INSERT INTO hec_channels (
 						tenant_id, ingestion_token_id, channel_id,
 						next_acknowledgment_id, created_at_unix_micro,

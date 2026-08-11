@@ -284,16 +284,16 @@ func (preparer *AdmissionPreparer) Prepare(request AdmissionRequest) (StoreBatch
 	}
 	var hecAdmission *HECStageAdmission
 	if request.HECAdmission != nil {
-		copy := *request.HECAdmission
-		copy.AuthorizedIndexes = make([]HECIndexAuthority, 0, len(retentionByIndex))
+		hecAdmissionCopy := *request.HECAdmission
+		hecAdmissionCopy.AuthorizedIndexes = make([]HECIndexAuthority, 0, len(retentionByIndex))
 		for _, policy := range authority.ordered {
 			if _, selected := retentionByIndex[policy.Name]; selected {
-				copy.AuthorizedIndexes = append(copy.AuthorizedIndexes, HECIndexAuthority{
+				hecAdmissionCopy.AuthorizedIndexes = append(hecAdmissionCopy.AuthorizedIndexes, HECIndexAuthority{
 					Name: policy.Name, Version: policy.Version,
 				})
 			}
 		}
-		hecAdmission = &copy
+		hecAdmission = &hecAdmissionCopy
 	}
 	return StoreBatch{
 		TenantID:           request.Authorization.TenantID,
