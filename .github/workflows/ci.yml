@@ -401,13 +401,24 @@ jobs:
           -v
 
   hec-durable-load:
-    name: HEC durable correctness and batch throughput
+    name: HEC durable (${{ matrix.label }})
     runs-on: ubuntu-latest
     # Standard hosted runners have no calibrated storage-IOPS contract. Keep
     # the default mixed 50/950 release qualification intact for recorded
-    # machine sizing, while CI independently proves bounded small-request
-    # saturation and the 1,000 EPS full-batch contract.
+    # machine sizing. The small-only profile observes correctness, bounded
+    # backpressure, and saturation behavior; it is not a throughput proof. The
+    # independently rate-gated batch-only profile proves 1,000 EPS.
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: observational 50 requests/s small-only correctness/backpressure saturation and outage recovery
+            events_per_second: "50"
+            profile: small-only
+          - label: rate-gated 1,000 EPS batch-only throughput and outage recovery
+            events_per_second: "1000"
+            profile: batch-only
     env:
       OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
     steps:
@@ -457,24 +468,11 @@ jobs:
             sleep "$((attempt * 5))"
           done
 
-      - name: Observe HEC durable 50 requests/s saturation and outage recovery
+      - name: Run ${{ matrix.label }}
         env:
           OPEN_SPLUNK_HEC_LOAD: "1"
-          OPEN_SPLUNK_HEC_LOAD_EVENTS_PER_SECOND: "50"
-          OPEN_SPLUNK_HEC_LOAD_PROFILE: small-only
-        run: >-
-          go test ./integration
-          -run '^TestBackendHECDurableLoad$'
-          -count=1
-          -timeout=15m
-          -p=1
-          -v
-
-      - name: Test HEC durable 1,000 EPS batch throughput and outage recovery
-        env:
-          OPEN_SPLUNK_HEC_LOAD: "1"
-          OPEN_SPLUNK_HEC_LOAD_EVENTS_PER_SECOND: "1000"
-          OPEN_SPLUNK_HEC_LOAD_PROFILE: batch-only
+          OPEN_SPLUNK_HEC_LOAD_EVENTS_PER_SECOND: ${{ matrix.events_per_second }}
+          OPEN_SPLUNK_HEC_LOAD_PROFILE: ${{ matrix.profile }}
         run: >-
           go test ./integration
           -run '^TestBackendHECDurableLoad$'
