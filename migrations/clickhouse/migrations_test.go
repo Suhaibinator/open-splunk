@@ -451,17 +451,29 @@ func TestGenerateEnvAcceptsUTCCommitTimestamp(t *testing.T) {
 		t.Fatalf("copy deployment environment generator: %v", err)
 	}
 
+	commandContext, cancelCommand := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelCommand()
+
 	for _, arguments := range [][]string{
 		{"init", "--quiet"},
 		{"add", "deploy/generate-env.sh"},
 	} {
-		command := exec.Command("git", arguments...)
+		command := exec.CommandContext(commandContext, "git", arguments...)
 		command.Dir = repository
 		if output, commandErr := command.CombinedOutput(); commandErr != nil {
 			t.Fatalf("git %s: %v: %s", strings.Join(arguments, " "), commandErr, output)
 		}
 	}
-	commit := exec.Command("git", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "UTC timestamp")
+	commit := exec.CommandContext(
+		commandContext,
+		"git",
+		"-c",
+		"commit.gpgsign=false",
+		"commit",
+		"--quiet",
+		"-m",
+		"UTC timestamp",
+	)
 	commit.Dir = repository
 	commit.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME=Open Splunk Test",
@@ -475,8 +487,6 @@ func TestGenerateEnvAcceptsUTCCommitTimestamp(t *testing.T) {
 		t.Fatalf("commit UTC fixture: %v: %s", err, output)
 	}
 
-	commandContext, cancelCommand := context.WithTimeout(t.Context(), 30*time.Second)
-	defer cancelCommand()
 	envFile := filepath.Join(repository, "deployment.env")
 	values := mustGenerateDeploymentEnvironment(
 		t,
