@@ -132,9 +132,24 @@ jobs:
           args: --timeout=5m
 
   go-test:
-    name: Go tests
+    name: Go tests (${{ matrix.label }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    # Race instrumentation and atomic coverage each retain a full-tree gate.
+    # Running them independently avoids compounding both overheads into
+    # deadline starvation on the two-vCPU hosted runner. The race row also
+    # serializes package processes: separate packages cannot share memory, so
+    # package concurrency cannot expose additional data races.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: race detector
+            test_flags: "-p=1 -race -shuffle=on"
+            upload_coverage: false
+          - label: atomic coverage
+            test_flags: "-shuffle=on -covermode=atomic -coverprofile=coverage.out"
+            upload_coverage: true
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -151,17 +166,15 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
-      - name: Test with race detection and coverage
+      - name: Test full repository (${{ matrix.label }})
         run: >-
           go test
-          -race
-          -shuffle=on
-          -covermode=atomic
-          -coverprofile=coverage.out
-          -timeout=30m
+          ${{ matrix.test_flags }}
+          -timeout=40m
           ./...
 
       - name: Upload Go coverage
+        if: matrix.upload_coverage
         uses: actions/upload-artifact@v7
         with:
           name: go-coverage
