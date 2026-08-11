@@ -21,10 +21,10 @@ type compiledDeferredKnowledgeRelation struct {
 }
 
 // compileDeferredKnowledgeRelation lowers the generated prefix into the
-// central compiler's flat validation graph so later authored CTEs never bury
-// its MATERIALIZED input. Runtime finalization remains closed until the
-// digest-pinned ClickHouse matrix proves this graph alongside every supported
-// suffix shape.
+// central compiler's flat validation graph so later authored CTEs consume one
+// guarded result backed by a MATERIALIZED input. Production finalization admits
+// this graph only from the compiler-minted, digest-pinned knowledge authority;
+// the pinned ClickHouse matrix continuously seals every supported suffix shape.
 func compileDeferredKnowledgeRelation(
 	relation compiledRelation,
 	scanState compileState,
@@ -61,27 +61,16 @@ func compileDeferredKnowledgeRelation(
 		return compiledDeferredKnowledgeRelation{}, err
 	}
 
-	expressions := compileKnowledgeRuntimeGuardExpressions(staged.prelude)
-	accountingColumns := knowledgeRuntimeGuardAccountingColumns(staged.prelude)
 	inputDefinition := knowledgeRuntimeGuardInputName + " AS MATERIALIZED (" +
 		staged.relation.sql + ")"
-	totalsDefinition := knowledgeRuntimeGuardTotalsName + " AS (SELECT " +
-		expressions.violation + " AS " + knowledgeRuntimeGuardViolationColumn +
-		" FROM " + knowledgeRuntimeGuardInputName + ")"
-	barrierSQL := "SELECT * EXCEPT (" + strings.Join(accountingColumns, ", ") +
-		", " + knowledgeRuntimeGuardViolationColumn +
-		"), toUInt8(" + expressions.validation + ") AS " +
-		knowledgeRuntimeGuardValidationColumn + " FROM " +
-		knowledgeRuntimeGuardInputName + " AS " + knowledgeRuntimeGuardInputAlias +
-		" CROSS JOIN " + knowledgeRuntimeGuardTotalsName + " AS " +
-		knowledgeRuntimeGuardTotalsAlias
+	barrierSQL := compileKnowledgeRuntimeWindowGuardBarrierSQL(staged.prelude)
 
 	barrierArgs, err := cloneKnowledgeRelationArguments(staged.args)
 	if err != nil {
 		return compiledDeferredKnowledgeRelation{}, err
 	}
-	totalsDepth := relationalNodeDepth(staged.relation.depth)
-	barrierDepth := relationalNodeDepth(staged.relation.depth, totalsDepth)
+	windowDepth := relationalNodeDepth(staged.relation.depth)
+	barrierDepth := relationalNodeDepth(windowDepth)
 	if err := validateRelationalDepth(barrierDepth, relation.ownerRange); err != nil {
 		return compiledDeferredKnowledgeRelation{}, err
 	}
@@ -89,12 +78,11 @@ func compileDeferredKnowledgeRelation(
 		name: knowledgeRuntimeGuardResultName,
 		prerequisiteDefinitions: []string{
 			inputDefinition,
-			totalsDefinition,
 		},
 		sql:               barrierSQL,
 		args:              barrierArgs,
 		validationColumns: []string{knowledgeRuntimeGuardValidationColumn},
-		fanout:            2,
+		fanout:            1,
 		depth:             barrierDepth,
 		ownerRange:        relation.ownerRange,
 	}
@@ -130,6 +118,25 @@ func compileDeferredKnowledgeRelation(
 		return compiledDeferredKnowledgeRelation{}, err
 	}
 	return result, nil
+}
+
+// compileKnowledgeRuntimeWindowGuardBarrierSQL is the complete public guard
+// relation above the separately materialized staged input. Keeping this shape
+// in one helper lets the deferred compiler and pinned runtime boundary corpus
+// exercise the identical one-window implementation.
+func compileKnowledgeRuntimeWindowGuardBarrierSQL(
+	prelude compiledKnowledgePrelude,
+) string {
+	expressions := compileKnowledgeRuntimeWindowGuardExpressions(prelude)
+	accountingColumns := knowledgeRuntimeGuardAccountingColumns(prelude)
+	return "SELECT * EXCEPT (" + strings.Join(accountingColumns, ", ") +
+		", " + knowledgeRuntimeGuardViolationColumn +
+		"), toUInt8(" + expressions.validation + ") AS " +
+		knowledgeRuntimeGuardValidationColumn + " FROM (SELECT *, " +
+		expressions.violation + " AS " + knowledgeRuntimeGuardViolationColumn +
+		" FROM " + knowledgeRuntimeGuardInputName + " AS " +
+		quoteIdentifier("__os_ko_guard_window_input") + ") AS " +
+		knowledgeRuntimeGuardInputAlias
 }
 
 func validateDeferredKnowledgeDescriptorSize(
@@ -173,10 +180,16 @@ func deferredKnowledgeDescriptorSQLBytes(
 			return 0, false
 		}
 	}
+	if len(barrier.prerequisiteDefinitions) > 0 && !add(len(", ")) {
+		return 0, false
+	}
+	barrierClause := " AS MATERIALIZED ("
+	if len(barrier.prerequisiteDefinitions) > 0 {
+		barrierClause = " AS ("
+	}
 	for _, bytes := range []int{
-		len(", "),
 		len(barrier.name),
-		len(" AS ("),
+		len(barrierClause),
 		len(barrier.sql),
 		len(") "),
 		len(published.sql),
@@ -222,10 +235,10 @@ func validateCompiledDeferredKnowledgeRelation(
 	}
 	barrier := compiled.state.chronologicalBarriers[0]
 	if barrier.name != knowledgeRuntimeGuardResultName ||
-		len(barrier.prerequisiteDefinitions) != 2 ||
+		len(barrier.prerequisiteDefinitions) != 1 ||
 		len(barrier.validationColumns) != 1 ||
 		barrier.validationColumns[0] != knowledgeRuntimeGuardValidationColumn ||
-		barrier.fanout != 2 || barrier.ownerRange != input.ownerRange {
+		barrier.fanout != 1 || barrier.ownerRange != input.ownerRange {
 		return errors.New(
 			"compile ClickHouse deferred knowledge relation: barrier is invalid",
 		)
@@ -236,17 +249,18 @@ func validateCompiledDeferredKnowledgeRelation(
 			"compile ClickHouse deferred knowledge relation: depth disagrees",
 		)
 	}
-	if strings.Count(strings.Join(barrier.prerequisiteDefinitions, "\x00"), "?") !=
-		len(barrier.args) || strings.Contains(barrier.sql, "?") ||
+	if strings.Count(barrier.prerequisiteDefinitions[0], "?") != len(barrier.args) ||
+		strings.Contains(barrier.sql, "?") ||
 		!strings.HasPrefix(
 			barrier.prerequisiteDefinitions[0],
 			knowledgeRuntimeGuardInputName+" AS MATERIALIZED (",
-		) || strings.Count(barrier.prerequisiteDefinitions[0], " AS MATERIALIZED (") != 1 ||
-		!strings.HasPrefix(
-			barrier.prerequisiteDefinitions[1],
-			knowledgeRuntimeGuardTotalsName+" AS (SELECT ",
-		) ||
-		strings.Contains(barrier.prerequisiteDefinitions[1], " AS MATERIALIZED (") {
+		) || strings.Count(
+		barrier.prerequisiteDefinitions[0],
+		" AS MATERIALIZED (",
+	) != 1 ||
+		strings.Contains(barrier.sql, " AS MATERIALIZED (") ||
+		strings.Contains(barrier.sql, " CROSS JOIN ") ||
+		strings.Count(barrier.sql, " OVER ()") != 1 {
 		return errors.New(
 			"compile ClickHouse deferred knowledge relation: barrier argument order is invalid",
 		)

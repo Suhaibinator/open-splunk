@@ -87,8 +87,8 @@ func (handler *apiHandler) validateKnowledgeObject(
 
 	transferred = true
 	return newSerializedValidateKnowledgeObjectResponse(
-		sealed,
 		request.Context(),
+		sealed,
 		release,
 	), nil
 }
@@ -245,9 +245,11 @@ func classifyKnowledgeValidationError(
 }
 
 func exactKnowledgeValidationError(err, target error) bool {
-	return err != nil && target != nil &&
-		reflect.TypeOf(err) == reflect.TypeOf(target) &&
-		reflect.TypeOf(err).Comparable() && err == target
+	if err == nil || target == nil {
+		return false
+	}
+	value, targetValue := reflect.ValueOf(err), reflect.ValueOf(target)
+	return value.Type() == targetValue.Type() && value.Comparable() && value.Equal(targetValue)
 }
 
 func knowledgeValidationErrorApplies(

@@ -87,6 +87,41 @@ func TestConvertContainerOutputReconstructsV1NestedValues(t *testing.T) {
 	}
 }
 
+func TestConvertContainerOutputReconstructsDynamicJSON(t *testing.T) {
+	t.Parallel()
+
+	document := chcol.NewJSON()
+	document.SetValueAtPath("child", chcol.NewDynamic("value"))
+	document.SetValueAtPath("nested.count", chcol.NewDynamic(int64(7)))
+	value := chcol.NewDynamicWithType(document, "JSON")
+	names, types := containerOutputMetadata(
+		containerOutputMetadataField{"child", eventfields.StoredValueTypeString},
+		containerOutputMetadataField{"nested.count", eventfields.StoredValueTypeSint64},
+		containerOutputMetadataField{"nothing", eventfields.StoredValueTypeNull},
+	)
+
+	got, err := convertContainerOutput(
+		value,
+		names,
+		types,
+		eventfields.CurrentFieldMetadataVersion,
+	)
+	if err != nil {
+		t.Fatalf("convertContainerOutput(Dynamic(JSON)): %v", err)
+	}
+	root := containerOutputObject(t, got)
+	if child, ok := root["child"].String(); !ok || child != "value" {
+		t.Fatalf("Dynamic(JSON) child = %#v", root["child"])
+	}
+	nested := containerOutputObject(t, root["nested"])
+	if count, ok := nested["count"].Signed(); !ok || count != 7 {
+		t.Fatalf("Dynamic(JSON) nested count = %#v", nested["count"])
+	}
+	if !root["nothing"].IsNull() {
+		t.Fatalf("Dynamic(JSON) explicit null = %#v", root["nothing"])
+	}
+}
+
 func TestConvertContainerOutputSupportsLegacyV0Names(t *testing.T) {
 	t.Parallel()
 
@@ -110,6 +145,8 @@ func TestConvertContainerOutputSupportsLegacyV0Names(t *testing.T) {
 
 func TestConvertContainerOutputIgnoresSharedNullOnlyPaths(t *testing.T) {
 	t.Parallel()
+	nullJSON := chcol.NewJSON()
+	nullJSON.SetValueAtPath("child", chcol.NewDynamic(nil))
 
 	got, err := convertContainerOutput(
 		map[string]any{
@@ -121,6 +158,7 @@ func TestConvertContainerOutputIgnoresSharedNullOnlyPaths(t *testing.T) {
 				},
 				"Map(String, Dynamic)",
 			),
+			"json_phantom": chcol.NewDynamicWithType(nullJSON, "JSON"),
 		},
 		[]string{"kept"},
 		[]uint8{uint8(eventfields.StoredValueTypeString)},

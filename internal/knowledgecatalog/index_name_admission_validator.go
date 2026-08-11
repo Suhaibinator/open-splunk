@@ -139,6 +139,7 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 	if err != nil {
 		return err
 	}
+	// #nosec G115 -- readPublicationIndexAdmissionIndexFacts validates a positive revision.
 	if uint64(indexFacts.revision) != request.IndexCatalogRevision ||
 		indexFacts.physicalCount != request.IndexCatalogPhysicalCount {
 		return fmt.Errorf(
@@ -289,6 +290,13 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 			return err
 		}
 		facts := &tenantFacts[index]
+		// Counts are bounded by the app/index inventory limits before this batch is assembled.
+		// #nosec G115 -- both lengths fit in uint16 by those validated limits.
+		expectedActiveAppCount := uint16(len(facts.apps.active))
+		// #nosec G115 -- the physical-index inventory is bounded below uint16 capacity.
+		expectedPotentiallySearchableIndexCount := uint16(len(indexFacts.names))
+		// #nosec G115 -- winner hydration is bounded by MaximumResolutionCandidates.
+		expectedCurrentActiveCount := uint32(len(facts.winners))
 		authority, err := validatePublicationIndexNameAdmissionWithBudget(
 			ctx,
 			publicationIndexNameAdmissionInventory{
@@ -300,11 +308,11 @@ func (validator *IndexNameAdmissionValidator) ValidateIndexNameAdmissionInTransa
 				expectedCanonicalSelectorBytes:          facts.aggregate.canonicalSelectorBytes,
 				expectedSelectorWork:                    facts.selectorWork,
 				expectedDependencyCount:                 facts.aggregate.dependencies,
-				expectedActiveAppCount:                  uint16(len(facts.apps.active)),
+				expectedActiveAppCount:                  expectedActiveAppCount,
 				activeAppIDs:                            facts.apps.active,
-				expectedCurrentActiveCount:              uint32(len(facts.winners)),
+				expectedCurrentActiveCount:              expectedCurrentActiveCount,
 				currentActive:                           facts.winners,
-				expectedPotentiallySearchableIndexCount: uint16(len(indexFacts.names)),
+				expectedPotentiallySearchableIndexCount: expectedPotentiallySearchableIndexCount,
 				potentiallySearchableIndexNames:         indexFacts.names,
 				newlyPotentiallySearchableIndexName:     request.CanonicalName,
 			},
@@ -365,7 +373,7 @@ func (validator *IndexNameAdmissionValidator) validateInvocation(
 		)
 	}
 	if tx == nil || tx.Error != nil || tx.Statement == nil || tx.Config == nil ||
-		tx.Config.ConnPool != validator.database.SQLDB() {
+		tx.ConnPool != validator.database.SQLDB() {
 		return nil, nil, fmt.Errorf(
 			"%w: index-name admission requires this control database transaction",
 			control.ErrInvalidArgument,
@@ -589,7 +597,7 @@ func readPublicationIndexAdmissionApps(
 	}
 	if len(revisions) != 1 || revisions[0].TenantID != tenantID ||
 		revisions[0].TenantIDBytes != int64(len(tenantID)) ||
-		revisions[0].Revision < 1 || revisions[0].Revision > math.MaxInt64 {
+		revisions[0].Revision < 1 {
 		return publicationIndexAdmissionAppFacts{}, fmt.Errorf(
 			"%w: index-name admission app-catalog revision authority is invalid",
 			ErrCorrupt,

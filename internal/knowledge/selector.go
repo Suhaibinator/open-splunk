@@ -443,7 +443,7 @@ func (program *globProgram) match(ctx context.Context, value string, maximumTran
 		}
 	}
 	for _, character := range value {
-		any := false
+		matchedAny := false
 		for pattern, tokens := range program.patterns {
 			for tokenIndex := 0; tokenIndex <= len(tokens); tokenIndex++ {
 				if !counter.step() {
@@ -457,7 +457,7 @@ func (program *globProgram) match(ctx context.Context, value string, maximumTran
 				switch token.kind {
 				case globLiteral:
 					if token.literal == character && program.addClosure(next, nextEpoch, pattern, tokenIndex+1, &counter) {
-						any = true
+						matchedAny = true
 					} else if token.literal == character {
 						return false, counter.used, counter.err
 					}
@@ -465,16 +465,16 @@ func (program *globProgram) match(ctx context.Context, value string, maximumTran
 					if !program.addClosure(next, nextEpoch, pattern, tokenIndex+1, &counter) {
 						return false, counter.used, counter.err
 					}
-					any = true
+					matchedAny = true
 				case globMany:
 					if !program.addClosure(next, nextEpoch, pattern, tokenIndex, &counter) {
 						return false, counter.used, counter.err
 					}
-					any = true
+					matchedAny = true
 				}
 			}
 		}
-		if !any {
+		if !matchedAny {
 			return false, counter.used, nil
 		}
 		active, next = next, active
@@ -559,11 +559,15 @@ func marshalCanonicalSelector(dimensions [MaximumSelectorDimensions]compiledDime
 	for index, dimension := range dimensions {
 		canonical = append(canonical, byte(index+1))
 		var count [2]byte
-		binary.BigEndian.PutUint16(count[:], uint16(len(dimension.patterns)))
+		// A compiled dimension is bounded by MaximumSelectorPatternsPerDimension.
+		patternCount := uint16(len(dimension.patterns)) // #nosec G115 -- compile-time bound is far below MaxUint16.
+		binary.BigEndian.PutUint16(count[:], patternCount)
 		canonical = append(canonical, count[:]...)
 		for _, pattern := range dimension.patterns {
 			var size [4]byte
-			binary.BigEndian.PutUint32(size[:], uint32(len(pattern)))
+			// A normalized pattern is bounded by MaximumSelectorPatternBytes.
+			patternSize := uint32(len(pattern)) // #nosec G115 -- compile-time bound is far below MaxUint32.
+			binary.BigEndian.PutUint32(size[:], patternSize)
 			canonical = append(canonical, size[:]...)
 			canonical = append(canonical, pattern...)
 		}

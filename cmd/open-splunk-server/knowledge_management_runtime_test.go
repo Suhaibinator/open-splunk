@@ -18,6 +18,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/server"
@@ -204,6 +205,7 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 	runtime, database := newRuntimeKnowledgeTestRuntime(t)
 	defer func() { _ = database.Close() }()
 	apps := &runtimeAppCatalog{catalog: &stubControlAppCatalog{}}
+	preview := newRuntimeKnowledgePreviewForTest(t, runtime)
 	var typedNilAppBackend *control.AppCatalog
 	config := server.Config{Bootstrap: server.BootstrapConfig{
 		Features: []opensplunkv1.ServerFeature{
@@ -211,13 +213,14 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 		},
 		SelectedAppID: "unchanged-app",
 	}}
-	if err := configureRuntimeKnowledgeManagement(&config, runtime, apps); err != nil {
+	if err := configureRuntimeKnowledgeManagement(&config, runtime, apps, preview); err != nil {
 		t.Fatal(err)
 	}
 	if config.KnowledgeCatalog != runtime.catalog ||
 		config.KnowledgeWriter != runtime.writer ||
 		config.KnowledgeApps != apps ||
-		config.KnowledgeAttempts != runtime.attempts {
+		config.KnowledgeAttempts != runtime.attempts ||
+		config.KnowledgePreview != preview {
 		t.Fatalf("configured knowledge dependencies = %#v", config)
 	}
 	if !slices.Equal(config.Bootstrap.Features, []opensplunkv1.ServerFeature{
@@ -230,15 +233,17 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 		name    string
 		runtime runtimeKnowledgeManagement
 		apps    *runtimeAppCatalog
+		preview *knowledgepreview.Service
 	}{
-		{name: "catalog", runtime: runtimeKnowledgeManagement{resolver: runtime.resolver, writer: runtime.writer, attempts: runtime.attempts}, apps: apps},
-		{name: "resolver", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, writer: runtime.writer, attempts: runtime.attempts}, apps: apps},
-		{name: "writer", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, attempts: runtime.attempts}, apps: apps},
-		{name: "unready writer", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, writer: &knowledgecatalog.Writer{}, attempts: runtime.attempts}, apps: apps},
-		{name: "attempts", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, writer: runtime.writer}, apps: apps},
-		{name: "apps", runtime: runtime, apps: nil},
-		{name: "app backend", runtime: runtime, apps: &runtimeAppCatalog{}},
-		{name: "typed nil app backend", runtime: runtime, apps: &runtimeAppCatalog{catalog: typedNilAppBackend}},
+		{name: "catalog", runtime: runtimeKnowledgeManagement{resolver: runtime.resolver, writer: runtime.writer, attempts: runtime.attempts}, apps: apps, preview: preview},
+		{name: "resolver", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, writer: runtime.writer, attempts: runtime.attempts}, apps: apps, preview: preview},
+		{name: "writer", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, attempts: runtime.attempts}, apps: apps, preview: preview},
+		{name: "unready writer", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, writer: &knowledgecatalog.Writer{}, attempts: runtime.attempts}, apps: apps, preview: preview},
+		{name: "attempts", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, writer: runtime.writer}, apps: apps, preview: preview},
+		{name: "apps", runtime: runtime, preview: preview},
+		{name: "app backend", runtime: runtime, apps: &runtimeAppCatalog{}, preview: preview},
+		{name: "typed nil app backend", runtime: runtime, apps: &runtimeAppCatalog{catalog: typedNilAppBackend}, preview: preview},
+		{name: "preview", runtime: runtime, apps: apps},
 	}
 	for _, test := range missing {
 		t.Run("missing "+test.name, func(t *testing.T) {
@@ -247,14 +252,15 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 				&candidate,
 				test.runtime,
 				test.apps,
+				test.preview,
 			); err == nil || candidate.KnowledgeCatalog != nil ||
 				candidate.KnowledgeWriter != nil || candidate.KnowledgeApps != nil ||
-				candidate.KnowledgeAttempts != nil {
+				candidate.KnowledgeAttempts != nil || candidate.KnowledgePreview != nil {
 				t.Fatalf("partial configuration = (%#v, %v)", candidate, err)
 			}
 		})
 	}
-	if err := configureRuntimeKnowledgeManagement(nil, runtime, apps); err == nil {
+	if err := configureRuntimeKnowledgeManagement(nil, runtime, apps, preview); err == nil {
 		t.Fatal("nil server config was accepted")
 	}
 
@@ -265,22 +271,24 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 		&preconfigured,
 		runtime,
 		apps,
+		preview,
 	); err == nil || preconfigured.KnowledgeCatalog != before ||
 		preconfigured.KnowledgeWriter != nil || preconfigured.KnowledgeApps != nil ||
-		preconfigured.KnowledgeAttempts != nil {
+		preconfigured.KnowledgeAttempts != nil || preconfigured.KnowledgePreview != nil {
 		t.Fatalf("typed-nil preconfiguration was overwritten = (%#v, %v)", preconfigured, err)
 	}
 }
 
-func TestRuntimeKnowledgeCompositionLeavesSearchAndCapabilityGatesOff(
+func TestRuntimeKnowledgeCompositionDoesNotAdvertiseWithoutSearchAdmission(
 	t *testing.T,
 ) {
 	runtime, database := newRuntimeKnowledgeTestRuntime(t)
 	defer func() { _ = database.Close() }()
 	apps := &runtimeAppCatalog{catalog: &stubControlAppCatalog{}}
+	preview := newRuntimeKnowledgePreviewForTest(t, runtime)
 	config := runtimeServerConfig()
 	originalSearchJobs := config.SearchJobs
-	if err := configureRuntimeKnowledgeManagement(&config, runtime, apps); err != nil {
+	if err := configureRuntimeKnowledgeManagement(&config, runtime, apps, preview); err != nil {
 		t.Fatal(err)
 	}
 	if config.SearchJobs != originalSearchJobs {
@@ -316,99 +324,6 @@ func TestRuntimeKnowledgeCompositionLeavesSearchAndCapabilityGatesOff(
 		opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
 	) {
 		t.Fatalf("management-only runtime advertised knowledge execution: %v", decoded.GetFeatures())
-	}
-}
-
-func testRuntimeKnowledgeResolverFailsClosedForWriterPublishedActiveObject(
-	t *testing.T,
-) {
-	runtime, database := newRuntimeKnowledgeTestRuntime(t)
-	defer func() { _ = database.Close() }()
-	createRuntimeKnowledgeTestApp(t, database)
-	createRuntimeKnowledgeTestIndex(t, database)
-
-	actorContext, err := audit.WithActor(t.Context(), audit.Actor{
-		Kind: audit.ActorKindBrowser,
-		ID:   "runtime-knowledge-admission-administrator",
-		Role: audit.ActorRoleAdministrator,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	activeRequest := runtimeKnowledgeTestCreateRequest(
-		"active-alias",
-		"runtime-knowledge-active-create-0001",
-	)
-	activeRequest.InitialState = opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE
-	activeRequest.Definition.Selector = &opensplunkv1.KnowledgeSelector{
-		IndexPatterns: []*opensplunkv1.KnowledgeSelectorPattern{{Value: "main"}},
-	}
-	published, err := runtime.writer.Create(
-		actorContext,
-		knowledgecatalog.WriteScope{
-			TenantID:       runtimeKnowledgeTestTenant,
-			OwnerID:        runtimeKnowledgeTestOwner,
-			WritableAppIDs: []string{runtimeKnowledgeTestApp},
-		},
-		activeRequest,
-	)
-	if err != nil {
-		t.Fatalf("publish ACTIVE knowledge object: %v", err)
-	}
-	if published.GetKnowledgeObject().GetState() !=
-		opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_ACTIVE {
-		t.Fatalf("published knowledge object = %v", published.GetKnowledgeObject())
-	}
-
-	resolution, err := runtime.resolver.Resolve(
-		t.Context(),
-		knowledgecatalog.ResolutionScope{
-			TenantID:                   runtimeKnowledgeTestTenant,
-			PrincipalID:                runtimeKnowledgeTestOwner,
-			AppID:                      runtimeKnowledgeTestApp,
-			EffectiveAuthorizedIndexes: []string{"main"},
-		},
-	)
-	if err != nil {
-		t.Fatalf("resolve Writer-published ACTIVE knowledge: %v", err)
-	}
-	if summary := resolution.Summary(); summary.ExecutableObjects != 1 ||
-		resolution.Prelude().ObjectCount() != 1 {
-		t.Fatalf(
-			"resolved ACTIVE authority = (%#v, objects=%d)",
-			summary,
-			resolution.Prelude().ObjectCount(),
-		)
-	}
-
-	counters := &runtimeKnowledgeAdmissionCounters{}
-	manager := newRuntimeKnowledgeAdmissionManager(t, runtime.resolver, counters)
-	defer func() {
-		if err := manager.Close(); err != nil {
-			t.Errorf("close knowledge admission manager: %v", err)
-		}
-	}()
-	if !manager.KnowledgeAdmissionEnabled() {
-		t.Fatal("concrete runtime resolver did not enable test-only knowledge admission")
-	}
-	job, err := manager.Create(t.Context(), runtimeKnowledgeSearchRequest(t))
-	if !errors.Is(err, searchjobs.ErrKnowledgeUnavailable) ||
-		err.Error() != searchjobs.ErrKnowledgeUnavailable.Error() {
-		t.Fatalf("Create(nonempty ACTIVE authority) = (%#v, %v)", job, err)
-	}
-	if counters.snapshots.Load() != 1 || counters.ids.Load() != 0 ||
-		counters.journalAdmissions.Load() != 0 ||
-		counters.journalFinalizations.Load() != 0 ||
-		counters.executions.Load() != 0 || len(manager.List()) != 0 {
-		t.Fatalf(
-			"failed nonempty admission side effects: snapshots=%d ids=%d journal=(%d,%d) executions=%d jobs=%d",
-			counters.snapshots.Load(),
-			counters.ids.Load(),
-			counters.journalAdmissions.Load(),
-			counters.journalFinalizations.Load(),
-			counters.executions.Load(),
-			len(manager.List()),
-		)
 	}
 }
 
@@ -688,9 +603,37 @@ func newRuntimeKnowledgeAdmissionManager(
 	t.Helper()
 	manager, err := searchjobs.New(runtimeKnowledgeAdmissionManagerConfig(resolver, counters))
 	if err != nil {
-		t.Fatalf("create test-only knowledge admission manager: %v", err)
+		t.Fatalf("create knowledge admission manager: %v", err)
 	}
 	return manager
+}
+
+func newRuntimeKnowledgePreviewForTest(
+	t *testing.T,
+	runtime runtimeKnowledgeManagement,
+) *knowledgepreview.Service {
+	t.Helper()
+	counters := &runtimeKnowledgeAdmissionCounters{}
+	manager := newRuntimeKnowledgeAdmissionManager(t, runtime.resolver, counters)
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close Preview search manager: %v", err)
+		}
+	})
+	executor := runtimeKnowledgeAdmissionExecutor{counters: counters}
+	preview, err := knowledgepreview.NewService(knowledgepreview.Config{
+		Searches: manager,
+		Writer:   runtime.writer,
+		Compiler: knowledgepreview.ProductionCompilerAdapter{Compiler: clickhouse.Compiler{
+			Database: "open_splunk",
+			Table:    "events",
+		}},
+		Executor: executor,
+	})
+	if err != nil {
+		t.Fatalf("create knowledge Preview service: %v", err)
+	}
+	return preview
 }
 
 func runtimeKnowledgeAdmissionManagerConfig(

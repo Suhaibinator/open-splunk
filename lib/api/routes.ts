@@ -18,6 +18,77 @@ export const MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES = 8 << 20;
 export const MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES = 128 << 10;
 export const MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES = 8 << 20;
 
+function readPreviewVarint(
+  bytes: Uint8Array,
+  start: number,
+): { readonly value: bigint; readonly next: number } {
+  let value = 0n;
+  let shift = 0n;
+  for (let index = start; index < bytes.byteLength && index < start + 10; index += 1) {
+    const octet = bytes[index] ?? 0;
+    value |= BigInt(octet & 0x7f) << shift;
+    if ((octet & 0x80) === 0) return { value, next: index + 1 };
+    shift += 7n;
+  }
+  throw new TypeError("Knowledge Preview response contains an invalid varint.");
+}
+
+function validatePreviewResponseEnvelopeWire(bytes: Uint8Array): void {
+  let position = 0;
+  let previousField = 0;
+  const singular = new Set<number>();
+  while (position < bytes.byteLength) {
+    const tag = readPreviewVarint(bytes, position);
+    position = tag.next;
+    const field = Number(tag.value >> 3n);
+    const wireType = Number(tag.value & 7n);
+    const lengthDelimited = field >= 1 && field <= 5;
+    const varint = field === 6 || field === 7;
+    if (
+      field === 0
+      || field < previousField
+      || (!lengthDelimited && !varint)
+      || (lengthDelimited && wireType !== 2)
+      || (varint && wireType !== 0)
+      || (field !== 4 && field !== 5 && singular.has(field))
+    ) {
+      throw new TypeError("Knowledge Preview response envelope is malformed.");
+    }
+    previousField = field;
+    if (field !== 4 && field !== 5) singular.add(field);
+    if (lengthDelimited) {
+      const length = readPreviewVarint(bytes, position);
+      position = length.next;
+      if (length.value > BigInt(bytes.byteLength - position)) {
+        throw new TypeError("Knowledge Preview response is truncated.");
+      }
+      position += Number(length.value);
+    } else {
+      position = readPreviewVarint(bytes, position).next;
+    }
+  }
+}
+
+/**
+ * Preview responses are server-sealed deterministic protobuf. Validate the
+ * complete top-level frame before invoking the generated decoder so unknown,
+ * duplicate, wrong-wire, truncated, or out-of-order envelope authority fails
+ * closed without round-tripping Timestamp precision through JavaScript Date.
+ */
+const strictPreviewKnowledgeObjectResponse = {
+  encode: KnowledgeApi.PreviewKnowledgeObjectResponse.encode,
+  decode(
+    input: Parameters<typeof KnowledgeApi.PreviewKnowledgeObjectResponse.decode>[0],
+    length?: number,
+  ): ReturnType<typeof KnowledgeApi.PreviewKnowledgeObjectResponse.decode> {
+    if (!(input instanceof Uint8Array) || length !== undefined) {
+      throw new TypeError("Knowledge Preview requires one complete response frame.");
+    }
+    validatePreviewResponseEnvelopeWire(input);
+    return KnowledgeApi.PreviewKnowledgeObjectResponse.decode(input);
+  },
+};
+
 /** Derives a generated request type from a route without duplicating contracts. */
 export type RouteRequest<TRoute> = TRoute extends ProtobufRoute<infer TRequest, unknown> ? TRequest : never;
 
@@ -142,6 +213,12 @@ export const knowledgeRoutes = {
     "/api/v1/knowledge/objects/validate",
     KnowledgeApi.ValidateKnowledgeObjectRequest,
     KnowledgeApi.ValidateKnowledgeObjectResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  preview: defineProtobufRoute(
+    "/api/v1/knowledge/objects/preview",
+    KnowledgeApi.PreviewKnowledgeObjectRequest,
+    strictPreviewKnowledgeObjectResponse,
     { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
   ),
   update: defineProtobufRoute(

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 
@@ -160,6 +159,12 @@ func (store *Store) readPublicationActiveTransitionInventory(
 	if err != nil {
 		return publicationActiveTransitionInventoryRead{}, err
 	}
+	// #nosec G115 -- the app inventory is bounded by maximumReadableApps.
+	expectedActiveAppCount := uint16(len(activeAppIDs))
+	// #nosec G115 -- the index inventory is bounded by maximumPublicationIndexAtoms.
+	expectedPotentiallySearchableIndexCount := uint16(len(indexNames))
+	// #nosec G115 -- hydrated winners are bounded by MaximumResolutionCandidates.
+	expectedCurrentActiveCount := uint32(len(winners))
 
 	inventory := publicationActiveTransitionInventory{
 		tenantID:                                strings.Clone(tenantID),
@@ -170,13 +175,13 @@ func (store *Store) readPublicationActiveTransitionInventory(
 		expectedCanonicalSelectorBytes:          aggregate.canonicalSelectorBytes,
 		expectedSelectorWork:                    selectorWork,
 		expectedDependencyCount:                 aggregate.dependencies,
-		expectedActiveAppCount:                  uint16(len(activeAppIDs)),
+		expectedActiveAppCount:                  expectedActiveAppCount,
 		activeAppIDs:                            activeAppIDs,
-		expectedCurrentActiveCount:              uint32(len(winners)),
+		expectedCurrentActiveCount:              expectedCurrentActiveCount,
 		currentActive:                           winners,
 		candidateBefore:                         before,
 		candidateAfter:                          after,
-		expectedPotentiallySearchableIndexCount: uint16(len(indexNames)),
+		expectedPotentiallySearchableIndexCount: expectedPotentiallySearchableIndexCount,
 		potentiallySearchableIndexNames:         indexNames,
 	}
 	return publicationActiveTransitionInventoryRead{
@@ -383,12 +388,24 @@ func readPublicationTransitionProjectionScalars(
 				ErrCorrupt,
 			)
 		}
-		if !addPublicationResource(&aggregate.definitionBytes, uint64(record.DefinitionBytes), maximumPublicationTransitionDefinitionBytes) ||
-			!addPublicationResource(&aggregate.projectionBytes, uint64(record.ProjectionBytes), maximumPublicationTransitionProjectionBytes) ||
-			!addPublicationResource(&aggregate.selectorPatterns, uint64(selectorPatterns), maximumPublicationTransitionSelectorPatterns) ||
-			!addPublicationResource(&aggregate.selectorValueBytes, uint64(record.SelectorValueBytes), maximumPublicationTransitionSelectorBytes) ||
-			!addPublicationResource(&aggregate.canonicalSelectorBytes, uint64(record.CanonicalSelectorBytes), maximumPublicationTransitionSelectorBytes) ||
-			!addPublicationResource(&aggregate.dependencies, uint64(record.DependencyCount), maximumPublicationTransitionDependencies) {
+		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
+		definitionBytes := uint64(record.DefinitionBytes)
+		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
+		projectionBytes := uint64(record.ProjectionBytes)
+		// #nosec G115 -- selector pattern counts above are nonnegative and bounded.
+		selectorPatternCount := uint64(selectorPatterns)
+		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
+		selectorValueBytes := uint64(record.SelectorValueBytes)
+		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
+		canonicalSelectorBytes := uint64(record.CanonicalSelectorBytes)
+		// #nosec G115 -- the scalar preflight above validates all values as nonnegative and bounded.
+		dependencyCount := uint64(record.DependencyCount)
+		if !addPublicationResource(&aggregate.definitionBytes, definitionBytes, maximumPublicationTransitionDefinitionBytes) ||
+			!addPublicationResource(&aggregate.projectionBytes, projectionBytes, maximumPublicationTransitionProjectionBytes) ||
+			!addPublicationResource(&aggregate.selectorPatterns, selectorPatternCount, maximumPublicationTransitionSelectorPatterns) ||
+			!addPublicationResource(&aggregate.selectorValueBytes, selectorValueBytes, maximumPublicationTransitionSelectorBytes) ||
+			!addPublicationResource(&aggregate.canonicalSelectorBytes, canonicalSelectorBytes, maximumPublicationTransitionSelectorBytes) ||
+			!addPublicationResource(&aggregate.dependencies, dependencyCount, maximumPublicationTransitionDependencies) {
 			return nil, publicationTransitionAggregateScalars{}, fmt.Errorf(
 				"%w: publication transition aggregate scalar preflight exceeds its limit",
 				control.ErrCapacityExceeded,
@@ -396,12 +413,12 @@ func readPublicationTransitionProjectionScalars(
 		}
 		scalars[index] = publicationTransitionProjectionScalar{
 			knowledgeObjectID:      strings.Clone(record.KnowledgeObjectID),
-			definitionBytes:        uint64(record.DefinitionBytes),
-			projectionBytes:        uint64(record.ProjectionBytes),
-			selectorPatterns:       uint64(selectorPatterns),
-			selectorValueBytes:     uint64(record.SelectorValueBytes),
-			canonicalSelectorBytes: uint64(record.CanonicalSelectorBytes),
-			dependencyCount:        uint64(record.DependencyCount),
+			definitionBytes:        definitionBytes,
+			projectionBytes:        projectionBytes,
+			selectorPatterns:       selectorPatternCount,
+			selectorValueBytes:     selectorValueBytes,
+			canonicalSelectorBytes: canonicalSelectorBytes,
+			dependencyCount:        dependencyCount,
 		}
 	}
 	return scalars, aggregate, nil
@@ -416,13 +433,28 @@ func matchPublicationTransitionProjectionPreflight(
 	}
 	for index, projection := range projections {
 		scalar := expected[index]
+		selectorPatterns := projectionSelectorCount(projection)
+		if projection.DefinitionBytes < 0 || projection.ProjectionBytes < 0 || selectorPatterns < 0 ||
+			projection.SelectorValueBytes < 0 || projection.CanonicalSelectorBytes < 0 ||
+			projection.DependencyCount < 0 {
+			return fmt.Errorf("%w: publication transition projection payload changed after preflight", ErrCorrupt)
+		}
+		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
+		definitionBytes := uint64(projection.DefinitionBytes)
+		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
+		projectionBytes := uint64(projection.ProjectionBytes)
+		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
+		selectorPatternCount := uint64(selectorPatterns)
+		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
+		selectorValueBytes := uint64(projection.SelectorValueBytes)
+		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
+		canonicalSelectorBytes := uint64(projection.CanonicalSelectorBytes)
+		// #nosec G115 -- the nonnegative checks above make these conversions lossless.
+		dependencyCount := uint64(projection.DependencyCount)
 		if projection.KnowledgeObjectID != scalar.knowledgeObjectID ||
-			projection.DefinitionBytes < 0 || uint64(projection.DefinitionBytes) != scalar.definitionBytes ||
-			projection.ProjectionBytes < 0 || uint64(projection.ProjectionBytes) != scalar.projectionBytes ||
-			projectionSelectorCount(projection) < 0 || uint64(projectionSelectorCount(projection)) != scalar.selectorPatterns ||
-			projection.SelectorValueBytes < 0 || uint64(projection.SelectorValueBytes) != scalar.selectorValueBytes ||
-			projection.CanonicalSelectorBytes < 0 || uint64(projection.CanonicalSelectorBytes) != scalar.canonicalSelectorBytes ||
-			projection.DependencyCount < 0 || uint64(projection.DependencyCount) != scalar.dependencyCount {
+			definitionBytes != scalar.definitionBytes || projectionBytes != scalar.projectionBytes ||
+			selectorPatternCount != scalar.selectorPatterns || selectorValueBytes != scalar.selectorValueBytes ||
+			canonicalSelectorBytes != scalar.canonicalSelectorBytes || dependencyCount != scalar.dependencyCount {
 			return fmt.Errorf("%w: publication transition projection payload changed after preflight", ErrCorrupt)
 		}
 	}
@@ -451,7 +483,7 @@ func readPublicationTransitionActiveApps(
 	}
 	if len(revisions) != 1 || revisions[0].TenantID != tenantID ||
 		revisions[0].TenantIDBytes != int64(len(tenantID)) ||
-		revisions[0].Revision < 1 || revisions[0].Revision > math.MaxInt64 {
+		revisions[0].Revision < 1 {
 		return nil, 0, fmt.Errorf(
 			"%w: publication transition app-catalog revision authority is missing or invalid",
 			ErrCorrupt,
@@ -536,7 +568,7 @@ func readPublicationTransitionPotentialIndexes(
 		return nil, 0, 0, err
 	}
 	if len(states) != 1 || states[0].SingletonID != 1 || states[0].Revision < 1 ||
-		states[0].Revision > math.MaxInt64 || states[0].PhysicalCount < 0 ||
+		states[0].PhysicalCount < 0 ||
 		states[0].PhysicalCount > maximumPublicationIndexAtoms {
 		return nil, 0, 0, fmt.Errorf("%w: publication transition index-catalog state is invalid", ErrCorrupt)
 	}
@@ -571,7 +603,7 @@ func readPublicationTransitionPotentialIndexes(
 		if record.IndexIDBytes != int64(len(record.IndexID)) ||
 			!validIdentity(record.IndexID, maximumObjectIDBytes) ||
 			record.NameBytes != int64(len(record.Name)) || normalizeErr != nil || canonical != record.Name ||
-			record.Version < 1 || record.Version > math.MaxInt64 ||
+			record.Version < 1 ||
 			record.StateBytes != int64(len(record.State)) ||
 			(record.State != string(control.IndexStateActive) &&
 				record.State != string(control.IndexStateArchived) &&
@@ -601,7 +633,9 @@ func readPublicationTransitionPotentialIndexes(
 			return nil, 0, 0, fmt.Errorf("%w: publication transition index tombstone marker is invalid", ErrCorrupt)
 		}
 	}
-	return names[:len(names):len(names)], states[0].Revision, uint16(states[0].PhysicalCount), nil
+	// #nosec G115 -- PhysicalCount was checked against maximumPublicationIndexAtoms above.
+	physicalCount := uint16(states[0].PhysicalCount)
+	return names[:len(names):len(names)], states[0].Revision, physicalCount, nil
 }
 
 func publicationTransitionPhysicalIndexQuery(tx *gorm.DB) *gorm.DB {

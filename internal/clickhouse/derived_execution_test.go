@@ -42,6 +42,9 @@ func TestDerivedExecutionSealsEveryPublicContractField(t *testing.T) {
 		!summary.HasValidExecutionSeal() || !suggestions.HasValidExecutionSeal() {
 		t.Fatal("a compiler-produced derived execution is unsigned")
 	}
+	if count, ok := catalog.KnowledgeGeneratedFields(); !ok || count != 0 {
+		t.Fatalf("legacy catalog generated-field evidence = (%d, %t), want (0, true)", count, ok)
+	}
 
 	assertTimelineMutationRejected := func(name string, mutate func(*CompiledTimeline)) {
 		t.Helper()
@@ -90,6 +93,17 @@ func TestDerivedExecutionSealsEveryPublicContractField(t *testing.T) {
 	assertCatalogMutationRejected("MaximumFields", func(candidate *CompiledFieldCatalog) {
 		candidate.Spec.MaximumFields++
 	})
+	assertCatalogMutationRejected("knowledgeGeneratedFields", func(candidate *CompiledFieldCatalog) {
+		candidate.knowledgeGeneratedFields++
+	})
+	tamperedCatalogCount := catalog
+	tamperedCatalogCount.knowledgeGeneratedFields++
+	if _, ok := tamperedCatalogCount.KnowledgeGeneratedFields(); ok {
+		t.Fatal("field catalog accessor opened tampered generated-field evidence")
+	}
+	if _, ok := (CompiledFieldCatalog{}).KnowledgeGeneratedFields(); ok {
+		t.Fatal("field catalog accessor opened hand-built generated-field evidence")
+	}
 	assertCatalogMutationRejected("scope argument", func(candidate *CompiledFieldCatalog) {
 		candidate.Args = slices.Clone(candidate.Args)
 		candidate.Args[candidate.readScope.argumentPositions[0]] = "other-tenant"
@@ -332,14 +346,29 @@ func TestDerivedExecutionRejectsLoweredKnowledgeArgumentMutation(t *testing.T) {
 	}
 
 	derived := CompiledFieldCatalog{
-		SQL:       source.SQL,
-		Args:      source.Args,
-		Spec:      FieldCatalogSpec{MaximumFields: 17},
-		readScope: source.readScope,
+		SQL:                      source.SQL,
+		Args:                     source.Args,
+		Spec:                     FieldCatalogSpec{MaximumFields: 17},
+		knowledgeGeneratedFields: evidence.prelude.charges.GeneratedFields,
+		readScope:                source.readScope,
 	}
 	derived.executionAuthority, err = sealCompiledFieldCatalogExecution(source, derived)
 	if err != nil {
 		t.Fatalf("seal derived knowledge execution: %v", err)
+	}
+	if count, ok := derived.KnowledgeGeneratedFields(); !ok ||
+		count != evidence.prelude.charges.GeneratedFields {
+		t.Fatalf(
+			"knowledge catalog generated-field evidence = (%d, %t), want (%d, true)",
+			count,
+			ok,
+			evidence.prelude.charges.GeneratedFields,
+		)
+	}
+	forgedCount := derived
+	forgedCount.knowledgeGeneratedFields--
+	if _, sealErr := sealCompiledFieldCatalogExecution(source, forgedCount); sealErr == nil {
+		t.Fatal("source authority accepted forged generated-field evidence")
 	}
 	loweredPattern := program.RegexExtractions()[0].Pattern()
 	mutated := derived

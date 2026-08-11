@@ -249,7 +249,7 @@ func validateKnowledgeJSONExtractionAuthority(
 			err,
 		)
 	}
-	workUnits := uint32(splpath.EvaluationWorkUnits(steps))
+	workUnits := uint32(splpath.EvaluationWorkUnits(steps)) // #nosec G115 -- parsed paths are bounded by splpath.MaximumPathSteps.
 	if !slices.Equal(steps, authority.steps) || workUnits != authority.workUnits {
 		return nil, errors.New(
 			"compile ClickHouse knowledge JSON extraction: path authority is inconsistent",
@@ -268,8 +268,8 @@ func knowledgeJSONScalarCandidateSQL(
 	const (
 		inputVariable          = "__os_ko_json_input"
 		preflightVariable      = "__os_ko_json_needs_preflight"
-		tokenCountVariable     = "__os_ko_json_token_count"
-		tokensVariable         = "__os_ko_json_tokens"
+		lexemeCountVariable    = "__os_ko_json_token_count"
+		lexemesVariable        = "__os_ko_json_tokens"
 		numberFlagsVariable    = "__os_ko_json_number_flags"
 		nulledJSONVariable     = "__os_ko_json_nulled"
 		pathEligibleVariable   = "__os_ko_json_path_eligible"
@@ -299,7 +299,7 @@ func knowledgeJSONScalarCandidateSQL(
 	markerIndex := "toUInt64OrZero(substring(" + numberMarkerVariable + ", " +
 		strconv.Itoa(len(spathJSONNumberMarkerPrefix)+1) + ", length(" + numberMarkerVariable +
 		") - " + strconv.Itoa(len(spathJSONNumberMarkerPrefix)+len(spathJSONNumberMarkerSuffix)) + "))"
-	rawSQL := "if(" + numberSelectedVariable + " != 0, arrayElement(" + tokensVariable +
+	rawSQL := "if(" + numberSelectedVariable + " != 0, arrayElement(" + lexemesVariable +
 		", " + markerIndex + "), " + nullRawVariable + ")"
 	result = bindSQLExpressions([]string{rawVariable}, []string{rawSQL}, result)
 
@@ -314,8 +314,8 @@ func knowledgeJSONScalarCandidateSQL(
 
 	markedJSONSQL := "arrayStringConcat(arrayMap((token, flag, token_index) -> if(flag != 0, " +
 		"concat(char(34), '" + spathJSONNumberMarkerPrefix + "', toString(token_index), '" +
-		spathJSONNumberMarkerSuffix + "', char(34)), token), " + tokensVariable + ", " +
-		numberFlagsVariable + ", arrayEnumerate(" + tokensVariable + ")))"
+		spathJSONNumberMarkerSuffix + "', char(34)), token), " + lexemesVariable + ", " +
+		numberFlagsVariable + ", arrayEnumerate(" + lexemesVariable + ")))"
 	numberMarkerSQL := "if(" + pathEligibleVariable + " != 0 AND " + nullRawVariable +
 		" = 'null' AND has(" + numberFlagsVariable + ", toUInt8(1)), JSONExtractString(" +
 		markedJSONSQL + ", " + pathSQL + "), CAST('' AS String))"
@@ -341,14 +341,14 @@ func knowledgeJSONScalarCandidateSQL(
 
 	nulledJSONSQL := "if(has(" + numberFlagsVariable + ", toUInt8(1)), " +
 		"arrayStringConcat(arrayMap((token, flag) -> if(flag != 0, CAST('null' AS String), token), " +
-		tokensVariable + ", " + numberFlagsVariable + ")), " + inputVariable + ")"
+		lexemesVariable + ", " + numberFlagsVariable + ")), " + inputVariable + ")"
 	result = bindSQLExpressions(
 		[]string{nulledJSONVariable},
 		[]string{nulledJSONSQL},
 		result,
 	)
 
-	numberFlagsSQL := "arrayMap(token -> toUInt8(match(token, ?)), " + tokensVariable + ")"
+	numberFlagsSQL := "arrayMap(token -> toUInt8(match(token, ?)), " + lexemesVariable + ")"
 	result = bindSQLExpressions(
 		[]string{numberFlagsVariable},
 		[]string{numberFlagsSQL},
@@ -356,9 +356,9 @@ func knowledgeJSONScalarCandidateSQL(
 	)
 
 	tokensSQL := "extractAll(" + inputVariable + ", ?)"
-	result = bindSQLExpressions([]string{tokensVariable}, []string{tokensSQL}, result)
+	result = bindSQLExpressions([]string{lexemesVariable}, []string{tokensSQL}, result)
 
-	overTokenLimit := tokenCountVariable + " > " + strconv.Itoa(MaximumSpathJSONTokens)
+	overTokenLimit := lexemeCountVariable + " > " + strconv.Itoa(MaximumSpathJSONTokens)
 	result = "if(" + overTokenLimit + ", " +
 		knowledgeJSONThrowCandidateTuple(overTokenLimit, SpathJSONTokenLimitMarker) +
 		", " + result + ")"
@@ -367,7 +367,7 @@ func knowledgeJSONScalarCandidateSQL(
 	tokenCountSQL := "if(" + preflightVariable + " != 0, countMatches(" +
 		preflightInput + ", ?), toUInt64(0))"
 	result = bindSQLExpressions(
-		[]string{tokenCountVariable},
+		[]string{lexemeCountVariable},
 		[]string{tokenCountSQL},
 		result,
 	)

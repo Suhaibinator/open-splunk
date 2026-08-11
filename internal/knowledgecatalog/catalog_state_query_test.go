@@ -14,7 +14,7 @@ func TestReadCatalogStateUsesOneBoundedQuery(t *testing.T) {
 	database, _ := newCatalogTestStore(t)
 	head := ensureIntegrationRevisionZeroTenant(t, database)
 
-	state, readErr, queryCount := countedCatalogStateRead(t, database)
+	state, queryCount, readErr := countedCatalogStateRead(t, database)
 	if readErr != nil {
 		t.Fatalf("read valid catalog state: %v", readErr)
 	}
@@ -39,7 +39,7 @@ func TestReadCatalogStateUsesOneBoundedQuery(t *testing.T) {
 	}
 	closeIntegrationCorruptionConnection(t, connection)
 
-	state, readErr, queryCount = countedCatalogStateRead(t, database)
+	state, queryCount, readErr = countedCatalogStateRead(t, database)
 	if !errors.Is(readErr, ErrCorrupt) {
 		t.Fatalf("oversized catalog-state error = %v, want ErrCorrupt", readErr)
 	}
@@ -48,7 +48,7 @@ func TestReadCatalogStateUsesOneBoundedQuery(t *testing.T) {
 	}
 }
 
-func countedCatalogStateRead(t *testing.T, database *control.DB) (catalogState, error, int64) {
+func countedCatalogStateRead(t *testing.T, database *control.DB) (catalogState, int64, error) {
 	t.Helper()
 	var queryCount atomic.Int64
 	callbackName := "test:count-catalog-state-query"
@@ -62,5 +62,5 @@ func countedCatalogStateRead(t *testing.T, database *control.DB) (catalogState, 
 	if removeErr := database.GORMDB().Callback().Query().Remove(callbackName); removeErr != nil {
 		t.Fatalf("remove catalog-state query counter: %v", removeErr)
 	}
-	return state, err, queryCount.Load()
+	return state, queryCount.Load(), err
 }

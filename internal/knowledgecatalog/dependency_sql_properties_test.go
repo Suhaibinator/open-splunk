@@ -235,16 +235,16 @@ func dependencyPropertyVersions(
 	for index, state := range states {
 		mutation := "create"
 		if index > 0 {
-			switch {
-			case state == states[index-1]:
+			switch state {
+			case states[index-1]:
 				mutation = "update"
-			case state == StateActive:
+			case StateActive:
 				mutation = "enable"
-			case state == StateDisabled:
+			case StateDisabled:
 				mutation = "disable"
-			case state == StateDeleted:
+			case StateDeleted:
 				mutation = "delete"
-			case state == StateQuarantined:
+			case StateQuarantined:
 				mutation = "quarantine"
 			default:
 				mutation = "update"

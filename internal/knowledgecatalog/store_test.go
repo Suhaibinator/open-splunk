@@ -299,10 +299,11 @@ func TestBoundsCancellationAndCursorKeyOwnership(t *testing.T) {
 	if _, err := New(nil, Options{CursorKey: testCursorKey}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Errorf("New(nil database) error = %v, want ErrInvalidArgument", err)
 	}
-	if _, err := store.List(nil, testReadScope(), ListRequest{}); !errors.Is(err, control.ErrInvalidArgument) {
+	var nilContext context.Context
+	if _, err := store.List(nilContext, testReadScope(), ListRequest{}); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Errorf("List(nil context) error = %v", err)
 	}
-	if _, err := store.Get(nil, testReadScope(), "ko", nil); !errors.Is(err, control.ErrInvalidArgument) {
+	if _, err := store.Get(nilContext, testReadScope(), "ko", nil); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Errorf("Get(nil context) error = %v", err)
 	}
 	canceled, cancel := context.WithCancel(context.Background())
@@ -643,7 +644,7 @@ func insertSelectorRows(t *testing.T, tx *sql.Tx, objectID string, version int64
 			if pattern.IsLiteral() {
 				matchKind = "exact"
 			}
-			if _, err := tx.Exec(`INSERT INTO knowledge_object_list_selector_patterns (
+			if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_selector_patterns (
 				tenant_id, knowledge_object_id, object_version, dimension, ordinal, match_kind, value
 			) VALUES (?, ?, ?, ?, ?, ?, ?)`, testTenant, objectID, version, dimension.name, ordinal, matchKind, value); err != nil {
 				t.Fatalf("insert selector %s[%d]: %v", dimension.name, ordinal, err)
@@ -686,7 +687,8 @@ func names(objects []Object) []string {
 
 func dropTrigger(t *testing.T, database *control.DB, name string) {
 	t.Helper()
-	if _, err := database.SQLDB().Exec(`DROP TRIGGER ` + name); err != nil {
+	// #nosec G202 -- name is supplied only by fixed test fixture identifiers.
+	if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER `+name); err != nil {
 		t.Fatalf("drop trigger %s: %v", name, err)
 	}
 }
@@ -746,7 +748,7 @@ func overwriteCatalogRevisionAuthority(
 
 func mustExec(t *testing.T, database *control.DB, query string, args ...any) {
 	t.Helper()
-	if _, err := database.SQLDB().Exec(query, args...); err != nil {
+	if _, err := database.SQLDB().ExecContext(t.Context(), query, args...); err != nil {
 		t.Fatalf("execute fixture corruption: %v", err)
 	}
 }
@@ -754,7 +756,7 @@ func mustExec(t *testing.T, database *control.DB, query string, args ...any) {
 func assertTableExists(t *testing.T, database *control.DB, table string) {
 	t.Helper()
 	var count int
-	if err := database.SQLDB().QueryRow(`SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
 		t.Fatalf("inspect migrated table %s: %v", table, err)
 	}
 	if count != 1 {

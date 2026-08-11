@@ -412,7 +412,7 @@ func compileObjects(
 		return nil, nil, fmt.Errorf("%w: more than %d objects", ErrResourceLimit, MaximumObjects)
 	}
 	state := &programState{}
-	state.objectCount = uint32(len(input))
+	state.objectCount = uint32(len(input)) // #nosec G115 -- input is bounded by MaximumObjects above.
 	stageOrdinals := map[opensplunkv1.KnowledgeSearchStage]uint32{}
 	var previous *opensplunkv1.KnowledgeSnapshotObject
 	objects := make(map[string]*opensplunkv1.KnowledgeSnapshotObject, len(input))
@@ -580,13 +580,15 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 				}
 			}
 			origin.location = "field_extraction.regex.pattern"
-			state.regex = append(state.regex, RegexExtraction{origin: origin, selector: selector, overwrite: overwrite, input: body.FieldExtraction.GetInputField(), pattern: compiled.Pattern, captures: captures, workUnits: uint64(compiled.ProgramWorkUnits)})
+			// The regex compiler returns a positive value bounded by MaximumExtractionProgramWorkUnits.
+			programWorkUnits := uint64(compiled.ProgramWorkUnits) // #nosec G115 -- the compiler-enforced bound is far below MaxUint64.
+			state.regex = append(state.regex, RegexExtraction{origin: origin, selector: selector, overwrite: overwrite, input: body.FieldExtraction.GetInputField(), pattern: compiled.Pattern, captures: captures, workUnits: programWorkUnits})
 			state.operatorKinds = append(state.operatorKinds, OperatorConditionalExtract)
 			state.charges.GeneratedOperators++
-			state.charges.GeneratedFields += uint32(len(captures))
+			state.charges.GeneratedFields += uint32(len(captures)) // #nosec G115 -- captures are bounded by MaximumExtractionOutputs.
 			state.charges.RegexPrograms++
-			state.charges.RegexWorkUnits += uint64(compiled.ProgramWorkUnits)
-			state.charges.ExtractionOutputs += uint32(len(captures))
+			state.charges.RegexWorkUnits += programWorkUnits
+			state.charges.ExtractionOutputs += uint32(len(captures)) // #nosec G115 -- captures are bounded by MaximumExtractionOutputs.
 		case *opensplunkv1.FieldExtractionDefinition_Json:
 			steps, err := splpath.ParseJSON(extraction.Json.GetPath())
 			if err != nil {
@@ -596,7 +598,7 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 				return errors.New("JSON extraction is not executable")
 			}
 			origin.location = "field_extraction.json.path"
-			workUnits := uint32(splpath.EvaluationWorkUnits(steps))
+			workUnits := uint32(splpath.EvaluationWorkUnits(steps)) // #nosec G115 -- parsed JSON paths have a bounded evaluation cost.
 			state.json = append(state.json, JSONExtraction{
 				origin:         origin,
 				selector:       selector,
@@ -644,7 +646,7 @@ func appendObject(state *programState, normalized knowledgedefinition.Normalized
 					Code:      IssueCodeCalculatedBoolean,
 					Message:   "calculated expression cannot directly assign a Boolean function result",
 					Range: &ScalarRange{
-						EndByteOffset: uint32(len(body.CalculatedField.GetExpression())),
+						EndByteOffset: uint32(len(body.CalculatedField.GetExpression())), // #nosec G115 -- authored expressions are bounded far below MaxUint32.
 					},
 				},
 			)
@@ -795,12 +797,12 @@ func writeOrigin(buffer *bytes.Buffer, origin Origin) {
 	writeUint64(buffer, uint64(origin.stageOrdinal))
 	writeString(buffer, origin.objectID)
 	writeUint64(buffer, origin.version)
-	writeUint64(buffer, uint64(origin.objectType))
+	writeUint64(buffer, uint64(origin.objectType)) // #nosec G115 -- accepted origins contain validated nonnegative protobuf enums.
 	writeString(buffer, origin.name)
 	writeString(buffer, origin.appID)
 	writeString(buffer, origin.ownerID)
-	writeUint64(buffer, uint64(origin.sharingScope))
-	writeUint64(buffer, uint64(origin.stage))
+	writeUint64(buffer, uint64(origin.sharingScope)) // #nosec G115 -- accepted origins contain validated nonnegative protobuf enums.
+	writeUint64(buffer, uint64(origin.stage))        // #nosec G115 -- accepted origins contain validated nonnegative protobuf enums.
 	writeBytes(buffer, origin.definitionDigest[:])
 	writeString(buffer, origin.location)
 }
@@ -824,9 +826,9 @@ func writeSelector(buffer *bytes.Buffer, selector Selector) {
 func writeDependency(buffer *bytes.Buffer, dependency *opensplunkv1.KnowledgeObjectDependency) {
 	writeVersionReference(buffer, dependency.GetSource())
 	writeVersionReference(buffer, dependency.GetTarget().GetObject())
-	writeUint64(buffer, uint64(dependency.GetRole()))
-	writeUint64(buffer, uint64(dependency.GetSourceStage()))
-	writeUint64(buffer, uint64(dependency.GetTargetStage()))
+	writeUint64(buffer, uint64(dependency.GetRole()))        // #nosec G115 -- validated dependencies contain closed nonnegative enums.
+	writeUint64(buffer, uint64(dependency.GetSourceStage())) // #nosec G115 -- validated dependencies contain closed nonnegative enums.
+	writeUint64(buffer, uint64(dependency.GetTargetStage())) // #nosec G115 -- validated dependencies contain closed nonnegative enums.
 	writeUint64(buffer, uint64(dependency.GetTopologicalDepth()))
 	writeUint64(buffer, uint64(dependency.GetCanonicalOrdinal()))
 }

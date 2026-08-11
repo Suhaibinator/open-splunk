@@ -385,20 +385,20 @@ func insertOrphanVersion(t *testing.T, database *control.DB, objectID string, ve
 	if err != nil {
 		t.Fatalf("begin orphan version: %v", err)
 	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO knowledge_definition_blobs (
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
 	) VALUES (?, ?, ?, ?, ?)`, testTenant, normalized.Digest[:], normalized.Bytes, len(normalized.Bytes), timestamp); err != nil {
 		t.Fatalf("insert orphan body: %v", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO knowledge_object_versions (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_versions (
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, dependency_count, mutation_kind, created_at_unix_micro
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 0, 'update', ?)`,
 		testTenant, objectID, version, appID, ownerID, objectType, name, sharingScope, normalized.Digest[:], timestamp); err != nil {
 		t.Fatalf("insert orphan version: %v", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO knowledge_object_dependency_seals (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_dependency_seals (
 		tenant_id, knowledge_object_id, object_version, dependency_count
 	) VALUES (?, ?, ?, 0)`, testTenant, objectID, version); err != nil {
 		t.Fatalf("seal orphan version: %v", err)

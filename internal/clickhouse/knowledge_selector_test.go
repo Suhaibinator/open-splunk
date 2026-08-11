@@ -39,7 +39,7 @@ func TestCompileKnowledgeSelectorDimensionsDistinguishesEmptyAndInvalid(t *testi
 func TestCompileKnowledgeSelectorDimensionsPinsLazyOrderChargesAndParameters(t *testing.T) {
 	dimensions := [knowledge.MaximumSelectorDimensions]knowledgeSelectorDimension{}
 	indexExact := []string{"audit", "main"}
-	dimensions[knowledge.DimensionIndex-knowledge.DimensionIndex] = knowledgeSelectorDimension{
+	dimensions[0] = knowledgeSelectorDimension{
 		constrained: true,
 		program: knowledge.DimensionRuntimeProgram{
 			ExactLiterals: indexExact,

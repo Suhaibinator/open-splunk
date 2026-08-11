@@ -194,6 +194,32 @@ func TestExecutorExecuteFieldCatalogReturnsMetadataUnavailableAtomically(t *test
 	}
 }
 
+func TestExecutorExecuteFieldCatalogPrefersMetadataUnavailableThroughOverflowSentinel(t *testing.T) {
+	t.Parallel()
+
+	const maximumFields = uint32(2)
+	profiles := [][]any{
+		fieldCatalogProfile("a", []uint8{2}, 1, 0, 0, 1),
+		fieldCatalogProfile("b", []uint8{2}, 1, 0, 0, 1),
+		fieldCatalogProfile("c", []uint8{2}, 1, 0, 0, 1),
+	}
+	rows := fieldCatalogFakeRows(1, profiles...)
+	rows.data[0][7] = uint8(1)
+	got, err := mustExecutor(t, &fakeQueryConnection{rows: rows}).ExecuteFieldCatalog(
+		context.Background(),
+		validCompiledFieldCatalog(maximumFields),
+	)
+	assertFieldCatalogError(t, got, err, ErrFieldMetadataUnavailable)
+	if !rows.closed || rows.nextCalls != len(profiles)+1 {
+		t.Fatalf(
+			"corrupt N+1 stream closed=%v nextCalls=%d, want complete atomic consumption of %d rows",
+			rows.closed,
+			rows.nextCalls,
+			len(profiles)+1,
+		)
+	}
+}
+
 func TestExecutorExecuteFieldCatalogHonorsContextAtEveryBoundary(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		connection := &fakeQueryConnection{rows: fieldCatalogFakeRows(0)}
@@ -352,7 +378,7 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 	for key, value := range base {
 		before[key] = value
 	}
-	got, err := settingsForFieldCatalog(base, 73)
+	got, err := settingsForFieldCatalog(base, 73, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +388,7 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 		got["max_bytes_to_read"] != maximumFieldCatalogBytesToRead ||
 		got["max_result_rows"] != uint64(75) ||
 		got["max_result_bytes"] != maximumFieldCatalogBytes ||
-		got["max_rows_to_group_by"] != uint64(74) ||
+		got["max_rows_to_group_by"] != uint64(75) ||
 		got["max_threads"] != maximumFieldCatalogThreads ||
 		got["use_query_cache"] != uint8(0) ||
 		got["readonly"] != uint8(2) {
@@ -370,6 +396,29 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 	}
 	if !reflect.DeepEqual(base, before) {
 		t.Fatalf("base settings mutated: got %#v, want %#v", base, before)
+	}
+	if MaximumFieldCatalogMemoryBytes != uint64(224<<20) {
+		t.Fatalf("maximum field catalog memory = %d, want %d", MaximumFieldCatalogMemoryBytes, uint64(224<<20))
+	}
+	for _, test := range []struct {
+		name                     string
+		knowledgeGeneratedFields uint32
+		wantMemory               uint64
+	}{
+		{name: "empty knowledge", knowledgeGeneratedFields: 0, wantMemory: maximumFieldCatalogMemoryBytes},
+		{name: "standard boundary", knowledgeGeneratedFields: 13, wantMemory: maximumFieldCatalogMemoryBytes},
+		{name: "elevated start", knowledgeGeneratedFields: 14, wantMemory: MaximumFieldCatalogMemoryBytes},
+		{name: "physical boundary", knowledgeGeneratedFields: clickhouse.MaximumClickHouseKnowledgeGeneratedFields, wantMemory: MaximumFieldCatalogMemoryBytes},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			settings, err := settingsForFieldCatalog(base, 73, test.knowledgeGeneratedFields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if settings["max_memory_usage"] != test.wantMemory {
+				t.Fatalf("max_memory_usage = %#v, want %d", settings["max_memory_usage"], test.wantMemory)
+			}
+		})
 	}
 	tightened := map[string]struct{}{
 		"max_execution_time": {}, "max_memory_usage": {}, "max_rows_to_read": {},
@@ -393,7 +442,7 @@ func TestSettingsForFieldCatalogClonesAndTightensEveryResourceCap(t *testing.T) 
 	base["max_result_bytes"] = uint64(1024)
 	base["max_rows_to_group_by"] = uint64(5)
 	base["max_threads"] = uint64(1)
-	strict, err := settingsForFieldCatalog(base, 73)
+	strict, err := settingsForFieldCatalog(base, 73, clickhouse.MaximumClickHouseKnowledgeGeneratedFields)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,21 +471,21 @@ func TestSettingsForFieldCatalogRejectsInvalidBaseSettings(t *testing.T) {
 		t.Run(name+" missing", func(t *testing.T) {
 			malformed := cloneFieldCatalogSettings(base)
 			delete(malformed, name)
-			if _, err := settingsForFieldCatalog(malformed, 1); err == nil {
+			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
 				t.Fatalf("missing %s unexpectedly accepted", name)
 			}
 		})
 		t.Run(name+" zero", func(t *testing.T) {
 			malformed := cloneFieldCatalogSettings(base)
 			malformed[name] = uint64(0)
-			if _, err := settingsForFieldCatalog(malformed, 1); err == nil {
+			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
 				t.Fatalf("zero %s unexpectedly accepted", name)
 			}
 		})
 		t.Run(name+" wrong type", func(t *testing.T) {
 			malformed := cloneFieldCatalogSettings(base)
 			malformed[name] = "1"
-			if _, err := settingsForFieldCatalog(malformed, 1); err == nil {
+			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
 				t.Fatalf("wrong type %s unexpectedly accepted", name)
 			}
 		})
@@ -445,7 +494,7 @@ func TestSettingsForFieldCatalogRejectsInvalidBaseSettings(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			malformed := cloneFieldCatalogSettings(base)
 			malformed[name] = "break"
-			if _, err := settingsForFieldCatalog(malformed, 1); err == nil {
+			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
 				t.Fatalf("unsafe %s unexpectedly accepted", name)
 			}
 		})
@@ -461,7 +510,7 @@ func TestSettingsForFieldCatalogRejectsInvalidBaseSettings(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			malformed := cloneFieldCatalogSettings(base)
 			malformed[test.name] = test.value
-			if _, err := settingsForFieldCatalog(malformed, 1); err == nil {
+			if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
 				t.Fatalf("unsafe %s unexpectedly accepted", test.name)
 			}
 		})
@@ -470,15 +519,22 @@ func TestSettingsForFieldCatalogRejectsInvalidBaseSettings(t *testing.T) {
 		if malformed != nil {
 			malformed["readonly"] = uint8(1)
 		}
-		if _, err := settingsForFieldCatalog(malformed, 1); err == nil {
+		if _, err := settingsForFieldCatalog(malformed, 1, 0); err == nil {
 			t.Fatalf("settingsForFieldCatalog(%#v) unexpectedly succeeded", malformed)
 		}
 	}
-	if _, err := settingsForFieldCatalog(base, 0); err == nil {
+	if _, err := settingsForFieldCatalog(base, 0, 0); err == nil {
 		t.Fatal("zero maximum fields unexpectedly accepted")
 	}
-	if _, err := settingsForFieldCatalog(base, clickhouse.MaximumFieldCatalogFields+1); err == nil {
+	if _, err := settingsForFieldCatalog(base, clickhouse.MaximumFieldCatalogFields+1, 0); err == nil {
 		t.Fatal("oversized maximum fields unexpectedly accepted")
+	}
+	if _, err := settingsForFieldCatalog(
+		base,
+		1,
+		clickhouse.MaximumClickHouseKnowledgeGeneratedFields+1,
+	); err == nil {
+		t.Fatal("oversized generated-field resource evidence unexpectedly accepted")
 	}
 }
 
@@ -493,13 +549,21 @@ func TestSettingsForFieldCatalogIsRaceSafeForConcurrentReaders(t *testing.T) {
 	for index := range workers {
 		go func() {
 			defer wait.Done()
-			got, err := settingsForFieldCatalog(base, uint32(index+1))
+			knowledgeGeneratedFields := uint32(index % 17)
+			got, err := settingsForFieldCatalog(base, uint32(index+1), knowledgeGeneratedFields)
 			if err != nil {
 				t.Errorf("settingsForFieldCatalog() error = %v", err)
 				return
 			}
-			if got["max_result_rows"] != uint64(index+3) || got["max_rows_to_group_by"] != uint64(index+2) {
+			wantMemory := maximumFieldCatalogMemoryBytes
+			if knowledgeGeneratedFields > maximumStandardFieldCatalogKnowledgeFields {
+				wantMemory = MaximumFieldCatalogMemoryBytes
+			}
+			if got["max_result_rows"] != uint64(index+3) || got["max_rows_to_group_by"] != uint64(index+3) {
 				t.Errorf("settingsForFieldCatalog(%d) = %#v", index+1, got)
+			}
+			if got["max_memory_usage"] != wantMemory {
+				t.Errorf("settingsForFieldCatalog(%d) memory = %#v, want %d", index+1, got["max_memory_usage"], wantMemory)
 			}
 		}()
 	}

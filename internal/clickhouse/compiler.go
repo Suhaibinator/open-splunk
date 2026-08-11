@@ -432,9 +432,10 @@ type CompiledQuery struct {
 	// contract. Keeping it private prevents callers from treating the guard as
 	// a tunable query option while allowing terminal analysis compilers to
 	// extend an already validated event relation without reparsing SQL.
-	relationalDepth      int
-	relationalDepthRange spl.Range
-	readScope            compiledReadScope
+	relationalDepth           int
+	relationalDepthRange      spl.Range
+	readScope                 compiledReadScope
+	validationDummyProjection []string
 	// sourceFanout records how many physical consumers the terminal lowering
 	// has for a chronology-validated source. It stays private because it is
 	// compiler resource evidence, not an executor transport contract.
@@ -676,7 +677,8 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 
 	aliasSequence := 0
 	remainingOperators := query.Operators[1+preparation.prefixLength:]
-	for operatorIndex, operator := range remainingOperators {
+	for operatorIndex := 0; operatorIndex < len(remainingOperators); operatorIndex++ {
+		operator := remainingOperators[operatorIndex]
 		if isNilPlanOperator(operator) {
 			return CompiledQuery{}, fmt.Errorf(
 				"compile ClickHouse query: operator %d is nil",
@@ -1099,6 +1101,35 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			}
 			state = nextState
 		case *plan.EventAggregate:
+			if operatorIndex+1 < len(remainingOperators) {
+				if adjacent, ok := remainingOperators[operatorIndex+1].(*plan.EventAggregate); ok &&
+					canFuseChronologicalEventAggregates(operator, adjacent, state) {
+					enriched, nextState, prefixArgs, barrier, compileErr :=
+						compileFusedChronologicalEventAggregates(
+							relation,
+							operator,
+							adjacent,
+							state,
+							aliasSequence,
+							aliasSequence+1,
+						)
+					if compileErr != nil {
+						return CompiledQuery{}, compileErr
+					}
+					relation = enriched
+					args = prependArguments(prefixArgs, args)
+					boundBarrier := barrier.bind(args)
+					args = nil
+					nextState.chronologicalBarriers = append(
+						nextState.chronologicalBarriers,
+						boundBarrier,
+					)
+					state = nextState
+					operatorIndex++
+					aliasSequence++
+					break
+				}
+			}
 			enriched, nextState, prefixArgs, barrier, compileErr := compileEventAggregate(
 				relation,
 				operator,
@@ -1124,6 +1155,35 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			}
 			state = nextState
 		case *plan.StreamAggregate:
+			if operatorIndex+1 < len(remainingOperators) {
+				if adjacent, ok := remainingOperators[operatorIndex+1].(*plan.StreamAggregate); ok &&
+					canFuseChronologicalStreamAggregates(operator, adjacent, state) {
+					enriched, nextState, prefixArgs, barrier, compileErr :=
+						compileFusedChronologicalStreamAggregates(
+							relation,
+							operator,
+							adjacent,
+							state,
+							aliasSequence,
+							aliasSequence+1,
+						)
+					if compileErr != nil {
+						return CompiledQuery{}, compileErr
+					}
+					relation = enriched
+					args = prependArguments(prefixArgs, args)
+					boundBarrier := barrier.bind(args)
+					args = nil
+					nextState.chronologicalBarriers = append(
+						nextState.chronologicalBarriers,
+						boundBarrier,
+					)
+					state = nextState
+					operatorIndex++
+					aliasSequence++
+					break
+				}
+			}
 			enriched, nextState, prefixArgs, barrier, compileErr := compileStreamAggregate(
 				relation,
 				operator,
@@ -1489,6 +1549,89 @@ func finalizeOrdinaryQuery(
 	), nil
 }
 
+func ordinaryChronologicalDummyValue(field fieldState) (string, bool) {
+	if field.alwaysNull {
+		switch field.kind {
+		case fieldKindString, fieldKindInvalid:
+			return "CAST(NULL AS Nullable(String))", true
+		case fieldKindNumber, fieldKindTime:
+			if field.numberType == "" {
+				return "", false
+			}
+			return "CAST(NULL AS Nullable(" + field.numberType + "))", true
+		case fieldKindBool:
+			return "CAST(NULL AS Nullable(Bool))", true
+		case fieldKindStringArray:
+			return "CAST(NULL AS Nullable(Array(String)))", true
+		case fieldKindDynamic:
+			return "CAST(NULL AS Dynamic)", true
+		default:
+			return "", false
+		}
+	}
+
+	switch field.kind {
+	case fieldKindDynamic:
+		return "CAST(NULL AS Dynamic)", true
+	case fieldKindString:
+		return "CAST('' AS String)", true
+	case fieldKindNumber, fieldKindTime:
+		if field.numberType == "" {
+			return "", false
+		}
+		return "CAST(0 AS " + field.numberType + ")", true
+	case fieldKindBool:
+		return "CAST(false AS Bool)", true
+	case fieldKindStringArray:
+		return "CAST([], 'Array(String)')", true
+	case fieldKindInvalid:
+		return "CAST(NULL AS Nullable(String))", true
+	default:
+		return "", false
+	}
+}
+
+// ordinaryChronologicalDummyProjection gives the invalid validation branch an
+// exact schema row without reading the complete final input a second time.
+// This optimization is deliberately limited to ordinary results, whose field
+// states and private container sidecars fully describe every physical column.
+// Analysis/chart wrappers retain the engine-inferred zero-row fallback.
+func ordinaryChronologicalDummyProjection(
+	state compileState,
+	outputFields []string,
+	sparseFields bool,
+	containerOutputs []ResultContainerOutput,
+) ([]string, bool) {
+	projection := make([]string, 0, len(outputFields)+1+len(containerOutputs)*3)
+	for _, name := range outputFields {
+		field, visible := state.visible[name]
+		if !visible {
+			return nil, false
+		}
+		value, supported := ordinaryChronologicalDummyValue(field)
+		if !supported {
+			return nil, false
+		}
+		projection = append(projection, value+" AS "+quoteIdentifier(name))
+	}
+	if sparseFields {
+		projection = append(
+			projection,
+			"CAST([], 'Array(String)') AS "+
+				quoteIdentifier(SparseEventFieldNamesColumn),
+		)
+	}
+	for _, output := range containerOutputs {
+		projection = append(
+			projection,
+			"CAST([], 'Array(String)') AS "+quoteIdentifier(output.NamesColumn()),
+			"CAST([], 'Array(UInt8)') AS "+quoteIdentifier(output.TypesColumn()),
+			"toUInt8(0) AS "+quoteIdentifier(output.MetadataVersionColumn()),
+		)
+	}
+	return projection, len(projection) > 0
+}
+
 func finalizeChronologicallyValidatedQuery(
 	relation compiledRelation,
 	state compileState,
@@ -1521,6 +1664,12 @@ func finalizeChronologicallyValidatedQuery(
 			output.MetadataVersionColumn(),
 		)
 	}
+	dummyProjection, _ := ordinaryChronologicalDummyProjection(
+		state,
+		outputFields,
+		sparseFields,
+		containerOutputs,
+	)
 	return wrapChronologicalValidation(
 		relation.sql,
 		relation.depth,
@@ -1531,10 +1680,11 @@ func finalizeChronologicallyValidatedQuery(
 		order,
 		eventStatsOrdinarySourceFanout,
 		CompiledQuery{
-			Args:             args,
-			OutputFields:     outputFields,
-			ContainerOutputs: containerOutputs,
-			SparseFields:     sparseFields,
+			Args:                      args,
+			OutputFields:              outputFields,
+			ContainerOutputs:          containerOutputs,
+			SparseFields:              sparseFields,
+			validationDummyProjection: dummyProjection,
 		},
 		aliasSequence,
 	)
@@ -1685,11 +1835,10 @@ func wrapChronologicalValidation(
 	}
 	definitions := make([]string, 0, len(barriers)+2)
 	barrierArgs := make([]any, 0)
-	hasPrerequisiteBarrier := hasPrerequisiteChronologicalBarrier(barriers)
 	// ClickHouse 26.3 can leave a chain of MATERIALIZED CTEs unplanned when
 	// every consumer is another CTE. Preserve only the earliest materialization
-	// in a graph that contains eventstats prerequisites; it is the physical-scan
-	// fence, while every later stage already reads that bounded result graph.
+	// in the complete graph; it is the physical-scan fence, while every later
+	// stage already reads that bounded result graph.
 	keptGraphMaterialization := false
 	for _, barrier := range barriers {
 		for _, definition := range barrier.prerequisiteDefinitions {
@@ -1705,12 +1854,10 @@ func wrapChronologicalValidation(
 		barrierClause := " AS MATERIALIZED ("
 		if len(barrier.prerequisiteDefinitions) > 0 {
 			barrierClause = " AS ("
-		} else if hasPrerequisiteBarrier {
-			if keptGraphMaterialization {
-				barrierClause = " AS ("
-			} else {
-				keptGraphMaterialization = true
-			}
+		} else if keptGraphMaterialization {
+			barrierClause = " AS ("
+		} else {
+			keptGraphMaterialization = true
 		}
 		definitions = append(
 			definitions,
@@ -1721,8 +1868,10 @@ func wrapChronologicalValidation(
 
 	finalInput := quoteIdentifier(fmt.Sprintf("__os_chronological_final_input_%d", aliasSequence+1))
 	finalInputClause := " AS MATERIALIZED ("
-	if hasPrerequisiteBarrier {
+	if keptGraphMaterialization {
 		finalInputClause = " AS ("
+	} else {
+		keptGraphMaterialization = true
 	}
 	definitions = append(definitions, finalInput+finalInputClause+inputSQL+")")
 
@@ -1778,20 +1927,31 @@ func wrapChronologicalValidation(
 		main += " ORDER BY " + order
 	}
 
-	dummyProjection := make([]string, 0, len(resultColumns))
-	for _, name := range resultColumns {
-		column := quoteIdentifier(name)
-		dummyProjection = append(dummyProjection, "any("+column+") AS "+column)
-	}
+	dummy := ""
+	dummyDepth := 1
+	if len(compiled.validationDummyProjection) == len(resultColumns) {
+		dummy = "SELECT " + strings.Join(compiled.validationDummyProjection, ", ")
+	} else {
+		inferredProjection := make([]string, 0, len(resultColumns))
+		for _, name := range resultColumns {
+			column := quoteIdentifier(name)
+			inferredProjection = append(
+				inferredProjection,
+				"any("+column+") AS "+column,
+			)
+		}
 
-	aliasSequence++
-	schemaSourceAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
-	schemaSource := "SELECT " + strings.Join(projection, ", ") + " FROM " +
-		finalInput + " AS " + schemaSourceAlias + " LIMIT 0"
-	aliasSequence++
-	schemaAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
-	dummy := "SELECT " + strings.Join(dummyProjection, ", ") + " FROM (" +
-		schemaSource + ") AS " + schemaAlias
+		aliasSequence++
+		schemaSourceAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+		schemaSource := "SELECT " + strings.Join(projection, ", ") + " FROM " +
+			finalInput + " AS " + schemaSourceAlias + " LIMIT 0"
+		aliasSequence++
+		schemaAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+		dummy = "SELECT " + strings.Join(inferredProjection, ", ") + " FROM (" +
+			schemaSource + ") AS " + schemaAlias
+		schemaSourceDepth := relationalNodeDepth(inputDepth)
+		dummyDepth = relationalNodeDepth(schemaSourceDepth)
+	}
 
 	validationUnion := strings.Join(validationRows, " UNION ALL ")
 	validationRowsDepth := relationalNodeDepth(maximumBarrierDepth)
@@ -1801,7 +1961,7 @@ func wrapChronologicalValidation(
 		"'), toUInt8(0)) AS " + quoteIdentifier("__os_chronological_valid") +
 		" FROM (" + validationUnion + ")"
 	validationClause := " AS MATERIALIZED ("
-	if hasPrerequisiteBarrier {
+	if keptGraphMaterialization {
 		// Keep this tiny validation aggregate ordinary so both top-level UNION
 		// branches directly consume the eventstats barriers. Only the earliest
 		// bounded prerequisite remains materialized; later stages stay in the
@@ -1824,8 +1984,6 @@ func wrapChronologicalValidation(
 		validationBranch + materializedCTESettingsSQL
 
 	mainDepth := relationalNodeDepth(inputDepth, validationDepth)
-	schemaSourceDepth := relationalNodeDepth(inputDepth)
-	dummyDepth := relationalNodeDepth(schemaSourceDepth)
 	validationBranchDepth := relationalNodeDepth(dummyDepth, validationDepth)
 	resultDepth := relationalNodeDepth(mainDepth, validationBranchDepth)
 	compiled.SQL = sql
@@ -3108,6 +3266,31 @@ func floorBucketTicks(value, span int64) int64 {
 	return quotient * span
 }
 
+// pivotDescendantSourceColumns keeps descendant probes available across the
+// narrow chart/timechart source CTE. Stored event fields evaluate their probe
+// from the immutable field-name array. Materialized fields, including
+// knowledge-generated fields, instead point at one retained private sidecar;
+// that identifier must cross the source CTE so the prepared CTE can evaluate
+// it without moving bind markers ahead of the nested scoped relation.
+func pivotDescendantSourceColumns(state compileState, fields ...fieldState) []string {
+	private := make([]string, 0, len(fields))
+	hasDescendant := false
+	for _, field := range fields {
+		if field.kind != fieldKindDynamic || field.descendantSQL == "" {
+			continue
+		}
+		hasDescendant = true
+		if slices.Contains(state.privateColumns, field.descendantSQL) &&
+			!slices.Contains(private, field.descendantSQL) {
+			private = append(private, field.descendantSQL)
+		}
+	}
+	if !hasDescendant {
+		return nil
+	}
+	return append([]string{quoteIdentifier(internalFieldNamesColumn)}, private...)
+}
+
 func compileTimechart(
 	relation compiledRelation,
 	state compileState,
@@ -3314,6 +3497,7 @@ func compileTimechart(
 		}
 		return compileSplitValueTimechart(
 			relation,
+			state,
 			args,
 			operator,
 			valueKind,
@@ -3359,13 +3543,12 @@ func compileTimechart(
 	classified := q("__os_timechart_classified")
 	canonicalized := q("__os_timechart_canonicalized")
 	counts := q("__os_timechart_group_counts")
-	top := q("__os_timechart_top")
+	scored := q("__os_timechart_scored")
+	ranked := q("__os_timechart_ranked")
 	collapsed := q("__os_timechart_collapsed")
 	domainRows := q("__os_timechart_domain_rows")
 	domain := q("__os_timechart_domain")
-	collisions := q("__os_timechart_normalization_collisions")
 	bucketMaps := q("__os_timechart_bucket_maps")
-	validation := q("__os_timechart_validation")
 	grid := q("__os_timechart_grid")
 
 	eventTime := q("__os_tc_event_time")
@@ -3381,9 +3564,12 @@ func compileTimechart(
 	frequency := q("__os_tc_count")
 	rowCount := q("__os_tc_row_count")
 	occurrenceCount := q("__os_tc_occurrence_count")
-	occurrenceScore := q("__os_tc_occurrence_score")
+	collapsedRowCount := q("__os_tc_collapsed_row_count")
+	collapsedCount := q("__os_tc_collapsed_count")
+	seriesScore := q("__os_tc_series_score")
+	seriesRank := q("__os_tc_series_rank")
 	encoded := q("__os_tc_encoded")
-	normalized := q("__os_tc_normalized")
+	collisionCardinality := q("__os_tc_collision_cardinality")
 	collision := q("__os_tc_collision")
 	sortLabel := q("__os_tc_sort_label")
 	countMap := q("__os_tc_count_map")
@@ -3406,8 +3592,8 @@ func compileTimechart(
 	if fieldOccurrenceCount {
 		sql.WriteString(", " + measureInputSQL + " AS " + measureCount)
 	}
-	if hasDescendant {
-		sql.WriteString(", " + q(internalFieldNamesColumn))
+	for _, column := range pivotDescendantSourceColumns(state, splitField) {
+		sql.WriteString(", " + column)
 	}
 	sql.WriteString(" FROM (")
 	sql.WriteString(relation.sql)
@@ -3441,8 +3627,11 @@ func compileTimechart(
 	}
 	sql.WriteString(" FROM " + classified + "), ")
 
+	// Keep the raw bucket/label aggregate as the first bounded operation. The
+	// executor's max_rows_to_group_by seal therefore continues to cap exactly
+	// the same 130k raw groups before any series selection or publication.
 	sql.WriteString(counts)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
 	if fieldOccurrenceCount {
 		// Row frequency and occurrence cardinality are intentionally
 		// independent. The former keeps zero-contribution labels in the domain
@@ -3455,60 +3644,72 @@ func compileTimechart(
 	}
 	sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucketNumber + ", " + kind + ", " + label + "), ")
 
-	sql.WriteString(top)
+	// Score every raw label once across buckets. The collision cardinality is a
+	// window over the public label normalization domain, so it travels with the
+	// same single-consumer chain instead of requiring another counts branch.
+	scoreInput := frequency
 	if fieldOccurrenceCount {
-		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(toUInt128(" + occurrenceCount + ")) AS " + occurrenceScore + " FROM " + counts)
-		sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY " + occurrenceScore + " DESC, " + label + " ASC LIMIT ")
-	} else {
-		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(" + frequency + ") AS " + frequency + " FROM " + counts)
-		sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
+		scoreInput = occurrenceCount
 	}
-	sql.WriteString(strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10))
-	sql.WriteString("), ")
+	sql.WriteString(scored)
+	sql.WriteString(" AS (SELECT *, sum(toUInt128(" + scoreInput + ")) OVER (PARTITION BY " + kind + ", " + label + ") AS " + seriesScore + ", ")
+	sql.WriteString("uniqExact(" + label + ") OVER (PARTITION BY " + kind + ", " + splunkSeriesLabelSQL(label) + ") AS " + collisionCardinality)
+	sql.WriteString(" FROM " + counts + "), ")
 
+	// The label tie-breaker makes every ordinary label's dense rank unique,
+	// while repeated bucket rows for that label retain one shared rank.
+	sql.WriteString(ranked)
+	sql.WriteString(" AS (SELECT *, dense_rank() OVER (PARTITION BY " + kind + " ORDER BY " + seriesScore + " DESC, " + label + " ASC) AS " + seriesRank)
+	sql.WriteString(" FROM " + scored + "), ")
+
+	seriesLimit := strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10)
 	sql.WriteString(collapsed)
-	sql.WriteString(" AS (SELECT " + bucketNumber + ", multiIf(" + kind + " = 1, '1:', ")
-	sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
+	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", multiIf(" + kind + " = 1, '1:', ")
+	sql.WriteString(kind + " = 0 AND " + seriesRank + " <= " + seriesLimit + ", concat('0:', " + label + "), ")
+	sql.WriteString(kind + " = 0, '2:', CAST('' AS String)) AS " + encoded + ", ")
 	if fieldOccurrenceCount {
-		sql.WriteString("toUInt64(sum(toUInt128(" + occurrenceCount + "))) AS " + occurrenceCount)
+		sql.WriteString("sum(" + rowCount + ") AS " + collapsedRowCount + ", ")
+		sql.WriteString("toUInt64(sum(toUInt128(" + occurrenceCount + "))) AS " + collapsedCount + ", ")
 	} else {
-		sql.WriteString("sum(" + frequency + ") AS " + frequency)
+		sql.WriteString("sum(" + frequency + ") AS " + collapsedCount + ", ")
 	}
-	sql.WriteString(" FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + bucketNumber + ", " + encoded + "), ")
-
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, ")
-	sql.WriteString(splunkSeriesLabelSQL(label) + " AS " + sortLabel + ", concat('0:', " + label + ") AS " + encoded)
-	sql.WriteString(" FROM " + top)
-	// Both sentinels probe the materialized aggregate as an ordinary relation.
-	// A scalar subquery would be evaluated during analysis, before the
-	// materialized temporary table exists, and would re-run the scoped scan
-	// once per occurrence.
-	sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " + counts + " WHERE " + kind + " = 1 LIMIT 1)")
-	sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " + counts + " WHERE " + kind + " = 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + top + ") LIMIT 1)), ")
-
-	sql.WriteString(domain)
-	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
-
-	sql.WriteString(collisions)
-	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS " + collision + " FROM (")
-	sql.WriteString("SELECT " + splunkSeriesLabelSQL(label) + " AS " + normalized)
-	sql.WriteString(" FROM " + counts + " WHERE " + kind + " = 0 GROUP BY " + normalized + " HAVING uniqExact(" + label + ") > 1 LIMIT 1)), ")
-
-	sql.WriteString(bucketMaps)
-	mapValue := frequency
-	if fieldOccurrenceCount {
-		mapValue = occurrenceCount
-	}
-	sql.WriteString(" AS (SELECT " + bucketNumber + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + mapValue + ")) AS " + countMap)
-	sql.WriteString(" FROM " + collapsed + " GROUP BY " + bucketNumber + "), ")
-
-	sql.WriteString(validation)
 	validationCount := frequency
 	if fieldOccurrenceCount {
 		validationCount = rowCount
 	}
-	sql.WriteString(" AS (SELECT toUInt8(sumIf(" + validationCount + ", " + kind + " = 3) > 0) AS " + invalid + " FROM " + counts + "), ")
+	sql.WriteString("toUInt8(sumIf(" + validationCount + ", " + kind + " = 3) > 0) AS " + invalid + ", ")
+	sql.WriteString("toUInt8(maxIf(" + collisionCardinality + ", " + kind + " = 0) > 1) AS " + collision)
+	sql.WriteString(" FROM " + ranked + " GROUP BY " + bucketNumber + ", " + encoded + "), ")
+
+	// Every domain member now comes from the sealed, already-collapsed relation.
+	// Empty encodings are private validation rows and never become map keys or
+	// public names.
+	domainFrequency := collapsedCount
+	if fieldOccurrenceCount {
+		domainFrequency = collapsedRowCount
+	}
+	rawEncodedLabel := "substring(" + encoded + ", 3)"
+	sql.WriteString(domainRows)
+	sql.WriteString(" AS (SELECT multiIf(" + encoded + " = '1:', toUInt8(1), " + encoded + " = '2:', toUInt8(2), toUInt8(0)) AS sort_kind, ")
+	sql.WriteString("if(startsWith(" + encoded + ", '0:'), " + splunkSeriesLabelSQL(rawEncodedLabel) + ", CAST('' AS String)) AS " + sortLabel + ", " + encoded)
+	sql.WriteString(" FROM " + collapsed + " WHERE " + encoded + " != '' AND " + domainFrequency + " > 0 GROUP BY " + encoded + "), ")
+
+	sql.WriteString(domain)
+	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
+
+	sql.WriteString(bucketMaps)
+	mapValue := collapsedCount
+	// The empty String is outside the public encoded domain (0:/1:/2:) and is
+	// therefore a private per-bucket validation key. Carrying the combined flag
+	// in the existing map removes a third collapsed consumer without adding a
+	// second public projection or losing invalid-only buckets. The executor
+	// buffers the complete fixed grid before publishing, so any nonzero bucket
+	// still rejects the result atomically.
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", mapFromArrays(")
+	sql.WriteString("arrayPushBack(groupArrayIf(" + encoded + ", " + encoded + " != ''), CAST('' AS String)), ")
+	sql.WriteString("arrayPushBack(groupArrayIf(" + mapValue + ", " + encoded + " != ''), ")
+	sql.WriteString("toUInt64(max(" + invalid + " != 0 OR " + collision + " != 0)))) AS " + countMap)
+	sql.WriteString(" FROM " + collapsed + " GROUP BY " + bucketNumber + "), ")
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (" + ordinalGridSQL(ordinal, bucketNumber) + ") ")
@@ -3516,8 +3717,8 @@ func compileTimechart(
 	sql.WriteString("SELECT " + grid + "." + ordinal + " AS " + ordinal + ", ")
 	sql.WriteString("if(" + grid + "." + ordinal + " = 0, " + domain + ".names, CAST([], 'Array(String)')) AS " + q(TimechartNamesColumn) + ", ")
 	sql.WriteString("arrayMap(name -> ifNull(" + bucketMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(TimechartCountsColumn) + ", ")
-	sql.WriteString("toUInt8(" + validation + "." + invalid + " != 0 OR " + collisions + "." + collision + " != 0) AS " + q(TimechartInvalidColumn))
-	sql.WriteString(" FROM " + grid + " CROSS JOIN " + domain + " CROSS JOIN " + validation + " CROSS JOIN " + collisions)
+	sql.WriteString("toUInt8(ifNull(" + bucketMaps + "." + countMap + "[''], toUInt64(0)) != 0) AS " + q(TimechartInvalidColumn))
+	sql.WriteString(" FROM " + grid + " CROSS JOIN " + domain)
 	sql.WriteString(" LEFT JOIN " + bucketMaps + " ON " + bucketMaps + "." + bucketNumber + " = " + grid + "." + bucketNumber + " ORDER BY " + grid + "." + ordinal + " ASC")
 	sql.WriteString(materializedCTESettingsSQL)
 
@@ -3527,31 +3728,16 @@ func compileTimechart(
 	classifiedDepth := relationalNodeDepth(preparedDepth)
 	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
 	countsDepth := relationalNodeDepth(canonicalizedDepth)
-	topDepth := relationalNodeDepth(countsDepth)
-	topMembershipDepth := relationalNodeDepth(topDepth)
-	collapsedDepth := relationalNodeDepth(countsDepth, topMembershipDepth)
-
-	domainTopBranchDepth := relationalNodeDepth(topDepth)
-	domainNullInputDepth := relationalNodeDepth(countsDepth)
-	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
-	domainOtherInputDepth := relationalNodeDepth(countsDepth, topMembershipDepth)
-	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
-	domainRowsDepth := relationalNodeDepth(
-		domainTopBranchDepth,
-		domainNullBranchDepth,
-		domainOtherBranchDepth,
-	)
+	scoredDepth := relationalNodeDepth(countsDepth)
+	rankedDepth := relationalNodeDepth(scoredDepth)
+	collapsedDepth := relationalNodeDepth(rankedDepth)
+	domainRowsDepth := relationalNodeDepth(collapsedDepth)
 	domainDepth := relationalNodeDepth(domainRowsDepth)
-	collisionInputDepth := relationalNodeDepth(countsDepth)
-	collisionsDepth := relationalNodeDepth(collisionInputDepth)
 	bucketMapsDepth := relationalNodeDepth(collapsedDepth)
-	validationDepth := relationalNodeDepth(countsDepth)
 	gridDepth := relationalNodeDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		domainDepth,
-		validationDepth,
-		collisionsDepth,
 		bucketMapsDepth,
 	)
 
@@ -3574,6 +3760,7 @@ func compileTimechart(
 
 func compileSplitValueTimechart(
 	relation compiledRelation,
+	state compileState,
 	args []any,
 	operator *plan.Timechart,
 	valueKind TimechartValueKind,
@@ -3683,8 +3870,8 @@ func compileSplitValueTimechart(
 	sql.WriteString("toUInt8(" + splitExistsSQL + ") AS " + present + ", ")
 	sql.WriteString(splitValueTypeSQL + " AS " + valueType + ", ")
 	sql.WriteString(measureInputSQL + " AS " + measureValues)
-	if hasDescendant {
-		sql.WriteString(", " + q(internalFieldNamesColumn))
+	for _, column := range pivotDescendantSourceColumns(state, splitField) {
+		sql.WriteString(", " + column)
 	}
 	sql.WriteString(" FROM (")
 	sql.WriteString(relation.sql)
@@ -4636,6 +4823,11 @@ func compileCountChart(
 	counts := q("__os_chart_group_counts")
 	top := q("__os_chart_top")
 	collapsed := q("__os_chart_collapsed")
+	labelGroups := q("__os_chart_label_groups")
+	normalizedGroups := q("__os_chart_normalized_groups")
+	authority := q("__os_chart_authority")
+	labelExpanded := q("__os_chart_label_expanded")
+	expanded := q("__os_chart_expanded")
 	domainRows := q("__os_chart_domain_rows")
 	domain := q("__os_chart_domain")
 	collisions := q("__os_chart_normalization_collisions")
@@ -4663,13 +4855,25 @@ func compileCountChart(
 	occurrenceCount := q("__os_ch_occurrence_count")
 	occurrenceScore := q("__os_ch_occurrence_score")
 	frequency := q("__os_ch_count")
+	collapsedCount := q("__os_ch_collapsed_count")
 	encoded := q("__os_ch_encoded")
 	normalized := q("__os_ch_normalized")
+	groupRow := q("__os_ch_group_row")
+	seriesScore := q("__os_ch_series_score")
+	rowEntries := q("__os_ch_row_entries")
+	labelRecords := q("__os_ch_label_records")
+	authorityValue := q("__os_ch_authority")
+	globalCollision := q("__os_ch_global_collision")
+	rowInvalidEvidence := q("__os_ch_row_invalid_evidence")
+	columnInvalidEvidence := q("__os_ch_column_invalid_evidence")
+	collisionEvidence := q("__os_ch_collision_evidence")
 	sortLabel := q("__os_ch_sort_label")
 	countMap := q("__os_ch_count_map")
+	domainNames := q("__os_ch_domain_names")
 	invalid := q("__os_ch_invalid")
 	collision := q("__os_ch_collision")
 	columnInvalid := q("__os_ch_column_invalid")
+	transportInvalid := q("__os_ch_transport_invalid")
 	ordinal := q(ChartOrdinalColumn)
 
 	// Placeholder order follows CTE nesting, not declaration order. Exact
@@ -4745,8 +4949,8 @@ func compileCountChart(
 	if fieldOccurrenceCount {
 		sql.WriteString(", " + measureInputSQL + " AS " + measureCount)
 	}
-	if rowHasDescendant || splitHasDescendant {
-		sql.WriteString(", " + q(internalFieldNamesColumn))
+	for _, column := range pivotDescendantSourceColumns(state, rowField, splitField) {
+		sql.WriteString(", " + column)
 	}
 	sql.WriteString(" FROM (")
 	sql.WriteString(relation.sql)
@@ -4828,122 +5032,200 @@ func compileCountChart(
 		sql.WriteString("toUInt64(sum(toUInt128(" + occurrenceCount + "))) AS " + frequency)
 		sql.WriteString(" FROM " + counts + " WHERE " + rowEligible + " != 0 AND " + kind + " IN (0, 1) GROUP BY " + row + ", " + encoded + "), ")
 	} else {
-		// Bare count can select and collapse the column axis before its row-keyed
-		// aggregation. This keeps that existing path bounded to the published
-		// series width rather than the raw row/label cross-product.
-		sql.WriteString(labelTotals)
-		sql.WriteString(" AS MATERIALIZED (SELECT " + kind + ", " + label + ", countIf(" + rowEligible + " != 0) AS " + frequency)
-		sql.WriteString(" FROM " + canonicalized + " GROUP BY " + kind + ", " + label + "), ")
+		// Bound the exact raw (row, label) work before any array retains label
+		// state. max_rows_to_group_by therefore fails the whole query at the
+		// executor's 130k chart allowance instead of letting attacker-controlled
+		// label cardinality hide inside an unbounded aggregate array.
+		sql.WriteString(counts)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", " + rowEligible + ", " + kind + ", " + label + ", ")
+		sql.WriteString("max(" + rowInvalid + ") AS " + rowInvalid + ", count() AS " + frequency)
+		sql.WriteString(" FROM " + canonicalized + " GROUP BY " + row + ", " + rowEligible + ", " + kind + ", " + label + "), ")
 
-		sql.WriteString(top)
-		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", " + frequency + " FROM " + labelTotals)
-		sql.WriteString(" WHERE " + kind + " = 0 AND " + frequency + " > 0 ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
-		sql.WriteString(strconv.FormatUint(uint64(operator.SeriesLimit), 10))
+		// Every array below is downstream of the materialized raw-pair bound. Each
+		// raw group enters exactly one rowEntries array; later arrays only nest
+		// those disjoint arrays and therefore retain at most the raw group count.
+		// Zero-score labels remain in the normalization domain, while only positive
+		// row-eligible UInt128 scores choose the public top ten.
+		sql.WriteString(labelGroups)
+		sql.WriteString(" AS (SELECT " + kind + ", " + label + ", sumIf(toUInt128(" + frequency + "), " + rowEligible + " != 0) AS " + seriesScore + ", ")
+		sql.WriteString("groupArray(tuple(" + row + ", " + rowEligible + ", " + rowInvalid + ", " + frequency + ")) AS " + rowEntries)
+		sql.WriteString(" FROM " + counts + " GROUP BY " + kind + ", " + label + "), ")
+
+		sql.WriteString(normalizedGroups)
+		sql.WriteString(" AS (SELECT " + kind + ", " + splunkSeriesLabelSQL(label) + " AS " + normalized + ", ")
+		sql.WriteString("groupArray(tuple(" + kind + ", " + label + ", " + seriesScore + ", " + rowEntries + ")) AS " + labelRecords + ", ")
+		sql.WriteString("toUInt8(" + kind + " = 0 AND count() > 1) AS " + collisionEvidence)
+		sql.WriteString(" FROM " + labelGroups + " GROUP BY " + kind + ", " + normalized + "), ")
+
+		recordsName := "__os_ch_records"
+		recordName := "__os_ch_record"
+		topName := "__os_ch_top_label_values"
+		collisionName := "__os_ch_collision_flag"
+		recordsAggregate := "arrayFlatten(groupArray(" + labelRecords + "))"
+		positiveRecords := "arrayFilter(" + recordName + " -> " + recordName + ".1 = toUInt8(0) AND " + recordName + ".3 > toUInt128(0), " + recordsName + ")"
+		topRecords := "arraySlice(arraySort(" + recordName + " -> tuple(-toInt256(" + recordName + ".3), " + recordName + ".2), " + positiveRecords + "), 1, " + strconv.FormatUint(uint64(operator.SeriesLimit), 10) + ")"
+		topLabelValues := "arrayMap(" + recordName + " -> " + recordName + ".2, " + topRecords + ")"
+		authorizedRecords := "arrayMap(" + recordName + " -> tuple(" + recordName + ".1, " + recordName + ".4, multiIf(" +
+			recordName + ".1 = toUInt8(1), CAST('1:' AS String), " +
+			recordName + ".1 = toUInt8(0) AND has(" + topName + ", " + recordName + ".2), concat('0:', " + recordName + ".2), " +
+			recordName + ".1 = toUInt8(0), CAST('2:' AS String), CAST('' AS String))), " + recordsName + ")"
+		authorityExpression := "arrayElement(arrayMap((" + recordsName + ", " + collisionName + ") -> arrayElement(arrayMap(" + topName + " -> tuple(" +
+			authorizedRecords + ", " + collisionName + "), [" + topLabelValues + "]), 1), [" + recordsAggregate + "], [toUInt8(maxOrDefault(" + collisionEvidence + ") != 0)]), 1)"
+		sql.WriteString(authority)
+		sql.WriteString(" AS (SELECT " + authorityExpression + " AS " + authorityValue + " FROM " + normalizedGroups + "), ")
+
+		labelRecord := q("__os_ch_label_record")
+		sql.WriteString(labelExpanded)
+		sql.WriteString(" AS (SELECT tupleElement(" + labelRecord + ", 1) AS " + kind + ", tupleElement(" + labelRecord + ", 2) AS " + rowEntries + ", ")
+		sql.WriteString("tupleElement(" + labelRecord + ", 3) AS " + encoded + ", tupleElement(" + authorityValue + ", 2) AS " + globalCollision)
+		sql.WriteString(" FROM " + authority + " ARRAY JOIN tupleElement(" + authorityValue + ", 1) AS " + labelRecord + "), ")
+
+		rowEntry := q("__os_ch_row_entry")
+		sql.WriteString(expanded)
+		sql.WriteString(" AS (SELECT tupleElement(" + rowEntry + ", 1) AS " + row + ", tupleElement(" + rowEntry + ", 2) AS " + rowEligible + ", ")
+		sql.WriteString("tupleElement(" + rowEntry + ", 3) AS " + rowInvalid + ", tupleElement(" + rowEntry + ", 4) AS " + frequency + ", ")
+		sql.WriteString(kind + ", " + encoded + ", " + globalCollision + " FROM " + labelExpanded + " ARRAY JOIN " + rowEntries + " AS " + rowEntry + "), ")
+
+		public := rowEligible + " != 0 AND " + kind + " IN (0, 1)"
+		typedValidationRow := chartValidationRowSQL(rowDatabaseType)
+		sql.WriteString(collapsed)
+		sql.WriteString(" AS (SELECT if(" + public + ", " + row + ", " + typedValidationRow + ") AS " + groupRow + ", ")
+		sql.WriteString("if(" + public + ", " + encoded + ", CAST('' AS String)) AS " + encoded + ", ")
+		sql.WriteString("toUInt64(sum(toUInt128(if(" + public + ", " + frequency + ", 0)))) AS " + collapsedCount + ", ")
+		sql.WriteString("toUInt8(maxIf(" + rowInvalid + ", " + rowEligible + " != 0) > 0) AS " + rowInvalidEvidence + ", ")
+		sql.WriteString("toUInt8(sumIf(toUInt128(" + frequency + "), " + kind + " = 3) > 0) AS " + columnInvalidEvidence + ", ")
+		sql.WriteString("toUInt8(max(" + globalCollision + ") > 0) AS " + collisionEvidence)
+		sql.WriteString(" FROM " + expanded + " GROUP BY " + groupRow + ", " + encoded + "), ")
+	}
+
+	if fieldOccurrenceCount {
+		// Both sentinels probe the materialized label aggregate as ordinary
+		// relations. A scalar subquery would be evaluated during analysis, before
+		// the materialized temporary table exists, and would re-run the whole
+		// scoped scan once per occurrence.
+		domainFrequency := frequency
+		if fieldOccurrenceCount {
+			domainFrequency = rowCount
+		}
+		sql.WriteString(domainRows)
+		sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, " + splunkSeriesLabelSQL(label) + " AS " + sortLabel)
+		sql.WriteString(", concat('0:', " + label + ") AS " + encoded + " FROM " + top)
+		sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " + labelTotals)
+		sql.WriteString(" WHERE " + kind + " = 1 AND " + domainFrequency + " > 0 LIMIT 1)")
+		sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " + labelTotals)
+		sql.WriteString(" WHERE " + kind + " = 0 AND " + domainFrequency + " > 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + top + ") LIMIT 1)), ")
+
+		sql.WriteString(domain)
+		sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
+
+		// Convergence after VALUE normalization is one member of the same label
+		// rule as the empty, invalid-UTF-8, over-long, reserved, and row-name
+		// labels, and every other member is evaluated on the column value's own
+		// presence. The label aggregate carries a kind = 0 group for every ordinary
+		// label any classified input row held, so reading it without the
+		// row-eligible frequency filter keeps the rule presence-independent: two
+		// labels that converge fail the whole command even when only row-ineligible
+		// events carried them, exactly as a reserved label on such an event does.
+		sql.WriteString(collisions)
+		sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS " + collision + " FROM (SELECT " + splunkSeriesLabelSQL(label) + " AS " + normalized)
+		sql.WriteString(" FROM " + labelTotals + " WHERE " + kind + " = 0 GROUP BY " + normalized)
+		sql.WriteString(" HAVING uniqExact(" + label + ") > 1 LIMIT 1)), ")
+
+		// The atomic column-value rejection is row-independent by construction:
+		// the label aggregate carries a kind = 3 group whenever any classified
+		// input row held an unsupported column value, whether or not that row also
+		// carried an eligible row value.
+		sql.WriteString(columnCheck)
+		sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + kind + " = 3)) AS " + columnInvalid + " FROM " + labelTotals + "), ")
+
+		sql.WriteString(rowMaps)
+		sql.WriteString(" AS (SELECT " + row + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + frequency + ")) AS " + countMap)
+		sql.WriteString(" FROM " + collapsed + " GROUP BY " + row + "), ")
+
+		sql.WriteString(validation)
+		sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + rowInvalid + ") > 0) AS " + invalid)
+		sql.WriteString(" FROM " + counts)
+		if fieldOccurrenceCount {
+			// Missing and explicit-null dynamic row values are not chart rows and
+			// therefore cannot invalidate the row domain. Unsupported descendants
+			// remain eligible by construction and still fail atomically.
+			sql.WriteString(" WHERE " + rowEligible + " != 0")
+		}
 		sql.WriteString("), ")
 
-		sql.WriteString(counts)
-		sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", " + kind + ", multiIf(" + kind + " = 1, '1:', " + kind + " = 3, CAST('' AS String), ")
-		sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
-		sql.WriteString("max(" + rowInvalid + ") AS " + rowInvalid + ", count() AS " + frequency)
-		sql.WriteString(" FROM " + canonicalized + " WHERE " + rowEligible + " != 0 GROUP BY " + row + ", " + kind + ", " + encoded + "), ")
+		// The row axis is data, so its ordinal is assigned server-side from the
+		// declared order. Only the dense ordinal proves that order to the executor;
+		// the row value itself crosses the boundary as an ordinary typed column.
+		sql.WriteString(rowDomain)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", toUInt64(row_number() OVER (ORDER BY " + rowSortSQL + " ASC) - 1) AS " + ordinal)
+		sql.WriteString(" FROM (SELECT " + row + " FROM " + counts)
+		if fieldOccurrenceCount {
+			sql.WriteString(" WHERE " + rowEligible + " != 0")
+		}
+		sql.WriteString(" GROUP BY " + row + ")) ")
 
-		sql.WriteString(collapsed)
-		sql.WriteString(" AS (SELECT " + row + ", " + encoded + ", sum(" + frequency + ") AS " + frequency)
-		sql.WriteString(" FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + row + ", " + encoded + "), ")
+		// A private sentinel carries row-independent validation across an empty row
+		// axis. It is ordered first and rejected by the buffering executor, so the
+		// synthetic row and empty arrays can never become public output.
+		sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", " +
+			q(ChartNamesColumn) + ", " + q(ChartCountsColumn) + ", " +
+			q(ChartInvalidColumn) + " FROM (")
+		sql.WriteString("SELECT " + rowDomain + "." + ordinal + " AS " + ordinal + ", ")
+		sql.WriteString(rowDomain + "." + row + " AS " + q(ChartRowColumn) + ", ")
+		sql.WriteString(domain + ".names AS " + q(ChartNamesColumn) + ", ")
+		sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(ChartCountsColumn) + ", ")
+		sql.WriteString("toUInt8(0) AS " + q(ChartInvalidColumn))
+		sql.WriteString(" FROM " + rowDomain + " CROSS JOIN " + domain)
+		sql.WriteString(" LEFT JOIN " + rowMaps + " ON " + rowMaps + "." + row + " = " + rowDomain + "." + row)
+		// Deterministic, non-truncating overflow: the guard runs during filtering,
+		// before the ordered result is produced, so no partial pivot is published.
+		sql.WriteString(" WHERE throwIf(" + rowDomain + "." + ordinal + " >= " + strconv.FormatUint(uint64(operator.RowLimit), 10) +
+			", '" + ChartRowLimitMarker + "') = 0")
+		sql.WriteString(" UNION ALL SELECT toUInt64(0) AS " + ordinal + ", " +
+			chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn) +
+			", CAST([], 'Array(String)') AS " + q(ChartNamesColumn) +
+			", CAST([], 'Array(UInt64)') AS " + q(ChartCountsColumn) +
+			", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
+			" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
+			" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
+			"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
+			" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
+			q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
+	} else {
+		rawEncodedLabel := "substring(" + encoded + ", 3)"
+		published := encoded + " != '' AND " + collapsedCount + " > 0"
+		domainItem := "tuple(multiIf(" + encoded + " = '1:', toUInt8(1), " + encoded + " = '2:', toUInt8(2), toUInt8(0)), " +
+			"if(startsWith(" + encoded + ", '0:'), " + splunkSeriesLabelSQL(rawEncodedLabel) + ", CAST('' AS String)), " + encoded + ")"
+
+		// Consume the bounded collapsed relation exactly once. Per-row maps are
+		// grouped first; only then do fixed-cardinality windows attach the global
+		// domain and validation evidence to at most one row per public row key.
+		// arrayFlatten sees no more than MaxSeries entries per group, so every
+		// post-collapse array is bounded by 12R+1 rather than raw label input.
+		sql.WriteString(rowMaps)
+		sql.WriteString(" AS (SELECT " + groupRow + ", mapFromArrays(groupArrayIf(" + encoded + ", " + published + "), groupArrayIf(" + collapsedCount + ", " + published + ")) AS " + countMap + ", ")
+		sql.WriteString("arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), arrayDistinct(arrayFlatten(groupArray(groupArrayIf(" + domainItem + ", " + published + ")) OVER ())))) AS " + domainNames + ", ")
+		sql.WriteString("toUInt8(max(max(" + rowInvalidEvidence + ")) OVER () != 0) AS " + invalid + ", ")
+		sql.WriteString("toUInt8(max(max(" + collisionEvidence + ")) OVER () != 0) AS " + collision + ", ")
+		sql.WriteString("toUInt8(max(max(" + columnInvalidEvidence + ")) OVER () != 0) AS " + columnInvalid)
+		sql.WriteString(" FROM " + collapsed + " GROUP BY " + groupRow + "), ")
+
+		bareRowSortSQL := groupRow
+		if rowDynamic || rowField.numericSort {
+			bareRowSortSQL = dynamicSortValue(groupRow, false)
+		}
+		sql.WriteString(rowDomain)
+		sql.WriteString(" AS (SELECT *, toUInt8(" + invalid + " != 0 OR " + collision + " != 0 OR " + columnInvalid + " != 0) AS " + transportInvalid + ", ")
+		sql.WriteString("toUInt64(row_number() OVER (ORDER BY " + bareRowSortSQL + " ASC) - 1) AS " + ordinal)
+		sql.WriteString(" FROM " + rowMaps + " WHERE length(mapKeys(" + countMap + ")) > 0 OR " + invalid + " != 0 OR " + collision + " != 0 OR " + columnInvalid + " != 0) ")
+
+		sql.WriteString("SELECT " + ordinal + ", " + groupRow + " AS " + q(ChartRowColumn) + ", ")
+		sql.WriteString("if(" + transportInvalid + " != 0, CAST([], 'Array(String)'), " + domainNames + ") AS " + q(ChartNamesColumn) + ", ")
+		sql.WriteString("if(" + transportInvalid + " != 0, CAST([], 'Array(UInt64)'), arrayMap(name -> ifNull(" + countMap + "[name], toUInt64(0)), " + domainNames + ")) AS " + q(ChartCountsColumn) + ", ")
+		sql.WriteString(transportInvalid + " AS " + q(ChartInvalidColumn) + " FROM " + rowDomain)
+		sql.WriteString(" WHERE throwIf(if(" + transportInvalid + " = 0, " + ordinal + " >= " + strconv.FormatUint(uint64(operator.RowLimit), 10) + ", 0), '" + ChartRowLimitMarker + "') = 0")
+		sql.WriteString(" AND (" + transportInvalid + " = 0 OR " + ordinal + " = 0) ORDER BY " + q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
 	}
-
-	// Both sentinels probe the materialized label aggregate as ordinary
-	// relations. A scalar subquery would be evaluated during analysis, before
-	// the materialized temporary table exists, and would re-run the whole
-	// scoped scan once per occurrence.
-	domainFrequency := frequency
-	if fieldOccurrenceCount {
-		domainFrequency = rowCount
-	}
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, " + splunkSeriesLabelSQL(label) + " AS " + sortLabel)
-	sql.WriteString(", concat('0:', " + label + ") AS " + encoded + " FROM " + top)
-	sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " + labelTotals)
-	sql.WriteString(" WHERE " + kind + " = 1 AND " + domainFrequency + " > 0 LIMIT 1)")
-	sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " + labelTotals)
-	sql.WriteString(" WHERE " + kind + " = 0 AND " + domainFrequency + " > 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + top + ") LIMIT 1)), ")
-
-	sql.WriteString(domain)
-	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
-
-	// Convergence after VALUE normalization is one member of the same label
-	// rule as the empty, invalid-UTF-8, over-long, reserved, and row-name
-	// labels, and every other member is evaluated on the column value's own
-	// presence. The label aggregate carries a kind = 0 group for every ordinary
-	// label any classified input row held, so reading it without the
-	// row-eligible frequency filter keeps the rule presence-independent: two
-	// labels that converge fail the whole command even when only row-ineligible
-	// events carried them, exactly as a reserved label on such an event does.
-	sql.WriteString(collisions)
-	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS " + collision + " FROM (SELECT " + splunkSeriesLabelSQL(label) + " AS " + normalized)
-	sql.WriteString(" FROM " + labelTotals + " WHERE " + kind + " = 0 GROUP BY " + normalized)
-	sql.WriteString(" HAVING uniqExact(" + label + ") > 1 LIMIT 1)), ")
-
-	// The atomic column-value rejection is row-independent by construction:
-	// the label aggregate carries a kind = 3 group whenever any classified
-	// input row held an unsupported column value, whether or not that row also
-	// carried an eligible row value.
-	sql.WriteString(columnCheck)
-	sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + kind + " = 3)) AS " + columnInvalid + " FROM " + labelTotals + "), ")
-
-	sql.WriteString(rowMaps)
-	sql.WriteString(" AS (SELECT " + row + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + frequency + ")) AS " + countMap)
-	sql.WriteString(" FROM " + collapsed + " GROUP BY " + row + "), ")
-
-	sql.WriteString(validation)
-	sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + rowInvalid + ") > 0) AS " + invalid)
-	sql.WriteString(" FROM " + counts)
-	if fieldOccurrenceCount {
-		// Missing and explicit-null dynamic row values are not chart rows and
-		// therefore cannot invalidate the row domain. Unsupported descendants
-		// remain eligible by construction and still fail atomically.
-		sql.WriteString(" WHERE " + rowEligible + " != 0")
-	}
-	sql.WriteString("), ")
-
-	// The row axis is data, so its ordinal is assigned server-side from the
-	// declared order. Only the dense ordinal proves that order to the executor;
-	// the row value itself crosses the boundary as an ordinary typed column.
-	sql.WriteString(rowDomain)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", toUInt64(row_number() OVER (ORDER BY " + rowSortSQL + " ASC) - 1) AS " + ordinal)
-	sql.WriteString(" FROM (SELECT " + row + " FROM " + counts)
-	if fieldOccurrenceCount {
-		sql.WriteString(" WHERE " + rowEligible + " != 0")
-	}
-	sql.WriteString(" GROUP BY " + row + ")) ")
-
-	// A private sentinel carries row-independent validation across an empty row
-	// axis. It is ordered first and rejected by the buffering executor, so the
-	// synthetic row and empty arrays can never become public output.
-	sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", " +
-		q(ChartNamesColumn) + ", " + q(ChartCountsColumn) + ", " +
-		q(ChartInvalidColumn) + " FROM (")
-	sql.WriteString("SELECT " + rowDomain + "." + ordinal + " AS " + ordinal + ", ")
-	sql.WriteString(rowDomain + "." + row + " AS " + q(ChartRowColumn) + ", ")
-	sql.WriteString(domain + ".names AS " + q(ChartNamesColumn) + ", ")
-	sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(ChartCountsColumn) + ", ")
-	sql.WriteString("toUInt8(0) AS " + q(ChartInvalidColumn))
-	sql.WriteString(" FROM " + rowDomain + " CROSS JOIN " + domain)
-	sql.WriteString(" LEFT JOIN " + rowMaps + " ON " + rowMaps + "." + row + " = " + rowDomain + "." + row)
-	// Deterministic, non-truncating overflow: the guard runs during filtering,
-	// before the ordered result is produced, so no partial pivot is published.
-	sql.WriteString(" WHERE throwIf(" + rowDomain + "." + ordinal + " >= " + strconv.FormatUint(uint64(operator.RowLimit), 10) +
-		", '" + ChartRowLimitMarker + "') = 0")
-	sql.WriteString(" UNION ALL SELECT toUInt64(0) AS " + ordinal + ", " +
-		chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn) +
-		", CAST([], 'Array(String)') AS " + q(ChartNamesColumn) +
-		", CAST([], 'Array(UInt64)') AS " + q(ChartCountsColumn) +
-		", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
-		" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
-		" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
-		"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
-		" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
-		q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
 	sql.WriteString(materializedCTESettingsSQL)
 
 	sourceDepth := relationalNodeDepth(relation.depth)
@@ -4951,58 +5233,62 @@ func compileCountChart(
 	kindedDepth := relationalNodeDepth(preparedDepth)
 	classifiedDepth := relationalNodeDepth(kindedDepth)
 	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
-	var labelTotalsDepth, countsDepth, collapsedDepth int
+	var resultDepth int
 	if fieldOccurrenceCount {
-		countsDepth = relationalNodeDepth(canonicalizedDepth)
-		labelTotalsDepth = relationalNodeDepth(countsDepth)
-	} else {
-		labelTotalsDepth = relationalNodeDepth(canonicalizedDepth)
-	}
-	topDepth := relationalNodeDepth(labelTotalsDepth)
-	topMembershipDepth := relationalNodeDepth(topDepth)
-	if fieldOccurrenceCount {
-		collapsedDepth = relationalNodeDepth(countsDepth, topMembershipDepth)
-	} else {
-		countsDepth = relationalNodeDepth(canonicalizedDepth, topMembershipDepth)
-		collapsedDepth = relationalNodeDepth(countsDepth)
-	}
+		countsDepth := relationalNodeDepth(canonicalizedDepth)
+		labelTotalsDepth := relationalNodeDepth(countsDepth)
+		topDepth := relationalNodeDepth(labelTotalsDepth)
+		topMembershipDepth := relationalNodeDepth(topDepth)
+		collapsedDepth := relationalNodeDepth(countsDepth, topMembershipDepth)
 
-	domainTopBranchDepth := relationalNodeDepth(topDepth)
-	domainNullInputDepth := relationalNodeDepth(labelTotalsDepth)
-	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
-	domainOtherInputDepth := relationalNodeDepth(labelTotalsDepth, topMembershipDepth)
-	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
-	domainRowsDepth := relationalNodeDepth(
-		domainTopBranchDepth,
-		domainNullBranchDepth,
-		domainOtherBranchDepth,
-	)
-	domainDepth := relationalNodeDepth(domainRowsDepth)
-	collisionInputDepth := relationalNodeDepth(labelTotalsDepth)
-	collisionsDepth := relationalNodeDepth(collisionInputDepth)
-	columnCheckDepth := relationalNodeDepth(labelTotalsDepth)
-	rowMapsDepth := relationalNodeDepth(collapsedDepth)
-	validationDepth := relationalNodeDepth(countsDepth)
-	rowDomainInputDepth := relationalNodeDepth(countsDepth)
-	rowDomainDepth := relationalNodeDepth(rowDomainInputDepth)
-	regularResultDepth := relationalNodeDepth(
-		rowDomainDepth,
-		domainDepth,
-		rowMapsDepth,
-	)
-	validationSentinelDepth := relationalNodeDepth(
-		validationDepth,
-		collisionsDepth,
-		columnCheckDepth,
-	)
-	unionDepth := relationalNodeDepth(regularResultDepth, validationSentinelDepth)
-	resultDepth := relationalNodeDepth(unionDepth)
+		domainTopBranchDepth := relationalNodeDepth(topDepth)
+		domainNullInputDepth := relationalNodeDepth(labelTotalsDepth)
+		domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
+		domainOtherInputDepth := relationalNodeDepth(labelTotalsDepth, topMembershipDepth)
+		domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
+		domainRowsDepth := relationalNodeDepth(
+			domainTopBranchDepth,
+			domainNullBranchDepth,
+			domainOtherBranchDepth,
+		)
+		domainDepth := relationalNodeDepth(domainRowsDepth)
+		collisionInputDepth := relationalNodeDepth(labelTotalsDepth)
+		collisionsDepth := relationalNodeDepth(collisionInputDepth)
+		columnCheckDepth := relationalNodeDepth(labelTotalsDepth)
+		rowMapsDepth := relationalNodeDepth(collapsedDepth)
+		validationDepth := relationalNodeDepth(countsDepth)
+		rowDomainInputDepth := relationalNodeDepth(countsDepth)
+		rowDomainDepth := relationalNodeDepth(rowDomainInputDepth)
+		regularResultDepth := relationalNodeDepth(
+			rowDomainDepth,
+			domainDepth,
+			rowMapsDepth,
+		)
+		validationSentinelDepth := relationalNodeDepth(
+			validationDepth,
+			collisionsDepth,
+			columnCheckDepth,
+		)
+		unionDepth := relationalNodeDepth(regularResultDepth, validationSentinelDepth)
+		resultDepth = relationalNodeDepth(unionDepth)
+	} else {
+		countsDepth := relationalNodeDepth(canonicalizedDepth)
+		labelGroupsDepth := relationalNodeDepth(countsDepth)
+		normalizedGroupsDepth := relationalNodeDepth(labelGroupsDepth)
+		authorityDepth := relationalNodeDepth(normalizedGroupsDepth)
+		labelExpandedDepth := relationalNodeDepth(authorityDepth)
+		expandedDepth := relationalNodeDepth(labelExpandedDepth)
+		collapsedDepth := relationalNodeDepth(expandedDepth)
+		rowMapsDepth := relationalNodeDepth(collapsedDepth)
+		rowDomainDepth := relationalNodeDepth(rowMapsDepth)
+		resultDepth = relationalNodeDepth(rowDomainDepth)
+	}
 
 	compiled := CompiledQuery{
 		SQL:          sql.String(),
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
-		sourceFanout: eventStatsChartSourceFanout,
+		sourceFanout: eventStatsOrdinarySourceFanout,
 		Chart: &ChartOutput{
 			RowField:        rowName,
 			RowKind:         rowKind,
@@ -5012,9 +5298,6 @@ func compileCountChart(
 			MaxLabelBytes:   maxTimechartLabelBytes,
 			ValueKind:       ChartValueKindCount,
 		},
-	}
-	if fieldOccurrenceCount {
-		compiled.sourceFanout = eventStatsOrdinarySourceFanout
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
 }
@@ -5329,8 +5612,8 @@ func compileNumericChart(
 	sql.WriteString("toUInt8(" + splitExistsSQL + ") AS " + present + ", ")
 	sql.WriteString(splitTypeSQL + " AS " + valueType + ", ")
 	sql.WriteString(measureInputSQL + " AS " + measureValues)
-	if rowHasDescendant || splitHasDescendant {
-		sql.WriteString(", " + q(internalFieldNamesColumn))
+	for _, column := range pivotDescendantSourceColumns(state, rowField, splitField) {
+		sql.WriteString(", " + column)
 	}
 	sql.WriteString(" FROM (" + relation.sql + ") AS " + alias + "), ")
 
@@ -5582,6 +5865,7 @@ type compileState struct {
 	postAggregateExactStrings        []compiledExactStringMeasure
 	postAggregateDistinctCounts      []compiledDistinctCount
 	postAggregateOrderedStrings      []compiledOrderedStringMeasure
+	deferredChronologicalValidation  []string
 	chronologicalBarriers            []compiledChronologicalBarrier
 }
 
@@ -12566,6 +12850,10 @@ func cloneCompileState(state compileState) compileState {
 		[]compiledOrderedStringMeasure(nil),
 		state.postAggregateOrderedStrings...,
 	)
+	next.deferredChronologicalValidation = append(
+		[]string(nil),
+		state.deferredChronologicalValidation...,
+	)
 	next.chronologicalBarriers = append(
 		[]compiledChronologicalBarrier(nil),
 		state.chronologicalBarriers...,
@@ -12735,6 +13023,10 @@ func appendPrivateEventProjection(projection []string, state compileState) []str
 	if state.rexCapturedBytesSQL != "" {
 		privateColumns = append(privateColumns, state.rexCapturedBytesSQL)
 	}
+	privateColumns = append(
+		privateColumns,
+		state.deferredChronologicalValidation...,
+	)
 	for _, key := range state.order {
 		privateColumns = append(privateColumns, key.valueSQL)
 	}
@@ -14389,6 +14681,765 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 		" PRECEDING AND 1 PRECEDING"
 }
 
+func chronologicalAggregateFunction(function plan.AggregateFunction) bool {
+	return function == plan.AggregateFunctionEarliest ||
+		function == plan.AggregateFunctionLatest
+}
+
+func newChronologicalAggregateOutput(state compileState, name string) bool {
+	if name == "" || slices.Contains(state.publicOrder, name) {
+		return false
+	}
+	_, visible := state.visible[name]
+	return !visible
+}
+
+func independentChronologicalAggregateOutputs(
+	state compileState,
+	firstInput, secondInput, firstOutput, secondOutput string,
+) bool {
+	if !newChronologicalAggregateOutput(state, firstOutput) ||
+		!newChronologicalAggregateOutput(state, secondOutput) ||
+		firstOutput == secondOutput {
+		return false
+	}
+	// Restrict fusion to pure sibling publications. In particular, neither
+	// measure may observe a value authored by the other logical stage, and an
+	// output may not replace a source field whose pre-replacement value the
+	// sibling consumes.
+	for _, output := range []string{firstOutput, secondOutput} {
+		if output == firstInput || output == secondInput {
+			return false
+		}
+	}
+	return true
+}
+
+func dynamicChronologicalInputs(
+	state compileState,
+	first, second plan.FieldRef,
+) bool {
+	firstField, firstExists, firstErr := resolveCompiledField(first, state)
+	secondField, secondExists, secondErr := resolveCompiledField(second, state)
+	return firstErr == nil && secondErr == nil && firstExists && secondExists &&
+		firstField.kind == fieldKindDynamic && secondField.kind == fieldKindDynamic
+}
+
+func canFuseChronologicalEventAggregates(
+	first, second *plan.EventAggregate,
+	state compileState,
+) bool {
+	if first == nil || second == nil || len(first.GroupBy) != 0 ||
+		len(second.GroupBy) != 0 ||
+		!chronologicalAggregateFunction(first.Measure.Function) ||
+		!chronologicalAggregateFunction(second.Measure.Function) ||
+		!independentChronologicalAggregateOutputs(
+			state,
+			first.Measure.Input.Name,
+			second.Measure.Input.Name,
+			first.Measure.Output,
+			second.Measure.Output,
+		) {
+		return false
+	}
+	return dynamicChronologicalInputs(
+		state,
+		first.Measure.Input,
+		second.Measure.Input,
+	)
+}
+
+func canFuseChronologicalStreamAggregates(
+	first, second *plan.StreamAggregate,
+	state compileState,
+) bool {
+	if first == nil || second == nil || len(first.GroupBy) != 0 ||
+		len(second.GroupBy) != 0 ||
+		first.IncludeCurrent != second.IncludeCurrent ||
+		first.WindowRows != second.WindowRows || first.Global != second.Global ||
+		!chronologicalAggregateFunction(first.Measure.Function) ||
+		!chronologicalAggregateFunction(second.Measure.Function) ||
+		!independentChronologicalAggregateOutputs(
+			state,
+			first.Measure.Input.Name,
+			second.Measure.Input.Name,
+			first.Measure.Output,
+			second.Measure.Output,
+		) {
+		return false
+	}
+	return dynamicChronologicalInputs(
+		state,
+		first.Measure.Input,
+		second.Measure.Input,
+	)
+}
+
+type fusedChronologicalPublication struct {
+	name             string
+	valueSQL         string
+	storedTypeSQL    string
+	validationColumn string
+	validationSQL    string
+}
+
+func fusedChronologicalProjection(
+	state, next compileState,
+	publications []fusedChronologicalPublication,
+) ([]string, error) {
+	byName := make(map[string]fusedChronologicalPublication, len(publications))
+	for _, publication := range publications {
+		if publication.name == "" || publication.valueSQL == "" ||
+			publication.storedTypeSQL == "" || publication.validationColumn == "" ||
+			publication.validationSQL == "" {
+			return nil, errors.New(
+				"compile ClickHouse chronological fusion: publication is incomplete",
+			)
+		}
+		if _, duplicate := byName[publication.name]; duplicate {
+			return nil, errors.New(
+				"compile ClickHouse chronological fusion: output is repeated",
+			)
+		}
+		byName[publication.name] = publication
+	}
+
+	names := orderedVisibleNames(next)
+	projection := make([]string, 0, len(names)+16+len(next.privateColumns))
+	for _, name := range names {
+		publicName := quoteIdentifier(name)
+		if publication, authored := byName[name]; authored {
+			projection = append(
+				projection,
+				publication.valueSQL+" AS "+publicName,
+			)
+			continue
+		}
+		field, present := state.visible[name]
+		if !present {
+			return nil, fmt.Errorf(
+				"compile ClickHouse chronological fusion: input field %q is unavailable",
+				name,
+			)
+		}
+		if field.valueSQL == publicName {
+			projection = append(projection, publicName)
+		} else {
+			projection = append(projection, field.valueSQL+" AS "+publicName)
+		}
+	}
+
+	projectionState := next
+	projectionState.privateColumns = livePrivateColumns(
+		state.privateColumns,
+		next.visible,
+	)
+	projection = appendPrivateEventProjection(projection, projectionState)
+	for _, publication := range publications {
+		output := next.visible[publication.name]
+		if output.storedTypeSQL == "" {
+			return nil, errors.New(
+				"compile ClickHouse chronological fusion: output type sidecar is missing",
+			)
+		}
+		projection = append(
+			projection,
+			publication.storedTypeSQL+" AS "+output.storedTypeSQL,
+			"toUInt8("+publication.validationSQL+") AS "+
+				publication.validationColumn,
+		)
+	}
+	return projection, nil
+}
+
+func fusedChronologicalOutputState(
+	output plan.FieldRef,
+	input fieldState,
+	typeColumn string,
+) fieldState {
+	return fieldState{
+		kind:           fieldKindDynamic,
+		dynamicTypeSQL: "dynamicType(" + quoteIdentifier(output.Name) + ")",
+		storedTypeSQL:  typeColumn,
+		maxStringBytes: fieldStateStringByteBound(input),
+	}
+}
+
+// transferDeferredChronologicalValidation moves validation ownership to a
+// later complete barrier only when every moved column is still a private
+// column of that barrier's input. The earlier barrier remains the semantic
+// source relation, but no longer needs a second top-level consumer solely to
+// repeat validation work.
+func transferDeferredChronologicalValidation(
+	barriers []compiledChronologicalBarrier,
+	available []string,
+) ([]compiledChronologicalBarrier, []string) {
+	if len(barriers) == 0 || len(available) == 0 {
+		return barriers, nil
+	}
+	transferred := make([]string, 0, len(available))
+	for index := range barriers {
+		barrier := &barriers[index]
+		retained := make([]string, 0, len(barrier.validationColumns))
+		for _, column := range barrier.validationColumns {
+			if slices.Contains(available, column) {
+				transferred = append(transferred, column)
+				continue
+			}
+			retained = append(retained, column)
+		}
+		barrier.validationColumns = retained
+		if len(retained) == 0 && barrier.fanout == 2 {
+			// The ungrouped fused eventstats source is row-preserving and has one
+			// remaining consumer after its validation columns move forward.
+			barrier.fanout = 1
+		}
+	}
+	return barriers, transferred
+}
+
+// compileFusedChronologicalEventAggregates lowers two independent sibling
+// eventstats chronological measures over one bounded input and one global
+// window. Both row-local poison bits remain independently named on the shared
+// barrier, so the final validation consumer still sees the complete relation
+// even if a later command removes every public row.
+func compileFusedChronologicalEventAggregates(
+	relation compiledRelation,
+	first, second *plan.EventAggregate,
+	state compileState,
+	firstStage, secondStage int,
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
+	if !canFuseChronologicalEventAggregates(first, second, state) ||
+		secondStage != firstStage+1 {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused eventstats chronology: contract is invalid",
+		)
+	}
+
+	firstOutput, firstErr := validateEventAggregate(first, state)
+	if firstErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, firstErr
+	}
+	firstInput, firstExists, resolveErr := resolveCompiledField(
+		first.Measure.Input,
+		state,
+	)
+	if resolveErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, resolveErr
+	}
+	firstCandidate, firstArgs, firstValidated, candidateErr :=
+		singleChronologicalCandidateSQL(
+			first.Measure.Function,
+			firstInput,
+			firstExists,
+		)
+	if candidateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, candidateErr
+	}
+	if !firstValidated {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused eventstats chronology: first input is not runtime validated",
+		)
+	}
+	firstType := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_extrema_type_%d",
+		firstStage,
+	))
+	firstState := eventAggregateCompileState(
+		state,
+		firstOutput,
+		fusedChronologicalOutputState(firstOutput, firstInput, firstType),
+		false,
+		firstStage,
+	)
+
+	secondOutput, secondErr := validateEventAggregate(second, firstState)
+	if secondErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, secondErr
+	}
+	secondInput, secondExists, resolveErr := resolveCompiledField(
+		second.Measure.Input,
+		firstState,
+	)
+	if resolveErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, resolveErr
+	}
+	secondCandidate, secondArgs, secondValidated, candidateErr :=
+		singleChronologicalCandidateSQL(
+			second.Measure.Function,
+			secondInput,
+			secondExists,
+		)
+	if candidateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, candidateErr
+	}
+	if !secondValidated {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused eventstats chronology: second input is not runtime validated",
+		)
+	}
+	secondType := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_extrema_type_%d",
+		secondStage,
+	))
+	next := eventAggregateCompileState(
+		firstState,
+		secondOutput,
+		fusedChronologicalOutputState(secondOutput, secondInput, secondType),
+		false,
+		secondStage,
+	)
+
+	firstMeasure := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_measure_%d",
+		firstStage,
+	))
+	secondMeasure := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_measure_%d",
+		secondStage,
+	))
+	sourceAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_source_%d",
+		secondStage,
+	))
+	rowKey := immutableChronologicalRowKeySQL()
+	preparedSQL := "SELECT *, tuple(" + firstCandidate + ", " + rowKey +
+		") AS " + firstMeasure + ", tuple(" + secondCandidate + ", " +
+		rowKey + ") AS " + secondMeasure + " FROM (" + relation.sql +
+		") AS " + sourceAlias + " LIMIT " +
+		strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
+
+	firstAggregate, aggregateErr := singleChronologicalAggregateSQL(
+		first.Measure.Function,
+		firstMeasure,
+	)
+	if aggregateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+	}
+	secondAggregate, aggregateErr := singleChronologicalAggregateSQL(
+		second.Measure.Function,
+		secondMeasure,
+	)
+	if aggregateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+	}
+	rawCount := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_raw_count_%d",
+		secondStage,
+	))
+	firstWinner := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_winner_%d",
+		firstStage,
+	))
+	secondWinner := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_winner_%d",
+		secondStage,
+	))
+	preparedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_prepared_%d",
+		secondStage,
+	))
+	windowSQL := "SELECT *, count() OVER () AS " + rawCount + ", " +
+		firstAggregate + " OVER () AS " + firstWinner + ", " +
+		secondAggregate + " OVER () AS " + secondWinner + " FROM (" +
+		preparedSQL + ") AS " + preparedAlias
+
+	inputCount := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_input_count_%d",
+		secondStage,
+	))
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_window_%d",
+		secondStage,
+	))
+	boundedSQL := "SELECT *, " + boundedEventStatsCountSQL(rawCount) +
+		" AS " + inputCount + " FROM (" + windowSQL + ") AS " + windowAlias
+	resultAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_result_%d",
+		secondStage,
+	))
+	firstValidation := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_validation_%d",
+		firstStage,
+	))
+	secondValidation := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_validation_%d",
+		secondStage,
+	))
+	publications := []fusedChronologicalPublication{
+		{
+			name:             firstOutput.Name,
+			valueSQL:         chronologicalPublishedValueSQL(resultAlias + "." + firstWinner),
+			storedTypeSQL:    chronologicalPublishedTypeSQL(resultAlias + "." + firstWinner),
+			validationColumn: firstValidation,
+			validationSQL: "tupleElement(tupleElement(" + resultAlias + "." +
+				firstMeasure + ", 1), 4)",
+		},
+		{
+			name:             secondOutput.Name,
+			valueSQL:         chronologicalPublishedValueSQL(resultAlias + "." + secondWinner),
+			storedTypeSQL:    chronologicalPublishedTypeSQL(resultAlias + "." + secondWinner),
+			validationColumn: secondValidation,
+			validationSQL: "tupleElement(tupleElement(" + resultAlias + "." +
+				secondMeasure + ", 1), 4)",
+		},
+	}
+	projection, projectionErr := fusedChronologicalProjection(
+		state,
+		next,
+		publications,
+	)
+	if projectionErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, projectionErr
+	}
+	next.deferredChronologicalValidation = append(
+		next.deferredChronologicalValidation,
+		firstValidation,
+		secondValidation,
+	)
+	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
+	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		boundedSQL + ") AS " + resultAlias + " WHERE " + resultAlias + "." +
+		inputCount + " <= " + maximumRows
+	resultDepth := relation.depth + 4
+	enriched := compiledRelation{
+		sql:        resultSQL,
+		depth:      resultDepth,
+		ownerRange: second.Range,
+	}
+
+	resultInputName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_input_%d",
+		secondStage,
+	))
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_%d",
+		secondStage,
+	))
+	barrierDepth := relationalNodeDepth(resultDepth)
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		sql:  "SELECT * FROM " + resultInputName,
+		prerequisiteDefinitions: []string{
+			resultInputName + " AS MATERIALIZED (" + resultSQL + ")",
+		},
+		validationColumns: []string{firstValidation, secondValidation},
+		fanout:            2,
+		depth:             barrierDepth,
+		ownerRange:        second.Range,
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_rows_result_%d",
+		secondStage,
+	))
+	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	enriched.depth = barrierDepth
+	prefixArgs := append(append([]any(nil), firstArgs...), secondArgs...)
+	return enriched.selectFrom(publishedSQL, second.Range), next, prefixArgs, barrier, nil
+}
+
+// compileFusedChronologicalStreamAggregates captures the established order
+// once and evaluates two independent windows with the same frame. Sequential
+// streamstats semantics are unchanged because neither measure consumes or
+// replaces the sibling's input or output.
+func compileFusedChronologicalStreamAggregates(
+	relation compiledRelation,
+	first, second *plan.StreamAggregate,
+	state compileState,
+	firstStage, secondStage int,
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
+	if !canFuseChronologicalStreamAggregates(first, second, state) ||
+		secondStage != firstStage+1 {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused streamstats chronology: contract is invalid",
+		)
+	}
+
+	firstOutput, firstErr := validateStreamAggregate(first, state)
+	if firstErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, firstErr
+	}
+	firstInput, firstExists, resolveErr := resolveCompiledField(
+		first.Measure.Input,
+		state,
+	)
+	if resolveErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, resolveErr
+	}
+	firstCandidate, firstArgs, firstValidated, candidateErr :=
+		singleChronologicalCandidateSQL(
+			first.Measure.Function,
+			firstInput,
+			firstExists,
+		)
+	if candidateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, candidateErr
+	}
+	if !firstValidated {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused streamstats chronology: first input is not runtime validated",
+		)
+	}
+
+	orderKeys := append([]compiledSortKey(nil), defaultCompiledOrder(state)...)
+	tieBreakers := append([]compiledSortKey(nil), state.tieBreakers...)
+	orderProjection := make([]string, 0, len(orderKeys)+len(tieBreakers))
+	for index := range orderKeys {
+		captured := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_order_%d_%d",
+			firstStage,
+			index,
+		))
+		orderProjection = append(
+			orderProjection,
+			orderKeys[index].valueSQL+" AS "+captured,
+		)
+		orderKeys[index].valueSQL = captured
+	}
+	for index := range tieBreakers {
+		captured := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_tie_breaker_%d_%d",
+			firstStage,
+			index,
+		))
+		orderProjection = append(
+			orderProjection,
+			tieBreakers[index].valueSQL+" AS "+captured,
+		)
+		tieBreakers[index].valueSQL = captured
+	}
+	orderSQL := ""
+	if len(orderKeys) > 0 {
+		var orderErr error
+		orderSQL, orderErr = compileMaterializedOrder(orderKeys, false)
+		if orderErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, fmt.Errorf(
+				"compile ClickHouse fused streamstats order: %w",
+				orderErr,
+			)
+		}
+	}
+
+	firstType := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_chronological_type_%d",
+		firstStage,
+	))
+	firstState := streamAggregateCompileState(
+		state,
+		firstOutput,
+		fusedChronologicalOutputState(firstOutput, firstInput, firstType),
+		false,
+		firstStage,
+		orderKeys,
+		tieBreakers,
+	)
+	secondOutput, secondErr := validateStreamAggregate(second, firstState)
+	if secondErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, secondErr
+	}
+	secondInput, secondExists, resolveErr := resolveCompiledField(
+		second.Measure.Input,
+		firstState,
+	)
+	if resolveErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, resolveErr
+	}
+	secondCandidate, secondArgs, secondValidated, candidateErr :=
+		singleChronologicalCandidateSQL(
+			second.Measure.Function,
+			secondInput,
+			secondExists,
+		)
+	if candidateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, candidateErr
+	}
+	if !secondValidated {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused streamstats chronology: second input is not runtime validated",
+		)
+	}
+	secondType := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_chronological_type_%d",
+		secondStage,
+	))
+	next := streamAggregateCompileState(
+		firstState,
+		secondOutput,
+		fusedChronologicalOutputState(secondOutput, secondInput, secondType),
+		false,
+		secondStage,
+		orderKeys,
+		tieBreakers,
+	)
+
+	firstMeasure := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_measure_%d",
+		firstStage,
+	))
+	secondMeasure := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_measure_%d",
+		secondStage,
+	))
+	rowKey := immutableChronologicalRowKeySQL()
+	sourceAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_fused_source_%d",
+		secondStage,
+	))
+	orderedProjection := []string{
+		"*",
+		"tuple(" + firstCandidate + ", " + rowKey + ") AS " + firstMeasure,
+		"tuple(" + secondCandidate + ", " + rowKey + ") AS " + secondMeasure,
+	}
+	orderedProjection = append(orderedProjection, orderProjection...)
+	orderedInput := "SELECT " + strings.Join(orderedProjection, ", ") +
+		" FROM (" + relation.sql + ") AS " + sourceAlias
+	if orderSQL != "" {
+		orderedInput += " ORDER BY " + orderSQL
+	}
+	orderedInput += " LIMIT " + strconv.FormatUint(MaximumStreamStatsInputRows+1, 10)
+
+	windowParts := make([]string, 0, 2)
+	if orderSQL != "" {
+		windowParts = append(windowParts, "ORDER BY "+orderSQL)
+	} else {
+		windowParts = append(windowParts, "ORDER BY tuple()")
+	}
+	windowParts = append(
+		windowParts,
+		streamStatsFrameSQL(first.IncludeCurrent, first.WindowRows),
+	)
+	windowClause := strings.Join(windowParts, " ")
+	firstAggregate, aggregateErr := singleChronologicalAggregateSQL(
+		first.Measure.Function,
+		firstMeasure,
+	)
+	if aggregateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+	}
+	secondAggregate, aggregateErr := singleChronologicalAggregateSQL(
+		second.Measure.Function,
+		secondMeasure,
+	)
+	if aggregateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+	}
+	inputCount := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_input_count_%d",
+		secondStage,
+	))
+	firstWinner := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_value_%d",
+		firstStage,
+	))
+	secondWinner := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_value_%d",
+		secondStage,
+	))
+	preparedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_fused_prepared_%d",
+		secondStage,
+	))
+	windowSQL := "SELECT *, count() OVER () AS " + inputCount + ", " +
+		firstAggregate + " OVER (" + windowClause + ") AS " + firstWinner +
+		", " + secondAggregate + " OVER (" + windowClause + ") AS " +
+		secondWinner + " FROM (" + orderedInput + ") AS " + preparedAlias
+
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_fused_window_%d",
+		secondStage,
+	))
+	firstValidation := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_validation_%d",
+		firstStage,
+	))
+	secondValidation := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_validation_%d",
+		secondStage,
+	))
+	var transferredValidation []string
+	next.chronologicalBarriers, transferredValidation =
+		transferDeferredChronologicalValidation(
+			next.chronologicalBarriers,
+			state.deferredChronologicalValidation,
+		)
+	allValidation := append(
+		append([]string(nil), transferredValidation...),
+		firstValidation,
+		secondValidation,
+	)
+	publications := []fusedChronologicalPublication{
+		{
+			name:             firstOutput.Name,
+			valueSQL:         chronologicalPublishedValueSQL(windowAlias + "." + firstWinner),
+			storedTypeSQL:    chronologicalPublishedTypeSQL(windowAlias + "." + firstWinner),
+			validationColumn: firstValidation,
+			validationSQL: "tupleElement(tupleElement(" + windowAlias + "." +
+				firstMeasure + ", 1), 4)",
+		},
+		{
+			name:             secondOutput.Name,
+			valueSQL:         chronologicalPublishedValueSQL(windowAlias + "." + secondWinner),
+			storedTypeSQL:    chronologicalPublishedTypeSQL(windowAlias + "." + secondWinner),
+			validationColumn: secondValidation,
+			validationSQL: "tupleElement(tupleElement(" + windowAlias + "." +
+				secondMeasure + ", 1), 4)",
+		},
+	}
+	projection, projectionErr := fusedChronologicalProjection(
+		state,
+		next,
+		publications,
+	)
+	if projectionErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, projectionErr
+	}
+	next.deferredChronologicalValidation = append(
+		[]string(nil),
+		allValidation...,
+	)
+	maximumRows := strconv.FormatUint(MaximumStreamStatsInputRows, 10)
+	guard := "if(" + windowAlias + "." + inputCount + " > toUInt64(" +
+		maximumRows + "), throwIf(toUInt8(1), '" +
+		StreamStatsInputLimitMarker + "'), toUInt8(0))"
+	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		windowSQL + ") AS " + windowAlias + " WHERE " + guard + " = 0"
+	resultDepth := relation.depth + 3
+	enriched := compiledRelation{
+		sql:        resultSQL,
+		depth:      resultDepth,
+		ownerRange: second.Range,
+	}
+
+	resultInputName := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_result_input_%d",
+		secondStage,
+	))
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_result_%d",
+		secondStage,
+	))
+	barrierDepth := relationalNodeDepth(resultDepth)
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		sql:  "SELECT * FROM " + resultInputName,
+		prerequisiteDefinitions: []string{
+			resultInputName + " AS MATERIALIZED (" + resultSQL + ")",
+		},
+		validationColumns: allValidation,
+		fanout:            1,
+		depth:             barrierDepth,
+		ownerRange:        second.Range,
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_rows_result_%d",
+		secondStage,
+	))
+	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	enriched.depth = barrierDepth
+	prefixArgs := append(append([]any(nil), firstArgs...), secondArgs...)
+	return enriched.selectFrom(publishedSQL, second.Range), next, prefixArgs, barrier, nil
+}
+
 // compileStreamAggregate lowers one running count, true-only predicate count,
 // numeric sum/average, mixed extremum, or chronological selection over frames in the order already
 // established by the pipeline. Its retained relation is capped at one sentinel
@@ -15768,6 +16819,19 @@ func compileEventAggregate(
 		prefixArgs = append(prefixArgs, eligibilityArgs...)
 		prefixArgs = append(prefixArgs, unsupportedArgs...)
 	}
+	if measure.Function == plan.AggregateFunctionCountRows && len(groups) == 0 {
+		return compileWindowedGlobalEventStatsCount(
+			relation,
+			operator,
+			durableState,
+			next,
+			output,
+			stage,
+			inputName,
+			inputSQL,
+			prefixArgs,
+		)
+	}
 	if windowedDynamicExtrema {
 		return compileWindowedDynamicEventStatsExtrema(
 			relation,
@@ -16210,6 +17274,81 @@ func compileEventAggregate(
 			barrierName + " AS " + publishedAlias
 	}
 	return enriched.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
+}
+
+// compileWindowedGlobalEventStatsCount publishes an argument-free global
+// count from the same bounded input row stream. The general eventstats graph
+// has two consumers for that input (the aggregate and the row publication),
+// but count() OVER () can attach the identical total while preserving every
+// input row. Keeping the sentinel input as the one prerequisite fence removes
+// the cross-join fanout without weakening the input-row guard.
+func compileWindowedGlobalEventStatsCount(
+	relation compiledRelation,
+	operator *plan.EventAggregate,
+	state compileState,
+	next compileState,
+	output plan.FieldRef,
+	stage int,
+	inputName string,
+	inputSQL string,
+	prefixArgs []any,
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
+	if operator == nil ||
+		operator.Measure.Function != plan.AggregateFunctionCountRows ||
+		len(operator.GroupBy) != 0 || output.Name == "" || stage < 0 ||
+		inputName == "" || inputSQL == "" || len(prefixArgs) != 0 {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse global eventstats count: contract is invalid",
+		)
+	}
+
+	rawTotal := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_raw_count_%d",
+		stage,
+	))
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_window_%d",
+		stage,
+	))
+	windowSQL := "SELECT *, count() OVER () AS " + rawTotal + " FROM " + inputName
+	projection := eventAggregateProjection(
+		state,
+		next,
+		output.Name,
+		boundedEventStatsCountSQL(windowAlias+"."+rawTotal),
+		"",
+		"1",
+		"",
+		"",
+	)
+	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		windowSQL + ") AS " + windowAlias
+	enriched := compiledRelation{
+		sql:        resultSQL,
+		depth:      relation.depth + 3,
+		ownerRange: operator.Range,
+	}
+
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_%d",
+		stage,
+	))
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		sql:  resultSQL,
+		prerequisiteDefinitions: []string{
+			inputName + " AS MATERIALIZED (" + inputSQL + ")",
+		},
+		fanout:     1,
+		depth:      enriched.depth,
+		ownerRange: operator.Range,
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_rows_result_%d",
+		stage,
+	))
+	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	return enriched.selectFrom(publishedSQL, operator.Range), next, nil, barrier, nil
 }
 
 // compileWindowedDynamicEventStatsExtrema keeps the bounded Dynamic row fold,

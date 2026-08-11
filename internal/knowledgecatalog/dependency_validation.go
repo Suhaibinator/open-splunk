@@ -171,7 +171,7 @@ func (validator *dependencySemanticValidator) seedDecodedVersion(
 	}
 	semantics, err := dependencySemanticsFromDefinition(decoded.Definition)
 	if err != nil {
-		return fmt.Errorf("%w: decoded dependency semantics are invalid: %v", ErrCorrupt, err)
+		return fmt.Errorf("%w: decoded dependency semantics are invalid: %w", ErrCorrupt, err)
 	}
 	if decoded.Selector == nil {
 		return fmt.Errorf("%w: decoded dependency selector is missing", ErrCorrupt)
@@ -431,7 +431,7 @@ func (validator *dependencySemanticValidator) loadNodeSemantics(
 	node.semantics, err = dependencySemanticsFromDefinition(decoded.Definition)
 	if err != nil {
 		node.semanticsLoadErr = fmt.Errorf(
-			"%w: decoded dependency semantics are invalid: %v",
+			"%w: decoded dependency semantics are invalid: %w",
 			ErrCorrupt,
 			err,
 		)

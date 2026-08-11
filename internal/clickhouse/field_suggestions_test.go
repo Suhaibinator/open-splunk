@@ -108,6 +108,193 @@ func TestCompileFieldSuggestionsIsDeterministicParameterizedAndNameOnly(t *testi
 	}
 }
 
+func TestCompileFieldSuggestionsPrerequisiteUsesSingleSourceSentinelChain(t *testing.T) {
+	t.Parallel()
+
+	logical := buildEventStatsMinimumPlan(
+		t,
+		`index=gradethis | eventstats min(payload) AS low BY host`,
+	)
+	compiled := compileFieldSuggestions(
+		t,
+		logical,
+		FieldSuggestionSpec{Prefix: "lo", MaximumFields: 20},
+	)
+
+	for _, name := range []string{
+		fieldSuggestionSourceCTE,
+		fieldSuggestionSidecarsCTE,
+		fieldSuggestionRowsCTE,
+		fieldSuggestionObservationsCTE,
+		fieldSuggestionGroupsCTE,
+		fieldSuggestionCandidatesCTE,
+		fieldSuggestionControlledCTE,
+		fieldSuggestionLimitedCTE,
+	} {
+		if got := strings.Count(compiled.SQL, quoteIdentifier(name)+" AS ("); got != 1 {
+			t.Errorf("single-consumer CTE %q definitions = %d, want one\nSQL: %s", name, got, compiled.SQL)
+		}
+		if got := strings.Count(compiled.SQL, " FROM "+quoteIdentifier(name)); got != 1 {
+			t.Errorf("single-consumer CTE %q reads = %d, want one\nSQL: %s", name, got, compiled.SQL)
+		}
+		if strings.Contains(compiled.SQL, quoteIdentifier(name)+" AS MATERIALIZED (") {
+			t.Errorf("single-consumer CTE %q was materialized\nSQL: %s", name, compiled.SQL)
+		}
+	}
+	for _, fragment := range []string{
+		"ifNull(" + quoteIdentifier(internalFieldNamesColumn) +
+			", CAST([], 'Array(String)')) AS " + quoteIdentifier(fieldSuggestionSafeNames),
+		"ifNull(" + quoteIdentifier(internalFieldTypesColumn) +
+			", CAST([], 'Array(UInt8)')) AS " + quoteIdentifier(fieldSuggestionSafeTypes),
+		"toUInt8(ifNull(isNull(" + quoteIdentifier(internalFieldMetadataVersionColumn),
+		quoteIdentifier(internalFieldMetadataVersionColumn) + " != ?",
+		"length(" + quoteIdentifier(internalFieldNamesColumn) + ") > ?",
+		"length(" + quoteIdentifier(internalFieldTypesColumn) + ") > ?",
+		quoteIdentifier(fieldSuggestionCheckedNames) + " != arraySort(arrayDistinct(" +
+			quoteIdentifier(fieldSuggestionCheckedNames) + "))",
+		"arrayExists(stored_type -> stored_type < ? OR stored_type > ?, " +
+			quoteIdentifier(fieldSuggestionBoundedTypes) + ")",
+		"arrayExists((sidecar_names, sidecar_types, sidecar_version) -> ((notEmpty(sidecar_names) OR notEmpty(sidecar_types)) AND sidecar_version != ?)",
+		"CAST([], 'Array(Array(String))'), CAST([], 'Array(Array(UInt8))'), CAST([], 'Array(UInt8)')",
+		"arrayConcat(arrayZip(arrayMap(field_name -> left(field_name, CAST(? AS UInt64)), arraySlice(",
+		"arrayFlatten(arrayMap((sidecar_root, sidecar_names, sidecar_types) -> arrayMap(field_metadata -> tuple(concat(sidecar_root, '.', tupleElement(field_metadata, 1))",
+		"ARRAY JOIN arrayConcat([tuple(toUInt8(0), CAST('' AS String), " +
+			quoteIdentifier(fieldSuggestionRowInvalid) + ")], arrayMap(field_metadata -> tuple(toUInt8(1)",
+		"arrayFilter(field_metadata -> " + quoteIdentifier(fieldSuggestionRowInvalid) +
+			" = 0 AND startsWith(tupleElement(field_metadata, 1), CAST(? AS String))",
+		"UNION ALL SELECT toUInt8(0), CAST('' AS String), toUInt8(0)",
+		"GROUP BY " + quoteIdentifier(fieldSuggestionObservedKind) + ", " +
+			quoteIdentifier(fieldSuggestionObservedName),
+		"UNION ALL SELECT toUInt8(1), arrayJoin(CAST(? AS Array(String))), toUInt8(0)",
+		"max(if(" + quoteIdentifier(fieldSuggestionCandidateKind) +
+			" = toUInt8(0), " + quoteIdentifier(fieldSuggestionMetadataInvalid) +
+			", toUInt8(0))) OVER ()",
+		quoteIdentifier(fieldSuggestionGlobalInvalid) + " = 0 AND NOT startsWith(",
+		"ORDER BY " + quoteIdentifier(fieldSuggestionCandidateKind) + " ASC, lower(" +
+			quoteIdentifier(fieldSuggestionCandidateName) + ") ASC, " +
+			quoteIdentifier(fieldSuggestionCandidateName) + " ASC LIMIT ?",
+	} {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Errorf("prerequisite sentinel suggestions are missing %q\nSQL: %s", fragment, compiled.SQL)
+		}
+	}
+	for _, name := range []string{
+		fieldSuggestionMetadataCTE,
+		fieldSuggestionDynamicCTE,
+		fieldSuggestionKnownCTE,
+	} {
+		if strings.Contains(compiled.SQL, quoteIdentifier(name)+" AS (") {
+			t.Errorf("prerequisite suggestions retained ordinary CTE %q\nSQL: %s", name, compiled.SQL)
+		}
+	}
+	groupPosition := strings.Index(compiled.SQL, quoteIdentifier(fieldSuggestionGroupsCTE)+" AS (SELECT")
+	windowPosition := strings.Index(compiled.SQL, quoteIdentifier(fieldSuggestionControlledCTE)+" AS (SELECT")
+	if groupPosition < 0 || windowPosition < groupPosition {
+		t.Fatalf("global invalid window is not downstream of the bounded group:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, " AS MATERIALIZED ("); got != 1 {
+		t.Fatalf("prerequisite suggestions materialized CTEs = %d, want the sole chronological input fence:\n%s", got, compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, " LIMIT 0") {
+		t.Fatalf("prerequisite suggestions reread the final input to infer its validation schema:\n%s", compiled.SQL)
+	}
+	wantDummy := []string{
+		"toUInt8(0) AS " + quoteIdentifier(FieldSuggestionRowKindColumn),
+		"CAST('' AS String) AS " + quoteIdentifier(FieldSuggestionNameColumn),
+		"toUInt8(0) AS " + quoteIdentifier(FieldSuggestionInvalidColumn),
+	}
+	if got := fieldSuggestionValidationDummyProjection(); !reflect.DeepEqual(got, wantDummy) {
+		t.Fatalf("field-suggestion validation dummy = %#v, want %#v", got, wantDummy)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nargs: %#v\nSQL: %s", got, want, compiled.Args, compiled.SQL)
+	}
+	known, shadows, prefixes, dynamic, ok := fieldSuggestionControlArguments(compiled.Args)
+	if !ok {
+		t.Fatalf("suggestion control arguments missing: %#v", compiled.Args)
+	}
+	wantSuffix := []any{
+		compiled.Spec.Prefix,
+		shadows,
+		prefixes,
+		dynamic,
+		known,
+		fieldSuggestionInvalidEditorNamePattern,
+		uint64(compiled.Spec.MaximumFields) + 2,
+	}
+	if len(compiled.Args) < len(wantSuffix) ||
+		!reflect.DeepEqual(compiled.Args[len(compiled.Args)-len(wantSuffix):], wantSuffix) {
+		t.Fatalf("prerequisite suggestion argument suffix = %#v, want %#v", compiled.Args, wantSuffix)
+	}
+
+	ordinaryPolicy := eventAnalysisFinalizationPolicy{materializeSharedCTEs: true}
+	prerequisitePolicy := eventAnalysisFinalizationPolicy{materializeSharedCTEs: false}
+	if got := fieldSuggestionResultContractFor(ordinaryPolicy).sourceFanout; got != eventStatsSummarySourceFanout {
+		t.Fatalf("ordinary field-suggestion source fanout = %d, want %d", got, eventStatsSummarySourceFanout)
+	}
+	if got := fieldSuggestionResultContractFor(prerequisitePolicy).sourceFanout; got != eventStatsOrdinarySourceFanout {
+		t.Fatalf("prerequisite field-suggestion source fanout = %d, want one", got)
+	}
+}
+
+func TestRetainedFieldSuggestionSidecarsAreCompleteSortedAndCompact(t *testing.T) {
+	t.Parallel()
+
+	complete := func(label string) fieldState {
+		return fieldState{
+			relativeFieldNamesSQL:   quoteIdentifier(label + "_names"),
+			relativeFieldTypesSQL:   quoteIdentifier(label + "_types"),
+			fieldMetadataVersionSQL: quoteIdentifier(label + "_version"),
+		}
+	}
+	state := compileState{visible: map[string]fieldState{
+		"zeta":   complete("zeta"),
+		"scalar": {},
+		"alpha":  complete("alpha"),
+	}}
+	sidecars, err := retainedFieldSuggestionSidecars(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fieldSuggestionSidecarRoots(sidecars); !reflect.DeepEqual(got, []string{"alpha", "zeta"}) {
+		t.Fatalf("retained sidecar roots = %#v, want sorted complete roots", got)
+	}
+
+	var sql strings.Builder
+	writePrerequisiteFieldSuggestionSidecars(&sql, sidecars)
+	sql.WriteString(", ")
+	writePrerequisiteFieldSuggestionRows(&sql, sidecars)
+	compiledSQL := sql.String()
+	for _, expression := range []string{
+		quoteIdentifier("alpha_names"), quoteIdentifier("alpha_types"), quoteIdentifier("alpha_version"),
+		quoteIdentifier("zeta_names"), quoteIdentifier("zeta_types"), quoteIdentifier("zeta_version"),
+	} {
+		if got := strings.Count(compiledSQL, expression); got != 1 {
+			t.Errorf("sidecar expression %q occurrences = %d, want one projection", expression, got)
+		}
+	}
+	for _, fragment := range []string{
+		"arrayExists((sidecar_names, sidecar_types, sidecar_version) ->",
+		"arrayFlatten(arrayMap((sidecar_root, sidecar_names, sidecar_types) ->",
+		"[" + quoteIdentifier(fieldSuggestionSidecarNamesAlias(0)) + ", " +
+			quoteIdentifier(fieldSuggestionSidecarNamesAlias(1)) + "]",
+		"[" + quoteIdentifier(fieldSuggestionSidecarTypesAlias(0)) + ", " +
+			quoteIdentifier(fieldSuggestionSidecarTypesAlias(1)) + "]",
+	} {
+		if got := strings.Count(compiledSQL, fragment); got == 0 {
+			t.Errorf("compact sidecar SQL is missing %q:\n%s", fragment, compiledSQL)
+		}
+	}
+	if got := strings.Count(compiledSQL, "arrayFlatten(arrayMap((sidecar_root"); got != 1 {
+		t.Fatalf("sidecar candidate lambdas = %d, want one generic expression:\n%s", got, compiledSQL)
+	}
+
+	state.visible["partial"] = fieldState{relativeFieldNamesSQL: quoteIdentifier("partial_names")}
+	if _, err := retainedFieldSuggestionSidecars(state); err == nil {
+		t.Fatal("partial retained sidecar authority compiled")
+	}
+}
+
 func TestCompileFieldSuggestionsAcceptsSeventeenSegmentDerivedQueryField(t *testing.T) {
 	t.Parallel()
 

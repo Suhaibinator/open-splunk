@@ -744,6 +744,111 @@ func TestRuntimeSearchAnalysisRejectsTypedNilDependencies(t *testing.T) {
 	}
 }
 
+func TestRuntimeFieldCatalogMemoryContract(t *testing.T) {
+	if runtimeFieldAnalysisMaxConcurrent != 2 ||
+		queryexec.MaximumFieldCatalogMemoryBytes != uint64(224<<20) ||
+		!runtimeFieldCatalogMemoryContractValid() {
+		t.Fatalf(
+			"runtime field-catalog memory contract = shared concurrency %d cap %d envelope %d valid %t",
+			runtimeFieldAnalysisMaxConcurrent,
+			queryexec.MaximumFieldCatalogMemoryBytes,
+			runtimeFieldCatalogMemoryEnvelopeBytes,
+			runtimeFieldCatalogMemoryContractValid(),
+		)
+	}
+	twoQueries := uint64(2) * queryexec.MaximumFieldCatalogMemoryBytes
+	threeQueries := uint64(3) * queryexec.MaximumFieldCatalogMemoryBytes
+	if twoQueries > runtimeFieldCatalogMemoryEnvelopeBytes ||
+		threeQueries <= runtimeFieldCatalogMemoryEnvelopeBytes {
+		t.Fatalf(
+			"runtime field-catalog aggregate = two %d three %d envelope %d",
+			twoQueries,
+			threeQueries,
+			runtimeFieldCatalogMemoryEnvelopeBytes,
+		)
+	}
+}
+
+func TestRuntimeFieldAnalysisAdmitsTwoCatalogsAndRejectsThirdWithoutWaiting(t *testing.T) {
+	jobIDs := []string{"field-capacity-0", "field-capacity-1", "field-capacity-third"}
+	snapshots := make(map[string]searchjobs.ExecutionSnapshot, len(jobIDs))
+	for _, jobID := range jobIDs {
+		snapshots[jobID] = runtimeFieldExecutionSnapshotWithID(t, jobID)
+	}
+	snapshot := snapshots[jobIDs[0]]
+	searches := runtimeCapacityFieldSearches{snapshots: snapshots}
+	executor := &runtimeCapacityFieldExecutor{
+		entered: make(chan struct{}, runtimeFieldAnalysisMaxConcurrent),
+		release: make(chan struct{}),
+	}
+	analysis, err := newRuntimeSearchAnalysis(runtimeSearchAnalysisConfig{
+		Searches: searches,
+		Compiler: runtimeTimelineCompiler{},
+		Executor: executor,
+	})
+	if err != nil {
+		t.Fatalf("newRuntimeSearchAnalysis: %v", err)
+	}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(executor.release)
+		}
+		if err := analysis.Close(); err != nil {
+			t.Errorf("analysis.Close cleanup: %v", err)
+		}
+	})
+
+	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
+	results := make(chan error, runtimeFieldAnalysisMaxConcurrent)
+	for index := range runtimeFieldAnalysisMaxConcurrent {
+		jobID := jobIDs[index]
+		go func() {
+			_, err := analysis.fields.ListFields(
+				context.Background(),
+				access,
+				searchanalysis.ListFieldsRequest{SearchJobID: jobID},
+			)
+			results <- err
+		}()
+	}
+	for range runtimeFieldAnalysisMaxConcurrent {
+		select {
+		case <-executor.entered:
+		case err := <-results:
+			t.Fatalf("runtime field analysis returned before executor admission: %v", err)
+		case <-time.After(5 * time.Second):
+			t.Fatal("runtime field analysis did not admit two workers")
+		}
+	}
+
+	started := time.Now()
+	_, err = analysis.fields.ListFields(
+		context.Background(),
+		access,
+		searchanalysis.ListFieldsRequest{SearchJobID: jobIDs[2]},
+	)
+	if !errors.Is(err, searchanalysis.ErrFieldAnalysisCapacity) {
+		t.Fatalf("third field analysis error = %v, want capacity", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("third field analysis waited %v instead of failing fast", elapsed)
+	}
+
+	close(executor.release)
+	released = true
+	for index := range runtimeFieldAnalysisMaxConcurrent {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("admitted field analysis %d error = %v", index, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("admitted field analysis %d did not complete", index)
+		}
+	}
+}
+
 func TestRuntimeSearchAnalysisCloseIsIdempotent(t *testing.T) {
 	analysis := newRuntimeSearchAnalysisForTest(t)
 	if err := analysis.Close(); err != nil {
@@ -999,10 +1104,16 @@ type runtimeSnapshotSearches struct {
 }
 
 func runtimeFieldExecutionSnapshot(t *testing.T) searchjobs.ExecutionSnapshot {
+	return runtimeFieldExecutionSnapshotWithID(t, "job")
+}
+
+func runtimeFieldExecutionSnapshotWithID(
+	t *testing.T,
+	jobID string,
+) searchjobs.ExecutionSnapshot {
 	t.Helper()
 
 	const (
-		jobID    = "job"
 		tenantID = "tenant"
 		ownerID  = "owner"
 		source   = "index=main level=error"
@@ -1146,6 +1257,46 @@ type runtimeBlockingFieldExecutor struct {
 	entered chan struct{}
 	exited  chan struct{}
 	once    sync.Once
+}
+
+type runtimeCapacityFieldSearches struct {
+	runtimeCompletedSearches
+	snapshots map[string]searchjobs.ExecutionSnapshot
+}
+
+func (searches runtimeCapacityFieldSearches) CompletedExecutionSnapshotFor(
+	_ context.Context,
+	access searchjobs.AccessScope,
+	jobID string,
+) (searchjobs.ExecutionSnapshot, error) {
+	snapshot, ok := searches.snapshots[jobID]
+	if !ok || snapshot.TenantID != access.TenantID || snapshot.OwnerID != access.OwnerID {
+		return searchjobs.ExecutionSnapshot{}, searchjobs.ErrNotFound
+	}
+	return snapshot, nil
+}
+
+type runtimeCapacityFieldExecutor struct {
+	runtimeTimelineExecutor
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (executor *runtimeCapacityFieldExecutor) ExecuteFieldCatalog(
+	ctx context.Context,
+	_ clickhouse.CompiledFieldCatalog,
+) (queryexec.FieldCatalogResult, error) {
+	select {
+	case executor.entered <- struct{}{}:
+	case <-ctx.Done():
+		return queryexec.FieldCatalogResult{}, ctx.Err()
+	}
+	select {
+	case <-executor.release:
+		return queryexec.FieldCatalogResult{Fields: []queryexec.FieldProfileRow{}}, nil
+	case <-ctx.Done():
+		return queryexec.FieldCatalogResult{}, ctx.Err()
+	}
 }
 
 func (executor *runtimeBlockingFieldExecutor) ExecuteFieldCatalog(ctx context.Context, _ clickhouse.CompiledFieldCatalog) (queryexec.FieldCatalogResult, error) {

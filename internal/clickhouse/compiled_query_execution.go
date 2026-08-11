@@ -193,16 +193,6 @@ func sealFinalCompiledQuery(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	// The exact semantic commitment, physical lowering proof, authored split,
-	// and whole-query ceilings are now staged above. Keep only the runtime
-	// compatibility gate closed. An explicitly tagged go test binary may cross
-	// this compiler-only boundary to exercise the public Compiler and executor
-	// acceptance matrix; ordinary builds, including tagged production binaries,
-	// remain closed and snapshot finalization retains its independent gate.
-	if preparation.present && preparation.program.ObjectCount() != 0 &&
-		!knowledgeRuntimeAcceptanceEnabled() {
-		return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: nonempty knowledge lowering is absent")
-	}
 	sealed, err := sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
 	if err != nil {
 		return CompiledQuery{}, err

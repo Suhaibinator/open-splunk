@@ -150,14 +150,14 @@ func TestPreviewKnowledgeObjectRequestCodecRawLimitBodyCloseAndDetachment(t *tes
 	if _, err := codec.DecodeBytes(exact); err != nil {
 		t.Fatalf("DecodeBytes exact limit: %v", err)
 	}
-	if _, err := codec.Decode(httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(exact))); err != nil {
+	if _, err := codec.Decode(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", bytes.NewReader(exact))); err != nil {
 		t.Fatalf("Decode exact limit: %v", err)
 	}
 	over := append(exact, 0)
 	for name, decode := range map[string]func() error{
 		"bytes": func() error { _, err := codec.DecodeBytes(over); return err },
 		"http": func() error {
-			_, err := codec.Decode(httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(over)))
+			_, err := codec.Decode(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", bytes.NewReader(over)))
 			return err
 		},
 	} {
@@ -169,7 +169,7 @@ func TestPreviewKnowledgeObjectRequestCodecRawLimitBodyCloseAndDetachment(t *tes
 	}
 
 	body := &validateTrackingReadCloser{Reader: bytes.NewReader(nil)}
-	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
 	request.Body = body
 	if _, err := codec.Decode(request); err != nil || !body.closed {
 		t.Fatalf("body close = %v / %t", err, body.closed)
@@ -177,7 +177,7 @@ func TestPreviewKnowledgeObjectRequestCodecRawLimitBodyCloseAndDetachment(t *tes
 	if _, err := codec.Decode(nil); err == nil {
 		t.Fatal("nil request was accepted")
 	}
-	requestWithoutBody := httptest.NewRequest(http.MethodPost, "/", nil)
+	requestWithoutBody := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
 	requestWithoutBody.Body = nil
 	if _, err := codec.Decode(requestWithoutBody); err == nil {
 		t.Fatal("request without a body was accepted")
@@ -467,7 +467,8 @@ func TestPreviewKnowledgeObjectRequestCodecRemainsUnregistered(t *testing.T) {
 		t.Fatalf("management routes = %d, want unchanged nine", len(routes))
 	}
 	body := newKnowledgeBoundaryObservedBody("unread Preview body", nil)
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/api/v1/knowledge/objects/preview",
 		body,

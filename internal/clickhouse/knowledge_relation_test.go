@@ -319,14 +319,14 @@ func TestCompileKnowledgeRelation(t *testing.T) {
 				if prepareErr != nil {
 					t.Fatalf("prepare stage combination: %v", prepareErr)
 				}
-				preparation := knowledgePreludePreparationForTest(program)
+				stagePreparation := knowledgePreludePreparationForTest(program)
 				input := compiledRelation{sql: "SELECT ?", depth: 2}
 				existing := []any{"existing-first"}
 				result, compileErr := compileKnowledgeRelation(
 					input,
 					knowledgeExtractionStageState(),
 					existing,
-					preparation,
+					stagePreparation,
 				)
 				if compileErr != nil {
 					t.Fatalf("compile stage combination: %v", compileErr)

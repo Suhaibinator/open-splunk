@@ -61,7 +61,7 @@ func TestCompileKnowledgeAliasSourcePinsStoredPathAuthority(t *testing.T) {
 	}
 	for _, required := range []string{
 		"tuple(toUInt8(1), CAST(" + wantAuthority.valueSQL() + " AS Dynamic)",
-		"JSONExtract(" + quoteIdentifier(internalFieldsColumn),
+		"JSONExtract(ifNull(JSONExtractRaw(toJSONString(" + quoteIdentifier(internalFieldsColumn) + ")",
 		"toUInt8(" + fmt.Sprint(eventfields.StoredValueTypeObject) + ")",
 		"CAST([], 'Array(String)')",
 		"CAST([], 'Array(UInt8)')",
@@ -112,8 +112,10 @@ func TestCompileKnowledgeAliasSourcePreservesContainerLeaves(t *testing.T) {
 		"arrayMap(field_index -> toUInt8(arrayElement(" +
 			quoteIdentifier(internalFieldTypesColumn) + ", field_index))",
 		"arrayEnumerate(" + quoteIdentifier(internalFieldNamesColumn) + ")",
-		"JSONExtract(" + quoteIdentifier(internalFieldsColumn) +
-			", CAST(? AS String), 'Dynamic')",
+		knowledgeAliasMaterializedDynamicSQL(
+			quoteIdentifier(internalFieldsColumn),
+			[]string{"CAST(? AS String)"},
+		),
 		"toUInt8(" + quoteIdentifier(internalFieldMetadataVersionColumn) + ")",
 	} {
 		if !strings.Contains(compiled.sql, required) {
@@ -183,8 +185,14 @@ func TestCompileKnowledgeAliasSourceEscapedPaths(t *testing.T) {
 		literal.proof.storedPath.normalizedDescendantPrefix != literalName+"." {
 		t.Fatalf("escaped stored path proof = %#v", literal.proof.storedPath)
 	}
-	wantMaterializer := "JSONExtract(" + quoteIdentifier(internalFieldsColumn) +
-		strings.Repeat(", CAST(? AS String)", len(wantPhysical)) + ", 'Dynamic')"
+	segments := make([]string, len(wantPhysical))
+	for index := range segments {
+		segments[index] = "CAST(? AS String)"
+	}
+	wantMaterializer := knowledgeAliasMaterializedDynamicSQL(
+		quoteIdentifier(internalFieldsColumn),
+		segments,
+	)
 	if got := strings.Count(literal.sql, wantMaterializer); got != 1 {
 		t.Fatalf(
 			"segment-wise JSON materializers = %d, want one %q:\n%s",
@@ -463,9 +471,14 @@ func TestCompileKnowledgeAliasSourceBoundsArgumentsAndSQL(t *testing.T) {
 				t.Fatalf("boundary argument %d = %#v (%T), want detached String", index, argument, argument)
 			}
 		}
-		wantMaterializer := "JSONExtract(" + quoteIdentifier(internalFieldsColumn) +
-			strings.Repeat(", CAST(? AS String)", len(field.storedPath.physicalSegments)) +
-			", 'Dynamic')"
+		segments := make([]string, len(field.storedPath.physicalSegments))
+		for index := range segments {
+			segments[index] = "CAST(? AS String)"
+		}
+		wantMaterializer := knowledgeAliasMaterializedDynamicSQL(
+			quoteIdentifier(internalFieldsColumn),
+			segments,
+		)
 		if got := strings.Count(compiled.sql, wantMaterializer); got != 1 {
 			t.Fatalf(
 				"boundary JSON materializers = %d, want one %q:\n%s",

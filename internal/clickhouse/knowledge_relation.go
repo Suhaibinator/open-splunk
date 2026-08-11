@@ -11,8 +11,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
-// compiledKnowledgeRelation is the complete, still-unreachable physical
-// knowledge prefix. prelude is retained beside the relation so later sealing
+// compiledKnowledgeRelation is the complete inline compatibility form of the
+// physical knowledge prefix. prelude is retained beside the relation so sealing
 // can prove that the SQL, final state, and runtime accounting came from one
 // internally compiled authority rather than independently mutable inputs.
 type compiledKnowledgeRelation struct {
@@ -34,9 +34,9 @@ type compiledKnowledgeStageRelation struct {
 
 // compileKnowledgeRelation compiles the immutable prelude from the exact Scan
 // state, applies every relation-neutral stage as two SELECT levels, and closes
-// nonempty work behind the runtime guard. It is intentionally not wired into
-// compiler.go; pinned ClickHouse suffix compatibility remains a prerequisite
-// for opening nonempty finalization.
+// nonempty work behind the runtime guard. Production compiler.go uses the
+// deferred top-level form instead; this independent inline form remains a
+// compatibility and invariant oracle for the same compiler-minted authority.
 func compileKnowledgeRelation(
 	relation compiledRelation,
 	scanState compileState,

@@ -581,6 +581,8 @@ func decodeOutcomeReference(record idempotencyRecord) (*opensplunkv1.KnowledgeOb
 	}
 	reference := outcome.GetObject()
 	quarantine := record.MutationKind == "quarantine"
+	// #nosec G115 -- the condition below rejects reference versions above math.MaxInt64.
+	referenceVersion := int64(reference.GetVersion())
 	if len(outcome.ProtoReflect().GetUnknown()) != 0 || reference == nil ||
 		len(reference.ProtoReflect().GetUnknown()) != 0 ||
 		outcome.GetRoute() != record.Route || outcome.GetMutationKind() != record.MutationKind ||
@@ -597,7 +599,7 @@ func decodeOutcomeReference(record idempotencyRecord) (*opensplunkv1.KnowledgeOb
 		reference.GetVersion() == 0 || reference.GetVersion() > math.MaxInt64 ||
 		!validOutcomeDefinitionDigest(quarantine, reference.GetDefinitionSha256()) ||
 		reference.GetKnowledgeObjectId() != record.KnowledgeObjectID ||
-		int64(reference.GetVersion()) != record.ObjectVersion {
+		referenceVersion != record.ObjectVersion {
 		return nil, fmt.Errorf("%w: knowledge outcome reference is invalid", ErrCorrupt)
 	}
 	canonical, err := (proto.MarshalOptions{Deterministic: true}).Marshal(outcome)

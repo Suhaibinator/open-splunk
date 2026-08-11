@@ -312,7 +312,7 @@ func knowledgeHTTPPost(
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
-	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(payload))
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, bytes.NewReader(payload))
 	request.Host = "example.com"
 	request.Header.Set("Origin", "http://example.com")
 	request.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -1496,7 +1496,7 @@ func TestKnowledgeHTTPExactRouteAndOriginChecksPrecedeAuthentication(t *testing.
 		{name: "untrusted origin", method: http.MethodPost, path: knowledgeObjectsGetPath, host: "example.com", origin: "http://attacker.example", wantStatus: http.StatusForbidden},
 	}
 	for _, test := range tests {
-		request := httptest.NewRequest(test.method, test.path, nil)
+		request := httptest.NewRequestWithContext(t.Context(), test.method, test.path, nil)
 		request.Host = test.host
 		request.Header.Set("Origin", test.origin)
 		request.Header.Set("Authorization", "Bearer "+knowledgeBoundaryToken)
@@ -1529,7 +1529,8 @@ func TestKnowledgeHTTPSmallRouteBodyLimitsAreAuditedBeforeScope(t *testing.T) {
 			appender := &knowledgeBoundaryAppender{}
 			apps := knowledgeHTTPApps()
 			_, httpHandler := newKnowledgeHTTPHandler(t, auth.BrowserRoleAdministrator, &knowledgeHTTPCatalog{}, &knowledgeHTTPWriter{}, apps, appender)
-			request := httptest.NewRequest(
+			request := httptest.NewRequestWithContext(
+				t.Context(),
 				http.MethodPost,
 				test.path,
 				bytes.NewReader(bytes.Repeat([]byte{0xff}, int(maximumKnowledgeSmallRequestBytes)+1)),
@@ -1854,7 +1855,7 @@ func TestKnowledgeHTTPHandlersDetachReadAndMutationResponsesBeforeEncoding(
 
 func knowledgeHTTPDirectAdministratorRequest(t *testing.T, path string) *http.Request {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodPost, path, nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, nil)
 	principal := knowledgeBoundaryPrincipal(t, auth.BrowserRoleAdministrator)
 	return request.WithContext(context.WithValue(
 		request.Context(),

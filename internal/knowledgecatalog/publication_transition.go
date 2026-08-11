@@ -543,8 +543,10 @@ func (evaluator *publicationTransitionEvaluator) evaluate() (
 			if err := evaluator.work.chargeChangedCohort(afterWinners); err != nil {
 				return candidateDependencyAuthority{}, 0, 0, err
 			}
+			// #nosec G115 -- changed cohorts are bounded by knowledgeprogram.MaximumObjects.
+			expectedWinnerCount := uint32(len(afterWinners))
 			cohort := publicationWinnerCohort{
-				expectedWinnerCount: uint32(len(afterWinners)),
+				expectedWinnerCount: expectedWinnerCount,
 				winners:             make([]publicationWinner, len(afterWinners)),
 			}
 			for index, winner := range afterWinners {
@@ -737,8 +739,10 @@ func (evaluator *publicationTransitionEvaluator) validateBaselineCohort(
 	if err := evaluator.work.chargeSemanticCohort(winners); err != nil {
 		return err
 	}
+	// #nosec G115 -- semantic cohorts are bounded by knowledgeprogram.MaximumObjects.
+	expectedWinnerCount := uint32(len(winners))
 	cohort := publicationWinnerCohort{
-		expectedWinnerCount: uint32(len(winners)),
+		expectedWinnerCount: expectedWinnerCount,
 		winners:             make([]publicationWinner, len(winners)),
 	}
 	for index, winner := range winners {
@@ -1032,6 +1036,7 @@ func validatePublicationActiveTransitionMode(
 		)
 	}
 	if afterActive {
+		// #nosec G115 -- a validated dependency authority cannot have a negative target count.
 		derivedCount := uint64(publicationTransitionDerivedTargetCount(candidateDependencies))
 		if postDependencyCount > maximumPublicationTransitionDependencies ||
 			derivedCount > maximumPublicationTransitionDependencies-postDependencyCount {
@@ -1044,8 +1049,10 @@ func validatePublicationActiveTransitionMode(
 			if !hydration.candidateVisible {
 				continue
 			}
-			if hydration.postDependencies > uint64(resolutionHydrationBudget.dependencies) ||
-				derivedCount > uint64(resolutionHydrationBudget.dependencies)-hydration.postDependencies {
+			// #nosec G115 -- resolution hydration budgets validate a nonnegative dependency limit.
+			dependencyBudget := uint64(resolutionHydrationBudget.dependencies)
+			if hydration.postDependencies > dependencyBudget ||
+				derivedCount > dependencyBudget-hydration.postDependencies {
 				return publicationActiveTransitionAuthority{}, fmt.Errorf(
 					"%w: publication transition post cohort exceeds dependency hydration limits",
 					control.ErrCapacityExceeded,
@@ -1520,6 +1527,7 @@ func publicationTransitionPersistenceEndpointFrom(
 	}
 	object := input.winner.object
 	result.objectID = strings.Clone(object.KnowledgeObjectID)
+	// #nosec G115 -- endpoint validation bounds public object versions to math.MaxInt64.
 	result.version = int64(object.Version)
 	result.objectType = object.ObjectType
 	result.name = strings.Clone(object.Name)
@@ -1779,7 +1787,8 @@ func publicationTransitionLinkedCanonicalObject(
 	}
 	result.canonical.key = dependencyVersionKey{
 		objectID: strings.Clone(winner.object.KnowledgeObjectID),
-		version:  int64(winner.object.Version),
+		// #nosec G115 -- canonical winner validation bounds versions to math.MaxInt64.
+		version: int64(winner.object.Version),
 	}
 	result.canonical.existingDependenciesPresent = winner.existingDependenciesPresent
 	result.canonical.existingDependencies = winner.existingDependencies
@@ -2106,11 +2115,21 @@ func publicationTransitionAddHydrationCharge(
 func publicationTransitionHydrationWithinResolutionBudget(
 	charge publicationTransitionHydrationCharge,
 ) bool {
-	return charge.definitionBytes <= uint64(resolutionHydrationBudget.definitionBytes) &&
-		charge.projectionBytes <= uint64(resolutionHydrationBudget.projectionBytes) &&
-		charge.selectorPatterns <= uint64(resolutionHydrationBudget.selectorPatterns) &&
-		charge.selectorValueBytes <= uint64(resolutionHydrationBudget.selectorValueBytes) &&
-		charge.dependencies <= uint64(resolutionHydrationBudget.dependencies)
+	// #nosec G115 -- the fixed resolution hydration budget contains only nonnegative limits.
+	definitionBytes := uint64(resolutionHydrationBudget.definitionBytes)
+	// #nosec G115 -- the fixed resolution hydration budget contains only nonnegative limits.
+	projectionBytes := uint64(resolutionHydrationBudget.projectionBytes)
+	// #nosec G115 -- the fixed resolution hydration budget contains only nonnegative limits.
+	selectorPatterns := uint64(resolutionHydrationBudget.selectorPatterns)
+	// #nosec G115 -- the fixed resolution hydration budget contains only nonnegative limits.
+	selectorValueBytes := uint64(resolutionHydrationBudget.selectorValueBytes)
+	// #nosec G115 -- the fixed resolution hydration budget contains only nonnegative limits.
+	dependencies := uint64(resolutionHydrationBudget.dependencies)
+	return charge.definitionBytes <= definitionBytes &&
+		charge.projectionBytes <= projectionBytes &&
+		charge.selectorPatterns <= selectorPatterns &&
+		charge.selectorValueBytes <= selectorValueBytes &&
+		charge.dependencies <= dependencies
 }
 
 func publicationTransitionIndexAtoms(
@@ -2205,9 +2224,7 @@ func publicationTransitionIndexAtomsWithBudget(
 				return invalidPublicationTransition("contains incomplete wildcard index-program authority")
 			}
 			cached, found := wildcardCache[key]
-			if found {
-				matchedIndexes = cached.indexes
-			} else {
+			if !found {
 				if budget.selectorProbes > maximumPublicationTransitionIndexSelectorProbes ||
 					uint64(len(names)) > maximumPublicationTransitionIndexSelectorProbes-budget.selectorProbes {
 					return fmt.Errorf(
@@ -2480,6 +2497,7 @@ func publicationTransitionWinnerKeyFromObject(
 	// Borrowing them avoids multiplying wide identity allocations per
 	// class/signature state.
 	result.objectID = object.GetKnowledgeObjectId()
+	// #nosec G115 -- canonical winner validation bounds versions to math.MaxInt64.
 	result.version = int64(object.GetVersion())
 	result.ownerID = object.GetOwnerId()
 	result.appID = object.GetAppId()
@@ -2529,6 +2547,7 @@ func (work *publicationTransitionWork) chargeSemanticCohort(
 			control.ErrCapacityExceeded,
 		)
 	}
+	// #nosec G115 -- the nonempty winner slice is bounded by knowledgeprogram.MaximumObjects.
 	pairs := uint64(len(winners)) * uint64(len(winners)-1) / 2
 	if !addPublicationResource(
 		&work.winnerPairComparisons,
@@ -2627,7 +2646,8 @@ func publicationCandidateAuthorityFromCanonical(
 	var digest [sha256.Size]byte
 	copy(digest[:], object.object.GetDefinitionSha256())
 	return publicationCandidateAuthority{
-		objectID:         strings.Clone(object.object.GetKnowledgeObjectId()),
+		objectID: strings.Clone(object.object.GetKnowledgeObjectId()),
+		// #nosec G115 -- canonical winner validation bounds versions to math.MaxInt64.
 		version:          int64(object.object.GetVersion()),
 		definitionDigest: digest,
 		ownerID:          strings.Clone(object.object.GetOwnerId()),
@@ -2732,20 +2752,26 @@ func publicationTransitionHashObject(
 	publicationTransitionHashBool(digest, object.winner.existingDependenciesPresent)
 	publicationTransitionHashUint64(digest, uint64(len(object.winner.existingDependencies)))
 	for _, dependency := range object.winner.existingDependencies {
+		// #nosec G115 -- canonical dependency ordinals are validated as nonnegative.
 		publicationTransitionHashUint64(digest, uint64(dependency.ordinal))
 		publicationTransitionHashString(digest, dependency.targetObjectID)
+		// #nosec G115 -- canonical dependency target versions are validated as positive.
 		publicationTransitionHashUint64(digest, uint64(dependency.targetVersion))
+		// #nosec G115 -- dependency roles are validated protobuf enum values.
 		publicationTransitionHashUint64(digest, uint64(dependency.role))
 	}
 }
 
 func publicationTransitionHashWinnerKey(digest hash.Hash, key publicationTransitionWinnerKey) {
 	publicationTransitionHashString(digest, key.objectID)
+	// #nosec G115 -- canonical winner key versions are validated as positive.
 	publicationTransitionHashUint64(digest, uint64(key.version))
 	_, _ = digest.Write(key.definitionDigest[:])
 	publicationTransitionHashString(digest, key.ownerID)
 	publicationTransitionHashString(digest, key.appID)
+	// #nosec G115 -- winner keys contain validated nonnegative enum values.
 	publicationTransitionHashUint64(digest, uint64(key.sharingScope))
+	// #nosec G115 -- winner keys contain validated nonnegative enum values.
 	publicationTransitionHashUint64(digest, uint64(key.objectType))
 	publicationTransitionHashString(digest, key.name)
 }
@@ -2842,18 +2868,23 @@ func publicationTransitionHashCandidateDependencies(
 	}
 	candidate := authority.state.candidate
 	publicationTransitionHashString(digest, candidate.objectID)
+	// #nosec G115 -- candidate authority versions are validated as positive.
 	publicationTransitionHashUint64(digest, uint64(candidate.version))
 	_, _ = digest.Write(candidate.definitionDigest[:])
 	publicationTransitionHashString(digest, candidate.ownerID)
+	// #nosec G115 -- source stages are validated nonnegative protobuf enum values.
 	publicationTransitionHashUint64(digest, uint64(authority.sourceStage()))
 	targets := authority.state.targets
 	publicationTransitionHashUint64(digest, uint64(len(targets)))
 	for _, target := range targets {
 		publicationTransitionHashString(digest, target.objectID)
+		// #nosec G115 -- target authority versions are validated as positive.
 		publicationTransitionHashUint64(digest, uint64(target.version))
 		_, _ = digest.Write(target.definitionDigest[:])
 		publicationTransitionHashString(digest, target.ownerID)
+		// #nosec G115 -- target roles are validated nonnegative protobuf enum values.
 		publicationTransitionHashUint64(digest, uint64(target.role))
+		// #nosec G115 -- target stages are validated nonnegative protobuf enum values.
 		publicationTransitionHashUint64(digest, uint64(target.targetStage))
 	}
 }

@@ -109,7 +109,7 @@ func newAuthoredSemanticError(text string, issue Issue) error {
 func candidateInvalid(index int, err *authoredSemanticError) error {
 	return &candidateIssueError{
 		text:       fmt.Sprintf("%v: object %d %s", ErrInvalidProgram, index, err.Error()),
-		inputIndex: uint32(index),
+		inputIndex: uint32(index), // #nosec G115 -- index comes from the MaximumObjects-bounded input slice.
 		issue:      cloneIssue(err.issue),
 	}
 }
@@ -216,8 +216,8 @@ func scalarDiagnosticRange(source string, sourceRange spl.Range) (*ScalarRange, 
 		return nil, false
 	}
 	return &ScalarRange{
-		StartByteOffset: uint32(start),
-		EndByteOffset:   uint32(end),
+		StartByteOffset: uint32(start), // #nosec G115 -- definition input is bounded far below MaxUint32.
+		EndByteOffset:   uint32(end),   // #nosec G115 -- definition input is bounded far below MaxUint32.
 	}, true
 }
 
@@ -235,8 +235,8 @@ func scalarPointRange(source string, offset int) (*ScalarRange, bool) {
 		end += width
 	}
 	return &ScalarRange{
-		StartByteOffset: uint32(offset),
-		EndByteOffset:   uint32(end),
+		StartByteOffset: uint32(offset), // #nosec G115 -- definition input is bounded far below MaxUint32.
+		EndByteOffset:   uint32(end),    // #nosec G115 -- definition input is bounded far below MaxUint32.
 	}, true
 }
 

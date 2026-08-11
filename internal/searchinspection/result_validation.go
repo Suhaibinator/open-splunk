@@ -280,7 +280,7 @@ func validInspectionKnowledgeBinding(
 		return len(objects) == 0
 	}
 	objectCount := summary.GetRef().GetObjectCount()
-	if uint32(len(objects)) != objectCount {
+	if uint64(len(objects)) != uint64(objectCount) {
 		return false
 	}
 	for _, object := range objects {

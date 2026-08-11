@@ -114,10 +114,10 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		t.Error("Preview create/update and maximum_rows scalar presence is not pinned by proto3 optional fields")
 	}
 	validationContractRequireProtoComments(t, "message PreviewKnowledgeObjectRequest {",
-		"future route remains unregistered",
-		"internal request codec accepts a raw protobuf request body of at most 4 MiB plus 64 KiB (4259840 bytes)",
-		"future owner-scoped retained execution authority",
-		"reacquire under the authenticated caller",
+		"administrator-only route is registered only with the complete ready",
+		"request codec accepts a raw protobuf body of at most 4 MiB plus 64 KiB (4259840 bytes)",
+		"owner-scoped retained execution authority",
+		"service reacquires under the authenticated caller",
 		"not an immutable event snapshot identity",
 		"does not itself grant access",
 		"nonempty valid UTF-8 of at most 256 bytes",
@@ -136,9 +136,10 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 		"never mutates or normalizes the decoded request",
 	)
 	validationContractRequireNestedProtoComments(t, "message PreviewKnowledgeObjectRequest {", "optional uint32 maximum_rows = 6;",
-		"preserves only presence and the exact uint32 value",
-		"no default, bound, or execution meaning",
-		"future Preview service contract",
+		"Absence selects the service default of 100 rows per side",
+		"Present values",
+		"must be in 1..1000",
+		"zero and larger values fail before execution",
 	)
 
 	dependency := file.Messages().ByName("KnowledgeValidationDependency")
@@ -395,7 +396,6 @@ func TestKnowledgeValidationContractPinsCandidateScopedWireLayout(t *testing.T) 
 	validationContractRequireField(t, previewResponse, "validation", 1, protoreflect.MessageKind, "open_splunk.v1.KnowledgeValidationResult")
 	validationContractRequireField(t, previewResponse, "tenant_catalog_revision", 7, protoreflect.Uint64Kind, "")
 	validationContractRequireProtoComments(t, "message PreviewKnowledgeObjectResponse {",
-		"future unregistered route",
 		"no independent validation intent",
 		"always uses ACTIVE_PUBLICATION",
 		"same create/update candidate-envelope semantics as ValidateKnowledgeObjectRequest",

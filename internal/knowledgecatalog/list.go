@@ -133,7 +133,8 @@ func (store *Store) List(
 		return ListPage{}, err
 	}
 	page = ListPage{
-		Objects:         objects,
+		Objects: objects,
+		// #nosec G115 -- readCatalogState validates the persisted catalog revision.
 		CatalogRevision: uint64(catalog.revision),
 	}
 	if hasMore {

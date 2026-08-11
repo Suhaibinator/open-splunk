@@ -126,7 +126,7 @@ func Normalize(input *opensplunkv1.KnowledgeObjectDefinition) (Normalized, error
 
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(definition)
 	if err != nil {
-		return Normalized{}, fmt.Errorf("%w: deterministic marshal: %v", ErrInvalidDefinition, err)
+		return Normalized{}, fmt.Errorf("%w: deterministic marshal: %w", ErrInvalidDefinition, err)
 	}
 	if err := validateCanonicalBytes(encoded); err != nil {
 		return Normalized{}, err
@@ -228,7 +228,7 @@ func DecodeCanonical(data, expectedDigest []byte) (Normalized, error) {
 	}
 	normalized, err := Normalize(definition)
 	if err != nil {
-		return Normalized{}, fmt.Errorf("%w: %v", ErrNonCanonical, err)
+		return Normalized{}, fmt.Errorf("%w: %w", ErrNonCanonical, err)
 	}
 	if !bytes.Equal(data, normalized.Bytes) {
 		return Normalized{}, ErrNonCanonical
@@ -275,7 +275,7 @@ func decodeCanonicalFutureBody(data, expectedDigest []byte) (ForwardCompatible, 
 		return ForwardCompatible{}, fmt.Errorf("%w: malformed protobuf", ErrNonCanonical)
 	}
 	if err := preflightInput(definition); err != nil {
-		return ForwardCompatible{}, fmt.Errorf("%w: %v", ErrNonCanonical, err)
+		return ForwardCompatible{}, fmt.Errorf("%w: %w", ErrNonCanonical, err)
 	}
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(definition)
 	if err != nil || !bytes.Equal(encoded, data) {
@@ -288,7 +288,7 @@ func decodeCanonicalFutureBody(data, expectedDigest []byte) (ForwardCompatible, 
 		return ForwardCompatible{}, err
 	}
 	if err := rejectNestedUnknownFields(definition.ProtoReflect(), rootDefinitionIssuePath()); err != nil {
-		return ForwardCompatible{}, fmt.Errorf("%w: %v", ErrNonCanonical, err)
+		return ForwardCompatible{}, fmt.Errorf("%w: %w", ErrNonCanonical, err)
 	}
 
 	known, ok := cloneWithoutTopLevelUnknown(definition)
@@ -865,8 +865,8 @@ func cloneOptionalString(value *string) *string {
 	if value == nil {
 		return nil
 	}
-	copy := *value
-	return &copy
+	cloned := *value
+	return &cloned
 }
 
 func trimASCIIWhitespace(value string) string {

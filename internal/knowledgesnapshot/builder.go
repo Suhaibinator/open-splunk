@@ -197,9 +197,9 @@ func (authority Authority) Summary() AuthoritySummary {
 		TenantCatalogStateToken:    bytes.Clone(authority.base.TenantCatalogStateToken),
 		AppCatalogRevision:         cloneUint64(authority.base.AppCatalogRevision),
 		EffectiveAuthorizedIndexes: slices.Clone(authority.base.EffectiveAuthorizedIndexes),
-		ExecutableObjects:          uint32(len(authority.objects)),
-		Dependencies:               uint32(len(authority.dependencies)),
-		Shadows:                    uint32(len(authority.shadows)),
+		ExecutableObjects:          uint32(len(authority.objects)),      // #nosec G115 -- prepared authority collections are resource-bounded.
+		Dependencies:               uint32(len(authority.dependencies)), // #nosec G115 -- prepared authority collections are resource-bounded.
+		Shadows:                    uint32(len(authority.shadows)),      // #nosec G115 -- prepared authority collections are resource-bounded.
 	}
 }
 
@@ -371,7 +371,7 @@ func Prepare(input Input) (Authority, error) {
 	}
 	indexScope, err := indexread.NormalizeScope(input.TenantID, input.EffectiveAuthorizedIndexes)
 	if err != nil {
-		return Authority{}, fmt.Errorf("%w: effective authorized indexes: %v", ErrInvalidInput, err)
+		return Authority{}, fmt.Errorf("%w: effective authorized indexes: %w", ErrInvalidInput, err)
 	}
 
 	var candidateDefinitionBytes uint64
@@ -465,11 +465,11 @@ func Prepare(input Input) (Authority, error) {
 	})
 	if err != nil {
 		if errors.Is(err, knowledgeprogram.ErrResourceLimit) {
-			return Authority{}, fmt.Errorf("%w: prepare knowledge prelude: %v", ErrResourceLimit, err)
+			return Authority{}, fmt.Errorf("%w: prepare knowledge prelude: %w", ErrResourceLimit, err)
 		}
-		return Authority{}, fmt.Errorf("%w: prepare knowledge prelude: %v", ErrInvalidInput, err)
+		return Authority{}, fmt.Errorf("%w: prepare knowledge prelude: %w", ErrInvalidInput, err)
 	}
-	if err := validatePreludeAuthority(prelude, static, uint32(len(objects))); err != nil {
+	if err := validatePreludeAuthority(prelude, static, uint32(len(objects))); err != nil { // #nosec G115 -- objects are bounded by MaximumObjects.
 		return Authority{}, err
 	}
 
@@ -488,11 +488,11 @@ func Prepare(input Input) (Authority, error) {
 		Shadows:                      snapshotShadows,
 		Warnings:                     snapshotWarnings,
 		BudgetCharges: &opensplunkv1.KnowledgeSnapshotBudgetCharges{
-			ExecutableObjects:         uint32(len(objects)),
+			ExecutableObjects:         uint32(len(objects)), // #nosec G115 -- objects are bounded by MaximumObjects.
 			SelectorPatterns:          selectorPatterns,
 			SelectorWildcardWorkUnits: selectorWork,
 			DependencyNodes:           dependencyNodes,
-			DependencyEdges:           uint32(len(dependencies)),
+			DependencyEdges:           uint32(len(dependencies)), // #nosec G115 -- dependencies are bounded by MaximumDependencies.
 			DependencyDepth:           dependencyDepth,
 		},
 		TenantCatalogStateToken: bytes.Clone(input.TenantCatalogStateToken),
@@ -579,7 +579,7 @@ func canonicalizeObjects(input Input, candidateDefinitionBytes *uint64) (
 		candidate := input.Objects[position]
 		stage, stageRank, err := stageForObjectType(candidate.ObjectType)
 		if err != nil {
-			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: object %d: %v", ErrInvalidInput, position, err)
+			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: object %d: %w", ErrInvalidInput, position, err)
 		}
 		if !validIdentity(candidate.KnowledgeObjectID, maximumObjectIDBytes) ||
 			candidate.Version == 0 || candidate.Version > math.MaxInt64 ||
@@ -599,7 +599,7 @@ func canonicalizeObjects(input Input, candidateDefinitionBytes *uint64) (
 		}
 		normalized, err := knowledgedefinition.Normalize(candidate.Definition)
 		if err != nil {
-			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: object %d definition: %v", ErrInvalidInput, position, err)
+			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: object %d definition: %w", ErrInvalidInput, position, err)
 		}
 		if err := chargeCandidateDefinitionBytes(candidateDefinitionBytes, len(normalized.Bytes)); err != nil {
 			return nil, nil, 0, 0, StaticCharges{}, err
@@ -613,7 +613,7 @@ func canonicalizeObjects(input Input, candidateDefinitionBytes *uint64) (
 		}
 		semantics, err := compileDefinitionSemantics(normalized)
 		if err != nil {
-			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: object %d definition is not executable: %v", ErrInvalidInput, position, err)
+			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: object %d definition is not executable: %w", ErrInvalidInput, position, err)
 		}
 		key := objectKey{id: candidate.KnowledgeObjectID, version: candidate.Version}
 		if _, duplicate := byKey[key]; duplicate {
@@ -638,13 +638,13 @@ func canonicalizeObjects(input Input, candidateDefinitionBytes *uint64) (
 		objects = append(objects, object)
 		byKey[key] = object
 		stats := normalized.Selector.Stats()
-		selectorPatterns += uint64(stats.Patterns)
+		selectorPatterns += stats.Patterns
 		if selectorPatterns > math.MaxUint32 {
 			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: selector pattern charge overflows", ErrResourceLimit)
 		}
 		selectorWork, err = knowledge.ChargeSnapshotSelectorWork(selectorWork, normalized.Selector)
 		if err != nil {
-			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: selector work: %v", ErrResourceLimit, err)
+			return nil, nil, 0, 0, StaticCharges{}, fmt.Errorf("%w: selector work: %w", ErrResourceLimit, err)
 		}
 	}
 	sort.Slice(objects, func(left, right int) bool {
@@ -693,10 +693,11 @@ func compileDefinitionSemantics(normalized knowledgedefinition.Normalized) (defi
 				}
 			}
 			semantics.outputFields = normalizedFields(outputs)
-			semantics.charges.GeneratedFields = uint32(len(outputs))
+			semantics.charges.GeneratedFields = uint32(len(outputs)) // #nosec G115 -- regex outputs are bounded by the extraction limit.
 			semantics.charges.ExtractionRegexPrograms = 1
-			semantics.charges.ExtractionRegexWorkUnits = uint64(compiled.ProgramWorkUnits)
-			semantics.charges.ExtractionOutputs = uint32(len(outputs))
+			// The regex compiler returns a positive value bounded by MaximumExtractionProgramWorkUnits.
+			semantics.charges.ExtractionRegexWorkUnits = uint64(compiled.ProgramWorkUnits) // #nosec G115 -- the compiler-enforced bound is far below MaxUint64.
+			semantics.charges.ExtractionOutputs = uint32(len(outputs))                     // #nosec G115 -- regex outputs are bounded by the extraction limit.
 		case *opensplunkv1.FieldExtractionDefinition_Json:
 			if extraction == nil || extraction.Json == nil {
 				return definitionSemantics{}, errors.New("JSON extraction is nil")
@@ -973,7 +974,7 @@ func canonicalizeDependencies(
 		}
 		return l.input.Role < r.input.Role
 	})
-	return dependencies, uint32(len(nodes)), maximumDepth, nil
+	return dependencies, uint32(len(nodes)), maximumDepth, nil // #nosec G115 -- dependency nodes are bounded by MaximumDependencies.
 }
 
 func canonicalizeShadows(
@@ -1018,7 +1019,7 @@ func canonicalizeShadows(
 			return nil, fmt.Errorf("%w: shadow %d definition authority disagrees", ErrInvalidInput, position)
 		}
 		if _, err := compileDefinitionSemantics(normalized); err != nil {
-			return nil, fmt.Errorf("%w: shadow %d definition is not executable: %v", ErrInvalidInput, position, err)
+			return nil, fmt.Errorf("%w: shadow %d definition is not executable: %w", ErrInvalidInput, position, err)
 		}
 		if submitted.KnowledgeObjectID == winner.input.KnowledgeObjectID {
 			return nil, fmt.Errorf("%w: shadow %d aliases its winner", ErrInvalidInput, position)
@@ -1129,7 +1130,7 @@ func validateBaseSkeletonSize(base *opensplunkv1.KnowledgeSnapshot) error {
 	}
 	encoded, err := (proto.MarshalOptions{Deterministic: true}).Marshal(base)
 	if err != nil {
-		return fmt.Errorf("%w: deterministic snapshot skeleton marshal: %v", ErrInvalidInput, err)
+		return fmt.Errorf("%w: deterministic snapshot skeleton marshal: %w", ErrInvalidInput, err)
 	}
 	if len(encoded) > MaximumCanonicalBytes {
 		return fmt.Errorf("%w: canonical snapshot bytes exceed %d", ErrResourceLimit, MaximumCanonicalBytes)
@@ -1164,9 +1165,7 @@ func finalize(authority Authority, evidence trustedCompilerEvidence) (Snapshot, 
 // Finalize seals this exact prepared authority against one exact compiler-
 // produced ClickHouse execution. It accepts no caller-constructible budget
 // counters and requires the exact present knowledge-program commitment even
-// for an admitted empty authority. Production nonempty finalization remains
-// disabled until the pinned KO-1 engine matrix passes; an explicitly dual-
-// tagged go-test process may cross only this final gate for lifecycle staging.
+// for an admitted empty authority.
 func (authority Authority) Finalize(compiled clickhouse.CompiledQuery) (Snapshot, error) {
 	if authority.base == nil || authority.base.BudgetCharges == nil {
 		return Snapshot{}, fmt.Errorf("%w: prepared authority is absent", ErrInvalidInput)
@@ -1178,9 +1177,6 @@ func (authority Authority) Finalize(compiled clickhouse.CompiledQuery) (Snapshot
 	if compilerEvidence.TenantID() != authority.base.GetTenantId() ||
 		!slices.Equal(compilerEvidence.EffectiveIndexes(), authority.base.GetEffectiveAuthorizedIndexes()) {
 		return Snapshot{}, fmt.Errorf("%w: compiled query read scope disagrees with prepared authority", ErrInvalidInput)
-	}
-	if len(authority.objects) != 0 && !knowledgeSnapshotAcceptanceEnabled() {
-		return Snapshot{}, fmt.Errorf("%w: nonempty authority requires the KO-1 knowledge prelude", ErrInvalidInput)
 	}
 	commitment, commitmentOK := compilerEvidence.KnowledgeProgramCommitment()
 	if !commitmentOK {
@@ -1219,7 +1215,7 @@ func validateTrustedCompilerEvidence(
 	if authority.base == nil || authority.base.BudgetCharges == nil {
 		return invalid("prepared authority is absent")
 	}
-	objects := uint32(len(authority.objects))
+	objects := uint32(len(authority.objects)) // #nosec G115 -- prepared authority objects are bounded by MaximumObjects.
 	if err := validatePreludeAuthority(authority.prelude, authority.static, objects); err != nil {
 		return trustedCompilerTotals{}, err
 	}
@@ -1338,7 +1334,7 @@ func digestSnapshot(
 	marshal := proto.MarshalOptions{Deterministic: true}
 	withoutCharge, err := marshal.Marshal(snapshot)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("%w: deterministic snapshot marshal: %v", ErrInvalidInput, err)
+		return Snapshot{}, fmt.Errorf("%w: deterministic snapshot marshal: %w", ErrInvalidInput, err)
 	}
 	if len(withoutCharge) > MaximumCanonicalBytes {
 		return Snapshot{}, fmt.Errorf("%w: canonical snapshot bytes exceed %d", ErrResourceLimit, MaximumCanonicalBytes)
@@ -1346,7 +1342,7 @@ func digestSnapshot(
 	snapshot.BudgetCharges.CanonicalSnapshotBytes = uint64(len(withoutCharge))
 	digestInput, err := marshal.Marshal(snapshot)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("%w: deterministic digest marshal: %v", ErrInvalidInput, err)
+		return Snapshot{}, fmt.Errorf("%w: deterministic digest marshal: %w", ErrInvalidInput, err)
 	}
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(digestDomain))
@@ -1358,7 +1354,7 @@ func digestSnapshot(
 	snapshot.SnapshotSha256 = bytes.Clone(digestBytes)
 	encoded, err := marshal.Marshal(snapshot)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("%w: final deterministic snapshot marshal: %v", ErrInvalidInput, err)
+		return Snapshot{}, fmt.Errorf("%w: final deterministic snapshot marshal: %w", ErrInvalidInput, err)
 	}
 	var digest [sha256.Size]byte
 	copy(digest[:], digestBytes)

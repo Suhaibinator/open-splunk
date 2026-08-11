@@ -510,6 +510,7 @@ func TestKnowledgeAuditMetadataCorruptionFailsStartupListAndContinuation(t *test
 				_ = connection.Close()
 				t.Fatalf("ignore fixture constraints: %v", err)
 			}
+			// #nosec G202 -- assignment is selected from the fixed corruption-test table above.
 			if _, err := connection.ExecContext(ctx, `
 				UPDATE audit_events
 				SET `+testCase.assignment+`

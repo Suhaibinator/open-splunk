@@ -1024,7 +1024,8 @@ func knowledgeSnapshotMetadataBytes(summary *opensplunkv1.KnowledgeSnapshotSumma
 	if err := knowledgesnapshot.ValidateSummary(summary); err != nil {
 		return 0, err
 	}
-	encodedBytes := uint64(proto.Size(summary))
+	// ValidateSummary bounds the encoded representation by MaximumSummaryBytes.
+	encodedBytes := uint64(proto.Size(summary)) // #nosec G115 -- validated above as a small, non-negative protobuf size.
 	encodedCharge, ok := checkedAddUint64(encodedBytes, encodedBytes)
 	if !ok {
 		return 0, errors.New("knowledge snapshot metadata charge overflow")

@@ -229,14 +229,15 @@ func sourcePosition(ctx context.Context, source string, offset uint64) (*openspl
 	if offset > uint64(len(source)) || !utf8.ValidString(source[:offset]) {
 		return nil, ErrInvariant
 	}
+	end := int(offset) // #nosec G115 -- offset was bounded by len(source) above.
 	line, column := uint32(1), uint32(1)
-	for index := 0; index < int(offset); {
+	for index := 0; index < end; {
 		if index&4095 == 0 {
 			if err := contextError(ctx); err != nil {
 				return nil, err
 			}
 		}
-		character, width := utf8.DecodeRuneInString(source[index:int(offset)])
+		character, width := utf8.DecodeRuneInString(source[index:end])
 		if character == utf8.RuneError && width == 1 {
 			return nil, ErrInvariant
 		}

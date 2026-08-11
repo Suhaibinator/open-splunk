@@ -70,7 +70,7 @@ func NormalizeFieldDestination(source string) (FieldDestination, error) {
 	}
 	segments, err := eventfields.ParseNormalizedSearchFieldPath(value)
 	if err != nil {
-		return FieldDestination{}, fmt.Errorf("%w: %v", ErrInvalidFieldDestination, err)
+		return FieldDestination{}, fmt.Errorf("%w: %w", ErrInvalidFieldDestination, err)
 	}
 	if eventfields.IsReservedDynamicRoot(segments[0]) {
 		return FieldDestination{}, fmt.Errorf("%w: reserved root", ErrInvalidFieldDestination)

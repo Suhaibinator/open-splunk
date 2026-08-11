@@ -20,14 +20,16 @@ This directory is the source of truth shared by the Go server, Go collector, and
   operation and carries only the optional compact `KnowledgeSnapshotRef`.
 - `knowledge.proto` defines the common registry projection, authorized selectors,
   Tier-1 typed definitions, versioned dependencies, provenance, and immutable
-  search snapshot. `knowledge_api.proto` reserves the protobuf CRUD,
-  validation, dependency, and bounded preview messages. The nine
+  search snapshot. `knowledge_api.proto` defines the protobuf CRUD,
+  validation, dependency, and bounded Preview messages. The nine core
   create/get/list/dependencies/dependents/validate/update/set-state/delete routes
-  are registered as one complete administrator-only management unit. Validate
-  uses a dedicated bounded decoder and the rollback-only catalog service;
-  Preview has only an internal bounded request codec and structural envelope
-  validator. Quarantine and Preview remain unregistered route contracts, and
-  none of this advertises the Tier-1 capability.
+  and the retained-search Preview route are one complete administrator-only
+  family. Validate uses a dedicated bounded decoder and rollback-only catalog
+  service. Preview reacquires an owner-scoped retained execution, validates one
+  ACTIVE-publication candidate, and returns paired bounded projections. The
+  server advertises Tier 1 only when this entire family, the Resolver-backed
+  search runtime, inspection/history/export, and field-analysis services are
+  ready. Quarantine remains unregistered.
 - `system_api.proto` gives the static frontend one bootstrap call for server capabilities and initial app/index choices.
 
 Persistent database rows and ClickHouse table definitions are deliberately not protobuf contracts. Converters at the service boundary keep storage migrations from becoming accidental wire changes.
@@ -246,18 +248,17 @@ redacted wire variant cannot retain an object ID, name, version, owner, app, or
 definition location.
 
 The route comments in `knowledge_api.proto` reserve the intended endpoint
-names. The browser-route table below contains exactly the nine production
-object-management routes currently registered by `NewHandler` when its complete
+names. The browser-route table below contains the nine core production
+object-management routes registered by `NewHandler` when its complete
 management dependency unit, including a constructor-ready concrete Writer, is
-present. Registration is all-or-none and independent of bootstrap feature
-advertisement. The quarantine and preview messages do not create routes.
-Preview's internal request codec and structural validator likewise do not
-register a route, install a response codec, or add the message to the route
-manifest or browser bearer policy.
-Validate is registered but deliberately absent from the browser administrator-
-bearer allowlist and the backend's generic outer administrator-route map; its
-inner knowledge-attempt boundary authenticates and authorizes the administrator
-before its dedicated decoder runs. List and graph continuations use bounded
+present. A ready Preview service over that same unit conditionally registers
+Preview as the tenth route; production supplies that complete composition.
+Core registration is all-or-none and remains independent of bootstrap feature
+advertisement. Quarantine has no route. All ten Knowledge routes are in the
+browser administrator-bearer policy, while their inner knowledge-attempt
+boundaries authenticate and authorize before the dedicated Validate or Preview
+decoder, or another route's generic decoder, can retain request authority.
+List and graph continuations use bounded
 `PageRequest`/`PageResponse`
 contracts. The implemented List cursor binds all normalized filters, ordering,
 caller scope, page bound, and the
@@ -266,15 +267,16 @@ cursor additionally binds its direction, requested-version presence and value,
 resolved root identity, and total-count choice; a catalog revision or state-
 commitment change invalidates continuation.
 
-The dormant browser's complete List request tuple contains page size/token and
-total-size choice; app, owner, name/description text, object-type, lifecycle-
-state, sharing-scope, and selector-text filters; and sort field/direction. App,
-type, state, and sort remain immediate controls. Owner, text, sharing, and
-selector text are one submitted child-local advanced tuple: typing sends no
-request and does not rerender the parent workspace (bounded at 8,192 rows), a
-changed valid Apply commits all four atomically, aborts list/detail work, and
-clears the page, token, consumed-token, stale, and selected-detail state. Clear
-restores owner/text/selector absent plus sharing `all`. A continuation
+The feature-gated browser's complete List request tuple contains page
+size/token and total-size choice; app, owner, name/description text,
+object-type, lifecycle-state, sharing-scope, and selector-text filters; and
+sort field/direction. App, type, state, and sort remain immediate controls.
+Owner, text, sharing, and selector text are one submitted child-local advanced
+tuple: typing sends no request and does not rerender the parent workspace
+(bounded at 8,192 rows), a changed valid Apply commits all four atomically,
+aborts list/detail work, and clears the page, token, consumed-token, stale, and
+selected-detail state. Clear restores owner/text/selector absent plus sharing
+`all`. A continuation
 reproduces the entire committed request and changes only `page_token`. The
 unchanged signed server cursor binds
 trusted tenant/owner/readable-app scope, page size and `include_total_size`, all
@@ -505,18 +507,17 @@ database read, catalog proof, route registration, or HTTP mapping occurs there.
 The Writer adapter supplies those catalog, transaction, transition, and
 authorization proofs and calls this seal only after successful rollback. The
 registered handler and custom encoder consume the seal without reopening its
-mutable protobuf authority. Validate remains absent from the browser bearer
-allowlist and capability advertisement.
+mutable protobuf authority. The seal itself grants no route, bearer, or
+capability authority; complete server composition supplies those separately.
 
 Preview's internal request-only codec accepts the retained-search-job scalar
 plus the same create/update candidate fields. The canonical field authority is
 `retained_search_job_id = 1`, `definition = 2`, optional
 `knowledge_object_id = 3`, optional `expected_version = 4`,
 `update_mask = 5`, and optional uint32 `maximum_rows = 6`; Preview accepts no
-independent intent. The retained job ID names future owner-scoped retained
-execution authority which a service must reacquire under the authenticated
-caller. It is not an immutable-event-snapshot identity and does not itself
-grant access.
+independent intent. The retained job ID names owner-scoped retained execution
+authority which the service reacquires under the authenticated caller. It is
+not an immutable-event-snapshot identity and does not itself grant access.
 
 The structural validator requires a nonempty valid-UTF-8 job ID of at most 256
 bytes, unchanged by whitespace trimming and containing no Unicode control code
@@ -529,32 +530,26 @@ and update mask-selected nested unknowns remain candidate authority for future
 service evaluation; update candidate top-level and unselected nested unknowns
 are outside the mask authority and are discarded.
 
-`maximum_rows` preserves full optional uint32 wire authority: absence,
-explicit zero, and every value through `4294967295` remain distinct and
-unchanged. This request boundary assigns no default, bound, or execution
-meaning. Generated Go and TypeScript contract oracles independently preserve
-the create tags `[1, 2]` and all six present-empty update tags; the Go
-structural oracle and TypeScript wire oracle additionally preserve the maximum
-uint32 value. The frozen request comments and oracle coverage are wire-neutral:
-no field number, type, or presence encoding changed.
+`maximum_rows` preserves full optional uint32 wire authority. Absence selects
+the service default of 100 rows per side; a present value must be in `1..1000`.
+Zero and larger values fail before retained execution. Generated Go and
+TypeScript contract oracles independently preserve the create tags `[1, 2]`,
+all six present-empty update tags, and the maximum uint32 overflow witness. No
+field number, type, or presence encoding changed.
 
-Preview remains unregistered and unadvertised. There is no Preview response
-codec, handler, catalog/search service, retained-execution acquisition or
-caller-authorization integration, route, TypeScript route entry, browser bearer
-attachment, capability, UI/navigation request, Resolver attachment, or search
-execution. A future service must reacquire the owner-scoped retained execution,
-evaluate definition validity in one fixed knowledge/app/index transaction,
-apply the validated candidate program to that retained server-authorized
-execution, and freeze row-limit, paired before/after schema-row, truncation,
-response-byte, deadline, and concurrency semantics while retaining the
-advisory-only revision contract. The production nonempty compiler,
-snapshot-finalization, and digest-pinned ClickHouse acceptance gates remain
-closed. The compiler-only and dual-tag snapshot lifecycle test bridges open no
-Preview service or wire authority. The runtime tag alone remains insufficient
-for `Authority.Finalize`; the dual-tag test finalizer grants no route or
-production authority. Preview must never accept raw events, physical table
-names, index authority, asset paths, or SQL. Validate remains registered but
-unadvertised.
+Preview is conditionally registered and advertised only as part of the complete
+Tier-1 family. Its handler authenticates and authorizes before decode, its
+service holds the Manager-retained result lease through validation and both
+executions, and its compiler adapter rebuilds only from the Manager-sealed app,
+index, time, visibility, catalog, and knowledge authority. The candidate is
+validated as ACTIVE publication against one fixed catalog view. Invalid
+candidates return validation only; valid candidates return paired job-bound
+revision-1 schemas and at most the requested rows per side, with one extra-row
+witness setting `truncated`. The complete response is capped at 8 MiB while the
+Manager, Writer, and executor retain their existing bounded admission and
+resource authorities. Any lookup, compilation, execution, cancellation,
+schema, row, or byte failure discards both sides atomically. Preview never
+accepts raw events, physical table names, index authority, asset paths, or SQL.
 
 This validation redesign intentionally uses a historical FILE-compatibility
 waiver. The earlier draft result fields 6 (`diagnostics`) and 7
@@ -563,8 +558,8 @@ waiver. The earlier draft result fields 6 (`diagnostics`) and 7
 and were never served by either the Validate or Preview route; all tags and the
 resource name remain reserved against reinterpretation. Peers may drop those
 never-served draft unknown values, but the change must not be described as
-schema non-breaking. Validate's later registration does not retroactively
-change that historical classification; Preview remains unregistered.
+schema non-breaking. Validate's and Preview's later registration do not
+retroactively change that historical classification.
 
 The dependency routes expose only direct persisted object-to-object edges and
 never snapshot-global stage, depth, ordinal, or definition-digest authority.
@@ -599,6 +594,29 @@ transactional catalog/app/index authority and compiler-derived dependency
 closure. Opaque future definitions cannot be updated or enabled as ACTIVE. An
 exact retained ACTIVE result remains replayable after downgrade only when the
 retained outcome is still recognized and canonical.
+
+**Tier-1 activation checkpoint (August 10, 2026).** Production now attaches the
+ready Resolver to `searchjobs.Manager`, admits and finalizes nonempty knowledge
+programs in ordinary builds, registers Preview with the complete management
+family, forwards the memory-only administrator bearer on all ten Knowledge
+routes, and advertises `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` only when the
+Resolver-backed runtime, Preview, inspection/history/export, field catalog,
+field summary, suggestions, and timeline services are all ready. The feature-
+gated manager provides Tier-1 create/validate/update/state/delete and retained-
+search Preview while feature-off bootstrap still imports nothing and emits
+zero Knowledge traffic. The pinned ClickHouse 26.3.17.4 matrix exercises
+ordinary search, selectors, all 16 executable compatibility runtime-edge IDs,
+chart/timechart/stats/chronology, pruning, empty runtime, field services, exact
+maximum-field concurrency, atomic overflow, and retained v1/v2 history/export
+lifecycle. The dated implementation milestones below are preserved as
+historical evidence; their earlier closed, dormant, unregistered, or hard-false
+readiness claims are superseded by this checkpoint.
+
+#### Historical pre-activation implementation ledger
+
+The following revision-bound inventory records the path to activation. Its
+present-tense readiness statements describe the cited historical revisions,
+not the current production composition above.
 
 Production composes the management Store, concrete ready Writer, attempt
 journal, app authority, and a concrete Resolver. It retains that Resolver for
@@ -1005,6 +1023,8 @@ production Resolver/wiring/runtime gate, identity release, or ClickHouse
 behavior. Docker was **NOT RUN** and remains paused/canceled. The complete
 digest-pinned 13-surface `26.3.17.4` matrix remains the next runtime action.
 
+### Current route manifest
+
 Collector display-name and enabled-state mutations return a
 `CollectorAdministrationSnapshot`, not a full operational `CollectorRecord`.
 The snapshot is the exact durable result of the optimistic update and contains
@@ -1022,6 +1042,7 @@ projection.
 | `/knowledge/objects/dependencies` | `ListKnowledgeObjectDependenciesRequest` | `ListKnowledgeObjectDependenciesResponse` |
 | `/knowledge/objects/dependents` | `ListKnowledgeObjectDependentsRequest` | `ListKnowledgeObjectDependentsResponse` |
 | `/knowledge/objects/validate` | `ValidateKnowledgeObjectRequest` | `ValidateKnowledgeObjectResponse` |
+| `/knowledge/objects/preview` | `PreviewKnowledgeObjectRequest` | `PreviewKnowledgeObjectResponse` |
 | `/knowledge/objects/update` | `UpdateKnowledgeObjectRequest` | `UpdateKnowledgeObjectResponse` |
 | `/knowledge/objects/set-state` | `SetKnowledgeObjectStateRequest` | `SetKnowledgeObjectStateResponse` |
 | `/knowledge/objects/delete` | `DeleteKnowledgeObjectRequest` | `DeleteKnowledgeObjectResponse` |

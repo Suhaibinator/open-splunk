@@ -387,7 +387,7 @@ func writeKnowledgeSealTime(writer hash.Hash, value time.Time) bool {
 	}
 	zoneName, zoneOffset := value.Zone()
 	writeKnowledgeSealString(writer, zoneName)
-	writeKnowledgeSealUint64(writer, uint64(int64(zoneOffset)))
+	writeKnowledgeSealUint64(writer, uint64(int64(zoneOffset))) // #nosec G115 -- two's-complement encoding preserves the signed zone offset in the stable seal.
 	return true
 }
 

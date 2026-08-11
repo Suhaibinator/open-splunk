@@ -170,17 +170,6 @@ func (event Event) ValidateForTenant(tenantID string) error {
 	return nil
 }
 
-func (event Event) detached() Event {
-	event.TenantID = strings.Clone(event.TenantID)
-	event.Actor = audit.Actor{
-		Kind: event.Actor.Kind,
-		ID:   strings.Clone(event.Actor.ID),
-		Role: event.Actor.Role,
-	}
-	event.AuthorizedContext = cloneAuthorizedContext(event.AuthorizedContext)
-	return event
-}
-
 func validRejectedActor(actor audit.Actor, reason Reason) bool {
 	if !actor.Valid() || actor.Kind != audit.ActorKindBrowser {
 		return false
@@ -235,20 +224,4 @@ func trimASCIIWhitespace(value string) string {
 	return strings.TrimFunc(value, func(character rune) bool {
 		return character == ' ' || character >= '\t' && character <= '\r'
 	})
-}
-
-func cloneAuthorizedContext(value *AuthorizedContext) *AuthorizedContext {
-	if value == nil {
-		return nil
-	}
-	cloned := &AuthorizedContext{AppID: strings.Clone(value.AppID)}
-	if value.Object != nil {
-		cloned.Object = &AuthorizedObject{
-			KnowledgeObjectID: strings.Clone(value.Object.KnowledgeObjectID),
-			ObjectType:        value.Object.ObjectType,
-			Version:           value.Object.Version,
-			SharingScope:      value.Object.SharingScope,
-		}
-	}
-	return cloned
 }

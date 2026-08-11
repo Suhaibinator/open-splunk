@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	clickhousedriverlib "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
@@ -30,6 +32,11 @@ import (
 const (
 	knowledgeRuntimeExpectedClickHouseVersion = "26.3.17.4"
 	knowledgeRuntimeOverflowAliasCount        = 5
+	// On the pinned server, a String read from the event table and converted to
+	// Dynamic contributes seventeen native framing bytes to byteSize. The exact
+	// overflow fixture subtracts that framing from its inserted String payload;
+	// the engine readback below independently proves the resulting Dynamic size.
+	knowledgeRuntimeStoredStringDynamicOverhead uint64 = 17
 )
 
 func TestKnowledgeRuntimeIntegrationProgramsAreCanonical(t *testing.T) {
@@ -116,11 +123,16 @@ func TestKnowledgeRuntimeIntegrationProgramsAreCanonical(t *testing.T) {
 //
 // Run only this test with:
 //
-//	OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test \
-//	  -tags=open_splunk_knowledge_runtime_acceptance -v ./internal/queryexec \
+//	OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 go test -v ./internal/queryexec \
 //	  -run '^TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse$' \
-//	  -count=1 -timeout=90s
+//	  -count=1 -timeout=2m30s
 func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
+	phaseStarted := time.Now()
+	logPhase := func(name string) {
+		t.Helper()
+		t.Logf("knowledge runtime phase %s completed in %s", name, time.Since(phaseStarted).Round(time.Millisecond))
+		phaseStarted = time.Now()
+	}
 	if os.Getenv("OPEN_SPLUNK_CLICKHOUSE_INTEGRATION") != "1" {
 		t.Skip("set OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 to run the Docker integration test")
 	}
@@ -134,10 +146,8 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		t.Fatalf("resolve pinned ClickHouse image: %v", err)
 	}
 
-	// Compile before starting the container so an invalid matrix fails without
-	// consuming Docker startup time. The explicit acceptance build tag crosses
-	// the compiler-only boundary inside go test; snapshot finalization remains
-	// independently closed.
+	// Compile before starting the container so an invalid production matrix
+	// fails without consuming Docker startup time.
 	const (
 		indexName         = "knowledge-runtime"
 		selectorIndexName = "selector-runtime"
@@ -159,14 +169,48 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		earliest,
 		latest,
 	)
+	compatibility := compileKnowledgeCompatibilityRuntime(
+		t,
+		tenantID,
+		base,
+		indexTime,
+		earliest,
+		latest,
+	)
+	t.Logf("knowledge compatibility runtime compiled: %s", knowledgeCompatibilityRuntimeDebug(compatibility))
+	maximumFieldCatalog := compileKnowledgeRuntimeMaximumFieldCatalog(
+		t,
+		tenantID,
+		indexName,
+		selectorIndexName,
+		base,
+		indexTime,
+		earliest,
+		latest,
+	)
+	t.Logf(
+		"knowledge runtime compiled maximum field catalog: sql=%d bytes args=%d",
+		len(maximumFieldCatalog.SQL),
+		len(maximumFieldCatalog.Args),
+	)
+	for _, descriptor := range matrix.compilerCases {
+		t.Logf(
+			"knowledge runtime compiled %s: sql=%d bytes args=%d",
+			descriptor.name,
+			len(descriptor.compiled.SQL),
+			len(descriptor.compiled.Args),
+		)
+	}
+	logPhase("compile")
 
-	overallContext, cancelOverall := context.WithTimeout(context.Background(), 75*time.Second)
+	overallContext, cancelOverall := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancelOverall()
 	startupContext, cancelStartup := context.WithTimeout(overallContext, 20*time.Second)
 	defer cancelStartup()
 	if err := exec.CommandContext(startupContext, "docker", "image", "inspect", image).Run(); err != nil {
 		t.Fatalf("digest-pinned ClickHouse image must be cached before this bounded test runs: %v", err)
 	}
+	logPhase("image inspection")
 	container, err := testsupport.StartClickHouse(startupContext, image)
 	if err != nil {
 		t.Fatalf("start pinned ClickHouse fixture: %v", err)
@@ -181,7 +225,9 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	if container.Image != image {
 		t.Fatalf("started ClickHouse image = %q, want %q", container.Image, image)
 	}
+	logPhase("container startup")
 	queryIntegrationMigrate(t, overallContext, container.Name, container.Password)
+	logPhase("migration")
 
 	connection, err := clickhousedriver.Open(&clickhousedriver.Options{
 		Protocol: clickhousedriver.Native,
@@ -215,6 +261,7 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	if exactVersion != 1 {
 		t.Fatalf("ClickHouse version is not exactly %s", knowledgeRuntimeExpectedClickHouseVersion)
 	}
+	logPhase("connection and version check")
 	fixtures := knowledgeRuntimeFixtures(
 		tenantID,
 		indexName,
@@ -224,6 +271,7 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	)
 	matrixFixtures := knowledgeRuntimeMatrixFixtures(t, fixtures)
 	insertKnowledgeRuntimeEvents(t, overallContext, connection, fixtures)
+	logPhase("matrix fixture insert")
 	insertKnowledgeRuntimeOverflowEvent(
 		t,
 		overallContext,
@@ -233,6 +281,17 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 		base,
 		indexTime,
 	)
+	knowledgeRuntimeRequireOverflowEvent(
+		t,
+		overallContext,
+		connection,
+		tenantID,
+		indexName,
+		indexName+"-overflow",
+		base,
+		indexTime,
+	)
+	logPhase("overflow fixture insert")
 
 	executor, err := New(connection, Config{
 		ReadAdmission:    indexread.UnfencedAdmission{},
@@ -248,6 +307,21 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create knowledge runtime query executor: %v", err)
 	}
+	executor.connection = knowledgeRuntimeDiagnosticConnection{
+		connection: executor.connection,
+		t:          t,
+	}
+
+	t.Run("compatibility v0.1 runtime edges", func(t *testing.T) {
+		runKnowledgeCompatibilityRuntime(
+			t,
+			overallContext,
+			connection,
+			executor,
+			tenantID,
+			compatibility,
+		)
+	})
 
 	t.Run("ordinary authored suffix and container decoding", func(t *testing.T) {
 		sink := &fakeSink{}
@@ -325,11 +399,98 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 	})
 
 	t.Run("field catalog", func(t *testing.T) {
+		knowledgeRuntimeRequireFieldCatalogMaskPrimitive(t, overallContext, connection)
 		catalog, err := executor.ExecuteFieldCatalog(overallContext, matrix.catalog)
 		if err != nil {
 			t.Fatalf("execute knowledge field catalog: %v", err)
 		}
+		if err := connection.Exec(overallContext, "SYSTEM FLUSH LOGS"); err != nil {
+			t.Fatalf("flush catalog query log: %v", err)
+		}
+		var peakMemory, durationMillis, readRows, resultRows, selectedRows uint64
+		if err := connection.QueryRow(
+			overallContext,
+			`SELECT toUInt64(memory_usage), toUInt64(query_duration_ms), read_rows, result_rows, toUInt64(ProfileEvents['SelectedRows']) FROM system.query_log WHERE type = 'QueryFinish' AND startsWith(query_id, 'open-splunk-search-') ORDER BY event_time_microseconds DESC LIMIT 1`,
+		).Scan(&peakMemory, &durationMillis, &readRows, &resultRows, &selectedRows); err != nil {
+			t.Fatalf("read catalog query log: %v", err)
+		}
+		t.Logf(
+			"knowledge catalog query log: peak_memory=%d duration_ms=%d read_rows=%d result_rows=%d selected_rows=%d",
+			peakMemory,
+			durationMillis,
+			readRows,
+			resultRows,
+			selectedRows,
+		)
+		t.Logf("knowledge catalog result: %#v", catalog)
 		knowledgeRuntimeAssertCatalog(t, catalog)
+	})
+
+	t.Run("field_catalog_maximum_generated_fields", func(t *testing.T) {
+		catalog, err := executor.ExecuteFieldCatalog(overallContext, maximumFieldCatalog)
+		if err != nil {
+			t.Fatalf("execute maximum-generated-field knowledge catalog: %v", err)
+		}
+		peakMemory, durationMillis, readRows, resultRows, selectedRows :=
+			knowledgeRuntimeCatalogQueryLog(t, overallContext, connection)
+		t.Logf(
+			"maximum knowledge catalog query log: peak_memory=%d duration_ms=%d read_rows=%d result_rows=%d selected_rows=%d",
+			peakMemory,
+			durationMillis,
+			readRows,
+			resultRows,
+			selectedRows,
+		)
+		t.Logf("maximum knowledge catalog result: %#v", catalog)
+		knowledgeRuntimeAssertMaximumFieldCatalog(t, catalog)
+	})
+
+	t.Run("field_catalog_maximum_generated_fields_concurrent", func(t *testing.T) {
+		type outcome struct {
+			catalog FieldCatalogResult
+			err     error
+		}
+		start := make(chan struct{})
+		outcomes := make(chan outcome, 2)
+		for range 2 {
+			go func() {
+				<-start
+				catalog, err := executor.ExecuteFieldCatalog(overallContext, maximumFieldCatalog)
+				outcomes <- outcome{catalog: catalog, err: err}
+			}()
+		}
+		close(start)
+		for index := range 2 {
+			result := <-outcomes
+			if result.err != nil {
+				t.Fatalf("execute concurrent maximum-generated-field knowledge catalog %d: %v", index, result.err)
+			}
+			knowledgeRuntimeAssertMaximumFieldCatalog(t, result.catalog)
+		}
+
+		metrics := knowledgeRuntimeCatalogQueryLogs(t, overallContext, connection, 2)
+		if metrics[0].queryID == metrics[1].queryID {
+			t.Fatalf("concurrent maximum catalogs reused query ID %q", metrics[0].queryID)
+		}
+		var summedPeaks uint64
+		for index, metric := range metrics {
+			if metric.peakMemory == 0 || metric.readRows != 33 ||
+				metric.resultRows != 52 || metric.selectedRows != 40 {
+				t.Fatalf("concurrent maximum catalog metric %d = %#v", index, metric)
+			}
+			summedPeaks += metric.peakMemory
+			t.Logf(
+				"concurrent maximum knowledge catalog %d query_id=%s peak_memory=%d duration_ms=%d read_rows=%d result_rows=%d selected_rows=%d",
+				index,
+				metric.queryID,
+				metric.peakMemory,
+				metric.durationMillis,
+				metric.readRows,
+				metric.resultRows,
+				metric.selectedRows,
+			)
+		}
+		t.Logf("concurrent maximum knowledge catalog summed per-query peaks=%d", summedPeaks)
 	})
 
 	t.Run("field summary", func(t *testing.T) {
@@ -369,6 +530,153 @@ func TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("writer resolver manager export and history lifecycle", func(t *testing.T) {
+		runKnowledgeLifecycleVertical(
+			t,
+			overallContext,
+			connection,
+			executor,
+			tenantID,
+			indexName,
+			base,
+			indexTime,
+		)
+	})
+}
+
+func knowledgeRuntimeRequireFieldCatalogMaskPrimitive(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+) {
+	t.Helper()
+	var databaseType string
+	var combined []uint16
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT toTypeName(groupBitOrForEach(mask)), groupBitOrForEach(mask) FROM (`+
+			`SELECT [toUInt16(0), toUInt16(2048)] AS mask UNION ALL `+
+			`SELECT [toUInt16(1), toUInt16(0)] AS mask)`,
+	).Scan(&databaseType, &combined); err != nil {
+		t.Fatalf("execute field-catalog mask primitive: %v", err)
+	}
+	if databaseType != "Array(UInt16)" || !slices.Equal(combined, []uint16{1, 2048}) {
+		t.Fatalf("field-catalog mask primitive = %q/%v, want Array(UInt16)/[1 2048]", databaseType, combined)
+	}
+
+	var empty []uint16
+	if err := connection.QueryRow(
+		ctx,
+		`SELECT groupBitOrForEach(mask) FROM (`+
+			`SELECT CAST([], 'Array(UInt16)') AS mask)`,
+	).Scan(&empty); err != nil {
+		t.Fatalf("execute empty field-catalog mask primitive: %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("empty field-catalog mask primitive = %#v, want non-nil empty Array(UInt16)", empty)
+	}
+}
+
+func knowledgeRuntimeCatalogQueryLog(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+) (
+	peakMemory uint64,
+	durationMillis uint64,
+	readRows uint64,
+	resultRows uint64,
+	selectedRows uint64,
+) {
+	t.Helper()
+	metric := knowledgeRuntimeCatalogQueryLogs(t, ctx, connection, 1)[0]
+	return metric.peakMemory,
+		metric.durationMillis,
+		metric.readRows,
+		metric.resultRows,
+		metric.selectedRows
+}
+
+type knowledgeRuntimeCatalogQueryMetric struct {
+	queryID        string
+	peakMemory     uint64
+	durationMillis uint64
+	readRows       uint64
+	resultRows     uint64
+	selectedRows   uint64
+}
+
+func knowledgeRuntimeCatalogQueryLogs(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	limit uint64,
+) []knowledgeRuntimeCatalogQueryMetric {
+	t.Helper()
+	if limit == 0 {
+		t.Fatal("catalog query-log limit is zero")
+	}
+	if err := connection.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+		t.Fatalf("flush catalog query log: %v", err)
+	}
+	rows, err := connection.Query(
+		ctx,
+		`SELECT query_id, toUInt64(memory_usage), toUInt64(query_duration_ms), read_rows, result_rows, toUInt64(ProfileEvents['SelectedRows']) FROM system.query_log WHERE type = 'QueryFinish' AND startsWith(query_id, 'open-splunk-search-') ORDER BY event_time_microseconds DESC LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		t.Fatalf("read catalog query log: %v", err)
+	}
+	metrics := make([]knowledgeRuntimeCatalogQueryMetric, 0, limit)
+	for rows.Next() {
+		var metric knowledgeRuntimeCatalogQueryMetric
+		if err := rows.Scan(
+			&metric.queryID,
+			&metric.peakMemory,
+			&metric.durationMillis,
+			&metric.readRows,
+			&metric.resultRows,
+			&metric.selectedRows,
+		); err != nil {
+			_ = rows.Close()
+			t.Fatalf("scan catalog query log: %v", err)
+		}
+		metrics = append(metrics, metric)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		t.Fatalf("iterate catalog query log: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close catalog query log: %v", err)
+	}
+	if uint64(len(metrics)) != limit {
+		t.Fatalf("catalog query-log rows = %d, want %d", len(metrics), limit)
+	}
+	return metrics
+}
+
+type knowledgeRuntimeDiagnosticConnection struct {
+	connection queryConnection
+	t          *testing.T
+}
+
+func (connection knowledgeRuntimeDiagnosticConnection) Query(
+	ctx context.Context,
+	query string,
+	args ...any,
+) (clickhousedriverlib.Rows, error) {
+	rows, err := connection.connection.Query(ctx, query, args...)
+	var exception *clickhousedriver.Exception
+	if errors.As(err, &exception) {
+		connection.t.Logf(
+			"knowledge runtime ClickHouse failure code=%d name=%s",
+			exception.Code,
+			exception.Name,
+		)
+	}
+	return rows, err
 }
 
 type compiledKnowledgeRuntimeMatrix struct {
@@ -808,6 +1116,12 @@ func compileKnowledgeRuntimeMatrix(
 
 	controls := compiledCase("selector controls")
 	chart := compiledCase("chart")
+	if chart.Chart == nil || chart.Chart.RowField != "calculated_value" ||
+		chart.Chart.RowKind != clickhouse.ChartRowKindString ||
+		chart.Chart.RowDatabaseType != "String" ||
+		!slices.Equal(chart.OutputFields, []string{"calculated_value"}) {
+		t.Fatalf("knowledge chart compiler contract = %#v outputs %#v", chart.Chart, chart.OutputFields)
+	}
 	timechart := compiledCase("timechart")
 	stats := compiledCase("stats")
 	chronological := compiledCase("stacked chronological barriers")
@@ -821,6 +1135,19 @@ func compileKnowledgeRuntimeMatrix(
 	if !timeline.HasValidExecutionSeal() {
 		t.Fatal("production knowledge timeline has no valid execution seal")
 	}
+	for _, fragment := range []string{
+		`WITH "__os_ko_guard_input" AS MATERIALIZED (`,
+		`"__os_ko_guard_result" AS (`,
+		`"__os_timeline_source" AS (`,
+		`"__os_timeline_counts" AS (`,
+	} {
+		if strings.Count(timeline.SQL, fragment) != 1 {
+			t.Fatalf("production knowledge timeline graph does not contain exactly one %q", fragment)
+		}
+	}
+	if strings.Contains(timeline.SQL, `FROM (WITH "__os_ko_guard_input"`) {
+		t.Fatal("production knowledge timeline embeds a separately finalized ordinary query")
+	}
 
 	catalog, err := compiler.CompileFieldCatalog(
 		plans.analysis,
@@ -829,6 +1156,10 @@ func compileKnowledgeRuntimeMatrix(
 	if err != nil {
 		t.Fatalf("compile production knowledge field catalog: %v", err)
 	}
+	if count, ok := catalog.KnowledgeGeneratedFields(); !ok || count != 13 {
+		t.Fatalf("production catalog generated-field evidence = (%d, %t), want (13, true)", count, ok)
+	}
+	t.Logf("knowledge runtime compiled field catalog: sql=%d bytes args=%d", len(catalog.SQL), len(catalog.Args))
 	summary, err := compiler.CompileFieldSummary(plans.analysis, plans.summarySpec)
 	if err != nil {
 		t.Fatalf("compile production knowledge field summary: %v", err)
@@ -866,6 +1197,78 @@ func compileKnowledgeRuntimeMatrix(
 		overflow:      overflow,
 		compilerCases: compilerCases,
 	}
+}
+
+func compileKnowledgeRuntimeMaximumFieldCatalog(
+	t *testing.T,
+	tenantID string,
+	indexName string,
+	selectorIndexName string,
+	base time.Time,
+	indexTime time.Time,
+	earliest time.Time,
+	latest time.Time,
+) clickhouse.CompiledFieldCatalog {
+	t.Helper()
+	compile := func(extraPayloadAliases int) (
+		clickhouse.CompiledFieldCatalog,
+		knowledgeprogram.Program,
+		error,
+	) {
+		program := knowledgeRuntimeProgramWithExtraPayloadAliases(
+			t,
+			extraPayloadAliases,
+		)
+		plans := buildKnowledgeRuntimeMatrixPlans(
+			t,
+			program,
+			tenantID,
+			indexName,
+			selectorIndexName,
+			base,
+			indexTime,
+			earliest,
+			latest,
+		)
+		catalog, err := (clickhouse.Compiler{}).CompileFieldCatalog(
+			plans.analysis,
+			plans.catalogSpec,
+		)
+		return catalog, program, err
+	}
+
+	catalog, program, err := compile(3)
+	if err != nil {
+		t.Fatalf("compile exact 16-generated-field catalog: %v", err)
+	}
+	count, countOK := catalog.KnowledgeGeneratedFields()
+	if program.Charges().GeneratedFields != 16 ||
+		!catalog.HasValidExecutionSeal() ||
+		!countOK ||
+		count != clickhouse.MaximumClickHouseKnowledgeGeneratedFields {
+		t.Fatalf(
+			"maximum field catalog authority = charges %#v seal %t generated fields (%d, %t)",
+			program.Charges(),
+			catalog.HasValidExecutionSeal(),
+			count,
+			countOK,
+		)
+	}
+
+	_, over, err := compile(4)
+	var diagnostic *plan.Diagnostic
+	if over.Charges().GeneratedFields != 17 ||
+		!errors.As(err, &diagnostic) ||
+		diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+		diagnostic.Message !=
+			"knowledge prelude generates more than 16 fields for ClickHouse execution" {
+		t.Fatalf(
+			"17-generated-field catalog rejection = charges %#v error %#v",
+			over.Charges(),
+			err,
+		)
+	}
+	return catalog
 }
 
 func knowledgeRuntimePlan(
@@ -907,6 +1310,20 @@ func knowledgeRuntimePlan(
 
 func knowledgeRuntimeProgram(t *testing.T) knowledgeprogram.Program {
 	t.Helper()
+	return knowledgeRuntimeProgramWithExtraPayloadAliases(t, 0)
+}
+
+func knowledgeRuntimeProgramWithExtraPayloadAliases(
+	t *testing.T,
+	extraPayloadAliases int,
+) knowledgeprogram.Program {
+	t.Helper()
+	if extraPayloadAliases < 0 || extraPayloadAliases > 4 {
+		t.Fatalf(
+			"runtime extra payload alias count = %d, want 0..4",
+			extraPayloadAliases,
+		)
+	}
 	replace := opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING
 	selector := func(dimension string, value string) *opensplunkv1.KnowledgeSelector {
 		pattern := []*opensplunkv1.KnowledgeSelectorPattern{{Value: value}}
@@ -986,6 +1403,21 @@ func knowledgeRuntimeProgram(t *testing.T) knowledgeprogram.Program {
 			},
 		},
 	}
+	calculated := definitions[len(definitions)-1]
+	definitions = definitions[:len(definitions)-1]
+	for index := 0; index < extraPayloadAliases; index++ {
+		suffix := string(rune('a' + index))
+		definitions = append(
+			definitions,
+			knowledgeRuntimeAliasDefinition(
+				fmt.Sprintf("%c-stress-payload", rune('k'+index)),
+				"payload",
+				"payload_stress_"+suffix,
+				selector("source", "*Source"),
+			),
+		)
+	}
+	definitions = append(definitions, calculated)
 	return knowledgeRuntimePrepareProgram(t, definitions)
 }
 
@@ -1139,7 +1571,7 @@ func knowledgeRuntimeRequireKnowledgeArguments(
 
 var (
 	knowledgeRuntimeCompilerBarrierCTEPattern = regexp.MustCompile(
-		`"(__os_ko_guard_input|__os_(eventstats_input|eventstats_result|` +
+		`"(__os_ko_guard_input|__os_ko_guard_result|__os_(eventstats_input|eventstats_result_input|eventstats_result|` +
 			`streamstats_result_input|streamstats_result|chronological_final_input|` +
 			`chronological_validation)_([0-9]+))" AS (MATERIALIZED )?\(`,
 	)
@@ -1217,8 +1649,8 @@ func knowledgeRuntimeRequireGuardValidation(
 	t.Helper()
 	required := []string{
 		`WITH "__os_ko_guard_input" AS MATERIALIZED (`,
-		`"__os_ko_guard_totals" AS (`,
 		`"__os_ko_guard_result" AS (`,
+		` OVER ()`,
 		`AS "__os_ko_guard_validation"`,
 		`"__os_chronological_final_input_`,
 		`"__os_chronological_validation_`,
@@ -1233,7 +1665,6 @@ func knowledgeRuntimeRequireGuardValidation(
 	}
 	ordered := []string{
 		`WITH "__os_ko_guard_input" AS MATERIALIZED (`,
-		`"__os_ko_guard_totals" AS (`,
 		`"__os_ko_guard_result" AS (`,
 		`"__os_chronological_final_input_`,
 		`"__os_chronological_validation_`,
@@ -1305,8 +1736,14 @@ func knowledgeRuntimeCompilerBarrierCTEs(sql string) []knowledgeRuntimeCompilerB
 		}
 		class := "knowledge guard input"
 		switch match[2] {
+		case "":
+			if match[1] == "__os_ko_guard_result" {
+				class = "knowledge guard result"
+			}
 		case "eventstats_input":
 			class = "eventstats input"
+		case "eventstats_result_input":
+			class = "eventstats result input"
 		case "eventstats_result":
 			class = "eventstats result"
 		case "streamstats_result_input":
@@ -1517,19 +1954,16 @@ func knowledgeRuntimeRequireStackedChronologicalCompilerCase(
 
 	wantCTEs := []string{
 		"knowledge guard input materialized",
-		"eventstats input ordinary",
+		"knowledge guard result ordinary",
+		"eventstats result input ordinary",
 		"eventstats result ordinary",
-		"eventstats input ordinary",
-		"eventstats result ordinary",
-		"streamstats result input ordinary",
-		"streamstats result ordinary",
 		"streamstats result input ordinary",
 		"streamstats result ordinary",
 		"chronological final input ordinary",
 		"chronological validation ordinary",
 	}
 	ctes := knowledgeRuntimeRequireCompilerBarrierCTEs(t, compiled.SQL, wantCTEs)
-	for _, pair := range [][2]int{{1, 2}, {3, 4}, {5, 6}, {7, 8}, {9, 10}} {
+	for _, pair := range [][2]int{{2, 3}, {4, 5}, {6, 7}} {
 		if ctes[pair[0]].stage != ctes[pair[1]].stage {
 			t.Fatalf(
 				"stacked chronological CTE stages %q/%q = %d/%d, want paired",
@@ -1540,8 +1974,26 @@ func knowledgeRuntimeRequireStackedChronologicalCompilerCase(
 			)
 		}
 	}
+	finalInputReference := `FROM "` + ctes[6].name + `" AS `
+	if got := strings.Count(compiled.SQL, finalInputReference); got != 1 {
+		t.Fatalf(
+			"stacked chronological final input consumers = %d, want one data consumer",
+			got,
+		)
+	}
+	for _, typedDummy := range []string{
+		`CAST('' AS String) AS "event_id"`,
+		`CAST(NULL AS Dynamic) AS "event_first"`,
+		`CAST(NULL AS Dynamic) AS "event_last"`,
+		`CAST(NULL AS Dynamic) AS "stream_first"`,
+		`CAST(NULL AS Dynamic) AS "stream_last"`,
+	} {
+		if strings.Count(compiled.SQL, typedDummy) != 1 {
+			t.Fatalf("stacked chronological typed invalid row is missing %q", typedDummy)
+		}
+	}
 	previousStage := -1
-	for _, index := range []int{1, 3, 5, 7, 9} {
+	for _, index := range []int{2, 4, 6} {
 		if ctes[index].stage <= previousStage {
 			t.Fatalf(
 				"stacked chronological CTE stage %q = %d after %d",
@@ -1552,8 +2004,8 @@ func knowledgeRuntimeRequireStackedChronologicalCompilerCase(
 		}
 		previousStage = ctes[index].stage
 	}
-	if got := strings.Count(compiled.SQL, "UNION ALL"); got != 5 {
-		t.Fatalf("stacked chronological validation unions = %d, want 5", got)
+	if got := strings.Count(compiled.SQL, "UNION ALL"); got != 2 {
+		t.Fatalf("stacked chronological validation unions = %d, want 2", got)
 	}
 	if got := strings.Count(compiled.SQL, "argMinOrNullIf("); got != 2 {
 		t.Fatalf("stacked chronological earliest states = %d, want 2", got)
@@ -1573,7 +2025,12 @@ func knowledgeRuntimeRequireStackedChronologicalCompilerCase(
 		)
 	}
 	wantMeasureClasses := []string{"eventstats", "eventstats", "streamstats", "streamstats"}
-	wantMeasureStages := []int{ctes[1].stage, ctes[3].stage, ctes[5].stage, ctes[7].stage}
+	wantMeasureStages := []int{
+		ctes[2].stage - 1,
+		ctes[2].stage,
+		ctes[4].stage - 1,
+		ctes[4].stage,
+	}
 	measureAliases := make([]string, len(measureAssignments))
 	seenMeasures := make(map[string]struct{}, len(measureAssignments))
 	for index, assignment := range measureAssignments {
@@ -1683,75 +2140,52 @@ func knowledgeRuntimeRequireStackedChronologicalCompilerCase(
 			}
 		}
 	}
-	authoredOutputs := []string{"event_first", "event_last", "stream_first", "stream_last"}
-	for index, binding := range []struct {
-		inputCTE  int
-		resultCTE int
-		output    string
-	}{
-		{inputCTE: 1, resultCTE: 2, output: "event_first"},
-		{inputCTE: 3, resultCTE: 4, output: "event_last"},
-	} {
-		body, ok := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[binding.resultCTE])
-		if !ok {
-			t.Fatalf("stacked eventstats result CTE %q has no bounded body", ctes[binding.resultCTE].name)
-		}
-		stage := strconv.Itoa(ctes[binding.resultCTE].stage)
-		wantInput := `FROM "` + ctes[binding.inputCTE].name + `" AS `
-		wantAggregate := `"__os_eventstats_total_row_` + stage + `".` +
-			`"__os_eventstats_published_value_` + stage + `"`
-		wantPublication := wantAggregate + ` AS "` + binding.output + `"`
-		if !strings.Contains(body, wantInput) || strings.Count(body, wantPublication) != 1 {
-			t.Fatalf(
-				"stacked eventstats result CTE %q does not publish %q from its stage aggregate (input=%t publication=%d body bytes=%d)",
-				ctes[binding.resultCTE].name,
-				binding.output,
-				strings.Contains(body, wantInput),
-				strings.Count(body, wantPublication),
-				len(body),
-			)
-		}
-		for otherIndex, otherOutput := range authoredOutputs {
-			if otherIndex != index && strings.Contains(body, ` AS "`+otherOutput+`"`) {
-				t.Fatalf(
-					"stacked eventstats result CTE %q also authors output %q",
-					ctes[binding.resultCTE].name,
-					otherOutput,
-				)
-			}
+	eventInputBody, eventInputOK := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[2])
+	eventResultBody, eventResultOK := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[3])
+	streamInputBody, streamInputOK := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[4])
+	streamResultBody, streamResultOK := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[5])
+	if !eventInputOK || !eventResultOK || !streamInputOK || !streamResultOK {
+		t.Fatal("stacked chronological fused CTE body is unavailable")
+	}
+	for _, output := range []string{"event_first", "event_last"} {
+		if strings.Count(eventInputBody, ` AS "`+output+`"`) != 1 ||
+			strings.Contains(streamInputBody, ` AS "`+output+`"`) {
+			t.Fatalf("stacked fused eventstats publication %q is not isolated", output)
 		}
 	}
-	for index, binding := range []struct {
-		inputCTE  int
-		resultCTE int
-		output    string
-	}{
-		{inputCTE: 5, resultCTE: 6, output: "stream_first"},
-		{inputCTE: 7, resultCTE: 8, output: "stream_last"},
-	} {
-		inputBody, inputOK := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[binding.inputCTE])
-		resultBody, resultOK := knowledgeRuntimeCompilerCTEBody(compiled.SQL, ctes[binding.resultCTE])
-		outputExpression, outputOK := knowledgeRuntimeAssignedCall(inputBody, binding.output, "if")
-		stage := strconv.Itoa(ctes[binding.inputCTE].stage)
-		wantWindow := `"__os_streamstats_window_` + stage + `".` +
-			`"__os_streamstats_value_` + stage + `"`
-		wantPassThrough := `SELECT * FROM "` + ctes[binding.inputCTE].name + `"`
-		if !inputOK || !resultOK || !outputOK ||
-			!strings.Contains(outputExpression, wantWindow) ||
-			strings.TrimSpace(resultBody) != wantPassThrough {
-			t.Fatalf(
-				"stacked streamstats CTE pair %q/%q does not publish %q from its stage window",
-				ctes[binding.inputCTE].name,
-				ctes[binding.resultCTE].name,
-				binding.output,
-			)
+	for _, output := range []string{"stream_first", "stream_last"} {
+		if strings.Count(streamInputBody, ` AS "`+output+`"`) != 1 ||
+			strings.Contains(eventInputBody, ` AS "`+output+`"`) {
+			t.Fatalf("stacked fused streamstats publication %q is not isolated", output)
 		}
-		for otherIndex, otherOutput := range authoredOutputs[2:] {
-			if otherIndex != index && strings.Contains(inputBody, ` AS "`+otherOutput+`"`) {
+	}
+	wantEventPassThrough := `SELECT * FROM "` + ctes[2].name + `"`
+	wantStreamPassThrough := `SELECT * FROM "` + ctes[4].name + `"`
+	if strings.TrimSpace(eventResultBody) != wantEventPassThrough ||
+		strings.TrimSpace(streamResultBody) != wantStreamPassThrough {
+		t.Fatalf(
+			"stacked fused chronological barriers are not pass-throughs: event=%q stream=%q",
+			eventResultBody,
+			streamResultBody,
+		)
+	}
+	for _, binding := range []struct {
+		body       string
+		class      string
+		firstStage int
+		lastStage  int
+	}{
+		{eventInputBody, "eventstats", wantMeasureStages[0], wantMeasureStages[1]},
+		{streamInputBody, "streamstats", wantMeasureStages[2], wantMeasureStages[3]},
+	} {
+		for _, stage := range []int{binding.firstStage, binding.lastStage} {
+			validation := fmt.Sprintf(` AS "__os_%s_validation_%d"`, binding.class, stage)
+			if strings.Count(binding.body, validation) != 1 {
 				t.Fatalf(
-					"stacked streamstats result input %q also authors output %q",
-					ctes[binding.inputCTE].name,
-					otherOutput,
+					"stacked fused %s validation stage %d count = %d, want 1",
+					binding.class,
+					stage,
+					strings.Count(binding.body, validation),
 				)
 			}
 		}
@@ -1823,17 +2257,18 @@ func knowledgeRuntimeRequireProjectedCompilerCase(
 	knowledgeRuntimeRequireGuardValidation(t, compiled)
 	wantCTEs := []string{
 		"knowledge guard input materialized",
+		"knowledge guard result ordinary",
 		"chronological final input ordinary",
 		"chronological validation ordinary",
 	}
 	ctes := knowledgeRuntimeRequireCompilerBarrierCTEs(t, compiled.SQL, wantCTEs)
-	if ctes[1].stage != ctes[2].stage {
+	if ctes[2].stage != ctes[3].stage {
 		t.Fatalf(
 			"projected knowledge final CTE stages %q/%q = %d/%d, want paired",
-			ctes[1].name,
 			ctes[2].name,
-			ctes[1].stage,
+			ctes[3].name,
 			ctes[2].stage,
+			ctes[3].stage,
 		)
 	}
 	if got := strings.Count(compiled.SQL, "UNION ALL"); got != 1 {
@@ -2057,7 +2492,7 @@ func insertKnowledgeRuntimeEvents(
 			"knowledge-collector",
 			"knowledge-batch",
 			uint64(index+1),
-			fixture.indexTime.Add(24*time.Hour),
+			knowledgeRuntimeFixtureExpiresAt(),
 			uint64(1),
 		); err != nil {
 			t.Fatalf("append knowledge runtime event %q: %v", fixture.id, err)
@@ -2078,12 +2513,15 @@ func insertKnowledgeRuntimeOverflowEvent(
 	indexTime time.Time,
 ) {
 	t.Helper()
+	overflowSource := strings.Repeat("x", knowledgeRuntimeOverflowSourceBytes(t))
 	query := "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"event_time_source, host, source, sourcetype, severity, raw, raw_encoding, fields, field_names, " +
-		"field_types, field_metadata_version, collector_id, batch_id, batch_sequence, expires_at, visibility_seq) VALUES"
-	if err := connection.Exec(
-		ctx,
-		query,
+		"field_types, field_metadata_version, collector_id, batch_id, batch_sequence, expires_at, visibility_seq)"
+	batch, err := connection.PrepareBatch(ctx, query)
+	if err != nil {
+		t.Fatalf("prepare knowledge runtime overflow fixture: %v", err)
+	}
+	if err := batch.Append(
 		"knowledge-overflow-event",
 		tenantID,
 		indexName,
@@ -2091,7 +2529,7 @@ func insertKnowledgeRuntimeOverflowEvent(
 		indexTime,
 		uint8(1),
 		"fixture-overflow",
-		strings.Repeat("x", knowledgeRuntimeOverflowSourceBytes(t)),
+		overflowSource,
 		"knowledge:overflow",
 		uint8(1),
 		[]byte("kind=overflow"),
@@ -2103,14 +2541,161 @@ func insertKnowledgeRuntimeOverflowEvent(
 		"knowledge-collector",
 		"knowledge-overflow-batch",
 		uint64(1),
-		indexTime.Add(24*time.Hour),
+		knowledgeRuntimeFixtureExpiresAt(),
 		uint64(1),
 	); err != nil {
-		t.Fatalf("insert knowledge runtime overflow event: %v", err)
+		t.Fatalf("append knowledge runtime overflow event: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send knowledge runtime overflow event: %v", err)
 	}
 }
 
+func knowledgeRuntimeRequireOverflowEvent(
+	t *testing.T,
+	ctx context.Context,
+	connection clickhousedriver.Conn,
+	tenantID string,
+	matrixIndexName string,
+	indexName string,
+	base time.Time,
+	indexTime time.Time,
+) {
+	t.Helper()
+	wantEventTime := base.Add(20 * time.Second)
+	wantExpiresAt := knowledgeRuntimeFixtureExpiresAt()
+	latest := base.Add(2 * time.Minute)
+	indexTimeCutoff := indexTime.Add(time.Millisecond)
+	for _, scope := range []struct {
+		name      string
+		indexName string
+		service   string
+		wantRows  uint64
+	}{
+		{name: "matrix", indexName: matrixIndexName, service: "matrix", wantRows: 4},
+		{name: "overflow", indexName: indexName, wantRows: 1},
+	} {
+		var gotRows uint64
+		if err := connection.QueryRow(
+			ctx,
+			`SELECT count() FROM open_splunk.events `+
+				`WHERE tenant_id = ? AND index_name = ? AND event_time >= ? AND event_time < ? `+
+				`AND index_time <= ? AND visibility_seq <= ? AND expires_at > ? `+
+				`AND (? = '' OR service = ?)`,
+			tenantID,
+			scope.indexName,
+			base,
+			latest,
+			indexTimeCutoff,
+			uint64(1),
+			indexTime,
+			scope.service,
+			scope.service,
+		).Scan(&gotRows); err != nil {
+			t.Fatalf("read back knowledge runtime %s scope: %v", scope.name, err)
+		}
+		if gotRows != scope.wantRows {
+			t.Fatalf(
+				"knowledge runtime %s physical scope rows = %d, want %d",
+				scope.name,
+				gotRows,
+				scope.wantRows,
+			)
+		}
+	}
+
+	var (
+		gotTenantID        string
+		gotIndexName       string
+		gotEventTime       time.Time
+		gotIndexTime       time.Time
+		gotExpiresAt       time.Time
+		gotVisibility      uint64
+		gotMetadataVersion uint8
+		gotFieldNames      uint64
+		gotFieldTypes      uint64
+		gotSourceLength    uint64
+		gotSourceBytes     uint64
+	)
+	err := connection.QueryRow(
+		ctx,
+		`SELECT tenant_id, index_name, event_time, index_time, expires_at, visibility_seq, `+
+			`field_metadata_version, toUInt64(length(field_names)), `+
+			`toUInt64(length(field_types)), toUInt64(length(source)), `+
+			`toUInt64(byteSize(CAST(source AS Dynamic))) `+
+			`FROM open_splunk.events WHERE event_id = 'knowledge-overflow-event'`,
+	).Scan(
+		&gotTenantID,
+		&gotIndexName,
+		&gotEventTime,
+		&gotIndexTime,
+		&gotExpiresAt,
+		&gotVisibility,
+		&gotMetadataVersion,
+		&gotFieldNames,
+		&gotFieldTypes,
+		&gotSourceLength,
+		&gotSourceBytes,
+	)
+	if err != nil {
+		t.Fatalf("read back knowledge runtime overflow event: %v", err)
+	}
+	wantSourceLength := uint64(knowledgeRuntimeOverflowSourceBytes(t))
+	wantSourceBytes := knowledgeRuntimeOverflowDynamicValueBytes(t)
+	if gotTenantID != tenantID || gotIndexName != indexName ||
+		!gotEventTime.Equal(wantEventTime) || !gotIndexTime.Equal(indexTime) ||
+		!gotExpiresAt.Equal(wantExpiresAt) || gotVisibility != 1 ||
+		gotMetadataVersion != eventfields.CurrentFieldMetadataVersion ||
+		gotFieldNames != 0 || gotFieldTypes != 0 ||
+		gotSourceLength != wantSourceLength ||
+		gotSourceBytes != wantSourceBytes {
+		t.Fatalf(
+			"knowledge runtime overflow event = tenant %q index %q event/index/expiry %s/%s/%s visibility %d metadata %d sidecars %d/%d source length/bytes %d/%d; want %q/%q %s/%s/%s 1/%d 0/0/%d/%d",
+			gotTenantID,
+			gotIndexName,
+			gotEventTime,
+			gotIndexTime,
+			gotExpiresAt,
+			gotVisibility,
+			gotMetadataVersion,
+			gotFieldNames,
+			gotFieldTypes,
+			gotSourceLength,
+			gotSourceBytes,
+			tenantID,
+			indexName,
+			wantEventTime,
+			indexTime,
+			wantExpiresAt,
+			eventfields.CurrentFieldMetadataVersion,
+			wantSourceLength,
+			wantSourceBytes,
+		)
+	}
+}
+
+func knowledgeRuntimeFixtureExpiresAt() time.Time {
+	// The event table enforces `TTL expires_at DELETE` against server wall time.
+	// Keep this otherwise deterministic historical fixture safely ahead of that
+	// clock so acceptance does not silently turn into an empty-result test as the
+	// fixed August 2026 search window ages.
+	return time.Date(2100, time.January, 1, 0, 0, 0, 0, time.UTC)
+}
+
 func knowledgeRuntimeOverflowSourceBytes(t *testing.T) int {
+	t.Helper()
+	valueBytes := knowledgeRuntimeOverflowDynamicValueBytes(t)
+	if valueBytes <= knowledgeRuntimeStoredStringDynamicOverhead {
+		t.Fatalf(
+			"overflow Dynamic bytes %d do not exceed pinned stored-String framing %d",
+			valueBytes,
+			knowledgeRuntimeStoredStringDynamicOverhead,
+		)
+	}
+	return int(valueBytes - knowledgeRuntimeStoredStringDynamicOverhead)
+}
+
+func knowledgeRuntimeOverflowDynamicValueBytes(t *testing.T) uint64 {
 	t.Helper()
 	target := knowledge.MaximumAliasCopyRuntimeEventBytes + 1
 	if target%knowledgeRuntimeOverflowAliasCount != 0 {
@@ -2121,8 +2706,9 @@ func knowledgeRuntimeOverflowSourceBytes(t *testing.T) int {
 		)
 	}
 	// A promoted scalar alias has no relative descendant metadata. Each winning
-	// root copy charges byteSize(source) plus the mandatory metadata-version
-	// byte, so five equal writes land exactly one byte beyond the event ceiling.
+	// root copy charges the native Dynamic byteSize plus the mandatory metadata-
+	// version byte, so five equal writes land exactly one byte beyond the event
+	// ceiling.
 	valueBytes := target/knowledgeRuntimeOverflowAliasCount - 1
 	charge, ok := knowledge.CheckedAliasCopyCharge(knowledge.AliasCopyWrite{
 		ValueBytes: valueBytes,
@@ -2139,7 +2725,7 @@ func knowledgeRuntimeOverflowSourceBytes(t *testing.T) int {
 		row.WorkUnits > knowledge.MaximumAliasCopyRuntimeQueryUnits {
 		t.Fatalf("exact alias-copy overflow charge = %#v, want event %d only", row, target)
 	}
-	return int(valueBytes)
+	return valueBytes
 }
 
 func knowledgeRuntimePrivateLimitMarkers() []string {
@@ -2300,7 +2886,7 @@ func knowledgeRuntimeAssertSelectorControls(t *testing.T, sink *fakeSink) {
 func knowledgeRuntimeAssertChart(t *testing.T, sink *fakeSink) {
 	t.Helper()
 	wantSchema := []searchjobs.Column{
-		{Name: "calculated_value", Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: "calculated_value", Kind: searchjobs.ValueKindString},
 		{Name: "alpha", Kind: searchjobs.ValueKindUnsigned},
 		{Name: "beta", Kind: searchjobs.ValueKindUnsigned},
 	}
@@ -2353,7 +2939,7 @@ func knowledgeRuntimeAssertTimechart(t *testing.T, sink *fakeSink, base time.Tim
 func knowledgeRuntimeAssertStats(t *testing.T, sink *fakeSink) {
 	t.Helper()
 	wantSchema := []searchjobs.Column{
-		{Name: "regex_value", Kind: searchjobs.ValueKindMixed, Nullable: true},
+		{Name: "regex_value", Kind: searchjobs.ValueKindString},
 		{Name: "total", Kind: searchjobs.ValueKindUnsigned},
 	}
 	if sink.setCalls != 1 || !slices.Equal(sink.schema.Columns, wantSchema) ||
@@ -2553,6 +3139,125 @@ func knowledgeRuntimeAssertCatalog(t *testing.T, catalog FieldCatalogResult) {
 			got.EventCount != want.EventCount || got.NullCount != want.NullCount ||
 			got.MissingCount != want.MissingCount {
 			t.Fatalf("knowledge catalog profile %q = %#v, want %#v", want.FieldName, got, want)
+		}
+	}
+}
+
+func knowledgeRuntimeAssertMaximumFieldCatalog(
+	t *testing.T,
+	catalog FieldCatalogResult,
+) {
+	t.Helper()
+	if catalog.TotalEvents != 4 {
+		t.Fatalf("maximum knowledge catalog total events = %d, want 4", catalog.TotalEvents)
+	}
+	wants := make(map[string][]eventfields.StoredValueType, 51)
+	add := func(storedType eventfields.StoredValueType, names ...string) {
+		for _, name := range names {
+			if _, duplicate := wants[name]; duplicate {
+				t.Fatalf("duplicate maximum catalog expectation %q", name)
+			}
+			wants[name] = []eventfields.StoredValueType{storedType}
+		}
+	}
+	add(
+		eventfields.StoredValueTypeString,
+		"_raw",
+		"batch_id",
+		"calculated_value",
+		"collector_id",
+		"event_id",
+		"host",
+		"index",
+		"json_value",
+		"payload.child",
+		"payload_copy.child",
+		"payload_stress_a.child",
+		"payload_stress_b.child",
+		"payload_stress_c.child",
+		"regex_value",
+		"service",
+		"source",
+		"sourcetype",
+	)
+	nullNames := []string{
+		"level",
+		"message",
+		"null_copy",
+		"null_source",
+		"payload.nothing",
+		"payload_copy.nothing",
+		"payload_stress_a.nothing",
+		"payload_stress_b.nothing",
+		"payload_stress_c.nothing",
+		"span_id",
+		"trace_id",
+	}
+	add(eventfields.StoredValueTypeNull, nullNames...)
+	add(eventfields.StoredValueTypeTimestamp, "_indextime", "_time")
+	add(eventfields.StoredValueTypeBytes, "bytes_copy", "bytes_source")
+	add(
+		eventfields.StoredValueTypeList,
+		"empty_list_copy",
+		"empty_list_source",
+		"numbers",
+		"numbers_copy",
+	)
+	add(eventfields.StoredValueTypeDouble, "float_copy", "float_source")
+	add(
+		eventfields.StoredValueTypeSint64,
+		"overwrite_source",
+		"replaced_value",
+		"signed_copy",
+		"signed_source",
+	)
+	add(
+		eventfields.StoredValueTypeUint64,
+		"cohort",
+		"severity",
+		"unsigned_copy",
+		"unsigned_source",
+	)
+	add(
+		eventfields.StoredValueTypeObject,
+		"payload_copy",
+		"payload_stress_a",
+		"payload_stress_b",
+		"payload_stress_c",
+	)
+	wants["preserved_value"] = []eventfields.StoredValueType{
+		eventfields.StoredValueTypeString,
+		eventfields.StoredValueTypeSint64,
+	}
+	if len(wants) != 51 || len(catalog.Fields) != len(wants) {
+		t.Fatalf(
+			"maximum knowledge catalog profiles = got %d want %d expectations %d",
+			len(catalog.Fields),
+			51,
+			len(wants),
+		)
+	}
+	seen := make(map[string]struct{}, len(catalog.Fields))
+	for _, got := range catalog.Fields {
+		wantTypes, ok := wants[got.FieldName]
+		_, duplicate := seen[got.FieldName]
+		seen[got.FieldName] = struct{}{}
+		wantNulls := uint64(0)
+		if slices.Contains(nullNames, got.FieldName) {
+			wantNulls = 4
+		}
+		if !ok || duplicate ||
+			!slices.Equal(got.ObservedTypes, wantTypes) ||
+			got.EventCount != 4 ||
+			got.NullCount != wantNulls ||
+			got.MissingCount != 0 {
+			t.Fatalf(
+				"maximum knowledge catalog profile %q = %#v, want types %#v events/nulls/missing 4/%d/0",
+				got.FieldName,
+				got,
+				wantTypes,
+				wantNulls,
+			)
 		}
 	}
 }

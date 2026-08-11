@@ -1,26 +1,55 @@
-import { SortDirection, SharingScope } from "@/gen/ts/open_splunk/v1/common";
+import {
+  DiagnosticSeverity,
+  SortDirection,
+  SharingScope,
+  type SourceRange,
+} from "@/gen/ts/open_splunk/v1/common";
 import {
   KnowledgeDependencyRole,
+  KnowledgeObject,
   KnowledgeObjectState,
   KnowledgeObjectType,
+  KnowledgeObjectDefinition,
   KnowledgeOverwriteBehavior,
+  KnowledgeSelector,
   KnowledgeSelectorMatchKind,
-  type KnowledgeObject,
-  type KnowledgeObjectDefinition,
-  type KnowledgeSelector,
 } from "@/gen/ts/open_splunk/v1/knowledge";
 import {
+  CreateKnowledgeObjectRequest,
+  CreateKnowledgeObjectResponse,
+  DeleteKnowledgeObjectRequest,
+  DeleteKnowledgeObjectResponse,
   GetKnowledgeObjectRequest,
+  KnowledgeValidationIntent,
   KnowledgeObjectSortBy,
   ListKnowledgeObjectDependenciesRequest,
   ListKnowledgeObjectDependentsRequest,
   ListKnowledgeObjectsRequest,
+  SetKnowledgeObjectStateRequest,
+  SetKnowledgeObjectStateResponse,
+  UpdateKnowledgeObjectRequest,
+  UpdateKnowledgeObjectResponse,
+  ValidateKnowledgeObjectRequest,
+  ValidateKnowledgeObjectResponse,
+  type CreateKnowledgeObjectRequest as CreateKnowledgeObjectRequestMessage,
+  type CreateKnowledgeObjectResponse as CreateKnowledgeObjectResponseMessage,
+  type DeleteKnowledgeObjectRequest as DeleteKnowledgeObjectRequestMessage,
+  type DeleteKnowledgeObjectResponse as DeleteKnowledgeObjectResponseMessage,
   type GetKnowledgeObjectResponse as GetKnowledgeObjectResponseMessage,
   type KnowledgeManagementDependencyEdge,
   type KnowledgeManagementObjectVersionIdentity,
+  type KnowledgeResourceEstimate,
+  type KnowledgeValidationDiagnostic,
+  type KnowledgeValidationResult,
   type ListKnowledgeObjectDependenciesResponse as ListKnowledgeObjectDependenciesResponseMessage,
   type ListKnowledgeObjectDependentsResponse as ListKnowledgeObjectDependentsResponseMessage,
   type ListKnowledgeObjectsResponse as ListKnowledgeObjectsResponseMessage,
+  type SetKnowledgeObjectStateRequest as SetKnowledgeObjectStateRequestMessage,
+  type SetKnowledgeObjectStateResponse as SetKnowledgeObjectStateResponseMessage,
+  type UpdateKnowledgeObjectRequest as UpdateKnowledgeObjectRequestMessage,
+  type UpdateKnowledgeObjectResponse as UpdateKnowledgeObjectResponseMessage,
+  type ValidateKnowledgeObjectRequest as ValidateKnowledgeObjectRequestMessage,
+  type ValidateKnowledgeObjectResponse as ValidateKnowledgeObjectResponseMessage,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import {
   ProtobufTransport,
@@ -56,6 +85,44 @@ const MAXIMUM_BODY_TEXT_BYTES = 16 << 10;
 const MAXIMUM_REGEX_OR_PATH_BYTES = 4 << 10;
 const MAXIMUM_DISPLAY_DESCRIPTION_CODE_POINTS = 480;
 const MAXIMUM_SIGNED_REVISION = 9_223_372_036_854_775_807n;
+const MINIMUM_CLIENT_REQUEST_ID_BYTES = 16;
+const MAXIMUM_CLIENT_REQUEST_ID_BYTES = 128;
+const MAXIMUM_UPDATE_MASK_PATHS = 8;
+const MAXIMUM_VALIDATION_ISSUES = 256;
+const MAXIMUM_VALIDATION_DEPENDENCIES = 1_024;
+const MAXIMUM_FIELD_PATH_BYTES = 1 << 10;
+const MAXIMUM_ISSUE_CODE_BYTES = 128;
+const MAXIMUM_ISSUE_MESSAGE_BYTES = 4 << 10;
+const MAXIMUM_DIAGNOSTIC_SUGGESTIONS = 32;
+const MAXIMUM_DIAGNOSTIC_SUGGESTION_BYTES = 1 << 10;
+const MAXIMUM_FIELD_VIOLATION_TEXT_BYTES = 256 << 10;
+const MAXIMUM_DIAGNOSTIC_TEXT_BYTES = 768 << 10;
+const MAXIMUM_KNOWLEDGE_MUTATION_REQUEST_BYTES = (4 << 20) + (64 << 10);
+const MAXIMUM_SELECTOR_NORMALIZED_BYTES = 8 << 10;
+const MAXIMUM_SELECTOR_WILDCARD_WORK_UNITS = 1 << 10;
+const MAXIMUM_SEARCH_FIELD_PATH_SEGMENTS = 17;
+const MAXIMUM_SEARCH_FIELD_PATH_SEGMENT_BYTES = 256;
+const KNOWLEDGE_SELECTOR_CANONICAL_DOMAIN = "open-splunk/knowledge-selector/v1\0";
+
+const KNOWLEDGE_UPDATE_MASK_PATHS = new Set([
+  "app_id",
+  "name",
+  "description",
+  "sharing_scope",
+  "selector",
+  "field_extraction",
+  "field_alias",
+  "calculated_field",
+]);
+
+const RESERVED_DYNAMIC_FIELD_ROOTS = new Set([
+  "event_id", "index", "_time", "_indextime", "host", "source", "sourcetype",
+  "service", "severity", "level", "message", "_raw", "trace_id", "span_id",
+  "collector_id", "batch_id", "tenant_id", "index_name", "event_time", "index_time",
+  "collected_at", "event_time_source", "body", "raw", "raw_encoding", "fields",
+  "field_names", "field_types", "field_metadata_version", "batch_sequence", "expires_at",
+  "visibility_seq",
+]);
 
 export interface KnowledgeReadClient {
   get(
@@ -101,6 +168,517 @@ export function createKnowledgeReadClient(
       request,
       requestOptions,
     ),
+  };
+}
+
+export interface KnowledgeMutationClient {
+  create(
+    request: CreateKnowledgeObjectRequestMessage,
+    options?: ProtobufRequestOptions,
+  ): Promise<KnowledgeObjectMutationReceipt>;
+  validate(
+    request: ValidateKnowledgeObjectRequestMessage,
+    options?: KnowledgeValidationRequestOptions,
+  ): Promise<KnowledgeValidationReceipt>;
+  update(
+    request: UpdateKnowledgeObjectRequestMessage,
+    options: KnowledgeCurrentObjectMutationOptions,
+  ): Promise<KnowledgeObjectMutationReceipt>;
+  setState(
+    request: SetKnowledgeObjectStateRequestMessage,
+    options: KnowledgeCurrentObjectMutationOptions,
+  ): Promise<KnowledgeObjectMutationReceipt>;
+  delete(
+    request: DeleteKnowledgeObjectRequestMessage,
+    options?: ProtobufRequestOptions,
+  ): Promise<KnowledgeDeleteReceipt>;
+}
+
+/**
+ * Update validation diagnostics may locate text retained from the current
+ * object rather than from a mask-unselected request field. Supplying the
+ * exact current object lets the adapter bind those ranges to request ID,
+ * expected version, canonical definition, and digest. It is local response
+ * context and is never added to the protobuf request.
+ */
+export interface KnowledgeValidationRequestOptions extends ProtobufRequestOptions {
+  readonly currentKnowledgeObject?: KnowledgeObject;
+}
+
+export interface KnowledgeCurrentObjectMutationOptions extends ProtobufRequestOptions {
+  readonly currentKnowledgeObject: KnowledgeObject;
+}
+
+/**
+ * Mutation responses may carry a complete bounded definition. Keep every
+ * mutation route on the management response ceiling even when the shared
+ * route manifest does not need that ceiling for its other consumers.
+ */
+const boundedKnowledgeMutationRoutes = {
+  create: {
+    ...knowledgeRoutes.create,
+    maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
+  },
+  validate: {
+    ...knowledgeRoutes.validate,
+    maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
+  },
+  update: {
+    ...knowledgeRoutes.update,
+    maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
+  },
+  setState: {
+    ...knowledgeRoutes.setState,
+    maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
+  },
+  delete: {
+    ...knowledgeRoutes.delete,
+    maximumResponseBytes: KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES,
+  },
+} as const;
+
+export function createKnowledgeMutationClient(
+  options: ProtobufTransportOptions = {},
+): KnowledgeMutationClient {
+  const transport = new ProtobufTransport(options);
+  return {
+    create: async (submitted, requestOptions) => {
+      const request = knowledgeCreateRequest(submitted);
+      const response = await transport.post(
+        boundedKnowledgeMutationRoutes.create,
+        request,
+        requestOptions,
+      );
+      return adaptKnowledgeCreateResponse(response, request);
+    },
+    validate: async (submitted, requestOptions) => {
+      const request = knowledgeValidateRequest(submitted);
+      const { currentKnowledgeObject, ...transportOptions } = requestOptions ?? {};
+      const detachedCurrentKnowledgeObject = await prepareKnowledgeCurrentObject(
+        request,
+        currentKnowledgeObject,
+      );
+      if (
+        request.knowledgeObjectId !== undefined
+        && detachedCurrentKnowledgeObject === undefined
+      ) {
+        throw new TypeError("Knowledge update validation requires its exact current object.");
+      }
+      const response = await transport.post(
+        boundedKnowledgeMutationRoutes.validate,
+        request,
+        transportOptions,
+      );
+      return adaptKnowledgeValidationResponse(
+        response,
+        request,
+        detachedCurrentKnowledgeObject,
+      );
+    },
+    update: async (submitted, requestOptions) => {
+      const request = knowledgeUpdateRequest(submitted);
+      const { currentKnowledgeObject, ...transportOptions } = requestOptions;
+      const detachedCurrentKnowledgeObject = await prepareKnowledgeCurrentObject(
+        request,
+        currentKnowledgeObject,
+      );
+      if (detachedCurrentKnowledgeObject === undefined) {
+        throw new TypeError("Knowledge update current object is required.");
+      }
+      const response = await transport.post(
+        boundedKnowledgeMutationRoutes.update,
+        request,
+        transportOptions,
+      );
+      return adaptKnowledgeUpdateResponse(response, request, detachedCurrentKnowledgeObject);
+    },
+    setState: async (submitted, requestOptions) => {
+      const request = knowledgeSetStateRequest(submitted);
+      const { currentKnowledgeObject, ...transportOptions } = requestOptions;
+      const detachedCurrentKnowledgeObject = await prepareKnowledgeCurrentObject(
+        request,
+        currentKnowledgeObject,
+      );
+      if (detachedCurrentKnowledgeObject === undefined) {
+        throw new TypeError("Knowledge state current object is required.");
+      }
+      const response = await transport.post(
+        boundedKnowledgeMutationRoutes.setState,
+        request,
+        transportOptions,
+      );
+      return adaptKnowledgeSetStateResponse(
+        response,
+        request,
+        detachedCurrentKnowledgeObject,
+      );
+    },
+    delete: async (submitted, requestOptions) => {
+      const request = knowledgeDeleteRequest(submitted);
+      const response = await transport.post(
+        boundedKnowledgeMutationRoutes.delete,
+        request,
+        requestOptions,
+      );
+      return adaptKnowledgeDeleteResponse(response, request);
+    },
+  };
+}
+
+export interface KnowledgeObjectMutationReceipt {
+  knowledgeObject: KnowledgeObject;
+  tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
+}
+
+export interface KnowledgeDeleteReceipt {
+  knowledgeObjectId: string;
+  deletedVersion: bigint;
+  tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
+}
+
+export interface KnowledgeValidationReceipt {
+  result: KnowledgeValidationResult;
+  tenantCatalogRevision: bigint;
+}
+
+export function knowledgeCreateRequest(
+  request: CreateKnowledgeObjectRequestMessage,
+): CreateKnowledgeObjectRequestMessage {
+  if (
+    request.definition === undefined
+    || (
+      request.initialState !== KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT
+      && request.initialState !== KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE
+    )
+    || !validClientRequestID(request.clientRequestId)
+  ) {
+    throw new TypeError("Knowledge create request is outside the browser contract.");
+  }
+  return cloneBoundedMutationRequest(CreateKnowledgeObjectRequest, request);
+}
+
+export function knowledgeValidateRequest(
+  request: ValidateKnowledgeObjectRequestMessage,
+): ValidateKnowledgeObjectRequestMessage {
+  if (
+    request.definition === undefined
+    || (
+      request.intent !== KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE
+      && request.intent
+        !== KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
+    )
+  ) {
+    throw new TypeError("Knowledge validation request is outside the browser contract.");
+  }
+  if (request.knowledgeObjectId === undefined) {
+    if (
+      request.expectedVersion !== undefined
+      || request.updateMask !== undefined
+    ) {
+      throw new TypeError("Knowledge validation create authority is malformed.");
+    }
+  } else if (
+    !validIdentity(request.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+    || !validExpectedVersion(request.expectedVersion)
+    || !validKnowledgeUpdateMask(request.updateMask)
+  ) {
+    throw new TypeError("Knowledge validation update authority is malformed.");
+  }
+  return cloneBoundedMutationRequest(ValidateKnowledgeObjectRequest, request);
+}
+
+export function knowledgeUpdateRequest(
+  request: UpdateKnowledgeObjectRequestMessage,
+): UpdateKnowledgeObjectRequestMessage {
+  if (
+    !validIdentity(request.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+    || !validExpectedVersion(request.expectedVersion)
+    || request.definition === undefined
+    || !validKnowledgeUpdateMask(request.updateMask)
+    || !validClientRequestID(request.clientRequestId)
+  ) {
+    throw new TypeError("Knowledge update request is outside the browser contract.");
+  }
+  return cloneBoundedMutationRequest(UpdateKnowledgeObjectRequest, request);
+}
+
+export function knowledgeSetStateRequest(
+  request: SetKnowledgeObjectStateRequestMessage,
+): SetKnowledgeObjectStateRequestMessage {
+  if (
+    !validIdentity(request.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+    || !validExpectedVersion(request.expectedVersion)
+    || (
+      request.state !== KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE
+      && request.state !== KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED
+    )
+    || !validClientRequestID(request.clientRequestId)
+  ) {
+    throw new TypeError("Knowledge state request is outside the browser contract.");
+  }
+  return cloneBoundedMutationRequest(SetKnowledgeObjectStateRequest, request);
+}
+
+export function knowledgeDeleteRequest(
+  request: DeleteKnowledgeObjectRequestMessage,
+): DeleteKnowledgeObjectRequestMessage {
+  if (
+    !validIdentity(request.knowledgeObjectId, MAXIMUM_OBJECT_ID_BYTES)
+    || !validExpectedVersion(request.expectedVersion)
+    || !validClientRequestID(request.clientRequestId)
+  ) {
+    throw new TypeError("Knowledge delete request is outside the browser contract.");
+  }
+  return cloneBoundedMutationRequest(DeleteKnowledgeObjectRequest, request);
+}
+
+export async function createKnowledgeObject(
+  client: KnowledgeMutationClient,
+  submitted: CreateKnowledgeObjectRequestMessage,
+  options?: ProtobufRequestOptions,
+): Promise<KnowledgeObjectMutationReceipt> {
+  return client.create(submitted, options);
+}
+
+export async function validateKnowledgeObject(
+  client: KnowledgeMutationClient,
+  submitted: ValidateKnowledgeObjectRequestMessage,
+  options?: KnowledgeValidationRequestOptions,
+): Promise<KnowledgeValidationReceipt> {
+  return client.validate(submitted, options);
+}
+
+export async function updateKnowledgeObject(
+  client: KnowledgeMutationClient,
+  submitted: UpdateKnowledgeObjectRequestMessage,
+  options: KnowledgeCurrentObjectMutationOptions,
+): Promise<KnowledgeObjectMutationReceipt> {
+  return client.update(submitted, options);
+}
+
+export async function setKnowledgeObjectState(
+  client: KnowledgeMutationClient,
+  submitted: SetKnowledgeObjectStateRequestMessage,
+  options: KnowledgeCurrentObjectMutationOptions,
+): Promise<KnowledgeObjectMutationReceipt> {
+  return client.setState(submitted, options);
+}
+
+export async function deleteKnowledgeObject(
+  client: KnowledgeMutationClient,
+  submitted: DeleteKnowledgeObjectRequestMessage,
+  options?: ProtobufRequestOptions,
+): Promise<KnowledgeDeleteReceipt> {
+  return client.delete(submitted, options);
+}
+
+export async function adaptKnowledgeCreateResponse(
+  response: CreateKnowledgeObjectResponseMessage,
+  request: CreateKnowledgeObjectRequestMessage,
+): Promise<KnowledgeObjectMutationReceipt> {
+  const detachedRequest = knowledgeCreateRequest(request);
+  const detachedResponse = cloneBoundedMutationResponse(
+    CreateKnowledgeObjectResponse,
+    response,
+  );
+  const receipt = await adaptKnowledgeObjectMutationReceipt(detachedResponse);
+  if (
+    receipt.knowledgeObject.version !== 1n
+    || receipt.knowledgeObject.state !== detachedRequest.initialState
+    || detachedRequest.definition === undefined
+    || receipt.knowledgeObject.definition === undefined
+    || !definitionMatchesNormalizedSubmission(
+      receipt.knowledgeObject.definition,
+      detachedRequest.definition,
+    )
+    || receipt.knowledgeObject.createdAt?.valueOf()
+      !== receipt.knowledgeObject.updatedAt?.valueOf()
+  ) {
+    throw new TypeError("Knowledge create response disagrees with its request.");
+  }
+  return receipt;
+}
+
+export async function adaptKnowledgeUpdateResponse(
+  response: UpdateKnowledgeObjectResponseMessage,
+  request: UpdateKnowledgeObjectRequestMessage,
+  currentKnowledgeObject: KnowledgeObject,
+): Promise<KnowledgeObjectMutationReceipt> {
+  const detachedRequest = knowledgeUpdateRequest(request);
+  const detachedResponse = cloneBoundedMutationResponse(
+    UpdateKnowledgeObjectResponse,
+    response,
+  );
+  const [receipt, detachedCurrentKnowledgeObject] = await Promise.all([
+    adaptKnowledgeObjectMutationReceipt(detachedResponse),
+    prepareKnowledgeCurrentObject(detachedRequest, currentKnowledgeObject),
+  ]);
+  if (detachedCurrentKnowledgeObject === undefined) {
+    throw new TypeError("Knowledge update current object is required.");
+  }
+  const expectedDefinition = normalizedAppliedUpdateDefinition(
+    detachedCurrentKnowledgeObject.definition,
+    detachedRequest.definition,
+    detachedRequest.updateMask,
+  );
+  if (
+    receipt.knowledgeObject.knowledgeObjectId !== detachedRequest.knowledgeObjectId
+    || receipt.knowledgeObject.version !== detachedRequest.expectedVersion + 1n
+    || receipt.knowledgeObject.state !== detachedCurrentKnowledgeObject.state
+    || (
+      detachedCurrentKnowledgeObject.state !== KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT
+      && detachedCurrentKnowledgeObject.state
+        !== KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE
+      && detachedCurrentKnowledgeObject.state
+        !== KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED
+    )
+    || receipt.knowledgeObject.definition === undefined
+    || expectedDefinition === null
+    || !sameKnowledgeDefinition(
+      receipt.knowledgeObject.definition,
+      expectedDefinition,
+    )
+    || !mutationResultRetainsCurrentIdentity(
+      receipt.knowledgeObject,
+      detachedCurrentKnowledgeObject,
+    )
+    || !sameOptionalDate(
+      receipt.knowledgeObject.disabledAt,
+      detachedCurrentKnowledgeObject.disabledAt,
+    )
+  ) {
+    throw new TypeError("Knowledge update response disagrees with its request.");
+  }
+  return receipt;
+}
+
+export async function adaptKnowledgeSetStateResponse(
+  response: SetKnowledgeObjectStateResponseMessage,
+  request: SetKnowledgeObjectStateRequestMessage,
+  currentKnowledgeObject: KnowledgeObject,
+): Promise<KnowledgeObjectMutationReceipt> {
+  const detachedRequest = knowledgeSetStateRequest(request);
+  const detachedResponse = cloneBoundedMutationResponse(
+    SetKnowledgeObjectStateResponse,
+    response,
+  );
+  const [receipt, detachedCurrentKnowledgeObject] = await Promise.all([
+    adaptKnowledgeObjectMutationReceipt(detachedResponse),
+    prepareKnowledgeCurrentObject(detachedRequest, currentKnowledgeObject),
+  ]);
+  if (detachedCurrentKnowledgeObject === undefined) {
+    throw new TypeError("Knowledge state current object is required.");
+  }
+  if (
+    receipt.knowledgeObject.knowledgeObjectId !== detachedRequest.knowledgeObjectId
+    || receipt.knowledgeObject.version !== detachedRequest.expectedVersion + 1n
+    || receipt.knowledgeObject.state !== detachedRequest.state
+    || receipt.knowledgeObject.definition === undefined
+    || detachedCurrentKnowledgeObject.definition === undefined
+    || !sameKnowledgeDefinition(
+      receipt.knowledgeObject.definition,
+      detachedCurrentKnowledgeObject.definition,
+    )
+    || !mutationResultRetainsCurrentIdentity(
+      receipt.knowledgeObject,
+      detachedCurrentKnowledgeObject,
+    )
+    || !validKnowledgeStateTransition(
+      detachedCurrentKnowledgeObject.state,
+      detachedRequest.state,
+    )
+    || (
+      detachedRequest.state === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED
+      && receipt.knowledgeObject.disabledAt?.valueOf()
+        !== receipt.knowledgeObject.updatedAt?.valueOf()
+    )
+  ) {
+    throw new TypeError("Knowledge state response disagrees with its request.");
+  }
+  return receipt;
+}
+
+export function adaptKnowledgeDeleteResponse(
+  response: DeleteKnowledgeObjectResponseMessage,
+  request: DeleteKnowledgeObjectRequestMessage,
+): KnowledgeDeleteReceipt {
+  const detachedRequest = knowledgeDeleteRequest(request);
+  const detachedResponse = cloneBoundedMutationResponse(
+    DeleteKnowledgeObjectResponse,
+    response,
+  );
+  if (
+    detachedResponse.knowledgeObjectId !== detachedRequest.knowledgeObjectId
+    || detachedResponse.deletedVersion !== detachedRequest.expectedVersion + 1n
+    || !validCatalogSnapshot(
+      detachedResponse.tenantCatalogRevision,
+      detachedResponse.tenantCatalogStateToken,
+      detachedResponse.deletedVersion,
+    )
+  ) {
+    throw new TypeError("Knowledge delete response disagrees with its request.");
+  }
+  return {
+    knowledgeObjectId: `${detachedResponse.knowledgeObjectId}`,
+    deletedVersion: detachedResponse.deletedVersion,
+    tenantCatalogRevision: detachedResponse.tenantCatalogRevision,
+    tenantCatalogStateToken: Uint8Array.from(detachedResponse.tenantCatalogStateToken),
+  };
+}
+
+export async function adaptKnowledgeValidationResponse(
+  response: ValidateKnowledgeObjectResponseMessage,
+  request: ValidateKnowledgeObjectRequestMessage,
+  currentKnowledgeObject?: KnowledgeObject,
+): Promise<KnowledgeValidationReceipt> {
+  const detachedRequest = knowledgeValidateRequest(request);
+  const detached = cloneBoundedMutationResponse(
+    ValidateKnowledgeObjectResponse,
+    response,
+  );
+  const detachedCurrentKnowledgeObject = currentKnowledgeObject === undefined
+    ? undefined
+    : cloneBoundedMutationResponse(KnowledgeObject, currentKnowledgeObject);
+  const preparedCurrentKnowledgeObject = await prepareKnowledgeCurrentObject(
+    detachedRequest,
+    detachedCurrentKnowledgeObject,
+  );
+  if (
+    !validKnowledgeValidationUpdateAuthority(
+      detachedRequest,
+      preparedCurrentKnowledgeObject,
+    )
+  ) {
+    throw new TypeError("Knowledge update validation authority is outside the browser contract.");
+  }
+  if (
+    detached.result === undefined
+    || typeof detached.tenantCatalogRevision !== "bigint"
+    || detached.tenantCatalogRevision < 0n
+    || detached.tenantCatalogRevision > MAXIMUM_SIGNED_REVISION
+    || !validKnowledgeValidationResult(
+      detached.result,
+      detachedRequest,
+      detached.tenantCatalogRevision,
+      preparedCurrentKnowledgeObject,
+    )
+  ) {
+    throw new TypeError("Knowledge validation response is outside the browser contract.");
+  }
+  if (
+    detached.result.valid
+      && !await definitionDigestMatches(
+        detached.result.normalizedDefinition,
+        detached.result.definitionSha256,
+      )
+  ) {
+    throw new TypeError("Knowledge validation result could not be detached.");
+  }
+  return {
+    result: detached.result,
+    tenantCatalogRevision: detached.tenantCatalogRevision,
   };
 }
 
@@ -164,6 +742,15 @@ export type KnowledgePageLoadResult =
 
 export type KnowledgeDetailLoadResult =
   | { status: "available"; object: KnowledgeObjectDisplay }
+  | { status: "unavailable" };
+
+export type KnowledgeMutationDetailLoadResult =
+  | {
+    status: "available";
+    object: KnowledgeObjectDisplay;
+    /** Exact detached authority required by Update, Validate-update, and SetState. */
+    currentKnowledgeObject: KnowledgeObject;
+  }
   | { status: "unavailable" };
 
 export interface KnowledgeDetailQuery {
@@ -529,6 +1116,39 @@ export async function loadKnowledgeDetail(
       return { status: "unavailable" };
     }
     return { status: "available", object };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
+/**
+ * Reads one exact version for the mutation surface without weakening the
+ * display-only projection used elsewhere. The returned protobuf object is
+ * detached and its canonical definition digest is verified before exposure.
+ */
+export async function loadKnowledgeMutationDetail(
+  client: KnowledgeReadClient,
+  query: KnowledgeDetailQuery,
+  options?: ProtobufRequestOptions,
+): Promise<KnowledgeMutationDetailLoadResult> {
+  try {
+    const request = knowledgeDetailRequest(query);
+    const response = await client.get(request, options);
+    if (response.knowledgeObject === undefined) return { status: "unavailable" };
+    const currentKnowledgeObject = await prepareKnowledgeCurrentObject({
+      knowledgeObjectId: request.knowledgeObjectId,
+      expectedVersion: request.version,
+    }, response.knowledgeObject);
+    if (currentKnowledgeObject === undefined) return { status: "unavailable" };
+    const object = adaptKnowledgeObject(currentKnowledgeObject, 0);
+    if (
+      object.disclosure !== "available"
+      || object.knowledgeObjectId !== request.knowledgeObjectId
+      || object.version !== request.version
+    ) {
+      return { status: "unavailable" };
+    }
+    return { status: "available", object, currentKnowledgeObject };
   } catch {
     return { status: "unavailable" };
   }
@@ -1313,6 +1933,1146 @@ function validKnowledgeLifecycle(object: KnowledgeObject): boolean {
     default:
       return false;
   }
+}
+
+interface GeneratedMessageCodec<T> {
+  encode(message: T): { finish(): Uint8Array };
+  decode(bytes: Uint8Array): T;
+}
+
+function cloneBoundedMutationRequest<T>(
+  codec: GeneratedMessageCodec<T>,
+  request: T,
+): T {
+  let encoded: Uint8Array;
+  try {
+    encoded = codec.encode(request).finish();
+  } catch {
+    throw new TypeError("Knowledge mutation request cannot be encoded.");
+  }
+  if (encoded.byteLength === 0 || encoded.byteLength > MAXIMUM_KNOWLEDGE_MUTATION_REQUEST_BYTES) {
+    throw new TypeError("Knowledge mutation request exceeds its browser envelope.");
+  }
+  return codec.decode(encoded);
+}
+
+function cloneBoundedMutationResponse<T>(
+  codec: GeneratedMessageCodec<T>,
+  response: T,
+): T {
+  let encoded: Uint8Array;
+  try {
+    encoded = codec.encode(response).finish();
+  } catch {
+    throw new TypeError("Knowledge mutation response cannot be encoded.");
+  }
+  if (encoded.byteLength > KNOWLEDGE_MANAGER_MAXIMUM_RESPONSE_BYTES) {
+    throw new TypeError("Knowledge mutation response exceeds its browser envelope.");
+  }
+  try {
+    return codec.decode(encoded);
+  } catch {
+    throw new TypeError("Knowledge mutation response cannot be detached.");
+  }
+}
+
+async function prepareKnowledgeCurrentObject(
+  request: {
+    readonly knowledgeObjectId?: string;
+    readonly expectedVersion?: bigint;
+  },
+  current: KnowledgeObject | undefined,
+): Promise<KnowledgeObject | undefined> {
+  if (current === undefined) return undefined;
+  const detached = cloneBoundedMutationResponse(KnowledgeObject, current);
+  const adapted = adaptKnowledgeObject(detached, 0);
+  if (
+    request.knowledgeObjectId === undefined
+    || request.expectedVersion === undefined
+    || adapted.disclosure !== "available"
+    || detached.knowledgeObjectId !== request.knowledgeObjectId
+    || detached.version !== request.expectedVersion
+    || detached.definition === undefined
+    || !validCanonicalMutationDefinition(detached.definition)
+    || !await definitionDigestMatches(detached.definition, detached.definitionSha256)
+  ) {
+    throw new TypeError("Knowledge mutation current object is outside the browser contract.");
+  }
+  return detached;
+}
+
+function validKnowledgeValidationUpdateAuthority(
+  request: ValidateKnowledgeObjectRequestMessage,
+  current: KnowledgeObject | undefined,
+): boolean {
+  if (request.knowledgeObjectId === undefined) return current === undefined;
+  if (
+    current === undefined
+    || request.definition === undefined
+    || (
+      request.intent === KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION
+      && current.state === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DELETED
+    )
+  ) return false;
+  const selectedBodyPath = request.updateMask?.find((path) =>
+    path === "field_extraction" || path === "field_alias" || path === "calculated_field");
+  if (selectedBodyPath === undefined) return true;
+  const expectedCase = selectedBodyPath === "field_extraction"
+    ? "fieldExtraction"
+    : selectedBodyPath === "field_alias" ? "fieldAlias" : "calculatedField";
+  return current.definition?.body?.$case === expectedCase
+    && request.definition.body?.$case === expectedCase;
+}
+
+function validExpectedVersion(value: bigint | undefined): value is bigint {
+  return typeof value === "bigint" && value >= 1n && value <= MAXIMUM_SIGNED_REVISION;
+}
+
+function validClientRequestID(value: string): boolean {
+  if (
+    typeof value !== "string"
+    || value.length < MINIMUM_CLIENT_REQUEST_ID_BYTES
+    || value.length > MAXIMUM_CLIENT_REQUEST_ID_BYTES
+  ) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x21 || code > 0x7e) return false;
+  }
+  return true;
+}
+
+function validKnowledgeUpdateMask(paths: string[] | undefined): paths is string[] {
+  if (
+    !Array.isArray(paths)
+    || paths.length < 1
+    || paths.length > MAXIMUM_UPDATE_MASK_PATHS
+  ) return false;
+  let bodyPaths = 0;
+  for (let index = 0; index < paths.length; index += 1) {
+    const path = paths[index];
+    if (
+      typeof path !== "string"
+      || !KNOWLEDGE_UPDATE_MASK_PATHS.has(path)
+      || (index > 0 && compareUTF8Binary(paths[index - 1] ?? "", path) >= 0)
+    ) return false;
+    if (
+      path === "field_extraction"
+      || path === "field_alias"
+      || path === "calculated_field"
+    ) bodyPaths += 1;
+  }
+  return bodyPaths <= 1;
+}
+
+function validCanonicalMutationDefinition(definition: KnowledgeObjectDefinition): boolean {
+  if (
+    !validIdentity(definition.appId, MAXIMUM_APP_ID_BYTES)
+    || !validIdentity(definition.name, MAXIMUM_IDENTITY_BYTES)
+    || (
+      definition.description !== undefined
+      && (
+        !validOptionalText(definition.description, MAXIMUM_DESCRIPTION_BYTES)
+        || definition.description.length === 0
+        || trimPinnedASCIIWhitespace(definition.description) !== definition.description
+      )
+    )
+    || knowledgeSharingScopeLabel(definition.sharingScope) === null
+    || !validCanonicalMutationSelector(definition.selector)
+  ) return false;
+
+  const objectType = mutationDefinitionObjectType(definition);
+  if (objectType === null || adaptKnowledgeDefinition(
+    definition,
+    objectType,
+    KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT,
+  ) === null) return false;
+
+  switch (definition.body?.$case) {
+    case "fieldExtraction": {
+      const body = definition.body.value;
+      if (body.inputField !== "_raw") return false;
+      if (body.extraction?.$case === "regex") {
+        return body.extraction.value.outputFields.every((field) =>
+          validCanonicalSearchFieldPath(field, true));
+      }
+      return body.extraction?.$case === "json"
+        && validCanonicalSearchFieldPath(body.extraction.value.outputField, true);
+    }
+    case "fieldAlias":
+      return validCanonicalSearchFieldPath(definition.body.value.sourceField, false)
+        && validCanonicalSearchFieldPath(definition.body.value.destinationField, true);
+    case "calculatedField":
+      return validCanonicalSearchFieldPath(definition.body.value.destinationField, true)
+        && trimPinnedASCIIWhitespace(definition.body.value.expression)
+          === definition.body.value.expression;
+    default:
+      return false;
+  }
+}
+
+function mutationDefinitionObjectType(
+  definition: KnowledgeObjectDefinition,
+): KnowledgeObjectType | null {
+  switch (definition.body?.$case) {
+    case "fieldExtraction":
+      return KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION;
+    case "fieldAlias":
+      return KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS;
+    case "calculatedField":
+      return KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD;
+    default:
+      return null;
+  }
+}
+
+function validCanonicalMutationSelector(selector: KnowledgeSelector | undefined): boolean {
+  if (selector === undefined) return true;
+  const dimensions = [
+    selector.indexPatterns,
+    selector.hostPatterns,
+    selector.sourcePatterns,
+    selector.sourcetypePatterns,
+  ];
+  if (dimensions.every((patterns) => patterns.length === 0)) return false;
+  let normalizedBytes = utf8ByteLength(KNOWLEDGE_SELECTOR_CANONICAL_DOMAIN) + 12;
+  let wildcardWorkUnits = 0;
+  for (const patterns of dimensions) {
+    if (patterns.length > MAXIMUM_SELECTOR_PATTERNS_PER_DIMENSION) return false;
+    for (let index = 0; index < patterns.length; index += 1) {
+      const pattern = patterns[index];
+      const normalized = pattern === undefined
+        ? null
+        : normalizeKnowledgeSelectorPattern(pattern.value);
+      if (
+        pattern === undefined
+        || normalized === null
+        || normalized.value !== pattern.value
+        || pattern.matchKind !== normalized.matchKind
+        || (index > 0 && compareUTF8Binary(patterns[index - 1]?.value ?? "", pattern.value) >= 0)
+      ) return false;
+      normalizedBytes += 4 + utf8ByteLength(pattern.value);
+      wildcardWorkUnits += knowledgeSelectorPatternWorkUnits(pattern.value);
+    }
+  }
+  return normalizedBytes <= MAXIMUM_SELECTOR_NORMALIZED_BYTES
+    && wildcardWorkUnits <= MAXIMUM_SELECTOR_WILDCARD_WORK_UNITS;
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
+}
+
+async function definitionDigestMatches(
+  definition: KnowledgeObjectDefinition | undefined,
+  digest: Uint8Array | undefined,
+): Promise<boolean> {
+  if (
+    definition === undefined
+    || !(digest instanceof Uint8Array)
+    || digest.byteLength !== 32
+    || globalThis.crypto?.subtle === undefined
+  ) return false;
+  try {
+    const bytes = KnowledgeObjectDefinition.encode(definition).finish();
+    const input = Uint8Array.from(bytes).buffer;
+    const computed = new Uint8Array(await globalThis.crypto.subtle.digest("SHA-256", input));
+    return sameBytes(computed, digest);
+  } catch {
+    return false;
+  }
+}
+
+function definitionMatchesNormalizedSubmission(
+  result: KnowledgeObjectDefinition,
+  submitted: KnowledgeObjectDefinition,
+): boolean {
+  const normalized = normalizedSubmittedDefinition(submitted);
+  return normalized !== null && sameBytes(
+    KnowledgeObjectDefinition.encode(result).finish(),
+    KnowledgeObjectDefinition.encode(normalized).finish(),
+  );
+}
+
+function normalizedAppliedUpdateDefinition(
+  current: KnowledgeObjectDefinition | undefined,
+  submitted: KnowledgeObjectDefinition | undefined,
+  paths: string[] | undefined,
+): KnowledgeObjectDefinition | null {
+  if (current === undefined || submitted === undefined || !validKnowledgeUpdateMask(paths)) {
+    return null;
+  }
+  const applied = KnowledgeObjectDefinition.decode(
+    KnowledgeObjectDefinition.encode(current).finish(),
+  );
+  for (const path of paths) {
+    switch (path) {
+      case "app_id":
+        applied.appId = submitted.appId;
+        break;
+      case "name":
+        applied.name = submitted.name;
+        break;
+      case "description":
+        applied.description = submitted.description;
+        break;
+      case "sharing_scope":
+        applied.sharingScope = submitted.sharingScope;
+        break;
+      case "selector":
+        applied.selector = submitted.selector === undefined
+          ? undefined
+          : KnowledgeSelector.decode(KnowledgeSelector.encode(submitted.selector).finish());
+        break;
+      case "field_extraction":
+      case "field_alias":
+      case "calculated_field": {
+        const expectedCase = path === "field_extraction"
+          ? "fieldExtraction"
+          : path === "field_alias" ? "fieldAlias" : "calculatedField";
+        if (
+          applied.body?.$case !== expectedCase
+          || submitted.body?.$case !== expectedCase
+        ) {
+          return null;
+        }
+        applied.body = KnowledgeObjectDefinition.decode(
+          KnowledgeObjectDefinition.encode(
+            KnowledgeObjectDefinition.fromPartial({ body: submitted.body }),
+          ).finish(),
+        ).body;
+        break;
+      }
+    }
+  }
+  return normalizedSubmittedDefinition(applied);
+}
+
+function sameKnowledgeDefinition(
+  left: KnowledgeObjectDefinition,
+  right: KnowledgeObjectDefinition,
+): boolean {
+  return sameBytes(
+    KnowledgeObjectDefinition.encode(left).finish(),
+    KnowledgeObjectDefinition.encode(right).finish(),
+  );
+}
+
+function sameOptionalDate(left: Date | undefined, right: Date | undefined): boolean {
+  return left === undefined
+    ? right === undefined
+    : right !== undefined && left.valueOf() === right.valueOf();
+}
+
+function mutationResultRetainsCurrentIdentity(
+  result: KnowledgeObject,
+  current: KnowledgeObject,
+): boolean {
+  return result.knowledgeObjectId === current.knowledgeObjectId
+    && result.tenantId === current.tenantId
+    && result.ownerId === current.ownerId
+    && sameOptionalDate(result.createdAt, current.createdAt)
+    && result.updatedAt !== undefined
+    && current.updatedAt !== undefined
+    && result.updatedAt.valueOf() >= current.updatedAt.valueOf();
+}
+
+function validKnowledgeStateTransition(
+  current: KnowledgeObjectState,
+  target: KnowledgeObjectState,
+): boolean {
+  if (target === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE) {
+    return current === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT
+      || current === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED;
+  }
+  return target === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED
+    && (
+      current === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT
+      || current === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE
+    );
+}
+
+function normalizedSubmittedDefinition(
+  submitted: KnowledgeObjectDefinition,
+): KnowledgeObjectDefinition | null {
+  const selector = normalizedSubmittedSelector(submitted.selector);
+  const body = normalizedSubmittedBody(submitted.body);
+  if (selector === null || body === null) return null;
+  return KnowledgeObjectDefinition.fromPartial({
+    appId: trimPinnedASCIIWhitespace(submitted.appId),
+    name: trimPinnedASCIIWhitespace(submitted.name),
+    description: normalizedSubmittedDescription(submitted.description),
+    sharingScope: submitted.sharingScope,
+    selector,
+    body,
+  });
+}
+
+function normalizedSubmittedDescription(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = trimPinnedASCIIWhitespace(value);
+  return normalized.length === 0 ? undefined : normalized;
+}
+
+function normalizedSubmittedBody(
+  body: KnowledgeObjectDefinition["body"],
+): KnowledgeObjectDefinition["body"] | null {
+  switch (body?.$case) {
+    case "fieldExtraction": {
+      const value = body.value;
+      const overwriteBehavior = normalizedSubmittedOverwrite(value.overwriteBehavior);
+      if (overwriteBehavior === null || value.extraction === undefined) return null;
+      if (value.extraction.$case === "regex") {
+        if (
+          value.extraction.value.outputFields.length < 1
+          || value.extraction.value.outputFields.length > MAXIMUM_FIELD_EXTRACTION_OUTPUTS
+        ) return null;
+        return {
+          $case: "fieldExtraction",
+          value: {
+            inputField: value.inputField === ""
+              ? "_raw"
+              : trimPinnedASCIIWhitespace(value.inputField),
+            overwriteBehavior,
+            extraction: {
+              $case: "regex",
+              value: {
+                pattern: value.extraction.value.pattern,
+                outputFields: value.extraction.value.outputFields.map(trimPinnedASCIIWhitespace),
+              },
+            },
+          },
+        };
+      }
+      return {
+        $case: "fieldExtraction",
+        value: {
+          inputField: value.inputField === ""
+            ? "_raw"
+            : trimPinnedASCIIWhitespace(value.inputField),
+          overwriteBehavior,
+          extraction: {
+            $case: "json",
+            value: {
+              path: value.extraction.value.path,
+              outputField: trimPinnedASCIIWhitespace(value.extraction.value.outputField),
+            },
+          },
+        },
+      };
+    }
+    case "fieldAlias": {
+      const overwriteBehavior = normalizedSubmittedOverwrite(body.value.overwriteBehavior);
+      if (overwriteBehavior === null) return null;
+      return {
+        $case: "fieldAlias",
+        value: {
+          sourceField: trimPinnedASCIIWhitespace(body.value.sourceField),
+          destinationField: trimPinnedASCIIWhitespace(body.value.destinationField),
+          overwriteBehavior,
+        },
+      };
+    }
+    case "calculatedField": {
+      if (
+        utf8ByteLength(body.value.expression, MAXIMUM_BODY_TEXT_BYTES)
+        > MAXIMUM_BODY_TEXT_BYTES
+      ) return null;
+      const overwriteBehavior = normalizedSubmittedOverwrite(body.value.overwriteBehavior);
+      if (overwriteBehavior === null) return null;
+      return {
+        $case: "calculatedField",
+        value: {
+          destinationField: trimPinnedASCIIWhitespace(body.value.destinationField),
+          expression: trimPinnedASCIIWhitespace(body.value.expression),
+          overwriteBehavior,
+        },
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+function normalizedSubmittedOverwrite(
+  value: KnowledgeOverwriteBehavior,
+): KnowledgeOverwriteBehavior | null {
+  if (value === KnowledgeOverwriteBehavior.KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED) {
+    return KnowledgeOverwriteBehavior.KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING;
+  }
+  return knowledgeOverwriteLabel(value) === null ? null : value;
+}
+
+function normalizedSubmittedSelector(
+  selector: KnowledgeSelector | undefined,
+): KnowledgeSelector | null | undefined {
+  if (selector === undefined) return undefined;
+  const normalizedDimensions: Array<KnowledgeSelector["indexPatterns"] | null> = [
+    normalizedSubmittedPatterns(selector.indexPatterns),
+    normalizedSubmittedPatterns(selector.hostPatterns),
+    normalizedSubmittedPatterns(selector.sourcePatterns),
+    normalizedSubmittedPatterns(selector.sourcetypePatterns),
+  ];
+  if (normalizedDimensions.some((dimension) => dimension === null)) return null;
+  const [indexPatterns, hostPatterns, sourcePatterns, sourcetypePatterns] =
+    normalizedDimensions as KnowledgeSelector["indexPatterns"][];
+  if (
+    indexPatterns.length === 0
+    && hostPatterns.length === 0
+    && sourcePatterns.length === 0
+    && sourcetypePatterns.length === 0
+  ) return undefined;
+  return KnowledgeSelector.fromPartial({
+    indexPatterns,
+    hostPatterns,
+    sourcePatterns,
+    sourcetypePatterns,
+  });
+}
+
+function normalizedSubmittedPatterns(
+  patterns: KnowledgeSelector["indexPatterns"],
+): KnowledgeSelector["indexPatterns"] | null {
+  if (patterns.length > MAXIMUM_SELECTOR_PATTERNS_PER_DIMENSION) return null;
+  const normalized = new Map<string, KnowledgeSelector["indexPatterns"][number]>();
+  for (const pattern of patterns) {
+    const canonical = normalizeKnowledgeSelectorPattern(pattern.value);
+    if (
+      canonical === null
+      || (
+        pattern.matchKind !== KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_UNSPECIFIED
+        && pattern.matchKind !== canonical.matchKind
+      )
+    ) return null;
+    normalized.set(canonical.value, canonical);
+  }
+  return [...normalized.values()].toSorted((left, right) =>
+    compareUTF8Binary(left.value, right.value));
+}
+
+function normalizeKnowledgeSelectorPattern(
+  submitted: string,
+): KnowledgeSelector["indexPatterns"][number] | null {
+  const value = trimPinnedASCIIWhitespace(submitted);
+  if (
+    value.length === 0
+    || utf8ByteLength(value, MAXIMUM_SELECTOR_PATTERN_BYTES) > MAXIMUM_SELECTOR_PATTERN_BYTES
+  ) return null;
+  let escaped = false;
+  let wildcard = false;
+  let previousStar = false;
+  let canonical = "";
+  for (const character of value) {
+    if (escaped) {
+      if (character !== "*" && character !== "?" && character !== "\\") return null;
+      canonical += `\\${character}`;
+      escaped = false;
+      previousStar = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    const codePoint = character.codePointAt(0) ?? 0;
+    if (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f)) return null;
+    if (character === "*") {
+      wildcard = true;
+      if (previousStar) continue;
+      previousStar = true;
+      canonical += character;
+      continue;
+    }
+    if (character === "?") wildcard = true;
+    previousStar = false;
+    canonical += character;
+  }
+  if (escaped) return null;
+  return {
+    value: canonical,
+    matchKind: wildcard
+      ? KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_WILDCARD
+      : KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+  };
+}
+
+function knowledgeSelectorPatternWorkUnits(canonical: string): number {
+  let escaped = false;
+  let units = 0;
+  for (const character of canonical) {
+    if (escaped) {
+      units += 1;
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === "*") {
+      units += 4;
+    } else if (character === "?") {
+      units += 2;
+    } else {
+      units += 1;
+    }
+  }
+  return escaped ? MAXIMUM_SELECTOR_WILDCARD_WORK_UNITS + 1 : units;
+}
+
+function validCanonicalSearchFieldPath(value: string, rejectReservedRoot: boolean): boolean {
+  if (
+    value.length === 0
+    || utf8ByteLength(value, MAXIMUM_IDENTITY_BYTES) > MAXIMUM_IDENTITY_BYTES
+  ) return false;
+  const segments: string[] = [];
+  let segment = "";
+  let escaped = false;
+  for (const character of value) {
+    if (escaped) {
+      if (character !== "\\" && character !== ".") return false;
+      segment += character;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === ".") {
+      if (!validSearchFieldSegment(segment) || segments.length >= MAXIMUM_SEARCH_FIELD_PATH_SEGMENTS - 1) {
+        return false;
+      }
+      segments.push(segment);
+      segment = "";
+      continue;
+    }
+    segment += character;
+  }
+  if (escaped || !validSearchFieldSegment(segment)) return false;
+  segments.push(segment);
+  const foldedRoot = foldASCIIIdentifier(segments[0] ?? "");
+  if (
+    rejectReservedRoot
+    && (
+      foldedRoot.startsWith("__os_")
+      || RESERVED_DYNAMIC_FIELD_ROOTS.has(foldedRoot)
+    )
+  ) return false;
+  return normalizeSearchFieldPath(segments) === value;
+}
+
+function foldASCIIIdentifier(value: string): string {
+  return value.replace(/[A-Z]/g, (character) => character.toLowerCase());
+}
+
+function validSearchFieldSegment(value: string): boolean {
+  if (
+    value.length === 0
+    || utf8ByteLength(value, MAXIMUM_SEARCH_FIELD_PATH_SEGMENT_BYTES)
+      > MAXIMUM_SEARCH_FIELD_PATH_SEGMENT_BYTES
+  ) return false;
+  for (const character of value) {
+    if (/\p{Cc}/u.test(character)) return false;
+  }
+  return true;
+}
+
+function normalizeSearchFieldPath(segments: readonly string[]): string {
+  return segments.map((segment) =>
+    segment.replaceAll("\\", "\\\\").replaceAll(".", "\\."),
+  ).join(".");
+}
+
+async function adaptKnowledgeObjectMutationReceipt(response: {
+  knowledgeObject: KnowledgeObject | undefined;
+  tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
+}): Promise<KnowledgeObjectMutationReceipt> {
+  if (
+    response.knowledgeObject === undefined
+    || !(response.tenantCatalogStateToken instanceof Uint8Array)
+    || response.tenantCatalogStateToken.byteLength !== 32
+  ) {
+    throw new TypeError("Knowledge mutation response omitted its object.");
+  }
+  const adapted = adaptKnowledgeObject(response.knowledgeObject, 0);
+  const knowledgeObject = adapted.disclosure === "available"
+    ? KnowledgeObject.decode(KnowledgeObject.encode(response.knowledgeObject).finish())
+    : undefined;
+  const tenantCatalogStateToken = Uint8Array.from(response.tenantCatalogStateToken);
+  if (
+    adapted.disclosure !== "available"
+    || knowledgeObject === undefined
+    || knowledgeObject.definition === undefined
+    || !validCanonicalMutationDefinition(knowledgeObject.definition)
+    || !await definitionDigestMatches(
+      knowledgeObject.definition,
+      knowledgeObject.definitionSha256,
+    )
+    || !validCatalogSnapshot(
+      response.tenantCatalogRevision,
+      tenantCatalogStateToken,
+      knowledgeObject.version,
+    )
+  ) {
+    throw new TypeError("Knowledge mutation response is outside the browser contract.");
+  }
+  return {
+    knowledgeObject,
+    tenantCatalogRevision: response.tenantCatalogRevision,
+    tenantCatalogStateToken,
+  };
+}
+
+function validCatalogSnapshot(
+  revision: bigint,
+  token: Uint8Array,
+  minimumRevision: bigint,
+): boolean {
+  return typeof revision === "bigint"
+    && revision >= minimumRevision
+    && revision <= MAXIMUM_SIGNED_REVISION
+    && token instanceof Uint8Array
+    && token.byteLength === 32;
+}
+
+function validKnowledgeValidationResult(
+  result: KnowledgeValidationResult,
+  request: ValidateKnowledgeObjectRequestMessage,
+  revision: bigint,
+  currentKnowledgeObject: KnowledgeObject | undefined,
+): boolean {
+  const currentDefinition = currentKnowledgeObject?.definition;
+  if (
+    request.definition === undefined
+    || (
+      request.knowledgeObjectId !== undefined
+      && (
+        request.expectedVersion === undefined
+        || revision < request.expectedVersion
+      )
+    )
+    ||
+    typeof result.valid !== "boolean"
+    || !Array.isArray(result.fieldViolations)
+    || !Array.isArray(result.dependencies)
+    || !Array.isArray(result.diagnostics)
+    || result.fieldViolations.length > MAXIMUM_VALIDATION_ISSUES
+    || result.dependencies.length > MAXIMUM_VALIDATION_DEPENDENCIES
+    || result.diagnostics.length > MAXIMUM_VALIDATION_ISSUES
+    || result.fieldViolationsTruncated
+    || result.diagnosticsTruncated
+    || !validValidationFieldViolations(result.fieldViolations)
+    || !validValidationDependencies(result.dependencies, revision)
+    || !validValidationDiagnostics(
+      result.diagnostics,
+      (fieldPath) => validationDiagnosticSource(
+        result,
+        request,
+        currentDefinition,
+        fieldPath,
+      ),
+    )
+  ) return false;
+
+  const isInactive = request.intent
+    === KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE;
+  const hasError = result.diagnostics.some(({ diagnostic }) =>
+    diagnostic?.severity === DiagnosticSeverity.DIAGNOSTIC_SEVERITY_ERROR);
+  if (!result.valid) {
+    return result.normalizedDefinition === undefined
+      && result.definitionSha256 === undefined
+      && result.resources === undefined
+      && result.dependencies.length === 0
+      && (result.fieldViolations.length > 0 || hasError)
+      && validInvalidValidationObjectType(result.objectType, request, currentDefinition);
+  }
+
+  if (
+    result.normalizedDefinition === undefined
+    || !validCanonicalMutationDefinition(result.normalizedDefinition)
+    || mutationDefinitionObjectType(result.normalizedDefinition) !== result.objectType
+    || !(result.definitionSha256 instanceof Uint8Array)
+    || result.definitionSha256.byteLength !== 32
+    || result.resources === undefined
+    || result.fieldViolations.length !== 0
+    || hasError
+    || !validKnowledgeResources(
+      result.resources,
+      result.dependencies,
+      isInactive,
+      result.normalizedDefinition,
+    )
+    || (isInactive && result.dependencies.length !== 0)
+  ) return false;
+  const expectedDefinition = request.knowledgeObjectId === undefined
+    ? normalizedSubmittedDefinition(request.definition)
+    : normalizedAppliedUpdateDefinition(
+      currentDefinition,
+      request.definition,
+      request.updateMask,
+    );
+  return expectedDefinition !== null
+    && sameKnowledgeDefinition(result.normalizedDefinition, expectedDefinition);
+}
+
+function validInvalidValidationObjectType(
+  value: KnowledgeObjectType,
+  request: ValidateKnowledgeObjectRequestMessage,
+  currentDefinition: KnowledgeObjectDefinition | undefined,
+): boolean {
+  const expected = expectedValidationObjectType(request, currentDefinition);
+  if (expected !== null) return value === expected;
+  return value === KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
+    || value === KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION
+    || value === KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS
+    || value === KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD;
+}
+
+function expectedValidationObjectType(
+  request: ValidateKnowledgeObjectRequestMessage,
+  currentDefinition: KnowledgeObjectDefinition | undefined,
+): KnowledgeObjectType | null {
+  if (request.definition === undefined) return null;
+  if (request.knowledgeObjectId === undefined) {
+    return mutationDefinitionObjectType(request.definition)
+      ?? KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED;
+  }
+  const selectedBodyPath = request.updateMask?.find((path) =>
+    path === "field_extraction" || path === "field_alias" || path === "calculated_field");
+  if (selectedBodyPath === undefined) {
+    return currentDefinition === undefined
+      ? null
+      : mutationDefinitionObjectType(currentDefinition);
+  }
+  const selectedCase = selectedBodyPath === "field_extraction"
+    ? "fieldExtraction"
+    : selectedBodyPath === "field_alias" ? "fieldAlias" : "calculatedField";
+  return request.definition.body?.$case === selectedCase
+    ? mutationDefinitionObjectType(request.definition)
+      ?? KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
+    : KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED;
+}
+
+function validValidationFieldViolations(
+  violations: KnowledgeValidationResult["fieldViolations"],
+): boolean {
+  let charge = 0;
+  let previous: readonly string[] | undefined;
+  for (const violation of violations) {
+    if (
+      !validIssuePath(violation.fieldPath)
+      || !validIssueScalar(violation.code, MAXIMUM_ISSUE_CODE_BYTES)
+      || !validIssueScalar(violation.message, MAXIMUM_ISSUE_MESSAGE_BYTES)
+    ) return false;
+    charge += utf8ByteLength(violation.fieldPath)
+      + utf8ByteLength(violation.code)
+      + utf8ByteLength(violation.message);
+    if (charge > MAXIMUM_FIELD_VIOLATION_TEXT_BYTES) return false;
+    const key = [violation.fieldPath, violation.code, violation.message] as const;
+    if (previous !== undefined && compareStringSequences(previous, key) >= 0) return false;
+    previous = key;
+  }
+  return true;
+}
+
+function validValidationDependencies(
+  dependencies: KnowledgeValidationResult["dependencies"],
+  revision: bigint,
+): boolean {
+  let previous: { knowledgeObjectId: string; version: bigint } | undefined;
+  for (const dependency of dependencies) {
+    const target = dependency.target;
+    if (
+      dependency.role !== KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT
+      || !validKnowledgeRelationshipIdentity(target, revision)
+    ) return false;
+    if (previous !== undefined) {
+      const order = compareUTF8Binary(previous.knowledgeObjectId, target.knowledgeObjectId);
+      if (order > 0 || (order === 0 && previous.version >= target.version)) return false;
+    }
+    previous = target;
+  }
+  return true;
+}
+
+function validValidationDiagnostics(
+  diagnostics: KnowledgeValidationDiagnostic[],
+  sourceForFieldPath: (fieldPath: string) => string | null,
+): boolean {
+  let charge = 0;
+  let previous: readonly (string | number | bigint)[] | undefined;
+  for (const located of diagnostics) {
+    const diagnostic = located.diagnostic;
+    if (
+      !validIssuePath(located.fieldPath)
+      || diagnostic === undefined
+      || diagnosticSeverityRank(diagnostic.severity) < 0
+      || !validIssueScalar(diagnostic.code, MAXIMUM_ISSUE_CODE_BYTES)
+      || !validIssueScalar(diagnostic.message, MAXIMUM_ISSUE_MESSAGE_BYTES)
+      || !Array.isArray(diagnostic.suggestions)
+      || diagnostic.suggestions.length > MAXIMUM_DIAGNOSTIC_SUGGESTIONS
+      || !strictlySortedIssueStrings(
+        diagnostic.suggestions,
+        MAXIMUM_DIAGNOSTIC_SUGGESTION_BYTES,
+      )
+      || !validSourceRange(
+        diagnostic.sourceRange,
+        sourceForFieldPath(located.fieldPath),
+      )
+    ) return false;
+    charge += utf8ByteLength(located.fieldPath)
+      + utf8ByteLength(diagnostic.code)
+      + utf8ByteLength(diagnostic.message);
+    for (const suggestion of diagnostic.suggestions) charge += utf8ByteLength(suggestion);
+    if (charge > MAXIMUM_DIAGNOSTIC_TEXT_BYTES) return false;
+    const range = diagnostic.sourceRange;
+    const key = [
+      diagnosticSeverityRank(diagnostic.severity),
+      located.fieldPath,
+      range === undefined ? 0 : 1,
+      range?.start?.byteOffset ?? 0n,
+      range?.end?.byteOffset ?? 0n,
+      diagnostic.code,
+      diagnostic.message,
+      range?.start?.line ?? 0,
+      range?.start?.column ?? 0,
+      range?.end?.line ?? 0,
+      range?.end?.column ?? 0,
+      ...diagnostic.suggestions,
+    ] as const;
+    if (previous !== undefined && compareValidationKeys(previous, key) >= 0) return false;
+    previous = key;
+  }
+  return true;
+}
+
+function diagnosticSeverityRank(severity: DiagnosticSeverity): number {
+  switch (severity) {
+    case DiagnosticSeverity.DIAGNOSTIC_SEVERITY_ERROR:
+      return 0;
+    case DiagnosticSeverity.DIAGNOSTIC_SEVERITY_WARNING:
+      return 1;
+    case DiagnosticSeverity.DIAGNOSTIC_SEVERITY_INFO:
+      return 2;
+    default:
+      return -1;
+  }
+}
+
+function validSourceRange(
+  range: SourceRange | undefined,
+  source: string | null,
+): boolean {
+  if (range === undefined) return true;
+  const start = range.start;
+  const end = range.end;
+  if (
+    source === null
+    || start === undefined
+    || end === undefined
+    || typeof start.byteOffset !== "bigint"
+    || typeof end.byteOffset !== "bigint"
+    || start.byteOffset < 0n
+    || end.byteOffset < start.byteOffset
+    || end.byteOffset > BigInt(MAXIMUM_KNOWLEDGE_MUTATION_REQUEST_BYTES)
+    || !Number.isSafeInteger(start.line)
+    || start.line < 1
+    || !Number.isSafeInteger(start.column)
+    || start.column < 1
+    || !Number.isSafeInteger(end.line)
+    || end.line < 1
+    || !Number.isSafeInteger(end.column)
+    || end.column < 1
+  ) return false;
+  const expectedStart = sourcePositionAtByteOffset(source, Number(start.byteOffset));
+  const expectedEnd = sourcePositionAtByteOffset(source, Number(end.byteOffset));
+  return expectedStart !== null
+    && expectedEnd !== null
+    && start.line === expectedStart.line
+    && start.column === expectedStart.column
+    && end.line === expectedEnd.line
+    && end.column === expectedEnd.column;
+}
+
+function validationDiagnosticSource(
+  result: KnowledgeValidationResult,
+  request: ValidateKnowledgeObjectRequestMessage,
+  currentDefinition: KnowledgeObjectDefinition | undefined,
+  fieldPath: string,
+): string | null {
+  if (result.valid) {
+    return result.normalizedDefinition === undefined
+      ? null
+      : validationDiagnosticScalar(result.normalizedDefinition, fieldPath);
+  }
+  if (request.definition === undefined) return null;
+  const selectedBodyPath = diagnosticBodyMaskPath(fieldPath);
+  if (selectedBodyPath === null) return null;
+  if (
+    request.knowledgeObjectId !== undefined
+    && !request.updateMask?.includes(selectedBodyPath)
+  ) {
+    return currentDefinition === undefined
+      ? null
+      : validationDiagnosticScalar(currentDefinition, fieldPath);
+  }
+  return validationDiagnosticScalar(request.definition, fieldPath);
+}
+
+function diagnosticBodyMaskPath(fieldPath: string): string | null {
+  if (fieldPath === "calculated_field.expression") return "calculated_field";
+  if (fieldPath === "field_extraction.json.path") return "field_extraction";
+  return null;
+}
+
+function validationDiagnosticScalar(
+  definition: KnowledgeObjectDefinition,
+  fieldPath: string,
+): string | null {
+  if (
+    fieldPath === "calculated_field.expression"
+    && definition.body?.$case === "calculatedField"
+  ) return definition.body.value.expression;
+  if (
+    fieldPath === "field_extraction.json.path"
+    && definition.body?.$case === "fieldExtraction"
+    && definition.body.value.extraction?.$case === "json"
+  ) return definition.body.value.extraction.value.path;
+  return null;
+}
+
+function sourcePositionAtByteOffset(
+  source: string,
+  requestedOffset: number,
+): { line: number; column: number } | null {
+  let byteOffset = 0;
+  let line = 1;
+  let column = 1;
+  for (const character of source) {
+    if (byteOffset === requestedOffset) return { line, column };
+    const characterBytes = utf8ByteLength(character, 4);
+    if (characterBytes > 4 || byteOffset + characterBytes > requestedOffset) return null;
+    byteOffset += characterBytes;
+    if (character === "\n") {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+  return byteOffset === requestedOffset ? { line, column } : null;
+}
+
+function validKnowledgeResources(
+  resources: KnowledgeResourceEstimate,
+  dependencies: KnowledgeValidationResult["dependencies"],
+  inactive: boolean,
+  definition: KnowledgeObjectDefinition,
+): boolean {
+  const uint32s = [
+    resources.selectorPatterns,
+    resources.dependencyNodes,
+    resources.dependencyEdges,
+    resources.generatedOperators,
+    resources.generatedFields,
+    resources.regexPrograms,
+    resources.scalarExpressions,
+    resources.scalarExpressionNodes,
+    resources.extractionOutputs,
+    resources.jsonEvaluationWorkUnits,
+    resources.scalarPredicates,
+  ];
+  const selectorPatterns = definition.selector === undefined
+    ? 0
+    : definition.selector.indexPatterns.length
+      + definition.selector.hostPatterns.length
+      + definition.selector.sourcePatterns.length
+      + definition.selector.sourcetypePatterns.length;
+  const normalizedDefinitionBytes = KnowledgeObjectDefinition.encode(definition).finish().byteLength;
+  if (
+    uint32s.some((value) => !Number.isSafeInteger(value) || value < 0 || value > 0xffff_ffff)
+    || !validUnsigned64(resources.normalizedDefinitionBytes)
+    || resources.normalizedDefinitionBytes !== BigInt(normalizedDefinitionBytes)
+    || resources.selectorPatterns !== selectorPatterns
+    || !validUnsigned64(resources.estimatedRegexWorkUnits)
+    || resources.dependencyEdges !== dependencies.length
+    || resources.dependencyNodes !== new Set(
+      dependencies.map(({ target }) =>
+        `${target?.knowledgeObjectId ?? ""}\0${target?.version.toString() ?? ""}`),
+    ).size
+  ) return false;
+  if (!inactive) return true;
+  return resources.dependencyNodes === 0
+    && resources.dependencyEdges === 0
+    && resources.generatedOperators === 0
+    && resources.generatedFields === 0
+    && resources.regexPrograms === 0
+    && resources.estimatedRegexWorkUnits === 0n
+    && resources.scalarExpressions === 0
+    && resources.scalarExpressionNodes === 0
+    && resources.extractionOutputs === 0
+    && resources.jsonEvaluationWorkUnits === 0
+    && resources.scalarPredicates === 0;
+}
+
+function validUnsigned64(value: bigint): boolean {
+  return typeof value === "bigint" && value >= 0n && value <= 18_446_744_073_709_551_615n;
+}
+
+function validIssuePath(value: string): boolean {
+  return typeof value === "string"
+    && utf8ByteLength(value, MAXIMUM_FIELD_PATH_BYTES) <= MAXIMUM_FIELD_PATH_BYTES
+    && !value.includes("\0");
+}
+
+function validIssueScalar(value: string, maximumBytes: number): boolean {
+  return typeof value === "string"
+    && value.length > 0
+    && utf8ByteLength(value, maximumBytes) <= maximumBytes
+    && !value.includes("\0");
+}
+
+function strictlySortedIssueStrings(values: string[], maximumBytes: number): boolean {
+  for (let index = 0; index < values.length; index += 1) {
+    if (
+      !validIssueScalar(values[index] ?? "", maximumBytes)
+      || (index > 0 && compareUTF8Binary(values[index - 1] ?? "", values[index] ?? "") >= 0)
+    ) return false;
+  }
+  return true;
+}
+
+function compareStringSequences(left: readonly string[], right: readonly string[]): number {
+  const shared = Math.min(left.length, right.length);
+  for (let index = 0; index < shared; index += 1) {
+    const order = compareUTF8Binary(left[index] ?? "", right[index] ?? "");
+    if (order !== 0) return order;
+  }
+  return left.length - right.length;
+}
+
+function compareValidationKeys(
+  left: readonly (string | number | bigint)[],
+  right: readonly (string | number | bigint)[],
+): number {
+  const shared = Math.min(left.length, right.length);
+  for (let index = 0; index < shared; index += 1) {
+    const leftValue = left[index] ?? 0;
+    const rightValue = right[index] ?? 0;
+    let order: number;
+    if (typeof leftValue === "string" && typeof rightValue === "string") {
+      order = compareUTF8Binary(leftValue, rightValue);
+    } else if (typeof leftValue === "number" && typeof rightValue === "number") {
+      order = leftValue - rightValue;
+    } else if (typeof leftValue === "bigint" && typeof rightValue === "bigint") {
+      order = leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+    } else {
+      order = typeof leftValue < typeof rightValue ? -1 : 1;
+    }
+    if (order !== 0) return order;
+  }
+  return left.length - right.length;
 }
 
 function validIdentity(value: string, maximumBytes: number): boolean {

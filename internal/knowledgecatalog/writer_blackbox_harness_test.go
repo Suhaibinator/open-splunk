@@ -125,7 +125,7 @@ func newWriterBlackboxHarness(t *testing.T) *writerBlackboxHarness {
 	writer, err := knowledgecatalog.NewWriter(database, auditStore, knowledgecatalog.WriterOptions{
 		Clock: func() time.Time {
 			call := harness.clockCalls.Add(1)
-			value := int64(10_000 + call)
+			value := 10_000 + call
 			harness.lastClockUS.Store(value)
 			return time.UnixMicro(value).UTC()
 		},

@@ -100,12 +100,12 @@ func TestKnowledgeWriterCommitAuthorityMigrationRejectsLegacyReplayStateAtomical
 			objectID: "ko-legacy-replay", version: 1, state: "active",
 			mutation: "create", timestamp: 10,
 		})
-		if _, err := raw.Exec(`UPDATE knowledge_catalog_tenants
+		if _, err := raw.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
 			SET catalog_revision = catalog_revision + 1
 			WHERE tenant_id = 'tenant-a'`); err != nil {
 			t.Fatalf("advance legacy revision: %v", err)
 		}
-		if _, err := raw.Exec(`
+		if _, err := raw.ExecContext(t.Context(), `
 			INSERT INTO knowledge_mutation_idempotency (
 				tenant_id, actor_id, route, client_request_id, mutation_kind,
 				request_digest, outcome_proto, committed_catalog_revision,
@@ -143,7 +143,7 @@ func TestKnowledgeWriterCommitAuthorityMigrationRejectsLegacyReplayStateAtomical
 		if err := ApplyMigrations(context.Background(), raw, migrationsBefore(t, "0030_")); err != nil {
 			t.Fatalf("apply through migration 0029: %v", err)
 		}
-		if _, err := raw.Exec(`
+		if _, err := raw.ExecContext(t.Context(), `
 			INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-a');
 			UPDATE knowledge_catalog_tenants SET idempotency_count = 1
 			WHERE tenant_id = 'tenant-a'`); err != nil {
@@ -223,7 +223,7 @@ func TestKnowledgeWriterCommitAuthorityMigrationRejectsRetainedWriterSemanticDri
 				objectID: "ko-retained-drift", version: 1, state: "draft",
 				mutation: "create", timestamp: 10,
 			})
-			if _, err := raw.Exec(`INSERT INTO knowledge_object_versions (
+			if _, err := raw.ExecContext(t.Context(), `INSERT INTO knowledge_object_versions (
 				tenant_id, knowledge_object_id, object_version,
 				app_id, owner_id, object_type, name, sharing_scope, state,
 				definition_digest, dependency_count, mutation_kind,
@@ -318,11 +318,11 @@ func TestKnowledgeWriterStateOnlyDependencySealRequiresExactPriorEdges(t *testin
 		"ko-dependency-target-a", 10,
 	)
 
-	tx, err := raw.Begin()
+	tx, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin mismatched state-only version: %v", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -343,7 +343,7 @@ func TestKnowledgeWriterStateOnlyDependencySealRequiresExactPriorEdges(t *testin
 		_ = tx.Rollback()
 		t.Fatalf("stage mismatched state-only dependency: %v", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		) VALUES ('tenant-a', 'ko-state-only-dependencies', 2, 1)`); err == nil ||
@@ -382,7 +382,7 @@ func TestKnowledgeWriterVersionSemanticTriggerRejectsAuthorityDrift(t *testing.T
 		mutation: "create", timestamp: 10,
 	})
 	distinctDigest := bytes.Repeat([]byte{0x5a}, 32)
-	if _, err := raw.Exec(`INSERT INTO knowledge_definition_blobs (
+	if _, err := raw.ExecContext(t.Context(), `INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto,
 		definition_bytes, created_at_unix_micro
 	) VALUES ('tenant-a', ?, X'02', 1, 2)`, distinctDigest); err != nil {
@@ -439,7 +439,7 @@ func TestKnowledgeWriterVersionSemanticTriggerRejectsAuthorityDrift(t *testing.T
 		{name: "state only disable", scope: "private", state: "disabled", mutation: "disable"},
 	} {
 		t.Run("accepts "+valid.name, func(t *testing.T) {
-			tx, err := raw.Begin()
+			tx, err := raw.BeginTx(t.Context(), nil)
 			if err != nil {
 				t.Fatalf("begin accepted transition: %v", err)
 			}
@@ -447,7 +447,7 @@ func TestKnowledgeWriterVersionSemanticTriggerRejectsAuthorityDrift(t *testing.T
 			if valid.mutation == "disable" || valid.mutation == "enable" {
 				digest = make([]byte, 32)
 			}
-			if _, err := tx.Exec(`
+			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO knowledge_object_versions (
 					tenant_id, knowledge_object_id, object_version,
 					app_id, owner_id, object_type, name, sharing_scope, state,
@@ -485,13 +485,13 @@ func TestKnowledgeWriterIdempotencyRequiresExactCommittedSuccessAuthorities(t *t
 		objectID: "ko-success-authority", version: 1, state: "active",
 		mutation: "create", timestamp: createdAt,
 	})
-	if _, err := raw.Exec(`INSERT INTO audit_tenant_state (
+	if _, err := raw.ExecContext(t.Context(), `INSERT INTO audit_tenant_state (
 		tenant_id, next_sequence, event_count
 	) VALUES ('tenant-a', 1, 0)`); err != nil {
 		t.Fatalf("seed audit tenant: %v", err)
 	}
 
-	tx, err := raw.Begin()
+	tx, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin exact success publication: %v", err)
 	}
@@ -499,20 +499,20 @@ func TestKnowledgeWriterIdempotencyRequiresExactCommittedSuccessAuthorities(t *t
 		_ = tx.Rollback()
 		t.Fatalf(format, args...)
 	}
-	if _, err := tx.Exec(`UPDATE knowledge_catalog_tenants
+	if _, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
 		SET catalog_revision = catalog_revision + 1
 		WHERE tenant_id = 'tenant-a'`); err != nil {
 		rollback("advance catalog revision: %v", err)
 	}
 	var token []byte
-	if err := tx.QueryRow(`SELECT state_token FROM knowledge_catalog_revision_heads
+	if err := tx.QueryRowContext(t.Context(), `SELECT state_token FROM knowledge_catalog_revision_heads
 		WHERE tenant_id = 'tenant-a' AND catalog_revision = 1`).Scan(&token); err != nil {
 		rollback("read committed token: %v", err)
 	}
 	if len(token) != 32 {
 		rollback("committed token length = %d", len(token))
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO audit_events (
 			tenant_id, sequence, occurred_at_unix_micro,
 			actor_kind, actor_id, actor_role, action,
@@ -618,12 +618,12 @@ func TestKnowledgeWriterIdempotencyRequiresExactCommittedSuccessAuthorities(t *t
 		},
 	} {
 		t.Run("composite foreign key rejects "+probe.name, func(t *testing.T) {
-			tx, err := raw.Begin()
+			tx, err := raw.BeginTx(t.Context(), nil)
 			if err != nil {
 				t.Fatalf("begin composite foreign-key probe: %v", err)
 			}
-			defer tx.Rollback()
-			if _, err := tx.Exec(`
+			defer func() { _ = tx.Rollback() }()
+			if _, err := tx.ExecContext(t.Context(), `
 				DROP TRIGGER knowledge_mutation_idempotency_update_is_forbidden;
 				DROP TRIGGER knowledge_mutation_idempotency_matches_commit_authority`); err != nil {
 				t.Fatalf("isolate composite foreign-key probe: %v", err)
@@ -631,7 +631,8 @@ func TestKnowledgeWriterIdempotencyRequiresExactCommittedSuccessAuthorities(t *t
 			arguments := append(probe.arguments,
 				"tenant-a", "actor-a", "objects.create", knowledgeWriterRequestID,
 			)
-			_, err = tx.Exec(`UPDATE knowledge_mutation_idempotency
+			// #nosec G202 -- assignment is selected from the fixed foreign-key probe table above.
+			_, err = tx.ExecContext(t.Context(), `UPDATE knowledge_mutation_idempotency
 				SET `+probe.assignment+`
 				WHERE tenant_id = ? AND actor_id = ? AND route = ?
 				  AND client_request_id = ?`, arguments...)
@@ -665,12 +666,12 @@ func TestKnowledgeWriterIdempotencyRequiresExactCommittedSuccessAuthorities(t *t
 			var outcomeProbe *sql.Tx
 			if test.name == "oversized outcome" {
 				var err error
-				outcomeProbe, err = raw.Begin()
+				outcomeProbe, err = raw.BeginTx(t.Context(), nil)
 				if err != nil {
 					t.Fatalf("begin oversized outcome probe: %v", err)
 				}
-				defer outcomeProbe.Rollback()
-				if _, err := outcomeProbe.Exec(`
+				defer func() { _ = outcomeProbe.Rollback() }()
+				if _, err := outcomeProbe.ExecContext(t.Context(), `
 					DROP TRIGGER knowledge_mutation_idempotency_matches_commit_authority`); err != nil {
 					t.Fatalf("isolate outcome size constraint: %v", err)
 				}
@@ -688,21 +689,21 @@ func TestKnowledgeWriterIdempotencyRequiresExactCommittedSuccessAuthorities(t *t
 		})
 	}
 	maximumRetention := int64(365 * 24 * time.Hour / time.Microsecond)
-	retentionProbe, err := raw.Begin()
+	retentionProbe, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin maximum-retention probe: %v", err)
 	}
-	if _, err := retentionProbe.Exec(`
+	if _, err := retentionProbe.ExecContext(t.Context(), `
 		DROP TRIGGER knowledge_mutation_commit_authority_update_is_forbidden;
 		DROP TRIGGER knowledge_mutation_idempotency_delete_before_retention_is_forbidden;
 		DELETE FROM knowledge_mutation_idempotency
 		WHERE tenant_id = 'tenant-a' AND actor_kind = 'browser'
 		  AND actor_id = 'actor-a' AND route = 'objects.create'
-		  AND client_request_id = '` + knowledgeWriterRequestID + `'`); err != nil {
+		  AND client_request_id = '`+knowledgeWriterRequestID+`'`); err != nil {
 		_ = retentionProbe.Rollback()
 		t.Fatalf("remove minimum-retention receipt probe: %v", err)
 	}
-	if _, err := retentionProbe.Exec(`
+	if _, err := retentionProbe.ExecContext(t.Context(), `
 		UPDATE knowledge_mutation_commit_authorities
 		SET client_request_id = ?, retention_anchor_unix_micro = ?,
 		    retain_until_unix_micro = ?
@@ -735,12 +736,12 @@ func TestKnowledgeWriterIdempotencyRequiresExactCommittedSuccessAuthorities(t *t
 		{name: "maximum plus one", requestID: "request-maximum-plus-one", delta: maximumRetention + 1},
 	} {
 		t.Run("rejects retention "+probe.name, func(t *testing.T) {
-			probeTx, err := raw.Begin()
+			probeTx, err := raw.BeginTx(t.Context(), nil)
 			if err != nil {
 				t.Fatalf("begin invalid retention probe: %v", err)
 			}
 			defer func() { _ = probeTx.Rollback() }()
-			if _, err := probeTx.Exec(`DROP TRIGGER knowledge_mutation_idempotency_matches_commit_authority`); err != nil {
+			if _, err := probeTx.ExecContext(t.Context(), `DROP TRIGGER knowledge_mutation_idempotency_matches_commit_authority`); err != nil {
 				t.Fatalf("isolate retention check constraint: %v", err)
 			}
 			if _, err := insertKnowledgeWriterIdempotency(
@@ -753,12 +754,12 @@ func TestKnowledgeWriterIdempotencyRequiresExactCommittedSuccessAuthorities(t *t
 			}
 		})
 	}
-	capacityProbe, err := raw.Begin()
+	capacityProbe, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin ordinary idempotency capacity probe: %v", err)
 	}
-	defer capacityProbe.Rollback()
-	if _, err := capacityProbe.Exec(`
+	defer func() { _ = capacityProbe.Rollback() }()
+	if _, err := capacityProbe.ExecContext(t.Context(), `
 		DROP TRIGGER knowledge_mutation_idempotency_matches_commit_authority;
 		DROP TRIGGER knowledge_mutation_idempotency_matches_audit_authority;
 		UPDATE knowledge_catalog_tenants
@@ -800,7 +801,7 @@ func TestKnowledgeWriterIdempotencyLinksQuarantineToRecoveryReserve(t *testing.T
 		quarantineReason: "root_corruption",
 	})
 
-	tx, err := raw.Begin()
+	tx, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin recovery publication: %v", err)
 	}
@@ -808,17 +809,17 @@ func TestKnowledgeWriterIdempotencyLinksQuarantineToRecoveryReserve(t *testing.T
 		_ = tx.Rollback()
 		t.Fatalf(format, args...)
 	}
-	if _, err := tx.Exec(`UPDATE knowledge_catalog_tenants
+	if _, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
 		SET catalog_revision = catalog_revision + 1
 		WHERE tenant_id = 'tenant-a'`); err != nil {
 		rollback("advance recovery revision: %v", err)
 	}
 	var token []byte
-	if err := tx.QueryRow(`SELECT state_token FROM knowledge_catalog_revision_heads
+	if err := tx.QueryRowContext(t.Context(), `SELECT state_token FROM knowledge_catalog_revision_heads
 		WHERE tenant_id = 'tenant-a' AND catalog_revision = 1`).Scan(&token); err != nil {
 		rollback("read recovery token: %v", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_recovery_audit (
 			tenant_id, sequence, knowledge_object_id, object_version,
 			actor_kind, actor_id, actor_role, app_id, object_type,
@@ -873,7 +874,7 @@ func insertKnowledgeWriterDependencyVersion(
 	timestamp int64,
 ) {
 	t.Helper()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin dependency version %s/%d: %v", objectID, version, err)
 	}
@@ -881,7 +882,7 @@ func insertKnowledgeWriterDependencyVersion(
 		_ = tx.Rollback()
 		t.Fatalf(format, args...)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -895,7 +896,7 @@ func insertKnowledgeWriterDependencyVersion(
 	); err != nil {
 		rollback("insert dependency version %s/%d: %v", objectID, version, err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_dependencies (
 			tenant_id, source_object_id, source_object_version, ordinal,
 			target_kind, target_object_id, target_object_version, dependency_role
@@ -904,13 +905,13 @@ func insertKnowledgeWriterDependencyVersion(
 		)`, objectID, version, targetObjectID); err != nil {
 		rollback("insert dependency edge %s/%d: %v", objectID, version, err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		) VALUES ('tenant-a', ?, ?, 1)`, objectID, version); err != nil {
 		rollback("seal dependency version %s/%d: %v", objectID, version, err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -937,7 +938,7 @@ func insertKnowledgeWriterDependencyVersion(
 		rollback("stage dependency projection %s/%d: %v", objectID, version, err)
 	}
 	if version == 1 {
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(t.Context(), `
 			INSERT INTO knowledge_objects (
 				tenant_id, knowledge_object_id, current_version,
 				app_id, owner_id, object_type, name, sharing_scope, state,
@@ -955,7 +956,7 @@ func insertKnowledgeWriterDependencyVersion(
 		if state == "disabled" {
 			disabledAt = timestamp
 		}
-		result, err := tx.Exec(`
+		result, err := tx.ExecContext(t.Context(), `
 			UPDATE knowledge_objects SET
 				current_version = ?, state = ?, updated_at_unix_micro = ?,
 				disabled_at_unix_micro = ?
@@ -1060,7 +1061,7 @@ func assertKnowledgeWriterCommitUniqueAuthority(t *testing.T, raw *sql.DB) {
 		"tenant_id", "catalog_revision", "catalog_state_token", "actor_kind",
 		"actor_id", "route", "client_request_id", "request_digest",
 	}, ",")
-	rows, err := raw.Query(`SELECT name FROM pragma_index_list(
+	rows, err := raw.QueryContext(t.Context(), `SELECT name FROM pragma_index_list(
 		'knowledge_mutation_commit_authorities'
 	) WHERE "unique" = 1`)
 	if err != nil {
@@ -1083,7 +1084,7 @@ func assertKnowledgeWriterCommitUniqueAuthority(t *testing.T, raw *sql.DB) {
 	found := false
 	for _, name := range indexNames {
 		var columns string
-		if err := raw.QueryRow(`SELECT group_concat(name, ',') FROM (
+		if err := raw.QueryRowContext(t.Context(), `SELECT group_concat(name, ',') FROM (
 			SELECT name FROM pragma_index_info(?) ORDER BY seqno
 		)`, name).Scan(&columns); err != nil {
 			t.Fatalf("read commit-authority index %s: %v", name, err)
@@ -1104,7 +1105,7 @@ func assertKnowledgeWriterReceiptCommitForeignKey(t *testing.T, raw *sql.DB) {
 		to   string
 	}
 	groups := make(map[int][]foreignKeyColumn)
-	rows, err := raw.Query(`SELECT id, seq, "from", "to"
+	rows, err := raw.QueryContext(t.Context(), `SELECT id, seq, "from", "to"
 		FROM pragma_foreign_key_list('knowledge_mutation_idempotency')
 		WHERE "table" = 'knowledge_mutation_commit_authorities'
 		ORDER BY id, seq`)

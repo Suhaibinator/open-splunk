@@ -245,10 +245,11 @@ func compileKnowledgeExtractionStage(
 		captureCharges = append(captureCharges, "toUInt128("+state.rexCapturedBytesSQL+")")
 	}
 	proof := make([]compiledKnowledgeExtractionOperation, 0, len(objects))
-	var emittedOutputCount, regexPrograms uint32
+	var emittedOperatorCount, emittedOutputCount, regexPrograms uint32
 	var regexWork uint64
 	var jsonWork uint32
 	for _, object := range objects {
+		emittedOperatorCount++
 		bindingProjection = append(bindingProjection, object.bindingAlias)
 		bindings = append(bindings, "["+object.bindingSQL+"] AS "+object.bindingAlias)
 		suffixArgs = append(suffixArgs, object.args...)
@@ -260,7 +261,9 @@ func compileKnowledgeExtractionStage(
 			regexWork += object.regexWorkUnits
 		}
 		jsonWork += object.jsonEvaluationWork
-		emittedOutputCount += uint32(len(object.outputs))
+		for range object.outputs {
+			emittedOutputCount++
+		}
 		proof = append(proof, object.proof)
 	}
 	for _, group := range groups {
@@ -334,7 +337,7 @@ func compileKnowledgeExtractionStage(
 		selectorCharges:           chargeColumns,
 		capturedBytes:             capturedBytes,
 		emittedOperations:         proof,
-		emittedOperatorCount:      uint32(len(objects)),
+		emittedOperatorCount:      emittedOperatorCount,
 		emittedOutputCount:        emittedOutputCount,
 		emittedRegexPrograms:      regexPrograms,
 		emittedRegexWorkUnits:     regexWork,
@@ -368,6 +371,7 @@ func compileKnowledgeExtractionObjects(
 	regex := program.RegexExtractions()
 	jsonObjects := program.JSONExtractions()
 	regexIndex, jsonIndex := 0, 0
+	var objectOrdinal uint32
 	objects := make([]compiledKnowledgeExtractionObject, 0, len(regex)+len(jsonObjects))
 	pastExtractions := false
 	for _, kind := range program.OperatorKinds() {
@@ -376,21 +380,23 @@ func compileKnowledgeExtractionObjects(
 			if pastExtractions || regexIndex >= len(regex) {
 				return nil, errors.New("compile ClickHouse knowledge extraction stage: regex order disagrees")
 			}
-			object, err := compileKnowledgeRegexExtractionObject(regex[regexIndex], stage, len(objects))
+			object, err := compileKnowledgeRegexExtractionObject(regex[regexIndex], stage, objectOrdinal)
 			if err != nil {
 				return nil, err
 			}
 			objects = append(objects, object)
+			objectOrdinal++
 			regexIndex++
 		case knowledgeprogram.OperatorConditionalExtractJSON:
 			if pastExtractions || jsonIndex >= len(jsonObjects) {
 				return nil, errors.New("compile ClickHouse knowledge extraction stage: JSON order disagrees")
 			}
-			object, err := compileKnowledgeJSONExtractionObject(jsonObjects[jsonIndex], stage, len(objects))
+			object, err := compileKnowledgeJSONExtractionObject(jsonObjects[jsonIndex], stage, objectOrdinal)
 			if err != nil {
 				return nil, err
 			}
 			objects = append(objects, object)
+			objectOrdinal++
 			jsonIndex++
 		case knowledgeprogram.OperatorCopyFieldAlias, knowledgeprogram.OperatorParallelExtend:
 			pastExtractions = true
@@ -406,9 +412,10 @@ func compileKnowledgeExtractionObjects(
 
 func compileKnowledgeRegexExtractionObject(
 	operation knowledgeprogram.RegexExtraction,
-	stage, objectIndex int,
+	stage int,
+	objectIndex uint32,
 ) (compiledKnowledgeExtractionObject, error) {
-	if operation.Origin().StageOrdinal() != uint32(objectIndex) {
+	if operation.Origin().StageOrdinal() != objectIndex {
 		return compiledKnowledgeExtractionObject{}, errors.New("compile ClickHouse knowledge extraction stage: regex provenance order disagrees")
 	}
 	compiled, err := compileKnowledgeRegexExtraction(operation)
@@ -442,9 +449,10 @@ func compileKnowledgeRegexExtractionObject(
 
 func compileKnowledgeJSONExtractionObject(
 	operation knowledgeprogram.JSONExtraction,
-	stage, objectIndex int,
+	stage int,
+	objectIndex uint32,
 ) (compiledKnowledgeExtractionObject, error) {
-	if operation.Origin().StageOrdinal() != uint32(objectIndex) {
+	if operation.Origin().StageOrdinal() != objectIndex {
 		return compiledKnowledgeExtractionObject{}, errors.New("compile ClickHouse knowledge extraction stage: JSON provenance order disagrees")
 	}
 	compiled, err := compileKnowledgeJSONExtraction(operation)

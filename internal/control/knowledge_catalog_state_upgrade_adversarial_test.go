@@ -133,7 +133,7 @@ func TestKnowledgeCatalogStateMigrationPreflightsPhysicalVersionOverCap(t *testi
 		SELECT count(*) FROM knowledge_object_versions
 		WHERE tenant_id = ?`, test.tenantID)
 			var integrity string
-			if err := raw.QueryRow(`PRAGMA integrity_check(1)`).Scan(&integrity); err != nil {
+			if err := raw.QueryRowContext(t.Context(), `PRAGMA integrity_check(1)`).Scan(&integrity); err != nil {
 				t.Fatal(err)
 			}
 			if integrity != "ok" {
@@ -159,7 +159,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 	}
 	seedKnowledgeStatePrerequisites(t, raw)
 
-	tx, err := raw.Begin()
+	tx, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 		_ = tx.Rollback()
 		t.Fatalf(format, args...)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -193,7 +193,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 	); err != nil {
 		rollback("stage long-history projection: %v", err)
 	}
-	blobInsert, err := tx.Prepare(`
+	blobInsert, err := tx.PrepareContext(t.Context(), `
 		INSERT INTO knowledge_definition_blobs (
 			tenant_id, definition_digest, definition_proto,
 			definition_bytes, created_at_unix_micro
@@ -201,7 +201,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 	if err != nil {
 		rollback("prepare long-history definition insert: %v", err)
 	}
-	versionInsert, err := tx.Prepare(`
+	versionInsert, err := tx.PrepareContext(t.Context(), `
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -237,14 +237,15 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 			var body [8]byte
 			binary.BigEndian.PutUint64(body[:], uint64(objectVersion))
 			hash := sha256.Sum256(body[:])
-			if _, err := blobInsert.Exec(hash[:], body[:], len(body), objectVersion); err != nil {
+			if _, err := blobInsert.ExecContext(t.Context(), hash[:], body[:], len(body), objectVersion); err != nil {
 				_ = versionInsert.Close()
 				_ = blobInsert.Close()
 				rollback("stage long-history definition %d: %v", objectVersion, err)
 			}
 			digest = hash[:]
 		}
-		if _, err := versionInsert.Exec(
+		if _, err := versionInsert.ExecContext(
+			t.Context(),
 			objectVersion, knowledgeMigrationTestAppID, state, digest, mutation, objectVersion,
 		); err != nil {
 			_ = versionInsert.Close()
@@ -260,7 +261,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsLongDisabledHistoryInBoundedTime
 	if err := blobInsert.Close(); err != nil {
 		rollback("close long-history definition insert: %v", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		)
@@ -352,7 +353,7 @@ func assertKnowledgeLifecycleBackfillPlanIsLinear(t *testing.T, db *sql.DB) {
 		t.Fatal("migration 0029 lifecycle backfill statement is incomplete")
 	}
 	statement := migrationSQL[start : start+endOffset+len(terminator)]
-	rows, err := db.Query(`EXPLAIN QUERY PLAN ` + statement)
+	rows, err := db.QueryContext(t.Context(), `EXPLAIN QUERY PLAN `+statement)
 	if err != nil {
 		t.Fatalf("explain migration 0029 lifecycle backfill: %v", err)
 	}
@@ -401,7 +402,7 @@ func TestKnowledgeCatalogStateMigrationRejectsCurrentVersionTupleDrift(t *testin
 				t.Fatalf("apply through migration 0028: %v", err)
 			}
 			seedKnowledgeStatePrerequisites(t, raw)
-			if _, err := raw.Exec(`
+			if _, err := raw.ExecContext(t.Context(), `
 				INSERT INTO app_workspaces (
 					app_id, tenant_id, version, slug, display_name, description,
 					default_time_range_present, state,
@@ -412,7 +413,7 @@ func TestKnowledgeCatalogStateMigrationRejectsCurrentVersionTupleDrift(t *testin
 			); err != nil {
 				t.Fatalf("seed alternate app authority: %v", err)
 			}
-			if _, err := raw.Exec(`
+			if _, err := raw.ExecContext(t.Context(), `
 				INSERT INTO knowledge_definition_blobs (
 					tenant_id, definition_digest, definition_proto,
 					definition_bytes, created_at_unix_micro
@@ -440,6 +441,7 @@ func TestKnowledgeCatalogStateMigrationRejectsCurrentVersionTupleDrift(t *testin
 				_ = conn.Close()
 				t.Fatalf("drop legacy immutability trigger for corruption fixture: %v", err)
 			}
+			// #nosec G202 -- assignment is selected from the fixed corruption-test table above.
 			if _, err := conn.ExecContext(context.Background(), `
 				UPDATE knowledge_object_versions SET `+test.assignment+`
 				WHERE tenant_id = 'tenant-a'
@@ -594,7 +596,7 @@ func TestKnowledgeCatalogOrderKeySupportsPermittedPublicationOrders(t *testing.T
 			}
 			seedProjectionPrerequisites(t, raw)
 			fixture := projectionFixture{ObjectID: "ko-publication", Version: 1, Name: "Publication"}
-			tx, err := raw.Begin()
+			tx, err := raw.BeginTx(t.Context(), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -606,7 +608,7 @@ func TestKnowledgeCatalogOrderKeySupportsPermittedPublicationOrders(t *testing.T
 				insertKnowledgeVersion(t, tx, fixture.ObjectID, fixture.Version, fixture.Name, "create", 10)
 				insertProjectionRows(t, tx, fixture)
 			}
-			if _, err := tx.Exec(`
+			if _, err := tx.ExecContext(t.Context(), `
 				INSERT INTO knowledge_objects (
 					tenant_id, knowledge_object_id, current_version,
 					app_id, owner_id, object_type, name, sharing_scope, state,
@@ -651,14 +653,14 @@ func TestKnowledgeCatalogOrderKeySupportsDeferredUpdatePublication(t *testing.T)
 		ObjectID: "ko-deferred-update", Version: 1, Name: "Deferred Update",
 	}, 10)
 
-	tx, err := raw.Begin()
+	tx, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture := projectionFixture{ObjectID: "ko-deferred-update", Version: 2, Name: "Deferred Update"}
 	definitionBody := []byte("knowledge-order-fixture/ko-deferred-update/2")
 	definitionDigest := sha256.Sum256(definitionBody)
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_definition_blobs (
 			tenant_id, definition_digest, definition_proto,
 			definition_bytes, created_at_unix_micro
@@ -680,7 +682,7 @@ func TestKnowledgeCatalogOrderKeySupportsDeferredUpdatePublication(t *testing.T)
 		definitionDigest[:],
 	)
 	sealKnowledgeStateProjection(t, tx, fixture.ObjectID, fixture.Version)
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		UPDATE knowledge_objects
 		SET current_version = 2, definition_digest = ?, updated_at_unix_micro = 20
 		WHERE tenant_id = 'tenant-a'
@@ -754,7 +756,7 @@ func stageKnowledgeStateHistory(
 		registryReason = current.quarantineReason
 	}
 
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -774,7 +776,7 @@ func stageKnowledgeStateHistory(
 		if sharingScope == "" {
 			sharingScope = "private"
 		}
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(t.Context(), `
 			INSERT INTO knowledge_object_versions (
 				tenant_id, knowledge_object_id, object_version,
 				app_id, owner_id, object_type, name, sharing_scope, state,
@@ -803,7 +805,7 @@ func stageKnowledgeStateHistory(
 	if currentSharingScope == "" {
 		currentSharingScope = "private"
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -833,7 +835,7 @@ func stageKnowledgeStateHistory(
 	if registryReason != "" {
 		reason = registryReason
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -869,7 +871,7 @@ func assertKnowledgeStateVersionInsertRejected(
 	if fixture.quarantineReason != "" {
 		reason = fixture.quarantineReason
 	}
-	if _, err := db.Exec(`
+	if _, err := db.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,

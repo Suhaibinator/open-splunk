@@ -28,6 +28,7 @@ import (
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/hechttp"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
@@ -582,10 +583,23 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return fmt.Errorf("create search-history job journal: %w", err)
 	}
+	// Construct the catalog and its immutable resolver before search admission.
+	// Manager captures this exact resolver in its private configuration; no
+	// later HTTP composition can rotate search-time knowledge authority.
+	knowledgeManagement, err := newRuntimeKnowledgeManagement(
+		startupContext,
+		controlDB,
+		config.masterKeyPath,
+		securityStores.auditEvents,
+	)
+	if err != nil {
+		return err
+	}
 	jobs, err := searchjobs.New(searchjobs.Config{
-		Executor:    executor,
-		Snapshotter: visibilitySnapshotter{sequencer: sequencer},
-		Journal:     jobJournal,
+		Executor:          executor,
+		Snapshotter:       visibilitySnapshotter{sequencer: sequencer},
+		Journal:           jobJournal,
+		KnowledgeResolver: knowledgeManagement.resolver,
 		OnJournalError: func(err error) {
 			log.Printf("persist search-job history: %v", err)
 		},
@@ -602,6 +616,15 @@ func runWithOptions(config options) error {
 			log.Printf("close search jobs: %v", err)
 		}
 	}()
+	knowledgePreview, err := knowledgepreview.NewService(knowledgepreview.Config{
+		Searches: jobs,
+		Writer:   knowledgeManagement.writer,
+		Compiler: knowledgepreview.ProductionCompilerAdapter{Compiler: compiler},
+		Executor: executor,
+	})
+	if err != nil {
+		return fmt.Errorf("create knowledge preview service: %w", err)
+	}
 	inspection, err := newRuntimeSearchInspection(
 		runtimeSearchInspectionConfig{
 			Searches:          jobs,
@@ -702,16 +725,6 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return err
 	}
-	knowledgeManagement, err := newRuntimeKnowledgeManagement(
-		startupContext,
-		controlDB,
-		config.masterKeyPath,
-		securityStores.auditEvents,
-	)
-	if err != nil {
-		clear(appCursorKey)
-		return err
-	}
 	collectorAdministration, err := newRuntimeCollectorAdministration(
 		startupContext,
 		controlDB,
@@ -779,6 +792,7 @@ func runWithOptions(config options) error {
 		&httpConfig,
 		knowledgeManagement,
 		appCatalog,
+		knowledgePreview,
 	); err != nil {
 		clear(appCursorKey)
 		return err

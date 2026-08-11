@@ -164,25 +164,6 @@ func (searches *reexecutionTestSearches) startManagerLocked() error {
 	return errors.New("reexecution fixture search did not complete")
 }
 
-func executionSnapshotFromJob(job searchjobs.Job) searchjobs.ExecutionSnapshot {
-	return searchjobs.ExecutionSnapshot{
-		ID:               job.ID,
-		OwnerID:          job.OwnerID,
-		TenantID:         job.TenantID,
-		AppID:            job.AppID,
-		SPL:              job.SPL,
-		EffectiveIndexes: slices.Clone(job.EffectiveIndexes),
-		Earliest:         job.Earliest,
-		Latest:           job.Latest,
-		SearchStart:      job.CreatedAt,
-		SearchTimezone:   job.TimeRange.Timezone,
-		IndexTimeCutoff:  job.IndexTimeCutoff,
-		VisibilityCutoff: job.VisibilityCutoff,
-		FinishedAt:       job.FinishedAt,
-		ExpiresAt:        job.ExpiresAt,
-	}
-}
-
 type reexecutionTestPin struct {
 	schema     searchjobs.Schema
 	generation uint64

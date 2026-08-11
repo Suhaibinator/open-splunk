@@ -229,7 +229,6 @@ func TestOpenRetainedKnowledgeExecutionValidatesAppAndDetaches(t *testing.T) {
 			err,
 		)
 	}
-	prelude = knowledgeprogram.Program{}
 	freshPrelude, present, err := snapshot.OpenRetainedKnowledgePrelude()
 	if err != nil || !present || !freshPrelude.Equal(wantPrelude) {
 		t.Fatalf("OpenRetainedKnowledgePrelude(fresh) = (%#v, %t, %v)", freshPrelude, present, err)

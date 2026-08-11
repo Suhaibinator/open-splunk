@@ -50,15 +50,25 @@ func TestCompileChartCountFieldUsesOneGroupedOccurrencePath(t *testing.T) {
 		strings.Contains(compiled.SQL, `WHERE `+chartFieldCountMeasureAlias+` != 0`) {
 		t.Fatalf("zero-occurrence rows were removed from the chart domain:\n%s", compiled.SQL)
 	}
+	for _, bareOnly := range []string{
+		`"__os_chart_scored"`,
+		`"__os_chart_ranked"`,
+		`"__os_chart_checks"`,
+		`"__os_ch_group_row"`,
+	} {
+		if strings.Contains(compiled.SQL, bareOnly) {
+			t.Fatalf("chart count(field) entered bare-count graph %q:\n%s", bareOnly, compiled.SQL)
+		}
+	}
 	assertChartCountFieldShape(t, compiled)
 }
 
-func TestCompileChartCountFieldDoesNotChangeBareCountFanout(t *testing.T) {
+func TestCompileChartBareCountUsesOneConsumerEnvelope(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | chart count OVER path BY level`)
-	if compiled.sourceFanout != eventStatsChartSourceFanout {
-		t.Fatalf("bare chart count source fanout = %d, want two", compiled.sourceFanout)
+	if compiled.sourceFanout != eventStatsOrdinarySourceFanout {
+		t.Fatalf("bare chart count source fanout = %d, want one", compiled.sourceFanout)
 	}
 }
 

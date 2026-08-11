@@ -165,7 +165,7 @@ func TestBaseProjectionQueryNeverReturnsOversizedRawPayload(t *testing.T) {
 
 func dropTableTriggers(t *testing.T, database *control.DB, table string) {
 	t.Helper()
-	rows, err := database.SQLDB().Query(`
+	rows, err := database.SQLDB().QueryContext(t.Context(), `
 		SELECT name FROM sqlite_schema
 		WHERE type = 'trigger' AND tbl_name = ?
 		ORDER BY name

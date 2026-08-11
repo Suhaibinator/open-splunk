@@ -738,10 +738,11 @@ export interface ListKnowledgeObjectDependentsResponse {
 
 /**
  * POST /api/v1/knowledge/objects/preview
- * This future route remains unregistered. The internal request codec accepts a
- * raw protobuf request body of at most 4 MiB plus 64 KiB (4259840 bytes). The
- * retained_search_job_id selects a future owner-scoped retained execution
- * authority which the service must reacquire under the authenticated caller;
+ * This administrator-only route is registered only with the complete ready
+ * knowledge-management and retained-execution family. Its request codec accepts
+ * a raw protobuf body of at most 4 MiB plus 64 KiB (4259840 bytes). The
+ * retained_search_job_id selects an owner-scoped retained execution authority
+ * which the service reacquires under the authenticated caller;
  * it is not an immutable event snapshot identity and does not itself grant
  * access. The ID must be nonempty valid UTF-8 of at most 256 bytes, unchanged by
  * whitespace trimming, and contain no Unicode control code point. A browser
@@ -774,15 +775,14 @@ export interface PreviewKnowledgeObjectRequest {
     | string[]
     | undefined;
   /**
-   * The structural request boundary preserves only presence and the exact
-   * uint32 value. It assigns no default, bound, or execution meaning; those
-   * remain part of the future Preview service contract.
+   * Absence selects the service default of 100 rows per side. Present values
+   * must be in 1..1000; zero and larger values fail before execution.
    */
   maximumRows?: number | undefined;
 }
 
 /**
- * This future unregistered route has no independent validation intent.
+ * Preview has no independent validation intent.
  * validation always uses ACTIVE_PUBLICATION and applies the same create/update
  * candidate-envelope semantics as ValidateKnowledgeObjectRequest. It evaluates
  * definition validity in one fixed knowledge, app, and index catalog

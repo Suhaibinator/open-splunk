@@ -37,10 +37,16 @@ const ADMINISTRATOR_ROUTE_PATHS: ReadonlySet<string> = new Set([
   "/api/v1/ingestion-tokens/revoke",
   "/api/v1/ingestion-tokens/state/set",
   "/api/v1/ingestion-tokens/update",
+  "/api/v1/knowledge/objects/create",
+  "/api/v1/knowledge/objects/delete",
   "/api/v1/knowledge/objects/dependencies",
   "/api/v1/knowledge/objects/dependents",
   "/api/v1/knowledge/objects/get",
   "/api/v1/knowledge/objects/list",
+  "/api/v1/knowledge/objects/preview",
+  "/api/v1/knowledge/objects/set-state",
+  "/api/v1/knowledge/objects/update",
+  "/api/v1/knowledge/objects/validate",
   "/api/v1/search/jobs/inspect",
 ]);
 

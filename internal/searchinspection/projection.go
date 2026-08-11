@@ -116,8 +116,8 @@ type LogicalPlan struct {
 type projectionBudget struct {
 	fieldOccurrences uint64
 	stringBytes      uint64
-	knowledgeObjects uint32
-	knowledgeOutputs uint32
+	knowledgeObjects uint64
+	knowledgeOutputs uint64
 }
 
 type operatorDescription struct {
@@ -729,10 +729,10 @@ func validateCanonicalKnowledgeProvenance(
 	contract knowledgeOperatorContract,
 ) bool {
 	if budget == nil || len(objects) == 0 || len(outputs) == 0 ||
-		budget.knowledgeObjects > maximumProjectedKnowledgeObjects ||
-		budget.knowledgeOutputs > maximumProjectedKnowledgeOutputs ||
-		uint64(len(objects)) > uint64(maximumProjectedKnowledgeObjects-budget.knowledgeObjects) ||
-		uint64(len(outputs)) > uint64(maximumProjectedKnowledgeOutputs-budget.knowledgeOutputs) {
+		budget.knowledgeObjects > uint64(maximumProjectedKnowledgeObjects) ||
+		budget.knowledgeOutputs > uint64(maximumProjectedKnowledgeOutputs) ||
+		uint64(len(objects)) > uint64(maximumProjectedKnowledgeObjects)-budget.knowledgeObjects ||
+		uint64(len(outputs)) > uint64(maximumProjectedKnowledgeOutputs)-budget.knowledgeOutputs {
 		return false
 	}
 	for index, object := range objects {
@@ -792,8 +792,8 @@ func validateCanonicalKnowledgeProvenance(
 		}
 	}
 
-	budget.knowledgeObjects += uint32(len(objects))
-	budget.knowledgeOutputs += uint32(len(outputs))
+	budget.knowledgeObjects += uint64(len(objects))
+	budget.knowledgeOutputs += uint64(len(outputs))
 	return true
 }
 

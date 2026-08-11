@@ -591,6 +591,15 @@ func (manager *Manager) KnowledgeAdmissionEnabled() bool {
 	return manager != nil && manager.knowledgeResolver != nil
 }
 
+// KnowledgeExecutionEnabled reports whether completed app-scoped searches can
+// retain the compiler and snapshot authority required by derived execution.
+// New constructs these dependencies once, so this value cannot drift after
+// the Manager starts accepting jobs.
+func (manager *Manager) KnowledgeExecutionEnabled() bool {
+	return manager != nil && manager.knowledgeResolver != nil &&
+		!isNilRequiredDependency(manager.executor)
+}
+
 // Create takes an immutable absolute-time, authorization, and committed-storage
 // visibility snapshot. Legacy and app-less requests queue asynchronous parsing;
 // when knowledge admission is configured, a nonempty-app request is parsed,

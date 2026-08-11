@@ -316,6 +316,11 @@ export class ProtobufTransport {
     request: TRequest,
     options: ProtobufRequestOptions = {},
   ): Promise<TResponse> {
+    const administratorRoute = isAdministratorRoutePath(route.path);
+    const expectedAuthorization = administratorRoute ? "administrator" : "none";
+    if (route.authorization !== expectedAuthorization) {
+      throw new TypeError("Protobuf route authorization disagrees with its registered path");
+    }
     const timeoutMs = options.timeoutMs ?? this.timeoutMs;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new RangeError("Request timeout must be a positive number of milliseconds");
@@ -337,15 +342,15 @@ export class ProtobufTransport {
       }
 
       const requestBytes = route.request.encode(request).finish();
-      const administratorToken = route.authorization === "administrator"
+      const administratorToken = administratorRoute
         ? getAdministratorBearerToken()
         : null;
-      const defaultHeaders = administratorToken === null
-        ? this.defaultHeaders
-        : withoutAuthorization(this.defaultHeaders);
-      const requestHeaders = administratorToken === null
-        ? (options.headers ?? {})
-        : withoutAuthorization(options.headers ?? {});
+      const defaultHeaders = administratorRoute
+        ? withoutAuthorization(this.defaultHeaders)
+        : this.defaultHeaders;
+      const requestHeaders = administratorRoute
+        ? withoutAuthorization(options.headers ?? {})
+        : (options.headers ?? {});
       const response = await this.fetchImplementation(url, {
         method: "POST",
         headers: {

@@ -135,7 +135,8 @@ func TestEnumeratePublicationIndexORSignaturesEnforcesFixedBounds(t *testing.T) 
 	if publicationIndexMembershipWordCount != 64 {
 		t.Fatalf("fixed membership words = %d, want 64", publicationIndexMembershipWordCount)
 	}
-	if _, err := enumeratePublicationIndexORSignatures(nil, nil); !errors.Is(err, control.ErrInvalidArgument) {
+	var nilContext context.Context
+	if _, err := enumeratePublicationIndexORSignatures(nilContext, nil); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("nil context error = %v, want InvalidArgument", err)
 	}
 	canceled, cancel := context.WithCancel(t.Context())
@@ -377,10 +378,7 @@ func bruteForcePublicationIndexORSignatures(
 			if subset&(uint64(1)<<atomIndex) == 0 {
 				continue
 			}
-			pair = orPublicationIndexPairs(pair, publicationIndexORPair{
-				before: atom.before,
-				after:  atom.after,
-			})
+			pair = orPublicationIndexPairs(pair, publicationIndexORPair(atom))
 		}
 		witness := uint16(bits.OnesCount64(subset))
 		if previous, exists := minimum[pair]; !exists || witness < previous {

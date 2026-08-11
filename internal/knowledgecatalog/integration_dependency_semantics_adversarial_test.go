@@ -571,7 +571,8 @@ func rewriteSemanticDependencySet(t *testing.T, database *control.DB, sourceID, 
 
 func dropTriggerIfPresent(t *testing.T, database *control.DB, name string) {
 	t.Helper()
-	if _, err := database.SQLDB().Exec(`DROP TRIGGER IF EXISTS ` + name); err != nil {
+	// #nosec G202 -- name is supplied only by fixed test fixture identifiers.
+	if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER IF EXISTS `+name); err != nil {
 		t.Fatalf("drop trigger %s: %v", name, err)
 	}
 }

@@ -358,7 +358,7 @@ func compilePublicationWinnerCohortMode(
 		)
 	}
 	if candidatePresent && (!validIdentity(candidateValue.objectID, maximumObjectIDBytes) ||
-		candidateValue.version < 1 || candidateValue.version > math.MaxInt64 ||
+		candidateValue.version < 1 ||
 		candidateValue.definitionDigest == ([sha256.Size]byte{}) ||
 		!validIdentity(candidateValue.ownerID, maximumOwnerIDBytes)) {
 		return candidateDependencyAuthority{}, fmt.Errorf(
@@ -666,8 +666,10 @@ func publicationWinnerMatchesCandidate(
 	object knowledgesnapshot.Object,
 	candidate publicationCandidateAuthority,
 ) bool {
+	// #nosec G115 -- publication candidate authority validation requires a positive version.
+	candidateVersion := uint64(candidate.version)
 	return object.KnowledgeObjectID == candidate.objectID &&
-		object.Version == uint64(candidate.version) &&
+		object.Version == candidateVersion &&
 		bytes.Equal(object.DefinitionSHA256, candidate.definitionDigest[:]) &&
 		object.OwnerID == candidate.ownerID
 }
@@ -883,13 +885,17 @@ func publicationDependenciesFromProgram(
 		}
 		sourceReference := dependency.GetSource()
 		targetReference := dependency.GetTarget().GetObject()
+		// #nosec G115 -- validated compiler references are bounded to signed persisted versions.
+		sourceVersion := int64(sourceReference.GetVersion())
+		// #nosec G115 -- validated compiler references are bounded to signed persisted versions.
+		targetVersion := int64(targetReference.GetVersion())
 		sourceKey := dependencyVersionKey{
 			objectID: sourceReference.GetKnowledgeObjectId(),
-			version:  int64(sourceReference.GetVersion()),
+			version:  sourceVersion,
 		}
 		targetKey := dependencyVersionKey{
 			objectID: targetReference.GetKnowledgeObjectId(),
-			version:  int64(targetReference.GetVersion()),
+			version:  targetVersion,
 		}
 		source, target := winners[sourceKey], winners[targetKey]
 		if source == nil || target == nil ||

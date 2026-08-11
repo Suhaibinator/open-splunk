@@ -331,6 +331,7 @@ func rewriteWriterReplayQuarantineRegistry(
 	default:
 		t.Fatalf("unknown quarantine registry rewrite %q", rewrite)
 	}
+	// #nosec G202 -- assignment is selected from the fixed rewrite cases above.
 	result, err := connection.ExecContext(t.Context(), `
 		UPDATE knowledge_objects SET `+assignment+`
 		WHERE tenant_id = ? AND knowledge_object_id = ?`, writerFaultTenant, objectID)

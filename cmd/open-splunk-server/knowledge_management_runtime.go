@@ -9,6 +9,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 )
 
@@ -17,8 +18,7 @@ const knowledgeCatalogCursorKeyPurpose = "knowledge-catalog-cursors"
 // runtimeKnowledgeManagement groups the same-control-database catalog
 // authorities, including the resolver retained for a later search-admission
 // composition. These stores borrow the process database and need no independent
-// shutdown path. configureRuntimeKnowledgeManagement deliberately exposes only
-// the management authorities today.
+// shutdown path.
 type runtimeKnowledgeManagement struct {
 	catalog  *knowledgecatalog.Store
 	resolver *knowledgecatalog.Resolver
@@ -109,24 +109,27 @@ func configureRuntimeKnowledgeManagement(
 	config *server.Config,
 	runtime runtimeKnowledgeManagement,
 	apps *runtimeAppCatalog,
+	preview *knowledgepreview.Service,
 ) error {
 	if config == nil || runtime.catalog == nil || runtime.resolver == nil ||
 		runtime.writer == nil ||
 		!runtime.writer.ReadyForManagement() || runtime.attempts == nil || apps == nil ||
-		nilRuntimeDependency(apps.catalog) {
+		nilRuntimeDependency(apps.catalog) || preview == nil || !preview.Ready() {
 		return errors.New(
-			"configure knowledge management: dependencies are incomplete",
+			"configure knowledge runtime: dependencies are incomplete",
 		)
 	}
 	if config.KnowledgeCatalog != nil || config.KnowledgeWriter != nil ||
-		config.KnowledgeApps != nil || config.KnowledgeAttempts != nil {
+		config.KnowledgeApps != nil || config.KnowledgeAttempts != nil ||
+		config.KnowledgePreview != nil {
 		return errors.New(
-			"configure knowledge management: dependencies are already configured",
+			"configure knowledge runtime: dependencies are already configured",
 		)
 	}
 	config.KnowledgeCatalog = runtime.catalog
 	config.KnowledgeWriter = runtime.writer
 	config.KnowledgeApps = apps
 	config.KnowledgeAttempts = runtime.attempts
+	config.KnowledgePreview = preview
 	return nil
 }

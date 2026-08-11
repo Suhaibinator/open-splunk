@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"os/exec"
 	"strconv"
@@ -584,10 +585,9 @@ ORDER BY n`
 
 	t.Run("runtime guard boundaries and precedence", func(t *testing.T) {
 		program := deferredMixedKnowledgeProgramForTest(t)
-		preparation := knowledgePreludePreparationForTest(program)
 		prelude, compileErr := compileKnowledgePrelude(
 			knowledgeExtractionStageState(),
-			preparation,
+			knowledgePreludePreparationForTest(program),
 		)
 		if compileErr != nil {
 			t.Fatalf("compile knowledge prelude: %v", compileErr)
@@ -735,14 +735,14 @@ ORDER BY n`
 					prelude.aliasCopyCharges.eventBytes + ", toUInt128(" + aliasUnits + ") AS " +
 					prelude.aliasCopyCharges.queryUnits + " FROM numbers(" +
 					strconv.FormatUint(test.rows, 10) + ")"
-				guard, guardErr := compileKnowledgeRuntimeGuard(
-					compiledRelation{sql: relationSQL, depth: 1},
-					prelude,
-					preparation,
-				)
-				if guardErr != nil {
-					t.Fatalf("compile knowledge runtime guard: %v", guardErr)
-				}
+				guardSQL := "WITH " + knowledgeRuntimeGuardInputName +
+					" AS MATERIALIZED (" + relationSQL + "), " +
+					knowledgeRuntimeGuardResultName + " AS (" +
+					compileKnowledgeRuntimeWindowGuardBarrierSQL(prelude) +
+					") SELECT " + prelude.capturedBytes + " FROM " +
+					knowledgeRuntimeGuardResultName + " WHERE " +
+					knowledgeRuntimeGuardValidationColumn + " = 0" +
+					materializedCTESettingsSQL
 				queryContext, cancelQuery := knowledgeRuntimeIntegrationQueryContext(overallContext)
 				defer cancelQuery()
 				if test.wantMarker == "" {
@@ -750,7 +750,7 @@ ORDER BY n`
 						t,
 						queryContext,
 						connection,
-						guard.relation.sql,
+						guardSQL,
 						prelude.capturedBytes,
 						test.wantRows,
 					)
@@ -759,7 +759,7 @@ ORDER BY n`
 				queryErr := knowledgeRuntimeQueryError(
 					queryContext,
 					connection,
-					guard.relation.sql,
+					guardSQL,
 				)
 				knowledgeRuntimeRequireMarker(t, queryErr, test.wantMarker)
 			}); !ok {
@@ -848,7 +848,7 @@ func knowledgeRuntimeRequireRows(
 	}
 	gotRows := 0
 	for rows.Next() {
-		var captured any
+		var captured big.Int
 		if scanErr := rows.Scan(&captured); scanErr != nil {
 			t.Fatalf("scan knowledge runtime guard row: %v", scanErr)
 		}

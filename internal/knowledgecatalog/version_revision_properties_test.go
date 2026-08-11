@@ -68,21 +68,21 @@ func TestExplicitMissingHistoryMakesEveryVisibleVersionRequestCorrupt(t *testing
 		t.Fatalf("acquire history-corruption connection: %v", err)
 	}
 	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = OFF`); err != nil {
-		connection.Close()
+		_ = connection.Close()
 		t.Fatalf("disable foreign keys: %v", err)
 	}
 	if _, err := connection.ExecContext(context.Background(), `DELETE FROM knowledge_object_dependency_seals
 		WHERE tenant_id = ? AND knowledge_object_id = 'ko-missing-history' AND object_version = 1`, testTenant); err != nil {
-		connection.Close()
+		_ = connection.Close()
 		t.Fatalf("delete historical dependency seal: %v", err)
 	}
 	if _, err := connection.ExecContext(context.Background(), `DELETE FROM knowledge_object_versions
 		WHERE tenant_id = ? AND knowledge_object_id = 'ko-missing-history' AND object_version = 1`, testTenant); err != nil {
-		connection.Close()
+		_ = connection.Close()
 		t.Fatalf("delete historical immutable version: %v", err)
 	}
 	if _, err := connection.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`); err != nil {
-		connection.Close()
+		_ = connection.Close()
 		t.Fatalf("restore foreign keys: %v", err)
 	}
 	if err := connection.Close(); err != nil {

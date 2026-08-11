@@ -217,7 +217,8 @@ func (store *Store) appendRejectedPrepared(
 			record.KnowledgeObjectID = &object.KnowledgeObjectID
 			objectType := object.ObjectType
 			record.ObjectType = &objectType
-			version := int64(object.Version) // validated against MaxInt64
+			// #nosec G115 -- prepareAppendInputs rejects versions greater than math.MaxInt64.
+			version := int64(object.Version)
 			record.ObjectVersion = &version
 			scope := object.SharingScope
 			record.SharingScope = &scope

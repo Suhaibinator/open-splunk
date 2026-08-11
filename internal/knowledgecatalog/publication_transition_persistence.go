@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
-	"math"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
@@ -66,7 +65,7 @@ func validatePublicationTransitionPersistenceTargets(
 	for index, target := range state.targets {
 		targetRank, targetStageValid := publicationTransitionPersistenceStageRank(target.targetStage)
 		if !validIdentity(target.objectID, maximumObjectIDBytes) ||
-			target.version < 1 || target.version > math.MaxInt64 ||
+			target.version < 1 ||
 			target.definitionDigest == ([sha256.Size]byte{}) ||
 			!validIdentity(target.ownerID, maximumOwnerIDBytes) ||
 			target.role != opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT ||
@@ -137,7 +136,7 @@ func validatePublicationTransitionPersistenceTargets(
 
 func validPublicationTransitionPersistenceCandidate(candidate publicationCandidateAuthority) bool {
 	return validIdentity(candidate.objectID, maximumObjectIDBytes) &&
-		candidate.version >= 1 && candidate.version <= math.MaxInt64 &&
+		candidate.version >= 1 &&
 		candidate.definitionDigest != ([sha256.Size]byte{}) &&
 		validIdentity(candidate.ownerID, maximumOwnerIDBytes)
 }

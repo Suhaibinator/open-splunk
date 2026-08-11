@@ -71,11 +71,11 @@ func (*validateKnowledgeObjectCodec) DecodeBytes(
 		return nil, err
 	}
 	result := &opensplunkv1.ValidateKnowledgeObjectRequest{
-		Definition:        candidate.definition,
+		Definition:        candidate.candidateDefinition,
 		KnowledgeObjectId: candidate.objectID,
 		ExpectedVersion:   candidate.expectedVersion,
 		UpdateMask:        candidate.updateMask,
-		Intent:            opensplunkv1.KnowledgeValidationIntent(int32(intent)),
+		Intent:            opensplunkv1.KnowledgeValidationIntent(int32(intent)), // #nosec G115 -- protobuf varints intentionally retain generated unmarshal truncation semantics.
 	}
 	setValidateUnknown(result, candidate.unknown)
 	return result, nil
@@ -94,8 +94,8 @@ type sealedValidateKnowledgeObjectResponse[Message proto.Message] struct {
 type serializedValidateKnowledgeObjectResponse = sealedValidateKnowledgeObjectResponse[*opensplunkv1.ValidateKnowledgeObjectResponse]
 
 func newSerializedValidateKnowledgeObjectResponse(
-	sealed knowledgevalidation.SealedValidateResponse,
 	ctx context.Context,
+	sealed knowledgevalidation.SealedValidateResponse,
 	release func(),
 ) *serializedValidateKnowledgeObjectResponse {
 	return &serializedValidateKnowledgeObjectResponse{

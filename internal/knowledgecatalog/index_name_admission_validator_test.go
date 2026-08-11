@@ -338,7 +338,7 @@ func TestIndexNameAdmissionValidatorDetectsFinalFactDrift(t *testing.T) {
 			}
 			if err := query.Exec(`UPDATE index_catalog_state
 				SET revision = revision + 1 WHERE singleton_id = 1`).Error; err != nil {
-				query.AddError(err)
+				_ = query.AddError(err)
 			}
 		},
 	); err != nil {
@@ -417,7 +417,7 @@ func TestIndexNameAdmissionValidatorGlobalScalarPreflightPrecedesHydration(t *te
 			destination := reflect.ValueOf(query.Statement.Dest)
 			if destination.Kind() != reflect.Pointer || destination.IsNil() ||
 				destination.Elem().Kind() != reflect.Slice {
-				query.AddError(errors.New("unexpected scalar preflight destination"))
+				_ = query.AddError(errors.New("unexpected scalar preflight destination"))
 				return
 			}
 			rows := destination.Elem()
@@ -615,7 +615,7 @@ func TestIndexNameAdmissionValidatorMidWorkCancellationAndAppFactDrift(t *testin
 				}
 				if err := query.Exec(`UPDATE app_catalog_revisions
 					SET revision = revision + 1 WHERE tenant_id = ?`, testTenant).Error; err != nil {
-					query.AddError(err)
+					_ = query.AddError(err)
 				}
 			},
 		); err != nil {
@@ -1016,7 +1016,7 @@ func insertIndexAdmissionTenantSelectorRows(
 			if pattern.IsLiteral() {
 				matchKind = "exact"
 			}
-			if _, err := tx.Exec(`INSERT INTO knowledge_object_list_selector_patterns (
+			if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_selector_patterns (
 				tenant_id, knowledge_object_id, object_version, dimension, ordinal, match_kind, value
 			) VALUES (?, ?, 1, ?, ?, ?, ?)`,
 				tenantID, objectID, dimension.name, ordinal, matchKind, value,

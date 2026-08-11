@@ -198,6 +198,7 @@ func normalizeValidationRequest(
 	}
 	prepared.update = true
 	prepared.objectID = strings.Clone(request.GetKnowledgeObjectId())
+	// #nosec G115 -- validation envelope checks reject expected versions above math.MaxInt64.
 	prepared.expectedVersion = int64(request.GetExpectedVersion())
 	prepared.updatePaths = slices.Clone(paths)
 	return prepared, nil

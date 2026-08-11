@@ -18,7 +18,13 @@ func TestSharedAdmissionGateIsUniqueBoundedAndFailFast(t *testing.T) {
 	if _, err := database.SharedAdmissionGate("knowledge-resolution", 3); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("SharedAdmissionGate(mismatched capacity) error = %v, want ErrInvalidArgument", err)
 	}
-	if !gate.TryAcquire() || !gate.TryAcquire() || gate.TryAcquire() {
+	if !gate.TryAcquire() {
+		t.Fatal("shared gate did not grant its first permit")
+	}
+	if !gate.TryAcquire() {
+		t.Fatal("shared gate did not grant its second permit")
+	}
+	if gate.TryAcquire() {
 		t.Fatal("shared gate did not enforce its exact fail-fast capacity")
 	}
 	gate.Release()

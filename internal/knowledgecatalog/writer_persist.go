@@ -98,7 +98,7 @@ func (writer *Writer) publishMutation(
 	plan publicationPlan,
 	blobExists bool,
 ) (Object, int64, []byte, error) {
-	if err := validatePublicationInputs(writer, ctx, tx, prepared, plan); err != nil {
+	if err := validatePublicationInputs(ctx, writer, tx, prepared, plan); err != nil {
 		return Object{}, 0, nil, err
 	}
 	dependencies, err := canonicalPublicationDependencies(plan)
@@ -134,8 +134,9 @@ func (writer *Writer) publishMutation(
 			Boundary:          boundary,
 			Route:             plan.route,
 			KnowledgeObjectID: plan.objectID,
-			Version:           uint64(plan.version), // validated above
-			IDAttempt:         plan.idAttempt,
+			// #nosec G115 -- publication plan validation above requires a positive version.
+			Version:   uint64(plan.version),
+			IDAttempt: plan.idAttempt,
 		}
 	}
 
@@ -360,10 +361,11 @@ func (writer *Writer) publishMutation(
 		return Object{}, 0, nil, err
 	}
 	auditEvent, err := writer.auditAppender.AppendInTransaction(ctx, tx, prepared.scope.tenantID, audit.SuccessfulEvent{
-		OccurredAt:    plan.updatedAt,
-		Action:        plan.auditAction,
-		TargetKind:    audit.TargetKindKnowledgeObject,
-		TargetID:      plan.objectID,
+		OccurredAt: plan.updatedAt,
+		Action:     plan.auditAction,
+		TargetKind: audit.TargetKindKnowledgeObject,
+		TargetID:   plan.objectID,
+		// #nosec G115 -- publication plan validation requires a positive version.
 		TargetVersion: uint64(plan.version),
 		KnowledgeObject: audit.KnowledgeObjectMetadata{
 			AppID:        plan.definition.appID,
@@ -394,7 +396,8 @@ func (writer *Writer) publishMutation(
 	}
 
 	mutationMicros := plan.updatedAt.UnixMicro()
-	auditSequence := int64(auditEvent.Sequence) // bounded by audit validation
+	// #nosec G115 -- the successful audit event validation bounds its sequence to math.MaxInt64.
+	auditSequence := int64(auditEvent.Sequence)
 	retentionMicros := int64(writer.idempotencyRetention / time.Microsecond)
 	retentionAnchor, err := writerRetentionAnchor(tx, mutationMicros)
 	if err != nil {
@@ -430,13 +433,16 @@ func (writer *Writer) publishMutation(
 	}
 
 	outcome, err := encodeOutcomeReference(mutationOutcomeAuthority{
-		route:                    plan.route,
-		mutationKind:             plan.mutationKind,
-		objectID:                 plan.objectID,
-		version:                  uint64(plan.version),
-		digest:                   plan.definition.digest,
-		catalogRevision:          uint64(advanced.revision),
-		catalogStateToken:        advancedToken,
+		route:        plan.route,
+		mutationKind: plan.mutationKind,
+		objectID:     plan.objectID,
+		// #nosec G115 -- publication plan validation requires a positive version.
+		version: uint64(plan.version),
+		digest:  plan.definition.digest,
+		// #nosec G115 -- the advanced catalog state has a validated nonnegative revision.
+		catalogRevision:   uint64(advanced.revision),
+		catalogStateToken: advancedToken,
+		// #nosec G115 -- auditSequence was converted from a bounded successful event sequence.
 		successfulAuditSequence:  uint64(auditSequence),
 		occurredAtUnixMicro:      mutationMicros,
 		retentionAnchorUnixMicro: retentionAnchor,
@@ -513,8 +519,9 @@ func (writer *Writer) commitMutation(
 	event := writerHookEvent{
 		Route:             plan.route,
 		KnowledgeObjectID: plan.objectID,
-		Version:           uint64(plan.version),
-		IDAttempt:         plan.idAttempt,
+		// #nosec G115 -- publication plan validation requires a positive version.
+		Version:   uint64(plan.version),
+		IDAttempt: plan.idAttempt,
 	}
 	event.Boundary = writerHookBeforeCommit
 	if err := writer.callHook(ctx, event); err != nil {
@@ -617,8 +624,8 @@ func (writer *Writer) reconcileCommittedMutation(
 }
 
 func validatePublicationInputs(
-	writer *Writer,
 	ctx context.Context,
+	writer *Writer,
 	tx *gorm.DB,
 	prepared preparedMutation,
 	plan publicationPlan,
@@ -748,7 +755,7 @@ func validateOpaqueActiveRemovalPersistence(
 	}
 	expectedAfter := binding.before
 	expectedAfter.state = plan.state
-	if expectedAfter.version >= math.MaxInt64 {
+	if expectedAfter.version == math.MaxInt64 {
 		return control.ErrCapacityExceeded
 	}
 	expectedAfter.version++
@@ -1126,13 +1133,15 @@ func validatePublicationAudit(
 	plan publicationPlan,
 	event audit.Event,
 ) error {
+	// #nosec G115 -- callers validate the publication plan version before audit comparison.
+	planVersion := uint64(plan.version)
 	if err := event.ValidateForTenant(prepared.scope.tenantID); err != nil ||
 		event.Sequence < 1 || event.Sequence > math.MaxInt64 ||
 		event.OccurredAt != plan.updatedAt ||
 		event.Actor.Kind != prepared.actor.Kind || event.Actor.ID != prepared.actor.ID ||
 		event.Actor.Role != prepared.actor.Role ||
 		event.Action != plan.auditAction || event.TargetKind != audit.TargetKindKnowledgeObject ||
-		event.TargetID != plan.objectID || event.TargetVersion != uint64(plan.version) ||
+		event.TargetID != plan.objectID || event.TargetVersion != planVersion ||
 		event.KnowledgeObject.AppID != plan.definition.appID ||
 		event.KnowledgeObject.ObjectType != plan.definition.objectType ||
 		event.KnowledgeObject.SharingScope != plan.definition.sharingScope {

@@ -435,7 +435,7 @@ func killWriterRecoveryChildAtBoundary(
 	defer readyReader.Close()
 	defer gateWriter.Close()
 
-	command := exec.Command(os.Args[0], "-test.run=^TestWriterSubprocessRecoveryHelper$")
+	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestWriterSubprocessRecoveryHelper$")
 	command.Env = writerRecoveryChildEnvironment(databasePath, route, boundary)
 	command.ExtraFiles = []*os.File{readyWriter, gateReader}
 	var stdout bytes.Buffer
@@ -498,7 +498,8 @@ func killWriterRecoveryChildAtBoundary(
 		)
 	}
 	waitErr := command.Wait()
-	exitErr, ok := waitErr.(*exec.ExitError)
+	var exitErr *exec.ExitError
+	ok := errors.As(waitErr, &exitErr)
 	status, statusOK := command.ProcessState.Sys().(syscall.WaitStatus)
 	if !ok || exitErr == nil || !statusOK || !status.Signaled() || status.Signal() != syscall.SIGKILL {
 		t.Fatalf(

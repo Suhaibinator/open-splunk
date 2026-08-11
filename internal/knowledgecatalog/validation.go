@@ -161,14 +161,15 @@ func (store *Store) objectFromHistoricalVersion(
 		OwnerID:           strings.Clone(version.OwnerID),
 		ObjectType:        version.ObjectType,
 		Name:              strings.Clone(version.Name),
-		Version:           uint64(version.ObjectVersion),
-		SharingScope:      version.SharingScope,
-		State:             version.State,
-		Definition:        proto.Clone(normalized.Definition).(*opensplunkv1.KnowledgeObjectDefinition),
-		DefinitionSHA256:  bytes.Clone(normalized.Digest),
-		CreatedAt:         createdAt,
-		UpdatedAt:         updatedAt,
-		QuarantineReason:  cloneString(version.QuarantineReason),
+		// #nosec G115 -- immutable version validation requires a positive persisted version.
+		Version:          uint64(version.ObjectVersion),
+		SharingScope:     version.SharingScope,
+		State:            version.State,
+		Definition:       proto.Clone(normalized.Definition).(*opensplunkv1.KnowledgeObjectDefinition),
+		DefinitionSHA256: bytes.Clone(normalized.Digest),
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
+		QuarantineReason: cloneString(version.QuarantineReason),
 	}
 	object.DisabledAt, err = optionalCanonicalTime(lifecycle.DisabledAtUnixMicro)
 	if err != nil {
@@ -251,7 +252,7 @@ func decodeVersionDefinitionBlob(
 	)
 	if futureErr != nil {
 		return decodedDefinition{}, 0, fmt.Errorf(
-			"%w: definition decode failed: strict=%v; future=%v",
+			"%w: definition decode failed: strict=%w; future=%w",
 			ErrCorrupt,
 			err,
 			futureErr,
@@ -528,13 +529,14 @@ func objectFromCurrentScalars(
 		OwnerID:           strings.Clone(record.OwnerID),
 		ObjectType:        record.ObjectType,
 		Name:              strings.Clone(record.Name),
-		Version:           uint64(record.CurrentVersion),
-		SharingScope:      record.SharingScope,
-		State:             record.State,
-		DefinitionSHA256:  bytes.Clone(digest),
-		CreatedAt:         createdAt,
-		UpdatedAt:         updatedAt,
-		QuarantineReason:  cloneString(record.QuarantineReason),
+		// #nosec G115 -- registry validation requires a positive current version.
+		Version:          uint64(record.CurrentVersion),
+		SharingScope:     record.SharingScope,
+		State:            record.State,
+		DefinitionSHA256: bytes.Clone(digest),
+		CreatedAt:        createdAt,
+		UpdatedAt:        updatedAt,
+		QuarantineReason: cloneString(record.QuarantineReason),
 	}
 	if definition != nil {
 		object.Definition = proto.Clone(definition).(*opensplunkv1.KnowledgeObjectDefinition)
@@ -668,14 +670,6 @@ func cloneString(value *string) *string {
 		return nil
 	}
 	cloned := strings.Clone(*value)
-	return &cloned
-}
-
-func cloneTime(value *time.Time) *time.Time {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
 	return &cloned
 }
 

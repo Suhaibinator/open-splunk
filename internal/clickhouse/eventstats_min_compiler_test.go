@@ -932,8 +932,8 @@ func TestCompileEventStatsStackBoundsDeferredGraphAmplification(t *testing.T) {
 		acceptedStages int
 	}{
 		{
-			name:           "global count stack",
-			aggregate:      "count",
+			name:           "global count field stack",
+			aggregate:      "count(payload)",
 			acceptedStages: 7,
 		},
 		{
@@ -980,6 +980,28 @@ func TestCompileEventStatsStackBoundsDeferredGraphAmplification(t *testing.T) {
 	}
 }
 
+func TestCompileEventStatsGlobalRowCountStackHasLinearFanout(t *testing.T) {
+	t.Parallel()
+
+	const stages = 12
+	compiled := compileSPL(
+		t,
+		eventStatsAmplificationStackSource(
+			`index=gradethis`,
+			"count",
+			stages,
+			false,
+		),
+	)
+	if got := strings.Count(compiled.SQL, "count() OVER ()"); got != stages {
+		t.Fatalf("global row-count windows = %d, want %d", got, stages)
+	}
+	if strings.Contains(compiled.SQL, `"__os_eventstats_total_`) ||
+		strings.Contains(compiled.SQL, "CROSS JOIN") {
+		t.Fatalf("global row-count stack retained aggregate fanout:\n%s", compiled.SQL)
+	}
+}
+
 func TestCompileEventStatsGraphAmplificationChargesPrerequisiteBarriers(t *testing.T) {
 	t.Parallel()
 
@@ -997,14 +1019,14 @@ func TestCompileEventStatsGraphAmplificationChargesPrerequisiteBarriers(t *testi
 			accepted: eventStatsAmplificationStackSource(
 				`index=gradethis | spath input=_raw output=selected path=value`+
 					` | eventstats count(eval(selected="wanted")) AS conditional_0`,
-				"count",
+				"count(payload)",
 				6,
 				false,
 			),
 			rejected: eventStatsAmplificationStackSource(
 				`index=gradethis | spath input=_raw output=selected path=value`+
 					` | eventstats count(eval(selected="wanted")) AS conditional_0`,
-				"count",
+				"count(payload)",
 				7,
 				false,
 			),
@@ -1013,13 +1035,13 @@ func TestCompileEventStatsGraphAmplificationChargesPrerequisiteBarriers(t *testi
 			name: "chronological barrier before eventstats",
 			accepted: eventStatsAmplificationStackSource(
 				`index=gradethis | stats earliest(payload) AS first`,
-				"count",
+				"count(payload)",
 				5,
 				false,
 			),
 			rejected: eventStatsAmplificationStackSource(
 				`index=gradethis | stats earliest(payload) AS first`,
-				"count",
+				"count(payload)",
 				6,
 				false,
 			),
@@ -1028,13 +1050,13 @@ func TestCompileEventStatsGraphAmplificationChargesPrerequisiteBarriers(t *testi
 			name: "chronological barrier after eventstats",
 			accepted: eventStatsAmplificationStackSource(
 				`index=gradethis`,
-				"count",
+				"count(payload)",
 				5,
 				false,
 			) + ` | stats earliest(payload) AS first`,
 			rejected: eventStatsAmplificationStackSource(
 				`index=gradethis`,
-				"count",
+				"count(payload)",
 				6,
 				false,
 			) + ` | stats earliest(payload) AS first`,
@@ -1056,20 +1078,51 @@ func TestCompileEventStatsGraphAmplificationChargesPrerequisiteBarriers(t *testi
 func TestCompileEventStatsGraphAmplificationChargesAnalysisFanout(t *testing.T) {
 	t.Parallel()
 
-	threeGroupedCounts := eventStatsAmplificationStackSource(
+	fourGroupedCounts := eventStatsAmplificationStackSource(
 		`index=gradethis`,
 		"count",
-		3,
+		4,
 		true,
 	)
-	logical := buildPlan(t, threeGroupedCounts)
-	if _, err := (Compiler{}).CompileFieldSuggestions(
+	logical := buildPlan(t, fourGroupedCounts)
+	for _, test := range []struct {
+		name    string
+		compile func(*plan.Query) error
+	}{
+		{name: "field suggestions", compile: func(query *plan.Query) error {
+			_, err := (Compiler{}).CompileFieldSuggestions(
+				query,
+				FieldSuggestionSpec{Prefix: "a", MaximumFields: 10},
+			)
+			return err
+		}},
+		{name: "field catalog", compile: func(query *plan.Query) error {
+			_, err := (Compiler{}).CompileFieldCatalog(
+				query,
+				FieldCatalogSpec{MaximumFields: 10},
+			)
+			return err
+		}},
+	} {
+		if err := test.compile(logical); err != nil {
+			t.Fatalf("Compile %s at prerequisite amplification boundary: %v", test.name, err)
+		}
+	}
+
+	fiveGroupedCounts := eventStatsAmplificationStackSource(
+		`index=gradethis`,
+		"count",
+		5,
+		true,
+	)
+	logical = buildPlan(t, fiveGroupedCounts)
+	_, err := (Compiler{}).CompileFieldSuggestions(
 		logical,
 		FieldSuggestionSpec{Prefix: "a", MaximumFields: 10},
-	); err != nil {
-		t.Fatalf("CompileFieldSuggestions(81 leaf reads): %v", err)
-	}
-	_, err := (Compiler{}).CompileFieldCatalog(
+	)
+	requireEventStatsAmplificationDiagnostic(t, logical, err)
+	logical = buildPlan(t, fiveGroupedCounts)
+	_, err = (Compiler{}).CompileFieldCatalog(
 		logical,
 		FieldCatalogSpec{MaximumFields: 10},
 	)
@@ -1085,7 +1138,7 @@ func TestCompileEventStatsGraphAmplificationChargesAnalysisFanout(t *testing.T) 
 		buildPlan(t, twoGroupedMinimums),
 		FieldCatalogSpec{MaximumFields: 10},
 	); err != nil {
-		t.Fatalf("CompileFieldCatalog(114 leaf reads): %v", err)
+		t.Fatalf("CompileFieldCatalog at prerequisite minimum boundary: %v", err)
 	}
 	threeGroupedMinimums := eventStatsAmplificationStackSource(
 		`index=gradethis`,
@@ -1114,9 +1167,9 @@ func TestCompileEventStatsGraphAmplificationChargesTerminalWideFanout(t *testing
 		acceptedStages int
 	}{
 		{
-			name:           "chart reads its event source twice",
+			name:           "chart reads its event source once",
 			terminal:       ` | chart count OVER host BY source`,
-			acceptedStages: 6,
+			acceptedStages: 7,
 		},
 		{
 			name:           "chart count field reads its event source once",
@@ -1134,13 +1187,13 @@ func TestCompileEventStatsGraphAmplificationChargesTerminalWideFanout(t *testing
 			t.Parallel()
 			accepted := eventStatsAmplificationStackSource(
 				`index=gradethis`,
-				"count",
+				"count(payload)",
 				test.acceptedStages,
 				false,
 			) + test.terminal
 			rejected := eventStatsAmplificationStackSource(
 				`index=gradethis`,
-				"count",
+				"count(payload)",
 				test.acceptedStages+1,
 				false,
 			) + test.terminal

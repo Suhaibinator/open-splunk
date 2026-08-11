@@ -196,8 +196,9 @@ func authorizedObjectContext(current registryRecord) AuthorizedContext {
 		Object: &AuthorizedObject{
 			KnowledgeObjectID: strings.Clone(current.KnowledgeObjectID),
 			ObjectType:        current.ObjectType,
-			Version:           uint64(current.CurrentVersion),
-			SharingScope:      current.SharingScope,
+			// #nosec G115 -- callers validate registry records, whose current version is positive.
+			Version:      uint64(current.CurrentVersion),
+			SharingScope: current.SharingScope,
 		},
 	}
 }

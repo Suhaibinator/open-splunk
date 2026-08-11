@@ -205,7 +205,7 @@ func compileKnowledgeRegexExtractionAuthority(
 		args:             args,
 		operation:        authority.operation,
 		captures:         resultCaptures,
-		programWorkUnits: uint64(validated.ProgramWorkUnits),
+		programWorkUnits: uint64(validated.ProgramWorkUnits), // #nosec G115 -- the regex compiler returns a positive bounded work estimate.
 	}, nil
 }
 
@@ -294,7 +294,7 @@ func validateKnowledgeRegexExtractionAuthority(
 	if err != nil || validated.Pattern != authority.pattern ||
 		validated.GroupCount != len(validated.Captures) ||
 		len(validated.Captures) != len(authority.captures) ||
-		uint64(validated.ProgramWorkUnits) != authority.workUnits {
+		uint64(validated.ProgramWorkUnits) != authority.workUnits { // #nosec G115 -- successful compilation bounds this by MaximumExtractionProgramWorkUnits.
 		if err == nil {
 			err = errors.New("retained regex inventory disagrees with a fresh compilation")
 		}

@@ -9,11 +9,14 @@ import (
 	"strings"
 )
 
-// v1 binds a specialized executable to both the complete compiler authority
+// v2 additionally binds compiler-owned resource evidence carried by a
+// specialized executable. In particular, a field catalog's knowledge field
+// count cannot be substituted to select a different executor memory class.
+// The seal binds a specialized executable to both the complete compiler authority
 // it was derived from and the complete public surface that reaches the driver.
 // A distinct kind token prevents equal byte sequences from crossing result
 // contracts.
-const derivedExecutionSealDomain = "open-splunk-derived-clickhouse-execution-v1"
+const derivedExecutionSealDomain = "open-splunk-derived-clickhouse-execution-v2"
 
 type derivedExecutionKind string
 
@@ -144,8 +147,16 @@ func writeTimelineSpec(writer hash.Hash, spec TimelineSpec) bool {
 		writeTimelineSpecRemainder(writer, spec)
 }
 
-func writeFieldCatalogSpec(writer hash.Hash, spec FieldCatalogSpec) bool {
+func writeFieldCatalogSpec(
+	writer hash.Hash,
+	spec FieldCatalogSpec,
+	knowledgeGeneratedFields uint32,
+) bool {
+	if knowledgeGeneratedFields > MaximumClickHouseKnowledgeGeneratedFields {
+		return false
+	}
 	writeUint64(writer, uint64(spec.MaximumFields))
+	writeUint64(writer, uint64(knowledgeGeneratedFields))
 	return true
 }
 
@@ -182,13 +193,25 @@ func sealCompiledFieldCatalogExecution(
 	source CompiledQuery,
 	compiled CompiledFieldCatalog,
 ) (*derivedExecutionAuthority, error) {
+	knowledgeGeneratedFields, ok := fieldCatalogKnowledgeGeneratedFieldsFromSource(source)
+	if !ok || compiled.knowledgeGeneratedFields != knowledgeGeneratedFields {
+		return nil, errors.New(
+			"seal derived ClickHouse field catalog execution: generated-field resource evidence is invalid",
+		)
+	}
 	return sealDerivedExecution(
 		derivedExecutionFieldCatalog,
 		source,
 		compiled.SQL,
 		compiled.Args,
 		compiled.readScope,
-		func(writer hash.Hash) bool { return writeFieldCatalogSpec(writer, compiled.Spec) },
+		func(writer hash.Hash) bool {
+			return writeFieldCatalogSpec(
+				writer,
+				compiled.Spec,
+				compiled.knowledgeGeneratedFields,
+			)
+		},
 	)
 }
 
@@ -273,7 +296,13 @@ func (compiled CompiledFieldCatalog) hasValidExecutionSeal() bool {
 		compiled.SQL,
 		compiled.Args,
 		compiled.readScope,
-		func(writer hash.Hash) bool { return writeFieldCatalogSpec(writer, compiled.Spec) },
+		func(writer hash.Hash) bool {
+			return writeFieldCatalogSpec(
+				writer,
+				compiled.Spec,
+				compiled.knowledgeGeneratedFields,
+			)
+		},
 	)
 }
 

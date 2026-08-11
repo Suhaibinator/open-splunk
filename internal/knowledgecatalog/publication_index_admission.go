@@ -609,8 +609,10 @@ func validatePublicationIndexNameAdmissionCohorts(
 			if err := work.chargeChangedCohort(afterWinners); err != nil {
 				return err
 			}
+			// #nosec G115 -- changed cohorts are bounded by knowledgeprogram.MaximumObjects.
+			expectedWinnerCount := uint32(len(afterWinners))
 			cohort := publicationWinnerCohort{
-				expectedWinnerCount: uint32(len(afterWinners)),
+				expectedWinnerCount: expectedWinnerCount,
 				winners:             make([]publicationWinner, len(afterWinners)),
 			}
 			for index, winner := range afterWinners {

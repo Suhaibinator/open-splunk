@@ -811,6 +811,116 @@ func TestFieldServiceSummaryCoalescesAndSharesAdmissionGate(t *testing.T) {
 	}
 }
 
+func TestFieldServiceCatalogAndSummaryShareOneAdmissionGate(t *testing.T) {
+	tests := []struct {
+		name          string
+		summaryLeader bool
+	}{
+		{name: "catalog blocks summary"},
+		{name: "summary blocks catalog", summaryLeader: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := fieldTestSnapshot("cross-kind-gate")
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var startedOnce sync.Once
+			executor := &fakeFieldSummaryExecutor{
+				fakeFieldExecutor: fakeFieldExecutor{execute: func(
+					ctx context.Context,
+					_ clickhouse.CompiledFieldCatalog,
+				) (queryexec.FieldCatalogResult, error) {
+					startedOnce.Do(func() { close(started) })
+					select {
+					case <-release:
+						return twoFieldCatalog(), nil
+					case <-ctx.Done():
+						return queryexec.FieldCatalogResult{}, ctx.Err()
+					}
+				}},
+				execute: func(
+					ctx context.Context,
+					query clickhouse.CompiledFieldSummary,
+				) (queryexec.FieldSummaryResult, error) {
+					startedOnce.Do(func() { close(started) })
+					select {
+					case <-release:
+						return zeroFieldSummaryResult(query.Spec.FieldName), nil
+					case <-ctx.Done():
+						return queryexec.FieldSummaryResult{}, ctx.Err()
+					}
+				},
+			}
+			service := newFieldSummaryTestService(t, snapshot, FieldConfig{
+				Searches:      &fakeFieldSearches{snapshot: snapshot},
+				Compiler:      &fakeFieldSummaryCompiler{fieldKnown: true},
+				Executor:      executor,
+				MaxConcurrent: 1,
+			})
+			access := fieldAccess(snapshot)
+			leaderResult := make(chan error, 1)
+			if test.summaryLeader {
+				go func() {
+					_, err := service.GetFieldSummary(
+						context.Background(),
+						access,
+						GetFieldSummaryRequest{SearchJobID: snapshot.ID, FieldName: "field"},
+					)
+					leaderResult <- err
+				}()
+			} else {
+				go func() {
+					_, err := service.ListFields(
+						context.Background(),
+						access,
+						ListFieldsRequest{SearchJobID: snapshot.ID},
+					)
+					leaderResult <- err
+				}()
+			}
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("cross-kind leader did not enter its executor")
+			}
+
+			if test.summaryLeader {
+				if _, err := service.ListFields(
+					context.Background(),
+					access,
+					ListFieldsRequest{SearchJobID: snapshot.ID},
+				); !errors.Is(err, ErrFieldAnalysisCapacity) {
+					t.Fatalf("catalog while summary holds gate error = %v, want capacity", err)
+				}
+				if executor.fakeFieldExecutor.Calls() != 0 {
+					t.Fatal("capacity-rejected catalog reached its executor")
+				}
+			} else {
+				if _, err := service.GetFieldSummary(
+					context.Background(),
+					access,
+					GetFieldSummaryRequest{SearchJobID: snapshot.ID, FieldName: "field"},
+				); !errors.Is(err, ErrFieldAnalysisCapacity) {
+					t.Fatalf("summary while catalog holds gate error = %v, want capacity", err)
+				}
+				if executor.Calls() != 0 {
+					t.Fatal("capacity-rejected summary reached its executor")
+				}
+			}
+
+			close(release)
+			select {
+			case err := <-leaderResult:
+				if err != nil {
+					t.Fatalf("cross-kind leader error = %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("cross-kind leader did not release the shared gate")
+			}
+		})
+	}
+}
+
 func TestFieldServiceSummaryCancellationAndCloseAbandonWorkers(t *testing.T) {
 	t.Run("last waiter cancellation permits retry", func(t *testing.T) {
 		snapshot := fieldTestSnapshot("summary-cancel")

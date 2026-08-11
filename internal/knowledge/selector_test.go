@@ -866,8 +866,8 @@ func TestSelectorIsSafeForConcurrentMatchingAndDetachedReads(t *testing.T) {
 					t.Errorf("concurrent Match() = %t, %v", matched, err)
 					return
 				}
-				copy := selector.CanonicalBytes()
-				copy[len(copy)-1] ^= byte(worker + 1)
+				canonicalCopy := selector.CanonicalBytes()
+				canonicalCopy[len(canonicalCopy)-1] ^= byte(worker + 1)
 			}
 		}()
 	}

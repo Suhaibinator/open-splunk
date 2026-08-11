@@ -96,6 +96,10 @@ func TestIntegrationBackupPreservesCommittedCatalogAndRejectedReadAuditSnapshot(
 		"update",
 		20,
 	)
+	committedDefinitionAuthorities := readBackupDefinitionAuthorities(t, database)
+	if len(committedDefinitionAuthorities) != 2 {
+		t.Fatalf("committed definition authorities = %d, want 2", len(committedDefinitionAuthorities))
+	}
 
 	backupPath := filepath.Join(t.TempDir(), "catalog-backup.sqlite")
 	backupContext, cancelBackup := context.WithTimeout(context.Background(), 10*time.Second)
@@ -132,6 +136,11 @@ func TestIntegrationBackupPreservesCommittedCatalogAndRejectedReadAuditSnapshot(
 	if _, err := knowledgeattemptaudit.NewWithContext(context.Background(), restored); err != nil {
 		t.Fatalf("knowledgeattemptaudit.NewWithContext(backup): %v", err)
 	}
+	assertBackupDefinitionAuthoritiesEqual(
+		t,
+		committedDefinitionAuthorities,
+		readBackupDefinitionAuthorities(t, restored),
+	)
 
 	restoredCurrent, err := restoredStore.Get(context.Background(), testReadScope(), "ko-backup-atomic", nil)
 	if err != nil || restoredCurrent.Version != 1 || restoredCurrent.Name != "backup-alpha" ||
@@ -196,5 +205,100 @@ func TestIntegrationBackupPreservesCommittedCatalogAndRejectedReadAuditSnapshot(
 	}
 	if !slices.Equal(gotAttempts, wantAttempts) {
 		t.Fatalf("restored rejected attempts = %#v, want %#v", gotAttempts, wantAttempts)
+	}
+}
+
+type backupDefinitionAuthority struct {
+	objectID        string
+	version         int64
+	versionDigest   []byte
+	blobDigest      []byte
+	definitionProto []byte
+	definitionBytes int64
+}
+
+func readBackupDefinitionAuthorities(t *testing.T, database *control.DB) []backupDefinitionAuthority {
+	t.Helper()
+	rows, err := database.SQLDB().QueryContext(t.Context(), `
+		SELECT version.knowledge_object_id, version.object_version,
+		       version.definition_digest, blob.definition_digest,
+		       blob.definition_proto, blob.definition_bytes
+		FROM knowledge_object_versions AS version
+		JOIN knowledge_definition_blobs AS blob
+		  ON blob.tenant_id = version.tenant_id
+		 AND blob.definition_digest = version.definition_digest
+		WHERE version.tenant_id = ?
+		ORDER BY version.knowledge_object_id, version.object_version`, testTenant)
+	if err != nil {
+		t.Fatalf("read backup definition authorities: %v", err)
+	}
+	defer rows.Close()
+
+	var authorities []backupDefinitionAuthority
+	for rows.Next() {
+		var authority backupDefinitionAuthority
+		if err := rows.Scan(
+			&authority.objectID,
+			&authority.version,
+			&authority.versionDigest,
+			&authority.blobDigest,
+			&authority.definitionProto,
+			&authority.definitionBytes,
+		); err != nil {
+			t.Fatalf("scan backup definition authority: %v", err)
+		}
+		authority.versionDigest = slices.Clone(authority.versionDigest)
+		authority.blobDigest = slices.Clone(authority.blobDigest)
+		authority.definitionProto = slices.Clone(authority.definitionProto)
+		if !slices.Equal(authority.versionDigest, authority.blobDigest) {
+			t.Fatalf(
+				"definition digest authority differs for %q v%d: version=%x blob=%x",
+				authority.objectID,
+				authority.version,
+				authority.versionDigest,
+				authority.blobDigest,
+			)
+		}
+		if authority.definitionBytes != int64(len(authority.definitionProto)) {
+			t.Fatalf(
+				"definition byte authority differs for %q v%d: declared=%d actual=%d",
+				authority.objectID,
+				authority.version,
+				authority.definitionBytes,
+				len(authority.definitionProto),
+			)
+		}
+		authorities = append(authorities, authority)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate backup definition authorities: %v", err)
+	}
+	return authorities
+}
+
+func assertBackupDefinitionAuthoritiesEqual(
+	t *testing.T,
+	want, got []backupDefinitionAuthority,
+) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("restored definition authority count = %d, want %d", len(got), len(want))
+	}
+	for index := range want {
+		wantAuthority := want[index]
+		gotAuthority := got[index]
+		if gotAuthority.objectID != wantAuthority.objectID ||
+			gotAuthority.version != wantAuthority.version ||
+			gotAuthority.definitionBytes != wantAuthority.definitionBytes ||
+			!slices.Equal(gotAuthority.versionDigest, wantAuthority.versionDigest) ||
+			!slices.Equal(gotAuthority.blobDigest, wantAuthority.blobDigest) ||
+			!slices.Equal(gotAuthority.definitionProto, wantAuthority.definitionProto) {
+			t.Fatalf(
+				"restored definition authority[%d] = %#v, want exact raw authority %#v",
+				index,
+				gotAuthority,
+				wantAuthority,
+			)
+		}
 	}
 }

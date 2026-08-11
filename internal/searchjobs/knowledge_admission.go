@@ -169,9 +169,9 @@ func exactKnowledgeResolution(
 		summary.PrincipalID != scope.PrincipalID ||
 		summary.AppID != scope.AppID ||
 		!slices.Equal(summary.EffectiveAuthorizedIndexes, scope.EffectiveAuthorizedIndexes) ||
-		summary.ExecutableObjects != uint32(len(objects)) ||
-		summary.Dependencies != uint32(len(dependencies)) ||
-		summary.Shadows != uint32(len(shadows)) ||
+		summary.ExecutableObjects != uint32(len(objects)) || // #nosec G115 -- resolver authority collections are resource-bounded.
+		summary.Dependencies != uint32(len(dependencies)) || // #nosec G115 -- resolver authority collections are resource-bounded.
+		summary.Shadows != uint32(len(shadows)) || // #nosec G115 -- resolver authority collections are resource-bounded.
 		len(summary.TenantCatalogStateToken) != sha256.Size || prelude.IsZero() ||
 		prelude.ObjectCount() != summary.ExecutableObjects ||
 		prelude.IsEmpty() != (summary.ExecutableObjects == 0) ||

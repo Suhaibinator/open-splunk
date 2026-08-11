@@ -285,7 +285,7 @@ func knowledgePreludeOperators(program knowledgeprogram.Program) ([]Operator, er
 			return nil, errors.New("unknown operator kind")
 		}
 	}
-	if uint32(len(generated)) != charges.GeneratedOperators || regexIndex != len(regex) || jsonIndex != len(json) {
+	if uint64(len(generated)) != uint64(charges.GeneratedOperators) || regexIndex != len(regex) || jsonIndex != len(json) {
 		return nil, errors.New("operator inventory disagrees")
 	}
 	return generated, nil

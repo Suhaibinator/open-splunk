@@ -47,6 +47,13 @@ const (
 	defaultMaxResultBytes   = uint64(128 << 20)
 	defaultMaxThreads       = uint64(4)
 	defaultMaxQueryBytes    = uint64(1 << 20)
+	// Knowledge lowering can legitimately exceed ClickHouse's 50,000-element
+	// default even while remaining inside the compiler's one-MiB SQL and
+	// 96-level relational ceilings. Pin both parser/analyzer AST budgets so an
+	// ambient server profile cannot reject a compiler-admitted query, while the
+	// fixed bounds remain independent defenses against expression expansion.
+	defaultMaxASTElements         = uint64(100_000)
+	defaultMaxExpandedASTElements = uint64(100_000)
 	// Keep the pinned ClickHouse analyzer ceiling above the compiler's
 	// conservative 96-level SELECT/UNION dependency limit. The compiler and
 	// server count relational structure differently, so this remains an
@@ -219,6 +226,8 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 		"group_by_overflow_mode":            "throw",
 		"max_threads":                       config.MaxThreads,
 		"max_query_size":                    defaultMaxQueryBytes,
+		"max_ast_elements":                  defaultMaxASTElements,
+		"max_expanded_ast_elements":         defaultMaxExpandedASTElements,
 		"max_subquery_depth":                defaultMaxSubqueryDepth,
 		"enable_materialized_cte":           uint8(1),
 		"short_circuit_function_evaluation": "enable",
@@ -491,10 +500,8 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err := executionContext.Err(); err != nil {
 		return err
 	}
-	if err := sink.SetSchema(schema); err != nil {
-		return err
-	}
 
+	schemaPublished := false
 	for rows.Next() {
 		if err := executionContext.Err(); err != nil {
 			return err
@@ -546,6 +553,15 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			}
 			values[index] = value
 		}
+		if !schemaPublished {
+			if err := executionContext.Err(); err != nil {
+				return err
+			}
+			if err := sink.SetSchema(schema); err != nil {
+				return err
+			}
+			schemaPublished = true
+		}
 		if err := sink.AddRow(values); err != nil {
 			return err
 		}
@@ -553,7 +569,13 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err := rows.Err(); err != nil {
 		return classifyQueryError(executionContext, fmt.Errorf("iterate ClickHouse results: %w", err))
 	}
-	return executionContext.Err()
+	if err := executionContext.Err(); err != nil {
+		return err
+	}
+	if !schemaPublished {
+		return sink.SetSchema(schema)
+	}
+	return nil
 }
 
 func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
@@ -609,7 +631,11 @@ func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhouse
 		if query.Chart.ValueKind == clickhouse.ChartValueKindPercentile {
 			required = maximumRuntimeWidePercentileGroups
 		} else {
-			required = query.Chart.RowLimit * (uint64(query.Chart.MaxSeries) + 1)
+			// Count, sum, and average charts aggregate the exact raw (row, label)
+			// pairs before reducing their output to a bounded row-by-series shape.
+			// Output width cannot size that pre-ranking work, so use the same fixed
+			// 130k allowance as runtime-wide timechart.
+			required = maximumRuntimeWideTimechartGroups
 		}
 	default:
 		return executor.settings

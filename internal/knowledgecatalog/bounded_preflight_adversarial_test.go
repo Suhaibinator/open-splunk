@@ -281,6 +281,7 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 	}
 	assertWideLiteralRejected := func(column, restore string) {
 		t.Helper()
+		// #nosec G202 -- column is selected only from the three fixed identifiers below.
 		if _, err := connection.ExecContext(context.Background(), `
 			UPDATE knowledge_object_dependencies
 			SET `+column+` = ? || CAST(zeroblob(?) AS TEXT)
@@ -310,6 +311,7 @@ func TestIntegrationDependencyPhysicalPreflightBoundsRowsBeforeGroupedValidation
 		if got := groupedQueries.Load(); got != 0 {
 			t.Fatalf("grouped queries after oversized dependency %s = %d, want 0", column, got)
 		}
+		// #nosec G202 -- column is selected only from the three fixed identifiers below.
 		if _, err := connection.ExecContext(context.Background(), `
 			UPDATE knowledge_object_dependencies SET `+column+` = ?
 			WHERE tenant_id = ? AND source_object_id = ?
@@ -375,7 +377,7 @@ func assertPreflightHasNoTemporaryOrderSort(t *testing.T, database *control.DB, 
 	if compiled.Error != nil {
 		t.Fatalf("compile bounded preflight query: %v", compiled.Error)
 	}
-	rows, err := database.SQLDB().Query(
+	rows, err := database.SQLDB().QueryContext(t.Context(),
 		"EXPLAIN QUERY PLAN "+compiled.Statement.SQL.String(),
 		compiled.Statement.Vars...,
 	)

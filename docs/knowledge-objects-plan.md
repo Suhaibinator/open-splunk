@@ -1,9 +1,18 @@
 # Open Splunk Knowledge Objects Plan
 
-**Status:** Proposed implementation plan
-**Date:** August 6, 2026
+**Status:** Tier 1 implemented and acceptance-verified; later tiers remain planned
+**Date:** August 10, 2026
 **Compatibility target:** A bounded, documented subset of Splunk search-time
 knowledge behavior for the single-node Open Splunk product
+
+> **Current checkpoint:** Tier-1 field extraction, field alias, and calculated
+> field Knowledge Objects are production-active. The dated implementation
+> inventories below are preserved as history; any earlier claim that the
+> capability is hard-false, Preview is unregistered, the browser is read-only,
+> the Resolver is unattached, Docker is pending, or nonempty execution gates are
+> closed is superseded by the
+> [August 10 activation and acceptance evidence](#tier-1-activation-and-acceptance-evidence-august-10-2026).
+> Lookup and later object families remain future phases.
 
 ## Executive summary
 
@@ -122,9 +131,9 @@ Saved searches already establish patterns for:
 - mutation audit committed atomically with the object change.
 
 App workspaces already have a tenant boundary, stable identity, lifecycle,
-default indexes, and a catalog revision. The knowledge catalog should use the
-same transaction, migration, cursor, validation, and audit patterns rather than
-building a second control-plane style.
+default indexes, and a catalog revision. The Tier-1 knowledge catalog now uses
+the same transaction, migration, cursor, validation, and audit patterns rather
+than building a second control-plane style.
 
 ### Reusable search behavior
 
@@ -136,17 +145,17 @@ The logical plan already has operators that cover part of the first release:
 - field dependency analysis used by execution, inspection, suggestions,
   history, and export.
 
-Field aliases cannot reuse `Rename`: Splunk-style aliases preserve the original
-field while exposing another name. A new copy/alias operator is required.
+Field aliases do not reuse `Rename`: the implemented `CopyFieldAlias` operator
+preserves the original field while exposing another name.
 
 Lookups, event-type classification, tags, and macro expansion require new
 planner or parser stages.
 
 ### Gaps in the current saved-object model
 
-The present saved-search store treats the authenticated owner as the read
-boundary even though definitions carry sharing metadata. Knowledge resolution
-must generalize that behavior so a principal can see:
+The saved-search store treats the authenticated owner as the read boundary even
+though definitions carry sharing metadata. Tier-1 Knowledge resolution
+generalizes that behavior so a principal can see:
 
 - private objects they own in the current app;
 - app-shared objects in apps they may read; and
@@ -968,22 +977,23 @@ POST /api/v1/knowledge/lookups/get
 POST /api/v1/knowledge/lookups/preview
 ```
 
-Since KO-0F, the first six object-management handlers and bounded protobuf
-codecs have real Store/Writer/audit integration. The direct-edge inspection
-slice adds bounded `dependencies` and `dependents` handlers over the same Store
-and rejected-attempt boundary, and the validation slice adds the dedicated
-bounded Validate transport and rollback-only Writer adapter described below.
-Production `NewHandler` now registers exactly those nine routes only when the
-complete management dependency unit and an exact constructor-ready concrete
-Writer are present, and `cmd/open-splunk-server` supplies that unit.
-Registration remains independent from feature advertisement: bootstrap
-continues to advertise no knowledge capability. The knowledge-specific boundary
+The first six object-management handlers and bounded protobuf codecs have real
+Store/Writer/audit integration. Bounded `dependencies` and `dependents`
+handlers use that same Store and rejected-attempt boundary, Validate uses its
+dedicated bounded transport and rollback-only Writer adapter, and Preview uses
+its dedicated bounded request and sealed-response transports. Production
+`NewHandler` registers the nine core management routes only when the complete
+management dependency unit and exact constructor-ready concrete Writer are
+present; a ready Preview service over that unit adds the tenth route.
+`cmd/open-splunk-server` supplies the complete composition. Registration
+remains independent from feature advertisement, while advertisement requires
+the complete Tier-1 runtime and service family. The knowledge-specific boundary
 authenticates before decoding, requires the administrator role, and attempts
-exactly one synchronous `ActionValidate` or other route-specific journal append
-for every authenticated definitive rejection. It exposes that rejection only
-after the append succeeds, returns the fixed unavailable response if the append
-cannot complete, and suppresses false rejection rows for committed or
-indeterminate mutation outcomes.
+exactly one synchronous route-specific journal append for every authenticated
+definitive rejection. It exposes that rejection only after the append succeeds,
+returns the fixed unavailable response if the append cannot complete, and
+suppresses false rejection rows for committed or indeterminate mutation
+outcomes.
 
 The first bounded lookup upload can carry CSV bytes in protobuf if the product
 limit stays small enough for safe browser and Go memory use. Larger assets
@@ -1023,13 +1033,14 @@ revalidated; supporting another target kind requires a new bounded current-
 inverse authority and index contract first.
 
 The protobuf freezes the `validate` contract, the concrete catalog Writer
-implements its rollback-only service boundary, and production now registers
-`POST /api/v1/knowledge/objects/validate` as the ninth all-or-none management
-route. The route remains capability-unadvertised and is absent from both the
-browser administrator-bearer allowlist and the backend's generic outer
-`administratorRoutes` map: its inner knowledge-attempt boundary owns
-authentication, administrator authorization, and fail-closed journaling before
-decode. Definition message presence and one explicit intent are required.
+implements its rollback-only service boundary, and production registers
+`POST /api/v1/knowledge/objects/validate` as the ninth core management route.
+It is in the browser administrator-bearer allowlist and remains outside the
+backend's generic outer `administratorRoutes` map because its inner
+knowledge-attempt boundary owns authentication, administrator authorization,
+and fail-closed journaling before decode. The complete Tier-1 capability, not
+this route in isolation, controls browser exposure. Definition message
+presence and one explicit intent are required.
 `INACTIVE_STORAGE` proves only bounded canonical inactive persistence;
 `ACTIVE_PUBLICATION` evaluates the candidate as a proposed ACTIVE version in
 one fixed knowledge/app/index catalog transaction.
@@ -1047,7 +1058,7 @@ also an envelope error, while a present definition with a missing or unknown
 body is candidate invalidity.
 
 Validate does not use the ordinary read-all-plus-`proto.Unmarshal` request
-path. Its codec and the dormant Preview request codec now share one extracted,
+path. Its codec and the Preview request codec share one extracted,
 layout-parameterized candidate wire decoder. The extraction preserves
 Validate's existing behavior while letting both envelopes enforce the mutation
 raw-body ceiling of 4 MiB plus 64 KiB (`4259840` bytes) by reading at most one
@@ -1069,11 +1080,11 @@ Unknown-field handling is deliberately split by semantic authority. Outer
 unknowns, including wrong-wire envelope fields, and field-mask unknowns are
 retained so envelope validation rejects them. Create retains the
 complete candidate's unknowns, and update retains unknowns inside mask-selected
-nested values, so Validate—and a future Preview service—treat
+nested values, so Validate and Preview treat
 candidate-authored future meaning as in-band invalidity. Update discards
 candidate top-level unknowns
 and unknowns nested only inside unselected fields because they are outside that
-mask's authority. Validate and the unregistered Preview request codec therefore
+mask's authority. Validate and the Preview request codec therefore
 bypass the generic forward-compatible sanitizer's unknown clearing.
 
 `Writer.Validate` accepts a `ValidationScope` with separate read and write
@@ -1215,14 +1226,14 @@ authority. Its custom response codec revalidates the seal under the live request
 context and writes the seal's exact deterministic bytes—never a fresh mutable
 protobuf marshal—while holding and then releasing the serialization permit.
 
-Preview now has an internal request-only codec and structural envelope
-validator, but remains unregistered and unadvertised. Its canonical request
-wire authority is `retained_search_job_id = 1`, `definition = 2`, optional
-`knowledge_object_id = 3`, optional `expected_version = 4`, `update_mask = 5`,
-and optional uint32 `maximum_rows = 6`; there is no client-authored validation
-intent. The retained job ID names future owner-scoped retained execution
-authority which a service must reacquire under the authenticated caller. It is
-not an immutable-event-snapshot identity and grants no access by itself.
+Preview has a dedicated request codec and structural envelope validator. Its
+canonical request wire authority is `retained_search_job_id = 1`,
+`definition = 2`, optional `knowledge_object_id = 3`, optional
+`expected_version = 4`, `update_mask = 5`, and optional uint32
+`maximum_rows = 6`; there is no client-authored validation intent. The retained
+job ID names owner-scoped retained execution authority which the service
+reacquires under the authenticated caller. It is not an immutable-event-
+snapshot identity and grants no access by itself.
 
 The codec enforces the exact 4 MiB-plus-64-KiB (`4259840`-byte) raw ceiling,
 validates every recognized string occurrence as UTF-8, retains at most 9 mask
@@ -1239,30 +1250,28 @@ Create full-candidate unknowns and update mask-selected nested unknowns remain
 candidate authority; update candidate top-level and unselected nested unknowns
 are discarded.
 
-`maximum_rows` has full optional uint32 wire authority: absence, explicit zero,
-and every value through `4294967295` remain distinct and unchanged. The request
-boundary assigns it no default, bound, or execution meaning. Generated Go and
-TypeScript contract oracles independently preserve create tags `[1, 2]` and
-all six present-empty update tags; the Go structural oracle and TypeScript wire
-oracle additionally preserve the maximum uint32 value. The contract hardening
-therefore changes no request field number, type, or presence encoding.
+`maximum_rows` retains full optional uint32 wire authority. Absence selects the
+service default of 100 rows per side; a present value must be in `1..1000`.
+Zero and larger values fail before retained execution. Generated Go and
+TypeScript contract oracles independently preserve create tags `[1, 2]`, all
+six present-empty update tags, and the maximum uint32 overflow witness. No
+request field number, type, or presence encoding changed.
 
-There is still no Preview response codec, handler, retained-execution
-acquisition or caller authorization, catalog/search service, route,
-route-manifest or browser-bearer entry, capability, UI/navigation request,
-Resolver attachment, or search execution. Before registration, the service
-must define and implement owner-scoped retained-execution reacquisition,
-evaluate the forced-ACTIVE candidate in one fixed knowledge/app/index
-transaction, apply the resulting program to the retained server-authorized
-execution, and freeze `maximum_rows` default/bound/execution policy plus paired
-before/after schema-row, truncation, response-byte, deadline, and concurrency
-semantics. Its revision remains advisory knowledge-ledger correlation metadata,
-not mutation acceptability, reservation, or reusable publication proof. It
-must never let a browser submit events, raw ClickHouse SQL, physical scope, or
-bypass index authorization. The production nonempty compiler,
-snapshot-finalization, and digest-pinned ClickHouse acceptance gates remain
-closed independently. The compiler-only and dual-tag snapshot lifecycle test
-bridges described below open none of those Preview or production boundaries.
+Preview is conditionally registered and advertised only as part of the
+complete Tier-1 family. Its handler authenticates and authorizes before decode,
+its service holds the Manager-retained result lease through validation and both
+executions, and its compiler adapter rebuilds only from the Manager-sealed app,
+index, time, visibility, catalog, and knowledge authority. The candidate is
+validated as ACTIVE publication against one fixed catalog view. Invalid
+candidates return validation only; valid candidates return paired job-bound
+revision-1 schemas and at most the requested rows per side, with one extra-row
+witness setting `truncated`. The complete response is capped at 8 MiB while the
+Manager, Writer, and executor retain their existing bounded admission and
+resource authorities. Any lookup, compilation, execution, cancellation,
+schema, row, or byte failure discards both sides atomically. The revision
+remains advisory knowledge-ledger correlation metadata, not mutation
+acceptability, a reservation, or reusable publication proof. Preview never
+accepts raw events, physical table names, index authority, asset paths, or SQL.
 
 The validation wire redesign carries an intentional historical protobuf
 FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
@@ -1270,8 +1279,8 @@ FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
 and were never served by either the Validate or Preview route; they remain
 reserved against reuse. Peers may drop those never-served draft values, but the
 change is intentionally not described as schema-nonbreaking. Validate's later
-route registration does not retroactively change that historical
-classification; Preview remains unregistered.
+registration and Preview's activation do not retroactively change that
+historical classification.
 
 System bootstrap advertises knowledge features only when their complete API and
 runtime family is configured:
@@ -1286,14 +1295,16 @@ SERVER_FEATURE_KNOWLEDGE_WORKFLOW_ACTIONS
 
 ## Browser application
 
-KO-0H supplies only a feature-gated read-only list/detail shell. The hidden
-readiness surface has immediate app, object-type, lifecycle-state, and sort
-controls plus a submitted advanced-filter form for optional owner ID, optional
-name/description text, one sharing scope (`all`, `private`, `app`, or `global`),
-and optional selector text. Drafts live in a child component, so typing causes
-no request and does not rerender the parent workspace, which may contain up to
-8,192 rows. A changed valid Apply commits all four advanced values atomically
-and clears the page, continuation and consumed-token state, stale state,
+The feature-gated Knowledge Manager retains the KO-0H bounded list/detail and
+relationship surfaces and now adds Tier-1 create, validate, edit, state,
+delete, and retained-search Preview controls. The list surface has immediate
+app, object-type, lifecycle-state, and sort controls plus a submitted advanced-
+filter form for optional owner ID, optional name/description text, one sharing
+scope (`all`, `private`, `app`, or `global`), and optional selector text. Drafts
+live in a child component, so typing causes no request and does not rerender the
+parent workspace, which may contain up to 8,192 rows. A changed valid Apply
+commits all four advanced values atomically and clears the page, continuation
+and consumed-token state, stale state,
 selected detail, and in-flight list/detail work before a fresh first-page
 request; the same reset occurs for valid fail-closed recovery. Clear restores
 the default tuple: owner/text/selector absent and sharing `all`, encoded as an
@@ -1317,7 +1328,7 @@ a valid Apply or Clear releases the fail-closed latch, and sends no List. A
 corrected Apply of the same committed tuple performs one fresh token-null
 recovery request. Repeated valid Apply is otherwise a no-op.
 
-The dormant detail view treats the immutable ID and version selected from List
+The exact detail view treats the immutable ID and version selected from List
 as one exact identity. It validates a nonempty, valid-UTF-8, C0/C1-control-free,
 ASCII-edge-trimmed ID of at most 128 bytes and the bigint version range 1
 through MaxInt64 before I/O, sends both fields in Get, and accepts only a
@@ -1328,13 +1339,14 @@ version consumers for both direct dependencies and direct dependents. Each
 direction owns its request, continuation, exact visible total, stale/retry
 state, and displayed catalog revision independently, and each row shows only
 the visible opposite endpoint's object ID, version, and `FIELD_INPUT` label. It
-has no mutation controls.
+contains no relationship-row mutation controls.
 
-Revision `8f7fd01` adds a compact related-object inspector to each direction,
-still inside this dormant read-only boundary. Relationship paint sends no
-endpoint Get. Only an explicit native Inspect activation validates the visible
-edge and calls the existing detail loader with that edge's exact disclosed ID
-and version. Dependencies and dependents each own at most one inspector, exact
+Historical revision `8f7fd01` added a compact related-object inspector to each
+direction while the manager was still dormant and read-only. The retained
+inspector sends no endpoint Get during relationship paint. Only an explicit
+native Inspect activation validates the visible edge and calls the existing
+detail loader with that edge's exact disclosed ID and version. Dependencies and
+dependents each own at most one inspector, exact
 edge identity, originating trigger, and dedicated `AbortController`, for a
 maximum of two simultaneous inspectors. Activating the same row closes it with
 no request; replacing it aborts and clears that direction; Retry focuses the
@@ -1397,19 +1409,23 @@ does not write URL or browser storage state.
 
 ### Knowledge Manager
 
-Continue the app-aware Knowledge Manager with:
+The app-aware Tier-1 Knowledge Manager now includes:
 
 - the completed type, app, owner, sharing, state, name/description, and
   selector-text filters;
 - stable pagination and sorting;
-- create, edit, duplicate, enable/disable, and delete actions;
+- create, edit, enable/disable, and delete actions;
 - definition validation with source-located errors;
 - selector builder for index, host, source, and sourcetype;
 - the completed direct dependency/dependent rows and explicit read-only
-  related-object inspection, followed by richer impact views;
-- permission and sharing controls;
+  related-object inspection;
+- permission and sharing controls; and
+- bounded before/after Preview against an authorized retained search.
+
+Later tiers can add:
+
+- duplicate and richer impact views;
 - lookup upload and bounded data preview;
-- “test against recent events” using an authorized search snapshot;
 - version, update time, owner, and audit history; and
 - explicit warnings when a change alters fields used by saved searches or
   other knowledge objects.
@@ -2414,6 +2430,67 @@ The Tier 1 knowledge release is complete when all of the following are true:
 - One backend vertical test creates an extraction, ingests a matching event,
   searches by the extracted field, updates the extraction during a retained
   job, and proves original-job/export stability plus fresh-rerun behavior.
+
+### Tier-1 activation and acceptance evidence (August 10, 2026)
+
+Tier 1 is production-active. This checkpoint supersedes earlier implementation
+snapshots in this plan that describe the capability as hard-false, Preview as
+unregistered, the browser as read-only, the Resolver as unattached, or nonempty
+compiler/snapshot gates as closed. Those passages remain useful history, but no
+longer describe the shipping configuration.
+
+Production constructs the ready Writer/Resolver before `searchjobs.Manager`,
+attaches that Resolver immutably, admits and finalizes compiler-minted nonempty
+knowledge programs in ordinary builds, and constructs Preview from the Manager,
+Writer, ordinary compiler adapter, and executor. The server advertises
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` only when all nine core management
+operations, Preview, search admission, inspection/history/export, timeline,
+field catalog, field summary, and field suggestions are ready. The browser then
+loads the feature-gated manager and permits only the exact ten administrator-
+bearer routes; feature-off bootstrap still imports nothing and sends zero
+Knowledge traffic.
+
+The final pinned production matrix rerun passed on
+`clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`
+in 72.07 seconds at package level (71.67 seconds for the top-level test). It
+covers ordinary enrichment and authored suffixes, all four selector dimensions,
+all 16 executable compatibility runtime-edge IDs in a 3.40-second subtest,
+chart, timechart, stats, fused chronology, pruned and runtime-empty consumers,
+timeline, field catalog, exact maximum generated fields, two concurrent
+maximum catalogs, field summary, field suggestions, atomic overflow, and a
+real Writer→Resolver→Manager→history/export v1/v2 lifecycle. CI runs the same
+untagged test with a 2m30s process deadline in the dedicated
+`knowledge-runtime-clickhouse` job.
+
+| # | Acceptance authority | Result |
+|---:|---|---|
+| 1 | CRUD protobuf routes, mutation adapters, gated Tier-1 editor, and the Knowledge Manager Playwright vertical | Pass |
+| 2 | `knowledgecatalog` Resolver scope, precedence, visibility, and corruption suites | Pass |
+| 3 | Pinned matrix selector-dimension subtest with authorized index scope | Pass |
+| 4 | Writer publication compiler, dependency, resource, and transition suites | Pass |
+| 5 | Manager admission plus immutable snapshot/program/digest seals | Pass |
+| 6 | Pinned retained v1/v2 lifecycle, inspection authority, and exact export | Pass |
+| 7 | Direct saved-search and history Run Again lifecycle resolves current v2 while original/export retain v1 | Pass |
+| 8 | Pinned ordinary suffix query proves enrichment precedes authored filtering | Pass |
+| 9 | Alias compiler/runtime suites prove source preservation, overwrite behavior, containers, and normalization | Pass |
+| 10 | Program dependency/collision suites prove calculated-stage parallelism | Pass |
+| 11 | Compiler provenance seals and detached Search Job Inspector projections | Pass |
+| 12 | Pinned catalog/summary/suggestions plus authorization/shadow suites | Pass |
+| 13 | Shared compiler/snapshot/executor budgets, dynamic catalog memory tiers, concurrency gate, and atomic overflow | Pass |
+| 14 | Source-located `knowledgeprogram` issues reject unsupported operators without prefix execution | Pass |
+| 15 | Bounded mutation and rejected-attempt audit stores and privacy projections | Pass |
+| 16 | Backup integration compares catalog revision/token and exact stored definition digest/protobuf bytes | Pass |
+| 17 | Dedicated pinned ClickHouse backend matrix, including ingested-event v1/v2 original/export/fresh behavior | Pass |
+
+The successful browser Preview vertical additionally proves zero request before
+explicit submission, exact current-object ID/version/definition authority, the
+canonical update mask, memory-only bearer forwarding, digest-bound validation,
+job-bound before/after schemas and rows, and safe paired rendering. The
+normative 55-case compatibility inventory is now executable through closed
+typed owner/vector registries whose package-local callbacks exercise the
+relevant production normalization, resolution, program, snapshot, catalog,
+audit, Preview, server, recovery, and query-execution authorities; no case is
+satisfied by a test-name string alone.
 
 The lookup release adds these criteria:
 

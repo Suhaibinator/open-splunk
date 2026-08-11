@@ -424,6 +424,7 @@ func updateWriterOutcomeReceiptWithoutForeignKeys(
 		mutationRouteCreate,
 		requestID,
 	)
+	// #nosec G202 -- assignment is selected from a fixed test-case corruption matrix.
 	result, updateErr := connection.ExecContext(t.Context(), `UPDATE knowledge_mutation_idempotency
 		SET `+assignment+`
 		WHERE tenant_id = ? AND actor_kind = ? AND actor_id = ?

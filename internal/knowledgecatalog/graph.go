@@ -107,7 +107,8 @@ func (store *Store) listGraph(
 	}
 	resolved := ObjectVersionIdentity{
 		KnowledgeObjectID: strings.Clone(selected.KnowledgeObjectID),
-		Version:           uint64(selected.ObjectVersion),
+		// #nosec G115 -- readGraphRootVersion validates the persisted version as positive.
+		Version: uint64(selected.ObjectVersion),
 	}
 	if cursor.CatalogRevision != 0 {
 		if cursor.ResolvedObjectID != selected.KnowledgeObjectID ||
@@ -172,8 +173,10 @@ func (store *Store) listGraph(
 			ResolvedObjectID:   selected.KnowledgeObjectID,
 			ResolvedVersion:    selected.ObjectVersion,
 			LastSourceObjectID: last.Source.KnowledgeObjectID,
+			// #nosec G115 -- dependency page validation bounds versions to math.MaxInt64.
 			LastSourceVersion:  int64(last.Source.Version),
 			LastTargetObjectID: last.Target.KnowledgeObjectID,
+			// #nosec G115 -- dependency page validation bounds versions to math.MaxInt64.
 			LastTargetVersion:  int64(last.Target.Version),
 			LastDependencyRole: int32(last.Role),
 		})
@@ -307,11 +310,13 @@ func dependencyEdgeFromRecord(
 	return DependencyEdge{
 		Source: ObjectVersionIdentity{
 			KnowledgeObjectID: strings.Clone(record.SourceObjectID),
-			Version:           uint64(record.SourceObjectVersion),
+			// #nosec G115 -- dependency records are validated before projection.
+			Version: uint64(record.SourceObjectVersion),
 		},
 		Target: ObjectVersionIdentity{
 			KnowledgeObjectID: strings.Clone(record.TargetObjectID),
-			Version:           uint64(record.TargetObjectVersion),
+			// #nosec G115 -- dependency records are validated before projection.
+			Version: uint64(record.TargetObjectVersion),
 		},
 		Role:          DependencyRoleFieldInput,
 		SourceCurrent: sourceCurrent,
@@ -323,12 +328,13 @@ func currentRegistryAuthorityFromRegistry(registry registryRecord) CurrentRegist
 	return CurrentRegistryAuthority{
 		TenantID:          strings.Clone(registry.TenantID),
 		KnowledgeObjectID: strings.Clone(registry.KnowledgeObjectID),
-		CurrentVersion:    uint64(registry.CurrentVersion),
-		AppID:             strings.Clone(registry.AppID),
-		OwnerID:           strings.Clone(registry.OwnerID),
-		ObjectType:        registry.ObjectType,
-		SharingScope:      registry.SharingScope,
-		State:             registry.State,
+		// #nosec G115 -- registry records are validated before projection.
+		CurrentVersion: uint64(registry.CurrentVersion),
+		AppID:          strings.Clone(registry.AppID),
+		OwnerID:        strings.Clone(registry.OwnerID),
+		ObjectType:     registry.ObjectType,
+		SharingScope:   registry.SharingScope,
+		State:          registry.State,
 	}
 }
 
@@ -395,17 +401,21 @@ func validDetachedCurrentAuthority(authority CurrentRegistryAuthority) bool {
 }
 
 func graphEdgeAfterCursor(edge DependencyEdge, cursor graphCursor) bool {
+	// #nosec G115 -- validated graph cursors contain positive persisted versions.
+	cursorSourceVersion := uint64(cursor.LastSourceVersion)
+	// #nosec G115 -- validated graph cursors contain positive persisted versions.
+	cursorTargetVersion := uint64(cursor.LastTargetVersion)
 	if edge.Source.KnowledgeObjectID != cursor.LastSourceObjectID {
 		return edge.Source.KnowledgeObjectID > cursor.LastSourceObjectID
 	}
-	if edge.Source.Version != uint64(cursor.LastSourceVersion) {
-		return edge.Source.Version > uint64(cursor.LastSourceVersion)
+	if edge.Source.Version != cursorSourceVersion {
+		return edge.Source.Version > cursorSourceVersion
 	}
 	if edge.Target.KnowledgeObjectID != cursor.LastTargetObjectID {
 		return edge.Target.KnowledgeObjectID > cursor.LastTargetObjectID
 	}
-	if edge.Target.Version != uint64(cursor.LastTargetVersion) {
-		return edge.Target.Version > uint64(cursor.LastTargetVersion)
+	if edge.Target.Version != cursorTargetVersion {
+		return edge.Target.Version > cursorTargetVersion
 	}
 	return int32(edge.Role) > cursor.LastDependencyRole
 }
@@ -528,6 +538,7 @@ func (store *Store) listIncomingGraphEdges(
 		if err != nil {
 			return nil, false, nil, err
 		}
+		// #nosec G115 -- countIncomingGraphCandidates returns a bounded nonnegative count.
 		value := uint64(count)
 		total = &value
 	}

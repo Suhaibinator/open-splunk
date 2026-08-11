@@ -698,7 +698,7 @@ func TestKnowledgeValidationErrorSanitizerIsClosed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			got := sanitizeKnowledgeValidationError(test.err, test.authority)
-			if (got == test.err) != test.wantSafe {
+			if exactKnowledgeValidationError(got, test.err) != test.wantSafe {
 				t.Fatalf("sanitized=%v original=%v wantSafe=%t", got, test.err, test.wantSafe)
 			}
 		})
@@ -732,7 +732,7 @@ func TestKnowledgeValidationCreateDependencyContextExceptionIsNarrow(
 		},
 	}
 	requestForAction := func(action knowledgeattemptaudit.Action) *http.Request {
-		request := httptest.NewRequest(http.MethodPost, knowledgeObjectsValidatePath, nil)
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, knowledgeObjectsValidatePath, nil)
 		return request.WithContext(context.WithValue(
 			request.Context(),
 			knowledgeAttemptStateContextKey{},
@@ -796,7 +796,8 @@ func TestKnowledgeValidationPathIsRegisteredInExactManagementBoundary(t *testing
 	if routes := handler.knowledgeManagementRoutes(router.NoAuth); len(routes) != 9 {
 		t.Fatalf("management routes=%d, want exactly nine", len(routes))
 	}
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		knowledgeObjectsValidatePath,
 		bytes.NewReader(nil),

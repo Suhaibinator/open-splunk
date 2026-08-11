@@ -1,5 +1,3 @@
-//go:build open_splunk_knowledge_runtime_acceptance && open_splunk_knowledge_snapshot_acceptance
-
 package main
 
 import (
@@ -17,6 +15,7 @@ import (
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
@@ -39,6 +38,44 @@ type runtimeKnowledgeSnapshotExecutor struct {
 	observations chan<- runtimeKnowledgeSnapshotExecution
 	releaseFirst <-chan struct{}
 	ordinal      atomic.Int32
+}
+
+type runtimeKnowledgeExportExecutor struct {
+	mu      sync.Mutex
+	queries []clickhouse.CompiledQuery
+}
+
+func (executor *runtimeKnowledgeExportExecutor) Execute(
+	ctx context.Context,
+	compiled clickhouse.CompiledQuery,
+	sink searchjobs.ResultSink,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	detached, ok := compiled.CloneForExecution()
+	if !ok {
+		return errors.New("runtime knowledge export received invalid compiler authority")
+	}
+	executor.mu.Lock()
+	executor.queries = append(executor.queries, detached)
+	executor.mu.Unlock()
+	if err := sink.SetSchema(searchjobs.Schema{Columns: []searchjobs.Column{{
+		Name: "message", Kind: searchjobs.ValueKindString,
+	}}}); err != nil {
+		return err
+	}
+	return sink.AddRow([]searchjobs.Value{searchjobs.StringValue("retained-export")})
+}
+
+func (executor *runtimeKnowledgeExportExecutor) recordedQueries() []clickhouse.CompiledQuery {
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	queries := make([]clickhouse.CompiledQuery, len(executor.queries))
+	for index := range executor.queries {
+		queries[index], _ = executor.queries[index].CloneForExecution()
+	}
+	return queries
 }
 
 type runtimeKnowledgeSnapshotExplainer struct {
@@ -260,12 +297,12 @@ func (executor *runtimeKnowledgeSnapshotExecutor) Execute(
 	)
 }
 
-// TestKnowledgeSnapshotAcceptanceManagerRetainsWriterResolvedActiveVersions proves
-// test-only Writer→Resolver→Manager retention and real searchinspection.Service
+// TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions proves
+// ordinary Writer→Resolver→Manager retention and real searchinspection.Service
 // consumption through a deterministic fake Explainer. It does not prove ClickHouse
 // EXPLAIN or rows, production wiring, HTTP/server projection or route, capability,
 // or browser behavior.
-func TestKnowledgeSnapshotAcceptanceManagerRetainsWriterResolvedActiveVersions(t *testing.T) {
+func TestKnowledgeSnapshotManagerRetainsWriterResolvedActiveVersions(t *testing.T) {
 	runtime, database := newRuntimeKnowledgeTestRuntime(t)
 	defer func() { _ = database.Close() }()
 	createRuntimeKnowledgeTestApp(t, database)
@@ -330,13 +367,16 @@ func TestKnowledgeSnapshotAcceptanceManagerRetainsWriterResolvedActiveVersions(t
 	}
 	manager, err := searchjobs.New(managerConfig)
 	if err != nil {
-		t.Fatalf("create test-only knowledge manager: %v", err)
+		t.Fatalf("create knowledge manager: %v", err)
 	}
 	defer func() {
 		if closeErr := manager.Close(); closeErr != nil {
-			t.Errorf("close test-only knowledge manager: %v", closeErr)
+			t.Errorf("close knowledge manager: %v", closeErr)
 		}
 	}()
+	if !manager.KnowledgeAdmissionEnabled() || !manager.KnowledgeExecutionEnabled() {
+		t.Fatal("knowledge Manager did not retain its immutable resolver/execution composition")
+	}
 
 	request := runtimeKnowledgeSearchRequest(t)
 	jobV1, err := manager.Create(t.Context(), request)
@@ -537,6 +577,48 @@ func TestKnowledgeSnapshotAcceptanceManagerRetainsWriterResolvedActiveVersions(t
 	if executionV1.Equal(executionV2) || executionV2.Equal(executionV1) {
 		t.Fatal("ACTIVE v1 and v2 Manager authorities compare equal")
 	}
+
+	exportExecutor := &runtimeKnowledgeExportExecutor{}
+	exportSource, err := exportjobs.NewReexecutionSource(exportjobs.ReexecutionSourceConfig{
+		Searches: manager,
+		Executor: exportExecutor,
+		// Retained knowledge exports must not consult this deliberately invalid
+		// legacy compiler.
+		Compiler: clickhouse.Compiler{Database: "retained_export_recompile_forbidden"},
+	})
+	if err != nil {
+		t.Fatalf("create retained knowledge export source: %v", err)
+	}
+	for _, jobID := range []string{jobV1.ID, jobV2.ID} {
+		lease, acquireErr := exportSource.AcquireResultsFor(t.Context(), access, jobID)
+		if acquireErr != nil {
+			t.Fatalf("acquire retained export for %q: %v", jobID, acquireErr)
+		}
+		row, hasRow, nextErr := lease.Next(t.Context())
+		if nextErr != nil || !hasRow || len(row.Values) != 1 {
+			_ = lease.Close()
+			t.Fatalf("read retained export for %q = (%#v, %t, %v)", jobID, row, hasRow, nextErr)
+		}
+		value, stringOK := row.Values[0].String()
+		if !stringOK || value != "retained-export" {
+			_ = lease.Close()
+			t.Fatalf("retained export row for %q = %#v", jobID, row)
+		}
+		if _, more, endErr := lease.Next(t.Context()); endErr != nil || more {
+			_ = lease.Close()
+			t.Fatalf("retained export end for %q = (%t, %v)", jobID, more, endErr)
+		}
+		if closeErr := lease.Close(); closeErr != nil {
+			t.Fatalf("close retained export for %q: %v", jobID, closeErr)
+		}
+	}
+	exportedQueries := exportExecutor.recordedQueries()
+	if len(exportedQueries) != 2 ||
+		!exportedQueries[0].EqualForExecution(observedV1) ||
+		!exportedQueries[1].EqualForExecution(observedV2) {
+		t.Fatalf("retained export authorities = %#v", exportedQueries)
+	}
+
 	rotated := executionV1
 	rotated.CompiledQuery = executionV2.CompiledQuery
 	rotated.KnowledgeSnapshot = executionV2.KnowledgeSnapshot

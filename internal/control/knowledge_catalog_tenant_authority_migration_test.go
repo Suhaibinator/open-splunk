@@ -27,7 +27,7 @@ func TestKnowledgeCatalogTenantAuthorityMigrationBackfillsAndPreservesState(t *t
 	insertKnowledgeAuthorityTestApp(t, raw, knowledgeMigrationTestAppID, "tenant-a", "tenant-a")
 	insertKnowledgeAuthorityTestApp(t, raw, knowledgeAuthoritySecondAppID, "tenant-b", "tenant-b")
 
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-a');
 		INSERT INTO knowledge_projection_tenant_ledgers (tenant_id) VALUES ('tenant-a');
 		UPDATE knowledge_catalog_tenants
@@ -136,7 +136,7 @@ func TestKnowledgeCatalogTenantAuthorityProvisioningIsAtomic(t *testing.T) {
 		if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
 			t.Fatalf("apply migrations: %v", err)
 		}
-		if _, err := raw.Exec(`
+		if _, err := raw.ExecContext(t.Context(), `
 			INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-corrupt');
 			DROP TRIGGER knowledge_catalog_revision_head_delete_is_forbidden;
 			DELETE FROM knowledge_catalog_revision_heads
@@ -234,7 +234,7 @@ func TestAppCatalogRevisionAuthorityIsMonotonicAndCollisionProof(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := raw.Exec(test.statement); err == nil || !strings.Contains(err.Error(), test.want) {
+			if _, err := raw.ExecContext(t.Context(), test.statement); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("authority mutation error = %v, want %q", err, test.want)
 			}
 			assertIntegerQuery(t, raw, 1, `
@@ -261,7 +261,7 @@ func TestKnowledgeCatalogTenantAuthorityMigrationRejectsCorruptHeadAtomically(t 
 		t.Fatalf("apply through migration 0030: %v", err)
 	}
 	insertKnowledgeAuthorityTestApp(t, raw, knowledgeMigrationTestAppID, "tenant-a", "tenant-a")
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-a');
 		DROP TRIGGER knowledge_catalog_revision_head_delete_is_forbidden;
 		DELETE FROM knowledge_catalog_revision_heads WHERE tenant_id = 'tenant-a'`); err != nil {
@@ -298,7 +298,7 @@ func TestKnowledgeCatalogTenantAuthorityMigrationRejectsMissingAppAuthorityAtomi
 				t.Fatalf("apply through migration 0030: %v", err)
 			}
 			insertKnowledgeAuthorityTestApp(t, raw, knowledgeMigrationTestAppID, "tenant-a", "tenant-a")
-			if _, err := raw.Exec(test.mutate); err != nil {
+			if _, err := raw.ExecContext(t.Context(), test.mutate); err != nil {
 				t.Fatalf("seed missing app authority: %v", err)
 			}
 
@@ -322,7 +322,7 @@ func TestAppCatalogRevisionMaximumRollsBackOuterAppMutation(t *testing.T) {
 		t.Fatalf("apply through migration 0030: %v", err)
 	}
 	insertKnowledgeAuthorityTestApp(t, raw, knowledgeMigrationTestAppID, "tenant-a", "tenant-a")
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		UPDATE app_catalog_revisions
 		SET revision = 9223372036854775807
 		WHERE tenant_id = 'tenant-a'`); err != nil {
@@ -332,7 +332,7 @@ func TestAppCatalogRevisionMaximumRollsBackOuterAppMutation(t *testing.T) {
 		t.Fatalf("apply migration 0031: %v", err)
 	}
 
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		UPDATE app_workspaces
 		SET display_name = 'Changed', version = version + 1, updated_at_unix_micro = 2
 		WHERE tenant_id = 'tenant-a'`); err == nil {
@@ -367,7 +367,7 @@ func insertKnowledgeAuthorityTestAppError(
 	tenantID string,
 	slug string,
 ) error {
-	_, err := db.Exec(`
+	_, err := db.ExecContext(context.Background(), `
 		INSERT INTO app_workspaces (
 			app_id, tenant_id, version, slug, display_name, description,
 			default_time_range_present, state,

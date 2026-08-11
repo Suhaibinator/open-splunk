@@ -24,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
@@ -102,12 +103,24 @@ type knowledgeSearchAdmission interface {
 	KnowledgeAdmissionEnabled() bool
 }
 
+type knowledgeSearchExecution interface {
+	KnowledgeExecutionEnabled() bool
+}
+
 func knowledgeSearchAdmissionEnabled(jobs SearchJobs) bool {
 	if isNilDependency(jobs) {
 		return false
 	}
 	admission, ok := jobs.(knowledgeSearchAdmission)
 	return ok && !isNilDependency(admission) && admission.KnowledgeAdmissionEnabled()
+}
+
+func knowledgeSearchExecutionEnabled(jobs SearchJobs) bool {
+	if isNilDependency(jobs) {
+		return false
+	}
+	execution, ok := jobs.(knowledgeSearchExecution)
+	return ok && !isNilDependency(execution) && execution.KnowledgeExecutionEnabled()
 }
 
 // IndexCatalog supplies the live index authorization and bootstrap view.
@@ -491,12 +504,13 @@ type Config struct {
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
 	// Knowledge-management routes are registered only for one complete unit
-	// backed by the concrete catalog Writer. Public feature advertisement stays
-	// disabled until the complete Tier-1 runtime family is ready.
+	// backed by the concrete catalog Writer. Public feature advertisement is
+	// derived separately from the complete Tier-1 runtime family.
 	KnowledgeCatalog           KnowledgeCatalog
 	KnowledgeWriter            KnowledgeWriter
 	KnowledgeApps              KnowledgeAppCatalog
 	KnowledgeAttempts          KnowledgeAttemptJournal
+	KnowledgePreview           *knowledgepreview.Service
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
 	Exports                    Exports
@@ -547,6 +561,7 @@ type apiHandler struct {
 	knowledgeWriter            KnowledgeWriter
 	knowledgeApps              KnowledgeAppCatalog
 	knowledgeAttempts          KnowledgeAttemptJournal
+	knowledgePreview           *knowledgepreview.Service
 	knowledgeSearchAdmission   bool
 	savedSearches              SavedSearches
 	searchHistory              SearchHistory
@@ -674,6 +689,7 @@ func NewHandler(config Config) (*Handler, error) {
 		appAdmin = nil
 	}
 	knowledgeAdmission := knowledgeSearchAdmissionEnabled(config.SearchJobs)
+	knowledgeExecution := knowledgeSearchExecutionEnabled(config.SearchJobs)
 	appCatalog := config.AppCatalog
 	if isNilDependency(appCatalog) {
 		appCatalog = nil
@@ -726,6 +742,14 @@ func NewHandler(config Config) (*Handler, error) {
 		!replaysUnavailableActiveMutations(knowledgeWriter) {
 		return nil, errors.New(
 			"create server handler: knowledge management requires the concrete catalog writer",
+		)
+	}
+	knowledgePreview := config.KnowledgePreview
+	if knowledgePreview != nil &&
+		(configuredKnowledgeDependencies != len(knowledgeDependenciesConfigured) ||
+			!knowledgePreview.Ready()) {
+		return nil, errors.New(
+			"create server handler: knowledge preview requires the complete ready knowledge management family",
 		)
 	}
 	browserAuthenticator := config.BrowserAuthenticator
@@ -952,6 +976,12 @@ func NewHandler(config Config) (*Handler, error) {
 		searchAttemptAudit: searchAttemptAuditEvents != nil,
 		fieldDiscovery:     fieldService != nil,
 		previews:           searchWebSocket != nil,
+		knowledge: configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
+			knowledgePreview != nil && knowledgePreview.Ready() &&
+			knowledgeAdmission && knowledgeExecution &&
+			inspectionService != nil && searchHistoryService != nil &&
+			exportService != nil && timelineService != nil &&
+			fieldService != nil && suggestionService != nil,
 	})
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
@@ -987,6 +1017,7 @@ func NewHandler(config Config) (*Handler, error) {
 		knowledgeWriter:            knowledgeWriter,
 		knowledgeApps:              knowledgeApps,
 		knowledgeAttempts:          knowledgeAttempts,
+		knowledgePreview:           knowledgePreview,
 		knowledgeSearchAdmission:   knowledgeAdmission,
 		savedSearches:              config.SavedSearches,
 		searchHistory:              searchHistoryService,
@@ -1130,6 +1161,9 @@ func NewHandler(config Config) (*Handler, error) {
 		} {
 			apiRoutes[path] = http.MethodPost
 		}
+	}
+	if api.knowledgePreviewConfigured() {
+		apiRoutes[knowledgeObjectsPreviewPath] = http.MethodPost
 	}
 	if api.exports != nil {
 		for _, path := range []string{
@@ -1313,6 +1347,7 @@ type serviceCapabilities struct {
 	searchAttemptAudit bool
 	fieldDiscovery     bool
 	previews           bool
+	knowledge          bool
 }
 
 func featuresForServices(features []opensplunkv1.ServerFeature, capabilities serviceCapabilities) []opensplunkv1.ServerFeature {
@@ -1335,9 +1370,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT, capabilities.searchAttemptAudit},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
-		// Reserved until the complete Tier-1 knowledge service, admission,
-		// execution, inspection, and browser family is configured together.
-		{opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS, false},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS, capabilities.knowledge},
 	}
 	enabled := make(map[opensplunkv1.ServerFeature]bool, len(managed))
 	for _, item := range managed {

@@ -77,7 +77,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationPinsFreshSchemaAndChecksum(t *te
 	var version int
 	var name string
 	var checksum []byte
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT version, name, checksum
 		FROM schema_migrations
 		WHERE version = 34`).Scan(&version, &name, &checksum); err != nil {
@@ -119,7 +119,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationPinsFreshSchemaAndChecksum(t *te
 		index := index
 		t.Run(index.name, func(t *testing.T) {
 			var unique, partial int
-			if err := raw.QueryRow(`
+			if err := raw.QueryRowContext(t.Context(), `
 				SELECT "unique", partial
 				FROM pragma_index_list(?)
 				WHERE name = ?`, index.table, index.name).Scan(&unique, &partial); err != nil {
@@ -131,7 +131,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationPinsFreshSchemaAndChecksum(t *te
 			assertKnowledge0034IndexColumns(t, raw, index.name, index.columns)
 
 			var statement string
-			if err := raw.QueryRow(`
+			if err := raw.QueryRowContext(t.Context(), `
 				SELECT sql FROM sqlite_schema
 				WHERE type = 'index' AND name = ?`, index.name).Scan(&statement); err != nil {
 				t.Fatalf("read index SQL: %v", err)
@@ -159,7 +159,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationUpgradesWithoutChangingCatalogSt
 	insertKnowledgeStateVersion(t, raw, stateVersionFixture{
 		objectID: "ko-0034-draft", version: 1, state: "draft", mutation: "create", timestamp: 20,
 	})
-	if _, err := raw.Exec(`INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-empty')`); err != nil {
+	if _, err := raw.ExecContext(t.Context(), `INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-empty')`); err != nil {
 		t.Fatalf("seed empty tenant ledger: %v", err)
 	}
 	activeToken := readKnowledgeRevisionToken(t, raw, "tenant-a", 0)
@@ -202,7 +202,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationRollsBackBothIndexes(t *testing.
 	if err := ApplyMigrations(context.Background(), raw, migrationsBefore(t, "0034_")); err != nil {
 		t.Fatalf("apply through migration 0033: %v", err)
 	}
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		CREATE VIEW knowledge_objects_active_tenant_idx AS
 		SELECT tenant_id, knowledge_object_id, current_version
 		FROM knowledge_objects WHERE 0`); err != nil {
@@ -224,7 +224,7 @@ func TestKnowledgeIndexAdmissionDriversMigrationRollsBackBothIndexes(t *testing.
 		SELECT count(*) FROM sqlite_schema
 		WHERE type = 'view' AND name = 'knowledge_objects_active_tenant_idx'`)
 
-	if _, err := raw.Exec(`DROP VIEW knowledge_objects_active_tenant_idx`); err != nil {
+	if _, err := raw.ExecContext(t.Context(), `DROP VIEW knowledge_objects_active_tenant_idx`); err != nil {
 		t.Fatalf("drop migration conflict: %v", err)
 	}
 	if err := ApplyMigrations(context.Background(), raw, migrations.SQLite()); err != nil {
@@ -250,7 +250,7 @@ func TestKnowledgeIndexAdmissionDriversIgnoreEmptyAndInactiveDecoys(t *testing.T
 	})
 
 	const decoyCount = 4096
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		WITH RECURSIVE sequence(n) AS (
 			VALUES (1)
 			UNION ALL
@@ -444,7 +444,7 @@ func assertKnowledge0034DriverPlans(t *testing.T, db *sql.DB) {
 
 func knowledge0034ExplainDetails(t *testing.T, db *sql.DB, query string) []string {
 	t.Helper()
-	rows, err := db.Query(query)
+	rows, err := db.QueryContext(t.Context(), query)
 	if err != nil {
 		t.Fatalf("explain query: %v", err)
 	}
@@ -466,7 +466,7 @@ func knowledge0034ExplainDetails(t *testing.T, db *sql.DB, query string) []strin
 
 func assertKnowledge0034IndexColumns(t *testing.T, db *sql.DB, name string, want []string) {
 	t.Helper()
-	rows, err := db.Query(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, name)
+	rows, err := db.QueryContext(t.Context(), `SELECT name FROM pragma_index_info(?) ORDER BY seqno`, name)
 	if err != nil {
 		t.Fatalf("read index %s columns: %v", name, err)
 	}

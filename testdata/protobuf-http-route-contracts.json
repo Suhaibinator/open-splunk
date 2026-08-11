@@ -327,6 +327,15 @@
       "responseFutureWire": "CgIIAfp/MmZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL3ZhbGlkYXRlOnJlc3BvbnNl"
     },
     {
+      "path": "/api/v1/knowledge/objects/preview",
+      "requestType": "PreviewKnowledgeObjectRequest",
+      "responseType": "PreviewKnowledgeObjectResponse",
+      "requestKnownWire": "CikvYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL3ByZXZpZXc6cmVxdWVzdA==",
+      "requestFutureWire": "CikvYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL3ByZXZpZXc6cmVxdWVzdPp/MGZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL3ByZXZpZXc6cmVxdWVzdA==",
+      "responseKnownWire": "CgIIAQ==",
+      "responseFutureWire": "CgIIAfp/MWZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL3ByZXZpZXc6cmVzcG9uc2U="
+    },
+    {
       "path": "/api/v1/indexes/create",
       "requestType": "CreateIndexRequest",
       "responseType": "CreateIndexResponse",

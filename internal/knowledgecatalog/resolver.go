@@ -327,9 +327,9 @@ func (resolver *Resolver) resolveOnce(
 	authority, err := knowledgesnapshot.Prepare(input)
 	if err != nil {
 		if errors.Is(err, knowledgesnapshot.ErrResourceLimit) {
-			return Resolution{}, fmt.Errorf("%w: prepare resolved knowledge authority: %v", control.ErrCapacityExceeded, err)
+			return Resolution{}, fmt.Errorf("%w: prepare resolved knowledge authority: %w", control.ErrCapacityExceeded, err)
 		}
-		return Resolution{}, fmt.Errorf("%w: prepared knowledge authority rejected persisted candidates: %v", ErrCorrupt, err)
+		return Resolution{}, fmt.Errorf("%w: prepared knowledge authority rejected persisted candidates: %w", ErrCorrupt, err)
 	}
 	if authority.StaticCharges() != staticCharges {
 		return Resolution{}, fmt.Errorf("%w: independently derived static charges disagree", ErrCorrupt)
@@ -410,7 +410,7 @@ func readActiveResolutionApp(
 		record.TenantIDBytes < 1 || record.TenantIDBytes > maximumTenantIDBytes ||
 		record.StateBytes != int64(len(record.State)) ||
 		(record.State != string(control.AppStateActive) && record.State != string(control.AppStateArchived)) ||
-		!record.Revision.Valid || record.Revision.Int64 < 1 || record.Revision.Int64 > math.MaxInt64 {
+		!record.Revision.Valid || record.Revision.Int64 < 1 {
 		return resolutionAppAuthority{}, false, fmt.Errorf("%w: selected app authority is invalid", ErrCorrupt)
 	}
 	if record.State != string(control.AppStateActive) {
@@ -566,7 +566,7 @@ func resolveCandidatePrecedence(
 		}
 		semantics, err := compileResolutionDefinition(normalized)
 		if err != nil {
-			return knowledgesnapshot.Input{}, fmt.Errorf("%w: active candidate definition is not executable: %v", ErrCorrupt, err)
+			return knowledgesnapshot.Input{}, fmt.Errorf("%w: active candidate definition is not executable: %w", ErrCorrupt, err)
 		}
 		intersects, err := resolutionSelectorIntersects(ctx, normalized.Selector, scope.indexes)
 		if err != nil {
@@ -635,9 +635,10 @@ func resolveCandidatePrecedence(
 	}
 
 	input := knowledgesnapshot.Input{
-		TenantID:                   strings.Clone(scope.tenantID),
-		PrincipalID:                strings.Clone(scope.principalID),
-		AppID:                      strings.Clone(scope.appID),
+		TenantID:    strings.Clone(scope.tenantID),
+		PrincipalID: strings.Clone(scope.principalID),
+		AppID:       strings.Clone(scope.appID),
+		// #nosec G115 -- the resolution catalog state is validated before snapshot construction.
 		TenantCatalogRevision:      uint64(catalog.revision),
 		EffectiveAuthorizedIndexes: slices.Clone(scope.indexes),
 		Objects:                    make([]knowledgesnapshot.Object, 0, len(winners)),
@@ -656,10 +657,12 @@ func resolveCandidatePrecedence(
 
 	winnerKeys := make(map[dependencyVersionKey]resolutionCandidate, len(winners))
 	for _, winner := range winners {
+		// #nosec G115 -- candidate hydration validates public versions against math.MaxInt64.
+		winnerVersion := int64(winner.object.Version)
 		version, found := versions[winner.object.KnowledgeObjectID]
 		if !found || version.TenantID != scope.tenantID ||
 			version.KnowledgeObjectID != winner.object.KnowledgeObjectID ||
-			version.ObjectVersion != int64(winner.object.Version) {
+			version.ObjectVersion != winnerVersion {
 			return knowledgesnapshot.Input{}, fmt.Errorf(
 				"%w: hydrated current-version authority is incomplete",
 				ErrCorrupt,
@@ -678,7 +681,7 @@ func resolveCandidatePrecedence(
 		input.Objects = append(input.Objects, object)
 		key := dependencyVersionKey{
 			objectID: winner.object.KnowledgeObjectID,
-			version:  int64(winner.object.Version),
+			version:  winnerVersion,
 		}
 		winnerKeys[key] = winner
 	}
@@ -707,8 +710,9 @@ func resolveCandidatePrecedence(
 				SourceObjectID: winner.object.KnowledgeObjectID,
 				SourceVersion:  winner.object.Version,
 				TargetObjectID: dependency.TargetObjectID,
-				TargetVersion:  uint64(dependency.TargetObjectVersion),
-				Role:           opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+				// #nosec G115 -- hydrated dependency target versions are validated as positive.
+				TargetVersion: uint64(dependency.TargetObjectVersion),
+				Role:          opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 			})
 		}
 	}
@@ -856,9 +860,12 @@ func compileResolutionDefinition(
 					return resolutionDefinitionSemantics{}, errors.New("regex capture order disagrees with declared outputs")
 				}
 			}
+			// #nosec G115 -- output cardinality is bounded by the compiled capture limit.
 			semantics.charges.GeneratedFields = uint32(len(outputs))
 			semantics.charges.ExtractionRegexPrograms = 1
+			// #nosec G115 -- successful compilation returns nonnegative bounded work units.
 			semantics.charges.ExtractionRegexWorkUnits = uint64(compiled.ProgramWorkUnits)
+			// #nosec G115 -- output cardinality is bounded by the compiled capture limit.
 			semantics.charges.ExtractionOutputs = uint32(len(outputs))
 		case *opensplunkv1.FieldExtractionDefinition_Json:
 			if extraction == nil || extraction.Json == nil {
@@ -960,9 +967,11 @@ func validateWinningResolutionDependency(
 
 func resolutionVersionMatchesCandidate(version versionRecord, candidate resolutionCandidate) bool {
 	object := candidate.object
+	// #nosec G115 -- resolution candidates validate public versions against math.MaxInt64.
+	objectVersion := int64(object.Version)
 	return version.TenantID == object.TenantID &&
 		version.KnowledgeObjectID == object.KnowledgeObjectID &&
-		version.ObjectVersion == int64(object.Version) &&
+		version.ObjectVersion == objectVersion &&
 		version.AppID == object.AppID && version.OwnerID == object.OwnerID &&
 		version.ObjectType == object.ObjectType && version.Name == object.Name &&
 		version.SharingScope == object.SharingScope && version.State == StateActive &&

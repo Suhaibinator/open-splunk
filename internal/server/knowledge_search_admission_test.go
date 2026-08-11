@@ -15,11 +15,16 @@ import (
 
 type knowledgeAdmissionSearchJobs struct {
 	*fakeSearchJobs
-	enabled bool
+	enabled          bool
+	executionEnabled bool
 }
 
 func (jobs *knowledgeAdmissionSearchJobs) KnowledgeAdmissionEnabled() bool {
 	return jobs != nil && jobs.enabled
+}
+
+func (jobs *knowledgeAdmissionSearchJobs) KnowledgeExecutionEnabled() bool {
+	return jobs != nil && jobs.executionEnabled
 }
 
 func TestKnowledgeSearchAdmissionRequiresLiveAppCatalog(t *testing.T) {

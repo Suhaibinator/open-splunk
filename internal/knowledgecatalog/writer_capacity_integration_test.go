@@ -204,7 +204,7 @@ func TestWriterPressureReclaimsOnlyABoundedOldestExpiredPrefix(t *testing.T) {
 		IDGenerator: func() (string, error) {
 			cancelIDCalls.Add(1)
 			cancel()
-			return "ko_capacity_cancelled_000001", nil
+			return "ko_capacity_canceled_000001", nil
 		},
 		IdempotencyRetention: 365 * 24 * time.Hour,
 	})
@@ -214,12 +214,12 @@ func TestWriterPressureReclaimsOnlyABoundedOldestExpiredPrefix(t *testing.T) {
 	if _, err := cancelWriter.Create(
 		cancelContext,
 		harness.writeScope,
-		capacityCreateRequest("capacity-reclaim-cancelled", "capacity-reclaim-cancel-0001"),
+		capacityCreateRequest("capacity-reclaim-canceled", "capacity-reclaim-cancel-0001"),
 	); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Create() cancelled after reclamation error = %v, want context.Canceled", err)
+		t.Fatalf("Create() canceled after reclamation error = %v, want context.Canceled", err)
 	}
 	if cancelIDCalls.Load() != 1 || cancelClockCalls.Load() != 0 {
-		t.Fatalf("cancelled reclaim generator calls = IDs %d clocks %d, want 1/0", cancelIDCalls.Load(), cancelClockCalls.Load())
+		t.Fatalf("canceled reclaim generator calls = IDs %d clocks %d, want 1/0", cancelIDCalls.Load(), cancelClockCalls.Load())
 	}
 	assertWriterAuthoritySnapshotsEqual(t, readWriterAuthoritySnapshot(t, harness.database), before)
 
@@ -1613,6 +1613,7 @@ func seedCapacityReceiptCopies(t *testing.T, database *control.DB, seed capacity
 		for _, record := range staged[offset:end] {
 			arguments = append(arguments, record.requestID, record.revision, record.token, record.outcome)
 		}
+		// #nosec G202 -- placeholders is generated only from a bounded batch size and contains no data.
 		if _, err := tx.ExecContext(t.Context(), `
 			INSERT INTO writer_capacity_receipt_seed (
 				request_id, catalog_revision, catalog_state_token, outcome_proto

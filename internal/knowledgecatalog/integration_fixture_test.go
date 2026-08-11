@@ -184,7 +184,7 @@ func insertIntegrationFutureObject(
 	if !ok || !scopeOK {
 		t.Fatal("future fixture metadata has unsupported identity")
 	}
-	if _, err := tx.Exec(`INSERT INTO knowledge_objects (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
 		tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 		disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
@@ -235,7 +235,7 @@ func stageIntegrationKnownPublication(
 	}
 	t.Cleanup(func() { _ = tx.Rollback() })
 	var currentVersion int64
-	if err := tx.QueryRow(`SELECT current_version FROM knowledge_objects
+	if err := tx.QueryRowContext(t.Context(), `SELECT current_version FROM knowledge_objects
 		WHERE tenant_id = ? AND knowledge_object_id = ?`, testTenant, objectID).Scan(&currentVersion); err != nil {
 		t.Fatalf("read staged current version: %v", err)
 	}
@@ -268,7 +268,7 @@ func stageIntegrationKnownPublication(
 	if state == StateDisabled {
 		if mutation == "disable" {
 			disabledAt = timestamp
-		} else if err := tx.QueryRow(`SELECT disabled_at_unix_micro
+		} else if err := tx.QueryRowContext(t.Context(), `SELECT disabled_at_unix_micro
 			FROM knowledge_objects WHERE tenant_id = ? AND knowledge_object_id = ?`,
 			testTenant, objectID,
 		).Scan(&disabledAt); err != nil {
@@ -278,7 +278,7 @@ func stageIntegrationKnownPublication(
 	if state == StateDeleted {
 		deletedAt = timestamp
 	}
-	result, err := tx.Exec(`UPDATE knowledge_objects SET
+	result, err := tx.ExecContext(t.Context(), `UPDATE knowledge_objects SET
 		current_version = ?, app_id = ?, owner_id = ?, object_type = ?, name = ?,
 		sharing_scope = ?, state = ?, definition_digest = ?, updated_at_unix_micro = ?,
 		disabled_at_unix_micro = ?, quarantined_at_unix_micro = NULL,
@@ -310,11 +310,11 @@ func stageIntegrationKnownPublication(
 
 func ensureIntegrationCatalogLedgers(t *testing.T, tx *sql.Tx) {
 	t.Helper()
-	if _, err := tx.Exec(`INSERT INTO knowledge_catalog_tenants (tenant_id)
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_catalog_tenants (tenant_id)
 		SELECT ? WHERE NOT EXISTS (SELECT 1 FROM knowledge_catalog_tenants WHERE tenant_id = ?)`, testTenant, testTenant); err != nil {
 		t.Fatalf("ensure catalog ledger: %v", err)
 	}
-	if _, err := tx.Exec(`INSERT INTO knowledge_projection_tenant_ledgers (tenant_id)
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_projection_tenant_ledgers (tenant_id)
 		SELECT ? WHERE NOT EXISTS (SELECT 1 FROM knowledge_projection_tenant_ledgers WHERE tenant_id = ?)`, testTenant, testTenant); err != nil {
 		t.Fatalf("ensure projection ledger: %v", err)
 	}
@@ -327,7 +327,7 @@ func insertIntegrationDefinitionBlob(
 	timestamp int64,
 ) {
 	t.Helper()
-	if _, err := tx.Exec(`INSERT INTO knowledge_definition_blobs (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
 	) VALUES (?, ?, ?, ?, ?)`, testTenant, digest, definition, len(definition), timestamp); err != nil {
 		t.Fatalf("insert integration definition blob: %v", err)
@@ -341,7 +341,7 @@ func ensureIntegrationDefinitionBlob(
 	timestamp int64,
 ) {
 	t.Helper()
-	result, err := tx.Exec(`INSERT INTO knowledge_definition_blobs (
+	result, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_definition_blobs (
 		tenant_id, definition_digest, definition_proto, definition_bytes, created_at_unix_micro
 	) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (
 		SELECT 1 FROM knowledge_definition_blobs
@@ -390,7 +390,7 @@ func insertIntegrationVersionWithDependencies(
 	if !ok || !scopeOK {
 		t.Fatal("integration version has unsupported identity")
 	}
-	if _, err := tx.Exec(`INSERT INTO knowledge_object_versions (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_versions (
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, definition_digest, dependency_count, mutation_kind,
 		quarantine_reason, created_at_unix_micro
@@ -412,7 +412,7 @@ func insertIntegrationVersionWithDependencies(
 		t.Fatalf("insert integration version: %v", err)
 	}
 	for ordinal, dependency := range dependencies {
-		if _, err := tx.Exec(`INSERT INTO knowledge_object_dependencies (
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_dependencies (
 			tenant_id, source_object_id, source_object_version, ordinal,
 			target_kind, target_object_id, target_object_version, dependency_role
 		) VALUES (?, ?, ?, ?, 'object', ?, ?, 'field_input')`,
@@ -422,7 +422,7 @@ func insertIntegrationVersionWithDependencies(
 			t.Fatalf("insert integration dependency: %v", err)
 		}
 	}
-	if _, err := tx.Exec(`INSERT INTO knowledge_object_dependency_seals (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_dependency_seals (
 		tenant_id, knowledge_object_id, object_version, dependency_count
 	) VALUES (?, ?, ?, ?)`, testTenant, objectID, version, len(dependencies)); err != nil {
 		t.Fatalf("seal integration dependencies: %v", err)
@@ -436,7 +436,7 @@ func readIntegrationCurrentDependencies(
 	currentVersion int64,
 ) []fixtureDependency {
 	t.Helper()
-	rows, err := tx.Query(`SELECT target_object_id, target_object_version
+	rows, err := tx.QueryContext(t.Context(), `SELECT target_object_id, target_object_version
 		FROM knowledge_object_dependencies
 		WHERE tenant_id = ? AND source_object_id = ? AND source_object_version = ?
 		ORDER BY ordinal`, testTenant, objectID, currentVersion)
@@ -495,7 +495,7 @@ func insertIntegrationProjection(
 	if !ok || !scopeOK {
 		t.Fatal("integration projection has unsupported identity")
 	}
-	if _, err := tx.Exec(`INSERT INTO knowledge_object_list_projections (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_projections (
 		tenant_id, knowledge_object_id, object_version, app_id, owner_id, object_type, name,
 		sharing_scope, state, description_present, description, index_selector_count,
 		host_selector_count, source_selector_count, sourcetype_selector_count,
@@ -522,7 +522,7 @@ func insertIntegrationProjection(
 		t.Fatalf("insert integration projection: %v", err)
 	}
 	insertSelectorRows(t, tx, objectID, version, metadata)
-	if _, err := tx.Exec(`INSERT INTO knowledge_object_list_projection_seals (
+	if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_object_list_projection_seals (
 		tenant_id, knowledge_object_id, object_version, projection_bytes, canonical_selector_bytes
 	) VALUES (?, ?, ?, ?, ?)`,
 		testTenant,
@@ -537,7 +537,7 @@ func insertIntegrationProjection(
 
 func advanceIntegrationCatalogRevision(t *testing.T, tx *sql.Tx) {
 	t.Helper()
-	result, err := tx.Exec(`UPDATE knowledge_catalog_tenants
+	result, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
 		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant)
 	if err != nil {
 		t.Fatalf("advance integration catalog revision: %v", err)

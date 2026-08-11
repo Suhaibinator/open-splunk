@@ -427,8 +427,9 @@ func TestValidatePublicationWinnerCohortRequiresExactExistingAuthority(t *testin
 	); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("invalid non-winning candidate error = %v, want InvalidArgument", err)
 	}
+	var nilContext context.Context
 	if _, err := validatePublicationWinnerCohort(
-		nil, base, absentCandidate, false,
+		nilContext, base, absentCandidate, false,
 	); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("nil context error = %v, want InvalidArgument", err)
 	}
@@ -483,7 +484,7 @@ func TestCompilePublicationWinnerCohortRejectsMalformedAuthority(t *testing.T) {
 		},
 		{
 			name: "candidate absent",
-			mutate: func(cohort *publicationWinnerCohort, candidate *publicationCandidateAuthority) {
+			mutate: func(_ *publicationWinnerCohort, candidate *publicationCandidateAuthority) {
 				candidate.objectID = "ko-absent"
 			},
 			wantErr: control.ErrDependencyConflict,
@@ -718,7 +719,8 @@ func TestCompilePublicationWinnerCohortRejectsChangedExistingWinner(t *testing.T
 
 func TestCompilePublicationWinnerCohortContextAndProgramLimit(t *testing.T) {
 	cohort, candidate := publicationTestChain(t)
-	if _, err := compilePublicationWinnerCohort(nil, cohort, candidate); !errors.Is(err, control.ErrInvalidArgument) {
+	var nilContext context.Context
+	if _, err := compilePublicationWinnerCohort(nilContext, cohort, candidate); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("nil context error = %v, want ErrInvalidArgument", err)
 	}
 	canceled, cancel := context.WithCancel(t.Context())

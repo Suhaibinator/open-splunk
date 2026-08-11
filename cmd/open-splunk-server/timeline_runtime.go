@@ -14,6 +14,21 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/server"
 )
 
+const (
+	runtimeFieldAnalysisMaxConcurrent      = 2
+	runtimeFieldCatalogMemoryEnvelopeBytes = uint64(512 << 20)
+)
+
+// The field-analysis gate is shared by catalog and summary work. This contract
+// budgets only aggregate configured ClickHouse max_memory_usage for catalog
+// queries; summaries use separate settings and are not bounded by this envelope.
+func runtimeFieldCatalogMemoryContractValid() bool {
+	admitted := uint64(runtimeFieldAnalysisMaxConcurrent) * queryexec.MaximumFieldCatalogMemoryBytes
+	next := uint64(runtimeFieldAnalysisMaxConcurrent+1) * queryexec.MaximumFieldCatalogMemoryBytes
+	return admitted <= runtimeFieldCatalogMemoryEnvelopeBytes &&
+		next > runtimeFieldCatalogMemoryEnvelopeBytes
+}
+
 // runtimeSearchAnalysis groups the derived-search services that share the
 // runtime's search-job manager, compiler, executor, and ClickHouse connection.
 // Timeline analysis is synchronous and owns no resources. Suggestions own
@@ -57,6 +72,9 @@ type runtimeSearchAnalysisConfig struct {
 }
 
 func newRuntimeSearchAnalysis(config runtimeSearchAnalysisConfig) (*runtimeSearchAnalysis, error) {
+	if !runtimeFieldCatalogMemoryContractValid() {
+		return nil, errors.New("compose search analysis runtime: field-catalog memory contract is invalid")
+	}
 	timelines, err := searchanalysis.New(searchanalysis.Config{
 		Searches: config.Searches,
 		Compiler: config.Compiler,
@@ -80,6 +98,7 @@ func newRuntimeSearchAnalysis(config runtimeSearchAnalysisConfig) (*runtimeSearc
 		Compiler:         config.Compiler,
 		Executor:         config.Executor,
 		CursorScope:      config.FieldCursorScope,
+		MaxConcurrent:    runtimeFieldAnalysisMaxConcurrent,
 	})
 	if err != nil {
 		_ = suggestions.Close(context.Background())

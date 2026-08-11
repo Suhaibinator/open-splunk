@@ -89,7 +89,8 @@ func (writer *Writer) replayProjectedObject(
 		return replayObjectResponseAuthority{}, err
 	}
 	return replayObjectResponseAuthority{
-		object:     projection,
+		object: projection,
+		// #nosec G115 -- replay authority validates a positive committed catalog revision.
 		revision:   uint64(record.CommittedCatalogRevision),
 		stateToken: bytes.Clone(record.CommittedCatalogStateToken),
 	}, nil
@@ -111,8 +112,9 @@ func (writer *Writer) replayDelete(
 		return nil, fmt.Errorf("%w: delete replay is not the current terminal version", ErrCorrupt)
 	}
 	return &opensplunkv1.DeleteKnowledgeObjectResponse{
-		KnowledgeObjectId:       strings.Clone(authority.reference.GetKnowledgeObjectId()),
-		DeletedVersion:          authority.reference.GetVersion(),
+		KnowledgeObjectId: strings.Clone(authority.reference.GetKnowledgeObjectId()),
+		DeletedVersion:    authority.reference.GetVersion(),
+		// #nosec G115 -- replay authority validates a positive committed catalog revision.
 		TenantCatalogRevision:   uint64(record.CommittedCatalogRevision),
 		TenantCatalogStateToken: bytes.Clone(record.CommittedCatalogStateToken),
 	}, nil

@@ -28,6 +28,7 @@ const (
 	knowledgeObjectsDependenciesRoute = "/knowledge/objects/dependencies"
 	knowledgeObjectsDependentsRoute   = "/knowledge/objects/dependents"
 	knowledgeObjectsValidateRoute     = "/knowledge/objects/validate"
+	knowledgeObjectsPreviewRoute      = "/knowledge/objects/preview"
 	knowledgeObjectsUpdateRoute       = "/knowledge/objects/update"
 	knowledgeObjectsSetStateRoute     = "/knowledge/objects/set-state"
 	knowledgeObjectsDeleteRoute       = "/knowledge/objects/delete"
@@ -38,6 +39,7 @@ const (
 	knowledgeObjectsDependenciesPath = apiV1PathPrefix + knowledgeObjectsDependenciesRoute
 	knowledgeObjectsDependentsPath   = apiV1PathPrefix + knowledgeObjectsDependentsRoute
 	knowledgeObjectsValidatePath     = apiV1PathPrefix + knowledgeObjectsValidateRoute
+	knowledgeObjectsPreviewPath      = apiV1PathPrefix + knowledgeObjectsPreviewRoute
 	knowledgeObjectsUpdatePath       = apiV1PathPrefix + knowledgeObjectsUpdateRoute
 	knowledgeObjectsSetStatePath     = apiV1PathPrefix + knowledgeObjectsSetStateRoute
 	knowledgeObjectsDeletePath       = apiV1PathPrefix + knowledgeObjectsDeleteRoute
@@ -122,6 +124,11 @@ func (handler *apiHandler) knowledgeManagementConfigured() bool {
 		!isNilDependency(handler.knowledgeAttempts)
 }
 
+func (handler *apiHandler) knowledgePreviewConfigured() bool {
+	return handler != nil && handler.knowledgeManagementConfigured() &&
+		handler.knowledgePreview != nil && handler.knowledgePreview.Ready()
+}
+
 func replaysUnavailableActiveMutations(writer KnowledgeWriter) bool {
 	if isNilDependency(writer) {
 		return false
@@ -136,7 +143,7 @@ func replaysUnavailableActiveMutations(writer KnowledgeWriter) bool {
 func (handler *apiHandler) knowledgeManagementRoutes(
 	noAuth router.AuthLevel,
 ) []protobufRouteDefinition {
-	return []protobufRouteDefinition{
+	routes := []protobufRouteDefinition{
 		newForwardCompatibleProtoRoute[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.CreateKnowledgeObjectRequest, *serializedCreateKnowledgeObjectResponse]{
 			Path: knowledgeObjectsCreateRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
 			Codec: newSerializedCreateKnowledgeObjectCodec(), Handler: handler.createKnowledgeObject,
@@ -192,6 +199,18 @@ func (handler *apiHandler) knowledgeManagementRoutes(
 			Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeSmallRequestBytes},
 		}),
 	}
+	if handler.knowledgePreviewConfigured() {
+		routes = append(
+			routes,
+			newForwardCompatibleProtoRoute[*opensplunkv1.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse](router.RouteConfig[*opensplunkv1.PreviewKnowledgeObjectRequest, *serializedPreviewKnowledgeObjectResponse]{
+				Path: knowledgeObjectsPreviewRoute, Methods: []router.HttpMethod{router.MethodPost}, AuthLevel: &noAuth,
+				Codec: newPreviewKnowledgeObjectRequestCodec(), Handler: handler.previewKnowledgeObject,
+				SourceType: router.Body, Sanitizer: forwardCompatibleProtoSanitizer[*opensplunkv1.PreviewKnowledgeObjectRequest],
+				Overrides: sroutercommon.RouteOverrides{MaxBodySize: maximumKnowledgeMutationRequestBytes},
+			}),
+		)
+	}
+	return routes
 }
 
 // KnowledgeAppCatalogResult is one complete, bounded snapshot of every app in
@@ -917,7 +936,8 @@ func knowledgeRejectionContextSatisfies(
 		bindings[0].kind == knowledgeRejectionBindingCreate {
 		action, found := knowledgeAttemptActionFromRequest(request)
 		validationCreateDependency = found &&
-			action == knowledgeattemptaudit.ActionValidate
+			(action == knowledgeattemptaudit.ActionValidate ||
+				action == knowledgeattemptaudit.ActionPreview)
 	}
 	requiresObject := reason == knowledgeattemptaudit.ReasonVersionConflict ||
 		reason == knowledgeattemptaudit.ReasonForbiddenDependency &&

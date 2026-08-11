@@ -2,6 +2,8 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import type { KnowledgeObject } from "@/gen/ts/open_splunk/v1/knowledge";
+
 import {
   KNOWLEDGE_LIFECYCLE_STATE_FILTER_OPTIONS,
   KNOWLEDGE_MANAGER_MAXIMUM_FILTER_BYTES,
@@ -9,6 +11,7 @@ import {
   KNOWLEDGE_SHARING_SCOPE_FILTER_OPTIONS,
   KNOWLEDGE_SORT_OPTIONS,
   boundedKnowledgePageSize,
+  createKnowledgeMutationClient,
   createKnowledgeReadClient,
   knowledgeLifecycleStateFilterFromControlValue,
   knowledgeObjectTypeFilterFromControlValue,
@@ -16,6 +19,7 @@ import {
   knowledgeSortChoiceFromControlValue,
   knowledgeTextFilterFromDraft,
   loadKnowledgeDetail,
+  loadKnowledgeMutationDetail,
   loadKnowledgePage,
   loadKnowledgeRelationshipPage,
   mergeKnowledgeContinuation,
@@ -32,6 +36,12 @@ import {
   type KnowledgeSharingScopeFilter,
   type KnowledgeSortChoice,
 } from "./knowledge-manager-data";
+import {
+  KnowledgeCreateControl,
+  KnowledgeObjectMutationControls,
+} from "./knowledge-manager-mutations";
+import { KnowledgeManagerPreview } from "./knowledge-manager-preview";
+import { createKnowledgePreviewClient } from "./knowledge-manager-preview-data";
 import {
   safeKnowledgeManagerAppOptions,
   type KnowledgeManagerPanelProps,
@@ -191,6 +201,14 @@ export function KnowledgeManagerPanel({
     () => createKnowledgeReadClient({ baseUrl: apiBaseUrl }),
     [apiBaseUrl],
   );
+  const mutationClient = useMemo(
+    () => createKnowledgeMutationClient({ baseUrl: apiBaseUrl }),
+    [apiBaseUrl],
+  );
+  const previewClient = useMemo(
+    () => createKnowledgePreviewClient({ baseUrl: apiBaseUrl }),
+    [apiBaseUrl],
+  );
   const appOptions = useMemo(() => safeKnowledgeManagerAppOptions(apps) ?? [], [apps]);
   const pageSize = boundedKnowledgePageSize(maximumPageSize);
   const initialFilter = appOptions.some((app) => app.appId === initialAppId)
@@ -212,6 +230,8 @@ export function KnowledgeManagerPanel({
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [detailState, setDetailState] = useState<DetailState>("closed");
   const [detail, setDetail] = useState<KnowledgeObjectDisplay | null>(null);
+  const [detailAuthority, setDetailAuthority] = useState<KnowledgeObject | null>(null);
+  const [mutationSurfaceGeneration, setMutationSurfaceGeneration] = useState(0);
   const consumedPageTokensRef = useRef(new Set<string>());
   const listRequestRef = useRef<AbortController | null>(null);
   const detailRequestRef = useRef<AbortController | null>(null);
@@ -240,6 +260,8 @@ export function KnowledgeManagerPanel({
         setSelectedObjectId(null);
         setDetailState("closed");
         setDetail(null);
+        setDetailAuthority(null);
+        setMutationSurfaceGeneration((value) => value + 1);
         rowRefs.current.clear();
         focusDetailWhenReadyRef.current = false;
       },
@@ -257,6 +279,7 @@ export function KnowledgeManagerPanel({
     setSelectedObjectId(null);
     setDetailState("closed");
     setDetail(null);
+    setDetailAuthority(null);
     focusDetailWhenReadyRef.current = false;
     if (restoreFocus && priorId !== null) {
       window.requestAnimationFrame(() => rowRefs.current.get(priorId)?.focus());
@@ -330,8 +353,9 @@ export function KnowledgeManagerPanel({
     setSelectedObjectId(object.knowledgeObjectId);
     setDetailState("loading");
     setDetail(null);
+    setDetailAuthority(null);
     focusDetailWhenReadyRef.current = true;
-    void loadKnowledgeDetail(client, {
+    void loadKnowledgeMutationDetail(client, {
       knowledgeObjectId: object.knowledgeObjectId,
       version: object.version,
     }, {
@@ -344,6 +368,7 @@ export function KnowledgeManagerPanel({
         return;
       }
       setDetail(result.object);
+      setDetailAuthority(result.currentKnowledgeObject);
       setDetailState("available");
     });
   }, [client]);
@@ -487,10 +512,18 @@ export function KnowledgeManagerPanel({
         <div>
           <span className="knowledge-manager__eyebrow">ADVERTISED CAPABILITY</span>
           <h2 id="knowledge-manager-title">Knowledge Manager</h2>
-          <p>Inspect visible field knowledge. This KO-0 surface is read-only.</p>
+          <p>Create, validate, and manage visible Tier-1 field knowledge.</p>
         </div>
-        <span className="knowledge-manager__readonly" aria-label="Read-only surface">Read only</span>
+        <span className="knowledge-manager__readonly" aria-label="Tier-1 management surface">Tier 1</span>
       </header>
+
+      <KnowledgeCreateControl
+        key={`create:${mutationSurfaceGeneration}`}
+        client={mutationClient}
+        apps={appOptions}
+        initialAppId={appId}
+        onCommitted={() => setReloadGeneration((value) => value + 1)}
+      />
 
       <div className="knowledge-manager__toolbar">
         <div className="knowledge-manager__filters">
@@ -581,12 +614,30 @@ export function KnowledgeManagerPanel({
           detailState={detailState}
           detail={detail}
           detailRef={detailRef}
-          detailExtension={detailState === "available" && detail !== null ? (
-            <KnowledgeRelationships
-              client={client}
-              object={detail}
-              pageSize={pageSize}
-            />
+          detailExtension={detailState === "available"
+            && detail !== null
+            && detailAuthority !== null ? (
+            <>
+              <KnowledgeObjectMutationControls
+                key={`${detailAuthority.knowledgeObjectId}:${detailAuthority.version.toString()}`}
+                client={mutationClient}
+                apps={appOptions}
+                currentKnowledgeObject={detailAuthority}
+                onCommitted={() => {
+                  closeDetail(false);
+                  setReloadGeneration((value) => value + 1);
+                }}
+              />
+              <KnowledgeManagerPreview
+                client={previewClient}
+                currentKnowledgeObject={detailAuthority}
+              />
+              <KnowledgeRelationships
+                client={client}
+                object={detail}
+                pageSize={pageSize}
+              />
+            </>
           ) : null}
           onOpen={openDetail}
           onRowKeyDown={handleRowKeyDown}
@@ -993,7 +1044,7 @@ export function KnowledgeDetail({
         )}
         {object.definition.status === "recognized" ? (
           <p className="knowledge-manager__safe-note">
-            Authored pattern, JSON path, and expression text is intentionally omitted from this initial shell.
+            Authored pattern, JSON path, and expression text is shown only inside the explicit editor.
           </p>
         ) : null}
       </section>

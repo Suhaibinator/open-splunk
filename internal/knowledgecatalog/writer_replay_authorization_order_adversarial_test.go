@@ -251,6 +251,7 @@ func tamperAllWriterReplayReceipts(
 			}
 		}()
 	}
+	// #nosec G202 -- assignment is selected from a fixed test-case corruption matrix.
 	result, err := connection.ExecContext(t.Context(), `UPDATE knowledge_mutation_idempotency SET `+assignment+` WHERE tenant_id = ?`, writerFaultTenant)
 	if err != nil {
 		t.Fatalf("tamper replay receipts: %v", err)

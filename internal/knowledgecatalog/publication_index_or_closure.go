@@ -205,10 +205,7 @@ func canonicalPublicationIndexAtoms(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		pair := publicationIndexORPair{
-			before: atom.before,
-			after:  atom.after,
-		}
+		pair := publicationIndexORPair(atom)
 		if _, duplicate := seen[pair]; duplicate {
 			continue
 		}

@@ -287,7 +287,7 @@ func explainSQLiteQueryPlan(
 	arguments []any,
 ) []string {
 	t.Helper()
-	rows, err := database.Query("EXPLAIN QUERY PLAN "+query, arguments...)
+	rows, err := database.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+query, arguments...)
 	if err != nil {
 		t.Fatalf("explain SQLite query: %v\n%s", err, query)
 	}
@@ -342,7 +342,7 @@ func cloneHiddenQueryProgressFixtures(t *testing.T, database *control.DB, count 
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.Exec(`CREATE TEMP TABLE query_progress_hidden_ids (
+	if _, err := tx.ExecContext(t.Context(), `CREATE TEMP TABLE query_progress_hidden_ids (
 		knowledge_object_id TEXT PRIMARY KEY
 	)`); err != nil {
 		t.Fatal(err)
@@ -363,13 +363,13 @@ func cloneHiddenQueryProgressFixtures(t *testing.T, database *control.DB, count 
 			}
 			arguments = append(arguments, fmt.Sprintf("%s-progress-hidden-%05d", prefix, index))
 		}
-		if _, err := tx.Exec(statement.String(), arguments...); err != nil {
+		if _, err := tx.ExecContext(t.Context(), statement.String(), arguments...); err != nil {
 			t.Fatalf("stage hidden identities [%d,%d): %v", start, end, err)
 		}
 	}
 	copyAuthority := func(label, statement string) {
 		t.Helper()
-		if _, err := tx.Exec(statement, testTenant, "mmm-progress-hidden-source"); err != nil {
+		if _, err := tx.ExecContext(t.Context(), statement, testTenant, "mmm-progress-hidden-source"); err != nil {
 			t.Fatalf("clone hidden %s: %v", label, err)
 		}
 	}

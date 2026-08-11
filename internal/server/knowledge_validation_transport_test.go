@@ -346,14 +346,14 @@ func TestValidateKnowledgeObjectCodecRawLimitBothDecodeForms(t *testing.T) {
 	if _, err := codec.DecodeBytes(exact); err != nil {
 		t.Fatalf("DecodeBytes exact limit: %v", err)
 	}
-	if _, err := codec.Decode(httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(exact))); err != nil {
+	if _, err := codec.Decode(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", bytes.NewReader(exact))); err != nil {
 		t.Fatalf("Decode exact limit: %v", err)
 	}
 	over := append(exact, 0)
 	for name, decode := range map[string]func() error{
 		"bytes": func() error { _, err := codec.DecodeBytes(over); return err },
 		"http": func() error {
-			_, err := codec.Decode(httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(over)))
+			_, err := codec.Decode(httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", bytes.NewReader(over)))
 			return err
 		},
 	} {
@@ -377,7 +377,7 @@ func (reader *validateTrackingReadCloser) Close() error {
 
 func TestValidateKnowledgeObjectCodecClosesRequestBody(t *testing.T) {
 	body := &validateTrackingReadCloser{Reader: bytes.NewReader(nil)}
-	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
 	request.Body = body
 	if _, err := newValidateKnowledgeObjectCodec().Decode(request); err != nil {
 		t.Fatal(err)
@@ -422,8 +422,8 @@ func TestValidateKnowledgeObjectCodecWritesExactSealAndReleasesPermit(t *testing
 	released := 0
 	response := httptest.NewRecorder()
 	err := codec.Encode(response, newSerializedValidateKnowledgeObjectResponse(
-		sealed,
 		context.Background(),
+		sealed,
 		func() { released++ },
 	))
 	if err != nil || released != 1 || !bytes.Equal(response.Body.Bytes(), sealed.DeterministicBytes()) || response.Header().Get("Content-Type") != "application/x-protobuf" {
@@ -440,11 +440,11 @@ func TestValidateKnowledgeObjectCodecWritesExactSealAndReleasesPermit(t *testing
 		{name: "canceled", sealed: sealed, ctx: canceledValidateTestContext()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			released := 0
-			response := httptest.NewRecorder()
-			err := codec.Encode(response, newSerializedValidateKnowledgeObjectResponse(test.sealed, test.ctx, func() { released++ }))
-			if err == nil || released != 1 || response.Body.Len() != 0 {
-				t.Fatalf("Encode invalid state = %v / released %d / bytes %d", err, released, response.Body.Len())
+			innerReleased := 0
+			innerResponse := httptest.NewRecorder()
+			err := codec.Encode(innerResponse, newSerializedValidateKnowledgeObjectResponse(test.ctx, test.sealed, func() { innerReleased++ }))
+			if err == nil || innerReleased != 1 || innerResponse.Body.Len() != 0 {
+				t.Fatalf("Encode invalid state = %v / released %d / bytes %d", err, innerReleased, innerResponse.Body.Len())
 			}
 		})
 	}
@@ -452,11 +452,11 @@ func TestValidateKnowledgeObjectCodecWritesExactSealAndReleasesPermit(t *testing
 	if err := codec.Encode(httptest.NewRecorder(), nil); err == nil {
 		t.Fatal("nil serialized response was accepted")
 	}
-	if err := codec.Encode(httptest.NewRecorder(), newSerializedValidateKnowledgeObjectResponse(sealed, context.Background(), nil)); err == nil {
+	if err := codec.Encode(httptest.NewRecorder(), newSerializedValidateKnowledgeObjectResponse(context.Background(), sealed, nil)); err == nil {
 		t.Fatal("nil serialization release was accepted")
 	}
 	released = 0
-	if err := codec.Encode(nil, newSerializedValidateKnowledgeObjectResponse(sealed, context.Background(), func() { released++ })); err == nil || released != 1 {
+	if err := codec.Encode(nil, newSerializedValidateKnowledgeObjectResponse(context.Background(), sealed, func() { released++ })); err == nil || released != 1 {
 		t.Fatalf("nil response writer = %v / released %d", err, released)
 	}
 
@@ -464,7 +464,7 @@ func TestValidateKnowledgeObjectCodecWritesExactSealAndReleasesPermit(t *testing
 	copyBytes[0] ^= 0xff
 	response = httptest.NewRecorder()
 	released = 0
-	if err := codec.Encode(response, newSerializedValidateKnowledgeObjectResponse(sealed, context.Background(), func() { released++ })); err != nil || bytes.Equal(response.Body.Bytes(), copyBytes) || released != 1 {
+	if err := codec.Encode(response, newSerializedValidateKnowledgeObjectResponse(context.Background(), sealed, func() { released++ })); err != nil || bytes.Equal(response.Body.Bytes(), copyBytes) || released != 1 {
 		t.Fatalf("mutated seal accessor affected encoding: %v / %d", err, released)
 	}
 }
@@ -485,7 +485,7 @@ func TestValidateKnowledgeObjectCodecReleasesPermitOnWriteFailure(t *testing.T) 
 	released := 0
 	writer := &validateFailingResponseWriter{header: make(http.Header)}
 	err := newValidateKnowledgeObjectCodec().Encode(writer, newSerializedValidateKnowledgeObjectResponse(
-		validateTestSeal(t), context.Background(), func() { released++ },
+		context.Background(), validateTestSeal(t), func() { released++ },
 	))
 	if !errors.Is(err, io.ErrClosedPipe) || released != 1 {
 		t.Fatalf("write failure = %v / released %d", err, released)

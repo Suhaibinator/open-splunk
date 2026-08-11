@@ -426,7 +426,15 @@ func settingsForFieldSummary(
 	settings := maps.Clone(base)
 	settings["max_result_rows"] = min(base["max_result_rows"].(uint64), uint64(spec.MaximumDistinctValues)+2)
 	settings["max_result_bytes"] = min(base["max_result_bytes"].(uint64), maximumFieldSummaryResultBytes)
-	settings["max_rows_to_group_by"] = min(base["max_rows_to_group_by"].(uint64), uint64(spec.MaximumDistinctValues))
+	maximumGroups := uint64(spec.MaximumDistinctValues)
+	if maximumGroups == ^uint64(0) {
+		return nil, errors.New("execute ClickHouse field summary: distinct-value group limit overflows")
+	}
+	// Prerequisite summaries group one synthetic header beside the exact value
+	// keys. Ordinary summaries do not use that key, and their buffering
+	// validator still rejects a (MaximumDistinctValues+1)st value atomically.
+	maximumGroups++
+	settings["max_rows_to_group_by"] = min(base["max_rows_to_group_by"].(uint64), maximumGroups)
 	return settings, nil
 }
 

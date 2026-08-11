@@ -35,7 +35,7 @@ func TestKnowledgeActivePublicationDependenciesMigrationPinsSchemaAndAccessPath(
 	var version int
 	var name string
 	var checksum []byte
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT version, name, checksum
 		FROM schema_migrations
 		WHERE version = 33`).Scan(&version, &name, &checksum); err != nil {
@@ -166,7 +166,7 @@ func TestKnowledgeActivePublicationDependenciesMigrationKeepsStateOnlyEdgesExact
 				"ko-state-target-a", 10,
 			)
 
-			exact, err := raw.Begin()
+			exact, err := raw.BeginTx(t.Context(), nil)
 			if err != nil {
 				t.Fatalf("begin exact %s: %v", mutation, err)
 			}
@@ -180,7 +180,7 @@ func TestKnowledgeActivePublicationDependenciesMigrationKeepsStateOnlyEdgesExact
 				t.Fatalf("roll back exact %s probe: %v", mutation, err)
 			}
 
-			drifted, err := raw.Begin()
+			drifted, err := raw.BeginTx(t.Context(), nil)
 			if err != nil {
 				t.Fatalf("begin drifted %s: %v", mutation, err)
 			}
@@ -211,7 +211,7 @@ func TestKnowledgeActivePublicationDependenciesMigrationGuardsTargetVersionAdvan
 		raw := newKnowledge0033DependencyDB(t, "knowledge-active-publication-blocked.sqlite")
 		seedKnowledge0033ActiveDependency(t, raw)
 
-		tx, err := raw.Begin()
+		tx, err := raw.BeginTx(t.Context(), nil)
 		if err != nil {
 			t.Fatalf("begin blocked advance: %v", err)
 		}
@@ -242,7 +242,7 @@ func TestKnowledgeActivePublicationDependenciesMigrationGuardsTargetVersionAdvan
 		raw := newKnowledge0033DependencyDB(t, "knowledge-active-publication-repin.sqlite")
 		seedKnowledge0033ActiveDependency(t, raw)
 
-		tx, err := raw.Begin()
+		tx, err := raw.BeginTx(t.Context(), nil)
 		if err != nil {
 			t.Fatalf("begin atomic repin: %v", err)
 		}
@@ -309,7 +309,7 @@ func TestKnowledgeActivePublicationDependenciesMigrationGuardsTargetVersionAdvan
 		raw := newKnowledge0033DependencyDB(t, "knowledge-active-publication-historical.sqlite")
 		seedKnowledge0033ActiveDependency(t, raw)
 
-		tx, err := raw.Begin()
+		tx, err := raw.BeginTx(t.Context(), nil)
 		if err != nil {
 			t.Fatalf("begin historical probe: %v", err)
 		}
@@ -361,7 +361,7 @@ func TestKnowledgeActivePublicationDependenciesMigrationGuardsTargetVersionAdvan
 			"ko-version-target", 15,
 		)
 
-		tx, err := raw.Begin()
+		tx, err := raw.BeginTx(t.Context(), nil)
 		if err != nil {
 			t.Fatalf("begin nonactive probe: %v", err)
 		}
@@ -478,7 +478,7 @@ func stageKnowledge0033StateOnlyDependency(tx *sql.Tx, mutation string, targetOb
 	if mutation == "delete" {
 		state = "deleted"
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -491,7 +491,7 @@ func stageKnowledge0033StateOnlyDependency(tx *sql.Tx, mutation string, targetOb
 		)`, knowledgeMigrationTestAppID, state, mutation); err != nil {
 		return fmt.Errorf("insert state-only version: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_dependencies (
 			tenant_id, source_object_id, source_object_version, ordinal,
 			target_kind, target_object_id, target_object_version, dependency_role
@@ -501,7 +501,7 @@ func stageKnowledge0033StateOnlyDependency(tx *sql.Tx, mutation string, targetOb
 		)`, targetObjectID); err != nil {
 		return fmt.Errorf("insert state-only edge: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		) VALUES ('tenant-a', 'ko-state-source', 2, 1)`); err != nil {
@@ -524,7 +524,7 @@ func stageKnowledge0033RetainedDefinitionPublication(
 	if targetObjectID != "" {
 		dependencyCount = 1
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -538,7 +538,7 @@ func stageKnowledge0033RetainedDefinitionPublication(
 		return fmt.Errorf("insert retained-definition version: %w", err)
 	}
 	if targetObjectID != "" {
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(context.Background(), `
 			INSERT INTO knowledge_object_dependencies (
 				tenant_id, source_object_id, source_object_version, ordinal,
 				target_kind, target_object_id, target_object_version, dependency_role
@@ -548,13 +548,13 @@ func stageKnowledge0033RetainedDefinitionPublication(
 			return fmt.Errorf("insert retained-definition dependency: %w", err)
 		}
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		) VALUES ('tenant-a', ?, ?, ?)`, objectID, version, dependencyCount); err != nil {
 		return fmt.Errorf("seal retained-definition dependencies: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -592,7 +592,7 @@ func publishKnowledge0033RetainedDefinitionVersion(
 	if state == "disabled" {
 		disabledAt = timestamp
 	}
-	result, err := tx.Exec(`
+	result, err := tx.ExecContext(context.Background(), `
 		UPDATE knowledge_objects
 		SET current_version = ?, state = ?, updated_at_unix_micro = ?,
 		    disabled_at_unix_micro = ?
@@ -622,7 +622,7 @@ func stageKnowledge0033ActiveUpdate(
 ) ([]byte, error) {
 	body := []byte(fmt.Sprintf("knowledge-0033/%s/%d", objectID, version))
 	digest := sha256.Sum256(body)
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_definition_blobs (
 			tenant_id, definition_digest, definition_proto,
 			definition_bytes, created_at_unix_micro
@@ -633,7 +633,7 @@ func stageKnowledge0033ActiveUpdate(
 	if targetObjectID != "" {
 		dependencyCount = 1
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -647,7 +647,7 @@ func stageKnowledge0033ActiveUpdate(
 		return nil, fmt.Errorf("insert active update version: %w", err)
 	}
 	if targetObjectID != "" {
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(context.Background(), `
 			INSERT INTO knowledge_object_dependencies (
 				tenant_id, source_object_id, source_object_version, ordinal,
 				target_kind, target_object_id, target_object_version, dependency_role
@@ -657,13 +657,13 @@ func stageKnowledge0033ActiveUpdate(
 			return nil, fmt.Errorf("insert active update dependency: %w", err)
 		}
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		) VALUES ('tenant-a', ?, ?, ?)`, objectID, version, dependencyCount); err != nil {
 		return nil, fmt.Errorf("seal active update dependencies: %w", err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(context.Background(), `
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -696,7 +696,7 @@ func publishKnowledge0033ActiveUpdate(
 	timestamp int64,
 	digest []byte,
 ) error {
-	result, err := tx.Exec(`
+	result, err := tx.ExecContext(context.Background(), `
 		UPDATE knowledge_objects
 		SET current_version = ?, definition_digest = ?, updated_at_unix_micro = ?
 		WHERE tenant_id = 'tenant-a' AND knowledge_object_id = ?
@@ -717,7 +717,7 @@ func publishKnowledge0033ActiveUpdate(
 func knowledge0033SchemaSQL(t *testing.T, db *sql.DB, objectType string, name string) string {
 	t.Helper()
 	var statement string
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(t.Context(), `
 		SELECT sql FROM sqlite_schema
 		WHERE type = ? AND name = ?`, objectType, name).Scan(&statement); err != nil {
 		t.Fatalf("read %s %s SQL: %v", objectType, name, err)
@@ -727,7 +727,7 @@ func knowledge0033SchemaSQL(t *testing.T, db *sql.DB, objectType string, name st
 
 func assertKnowledge0033IndexColumns(t *testing.T, db *sql.DB, indexName string, want []string) {
 	t.Helper()
-	rows, err := db.Query(`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, indexName)
+	rows, err := db.QueryContext(t.Context(), `SELECT name FROM pragma_index_info(?) ORDER BY seqno`, indexName)
 	if err != nil {
 		t.Fatalf("read index %s columns: %v", indexName, err)
 	}
@@ -750,7 +750,7 @@ func assertKnowledge0033IndexColumns(t *testing.T, db *sql.DB, indexName string,
 
 func assertKnowledge0033GuardPlanUsesBoundedIndexes(t *testing.T, db *sql.DB) {
 	t.Helper()
-	rows, err := db.Query(`EXPLAIN QUERY PLAN
+	rows, err := db.QueryContext(t.Context(), `EXPLAIN QUERY PLAN
 		SELECT 1
 		FROM knowledge_objects AS dependent
 		    INDEXED BY knowledge_objects_resolution_idx

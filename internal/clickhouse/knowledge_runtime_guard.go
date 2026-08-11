@@ -33,6 +33,12 @@ type compiledKnowledgeRuntimeGuardExpressions struct {
 	validation string
 }
 
+type compiledKnowledgeRuntimeGuardViolation struct {
+	over   string
+	code   uint8
+	marker string
+}
+
 // compiledKnowledgeRuntimeGuard is a pure relation wrapper. suffixArgs is
 // intentionally always empty: selector and capture limits are compile-time
 // constants, while every argument already owned by the input relation keeps
@@ -48,12 +54,11 @@ type compiledKnowledgeRuntimeGuard struct {
 // event relation once, derives whole-event and whole-query maxima/totals, and
 // republishes the event columns only after the ordered guards have passed.
 //
-// This helper is deliberately not wired into central compilation yet. The
-// caller must keep nonempty knowledge finalization closed until the pinned
-// ClickHouse compatibility matrix proves this relation can safely precede all
-// authored suffix shapes. The later central composer must also construct
-// relation directly from prelude.stages; accepting the relation separately
-// here does not by itself prove that it contains those physical projections.
+// This helper remains the independent inline compatibility oracle used by
+// compileKnowledgeRelation. Production central compilation uses the deferred
+// top-level barrier built from the same staged prelude authority. A caller must
+// still construct relation directly from prelude.stages; accepting a relation
+// separately here does not prove that it contains those physical projections.
 func compileKnowledgeRuntimeGuard(
 	relation compiledRelation,
 	prelude compiledKnowledgePrelude,
@@ -150,49 +155,159 @@ func compileKnowledgeRuntimeGuard(
 func compileKnowledgeRuntimeGuardExpressions(
 	prelude compiledKnowledgePrelude,
 ) compiledKnowledgeRuntimeGuardExpressions {
-	type orderedViolation struct {
-		over   string
-		code   uint8
-		marker string
+	return compileKnowledgeRuntimeGuardExpressionsWithAggregates(
+		prelude,
+		func(column string) string {
+			return "maxOrDefault(toUInt128(" + column + "))"
+		},
+		func(column string) string {
+			return "sum(toUInt128(" + column + "))"
+		},
+		knowledgeRuntimeGuardTotalsAlias+"."+
+			knowledgeRuntimeGuardViolationColumn,
+	)
+}
+
+// compileKnowledgeRuntimeWindowGuardExpressions derives the same ordered
+// limits as compileKnowledgeRuntimeGuardExpressions, but publishes the global
+// aggregates beside every staged event. The deferred compiler can therefore
+// keep one materialized staged input and one ordinary guarded result instead
+// of exposing separate totals and CROSS JOIN nodes to every suffix consumer.
+func compileKnowledgeRuntimeWindowGuardExpressions(
+	prelude compiledKnowledgePrelude,
+) compiledKnowledgeRuntimeGuardExpressions {
+	// Bind one fixed-width evidence vector. Per-event limits contribute a local
+	// zero/one witness; query limits contribute their UInt128 row charge. One
+	// sumForEach window therefore preserves global category precedence without
+	// making ClickHouse substitute the complete staged input once per maximum
+	// and total aggregate.
+	const evidence = "__os_ko_guard_evidence"
+	vector := make([]string, 0, 5)
+	violations := make([]compiledKnowledgeRuntimeGuardViolation, 0, 5)
+	appendEventViolation := func(column string, limit uint64, code uint8, marker string) {
+		limitSQL := strconv.FormatUint(limit, 10)
+		vector = append(
+			vector,
+			"toUInt128(toUInt128("+column+") > toUInt128("+limitSQL+"))",
+		)
+		violations = append(violations, compiledKnowledgeRuntimeGuardViolation{
+			over: "toUInt128(arrayElement(" + evidence + ", " +
+				strconv.Itoa(len(vector)) + ")) > toUInt128(0)",
+			code:   code,
+			marker: marker,
+		})
 	}
+	appendQueryViolation := func(column string, limit uint64, code uint8, marker string) {
+		vector = append(vector, "toUInt128("+column+")")
+		violations = append(violations, compiledKnowledgeRuntimeGuardViolation{
+			over: "toUInt128(arrayElement(" + evidence + ", " +
+				strconv.Itoa(len(vector)) + ")) > toUInt128(" +
+				strconv.FormatUint(limit, 10) + ")",
+			code:   code,
+			marker: marker,
+		})
+	}
+
+	appendEventViolation(
+		prelude.selectorCharges.inputBytes,
+		uint64(knowledge.MaximumSelectorRuntimeEventBytes),
+		1,
+		KnowledgeSelectorEventLimitMarker,
+	)
+	if prelude.capturedBytes != "" {
+		appendEventViolation(
+			prelude.capturedBytes,
+			MaximumRexCapturedBytesPerRow,
+			2,
+			RexCaptureLimitMarker,
+		)
+	}
+	if prelude.aliasCopyCharges.eventBytes != "" {
+		appendEventViolation(
+			prelude.aliasCopyCharges.eventBytes,
+			knowledge.MaximumAliasCopyRuntimeEventBytes,
+			4,
+			KnowledgeAliasCopyEventLimitMarker,
+		)
+	}
+	appendQueryViolation(
+		prelude.selectorCharges.queryUnits,
+		uint64(knowledge.MaximumSelectorRuntimeQueryUnits),
+		3,
+		KnowledgeSelectorQueryLimitMarker,
+	)
+	if prelude.aliasCopyCharges.queryUnits != "" {
+		appendQueryViolation(
+			prelude.aliasCopyCharges.queryUnits,
+			knowledge.MaximumAliasCopyRuntimeQueryUnits,
+			5,
+			KnowledgeAliasCopyQueryLimitMarker,
+		)
+	}
+
+	expressions := compileKnowledgeRuntimeGuardPrecedence(
+		violations,
+		knowledgeRuntimeGuardInputAlias+"."+
+			knowledgeRuntimeGuardViolationColumn,
+	)
+	expressions.violation = bindSQLExpressions(
+		[]string{evidence},
+		[]string{"sumForEach([" + strings.Join(vector, ", ") + "]) OVER ()"},
+		expressions.violation,
+	)
+	return expressions
+}
+
+func compileKnowledgeRuntimeGuardExpressionsWithAggregates(
+	prelude compiledKnowledgePrelude,
+	maximum func(string) string,
+	total func(string) string,
+	violationRef string,
+) compiledKnowledgeRuntimeGuardExpressions {
 	selectorCharges := prelude.selectorCharges
-	selectorEventMaximum := "maxOrDefault(toUInt128(" + selectorCharges.inputBytes + "))"
-	selectorQueryTotal := "sum(toUInt128(" + selectorCharges.queryUnits + "))"
+	selectorEventMaximum := maximum(selectorCharges.inputBytes)
+	selectorQueryTotal := total(selectorCharges.queryUnits)
 	selectorEventOver := selectorEventMaximum + " > toUInt128(" +
 		strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes) + ")"
 	selectorQueryOver := selectorQueryTotal + " > toUInt128(" +
 		strconv.Itoa(knowledge.MaximumSelectorRuntimeQueryUnits) + ")"
-	violations := []orderedViolation{{
+	violations := []compiledKnowledgeRuntimeGuardViolation{{
 		over: selectorEventOver, code: 1, marker: KnowledgeSelectorEventLimitMarker,
 	}}
 	if prelude.capturedBytes != "" {
-		rexMaximum := "maxOrDefault(toUInt128(" + prelude.capturedBytes + "))"
+		rexMaximum := maximum(prelude.capturedBytes)
 		rexOver := rexMaximum + " > toUInt128(" +
 			strconv.FormatUint(MaximumRexCapturedBytesPerRow, 10) + ")"
-		violations = append(violations, orderedViolation{
+		violations = append(violations, compiledKnowledgeRuntimeGuardViolation{
 			over: rexOver, code: 2, marker: RexCaptureLimitMarker,
 		})
 	}
 	if prelude.aliasCopyCharges.eventBytes != "" {
-		aliasEventMaximum := "maxOrDefault(toUInt128(" +
-			prelude.aliasCopyCharges.eventBytes + "))"
+		aliasEventMaximum := maximum(prelude.aliasCopyCharges.eventBytes)
 		aliasEventOver := aliasEventMaximum + " > toUInt128(" +
 			strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeEventBytes, 10) + ")"
-		violations = append(violations, orderedViolation{
+		violations = append(violations, compiledKnowledgeRuntimeGuardViolation{
 			over: aliasEventOver, code: 4, marker: KnowledgeAliasCopyEventLimitMarker,
 		})
 	}
-	violations = append(violations, orderedViolation{
+	violations = append(violations, compiledKnowledgeRuntimeGuardViolation{
 		over: selectorQueryOver, code: 3, marker: KnowledgeSelectorQueryLimitMarker,
 	})
 	if prelude.aliasCopyCharges.queryUnits != "" {
-		aliasQueryTotal := "sum(toUInt128(" + prelude.aliasCopyCharges.queryUnits + "))"
+		aliasQueryTotal := total(prelude.aliasCopyCharges.queryUnits)
 		aliasQueryOver := aliasQueryTotal + " > toUInt128(" +
 			strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeQueryUnits, 10) + ")"
-		violations = append(violations, orderedViolation{
+		violations = append(violations, compiledKnowledgeRuntimeGuardViolation{
 			over: aliasQueryOver, code: 5, marker: KnowledgeAliasCopyQueryLimitMarker,
 		})
 	}
+	return compileKnowledgeRuntimeGuardPrecedence(violations, violationRef)
+}
+
+func compileKnowledgeRuntimeGuardPrecedence(
+	violations []compiledKnowledgeRuntimeGuardViolation,
+	violationRef string,
+) compiledKnowledgeRuntimeGuardExpressions {
 	var violation strings.Builder
 	violation.WriteString("multiIf(")
 	for _, candidate := range violations {
@@ -203,8 +318,6 @@ func compileKnowledgeRuntimeGuardExpressions(
 	}
 	violation.WriteString("toUInt8(0))")
 
-	violationRef := knowledgeRuntimeGuardTotalsAlias + "." +
-		knowledgeRuntimeGuardViolationColumn
 	last := violations[len(violations)-1]
 	lastCondition := violationRef + " = toUInt8(" + strconv.Itoa(int(last.code)) + ")"
 	validation := knowledgeRuntimeGuardThrow(lastCondition, last.marker)

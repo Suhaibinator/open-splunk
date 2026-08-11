@@ -358,7 +358,8 @@ func (writer *Writer) create(
 		return nil, err
 	}
 	result = &opensplunkv1.CreateKnowledgeObjectResponse{
-		KnowledgeObject:         projected,
+		KnowledgeObject: projected,
+		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
 		TenantCatalogRevision:   uint64(revision),
 		TenantCatalogStateToken: bytes.Clone(token),
 	}
@@ -463,6 +464,7 @@ func (writer *Writer) update(
 	}
 	authorizedValue := authorizedObjectContext(current)
 	authorized = &authorizedValue
+	// #nosec G115 -- readAuthorizedMutationRegistry validates a positive current version.
 	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
@@ -531,7 +533,7 @@ func (writer *Writer) update(
 	); err != nil {
 		return nil, err
 	}
-	if health.IdempotencyCount >= normalIdempotencyCapacity || health.VersionCount >= 61440 || currentVersion.ObjectVersion >= math.MaxInt64 {
+	if health.IdempotencyCount >= normalIdempotencyCapacity || health.VersionCount >= 61440 || currentVersion.ObjectVersion == math.MaxInt64 {
 		return nil, control.ErrCapacityExceeded
 	}
 	if health.ProjectionBytes > 268435456-projectionCharge(authority) {
@@ -595,6 +597,7 @@ func (writer *Writer) update(
 			return nil, writerError(ctx, "validate update publication transition", err)
 		}
 	}
+	// #nosec G115 -- the validated current version is positive and below its capacity ceiling.
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteUpdate, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
 		return nil, err
 	}
@@ -637,7 +640,8 @@ func (writer *Writer) update(
 		return nil, err
 	}
 	result = &opensplunkv1.UpdateKnowledgeObjectResponse{
-		KnowledgeObject:         projected,
+		KnowledgeObject: projected,
+		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
 		TenantCatalogRevision:   uint64(revision),
 		TenantCatalogStateToken: bytes.Clone(token),
 	}
@@ -742,6 +746,7 @@ func (writer *Writer) setState(
 	}
 	authorizedValue := authorizedObjectContext(current)
 	authorized = &authorizedValue
+	// #nosec G115 -- readAuthorizedMutationRegistry validates a positive current version.
 	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
@@ -780,7 +785,7 @@ func (writer *Writer) setState(
 			return nil, control.ErrDependencyConflict
 		}
 	}
-	if health.IdempotencyCount >= normalIdempotencyCapacity || health.VersionCount >= 61440 || currentVersion.ObjectVersion >= math.MaxInt64 {
+	if health.IdempotencyCount >= normalIdempotencyCapacity || health.VersionCount >= 61440 || currentVersion.ObjectVersion == math.MaxInt64 {
 		return nil, control.ErrCapacityExceeded
 	}
 	if health.ProjectionBytes > 268435456-projectionCharge(authority) {
@@ -851,6 +856,7 @@ func (writer *Writer) setState(
 			return nil, writerError(ctx, "validate disable publication transition", err)
 		}
 	}
+	// #nosec G115 -- the validated current version is positive and below its capacity ceiling.
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteSetState, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
 		return nil, err
 	}
@@ -897,7 +903,8 @@ func (writer *Writer) setState(
 		return nil, err
 	}
 	result = &opensplunkv1.SetKnowledgeObjectStateResponse{
-		KnowledgeObject:         projected,
+		KnowledgeObject: projected,
+		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
 		TenantCatalogRevision:   uint64(revision),
 		TenantCatalogStateToken: bytes.Clone(token),
 	}
@@ -1002,6 +1009,7 @@ func (writer *Writer) delete(
 	}
 	authorizedValue := authorizedObjectContext(current)
 	authorized = &authorizedValue
+	// #nosec G115 -- readAuthorizedMutationRegistry validates a positive current version.
 	if uint64(current.CurrentVersion) != request.GetExpectedVersion() {
 		return nil, control.ErrVersionConflict
 	}
@@ -1019,7 +1027,7 @@ func (writer *Writer) delete(
 			return nil, control.ErrDependencyConflict
 		}
 	}
-	if health.IdempotencyCount >= normalIdempotencyCapacity || health.VersionCount >= 61440 || currentVersion.ObjectVersion >= math.MaxInt64 {
+	if health.IdempotencyCount >= normalIdempotencyCapacity || health.VersionCount >= 61440 || currentVersion.ObjectVersion == math.MaxInt64 {
 		return nil, control.ErrCapacityExceeded
 	}
 	if health.ProjectionBytes > 268435456-projectionCharge(authority) {
@@ -1029,6 +1037,7 @@ func (writer *Writer) delete(
 	if err != nil {
 		return nil, err
 	}
+	// #nosec G115 -- the validated current version is positive and below its capacity ceiling.
 	if err := writer.callHook(ctx, writerHookEvent{Boundary: writerHookCapacityChecked, Route: mutationRouteDelete, KnowledgeObjectID: current.KnowledgeObjectID, Version: uint64(current.CurrentVersion + 1)}); err != nil {
 		return nil, err
 	}
@@ -1072,8 +1081,10 @@ func (writer *Writer) delete(
 		return nil, err
 	}
 	result = &opensplunkv1.DeleteKnowledgeObjectResponse{
-		KnowledgeObjectId:       strings.Clone(plan.objectID),
-		DeletedVersion:          uint64(plan.version),
+		KnowledgeObjectId: strings.Clone(plan.objectID),
+		// #nosec G115 -- the publication plan validates a positive deleted version.
+		DeletedVersion: uint64(plan.version),
+		// #nosec G115 -- publishMutation returns a validated positive catalog revision.
 		TenantCatalogRevision:   uint64(revision),
 		TenantCatalogStateToken: bytes.Clone(token),
 	}
@@ -1878,28 +1889,6 @@ func (writer *Writer) selectCreateObjectID(tx *gorm.DB, tenantID string) (string
 	return "", 0, errors.New("generate knowledge object identity: repeated collision")
 }
 
-func (writer *Writer) hydrateAuthorizedCurrent(
-	tx *gorm.DB,
-	current registryRecord,
-) (Object, versionRecord, definitionAuthority, error) {
-	object, err := writer.reader.objectFromCurrentRegistry(tx, current)
-	if err != nil {
-		return Object{}, versionRecord{}, definitionAuthority{}, err
-	}
-	version, found, err := readVersionRecord(tx, current.TenantID, current.KnowledgeObjectID, current.CurrentVersion)
-	if err != nil || !found {
-		if err == nil {
-			err = fmt.Errorf("%w: current immutable version is missing", ErrCorrupt)
-		}
-		return Object{}, versionRecord{}, definitionAuthority{}, err
-	}
-	authority, err := authorityFromStoredVersion(tx, version)
-	if err != nil {
-		return Object{}, versionRecord{}, definitionAuthority{}, err
-	}
-	return object, version, authority, nil
-}
-
 func readAuthorizedMutationRegistry(
 	tx *gorm.DB,
 	scope normalizedWriteScope,
@@ -2026,7 +2015,7 @@ func decodeVersionDefinitionForStateOnly(
 	decoded, _, structuralErr := decodeVersionDefinitionBlob(structuralVersion, blob)
 	if structuralErr != nil || decoded.ObjectTypeKnown {
 		return decodedDefinition{}, definitionBlobRecord{}, fmt.Errorf(
-			"%w: active definition cannot be preserved structurally: strict=%v; opaque=%v",
+			"%w: active definition cannot be preserved structurally: strict=%w; opaque=%w",
 			ErrCorrupt,
 			err,
 			structuralErr,

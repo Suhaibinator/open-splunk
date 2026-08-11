@@ -644,7 +644,7 @@ func insertIntegrationBatchObjects(t *testing.T, database *control.DB, count int
 			mutations++
 		}
 		insertIntegrationProjection(t, tx, objectID, currentVersion, testOwner, StateDraft, current)
-		if _, err := tx.Exec(`INSERT INTO knowledge_objects (
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 			sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 			disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
@@ -655,7 +655,7 @@ func insertIntegrationBatchObjects(t *testing.T, database *control.DB, count int
 		}
 	}
 	for mutation := int64(0); mutation < mutations; mutation++ {
-		if _, err := tx.Exec(`UPDATE knowledge_catalog_tenants
+		if _, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
 			SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant); err != nil {
 			t.Fatalf("advance batch catalog revision %d: %v", mutation, err)
 		}
@@ -696,7 +696,7 @@ func insertIntegrationDisabledBatchObjects(t *testing.T, database *control.DB, c
 		insertIntegrationVersion(t, tx, objectID, 1, StateActive, "create", normalized.Digest[:], normalized, createdAt)
 		insertIntegrationVersion(t, tx, objectID, 2, StateDisabled, "disable", normalized.Digest[:], normalized, disabledAt)
 		insertIntegrationProjection(t, tx, objectID, 2, testOwner, StateDisabled, normalized)
-		if _, err := tx.Exec(`INSERT INTO knowledge_objects (
+		if _, err := tx.ExecContext(t.Context(), `INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version, app_id, owner_id, object_type, name,
 			sharing_scope, state, definition_digest, created_at_unix_micro, updated_at_unix_micro,
 			disabled_at_unix_micro, quarantined_at_unix_micro, deleted_at_unix_micro, quarantine_reason
@@ -715,7 +715,7 @@ func insertIntegrationDisabledBatchObjects(t *testing.T, database *control.DB, c
 		}
 	}
 	for mutation := 0; mutation < count*2; mutation++ {
-		if _, err := tx.Exec(`UPDATE knowledge_catalog_tenants
+		if _, err := tx.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
 			SET catalog_revision = catalog_revision + 1 WHERE tenant_id = ?`, testTenant); err != nil {
 			t.Fatalf("advance disabled batch catalog revision %d: %v", mutation, err)
 		}

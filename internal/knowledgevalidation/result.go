@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"math"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"google.golang.org/protobuf/proto"
@@ -161,7 +162,7 @@ func (response SealedValidateResponse) Proto(ctx context.Context) (*opensplunkv1
 	if response.response == nil || response.wire == nil {
 		return nil, ErrInvariant
 	}
-	if response.response.GetResult() == nil || response.response.GetTenantCatalogRevision() > uint64(^uint64(0)>>1) {
+	if response.response.GetResult() == nil || response.response.GetTenantCatalogRevision() > math.MaxInt64 {
 		return nil, ErrInvariant
 	}
 	if err := validateResult(ctx, response.response.GetResult(), response.kind, response.diagnosticSources); err != nil {

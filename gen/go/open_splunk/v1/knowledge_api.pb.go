@@ -2540,10 +2540,11 @@ func (x *ListKnowledgeObjectDependentsResponse) GetResolvedObject() *KnowledgeMa
 }
 
 // POST /api/v1/knowledge/objects/preview
-// This future route remains unregistered. The internal request codec accepts a
-// raw protobuf request body of at most 4 MiB plus 64 KiB (4259840 bytes). The
-// retained_search_job_id selects a future owner-scoped retained execution
-// authority which the service must reacquire under the authenticated caller;
+// This administrator-only route is registered only with the complete ready
+// knowledge-management and retained-execution family. Its request codec accepts
+// a raw protobuf body of at most 4 MiB plus 64 KiB (4259840 bytes). The
+// retained_search_job_id selects an owner-scoped retained execution authority
+// which the service reacquires under the authenticated caller;
 // it is not an immutable event snapshot identity and does not itself grant
 // access. The ID must be nonempty valid UTF-8 of at most 256 bytes, unchanged by
 // whitespace trimming, and contain no Unicode control code point. A browser
@@ -2571,9 +2572,8 @@ type PreviewKnowledgeObjectRequest struct {
 	ExpectedVersion     *uint64                    `protobuf:"varint,4,opt,name=expected_version,json=expectedVersion,proto3,oneof" json:"expected_version,omitempty"`
 	// Paths are relative to KnowledgeObjectDefinition, never this request.
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,5,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	// The structural request boundary preserves only presence and the exact
-	// uint32 value. It assigns no default, bound, or execution meaning; those
-	// remain part of the future Preview service contract.
+	// Absence selects the service default of 100 rows per side. Present values
+	// must be in 1..1000; zero and larger values fail before execution.
 	MaximumRows   *uint32 `protobuf:"varint,6,opt,name=maximum_rows,json=maximumRows,proto3,oneof" json:"maximum_rows,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2651,7 +2651,7 @@ func (x *PreviewKnowledgeObjectRequest) GetMaximumRows() uint32 {
 	return 0
 }
 
-// This future unregistered route has no independent validation intent.
+// Preview has no independent validation intent.
 // validation always uses ACTIVE_PUBLICATION and applies the same create/update
 // candidate-envelope semantics as ValidateKnowledgeObjectRequest. It evaluates
 // definition validity in one fixed knowledge, app, and index catalog

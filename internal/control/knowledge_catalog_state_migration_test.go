@@ -32,7 +32,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsExactAuthorities(t *testing.T) {
 		objectID: "ko-lifecycle", version: 3, state: "disabled", mutation: "scope_change", timestamp: 30,
 		disabledAt: sql.NullInt64{Int64: 20, Valid: true}, sharingScope: "app",
 	})
-	if _, err := raw.Exec(`UPDATE knowledge_catalog_tenants
+	if _, err := raw.ExecContext(t.Context(), `UPDATE knowledge_catalog_tenants
 		SET catalog_revision = catalog_revision + 1 WHERE tenant_id = 'tenant-a'`); err != nil {
 		t.Fatalf("advance pre-0029 revision: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestKnowledgeCatalogStateMigrationBackfillsExactAuthorities(t *testing.T) {
 		"knowledge_object_list_order_keys",
 	} {
 		var withoutRowID, strict int
-		if err := raw.QueryRow(`SELECT wr, strict FROM pragma_table_list WHERE name = ?`, table).
+		if err := raw.QueryRowContext(t.Context(), `SELECT wr, strict FROM pragma_table_list WHERE name = ?`, table).
 			Scan(&withoutRowID, &strict); err != nil {
 			t.Fatalf("inspect %s: %v", table, err)
 		}
@@ -350,7 +350,7 @@ type knowledgeStateFixtureExecer interface {
 func seedKnowledgeStatePrerequisites(t *testing.T, db *sql.DB) {
 	t.Helper()
 	seedKnowledgeMigrationApp(t, db)
-	if _, err := db.Exec(`
+	if _, err := db.ExecContext(t.Context(), `
 		INSERT INTO knowledge_catalog_tenants (tenant_id)
 		SELECT 'tenant-a'
 		WHERE NOT EXISTS (
@@ -372,7 +372,7 @@ func seedKnowledgeStatePrerequisites(t *testing.T, db *sql.DB) {
 
 func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionFixture) {
 	t.Helper()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 	if sharingScope == "" {
 		sharingScope = "private"
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -412,7 +412,7 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 	); err != nil {
 		rollback("insert version %s/%d: %v", fixture.objectID, fixture.version, err)
 	}
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -438,7 +438,7 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 		rollback("insert projection %s/%d: %v", fixture.objectID, fixture.version, err)
 	}
 	if fixture.version == 1 {
-		if _, err := tx.Exec(`
+		if _, err := tx.ExecContext(t.Context(), `
 			INSERT INTO knowledge_objects (
 				tenant_id, knowledge_object_id, current_version,
 				app_id, owner_id, object_type, name, sharing_scope, state,
@@ -456,7 +456,7 @@ func insertKnowledgeStateVersion(t *testing.T, db *sql.DB, fixture stateVersionF
 			rollback("insert registry %s: %v", fixture.objectID, err)
 		}
 	} else {
-		result, err := tx.Exec(`
+		result, err := tx.ExecContext(t.Context(), `
 			UPDATE knowledge_objects SET
 				current_version = ?, sharing_scope = ?, state = ?, definition_digest = ?,
 				updated_at_unix_micro = ?, disabled_at_unix_micro = ?,
@@ -531,7 +531,7 @@ func nullInt64Value(value sql.NullInt64) any {
 func readKnowledgeRevisionToken(t *testing.T, db *sql.DB, tenantID string, revision int64) []byte {
 	t.Helper()
 	var token []byte
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(t.Context(), `
 		SELECT state_token FROM knowledge_catalog_revision_heads
 		WHERE tenant_id = ? AND catalog_revision = ?`, tenantID, revision).Scan(&token); err != nil {
 		t.Fatalf("read revision token for %s/%d: %v", tenantID, revision, err)

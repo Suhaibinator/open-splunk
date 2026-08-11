@@ -952,7 +952,8 @@ func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) 
 		"/api/v1/knowledge/objects/list",
 		nil,
 	)
-	request.Header["authorization"] = []string{
+	lowercaseAuthorizationHeader := strings.ToLower("Authorization")
+	request.Header[lowercaseAuthorizationHeader] = []string{
 		"Bearer " + adminIntegrationBearerToken,
 	}
 	request.Header["X-Request-Marker"] = []string{"caller-owned"}
@@ -1012,7 +1013,7 @@ func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) 
 		}
 	}
 	authenticatedRequest.Header.Set("X-Request-Marker", "downstream")
-	if got := request.Header["authorization"]; len(got) != 1 ||
+	if got := request.Header[lowercaseAuthorizationHeader]; len(got) != 1 ||
 		got[0] != "Bearer "+adminIntegrationBearerToken {
 		t.Fatalf("caller-owned Authorization header was mutated: %q", got)
 	}

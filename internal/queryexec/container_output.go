@@ -257,6 +257,12 @@ func containerObjectFields(raw any, present bool) (map[string]any, error) {
 		}
 		raw = value.Any()
 	}
+	switch value := raw.(type) {
+	case chcol.JSON:
+		return containerJSONFields(&value)
+	case *chcol.JSON:
+		return containerJSONFields(value)
+	}
 	reflected := reflect.ValueOf(raw)
 	for reflected.IsValid() && (reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) {
 		if reflected.IsNil() {
@@ -282,6 +288,29 @@ func containerObjectFields(raw any, present bool) (map[string]any, error) {
 	return result, nil
 }
 
+func containerJSONFields(document *chcol.JSON) (map[string]any, error) {
+	if document == nil {
+		return make(map[string]any), nil
+	}
+	values, err := normalizedJSONValues(document)
+	if err != nil {
+		return nil, errors.New("container JSON paths are invalid")
+	}
+	paths := make([]string, 0, len(values))
+	for path := range values {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	root := make(map[string]any)
+	for _, path := range paths {
+		segments, parseErr := eventfields.ParseNormalizedDynamicPath(path)
+		if parseErr != nil || insertResultPath(root, segments, values[path]) != nil {
+			return nil, errors.New("container JSON paths collide after decoding")
+		}
+	}
+	return root, nil
+}
+
 func containerNativeValueIsOnlyNull(value any) bool {
 	if isNullJSONPathValue(value) {
 		return true
@@ -294,6 +323,10 @@ func containerNativeValueIsOnlyNull(value any) bool {
 			return true
 		}
 		return containerNativeValueIsOnlyNull(value.Any())
+	case chcol.JSON:
+		return containerJSONIsOnlyNull(&value)
+	case *chcol.JSON:
+		return containerJSONIsOnlyNull(value)
 	}
 	reflected := reflect.ValueOf(value)
 	for reflected.IsValid() && (reflected.Kind() == reflect.Pointer || reflected.Kind() == reflect.Interface) {
@@ -307,6 +340,22 @@ func containerNativeValueIsOnlyNull(value any) bool {
 	}
 	for _, key := range reflected.MapKeys() {
 		if !containerNativeValueIsOnlyNull(reflected.MapIndex(key).Interface()) {
+			return false
+		}
+	}
+	return true
+}
+
+func containerJSONIsOnlyNull(document *chcol.JSON) bool {
+	if document == nil {
+		return true
+	}
+	values, err := normalizedJSONValues(document)
+	if err != nil || len(values) == 0 {
+		return false
+	}
+	for _, value := range values {
+		if !containerNativeValueIsOnlyNull(value) {
 			return false
 		}
 	}

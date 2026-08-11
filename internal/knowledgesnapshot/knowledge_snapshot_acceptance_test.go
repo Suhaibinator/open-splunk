@@ -1,5 +1,3 @@
-//go:build open_splunk_knowledge_runtime_acceptance && open_splunk_knowledge_snapshot_acceptance
-
 package knowledgesnapshot
 
 import (
@@ -14,9 +12,6 @@ import (
 )
 
 func TestKnowledgeSnapshotAcceptanceFinalizesExactPublicCompilerAuthority(t *testing.T) {
-	if !knowledgeSnapshotAcceptanceEnabled() {
-		t.Fatal("dual-tag go-test snapshot acceptance gate is closed")
-	}
 	input := snapshotGoldenInput(t)
 	authority, err := Prepare(input)
 	if err != nil {

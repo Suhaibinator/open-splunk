@@ -114,7 +114,7 @@ func TestCompileKnowledgeRuntimeGuard(t *testing.T) {
 	eventMarker := strings.Index(guarded.relation.sql, KnowledgeSelectorEventLimitMarker)
 	rexMarker := strings.Index(guarded.relation.sql, RexCaptureLimitMarker)
 	queryMarker := strings.Index(guarded.relation.sql, KnowledgeSelectorQueryLimitMarker)
-	if eventMarker < 0 || !(eventMarker < rexMarker && rexMarker < queryMarker) {
+	if eventMarker < 0 || rexMarker <= eventMarker || queryMarker <= rexMarker {
 		t.Fatalf("guard marker precedence = %d, %d, %d", eventMarker, rexMarker, queryMarker)
 	}
 	if len(guarded.relation.sql) > maxCompiledKnowledgeRuntimeGuardSQLBytes {
@@ -355,8 +355,8 @@ func TestCompileKnowledgeRuntimeGuardAccountsAliasCopies(t *testing.T) {
 	aliasEvent := strings.Index(guarded.relation.sql, KnowledgeAliasCopyEventLimitMarker)
 	selectorQuery := strings.Index(guarded.relation.sql, KnowledgeSelectorQueryLimitMarker)
 	aliasQuery := strings.Index(guarded.relation.sql, KnowledgeAliasCopyQueryLimitMarker)
-	if !(selectorEvent >= 0 && selectorEvent < aliasEvent && aliasEvent < selectorQuery &&
-		selectorQuery < aliasQuery) {
+	if selectorEvent < 0 || aliasEvent <= selectorEvent || selectorQuery <= aliasEvent ||
+		aliasQuery <= selectorQuery {
 		t.Fatalf(
 			"alias guard marker precedence = %d, %d, %d, %d\n%s",
 			selectorEvent,

@@ -108,7 +108,7 @@ func TestCandidateRegexIssuesPreserveLegacyFailureContract(t *testing.T) {
 				wantError = "invalid knowledge program: object 0 regex extraction is not executable"
 			}
 			if err.Error() != wantError || !errors.Is(err, ErrInvalidProgram) ||
-				errors.Is(err, ErrResourceLimit) || errors.Unwrap(err) != ErrInvalidProgram {
+				errors.Is(err, ErrResourceLimit) || !errors.Is(errors.Unwrap(err), ErrInvalidProgram) {
 				t.Fatalf("Compile error = %q, ErrInvalidProgram=%t ErrResourceLimit=%t", err, errors.Is(err, ErrInvalidProgram), errors.Is(err, ErrResourceLimit))
 			}
 			issue, ok := CandidateIssueFromError(err, 0)

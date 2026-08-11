@@ -204,7 +204,7 @@ func (writer *Writer) validateActiveCandidate(
 			return knowledgevalidation.Result{}, 0, err
 		}
 	} else {
-		if current.version.ObjectVersion >= math.MaxInt64 {
+		if current.version.ObjectVersion == math.MaxInt64 {
 			return knowledgevalidation.Result{}, 0, control.ErrCapacityExceeded
 		}
 		objectID = current.registry.KnowledgeObjectID
@@ -249,6 +249,8 @@ func (writer *Writer) validateActiveCandidate(
 	if err != nil {
 		return knowledgevalidation.Result{}, 0, err
 	}
+	// #nosec G115 -- the publication inventory validates its catalog revision as nonnegative.
+	catalogRevision := uint64(read.catalog.revision)
 	decision, err := validatePublicationActiveCandidate(ctx, read.inventory)
 	if err != nil {
 		return knowledgevalidation.Result{}, 0, err
@@ -266,7 +268,7 @@ func (writer *Writer) validateActiveCandidate(
 			if err := matchValidationCatalogBookend(tx, scope.write.tenantID, read.catalog); err != nil {
 				return knowledgevalidation.Result{}, 0, err
 			}
-			return invalid, uint64(read.catalog.revision), nil
+			return invalid, catalogRevision, nil
 		}
 		return knowledgevalidation.Result{}, 0, knowledgevalidation.ErrInvariant
 	}
@@ -302,7 +304,7 @@ func (writer *Writer) validateActiveCandidate(
 		if err := matchValidationCatalogBookend(tx, scope.write.tenantID, read.catalog); err != nil {
 			return knowledgevalidation.Result{}, 0, err
 		}
-		return invalid, uint64(read.catalog.revision), nil
+		return invalid, catalogRevision, nil
 	}
 	result, err := candidate.BuildValid(ctx, knowledgevalidation.ActivePublication{
 		Candidate: knowledgevalidation.ExactIdentity{
@@ -317,7 +319,7 @@ func (writer *Writer) validateActiveCandidate(
 	if err := matchValidationCatalogBookend(tx, scope.write.tenantID, read.catalog); err != nil {
 		return knowledgevalidation.Result{}, 0, err
 	}
-	return result, uint64(read.catalog.revision), nil
+	return result, catalogRevision, nil
 }
 
 func validationTransitionConflictResult(
@@ -350,7 +352,7 @@ func readValidationCatalogRevisionBookends(tx *gorm.DB, tenantID string) (uint64
 	if err != nil {
 		return 0, err
 	}
-	if !initial.found || initial.revision < 0 || initial.revision > math.MaxInt64 {
+	if !initial.found || initial.revision < 0 {
 		return 0, fmt.Errorf("%w: knowledge validation catalog authority is missing", ErrCorrupt)
 	}
 	if err := matchValidationCatalogBookend(tx, tenantID, initial); err != nil {
@@ -360,7 +362,7 @@ func readValidationCatalogRevisionBookends(tx *gorm.DB, tenantID string) (uint64
 }
 
 func matchValidationCatalogBookend(tx *gorm.DB, tenantID string, initial catalogState) error {
-	if !initial.found || initial.revision < 0 || initial.revision > math.MaxInt64 {
+	if !initial.found || initial.revision < 0 {
 		return fmt.Errorf("%w: knowledge validation catalog authority is invalid", ErrCorrupt)
 	}
 	final, err := readCatalogState(tx, tenantID)
@@ -461,7 +463,7 @@ func projectAuthorizedValidationDependencies(
 	objectIDs := make([]string, len(dependencies))
 	for index, dependency := range dependencies {
 		if !validIdentity(dependency.targetObjectID, maximumObjectIDBytes) ||
-			dependency.targetVersion < 1 || dependency.targetVersion > math.MaxInt64 ||
+			dependency.targetVersion < 1 ||
 			index > 0 && dependencies[index-1].targetObjectID >= dependency.targetObjectID {
 			return nil, false, ErrCorrupt
 		}
@@ -496,7 +498,8 @@ func projectAuthorizedValidationDependencies(
 		result[index] = &opensplunkv1.KnowledgeValidationDependency{
 			Target: &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
 				KnowledgeObjectId: strings.Clone(record.KnowledgeObjectID),
-				Version:           uint64(record.CurrentVersion),
+				// #nosec G115 -- current dependency records are validated as positive above.
+				Version: uint64(record.CurrentVersion),
 			},
 			Role: opensplunkv1.KnowledgeDependencyRole_KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
 		}

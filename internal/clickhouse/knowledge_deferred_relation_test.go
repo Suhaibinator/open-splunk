@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledge"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -44,8 +45,6 @@ func TestCompileDeferredKnowledgeRelationBuildsFlatGuardBarrier(t *testing.T) {
 	violation, validation := deferredKnowledgeGuardExpressionsForTest(compiled.prelude)
 	wantDefinitions := []string{
 		`"__os_ko_guard_input" AS MATERIALIZED (` + staged.sql + `)`,
-		`"__os_ko_guard_totals" AS (SELECT ` + violation +
-			` AS "__os_ko_guard_violation" FROM "__os_ko_guard_input")`,
 	}
 	if !slices.Equal(barrier.prerequisiteDefinitions, wantDefinitions) {
 		t.Fatalf(
@@ -54,7 +53,7 @@ func TestCompileDeferredKnowledgeRelationBuildsFlatGuardBarrier(t *testing.T) {
 			wantDefinitions,
 		)
 	}
-	if barrier.name != `"__os_ko_guard_result"` || barrier.fanout != 2 ||
+	if barrier.name != `"__os_ko_guard_result"` || barrier.fanout != 1 ||
 		barrier.depth != staged.depth+2 || barrier.ownerRange != owner ||
 		len(barrier.validationColumns) != 1 ||
 		barrier.validationColumns[0] != `"__os_ko_guard_validation"` {
@@ -66,19 +65,37 @@ func TestCompileDeferredKnowledgeRelationBuildsFlatGuardBarrier(t *testing.T) {
 		", ",
 	) +
 		`, "__os_ko_guard_violation"), toUInt8(` + validation + ") AS " + hiddenValidation
-	for _, fragment := range []string{
-		wantPublication,
-		`FROM "__os_ko_guard_input" AS "__os_ko_guard_event" CROSS JOIN ` +
-			`"__os_ko_guard_totals" AS "__os_ko_guard_total"`,
-	} {
-		if !strings.Contains(barrier.sql, fragment) {
-			t.Fatalf("guard barrier omits %q:\n%s", fragment, barrier.sql)
-		}
+	wantSQL := wantPublication + ` FROM (SELECT *, ` + violation +
+		` AS "__os_ko_guard_violation" FROM "__os_ko_guard_input" AS ` +
+		`"__os_ko_guard_window_input") AS "__os_ko_guard_event"`
+	if barrier.sql != wantSQL {
+		t.Fatalf("guard barrier:\n got: %s\nwant: %s", barrier.sql, wantSQL)
 	}
 	if strings.Contains(barrier.sql, "WITH ") ||
 		strings.Contains(barrier.sql, " AS MATERIALIZED (") ||
-		strings.Contains(barrier.sql, " WHERE ") {
-		t.Fatalf("guard barrier is not a flat row definition:\n%s", barrier.sql)
+		strings.Contains(barrier.sql, " CROSS JOIN ") ||
+		strings.Contains(barrier.sql, " WHERE ") ||
+		strings.Count(barrier.sql, " OVER ()") != 1 ||
+		strings.Contains(barrier.sql, "maxForEach(") ||
+		strings.Count(barrier.sql, "sumForEach(") != 1 ||
+		strings.Contains(barrier.sql, staged.sql) {
+		t.Fatalf("guard barrier is not a single windowed relation:\n%s", barrier.sql)
+	}
+	wantEvidence := "sumForEach([" +
+		"toUInt128(toUInt128(" + compiled.prelude.selectorCharges.inputBytes +
+		") > toUInt128(" + strconv.Itoa(knowledge.MaximumSelectorRuntimeEventBytes) + ")), " +
+		"toUInt128(toUInt128(" + compiled.prelude.capturedBytes +
+		") > toUInt128(" + strconv.FormatUint(MaximumRexCapturedBytesPerRow, 10) + ")), " +
+		"toUInt128(toUInt128(" + compiled.prelude.aliasCopyCharges.eventBytes +
+		") > toUInt128(" + strconv.FormatUint(knowledge.MaximumAliasCopyRuntimeEventBytes, 10) + ")), " +
+		"toUInt128(" + compiled.prelude.selectorCharges.queryUnits + "), " +
+		"toUInt128(" + compiled.prelude.aliasCopyCharges.queryUnits + ")]) OVER ()"
+	if !strings.Contains(barrier.sql, wantEvidence) {
+		t.Fatalf(
+			"guard fixed-width evidence order is invalid:\nwant: %s\nSQL: %s",
+			wantEvidence,
+			barrier.sql,
+		)
 	}
 	if compiled.relation.depth != staged.depth+3 ||
 		compiled.relation.ownerRange != owner ||
@@ -301,14 +318,12 @@ func TestCompileDeferredKnowledgeRelationMarkerPrecedenceAndIdentity(t *testing.
 		}
 		barrier := compiled.state.chronologicalBarriers[0]
 		violation, validation := deferredKnowledgeGuardExpressionsForTest(compiled.prelude)
-		if !strings.Contains(barrier.prerequisiteDefinitions[1], violation) ||
-			!strings.Contains(
-				barrier.sql,
-				"toUInt8("+validation+") AS "+barrier.validationColumns[0],
-			) {
+		if !strings.Contains(barrier.sql, violation) || !strings.Contains(
+			barrier.sql,
+			"toUInt8("+validation+") AS "+barrier.validationColumns[0],
+		) {
 			t.Fatalf(
-				"guard precedence expressions are incomplete:\n%s\n%s",
-				barrier.prerequisiteDefinitions[1],
+				"guard precedence expressions are incomplete:\n%s",
 				barrier.sql,
 			)
 		}
@@ -328,8 +343,8 @@ func TestCompileDeferredKnowledgeRelationMarkerPrecedenceAndIdentity(t *testing.
 		aliasEventMarker := strings.Index(barrier.sql, KnowledgeAliasCopyEventLimitMarker)
 		selectorQueryMarker := strings.Index(barrier.sql, KnowledgeSelectorQueryLimitMarker)
 		aliasQueryMarker := strings.Index(barrier.sql, KnowledgeAliasCopyQueryLimitMarker)
-		if eventMarker < 0 || !(eventMarker < rexMarker && rexMarker < aliasEventMarker &&
-			aliasEventMarker < selectorQueryMarker && selectorQueryMarker < aliasQueryMarker) ||
+		if eventMarker < 0 || rexMarker <= eventMarker || aliasEventMarker <= rexMarker ||
+			selectorQueryMarker <= aliasEventMarker || aliasQueryMarker <= selectorQueryMarker ||
 			strings.Count(barrier.sql, KnowledgeSelectorEventLimitMarker) != 1 ||
 			strings.Count(barrier.sql, RexCaptureLimitMarker) != 1 ||
 			strings.Count(barrier.sql, KnowledgeAliasCopyEventLimitMarker) != 1 ||
@@ -473,8 +488,7 @@ func TestCompileDeferredKnowledgeRelationMarkerPrecedenceAndIdentity(t *testing.
 		barrier := compiledChronologicalBarrier{
 			name: knowledgeRuntimeGuardResultName,
 			prerequisiteDefinitions: []string{
-				"",
-				knowledgeRuntimeGuardTotalsName + " AS (SELECT 0)",
+				knowledgeRuntimeGuardInputName + " AS MATERIALIZED (SELECT 1)",
 			},
 			sql: "SELECT 1",
 		}
@@ -483,7 +497,7 @@ func TestCompileDeferredKnowledgeRelationMarkerPrecedenceAndIdentity(t *testing.
 		if !ok || base >= maxCompiledQueryBytes {
 			t.Fatalf("descriptor base size = %d, %t", base, ok)
 		}
-		barrier.prerequisiteDefinitions[0] = strings.Repeat(
+		barrier.sql += strings.Repeat(
 			"x",
 			maxCompiledQueryBytes-base,
 		)
@@ -493,7 +507,7 @@ func TestCompileDeferredKnowledgeRelationMarkerPrecedenceAndIdentity(t *testing.
 		if err := validateDeferredKnowledgeDescriptorSize(barrier, published); err != nil {
 			t.Fatalf("exact descriptor rejected: %v", err)
 		}
-		barrier.prerequisiteDefinitions[0] += "x"
+		barrier.sql += "x"
 		if _, within := deferredKnowledgeDescriptorSQLBytes(barrier, published); within {
 			t.Fatal("over-limit descriptor reported within bound")
 		}
@@ -548,6 +562,6 @@ func composeDeferredKnowledgeStagesForTest(
 func deferredKnowledgeGuardExpressionsForTest(
 	prelude compiledKnowledgePrelude,
 ) (string, string) {
-	expressions := compileKnowledgeRuntimeGuardExpressions(prelude)
+	expressions := compileKnowledgeRuntimeWindowGuardExpressions(prelude)
 	return expressions.violation, expressions.validation
 }

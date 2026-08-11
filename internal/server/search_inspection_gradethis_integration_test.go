@@ -501,6 +501,19 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 							Column:     5,
 						},
 					},
+					KnowledgeObjects: []searchinspection.RedactedObjectProvenance{
+						{
+							Ordinal:    7,
+							ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+							Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+						},
+					},
+					OutputProvenance: []searchinspection.OutputProvenance{
+						{
+							Field:         "output",
+							ObjectOrdinal: 7,
+						},
+					},
 				},
 			},
 			ReferencedFields: []string{"referenced"},
@@ -532,6 +545,12 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 		GeneratedSQL:      "SELECT body",
 		ExplainText:       `{"Plan":{"Node Type":"ReadFromMergeTree"}}`,
 		DiagnosticQueryID: "open-splunk-explain-clone",
+		KnowledgeSnapshot: &opensplunkv1.KnowledgeSnapshotSummary{
+			Ref: &opensplunkv1.KnowledgeSnapshotRef{
+				SnapshotSha256:        []byte{0x42},
+				TenantCatalogRevision: 7,
+			},
+		},
 	}
 	cloned := cloneGradeThisInspectionRouteResult(original)
 
@@ -540,6 +559,8 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 	original.Plan.Stages[0].InputFields[0] = "mutated-input"
 	original.Plan.Stages[0].OutputFields[0] = "mutated-output"
 	original.Plan.Stages[0].SourceRange.End.ByteOffset = 99
+	original.Plan.Stages[0].KnowledgeObjects[0].Ordinal = 99
+	original.Plan.Stages[0].OutputProvenance[0].Field = "mutated-provenance"
 	original.Plan.ReferencedFields[0] = "mutated-reference"
 	original.Plan.Output.Fields[0] = "mutated-fixed"
 	original.PhysicalPlan.NodeTypes[0] = "Filter"
@@ -550,6 +571,8 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 	original.GeneratedSQL = "mutated SQL"
 	original.ExplainText = "mutated EXPLAIN"
 	original.DiagnosticQueryID = "mutated-query-id"
+	original.KnowledgeSnapshot.Ref.SnapshotSha256[0] = 0x99
+	original.KnowledgeSnapshot.Ref.TenantCatalogRevision = 99
 
 	stage := cloned.Plan.Stages[0]
 	physicalIndex := cloned.PhysicalPlan.Reads[0].Indexes[0]
@@ -558,6 +581,10 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 		!slices.Equal(stage.InputFields, []string{"input"}) ||
 		!slices.Equal(stage.OutputFields, []string{"output"}) ||
 		stage.SourceRange.End.ByteOffset != 4 ||
+		len(stage.KnowledgeObjects) != 1 ||
+		stage.KnowledgeObjects[0].Ordinal != 7 ||
+		len(stage.OutputProvenance) != 1 ||
+		stage.OutputProvenance[0].Field != "output" ||
 		!slices.Equal(
 			cloned.Plan.ReferencedFields,
 			[]string{"referenced"},
@@ -577,7 +604,14 @@ func TestGradeThisInspectionRouteResultCloneIsIndependent(t *testing.T) {
 		cloned.GeneratedSQL != "SELECT body" ||
 		cloned.ExplainText !=
 			`{"Plan":{"Node Type":"ReadFromMergeTree"}}` ||
-		cloned.DiagnosticQueryID != "open-splunk-explain-clone" {
+		cloned.DiagnosticQueryID != "open-splunk-explain-clone" ||
+		cloned.KnowledgeSnapshot == nil ||
+		cloned.KnowledgeSnapshot.GetRef() == nil ||
+		!slices.Equal(
+			cloned.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
+			[]byte{0x42},
+		) ||
+		cloned.KnowledgeSnapshot.GetRef().GetTenantCatalogRevision() != 7 {
 		t.Fatalf("detached GradeThis inspection result changed: %#v", cloned)
 	}
 }
@@ -645,6 +679,11 @@ func cloneGradeThisInspectionRouteResult(
 		ExplainText:       strings.Clone(result.ExplainText),
 		DiagnosticQueryID: strings.Clone(result.DiagnosticQueryID),
 	}
+	if result.KnowledgeSnapshot != nil {
+		cloned.KnowledgeSnapshot = proto.Clone(
+			result.KnowledgeSnapshot,
+		).(*opensplunkv1.KnowledgeSnapshotSummary)
+	}
 	return cloned
 }
 
@@ -662,6 +701,12 @@ func cloneGradeThisInspectionRouteStages(
 			cloneGradeThisInspectionRouteStrings(stage.InputFields)
 		cloned[index].OutputFields =
 			cloneGradeThisInspectionRouteStrings(stage.OutputFields)
+		if stage.SourceRange != nil {
+			sourceRange := *stage.SourceRange
+			cloned[index].SourceRange = &sourceRange
+		}
+		cloned[index].KnowledgeObjects = slices.Clone(stage.KnowledgeObjects)
+		cloned[index].OutputProvenance = slices.Clone(stage.OutputProvenance)
 	}
 	return cloned
 }

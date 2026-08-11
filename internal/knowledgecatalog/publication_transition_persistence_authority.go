@@ -352,7 +352,7 @@ func readPublicationTransitionPersistenceFacts(
 	}
 	if len(appRevisions) != 1 || appRevisions[0].TenantID != tenantID ||
 		appRevisions[0].TenantIDBytes != int64(len(tenantID)) ||
-		appRevisions[0].Revision < 1 || appRevisions[0].Revision > math.MaxInt64 {
+		appRevisions[0].Revision < 1 {
 		return publicationTransitionPersistenceFacts{}, fmt.Errorf(
 			"%w: publication transition app-catalog authority is missing or malformed",
 			ErrCorrupt,
@@ -373,7 +373,7 @@ func readPublicationTransitionPersistenceFacts(
 		return publicationTransitionPersistenceFacts{}, err
 	}
 	if len(indexStates) != 1 || indexStates[0].SingletonID != 1 ||
-		indexStates[0].Revision < 1 || indexStates[0].Revision > math.MaxInt64 ||
+		indexStates[0].Revision < 1 ||
 		indexStates[0].PhysicalCount < 0 ||
 		indexStates[0].PhysicalCount > maximumPublicationIndexAtoms {
 		return publicationTransitionPersistenceFacts{}, fmt.Errorf(
@@ -385,9 +385,10 @@ func readPublicationTransitionPersistenceFacts(
 		return publicationTransitionPersistenceFacts{}, err
 	}
 	return publicationTransitionPersistenceFacts{
-		catalog:                   catalog,
-		appCatalogRevision:        appRevisions[0].Revision,
-		indexCatalogRevision:      indexStates[0].Revision,
+		catalog:              catalog,
+		appCatalogRevision:   appRevisions[0].Revision,
+		indexCatalogRevision: indexStates[0].Revision,
+		// #nosec G115 -- PhysicalCount was bounded by maximumPublicationIndexAtoms above.
 		indexCatalogPhysicalCount: uint16(indexStates[0].PhysicalCount),
 	}, nil
 }
@@ -449,8 +450,8 @@ func validPublicationTransitionPersistenceReadFacts(
 	read publicationActiveTransitionInventoryRead,
 ) bool {
 	return validPublicationTransitionCatalogState(read.catalog) &&
-		read.appCatalogRevision >= 1 && read.appCatalogRevision <= math.MaxInt64 &&
-		read.indexCatalogRevision >= 1 && read.indexCatalogRevision <= math.MaxInt64 &&
+		read.appCatalogRevision >= 1 &&
+		read.indexCatalogRevision >= 1 &&
 		uint64(read.indexCatalogPhysicalCount) <= maximumPublicationIndexAtoms
 }
 
@@ -489,7 +490,7 @@ func validPublicationTransitionDependencyProjection(dependencies []publicationDe
 	}
 	for index, dependency := range dependencies {
 		if !validIdentity(dependency.targetObjectID, maximumObjectIDBytes) ||
-			dependency.targetVersion < 1 || dependency.targetVersion > math.MaxInt64 ||
+			dependency.targetVersion < 1 ||
 			(index > 0 && !publicationDependencyAfter(dependencies[index-1], dependency)) {
 			return false
 		}
@@ -512,7 +513,7 @@ func validPublicationTransitionPersistenceEndpoint(
 	_, scopeValid := sharingScopeFromProto(endpoint.sharingScope)
 	_, stateValid := stateToProto(endpoint.state)
 	if !validIdentity(endpoint.objectID, maximumObjectIDBytes) ||
-		endpoint.version < 1 || endpoint.version > math.MaxInt64 ||
+		endpoint.version < 1 ||
 		!typeValid || nameErr != nil || canonicalName.String() != endpoint.name ||
 		!control.ValidCanonicalAppID(endpoint.appID) ||
 		!validIdentity(endpoint.ownerID, maximumOwnerIDBytes) || !scopeValid || !stateValid ||

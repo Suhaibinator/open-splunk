@@ -5,15 +5,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
@@ -64,6 +69,53 @@ func newReadyKnowledgeWriter(t *testing.T) *knowledgecatalog.Writer {
 		t.Fatalf("knowledgecatalog.NewWriter(): %v", err)
 	}
 	return writer
+}
+
+type dormantPreviewSearches struct{}
+
+func (dormantPreviewSearches) AcquireExecutionFor(
+	context.Context,
+	searchjobs.AccessScope,
+	string,
+) (searchjobs.ResultLease, searchjobs.ExecutionSnapshot, error) {
+	panic("configuration test must not acquire a retained execution")
+}
+
+type dormantPreviewCompiler struct{}
+
+func (dormantPreviewCompiler) CompilePreview(
+	context.Context,
+	searchjobs.ExecutionSnapshot,
+	knowledgeprogram.Program,
+) (clickhouse.CompiledQuery, error) {
+	panic("configuration test must not compile")
+}
+
+type dormantPreviewExecutor struct{}
+
+func (dormantPreviewExecutor) Execute(
+	context.Context,
+	clickhouse.CompiledQuery,
+	searchjobs.ResultSink,
+) error {
+	panic("configuration test must not execute")
+}
+
+func newReadyKnowledgePreview(
+	t *testing.T,
+	writer *knowledgecatalog.Writer,
+) *knowledgepreview.Service {
+	t.Helper()
+	service, err := knowledgepreview.NewService(knowledgepreview.Config{
+		Searches: dormantPreviewSearches{},
+		Writer:   writer,
+		Compiler: dormantPreviewCompiler{},
+		Executor: dormantPreviewExecutor{},
+	})
+	if err != nil {
+		t.Fatalf("knowledgepreview.NewService(): %v", err)
+	}
+	return service
 }
 
 func knowledgeConfigBase(t *testing.T) Config {
@@ -213,7 +265,7 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 			knowledgeObjectsDeletePath,
 		} {
 			body := newKnowledgeBoundaryObservedBody("\xff", nil)
-			request := httptest.NewRequest(http.MethodPost, path, body)
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, body)
 			request.Host = "example.com"
 			request.Header.Set("Origin", "http://example.com")
 			request.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -262,7 +314,7 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 			knowledgeObjectsDeletePath,
 		} {
 			body := newKnowledgeBoundaryObservedBody("unread secret body", nil)
-			request := httptest.NewRequest(http.MethodPost, path, body)
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, body)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
 			if response.Code != http.StatusNotFound || body.reads() != 0 {
@@ -273,6 +325,236 @@ func TestKnowledgeManagementRoutesFollowCompleteConfigurationAndRemainUnadvertis
 			t.Fatalf("authentication calls=%d", authenticator.callCount())
 		}
 	})
+}
+
+func TestKnowledgePreviewRequiresCompleteFamilyAndRegistersOnlyWhenReady(t *testing.T) {
+	writer := newReadyKnowledgeWriter(t)
+	preview := newReadyKnowledgePreview(t, writer)
+
+	for _, test := range []struct {
+		name string
+		drop func(*Config)
+	}{
+		{name: "catalog", drop: func(config *Config) { config.KnowledgeCatalog = nil }},
+		{name: "writer", drop: func(config *Config) { config.KnowledgeWriter = nil }},
+		{name: "apps", drop: func(config *Config) { config.KnowledgeApps = nil }},
+		{name: "attempt journal", drop: func(config *Config) { config.KnowledgeAttempts = nil }},
+	} {
+		t.Run("missing "+test.name, func(t *testing.T) {
+			config := knowledgeConfigBase(t)
+			config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
+			config.KnowledgeWriter = writer
+			config.KnowledgeApps = knowledgeHTTPApps()
+			config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
+			config.KnowledgePreview = preview
+			test.drop(&config)
+			if handler, err := NewHandler(config); err == nil || handler != nil {
+				t.Fatalf("NewHandler(missing %s) = (%#v, %v), want no route-bearing handler", test.name, handler, err)
+			}
+		})
+	}
+
+	t.Run("typed nil is absent", func(t *testing.T) {
+		var typedNil *knowledgepreview.Service
+		config := knowledgeConfigBase(t)
+		config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
+		config.KnowledgeWriter = writer
+		config.KnowledgeApps = knowledgeHTTPApps()
+		config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
+		config.KnowledgePreview = typedNil
+		handler, err := NewHandler(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := newKnowledgeBoundaryObservedBody("unread Preview body", nil)
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, knowledgeObjectsPreviewPath, body)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound || body.reads() != 0 {
+			t.Fatalf("typed-nil Preview route status=%d reads=%d", response.Code, body.reads())
+		}
+	})
+
+	t.Run("complete ready family", func(t *testing.T) {
+		config := knowledgeConfigBase(t)
+		config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
+		config.KnowledgeWriter = writer
+		config.KnowledgeApps = knowledgeHTTPApps()
+		attempts := &knowledgeBoundaryAppender{}
+		config.KnowledgeAttempts = attempts
+		config.KnowledgePreview = preview
+		handler, err := NewHandler(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := newKnowledgeBoundaryObservedBody("\xff", nil)
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, knowledgeObjectsPreviewPath, body)
+		request.Host = "example.com"
+		request.Header.Set("Origin", "http://example.com")
+		request.Header.Set("Sec-Fetch-Site", "same-origin")
+		request.Header.Set("Authorization", "Bearer "+knowledgeBoundaryToken)
+		request.Header.Set("Content-Type", "application/x-protobuf")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || body.reads() == 0 ||
+			len(attempts.snapshot()) != 1 {
+			t.Fatalf("ready Preview route status=%d reads=%d attempts=%+v",
+				response.Code, body.reads(), attempts.snapshot())
+		}
+	})
+
+	t.Run("non-administrator is journaled before body read", func(t *testing.T) {
+		attempts := &knowledgeBoundaryAppender{}
+		config := knowledgeConfigBase(t)
+		config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
+		config.KnowledgeWriter = writer
+		config.KnowledgeApps = knowledgeHTTPApps()
+		config.KnowledgeAttempts = attempts
+		config.KnowledgePreview = preview
+		config.BrowserAuthenticator = &knowledgeBoundaryAuthenticator{
+			principal: knowledgeBoundaryPrincipal(t, auth.BrowserRoleUser),
+		}
+		handler, err := NewHandler(config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := newKnowledgeBoundaryObservedBody("unread retained job authority", nil)
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, knowledgeObjectsPreviewPath, body)
+		request.Host = "example.com"
+		request.Header.Set("Origin", "http://example.com")
+		request.Header.Set("Sec-Fetch-Site", "same-origin")
+		request.Header.Set("Authorization", "Bearer "+knowledgeBoundaryToken)
+		request.Header.Set("Content-Type", "application/x-protobuf")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		calls := attempts.snapshot()
+		if response.Code != http.StatusForbidden || body.reads() != 0 ||
+			len(calls) != 1 ||
+			calls[0].definition.Action != knowledgeattemptaudit.ActionPreview ||
+			calls[0].definition.Reason != knowledgeattemptaudit.ReasonNotAdministrator {
+			t.Fatalf("user Preview status=%d reads=%d attempts=%+v",
+				response.Code, body.reads(), calls)
+		}
+	})
+
+	t.Run("unready service is rejected", func(t *testing.T) {
+		config := knowledgeConfigBase(t)
+		config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
+		config.KnowledgeWriter = writer
+		config.KnowledgeApps = knowledgeHTTPApps()
+		config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
+		config.KnowledgePreview = &knowledgepreview.Service{}
+		if handler, err := NewHandler(config); err == nil || handler != nil {
+			t.Fatalf("NewHandler(unready Preview) = (%#v, %v), want rejection", handler, err)
+		}
+	})
+}
+
+func TestKnowledgeFeatureRequiresCompleteRuntimeFamily(t *testing.T) {
+	complete := func(t *testing.T) Config {
+		t.Helper()
+		writer := newReadyKnowledgeWriter(t)
+		config := knowledgeConfigBase(t)
+		config.SearchJobs = &knowledgeAdmissionSearchJobs{
+			fakeSearchJobs:   &fakeSearchJobs{},
+			enabled:          true,
+			executionEnabled: true,
+		}
+		config.AppCatalog = activeHistoryRerunAppCatalog("app-main")
+		config.KnowledgeCatalog = &knowledgeHTTPCatalog{}
+		config.KnowledgeWriter = writer
+		config.KnowledgeApps = knowledgeHTTPApps()
+		config.KnowledgeAttempts = &knowledgeBoundaryAppender{}
+		config.KnowledgePreview = newReadyKnowledgePreview(t, writer)
+		config.SearchInspections = &fakeSearchInspections{}
+		config.SearchHistory = &fakeSearchHistory{}
+		config.Exports = &fakeExports{}
+		config.SearchTimelines = &fakeSearchTimelines{maximum: 100}
+		config.SearchFields = &fakeSearchFields{
+			maximumFields:  100,
+			maximumPage:    10,
+			maximumSummary: 10,
+		}
+		config.SearchSuggestions = &fakeSearchSuggestions{maximum: 10}
+		return config
+	}
+	advertised := func(t *testing.T, config Config) bool {
+		t.Helper()
+		handler, err := NewHandler(config)
+		if err != nil {
+			t.Fatalf("NewHandler: %v", err)
+		}
+		response := postProto(
+			t,
+			handler,
+			"/api/v1/system/bootstrap",
+			&opensplunkv1.GetSystemBootstrapRequest{},
+		)
+		if response.Code != http.StatusOK {
+			t.Fatalf("bootstrap status=%d body=%q", response.Code, response.Body.String())
+		}
+		decoded := &opensplunkv1.GetSystemBootstrapResponse{}
+		unmarshalResponse(t, response, decoded)
+		return slices.Contains(
+			decoded.GetFeatures(),
+			opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+		)
+	}
+
+	if !advertised(t, complete(t)) {
+		t.Fatal("complete knowledge runtime family was not advertised")
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "management catalog", mutate: func(config *Config) { config.KnowledgeCatalog = nil }},
+		{name: "management writer", mutate: func(config *Config) { config.KnowledgeWriter = nil }},
+		{name: "management apps", mutate: func(config *Config) { config.KnowledgeApps = nil }},
+		{name: "management attempt journal", mutate: func(config *Config) { config.KnowledgeAttempts = nil }},
+		{name: "preview", mutate: func(config *Config) { config.KnowledgePreview = nil }},
+		{name: "admission", mutate: func(config *Config) {
+			config.SearchJobs.(*knowledgeAdmissionSearchJobs).enabled = false
+		}},
+		{name: "execution", mutate: func(config *Config) {
+			config.SearchJobs.(*knowledgeAdmissionSearchJobs).executionEnabled = false
+		}},
+		{name: "inspection", mutate: func(config *Config) { config.SearchInspections = nil }},
+		{name: "history", mutate: func(config *Config) { config.SearchHistory = nil }},
+		{name: "export", mutate: func(config *Config) { config.Exports = nil }},
+		{name: "timeline", mutate: func(config *Config) { config.SearchTimelines = nil }},
+		{name: "field catalog and summary", mutate: func(config *Config) { config.SearchFields = nil }},
+		{name: "suggestions", mutate: func(config *Config) { config.SearchSuggestions = nil }},
+	} {
+		t.Run("missing "+test.name, func(t *testing.T) {
+			config := complete(t)
+			test.mutate(&config)
+			handler, err := NewHandler(config)
+			if err != nil {
+				// Partial management and Preview configuration is rejected before a
+				// route-bearing handler can advertise anything.
+				if handler != nil || !strings.Contains(err.Error(), "knowledge") {
+					t.Fatalf("NewHandler = (%#v, %v)", handler, err)
+				}
+				return
+			}
+			response := postProto(
+				t,
+				handler,
+				"/api/v1/system/bootstrap",
+				&opensplunkv1.GetSystemBootstrapRequest{},
+			)
+			decoded := &opensplunkv1.GetSystemBootstrapResponse{}
+			unmarshalResponse(t, response, decoded)
+			if slices.Contains(
+				decoded.GetFeatures(),
+				opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS,
+			) {
+				t.Fatalf("partial family advertised knowledge: %v", decoded.GetFeatures())
+			}
+		})
+	}
 }
 
 func TestKnowledgeManagementProductionMiddlewareOrdering(t *testing.T) {
@@ -303,7 +585,7 @@ func TestKnowledgeManagementProductionMiddlewareOrdering(t *testing.T) {
 		{name: "untrusted origin", method: http.MethodPost, path: knowledgeObjectsCreatePath, origin: "http://attacker.example", wantStatus: http.StatusForbidden},
 	} {
 		body := newKnowledgeBoundaryObservedBody("unread secret body", nil)
-		request := httptest.NewRequest(test.method, test.path, body)
+		request := httptest.NewRequestWithContext(t.Context(), test.method, test.path, body)
 		request.Host = "example.com"
 		request.Header.Set("Origin", test.origin)
 		request.Header.Set("Authorization", "Bearer "+knowledgeBoundaryToken)

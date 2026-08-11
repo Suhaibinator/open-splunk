@@ -350,7 +350,7 @@ func TestGraphCursorInvalidatesAtSameRevisionWithDifferentStateToken(t *testing.
 		t.Fatalf("ListDependencies(fork first) = %#v, %v", first, err)
 	}
 	var oldToken []byte
-	if err := database.SQLDB().QueryRow(`SELECT state_token FROM knowledge_catalog_revision_heads
+	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT state_token FROM knowledge_catalog_revision_heads
 		WHERE tenant_id = ?`, testTenant).Scan(&oldToken); err != nil {
 		t.Fatalf("read old catalog state token: %v", err)
 	}

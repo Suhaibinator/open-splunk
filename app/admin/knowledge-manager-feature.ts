@@ -30,7 +30,7 @@ const BASE_NAVIGATION: readonly BackendAdminNavigationItem[] = [
 const KNOWLEDGE_NAVIGATION: BackendAdminNavigationItem = {
   key: "knowledge",
   label: "Knowledge Manager",
-  detail: "Read-only definitions",
+  detail: "Tier-1 definitions",
   icon: "⌘",
 };
 

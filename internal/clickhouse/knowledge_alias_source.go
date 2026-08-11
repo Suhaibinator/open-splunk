@@ -552,13 +552,11 @@ func buildKnowledgeAliasSourceSQL(
 	emptyNames := "CAST([], 'Array(String)')"
 	emptyTypes := "CAST([], 'Array(UInt8)')"
 
-	var materialized strings.Builder
-	materialized.WriteString("JSONExtract(")
-	materialized.WriteString(fields)
+	physicalSegmentSQL := make([]string, 0, len(authority.physicalSegments))
 	for range authority.physicalSegments {
-		materialized.WriteString(", CAST(? AS String)")
+		physicalSegmentSQL = append(physicalSegmentSQL, "CAST(? AS String)")
 	}
-	materialized.WriteString(", 'Dynamic')")
+	materialized := knowledgeAliasMaterializedDynamicSQL(fields, physicalSegmentSQL)
 
 	relativeNames := "arrayMap(field_name -> substring(field_name, " +
 		"length(CAST(? AS String)) + 1), " +
@@ -581,7 +579,7 @@ func buildKnowledgeAliasSourceSQL(
 	exactTuple := "tuple(toUInt8(1), CAST(" + authority.valueSQL() +
 		" AS Dynamic), " + exactType + ", " + emptyNames + ", " + emptyTypes +
 		", " + metadataVersion + ")"
-	descendantTuple := "tuple(toUInt8(1), " + materialized.String() +
+	descendantTuple := "tuple(toUInt8(1), " + materialized +
 		", toUInt8(" + strconv.Itoa(int(eventfields.StoredValueTypeObject)) + "), " +
 		relativeNames + ", " + relativeTypes + ", " + metadataVersion + ")"
 	missingTuple := "tuple(toUInt8(0), CAST(NULL AS Dynamic), toUInt8(0), " +
@@ -652,11 +650,11 @@ func buildKnowledgeAliasSourceExpressions(
 	emptyNames := knowledgeEmptyRelativeFieldNamesSQL()
 	emptyTypes := knowledgeEmptyRelativeFieldTypesSQL()
 
-	materialized := "JSONExtract(" + fields
+	segments := make([]string, 0, len(physicalSegmentSQL))
 	for _, segmentSQL := range physicalSegmentSQL {
-		materialized += ", CAST(" + segmentSQL + " AS String)"
+		segments = append(segments, "CAST("+segmentSQL+" AS String)")
 	}
-	materialized += ", 'Dynamic')"
+	materialized := knowledgeAliasMaterializedDynamicSQL(fields, segments)
 	exact := "has(" + names + ", CAST(" + exactPathSQL + " AS String))"
 	descendant := "arrayExists(field_name -> startsWith(field_name, CAST(" +
 		descendantPrefixSQL + " AS String)), " + names + ")"
@@ -688,6 +686,29 @@ func buildKnowledgeAliasSourceExpressions(
 			emptyTypes + ")",
 		metadataVersionSQL: metadataVersion,
 	}, nil
+}
+
+// knowledgeAliasMaterializedDynamicSQL reconstructs a flattened JSON parent
+// only on the descendant branch. ClickHouse 26.3 makes JSONExtract over a
+// native JSON column nullable; requesting Dynamic there would construct the
+// forbidden Nullable(Dynamic) type even when the branch is not selected.
+// Serializing the native document before extracting raw JSON also preserves
+// parameterized stored paths: JSONExtractRaw accepts only constant paths when
+// its input remains the native JSON type. Stripping the nullable raw wrapper
+// and then parsing a concrete object map retains heterogeneous descendants
+// without producing the native JSON variant. The explicit Dynamic cast keeps
+// the public field contract stable without crossing either restriction.
+func knowledgeAliasMaterializedDynamicSQL(
+	fieldsSQL string,
+	physicalSegmentSQL []string,
+) string {
+	raw := "JSONExtractRaw(toJSONString(" + fieldsSQL + ")"
+	for _, segmentSQL := range physicalSegmentSQL {
+		raw += ", " + segmentSQL
+	}
+	raw += ")"
+	return "CAST(JSONExtract(ifNull(" + raw +
+		", CAST('' AS String)), 'Map(String, Dynamic)') AS Dynamic)"
 }
 
 func knowledgeAliasSourceExactPresenceSQL() string {

@@ -1,8 +1,14 @@
 # Knowledge objects implementation checkpoint
 
-**Goal status:** active
+> This file is the chronological pre-activation implementation log. Its
+> closed-gate, dormant-browser, unregistered-Preview, and Docker-pending claims
+> describe the dated revisions beside them and are preserved as history. The
+> August 10, 2026 Tier-1 activation and acceptance checkpoint in
+> `docs/knowledge-objects-plan.md` supersedes those readiness claims.
 
-**Current milestone:** test-only retained Knowledge authority reaches the real
+**Historical goal status at this checkpoint:** active
+
+**Historical milestone:** test-only retained Knowledge authority reaches the real
 search-inspection service (Docker paused; production gates closed)
 
 **Last completed slice:** revision

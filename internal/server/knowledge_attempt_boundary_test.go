@@ -326,7 +326,7 @@ func TestKnowledgeAttemptBoundaryRecognizesOnlyExactPostRoutes(t *testing.T) {
 				func(response http.ResponseWriter, _ *http.Request) {
 					response.WriteHeader(http.StatusNoContent)
 				},
-			)).ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+			)).ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), test.method, test.path, nil))
 			if response.Code != http.StatusNoContent ||
 				authenticator.callCount() != 0 || len(appender.snapshot()) != 0 {
 				t.Fatalf(
@@ -1088,7 +1088,8 @@ func TestKnowledgeAttemptBoundaryUnauthenticatedFailureIsNotJournaled(t *testing
 		appender,
 	)
 	body := newKnowledgeBoundaryObservedBody("must remain unread", nil)
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		"/api/v1/knowledge/objects/create",
 		body,

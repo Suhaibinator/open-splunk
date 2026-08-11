@@ -233,7 +233,7 @@ func privacyContractCloneVisibleAuthorities(t *testing.T, database *control.DB, 
 	if count < 1 {
 		t.Fatalf("visible authority clone count = %d", count)
 	}
-	triggerRows, err := database.SQLDB().Query(`
+	triggerRows, err := database.SQLDB().QueryContext(t.Context(), `
 		SELECT name
 		FROM sqlite_schema
 		WHERE type = 'trigger' AND tbl_name = 'knowledge_objects'

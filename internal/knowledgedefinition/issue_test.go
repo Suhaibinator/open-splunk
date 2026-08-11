@@ -483,8 +483,9 @@ func assertDefinitionErrorRoots(t *testing.T, err error, want error) {
 		ErrNonCanonical,
 		ErrUnknownFutureBody,
 	} {
-		if got := errors.Is(err, candidate); got != (candidate == want) {
-			t.Errorf("errors.Is(%v, %v) = %t, want %t", err, candidate, got, candidate == want)
+		wantMatch := errors.Is(want, candidate)
+		if got := errors.Is(err, candidate); got != wantMatch {
+			t.Errorf("errors.Is(%v, %v) = %t, want %t", err, candidate, got, wantMatch)
 		}
 	}
 }

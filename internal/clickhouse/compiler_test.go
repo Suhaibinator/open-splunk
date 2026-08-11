@@ -1232,12 +1232,18 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`"__os_timechart_prepared" AS (SELECT *, toUInt8(if("__os_tc_present" != 0, 0, arrayExists(`,
 		`"__os_timechart_classified" AS (`,
 		`"__os_timechart_canonicalized" AS (`,
-		`"__os_timechart_group_counts" AS MATERIALIZED`,
-		`"__os_timechart_top" AS MATERIALIZED`,
-		`"__os_timechart_normalization_collisions" AS (`,
-		`LIMIT 10`,
+		`"__os_timechart_group_counts" AS (`,
+		`"__os_timechart_scored" AS (`,
+		`sum(toUInt128("__os_tc_count")) OVER (PARTITION BY "__os_tc_kind", "__os_tc_label") AS "__os_tc_series_score"`,
+		`uniqExact("__os_tc_label") OVER (PARTITION BY "__os_tc_kind", if(startsWith("__os_tc_label", '_'), concat('VALUE', "__os_tc_label"), "__os_tc_label")) AS "__os_tc_collision_cardinality"`,
+		`"__os_timechart_ranked" AS (`,
+		`dense_rank() OVER (PARTITION BY "__os_tc_kind" ORDER BY "__os_tc_series_score" DESC, "__os_tc_label" ASC) AS "__os_tc_series_rank"`,
+		`"__os_timechart_collapsed" AS MATERIALIZED (`,
+		`"__os_tc_series_rank" <= 10`,
 		`sumIf("__os_tc_count", "__os_tc_kind" = 3)`,
-		`HAVING uniqExact("__os_tc_label") > 1`,
+		`maxIf("__os_tc_collision_cardinality", "__os_tc_kind" = 0) > 1`,
+		`arrayPushBack(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), CAST('' AS String))`,
+		`toUInt8(ifNull("__os_timechart_bucket_maps"."__os_tc_count_map"[''], toUInt64(0)) != 0)`,
 		`concat('VALUE', "__os_tc_label")`,
 		`"__os_tc_sort_label"`,
 		`arrayMap(item -> item.3`,
@@ -1254,6 +1260,30 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 	}
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+	}
+	for relation, want := range map[string]int{
+		`FROM "__os_timechart_group_counts"`: 1,
+		`FROM "__os_timechart_scored"`:       1,
+		`FROM "__os_timechart_ranked"`:       1,
+		`FROM "__os_timechart_collapsed"`:    2,
+	} {
+		if got := strings.Count(compiled.SQL, relation); got != want {
+			t.Fatalf("timechart relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
+		}
+	}
+	for _, removed := range []string{
+		`"__os_timechart_group_counts" AS MATERIALIZED`,
+		`"__os_timechart_checks"`,
+		`"__os_timechart_top"`,
+		`"__os_timechart_normalization_collisions"`,
+		`"__os_timechart_validation"`,
+	} {
+		if strings.Contains(compiled.SQL, removed) {
+			t.Fatalf("timechart SQL retains removed graph node %q:\n%s", removed, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("timechart materialized CTE count = %d, want collapsed only:\n%s", got, compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
@@ -4517,29 +4547,41 @@ func TestCompileChartUsesBoundedPivotTransport(t *testing.T) {
 		`"__os_chart_classified" AS (`,
 		`FROM "__os_chart_kinded")`,
 		`"__os_chart_canonicalized" AS (`,
-		`"__os_chart_label_totals" AS MATERIALIZED`,
-		`"__os_chart_group_counts" AS MATERIALIZED`,
-		`WHERE "__os_ch_row_eligible" != 0 GROUP BY "__os_ch_row", "__os_ch_kind", "__os_ch_encoded"`,
-		`"__os_chart_top" AS MATERIALIZED`,
-		`"__os_chart_row_domain" AS MATERIALIZED`,
-		`"__os_chart_normalization_collisions" AS (`,
-		`"__os_chart_column_check" AS (`,
-		`ORDER BY "__os_ch_count" DESC, "__os_ch_label" ASC LIMIT 10`,
-		`maxOrDefault("__os_ch_kind" = 3)`,
-		`maxOrDefault("__os_ch_row_invalid") > 0`,
-		`HAVING uniqExact("__os_ch_label") > 1`,
-		`concat('VALUE', "__os_ch_label")`,
-		`"__os_ch_sort_label"`,
-		`arrayMap(item -> item.3`,
-		`mapFromArrays(`,
+		`"__os_chart_group_counts" AS MATERIALIZED (`,
+		`max("__os_ch_row_invalid") AS "__os_ch_row_invalid", count() AS "__os_ch_count"`,
+		`GROUP BY "__os_ch_row", "__os_ch_row_eligible", "__os_ch_kind", "__os_ch_label"`,
+		`"__os_chart_label_groups" AS (`,
+		`sumIf(toUInt128("__os_ch_count"), "__os_ch_row_eligible" != 0) AS "__os_ch_series_score"`,
+		`groupArray(tuple("__os_ch_row", "__os_ch_row_eligible", "__os_ch_row_invalid", "__os_ch_count")) AS "__os_ch_row_entries"`,
+		`"__os_chart_normalized_groups" AS (`,
+		`groupArray(tuple("__os_ch_kind", "__os_ch_label", "__os_ch_series_score", "__os_ch_row_entries")) AS "__os_ch_label_records"`,
+		`toUInt8("__os_ch_kind" = 0 AND count() > 1) AS "__os_ch_collision_evidence"`,
+		`"__os_chart_authority" AS (`,
+		`arrayFlatten(groupArray("__os_ch_label_records"))`,
+		`arraySlice(arraySort(__os_ch_record -> tuple(-toInt256(__os_ch_record.3), __os_ch_record.2)`,
+		`arrayFilter(__os_ch_record -> __os_ch_record.1 = toUInt8(0) AND __os_ch_record.3 > toUInt128(0)`,
+		`"__os_chart_label_expanded" AS (`,
+		`ARRAY JOIN tupleElement("__os_ch_authority", 1) AS "__os_ch_label_record"`,
+		`"__os_chart_expanded" AS (`,
+		`ARRAY JOIN "__os_ch_row_entries" AS "__os_ch_row_entry"`,
+		`"__os_chart_collapsed" AS (`,
+		`has(__os_ch_top_label_values, __os_ch_record.2), concat('0:', __os_ch_record.2)`,
+		`toUInt64(sum(toUInt128(if("__os_ch_row_eligible" != 0 AND "__os_ch_kind" IN (0, 1), "__os_ch_count", 0)))) AS "__os_ch_collapsed_count"`,
+		`maxIf("__os_ch_row_invalid", "__os_ch_row_eligible" != 0)`,
+		`sumIf(toUInt128("__os_ch_count"), "__os_ch_kind" = 3)`,
+		`max("__os_ch_global_collision")`,
+		`"__os_chart_row_maps" AS (`,
+		`"__os_chart_row_domain" AS (`,
+		`mapFromArrays(groupArrayIf("__os_ch_encoded"`,
+		`arrayDistinct(arrayFlatten(groupArray(groupArrayIf(tuple(`,
 		`row_number() OVER (ORDER BY`,
 		`AS "` + ChartOrdinalColumn + `"`,
 		`AS "` + ChartRowColumn + `"`,
 		`AS "` + ChartNamesColumn + `"`,
 		`AS "` + ChartCountsColumn + `"`,
 		`AS "` + ChartInvalidColumn + `"`,
-		`WHERE throwIf("__os_chart_row_domain"."` + ChartOrdinalColumn + `" >= 10000, '` + ChartRowLimitMarker + `') = 0`,
-		`CAST([], 'Array(UInt64)') AS "` + ChartCountsColumn + `"`,
+		`WHERE throwIf(if("__os_ch_transport_invalid" = 0, "` + ChartOrdinalColumn + `" >= 10000, 0), '` + ChartRowLimitMarker + `') = 0`,
+		`if("__os_ch_transport_invalid" != 0, CAST([], 'Array(UInt64)'), arrayMap(`,
 		`ORDER BY "` + ChartInvalidColumn + `" DESC, "` + ChartOrdinalColumn + `" ASC`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
@@ -4555,37 +4597,59 @@ func TestCompileChartUsesBoundedPivotTransport(t *testing.T) {
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("scoped storage relation occurs %d times in generated SQL, want once:\n%s", got, compiled.SQL)
 	}
-	// Exactly two aggregations read the scanned rows: the one-dimensional label
-	// aggregate that chooses the column domain, then the row-keyed aggregate
-	// whose column axis is already collapsed to it. Every later stage reads one
-	// of those materialized aggregates instead of the events again.
-	if got := strings.Count(compiled.SQL, `FROM "__os_chart_canonicalized"`); got != 2 {
-		t.Fatalf("row-level aggregation occurs %d times, want twice:\n%s", got, compiled.SQL)
-	}
-	// A scalar subquery over a materialized CTE is evaluated during analysis,
-	// before the temporary table exists, so each occurrence re-runs the whole
-	// scoped scan. Every reference must be an ordinary relation reference.
-	for _, materialized := range []string{
-		`"__os_chart_label_totals"`,
-		`"__os_chart_group_counts"`,
-		`"__os_chart_top"`,
-		`"__os_chart_normalization_collisions"`,
-		`"__os_chart_column_check"`,
-		`"__os_chart_row_domain"`,
+	// The raw stream is grouped once before any label array is allocated, so the
+	// fixed chart group allowance caps every retained raw (row, label) pair.
+	for relation, want := range map[string]int{
+		`FROM "__os_chart_canonicalized"`:     1,
+		`FROM "__os_chart_group_counts"`:      1,
+		`FROM "__os_chart_label_groups"`:      1,
+		`FROM "__os_chart_normalized_groups"`: 1,
+		`FROM "__os_chart_authority"`:         1,
+		`FROM "__os_chart_label_expanded"`:    1,
+		`FROM "__os_chart_expanded"`:          1,
+		`FROM "__os_chart_collapsed"`:         1,
+		`FROM "__os_chart_row_maps"`:          1,
+		`FROM "__os_chart_row_domain"`:        1,
 	} {
-		for _, scalar := range []string{
-			"(SELECT count() FROM " + materialized,
-			"(SELECT count() FROM (SELECT 1 FROM " + materialized,
-		} {
-			if strings.Contains(compiled.SQL, scalar) {
-				t.Fatalf("chart SQL evaluates %s through a scalar subquery:\n%s", materialized, compiled.SQL)
-			}
+		if got := strings.Count(compiled.SQL, relation); got != want {
+			t.Fatalf("chart relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
 		}
 	}
-	// The row-keyed aggregation groups on the already-encoded column domain, so
-	// its state count is rows x public series rather than rows x raw labels.
-	if strings.Contains(compiled.SQL, `count() AS "__os_ch_count" FROM "__os_chart_canonicalized" WHERE "__os_ch_row_eligible" != 0 GROUP BY "__os_ch_row", "__os_ch_kind", "__os_ch_label"`) {
-		t.Fatalf("chart SQL groups the row axis on the raw column label:\n%s", compiled.SQL)
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("bare chart materialized CTE count = %d, want raw group counts only:\n%s", got, compiled.SQL)
+	}
+	for _, removed := range []string{
+		`"__os_chart_label_totals"`,
+		`"__os_chart_top"`,
+		`"__os_chart_grouped"`,
+		`"__os_chart_authorized"`,
+		`"__os_chart_normalization_collisions"`,
+		`"__os_chart_column_check"`,
+		`"__os_chart_validation"`,
+		`"__os_chart_scored"`,
+		`"__os_chart_ranked"`,
+		`"__os_chart_domain_rows"`,
+		`"__os_chart_checks"`,
+	} {
+		if strings.Contains(compiled.SQL, removed) {
+			t.Fatalf("bare chart retains removed graph node %q:\n%s", removed, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, `sumMap(`); got != 0 {
+		t.Fatalf("bare chart retains %d unbounded sumMap aggregates:\n%s", got, compiled.SQL)
+	}
+	rawGroup := `GROUP BY "__os_ch_row", "__os_ch_row_eligible", "__os_ch_kind", "__os_ch_label"`
+	groupAt := strings.Index(compiled.SQL, rawGroup)
+	firstArrayAt := strings.Index(compiled.SQL, `groupArray(`)
+	collapsedAt := strings.Index(compiled.SQL, `"__os_chart_collapsed" AS (`)
+	if groupAt < 0 || firstArrayAt <= groupAt || collapsedAt <= firstArrayAt {
+		t.Fatalf("chart arrays are not downstream of the bounded raw grouping:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL[firstArrayAt:collapsedAt], ` OVER (`) {
+		t.Fatalf("chart label authority retains a pre-collapse window:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL[firstArrayAt:collapsedAt], ` ARRAY JOIN `); got != 2 {
+		t.Fatalf("chart bounded label authority expands arrays %d times, want exactly two linear expansions:\n%s", got, compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
@@ -4621,9 +4685,9 @@ func TestCompileChartClassifiesColumnValuesIndependentOfRowPresence(t *testing.T
 	// The atomic flag reads a signal derived from every classified input row,
 	// not only from the row-keyed aggregate.
 	for _, required := range []string{
-		`"__os_chart_column_check" AS (SELECT toUInt8(maxOrDefault("__os_ch_kind" = 3)) AS "__os_ch_column_invalid" FROM "__os_chart_label_totals")`,
-		`"__os_chart_column_check"."__os_ch_column_invalid" != 0`,
-		`CROSS JOIN "__os_chart_column_check"`,
+		`toUInt8(sumIf(toUInt128("__os_ch_count"), "__os_ch_kind" = 3) > 0) AS "__os_ch_column_invalid_evidence"`,
+		`toUInt8(max(max("__os_ch_column_invalid_evidence")) OVER () != 0) AS "__os_ch_column_invalid"`,
+		`"__os_ch_column_invalid" != 0) AS "__os_ch_transport_invalid"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("chart SQL missing %q:\n%s", required, compiled.SQL)
@@ -4782,7 +4846,7 @@ func TestCompileChartOrdersRowsLikeAutomaticSort(t *testing.T) {
 	lexical := compileSPL(t, `index=gradethis | chart count OVER path BY level`)
 	for _, required := range []string{
 		`row_number() OVER (ORDER BY arrayElement(arrayMap((__os_sort_exact_text, __os_sort_lexical_text, __os_sort_exact_null)`,
-		`if(length(toString("__os_ch_row")) <= ` +
+		`if(length(toString("__os_ch_group_row")) <= ` +
 			strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
 		`ifNull(__os_sort_lexical_text, CAST('' AS String))`,
 		`tupleElement(__os_sort_exact_key, 1) != 0`,
@@ -4796,7 +4860,7 @@ func TestCompileChartOrdersRowsLikeAutomaticSort(t *testing.T) {
 		t.Fatalf("runtime-typed chart placeholder count = %d, args = %d: %#v", got, want, lexical.Args)
 	}
 	fixed := compileSPL(t, `index=gradethis | bin severity span=10 | chart count OVER severity BY level`)
-	if !strings.Contains(fixed.SQL, `row_number() OVER (ORDER BY "__os_ch_row" ASC)`) {
+	if !strings.Contains(fixed.SQL, `row_number() OVER (ORDER BY "__os_ch_group_row" ASC)`) {
 		t.Fatalf("fixed numeric row axis is not ordered by its own value:\n%s", fixed.SQL)
 	}
 	if got, want := strings.Count(fixed.SQL, "?"), len(fixed.Args); got != want {

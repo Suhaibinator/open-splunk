@@ -15,8 +15,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
-const testNonemptyKnowledgeSealError = "seal compiled ClickHouse execution: nonempty knowledge lowering is absent"
-
 func TestCompiledKnowledgeSnapshotEvidencePinsAuthoredWholeQueryCharges(t *testing.T) {
 	t.Parallel()
 
@@ -232,16 +230,12 @@ func TestCompileKnowledgeCompilationEvidenceDerivesExactNonemptyProof(t *testing
 		preparation,
 		prelude,
 	)
-	if knowledgeRuntimeAcceptanceEnabled() {
-		if sealErr != nil || !sealed.HasValidExecutionSeal() {
-			t.Fatalf("acceptance-mode nonempty seal = (%#v, %v), want trusted execution", sealed, sealErr)
-		}
-		if sealedEvidence, sealedOK := sealed.KnowledgeSnapshotEvidenceFor(program); !sealedOK ||
-			sealedEvidence.KnowledgeProgramObjectCount() != program.ObjectCount() {
-			t.Fatalf("acceptance-mode sealed evidence = (%#v, %t)", sealedEvidence, sealedOK)
-		}
-	} else if sealErr == nil || sealErr.Error() != testNonemptyKnowledgeSealError {
-		t.Fatalf("default nonempty seal error = %v", sealErr)
+	if sealErr != nil || !sealed.HasValidExecutionSeal() {
+		t.Fatalf("nonempty seal = (%#v, %v), want trusted execution", sealed, sealErr)
+	}
+	if sealedEvidence, sealedOK := sealed.KnowledgeSnapshotEvidenceFor(program); !sealedOK ||
+		sealedEvidence.KnowledgeProgramObjectCount() != program.ObjectCount() {
+		t.Fatalf("sealed evidence = (%#v, %t)", sealedEvidence, sealedOK)
 	}
 }
 
@@ -296,7 +290,7 @@ func TestCompileKnowledgeCompilationEvidenceRejectsSameChargeProgramSubstitution
 		scan,
 		secondPreparation,
 		firstPrelude,
-	); err == nil || err.Error() == testNonemptyKnowledgeSealError {
+	); err == nil {
 		t.Fatalf("same-charge substituted seal error = %v", err)
 	}
 }
@@ -333,7 +327,7 @@ func TestCompileKnowledgeCompilationEvidenceRejectsEmittedProofMismatch(t *testi
 		scan,
 		preparation,
 		forged,
-	); err == nil || err.Error() == testNonemptyKnowledgeSealError {
+	); err == nil {
 		t.Fatalf("forged emitted-proof seal error = %v", err)
 	}
 }

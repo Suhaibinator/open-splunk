@@ -79,8 +79,17 @@ func TestCompileKnowledgeAliasStageBuildsOneFrozenProjection(t *testing.T) {
 		t.Fatalf("runtime charges leaked into generic private columns: %#v", compiled.state.privateColumns)
 	}
 	projectionSQL := strings.Join(compiled.projection, " ")
+	bindingSQL := strings.Join(compiled.arrayJoinBindings, " ")
 	for _, fragment := range []string{
 		"byteSize(",
+		`__os_ko_field_source`,
+		`__os_ko_field_payload_bytes`,
+	} {
+		if !strings.Contains(bindingSQL, fragment) {
+			t.Fatalf("alias-copy binding omits %q:\n%s", fragment, bindingSQL)
+		}
+	}
+	for _, fragment := range []string{
 		"least(",
 		fmt.Sprintf("toUInt128(%d)) AS %s", knowledge.MaximumAliasCopyRuntimeEventBytes+1, compiled.aliasCopyCharges.eventBytes),
 		fmt.Sprintf("toUInt128(%d)) AS %s", knowledge.MaximumAliasCopyRuntimeQueryUnits+1, compiled.aliasCopyCharges.queryUnits),
@@ -219,12 +228,16 @@ func TestCompileKnowledgeAliasStageGroupsDisjointDestinationWriters(t *testing.T
 	if strings.Count(bindings, `__os_ko_field_selector`) < 2 {
 		t.Fatalf("grouped merge does not evaluate both writers:\n%s", bindings)
 	}
-	if got := strings.Count(joined, "byteSize("); got != 6 {
-		t.Fatalf("grouped destination charge evaluated %d byte-size terms, want 6 for one winner:\n%s", got, joined)
+	if got := strings.Count(bindings, "byteSize("); got != 3 {
+		t.Fatalf("grouped destination charge evaluated %d byte-size terms, want 3 for one compact winner:\n%s", got, bindings)
 	}
-	wrote := `if(toUInt8(tupleElement("__os_ko_field_binding_4_0", 2)) != 0, `
-	if got := strings.Count(joined, wrote); got != 2 {
-		t.Fatalf("winner-only payload/work guards = %d, want 2:\n%s", got, joined)
+	if strings.Contains(joined, "byteSize(") ||
+		strings.Contains(joined, `tupleElement(tupleElement("__os_ko_field_binding_4_0"`) {
+		t.Fatalf("outer projection re-expands a compact destination binding:\n%s", joined)
+	}
+	wrote := `if(__os_ko_field_wrote != 0, `
+	if got := strings.Count(bindings, wrote); got != 3 {
+		t.Fatalf("winner selection plus payload/work guards = %d, want 3:\n%s", got, bindings)
 	}
 }
 

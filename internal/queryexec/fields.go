@@ -20,11 +20,16 @@ import (
 const (
 	maximumFieldCatalogExecutionTime = 15 * time.Second
 	maximumFieldCatalogMemoryBytes   = uint64(128 << 20)
-	maximumFieldCatalogRowsToRead    = uint64(5_000_000)
-	maximumFieldCatalogBytesToRead   = uint64(1 << 30)
-	maximumFieldCatalogNameBytes     = eventfields.MaximumNormalizedFieldNameBytes
-	maximumFieldCatalogBytes         = uint64(32 << 20)
-	maximumFieldCatalogThreads       = uint64(2)
+	// MaximumFieldCatalogMemoryBytes is the largest sealed per-query catalog
+	// memory class. Production admission uses this exported worst case to bound
+	// concurrent catalog work. Field summaries have an independent query cap.
+	MaximumFieldCatalogMemoryBytes             = uint64(224 << 20)
+	maximumStandardFieldCatalogKnowledgeFields = uint32(13)
+	maximumFieldCatalogRowsToRead              = uint64(5_000_000)
+	maximumFieldCatalogBytesToRead             = uint64(1 << 30)
+	maximumFieldCatalogNameBytes               = eventfields.MaximumNormalizedFieldNameBytes
+	maximumFieldCatalogBytes                   = uint64(32 << 20)
+	maximumFieldCatalogThreads                 = uint64(2)
 )
 
 var ErrFieldMetadataUnavailable = errors.New("field catalog metadata is unavailable")
@@ -73,6 +78,19 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	if err := validateCompiledFieldCatalog(query); err != nil {
 		return FieldCatalogResult{}, err
 	}
+	knowledgeGeneratedFields, sealedResourceEvidence := query.KnowledgeGeneratedFields()
+	if !sealedResourceEvidence {
+		// Executor.New always installs read admission and therefore rejects an
+		// unsealed query above. The fallback exists only for same-package
+		// transport diagnostics that deliberately construct an executor without
+		// admission; they exercise the zero-knowledge resource class.
+		if executor.readAdmission != nil {
+			return FieldCatalogResult{}, invalidFieldCatalogResult(
+				"compiled field catalog resource evidence is invalid",
+			)
+		}
+		knowledgeGeneratedFields = 0
+	}
 	admittedContext, releaseRead, err := executor.acquireRead(ctx, query, "execute ClickHouse field catalog")
 	if err != nil {
 		return FieldCatalogResult{}, err
@@ -85,7 +103,11 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 		}
 	}()
 	ctx = admittedContext
-	settings, err := settingsForFieldCatalog(executor.settings, query.Spec.MaximumFields)
+	settings, err := settingsForFieldCatalog(
+		executor.settings,
+		query.Spec.MaximumFields,
+		knowledgeGeneratedFields,
+	)
 	if err != nil {
 		return FieldCatalogResult{}, err
 	}
@@ -250,9 +272,18 @@ func validateCompiledFieldCatalog(query clickhouse.CompiledFieldCatalog) error {
 	return nil
 }
 
-func settingsForFieldCatalog(base clickhousedriver.Settings, maximumFields uint32) (clickhousedriver.Settings, error) {
+func settingsForFieldCatalog(
+	base clickhousedriver.Settings,
+	maximumFields uint32,
+	knowledgeGeneratedFields uint32,
+) (clickhousedriver.Settings, error) {
 	if maximumFields == 0 || maximumFields > clickhouse.MaximumFieldCatalogFields {
 		return nil, errors.New("execute ClickHouse field catalog: field limit is invalid")
+	}
+	if knowledgeGeneratedFields > clickhouse.MaximumClickHouseKnowledgeGeneratedFields {
+		return nil, errors.New(
+			"execute ClickHouse field catalog: generated-field resource evidence is invalid",
+		)
 	}
 	if base == nil || base["readonly"] != uint8(2) {
 		return nil, errors.New("execute ClickHouse field catalog: executor does not have read-only settings")
@@ -290,13 +321,17 @@ func settingsForFieldCatalog(base clickhousedriver.Settings, maximumFields uint3
 	}
 
 	settings := maps.Clone(base)
+	memoryLimit := maximumFieldCatalogMemoryBytes
+	if knowledgeGeneratedFields > maximumStandardFieldCatalogKnowledgeFields {
+		memoryLimit = MaximumFieldCatalogMemoryBytes
+	}
 	settings["max_execution_time"] = min(
 		base["max_execution_time"].(uint64),
 		uint64(maximumFieldCatalogExecutionTime/time.Second),
 	)
 	settings["max_memory_usage"] = min(
 		base["max_memory_usage"].(uint64),
-		maximumFieldCatalogMemoryBytes,
+		memoryLimit,
 	)
 	settings["max_rows_to_read"] = min(
 		base["max_rows_to_read"].(uint64),
@@ -308,7 +343,11 @@ func settingsForFieldCatalog(base clickhousedriver.Settings, maximumFields uint3
 	)
 	settings["max_result_rows"] = min(base["max_result_rows"].(uint64), uint64(maximumFields)+2)
 	settings["max_result_bytes"] = min(base["max_result_bytes"].(uint64), maximumFieldCatalogBytes)
-	settings["max_rows_to_group_by"] = min(base["max_rows_to_group_by"].(uint64), uint64(maximumFields)+1)
+	// The prerequisite catalog groups one synthetic/header key plus up to
+	// MaximumFields+1 profile keys. The latter extra key is the executor's exact
+	// overflow sentinel; neither may be rejected before the atomic result is
+	// observed.
+	settings["max_rows_to_group_by"] = min(base["max_rows_to_group_by"].(uint64), uint64(maximumFields)+2)
 	settings["max_threads"] = min(
 		base["max_threads"].(uint64),
 		maximumFieldCatalogThreads,

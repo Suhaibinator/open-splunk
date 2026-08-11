@@ -264,7 +264,8 @@ func equalSourceRange(left, right *opensplunkv1.SourceRange) bool {
 }
 
 func validateDependencyProjection(ctx context.Context, values []*opensplunkv1.KnowledgeValidationDependency, resources *opensplunkv1.KnowledgeResourceEstimate) error {
-	if len(values) > MaximumDependencies || resources == nil || resources.GetDependencyEdges() != uint32(len(values)) {
+	if len(values) > MaximumDependencies || resources == nil ||
+		resources.GetDependencyEdges() != uint32(len(values)) { // #nosec G115 -- len(values) is bounded by MaximumDependencies first.
 		return ErrInvariant
 	}
 	nodes := make(map[string]struct{}, len(values))
@@ -289,7 +290,7 @@ func validateDependencyProjection(ctx context.Context, values []*opensplunkv1.Kn
 		}
 		nodes[value.GetTarget().GetKnowledgeObjectId()+"\x00"+stringUint64(value.GetTarget().GetVersion())] = struct{}{}
 	}
-	if resources.GetDependencyNodes() != uint32(len(nodes)) {
+	if resources.GetDependencyNodes() != uint32(len(nodes)) { // #nosec G115 -- nodes cannot exceed the bounded dependency count.
 		return ErrInvariant
 	}
 	return nil

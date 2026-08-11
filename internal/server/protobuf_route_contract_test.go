@@ -55,8 +55,8 @@ func TestEveryProtobufHTTPRouteHasCrossRuntimeForwardCompatibility(t *testing.T)
 	if err := json.Unmarshal(encoded, &fixture); err != nil {
 		t.Fatalf("decode route fixture: %v", err)
 	}
-	if fixture.Version != 1 || len(fixture.Routes) != 62 {
-		t.Fatalf("route fixture version/count = %d/%d, want 1/62", fixture.Version, len(fixture.Routes))
+	if fixture.Version != 1 || len(fixture.Routes) != 63 {
+		t.Fatalf("route fixture version/count = %d/%d, want 1/63", fixture.Version, len(fixture.Routes))
 	}
 	assertProtobufRouteFixtureInventory(t, fixture.Routes)
 	futureFieldNumber := protowire.Number(fixture.FutureFieldNumber)
@@ -1070,9 +1070,10 @@ func assertGoRequestAcceptsFutureWire(
 	if _, err := forwardCompatibleProtoSanitizer(message); err != nil {
 		t.Fatalf("sanitize future request: %v", err)
 	}
-	if typeName == "ValidateKnowledgeObjectRequest" {
+	if typeName == "ValidateKnowledgeObjectRequest" ||
+		typeName == "PreviewKnowledgeObjectRequest" {
 		if len(message.ProtoReflect().GetUnknown()) == 0 {
-			t.Fatal("Validate future envelope authority was discarded")
+			t.Fatalf("%s future envelope authority was discarded", typeName)
 		}
 		message.ProtoReflect().SetUnknown(nil)
 	} else if len(message.ProtoReflect().GetUnknown()) != 0 {

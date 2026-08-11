@@ -268,7 +268,7 @@ func allowedProgramIssue(issue knowledgeprogram.Issue, normalized *opensplunkv1.
 			return false
 		}
 		return issue.Range.StartByteOffset == 0 &&
-			issue.Range.EndByteOffset == uint32(len(normalized.GetCalculatedField().GetExpression()))
+			issue.Range.EndByteOffset == uint32(len(normalized.GetCalculatedField().GetExpression())) // #nosec G115 -- normalized expressions are bounded far below MaxUint32.
 	default:
 		return normalized != nil && normalized.GetCalculatedField() != nil &&
 			issue.FieldPath == "calculated_field.expression" && issue.Range != nil &&
@@ -335,8 +335,9 @@ func rebaseProgramRange(
 		if start == end && end == uint64(len(canonical)) {
 			start, end = uint64(len(raw)), uint64(len(raw))
 		} else {
-			start += uint64(left)
-			end += uint64(left)
+			trimmedPrefixBytes := uint64(left) // #nosec G115 -- left is a nonnegative index into raw.
+			start += trimmedPrefixBytes
+			end += trimmedPrefixBytes
 		}
 	case "field_extraction.json.path":
 		if submitted.GetFieldExtraction() == nil || submitted.GetFieldExtraction().GetJson() == nil ||

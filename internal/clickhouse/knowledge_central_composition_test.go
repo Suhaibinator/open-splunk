@@ -11,7 +11,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
 
-const centralKnowledgeClosedSealError = "seal compiled ClickHouse execution: nonempty knowledge lowering is absent"
 const centralKnowledgeAuthoredAuthorityError = "seal compiled ClickHouse execution: knowledge authority changed during compilation"
 
 type centralKnowledgeFinalizerCapture struct {
@@ -99,7 +98,7 @@ func TestCentralKnowledgeCompositionLowersOnceBeforeAuthoredSuffixAtCompilerBoun
 	}
 	barrier := capture.state.chronologicalBarriers[0]
 	if barrier.name != knowledgeRuntimeGuardResultName ||
-		len(barrier.prerequisiteDefinitions) != 2 ||
+		len(barrier.prerequisiteDefinitions) != 1 ||
 		len(barrier.validationColumns) != 1 ||
 		barrier.validationColumns[0] != knowledgeRuntimeGuardValidationColumn {
 		t.Fatalf("central knowledge barrier = %#v", barrier)
@@ -111,7 +110,10 @@ func TestCentralKnowledgeCompositionLowersOnceBeforeAuthoredSuffixAtCompilerBoun
 	}
 	if !strings.Contains(capture.relation.sql, knowledgeRuntimeGuardResultName) ||
 		!strings.Contains(capture.relation.sql, `"authored_value"`) ||
-		strings.Contains(strings.Join(barrier.prerequisiteDefinitions, "\x00"), `"authored_value"`) {
+		strings.Contains(
+			strings.Join(barrier.prerequisiteDefinitions, "\x00")+barrier.sql,
+			`"authored_value"`,
+		) {
 		t.Fatalf(
 			"authored suffix is not strictly outside the knowledge barrier:\nrelation: %s\nbarrier: %#v",
 			capture.relation.sql,
@@ -126,7 +128,7 @@ func TestCentralKnowledgeCompositionLowersOnceBeforeAuthoredSuffixAtCompilerBoun
 		)
 	}
 	if got, want := strings.Count(
-		strings.Join(barrier.prerequisiteDefinitions, "\x00"),
+		barrier.prerequisiteDefinitions[0],
 		"?",
 	), len(barrier.args); got != want {
 		t.Fatalf("barrier placeholders = %d, args = %d", got, want)
@@ -396,21 +398,7 @@ func compileCentralKnowledgeCapture(
 
 func requireCentralKnowledgeCompilerBoundary(t *testing.T, validSeal bool, err error) {
 	t.Helper()
-	if knowledgeRuntimeAcceptanceEnabled() {
-		if err != nil || !validSeal {
-			t.Fatalf("central knowledge acceptance compile = (sealed:%t, error:%v)", validSeal, err)
-		}
-		return
-	}
-	if validSeal || err == nil || err.Error() != centralKnowledgeClosedSealError {
-		t.Fatalf(
-			"central knowledge default compile = (sealed:%t, error:%v), want zero/%q",
-			validSeal,
-			err,
-			centralKnowledgeClosedSealError,
-		)
-	}
-	if strings.Contains(err.Error(), "unsupported logical operator") {
-		t.Fatalf("central knowledge prefix reached generic operator lowering: %v", err)
+	if err != nil || !validSeal {
+		t.Fatalf("central knowledge compile = (sealed:%t, error:%v)", validSeal, err)
 	}
 }

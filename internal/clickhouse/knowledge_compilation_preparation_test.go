@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 
@@ -12,6 +13,71 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 	"github.com/Suhaibinator/open-splunk/internal/splregex"
 )
+
+func TestPrepareKnowledgeCompilationRejectsPhysicalFieldAuthorityBeforeLowering(t *testing.T) {
+	programWithAliases := func(count int) knowledgeprogram.Program {
+		definitions := make([]*opensplunkv1.KnowledgeObjectDefinition, count)
+		for index := range definitions {
+			definitions[index] = knowledgePreludeAliasDefinition(
+				fmt.Sprintf("physical-alias-%03d", index),
+				fmt.Sprintf("physical_source_%03d", index),
+				fmt.Sprintf("physical_destination_%03d", index),
+			)
+		}
+		return knowledgePreludeProgram(t, definitions)
+	}
+	prepare := func(program knowledgeprogram.Program) error {
+		logical, err := plan.InjectKnowledgePrelude(
+			buildPlan(t, `index=gradethis`),
+			program,
+		)
+		if err != nil {
+			t.Fatalf("InjectKnowledgePrelude: %v", err)
+		}
+		_, err = prepareKnowledgeCompilation(logical)
+		return err
+	}
+
+	boundary := programWithAliases(int(MaximumClickHouseKnowledgeGeneratedFields))
+	if charges := boundary.Charges(); charges.GeneratedFields != MaximumClickHouseKnowledgeGeneratedFields ||
+		charges.GeneratedOperators != 1 {
+		t.Fatalf("boundary charges = %#v", charges)
+	}
+	if err := prepare(boundary); err != nil {
+		t.Fatalf("exact physical field ceiling: %v", err)
+	}
+
+	for _, count := range []int{
+		int(MaximumClickHouseKnowledgeGeneratedFields) + 1,
+		knowledgeprogram.MaximumObjects,
+	} {
+		program := programWithAliases(count)
+		if count == knowledgeprogram.MaximumObjects {
+			charges := program.Charges()
+			if program.ObjectCount() != knowledgeprogram.MaximumObjects ||
+				charges.GeneratedFields != knowledgeprogram.MaximumObjects ||
+				charges.GeneratedOperators != 1 {
+				t.Fatalf("maximum authority = objects %d, charges %#v", program.ObjectCount(), charges)
+			}
+		}
+		err := prepare(program)
+		var diagnostic *plan.Diagnostic
+		wantMessage := fmt.Sprintf(
+			"knowledge prelude generates more than %d fields for ClickHouse execution",
+			MaximumClickHouseKnowledgeGeneratedFields,
+		)
+		if !errors.As(err, &diagnostic) ||
+			diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+			diagnostic.Message != wantMessage {
+			t.Fatalf("prepare %d-field authority error = %#v", count, err)
+		}
+		if err := validateKnowledgePreludePreparation(
+			knowledgePreludePreparationForTest(program),
+		); !errors.As(err, &diagnostic) || diagnostic.Message != wantMessage {
+			t.Fatalf("validate %d-field authority error = %#v", count, err)
+		}
+	}
+}
 
 func TestPrepareKnowledgeCompilationDistinguishesLegacyAndPresentEmpty(t *testing.T) {
 	t.Parallel()

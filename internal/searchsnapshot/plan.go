@@ -10,6 +10,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -61,6 +62,50 @@ func BuildExecutionPlan(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, err
 	logical, err = plan.InjectKnowledgePrelude(logical, prelude)
 	if err != nil {
 		return nil, fmt.Errorf("rebuild immutable search plan: inject retained knowledge prelude: %w", err)
+	}
+	return logical, nil
+}
+
+// BuildExecutionPlanWithKnowledgePrelude rebuilds the exact immutable event
+// scope retained by a Manager-minted execution and substitutes one complete
+// backend-neutral knowledge program. It deliberately delegates compilation to
+// the ordinary compiler path and cannot create executable authority by itself.
+func BuildExecutionPlanWithKnowledgePrelude(
+	snapshot searchjobs.ExecutionSnapshot,
+	program knowledgeprogram.Program,
+) (*plan.Query, error) {
+	retained, err := snapshot.OpenRetainedKnowledgeExecution()
+	if err != nil {
+		return nil, fmt.Errorf(
+			"rebuild immutable search plan: open retained knowledge execution: %w",
+			err,
+		)
+	}
+	if retained == nil || program.IsZero() {
+		return nil, errors.New(
+			"rebuild immutable search plan: retained or candidate knowledge authority is unavailable",
+		)
+	}
+	logical, err := buildPlan(planSnapshot{
+		spl:              snapshot.SPL,
+		tenantID:         snapshot.TenantID,
+		effectiveIndexes: snapshot.EffectiveIndexes,
+		earliest:         snapshot.Earliest,
+		latest:           snapshot.Latest,
+		searchStart:      snapshot.SearchStart,
+		searchTimezone:   snapshot.SearchTimezone,
+		indexTimeCutoff:  snapshot.IndexTimeCutoff,
+		visibilityCutoff: snapshot.VisibilityCutoff,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logical, err = plan.InjectKnowledgePrelude(logical, program)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"rebuild immutable search plan: inject candidate knowledge prelude: %w",
+			err,
+		)
 	}
 	return logical, nil
 }

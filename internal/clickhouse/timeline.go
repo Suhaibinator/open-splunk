@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 const (
@@ -61,19 +62,75 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 		return CompiledTimeline{}, errors.New("compile ClickHouse timeline: covered range does not match the Scan snapshot")
 	}
 
-	ordinary, err := c.Compile(query)
+	firstBucketNumber, gridOK := ordinalGridFirstBucketNumber(spec.FirstBucket.Unix(), spec.SpanSeconds, spec.BucketCount)
+	if !gridOK {
+		return CompiledTimeline{}, errors.New("compile ClickHouse timeline: grid bucket number overflows")
+	}
+	source, err := c.compileWithFinalizer(
+		query,
+		func(
+			relation compiledRelation,
+			state compileState,
+			args []any,
+			_ *plan.Scan,
+			aliasSequence int,
+		) (CompiledQuery, error) {
+			_, outputFields, projectionErr := finalProjection(state)
+			if projectionErr != nil {
+				return CompiledQuery{}, projectionErr
+			}
+			if !timelineOutputContainsCanonicalTime(outputFields) {
+				return CompiledQuery{}, &plan.Diagnostic{
+					Code:        "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD",
+					Message:     "timeline requires the unmodified canonical _time field",
+					Range:       query.Operators[0].SourceRange(),
+					Suggestions: []string{"request the timeline before removing, replacing, or renaming _time"},
+				}
+			}
+			return finalizeTimeline(
+				relation,
+				state,
+				args,
+				spanNanoseconds,
+				firstBucketNumber,
+				spec.BucketCount,
+				scan.Range,
+				aliasSequence,
+			)
+		},
+		false,
+	)
 	if err != nil {
 		return CompiledTimeline{}, err
 	}
-	if ordinary.Timechart != nil || ordinary.Chart != nil || !timelineOutputContainsCanonicalTime(ordinary.OutputFields) {
-		return CompiledTimeline{}, &plan.Diagnostic{
-			Code:        "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD",
-			Message:     "timeline requires the unmodified canonical _time field",
-			Range:       query.Operators[0].SourceRange(),
-			Suggestions: []string{"request the timeline before removing, replacing, or renaming _time"},
-		}
+	compiled := CompiledTimeline{
+		SQL:       source.SQL,
+		Args:      source.Args,
+		Spec:      spec,
+		readScope: source.readScope,
 	}
+	compiled.executionAuthority, err = sealCompiledTimelineExecution(source, compiled)
+	if err != nil {
+		return CompiledTimeline{}, err
+	}
+	return compiled, nil
+}
 
+// finalizeTimeline consumes the proven event relation directly. In
+// particular, it does not embed a separately finalized ordinary query: doing
+// so would duplicate that query's chronological validation graph before the
+// bucket aggregate. The shared finalizer keeps authored operators, runtime
+// guards, and the timeline transport in one validation envelope.
+func finalizeTimeline(
+	relation compiledRelation,
+	state compileState,
+	args []any,
+	spanNanoseconds int64,
+	firstBucketNumber int64,
+	bucketCount uint64,
+	ownerRange spl.Range,
+	aliasSequence int,
+) (CompiledQuery, error) {
 	q := quoteIdentifier
 	source := q("__os_timeline_source")
 	input := q("__os_timeline_input")
@@ -86,10 +143,8 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	ordinal := q(TimelineOrdinalColumn)
 	count := q(TimelineCountColumn)
 
-	bucketNumberExpression := epochFloorBucketNumberSQL(ticks)
-
 	var sql strings.Builder
-	sql.Grow(len(ordinary.SQL) + 1_536)
+	sql.Grow(len(relation.sql) + 1_536)
 	sql.WriteString("WITH ")
 	sql.WriteString(source)
 	sql.WriteString(" AS (SELECT ")
@@ -97,7 +152,7 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	sql.WriteString(" AS ")
 	sql.WriteString(eventTime)
 	sql.WriteString(" FROM (")
-	sql.WriteString(ordinary.SQL)
+	sql.WriteString(relation.sql)
 	sql.WriteString(") AS ")
 	sql.WriteString(input)
 	sql.WriteString("), ")
@@ -113,7 +168,7 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 
 	sql.WriteString(counts)
 	sql.WriteString(" AS (SELECT ")
-	sql.WriteString(bucketNumberExpression)
+	sql.WriteString(epochFloorBucketNumberSQL(ticks))
 	sql.WriteString(" AS ")
 	sql.WriteString(bucketNumber)
 	sql.WriteString(", count() AS ")
@@ -127,9 +182,7 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	sql.WriteString(grid)
 	sql.WriteString(" AS (")
 	sql.WriteString(ordinalGridSQL(ordinal, bucketNumber))
-	sql.WriteString(") ")
-
-	sql.WriteString("SELECT ")
+	sql.WriteString(") SELECT ")
 	sql.WriteString(grid)
 	sql.WriteString(".")
 	sql.WriteString(ordinal)
@@ -159,36 +212,39 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	sql.WriteString(ordinal)
 	sql.WriteString(" ASC")
 
-	sourceDepth := relationalNodeDepth(ordinary.relationalDepth)
+	sourceDepth := relationalNodeDepth(relation.depth)
 	preparedDepth := relationalNodeDepth(sourceDepth)
 	countsDepth := relationalNodeDepth(preparedDepth)
 	gridDepth := relationalNodeDepth()
 	resultDepth := relationalNodeDepth(gridDepth, countsDepth)
-	if err := validateRelationalDepth(resultDepth, scan.Range); err != nil {
-		return CompiledTimeline{}, err
+	compiled := withCompiledRelationalDepth(
+		CompiledQuery{
+			SQL: sql.String(),
+			Args: appendOrdinalGridArgs(
+				append([]any(nil), args...),
+				spanNanoseconds,
+				firstBucketNumber,
+				bucketCount,
+			),
+		},
+		resultDepth,
+		ownerRange,
+	)
+	if len(state.chronologicalBarriers) == 0 {
+		return compiled, nil
 	}
-	if sql.Len() > maxCompiledQueryBytes {
-		return CompiledTimeline{}, &plan.Diagnostic{
-			Code:    "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
-			Range:   query.Operators[0].SourceRange(),
-		}
-	}
-
-	firstBucketNumber, gridOK := ordinalGridFirstBucketNumber(spec.FirstBucket.Unix(), spec.SpanSeconds, spec.BucketCount)
-	if !gridOK {
-		return CompiledTimeline{}, errors.New("compile ClickHouse timeline: grid bucket number overflows")
-	}
-	args := make([]any, 0, len(ordinary.Args)+4)
-	args = append(args, ordinary.Args...)
-	args = appendOrdinalGridArgs(args, spanNanoseconds, firstBucketNumber, spec.BucketCount)
-	compiled := CompiledTimeline{SQL: sql.String(), Args: args, Spec: spec}
-	compiled.readScope = ordinary.readScope.sealedForSQL(compiled.SQL)
-	compiled.executionAuthority, err = sealCompiledTimelineExecution(ordinary, compiled)
-	if err != nil {
-		return CompiledTimeline{}, err
-	}
-	return compiled, nil
+	return wrapChronologicalValidation(
+		compiled.SQL,
+		compiled.relationalDepth,
+		ownerRange,
+		state.chronologicalBarriers,
+		[]string{ordinal, count},
+		[]string{TimelineOrdinalColumn, TimelineCountColumn},
+		ordinal+" ASC",
+		eventStatsOrdinarySourceFanout,
+		compiled,
+		aliasSequence,
+	)
 }
 
 func validateTimelineSpec(spec TimelineSpec) (int64, error) {

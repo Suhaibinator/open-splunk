@@ -58,6 +58,11 @@ func (handler *apiHandler) protectKnowledgeManagementRoutes(
 		request *http.Request,
 	) {
 		action, protected := knowledgeAttemptFallbackAction(request)
+		if !protected && handler.knowledgePreviewConfigured() &&
+			request != nil && request.Method == http.MethodPost &&
+			request.URL != nil && request.URL.Path == knowledgeObjectsPreviewPath {
+			action, protected = knowledgeattemptaudit.ActionPreview, true
+		}
 		if !protected {
 			next.ServeHTTP(response, request)
 			return

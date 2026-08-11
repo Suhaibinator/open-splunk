@@ -240,11 +240,14 @@ func validateKnowledgePreludePreparation(preparation preparedKnowledgeCompilatio
 	commitment, ok := preparation.program.Commitment()
 	programKinds := preparation.program.OperatorKinds()
 	programCharges := preparation.program.Charges()
+	if err := validateClickHouseKnowledgePhysicalCharges(programCharges); err != nil {
+		return err
+	}
 	if !ok || commitment != preparation.programCommitment ||
 		!slices.Equal(programKinds, preparation.operatorKinds) ||
 		programCharges != preparation.programCharges ||
 		preparation.prefixLength != len(programKinds) ||
-		uint32(preparation.prefixLength) != programCharges.GeneratedOperators {
+		uint32(preparation.prefixLength) != programCharges.GeneratedOperators { // #nosec G115 -- physical charge validation bounds this by knowledgeprogram.MaximumObjects.
 		return errors.New(
 			"compile ClickHouse knowledge prelude: prepared authority disagrees with program",
 		)

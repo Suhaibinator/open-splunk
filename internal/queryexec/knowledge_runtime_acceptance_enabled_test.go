@@ -1,5 +1,3 @@
-//go:build open_splunk_knowledge_runtime_acceptance
-
 package queryexec
 
 import (
@@ -8,7 +6,7 @@ import (
 	"time"
 )
 
-func TestKnowledgeRuntimeAcceptanceCompilerMatrixSealsWithoutDocker(t *testing.T) {
+func TestKnowledgeRuntimeCompilerMatrixSealsWithoutDocker(t *testing.T) {
 	const (
 		indexName         = "knowledge-runtime"
 		selectorIndexName = "selector-runtime"
@@ -29,12 +27,12 @@ func TestKnowledgeRuntimeAcceptanceCompilerMatrixSealsWithoutDocker(t *testing.T
 		base.Add(2*time.Minute),
 	)
 	if len(matrix.compilerCases)+4 != 13 {
-		t.Fatalf("tagged compiler matrix cases = %d, want 13", len(matrix.compilerCases)+4)
+		t.Fatalf("compiler matrix cases = %d, want 13", len(matrix.compilerCases)+4)
 	}
 	for _, test := range matrix.compilerCases {
 		t.Run(test.name, func(t *testing.T) {
 			if !test.compiled.HasValidExecutionSeal() {
-				t.Fatal("tagged public compiler case has no valid execution seal")
+				t.Fatal("public compiler case has no valid execution seal")
 			}
 		})
 	}
@@ -49,7 +47,7 @@ func TestKnowledgeRuntimeAcceptanceCompilerMatrixSealsWithoutDocker(t *testing.T
 		!matrix.summary.HasValidExecutionSeal() ||
 		!matrix.suggestions.HasValidExecutionSeal() ||
 		!matrix.overflow.HasValidExecutionSeal() {
-		t.Fatal("tagged compiler matrix contains an unsealed execution")
+		t.Fatal("compiler matrix contains an unsealed execution")
 	}
 
 	commitment, commitmentOK := program.Commitment()
@@ -63,7 +61,7 @@ func TestKnowledgeRuntimeAcceptanceCompilerMatrixSealsWithoutDocker(t *testing.T
 		evidence.TenantID() != tenantID ||
 		!slices.Equal(evidence.EffectiveIndexes(), []string{indexName}) {
 		t.Fatalf(
-			"tagged ordinary knowledge evidence = (%#v, %t), commitment=%x/%x",
+			"ordinary knowledge evidence = (%#v, %t), commitment=%x/%x",
 			evidence,
 			evidenceOK,
 			evidenceCommitment,
@@ -74,24 +72,46 @@ func TestKnowledgeRuntimeAcceptanceCompilerMatrixSealsWithoutDocker(t *testing.T
 	cloned, cloneOK := matrix.ordinary.CloneForExecution()
 	if !cloneOK || !matrix.ordinary.EqualForExecution(cloned) ||
 		!cloned.HasValidExecutionSeal() || len(cloned.OutputFields) == 0 {
-		t.Fatalf("tagged ordinary execution clone = (%#v, %t)", cloned, cloneOK)
+		t.Fatalf("ordinary execution clone = (%#v, %t)", cloned, cloneOK)
 	}
 	wantFirstOutput := matrix.ordinary.OutputFields[0]
-	cloned.OutputFields[0] = "mutated-tagged-acceptance-output"
+	cloned.OutputFields[0] = "mutated-production-output"
 	if matrix.ordinary.OutputFields[0] != wantFirstOutput ||
 		matrix.ordinary.EqualForExecution(cloned) || cloned.HasValidExecutionSeal() {
-		t.Fatal("tagged ordinary execution clone aliases or survives mutation")
+		t.Fatal("ordinary execution clone aliases or survives mutation")
 	}
 
 	containerClone, cloneOK := matrix.ordinary.CloneForExecution()
 	if !cloneOK || len(containerClone.ContainerOutputs) == 0 {
-		t.Fatalf("tagged ordinary container clone = (%#v, %t)", containerClone, cloneOK)
+		t.Fatalf("ordinary container clone = (%#v, %t)", containerClone, cloneOK)
 	}
 	wantFirstContainer := matrix.ordinary.ContainerOutputs[0]
 	containerClone.ContainerOutputs[0].OutputIndex = 0
 	if matrix.ordinary.ContainerOutputs[0] != wantFirstContainer ||
 		matrix.ordinary.EqualForExecution(containerClone) ||
 		containerClone.HasValidExecutionSeal() {
-		t.Fatal("tagged ordinary container clone aliases or survives mutation")
+		t.Fatal("ordinary container clone aliases or survives mutation")
+	}
+}
+
+func TestKnowledgeRuntimeMaximumFieldCatalogCompilerBoundary(t *testing.T) {
+	const (
+		indexName         = "knowledge-runtime"
+		selectorIndexName = "selector-runtime"
+		tenantID          = "knowledge-tenant"
+	)
+	base := time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC)
+	catalog := compileKnowledgeRuntimeMaximumFieldCatalog(
+		t,
+		tenantID,
+		indexName,
+		selectorIndexName,
+		base,
+		base.Add(10*time.Minute),
+		base,
+		base.Add(2*time.Minute),
+	)
+	if count, ok := catalog.KnowledgeGeneratedFields(); !ok || count != 16 {
+		t.Fatalf("maximum-generated-field catalog evidence = (%d, %t), want (16, true)", count, ok)
 	}
 }

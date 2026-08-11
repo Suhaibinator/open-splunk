@@ -485,6 +485,7 @@ func insertWriterActiveCounterRange(
 	columns += ", " + spec.countColumn
 	values += ", 0"
 	withWriterHealthCorruptionConnection(t, database, func(connection *sql.Conn) {
+		// #nosec G202 -- table, columns, and expressions come only from the closed activeCounterPreflightKind mapping.
 		if _, err := connection.ExecContext(context.Background(), `WITH RECURSIVE identities(n) AS (
 			SELECT ?
 			UNION ALL SELECT n + 1 FROM identities WHERE n + 1 < ?
@@ -517,6 +518,7 @@ func insertWriterActiveCounterRecord(
 	arguments = append(arguments, counter)
 	placeholders += ", ?"
 	withWriterHealthCorruptionConnection(t, database, func(connection *sql.Conn) {
+		// #nosec G202 -- table and column names come only from the closed activeCounterPreflightKind mapping.
 		if _, err := connection.ExecContext(
 			context.Background(),
 			"INSERT INTO "+spec.table+" ("+columns+") VALUES ("+placeholders+")",
@@ -590,12 +592,12 @@ func seedWriterHealthDefinitionBoundary(t *testing.T, database *control.DB) {
 	if err != nil {
 		t.Fatalf("acquire definition boundary connection: %v", err)
 	}
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 	tx, err := connection.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("begin definition boundary transaction: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err := tx.ExecContext(context.Background(), `WITH RECURSIVE versions(n) AS (
 		SELECT 2
 		UNION ALL SELECT n + 1 FROM versions WHERE n < ?

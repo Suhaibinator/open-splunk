@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -110,7 +109,7 @@ func TestAuthorityFinalizeRejectsForgeryTamperAndScopeMismatch(t *testing.T) {
 	}
 }
 
-func TestAuthorityFinalizeNonemptyAcceptanceModes(t *testing.T) {
+func TestAuthorityFinalizeNonemptySealedCompilerAuthority(t *testing.T) {
 	t.Parallel()
 
 	authority, err := Prepare(snapshotGoldenInput(t))
@@ -123,24 +122,12 @@ func TestAuthorityFinalizeNonemptyAcceptanceModes(t *testing.T) {
 		t.Fatalf("InjectKnowledgePrelude(nonempty): %v", err)
 	}
 	compiled, compileErr := (clickhouse.Compiler{}).Compile(logical)
-	if compileErr != nil {
-		if knowledgeSnapshotAcceptanceEnabled() ||
-			!strings.Contains(compileErr.Error(), "nonempty knowledge lowering is absent") {
-			t.Fatalf("Compile(nonempty) = (%#v, %v), want default compiler closure", compiled, compileErr)
-		}
-	} else {
-		if !compiled.HasValidExecutionSeal() {
-			t.Fatal("Compile(nonempty) returned an unsealed result")
-		}
-		snapshot, finalizeErr := authority.Finalize(compiled)
-		if knowledgeSnapshotAcceptanceEnabled() {
-			if finalizeErr != nil || snapshot.IsZero() {
-				t.Fatalf("Finalize(dual-tag nonempty) = (%#v, %v), want sealed snapshot", snapshot, finalizeErr)
-			}
-		} else if !snapshot.IsZero() || !errors.Is(finalizeErr, ErrInvalidInput) ||
-			!strings.Contains(finalizeErr.Error(), "nonempty authority requires the KO-1 knowledge prelude") {
-			t.Fatalf("Finalize(compiler-only nonempty) = (%#v, %v), want closed snapshot gate", snapshot, finalizeErr)
-		}
+	if compileErr != nil || !compiled.HasValidExecutionSeal() {
+		t.Fatalf("Compile(nonempty) = (%#v, %v), want sealed execution", compiled, compileErr)
+	}
+	snapshot, finalizeErr := authority.Finalize(compiled)
+	if finalizeErr != nil || snapshot.IsZero() {
+		t.Fatalf("Finalize(nonempty) = (%#v, %v), want sealed snapshot", snapshot, finalizeErr)
 	}
 
 	emptyCompiled, _ := compileSnapshotQuery(t, "tenant-a", []string{"alpha", "zeta"}, `*`)

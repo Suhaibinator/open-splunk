@@ -110,7 +110,7 @@ func ValidateReadScope(scope ReadScope) error {
 }
 
 func normalizeListRequest(scope ReadScope, request ListRequest) (normalizedListRequest, error) {
-	normalizedScope, err := normalizeScope(scope)
+	normalized, err := normalizeScope(scope)
 	if err != nil {
 		return normalizedListRequest{}, err
 	}
@@ -177,7 +177,7 @@ func normalizeListRequest(scope ReadScope, request ListRequest) (normalizedListR
 		return normalizedListRequest{}, fmt.Errorf("%w: knowledge sort direction is invalid", control.ErrInvalidArgument)
 	}
 	return normalizedListRequest{
-		scope:               normalizedScope,
+		scope:               normalized,
 		pageSize:            pageSize,
 		pageToken:           strings.Clone(request.PageToken),
 		includeTotal:        request.IncludeTotal,
@@ -198,7 +198,7 @@ func normalizeDependencyListRequest(
 	request DependencyListRequest,
 	direction graphDirection,
 ) (normalizedDependencyListRequest, error) {
-	normalizedScope, err := normalizeScope(scope)
+	normalized, err := normalizeScope(scope)
 	if err != nil {
 		return normalizedDependencyListRequest{}, err
 	}
@@ -224,7 +224,7 @@ func normalizeDependencyListRequest(
 		requestedVersion = int64(*request.Version)
 	}
 	return normalizedDependencyListRequest{
-		scope:                   normalizedScope,
+		scope:                   normalized,
 		direction:               direction,
 		knowledgeObjectID:       strings.Clone(request.KnowledgeObjectID),
 		requestedVersion:        requestedVersion,
@@ -253,6 +253,7 @@ func NormalizeDependencyListRequest(
 		IncludeTotal:      normalized.includeTotal,
 	}
 	if normalized.requestedVersionPresent {
+		// #nosec G115 -- normalizeDependencyListRequest requires a positive requested version.
 		value := uint64(normalized.requestedVersion)
 		result.Version = &value
 	}

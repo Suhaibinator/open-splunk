@@ -22,7 +22,8 @@ func knowledgeValidationRawRequest(
 	body io.Reader,
 ) *http.Request {
 	t.Helper()
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodPost,
 		knowledgeObjectsValidatePath,
 		body,

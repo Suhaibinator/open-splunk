@@ -366,6 +366,9 @@ func TestKnowledgeAdmissionLegacyAndAppLessParity(t *testing.T) {
 			if manager.KnowledgeAdmissionEnabled() != test.enabled {
 				t.Fatalf("KnowledgeAdmissionEnabled() = %t", manager.KnowledgeAdmissionEnabled())
 			}
+			if manager.KnowledgeExecutionEnabled() != test.enabled {
+				t.Fatalf("KnowledgeExecutionEnabled() = %t", manager.KnowledgeExecutionEnabled())
+			}
 			created, err := manager.Create(context.Background(), withSPL(validRequest(), "| unsupported_legacy_command"))
 			if err != nil {
 				t.Fatalf("legacy Create() became synchronous: %v", err)
@@ -546,7 +549,7 @@ func TestKnowledgeAdmissionCancellationAndCloseInterruptResolver(t *testing.T) {
 			if !errors.Is(err, test.want) {
 				t.Fatalf("Create() error = %v, want %v", err, test.want)
 			}
-			if stopErr := <-stopDone; stopErr != nil && test.want == ErrClosed {
+			if stopErr := <-stopDone; stopErr != nil && errors.Is(test.want, ErrClosed) {
 				t.Fatalf("Close(): %v", stopErr)
 			}
 			assertEmptyManagerAdmissionState(t, manager)

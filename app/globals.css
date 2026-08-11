@@ -5315,6 +5315,40 @@ pre {
 .knowledge-manager__advanced-filter-actions > span { display: flex; flex: 0 0 auto; gap: 7px; }
 .knowledge-manager__advanced-filter-actions button { background: white; border: 1px solid #aeb9be; color: #2e6f91; font-size: 10px; min-height: 32px; padding: 0 11px; }
 .knowledge-manager__advanced-filter-actions button[type="submit"] { background: #3b7e9e; border-color: #3b7e9e; color: white; }
+.knowledge-manager > .suite-button { justify-self: end; min-height: 34px; }
+.knowledge-manager__mutation-form { background: #fff; border: 1px solid #cbd3d6; display: grid; gap: 12px; min-width: 0; padding: 14px; }
+.knowledge-manager__mutation-form > header { align-items: flex-start; border-bottom: 1px solid #e0e5e7; display: flex; gap: 12px; justify-content: space-between; padding-bottom: 11px; }
+.knowledge-manager__mutation-form h3 { color: #293941; font-size: 14px; font-weight: 500; margin: 2px 0 3px; }
+.knowledge-manager__mutation-form header p { color: #68767e; font-size: 9px; margin: 0; }
+.knowledge-manager__mutation-form button,
+.knowledge-manager__object-actions button,
+.knowledge-manager__delete-confirmation button { min-height: 32px; }
+.knowledge-manager__mutation-form fieldset { border: 1px solid #d8dfe1; display: grid; gap: 9px; margin: 0; min-width: 0; padding: 11px; }
+.knowledge-manager__mutation-form legend { color: #43545d; font-size: 10px; font-weight: 700; padding: 0 5px; }
+.knowledge-manager__mutation-form legend small { color: #748188; font-size: 8px; font-weight: 400; }
+.knowledge-manager__mutation-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); min-width: 0; }
+.knowledge-manager__mutation-grid--selectors { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.knowledge-manager__mutation-grid label,
+.knowledge-manager__delete-confirmation label { display: grid; gap: 5px; min-width: 0; }
+.knowledge-manager__mutation-grid label > span,
+.knowledge-manager__delete-confirmation label > span { color: #5f6e76; font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.knowledge-manager__mutation-grid input,
+.knowledge-manager__mutation-grid select,
+.knowledge-manager__delete-confirmation input { background: #fff; border: 1px solid #adb8bd; font-size: 10px; height: 34px; min-width: 0; padding: 0 9px; width: 100%; }
+.knowledge-manager__mutation-grid textarea { background: #fff; border: 1px solid #adb8bd; font-family: inherit; font-size: 10px; line-height: 1.45; min-height: 70px; padding: 7px 9px; resize: vertical; width: 100%; }
+.knowledge-manager__mutation-grid label.knowledge-manager__mutation-wide { grid-column: 1 / -1; }
+.knowledge-manager__mutation-actions { align-items: center; display: flex; gap: 8px; justify-content: flex-end; }
+.knowledge-manager__mutation-result { background: #f4f7f8; color: #52646e; display: grid; font-size: 9px; gap: 5px; padding: 9px; }
+.knowledge-manager__mutation-result--valid { background: #edf4e9; border-left: 3px solid #5c9635; color: #456f31; }
+.knowledge-manager__mutation-result--invalid,
+.knowledge-manager__mutation-error { background: #fff8e9; border-left: 3px solid #c07823; color: #795817; font-size: 9px; padding: 9px; }
+.knowledge-manager__mutation-result ul { display: grid; gap: 4px; margin: 3px 0 0; padding-left: 18px; }
+.knowledge-manager__object-actions { border-top: 1px solid #e1e6e8; display: grid; gap: 8px; padding-top: 12px; }
+.knowledge-manager__object-actions > div:first-child { display: flex; flex-wrap: wrap; gap: 7px; }
+.knowledge-manager__object-actions button { background: white; border: 1px solid #aeb9be; color: #2e6f91; font-size: 9px; padding: 0 9px; }
+.knowledge-manager__delete-confirmation { background: #fff8e9; border: 1px solid #dec58f; display: grid; gap: 9px; padding: 10px; }
+.knowledge-manager__delete-confirmation h4 { color: #795817; font-size: 11px; margin: 0; }
+.knowledge-manager__delete-confirmation p { color: #715d34; font-size: 9px; line-height: 1.45; margin: 0; overflow-wrap: anywhere; }
 .knowledge-manager__workspace { display: grid; gap: 12px; grid-template-columns: minmax(0, 1fr); }
 .knowledge-manager__workspace--detail { grid-template-columns: minmax(0, 1fr) minmax(310px, 0.66fr); }
 .knowledge-manager__list-panel { background: white; border: 1px solid #cfd6d9; min-width: 0; overflow: hidden; }
@@ -5435,7 +5469,8 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
 .knowledge-manager__status--unavailable > span:first-child { background: #e5b553; color: #4f3a12; }
 .knowledge-manager button:focus-visible,
 .knowledge-manager input:focus-visible,
-.knowledge-manager select:focus-visible { outline: 3px solid rgb(42 120 158 / 28%); outline-offset: 1px; }
+.knowledge-manager select:focus-visible,
+.knowledge-manager textarea:focus-visible { outline: 3px solid rgb(42 120 158 / 28%); outline-offset: 1px; }
 
 /* Activity */
 .backend-activity-page { max-width: 1680px; }
@@ -6812,6 +6847,7 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .knowledge-manager__toolbar { align-items: stretch; flex-direction: column; }
   .knowledge-manager__filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .knowledge-manager__advanced-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .knowledge-manager__mutation-grid--selectors { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .knowledge-manager__toolbar > p { align-items: flex-start; }
   .knowledge-manager__workspace--detail { grid-template-columns: 1fr; }
   .knowledge-manager__detail { position: static; }
@@ -6934,7 +6970,11 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .knowledge-manager__toolbar label { min-width: 0; width: 100%; }
   .knowledge-manager__toolbar select,
   .knowledge-manager__advanced-filter-grid input,
-  .knowledge-manager__advanced-filter-grid select { font-size: 16px; height: 44px; }
+  .knowledge-manager__advanced-filter-grid select,
+  .knowledge-manager__mutation-grid input,
+  .knowledge-manager__mutation-grid select,
+  .knowledge-manager__delete-confirmation input { font-size: 16px; height: 44px; }
+  .knowledge-manager__mutation-grid textarea { font-size: 16px; }
   .knowledge-manager__toolbar > p { align-items: flex-start; }
   .knowledge-manager__advanced-filter-actions { align-items: stretch; flex-direction: column; }
   .knowledge-manager__advanced-filter-actions > span { width: 100%; }
@@ -6960,6 +7000,10 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .knowledge-manager__relationship-inspect,
   .knowledge-manager__related-status button { min-height: 42px; width: 100%; }
   .knowledge-manager__related-object dl { grid-template-columns: 1fr; }
+  .knowledge-manager__mutation-grid { grid-template-columns: 1fr; }
+  .knowledge-manager__mutation-grid label.knowledge-manager__mutation-wide { grid-column: 1; }
+  .knowledge-manager__mutation-actions { align-items: stretch; flex-direction: column; }
+  .knowledge-manager__mutation-actions button { min-height: 42px; width: 100%; }
   .admin-summary-grid { grid-template-columns: 1fr; }
   .admin-summary-grid article { min-height: 74px; }
   .admin-section-header { align-items: flex-start; flex-direction: column; gap: 10px; }
@@ -7282,6 +7326,7 @@ button.knowledge-manager__row:hover { background: #f5f8f9; }
   .knowledge-manager__header { flex-direction: column; }
   .knowledge-manager__filters { grid-template-columns: 1fr; }
   .knowledge-manager__advanced-filter-grid { grid-template-columns: 1fr; }
+  .knowledge-manager__mutation-grid--selectors { grid-template-columns: 1fr; }
   .knowledge-manager__metadata { grid-template-columns: 1fr; }
   .knowledge-manager__row { grid-template-columns: 1fr; }
   .knowledge-manager__row > span,

@@ -180,7 +180,7 @@ func (snapshot Snapshot) Reference() *opensplunkv1.KnowledgeSnapshotRef {
 		SnapshotSha256:               bytes.Clone(snapshot.message.GetSnapshotSha256()),
 		TenantCatalogRevision:        snapshot.message.GetTenantCatalogRevision(),
 		TenantCatalogStateToken:      bytes.Clone(snapshot.message.GetTenantCatalogStateToken()),
-		ObjectCount:                  uint32(len(snapshot.message.GetObjects())),
+		ObjectCount:                  uint32(len(snapshot.message.GetObjects())), // #nosec G115 -- finalized snapshots are bounded by MaximumObjects.
 		CompilerCompatibilityVersion: strings.Clone(snapshot.message.GetCompilerCompatibilityVersion()),
 	}
 }
@@ -248,7 +248,8 @@ func retainedMessageBytes(message protoreflect.Message) uint64 {
 		switch {
 		case field.IsMap():
 			mapping := value.Map()
-			total += uint64(retainedRepeatedSlotCharge * 2 * mapping.Len())
+			mappingLength := uint64(mapping.Len()) // #nosec G115 -- protobuf container lengths are nonnegative.
+			total += retainedRepeatedSlotCharge * 2 * mappingLength
 			mapping.Range(func(key protoreflect.MapKey, element protoreflect.Value) bool {
 				total += retainedValueBytes(field.MapKey().Kind(), key.Value())
 				total += retainedValueBytes(field.MapValue().Kind(), element)
@@ -256,7 +257,8 @@ func retainedMessageBytes(message protoreflect.Message) uint64 {
 			})
 		case field.IsList():
 			list := value.List()
-			total += uint64(retainedRepeatedSlotCharge * list.Len())
+			listLength := uint64(list.Len()) // #nosec G115 -- protobuf container lengths are nonnegative.
+			total += retainedRepeatedSlotCharge * listLength
 			for index := 0; index < list.Len(); index++ {
 				total += retainedValueBytes(field.Kind(), list.Get(index))
 			}

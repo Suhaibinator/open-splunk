@@ -607,7 +607,8 @@ func TestWriterValidateNilAndCanceledContextAdmissionPrecedence(t *testing.T) {
 		t.Fatal("failed to reserve validation gate")
 	}
 	defer writer.validationGate.Release()
-	if _, err := writer.Validate(nil, scope, request); !errors.Is(err, control.ErrInvalidArgument) {
+	var nilContext context.Context
+	if _, err := writer.Validate(nilContext, scope, request); !errors.Is(err, control.ErrInvalidArgument) {
 		t.Fatalf("nil-context error = %v, want ErrInvalidArgument", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1034,7 +1035,7 @@ func TestWriterValidateProductionPathAlwaysRollsBackInjectedDML(t *testing.T) {
 			return
 		}
 		if err := tx.Exec(`INSERT INTO validation_rollback_sentinel (value) VALUES (1)`).Error; err != nil {
-			tx.AddError(err)
+			_ = tx.AddError(err)
 		}
 	}); err != nil {
 		t.Fatalf("register validation rollback sentinel: %v", err)

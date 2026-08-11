@@ -10,6 +10,14 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
+// MaximumClickHouseKnowledgeGeneratedFields is the physical-backend envelope,
+// not the backend-neutral catalog limit. The digest-pinned acceptance authority
+// generates thirteen fields and already consumes most of ClickHouse 26.3's
+// bounded analyzer tree. Reject larger pathological authorities before SQL
+// generation while independent byte, depth, and graph-amplification ceilings
+// continue to protect different query shapes.
+const MaximumClickHouseKnowledgeGeneratedFields uint32 = 16
+
 // preparedKnowledgeCompilation is the fail-closed handoff between logical-plan
 // admission and physical ClickHouse lowering. prefixLength counts only the
 // generated knowledge operators after Scan; authored operators begin at
@@ -55,6 +63,11 @@ func prepareKnowledgeCompilation(query *plan.Query) (preparedKnowledgeCompilatio
 	if present {
 		preparation.program = program.Clone()
 		preparation.programCharges = program.Charges()
+		if err := validateClickHouseKnowledgePhysicalCharges(
+			preparation.programCharges,
+		); err != nil {
+			return preparedKnowledgeCompilation{}, err
+		}
 		preparation.operatorKinds = program.OperatorKinds()
 		preparation.prefixLength = len(preparation.operatorKinds)
 		commitment, ok := program.Commitment()
@@ -64,7 +77,8 @@ func prepareKnowledgeCompilation(query *plan.Query) (preparedKnowledgeCompilatio
 			)
 		}
 		preparation.programCommitment = commitment
-		if uint64(preparation.prefixLength) != uint64(preparation.programCharges.GeneratedOperators) {
+		// validateClickHouseKnowledgePhysicalCharges bounds the generated operator count.
+		if uint32(preparation.prefixLength) != preparation.programCharges.GeneratedOperators { // #nosec G115 -- bounded by knowledgeprogram.MaximumObjects.
 			return preparedKnowledgeCompilation{}, errors.New(
 				"prepare ClickHouse knowledge compilation: program operator charge disagrees with prefix",
 			)
@@ -105,6 +119,21 @@ func prepareKnowledgeCompilation(query *plan.Query) (preparedKnowledgeCompilatio
 	// compiler handoff.
 	preparation.operatorKinds = slices.Clone(preparation.operatorKinds)
 	return preparation, nil
+}
+
+func validateClickHouseKnowledgePhysicalCharges(
+	charges knowledgeprogram.Charges,
+) error {
+	if charges.GeneratedFields <= MaximumClickHouseKnowledgeGeneratedFields {
+		return nil
+	}
+	return &plan.Diagnostic{
+		Code: "SPL_QUERY_TOO_COMPLEX",
+		Message: fmt.Sprintf(
+			"knowledge prelude generates more than %d fields for ClickHouse execution",
+			MaximumClickHouseKnowledgeGeneratedFields,
+		),
+	}
 }
 
 func validateSharedKnowledgeCompilationBudgets(

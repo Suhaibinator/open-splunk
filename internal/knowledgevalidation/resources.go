@@ -59,7 +59,7 @@ func (candidate ActiveCandidate) BuildValid(ctx context.Context, publication Act
 		SelectorPatterns:          candidate.state.patterns,
 		NormalizedDefinitionBytes: candidate.state.normalizedBytes,
 		DependencyNodes:           nodes,
-		DependencyEdges:           uint32(len(dependencies)),
+		DependencyEdges:           uint32(len(dependencies)), // #nosec G115 -- dependencies are bounded by MaximumDependencies.
 		GeneratedOperators:        charges.generatedOperators,
 		GeneratedFields:           charges.generatedFields,
 		RegexPrograms:             charges.regexPrograms,
@@ -100,7 +100,8 @@ func canonicalDependencies(ctx context.Context, publication ActivePublication) (
 			return nil, 0, ErrInvariant
 		}
 		key := dependency.GetTarget().GetKnowledgeObjectId() + "\x00" +
-			stringUint64(dependency.GetTarget().GetVersion()) + "\x00" + stringUint64(uint64(dependency.GetRole()))
+			stringUint64(dependency.GetTarget().GetVersion()) + "\x00" +
+			stringUint64(uint64(dependency.GetRole())) // #nosec G115 -- role is checked against the closed nonnegative value above.
 		if _, duplicate := seen[key]; duplicate {
 			return nil, 0, ErrInvariant
 		}
@@ -127,7 +128,7 @@ func canonicalDependencies(ctx context.Context, publication ActivePublication) (
 		}
 		return cmp.Compare(left.GetRole(), right.GetRole())
 	})
-	return values, uint32(len(nodes)), nil
+	return values, uint32(len(nodes)), nil // #nosec G115 -- dependency nodes cannot exceed MaximumDependencies.
 }
 
 func validIdentity(value string, maximum int) bool {

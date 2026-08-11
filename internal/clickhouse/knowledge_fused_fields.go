@@ -28,10 +28,22 @@ const (
 	knowledgeFieldAssignmentSelectorInputBytesElement = 2
 	knowledgeFieldAssignmentSelectorQueryUnitsElement = 3
 
-	knowledgeFieldBindingSourceElement             = 1
-	knowledgeFieldBindingWroteElement              = 2
-	knowledgeFieldBindingSelectorInputBytesElement = 3
-	knowledgeFieldBindingSelectorQueryUnitsElement = 4
+	// A destination binding publishes one flat, compact tuple. Keeping the
+	// chosen source tuple private to the binding prevents ClickHouse's analyzer
+	// from re-expanding it independently for the value, six sidecars, and both
+	// alias-copy charge expressions.
+	knowledgeFieldBindingValueElement               = 1
+	knowledgeFieldBindingExistsElement              = 2
+	knowledgeFieldBindingStoredTypeElement          = 3
+	knowledgeFieldBindingDescendantElement          = 4
+	knowledgeFieldBindingNamesElement               = 5
+	knowledgeFieldBindingTypesElement               = 6
+	knowledgeFieldBindingMetadataVersionElement     = 7
+	knowledgeFieldBindingWroteElement               = 8
+	knowledgeFieldBindingSelectorInputBytesElement  = 9
+	knowledgeFieldBindingSelectorQueryUnitsElement  = 10
+	knowledgeFieldBindingAliasCopyBytesElement      = 11
+	knowledgeFieldBindingAliasCopyQueryUnitsElement = 12
 
 	maxCompiledKnowledgeFieldAssignmentSQLBytes = 64 << 10
 )
@@ -152,14 +164,6 @@ func (compiled compiledKnowledgeFieldAssignment) sourceResultSQL(resultSQL strin
 	return knowledgeTupleElement(resultSQL, knowledgeFieldAssignmentSourceElement)
 }
 
-func (compiled compiledKnowledgeFieldAssignment) selectorInputBytesSQL(resultSQL string) string {
-	return knowledgeTupleElementUInt128(resultSQL, knowledgeFieldAssignmentSelectorInputBytesElement)
-}
-
-func (compiled compiledKnowledgeFieldAssignment) selectorQueryUnitsSQL(resultSQL string) string {
-	return knowledgeTupleElementUInt128(resultSQL, knowledgeFieldAssignmentSelectorQueryUnitsElement)
-}
-
 type compiledKnowledgeSelectorChargeColumns struct {
 	inputBytes string
 	queryUnits string
@@ -194,8 +198,8 @@ type compiledKnowledgeFusedFieldProjection struct {
 // compileKnowledgeAliasAssignment lowers one immutable alias against the
 // frozen extraction-stage state. Exact leaves retain their Dynamic value;
 // flattened object parents retain a lazy materializer plus relative metadata
-// sidecars. The central nonempty-finalization gate remains closed until result
-// transport and runtime copy accounting consume that authority end to end.
+// sidecars. Result transport and runtime copy accounting consume the sealed
+// authority end to end.
 func compileKnowledgeAliasAssignment(
 	operation knowledgeprogram.Alias,
 	state compileState,
@@ -508,30 +512,51 @@ func knowledgeNullableStoredTypeSQL(
 // the authoritative knownFieldStoredTypeSQL path above; this fallback is for
 // typed calculated producers only.
 func knowledgeDynamicStoredTypeSQL(valueSQL string) string {
-	typeSQL := "dynamicType(" + valueSQL + ")"
-	dynamic := compiledScalar{valueSQL: valueSQL, dynamicTypeSQL: typeSQL, kind: fieldKindDynamic}
 	code := func(value eventfields.StoredValueType) string {
 		return "toUInt8(" + strconv.Itoa(int(value)) + ")"
 	}
-	stringValue := "dynamicElement(" + valueSQL + ", 'String')"
-	return "multiIf(" +
-		typeSQL + " = 'None', " + code(eventfields.StoredValueTypeNull) + ", " +
-		dynamicTaggedEnvelopeCondition(dynamic, "bytes/v1") + ", " + code(eventfields.StoredValueTypeBytes) + ", " +
-		dynamicTaggedEnvelopeCondition(dynamic, "timestamp/v1") + ", " + code(eventfields.StoredValueTypeTimestamp) + ", " +
-		dynamicTaggedEnvelopeCondition(dynamic, "duration/v1") + ", " + code(eventfields.StoredValueTypeDuration) + ", " +
-		dynamicTaggedEnvelopeCondition(dynamic, "decimal/v1") + ", " + code(eventfields.StoredValueTypeDecimal) + ", " +
-		typeSQL + " = 'String' AND isValidUTF8(" + stringValue + "), " + code(eventfields.StoredValueTypeString) + ", " +
-		typeSQL + " = 'String', " + code(eventfields.StoredValueTypeBytes) + ", " +
-		"startsWith(" + typeSQL + ", 'Int'), " + code(eventfields.StoredValueTypeSint64) + ", " +
-		"startsWith(" + typeSQL + ", 'UInt'), " + code(eventfields.StoredValueTypeUint64) + ", " +
-		"startsWith(" + typeSQL + ", 'Float'), " + code(eventfields.StoredValueTypeDouble) + ", " +
-		"startsWith(" + typeSQL + ", 'Decimal'), " + code(eventfields.StoredValueTypeDecimal) + ", " +
-		typeSQL + " = 'Bool', " + code(eventfields.StoredValueTypeBool) + ", " +
-		"startsWith(" + typeSQL + ", 'Date') OR startsWith(" + typeSQL + ", 'DateTime'), " + code(eventfields.StoredValueTypeTimestamp) + ", " +
-		"startsWith(" + typeSQL + ", 'Interval'), " + code(eventfields.StoredValueTypeDuration) + ", " +
-		"startsWith(" + typeSQL + ", 'Array'), " + code(eventfields.StoredValueTypeList) + ", " +
-		"startsWith(" + typeSQL + ", 'Map') OR startsWith(" + typeSQL + ", 'Tuple'), " + code(eventfields.StoredValueTypeObject) + ", " +
+	const (
+		typeVariable   = "__os_ko_dynamic_type"
+		mapVariable    = "__os_ko_dynamic_map"
+		stringVariable = "__os_ko_dynamic_string"
+		tagVariable    = "__os_ko_dynamic_tag"
+	)
+	typeKey := "concat(char(0), 'open_splunk_type')"
+	valueKey := "concat(char(0), 'open_splunk_value')"
+	validEnvelope := typeVariable + " = 'Map(String, String)'" +
+		" AND length(" + mapVariable + ") = 2" +
+		" AND mapContains(" + mapVariable + ", " + typeKey + ")" +
+		" AND mapContains(" + mapVariable + ", " + valueKey + ")"
+	tagSQL := "if(" + validEnvelope + ", " + mapVariable + "[" +
+		typeKey + "], CAST('' AS String))"
+	body := "multiIf(" +
+		typeVariable + " = 'None', " + code(eventfields.StoredValueTypeNull) + ", " +
+		tagVariable + " = 'bytes/v1', " + code(eventfields.StoredValueTypeBytes) + ", " +
+		tagVariable + " = 'timestamp/v1', " + code(eventfields.StoredValueTypeTimestamp) + ", " +
+		tagVariable + " = 'duration/v1', " + code(eventfields.StoredValueTypeDuration) + ", " +
+		tagVariable + " = 'decimal/v1', " + code(eventfields.StoredValueTypeDecimal) + ", " +
+		typeVariable + " = 'String' AND isValidUTF8(" + stringVariable + "), " + code(eventfields.StoredValueTypeString) + ", " +
+		typeVariable + " = 'String', " + code(eventfields.StoredValueTypeBytes) + ", " +
+		"startsWith(" + typeVariable + ", 'Int'), " + code(eventfields.StoredValueTypeSint64) + ", " +
+		"startsWith(" + typeVariable + ", 'UInt'), " + code(eventfields.StoredValueTypeUint64) + ", " +
+		"startsWith(" + typeVariable + ", 'Float'), " + code(eventfields.StoredValueTypeDouble) + ", " +
+		"startsWith(" + typeVariable + ", 'Decimal'), " + code(eventfields.StoredValueTypeDecimal) + ", " +
+		typeVariable + " = 'Bool', " + code(eventfields.StoredValueTypeBool) + ", " +
+		"startsWith(" + typeVariable + ", 'Date') OR startsWith(" + typeVariable + ", 'DateTime'), " + code(eventfields.StoredValueTypeTimestamp) + ", " +
+		"startsWith(" + typeVariable + ", 'Interval'), " + code(eventfields.StoredValueTypeDuration) + ", " +
+		"startsWith(" + typeVariable + ", 'Array'), " + code(eventfields.StoredValueTypeList) + ", " +
+		"startsWith(" + typeVariable + ", 'Map') OR startsWith(" + typeVariable + ", 'Tuple'), " + code(eventfields.StoredValueTypeObject) + ", " +
 		"toUInt8(0))"
+	body = bindSQLExpressions([]string{tagVariable}, []string{tagSQL}, body)
+	return bindSQLExpressions(
+		[]string{typeVariable, mapVariable, stringVariable},
+		[]string{
+			"dynamicType(" + valueSQL + ")",
+			"dynamicElement(" + valueSQL + ", 'Map(String, String)')",
+			"dynamicElement(" + valueSQL + ", 'String')",
+		},
+		body,
+	)
 }
 
 // compileKnowledgeAliasStage emits every alias assignment in one projection.
@@ -885,6 +910,10 @@ func compileKnowledgeFusedFieldProjection(
 			)
 		}
 	}
+	var emittedAssignments uint32
+	for range assignments {
+		emittedAssignments++
+	}
 	return compiledKnowledgeFusedFieldProjection{
 		bindingProjection:  bindingProjection,
 		projection:         projection,
@@ -893,7 +922,7 @@ func compileKnowledgeFusedFieldProjection(
 		suffixArgs:         args,
 		selectorCharges:    chargeColumns,
 		aliasCopyCharges:   aliasCopyCharges,
-		emittedAssignments: uint32(len(assignments)),
+		emittedAssignments: emittedAssignments,
 		aliases:            aliases,
 		calculated:         calculated,
 	}, nil
@@ -1037,6 +1066,9 @@ func compileKnowledgeFieldDestinationMerge(
 	const (
 		candidatesVariable = "__os_ko_field_candidates"
 		candidateVariable  = "__os_ko_field_candidate"
+		wroteVariable      = "__os_ko_field_wrote"
+		sourceVariable     = "__os_ko_field_source"
+		payloadVariable    = "__os_ko_field_payload_bytes"
 	)
 	candidateSource := func(candidateSQL string) string {
 		return knowledgeTupleElement(
@@ -1053,7 +1085,7 @@ func compileKnowledgeFieldDestinationMerge(
 		"arrayFirst(" + candidateVariable + " -> " +
 			produced(candidateVariable) + ", " + candidatesVariable + ")",
 	)
-	chosenSourceSQL := "if(" + wroteSQL + ", " + winnerSourceSQL + ", " +
+	chosenSourceSQL := "if(" + wroteVariable + " != 0, " + winnerSourceSQL + ", " +
 		previousSource.sql + ")"
 	inputBytesSQL := "arrayFold((__os_ko_sum, " + candidateVariable + ") -> " +
 		"__os_ko_sum + " + knowledgeTupleElementUInt128(
@@ -1065,8 +1097,49 @@ func compileKnowledgeFieldDestinationMerge(
 		candidateVariable,
 		knowledgeFieldAssignmentSelectorQueryUnitsElement,
 	) + ", " + candidatesVariable + ", toUInt128(0))"
-	body := "tuple(" + chosenSourceSQL + ", toUInt8(" + wroteSQL + "), " +
-		inputBytesSQL + ", " + queryUnitsSQL + ")"
+	valueSQL := previousSource.valueSQL(sourceVariable)
+	namesSQL := previousSource.namesSQL(sourceVariable)
+	typesSQL := previousSource.typesSQL(sourceVariable)
+	payloadSQL := "toUInt128(byteSize(" + valueSQL + ")) + " +
+		"toUInt128(byteSize(" + namesSQL + ")) + " +
+		"toUInt128(byteSize(" + typesSQL + ")) + toUInt128(1)"
+	workSQL := payloadVariable + " + toUInt128(length(" + namesSQL +
+		")) * toUInt128(" +
+		strconv.FormatUint(knowledge.AliasCopyDescendantWorkUnits, 10) +
+		") + toUInt128(" +
+		strconv.FormatUint(knowledge.AliasCopyWorkUnits, 10) + ")"
+	copyBytesSQL := "if(" + wroteVariable + " != 0, " + payloadVariable +
+		", toUInt128(0))"
+	copyUnitsSQL := "if(" + wroteVariable + " != 0, " + workSQL +
+		", toUInt128(0))"
+	body := "tuple(" +
+		valueSQL + ", " +
+		previousSource.producedSQL(sourceVariable) + ", " +
+		previousSource.storedTypeSQL(sourceVariable) + ", " +
+		"toUInt8(notEmpty(" + namesSQL + ")), " +
+		namesSQL + ", " +
+		typesSQL + ", " +
+		previousSource.metadataVersionSQL(sourceVariable) + ", " +
+		"toUInt8(" + wroteVariable + "), " +
+		inputBytesSQL + ", " +
+		queryUnitsSQL + ", " +
+		copyBytesSQL + ", " +
+		copyUnitsSQL + ")"
+	body = bindSQLExpressions(
+		[]string{payloadVariable},
+		[]string{payloadSQL},
+		body,
+	)
+	body = bindSQLExpressions(
+		[]string{sourceVariable},
+		[]string{chosenSourceSQL},
+		body,
+	)
+	body = bindSQLExpressions(
+		[]string{wroteVariable},
+		[]string{"toUInt8(" + wroteSQL + ")"},
+		body,
+	)
 	bindingSQL := bindSQLExpressions(
 		[]string{candidatesVariable},
 		[]string{"[" + strings.Join(candidateSQL, ", ") + "]"},
@@ -1092,11 +1165,10 @@ func compileKnowledgeFieldDestinationMerge(
 	))
 	group.bindingSQL = bindingSQL
 	group.args = args
-	resultSource := knowledgeTupleElement(
+	group.outputValueSQL = knowledgeTupleElement(
 		group.bindingAlias,
-		knowledgeFieldBindingSourceElement,
+		knowledgeFieldBindingValueElement,
 	)
-	group.outputValueSQL = previousSource.valueSQL(resultSource)
 	group.existsAlias = quoteIdentifier(fmt.Sprintf(
 		"__os_ko_field_exists_%d_%d",
 		stage,
@@ -1127,33 +1199,38 @@ func compileKnowledgeFieldDestinationMerge(
 		stage,
 		index,
 	))
-	group.existsProjection = previousSource.producedSQL(resultSource) + " AS " +
-		group.existsAlias
-	group.typeProjection = previousSource.storedTypeSQL(resultSource) + " AS " +
-		group.typeAlias
-	group.descendantProjection = "toUInt8(notEmpty(" +
-		previousSource.namesSQL(resultSource) + ")) AS " + group.descendantAlias
-	group.namesProjection = previousSource.namesSQL(resultSource) + " AS " +
-		group.namesAlias
-	group.typesProjection = previousSource.typesSQL(resultSource) + " AS " +
-		group.typesAlias
-	group.metadataProjection = previousSource.metadataVersionSQL(resultSource) +
-		" AS " + group.metadataAlias
-	wroteSQL = knowledgeTupleElementUInt8(
+	group.existsProjection = knowledgeTupleElementUInt8(
 		group.bindingAlias,
-		knowledgeFieldBindingWroteElement,
-	) + " != 0"
-	valueBytesSQL := "toUInt128(byteSize(" + previousSource.valueSQL(resultSource) + "))"
-	namesBytesSQL := "toUInt128(byteSize(" + previousSource.namesSQL(resultSource) + "))"
-	typesBytesSQL := "toUInt128(byteSize(" + previousSource.typesSQL(resultSource) + "))"
-	payloadSQL := valueBytesSQL + " + " + namesBytesSQL + " + " + typesBytesSQL +
-		" + toUInt128(1)"
-	workSQL := payloadSQL + " + toUInt128(length(" +
-		previousSource.namesSQL(resultSource) + ")) * toUInt128(" +
-		strconv.FormatUint(knowledge.AliasCopyDescendantWorkUnits, 10) +
-		") + toUInt128(" + strconv.FormatUint(knowledge.AliasCopyWorkUnits, 10) + ")"
-	group.aliasCopyBytesSQL = "if(" + wroteSQL + ", " + payloadSQL + ", toUInt128(0))"
-	group.aliasCopyUnitsSQL = "if(" + wroteSQL + ", " + workSQL + ", toUInt128(0))"
+		knowledgeFieldBindingExistsElement,
+	) + " AS " + group.existsAlias
+	group.typeProjection = knowledgeTupleElementUInt8(
+		group.bindingAlias,
+		knowledgeFieldBindingStoredTypeElement,
+	) + " AS " + group.typeAlias
+	group.descendantProjection = knowledgeTupleElementUInt8(
+		group.bindingAlias,
+		knowledgeFieldBindingDescendantElement,
+	) + " AS " + group.descendantAlias
+	group.namesProjection = knowledgeTupleElement(
+		group.bindingAlias,
+		knowledgeFieldBindingNamesElement,
+	) + " AS " + group.namesAlias
+	group.typesProjection = knowledgeTupleElement(
+		group.bindingAlias,
+		knowledgeFieldBindingTypesElement,
+	) + " AS " + group.typesAlias
+	group.metadataProjection = knowledgeTupleElementUInt8(
+		group.bindingAlias,
+		knowledgeFieldBindingMetadataVersionElement,
+	) + " AS " + group.metadataAlias
+	group.aliasCopyBytesSQL = knowledgeTupleElementUInt128(
+		group.bindingAlias,
+		knowledgeFieldBindingAliasCopyBytesElement,
+	)
+	group.aliasCopyUnitsSQL = knowledgeTupleElementUInt128(
+		group.bindingAlias,
+		knowledgeFieldBindingAliasCopyQueryUnitsElement,
+	)
 	return nil
 }
 
