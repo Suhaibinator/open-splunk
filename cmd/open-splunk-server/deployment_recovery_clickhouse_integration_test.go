@@ -16,6 +16,7 @@ import (
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/Suhaibinator/open-splunk/internal/controlbackup"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/recoveryset"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
@@ -62,12 +63,19 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 	nativeRecoveryIntegrationRequireMigrationLedgerBounds(t, ctx, admin)
 	nativeRecoveryIntegrationRequireSingletonReadBounds(t, ctx, admin)
 	nativeRecoveryIntegrationRequireCatalogIsolation(t, ctx, admin)
+	recoverySource := ingest.NativeCollectorSource("native-recovery-fixture-collector")
 	if err := admin.Exec(ctx, `
 		INSERT INTO open_splunk.events
-			(event_id, event_time, index_time, raw, visibility_seq, expires_at)
+			(event_id, event_time, index_time, raw,
+			 collector_id, ingest_source_kind, ingest_source_id,
+			 visibility_seq, expires_at)
 		VALUES
-			('recovery-fixture', now64(9), now64(3), 'durable recovery fixture', 42,
-			 addYears(now64(3), 1))`); err != nil {
+			('recovery-fixture', now64(9), now64(3), 'durable recovery fixture',
+			 ?, ?, ?, 42, addYears(now64(3), 1))`,
+		recoverySource.CollectorID,
+		uint8(recoverySource.Kind),
+		recoverySource.ID,
+	); err != nil {
 		t.Fatalf("seed recovery integration source: %v", err)
 	}
 	fixture.provisionRecoveryPrincipals(t, ctx, admin)
@@ -223,10 +231,16 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 	originalArchiveIdentity := fixture.archiveIdentity(t, ctx, requestA.ArchiveName)
 	if err := admin.Exec(ctx, `
 		INSERT INTO open_splunk.events
-			(event_id, event_time, index_time, raw, visibility_seq, expires_at)
+			(event_id, event_time, index_time, raw,
+			 collector_id, ingest_source_kind, ingest_source_id,
+			 visibility_seq, expires_at)
 		VALUES
-			('same-alias-replacement', now64(9), now64(3), 'archive replacement payload', 42,
-			 addYears(now64(3), 1))`); err != nil {
+			('same-alias-replacement', now64(9), now64(3), 'archive replacement payload',
+			 ?, ?, ?, 42, addYears(now64(3), 1))`,
+		recoverySource.CollectorID,
+		uint8(recoverySource.Kind),
+		recoverySource.ID,
+	); err != nil {
 		t.Fatalf("seed same-alias replacement payload: %v", err)
 	}
 	replacementOperationID := uuid.MustParse("10000000-0000-4000-8000-000000000009")
@@ -347,8 +361,8 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 		t.Fatalf("validate pinned read-only recovery disk: %v", err)
 	}
 
-	// A live/nonempty final database without the exact recovery receipt must
-	// never be interpreted as a successful prior restore.
+	// A live/nonempty final database without the exact restored identity and
+	// recovery receipt must never be interpreted as a successful prior restore.
 	beforeFinalFailure := operationIndex
 	if err := runDeploymentRestoreStateMachine(
 		ctx,
@@ -356,8 +370,8 @@ func TestDeploymentNativeRecoveryClickHouseLifecycle(t *testing.T) {
 		verificationA,
 		postRestoreVerify,
 		dependencies,
-	); err == nil || !strings.Contains(err.Error(), "receipt") {
-		t.Fatalf("non-restored final database error = %v, want receipt failure", err)
+	); err == nil || !strings.Contains(err.Error(), "exact resumable restore") {
+		t.Fatalf("non-restored final database error = %v, want exact-state failure", err)
 	}
 	if operationIndex != beforeFinalFailure {
 		t.Fatal("final-state validation unexpectedly allocated a native operation ID")
@@ -1221,7 +1235,7 @@ func nativeRecoveryIntegrationVerification(
 		Manifest: recoveryset.Manifest{
 			RecoverySetID: recoverySetID,
 			ClickHouseMigrations: controlbackup.MigrationIdentity{
-				LatestVersion: 4,
+				LatestVersion: 5,
 			},
 			ClickHouse: recoveryset.ClickHouseIdentity{
 				ServerVersion:                   identity.ServerVersion,

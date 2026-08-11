@@ -2298,6 +2298,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     timezone: "UTC",
   };
   const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const ordinaryValidateRequests: ValidateSearchRequest[] = [];
   const ordinaryCreateRequests: CreateSearchJobRequest[] = [];
   const historyRerunCreateRequests: CreateSearchJobRequest[] = [];
   let historyRerunSourceMissing = false;
@@ -2404,6 +2405,31 @@ test("history Run again delegates persisted intent with source-only rerun proven
         body: Buffer.from(DeleteSearchHistoryEntryResponse.encode({
           searchJobId: deletedHistorySearchId,
         }).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    async (route) => {
+      const requestWire = route.request().postDataBuffer();
+      if (requestWire === null) throw new Error("history ordinary Validate omitted its protobuf body");
+      const request = ValidateSearchRequest.decode(requestWire);
+      if (request.definition === undefined) {
+        throw new Error("history ordinary Validate omitted its search definition");
+      }
+      ordinaryValidateRequests.push(request);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ValidateSearchResponse.encode(
+          ValidateSearchResponse.fromPartial({
+            valid: true,
+            normalizedSpl: request.definition.spl,
+            referencedIndexes: [indexName],
+            referencedFields: ["message"],
+            predictedResultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+          }),
+        ).finish()),
       });
     },
   );
@@ -2530,7 +2556,11 @@ test("history Run again delegates persisted intent with source-only rerun proven
   await postDeleteCreateRequest;
   await expect(page.getByTestId("job-strip")).toContainText("Canceled", { timeout });
   expect(historyRerunCreateRequests).toHaveLength(0);
+  expect(ordinaryValidateRequests).toHaveLength(1);
   expect(ordinaryCreateRequests).toHaveLength(1);
+  expect(ordinaryValidateRequests[0]?.definition).toEqual(
+    ordinaryCreateRequests[0]?.definition,
+  );
   expect(ordinaryCreateRequests[0]?.definition?.spl).toBe(deletedHistorySPL);
   expect(ordinaryCreateRequests[0]?.source).toBeUndefined();
 
@@ -2550,6 +2580,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
   await rerunRequestPromise;
 
   expect(historyRerunCreateRequests).toHaveLength(1);
+  expect(ordinaryValidateRequests).toHaveLength(1);
   expect(historyRerunCreateRequests[0]).toEqual({
     definition: undefined,
     source: {
@@ -2598,6 +2629,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     timeout,
   });
   expect(historyRerunCreateRequests).toHaveLength(2);
+  expect(ordinaryValidateRequests).toHaveLength(1);
   expect(ordinaryCreateRequests).toHaveLength(1);
 });
 

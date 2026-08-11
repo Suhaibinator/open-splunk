@@ -410,22 +410,14 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 		if len(compiled.Args) == 0 {
 			t.Fatal("compiler produced no ordered parameters for EXPLAIN coverage")
 		}
-		largeParameter := strings.Repeat("x", 300<<10)
-		replaced := false
-		for index, argument := range compiled.Args {
-			if argument == "hello" {
-				compiled.Args[index] = largeParameter
-				replaced = true
-				break
-			}
-		}
-		if !replaced {
+		if !slices.ContainsFunc(compiled.Args, func(argument any) bool {
+			literal, ok := argument.(string)
+			return ok && literal == "hello"
+		}) {
 			t.Fatalf("compiler arguments have no search literal: %#v", compiled.Args)
 		}
-		if !compiled.HasValidSQLSeal() ||
-			len(compiled.SQL) > 256<<10 ||
-			len(largeParameter) <= 256<<10 {
-			t.Fatal("compiled SQL seal or parameter-expansion boundary is invalid")
+		if !compiled.HasValidSQLSeal() || !compiled.HasValidExecutionSeal() {
+			t.Fatal("compiled SQL or execution authority seal is invalid")
 		}
 		explained, err := explainer.Explain(ctx, compiled)
 		if err != nil {

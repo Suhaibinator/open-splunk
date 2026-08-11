@@ -996,8 +996,13 @@ func TestCompileEventStatsGlobalRowCountStackHasLinearFanout(t *testing.T) {
 	if got := strings.Count(compiled.SQL, "count() OVER ()"); got != stages {
 		t.Fatalf("global row-count windows = %d, want %d", got, stages)
 	}
-	if strings.Contains(compiled.SQL, `"__os_eventstats_total_`) ||
-		strings.Contains(compiled.SQL, "CROSS JOIN") {
+	if got := strings.Count(
+		compiled.SQL,
+		`SELECT toUInt8(("__os_eventstats_validation_`,
+	); got != stages {
+		t.Fatalf("global row-count validations = %d, want %d", got, stages)
+	}
+	if strings.Contains(compiled.SQL, `"__os_eventstats_total_`) {
 		t.Fatalf("global row-count stack retained aggregate fanout:\n%s", compiled.SQL)
 	}
 }

@@ -20,6 +20,8 @@ func TestCompileEventStatsGlobalCountPreservesRowsAndBoundsInput(t *testing.T) {
 		`LIMIT ` + strconv.FormatUint(MaximumEventStatsInputRows+1, 10),
 		`count() OVER ()`,
 		EventStatsInputLimitMarker,
+		`"__os_chronological_validation_`,
+		`UNION ALL`,
 		`AS "total"`,
 		materializedCTESettingsSQL,
 	} {
@@ -31,7 +33,6 @@ func TestCompileEventStatsGlobalCountPreservesRowsAndBoundsInput(t *testing.T) {
 		"ARRAY JOIN",
 		"GROUP BY",
 		"groupArray(",
-		"CROSS JOIN",
 		`"__os_eventstats_total_`,
 	} {
 		if strings.Contains(compiled.SQL, forbidden) {

@@ -19,6 +19,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/control"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"google.golang.org/protobuf/proto"
 )
@@ -860,10 +861,12 @@ func backendIndexDeletionSeedRows(
 	}
 	indexTime := time.Now().UTC().Truncate(time.Millisecond)
 	expiresAt := indexTime.Add(24 * time.Hour)
+	source := ingest.NativeCollectorSource("backend-index-deletion-fixture-collector")
 	batch, err := connection.PrepareBatch(
 		ctx,
 		`INSERT INTO open_splunk.events
 		    (event_id, tenant_id, index_name, event_time, index_time,
+		     collector_id, ingest_source_kind, ingest_source_id,
 		     expires_at, visibility_seq)`,
 	)
 	if err != nil {
@@ -876,6 +879,9 @@ func backendIndexDeletionSeedRows(
 			fixture.indexName,
 			fixture.eventTime,
 			indexTime,
+			source.CollectorID,
+			uint8(source.Kind),
+			source.ID,
 			expiresAt,
 			fixture.sequence,
 		); err != nil {

@@ -12,6 +12,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	internalclickhouse "github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/migrations"
@@ -393,11 +394,13 @@ func insertIndexStatisticsFixture(
 	rows []indexStatisticsFixtureRow,
 ) {
 	t.Helper()
+	source := ingest.NativeCollectorSource("index-statistics-fixture-collector")
 
 	batch, err := connection.PrepareBatch(
 		ctx,
 		`INSERT INTO open_splunk.events
 			(event_id, tenant_id, index_name, event_time, index_time,
+			 collector_id, ingest_source_kind, ingest_source_id,
 			 expires_at, visibility_seq)`,
 	)
 	if err != nil {
@@ -410,6 +413,9 @@ func insertIndexStatisticsFixture(
 			row.indexName,
 			row.eventTime,
 			row.indexTime,
+			source.CollectorID,
+			uint8(source.Kind),
+			source.ID,
 			row.expiresAt,
 			row.visibilitySeq,
 		); err != nil {

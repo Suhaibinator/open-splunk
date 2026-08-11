@@ -10,6 +10,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
@@ -433,6 +434,8 @@ func insertConcatDynamicDecimalFixtures(
 		nil,
 		document,
 		fieldNames,
+		"concat-collector",
+		uint8(ingest.IngestionSourceKindNativeCollector),
 		"concat-collector",
 		"concat-dynamic-decimal-batch",
 		uint64(1),

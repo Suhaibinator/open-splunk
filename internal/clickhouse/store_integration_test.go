@@ -2504,17 +2504,24 @@ func testCompiledQueriesAgainstClickHouse(
 		)
 	}
 
+	preEpochSource := ingest.NativeCollectorSource("collector")
 	if err := connection.Exec(ctx, `
 		INSERT INTO open_splunk.events
-			(event_id, tenant_id, index_name, event_time, index_time, expires_at, visibility_seq)
+			(event_id, tenant_id, index_name, event_time, index_time,
+			 collector_id, ingest_source_kind, ingest_source_id,
+			 expires_at, visibility_seq)
 		SELECT ?, ?, ?,
 			parseDateTime64BestEffort(?, 9, 'UTC'),
 			parseDateTime64BestEffort(?, 3, 'UTC'),
+			?, ?, ?,
 			parseDateTime64BestEffort(?, 3, 'UTC'),
 			toUInt64(?)`,
 		"bin-pre-epoch", "tenant", "compiler",
 		"1969-12-31 23:59:59.999999999",
 		indexTime.UTC().Format("2006-01-02 15:04:05.000"),
+		preEpochSource.CollectorID,
+		uint8(preEpochSource.Kind),
+		preEpochSource.ID,
 		"2099-01-01 00:00:00.000",
 		uint64(1),
 	); err != nil {

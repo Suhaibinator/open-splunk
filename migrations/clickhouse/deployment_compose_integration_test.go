@@ -18,6 +18,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/Suhaibinator/open-splunk/internal/ingest"
 	"github.com/Suhaibinator/open-splunk/internal/server"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	shippedmigrations "github.com/Suhaibinator/open-splunk/migrations"
@@ -1092,17 +1093,23 @@ func validateComposePrincipalsAndSchema(
 		markerIndex  = "compose-persistence-index"
 	)
 	if insertMarker {
+		source := ingest.NativeCollectorSource("compose-persistence-fixture-collector")
 		if err := runtimeConnection.Exec(
 			ctx,
 			`INSERT INTO open_splunk.events
 				(
 					event_id, tenant_id, index_name, event_time, index_time,
+					collector_id, ingest_source_kind, ingest_source_id,
 					expires_at, visibility_seq
 				)
-			 VALUES (?, ?, ?, now64(9), now64(3), now64(3) + INTERVAL 1 DAY, 1)`,
+			 VALUES (?, ?, ?, now64(9), now64(3), ?, ?, ?,
+			         now64(3) + INTERVAL 1 DAY, 1)`,
 			markerEventID,
 			markerTenant,
 			markerIndex,
+			source.CollectorID,
+			uint8(source.Kind),
+			source.ID,
 		); err != nil {
 			t.Fatalf("insert persistent Compose marker event: %v", err)
 		}

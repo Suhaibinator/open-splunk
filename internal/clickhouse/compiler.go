@@ -17306,11 +17306,16 @@ func compileWindowedGlobalEventStatsCount(
 		"__os_eventstats_raw_count_%d",
 		stage,
 	))
+	validationColumn := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_validation_%d",
+		stage,
+	))
 	windowAlias := quoteIdentifier(fmt.Sprintf(
 		"__os_eventstats_window_%d",
 		stage,
 	))
 	windowSQL := "SELECT *, count() OVER () AS " + rawTotal + " FROM " + inputName
+	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
 	projection := eventAggregateProjection(
 		state,
 		next,
@@ -17318,8 +17323,9 @@ func compileWindowedGlobalEventStatsCount(
 		boundedEventStatsCountSQL(windowAlias+"."+rawTotal),
 		"",
 		"1",
-		"",
-		"",
+		validationColumn,
+		"toUInt8("+boundedEventStatsCountSQL(windowAlias+"."+rawTotal)+
+			" > "+maximumRows+")",
 	)
 	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
 		windowSQL + ") AS " + windowAlias
@@ -17339,15 +17345,17 @@ func compileWindowedGlobalEventStatsCount(
 		prerequisiteDefinitions: []string{
 			inputName + " AS MATERIALIZED (" + inputSQL + ")",
 		},
-		fanout:     1,
-		depth:      enriched.depth,
-		ownerRange: operator.Range,
+		validationColumns: []string{validationColumn},
+		fanout:            1,
+		depth:             enriched.depth,
+		ownerRange:        operator.Range,
 	}
 	publishedAlias := quoteIdentifier(fmt.Sprintf(
 		"__os_eventstats_rows_result_%d",
 		stage,
 	))
-	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	publishedSQL := "SELECT * EXCEPT (" + validationColumn + ") FROM " +
+		barrierName + " AS " + publishedAlias
 	return enriched.selectFrom(publishedSQL, operator.Range), next, nil, barrier, nil
 }
 
