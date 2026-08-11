@@ -47,6 +47,42 @@ func TestParseEvalConcatenationFlattensOperandsAndPreservesRanges(t *testing.T) 
 	}
 }
 
+func TestParseConcatenationDeliberatelyRejectsFixedStringPlus(t *testing.T) {
+	t.Parallel()
+
+	const periodSource = `index=main | eval value="left" . "right"`
+	query, err := Parse(periodSource)
+	if err != nil {
+		t.Fatalf("Parse period concatenation: %v", err)
+	}
+	concatenation := requireConcatenationCall(
+		t,
+		query.Commands[0].(*EvalCommand).Assignments[0].Expression,
+		2,
+	)
+	for index, want := range []string{"left", "right"} {
+		literal, ok := concatenation.Arguments[index].(*ScalarLiteralExpr)
+		if !ok || literal.Value.Kind != LiteralKindString ||
+			literal.Value.Text != want || !literal.Value.Quoted {
+			t.Fatalf(
+				"period concatenation argument %d = %#v, want fixed String %q",
+				index,
+				concatenation.Arguments[index],
+				want,
+			)
+		}
+	}
+
+	// SPL2 overloads + for String concatenation. Version 0.1 deliberately
+	// keeps that spelling out of the grammar so period remains the only
+	// supported and unambiguous concatenation operator.
+	assertParseDiagnosticCode(
+		t,
+		`index=main | eval value="left"+"right"`,
+		"SPL_UNSUPPORTED_EVAL_EXPRESSION",
+	)
+}
+
 func TestParseConcatenationRecognizesUnspacedQuotedBoundaries(t *testing.T) {
 	t.Parallel()
 

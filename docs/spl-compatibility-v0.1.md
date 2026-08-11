@@ -511,13 +511,15 @@ SPL1 period concatenation joins scalar values with the `.` operator:
 
 Compatibility version 0.1 supports only the SPL1 period operator.
 `concat(first, last)`, the SPL2 `+` concatenation spelling, arithmetic, and
-other implicit String-conversion operators remain unsupported. A chain is
-parsed as one flat, source-ordered expression with two through 32 operands;
-there is no backend-dependent left- or right-nested associativity. Function
-arguments and results may themselves contain or participate in concatenation,
-including supported `if`, `case`, and `coalesce` values. Concatenation may be
-used on either side of a `where`, conditional, or `count(eval(...))`
-comparison.
+other implicit String-conversion operators remain unsupported. In particular,
+fixed String `+` is an intentional Open Splunk rejection rather than an
+accidental parser limitation; use period concatenation when targeting version
+0.1. A chain is parsed as one flat, source-ordered expression with two through
+32 operands; there is no backend-dependent left- or right-nested associativity.
+Function arguments and results may themselves contain or participate in
+concatenation, including supported `if`, `case`, and `coalesce` values.
+Concatenation may be used on either side of a `where`, conditional, or
+`count(eval(...))` comparison.
 
 From tightest to loosest, the expression-language precedence relevant to this
 operator is scalar primary or function call, period concatenation, comparison,
@@ -2246,6 +2248,11 @@ arguments, `min(eval(...))`, `max(eval(...))`, `earliest(eval(...))`,
 `latest(eval(...))`, every other aggregate function, multiple measures, quoted
 or wildcard output/grouping fields, and command options fail with
 source-located unsupported-syntax or unsupported-aggregate diagnostics.
+This includes `allnum=true`: native Splunk documents `allnum` as a supported
+per-field or per-group numeric-eligibility option, but Open Splunk version 0.1
+rejects it explicitly rather than accepting it as a no-op or silently applying
+different mixed-value rules. This is an unsupported compatibility divergence,
+not a claim of native parity.
 
 Unlike `stats`, `eventstats` does not collapse or generate rows. A global count
 is added to every row in the complete upstream relation; grouped counts are
@@ -2538,18 +2545,20 @@ closes the schema. Replacing `_time` preserves rows but
 makes timeline analysis ineligible; replacing `index` creates ordinary
 pipeline data and never changes the authorization-constrained physical scan.
 
-One eventstats stage accepts at most 10,000 upstream rows. The compiler bounds
-the input at 10,001 rows, uses the additional row only as an overflow sentinel,
-and fails the whole search with an execution-limit error above the boundary
-instead of annotating a prefix. A standalone stage materializes that bounded
-relation once; a stack shares its earliest physical-scan fence. Global count
-uses one constant-size aggregate, global distinct count uses one bounded exact
-set, global values uses one smaller bounded exact set, and global percentile,
-sum, or average uses one bounded numeric aggregate. A global minimum, maximum,
-earliest, or latest likewise uses one constant-size aggregate. Each grouped
-count, sum, average, minimum, maximum, earliest, latest, percentile, distinct
-count, or values uses one bounded `GROUP BY` and one left join back to those
-same rows;
+One eventstats stage accepts at most 10,000 upstream rows. This is an explicit
+Open Splunk resource-safety ceiling, not a claim that native Splunk has the same
+fixed boundary or atomic failure behavior; native deployments use configurable
+result and memory limits. The compiler bounds the input at 10,001 rows, uses the
+additional row only as an overflow sentinel, and fails the whole search with an
+execution-limit error above the boundary instead of annotating a prefix. A
+standalone stage materializes that bounded relation once; a stack shares its
+earliest physical-scan fence. Global count uses one constant-size aggregate,
+global distinct count uses one bounded exact set, global values uses one smaller
+bounded exact set, and global percentile, sum, or average uses one bounded
+numeric aggregate. A global minimum, maximum, earliest, or latest likewise uses
+one constant-size aggregate. Each grouped count, sum, average, minimum, maximum,
+earliest, latest, percentile, distinct count, or values uses one bounded
+`GROUP BY` and one left join back to those same rows;
 none performs a per-group query, row expansion, `groupArray`, physical-event
 rescan, or Go-side buffering.
 
