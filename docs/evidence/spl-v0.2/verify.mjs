@@ -141,21 +141,20 @@ function git(argumentsForGit, options = {}) {
 }
 
 async function listBundleFiles(directory = bundleRoot, prefix = "") {
-  const result = [];
   const entries = await readdir(directory, { withFileTypes: true });
-  entries.sort((left, right) => left.name.localeCompare(right.name, "en"));
-  for (const entry of entries) {
+  const sortedEntries = entries.toSorted((left, right) =>
+    left.name.localeCompare(right.name, "en"));
+  const results = await Promise.all(sortedEntries.map(async (entry) => {
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     const absolute = path.join(directory, entry.name);
     check(!entry.isSymbolicLink(), `${relative} must not be a symbolic link`);
     if (entry.isDirectory()) {
-      result.push(...await listBundleFiles(absolute, relative));
-    } else {
-      check(entry.isFile(), `${relative} must be a regular file`);
-      result.push(relative);
+      return listBundleFiles(absolute, relative);
     }
-  }
-  return result;
+    check(entry.isFile(), `${relative} must be a regular file`);
+    return [relative];
+  }));
+  return results.flat();
 }
 
 function tuple(objectID, sourceLocation) {
@@ -198,8 +197,8 @@ check(manifest.evidence_state === "pending_ci" ||
   manifest.evidence_state === "complete", "manifest evidence state is invalid");
 
 const placeholders = findPlaceholders(manifest);
-const distinctPlaceholders = [...new Set(placeholders.map((entry) => entry.value))].sort();
-const declaredPending = [...new Set(manifest.pending ?? [])].sort();
+const distinctPlaceholders = [...new Set(placeholders.map((entry) => entry.value))].toSorted();
+const declaredPending = [...new Set(manifest.pending ?? [])].toSorted();
 check(JSON.stringify(distinctPlaceholders) === JSON.stringify(declaredPending),
   "manifest.pending must enumerate every distinct placeholder exactly once");
 if (placeholders.length > 0) {
@@ -261,7 +260,7 @@ if (diff !== null) {
     "Git base-to-target binary diff digest does not match");
 }
 
-for (const contract of manifest.contracts ?? []) {
+await Promise.all((manifest.contracts ?? []).map(async (contract) => {
   check(GIT_OBJECT_PATTERN.test(target.revision), "target revision is not canonical");
   check(typeof contract.path === "string" && SHA256_PATTERN.test(contract.sha256),
     "contract digest entry is invalid");
@@ -271,12 +270,13 @@ for (const contract of manifest.contracts ?? []) {
   const bytes = await readFile(absolute);
   check(sha256(bytes) === contract.sha256,
     `contract ${contract.path} digest does not match`);
-}
+}));
 
 check(Array.isArray(manifest.gates) && manifest.gates.length === 16,
   "manifest must contain exactly 16 local receipt groups");
 const gateIDs = new Set();
 const receiptPaths = new Set();
+const gateReceiptChecks = [];
 for (const gate of manifest.gates ?? []) {
   check(typeof gate.id === "string" && !gateIDs.has(gate.id),
     `gate ID ${JSON.stringify(gate.id)} must be unique`);
@@ -288,16 +288,21 @@ for (const gate of manifest.gates ?? []) {
   const receipt = gate.receipt;
   check(!receiptPaths.has(receipt.path), `receipt ${receipt.path} is referenced twice`);
   receiptPaths.add(receipt.path);
-  await checkDigestedFile(receipt, `gate ${gate.id} receipt`);
+  gateReceiptChecks.push(checkDigestedFile(receipt, `gate ${gate.id} receipt`));
 }
+await Promise.all(gateReceiptChecks);
 
 const durablePaths = new Set();
+const durableArtifactChecks = [];
 for (const artifact of manifest.durable_artifacts ?? []) {
   check(!durablePaths.has(artifact.path),
     `durable artifact ${artifact.path} is listed twice`);
   durablePaths.add(artifact.path);
-  await checkDigestedFile(artifact, `durable artifact ${artifact.path}`);
+  durableArtifactChecks.push(
+    checkDigestedFile(artifact, `durable artifact ${artifact.path}`),
+  );
 }
+await Promise.all(durableArtifactChecks);
 
 const report = await readJSON(manifest.audit.report);
 const ledger = await readJSON(manifest.audit.dispositions);
@@ -312,7 +317,7 @@ if (report && ledger && ledgerSchema) {
     "audit report finding count is invalid");
   const reportTuples = new Set();
   for (const finding of report.findings ?? []) {
-    check(Object.keys(finding).sort().join(",") === "kind,object_id,source_location",
+    check(Object.keys(finding).toSorted().join(",") === "kind,object_id,source_location",
       "audit findings must contain only redacted identity/location fields");
     check(finding.kind === "ambiguous_unspaced_scalar_operator",
       "audit finding kind is invalid");
@@ -477,13 +482,13 @@ if (placeholders.length === 0) {
 const receiptDirectoryEntries = (await readdir(path.join(bundleRoot, "receipts")))
   .filter((entry) => entry.endsWith(".txt"))
   .map((entry) => `receipts/${entry}`)
-  .sort();
+  .toSorted();
 check(receiptDirectoryEntries.every((entry) => receiptPaths.has(entry)),
   "every durable text receipt must be referenced by a gate or CI");
 check([...receiptPaths].every((entry) => receiptDirectoryEntries.includes(entry)),
   "every referenced receipt must exist in the receipt directory");
 
-const bundleFiles = (await listBundleFiles()).sort();
+const bundleFiles = (await listBundleFiles()).toSorted();
 for (const relative of bundleFiles) {
   check(!relative.endsWith(".log"), `${relative} must not use the ignored log extension`);
   check(!/\.(?:db|db-shm|db-wal|sqlite|sqlite3)$/.test(relative),
@@ -525,11 +530,11 @@ if (checksumBytes !== null) {
   check(expected.every((relative) => indexed.has(relative)) &&
     [...indexed].every(([relative]) => expected.includes(relative)),
   "SHA256SUMS must index every bundle file except itself exactly once");
-  for (const relative of expected) {
+  await Promise.all(expected.map(async (relative) => {
     const bytes = await readBytes(relative);
     check(indexed.get(relative) === sha256(bytes),
       `SHA256SUMS digest does not match ${relative}`);
-  }
+  }));
   if (placeholders.length === 0) {
     check(manifest.integrity.status === "complete",
       "placeholder-free checksum index must be marked complete");
