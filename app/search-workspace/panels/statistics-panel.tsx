@@ -133,16 +133,16 @@ function StatsSparklineCell({ value }: { value: WorkspaceStatisticsValue }) {
       role="img"
       aria-label={`Sparkline values: ${description}`}
     >
-      {segments.map((segment, index) => segment.length === 1 ? (
+      {segments.map((segment) => segment.length === 1 ? (
         <circle
           // A segment can contain one isolated bucket between missing values.
-          key={`point-${index}`}
+          key={`point-${segment[0]}`}
           cx={segment[0].split(",")[0]}
           cy={segment[0].split(",")[1]}
           r="1.75"
         />
       ) : (
-        <polyline key={`line-${index}`} points={segment.join(" ")} />
+        <polyline key={`line-${segment.join(" ")}`} points={segment.join(" ")} />
       ))}
     </svg>
   );
