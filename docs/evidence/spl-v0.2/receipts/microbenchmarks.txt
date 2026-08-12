@@ -1,0 +1,102 @@
+revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+host=Apple M4 Max logical_cpus=16
+started_utc=2026-08-11T22:17:36Z
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/spl
+cpu: Apple M4 Max
+BenchmarkParseV02ArithmeticOperators/operators_001-16         	      10	      2800 ns/op	   5.71 MB/s	    4096 B/op	      12 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_001-16         	      10	      2233 ns/op	   7.16 MB/s	    4096 B/op	      12 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_001-16         	      10	      3467 ns/op	   4.62 MB/s	    4096 B/op	      12 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_032-16         	      10	     17633 ns/op	   4.42 MB/s	   33312 B/op	      78 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_032-16         	      10	     15833 ns/op	   4.93 MB/s	   33312 B/op	      78 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_032-16         	      10	     11333 ns/op	   6.88 MB/s	   33312 B/op	      78 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_128-16         	      10	     45738 ns/op	   5.90 MB/s	  123040 B/op	     272 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_128-16         	      10	     41779 ns/op	   6.46 MB/s	  123040 B/op	     272 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_128-16         	      10	     41017 ns/op	   6.58 MB/s	  123040 B/op	     272 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_256-16         	      10	     88250 ns/op	   5.96 MB/s	  247328 B/op	     529 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_256-16         	      10	     71592 ns/op	   7.35 MB/s	  247328 B/op	     529 allocs/op
+BenchmarkParseV02ArithmeticOperators/operators_256-16         	      10	     69438 ns/op	   7.58 MB/s	  247328 B/op	     529 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_01-16        	      10	      1504 ns/op	  13.30 MB/s	    2320 B/op	       8 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_01-16        	      10	      2029 ns/op	   9.86 MB/s	    2320 B/op	       8 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_01-16        	      10	      1671 ns/op	  11.97 MB/s	    2320 B/op	       8 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_08-16        	      10	      4508 ns/op	   7.54 MB/s	    6800 B/op	      17 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_08-16        	      10	      3450 ns/op	   9.86 MB/s	    6800 B/op	      17 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_08-16        	      10	      3742 ns/op	   9.09 MB/s	    6800 B/op	      17 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_16-16        	      10	      6596 ns/op	   7.58 MB/s	   14992 B/op	      27 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_16-16        	      10	      6250 ns/op	   8.00 MB/s	   14992 B/op	      27 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_16-16        	      10	      5546 ns/op	   9.02 MB/s	   14992 B/op	      27 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_32-16        	      10	     10642 ns/op	   7.71 MB/s	   31888 B/op	      45 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_32-16        	      10	     10754 ns/op	   7.62 MB/s	   31888 B/op	      45 allocs/op
+BenchmarkParseV02MembershipCandidates/candidates_32-16        	      10	      9883 ns/op	   8.30 MB/s	   31888 B/op	      45 allocs/op
+PASS
+ok  	github.com/Suhaibinator/open-splunk/internal/spl	0.324s
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/clickhouse
+cpu: Apple M4 Max
+BenchmarkExpressionV02Compile/fixed-arithmetic/001-16         	      10	     62862 ns/op	      1925 sql-B	   85695 B/op	     557 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/001-16         	      10	     57058 ns/op	      1925 sql-B	   85695 B/op	     557 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/001-16         	      10	     58171 ns/op	      1925 sql-B	   85695 B/op	     557 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/032-16         	      10	     92600 ns/op	      5414 sql-B	  144407 B/op	     966 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/032-16         	      10	     88112 ns/op	      5414 sql-B	  144412 B/op	     966 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/032-16         	      10	     83738 ns/op	      5414 sql-B	  144412 B/op	     966 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/128-16         	      10	    179446 ns/op	      7723 sql-B	  249376 B/op	    2213 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/128-16         	      10	    161475 ns/op	      7723 sql-B	  249407 B/op	    2213 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/128-16         	      10	    155867 ns/op	      7723 sql-B	  249407 B/op	    2213 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/256-16         	      10	    320292 ns/op	     12587 sql-B	  409372 B/op	    4015 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/256-16         	      10	    310533 ns/op	     12587 sql-B	  409406 B/op	    4015 allocs/op
+BenchmarkExpressionV02Compile/fixed-arithmetic/256-16         	      10	    300042 ns/op	     12587 sql-B	  409427 B/op	    4015 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/001-16       	      10	     68592 ns/op	      8237 sql-B	  198461 B/op	     653 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/001-16       	      10	     51054 ns/op	      8237 sql-B	  198461 B/op	     653 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/001-16       	      10	     54850 ns/op	      8237 sql-B	  198461 B/op	     653 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/032-16       	      10	     82088 ns/op	     11726 sql-B	  256037 B/op	    1062 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/032-16       	      10	     72958 ns/op	     11726 sql-B	  256007 B/op	    1062 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/032-16       	      10	     74100 ns/op	     11726 sql-B	  256037 B/op	    1062 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/128-16       	      10	    187654 ns/op	     14035 sql-B	  365353 B/op	    2309 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/128-16       	      10	    178954 ns/op	     14035 sql-B	  365363 B/op	    2309 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/128-16       	      10	    188696 ns/op	     14035 sql-B	  365331 B/op	    2309 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/256-16       	      10	    286383 ns/op	     18899 sql-B	  520460 B/op	    4110 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/256-16       	      10	    272604 ns/op	     18899 sql-B	  520492 B/op	    4110 allocs/op
+BenchmarkExpressionV02Compile/dynamic-arithmetic/256-16       	      10	    251583 ns/op	     18899 sql-B	  520472 B/op	    4110 allocs/op
+BenchmarkExpressionV02Compile/membership/001-16               	      10	     75758 ns/op	     13170 sql-B	  279040 B/op	     742 allocs/op
+BenchmarkExpressionV02Compile/membership/001-16               	      10	     76412 ns/op	     13170 sql-B	  279063 B/op	     742 allocs/op
+BenchmarkExpressionV02Compile/membership/001-16               	      10	     66362 ns/op	     13170 sql-B	  278968 B/op	     741 allocs/op
+BenchmarkExpressionV02Compile/membership/008-16               	      10	    116575 ns/op	     25308 sql-B	  478520 B/op	    1014 allocs/op
+BenchmarkExpressionV02Compile/membership/008-16               	      10	    117288 ns/op	     25308 sql-B	  478496 B/op	    1014 allocs/op
+BenchmarkExpressionV02Compile/membership/008-16               	      10	    114067 ns/op	     25308 sql-B	  478475 B/op	    1013 allocs/op
+BenchmarkExpressionV02Compile/membership/016-16               	      10	    159575 ns/op	     39234 sql-B	  695852 B/op	    1311 allocs/op
+BenchmarkExpressionV02Compile/membership/016-16               	      10	    162846 ns/op	     39234 sql-B	  695616 B/op	    1311 allocs/op
+BenchmarkExpressionV02Compile/membership/016-16               	      10	    161917 ns/op	     39234 sql-B	  695792 B/op	    1311 allocs/op
+BenchmarkExpressionV02Compile/membership/032-16               	      10	    231175 ns/op	     67104 sql-B	 1164200 B/op	    1903 allocs/op
+BenchmarkExpressionV02Compile/membership/032-16               	      10	    253967 ns/op	     67104 sql-B	 1164614 B/op	    1906 allocs/op
+BenchmarkExpressionV02Compile/membership/032-16               	      10	    245017 ns/op	     67104 sql-B	 1164518 B/op	    1904 allocs/op
+PASS
+ok  	github.com/Suhaibinator/open-splunk/internal/clickhouse	0.622s
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/spl
+cpu: Apple M4 Max
+BenchmarkAnalyzeSuggestionContextV02MaximumScalarShape-16    	      10	    119708 ns/op	  25.70 MB/s	  107312 B/op	      10 allocs/op
+BenchmarkAnalyzeSuggestionContextV02MaximumScalarShape-16    	      10	    116367 ns/op	  26.43 MB/s	  107312 B/op	      10 allocs/op
+BenchmarkAnalyzeSuggestionContextV02MaximumScalarShape-16    	      10	    106854 ns/op	  28.79 MB/s	  107312 B/op	      10 allocs/op
+PASS
+ok  	github.com/Suhaibinator/open-splunk/internal/spl	0.284s
+goos: darwin
+goarch: arm64
+pkg: github.com/Suhaibinator/open-splunk/internal/splcompataudit
+cpu: Apple M4 Max
+BenchmarkAuditSourceLinear/operators_001000-16         	      10	     48392 ns/op	  41.85 MB/s	   84688 B/op	      19 allocs/op
+BenchmarkAuditSourceLinear/operators_001000-16         	      10	     44792 ns/op	  45.21 MB/s	   84688 B/op	      19 allocs/op
+BenchmarkAuditSourceLinear/operators_001000-16         	      10	     49092 ns/op	  41.25 MB/s	   84688 B/op	      19 allocs/op
+BenchmarkAuditSourceLinear/operators_010000-16         	      10	    459746 ns/op	  43.56 MB/s	  943441 B/op	      26 allocs/op
+BenchmarkAuditSourceLinear/operators_010000-16         	      10	    425288 ns/op	  47.09 MB/s	  943441 B/op	      26 allocs/op
+BenchmarkAuditSourceLinear/operators_010000-16         	      10	    410008 ns/op	  48.84 MB/s	  943441 B/op	      26 allocs/op
+BenchmarkAuditSourceLinear/operators_100000-16         	      10	   2999204 ns/op	  66.69 MB/s	 9909584 B/op	      35 allocs/op
+BenchmarkAuditSourceLinear/operators_100000-16         	      10	   2688154 ns/op	  74.41 MB/s	 9909584 B/op	      35 allocs/op
+BenchmarkAuditSourceLinear/operators_100000-16         	      10	   2622071 ns/op	  76.29 MB/s	 9909585 B/op	      35 allocs/op
+PASS
+ok  	github.com/Suhaibinator/open-splunk/internal/splcompataudit	0.520s
+ok  	github.com/Suhaibinator/open-splunk/internal/spl	0.278s
+tracked_and_untracked_status=clean
+completed_utc=2026-08-11T22:17:40Z

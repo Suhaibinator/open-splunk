@@ -1,0 +1,85 @@
+revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+started_utc=2026-08-11T22:05:39Z
+go version go1.26.5 darwin/arm64
+ok  	github.com/Suhaibinator/open-splunk	1.107s
+ok  	github.com/Suhaibinator/open-splunk/cmd/open-splunk-collector	0.568s
+ok  	github.com/Suhaibinator/open-splunk/cmd/open-splunk-loggen	0.679s
+ok  	github.com/Suhaibinator/open-splunk/cmd/open-splunk-manifest	0.930s
+ok  	github.com/Suhaibinator/open-splunk/cmd/open-splunk-server	10.935s
+?   	github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1	[no test files]
+ok  	github.com/Suhaibinator/open-splunk/integration	2.553s
+ok  	github.com/Suhaibinator/open-splunk/internal/audit	14.526s
+ok  	github.com/Suhaibinator/open-splunk/internal/auth	28.302s
+ok  	github.com/Suhaibinator/open-splunk/internal/buildassets	2.083s
+ok  	github.com/Suhaibinator/open-splunk/internal/buildinfo	0.781s
+ok  	github.com/Suhaibinator/open-splunk/internal/buildmetadata	1.103s
+ok  	github.com/Suhaibinator/open-splunk/internal/clickhouse	8.042s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector	5.982s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/config	2.480s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/framing	1.793s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/input	5.988s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/sender	3.495s
+ok  	github.com/Suhaibinator/open-splunk/internal/collector/wal	26.670s
+ok  	github.com/Suhaibinator/open-splunk/internal/collectoradmission	20.371s
+ok  	github.com/Suhaibinator/open-splunk/internal/collectorfleet	23.975s
+ok  	github.com/Suhaibinator/open-splunk/internal/control	83.776s
+ok  	github.com/Suhaibinator/open-splunk/internal/controlbackup	21.729s
+ok  	github.com/Suhaibinator/open-splunk/internal/cursorcodec	5.110s
+ok  	github.com/Suhaibinator/open-splunk/internal/eventfields	4.914s
+ok  	github.com/Suhaibinator/open-splunk/internal/export	6.109s
+ok  	github.com/Suhaibinator/open-splunk/internal/hec	3.874s
+ok  	github.com/Suhaibinator/open-splunk/internal/hecadapter	3.286s
+ok  	github.com/Suhaibinator/open-splunk/internal/hechttp	1.870s
+ok  	github.com/Suhaibinator/open-splunk/internal/ianatimezone	1.764s
+ok  	github.com/Suhaibinator/open-splunk/internal/indexes	1.995s
+ok  	github.com/Suhaibinator/open-splunk/internal/indexname	2.044s
+ok  	github.com/Suhaibinator/open-splunk/internal/indexpolicy	1.872s
+ok  	github.com/Suhaibinator/open-splunk/internal/indexread	1.752s
+ok  	github.com/Suhaibinator/open-splunk/internal/ingest	1.700s
+ok  	github.com/Suhaibinator/open-splunk/internal/ingestquota	1.720s
+ok  	github.com/Suhaibinator/open-splunk/internal/jsonnumber	1.430s
+ok  	github.com/Suhaibinator/open-splunk/internal/knowledge	1.706s
+ok  	github.com/Suhaibinator/open-splunk/internal/knowledgeattemptaudit	21.510s
+ok  	github.com/Suhaibinator/open-splunk/internal/knowledgecatalog	103.688s
+ok  	github.com/Suhaibinator/open-splunk/internal/knowledgedefinition	2.616s
+ok  	github.com/Suhaibinator/open-splunk/internal/knowledgepreview	13.512s
+ok  	github.com/Suhaibinator/open-splunk/internal/knowledgeprogram	2.853s
+ok  	github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot	10.306s
+ok  	github.com/Suhaibinator/open-splunk/internal/knowledgevalidation	3.446s
+ok  	github.com/Suhaibinator/open-splunk/internal/loggen	3.528s
+ok  	github.com/Suhaibinator/open-splunk/internal/plan	3.384s
+ok  	github.com/Suhaibinator/open-splunk/internal/privatefs	2.931s
+ok  	github.com/Suhaibinator/open-splunk/internal/protocolid	1.765s
+ok  	github.com/Suhaibinator/open-splunk/internal/queryexec	3.222s
+ok  	github.com/Suhaibinator/open-splunk/internal/recoverycontract	1.694s
+ok  	github.com/Suhaibinator/open-splunk/internal/recoveryset	7.129s
+ok  	github.com/Suhaibinator/open-splunk/internal/savedobjects	15.056s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchanalysis	6.445s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchaudit	12.062s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchhistory	16.159s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchinspection	4.717s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchjobproto	0.442s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchjobs	6.399s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchsnapshot	1.542s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchsuggestions	1.134s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchtime	1.659s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchtimebounds	1.698s
+ok  	github.com/Suhaibinator/open-splunk/internal/searchws	4.095s
+ok  	github.com/Suhaibinator/open-splunk/internal/server	34.455s
+ok  	github.com/Suhaibinator/open-splunk/internal/spl	2.143s
+ok  	github.com/Suhaibinator/open-splunk/internal/splcompataudit	2.720s
+ok  	github.com/Suhaibinator/open-splunk/internal/splpath	2.262s
+ok  	github.com/Suhaibinator/open-splunk/internal/splregex	2.868s
+ok  	github.com/Suhaibinator/open-splunk/internal/splrelativetime	1.794s
+ok  	github.com/Suhaibinator/open-splunk/internal/spltimeformat	1.920s
+ok  	github.com/Suhaibinator/open-splunk/internal/splwildcard	1.742s
+ok  	github.com/Suhaibinator/open-splunk/internal/testsupport	1.664s
+ok  	github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus	1.931s
+?   	github.com/Suhaibinator/open-splunk/internal/testsupport/jsonnumbercorpus	[no test files]
+?   	github.com/Suhaibinator/open-splunk/internal/testsupport/knowledgecompat	[no test files]
+ok  	github.com/Suhaibinator/open-splunk/internal/tokenconstraint	2.091s
+ok  	github.com/Suhaibinator/open-splunk/internal/visibility	20.121s
+?   	github.com/Suhaibinator/open-splunk/migrations	[no test files]
+ok  	github.com/Suhaibinator/open-splunk/migrations/clickhouse	3.834s
+completed_utc=2026-08-11T22:07:43Z
+tracked_status=clean

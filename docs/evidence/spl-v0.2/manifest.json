@@ -1,0 +1,674 @@
+{
+  "$schema": "./manifest.schema.json",
+  "format_version": "open-splunk-spl-v0.2-acceptance-evidence-v1",
+  "evidence_state": "pending_ci",
+  "generated_at_utc": "2026-08-11T22:23:53Z",
+  "acceptance_window": {
+    "local_started_at_utc": "2026-08-11T22:05:39Z",
+    "local_completed_at_utc": "2026-08-11T22:20:44Z",
+    "remote_completed_at_utc": "PENDING::GITHUB_CI_COMPLETED_AT"
+  },
+  "pending": [
+    "PENDING::GITHUB_CI_COMPLETED_AT",
+    "PENDING::GITHUB_CI_CONCLUSION",
+    "PENDING::GITHUB_CI_EVENT",
+    "PENDING::GITHUB_CI_CHECKOUT_REVISION",
+    "PENDING::GITHUB_CI_CHECKOUT_TREE",
+    "PENDING::GITHUB_CI_TREE_EQUIVALENCE",
+    "PENDING::GITHUB_CI_RELEASE_ARTIFACT_SOURCE_REVISION",
+    "PENDING::GITHUB_CI_JOB_RESULTS",
+    "PENDING::GITHUB_CI_RECEIPT",
+    "PENDING::SHA256SUMS_AFTER_CI_FINALIZATION"
+  ],
+  "compatibility": {
+    "authored_search": "0.2",
+    "knowledge_expression": "0.1",
+    "application_version": "0.1.0"
+  },
+  "decision": {
+    "status": "pending",
+    "reason": "Every local A4 gate and the complete audit disposition review passed; final acceptance awaits terminal-success provenance for GitHub Actions run 31540820337 and the resulting checksum index.",
+    "unresolved_implementation_findings": 0,
+    "unresolved_audit_findings": 0
+  },
+  "runtime_target": {
+    "revision": "dffde13c84d9a2ef0567e89dd527ec4776f5ca42",
+    "tree": "70a99f34c187c6f1c46fa06549af78f33ed2e017",
+    "base_revision": "c5440b96248c68a9b58d10ebaf08eaef5345b61a",
+    "base_tree": "3337f81e67c370f111238a73c5579982c7564717",
+    "base_target_binary_diff_sha256": "ba796b30a6d67bd6f08ec56c8e2deeab553e13086294d710141f77d0e0437cac",
+    "branch": "codex/knowledge-objects-runtime",
+    "remote_ref": "refs/heads/codex/knowledge-objects-runtime",
+    "remote_readback_revision": "dffde13c84d9a2ef0567e89dd527ec4776f5ca42",
+    "checkout_kind": "isolated_committed_materialization",
+    "git_status_porcelain_bytes_before": 0,
+    "git_status_porcelain_bytes_after": 0
+  },
+  "evidence_publication": {
+    "manifest_path": "docs/evidence/spl-v0.2/manifest.json",
+    "revision_binding": "containing_commit",
+    "embedded_revision": null,
+    "expected_first_parent": "dffde13c84d9a2ef0567e89dd527ec4776f5ca42",
+    "resolve_command": "git log -1 --format=%H -- docs/evidence/spl-v0.2/manifest.json",
+    "is_runtime_activation_target": false,
+    "reason_revision_not_embedded": "Embedding the containing evidence-publication commit inside its own tree would be recursively self-referential."
+  },
+  "host": {
+    "kernel_system": "Darwin",
+    "kernel_release": "25.6.0",
+    "architecture": "arm64",
+    "macos_version": "26.6.1",
+    "cpu": "Apple M4 Max",
+    "logical_cpus": 16
+  },
+  "toolchain": {
+    "go": "go1.26.5",
+    "node": "v24.18.0",
+    "npm": "11.16.0",
+    "playwright": "1.62.1",
+    "golangci_lint": "2.12.2",
+    "golangci_lint_build_go": "go1.26.2",
+    "docker_client": "29.7.2",
+    "docker_server": "29.7.2",
+    "clickhouse_version": "26.3.17.4",
+    "clickhouse_image": "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49"
+  },
+  "contracts": [
+    {
+      "path": "docs/spl-compatibility-v0.2.md",
+      "sha256": "2f1e7c9f2fb3902908bf328a135112b7acf20024796ce39179c486737c6eca7e"
+    },
+    {
+      "path": "internal/spl/testdata/compatibility-v0.2.json",
+      "sha256": "613ee59ce81252f733399ffa7d69487d37648b22052cbf6118fced51c39512b3"
+    }
+  ],
+  "ci": {
+    "provider": "github_actions",
+    "workflow": "CI",
+    "run_id": 31540820337,
+    "url": "https://github.com/Suhaibinator/open-splunk/actions/runs/31540820337",
+    "status": "in_progress",
+    "conclusion": "PENDING::GITHUB_CI_CONCLUSION",
+    "event": "PENDING::GITHUB_CI_EVENT",
+    "head_revision": "dffde13c84d9a2ef0567e89dd527ec4776f5ca42",
+    "checkout_revision": "PENDING::GITHUB_CI_CHECKOUT_REVISION",
+    "head_tree": "70a99f34c187c6f1c46fa06549af78f33ed2e017",
+    "checkout_tree": "PENDING::GITHUB_CI_CHECKOUT_TREE",
+    "tree_equivalent": "PENDING::GITHUB_CI_TREE_EQUIVALENCE",
+    "release_artifact_source_revision": "PENDING::GITHUB_CI_RELEASE_ARTIFACT_SOURCE_REVISION",
+    "jobs": "PENDING::GITHUB_CI_JOB_RESULTS",
+    "receipt": "PENDING::GITHUB_CI_RECEIPT"
+  },
+  "gates": [
+    {
+      "id": "source-identity",
+      "category": "provenance",
+      "commands": [
+        "git rev-parse HEAD",
+        "git rev-parse HEAD^{tree}",
+        "git status --porcelain",
+        "git diff --binary c5440b96248c68a9b58d10ebaf08eaef5345b61a dffde13c84d9a2ef0567e89dd527ec4776f5ca42 | shasum -a 256",
+        "shasum -a 256 docs/spl-compatibility-v0.2.md internal/spl/testdata/compatibility-v0.2.json",
+        "git ls-remote origin refs/heads/codex/knowledge-objects-runtime"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:05:39Z",
+      "completed_at_utc": null,
+      "receipt": {
+        "path": "receipts/identity.txt",
+        "sha256": "e8d7b88e710114773aeb8625801cdffef286aba782beb9a85e99ec520a3567c5",
+        "bytes": 1215
+      },
+      "facts": {
+        "remote_readback_matched": true,
+        "initial_status_bytes": 0,
+        "hostname_recorded": false
+      }
+    },
+    {
+      "id": "npm-clean-install",
+      "category": "frontend",
+      "commands": [
+        "npm ci"
+      ],
+      "result": "pass",
+      "started_at_utc": null,
+      "completed_at_utc": null,
+      "receipt": {
+        "path": "receipts/npm-ci.txt",
+        "sha256": "1f76758a74c7806b9eb866a10c10792a1b5b82b759273ffb5da82b593d4a19ca",
+        "bytes": 662
+      },
+      "facts": {
+        "packages_added": 44,
+        "pending_install_script_approval_warnings": 2
+      }
+    },
+    {
+      "id": "frontend-gates",
+      "category": "frontend",
+      "commands": [
+        "npm run typecheck",
+        "npm run lint",
+        "npm run test:frontend",
+        "npm run build"
+      ],
+      "result": "pass",
+      "started_at_utc": null,
+      "completed_at_utc": null,
+      "receipt": {
+        "path": "receipts/frontend-gates.txt",
+        "sha256": "56d19708a02b006ca386087f23f15573210f25b0371ded6e1c8c7674e890c26f",
+        "bytes": 32607
+      },
+      "facts": {
+        "script_tests": 70,
+        "frontend_tests": 290,
+        "failed_tests": 0,
+        "static_pages": 11
+      }
+    },
+    {
+      "id": "playwright-browser",
+      "category": "frontend",
+      "commands": [
+        "npx --no-install playwright --version",
+        "npx --no-install playwright install chromium",
+        "git status --porcelain=v1"
+      ],
+      "result": "pass",
+      "started_at_utc": null,
+      "completed_at_utc": null,
+      "receipt": {
+        "path": "receipts/playwright-install.txt",
+        "sha256": "c73322c55e72b2eefeb14b53937a405f9acde1debf4d3996a0e4585e36c6b043",
+        "bytes": 639
+      },
+      "facts": {
+        "version": "1.62.1",
+        "browser": "chromium",
+        "worktree_status": "clean"
+      }
+    },
+    {
+      "id": "go-test-all",
+      "category": "backend",
+      "commands": [
+        "go test ./... -count=1 -timeout=10m"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:05:39Z",
+      "completed_at_utc": "2026-08-11T22:07:43Z",
+      "receipt": {
+        "path": "receipts/go-test-all.txt",
+        "sha256": "2d4ab1302ca8b65b6ff9fe26e32f9d60a4b8e80f74c14f7e46afa02b62cc1cb5",
+        "bytes": 5801
+      },
+      "facts": {
+        "go": "go1.26.5",
+        "tracked_status": "clean"
+      }
+    },
+    {
+      "id": "go-race-focused",
+      "category": "backend",
+      "commands": [
+        "go test -race ./internal/spl ./internal/plan ./internal/clickhouse ./internal/queryexec ./internal/searchjobs ./internal/knowledgeprogram ./internal/knowledgesnapshot ./cmd/open-splunk-server -count=1 -timeout=20m"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:07:58Z",
+      "completed_at_utc": "2026-08-11T22:10:09Z",
+      "receipt": {
+        "path": "receipts/go-race-focused.txt",
+        "sha256": "3ca68ebd1e0133f371df5c3dfb5e183a2ada9cfc63c15bee5d1215df9e5ee254",
+        "bytes": 689
+      },
+      "facts": {
+        "packages": 8,
+        "tracked_status": "clean"
+      }
+    },
+    {
+      "id": "static-gates",
+      "category": "static-analysis",
+      "commands": [
+        "go mod tidy -diff",
+        "go vet ./...",
+        "go build ./...",
+        "/private/tmp/open-splunk-golangci-v2.12.2/golangci-lint-2.12.2-darwin-arm64/golangci-lint run ./..."
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:10:24Z",
+      "completed_at_utc": "2026-08-11T22:10:33Z",
+      "receipt": {
+        "path": "receipts/static-gates.txt",
+        "sha256": "13d29923e1d38a42fbca93e21a7c73338e259bf0654a27116bc71c950ee1e5d6",
+        "bytes": 315
+      },
+      "facts": {
+        "golangci_lint_issues": 0,
+        "tracked_status": "clean"
+      }
+    },
+    {
+      "id": "clickhouse-gates",
+      "category": "integration",
+      "commands": [
+        "OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' go test ./internal/clickhouse -run '^TestExpressionV02AgainstClickHouse$' -count=1 -timeout=15m -v",
+        "OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' go test ./internal/queryexec -run '^TestExpressionV02ExecutorManagerAgainstClickHouse$' -count=1 -timeout=15m -v",
+        "OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' go test ./internal/clickhouse -run '^TestStoreAgainstClickHouse$' -count=1 -timeout=15m -v"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:11:03Z",
+      "completed_at_utc": "2026-08-11T22:13:45Z",
+      "receipt": {
+        "path": "receipts/clickhouse-gates.txt",
+        "sha256": "97042c31b31b48180b12429e066d5c24f639d194e692f0bb07e6657501671bb6",
+        "bytes": 33736
+      },
+      "facts": {
+        "expression_vertical_seconds": 14.8,
+        "executor_manager_seconds": 7.9,
+        "store_corpus_seconds": 134.7,
+        "tracked_status": "clean"
+      }
+    },
+    {
+      "id": "protobuf-gates",
+      "category": "contracts",
+      "commands": [
+        "make proto-tools",
+        "make proto",
+        "make proto-lint",
+        "BUF_CACHE_DIR=\"$PWD/.cache/buf\" node scripts/check-buf-breaking.mjs --against-ref c5440b96248c68a9b58d10ebaf08eaef5345b61a",
+        "go test . -count=1"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:14:28Z",
+      "completed_at_utc": "2026-08-11T22:14:37Z",
+      "receipt": {
+        "path": "receipts/protobuf-gates.txt",
+        "sha256": "5fe054e9fe25b6c213334f6d0519359c8edd3668330e715fedf0d4a77e0821c0",
+        "bytes": 3434
+      },
+      "facts": {
+        "allowed_exact_pre_activation_migrations": 5,
+        "npm_audited_packages": 45,
+        "npm_vulnerabilities": 0,
+        "tracked_and_untracked_status": "clean"
+      }
+    },
+    {
+      "id": "backend-vertical",
+      "category": "integration",
+      "commands": [
+        "OPEN_SPLUNK_BACKEND_INTEGRATION=1 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' go test ./integration -run '^TestBackendVertical$' -count=1 -timeout=15m -v"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:14:58Z",
+      "completed_at_utc": "2026-08-11T22:15:24Z",
+      "receipt": {
+        "path": "receipts/backend-vertical.txt",
+        "sha256": "e0d95ffbcffcd8fb0debee71ffcaa00236cae7053efffcb18d67b7b828217ad3",
+        "bytes": 1916
+      },
+      "facts": {
+        "test_seconds": 23.97,
+        "stored_events": 4,
+        "distinct_event_ids": 4,
+        "replayed_events": 0,
+        "gradethis_subtests": 6,
+        "tracked_and_untracked_status": "clean"
+      }
+    },
+    {
+      "id": "hec-durable-mixed",
+      "category": "load",
+      "commands": [
+        "OPEN_SPLUNK_HEC_LOAD=1 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' go test ./integration -run '^TestBackendHECDurableLoad$' -count=1 -timeout=15m -p=1 -v"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:15:46Z",
+      "completed_at_utc": "2026-08-11T22:16:33Z",
+      "receipt": {
+        "path": "receipts/hec-durable-mixed.txt",
+        "sha256": "8c41e1574e018be6bf6524cda20e7df6535c2672e5e917f4befebfb64eba682a",
+        "bytes": 1560
+      },
+      "facts": {
+        "claim": "calibrated combined release qualification on the recorded host",
+        "profile": "default-mixed",
+        "configured_seconds": 30,
+        "elapsed_seconds": 31.94,
+        "small_requests_per_second": 50,
+        "batch_events_per_second": 950,
+        "target_total_events_per_second": 1000,
+        "small_scheduled_requests": 1500,
+        "small_accepted_requests": 1236,
+        "small_warm_accepted_requests": 455,
+        "small_capacity_responses": 264,
+        "batch_scheduled_events": 29000,
+        "batch_accepted_events": 23000,
+        "batch_warm_accepted_events": 9000,
+        "batch_capacity_responses": 6,
+        "outage_seconds": 5,
+        "recovery_seconds": 15.303,
+        "maximum_pending": 64,
+        "maximum_pending_bytes": 340369,
+        "retries": 8,
+        "maximum_heap_megabytes": 20,
+        "maximum_goroutines": 57,
+        "maximum_threads": 21,
+        "tracked_and_untracked_status": "clean"
+      }
+    },
+    {
+      "id": "spl-fuzz",
+      "category": "fuzz",
+      "commands": [
+        "GOMAXPROCS=2 go test ./internal/spl -run '^$' -fuzz '^FuzzParseDoesNotPanic$' -fuzztime=350000x -fuzzminimizetime=10s -timeout=2m -parallel=2 -count=1",
+        "GOMAXPROCS=2 go test ./internal/spl -run '^$' -fuzz '^FuzzParseV02ExpressionFragmentsCanonicalize$' -fuzztime=150000x -fuzzminimizetime=10s -timeout=2m -parallel=2 -count=1",
+        "GOMAXPROCS=2 go test ./internal/spl -run '^$' -fuzz '^FuzzParseV02ExpressionsAreDeterministicAndAtomic$' -fuzztime=250000x -fuzzminimizetime=10s -timeout=2m -parallel=2 -count=1"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:16:58Z",
+      "completed_at_utc": "2026-08-11T22:17:20Z",
+      "receipt": {
+        "path": "receipts/spl-fuzz.txt",
+        "sha256": "1e6603021080f63560cc67306fbf49614745e6a030bc35d7c837da2c257159c7",
+        "bytes": 1481
+      },
+      "facts": {
+        "gomaxprocs": 2,
+        "fixed_execution_budget_rationale": "Avoid the Go 1.26.5 timed-fuzz context race while retaining deterministic minimum work.",
+        "upstream_issue": "https://github.com/golang/go/issues/75804",
+        "campaigns": [
+          {
+            "target": "FuzzParseDoesNotPanic",
+            "requested_executions": 350000,
+            "observed_executions": 350008,
+            "baseline_inputs": 862,
+            "new_interesting": 12,
+            "total_interesting": 874
+          },
+          {
+            "target": "FuzzParseV02ExpressionFragmentsCanonicalize",
+            "requested_executions": 150000,
+            "observed_executions": 150000,
+            "baseline_inputs": 1045,
+            "new_interesting": 9,
+            "total_interesting": 1054
+          },
+          {
+            "target": "FuzzParseV02ExpressionsAreDeterministicAndAtomic",
+            "requested_executions": 250000,
+            "observed_executions": 250000,
+            "baseline_inputs": 1199,
+            "new_interesting": 12,
+            "total_interesting": 1211
+          }
+        ],
+        "tracked_and_untracked_status": "clean"
+      }
+    },
+    {
+      "id": "microbenchmarks",
+      "category": "benchmark",
+      "commands": [
+        "go test ./internal/spl -run '^$' -bench '^BenchmarkParseV02(ArithmeticOperators|MembershipCandidates)$' -benchtime=10x -count=3 -benchmem",
+        "go test ./internal/clickhouse -run '^$' -bench '^BenchmarkExpressionV02Compile$' -benchtime=10x -count=3 -benchmem",
+        "go test ./internal/spl -run '^$' -bench '^BenchmarkAnalyzeSuggestionContextV02MaximumScalarShape$' -benchtime=10x -count=3 -benchmem",
+        "go test ./internal/splcompataudit -run '^$' -bench '^BenchmarkAuditSourceLinear$' -benchtime=10x -count=3 -benchmem",
+        "go test ./internal/spl -run '^TestAnalyzeSuggestionContextV02MaximumScalarShapeBoundsAllocations$' -count=1"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:17:36Z",
+      "completed_at_utc": "2026-08-11T22:17:40Z",
+      "receipt": {
+        "path": "receipts/microbenchmarks.txt",
+        "sha256": "908cbfd3021c26c6122bb593d1d29d670db1a4bcad228db1656552b15dec374e",
+        "bytes": 10742
+      },
+      "facts": {
+        "benchtime_iterations": 10,
+        "sample_count": 3,
+        "maximum_parser_operators": 256,
+        "maximum_membership_candidates": 32,
+        "maximum_audit_operators": 100000,
+        "maximum_suggestion_allocations_test": "pass",
+        "tracked_and_untracked_status": "clean"
+      }
+    },
+    {
+      "id": "execution-benchmark",
+      "category": "benchmark",
+      "commands": [
+        "OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 OPEN_SPLUNK_EXPRESSION_V02_BENCH_ROWS=65536 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49' go test ./internal/queryexec -run '^$' -bench '^BenchmarkExpressionV02Execution$' -benchtime=7x -count=3 -benchmem -v"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:17:55Z",
+      "completed_at_utc": "2026-08-11T22:18:08Z",
+      "receipt": {
+        "path": "receipts/execution-benchmark.txt",
+        "sha256": "87b5e926c9d2411638629172d8b565f474779044e7c4d45494b33f346f8ba850",
+        "bytes": 7403
+      },
+      "facts": {
+        "rows": 65536,
+        "timed_iterations_per_sample": 7,
+        "sample_count": 3,
+        "parts": 1,
+        "warmups": 1,
+        "maximum_clickhouse_threads": 1,
+        "production_median_of_medians_ms": {
+          "fixed_arithmetic": 6.298,
+          "dynamic_arithmetic": 45.48,
+          "membership_low_cardinality": 9.945,
+          "membership_high_cardinality": 27.63
+        },
+        "tracked_and_untracked_status": "clean"
+      }
+    },
+    {
+      "id": "release-build",
+      "category": "release",
+      "commands": [
+        "OPEN_SPLUNK_SOURCE_REVISION=dffde13c84d9a2ef0567e89dd527ec4776f5ca42 make release"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:18:28Z",
+      "completed_at_utc": "2026-08-11T22:19:49Z",
+      "receipt": {
+        "path": "receipts/release.txt",
+        "sha256": "9b44a25185aafe658fb9c3b64eae1e6b89800f2121b7093df87f155ea20c64f1",
+        "bytes": 17478
+      },
+      "facts": {
+        "committed_snapshot_revision_matched": true,
+        "binary_identity_readbacks_matched": 3,
+        "ui_files": 87,
+        "post_status": "clean"
+      }
+    },
+    {
+      "id": "compatibility-audit",
+      "category": "audit",
+      "commands": [
+        "OPEN_SPLUNK_SPL_V02_AUDIT_FIXTURE_OUTPUT=/private/tmp/open-splunk-v02-final-dffde13/evidence/sanitized-control.db go test ./internal/splcompataudit -run '^TestGenerateCompatibilityAuditAcceptanceFixture$' -count=1 -v",
+        "for run in 1 2 3 4; do ./build/open-splunk-server audit-spl-v0.2 -control-db /private/tmp/open-splunk-v02-final-dffde13/evidence/sanitized-control.db -repository \"$PWD\" > /private/tmp/open-splunk-v02-final-dffde13/evidence/audit-report-${run}.json; done"
+      ],
+      "result": "pass",
+      "started_at_utc": "2026-08-11T22:20:42Z",
+      "completed_at_utc": "2026-08-11T22:20:44Z",
+      "receipt": {
+        "path": "receipts/audit.txt",
+        "sha256": "cdd3890cd216470b95f31f783504295fb0888e7e1bd3035948b08225e298db65",
+        "bytes": 1506
+      },
+      "facts": {
+        "reports_byte_identical": true,
+        "repeat_count": 4,
+        "scanned_objects": 186,
+        "finding_count": 214,
+        "redacted_fields_only": true,
+        "fixture_unchanged_during_audit": true,
+        "tracked_and_untracked_status": "clean"
+      }
+    }
+  ],
+  "audit": {
+    "target_revision": "dffde13c84d9a2ef0567e89dd527ec4776f5ca42",
+    "target_tree": "70a99f34c187c6f1c46fa06549af78f33ed2e017",
+    "auditing_binary_source_revision": "dffde13c84d9a2ef0567e89dd527ec4776f5ca42",
+    "auditing_binary_sha256": "ab25f90c4dbc7adb96cbcb41103e1e3dc3d5457ddd5014bc4e894f0f8ec972a8",
+    "fixture_generator": "TestGenerateCompatibilityAuditAcceptanceFixture",
+    "fixture_sha256_before": "3daaf519e35285fba2411b216fc536ee1f730869e80b00db4b03b922b511f62f",
+    "fixture_sha256_after": "3daaf519e35285fba2411b216fc536ee1f730869e80b00db4b03b922b511f62f",
+    "fixture_bytes": 1056768,
+    "fixture_cross_generation_bytes_claimed_deterministic": false,
+    "report": "audit/report.json",
+    "report_sha256": "23f91f67d935026d69313b5e9f4552cc328bc44aff7461f445411052cbc8d50c",
+    "report_bytes": 42991,
+    "repeat_count": 4,
+    "reports_byte_identical": true,
+    "compatibility_version": "0.2",
+    "scanned_objects": 186,
+    "finding_count": 214,
+    "finding_kind": "ambiguous_unspaced_scalar_operator",
+    "dispositions": "audit/dispositions.json",
+    "dispositions_schema": "audit/spl-v0.2-audit-dispositions.schema.json",
+    "dispositions_sha256": "a8aa3b3e4780dbdde6303875441d14e185da24bc1da8fdc5870af31b9948fbf8",
+    "dispositions_bytes": 38739,
+    "disposition_count": 214,
+    "unresolved_count": 0,
+    "categories": [
+      {
+        "id": "audit_fixture_intended_arithmetic_control",
+        "finding_count": 1,
+        "object_count": 1,
+        "disposition": "expected_synthetic_control"
+      },
+      {
+        "id": "audit_fixture_legacy_field_positive_control",
+        "finding_count": 1,
+        "object_count": 1,
+        "disposition": "expected_synthetic_control"
+      },
+      {
+        "id": "audit_or_migration_test_control",
+        "finding_count": 25,
+        "object_count": 3,
+        "disposition": "expected_non_production_source"
+      },
+      {
+        "id": "host_language_concatenation_artifact",
+        "finding_count": 46,
+        "object_count": 17,
+        "disposition": "expected_non_spl_source"
+      },
+      {
+        "id": "host_language_format_specifier_artifact",
+        "finding_count": 3,
+        "object_count": 1,
+        "disposition": "expected_non_spl_source"
+      },
+      {
+        "id": "intentional_v02_expression_fixture",
+        "finding_count": 137,
+        "object_count": 17,
+        "disposition": "expected_authored_fixture"
+      },
+      {
+        "id": "preexisting_intended_comparison",
+        "finding_count": 1,
+        "object_count": 1,
+        "disposition": "intended_existing_semantics"
+      }
+    ],
+    "contains_authored_spl": false,
+    "input_database_mutated": false
+  },
+  "release": {
+    "command": "OPEN_SPLUNK_SOURCE_REVISION=dffde13c84d9a2ef0567e89dd527ec4776f5ca42 make release",
+    "application_version": "0.1.0",
+    "source_revision": "dffde13c84d9a2ef0567e89dd527ec4776f5ca42",
+    "verification": "release/release-verification.txt",
+    "binary_identities": "release/binary-identities.txt",
+    "asset_manifest": "release/asset-manifest.json",
+    "ui_build_id": "r18hh3g03m74j2n1574n107mg580m978h781hjgj327186mmk8h40472hhgj6j0mg",
+    "ui_sha256": "ad51b5a92ce581a4bd2e2d163d8c5bc9eb15e93c40318dafacbfacfc047667f5",
+    "ui_file_count": 87,
+    "ui_byte_count": 2754412,
+    "artifacts": [
+      {
+        "name": "open-splunk-server",
+        "sha256": "ab25f90c4dbc7adb96cbcb41103e1e3dc3d5457ddd5014bc4e894f0f8ec972a8",
+        "bytes": 60939538,
+        "mode": "0755",
+        "committed": false
+      },
+      {
+        "name": "open-splunk-collector",
+        "sha256": "fb349e47b94f5309a875a34935815a2149a98ebd4fd72b6071061d706d516b6e",
+        "bytes": 27761746,
+        "mode": "0755",
+        "committed": false
+      },
+      {
+        "name": "open-splunk-loggen",
+        "sha256": "b509b4dc2434443c6d4a339f3a9bde381049c6161750b41dc9c1b388a128f304",
+        "bytes": 3775234,
+        "mode": "0755",
+        "committed": false
+      }
+    ],
+    "clean_before": true,
+    "clean_after": true
+  },
+  "durable_artifacts": [
+    {
+      "path": "audit/report.json",
+      "sha256": "23f91f67d935026d69313b5e9f4552cc328bc44aff7461f445411052cbc8d50c",
+      "bytes": 42991,
+      "media_type": "application/json"
+    },
+    {
+      "path": "audit/dispositions.json",
+      "sha256": "a8aa3b3e4780dbdde6303875441d14e185da24bc1da8fdc5870af31b9948fbf8",
+      "bytes": 38739,
+      "media_type": "application/json"
+    },
+    {
+      "path": "audit/spl-v0.2-audit-dispositions.schema.json",
+      "sha256": "f443df80413830dd007eae6f5199c1257f65ac4e30a650468b6687e9741e06d8",
+      "bytes": 2940,
+      "media_type": "application/schema+json"
+    },
+    {
+      "path": "release/asset-manifest.json",
+      "sha256": "e60803f0f30b50786bb761283c2a61892477a84c588299b365e45cbfbf260d3e",
+      "bytes": 16083,
+      "media_type": "application/json"
+    },
+    {
+      "path": "release/binary-identities.txt",
+      "sha256": "2cbc205f4f0775a67168c42f132dab4763a7ace27ffb202333ee2f6520d278d3",
+      "bytes": 309,
+      "media_type": "text/plain"
+    },
+    {
+      "path": "release/release-verification.txt",
+      "sha256": "0125e0b8b16ce5b3032e1c27890633bffd0ec64069bece39c6aa5375121c7fc3",
+      "bytes": 236,
+      "media_type": "text/plain"
+    }
+  ],
+  "integrity": {
+    "algorithm": "sha256",
+    "index_path": "SHA256SUMS",
+    "status": "PENDING::SHA256SUMS_AFTER_CI_FINALIZATION",
+    "index_self_excluded": true,
+    "manifest_listed_in_index": true
+  }
+}
