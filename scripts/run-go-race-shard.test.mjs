@@ -160,9 +160,9 @@ test("core race shards reconstruct an unsorted package inventory exactly once", 
   assert.deepEqual(observed.toSorted(), sorted);
   assert.equal(new Set(observed).size, sorted.length);
 
-  const expectedCommands = Array.from({ length: 4 }, (_, shard) => [
+  const expectedCommands = Array.from({ length: 4 }, (_unusedShard, shard) => [
     ...coreCommandPrefix,
-    ...sorted.filter((_, ordinal) => ordinal % 4 === shard),
+    ...sorted.filter((_packageName, ordinal) => ordinal % 4 === shard),
   ]).toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
   assert.deepEqual(
     commands.toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
