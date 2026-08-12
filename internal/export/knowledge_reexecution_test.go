@@ -418,19 +418,7 @@ func TestExportManagerRetainsAndDetachesKnowledgeSummaryAcrossLifecycle(t *testi
 func TestLegacyExportMetadataExactFitPreservesNilSummaryAdmission(t *testing.T) {
 	t.Parallel()
 	baseDirectory := t.TempDir()
-	prepared, err := prepareArtifactDirectory(baseDirectory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionPath := prepared.session
-	if err := prepared.Close(); err != nil {
-		t.Fatal(err)
-	}
 	access := searchjobs.AccessScope{TenantID: "t", OwnerID: "o"}
-	exactMetadata, err := requestedMetadataBytes(sessionPath, access, "x", []string{"x"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	if summaryBytes, err := knowledgeSnapshotMetadataBytes(nil); err != nil || summaryBytes != 0 {
 		t.Fatalf("nil summary metadata = (%d, %v), want 0/nil", summaryBytes, err)
 	}
@@ -438,26 +426,24 @@ func TestLegacyExportMetadataExactFitPreservesNilSummaryAdmission(t *testing.T) 
 		"x": {schema: searchjobs.Schema{Columns: []searchjobs.Column{{Name: "x", Kind: searchjobs.ValueKindString}}}},
 	}}
 	manager, err := New(Config{
-		Source:                source,
-		ArtifactDir:           baseDirectory,
-		MaxTotalMetadataBytes: exactMetadata,
-		CleanupInterval:       -1,
-		NewID:                 func() string { return "legacy-exact" },
+		Source:          source,
+		ArtifactDir:     baseDirectory,
+		CleanupInterval: -1,
+		NewID:           func() string { return "legacy-exact" },
 	})
 	if err != nil {
 		t.Fatalf("New(exact legacy metadata): %v", err)
 	}
 	t.Cleanup(func() { _ = manager.Close() })
-	actualMetadata, err := requestedMetadataBytes(manager.artifactDir, access, "x", []string{"x"})
+	exactMetadata, err := requestedMetadataBytes(manager.artifactDir, access, "x", []string{"x"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The OS may choose a different-length random MkdirTemp suffix for the
-	// manager-owned session than the dry-run session above. Pin the test's
-	// internal budget to the actual retained path so it continues to exercise
-	// exact-fit admission rather than filesystem name generation.
-	manager.maxTotalMetadata = actualMetadata
-	exactMetadata = actualMetadata
+	// Pin the test's internal budget to the actual manager-owned session path so
+	// it exercises exact-fit admission rather than MkdirTemp suffix length.
+	manager.budgetMu.Lock()
+	manager.maxTotalMetadata = exactMetadata
+	manager.budgetMu.Unlock()
 	created, err := manager.Create(context.Background(), access, CreateRequest{
 		SearchJobID: "x",
 		Format:      FormatCSV,
