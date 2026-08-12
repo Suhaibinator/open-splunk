@@ -1169,7 +1169,7 @@ The first useful compatibility tier should support:
 
 - `if`, `case`, `coalesce`, `isnull`, `isnotnull`
 - `tonumber`, `tostring`, `round`, `ceil`, `floor`
-- `lower`, `upper`, `len`, `substr`, `mvcount`, concatenation
+- `lower`, `upper`, `len`, `substr`, `mvcount`, `mvsort`, concatenation
 - `match`, `like`, `replace`
 - `now`, `relative_time`, `strftime`, `strptime`
 

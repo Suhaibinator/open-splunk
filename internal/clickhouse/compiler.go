@@ -128,6 +128,10 @@ const (
 	// maxCompiledMVCountScalarSQLBytes independently bounds value-cardinality
 	// expressions. Dynamic input is bound once, so nested calls grow linearly.
 	maxCompiledMVCountScalarSQLBytes = 64 << 10
+	// maxCompiledMVSortScalarSQLBytes independently bounds lexical multivalue
+	// sorting. Dynamic input is bound once, and already-sorted results collapse
+	// to identities so nested calls cannot multiply sort work.
+	maxCompiledMVSortScalarSQLBytes = 64 << 10
 	// maxCompiledMatchScalarSQLBytes independently bounds regular-expression
 	// predicate lowering. Each value is referenced once and each normalized
 	// pattern remains a bound argument, so nested composition grows linearly.
@@ -284,6 +288,12 @@ const (
 	MaximumStatsListBytesPerGroup   = MaximumStatsValuesBytesPerGroup
 	MaximumStatsListValuesPerResult = MaximumStatsValuesPerResult
 	MaximumStatsListBytesPerResult  = MaximumStatsValuesBytesPerResult
+	// MaximumMVSortValues admits every bounded values() result while keeping a
+	// forged or corrupted array from driving unbounded per-row sort work.
+	MaximumMVSortValues = MaximumStatsValuesPerGroup
+	// MaximumMVSortBytes admits every durable event multivalue and every
+	// bounded values()/list() result. Larger raw-storage values fail closed.
+	MaximumMVSortBytes = MaximumStoredScalarBytes
 
 	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
 	// guard so the executor can classify the ClickHouse exception without
@@ -6080,6 +6090,7 @@ type fieldState struct {
 	dynamicDomain             dynamicScalarDomain
 	numericIntegral           bool
 	mvCountOneOrNull          bool
+	mvSortedLexicographic     bool
 	dynamicTypeSQL            string
 	storedTypeSQL             string
 	existsSQL                 string
@@ -6919,6 +6930,7 @@ type compiledScalar struct {
 	dynamicDomain             dynamicScalarDomain
 	numericIntegral           bool
 	mvCountOneOrNull          bool
+	mvSortedLexicographic     bool
 	dynamicTypeSQL            string
 	storedTypeSQL             string
 	descendantSQL             string
@@ -7145,6 +7157,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileIntegralRoundingScalar(expression, state, "floor")
 		case plan.ScalarFunctionMVCount:
 			return compileMVCountScalar(expression, state)
+		case plan.ScalarFunctionMVSort:
+			return compileMVSortScalar(expression, state)
 		case plan.ScalarFunctionMatch:
 			return compileMatchScalar(expression, state)
 		case plan.ScalarFunctionLike:
@@ -9558,7 +9572,8 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionLength,
 			plan.ScalarFunctionCeil,
 			plan.ScalarFunctionFloor,
-			plan.ScalarFunctionMVCount:
+			plan.ScalarFunctionMVCount,
+			plan.ScalarFunctionMVSort:
 			expectedArguments = 1
 			hasExactArity = true
 		case plan.ScalarFunctionMatch:
@@ -10046,6 +10061,21 @@ func compiledScalarPresenceSQL(value compiledScalar) (string, []any) {
 	existsSQL := value.existsSQL
 	if existsSQL == "" {
 		existsSQL = "1"
+	}
+	if value.kind == fieldKindStringArray {
+		// Fixed multivalue results are physically non-null Array(String), but
+		// their canonical empty representation is logically absent in SPL.
+		// Calculated arrays without a separate existence predicate must test
+		// their members instead of treating isNotNull([]) as presence. Projected
+		// arrays already carry a notEmpty(alias) existence predicate and retain
+		// the ordinary physical-null check below.
+		if existsSQL == "0" {
+			return "0", nil
+		}
+		if existsSQL == "1" {
+			return "notEmpty(" + value.valueSQL + ")",
+				append([]any(nil), value.valueArgs...)
+		}
 	}
 	presenceSQL := "((" + existsSQL + ") AND isNotNull(" + value.valueSQL + "))"
 	args := make([]any, 0, len(value.existsArgs)+len(value.valueArgs)+len(value.descendantArgs))
@@ -11421,6 +11451,152 @@ func compileNumericRoundingInput(
 	}, nil
 }
 
+func compileMVSortScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	input, err := compileUnaryNonBooleanScalarInput(expression, state, "mvsort")
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if input.mvSortedLexicographic {
+		return input, nil
+	}
+
+	emptyArray := "CAST([], 'Array(String)')"
+	if input.alwaysNull {
+		return compiledScalar{
+			valueSQL:              emptyArray,
+			existsSQL:             "0",
+			kind:                  fieldKindStringArray,
+			alwaysNull:            true,
+			mvSortedLexicographic: true,
+		}, nil
+	}
+
+	valueSQL := ""
+	valueArgs := append([]any(nil), input.valueArgs...)
+	resultKind := fieldKindStringArray
+	dynamicDomain := dynamicScalarDomainAny
+	switch input.kind {
+	case fieldKindStringArray:
+		valueSQL = "arrayElement(arrayMap(values -> " +
+			boundedMVSortStringArraySQL(
+				"values",
+				emptyArray,
+				"Array(String)",
+				false,
+			) +
+			", [" + input.valueSQL + "]), 1)"
+	case fieldKindDynamic:
+		nullDynamic := "CAST(NULL AS Dynamic)"
+		stringArray := "arrayElement(arrayMap(values -> " +
+			boundedMVSortStringArraySQL(
+				"values",
+				nullDynamic,
+				"Dynamic",
+				true,
+			) +
+			", [dynamicElement(value, 'Array(String)')]), 1)"
+		dynamicArray := "arrayElement(arrayMap(values -> " +
+			boundedMVSortDynamicArraySQL("values", nullDynamic) +
+			", [dynamicElement(value, 'Array(Dynamic)')]), 1)"
+		body := "multiIf(" +
+			"dynamicType(value) = 'Array(String)', " + stringArray + ", " +
+			"dynamicType(value) = 'Array(Dynamic)', " + dynamicArray + ", " +
+			nullDynamic + ")"
+		bound := "arrayElement(arrayMap(value -> " + body +
+			", [" + input.valueSQL + "]), 1)"
+		existsSQL := input.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
+		if existsSQL == "1" {
+			valueSQL = bound
+		} else {
+			valueSQL = "if(" + existsSQL + ", " + bound + ", " + nullDynamic + ")"
+			valueArgs = append(
+				append([]any(nil), input.existsArgs...),
+				input.valueArgs...,
+			)
+		}
+		resultKind = fieldKindDynamic
+		dynamicDomain = dynamicScalarDomainText
+	case fieldKindInvalid:
+		valueSQL = emptyArray
+		valueArgs = nil
+	default:
+		return compiledScalar{}, &plan.Diagnostic{
+			Code:    "SPL_UNSUPPORTED_MVSORT_VALUE_TYPE",
+			Message: "mvsort requires a multivalue String input",
+			Range:   expression.Range,
+		}
+	}
+	if len(valueSQL) > maxCompiledMVSortScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"mvsort scalar SQL exceeds %d bytes",
+				maxCompiledMVSortScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		maxStringBytes:          input.maxStringBytes,
+		existsSQL:               "1",
+		dynamicDomain:           dynamicDomain,
+		kind:                    resultKind,
+		mvSortedLexicographic:   true,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func boundedMVSortStringArraySQL(
+	valuesSQL string,
+	invalidSQL string,
+	resultType string,
+	requireNonEmpty bool,
+) string {
+	conditions := []string{
+		"length(" + valuesSQL + ") <= toUInt64(" +
+			strconv.FormatUint(uint64(MaximumMVSortValues), 10) + ")",
+		stringArrayPayloadBytesSQL(valuesSQL) + " <= toUInt128(" +
+			strconv.FormatUint(uint64(MaximumMVSortBytes), 10) + ")",
+		"arrayAll(element -> isValidUTF8(element), " + valuesSQL + ")",
+	}
+	if requireNonEmpty {
+		conditions = append([]string{"notEmpty(" + valuesSQL + ")"}, conditions...)
+	}
+	return "if(" + strings.Join(conditions, " AND ") +
+		", CAST(arraySort(" + valuesSQL + ") AS " + resultType +
+		"), " + invalidSQL + ")"
+}
+
+func boundedMVSortDynamicArraySQL(valuesSQL string, invalidSQL string) string {
+	nullableStringValue := "dynamicElement(element, 'String')"
+	stringValue := "assumeNotNull(" + nullableStringValue + ")"
+	overLimitBytes := strconv.FormatUint(uint64(MaximumMVSortBytes)+1, 10)
+	payloadBytes := "arrayFold((bytes, element) -> bytes + toUInt128(ifNull(" +
+		"length(" + nullableStringValue + "), toUInt64(" + overLimitBytes + "))), " +
+		valuesSQL + ", toUInt128(0))"
+	conditions := []string{
+		"notEmpty(" + valuesSQL + ")",
+		"length(" + valuesSQL + ") <= toUInt64(" +
+			strconv.FormatUint(uint64(MaximumMVSortValues), 10) + ")",
+		"arrayAll(element -> dynamicType(element) = 'String', " + valuesSQL + ")",
+		payloadBytes + " <= toUInt128(" +
+			strconv.FormatUint(uint64(MaximumMVSortBytes), 10) + ")",
+		"arrayAll(element -> isValidUTF8(ifNull(" + nullableStringValue +
+			", '')), " + valuesSQL + ")",
+	}
+	stringsSQL := "arrayMap(element -> " + stringValue + ", " + valuesSQL + ")"
+	return "if(" + strings.Join(conditions, " AND ") +
+		", CAST(arraySort(" + stringsSQL + ") AS Dynamic), " + invalidSQL + ")"
+}
+
 func compileMVCountScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
@@ -11738,6 +11914,7 @@ func extendCompileState(
 		dynamicDomain:           value.dynamicDomain,
 		numericIntegral:         value.numericIntegral,
 		mvCountOneOrNull:        value.mvCountOneOrNull,
+		mvSortedLexicographic:   value.mvSortedLexicographic,
 		existsSQL:               existsSQL,
 		descendantSQL:           value.descendantSQL,
 		descendantArgs:          append([]any(nil), value.descendantArgs...),
@@ -13088,6 +13265,7 @@ func projectedRenameField(source fieldState, destination string) fieldState {
 		rawTextIndexEligible:    source.rawTextIndexEligible,
 		dynamicDomain:           source.dynamicDomain,
 		numericIntegral:         source.numericIntegral,
+		mvSortedLexicographic:   source.mvSortedLexicographic,
 		storedTypeSQL:           source.storedTypeSQL,
 		existsSQL:               rewriteExistenceForProjection(source, destination),
 		existsArgs:              append([]any(nil), source.existsArgs...),
@@ -14250,6 +14428,7 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		dynamicDomain:             field.dynamicDomain,
 		numericIntegral:           field.numericIntegral,
 		mvCountOneOrNull:          field.mvCountOneOrNull,
+		mvSortedLexicographic:     field.mvSortedLexicographic,
 		dynamicTypeSQL:            field.dynamicTypeSQL,
 		storedTypeSQL:             field.storedTypeSQL,
 		descendantSQL:             field.descendantSQL,
@@ -14492,6 +14671,7 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 			dynamicDomain:           compiled.dynamicDomain,
 			numericIntegral:         compiled.numericIntegral,
 			mvCountOneOrNull:        compiled.mvCountOneOrNull,
+			mvSortedLexicographic:   compiled.mvSortedLexicographic,
 			dynamicTypeSQL:          compiled.dynamicTypeSQL,
 			storedTypeSQL:           compiled.storedTypeSQL,
 			existsSQL:               rewriteExistenceForProjection(compiled, name),
@@ -16726,7 +16906,10 @@ func compileEventAggregate(
 			case plan.AggregateFunctionValues:
 				measureUsesValuesValidation = true
 				measureNullSQL = emptyValues
-				outputState = fieldState{kind: fieldKindStringArray}
+				outputState = fieldState{
+					kind:                  fieldKindStringArray,
+					mvSortedLexicographic: true,
+				}
 			case plan.AggregateFunctionList:
 				listInputExists = exists
 				measureNullSQL = emptyValues
@@ -19012,6 +19195,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 					measureState.numberType = "UInt64"
 				} else {
 					measureState.kind = fieldKindStringArray
+					measureState.mvSortedLexicographic = true
 					// The physical result is always a non-null Array(String), but an
 					// empty multivalue has no logical SPL field value.
 					measureState.existsSQL = "notEmpty(" + output + ")"

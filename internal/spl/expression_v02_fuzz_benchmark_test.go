@@ -490,6 +490,8 @@ func v02FuzzCanonicalFunctionName(function ScalarFunction) (string, bool) {
 		return "floor", true
 	case ScalarFunctionMVCount:
 		return "mvcount", true
+	case ScalarFunctionMVSort:
+		return "mvsort", true
 	case ScalarFunctionMatch:
 		return "match", true
 	case ScalarFunctionLike:

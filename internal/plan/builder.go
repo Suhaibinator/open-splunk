@@ -3260,6 +3260,10 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			expectedArguments = 1
 			hasExactArity = true
 			functionName = "mvcount"
+		case spl.ScalarFunctionMVSort:
+			expectedArguments = 1
+			hasExactArity = true
+			functionName = "mvsort"
 		case spl.ScalarFunctionMatch:
 			expectedArguments = 2
 			hasExactArity = true
@@ -3348,6 +3352,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			expression.Function == spl.ScalarFunctionReplace ||
 			expression.Function == spl.ScalarFunctionLower ||
 			expression.Function == spl.ScalarFunctionUpper ||
+			expression.Function == spl.ScalarFunctionMVSort ||
 			expression.Function == spl.ScalarFunctionLength {
 			for _, argument := range expression.Arguments {
 				if splScalarMayReturnBooleanFunction(argument) {
@@ -3675,6 +3680,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionFloor
 		case spl.ScalarFunctionMVCount:
 			function = ScalarFunctionMVCount
+		case spl.ScalarFunctionMVSort:
+			function = ScalarFunctionMVSort
 		case spl.ScalarFunctionMatch:
 			function = ScalarFunctionMatch
 		case spl.ScalarFunctionLike:
@@ -3851,6 +3858,7 @@ func splScalarHasStaticallyUnsupportedArithmeticType(
 		case spl.ScalarFunctionReplace,
 			spl.ScalarFunctionLower,
 			spl.ScalarFunctionUpper,
+			spl.ScalarFunctionMVSort,
 			spl.ScalarFunctionSubstring,
 			spl.ScalarFunctionToString,
 			spl.ScalarFunctionStrftime,

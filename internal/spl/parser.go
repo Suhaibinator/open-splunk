@@ -4561,6 +4561,25 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				Range:   name.sourceRange,
 			}
 		}
+	case "mvsort":
+		function = ScalarFunctionMVSort
+		if len(arguments) != 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_INVALID_EVAL_ARITY",
+				Message: "mvsort requires exactly one argument",
+				Range:   name.sourceRange,
+			}
+		}
+		if scalarExpressionMayReturnBooleanFunction(arguments[0]) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+				Message: "mvsort cannot consume a Boolean result in search-mode expressions",
+				Range:   arguments[0].SourceRange(),
+				Suggestions: []string{
+					"mvsort(multivalue_field)",
+				},
+			}
+		}
 	case "match":
 		function = ScalarFunctionMatch
 		if len(arguments) != 2 {
@@ -4722,6 +4741,7 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				"ceil(value)",
 				"floor(value)",
 				"mvcount(value)",
+				"mvsort(multivalue_field)",
 				`match(value, "pattern")`,
 				`like(value, "pattern%")`,
 				"now()",

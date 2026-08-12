@@ -2611,6 +2611,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testRoundAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testIntegralRoundingAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testMVCountAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testMVSortAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testMatchAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testLikeAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testNowAgainstClickHouse(ctx, t, store, connection, indexTime)

@@ -278,6 +278,7 @@ func validEventAggregateScalarFunction(function ScalarFunction) bool {
 		ScalarFunctionCeil,
 		ScalarFunctionFloor,
 		ScalarFunctionMVCount,
+		ScalarFunctionMVSort,
 		ScalarFunctionMatch,
 		ScalarFunctionLike,
 		ScalarFunctionNow,

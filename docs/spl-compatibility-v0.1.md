@@ -2,7 +2,7 @@
 
 **Status:** executable implementation contract
 **Compatibility version:** `0.1`
-**Last updated:** August 4, 2026
+**Last updated:** August 11, 2026
 
 Open Splunk accepts only the syntax and behavior described here. Unsupported
 commands or forms fail with a source-located diagnostic; the compiler never
@@ -74,6 +74,10 @@ Every `mvcount` call accepts exactly one value and has the same separate
 64 KiB generated-SQL ceiling, checked after its typed cardinality lowering is
 built. Validation of a tagged scalar payload is independently capped at the
 1 MiB hard ingestion ceiling.
+Every `mvsort` call accepts exactly one homogeneous String multivalue and has
+the same separate 64 KiB generated-SQL ceiling. One input may contain at most
+10,000 members and 1 MiB of String payload; larger values fail closed before
+sorting.
 Every `match` call accepts one value and one quoted literal regular expression.
 Both the original and normalized RE2 text are capped at 4 KiB, the estimated
 post-repeat program is capped at 4,096 work units, and one query may use at
@@ -227,7 +231,7 @@ with a Boolean literal. Scalar operands may be fields, typed literals, or the
 supported `tonumber`, `replace`, bounded `if`, bounded `coalesce`, bounded
 `case`, `lower`, `upper`, `len`, `length`, bounded `substr`, and bounded
 default `tostring`, bounded period concatenation, bounded `round`,
-`ceil`/`ceiling`, `floor`, and `mvcount` calls, plus bounded
+`ceil`/`ceiling`, `floor`, `mvcount`, and `mvsort` calls, plus bounded
 `match(value, "regex")` and
 `like(value, "pattern")`, zero-argument `now()`, and bounded
 `relative_time(value, "specifier")`, `strftime(time, "format")`, and
@@ -274,6 +278,7 @@ decimal compatibility contract, not an exact binary-rational comparison.
 | eval latency_ms=round(duration_ms, 2)
 | eval upper_bound=ceil(ratio), lower_bound=floor(ratio)
 | eval recipient_count=mvcount(recipients)
+| eval sorted_recipients=mvsort(recipients)
 | eval class=if(match(message, "(?i)error|warn"), "problem", "ok")
 | eval route_class=if(like(path, "/api/%"), "api", "other")
 | eval search_started=now()
@@ -316,6 +321,8 @@ narrow:
   `floor(value)` rounds one numeric value downward.
 - `mvcount(value)` returns the number of immediate non-null multivalue members,
   one for a non-null scalar, or null when there are no values.
+- `mvsort(multivalue_field)` returns homogeneous String members in ascending
+  encoded order while preserving duplicates.
 - `match(value, "regex")` returns a Boolean substring-match result for
   predicate and conditional use with a bounded literal RE2 pattern.
 - `like(value, "pattern")` returns a Boolean whole-string wildcard-match result
@@ -944,6 +951,47 @@ operation because the first result is already one or null, including across
 eval projection and rename stages. No form uses `ARRAY JOIN` or changes row
 cardinality. The per-call 64 KiB and whole-query 256 KiB generated-SQL ceilings
 remain authoritative.
+
+`mvsort` accepts exactly one multivalue:
+
+```spl
+| eval sorted=mvsort(recipients)
+| eval normalized=mvsort(lower(tags))
+| where mvcount(mvsort(errors))>1
+```
+
+Function names are case-insensitive, and a bare field named `mvsort` remains
+an ordinary field. Zero or multiple arguments fail with
+`SPL_INVALID_EVAL_ARITY`. A statically known String, number, Boolean, or
+canonical time fails with `SPL_UNSUPPORTED_MVSORT_VALUE_TYPE`; Boolean
+function results are rejected before planning.
+
+Members sort ascending by their encoded UTF-8 bytes. Numeric-looking Strings
+therefore remain lexical: `10, 9, 70, 100` becomes `10, 100, 70, 9`.
+Uppercase ASCII sorts before lowercase ASCII, duplicates and empty Strings are
+retained, and no case folding, locale collation, Unicode normalization, or
+numeric coercion is applied. This pins exact symbol ordering to byte order;
+Splunk documents encoded lexicographic ordering but does not standardize every
+symbol edge.
+
+A fixed `Array(String)` remains fixed and uses the canonical empty array for
+an empty, authored `null`, statically absent, invalid-UTF-8, or over-limit
+result. Empty fixed arrays are logically absent, so both `isnull(mvsort(null))`
+and `isnull(mvsort(empty_fixed_multivalue))` are true and `mvcount` returns
+null. A runtime nonempty `Array(String)`, or a nonempty
+`Array(Dynamic)` whose every immediate member is a valid String, becomes a
+Dynamic `Array(String)`. Runtime missing, null, empty, scalar, heterogeneous,
+null-containing, nested, object, invalid-UTF-8, and over-limit inputs become
+Dynamic null. Numeric members are not stringified. Splunk's public
+documentation does not settle these typed cases; this homogeneous-String rule
+is the explicit Open Splunk v0.1 boundary.
+
+Each call admits at most 10,000 members and 1 MiB of raw String payload, using
+wide byte accumulation before `arraySort`. A Dynamic source is bound once.
+`stats values(...)` carries its existing lexical-order invariant, and repeated
+or sequential `mvsort` calls over an already sorted result collapse to an
+identity. No lowering uses `ARRAY JOIN`, expands a member, changes row
+cardinality, removes duplicates, or rescans physical events.
 
 `match` accepts one value and one quoted literal regular expression:
 
@@ -3797,7 +3845,7 @@ Reference behavior is compared against Splunk's official [`search`](https://help
 [SQLite core `substr` semantics](https://www.sqlite.org/lang_corefunc.html),
 [`tostring` and conversion functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.2/evaluation-functions/conversion-functions),
 [`round` and mathematical functions](https://help.splunk.com/en/splunk-enterprise/search/spl-search-reference/10.2/evaluation-functions/mathematical-functions),
-[`mvcount` and multivalue eval functions](https://help.splunk.com/en?resourceId=SCS_SearchReference_MultivalueEvalFunctions),
+[`mvcount`, `mvsort`, and multivalue eval functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.4/evaluation-functions/multivalue-eval-functions#mvsort-mv),
 [`predicate expressions`](https://help.splunk.com/en/splunk-enterprise/search/search-manual/10.2/expressions-and-predicates/predicate-expressions),
 [`isnull` and `isnotnull` informational functions](https://help.splunk.com/en/splunk-enterprise/spl-search-reference/10.0/evaluation-functions/informational-functions),
 [`rex`](https://help.splunk.com/en/splunk-cloud-platform/spl-search-reference/10.2.2510/search-commands/rex),

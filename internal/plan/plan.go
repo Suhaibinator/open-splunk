@@ -656,6 +656,7 @@ const (
 	ScalarFunctionCeil
 	ScalarFunctionFloor
 	ScalarFunctionMVCount
+	ScalarFunctionMVSort
 	ScalarFunctionMatch
 	ScalarFunctionLike
 	ScalarFunctionNow

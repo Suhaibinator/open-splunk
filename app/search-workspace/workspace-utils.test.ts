@@ -162,6 +162,18 @@ test("mvcount highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("mvsort highlights only when used as a parenthesized function", () => {
+  const query = `index=main mvsort=1 | eval sorted=MvSoRt(recipients) | table mvsort`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["mvsort"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("match highlights only when used as a parenthesized function", () => {
   const query = `index=main match=1 | where MaTcH(message, "(?i)error") | table match`;
   const tokens = classifiedTokens(query);
@@ -252,6 +264,8 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /mvcount\(value\)/);
   assert.match(evalCompletion.detail, /single value as 1/i);
   assert.match(evalCompletion.detail, /no values as null/i);
+  assert.match(evalCompletion.detail, /mvsort\(multivalue_field\)/);
+  assert.match(evalCompletion.detail, /ascending encoded order/i);
   assert.match(evalCompletion.detail, /match\(value, "regex"\)/);
   assert.match(evalCompletion.detail, /4 KiB literal RE2 pattern/i);
   assert.match(evalCompletion.detail, /like\(value, "pattern"\)/);
