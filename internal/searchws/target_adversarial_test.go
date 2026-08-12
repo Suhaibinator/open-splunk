@@ -1201,17 +1201,22 @@ func TestAdversarialPermanentNotFoundPollBacksOffAndNotifiesOnce(t *testing.T) {
 }
 
 func TestAdversarialApplyRetireAndResolverPinsRace(t *testing.T) {
+	const actorIterations = 200
 	service := adversarialNewService(t, nil)
 	target := adversarialNewTarget(service, "race")
 	incarnation := adversarialNow.Add(-time.Hour)
 	start := make(chan struct{})
-	errorsSeen := make(chan error, 256)
+	errorsSeen := make(chan error, 2*actorIterations+1)
+	actorsDone := make(chan struct{})
+	var actors sync.WaitGroup
+	actors.Add(2)
 	var wait sync.WaitGroup
 	wait.Add(3)
 	go func() {
 		defer wait.Done()
+		defer actors.Done()
 		<-start
-		for index := 1; index <= 200; index++ {
+		for index := 1; index <= actorIterations; index++ {
 			_, err := target.applyProjection(adversarialProjection(
 				uint64(index), incarnation, false,
 				opensplunkv1.SearchJobState_SEARCH_JOB_STATE_RUNNING, uint64(index), true,
@@ -1223,11 +1228,12 @@ func TestAdversarialApplyRetireAndResolverPinsRace(t *testing.T) {
 	}()
 	go func() {
 		defer wait.Done()
+		defer actors.Done()
 		<-start
-		for index := 0; index < 200; index++ {
+		for index := 0; index < actorIterations; index++ {
 			resolved, err := service.resolveTarget(context.Background(), target.key)
 			if err == nil {
-				resolved.resolverCount.Add(-1)
+				service.releaseResolvedTarget(resolved)
 			} else if !errors.Is(err, errTargetNotFound) {
 				errorsSeen <- err
 			}
@@ -1237,15 +1243,27 @@ func TestAdversarialApplyRetireAndResolverPinsRace(t *testing.T) {
 	go func() {
 		defer wait.Done()
 		<-start
-		for attempts := 0; attempts < 10_000; attempts++ {
+		for {
 			if service.evictInactiveTarget(nil) {
 				return
 			}
-			runtime.Gosched()
+			select {
+			case <-actorsDone:
+				// The actor wait proves every transient resolver pin has been
+				// released. One final attempt must now retire the idle target.
+				if service.evictInactiveTarget(nil) {
+					return
+				}
+				errorsSeen <- errors.New("could not evict target after resolver pins were released")
+				return
+			default:
+				runtime.Gosched()
+			}
 		}
-		errorsSeen <- errors.New("could not evict target after resolver pins were released")
 	}()
 	close(start)
+	actors.Wait()
+	close(actorsDone)
 	wait.Wait()
 	close(errorsSeen)
 	for err := range errorsSeen {

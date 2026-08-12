@@ -134,23 +134,42 @@ jobs:
   go-test:
     name: Go tests (${{ matrix.label }})
     runs-on: ubuntu-latest
-    # The serialized core race row needs a larger aggregate envelope. Catalog
-    # race shards and coverage retain the smaller aggregate budget; every
-    # package invocation remains bounded at 40 minutes.
+    # Every race shard and the coverage row retain the same aggregate budget;
+    # each package invocation remains bounded at 40 minutes.
     timeout-minutes: ${{ matrix.job_timeout_minutes }}
     # Race instrumentation and atomic coverage each retain a full-tree gate.
-    # Core race package processes are serialized because separate packages
-    # cannot share memory. The migration-heavy catalog test binary is split by
-    # a fail-closed dynamic inventory so every top-level test, example, fuzz
-    # seed, and all of their subtests still run under the race detector.
+    # Core packages and the migration-heavy catalog test binary are partitioned
+    # by fail-closed dynamic inventories. Every package and every top-level
+    # catalog test, example, fuzz seed, and subtest still runs under race.
     strategy:
       fail-fast: false
+      max-parallel: 5
       matrix:
         include:
-          - label: race detector, non-catalog packages
+          - label: race detector, non-catalog packages shard 1/4
             mode: race-core
+            shard_index: 0
+            shard_count: 4
             upload_coverage: false
-            job_timeout_minutes: 90
+            job_timeout_minutes: 45
+          - label: race detector, non-catalog packages shard 2/4
+            mode: race-core
+            shard_index: 1
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, non-catalog packages shard 3/4
+            mode: race-core
+            shard_index: 2
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, non-catalog packages shard 4/4
+            mode: race-core
+            shard_index: 3
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
           - label: race detector, knowledge catalog shard 1/4
             mode: race-catalog
             shard_index: 0
@@ -209,7 +228,10 @@ jobs:
         if: matrix.mode == 'race-core'
         env:
           GOMAXPROCS: "2"
-        run: scripts/run-go-race-shard.sh core
+        run: >-
+          scripts/run-go-race-shard.sh core
+          ${{ matrix.shard_index }}
+          ${{ matrix.shard_count }}
 
       - name: Test knowledge catalog shard with the race detector
         if: matrix.mode == 'race-catalog'

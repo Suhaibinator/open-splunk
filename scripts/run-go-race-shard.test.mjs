@@ -93,24 +93,130 @@ async function readFinalCommands(log) {
   return content.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
-test("core race scope excludes exactly the catalog package", async (t) => {
-  const harness = await fakeGoHarness(t);
-  const result = await run(shardScript, ["core"], harness.environment);
-  assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /repository_package_count=3/);
-  assert.match(result.stdout, /selected_package_count=2/);
-  assert.match(result.stdout, new RegExp(`excluded_package=${catalogPackage}`));
-  assert.deepEqual(await readFinalCommands(harness.log), [[
-    "test",
-    "-p=1",
-    "-race",
-    "-shuffle=on",
-    "-count=1",
-    "-parallel=2",
-    "-timeout=40m",
+async function assertNoFinalCommand(log) {
+  try {
+    assert.deepEqual(await readFinalCommands(log), []);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
+
+const coreCommandPrefix = [
+  "test",
+  "-p=1",
+  "-race",
+  "-shuffle=on",
+  "-count=1",
+  "-parallel=2",
+  "-timeout=40m",
+];
+
+test("core race shards reconstruct an unsorted package inventory exactly once", async (t) => {
+  const corePackages = [
+    "example.com/open-splunk/internal/zulu",
     "example.com/open-splunk",
-    "example.com/open-splunk/internal/zeta",
-  ]]);
+    "example.com/open-splunk/internal/alpha",
+    "example.com/open-splunk/cmd/server",
+    "example.com/open-splunk/internal/eta",
+    "example.com/open-splunk/internal/bravo",
+    "example.com/open-splunk/internal/theta",
+    "example.com/open-splunk/internal/delta",
+    "example.com/open-splunk/internal/gamma",
+  ];
+  const harness = await fakeGoHarness(t, {
+    FAKE_PACKAGES: [
+      corePackages[0],
+      catalogPackage,
+      ...corePackages.slice(1),
+    ].join("\n") + "\n",
+  });
+  const sorted = corePackages.toSorted();
+  const results = await Promise.all(Array.from({ length: 4 }, (_, index) =>
+    run(shardScript, ["core", String(index), "4"], harness.environment)));
+
+  for (const [index, result] of results.entries()) {
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /repository_package_count=10/);
+    assert.match(result.stdout, /core_package_count=9/);
+    assert.match(result.stdout, new RegExp(`core_shard_index=${index}`));
+    assert.match(result.stdout, /core_shard_count=4/);
+    assert.match(result.stdout, new RegExp(`excluded_package=${catalogPackage}`));
+    const assignments = [...result.stdout.matchAll(/^core_assignment shard=(\d+) package=(.+)$/gm)]
+      .map((match) => ({ shard: Number(match[1]), package: match[2] }));
+    assert.deepEqual(assignments, sorted.map((packageName, ordinal) => ({
+      shard: ordinal % 4,
+      package: packageName,
+    })));
+  }
+
+  const commands = await readFinalCommands(harness.log);
+  assert.equal(commands.length, 4);
+  const observed = [];
+  for (const command of commands) {
+    assert.deepEqual(command.slice(0, coreCommandPrefix.length), coreCommandPrefix);
+    assert.ok(!command.includes("-run"), "core package shards must execute whole packages");
+    observed.push(...command.slice(coreCommandPrefix.length));
+  }
+  assert.deepEqual(observed.toSorted(), sorted);
+  assert.equal(new Set(observed).size, sorted.length);
+
+  const expectedCommands = Array.from({ length: 4 }, (_unusedShard, shard) => [
+    ...coreCommandPrefix,
+    ...sorted.filter((_packageName, ordinal) => ordinal % 4 === shard),
+  ]).toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  assert.deepEqual(
+    commands.toSorted((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+    expectedCommands,
+  );
+});
+
+test("core shard selection is stable across discovery order permutations", async (t) => {
+  const packages = [
+    "example.com/open-splunk/internal/charlie",
+    "example.com/open-splunk/internal/alpha",
+    "example.com/open-splunk/internal/echo",
+    "example.com/open-splunk/internal/bravo",
+    "example.com/open-splunk/internal/foxtrot",
+    "example.com/open-splunk/internal/delta",
+    "example.com/open-splunk/internal/golf",
+    "example.com/open-splunk/internal/hotel",
+  ];
+  const first = await fakeGoHarness(t, {
+    FAKE_PACKAGES: [catalogPackage, ...packages].join("\n") + "\n",
+  });
+  const second = await fakeGoHarness(t, {
+    FAKE_PACKAGES: [...packages.toReversed(), catalogPackage].join("\n") + "\n",
+  });
+  const [firstResult, secondResult] = await Promise.all([
+    run(shardScript, ["core", "2", "4"], first.environment),
+    run(shardScript, ["core", "2", "4"], second.environment),
+  ]);
+  assert.equal(firstResult.code, 0, firstResult.stderr);
+  assert.equal(secondResult.code, 0, secondResult.stderr);
+  assert.deepEqual(await readFinalCommands(first.log), await readFinalCommands(second.log));
+});
+
+test("a newly discovered core package is assigned to exactly one shard", async (t) => {
+  const futurePackage = "example.com/open-splunk/internal/futurepackage";
+  const packages = [
+    "example.com/open-splunk/internal/alpha",
+    "example.com/open-splunk/internal/bravo",
+    "example.com/open-splunk/internal/charlie",
+    "example.com/open-splunk/internal/delta",
+    futurePackage,
+    "example.com/open-splunk/internal/golf",
+  ];
+  const harness = await fakeGoHarness(t, {
+    FAKE_PACKAGES: [...packages.toReversed(), catalogPackage].join("\n") + "\n",
+  });
+  await Promise.all(Array.from({ length: 4 }, async (_, index) => {
+    const result = await run(shardScript, ["core", String(index), "4"], harness.environment);
+    assert.equal(result.code, 0, result.stderr);
+  }));
+  const occurrences = (await readFinalCommands(harness.log))
+    .flatMap((command) => command.slice(coreCommandPrefix.length))
+    .filter((packageName) => packageName === futurePackage);
+  assert.deepEqual(occurrences, [futurePackage]);
 });
 
 test("catalog race shards reconstruct every safe runnable exactly once", async (t) => {
@@ -161,28 +267,44 @@ test("catalog race shards reconstruct every safe runnable exactly once", async (
 
 test("race shard argument bounds reject before invoking Go", async () => {
   const invalid = [
-    [],
-    ["unknown"],
-    ["core", "extra"],
-    ["catalog"],
-    ["catalog", "-1", "4"],
-    ["catalog", "01", "4"],
-    ["catalog", "4", "4"],
-    ["catalog", "0", "1"],
-    ["catalog", "0", "17"],
+    { args: [], code: 64 },
+    { args: ["unknown"], code: 64 },
+    { args: ["core"], code: 64 },
+    { args: ["core", "0"], code: 64 },
+    { args: ["core", "0", "4", "extra"], code: 64 },
+    { args: ["core", "-1", "4"], code: 65 },
+    { args: ["core", "01", "4"], code: 65 },
+    { args: ["core", "4", "4"], code: 65 },
+    { args: ["core", "0", "1"], code: 65 },
+    { args: ["core", "0", "17"], code: 65 },
+    { args: ["core", "18446744073709551620", "4"], code: 65 },
+    { args: ["core", "0", "18446744073709551620"], code: 65 },
+    { args: ["catalog"], code: 64 },
+    { args: ["catalog", "-1", "4"], code: 65 },
+    { args: ["catalog", "01", "4"], code: 65 },
+    { args: ["catalog", "4", "4"], code: 65 },
+    { args: ["catalog", "0", "1"], code: 65 },
+    { args: ["catalog", "0", "17"], code: 65 },
+    { args: ["catalog", "18446744073709551620", "4"], code: 65 },
+    { args: ["catalog", "0", "18446744073709551620"], code: 65 },
   ];
-  await Promise.all(invalid.map(async (args) => {
+  await Promise.all(invalid.map(async ({ args, code }) => {
     const result = await run(shardScript, args, { ...process.env, PATH: "/usr/bin:/bin" });
-    assert.notEqual(result.code, 0, `unexpected success for ${JSON.stringify(args)}`);
+    assert.equal(result.code, code, `wrong rejection for ${JSON.stringify(args)}: ${result.stderr}`);
   }));
 });
 
 test("race shard discovery fails closed on missing and malformed inventory", async (t) => {
   const scenarios = [
-    { args: ["core"], overrides: { FAKE_GO_FAIL: "packages" } },
-    { args: ["core"], overrides: { FAKE_PACKAGES: `${catalogPackage}\n${catalogPackage}\n` } },
-    { args: ["core"], overrides: { FAKE_PACKAGES: "example.com/open-splunk\n" } },
-    { args: ["core"], overrides: { FAKE_PACKAGES: `${catalogPackage}\n` } },
+    { args: ["core", "0", "4"], overrides: { FAKE_GO_FAIL: "catalog-package" } },
+    { args: ["core", "0", "4"], overrides: { FAKE_GO_FAIL: "packages" } },
+    { args: ["core", "0", "4"], overrides: { FAKE_PACKAGES: "" } },
+    { args: ["core", "0", "4"], overrides: { FAKE_PACKAGES: `${catalogPackage}\nunsafe package\n` } },
+    { args: ["core", "0", "4"], overrides: { FAKE_PACKAGES: `${catalogPackage}\nexample.com/open-splunk\nexample.com/open-splunk\n` } },
+    { args: ["core", "0", "4"], overrides: { FAKE_PACKAGES: `${catalogPackage}\n${catalogPackage}\nexample.com/open-splunk\n` } },
+    { args: ["core", "0", "4"], overrides: { FAKE_PACKAGES: "example.com/open-splunk\nexample.com/open-splunk/internal/alpha\nexample.com/open-splunk/internal/bravo\nexample.com/open-splunk/internal/charlie\n" } },
+    { args: ["core", "0", "4"], overrides: { FAKE_PACKAGES: `${catalogPackage}\n` } },
+    { args: ["core", "0", "4"], overrides: { FAKE_PACKAGES: `${catalogPackage}\nexample.com/open-splunk\nexample.com/open-splunk/internal/alpha\nexample.com/open-splunk/internal/bravo\n` } },
     { args: ["catalog", "0", "4"], overrides: { FAKE_GO_FAIL: "runnables" } },
     { args: ["catalog", "0", "4"], overrides: { FAKE_RUNNABLES: "" } },
     { args: ["catalog", "0", "4"], overrides: { FAKE_RUNNABLES: "TestAlpha\nTestAlpha\nTestBeta\nTestGamma" } },
@@ -197,16 +319,29 @@ test("race shard discovery fails closed on missing and malformed inventory", asy
     const harness = await fakeGoHarness(t, scenario.overrides);
     const result = await run(shardScript, scenario.args, harness.environment);
     assert.notEqual(result.code, 0, `unexpected success for ${JSON.stringify(scenario)}`);
+    await assertNoFinalCommand(harness.log);
   }));
 });
 
 test("race shard propagates the selected Go test command failure", async (t) => {
-  const harness = await fakeGoHarness(t, { FAKE_GO_FAIL: "final" });
-  const result = await run(shardScript, ["catalog", "0", "4"], harness.environment);
-  assert.equal(result.code, 9);
+  const [core, catalog] = await Promise.all([
+    (async () => {
+      const harness = await fakeGoHarness(t, {
+        FAKE_GO_FAIL: "final",
+        FAKE_PACKAGES: `${catalogPackage}\nexample.com/open-splunk/a\nexample.com/open-splunk/b\nexample.com/open-splunk/c\nexample.com/open-splunk/d\n`,
+      });
+      return run(shardScript, ["core", "0", "4"], harness.environment);
+    })(),
+    (async () => {
+      const harness = await fakeGoHarness(t, { FAKE_GO_FAIL: "final" });
+      return run(shardScript, ["catalog", "0", "4"], harness.environment);
+    })(),
+  ]);
+  assert.equal(core.code, 9);
+  assert.equal(catalog.code, 9);
 });
 
-test("CI declares one core row and every catalog shard exactly once", async () => {
+test("CI declares every core and catalog shard exactly once", async () => {
   const workflow = await readFile(path.join(workspace, ".github", "workflows", "ci.yml"), "utf8");
   const goTestStart = workflow.indexOf("  go-test:\n");
   const goTestEnd = workflow.indexOf("\n  knowledge-object-fuzz:\n", goTestStart);
@@ -223,16 +358,21 @@ test("CI declares one core row and every catalog shard exactly once", async () =
   }
 
   const core = rows.filter((row) => row.mode === "race-core");
-  assert.equal(core.length, 1);
-  assert.equal(core[0].job_timeout_minutes, "90");
+  assert.equal(core.length, 4);
+  assert.deepEqual(core.map((row) => Number(row.shard_index)).toSorted(), [0, 1, 2, 3]);
+  assert.ok(core.every((row) => row.shard_count === "4"));
+  assert.ok(core.every((row) => row.job_timeout_minutes === "45"));
   const catalog = rows.filter((row) => row.mode === "race-catalog");
   assert.equal(catalog.length, 4);
   assert.deepEqual(catalog.map((row) => Number(row.shard_index)).toSorted(), [0, 1, 2, 3]);
   assert.ok(catalog.every((row) => row.shard_count === "4"));
   assert.ok(catalog.every((row) => row.job_timeout_minutes === "45"));
   assert.equal(rows.filter((row) => row.mode === "coverage").length, 1);
+  assert.equal(rows.length, 9);
   assert.match(goTestWorkflow, /strategy:\n {6}fail-fast: false/);
-  assert.match(goTestWorkflow, /scripts\/run-go-race-shard\.sh core/);
+  assert.match(goTestWorkflow, /strategy:\n {6}fail-fast: false\n {6}max-parallel: 5/);
+  assert.match(goTestWorkflow, /scripts\/run-go-race-shard\.sh core\n {10}\$\{\{ matrix\.shard_index \}\}\n {10}\$\{\{ matrix\.shard_count \}\}/);
+  assert.doesNotMatch(goTestWorkflow, /^ {8}run: scripts\/run-go-race-shard\.sh core$/m);
   assert.match(goTestWorkflow, /scripts\/run-go-race-shard\.sh catalog/);
   assert.equal((goTestWorkflow.match(/GOMAXPROCS: "2"/g) ?? []).length, 2);
   assert.match(workflow, /build:\n(?:.|\n)*?needs:\n(?: {6}- .+\n)* {6}- go-test\n/);

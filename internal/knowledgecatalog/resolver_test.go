@@ -307,9 +307,21 @@ func TestResolverRetainsExactWinningSemanticCharges(t *testing.T) {
 		}},
 	}}})
 
-	resolved, err := resolver.Resolve(t.Context(), testResolutionScope("main"))
+	normalizedScope, err := normalizeResolutionScope(testResolutionScope("main"))
 	if err != nil {
-		t.Fatalf("Resolve(charges): %v", err)
+		t.Fatalf("normalize resolution scope: %v", err)
+	}
+	resolveContext, cancelResolve := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelResolve()
+	// This test verifies the exact semantic charges retained by the resolution
+	// core, not the public resolver's 250 ms wall-clock admission bound. Race-
+	// instrumented modernc SQLite can legitimately consume that entire bound on
+	// a constrained runner, so exercise the same single-attempt core directly.
+	// The public deadline, retry, cancellation, and gate-release contracts are
+	// covered independently in resolver_retry_test.go.
+	resolved, err := resolver.resolveOnce(resolveContext, normalizedScope)
+	if err != nil {
+		t.Fatalf("resolveOnce(charges): %v", err)
 	}
 	compiled, err := splregex.CompileExtractionPattern(pattern)
 	if err != nil {

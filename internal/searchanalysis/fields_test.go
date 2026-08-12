@@ -1294,16 +1294,28 @@ func TestFieldServiceClassifiesEligibilityDiagnosticsMetadataAndLimits(t *testin
 }
 
 func TestFieldServiceRuntimeTimeoutReleasesFlightForRetry(t *testing.T) {
-	snapshot := fieldTestSnapshot("search-1")
+	snapshot, err := sealSearchAnalysisSnapshot(fieldTestSnapshot("search-1"))
+	if err != nil {
+		t.Fatalf("sealSearchAnalysisSnapshot() error = %v", err)
+	}
+	fingerprint, err := fieldSnapshotFingerprint(snapshot)
+	if err != nil {
+		t.Fatalf("fieldSnapshotFingerprint() error = %v", err)
+	}
 	executor := &fakeFieldExecutor{execute: func(ctx context.Context, _ clickhouse.CompiledFieldCatalog) (queryexec.FieldCatalogResult, error) {
 		<-ctx.Done()
 		return queryexec.FieldCatalogResult{}, ctx.Err()
 	}}
 	service := newFieldTestService(t, FieldConfig{
-		Searches: &fakeFieldSearches{snapshot: snapshot}, Compiler: &fakeFieldCompiler{}, Executor: executor, MaxRuntime: 10 * time.Millisecond,
+		Searches: &fakeFieldSearches{snapshot: snapshot}, Compiler: &fakeFieldCompiler{}, Executor: executor, MaxRuntime: 50 * time.Millisecond,
 	})
+	key := fieldCacheKey{
+		domain: fieldCatalogCompletedSearch, tenantID: snapshot.TenantID,
+		ownerID: snapshot.OwnerID, jobID: snapshot.ID, snapshotFingerprint: fingerprint,
+	}
+	source := fieldCatalogPlanSource{completedExecution: true, execution: snapshot}
 	for attempt := 0; attempt < 2; attempt++ {
-		if _, err := service.ListFields(context.Background(), fieldAccess(snapshot), ListFieldsRequest{SearchJobID: snapshot.ID}); !errors.Is(err, context.DeadlineExceeded) {
+		if _, err := service.catalogFor(context.Background(), key, source, snapshot.ExpiresAt); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("attempt %d error = %v, want DeadlineExceeded", attempt, err)
 		}
 	}
