@@ -2838,6 +2838,27 @@ pre {
   vertical-align: middle;
 }
 
+.statistics-sparkline {
+  display: block;
+  width: 128px;
+  height: 28px;
+  overflow: visible;
+  color: var(--color-accent, #4f7cff);
+}
+
+.statistics-sparkline polyline {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+  vector-effect: non-scaling-stroke;
+}
+
+.statistics-sparkline circle {
+  fill: currentColor;
+}
+
 .statistics-table th:last-child,
 .statistics-table td:last-child {
   border-right: 0;

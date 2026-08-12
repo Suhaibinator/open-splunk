@@ -81,7 +81,7 @@ func TestParseStatsCountEvalAcceptsNestedBooleanIf(t *testing.T) {
 	}
 }
 
-func TestParseStatsCountEvalRequiresExplicitAliasAndExactPredicateSyntax(t *testing.T) {
+func TestParseStatsCountEvalRequiresExactPredicateSyntax(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -90,12 +90,6 @@ func TestParseStatsCountEvalRequiresExplicitAliasAndExactPredicateSyntax(t *test
 		code    string
 		message string
 	}{
-		{
-			name:    "alias omitted",
-			source:  `index=main | stats count(eval(status=200))`,
-			code:    "SPL_UNSUPPORTED_STATS_SYNTAX",
-			message: "requires AS",
-		},
 		{
 			name:   "alias name omitted",
 			source: `index=main | stats count(eval(status=200)) AS`,

@@ -72,8 +72,8 @@
     },
     {
       "name": "stats",
-      "insertion": "stats count AS events count(eval(status>=500)) AS errors c(user) AS user_occurrences dc(user) AS user_count values(user) AS users min(duration_ms) AS min_ms max(duration_ms) AS max_ms earliest(status) AS first_status latest(status) AS last_status p50(duration_ms) AS median_ms p95(duration_ms) AS p95_ms sum(bytes) AS total_bytes avg(duration_ms) AS avg_ms BY level",
-      "detail": "Aggregate with row count, true-only count(eval(predicate)) AS output, count/c field occurrences, dc/distinct_count, values, list, min, max, chronological earliest/latest, pN/percN percentiles (1-99), sum, and avg."
+      "insertion": "stats partitions=1 allnum=false delim=\",\" count AS events sparkline(avg(latency),5m) AS latency_trend values(user) AS users rate(bytes) AS byte_rate BY level dedup_splitvals=false",
+      "detail": "Aggregate with bounded row, predicate, field, distinct-count, percentile, distribution, value-selection, chronological, rate, and time-binned sparkline measures. Leading unsigned partitions (0 selects the default; values above 100 clamp to 100), allnum, and delim options plus terminal dedup_splitvals are preserved in the plan; delimiter-display and parallel-order details remain oracle-governed."
     },
     {
       "name": "eventstats",
@@ -115,6 +115,13 @@
       "highlight_requires_call": false
     },
     {
+      "name": "sparkline",
+      "insertion": "sparkline(",
+      "detail": "Build a bounded time-binned aggregate series inside stats.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
       "name": "p50",
       "insertion": "p50(",
       "detail": "Estimate the 50th percentile of non-null numeric field values.",
@@ -125,6 +132,34 @@
       "name": "p95",
       "insertion": "p95(",
       "detail": "Estimate the 95th percentile of non-null numeric field values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "exactperc50",
+      "insertion": "exactperc50(",
+      "detail": "Calculate the exact 50th percentile of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "exactperc95",
+      "insertion": "exactperc95(",
+      "detail": "Calculate the exact 95th percentile of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "upperperc50",
+      "insertion": "upperperc50(",
+      "detail": "Calculate the upper 50th percentile of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "upperperc95",
+      "insertion": "upperperc95(",
+      "detail": "Calculate the upper 95th percentile of non-null numeric values.",
       "class": "aggregate",
       "highlight_requires_call": true
     },
@@ -146,6 +181,20 @@
       "name": "distinct_count",
       "insertion": "distinct_count(",
       "detail": "Alias for counting distinct non-null field values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "estdc",
+      "insertion": "estdc(",
+      "detail": "Estimate the number of distinct non-null values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "estdc_error",
+      "insertion": "estdc_error(",
+      "detail": "Estimate the relative error of an estimated distinct count.",
       "class": "aggregate",
       "highlight_requires_call": false
     },
@@ -178,6 +227,34 @@
       "highlight_requires_call": false
     },
     {
+      "name": "median",
+      "insertion": "median(",
+      "detail": "Calculate the median of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "mode",
+      "insertion": "mode(",
+      "detail": "Return the most frequent non-null value.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "first",
+      "insertion": "first(",
+      "detail": "Return the first non-null value in processing order.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "last",
+      "insertion": "last(",
+      "detail": "Return the last non-null value in processing order.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
       "name": "earliest",
       "insertion": "earliest(",
       "detail": "Return the chronologically earliest field value.",
@@ -192,6 +269,27 @@
       "highlight_requires_call": false
     },
     {
+      "name": "earliest_time",
+      "insertion": "earliest_time(",
+      "detail": "Return the event time of the chronologically earliest eligible value.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "latest_time",
+      "insertion": "latest_time(",
+      "detail": "Return the event time of the chronologically latest eligible value.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "rate",
+      "insertion": "rate(",
+      "detail": "Calculate the chronological rate of change for numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
       "name": "sum",
       "insertion": "sum(",
       "detail": "Sum non-null numeric field values.",
@@ -202,6 +300,55 @@
       "name": "avg",
       "insertion": "avg(",
       "detail": "Average non-null numeric field values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "mean",
+      "insertion": "mean(",
+      "detail": "Average non-null numeric values while preserving the mean function name.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "range",
+      "insertion": "range(",
+      "detail": "Return the difference between the maximum and minimum numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "sumsq",
+      "insertion": "sumsq(",
+      "detail": "Sum the squares of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "stdev",
+      "insertion": "stdev(",
+      "detail": "Calculate sample standard deviation over numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "stdevp",
+      "insertion": "stdevp(",
+      "detail": "Calculate population standard deviation over numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "var",
+      "insertion": "var(",
+      "detail": "Calculate sample variance over numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "varp",
+      "insertion": "varp(",
+      "detail": "Calculate population variance over numeric values.",
       "class": "aggregate",
       "highlight_requires_call": false
     },
@@ -459,6 +606,30 @@
       "name": "global=",
       "insertion": "global=",
       "detail": "Select a global or per-group streamstats window.",
+      "highlight": false
+    },
+    {
+      "name": "partitions=",
+      "insertion": "partitions=",
+      "detail": "Set the stats reduction partition count from 0 through 100; zero resolves to one.",
+      "highlight": false
+    },
+    {
+      "name": "allnum=",
+      "insertion": "allnum=",
+      "detail": "Require numeric eligibility according to the stats allnum setting.",
+      "highlight": false
+    },
+    {
+      "name": "delim=",
+      "insertion": "delim=\"\"",
+      "detail": "Preserve the authored stats delimiter; display semantics remain oracle-governed.",
+      "highlight": false
+    },
+    {
+      "name": "dedup_splitvals=",
+      "insertion": "dedup_splitvals=",
+      "detail": "Deduplicate split values for multivalue stats grouping.",
       "highlight": false
     },
     {

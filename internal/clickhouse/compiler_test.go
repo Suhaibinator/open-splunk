@@ -2999,9 +2999,9 @@ func TestCompileStatsCountValuesUsesSharedCardinalityWithoutRowExpansion(t *test
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats count count(user) AS users count(user) AS users_again count(other) AS others BY service`,
+		`index=gradethis | stats count count(user) AS users count(other) AS others BY service`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again", "others"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "others"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	for _, required := range []string{
@@ -3010,7 +3010,6 @@ func TestCompileStatsCountValuesUsesSharedCardinalityWithoutRowExpansion(t *test
 		`AS "__os_measure_count_0"`,
 		`AS "__os_measure_count_1"`,
 		`toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "users"`,
-		`toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "users_again"`,
 		`toUInt64(sum(toUInt128("__os_measure_count_1"))) AS "others"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
@@ -3129,8 +3128,8 @@ func TestCompileStatsCountValuesCountsStaticNullAndExactTableBoundaries(t *testi
 func TestCompileStatsDistinctCountUsesExactStringArraysWithoutRowExpansion(t *testing.T) {
 	t.Parallel()
 
-	compiled := compileSPL(t, `index=gradethis | stats count dc(user) AS users distinct_count(user) AS users_again BY service`)
-	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again"}) {
+	compiled := compileSPL(t, `index=gradethis | stats count dc(user) AS users BY service`)
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	sentinel := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup+1, 10)
@@ -3145,7 +3144,6 @@ func TestCompileStatsDistinctCountUsesExactStringArraysWithoutRowExpansion(t *te
 		ExactDistinctLimitMarker,
 		UnsupportedStatsMeasureValueMarker,
 		`"__os_dc_cardinality_0" AS "users"`,
-		`"__os_dc_cardinality_0" AS "users_again"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("dc SQL missing %q:\n%s", required, compiled.SQL)
@@ -3205,9 +3203,9 @@ func TestCompileStatsValuesUsesOneBoundedExactSetWithLexicalPublication(t *testi
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats count values(user) AS users dc(user) AS user_count values(user) AS users_again BY service`,
+		`index=gradethis | stats count values(user) AS users dc(user) AS user_count BY service`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "user_count", "users_again"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "user_count"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	sentinel := strconv.FormatUint(MaximumStatsValuesPerGroup+1, 10)
@@ -3229,7 +3227,6 @@ func TestCompileStatsValuesUsesOneBoundedExactSetWithLexicalPublication(t *testi
 		StatsValuesBytesLimitMarker,
 		`"__os_sorted_exact_strings_0" AS "users"`,
 		`toUInt64(length("__os_exact_strings_0")) AS "user_count"`,
-		`"__os_sorted_exact_strings_0" AS "users_again"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("values SQL missing %q:\n%s", required, compiled.SQL)
@@ -3286,9 +3283,9 @@ func TestCompileStatsListUsesOneBoundedOrderedStateAndPreservesPipelineOrder(t *
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | sort 0 +sequence | stats count list(user) AS users list(user) AS users_again BY service`,
+		`index=gradethis | sort 0 +sequence | stats count list(user) AS users BY service`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	maximum := strconv.FormatUint(MaximumStatsListValuesPerGroup, 10)
@@ -3309,7 +3306,6 @@ func TestCompileStatsListUsesOneBoundedOrderedStateAndPreservesPipelineOrder(t *
 		StatsListLimitMarker,
 		StatsListBytesLimitMarker,
 		`"__os_list_strings_0" AS "users"`,
-		`"__os_list_strings_0" AS "users_again"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("list SQL missing %q:\n%s", required, compiled.SQL)
@@ -3533,7 +3529,6 @@ func TestCompileStatsValuesRejectsUnpinnedScalarMultivalueConsumers(t *testing.T
 		{name: "ordered search", source: `index=gradethis | stats values(user) AS users | search users>"alice"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `users>"alice"`},
 		{name: "sort", source: `index=gradethis | stats values(user) AS users | sort users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "dedup", source: `index=gradethis | stats values(user) AS users | dedup users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
-		{name: "stats BY", source: `index=gradethis | stats values(user) AS users | stats count BY users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "replace", source: `index=gradethis | stats values(user) AS users | eval x=replace(users,"a","b")`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `replace(users,"a","b")`},
 		{name: "tonumber", source: `index=gradethis | stats values(user) AS users | eval x=tonumber(users)`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "tonumber(users)"},
 		{name: "rex", source: `index=gradethis | stats values(user) AS users | rex field=users "(?<x>.+)"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
@@ -3717,7 +3712,7 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 func TestCompileStatsNumericInputCachingPreservesPreAggregateArgumentOrder(t *testing.T) {
 	t.Parallel()
 
-	compiled := compileSPL(t, `index=gradethis | stats sum(request.amount) avg(other.amount) sum(request.amount) AS repeated`)
+	compiled := compileSPL(t, `index=gradethis | stats sum(request.amount) avg(other.amount) avg(request.amount) AS repeated`)
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
 	}
@@ -3736,9 +3731,9 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats min(metric) AS low max(metric) AS high min(metric) AS low_again`,
+		`index=gradethis | stats min(metric) AS low max(metric) AS high`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"low", "high", "low_again"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"low", "high"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	for _, required := range []string{
@@ -3764,9 +3759,6 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 	if strings.Count(compiled.SQL, `AS "__os_measure_extrema_0"`) != 1 ||
 		strings.Contains(compiled.SQL, `__os_measure_extrema_1`) {
 		t.Fatalf("min/max did not share one normalization for the same input:\n%s", compiled.SQL)
-	}
-	if strings.Contains(compiled.SQL, `__os_stats_extrema_type_2`) {
-		t.Fatalf("duplicate min published a duplicate stored-type state:\n%s", compiled.SQL)
 	}
 	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
 		t.Fatalf("min/max expanded event rows:\n%s", compiled.SQL)
@@ -3815,7 +3807,7 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats min(service) AS low max(service) AS high min(service) AS low_again`,
+		`index=gradethis | stats min(service) AS low max(service) AS high`,
 	)
 	for _, required := range []string{
 		`AS "__os_measure_scalar_string_0"`,
@@ -3948,17 +3940,21 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 func TestCompileStatsScalarStringExtremaMaximumMeasuresStayBounded(t *testing.T) {
 	t.Parallel()
 
+	fields := []string{"service", "host", "source", "sourcetype", "level", "message", "index", "trace_id"}
 	var source strings.Builder
 	source.WriteString(`index=gradethis | stats `)
-	for measure := 0; measure < spl.MaximumStatsMeasures; measure++ {
-		if measure > 0 {
+	for fieldIndex, field := range fields {
+		if fieldIndex > 0 {
 			source.WriteByte(' ')
 		}
-		function := "min"
-		if measure%2 != 0 {
-			function = "max"
-		}
-		fmt.Fprintf(&source, "%s(service) AS result_%d", function, measure)
+		fmt.Fprintf(
+			&source,
+			"min(%s) AS minimum_%d max(%s) AS maximum_%d",
+			field,
+			fieldIndex,
+			field,
+			fieldIndex,
+		)
 	}
 	compiled := compileSPL(t, source.String())
 	if len(compiled.OutputFields) != spl.MaximumStatsMeasures {
@@ -3968,27 +3964,14 @@ func TestCompileStatsScalarStringExtremaMaximumMeasuresStayBounded(t *testing.T)
 			spl.MaximumStatsMeasures,
 		)
 	}
-	if strings.Count(compiled.SQL, `AS "__os_measure_scalar_string_0"`) != 1 ||
-		strings.Count(compiled.SQL, `AS "__os_measure_extrema_number_0"`) != 1 ||
-		strings.Count(compiled.SQL, `AS "__os_measure_extrema_scalar_0"`) != 1 ||
-		strings.Contains(compiled.SQL, `__os_measure_extrema_scalar_1`) {
-		t.Fatalf("maximum scalar extrema measures did not share one candidate:\n%s", compiled.SQL)
+	if strings.Count(compiled.SQL, `AS "__os_measure_scalar_string_`) != len(fields) ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_number_`) != len(fields) ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_scalar_`) != len(fields) {
+		t.Fatalf("maximum distinct scalar extrema sources did not retain one candidate each:\n%s", compiled.SQL)
 	}
-	for _, alias := range []string{
-		`AS "__os_stats_extrema_winner_0"`,
-		`AS "__os_stats_extrema_type_0"`,
-		`AS "__os_stats_extrema_winner_1"`,
-		`AS "__os_stats_extrema_type_1"`,
-	} {
-		if strings.Count(compiled.SQL, alias) != 1 {
-			t.Fatalf("maximum scalar extrema measures did not materialize one %s:\n%s", alias, compiled.SQL)
-		}
-	}
-	if strings.Contains(compiled.SQL, `__os_stats_extrema_winner_2`) ||
-		strings.Contains(compiled.SQL, `__os_stats_extrema_type_2`) ||
-		strings.Count(compiled.SQL, "argMinOrNullIf(") != 1 ||
-		strings.Count(compiled.SQL, "argMaxOrNullIf(") != 1 {
-		t.Fatalf("maximum scalar extrema measures duplicated aggregate state:\n%s", compiled.SQL)
+	if strings.Count(compiled.SQL, "argMinOrNullIf(") != len(fields) ||
+		strings.Count(compiled.SQL, "argMaxOrNullIf(") != len(fields) {
+		t.Fatalf("maximum distinct scalar extrema sources did not retain one aggregate each:\n%s", compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d", got, want)

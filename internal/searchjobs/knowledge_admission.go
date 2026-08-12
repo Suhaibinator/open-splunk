@@ -18,11 +18,13 @@ import (
 )
 
 type preparedKnowledgeAdmission struct {
-	compiled      clickhouse.CompiledQuery
-	snapshot      knowledgesnapshot.Snapshot
-	summary       *opensplunkv1.KnowledgeSnapshotSummary
-	effective     []string
-	metadataBytes uint64
+	compiled          clickhouse.CompiledQuery
+	snapshot          knowledgesnapshot.Snapshot
+	wildcardExpansion plan.StatsWildcardExpansion
+	summary           *opensplunkv1.KnowledgeSnapshotSummary
+	effective         []string
+	metadataBytes     uint64
+	remainingRuntime  time.Duration
 }
 
 func normalizedKnowledgeResolver(resolver KnowledgeResolver) KnowledgeResolver {
@@ -78,9 +80,19 @@ func (manager *Manager) prepareKnowledgeAdmission(
 		IndexTimeCutoff:   searchStart,
 		VisibilityCutoff:  &visibilityCutoff,
 	}
-	logical, err := plan.Build(parsed, scope)
+	wildcardPreparation, err := plan.PrepareStatsWildcard(parsed, scope)
 	if err != nil {
 		return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, false)
+	}
+	logical := wildcardPreparation.FullPlan()
+	prefix := wildcardPreparation.Prefix()
+	wildcardRequest := wildcardPreparation.Request()
+	if logical == nil && (prefix == nil || wildcardRequest.IsZero()) {
+		return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
+	}
+	resolutionPlan := logical
+	if resolutionPlan == nil {
+		resolutionPlan = prefix
 	}
 	if err := manager.operationContextError(admissionContext); err != nil {
 		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
@@ -90,7 +102,7 @@ func (manager *Manager) prepareKnowledgeAdmission(
 		TenantID:                   request.TenantID,
 		PrincipalID:                request.OwnerID,
 		AppID:                      request.AppID,
-		EffectiveAuthorizedIndexes: cloneStrings(logical.EffectiveIndexes),
+		EffectiveAuthorizedIndexes: cloneStrings(resolutionPlan.EffectiveIndexes),
 	}
 	resolverInput := expectedResolutionScope
 	resolverInput.EffectiveAuthorizedIndexes = cloneStrings(expectedResolutionScope.EffectiveAuthorizedIndexes)
@@ -105,14 +117,72 @@ func (manager *Manager) prepareKnowledgeAdmission(
 		return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 	}
 	prelude := resolution.Prelude()
-	logical, err = plan.InjectKnowledgePrelude(logical, prelude)
+	var wildcardExpansion plan.StatsWildcardExpansion
+	var compiled clickhouse.CompiledQuery
+	remainingRuntime := manager.maxRuntime
+	if logical == nil {
+		inventoryPrefix, injectErr := plan.InjectKnowledgePrelude(prefix, prelude)
+		if injectErr != nil {
+			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
+		}
+		discoveryContext, cancelDiscovery := context.WithTimeout(
+			admissionContext,
+			manager.maxRuntime,
+		)
+		var inventory clickhouse.CompiledStatsWildcardInventory
+		var inventoryRuntime time.Duration
+		wildcardExpansion, inventory, inventoryRuntime, err = manager.executeStatsWildcardInventory(
+			discoveryContext,
+			inventoryPrefix,
+			wildcardRequest,
+		)
+		cancelDiscovery()
+		if err != nil {
+			var diagnostic *plan.Diagnostic
+			if errors.As(err, &diagnostic) {
+				return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, false)
+			}
+			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
+		}
+		var remainingOK bool
+		remainingRuntime, remainingOK = remainingStatsWildcardRuntime(
+			manager.maxRuntime,
+			inventoryRuntime,
+		)
+		if !remainingOK {
+			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(
+				ctx,
+				context.DeadlineExceeded,
+			)
+		}
+		logical, err = plan.BuildWithStatsWildcardExpansion(parsed, scope, wildcardExpansion)
+		if err != nil {
+			return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, false)
+		}
+		logical, err = plan.InjectKnowledgePrelude(logical, prelude)
+		if err != nil {
+			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
+		}
+		compiledCandidate, compileErr := manager.compiler.Compile(logical)
+		if compileErr != nil {
+			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compileErr)
+		}
+		if !inventory.SameReadScope(compiledCandidate) {
+			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
+		}
+		compiled = compiledCandidate
+	} else {
+		logical, err = plan.InjectKnowledgePrelude(logical, prelude)
+	}
 	if err != nil {
 		return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 	}
 
-	compiled, err := manager.compiler.Compile(logical)
-	if err != nil {
-		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
+	if wildcardExpansion.IsZero() {
+		compiled, err = manager.compiler.Compile(logical)
+		if err != nil {
+			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
+		}
 	}
 	if err := manager.operationContextError(admissionContext); err != nil {
 		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
@@ -137,15 +207,27 @@ func (manager *Manager) prepareKnowledgeAdmission(
 	if err != nil {
 		return preparedKnowledgeAdmission{}, ErrCapacity
 	}
+	if !wildcardExpansion.IsZero() {
+		wildcardBytes, ok := wildcardExpansion.RetainedBytes()
+		if !ok {
+			return preparedKnowledgeAdmission{}, ErrCapacity
+		}
+		metadataBytes, err = checkedAdd(metadataBytes, wildcardBytes)
+		if err != nil {
+			return preparedKnowledgeAdmission{}, ErrCapacity
+		}
+	}
 	if err := manager.operationContextError(admissionContext); err != nil {
 		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
 	}
 	return preparedKnowledgeAdmission{
-		compiled:      detachedCompiled,
-		snapshot:      snapshot,
-		summary:       summary,
-		effective:     cloneStrings(logical.EffectiveIndexes),
-		metadataBytes: metadataBytes,
+		compiled:          detachedCompiled,
+		snapshot:          snapshot,
+		wildcardExpansion: wildcardExpansion.Clone(),
+		summary:           summary,
+		effective:         cloneStrings(logical.EffectiveIndexes),
+		metadataBytes:     metadataBytes,
+		remainingRuntime:  remainingRuntime,
 	}, nil
 }
 

@@ -124,7 +124,7 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 		{name: "spath", source: `| spath output=value path=payload.value`, depth: 11},
 		{name: "fixed dedup", source: `| dedup host`, depth: 4},
 		{name: "dynamic dedup", source: `| dedup latency`, depth: 5},
-		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 6},
+		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 9},
 		{name: "count values aggregate", source: `| stats count(user) AS users`, depth: 4},
 		{name: "fixed extrema aggregate", source: `| stats min(severity) AS low`, depth: 3},
 		{name: "scalar String extrema aggregate", source: `| stats min(service) AS low max(service) AS high`, depth: 5},

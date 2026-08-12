@@ -65,7 +65,7 @@
     },
     {
       "id": "SPL-V02-QUOTED-FIELD-001",
-      "summary": "Single quotes name exact scalar fields and eval destinations only.",
+      "summary": "Single quotes name exact scalar fields, including stats inputs and BY fields, and eval destinations.",
       "cases": [
         {"name": "operator field", "source": "index=main | eval value='request-bytes'/1024", "expect": {"parse": "accept"}},
         {"name": "space field", "source": "index=main | where 'HTTP Status' IN (500,502)", "expect": {"parse": "accept"}},
@@ -75,7 +75,7 @@
         {"name": "invalid escape", "source": "index=main | eval value='bad\\nfield'", "expect": {"diagnostic": "SPL_INVALID_FIELD_QUOTE_ESCAPE"}},
         {"name": "unterminated", "source": "index=main | eval value='field", "expect": {"diagnostic": "SPL_UNTERMINATED_FIELD_QUOTE"}},
         {"name": "empty", "source": "index=main | eval value=''", "expect": {"diagnostic": "SPL_EXPECTED_FIELD"}},
-        {"name": "quoted aggregate excluded", "source": "index=main | stats avg('request-bytes')", "expect": {"diagnostic": "SPL_UNSUPPORTED_STATS_AGGREGATE"}}
+        {"name": "quoted stats aggregate", "source": "index=main | stats avg('request-bytes') BY 'HTTP Status'", "expect": {"parse": "accept"}}
       ]
     },
     {

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -15,6 +16,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/proto"
 )
+
+// MaximumFlatMultivalueDelimiterBytes bounds optional flat-display metadata
+// independently of result-row payloads.
+const MaximumFlatMultivalueDelimiterBytes = 16 << 10
 
 // State is the lifecycle state of one asynchronous search job.
 type State uint8
@@ -425,6 +430,31 @@ type Column struct {
 	Kind       ValueKind
 	Nullable   bool
 	Multivalue bool
+	// FlatMultivalueDelimiter is optional presentation metadata for rendering
+	// one typed multivalue cell as flat text. The presence bit deliberately
+	// distinguishes an authored empty delimiter from absent metadata.
+	FlatMultivalueDelimiter    string
+	HasFlatMultivalueDelimiter bool
+	// StatsSparkline identifies the compiler-authored stats sparkline transport.
+	// Cell contents remain a typed list; renderers must require this sealed schema
+	// bit instead of trusting the user-representable marker alone.
+	StatsSparkline bool
+}
+
+// ValidFlatMultivaluePresentation reports whether optional flat-display
+// metadata is canonical and attached only to a typed multivalue list column.
+func (column Column) ValidFlatMultivaluePresentation() bool {
+	if column.StatsSparkline {
+		return !column.HasFlatMultivalueDelimiter &&
+			column.FlatMultivalueDelimiter == "" &&
+			column.Kind == ValueKindList && column.Multivalue
+	}
+	if !column.HasFlatMultivalueDelimiter {
+		return column.FlatMultivalueDelimiter == ""
+	}
+	return column.Kind == ValueKindList && column.Multivalue &&
+		len(column.FlatMultivalueDelimiter) <= MaximumFlatMultivalueDelimiterBytes &&
+		utf8.ValidString(column.FlatMultivalueDelimiter)
 }
 
 // Schema is the ordered schema emitted by the executor. Column names must
@@ -711,6 +741,9 @@ func cloneSchema(source Schema) Schema {
 	for index, column := range source.Columns {
 		columns[index] = column
 		columns[index].Name = strings.Clone(column.Name)
+		columns[index].FlatMultivalueDelimiter = strings.Clone(
+			column.FlatMultivalueDelimiter,
+		)
 	}
 	return Schema{Columns: columns}
 }
@@ -946,6 +979,10 @@ func retainedSchemaSize(schema Schema) (uint64, error) {
 			return 0, err
 		}
 		total, err = checkedAdd(total, uint64(len(column.Name)))
+		if err != nil {
+			return 0, err
+		}
+		total, err = checkedAdd(total, uint64(len(column.FlatMultivalueDelimiter)))
 		if err != nil {
 			return 0, err
 		}

@@ -293,11 +293,14 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /null-propagating.*use tostring\(value\) for Boolean/i);
 });
 
-test("stats completion advertises true-only conditional count with an explicit alias", () => {
+test("stats completion advertises the expanded bounded aggregate surface", () => {
   const statsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "stats");
   assert.ok(statsCompletion);
-  assert.match(statsCompletion.insertion, /count\(eval\(status>=500\)\) AS errors/);
-  assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
+  assert.match(statsCompletion.insertion, /sparkline\(avg\(latency\),5m\) AS latency_trend/);
+  assert.match(statsCompletion.insertion, /values\(user\) AS users/);
+  assert.match(statsCompletion.insertion, /rate\(bytes\) AS byte_rate/);
+  assert.match(statsCompletion.detail, /row, predicate, field, distinct-count, percentile, distribution/);
+  assert.match(statsCompletion.detail, /values above 100 clamp to 100/);
 });
 
 test("eventstats completion advertises bounded values and percentile aggregates", () => {

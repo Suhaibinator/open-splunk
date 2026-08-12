@@ -31,6 +31,7 @@ function column(
     nullable: false,
     multivalue: false,
     hiddenByDefault: false,
+	statsSparkline: false,
   };
 }
 
@@ -128,6 +129,23 @@ test("result adaptation rejects unsupported result kinds", () => {
       new RegExp(`unsupported result kind ${resultKind}`),
     );
   }
+});
+
+test("result adaptation rejects forged flat multivalue presentation metadata", () => {
+  const schema: ResultSchema = {
+    schemaId: "invalid-delimiter-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [{
+      ...column("users", ValueType.VALUE_TYPE_STRING),
+      multivalue: true,
+      flatMultivalueDelimiter: ",",
+    }],
+  };
+  assert.throws(
+    () => adaptSearchResults(schema, []),
+    /invalid multivalue presentation metadata/,
+  );
 });
 
 test("top message results retain count and percent as categorical series", () => {
@@ -234,6 +252,45 @@ test("chronological aggregate names are not offered as pivot dimensions", () => 
       { fieldName: "latest(path)", pivotable: false },
     ],
   );
+});
+
+test("statistics adaptation retains optional flat multivalue metadata and typed cells", () => {
+  const valuesColumn = {
+    ...column("users", ValueType.VALUE_TYPE_LIST),
+    multivalue: true,
+    flatMultivalueDelimiter: "",
+  };
+  const listColumn = {
+    ...column("hosts", ValueType.VALUE_TYPE_LIST),
+    multivalue: true,
+  };
+  const schema: ResultSchema = {
+    schemaId: "stats-delimiter-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [valuesColumn, listColumn],
+  };
+  const adapted = adaptSearchResults(schema, [
+    row("all", 0n, [
+      {
+        kind: {
+          $case: "listValue",
+          value: { values: [stringValue("alice"), stringValue("bob")] },
+        },
+      },
+      {
+        kind: {
+          $case: "listValue",
+          value: { values: [stringValue("web-1"), stringValue("web-2")] },
+        },
+      },
+    ]),
+  ]);
+
+  assert.equal(adapted.statisticsTable?.columns[0]?.flatMultivalueDelimiter, "");
+  assert.equal(adapted.statisticsTable?.columns[1]?.flatMultivalueDelimiter, undefined);
+  assert.deepEqual(adapted.statisticsTable?.rows[0]?.values.users, ["alice", "bob"]);
+  assert.deepEqual(adapted.statisticsTable?.rows[0]?.values.hosts, ["web-1", "web-2"]);
 });
 
 test("runtime-wide chart results retain every split series in schema order", () => {

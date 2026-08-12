@@ -17,7 +17,10 @@ import (
 func validEventAggregateContract(operator *EventAggregate) bool {
 	if operator == nil ||
 		len(operator.GroupBy) > spl.MaximumStatsGroupFields ||
-		operator.Measure.Output == "" {
+		operator.Measure.Output == "" ||
+		operator.Measure.OutputLiteral ||
+		operator.Measure.Sparkline != nil ||
+		operator.Measure.InputExpression != nil {
 		return false
 	}
 	if operator.Measure.Function != AggregateFunctionPercentile &&
@@ -323,7 +326,10 @@ func validEventAggregateLiteralKind(kind ValueKind) bool {
 func validResolvedEventAggregateField(field FieldRef) bool {
 	resolved, err := ResolveField(field.Name, field.Range)
 	if err != nil {
-		return false
+		resolved, err = ResolveQuotedField(field.Name, field.Range)
+		if err != nil {
+			return false
+		}
 	}
 	return resolved.Name == field.Name &&
 		resolved.Canonical == field.Canonical &&

@@ -18,10 +18,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v4 additionally binds the atomic-result publication contract. Execution
-// digests minted before that barrier became authoritative must never compare
-// equal to the stronger contract.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v4"
+// v6 additionally binds the stats partitions whole-query max_threads hint.
+// Execution digests minted before that compiler-owned execution setting became
+// authoritative must never compare equal to the stronger contract.
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v7"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -384,6 +384,17 @@ func (compiled CompiledQuery) HasValidExecutionSeal() bool {
 	return compiled.hasValidExecutionSeal()
 }
 
+// StatsPartitionsMaxThreadsHint opens the compiler-owned whole-query
+// max_threads cap only while the complete execution contract remains sealed.
+// It is an Open Splunk approximation of stats partitions because ClickHouse
+// cannot apply a different max_threads value to each reduction stage.
+func (compiled CompiledQuery) StatsPartitionsMaxThreadsHint() (uint8, bool) {
+	if compiled.statsPartitionsMaxThreadsHint == 0 || !compiled.hasValidExecutionSeal() {
+		return 0, false
+	}
+	return compiled.statsPartitionsMaxThreadsHint, true
+}
+
 // ExecutionAuthorityDigest returns an opaque commitment to the complete
 // executable contract only when its compiler-owned seal is valid. The digest
 // can be embedded in a wider authority commitment without exposing any API
@@ -407,13 +418,22 @@ func (compiled CompiledQuery) EqualForExecution(other CompiledQuery) bool {
 }
 
 func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, bool) {
-	if !validResultContainerOutputs(compiled) {
+	if !validResultContainerOutputs(compiled) ||
+		!validResultFieldPresentations(compiled) ||
+		compiled.statsPartitionsMaxThreadsHint > maximumStatsPartitionsMaxThreadsHint {
 		return compiledExecutionSeal{}, false
 	}
 	digest := sha256.New()
 	writeTokenPart(digest, compiledExecutionSealDomain)
 	writeTokenPart(digest, compiled.SQL)
 	writeStringSlice(digest, compiled.OutputFields)
+	writeBool(digest, compiled.OutputPresentations == nil)
+	writeUint64(digest, uint64(len(compiled.OutputPresentations)))
+	for _, presentation := range compiled.OutputPresentations {
+		writeBool(digest, presentation.HasFlatMultivalueDelimiter)
+		writeTokenPart(digest, presentation.FlatMultivalueDelimiter)
+		writeBool(digest, presentation.StatsSparkline)
+	}
 	writeBool(digest, compiled.ContainerOutputs == nil)
 	writeUint64(digest, uint64(len(compiled.ContainerOutputs)))
 	for _, output := range compiled.ContainerOutputs {
@@ -424,6 +444,7 @@ func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, boo
 	writeInt64(digest, int64(compiled.relationalDepth))
 	writeRange(digest, compiled.relationalDepthRange)
 	writeUint64(digest, compiled.sourceFanout)
+	writeUint64(digest, uint64(compiled.statsPartitionsMaxThreadsHint))
 	_, _ = digest.Write(compiled.readScope.seal[:])
 
 	writeBool(digest, compiled.Args == nil)
@@ -614,6 +635,9 @@ func (compiled CompiledQuery) CloneForExecution() (CompiledQuery, bool) {
 	cloned := compiled
 	cloned.SQL = strings.Clone(compiled.SQL)
 	cloned.OutputFields = cloneStrings(compiled.OutputFields)
+	cloned.OutputPresentations = cloneResultFieldPresentations(
+		compiled.OutputPresentations,
+	)
 	cloned.ContainerOutputs = slices.Clone(compiled.ContainerOutputs)
 	if compiled.Args == nil {
 		cloned.Args = nil
@@ -728,6 +752,23 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 	total, ok = retainedStringSlice(total, compiled.OutputFields)
 	if !ok {
 		return 0, false
+	}
+	total, ok = retainedAdd(
+		total,
+		uint64(cap(compiled.OutputPresentations))*
+			uint64(unsafe.Sizeof(ResultFieldPresentation{})),
+	)
+	if !ok {
+		return 0, false
+	}
+	for _, presentation := range compiled.OutputPresentations {
+		total, ok = retainedAdd(
+			total,
+			uint64(len(presentation.FlatMultivalueDelimiter)),
+		)
+		if !ok {
+			return 0, false
+		}
 	}
 	total, ok = retainedAdd(
 		total,

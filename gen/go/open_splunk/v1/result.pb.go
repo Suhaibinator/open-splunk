@@ -285,8 +285,16 @@ type ResultColumn struct {
 	Nullable        bool                   `protobuf:"varint,5,opt,name=nullable,proto3" json:"nullable,omitempty"`
 	Multivalue      bool                   `protobuf:"varint,6,opt,name=multivalue,proto3" json:"multivalue,omitempty"`
 	HiddenByDefault bool                   `protobuf:"varint,7,opt,name=hidden_by_default,json=hiddenByDefault,proto3" json:"hidden_by_default,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Optional flat-table presentation for a typed multivalue cell. Presence is
+	// significant: an empty delimiter means concatenate members, while absence
+	// leaves the renderer's normal typed-array representation unchanged.
+	FlatMultivalueDelimiter *string `protobuf:"bytes,8,opt,name=flat_multivalue_delimiter,json=flatMultivalueDelimiter,proto3,oneof" json:"flat_multivalue_delimiter,omitempty"`
+	// Compiler-authored stats sparkline semantics. The first cell member remains
+	// a transport-integrity marker, but clients must require this schema bit so
+	// an ordinary user-controlled multivalue cannot opt into chart rendering.
+	StatsSparkline bool `protobuf:"varint,9,opt,name=stats_sparkline,json=statsSparkline,proto3" json:"stats_sparkline,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ResultColumn) Reset() {
@@ -364,6 +372,20 @@ func (x *ResultColumn) GetMultivalue() bool {
 func (x *ResultColumn) GetHiddenByDefault() bool {
 	if x != nil {
 		return x.HiddenByDefault
+	}
+	return false
+}
+
+func (x *ResultColumn) GetFlatMultivalueDelimiter() string {
+	if x != nil && x.FlatMultivalueDelimiter != nil {
+		return *x.FlatMultivalueDelimiter
+	}
+	return ""
+}
+
+func (x *ResultColumn) GetStatsSparkline() bool {
+	if x != nil {
+		return x.StatsSparkline
 	}
 	return false
 }
@@ -992,7 +1014,7 @@ var File_open_splunk_v1_result_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_result_proto_rawDesc = "" +
 	"\n" +
-	"\x1bopen_splunk/v1/result.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/v1/common.proto\x1a\x1aopen_splunk/v1/value.proto\"\xbb\x02\n" +
+	"\x1bopen_splunk/v1/result.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/v1/common.proto\x1a\x1aopen_splunk/v1/value.proto\"\xc3\x03\n" +
 	"\fResultColumn\x12\x1d\n" +
 	"\n" +
 	"field_name\x18\x01 \x01(\tR\tfieldName\x12!\n" +
@@ -1004,7 +1026,10 @@ const file_open_splunk_v1_result_proto_rawDesc = "" +
 	"\n" +
 	"multivalue\x18\x06 \x01(\bR\n" +
 	"multivalue\x12*\n" +
-	"\x11hidden_by_default\x18\a \x01(\bR\x0fhiddenByDefault\"\xbf\x01\n" +
+	"\x11hidden_by_default\x18\a \x01(\bR\x0fhiddenByDefault\x12?\n" +
+	"\x19flat_multivalue_delimiter\x18\b \x01(\tH\x00R\x17flatMultivalueDelimiter\x88\x01\x01\x12'\n" +
+	"\x0fstats_sparkline\x18\t \x01(\bR\x0estatsSparklineB\x1c\n" +
+	"\x1a_flat_multivalue_delimiter\"\xbf\x01\n" +
 	"\fResultSchema\x12\x1b\n" +
 	"\tschema_id\x18\x01 \x01(\tR\bschemaId\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x04R\brevision\x12>\n" +
@@ -1175,6 +1200,7 @@ func file_open_splunk_v1_result_proto_init() {
 	}
 	file_open_splunk_v1_common_proto_init()
 	file_open_splunk_v1_value_proto_init()
+	file_open_splunk_v1_result_proto_msgTypes[0].OneofWrappers = []any{}
 	file_open_splunk_v1_result_proto_msgTypes[5].OneofWrappers = []any{}
 	file_open_splunk_v1_result_proto_msgTypes[8].OneofWrappers = []any{}
 	type x struct{}

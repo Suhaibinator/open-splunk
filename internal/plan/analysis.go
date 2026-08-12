@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -238,8 +239,15 @@ func (analyzer *queryAnalyzer) addChronologicalTimeDependency(
 	source FieldRef,
 	depth int,
 ) error {
-	if function != AggregateFunctionEarliest &&
-		function != AggregateFunctionLatest {
+	switch function {
+	case AggregateFunctionEarliest,
+		AggregateFunctionLatest,
+		AggregateFunctionEarliestTime,
+		AggregateFunctionLatestTime,
+		AggregateFunctionRate:
+		// These functions select or derive values using event chronology even
+		// when their aggregate input is a calculated scalar expression.
+	default:
 		return nil
 	}
 	return analyzer.addField(FieldRef{
@@ -249,6 +257,99 @@ func (analyzer *queryAnalyzer) addChronologicalTimeDependency(
 	}, depth)
 }
 
+func emptyAggregateField(field FieldRef) bool {
+	return field.Name == "" && !field.Canonical && field.Path == nil &&
+		field.Range == (spl.Range{})
+}
+
+func validSparklineSpan(span SparklineSpan) bool {
+	switch span.Kind {
+	case SparklineSpanKindAutomatic:
+		return span.Magnitude == 0 && span.Unit == SparklineSpanUnitInvalid
+	case SparklineSpanKindExplicit:
+		if span.Magnitude == 0 {
+			return false
+		}
+		var unitsPerSecond uint64
+		switch span.Unit {
+		case SparklineSpanUnitMicrosecond:
+			unitsPerSecond = 1_000_000
+		case SparklineSpanUnitMillisecond:
+			unitsPerSecond = 1_000
+		case SparklineSpanUnitCentisecond:
+			unitsPerSecond = 100
+		case SparklineSpanUnitDecisecond:
+			unitsPerSecond = 10
+		case SparklineSpanUnitSecond,
+			SparklineSpanUnitMinute,
+			SparklineSpanUnitHour,
+			SparklineSpanUnitDay,
+			SparklineSpanUnitMonth:
+			// These are valid positive integral spans. Month remains a
+			// calendar unit and is deliberately not converted to a duration.
+		default:
+			return false
+		}
+		return unitsPerSecond == 0 ||
+			(span.Magnitude < unitsPerSecond &&
+				unitsPerSecond%span.Magnitude == 0)
+	default:
+		return false
+	}
+}
+
+func sparklineFunctionRequiresInput(function AggregateFunction) (bool, bool) {
+	switch function {
+	case AggregateFunctionCountRows:
+		return false, true
+	case AggregateFunctionCountValues,
+		AggregateFunctionDistinctCount,
+		AggregateFunctionAverage,
+		AggregateFunctionStandardDeviationSample,
+		AggregateFunctionStandardDeviationPopulation,
+		AggregateFunctionVarianceSample,
+		AggregateFunctionVariancePopulation,
+		AggregateFunctionSum,
+		AggregateFunctionSumSquares,
+		AggregateFunctionMinimum,
+		AggregateFunctionMaximum,
+		AggregateFunctionRange:
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+func (analyzer *queryAnalyzer) visitSparklineMeasure(
+	measure *SparklineMeasure,
+	depth int,
+) error {
+	if measure == nil ||
+		measure.MaximumPoints != spl.MaximumStatsSparklinePoints ||
+		!validSparklineSpan(measure.Span) ||
+		!validResolvedEventAggregateField(measure.Time) ||
+		measure.Time.Name != "_time" || !measure.Time.Canonical ||
+		measure.Time.Path != nil {
+		return errors.New("analyze logical query: sparkline metadata is invalid")
+	}
+	requiresInput, supported := sparklineFunctionRequiresInput(measure.Function)
+	if !supported {
+		return errors.New("analyze logical query: sparkline function is invalid")
+	}
+	hasInput := !emptyAggregateField(measure.Input)
+	if hasInput != requiresInput ||
+		(hasInput && !validResolvedEventAggregateField(measure.Input)) {
+		return errors.New("analyze logical query: sparkline input metadata is invalid")
+	}
+	if err := analyzer.addField(measure.Time, depth); err != nil {
+		return err
+	}
+	if hasInput {
+		return analyzer.addField(measure.Input, depth)
+	}
+	return nil
+}
+
 func (analyzer *queryAnalyzer) visitAggregateMeasure(
 	measure AggregateMeasure,
 	depth int,
@@ -256,10 +357,81 @@ func (analyzer *queryAnalyzer) visitAggregateMeasure(
 	if err := analyzer.validateOutputName(measure.Output, depth); err != nil {
 		return err
 	}
+	if measure.OutputLiteral {
+		if !spl.IsStatsLiteralOutputName(measure.Output) {
+			return errors.New("analyze logical query: aggregate literal output is invalid")
+		}
+	} else if _, err := ResolveField(measure.Output, spl.Range{}); err != nil {
+		return fmt.Errorf("analyze logical query: aggregate output is invalid: %w", err)
+	}
+	if measure.Sparkline != nil {
+		if measure.Function != AggregateFunctionInvalid ||
+			!emptyAggregateField(measure.Input) || measure.InputExpression != nil ||
+			measure.Predicate != nil || measure.Percentile != 0 {
+			return errors.New("analyze logical query: sparkline and scalar aggregate metadata overlap")
+		}
+		return analyzer.visitSparklineMeasure(measure.Sparkline, depth)
+	}
+	hasInput := measure.Input.Name != "" || measure.Input.Canonical ||
+		measure.Input.Path != nil || measure.Input.Range != (spl.Range{})
+	hasInputExpression := measure.InputExpression != nil
+	hasPredicate := measure.Predicate != nil
 	switch measure.Function {
-	case AggregateFunctionCountRows, AggregateFunctionCountPredicate:
+	case AggregateFunctionCountRows:
+		if hasInput || hasInputExpression || hasPredicate || measure.Percentile != 0 {
+			return errors.New("analyze logical query: row count metadata is invalid")
+		}
+	case AggregateFunctionCountPredicate:
+		if hasInput || hasInputExpression || !hasPredicate || measure.Percentile != 0 ||
+			!validEventAggregatePredicate(measure.Predicate) {
+			return errors.New("analyze logical query: conditional count metadata is invalid")
+		}
+	case AggregateFunctionPercentile,
+		AggregateFunctionExactPercentile,
+		AggregateFunctionUpperPercentile:
+		if hasInput == hasInputExpression || hasPredicate ||
+			measure.Percentile < 1 || measure.Percentile > 99 {
+			return errors.New("analyze logical query: percentile metadata is invalid")
+		}
+	case AggregateFunctionMedian,
+		AggregateFunctionSum, AggregateFunctionAverage,
+		AggregateFunctionRange, AggregateFunctionSumSquares,
+		AggregateFunctionStandardDeviationSample,
+		AggregateFunctionStandardDeviationPopulation,
+		AggregateFunctionVarianceSample,
+		AggregateFunctionVariancePopulation,
+		AggregateFunctionDistinctCount,
+		AggregateFunctionEstimatedDistinctCount,
+		AggregateFunctionEstimatedDistinctCountError,
+		AggregateFunctionValues, AggregateFunctionList,
+		AggregateFunctionMinimum, AggregateFunctionMaximum,
+		AggregateFunctionMode, AggregateFunctionFirst, AggregateFunctionLast,
+		AggregateFunctionEarliest, AggregateFunctionLatest,
+		AggregateFunctionEarliestTime, AggregateFunctionLatestTime,
+		AggregateFunctionRate:
+		if hasInput == hasInputExpression || hasPredicate || measure.Percentile != 0 {
+			return errors.New("analyze logical query: field-taking aggregate metadata is invalid")
+		}
+	case AggregateFunctionCountValues:
+		if !hasInput || hasInputExpression || hasPredicate || measure.Percentile != 0 {
+			return errors.New("analyze logical query: field occurrence count metadata is invalid")
+		}
 	default:
+		return errors.New("analyze logical query: aggregate function is invalid")
+	}
+	if hasInput {
+		if !validResolvedEventAggregateField(measure.Input) {
+			return errors.New("analyze logical query: aggregate input field metadata is invalid")
+		}
 		if err := analyzer.addField(measure.Input, depth); err != nil {
+			return err
+		}
+	}
+	if hasInputExpression {
+		if err := analyzer.visitScalarExpressionStrict(
+			measure.InputExpression,
+			depth,
+		); err != nil {
 			return err
 		}
 	}
@@ -270,7 +442,7 @@ func (analyzer *queryAnalyzer) visitAggregateMeasure(
 	); err != nil {
 		return err
 	}
-	if measure.Predicate != nil {
+	if hasPredicate {
 		return analyzer.visitExpression(measure.Predicate, depth)
 	}
 	return nil
@@ -431,13 +603,53 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		}
 		return analyzer.addFields(operator.GroupBy, depth+1)
 	case *Aggregate:
-		if err := analyzer.addFields(operator.GroupBy, depth+1); err != nil {
-			return err
+		if len(operator.Measures) == 0 ||
+			len(operator.Measures) > spl.MaximumStatsMeasures ||
+			len(operator.GroupBy) > spl.MaximumStatsGroupFields {
+			return errors.New("analyze logical query: aggregate resource bounds are invalid")
+		}
+		requiresStatsOptions := false
+		for _, measure := range operator.Measures {
+			requiresStatsOptions = requiresStatsOptions ||
+				measure.OutputLiteral || measure.Sparkline != nil
+		}
+		if requiresStatsOptions && operator.StatsOptions == nil {
+			return errors.New("analyze logical query: stats-only aggregate metadata requires stats options")
+		}
+		if operator.StatsOptions != nil &&
+			(operator.StatsOptions.Partitions < 1 ||
+				operator.StatsOptions.Partitions > spl.MaximumStatsPartitions ||
+				!utf8.ValidString(operator.StatsOptions.Delimiter)) {
+			return errors.New("analyze logical query: stats options are invalid")
+		}
+		seenOutputs := make(map[string]struct{}, len(operator.GroupBy)+len(operator.Measures))
+		seenSources := make([]AggregateMeasure, 0, len(operator.Measures))
+		for _, field := range operator.GroupBy {
+			if !validResolvedEventAggregateField(field) {
+				return errors.New("analyze logical query: aggregate group field metadata is invalid")
+			}
+			if _, duplicate := seenOutputs[field.Name]; duplicate {
+				return errors.New("analyze logical query: aggregate group field is duplicated")
+			}
+			seenOutputs[field.Name] = struct{}{}
+			if err := analyzer.addField(field, depth+1); err != nil {
+				return err
+			}
 		}
 		for _, measure := range operator.Measures {
+			if _, duplicate := seenOutputs[measure.Output]; duplicate {
+				return errors.New("analyze logical query: aggregate output field is duplicated")
+			}
+			seenOutputs[measure.Output] = struct{}{}
 			if err := analyzer.visitAggregateMeasure(measure, depth+1); err != nil {
 				return err
 			}
+			for _, source := range seenSources {
+				if sameStatsAggregateSource(source, measure) {
+					return errors.New("analyze logical query: aggregate source is renamed more than once")
+				}
+			}
+			seenSources = append(seenSources, measure)
 		}
 		return nil
 	case *Timechart:

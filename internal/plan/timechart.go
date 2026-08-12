@@ -9,7 +9,10 @@ import "github.com/Suhaibinator/open-splunk/internal/spl"
 func validTimechartMeasureContract(operator *Timechart) bool {
 	if operator == nil ||
 		operator.Measure.Output == "" ||
+		operator.Measure.OutputLiteral ||
+		operator.Measure.Sparkline != nil ||
 		operator.Measure.Predicate != nil ||
+		operator.Measure.InputExpression != nil ||
 		operator.Time.Name != "_time" ||
 		!operator.Time.Canonical ||
 		!validResolvedEventAggregateField(operator.Time) {

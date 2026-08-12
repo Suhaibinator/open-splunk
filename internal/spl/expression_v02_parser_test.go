@@ -190,7 +190,14 @@ func TestParseV02QuotedScalarFieldsAndDestinations(t *testing.T) {
 		assertSourceRangeText(t, diagnosticCase.source, diagnostic.Range, diagnosticCase.want)
 	}
 	assertV02DiagnosticCode(t, `| eval value=''`, "SPL_EXPECTED_FIELD")
-	assertV02DiagnosticCode(t, `| stats avg('request-bytes')`, "SPL_UNSUPPORTED_STATS_AGGREGATE")
+	quotedStats, quotedStatsErr := Parse(`| stats avg('request-bytes')`)
+	if quotedStatsErr != nil {
+		t.Fatalf("quoted stats field: %v", quotedStatsErr)
+	}
+	quotedAggregate := quotedStats.Commands[0].(*StatsCommand).Aggregates[0]
+	if quotedAggregate.Input != "request-bytes" || !quotedAggregate.InputQuoted {
+		t.Fatalf("quoted stats aggregate = %#v", quotedAggregate)
+	}
 	if _, err := Parse(`| eval value='pipe|comma,paren()=operator'`); err != nil {
 		t.Fatalf("quoted field containing lexer punctuation: %v", err)
 	}

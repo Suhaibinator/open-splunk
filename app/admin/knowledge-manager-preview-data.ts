@@ -28,6 +28,7 @@ import {
   MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES,
   knowledgeRoutes,
 } from "@/lib/api/routes";
+import { validFlatMultivalueColumnPresentation } from "@/lib/api/result-column-presentation";
 
 import {
   adaptKnowledgeValidationResponse,
@@ -241,7 +242,8 @@ function validColumn(column: ResultColumn): boolean {
     && column.valueType <= ValueType.VALUE_TYPE_MIXED
     && column.semanticType >= ColumnSemanticType.COLUMN_SEMANTIC_TYPE_UNSPECIFIED
     && column.semanticType <= ColumnSemanticType.COLUMN_SEMANTIC_TYPE_DIMENSION
-    && !column.hiddenByDefault;
+    && !column.hiddenByDefault
+    && validFlatMultivalueColumnPresentation(column);
 }
 
 function validPreviewRows(

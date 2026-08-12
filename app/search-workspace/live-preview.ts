@@ -15,6 +15,7 @@ import {
   type TypedValue,
 } from "../../gen/ts/open_splunk/v1/value";
 import { validateBrowserResultColumnCount } from "../../lib/api/pagination";
+import { validFlatMultivalueColumnPresentation } from "../../lib/api/result-column-presentation";
 
 export interface LivePreviewSnapshot {
   schemaId: string;
@@ -227,6 +228,9 @@ export function validateLivePreviewSchema(schema: ResultSchema): string | null {
 
   const fieldNames = new Set<string>();
   for (const column of schema.columns) {
+    if (!validFlatMultivalueColumnPresentation(column)) {
+      return `The preview schema contains invalid multivalue presentation metadata for “${column.fieldName}”.`;
+    }
     if (column.fieldName.length === 0) {
       return "The preview schema contains an unnamed column.";
     }

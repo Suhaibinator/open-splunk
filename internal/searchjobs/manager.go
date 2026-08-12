@@ -173,6 +173,18 @@ type Executor interface {
 	Execute(context.Context, clickhouse.CompiledQuery, ResultSink) error
 }
 
+// StatsWildcardInventoryExecutor is the optional bounded discovery capability
+// required only when stats wc-field expansion reaches an open event schema.
+// The ordinary Executor interface remains source-compatible for embedders that
+// never admit such SPL. Implementations must return only the opaque, validated
+// expansion minted from the compiler-sealed inventory query.
+type StatsWildcardInventoryExecutor interface {
+	ExecuteStatsWildcardInventory(
+		context.Context,
+		clickhouse.CompiledStatsWildcardInventory,
+	) (plan.StatsWildcardExpansion, error)
+}
+
 // Snapshotter resolves the highest fully committed storage batch visible to a
 // newly admitted search. Implementations must observe ctx cancellation. Create
 // captures this value synchronously and exactly once; asynchronous planning
@@ -348,6 +360,8 @@ type jobEntry struct {
 	preparedCompiled         *clickhouse.CompiledQuery
 	preparedExecutionClaimed bool
 	knowledgeSnapshot        knowledgesnapshot.Snapshot
+	statsWildcardExpansion   plan.StatsWildcardExpansion
+	remainingRuntime         time.Duration
 }
 
 // New constructs and starts a search job manager.
@@ -742,6 +756,8 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 		compiled := prepared.compiled
 		entry.preparedCompiled = &compiled
 		entry.knowledgeSnapshot = prepared.snapshot
+		entry.statsWildcardExpansion = prepared.wildcardExpansion.Clone()
+		entry.remainingRuntime = prepared.remainingRuntime
 	}
 	created := cloneJob(entry.job)
 	journalAdmitted := false
@@ -1667,12 +1683,12 @@ func (manager *Manager) run(entry *jobEntry) {
 		if !manager.advance(entry, StatePlanning, StateRunning, nil) {
 			return
 		}
-		compiled, ok := entry.takePreparedExecution()
+		compiled, runtimeBudget, ok := entry.takePreparedExecution()
 		if !ok {
 			manager.failOrCancel(entry, Failure{Code: FailureInternal, Message: "search planning failed"}, manager.nowUTC())
 			return
 		}
-		manager.executeCompiled(entry, compiled)
+		manager.executeCompiled(entry, compiled, runtimeBudget)
 		return
 	}
 	parsed, err := parseSPLQuery(entry.ctx, entry.job.SPL)
@@ -1698,25 +1714,43 @@ func (manager *Manager) run(entry *jobEntry) {
 		VisibilityCutoff:  &visibilityCutoff,
 	}
 	entry.mu.RUnlock()
-	logical, compiled, err := manager.buildAndCompileQuery(entry.ctx, parsed, scope)
+	logical, compiled, wildcardExpansion, runtimeBudget, err := manager.prepareAndCompileStatsWildcard(
+		entry.ctx,
+		parsed,
+		scope,
+	)
 	if err != nil {
 		var diagnostic *plan.Diagnostic
 		if errors.As(err, &diagnostic) {
 			manager.failOrCancel(entry, planningFailure(err), manager.nowUTC())
 		} else {
-			manager.failOrCancel(entry, Failure{Code: FailureInternal, Message: "search planning failed"}, manager.nowUTC())
+			manager.executionFailed(entry, err)
 		}
 		return
+	}
+	if !wildcardExpansion.IsZero() {
+		if err := manager.retainStatsWildcardExpansion(entry, wildcardExpansion); err != nil {
+			manager.executionFailed(entry, err)
+			return
+		}
 	}
 	if !manager.advance(entry, StatePlanning, StateRunning, func(job *Job) {
 		job.EffectiveIndexes = cloneStrings(logical.EffectiveIndexes)
 	}) {
 		return
 	}
-	manager.executeCompiled(entry, compiled)
+	manager.executeCompiled(entry, compiled, runtimeBudget)
 }
 
-func (manager *Manager) executeCompiled(entry *jobEntry, compiled clickhouse.CompiledQuery) {
+func (manager *Manager) executeCompiled(
+	entry *jobEntry,
+	compiled clickhouse.CompiledQuery,
+	runtimeBudget time.Duration,
+) {
+	if runtimeBudget <= 0 {
+		manager.executionFailed(entry, context.DeadlineExceeded)
+		return
+	}
 	retained, ok := compiled.CloneForExecution()
 	if !ok || !retained.EqualForExecution(compiled) {
 		manager.executionFailed(entry, ErrInvalidResult)
@@ -1745,7 +1779,7 @@ func (manager *Manager) executeCompiled(entry *jobEntry, compiled clickhouse.Com
 		timechart:      timechart,
 		chart:          chart,
 	}
-	executionContext, cancelExecution := context.WithTimeout(entry.ctx, manager.maxRuntime)
+	executionContext, cancelExecution := context.WithTimeout(entry.ctx, runtimeBudget)
 	defer cancelExecution()
 	sink.ctx = executionContext
 	defer sink.close()
@@ -1804,18 +1838,19 @@ func (entry *jobEntry) hasPreparedExecution() bool {
 // privately retained compiled authority. The immutable original remains with
 // the job for inspection and export, while the claim prevents a second worker
 // execution without ever reparsing, replanning, or re-resolving.
-func (entry *jobEntry) takePreparedExecution() (clickhouse.CompiledQuery, bool) {
+func (entry *jobEntry) takePreparedExecution() (clickhouse.CompiledQuery, time.Duration, bool) {
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if entry.preparedCompiled == nil || entry.preparedExecutionClaimed {
-		return clickhouse.CompiledQuery{}, false
+	if entry.preparedCompiled == nil || entry.preparedExecutionClaimed ||
+		entry.remainingRuntime <= 0 {
+		return clickhouse.CompiledQuery{}, 0, false
 	}
 	compiled, ok := entry.preparedCompiled.CloneForExecution()
 	if !ok {
-		return clickhouse.CompiledQuery{}, false
+		return clickhouse.CompiledQuery{}, 0, false
 	}
 	entry.preparedExecutionClaimed = true
-	return compiled, true
+	return compiled, entry.remainingRuntime, true
 }
 
 func (manager *Manager) advance(entry *jobEntry, from, to State, update func(*Job)) bool {
@@ -1864,6 +1899,8 @@ func (manager *Manager) executionFailed(entry *jobEntry, err error) {
 		failure = Failure{Code: FailureStorageUnavailable, Message: "search storage is unavailable", Retryable: true}
 	case errors.Is(err, ErrUnsupportedValue):
 		failure = Failure{Code: FailureUnsupportedSPL, Message: "search command does not support one or more field values"}
+	case errors.Is(err, ErrUnsupportedSPL):
+		failure = Failure{Code: FailureUnsupportedSPL, Message: "search command is not supported by the configured executor"}
 	case errors.Is(err, ErrInvalidResult), errors.Is(err, ErrStreamClosed):
 		failure = Failure{Code: FailureInternal, Message: "search execution returned an invalid result"}
 	case errors.Is(err, ErrByteLimit):
@@ -2276,6 +2313,15 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	if sink.receivedSchema {
 		return sink.rememberLocked(fmt.Errorf("%w: schema was emitted more than once", ErrInvalidResult))
 	}
+	for index, column := range schema.Columns {
+		if !column.ValidFlatMultivaluePresentation() {
+			return sink.rememberLocked(fmt.Errorf(
+				"%w: schema column %d has invalid multivalue presentation metadata",
+				ErrInvalidResult,
+				index,
+			))
+		}
+	}
 	var schemaErr error
 	switch {
 	case sink.timechart != nil && sink.chart != nil:
@@ -2517,6 +2563,9 @@ func validateSchema(schema Schema, expected []string) error {
 	}
 	seen := make(map[string]struct{}, len(schema.Columns))
 	for index, column := range schema.Columns {
+		if !column.ValidFlatMultivaluePresentation() {
+			return fmt.Errorf("%w: schema column %d has invalid multivalue presentation metadata", ErrInvalidResult, index)
+		}
 		if column.Name == "" || column.Name != expected[index] {
 			return fmt.Errorf("%w: schema column %d does not match compiler output", ErrInvalidResult, index)
 		}
@@ -2535,6 +2584,11 @@ func validateSchema(schema Schema, expected []string) error {
 // compiler-declared timechart output contract. Re-execution consumers use the
 // same boundary so ordinary jobs and exports cannot diverge.
 func ValidateTimechartSchema(schema Schema, expected []string, output clickhouse.TimechartOutput) error {
+	for index, column := range schema.Columns {
+		if !column.ValidFlatMultivaluePresentation() {
+			return fmt.Errorf("%w: timechart schema column %d has invalid multivalue presentation metadata", ErrInvalidResult, index)
+		}
+	}
 	if output.Mode == clickhouse.TimechartModeFixedCount {
 		if output.MaxSeries != 1 ||
 			output.MaxLabelBytes != 0 ||
@@ -2698,6 +2752,11 @@ func chartSeriesSchema(kind clickhouse.ChartValueKind) (ValueKind, bool, bool) {
 }
 
 func validateChartSchema(schema Schema, expected []string, output clickhouse.ChartOutput) error {
+	for index, column := range schema.Columns {
+		if !column.ValidFlatMultivaluePresentation() {
+			return fmt.Errorf("%w: chart schema column %d has invalid multivalue presentation metadata", ErrInvalidResult, index)
+		}
+	}
 	rowKind, ok := chartRowSchemaKind(output.RowKind)
 	seriesKind, seriesNullable, seriesOK := chartSeriesSchema(output.ValueKind)
 	if !ok || !seriesOK || output.RowField == "" || !slices.Equal(expected, []string{output.RowField}) ||

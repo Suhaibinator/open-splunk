@@ -261,7 +261,8 @@ func TestAnalyzeSuggestionContextIncompleteGrammar(t *testing.T) {
 		{
 			source:        "| stats d",
 			prefix:        "d",
-			kinds:         []SuggestionKind{SuggestionKindFunction},
+			kinds:         []SuggestionKind{SuggestionKindFunction, SuggestionKindKeyword},
+			keywords:      []string{"partitions=", "allnum=", "delim="},
 			functionClass: SuggestionFunctionClassAggregate,
 		},
 		{source: "| stats dc(tr", prefix: "tr", kinds: []SuggestionKind{SuggestionKindField}},
@@ -275,7 +276,7 @@ func TestAnalyzeSuggestionContextIncompleteGrammar(t *testing.T) {
 			source:        "| stats count B",
 			prefix:        "B",
 			kinds:         []SuggestionKind{SuggestionKindFunction, SuggestionKindKeyword},
-			keywords:      []string{"AS", "BY"},
+			keywords:      []string{"AS", "BY", "dedup_splitvals="},
 			functionClass: SuggestionFunctionClassAggregate,
 		},
 		{
@@ -1073,8 +1074,8 @@ func TestStaticSuggestionsUseSharedCatalogAndContextFilters(t *testing.T) {
 	if aggregate.Diagnostic != nil {
 		t.Fatalf("Suggest(aggregate): %v", aggregate.Diagnostic)
 	}
-	if labels := suggestionLabels(aggregate.Suggestions); !slices.Equal(labels, []string{"dc", "distinct_count"}) {
-		t.Fatalf("aggregate labels = %v, want dc/distinct_count", labels)
+	if labels := suggestionLabels(aggregate.Suggestions); !slices.Equal(labels, []string{"dc", "distinct_count", "delim="}) {
+		t.Fatalf("aggregate labels = %v, want dc/distinct_count/delim", labels)
 	}
 
 	timechart := Suggest("| timechart span=5m co", len("| timechart span=5m co"), 20)
@@ -1155,8 +1156,11 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 	}
 
 	wantFunctions := []string{
-		"count", "p50", "p95", "c", "dc", "distinct_count", "values", "list", "min", "max",
-		"earliest", "latest", "sum", "avg", "if", "case", "in", "now", "strftime",
+		"count", "sparkline", "p50", "p95", "exactperc50", "exactperc95", "upperperc50", "upperperc95",
+		"c", "dc", "distinct_count", "estdc", "estdc_error", "values", "list", "min", "max",
+		"median", "mode", "first", "last", "earliest", "latest", "earliest_time",
+		"latest_time", "rate", "sum", "avg", "mean", "range", "sumsq", "stdev",
+		"stdevp", "var", "varp", "if", "case", "in", "now", "strftime",
 		"strptime", "relative_time", "tonumber", "tostring", "replace", "isnull",
 		"isnotnull", "coalesce", "lower", "upper", "len", "length", "round",
 		"ceil", "ceiling", "floor", "mvcount", "mvsort", "match", "like", "substr",
@@ -1170,6 +1174,52 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 	}
 	if !slices.Equal(gotFunctions, wantFunctions) {
 		t.Fatalf("catalog functions = %v, want %v", gotFunctions, wantFunctions)
+	}
+}
+
+func TestStatsNumericAggregateAndEvalInputSuggestions(t *testing.T) {
+	t.Parallel()
+
+	aggregates := Suggest("| stats st", len("| stats st"), 20)
+	if aggregates.Diagnostic != nil {
+		t.Fatalf("Suggest aggregate: %v", aggregates.Diagnostic)
+	}
+	if labels := suggestionLabels(aggregates.Suggestions); !slices.Equal(
+		labels,
+		[]string{"stdev", "stdevp"},
+	) {
+		t.Fatalf("aggregate labels = %v, want stdev/stdevp", labels)
+	}
+
+	scalar := Suggest(
+		"| stats sum(eval(duration_ms+to",
+		len("| stats sum(eval(duration_ms+to"),
+		20,
+	)
+	if scalar.Diagnostic != nil {
+		t.Fatalf("Suggest scalar input: %v", scalar.Diagnostic)
+	}
+	if scalar.Context.FunctionClass != SuggestionFunctionClassScalar ||
+		!scalar.Context.Allows(SuggestionKindFunction) ||
+		!scalar.Context.Allows(SuggestionKindField) ||
+		!scalar.Context.AllowsQuotedScalarFields {
+		t.Fatalf("scalar input context = %#v", scalar.Context)
+	}
+	if labels := suggestionLabels(scalar.Suggestions); !slices.Equal(
+		labels,
+		[]string{"tonumber", "tostring"},
+	) {
+		t.Fatalf("scalar input labels = %v, want tonumber/tostring", labels)
+	}
+
+	exact := Suggest("| stats range(fi", len("| stats range(fi"), 20)
+	if exact.Diagnostic != nil {
+		t.Fatalf("Suggest exact input: %v", exact.Diagnostic)
+	}
+	if !exact.Context.Allows(SuggestionKindField) ||
+		exact.Context.Allows(SuggestionKindFunction) ||
+		!exact.Context.AllowsQuotedScalarFields {
+		t.Fatalf("exact input context = %#v", exact.Context)
 	}
 }
 

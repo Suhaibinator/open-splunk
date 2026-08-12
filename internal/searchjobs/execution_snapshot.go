@@ -12,6 +12,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
 // ExecutionSnapshot is the immutable execution scope retained for a
@@ -39,8 +40,12 @@ type ExecutionSnapshot struct {
 	// exact execution. Its zero value identifies the legacy knowledge-disabled
 	// path; value copies remain immutable and all accessors detach.
 	KnowledgeSnapshot knowledgesnapshot.Snapshot
-	FinishedAt        time.Time
-	ExpiresAt         time.Time
+	// StatsWildcardExpansion is opaque, compiler-independent evidence for the
+	// exact runtime field inventory used to expand an open-schema stats stage.
+	// Its zero value means no runtime expansion was required.
+	StatsWildcardExpansion plan.StatsWildcardExpansion
+	FinishedAt             time.Time
+	ExpiresAt              time.Time
 
 	// knowledgeAuthoritySeal is present on every manager-minted execution. It
 	// commits an explicit knowledge-enabled bit, the public tuple above, and the
@@ -126,6 +131,26 @@ func (snapshot ExecutionSnapshot) OpenRetainedKnowledgeExecution() (*RetainedKno
 		KnowledgeSummary: validated.summary,
 		KnowledgePrelude: validated.prelude,
 	}, nil
+}
+
+// OpenRetainedStatsWildcardExpansion verifies the manager signature before
+// returning detached replay evidence. A zero expansion with nil error means
+// this execution did not require runtime wildcard discovery.
+func (snapshot ExecutionSnapshot) OpenRetainedStatsWildcardExpansion() (
+	plan.StatsWildcardExpansion,
+	bool,
+	error,
+) {
+	if _, ok := snapshot.validatedKnowledgeAuthoritySeal(); !ok {
+		return plan.StatsWildcardExpansion{}, false, ErrResultsUnavailable
+	}
+	if snapshot.StatsWildcardExpansion.IsZero() {
+		return plan.StatsWildcardExpansion{}, false, nil
+	}
+	if _, ok := snapshot.StatsWildcardExpansion.AuthorityDigest(); !ok {
+		return plan.StatsWildcardExpansion{}, false, ErrResultsUnavailable
+	}
+	return snapshot.StatsWildcardExpansion.Clone(), true, nil
 }
 
 func (snapshot ExecutionSnapshot) validateRetainedKnowledgeAuthority(
@@ -251,9 +276,19 @@ func (snapshot ExecutionSnapshot) Equal(other ExecutionSnapshot) bool {
 		snapshot.VisibilityCutoff == other.VisibilityCutoff &&
 		equalCompiledExecution(snapshot.CompiledQuery, other.CompiledQuery) &&
 		snapshot.KnowledgeSnapshot.Equal(other.KnowledgeSnapshot) &&
+		equalStatsWildcardExpansion(snapshot.StatsWildcardExpansion, other.StatsWildcardExpansion) &&
 		snapshot.FinishedAt.Equal(other.FinishedAt) &&
 		snapshot.ExpiresAt.Equal(other.ExpiresAt)
 	return equal && snapshot.knowledgeAuthoritySeal.equal(other.knowledgeAuthoritySeal)
+}
+
+func equalStatsWildcardExpansion(
+	left, right plan.StatsWildcardExpansion,
+) bool {
+	if left.IsZero() || right.IsZero() {
+		return left.IsZero() && right.IsZero()
+	}
+	return left.Equal(right)
 }
 
 // CompletedExecutionSnapshotFor returns the detached execution scope of a
@@ -330,22 +365,23 @@ func (manager *Manager) executionSnapshotLocked(
 		return ExecutionSnapshot{}, executionResultAuthority{}, ErrResultsUnavailable
 	}
 	snapshot := ExecutionSnapshot{
-		ID:                strings.Clone(entry.job.ID),
-		OwnerID:           strings.Clone(entry.job.OwnerID),
-		TenantID:          strings.Clone(entry.job.TenantID),
-		AppID:             strings.Clone(entry.job.AppID),
-		SPL:               strings.Clone(entry.job.SPL),
-		CompilerVersion:   strings.Clone(entry.job.CompilerVersion),
-		EffectiveIndexes:  cloneStrings(entry.job.EffectiveIndexes),
-		Earliest:          entry.job.Earliest,
-		Latest:            entry.job.Latest,
-		SearchStart:       entry.job.CreatedAt,
-		SearchTimezone:    strings.Clone(entry.job.TimeRange.Timezone),
-		IndexTimeCutoff:   entry.job.IndexTimeCutoff,
-		VisibilityCutoff:  entry.job.VisibilityCutoff,
-		KnowledgeSnapshot: entry.knowledgeSnapshot,
-		FinishedAt:        entry.job.FinishedAt,
-		ExpiresAt:         entry.job.ExpiresAt,
+		ID:                     strings.Clone(entry.job.ID),
+		OwnerID:                strings.Clone(entry.job.OwnerID),
+		TenantID:               strings.Clone(entry.job.TenantID),
+		AppID:                  strings.Clone(entry.job.AppID),
+		SPL:                    strings.Clone(entry.job.SPL),
+		CompilerVersion:        strings.Clone(entry.job.CompilerVersion),
+		EffectiveIndexes:       cloneStrings(entry.job.EffectiveIndexes),
+		Earliest:               entry.job.Earliest,
+		Latest:                 entry.job.Latest,
+		SearchStart:            entry.job.CreatedAt,
+		SearchTimezone:         strings.Clone(entry.job.TimeRange.Timezone),
+		IndexTimeCutoff:        entry.job.IndexTimeCutoff,
+		VisibilityCutoff:       entry.job.VisibilityCutoff,
+		KnowledgeSnapshot:      entry.knowledgeSnapshot,
+		StatsWildcardExpansion: entry.statsWildcardExpansion.Clone(),
+		FinishedAt:             entry.job.FinishedAt,
+		ExpiresAt:              entry.job.ExpiresAt,
 	}
 	hasKnowledge := !entry.knowledgeSnapshot.IsZero()
 	if (entry.preparedCompiled != nil) != hasKnowledge {

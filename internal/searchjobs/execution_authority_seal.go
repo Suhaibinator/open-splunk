@@ -12,12 +12,13 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 )
 
 const (
 	knowledgeExecutionSigningKeyDomain  = "open-splunk-search-job-knowledge-signing-key-v1"
-	knowledgeExecutionAuthorityDomain   = "open-splunk-search-job-knowledge-execution-authority-v3"
-	knowledgeExecutionResultDomain      = "open-splunk-search-job-result-generation-v1"
+	knowledgeExecutionAuthorityDomain   = "open-splunk-search-job-knowledge-execution-authority-v5"
+	knowledgeExecutionResultDomain      = "open-splunk-search-job-result-generation-v2"
 	knowledgeExecutionResultNonceDomain = "open-splunk-search-job-result-generation-nonce-v1"
 )
 
@@ -248,6 +249,16 @@ func knowledgeExecutionAuthorityDigest(
 		return [sha256.Size]byte{}, false
 	}
 	writeKnowledgeSealUint64(digest, snapshot.VisibilityCutoff)
+	wildcardDigest, wildcardPresent, wildcardOK := statsWildcardExpansionDigest(
+		snapshot.StatsWildcardExpansion,
+	)
+	if !wildcardOK {
+		return [sha256.Size]byte{}, false
+	}
+	writeKnowledgeSealBool(digest, wildcardPresent)
+	if wildcardPresent {
+		writeKnowledgeSealBytes(digest, wildcardDigest[:])
+	}
 	if !writeKnowledgeSealTime(digest, snapshot.FinishedAt) ||
 		!writeKnowledgeSealTime(digest, snapshot.ExpiresAt) {
 		return [sha256.Size]byte{}, false
@@ -264,6 +275,16 @@ func knowledgeExecutionAuthorityDigest(
 	var result [sha256.Size]byte
 	digest.Sum(result[:0])
 	return result, true
+}
+
+func statsWildcardExpansionDigest(
+	expansion plan.StatsWildcardExpansion,
+) ([sha256.Size]byte, bool, bool) {
+	if expansion.IsZero() {
+		return [sha256.Size]byte{}, false, true
+	}
+	digest, ok := expansion.AuthorityDigest()
+	return digest, true, ok
 }
 
 func retainedKnowledgeAuthorityFacts(
@@ -345,6 +366,9 @@ func writeKnowledgeExecutionResultMetadata(
 		writeKnowledgeSealUint64(writer, uint64(column.Kind))
 		writeKnowledgeSealBool(writer, column.Nullable)
 		writeKnowledgeSealBool(writer, column.Multivalue)
+		writeKnowledgeSealBool(writer, column.HasFlatMultivalueDelimiter)
+		writeKnowledgeSealString(writer, column.FlatMultivalueDelimiter)
+		writeKnowledgeSealBool(writer, column.StatsSparkline)
 	}
 	writeKnowledgeSealUint64(writer, metadata.rowCount)
 	writeKnowledgeSealBool(writer, metadata.resultsTruncated)

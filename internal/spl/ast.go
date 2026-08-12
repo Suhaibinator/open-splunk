@@ -1,7 +1,11 @@
 package spl
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"reflect"
+	"slices"
+	"strings"
 
 	"github.com/Suhaibinator/open-splunk/internal/splpath"
 )
@@ -35,8 +39,71 @@ type Query struct {
 	// eval/where predicate leaves admitted from source. Logical planning keeps
 	// it private so a later whole-query compiler can combine authored and
 	// knowledge work without trusting a caller-constructible counter.
-	parsedEvalPredicates uint32
-	parsed               bool
+	parsedEvalPredicates        uint32
+	parsedEvalPredicatePrefixes []uint32
+	// sourceDigest binds private parser provenance to the exact authored byte
+	// sequence. ASTs assembled or spliced by callers cannot mint this identity.
+	sourceDigest [sha256.Size]byte
+	parsedSource string
+	parsed       bool
+}
+
+// ParsedCanonicalClone reparses the exact privately retained source and
+// returns a detached AST only when every current public and private AST field
+// still agrees. This is the parser-to-planner integrity boundary for features
+// that mint replayable authority: retaining a source digest is insufficient
+// if a caller mutates public nodes after Parse returns.
+func (q *Query) ParsedCanonicalClone() (*Query, bool) {
+	if q == nil || !q.parsed || q.parsedSource == "" ||
+		q.sourceDigest == ([sha256.Size]byte{}) ||
+		sha256.Sum256([]byte(q.parsedSource)) != q.sourceDigest {
+		return nil, false
+	}
+	canonical, err := Parse(q.parsedSource)
+	if err != nil || canonical == nil || !reflect.DeepEqual(q, canonical) {
+		return nil, false
+	}
+	canonical.parsedSource = strings.Clone(canonical.parsedSource)
+	return canonical, true
+}
+
+// ParsedSourceDigest returns parser-owned identity for the exact SPL source.
+func (q *Query) ParsedSourceDigest() ([sha256.Size]byte, bool) {
+	if q == nil || !q.parsed || q.parsedSource == "" ||
+		q.sourceDigest == ([sha256.Size]byte{}) ||
+		sha256.Sum256([]byte(q.parsedSource)) != q.sourceDigest {
+		return [sha256.Size]byte{}, false
+	}
+	return q.sourceDigest, true
+}
+
+// ParsedSource returns a detached copy of parser-retained authored SPL only
+// while the public AST still agrees exactly with a fresh parse of that source.
+// It is intentionally not an authority by itself; planner APIs reparse it and
+// bind the resulting canonical plan to a trusted scope.
+func (q *Query) ParsedSource() (string, bool) {
+	if _, ok := q.ParsedCanonicalClone(); !ok {
+		return "", false
+	}
+	return strings.Clone(q.parsedSource), true
+}
+
+// ParsedPrefix returns parser-owned provenance for exactly the base search and
+// the first commandCount pipeline commands. Command nodes are immutable parser
+// output; the command slice and provenance vectors are detached.
+func (q *Query) ParsedPrefix(commandCount int) (*Query, bool) {
+	canonical, ok := q.ParsedCanonicalClone()
+	if !ok || commandCount < 0 || commandCount > len(canonical.Commands) ||
+		len(canonical.parsedEvalPredicatePrefixes) != len(canonical.Commands)+1 {
+		return nil, false
+	}
+	result := *canonical
+	result.Commands = slices.Clone(canonical.Commands[:commandCount])
+	result.parsedEvalPredicates = canonical.parsedEvalPredicatePrefixes[commandCount]
+	result.parsedEvalPredicatePrefixes = slices.Clone(
+		canonical.parsedEvalPredicatePrefixes[:commandCount+1],
+	)
+	return &result, true
 }
 
 // SourceRange implements Node.
@@ -204,8 +271,9 @@ type ScalarExpr interface {
 
 // ScalarFieldExpr reads one field from the current pipeline row.
 type ScalarFieldExpr struct {
-	Field string
-	Range Range
+	Field  string
+	Quoted bool
+	Range  Range
 }
 
 func (*ScalarFieldExpr) scalarExpression()    {}
@@ -547,8 +615,10 @@ func (c *FieldsCommand) SourceRange() Range { return c.Range }
 
 // TableCommand selects an ordered result schema.
 type TableCommand struct {
-	Fields []string
-	Range  Range
+	Fields       []string
+	QuotedFields []bool
+	FieldRanges  []Range
+	Range        Range
 }
 
 func (*TableCommand) command()             {}
@@ -649,6 +719,18 @@ const (
 	// MaximumStatsGroupFields is the corresponding ceiling for one stats,
 	// eventstats, or streamstats BY tuple.
 	MaximumStatsGroupFields = 16
+	// MaximumStatsPartitions is the documented stats partitions_limit. An
+	// authored zero requests the configured default, which this compatibility
+	// surface resolves to DefaultStatsPartitions; authored values above the
+	// limit are retained in the AST and clamp to this effective maximum while
+	// building the logical plan.
+	MaximumStatsPartitions uint8 = 100
+	DefaultStatsPartitions uint8 = 1
+	DefaultStatsDelimiter        = " "
+	// MaximumStatsSparklinePoints is the fixed publication ceiling carried by
+	// every sparkline plan. Splunk's sparkline_maxsize defaults to list_maxsize,
+	// whose pinned value is 100 for this compatibility surface.
+	MaximumStatsSparklinePoints uint16 = 100
 	// MaximumStreamStatsWindow is the largest explicit row window accepted by
 	// the bounded streamstats compatibility surface. The backend separately
 	// caps the complete input relation so window=0 remains exact rather than
@@ -662,39 +744,208 @@ const (
 	AggregateFunctionCountValues
 	AggregateFunctionCountPredicate
 	AggregateFunctionPercentile
+	AggregateFunctionExactPercentile
+	AggregateFunctionUpperPercentile
+	AggregateFunctionMedian
 	AggregateFunctionSum
 	AggregateFunctionAverage
+	AggregateFunctionRange
+	AggregateFunctionSumSquares
+	AggregateFunctionStandardDeviationSample
+	AggregateFunctionStandardDeviationPopulation
+	AggregateFunctionVarianceSample
+	AggregateFunctionVariancePopulation
 	AggregateFunctionDistinctCount
+	AggregateFunctionEstimatedDistinctCount
+	AggregateFunctionEstimatedDistinctCountError
 	AggregateFunctionValues
 	AggregateFunctionList
 	AggregateFunctionMinimum
 	AggregateFunctionMaximum
+	AggregateFunctionMode
+	AggregateFunctionFirst
+	AggregateFunctionLast
 	AggregateFunctionEarliest
 	AggregateFunctionLatest
+	AggregateFunctionEarliestTime
+	AggregateFunctionLatestTime
+	AggregateFunctionRate
 )
+
+// SparklineSpanKind distinguishes an omitted, search-range-derived span from
+// one explicitly authored by the user. Invalid is reserved for forged or
+// incomplete metadata; a parsed sparkline always uses Automatic or Explicit.
+type SparklineSpanKind uint8
+
+const (
+	SparklineSpanKindInvalid SparklineSpanKind = iota
+	SparklineSpanKindAutomatic
+	SparklineSpanKindExplicit
+)
+
+// SparklineSpanUnit preserves the full documented sparkline span vocabulary.
+// Calendar months deliberately remain distinct from fixed durations, and the
+// subsecond units retain their authored scale for exact divisibility checks.
+type SparklineSpanUnit uint8
+
+const (
+	SparklineSpanUnitInvalid SparklineSpanUnit = iota
+	SparklineSpanUnitMicrosecond
+	SparklineSpanUnitMillisecond
+	SparklineSpanUnitCentisecond
+	SparklineSpanUnitDecisecond
+	SparklineSpanUnitSecond
+	SparklineSpanUnitMinute
+	SparklineSpanUnitHour
+	SparklineSpanUnitDay
+	SparklineSpanUnitMonth
+)
+
+// String returns the canonical SPL suffix for unit.
+func (unit SparklineSpanUnit) String() string {
+	switch unit {
+	case SparklineSpanUnitMicrosecond:
+		return "us"
+	case SparklineSpanUnitMillisecond:
+		return "ms"
+	case SparklineSpanUnitCentisecond:
+		return "cs"
+	case SparklineSpanUnitDecisecond:
+		return "ds"
+	case SparklineSpanUnitSecond:
+		return "s"
+	case SparklineSpanUnitMinute:
+		return "m"
+	case SparklineSpanUnitHour:
+		return "h"
+	case SparklineSpanUnitDay:
+		return "d"
+	case SparklineSpanUnitMonth:
+		return "mon"
+	default:
+		return ""
+	}
+}
+
+// SparklineSpan is either an automatic marker or one source-located positive
+// magnitude and documented time unit. Month is calendar-relative and must not
+// be approximated as a fixed duration by downstream compilers.
+type SparklineSpan struct {
+	Kind      SparklineSpanKind
+	Magnitude uint64
+	Unit      SparklineSpanUnit
+	Range     Range
+}
+
+// StatsSparkline is the nested time-series specification for one stats output.
+// Function is restricted to the documented sparkline inventory. Input is empty
+// only for an unscoped count or while InputGlob carries a wildcard input that
+// logical planning has not yet expanded.
+type StatsSparkline struct {
+	Function AggregateFunction
+	Input    string
+	// InputGlob is mutually exclusive with Input and is consumed by stats
+	// planning against a proven closed upstream schema.
+	InputGlob *StatsFieldGlob
+	// InputQuoted records the single-quoted exact-field spelling. Input always
+	// contains the decoded logical name; quoting is syntax provenance rather
+	// than a distinct runtime field type.
+	InputQuoted bool
+	InputRange  Range
+	Span        SparklineSpan
+	Range       Range
+}
+
+// StatsFieldGlob is one ordinary stats wc-field input. Pattern retains the
+// exact authored wildcard spelling and Range identifies either that explicit
+// input token or, for the deprecated bare-function form, the function token
+// that implied "*". Logical planning expands this arm only when the upstream
+// output schema is closed; no wildcard metadata crosses into a backend plan.
+type StatsFieldGlob struct {
+	Pattern  string
+	Range    Range
+	Implicit bool
+}
 
 // StatsAggregate is one source-located aggregate expression and its public
 // output name.
 type StatsAggregate struct {
-	Function   AggregateFunction
-	Input      string
-	InputRange Range
+	// Sparkline selects the distinct time-series arm of this ordered stats
+	// measure. It is mutually exclusive with every ordinary aggregate field
+	// below except the shared alias and source-range metadata.
+	Sparkline *StatsSparkline
+	Function  AggregateFunction
+	Input     string
+	// InputGlob is mutually exclusive with Input, InputExpression, Predicate,
+	// and Sparkline. It is expanded to exact ordinary aggregates by logical
+	// planning against a proven closed upstream schema.
+	InputGlob *StatsFieldGlob
+	// AliasGlob is the optional wc-field on the right side of AS. It must have
+	// exactly as many '*' captures as either the ordinary InputGlob or the
+	// Sparkline InputGlob and is consumed by the same closed-schema expansion
+	// step.
+	AliasGlob *StatsFieldGlob
+	// InputQuoted records the single-quoted exact-field spelling for an
+	// ordinary field input. It must be false for eval and predicate inputs.
+	InputQuoted bool
+	InputRange  Range
+	// InputExpression is populated only for a supported field-taking
+	// function(eval(<scalar expression>)) input. It is mutually exclusive with
+	// the exact-field Input and the Boolean Predicate used by count(eval(...)).
+	InputExpression ScalarExpr
 	// Predicate is populated only for count(eval(<predicate>)). It remains
 	// separate from Input so later layers cannot reinterpret a conditional
 	// count as either a row count or count(field).
 	Predicate WhereExpr
-	// Percentile is the validated integer pN/percN suffix in [1, 99].
+	// Percentile is the validated integer pN/percN, exactpercN, or upperpercN
+	// suffix in [1, 99].
 	Percentile    uint8
 	Alias         string
 	ExplicitAlias bool
-	Range         Range
-	AliasRange    Range
+	// AliasQuoted records a documented double-quoted AS output. Alias contains
+	// the decoded output name. It is false for unquoted AS and every implicit
+	// aggregate output.
+	AliasQuoted bool
+	// AliasSourceDerived identifies the deterministic Open Splunk default for
+	// stats function(eval(...)) and count(eval(...)): Alias preserves the
+	// authored aggregate invocation, except that control whitespace is replaced
+	// with spaces so the result remains a safe output name. This is deliberately
+	// separate from quoted AS provenance and remains governed by O-alias-schema.
+	AliasSourceDerived bool
+	// AliasWildcardDerived identifies the deterministic default name minted
+	// while a planner expands one wc-field input (for example avg(Product Name)).
+	// It preserves that complete spelling as one literal result column.
+	AliasWildcardDerived bool
+	Range                Range
+	AliasRange           Range
 }
 
 // StatsGroupField is one source-located field in a stats BY clause.
 type StatsGroupField struct {
-	Name  string
-	Range Range
+	Name   string
+	Quoted bool
+	Range  Range
+}
+
+// StatsOptions preserves the authored stats command options and their source
+// locations. Zero-valued unspecified metadata is distinct from explicitly
+// authored false, zero, or an empty quoted delimiter.
+type StatsOptions struct {
+	Partitions          uint64
+	PartitionsSpecified bool
+	PartitionsRange     Range
+
+	AllNumeric          bool
+	AllNumericSpecified bool
+	AllNumericRange     Range
+
+	Delimiter          string
+	DelimiterSpecified bool
+	DelimiterRange     Range
+
+	DeduplicateSplitValues          bool
+	DeduplicateSplitValuesSpecified bool
+	DeduplicateSplitValuesRange     Range
 }
 
 // StatsCommand transforms events into one row per distinct group (or one
@@ -702,6 +953,7 @@ type StatsGroupField struct {
 type StatsCommand struct {
 	Aggregates []StatsAggregate
 	GroupBy    []StatsGroupField
+	Options    StatsOptions
 	Range      Range
 }
 

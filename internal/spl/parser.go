@@ -1,6 +1,7 @@
 package spl
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strconv"
@@ -123,6 +124,10 @@ func (p *parser) parseQuery() (*Query, error) {
 		}
 		query.Search = expression
 	}
+	query.parsedEvalPredicatePrefixes = append(
+		query.parsedEvalPredicatePrefixes,
+		uint32(p.evalPredicates), // #nosec G115 -- parser predicate count is bounded.
+	)
 
 	stage := 0
 	for p.match(tokenPipe) {
@@ -139,6 +144,10 @@ func (p *parser) parseQuery() (*Query, error) {
 			return nil, err
 		}
 		query.Commands = append(query.Commands, command)
+		query.parsedEvalPredicatePrefixes = append(
+			query.parsedEvalPredicatePrefixes,
+			uint32(p.evalPredicates), // #nosec G115 -- parser predicate count is bounded.
+		)
 	}
 	if p.current().kind != tokenEOF {
 		return nil, p.errorAtCurrent("SPL_UNEXPECTED_TOKEN", fmt.Sprintf("unexpected token %q", p.current().text))
@@ -149,6 +158,8 @@ func (p *parser) parseQuery() (*Query, error) {
 	query.Range = Range{Start: start, End: p.current().sourceRange.End}
 	// #nosec G115 -- countEvalPredicate admits at most MaximumEvalPredicates.
 	query.parsedEvalPredicates = uint32(p.evalPredicates)
+	query.sourceDigest = sha256.Sum256([]byte(p.source))
+	query.parsedSource = strings.Clone(p.source)
 	query.parsed = true
 	return query, nil
 }
@@ -1601,8 +1612,38 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats requires an aggregate function")
 	}
 
+	options := StatsOptions{}
+	end := name.sourceRange.End
+	for !p.atCommandEnd() {
+		option := p.current()
+		if option.kind != tokenWord || !isLeadingStatsOptionName(option.text) {
+			if statsOptionFollowedByEqual(p.tokens, p.index) {
+				return nil, p.unsupportedStatsOption(
+					option,
+					fmt.Sprintf("stats option %q is not supported", option.text),
+				)
+			}
+			break
+		}
+		if !statsOptionFollowedByEqual(p.tokens, p.index) {
+			return nil, &Diagnostic{
+				Code:        "SPL_EXPECTED_EQUAL",
+				Message:     fmt.Sprintf("stats option %q must be followed by '='", option.text),
+				Range:       option.sourceRange,
+				Suggestions: []string{strings.ToLower(option.text) + "="},
+			}
+		}
+		optionEnd, err := p.parseLeadingStatsOption(&options)
+		if err != nil {
+			return nil, err
+		}
+		end = optionEnd
+	}
+	if p.atCommandEnd() {
+		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats options must be followed by an aggregate function")
+	}
+
 	aggregates := make([]StatsAggregate, 0, 4)
-	var end Position
 	for {
 		if len(aggregates) >= MaximumStatsMeasures {
 			return nil, &Diagnostic{
@@ -1617,7 +1658,8 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 		}
 		aggregates = append(aggregates, aggregate)
 		end = aggregateEnd
-		if p.isKeyword("BY") || p.atCommandEnd() {
+		if p.isKeyword("BY") || p.atCommandEnd() ||
+			statsOptionFollowedByEqual(p.tokens, p.index) {
 			break
 		}
 		if p.match(tokenComma) {
@@ -1647,17 +1689,192 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 			"stats",
 			"a",
 			false,
+			true,
 			p.unsupportedStatsGroupSyntax,
 		)
 		if err != nil {
 			return nil, err
 		}
 	}
+	if !p.atCommandEnd() {
+		option := p.current()
+		if !statsOptionFollowedByEqual(p.tokens, p.index) ||
+			!strings.EqualFold(option.text, "dedup_splitvals") {
+			message := fmt.Sprintf("unsupported stats syntax at %q", option.text)
+			if statsOptionFollowedByEqual(p.tokens, p.index) {
+				message = fmt.Sprintf(
+					"stats option %q must precede aggregates or is not supported in this position",
+					option.text,
+				)
+			}
+			return nil, p.unsupportedStatsOption(option, message)
+		}
+		optionEnd, err := p.parseStatsDeduplicateSplitValues(&options)
+		if err != nil {
+			return nil, err
+		}
+		end = optionEnd
+		if !p.atCommandEnd() {
+			return nil, p.unsupportedStatsOption(
+				p.current(),
+				"dedup_splitvals must be the final stats command option",
+			)
+		}
+	}
 	return &StatsCommand{
 		Aggregates: aggregates,
 		GroupBy:    groupBy,
+		Options:    options,
 		Range:      Range{Start: name.sourceRange.Start, End: end},
 	}, nil
+}
+
+func isLeadingStatsOptionName(name string) bool {
+	switch strings.ToLower(name) {
+	case "partitions", "allnum", "delim":
+		return true
+	default:
+		return false
+	}
+}
+
+func statsOptionFollowedByEqual(tokens []token, index int) bool {
+	return index >= 0 && index+1 < len(tokens) &&
+		tokens[index].kind == tokenWord && tokens[index+1].kind == tokenEqual
+}
+
+func (p *parser) parseLeadingStatsOption(options *StatsOptions) (Position, error) {
+	option := p.current()
+	optionName := strings.ToLower(option.text)
+	p.advance()
+	p.advance() // parseStatsCommand established the '=' token by lookahead.
+	value := p.current()
+
+	switch optionName {
+	case "partitions":
+		if options.PartitionsSpecified {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				option,
+				"stats partitions may be specified only once",
+			)
+		}
+		if value.kind != tokenWord || !unsignedIntegerSyntax(value.text) {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				value,
+				"stats partitions must be an unsigned base-10 64-bit integer; values above the configured limit clamp",
+			)
+		}
+		parsed, err := strconv.ParseUint(value.text, 10, 64)
+		if err != nil {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				value,
+				"stats partitions is outside the supported unsigned 64-bit range",
+			)
+		}
+		options.Partitions = parsed
+		options.PartitionsSpecified = true
+		options.PartitionsRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+	case "allnum":
+		if options.AllNumericSpecified {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				option,
+				"stats allnum may be specified only once",
+			)
+		}
+		if value.kind != tokenWord {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				value,
+				"stats allnum must be t, true, f, or false",
+			)
+		}
+		parsed, ok := parseStreamStatsBool(value.text)
+		if !ok {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				value,
+				"stats allnum must be t, true, f, or false",
+			)
+		}
+		options.AllNumeric = parsed
+		options.AllNumericSpecified = true
+		options.AllNumericRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+	case "delim":
+		if options.DelimiterSpecified {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				option,
+				"stats delim may be specified only once",
+			)
+		}
+		if value.kind != tokenWord && value.kind != tokenString {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				value,
+				"stats delim requires one quoted string or bare token",
+			)
+		}
+		if value.kind == tokenWord && value.text == "" {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				value,
+				"an empty stats delimiter must be written as a quoted string",
+			)
+		}
+		if !utf8.ValidString(value.text) {
+			return option.sourceRange.End, p.unsupportedStatsOption(
+				value,
+				"stats delimiter must contain valid UTF-8",
+			)
+		}
+		options.Delimiter = value.text
+		options.DelimiterSpecified = true
+		options.DelimiterRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+	default:
+		return option.sourceRange.End, p.unsupportedStatsOption(
+			option,
+			fmt.Sprintf("stats option %q is not supported", option.text),
+		)
+	}
+
+	end := value.sourceRange.End
+	p.advance()
+	return end, nil
+}
+
+func (p *parser) parseStatsDeduplicateSplitValues(
+	options *StatsOptions,
+) (Position, error) {
+	option := p.current()
+	if options.DeduplicateSplitValuesSpecified {
+		return option.sourceRange.End, p.unsupportedStatsOption(
+			option,
+			"stats dedup_splitvals may be specified only once",
+		)
+	}
+	p.advance()
+	p.advance() // The caller established the '=' token by lookahead.
+	value := p.current()
+	if value.kind != tokenWord {
+		if value.kind == tokenEOF || value.kind == tokenPipe {
+			value = option
+		}
+		return option.sourceRange.End, p.unsupportedStatsOption(
+			value,
+			"stats dedup_splitvals must be t, true, f, or false",
+		)
+	}
+	parsed, ok := parseStreamStatsBool(value.text)
+	if !ok {
+		return option.sourceRange.End, p.unsupportedStatsOption(
+			value,
+			"stats dedup_splitvals must be t, true, f, or false",
+		)
+	}
+	options.DeduplicateSplitValues = parsed
+	options.DeduplicateSplitValuesSpecified = true
+	options.DeduplicateSplitValuesRange = Range{
+		Start: option.sourceRange.Start,
+		End:   value.sourceRange.End,
+	}
+	end := value.sourceRange.End
+	p.advance()
+	return end, nil
 }
 
 func (p *parser) parseEventStatsCommand(name token) (Command, error) {
@@ -1800,6 +2017,7 @@ func (p *parser) parseEventStatsCommand(name token) (Command, error) {
 			"eventstats",
 			"an",
 			true,
+			false,
 			p.unsupportedEventStatsSyntax,
 		)
 		if err != nil {
@@ -2421,6 +2639,9 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 		return StatsAggregate{}, functionToken.sourceRange.End, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats requires an aggregate function")
 	}
 	p.advance()
+	if strings.EqualFold(functionToken.text, "sparkline") {
+		return p.parseStatsSparkline(functionToken)
+	}
 	aggregate := StatsAggregate{Range: functionToken.sourceRange, AliasRange: functionToken.sourceRange}
 	end := functionToken.sourceRange.End
 	functionName := strings.ToLower(functionToken.text)
@@ -2428,7 +2649,7 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 	if !supported {
 		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
 			functionToken,
-			fmt.Sprintf("stats aggregate %q is not supported; count, c(field), dc, values, list, pN/percN (1-99), sum, avg, min, max, earliest, and latest are available", functionToken.text),
+			fmt.Sprintf("stats aggregate %q is not supported by the documented bounded function surface", functionToken.text),
 		)
 	}
 	aggregate.Function = spec.function
@@ -2443,75 +2664,586 @@ func (p *parser) parseStatsAggregate() (StatsAggregate, Position, error) {
 		aggregate.Predicate = predicate
 		end = predicateEnd
 		aggregate.Range.End = end
-		aggregate.Alias = ""
+		aggregate.Alias = p.statsAggregateInvocationText(
+			functionToken.sourceRange.Start,
+			end,
+		)
+		aggregate.AliasSourceDerived = true
 		aggregate.AliasRange = Range{Start: functionToken.sourceRange.Start, End: end}
 	}
 	parseInput := spec.requiresInput ||
 		(spec.inputFunction != AggregateFunctionInvalid && p.current().kind == tokenLeftParen)
 	if aggregate.Function != AggregateFunctionCountPredicate && parseInput {
-		if !p.match(tokenLeftParen) {
-			return StatsAggregate{}, end, &Diagnostic{
-				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
-				Message:     functionName + " requires one field argument in parentheses",
-				Range:       functionToken.sourceRange,
-				Suggestions: []string{functionName + "(field)"},
+		if spec.supportsExpressionInput && startsEvalPredicateArgument(p.tokens, p.index) {
+			expression, expressionEnd, expressionErr := p.parseStatsScalarInput(functionName)
+			if expressionErr != nil {
+				return StatsAggregate{}, end, expressionErr
 			}
-		}
-		input := p.current()
-		if input.kind == tokenScalarComposite {
-			if err := p.prepareSearchToken(); err != nil {
-				return StatsAggregate{}, end, err
-			}
-			input = p.current()
-		}
-		if input.kind == tokenQuotedField {
-			return StatsAggregate{}, end, p.unsupportedStatsAggregate(
-				input,
-				"quoted scalar field references are not supported as stats aggregate inputs",
+			aggregate.InputExpression = expression
+			end = expressionEnd
+			aggregate.Range.End = end
+			aggregate.Alias = p.statsAggregateInvocationText(
+				functionToken.sourceRange.Start,
+				end,
 			)
+			aggregate.AliasSourceDerived = true
+			aggregate.AliasRange = Range{Start: functionToken.sourceRange.Start, End: end}
+		} else if spec.requiresInput && p.current().kind != tokenLeftParen {
+			// Deprecated bare input-requiring functions are implicit wc-field
+			// aggregates over "*". Planning expands them only when the upstream
+			// schema is closed.
+			aggregate.InputGlob = &StatsFieldGlob{
+				Pattern:  "*",
+				Range:    functionToken.sourceRange,
+				Implicit: true,
+			}
+			aggregate.Alias = spec.canonicalName + "(*)"
+			if spec.inputFunction != AggregateFunctionInvalid {
+				aggregate.Function = spec.inputFunction
+			}
+		} else {
+			if !p.match(tokenLeftParen) {
+				return StatsAggregate{}, end, &Diagnostic{
+					Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
+					Message:     functionName + " requires one field argument in parentheses",
+					Range:       functionToken.sourceRange,
+					Suggestions: []string{functionName + "(field)"},
+				}
+			}
+			input := p.current()
+			if input.kind == tokenScalarComposite {
+				if err := p.prepareSearchToken(); err != nil {
+					return StatsAggregate{}, end, err
+				}
+				input = p.current()
+			}
+			quotedInput := input.kind == tokenQuotedField
+			if quotedInput {
+				if input.scalarDiagnostic != nil {
+					return StatsAggregate{}, end, input.scalarDiagnostic
+				}
+				if err := validateQuotedFieldReference(input); err != nil {
+					return StatsAggregate{}, end, err
+				}
+			}
+			if input.kind != tokenWord && !quotedInput {
+				return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", functionName+" requires one input field")
+			}
+			wildcardInput := !quotedInput && IsStatsFieldGlob(input.text)
+			if !quotedInput && !wildcardInput && !IsExactUnquotedFieldName(input.text) {
+				return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+					input,
+					"stats aggregate input must be one exact field or wc-field pattern",
+				)
+			}
+			if wildcardInput {
+				aggregate.InputGlob = &StatsFieldGlob{
+					Pattern: input.text,
+					Range:   input.sourceRange,
+				}
+			} else {
+				aggregate.Input = input.text
+				aggregate.InputQuoted = quotedInput
+				aggregate.InputRange = input.sourceRange
+			}
+			p.advance()
+			if !p.match(tokenRightParen) {
+				return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' after the "+functionName+" input field")
+			}
+			if spec.inputFunction != AggregateFunctionInvalid {
+				aggregate.Function = spec.inputFunction
+			}
+			end = p.previous().sourceRange.End
+			aggregate.Range.End = end
+			aggregate.Alias = spec.canonicalName + "(" + input.text + ")"
+			aggregate.AliasRange = Range{Start: functionToken.sourceRange.Start, End: end}
 		}
-		if input.kind != tokenWord {
-			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", functionName+" requires one input field")
-		}
-		aggregate.Input = input.text
-		aggregate.InputRange = input.sourceRange
-		p.advance()
-		if !p.match(tokenRightParen) {
-			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_RIGHT_PAREN", "expected ')' after the "+functionName+" input field")
-		}
-		if spec.inputFunction != AggregateFunctionInvalid {
-			aggregate.Function = spec.inputFunction
-		}
-		end = p.previous().sourceRange.End
-		aggregate.Range.End = end
-		aggregate.Alias = spec.canonicalName + "(" + input.text + ")"
-		aggregate.AliasRange = Range{Start: functionToken.sourceRange.Start, End: end}
 	}
-
 	if p.isKeyword("AS") {
+		if aggregate.InputGlob != nil {
+			p.advance()
+			alias := p.current()
+			if alias.kind != tokenWord || !IsStatsFieldGlob(alias.text) {
+				return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+					alias,
+					"stats wc-field AS requires one unquoted wc-field output pattern",
+				)
+			}
+			if strings.Count(alias.text, "*") !=
+				strings.Count(aggregate.InputGlob.Pattern, "*") {
+				return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+					alias,
+					"stats wc-field AS output must contain exactly one '*' for each input capture",
+				)
+			}
+			aggregate.AliasGlob = &StatsFieldGlob{
+				Pattern: alias.text,
+				Range:   alias.sourceRange,
+			}
+			aggregate.ExplicitAlias = true
+			aggregate.AliasRange = alias.sourceRange
+			aggregate.Range.End = alias.sourceRange.End
+			end = alias.sourceRange.End
+			p.advance()
+			return aggregate, end, nil
+		}
 		p.advance()
 		alias := p.current()
-		if alias.kind != tokenWord || p.isKeyword("BY") {
+		quotedAlias := alias.kind == tokenString
+		if alias.kind != tokenWord && !quotedAlias ||
+			(!quotedAlias && p.isKeyword("BY")) {
 			return StatsAggregate{}, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected an output field name after AS")
+		}
+		if quotedAlias {
+			if !IsStatsLiteralOutputName(alias.text) {
+				return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+					alias,
+					"quoted stats output field is empty, invalid, private, reserved, or too long",
+				)
+			}
+		} else if !IsExactUnquotedFieldName(alias.text) {
+			return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+				alias,
+				"stats AS requires one exact output field; wildcard aliases are not supported in this slice",
+			)
 		}
 		aggregate.Alias = alias.text
 		aggregate.ExplicitAlias = true
+		aggregate.AliasQuoted = quotedAlias
+		aggregate.AliasSourceDerived = false
 		aggregate.AliasRange = alias.sourceRange
 		aggregate.Range.End = alias.sourceRange.End
 		end = alias.sourceRange.End
 		p.advance()
 	}
-	if aggregate.Function == AggregateFunctionCountPredicate && !aggregate.ExplicitAlias {
-		return StatsAggregate{}, end, &Diagnostic{
+	return aggregate, end, nil
+}
+
+func (p *parser) statsAggregateInvocationText(start, end Position) string {
+	if start.Offset < 0 || end.Offset <= start.Offset || end.Offset > len(p.source) {
+		return ""
+	}
+	return normalizeStatsSourceDerivedAlias(p.source[start.Offset:end.Offset])
+}
+
+func normalizeStatsSourceDerivedAlias(value string) string {
+	return strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) && unicode.IsSpace(character) {
+			return ' '
+		}
+		return character
+	}, value)
+}
+
+type statsSparklineAggregateSpec struct {
+	function AggregateFunction
+}
+
+func statsSparklineAggregateSpecForName(
+	name string,
+) (statsSparklineAggregateSpec, bool) {
+	switch strings.ToLower(name) {
+	case "count":
+		return statsSparklineAggregateSpec{function: AggregateFunctionCount}, true
+	case "c":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionCountValues,
+		}, true
+	case "dc":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionDistinctCount,
+		}, true
+	case "mean", "avg":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionAverage,
+		}, true
+	case "stdev":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionStandardDeviationSample,
+		}, true
+	case "stdevp":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionStandardDeviationPopulation,
+		}, true
+	case "var":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionVarianceSample,
+		}, true
+	case "varp":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionVariancePopulation,
+		}, true
+	case "sum":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionSum,
+		}, true
+	case "sumsq":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionSumSquares,
+		}, true
+	case "min":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionMinimum,
+		}, true
+	case "max":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionMaximum,
+		}, true
+	case "range":
+		return statsSparklineAggregateSpec{
+			function: AggregateFunctionRange,
+		}, true
+	default:
+		return statsSparklineAggregateSpec{}, false
+	}
+}
+
+func (p *parser) parseStatsSparkline(
+	functionToken token,
+) (StatsAggregate, Position, error) {
+	aggregate := StatsAggregate{
+		Alias:      "sparkline",
+		Range:      functionToken.sourceRange,
+		AliasRange: functionToken.sourceRange,
+	}
+	sparkline := &StatsSparkline{
+		Span: SparklineSpan{Kind: SparklineSpanKindAutomatic},
+	}
+	aggregate.Sparkline = sparkline
+
+	// Splunk's documented legacy shorthand is equivalent to an automatic,
+	// unscoped count sparkline. Other shorthand functions remain invalid; they
+	// require the canonical sparkline(function(field)) wrapper.
+	if p.current().kind != tokenLeftParen {
+		inner := p.current()
+		if inner.kind != tokenWord || !strings.EqualFold(inner.text, "count") {
+			return StatsAggregate{}, functionToken.sourceRange.End, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STATS_SYNTAX",
+				Message: "sparkline must contain a supported aggregate or use the legacy 'sparkline count' form",
+				Range:   inner.sourceRange,
+				Suggestions: []string{
+					"sparkline(count)",
+					"sparkline(avg(field), 5m) AS trend",
+					"sparkline count",
+				},
+			}
+		}
+		p.advance()
+		sparkline.Function = AggregateFunctionCount
+		sparkline.Range = Range{
+			Start: functionToken.sourceRange.Start,
+			End:   inner.sourceRange.End,
+		}
+		aggregate.Range = sparkline.Range
+		aggregate.AliasRange = sparkline.Range
+		return p.parseStatsSparklineAlias(aggregate)
+	}
+
+	p.advance()
+	innerToken := p.current()
+	if innerToken.kind != tokenWord {
+		return StatsAggregate{}, functionToken.sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_AGGREGATE",
+			"sparkline requires a supported aggregate function",
+		)
+	}
+	p.advance()
+	spec, supported := statsSparklineAggregateSpecForName(innerToken.text)
+	if !supported {
+		return StatsAggregate{}, innerToken.sourceRange.End, p.unsupportedStatsAggregate(
+			innerToken,
+			fmt.Sprintf("aggregate %q is not supported inside sparkline", innerToken.text),
+		)
+	}
+	sparkline.Function = spec.function
+
+	if strings.EqualFold(innerToken.text, "count") && p.current().kind != tokenLeftParen {
+		// Bare count is the only unscoped inner aggregate.
+		if p.current().kind != tokenComma && p.current().kind != tokenRightParen {
+			return StatsAggregate{}, innerToken.sourceRange.End, p.errorAtCurrent(
+				"SPL_EXPECTED_RIGHT_PAREN",
+				"expected ')' or a span after unscoped sparkline count",
+			)
+		}
+	} else {
+		if !p.match(tokenLeftParen) {
+			return StatsAggregate{}, innerToken.sourceRange.End, &Diagnostic{
+				Code:        "SPL_UNSUPPORTED_STATS_SYNTAX",
+				Message:     strings.ToLower(innerToken.text) + " requires one exact field inside sparkline",
+				Range:       innerToken.sourceRange,
+				Suggestions: []string{"sparkline(" + strings.ToLower(innerToken.text) + "(field))"},
+			}
+		}
+		if strings.EqualFold(innerToken.text, "count") && p.match(tokenRightParen) {
+			// count() is the parenthesized spelling of unscoped row count.
+			sparkline.Function = AggregateFunctionCount
+		} else {
+			input := p.current()
+			if input.kind == tokenScalarComposite {
+				if err := p.prepareSearchToken(); err != nil {
+					return StatsAggregate{}, innerToken.sourceRange.End, err
+				}
+				input = p.current()
+			}
+			quotedInput := input.kind == tokenQuotedField
+			if quotedInput {
+				if input.scalarDiagnostic != nil {
+					return StatsAggregate{}, input.sourceRange.End, input.scalarDiagnostic
+				}
+				if err := validateQuotedFieldReference(input); err != nil {
+					return StatsAggregate{}, input.sourceRange.End, err
+				}
+			}
+			if input.kind != tokenWord && !quotedInput {
+				return StatsAggregate{}, input.sourceRange.End, p.errorAtCurrent(
+					"SPL_EXPECTED_FIELD",
+					strings.ToLower(innerToken.text)+" requires one exact sparkline input field",
+				)
+			}
+			wildcardInput := !quotedInput && IsStatsFieldGlob(input.text)
+			if !quotedInput && !wildcardInput && !IsExactUnquotedFieldName(input.text) {
+				return StatsAggregate{}, input.sourceRange.End, p.unsupportedStatsAggregate(
+					input,
+					"sparkline input must be one exact field or wc-field pattern",
+				)
+			}
+			if wildcardInput {
+				sparkline.InputGlob = &StatsFieldGlob{
+					Pattern: input.text,
+					Range:   input.sourceRange,
+				}
+			} else {
+				sparkline.Input = input.text
+				sparkline.InputQuoted = quotedInput
+				sparkline.InputRange = input.sourceRange
+			}
+			p.advance()
+			if !p.match(tokenRightParen) {
+				return StatsAggregate{}, input.sourceRange.End, p.errorAtCurrent(
+					"SPL_EXPECTED_RIGHT_PAREN",
+					"expected ')' after the sparkline input field",
+				)
+			}
+			if strings.EqualFold(innerToken.text, "count") {
+				sparkline.Function = AggregateFunctionCountValues
+			}
+		}
+	}
+
+	if p.match(tokenComma) {
+		spanToken := p.current()
+		span, err := parseSparklineSpan(spanToken)
+		if err != nil {
+			return StatsAggregate{}, spanToken.sourceRange.End, err
+		}
+		sparkline.Span = span
+		p.advance()
+	}
+	if !p.match(tokenRightParen) {
+		return StatsAggregate{}, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_RIGHT_PAREN",
+			"expected ')' to close sparkline",
+		)
+	}
+	end := p.previous().sourceRange.End
+	sparkline.Range = Range{Start: functionToken.sourceRange.Start, End: end}
+	aggregate.Range = sparkline.Range
+	aggregate.AliasRange = sparkline.Range
+	return p.parseStatsSparklineAlias(aggregate)
+}
+
+func (p *parser) parseStatsSparklineAlias(
+	aggregate StatsAggregate,
+) (StatsAggregate, Position, error) {
+	end := aggregate.Range.End
+	if !p.isKeyword("AS") {
+		return aggregate, end, nil
+	}
+	p.advance()
+	alias := p.current()
+	if aggregate.Sparkline.InputGlob != nil {
+		if alias.kind != tokenWord || !IsStatsFieldGlob(alias.text) {
+			return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+				alias,
+				"sparkline wc-field AS requires one unquoted wc-field output pattern",
+			)
+		}
+		if strings.Count(alias.text, "*") !=
+			strings.Count(aggregate.Sparkline.InputGlob.Pattern, "*") {
+			return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+				alias,
+				"sparkline wc-field AS output must contain exactly one '*' for each input capture",
+			)
+		}
+		aggregate.AliasGlob = &StatsFieldGlob{
+			Pattern: alias.text,
+			Range:   alias.sourceRange,
+		}
+		aggregate.ExplicitAlias = true
+		aggregate.AliasRange = alias.sourceRange
+		aggregate.Range.End = alias.sourceRange.End
+		end = alias.sourceRange.End
+		p.advance()
+		return aggregate, end, nil
+	}
+	quotedAlias := alias.kind == tokenString
+	if alias.kind != tokenWord && !quotedAlias ||
+		(!quotedAlias && p.isKeyword("BY")) {
+		return StatsAggregate{}, end, p.errorAtCurrent(
+			"SPL_EXPECTED_FIELD",
+			"expected an output field name after sparkline AS",
+		)
+	}
+	if quotedAlias {
+		if !IsStatsLiteralOutputName(alias.text) {
+			return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+				alias,
+				"quoted sparkline output field is empty, invalid, private, reserved, or too long",
+			)
+		}
+	} else if !IsExactUnquotedFieldName(alias.text) {
+		return StatsAggregate{}, end, p.unsupportedStatsAggregate(
+			alias,
+			"sparkline AS requires one exact output field; wildcard aliases are not supported in this slice",
+		)
+	}
+	aggregate.Alias = alias.text
+	aggregate.ExplicitAlias = true
+	aggregate.AliasQuoted = quotedAlias
+	aggregate.AliasRange = alias.sourceRange
+	aggregate.Range.End = alias.sourceRange.End
+	p.advance()
+	return aggregate, alias.sourceRange.End, nil
+}
+
+func parseSparklineSpan(tok token) (SparklineSpan, error) {
+	if tok.kind != tokenWord {
+		return SparklineSpan{}, invalidSparklineSpan(tok)
+	}
+	digitEnd := 0
+	for digitEnd < len(tok.text) && tok.text[digitEnd] >= '0' && tok.text[digitEnd] <= '9' {
+		digitEnd++
+	}
+	if digitEnd == 0 || digitEnd == len(tok.text) {
+		return SparklineSpan{}, invalidSparklineSpan(tok)
+	}
+	magnitude, err := strconv.ParseUint(tok.text[:digitEnd], 10, 64)
+	if err != nil {
+		return SparklineSpan{}, &Diagnostic{
+			Code:    "SPL_NUMBER_OUT_OF_RANGE",
+			Message: "sparkline span magnitude is outside the supported 64-bit range",
+			Range:   tok.sourceRange,
+		}
+	}
+	if magnitude == 0 {
+		return SparklineSpan{}, invalidSparklineSpan(tok)
+	}
+
+	var unit SparklineSpanUnit
+	var unitsPerSecond uint64
+	switch strings.ToLower(tok.text[digitEnd:]) {
+	case "us":
+		unit, unitsPerSecond = SparklineSpanUnitMicrosecond, 1_000_000
+	case "ms":
+		unit, unitsPerSecond = SparklineSpanUnitMillisecond, 1_000
+	case "cs":
+		unit, unitsPerSecond = SparklineSpanUnitCentisecond, 100
+	case "ds":
+		unit, unitsPerSecond = SparklineSpanUnitDecisecond, 10
+	case "s", "sec", "secs", "second", "seconds":
+		unit = SparklineSpanUnitSecond
+	case "m", "min", "mins", "minute", "minutes":
+		unit = SparklineSpanUnitMinute
+	case "h", "hr", "hrs", "hour", "hours":
+		unit = SparklineSpanUnitHour
+	case "d", "day", "days":
+		unit = SparklineSpanUnitDay
+	case "mon", "month", "months":
+		unit = SparklineSpanUnitMonth
+	default:
+		return SparklineSpan{}, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_STATS_SYNTAX",
-			Message: "count(eval(...)) requires AS followed by an output field name",
-			Range:   aggregate.Range,
+			Message: fmt.Sprintf("sparkline span unit in %q is unsupported", tok.text),
+			Range:   tok.sourceRange,
 			Suggestions: []string{
-				"count(eval(field=value)) AS matches",
+				"sparkline(count, 30m)",
+				"sparkline(avg(field), 6h)",
 			},
 		}
 	}
-	return aggregate, end, nil
+	if unitsPerSecond != 0 &&
+		(magnitude >= unitsPerSecond || unitsPerSecond%magnitude != 0) {
+		return SparklineSpan{}, &Diagnostic{
+			Code: "SPL_INVALID_ARGUMENT",
+			Message: fmt.Sprintf(
+				"sparkline subsecond span %q must divide one second evenly and be less than one second",
+				tok.text,
+			),
+			Range:       tok.sourceRange,
+			Suggestions: []string{"use an exact divisor of one second, or use 1s"},
+		}
+	}
+	return SparklineSpan{
+		Kind:      SparklineSpanKindExplicit,
+		Magnitude: magnitude,
+		Unit:      unit,
+		Range:     tok.sourceRange,
+	}, nil
+}
+
+func invalidSparklineSpan(tok token) *Diagnostic {
+	return &Diagnostic{
+		Code:    "SPL_INVALID_ARGUMENT",
+		Message: "sparkline span must be a positive integer followed by a documented time unit",
+		Range:   tok.sourceRange,
+		Suggestions: []string{
+			"sparkline(count, 30m)",
+			"sparkline(avg(field), 6h)",
+		},
+	}
+}
+
+// parseStatsScalarInput parses the general field-taking aggregate wrapper
+// function(eval(<v0.2 scalar expression>)). count(eval(...)) is parsed first as
+// its distinct predicate form; every other field-taking stats function retains
+// the scalar result kind, including Boolean values.
+func (p *parser) parseStatsScalarInput(functionName string) (ScalarExpr, Position, error) {
+	if !p.match(tokenLeftParen) {
+		return nil, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_LEFT_PAREN",
+			"expected '(' after "+functionName,
+		)
+	}
+	p.advance() // startsEvalPredicateArgument proved this token is eval.
+	if !p.match(tokenLeftParen) {
+		return nil, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_LEFT_PAREN",
+			"expected '(' after eval",
+		)
+	}
+	if p.current().kind == tokenRightParen {
+		return nil, p.current().sourceRange.End, p.errorAtCurrent(
+			"SPL_EXPECTED_SCALAR_EXPRESSION",
+			functionName+"(eval(...)) requires a scalar expression",
+		)
+	}
+	expression, err := p.parseScalarExpression()
+	if err != nil {
+		return nil, p.current().sourceRange.End, err
+	}
+	if !p.match(tokenRightParen) {
+		return nil, expression.SourceRange().End, p.errorAtCurrent(
+			"SPL_EXPECTED_RIGHT_PAREN",
+			"expected ')' to close the eval scalar expression",
+		)
+	}
+	if !p.match(tokenRightParen) {
+		return nil, expression.SourceRange().End, p.errorAtCurrent(
+			"SPL_EXPECTED_RIGHT_PAREN",
+			"expected ')' to close "+functionName+"(eval(...))",
+		)
+	}
+	return expression, p.previous().sourceRange.End, nil
 }
 
 func (p *parser) startsCountPredicate() bool {
@@ -2586,11 +3318,12 @@ func (p *parser) parseCountPredicate() (WhereExpr, Position, error) {
 }
 
 type statsAggregateSpec struct {
-	function      AggregateFunction
-	inputFunction AggregateFunction
-	canonicalName string
-	requiresInput bool
-	percentile    uint8
+	function                AggregateFunction
+	inputFunction           AggregateFunction
+	canonicalName           string
+	requiresInput           bool
+	supportsExpressionInput bool
+	percentile              uint8
 }
 
 type eventStatsFieldAggregateDescriptor struct {
@@ -2710,10 +3443,29 @@ func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 	name = strings.ToLower(name)
 	if percentile, ok := parseStatsPercentileSuffix(name); ok {
 		return statsAggregateSpec{
-			function:      AggregateFunctionPercentile,
-			canonicalName: "perc" + strconv.Itoa(int(percentile)),
-			requiresInput: true,
-			percentile:    percentile,
+			function:                AggregateFunctionPercentile,
+			canonicalName:           "perc" + strconv.Itoa(int(percentile)),
+			requiresInput:           true,
+			supportsExpressionInput: true,
+			percentile:              percentile,
+		}, true
+	}
+	if percentile, ok := parseBoundedStatsFunctionSuffix(name, "exactperc"); ok {
+		return statsAggregateSpec{
+			function:                AggregateFunctionExactPercentile,
+			canonicalName:           "exactperc" + strconv.Itoa(int(percentile)),
+			requiresInput:           true,
+			supportsExpressionInput: true,
+			percentile:              percentile,
+		}, true
+	}
+	if percentile, ok := parseBoundedStatsFunctionSuffix(name, "upperperc"); ok {
+		return statsAggregateSpec{
+			function:                AggregateFunctionUpperPercentile,
+			canonicalName:           "upperperc" + strconv.Itoa(int(percentile)),
+			requiresInput:           true,
+			supportsExpressionInput: true,
+			percentile:              percentile,
 		}, true
 	}
 	switch name {
@@ -2730,23 +3482,55 @@ func statsAggregateSpecForName(name string) (statsAggregateSpec, bool) {
 			requiresInput: true,
 		}, true
 	case "sum":
-		return statsAggregateSpec{function: AggregateFunctionSum, canonicalName: "sum", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionSum, canonicalName: "sum", requiresInput: true, supportsExpressionInput: true}, true
 	case "avg":
-		return statsAggregateSpec{function: AggregateFunctionAverage, canonicalName: "avg", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionAverage, canonicalName: "avg", requiresInput: true, supportsExpressionInput: true}, true
+	case "mean":
+		return statsAggregateSpec{function: AggregateFunctionAverage, canonicalName: "mean", requiresInput: true, supportsExpressionInput: true}, true
+	case "range":
+		return statsAggregateSpec{function: AggregateFunctionRange, canonicalName: "range", requiresInput: true, supportsExpressionInput: true}, true
+	case "sumsq":
+		return statsAggregateSpec{function: AggregateFunctionSumSquares, canonicalName: "sumsq", requiresInput: true, supportsExpressionInput: true}, true
+	case "stdev":
+		return statsAggregateSpec{function: AggregateFunctionStandardDeviationSample, canonicalName: "stdev", requiresInput: true, supportsExpressionInput: true}, true
+	case "stdevp":
+		return statsAggregateSpec{function: AggregateFunctionStandardDeviationPopulation, canonicalName: "stdevp", requiresInput: true, supportsExpressionInput: true}, true
+	case "var":
+		return statsAggregateSpec{function: AggregateFunctionVarianceSample, canonicalName: "var", requiresInput: true, supportsExpressionInput: true}, true
+	case "varp":
+		return statsAggregateSpec{function: AggregateFunctionVariancePopulation, canonicalName: "varp", requiresInput: true, supportsExpressionInput: true}, true
 	case "dc", "distinct_count":
-		return statsAggregateSpec{function: AggregateFunctionDistinctCount, canonicalName: "dc", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionDistinctCount, canonicalName: "dc", requiresInput: true, supportsExpressionInput: true}, true
+	case "estdc":
+		return statsAggregateSpec{function: AggregateFunctionEstimatedDistinctCount, canonicalName: "estdc", requiresInput: true, supportsExpressionInput: true}, true
+	case "estdc_error":
+		return statsAggregateSpec{function: AggregateFunctionEstimatedDistinctCountError, canonicalName: "estdc_error", requiresInput: true, supportsExpressionInput: true}, true
+	case "median":
+		return statsAggregateSpec{function: AggregateFunctionMedian, canonicalName: "median", requiresInput: true, supportsExpressionInput: true}, true
+	case "mode":
+		return statsAggregateSpec{function: AggregateFunctionMode, canonicalName: "mode", requiresInput: true, supportsExpressionInput: true}, true
 	case "values":
-		return statsAggregateSpec{function: AggregateFunctionValues, canonicalName: "values", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionValues, canonicalName: "values", requiresInput: true, supportsExpressionInput: true}, true
 	case "list":
-		return statsAggregateSpec{function: AggregateFunctionList, canonicalName: "list", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionList, canonicalName: "list", requiresInput: true, supportsExpressionInput: true}, true
 	case "min":
-		return statsAggregateSpec{function: AggregateFunctionMinimum, canonicalName: "min", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionMinimum, canonicalName: "min", requiresInput: true, supportsExpressionInput: true}, true
 	case "max":
-		return statsAggregateSpec{function: AggregateFunctionMaximum, canonicalName: "max", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionMaximum, canonicalName: "max", requiresInput: true, supportsExpressionInput: true}, true
+	case "first":
+		return statsAggregateSpec{function: AggregateFunctionFirst, canonicalName: "first", requiresInput: true, supportsExpressionInput: true}, true
+	case "last":
+		return statsAggregateSpec{function: AggregateFunctionLast, canonicalName: "last", requiresInput: true, supportsExpressionInput: true}, true
 	case "earliest":
-		return statsAggregateSpec{function: AggregateFunctionEarliest, canonicalName: "earliest", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionEarliest, canonicalName: "earliest", requiresInput: true, supportsExpressionInput: true}, true
 	case "latest":
-		return statsAggregateSpec{function: AggregateFunctionLatest, canonicalName: "latest", requiresInput: true}, true
+		return statsAggregateSpec{function: AggregateFunctionLatest, canonicalName: "latest", requiresInput: true, supportsExpressionInput: true}, true
+	case "earliest_time":
+		return statsAggregateSpec{function: AggregateFunctionEarliestTime, canonicalName: "earliest_time", requiresInput: true, supportsExpressionInput: true}, true
+	case "latest_time":
+		return statsAggregateSpec{function: AggregateFunctionLatestTime, canonicalName: "latest_time", requiresInput: true, supportsExpressionInput: true}, true
+	case "rate":
+		return statsAggregateSpec{function: AggregateFunctionRate, canonicalName: "rate", requiresInput: true, supportsExpressionInput: true}, true
 	default:
 		return statsAggregateSpec{}, false
 	}
@@ -2799,15 +3583,25 @@ func eventStatsFieldAggregatePresentation(
 }
 
 func parseStatsPercentileSuffix(name string) (uint8, bool) {
-	suffix := ""
 	switch {
 	case strings.HasPrefix(name, "perc"):
-		suffix = strings.TrimPrefix(name, "perc")
+		return parseBoundedStatsFunctionSuffix(name, "perc")
 	case strings.HasPrefix(name, "p"):
-		suffix = strings.TrimPrefix(name, "p")
+		return parseBoundedStatsFunctionSuffix(name, "p")
 	default:
 		return 0, false
 	}
+}
+
+// parseBoundedStatsFunctionSuffix intentionally retains the current integer
+// 1..99 percentile surface. The pinned SPL1 pages disagree on broader suffix
+// ranges and percentile algorithms, so widening either requires oracle-backed
+// evidence rather than parser inference.
+func parseBoundedStatsFunctionSuffix(name, prefix string) (uint8, bool) {
+	if !strings.HasPrefix(name, prefix) {
+		return 0, false
+	}
+	suffix := strings.TrimPrefix(name, prefix)
 	if suffix == "" {
 		return 0, false
 	}
@@ -2819,6 +3613,9 @@ func parseStatsPercentileSuffix(name string) (uint8, bool) {
 }
 
 func supportedStatsAggregateName(name string) bool {
+	if strings.EqualFold(name, "sparkline") {
+		return true
+	}
 	_, supported := statsAggregateSpecForName(name)
 	return supported
 }
@@ -2827,6 +3624,7 @@ func (p *parser) parseBoundedAggregateGroupFields(
 	commandName string,
 	article string,
 	requireExactDistinctFields bool,
+	stopBeforeOption bool,
 	unsupportedSyntax func(token, string) *Diagnostic,
 ) ([]StatsGroupField, Position, error) {
 	fields := make([]StatsGroupField, 0, 4)
@@ -2837,6 +3635,10 @@ func (p *parser) parseBoundedAggregateGroupFields(
 	end := p.current().sourceRange.Start
 	wantField := true
 	for !p.atCommandEnd() {
+		if !wantField && stopBeforeOption &&
+			statsOptionFollowedByEqual(p.tokens, p.index) {
+			break
+		}
 		if p.current().kind == tokenScalarComposite {
 			if err := p.prepareSearchToken(); err != nil {
 				return nil, end, err
@@ -2854,19 +3656,28 @@ func (p *parser) parseBoundedAggregateGroupFields(
 			p.advance()
 			continue
 		}
-		if tok.kind != tokenWord {
+		quotedField := commandName == "stats" && tok.kind == tokenQuotedField
+		if quotedField {
+			if tok.scalarDiagnostic != nil {
+				return nil, end, tok.scalarDiagnostic
+			}
+			if err := validateQuotedFieldReference(tok); err != nil {
+				return nil, end, err
+			}
+		}
+		if tok.kind != tokenWord && !quotedField {
 			return nil, end, p.errorAtCurrent(
 				"SPL_EXPECTED_FIELD",
 				fmt.Sprintf("expected %s %s grouping field", article, commandName),
 			)
 		}
-		if strings.EqualFold(tok.text, "AS") {
+		if !quotedField && strings.EqualFold(tok.text, "AS") {
 			return nil, end, unsupportedSyntax(
 				tok,
 				fmt.Sprintf("%s %s aggregate alias must appear before the BY clause", article, commandName),
 			)
 		}
-		if requireExactDistinctFields && strings.Contains(tok.text, "*") {
+		if strings.Contains(tok.text, "*") {
 			return nil, end, unsupportedSyntax(
 				tok,
 				fmt.Sprintf("wildcard %s grouping fields are not supported", commandName),
@@ -2888,7 +3699,11 @@ func (p *parser) parseBoundedAggregateGroupFields(
 		if requireExactDistinctFields {
 			seen[tok.text] = struct{}{}
 		}
-		fields = append(fields, StatsGroupField{Name: tok.text, Range: tok.sourceRange})
+		fields = append(fields, StatsGroupField{
+			Name:   tok.text,
+			Quoted: quotedField,
+			Range:  tok.sourceRange,
+		})
 		end = tok.sourceRange.End
 		wantField = false
 		p.advance()
@@ -2908,6 +3723,17 @@ func (p *parser) unsupportedStatsGroupSyntax(tok token, message string) *Diagnos
 		Message:     message,
 		Range:       tok.sourceRange,
 		Suggestions: []string{"stats count AS total BY field"},
+	}
+}
+
+func (p *parser) unsupportedStatsOption(tok token, message string) *Diagnostic {
+	return &Diagnostic{
+		Code:    "SPL_UNSUPPORTED_STATS_SYNTAX",
+		Message: message,
+		Range:   tok.sourceRange,
+		Suggestions: []string{
+			"stats partitions=1 allnum=false delim=\",\" count BY field dedup_splitvals=false",
+		},
 	}
 }
 
@@ -3054,11 +3880,57 @@ func (p *parser) parseFieldsCommand(name token) (Command, error) {
 }
 
 func (p *parser) parseTableCommand(name token) (Command, error) {
-	fields, end, err := p.parseFieldList()
+	fields, quoted, ranges, end, err := p.parseTableFieldList()
 	if err != nil {
 		return nil, err
 	}
-	return &TableCommand{Fields: fields, Range: Range{Start: name.sourceRange.Start, End: end}}, nil
+	return &TableCommand{
+		Fields:       fields,
+		QuotedFields: quoted,
+		FieldRanges:  ranges,
+		Range:        Range{Start: name.sourceRange.Start, End: end},
+	}, nil
+}
+
+func (p *parser) parseTableFieldList() ([]string, []bool, []Range, Position, error) {
+	fields := make([]string, 0, 8)
+	quoted := make([]bool, 0, 8)
+	ranges := make([]Range, 0, 8)
+	end := p.current().sourceRange.Start
+	wantField := true
+	for !p.atCommandEnd() {
+		tok := p.current()
+		if tok.kind == tokenComma {
+			if wantField {
+				return nil, nil, nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a field name")
+			}
+			wantField = true
+			p.advance()
+			continue
+		}
+		isQuoted := tok.kind == tokenQuotedField
+		if isQuoted {
+			if tok.scalarDiagnostic != nil {
+				return nil, nil, nil, end, tok.scalarDiagnostic
+			}
+			if err := validateQuotedFieldReference(tok); err != nil {
+				return nil, nil, nil, end, err
+			}
+		}
+		if tok.kind != tokenWord && !isQuoted {
+			return nil, nil, nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a field name")
+		}
+		fields = append(fields, tok.text)
+		quoted = append(quoted, isQuoted)
+		ranges = append(ranges, tok.sourceRange)
+		end = tok.sourceRange.End
+		wantField = false
+		p.advance()
+	}
+	if len(fields) == 0 || wantField {
+		return nil, nil, nil, end, p.errorAtCurrent("SPL_EXPECTED_FIELD", "expected a field name")
+	}
+	return fields, quoted, ranges, end, nil
 }
 
 func (p *parser) parseFieldList() ([]string, Position, error) {
@@ -3868,11 +4740,11 @@ func (p *parser) parseScalarPrimaryV02() (ScalarExpr, error) {
 		return &ScalarLiteralExpr{Value: literal, Range: tok.sourceRange}, nil
 	}
 	if tok.kind == tokenQuotedField {
-		if err := validateQuotedScalarField(tok); err != nil {
+		if err := validateQuotedFieldReference(tok); err != nil {
 			return nil, err
 		}
 		p.advance()
-		return &ScalarFieldExpr{Field: tok.text, Range: tok.sourceRange}, nil
+		return &ScalarFieldExpr{Field: tok.text, Quoted: true, Range: tok.sourceRange}, nil
 	}
 	if tok.kind != tokenWord || p.isKeyword("AND") || p.isKeyword("OR") || p.isKeyword("NOT") {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_SCALAR_EXPRESSION", "expected a field, literal, supported function call, or grouped scalar expression")
@@ -3957,6 +4829,14 @@ func validateQuotedScalarField(tok token) error {
 		}
 	}
 	return nil
+}
+
+func validateQuotedFieldReference(tok token) error {
+	if IsExactQuotedFieldName(tok.text) ||
+		IsStatsLiteralFieldReference(tok.text) {
+		return nil
+	}
+	return validateQuotedScalarField(tok)
 }
 
 func unterminatedQuotedScalarField(tok token) *Diagnostic {

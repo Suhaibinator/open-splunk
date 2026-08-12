@@ -1132,7 +1132,6 @@ func TestParseStatsCountFieldRequiresExactlyOneExactField(t *testing.T) {
 		{name: "multiple fields", source: `index=main | stats count(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 		{name: "quoted field", source: `index=main | stats count("status")`, code: "SPL_EXPECTED_FIELD"},
 		{name: "missing right parenthesis", source: `index=main | stats count(status`, code: "SPL_EXPECTED_RIGHT_PAREN"},
-		{name: "bare abbreviation", source: `index=main | stats c`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
 		{name: "empty abbreviation", source: `index=main | stats c()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "abbreviated eval expression", source: `index=main | stats c(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
@@ -1331,7 +1330,6 @@ func TestParseStatsValuesRequiresExactlyOneField(t *testing.T) {
 		source string
 		code   string
 	}{
-		{name: "missing parentheses", source: `index=main | stats values`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
 		{name: "missing field", source: `index=main | stats values()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "multiple fields", source: `index=main | stats values(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
@@ -1383,7 +1381,6 @@ func TestParseStatsListRequiresExactlyOneField(t *testing.T) {
 		source string
 		code   string
 	}{
-		{name: "missing parentheses", source: `index=main | stats list`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
 		{name: "missing field", source: `index=main | stats list()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "multiple fields", source: `index=main | stats list(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
@@ -1412,7 +1409,6 @@ func TestParseStatsDistinctCountRequiresExactlyOneField(t *testing.T) {
 		source string
 		code   string
 	}{
-		{name: "missing parentheses", source: `index=main | stats dc`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
 		{name: "missing field", source: `index=main | stats distinct_count()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "multiple fields", source: `index=main | stats dc(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
@@ -1440,8 +1436,6 @@ func TestParseStatsSumAndAvgRequireExactlyOneField(t *testing.T) {
 		source string
 		code   string
 	}{
-		{name: "sum missing parentheses", source: `index=main | stats sum`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
-		{name: "avg missing parentheses", source: `index=main | stats avg`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
 		{name: "sum missing field", source: `index=main | stats sum()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "avg multiple fields", source: `index=main | stats avg(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 	}
@@ -1469,7 +1463,6 @@ func TestParseStatsMinAndMaxRequireExactlyOneField(t *testing.T) {
 		source string
 		code   string
 	}{
-		{name: "min missing parentheses", source: `index=main | stats min`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
 		{name: "max missing field", source: `index=main | stats max()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "min multiple fields", source: `index=main | stats min(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 		{name: "max eval expression", source: `index=main | stats max(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
@@ -1499,7 +1492,6 @@ func TestParseStatsEarliestAndLatestRequireExactlyOneField(t *testing.T) {
 		source string
 		code   string
 	}{
-		{name: "earliest missing parentheses", source: `index=main | stats earliest`, code: "SPL_UNSUPPORTED_STATS_SYNTAX"},
 		{name: "latest missing field", source: `index=main | stats latest()`, code: "SPL_EXPECTED_FIELD"},
 		{name: "earliest multiple fields", source: `index=main | stats earliest(left,right)`, code: "SPL_EXPECTED_RIGHT_PAREN"},
 		{name: "latest eval expression", source: `index=main | stats latest(eval(status=200))`, code: "SPL_EXPECTED_RIGHT_PAREN"},
@@ -2329,13 +2321,13 @@ func TestUnsupportedStatsAggregatesAreSourceLocated(t *testing.T) {
 		line   int
 		column int
 	}{
-		{"other function", "index=main\n| stats median(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
-		{"second aggregate", `* | stats count, median(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
-		{"space-separated aggregate", `* | stats count mode(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
-		{"first remains unsupported", `* | stats first(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
-		{"last remains unsupported", `* | stats last(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
-		{"earliest_time remains unsupported", `* | stats earliest_time(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
-		{"latest_time remains unsupported", `* | stats latest_time(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
+		{"other function", "index=main\n| stats geomean(bytes)", "SPL_UNSUPPORTED_STATS_AGGREGATE", 2, 9},
+		{"second aggregate", `* | stats count, geomean(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 18},
+		{"space-separated aggregate", `* | stats count geomean(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 17},
+		{"exact percentile missing suffix", `* | stats exactperc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
+		{"upper percentile missing suffix", `* | stats upperperc(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
+		{"exact percentile zero", `* | stats exactperc0(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
+		{"upper percentile one hundred", `* | stats upperperc100(host)`, "SPL_UNSUPPORTED_STATS_AGGREGATE", 1, 11},
 		{"missing AS", `* | stats count total`, "SPL_UNSUPPORTED_STATS_SYNTAX", 1, 17},
 		{"missing group field", `* | stats count by`, "SPL_EXPECTED_FIELD", 1, 19},
 	}

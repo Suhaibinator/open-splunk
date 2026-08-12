@@ -333,6 +333,13 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if query.Timechart != nil && query.Chart != nil {
 		return fmt.Errorf("%w: compiled query declares two wide result contracts", searchjobs.ErrInvalidResult)
 	}
+	resultPresentations, presentationsOK := query.ValidatedResultFieldPresentations()
+	if !presentationsOK {
+		return fmt.Errorf("%w: compiled result presentation contract is invalid", searchjobs.ErrInvalidResult)
+	}
+	if len(resultPresentations) != 0 && (query.Timechart != nil || query.Chart != nil) {
+		return fmt.Errorf("%w: wide result declares ordinary presentation metadata", searchjobs.ErrInvalidResult)
+	}
 	if query.Timechart != nil {
 		if err := validateTimechartOutput(query); err != nil {
 			return err
@@ -495,12 +502,37 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(query.OutputFields))}
 	for index, columnType := range columnTypes[:len(query.OutputFields)] {
 		kind, multivalue := schemaKind(columns[index], columnType.DatabaseTypeName())
-		schema.Columns[index] = searchjobs.Column{
+		column := searchjobs.Column{
 			Name:       columns[index],
 			Kind:       kind,
 			Nullable:   columnType.Nullable() || databaseTypeNullable(columnType.DatabaseTypeName()) || kind == searchjobs.ValueKindMixed,
 			Multivalue: multivalue,
 		}
+		if len(resultPresentations) != 0 {
+			presentation := resultPresentations[index]
+			if presentation.StatsSparkline {
+				if kind != searchjobs.ValueKindList || !multivalue {
+					return fmt.Errorf(
+						"%w: sparkline presentation metadata does not match column %q",
+						searchjobs.ErrInvalidResult,
+						columns[index],
+					)
+				}
+				column.StatsSparkline = true
+			}
+			if presentation.HasFlatMultivalueDelimiter {
+				if kind != searchjobs.ValueKindList || !multivalue {
+					return fmt.Errorf(
+						"%w: result presentation metadata does not match column %q",
+						searchjobs.ErrInvalidResult,
+						columns[index],
+					)
+				}
+				column.FlatMultivalueDelimiter = presentation.FlatMultivalueDelimiter
+				column.HasFlatMultivalueDelimiter = true
+			}
+		}
+		schema.Columns[index] = column
 	}
 	if err := executionContext.Err(); err != nil {
 		return err
@@ -709,6 +741,21 @@ func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
+	settings := executor.groupLimitSettingsFor(query)
+	hint, ok := query.StatsPartitionsMaxThreadsHint()
+	if !ok {
+		return settings
+	}
+	current, ok := settings["max_threads"].(uint64)
+	if !ok || current <= uint64(hint) {
+		return settings
+	}
+	bounded := maps.Clone(settings)
+	bounded["max_threads"] = uint64(hint)
+	return bounded
+}
+
+func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
 	percentileWide := (query.Timechart != nil &&
 		query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue &&
 		query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile) ||
@@ -2720,6 +2767,7 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.ChartRowLimitMarker, "chart row values exceeded the supported limit"},
 	{clickhouse.EventStatsInputLimitMarker, "eventstats input rows exceeded the supported limit"},
 	{clickhouse.StreamStatsInputLimitMarker, "streamstats input rows exceeded the supported limit"},
+	{clickhouse.StatsMultivalueByExpansionLimitMarker, "stats multivalue BY expansion exceeded the per-event limit"},
 	{clickhouse.ExactDistinctLimitMarker, "exact distinct values exceeded the supported limit"},
 	{clickhouse.StatsValuesBytesLimitMarker, "stats values bytes exceeded the supported limit"},
 	{clickhouse.StatsValuesLimitMarker, "stats values exceeded the supported limit"},
@@ -2729,6 +2777,8 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.EventStatsListLimitMarker, "eventstats list exceeded the supported limit"},
 	{clickhouse.StatsListBytesLimitMarker, "stats list bytes exceeded the supported limit"},
 	{clickhouse.StatsListLimitMarker, "stats list exceeded the supported result limit"},
+	{clickhouse.StatsSparklineBytesLimitMarker, "stats sparkline bytes exceeded the supported limit"},
+	{clickhouse.StatsSparklineLimitMarker, "stats sparkline exceeded the supported limit"},
 	{clickhouse.KnowledgeSelectorValueLimitMarker, "knowledge selector value bytes exceeded the per-value limit"},
 	{clickhouse.KnowledgeSelectorEventLimitMarker, "knowledge selector input bytes exceeded the per-event limit"},
 	{clickhouse.KnowledgeSelectorQueryLimitMarker, "knowledge selector work exceeded the per-query limit"},

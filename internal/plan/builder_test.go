@@ -790,7 +790,7 @@ func TestBuildRejectsForgedStatsRequiredInputMetadata(t *testing.T) {
 	}
 }
 
-func TestBuildStatsAggregatesRequireExactInputFields(t *testing.T) {
+func TestBuildStatsWildcardInputsRequireClosedSchema(t *testing.T) {
 	t.Parallel()
 
 	for _, source := range []string{
@@ -808,8 +808,11 @@ func TestBuildStatsAggregatesRequireExactInputFields(t *testing.T) {
 		`index=gradethis | stats values(request*)`,
 		`index=gradethis | stats list(request*)`,
 	} {
-		_, err := Build(mustParse(t, source), testScope([]string{"gradethis"}, nil))
-		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_FIELD_PATTERN")
+		_, err := Build(
+			mustParse(t, source),
+			testScope([]string{"gradethis"}, nil),
+		)
+		assertDiagnosticCode(t, err, "SPL_UNSUPPORTED_STATS_WILDCARD")
 	}
 }
 

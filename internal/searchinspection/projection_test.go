@@ -27,6 +27,14 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve chart column field: %v", err)
 	}
+	aggregateGroup, err := plan.ResolveField("host", spl.Range{})
+	if err != nil {
+		t.Fatalf("resolve aggregate group field: %v", err)
+	}
+	aggregateInput, err := plan.ResolveField("bytes", spl.Range{})
+	if err != nil {
+		t.Fatalf("resolve aggregate input field: %v", err)
+	}
 	query := &plan.Query{
 		Operators: []plan.Operator{
 			&plan.Scan{Range: sourceRange},
@@ -80,10 +88,10 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 				Range: sourceRange,
 			},
 			&plan.Aggregate{
-				GroupBy: []plan.FieldRef{{Name: "host"}},
+				GroupBy: []plan.FieldRef{aggregateGroup},
 				Measures: []plan.AggregateMeasure{
 					{Function: plan.AggregateFunctionCountRows, Output: "events"},
-					{Function: plan.AggregateFunctionSum, Input: plan.FieldRef{Name: "bytes"}, Output: "total_bytes"},
+					{Function: plan.AggregateFunctionSum, Input: aggregateInput, Output: "total_bytes"},
 				},
 				Range: sourceRange,
 			},

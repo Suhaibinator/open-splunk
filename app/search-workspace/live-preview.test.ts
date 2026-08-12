@@ -19,6 +19,7 @@ import {
   type TypedValue,
 } from "../../gen/ts/open_splunk/v1/value";
 import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../../lib/api/pagination";
+import { MAXIMUM_FLAT_MULTIVALUE_DELIMITER_BYTES } from "../../lib/api/result-column-presentation";
 import {
   applyLiveResultPreview,
   validateLivePreviewSchema,
@@ -39,6 +40,7 @@ function column(overrides: Partial<ResultColumn> = {}): ResultColumn {
     nullable: false,
     multivalue: false,
     hiddenByDefault: false,
+	statsSparkline: false,
     ...overrides,
   };
 }
@@ -127,6 +129,22 @@ test("validates schema identity, revision, columns, and supported types", () => 
       (_, index) => column({ fieldName: `field-${index}` }),
     ),
   })) ?? "", /65 columns.*supports 1–64/);
+});
+
+test("validates presence-sensitive flat multivalue presentation metadata", () => {
+  const listColumn = column({
+    fieldName: "users",
+    valueType: ValueType.VALUE_TYPE_LIST,
+    multivalue: true,
+    flatMultivalueDelimiter: "",
+  });
+  assert.equal(validateLivePreviewSchema(schema({ columns: [listColumn] })), null);
+  assert.match(validateLivePreviewSchema(schema({
+    columns: [{ ...listColumn, valueType: ValueType.VALUE_TYPE_STRING }],
+  })) ?? "", /multivalue presentation/);
+  assert.match(validateLivePreviewSchema(schema({
+    columns: [{ ...listColumn, flatMultivalueDelimiter: "x".repeat(MAXIMUM_FLAT_MULTIVALUE_DELIMITER_BYTES + 1) }],
+  })) ?? "", /multivalue presentation/);
 });
 
 test("schema and object field names preserve whitespace but reject empty names", () => {

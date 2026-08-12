@@ -488,7 +488,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				canonicalTimeAvailable = false
 			}
 		case *spl.TableCommand:
-			fields, fieldErr := convertFields(command.Fields, command.Range)
+			fields, fieldErr := convertTableFields(command)
 			if fieldErr != nil {
 				return nil, fieldErr
 			}
@@ -567,6 +567,22 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 			}
 			aggregate := command.Aggregate
+			if aggregate.Sparkline != nil {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+					Message: "sparkline is supported only by stats in this compatibility slice",
+					Range:   aggregate.Range,
+				}
+			}
+			if aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+				aggregate.InputQuoted || aggregate.AliasQuoted ||
+				aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+					Message: "quoted stats-only field provenance is not supported by eventstats",
+					Range:   aggregate.Range,
+				}
+			}
 			if aggregate.Alias == "" {
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
@@ -579,6 +595,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			case spl.AggregateFunctionCount:
 				if aggregate.Input != "" ||
 					aggregate.InputRange != (spl.Range{}) ||
+					aggregate.InputExpression != nil ||
 					aggregate.Predicate != nil ||
 					aggregate.Percentile != 0 ||
 					(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
@@ -801,11 +818,28 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 
 			aggregate := command.Aggregate
+			if aggregate.Sparkline != nil {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+					Message: "sparkline is supported only by stats in this compatibility slice",
+					Range:   aggregate.Range,
+				}
+			}
+			if aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+				aggregate.InputQuoted || aggregate.AliasQuoted ||
+				aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+					Message: "quoted stats-only field provenance is not supported by streamstats",
+					Range:   aggregate.Range,
+				}
+			}
 			measure := AggregateMeasure{Output: aggregate.Alias}
 			switch aggregate.Function {
 			case spl.AggregateFunctionCount:
 				if aggregate.Input != "" ||
 					aggregate.InputRange != (spl.Range{}) ||
+					aggregate.InputExpression != nil ||
 					aggregate.Predicate != nil ||
 					aggregate.Percentile != 0 ||
 					aggregate.Alias == "" ||
@@ -864,6 +898,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				if aggregate.Input == "" ||
 					aggregate.InputRange == (spl.Range{}) ||
+					aggregate.InputExpression != nil ||
 					aggregate.Predicate != nil ||
 					aggregate.Percentile != 0 ||
 					aggregate.Alias == "" ||
@@ -950,7 +985,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, aliasErr
 			}
 			for _, group := range command.GroupBy {
-				if !validStreamAggregateFieldName(group.Name) {
+				if group.Quoted || !validStreamAggregateFieldName(group.Name) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
 						Message: "streamstats BY requires exact unquoted grouping fields",
@@ -1008,6 +1043,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:   command.Range,
 				}
 			}
+			aggregates, wildcardErr := expandStatsWildcardAggregates(
+				command.Aggregates,
+				outputSchemaKnown,
+				result.OutputFields,
+			)
+			if wildcardErr != nil {
+				return nil, wildcardErr
+			}
 			if len(command.GroupBy) > spl.MaximumStatsGroupFields {
 				return nil, &Diagnostic{
 					Code:    "SPL_QUERY_TOO_COMPLEX",
@@ -1015,13 +1058,25 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:   command.Range,
 				}
 			}
+			statsOptions, optionsErr := buildStatsOptions(
+				command.Options,
+				command.Range,
+			)
+			if optionsErr != nil {
+				return nil, optionsErr
+			}
 			if !outputSchemaKnown {
-				for _, aggregate := range command.Aggregates {
-					if aggregate.Input == "fields" {
+				for _, aggregate := range aggregates {
+					if aggregate.Input == "fields" ||
+						(aggregate.Sparkline != nil && aggregate.Sparkline.Input == "fields") {
+						inputRange := aggregate.InputRange
+						if aggregate.Sparkline != nil {
+							inputRange = aggregate.Sparkline.InputRange
+						}
 						return nil, &Diagnostic{
 							Code:    "SPL_AMBIGUOUS_STATS_FIELD",
 							Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-							Range:   aggregate.InputRange,
+							Range:   inputRange,
 						}
 					}
 				}
@@ -1042,14 +1097,51 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if groupErr != nil {
 				return nil, groupErr
 			}
-			seenOutputs := make(map[string]struct{}, len(groupBy)+len(command.Aggregates))
-			outputFields := make([]string, 0, len(groupBy)+len(command.Aggregates))
+			seenOutputs := make(map[string]struct{}, len(groupBy)+len(aggregates))
+			outputFields := make([]string, 0, len(groupBy)+len(aggregates))
 			for _, group := range groupBy {
 				seenOutputs[group.Name] = struct{}{}
 				outputFields = append(outputFields, group.Name)
 			}
-			measures := make([]AggregateMeasure, 0, len(command.Aggregates))
-			for _, aggregate := range command.Aggregates {
+			measures := make([]AggregateMeasure, 0, len(aggregates))
+			seenSources := make([]AggregateMeasure, 0, len(aggregates))
+			for _, aggregate := range aggregates {
+				if aggregate.InputGlob != nil || aggregate.AliasGlob != nil {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "unexpanded stats wc-field metadata is invalid",
+						Range:   aggregate.Range,
+					}
+				}
+				if aggregate.Sparkline != nil &&
+					(aggregate.Function != spl.AggregateFunctionInvalid ||
+						aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) ||
+						aggregate.InputQuoted ||
+						aggregate.InputExpression != nil || aggregate.Predicate != nil ||
+						aggregate.Percentile != 0) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "sparkline metadata is mutually exclusive with ordinary aggregate metadata",
+						Range:   aggregate.Range,
+					}
+				}
+				if aggregate.InputExpression != nil &&
+					nilSPLScalarExpression(aggregate.InputExpression) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "stats aggregate contains a missing scalar input expression",
+						Range:   aggregate.Range,
+					}
+				}
+				if aggregate.InputExpression != nil &&
+					(aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) ||
+						aggregate.InputQuoted || aggregate.Predicate != nil) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "stats aggregate scalar input is mutually exclusive with exact-field and predicate metadata",
+						Range:   aggregate.Range,
+					}
+				}
 				if aggregate.Function != spl.AggregateFunctionCountPredicate &&
 					aggregate.Predicate != nil {
 					return nil, &Diagnostic{
@@ -1058,7 +1150,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						Range:   aggregate.Range,
 					}
 				}
-				if aggregate.Function == spl.AggregateFunctionPercentile {
+				if aggregate.Input == "" && aggregate.InputQuoted {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "stats aggregate contains quoted-input provenance without an exact input field",
+						Range:   aggregate.Range,
+					}
+				}
+				if statsAggregateUsesPercentileSuffix(aggregate.Function) {
 					if aggregate.Percentile < 1 || aggregate.Percentile > 99 {
 						return nil, &Diagnostic{
 							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
@@ -1069,11 +1168,84 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				} else if aggregate.Percentile != 0 {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-						Message: "non-percentile stats aggregate contains percentile metadata",
+						Message: "stats aggregate without a percentile suffix contains percentile metadata",
 						Range:   aggregate.Range,
 					}
 				}
-				if _, aliasErr := ResolveField(aggregate.Alias, aggregate.AliasRange); aliasErr != nil {
+				if aggregate.Sparkline != nil {
+					validAliasMetadata := aggregate.Alias != "" &&
+						aggregate.AliasRange != (spl.Range{}) &&
+						aggregate.Range != (spl.Range{}) &&
+						aggregate.Range.Start == aggregate.Sparkline.Range.Start
+					if aggregate.ExplicitAlias {
+						validAliasMetadata = validAliasMetadata &&
+							aggregate.Range.End == aggregate.AliasRange.End
+					} else {
+						validAliasMetadata = validAliasMetadata &&
+							aggregate.Alias == "sparkline" &&
+							aggregate.Range == aggregate.Sparkline.Range &&
+							aggregate.AliasRange == aggregate.Sparkline.Range
+					}
+					if !validAliasMetadata {
+						return nil, &Diagnostic{
+							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+							Message: "stats sparkline alias metadata is invalid",
+							Range:   aggregate.Range,
+						}
+					}
+				}
+				if aggregate.AliasQuoted &&
+					(!aggregate.ExplicitAlias || aggregate.AliasSourceDerived ||
+						aggregate.AliasWildcardDerived) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "quoted stats output provenance requires an explicit AS alias",
+						Range:   aggregate.AliasRange,
+					}
+				}
+				if aggregate.AliasSourceDerived &&
+					(aggregate.ExplicitAlias || aggregate.AliasQuoted ||
+						aggregate.AliasWildcardDerived ||
+						(aggregate.InputExpression == nil &&
+							aggregate.Function != spl.AggregateFunctionCountPredicate) ||
+						aggregate.Range == (spl.Range{}) ||
+						aggregate.AliasRange != aggregate.Range) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "source-derived stats output provenance is invalid",
+						Range:   aggregate.AliasRange,
+					}
+				}
+				if aggregate.AliasWildcardDerived &&
+					!spl.ValidStatsWildcardDerivedAlias(aggregate) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "wc-field-derived stats output provenance is invalid",
+						Range:   aggregate.AliasRange,
+					}
+				}
+				hasEvalSource := aggregate.InputExpression != nil ||
+					aggregate.Function == spl.AggregateFunctionCountPredicate
+				if hasEvalSource && !aggregate.ExplicitAlias &&
+					!aggregate.AliasSourceDerived && !aggregate.AliasWildcardDerived {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "implicit stats eval output requires source-derived alias provenance",
+						Range:   aggregate.AliasRange,
+					}
+				}
+				literalOutput := aggregate.AliasQuoted || aggregate.AliasSourceDerived ||
+					aggregate.AliasWildcardDerived
+				if literalOutput {
+					if aggregate.AliasRange == (spl.Range{}) ||
+						!spl.IsStatsLiteralOutputName(aggregate.Alias) {
+						return nil, &Diagnostic{
+							Code:    "SPL_INVALID_FIELD",
+							Message: "stats literal output field is empty, invalid, private, reserved, or too long",
+							Range:   aggregate.AliasRange,
+						}
+					}
+				} else if _, aliasErr := ResolveField(aggregate.Alias, aggregate.AliasRange); aliasErr != nil {
 					return nil, aliasErr
 				}
 				if _, duplicate := seenOutputs[aggregate.Alias]; duplicate {
@@ -1084,115 +1256,212 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 				seenOutputs[aggregate.Alias] = struct{}{}
-				measure := AggregateMeasure{Output: aggregate.Alias}
-				switch aggregate.Function {
-				case spl.AggregateFunctionCount:
-					if aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) {
+				measure := AggregateMeasure{
+					Output:        aggregate.Alias,
+					OutputLiteral: literalOutput,
+				}
+				if aggregate.Sparkline != nil {
+					if !canonicalTimeAvailable {
 						return nil, &Diagnostic{
-							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							Message: "argument-free count cannot contain input metadata",
-							Range:   aggregate.Range,
+							Code:    "SPL_UNSUPPORTED_STATS_TIME_FIELD",
+							Message: "stats sparkline requires the unmodified canonical _time field",
+							Range:   aggregate.Sparkline.Range,
+							Suggestions: []string{
+								"run stats sparkline before removing, replacing, or transforming _time",
+							},
 						}
 					}
-					measure.Function = AggregateFunctionCountRows
-				case spl.AggregateFunctionCountPredicate:
-					predicateMeasure, predicateErr := buildCountPredicateMeasure(
-						aggregate,
-						outputSchemaKnown,
-						&expressionBudget,
-						countPredicateMeasureDiagnostics{
-							unsupportedCode: "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							invalidMessage:  "count(eval(...)) requires one predicate, an explicit alias, and no field or percentile metadata",
-							ambiguousCode:   "SPL_AMBIGUOUS_STATS_FIELD",
-							reservedMessage: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-						},
+					sparkline, sparklineErr := buildStatsSparklineMeasure(
+						aggregate.Sparkline,
 					)
-					if predicateErr != nil {
-						return nil, predicateErr
+					if sparklineErr != nil {
+						return nil, sparklineErr
 					}
-					measure = predicateMeasure
-				case spl.AggregateFunctionCountValues:
-					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
-						return nil, &Diagnostic{
-							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							Message: "count(field) requires one exact input field",
-							Range:   aggregate.Range,
-						}
-					}
-					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
-					if inputErr != nil {
-						return nil, inputErr
-					}
-					measure.Function = AggregateFunctionCountValues
-					measure.Input = input
-				case spl.AggregateFunctionPercentile, spl.AggregateFunctionSum,
-					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount,
-					spl.AggregateFunctionValues, spl.AggregateFunctionList,
-					spl.AggregateFunctionMinimum,
-					spl.AggregateFunctionMaximum,
-					spl.AggregateFunctionEarliest,
-					spl.AggregateFunctionLatest:
-					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
-						return nil, &Diagnostic{
-							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							Message: "stats aggregate requires one exact input field",
-							Range:   aggregate.Range,
-						}
-					}
-					if (aggregate.Function == spl.AggregateFunctionEarliest ||
-						aggregate.Function == spl.AggregateFunctionLatest) &&
-						!canonicalTimeAvailable {
-						return nil, &Diagnostic{
-							Code:        "SPL_UNSUPPORTED_STATS_TIME_FIELD",
-							Message:     "earliest and latest require the unmodified canonical _time field",
-							Range:       aggregate.Range,
-							Suggestions: []string{"run stats earliest or latest before removing, replacing, or transforming _time"},
-						}
-					}
-					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
-					if inputErr != nil {
-						return nil, inputErr
-					}
-					measure.Input = input
+					measure.Sparkline = sparkline
+				} else {
 					switch aggregate.Function {
-					case spl.AggregateFunctionPercentile:
-						measure.Function = AggregateFunctionPercentile
-						measure.Percentile = aggregate.Percentile
-					case spl.AggregateFunctionSum:
-						measure.Function = AggregateFunctionSum
-					case spl.AggregateFunctionAverage:
-						measure.Function = AggregateFunctionAverage
-					case spl.AggregateFunctionDistinctCount:
-						measure.Function = AggregateFunctionDistinctCount
-					case spl.AggregateFunctionValues:
-						measure.Function = AggregateFunctionValues
-					case spl.AggregateFunctionList:
-						measure.Function = AggregateFunctionList
-					case spl.AggregateFunctionMinimum:
-						measure.Function = AggregateFunctionMinimum
-					case spl.AggregateFunctionMaximum:
-						measure.Function = AggregateFunctionMaximum
-					case spl.AggregateFunctionEarliest:
-						measure.Function = AggregateFunctionEarliest
-					case spl.AggregateFunctionLatest:
-						measure.Function = AggregateFunctionLatest
-					}
-				default:
-					return nil, &Diagnostic{
-						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-						Message: "unsupported stats aggregate",
-						Range:   aggregate.Range,
+					case spl.AggregateFunctionCount:
+						if aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) ||
+							aggregate.InputQuoted || aggregate.InputExpression != nil {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "argument-free count cannot contain input metadata",
+								Range:   aggregate.Range,
+							}
+						}
+						measure.Function = AggregateFunctionCountRows
+					case spl.AggregateFunctionCountPredicate:
+						predicateMeasure, predicateErr := buildCountPredicateMeasure(
+							aggregate,
+							outputSchemaKnown,
+							&expressionBudget,
+							countPredicateMeasureDiagnostics{
+								unsupportedCode:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								invalidMessage:     "count(eval(...)) requires one predicate, a valid explicit or source-derived output, and no field or percentile metadata",
+								ambiguousCode:      "SPL_AMBIGUOUS_STATS_FIELD",
+								reservedMessage:    "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+								allowImplicitAlias: true,
+							},
+						)
+						if predicateErr != nil {
+							return nil, predicateErr
+						}
+						measure = predicateMeasure
+					case spl.AggregateFunctionCountValues:
+						if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) ||
+							aggregate.InputExpression != nil {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "count(field) requires one exact input field",
+								Range:   aggregate.Range,
+							}
+						}
+						if aggregate.InputQuoted {
+							if !spl.IsStatsLiteralFieldReference(aggregate.Input) {
+								return nil, &Diagnostic{
+									Code:    "SPL_INVALID_FIELD",
+									Message: "quoted stats aggregate input is invalid",
+									Range:   aggregate.InputRange,
+								}
+							}
+						} else if !spl.IsExactUnquotedFieldName(aggregate.Input) {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "stats aggregate input is not an exact unquoted field",
+								Range:   aggregate.InputRange,
+							}
+						}
+						input, inputErr := resolveStatsInputField(
+							aggregate.Input,
+							aggregate.InputRange,
+							aggregate.InputQuoted,
+						)
+						if inputErr != nil {
+							return nil, inputErr
+						}
+						measure.Function = AggregateFunctionCountValues
+						measure.Input = input
+					default:
+						function, supported := convertStatsFieldAggregateFunction(
+							aggregate.Function,
+						)
+						if !supported {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "unsupported stats aggregate",
+								Range:   aggregate.Range,
+							}
+						}
+						hasExactInput := aggregate.Input != "" ||
+							aggregate.InputRange != (spl.Range{})
+						hasExpressionInput := aggregate.InputExpression != nil
+						if hasExactInput == hasExpressionInput ||
+							(hasExactInput && (aggregate.Input == "" ||
+								aggregate.InputRange == (spl.Range{}))) {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "stats aggregate requires exactly one exact-field or eval scalar input",
+								Range:   aggregate.Range,
+							}
+						}
+						if statsAggregateRequiresCanonicalTime(aggregate.Function) &&
+							!canonicalTimeAvailable {
+							return nil, &Diagnostic{
+								Code: "SPL_UNSUPPORTED_STATS_TIME_FIELD",
+								Message: "time-sensitive stats aggregates require the " +
+									"unmodified canonical _time field",
+								Range: aggregate.Range,
+								Suggestions: []string{
+									"run stats earliest or latest before removing, replacing, or transforming _time",
+									"run the time-sensitive stats aggregate before removing, replacing, or transforming _time",
+								},
+							}
+						}
+						measure.Function = function
+						if hasExpressionInput {
+							if complexityErr := validateSPLScalarExpressionComplexity(
+								aggregate.InputExpression,
+								&expressionBudget,
+							); complexityErr != nil {
+								return nil, complexityErr
+							}
+							expression, expressionErr := convertScalarExpressionUnchecked(
+								aggregate.InputExpression,
+							)
+							if expressionErr != nil {
+								return nil, expressionErr
+							}
+							if !outputSchemaKnown {
+								fieldRange, referencesReserved, inventoryErr := predicateFieldRange(
+									&ScalarPredicateExpression{
+										Value: expression,
+										Range: expression.SourceRange(),
+									},
+									"fields",
+								)
+								if inventoryErr != nil {
+									return nil, inventoryErr
+								}
+								if referencesReserved {
+									return nil, &Diagnostic{
+										Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+										Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+										Range:   fieldRange,
+									}
+								}
+							}
+							measure.InputExpression = expression
+						} else {
+							if aggregate.InputQuoted {
+								if !spl.IsStatsLiteralFieldReference(aggregate.Input) {
+									return nil, &Diagnostic{
+										Code:    "SPL_INVALID_FIELD",
+										Message: "quoted stats aggregate input is invalid",
+										Range:   aggregate.InputRange,
+									}
+								}
+							} else if !spl.IsExactUnquotedFieldName(aggregate.Input) {
+								return nil, &Diagnostic{
+									Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+									Message: "stats aggregate input is not an exact unquoted field",
+									Range:   aggregate.InputRange,
+								}
+							}
+							input, inputErr := resolveStatsInputField(
+								aggregate.Input,
+								aggregate.InputRange,
+								aggregate.InputQuoted,
+							)
+							if inputErr != nil {
+								return nil, inputErr
+							}
+							measure.Input = input
+						}
+						if statsAggregateUsesPercentileSuffix(aggregate.Function) {
+							measure.Percentile = aggregate.Percentile
+						}
 					}
 				}
+				for _, source := range seenSources {
+					if sameStatsAggregateSource(source, measure) {
+						return nil, &Diagnostic{
+							Code:    "SPL_DUPLICATE_STATS_AGGREGATE",
+							Message: "the same stats aggregate source cannot be renamed to multiple output fields",
+							Range:   aggregate.Range,
+						}
+					}
+				}
+				seenSources = append(seenSources, measure)
 				measures = append(measures, measure)
 				outputFields = append(outputFields, aggregate.Alias)
 			}
 			result.OutputFields = outputFields
 			outputSchemaKnown = true
 			result.Operators = append(result.Operators, &Aggregate{
-				GroupBy:  groupBy,
-				Measures: measures,
-				Range:    command.Range,
+				GroupBy:      groupBy,
+				Measures:     measures,
+				StatsOptions: statsOptions,
+				Range:        command.Range,
 			})
 			canonicalTimeAvailable = false
 		case *spl.TopCommand, *spl.RareCommand:
@@ -1346,6 +1615,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			var split *TimechartSplit
 			if command.SplitBy != nil {
+				if command.SplitBy.Quoted {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_TIMECHART_FIELD_TYPE",
+						Message: "timechart split fields must use unquoted exact-field syntax",
+						Range:   command.SplitBy.Range,
+					}
+				}
 				resolved, splitErr := ResolveField(
 					command.SplitBy.Name,
 					command.SplitBy.Range,
@@ -1410,6 +1686,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			// always reachable public column names. A field spelled like one
 			// of them would collide with a series deterministically.
 			for _, axis := range []spl.StatsGroupField{command.Over, command.SplitBy} {
+				if axis.Quoted {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+						Message: "chart axes must use unquoted exact-field syntax",
+						Range:   axis.Range,
+					}
+				}
 				if axis.Name == "NULL" || axis.Name == "OTHER" {
 					return nil, &Diagnostic{
 						Code:        "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
@@ -1483,6 +1766,9 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 		result.parsedEvalPredicates = predicates
 		result.parsedSPL = true
 	}
+	if sourceDigest, ok := query.ParsedSourceDigest(); ok {
+		result.parsedSourceDigest = sourceDigest
+	}
 	return result, nil
 }
 
@@ -1505,7 +1791,11 @@ func buildChartMeasure(
 		}
 	}
 	if aggregate.Range == (spl.Range{}) || aggregate.AliasRange == (spl.Range{}) ||
-		aggregate.Predicate != nil {
+		aggregate.Sparkline != nil ||
+		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+		aggregate.Predicate != nil || aggregate.InputExpression != nil ||
+		aggregate.InputQuoted || aggregate.AliasQuoted ||
+		aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
 		return invalid("chart aggregate metadata is invalid")
 	}
 
@@ -1587,10 +1877,14 @@ func buildTimechartMeasure(
 		}
 	}
 	aggregate := command.Aggregate
-	if aggregate.Predicate != nil {
+	if aggregate.Sparkline != nil ||
+		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+		aggregate.Predicate != nil || aggregate.InputExpression != nil ||
+		aggregate.InputQuoted || aggregate.AliasQuoted ||
+		aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
 		return AggregateMeasure{}, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
-			Message: "timechart aggregate cannot contain predicate metadata",
+			Message: "timechart aggregate cannot contain predicate or scalar-expression metadata",
 			Range:   aggregate.Range,
 		}
 	}
@@ -1997,6 +2291,22 @@ func convertStatsGroupFields(
 	result := make([]FieldRef, 0, len(fields))
 	seen := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
+		if field.Quoted {
+			if commandName != "stats" || !spl.IsStatsLiteralFieldReference(field.Name) {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_FIELD",
+					Message: commandName + " grouping field has invalid quoted-field provenance",
+					Range:   field.Range,
+				}
+			}
+		} else if commandName == "stats" &&
+			!spl.IsExactUnquotedFieldName(field.Name) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STATS_SYNTAX",
+				Message: "stats BY requires exact quoted or unquoted fields; wildcard fields are not supported",
+				Range:   field.Range,
+			}
+		}
 		if _, duplicate := seen[field.Name]; duplicate {
 			return nil, &Diagnostic{
 				Code: "SPL_DUPLICATE_FIELD",
@@ -2009,7 +2319,7 @@ func convertStatsGroupFields(
 			}
 		}
 		seen[field.Name] = struct{}{}
-		resolved, err := ResolveField(field.Name, field.Range)
+		resolved, err := resolveStatsInputField(field.Name, field.Range, field.Quoted)
 		if err != nil {
 			return nil, err
 		}
@@ -2824,6 +3134,343 @@ func splExpressionComplexityError(message string, sourceRange spl.Range) error {
 	}
 }
 
+func statsAggregateUsesPercentileSuffix(function spl.AggregateFunction) bool {
+	switch function {
+	case spl.AggregateFunctionPercentile,
+		spl.AggregateFunctionExactPercentile,
+		spl.AggregateFunctionUpperPercentile:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildStatsSparklineMeasure(
+	spec *spl.StatsSparkline,
+) (*SparklineMeasure, error) {
+	if spec == nil || spec.Range == (spl.Range{}) {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: "stats sparkline metadata is missing",
+		}
+	}
+	span, spanErr := convertStatsSparklineSpan(spec.Span, spec.Range)
+	if spanErr != nil {
+		return nil, spanErr
+	}
+	function, requiresInput, supported := convertStatsSparklineFunction(spec.Function)
+	if !supported {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: "unsupported aggregate inside stats sparkline",
+			Range:   spec.Range,
+		}
+	}
+	hasInput := spec.Input != "" || spec.InputQuoted ||
+		spec.InputRange != (spl.Range{}) || spec.InputGlob != nil
+	if spec.InputGlob != nil {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: "stats sparkline contains unexpanded wc-field metadata",
+			Range:   spec.InputGlob.Range,
+		}
+	}
+	if hasInput != requiresInput ||
+		(hasInput && (spec.Input == "" || spec.InputRange == (spl.Range{}))) {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: "stats sparkline inner aggregate contains invalid input metadata",
+			Range:   spec.Range,
+		}
+	}
+	var input FieldRef
+	if hasInput {
+		if spec.InputQuoted {
+			if !spl.IsStatsLiteralFieldReference(spec.Input) {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_FIELD",
+					Message: "quoted stats sparkline input is invalid",
+					Range:   spec.InputRange,
+				}
+			}
+		} else if !spl.IsExactUnquotedFieldName(spec.Input) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+				Message: "stats sparkline input is not an exact unquoted field",
+				Range:   spec.InputRange,
+			}
+		}
+		var inputErr error
+		input, inputErr = resolveStatsInputField(
+			spec.Input,
+			spec.InputRange,
+			spec.InputQuoted,
+		)
+		if inputErr != nil {
+			return nil, inputErr
+		}
+	}
+	timeField, timeErr := ResolveField("_time", spec.Range)
+	if timeErr != nil {
+		return nil, timeErr
+	}
+	return &SparklineMeasure{
+		Function:      function,
+		Input:         input,
+		Time:          timeField,
+		Span:          span,
+		MaximumPoints: spl.MaximumStatsSparklinePoints,
+	}, nil
+}
+
+func convertStatsSparklineFunction(
+	function spl.AggregateFunction,
+) (AggregateFunction, bool, bool) {
+	switch function {
+	case spl.AggregateFunctionCount:
+		return AggregateFunctionCountRows, false, true
+	case spl.AggregateFunctionCountValues:
+		return AggregateFunctionCountValues, true, true
+	case spl.AggregateFunctionDistinctCount:
+		return AggregateFunctionDistinctCount, true, true
+	case spl.AggregateFunctionAverage:
+		return AggregateFunctionAverage, true, true
+	case spl.AggregateFunctionStandardDeviationSample:
+		return AggregateFunctionStandardDeviationSample, true, true
+	case spl.AggregateFunctionStandardDeviationPopulation:
+		return AggregateFunctionStandardDeviationPopulation, true, true
+	case spl.AggregateFunctionVarianceSample:
+		return AggregateFunctionVarianceSample, true, true
+	case spl.AggregateFunctionVariancePopulation:
+		return AggregateFunctionVariancePopulation, true, true
+	case spl.AggregateFunctionSum:
+		return AggregateFunctionSum, true, true
+	case spl.AggregateFunctionSumSquares:
+		return AggregateFunctionSumSquares, true, true
+	case spl.AggregateFunctionMinimum:
+		return AggregateFunctionMinimum, true, true
+	case spl.AggregateFunctionMaximum:
+		return AggregateFunctionMaximum, true, true
+	case spl.AggregateFunctionRange:
+		return AggregateFunctionRange, true, true
+	default:
+		return AggregateFunctionInvalid, false, false
+	}
+}
+
+func convertStatsSparklineSpan(
+	span spl.SparklineSpan,
+	sourceRange spl.Range,
+) (SparklineSpan, error) {
+	invalid := func(message string) (SparklineSpan, error) {
+		return SparklineSpan{}, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: message,
+			Range:   sourceRange,
+		}
+	}
+	switch span.Kind {
+	case spl.SparklineSpanKindAutomatic:
+		if span.Magnitude != 0 || span.Unit != spl.SparklineSpanUnitInvalid ||
+			span.Range != (spl.Range{}) {
+			return invalid("automatic stats sparkline span contains explicit metadata")
+		}
+		return SparklineSpan{Kind: SparklineSpanKindAutomatic}, nil
+	case spl.SparklineSpanKindExplicit:
+		if span.Magnitude == 0 || span.Range == (spl.Range{}) {
+			return invalid("explicit stats sparkline span metadata is incomplete")
+		}
+		unit, unitsPerSecond, supported := convertStatsSparklineSpanUnit(span.Unit)
+		if !supported {
+			return invalid("explicit stats sparkline span unit is invalid")
+		}
+		if unitsPerSecond != 0 &&
+			(span.Magnitude >= unitsPerSecond || unitsPerSecond%span.Magnitude != 0) {
+			return invalid("stats sparkline subsecond span must divide one second evenly")
+		}
+		return SparklineSpan{
+			Kind:      SparklineSpanKindExplicit,
+			Magnitude: span.Magnitude,
+			Unit:      unit,
+		}, nil
+	default:
+		return invalid("stats sparkline span kind is invalid")
+	}
+}
+
+func convertStatsSparklineSpanUnit(
+	unit spl.SparklineSpanUnit,
+) (SparklineSpanUnit, uint64, bool) {
+	switch unit {
+	case spl.SparklineSpanUnitMicrosecond:
+		return SparklineSpanUnitMicrosecond, 1_000_000, true
+	case spl.SparklineSpanUnitMillisecond:
+		return SparklineSpanUnitMillisecond, 1_000, true
+	case spl.SparklineSpanUnitCentisecond:
+		return SparklineSpanUnitCentisecond, 100, true
+	case spl.SparklineSpanUnitDecisecond:
+		return SparklineSpanUnitDecisecond, 10, true
+	case spl.SparklineSpanUnitSecond:
+		return SparklineSpanUnitSecond, 0, true
+	case spl.SparklineSpanUnitMinute:
+		return SparklineSpanUnitMinute, 0, true
+	case spl.SparklineSpanUnitHour:
+		return SparklineSpanUnitHour, 0, true
+	case spl.SparklineSpanUnitDay:
+		return SparklineSpanUnitDay, 0, true
+	case spl.SparklineSpanUnitMonth:
+		return SparklineSpanUnitMonth, 0, true
+	default:
+		return SparklineSpanUnitInvalid, 0, false
+	}
+}
+
+func buildStatsOptions(
+	options spl.StatsOptions,
+	commandRange spl.Range,
+) (*StatsOptions, error) {
+	invalid := func(message string, sourceRange spl.Range) (*StatsOptions, error) {
+		if sourceRange == (spl.Range{}) {
+			sourceRange = commandRange
+		}
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_SYNTAX",
+			Message: message,
+			Range:   sourceRange,
+		}
+	}
+
+	if options.PartitionsSpecified {
+		if options.PartitionsRange == (spl.Range{}) {
+			return invalid("stats partitions metadata is invalid", options.PartitionsRange)
+		}
+	} else if options.Partitions != 0 || options.PartitionsRange != (spl.Range{}) {
+		return invalid("unspecified stats partitions contains authored metadata", options.PartitionsRange)
+	}
+	if options.AllNumericSpecified {
+		if options.AllNumericRange == (spl.Range{}) {
+			return invalid("stats allnum metadata is invalid", options.AllNumericRange)
+		}
+	} else if options.AllNumeric || options.AllNumericRange != (spl.Range{}) {
+		return invalid("unspecified stats allnum contains authored metadata", options.AllNumericRange)
+	}
+	if options.DelimiterSpecified {
+		if options.DelimiterRange == (spl.Range{}) ||
+			!utf8.ValidString(options.Delimiter) {
+			return invalid("stats delim metadata is invalid", options.DelimiterRange)
+		}
+	} else if options.Delimiter != "" || options.DelimiterRange != (spl.Range{}) {
+		return invalid("unspecified stats delim contains authored metadata", options.DelimiterRange)
+	}
+	if options.DeduplicateSplitValuesSpecified {
+		if options.DeduplicateSplitValuesRange == (spl.Range{}) {
+			return invalid(
+				"stats dedup_splitvals metadata is invalid",
+				options.DeduplicateSplitValuesRange,
+			)
+		}
+	} else if options.DeduplicateSplitValues ||
+		options.DeduplicateSplitValuesRange != (spl.Range{}) {
+		return invalid(
+			"unspecified stats dedup_splitvals contains authored metadata",
+			options.DeduplicateSplitValuesRange,
+		)
+	}
+
+	partitions := spl.DefaultStatsPartitions
+	if options.Partitions > uint64(spl.MaximumStatsPartitions) {
+		partitions = spl.MaximumStatsPartitions
+	} else if options.Partitions > 0 {
+		partitions = uint8(options.Partitions)
+	}
+	delimiter := spl.DefaultStatsDelimiter
+	if options.DelimiterSpecified {
+		delimiter = options.Delimiter
+	}
+	return &StatsOptions{
+		Partitions:             partitions,
+		AllNumeric:             options.AllNumeric,
+		Delimiter:              delimiter,
+		DeduplicateSplitValues: options.DeduplicateSplitValues,
+	}, nil
+}
+
+func statsAggregateRequiresCanonicalTime(function spl.AggregateFunction) bool {
+	switch function {
+	case spl.AggregateFunctionEarliest,
+		spl.AggregateFunctionLatest,
+		spl.AggregateFunctionEarliestTime,
+		spl.AggregateFunctionLatestTime,
+		spl.AggregateFunctionRate:
+		return true
+	default:
+		return false
+	}
+}
+
+func convertStatsFieldAggregateFunction(
+	function spl.AggregateFunction,
+) (AggregateFunction, bool) {
+	switch function {
+	case spl.AggregateFunctionPercentile:
+		return AggregateFunctionPercentile, true
+	case spl.AggregateFunctionExactPercentile:
+		return AggregateFunctionExactPercentile, true
+	case spl.AggregateFunctionUpperPercentile:
+		return AggregateFunctionUpperPercentile, true
+	case spl.AggregateFunctionMedian:
+		return AggregateFunctionMedian, true
+	case spl.AggregateFunctionSum:
+		return AggregateFunctionSum, true
+	case spl.AggregateFunctionAverage:
+		return AggregateFunctionAverage, true
+	case spl.AggregateFunctionRange:
+		return AggregateFunctionRange, true
+	case spl.AggregateFunctionSumSquares:
+		return AggregateFunctionSumSquares, true
+	case spl.AggregateFunctionStandardDeviationSample:
+		return AggregateFunctionStandardDeviationSample, true
+	case spl.AggregateFunctionStandardDeviationPopulation:
+		return AggregateFunctionStandardDeviationPopulation, true
+	case spl.AggregateFunctionVarianceSample:
+		return AggregateFunctionVarianceSample, true
+	case spl.AggregateFunctionVariancePopulation:
+		return AggregateFunctionVariancePopulation, true
+	case spl.AggregateFunctionDistinctCount:
+		return AggregateFunctionDistinctCount, true
+	case spl.AggregateFunctionEstimatedDistinctCount:
+		return AggregateFunctionEstimatedDistinctCount, true
+	case spl.AggregateFunctionEstimatedDistinctCountError:
+		return AggregateFunctionEstimatedDistinctCountError, true
+	case spl.AggregateFunctionValues:
+		return AggregateFunctionValues, true
+	case spl.AggregateFunctionList:
+		return AggregateFunctionList, true
+	case spl.AggregateFunctionMinimum:
+		return AggregateFunctionMinimum, true
+	case spl.AggregateFunctionMaximum:
+		return AggregateFunctionMaximum, true
+	case spl.AggregateFunctionMode:
+		return AggregateFunctionMode, true
+	case spl.AggregateFunctionFirst:
+		return AggregateFunctionFirst, true
+	case spl.AggregateFunctionLast:
+		return AggregateFunctionLast, true
+	case spl.AggregateFunctionEarliest:
+		return AggregateFunctionEarliest, true
+	case spl.AggregateFunctionLatest:
+		return AggregateFunctionLatest, true
+	case spl.AggregateFunctionEarliestTime:
+		return AggregateFunctionEarliestTime, true
+	case spl.AggregateFunctionLatestTime:
+		return AggregateFunctionLatestTime, true
+	case spl.AggregateFunctionRate:
+		return AggregateFunctionRate, true
+	default:
+		return AggregateFunctionInvalid, false
+	}
+}
+
 func buildEventStatsFieldMeasure(
 	aggregate spl.StatsAggregate,
 	function AggregateFunction,
@@ -2850,6 +3497,8 @@ func buildEventStatsFieldMeasure(
 	}
 	if aggregate.Input == "" ||
 		aggregate.InputRange == (spl.Range{}) ||
+		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+		aggregate.InputExpression != nil ||
 		aggregate.Predicate != nil ||
 		!aggregate.ExplicitAlias {
 		return AggregateMeasure{}, &Diagnostic{
@@ -2872,10 +3521,11 @@ func buildEventStatsFieldMeasure(
 }
 
 type countPredicateMeasureDiagnostics struct {
-	unsupportedCode string
-	invalidMessage  string
-	ambiguousCode   string
-	reservedMessage string
+	unsupportedCode    string
+	invalidMessage     string
+	ambiguousCode      string
+	reservedMessage    string
+	allowImplicitAlias bool
 }
 
 // buildCountPredicateMeasure converts the common count(eval(...)) contract
@@ -2887,9 +3537,12 @@ func buildCountPredicateMeasure(
 	diagnostics countPredicateMeasureDiagnostics,
 ) (AggregateMeasure, error) {
 	if aggregate.Input != "" ||
+		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+		aggregate.InputQuoted ||
 		aggregate.InputRange != (spl.Range{}) ||
+		aggregate.InputExpression != nil ||
 		aggregate.Percentile != 0 ||
-		!aggregate.ExplicitAlias ||
+		(!aggregate.ExplicitAlias && !diagnostics.allowImplicitAlias) ||
 		nilSPLWhereExpression(aggregate.Predicate) {
 		return AggregateMeasure{}, &Diagnostic{
 			Code:    diagnostics.unsupportedCode,
@@ -2918,9 +3571,10 @@ func buildCountPredicateMeasure(
 		}
 	}
 	return AggregateMeasure{
-		Function:  AggregateFunctionCountPredicate,
-		Predicate: predicate,
-		Output:    aggregate.Alias,
+		Function:      AggregateFunctionCountPredicate,
+		Predicate:     predicate,
+		Output:        aggregate.Alias,
+		OutputLiteral: aggregate.AliasQuoted || aggregate.AliasSourceDerived,
 	}, nil
 }
 
@@ -3085,7 +3739,15 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				Message: "scalar field expression is missing",
 			}
 		}
-		field, err := ResolveField(expression.Field, expression.Range)
+		var (
+			field FieldRef
+			err   error
+		)
+		if expression.Quoted {
+			field, err = ResolveQuotedField(expression.Field, expression.Range)
+		} else {
+			field, err = ResolveField(expression.Field, expression.Range)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -4088,6 +4750,49 @@ func convertFields(names []string, sourceRange spl.Range) ([]FieldRef, error) {
 	return fields, nil
 }
 
+func convertTableFields(command *spl.TableCommand) ([]FieldRef, error) {
+	if command == nil {
+		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "table command is nil"}
+	}
+	if len(command.QuotedFields) == 0 && len(command.FieldRanges) == 0 {
+		return convertFields(command.Fields, command.Range)
+	}
+	if len(command.QuotedFields) != len(command.Fields) ||
+		len(command.FieldRanges) != len(command.Fields) {
+		return nil, &Diagnostic{
+			Code:    "SPL_INVALID_FIELD",
+			Message: "table field quote and source-range metadata is inconsistent",
+			Range:   command.Range,
+		}
+	}
+	fields := make([]FieldRef, 0, len(command.Fields))
+	seen := make(map[string]struct{}, len(command.Fields))
+	for index, name := range command.Fields {
+		if _, duplicate := seen[name]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_DUPLICATE_FIELD",
+				Message: fmt.Sprintf("field %q is repeated", name),
+				Range:   command.FieldRanges[index],
+			}
+		}
+		seen[name] = struct{}{}
+		var (
+			field FieldRef
+			err   error
+		)
+		if command.QuotedFields[index] {
+			field, err = ResolveQuotedField(name, command.FieldRanges[index])
+		} else {
+			field, err = ResolveField(name, command.FieldRanges[index])
+		}
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, field)
+	}
+	return fields, nil
+}
+
 // ResolveField parses deterministic dotted dynamic access. A backslash escapes
 // a literal dot or backslash within one path segment.
 func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
@@ -4131,6 +4836,36 @@ func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
 		}
 	}
 	return FieldRef{Name: name, Path: path, Range: sourceRange}, nil
+}
+
+// ResolveQuotedField resolves repository-standard single-quoted exact-field
+// syntax. Canonical event paths retain their ordinary metadata. A safe stats
+// literal name that cannot be a canonical path (for example ".com") receives
+// one exact logical segment so downstream stages can bind it by visible Name
+// without minting storage-path authority.
+func ResolveQuotedField(name string, sourceRange spl.Range) (FieldRef, error) {
+	if spl.IsExactQuotedFieldName(name) {
+		return ResolveField(name, sourceRange)
+	}
+	if !spl.IsStatsLiteralFieldReference(name) {
+		return FieldRef{}, &Diagnostic{
+			Code:    "SPL_INVALID_FIELD",
+			Message: "single-quoted field is not a safe exact field reference",
+			Range:   sourceRange,
+		}
+	}
+	return FieldRef{Name: name, Path: []string{name}, Range: sourceRange}, nil
+}
+
+func resolveStatsInputField(
+	name string,
+	sourceRange spl.Range,
+	quoted bool,
+) (FieldRef, error) {
+	if quoted {
+		return ResolveQuotedField(name, sourceRange)
+	}
+	return ResolveField(name, sourceRange)
 }
 
 func splitFieldPath(name string) ([]string, error) {

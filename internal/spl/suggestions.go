@@ -549,7 +549,11 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 	case "eval":
 		base.AllowsQuotedScalarFields = true
 		return classifyEvalSuggestion(base, body)
-	case "fields", "table", "sort", "dedup":
+	case "table":
+		base.Kinds = []SuggestionKind{SuggestionKindField}
+		base.AllowsQuotedScalarFields = true
+		return base
+	case "fields", "sort", "dedup":
 		base.Kinds = []SuggestionKind{SuggestionKindField}
 		return base
 	case "rename":
@@ -678,36 +682,243 @@ func classifyRenameSuggestion(context SuggestionContext, tokens []token) Suggest
 }
 
 func classifyStatsSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
-	if index := topLevelWordIndex(tokens, "BY"); index >= 0 {
+	for _, option := range []string{"partitions", "allnum", "delim", "dedup_splitvals"} {
+		if endsOptionEqual(tokens, option) {
+			return context
+		}
+	}
+	body, usedLeadingOptions := statsSuggestionBody(tokens)
+	trailingOption := topLevelOptionAssignmentIndex(body, "dedup_splitvals")
+	if trailingOption >= 0 {
+		// dedup_splitvals is terminal. Once its value is present, no append-only
+		// completion can legally extend the command.
+		if trailingOption+2 < len(body) {
+			return context
+		}
+	}
+	if index := topLevelWordIndex(body, "BY"); index >= 0 {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
+		context.AllowsQuotedScalarFields = true
+		if trailingOption < 0 && len(body) > index+1 {
+			context.Kinds = append(context.Kinds, SuggestionKindKeyword)
+			context.Keywords = []string{"dedup_splitvals="}
+		}
 		return context
 	}
-	if parenthesisDepth(tokens) > 0 {
+	if legacyContext, active := classifyStatsSparklineLegacySuggestion(
+		context,
+		body,
+	); active {
+		return legacyContext
+	}
+	if parenthesisDepth(body) > 0 {
+		if sparklineContext, active := classifyActiveStatsSparklineSuggestion(
+			context,
+			body,
+		); active {
+			return sparklineContext
+		}
 		if predicateContext, active := classifyActiveCountEvalPredicateSuggestion(
 			context,
-			tokens,
+			body,
 		); active {
 			return predicateContext
 		}
+		if scalarContext, active := classifyActiveStatsScalarEvalInputSuggestion(
+			context,
+			body,
+		); active {
+			return scalarContext
+		}
 		context.Kinds = []SuggestionKind{SuggestionKindField}
+		context.AllowsQuotedScalarFields = true
+		if star := strings.LastIndexByte(context.Prefix, '*'); star >= 0 {
+			// Rank exact-field replacements by the literal suffix after the last
+			// star instead of treating the metacharacter as part of a field prefix.
+			context.Replacement.Start = advanceSourcePosition(
+				context.Replacement.Start,
+				context.Prefix[:star+1],
+			)
+			context.Prefix = context.Prefix[star+1:]
+			context.AllowsQuotedScalarFields = false
+		}
 		return context
 	}
-	if len(tokens) == 0 {
-		return aggregateSuggestionContext(context)
+	if len(body) == 0 {
+		context = aggregateSuggestionContext(context)
+		context.Kinds = append(context.Kinds, SuggestionKindKeyword)
+		context.Keywords = remainingLeadingStatsSuggestionOptions(usedLeadingOptions)
+		return context
 	}
-	last := tokens[len(tokens)-1]
+	last := body[len(body)-1]
 	if tokenWordEqual(last, "AS") {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
 		return context
 	}
 	if last.kind == tokenLeftParen {
 		context.Kinds = []SuggestionKind{SuggestionKindField}
+		context.AllowsQuotedScalarFields = true
 		return context
 	}
 	context = aggregateSuggestionContext(context)
 	context.Kinds = append(context.Kinds, SuggestionKindKeyword)
-	context.Keywords = []string{"AS", "BY"}
+	context.Keywords = []string{"AS", "BY", "dedup_splitvals="}
+	if !statsSuggestionAggregateStarted(body) {
+		context.Keywords = append(
+			context.Keywords,
+			remainingLeadingStatsSuggestionOptions(usedLeadingOptions)...,
+		)
+	}
 	return context
+}
+
+func classifyStatsSparklineLegacySuggestion(
+	context SuggestionContext,
+	tokens []token,
+) (SuggestionContext, bool) {
+	depth := 0
+	start := -1
+	for index, tok := range tokens {
+		if depth == 0 && tokenWordEqual(tok, "sparkline") &&
+			(index+1 >= len(tokens) || tokens[index+1].kind != tokenLeftParen) {
+			start = index
+		}
+		switch tok.kind {
+		case tokenLeftParen:
+			depth++
+		case tokenRightParen:
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	if start < 0 {
+		return context, false
+	}
+	suffix := tokens[start+1:]
+	if len(suffix) > 1 ||
+		(len(suffix) == 1 && tokenWordEqual(suffix[0], "count")) {
+		return context, false
+	}
+	context = aggregateSuggestionContext(context)
+	context.FunctionNames = []string{"count"}
+	return context, true
+}
+
+func statsSparklineFunctionNames() []string {
+	return []string{
+		"c", "count", "dc", "mean", "avg", "stdev", "stdevp", "var",
+		"varp", "sum", "sumsq", "min", "max", "range",
+	}
+}
+
+func classifyActiveStatsSparklineSuggestion(
+	context SuggestionContext,
+	tokens []token,
+) (SuggestionContext, bool) {
+	start := -1
+	depth := 0
+	for index, tok := range tokens {
+		if depth == 0 && tokenWordEqual(tok, "sparkline") &&
+			index+1 < len(tokens) && tokens[index+1].kind == tokenLeftParen {
+			start = index
+		}
+		switch tok.kind {
+		case tokenLeftParen:
+			depth++
+		case tokenRightParen:
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	if start < 0 || depth == 0 || start+2 > len(tokens) {
+		return context, false
+	}
+	inner := tokens[start+2:]
+	if len(inner) == 0 {
+		context = aggregateSuggestionContext(context)
+		context.FunctionNames = statsSparklineFunctionNames()
+		return context, true
+	}
+
+	function := inner[0]
+	if function.kind != tokenWord {
+		return context, true
+	}
+	_, supported := statsSparklineAggregateSpecForName(function.text)
+	if len(inner) == 1 || !supported {
+		context = aggregateSuggestionContext(context)
+		context.FunctionNames = statsSparklineFunctionNames()
+		return context, true
+	}
+	if inner[1].kind == tokenLeftParen && parenthesisDepth(inner[1:]) > 0 {
+		context.Kinds = []SuggestionKind{SuggestionKindField}
+		context.AllowsQuotedScalarFields = true
+		return context, true
+	}
+	// The inner aggregate has closed, or bare count is followed by the optional
+	// span. There is no field/function completion at this point.
+	return context, true
+}
+
+func statsSuggestionBody(tokens []token) ([]token, map[string]struct{}) {
+	used := make(map[string]struct{}, 3)
+	index := 0
+	for index+2 < len(tokens) {
+		name := tokens[index]
+		if name.kind != tokenWord || !isLeadingStatsOptionName(name.text) ||
+			tokens[index+1].kind != tokenEqual {
+			break
+		}
+		value := tokens[index+2]
+		if value.kind != tokenWord && value.kind != tokenString {
+			break
+		}
+		used[asciiFold(name.text)] = struct{}{}
+		index += 3
+	}
+	return tokens[index:], used
+}
+
+func remainingLeadingStatsSuggestionOptions(used map[string]struct{}) []string {
+	result := make([]string, 0, 3-len(used))
+	for _, name := range []string{"partitions=", "allnum=", "delim="} {
+		key := strings.TrimSuffix(name, "=")
+		if _, exists := used[key]; !exists {
+			result = append(result, name)
+		}
+	}
+	return result
+}
+
+func statsSuggestionAggregateStarted(tokens []token) bool {
+	if len(tokens) == 0 || tokens[0].kind != tokenWord {
+		return false
+	}
+	if supportedStatsAggregateName(tokens[0].text) {
+		return true
+	}
+	return len(tokens) > 1 && tokens[1].kind == tokenLeftParen
+}
+
+func topLevelOptionAssignmentIndex(tokens []token, name string) int {
+	depth := 0
+	for index, tok := range tokens {
+		if depth == 0 && tokenWordEqual(tok, name) && index+1 < len(tokens) &&
+			tokens[index+1].kind == tokenEqual {
+			return index
+		}
+		switch tok.kind {
+		case tokenLeftParen:
+			depth++
+		case tokenRightParen:
+			if depth > 0 {
+				depth--
+			}
+		}
+	}
+	return -1
 }
 
 func classifyEventStatsSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
@@ -1565,6 +1776,64 @@ func activeCountEvalPredicateStart(tokens []token) int {
 	return activeStart
 }
 
+func classifyActiveStatsScalarEvalInputSuggestion(
+	context SuggestionContext,
+	tokens []token,
+) (SuggestionContext, bool) {
+	start := activeStatsScalarEvalInputStart(tokens)
+	if start < 0 {
+		return context, false
+	}
+	context.AllowsQuotedScalarFields = true
+	expression := tokens[start:]
+	if len(expression) == 0 {
+		return scalarSuggestionContext(context, false), true
+	}
+	last := expression[len(expression)-1]
+	if isScalarOperandBoundaryToken(last.kind) ||
+		last.kind == tokenLeftParen ||
+		(last.kind == tokenWord &&
+			(tokenWordEqual(last, "AND") || tokenWordEqual(last, "OR") ||
+				tokenWordEqual(last, "NOT"))) {
+		return scalarSuggestionContext(context, false), true
+	}
+	return context, true
+}
+
+func activeStatsScalarEvalInputStart(tokens []token) int {
+	activeStart := -1
+	for index := 0; index+3 < len(tokens); index++ {
+		if tokens[index].kind != tokenWord {
+			continue
+		}
+		spec, supported := statsAggregateSpecForName(tokens[index].text)
+		if !supported || !spec.supportsExpressionInput ||
+			!startsEvalPredicateArgument(tokens, index+1) {
+			continue
+		}
+		depth := 1
+		closed := false
+		for _, tok := range tokens[index+4:] {
+			switch tok.kind {
+			case tokenLeftParen:
+				depth++
+			case tokenRightParen:
+				depth--
+				if depth == 0 {
+					closed = true
+				}
+			}
+			if closed {
+				break
+			}
+		}
+		if !closed {
+			activeStart = index + 4
+		}
+	}
+	return activeStart
+}
+
 func scalarSuggestionTokenStart(tokens []token) (int, bool) {
 	stage, stageStart, followsPipeline := activeSuggestionStage(tokens)
 	if !followsPipeline || len(stage) == 0 || stage[0].kind != tokenWord {
@@ -1573,7 +1842,17 @@ func scalarSuggestionTokenStart(tokens []token) (int, bool) {
 	switch asciiFold(stage[0].text) {
 	case "eval", "where":
 		return stageStart + 1, true
-	case "stats", "eventstats", "streamstats":
+	case "stats":
+		bodyStart := stageStart + 1
+		predicateStart := activeCountEvalPredicateStart(stage[1:])
+		if predicateStart >= 0 {
+			return bodyStart + predicateStart, true
+		}
+		scalarStart := activeStatsScalarEvalInputStart(stage[1:])
+		if scalarStart >= 0 {
+			return bodyStart + scalarStart, true
+		}
+	case "eventstats", "streamstats":
 		bodyStart := stageStart + 1
 		predicateStart := activeCountEvalPredicateStart(stage[1:])
 		if predicateStart >= 0 {
