@@ -8,10 +8,18 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"google.golang.org/protobuf/proto"
 )
+
+// MaximumFlatMultivalueDelimiterBytes bounds optional flat-display metadata
+// independently of result-row payloads.
+const MaximumFlatMultivalueDelimiterBytes = 16 << 10
 
 // State is the lifecycle state of one asynchronous search job.
 type State uint8
@@ -235,21 +243,23 @@ type JobListRequest struct {
 // no field through which result schema or detailed failure diagnostics can be
 // exposed. New Job fields therefore remain absent until deliberately added.
 type JobListItem struct {
-	ID               string
-	Version          uint64
-	OwnerID          string
-	TenantID         string
-	SPL              string
-	NormalizedSPL    string
-	RequestedIndexes []string
-	EffectiveIndexes []string
-	TimeRange        searchtime.Intent
-	AppID            string
-	Source           JobSource
-	Earliest         time.Time
-	Latest           time.Time
-	IndexTimeCutoff  time.Time
-	State            State
+	ID                string
+	Version           uint64
+	OwnerID           string
+	TenantID          string
+	SPL               string
+	NormalizedSPL     string
+	CompilerVersion   string
+	RequestedIndexes  []string
+	EffectiveIndexes  []string
+	TimeRange         searchtime.Intent
+	AppID             string
+	Source            JobSource
+	Earliest          time.Time
+	Latest            time.Time
+	IndexTimeCutoff   time.Time
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
+	State             State
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
 	// received so far. They are not inferred from retained result rows.
 	ScannedRows      uint64
@@ -291,6 +301,7 @@ type Job struct {
 	OwnerID          string
 	SPL              string
 	NormalizedSPL    string
+	CompilerVersion  string
 	TenantID         string
 	RequestedIndexes []string
 	EffectiveIndexes []string
@@ -301,8 +312,13 @@ type Job struct {
 	Latest           time.Time
 	IndexTimeCutoff  time.Time
 	VisibilityCutoff uint64
-	State            State
-	Schema           *Schema
+	// KnowledgeSnapshot is the bounded, definition-free identity and canonical
+	// inventory prefix sealed for this exact admission. Nil means the legacy
+	// knowledge-disabled path; a present zero-object summary is distinct and
+	// proves that configured admission observed an empty active authority.
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
+	State             State
+	Schema            *Schema
 	// ScannedRows and ScannedBytes are the exact executor-reported progress
 	// received so far. A terminal job may contain only the prefix reported
 	// before cancellation or failure; the manager never extrapolates a total.
@@ -414,6 +430,31 @@ type Column struct {
 	Kind       ValueKind
 	Nullable   bool
 	Multivalue bool
+	// FlatMultivalueDelimiter is optional presentation metadata for rendering
+	// one typed multivalue cell as flat text. The presence bit deliberately
+	// distinguishes an authored empty delimiter from absent metadata.
+	FlatMultivalueDelimiter    string
+	HasFlatMultivalueDelimiter bool
+	// StatsSparkline identifies the compiler-authored stats sparkline transport.
+	// Cell contents remain a typed list; renderers must require this sealed schema
+	// bit instead of trusting the user-representable marker alone.
+	StatsSparkline bool
+}
+
+// ValidFlatMultivaluePresentation reports whether optional flat-display
+// metadata is canonical and attached only to a typed multivalue list column.
+func (column Column) ValidFlatMultivaluePresentation() bool {
+	if column.StatsSparkline {
+		return !column.HasFlatMultivalueDelimiter &&
+			column.FlatMultivalueDelimiter == "" &&
+			column.Kind == ValueKindList && column.Multivalue
+	}
+	if !column.HasFlatMultivalueDelimiter {
+		return column.FlatMultivalueDelimiter == ""
+	}
+	return column.Kind == ValueKindList && column.Multivalue &&
+		len(column.FlatMultivalueDelimiter) <= MaximumFlatMultivalueDelimiterBytes &&
+		utf8.ValidString(column.FlatMultivalueDelimiter)
 }
 
 // Schema is the ordered schema emitted by the executor. Column names must
@@ -634,6 +675,7 @@ func cloneJob(source Job) Job {
 	result := source
 	result.RequestedIndexes = cloneStrings(source.RequestedIndexes)
 	result.EffectiveIndexes = cloneStrings(source.EffectiveIndexes)
+	result.KnowledgeSnapshot = cloneKnowledgeSnapshotSummary(source.KnowledgeSnapshot)
 	if source.Schema != nil {
 		schema := cloneSchema(*source.Schema)
 		result.Schema = &schema
@@ -651,6 +693,7 @@ func cloneJobSummary(source Job) Job {
 	result.NormalizedSPL = ""
 	result.RequestedIndexes = nil
 	result.EffectiveIndexes = nil
+	result.KnowledgeSnapshot = nil
 	result.Schema = nil
 	if source.Failure != nil {
 		failure := *source.Failure
@@ -658,6 +701,29 @@ func cloneJobSummary(source Job) Job {
 		result.Failure = &failure
 	}
 	return result
+}
+
+func cloneKnowledgeSnapshotSummary(source *opensplunkv1.KnowledgeSnapshotSummary) *opensplunkv1.KnowledgeSnapshotSummary {
+	if source == nil {
+		return nil
+	}
+	cloned, _ := proto.Clone(source).(*opensplunkv1.KnowledgeSnapshotSummary)
+	return cloned
+}
+
+func retainedKnowledgeAdmissionMetadata(
+	snapshot knowledgesnapshot.Snapshot,
+	compiledBytes uint64,
+) (uint64, error) {
+	total, err := checkedAdd(snapshot.RetainedBytes(), compiledBytes)
+	if err != nil {
+		return 0, err
+	}
+	// Charge the complete allowed summary envelope rather than its current
+	// serialized length. This covers protobuf object, repeated-slot, string,
+	// and allocator overhead without making manager capacity depend on runtime
+	// implementation details.
+	return checkedAdd(total, knowledgesnapshot.MaximumSummaryBytes)
 }
 
 func cloneFailure(source Failure) Failure {
@@ -675,6 +741,9 @@ func cloneSchema(source Schema) Schema {
 	for index, column := range source.Columns {
 		columns[index] = column
 		columns[index].Name = strings.Clone(column.Name)
+		columns[index].FlatMultivalueDelimiter = strings.Clone(
+			column.FlatMultivalueDelimiter,
+		)
 	}
 	return Schema{Columns: columns}
 }
@@ -808,6 +877,16 @@ func validateValue(value Value, depth int) error {
 	return err
 }
 
+// RetainedSizeBytes returns the search-job layer's exact modeled heap
+// retention for this immutable value, including every nested Value,
+// ObjectField, payload byte, and container backing element. Executors that
+// temporarily buffer values use this same accounting as the durable result
+// sink so recursive containers cannot evade a private memory ceiling.
+func (value Value) RetainedSizeBytes() (uint64, error) {
+	_, retained, err := measureValue(value, 0)
+	return retained, err
+}
+
 func measureValue(value Value, depth int) (uint64, uint64, error) {
 	if depth > 32 {
 		return 0, 0, errors.New("search result value exceeds maximum nesting depth")
@@ -900,6 +979,10 @@ func retainedSchemaSize(schema Schema) (uint64, error) {
 			return 0, err
 		}
 		total, err = checkedAdd(total, uint64(len(column.Name)))
+		if err != nil {
+			return 0, err
+		}
+		total, err = checkedAdd(total, uint64(len(column.FlatMultivalueDelimiter)))
 		if err != nil {
 			return 0, err
 		}

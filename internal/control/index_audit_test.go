@@ -538,6 +538,7 @@ func TestNewAuditedIndexAdministrationRejectsInvalidDependencies(t *testing.T) {
 	db := openTestDB(t)
 	valid := &recordingIndexMutationAuditAppender{}
 	var typedNil *recordingIndexMutationAuditAppender
+	var typedNilValidator *typedNilIndexNameAdmissionValidator
 	for name, test := range map[string]struct {
 		db      *DB
 		options AuditedIndexAdministrationOptions
@@ -559,6 +560,9 @@ func TestNewAuditedIndexAdministrationRejectsInvalidDependencies(t *testing.T) {
 		}},
 		"typed nil appender": {db: db, options: AuditedIndexAdministrationOptions{
 			TenantID: "tenant-a", Appender: typedNil,
+		}},
+		"typed nil validator": {db: db, options: AuditedIndexAdministrationOptions{
+			TenantID: "tenant-a", Appender: valid, Validator: typedNilValidator,
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -36,7 +36,9 @@ var browserGateAdministratorPaths = []string{
 	"/api/v1/ingestion-tokens/get",
 	"/api/v1/ingestion-tokens/list",
 	"/api/v1/ingestion-tokens/update",
+	"/api/v1/ingestion-tokens/state/set",
 	"/api/v1/ingestion-tokens/revoke",
+	hecOperationsPath,
 	"/api/v1/collectors/get",
 	"/api/v1/collectors/list",
 	"/api/v1/collectors/update",
@@ -306,6 +308,16 @@ func (administration *browserGateTokenAdministration) UpdateCollectorToken(
 ) (auth.CollectorToken, error) {
 	administration.record()
 	return auth.CollectorToken{}, errors.New("unexpected token update")
+}
+
+func (administration *browserGateTokenAdministration) SetCollectorTokenEnabled(
+	context.Context,
+	string,
+	uint64,
+	bool,
+) (auth.CollectorToken, error) {
+	administration.record()
+	return auth.CollectorToken{}, errors.New("unexpected token state update")
 }
 
 func (administration *browserGateTokenAdministration) RevokeCollectorToken(
@@ -715,6 +727,12 @@ func TestAdministratorAuthenticationAndAuthorizationOutcomesAreSafe(t *testing.T
 					response.Body.String(),
 				)
 			}
+			if test.status == http.StatusForbidden {
+				wantBody := "{\"error\":{\"message\":\"administrator access is required\"}}\n"
+				if response.Body.String() != wantBody {
+					t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
+				}
+			}
 			wantAuthenticate := ""
 			if test.wantChallenge {
 				wantAuthenticate = administratorAuthenticationRealm
@@ -893,6 +911,275 @@ func TestAdministratorAuthenticationPrecedesProtobufDecoding(t *testing.T) {
 					indexes.callCount(),
 					test.wantService,
 				)
+			}
+		})
+	}
+}
+
+func TestAuthenticateBrowserAcceptsUserAndDetachesSecurityContext(t *testing.T) {
+	t.Parallel()
+
+	principal := browserGatePrincipal(
+		t,
+		"user-tenant",
+		"ordinary-user",
+		auth.BrowserRoleUser,
+	)
+	authenticator := &recordingBrowserAuthenticator{
+		fn: func(ctx context.Context, token []byte) (auth.BrowserPrincipal, error) {
+			if ctx == nil {
+				t.Fatal("authentication context is nil")
+			}
+			if string(token) != adminIntegrationBearerToken {
+				t.Fatalf("authentication token = %q", string(token))
+			}
+			return principal, nil
+		},
+	}
+	handler := &apiHandler{browserAuthenticator: authenticator}
+	upstreamActor := audit.Actor{
+		Kind: audit.ActorKindBrowser,
+		ID:   "untrusted-upstream-actor",
+		Role: audit.ActorRoleAdministrator,
+	}
+	upstreamContext, err := audit.WithActor(context.Background(), upstreamActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequestWithContext(
+		upstreamContext,
+		http.MethodPost,
+		"/api/v1/knowledge/objects/list",
+		nil,
+	)
+	lowercaseAuthorizationHeader := strings.ToLower("Authorization")
+	request.Header[lowercaseAuthorizationHeader] = []string{
+		"Bearer " + adminIntegrationBearerToken,
+	}
+	request.Header["X-Request-Marker"] = []string{"caller-owned"}
+	response := httptest.NewRecorder()
+
+	authenticatedRequest, authenticatedPrincipal, ok := handler.authenticateBrowser(
+		response,
+		request,
+	)
+	if !ok {
+		t.Fatalf(
+			"authenticateBrowser rejected valid user: status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	if authenticatedRequest == request {
+		t.Fatal("authenticateBrowser returned the caller-owned request")
+	}
+	if !authenticatedPrincipal.Valid() ||
+		authenticatedPrincipal.TenantID() != "user-tenant" ||
+		authenticatedPrincipal.OwnerID() != "ordinary-user" ||
+		authenticatedPrincipal.Role() != auth.BrowserRoleUser {
+		t.Fatalf(
+			"authenticated principal = tenant %q owner %q role %v valid %t",
+			authenticatedPrincipal.TenantID(),
+			authenticatedPrincipal.OwnerID(),
+			authenticatedPrincipal.Role(),
+			authenticatedPrincipal.Valid(),
+		)
+	}
+	capturedPrincipal, present := browserPrincipalFromRequest(authenticatedRequest)
+	if !present ||
+		capturedPrincipal.TenantID() != "user-tenant" ||
+		capturedPrincipal.OwnerID() != "ordinary-user" ||
+		capturedPrincipal.Role() != auth.BrowserRoleUser {
+		t.Fatalf(
+			"context principal = tenant %q owner %q role %v present %t",
+			capturedPrincipal.TenantID(),
+			capturedPrincipal.OwnerID(),
+			capturedPrincipal.Role(),
+			present,
+		)
+	}
+	capturedActor, present := audit.ActorFromContext(authenticatedRequest.Context())
+	wantActor := audit.Actor{
+		Kind: audit.ActorKindBrowser,
+		ID:   "ordinary-user",
+		Role: audit.ActorRoleUser,
+	}
+	if !present || capturedActor != wantActor {
+		t.Fatalf("context actor = (%+v, %t), want %+v", capturedActor, present, wantActor)
+	}
+	for name := range authenticatedRequest.Header {
+		if strings.EqualFold(name, "Authorization") {
+			t.Fatalf("authenticated request retained Authorization key %q", name)
+		}
+	}
+	authenticatedRequest.Header.Set("X-Request-Marker", "downstream")
+	if got := request.Header[lowercaseAuthorizationHeader]; len(got) != 1 ||
+		got[0] != "Bearer "+adminIntegrationBearerToken {
+		t.Fatalf("caller-owned Authorization header was mutated: %q", got)
+	}
+	if got := request.Header.Get("X-Request-Marker"); got != "caller-owned" {
+		t.Fatalf("caller-owned marker header = %q", got)
+	}
+	if _, present := browserPrincipalFromRequest(request); present {
+		t.Fatal("caller-owned request gained a browser principal")
+	}
+	if got, present := audit.ActorFromContext(request.Context()); !present || got != upstreamActor {
+		t.Fatalf("caller-owned actor = (%+v, %t), want %+v", got, present, upstreamActor)
+	}
+	if response.Body.Len() != 0 {
+		t.Fatalf("successful authentication response body = %q", response.Body.String())
+	}
+	if authenticator.callCount() != 1 {
+		t.Fatalf("authenticator calls = %d, want 1", authenticator.callCount())
+	}
+	if !authenticator.aliasedTokenWasCleared() {
+		t.Fatal("transport-owned credential buffer was not cleared")
+	}
+}
+
+func TestAuthenticateBrowserFailureMappingsAreStable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		nilHandler    bool
+		typedNil      bool
+		principal     auth.BrowserPrincipal
+		err           error
+		status        int
+		message       string
+		wantChallenge bool
+		wantCalls     int
+	}{
+		{
+			name:       "nil handler",
+			nilHandler: true,
+			status:     http.StatusServiceUnavailable,
+			message:    "administrator authentication is unavailable",
+		},
+		{
+			name:       "missing authenticator",
+			nilHandler: false,
+			status:     http.StatusServiceUnavailable,
+			message:    "administrator authentication is unavailable",
+		},
+		{
+			name:     "typed nil authenticator",
+			typedNil: true,
+			status:   http.StatusServiceUnavailable,
+			message:  "administrator authentication is unavailable",
+		},
+		{
+			name:          "invalid credential",
+			err:           auth.ErrBrowserUnauthorized,
+			status:        http.StatusUnauthorized,
+			message:       "administrator authentication is required",
+			wantChallenge: true,
+			wantCalls:     1,
+		},
+		{
+			name:      "invalid principal",
+			status:    http.StatusServiceUnavailable,
+			message:   "administrator authentication is unavailable",
+			wantCalls: 1,
+		},
+		{
+			name:      "request canceled",
+			err:       context.Canceled,
+			status:    http.StatusRequestTimeout,
+			message:   "administrator authentication timed out",
+			wantCalls: 1,
+		},
+		{
+			name:      "request deadline exceeded",
+			err:       context.DeadlineExceeded,
+			status:    http.StatusRequestTimeout,
+			message:   "administrator authentication timed out",
+			wantCalls: 1,
+		},
+		{
+			name:      "backend failure",
+			err:       errors.New("secret backend detail"),
+			status:    http.StatusServiceUnavailable,
+			message:   "administrator authentication is unavailable",
+			wantCalls: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var handler *apiHandler
+			var authenticator *recordingBrowserAuthenticator
+			if !test.nilHandler {
+				handler = &apiHandler{}
+				if test.typedNil {
+					handler.browserAuthenticator = (*recordingBrowserAuthenticator)(nil)
+				} else if test.wantCalls > 0 {
+					authenticator = &recordingBrowserAuthenticator{
+						fn: func(context.Context, []byte) (auth.BrowserPrincipal, error) {
+							return test.principal, test.err
+						},
+					}
+					handler.browserAuthenticator = authenticator
+				}
+			}
+			request := httptest.NewRequestWithContext(
+				context.Background(),
+				http.MethodPost,
+				"/api/v1/knowledge/objects/list",
+				nil,
+			)
+			request.Header.Set(
+				"Authorization",
+				"Bearer "+adminIntegrationBearerToken,
+			)
+			response := httptest.NewRecorder()
+
+			returnedRequest, returnedPrincipal, ok := handler.authenticateBrowser(
+				response,
+				request,
+			)
+			if ok {
+				t.Fatal("authenticateBrowser accepted a failed authentication")
+			}
+			if returnedRequest != request {
+				t.Fatal("failed authentication replaced the caller-owned request")
+			}
+			if returnedPrincipal.Valid() {
+				t.Fatalf("failed authentication returned principal %+v", returnedPrincipal)
+			}
+			if response.Code != test.status {
+				t.Fatalf(
+					"status = %d, want %d; body = %s",
+					response.Code,
+					test.status,
+					response.Body.String(),
+				)
+			}
+			wantBody := "{\"error\":{\"message\":\"" + test.message + "\"}}\n"
+			if response.Body.String() != wantBody {
+				t.Fatalf("body = %q, want %q", response.Body.String(), wantBody)
+			}
+			wantChallenge := ""
+			if test.wantChallenge {
+				wantChallenge = administratorAuthenticationRealm
+			}
+			if got := response.Header().Get("WWW-Authenticate"); got != wantChallenge {
+				t.Fatalf("WWW-Authenticate = %q, want %q", got, wantChallenge)
+			}
+			gotCalls := 0
+			if authenticator != nil {
+				gotCalls = authenticator.callCount()
+			}
+			if gotCalls != test.wantCalls {
+				t.Fatalf("authenticator calls = %d, want %d", gotCalls, test.wantCalls)
+			}
+			if request.Header.Get("Authorization") !=
+				"Bearer "+adminIntegrationBearerToken {
+				t.Fatal("failed authentication mutated caller-owned Authorization header")
+			}
+			if _, present := browserPrincipalFromRequest(request); present {
+				t.Fatal("failed authentication installed a principal")
 			}
 		})
 	}
@@ -1110,6 +1397,7 @@ func newBrowserGateHandler(
 		Indexes:                    indexes,
 		IndexAdmin:                 indexes,
 		IngestionTokens:            tokens,
+		HECOperations:              &staticHECOperationalSnapshotter{},
 		CollectorAdmin:             browserGateCollectorAdministration{},
 		AppAdmin:                   &fakeAppAdministration{},
 		AppCursorKey:               appAdministrationCursorKey,

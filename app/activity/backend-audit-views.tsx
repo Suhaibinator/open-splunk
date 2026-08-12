@@ -26,10 +26,13 @@ import {
   auditActorKindLabel,
   auditActorRoleLabel,
   auditErrorPresentation,
+  auditIdentifierFromDraft,
+  auditTargetDetails,
   auditTargetKindLabel,
   listMutationAuditEvents,
   listSearchAttemptAuditEvents,
   mutationAuditActionOptions,
+  mutationAuditTargetOptions,
   type AuditErrorPresentation,
   type AuditListClient,
   type AuditPage,
@@ -144,6 +147,9 @@ function useAuditTraversal<T extends { sequence: bigint }>(
     try {
       const page = await loadPage(nextPageToken, controller.signal);
       if (controller.signal.aborted) return;
+      if (page.totalSize !== totalSize) {
+        throw new TypeError(`${label} changed its exact total during one traversal.`);
+      }
       const duplicate = page.items.find((item) => sequencesSeenRef.current.has(item.sequence));
       if (duplicate !== undefined) throw new TypeError(`${label} repeated sequence ${duplicate.sequence.toString()} across pages.`);
       const last = items.at(-1);
@@ -151,10 +157,22 @@ function useAuditTraversal<T extends { sequence: bigint }>(
       if (last !== undefined && first !== undefined && last.sequence <= first.sequence) {
         throw new TypeError(`${label} continued outside descending sequence order.`);
       }
+      const combinedItemCount = BigInt(items.length + page.items.length);
+      if (
+        combinedItemCount > page.totalSize
+        || (page.nextPageToken === null && combinedItemCount !== page.totalSize)
+        || (page.nextPageToken !== null && combinedItemCount >= page.totalSize)
+      ) {
+        throw new TypeError(`${label} continuation did not match its retained exact total.`);
+      }
+      const validatedNextPageToken = recordOpaquePageToken(
+        tokensSeenRef.current,
+        page.nextPageToken,
+        label,
+      );
       for (const item of page.items) sequencesSeenRef.current.add(item.sequence);
       setItems((current) => [...current, ...page.items]);
-      setTotalSize(page.totalSize);
-      setNextPageToken(recordOpaquePageToken(tokensSeenRef.current, page.nextPageToken, label));
+      setNextPageToken(validatedNextPageToken);
     } catch (reason) {
       if (!controller.signal.aborted) {
         const presentation = auditErrorPresentation(reason, label);
@@ -169,7 +187,7 @@ function useAuditTraversal<T extends { sequence: bigint }>(
         setLoadingMore(false);
       }
     }
-  }, [items, label, loadPage, nextPageToken]);
+  }, [items, label, loadPage, nextPageToken, totalSize]);
 
   return { state, items, totalSize, nextPageToken, error, loadMoreError, loadingMore, loadMore, reload };
 }
@@ -216,6 +234,17 @@ function PageSizeField({ maximumPageSize, value, onChange }: { maximumPageSize: 
   );
 }
 
+export function MutationAuditTargetProjection({ event }: { event: AuditEvent }) {
+  const details = auditTargetDetails(event);
+  return (
+    <>
+      <strong>{event.targetId}</strong>
+      <small>{auditTargetKindLabel(event.targetKind)}</small>
+      {details === null ? null : <small>{details}</small>}
+    </>
+  );
+}
+
 export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewProps) {
   const client = useMemo(() => auditClient(apiBaseUrl), [apiBaseUrl]);
   const initialPageSize = Math.min(50, Math.max(maximumPageSize, 1), 200);
@@ -231,9 +260,10 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
     { pageSize, pageToken, signal },
   ), [client, filters, pageSize]);
   const traversal = useAuditTraversal("Mutation audit", loadPage);
+  const normalizedDraftActorId = auditIdentifierFromDraft(draftActorId);
   const dirty = !sameMutationFilters(filters, {
     actions: draftActions,
-    actorId: draftActorId.trim() || undefined,
+    actorId: normalizedDraftActorId,
     targetKind: draftTargetKind,
   }) || pageSize !== draftPageSize;
 
@@ -241,7 +271,7 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
     event.preventDefault();
     setFilters({
       actions: [...draftActions].toSorted((left, right) => left - right),
-      actorId: draftActorId.trim() || undefined,
+      actorId: normalizedDraftActorId,
       targetKind: draftTargetKind,
     });
     setPageSize(draftPageSize);
@@ -257,7 +287,7 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
 
   return (
     <div className="backend-activity-view">
-      {traversal.state === "loading" ? <ActivityState kind="loading" title="Loading mutation audit" message="Reading successful token, index, app, and saved-search mutations…" /> : null}
+      {traversal.state === "loading" ? <ActivityState kind="loading" title="Loading mutation audit" message="Reading successful token, index, app, saved-search, and knowledge-object mutations…" /> : null}
       {traversal.state === "error" && traversal.error !== null ? <ActivityState kind={traversal.error.title.endsWith("unavailable") ? "unavailable" : "error"} title={traversal.error.title} message={traversal.error.message} action={<button type="button" onClick={traversal.reload}>Retry</button>} /> : null}
       {traversal.state === "available" ? (
         <>
@@ -267,14 +297,14 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
             <div className="audit-filter-grid">
               <label className="audit-action-filter"><span>Actions</span><select multiple size={5} value={draftActions.map(String)} onChange={(event) => setDraftActions([...event.currentTarget.selectedOptions].map((option) => Number(option.value) as AuditAction))}>{mutationAuditActionOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><small>Select one or more; no selection means every action.</small></label>
               <label><span>Actor ID</span><input value={draftActorId} onChange={(event) => setDraftActorId(event.target.value)} placeholder="Exact actor ID" /></label>
-              <label><span>Target kind</span><select value={draftTargetKind ?? ""} onChange={(event) => setDraftTargetKind(event.target.value === "" ? undefined : Number(event.target.value) as AuditTargetKind)}><option value="">Every target kind</option><option value={AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN}>Ingestion token</option><option value={AuditTargetKind.AUDIT_TARGET_KIND_INDEX}>Index</option><option value={AuditTargetKind.AUDIT_TARGET_KIND_APP}>App</option><option value={AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH}>Saved search</option></select></label>
+              <label><span>Target kind</span><select value={draftTargetKind ?? ""} onChange={(event) => setDraftTargetKind(event.target.value === "" ? undefined : Number(event.target.value) as AuditTargetKind)}><option value="">Every target kind</option>{mutationAuditTargetOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               <PageSizeField maximumPageSize={maximumPageSize} value={draftPageSize} onChange={setDraftPageSize} />
             </div>
           </form>
           <AuditPaging loaded={traversal.items.length} total={traversal.totalSize} hasNext={traversal.nextPageToken !== null} loading={traversal.loadingMore} error={traversal.loadMoreError} onLoadMore={() => void traversal.loadMore()} onRefresh={traversal.reload} />
           <section className="suite-card activity-jobs-card">
             {traversal.items.length === 0 ? <ActivityState kind="empty" title="No mutation events" message="No retained successful mutations match these exact filters." /> : (
-              <div className="responsive-table-wrap"><table className="product-table audit-table"><caption className="sr-only">Successful mutation audit events</caption><thead><tr><th scope="col">Occurred</th><th scope="col">Action</th><th scope="col">Actor</th><th scope="col">Target</th><th scope="col">Version</th><th scope="col">Sequence</th></tr></thead><tbody>{traversal.items.map((event: AuditEvent) => <tr key={event.sequence.toString()}><td data-label="Occurred"><time dateTime={event.occurredAt?.toISOString()}>{formatActivityDate(event.occurredAt ?? null)}</time></td><td data-label="Action"><strong>{auditActionLabel(event.action)}</strong></td><td data-label="Actor"><strong>{event.actorId}</strong><small>{auditActorKindLabel(event.actorKind)} · {auditActorRoleLabel(event.actorRole)}</small></td><td data-label="Target"><strong>{event.targetId}</strong><small>{auditTargetKindLabel(event.targetKind)}</small></td><td data-label="Version" className="numeric-data">{formatActivityCount(event.targetVersion)}</td><td data-label="Sequence" className="numeric-data">{formatActivityCount(event.sequence)}</td></tr>)}</tbody></table></div>
+              <div className="responsive-table-wrap"><table className="product-table audit-table"><caption className="sr-only">Successful mutation audit events</caption><thead><tr><th scope="col">Occurred</th><th scope="col">Action</th><th scope="col">Actor</th><th scope="col">Target</th><th scope="col">Version</th><th scope="col">Sequence</th></tr></thead><tbody>{traversal.items.map((event: AuditEvent) => <tr key={event.sequence.toString()}><td data-label="Occurred"><time dateTime={event.occurredAt?.toISOString()}>{formatActivityDate(event.occurredAt ?? null)}</time></td><td data-label="Action"><strong>{auditActionLabel(event.action)}</strong></td><td data-label="Actor"><strong>{event.actorId}</strong><small>{auditActorKindLabel(event.actorKind)} · {auditActorRoleLabel(event.actorRole)}</small></td><td data-label="Target"><MutationAuditTargetProjection event={event} /></td><td data-label="Version" className="numeric-data">{formatActivityCount(event.targetVersion)}</td><td data-label="Sequence" className="numeric-data">{formatActivityCount(event.sequence)}</td></tr>)}</tbody></table></div>
             )}
           </section>
         </>
@@ -297,7 +327,10 @@ export function BackendSearchAttemptAudit({ apiBaseUrl, maximumPageSize }: Audit
     { pageSize, pageToken, signal },
   ), [client, filters, pageSize]);
   const traversal = useAuditTraversal("Search-attempt audit", loadPage);
-  const nextFilters = { actorId: draftActorId.trim() || undefined, ownerId: draftOwnerId.trim() || undefined };
+  const nextFilters = {
+    actorId: auditIdentifierFromDraft(draftActorId),
+    ownerId: auditIdentifierFromDraft(draftOwnerId),
+  };
   const dirty = !sameAttemptFilters(filters, nextFilters) || pageSize !== draftPageSize;
 
   function applyFilters(event: FormEvent) {

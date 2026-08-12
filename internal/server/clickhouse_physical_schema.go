@@ -55,6 +55,8 @@ const (
 		"`field_types` Array(UInt8) DEFAULT [] CODEC(ZSTD(1)), " +
 		"`field_metadata_version` UInt8 DEFAULT 0 CODEC(T64, ZSTD(1)), " +
 		"`collector_id` String CODEC(ZSTD(1)), " +
+		"`ingest_source_kind` UInt8 DEFAULT if(empty(collector_id), 0, 1) CODEC(T64, ZSTD(1)), " +
+		"`ingest_source_id` String DEFAULT if(ingest_source_kind = 1, collector_id, '') CODEC(ZSTD(1)), " +
 		"`batch_id` String CODEC(ZSTD(1)), " +
 		"`batch_sequence` UInt64 CODEC(Delta(8), ZSTD(1)), " +
 		"`visibility_seq` UInt64 DEFAULT 0 CODEC(Delta(8), ZSTD(1)), " +
@@ -71,7 +73,12 @@ const (
 		"((field_metadata_version = 0) AND empty(field_types)) OR " +
 		"((field_metadata_version = 1) AND " +
 		"(length(field_names) = length(field_types)) AND " +
-		"arrayAll(code -> ((code >= 1) AND (code <= 12)), field_types)))" +
+		"arrayAll(code -> ((code >= 1) AND (code <= 12)), field_types)), " +
+		"CONSTRAINT ingest_source_kind_is_supported CHECK ingest_source_kind IN (1, 2), " +
+		"CONSTRAINT ingest_source_shape_is_valid CHECK " +
+		"((ingest_source_kind = 0) AND empty(ingest_source_id)) OR " +
+		"((ingest_source_kind = 1) AND notEmpty(collector_id) AND (ingest_source_id = collector_id)) OR " +
+		"((ingest_source_kind = 2) AND empty(collector_id) AND notEmpty(ingest_source_id)))" +
 		" ENGINE = MergeTree PARTITION BY toYYYYMM(event_time) " +
 		"PRIMARY KEY (tenant_id, index_name, toStartOfHour(event_time), event_time) " +
 		"ORDER BY (tenant_id, index_name, toStartOfHour(event_time), event_time, event_id) " +

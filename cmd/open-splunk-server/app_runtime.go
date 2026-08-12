@@ -33,6 +33,11 @@ type controlAppCatalog interface {
 		control.AppAccessScope,
 		control.AppListRequest,
 	) (control.AppListResult, error)
+	ListAppIdentities(
+		context.Context,
+		control.AppAccessScope,
+		uint32,
+	) (control.AppIdentityListResult, error)
 	UpdateApp(
 		context.Context,
 		control.AppAccessScope,
@@ -69,6 +74,7 @@ type runtimeAppCatalog struct {
 
 var _ server.AppAdministration = (*runtimeAppCatalog)(nil)
 var _ server.AppCatalog = (*runtimeAppCatalog)(nil)
+var _ server.KnowledgeAppCatalog = (*runtimeAppCatalog)(nil)
 
 func newRuntimeAppCatalog(
 	ctx context.Context,
@@ -352,6 +358,60 @@ func (adapter *runtimeAppCatalog) ListActiveApps(
 	return server.AppCatalogResult{
 		Apps:     apps,
 		Complete: result.NextPageToken == nil,
+	}, nil
+}
+
+// ListKnowledgeApps returns the complete app identity authority used by the
+// knowledge-management boundary. Archived workspaces remain included because
+// their retained knowledge objects must stay manageable. A continuation is
+// deliberately returned without partial IDs so a future caller cannot mistake
+// one page for complete authorization authority.
+func (adapter *runtimeAppCatalog) ListKnowledgeApps(
+	ctx context.Context,
+	tenantID string,
+	maximum uint32,
+) (server.KnowledgeAppCatalogResult, error) {
+	if maximum == 0 || maximum > control.MaximumAppsPerTenant {
+		return server.KnowledgeAppCatalogResult{},
+			server.ErrAppAdministrationInvalidArgument
+	}
+	result, err := adapter.catalog.ListAppIdentities(
+		ctx,
+		control.AppAccessScope{TenantID: strings.Clone(tenantID)},
+		maximum,
+	)
+	if err != nil {
+		return server.KnowledgeAppCatalogResult{}, mapRuntimeAppCatalogError(err)
+	}
+	if !result.Complete {
+		return server.KnowledgeAppCatalogResult{Complete: false}, nil
+	}
+	if uint64(len(result.AppIDs)) > uint64(maximum) {
+		return server.KnowledgeAppCatalogResult{}, errors.New(
+			"convert knowledge app catalog: storage page exceeds its bound",
+		)
+	}
+
+	appIDs := make([]string, len(result.AppIDs))
+	for index, appID := range result.AppIDs {
+		if !control.ValidCanonicalAppID(appID) {
+			return server.KnowledgeAppCatalogResult{}, errors.New(
+				"convert knowledge app catalog: persisted app identity is invalid",
+			)
+		}
+		appIDs[index] = strings.Clone(appID)
+	}
+	slices.Sort(appIDs)
+	for index := 1; index < len(appIDs); index++ {
+		if appIDs[index-1] == appIDs[index] {
+			return server.KnowledgeAppCatalogResult{}, errors.New(
+				"convert knowledge app catalog: persisted app identity is duplicated",
+			)
+		}
+	}
+	return server.KnowledgeAppCatalogResult{
+		AppIDs:   appIDs,
+		Complete: true,
 	}, nil
 }
 

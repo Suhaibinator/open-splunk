@@ -21,15 +21,18 @@ import {
   sortDirectionToJSON,
 } from "./common";
 import {
+  KnowledgeDependencyRole,
+  knowledgeDependencyRoleFromJSON,
+  knowledgeDependencyRoleToJSON,
   KnowledgeObject,
   KnowledgeObjectDefinition,
-  KnowledgeObjectDependency,
   KnowledgeObjectState,
   knowledgeObjectStateFromJSON,
   knowledgeObjectStateToJSON,
   KnowledgeObjectType,
   knowledgeObjectTypeFromJSON,
   knowledgeObjectTypeToJSON,
+  KnowledgeObjectVersionReference,
 } from "./knowledge";
 import { ResultRow, ResultSchema } from "./result";
 
@@ -123,6 +126,63 @@ export function knowledgeQuarantineReasonToJSON(object: KnowledgeQuarantineReaso
   }
 }
 
+/**
+ * KnowledgeValidationIntent selects the lifecycle authority which validation
+ * proves. The request must contain exactly one of the two defined nonzero
+ * values. UNSPECIFIED and every unknown numeric enum value are request-envelope
+ * errors rather than in-band candidate validation results.
+ */
+export enum KnowledgeValidationIntent {
+  KNOWLEDGE_VALIDATION_INTENT_UNSPECIFIED = 0,
+  /**
+   * KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE - INACTIVE_STORAGE proves that the candidate is canonical and bounded for
+   * persistence in a non-ACTIVE lifecycle state. It performs no publication-
+   * readiness derivation, does not claim that the candidate is currently
+   * publishable, and returns no derived dependencies.
+   */
+  KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE = 1,
+  /**
+   * KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION - ACTIVE_PUBLICATION evaluates the candidate as the proposed ACTIVE version
+   * in one fixed knowledge, app, and index catalog transaction. The response
+   * revision identifies only the knowledge-ledger component of that advisory
+   * evaluation; it is not the complete transaction authority.
+   */
+  KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION = 2,
+  UNRECOGNIZED = -1,
+}
+
+export function knowledgeValidationIntentFromJSON(object: any): KnowledgeValidationIntent {
+  switch (object) {
+    case 0:
+    case "KNOWLEDGE_VALIDATION_INTENT_UNSPECIFIED":
+      return KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_UNSPECIFIED;
+    case 1:
+    case "KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE":
+      return KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE;
+    case 2:
+    case "KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION":
+      return KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION;
+    case -1:
+    case "UNRECOGNIZED":
+    default:
+      return KnowledgeValidationIntent.UNRECOGNIZED;
+  }
+}
+
+export function knowledgeValidationIntentToJSON(object: KnowledgeValidationIntent): string {
+  switch (object) {
+    case KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_UNSPECIFIED:
+      return "KNOWLEDGE_VALIDATION_INTENT_UNSPECIFIED";
+    case KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE:
+      return "KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE";
+    case KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION:
+      return "KNOWLEDGE_VALIDATION_INTENT_ACTIVE_PUBLICATION";
+    case KnowledgeValidationIntent.UNRECOGNIZED:
+    default:
+      return "UNRECOGNIZED";
+  }
+}
+
 /** POST /api/v1/knowledge/objects/create */
 export interface CreateKnowledgeObjectRequest {
   definition:
@@ -134,8 +194,15 @@ export interface CreateKnowledgeObjectRequest {
 }
 
 export interface CreateKnowledgeObjectResponse {
-  knowledgeObject: KnowledgeObject | undefined;
+  knowledgeObject:
+    | KnowledgeObject
+    | undefined;
+  /**
+   * The revision and state token form one catalog snapshot identity. The token
+   * is exactly 32 bytes and must never be interpreted without this revision.
+   */
   tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
 }
 
 /**
@@ -156,7 +223,8 @@ export interface GetKnowledgeObjectResponse {
 /**
  * POST /api/v1/knowledge/objects/list
  * The signed continuation binds every normalized filter, ordering choice,
- * caller scope, page bound, and first-page catalog revision.
+ * caller scope, page bound, and first-page catalog revision plus its exact
+ * 32-byte restore-fork-safe catalog-state commitment.
  * text_filter is a binary substring of the current name or description;
  * selector_text_filter is a binary substring of one individual current
  * selector pattern. Every predicate is applied before keyset LIMIT.
@@ -193,8 +261,15 @@ export interface UpdateKnowledgeObjectRequest {
 }
 
 export interface UpdateKnowledgeObjectResponse {
-  knowledgeObject: KnowledgeObject | undefined;
+  knowledgeObject:
+    | KnowledgeObject
+    | undefined;
+  /**
+   * The revision and state token form one catalog snapshot identity. The token
+   * is exactly 32 bytes and must never be interpreted without this revision.
+   */
   tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
 }
 
 /**
@@ -211,8 +286,15 @@ export interface SetKnowledgeObjectStateRequest {
 }
 
 export interface SetKnowledgeObjectStateResponse {
-  knowledgeObject: KnowledgeObject | undefined;
+  knowledgeObject:
+    | KnowledgeObject
+    | undefined;
+  /**
+   * The revision and state token form one catalog snapshot identity. The token
+   * is exactly 32 bytes and must never be interpreted without this revision.
+   */
   tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
 }
 
 /**
@@ -229,7 +311,45 @@ export interface DeleteKnowledgeObjectRequest {
 export interface DeleteKnowledgeObjectResponse {
   knowledgeObjectId: string;
   deletedVersion: bigint;
+  /**
+   * The revision and state token form one catalog snapshot identity. The token
+   * is exactly 32 bytes and must never be interpreted without this revision.
+   */
   tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
+}
+
+/**
+ * Internal, strictly canonical replay authority persisted in
+ * knowledge_mutation_idempotency.outcome_proto. It deliberately duplicates
+ * the bounded row scalars so same-width storage corruption cannot forge a
+ * response snapshot identity. Ordinary mutations use successful_audit_sequence;
+ * protective quarantine uses recovery_audit_sequence.
+ */
+export interface KnowledgeMutationOutcomeRecord {
+  route: string;
+  mutationKind: string;
+  object: KnowledgeObjectVersionReference | undefined;
+  tenantCatalogRevision: bigint;
+  tenantCatalogStateToken: Uint8Array;
+  /**
+   * Immutable mutation occurrence and retention authorities. Reclamation
+   * validates these canonical microsecond values against the receipt row so a
+   * damaged or shortened fence cannot make an idempotent outcome disappear.
+   */
+  occurredAtUnixMicro: bigint;
+  retentionAnchorUnixMicro: bigint;
+  retainUntilUnixMicro: bigint;
+  /**
+   * Keep the oneof declaration after the ordinary scalar fields. The Go
+   * runtime emits oneofs after ordinary fields, while the TypeScript runtime
+   * follows declaration order; this ordering makes their canonical v1 wire
+   * bytes identical without changing any established field number.
+   */
+  auditAuthority: { $case: "successfulAuditSequence"; value: bigint } | {
+    $case: "recoveryAuditSequence";
+    value: bigint;
+  } | undefined;
 }
 
 export interface KnowledgeQuarantineTransition {
@@ -276,10 +396,90 @@ export interface QuarantineKnowledgeObjectResponse {
   tenantCatalogRevision: bigint;
 }
 
+/**
+ * KnowledgeValidationDependency is one direct dependency of only the applied
+ * candidate. It deliberately excludes a source identity, definition digests,
+ * snapshot stages, global depth, and canonical snapshot ordinals. target is an
+ * exact currently authorized object identity. Only ACTIVE_PUBLICATION may
+ * return these entries, and KO-1 emits only FIELD_INPUT. Missing and
+ * unauthorized dependency targets are indistinguishable and never produce an
+ * entry: candidate invalidity uses only the static diagnostic code
+ * KNOWLEDGE_DEPENDENCY_UNAVAILABLE, while boundary failures use a uniform
+ * non-2xx response.
+ */
+export interface KnowledgeValidationDependency {
+  target: KnowledgeManagementObjectVersionIdentity | undefined;
+  role: KnowledgeDependencyRole;
+}
+
+/**
+ * KnowledgeValidationDiagnostic locates a compiler diagnostic within the
+ * applied candidate. field_path is a path in KnowledgeObjectDefinition and is
+ * at most 1 KiB of UTF-8. When diagnostic.source_range is present, its byte
+ * offsets are relative to the UTF-8 scalar value at field_path, never to the
+ * encoded request or the complete definition. A present source_range requires
+ * nonnil start and end positions and denotes a half-open range with start byte
+ * offset less than or equal to end. Both offsets are at most the exact scalar
+ * UTF-8 byte length and fall on code-point boundaries. Source line and column
+ * values must equal the uniquely derived one-based coordinates: offset zero is
+ * line 1, column 1; LF increments line and resets column to 1; every other
+ * Unicode scalar, including CR, increments column. UNSPECIFIED and unknown
+ * diagnostic severities are invalid service output.
+ * diagnostic.code is at most 128 UTF-8 bytes, diagnostic.message is at most
+ * 4 KiB, and diagnostic.suggestions contains at most 32 unique values of at
+ * most 1 KiB each in ascending binary UTF-8 order. field_path, code, message,
+ * and suggestions may contain only stable static templates plus exact source
+ * text already present in the applied candidate scalar. They must never expose
+ * any other catalog object, app, owner, name, ID, version, digest, definition,
+ * index inventory beyond candidate-authored text, cohort or global count,
+ * generated SQL, or hidden authority.
+ */
+export interface KnowledgeValidationDiagnostic {
+  fieldPath: string;
+  diagnostic: Diagnostic | undefined;
+}
+
+/**
+ * Every charge is attributable only to the applied candidate, never to the
+ * complete tenant catalog or an affected publication cohort. A present report
+ * is complete; partial resource estimates are forbidden. selector_patterns is
+ * the exact number of normalized selector patterns in the applied candidate,
+ * and normalized_definition_bytes is its exact deterministic protobuf size.
+ *
+ * INACTIVE_STORAGE sets dependency_nodes, dependency_edges, and every compile-
+ * derived field -- generated_operators, generated_fields, regex_programs,
+ * estimated_regex_work_units, scalar_expressions, scalar_expression_nodes,
+ * extraction_outputs, json_evaluation_work_units, and scalar_predicates -- to
+ * exactly zero because publication compilation does not occur.
+ *
+ * ACTIVE_PUBLICATION obtains compile-derived fields by compiling a canonical
+ * knowledge program input whose only object is the applied normalized
+ * candidate and whose dependency list is empty. The fields equal, respectively,
+ * that singleton program's intrinsic Charges.GeneratedOperators,
+ * Charges.GeneratedFields, Charges.RegexPrograms, Charges.RegexWorkUnits,
+ * Charges.ScalarExpressions, Charges.ScalarExpressionNodes,
+ * Charges.ExtractionOutputs, Charges.JSONEvaluationWork, and
+ * Charges.ScalarPredicates. They are neither affected-cohort totals nor
+ * marginal deltas after cohort operator fusion. dependency_nodes and
+ * dependency_edges remain derived from the full ACTIVE transition and the
+ * returned authorized result.dependencies, not from the singleton program.
+ */
 export interface KnowledgeResourceEstimate {
+  /** Exact number of normalized selector patterns in the applied candidate. */
   selectorPatterns: number;
+  /** Exact deterministic protobuf size of the normalized candidate definition. */
   normalizedDefinitionBytes: bigint;
+  /**
+   * Distinct exact direct targets in result.dependencies, excluding the
+   * candidate itself. This is zero for INACTIVE_STORAGE; for a valid
+   * ACTIVE_PUBLICATION it derives only from returned authorized dependencies.
+   */
   dependencyNodes: number;
+  /**
+   * Direct candidate dependency edges; this equals result.dependencies size
+   * and is zero for INACTIVE_STORAGE. For a valid ACTIVE_PUBLICATION it derives
+   * only from returned authorized dependencies.
+   */
   dependencyEdges: number;
   generatedOperators: number;
   generatedFields: number;
@@ -287,24 +487,133 @@ export interface KnowledgeResourceEstimate {
   estimatedRegexWorkUnits: bigint;
   scalarExpressions: number;
   scalarExpressionNodes: number;
-  estimatedGeneratedSqlBytes: bigint;
+  extractionOutputs: number;
+  jsonEvaluationWorkUnits: number;
+  scalarPredicates: number;
 }
 
+/**
+ * KnowledgeValidationResult reports candidate-authored definition validity
+ * under the selected intent in-band with HTTP 200. valid is not mutation
+ * acceptability, a reservation, or a promise that a later Writer operation
+ * will succeed. An applied masked update that is identical to the current
+ * definition may be valid. INACTIVE_STORAGE against a currently ACTIVE object
+ * proves only hypothetical non-ACTIVE storage validity and never ACTIVE Update
+ * admissibility. Every later Writer operation independently revalidates its
+ * then-current authorization, version, lifecycle, capacity, app, index, and
+ * publication authority. Request-envelope, authentication, authorization-to-
+ * the-requested object, catalog-integrity, and service failures remain ordinary
+ * non-2xx API errors and never appear as valid=false.
+ *
+ * valid=false requires at least one retained field violation or ERROR
+ * diagnostic even when either issue list is truncated, and requires
+ * normalized_definition, definition_sha256, dependencies, and resources to be
+ * absent. valid=true requires a normalized_definition, an exact 32-byte SHA-256
+ * digest of its deterministic protobuf encoding, a complete resources report, no
+ * field violations, no ERROR diagnostics, and field_violations_truncated=false.
+ * object_type is UNSPECIFIED only when an invalid candidate's body cannot be
+ * identified; otherwise it is the applied candidate's exact body type.
+ * Persisted corruption and hidden inventory failures are always uniform non-2xx
+ * service failures and must not be converted into candidate issues.
+ * Before issue canonicalization or serialization, the response boundary
+ * recursively rejects unknown protobuf fields in this result and every nested
+ * message. The violation and diagnostic keys cover every currently recognized
+ * nested field; any future appended issue field must extend per-entry
+ * validation, deduplication, and comparison before it may be emitted.
+ */
 export interface KnowledgeValidationResult {
   valid: boolean;
   objectType: KnowledgeObjectType;
   normalizedDefinition?: KnowledgeObjectDefinition | undefined;
-  definitionSha256?: Uint8Array | undefined;
+  definitionSha256?:
+    | Uint8Array
+    | undefined;
+  /**
+   * Validate every candidate-authored value against its per-entry limits,
+   * deduplicate exact full values, sort by ascending binary UTF-8 field_path,
+   * code, then message, and retain the longest prefix bounded by both 256
+   * values and a 256 KiB (262144-byte)
+   * aggregate UTF-8 text charge. One value's charge is the sum of the UTF-8
+   * byte lengths of field_path, code, and message, without separators or wire
+   * framing. Each field_path is at most 1 KiB, code at most 128 bytes, and
+   * message at most 4 KiB. Once the next sorted value would exceed either
+   * bound, it and every later value are omitted. field_path, code, and message
+   * obey the same static-template, candidate-source-only nondisclosure rule as
+   * KnowledgeValidationDiagnostic. field_violations_truncated records omission
+   * by either the field_violations count or aggregate-text bound.
+   */
   fieldViolations: FieldViolation[];
-  diagnostics: Diagnostic[];
-  dependencies: KnowledgeObjectDependency[];
-  resources: KnowledgeResourceEstimate | undefined;
+  resources:
+    | KnowledgeResourceEstimate
+    | undefined;
+  /**
+   * ACTIVE_PUBLICATION returns at most 1024 unique values, sorted by ascending
+   * binary UTF-8 target object ID, target version, then numeric role. role must
+   * be FIELD_INPUT. INACTIVE_STORAGE always returns an empty list.
+   */
+  dependencies: KnowledgeValidationDependency[];
+  /**
+   * Validate every candidate-authored value against its per-entry limits, then
+   * deduplicate exact full values and sort first by explicit severity rank
+   * ERROR, WARNING, INFO. UNSPECIFIED and unknown severities are invalid. The
+   * remaining keys are field_path, absent source range before a present range,
+   * start byte offset, end byte offset, code, message, canonical derived start
+   * and end line/column coordinates, then the complete suggestions sequence
+   * lexicographically. Sequence comparison is elementwise ascending binary
+   * UTF-8 with a shorter equal-prefix sequence first. This is a total key.
+   * Retain the longest prefix bounded by both 256 values and a 768 KiB
+   * (786432-byte) aggregate UTF-8 text charge. One value's charge is the sum of
+   * the UTF-8 byte lengths of its field_path, diagnostic code, diagnostic
+   * message, and every suggestion, without separators or wire framing. Once
+   * the next sorted value would exceed either bound, it and every later value
+   * are omitted. ERROR-first ordering and the per-entry limit guarantee that
+   * valid=false retains at least one ERROR diagnostic even when warnings alone
+   * would otherwise fill the aggregate budget. diagnostics_truncated records
+   * omission by either the diagnostics count or aggregate-text bound.
+   */
+  diagnostics: KnowledgeValidationDiagnostic[];
+  /**
+   * True exactly when one or more otherwise-valid sorted field violations were
+   * omitted by the field_violations count or aggregate-text bound; false means
+   * the returned list is complete. Per-entry validation failures are service
+   * failures, never truncation. This must be false when valid=true.
+   */
+  fieldViolationsTruncated: boolean;
+  /**
+   * True exactly when one or more otherwise-valid sorted diagnostics were
+   * omitted by the diagnostics count or aggregate-text bound; false means the
+   * returned list is complete. Per-entry validation failures are service
+   * failures, never truncation.
+   */
+  diagnosticsTruncated: boolean;
 }
 
 /**
  * POST /api/v1/knowledge/objects/validate
- * When knowledge_object_id is present, expected_version and update_mask are
- * required and validation applies the masked candidate to that exact version.
+ * The route is registered only with the complete knowledge-management
+ * dependency unit; route presence does not advertise a capability.
+ *
+ * definition message presence is required. A missing top-level definition is
+ * a request-envelope error; a present definition whose body is missing or
+ * unknown is candidate-authored invalidity reported in-band. intent must be
+ * exactly INACTIVE_STORAGE or ACTIVE_PUBLICATION; UNSPECIFIED and unknown
+ * numeric values are request-envelope errors. Create mode is selected only when
+ * knowledge_object_id is absent and requires expected_version and update_mask
+ * message to both be absent, not merely zero or empty. ACTIVE_PUBLICATION
+ * create validation evaluates the candidate under a deterministic,
+ * non-persisted object ID proven fresh in the same catalog transaction. Its
+ * validity, diagnostics, resources, and target-only dependency projection must
+ * be invariant under alpha-renaming that ID to any other fresh valid ID. The
+ * result neither reserves that ID nor authorizes a later Create: Create
+ * generates its own ID and revalidates the then-current catalog, app, and index
+ * authority, so intervening changes may alter the outcome. Update mode is
+ * selected only when knowledge_object_id is present; that ID must be nonempty,
+ * expected_version must be present in the inclusive range 1 through MaxInt64
+ * (9223372036854775807), and update_mask must be a present message with at
+ * least one canonical path. Update validation applies the masked candidate to
+ * that exact current version.
+ * Violations of these rules are request-envelope errors, never an in-band
+ * valid=false candidate result.
  */
 export interface ValidateKnowledgeObjectRequest {
   definition: KnowledgeObjectDefinition | undefined;
@@ -314,14 +623,68 @@ export interface ValidateKnowledgeObjectRequest {
     | undefined;
   /** Paths are relative to KnowledgeObjectDefinition, never this request. */
   updateMask: string[] | undefined;
+  intent: KnowledgeValidationIntent;
 }
 
+/**
+ * Validation observes the knowledge, app, and index catalogs in one fixed
+ * transaction. The deterministic protobuf encoding of this complete response
+ * is at most 8 MiB (8388608 bytes), including result framing and
+ * tenant_catalog_revision. The boundary recursively rejects unknown protobuf
+ * fields in the response, result, and every nested message before deterministic
+ * serialization.
+ */
 export interface ValidateKnowledgeObjectResponse {
-  result: KnowledgeValidationResult | undefined;
+  /** Required by the response boundary; an absent result is invalid. */
+  result:
+    | KnowledgeValidationResult
+    | undefined;
+  /**
+   * Exact knowledge-ledger revision observed in the fixed transaction; zero
+   * denotes a proven empty knowledge ledger. It identifies only the knowledge-
+   * ledger component, not the app or index authority which also affected the
+   * result. It is advisory correlation metadata, not a reusable full authority,
+   * reservation, mutation proof, or promise that later validation will agree.
+   */
   tenantCatalogRevision: bigint;
 }
 
-/** POST /api/v1/knowledge/objects/dependencies */
+/**
+ * KnowledgeManagementObjectVersionIdentity identifies one exact immutable
+ * object version without exposing its definition digest. Definition digests
+ * remain subject to the containing object's current disclosure policy.
+ */
+export interface KnowledgeManagementObjectVersionIdentity {
+  knowledgeObjectId: string;
+  version: bigint;
+}
+
+/**
+ * KnowledgeManagementDependencyEdge is one direct persisted object-to-object
+ * edge. Snapshot-global stage, topological-depth, and canonical-order metadata
+ * deliberately do not belong to this management projection.
+ */
+export interface KnowledgeManagementDependencyEdge {
+  source: KnowledgeManagementObjectVersionIdentity | undefined;
+  target: KnowledgeManagementObjectVersionIdentity | undefined;
+  role: KnowledgeDependencyRole;
+}
+
+/**
+ * POST /api/v1/knowledge/objects/dependencies
+ * The current registry identity authorizes the requested source; selecting a
+ * historical version never grants authority. The response lists the exact
+ * direct outgoing edges persisted for that selected source version. An edge
+ * whose target is not currently disclosable is omitted before pagination and
+ * total counting, without a redacted placeholder or hidden count. A currently
+ * quarantined requested source is reported through the uniform not-found-or-
+ * forbidden response and exposes no current or historical dependency data.
+ * Disclosed edges use fixed ascending binary target ID, target version, then
+ * role order. The signed continuation binds this route, caller scope, request
+ * version presence and value, resolved source, page bound and total-count
+ * choice, and the first page's catalog revision plus exact state commitment.
+ * Any later catalog identity invalidates the continuation.
+ */
 export interface ListKnowledgeObjectDependenciesRequest {
   knowledgeObjectId: string;
   version?: bigint | undefined;
@@ -329,12 +692,40 @@ export interface ListKnowledgeObjectDependenciesRequest {
 }
 
 export interface ListKnowledgeObjectDependenciesResponse {
-  dependencies: KnowledgeObjectDependency[];
+  /**
+   * Intentional historical compatibility waiver: the unregistered draft used
+   * KnowledgeObjectDependency at tag 1. The management-only edge replaced it
+   * before this graph route was registered or advertised. The migration is
+   * intentionally breaking and is allowlisted only against its exact draft
+   * baseline; it must not be described as schema non-breaking.
+   */
+  dependencies: KnowledgeManagementDependencyEdge[];
   page: PageResponse | undefined;
   tenantCatalogRevision: bigint;
+  /**
+   * resolved_object is the exact source selected by the request, including on
+   * an empty page when request.version was absent.
+   */
+  resolvedObject: KnowledgeManagementObjectVersionIdentity | undefined;
 }
 
-/** POST /api/v1/knowledge/objects/dependents */
+/**
+ * POST /api/v1/knowledge/objects/dependents
+ * The current registry identity authorizes the requested target; selecting a
+ * historical version never grants authority. The response lists exact incoming
+ * edges to that target version only from source versions which are their
+ * objects' current registry versions. Every source lifecycle state is eligible,
+ * but a source which is not currently disclosable is omitted before pagination
+ * and total counting, without a redacted placeholder or hidden count. A
+ * currently quarantined requested target is reported through the uniform not-
+ * found-or-forbidden response and exposes no current or historical dependency
+ * data.
+ * Disclosed edges use fixed ascending binary source ID, source version, then
+ * role order. The signed continuation binds this route, caller scope, request
+ * version presence and value, resolved target, page bound and total-count
+ * choice, and the first page's catalog revision plus exact state commitment.
+ * Any later catalog identity invalidates the continuation.
+ */
 export interface ListKnowledgeObjectDependentsRequest {
   knowledgeObjectId: string;
   version?: bigint | undefined;
@@ -342,15 +733,49 @@ export interface ListKnowledgeObjectDependentsRequest {
 }
 
 export interface ListKnowledgeObjectDependentsResponse {
-  dependents: KnowledgeObjectDependency[];
+  /**
+   * Intentional historical compatibility waiver: the unregistered draft used
+   * KnowledgeObjectDependency at tag 1. The management-only edge replaced it
+   * before this graph route was registered or advertised. The migration is
+   * intentionally breaking and is allowlisted only against its exact draft
+   * baseline; it must not be described as schema non-breaking.
+   */
+  dependents: KnowledgeManagementDependencyEdge[];
   page: PageResponse | undefined;
   tenantCatalogRevision: bigint;
+  /**
+   * resolved_object is the exact target selected by the request, including on
+   * an empty page when request.version was absent.
+   */
+  resolvedObject: KnowledgeManagementObjectVersionIdentity | undefined;
 }
 
 /**
  * POST /api/v1/knowledge/objects/preview
- * retained_search_job_id selects a server-authorized immutable event snapshot.
- * A browser cannot submit events, index scope, a physical table, or SQL.
+ * This administrator-only route is registered only with the complete ready
+ * knowledge-management and retained-execution family. Its request codec accepts
+ * a raw protobuf body of at most 4 MiB plus 64 KiB (4259840 bytes). The
+ * retained_search_job_id selects an owner-scoped retained execution authority
+ * which the service reacquires under the authenticated caller;
+ * it is not an immutable event snapshot identity and does not itself grant
+ * access. The ID must be nonempty valid UTF-8 of at most 256 bytes, unchanged by
+ * whitespace trimming, and contain no Unicode control code point. A browser
+ * cannot submit events, index scope, a physical table, or SQL.
+ *
+ * The internal codec rejects malformed wire and unknown-group nesting deeper
+ * than 32. Its bounded projection retains at most 9 update-mask paths and 17
+ * entries in each selected selector dimension or regex output list while
+ * validating UTF-8 in every recognized string occurrence, including values
+ * later overwritten, unselected, or cleared. It retains outer and wrong-wire
+ * envelope unknowns plus update-mask unknowns for structural rejection. Create
+ * full-candidate unknowns and update mask-selected nested unknowns are retained;
+ * update candidate top-level and unselected nested unknowns are discarded.
+ *
+ * definition, knowledge_object_id, expected_version, and update_mask obey the
+ * exact create/update envelope of ValidateKnowledgeObjectRequest, with the
+ * server forcing ACTIVE_PUBLICATION and accepting no independent intent. This
+ * structural envelope validator performs no retained-job lookup or
+ * authorization and never mutates or normalizes the decoded request.
  */
 export interface PreviewKnowledgeObjectRequest {
   retainedSearchJobId: string;
@@ -360,10 +785,28 @@ export interface PreviewKnowledgeObjectRequest {
     | bigint
     | undefined;
   /** Paths are relative to KnowledgeObjectDefinition, never this request. */
-  updateMask: string[] | undefined;
+  updateMask:
+    | string[]
+    | undefined;
+  /**
+   * Absence selects the service default of 100 rows per side. Present values
+   * must be in 1..1000; zero and larger values fail before execution.
+   */
   maximumRows?: number | undefined;
 }
 
+/**
+ * Preview has no independent validation intent.
+ * validation always uses ACTIVE_PUBLICATION and applies the same create/update
+ * candidate-envelope semantics as ValidateKnowledgeObjectRequest. It evaluates
+ * definition validity in one fixed knowledge, app, and index catalog
+ * transaction and obeys every candidate dependency, resource, truncation, and
+ * nondisclosure invariant of KnowledgeValidationResult before preview
+ * execution. Its tenant_catalog_revision identifies only the advisory
+ * knowledge-ledger component; it is not mutation acceptability, a reservation,
+ * or a reusable publication proof, and every later Writer operation revalidates
+ * its then-current authority.
+ */
 export interface PreviewKnowledgeObjectResponse {
   validation: KnowledgeValidationResult | undefined;
   beforeSchema: ResultSchema | undefined;
@@ -477,7 +920,7 @@ export const CreateKnowledgeObjectRequest: MessageFns<CreateKnowledgeObjectReque
 };
 
 function createBaseCreateKnowledgeObjectResponse(): CreateKnowledgeObjectResponse {
-  return { knowledgeObject: undefined, tenantCatalogRevision: 0n };
+  return { knowledgeObject: undefined, tenantCatalogRevision: 0n, tenantCatalogStateToken: new Uint8Array(0) };
 }
 
 export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResponse> = {
@@ -490,6 +933,9 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(16).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(26).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -517,6 +963,14 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -538,6 +992,11 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -548,6 +1007,9 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
     return obj;
   },
@@ -566,6 +1028,7 @@ export const CreateKnowledgeObjectResponse: MessageFns<CreateKnowledgeObjectResp
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
     return message;
   },
 };
@@ -1270,7 +1733,7 @@ export const UpdateKnowledgeObjectRequest: MessageFns<UpdateKnowledgeObjectReque
 };
 
 function createBaseUpdateKnowledgeObjectResponse(): UpdateKnowledgeObjectResponse {
-  return { knowledgeObject: undefined, tenantCatalogRevision: 0n };
+  return { knowledgeObject: undefined, tenantCatalogRevision: 0n, tenantCatalogStateToken: new Uint8Array(0) };
 }
 
 export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResponse> = {
@@ -1283,6 +1746,9 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(16).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(26).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -1310,6 +1776,14 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1331,6 +1805,11 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -1341,6 +1820,9 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
     return obj;
   },
@@ -1359,6 +1841,7 @@ export const UpdateKnowledgeObjectResponse: MessageFns<UpdateKnowledgeObjectResp
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
     return message;
   },
 };
@@ -1491,7 +1974,7 @@ export const SetKnowledgeObjectStateRequest: MessageFns<SetKnowledgeObjectStateR
 };
 
 function createBaseSetKnowledgeObjectStateResponse(): SetKnowledgeObjectStateResponse {
-  return { knowledgeObject: undefined, tenantCatalogRevision: 0n };
+  return { knowledgeObject: undefined, tenantCatalogRevision: 0n, tenantCatalogStateToken: new Uint8Array(0) };
 }
 
 export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectStateResponse> = {
@@ -1504,6 +1987,9 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(16).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(26).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -1531,6 +2017,14 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1552,6 +2046,11 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -1562,6 +2061,9 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
     return obj;
   },
@@ -1580,6 +2082,7 @@ export const SetKnowledgeObjectStateResponse: MessageFns<SetKnowledgeObjectState
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
     return message;
   },
 };
@@ -1694,7 +2197,12 @@ export const DeleteKnowledgeObjectRequest: MessageFns<DeleteKnowledgeObjectReque
 };
 
 function createBaseDeleteKnowledgeObjectResponse(): DeleteKnowledgeObjectResponse {
-  return { knowledgeObjectId: "", deletedVersion: 0n, tenantCatalogRevision: 0n };
+  return {
+    knowledgeObjectId: "",
+    deletedVersion: 0n,
+    tenantCatalogRevision: 0n,
+    tenantCatalogStateToken: new Uint8Array(0),
+  };
 }
 
 export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResponse> = {
@@ -1713,6 +2221,9 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(24).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(34).bytes(message.tenantCatalogStateToken);
     }
     return writer;
   },
@@ -1748,6 +2259,14 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1774,6 +2293,11 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
     };
   },
 
@@ -1787,6 +2311,9 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
     }
     return obj;
   },
@@ -1806,6 +2333,297 @@ export const DeleteKnowledgeObjectResponse: MessageFns<DeleteKnowledgeObjectResp
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseKnowledgeMutationOutcomeRecord(): KnowledgeMutationOutcomeRecord {
+  return {
+    route: "",
+    mutationKind: "",
+    object: undefined,
+    tenantCatalogRevision: 0n,
+    tenantCatalogStateToken: new Uint8Array(0),
+    occurredAtUnixMicro: 0n,
+    retentionAnchorUnixMicro: 0n,
+    retainUntilUnixMicro: 0n,
+    auditAuthority: undefined,
+  };
+}
+
+export const KnowledgeMutationOutcomeRecord: MessageFns<KnowledgeMutationOutcomeRecord> = {
+  encode(message: KnowledgeMutationOutcomeRecord, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.route !== "") {
+      writer.uint32(10).string(message.route);
+    }
+    if (message.mutationKind !== "") {
+      writer.uint32(18).string(message.mutationKind);
+    }
+    if (message.object !== undefined) {
+      KnowledgeObjectVersionReference.encode(message.object, writer.uint32(26).fork()).join();
+    }
+    if (message.tenantCatalogRevision !== 0n) {
+      if (BigInt.asUintN(64, message.tenantCatalogRevision) !== message.tenantCatalogRevision) {
+        throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.tenantCatalogRevision);
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      writer.uint32(42).bytes(message.tenantCatalogStateToken);
+    }
+    if (message.occurredAtUnixMicro !== 0n) {
+      if (BigInt.asIntN(64, message.occurredAtUnixMicro) !== message.occurredAtUnixMicro) {
+        throw new globalThis.Error("value provided for field message.occurredAtUnixMicro of type int64 too large");
+      }
+      writer.uint32(64).int64(message.occurredAtUnixMicro);
+    }
+    if (message.retentionAnchorUnixMicro !== 0n) {
+      if (BigInt.asIntN(64, message.retentionAnchorUnixMicro) !== message.retentionAnchorUnixMicro) {
+        throw new globalThis.Error("value provided for field message.retentionAnchorUnixMicro of type int64 too large");
+      }
+      writer.uint32(72).int64(message.retentionAnchorUnixMicro);
+    }
+    if (message.retainUntilUnixMicro !== 0n) {
+      if (BigInt.asIntN(64, message.retainUntilUnixMicro) !== message.retainUntilUnixMicro) {
+        throw new globalThis.Error("value provided for field message.retainUntilUnixMicro of type int64 too large");
+      }
+      writer.uint32(80).int64(message.retainUntilUnixMicro);
+    }
+    switch (message.auditAuthority?.$case) {
+      case "successfulAuditSequence":
+        if (BigInt.asUintN(64, message.auditAuthority.value) !== message.auditAuthority.value) {
+          throw new globalThis.Error("value provided for field message.auditAuthority.value of type uint64 too large");
+        }
+        writer.uint32(48).uint64(message.auditAuthority.value);
+        break;
+      case "recoveryAuditSequence":
+        if (BigInt.asUintN(64, message.auditAuthority.value) !== message.auditAuthority.value) {
+          throw new globalThis.Error("value provided for field message.auditAuthority.value of type uint64 too large");
+        }
+        writer.uint32(56).uint64(message.auditAuthority.value);
+        break;
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeMutationOutcomeRecord {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeMutationOutcomeRecord();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.route = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.mutationKind = reader.string();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.object = KnowledgeObjectVersionReference.decode(reader, reader.uint32());
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.tenantCatalogRevision = reader.uint64() as bigint;
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.tenantCatalogStateToken = reader.bytes();
+          continue;
+        }
+        case 8: {
+          if (tag !== 64) {
+            break;
+          }
+
+          message.occurredAtUnixMicro = reader.int64() as bigint;
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.retentionAnchorUnixMicro = reader.int64() as bigint;
+          continue;
+        }
+        case 10: {
+          if (tag !== 80) {
+            break;
+          }
+
+          message.retainUntilUnixMicro = reader.int64() as bigint;
+          continue;
+        }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.auditAuthority = { $case: "successfulAuditSequence", value: reader.uint64() as bigint };
+          continue;
+        }
+        case 7: {
+          if (tag !== 56) {
+            break;
+          }
+
+          message.auditAuthority = { $case: "recoveryAuditSequence", value: reader.uint64() as bigint };
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeMutationOutcomeRecord {
+    return {
+      route: isSet(object.route) ? globalThis.String(object.route) : "",
+      mutationKind: isSet(object.mutationKind)
+        ? globalThis.String(object.mutationKind)
+        : isSet(object.mutation_kind)
+        ? globalThis.String(object.mutation_kind)
+        : "",
+      object: isSet(object.object) ? KnowledgeObjectVersionReference.fromJSON(object.object) : undefined,
+      tenantCatalogRevision: isSet(object.tenantCatalogRevision)
+        ? BigInt(object.tenantCatalogRevision)
+        : isSet(object.tenant_catalog_revision)
+        ? BigInt(object.tenant_catalog_revision)
+        : 0n,
+      tenantCatalogStateToken: isSet(object.tenantCatalogStateToken)
+        ? bytesFromBase64(object.tenantCatalogStateToken)
+        : isSet(object.tenant_catalog_state_token)
+        ? bytesFromBase64(object.tenant_catalog_state_token)
+        : new Uint8Array(0),
+      occurredAtUnixMicro: isSet(object.occurredAtUnixMicro)
+        ? BigInt(object.occurredAtUnixMicro)
+        : isSet(object.occurred_at_unix_micro)
+        ? BigInt(object.occurred_at_unix_micro)
+        : 0n,
+      retentionAnchorUnixMicro: isSet(object.retentionAnchorUnixMicro)
+        ? BigInt(object.retentionAnchorUnixMicro)
+        : isSet(object.retention_anchor_unix_micro)
+        ? BigInt(object.retention_anchor_unix_micro)
+        : 0n,
+      retainUntilUnixMicro: isSet(object.retainUntilUnixMicro)
+        ? BigInt(object.retainUntilUnixMicro)
+        : isSet(object.retain_until_unix_micro)
+        ? BigInt(object.retain_until_unix_micro)
+        : 0n,
+      auditAuthority: isSet(object.successfulAuditSequence)
+        ? { $case: "successfulAuditSequence", value: BigInt(object.successfulAuditSequence) }
+        : isSet(object.successful_audit_sequence)
+        ? { $case: "successfulAuditSequence", value: BigInt(object.successful_audit_sequence) }
+        : isSet(object.recoveryAuditSequence)
+        ? { $case: "recoveryAuditSequence", value: BigInt(object.recoveryAuditSequence) }
+        : isSet(object.recovery_audit_sequence)
+        ? { $case: "recoveryAuditSequence", value: BigInt(object.recovery_audit_sequence) }
+        : undefined,
+    };
+  },
+
+  toJSON(message: KnowledgeMutationOutcomeRecord): unknown {
+    const obj: any = {};
+    if (message.route !== "") {
+      obj.route = message.route;
+    }
+    if (message.mutationKind !== "") {
+      obj.mutationKind = message.mutationKind;
+    }
+    if (message.object !== undefined) {
+      obj.object = KnowledgeObjectVersionReference.toJSON(message.object);
+    }
+    if (message.tenantCatalogRevision !== 0n) {
+      obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.tenantCatalogStateToken.length !== 0) {
+      obj.tenantCatalogStateToken = base64FromBytes(message.tenantCatalogStateToken);
+    }
+    if (message.occurredAtUnixMicro !== 0n) {
+      obj.occurredAtUnixMicro = message.occurredAtUnixMicro.toString();
+    }
+    if (message.retentionAnchorUnixMicro !== 0n) {
+      obj.retentionAnchorUnixMicro = message.retentionAnchorUnixMicro.toString();
+    }
+    if (message.retainUntilUnixMicro !== 0n) {
+      obj.retainUntilUnixMicro = message.retainUntilUnixMicro.toString();
+    }
+    if (message.auditAuthority?.$case === "successfulAuditSequence") {
+      obj.successfulAuditSequence = message.auditAuthority.value.toString();
+    } else if (message.auditAuthority?.$case === "recoveryAuditSequence") {
+      obj.recoveryAuditSequence = message.auditAuthority.value.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeMutationOutcomeRecord>, I>>(base?: I): KnowledgeMutationOutcomeRecord {
+    return KnowledgeMutationOutcomeRecord.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeMutationOutcomeRecord>, I>>(
+    object: I,
+  ): KnowledgeMutationOutcomeRecord {
+    const message = createBaseKnowledgeMutationOutcomeRecord();
+    message.route = object.route ?? "";
+    message.mutationKind = object.mutationKind ?? "";
+    message.object = (object.object !== undefined && object.object !== null)
+      ? KnowledgeObjectVersionReference.fromPartial(object.object)
+      : undefined;
+    message.tenantCatalogRevision =
+      (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
+        ? BigInt(object.tenantCatalogRevision)
+        : 0n;
+    message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
+    message.occurredAtUnixMicro = (object.occurredAtUnixMicro !== undefined && object.occurredAtUnixMicro !== null)
+      ? BigInt(object.occurredAtUnixMicro)
+      : 0n;
+    message.retentionAnchorUnixMicro =
+      (object.retentionAnchorUnixMicro !== undefined && object.retentionAnchorUnixMicro !== null)
+        ? BigInt(object.retentionAnchorUnixMicro)
+        : 0n;
+    message.retainUntilUnixMicro = (object.retainUntilUnixMicro !== undefined && object.retainUntilUnixMicro !== null)
+      ? BigInt(object.retainUntilUnixMicro)
+      : 0n;
+    switch (object.auditAuthority?.$case) {
+      case "successfulAuditSequence": {
+        if (object.auditAuthority?.value !== undefined && object.auditAuthority?.value !== null) {
+          message.auditAuthority = { $case: "successfulAuditSequence", value: BigInt(object.auditAuthority.value) };
+        }
+        break;
+      }
+      case "recoveryAuditSequence": {
+        if (object.auditAuthority?.value !== undefined && object.auditAuthority?.value !== null) {
+          message.auditAuthority = { $case: "recoveryAuditSequence", value: BigInt(object.auditAuthority.value) };
+        }
+        break;
+      }
+    }
     return message;
   },
 };
@@ -2390,6 +3208,170 @@ export const QuarantineKnowledgeObjectResponse: MessageFns<QuarantineKnowledgeOb
   },
 };
 
+function createBaseKnowledgeValidationDependency(): KnowledgeValidationDependency {
+  return { target: undefined, role: 0 };
+}
+
+export const KnowledgeValidationDependency: MessageFns<KnowledgeValidationDependency> = {
+  encode(message: KnowledgeValidationDependency, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.target !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.target, writer.uint32(10).fork()).join();
+    }
+    if (message.role !== 0) {
+      writer.uint32(16).int32(message.role);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeValidationDependency {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeValidationDependency();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.target = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.role = reader.int32() as any;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeValidationDependency {
+    return {
+      target: isSet(object.target) ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.target) : undefined,
+      role: isSet(object.role) ? knowledgeDependencyRoleFromJSON(object.role) : 0,
+    };
+  },
+
+  toJSON(message: KnowledgeValidationDependency): unknown {
+    const obj: any = {};
+    if (message.target !== undefined) {
+      obj.target = KnowledgeManagementObjectVersionIdentity.toJSON(message.target);
+    }
+    if (message.role !== 0) {
+      obj.role = knowledgeDependencyRoleToJSON(message.role);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeValidationDependency>, I>>(base?: I): KnowledgeValidationDependency {
+    return KnowledgeValidationDependency.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeValidationDependency>, I>>(
+    object: I,
+  ): KnowledgeValidationDependency {
+    const message = createBaseKnowledgeValidationDependency();
+    message.target = (object.target !== undefined && object.target !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.target)
+      : undefined;
+    message.role = object.role ?? 0;
+    return message;
+  },
+};
+
+function createBaseKnowledgeValidationDiagnostic(): KnowledgeValidationDiagnostic {
+  return { fieldPath: "", diagnostic: undefined };
+}
+
+export const KnowledgeValidationDiagnostic: MessageFns<KnowledgeValidationDiagnostic> = {
+  encode(message: KnowledgeValidationDiagnostic, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.fieldPath !== "") {
+      writer.uint32(10).string(message.fieldPath);
+    }
+    if (message.diagnostic !== undefined) {
+      Diagnostic.encode(message.diagnostic, writer.uint32(18).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeValidationDiagnostic {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeValidationDiagnostic();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.fieldPath = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.diagnostic = Diagnostic.decode(reader, reader.uint32());
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeValidationDiagnostic {
+    return {
+      fieldPath: isSet(object.fieldPath)
+        ? globalThis.String(object.fieldPath)
+        : isSet(object.field_path)
+        ? globalThis.String(object.field_path)
+        : "",
+      diagnostic: isSet(object.diagnostic) ? Diagnostic.fromJSON(object.diagnostic) : undefined,
+    };
+  },
+
+  toJSON(message: KnowledgeValidationDiagnostic): unknown {
+    const obj: any = {};
+    if (message.fieldPath !== "") {
+      obj.fieldPath = message.fieldPath;
+    }
+    if (message.diagnostic !== undefined) {
+      obj.diagnostic = Diagnostic.toJSON(message.diagnostic);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeValidationDiagnostic>, I>>(base?: I): KnowledgeValidationDiagnostic {
+    return KnowledgeValidationDiagnostic.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeValidationDiagnostic>, I>>(
+    object: I,
+  ): KnowledgeValidationDiagnostic {
+    const message = createBaseKnowledgeValidationDiagnostic();
+    message.fieldPath = object.fieldPath ?? "";
+    message.diagnostic = (object.diagnostic !== undefined && object.diagnostic !== null)
+      ? Diagnostic.fromPartial(object.diagnostic)
+      : undefined;
+    return message;
+  },
+};
+
 function createBaseKnowledgeResourceEstimate(): KnowledgeResourceEstimate {
   return {
     selectorPatterns: 0,
@@ -2402,7 +3384,9 @@ function createBaseKnowledgeResourceEstimate(): KnowledgeResourceEstimate {
     estimatedRegexWorkUnits: 0n,
     scalarExpressions: 0,
     scalarExpressionNodes: 0,
-    estimatedGeneratedSqlBytes: 0n,
+    extractionOutputs: 0,
+    jsonEvaluationWorkUnits: 0,
+    scalarPredicates: 0,
   };
 }
 
@@ -2446,13 +3430,14 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
     if (message.scalarExpressionNodes !== 0) {
       writer.uint32(80).uint32(message.scalarExpressionNodes);
     }
-    if (message.estimatedGeneratedSqlBytes !== 0n) {
-      if (BigInt.asUintN(64, message.estimatedGeneratedSqlBytes) !== message.estimatedGeneratedSqlBytes) {
-        throw new globalThis.Error(
-          "value provided for field message.estimatedGeneratedSqlBytes of type uint64 too large",
-        );
-      }
-      writer.uint32(88).uint64(message.estimatedGeneratedSqlBytes);
+    if (message.extractionOutputs !== 0) {
+      writer.uint32(96).uint32(message.extractionOutputs);
+    }
+    if (message.jsonEvaluationWorkUnits !== 0) {
+      writer.uint32(104).uint32(message.jsonEvaluationWorkUnits);
+    }
+    if (message.scalarPredicates !== 0) {
+      writer.uint32(112).uint32(message.scalarPredicates);
     }
     return writer;
   },
@@ -2544,12 +3529,28 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
           message.scalarExpressionNodes = reader.uint32();
           continue;
         }
-        case 11: {
-          if (tag !== 88) {
+        case 12: {
+          if (tag !== 96) {
             break;
           }
 
-          message.estimatedGeneratedSqlBytes = reader.uint64() as bigint;
+          message.extractionOutputs = reader.uint32();
+          continue;
+        }
+        case 13: {
+          if (tag !== 104) {
+            break;
+          }
+
+          message.jsonEvaluationWorkUnits = reader.uint32();
+          continue;
+        }
+        case 14: {
+          if (tag !== 112) {
+            break;
+          }
+
+          message.scalarPredicates = reader.uint32();
           continue;
         }
       }
@@ -2613,11 +3614,21 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
         : isSet(object.scalar_expression_nodes)
         ? globalThis.Number(object.scalar_expression_nodes)
         : 0,
-      estimatedGeneratedSqlBytes: isSet(object.estimatedGeneratedSqlBytes)
-        ? BigInt(object.estimatedGeneratedSqlBytes)
-        : isSet(object.estimated_generated_sql_bytes)
-        ? BigInt(object.estimated_generated_sql_bytes)
-        : 0n,
+      extractionOutputs: isSet(object.extractionOutputs)
+        ? globalThis.Number(object.extractionOutputs)
+        : isSet(object.extraction_outputs)
+        ? globalThis.Number(object.extraction_outputs)
+        : 0,
+      jsonEvaluationWorkUnits: isSet(object.jsonEvaluationWorkUnits)
+        ? globalThis.Number(object.jsonEvaluationWorkUnits)
+        : isSet(object.json_evaluation_work_units)
+        ? globalThis.Number(object.json_evaluation_work_units)
+        : 0,
+      scalarPredicates: isSet(object.scalarPredicates)
+        ? globalThis.Number(object.scalarPredicates)
+        : isSet(object.scalar_predicates)
+        ? globalThis.Number(object.scalar_predicates)
+        : 0,
     };
   },
 
@@ -2653,8 +3664,14 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
     if (message.scalarExpressionNodes !== 0) {
       obj.scalarExpressionNodes = Math.round(message.scalarExpressionNodes);
     }
-    if (message.estimatedGeneratedSqlBytes !== 0n) {
-      obj.estimatedGeneratedSqlBytes = message.estimatedGeneratedSqlBytes.toString();
+    if (message.extractionOutputs !== 0) {
+      obj.extractionOutputs = Math.round(message.extractionOutputs);
+    }
+    if (message.jsonEvaluationWorkUnits !== 0) {
+      obj.jsonEvaluationWorkUnits = Math.round(message.jsonEvaluationWorkUnits);
+    }
+    if (message.scalarPredicates !== 0) {
+      obj.scalarPredicates = Math.round(message.scalarPredicates);
     }
     return obj;
   },
@@ -2680,10 +3697,9 @@ export const KnowledgeResourceEstimate: MessageFns<KnowledgeResourceEstimate> = 
         : 0n;
     message.scalarExpressions = object.scalarExpressions ?? 0;
     message.scalarExpressionNodes = object.scalarExpressionNodes ?? 0;
-    message.estimatedGeneratedSqlBytes =
-      (object.estimatedGeneratedSqlBytes !== undefined && object.estimatedGeneratedSqlBytes !== null)
-        ? BigInt(object.estimatedGeneratedSqlBytes)
-        : 0n;
+    message.extractionOutputs = object.extractionOutputs ?? 0;
+    message.jsonEvaluationWorkUnits = object.jsonEvaluationWorkUnits ?? 0;
+    message.scalarPredicates = object.scalarPredicates ?? 0;
     return message;
   },
 };
@@ -2695,9 +3711,11 @@ function createBaseKnowledgeValidationResult(): KnowledgeValidationResult {
     normalizedDefinition: undefined,
     definitionSha256: undefined,
     fieldViolations: [],
-    diagnostics: [],
-    dependencies: [],
     resources: undefined,
+    dependencies: [],
+    diagnostics: [],
+    fieldViolationsTruncated: false,
+    diagnosticsTruncated: false,
   };
 }
 
@@ -2718,14 +3736,20 @@ export const KnowledgeValidationResult: MessageFns<KnowledgeValidationResult> = 
     for (const v of message.fieldViolations) {
       FieldViolation.encode(v!, writer.uint32(42).fork()).join();
     }
-    for (const v of message.diagnostics) {
-      Diagnostic.encode(v!, writer.uint32(50).fork()).join();
-    }
-    for (const v of message.dependencies) {
-      KnowledgeObjectDependency.encode(v!, writer.uint32(58).fork()).join();
-    }
     if (message.resources !== undefined) {
       KnowledgeResourceEstimate.encode(message.resources, writer.uint32(66).fork()).join();
+    }
+    for (const v of message.dependencies) {
+      KnowledgeValidationDependency.encode(v!, writer.uint32(74).fork()).join();
+    }
+    for (const v of message.diagnostics) {
+      KnowledgeValidationDiagnostic.encode(v!, writer.uint32(82).fork()).join();
+    }
+    if (message.fieldViolationsTruncated !== false) {
+      writer.uint32(88).bool(message.fieldViolationsTruncated);
+    }
+    if (message.diagnosticsTruncated !== false) {
+      writer.uint32(96).bool(message.diagnosticsTruncated);
     }
     return writer;
   },
@@ -2777,28 +3801,44 @@ export const KnowledgeValidationResult: MessageFns<KnowledgeValidationResult> = 
           message.fieldViolations.push(FieldViolation.decode(reader, reader.uint32()));
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
-            break;
-          }
-
-          message.diagnostics.push(Diagnostic.decode(reader, reader.uint32()));
-          continue;
-        }
-        case 7: {
-          if (tag !== 58) {
-            break;
-          }
-
-          message.dependencies.push(KnowledgeObjectDependency.decode(reader, reader.uint32()));
-          continue;
-        }
         case 8: {
           if (tag !== 66) {
             break;
           }
 
           message.resources = KnowledgeResourceEstimate.decode(reader, reader.uint32());
+          continue;
+        }
+        case 9: {
+          if (tag !== 74) {
+            break;
+          }
+
+          message.dependencies.push(KnowledgeValidationDependency.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.diagnostics.push(KnowledgeValidationDiagnostic.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 11: {
+          if (tag !== 88) {
+            break;
+          }
+
+          message.fieldViolationsTruncated = reader.bool();
+          continue;
+        }
+        case 12: {
+          if (tag !== 96) {
+            break;
+          }
+
+          message.diagnosticsTruncated = reader.bool();
           continue;
         }
       }
@@ -2833,13 +3873,23 @@ export const KnowledgeValidationResult: MessageFns<KnowledgeValidationResult> = 
         : globalThis.Array.isArray(object?.field_violations)
         ? object.field_violations.map((e: any) => FieldViolation.fromJSON(e))
         : [],
-      diagnostics: globalThis.Array.isArray(object?.diagnostics)
-        ? object.diagnostics.map((e: any) => Diagnostic.fromJSON(e))
-        : [],
-      dependencies: globalThis.Array.isArray(object?.dependencies)
-        ? object.dependencies.map((e: any) => KnowledgeObjectDependency.fromJSON(e))
-        : [],
       resources: isSet(object.resources) ? KnowledgeResourceEstimate.fromJSON(object.resources) : undefined,
+      dependencies: globalThis.Array.isArray(object?.dependencies)
+        ? object.dependencies.map((e: any) => KnowledgeValidationDependency.fromJSON(e))
+        : [],
+      diagnostics: globalThis.Array.isArray(object?.diagnostics)
+        ? object.diagnostics.map((e: any) => KnowledgeValidationDiagnostic.fromJSON(e))
+        : [],
+      fieldViolationsTruncated: isSet(object.fieldViolationsTruncated)
+        ? globalThis.Boolean(object.fieldViolationsTruncated)
+        : isSet(object.field_violations_truncated)
+        ? globalThis.Boolean(object.field_violations_truncated)
+        : false,
+      diagnosticsTruncated: isSet(object.diagnosticsTruncated)
+        ? globalThis.Boolean(object.diagnosticsTruncated)
+        : isSet(object.diagnostics_truncated)
+        ? globalThis.Boolean(object.diagnostics_truncated)
+        : false,
     };
   },
 
@@ -2860,14 +3910,20 @@ export const KnowledgeValidationResult: MessageFns<KnowledgeValidationResult> = 
     if (message.fieldViolations?.length) {
       obj.fieldViolations = message.fieldViolations.map((e) => FieldViolation.toJSON(e));
     }
-    if (message.diagnostics?.length) {
-      obj.diagnostics = message.diagnostics.map((e) => Diagnostic.toJSON(e));
-    }
-    if (message.dependencies?.length) {
-      obj.dependencies = message.dependencies.map((e) => KnowledgeObjectDependency.toJSON(e));
-    }
     if (message.resources !== undefined) {
       obj.resources = KnowledgeResourceEstimate.toJSON(message.resources);
+    }
+    if (message.dependencies?.length) {
+      obj.dependencies = message.dependencies.map((e) => KnowledgeValidationDependency.toJSON(e));
+    }
+    if (message.diagnostics?.length) {
+      obj.diagnostics = message.diagnostics.map((e) => KnowledgeValidationDiagnostic.toJSON(e));
+    }
+    if (message.fieldViolationsTruncated !== false) {
+      obj.fieldViolationsTruncated = message.fieldViolationsTruncated;
+    }
+    if (message.diagnosticsTruncated !== false) {
+      obj.diagnosticsTruncated = message.diagnosticsTruncated;
     }
     return obj;
   },
@@ -2884,17 +3940,25 @@ export const KnowledgeValidationResult: MessageFns<KnowledgeValidationResult> = 
       : undefined;
     message.definitionSha256 = object.definitionSha256 ?? undefined;
     message.fieldViolations = object.fieldViolations?.map((e) => FieldViolation.fromPartial(e)) || [];
-    message.diagnostics = object.diagnostics?.map((e) => Diagnostic.fromPartial(e)) || [];
-    message.dependencies = object.dependencies?.map((e) => KnowledgeObjectDependency.fromPartial(e)) || [];
     message.resources = (object.resources !== undefined && object.resources !== null)
       ? KnowledgeResourceEstimate.fromPartial(object.resources)
       : undefined;
+    message.dependencies = object.dependencies?.map((e) => KnowledgeValidationDependency.fromPartial(e)) || [];
+    message.diagnostics = object.diagnostics?.map((e) => KnowledgeValidationDiagnostic.fromPartial(e)) || [];
+    message.fieldViolationsTruncated = object.fieldViolationsTruncated ?? false;
+    message.diagnosticsTruncated = object.diagnosticsTruncated ?? false;
     return message;
   },
 };
 
 function createBaseValidateKnowledgeObjectRequest(): ValidateKnowledgeObjectRequest {
-  return { definition: undefined, knowledgeObjectId: undefined, expectedVersion: undefined, updateMask: undefined };
+  return {
+    definition: undefined,
+    knowledgeObjectId: undefined,
+    expectedVersion: undefined,
+    updateMask: undefined,
+    intent: 0,
+  };
 }
 
 export const ValidateKnowledgeObjectRequest: MessageFns<ValidateKnowledgeObjectRequest> = {
@@ -2913,6 +3977,9 @@ export const ValidateKnowledgeObjectRequest: MessageFns<ValidateKnowledgeObjectR
     }
     if (message.updateMask !== undefined) {
       FieldMask.encode(FieldMask.wrap(message.updateMask), writer.uint32(34).fork()).join();
+    }
+    if (message.intent !== 0) {
+      writer.uint32(40).int32(message.intent);
     }
     return writer;
   },
@@ -2956,6 +4023,14 @@ export const ValidateKnowledgeObjectRequest: MessageFns<ValidateKnowledgeObjectR
           message.updateMask = FieldMask.unwrap(FieldMask.decode(reader, reader.uint32()));
           continue;
         }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.intent = reader.int32() as any;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -2983,6 +4058,7 @@ export const ValidateKnowledgeObjectRequest: MessageFns<ValidateKnowledgeObjectR
         : isSet(object.update_mask)
         ? FieldMask.unwrap(FieldMask.fromJSON(object.update_mask))
         : undefined,
+      intent: isSet(object.intent) ? knowledgeValidationIntentFromJSON(object.intent) : 0,
     };
   },
 
@@ -2999,6 +4075,9 @@ export const ValidateKnowledgeObjectRequest: MessageFns<ValidateKnowledgeObjectR
     }
     if (message.updateMask !== undefined) {
       obj.updateMask = FieldMask.toJSON(FieldMask.wrap(message.updateMask));
+    }
+    if (message.intent !== 0) {
+      obj.intent = knowledgeValidationIntentToJSON(message.intent);
     }
     return obj;
   },
@@ -3018,6 +4097,7 @@ export const ValidateKnowledgeObjectRequest: MessageFns<ValidateKnowledgeObjectR
       ? BigInt(object.expectedVersion)
       : undefined;
     message.updateMask = object.updateMask ?? undefined;
+    message.intent = object.intent ?? 0;
     return message;
   },
 };
@@ -3108,6 +4188,193 @@ export const ValidateKnowledgeObjectResponse: MessageFns<ValidateKnowledgeObject
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    return message;
+  },
+};
+
+function createBaseKnowledgeManagementObjectVersionIdentity(): KnowledgeManagementObjectVersionIdentity {
+  return { knowledgeObjectId: "", version: 0n };
+}
+
+export const KnowledgeManagementObjectVersionIdentity: MessageFns<KnowledgeManagementObjectVersionIdentity> = {
+  encode(message: KnowledgeManagementObjectVersionIdentity, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.knowledgeObjectId !== "") {
+      writer.uint32(10).string(message.knowledgeObjectId);
+    }
+    if (message.version !== 0n) {
+      if (BigInt.asUintN(64, message.version) !== message.version) {
+        throw new globalThis.Error("value provided for field message.version of type uint64 too large");
+      }
+      writer.uint32(16).uint64(message.version);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeManagementObjectVersionIdentity {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeManagementObjectVersionIdentity();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.knowledgeObjectId = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.version = reader.uint64() as bigint;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeManagementObjectVersionIdentity {
+    return {
+      knowledgeObjectId: isSet(object.knowledgeObjectId)
+        ? globalThis.String(object.knowledgeObjectId)
+        : isSet(object.knowledge_object_id)
+        ? globalThis.String(object.knowledge_object_id)
+        : "",
+      version: isSet(object.version) ? BigInt(object.version) : 0n,
+    };
+  },
+
+  toJSON(message: KnowledgeManagementObjectVersionIdentity): unknown {
+    const obj: any = {};
+    if (message.knowledgeObjectId !== "") {
+      obj.knowledgeObjectId = message.knowledgeObjectId;
+    }
+    if (message.version !== 0n) {
+      obj.version = message.version.toString();
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeManagementObjectVersionIdentity>, I>>(
+    base?: I,
+  ): KnowledgeManagementObjectVersionIdentity {
+    return KnowledgeManagementObjectVersionIdentity.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeManagementObjectVersionIdentity>, I>>(
+    object: I,
+  ): KnowledgeManagementObjectVersionIdentity {
+    const message = createBaseKnowledgeManagementObjectVersionIdentity();
+    message.knowledgeObjectId = object.knowledgeObjectId ?? "";
+    message.version = (object.version !== undefined && object.version !== null) ? BigInt(object.version) : 0n;
+    return message;
+  },
+};
+
+function createBaseKnowledgeManagementDependencyEdge(): KnowledgeManagementDependencyEdge {
+  return { source: undefined, target: undefined, role: 0 };
+}
+
+export const KnowledgeManagementDependencyEdge: MessageFns<KnowledgeManagementDependencyEdge> = {
+  encode(message: KnowledgeManagementDependencyEdge, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.source !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.source, writer.uint32(10).fork()).join();
+    }
+    if (message.target !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.target, writer.uint32(18).fork()).join();
+    }
+    if (message.role !== 0) {
+      writer.uint32(24).int32(message.role);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): KnowledgeManagementDependencyEdge {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseKnowledgeManagementDependencyEdge();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.source = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.target = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.role = reader.int32() as any;
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): KnowledgeManagementDependencyEdge {
+    return {
+      source: isSet(object.source) ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.source) : undefined,
+      target: isSet(object.target) ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.target) : undefined,
+      role: isSet(object.role) ? knowledgeDependencyRoleFromJSON(object.role) : 0,
+    };
+  },
+
+  toJSON(message: KnowledgeManagementDependencyEdge): unknown {
+    const obj: any = {};
+    if (message.source !== undefined) {
+      obj.source = KnowledgeManagementObjectVersionIdentity.toJSON(message.source);
+    }
+    if (message.target !== undefined) {
+      obj.target = KnowledgeManagementObjectVersionIdentity.toJSON(message.target);
+    }
+    if (message.role !== 0) {
+      obj.role = knowledgeDependencyRoleToJSON(message.role);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<KnowledgeManagementDependencyEdge>, I>>(
+    base?: I,
+  ): KnowledgeManagementDependencyEdge {
+    return KnowledgeManagementDependencyEdge.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<KnowledgeManagementDependencyEdge>, I>>(
+    object: I,
+  ): KnowledgeManagementDependencyEdge {
+    const message = createBaseKnowledgeManagementDependencyEdge();
+    message.source = (object.source !== undefined && object.source !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.source)
+      : undefined;
+    message.target = (object.target !== undefined && object.target !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.target)
+      : undefined;
+    message.role = object.role ?? 0;
     return message;
   },
 };
@@ -3218,13 +4485,13 @@ export const ListKnowledgeObjectDependenciesRequest: MessageFns<ListKnowledgeObj
 };
 
 function createBaseListKnowledgeObjectDependenciesResponse(): ListKnowledgeObjectDependenciesResponse {
-  return { dependencies: [], page: undefined, tenantCatalogRevision: 0n };
+  return { dependencies: [], page: undefined, tenantCatalogRevision: 0n, resolvedObject: undefined };
 }
 
 export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeObjectDependenciesResponse> = {
   encode(message: ListKnowledgeObjectDependenciesResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     for (const v of message.dependencies) {
-      KnowledgeObjectDependency.encode(v!, writer.uint32(10).fork()).join();
+      KnowledgeManagementDependencyEdge.encode(v!, writer.uint32(10).fork()).join();
     }
     if (message.page !== undefined) {
       PageResponse.encode(message.page, writer.uint32(18).fork()).join();
@@ -3234,6 +4501,9 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(24).uint64(message.tenantCatalogRevision);
+    }
+    if (message.resolvedObject !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.resolvedObject, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -3250,7 +4520,7 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
             break;
           }
 
-          message.dependencies.push(KnowledgeObjectDependency.decode(reader, reader.uint32()));
+          message.dependencies.push(KnowledgeManagementDependencyEdge.decode(reader, reader.uint32()));
           continue;
         }
         case 2: {
@@ -3269,6 +4539,14 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.resolvedObject = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3281,7 +4559,7 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
   fromJSON(object: any): ListKnowledgeObjectDependenciesResponse {
     return {
       dependencies: globalThis.Array.isArray(object?.dependencies)
-        ? object.dependencies.map((e: any) => KnowledgeObjectDependency.fromJSON(e))
+        ? object.dependencies.map((e: any) => KnowledgeManagementDependencyEdge.fromJSON(e))
         : [],
       page: isSet(object.page) ? PageResponse.fromJSON(object.page) : undefined,
       tenantCatalogRevision: isSet(object.tenantCatalogRevision)
@@ -3289,19 +4567,27 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      resolvedObject: isSet(object.resolvedObject)
+        ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.resolvedObject)
+        : isSet(object.resolved_object)
+        ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.resolved_object)
+        : undefined,
     };
   },
 
   toJSON(message: ListKnowledgeObjectDependenciesResponse): unknown {
     const obj: any = {};
     if (message.dependencies?.length) {
-      obj.dependencies = message.dependencies.map((e) => KnowledgeObjectDependency.toJSON(e));
+      obj.dependencies = message.dependencies.map((e) => KnowledgeManagementDependencyEdge.toJSON(e));
     }
     if (message.page !== undefined) {
       obj.page = PageResponse.toJSON(message.page);
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.resolvedObject !== undefined) {
+      obj.resolvedObject = KnowledgeManagementObjectVersionIdentity.toJSON(message.resolvedObject);
     }
     return obj;
   },
@@ -3315,7 +4601,7 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
     object: I,
   ): ListKnowledgeObjectDependenciesResponse {
     const message = createBaseListKnowledgeObjectDependenciesResponse();
-    message.dependencies = object.dependencies?.map((e) => KnowledgeObjectDependency.fromPartial(e)) || [];
+    message.dependencies = object.dependencies?.map((e) => KnowledgeManagementDependencyEdge.fromPartial(e)) || [];
     message.page = (object.page !== undefined && object.page !== null)
       ? PageResponse.fromPartial(object.page)
       : undefined;
@@ -3323,6 +4609,9 @@ export const ListKnowledgeObjectDependenciesResponse: MessageFns<ListKnowledgeOb
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.resolvedObject = (object.resolvedObject !== undefined && object.resolvedObject !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.resolvedObject)
+      : undefined;
     return message;
   },
 };
@@ -3433,13 +4722,13 @@ export const ListKnowledgeObjectDependentsRequest: MessageFns<ListKnowledgeObjec
 };
 
 function createBaseListKnowledgeObjectDependentsResponse(): ListKnowledgeObjectDependentsResponse {
-  return { dependents: [], page: undefined, tenantCatalogRevision: 0n };
+  return { dependents: [], page: undefined, tenantCatalogRevision: 0n, resolvedObject: undefined };
 }
 
 export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObjectDependentsResponse> = {
   encode(message: ListKnowledgeObjectDependentsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     for (const v of message.dependents) {
-      KnowledgeObjectDependency.encode(v!, writer.uint32(10).fork()).join();
+      KnowledgeManagementDependencyEdge.encode(v!, writer.uint32(10).fork()).join();
     }
     if (message.page !== undefined) {
       PageResponse.encode(message.page, writer.uint32(18).fork()).join();
@@ -3449,6 +4738,9 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
         throw new globalThis.Error("value provided for field message.tenantCatalogRevision of type uint64 too large");
       }
       writer.uint32(24).uint64(message.tenantCatalogRevision);
+    }
+    if (message.resolvedObject !== undefined) {
+      KnowledgeManagementObjectVersionIdentity.encode(message.resolvedObject, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -3465,7 +4757,7 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
             break;
           }
 
-          message.dependents.push(KnowledgeObjectDependency.decode(reader, reader.uint32()));
+          message.dependents.push(KnowledgeManagementDependencyEdge.decode(reader, reader.uint32()));
           continue;
         }
         case 2: {
@@ -3484,6 +4776,14 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
           message.tenantCatalogRevision = reader.uint64() as bigint;
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.resolvedObject = KnowledgeManagementObjectVersionIdentity.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3496,7 +4796,7 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
   fromJSON(object: any): ListKnowledgeObjectDependentsResponse {
     return {
       dependents: globalThis.Array.isArray(object?.dependents)
-        ? object.dependents.map((e: any) => KnowledgeObjectDependency.fromJSON(e))
+        ? object.dependents.map((e: any) => KnowledgeManagementDependencyEdge.fromJSON(e))
         : [],
       page: isSet(object.page) ? PageResponse.fromJSON(object.page) : undefined,
       tenantCatalogRevision: isSet(object.tenantCatalogRevision)
@@ -3504,19 +4804,27 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
         : isSet(object.tenant_catalog_revision)
         ? BigInt(object.tenant_catalog_revision)
         : 0n,
+      resolvedObject: isSet(object.resolvedObject)
+        ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.resolvedObject)
+        : isSet(object.resolved_object)
+        ? KnowledgeManagementObjectVersionIdentity.fromJSON(object.resolved_object)
+        : undefined,
     };
   },
 
   toJSON(message: ListKnowledgeObjectDependentsResponse): unknown {
     const obj: any = {};
     if (message.dependents?.length) {
-      obj.dependents = message.dependents.map((e) => KnowledgeObjectDependency.toJSON(e));
+      obj.dependents = message.dependents.map((e) => KnowledgeManagementDependencyEdge.toJSON(e));
     }
     if (message.page !== undefined) {
       obj.page = PageResponse.toJSON(message.page);
     }
     if (message.tenantCatalogRevision !== 0n) {
       obj.tenantCatalogRevision = message.tenantCatalogRevision.toString();
+    }
+    if (message.resolvedObject !== undefined) {
+      obj.resolvedObject = KnowledgeManagementObjectVersionIdentity.toJSON(message.resolvedObject);
     }
     return obj;
   },
@@ -3530,7 +4838,7 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
     object: I,
   ): ListKnowledgeObjectDependentsResponse {
     const message = createBaseListKnowledgeObjectDependentsResponse();
-    message.dependents = object.dependents?.map((e) => KnowledgeObjectDependency.fromPartial(e)) || [];
+    message.dependents = object.dependents?.map((e) => KnowledgeManagementDependencyEdge.fromPartial(e)) || [];
     message.page = (object.page !== undefined && object.page !== null)
       ? PageResponse.fromPartial(object.page)
       : undefined;
@@ -3538,6 +4846,9 @@ export const ListKnowledgeObjectDependentsResponse: MessageFns<ListKnowledgeObje
       (object.tenantCatalogRevision !== undefined && object.tenantCatalogRevision !== null)
         ? BigInt(object.tenantCatalogRevision)
         : 0n;
+    message.resolvedObject = (object.resolvedObject !== undefined && object.resolvedObject !== null)
+      ? KnowledgeManagementObjectVersionIdentity.fromPartial(object.resolvedObject)
+      : undefined;
     return message;
   },
 };

@@ -50,6 +50,166 @@ func TestExecutorReadAdmissionRejectsTamperedScopeBeforeConnection(t *testing.T)
 	}
 }
 
+func TestExecutorRejectsTamperedNonReadArgumentBeforeAdmissionOrConnection(t *testing.T) {
+	t.Parallel()
+
+	compiled := compileReadAdmissionQuery(t, `index=target status="non-read-literal" | table status`)
+	compiled.Args = slices.Clone(compiled.Args)
+	mutated := false
+	for index, argument := range compiled.Args {
+		if value, ok := argument.(string); ok && value == "non-read-literal" {
+			compiled.Args[index] = "tampered-filter"
+			mutated = true
+			break
+		}
+	}
+	if !mutated {
+		t.Fatal("compiled fixture did not expose the filter bind argument")
+	}
+	if _, _, ok := compiled.ReadScope(); !ok {
+		t.Fatal("non-read mutation unexpectedly invalidated the older read-scope seal")
+	}
+
+	admission := &recordingReadAdmission{}
+	connection := &fakeQueryConnection{err: errors.New("connection must not be called")}
+	executor := mustExecutor(t, connection)
+	executor.readAdmission = admission
+	err := executor.Execute(context.Background(), compiled, &fakeSink{})
+	if !errors.Is(err, searchjobs.ErrInvalidResult) {
+		t.Fatalf("Execute error = %v, want ErrInvalidResult", err)
+	}
+	if admission.acquireCalls.Load() != 0 || connection.query != "" {
+		t.Fatalf("tampered non-read argument reached admission/connection: acquire=%d query=%q", admission.acquireCalls.Load(), connection.query)
+	}
+}
+
+func TestSearchDerivedExecutorsRejectTamperedNonReadArgumentsBeforeAdmission(t *testing.T) {
+	t.Parallel()
+
+	const literal = "derived-non-read-literal"
+	compiler := clickhouse.Compiler{}
+	build := func() *plan.Query {
+		return buildReadAdmissionPlan(t, `index=target host="`+literal+`"`)
+	}
+
+	timelinePlan := build()
+	timelineScan := timelinePlan.Operators[0].(*plan.Scan)
+	timeline, err := compiler.CompileTimeline(timelinePlan, clickhouse.TimelineSpec{
+		FirstBucket: timelineScan.Earliest,
+		SpanSeconds: 60,
+		BucketCount: 60,
+		Earliest:    timelineScan.Earliest,
+		Latest:      timelineScan.Latest,
+	})
+	if err != nil {
+		t.Fatalf("CompileTimeline: %v", err)
+	}
+	catalog, err := compiler.CompileFieldCatalog(
+		build(),
+		clickhouse.FieldCatalogSpec{MaximumFields: 10},
+	)
+	if err != nil {
+		t.Fatalf("CompileFieldCatalog: %v", err)
+	}
+	summary, err := compiler.CompileFieldSummary(
+		build(),
+		clickhouse.FieldSummarySpec{
+			FieldName:             "host",
+			MaximumValues:         10,
+			MaximumDistinctValues: 100,
+			MaximumValueBytes:     1_024,
+		},
+	)
+	if err != nil {
+		t.Fatalf("CompileFieldSummary: %v", err)
+	}
+	suggestions, err := compiler.CompileFieldSuggestions(
+		build(),
+		clickhouse.FieldSuggestionSpec{Prefix: "ho", MaximumFields: 10},
+	)
+	if err != nil {
+		t.Fatalf("CompileFieldSuggestions: %v", err)
+	}
+
+	mutateArgs := func(args []any) []any {
+		t.Helper()
+		mutated := slices.Clone(args)
+		for index, argument := range mutated {
+			if value, ok := argument.(string); ok && value == literal {
+				mutated[index] = "tampered-derived-literal"
+				return mutated
+			}
+		}
+		t.Fatal("compiled derived fixture did not expose the non-read literal")
+		return nil
+	}
+	timeline.Args = mutateArgs(timeline.Args)
+	catalog.Args = mutateArgs(catalog.Args)
+	summary.Args = mutateArgs(summary.Args)
+	suggestions.Args = mutateArgs(suggestions.Args)
+
+	for name, query := range map[string]interface {
+		ReadScope() (string, []string, bool)
+	}{
+		"timeline":          timeline,
+		"field catalog":     catalog,
+		"field summary":     summary,
+		"field suggestions": suggestions,
+	} {
+		if _, _, ok := query.ReadScope(); !ok {
+			t.Fatalf("%s non-read mutation invalidated the older read-scope seal", name)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		execute func(*Executor) error
+	}{
+		{name: "timeline", execute: func(executor *Executor) error {
+			_, executeErr := executor.ExecuteTimeline(context.Background(), timeline)
+			return executeErr
+		}},
+		{name: "field catalog", execute: func(executor *Executor) error {
+			_, executeErr := executor.ExecuteFieldCatalog(context.Background(), catalog)
+			return executeErr
+		}},
+		{name: "field summary", execute: func(executor *Executor) error {
+			_, executeErr := executor.ExecuteFieldSummary(context.Background(), summary)
+			return executeErr
+		}},
+		{name: "field suggestions", execute: func(executor *Executor) error {
+			_, executeErr := executor.ExecuteFieldSuggestions(context.Background(), suggestions)
+			return executeErr
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			admission := &recordingReadAdmission{}
+			connection := &fakeQueryConnection{err: errors.New("connection must not be called")}
+			executor := mustExecutor(t, connection)
+			executor.readAdmission = admission
+			var queryIDCalls atomic.Int32
+			executor.newQueryID = func() (string, error) {
+				queryIDCalls.Add(1)
+				return "must-not-be-created", nil
+			}
+
+			err := test.execute(executor)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) {
+				t.Fatalf("execution error = %v, want ErrInvalidResult", err)
+			}
+			if admission.acquireCalls.Load() != 0 || queryIDCalls.Load() != 0 || connection.query != "" {
+				t.Fatalf(
+					"tampered derived query reached resources: acquire=%d queryIDs=%d query=%q",
+					admission.acquireCalls.Load(),
+					queryIDCalls.Load(),
+					connection.query,
+				)
+			}
+		})
+	}
+}
+
 func TestExecutorReadAdmissionRejectsRetiredScopeBeforeConnection(t *testing.T) {
 	t.Parallel()
 

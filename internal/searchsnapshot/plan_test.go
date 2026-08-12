@@ -2,11 +2,11 @@ package searchsnapshot
 
 import (
 	"errors"
-	"reflect"
 	"slices"
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
@@ -66,13 +66,9 @@ func TestBuildPlanPreservesEmptyVisibilitySnapshot(t *testing.T) {
 	}
 }
 
-func TestBuildExecutionPlanMatchesCompletedJobPlan(t *testing.T) {
+func TestBuildExecutionPlanRejectsUnsignedLegacySnapshot(t *testing.T) {
 	job := testJob()
-	fromJob, err := BuildPlan(job)
-	if err != nil {
-		t.Fatalf("BuildPlan() error = %v", err)
-	}
-	fromSnapshot, err := BuildExecutionPlan(searchjobs.ExecutionSnapshot{
+	logical, err := BuildExecutionPlan(searchjobs.ExecutionSnapshot{
 		ID:               job.ID,
 		OwnerID:          job.OwnerID,
 		TenantID:         job.TenantID,
@@ -85,16 +81,30 @@ func TestBuildExecutionPlanMatchesCompletedJobPlan(t *testing.T) {
 		IndexTimeCutoff:  job.IndexTimeCutoff,
 		VisibilityCutoff: job.VisibilityCutoff,
 	})
-	if err != nil {
-		t.Fatalf("BuildExecutionPlan() error = %v", err)
+	if err == nil || logical != nil {
+		t.Fatalf("BuildExecutionPlan(unsigned legacy) = (%#v, %v), want failure", logical, err)
 	}
-	jobScan := fromJob.Operators[0].(*plan.Scan)
-	snapshotScan := fromSnapshot.Operators[0].(*plan.Scan)
-	if !slices.Equal(fromSnapshot.EffectiveIndexes, fromJob.EffectiveIndexes) ||
-		!reflect.DeepEqual(snapshotScan, jobScan) ||
-		!fromSnapshot.SearchStart.Equal(fromJob.SearchStart) ||
-		fromSnapshot.SearchTimezone != fromJob.SearchTimezone {
-		t.Fatalf("execution snapshot plan differs: job=%+v snapshot=%+v", fromJob, fromSnapshot)
+}
+
+func TestBuildExecutionPlanRejectsUnsealedKnowledgeAuthority(t *testing.T) {
+	snapshot := searchjobs.ExecutionSnapshot{
+		ID:               "unsealed-knowledge",
+		OwnerID:          "owner-1",
+		TenantID:         "tenant-1",
+		AppID:            "app_aaaaaaaaaaaaaaaaaaaaaA",
+		SPL:              `index=allowed-a`,
+		EffectiveIndexes: []string{"allowed-a"},
+		Earliest:         time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC),
+		Latest:           time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC),
+		SearchStart:      time.Date(2026, 7, 21, 9, 0, 1, 0, time.UTC),
+		SearchTimezone:   "UTC",
+		IndexTimeCutoff:  time.Date(2026, 7, 21, 9, 1, 0, 0, time.UTC),
+		VisibilityCutoff: 42,
+		CompiledQuery:    &clickhouse.CompiledQuery{},
+	}
+	logical, err := BuildExecutionPlan(snapshot)
+	if err == nil || logical != nil {
+		t.Fatalf("BuildExecutionPlan(unsealed knowledge) = (%#v, %v), want failure", logical, err)
 	}
 }
 

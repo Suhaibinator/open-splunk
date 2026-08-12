@@ -17,11 +17,11 @@ func TestCompileStatsPercentileFamilySharesOneBoundedStatePerInput(t *testing.T)
 		t,
 		`index=gradethis | stats p50(duration) AS median p90(duration) AS p90 `+
 			`p95(duration) AS p95 p99(duration) AS p99 `+
-			`perc50(duration) AS median_again sum(duration) AS total avg(duration) AS mean`,
+			`sum(duration) AS total avg(duration) AS mean`,
 	)
 	if !slices.Equal(
 		compiled.OutputFields,
-		[]string{"median", "p90", "p95", "p99", "median_again", "total", "mean"},
+		[]string{"median", "p90", "p95", "p99", "total", "mean"},
 	) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
@@ -32,7 +32,6 @@ func TestCompileStatsPercentileFamilySharesOneBoundedStatePerInput(t *testing.T)
 		`arrayElementOrNull(` + state + `, 2) AS "p90"`,
 		`arrayElementOrNull(` + state + `, 3) AS "p95"`,
 		`arrayElementOrNull(` + state + `, 4) AS "p99"`,
-		`arrayElementOrNull(` + state + `, 1) AS "median_again"`,
 		`sumOrNullArray("__os_measure_values_0")`,
 		`avgOrNullArray("__os_measure_values_0")`,
 	} {

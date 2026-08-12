@@ -181,6 +181,57 @@ func (IngestionTokenState) EnumDescriptor() ([]byte, []int) {
 	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{2}
 }
 
+// IngestionTokenPurpose is an immutable transport boundary. A credential for
+// one ingestion surface must never authorize the other surface.
+type IngestionTokenPurpose int32
+
+const (
+	IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_UNSPECIFIED      IngestionTokenPurpose = 0
+	IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR IngestionTokenPurpose = 1
+	IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_HEC              IngestionTokenPurpose = 2
+)
+
+// Enum value maps for IngestionTokenPurpose.
+var (
+	IngestionTokenPurpose_name = map[int32]string{
+		0: "INGESTION_TOKEN_PURPOSE_UNSPECIFIED",
+		1: "INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR",
+		2: "INGESTION_TOKEN_PURPOSE_HEC",
+	}
+	IngestionTokenPurpose_value = map[string]int32{
+		"INGESTION_TOKEN_PURPOSE_UNSPECIFIED":      0,
+		"INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR": 1,
+		"INGESTION_TOKEN_PURPOSE_HEC":              2,
+	}
+)
+
+func (x IngestionTokenPurpose) Enum() *IngestionTokenPurpose {
+	p := new(IngestionTokenPurpose)
+	*p = x
+	return p
+}
+
+func (x IngestionTokenPurpose) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (IngestionTokenPurpose) Descriptor() protoreflect.EnumDescriptor {
+	return file_open_splunk_v1_collector_admin_proto_enumTypes[3].Descriptor()
+}
+
+func (IngestionTokenPurpose) Type() protoreflect.EnumType {
+	return &file_open_splunk_v1_collector_admin_proto_enumTypes[3]
+}
+
+func (x IngestionTokenPurpose) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use IngestionTokenPurpose.Descriptor instead.
+func (IngestionTokenPurpose) EnumDescriptor() ([]byte, []int) {
+	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{3}
+}
+
 type CollectorRecord struct {
 	state               protoimpl.MessageState       `protogen:"open.v1"`
 	CollectorId         string                       `protobuf:"bytes,1,opt,name=collector_id,json=collectorId,proto3" json:"collector_id,omitempty"`
@@ -520,6 +571,85 @@ func (x *IngestionTokenConstraints) GetBoundCollectorId() string {
 	return ""
 }
 
+// IngestionTokenHecProfile contains the HEC-only metadata defaults. Presence
+// is required for HEC-purpose tokens and forbidden for native collector
+// tokens. indexer_acknowledgment is immutable after creation.
+type IngestionTokenHecProfile struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	DefaultIndexName      *string                `protobuf:"bytes,1,opt,name=default_index_name,json=defaultIndexName,proto3,oneof" json:"default_index_name,omitempty"`
+	DefaultHost           *string                `protobuf:"bytes,2,opt,name=default_host,json=defaultHost,proto3,oneof" json:"default_host,omitempty"`
+	DefaultSource         *string                `protobuf:"bytes,3,opt,name=default_source,json=defaultSource,proto3,oneof" json:"default_source,omitempty"`
+	DefaultSourcetype     *string                `protobuf:"bytes,4,opt,name=default_sourcetype,json=defaultSourcetype,proto3,oneof" json:"default_sourcetype,omitempty"`
+	IndexerAcknowledgment bool                   `protobuf:"varint,5,opt,name=indexer_acknowledgment,json=indexerAcknowledgment,proto3" json:"indexer_acknowledgment,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *IngestionTokenHecProfile) Reset() {
+	*x = IngestionTokenHecProfile{}
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IngestionTokenHecProfile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IngestionTokenHecProfile) ProtoMessage() {}
+
+func (x *IngestionTokenHecProfile) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IngestionTokenHecProfile.ProtoReflect.Descriptor instead.
+func (*IngestionTokenHecProfile) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *IngestionTokenHecProfile) GetDefaultIndexName() string {
+	if x != nil && x.DefaultIndexName != nil {
+		return *x.DefaultIndexName
+	}
+	return ""
+}
+
+func (x *IngestionTokenHecProfile) GetDefaultHost() string {
+	if x != nil && x.DefaultHost != nil {
+		return *x.DefaultHost
+	}
+	return ""
+}
+
+func (x *IngestionTokenHecProfile) GetDefaultSource() string {
+	if x != nil && x.DefaultSource != nil {
+		return *x.DefaultSource
+	}
+	return ""
+}
+
+func (x *IngestionTokenHecProfile) GetDefaultSourcetype() string {
+	if x != nil && x.DefaultSourcetype != nil {
+		return *x.DefaultSourcetype
+	}
+	return ""
+}
+
+func (x *IngestionTokenHecProfile) GetIndexerAcknowledgment() bool {
+	if x != nil {
+		return x.IndexerAcknowledgment
+	}
+	return false
+}
+
 // IngestionToken never contains the secret or its hash. token_prefix is a safe
 // short identifier for operator recognition.
 type IngestionToken struct {
@@ -537,13 +667,15 @@ type IngestionToken struct {
 	ExpiresAt           *timestamppb.Timestamp     `protobuf:"bytes,11,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	RevokedAt           *timestamppb.Timestamp     `protobuf:"bytes,12,opt,name=revoked_at,json=revokedAt,proto3" json:"revoked_at,omitempty"`
 	IngestionRateLimits *IngestionRateLimits       `protobuf:"bytes,13,opt,name=ingestion_rate_limits,json=ingestionRateLimits,proto3" json:"ingestion_rate_limits,omitempty"`
+	Purpose             IngestionTokenPurpose      `protobuf:"varint,14,opt,name=purpose,proto3,enum=open_splunk.v1.IngestionTokenPurpose" json:"purpose,omitempty"`
+	HecProfile          *IngestionTokenHecProfile  `protobuf:"bytes,15,opt,name=hec_profile,json=hecProfile,proto3" json:"hec_profile,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
 
 func (x *IngestionToken) Reset() {
 	*x = IngestionToken{}
-	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[3]
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -555,7 +687,7 @@ func (x *IngestionToken) String() string {
 func (*IngestionToken) ProtoMessage() {}
 
 func (x *IngestionToken) ProtoReflect() protoreflect.Message {
-	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[3]
+	mi := &file_open_splunk_v1_collector_admin_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -568,7 +700,7 @@ func (x *IngestionToken) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IngestionToken.ProtoReflect.Descriptor instead.
 func (*IngestionToken) Descriptor() ([]byte, []int) {
-	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{3}
+	return file_open_splunk_v1_collector_admin_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *IngestionToken) GetIngestionTokenId() string {
@@ -662,6 +794,20 @@ func (x *IngestionToken) GetIngestionRateLimits() *IngestionRateLimits {
 	return nil
 }
 
+func (x *IngestionToken) GetPurpose() IngestionTokenPurpose {
+	if x != nil {
+		return x.Purpose
+	}
+	return IngestionTokenPurpose_INGESTION_TOKEN_PURPOSE_UNSPECIFIED
+}
+
+func (x *IngestionToken) GetHecProfile() *IngestionTokenHecProfile {
+	if x != nil {
+		return x.HecProfile
+	}
+	return nil
+}
+
 var File_open_splunk_v1_collector_admin_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_collector_admin_proto_rawDesc = "" +
@@ -708,7 +854,17 @@ const file_open_splunk_v1_collector_admin_proto_rawDesc = "" +
 	"\x14allowed_host_regexes\x18\x02 \x03(\tR\x12allowedHostRegexes\x124\n" +
 	"\x16allowed_source_regexes\x18\x03 \x03(\tR\x14allowedSourceRegexes\x121\n" +
 	"\x12bound_collector_id\x18\x04 \x01(\tH\x00R\x10boundCollectorId\x88\x01\x01B\x15\n" +
-	"\x13_bound_collector_id\"\xd1\x05\n" +
+	"\x13_bound_collector_id\"\xde\x02\n" +
+	"\x18IngestionTokenHecProfile\x121\n" +
+	"\x12default_index_name\x18\x01 \x01(\tH\x00R\x10defaultIndexName\x88\x01\x01\x12&\n" +
+	"\fdefault_host\x18\x02 \x01(\tH\x01R\vdefaultHost\x88\x01\x01\x12*\n" +
+	"\x0edefault_source\x18\x03 \x01(\tH\x02R\rdefaultSource\x88\x01\x01\x122\n" +
+	"\x12default_sourcetype\x18\x04 \x01(\tH\x03R\x11defaultSourcetype\x88\x01\x01\x125\n" +
+	"\x16indexer_acknowledgment\x18\x05 \x01(\bR\x15indexerAcknowledgmentB\x15\n" +
+	"\x13_default_index_nameB\x0f\n" +
+	"\r_default_hostB\x11\n" +
+	"\x0f_default_sourceB\x15\n" +
+	"\x13_default_sourcetype\"\xdd\x06\n" +
 	"\x0eIngestionToken\x12,\n" +
 	"\x12ingestion_token_id\x18\x01 \x01(\tR\x10ingestionTokenId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x12\n" +
@@ -728,7 +884,10 @@ const file_open_splunk_v1_collector_admin_proto_rawDesc = "" +
 	"expires_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x129\n" +
 	"\n" +
 	"revoked_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\trevokedAt\x12W\n" +
-	"\x15ingestion_rate_limits\x18\r \x01(\v2#.open_splunk.v1.IngestionRateLimitsR\x13ingestionRateLimitsB\x0e\n" +
+	"\x15ingestion_rate_limits\x18\r \x01(\v2#.open_splunk.v1.IngestionRateLimitsR\x13ingestionRateLimits\x12?\n" +
+	"\apurpose\x18\x0e \x01(\x0e2%.open_splunk.v1.IngestionTokenPurposeR\apurpose\x12I\n" +
+	"\vhec_profile\x18\x0f \x01(\v2(.open_splunk.v1.IngestionTokenHecProfileR\n" +
+	"hecProfileB\x0e\n" +
 	"\f_description*\xe4\x01\n" +
 	"\x18CollectorConnectionState\x12*\n" +
 	"&COLLECTOR_CONNECTION_STATE_UNSPECIFIED\x10\x00\x12%\n" +
@@ -745,7 +904,11 @@ const file_open_splunk_v1_collector_admin_proto_rawDesc = "" +
 	"\x1cINGESTION_TOKEN_STATE_ACTIVE\x10\x01\x12\"\n" +
 	"\x1eINGESTION_TOKEN_STATE_DISABLED\x10\x02\x12!\n" +
 	"\x1dINGESTION_TOKEN_STATE_REVOKED\x10\x03\x12!\n" +
-	"\x1dINGESTION_TOKEN_STATE_EXPIRED\x10\x04BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"\x1dINGESTION_TOKEN_STATE_EXPIRED\x10\x04*\x8f\x01\n" +
+	"\x15IngestionTokenPurpose\x12'\n" +
+	"#INGESTION_TOKEN_PURPOSE_UNSPECIFIED\x10\x00\x12,\n" +
+	"(INGESTION_TOKEN_PURPOSE_NATIVE_COLLECTOR\x10\x01\x12\x1f\n" +
+	"\x1bINGESTION_TOKEN_PURPOSE_HEC\x10\x02BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_collector_admin_proto_rawDescOnce sync.Once
@@ -759,48 +922,52 @@ func file_open_splunk_v1_collector_admin_proto_rawDescGZIP() []byte {
 	return file_open_splunk_v1_collector_admin_proto_rawDescData
 }
 
-var file_open_splunk_v1_collector_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_open_splunk_v1_collector_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_open_splunk_v1_collector_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_open_splunk_v1_collector_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_open_splunk_v1_collector_admin_proto_goTypes = []any{
 	(CollectorConnectionState)(0),           // 0: open_splunk.v1.CollectorConnectionState
 	(CollectorAdministrativeState)(0),       // 1: open_splunk.v1.CollectorAdministrativeState
 	(IngestionTokenState)(0),                // 2: open_splunk.v1.IngestionTokenState
-	(*CollectorRecord)(nil),                 // 3: open_splunk.v1.CollectorRecord
-	(*CollectorAdministrationSnapshot)(nil), // 4: open_splunk.v1.CollectorAdministrationSnapshot
-	(*IngestionTokenConstraints)(nil),       // 5: open_splunk.v1.IngestionTokenConstraints
-	(*IngestionToken)(nil),                  // 6: open_splunk.v1.IngestionToken
-	(CollectorCapability)(0),                // 7: open_splunk.v1.CollectorCapability
-	(*CollectorQueueStats)(nil),             // 8: open_splunk.v1.CollectorQueueStats
-	(*CollectorInputHealth)(nil),            // 9: open_splunk.v1.CollectorInputHealth
-	(*timestamppb.Timestamp)(nil),           // 10: google.protobuf.Timestamp
-	(*IngestionRateLimits)(nil),             // 11: open_splunk.v1.IngestionRateLimits
+	(IngestionTokenPurpose)(0),              // 3: open_splunk.v1.IngestionTokenPurpose
+	(*CollectorRecord)(nil),                 // 4: open_splunk.v1.CollectorRecord
+	(*CollectorAdministrationSnapshot)(nil), // 5: open_splunk.v1.CollectorAdministrationSnapshot
+	(*IngestionTokenConstraints)(nil),       // 6: open_splunk.v1.IngestionTokenConstraints
+	(*IngestionTokenHecProfile)(nil),        // 7: open_splunk.v1.IngestionTokenHecProfile
+	(*IngestionToken)(nil),                  // 8: open_splunk.v1.IngestionToken
+	(CollectorCapability)(0),                // 9: open_splunk.v1.CollectorCapability
+	(*CollectorQueueStats)(nil),             // 10: open_splunk.v1.CollectorQueueStats
+	(*CollectorInputHealth)(nil),            // 11: open_splunk.v1.CollectorInputHealth
+	(*timestamppb.Timestamp)(nil),           // 12: google.protobuf.Timestamp
+	(*IngestionRateLimits)(nil),             // 13: open_splunk.v1.IngestionRateLimits
 }
 var file_open_splunk_v1_collector_admin_proto_depIdxs = []int32{
 	0,  // 0: open_splunk.v1.CollectorRecord.connection_state:type_name -> open_splunk.v1.CollectorConnectionState
-	7,  // 1: open_splunk.v1.CollectorRecord.capabilities:type_name -> open_splunk.v1.CollectorCapability
-	8,  // 2: open_splunk.v1.CollectorRecord.queue:type_name -> open_splunk.v1.CollectorQueueStats
-	9,  // 3: open_splunk.v1.CollectorRecord.inputs:type_name -> open_splunk.v1.CollectorInputHealth
-	10, // 4: open_splunk.v1.CollectorRecord.first_seen_at:type_name -> google.protobuf.Timestamp
-	10, // 5: open_splunk.v1.CollectorRecord.connected_at:type_name -> google.protobuf.Timestamp
-	10, // 6: open_splunk.v1.CollectorRecord.last_seen_at:type_name -> google.protobuf.Timestamp
-	10, // 7: open_splunk.v1.CollectorRecord.disconnected_at:type_name -> google.protobuf.Timestamp
+	9,  // 1: open_splunk.v1.CollectorRecord.capabilities:type_name -> open_splunk.v1.CollectorCapability
+	10, // 2: open_splunk.v1.CollectorRecord.queue:type_name -> open_splunk.v1.CollectorQueueStats
+	11, // 3: open_splunk.v1.CollectorRecord.inputs:type_name -> open_splunk.v1.CollectorInputHealth
+	12, // 4: open_splunk.v1.CollectorRecord.first_seen_at:type_name -> google.protobuf.Timestamp
+	12, // 5: open_splunk.v1.CollectorRecord.connected_at:type_name -> google.protobuf.Timestamp
+	12, // 6: open_splunk.v1.CollectorRecord.last_seen_at:type_name -> google.protobuf.Timestamp
+	12, // 7: open_splunk.v1.CollectorRecord.disconnected_at:type_name -> google.protobuf.Timestamp
 	1,  // 8: open_splunk.v1.CollectorRecord.administrative_state:type_name -> open_splunk.v1.CollectorAdministrativeState
 	1,  // 9: open_splunk.v1.CollectorAdministrationSnapshot.administrative_state:type_name -> open_splunk.v1.CollectorAdministrativeState
-	10, // 10: open_splunk.v1.CollectorAdministrationSnapshot.first_seen_at:type_name -> google.protobuf.Timestamp
-	10, // 11: open_splunk.v1.CollectorAdministrationSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	12, // 10: open_splunk.v1.CollectorAdministrationSnapshot.first_seen_at:type_name -> google.protobuf.Timestamp
+	12, // 11: open_splunk.v1.CollectorAdministrationSnapshot.updated_at:type_name -> google.protobuf.Timestamp
 	2,  // 12: open_splunk.v1.IngestionToken.state:type_name -> open_splunk.v1.IngestionTokenState
-	5,  // 13: open_splunk.v1.IngestionToken.constraints:type_name -> open_splunk.v1.IngestionTokenConstraints
-	10, // 14: open_splunk.v1.IngestionToken.created_at:type_name -> google.protobuf.Timestamp
-	10, // 15: open_splunk.v1.IngestionToken.updated_at:type_name -> google.protobuf.Timestamp
-	10, // 16: open_splunk.v1.IngestionToken.last_used_at:type_name -> google.protobuf.Timestamp
-	10, // 17: open_splunk.v1.IngestionToken.expires_at:type_name -> google.protobuf.Timestamp
-	10, // 18: open_splunk.v1.IngestionToken.revoked_at:type_name -> google.protobuf.Timestamp
-	11, // 19: open_splunk.v1.IngestionToken.ingestion_rate_limits:type_name -> open_splunk.v1.IngestionRateLimits
-	20, // [20:20] is the sub-list for method output_type
-	20, // [20:20] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	6,  // 13: open_splunk.v1.IngestionToken.constraints:type_name -> open_splunk.v1.IngestionTokenConstraints
+	12, // 14: open_splunk.v1.IngestionToken.created_at:type_name -> google.protobuf.Timestamp
+	12, // 15: open_splunk.v1.IngestionToken.updated_at:type_name -> google.protobuf.Timestamp
+	12, // 16: open_splunk.v1.IngestionToken.last_used_at:type_name -> google.protobuf.Timestamp
+	12, // 17: open_splunk.v1.IngestionToken.expires_at:type_name -> google.protobuf.Timestamp
+	12, // 18: open_splunk.v1.IngestionToken.revoked_at:type_name -> google.protobuf.Timestamp
+	13, // 19: open_splunk.v1.IngestionToken.ingestion_rate_limits:type_name -> open_splunk.v1.IngestionRateLimits
+	3,  // 20: open_splunk.v1.IngestionToken.purpose:type_name -> open_splunk.v1.IngestionTokenPurpose
+	7,  // 21: open_splunk.v1.IngestionToken.hec_profile:type_name -> open_splunk.v1.IngestionTokenHecProfile
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_collector_admin_proto_init() }
@@ -814,13 +981,14 @@ func file_open_splunk_v1_collector_admin_proto_init() {
 	file_open_splunk_v1_collector_admin_proto_msgTypes[1].OneofWrappers = []any{}
 	file_open_splunk_v1_collector_admin_proto_msgTypes[2].OneofWrappers = []any{}
 	file_open_splunk_v1_collector_admin_proto_msgTypes[3].OneofWrappers = []any{}
+	file_open_splunk_v1_collector_admin_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_v1_collector_admin_proto_rawDesc), len(file_open_splunk_v1_collector_admin_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   4,
+			NumEnums:      4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

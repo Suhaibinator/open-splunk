@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -69,6 +70,52 @@ func FuzzNormalizeNeverPanicsAndSuccessIsIdempotent(f *testing.F) {
 		}
 		if !bytes.Equal(one.Bytes, two.Bytes) || one.Digest != two.Digest {
 			t.Fatal("successful normalization is not idempotent")
+		}
+	})
+}
+
+func FuzzDecodeCanonicalFutureBodyNeverPanicsAndSuccessIsStable(f *testing.F) {
+	metadata, err := (proto.MarshalOptions{Deterministic: true}).Marshal(validBaseDefinition())
+	if err != nil {
+		f.Fatal(err)
+	}
+	future := protowire.AppendBytes(
+		protowire.AppendTag(bytes.Clone(metadata), 13, protowire.BytesType),
+		[]byte{0x08, 0x01},
+	)
+	f.Add(future)
+	f.Add(metadata)
+	f.Add([]byte{})
+	f.Add([]byte{0x80})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		if len(data) > MaximumCanonicalBytes+1 {
+			return
+		}
+		digest := sha256.Sum256(data)
+		decoded, err := DecodeCanonicalInactiveFutureBody(
+			data,
+			digest[:],
+			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		)
+		if err != nil {
+			return
+		}
+		if decoded.Digest != digest || !bytes.Equal(decoded.Bytes, data) ||
+			decoded.Definition.GetBody() != nil || len(decoded.Definition.ProtoReflect().GetUnknown()) == 0 {
+			t.Fatal("successful future decode changed canonical authorities")
+		}
+		again, err := DecodeCanonicalInactiveFutureBody(
+			decoded.Bytes,
+			decoded.Digest[:],
+			opensplunkv1.KnowledgeObjectState_KNOWLEDGE_OBJECT_STATE_DISABLED,
+		)
+		if err != nil {
+			t.Fatalf("successful future decode is not repeatable: %v", err)
+		}
+		if !bytes.Equal(again.Bytes, decoded.Bytes) || again.Digest != decoded.Digest ||
+			!proto.Equal(again.Definition, decoded.Definition) {
+			t.Fatal("successful future decode is not stable")
 		}
 	})
 }

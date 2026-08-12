@@ -224,6 +224,13 @@ func testEventStatsChronologicalAgainstClickHouse(
 		`index=compiler source="stats-chronological-multivalue-poison"` +
 			` | eventstats latest(chronological_value) AS discarded` +
 			` | search definitely_missing=value | table event_id`,
+		`index=compiler source="stats-chronological-multivalue-poison"` +
+			` | eventstats earliest(chronological_value) AS event_first` +
+			` | eventstats latest(chronological_value) AS event_last` +
+			` | sort 0 +event_id` +
+			` | streamstats earliest(chronological_value) AS stream_first` +
+			` | streamstats latest(chronological_value) AS stream_last` +
+			` | search definitely_missing=value | table event_id`,
 	} {
 		queryErr := executeCompiledExpectingNoRows(ctx, connection, compile(source))
 		if queryErr == nil || !strings.Contains(

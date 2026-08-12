@@ -41,6 +41,14 @@ message ResultColumn {
   bool nullable = 5;
   bool multivalue = 6;
   bool hidden_by_default = 7;
+  // Optional flat-table presentation for a typed multivalue cell. Presence is
+  // significant: an empty delimiter means concatenate members, while absence
+  // leaves the renderer's normal typed-array representation unchanged.
+  optional string flat_multivalue_delimiter = 8;
+  // Compiler-authored stats sparkline semantics. The first cell member remains
+  // a transport-integrity marker, but clients must require this schema bit so
+  // an ordinary user-controlled multivalue cannot opt into chart rendering.
+  bool stats_sparkline = 9;
 }
 
 // ResultSchema is versioned independently from a job because preview schemas

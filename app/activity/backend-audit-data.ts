@@ -5,6 +5,8 @@ import {
   AuditTargetKind,
   type AuditEvent,
 } from "@/gen/ts/open_splunk/v1/audit";
+import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
+import { KnowledgeObjectType } from "@/gen/ts/open_splunk/v1/knowledge";
 import type {
   ListAuditEventsRequest,
   ListAuditEventsResponse,
@@ -57,51 +59,105 @@ export interface AuditErrorPresentation {
   invalidTraversal: boolean;
 }
 
-const AUDIT_ACTIONS = new Set<AuditAction>([
-  AuditAction.AUDIT_ACTION_INGESTION_TOKEN_CREATE,
-  AuditAction.AUDIT_ACTION_INGESTION_TOKEN_UPDATE,
-  AuditAction.AUDIT_ACTION_INGESTION_TOKEN_REVOKE,
-  AuditAction.AUDIT_ACTION_INDEX_CREATE,
-  AuditAction.AUDIT_ACTION_INDEX_UPDATE,
-  AuditAction.AUDIT_ACTION_INDEX_ACTIVATE,
-  AuditAction.AUDIT_ACTION_INDEX_ARCHIVE,
-  AuditAction.AUDIT_ACTION_INDEX_DELETE_KEEP_DATA,
-  AuditAction.AUDIT_ACTION_INDEX_DELETE_DATA,
-  AuditAction.AUDIT_ACTION_APP_CREATE,
-  AuditAction.AUDIT_ACTION_APP_UPDATE,
-  AuditAction.AUDIT_ACTION_APP_ACTIVATE,
-  AuditAction.AUDIT_ACTION_APP_ARCHIVE,
-  AuditAction.AUDIT_ACTION_APP_DELETE,
-  AuditAction.AUDIT_ACTION_SAVED_SEARCH_CREATE,
-  AuditAction.AUDIT_ACTION_SAVED_SEARCH_UPDATE,
-  AuditAction.AUDIT_ACTION_SAVED_SEARCH_DUPLICATE,
-  AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE,
+const MAXIMUM_AUDIT_EVENTS = 100_000n;
+const MAXIMUM_AUDIT_ACTOR_ID_BYTES = 255;
+const MAXIMUM_AUDIT_TARGET_ID_BYTES = 128;
+const MAXIMUM_KNOWLEDGE_APP_ID_BYTES = 128;
+const MAXIMUM_AUDIT_PAGE_TOKEN_BYTES = 2 << 10;
+const MAXIMUM_SIGNED_INT64 = 9_223_372_036_854_775_807n;
+const UNICODE_EDGE_WHITESPACE = /^\p{White_Space}|\p{White_Space}$/u;
+const UNICODE_EDGE_WHITESPACE_RUN = /^\p{White_Space}+|\p{White_Space}+$/gu;
+const UNICODE_CONTROL = /\p{Cc}/u;
+const UTF8_ENCODER = new TextEncoder();
+
+interface MutationAuditActionSpec {
+  readonly label: string;
+  readonly targetKind: AuditTargetKind;
+  readonly versionPolicy: MutationAuditVersionPolicy;
+}
+
+interface MutationAuditVersionPolicy {
+  readonly minimum: bigint;
+  readonly exact: boolean;
+}
+
+const EXACTLY_ONE: MutationAuditVersionPolicy = { minimum: 1n, exact: true };
+const AT_LEAST_ONE: MutationAuditVersionPolicy = { minimum: 1n, exact: false };
+const AT_LEAST_TWO: MutationAuditVersionPolicy = { minimum: 2n, exact: false };
+const AT_LEAST_THREE: MutationAuditVersionPolicy = { minimum: 3n, exact: false };
+
+const ACTION_SPECS: ReadonlyMap<AuditAction, MutationAuditActionSpec> = new Map([
+  [AuditAction.AUDIT_ACTION_INGESTION_TOKEN_CREATE, { label: "Ingestion token · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN, versionPolicy: EXACTLY_ONE }],
+  [AuditAction.AUDIT_ACTION_INGESTION_TOKEN_UPDATE, { label: "Ingestion token · update", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_INGESTION_TOKEN_REVOKE, { label: "Ingestion token · revoke", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_INDEX_CREATE, { label: "Index · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INDEX, versionPolicy: EXACTLY_ONE }],
+  [AuditAction.AUDIT_ACTION_INDEX_UPDATE, { label: "Index · update", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INDEX, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_INDEX_ACTIVATE, { label: "Index · activate", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INDEX, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_INDEX_ARCHIVE, { label: "Index · archive", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INDEX, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, { label: "Index · delete, keep data", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INDEX, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_INDEX_DELETE_DATA, { label: "Index · delete data", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_INDEX, versionPolicy: AT_LEAST_THREE }],
+  [AuditAction.AUDIT_ACTION_APP_CREATE, { label: "App · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_APP, versionPolicy: EXACTLY_ONE }],
+  [AuditAction.AUDIT_ACTION_APP_UPDATE, { label: "App · update", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_APP, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_APP_ACTIVATE, { label: "App · activate", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_APP, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_APP_ARCHIVE, { label: "App · archive", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_APP, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_APP_DELETE, { label: "App · delete", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_APP, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_SAVED_SEARCH_CREATE, { label: "Saved search · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH, versionPolicy: EXACTLY_ONE }],
+  [AuditAction.AUDIT_ACTION_SAVED_SEARCH_UPDATE, { label: "Saved search · update", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, { label: "Saved search · duplicate", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH, versionPolicy: EXACTLY_ONE }],
+  [AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE, { label: "Saved search · delete", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH, versionPolicy: AT_LEAST_ONE }],
+  [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_CREATE, { label: "Knowledge object · create", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, versionPolicy: EXACTLY_ONE }],
+  [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_UPDATE, { label: "Knowledge object · update", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE, { label: "Knowledge object · scope change", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_ENABLE, { label: "Knowledge object · enable", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DISABLE, { label: "Knowledge object · disable", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, versionPolicy: AT_LEAST_TWO }],
+  [AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_DELETE, { label: "Knowledge object · delete", targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, versionPolicy: AT_LEAST_TWO }],
 ]);
 
-const TARGET_KINDS = new Set<AuditTargetKind>([
-  AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN,
-  AuditTargetKind.AUDIT_TARGET_KIND_INDEX,
-  AuditTargetKind.AUDIT_TARGET_KIND_APP,
-  AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH,
+const TARGET_LABELS: ReadonlyMap<AuditTargetKind, string> = new Map([
+  [AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN, "Ingestion token"],
+  [AuditTargetKind.AUDIT_TARGET_KIND_INDEX, "Index"],
+  [AuditTargetKind.AUDIT_TARGET_KIND_APP, "App"],
+  [AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH, "Saved search"],
+  [AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT, "Knowledge object"],
 ]);
 
-const ACTOR_KINDS = new Set<AuditActorKind>([
-  AuditActorKind.AUDIT_ACTOR_KIND_SYSTEM,
-  AuditActorKind.AUDIT_ACTOR_KIND_BROWSER,
+const KNOWLEDGE_OBJECT_TYPE_LABELS: ReadonlyMap<KnowledgeObjectType, string> = new Map([
+  [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION, "Field extraction"],
+  [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS, "Field alias"],
+  [KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD, "Calculated field"],
 ]);
 
-const ACTOR_ROLES = new Set<AuditActorRole>([
-  AuditActorRole.AUDIT_ACTOR_ROLE_SYSTEM,
-  AuditActorRole.AUDIT_ACTOR_ROLE_USER,
-  AuditActorRole.AUDIT_ACTOR_ROLE_ADMINISTRATOR,
+const KNOWLEDGE_SHARING_SCOPE_LABELS: ReadonlyMap<SharingScope, string> = new Map([
+  [SharingScope.SHARING_SCOPE_PRIVATE, "Private"],
+  [SharingScope.SHARING_SCOPE_APP, "App"],
+  [SharingScope.SHARING_SCOPE_GLOBAL, "Global"],
 ]);
 
-function normalizedIdentifier(value: string | undefined): string | undefined {
-  return value?.trim() || undefined;
+export function auditIdentifierFromDraft(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  return value.replace(UNICODE_EDGE_WHITESPACE_RUN, "") || undefined;
 }
 
 function opaquePageToken(value: string | undefined): string | undefined {
-  return value === undefined || value.length === 0 ? undefined : value;
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new TypeError("The audit page token was not a string.");
+  }
+  if (value.length === 0) return undefined;
+  if (!canonicalBoundedText(value, MAXIMUM_AUDIT_PAGE_TOKEN_BYTES)) {
+    throw new TypeError("The audit page token was not a canonical bounded value.");
+  }
+  return value;
+}
+
+function canonicalBoundedText(value: string, maximumBytes: number): boolean {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= maximumBytes
+    && value.isWellFormed()
+    && UTF8_ENCODER.encode(value).byteLength <= maximumBytes
+    && !UNICODE_EDGE_WHITESPACE.test(value)
+    && !UNICODE_CONTROL.test(value);
 }
 
 function pageRequest(options: AuditPageOptions) {
@@ -116,36 +172,126 @@ function pageRequest(options: AuditPageOptions) {
 }
 
 function requireValidDate(value: Date | undefined, label: string): Date {
-  if (value === undefined || Number.isNaN(value.valueOf())) {
+  if (!(value instanceof Date) || Number.isNaN(value.valueOf())) {
     throw new TypeError(`${label} did not include a valid occurrence time.`);
   }
   return new Date(value);
 }
 
-function assertActor(actorKind: AuditActorKind, actorRole: AuditActorRole, actorId: string, label: string) {
-  if (!ACTOR_KINDS.has(actorKind) || !ACTOR_ROLES.has(actorRole) || actorId.trim().length === 0) {
+function assertActor(
+  actorKind: AuditActorKind,
+  actorRole: AuditActorRole,
+  actorId: string,
+  actionTargetKind: AuditTargetKind | null,
+  label: string,
+) {
+  const kindRoleValid = actorKind === AuditActorKind.AUDIT_ACTOR_KIND_SYSTEM
+    ? actorRole === AuditActorRole.AUDIT_ACTOR_ROLE_SYSTEM
+    : actorKind === AuditActorKind.AUDIT_ACTOR_KIND_BROWSER
+      && (actorRole === AuditActorRole.AUDIT_ACTOR_ROLE_USER
+        || actorRole === AuditActorRole.AUDIT_ACTOR_ROLE_ADMINISTRATOR);
+  const actionActorValid = actionTargetKind === null
+    || actorKind !== AuditActorKind.AUDIT_ACTOR_KIND_BROWSER
+    || actorRole !== AuditActorRole.AUDIT_ACTOR_ROLE_USER
+    || actionTargetKind === AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH;
+  if (
+    !kindRoleValid
+    || !actionActorValid
+    || !canonicalBoundedText(actorId, MAXIMUM_AUDIT_ACTOR_ID_BYTES)
+  ) {
     throw new TypeError(`${label} included an invalid actor projection.`);
   }
 }
 
+function validActionVersion(
+  policy: MutationAuditVersionPolicy,
+  version: bigint,
+): boolean {
+  if (version < 1n || version > MAXIMUM_SIGNED_INT64) return false;
+  return version >= policy.minimum
+    && (!policy.exact || version === policy.minimum);
+}
+
+function validKnowledgeMetadata(event: AuditEvent): boolean {
+  if (event.targetKind !== AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT) {
+    return event.appId === undefined
+      && event.objectType === undefined
+      && event.sharingScope === undefined;
+  }
+  return event.appId !== undefined
+    && canonicalBoundedText(event.appId, MAXIMUM_KNOWLEDGE_APP_ID_BYTES)
+    && event.objectType !== undefined
+    && KNOWLEDGE_OBJECT_TYPE_LABELS.has(event.objectType)
+    && event.sharingScope !== undefined
+    && KNOWLEDGE_SHARING_SCOPE_LABELS.has(event.sharingScope);
+}
+
 function adaptMutationEvent(event: AuditEvent): AuditEvent {
-  if (event.sequence <= 0n || event.targetVersion <= 0n) {
+  const actionSpec = ACTION_SPECS.get(event.action);
+  if (
+    typeof event.sequence !== "bigint"
+    || typeof event.targetVersion !== "bigint"
+    || event.sequence < 1n
+    || event.sequence > MAXIMUM_AUDIT_EVENTS
+    || actionSpec === undefined
+    || !validActionVersion(actionSpec.versionPolicy, event.targetVersion)
+  ) {
     throw new TypeError("The mutation audit event included an invalid sequence or target version.");
   }
-  requireValidDate(event.occurredAt, "The mutation audit event");
-  assertActor(event.actorKind, event.actorRole, event.actorId, "The mutation audit event");
-  if (!AUDIT_ACTIONS.has(event.action) || !TARGET_KINDS.has(event.targetKind) || event.targetId.trim().length === 0) {
+  const occurredAt = requireValidDate(event.occurredAt, "The mutation audit event");
+  assertActor(
+    event.actorKind,
+    event.actorRole,
+    event.actorId,
+    actionSpec.targetKind,
+    "The mutation audit event",
+  );
+  if (
+    event.targetKind !== actionSpec.targetKind
+    || !canonicalBoundedText(event.targetId, MAXIMUM_AUDIT_TARGET_ID_BYTES)
+    || !validKnowledgeMetadata(event)
+  ) {
     throw new TypeError("The mutation audit event included an invalid action or target projection.");
   }
-  return { ...event, occurredAt: new Date(event.occurredAt!) };
+  return {
+    sequence: event.sequence,
+    occurredAt,
+    actorKind: event.actorKind,
+    actorId: `${event.actorId}`,
+    actorRole: event.actorRole,
+    action: event.action,
+    targetKind: event.targetKind,
+    targetId: `${event.targetId}`,
+    targetVersion: event.targetVersion,
+    ...(event.targetKind === AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT
+      ? {
+          appId: `${event.appId}`,
+          objectType: event.objectType,
+          sharingScope: event.sharingScope,
+        }
+      : {}),
+  };
 }
 
 function adaptSearchAttemptEvent(event: SearchAttemptAuditEvent): SearchAttemptAuditEvent {
-  if (event.sequence <= 0n || event.ownerId.trim().length === 0 || event.searchJobId.trim().length === 0) {
+  if (
+    typeof event.sequence !== "bigint"
+    || typeof event.ownerId !== "string"
+    || typeof event.searchJobId !== "string"
+    || event.sequence <= 0n
+    || event.ownerId.trim().length === 0
+    || event.searchJobId.trim().length === 0
+  ) {
     throw new TypeError("The search-attempt audit event included an invalid sequence, owner, or job ID.");
   }
   requireValidDate(event.occurredAt, "The search-attempt audit event");
-  assertActor(event.actorKind, event.actorRole, event.actorId, "The search-attempt audit event");
+  assertActor(
+    event.actorKind,
+    event.actorRole,
+    event.actorId,
+    null,
+    "The search-attempt audit event",
+  );
   return { ...event, occurredAt: new Date(event.occurredAt!) };
 }
 
@@ -153,10 +299,33 @@ function adaptPage<T>(
   items: T[],
   responsePage: ListAuditEventsResponse["page"] | ListSearchAttemptAuditEventsResponse["page"],
   label: string,
+  options: {
+    pageSize: number;
+    requestedPageToken: string | undefined;
+    maximumTotal?: bigint;
+  },
 ): AuditPage<T> {
   if (responsePage === undefined) throw new TypeError(`${label} did not include page metadata.`);
-  if (responsePage.totalSize === undefined || !responsePage.totalSizeExact) {
+  if (typeof responsePage.totalSize !== "bigint" || responsePage.totalSizeExact !== true) {
     throw new TypeError(`${label} did not include the requested exact total.`);
+  }
+  const nextPageToken = opaquePageToken(responsePage.nextPageToken) ?? null;
+  if (
+    items.length > options.pageSize
+    || responsePage.totalSize < BigInt(items.length)
+    || (options.maximumTotal !== undefined && responsePage.totalSize > options.maximumTotal)
+    || (nextPageToken !== null && (
+      items.length !== options.pageSize
+      || nextPageToken === options.requestedPageToken
+      || responsePage.totalSize <= BigInt(items.length)
+    ))
+    || (
+      options.requestedPageToken === undefined
+      && nextPageToken === null
+      && responsePage.totalSize !== BigInt(items.length)
+    )
+  ) {
+    throw new TypeError(`${label} included an invalid item count or exact total.`);
   }
   for (let index = 1; index < items.length; index += 1) {
     const previous = items[index - 1] as { sequence: bigint };
@@ -167,10 +336,20 @@ function adaptPage<T>(
   }
   return {
     items,
-    nextPageToken: opaquePageToken(responsePage.nextPageToken) ?? null,
+    nextPageToken,
     totalSize: responsePage.totalSize,
     totalSizeExact: true,
   };
+}
+
+function assertResponseItemCount(
+  items: readonly unknown[],
+  requestedPageSize: number,
+  label: string,
+): void {
+  if (!Array.isArray(items) || items.length > requestedPageSize) {
+    throw new TypeError(`${label} exceeded the requested page size.`);
+  }
 }
 
 export function buildMutationAuditRequest(
@@ -178,16 +357,23 @@ export function buildMutationAuditRequest(
   options: AuditPageOptions,
 ): ListAuditEventsRequest {
   const actions = [...new Set(filters.actions)].toSorted((left, right) => left - right);
-  if (actions.some((action) => !AUDIT_ACTIONS.has(action))) {
+  if (actions.some((action) => !ACTION_SPECS.has(action))) {
     throw new RangeError("Mutation audit action filters contain an unsupported value.");
   }
-  if (filters.targetKind !== undefined && !TARGET_KINDS.has(filters.targetKind)) {
+  if (filters.targetKind !== undefined && !TARGET_LABELS.has(filters.targetKind)) {
     throw new RangeError("Mutation audit target-kind filter contains an unsupported value.");
+  }
+  const actorIdFilter = auditIdentifierFromDraft(filters.actorId);
+  if (
+    actorIdFilter !== undefined
+    && !canonicalBoundedText(actorIdFilter, MAXIMUM_AUDIT_ACTOR_ID_BYTES)
+  ) {
+    throw new RangeError("Mutation audit actor filter contains an invalid identifier.");
   }
   return {
     page: pageRequest(options),
     actionFilters: actions,
-    actorIdFilter: normalizedIdentifier(filters.actorId),
+    actorIdFilter,
     targetKindFilter: filters.targetKind,
   };
 }
@@ -198,8 +384,8 @@ export function buildSearchAttemptAuditRequest(
 ): ListSearchAttemptAuditEventsRequest {
   return {
     page: pageRequest(options),
-    actorIdFilter: normalizedIdentifier(filters.actorId),
-    ownerIdFilter: normalizedIdentifier(filters.ownerId),
+    actorIdFilter: auditIdentifierFromDraft(filters.actorId),
+    ownerIdFilter: auditIdentifierFromDraft(filters.ownerId),
   };
 }
 
@@ -208,8 +394,17 @@ export async function listMutationAuditEvents(
   filters: MutationAuditFilters,
   options: AuditPageOptions,
 ): Promise<AuditPage<AuditEvent>> {
-  const response = await client.auditEvents.list(buildMutationAuditRequest(filters, options), options);
-  return adaptPage(response.auditEvents.map(adaptMutationEvent), response.page, "Mutation audit response");
+  const request = buildMutationAuditRequest(filters, options);
+  const pageSize = options.pageSize;
+  const requestedPageToken = request.page?.pageToken;
+  const response = await client.auditEvents.list(request, options);
+  assertResponseItemCount(response.auditEvents, pageSize, "Mutation audit response");
+  return adaptPage(
+    response.auditEvents.map(adaptMutationEvent),
+    response.page,
+    "Mutation audit response",
+    { pageSize, requestedPageToken, maximumTotal: MAXIMUM_AUDIT_EVENTS },
+  );
 }
 
 export async function listSearchAttemptAuditEvents(
@@ -217,8 +412,17 @@ export async function listSearchAttemptAuditEvents(
   filters: SearchAttemptAuditFilters,
   options: AuditPageOptions,
 ): Promise<AuditPage<SearchAttemptAuditEvent>> {
-  const response = await client.searchAttemptAudit.list(buildSearchAttemptAuditRequest(filters, options), options);
-  return adaptPage(response.events.map(adaptSearchAttemptEvent), response.page, "Search-attempt audit response");
+  const request = buildSearchAttemptAuditRequest(filters, options);
+  const pageSize = options.pageSize;
+  const requestedPageToken = request.page?.pageToken;
+  const response = await client.searchAttemptAudit.list(request, options);
+  assertResponseItemCount(response.events, pageSize, "Search-attempt audit response");
+  return adaptPage(
+    response.events.map(adaptSearchAttemptEvent),
+    response.page,
+    "Search-attempt audit response",
+    { pageSize, requestedPageToken, maximumTotal: MAXIMUM_AUDIT_EVENTS },
+  );
 }
 
 export function auditErrorPresentation(error: unknown, subject: string): AuditErrorPresentation {
@@ -289,36 +493,37 @@ export function auditActorRoleLabel(role: AuditActorRole): string {
 }
 
 export function auditTargetKindLabel(kind: AuditTargetKind): string {
-  if (kind === AuditTargetKind.AUDIT_TARGET_KIND_INGESTION_TOKEN) return "Ingestion token";
-  if (kind === AuditTargetKind.AUDIT_TARGET_KIND_INDEX) return "Index";
-  if (kind === AuditTargetKind.AUDIT_TARGET_KIND_APP) return "App";
-  if (kind === AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH) return "Saved search";
-  return "Unknown target";
+  return TARGET_LABELS.get(kind) ?? "Unknown target";
 }
 
-const ACTION_LABELS = new Map<AuditAction, string>([
-  [AuditAction.AUDIT_ACTION_INGESTION_TOKEN_CREATE, "Ingestion token · create"],
-  [AuditAction.AUDIT_ACTION_INGESTION_TOKEN_UPDATE, "Ingestion token · update"],
-  [AuditAction.AUDIT_ACTION_INGESTION_TOKEN_REVOKE, "Ingestion token · revoke"],
-  [AuditAction.AUDIT_ACTION_INDEX_CREATE, "Index · create"],
-  [AuditAction.AUDIT_ACTION_INDEX_UPDATE, "Index · update"],
-  [AuditAction.AUDIT_ACTION_INDEX_ACTIVATE, "Index · activate"],
-  [AuditAction.AUDIT_ACTION_INDEX_ARCHIVE, "Index · archive"],
-  [AuditAction.AUDIT_ACTION_INDEX_DELETE_KEEP_DATA, "Index · delete, keep data"],
-  [AuditAction.AUDIT_ACTION_INDEX_DELETE_DATA, "Index · delete data"],
-  [AuditAction.AUDIT_ACTION_APP_CREATE, "App · create"],
-  [AuditAction.AUDIT_ACTION_APP_UPDATE, "App · update"],
-  [AuditAction.AUDIT_ACTION_APP_ACTIVATE, "App · activate"],
-  [AuditAction.AUDIT_ACTION_APP_ARCHIVE, "App · archive"],
-  [AuditAction.AUDIT_ACTION_APP_DELETE, "App · delete"],
-  [AuditAction.AUDIT_ACTION_SAVED_SEARCH_CREATE, "Saved search · create"],
-  [AuditAction.AUDIT_ACTION_SAVED_SEARCH_UPDATE, "Saved search · update"],
-  [AuditAction.AUDIT_ACTION_SAVED_SEARCH_DUPLICATE, "Saved search · duplicate"],
-  [AuditAction.AUDIT_ACTION_SAVED_SEARCH_DELETE, "Saved search · delete"],
-]);
+export const mutationAuditActionOptions = [...ACTION_SPECS].map(([value, spec]) => ({
+  value,
+  label: spec.label,
+}));
 
-export const mutationAuditActionOptions = [...ACTION_LABELS].map(([value, label]) => ({ value, label }));
+export const mutationAuditTargetOptions = [...TARGET_LABELS].map(([value, label]) => ({
+  value,
+  label,
+}));
 
 export function auditActionLabel(action: AuditAction): string {
-  return ACTION_LABELS.get(action) ?? "Unknown action";
+  return ACTION_SPECS.get(action)?.label ?? "Unknown action";
+}
+
+export function auditKnowledgeObjectTypeLabel(objectType: KnowledgeObjectType): string {
+  return KNOWLEDGE_OBJECT_TYPE_LABELS.get(objectType) ?? "Unknown object type";
+}
+
+export function auditKnowledgeSharingScopeLabel(sharingScope: SharingScope): string {
+  return KNOWLEDGE_SHARING_SCOPE_LABELS.get(sharingScope) ?? "Unknown sharing scope";
+}
+
+export function auditTargetDetails(event: AuditEvent): string | null {
+  if (
+    event.targetKind !== AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT
+    || event.appId === undefined
+    || event.objectType === undefined
+    || event.sharingScope === undefined
+  ) return null;
+  return `App: ${event.appId} · Type: ${auditKnowledgeObjectTypeLabel(event.objectType)} · Sharing: ${auditKnowledgeSharingScopeLabel(event.sharingScope)}`;
 }

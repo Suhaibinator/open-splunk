@@ -20,8 +20,9 @@ func TestCompileEvalRoundFixedNumbersAreTypedAndParameterized(t *testing.T) {
 	for _, required := range []string{
 		`round(CAST(? AS Float64)) AS "whole"`,
 		`round(CAST(? AS Float64), CAST(? AS UInt8)) AS "cents"`,
-		`round(CAST(? AS Float64)) AS "negative"`,
-		`CAST(? AS Int64) AS "signed"`,
+		`[toFloat64(CAST(? AS Float64))]), 1)) AS "negative"`,
+		`[toFloat64(CAST(? AS Int64))]), 1), CAST(? AS UInt8)) AS "signed"`,
+		`negate(__os_arithmetic_operand)`,
 		`CAST(? AS UInt64) AS "unsigned"`,
 		`CAST(NULL AS Nullable(Float64)) AS "absent"`,
 	} {
@@ -33,8 +34,8 @@ func TestCompileEvalRoundFixedNumbersAreTypedAndParameterized(t *testing.T) {
 		float64(3.5),
 		float64(2.555),
 		uint8(2),
-		float64(-2.5),
-		int64(-42),
+		float64(2.5),
+		int64(42),
 		uint64(math.MaxUint64),
 	} {
 		if !containsArgument(compiled.Args, argument) {

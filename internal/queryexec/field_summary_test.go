@@ -650,7 +650,7 @@ func TestSettingsForFieldSummaryClonesAndTightensEveryOutputCap(t *testing.T) {
 	}
 	if got["max_result_rows"] != uint64(75) ||
 		got["max_result_bytes"] != maximumFieldSummaryResultBytes ||
-		got["max_rows_to_group_by"] != uint64(73) ||
+		got["max_rows_to_group_by"] != uint64(74) ||
 		got["readonly"] != uint8(2) {
 		t.Fatalf("field-summary settings = %#v", got)
 	}
@@ -786,7 +786,7 @@ func TestSettingsForFieldSummaryIsRaceSafeForConcurrentReaders(t *testing.T) {
 				return
 			}
 			if got["max_result_rows"] != uint64(index+3) ||
-				got["max_rows_to_group_by"] != uint64(index+1) {
+				got["max_rows_to_group_by"] != uint64(index+2) {
 				t.Errorf("settingsForFieldSummary(%d) = %#v", index+1, got)
 			}
 		}()

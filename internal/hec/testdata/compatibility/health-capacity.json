@@ -1,0 +1,157 @@
+{
+  "format_version": "hec-compatibility-fixture-v0.1",
+  "cases": [
+    {
+      "id": "health.shallow-unauthenticated-healthy",
+      "rule": "a shallow health probe requires no token and exposes no control-plane detail",
+      "request": {"method": "GET", "path": "/services/collector/health", "headers": [], "query": [], "body": {"kind": "utf8", "value": ""}},
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": []},
+      "expect": {
+        "http": {"status": 200, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"HEC is healthy\",\"code\":17}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "health.queue-unhealthy",
+      "rule": "the shallow probe reports only durable queue unavailability without queue depth",
+      "request": {"method": "GET", "path": "/services/collector/health/1.0", "headers": [], "query": [], "body": {"kind": "utf8", "value": ""}},
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": ["queue_unhealthy"]},
+      "expect": {
+        "http": {"status": 503, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"HEC is unhealthy, queues are full\",\"code\":18}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "health.requested-ack-unhealthy",
+      "rule": "ACK health is included only when the bounded ack flag is requested",
+      "request": {"method": "GET", "path": "/services/collector/health", "headers": [], "query": [{"name": "ack", "value": "true"}], "body": {"kind": "utf8", "value": ""}},
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": ["ack_unhealthy"]},
+      "expect": {
+        "http": {"status": 503, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"HEC is unhealthy, ack service unavailable\",\"code\":19}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "health.queue-and-ack-unhealthy",
+      "rule": "the combined health category is deterministic when both requested dimensions fail",
+      "request": {"method": "GET", "path": "/services/collector/health", "headers": [], "query": [{"name": "ack", "value": "1"}], "body": {"kind": "utf8", "value": ""}},
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": ["queue_unhealthy", "ack_unhealthy"]},
+      "expect": {
+        "http": {"status": 503, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"HEC is unhealthy, queues are full, ack service unavailable\",\"code\":20}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "health.invalid-authenticated-token",
+      "rule": "an authenticated health probe maps every unusable non-disabled credential to the same token result",
+      "request": {"method": "GET", "path": "/services/collector/health", "headers": [{"name": "Authorization", "value": "Splunk {{token:unknown}}"}], "query": [], "body": {"kind": "utf8", "value": ""}},
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": []},
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid token\",\"code\":21}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "health.disabled-token-is-explicit",
+      "rule": "a disabled-token health request uses the token-specific documented health result",
+      "request": {"method": "GET", "path": "/services/collector/health", "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}], "query": [], "body": {"kind": "utf8", "value": ""}},
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "disabled", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Token disabled\",\"code\":22}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "capacity.internal-staging-failure",
+      "rule": "an unexpected nonretryable staging failure is bounded and creates no partial state",
+      "request": {"method": "POST", "path": "/services/collector/event", "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}], "query": [], "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}},
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": ["staging_internal"]
+      },
+      "expect": {
+        "http": {"status": 500, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Internal server error\",\"code\":8}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "capacity.transient-staging-busy",
+      "rule": "transient admission unavailability is retryable server busy without partial state",
+      "request": {"method": "POST", "path": "/services/collector/event", "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}], "query": [], "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}},
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": ["staging_busy"]
+      },
+      "expect": {
+        "http": {"status": 503, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Server is busy\",\"code\":9}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "capacity.quota-busy-has-retry-after",
+      "rule": "durable quota pressure refines server busy to HTTP 429 and a bounded Retry-After",
+      "request": {"method": "POST", "path": "/services/collector/event", "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}], "query": [], "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}},
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": ["quota_limited"],
+        "retry_after_seconds": 2
+      },
+      "expect": {
+        "http": {"status": 429, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "Retry-After": "2"}, "body_utf8": "{\"text\":\"Server is busy\",\"code\":9}"},
+        "durable": {"quota": "unchanged", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "capacity.shutdown-closes-admission",
+      "rule": "new ingestion after the shutdown gate closes is rejected before durable work",
+      "request": {"method": "POST", "path": "/services/collector/event", "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}], "query": [], "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}},
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": ["shutdown"]
+      },
+      "expect": {
+        "http": {"status": 503, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Server is shutting down\",\"code\":23}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "capacity.durable-outbox-limit",
+      "rule": "the pending-row or pending-byte ceiling rejects before quota and staging",
+      "request": {"method": "POST", "path": "/services/collector/event", "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}], "query": [], "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}},
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": ["outbox_capacity"]
+      },
+      "expect": {
+        "http": {"status": 429, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"HEC queue is at capacity and cannot process any more requests\",\"code\":26}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    }
+  ]
+}

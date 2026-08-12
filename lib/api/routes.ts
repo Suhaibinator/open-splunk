@@ -1,9 +1,11 @@
 import * as ExportApi from "@/gen/ts/open_splunk/v1/export_api";
 import * as HistoryApi from "@/gen/ts/open_splunk/v1/history_api";
+import * as HecAdminApi from "@/gen/ts/open_splunk/v1/hec_admin_api";
 import * as IndexApi from "@/gen/ts/open_splunk/v1/index_api";
 import * as AppApi from "@/gen/ts/open_splunk/v1/app_api";
 import * as AuditApi from "@/gen/ts/open_splunk/v1/audit_api";
 import * as CollectorAdminApi from "@/gen/ts/open_splunk/v1/collector_admin_api";
+import * as KnowledgeApi from "@/gen/ts/open_splunk/v1/knowledge_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/v1/saved_search_api";
 import * as SearchApi from "@/gen/ts/open_splunk/v1/search_api";
 import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/v1/search_attempt_audit_api";
@@ -11,6 +13,81 @@ import * as SearchInspectionApi from "@/gen/ts/open_splunk/v1/search_inspection_
 import * as SystemApi from "@/gen/ts/open_splunk/v1/system_api";
 
 import { defineProtobufRoute, type ProtobufRoute } from "./protobuf-transport";
+
+export const MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES = 8 << 20;
+export const MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES = 128 << 10;
+export const MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES = 8 << 20;
+
+function readPreviewVarint(
+  bytes: Uint8Array,
+  start: number,
+): { readonly value: bigint; readonly next: number } {
+  let value = 0n;
+  let shift = 0n;
+  for (let index = start; index < bytes.byteLength && index < start + 10; index += 1) {
+    const octet = bytes[index] ?? 0;
+    value |= BigInt(octet & 0x7f) << shift;
+    if ((octet & 0x80) === 0) return { value, next: index + 1 };
+    shift += 7n;
+  }
+  throw new TypeError("Knowledge Preview response contains an invalid varint.");
+}
+
+function validatePreviewResponseEnvelopeWire(bytes: Uint8Array): void {
+  let position = 0;
+  let previousField = 0;
+  const singular = new Set<number>();
+  while (position < bytes.byteLength) {
+    const tag = readPreviewVarint(bytes, position);
+    position = tag.next;
+    const field = Number(tag.value >> 3n);
+    const wireType = Number(tag.value & 7n);
+    const lengthDelimited = field >= 1 && field <= 5;
+    const varint = field === 6 || field === 7;
+    if (
+      field === 0
+      || field < previousField
+      || (!lengthDelimited && !varint)
+      || (lengthDelimited && wireType !== 2)
+      || (varint && wireType !== 0)
+      || (field !== 4 && field !== 5 && singular.has(field))
+    ) {
+      throw new TypeError("Knowledge Preview response envelope is malformed.");
+    }
+    previousField = field;
+    if (field !== 4 && field !== 5) singular.add(field);
+    if (lengthDelimited) {
+      const length = readPreviewVarint(bytes, position);
+      position = length.next;
+      if (length.value > BigInt(bytes.byteLength - position)) {
+        throw new TypeError("Knowledge Preview response is truncated.");
+      }
+      position += Number(length.value);
+    } else {
+      position = readPreviewVarint(bytes, position).next;
+    }
+  }
+}
+
+/**
+ * Preview responses are server-sealed deterministic protobuf. Validate the
+ * complete top-level frame before invoking the generated decoder so unknown,
+ * duplicate, wrong-wire, truncated, or out-of-order envelope authority fails
+ * closed without round-tripping Timestamp precision through JavaScript Date.
+ */
+const strictPreviewKnowledgeObjectResponse = {
+  encode: KnowledgeApi.PreviewKnowledgeObjectResponse.encode,
+  decode(
+    input: Parameters<typeof KnowledgeApi.PreviewKnowledgeObjectResponse.decode>[0],
+    length?: number,
+  ): ReturnType<typeof KnowledgeApi.PreviewKnowledgeObjectResponse.decode> {
+    if (!(input instanceof Uint8Array) || length !== undefined) {
+      throw new TypeError("Knowledge Preview requires one complete response frame.");
+    }
+    validatePreviewResponseEnvelopeWire(input);
+    return KnowledgeApi.PreviewKnowledgeObjectResponse.decode(input);
+  },
+};
 
 /** Derives a generated request type from a route without duplicating contracts. */
 export type RouteRequest<TRoute> = TRoute extends ProtobufRoute<infer TRequest, unknown> ? TRequest : never;
@@ -102,6 +179,65 @@ export const appRoutes = {
   ),
 } as const;
 
+export const knowledgeRoutes = {
+  create: defineProtobufRoute(
+    "/api/v1/knowledge/objects/create",
+    KnowledgeApi.CreateKnowledgeObjectRequest,
+    KnowledgeApi.CreateKnowledgeObjectResponse,
+  ),
+  get: defineProtobufRoute(
+    "/api/v1/knowledge/objects/get",
+    KnowledgeApi.GetKnowledgeObjectRequest,
+    KnowledgeApi.GetKnowledgeObjectResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  list: defineProtobufRoute(
+    "/api/v1/knowledge/objects/list",
+    KnowledgeApi.ListKnowledgeObjectsRequest,
+    KnowledgeApi.ListKnowledgeObjectsResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  dependencies: defineProtobufRoute(
+    "/api/v1/knowledge/objects/dependencies",
+    KnowledgeApi.ListKnowledgeObjectDependenciesRequest,
+    KnowledgeApi.ListKnowledgeObjectDependenciesResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES },
+  ),
+  dependents: defineProtobufRoute(
+    "/api/v1/knowledge/objects/dependents",
+    KnowledgeApi.ListKnowledgeObjectDependentsRequest,
+    KnowledgeApi.ListKnowledgeObjectDependentsResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES },
+  ),
+  validate: defineProtobufRoute(
+    "/api/v1/knowledge/objects/validate",
+    KnowledgeApi.ValidateKnowledgeObjectRequest,
+    KnowledgeApi.ValidateKnowledgeObjectResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  preview: defineProtobufRoute(
+    "/api/v1/knowledge/objects/preview",
+    KnowledgeApi.PreviewKnowledgeObjectRequest,
+    strictPreviewKnowledgeObjectResponse,
+    { maximumResponseBytes: MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  update: defineProtobufRoute(
+    "/api/v1/knowledge/objects/update",
+    KnowledgeApi.UpdateKnowledgeObjectRequest,
+    KnowledgeApi.UpdateKnowledgeObjectResponse,
+  ),
+  setState: defineProtobufRoute(
+    "/api/v1/knowledge/objects/set-state",
+    KnowledgeApi.SetKnowledgeObjectStateRequest,
+    KnowledgeApi.SetKnowledgeObjectStateResponse,
+  ),
+  delete: defineProtobufRoute(
+    "/api/v1/knowledge/objects/delete",
+    KnowledgeApi.DeleteKnowledgeObjectRequest,
+    KnowledgeApi.DeleteKnowledgeObjectResponse,
+  ),
+} as const;
+
 export const collectorRoutes = {
   list: defineProtobufRoute(
     "/api/v1/collectors/list",
@@ -162,10 +298,23 @@ export const ingestionTokenRoutes = {
     CollectorAdminApi.UpdateIngestionTokenRequest,
     CollectorAdminApi.UpdateIngestionTokenResponse,
   ),
+  setState: defineProtobufRoute(
+    "/api/v1/ingestion-tokens/state/set",
+    CollectorAdminApi.SetIngestionTokenEnabledRequest,
+    CollectorAdminApi.SetIngestionTokenEnabledResponse,
+  ),
   revoke: defineProtobufRoute(
     "/api/v1/ingestion-tokens/revoke",
     CollectorAdminApi.RevokeIngestionTokenRequest,
     CollectorAdminApi.RevokeIngestionTokenResponse,
+  ),
+} as const;
+
+export const hecOperationsRoutes = {
+  get: defineProtobufRoute(
+    "/api/v1/hec/operations/get",
+    HecAdminApi.GetHECOperationalSnapshotRequest,
+    HecAdminApi.GetHECOperationalSnapshotResponse,
   ),
 } as const;
 
@@ -224,6 +373,7 @@ export const searchRoutes = {
     "/api/v1/search/jobs/inspect",
     SearchInspectionApi.InspectSearchJobRequest,
     SearchInspectionApi.InspectSearchJobResponse,
+    { maximumResponseBytes: MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES },
   ),
 } as const;
 
@@ -313,7 +463,9 @@ export const openSplunkRoutes = {
   auditEvents: auditEventRoutes,
   searchAttemptAudit: searchAttemptAuditRoutes,
   indexes: indexRoutes,
+  knowledge: knowledgeRoutes,
   ingestionTokens: ingestionTokenRoutes,
+  hec: hecOperationsRoutes,
   search: searchRoutes,
   savedSearches: savedSearchRoutes,
   history: historyRoutes,

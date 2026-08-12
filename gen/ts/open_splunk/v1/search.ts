@@ -9,6 +9,7 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Duration } from "../../google/protobuf/duration";
 import { Timestamp } from "../../google/protobuf/timestamp";
 import { ApiWarning, Diagnostic, ResolvedTimeRange, SourceRange, TimeRangeSpec } from "./common";
+import { KnowledgeSnapshotSummary } from "./knowledge";
 import { ResultSchema, ResultSetKind, resultSetKindFromJSON, resultSetKindToJSON, VisualizationSpec } from "./result";
 
 export enum SearchResultTab {
@@ -480,6 +481,11 @@ export interface SearchJob {
    * The full SPL result may still be exported through bounded re-execution.
    */
   resultsTruncated: boolean;
+  /**
+   * Definition-free identity for the immutable knowledge authority admitted
+   * with this job. It is absent for legacy or feature-disabled attempts.
+   */
+  knowledgeSnapshot?: KnowledgeSnapshotSummary | undefined;
 }
 
 function createBaseSearchDefinition(): SearchDefinition {
@@ -1635,6 +1641,7 @@ function createBaseSearchJob(): SearchJob {
     expiresAt: undefined,
     plan: undefined,
     resultsTruncated: false,
+    knowledgeSnapshot: undefined,
   };
 }
 
@@ -1708,6 +1715,9 @@ export const SearchJob: MessageFns<SearchJob> = {
     }
     if (message.resultsTruncated !== false) {
       writer.uint32(176).bool(message.resultsTruncated);
+    }
+    if (message.knowledgeSnapshot !== undefined) {
+      KnowledgeSnapshotSummary.encode(message.knowledgeSnapshot, writer.uint32(186).fork()).join();
     }
     return writer;
   },
@@ -1895,6 +1905,14 @@ export const SearchJob: MessageFns<SearchJob> = {
           message.resultsTruncated = reader.bool();
           continue;
         }
+        case 23: {
+          if (tag !== 186) {
+            break;
+          }
+
+          message.knowledgeSnapshot = KnowledgeSnapshotSummary.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1988,6 +2006,11 @@ export const SearchJob: MessageFns<SearchJob> = {
         : isSet(object.results_truncated)
         ? globalThis.Boolean(object.results_truncated)
         : false,
+      knowledgeSnapshot: isSet(object.knowledgeSnapshot)
+        ? KnowledgeSnapshotSummary.fromJSON(object.knowledgeSnapshot)
+        : isSet(object.knowledge_snapshot)
+        ? KnowledgeSnapshotSummary.fromJSON(object.knowledge_snapshot)
+        : undefined,
     };
   },
 
@@ -2059,6 +2082,9 @@ export const SearchJob: MessageFns<SearchJob> = {
     if (message.resultsTruncated !== false) {
       obj.resultsTruncated = message.resultsTruncated;
     }
+    if (message.knowledgeSnapshot !== undefined) {
+      obj.knowledgeSnapshot = KnowledgeSnapshotSummary.toJSON(message.knowledgeSnapshot);
+    }
     return obj;
   },
 
@@ -2105,6 +2131,9 @@ export const SearchJob: MessageFns<SearchJob> = {
       ? SearchPlanSummary.fromPartial(object.plan)
       : undefined;
     message.resultsTruncated = object.resultsTruncated ?? false;
+    message.knowledgeSnapshot = (object.knowledgeSnapshot !== undefined && object.knowledgeSnapshot !== null)
+      ? KnowledgeSnapshotSummary.fromPartial(object.knowledgeSnapshot)
+      : undefined;
     return message;
   },
 };

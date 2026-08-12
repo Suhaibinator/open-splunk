@@ -12,6 +12,7 @@ import type {
   TimelinePoint,
 } from "@/lib/demo/search-data";
 import { assertBrowserResultColumnCount } from "@/lib/api/pagination";
+import { validFlatMultivalueColumnPresentation } from "@/lib/api/result-column-presentation";
 
 export type SearchDataMode = "backend" | "demo";
 
@@ -60,6 +61,10 @@ export interface WorkspaceStatisticsColumn {
   semanticType: ColumnSemanticType;
   numeric: boolean;
   pivotable: boolean;
+  /** Optional display-only separator for a typed multivalue list. */
+  flatMultivalueDelimiter?: string;
+  /** Server-authenticated stats sparkline semantics for this list column. */
+  statsSparkline: boolean;
 }
 
 export type WorkspaceStatisticsValue =
@@ -433,6 +438,8 @@ function statisticsTableFromRows(schema: ResultSchema, rows: ResultRow[]): Works
         && column.valueType !== ValueType.VALUE_TYPE_LIST
         && column.valueType !== ValueType.VALUE_TYPE_OBJECT
         && fieldName.length > 0,
+      flatMultivalueDelimiter: column.flatMultivalueDelimiter,
+	  statsSparkline: column.statsSparkline,
       sourceIndex,
     };
   });
@@ -736,6 +743,13 @@ export function adaptSearchResults(
   timechartBucketWidthMs?: number,
 ): AdaptedSearchResults {
   assertBrowserResultColumnCount(schema.columns.length);
+  for (const column of schema.columns) {
+    if (!validFlatMultivalueColumnPresentation(column)) {
+      throw new RangeError(
+        `Search result column “${column.fieldName}” has invalid multivalue presentation metadata.`,
+      );
+    }
+  }
   switch (schema.resultKind) {
     case ResultSetKind.RESULT_SET_KIND_STATISTICS: {
       const transformedStatistics = statisticsFromRows(schema, rows);

@@ -83,7 +83,7 @@ case "$source_date_epoch" in
         ;;
 esac
 case "$image_created" in
-    ""|*[!0-9T:+-]*)
+    ""|*[!0-9TZ:+-]*)
         echo "repository HEAD has an invalid RFC 3339 commit timestamp" >&2
         exit 1
         ;;

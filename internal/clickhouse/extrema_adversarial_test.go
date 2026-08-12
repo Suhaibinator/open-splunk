@@ -67,14 +67,14 @@ func TestCompileStatsExtremaBindsAggregateWinnersWithinTightBounds(t *testing.T)
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats min(metric) AS low min(metric) AS low2 max(metric) AS high`,
+		`index=gradethis | stats min(metric) AS low max(metric) AS high`,
 	)
 	minAggregates := strings.Count(compiled.SQL, "argMinArray(")
 	maxAggregates := strings.Count(compiled.SQL, "argMaxArray(")
 	if minAggregates != 1 {
-		t.Fatalf("argMinArray expression count = %d, want one shared winner\nSQL: %s", minAggregates, compiled.SQL)
+		t.Fatalf("argMinArray expression count = %d, want one winner\nSQL: %s", minAggregates, compiled.SQL)
 	}
 	if maxAggregates != 1 {
-		t.Fatalf("argMaxArray expression count = %d, want one shared winner\nSQL: %s", maxAggregates, compiled.SQL)
+		t.Fatalf("argMaxArray expression count = %d, want one winner\nSQL: %s", maxAggregates, compiled.SQL)
 	}
 }

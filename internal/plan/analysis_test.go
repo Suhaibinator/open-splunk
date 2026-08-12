@@ -111,18 +111,24 @@ func TestAnalyzeOperatorReadPositions(t *testing.T) {
 		{
 			name: "aggregate grouping measures and predicate",
 			operator: &Aggregate{
-				GroupBy: []FieldRef{analysisField("aggregate_group")},
+				GroupBy: []FieldRef{mustResolveEventAggregateField(t, "aggregate_group")},
 				Measures: []AggregateMeasure{
 					{Function: AggregateFunctionCountRows, Output: "row_count"},
 					{
 						Function: AggregateFunctionSum,
-						Input:    analysisField("aggregate_measure"),
+						Input:    mustResolveEventAggregateField(t, "aggregate_measure"),
 						Output:   "total",
 					},
 					{
 						Function: AggregateFunctionCountPredicate,
-						Predicate: &ComparisonExpression{
-							Field: analysisField("aggregate_predicate"),
+						Predicate: &EvalComparisonExpression{
+							Left: &ScalarFieldExpression{
+								Field: mustResolveEventAggregateField(t, "aggregate_predicate"),
+							},
+							Op: ComparisonOpEqual,
+							Right: &ScalarLiteralExpression{
+								Value: Value{Kind: ValueKindInt64, Int64: 1},
+							},
 						},
 						Output: "conditional_count",
 					},
@@ -471,7 +477,7 @@ func TestAnalyzeExcludesWriteOnlyOutputsUntilRead(t *testing.T) {
 			name: "aggregate",
 			operator: &Aggregate{Measures: []AggregateMeasure{{
 				Function: AggregateFunctionSum,
-				Input:    analysisField("aggregate_input"),
+				Input:    mustResolveEventAggregateField(t, "aggregate_input"),
 				Output:   "aggregate_output",
 			}}},
 			inputs:  []string{"aggregate_input"},

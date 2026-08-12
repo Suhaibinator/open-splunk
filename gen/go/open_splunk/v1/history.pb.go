@@ -45,8 +45,11 @@ type SearchHistoryEntry struct {
 	CreatedAt           *timestamppb.Timestamp `protobuf:"bytes,15,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	StartedAt           *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	FinishedAt          *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// The admitted definition-free knowledge identity is preserved unchanged
+	// from queued admission through the first terminal history publication.
+	KnowledgeSnapshot *KnowledgeSnapshotSummary `protobuf:"bytes,18,opt,name=knowledge_snapshot,json=knowledgeSnapshot,proto3,oneof" json:"knowledge_snapshot,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SearchHistoryEntry) Reset() {
@@ -198,11 +201,18 @@ func (x *SearchHistoryEntry) GetFinishedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *SearchHistoryEntry) GetKnowledgeSnapshot() *KnowledgeSnapshotSummary {
+	if x != nil {
+		return x.KnowledgeSnapshot
+	}
+	return nil
+}
+
 var File_open_splunk_v1_history_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_history_proto_rawDesc = "" +
 	"\n" +
-	"\x1copen_splunk/v1/history.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/v1/common.proto\x1a\x1bopen_splunk/v1/search.proto\"\xc3\a\n" +
+	"\x1copen_splunk/v1/history.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bopen_splunk/v1/common.proto\x1a\x1eopen_splunk/v1/knowledge.proto\x1a\x1bopen_splunk/v1/search.proto\"\xb8\b\n" +
 	"\x12SearchHistoryEntry\x12\"\n" +
 	"\rsearch_job_id\x18\x01 \x01(\tR\vsearchJobId\x12@\n" +
 	"\n" +
@@ -227,10 +237,12 @@ const file_open_splunk_v1_history_proto_rawDesc = "" +
 	"\n" +
 	"started_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"finishedAtB\x16\n" +
+	"finishedAt\x12\\\n" +
+	"\x12knowledge_snapshot\x18\x12 \x01(\v2(.open_splunk.v1.KnowledgeSnapshotSummaryH\x02R\x11knowledgeSnapshot\x88\x01\x01B\x16\n" +
 	"\x14_resolved_time_rangeB\n" +
 	"\n" +
-	"\b_failureBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"\b_failureB\x15\n" +
+	"\x13_knowledge_snapshotBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_history_proto_rawDescOnce sync.Once
@@ -246,15 +258,16 @@ func file_open_splunk_v1_history_proto_rawDescGZIP() []byte {
 
 var file_open_splunk_v1_history_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_open_splunk_v1_history_proto_goTypes = []any{
-	(*SearchHistoryEntry)(nil),    // 0: open_splunk.v1.SearchHistoryEntry
-	(*SearchDefinition)(nil),      // 1: open_splunk.v1.SearchDefinition
-	(*SearchJobSource)(nil),       // 2: open_splunk.v1.SearchJobSource
-	(*ResolvedTimeRange)(nil),     // 3: open_splunk.v1.ResolvedTimeRange
-	(SearchJobState)(0),           // 4: open_splunk.v1.SearchJobState
-	(*durationpb.Duration)(nil),   // 5: google.protobuf.Duration
-	(*ApiWarning)(nil),            // 6: open_splunk.v1.ApiWarning
-	(*SearchFailure)(nil),         // 7: open_splunk.v1.SearchFailure
-	(*timestamppb.Timestamp)(nil), // 8: google.protobuf.Timestamp
+	(*SearchHistoryEntry)(nil),       // 0: open_splunk.v1.SearchHistoryEntry
+	(*SearchDefinition)(nil),         // 1: open_splunk.v1.SearchDefinition
+	(*SearchJobSource)(nil),          // 2: open_splunk.v1.SearchJobSource
+	(*ResolvedTimeRange)(nil),        // 3: open_splunk.v1.ResolvedTimeRange
+	(SearchJobState)(0),              // 4: open_splunk.v1.SearchJobState
+	(*durationpb.Duration)(nil),      // 5: google.protobuf.Duration
+	(*ApiWarning)(nil),               // 6: open_splunk.v1.ApiWarning
+	(*SearchFailure)(nil),            // 7: open_splunk.v1.SearchFailure
+	(*timestamppb.Timestamp)(nil),    // 8: google.protobuf.Timestamp
+	(*KnowledgeSnapshotSummary)(nil), // 9: open_splunk.v1.KnowledgeSnapshotSummary
 }
 var file_open_splunk_v1_history_proto_depIdxs = []int32{
 	1,  // 0: open_splunk.v1.SearchHistoryEntry.definition:type_name -> open_splunk.v1.SearchDefinition
@@ -267,11 +280,12 @@ var file_open_splunk_v1_history_proto_depIdxs = []int32{
 	8,  // 7: open_splunk.v1.SearchHistoryEntry.created_at:type_name -> google.protobuf.Timestamp
 	8,  // 8: open_splunk.v1.SearchHistoryEntry.started_at:type_name -> google.protobuf.Timestamp
 	8,  // 9: open_splunk.v1.SearchHistoryEntry.finished_at:type_name -> google.protobuf.Timestamp
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	9,  // 10: open_splunk.v1.SearchHistoryEntry.knowledge_snapshot:type_name -> open_splunk.v1.KnowledgeSnapshotSummary
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_history_proto_init() }
@@ -280,6 +294,7 @@ func file_open_splunk_v1_history_proto_init() {
 		return
 	}
 	file_open_splunk_v1_common_proto_init()
+	file_open_splunk_v1_knowledge_proto_init()
 	file_open_splunk_v1_search_proto_init()
 	file_open_splunk_v1_history_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}

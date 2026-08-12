@@ -140,6 +140,27 @@ func TestAnalyzeSuggestionContextUsesLexerPipeQuoteAndEscapeRules(t *testing.T) 
 	}
 }
 
+func TestAnalyzeSuggestionContextKeepsBaseSearchOutOfScalarNormalization(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		"eval=status+",
+		"where=status/",
+		"stats=count+",
+	} {
+		context, diagnostic := AnalyzeSuggestionContext(source, len(source))
+		if diagnostic != nil {
+			t.Fatalf("AnalyzeSuggestionContext(%q): %v", source, diagnostic)
+		}
+		if context.Prefix != source[strings.IndexByte(source, '=')+1:] ||
+			context.Replacement.Start.Offset != strings.IndexByte(source, '=')+1 ||
+			context.Replacement.End.Offset != len(source) ||
+			context.AllowsQuotedScalarFields {
+			t.Fatalf("base-search context for %q = %#v", source, context)
+		}
+	}
+}
+
 func TestAnalyzeSuggestionContextExposesParseablePipelinePrefix(t *testing.T) {
 	t.Parallel()
 
@@ -190,9 +211,58 @@ func TestAnalyzeSuggestionContextIncompleteGrammar(t *testing.T) {
 			keywords:      []string{"NOT"},
 		},
 		{
+			source:        "| eval ratio=duration_ms+to",
+			prefix:        "to",
+			kinds:         []SuggestionKind{SuggestionKindFunction, SuggestionKindField},
+			functionClass: SuggestionFunctionClassScalar,
+		},
+		{
+			source:        "| where duration_ms/to",
+			prefix:        "to",
+			kinds:         []SuggestionKind{SuggestionKindFunction, SuggestionKindField},
+			functionClass: SuggestionFunctionClassScalar,
+		},
+		{
+			source:        "| where status==to",
+			prefix:        "to",
+			kinds:         []SuggestionKind{SuggestionKindFunction, SuggestionKindField},
+			functionClass: SuggestionFunctionClassScalar,
+		},
+		{
+			source:   "| where status I",
+			prefix:   "I",
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"AND", "OR", "IN", "NOT"},
+		},
+		{
+			source:   "| where status NOT I",
+			prefix:   "I",
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"IN"},
+		},
+		{
+			source:        "| stats count(eval(duration_ms+to",
+			prefix:        "to",
+			kinds:         []SuggestionKind{SuggestionKindFunction, SuggestionKindField},
+			functionClass: SuggestionFunctionClassScalar,
+		},
+		{
+			source:   "| eventstats count(eval(status I",
+			prefix:   "I",
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"AND", "OR", "IN", "NOT"},
+		},
+		{
+			source:   "| streamstats count(eval(status NOT I",
+			prefix:   "I",
+			kinds:    []SuggestionKind{SuggestionKindKeyword},
+			keywords: []string{"IN"},
+		},
+		{
 			source:        "| stats d",
 			prefix:        "d",
-			kinds:         []SuggestionKind{SuggestionKindFunction},
+			kinds:         []SuggestionKind{SuggestionKindFunction, SuggestionKindKeyword},
+			keywords:      []string{"partitions=", "allnum=", "delim="},
 			functionClass: SuggestionFunctionClassAggregate,
 		},
 		{source: "| stats dc(tr", prefix: "tr", kinds: []SuggestionKind{SuggestionKindField}},
@@ -206,7 +276,7 @@ func TestAnalyzeSuggestionContextIncompleteGrammar(t *testing.T) {
 			source:        "| stats count B",
 			prefix:        "B",
 			kinds:         []SuggestionKind{SuggestionKindFunction, SuggestionKindKeyword},
-			keywords:      []string{"AS", "BY"},
+			keywords:      []string{"AS", "BY", "dedup_splitvals="},
 			functionClass: SuggestionFunctionClassAggregate,
 		},
 		{
@@ -273,6 +343,77 @@ func TestAnalyzeSuggestionContextIncompleteGrammar(t *testing.T) {
 					context, test.prefix, test.kinds, test.functionClass, test.keywords)
 			}
 		})
+	}
+}
+
+func TestAnalyzeSuggestionContextV02OperatorsReplaceOnlyTheActiveFragment(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{
+		"| eval ratio=duration_ms+toSuffix",
+		"| eval ratio=duration_ms-toSuffix",
+		"| eval ratio=duration_ms*toSuffix",
+		"| eval ratio=duration_ms/toSuffix",
+		"| eval ratio=duration_ms%toSuffix",
+		"| where status==toSuffix",
+		"| eval ratio=duration_ms+'HTTP Status'+toSuffix",
+		"| stats count(eval(duration_ms+toSuffix",
+		"| eventstats count(eval(duration_ms/toSuffix",
+		"| streamstats count(eval(duration_ms%toSuffix",
+	} {
+		source := source
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+			fragmentStart := strings.LastIndex(source, "toSuffix")
+			cursor := fragmentStart + len("to")
+			context, diagnostic := AnalyzeSuggestionContext(source, cursor)
+			if diagnostic != nil {
+				t.Fatalf("AnalyzeSuggestionContext(): %v", diagnostic)
+			}
+			if context.Prefix != "to" ||
+				!slices.Equal(context.Kinds, []SuggestionKind{
+					SuggestionKindFunction,
+					SuggestionKindField,
+				}) ||
+				context.FunctionClass != SuggestionFunctionClassScalar ||
+				!context.AllowsQuotedScalarFields ||
+				context.Replacement.Start.Offset != fragmentStart ||
+				context.Replacement.End.Offset != fragmentStart+len("toSuffix") {
+				t.Fatalf("context = %#v, want trailing toSuffix replacement", context)
+			}
+			result := Suggest(source, cursor, 20)
+			if result.Diagnostic != nil {
+				t.Fatalf("Suggest(): %v", result.Diagnostic)
+			}
+			if labels := suggestionLabels(result.Suggestions); !slices.Equal(
+				labels,
+				[]string{"tonumber", "tostring"},
+			) {
+				t.Fatalf("labels = %v, want tonumber/tostring", labels)
+			}
+		})
+	}
+}
+
+func TestAnalyzeSuggestionContextReplacesFragmentInsideQuotedFieldComposite(t *testing.T) {
+	t.Parallel()
+
+	source := "| eval x='HTTP Status'+staZZ"
+	fragmentStart := strings.Index(source, "staZZ")
+	cursor := fragmentStart + len("sta")
+	context, diagnostic := AnalyzeSuggestionContext(source, cursor)
+	if diagnostic != nil {
+		t.Fatalf("AnalyzeSuggestionContext(): %v", diagnostic)
+	}
+	if context.Prefix != "sta" ||
+		context.Replacement.Start.Offset != fragmentStart ||
+		context.Replacement.End.Offset != fragmentStart+len("staZZ") ||
+		!context.AllowsQuotedScalarFields ||
+		!slices.Equal(context.Kinds, []SuggestionKind{
+			SuggestionKindFunction,
+			SuggestionKindField,
+		}) {
+		t.Fatalf("context = %#v, want exact staZZ scalar fragment", context)
 	}
 }
 
@@ -885,12 +1026,56 @@ func TestStaticSuggestionsUseSharedCatalogAndContextFilters(t *testing.T) {
 		t.Fatalf("scalar labels = %v, want tonumber/tostring", labels)
 	}
 
+	arithmetic := Suggest("| eval ratio=duration_ms+to", len("| eval ratio=duration_ms+to"), 20)
+	if arithmetic.Diagnostic != nil {
+		t.Fatalf("Suggest(arithmetic): %v", arithmetic.Diagnostic)
+	}
+	if labels := suggestionLabels(arithmetic.Suggestions); !slices.Equal(labels, []string{"tonumber", "tostring"}) {
+		t.Fatalf("arithmetic labels = %v, want tonumber/tostring", labels)
+	}
+
+	membership := Suggest("| where status I", len("| where status I"), 20)
+	if membership.Diagnostic != nil {
+		t.Fatalf("Suggest(membership): %v", membership.Diagnostic)
+	}
+	if labels := suggestionLabels(membership.Suggestions); !slices.Equal(labels, []string{"IN"}) {
+		t.Fatalf("membership labels = %v, want IN", labels)
+	}
+	if got := membership.Suggestions[0].Insertion; got != "IN (" {
+		t.Fatalf("membership insertion = %q, want IN (", got)
+	}
+
+	notMembership := Suggest("| where status NOT I", len("| where status NOT I"), 20)
+	if notMembership.Diagnostic != nil {
+		t.Fatalf("Suggest(not membership): %v", notMembership.Diagnostic)
+	}
+	if labels := suggestionLabels(notMembership.Suggestions); !slices.Equal(labels, []string{"IN"}) {
+		t.Fatalf("not-membership labels = %v, want IN", labels)
+	}
+
+	for _, source := range []string{
+		"| stats count(eval(status I",
+		"| eventstats count(eval(status I",
+		"| streamstats count(eval(status I",
+	} {
+		result := Suggest(source, len(source), 20)
+		if result.Diagnostic != nil {
+			t.Fatalf("Suggest(%q): %v", source, result.Diagnostic)
+		}
+		if labels := suggestionLabels(result.Suggestions); !slices.Equal(labels, []string{"IN"}) {
+			t.Fatalf("nested membership labels for %q = %v, want IN", source, labels)
+		}
+		if !result.Context.AllowsQuotedScalarFields {
+			t.Fatalf("nested membership context for %q did not allow quoted scalar fields", source)
+		}
+	}
+
 	aggregate := Suggest("| stats d", len("| stats d"), 20)
 	if aggregate.Diagnostic != nil {
 		t.Fatalf("Suggest(aggregate): %v", aggregate.Diagnostic)
 	}
-	if labels := suggestionLabels(aggregate.Suggestions); !slices.Equal(labels, []string{"dc", "distinct_count"}) {
-		t.Fatalf("aggregate labels = %v, want dc/distinct_count", labels)
+	if labels := suggestionLabels(aggregate.Suggestions); !slices.Equal(labels, []string{"dc", "distinct_count", "delim="}) {
+		t.Fatalf("aggregate labels = %v, want dc/distinct_count/delim", labels)
 	}
 
 	timechart := Suggest("| timechart span=5m co", len("| timechart span=5m co"), 20)
@@ -971,11 +1156,14 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 	}
 
 	wantFunctions := []string{
-		"count", "p50", "p95", "c", "dc", "distinct_count", "values", "list", "min", "max",
-		"earliest", "latest", "sum", "avg", "if", "case", "now", "strftime",
+		"count", "sparkline", "p50", "p95", "exactperc50", "exactperc95", "upperperc50", "upperperc95",
+		"c", "dc", "distinct_count", "estdc", "estdc_error", "values", "list", "min", "max",
+		"median", "mode", "first", "last", "earliest", "latest", "earliest_time",
+		"latest_time", "rate", "sum", "avg", "mean", "range", "sumsq", "stdev",
+		"stdevp", "var", "varp", "if", "case", "in", "now", "strftime",
 		"strptime", "relative_time", "tonumber", "tostring", "replace", "isnull",
 		"isnotnull", "coalesce", "lower", "upper", "len", "length", "round",
-		"ceil", "ceiling", "floor", "mvcount", "match", "like", "substr",
+		"ceil", "ceiling", "floor", "mvcount", "mvsort", "match", "like", "substr",
 	}
 	gotFunctions := make([]string, 0, len(completionCatalog.Functions))
 	for _, function := range completionCatalog.Functions {
@@ -989,10 +1177,106 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 	}
 }
 
+func TestStatsNumericAggregateAndEvalInputSuggestions(t *testing.T) {
+	t.Parallel()
+
+	aggregates := Suggest("| stats st", len("| stats st"), 20)
+	if aggregates.Diagnostic != nil {
+		t.Fatalf("Suggest aggregate: %v", aggregates.Diagnostic)
+	}
+	if labels := suggestionLabels(aggregates.Suggestions); !slices.Equal(
+		labels,
+		[]string{"stdev", "stdevp"},
+	) {
+		t.Fatalf("aggregate labels = %v, want stdev/stdevp", labels)
+	}
+
+	scalar := Suggest(
+		"| stats sum(eval(duration_ms+to",
+		len("| stats sum(eval(duration_ms+to"),
+		20,
+	)
+	if scalar.Diagnostic != nil {
+		t.Fatalf("Suggest scalar input: %v", scalar.Diagnostic)
+	}
+	if scalar.Context.FunctionClass != SuggestionFunctionClassScalar ||
+		!scalar.Context.Allows(SuggestionKindFunction) ||
+		!scalar.Context.Allows(SuggestionKindField) ||
+		!scalar.Context.AllowsQuotedScalarFields {
+		t.Fatalf("scalar input context = %#v", scalar.Context)
+	}
+	if labels := suggestionLabels(scalar.Suggestions); !slices.Equal(
+		labels,
+		[]string{"tonumber", "tostring"},
+	) {
+		t.Fatalf("scalar input labels = %v, want tonumber/tostring", labels)
+	}
+
+	exact := Suggest("| stats range(fi", len("| stats range(fi"), 20)
+	if exact.Diagnostic != nil {
+		t.Fatalf("Suggest exact input: %v", exact.Diagnostic)
+	}
+	if !exact.Context.Allows(SuggestionKindField) ||
+		exact.Context.Allows(SuggestionKindFunction) ||
+		!exact.Context.AllowsQuotedScalarFields {
+		t.Fatalf("exact input context = %#v", exact.Context)
+	}
+}
+
 func suggestionLabels(suggestions []Suggestion) []string {
 	labels := make([]string, len(suggestions))
 	for index, suggestion := range suggestions {
 		labels[index] = suggestion.Label
 	}
 	return labels
+}
+
+func maximumScalarSuggestionFixture() (string, int) {
+	var source strings.Builder
+	source.WriteString("| eval result=")
+	for range (maxSPLTokens - 5) / 2 {
+		source.WriteString("value+")
+	}
+	source.WriteString("toSuffix")
+	value := source.String()
+	return value, strings.LastIndex(value, "toSuffix") + len("to")
+}
+
+func TestAnalyzeSuggestionContextV02MaximumScalarShapeBoundsAllocations(t *testing.T) {
+	source, cursor := maximumScalarSuggestionFixture()
+	var context SuggestionContext
+	var diagnostic *Diagnostic
+	allocations := testing.AllocsPerRun(50, func() {
+		context, diagnostic = AnalyzeSuggestionContext(source, cursor)
+	})
+	if diagnostic != nil {
+		t.Fatalf("AnalyzeSuggestionContext(): %v", diagnostic)
+	}
+	if context.Prefix != "to" ||
+		context.Replacement.Start.Offset != strings.LastIndex(source, "toSuffix") {
+		t.Fatalf("context = %#v, want maximum-shape trailing fragment", context)
+	}
+	// The append-only normalizer needs one bounded token backing array. Leave
+	// headroom for runtime bookkeeping while catching fragment-by-fragment
+	// slice reconstruction, which scales allocations with authored operators.
+	if allocations > 32 {
+		t.Fatalf("maximum-shape allocations = %.0f, want at most 32", allocations)
+	}
+}
+
+func BenchmarkAnalyzeSuggestionContextV02MaximumScalarShape(b *testing.B) {
+	source, cursor := maximumScalarSuggestionFixture()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(source)))
+	b.ResetTimer()
+	for range b.N {
+		context, diagnostic := AnalyzeSuggestionContext(source, cursor)
+		if diagnostic != nil {
+			b.Fatalf("AnalyzeSuggestionContext(): %v", diagnostic)
+		}
+		if context.Prefix != "to" ||
+			context.Replacement.Start.Offset != strings.LastIndex(source, "toSuffix") {
+			b.Fatalf("context = %#v, want maximum-shape trailing fragment", context)
+		}
+	}
 }

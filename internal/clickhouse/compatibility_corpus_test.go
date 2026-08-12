@@ -189,7 +189,7 @@ func TestChartCompatibilityCorpus(t *testing.T) {
 			source:   `index=gradethis | chart count OVER path BY level`,
 			rowField: "path",
 			rowKind:  ChartRowKindString,
-			required: `CAST('2:' AS String)`,
+			required: `arraySlice(arraySort(__os_ch_record -> tuple(-toInt256(__os_ch_record.3), __os_ch_record.2)`,
 		},
 		{
 			// chart does not require event rows or canonical _time.
@@ -245,11 +245,16 @@ func TestChartTotalsMatchStatsCountByRowField(t *testing.T) {
 	}
 	// Both eliminate exactly the same ineligible rows: missing or explicit null.
 	if !strings.Contains(chart.SQL, `"__os_ch_row_present" AS "__os_ch_row_eligible"`) ||
-		!strings.Contains(chart.SQL, `WHERE "__os_ch_row_eligible" != 0 GROUP BY "__os_ch_row"`) {
+		!strings.Contains(chart.SQL, `toUInt64(sum(toUInt128(if("__os_ch_row_eligible" != 0 AND "__os_ch_kind" IN (0, 1), "__os_ch_count", 0))))`) ||
+		!strings.Contains(chart.SQL, `mapFromArrays(groupArrayIf("__os_ch_encoded", "__os_ch_encoded" != '' AND "__os_ch_collapsed_count" > 0), groupArrayIf("__os_ch_collapsed_count"`) {
 		t.Fatalf("chart row eligibility diverged from stats BY:\n%s", chart.SQL)
 	}
 	// usenull and useother are unconditional, so the column bound cannot drop a row.
-	for _, required := range []string{`CAST('1:' AS String)`, `CAST('2:' AS String)`} {
+	for _, required := range []string{
+		`__os_ch_record.1 = toUInt8(1), CAST('1:' AS String)`,
+		`has(__os_ch_top_label_values, __os_ch_record.2), concat('0:', __os_ch_record.2)`,
+		`__os_ch_record.1 = toUInt8(0), CAST('2:' AS String)`,
+	} {
 		if !strings.Contains(chart.SQL, required) {
 			t.Fatalf("chart omitted the %q series:\n%s", required, chart.SQL)
 		}

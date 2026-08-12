@@ -72,6 +72,7 @@ func TestReleaseOCIComposeContract(t *testing.T) {
 	// window while the two release images build.
 	values["OPEN_SPLUNK_SERVER_HTTP_PORT"] = "0"
 	values["OPEN_SPLUNK_SERVER_GRPC_PORT"] = "0"
+	values["OPEN_SPLUNK_HEC_ENABLED"] = "true"
 	values["COMPOSE_ANSI"] = "never"
 	values["COMPOSE_PROGRESS"] = "plain"
 
@@ -344,6 +345,7 @@ type releaseOCIRecoveryFixture struct {
 	restoredClient             *http.Client
 	restoredBaseURL            string
 	restoredGRPCAddress        string
+	hecRecovery                *releaseOCIHECRecoveryState
 }
 
 type releaseOCIRecoveryHelperMount struct {
@@ -944,6 +946,7 @@ func releaseOCIAssertRecoveryHelperTmpfs(
 func (fixture *releaseOCIRecoveryFixture) run() {
 	fixture.t.Helper()
 	fixture.seedPreBackupState()
+	fixture.seedHECPreBackupState()
 	fixture.captureBackupBoundaryAndPostBackupMutations()
 	fixture.restoreIntoFreshVolumes()
 	fixture.assertPostRestoreState()
@@ -1014,15 +1017,7 @@ func (fixture *releaseOCIRecoveryFixture) captureBackupBoundaryAndPostBackupMuta
 	ctx := fixture.ctx
 	stack := fixture.stack
 
-	stack.mustCompose(
-		t,
-		ctx,
-		"stop server before paired deployment backup",
-		"stop",
-		"--timeout",
-		"40",
-		"server",
-	)
+	fixture.stagePendingHECAndStopServer()
 	fixture.client.CloseIdleConnections()
 	stoppedServer := releaseOCIInspectContainer(t, ctx, stack, fixture.originalServerID)
 	if stoppedServer.State.Status != "exited" {
@@ -1109,6 +1104,7 @@ func (fixture *releaseOCIRecoveryFixture) captureBackupBoundaryAndPostBackupMuta
 		postBackupBaseURL,
 		postBackupHTTPAddress,
 	)
+	fixture.recordPostBackupHECMutation(postBackupClient, postBackupBaseURL)
 	fixture.postBackupIndex = "oci-after-backup-" + fixture.suffix
 	releaseOCICreateIndex(
 		t,
@@ -1608,6 +1604,7 @@ func (fixture *releaseOCIRecoveryFixture) assertPostRestoreState() {
 		fixture.fixtureTime,
 		[]string{fixture.preBackupEventID},
 	)
+	fixture.assertRestoredHECState()
 	releaseOCIIngestEvent(
 		t,
 		ctx,

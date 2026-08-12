@@ -21,13 +21,13 @@ func TestMigrationFreshSchemaIsExactAndBounded(t *testing.T) {
 	_, database := openTestDatabase(t)
 
 	var version int
-	if err := database.SQLDB().QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
+	if err := database.SQLDB().QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
 	if version < 28 {
 		t.Fatalf("latest migration = %d, want at least 28", version)
 	}
-	rows, err := database.SQLDB().Query(`
+	rows, err := database.SQLDB().QueryContext(t.Context(), `
 		SELECT name FROM pragma_table_info('knowledge_attempt_audit_events') ORDER BY cid
 	`)
 	if err != nil {
@@ -52,7 +52,7 @@ func TestMigrationFreshSchemaIsExactAndBounded(t *testing.T) {
 		t.Fatalf("columns = %v, want %v", columns, want)
 	}
 	var strict, withoutRowID int
-	if err := database.SQLDB().QueryRow(`
+	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT strict, wr FROM pragma_table_list
 		WHERE schema = 'main' AND name = 'knowledge_attempt_audit_events'
 	`).Scan(&strict, &withoutRowID); err != nil {
@@ -62,7 +62,7 @@ func TestMigrationFreshSchemaIsExactAndBounded(t *testing.T) {
 		t.Fatalf("event table shape = strict %d without-rowid %d", strict, withoutRowID)
 	}
 	var tableSQL string
-	if err := database.SQLDB().QueryRow(`
+	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT sql FROM sqlite_schema
 		WHERE type = 'table' AND name = 'knowledge_attempt_audit_events'
 	`).Scan(&tableSQL); err != nil {
@@ -74,7 +74,7 @@ func TestMigrationFreshSchemaIsExactAndBounded(t *testing.T) {
 		}
 	}
 	var triggerCount int
-	if err := database.SQLDB().QueryRow(`
+	if err := database.SQLDB().QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM sqlite_schema
 		WHERE type = 'trigger' AND name LIKE 'knowledge_attempt_audit_%'
 	`).Scan(&triggerCount); err != nil {
@@ -83,7 +83,7 @@ func TestMigrationFreshSchemaIsExactAndBounded(t *testing.T) {
 	if triggerCount != 10 {
 		t.Fatalf("trigger count = %d, want 10", triggerCount)
 	}
-	if _, err := database.SQLDB().Exec(`
+	if _, err := database.SQLDB().ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_tenant_state (
 			tenant_id, first_sequence, next_sequence, retained_count
 		) VALUES ('bad-count', 1, 100003, 100002)
@@ -100,23 +100,23 @@ func TestMigrationUpgradesVersion26Database(t *testing.T) {
 	if err := control.ApplyMigrations(ctx, raw, before); err != nil {
 		t.Fatalf("ApplyMigrations(before 0027): %v", err)
 	}
-	if _, err := raw.Exec(`INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('tenant-existing', 1)`); err != nil {
+	if _, err := raw.ExecContext(t.Context(), `INSERT INTO app_catalog_revisions (tenant_id, revision) VALUES ('tenant-existing', 1)`); err != nil {
 		t.Fatalf("seed legacy control state: %v", err)
 	}
 	if err := control.ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		t.Fatalf("ApplyMigrations(upgrade): %v", err)
 	}
 	var existingRevision, latest int
-	if err := raw.QueryRow(`SELECT revision FROM app_catalog_revisions WHERE tenant_id = 'tenant-existing'`).Scan(&existingRevision); err != nil {
+	if err := raw.QueryRowContext(t.Context(), `SELECT revision FROM app_catalog_revisions WHERE tenant_id = 'tenant-existing'`).Scan(&existingRevision); err != nil {
 		t.Fatal(err)
 	}
-	if err := raw.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&latest); err != nil {
+	if err := raw.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
 	if existingRevision != 1 || latest < 28 {
 		t.Fatalf("upgrade state = revision %d, latest %d", existingRevision, latest)
 	}
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_tenant_state (
 			tenant_id, first_sequence, next_sequence, retained_count
 		) VALUES ('tenant-new', 1, 1, 0)
@@ -133,7 +133,7 @@ func TestMigrationUpgradesVersion27JournalWithoutChangingRetainedRows(t *testing
 	if err := control.ApplyMigrations(ctx, raw, before); err != nil {
 		t.Fatalf("ApplyMigrations(before 0028): %v", err)
 	}
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_tenant_state (
 			tenant_id, first_sequence, next_sequence, retained_count
 		) VALUES ('tenant-existing', 1, 1, 0);
@@ -199,7 +199,7 @@ func TestMigrationUpgradesVersion27JournalWithoutChangingRetainedRows(t *testing
 	}
 
 	var state tenantStateRecord
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT tenant_id, first_sequence, next_sequence, retained_count
 		FROM knowledge_attempt_audit_tenant_state
 		WHERE tenant_id = 'tenant-existing'
@@ -216,7 +216,7 @@ func TestMigrationUpgradesVersion27JournalWithoutChangingRetainedRows(t *testing
 	}
 
 	for sequence, action := range []string{"get", "list", "dependencies", "dependents"} {
-		if _, err := raw.Exec(`
+		if _, err := raw.ExecContext(t.Context(), `
 			INSERT INTO knowledge_attempt_audit_events (
 				tenant_id, sequence, occurred_at_unix_micro,
 				actor_kind, actor_id, actor_role, action, result, reason,
@@ -232,7 +232,7 @@ func TestMigrationUpgradesVersion27JournalWithoutChangingRetainedRows(t *testing
 			t.Fatalf("append %q after upgrade: %v", action, err)
 		}
 	}
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT first_sequence, next_sequence, retained_count
 		FROM knowledge_attempt_audit_tenant_state
 		WHERE tenant_id = 'tenant-existing'
@@ -243,7 +243,7 @@ func TestMigrationUpgradesVersion27JournalWithoutChangingRetainedRows(t *testing
 		t.Fatalf("post-upgrade append state = %+v", state)
 	}
 
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_events (
 			tenant_id, sequence, occurred_at_unix_micro,
 			actor_kind, actor_id, actor_role, action, result, reason,
@@ -258,7 +258,7 @@ func TestMigrationUpgradesVersion27JournalWithoutChangingRetainedRows(t *testing
 	`); err == nil {
 		t.Fatal("unknown post-upgrade action was accepted")
 	}
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT next_sequence, retained_count
 		FROM knowledge_attempt_audit_tenant_state
 		WHERE tenant_id = 'tenant-existing'
@@ -269,7 +269,7 @@ func TestMigrationUpgradesVersion27JournalWithoutChangingRetainedRows(t *testing
 		t.Fatalf("invalid action advanced state = %+v", state)
 	}
 
-	foreignKeys, err := raw.Query(`PRAGMA foreign_key_check`)
+	foreignKeys, err := raw.QueryContext(t.Context(), `PRAGMA foreign_key_check`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestMigrationUpgradesVersion27JournalWithoutChangingRetainedRows(t *testing
 		t.Fatal("upgraded journal has a foreign-key violation")
 	}
 	var temporaryTables int
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM sqlite_schema
 		WHERE name = 'knowledge_attempt_audit_events_before_read_actions'
 	`).Scan(&temporaryTables); err != nil {
@@ -297,7 +297,7 @@ func TestFailedReadActionMigrationRollsBackSchemaRowsAndLedger(t *testing.T) {
 	if err := control.ApplyMigrations(ctx, raw, before); err != nil {
 		t.Fatalf("ApplyMigrations(before): %v", err)
 	}
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_tenant_state (
 			tenant_id, first_sequence, next_sequence, retained_count
 		) VALUES ('tenant-rollback', 1, 1, 0);
@@ -333,17 +333,17 @@ func TestFailedReadActionMigrationRollsBackSchemaRowsAndLedger(t *testing.T) {
 
 	var latest, rows, triggers int
 	var action string
-	if err := raw.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&latest); err != nil {
+	if err := raw.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT COUNT(*), MIN(action)
 		FROM knowledge_attempt_audit_events
 		WHERE tenant_id = 'tenant-rollback'
 	`).Scan(&rows, &action); err != nil {
 		t.Fatal(err)
 	}
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM sqlite_schema
 		WHERE type = 'trigger' AND name LIKE 'knowledge_attempt_audit_%'
 	`).Scan(&triggers); err != nil {
@@ -358,7 +358,7 @@ func TestFailedReadActionMigrationRollsBackSchemaRowsAndLedger(t *testing.T) {
 			triggers,
 		)
 	}
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_events (
 			tenant_id, sequence, occurred_at_unix_micro,
 			actor_kind, actor_id, actor_role, action, result, reason,
@@ -395,7 +395,7 @@ func TestFailedMigrationRollsBackEntireVersion(t *testing.T) {
 		t.Fatal("broken migration unexpectedly succeeded")
 	}
 	var tables, ledger int
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM sqlite_schema
 		WHERE name IN (
 			'knowledge_attempt_audit_tenant_state',
@@ -404,7 +404,7 @@ func TestFailedMigrationRollsBackEntireVersion(t *testing.T) {
 	`).Scan(&tables); err != nil {
 		t.Fatal(err)
 	}
-	if err := raw.QueryRow(`SELECT coalesce(MAX(version), 0) FROM schema_migrations`).Scan(&ledger); err != nil {
+	if err := raw.QueryRowContext(t.Context(), `SELECT coalesce(MAX(version), 0) FROM schema_migrations`).Scan(&ledger); err != nil {
 		t.Fatal(err)
 	}
 	if tables != 0 || ledger != 26 {
@@ -419,7 +419,7 @@ func openRawMigrationDB(t *testing.T, path string) *sql.DB {
 		t.Fatal(err)
 	}
 	raw.SetMaxOpenConns(4)
-	if err := raw.Ping(); err != nil {
+	if err := raw.PingContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -489,7 +489,7 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 	t.Helper()
 	var snapshot knowledgeAttemptAuditSchema
 
-	columnRows, err := raw.Query(`
+	columnRows, err := raw.QueryContext(t.Context(), `
 		SELECT cid, name, type, "notnull", dflt_value, pk, hidden
 		FROM pragma_table_xinfo('knowledge_attempt_audit_events')
 		ORDER BY cid
@@ -508,20 +508,24 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 			&column.PrimaryKey,
 			&column.Hidden,
 		); err != nil {
-			columnRows.Close()
+			if closeErr := columnRows.Close(); closeErr != nil {
+				t.Errorf("close column rows after scan failure: %v", closeErr)
+			}
 			t.Fatal(err)
 		}
 		snapshot.Columns = append(snapshot.Columns, column)
 	}
 	if err := columnRows.Err(); err != nil {
-		columnRows.Close()
+		if closeErr := columnRows.Close(); closeErr != nil {
+			t.Errorf("close column rows after iteration failure: %v", closeErr)
+		}
 		t.Fatal(err)
 	}
 	if err := columnRows.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT strict, wr
 		FROM pragma_table_list
 		WHERE schema = 'main' AND name = 'knowledge_attempt_audit_events'
@@ -529,7 +533,7 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 		t.Fatal(err)
 	}
 
-	foreignKeyRows, err := raw.Query(`
+	foreignKeyRows, err := raw.QueryContext(t.Context(), `
 		SELECT id, seq, "table", "from", "to", on_update, on_delete, match
 		FROM pragma_foreign_key_list('knowledge_attempt_audit_events')
 		ORDER BY id, seq
@@ -549,20 +553,24 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 			&foreignKey.OnDelete,
 			&foreignKey.Match,
 		); err != nil {
-			foreignKeyRows.Close()
+			if closeErr := foreignKeyRows.Close(); closeErr != nil {
+				t.Errorf("close foreign-key rows after scan failure: %v", closeErr)
+			}
 			t.Fatal(err)
 		}
 		snapshot.ForeignKeys = append(snapshot.ForeignKeys, foreignKey)
 	}
 	if err := foreignKeyRows.Err(); err != nil {
-		foreignKeyRows.Close()
+		if closeErr := foreignKeyRows.Close(); closeErr != nil {
+			t.Errorf("close foreign-key rows after iteration failure: %v", closeErr)
+		}
 		t.Fatal(err)
 	}
 	if err := foreignKeyRows.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	indexRows, err := raw.Query(`
+	indexRows, err := raw.QueryContext(t.Context(), `
 		SELECT seq, name, "unique", origin, partial
 		FROM pragma_index_list('knowledge_attempt_audit_events')
 		ORDER BY seq
@@ -579,13 +587,17 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 			&index.Origin,
 			&index.Partial,
 		); err != nil {
-			indexRows.Close()
+			if closeErr := indexRows.Close(); closeErr != nil {
+				t.Errorf("close index rows after scan failure: %v", closeErr)
+			}
 			t.Fatal(err)
 		}
 		snapshot.Indexes = append(snapshot.Indexes, index)
 	}
 	if err := indexRows.Err(); err != nil {
-		indexRows.Close()
+		if closeErr := indexRows.Close(); closeErr != nil {
+			t.Errorf("close index rows after iteration failure: %v", closeErr)
+		}
 		t.Fatal(err)
 	}
 	if err := indexRows.Close(); err != nil {
@@ -593,7 +605,7 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 	}
 	for indexNumber := range snapshot.Indexes {
 		index := &snapshot.Indexes[indexNumber]
-		indexColumnRows, err := raw.Query(`
+		indexColumnRows, err := raw.QueryContext(t.Context(), `
 			SELECT seqno, cid, name, "desc", coll, "key"
 			FROM pragma_index_xinfo(?)
 			ORDER BY seqno
@@ -611,13 +623,17 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 				&column.Collation,
 				&column.Key,
 			); err != nil {
-				indexColumnRows.Close()
+				if closeErr := indexColumnRows.Close(); closeErr != nil {
+					t.Errorf("close index-column rows after scan failure: %v", closeErr)
+				}
 				t.Fatal(err)
 			}
 			index.Columns = append(index.Columns, column)
 		}
 		if err := indexColumnRows.Err(); err != nil {
-			indexColumnRows.Close()
+			if closeErr := indexColumnRows.Close(); closeErr != nil {
+				t.Errorf("close index-column rows after iteration failure: %v", closeErr)
+			}
 			t.Fatal(err)
 		}
 		if err := indexColumnRows.Close(); err != nil {
@@ -625,7 +641,7 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 		}
 	}
 
-	objectRows, err := raw.Query(`
+	objectRows, err := raw.QueryContext(t.Context(), `
 		SELECT type, name, tbl_name, coalesce(sql, '')
 		FROM sqlite_schema
 		WHERE name GLOB 'knowledge_attempt_audit_*'
@@ -647,14 +663,18 @@ func readKnowledgeAttemptAuditSchema(t *testing.T, raw *sql.DB) knowledgeAttempt
 			&object.TableName,
 			&schemaSQL,
 		); err != nil {
-			objectRows.Close()
+			if closeErr := objectRows.Close(); closeErr != nil {
+				t.Errorf("close schema-object rows after scan failure: %v", closeErr)
+			}
 			t.Fatal(err)
 		}
 		object.SQL = normalizeKnowledgeAttemptAuditSchemaSQL(schemaSQL)
 		snapshot.Objects = append(snapshot.Objects, object)
 	}
 	if err := objectRows.Err(); err != nil {
-		objectRows.Close()
+		if closeErr := objectRows.Close(); closeErr != nil {
+			t.Errorf("close schema-object rows after iteration failure: %v", closeErr)
+		}
 		t.Fatal(err)
 	}
 	if err := objectRows.Close(); err != nil {
@@ -851,7 +871,7 @@ func readRawKnowledgeAttemptAuditRows(
 	tenantID string,
 ) []rawKnowledgeAttemptAuditRow {
 	t.Helper()
-	rows, err := raw.Query(`
+	rows, err := raw.QueryContext(t.Context(), `
 		SELECT
 			CAST(tenant_id AS BLOB), sequence, occurred_at_unix_micro,
 			CAST(actor_kind AS BLOB), CAST(actor_id AS BLOB),

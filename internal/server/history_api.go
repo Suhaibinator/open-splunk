@@ -331,6 +331,10 @@ func cloneSearchHistoryEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplun
 	if input == nil {
 		return nil, errors.New("search history service returned an invalid entry")
 	}
+	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(input.GetKnowledgeSnapshot())
+	if err != nil {
+		return nil, err
+	}
 	encodedSize := proto.Size(input)
 	if encodedSize == 0 || encodedSize > maximumHistoryEntryBytes {
 		return nil, errors.New("search history service returned an invalid entry")
@@ -361,7 +365,9 @@ func cloneSearchHistoryEntry(input *opensplunkv1.SearchHistoryEntry) (*opensplun
 	if duration == nil || duration.CheckValid() != nil || duration.Seconds < 0 || duration.Nanos < 0 || duration.Seconds > maximumDurationSeconds || (duration.Seconds == maximumDurationSeconds && duration.Nanos > maximumDurationNanos) {
 		return nil, errors.New("search history service returned an invalid duration")
 	}
-	return proto.Clone(input).(*opensplunkv1.SearchHistoryEntry), nil
+	cloned := proto.Clone(input).(*opensplunkv1.SearchHistoryEntry)
+	cloned.KnowledgeSnapshot = knowledgeSnapshot
+	return cloned, nil
 }
 
 func historyEntryMatchesFilter(entry *opensplunkv1.SearchHistoryEntry, filter searchhistory.Filter) bool {

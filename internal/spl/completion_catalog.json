@@ -13,7 +13,7 @@
     {
       "name": "eval",
       "insertion": "eval availability=if(isnull(status), \"missing\", \"present\")",
-      "detail": "Create or replace fields; the null-propagating period operator concatenates 2-32 String or number operands in source order, as in full_name=first.\" \".last (use tostring(value) for Boolean), if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text, round(value[, precision]) rounds a number with an optional literal precision from 0 through 18, ceil(value)/ceiling(value) rounds a number upward, floor(value) rounds it downward, mvcount(value) counts non-null multivalue members, a single value as 1, and no values as null, match(value, \"regex\") tests substring matches with a 4 KiB literal RE2 pattern, like(value, \"pattern\") tests whole-string matches with a 4 KiB literal wildcard pattern where % matches zero or more Unicode code points and _ matches one Unicode code point, now() returns the fixed search-start Unix second, relative_time(time, \"-1d@d+2h\") applies an optional signed offset, optional snap, and optional signed post-snap offset in the effective IANA search timezone and returns nullable Unix seconds from a 1 KiB literal specifier, strftime(time, \"%Y-%m-%dT%H:%M:%S.%Q\") formats canonical time or Unix seconds in that timezone using a bounded literal format, and strptime(text, \"%Y-%m-%dT%H:%M:%S.%6N\") requires a full date and returns nullable microsecond Unix seconds with a 4 KiB literal format and a 4 KiB String input ceiling. Formatted tostring modes and negative or calculated round precisions are not yet supported."
+      "detail": "Create or replace fields; the null-propagating period operator concatenates 2-32 String or number operands in source order, as in full_name=first.\" \".last (use tostring(value) for Boolean), if(predicate, true_value, false_value) selects between two values, coalesce(value, fallback, ...) selects the first non-null fixed value, case(predicate, value, ...) selects the value for the first true predicate, lower(value)/upper(value) map a Unicode string or multivalue, len(value)/length(value) count UTF-8 code points in one string, substr(value, start[, length]) selects UTF-8 code points with SQLite indexing and literal integer indexes, tostring(value) preserves strings, renders exact numbers, and uses capitalized Boolean text, round(value[, precision]) rounds a number with an optional literal precision from 0 through 18, ceil(value)/ceiling(value) rounds a number upward, floor(value) rounds it downward, mvcount(value) counts non-null multivalue members, a single value as 1, and no values as null, mvsort(multivalue_field) sorts homogeneous String members in ascending encoded order while preserving duplicates, match(value, \"regex\") tests substring matches with a 4 KiB literal RE2 pattern, like(value, \"pattern\") tests whole-string matches with a 4 KiB literal wildcard pattern where % matches zero or more Unicode code points and _ matches one Unicode code point, now() returns the fixed search-start Unix second, relative_time(time, \"-1d@d+2h\") applies an optional signed offset, optional snap, and optional signed post-snap offset in the effective IANA search timezone and returns nullable Unix seconds from a 1 KiB literal specifier, strftime(time, \"%Y-%m-%dT%H:%M:%S.%Q\") formats canonical time or Unix seconds in that timezone using a bounded literal format, and strptime(text, \"%Y-%m-%dT%H:%M:%S.%6N\") requires a full date and returns nullable microsecond Unix seconds with a 4 KiB literal format and a 4 KiB String input ceiling. Formatted tostring modes and negative or calculated round precisions are not yet supported."
     },
     {
       "name": "rename",
@@ -72,8 +72,8 @@
     },
     {
       "name": "stats",
-      "insertion": "stats count AS events count(eval(status>=500)) AS errors c(user) AS user_occurrences dc(user) AS user_count values(user) AS users min(duration_ms) AS min_ms max(duration_ms) AS max_ms earliest(status) AS first_status latest(status) AS last_status p50(duration_ms) AS median_ms p95(duration_ms) AS p95_ms sum(bytes) AS total_bytes avg(duration_ms) AS avg_ms BY level",
-      "detail": "Aggregate with row count, true-only count(eval(predicate)) AS output, count/c field occurrences, dc/distinct_count, values, list, min, max, chronological earliest/latest, pN/percN percentiles (1-99), sum, and avg."
+      "insertion": "stats partitions=1 allnum=false delim=\",\" count AS events sparkline(avg(latency),5m) AS latency_trend values(user) AS users rate(bytes) AS byte_rate BY level dedup_splitvals=false",
+      "detail": "Aggregate with bounded row, predicate, field, distinct-count, percentile, distribution, value-selection, chronological, rate, and time-binned sparkline measures. Leading unsigned partitions (0 selects the default; values above 100 clamp to 100), allnum, and delim options plus terminal dedup_splitvals are preserved in the plan; delimiter-display and parallel-order details remain oracle-governed."
     },
     {
       "name": "eventstats",
@@ -115,6 +115,13 @@
       "highlight_requires_call": false
     },
     {
+      "name": "sparkline",
+      "insertion": "sparkline(",
+      "detail": "Build a bounded time-binned aggregate series inside stats.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
       "name": "p50",
       "insertion": "p50(",
       "detail": "Estimate the 50th percentile of non-null numeric field values.",
@@ -125,6 +132,34 @@
       "name": "p95",
       "insertion": "p95(",
       "detail": "Estimate the 95th percentile of non-null numeric field values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "exactperc50",
+      "insertion": "exactperc50(",
+      "detail": "Calculate the exact 50th percentile of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "exactperc95",
+      "insertion": "exactperc95(",
+      "detail": "Calculate the exact 95th percentile of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "upperperc50",
+      "insertion": "upperperc50(",
+      "detail": "Calculate the upper 50th percentile of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "upperperc95",
+      "insertion": "upperperc95(",
+      "detail": "Calculate the upper 95th percentile of non-null numeric values.",
       "class": "aggregate",
       "highlight_requires_call": true
     },
@@ -146,6 +181,20 @@
       "name": "distinct_count",
       "insertion": "distinct_count(",
       "detail": "Alias for counting distinct non-null field values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "estdc",
+      "insertion": "estdc(",
+      "detail": "Estimate the number of distinct non-null values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "estdc_error",
+      "insertion": "estdc_error(",
+      "detail": "Estimate the relative error of an estimated distinct count.",
       "class": "aggregate",
       "highlight_requires_call": false
     },
@@ -178,6 +227,34 @@
       "highlight_requires_call": false
     },
     {
+      "name": "median",
+      "insertion": "median(",
+      "detail": "Calculate the median of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "mode",
+      "insertion": "mode(",
+      "detail": "Return the most frequent non-null value.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "first",
+      "insertion": "first(",
+      "detail": "Return the first non-null value in processing order.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "last",
+      "insertion": "last(",
+      "detail": "Return the last non-null value in processing order.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
       "name": "earliest",
       "insertion": "earliest(",
       "detail": "Return the chronologically earliest field value.",
@@ -188,6 +265,27 @@
       "name": "latest",
       "insertion": "latest(",
       "detail": "Return the chronologically latest field value.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "earliest_time",
+      "insertion": "earliest_time(",
+      "detail": "Return the event time of the chronologically earliest eligible value.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "latest_time",
+      "insertion": "latest_time(",
+      "detail": "Return the event time of the chronologically latest eligible value.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "rate",
+      "insertion": "rate(",
+      "detail": "Calculate the chronological rate of change for numeric values.",
       "class": "aggregate",
       "highlight_requires_call": false
     },
@@ -206,6 +304,55 @@
       "highlight_requires_call": false
     },
     {
+      "name": "mean",
+      "insertion": "mean(",
+      "detail": "Average non-null numeric values while preserving the mean function name.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "range",
+      "insertion": "range(",
+      "detail": "Return the difference between the maximum and minimum numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "sumsq",
+      "insertion": "sumsq(",
+      "detail": "Sum the squares of non-null numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "stdev",
+      "insertion": "stdev(",
+      "detail": "Calculate sample standard deviation over numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "stdevp",
+      "insertion": "stdevp(",
+      "detail": "Calculate population standard deviation over numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "var",
+      "insertion": "var(",
+      "detail": "Calculate sample variance over numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
+      "name": "varp",
+      "insertion": "varp(",
+      "detail": "Calculate population variance over numeric values.",
+      "class": "aggregate",
+      "highlight_requires_call": false
+    },
+    {
       "name": "if",
       "insertion": "if(",
       "detail": "Select between two values using a predicate.",
@@ -216,6 +363,13 @@
       "name": "case",
       "insertion": "case(",
       "detail": "Select the first value whose predicate is true.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
+      "name": "in",
+      "insertion": "in(",
+      "detail": "Test one scalar value against one through 32 exact candidates.",
       "class": "scalar",
       "highlight_requires_call": true
     },
@@ -353,6 +507,13 @@
       "highlight_requires_call": true
     },
     {
+      "name": "mvsort",
+      "insertion": "mvsort(",
+      "detail": "Sort homogeneous String multivalue members in ascending UTF-8 byte order.",
+      "class": "scalar",
+      "highlight_requires_call": true
+    },
+    {
       "name": "match",
       "insertion": "match(",
       "detail": "Test a string against a bounded RE2 pattern.",
@@ -391,6 +552,12 @@
       "name": "NOT",
       "insertion": "NOT ",
       "detail": "Negate the following predicate.",
+      "highlight": true
+    },
+    {
+      "name": "IN",
+      "insertion": "IN (",
+      "detail": "Test a scalar value against a bounded exact candidate list.",
       "highlight": true
     },
     {
@@ -439,6 +606,30 @@
       "name": "global=",
       "insertion": "global=",
       "detail": "Select a global or per-group streamstats window.",
+      "highlight": false
+    },
+    {
+      "name": "partitions=",
+      "insertion": "partitions=",
+      "detail": "Set the stats reduction partition count from 0 through 100; zero resolves to one.",
+      "highlight": false
+    },
+    {
+      "name": "allnum=",
+      "insertion": "allnum=",
+      "detail": "Require numeric eligibility according to the stats allnum setting.",
+      "highlight": false
+    },
+    {
+      "name": "delim=",
+      "insertion": "delim=\"\"",
+      "detail": "Preserve the authored stats delimiter; display semantics remain oracle-governed.",
+      "highlight": false
+    },
+    {
+      "name": "dedup_splitvals=",
+      "insertion": "dedup_splitvals=",
+      "detail": "Deduplicate split values for multivalue stats grouping.",
       "highlight": false
     },
     {

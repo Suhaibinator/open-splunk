@@ -1,29 +1,16 @@
 package knowledge
 
 import (
-	"bytes"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/Suhaibinator/open-splunk/internal/testsupport/knowledgecompat"
 )
 
-const compatibilityFixtureSHA256 = "958eb18284f45a895951e5a1539537dda19f78c0ad380acb8847312b6ebe7fd4"
-
-type compatibilityFixture struct {
-	CompatibilityVersion string                     `json:"compatibility_version"`
-	Cases                []compatibilityFixtureCase `json:"cases"`
-}
-
-type compatibilityFixtureCase struct {
-	ID     string `json:"id"`
-	Stage  string `json:"stage"`
-	Rule   string `json:"rule"`
-	Expect string `json:"expect"`
-}
+const compatibilityFixtureSHA256 = "35cae144db3ae70ca26ac82fb5fee4e106983967b7425e636cc1509651057071"
 
 func TestCompatibilityV0_1FixtureContract(t *testing.T) {
 	t.Parallel()
@@ -35,15 +22,7 @@ func TestCompatibilityV0_1FixtureContract(t *testing.T) {
 	if digest := fmt.Sprintf("%x", sha256.Sum256(encoded)); digest != compatibilityFixtureSHA256 {
 		t.Fatalf("fixture SHA-256 = %s, want %s; intentional corpus changes must update the reviewed digest", digest, compatibilityFixtureSHA256)
 	}
-	var fixture compatibilityFixture
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&fixture); err != nil {
-		t.Fatalf("decode fixture: %v", err)
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		t.Fatalf("decode trailing fixture data: %v", err)
-	}
+	fixture := knowledgecompat.Load(t)
 	if fixture.CompatibilityVersion != CompatibilityVersion {
 		t.Fatalf("compatibility version = %q, want %q", fixture.CompatibilityVersion, CompatibilityVersion)
 	}
@@ -72,6 +51,7 @@ func TestCompatibilityV0_1FixtureContract(t *testing.T) {
 	}
 	seenIDs := make(map[string]struct{}, len(fixture.Cases))
 	seenPrefixes := make(map[string]bool, len(requiredPrefixes))
+	ownerCounts := make(map[knowledgecompat.Owner]int)
 	for index, testCase := range fixture.Cases {
 		if strings.TrimSpace(testCase.ID) != testCase.ID || testCase.ID == "" {
 			t.Errorf("case %d has invalid id %q", index, testCase.ID)
@@ -89,6 +69,7 @@ func TestCompatibilityV0_1FixtureContract(t *testing.T) {
 		if strings.TrimSpace(testCase.Expect) == "" {
 			t.Errorf("case %q has empty expectation", testCase.ID)
 		}
+		ownerCounts[testCase.Authority.Owner]++
 		for _, prefix := range requiredPrefixes {
 			if strings.HasPrefix(testCase.ID, prefix) {
 				seenPrefixes[prefix] = true
@@ -98,6 +79,36 @@ func TestCompatibilityV0_1FixtureContract(t *testing.T) {
 	for _, prefix := range requiredPrefixes {
 		if !seenPrefixes[prefix] {
 			t.Errorf("fixture has no %q case", prefix)
+		}
+	}
+	expectedOwnerCounts := map[knowledgecompat.Owner]int{
+		knowledgecompat.OwnerKnowledge:                7,
+		knowledgecompat.OwnerKnowledgeDefinition:      1,
+		knowledgecompat.OwnerKnowledgeProgram:         6,
+		knowledgecompat.OwnerKnowledgeSnapshot:        3,
+		knowledgecompat.OwnerKnowledgeCatalog:         10,
+		knowledgecompat.OwnerKnowledgeCatalogBlackbox: 2,
+		knowledgecompat.OwnerKnowledgeAttemptAudit:    1,
+		knowledgecompat.OwnerKnowledgePreview:         1,
+		knowledgecompat.OwnerServer:                   4,
+		knowledgecompat.OwnerControl:                  3,
+		knowledgecompat.OwnerQueryExec:                17,
+	}
+	if len(expectedOwnerCounts) != len(knowledgecompat.Owners()) {
+		t.Fatalf(
+			"reviewed compatibility owner count = %d, closed taxonomy = %d",
+			len(expectedOwnerCounts),
+			len(knowledgecompat.Owners()),
+		)
+	}
+	for _, owner := range knowledgecompat.Owners() {
+		if ownerCounts[owner] != expectedOwnerCounts[owner] {
+			t.Errorf(
+				"fixture owner %q cases = %d, want %d",
+				owner,
+				ownerCounts[owner],
+				expectedOwnerCounts[owner],
+			)
 		}
 	}
 }

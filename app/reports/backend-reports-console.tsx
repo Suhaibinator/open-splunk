@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
-import { SharingScope } from "@/gen/ts/open_splunk/v1/common";
+import { SharingScope, SortDirection } from "@/gen/ts/open_splunk/v1/common";
+import { SavedSearchSortBy } from "@/gen/ts/open_splunk/v1/saved_search_api";
 import {
   createOpenSplunkApiClient,
   getSystemBootstrap,
@@ -56,11 +57,18 @@ function scopeLabel(scope: SharingScope): string {
   return "Unknown";
 }
 
-function scopeMatches(savedSearch: ServerSavedSearch, scope: SavedSearchScope): boolean {
-  if (scope === "all") return true;
-  if (scope === "global") return savedSearch.sharingScope === SharingScope.SHARING_SCOPE_GLOBAL;
-  if (scope === "app") return savedSearch.sharingScope === SharingScope.SHARING_SCOPE_APP;
-  return savedSearch.sharingScope === SharingScope.SHARING_SCOPE_PRIVATE;
+function sharingScopeFilters(scope: SavedSearchScope): SharingScope[] {
+  if (scope === "global") return [SharingScope.SHARING_SCOPE_GLOBAL];
+  if (scope === "app") return [SharingScope.SHARING_SCOPE_APP];
+  if (scope === "private") return [SharingScope.SHARING_SCOPE_PRIVATE];
+  return [];
+}
+
+function selectedScopeLabel(scope: SavedSearchScope): string {
+  if (scope === "private") return "Private";
+  if (scope === "app") return "App";
+  if (scope === "global") return "Global";
+  return "All";
 }
 
 function formatDate(value: Date | null): string {
@@ -90,7 +98,9 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const [generation, setGeneration] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState("");
+  const [effectiveQuery, setEffectiveQuery] = useState("");
   const [scope, setScope] = useState<SavedSearchScope>("all");
+  const [appFilter, setAppFilter] = useState("all");
   const [sort, setSort] = useState<SortOrder>("updated");
   const [modal, setModal] = useState<SavedSearchModal | null>(null);
   const [actionName, setActionName] = useState("");
@@ -105,6 +115,11 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
   const reload = useCallback(() => setGeneration((current) => current + 1), []);
 
   useEffect(() => () => actionAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setEffectiveQuery(query.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   useEffect(() => {
     const retainShell = hasLoadedRef.current;
@@ -133,6 +148,15 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           signal: controller.signal,
           pageSize: Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 50, 100)),
           maximumPages: 1,
+          text: effectiveQuery,
+          appId: appFilter === "all" ? undefined : appFilter,
+          sharingScopes: sharingScopeFilters(scope),
+          sortBy: sort === "name"
+            ? SavedSearchSortBy.SAVED_SEARCH_SORT_BY_NAME
+            : SavedSearchSortBy.SAVED_SEARCH_SORT_BY_UPDATED_AT,
+          sortDirection: sort === "name"
+            ? SortDirection.SORT_DIRECTION_ASCENDING
+            : SortDirection.SORT_DIRECTION_DESCENDING,
         });
         if (!current) return;
         if (result.status === "unavailable") {
@@ -174,7 +198,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
       loadMoreAbortRef.current?.abort();
       loadMoreAbortRef.current = null;
     };
-  }, [client, generation]);
+  }, [appFilter, client, effectiveQuery, generation, scope, sort]);
 
   const loadMore = useCallback(async () => {
     const bootstrap = bootstrapRef.current;
@@ -190,6 +214,15 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         pageSize: Math.max(1, Math.min(bootstrap.limits.maximumPageSize || 50, 100)),
         pageToken,
         maximumPages: 1,
+        text: effectiveQuery,
+        appId: appFilter === "all" ? undefined : appFilter,
+        sharingScopes: sharingScopeFilters(scope),
+        sortBy: sort === "name"
+          ? SavedSearchSortBy.SAVED_SEARCH_SORT_BY_NAME
+          : SavedSearchSortBy.SAVED_SEARCH_SORT_BY_UPDATED_AT,
+        sortDirection: sort === "name"
+          ? SortDirection.SORT_DIRECTION_ASCENDING
+          : SortDirection.SORT_DIRECTION_DESCENDING,
       });
       if (controller.signal.aborted || bootstrapRef.current !== bootstrap) return;
       if (result.status === "unavailable") {
@@ -230,30 +263,9 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         setLoadingMore(false);
       }
     }
-  }, [client, nextPageToken]);
+  }, [appFilter, client, effectiveQuery, nextPageToken, scope, sort]);
 
-  const counts = useMemo(() => ({
-    all: savedSearches.length,
-    private: savedSearches.filter((item) => item.sharingScope === SharingScope.SHARING_SCOPE_PRIVATE).length,
-    app: savedSearches.filter((item) => item.sharingScope === SharingScope.SHARING_SCOPE_APP).length,
-    global: savedSearches.filter((item) => item.sharingScope === SharingScope.SHARING_SCOPE_GLOBAL).length,
-  }), [savedSearches]);
-
-  const visible = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    return savedSearches
-      .filter((item) =>
-        scopeMatches(item, scope)
-        && (normalized.length === 0
-          || `${item.name} ${item.description} ${item.search.spl} ${item.ownerId ?? ""} ${item.search.appId ?? ""} ${appNames[item.search.appId ?? ""] ?? ""}`
-            .toLowerCase()
-            .includes(normalized)))
-      .toSorted((left, right) => {
-        if (sort === "name") return left.name.localeCompare(right.name);
-        return (right.updatedAt?.valueOf() ?? right.createdAt?.valueOf() ?? 0)
-          - (left.updatedAt?.valueOf() ?? left.createdAt?.valueOf() ?? 0);
-      });
-  }, [appNames, query, savedSearches, scope, sort]);
+  const visible = savedSearches;
 
   const displayedTotal = totalSizeExact && totalSize !== null
     ? totalSize.toLocaleString()
@@ -413,9 +425,9 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           {error === null ? null : <div className="backend-inline-error" role="alert">The latest refresh failed; the previous saved-search snapshot remains visible. {error}</div>}
           {actionNotice === null ? null : <output className={styles.actionNotice}><span>{actionNotice}</span><button type="button" aria-label="Dismiss saved-search action message" onClick={() => setActionNotice(null)}>×</button></output>}
           <section className={styles.summary} aria-label="Saved search summary">
-            <article><span className={styles.metricIcon} aria-hidden="true">▤</span><div><strong>{displayedTotal}</strong><small>{totalSizeExact ? "Saved searches" : "Definitions loaded"}</small></div></article>
-            <article><span className={styles.metricIcon} aria-hidden="true">♙</span><div><strong>{counts.private}</strong><small>{complete ? "Private" : "Private loaded"}</small></div></article>
-            <article><span className={styles.metricIcon} aria-hidden="true">◎</span><div><strong>{counts.app + counts.global}</strong><small>{complete ? "Shared" : "Shared loaded"}</small></div></article>
+            <article><span className={styles.metricIcon} aria-hidden="true">▤</span><div><strong>{displayedTotal}</strong><small>{totalSizeExact ? "Matching saved searches" : "Matching definitions loaded"}</small></div></article>
+            <article><span className={styles.metricIcon} aria-hidden="true">♙</span><div><strong>{savedSearches.length.toLocaleString()}</strong><small>Definitions loaded</small></div></article>
+            <article><span className={styles.metricIcon} aria-hidden="true">◎</span><div><strong>{selectedScopeLabel(scope)}</strong><small>Server-side sharing scope</small></div></article>
           </section>
           {!complete ? (
             <output className="backend-list-notice backend-list-notice--action">
@@ -433,7 +445,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
               <span><strong>{visible.length}</strong> {visible.length === 1 ? "saved search" : "saved searches"}{complete ? "" : " loaded"}</span>
             </header>
 
-            <div className={styles.scopeBar} aria-label={complete ? "Saved search sharing scope" : "Saved search sharing scope; counts apply to loaded definitions only"}>
+            <div className={styles.scopeBar} aria-label="Server-side saved search sharing scope">
               {([
                 ["all", "All saved searches"],
                 ["private", "Private"],
@@ -441,16 +453,23 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
                 ["global", "Global"],
               ] as const).map(([id, label]) => (
                 <button className={scope === id ? styles.scopeActive : undefined} type="button" aria-pressed={scope === id} onClick={() => setScope(id)} key={id}>
-                  {label}<span>{counts[id]}{complete ? null : <small className={styles.loadedCountLabel}> loaded</small>}</span>
+                  {label}<span>{scope === id ? displayedTotal : null}</span>
                 </button>
               ))}
             </div>
-            {complete ? null : <p className={styles.loadedOnlyNote}>Scope filters, text filtering, sorting, and badges apply to loaded definitions only.</p>}
+            {complete ? null : <p className={styles.loadedOnlyNote}>Scope, text, and ordering are applied by the server. Load more to continue this result set.</p>}
 
             <div className={`${styles.toolbar} ${styles.backendToolbar}`}>
               <label className={styles.searchField}>
                 <span className="sr-only">Filter saved searches</span><i aria-hidden="true">⌕</i>
                 <input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find by name, SPL, app, or owner" />
+              </label>
+              <label className={styles.selectField}>
+                <span>App</span>
+                <select value={appFilter} onChange={(event) => setAppFilter(event.target.value)}>
+                  <option value="all">All apps</option>
+                  {Object.entries(appNames).toSorted((left, right) => left[1].localeCompare(right[1])).map(([appId, appName]) => <option value={appId} key={appId}>{appName}</option>)}
+                </select>
               </label>
               <label className={styles.selectField}>
                 <span>Sort</span>
@@ -465,7 +484,7 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
               <div className={styles.empty}>
                 <span aria-hidden="true">⌕</span>
                 <strong>{savedSearches.length === 0 ? "No saved searches" : "No matching saved searches"}</strong>
-                <p>{savedSearches.length === 0 ? "Save a search from the Search workspace to add its reusable definition here." : !complete ? "Load more definitions or try another phrase or sharing scope." : "Try another phrase or sharing scope."}</p>
+                <p>{savedSearches.length === 0 && effectiveQuery.length === 0 && scope === "all" ? "Save a search from the Search workspace to add its reusable definition here." : "Try another phrase or sharing scope."}</p>
                 {savedSearches.length > 0 ? <button type="button" onClick={() => { setQuery(""); setScope("all"); }}>Clear filters</button> : <Link href="/search/">Open Search</Link>}
               </div>
             ) : (

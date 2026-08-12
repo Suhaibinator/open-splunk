@@ -24,12 +24,13 @@ const (
 	maximumAppDisplayNameBytes    = 255
 	maximumAppDescriptionBytes    = 16_384
 	maximumAppDefaultIndexes      = 128
-	maximumAppsPerTenant          = 256
 	minimumAppCursorKeyBytes      = 32
 	maximumAppCursorKeyBytes      = 1_024
 	maximumAppIDAttempts          = 4
 	canonicalAppIDBytes           = 26
 	maximumAppTimeExpressionBytes = 1_024
+	// MaximumAppsPerTenant is the control-plane workspace authority bound.
+	MaximumAppsPerTenant = 256
 )
 
 var (
@@ -186,7 +187,7 @@ func (catalog *AppCatalog) createApp(
 		if generateErr != nil {
 			return AppWorkspace{}, fmt.Errorf("generate app ID: %w", generateErr)
 		}
-		if !validCanonicalAppID(appID) {
+		if !ValidCanonicalAppID(appID) {
 			return AppWorkspace{}, errors.New("generate app ID: generator returned an invalid ID")
 		}
 		created, createErr := catalog.createAppOnce(
@@ -233,7 +234,7 @@ func (catalog *AppCatalog) createAppOnce(
 	if err := tx.Model(&appRecord{}).Where("tenant_id = ?", tenantID).Count(&appCount).Error; err != nil {
 		return AppWorkspace{}, appContextError(ctx, "count tenant apps", err)
 	}
-	if appCount >= maximumAppsPerTenant {
+	if appCount >= MaximumAppsPerTenant {
 		return AppWorkspace{}, ErrCapacityExceeded
 	}
 	idErr := tx.Select("app_id").Where("app_id = ?", appID).Take(&existing).Error
@@ -775,7 +776,7 @@ func appDefinitionUpdates(definition AppDefinition, now time.Time) map[string]an
 }
 
 func appFromRecord(record appRecord, defaultIndexes []string) (AppWorkspace, error) {
-	if !validCanonicalAppID(record.AppID) ||
+	if !ValidCanonicalAppID(record.AppID) ||
 		validateTenantID(record.TenantID) != nil ||
 		record.Version < 1 ||
 		record.DefaultTimeRangePresent < 0 ||
@@ -1222,7 +1223,7 @@ func normalizeAppSelector(selector AppSelector) (AppSelector, error) {
 		)
 	}
 	if hasID {
-		if !validCanonicalAppID(selector.AppID) {
+		if !ValidCanonicalAppID(selector.AppID) {
 			return AppSelector{}, fmt.Errorf("%w: app ID is invalid", ErrInvalidArgument)
 		}
 		return AppSelector{AppID: strings.Clone(selector.AppID)}, nil
@@ -1248,7 +1249,8 @@ func validateCanonicalAppText(value string, maximum int, allowEmpty bool) error 
 	return nil
 }
 
-func validCanonicalAppID(value string) bool {
+// ValidCanonicalAppID reports whether value is one canonical app identity.
+func ValidCanonicalAppID(value string) bool {
 	return len(value) == canonicalAppIDBytes && appIDPattern.MatchString(value)
 }
 

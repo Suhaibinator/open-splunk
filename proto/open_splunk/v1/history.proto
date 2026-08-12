@@ -5,6 +5,7 @@ package open_splunk.v1;
 import "google/protobuf/duration.proto";
 import "google/protobuf/timestamp.proto";
 import "open_splunk/v1/common.proto";
+import "open_splunk/v1/knowledge.proto";
 import "open_splunk/v1/search.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
@@ -30,4 +31,7 @@ message SearchHistoryEntry {
   google.protobuf.Timestamp created_at = 15;
   google.protobuf.Timestamp started_at = 16;
   google.protobuf.Timestamp finished_at = 17;
+  // The admitted definition-free knowledge identity is preserved unchanged
+  // from queued admission through the first terminal history publication.
+  optional KnowledgeSnapshotSummary knowledge_snapshot = 18;
 }

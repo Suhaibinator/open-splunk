@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "regex",
+      "inputField": "_raw",
+      "overwriteBehavior": 1,
+      "regex": {
+        "pattern": "status=(?<status>[0-9]+)",
+        "outputFields": ["status"]
+      },
+      "wireHex": "0a045f726177200112220a187374617475733d283f3c7374617475733e5b302d395d2b291206737461747573"
+    },
+    {
+      "name": "json",
+      "inputField": "_raw",
+      "overwriteBehavior": 2,
+      "json": {
+        "path": "payload.user",
+        "outputField": "user.name"
+      },
+      "wireHex": "0a045f72617720021a190a0c7061796c6f61642e757365721209757365722e6e616d65"
+    }
+  ]
+}

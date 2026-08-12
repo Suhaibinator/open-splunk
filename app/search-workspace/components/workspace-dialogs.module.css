@@ -178,7 +178,94 @@
   padding-left: 18px;
 }
 
+.inspectionBlock {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inspectionGrid {
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.inspectionGrid > * {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.inspectionBlock li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inspectionQuery,
+.inspectionQuery code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inspectionAnnotations {
+  display: grid;
+  font-size: 9px;
+  gap: 2px;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+.knowledgeInspection {
+  background: #f4f8fa;
+  border-bottom: 1px solid #d7e1e5;
+  grid-column: 1 / -1;
+  padding: 11px 12px;
+}
+
+.knowledgeInspection h3 {
+  font-size: 11px;
+  margin: 0 0 7px;
+}
+
+.knowledgeInspection p {
+  color: #52616a;
+  font-size: 10px;
+  margin: 6px 0 0;
+}
+
+.knowledgeInspection dl {
+  display: grid;
+  font-size: 10px;
+  gap: 4px 10px;
+  grid-template-columns: max-content minmax(0, 1fr);
+  margin: 0;
+}
+
+.knowledgeInspection dt {
+  color: #66747c;
+  font-weight: 700;
+}
+
+.knowledgeInspection dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.knowledgeInspection ol {
+  font-size: 10px;
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
 @media (max-width: 520px) {
+  .knowledgeInspection dl {
+    grid-template-columns: 1fr;
+  }
+
+  .knowledgeInspection dd {
+    margin-bottom: 3px;
+  }
+
   :global(.settings-list) label > .capabilityControl {
     align-items: center;
   }

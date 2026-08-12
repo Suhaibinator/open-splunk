@@ -4,8 +4,6 @@ import (
 	"context"
 	"slices"
 	"testing"
-
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
 
 func TestProjectLogicalPlanProjectsEventStatsDistinctCountInputsAndOutput(
@@ -17,7 +15,7 @@ func TestProjectLogicalPlanProjectsEventStatsDistinctCountInputsAndOutput(
 	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 		" | table _time,host,user" +
 		" | eventstats dc(user) AS unique_users BY host"
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}

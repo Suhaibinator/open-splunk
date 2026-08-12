@@ -977,12 +977,14 @@ The complete immutable catalog, rather than individual pages, is held in the
 bounded field-analysis LRU. Exact-key computations coalesce behind one flight;
 the first miss uses one ClickHouse query, while continuations page the retained
 memory without native reads. Defaults are 128 entries, 64 MiB, and a five
-minute absolute TTL. A shared nonblocking computation gate defaults to four
-slots and fails saturation fast. Native settings further cap a catalog query
-at fifteen seconds, 128 MiB, five million source rows, 1 GiB read, two threads,
-10,001 groups, and 32 MiB of result data. Query/snapshot work is completed
-before acquiring the global large-response serialization permit, and the
-protobuf response has its own 32 MiB limit.
+minute absolute TTL. A shared nonblocking computation gate admits two slots and
+fails saturation fast. Native settings further cap a catalog query
+at fifteen seconds, a sealed 384 MiB standard memory tier or 448 MiB tier for
+14–16 generated knowledge fields, five million source rows, 1 GiB read, two
+threads, 10,002 groups, and 32 MiB of result data. The production runtime
+admits two such computations within a 1 GiB aggregate envelope. Query/snapshot
+work is completed before acquiring the global large-response serialization
+permit, and the protobuf response has its own 32 MiB limit.
 
 Filtering is a case-sensitive UTF-8 field-name substring applied to the
 validated in-memory catalog. Pages default to 100 and are capped at 1,000;
@@ -1118,6 +1120,12 @@ Some of the hardest compatibility work is not grammar; it is behavior:
 
 These rules should live in a versioned **SPL compatibility specification** and executable conformance tests.
 
+The selected post-`0.1` language program is the bounded arithmetic, grouping,
+quoted-scalar-field, and eval-membership foundation in
+[`spl-roadmap.md`](spl-roadmap.md). That plan owns the next implementation
+sequence and activation gates; the command inventory below remains the original
+first-release scope.
+
 ### Recommended first command set
 
 The first useful compatibility tier should support:
@@ -1161,7 +1169,7 @@ The first useful compatibility tier should support:
 
 - `if`, `case`, `coalesce`, `isnull`, `isnotnull`
 - `tonumber`, `tostring`, `round`, `ceil`, `floor`
-- `lower`, `upper`, `len`, `substr`, `mvcount`, concatenation
+- `lower`, `upper`, `len`, `substr`, `mvcount`, `mvsort`, concatenation
 - `match`, `like`, `replace`
 - `now`, `relative_time`, `strftime`, `strptime`
 

@@ -71,6 +71,12 @@ message IngestionTokenDefinition {
   IngestionTokenConstraints constraints = 3;
   optional google.protobuf.Timestamp expires_at = 4;
   IngestionRateLimits ingestion_rate_limits = 5;
+  // New clients must set purpose on creation, and it is immutable thereafter.
+  // For wire compatibility only, UNSPECIFIED plus a valid bound_collector_id
+  // is inferred as NATIVE_COLLECTOR; UNSPECIFIED can never create HEC.
+  IngestionTokenPurpose purpose = 6;
+  // Required only when purpose is INGESTION_TOKEN_PURPOSE_HEC.
+  IngestionTokenHecProfile hec_profile = 7;
 }
 
 // POST /api/v1/ingestion-tokens/create
@@ -127,6 +133,17 @@ message UpdateIngestionTokenRequest {
 }
 
 message UpdateIngestionTokenResponse {
+  IngestionToken ingestion_token = 1;
+}
+
+// POST /api/v1/ingestion-tokens/state/set
+message SetIngestionTokenEnabledRequest {
+  string ingestion_token_id = 1;
+  uint64 expected_version = 2;
+  bool enabled = 3;
+}
+
+message SetIngestionTokenEnabledResponse {
   IngestionToken ingestion_token = 1;
 }
 

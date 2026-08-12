@@ -1481,6 +1481,8 @@ func binEdgeInsertRawDecimalEnvelopes(
 			document,
 			[]string{fixture.fieldName},
 			"poison-collector",
+			uint8(ingest.IngestionSourceKindNativeCollector),
+			"poison-collector",
 			"poison-batch",
 			uint64(1),
 			time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC),

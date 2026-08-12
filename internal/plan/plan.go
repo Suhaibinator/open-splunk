@@ -4,6 +4,7 @@
 package plan
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"time"
 
@@ -30,6 +31,30 @@ type Query struct {
 	// the search time-range intent. Time formatting must never inherit the
 	// ClickHouse or API server's local timezone.
 	SearchTimezone string
+
+	// parsedEvalPredicates is retained only for plans produced from a parser-
+	// owned SPL query. The compiler re-derives the exact count from this plan
+	// before opening the provenance, so mutation cannot preserve the evidence.
+	parsedEvalPredicates       uint32
+	parsedSPL                  bool
+	parsedSourceDigest         [sha256.Size]byte
+	statsWildcardRequestDigest [sha256.Size]byte
+	knowledgePrelude           queryKnowledgePrelude
+}
+
+// AuthoredScalarPredicateCount opens parser-owned whole-query provenance only
+// when the current logical plan still contains the exact admitted number of
+// eval/where predicate leaves. Directly assembled plans intentionally return
+// false while remaining valid ordinary compiler fixtures.
+func (query *Query) AuthoredScalarPredicateCount() (uint32, bool) {
+	if query == nil || !query.parsedSPL || query.parsedEvalPredicates > spl.MaximumEvalPredicates {
+		return 0, false
+	}
+	analysis, err := analyze(query)
+	if err != nil || analysis.scalarPredicates != query.parsedEvalPredicates {
+		return 0, false
+	}
+	return query.parsedEvalPredicates, true
 }
 
 // DynamicSeriesOutput describes a bounded runtime-wide result schema. Fixed
@@ -208,38 +233,127 @@ const (
 	AggregateFunctionCountValues
 	AggregateFunctionCountPredicate
 	AggregateFunctionPercentile
+	AggregateFunctionExactPercentile
+	AggregateFunctionUpperPercentile
+	AggregateFunctionMedian
 	AggregateFunctionSum
 	AggregateFunctionAverage
+	AggregateFunctionRange
+	AggregateFunctionSumSquares
+	AggregateFunctionStandardDeviationSample
+	AggregateFunctionStandardDeviationPopulation
+	AggregateFunctionVarianceSample
+	AggregateFunctionVariancePopulation
 	AggregateFunctionDistinctCount
+	AggregateFunctionEstimatedDistinctCount
+	AggregateFunctionEstimatedDistinctCountError
 	AggregateFunctionValues
 	AggregateFunctionList
 	AggregateFunctionMinimum
 	AggregateFunctionMaximum
+	AggregateFunctionMode
+	AggregateFunctionFirst
+	AggregateFunctionLast
 	AggregateFunctionEarliest
 	AggregateFunctionLatest
+	AggregateFunctionEarliestTime
+	AggregateFunctionLatestTime
+	AggregateFunctionRate
 )
+
+// SparklineSpanKind distinguishes search-range-derived automatic binning from
+// an explicit unit-preserving span. Invalid is reserved for forged plans.
+type SparklineSpanKind uint8
+
+const (
+	SparklineSpanKindInvalid SparklineSpanKind = iota
+	SparklineSpanKindAutomatic
+	SparklineSpanKindExplicit
+)
+
+// SparklineSpanUnit is the backend-neutral documented span scale. Calendar
+// months remain distinct so a compiler cannot silently approximate them as a
+// fixed duration.
+type SparklineSpanUnit uint8
+
+const (
+	SparklineSpanUnitInvalid SparklineSpanUnit = iota
+	SparklineSpanUnitMicrosecond
+	SparklineSpanUnitMillisecond
+	SparklineSpanUnitCentisecond
+	SparklineSpanUnitDecisecond
+	SparklineSpanUnitSecond
+	SparklineSpanUnitMinute
+	SparklineSpanUnitHour
+	SparklineSpanUnitDay
+	SparklineSpanUnitMonth
+)
+
+// SparklineSpan is either an automatic marker or a positive explicit span.
+type SparklineSpan struct {
+	Kind      SparklineSpanKind
+	Magnitude uint64
+	Unit      SparklineSpanUnit
+}
+
+// SparklineMeasure is a time-binned aggregate published as one multivalue
+// output cell per stats group. Function is restricted to the documented
+// sparkline inventory, Input is empty only for row count, and Time must be the
+// resolved canonical _time field. MaximumPoints is an explicit resource seam
+// for automatic-span selection and result publication.
+type SparklineMeasure struct {
+	Function      AggregateFunction
+	Input         FieldRef
+	Time          FieldRef
+	Span          SparklineSpan
+	MaximumPoints uint16
+}
 
 // AggregateMeasure is one aggregate output column.
 type AggregateMeasure struct {
-	Function AggregateFunction
-	Input    FieldRef
+	// Sparkline selects the distinct time-series arm. It is mutually exclusive
+	// with Function, Input, InputExpression, Predicate, and Percentile below.
+	Sparkline *SparklineMeasure
+	Function  AggregateFunction
+	Input     FieldRef
+	// InputExpression is populated only for a supported field-taking aggregate
+	// over a calculated scalar value. It is mutually exclusive with Input and
+	// with the Boolean Predicate used by a conditional count.
+	InputExpression ScalarExpression
 	// Predicate is populated only for a conditional count. It is deliberately
 	// distinct from Input so compilers cannot turn the condition into an
 	// aggregate-wide filter or reinterpret it as count(field).
 	Predicate Expression
-	// Percentile is the integer function suffix in the closed interval [1, 99].
-	// It is zero for every non-percentile measure.
+	// Percentile is the pN/percN, exactpercN, or upperpercN integer suffix in
+	// the closed interval [1, 99]. It is zero for every other measure.
 	Percentile uint8
 	Output     string
+	// OutputLiteral distinguishes a stats output whose decoded name must be
+	// treated as one literal column rather than parsed as a dotted field path.
+	// It is set for double-quoted AS names and source-derived eval defaults.
+	OutputLiteral bool
+}
+
+// StatsOptions contains the effective command options needed by aggregate
+// compilers. Build resolves absent or authored partitions=0 to one partition
+// and an absent delimiter to one space before constructing this value.
+// Delimiter-display and parallel-order semantics remain explicitly
+// oracle-governed; this type only preserves the selected settings.
+type StatsOptions struct {
+	Partitions             uint8
+	AllNumeric             bool
+	Delimiter              string
+	DeduplicateSplitValues bool
 }
 
 // Aggregate transforms its input into one row per distinct GroupBy tuple, or
 // one global row when GroupBy is empty. Only grouping fields and measures
 // remain visible after this stage.
 type Aggregate struct {
-	GroupBy  []FieldRef
-	Measures []AggregateMeasure
-	Range    spl.Range
+	GroupBy      []FieldRef
+	Measures     []AggregateMeasure
+	StatsOptions *StatsOptions
+	Range        spl.Range
 }
 
 func (*Aggregate) operator()                 {}
@@ -534,6 +648,69 @@ type ScalarExpression interface {
 	scalarExpression()
 }
 
+// ScalarUnaryOp identifies one closed unary arithmetic operation.
+type ScalarUnaryOp uint8
+
+const (
+	ScalarUnaryOpInvalid ScalarUnaryOp = iota
+	ScalarUnaryOpPositive
+	ScalarUnaryOpNegative
+	ScalarUnaryOpCount
+)
+
+func validScalarUnaryOp(op ScalarUnaryOp) bool {
+	return op == ScalarUnaryOpPositive || op == ScalarUnaryOpNegative
+}
+
+// ScalarUnaryExpression applies one unary arithmetic operation. Accepted
+// plans normalize the operand and result to the v0.2 nullable-Double domain.
+type ScalarUnaryExpression struct {
+	Op      ScalarUnaryOp
+	Operand ScalarExpression
+	Range   spl.Range
+}
+
+func (*ScalarUnaryExpression) scalarExpression()        {}
+func (e *ScalarUnaryExpression) SourceRange() spl.Range { return e.Range }
+
+// ScalarBinaryOp identifies one closed binary arithmetic operation.
+type ScalarBinaryOp uint8
+
+const (
+	ScalarBinaryOpInvalid ScalarBinaryOp = iota
+	ScalarBinaryOpMultiply
+	ScalarBinaryOpDivide
+	ScalarBinaryOpRemainder
+	ScalarBinaryOpAdd
+	ScalarBinaryOpSubtract
+	ScalarBinaryOpCount
+)
+
+func validScalarBinaryOp(op ScalarBinaryOp) bool {
+	switch op {
+	case ScalarBinaryOpMultiply,
+		ScalarBinaryOpDivide,
+		ScalarBinaryOpRemainder,
+		ScalarBinaryOpAdd,
+		ScalarBinaryOpSubtract:
+		return true
+	default:
+		return false
+	}
+}
+
+// ScalarBinaryExpression applies one binary arithmetic operation. Left and
+// Right preserve authored evaluation and dependency order.
+type ScalarBinaryExpression struct {
+	Op    ScalarBinaryOp
+	Left  ScalarExpression
+	Right ScalarExpression
+	Range spl.Range
+}
+
+func (*ScalarBinaryExpression) scalarExpression()        {}
+func (e *ScalarBinaryExpression) SourceRange() spl.Range { return e.Range }
+
 // ScalarFieldExpression reads one field from the current pipeline row.
 type ScalarFieldExpression struct {
 	Field FieldRef
@@ -571,6 +748,7 @@ const (
 	ScalarFunctionCeil
 	ScalarFunctionFloor
 	ScalarFunctionMVCount
+	ScalarFunctionMVSort
 	ScalarFunctionMatch
 	ScalarFunctionLike
 	ScalarFunctionNow
@@ -645,6 +823,19 @@ type EvalComparisonExpression struct {
 func (*EvalComparisonExpression) expression()              {}
 func (e *EvalComparisonExpression) SourceRange() spl.Range { return e.Range }
 
+// MembershipExpression compares Value with each candidate in source order
+// using eval-comparison three-valued semantics. Candidates is detached from
+// the source AST during planning.
+type MembershipExpression struct {
+	Value      ScalarExpression
+	Candidates []ScalarExpression
+	Negated    bool
+	Range      spl.Range
+}
+
+func (*MembershipExpression) expression()              {}
+func (e *MembershipExpression) SourceRange() spl.Range { return e.Range }
+
 // ScalarPredicateExpression consumes one statically Boolean scalar in a where
 // predicate. Backends must reject non-Boolean forged inputs rather than
 // inventing general scalar truthiness.
@@ -655,6 +846,26 @@ type ScalarPredicateExpression struct {
 
 func (*ScalarPredicateExpression) expression()              {}
 func (e *ScalarPredicateExpression) SourceRange() spl.Range { return e.Range }
+
+// validExpressionRangeOrZero accepts the zero range used by directly
+// assembled backend fixtures, while rejecting internally inconsistent source
+// provenance on authored nodes.
+func validExpressionRangeOrZero(sourceRange spl.Range) bool {
+	if sourceRange == (spl.Range{}) {
+		return true
+	}
+	if sourceRange.Start.Offset < 0 ||
+		sourceRange.Start.Line < 1 || sourceRange.Start.Column < 1 ||
+		sourceRange.End.Line < 1 || sourceRange.End.Column < 1 ||
+		sourceRange.End.Offset <= sourceRange.Start.Offset {
+		return false
+	}
+	if sourceRange.End.Line < sourceRange.Start.Line {
+		return false
+	}
+	return sourceRange.End.Line != sourceRange.Start.Line ||
+		sourceRange.End.Column > sourceRange.Start.Column
+}
 
 // Diagnostic is a source-located semantic/planning error.
 type Diagnostic struct {

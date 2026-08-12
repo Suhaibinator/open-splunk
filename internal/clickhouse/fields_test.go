@@ -2,13 +2,16 @@ package clickhouse
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 func TestCompileFieldCatalogValidatesBound(t *testing.T) {
@@ -123,6 +126,511 @@ func TestCompileFieldCatalogFixedResultContract(t *testing.T) {
 	}
 	if strings.Contains(compiled.SQL, "GROUP BY Dynamic") || strings.Contains(compiled.SQL, `GROUP BY "__os_fields"`) {
 		t.Fatalf("catalog grouped a Dynamic value:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileFieldCatalogPrerequisiteUsesSingleSourceSentinelChain(t *testing.T) {
+	t.Parallel()
+
+	logical := buildEventStatsMinimumPlan(
+		t,
+		`index=gradethis | eventstats min(payload) AS low BY host`,
+	)
+	compiled := compileFieldCatalog(t, logical, 73)
+
+	for _, name := range []string{
+		fieldCatalogSourceCTE,
+		fieldCatalogKnownRowsCTE,
+		fieldCatalogRowsCTE,
+		fieldCatalogObservationsCTE,
+		fieldCatalogGroupsCTE,
+		fieldCatalogControlledCTE,
+		fieldCatalogExpandedCTE,
+		fieldCatalogLimitedCTE,
+	} {
+		if got := strings.Count(compiled.SQL, quoteIdentifier(name)+" AS ("); got != 1 {
+			t.Errorf("single-consumer CTE %q definitions = %d, want one\nSQL: %s", name, got, compiled.SQL)
+		}
+		if got := strings.Count(compiled.SQL, " FROM "+quoteIdentifier(name)); got != 1 {
+			t.Errorf("single-consumer CTE %q reads = %d, want one\nSQL: %s", name, got, compiled.SQL)
+		}
+		if strings.Contains(compiled.SQL, quoteIdentifier(name)+" AS MATERIALIZED (") {
+			t.Errorf("single-consumer CTE %q was materialized\nSQL: %s", name, compiled.SQL)
+		}
+	}
+	for _, fragment := range []string{
+		"arrayJoin(arrayConcat([tuple(toUInt8(0)",
+		"arrayMap(field_metadata -> tuple(toUInt8(1)",
+		"UNION ALL SELECT toUInt8(0), CAST('' AS String)",
+		quoteIdentifier(internalFieldMetadataVersionColumn) + " != ?",
+		"length(" + quoteIdentifier(internalFieldNamesColumn) + ") > ?",
+		"length(" + quoteIdentifier(internalFieldTypesColumn) + ") > ?",
+		quoteIdentifier(internalFieldNamesColumn) + " != arraySort(arrayDistinct(" +
+			quoteIdentifier(internalFieldNamesColumn) + "))",
+		"arrayExists(stored_type -> stored_type < ? OR stored_type > ?, " +
+			quoteIdentifier(internalFieldTypesColumn) + ")",
+		"GROUP BY " + quoteIdentifier(fieldCatalogObservedKind) + ", " +
+			quoteIdentifier(fieldCatalogObservedName),
+		"sumForEach(" + quoteIdentifier(fieldCatalogKnownCounts) + ")",
+		"groupBitOrForEach(" + quoteIdentifier(fieldCatalogKnownTypeMasks) + ")",
+		"max(if(" + quoteIdentifier(fieldCatalogGroupKind) + " = toUInt8(0), " +
+			quoteIdentifier(fieldCatalogGroupInvalid) + ", toUInt8(0))) OVER ()",
+		"arrayResize(arrayMap((field_name, field_index) -> tuple(toUInt8(1)",
+		"LIMIT ?",
+	} {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Errorf("prerequisite sentinel catalog is missing %q\nSQL: %s", fragment, compiled.SQL)
+		}
+	}
+	for _, forbidden := range []string{
+		quoteIdentifier(fieldCatalogTotalsCTE),
+		quoteIdentifier(fieldCatalogProfilesCTE),
+		"sumMap(",
+		"GROUPING SETS",
+		"groupArray(",
+	} {
+		if strings.Contains(compiled.SQL, forbidden) {
+			t.Errorf("prerequisite catalog retained forbidden parallel or unbounded graph %q\nSQL: %s", forbidden, compiled.SQL)
+		}
+	}
+	groupPosition := strings.Index(compiled.SQL, quoteIdentifier(fieldCatalogGroupsCTE)+" AS (SELECT")
+	windowPosition := strings.Index(compiled.SQL, quoteIdentifier(fieldCatalogControlledCTE)+" AS (SELECT")
+	rowsPosition := strings.Index(compiled.SQL, quoteIdentifier(fieldCatalogRowsCTE)+" AS (SELECT")
+	if groupPosition < 0 || windowPosition < 0 || windowPosition < groupPosition ||
+		rowsPosition < 0 || strings.Contains(compiled.SQL[rowsPosition:groupPosition], " OVER ()") {
+		t.Fatalf("catalog control window is not exclusively downstream of the bounded group:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, " AS MATERIALIZED ("); got != 1 {
+		t.Fatalf("prerequisite catalog materialized CTEs = %d, want the sole chronological input fence:\n%s", got, compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, "__os_chronological_final_input_"); got != 2 {
+		t.Fatalf("prerequisite catalog final-input textual uses = %d, want definition plus one main consumer:\n%s", got, compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, "any("+quoteIdentifier(FieldCatalogRowKindColumn)+")") ||
+		strings.Contains(compiled.SQL, " LIMIT 0") {
+		t.Fatalf("prerequisite catalog inferred its validation schema from the complete final input:\n%s", compiled.SQL)
+	}
+	for _, fragment := range fieldCatalogValidationDummyProjection() {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Errorf("typed validation dummy is missing %q\nSQL: %s", fragment, compiled.SQL)
+		}
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nargs: %#v\nSQL: %s", got, want, compiled.Args, compiled.SQL)
+	}
+	if got := compiled.Args[len(compiled.Args)-1]; got != uint64(compiled.Spec.MaximumFields)+2 {
+		t.Fatalf("bounded result limit = %#v, want MaximumFields+2", got)
+	}
+
+	ordinaryPolicy := eventAnalysisFinalizationPolicy{materializeSharedCTEs: true}
+	prerequisitePolicy := eventAnalysisFinalizationPolicy{materializeSharedCTEs: false}
+	if got := fieldCatalogResultContractFor(ordinaryPolicy).sourceFanout; got != eventStatsCatalogSourceFanout {
+		t.Fatalf("ordinary field-catalog source fanout = %d, want %d", got, eventStatsCatalogSourceFanout)
+	}
+	if got := fieldCatalogResultContractFor(prerequisitePolicy).sourceFanout; got != eventStatsOrdinarySourceFanout {
+		t.Fatalf("prerequisite field-catalog source fanout = %d, want one", got)
+	}
+}
+
+func TestPrerequisiteFieldCatalogSidecarWritersStayGenericAcrossKnownCount(t *testing.T) {
+	t.Parallel()
+
+	render := func(count int) string {
+		fields := make([]compiledKnownField, count)
+		for index := range fields {
+			fields[index] = compiledKnownField{
+				name:               fmt.Sprintf("logical-secret-%d", index),
+				presenceSQL:        quoteIdentifier(fmt.Sprintf("known_present_%d", index)),
+				typeSQL:            quoteIdentifier(fmt.Sprintf("known_type_%d", index)),
+				relativeNamesSQL:   quoteIdentifier(fmt.Sprintf("retained_names_%d", index)),
+				relativeTypesSQL:   quoteIdentifier(fmt.Sprintf("retained_types_%d", index)),
+				metadataVersionSQL: quoteIdentifier(fmt.Sprintf("retained_version_%d", index)),
+			}
+		}
+		var sql strings.Builder
+		writePrerequisiteKnownFieldRows(&sql, fields)
+		sql.WriteString(", ")
+		sql.WriteString(quoteIdentifier(fieldCatalogRowsCTE))
+		sql.WriteString(" AS (SELECT toUInt8(")
+		writePrerequisiteFieldCatalogMetadataPredicate(&sql, true)
+		sql.WriteString(") AS invalid, ")
+		sql.WriteString(quoteIdentifier(fieldCatalogPackedKnownCounts))
+		sql.WriteString(", ")
+		sql.WriteString(quoteIdentifier(fieldCatalogPackedKnownMasks))
+		sql.WriteString(", ")
+		writePrerequisiteFieldCatalogCandidates(&sql, true)
+		sql.WriteString(" FROM ")
+		sql.WriteString(quoteIdentifier(fieldCatalogKnownRowsCTE))
+		sql.WriteString("), ")
+		writePrerequisiteFieldCatalogHeaderArray(&sql, fields)
+		return sql.String()
+	}
+
+	narrow := render(1)
+	wide := render(64)
+	for _, sql := range []string{narrow, wide} {
+		for _, generic := range []string{
+			"arrayExists((relative_names, relative_types, relative_version)",
+			"arrayFlatten(arrayMap(field_state",
+			"arrayMap(field_state -> toUInt16(",
+			"arraySlice(arrayFlatten(arrayMap((field_name, relative_names, relative_types)",
+			"arrayResize(arrayMap((field_name, field_index)",
+		} {
+			if got := strings.Count(sql, generic); got != 1 {
+				t.Errorf("generic sidecar expression %q count = %d, want one\nSQL: %s", generic, got, sql)
+			}
+		}
+		if got := strings.Count(sql, "CAST(? AS Array(String))"); got != 2 {
+			t.Errorf("bound root/name arrays = %d, want two independent fixed binds\nSQL: %s", got, sql)
+		}
+		if strings.Contains(sql, "logical-secret-") {
+			t.Errorf("logical known name was interpolated instead of carried by one bound array:\n%s", sql)
+		}
+		for _, packed := range []string{
+			fieldCatalogPackedKnownCounts,
+			fieldCatalogPackedKnownMasks,
+			fieldCatalogSidecarInvalid,
+			fieldCatalogSidecarCandidates,
+		} {
+			if got := strings.Count(sql, quoteIdentifier(packed)); got != 2 {
+				t.Errorf("packed sidecar output %q references = %d, want definition plus one downstream read\nSQL: %s", packed, got, sql)
+			}
+		}
+	}
+	if growth := len(wide) - len(narrow); growth <= 0 || growth > 32<<10 {
+		t.Fatalf("64-field generic sidecar source growth = %d bytes, want only bounded producer/binding growth", growth)
+	}
+
+	thirteen := render(13)
+	boundaryEnd := strings.Index(thirteen, ", "+quoteIdentifier(fieldCatalogRowsCTE)+" AS (SELECT")
+	if boundaryEnd < 0 {
+		t.Fatalf("packed sidecar boundary is missing:\n%s", thirteen)
+	}
+	boundary, downstream := thirteen[:boundaryEnd], thirteen[boundaryEnd:]
+	rawProducerReferences := 0
+	for index := 0; index < 13; index++ {
+		for name, want := range map[string]int{
+			fmt.Sprintf("known_present_%d", index):    1,
+			fmt.Sprintf("known_type_%d", index):       1,
+			fmt.Sprintf("retained_names_%d", index):   1,
+			fmt.Sprintf("retained_types_%d", index):   1,
+			fmt.Sprintf("retained_version_%d", index): 1,
+		} {
+			rawProducerReferences += strings.Count(boundary, quoteIdentifier(name))
+			if got := strings.Count(boundary, quoteIdentifier(name)); got != want {
+				t.Errorf("guarded-boundary source %q references = %d, want %d", name, got, want)
+			}
+			if got := strings.Count(downstream, quoteIdentifier(name)); got != 0 {
+				t.Errorf("sidecar source %q leaked through packed boundary %d times", name, got)
+			}
+		}
+	}
+	legacyRawReferences := 2*13 + 5*13
+	packedRawReferences := 2*13 + 3*13
+	if legacyRawReferences != 91 || packedRawReferences != 65 ||
+		rawProducerReferences != packedRawReferences {
+		t.Fatalf(
+			"guarded-boundary raw producer references = %d, want 2K+3S=%d after 2K+5S=%d",
+			rawProducerReferences,
+			packedRawReferences,
+			legacyRawReferences,
+		)
+	}
+	packedReads := strings.Count(downstream, quoteIdentifier(fieldCatalogPackedKnownCounts)) +
+		strings.Count(downstream, quoteIdentifier(fieldCatalogPackedKnownMasks)) +
+		strings.Count(downstream, quoteIdentifier(fieldCatalogSidecarInvalid)) +
+		strings.Count(downstream, quoteIdentifier(fieldCatalogSidecarCandidates))
+	if packedReads != 4 {
+		t.Fatalf("downstream packed catalog reads = %d, want 4", packedReads)
+	}
+	rawInput := ", [" + quoteIdentifier(fieldCatalogRawRowBinding) + "]) AS " +
+		quoteIdentifier(fieldCatalogPackedRows)
+	if got := strings.Count(boundary, rawInput); got != 1 {
+		t.Fatalf("singleton scoped raw input count = %d, want one:\n%s", got, thirteen)
+	}
+	packedJoin := "ARRAY JOIN " + quoteIdentifier(fieldCatalogPackedRows) + " AS " +
+		quoteIdentifier(fieldCatalogPackedRow)
+	if got := strings.Count(boundary, packedJoin); got != 1 {
+		t.Fatalf("singleton packed row join count = %d, want one:\n%s", got, thirteen)
+	}
+	lambdaStart := strings.Index(
+		boundary,
+		"arrayMap("+quoteIdentifier(fieldCatalogRowBinding)+" -> tuple(",
+	)
+	lambdaEnd := strings.Index(boundary, rawInput)
+	if lambdaStart < 0 || lambdaEnd <= lambdaStart ||
+		strings.Contains(boundary[lambdaEnd:], quoteIdentifier(fieldCatalogRowBinding)) {
+		t.Fatalf("derived expressions escaped the scoped row-binding lambda:\n%s", thirteen)
+	}
+	perSidecarLimit := uint64(eventfields.MaximumStoredFieldsPerEvent) + 1
+	if got := strings.Count(thirteen, fmt.Sprintf("toUInt64(%d)", perSidecarLimit)); got < 4 {
+		t.Fatalf("pre-aggregate candidate sentinel bounds = %d, want canonical and retained arrays bounded\nSQL: %s", got, thirteen)
+	}
+	if want := fmt.Sprintf("toUInt64(%d)", 13*perSidecarLimit); !strings.Contains(thirteen, want) {
+		t.Fatalf("packed sidecar generated-field bound %q is missing:\n%s", want, thirteen)
+	}
+}
+
+func TestPrerequisiteFieldCatalogRejectsSidecarsPastGeneratedFieldCeiling(t *testing.T) {
+	t.Parallel()
+
+	fields := make([]compiledKnownField, knowledgeprogram.MaximumGeneratedFields+1)
+	for index := range fields {
+		fields[index] = compiledKnownField{
+			relativeNamesSQL:   quoteIdentifier(fmt.Sprintf("retained_names_%d", index)),
+			relativeTypesSQL:   quoteIdentifier(fmt.Sprintf("retained_types_%d", index)),
+			metadataVersionSQL: quoteIdentifier(fmt.Sprintf("retained_version_%d", index)),
+		}
+	}
+	_, err := finalizePrerequisiteFieldCatalog(
+		compiledRelation{},
+		nil,
+		fields,
+		nil,
+		nil,
+		false,
+		FieldCatalogSpec{MaximumFields: 1},
+		spl.Range{},
+		eventAnalysisFinalizationPolicy{},
+	)
+	if err == nil || err.Error() != "compile ClickHouse prerequisite field catalog: retained knowledge sidecars exceed the generated-field limit" {
+		t.Fatalf("sidecar ceiling error = %v", err)
+	}
+}
+
+func TestPrerequisiteFieldCatalogRejectsKnownFieldsPastOverflowBound(t *testing.T) {
+	t.Parallel()
+
+	fields := make(
+		[]compiledKnownField,
+		maximumPrerequisiteFieldCatalogKnownFields+1,
+	)
+	_, err := finalizePrerequisiteFieldCatalog(
+		compiledRelation{},
+		nil,
+		fields,
+		nil,
+		nil,
+		false,
+		FieldCatalogSpec{MaximumFields: MaximumFieldCatalogFields},
+		spl.Range{},
+		eventAnalysisFinalizationPolicy{},
+	)
+	if err == nil || err.Error() != "compile ClickHouse prerequisite field catalog: known fields exceed the catalog overflow bound" {
+		t.Fatalf("known-field overflow-bound error = %v", err)
+	}
+}
+
+func TestPrerequisiteFieldCatalogDenseKnownStateMatchesCounterSemantics(t *testing.T) {
+	t.Parallel()
+
+	type observation struct {
+		present bool
+		code    uint8
+	}
+	observations := make([]observation, 0, 32)
+	for code := uint8(eventfields.StoredValueTypeNull); code <= uint8(eventfields.StoredValueTypeDecimal); code++ {
+		observations = append(observations, observation{present: true, code: code})
+	}
+	observations = append(observations,
+		observation{present: true, code: uint8(eventfields.StoredValueTypeNull)},
+		observation{present: true, code: uint8(eventfields.StoredValueTypeString)},
+		observation{present: false, code: uint8(eventfields.StoredValueTypeDecimal)},
+		observation{present: true, code: 0},
+		observation{present: true, code: 255},
+	)
+	encodeMask := func(present bool, code uint8) uint16 {
+		ordinal := int(code) - int(eventfields.StoredValueTypeNull)
+		ordinal = min(max(ordinal, 0), 11)
+		base := uint16(1) << ordinal
+		if !present ||
+			code < uint8(eventfields.StoredValueTypeNull) ||
+			code > uint8(eventfields.StoredValueTypeDecimal) {
+			return 0
+		}
+		return base
+	}
+
+	var prior [13]uint64
+	var presentCount, nullCount uint64
+	var typeMask uint16
+	for _, observation := range observations {
+		if !observation.present {
+			continue
+		}
+		prior[0]++
+		presentCount++
+		if observation.code >= uint8(eventfields.StoredValueTypeNull) &&
+			observation.code <= uint8(eventfields.StoredValueTypeDecimal) {
+			prior[observation.code]++
+		}
+		typeMask |= encodeMask(observation.present, observation.code)
+		if observation.code == uint8(eventfields.StoredValueTypeNull) {
+			nullCount++
+		}
+	}
+	if presentCount != prior[0] || nullCount != prior[uint8(eventfields.StoredValueTypeNull)] {
+		t.Fatalf(
+			"dense counts = present %d null %d, prior = present %d null %d",
+			presentCount,
+			nullCount,
+			prior[0],
+			prior[uint8(eventfields.StoredValueTypeNull)],
+		)
+	}
+	var decoded []uint8
+	for code := uint8(eventfields.StoredValueTypeNull); code <= uint8(eventfields.StoredValueTypeDecimal); code++ {
+		bit := uint16(1) << (code - uint8(eventfields.StoredValueTypeNull))
+		if typeMask&bit != 0 {
+			decoded = append(decoded, code)
+		}
+		if got := typeMask&bit != 0; got != (prior[code] != 0) {
+			t.Errorf("dense type bit for code %d = %t, prior count = %d", code, got, prior[code])
+		}
+	}
+	wantCodes := make([]uint8, 0, 12)
+	for code := uint8(eventfields.StoredValueTypeNull); code <= uint8(eventfields.StoredValueTypeDecimal); code++ {
+		wantCodes = append(wantCodes, code)
+	}
+	if !slices.Equal(decoded, wantCodes) {
+		t.Fatalf("decoded durable type codes = %v, want %v", decoded, wantCodes)
+	}
+	if typeMask != uint16(0x0fff) ||
+		typeMask&(uint16(1)<<11) == 0 ||
+		typeMask&uint16(1) == 0 {
+		t.Fatalf("dense all-type mask = %#04x, want bits 0..11 including Null and Decimal", typeMask)
+	}
+	if encodeMask(true, 0) != 0 || encodeMask(true, 255) != 0 ||
+		encodeMask(false, uint8(eventfields.StoredValueTypeDecimal)) != 0 ||
+		encodeMask(true, uint8(eventfields.StoredValueTypeDecimal)) != uint16(1)<<11 {
+		t.Fatal("dense mask corrupt/missing/bit11 gates are not exact")
+	}
+
+	var emptyPresent, emptyNull uint64
+	var emptyMask uint16
+	if emptyPresent != 0 || emptyNull != 0 || emptyMask != 0 {
+		t.Fatalf("empty dense state = %d/%d/%#x", emptyPresent, emptyNull, emptyMask)
+	}
+}
+
+func TestPrerequisiteFieldCatalogDenseKnownStateIsFixedAndBoundedAtMaximumK(t *testing.T) {
+	t.Parallel()
+
+	const producerSampleCount = knowledgeprogram.MaximumGeneratedFields
+	fields := make([]compiledKnownField, producerSampleCount)
+	for index := range fields {
+		fields[index] = compiledKnownField{
+			name:        fmt.Sprintf("known-%d", index),
+			presenceSQL: quoteIdentifier(fmt.Sprintf("producer_present_%d", index)),
+			typeSQL:     quoteIdentifier(fmt.Sprintf("producer_type_%d", index)),
+		}
+	}
+
+	var knownRows strings.Builder
+	writePrerequisiteKnownFieldRows(&knownRows, fields)
+	knownSQL := knownRows.String()
+	for index := range fields {
+		for _, producer := range []string{
+			fmt.Sprintf("producer_present_%d", index),
+			fmt.Sprintf("producer_type_%d", index),
+		} {
+			if got := strings.Count(knownSQL, quoteIdentifier(producer)); got != 1 {
+				t.Fatalf("maximum-K raw producer %q references = %d, want one", producer, got)
+			}
+		}
+	}
+	for _, fragment := range []string{
+		"toUInt8(ifNull(",
+		"arrayFlatten(arrayMap(field_state",
+		"arrayMap(field_state -> toUInt16(",
+		"least(greatest(toInt16(tupleElement(field_state, 2)) - toInt16(1), toInt16(0)), toInt16(11))",
+		"toUInt16(tupleElement(field_state, 2) >= toUInt8(1))",
+		"toUInt16(tupleElement(field_state, 2) <= toUInt8(12))",
+	} {
+		if !strings.Contains(knownSQL, fragment) {
+			t.Errorf("maximum-K dense state is missing %q\nSQL: %s", fragment, knownSQL)
+		}
+	}
+
+	var observations strings.Builder
+	writePrerequisiteFieldCatalogObservations(
+		&observations,
+		maximumPrerequisiteFieldCatalogKnownFields,
+	)
+	observationSQL := observations.String()
+	for _, fragment := range []string{
+		fmt.Sprintf(
+			"arrayResize(CAST([], 'Array(UInt64)'), toUInt64(%d), toUInt64(0))",
+			maximumPrerequisiteFieldCatalogKnownFields*2,
+		),
+		fmt.Sprintf(
+			"arrayResize(CAST([], 'Array(UInt16)'), toUInt64(%d), toUInt16(0))",
+			maximumPrerequisiteFieldCatalogKnownFields,
+		),
+		"CAST([], 'Array(UInt64)'), CAST([], 'Array(UInt16)')",
+	} {
+		if !strings.Contains(observationSQL, fragment) {
+			t.Errorf("maximum-K synthetic/dynamic state is missing %q\nSQL: %s", fragment, observationSQL)
+		}
+	}
+
+	var groups strings.Builder
+	writePrerequisiteFieldCatalogGroups(&groups)
+	if got := strings.Count(groups.String(), "sumForEach("+quoteIdentifier(fieldCatalogKnownCounts)+")"); got != 1 {
+		t.Errorf("dense count aggregate count = %d, want one", got)
+	}
+	if got := strings.Count(groups.String(), "groupBitOrForEach("+quoteIdentifier(fieldCatalogKnownTypeMasks)+")"); got != 1 {
+		t.Errorf("dense mask aggregate count = %d, want one", got)
+	}
+
+	var header strings.Builder
+	writePrerequisiteFieldCatalogHeaderArray(
+		&header,
+		make([]compiledKnownField, maximumPrerequisiteFieldCatalogKnownFields),
+	)
+	headerSQL := header.String()
+	for _, fragment := range []string{
+		"bitAnd(toUInt16(arrayElement(",
+		"bitShiftLeft(toUInt16(1), toUInt8(type_code - toUInt8(1)))",
+		"field_index * toUInt64(2) + toUInt64(1)",
+		"field_index * toUInt64(2) + toUInt64(2)",
+	} {
+		if !strings.Contains(headerSQL, fragment) {
+			t.Errorf("dense header decoder is missing %q\nSQL: %s", fragment, headerSQL)
+		}
+	}
+
+	var codes strings.Builder
+	writeStoredFieldTypeCodeArray(&codes)
+	var wantCodes strings.Builder
+	wantCodes.WriteByte('[')
+	for code := uint8(eventfields.StoredValueTypeNull); code <= uint8(eventfields.StoredValueTypeDecimal); code++ {
+		if code > uint8(eventfields.StoredValueTypeNull) {
+			wantCodes.WriteString(", ")
+		}
+		fmt.Fprintf(&wantCodes, "toUInt8(%d)", code)
+	}
+	wantCodes.WriteByte(']')
+	if codes.String() != wantCodes.String() || strings.Contains(codes.String(), "toUInt8(0)") {
+		t.Fatalf("decoded durable code domain = %q, want %q without invalid code zero", codes.String(), wantCodes.String())
+	}
+
+	countLength, maskLength, ok := prerequisiteFieldCatalogKnownVectorLengths(
+		maximumPrerequisiteFieldCatalogKnownFields,
+	)
+	if !ok || countLength != uint64(maximumPrerequisiteFieldCatalogKnownFields*2) ||
+		maskLength != uint64(maximumPrerequisiteFieldCatalogKnownFields) {
+		t.Fatalf(
+			"maximum-K dense vector lengths = %d/%d, %t",
+			countLength,
+			maskLength,
+			ok,
+		)
+	}
+	if _, _, ok := prerequisiteFieldCatalogKnownVectorLengths(
+		maximumPrerequisiteFieldCatalogKnownFields + 1,
+	); ok {
+		t.Fatal("maximum-K+1 dense vector length was accepted")
 	}
 }
 
@@ -300,7 +808,6 @@ func TestCompileFieldCatalogPreservesKnownScalarTypeCodes(t *testing.T) {
 	for _, code := range []eventfields.StoredValueType{
 		eventfields.StoredValueTypeNull,
 		eventfields.StoredValueTypeString,
-		eventfields.StoredValueTypeSint64,
 		eventfields.StoredValueTypeUint64,
 		eventfields.StoredValueTypeDouble,
 		eventfields.StoredValueTypeBool,
@@ -321,8 +828,8 @@ func TestCompileFieldCatalogAnalyzesNumericBinFinalType(t *testing.T) {
 		10,
 	)
 	if !strings.Contains(compiled.SQL, UnsupportedNumericBinValueMarker) ||
-		!containsArgument(compiled.Args, uint8(eventfields.StoredValueTypeSint64)) {
-		t.Fatalf("numeric-bin catalog lost its guarded Int64 final type:\n%s\nargs: %#v", compiled.SQL, compiled.Args)
+		!containsArgument(compiled.Args, uint8(eventfields.StoredValueTypeDouble)) {
+		t.Fatalf("numeric-bin catalog lost its guarded Float64 final type:\n%s\nargs: %#v", compiled.SQL, compiled.Args)
 	}
 	if known := catalogStringArguments(compiled.Args); !slices.Contains(known, "band") {
 		t.Fatalf("known catalog fields = %v, want band", known)

@@ -47,7 +47,8 @@ func TestNewExplainerOwnsTwoOneConnectionNativeLanes(t *testing.T) {
 
 	if cap(explainer.lanes) != maximumConcurrentExplains ||
 		len(explainer.lanes) != maximumConcurrentExplains ||
-		len(explainer.allLanes) != maximumConcurrentExplains {
+		len(explainer.allLanes) != maximumConcurrentExplains ||
+		!explainer.requireExecutionSeal {
 		t.Fatalf(
 			"lanes = len %d cap %d all %d",
 			len(explainer.lanes),

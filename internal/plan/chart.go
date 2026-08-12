@@ -19,7 +19,10 @@ func validChartContract(operator *Chart) bool {
 		operator.SeriesLimit != chartSeriesLimit ||
 		!operator.IncludeNull || !operator.IncludeOther ||
 		operator.NullLabel != "NULL" || operator.OtherLabel != "OTHER" ||
-		operator.Measure.Predicate != nil {
+		operator.Measure.Sparkline != nil ||
+		operator.Measure.OutputLiteral ||
+		operator.Measure.Predicate != nil ||
+		operator.Measure.InputExpression != nil {
 		return false
 	}
 

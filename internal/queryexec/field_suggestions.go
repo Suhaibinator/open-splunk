@@ -30,7 +30,9 @@ const (
 		(eventfields.MaximumNormalizedFieldNameBytes + 3) *
 			(int(clickhouse.MaximumFieldSuggestions) + 2),
 	)
-	maximumFieldSuggestionGroups  = uint64(clickhouse.MaximumFieldCatalogFields) + 1
+	// The prerequisite single-source graph groups one synthetic header in
+	// addition to the catalog-sized dynamic-name domain and its overflow slot.
+	maximumFieldSuggestionGroups  = uint64(clickhouse.MaximumFieldCatalogFields) + 2
 	maximumFieldSuggestionThreads = uint64(2)
 )
 
@@ -64,6 +66,16 @@ func (executor *Executor) ExecuteFieldSuggestions(
 		return FieldSuggestionResult{}, errors.New(
 			"execute ClickHouse field suggestions: query ID generator is required",
 		)
+	}
+	if executor.readAdmission != nil {
+		detached, ok := query.CloneForExecution()
+		if !ok {
+			return FieldSuggestionResult{}, fmt.Errorf(
+				"%w: compiled field suggestions execution authority is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		query = detached
 	}
 	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledFieldSuggestions(query); err != nil {

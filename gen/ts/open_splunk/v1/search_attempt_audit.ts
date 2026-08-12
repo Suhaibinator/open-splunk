@@ -15,6 +15,7 @@ import {
   auditActorRoleFromJSON,
   auditActorRoleToJSON,
 } from "./audit";
+import { KnowledgeSnapshotRef } from "./knowledge";
 
 /**
  * SearchAttemptAuditEvent is the immutable, allowlisted projection of one
@@ -29,10 +30,24 @@ export interface SearchAttemptAuditEvent {
   actorRole: AuditActorRole;
   ownerId: string;
   searchJobId: string;
+  /**
+   * Audit retains only the compact snapshot identity and exact object count;
+   * definition and object inventory remain outside this journal.
+   */
+  knowledgeSnapshot?: KnowledgeSnapshotRef | undefined;
 }
 
 function createBaseSearchAttemptAuditEvent(): SearchAttemptAuditEvent {
-  return { sequence: 0n, occurredAt: undefined, actorKind: 0, actorId: "", actorRole: 0, ownerId: "", searchJobId: "" };
+  return {
+    sequence: 0n,
+    occurredAt: undefined,
+    actorKind: 0,
+    actorId: "",
+    actorRole: 0,
+    ownerId: "",
+    searchJobId: "",
+    knowledgeSnapshot: undefined,
+  };
 }
 
 export const SearchAttemptAuditEvent: MessageFns<SearchAttemptAuditEvent> = {
@@ -60,6 +75,9 @@ export const SearchAttemptAuditEvent: MessageFns<SearchAttemptAuditEvent> = {
     }
     if (message.searchJobId !== "") {
       writer.uint32(58).string(message.searchJobId);
+    }
+    if (message.knowledgeSnapshot !== undefined) {
+      KnowledgeSnapshotRef.encode(message.knowledgeSnapshot, writer.uint32(66).fork()).join();
     }
     return writer;
   },
@@ -127,6 +145,14 @@ export const SearchAttemptAuditEvent: MessageFns<SearchAttemptAuditEvent> = {
           message.searchJobId = reader.string();
           continue;
         }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.knowledgeSnapshot = KnowledgeSnapshotRef.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -169,6 +195,11 @@ export const SearchAttemptAuditEvent: MessageFns<SearchAttemptAuditEvent> = {
         : isSet(object.search_job_id)
         ? globalThis.String(object.search_job_id)
         : "",
+      knowledgeSnapshot: isSet(object.knowledgeSnapshot)
+        ? KnowledgeSnapshotRef.fromJSON(object.knowledgeSnapshot)
+        : isSet(object.knowledge_snapshot)
+        ? KnowledgeSnapshotRef.fromJSON(object.knowledge_snapshot)
+        : undefined,
     };
   },
 
@@ -195,6 +226,9 @@ export const SearchAttemptAuditEvent: MessageFns<SearchAttemptAuditEvent> = {
     if (message.searchJobId !== "") {
       obj.searchJobId = message.searchJobId;
     }
+    if (message.knowledgeSnapshot !== undefined) {
+      obj.knowledgeSnapshot = KnowledgeSnapshotRef.toJSON(message.knowledgeSnapshot);
+    }
     return obj;
   },
 
@@ -210,6 +244,9 @@ export const SearchAttemptAuditEvent: MessageFns<SearchAttemptAuditEvent> = {
     message.actorRole = object.actorRole ?? 0;
     message.ownerId = object.ownerId ?? "";
     message.searchJobId = object.searchJobId ?? "";
+    message.knowledgeSnapshot = (object.knowledgeSnapshot !== undefined && object.knowledgeSnapshot !== null)
+      ? KnowledgeSnapshotRef.fromPartial(object.knowledgeSnapshot)
+      : undefined;
     return message;
   },
 };

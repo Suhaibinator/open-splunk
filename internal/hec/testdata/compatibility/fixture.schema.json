@@ -1,0 +1,362 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-splunk.dev/schemas/hec-compatibility-fixture-v0.1.json",
+  "title": "Open Splunk HEC compatibility fixture corpus v0.1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "cases"],
+  "properties": {
+    "format_version": {"const": "hec-compatibility-fixture-v0.1"},
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/case"}
+    }
+  },
+  "$defs": {
+    "case": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "rule", "request", "setup", "expect"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$"},
+        "rule": {"type": "string", "minLength": 1, "maxLength": 512},
+        "request": {"$ref": "#/$defs/request"},
+        "setup": {"$ref": "#/$defs/setup"},
+        "expect": {"$ref": "#/$defs/expect"}
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "headers", "query", "body"],
+      "properties": {
+        "method": {"type": "string", "minLength": 1, "maxLength": 16},
+        "path": {"type": "string", "pattern": "^/", "maxLength": 8192},
+        "headers": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/header"}
+        },
+        "query": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {"$ref": "#/$defs/query"}
+        },
+        "body": {"$ref": "#/$defs/body"}
+      }
+    },
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "value": {"type": "string", "maxLength": 16384}
+      }
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "maxLength": 256},
+        "value": {"type": "string", "maxLength": 8192}
+      }
+    },
+    "body": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": {"const": "utf8"},
+            "value": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": {"const": "base64"},
+            "value": {"type": "string", "contentEncoding": "base64"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": {"const": "gzip_utf8"},
+            "value": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "members"],
+          "properties": {
+            "kind": {"const": "concatenated_gzip_utf8"},
+            "members": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 8,
+              "items": {"type": "string"}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "unit", "count"],
+          "properties": {
+            "kind": {"const": "repeat_utf8"},
+            "unit": {"type": "string", "minLength": 1, "maxLength": 16},
+            "count": {"type": "integer", "minimum": 1, "maximum": 33554432}
+          }
+        }
+      ]
+    },
+    "setup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["received_at", "indexes", "conditions"],
+      "properties": {
+        "received_at": {"type": "string", "format": "date-time"},
+        "token": {"$ref": "#/$defs/token"},
+        "indexes": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"$ref": "#/$defs/index"}
+        },
+        "ack_allocations": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/ack_allocation"}
+        },
+        "ack_rows": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {"$ref": "#/$defs/ack_row"}
+        },
+        "conditions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "quota_limited",
+              "staging_busy",
+              "staging_internal",
+              "shutdown",
+              "outbox_capacity",
+              "ack_capacity",
+              "queue_unhealthy",
+              "ack_unhealthy"
+            ]
+          }
+        },
+        "retry_after_seconds": {"type": "integer", "minimum": 1, "maximum": 3600}
+      }
+    },
+    "token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "purpose", "state", "ack_enabled", "allowed_indexes", "defaults"],
+      "properties": {
+        "alias": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$"},
+        "purpose": {"enum": ["hec", "native_collector"]},
+        "state": {"enum": ["active", "disabled", "expired", "revoked"]},
+        "ack_enabled": {"type": "boolean"},
+        "allowed_indexes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 255}
+        },
+        "defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "index": {"type": "string", "minLength": 1, "maxLength": 255},
+            "host": {"type": "string", "minLength": 1, "maxLength": 255},
+            "source": {"type": "string", "minLength": 1, "maxLength": 255},
+            "sourcetype": {"type": "string", "minLength": 1, "maxLength": 255}
+          }
+        }
+      }
+    },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "state", "ingestion_enabled"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 255},
+        "state": {"enum": ["active", "disabled", "archived"]},
+        "ingestion_enabled": {"type": "boolean"},
+        "default_sourcetype": {"type": "string", "minLength": 1, "maxLength": 255}
+      }
+    },
+    "ack_allocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "id"],
+      "properties": {
+        "channel": {"type": "string", "minLength": 1, "maxLength": 128},
+        "id": {"type": "string", "pattern": "^[1-9][0-9]{0,15}$"}
+      }
+    },
+    "ack_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "id", "state"],
+      "properties": {
+        "channel": {"type": "string", "minLength": 1, "maxLength": 128},
+        "id": {"type": "string", "pattern": "^[1-9][0-9]{0,18}$"},
+        "state": {"enum": ["pending", "indexed", "terminal_failure", "expired"]},
+        "terminal_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["http", "durable", "events"],
+      "properties": {
+        "http": {"$ref": "#/$defs/http_expect"},
+        "durable": {"$ref": "#/$defs/durable"},
+        "events": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {"$ref": "#/$defs/event"}
+        },
+        "spl": {"$ref": "#/$defs/spl"}
+      }
+    },
+    "http_expect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "headers", "body_utf8"],
+      "properties": {
+        "status": {"type": "integer", "minimum": 100, "maximum": 599},
+        "headers": {
+          "type": "object",
+          "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128},
+          "additionalProperties": {"type": "string", "maxLength": 1024}
+        },
+        "body_utf8": {"type": "string", "maxLength": 1048576}
+      }
+    },
+    "durable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quota", "request", "ack", "outbox", "visibility"],
+      "properties": {
+        "quota": {"enum": ["absent", "unchanged", "charged"]},
+        "request": {"enum": ["absent", "unchanged", "staged"]},
+        "ack": {"enum": ["absent", "unchanged", "pending"]},
+        "outbox": {"enum": ["absent", "unchanged", "pending"]},
+        "visibility": {"enum": ["absent", "unchanged", "reserved"]}
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ordinal", "index", "time_unix_nanos", "time_source", "host", "source", "sourcetype", "raw", "fields"],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 999},
+        "index": {"type": "string", "minLength": 1, "maxLength": 255},
+        "time_unix_nanos": {"type": "string", "pattern": "^-?[0-9]+$"},
+        "time_source": {"enum": ["explicit", "received_at_fallback"]},
+        "host": {"type": "string", "maxLength": 255},
+        "source": {"type": "string", "maxLength": 255},
+        "sourcetype": {"type": "string", "maxLength": 255},
+        "raw": {"type": "string", "maxLength": 1048576},
+        "message": {"type": "string", "maxLength": 1048576},
+        "fields": {
+          "type": "array",
+          "maxItems": 1024,
+          "items": {"$ref": "#/$defs/field"}
+        }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "value": {"$ref": "#/$defs/value"}
+      }
+    },
+    "value": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": {"kind": {"const": "null"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "string"}, "value": {"type": "string"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "sint64"}, "value": {"type": "string", "pattern": "^-?(0|[1-9][0-9]*)$"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "uint64"}, "value": {"type": "string", "pattern": "^(0|[1-9][0-9]*)$"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "decimal"}, "value": {"type": "string", "maxLength": 128, "pattern": "^-?(?:0|[1-9][0-9]*)(?:(?:\\.[0-9]+)(?:[eE][+-]?(?:0|[1-9][0-9]*))?|[eE][+-]?(?:0|[1-9][0-9]*))$"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {"kind": {"const": "bool"}, "value": {"type": "boolean"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "items"],
+          "properties": {
+            "kind": {"const": "list"},
+            "items": {"type": "array", "maxItems": 1024, "items": {"$ref": "#/$defs/scalar_value"}}
+          }
+        }
+      ]
+    },
+    "scalar_value": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "null"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"const": "string"}, "value": {"type": "string"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"const": "sint64"}, "value": {"type": "string", "pattern": "^-?(0|[1-9][0-9]*)$"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"const": "uint64"}, "value": {"type": "string", "pattern": "^(0|[1-9][0-9]*)$"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"const": "decimal"}, "value": {"type": "string", "maxLength": 128, "pattern": "^-?(?:0|[1-9][0-9]*)(?:(?:\\.[0-9]+)(?:[eE][+-]?(?:0|[1-9][0-9]*))?|[eE][+-]?(?:0|[1-9][0-9]*))$"}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "value"], "properties": {"kind": {"const": "bool"}, "value": {"type": "boolean"}}}
+      ]
+    },
+    "spl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query", "rows"],
+      "properties": {
+        "query": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "rows": {"type": "array", "maxItems": 1000, "items": {"type": "object"}}
+      }
+    }
+  }
+}

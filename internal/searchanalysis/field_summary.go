@@ -202,12 +202,16 @@ func (service *FieldService) GetFieldSummary(
 		)
 	}
 
+	fingerprint, err := fieldSnapshotFingerprint(snapshot)
+	if err != nil {
+		return FieldSummary{}, err
+	}
 	baseKey := fieldCacheKey{
 		domain:              fieldCatalogCompletedSearch,
 		tenantID:            strings.Clone(access.TenantID),
 		ownerID:             strings.Clone(access.OwnerID),
 		jobID:               strings.Clone(normalized.jobID),
-		snapshotFingerprint: fieldSnapshotFingerprint(snapshot),
+		snapshotFingerprint: fingerprint,
 	}
 	key := fieldSummaryCacheKey{
 		fieldCacheKey: baseKey,

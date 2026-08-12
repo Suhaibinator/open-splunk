@@ -16,9 +16,12 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"golang.org/x/sys/unix"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -65,25 +68,30 @@ const (
 	artifactBaseLockName       = ".open-splunk-export.lock"
 
 	// Metadata accounting conservatively covers the retained Job column slice,
-	// active column selection, index slice, column-name storage, fixed job
-	// bookkeeping, and the owner-scoped list index. The list-index charge
+	// active column selection, index slice, column-name storage, optional
+	// knowledge-summary graph, fixed job bookkeeping, and the owner-scoped list
+	// index. The list-index charge
 	// includes one treap node plus a full scope/root-map allowance per job,
 	// although the map entry is normally amortized across every job in a scope.
 	// It intentionally remains charged after the source lease and selection are
 	// released so terminal tombstones cannot bypass the budget.
-	metadataContextBytes                 = uint64(1 << 10)
-	metadataExportListIndexBytes         = uint64(unsafe.Sizeof(exportListIndexNode{})) + uint64(unsafe.Sizeof(searchjobs.AccessScope{})) + uint64(unsafe.Sizeof((*exportListIndexNode)(nil))) + 64
-	metadataBaseBytes                    = uint64(unsafe.Sizeof(jobEntry{})) + metadataContextBytes + metadataExportListIndexBytes
-	metadataStringBytes                  = uint64(unsafe.Sizeof(""))
-	metadataIdentitySlots                = 3 * metadataStringBytes
-	metadataPerColumnBytes               = uint64(64)
-	metadataTempPathSuffix               = uint64(1 + len(".open-splunk-export-") + maximumExportIDBytes + 1 + 64 + len(".partial"))
-	metadataFinalSuffix                  = uint64(1 + maximumExportIDBytes + len(".jsonl"))
-	metadataArtifactName                 = uint64(maximumExportIDBytes + len(".jsonl"))
-	metadataStorageFixed                 = uint64(maximumExportIDBytes) + metadataTempPathSuffix + metadataFinalSuffix + metadataArtifactName
-	maximumIdentityBytes                 = uint64(2*maximumAccessIDBytes + maximumSearchIDBytes)
-	maximumColumnMetadata                = uint64(maximumColumns)*metadataPerColumnBytes + uint64(maximumColumnBytes)
-	maximumJobMetadataExcludingDirectory = metadataBaseBytes + metadataIdentitySlots + maximumIdentityBytes + maximumColumnMetadata + metadataStorageFixed
+	metadataContextBytes                       = uint64(1 << 10)
+	metadataExportListIndexBytes               = uint64(unsafe.Sizeof(exportListIndexNode{})) + uint64(unsafe.Sizeof(searchjobs.AccessScope{})) + uint64(unsafe.Sizeof((*exportListIndexNode)(nil))) + 64
+	metadataBaseBytes                          = uint64(unsafe.Sizeof(jobEntry{})) + metadataContextBytes + metadataExportListIndexBytes
+	metadataStringBytes                        = uint64(unsafe.Sizeof(""))
+	metadataIdentitySlots                      = 3 * metadataStringBytes
+	metadataPerColumnBytes                     = uint64(64)
+	metadataTempPathSuffix                     = uint64(1 + len(".open-splunk-export-") + maximumExportIDBytes + 1 + 64 + len(".partial"))
+	metadataFinalSuffix                        = uint64(1 + maximumExportIDBytes + len(".jsonl"))
+	metadataArtifactName                       = uint64(maximumExportIDBytes + len(".jsonl"))
+	metadataStorageFixed                       = uint64(maximumExportIDBytes) + metadataTempPathSuffix + metadataFinalSuffix + metadataArtifactName
+	metadataKnowledgeSummaryFixed              = uint64(1 << 10)
+	metadataKnowledgeSummaryPerObject          = uint64(512)
+	metadataKnowledgeSummaryMaximum            = uint64(2*knowledgesnapshot.MaximumSummaryBytes) + metadataKnowledgeSummaryFixed + uint64(knowledgesnapshot.MaximumSummaryObjects)*metadataKnowledgeSummaryPerObject
+	maximumIdentityBytes                       = uint64(2*maximumAccessIDBytes + maximumSearchIDBytes)
+	maximumColumnMetadata                      = uint64(maximumColumns)*metadataPerColumnBytes + uint64(maximumColumnBytes)
+	maximumLegacyJobMetadataExcludingDirectory = metadataBaseBytes + metadataIdentitySlots + maximumIdentityBytes + maximumColumnMetadata + metadataStorageFixed
+	maximumJobMetadataExcludingDirectory       = maximumLegacyJobMetadataExcludingDirectory + metadataKnowledgeSummaryMaximum
 )
 
 var errArtifactStorage = errors.New("export artifact storage operation failed")
@@ -280,7 +288,7 @@ func (accumulator *cleanupErrorAccumulator) err() error {
 
 // New constructs an export manager and starts its bounded workers.
 func New(config Config) (*Manager, error) {
-	if config.Source == nil {
+	if nilReexecutionDependency(config.Source) {
 		return nil, errors.New("create export manager: result source is nil")
 	}
 	maxWorkers, err := boundedInt(config.MaxWorkers, defaultMaxWorkers, maximumWorkers, "worker")
@@ -762,7 +770,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 	if acquireErr != nil {
 		stopRequestCancellation()
 		jobCancel()
-		if lease != nil {
+		if !nilReexecutionDependency(lease) {
 			_ = lease.Close()
 		}
 		if err := ctx.Err(); err != nil {
@@ -773,7 +781,7 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		}
 		return Job{}, mapSourceError(acquireErr)
 	}
-	if lease == nil {
+	if nilReexecutionDependency(lease) {
 		stopRequestCancellation()
 		jobCancel()
 		if err := ctx.Err(); err != nil {
@@ -801,7 +809,28 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		}
 		return Job{}, ErrSourceTruncated
 	}
-	selection, err := selectColumns(lease.Schema(), normalized.Columns)
+	schema := lease.Schema()
+	if !validSourceSchemaCardinality(schema) {
+		stopRequestCancellation()
+		jobCancel()
+		if len(schema.Columns) == 0 {
+			return Job{}, ErrSourceUnavailable
+		}
+		return Job{}, ErrInvalidColumns
+	}
+	compilerVersion, err := admittedCompilerVersion(lease)
+	if err != nil {
+		stopRequestCancellation()
+		jobCancel()
+		return Job{}, ErrSourceUnavailable
+	}
+	knowledgeSnapshot, err := admittedKnowledgeSnapshot(lease)
+	if err != nil {
+		stopRequestCancellation()
+		jobCancel()
+		return Job{}, ErrSourceUnavailable
+	}
+	selection, err := selectColumns(schema, normalized.Columns)
 	if err != nil {
 		stopRequestCancellation()
 		jobCancel()
@@ -817,6 +846,24 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		stopRequestCancellation()
 		jobCancel()
 		return Job{}, err
+	}
+	knowledgeMetadata, err := knowledgeSnapshotMetadataBytes(knowledgeSnapshot)
+	if err != nil {
+		stopRequestCancellation()
+		jobCancel()
+		return Job{}, ErrSourceUnavailable
+	}
+	resolvedMetadata, ok := checkedAddUint64(resolvedMetadata, knowledgeMetadata)
+	if !ok {
+		stopRequestCancellation()
+		jobCancel()
+		return Job{}, ErrCapacity
+	}
+	resolvedMetadata, ok = checkedAddUint64(resolvedMetadata, uint64(len(compilerVersion)))
+	if !ok {
+		stopRequestCancellation()
+		jobCancel()
+		return Job{}, ErrCapacity
 	}
 	if err := manager.reconcileAdmissionMetadata(id, resolvedMetadata); err != nil {
 		stopRequestCancellation()
@@ -845,18 +892,20 @@ func (manager *Manager) Create(ctx context.Context, access searchjobs.AccessScop
 		accountedBytes:    normalized.ByteLimit,
 		accountedMetadata: resolvedMetadata,
 		job: Job{
-			ID:          id,
-			Version:     1,
-			SearchJobID: strings.Clone(normalized.SearchJobID),
-			Format:      normalized.Format,
-			Columns:     append([]string(nil), normalized.Columns...),
-			RowLimit:    normalized.RowLimit,
-			ByteLimit:   normalized.ByteLimit,
-			CSV:         normalized.CSV,
-			JSONLines:   normalized.JSONLines,
-			State:       StateQueued,
-			CreatedAt:   now,
-			Progress:    Progress{UpdatedAt: now},
+			ID:                id,
+			Version:           1,
+			SearchJobID:       strings.Clone(normalized.SearchJobID),
+			CompilerVersion:   compilerVersion,
+			Format:            normalized.Format,
+			Columns:           append([]string(nil), normalized.Columns...),
+			RowLimit:          normalized.RowLimit,
+			ByteLimit:         normalized.ByteLimit,
+			CSV:               normalized.CSV,
+			JSONLines:         normalized.JSONLines,
+			State:             StateQueued,
+			CreatedAt:         now,
+			Progress:          Progress{UpdatedAt: now},
+			KnowledgeSnapshot: knowledgeSnapshot,
 		},
 	}
 
@@ -977,6 +1026,31 @@ func requestedMetadataBytes(artifactDir string, access searchjobs.AccessScope, s
 		if !ok {
 			return 0, fmt.Errorf("%w: selected-column metadata is too large", ErrInvalidRequest)
 		}
+	}
+	return total, nil
+}
+
+func knowledgeSnapshotMetadataBytes(summary *opensplunkv1.KnowledgeSnapshotSummary) (uint64, error) {
+	if summary == nil {
+		return 0, nil
+	}
+	if err := knowledgesnapshot.ValidateSummary(summary); err != nil {
+		return 0, err
+	}
+	// ValidateSummary bounds the encoded representation by MaximumSummaryBytes.
+	encodedBytes := uint64(proto.Size(summary)) // #nosec G115 -- validated above as a small, non-negative protobuf size.
+	encodedCharge, ok := checkedAddUint64(encodedBytes, encodedBytes)
+	if !ok {
+		return 0, errors.New("knowledge snapshot metadata charge overflow")
+	}
+	objectCharge := uint64(len(summary.GetObjects())) * metadataKnowledgeSummaryPerObject
+	total, ok := checkedAddUint64(metadataKnowledgeSummaryFixed, encodedCharge)
+	if !ok {
+		return 0, errors.New("knowledge snapshot metadata charge overflow")
+	}
+	total, ok = checkedAddUint64(total, objectCharge)
+	if !ok || total > metadataKnowledgeSummaryMaximum {
+		return 0, errors.New("knowledge snapshot metadata exceeds fixed envelope")
 	}
 	return total, nil
 }

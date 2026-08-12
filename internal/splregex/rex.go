@@ -40,14 +40,16 @@ type NamedCapture struct {
 	Group int
 }
 
-// ExtractionPattern is a bounded RE2 program and its ordered named outputs.
+// ExtractionPattern is a bounded RE2 program, its exact static work charge,
+// and its ordered named outputs.
 // Pattern explicitly disables dot-all mode before the user's expression so
 // ClickHouse's default agrees with ordinary PCRE/Splunk dot behavior. A scoped
 // or later user-authored (?s) flag can still opt in.
 type ExtractionPattern struct {
-	Pattern    string
-	Captures   []NamedCapture
-	GroupCount int
+	Pattern          string
+	Captures         []NamedCapture
+	GroupCount       int
+	ProgramWorkUnits int
 }
 
 // CompileExtractionPattern validates the deliberately supported RE2 subset of
@@ -96,8 +98,9 @@ func CompileExtractionPattern(pattern string) (ExtractionPattern, error) {
 		return ExtractionPattern{}, ErrNoNamedCapture
 	}
 	return ExtractionPattern{
-		Pattern:    compiled.normalized,
-		Captures:   captures,
-		GroupCount: groupCount,
+		Pattern:          compiled.normalized,
+		Captures:         captures,
+		GroupCount:       groupCount,
+		ProgramWorkUnits: compiled.programWorkUnits,
 	}, nil
 }

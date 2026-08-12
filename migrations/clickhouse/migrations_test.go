@@ -153,6 +153,28 @@ func TestRecoverySetsMigrationContract(t *testing.T) {
 	}
 }
 
+func TestIngestSourceMigrationContract(t *testing.T) {
+	t.Parallel()
+	sql := readFile(t, "0005_add_ingest_source.sql")
+	for _, fragment := range []string{
+		"ADD COLUMN IF NOT EXISTS `ingest_source_kind` UInt8",
+		"DEFAULT if(empty(`collector_id`), 0, 1)",
+		"ADD COLUMN IF NOT EXISTS `ingest_source_id` String",
+		"DEFAULT if(`ingest_source_kind` = 1, `collector_id`, '')",
+		"ADD CONSTRAINT IF NOT EXISTS ingest_source_kind_is_supported",
+		"CHECK `ingest_source_kind` IN (1, 2)",
+		"ADD CONSTRAINT IF NOT EXISTS ingest_source_shape_is_valid",
+		"`ingest_source_id` = `collector_id`",
+		"empty(`collector_id`)",
+		"SELECT 5, 'add_ingest_source'",
+		"WHERE `version` = 5",
+	} {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("ingest source migration is missing contract fragment %q", fragment)
+		}
+	}
+}
+
 func TestComposeFullStackSecurityContract(t *testing.T) {
 	compose := readFile(t, filepath.Join("..", "..", "deploy", "docker-compose.yaml"))
 
@@ -406,6 +428,75 @@ func mustGenerateDeploymentEnvironment(
 		t.Fatalf("generate deployment environment: %v: %s", err, output)
 	}
 	return parseDeploymentEnvironment(t, readFile(t, envFile))
+}
+
+func TestGenerateEnvAcceptsUTCCommitTimestamp(t *testing.T) {
+	for _, dependency := range []string{"git", "openssl"} {
+		if _, err := exec.LookPath(dependency); err != nil {
+			t.Skipf("%s is unavailable: %v", dependency, err)
+		}
+	}
+
+	repository := t.TempDir()
+	deployDirectory := filepath.Join(repository, "deploy")
+	if err := os.Mkdir(deployDirectory, 0o755); err != nil {
+		t.Fatalf("create temporary deployment directory: %v", err)
+	}
+	generatorPath := filepath.Join(deployDirectory, "generate-env.sh")
+	generator, err := os.ReadFile(filepath.Join(deploymentDirectory(t), "generate-env.sh"))
+	if err != nil {
+		t.Fatalf("read deployment environment generator: %v", err)
+	}
+	if err := os.WriteFile(generatorPath, generator, 0o755); err != nil {
+		t.Fatalf("copy deployment environment generator: %v", err)
+	}
+
+	commandContext, cancelCommand := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancelCommand()
+
+	for _, arguments := range [][]string{
+		{"init", "--quiet"},
+		{"add", "deploy/generate-env.sh"},
+	} {
+		command := exec.CommandContext(commandContext, "git", arguments...)
+		command.Dir = repository
+		if output, commandErr := command.CombinedOutput(); commandErr != nil {
+			t.Fatalf("git %s: %v: %s", strings.Join(arguments, " "), commandErr, output)
+		}
+	}
+	commit := exec.CommandContext(
+		commandContext,
+		"git",
+		"-c",
+		"commit.gpgsign=false",
+		"commit",
+		"--quiet",
+		"-m",
+		"UTC timestamp",
+	)
+	commit.Dir = repository
+	commit.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME=Open Splunk Test",
+		"GIT_AUTHOR_EMAIL=open-splunk-test@example.com",
+		"GIT_AUTHOR_DATE=2026-08-11T05:29:10+00:00",
+		"GIT_COMMITTER_NAME=Open Splunk Test",
+		"GIT_COMMITTER_EMAIL=open-splunk-test@example.com",
+		"GIT_COMMITTER_DATE=2026-08-11T05:29:10+00:00",
+	)
+	if output, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("commit UTC fixture: %v: %s", err, output)
+	}
+
+	envFile := filepath.Join(repository, "deployment.env")
+	values := mustGenerateDeploymentEnvironment(
+		t,
+		commandContext,
+		deployDirectory,
+		envFile,
+	)
+	if got := values["OPEN_SPLUNK_IMAGE_CREATED"]; got != "2026-08-11T05:29:10Z" {
+		t.Fatalf("generated UTC OCI creation time = %q, want %q", got, "2026-08-11T05:29:10Z")
+	}
 }
 
 func TestGenerateEnvCreatesVerifiedClickHouseTLSIdentity(t *testing.T) {

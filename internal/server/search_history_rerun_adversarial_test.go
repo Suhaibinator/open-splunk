@@ -333,7 +333,7 @@ func TestCreateSearchHistoryRerunAuthorizesLegacyAndStaticApps(t *testing.T) {
 			) (*opensplunkv1.SearchHistoryEntry, error) {
 				return entry, nil
 			}}
-			jobs := &fakeSearchJobs{createJob: completeJob("history-rerun-app")}
+			jobs := &fakeSearchJobs{createJob: completeJobForApp("history-rerun-app", test.wantAppID)}
 			handler := newTestHandler(t, Config{
 				SearchJobs:    jobs,
 				Indexes:       activeHistoryRerunIndexCatalog("main"),
@@ -778,7 +778,7 @@ func TestCreateSearchHistoryRerunResolvesNamedZoneDayIntentAtFreshAdmission(t *t
 	) (*opensplunkv1.SearchHistoryEntry, error) {
 		return entry, nil
 	}}
-	jobs := &fakeSearchJobs{createJob: completeJob("history-rerun-named-zone")}
+	jobs := &fakeSearchJobs{createJob: completeJobForApp("history-rerun-named-zone", "app-main")}
 	handler := newTestHandler(t, Config{
 		SearchJobs:    jobs,
 		Indexes:       activeHistoryRerunIndexCatalog("main"),

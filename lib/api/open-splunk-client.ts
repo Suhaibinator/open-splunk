@@ -8,6 +8,7 @@ import {
   auditEventRoutes,
   collectorRoutes,
   exportRoutes,
+  hecOperationsRoutes,
   historyRoutes,
   indexRoutes,
   ingestionTokenRoutes,
@@ -139,10 +140,21 @@ export class OpenSplunkApiClient {
       request: RouteRequest<typeof ingestionTokenRoutes.update>,
       options?: ProtobufRequestOptions,
     ) => this.transport.post(ingestionTokenRoutes.update, request, options),
+    setState: (
+      request: RouteRequest<typeof ingestionTokenRoutes.setState>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(ingestionTokenRoutes.setState, request, options),
     revoke: (
       request: RouteRequest<typeof ingestionTokenRoutes.revoke>,
       options?: ProtobufRequestOptions,
     ) => this.transport.post(ingestionTokenRoutes.revoke, request, options),
+  };
+
+  public readonly hec = {
+    getOperationalSnapshot: (
+      request: RouteRequest<typeof hecOperationsRoutes.get>,
+      options?: ProtobufRequestOptions,
+    ) => this.transport.post(hecOperationsRoutes.get, request, options),
   };
 
   public readonly search = {

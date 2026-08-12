@@ -459,16 +459,14 @@ func TestParseAggregateGroupFieldsKeepCommandSpecificDiagnostics(t *testing.T) {
 	}
 }
 
-func TestParseStatsGroupFieldsStillAcceptWildcards(t *testing.T) {
+func TestParseStatsGroupFieldsRejectWildcardsBeforePlanning(t *testing.T) {
 	t.Parallel()
 
-	query, err := Parse(`index=main | stats count BY host*`)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	command := query.Commands[0].(*StatsCommand)
-	if len(command.GroupBy) != 1 || command.GroupBy[0].Name != "host*" {
-		t.Fatalf("group fields = %#v, want host*", command.GroupBy)
+	_, err := Parse(`index=main | stats count BY host*`)
+	var diagnostic *Diagnostic
+	if !errors.As(err, &diagnostic) ||
+		diagnostic.Code != "SPL_UNSUPPORTED_STATS_SYNTAX" {
+		t.Fatalf("diagnostic = %#v, want wildcard stats BY rejection", err)
 	}
 }
 

@@ -18,9 +18,10 @@ func TestCompileEventStatsGlobalCountPreservesRowsAndBoundsInput(t *testing.T) {
 	for _, required := range []string{
 		` AS MATERIALIZED (`,
 		`LIMIT ` + strconv.FormatUint(MaximumEventStatsInputRows+1, 10),
-		`count()`,
+		`count() OVER ()`,
 		EventStatsInputLimitMarker,
-		`CROSS JOIN`,
+		`"__os_chronological_validation_`,
+		`UNION ALL`,
 		`AS "total"`,
 		materializedCTESettingsSQL,
 	} {
@@ -28,10 +29,18 @@ func TestCompileEventStatsGlobalCountPreservesRowsAndBoundsInput(t *testing.T) {
 			t.Fatalf("eventstats SQL missing %q:\n%s", required, compiled.SQL)
 		}
 	}
-	for _, forbidden := range []string{"ARRAY JOIN", "GROUP BY", "groupArray("} {
+	for _, forbidden := range []string{
+		"ARRAY JOIN",
+		"GROUP BY",
+		"groupArray(",
+		`"__os_eventstats_total_`,
+	} {
 		if strings.Contains(compiled.SQL, forbidden) {
 			t.Fatalf("global eventstats SQL contains %q:\n%s", forbidden, compiled.SQL)
 		}
+	}
+	if got := strings.Count(compiled.SQL, `"__os_eventstats_input_`); got != 2 {
+		t.Fatalf("global eventstats input consumers = %d, want definition plus one window read:\n%s", got, compiled.SQL)
 	}
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("physical event scan count = %d, want 1:\n%s", got, compiled.SQL)

@@ -626,16 +626,16 @@ func (x *JsonFieldExtractionDefinition) GetOutputField() string {
 }
 
 type FieldExtractionDefinition struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	InputField string                 `protobuf:"bytes,1,opt,name=input_field,json=inputField,proto3" json:"input_field,omitempty"`
+	state             protoimpl.MessageState     `protogen:"open.v1"`
+	InputField        string                     `protobuf:"bytes,1,opt,name=input_field,json=inputField,proto3" json:"input_field,omitempty"`
+	OverwriteBehavior KnowledgeOverwriteBehavior `protobuf:"varint,4,opt,name=overwrite_behavior,json=overwriteBehavior,proto3,enum=open_splunk.v1.KnowledgeOverwriteBehavior" json:"overwrite_behavior,omitempty"`
 	// Types that are valid to be assigned to Extraction:
 	//
 	//	*FieldExtractionDefinition_Regex
 	//	*FieldExtractionDefinition_Json
-	Extraction        isFieldExtractionDefinition_Extraction `protobuf_oneof:"extraction"`
-	OverwriteBehavior KnowledgeOverwriteBehavior             `protobuf:"varint,4,opt,name=overwrite_behavior,json=overwriteBehavior,proto3,enum=open_splunk.v1.KnowledgeOverwriteBehavior" json:"overwrite_behavior,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	Extraction    isFieldExtractionDefinition_Extraction `protobuf_oneof:"extraction"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *FieldExtractionDefinition) Reset() {
@@ -675,6 +675,13 @@ func (x *FieldExtractionDefinition) GetInputField() string {
 	return ""
 }
 
+func (x *FieldExtractionDefinition) GetOverwriteBehavior() KnowledgeOverwriteBehavior {
+	if x != nil {
+		return x.OverwriteBehavior
+	}
+	return KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED
+}
+
 func (x *FieldExtractionDefinition) GetExtraction() isFieldExtractionDefinition_Extraction {
 	if x != nil {
 		return x.Extraction
@@ -698,13 +705,6 @@ func (x *FieldExtractionDefinition) GetJson() *JsonFieldExtractionDefinition {
 		}
 	}
 	return nil
-}
-
-func (x *FieldExtractionDefinition) GetOverwriteBehavior() KnowledgeOverwriteBehavior {
-	if x != nil {
-		return x.OverwriteBehavior
-	}
-	return KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_UNSPECIFIED
 }
 
 type isFieldExtractionDefinition_Extraction interface {
@@ -847,7 +847,18 @@ func (x *CalculatedFieldDefinition) GetOverwriteBehavior() KnowledgeOverwriteBeh
 // app_id, name, and sharing_scope deliberately repeat indexed registry fields;
 // disagreement after decoding is corruption. Executable objects are ordered by
 // stage, normalized binary name, and stable object ID; clients cannot author an
-// execution-order override.
+// execution-order override. Field numbers 13 through 31 are allocated
+// exclusively to future length-delimited body oneof alternatives. Future
+// ordinary top-level metadata fields must use numbers 32 or greater, must not
+// use the protobuf compiler-reserved range 19000 through 19999, and must be
+// declared in ascending field-number order before the body oneof. This source
+// declaration order is part of the cross-language deterministic wire contract:
+// future metadata is encoded before exactly one future body. This allocation
+// lets an older server distinguish one unreadable inactive body from future
+// metadata while preserving the complete canonical stored message. For such an
+// inactive opaque body only, an older reader may display the sealed registry
+// object type but cannot infer or execute semantic type authority from this
+// message.
 type KnowledgeObjectDefinition struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	AppId        string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
@@ -989,7 +1000,9 @@ func (*KnowledgeObjectDefinition_CalculatedField) isKnowledgeObjectDefinition_Bo
 // KnowledgeObject is the safe control-plane projection. definition_sha256 is
 // exactly 32 bytes. version is an optimistic token and increases on every
 // successful definition or state mutation. A quarantined projection has no
-// definition because its suspect bytes remain forensic storage only.
+// definition because its suspect bytes remain forensic storage only. Lifecycle
+// timestamps are exact immutable transition markers. quarantine_reason is a
+// bounded closed server reason code, never free-form diagnostic text.
 type KnowledgeObject struct {
 	state             protoimpl.MessageState     `protogen:"open.v1"`
 	KnowledgeObjectId string                     `protobuf:"bytes,1,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3" json:"knowledge_object_id,omitempty"`
@@ -1006,6 +1019,9 @@ type KnowledgeObject struct {
 	CreatedAt         *timestamppb.Timestamp     `protobuf:"bytes,12,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt         *timestamppb.Timestamp     `protobuf:"bytes,13,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	DisabledAt        *timestamppb.Timestamp     `protobuf:"bytes,14,opt,name=disabled_at,json=disabledAt,proto3,oneof" json:"disabled_at,omitempty"`
+	QuarantinedAt     *timestamppb.Timestamp     `protobuf:"bytes,15,opt,name=quarantined_at,json=quarantinedAt,proto3,oneof" json:"quarantined_at,omitempty"`
+	DeletedAt         *timestamppb.Timestamp     `protobuf:"bytes,16,opt,name=deleted_at,json=deletedAt,proto3,oneof" json:"deleted_at,omitempty"`
+	QuarantineReason  *string                    `protobuf:"bytes,17,opt,name=quarantine_reason,json=quarantineReason,proto3,oneof" json:"quarantine_reason,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -1136,6 +1152,27 @@ func (x *KnowledgeObject) GetDisabledAt() *timestamppb.Timestamp {
 		return x.DisabledAt
 	}
 	return nil
+}
+
+func (x *KnowledgeObject) GetQuarantinedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.QuarantinedAt
+	}
+	return nil
+}
+
+func (x *KnowledgeObject) GetDeletedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.DeletedAt
+	}
+	return nil
+}
+
+func (x *KnowledgeObject) GetQuarantineReason() string {
+	if x != nil && x.QuarantineReason != nil {
+		return *x.QuarantineReason
+	}
+	return ""
 }
 
 type KnowledgeObjectVersionReference struct {
@@ -1351,9 +1388,11 @@ func (*KnowledgeDependencyTarget_Object) isKnowledgeDependencyTarget_Target() {}
 
 func (*KnowledgeDependencyTarget_LookupAsset) isKnowledgeDependencyTarget_Target() {}
 
-// topological_depth is the bounded longest-path depth of the source object.
-// canonical_ordinal is unique and contiguous within a snapshot dependency
-// list, which is encoded in ascending ordinal.
+// topological_depth is the bounded longest outgoing-path depth of the source
+// object in edges; a leaf has depth zero. Snapshot dependencies sort by source
+// depth, explicit source stage rank, source ID/version, target kind, target
+// ID/version, then role. canonical_ordinal is the zero-based position in that
+// order and the repeated list is encoded in ascending ordinal.
 type KnowledgeObjectDependency struct {
 	state            protoimpl.MessageState           `protogen:"open.v1"`
 	Source           *KnowledgeObjectVersionReference `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
@@ -1927,7 +1966,9 @@ func (x *KnowledgeSnapshotLookupAsset) GetAsset() *KnowledgeLookupAssetVersionRe
 }
 
 // KnowledgeSnapshotShadow records a visible lower-precedence object that lost
-// whole-object resolution. Entries are ordered by contiguous shadow_ordinal.
+// whole-object resolution. Entries sort by winner resolution ordinal, losing
+// precedence nearest-first (private, app, global), then loser object ID;
+// shadow_ordinal is the zero-based position in that order.
 type KnowledgeSnapshotShadow struct {
 	state                   protoimpl.MessageState `protogen:"open.v1"`
 	ShadowOrdinal           uint32                 `protobuf:"varint,1,opt,name=shadow_ordinal,json=shadowOrdinal,proto3" json:"shadow_ordinal,omitempty"`
@@ -2114,8 +2155,12 @@ func (x *KnowledgeSnapshotWarning) GetShadowOrdinal() uint32 {
 	return 0
 }
 
-// KnowledgeSnapshotBudgetCharges contains aggregate admitted work, including
-// authored SPL where it shares a query-wide ceiling with knowledge work.
+// KnowledgeSnapshotBudgetCharges contains canonical snapshot structure, exact
+// knowledge-only semantic contributions, and the explicitly identified
+// authored-plus-knowledge compiler charges. Shared budgets which have no wire
+// field (including extraction outputs, JSON evaluation work, and predicate
+// leaves) are still enforced by the sealed compiler evidence before a snapshot
+// can be finalized.
 type KnowledgeSnapshotBudgetCharges struct {
 	state                     protoimpl.MessageState `protogen:"open.v1"`
 	ExecutableObjects         uint32                 `protobuf:"varint,1,opt,name=executable_objects,json=executableObjects,proto3" json:"executable_objects,omitempty"`
@@ -2125,19 +2170,39 @@ type KnowledgeSnapshotBudgetCharges struct {
 	// bytes after both snapshot_sha256 and this field are cleared. The charge is
 	// then set before the final digest serialization, avoiding a self-reference.
 	CanonicalSnapshotBytes uint64 `protobuf:"varint,4,opt,name=canonical_snapshot_bytes,json=canonicalSnapshotBytes,proto3" json:"canonical_snapshot_bytes,omitempty"`
-	DependencyNodes        uint32 `protobuf:"varint,5,opt,name=dependency_nodes,json=dependencyNodes,proto3" json:"dependency_nodes,omitempty"`
-	DependencyEdges        uint32 `protobuf:"varint,6,opt,name=dependency_edges,json=dependencyEdges,proto3" json:"dependency_edges,omitempty"`
-	DependencyDepth        uint32 `protobuf:"varint,7,opt,name=dependency_depth,json=dependencyDepth,proto3" json:"dependency_depth,omitempty"`
-	GeneratedOperators     uint32 `protobuf:"varint,8,opt,name=generated_operators,json=generatedOperators,proto3" json:"generated_operators,omitempty"`
-	GeneratedFields        uint32 `protobuf:"varint,9,opt,name=generated_fields,json=generatedFields,proto3" json:"generated_fields,omitempty"`
-	RegexPrograms          uint32 `protobuf:"varint,10,opt,name=regex_programs,json=regexPrograms,proto3" json:"regex_programs,omitempty"`
-	RegexWorkUnits         uint64 `protobuf:"varint,11,opt,name=regex_work_units,json=regexWorkUnits,proto3" json:"regex_work_units,omitempty"`
-	RegexCaptureBytes      uint64 `protobuf:"varint,12,opt,name=regex_capture_bytes,json=regexCaptureBytes,proto3" json:"regex_capture_bytes,omitempty"`
-	ScalarExpressions      uint32 `protobuf:"varint,13,opt,name=scalar_expressions,json=scalarExpressions,proto3" json:"scalar_expressions,omitempty"`
-	ScalarExpressionNodes  uint32 `protobuf:"varint,14,opt,name=scalar_expression_nodes,json=scalarExpressionNodes,proto3" json:"scalar_expression_nodes,omitempty"`
-	GeneratedSqlBytes      uint64 `protobuf:"varint,15,opt,name=generated_sql_bytes,json=generatedSqlBytes,proto3" json:"generated_sql_bytes,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Every executable object is one node, including isolated objects.
+	DependencyNodes uint32 `protobuf:"varint,5,opt,name=dependency_nodes,json=dependencyNodes,proto3" json:"dependency_nodes,omitempty"`
+	DependencyEdges uint32 `protobuf:"varint,6,opt,name=dependency_edges,json=dependencyEdges,proto3" json:"dependency_edges,omitempty"`
+	// Maximum longest outgoing-path depth in edges; isolated objects and leaves
+	// have depth zero.
+	DependencyDepth uint32 `protobuf:"varint,7,opt,name=dependency_depth,json=dependencyDepth,proto3" json:"dependency_depth,omitempty"`
+	// Exact knowledge-origin logical-operator occurrences in the canonical
+	// pre-optimization knowledge prelude. A fused parallel operator counts once;
+	// authored operators, scans, and SQL-only helpers do not count.
+	GeneratedOperators uint32 `protobuf:"varint,8,opt,name=generated_operators,json=generatedOperators,proto3" json:"generated_operators,omitempty"`
+	// Exact knowledge output occurrences. Every regex named capture and every
+	// JSON, alias, or calculated destination counts, even when selectors are
+	// disjoint. Authored outputs and compiler-private columns do not count.
+	GeneratedFields uint32 `protobuf:"varint,9,opt,name=generated_fields,json=generatedFields,proto3" json:"generated_fields,omitempty"`
+	// Extraction/rex program occurrences from knowledge regex definitions plus
+	// authored rex. Calculated-field match() programs are a separate budget.
+	RegexPrograms uint32 `protobuf:"varint,10,opt,name=regex_programs,json=regexPrograms,proto3" json:"regex_programs,omitempty"`
+	// Exact sum of bounded RE2 program work for precisely regex_programs.
+	RegexWorkUnits uint64 `protobuf:"varint,11,opt,name=regex_work_units,json=regexWorkUnits,proto3" json:"regex_work_units,omitempty"`
+	// The admitted cumulative per-row capture-byte guard: zero when
+	// regex_programs is zero, otherwise exactly the compatibility 4 MiB guard.
+	RegexCaptureBytes uint64 `protobuf:"varint,12,opt,name=regex_capture_bytes,json=regexCaptureBytes,proto3" json:"regex_capture_bytes,omitempty"`
+	// Exact winning knowledge calculated-field root-expression occurrences.
+	// Authored eval assignments do not count in this field.
+	ScalarExpressions uint32 `protobuf:"varint,13,opt,name=scalar_expressions,json=scalarExpressions,proto3" json:"scalar_expressions,omitempty"`
+	// Exact scalar and Boolean/predicate AST node occurrences in the field-13
+	// roots before optimization. Repeated occurrences count repeatedly.
+	ScalarExpressionNodes uint32 `protobuf:"varint,14,opt,name=scalar_expression_nodes,json=scalarExpressionNodes,proto3" json:"scalar_expression_nodes,omitempty"`
+	// Exact Go byte length of the final sealed parameterized SQL. Bind argument
+	// rendering, executor wrapper text, and ClickHouse settings are excluded.
+	GeneratedSqlBytes uint64 `protobuf:"varint,15,opt,name=generated_sql_bytes,json=generatedSqlBytes,proto3" json:"generated_sql_bytes,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *KnowledgeSnapshotBudgetCharges) Reset() {
@@ -2284,6 +2349,8 @@ func (x *KnowledgeSnapshotBudgetCharges) GetGeneratedSqlBytes() uint64 {
 // hashing. snapshot_sha256 is calculated over deterministic canonical protobuf
 // bytes with that field absent and is exactly 32 bytes. Wall-clock admission
 // time and every other timestamp are deliberately outside this digest message.
+// tenant_catalog_state_token is the exact 32-byte restore-fork-safe commitment
+// paired with tenant_catalog_revision and is included in the digest.
 type KnowledgeSnapshot struct {
 	state                        protoimpl.MessageState          `protogen:"open.v1"`
 	FormatVersion                uint32                          `protobuf:"varint,1,opt,name=format_version,json=formatVersion,proto3" json:"format_version,omitempty"`
@@ -2301,6 +2368,7 @@ type KnowledgeSnapshot struct {
 	Shadows                      []*KnowledgeSnapshotShadow      `protobuf:"bytes,13,rep,name=shadows,proto3" json:"shadows,omitempty"`
 	Warnings                     []*KnowledgeSnapshotWarning     `protobuf:"bytes,14,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	BudgetCharges                *KnowledgeSnapshotBudgetCharges `protobuf:"bytes,15,opt,name=budget_charges,json=budgetCharges,proto3" json:"budget_charges,omitempty"`
+	TenantCatalogStateToken      []byte                          `protobuf:"bytes,16,opt,name=tenant_catalog_state_token,json=tenantCatalogStateToken,proto3" json:"tenant_catalog_state_token,omitempty"`
 	unknownFields                protoimpl.UnknownFields
 	sizeCache                    protoimpl.SizeCache
 }
@@ -2440,6 +2508,329 @@ func (x *KnowledgeSnapshot) GetBudgetCharges() *KnowledgeSnapshotBudgetCharges {
 	return nil
 }
 
+func (x *KnowledgeSnapshot) GetTenantCatalogStateToken() []byte {
+	if x != nil {
+		return x.TenantCatalogStateToken
+	}
+	return nil
+}
+
+// KnowledgeSnapshotRef is the bounded, definition-free identity retained by
+// generic search lifecycle records. Absence means knowledge resolution was
+// disabled for the attempt; a present reference with object_count zero is an
+// enabled, canonically empty knowledge snapshot.
+type KnowledgeSnapshotRef struct {
+	state                        protoimpl.MessageState `protogen:"open.v1"`
+	SnapshotSha256               []byte                 `protobuf:"bytes,1,opt,name=snapshot_sha256,json=snapshotSha256,proto3" json:"snapshot_sha256,omitempty"`
+	TenantCatalogRevision        uint64                 `protobuf:"varint,2,opt,name=tenant_catalog_revision,json=tenantCatalogRevision,proto3" json:"tenant_catalog_revision,omitempty"`
+	TenantCatalogStateToken      []byte                 `protobuf:"bytes,3,opt,name=tenant_catalog_state_token,json=tenantCatalogStateToken,proto3" json:"tenant_catalog_state_token,omitempty"`
+	ObjectCount                  uint32                 `protobuf:"varint,4,opt,name=object_count,json=objectCount,proto3" json:"object_count,omitempty"`
+	CompilerCompatibilityVersion string                 `protobuf:"bytes,5,opt,name=compiler_compatibility_version,json=compilerCompatibilityVersion,proto3" json:"compiler_compatibility_version,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
+}
+
+func (x *KnowledgeSnapshotRef) Reset() {
+	*x = KnowledgeSnapshotRef{}
+	mi := &file_open_splunk_v1_knowledge_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KnowledgeSnapshotRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KnowledgeSnapshotRef) ProtoMessage() {}
+
+func (x *KnowledgeSnapshotRef) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_knowledge_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KnowledgeSnapshotRef.ProtoReflect.Descriptor instead.
+func (*KnowledgeSnapshotRef) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_knowledge_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *KnowledgeSnapshotRef) GetSnapshotSha256() []byte {
+	if x != nil {
+		return x.SnapshotSha256
+	}
+	return nil
+}
+
+func (x *KnowledgeSnapshotRef) GetTenantCatalogRevision() uint64 {
+	if x != nil {
+		return x.TenantCatalogRevision
+	}
+	return 0
+}
+
+func (x *KnowledgeSnapshotRef) GetTenantCatalogStateToken() []byte {
+	if x != nil {
+		return x.TenantCatalogStateToken
+	}
+	return nil
+}
+
+func (x *KnowledgeSnapshotRef) GetObjectCount() uint32 {
+	if x != nil {
+		return x.ObjectCount
+	}
+	return 0
+}
+
+func (x *KnowledgeSnapshotRef) GetCompilerCompatibilityVersion() string {
+	if x != nil {
+		return x.CompilerCompatibilityVersion
+	}
+	return ""
+}
+
+// KnowledgeSnapshotAuthorizedObjectSummary is current-policy-authorized
+// diagnostic identity only. It never carries a definition body, selector,
+// dependency, digest, or compiler output.
+type KnowledgeSnapshotAuthorizedObjectSummary struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	KnowledgeObjectId string                 `protobuf:"bytes,1,opt,name=knowledge_object_id,json=knowledgeObjectId,proto3" json:"knowledge_object_id,omitempty"`
+	Version           uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+	Name              string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *KnowledgeSnapshotAuthorizedObjectSummary) Reset() {
+	*x = KnowledgeSnapshotAuthorizedObjectSummary{}
+	mi := &file_open_splunk_v1_knowledge_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KnowledgeSnapshotAuthorizedObjectSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KnowledgeSnapshotAuthorizedObjectSummary) ProtoMessage() {}
+
+func (x *KnowledgeSnapshotAuthorizedObjectSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_knowledge_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KnowledgeSnapshotAuthorizedObjectSummary.ProtoReflect.Descriptor instead.
+func (*KnowledgeSnapshotAuthorizedObjectSummary) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_knowledge_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *KnowledgeSnapshotAuthorizedObjectSummary) GetKnowledgeObjectId() string {
+	if x != nil {
+		return x.KnowledgeObjectId
+	}
+	return ""
+}
+
+func (x *KnowledgeSnapshotAuthorizedObjectSummary) GetVersion() uint64 {
+	if x != nil {
+		return x.Version
+	}
+	return 0
+}
+
+func (x *KnowledgeSnapshotAuthorizedObjectSummary) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+// KnowledgeSnapshotObjectSummary preserves canonical position and execution
+// type while allowing response projections to remove stale object identity.
+type KnowledgeSnapshotObjectSummary struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ResolutionOrdinal uint32                 `protobuf:"varint,1,opt,name=resolution_ordinal,json=resolutionOrdinal,proto3" json:"resolution_ordinal,omitempty"`
+	ObjectType        KnowledgeObjectType    `protobuf:"varint,2,opt,name=object_type,json=objectType,proto3,enum=open_splunk.v1.KnowledgeObjectType" json:"object_type,omitempty"`
+	Stage             KnowledgeSearchStage   `protobuf:"varint,3,opt,name=stage,proto3,enum=open_splunk.v1.KnowledgeSearchStage" json:"stage,omitempty"`
+	// Types that are valid to be assigned to Disclosure:
+	//
+	//	*KnowledgeSnapshotObjectSummary_AuthorizedObject
+	//	*KnowledgeSnapshotObjectSummary_Redacted
+	Disclosure    isKnowledgeSnapshotObjectSummary_Disclosure `protobuf_oneof:"disclosure"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KnowledgeSnapshotObjectSummary) Reset() {
+	*x = KnowledgeSnapshotObjectSummary{}
+	mi := &file_open_splunk_v1_knowledge_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KnowledgeSnapshotObjectSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KnowledgeSnapshotObjectSummary) ProtoMessage() {}
+
+func (x *KnowledgeSnapshotObjectSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_knowledge_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KnowledgeSnapshotObjectSummary.ProtoReflect.Descriptor instead.
+func (*KnowledgeSnapshotObjectSummary) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_knowledge_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *KnowledgeSnapshotObjectSummary) GetResolutionOrdinal() uint32 {
+	if x != nil {
+		return x.ResolutionOrdinal
+	}
+	return 0
+}
+
+func (x *KnowledgeSnapshotObjectSummary) GetObjectType() KnowledgeObjectType {
+	if x != nil {
+		return x.ObjectType
+	}
+	return KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED
+}
+
+func (x *KnowledgeSnapshotObjectSummary) GetStage() KnowledgeSearchStage {
+	if x != nil {
+		return x.Stage
+	}
+	return KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_UNSPECIFIED
+}
+
+func (x *KnowledgeSnapshotObjectSummary) GetDisclosure() isKnowledgeSnapshotObjectSummary_Disclosure {
+	if x != nil {
+		return x.Disclosure
+	}
+	return nil
+}
+
+func (x *KnowledgeSnapshotObjectSummary) GetAuthorizedObject() *KnowledgeSnapshotAuthorizedObjectSummary {
+	if x != nil {
+		if x, ok := x.Disclosure.(*KnowledgeSnapshotObjectSummary_AuthorizedObject); ok {
+			return x.AuthorizedObject
+		}
+	}
+	return nil
+}
+
+func (x *KnowledgeSnapshotObjectSummary) GetRedacted() bool {
+	if x != nil {
+		if x, ok := x.Disclosure.(*KnowledgeSnapshotObjectSummary_Redacted); ok {
+			return x.Redacted
+		}
+	}
+	return false
+}
+
+type isKnowledgeSnapshotObjectSummary_Disclosure interface {
+	isKnowledgeSnapshotObjectSummary_Disclosure()
+}
+
+type KnowledgeSnapshotObjectSummary_AuthorizedObject struct {
+	AuthorizedObject *KnowledgeSnapshotAuthorizedObjectSummary `protobuf:"bytes,4,opt,name=authorized_object,json=authorizedObject,proto3,oneof"`
+}
+
+type KnowledgeSnapshotObjectSummary_Redacted struct {
+	// Must be true. Identity, name, and version are structurally absent.
+	Redacted bool `protobuf:"varint,5,opt,name=redacted,proto3,oneof"`
+}
+
+func (*KnowledgeSnapshotObjectSummary_AuthorizedObject) isKnowledgeSnapshotObjectSummary_Disclosure() {
+}
+
+func (*KnowledgeSnapshotObjectSummary_Redacted) isKnowledgeSnapshotObjectSummary_Disclosure() {}
+
+// KnowledgeSnapshotSummary carries at most the canonical first 64 object
+// summaries. object_count in ref is always the exact total; objects_truncated
+// is true exactly when the retained prefix is shorter than that total.
+type KnowledgeSnapshotSummary struct {
+	state            protoimpl.MessageState            `protogen:"open.v1"`
+	Ref              *KnowledgeSnapshotRef             `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
+	Objects          []*KnowledgeSnapshotObjectSummary `protobuf:"bytes,2,rep,name=objects,proto3" json:"objects,omitempty"`
+	ObjectsTruncated bool                              `protobuf:"varint,3,opt,name=objects_truncated,json=objectsTruncated,proto3" json:"objects_truncated,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *KnowledgeSnapshotSummary) Reset() {
+	*x = KnowledgeSnapshotSummary{}
+	mi := &file_open_splunk_v1_knowledge_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KnowledgeSnapshotSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KnowledgeSnapshotSummary) ProtoMessage() {}
+
+func (x *KnowledgeSnapshotSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_open_splunk_v1_knowledge_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KnowledgeSnapshotSummary.ProtoReflect.Descriptor instead.
+func (*KnowledgeSnapshotSummary) Descriptor() ([]byte, []int) {
+	return file_open_splunk_v1_knowledge_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *KnowledgeSnapshotSummary) GetRef() *KnowledgeSnapshotRef {
+	if x != nil {
+		return x.Ref
+	}
+	return nil
+}
+
+func (x *KnowledgeSnapshotSummary) GetObjects() []*KnowledgeSnapshotObjectSummary {
+	if x != nil {
+		return x.Objects
+	}
+	return nil
+}
+
+func (x *KnowledgeSnapshotSummary) GetObjectsTruncated() bool {
+	if x != nil {
+		return x.ObjectsTruncated
+	}
+	return false
+}
+
 var File_open_splunk_v1_knowledge_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
@@ -2462,10 +2853,10 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\foutput_field\x18\x02 \x01(\tR\voutputField\"\xb2\x02\n" +
 	"\x19FieldExtractionDefinition\x12\x1f\n" +
 	"\vinput_field\x18\x01 \x01(\tR\n" +
-	"inputField\x12F\n" +
+	"inputField\x12Y\n" +
+	"\x12overwrite_behavior\x18\x04 \x01(\x0e2*.open_splunk.v1.KnowledgeOverwriteBehaviorR\x11overwriteBehavior\x12F\n" +
 	"\x05regex\x18\x02 \x01(\v2..open_splunk.v1.RegexFieldExtractionDefinitionH\x00R\x05regex\x12C\n" +
-	"\x04json\x18\x03 \x01(\v2-.open_splunk.v1.JsonFieldExtractionDefinitionH\x00R\x04json\x12Y\n" +
-	"\x12overwrite_behavior\x18\x04 \x01(\x0e2*.open_splunk.v1.KnowledgeOverwriteBehaviorR\x11overwriteBehaviorB\f\n" +
+	"\x04json\x18\x03 \x01(\v2-.open_splunk.v1.JsonFieldExtractionDefinitionH\x00R\x04jsonB\f\n" +
 	"\n" +
 	"extraction\"\xc1\x01\n" +
 	"\x14FieldAliasDefinition\x12!\n" +
@@ -2490,7 +2881,7 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"fieldAlias\x12V\n" +
 	"\x10calculated_field\x18\f \x01(\v2).open_splunk.v1.CalculatedFieldDefinitionH\x00R\x0fcalculatedFieldB\x06\n" +
 	"\x04bodyB\x0e\n" +
-	"\f_description\"\xc3\x05\n" +
+	"\f_description\"\xb5\a\n" +
 	"\x0fKnowledgeObject\x12.\n" +
 	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x15\n" +
@@ -2512,8 +2903,15 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12@\n" +
 	"\vdisabled_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampH\x00R\n" +
-	"disabledAt\x88\x01\x01B\x0e\n" +
-	"\f_disabled_at\"\x98\x01\n" +
+	"disabledAt\x88\x01\x01\x12F\n" +
+	"\x0equarantined_at\x18\x0f \x01(\v2\x1a.google.protobuf.TimestampH\x01R\rquarantinedAt\x88\x01\x01\x12>\n" +
+	"\n" +
+	"deleted_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampH\x02R\tdeletedAt\x88\x01\x01\x120\n" +
+	"\x11quarantine_reason\x18\x11 \x01(\tH\x03R\x10quarantineReason\x88\x01\x01B\x0e\n" +
+	"\f_disabled_atB\x11\n" +
+	"\x0f_quarantined_atB\r\n" +
+	"\v_deleted_atB\x14\n" +
+	"\x12_quarantine_reason\"\x98\x01\n" +
 	"\x1fKnowledgeObjectVersionReference\x12.\n" +
 	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12+\n" +
@@ -2613,7 +3011,7 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\x13regex_capture_bytes\x18\f \x01(\x04R\x11regexCaptureBytes\x12-\n" +
 	"\x12scalar_expressions\x18\r \x01(\rR\x11scalarExpressions\x126\n" +
 	"\x17scalar_expression_nodes\x18\x0e \x01(\rR\x15scalarExpressionNodes\x12.\n" +
-	"\x13generated_sql_bytes\x18\x0f \x01(\x04R\x11generatedSqlBytes\"\x8f\a\n" +
+	"\x13generated_sql_bytes\x18\x0f \x01(\x04R\x11generatedSqlBytes\"\xcc\a\n" +
 	"\x11KnowledgeSnapshot\x12%\n" +
 	"\x0eformat_version\x18\x01 \x01(\rR\rformatVersion\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12!\n" +
@@ -2630,8 +3028,32 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\x1ceffective_authorized_indexes\x18\f \x03(\tR\x1aeffectiveAuthorizedIndexes\x12A\n" +
 	"\ashadows\x18\r \x03(\v2'.open_splunk.v1.KnowledgeSnapshotShadowR\ashadows\x12D\n" +
 	"\bwarnings\x18\x0e \x03(\v2(.open_splunk.v1.KnowledgeSnapshotWarningR\bwarnings\x12U\n" +
-	"\x0ebudget_charges\x18\x0f \x01(\v2..open_splunk.v1.KnowledgeSnapshotBudgetChargesR\rbudgetChargesB\x17\n" +
-	"\x15_app_catalog_revision*\xbb\x01\n" +
+	"\x0ebudget_charges\x18\x0f \x01(\v2..open_splunk.v1.KnowledgeSnapshotBudgetChargesR\rbudgetCharges\x12;\n" +
+	"\x1atenant_catalog_state_token\x18\x10 \x01(\fR\x17tenantCatalogStateTokenB\x17\n" +
+	"\x15_app_catalog_revision\"\x9d\x02\n" +
+	"\x14KnowledgeSnapshotRef\x12'\n" +
+	"\x0fsnapshot_sha256\x18\x01 \x01(\fR\x0esnapshotSha256\x126\n" +
+	"\x17tenant_catalog_revision\x18\x02 \x01(\x04R\x15tenantCatalogRevision\x12;\n" +
+	"\x1atenant_catalog_state_token\x18\x03 \x01(\fR\x17tenantCatalogStateToken\x12!\n" +
+	"\fobject_count\x18\x04 \x01(\rR\vobjectCount\x12D\n" +
+	"\x1ecompiler_compatibility_version\x18\x05 \x01(\tR\x1ccompilerCompatibilityVersion\"\x88\x01\n" +
+	"(KnowledgeSnapshotAuthorizedObjectSummary\x12.\n" +
+	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\"\xe6\x02\n" +
+	"\x1eKnowledgeSnapshotObjectSummary\x12-\n" +
+	"\x12resolution_ordinal\x18\x01 \x01(\rR\x11resolutionOrdinal\x12D\n" +
+	"\vobject_type\x18\x02 \x01(\x0e2#.open_splunk.v1.KnowledgeObjectTypeR\n" +
+	"objectType\x12:\n" +
+	"\x05stage\x18\x03 \x01(\x0e2$.open_splunk.v1.KnowledgeSearchStageR\x05stage\x12g\n" +
+	"\x11authorized_object\x18\x04 \x01(\v28.open_splunk.v1.KnowledgeSnapshotAuthorizedObjectSummaryH\x00R\x10authorizedObject\x12\x1c\n" +
+	"\bredacted\x18\x05 \x01(\bH\x00R\bredactedB\f\n" +
+	"\n" +
+	"disclosure\"\xc9\x01\n" +
+	"\x18KnowledgeSnapshotSummary\x126\n" +
+	"\x03ref\x18\x01 \x01(\v2$.open_splunk.v1.KnowledgeSnapshotRefR\x03ref\x12H\n" +
+	"\aobjects\x18\x02 \x03(\v2..open_splunk.v1.KnowledgeSnapshotObjectSummaryR\aobjects\x12+\n" +
+	"\x11objects_truncated\x18\x03 \x01(\bR\x10objectsTruncated*\xbb\x01\n" +
 	"\x13KnowledgeObjectType\x12%\n" +
 	"!KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED\x10\x00\x12*\n" +
 	"&KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION\x10\x01\x12%\n" +
@@ -2681,41 +3103,45 @@ func file_open_splunk_v1_knowledge_proto_rawDescGZIP() []byte {
 }
 
 var file_open_splunk_v1_knowledge_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
-var file_open_splunk_v1_knowledge_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_open_splunk_v1_knowledge_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_open_splunk_v1_knowledge_proto_goTypes = []any{
-	(KnowledgeObjectType)(0),                     // 0: open_splunk.v1.KnowledgeObjectType
-	(KnowledgeObjectState)(0),                    // 1: open_splunk.v1.KnowledgeObjectState
-	(KnowledgeSearchStage)(0),                    // 2: open_splunk.v1.KnowledgeSearchStage
-	(KnowledgeSelectorMatchKind)(0),              // 3: open_splunk.v1.KnowledgeSelectorMatchKind
-	(KnowledgeOverwriteBehavior)(0),              // 4: open_splunk.v1.KnowledgeOverwriteBehavior
-	(KnowledgeDependencyRole)(0),                 // 5: open_splunk.v1.KnowledgeDependencyRole
-	(KnowledgeSnapshotWarningKind)(0),            // 6: open_splunk.v1.KnowledgeSnapshotWarningKind
-	(*KnowledgeSelectorPattern)(nil),             // 7: open_splunk.v1.KnowledgeSelectorPattern
-	(*KnowledgeSelector)(nil),                    // 8: open_splunk.v1.KnowledgeSelector
-	(*RegexFieldExtractionDefinition)(nil),       // 9: open_splunk.v1.RegexFieldExtractionDefinition
-	(*JsonFieldExtractionDefinition)(nil),        // 10: open_splunk.v1.JsonFieldExtractionDefinition
-	(*FieldExtractionDefinition)(nil),            // 11: open_splunk.v1.FieldExtractionDefinition
-	(*FieldAliasDefinition)(nil),                 // 12: open_splunk.v1.FieldAliasDefinition
-	(*CalculatedFieldDefinition)(nil),            // 13: open_splunk.v1.CalculatedFieldDefinition
-	(*KnowledgeObjectDefinition)(nil),            // 14: open_splunk.v1.KnowledgeObjectDefinition
-	(*KnowledgeObject)(nil),                      // 15: open_splunk.v1.KnowledgeObject
-	(*KnowledgeObjectVersionReference)(nil),      // 16: open_splunk.v1.KnowledgeObjectVersionReference
-	(*KnowledgeLookupAssetVersionReference)(nil), // 17: open_splunk.v1.KnowledgeLookupAssetVersionReference
-	(*KnowledgeDependencyTarget)(nil),            // 18: open_splunk.v1.KnowledgeDependencyTarget
-	(*KnowledgeObjectDependency)(nil),            // 19: open_splunk.v1.KnowledgeObjectDependency
-	(*KnowledgeAuthoredProvenance)(nil),          // 20: open_splunk.v1.KnowledgeAuthoredProvenance
-	(*KnowledgeAuthorizedObjectProvenance)(nil),  // 21: open_splunk.v1.KnowledgeAuthorizedObjectProvenance
-	(*KnowledgeRedactedObjectProvenance)(nil),    // 22: open_splunk.v1.KnowledgeRedactedObjectProvenance
-	(*KnowledgeProvenance)(nil),                  // 23: open_splunk.v1.KnowledgeProvenance
-	(*KnowledgeSnapshotObject)(nil),              // 24: open_splunk.v1.KnowledgeSnapshotObject
-	(*KnowledgeSnapshotLookupAsset)(nil),         // 25: open_splunk.v1.KnowledgeSnapshotLookupAsset
-	(*KnowledgeSnapshotShadow)(nil),              // 26: open_splunk.v1.KnowledgeSnapshotShadow
-	(*KnowledgeSnapshotWarning)(nil),             // 27: open_splunk.v1.KnowledgeSnapshotWarning
-	(*KnowledgeSnapshotBudgetCharges)(nil),       // 28: open_splunk.v1.KnowledgeSnapshotBudgetCharges
-	(*KnowledgeSnapshot)(nil),                    // 29: open_splunk.v1.KnowledgeSnapshot
-	(SharingScope)(0),                            // 30: open_splunk.v1.SharingScope
-	(*timestamppb.Timestamp)(nil),                // 31: google.protobuf.Timestamp
-	(*SourceRange)(nil),                          // 32: open_splunk.v1.SourceRange
+	(KnowledgeObjectType)(0),                         // 0: open_splunk.v1.KnowledgeObjectType
+	(KnowledgeObjectState)(0),                        // 1: open_splunk.v1.KnowledgeObjectState
+	(KnowledgeSearchStage)(0),                        // 2: open_splunk.v1.KnowledgeSearchStage
+	(KnowledgeSelectorMatchKind)(0),                  // 3: open_splunk.v1.KnowledgeSelectorMatchKind
+	(KnowledgeOverwriteBehavior)(0),                  // 4: open_splunk.v1.KnowledgeOverwriteBehavior
+	(KnowledgeDependencyRole)(0),                     // 5: open_splunk.v1.KnowledgeDependencyRole
+	(KnowledgeSnapshotWarningKind)(0),                // 6: open_splunk.v1.KnowledgeSnapshotWarningKind
+	(*KnowledgeSelectorPattern)(nil),                 // 7: open_splunk.v1.KnowledgeSelectorPattern
+	(*KnowledgeSelector)(nil),                        // 8: open_splunk.v1.KnowledgeSelector
+	(*RegexFieldExtractionDefinition)(nil),           // 9: open_splunk.v1.RegexFieldExtractionDefinition
+	(*JsonFieldExtractionDefinition)(nil),            // 10: open_splunk.v1.JsonFieldExtractionDefinition
+	(*FieldExtractionDefinition)(nil),                // 11: open_splunk.v1.FieldExtractionDefinition
+	(*FieldAliasDefinition)(nil),                     // 12: open_splunk.v1.FieldAliasDefinition
+	(*CalculatedFieldDefinition)(nil),                // 13: open_splunk.v1.CalculatedFieldDefinition
+	(*KnowledgeObjectDefinition)(nil),                // 14: open_splunk.v1.KnowledgeObjectDefinition
+	(*KnowledgeObject)(nil),                          // 15: open_splunk.v1.KnowledgeObject
+	(*KnowledgeObjectVersionReference)(nil),          // 16: open_splunk.v1.KnowledgeObjectVersionReference
+	(*KnowledgeLookupAssetVersionReference)(nil),     // 17: open_splunk.v1.KnowledgeLookupAssetVersionReference
+	(*KnowledgeDependencyTarget)(nil),                // 18: open_splunk.v1.KnowledgeDependencyTarget
+	(*KnowledgeObjectDependency)(nil),                // 19: open_splunk.v1.KnowledgeObjectDependency
+	(*KnowledgeAuthoredProvenance)(nil),              // 20: open_splunk.v1.KnowledgeAuthoredProvenance
+	(*KnowledgeAuthorizedObjectProvenance)(nil),      // 21: open_splunk.v1.KnowledgeAuthorizedObjectProvenance
+	(*KnowledgeRedactedObjectProvenance)(nil),        // 22: open_splunk.v1.KnowledgeRedactedObjectProvenance
+	(*KnowledgeProvenance)(nil),                      // 23: open_splunk.v1.KnowledgeProvenance
+	(*KnowledgeSnapshotObject)(nil),                  // 24: open_splunk.v1.KnowledgeSnapshotObject
+	(*KnowledgeSnapshotLookupAsset)(nil),             // 25: open_splunk.v1.KnowledgeSnapshotLookupAsset
+	(*KnowledgeSnapshotShadow)(nil),                  // 26: open_splunk.v1.KnowledgeSnapshotShadow
+	(*KnowledgeSnapshotWarning)(nil),                 // 27: open_splunk.v1.KnowledgeSnapshotWarning
+	(*KnowledgeSnapshotBudgetCharges)(nil),           // 28: open_splunk.v1.KnowledgeSnapshotBudgetCharges
+	(*KnowledgeSnapshot)(nil),                        // 29: open_splunk.v1.KnowledgeSnapshot
+	(*KnowledgeSnapshotRef)(nil),                     // 30: open_splunk.v1.KnowledgeSnapshotRef
+	(*KnowledgeSnapshotAuthorizedObjectSummary)(nil), // 31: open_splunk.v1.KnowledgeSnapshotAuthorizedObjectSummary
+	(*KnowledgeSnapshotObjectSummary)(nil),           // 32: open_splunk.v1.KnowledgeSnapshotObjectSummary
+	(*KnowledgeSnapshotSummary)(nil),                 // 33: open_splunk.v1.KnowledgeSnapshotSummary
+	(SharingScope)(0),                                // 34: open_splunk.v1.SharingScope
+	(*timestamppb.Timestamp)(nil),                    // 35: google.protobuf.Timestamp
+	(*SourceRange)(nil),                              // 36: open_splunk.v1.SourceRange
 }
 var file_open_splunk_v1_knowledge_proto_depIdxs = []int32{
 	3,  // 0: open_splunk.v1.KnowledgeSelectorPattern.match_kind:type_name -> open_splunk.v1.KnowledgeSelectorMatchKind
@@ -2723,57 +3149,64 @@ var file_open_splunk_v1_knowledge_proto_depIdxs = []int32{
 	7,  // 2: open_splunk.v1.KnowledgeSelector.host_patterns:type_name -> open_splunk.v1.KnowledgeSelectorPattern
 	7,  // 3: open_splunk.v1.KnowledgeSelector.source_patterns:type_name -> open_splunk.v1.KnowledgeSelectorPattern
 	7,  // 4: open_splunk.v1.KnowledgeSelector.sourcetype_patterns:type_name -> open_splunk.v1.KnowledgeSelectorPattern
-	9,  // 5: open_splunk.v1.FieldExtractionDefinition.regex:type_name -> open_splunk.v1.RegexFieldExtractionDefinition
-	10, // 6: open_splunk.v1.FieldExtractionDefinition.json:type_name -> open_splunk.v1.JsonFieldExtractionDefinition
-	4,  // 7: open_splunk.v1.FieldExtractionDefinition.overwrite_behavior:type_name -> open_splunk.v1.KnowledgeOverwriteBehavior
+	4,  // 5: open_splunk.v1.FieldExtractionDefinition.overwrite_behavior:type_name -> open_splunk.v1.KnowledgeOverwriteBehavior
+	9,  // 6: open_splunk.v1.FieldExtractionDefinition.regex:type_name -> open_splunk.v1.RegexFieldExtractionDefinition
+	10, // 7: open_splunk.v1.FieldExtractionDefinition.json:type_name -> open_splunk.v1.JsonFieldExtractionDefinition
 	4,  // 8: open_splunk.v1.FieldAliasDefinition.overwrite_behavior:type_name -> open_splunk.v1.KnowledgeOverwriteBehavior
 	4,  // 9: open_splunk.v1.CalculatedFieldDefinition.overwrite_behavior:type_name -> open_splunk.v1.KnowledgeOverwriteBehavior
-	30, // 10: open_splunk.v1.KnowledgeObjectDefinition.sharing_scope:type_name -> open_splunk.v1.SharingScope
+	34, // 10: open_splunk.v1.KnowledgeObjectDefinition.sharing_scope:type_name -> open_splunk.v1.SharingScope
 	8,  // 11: open_splunk.v1.KnowledgeObjectDefinition.selector:type_name -> open_splunk.v1.KnowledgeSelector
 	11, // 12: open_splunk.v1.KnowledgeObjectDefinition.field_extraction:type_name -> open_splunk.v1.FieldExtractionDefinition
 	12, // 13: open_splunk.v1.KnowledgeObjectDefinition.field_alias:type_name -> open_splunk.v1.FieldAliasDefinition
 	13, // 14: open_splunk.v1.KnowledgeObjectDefinition.calculated_field:type_name -> open_splunk.v1.CalculatedFieldDefinition
 	0,  // 15: open_splunk.v1.KnowledgeObject.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
-	30, // 16: open_splunk.v1.KnowledgeObject.sharing_scope:type_name -> open_splunk.v1.SharingScope
+	34, // 16: open_splunk.v1.KnowledgeObject.sharing_scope:type_name -> open_splunk.v1.SharingScope
 	1,  // 17: open_splunk.v1.KnowledgeObject.state:type_name -> open_splunk.v1.KnowledgeObjectState
 	14, // 18: open_splunk.v1.KnowledgeObject.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
-	31, // 19: open_splunk.v1.KnowledgeObject.created_at:type_name -> google.protobuf.Timestamp
-	31, // 20: open_splunk.v1.KnowledgeObject.updated_at:type_name -> google.protobuf.Timestamp
-	31, // 21: open_splunk.v1.KnowledgeObject.disabled_at:type_name -> google.protobuf.Timestamp
-	16, // 22: open_splunk.v1.KnowledgeDependencyTarget.object:type_name -> open_splunk.v1.KnowledgeObjectVersionReference
-	17, // 23: open_splunk.v1.KnowledgeDependencyTarget.lookup_asset:type_name -> open_splunk.v1.KnowledgeLookupAssetVersionReference
-	16, // 24: open_splunk.v1.KnowledgeObjectDependency.source:type_name -> open_splunk.v1.KnowledgeObjectVersionReference
-	18, // 25: open_splunk.v1.KnowledgeObjectDependency.target:type_name -> open_splunk.v1.KnowledgeDependencyTarget
-	5,  // 26: open_splunk.v1.KnowledgeObjectDependency.role:type_name -> open_splunk.v1.KnowledgeDependencyRole
-	2,  // 27: open_splunk.v1.KnowledgeObjectDependency.source_stage:type_name -> open_splunk.v1.KnowledgeSearchStage
-	2,  // 28: open_splunk.v1.KnowledgeObjectDependency.target_stage:type_name -> open_splunk.v1.KnowledgeSearchStage
-	32, // 29: open_splunk.v1.KnowledgeAuthoredProvenance.source_range:type_name -> open_splunk.v1.SourceRange
-	0,  // 30: open_splunk.v1.KnowledgeAuthorizedObjectProvenance.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
-	2,  // 31: open_splunk.v1.KnowledgeAuthorizedObjectProvenance.stage:type_name -> open_splunk.v1.KnowledgeSearchStage
-	0,  // 32: open_splunk.v1.KnowledgeRedactedObjectProvenance.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
-	2,  // 33: open_splunk.v1.KnowledgeRedactedObjectProvenance.stage:type_name -> open_splunk.v1.KnowledgeSearchStage
-	20, // 34: open_splunk.v1.KnowledgeProvenance.authored:type_name -> open_splunk.v1.KnowledgeAuthoredProvenance
-	21, // 35: open_splunk.v1.KnowledgeProvenance.authorized_object:type_name -> open_splunk.v1.KnowledgeAuthorizedObjectProvenance
-	22, // 36: open_splunk.v1.KnowledgeProvenance.redacted_object:type_name -> open_splunk.v1.KnowledgeRedactedObjectProvenance
-	2,  // 37: open_splunk.v1.KnowledgeSnapshotObject.stage:type_name -> open_splunk.v1.KnowledgeSearchStage
-	0,  // 38: open_splunk.v1.KnowledgeSnapshotObject.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
-	30, // 39: open_splunk.v1.KnowledgeSnapshotObject.sharing_scope:type_name -> open_splunk.v1.SharingScope
-	14, // 40: open_splunk.v1.KnowledgeSnapshotObject.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
-	17, // 41: open_splunk.v1.KnowledgeSnapshotLookupAsset.asset:type_name -> open_splunk.v1.KnowledgeLookupAssetVersionReference
-	0,  // 42: open_splunk.v1.KnowledgeSnapshotShadow.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
-	30, // 43: open_splunk.v1.KnowledgeSnapshotShadow.sharing_scope:type_name -> open_splunk.v1.SharingScope
-	6,  // 44: open_splunk.v1.KnowledgeSnapshotWarning.kind:type_name -> open_splunk.v1.KnowledgeSnapshotWarningKind
-	24, // 45: open_splunk.v1.KnowledgeSnapshot.objects:type_name -> open_splunk.v1.KnowledgeSnapshotObject
-	19, // 46: open_splunk.v1.KnowledgeSnapshot.dependencies:type_name -> open_splunk.v1.KnowledgeObjectDependency
-	25, // 47: open_splunk.v1.KnowledgeSnapshot.lookup_assets:type_name -> open_splunk.v1.KnowledgeSnapshotLookupAsset
-	26, // 48: open_splunk.v1.KnowledgeSnapshot.shadows:type_name -> open_splunk.v1.KnowledgeSnapshotShadow
-	27, // 49: open_splunk.v1.KnowledgeSnapshot.warnings:type_name -> open_splunk.v1.KnowledgeSnapshotWarning
-	28, // 50: open_splunk.v1.KnowledgeSnapshot.budget_charges:type_name -> open_splunk.v1.KnowledgeSnapshotBudgetCharges
-	51, // [51:51] is the sub-list for method output_type
-	51, // [51:51] is the sub-list for method input_type
-	51, // [51:51] is the sub-list for extension type_name
-	51, // [51:51] is the sub-list for extension extendee
-	0,  // [0:51] is the sub-list for field type_name
+	35, // 19: open_splunk.v1.KnowledgeObject.created_at:type_name -> google.protobuf.Timestamp
+	35, // 20: open_splunk.v1.KnowledgeObject.updated_at:type_name -> google.protobuf.Timestamp
+	35, // 21: open_splunk.v1.KnowledgeObject.disabled_at:type_name -> google.protobuf.Timestamp
+	35, // 22: open_splunk.v1.KnowledgeObject.quarantined_at:type_name -> google.protobuf.Timestamp
+	35, // 23: open_splunk.v1.KnowledgeObject.deleted_at:type_name -> google.protobuf.Timestamp
+	16, // 24: open_splunk.v1.KnowledgeDependencyTarget.object:type_name -> open_splunk.v1.KnowledgeObjectVersionReference
+	17, // 25: open_splunk.v1.KnowledgeDependencyTarget.lookup_asset:type_name -> open_splunk.v1.KnowledgeLookupAssetVersionReference
+	16, // 26: open_splunk.v1.KnowledgeObjectDependency.source:type_name -> open_splunk.v1.KnowledgeObjectVersionReference
+	18, // 27: open_splunk.v1.KnowledgeObjectDependency.target:type_name -> open_splunk.v1.KnowledgeDependencyTarget
+	5,  // 28: open_splunk.v1.KnowledgeObjectDependency.role:type_name -> open_splunk.v1.KnowledgeDependencyRole
+	2,  // 29: open_splunk.v1.KnowledgeObjectDependency.source_stage:type_name -> open_splunk.v1.KnowledgeSearchStage
+	2,  // 30: open_splunk.v1.KnowledgeObjectDependency.target_stage:type_name -> open_splunk.v1.KnowledgeSearchStage
+	36, // 31: open_splunk.v1.KnowledgeAuthoredProvenance.source_range:type_name -> open_splunk.v1.SourceRange
+	0,  // 32: open_splunk.v1.KnowledgeAuthorizedObjectProvenance.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
+	2,  // 33: open_splunk.v1.KnowledgeAuthorizedObjectProvenance.stage:type_name -> open_splunk.v1.KnowledgeSearchStage
+	0,  // 34: open_splunk.v1.KnowledgeRedactedObjectProvenance.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
+	2,  // 35: open_splunk.v1.KnowledgeRedactedObjectProvenance.stage:type_name -> open_splunk.v1.KnowledgeSearchStage
+	20, // 36: open_splunk.v1.KnowledgeProvenance.authored:type_name -> open_splunk.v1.KnowledgeAuthoredProvenance
+	21, // 37: open_splunk.v1.KnowledgeProvenance.authorized_object:type_name -> open_splunk.v1.KnowledgeAuthorizedObjectProvenance
+	22, // 38: open_splunk.v1.KnowledgeProvenance.redacted_object:type_name -> open_splunk.v1.KnowledgeRedactedObjectProvenance
+	2,  // 39: open_splunk.v1.KnowledgeSnapshotObject.stage:type_name -> open_splunk.v1.KnowledgeSearchStage
+	0,  // 40: open_splunk.v1.KnowledgeSnapshotObject.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
+	34, // 41: open_splunk.v1.KnowledgeSnapshotObject.sharing_scope:type_name -> open_splunk.v1.SharingScope
+	14, // 42: open_splunk.v1.KnowledgeSnapshotObject.definition:type_name -> open_splunk.v1.KnowledgeObjectDefinition
+	17, // 43: open_splunk.v1.KnowledgeSnapshotLookupAsset.asset:type_name -> open_splunk.v1.KnowledgeLookupAssetVersionReference
+	0,  // 44: open_splunk.v1.KnowledgeSnapshotShadow.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
+	34, // 45: open_splunk.v1.KnowledgeSnapshotShadow.sharing_scope:type_name -> open_splunk.v1.SharingScope
+	6,  // 46: open_splunk.v1.KnowledgeSnapshotWarning.kind:type_name -> open_splunk.v1.KnowledgeSnapshotWarningKind
+	24, // 47: open_splunk.v1.KnowledgeSnapshot.objects:type_name -> open_splunk.v1.KnowledgeSnapshotObject
+	19, // 48: open_splunk.v1.KnowledgeSnapshot.dependencies:type_name -> open_splunk.v1.KnowledgeObjectDependency
+	25, // 49: open_splunk.v1.KnowledgeSnapshot.lookup_assets:type_name -> open_splunk.v1.KnowledgeSnapshotLookupAsset
+	26, // 50: open_splunk.v1.KnowledgeSnapshot.shadows:type_name -> open_splunk.v1.KnowledgeSnapshotShadow
+	27, // 51: open_splunk.v1.KnowledgeSnapshot.warnings:type_name -> open_splunk.v1.KnowledgeSnapshotWarning
+	28, // 52: open_splunk.v1.KnowledgeSnapshot.budget_charges:type_name -> open_splunk.v1.KnowledgeSnapshotBudgetCharges
+	0,  // 53: open_splunk.v1.KnowledgeSnapshotObjectSummary.object_type:type_name -> open_splunk.v1.KnowledgeObjectType
+	2,  // 54: open_splunk.v1.KnowledgeSnapshotObjectSummary.stage:type_name -> open_splunk.v1.KnowledgeSearchStage
+	31, // 55: open_splunk.v1.KnowledgeSnapshotObjectSummary.authorized_object:type_name -> open_splunk.v1.KnowledgeSnapshotAuthorizedObjectSummary
+	30, // 56: open_splunk.v1.KnowledgeSnapshotSummary.ref:type_name -> open_splunk.v1.KnowledgeSnapshotRef
+	32, // 57: open_splunk.v1.KnowledgeSnapshotSummary.objects:type_name -> open_splunk.v1.KnowledgeSnapshotObjectSummary
+	58, // [58:58] is the sub-list for method output_type
+	58, // [58:58] is the sub-list for method input_type
+	58, // [58:58] is the sub-list for extension type_name
+	58, // [58:58] is the sub-list for extension extendee
+	0,  // [0:58] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_knowledge_proto_init() }
@@ -2803,13 +3236,17 @@ func file_open_splunk_v1_knowledge_proto_init() {
 	}
 	file_open_splunk_v1_knowledge_proto_msgTypes[20].OneofWrappers = []any{}
 	file_open_splunk_v1_knowledge_proto_msgTypes[22].OneofWrappers = []any{}
+	file_open_splunk_v1_knowledge_proto_msgTypes[25].OneofWrappers = []any{
+		(*KnowledgeSnapshotObjectSummary_AuthorizedObject)(nil),
+		(*KnowledgeSnapshotObjectSummary_Redacted)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_open_splunk_v1_knowledge_proto_rawDesc), len(file_open_splunk_v1_knowledge_proto_rawDesc)),
 			NumEnums:      7,
-			NumMessages:   23,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

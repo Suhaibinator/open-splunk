@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
@@ -659,17 +660,15 @@ func TestCompileNumericBinUsesExactStreamingArithmetic(t *testing.T) {
 		required   []string
 	}{
 		{
-			name:       "signed integer",
+			name:       "authored negative integer normalizes to float",
 			source:     `index=gradethis | eval latency=-11 | bin latency span=10 | table latency`,
 			output:     "latency",
-			numberType: "Int64",
+			numberType: "Float64",
 			guarded:    true,
 			required: []string{
-				`toInt128("latency")`,
-				`intDiv(`,
-				`%`,
-				`accurateCastOrNull(`,
-				`'Int64'`,
+				`floor(`,
+				`toFloat64(`,
+				`isFinite(`,
 			},
 		},
 		{
@@ -1231,12 +1230,18 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 		`"__os_timechart_prepared" AS (SELECT *, toUInt8(if("__os_tc_present" != 0, 0, arrayExists(`,
 		`"__os_timechart_classified" AS (`,
 		`"__os_timechart_canonicalized" AS (`,
-		`"__os_timechart_group_counts" AS MATERIALIZED`,
-		`"__os_timechart_top" AS MATERIALIZED`,
-		`"__os_timechart_normalization_collisions" AS (`,
-		`LIMIT 10`,
+		`"__os_timechart_group_counts" AS (`,
+		`"__os_timechart_scored" AS (`,
+		`sum(toUInt128("__os_tc_count")) OVER (PARTITION BY "__os_tc_kind", "__os_tc_label") AS "__os_tc_series_score"`,
+		`uniqExact("__os_tc_label") OVER (PARTITION BY "__os_tc_kind", if(startsWith("__os_tc_label", '_'), concat('VALUE', "__os_tc_label"), "__os_tc_label")) AS "__os_tc_collision_cardinality"`,
+		`"__os_timechart_ranked" AS (`,
+		`dense_rank() OVER (PARTITION BY "__os_tc_kind" ORDER BY "__os_tc_series_score" DESC, "__os_tc_label" ASC) AS "__os_tc_series_rank"`,
+		`"__os_timechart_collapsed" AS MATERIALIZED (`,
+		`"__os_tc_series_rank" <= 10`,
 		`sumIf("__os_tc_count", "__os_tc_kind" = 3)`,
-		`HAVING uniqExact("__os_tc_label") > 1`,
+		`maxIf("__os_tc_collision_cardinality", "__os_tc_kind" = 0) > 1`,
+		`arrayPushBack(groupArrayIf("__os_tc_encoded", "__os_tc_encoded" != ''), CAST('' AS String))`,
+		`toUInt8(ifNull("__os_timechart_bucket_maps"."__os_tc_count_map"[''], toUInt64(0)) != 0)`,
 		`concat('VALUE', "__os_tc_label")`,
 		`"__os_tc_sort_label"`,
 		`arrayMap(item -> item.3`,
@@ -1253,6 +1258,30 @@ func TestCompileTimechartUsesOneScopedScanAndPrivateWideTransport(t *testing.T) 
 	}
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("scoped storage scan occurs %d times, want once:\n%s", got, compiled.SQL)
+	}
+	for relation, want := range map[string]int{
+		`FROM "__os_timechart_group_counts"`: 1,
+		`FROM "__os_timechart_scored"`:       1,
+		`FROM "__os_timechart_ranked"`:       1,
+		`FROM "__os_timechart_collapsed"`:    2,
+	} {
+		if got := strings.Count(compiled.SQL, relation); got != want {
+			t.Fatalf("timechart relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
+		}
+	}
+	for _, removed := range []string{
+		`"__os_timechart_group_counts" AS MATERIALIZED`,
+		`"__os_timechart_checks"`,
+		`"__os_timechart_top"`,
+		`"__os_timechart_normalization_collisions"`,
+		`"__os_timechart_validation"`,
+	} {
+		if strings.Contains(compiled.SQL, removed) {
+			t.Fatalf("timechart SQL retains removed graph node %q:\n%s", removed, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("timechart materialized CTE count = %d, want collapsed only:\n%s", got, compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
@@ -2828,12 +2857,13 @@ func TestCompileEvalAssignmentsAreSequentialAndOverwriteWithoutDuplicateColumns(
 	}
 }
 
-func TestCompileEvalLiteralsRetainNativeTypesAndCalculatedIndexSemantics(t *testing.T) {
+func TestCompileEvalLiteralsUseNativeTypesExceptAuthoredSignedNumbers(t *testing.T) {
 	t.Parallel()
 
 	compiled := compileSPL(t, `index=gradethis | eval signed=-7,unsigned=18446744073709551615,ratio=1.25,ok=true,text="x" | table signed,unsigned,ratio,ok,text`)
 	for _, required := range []string{
-		`CAST(? AS Int64) AS "signed"`,
+		`[toFloat64(CAST(? AS Int64))]), 1) AS "signed"`,
+		`negate(__os_arithmetic_operand)`,
 		`CAST(? AS UInt64) AS "unsigned"`,
 		`CAST(? AS Float64) AS "ratio"`,
 		`CAST(? AS Bool) AS "ok"`,
@@ -2969,9 +2999,9 @@ func TestCompileStatsCountValuesUsesSharedCardinalityWithoutRowExpansion(t *test
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats count count(user) AS users count(user) AS users_again count(other) AS others BY service`,
+		`index=gradethis | stats count count(user) AS users count(other) AS others BY service`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again", "others"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "others"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	for _, required := range []string{
@@ -2980,7 +3010,6 @@ func TestCompileStatsCountValuesUsesSharedCardinalityWithoutRowExpansion(t *test
 		`AS "__os_measure_count_0"`,
 		`AS "__os_measure_count_1"`,
 		`toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "users"`,
-		`toUInt64(sum(toUInt128("__os_measure_count_0"))) AS "users_again"`,
 		`toUInt64(sum(toUInt128("__os_measure_count_1"))) AS "others"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
@@ -3099,8 +3128,8 @@ func TestCompileStatsCountValuesCountsStaticNullAndExactTableBoundaries(t *testi
 func TestCompileStatsDistinctCountUsesExactStringArraysWithoutRowExpansion(t *testing.T) {
 	t.Parallel()
 
-	compiled := compileSPL(t, `index=gradethis | stats count dc(user) AS users distinct_count(user) AS users_again BY service`)
-	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again"}) {
+	compiled := compileSPL(t, `index=gradethis | stats count dc(user) AS users BY service`)
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	sentinel := strconv.FormatUint(MaximumStatsDistinctValuesPerGroup+1, 10)
@@ -3115,7 +3144,6 @@ func TestCompileStatsDistinctCountUsesExactStringArraysWithoutRowExpansion(t *te
 		ExactDistinctLimitMarker,
 		UnsupportedStatsMeasureValueMarker,
 		`"__os_dc_cardinality_0" AS "users"`,
-		`"__os_dc_cardinality_0" AS "users_again"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("dc SQL missing %q:\n%s", required, compiled.SQL)
@@ -3175,9 +3203,9 @@ func TestCompileStatsValuesUsesOneBoundedExactSetWithLexicalPublication(t *testi
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats count values(user) AS users dc(user) AS user_count values(user) AS users_again BY service`,
+		`index=gradethis | stats count values(user) AS users dc(user) AS user_count BY service`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "user_count", "users_again"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "user_count"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	sentinel := strconv.FormatUint(MaximumStatsValuesPerGroup+1, 10)
@@ -3199,7 +3227,6 @@ func TestCompileStatsValuesUsesOneBoundedExactSetWithLexicalPublication(t *testi
 		StatsValuesBytesLimitMarker,
 		`"__os_sorted_exact_strings_0" AS "users"`,
 		`toUInt64(length("__os_exact_strings_0")) AS "user_count"`,
-		`"__os_sorted_exact_strings_0" AS "users_again"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("values SQL missing %q:\n%s", required, compiled.SQL)
@@ -3256,9 +3283,9 @@ func TestCompileStatsListUsesOneBoundedOrderedStateAndPreservesPipelineOrder(t *
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | sort 0 +sequence | stats count list(user) AS users list(user) AS users_again BY service`,
+		`index=gradethis | sort 0 +sequence | stats count list(user) AS users BY service`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users", "users_again"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"service", "count", "users"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	maximum := strconv.FormatUint(MaximumStatsListValuesPerGroup, 10)
@@ -3279,7 +3306,6 @@ func TestCompileStatsListUsesOneBoundedOrderedStateAndPreservesPipelineOrder(t *
 		StatsListLimitMarker,
 		StatsListBytesLimitMarker,
 		`"__os_list_strings_0" AS "users"`,
-		`"__os_list_strings_0" AS "users_again"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("list SQL missing %q:\n%s", required, compiled.SQL)
@@ -3503,7 +3529,6 @@ func TestCompileStatsValuesRejectsUnpinnedScalarMultivalueConsumers(t *testing.T
 		{name: "ordered search", source: `index=gradethis | stats values(user) AS users | search users>"alice"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `users>"alice"`},
 		{name: "sort", source: `index=gradethis | stats values(user) AS users | sort users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "dedup", source: `index=gradethis | stats values(user) AS users | dedup users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
-		{name: "stats BY", source: `index=gradethis | stats values(user) AS users | stats count BY users`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
 		{name: "replace", source: `index=gradethis | stats values(user) AS users | eval x=replace(users,"a","b")`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: `replace(users,"a","b")`},
 		{name: "tonumber", source: `index=gradethis | stats values(user) AS users | eval x=tonumber(users)`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "tonumber(users)"},
 		{name: "rex", source: `index=gradethis | stats values(user) AS users | rex field=users "(?<x>.+)"`, code: "SPL_UNSUPPORTED_MULTIVALUE_USAGE", wantText: "users"},
@@ -3687,7 +3712,7 @@ func TestCompileRejectsForgedAggregateBoundsAndReservedFieldsInput(t *testing.T)
 func TestCompileStatsNumericInputCachingPreservesPreAggregateArgumentOrder(t *testing.T) {
 	t.Parallel()
 
-	compiled := compileSPL(t, `index=gradethis | stats sum(request.amount) avg(other.amount) sum(request.amount) AS repeated`)
+	compiled := compileSPL(t, `index=gradethis | stats sum(request.amount) avg(other.amount) avg(request.amount) AS repeated`)
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
 	}
@@ -3706,9 +3731,9 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats min(metric) AS low max(metric) AS high min(metric) AS low_again`,
+		`index=gradethis | stats min(metric) AS low max(metric) AS high`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"low", "high", "low_again"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"low", "high"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 	for _, required := range []string{
@@ -3734,9 +3759,6 @@ func TestCompileStatsMinAndMaxShareOneRuntimeNormalization(t *testing.T) {
 	if strings.Count(compiled.SQL, `AS "__os_measure_extrema_0"`) != 1 ||
 		strings.Contains(compiled.SQL, `__os_measure_extrema_1`) {
 		t.Fatalf("min/max did not share one normalization for the same input:\n%s", compiled.SQL)
-	}
-	if strings.Contains(compiled.SQL, `__os_stats_extrema_type_2`) {
-		t.Fatalf("duplicate min published a duplicate stored-type state:\n%s", compiled.SQL)
 	}
 	if strings.Contains(strings.ToUpper(compiled.SQL), "ARRAY JOIN") {
 		t.Fatalf("min/max expanded event rows:\n%s", compiled.SQL)
@@ -3785,7 +3807,7 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats min(service) AS low max(service) AS high min(service) AS low_again`,
+		`index=gradethis | stats min(service) AS low max(service) AS high`,
 	)
 	for _, required := range []string{
 		`AS "__os_measure_scalar_string_0"`,
@@ -3918,17 +3940,21 @@ func TestCompileStatsScalarStringExtremaAvoidArrayLowering(t *testing.T) {
 func TestCompileStatsScalarStringExtremaMaximumMeasuresStayBounded(t *testing.T) {
 	t.Parallel()
 
+	fields := []string{"service", "host", "source", "sourcetype", "level", "message", "index", "trace_id"}
 	var source strings.Builder
 	source.WriteString(`index=gradethis | stats `)
-	for measure := 0; measure < spl.MaximumStatsMeasures; measure++ {
-		if measure > 0 {
+	for fieldIndex, field := range fields {
+		if fieldIndex > 0 {
 			source.WriteByte(' ')
 		}
-		function := "min"
-		if measure%2 != 0 {
-			function = "max"
-		}
-		fmt.Fprintf(&source, "%s(service) AS result_%d", function, measure)
+		fmt.Fprintf(
+			&source,
+			"min(%s) AS minimum_%d max(%s) AS maximum_%d",
+			field,
+			fieldIndex,
+			field,
+			fieldIndex,
+		)
 	}
 	compiled := compileSPL(t, source.String())
 	if len(compiled.OutputFields) != spl.MaximumStatsMeasures {
@@ -3938,27 +3964,14 @@ func TestCompileStatsScalarStringExtremaMaximumMeasuresStayBounded(t *testing.T)
 			spl.MaximumStatsMeasures,
 		)
 	}
-	if strings.Count(compiled.SQL, `AS "__os_measure_scalar_string_0"`) != 1 ||
-		strings.Count(compiled.SQL, `AS "__os_measure_extrema_number_0"`) != 1 ||
-		strings.Count(compiled.SQL, `AS "__os_measure_extrema_scalar_0"`) != 1 ||
-		strings.Contains(compiled.SQL, `__os_measure_extrema_scalar_1`) {
-		t.Fatalf("maximum scalar extrema measures did not share one candidate:\n%s", compiled.SQL)
+	if strings.Count(compiled.SQL, `AS "__os_measure_scalar_string_`) != len(fields) ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_number_`) != len(fields) ||
+		strings.Count(compiled.SQL, `AS "__os_measure_extrema_scalar_`) != len(fields) {
+		t.Fatalf("maximum distinct scalar extrema sources did not retain one candidate each:\n%s", compiled.SQL)
 	}
-	for _, alias := range []string{
-		`AS "__os_stats_extrema_winner_0"`,
-		`AS "__os_stats_extrema_type_0"`,
-		`AS "__os_stats_extrema_winner_1"`,
-		`AS "__os_stats_extrema_type_1"`,
-	} {
-		if strings.Count(compiled.SQL, alias) != 1 {
-			t.Fatalf("maximum scalar extrema measures did not materialize one %s:\n%s", alias, compiled.SQL)
-		}
-	}
-	if strings.Contains(compiled.SQL, `__os_stats_extrema_winner_2`) ||
-		strings.Contains(compiled.SQL, `__os_stats_extrema_type_2`) ||
-		strings.Count(compiled.SQL, "argMinOrNullIf(") != 1 ||
-		strings.Count(compiled.SQL, "argMaxOrNullIf(") != 1 {
-		t.Fatalf("maximum scalar extrema measures duplicated aggregate state:\n%s", compiled.SQL)
+	if strings.Count(compiled.SQL, "argMinOrNullIf(") != len(fields) ||
+		strings.Count(compiled.SQL, "argMaxOrNullIf(") != len(fields) {
+		t.Fatalf("maximum distinct scalar extrema sources did not retain one aggregate each:\n%s", compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d", got, want)
@@ -4152,29 +4165,43 @@ func TestCompileRejectsOversizedGeneratedSQL(t *testing.T) {
 	t.Parallel()
 
 	logical := buildPlan(t, `index=gradethis`)
-	fieldName := strings.Repeat("oversized", 1_800)
+	fieldName := strings.Repeat("x", eventfields.MaximumDynamicPathSegmentBytes)
 	field := plan.FieldRef{Name: fieldName, Path: []string{fieldName}}
-	for range 16 {
-		logical.Operators = append(logical.Operators, &plan.Filter{
-			Expression: &plan.EvalComparisonExpression{
-				Left: &plan.ScalarFieldExpression{
-					Field: field,
-				},
-				Op: plan.ComparisonOpEqual,
-				Right: &plan.ScalarLiteralExpression{
-					Value: plan.Value{
-						Kind:  plan.ValueKindInt64,
-						Int64: 1,
-					},
-				},
-			},
-		})
+	expressions := make([]plan.Expression, (maxCompiledPredicateNodes+1)/2)
+	for index := range expressions {
+		expressions[index] = &plan.ComparisonExpression{
+			Field: field,
+			Op:    plan.ComparisonOpEqual,
+			Value: plan.Value{Kind: plan.ValueKindInt64, Int64: 1},
+		}
 	}
+	for len(expressions) > 1 {
+		next := make([]plan.Expression, 0, (len(expressions)+1)/2)
+		for index := 0; index < len(expressions); index += 2 {
+			if index+1 == len(expressions) {
+				next = append(next, expressions[index])
+				continue
+			}
+			next = append(next, &plan.BooleanExpression{
+				Op:    plan.BooleanOpAnd,
+				Left:  expressions[index],
+				Right: expressions[index+1],
+			})
+		}
+		expressions = next
+	}
+	logical.Operators = append(logical.Operators, &plan.Filter{
+		Expression: expressions[0],
+	})
 	_, err := (Compiler{}).Compile(logical)
 	diagnostic := &plan.Diagnostic{}
 	ok := errors.As(err, &diagnostic)
-	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" {
-		t.Fatalf("Compile error = %#v, want SPL_QUERY_TOO_COMPLEX", err)
+	if !ok || diagnostic.Code != "SPL_QUERY_TOO_COMPLEX" ||
+		!strings.Contains(diagnostic.Message, "compiled query exceeds") {
+		t.Fatalf(
+			"Compile error = %#v, want compiled-query SPL_QUERY_TOO_COMPLEX",
+			err,
+		)
 	}
 }
 
@@ -4502,29 +4529,41 @@ func TestCompileChartUsesBoundedPivotTransport(t *testing.T) {
 		`"__os_chart_classified" AS (`,
 		`FROM "__os_chart_kinded")`,
 		`"__os_chart_canonicalized" AS (`,
-		`"__os_chart_label_totals" AS MATERIALIZED`,
-		`"__os_chart_group_counts" AS MATERIALIZED`,
-		`WHERE "__os_ch_row_eligible" != 0 GROUP BY "__os_ch_row", "__os_ch_kind", "__os_ch_encoded"`,
-		`"__os_chart_top" AS MATERIALIZED`,
-		`"__os_chart_row_domain" AS MATERIALIZED`,
-		`"__os_chart_normalization_collisions" AS (`,
-		`"__os_chart_column_check" AS (`,
-		`ORDER BY "__os_ch_count" DESC, "__os_ch_label" ASC LIMIT 10`,
-		`maxOrDefault("__os_ch_kind" = 3)`,
-		`maxOrDefault("__os_ch_row_invalid") > 0`,
-		`HAVING uniqExact("__os_ch_label") > 1`,
-		`concat('VALUE', "__os_ch_label")`,
-		`"__os_ch_sort_label"`,
-		`arrayMap(item -> item.3`,
-		`mapFromArrays(`,
+		`"__os_chart_group_counts" AS MATERIALIZED (`,
+		`max("__os_ch_row_invalid") AS "__os_ch_row_invalid", count() AS "__os_ch_count"`,
+		`GROUP BY "__os_ch_row", "__os_ch_row_eligible", "__os_ch_kind", "__os_ch_label"`,
+		`"__os_chart_label_groups" AS (`,
+		`sumIf(toUInt128("__os_ch_count"), "__os_ch_row_eligible" != 0) AS "__os_ch_series_score"`,
+		`groupArray(tuple("__os_ch_row", "__os_ch_row_eligible", "__os_ch_row_invalid", "__os_ch_count")) AS "__os_ch_row_entries"`,
+		`"__os_chart_normalized_groups" AS (`,
+		`groupArray(tuple("__os_ch_kind", "__os_ch_label", "__os_ch_series_score", "__os_ch_row_entries")) AS "__os_ch_label_records"`,
+		`toUInt8("__os_ch_kind" = 0 AND count() > 1) AS "__os_ch_collision_evidence"`,
+		`"__os_chart_authority" AS (`,
+		`arrayFlatten(groupArray("__os_ch_label_records"))`,
+		`arraySlice(arraySort(__os_ch_record -> tuple(-toInt256(__os_ch_record.3), __os_ch_record.2)`,
+		`arrayFilter(__os_ch_record -> __os_ch_record.1 = toUInt8(0) AND __os_ch_record.3 > toUInt128(0)`,
+		`"__os_chart_label_expanded" AS (`,
+		`ARRAY JOIN tupleElement("__os_ch_authority", 1) AS "__os_ch_label_record"`,
+		`"__os_chart_expanded" AS (`,
+		`ARRAY JOIN "__os_ch_row_entries" AS "__os_ch_row_entry"`,
+		`"__os_chart_collapsed" AS (`,
+		`has(__os_ch_top_label_values, __os_ch_record.2), concat('0:', __os_ch_record.2)`,
+		`toUInt64(sum(toUInt128(if("__os_ch_row_eligible" != 0 AND "__os_ch_kind" IN (0, 1), "__os_ch_count", 0)))) AS "__os_ch_collapsed_count"`,
+		`maxIf("__os_ch_row_invalid", "__os_ch_row_eligible" != 0)`,
+		`sumIf(toUInt128("__os_ch_count"), "__os_ch_kind" = 3)`,
+		`max("__os_ch_global_collision")`,
+		`"__os_chart_row_maps" AS (`,
+		`"__os_chart_row_domain" AS (`,
+		`mapFromArrays(groupArrayIf("__os_ch_encoded"`,
+		`arrayDistinct(arrayFlatten(groupArray(groupArrayIf(tuple(`,
 		`row_number() OVER (ORDER BY`,
 		`AS "` + ChartOrdinalColumn + `"`,
 		`AS "` + ChartRowColumn + `"`,
 		`AS "` + ChartNamesColumn + `"`,
 		`AS "` + ChartCountsColumn + `"`,
 		`AS "` + ChartInvalidColumn + `"`,
-		`WHERE throwIf("__os_chart_row_domain"."` + ChartOrdinalColumn + `" >= 10000, '` + ChartRowLimitMarker + `') = 0`,
-		`CAST([], 'Array(UInt64)') AS "` + ChartCountsColumn + `"`,
+		`WHERE throwIf(if("__os_ch_transport_invalid" = 0, "` + ChartOrdinalColumn + `" >= 10000, 0), '` + ChartRowLimitMarker + `') = 0`,
+		`if("__os_ch_transport_invalid" != 0, CAST([], 'Array(UInt64)'), arrayMap(`,
 		`ORDER BY "` + ChartInvalidColumn + `" DESC, "` + ChartOrdinalColumn + `" ASC`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
@@ -4540,37 +4579,59 @@ func TestCompileChartUsesBoundedPivotTransport(t *testing.T) {
 	if got := strings.Count(compiled.SQL, `FROM "open_splunk"."events"`); got != 1 {
 		t.Fatalf("scoped storage relation occurs %d times in generated SQL, want once:\n%s", got, compiled.SQL)
 	}
-	// Exactly two aggregations read the scanned rows: the one-dimensional label
-	// aggregate that chooses the column domain, then the row-keyed aggregate
-	// whose column axis is already collapsed to it. Every later stage reads one
-	// of those materialized aggregates instead of the events again.
-	if got := strings.Count(compiled.SQL, `FROM "__os_chart_canonicalized"`); got != 2 {
-		t.Fatalf("row-level aggregation occurs %d times, want twice:\n%s", got, compiled.SQL)
-	}
-	// A scalar subquery over a materialized CTE is evaluated during analysis,
-	// before the temporary table exists, so each occurrence re-runs the whole
-	// scoped scan. Every reference must be an ordinary relation reference.
-	for _, materialized := range []string{
-		`"__os_chart_label_totals"`,
-		`"__os_chart_group_counts"`,
-		`"__os_chart_top"`,
-		`"__os_chart_normalization_collisions"`,
-		`"__os_chart_column_check"`,
-		`"__os_chart_row_domain"`,
+	// The raw stream is grouped once before any label array is allocated, so the
+	// fixed chart group allowance caps every retained raw (row, label) pair.
+	for relation, want := range map[string]int{
+		`FROM "__os_chart_canonicalized"`:     1,
+		`FROM "__os_chart_group_counts"`:      1,
+		`FROM "__os_chart_label_groups"`:      1,
+		`FROM "__os_chart_normalized_groups"`: 1,
+		`FROM "__os_chart_authority"`:         1,
+		`FROM "__os_chart_label_expanded"`:    1,
+		`FROM "__os_chart_expanded"`:          1,
+		`FROM "__os_chart_collapsed"`:         1,
+		`FROM "__os_chart_row_maps"`:          1,
+		`FROM "__os_chart_row_domain"`:        1,
 	} {
-		for _, scalar := range []string{
-			"(SELECT count() FROM " + materialized,
-			"(SELECT count() FROM (SELECT 1 FROM " + materialized,
-		} {
-			if strings.Contains(compiled.SQL, scalar) {
-				t.Fatalf("chart SQL evaluates %s through a scalar subquery:\n%s", materialized, compiled.SQL)
-			}
+		if got := strings.Count(compiled.SQL, relation); got != want {
+			t.Fatalf("chart relation %q occurs %d times, want %d:\n%s", relation, got, want, compiled.SQL)
 		}
 	}
-	// The row-keyed aggregation groups on the already-encoded column domain, so
-	// its state count is rows x public series rather than rows x raw labels.
-	if strings.Contains(compiled.SQL, `count() AS "__os_ch_count" FROM "__os_chart_canonicalized" WHERE "__os_ch_row_eligible" != 0 GROUP BY "__os_ch_row", "__os_ch_kind", "__os_ch_label"`) {
-		t.Fatalf("chart SQL groups the row axis on the raw column label:\n%s", compiled.SQL)
+	if got := strings.Count(compiled.SQL, ` AS MATERIALIZED (`); got != 1 {
+		t.Fatalf("bare chart materialized CTE count = %d, want raw group counts only:\n%s", got, compiled.SQL)
+	}
+	for _, removed := range []string{
+		`"__os_chart_label_totals"`,
+		`"__os_chart_top"`,
+		`"__os_chart_grouped"`,
+		`"__os_chart_authorized"`,
+		`"__os_chart_normalization_collisions"`,
+		`"__os_chart_column_check"`,
+		`"__os_chart_validation"`,
+		`"__os_chart_scored"`,
+		`"__os_chart_ranked"`,
+		`"__os_chart_domain_rows"`,
+		`"__os_chart_checks"`,
+	} {
+		if strings.Contains(compiled.SQL, removed) {
+			t.Fatalf("bare chart retains removed graph node %q:\n%s", removed, compiled.SQL)
+		}
+	}
+	if got := strings.Count(compiled.SQL, `sumMap(`); got != 0 {
+		t.Fatalf("bare chart retains %d unbounded sumMap aggregates:\n%s", got, compiled.SQL)
+	}
+	rawGroup := `GROUP BY "__os_ch_row", "__os_ch_row_eligible", "__os_ch_kind", "__os_ch_label"`
+	groupAt := strings.Index(compiled.SQL, rawGroup)
+	firstArrayAt := strings.Index(compiled.SQL, `groupArray(`)
+	collapsedAt := strings.Index(compiled.SQL, `"__os_chart_collapsed" AS (`)
+	if groupAt < 0 || firstArrayAt <= groupAt || collapsedAt <= firstArrayAt {
+		t.Fatalf("chart arrays are not downstream of the bounded raw grouping:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL[firstArrayAt:collapsedAt], ` OVER (`) {
+		t.Fatalf("chart label authority retains a pre-collapse window:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL[firstArrayAt:collapsedAt], ` ARRAY JOIN `); got != 2 {
+		t.Fatalf("chart bounded label authority expands arrays %d times, want exactly two linear expansions:\n%s", got, compiled.SQL)
 	}
 	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 		t.Fatalf("placeholder count = %d, args = %d\nSQL: %s\nargs: %#v", got, want, compiled.SQL, compiled.Args)
@@ -4606,9 +4667,9 @@ func TestCompileChartClassifiesColumnValuesIndependentOfRowPresence(t *testing.T
 	// The atomic flag reads a signal derived from every classified input row,
 	// not only from the row-keyed aggregate.
 	for _, required := range []string{
-		`"__os_chart_column_check" AS (SELECT toUInt8(maxOrDefault("__os_ch_kind" = 3)) AS "__os_ch_column_invalid" FROM "__os_chart_label_totals")`,
-		`"__os_chart_column_check"."__os_ch_column_invalid" != 0`,
-		`CROSS JOIN "__os_chart_column_check"`,
+		`toUInt8(sumIf(toUInt128("__os_ch_count"), "__os_ch_kind" = 3) > 0) AS "__os_ch_column_invalid_evidence"`,
+		`toUInt8(max(max("__os_ch_column_invalid_evidence")) OVER () != 0) AS "__os_ch_column_invalid"`,
+		`"__os_ch_column_invalid" != 0) AS "__os_ch_transport_invalid"`,
 	} {
 		if !strings.Contains(compiled.SQL, required) {
 			t.Fatalf("chart SQL missing %q:\n%s", required, compiled.SQL)
@@ -4712,9 +4773,9 @@ func TestCompileChartRowColumnMatchesStatsGroupColumn(t *testing.T) {
 		{
 			name:         "signed row axis",
 			source:       `index=gradethis | eval offset=-3 | chart count OVER offset BY level`,
-			kind:         ChartRowKindSigned,
-			databaseType: "Int64",
-			required:     `CAST(assumeNotNull("__os_ch_row_value") AS Int64) AS "__os_ch_row"`,
+			kind:         ChartRowKindDouble,
+			databaseType: "Float64",
+			required:     `CAST(assumeNotNull("__os_ch_row_value") AS Float64) AS "__os_ch_row"`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -4767,7 +4828,7 @@ func TestCompileChartOrdersRowsLikeAutomaticSort(t *testing.T) {
 	lexical := compileSPL(t, `index=gradethis | chart count OVER path BY level`)
 	for _, required := range []string{
 		`row_number() OVER (ORDER BY arrayElement(arrayMap((__os_sort_exact_text, __os_sort_lexical_text, __os_sort_exact_null)`,
-		`if(length(toString("__os_ch_row")) <= ` +
+		`if(length(toString("__os_ch_group_row")) <= ` +
 			strconv.Itoa(MaximumExactNumericOrderingInputTextBytes),
 		`ifNull(__os_sort_lexical_text, CAST('' AS String))`,
 		`tupleElement(__os_sort_exact_key, 1) != 0`,
@@ -4781,7 +4842,7 @@ func TestCompileChartOrdersRowsLikeAutomaticSort(t *testing.T) {
 		t.Fatalf("runtime-typed chart placeholder count = %d, args = %d: %#v", got, want, lexical.Args)
 	}
 	fixed := compileSPL(t, `index=gradethis | bin severity span=10 | chart count OVER severity BY level`)
-	if !strings.Contains(fixed.SQL, `row_number() OVER (ORDER BY "__os_ch_row" ASC)`) {
+	if !strings.Contains(fixed.SQL, `row_number() OVER (ORDER BY "__os_ch_group_row" ASC)`) {
 		t.Fatalf("fixed numeric row axis is not ordered by its own value:\n%s", fixed.SQL)
 	}
 	if got, want := strings.Count(fixed.SQL, "?"), len(fixed.Args); got != want {
@@ -5034,12 +5095,12 @@ func assertFinalOrderDirections(t *testing.T, sql string, want ...string) {
 	}
 }
 
-func compileSPL(t *testing.T, source string) CompiledQuery {
+func compileSPL(t testing.TB, source string) CompiledQuery {
 	t.Helper()
 	return compileSPLWithScope(t, source, testChartScope())
 }
 
-func compileSPLWithScope(t *testing.T, source string, scope plan.Scope) CompiledQuery {
+func compileSPLWithScope(t testing.TB, source string, scope plan.Scope) CompiledQuery {
 	t.Helper()
 	logical := buildPlanWithScope(t, source, scope)
 	compiled, err := (Compiler{}).Compile(logical)
@@ -5049,12 +5110,12 @@ func compileSPLWithScope(t *testing.T, source string, scope plan.Scope) Compiled
 	return compiled
 }
 
-func buildPlan(t *testing.T, source string) *plan.Query {
+func buildPlan(t testing.TB, source string) *plan.Query {
 	t.Helper()
 	return buildPlanWithScope(t, source, testChartScope())
 }
 
-func buildPlanWithScope(t *testing.T, source string, scope plan.Scope) *plan.Query {
+func buildPlanWithScope(t testing.TB, source string, scope plan.Scope) *plan.Query {
 	t.Helper()
 	parsed, err := spl.Parse(source)
 	if err != nil {

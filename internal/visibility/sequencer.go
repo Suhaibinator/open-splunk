@@ -44,6 +44,15 @@ var (
 	// fencing for the supplied control database file. Callers must share that
 	// owner.
 	ErrOwnerExists = errors.New("visibility sequencer: database file already has a live owner")
+	// ErrHECAcknowledgmentCapacity means durable channel or acknowledgment
+	// retention is full. Pending acknowledgments are never evicted for capacity.
+	ErrHECAcknowledgmentCapacity = errors.New("visibility sequencer: HEC acknowledgment capacity reached")
+	// ErrHECRequestCapacity means the retained per-token request ledger is at
+	// its durable bound. It is distinct from channel/ACK capacity on the wire.
+	ErrHECRequestCapacity = errors.New("visibility sequencer: HEC request capacity reached")
+	// ErrHECAdmissionStale means the token purpose, version, state, expiration,
+	// profile, or acknowledgment mode changed before durable staging.
+	ErrHECAdmissionStale = errors.New("visibility sequencer: HEC admission snapshot is stale")
 )
 
 const (
@@ -57,7 +66,42 @@ const (
 	MaxPendingOutboxBytes = 256 << 20
 	// MaxPruneLimit bounds work performed by one terminal-ledger prune call.
 	MaxPruneLimit = 10_000
+	// MaxHECChannelsPerToken bounds retained channel identities for one token.
+	MaxHECChannelsPerToken = 256
+	// MaxHECAcknowledgmentsPerToken bounds retained acknowledgment rows for one
+	// token. Pending rows are never evicted to admit another request.
+	MaxHECAcknowledgmentsPerToken = 100_000
+	// MaxHECRequestsPerToken independently bounds retained HEC request rows,
+	// including requests from tokens which do not enable acknowledgment.
+	MaxHECRequestsPerToken = 100_000
+	// MaxHECAcknowledgmentsPerQuery bounds public status lookup work.
+	MaxHECAcknowledgmentsPerQuery = 1_000
+	// HECTerminalRetention is the fixed v0.1 period for indexed and failed HEC
+	// acknowledgment authority. Operational telemetry classifies rows older
+	// than this period as expired until bounded cleanup deletes them.
+	HECTerminalRetention = 24 * time.Hour
 )
+
+// HECAdmissionRequest binds one staged HEC request to its freshly revalidated
+// token snapshot and optional channel-scoped acknowledgment. TokenID is the
+// stable token record ID, never a secret, prefix, digest, or display name.
+type HECAdmissionRequest struct {
+	TenantID              string
+	TokenID               string
+	TokenVersion          uint64
+	AuthorizedIndexes     []HECIndexAuthority
+	RequestID             string
+	Acknowledgment        bool
+	AcknowledgmentChannel string
+	CreatedAt             time.Time
+}
+
+// HECIndexAuthority identifies one selected, already-normalized index policy
+// generation which must still be active and ingestion-enabled at commit.
+type HECIndexAuthority struct {
+	Name    string
+	Version uint64
+}
 
 // ReserveRequest carries the deterministic event identity and server-derived
 // metadata needed to reproduce one ClickHouse block after a restart.
@@ -79,6 +123,9 @@ type ReserveRequest struct {
 	// the legacy non-quota reservation contract.
 	QuotaAdmission   *ingestquota.Admission
 	QuotaEvaluatedAt time.Time
+	// HECAdmission, when present on a fresh reservation, is revalidated and
+	// allocated in the same SQLite transaction as quota and outbox persistence.
+	HECAdmission *HECAdmissionRequest
 }
 
 // RejectRequest carries the stable event identity and compact server-derived
@@ -121,6 +168,12 @@ type Reservation struct {
 	Outbox                []byte
 	CommittedAt           time.Time
 	RejectedAt            time.Time
+	// HECAcknowledgmentID is positive only when this Reserve call allocated the
+	// channel-scoped durable acknowledgment in the same transaction.
+	HECAcknowledgmentID uint64
+	// HECRequestSequence is the positive per-token sequence allocated in the
+	// same transaction as this fresh HEC reservation.
+	HECRequestSequence uint64
 }
 
 // PendingUsage reports durable reservations that have not reached a terminal

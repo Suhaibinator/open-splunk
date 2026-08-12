@@ -18,9 +18,10 @@ func TestCompileEvalIntegralRoundingFixedNumbersAreTypedAndAliasesNormalize(t *t
 	)
 	for _, required := range []string{
 		`ceil(CAST(? AS Float64)) AS "up"`,
-		`ceil(CAST(? AS Float64)) AS "alias"`,
-		`floor(CAST(? AS Float64)) AS "down"`,
-		`CAST(? AS Int64) AS "signed"`,
+		`[toFloat64(CAST(? AS Float64))]), 1)) AS "alias"`,
+		`[toFloat64(CAST(? AS Float64))]), 1)) AS "down"`,
+		`[toFloat64(CAST(? AS Int64))]), 1)) AS "signed"`,
+		`negate(__os_arithmetic_operand)`,
 		`CAST(? AS UInt64) AS "unsigned"`,
 		`CAST(NULL AS Nullable(Float64)) AS "absent"`,
 	} {
@@ -30,8 +31,7 @@ func TestCompileEvalIntegralRoundingFixedNumbersAreTypedAndAliasesNormalize(t *t
 	}
 	for _, argument := range []any{
 		float64(1.2),
-		float64(-1.2),
-		int64(-42),
+		int64(42),
 		uint64(math.MaxUint64),
 	} {
 		if !containsArgument(compiled.Args, argument) {

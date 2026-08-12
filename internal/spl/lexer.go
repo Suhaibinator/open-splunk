@@ -14,6 +14,8 @@ const (
 	tokenEOF
 	tokenWord
 	tokenString
+	tokenQuotedField
+	tokenScalarComposite
 	tokenPipe
 	tokenLeftParen
 	tokenRightParen
@@ -25,13 +27,25 @@ const (
 	tokenGreater
 	tokenGreaterEqual
 	tokenConcat
+	tokenPlus
+	tokenMinus
+	tokenMultiply
+	tokenDivide
+	tokenRemainder
+	tokenEqualEqual
 )
 
 type token struct {
 	kind        tokenKind
 	text        string
+	raw         string
 	quoted      bool
 	sourceRange Range
+
+	// scalarDiagnostic is deferred until a token is consumed by v0.2 scalar
+	// grammar. Base search can expand the same raw token through legacy
+	// tokenization without inheriting quoted-field escape semantics.
+	scalarDiagnostic *Diagnostic
 }
 
 type lexer struct {
@@ -39,10 +53,16 @@ type lexer struct {
 	offset int
 	line   int
 	column int
+
+	quotedFields bool
 }
 
 func lex(source string) ([]token, error) {
-	l := lexer{source: source, line: 1, column: 1}
+	return lexWithQuotedFields(source, true)
+}
+
+func lexWithQuotedFields(source string, quotedFields bool) ([]token, error) {
+	l := lexer{source: source, line: 1, column: 1, quotedFields: quotedFields}
 	tokens := make([]token, 0, 16)
 	for {
 		tok, err := l.next()
@@ -78,6 +98,9 @@ func (l *lexer) next() (token, error) {
 		return l.single(tokenComma, ",", start), nil
 	case '=':
 		l.advanceASCII()
+		if l.consumeASCII('=') {
+			return l.single(tokenEqualEqual, "==", start), nil
+		}
 		return l.single(tokenEqual, "=", start), nil
 	case '!':
 		l.advanceASCII()
@@ -98,16 +121,114 @@ func (l *lexer) next() (token, error) {
 		}
 		return l.single(tokenGreater, ">", start), nil
 	case '.':
-		if l.concatenationDotAt(l.offset) {
+		if concatenationDotAt(l.source, l.offset) {
 			l.advanceASCII()
 			return l.single(tokenConcat, ".", start), nil
 		}
 		return l.scanWord(start)
 	case '"':
 		return l.scanString(start)
+	case '\'':
+		if l.quotedFields && l.hasClosingSingleQuote() {
+			return l.scanQuotedField(start)
+		}
+		return l.scanWord(start)
 	default:
 		return l.scanWord(start)
 	}
+}
+
+// scanQuotedField decodes the deliberately small escape language used by an
+// exact scalar field reference. Single quotes are recognized only when they
+// open a token; an apostrophe inside an ordinary word (for example O'Reilly)
+// remains part of that word and preserves the legacy non-scalar grammar.
+func (l *lexer) scanQuotedField(start Position) (token, error) {
+	startOffset := l.offset
+	l.advanceASCII() // opening quote
+	var value strings.Builder
+	var deferred *Diagnostic
+	for l.offset < len(l.source) {
+		if l.source[l.offset] == '\'' {
+			l.advanceASCII()
+			return token{
+				kind:             tokenQuotedField,
+				text:             value.String(),
+				raw:              l.source[startOffset:l.offset],
+				quoted:           true,
+				sourceRange:      Range{Start: start, End: l.position()},
+				scalarDiagnostic: deferred,
+			}, nil
+		}
+		if l.source[l.offset] == '\\' {
+			escapeStart := l.position()
+			l.advanceASCII()
+			if l.offset >= len(l.source) {
+				break
+			}
+			escaped, width := utf8.DecodeRuneInString(l.source[l.offset:])
+			if escaped != '\\' && escaped != '\'' {
+				if escaped == utf8.RuneError && width == 1 {
+					l.advanceASCII()
+				} else {
+					l.advanceRune(escaped, width)
+				}
+				if deferred == nil {
+					deferred = l.diagnostic(
+						"SPL_INVALID_FIELD_QUOTE_ESCAPE",
+						"single-quoted field references support only \\\\ and \\' escapes",
+						escapeStart,
+						l.position(),
+					)
+				}
+				continue
+			}
+			value.WriteRune(escaped)
+			l.advanceRune(escaped, width)
+			continue
+		}
+		r, width := utf8.DecodeRuneInString(l.source[l.offset:])
+		if r == utf8.RuneError && width == 1 {
+			invalidStart := l.position()
+			l.advanceASCII()
+			if deferred == nil {
+				deferred = l.diagnostic(
+					"SPL_INVALID_FIELD",
+					"single-quoted field reference must contain valid UTF-8",
+					invalidStart,
+					l.position(),
+				)
+			}
+			continue
+		}
+		value.WriteRune(r)
+		l.advanceRune(r, width)
+	}
+	return token{}, l.diagnostic(
+		"SPL_UNTERMINATED_FIELD_QUOTE",
+		"unterminated single-quoted field reference",
+		start,
+		l.position(),
+	)
+}
+
+func (l *lexer) hasClosingSingleQuote() bool {
+	for offset := l.offset + 1; offset < len(l.source); {
+		if l.source[offset] == '\'' {
+			return true
+		}
+		if l.source[offset] == '\\' {
+			offset++
+			if offset >= len(l.source) {
+				return false
+			}
+			_, width := utf8.DecodeRuneInString(l.source[offset:])
+			offset += width
+			continue
+		}
+		_, width := utf8.DecodeRuneInString(l.source[offset:])
+		offset += width
+	}
+	return false
 }
 
 func (l *lexer) scanString(start Position) (token, error) {
@@ -160,24 +281,10 @@ func (l *lexer) scanString(start Position) (token, error) {
 
 func (l *lexer) scanWord(start Position) (token, error) {
 	startOffset := l.offset
-	for l.offset < len(l.source) {
-		b := l.source[l.offset]
-		if b == '.' && l.concatenationDotAt(l.offset) {
-			break
-		}
-		if isDelimiter(b) {
-			break
-		}
-		r, width := utf8.DecodeRuneInString(l.source[l.offset:])
-		if unicode.IsSpace(r) {
-			break
-		}
-		if r == utf8.RuneError && width == 1 {
-			l.advanceASCII()
-			continue
-		}
-		l.advanceRune(r, width)
-	}
+	scan := scanScalarWordBoundary(l.source, start, l.quotedFields)
+	l.offset = scan.end.Offset
+	l.line = scan.end.Line
+	l.column = scan.end.Column
 	if startOffset == l.offset {
 		l.advanceASCII()
 		return token{}, l.diagnostic(
@@ -187,7 +294,83 @@ func (l *lexer) scanWord(start Position) (token, error) {
 			l.position(),
 		)
 	}
-	return token{kind: tokenWord, text: l.source[startOffset:l.offset], sourceRange: Range{Start: start, End: l.position()}}, nil
+	kind := tokenWord
+	raw := ""
+	if scan.composite {
+		kind = tokenScalarComposite
+		raw = l.source[startOffset:l.offset]
+	}
+	return token{
+		kind:        kind,
+		text:        l.source[startOffset:l.offset],
+		raw:         raw,
+		sourceRange: Range{Start: start, End: l.position()},
+	}, nil
+}
+
+type scalarWordScan struct {
+	end       Position
+	composite bool
+}
+
+// scanScalarWordBoundary is the pure boundary scanner shared by ordinary and
+// v0.2 composite words. An operator-adjacent single quote makes the word a
+// composite and temporarily suppresses delimiter/space boundaries; legacy
+// mode never opens that quote and therefore retains its original boundary.
+func scanScalarWordBoundary(
+	source string,
+	start Position,
+	quotedFields bool,
+) scalarWordScan {
+	position := start
+	segmentStart := start.Offset
+	inQuote := false
+	composite := false
+	for position.Offset < len(source) {
+		value := source[position.Offset]
+		if inQuote {
+			switch value {
+			case '\\':
+				position = advancePositionByRune(position, '\\', 1)
+				if position.Offset < len(source) {
+					r, width := utf8.DecodeRuneInString(source[position.Offset:])
+					position = advancePositionByRune(position, r, width)
+				}
+				continue
+			case '\'':
+				position = advancePositionByRune(position, '\'', 1)
+				inQuote = false
+				segmentStart = -1
+				continue
+			}
+			r, width := utf8.DecodeRuneInString(source[position.Offset:])
+			position = advancePositionByRune(position, r, width)
+			continue
+		}
+
+		if value == '.' && concatenationDotAt(source, position.Offset) ||
+			isDelimiter(value) {
+			break
+		}
+		r, width := utf8.DecodeRuneInString(source[position.Offset:])
+		if unicode.IsSpace(r) {
+			break
+		}
+		if quotedFields && value == '\'' &&
+			position.Offset == segmentStart && position.Offset > start.Offset {
+			position = advancePositionByRune(position, '\'', 1)
+			inQuote = true
+			composite = true
+			continue
+		}
+		if _, operator := scalarOperatorToken(value); operator {
+			position = advancePositionByRune(position, r, width)
+			segmentStart = position.Offset
+			continue
+		}
+		position = advancePositionByRune(position, r, width)
+	}
+	return scalarWordScan{end: position, composite: composite}
 }
 
 // concatenationDotAt recognizes only spellings that cannot change the
@@ -196,22 +379,22 @@ func (l *lexer) scanWord(start Position) (token, error) {
 // each operator neighbors a quoted literal (with optional Unicode space).
 // Bare field-to-field concatenation must use a fully separated dot:
 // left . right.
-func (l *lexer) concatenationDotAt(offset int) bool {
-	if offset < 0 || offset >= len(l.source) || l.source[offset] != '.' {
+func concatenationDotAt(source string, offset int) bool {
+	if offset < 0 || offset >= len(source) || source[offset] != '.' {
 		return false
 	}
-	if l.quoteBeforeIgnoringSpace(offset) {
+	if quoteBeforeIgnoringSpace(source, offset) {
 		return true
 	}
-	if l.quoteAfterIgnoringSpace(offset) {
+	if quoteAfterIgnoringSpace(source, offset) {
 		return true
 	}
-	return l.dotBoundaryBefore(offset) && l.dotBoundaryAfter(offset)
+	return dotBoundaryBefore(source, offset) && dotBoundaryAfter(source, offset)
 }
 
-func (l *lexer) quoteBeforeIgnoringSpace(offset int) bool {
+func quoteBeforeIgnoringSpace(source string, offset int) bool {
 	for cursor := offset; cursor > 0; {
-		r, width := utf8.DecodeLastRuneInString(l.source[:cursor])
+		r, width := utf8.DecodeLastRuneInString(source[:cursor])
 		cursor -= width
 		if unicode.IsSpace(r) {
 			continue
@@ -221,9 +404,9 @@ func (l *lexer) quoteBeforeIgnoringSpace(offset int) bool {
 	return false
 }
 
-func (l *lexer) quoteAfterIgnoringSpace(offset int) bool {
-	for cursor := offset + 1; cursor < len(l.source); {
-		r, width := utf8.DecodeRuneInString(l.source[cursor:])
+func quoteAfterIgnoringSpace(source string, offset int) bool {
+	for cursor := offset + 1; cursor < len(source); {
+		r, width := utf8.DecodeRuneInString(source[cursor:])
 		cursor += width
 		if unicode.IsSpace(r) {
 			continue
@@ -233,22 +416,22 @@ func (l *lexer) quoteAfterIgnoringSpace(offset int) bool {
 	return false
 }
 
-func (l *lexer) dotBoundaryBefore(offset int) bool {
+func dotBoundaryBefore(source string, offset int) bool {
 	if offset == 0 {
 		return true
 	}
-	r, _ := utf8.DecodeLastRuneInString(l.source[:offset])
+	r, _ := utf8.DecodeLastRuneInString(source[:offset])
 	if unicode.IsSpace(r) {
 		return true
 	}
 	return isDelimiterRune(r)
 }
 
-func (l *lexer) dotBoundaryAfter(offset int) bool {
-	if offset+1 >= len(l.source) {
+func dotBoundaryAfter(source string, offset int) bool {
+	if offset+1 >= len(source) {
 		return true
 	}
-	r, _ := utf8.DecodeRuneInString(l.source[offset+1:])
+	r, _ := utf8.DecodeRuneInString(source[offset+1:])
 	if unicode.IsSpace(r) {
 		return true
 	}
@@ -294,24 +477,25 @@ func (l *lexer) consumeASCII(want byte) bool {
 }
 
 func (l *lexer) advanceASCII() {
-	b := l.source[l.offset]
-	l.offset++
-	if b == '\n' {
-		l.line++
-		l.column = 1
-		return
-	}
-	l.column++
+	l.advanceRune(rune(l.source[l.offset]), 1)
 }
 
 func (l *lexer) advanceRune(r rune, width int) {
-	l.offset += width
+	position := advancePositionByRune(l.position(), r, width)
+	l.offset = position.Offset
+	l.line = position.Line
+	l.column = position.Column
+}
+
+func advancePositionByRune(position Position, r rune, width int) Position {
+	position.Offset += width
 	if r == '\n' {
-		l.line++
-		l.column = 1
-		return
+		position.Line++
+		position.Column = 1
+	} else {
+		position.Column++
 	}
-	l.column++
+	return position
 }
 
 func (l *lexer) position() Position {

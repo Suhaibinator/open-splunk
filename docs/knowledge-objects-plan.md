@@ -1,9 +1,18 @@
 # Open Splunk Knowledge Objects Plan
 
-**Status:** Proposed implementation plan
-**Date:** August 6, 2026
+**Status:** Tier 1 implemented and acceptance-verified; later tiers remain planned
+**Date:** August 10, 2026
 **Compatibility target:** A bounded, documented subset of Splunk search-time
 knowledge behavior for the single-node Open Splunk product
+
+> **Current checkpoint:** Tier-1 field extraction, field alias, and calculated
+> field Knowledge Objects are production-active. The dated implementation
+> inventories below are preserved as history; any earlier claim that the
+> capability is hard-false, Preview is unregistered, the browser is read-only,
+> the Resolver is unattached, Docker is pending, or nonempty execution gates are
+> closed is superseded by the
+> [August 10 activation and acceptance evidence](#tier-1-activation-and-acceptance-evidence-august-10-2026).
+> Lookup and later object families remain future phases.
 
 ## Executive summary
 
@@ -122,9 +131,9 @@ Saved searches already establish patterns for:
 - mutation audit committed atomically with the object change.
 
 App workspaces already have a tenant boundary, stable identity, lifecycle,
-default indexes, and a catalog revision. The knowledge catalog should use the
-same transaction, migration, cursor, validation, and audit patterns rather than
-building a second control-plane style.
+default indexes, and a catalog revision. The Tier-1 knowledge catalog now uses
+the same transaction, migration, cursor, validation, and audit patterns rather
+than building a second control-plane style.
 
 ### Reusable search behavior
 
@@ -136,17 +145,17 @@ The logical plan already has operators that cover part of the first release:
 - field dependency analysis used by execution, inspection, suggestions,
   history, and export.
 
-Field aliases cannot reuse `Rename`: Splunk-style aliases preserve the original
-field while exposing another name. A new copy/alias operator is required.
+Field aliases do not reuse `Rename`: the implemented `CopyFieldAlias` operator
+preserves the original field while exposing another name.
 
 Lookups, event-type classification, tags, and macro expansion require new
 planner or parser stages.
 
 ### Gaps in the current saved-object model
 
-The present saved-search store treats the authenticated owner as the read
-boundary even though definitions carry sharing metadata. Knowledge resolution
-must generalize that behavior so a principal can see:
+The saved-search store treats the authenticated owner as the read boundary even
+though definitions carry sharing metadata. Tier-1 Knowledge resolution
+generalizes that behavior so a principal can see:
 
 - private objects they own in the current app;
 - app-shared objects in apps they may read; and
@@ -357,6 +366,54 @@ Definitions are normalized before storage. Indexed registry fields and the
 encoded definition must agree exactly; decoding a disagreement is a corruption
 error, not an opportunity to repair data during a request.
 
+The current normalizer also exposes a detached, fail-fast candidate issue seam
+without changing its legacy error behavior. `IssueFromError` returns at most
+one definition-relative field path (an empty path means the definition
+message), one of `KNOWLEDGE_DEFINITION_INVALID`,
+`KNOWLEDGE_DEFINITION_UNKNOWN_FIELD`, or
+`KNOWLEDGE_DEFINITION_RESOURCE_LIMIT`, and a candidate-actionable message.
+Legacy error text and `errors.Is` roots remain unchanged, and lower-level
+causes are not newly exposed. Infrastructure, invariant, canonical-storage,
+and other non-candidate failures deliberately produce no issue. The registered
+HTTP handler never maps this raw internal seam directly; Writer result
+construction consumes only its closed typed projection.
+
+The semantic compiler has a separate internal, detached issue seam.
+`knowledgeprogram.Compile` remains fail-fast and may bind one issue to the exact
+input index which produced an intrinsic regex syntax/resource/capture-shape,
+JSON-path syntax/unsupported/resource, calculated-expression `SPL_*`, or
+direct-Boolean-result failure. A validation adapter must independently prove
+that index is the submitted candidate and should use singleton Compile at index
+zero; it must never project an issue from a winner-cohort compilation. `Prepare`
+and object/definition authority, aggregate-limit, cohort/collision/selector, and
+dependency failures remain opaque to this typed compiler-issue seam. Legacy
+error text and sentinel behavior are preserved. The registered HTTP handler
+likewise never maps this raw semantic seam directly; the result layer consumes
+only its closed typed projection.
+
+The pure `internal/knowledgevalidation` layer now consumes those two typed
+seams to build bounded results, but owns no catalog, database, transition,
+authorization, route, or HTTP policy. `BuildInactive` only normalizes and
+returns an opaque detached result; it never compiles or derives dependencies.
+`PrepareActive` normalizes and singleton-compiles into exactly one opaque
+terminal invalid result or one opaque `ActiveCandidate` with no catalog
+authority. Only recognized typed definition/compiler issues are mapped
+in-band—definition messages use closed static templates, and semantic issues
+must match the candidate body plus exact code/path/range/suggestion shape.
+Untyped or malformed local failures become opaque invariant errors. Authority,
+cohort, aggregate, dependency, and transition failures receive no typed issue
+mapping through inactive/active preparation; the sole result-layer exception
+is the caller-selected, target-free `BuildDependencyUnavailable` generic
+diagnostic described below.
+
+A caller which already proved the full ACTIVE transition supplies the complete
+authorized direct target projection and an evaluation-local candidate identity
+to `ActiveCandidate.BuildValid`. The pure layer bounds, detaches, sorts, rejects
+duplicates/self-edges, and seals that projection, but cannot prove catalog
+completeness or visibility. Its target-free `BuildDependencyUnavailable`
+constructor is that sole transition-adjacent exception: it emits only the
+generic closed diagnostic and never accepts a hidden identity.
+
 ### Selectors
 
 Tier 1 and automatic-lookup definitions need a selector over trusted canonical
@@ -373,11 +430,43 @@ Selectors are ANDed across dimensions and ORed within one dimension. Empty
 dimensions mean unrestricted. Selector count, pattern length, wildcard work,
 and normalized byte size are bounded.
 
+Runtime lowering uses one exact-literal set and at most one anchored,
+case-sensitive, dot-all RE2 alternation per constrained dimension. It must not
+rescan the value once per wildcard, install an executable UDF, or encode the Go
+NFA as array state in SQL. Dimensions are reached in the fixed order `index`,
+`host`, `source`, `sourcetype`; missing/null is a nonmatch without input charge,
+and later dimensions are not inspected after an earlier nonmatch.
+
+The runtime charge is a deterministic conservative compiler assessment, not an
+engine-specific observed transition count. For every normalized wildcard with
+`n` tokens, the initial, per-input-byte, and final coefficients are
+`1 + starts_with_star`, `3*n + 1`, and `n + 1`. After an exact miss, a reached
+value of `B` valid UTF-8 bytes charges the sums of those coefficients as
+`initial + B*per_byte + final`; an exact hit or literal-only miss charges only
+the `B` input bytes. Reached input-byte charges must remain within the 4 MiB
+per-event ceiling; input plus eight times the assessed transition bound must
+remain within the 1 GiB cumulative per-query ceiling. Using bytes rather than
+Unicode scalar count intentionally gives Go and ClickHouse the same conservative
+result. Logical matching and the static snapshot's one/two/four
+literal/`?`/`*` publication weights do not change.
+
+Generated SQL must widen byte/coefficient multiplication, the factor of eight,
+and aggregate sums to `UInt128` before comparing with the limits. A later
+dimension's match and charge expressions stay inside the earlier dimension's
+short-circuit branch; independently materializing eager aliases would inspect
+work that the contract defines as unreachable.
+
 Cross-index searches can contain events matching different selectors. The
 resolver therefore uses the authorized index scope to eliminate impossible
 objects, but the logical plan still applies the selector per row. Catalog
 resolution must not assume that one object either applies to the entire job or
 does not apply at all.
+
+The resolver's bounded index-intersection probes use the same logical matcher
+but are not event execution and do not consume the admitted query's cumulative
+runtime charge. Each of at most 256 canonical index names gets an independent
+hard matcher budget under the resolver deadline; a conservative sum over that
+authorization inventory is not catalog corruption.
 
 ### Dependencies
 
@@ -525,6 +614,28 @@ A running job never observes a later catalog mutation. Inspection exposes the
 safe object inventory and provenance without exposing definitions the caller
 is no longer allowed to read.
 
+Lifecycle presence is explicit: an absent `KnowledgeSnapshotSummary` means
+resolution was disabled or the request followed the legacy/app-less path; a
+present reference with `object_count == 0` means resolution was enabled and
+produced the canonical empty snapshot. A retained summary is limited to 32 KiB
+and contains exactly the first `min(object_count, 64)` canonical object
+summaries, with `objects_truncated` true exactly when the total exceeds 64.
+Browser search-job, history, export, and inspection projections currently
+preserve the reference and ordinal/type/stage while redacting every retained
+object identity.
+At browser revision `e18e58f`, the existing administrator Search Job Inspector
+adapts that redacted projection only when the unchanged Knowledge feature is
+advertised. Without that feature, its adapter keeps the ordinary
+logical/physical plan but does not traverse the summary or nested provenance
+fields.
+
+Every completed execution snapshot returned by the manager, including a legacy
+snapshot, is manager-minted with a private seal over the explicit
+knowledge-enabled bit, complete execution scope, enabled compiled/snapshot
+authority, and exact result generation, schema, row count, and truncation
+state. Only the matching manager-owned result pin can open that result
+authority.
+
 Exports re-execute using the original job's knowledge snapshot, event-time
 range, index-time cutoff, and visibility cutoff. If a required lookup version
 has expired or crossed an index-deletion boundary, export fails explicitly as
@@ -533,10 +644,15 @@ unavailable.
 Saved searches store authored SPL and app/time intent, not a trusted knowledge
 snapshot. Running a saved search resolves current knowledge.
 
-History records the knowledge-snapshot digest and a bounded safe inventory of
-object IDs/versions for diagnostics. `Run Again` resolves current knowledge and
-creates a new snapshot; it never reuses the old compiled prelude or lookup
-asset by client request.
+History durably preserves the exact bounded summary admitted with the queued
+job. Search-attempt audit atomically preserves only its compact reference and
+exact object count. Inspection uses two detached sealed metadata reads around
+`EXPLAIN` and consumes no result pin; enabled inspection opens the retained
+compiled authority. Export atomically acquires the execution authority and
+matching result pin and holds the pin for the export lifetime. `Run Again`
+treats the historical summary as provenance only: it reauthorizes current
+app/index intent and, when the optional resolver is configured, performs a
+fresh current-catalog resolution.
 
 ### Retention and garbage collection
 
@@ -554,17 +670,35 @@ still-runnable job silently use a newer version.
 
 ### Knowledge prelude
 
-The semantic planner should build a backend-neutral knowledge prelude before
-the authored base filter. It should reuse existing operators where their
-semantics match and add explicit operators where they do not.
+KO-1B introduces a cycle-neutral, backend-independent immutable knowledge
+program and injects its explicit Tier-1 field prelude immediately after the
+authorized `Scan`, before the authored base filter. A deliberately resolved
+empty program is a present marker with zero generated operators; it is distinct
+from a legacy query that never crossed the knowledge boundary. Analysis, field
+analysis, and timeline eligibility verify that the retained program still
+matches the complete contiguous generated prefix before consuming it.
 
-Expected additions include:
+The implemented Tier-1 prefix contains:
 
 ```text
 ConditionalExtract
 ConditionalExtractJSON
 CopyFieldAlias
 ParallelExtend
+```
+
+Each regex and JSON object remains an individual operator in canonical
+resolution order. All aliases are fused into one `CopyFieldAlias` stage and all
+calculated fields into one `ParallelExtend` stage, with every fused assignment
+reading the same frozen stage input. The program independently re-normalizes
+definitions, re-derives the exact dependency closure and longest-path depths,
+checks same-stage collisions and chains, enforces aggregate semantic ceilings,
+and commits the typed operation sequence, selectors, bodies, origins, charges,
+and canonical dependencies under a versioned private digest domain.
+
+Later tiers are expected to add:
+
+```text
 Lookup
 ClassifyEventType
 ApplyTags
@@ -576,7 +710,8 @@ preferred.
 
 ### Provenance
 
-Every generated operator and output field should carry a private origin:
+Every implemented Tier-1 generated operator and output field carries a private
+origin:
 
 ```text
 kind                 authored_spl | knowledge_object
@@ -584,8 +719,18 @@ object_id            present for knowledge
 object_version       present for knowledge
 object_type
 object_name
+app_id
+owner_id
+sharing_scope
+resolution_ordinal
+stage_ordinal
+definition_digest
 definition_location  field or expression within the object
 ```
+
+Regex captures and JSON outputs retain their own stable output-field locations,
+rather than inheriting only the enclosing pattern/path location. Source ranges
+remain zero because definition locations are not authored SPL ranges.
 
 Provenance must survive safe rewrites, nested ClickHouse subqueries, inspection,
 execution diagnostics, history re-execution, and export. It is not necessarily
@@ -672,6 +817,19 @@ Aliases cannot use fields produced by calculated fields, lookups, event types,
 or tags because those stages run later. Alias cycles and multiple competing
 sources for one destination are rejected unless a deterministic compatibility
 rule is explicitly adopted.
+
+Alias copying is bounded independently of selector work. After selector,
+presence, overwrite, and disjoint-writer arbitration choose a successful write,
+the runtime charges the native byte size of the copied Dynamic value, relative
+container-name and type sidecars, one metadata-version byte, one unit per
+descendant, and one copy unit. Losing, missing, selector-false, and
+preserve-blocked writes charge zero; copying to multiple destinations charges
+once per destination. UInt128 row sums saturate at a 4 MiB-plus-one event
+sentinel and a 1 GiB-plus-one query-work sentinel before the top-level atomic
+guard. The generated SQL must keep materialization and `byteSize` inside the
+winning branch, remove its private accounting columns before authored SPL, and
+remain disabled until digest-pinned ClickHouse tests prove Dynamic sizing and
+branch laziness for every supported value shape.
 
 ### Calculated fields
 
@@ -819,6 +977,24 @@ POST /api/v1/knowledge/lookups/get
 POST /api/v1/knowledge/lookups/preview
 ```
 
+The first six object-management handlers and bounded protobuf codecs have real
+Store/Writer/audit integration. Bounded `dependencies` and `dependents`
+handlers use that same Store and rejected-attempt boundary, Validate uses its
+dedicated bounded transport and rollback-only Writer adapter, and Preview uses
+its dedicated bounded request and sealed-response transports. Production
+`NewHandler` registers the nine core management routes only when the complete
+management dependency unit and exact constructor-ready concrete Writer are
+present; a ready Preview service over that unit adds the tenth route.
+`cmd/open-splunk-server` supplies the complete composition. Registration
+remains independent from feature advertisement, while advertisement requires
+the complete Tier-1 runtime and service family. The knowledge-specific boundary
+authenticates before decoding, requires the administrator role, and attempts
+exactly one synchronous route-specific journal append for every authenticated
+definitive rejection. It exposes that rejection only after the append succeeds,
+returns the fixed unavailable response if the append cannot complete, and
+suppresses false rejection rows for committed or indeterminate mutation
+outcomes.
+
 The first bounded lookup upload can carry CSV bytes in protobuf if the product
 limit stays small enough for safe browser and Go memory use. Larger assets
 should use a two-step upload grant plus a raw streaming route, analogous to the
@@ -827,12 +1003,284 @@ intentional raw-download exception used by exports.
 Every mutation includes expected version, idempotency identity where needed,
 and an exact field mask. Mutation responses return the committed object and new
 catalog revision. List routes use signed, owner/tenant-scoped keyset cursors and
-may filter by app, object type, state, scope, selector summary, or text.
+may filter by app, object type, state, scope, selector text/patterns, or text.
 
-`validate` performs syntax, schema, dependency, budget, and permission checks
-without publishing. `preview` applies a draft definition to a bounded retained
-search snapshot and returns before/after schema and sample rows; it never lets a
-browser submit raw ClickHouse SQL or bypass index authorization.
+Store `ListDependencies` and `ListDependents` back the graph routes with only
+direct persisted object-to-object `FIELD_INPUT` edges and exact source and
+target versions. They do not reuse snapshot-global depth, stage, canonical
+ordinal, or digest fields. An omitted version selects
+the current root version; an explicit historical root version is authorized
+only through that object's current registry identity. Outgoing inspection
+returns the selected source version's exact edges. Inverse inspection returns
+edges to the selected target version only from source versions which are still
+their objects' current registry versions, including nonquarantined DRAFT,
+ACTIVE, DISABLED, and DELETED sources. A hidden or quarantined root returns the
+uniform not-found-or-forbidden result, and a hidden or quarantined opposite
+endpoint is omitted before keyset pagination and optional exact total counting.
+Signed continuations bind direction, caller scope, requested-version presence
+and value, resolved root, page size, total-count choice, and the first page's
+revision plus state commitment.
+
+Inverse traversal is deliberately authorization-leading. It enumerates
+currently authorized registry source identities and probes their exact current
+version through `knowledge_object_dependencies_source_target_idx`, including
+the `target_kind = 'object'` predicate, rather than driving from retained
+target-side history through `knowledge_object_dependencies_target_idx`. The
+v0.1 management graph therefore recognizes only
+object targets. A constraint-bypassed non-object target row is outside the
+bounded inverse result and must be detected when its source graph is read or
+revalidated; supporting another target kind requires a new bounded current-
+inverse authority and index contract first.
+
+The protobuf freezes the `validate` contract, the concrete catalog Writer
+implements its rollback-only service boundary, and production registers
+`POST /api/v1/knowledge/objects/validate` as the ninth core management route.
+It is in the browser administrator-bearer allowlist and remains outside the
+backend's generic outer `administratorRoutes` map because its inner
+knowledge-attempt boundary owns authentication, administrator authorization,
+and fail-closed journaling before decode. The complete Tier-1 capability, not
+this route in isolation, controls browser exposure. Definition message
+presence and one explicit intent are required.
+`INACTIVE_STORAGE` proves only bounded canonical inactive persistence;
+`ACTIVE_PUBLICATION` evaluates the candidate as a proposed ACTIVE version in
+one fixed knowledge/app/index catalog transaction.
+The returned tenant catalog revision identifies only that transaction's
+knowledge-ledger component; zero means that ledger was proven empty. It is only
+advisory correlation metadata, not complete reusable authority, a reservation,
+mutation proof, or promise that later validation will agree. `UNSPECIFIED` and
+unknown intent numbers are request-envelope errors. Create mode requires object
+ID, expected version, and update-mask message all to be absent. Update mode
+requires a present nonempty ID, a present expected version in the inclusive
+range 1 through MaxInt64
+(`9223372036854775807`), and a present nonempty canonical definition-relative
+mask applied to that exact current version. A missing top-level definition is
+also an envelope error, while a present definition with a missing or unknown
+body is candidate invalidity.
+
+Validate does not use the ordinary read-all-plus-`proto.Unmarshal` request
+path. Its codec and the Preview request codec share one extracted,
+layout-parameterized candidate wire decoder. The extraction preserves
+Validate's existing behavior while letting both envelopes enforce the mutation
+raw-body ceiling of 4 MiB plus 64 KiB (`4259840` bytes) by reading at most one
+byte beyond it solely as an overflow witness. The bounded two-pass projection
+preserves protobuf duplicate-message
+merge, last-scalar, optional-presence, and `oneof` merge/reset semantics without
+materializing attacker-sized repetitions. Correct-wire object-ID presence,
+including an explicitly empty value, selects update/mask projection; absence
+selects the complete create definition. The decoder retains at most 9 mask
+paths, 17 entries in each selected selector dimension, and 17 selected regex
+outputs; validates UTF-8 in every recognized string occurrence even when that
+field is unselected, overwritten, or later cleared; and rejects malformed wire
+or unknown-group nesting beyond 32 levels. Tests drive one million mask paths,
+selected and unselected selector entries, extraction outputs, job-ID scalars,
+and alternating body choices while proving bounded retention and allocation
+behavior.
+
+Unknown-field handling is deliberately split by semantic authority. Outer
+unknowns, including wrong-wire envelope fields, and field-mask unknowns are
+retained so envelope validation rejects them. Create retains the
+complete candidate's unknowns, and update retains unknowns inside mask-selected
+nested values, so Validate and Preview treat
+candidate-authored future meaning as in-band invalidity. Update discards
+candidate top-level unknowns
+and unknowns nested only inside unselected fields because they are outside that
+mask's authority. Validate and the Preview request codec therefore
+bypass the generic forward-compatible sanitizer's unknown clearing.
+
+`Writer.Validate` accepts a `ValidationScope` with separate read and write
+authority. The scopes must agree on the authenticated tenant and owner, but
+their app sets are intentionally independent: `WriteScope` controls the root
+object and candidate app, while `ReadScope` controls which derived dependency
+targets may be disclosed. The process-local admission limit is one validation
+per control database and is shared by every Writer over that database; a full
+gate fails fast instead of queueing. The request envelope is checked before
+admission without cloning the candidate. Under the gate, create selects the
+whole definition and update constructs a shallow view containing only mask-
+selected top-level fields. Unselected update payload does not contribute to the
+validation byte authority and is never cloned.
+
+Selected selector dimensions and regex output lists are cardinality-checked in
+the normalizer's fail-fast order before any exact size walk. Each is limited to
+16 entries. On overflow, the service replaces the caller-owned repetition with
+a newly allocated 17-entry witness carrying only the applicable body kind, so
+the normalizer emits its ordinary typed `KNOWLEDGE_DEFINITION_RESOURCE_LIMIT`
+issue without traversing or cloning an attacker-sized list. If no selected list
+overflows, only the bounded selected request view is measured against the
+mutation-request byte ceiling and then detached. The witness path deliberately
+does not perform a full request-size walk because candidate cardinality is the
+earlier typed failure; every later result still passes the independent 8 MiB
+response seal.
+
+Every admitted request evaluates inside one fixed, always-rolled-back
+`BEGIN IMMEDIATE` transaction. Update first authorizes the requested root, then
+checks expected version, lifecycle and current storage integrity, and rejects a
+current opaque future definition out-of-band before applying the candidate
+mask. These root/version/lifecycle/opaque outcomes therefore cannot be replaced
+by a candidate issue. For a create, or after the update root is established,
+local candidate invalidity precedes candidate-app/index inventory work. A valid
+candidate app is authorized through `WriteScope`; error context may identify
+only that authorized root or app and never a dependency target. Every service
+error defaults to definitive rejection.
+
+`INACTIVE_STORAGE` normalizes the applied definition, authorizes its app only
+when valid, and bookends the tenant knowledge revision. It does not singleton-
+compile publication semantics, read the ACTIVE publication inventory, or
+derive dependencies. `ACTIVE_PUBLICATION` first performs candidate singleton
+preparation, then reads the complete bounded knowledge/app/index inventory and
+uses the ACTIVE transition evaluator. Validation compiles every affected
+candidate-absent baseline before attributing a post-candidate conflict, so an
+invalid persisted baseline remains an out-of-band catalog error. Candidate
+conflicts are opaque and deterministically prefer stronger topology failures;
+only cohort-local target absence may become the target-free generic dependency
+diagnostic. Rich derived targets are first integrity-checked against the exact
+current ACTIVE registry/version and only then projected through `ReadScope`.
+A missing or unauthorized target produces the same generic in-band result;
+target identity and authorization context are never exposed. Other transition,
+integrity, catalog, resource, and infrastructure failures remain errors.
+
+ACTIVE create chooses the first deterministic
+`knowledge-validation-candidate-%04x` value absent from the complete tenant
+inventory after reconciling the tenant identity ledger and physical row count.
+It neither invokes the mutation ID generator nor reserves or returns the
+evaluation identity. Both intents return the exact same-transaction knowledge-
+ledger revision. A zero revision is accepted only after proving the physical
+object ledger empty, and every revision path matches an end bookend. The
+transaction is rolled back before `SealValidateResponse`; any rollback failure
+invalidates the request. Validation commits no data and invokes no DML, audit,
+idempotency, publication hook, clock, or mutation-ID authority.
+
+The evaluation-local create identity is alpha-invariant: validity, diagnostics,
+resource charges, and the target-only dependency projection must be unchanged
+under every other fresh candidate-ID choice. A later Create generates its own
+ID and revalidates all live catalog, app, and index facts, so intervening
+changes may alter the outcome.
+
+Only candidate-authored invalidity is an in-band `valid=false` result; the
+registered HTTP handler maps that sealed result to HTTP 200. It must
+retain a field violation or ERROR diagnostic and omit normalized definition,
+digest, dependencies, and resources. A valid result carries the normalized
+definition,
+its exact 32-byte digest, and a complete candidate-only resource report with no
+field violations or ERROR diagnostics. Inactive reports contain only exact
+selector-pattern and normalized-definition-byte charges; dependencies and all
+compile-derived charges are zero. Active intrinsic compile charges come from a
+canonical singleton candidate program with an empty dependency list and include
+generated operators/fields, regex programs/work, scalar expressions/nodes,
+extraction outputs, JSON evaluation work, and scalar predicates. They are not
+affected-cohort totals or marginal post-fusion deltas. Dependency nodes/edges
+instead derive from the full ACTIVE transition and the complete set of at most
+1,024 direct authorized candidate `FIELD_INPUT` dependencies. Hidden and
+missing targets are indistinguishable. Authentication, request authorization,
+catalog corruption, hidden-inventory, and service failures remain out-of-band
+rather than candidate issues; the handler maps only its closed, disposition-
+checked service-error taxonomy to uniform non-2xx outcomes. It accepts the sole
+exact `control.ErrCapacityExceeded` plus
+`knowledgevalidation.ErrResponseTooLarge` join and collapses impossible or any
+other joined error authority to the generic unavailable response.
+
+The three formerly missing intrinsic counters are append-only resource fields:
+`extraction_outputs = 12`, `json_evaluation_work_units = 13`, and
+`scalar_predicates = 14`; the waived draft SQL-size tag/name 11 stays reserved.
+
+`valid` describes definition validity under the selected advisory intent, not
+mutation acceptability, reservation, or a promise. A masked update identical to
+the current definition may be valid. `INACTIVE_STORAGE` against a currently
+ACTIVE object proves only hypothetical inactive-storage validity, never ACTIVE
+Update admissibility. Every Writer operation revalidates then-current
+authorization, version, lifecycle, capacity, app, index, and publication
+authority independently.
+
+Field violations and located diagnostics are independently capped at 256,
+deduplicated and deterministically sorted, and truncated by longest prefix at
+256 KiB and 768 KiB of aggregate UTF-8 text respectively. Paths are at most
+1 KiB, codes 128 bytes, messages 4 KiB, and a diagnostic has at most 32 unique
+binary-sorted suggestions of 1 KiB each. ERROR sorts before WARNING and INFO;
+truncation is explicit. Source ranges are half-open UTF-8 scalar-relative
+code-point boundaries with uniquely derived one-based LF/Unicode-scalar
+coordinates. Issue text is limited to static templates and exact source text
+already present in that candidate; it cannot disclose other catalog identity,
+inventory, definitions, generated SQL, or hidden authority. The complete
+deterministic validation response is capped at 8 MiB and recursively rejects
+unknown response fields before serialization.
+
+For ranged typed diagnostics, the result layer re-normalizes a detached copy of
+the submitted source before rebasing canonical byte offsets. JSON-path bytes
+must be unchanged; calculated-expression offsets are mapped through the exact
+ASCII trim, including canonical EOF after submitted trailing trim. A private
+sidecar binds each public range to its exact field path and submitted scalar;
+projection and every later seal rederive UTF-8 boundaries and LF/Unicode-scalar
+line/column coordinates, so range or provenance tampering fails closed.
+
+`SealValidateResponse` revalidates the opaque result kind, normalized digest,
+singleton intrinsic charges, transition-supplied dependency counts/order,
+issue provenance, recursive unknown-field absence, and a revision no greater
+than MaxInt64. It retains the exact deterministic protobuf bytes only when the
+complete response is at most 8 MiB; its protobuf and byte accessors detach.
+This remains the pure internal construction boundary. `Writer.Validate`
+supplies its catalog/transaction/authorization adapter and returns only the
+sealed projection after successful rollback. The registered handler requires
+that exact concrete ready Writer, acquires response-serialization capacity
+before retained request authority, derives and independently clones the trusted
+read/write scopes, and accepts only the closed validation error/disposition
+authority. Its custom response codec revalidates the seal under the live request
+context and writes the seal's exact deterministic bytes—never a fresh mutable
+protobuf marshal—while holding and then releasing the serialization permit.
+
+Preview has a dedicated request codec and structural envelope validator. Its
+canonical request wire authority is `retained_search_job_id = 1`,
+`definition = 2`, optional `knowledge_object_id = 3`, optional
+`expected_version = 4`, `update_mask = 5`, and optional uint32
+`maximum_rows = 6`; there is no client-authored validation intent. The retained
+job ID names owner-scoped retained execution authority which the service
+reacquires under the authenticated caller. It is not an immutable-event-
+snapshot identity and grants no access by itself.
+
+The codec enforces the exact 4 MiB-plus-64-KiB (`4259840`-byte) raw ceiling,
+validates every recognized string occurrence as UTF-8, retains at most 9 mask
+paths, 17 entries in each selected selector dimension, and 17 selected regex
+outputs, and rejects malformed wire or unknown-group nesting deeper than 32.
+It retains the last UTF-8 job-ID value through the 256-byte ceiling or a
+detached 257-byte over-limit witness. The structural validator requires that ID
+to be nonempty, unchanged by whitespace trimming, and free of Unicode control
+code points; rejects outer unknown or wrong-wire envelope authority and mask
+unknowns; and synchronously views the exact Validate create/update envelope
+with the server forcing `ACTIVE_PUBLICATION`. It performs no retained-job
+lookup or authorization and never mutates or normalizes the decoded request.
+Create full-candidate unknowns and update mask-selected nested unknowns remain
+candidate authority; update candidate top-level and unselected nested unknowns
+are discarded.
+
+`maximum_rows` retains full optional uint32 wire authority. Absence selects the
+service default of 100 rows per side; a present value must be in `1..1000`.
+Zero and larger values fail before retained execution. Generated Go and
+TypeScript contract oracles independently preserve create tags `[1, 2]`, all
+six present-empty update tags, and the maximum uint32 overflow witness. No
+request field number, type, or presence encoding changed.
+
+Preview is conditionally registered and advertised only as part of the
+complete Tier-1 family. Its handler authenticates and authorizes before decode,
+its service holds the Manager-retained result lease through validation and both
+executions, and its compiler adapter rebuilds only from the Manager-sealed app,
+index, time, visibility, catalog, and knowledge authority. The candidate is
+validated as ACTIVE publication against one fixed catalog view. Invalid
+candidates return validation only; valid candidates return paired job-bound
+revision-1 schemas and at most the requested rows per side, with one extra-row
+witness setting `truncated`. The complete response is capped at 8 MiB while the
+Manager, Writer, and executor retain their existing bounded admission and
+resource authorities. Any lookup, compilation, execution, cancellation,
+schema, row, or byte failure discards both sides atomically. The revision
+remains advisory knowledge-ledger correlation metadata, not mutation
+acceptability, a reservation, or reusable publication proof. Preview never
+accepts raw events, physical table names, index authority, asset paths, or SQL.
+
+The validation wire redesign carries an intentional historical protobuf
+FILE-compatibility waiver. Draft result tags 6 and 7 and resource tag/name 11
+(`estimated_generated_sql_bytes`) were retired before Validate was registered
+and were never served by either the Validate or Preview route; they remain
+reserved against reuse. Peers may drop those never-served draft values, but the
+change is intentionally not described as schema-nonbreaking. Validate's later
+registration and Preview's activation do not retroactively change that
+historical classification.
 
 System bootstrap advertises knowledge features only when their complete API and
 runtime family is configured:
@@ -847,19 +1295,137 @@ SERVER_FEATURE_KNOWLEDGE_WORKFLOW_ACTIONS
 
 ## Browser application
 
+The feature-gated Knowledge Manager retains the KO-0H bounded list/detail and
+relationship surfaces and now adds Tier-1 create, validate, edit, state,
+delete, and retained-search Preview controls. The list surface has immediate
+app, object-type, lifecycle-state, and sort controls plus a submitted advanced-
+filter form for optional owner ID, optional name/description text, one sharing
+scope (`all`, `private`, `app`, or `global`), and optional selector text. Drafts
+live in a child component, so typing causes no request and does not rerender the
+parent workspace, which may contain up to 8,192 rows. A changed valid Apply
+commits all four advanced values atomically and clears the page, continuation
+and consumed-token state, stale state,
+selected detail, and in-flight list/detail work before a fresh first-page
+request; the same reset occurs for valid fail-closed recovery. Clear restores
+the default tuple: owner/text/selector absent and sharing `all`, encoded as an
+empty `sharingScopeFilters`. Both first-page and continuation List requests carry the
+exact committed advanced tuple together with the immediate controls; only
+`pageToken` changes on continuation. The unchanged signed server cursor binds
+trusted tenant, owner, readable-app scope, page size and total-size choice, all
+app/owner/text/type/state/sharing/selector filters, sort/direction, and the
+first-page catalog revision plus state commitment.
+
+Advanced text submission trims only ASCII TAB/LF/VT/FF/CR/SPACE
+(`U+0009..U+000D`, `U+0020`) at the edges; blank becomes absent. A committed
+value is nonempty, valid UTF-8, free of C0 `U+0000..U+001F` and C1
+`U+007F..U+009F` controls, and no longer than 255 UTF-8 bytes. Non-ASCII edge
+whitespace such as NBSP is preserved. The request builder independently
+validates that exact canonical form and emits `ownerIdFilter`, `textFilter`,
+`sharingScopeFilters` (empty for `all`, otherwise one closed enum), and
+`selectorTextFilter`. An invalid submitted draft on Apply, or a forged sharing
+control value, aborts and removes the old list/detail, keeps Retry hidden until
+a valid Apply or Clear releases the fail-closed latch, and sends no List. A
+corrected Apply of the same committed tuple performs one fresh token-null
+recovery request. Repeated valid Apply is otherwise a no-op.
+
+The exact detail view treats the immutable ID and version selected from List
+as one exact identity. It validates a nonempty, valid-UTF-8, C0/C1-control-free,
+ASCII-edge-trimmed ID of at most 128 bytes and the bigint version range 1
+through MaxInt64 before I/O, sends both fields in Get, and accepts only a
+returned object with that exact ID and version. Invalid input or a response
+mismatch becomes the same unavailable
+state and starts neither graph read. After an exact Get, the view has exact-
+version consumers for both direct dependencies and direct dependents. Each
+direction owns its request, continuation, exact visible total, stale/retry
+state, and displayed catalog revision independently, and each row shows only
+the visible opposite endpoint's object ID, version, and `FIELD_INPUT` label. It
+contains no relationship-row mutation controls.
+
+Historical revision `8f7fd01` added a compact related-object inspector to each
+direction while the manager was still dormant and read-only. The retained
+inspector sends no endpoint Get during relationship paint. Only an explicit
+native Inspect activation validates the visible edge and calls the existing
+detail loader with that edge's exact disclosed ID and version. Dependencies and
+dependents each own at most one inspector, exact
+edge identity, originating trigger, and dedicated `AbortController`, for a
+maximum of two simultaneous inspectors. Activating the same row closes it with
+no request; replacing it aborts and clears that direction; Retry focuses the
+same expanded row before repeating the exact stored request. A response may
+commit only while its signal is live and its controller remains the current
+reference, so late completion cannot replace a newer disclosure.
+
+A continuation, including one rejected as stale, may retain the already
+disclosed inspector. A fresh first page or Reload clears that direction, while
+root-detail or client replacement, parent close, and unmount abort and clear
+both sections. The compact view uses only adapted identity, bounded name and
+description, and ordinary type/state/sharing/app/owner/update metadata. It
+never exposes raw selectors, authored body or expression data, nested graphs,
+navigation, or mutation controls, and it writes neither URL nor browser
+storage. Missing, failed, and mismatched results share one non-disclosing
+unavailable message. Direction/ID/version labels, unique busy/live regions,
+focus continuity across Close and Retry, mobile 42-pixel row controls, and a
+two-to-one-column metadata layout preserve keyboard and responsive behavior.
+Memoized relationship lists keep inspector result and Retry transitions from
+remapping as many as 8,192 rows once the expanded edge is unchanged.
+
+When the trusted bootstrap capability is absent,
+Knowledge Manager is omitted from navigation, its feature-gate importer is not
+invoked, and it issues no knowledge API request. Development bundlers may
+prefetch an emitted chunk independently; that is not importer invocation or
+production feature exposure.
+
+The live administrator Mutation Audit is a separate historical-read surface
+gated by the existing `SERVER_FEATURE_AUDIT_SEARCH`, not by
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS`. Before revision `7b6e825`, the wire
+and server already exposed 24 successful actions, five target kinds, six
+Knowledge actions, and optional Knowledge app/object-type/sharing metadata.
+The frontend now consumes that existing contract without making a Knowledge
+API request or opening Knowledge Manager.
+
+One closed action specification supplies each option label, exact target kind,
+and action-specific version policy. Response adaptation validates runtime
+primitive types, sequence `1..100000`, target version through MaxInt64, exact
+action/target and actor-role/action correlations, canonical bounded actor,
+target, and Knowledge app identities, and the closed Knowledge metadata triple.
+Knowledge targets require app plus extraction/alias/calculated type plus
+private/app/global sharing; legacy targets require all three fields absent.
+Accepted events are reconstructed from an allowlist with a cloned timestamp,
+so response extras and later caller mutation cannot enter display state.
+
+Page adaptation bounds the raw row count before per-row work, requires exact
+totals no greater than 100,000, validates the 200-row page and 2 KiB opaque-
+cursor contracts, and preserves descending sequence. Continuation retains the
+first exact total and rejects repeated or out-of-order sequences, impossible
+cumulative counts, terminal underfill, nonterminal exhaustion, repeated
+cursors, and non-adjacent cursor cycles. Next-token validation precedes every
+retained sequence or item mutation, keeping a rejected page atomic.
+
+The Activity filter derives all action and target labels in enum order while
+leaving action and target predicates intentionally independent. A Knowledge
+row displays only escaped target identity and safe app, closed type, and closed
+sharing labels; a legacy row has no Knowledge metadata. It adds no selector,
+definition body, expression, graph, navigation, link, or mutation control and
+does not write URL or browser storage state.
+
 ### Knowledge Manager
 
-Add an app-aware Knowledge Manager with:
+The app-aware Tier-1 Knowledge Manager now includes:
 
-- type, app, owner, sharing, state, and text filters;
+- the completed type, app, owner, sharing, state, name/description, and
+  selector-text filters;
 - stable pagination and sorting;
-- create, edit, duplicate, enable/disable, and delete actions;
+- create, edit, enable/disable, and delete actions;
 - definition validation with source-located errors;
 - selector builder for index, host, source, and sourcetype;
-- dependency and dependent-object views;
-- permission and sharing controls;
+- the completed direct dependency/dependent rows and explicit read-only
+  related-object inspection;
+- permission and sharing controls; and
+- bounded before/after Preview against an authorized retained search.
+
+Later tiers can add:
+
+- duplicate and richer impact views;
 - lookup upload and bounded data preview;
-- “test against recent events” using an authorized search snapshot;
 - version, update time, owner, and audit history; and
 - explicit warnings when a change alters fields used by saved searches or
   other knowledge objects.
@@ -957,10 +1523,12 @@ Records contain actor, tenant, app, object ID, object type, object version,
 sharing scope, occurrence time, result, and safe reason category. They do not
 copy regex text, SPL, lookup rows, macro bodies, or workflow URL parameters.
 
-Search-attempt audit should record the knowledge snapshot digest and object
-count, not definition bodies. User-facing history may show a safe inventory of
-object names and versions only while the caller remains authorized to inspect
-them.
+Search-attempt audit durably records the optional compact snapshot reference:
+digest, catalog revision/state commitment, exact object count, and compiler
+compatibility version, but never the object inventory or definition bodies.
+Durable history retains the bounded summary. Browser projections redact
+retained object identity until a current-policy provenance authorizer is
+available.
 
 ## Testing strategy
 
@@ -1071,6 +1639,673 @@ with an executable Open Splunk fixture.
 **Outcome:** knowledge definitions can be persisted, authorized, resolved, and
 pinned without affecting search results.
 
+**Implementation checkpoint (August 9, 2026):** contracts, migrations 0024
+through 0034, canonical definition handling, the bounded authorization-first
+reader, the atomic catalog Writer, the nine administrator-only management
+handlers/codecs with their synchronous rejected-attempt boundary and exact
+all-or-none production registration, the
+one-read-transaction active resolver, and opaque immutable snapshot preparation
+are complete.
+`cmd/open-splunk-server` composes their bounded app authority, catalog Store,
+attempt journal, concrete ready Writer, and concrete Resolver on the shared
+control database. The management runtime retains that Resolver for staged
+readiness but intentionally does not attach it to the production
+`searchjobs.Manager`. The capability is still not advertised. The concrete
+Writer now publishes DRAFT or recognized ACTIVE creates, DRAFT/DISABLED and
+recognized ACTIVE definition updates, DRAFT/DISABLED-to-ACTIVE enables,
+DRAFT/ACTIVE disables, and
+DRAFT/ACTIVE/DISABLED delete tombstones with exact idempotency replay,
+revision/state-token rotation, successful audit, immutable commit authority,
+bounded health/reclamation, and crash recovery. Every recognized ACTIVE
+create, update, or enable proves an exact current-index winning witness,
+selector-independent namespace uniqueness, migration-aligned active capacity,
+complete transactional catalog/app/index authority, and compiler-derived
+dependency closure before its first publication hook or durable write. ACTIVE
+updates reject inbound pins that cannot be atomically repinned and reject any
+new outgoing-edge drift in another immutable winner. Opaque future bodies keep
+their metadata-only DRAFT/DISABLED update and state-only emergency removal
+paths, but cannot be created, updated, or enabled as ACTIVE by this binary. An
+exact retained ACTIVE receipt remains replayable before all new admission work,
+including after later app/catalog facts change. The resolver now authorizes and
+validates every visible ACTIVE
+candidate inside one SQLite read transaction, prunes against trusted effective
+indexes, applies private/app/global precedence, proves exact winning dependency
+closure, and returns a detached opaque authority. Snapshot preparation derives
+canonical object, shadow, dependency, and static-charge authorities and pins a
+shared Go/TypeScript B0/B1 wire/digest contract. KO-0H completes the remaining
+KO-0 lifecycle readiness work: an optional nonempty-app pre-admission resolver
+path; compiler-sealed empty-authority finalization; bounded summary/reference
+lifecycle contracts; durable history and search-attempt-audit persistence;
+retained inspection authority; atomic export execution/result pinning; and a
+hidden read-only Knowledge Manager shell. Nil or typed-nil resolvers and
+app-less searches preserve the legacy path. A configured request is parsed,
+planned, resolved, compiled, and finalized before any job ID, journal
+admission, publication, or execution.
+
+The production retained-admission path deliberately finalizes only a
+canonically empty enabled snapshot. Although the knowledge prelude and
+generated operators are implemented and inspectable behind closed gates, any
+production resolution containing an executable object still fails before job
+creation at the independent compiler and snapshot-finalization boundaries. No
+shipping search-time knowledge runtime is claimed: `cmd/open-splunk-server`
+retains the concrete Resolver in its
+management runtime but does not configure it on production search admission,
+bootstrap hard-disables the capability, and the hidden UI therefore remains
+unreachable.
+
+The KO-1C inspection slice now analyzes the complete sealed knowledge prelude
+once and projects all four generated logical operator kinds. Generated stages
+have no authored source range; they expose only canonical ordinal/type/stage
+provenance, plus output-field-to-ordinal associations, while object identity,
+definition, selector, overwrite policy, expression, path, and pattern remain
+redacted. Result validation independently enforces the exact
+`extraction* -> alias? -> calculated?` prefix grammar, the 256 generated and
+256 authored stage ceilings, the 256-object/512-output provenance ceilings,
+canonical ordering, and exact binding to the retained bounded snapshot
+summary. The protobuf additions are append-only fields 6 and 7 on logical
+stages. A direct prepared nonempty-program fixture proves projection and
+redaction. A production Manager-sealed nonempty retained service fixture
+remains deliberately impossible while production snapshot finalization is
+closed; the later dual-tag test-only fixture stages retained identity with fake
+dispatch. At its `9f8c8ac` checkpoint it made no inspection-service or
+ClickHouse-row claim; `b3c40886` later adds the test-only internal service seam
+described below. Focused normal and race tests, `go vet`, protobuf generation/lint, the Go descriptor contract,
+and TypeScript type checking pass. The pinned ClickHouse/Docker runtime matrix
+was not rerun and remains required before the production compiler and snapshot
+gates open.
+
+The public production-path KO-1C matrix in `internal/queryexec` now shares one
+exact plan set between a default closure proof and an explicitly tagged
+test-process-only acceptance bridge. Its nine `Compile` cases are ordinary,
+selector controls, chart, timechart, stats, stacked chronological barriers,
+generated-field-pruned consumer, runtime-empty consumer, and alias overflow;
+timeline, field catalog, field summary, and field suggestions bring the total
+to thirteen public surfaces. Without the tag, all thirteen reach the
+intentional nonempty compiler seal, return the exact closed-gate error, and
+leave their typed results zero. With
+`open_splunk_knowledge_runtime_acceptance`, the alternate gate additionally
+requires `testing.Testing()`, so only a tagged `go test` binary can seal those
+thirteen public compiler/derived surfaces; adding the tag to `go build` remains
+closed.
+
+A second explicit `open_splunk_knowledge_snapshot_acceptance` tag is conjoined
+with the runtime tag and an independent `testing.Testing()` check at the final
+snapshot gate. The four modes are intentional: without tags both boundaries
+remain closed; the runtime tag alone can mint a compiler seal but finalization
+rejects it; the snapshot tag alone cannot cross the compiler gate; and A+B lets
+that runtime-tag-enabled test-only Compiler cross finalization only inside a
+`go test` process. An ordinary supported
+dual-tag server build remains closed. A disposable tracked-source probe in an
+ordinary binary called only the private snapshot helper and observed `false`;
+it did not dynamically
+exercise public `Authority.Finalize`, because the compiler's independent
+test-process guard would stop that path first. This is bounded supported-build
+evidence, not a claim of adversarial linker resistance.
+
+That tagged non-Docker proof pins the ordinary query's exact 19 public outputs,
+13 container descriptors, and 39 unique private name/type/metadata-version
+sidecar columns, including detached validated descriptors. It also reopens the
+seal only for the exact program commitment, object count, charges, tenant,
+effective indexes, and generated SQL byte count, and proves detached execution
+clones lose equality and their seal after public-output or container mutation.
+The earlier parser-invalid wildcard-shaped predicate is replaced by executable
+`where isnotnull(regex_value)` in the ordinary and timeline fixtures; this does
+not claim authored wildcard-predicate coverage. A runtime-tag-only test uses a
+real nonempty prepared authority and valid public Compiler seal to prove that
+`Authority.Finalize` still returns a zero snapshot at its independent hard
+gate. The dual-tag test instead proves the exact public
+Compiler-to-`Authority.Finalize` chain, including digest, summary, retained
+budget/commitment, detachment, tamper, scope, and equal-charge
+program-substitution checks.
+
+The same dual-tag test process now stages one complete identity lifecycle
+through the real Writer, Resolver, and `searchjobs.Manager`: ACTIVE v1 is
+resolved, admitted, retained, and paused at fake dispatch while ACTIVE v2 is
+published and resolved; the two completed jobs then reopen their distinct exact
+snapshot, prelude, and compiler authorities under owner-scoped access. At the
+`9f8c8ac` checkpoint this was lifecycle/identity staging only; `b3c40886` later
+carries the retained authority through the internal inspection service. Neither
+test executes a ClickHouse row or adds
+production Resolver attachment, route, capability, browser request, protobuf
+behavior, or runtime acceptance.
+
+At revision `9f8c8ace0da51b837ebccc0eca1e61db8e9c2dcf`, for which
+`git rev-list --count c5440b9..9f8c8ac` is exactly 135, all four full
+`internal/knowledgesnapshot` modes and all four named Manager entrypoint modes
+pass. The direct snapshot and Manager lifecycle tests pass together under
+`-race`; default and dual-tag vet pass; and isolated tracked-only
+`internal/clickhouse` default/runtime-tagged full plus tagged race runs pass.
+The full server package is not claimed green: the same two pre-existing field-
+catalog/field-summary HTTP tests and two blocked-worker search-analysis tests
+fail identically in every mode. Formatting and diff hygiene pass. The protected
+pre-existing untracked ClickHouse probe was excluded and left untouched without
+opening or hashing it.
+
+That full-server result is time-scoped to `9f8c8ac`. At subsequent revision
+`81c64122fb8be4a98ab42ecb5e3e23772827c208`, for which
+`git rev-list --count c5440b9..81c6412` is exactly 137, the shared analysis
+fixture no longer handcrafts an unsigned legacy `ExecutionSnapshot`. It creates
+and completes a legacy search through a real `searchjobs.Manager`, reacquires
+the owner-scoped completed snapshot, and supplies that Manager-sealed retained
+authority to field analysis. The exact legacy tuple validates before and after
+Manager closure, so the repair preserves `ValidateRetainedKnowledgeAuthority`
+rather than bypassing it. The four recorded field-catalog, field-summary, and
+blocked-worker failures now pass; the affected focused fixture cohort passes in
+all four no-tag/runtime-only/snapshot-only/dual-tag modes. Full
+`cmd/open-splunk-server` default and dual-tag normal and race runs plus default
+and dual-tag vet pass. Revision `81c6412` changes test fixture construction
+only: production Manager composition, Resolver attachment, browser behavior,
+protobuf behavior, and route registration remain unchanged; the production
+compiler and snapshot gates stay closed and the capability remains
+unadvertised. This slice executes no ClickHouse row, and digest-pinned
+knowledge runtime acceptance remains pending. The protected untracked probe
+remained excluded and untouched without opening or hashing it.
+
+The intervening signed-fixture documentation checkpoint is
+`14c6944eecfe5ef2cbef54c55a0ea5a845c0bd63` at exactly 138 post-`c5440b9`
+commits. The advanced-filter frontend milestone is
+`c22df67cc0e65a7d5b250331e3ed30ca74863926`, for which
+`git rev-list --count c5440b9..c22df67` is exactly 139. It changes only the
+three Knowledge Manager frontend production files and their focused unit and
+mocked-protobuf Playwright tests. No Go, protobuf, generated, backend, route,
+handler, administrator-bearer, capability, or navigation-production logic is
+changed. The hard-false `SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` boundary still
+means no production Knowledge Manager navigation, feature-gate importer
+invocation, or browser Knowledge request; the existing nine server management
+routes remain registered only as their unchanged, configuration-dependent,
+all-or-none unit.
+
+The hidden browser vertical proves exact initial, applied, continuation,
+stale-reset, Clear, invalid same-tuple recovery, and forged-sharing recovery
+List messages. It uses a monotonically counted, phase-labelled request oracle;
+after each expected protobuf tuple it waits two animation frames and reasserts
+the exact count, catching effect/render-delayed duplicates within that barrier.
+Typing-only phases use the same
+two-frame barrier with no arbitrary sleep, and the test waits for the first
+rendered object before measuring the permitted development StrictMode initial
+replay. Unit and browser evidence also pins ASCII-edge-only trim including
+NBSP preservation, UTF-8/control/255-byte rejection, per-field invalid state,
+fail-closed page/detail removal, successful Apply/Clear recovery, no query-
+string form leakage, escaped malicious server text with no script/image
+execution, keyboard and status semantics, the read-only badge, four-/two-/one-
+column responsive layout, and absence of mutation controls and requests. Source
+audit also pins React text rendering without `dangerouslySetInnerHTML`. The
+focused scenario passes 1/1 without Docker. That slice's documentation
+checkpoint is `d1d8e9cc3b6a14e030237957af8b4824874b6382`, exactly 140
+post-`c5440b9` commits.
+
+The subsequent exact-detail hardening revision is
+`4717c243ff2f162e034b84dc9c8cc63524a153b3`, exactly 141
+post-`c5440b9` commits. List-selected immutable ID and version now form the Get
+request and must match the returned object exactly before either graph route
+can run. Generated-protobuf unit coverage proves invalid ID/version rejection
+before I/O and uniform mismatch unavailability. The expanded Playwright
+vertical proves the exact successful dependency and dependent roots, versions,
+and first pages; independent catalog revisions and failure states; one
+successful dependency continuation; one stale dependent continuation with a
+fresh first-page retry; and escaped malicious endpoint IDs with no executable
+nodes. Feature-off, read-only, and zero-mutation boundaries remain unchanged.
+At this revision `npm run test:frontend` passes 66 build/tool plus 200 frontend
+tests; typecheck, strict no-warning lint, diff hygiene, and the focused no-
+Docker Playwright scenario pass.
+The protected untracked probe remained excluded and untouched without opening
+or hashing it.
+
+The three added `Compile` cases use relationship-based construction oracles.
+Each proves one physical event-table scan, placeholder count equal to
+bound-argument count, its exact ordered authored argument suffix, and exact
+program, tenant, effective-index, object, charge, and generated-SQL-byte evidence. Stacked
+chronology proves unique CTE identities; same-stage input/result pairs at
+strictly increasing stages; only the guard input materialized among those
+barrier CTEs plus the one terminal materialized-CTE setting; and four one-to-one
+bindings from exact source and first/last direction through immutable measure
+and chronological aggregate to the authored output. Those aggregates retain the immutable
+time/event/visibility/source chronology while the authored `sort +event_id`
+uses a separate pipeline-order key. Exactly five `UNION ALL` links keep the
+final guard-consuming validation chain live. The pruned and runtime-empty cases
+both publish only `event_id`, expose valid empty container authority, and retain
+the live knowledge guard and final validation. Only the runtime-empty form
+binds its impossible Boolean predicate once, before the validation union.
+
+The Docker executor matrix definition uses the migrated event table,
+independently falsifiable selector dimensions, cross-tenant decoys, exact typed
+container and overwrite results, authored suffixes and aggregations, analysis
+finalizers, and atomic alias-copy limit attribution. It requires the cached
+digest-pinned ClickHouse image and exact `26.3.17.4` server version. Revision
+`922e6eee2b2ec5c554d876a1a08568fbca3d096c`, exactly 142
+post-`c5440b9` commits and immediately following `4717c24`, completes the
+matrix definition by wiring the three previously compile-only queries into
+named test-only Docker executor rows. Their source assertions deliberately make
+event-ID order diverge from event-time chronology; hard-pin the global earliest
+`knowledge-event-b`/`beta` and latest `knowledge-event-a`/`json-alpha` extrema
+plus every prefix-stream extremum; require the pruned result's exact
+`knowledge-event-a`/`knowledge-event-b`/`knowledge-event-c`/
+`knowledge-event-d` set; and require the runtime-empty result to publish the
+typed `event_id` schema exactly once with zero rows. Docker acceptance remains
+explicitly paused/canceled and was **NOT RUN** for this matrix-definition
+revision or the preceding compiler, snapshot-lifecycle, signed-fixture-repair,
+and dormant browser slices. The next runtime action is to run this complete
+paused digest-pinned matrix, not add another row. There is no green container
+result, engine-compatibility claim, opening of a production compiler or snapshot
+gate, Resolver attachment, capability advertisement, or browser gate.
+
+The exact-detail/runtime-matrix documentation checkpoint is
+`86446423b2999df83373e9ba42a4bab565e429bc`, exactly 143 post-`c5440b9`
+commits. The following dormant related-object inspector revision is
+`8f7fd018ddc7d6f2e76dbb26072784be5c63920e`, exactly 144
+post-`c5440b9` commits. It changes only the panel, its CSS, and the focused
+frontend/browser tests. It reuses the existing generated-protobuf Get path and
+changes no backend or Go code, protobuf schema or generated artifact, route,
+browser bearer policy, capability response, production feature logic, Resolver,
+compiler/finalizer gate, or mutation authority.
+
+Static/unit evidence freezes the closed/loading/available/unavailable
+projections, escaping, per-direction unique IDs and exact accessible labels,
+conditional `aria-controls`, uniform nondisclosure, mobile control sizing,
+two-to-one-column metadata, and cleanup of both relationship and inspector
+controllers. Production-source audit pins the memoized relationship list and
+reuse of the adapter-owned edge on Retry, isolating result/Retry renders from
+the 8,192-row list. The deterministic generated-protobuf Playwright vertical
+counts root-detail Gets separately from related endpoint Gets. It proves zero
+endpoint Get after graph paint; exact
+edge ID/version and one request per explicit Inspect or Retry; one inspector per
+direction and at most two simultaneously; a held, released, and settled A-to-B
+replacement whose late A cannot replace visible B; uniform mismatch and exact
+Retry; dependency continuation and stale dependent continuation retention;
+dependent-only clearing on fresh Reload while dependency remains; same-row
+toggle-close without I/O; and parent close/reopen clearing both without an
+endpoint Get until a new explicit activation. It also pins focus on the exact
+row during Retry loading and after resolution, escaped malicious content, an
+unchanged URL and local/session storage, responsive rendering, and zero
+mutation controls or requests. Deterministic barriers and request counters use
+no arbitrary sleep, and route cleanup awaits the intentionally aborted held
+request before the stale-result oracle.
+
+At `8f7fd01`, `npm run test:frontend` passes 66 build/tool plus 201 frontend
+tests; typecheck, strict no-warning lint, `git diff --check`, and the focused
+generated-protobuf Playwright scenario pass. Docker was **NOT RUN** and remains
+paused/canceled; the protected pre-existing untracked ClickHouse probe remained
+excluded and untouched without opening or hashing it. This browser readiness
+evidence does not supply a ClickHouse result or open a shipping feature.
+
+The related-inspection documentation checkpoint is
+`c54392ddfdc5a09e0f241b80b30c1ac9588a78d8`, exactly 145 post-`c5440b9`
+commits. The distinct live Mutation Audit compatibility repair is
+`7b6e825807aaf50250b97cff642e461c57308da7`, exactly 146. That implementation
+changes only `app/activity/backend-audit-data.ts`,
+`app/activity/backend-audit-views.tsx`,
+`app/activity/backend-audit-data.test.ts`, and
+`integration/browser_vertical.spec.ts`. It changes no Go or backend code,
+protobuf schema or generated output, route or bearer policy, capability,
+Resolver, compiler/finalizer gate, mutation authority, or execution behavior.
+
+Unit and source evidence cover all 24 action/target/version policies, every
+wrong target and version boundary, valid and invalid actor authority, maximum
+identities and integers, exact Knowledge-triple/legacy-absence behavior,
+detachment, page-level nondisclosure, pre-adaptation row bounds, exact total and
+cursor relations, and atomic continuation commit ordering. Static rendering
+proves hostile target/app text is escaped and the safe Knowledge metadata has
+no link or mutation control. The generated-protobuf Activity scenario omits
+the Knowledge feature while advertising audit search, returns mixed Knowledge
+and legacy rows, decodes the exact List tuple, and observes only audit List
+traffic after activation with no Knowledge API, mutation, URL, or storage side
+effect.
+
+At `7b6e825`, `npm run test:frontend` passes 66 build/tool plus 211 frontend
+tests. Typecheck, strict no-warning lint, `git diff --check`, and focused
+Playwright 1/1 pass. The simplify/efficiency and final independent review are
+CLEAN. Docker was **NOT RUN** and remains paused/canceled, and the protected
+pre-existing probe remained excluded and untouched without opening or hashing
+it. The next runtime action remains the complete digest-pinned ClickHouse
+matrix; historical audit rendering is not Knowledge capability or engine
+acceptance.
+
+The Mutation Audit documentation checkpoint is
+`8dcd2898312f23ee47ab7dd778550cd3dcc88e9f`, exactly 147 post-`c5440b9`
+commits. The historical dormant redacted Search Job Inspector revision is
+`e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, repository commit count 686 and
+exactly 148 post-`c5440b9` commits. It changes only
+`app/search-workspace.tsx`,
+`app/search-workspace/components/workspace-dialogs.module.css`,
+`app/search-workspace/components/workspace-dialogs.tsx`,
+`integration/browser_vertical.spec.ts`,
+`lib/api/administrator-session.test.ts`, `lib/api/routes.ts`,
+`lib/search/server-inspection.ts`, `lib/search/server-inspection.test.ts`, and
+`scripts/test-frontend.mjs`.
+
+The inspect protobuf, completed-job service/route, administrator bearer
+attachment, and `SERVER_FEATURE_PLAN_INSPECTION` request gate all predate this
+slice. The existing PLAN capability still gates the one explicit
+`/api/v1/search/jobs/inspect` POST. The unchanged
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` value only gates whether the browser
+adapter traverses/retains and the UI displays decoded Knowledge authority, and
+remains hard-false in production.
+No second request, Knowledge endpoint, or background effect was added. The
+frontend route manifest now gives the existing inspect response the same 8 MiB
+ceiling as the server so transport rejects an oversized body before decode.
+
+The workspace retains the existing inspection request, abort-controller, and
+15-second timeout flow while replacing raw-response state with a detached
+discriminated display model. Each activation captures the exact displayed job
+ID, sends it once, requires the response ID to match before nested
+traversal/adaptation, and commits only while the signal, controller-reference
+identity, and displayed job are all current. Modal close,
+job/result reset or replacement, draft/root clearing, app/client replacement,
+and unmount abort and clear the request. Reopen supersedes the old controller,
+so a deterministically released late response cannot replace the new result.
+Transport, response, and adaptation failures use one generic non-disclosing
+message.
+
+One closed adapter validates and copies the complete response into a detached
+display model. The capability-off path still validates the ordinary plan's
+nonnested structure and renders its logical, physical, SQL, EXPLAIN, and
+diagnostic fields, but short-circuits before reading or traversing the Knowledge
+summary, operator provenance, or output provenance. Capability-on distinguishes
+absent from enabled-empty and enabled-nonempty authority. A present reference
+requires exact 32-byte digest and state-token commitments, catalog revision no
+greater than MaxInt64-1, total `0..256`, and exactly `min(total, 64)` ordered
+redacted summary entries with coherent truncation. Compiler compatibility must
+be nonempty, well-formed UTF-8 of at most 128 bytes, with no ASCII-edge SPACE or
+TAB-through-CR and no C0/C1 control; non-ASCII edge whitespace such as NBSP is
+retained. Only redacted disclosure, contiguous ordinals, closed
+extraction/alias/calculated stage/type/operator mappings, canonical rank and
+shape, bounded canonical inputs, and exact operator/output-provenance bindings
+are accepted.
+
+Raw arrays are bounded before mapping. The adapter mirrors canonical field
+spelling and UTF-8/control rules with an 8,720-byte name, 17 path segments, and
+256-byte decoded segment ceiling. Logical plans allow at most 256 authored plus
+256 generated stages, 1,024 fields per stage, 16,384 field occurrences, 1 MiB
+of strings, 256 operator-provenance entries, and 512 output-provenance entries.
+Physical projections allow 4,096 nodes, 256 reads, 4,096 cumulative headers and
+indexes, 64 index keys, 16 KiB per metadata string, and 1 MiB total. SQL is
+bounded at 256 KiB; EXPLAIN at 1 MiB, 4,096 nonempty lines, and 16 KiB per line;
+the diagnostic ID is at most 128 bytes. Each bounded string is UTF-8 encoded
+once, canonical comparison walks scalars without allocation while preserving Go
+byte order, and EXPLAIN validation is one byte pass.
+
+The compact view shows only the snapshot digest, catalog revision, exact total,
+compiler identity, redacted ordinal/type prefix, and generated stage input,
+operator, output-field, and redacted provenance annotations. It never retains
+or displays object IDs, names, versions, definitions, selectors, state token,
+deep links, or mutation controls, and it does not invent exact type totals from
+a truncated prefix. React text escaping, generic failures, labelled semantic
+regions, the existing modal focus trap/restoration, Escape/Close/Done behavior,
+and wrapping for long fields/SQL/EXPLAIN preserve XSS, keyboard, and 375-pixel
+mobile containment.
+
+The generated-protobuf browser scenario creates genuinely completed statistics
+jobs, waits for exactly one bounded job-bound Results request per job, and then
+proves zero automatic Inspect or Knowledge traffic. Feature-off forged
+authorized identity is ignored while the ordinary plan remains visible. A foreign
+response/job identity fails generically; the next explicit activation renders
+valid redacted authority. Exact counters and two-rendered-turn barriers prove
+one Inspect per activation, no duplicate Results or Inspect traffic, no
+Knowledge or mutation call, unchanged URL and local/session storage, and inert
+hostile text. A held modal-close/reopen race proves transport abort and stale-
+completion exclusion.
+
+At `e18e58f`, `npm run test:frontend` passes 66 build/tool plus 230 frontend
+tests; `npm run typecheck`, strict `npm run lint -- --deny-warnings`, and
+`git diff --check` pass. Exact post-amend focused Playwright passes 1/1 in 4.2
+seconds from an isolated `git-archive` snapshot. The simplify/efficiency pass
+and three final independent implementation reviews are CLEAN. No Go,
+protobuf/generated, backend route,
+bearer, capability, Resolver, compiler/finalizer, execution authority, or
+runtime gate changed.
+Docker was **NOT RUN** and remains paused/canceled; the protected pre-existing
+probe remained excluded and untouched without opening or hashing it. The next
+runtime action remains the complete digest-pinned 13-surface ClickHouse
+`26.3.17.4` matrix, not another browser or compiler-only substitute.
+
+The dormant browser implementation
+`e18e58f67b9da87a2f3fc8724da491f7e1d42beb`, count 148, and documentation
+checkpoint `6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, count 149, remain durable
+historical milestones. The current test-only retained-inspection revision is
+`b3c40886f9fade0818d78975e9486e96e02414e3`, parent
+`6c3c423f86ba53b258aa17925dceb7bdd8cc6a83`, repository commit count 688 and
+exactly 150 commits after `c5440b9`. Its exact scope is one file,
+`cmd/open-splunk-server/knowledge_runtime_snapshot_acceptance_test.go`, with
+311 insertions and two deletions.
+
+The existing dual-tag acceptance lifecycle now carries real ACTIVE alias v1
+and v2 from Writer through Resolver and Manager into the real
+`searchinspection.Service`. V1 execution remains paused while v2 is published
+and resolved, then each completed job proves its separately sealed prelude,
+compiled query, authorized summary, and snapshot digest. The inspection service
+is configured with a deliberately different but valid Compiler database/table.
+Its deterministic fake Explainer accepts only an exact `EqualForExecution`
+match to the Manager-retained v1 or v2 query, proving the Knowledge path does
+not rebuild or recompile from current mutable catalog state.
+
+A transparent Manager adapter records exactly two completed-snapshot reads per
+successful inspection, including the authoritative postflight equality check.
+A wrong-owner request performs one Manager lookup, returns the generic
+`searchjobs.ErrNotFound` and a zero result, and never reaches Explain. The fake
+returns one valid deterministic `ReadNothing` plan, so this is real service
+control-flow and validation evidence but not real ClickHouse EXPLAIN or row
+evidence.
+
+The internal service result intentionally retains the authorized summary with
+exact object ID, version, alias type/stage, and digest. Its logical
+`CopyFieldAlias` projection carries only response-local ordinal zero, closed
+alias type/stage, canonical input fields, generated destination, and the
+destination-to-ordinal output occurrence. The test therefore pins the internal
+authorized-summary versus redacted logical-provenance separation without
+crossing or claiming the HTTP/server projection boundary or releasing that
+identity to a browser.
+
+V1 and v2 retain distinct summaries, digests, generated destinations, output
+provenance, compiled authorities, and diagnostic query IDs while preserving
+the same ordinal/type/stage-only logical identity shape. Caller mutation of the
+returned v1 summary, logical stage collections, output shape, physical node,
+and generated SQL cannot change the already-returned v2 result or a fresh v1
+inspection. The fresh result remains exactly bound to Manager-retained v1,
+proving stable detached publication.
+
+Default (`00`), runtime-tag-only (`A`), and snapshot-tag-only (`B`) focused
+tests retain the Writer-published-ACTIVE fail-closed oracle. The conjoined
+`A+B` focused test passes normally and under the race detector, tagged-package
+`go vet` passes, and final independent review is CLEAN. This one-file test
+change adds no production wiring, HTTP/server projection or route, protobuf or
+generated artifact, browser bearer, capability advertisement, frontend,
+Resolver/compiler/finalizer behavior, runtime gate, identity disclosure, or
+ClickHouse query. Docker was **NOT RUN** and remains paused/canceled. The next
+runtime action remains the complete digest-pinned 13-surface ClickHouse
+`26.3.17.4` matrix.
+
+The KO-1C compiler now also preserves complete execution authority when an
+ordinary sealed query is projected into timeline, field-catalog,
+field-summary, or field-suggestion SQL. One kind-separated derived seal binds
+the source execution digest (including knowledge evidence), final SQL, every
+typed bind argument, the complete specialized result contract, and the final
+read scope. Production executors validate and deeply detach that authority
+before read admission, query-ID creation, or driver access. Focused normal and
+race tests prove that mutations of actual lowered knowledge regex and selector
+arguments fail before those boundaries while both production global nonempty
+gates remain closed.
+
+Completed-search field catalog and field-summary cache keys now validate the
+Manager-signed retained authority before any cache or cursor reuse and bind the
+app, explicit legacy-versus-enabled presence bit, snapshot digest, and compiled
+execution digest. Finalized snapshots mint an opaque fixed-size retention fact
+set once; the version-two Manager seal commits those facts, the complete public
+execution tuple, and the result generation. Repeated facts-only validation no
+longer clones the snapshot protobuf, program, summary, or up-to-4-MiB wire
+encoding. Named allocation, tamper, snapshot-only rotation, compiled-only
+rotation, enabled-empty, cache, and cursor tests pass; nonempty gates remain
+unchanged.
+
+The backend-neutral knowledge program now also exposes a publication-facing
+compiler that derives the exact canonical `FIELD_INPUT` graph from a complete
+winner set instead of accepting dependency claims. The existing snapshot-facing
+preparation path shares the object compiler but still independently requires an
+exact submitted dependency list, preserving a separate persisted-authority
+oracle. Derived edges are pinned to object version, definition digest, stages,
+longest-path source depth, and canonical ordinal; selector implication,
+disjointness, sharing scope, same-stage conflicts, graph ceilings, deterministic
+ordering, detachment, and concurrent immutable access have focused normal and
+race coverage. A pure catalog adapter now consumes one explicitly complete
+post-publication winner cohort, regenerates its stage/resolution ordinals, calls
+only that compiler, binds the candidate owner alongside ID/version/digest,
+returns a present-even-when-empty candidate dependency authority, and rejects
+any drift in the already-persisted outgoing edges of
+every other winner. Its result retains target owner, version, digest, role, and
+stage separately from the smaller database projection; input rows are detached before
+compilation, and canonical definition bytes, selector work, static charges,
+objects, and edges are bounded before retention can amplify malformed input.
+The helper deliberately cannot prove catalog completeness from a caller-supplied
+count or one search `Resolution`. The later transactional catalog reader and
+opaque persistence authority now prove the complete tenant object, app, and
+durable index inventories before the concrete Writer admits a recognized ACTIVE
+mutation and stores only the resulting derived edges atomically.
+
+The cohort validator now also covers transitions in which the exact candidate
+does not win. Every result binds the transition candidate ID, version,
+definition digest, owner, an explicit winner/non-winner mode, and the canonical
+program commitment. A candidate-winning cohort requires exactly one exact
+candidate and derives its present-even-when-empty edge authority; a
+candidate-absent cohort requires zero exact matches and revalidates the sealed
+outgoing rows of every remaining winner. This prevents an empty or unshadowed
+post-state proof from being replayed for a different candidate transition.
+
+Effective index scopes are modeled as paired before/after applicability
+signatures, not as singleton indexes. The bounded closure enumerator deduplicates
+physical-index atoms, computes component-wise OR closure, and retains the exact
+minimum index count for each reachable signature. It uses a fixed 4,096-object
+bit universe, admits at most 1,024 physical atoms and 1,024 retained states, and
+has an independent 65,536-probe work ceiling so a join-closed inventory cannot
+force the full quadratic product while an immediate publication transaction is
+held. The future transactional layer still must prove that its atom inventory
+covers every durable index transition which can become searchable.
+
+A pure ACTIVE-transition authority now derives every affected cohort from one
+exact tenant inventory rather than accepting caller-built before/after winner
+lists. It binds explicit absent/DRAFT/DISABLED/ACTIVE/DELETED endpoints,
+constructs the post-state by exact object identity, validates every recognized
+definition before pruning, and enumerates tagged generic-app,
+generic-principal, and exact private-principal visibility classes across the
+union of the pre/post state. Each class is paired with the multi-index OR
+signatures above; unique-highest precedence is order-independent, every
+distinct changed post cohort is independently compiled, an ACTIVE candidate
+must have a durable winning witness, and its rich dependency authority must be
+identical across all winning cohorts. Disable/delete need no surviving witness
+but revalidate every unshadowed winner. Post-tenant and per-class hydration,
+matcher, cohort, revisit, dependency, and repeated semantic-compiler work are
+independently bounded before persistence, including both selector-normalization
+passes for every changed-cohort compilation. The resulting opaque authority
+matches a write plan on tenant, full body-free before/after scalar
+endpoints, retained ordered dependency rows, and the exact derived-or-retained
+database projection. It intentionally rejects opaque future bodies; the
+existing projection-only emergency removal path remains separate until it has
+its own transactional proof. The concrete Writer now consumes this authority
+for recognized ACTIVE create, update, enable, disable, and delete mutations.
+
+The transaction and persistence boundary is now implemented and wired into the
+concrete Writer. It accepts only
+the Writer's existing fixed `*sql.Tx`,
+proves exact knowledge revision/token and ACTIVE rows, tenant app revision and
+bounded app inventory, and global index revision/physical rows before hydrating
+definitions, selectors, or dependencies. Its object, app, and index drivers are
+explicitly bounded and query-plan tested. An opaque authority binds that exact
+transaction and all three revision domains to the pure transition proof. Rich
+compiler targets are revalidated against the exact current ACTIVE registry and
+version before their smaller database projection is retained. Immediately
+before its first persistence write or hook, `publishMutation` reconstructs the
+before endpoint from the live registry, immutable version, and sealed ordered
+dependency rows; rechecks the transaction and catalog facts; and uses only a
+fresh detached projection from the authority for the version count, dependency
+rows, and dependency seal. ACTIVE plans cannot submit dependency rows or use a
+zero authority, while existing non-ACTIVE paths retain their prior hook order.
+Recognized ACTIVE disable/delete routes now mint that authority from the exact
+hydrated current object and retained graph immediately before publication.
+Replay and active-dependent rejection still precede inventory work. The sole
+zero-proof exception reopens the live stored definition and proves a genuinely
+opaque future body plus exact scalar, selector, digest, and dependency identity
+before any write or persistence hook. Recognized ACTIVE create, ACTIVE update,
+and enable now mint and consume the nonzero proof; opaque ACTIVE update/enable
+remain closed. The nine supported production management routes, including
+Validate, are registered as one all-or-none unit. The two graph routes remain
+capability-unadvertised but join Get/List as the only knowledge paths in the
+browser bearer allowlist and have exact-version consumers in the dormant hidden
+detail view; Create/Validate/Update/SetState/Delete remain excluded. Validate is
+also absent from the backend's generic outer administrator-route map because the
+inner knowledge attempt boundary performs its administrator authentication and
+`ActionValidate` journaling. Because bootstrap still hard-disables the
+capability, production browser navigation and Knowledge API requests remain
+absent and the feature-gate importer is not invoked, while production search
+resolution and nonempty execution also remain closed. Development bundler
+prefetch of an emitted chunk is not a production exposure or importer oracle.
+
+Immutable index-name creation now has its own atomic global admission boundary.
+Migration 0034 supplies sparse covering drivers for every nonempty ACTIVE
+knowledge tenant and every current ACTIVE registry identity. Before the first
+index write or audit append, the control transaction passes the canonical new
+name and exact pre-insert index facts to a knowledge-catalog validator on the
+same fixed `*sql.Tx`. The validator reconciles every tenant ledger with the
+global ACTIVE registry, captures catalog tokens and app revisions, preflights
+all tenants' aggregate projection/definition/selector/dependency scalars before
+hydrating any payload, and then recompiles every newly reachable candidate-free
+winner cohort. Matcher, multi-index OR-closure, visibility, compiler, and
+revisit budgets are shared across the complete tenant batch while retained
+caches remain tenant-local. A final fact-vector recheck precedes the index
+insert. The raw/nil path fails closed if either sparse ACTIVE driver has any
+evidence, and `cmd/open-splunk-server` always injects the full validator.
+Focused normal/race tests cover safe and conflicting foreign knowledge tenants,
+exact transaction use, clipped and bounded query plans, aggregate failure before
+hydration, malformed catalog/app/projection/dependency authority, cancellation,
+fact drift, atomic rollback, and audit ordering. This closes the future-index
+lifecycle prerequisite and is now consumed by recognized ACTIVE Writer
+publication. The server registers the management API through its complete
+concrete configuration and retains a concrete Resolver for readiness, but
+advertises no search-time knowledge capability and does not attach that
+Resolver to production search jobs.
+
+Migration 0033 prepares that atomic publication boundary.
+An enable may append a newly derived dependency set instead of copying its
+draft or disabled predecessor, while disable and delete still require exact
+state-only graph identity. A current ACTIVE target cannot advance to a new
+immutable version while any current ACTIVE dependent still pins an older
+target version; a future bounded batch publication may append exact state-only
+disabled versions for those dependents, advance the target, and then enable
+them with newly derived edges inside one immediate transaction. The migration
+rejects a catalog that already violates this invariant before replacing any
+trigger. Recognized ACTIVE create, one-object ACTIVE update, and enable now use
+the complete transactional inventory and persistence authority described
+above; updates with current inbound pins remain fail-closed until a bounded
+batch repin transaction exists.
+
+The same catalog primitives now support advisory validation without opening a
+mutation path. An internal `Writer.Validate` separates read disclosure from
+write admission, shares a fail-fast one-slot gate per control database, detaches
+only the selected create/update definition view, and uses bounded cardinality
+witnesses for selected repeated-field amplification. Both intents run in a
+fresh immediate transaction which is always rolled back before the response is
+sealed. Inactive validation stops after structural result construction, app
+authorization, and revision bookends; active validation uses the complete
+baseline-first transition and separately authorizes its integrity-checked
+targets. Deterministic fresh create IDs are transaction-local and unreserved,
+revision zero proves physical catalog emptiness, and no mutation collaborator,
+DML, audit, idempotency record, hook, or commit can run. A dedicated raw decoder,
+handler, exact sealed-response encoder, and `ActionValidate` attempt-boundary
+mapping now expose this service as the ninth all-or-none administrator route.
+The custom decoder's candidate wire core is now shared with an unregistered,
+request-only Preview codec; million-entry oracles prove bounded selected
+overflow, unselected projection, job-ID handling, and alternating-`oneof`
+behavior without generic protobuf materialization. A structural Preview
+envelope validator rejects untrusted outer/job authority, performs no lookup or
+authorization of retained execution, and forces the exact Validate envelope to
+`ACTIVE_PUBLICATION`. Its optional uint32 `maximum_rows` authority preserves
+absence, explicit zero, and the full value through `4294967295` without a
+default, bound, or execution meaning. Validate remains outside the generic outer
+administrator map and browser bearer allowlist; Preview still has no response
+codec, handler, retained-execution acquisition/caller-auth service, route,
+manifest/bearer entry, capability, browser surface, or runtime gate; and no
+bootstrap capability,
+Resolver attachment, or production nonempty execution gate changed. The later
+test-process-only compiler bridge changes none of these validation/Preview
+claims.
+
 - write `knowledge-compatibility-v0.1.md` for Tier 1;
 - define protobuf object, selector, CRUD, validation, dependency, snapshot, and
   provenance contracts;
@@ -1081,7 +2316,8 @@ pinned without affecting search results.
 - implement private/app/global resolution and explicit precedence;
 - implement immutable snapshot creation and digesting;
 - attach snapshot metadata to search jobs, inspection, history, and export;
-- add feature advertisement and API contract tests; and
+- preserve negative feature-advertisement and capability contracts plus exact
+  all-or-none management API-registration tests; and
 - add the initial Knowledge Manager list/detail shell.
 
 ### Phase KO-1 — Field knowledge
@@ -1099,7 +2335,11 @@ results predictably.
 - add operator and field provenance;
 - integrate field discovery, suggestions, inspection, history, and export;
 - add create/edit/validate/preview UI; and
-- add ClickHouse, lifecycle, browser, fuzz, and differential tests.
+- add ClickHouse, lifecycle, browser, fuzz, and differential tests; then only
+  after the complete hidden search-time acceptance vertical passes, configure
+  the resolver and generated operators and advertise the capability. The
+  administrator-only management routes may remain registered before that
+  feature exposure.
 
 ### Phase KO-2 — Exact CSV lookups
 
@@ -1190,6 +2430,67 @@ The Tier 1 knowledge release is complete when all of the following are true:
 - One backend vertical test creates an extraction, ingests a matching event,
   searches by the extracted field, updates the extraction during a retained
   job, and proves original-job/export stability plus fresh-rerun behavior.
+
+### Tier-1 activation and acceptance evidence (August 10, 2026)
+
+Tier 1 is production-active. This checkpoint supersedes earlier implementation
+snapshots in this plan that describe the capability as hard-false, Preview as
+unregistered, the browser as read-only, the Resolver as unattached, or nonempty
+compiler/snapshot gates as closed. Those passages remain useful history, but no
+longer describe the shipping configuration.
+
+Production constructs the ready Writer/Resolver before `searchjobs.Manager`,
+attaches that Resolver immutably, admits and finalizes compiler-minted nonempty
+knowledge programs in ordinary builds, and constructs Preview from the Manager,
+Writer, ordinary compiler adapter, and executor. The server advertises
+`SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS` only when all nine core management
+operations, Preview, search admission, inspection/history/export, timeline,
+field catalog, field summary, and field suggestions are ready. The browser then
+loads the feature-gated manager and permits only the exact ten administrator-
+bearer routes; feature-off bootstrap still imports nothing and sends zero
+Knowledge traffic.
+
+The final pinned production matrix rerun passed on
+`clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`
+in 72.78 seconds at package level (72.36 seconds for the top-level test). It
+covers ordinary enrichment and authored suffixes, all four selector dimensions,
+all 16 executable compatibility runtime-edge IDs in a 3.33-second subtest,
+chart, timechart, stats, fused chronology, pruned and runtime-empty consumers,
+timeline, field catalog, exact maximum generated fields, two concurrent
+maximum catalogs, field summary, field suggestions, atomic overflow, and a
+real Writer→Resolver→Manager→history/export v1/v2 lifecycle. CI runs the same
+untagged test with one-minute subtest bounds, a four-minute suite watchdog, and
+a 4m30s process deadline in the dedicated `knowledge-runtime-clickhouse` job.
+
+| # | Acceptance authority | Result |
+|---:|---|---|
+| 1 | CRUD protobuf routes, mutation adapters, gated Tier-1 editor, and the Knowledge Manager Playwright vertical | Pass |
+| 2 | `knowledgecatalog` Resolver scope, precedence, visibility, and corruption suites | Pass |
+| 3 | Pinned matrix selector-dimension subtest with authorized index scope | Pass |
+| 4 | Writer publication compiler, dependency, resource, and transition suites | Pass |
+| 5 | Manager admission plus immutable snapshot/program/digest seals | Pass |
+| 6 | Pinned retained v1/v2 lifecycle, inspection authority, and exact export | Pass |
+| 7 | Direct saved-search and history Run Again lifecycle resolves current v2 while original/export retain v1 | Pass |
+| 8 | Pinned ordinary suffix query proves enrichment precedes authored filtering | Pass |
+| 9 | Alias compiler/runtime suites prove source preservation, overwrite behavior, containers, and normalization | Pass |
+| 10 | Program dependency/collision suites prove calculated-stage parallelism | Pass |
+| 11 | Compiler provenance seals and detached Search Job Inspector projections | Pass |
+| 12 | Pinned catalog/summary/suggestions plus authorization/shadow suites | Pass |
+| 13 | Shared compiler/snapshot/executor budgets, dynamic catalog memory tiers, concurrency gate, and atomic overflow | Pass |
+| 14 | Source-located `knowledgeprogram` issues reject unsupported operators without prefix execution | Pass |
+| 15 | Bounded mutation and rejected-attempt audit stores and privacy projections | Pass |
+| 16 | Backup integration compares catalog revision/token and exact stored definition digest/protobuf bytes | Pass |
+| 17 | Dedicated pinned ClickHouse backend matrix, including ingested-event v1/v2 original/export/fresh behavior | Pass |
+
+The successful browser Preview vertical additionally proves zero request before
+explicit submission, exact current-object ID/version/definition authority, the
+canonical update mask, memory-only bearer forwarding, digest-bound validation,
+job-bound before/after schemas and rows, and safe paired rendering. The
+normative 55-case compatibility inventory is now executable through closed
+typed owner/vector registries whose package-local callbacks exercise the
+relevant production normalization, resolution, program, snapshot, catalog,
+audit, Preview, server, recovery, and query-execution authorities; no case is
+satisfied by a test-name string alone.
 
 The lookup release adds these criteria:
 

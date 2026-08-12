@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -487,7 +488,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				canonicalTimeAvailable = false
 			}
 		case *spl.TableCommand:
-			fields, fieldErr := convertFields(command.Fields, command.Range)
+			fields, fieldErr := convertTableFields(command)
 			if fieldErr != nil {
 				return nil, fieldErr
 			}
@@ -566,6 +567,22 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 			}
 			aggregate := command.Aggregate
+			if aggregate.Sparkline != nil {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+					Message: "sparkline is supported only by stats in this compatibility slice",
+					Range:   aggregate.Range,
+				}
+			}
+			if aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+				aggregate.InputQuoted || aggregate.AliasQuoted ||
+				aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
+					Message: "quoted stats-only field provenance is not supported by eventstats",
+					Range:   aggregate.Range,
+				}
+			}
 			if aggregate.Alias == "" {
 				return nil, &Diagnostic{
 					Code:    "SPL_UNSUPPORTED_EVENTSTATS_AGGREGATE",
@@ -578,6 +595,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			case spl.AggregateFunctionCount:
 				if aggregate.Input != "" ||
 					aggregate.InputRange != (spl.Range{}) ||
+					aggregate.InputExpression != nil ||
 					aggregate.Predicate != nil ||
 					aggregate.Percentile != 0 ||
 					(!aggregate.ExplicitAlias && aggregate.Alias != "count") {
@@ -800,11 +818,28 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 
 			aggregate := command.Aggregate
+			if aggregate.Sparkline != nil {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+					Message: "sparkline is supported only by stats in this compatibility slice",
+					Range:   aggregate.Range,
+				}
+			}
+			if aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+				aggregate.InputQuoted || aggregate.AliasQuoted ||
+				aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STREAMSTATS_AGGREGATE",
+					Message: "quoted stats-only field provenance is not supported by streamstats",
+					Range:   aggregate.Range,
+				}
+			}
 			measure := AggregateMeasure{Output: aggregate.Alias}
 			switch aggregate.Function {
 			case spl.AggregateFunctionCount:
 				if aggregate.Input != "" ||
 					aggregate.InputRange != (spl.Range{}) ||
+					aggregate.InputExpression != nil ||
 					aggregate.Predicate != nil ||
 					aggregate.Percentile != 0 ||
 					aggregate.Alias == "" ||
@@ -863,6 +898,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				}
 				if aggregate.Input == "" ||
 					aggregate.InputRange == (spl.Range{}) ||
+					aggregate.InputExpression != nil ||
 					aggregate.Predicate != nil ||
 					aggregate.Percentile != 0 ||
 					aggregate.Alias == "" ||
@@ -949,7 +985,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				return nil, aliasErr
 			}
 			for _, group := range command.GroupBy {
-				if !validStreamAggregateFieldName(group.Name) {
+				if group.Quoted || !validStreamAggregateFieldName(group.Name) {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_STREAMSTATS_SYNTAX",
 						Message: "streamstats BY requires exact unquoted grouping fields",
@@ -1007,6 +1043,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:   command.Range,
 				}
 			}
+			aggregates, wildcardErr := expandStatsWildcardAggregates(
+				command.Aggregates,
+				outputSchemaKnown,
+				result.OutputFields,
+			)
+			if wildcardErr != nil {
+				return nil, wildcardErr
+			}
 			if len(command.GroupBy) > spl.MaximumStatsGroupFields {
 				return nil, &Diagnostic{
 					Code:    "SPL_QUERY_TOO_COMPLEX",
@@ -1014,13 +1058,25 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					Range:   command.Range,
 				}
 			}
+			statsOptions, optionsErr := buildStatsOptions(
+				command.Options,
+				command.Range,
+			)
+			if optionsErr != nil {
+				return nil, optionsErr
+			}
 			if !outputSchemaKnown {
-				for _, aggregate := range command.Aggregates {
-					if aggregate.Input == "fields" {
+				for _, aggregate := range aggregates {
+					if aggregate.Input == "fields" ||
+						(aggregate.Sparkline != nil && aggregate.Sparkline.Input == "fields") {
+						inputRange := aggregate.InputRange
+						if aggregate.Sparkline != nil {
+							inputRange = aggregate.Sparkline.InputRange
+						}
 						return nil, &Diagnostic{
 							Code:    "SPL_AMBIGUOUS_STATS_FIELD",
 							Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-							Range:   aggregate.InputRange,
+							Range:   inputRange,
 						}
 					}
 				}
@@ -1041,14 +1097,51 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if groupErr != nil {
 				return nil, groupErr
 			}
-			seenOutputs := make(map[string]struct{}, len(groupBy)+len(command.Aggregates))
-			outputFields := make([]string, 0, len(groupBy)+len(command.Aggregates))
+			seenOutputs := make(map[string]struct{}, len(groupBy)+len(aggregates))
+			outputFields := make([]string, 0, len(groupBy)+len(aggregates))
 			for _, group := range groupBy {
 				seenOutputs[group.Name] = struct{}{}
 				outputFields = append(outputFields, group.Name)
 			}
-			measures := make([]AggregateMeasure, 0, len(command.Aggregates))
-			for _, aggregate := range command.Aggregates {
+			measures := make([]AggregateMeasure, 0, len(aggregates))
+			seenSources := make([]AggregateMeasure, 0, len(aggregates))
+			for _, aggregate := range aggregates {
+				if aggregate.InputGlob != nil || aggregate.AliasGlob != nil {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "unexpanded stats wc-field metadata is invalid",
+						Range:   aggregate.Range,
+					}
+				}
+				if aggregate.Sparkline != nil &&
+					(aggregate.Function != spl.AggregateFunctionInvalid ||
+						aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) ||
+						aggregate.InputQuoted ||
+						aggregate.InputExpression != nil || aggregate.Predicate != nil ||
+						aggregate.Percentile != 0) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "sparkline metadata is mutually exclusive with ordinary aggregate metadata",
+						Range:   aggregate.Range,
+					}
+				}
+				if aggregate.InputExpression != nil &&
+					nilSPLScalarExpression(aggregate.InputExpression) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "stats aggregate contains a missing scalar input expression",
+						Range:   aggregate.Range,
+					}
+				}
+				if aggregate.InputExpression != nil &&
+					(aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) ||
+						aggregate.InputQuoted || aggregate.Predicate != nil) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "stats aggregate scalar input is mutually exclusive with exact-field and predicate metadata",
+						Range:   aggregate.Range,
+					}
+				}
 				if aggregate.Function != spl.AggregateFunctionCountPredicate &&
 					aggregate.Predicate != nil {
 					return nil, &Diagnostic{
@@ -1057,7 +1150,14 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 						Range:   aggregate.Range,
 					}
 				}
-				if aggregate.Function == spl.AggregateFunctionPercentile {
+				if aggregate.Input == "" && aggregate.InputQuoted {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "stats aggregate contains quoted-input provenance without an exact input field",
+						Range:   aggregate.Range,
+					}
+				}
+				if statsAggregateUsesPercentileSuffix(aggregate.Function) {
 					if aggregate.Percentile < 1 || aggregate.Percentile > 99 {
 						return nil, &Diagnostic{
 							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
@@ -1068,11 +1168,84 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				} else if aggregate.Percentile != 0 {
 					return nil, &Diagnostic{
 						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-						Message: "non-percentile stats aggregate contains percentile metadata",
+						Message: "stats aggregate without a percentile suffix contains percentile metadata",
 						Range:   aggregate.Range,
 					}
 				}
-				if _, aliasErr := ResolveField(aggregate.Alias, aggregate.AliasRange); aliasErr != nil {
+				if aggregate.Sparkline != nil {
+					validAliasMetadata := aggregate.Alias != "" &&
+						aggregate.AliasRange != (spl.Range{}) &&
+						aggregate.Range != (spl.Range{}) &&
+						aggregate.Range.Start == aggregate.Sparkline.Range.Start
+					if aggregate.ExplicitAlias {
+						validAliasMetadata = validAliasMetadata &&
+							aggregate.Range.End == aggregate.AliasRange.End
+					} else {
+						validAliasMetadata = validAliasMetadata &&
+							aggregate.Alias == "sparkline" &&
+							aggregate.Range == aggregate.Sparkline.Range &&
+							aggregate.AliasRange == aggregate.Sparkline.Range
+					}
+					if !validAliasMetadata {
+						return nil, &Diagnostic{
+							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+							Message: "stats sparkline alias metadata is invalid",
+							Range:   aggregate.Range,
+						}
+					}
+				}
+				if aggregate.AliasQuoted &&
+					(!aggregate.ExplicitAlias || aggregate.AliasSourceDerived ||
+						aggregate.AliasWildcardDerived) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "quoted stats output provenance requires an explicit AS alias",
+						Range:   aggregate.AliasRange,
+					}
+				}
+				if aggregate.AliasSourceDerived &&
+					(aggregate.ExplicitAlias || aggregate.AliasQuoted ||
+						aggregate.AliasWildcardDerived ||
+						(aggregate.InputExpression == nil &&
+							aggregate.Function != spl.AggregateFunctionCountPredicate) ||
+						aggregate.Range == (spl.Range{}) ||
+						aggregate.AliasRange != aggregate.Range) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "source-derived stats output provenance is invalid",
+						Range:   aggregate.AliasRange,
+					}
+				}
+				if aggregate.AliasWildcardDerived &&
+					!spl.ValidStatsWildcardDerivedAlias(aggregate) {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "wc-field-derived stats output provenance is invalid",
+						Range:   aggregate.AliasRange,
+					}
+				}
+				hasEvalSource := aggregate.InputExpression != nil ||
+					aggregate.Function == spl.AggregateFunctionCountPredicate
+				if hasEvalSource && !aggregate.ExplicitAlias &&
+					!aggregate.AliasSourceDerived && !aggregate.AliasWildcardDerived {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+						Message: "implicit stats eval output requires source-derived alias provenance",
+						Range:   aggregate.AliasRange,
+					}
+				}
+				literalOutput := aggregate.AliasQuoted || aggregate.AliasSourceDerived ||
+					aggregate.AliasWildcardDerived
+				if literalOutput {
+					if aggregate.AliasRange == (spl.Range{}) ||
+						!spl.IsStatsLiteralOutputName(aggregate.Alias) {
+						return nil, &Diagnostic{
+							Code:    "SPL_INVALID_FIELD",
+							Message: "stats literal output field is empty, invalid, private, reserved, or too long",
+							Range:   aggregate.AliasRange,
+						}
+					}
+				} else if _, aliasErr := ResolveField(aggregate.Alias, aggregate.AliasRange); aliasErr != nil {
 					return nil, aliasErr
 				}
 				if _, duplicate := seenOutputs[aggregate.Alias]; duplicate {
@@ -1083,115 +1256,212 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 					}
 				}
 				seenOutputs[aggregate.Alias] = struct{}{}
-				measure := AggregateMeasure{Output: aggregate.Alias}
-				switch aggregate.Function {
-				case spl.AggregateFunctionCount:
-					if aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) {
+				measure := AggregateMeasure{
+					Output:        aggregate.Alias,
+					OutputLiteral: literalOutput,
+				}
+				if aggregate.Sparkline != nil {
+					if !canonicalTimeAvailable {
 						return nil, &Diagnostic{
-							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							Message: "argument-free count cannot contain input metadata",
-							Range:   aggregate.Range,
+							Code:    "SPL_UNSUPPORTED_STATS_TIME_FIELD",
+							Message: "stats sparkline requires the unmodified canonical _time field",
+							Range:   aggregate.Sparkline.Range,
+							Suggestions: []string{
+								"run stats sparkline before removing, replacing, or transforming _time",
+							},
 						}
 					}
-					measure.Function = AggregateFunctionCountRows
-				case spl.AggregateFunctionCountPredicate:
-					predicateMeasure, predicateErr := buildCountPredicateMeasure(
-						aggregate,
-						outputSchemaKnown,
-						&expressionBudget,
-						countPredicateMeasureDiagnostics{
-							unsupportedCode: "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							invalidMessage:  "count(eval(...)) requires one predicate, an explicit alias, and no field or percentile metadata",
-							ambiguousCode:   "SPL_AMBIGUOUS_STATS_FIELD",
-							reservedMessage: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-						},
+					sparkline, sparklineErr := buildStatsSparklineMeasure(
+						aggregate.Sparkline,
 					)
-					if predicateErr != nil {
-						return nil, predicateErr
+					if sparklineErr != nil {
+						return nil, sparklineErr
 					}
-					measure = predicateMeasure
-				case spl.AggregateFunctionCountValues:
-					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
-						return nil, &Diagnostic{
-							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							Message: "count(field) requires one exact input field",
-							Range:   aggregate.Range,
-						}
-					}
-					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
-					if inputErr != nil {
-						return nil, inputErr
-					}
-					measure.Function = AggregateFunctionCountValues
-					measure.Input = input
-				case spl.AggregateFunctionPercentile, spl.AggregateFunctionSum,
-					spl.AggregateFunctionAverage, spl.AggregateFunctionDistinctCount,
-					spl.AggregateFunctionValues, spl.AggregateFunctionList,
-					spl.AggregateFunctionMinimum,
-					spl.AggregateFunctionMaximum,
-					spl.AggregateFunctionEarliest,
-					spl.AggregateFunctionLatest:
-					if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) {
-						return nil, &Diagnostic{
-							Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-							Message: "stats aggregate requires one exact input field",
-							Range:   aggregate.Range,
-						}
-					}
-					if (aggregate.Function == spl.AggregateFunctionEarliest ||
-						aggregate.Function == spl.AggregateFunctionLatest) &&
-						!canonicalTimeAvailable {
-						return nil, &Diagnostic{
-							Code:        "SPL_UNSUPPORTED_STATS_TIME_FIELD",
-							Message:     "earliest and latest require the unmodified canonical _time field",
-							Range:       aggregate.Range,
-							Suggestions: []string{"run stats earliest or latest before removing, replacing, or transforming _time"},
-						}
-					}
-					input, inputErr := ResolveField(aggregate.Input, aggregate.InputRange)
-					if inputErr != nil {
-						return nil, inputErr
-					}
-					measure.Input = input
+					measure.Sparkline = sparkline
+				} else {
 					switch aggregate.Function {
-					case spl.AggregateFunctionPercentile:
-						measure.Function = AggregateFunctionPercentile
-						measure.Percentile = aggregate.Percentile
-					case spl.AggregateFunctionSum:
-						measure.Function = AggregateFunctionSum
-					case spl.AggregateFunctionAverage:
-						measure.Function = AggregateFunctionAverage
-					case spl.AggregateFunctionDistinctCount:
-						measure.Function = AggregateFunctionDistinctCount
-					case spl.AggregateFunctionValues:
-						measure.Function = AggregateFunctionValues
-					case spl.AggregateFunctionList:
-						measure.Function = AggregateFunctionList
-					case spl.AggregateFunctionMinimum:
-						measure.Function = AggregateFunctionMinimum
-					case spl.AggregateFunctionMaximum:
-						measure.Function = AggregateFunctionMaximum
-					case spl.AggregateFunctionEarliest:
-						measure.Function = AggregateFunctionEarliest
-					case spl.AggregateFunctionLatest:
-						measure.Function = AggregateFunctionLatest
-					}
-				default:
-					return nil, &Diagnostic{
-						Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
-						Message: "unsupported stats aggregate",
-						Range:   aggregate.Range,
+					case spl.AggregateFunctionCount:
+						if aggregate.Input != "" || aggregate.InputRange != (spl.Range{}) ||
+							aggregate.InputQuoted || aggregate.InputExpression != nil {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "argument-free count cannot contain input metadata",
+								Range:   aggregate.Range,
+							}
+						}
+						measure.Function = AggregateFunctionCountRows
+					case spl.AggregateFunctionCountPredicate:
+						predicateMeasure, predicateErr := buildCountPredicateMeasure(
+							aggregate,
+							outputSchemaKnown,
+							&expressionBudget,
+							countPredicateMeasureDiagnostics{
+								unsupportedCode:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								invalidMessage:     "count(eval(...)) requires one predicate, a valid explicit or source-derived output, and no field or percentile metadata",
+								ambiguousCode:      "SPL_AMBIGUOUS_STATS_FIELD",
+								reservedMessage:    "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+								allowImplicitAlias: true,
+							},
+						)
+						if predicateErr != nil {
+							return nil, predicateErr
+						}
+						measure = predicateMeasure
+					case spl.AggregateFunctionCountValues:
+						if aggregate.Input == "" || aggregate.InputRange == (spl.Range{}) ||
+							aggregate.InputExpression != nil {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "count(field) requires one exact input field",
+								Range:   aggregate.Range,
+							}
+						}
+						if aggregate.InputQuoted {
+							if !spl.IsStatsLiteralFieldReference(aggregate.Input) {
+								return nil, &Diagnostic{
+									Code:    "SPL_INVALID_FIELD",
+									Message: "quoted stats aggregate input is invalid",
+									Range:   aggregate.InputRange,
+								}
+							}
+						} else if !spl.IsExactUnquotedFieldName(aggregate.Input) {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "stats aggregate input is not an exact unquoted field",
+								Range:   aggregate.InputRange,
+							}
+						}
+						input, inputErr := resolveStatsInputField(
+							aggregate.Input,
+							aggregate.InputRange,
+							aggregate.InputQuoted,
+						)
+						if inputErr != nil {
+							return nil, inputErr
+						}
+						measure.Function = AggregateFunctionCountValues
+						measure.Input = input
+					default:
+						function, supported := convertStatsFieldAggregateFunction(
+							aggregate.Function,
+						)
+						if !supported {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "unsupported stats aggregate",
+								Range:   aggregate.Range,
+							}
+						}
+						hasExactInput := aggregate.Input != "" ||
+							aggregate.InputRange != (spl.Range{})
+						hasExpressionInput := aggregate.InputExpression != nil
+						if hasExactInput == hasExpressionInput ||
+							(hasExactInput && (aggregate.Input == "" ||
+								aggregate.InputRange == (spl.Range{}))) {
+							return nil, &Diagnostic{
+								Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+								Message: "stats aggregate requires exactly one exact-field or eval scalar input",
+								Range:   aggregate.Range,
+							}
+						}
+						if statsAggregateRequiresCanonicalTime(aggregate.Function) &&
+							!canonicalTimeAvailable {
+							return nil, &Diagnostic{
+								Code: "SPL_UNSUPPORTED_STATS_TIME_FIELD",
+								Message: "time-sensitive stats aggregates require the " +
+									"unmodified canonical _time field",
+								Range: aggregate.Range,
+								Suggestions: []string{
+									"run stats earliest or latest before removing, replacing, or transforming _time",
+									"run the time-sensitive stats aggregate before removing, replacing, or transforming _time",
+								},
+							}
+						}
+						measure.Function = function
+						if hasExpressionInput {
+							if complexityErr := validateSPLScalarExpressionComplexity(
+								aggregate.InputExpression,
+								&expressionBudget,
+							); complexityErr != nil {
+								return nil, complexityErr
+							}
+							expression, expressionErr := convertScalarExpressionUnchecked(
+								aggregate.InputExpression,
+							)
+							if expressionErr != nil {
+								return nil, expressionErr
+							}
+							if !outputSchemaKnown {
+								fieldRange, referencesReserved, inventoryErr := predicateFieldRange(
+									&ScalarPredicateExpression{
+										Value: expression,
+										Range: expression.SourceRange(),
+									},
+									"fields",
+								)
+								if inventoryErr != nil {
+									return nil, inventoryErr
+								}
+								if referencesReserved {
+									return nil, &Diagnostic{
+										Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+										Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+										Range:   fieldRange,
+									}
+								}
+							}
+							measure.InputExpression = expression
+						} else {
+							if aggregate.InputQuoted {
+								if !spl.IsStatsLiteralFieldReference(aggregate.Input) {
+									return nil, &Diagnostic{
+										Code:    "SPL_INVALID_FIELD",
+										Message: "quoted stats aggregate input is invalid",
+										Range:   aggregate.InputRange,
+									}
+								}
+							} else if !spl.IsExactUnquotedFieldName(aggregate.Input) {
+								return nil, &Diagnostic{
+									Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+									Message: "stats aggregate input is not an exact unquoted field",
+									Range:   aggregate.InputRange,
+								}
+							}
+							input, inputErr := resolveStatsInputField(
+								aggregate.Input,
+								aggregate.InputRange,
+								aggregate.InputQuoted,
+							)
+							if inputErr != nil {
+								return nil, inputErr
+							}
+							measure.Input = input
+						}
+						if statsAggregateUsesPercentileSuffix(aggregate.Function) {
+							measure.Percentile = aggregate.Percentile
+						}
 					}
 				}
+				for _, source := range seenSources {
+					if sameStatsAggregateSource(source, measure) {
+						return nil, &Diagnostic{
+							Code:    "SPL_DUPLICATE_STATS_AGGREGATE",
+							Message: "the same stats aggregate source cannot be renamed to multiple output fields",
+							Range:   aggregate.Range,
+						}
+					}
+				}
+				seenSources = append(seenSources, measure)
 				measures = append(measures, measure)
 				outputFields = append(outputFields, aggregate.Alias)
 			}
 			result.OutputFields = outputFields
 			outputSchemaKnown = true
 			result.Operators = append(result.Operators, &Aggregate{
-				GroupBy:  groupBy,
-				Measures: measures,
-				Range:    command.Range,
+				GroupBy:      groupBy,
+				Measures:     measures,
+				StatsOptions: statsOptions,
+				Range:        command.Range,
 			})
 			canonicalTimeAvailable = false
 		case *spl.TopCommand, *spl.RareCommand:
@@ -1345,6 +1615,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 			var split *TimechartSplit
 			if command.SplitBy != nil {
+				if command.SplitBy.Quoted {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_TIMECHART_FIELD_TYPE",
+						Message: "timechart split fields must use unquoted exact-field syntax",
+						Range:   command.SplitBy.Range,
+					}
+				}
 				resolved, splitErr := ResolveField(
 					command.SplitBy.Name,
 					command.SplitBy.Range,
@@ -1409,6 +1686,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			// always reachable public column names. A field spelled like one
 			// of them would collide with a series deterministically.
 			for _, axis := range []spl.StatsGroupField{command.Over, command.SplitBy} {
+				if axis.Quoted {
+					return nil, &Diagnostic{
+						Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
+						Message: "chart axes must use unquoted exact-field syntax",
+						Range:   axis.Range,
+					}
+				}
 				if axis.Name == "NULL" || axis.Name == "OTHER" {
 					return nil, &Diagnostic{
 						Code:        "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
@@ -1478,6 +1762,13 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			}
 		}
 	}
+	if predicates, ok := query.ParsedEvalPredicateCount(); ok {
+		result.parsedEvalPredicates = predicates
+		result.parsedSPL = true
+	}
+	if sourceDigest, ok := query.ParsedSourceDigest(); ok {
+		result.parsedSourceDigest = sourceDigest
+	}
 	return result, nil
 }
 
@@ -1500,7 +1791,11 @@ func buildChartMeasure(
 		}
 	}
 	if aggregate.Range == (spl.Range{}) || aggregate.AliasRange == (spl.Range{}) ||
-		aggregate.Predicate != nil {
+		aggregate.Sparkline != nil ||
+		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+		aggregate.Predicate != nil || aggregate.InputExpression != nil ||
+		aggregate.InputQuoted || aggregate.AliasQuoted ||
+		aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
 		return invalid("chart aggregate metadata is invalid")
 	}
 
@@ -1582,10 +1877,14 @@ func buildTimechartMeasure(
 		}
 	}
 	aggregate := command.Aggregate
-	if aggregate.Predicate != nil {
+	if aggregate.Sparkline != nil ||
+		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+		aggregate.Predicate != nil || aggregate.InputExpression != nil ||
+		aggregate.InputQuoted || aggregate.AliasQuoted ||
+		aggregate.AliasSourceDerived || aggregate.AliasWildcardDerived {
 		return AggregateMeasure{}, &Diagnostic{
 			Code:    "SPL_UNSUPPORTED_TIMECHART_AGGREGATE",
-			Message: "timechart aggregate cannot contain predicate metadata",
+			Message: "timechart aggregate cannot contain predicate or scalar-expression metadata",
 			Range:   aggregate.Range,
 		}
 	}
@@ -1992,6 +2291,22 @@ func convertStatsGroupFields(
 	result := make([]FieldRef, 0, len(fields))
 	seen := make(map[string]struct{}, len(fields))
 	for _, field := range fields {
+		if field.Quoted {
+			if commandName != "stats" || !spl.IsStatsLiteralFieldReference(field.Name) {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_FIELD",
+					Message: commandName + " grouping field has invalid quoted-field provenance",
+					Range:   field.Range,
+				}
+			}
+		} else if commandName == "stats" &&
+			!spl.IsExactUnquotedFieldName(field.Name) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STATS_SYNTAX",
+				Message: "stats BY requires exact quoted or unquoted fields; wildcard fields are not supported",
+				Range:   field.Range,
+			}
+		}
 		if _, duplicate := seen[field.Name]; duplicate {
 			return nil, &Diagnostic{
 				Code: "SPL_DUPLICATE_FIELD",
@@ -2004,7 +2319,7 @@ func convertStatsGroupFields(
 			}
 		}
 		seen[field.Name] = struct{}{}
-		resolved, err := ResolveField(field.Name, field.Range)
+		resolved, err := resolveStatsInputField(field.Name, field.Range, field.Quoted)
 		if err != nil {
 			return nil, err
 		}
@@ -2219,7 +2534,7 @@ func convertExpression(expression spl.Expr) (Expression, error) {
 		}
 		return &ComparisonExpression{Field: field, Op: convertComparisonOp(expression.Op), Value: value, Range: expression.Range}, nil
 	default:
-		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EXPRESSION", Message: fmt.Sprintf("unsupported expression type %T", expression), Range: expression.SourceRange()}
+		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EXPRESSION", Message: fmt.Sprintf("unsupported expression type %T", expression), Range: safeSPLNodeRange(expression)}
 	}
 }
 
@@ -2314,6 +2629,54 @@ func convertWhereExpressionUnchecked(expression spl.WhereExpr) (Expression, erro
 			Right: right,
 			Range: expression.Range,
 		}, nil
+	case *spl.WhereMembershipExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership expression is missing",
+			}
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Candidates) < 1 {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership requires at least one candidate",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Candidates) > spl.MaximumMembershipCandidates {
+			return nil, splExpressionComplexityError(
+				fmt.Sprintf(
+					"membership contains more than %d candidates",
+					spl.MaximumMembershipCandidates,
+				),
+				expression.Range,
+			)
+		}
+		value, err := convertScalarExpressionUnchecked(expression.Value)
+		if err != nil {
+			return nil, err
+		}
+		candidates := make([]ScalarExpression, len(expression.Candidates))
+		for index, candidate := range expression.Candidates {
+			converted, candidateErr := convertScalarExpressionUnchecked(candidate)
+			if candidateErr != nil {
+				return nil, candidateErr
+			}
+			candidates[index] = converted
+		}
+		return &MembershipExpression{
+			Value:      value,
+			Candidates: candidates,
+			Negated:    expression.Negated,
+			Range:      expression.Range,
+		}, nil
 	case *spl.WhereScalarPredicateExpr:
 		if expression == nil {
 			return nil, &Diagnostic{
@@ -2334,7 +2697,7 @@ func convertWhereExpressionUnchecked(expression spl.WhereExpr) (Expression, erro
 		}
 		return &ScalarPredicateExpression{Value: value, Range: expression.Range}, nil
 	default:
-		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_WHERE_EXPRESSION", Message: fmt.Sprintf("unsupported where expression type %T", expression), Range: expression.SourceRange()}
+		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_WHERE_EXPRESSION", Message: fmt.Sprintf("unsupported where expression type %T", expression), Range: safeSPLNodeRange(expression)}
 	}
 }
 
@@ -2349,10 +2712,12 @@ func nilSPLWhereExpression(expression spl.WhereExpr) bool {
 		return expression == nil
 	case *spl.WhereComparisonExpr:
 		return expression == nil
+	case *spl.WhereMembershipExpr:
+		return expression == nil
 	case *spl.WhereScalarPredicateExpr:
 		return expression == nil
 	default:
-		return false
+		return nilInterfaceValue(expression)
 	}
 }
 
@@ -2365,6 +2730,10 @@ func nilSPLScalarExpression(expression spl.ScalarExpr) bool {
 		return expression == nil
 	case *spl.ScalarLiteralExpr:
 		return expression == nil
+	case *spl.ScalarUnaryExpr:
+		return expression == nil
+	case *spl.ScalarBinaryExpr:
+		return expression == nil
 	case *spl.ScalarCallExpr:
 		return expression == nil
 	case *spl.ScalarIfExpr:
@@ -2372,8 +2741,29 @@ func nilSPLScalarExpression(expression spl.ScalarExpr) bool {
 	case *spl.ScalarCaseExpr:
 		return expression == nil
 	default:
+		return nilInterfaceValue(expression)
+	}
+}
+
+func nilInterfaceValue(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
 		return false
 	}
+}
+
+func safeSPLNodeRange(node spl.Node) spl.Range {
+	if nilInterfaceValue(node) {
+		return spl.Range{}
+	}
+	return node.SourceRange()
 }
 
 func splQuotedStringLiteral(
@@ -2401,6 +2791,8 @@ type splExpressionComplexityValidator struct {
 
 type splExpressionResourceBudget struct {
 	concatenationOperands int
+	arithmeticOperators   int
+	membershipCandidates  int
 }
 
 func validateSPLWhereExpressionComplexity(
@@ -2422,7 +2814,7 @@ func validateSPLScalarExpressionComplexity(
 		active: make(map[any]struct{}),
 		budget: budget,
 	}
-	return validator.validateScalar(expression, 1)
+	return validator.validateScalar(expression, 1, 0)
 }
 
 func (v *splExpressionComplexityValidator) validateWhere(
@@ -2432,7 +2824,7 @@ func (v *splExpressionComplexityValidator) validateWhere(
 	if nilSPLWhereExpression(expression) {
 		return nil
 	}
-	if err := v.enter(expression, depth, expression.SourceRange()); err != nil {
+	if err := v.enter(expression, depth, safeSPLNodeRange(expression)); err != nil {
 		return err
 	}
 	defer v.leave(expression)
@@ -2446,30 +2838,126 @@ func (v *splExpressionComplexityValidator) validateWhere(
 	case *spl.WhereNotExpr:
 		return v.validateWhere(expression.Operand, depth+1)
 	case *spl.WhereComparisonExpr:
-		if err := v.validateScalar(expression.Left, depth+1); err != nil {
+		if err := v.validateScalar(expression.Left, depth+1, 0); err != nil {
 			return err
 		}
-		return v.validateScalar(expression.Right, depth+1)
-	case *spl.WhereScalarPredicateExpr:
-		return v.validateScalar(expression.Value, depth+1)
-	default:
+		return v.validateScalar(expression.Right, depth+1, 0)
+	case *spl.WhereMembershipExpr:
+		if !validExpressionRangeOrZero(expression.Range) {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Candidates) < 1 {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_MEMBERSHIP_SYNTAX",
+				Message: "membership requires at least one candidate",
+				Range:   expression.Range,
+			}
+		}
+		if len(expression.Candidates) > spl.MaximumMembershipCandidates {
+			return splExpressionComplexityError(
+				fmt.Sprintf(
+					"membership contains more than %d candidates",
+					spl.MaximumMembershipCandidates,
+				),
+				expression.Range,
+			)
+		}
+		if err := v.chargeMembershipCandidates(
+			len(expression.Candidates),
+			expression.Range,
+		); err != nil {
+			return err
+		}
+		if err := v.validateScalar(expression.Value, depth+1, 0); err != nil {
+			return err
+		}
+		for _, candidate := range expression.Candidates {
+			if err := v.validateScalar(candidate, depth+1, 0); err != nil {
+				return err
+			}
+		}
 		return nil
+	case *spl.WhereScalarPredicateExpr:
+		return v.validateScalar(expression.Value, depth+1, 0)
+	default:
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_WHERE_EXPRESSION",
+			Message: fmt.Sprintf("unsupported where expression type %T", expression),
+			Range:   safeSPLNodeRange(expression),
+		}
 	}
 }
 
 func (v *splExpressionComplexityValidator) validateScalar(
 	expression spl.ScalarExpr,
 	depth int,
+	unaryChain int,
 ) error {
 	if nilSPLScalarExpression(expression) {
 		return nil
 	}
-	if err := v.enter(expression, depth, expression.SourceRange()); err != nil {
+	if err := v.enter(expression, depth, safeSPLNodeRange(expression)); err != nil {
 		return err
 	}
 	defer v.leave(expression)
 
 	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr, *spl.ScalarLiteralExpr:
+		return nil
+	case *spl.ScalarUnaryExpr:
+		if !validExpressionRangeOrZero(expression.Range) {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		if convertScalarUnaryOp(expression.Op) == ScalarUnaryOpInvalid {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		if unaryChain >= spl.MaximumUnaryOperatorChain {
+			return splExpressionComplexityError(
+				fmt.Sprintf(
+					"unary arithmetic chain exceeds %d operators",
+					spl.MaximumUnaryOperatorChain,
+				),
+				expression.Range,
+			)
+		}
+		if err := v.chargeArithmeticOperator(expression.Range); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.Operand, depth+1, unaryChain+1)
+	case *spl.ScalarBinaryExpr:
+		if !validExpressionRangeOrZero(expression.Range) {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		if convertScalarBinaryOp(expression.Op) == ScalarBinaryOpInvalid {
+			return &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		if err := v.chargeArithmeticOperator(expression.Range); err != nil {
+			return err
+		}
+		if err := v.validateScalar(expression.Left, depth+1, 0); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.Right, depth+1, 0)
 	case *spl.ScalarCallExpr:
 		if expression.Function == spl.ScalarFunctionCoalesce &&
 			len(expression.Arguments) > spl.MaximumCoalesceArguments {
@@ -2512,18 +3000,19 @@ func (v *splExpressionComplexityValidator) validateScalar(
 			)
 		}
 		for _, argument := range expression.Arguments {
-			if err := v.validateScalar(argument, depth+1); err != nil {
+			if err := v.validateScalar(argument, depth+1, 0); err != nil {
 				return err
 			}
 		}
+		return nil
 	case *spl.ScalarIfExpr:
 		if err := v.validateWhere(expression.Condition, depth+1); err != nil {
 			return err
 		}
-		if err := v.validateScalar(expression.True, depth+1); err != nil {
+		if err := v.validateScalar(expression.True, depth+1, 0); err != nil {
 			return err
 		}
-		return v.validateScalar(expression.False, depth+1)
+		return v.validateScalar(expression.False, depth+1, 0)
 	case *spl.ScalarCaseExpr:
 		if len(expression.Branches) > spl.MaximumCaseBranches {
 			return splExpressionComplexityError(
@@ -2538,11 +3027,57 @@ func (v *splExpressionComplexityValidator) validateScalar(
 			if err := v.validateWhere(branch.Condition, depth+1); err != nil {
 				return err
 			}
-			if err := v.validateScalar(branch.Value, depth+1); err != nil {
+			if err := v.validateScalar(branch.Value, depth+1, 0); err != nil {
 				return err
 			}
 		}
+		return nil
+	default:
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message: fmt.Sprintf("unsupported scalar expression type %T", expression),
+			Range:   safeSPLNodeRange(expression),
+		}
 	}
+}
+
+func (v *splExpressionComplexityValidator) chargeArithmeticOperator(
+	sourceRange spl.Range,
+) error {
+	if v.budget == nil {
+		return nil
+	}
+	if v.budget.arithmeticOperators >= spl.MaximumArithmeticOperatorsPerQuery {
+		return splExpressionComplexityError(
+			fmt.Sprintf(
+				"arithmetic contains more than %d operator occurrences per query",
+				spl.MaximumArithmeticOperatorsPerQuery,
+			),
+			sourceRange,
+		)
+	}
+	v.budget.arithmeticOperators++
+	return nil
+}
+
+func (v *splExpressionComplexityValidator) chargeMembershipCandidates(
+	count int,
+	sourceRange spl.Range,
+) error {
+	if v.budget == nil {
+		return nil
+	}
+	if v.budget.membershipCandidates >
+		spl.MaximumMembershipCandidatesPerQuery-count {
+		return splExpressionComplexityError(
+			fmt.Sprintf(
+				"membership contains more than %d candidate occurrences per query",
+				spl.MaximumMembershipCandidatesPerQuery,
+			),
+			sourceRange,
+		)
+	}
+	v.budget.membershipCandidates += count
 	return nil
 }
 
@@ -2559,6 +3094,13 @@ func (v *splExpressionComplexityValidator) enter(
 			),
 			sourceRange,
 		)
+	}
+	if node == nil || !reflect.TypeOf(node).Comparable() {
+		return &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+			Message: fmt.Sprintf("unsupported expression node %T", node),
+			Range:   sourceRange,
+		}
 	}
 	if _, cyclic := v.active[node]; cyclic {
 		return splExpressionComplexityError(
@@ -2592,6 +3134,343 @@ func splExpressionComplexityError(message string, sourceRange spl.Range) error {
 	}
 }
 
+func statsAggregateUsesPercentileSuffix(function spl.AggregateFunction) bool {
+	switch function {
+	case spl.AggregateFunctionPercentile,
+		spl.AggregateFunctionExactPercentile,
+		spl.AggregateFunctionUpperPercentile:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildStatsSparklineMeasure(
+	spec *spl.StatsSparkline,
+) (*SparklineMeasure, error) {
+	if spec == nil || spec.Range == (spl.Range{}) {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: "stats sparkline metadata is missing",
+		}
+	}
+	span, spanErr := convertStatsSparklineSpan(spec.Span, spec.Range)
+	if spanErr != nil {
+		return nil, spanErr
+	}
+	function, requiresInput, supported := convertStatsSparklineFunction(spec.Function)
+	if !supported {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: "unsupported aggregate inside stats sparkline",
+			Range:   spec.Range,
+		}
+	}
+	hasInput := spec.Input != "" || spec.InputQuoted ||
+		spec.InputRange != (spl.Range{}) || spec.InputGlob != nil
+	if spec.InputGlob != nil {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: "stats sparkline contains unexpanded wc-field metadata",
+			Range:   spec.InputGlob.Range,
+		}
+	}
+	if hasInput != requiresInput ||
+		(hasInput && (spec.Input == "" || spec.InputRange == (spl.Range{}))) {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: "stats sparkline inner aggregate contains invalid input metadata",
+			Range:   spec.Range,
+		}
+	}
+	var input FieldRef
+	if hasInput {
+		if spec.InputQuoted {
+			if !spl.IsStatsLiteralFieldReference(spec.Input) {
+				return nil, &Diagnostic{
+					Code:    "SPL_INVALID_FIELD",
+					Message: "quoted stats sparkline input is invalid",
+					Range:   spec.InputRange,
+				}
+			}
+		} else if !spl.IsExactUnquotedFieldName(spec.Input) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+				Message: "stats sparkline input is not an exact unquoted field",
+				Range:   spec.InputRange,
+			}
+		}
+		var inputErr error
+		input, inputErr = resolveStatsInputField(
+			spec.Input,
+			spec.InputRange,
+			spec.InputQuoted,
+		)
+		if inputErr != nil {
+			return nil, inputErr
+		}
+	}
+	timeField, timeErr := ResolveField("_time", spec.Range)
+	if timeErr != nil {
+		return nil, timeErr
+	}
+	return &SparklineMeasure{
+		Function:      function,
+		Input:         input,
+		Time:          timeField,
+		Span:          span,
+		MaximumPoints: spl.MaximumStatsSparklinePoints,
+	}, nil
+}
+
+func convertStatsSparklineFunction(
+	function spl.AggregateFunction,
+) (AggregateFunction, bool, bool) {
+	switch function {
+	case spl.AggregateFunctionCount:
+		return AggregateFunctionCountRows, false, true
+	case spl.AggregateFunctionCountValues:
+		return AggregateFunctionCountValues, true, true
+	case spl.AggregateFunctionDistinctCount:
+		return AggregateFunctionDistinctCount, true, true
+	case spl.AggregateFunctionAverage:
+		return AggregateFunctionAverage, true, true
+	case spl.AggregateFunctionStandardDeviationSample:
+		return AggregateFunctionStandardDeviationSample, true, true
+	case spl.AggregateFunctionStandardDeviationPopulation:
+		return AggregateFunctionStandardDeviationPopulation, true, true
+	case spl.AggregateFunctionVarianceSample:
+		return AggregateFunctionVarianceSample, true, true
+	case spl.AggregateFunctionVariancePopulation:
+		return AggregateFunctionVariancePopulation, true, true
+	case spl.AggregateFunctionSum:
+		return AggregateFunctionSum, true, true
+	case spl.AggregateFunctionSumSquares:
+		return AggregateFunctionSumSquares, true, true
+	case spl.AggregateFunctionMinimum:
+		return AggregateFunctionMinimum, true, true
+	case spl.AggregateFunctionMaximum:
+		return AggregateFunctionMaximum, true, true
+	case spl.AggregateFunctionRange:
+		return AggregateFunctionRange, true, true
+	default:
+		return AggregateFunctionInvalid, false, false
+	}
+}
+
+func convertStatsSparklineSpan(
+	span spl.SparklineSpan,
+	sourceRange spl.Range,
+) (SparklineSpan, error) {
+	invalid := func(message string) (SparklineSpan, error) {
+		return SparklineSpan{}, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_AGGREGATE",
+			Message: message,
+			Range:   sourceRange,
+		}
+	}
+	switch span.Kind {
+	case spl.SparklineSpanKindAutomatic:
+		if span.Magnitude != 0 || span.Unit != spl.SparklineSpanUnitInvalid ||
+			span.Range != (spl.Range{}) {
+			return invalid("automatic stats sparkline span contains explicit metadata")
+		}
+		return SparklineSpan{Kind: SparklineSpanKindAutomatic}, nil
+	case spl.SparklineSpanKindExplicit:
+		if span.Magnitude == 0 || span.Range == (spl.Range{}) {
+			return invalid("explicit stats sparkline span metadata is incomplete")
+		}
+		unit, unitsPerSecond, supported := convertStatsSparklineSpanUnit(span.Unit)
+		if !supported {
+			return invalid("explicit stats sparkline span unit is invalid")
+		}
+		if unitsPerSecond != 0 &&
+			(span.Magnitude >= unitsPerSecond || unitsPerSecond%span.Magnitude != 0) {
+			return invalid("stats sparkline subsecond span must divide one second evenly")
+		}
+		return SparklineSpan{
+			Kind:      SparklineSpanKindExplicit,
+			Magnitude: span.Magnitude,
+			Unit:      unit,
+		}, nil
+	default:
+		return invalid("stats sparkline span kind is invalid")
+	}
+}
+
+func convertStatsSparklineSpanUnit(
+	unit spl.SparklineSpanUnit,
+) (SparklineSpanUnit, uint64, bool) {
+	switch unit {
+	case spl.SparklineSpanUnitMicrosecond:
+		return SparklineSpanUnitMicrosecond, 1_000_000, true
+	case spl.SparklineSpanUnitMillisecond:
+		return SparklineSpanUnitMillisecond, 1_000, true
+	case spl.SparklineSpanUnitCentisecond:
+		return SparklineSpanUnitCentisecond, 100, true
+	case spl.SparklineSpanUnitDecisecond:
+		return SparklineSpanUnitDecisecond, 10, true
+	case spl.SparklineSpanUnitSecond:
+		return SparklineSpanUnitSecond, 0, true
+	case spl.SparklineSpanUnitMinute:
+		return SparklineSpanUnitMinute, 0, true
+	case spl.SparklineSpanUnitHour:
+		return SparklineSpanUnitHour, 0, true
+	case spl.SparklineSpanUnitDay:
+		return SparklineSpanUnitDay, 0, true
+	case spl.SparklineSpanUnitMonth:
+		return SparklineSpanUnitMonth, 0, true
+	default:
+		return SparklineSpanUnitInvalid, 0, false
+	}
+}
+
+func buildStatsOptions(
+	options spl.StatsOptions,
+	commandRange spl.Range,
+) (*StatsOptions, error) {
+	invalid := func(message string, sourceRange spl.Range) (*StatsOptions, error) {
+		if sourceRange == (spl.Range{}) {
+			sourceRange = commandRange
+		}
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STATS_SYNTAX",
+			Message: message,
+			Range:   sourceRange,
+		}
+	}
+
+	if options.PartitionsSpecified {
+		if options.PartitionsRange == (spl.Range{}) {
+			return invalid("stats partitions metadata is invalid", options.PartitionsRange)
+		}
+	} else if options.Partitions != 0 || options.PartitionsRange != (spl.Range{}) {
+		return invalid("unspecified stats partitions contains authored metadata", options.PartitionsRange)
+	}
+	if options.AllNumericSpecified {
+		if options.AllNumericRange == (spl.Range{}) {
+			return invalid("stats allnum metadata is invalid", options.AllNumericRange)
+		}
+	} else if options.AllNumeric || options.AllNumericRange != (spl.Range{}) {
+		return invalid("unspecified stats allnum contains authored metadata", options.AllNumericRange)
+	}
+	if options.DelimiterSpecified {
+		if options.DelimiterRange == (spl.Range{}) ||
+			!utf8.ValidString(options.Delimiter) {
+			return invalid("stats delim metadata is invalid", options.DelimiterRange)
+		}
+	} else if options.Delimiter != "" || options.DelimiterRange != (spl.Range{}) {
+		return invalid("unspecified stats delim contains authored metadata", options.DelimiterRange)
+	}
+	if options.DeduplicateSplitValuesSpecified {
+		if options.DeduplicateSplitValuesRange == (spl.Range{}) {
+			return invalid(
+				"stats dedup_splitvals metadata is invalid",
+				options.DeduplicateSplitValuesRange,
+			)
+		}
+	} else if options.DeduplicateSplitValues ||
+		options.DeduplicateSplitValuesRange != (spl.Range{}) {
+		return invalid(
+			"unspecified stats dedup_splitvals contains authored metadata",
+			options.DeduplicateSplitValuesRange,
+		)
+	}
+
+	partitions := spl.DefaultStatsPartitions
+	if options.Partitions > uint64(spl.MaximumStatsPartitions) {
+		partitions = spl.MaximumStatsPartitions
+	} else if options.Partitions > 0 {
+		partitions = uint8(options.Partitions)
+	}
+	delimiter := spl.DefaultStatsDelimiter
+	if options.DelimiterSpecified {
+		delimiter = options.Delimiter
+	}
+	return &StatsOptions{
+		Partitions:             partitions,
+		AllNumeric:             options.AllNumeric,
+		Delimiter:              delimiter,
+		DeduplicateSplitValues: options.DeduplicateSplitValues,
+	}, nil
+}
+
+func statsAggregateRequiresCanonicalTime(function spl.AggregateFunction) bool {
+	switch function {
+	case spl.AggregateFunctionEarliest,
+		spl.AggregateFunctionLatest,
+		spl.AggregateFunctionEarliestTime,
+		spl.AggregateFunctionLatestTime,
+		spl.AggregateFunctionRate:
+		return true
+	default:
+		return false
+	}
+}
+
+func convertStatsFieldAggregateFunction(
+	function spl.AggregateFunction,
+) (AggregateFunction, bool) {
+	switch function {
+	case spl.AggregateFunctionPercentile:
+		return AggregateFunctionPercentile, true
+	case spl.AggregateFunctionExactPercentile:
+		return AggregateFunctionExactPercentile, true
+	case spl.AggregateFunctionUpperPercentile:
+		return AggregateFunctionUpperPercentile, true
+	case spl.AggregateFunctionMedian:
+		return AggregateFunctionMedian, true
+	case spl.AggregateFunctionSum:
+		return AggregateFunctionSum, true
+	case spl.AggregateFunctionAverage:
+		return AggregateFunctionAverage, true
+	case spl.AggregateFunctionRange:
+		return AggregateFunctionRange, true
+	case spl.AggregateFunctionSumSquares:
+		return AggregateFunctionSumSquares, true
+	case spl.AggregateFunctionStandardDeviationSample:
+		return AggregateFunctionStandardDeviationSample, true
+	case spl.AggregateFunctionStandardDeviationPopulation:
+		return AggregateFunctionStandardDeviationPopulation, true
+	case spl.AggregateFunctionVarianceSample:
+		return AggregateFunctionVarianceSample, true
+	case spl.AggregateFunctionVariancePopulation:
+		return AggregateFunctionVariancePopulation, true
+	case spl.AggregateFunctionDistinctCount:
+		return AggregateFunctionDistinctCount, true
+	case spl.AggregateFunctionEstimatedDistinctCount:
+		return AggregateFunctionEstimatedDistinctCount, true
+	case spl.AggregateFunctionEstimatedDistinctCountError:
+		return AggregateFunctionEstimatedDistinctCountError, true
+	case spl.AggregateFunctionValues:
+		return AggregateFunctionValues, true
+	case spl.AggregateFunctionList:
+		return AggregateFunctionList, true
+	case spl.AggregateFunctionMinimum:
+		return AggregateFunctionMinimum, true
+	case spl.AggregateFunctionMaximum:
+		return AggregateFunctionMaximum, true
+	case spl.AggregateFunctionMode:
+		return AggregateFunctionMode, true
+	case spl.AggregateFunctionFirst:
+		return AggregateFunctionFirst, true
+	case spl.AggregateFunctionLast:
+		return AggregateFunctionLast, true
+	case spl.AggregateFunctionEarliest:
+		return AggregateFunctionEarliest, true
+	case spl.AggregateFunctionLatest:
+		return AggregateFunctionLatest, true
+	case spl.AggregateFunctionEarliestTime:
+		return AggregateFunctionEarliestTime, true
+	case spl.AggregateFunctionLatestTime:
+		return AggregateFunctionLatestTime, true
+	case spl.AggregateFunctionRate:
+		return AggregateFunctionRate, true
+	default:
+		return AggregateFunctionInvalid, false
+	}
+}
+
 func buildEventStatsFieldMeasure(
 	aggregate spl.StatsAggregate,
 	function AggregateFunction,
@@ -2618,6 +3497,8 @@ func buildEventStatsFieldMeasure(
 	}
 	if aggregate.Input == "" ||
 		aggregate.InputRange == (spl.Range{}) ||
+		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+		aggregate.InputExpression != nil ||
 		aggregate.Predicate != nil ||
 		!aggregate.ExplicitAlias {
 		return AggregateMeasure{}, &Diagnostic{
@@ -2640,10 +3521,11 @@ func buildEventStatsFieldMeasure(
 }
 
 type countPredicateMeasureDiagnostics struct {
-	unsupportedCode string
-	invalidMessage  string
-	ambiguousCode   string
-	reservedMessage string
+	unsupportedCode    string
+	invalidMessage     string
+	ambiguousCode      string
+	reservedMessage    string
+	allowImplicitAlias bool
 }
 
 // buildCountPredicateMeasure converts the common count(eval(...)) contract
@@ -2655,9 +3537,12 @@ func buildCountPredicateMeasure(
 	diagnostics countPredicateMeasureDiagnostics,
 ) (AggregateMeasure, error) {
 	if aggregate.Input != "" ||
+		aggregate.InputGlob != nil || aggregate.AliasGlob != nil ||
+		aggregate.InputQuoted ||
 		aggregate.InputRange != (spl.Range{}) ||
+		aggregate.InputExpression != nil ||
 		aggregate.Percentile != 0 ||
-		!aggregate.ExplicitAlias ||
+		(!aggregate.ExplicitAlias && !diagnostics.allowImplicitAlias) ||
 		nilSPLWhereExpression(aggregate.Predicate) {
 		return AggregateMeasure{}, &Diagnostic{
 			Code:    diagnostics.unsupportedCode,
@@ -2670,7 +3555,14 @@ func buildCountPredicateMeasure(
 		return AggregateMeasure{}, err
 	}
 	if !outputSchemaKnown {
-		if fieldRange, referencesReserved := predicateFieldRange(predicate, "fields"); referencesReserved {
+		fieldRange, referencesReserved, inventoryErr := predicateFieldRange(
+			predicate,
+			"fields",
+		)
+		if inventoryErr != nil {
+			return AggregateMeasure{}, inventoryErr
+		}
+		if referencesReserved {
 			return AggregateMeasure{}, &Diagnostic{
 				Code:    diagnostics.ambiguousCode,
 				Message: diagnostics.reservedMessage,
@@ -2679,9 +3571,10 @@ func buildCountPredicateMeasure(
 		}
 	}
 	return AggregateMeasure{
-		Function:  AggregateFunctionCountPredicate,
-		Predicate: predicate,
-		Output:    aggregate.Alias,
+		Function:      AggregateFunctionCountPredicate,
+		Predicate:     predicate,
+		Output:        aggregate.Alias,
+		OutputLiteral: aggregate.AliasQuoted || aggregate.AliasSourceDerived,
 	}, nil
 }
 
@@ -2689,78 +3582,144 @@ func buildCountPredicateMeasure(
 // expression order. Conditional aggregate planning uses it to preserve the
 // reserved open-event "fields" payload boundary just as it does for exact
 // inputs.
-func predicateFieldRange(expression Expression, name string) (spl.Range, bool) {
-	var visitExpression func(Expression) (spl.Range, bool)
-	var visitScalar func(ScalarExpression) (spl.Range, bool)
-	visitScalar = func(expression ScalarExpression) (spl.Range, bool) {
+func predicateFieldRange(
+	expression Expression,
+	name string,
+) (spl.Range, bool, error) {
+	var visitExpression func(Expression) (spl.Range, bool, error)
+	var visitScalar func(ScalarExpression) (spl.Range, bool, error)
+	visitScalar = func(expression ScalarExpression) (spl.Range, bool, error) {
 		switch expression := expression.(type) {
 		case *ScalarFieldExpression:
-			if expression != nil && expression.Field.Name == name {
-				return expression.Field.Range, true
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar field expression is nil")
 			}
+			if expression.Field.Name == name {
+				return expression.Field.Range, true, nil
+			}
+			return spl.Range{}, false, nil
+		case *ScalarLiteralExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar literal expression is nil")
+			}
+			return spl.Range{}, false, nil
+		case *ScalarUnaryExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar unary expression is nil")
+			}
+			return visitScalar(expression.Operand)
+		case *ScalarBinaryExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar binary expression is nil")
+			}
+			if sourceRange, ok, err := visitScalar(expression.Left); ok || err != nil {
+				return sourceRange, ok, err
+			}
+			return visitScalar(expression.Right)
 		case *ScalarCallExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar call expression is nil")
 			}
 			for _, argument := range expression.Arguments {
-				if sourceRange, ok := visitScalar(argument); ok {
-					return sourceRange, true
+				if sourceRange, ok, err := visitScalar(argument); ok || err != nil {
+					return sourceRange, ok, err
 				}
 			}
+			return spl.Range{}, false, nil
 		case *ScalarIfExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar if expression is nil")
 			}
-			if sourceRange, ok := visitExpression(expression.Condition); ok {
-				return sourceRange, true
+			if sourceRange, ok, err := visitExpression(expression.Condition); ok || err != nil {
+				return sourceRange, ok, err
 			}
-			if sourceRange, ok := visitScalar(expression.True); ok {
-				return sourceRange, true
+			if sourceRange, ok, err := visitScalar(expression.True); ok || err != nil {
+				return sourceRange, ok, err
 			}
 			return visitScalar(expression.False)
 		case *ScalarCaseExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar case expression is nil")
 			}
 			for _, branch := range expression.Branches {
-				if sourceRange, ok := visitExpression(branch.Condition); ok {
-					return sourceRange, true
+				if sourceRange, ok, err := visitExpression(branch.Condition); ok || err != nil {
+					return sourceRange, ok, err
 				}
-				if sourceRange, ok := visitScalar(branch.Value); ok {
-					return sourceRange, true
+				if sourceRange, ok, err := visitScalar(branch.Value); ok || err != nil {
+					return sourceRange, ok, err
 				}
 			}
+			return spl.Range{}, false, nil
+		default:
+			return spl.Range{}, false, fmt.Errorf(
+				"inspect predicate fields: unsupported scalar expression %T",
+				expression,
+			)
 		}
-		return spl.Range{}, false
 	}
-	visitExpression = func(expression Expression) (spl.Range, bool) {
+	visitExpression = func(expression Expression) (spl.Range, bool, error) {
 		switch expression := expression.(type) {
 		case *BooleanExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: Boolean expression is nil")
 			}
-			if sourceRange, ok := visitExpression(expression.Left); ok {
-				return sourceRange, true
+			if sourceRange, ok, err := visitExpression(expression.Left); ok || err != nil {
+				return sourceRange, ok, err
 			}
 			return visitExpression(expression.Right)
 		case *NotExpression:
-			if expression != nil {
-				return visitExpression(expression.Operand)
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: not expression is nil")
 			}
+			return visitExpression(expression.Operand)
+		case *TextExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: text expression is nil")
+			}
+			if name == "_raw" {
+				return expression.Range, true, nil
+			}
+			return spl.Range{}, false, nil
+		case *ComparisonExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: comparison expression is nil")
+			}
+			if expression.Field.Name == name {
+				return expression.Field.Range, true, nil
+			}
+			return spl.Range{}, false, nil
 		case *EvalComparisonExpression:
 			if expression == nil {
-				return spl.Range{}, false
+				return spl.Range{}, false, errors.New("inspect predicate fields: eval comparison expression is nil")
 			}
-			if sourceRange, ok := visitScalar(expression.Left); ok {
-				return sourceRange, true
+			if sourceRange, ok, err := visitScalar(expression.Left); ok || err != nil {
+				return sourceRange, ok, err
 			}
 			return visitScalar(expression.Right)
 		case *ScalarPredicateExpression:
-			if expression != nil {
-				return visitScalar(expression.Value)
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: scalar predicate expression is nil")
 			}
+			return visitScalar(expression.Value)
+		case *MembershipExpression:
+			if expression == nil {
+				return spl.Range{}, false, errors.New("inspect predicate fields: membership expression is nil")
+			}
+			if sourceRange, ok, err := visitScalar(expression.Value); ok || err != nil {
+				return sourceRange, ok, err
+			}
+			for _, candidate := range expression.Candidates {
+				if sourceRange, ok, err := visitScalar(candidate); ok || err != nil {
+					return sourceRange, ok, err
+				}
+			}
+			return spl.Range{}, false, nil
+		default:
+			return spl.Range{}, false, fmt.Errorf(
+				"inspect predicate fields: unsupported expression %T",
+				expression,
+			)
 		}
-		return spl.Range{}, false
 	}
 	return visitExpression(expression)
 }
@@ -2780,7 +3739,15 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 				Message: "scalar field expression is missing",
 			}
 		}
-		field, err := ResolveField(expression.Field, expression.Range)
+		var (
+			field FieldRef
+			err   error
+		)
+		if expression.Quoted {
+			field, err = ResolveQuotedField(expression.Field, expression.Range)
+		} else {
+			field, err = ResolveField(expression.Field, expression.Range)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -2797,6 +3764,89 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			return nil, err
 		}
 		return &ScalarLiteralExpression{Value: value, Range: expression.Range}, nil
+	case *spl.ScalarUnaryExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression is missing",
+			}
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		op := convertScalarUnaryOp(expression.Op)
+		if op == ScalarUnaryOpInvalid {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "unary arithmetic expression has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		if splScalarHasStaticallyUnsupportedArithmeticType(expression.Operand) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE",
+				Message: "arithmetic cannot consume the statically known operand type",
+				Range:   splScalarExpressionRange(expression.Operand, expression.Range),
+			}
+		}
+		operand, err := convertScalarExpressionUnchecked(expression.Operand)
+		if err != nil {
+			return nil, err
+		}
+		return &ScalarUnaryExpression{
+			Op:      op,
+			Operand: operand,
+			Range:   expression.Range,
+		}, nil
+	case *spl.ScalarBinaryExpr:
+		if expression == nil {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression is missing",
+			}
+		}
+		if !validExpressionRangeOrZero(expression.Range) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression has an invalid source range",
+				Range:   expression.Range,
+			}
+		}
+		op := convertScalarBinaryOp(expression.Op)
+		if op == ScalarBinaryOpInvalid {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ARITHMETIC_SYNTAX",
+				Message: "binary arithmetic expression has an invalid operator",
+				Range:   expression.Range,
+			}
+		}
+		for _, operand := range []spl.ScalarExpr{expression.Left, expression.Right} {
+			if splScalarHasStaticallyUnsupportedArithmeticType(operand) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_ARITHMETIC_VALUE_TYPE",
+					Message: "arithmetic cannot consume the statically known operand type",
+					Range:   splScalarExpressionRange(operand, expression.Range),
+				}
+			}
+		}
+		left, err := convertScalarExpressionUnchecked(expression.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := convertScalarExpressionUnchecked(expression.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &ScalarBinaryExpression{
+			Op:    op,
+			Left:  left,
+			Right: right,
+			Range: expression.Range,
+		}, nil
 	case *spl.ScalarCallExpr:
 		if expression == nil {
 			return nil, &Diagnostic{
@@ -2872,6 +3922,10 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			expectedArguments = 1
 			hasExactArity = true
 			functionName = "mvcount"
+		case spl.ScalarFunctionMVSort:
+			expectedArguments = 1
+			hasExactArity = true
+			functionName = "mvsort"
 		case spl.ScalarFunctionMatch:
 			expectedArguments = 2
 			hasExactArity = true
@@ -2960,6 +4014,7 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			expression.Function == spl.ScalarFunctionReplace ||
 			expression.Function == spl.ScalarFunctionLower ||
 			expression.Function == spl.ScalarFunctionUpper ||
+			expression.Function == spl.ScalarFunctionMVSort ||
 			expression.Function == spl.ScalarFunctionLength {
 			for _, argument := range expression.Arguments {
 				if splScalarMayReturnBooleanFunction(argument) {
@@ -3287,6 +4342,8 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			function = ScalarFunctionFloor
 		case spl.ScalarFunctionMVCount:
 			function = ScalarFunctionMVCount
+		case spl.ScalarFunctionMVSort:
+			function = ScalarFunctionMVSort
 		case spl.ScalarFunctionMatch:
 			function = ScalarFunctionMatch
 		case spl.ScalarFunctionLike:
@@ -3381,48 +4438,18 @@ func convertScalarExpressionUnchecked(expression spl.ScalarExpr) (ScalarExpressi
 			Range:    expression.Range,
 		}, nil
 	default:
-		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION", Message: fmt.Sprintf("unsupported scalar expression type %T", expression), Range: expression.SourceRange()}
+		return nil, &Diagnostic{Code: "SPL_UNSUPPORTED_EVAL_EXPRESSION", Message: fmt.Sprintf("unsupported scalar expression type %T", expression), Range: safeSPLNodeRange(expression)}
 	}
 }
 
 func splScalarMayReturnBooleanFunction(expression spl.ScalarExpr) bool {
-	switch expression := expression.(type) {
-	case *spl.ScalarCallExpr:
-		if expression == nil {
-			return false
-		}
-		if expression.Function.ReturnsBoolean() {
-			return true
-		}
-		if expression.Function == spl.ScalarFunctionCoalesce {
-			for _, argument := range expression.Arguments {
-				if splScalarMayReturnBooleanFunction(argument) {
-					return true
-				}
-			}
-		}
-		return false
-	case *spl.ScalarIfExpr:
-		return expression != nil &&
-			(splScalarMayReturnBooleanFunction(expression.True) ||
-				splScalarMayReturnBooleanFunction(expression.False))
-	case *spl.ScalarCaseExpr:
-		if expression == nil {
-			return false
-		}
-		for _, branch := range expression.Branches {
-			if splScalarMayReturnBooleanFunction(branch.Value) {
-				return true
-			}
-		}
-		return false
-	default:
-		return false
-	}
+	return spl.ScalarExpressionMayReturnBooleanFunction(expression)
 }
 
 func splScalarMayReturnBooleanValue(expression spl.ScalarExpr) bool {
 	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr, *spl.ScalarUnaryExpr, *spl.ScalarBinaryExpr:
+		return false
 	case *spl.ScalarLiteralExpr:
 		return expression != nil &&
 			expression.Value.Kind == spl.LiteralKindBool
@@ -3460,8 +4487,86 @@ func splScalarMayReturnBooleanValue(expression spl.ScalarExpr) bool {
 	}
 }
 
+func splScalarExpressionRange(
+	expression spl.ScalarExpr,
+	fallback spl.Range,
+) spl.Range {
+	if nilSPLScalarExpression(expression) {
+		return fallback
+	}
+	return expression.SourceRange()
+}
+
+func splScalarHasStaticallyUnsupportedArithmeticType(
+	expression spl.ScalarExpr,
+) bool {
+	if nilSPLScalarExpression(expression) ||
+		splScalarMayReturnBooleanValue(expression) {
+		return !nilSPLScalarExpression(expression)
+	}
+	switch expression := expression.(type) {
+	case *spl.ScalarFieldExpr:
+		// Field type and canonical-time lineage are properties of the current
+		// pipeline state. The backend validator owns that evidence so a field
+		// overwritten by an earlier eval is not misclassified from its name.
+		return false
+	case *spl.ScalarLiteralExpr:
+		return expression != nil && expression.Value.Kind == spl.LiteralKindString
+	case *spl.ScalarCallExpr:
+		if expression == nil {
+			return false
+		}
+		switch expression.Function {
+		case spl.ScalarFunctionReplace,
+			spl.ScalarFunctionLower,
+			spl.ScalarFunctionUpper,
+			spl.ScalarFunctionMVSort,
+			spl.ScalarFunctionSubstring,
+			spl.ScalarFunctionToString,
+			spl.ScalarFunctionStrftime,
+			spl.ScalarFunctionConcat:
+			return true
+		case spl.ScalarFunctionCoalesce:
+			foundValue := false
+			for _, argument := range expression.Arguments {
+				if literal, ok := argument.(*spl.ScalarLiteralExpr); ok &&
+					literal != nil && literal.Value.Kind == spl.LiteralKindNull {
+					continue
+				}
+				foundValue = true
+				if !splScalarHasStaticallyUnsupportedArithmeticType(argument) {
+					return false
+				}
+			}
+			return foundValue
+		default:
+			return false
+		}
+	case *spl.ScalarIfExpr:
+		return expression != nil &&
+			splScalarHasStaticallyUnsupportedArithmeticType(expression.True) &&
+			splScalarHasStaticallyUnsupportedArithmeticType(expression.False)
+	case *spl.ScalarCaseExpr:
+		if expression == nil || len(expression.Branches) == 0 {
+			return false
+		}
+		for _, branch := range expression.Branches {
+			if !splScalarHasStaticallyUnsupportedArithmeticType(branch.Value) {
+				return false
+			}
+		}
+		return true
+	case *spl.ScalarUnaryExpr, *spl.ScalarBinaryExpr:
+		return false
+	default:
+		return false
+	}
+}
+
 func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
 	switch expression := expression.(type) {
+	case *ScalarFieldExpression, *ScalarUnaryExpression, *ScalarBinaryExpression:
+		return false
 	case *ScalarCallExpression:
 		if expression == nil {
 			return false
@@ -3489,6 +4594,11 @@ func scalarFunctionReturnsBoolean(expression ScalarExpression) bool {
 
 func scalarExpressionCanBeDirectPredicate(expression ScalarExpression) bool {
 	switch expression := expression.(type) {
+	case *ScalarFieldExpression,
+		*ScalarLiteralExpression,
+		*ScalarUnaryExpression,
+		*ScalarBinaryExpression:
+		return false
 	case *ScalarCallExpression:
 		if expression == nil {
 			return false
@@ -3560,6 +4670,34 @@ func convertComparisonOp(op spl.CompareOp) ComparisonOp {
 	}
 }
 
+func convertScalarUnaryOp(op spl.ScalarUnaryOp) ScalarUnaryOp {
+	switch op {
+	case spl.ScalarUnaryOpPositive:
+		return ScalarUnaryOpPositive
+	case spl.ScalarUnaryOpNegative:
+		return ScalarUnaryOpNegative
+	default:
+		return ScalarUnaryOpInvalid
+	}
+}
+
+func convertScalarBinaryOp(op spl.ScalarBinaryOp) ScalarBinaryOp {
+	switch op {
+	case spl.ScalarBinaryOpMultiply:
+		return ScalarBinaryOpMultiply
+	case spl.ScalarBinaryOpDivide:
+		return ScalarBinaryOpDivide
+	case spl.ScalarBinaryOpRemainder:
+		return ScalarBinaryOpRemainder
+	case spl.ScalarBinaryOpAdd:
+		return ScalarBinaryOpAdd
+	case spl.ScalarBinaryOpSubtract:
+		return ScalarBinaryOpSubtract
+	default:
+		return ScalarBinaryOpInvalid
+	}
+}
+
 func convertValue(literal spl.Literal) (Value, error) {
 	switch literal.Kind {
 	case spl.LiteralKindString:
@@ -3612,6 +4750,49 @@ func convertFields(names []string, sourceRange spl.Range) ([]FieldRef, error) {
 	return fields, nil
 }
 
+func convertTableFields(command *spl.TableCommand) ([]FieldRef, error) {
+	if command == nil {
+		return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "table command is nil"}
+	}
+	if len(command.QuotedFields) == 0 && len(command.FieldRanges) == 0 {
+		return convertFields(command.Fields, command.Range)
+	}
+	if len(command.QuotedFields) != len(command.Fields) ||
+		len(command.FieldRanges) != len(command.Fields) {
+		return nil, &Diagnostic{
+			Code:    "SPL_INVALID_FIELD",
+			Message: "table field quote and source-range metadata is inconsistent",
+			Range:   command.Range,
+		}
+	}
+	fields := make([]FieldRef, 0, len(command.Fields))
+	seen := make(map[string]struct{}, len(command.Fields))
+	for index, name := range command.Fields {
+		if _, duplicate := seen[name]; duplicate {
+			return nil, &Diagnostic{
+				Code:    "SPL_DUPLICATE_FIELD",
+				Message: fmt.Sprintf("field %q is repeated", name),
+				Range:   command.FieldRanges[index],
+			}
+		}
+		seen[name] = struct{}{}
+		var (
+			field FieldRef
+			err   error
+		)
+		if command.QuotedFields[index] {
+			field, err = ResolveQuotedField(name, command.FieldRanges[index])
+		} else {
+			field, err = ResolveField(name, command.FieldRanges[index])
+		}
+		if err != nil {
+			return nil, err
+		}
+		fields = append(fields, field)
+	}
+	return fields, nil
+}
+
 // ResolveField parses deterministic dotted dynamic access. A backslash escapes
 // a literal dot or backslash within one path segment.
 func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
@@ -3655,6 +4836,36 @@ func ResolveField(name string, sourceRange spl.Range) (FieldRef, error) {
 		}
 	}
 	return FieldRef{Name: name, Path: path, Range: sourceRange}, nil
+}
+
+// ResolveQuotedField resolves repository-standard single-quoted exact-field
+// syntax. Canonical event paths retain their ordinary metadata. A safe stats
+// literal name that cannot be a canonical path (for example ".com") receives
+// one exact logical segment so downstream stages can bind it by visible Name
+// without minting storage-path authority.
+func ResolveQuotedField(name string, sourceRange spl.Range) (FieldRef, error) {
+	if spl.IsExactQuotedFieldName(name) {
+		return ResolveField(name, sourceRange)
+	}
+	if !spl.IsStatsLiteralFieldReference(name) {
+		return FieldRef{}, &Diagnostic{
+			Code:    "SPL_INVALID_FIELD",
+			Message: "single-quoted field is not a safe exact field reference",
+			Range:   sourceRange,
+		}
+	}
+	return FieldRef{Name: name, Path: []string{name}, Range: sourceRange}, nil
+}
+
+func resolveStatsInputField(
+	name string,
+	sourceRange spl.Range,
+	quoted bool,
+) (FieldRef, error) {
+	if quoted {
+		return ResolveQuotedField(name, sourceRange)
+	}
+	return ResolveField(name, sourceRange)
 }
 
 func splitFieldPath(name string) ([]string, error) {

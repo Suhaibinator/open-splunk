@@ -1249,10 +1249,9 @@ func TestManagerDetachesStaticTimechartMetadataFromExecutor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed := waitForState(t, manager, created.ID, StateCompleted)
-	if completed.Schema == nil ||
-		!reflect.DeepEqual(*completed.Schema, schema) {
-		t.Fatalf("completed schema = %#v, want %#v", completed.Schema, schema)
+	failed := waitForState(t, manager, created.ID, StateFailed)
+	if failed.Failure == nil || failed.Failure.Code != FailureInternal || failed.Schema != nil {
+		t.Fatalf("mutated execution authority published result = %#v", failed)
 	}
 }
 
@@ -1488,6 +1487,10 @@ func TestMetadataBudgetRejectsBeforeStorageAndIsReclaimedWithTombstone(t *testin
 		clock := &fakeClock{now: time.Date(2026, time.July, 21, 9, 0, 0, 0, time.UTC)}
 		request := validRequest()
 		metadataLimit, err := retainedJobMetadataReservation("metadata-1", request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadataLimit, err = checkedAdd(metadataLimit, uint64(len(defaultCompilerVersion)))
 		if err != nil {
 			t.Fatal(err)
 		}

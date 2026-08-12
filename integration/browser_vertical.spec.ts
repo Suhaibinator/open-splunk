@@ -10,6 +10,7 @@ import {
   type Locator,
   type Page,
   type Response,
+  type Route,
   type WebSocket,
   type WebSocketRoute,
 } from "@playwright/test";
@@ -21,7 +22,19 @@ import {
   GetSearchJobResponse,
   GetSearchResultsRequest,
   GetSearchResultsResponse,
+  ValidateSearchRequest,
+  ValidateSearchResponse,
 } from "../gen/ts/open_splunk/v1/search_api";
+import {
+  AuditAction,
+  AuditActorKind,
+  AuditActorRole,
+  AuditTargetKind,
+} from "../gen/ts/open_splunk/v1/audit";
+import {
+  ListAuditEventsRequest,
+  ListAuditEventsResponse,
+} from "../gen/ts/open_splunk/v1/audit_api";
 import { AppState } from "../gen/ts/open_splunk/v1/app";
 import { IndexAccessState, IndexState } from "../gen/ts/open_splunk/v1/index";
 import {
@@ -34,13 +47,65 @@ import {
   ServerFeature,
 } from "../gen/ts/open_splunk/v1/system_api";
 import {
+  DiagnosticSeverity,
+  SharingScope,
+  SortDirection,
+} from "../gen/ts/open_splunk/v1/common";
+import {
+  KnowledgeDependencyRole,
+  KnowledgeObject,
+  KnowledgeObjectDefinition,
+  KnowledgeObjectState,
+  KnowledgeObjectType,
+  KnowledgeOverwriteBehavior,
+  KnowledgeSearchStage,
+  KnowledgeSelectorMatchKind,
+} from "../gen/ts/open_splunk/v1/knowledge";
+import {
+  InspectSearchJobRequest,
+  InspectSearchJobResponse,
+  SearchInspectionOutputKind,
+} from "../gen/ts/open_splunk/v1/search_inspection_api";
+import {
+  CreateKnowledgeObjectRequest,
+  CreateKnowledgeObjectResponse,
+  DeleteKnowledgeObjectRequest,
+  DeleteKnowledgeObjectResponse,
+  GetKnowledgeObjectRequest,
+  GetKnowledgeObjectResponse,
+  KnowledgeValidationIntent,
+  KnowledgeObjectSortBy,
+  ListKnowledgeObjectDependenciesRequest,
+  ListKnowledgeObjectDependenciesResponse,
+  ListKnowledgeObjectDependentsRequest,
+  ListKnowledgeObjectDependentsResponse,
+  ListKnowledgeObjectsRequest,
+  ListKnowledgeObjectsResponse,
+  PreviewKnowledgeObjectRequest,
+  PreviewKnowledgeObjectResponse,
+  SetKnowledgeObjectStateRequest,
+  SetKnowledgeObjectStateResponse,
+  UpdateKnowledgeObjectRequest,
+  UpdateKnowledgeObjectResponse,
+  ValidateKnowledgeObjectRequest,
+  ValidateKnowledgeObjectResponse,
+} from "../gen/ts/open_splunk/v1/knowledge_api";
+import { ListIndexesResponse } from "../gen/ts/open_splunk/v1/index_api";
+import { ListIngestionTokensResponse } from "../gen/ts/open_splunk/v1/collector_admin_api";
+import {
   SearchExecutionPhase,
   SearchFailureCode,
   SearchJobOrigin,
   SearchJobState,
   type SearchProgress,
 } from "../gen/ts/open_splunk/v1/search";
-import type { ResultRow } from "../gen/ts/open_splunk/v1/result";
+import {
+  ColumnSemanticType,
+  ResultRow,
+  ResultSchema,
+  ResultSetKind,
+} from "../gen/ts/open_splunk/v1/result";
+import { TypedValue, ValueType } from "../gen/ts/open_splunk/v1/value";
 import {
   ResynchronizationReason,
   SearchWebSocketCommand,
@@ -83,12 +148,47 @@ const sequenceGapRESTFirstProgressTest =
   process.env.OPEN_SPLUNK_E2E_SEQUENCE_GAP_REST_FIRST_PROGRESS_TEST === "1";
 const origin = validatedOrigin(baseURL);
 const timeout = 45_000;
+
+function tierOneObjectType(definition: KnowledgeObjectDefinition): KnowledgeObjectType {
+  switch (definition.body?.$case) {
+    case "fieldExtraction": return KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION;
+    case "fieldAlias": return KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS;
+    case "calculatedField": return KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD;
+    default: return KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED;
+  }
+}
+
+function tierOneDefinitionDigest(definition: KnowledgeObjectDefinition): Uint8Array {
+  return createHash("sha256")
+    .update(KnowledgeObjectDefinition.encode(definition).finish())
+    .digest();
+}
 const maximumMaterializedRows = 32;
 const maximumSpacerRows = 2;
 const maximumTableBodyRows = maximumMaterializedRows + maximumSpacerRows;
 const maximumRecordedBrowserFrameBytes = 16_384;
 const maximumRecordedBrowserFrames = 64;
 let browserRecorderSelfTestCompleted = false;
+
+interface RequestGate {
+  release: (() => void) | null;
+  started: boolean;
+  settled: Promise<void>;
+  markSettled: () => void;
+}
+
+function createRequestGate(): RequestGate {
+  let resolveSettled: (() => void) | null = null;
+  const settled = new Promise<void>((resolve) => {
+    resolveSettled = resolve;
+  });
+  return {
+    release: null,
+    started: false,
+    settled,
+    markSettled: () => resolveSettled?.(),
+  };
+}
 
 test.use({
   launchOptions: browserExecutable ? { executablePath: browserExecutable } : {},
@@ -147,6 +247,2099 @@ test("collector event is visible through the compiled backend UI", async ({ page
   assertBrowserSafety(safety);
 });
 
+test("backend v0.2 diagnostics remain authoritative and prevent browser dispatch", async ({
+  page,
+}) => {
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const indexMatch = /\bindex=(?:"([^"]+)"|([^\s|]+))/u.exec(searchSPL);
+  const indexName = indexMatch?.[1] ?? indexMatch?.[2] ?? "main";
+  const source = `index=${JSON.stringify(indexName)} message="🟢" | eval rejected=status IN (500, 503)`;
+  const membershipOffset = source.indexOf("IN (500");
+  if (membershipOffset < 0) throw new Error("diagnostic membership operator is missing");
+  const startByteOffset = BigInt(Buffer.byteLength(source.slice(0, membershipOffset), "utf8"));
+  const startColumn = Array.from(source.slice(0, membershipOffset)).length + 1;
+  const diagnosticMessage =
+    "SPL v0.2 membership is Boolean and cannot be assigned directly by eval.";
+  const validated: ValidateSearchRequest[] = [];
+  const safety = observeBrowserSafety(page);
+
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("diagnostic Validate omitted its protobuf body");
+      const request = ValidateSearchRequest.decode(wire);
+      if (request.definition?.spl !== source) {
+        throw new Error("diagnostic Validate did not preserve the authored v0.2 source");
+      }
+      validated.push(request);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ValidateSearchResponse.encode(
+          ValidateSearchResponse.fromPartial({
+            valid: false,
+            diagnostics: [{
+              code: "SPL_UNSUPPORTED_EVAL_EXPRESSION",
+              severity: DiagnosticSeverity.DIAGNOSTIC_SEVERITY_ERROR,
+              message: diagnosticMessage,
+              sourceRange: {
+                start: { byteOffset: startByteOffset, line: 1, column: startColumn },
+                end: { byteOffset: startByteOffset + 2n, line: 1, column: startColumn + 2 },
+              },
+              suggestions: ["Use membership inside where, if, or case."],
+            }],
+          }),
+        ).finish()),
+      });
+    },
+  );
+
+  await openSearchWorkspace(page);
+  await page.getByTestId("search-input").fill(source);
+  await page.getByTestId("run-search").click();
+
+  await expect(page.getByTestId("toast")).toContainText(diagnosticMessage, { timeout });
+  expect(validated).toHaveLength(1);
+  expect(safety.createRequests()).toBe(0);
+  expect(safety.resultsRequests()).toBe(0);
+  assertBrowserSafety(safety);
+});
+
+test("Search Job Inspector renders only capability-gated redacted Knowledge authority", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const safety = observeBrowserSafety(page);
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const selectedAppId = "inspection-app";
+  const indexMatch = /\bindex=(?:"([^"]+)"|([^\s|]+))/u.exec(searchSPL);
+  const indexName = indexMatch?.[1] ?? indexMatch?.[2] ?? "main";
+  const maliciousField =
+    "generated-<img src=x onerror=globalThis.__inspectionExecuted=true>";
+  const maliciousCompiler =
+    "compiler-<script>globalThis.__inspectionExecuted=true</script>";
+  const longGeneratedSQL = `SELECT ${"x".repeat(4_096)}`;
+  const capabilityOffSecret = "SECRET_CAPABILITY_OFF_KNOWLEDGE_IDENTITY";
+  const foreignSecret = "SECRET_FOREIGN_KNOWLEDGE_IDENTITY";
+  const staleCompiler = "STALE_ABORTED_INSPECTION_COMPILER";
+  const resultSchema = {
+    schemaId: "inspection-statistics-v1",
+    revision: 1n,
+    resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+    columns: [{
+      fieldName: "message",
+      displayName: "Message",
+      valueType: ValueType.VALUE_TYPE_STRING,
+      semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_DIMENSION,
+      nullable: false,
+      multivalue: false,
+      hiddenByDefault: false,
+    }],
+  };
+  const inspectRequests: InspectSearchJobRequest[] = [];
+  const resultRequests: GetSearchResultsRequest[] = [];
+  const apiTraffic: Array<{ method: string; pathname: string }> = [];
+  const heldInspection = createRequestGate();
+  let knowledgeAdvertised = false;
+  let serveForeignIdentity = true;
+  let holdNextInspection = false;
+  let createdJobs = 0;
+
+  const expectCompletedResultRequest = async (
+    expectedCount: number,
+    searchJobId: string,
+  ): Promise<void> => {
+    await expect.poll(() => resultRequests.length, {
+      message: `completed job ${searchJobId} loaded one authoritative result snapshot`,
+      timeout,
+    }).toBe(expectedCount);
+    expect(resultRequests[expectedCount - 1]).toEqual({
+      searchJobId,
+      page: { pageSize: 20, pageToken: undefined, includeTotalSize: true },
+      columns: [],
+      allowPartialResults: false,
+    });
+    await waitForBrowserRender(page);
+    expect(resultRequests).toHaveLength(expectedCount);
+  };
+
+  const inspectionResponse = (responseJobId: string): InspectSearchJobResponse => {
+    const provenance = {
+      source: {
+        $case: "redactedObject" as const,
+        value: {
+          redactedObjectOrdinal: 0,
+          objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+          stage: KnowledgeSearchStage.KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+        },
+      },
+    };
+    return InspectSearchJobResponse.fromPartial({
+      searchJobId: responseJobId,
+      logicalPlan: {
+        stages: [{
+          stageIndex: 0,
+          operator: "Scan",
+          inputFields: ["message"],
+          outputFields: ["message"],
+          sourceRange: {
+            start: { byteOffset: 0n, line: 1, column: 1 },
+            end: { byteOffset: 1n, line: 1, column: 2 },
+          },
+          operatorProvenance: [],
+          outputProvenance: [],
+        }, {
+          stageIndex: 1,
+          operator: "ParallelExtend",
+          inputFields: ["message"],
+          outputFields: [maliciousField],
+          operatorProvenance: [provenance],
+          outputProvenance: [{ outputField: maliciousField, provenance }],
+        }],
+        referencedFields: ["message"],
+        output: {
+          kind: SearchInspectionOutputKind.SEARCH_INSPECTION_OUTPUT_KIND_STATIC,
+          fields: ["message"],
+        },
+      },
+      physicalPlan: {
+        nodeTypes: ["ReadFromMergeTree"],
+        reads: [],
+      },
+      generatedSql: longGeneratedSQL,
+      explainText: "ReadFromMergeTree",
+      diagnosticQueryId: "inspection-diagnostic-query",
+      knowledgeSnapshot: {
+        ref: {
+          snapshotSha256: new Uint8Array(32).fill(0x42),
+          tenantCatalogRevision: 7n,
+          tenantCatalogStateToken: new Uint8Array(32).fill(0x24),
+          objectCount: 1,
+          compilerCompatibilityVersion: maliciousCompiler,
+        },
+        objects: [{
+          resolutionOrdinal: 0,
+          objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+          stage: KnowledgeSearchStage.KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+          disclosure: { $case: "redacted", value: true },
+        }],
+        objectsTruncated: false,
+      },
+    });
+  };
+
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.origin === origin && url.pathname.startsWith("/api/v1/")) {
+      apiTraffic.push({ method: request.method(), pathname: url.pathname });
+    }
+  });
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(GetSystemBootstrapResponse.encode(
+        GetSystemBootstrapResponse.fromPartial({
+          serverVersion: "search-inspection-browser-test",
+          apiVersion: "v1",
+          splCompatibilityVersion: "open-splunk-v0.1",
+          searchWebsocketPath: "/api/v1/search/ws",
+          features: [
+            ServerFeature.SERVER_FEATURE_SEARCH,
+            ServerFeature.SERVER_FEATURE_PLAN_INSPECTION,
+            ...(knowledgeAdvertised
+              ? [ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS]
+              : []),
+          ],
+          limits: { maximumPageSize: 20 },
+          apps: [{
+            appId: selectedAppId,
+            slug: "inspection-app",
+            displayName: "Inspection app",
+            defaultIndexNames: [indexName],
+            state: AppState.APP_STATE_ACTIVE,
+          }],
+          indexes: [{
+            indexId: "inspection-index-id",
+            name: indexName,
+            displayName: "Inspection index",
+            state: IndexState.INDEX_STATE_ACTIVE,
+            ingestionAccess: IndexAccessState.INDEX_ACCESS_STATE_ENABLED,
+            searchAccess: IndexAccessState.INDEX_ACCESS_STATE_ENABLED,
+          }],
+          selectedAppId,
+          serverTime: new Date("2026-08-10T12:00:00.000Z"),
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("inspection search Validate omitted its protobuf body");
+      const request = ValidateSearchRequest.decode(wire);
+      if (request.definition === undefined) {
+        throw new Error("inspection search Validate omitted its definition");
+      }
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ValidateSearchResponse.encode(
+          ValidateSearchResponse.fromPartial({
+            valid: true,
+            normalizedSpl: request.definition.spl,
+            referencedIndexes: [indexName],
+            referencedFields: ["message"],
+            predictedResultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/create",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("inspection search Create omitted its protobuf body");
+      const request = CreateSearchJobRequest.decode(wire);
+      if (request.definition === undefined) {
+        throw new Error("inspection search Create omitted its definition");
+      }
+      createdJobs += 1;
+      const searchJobId = `inspection-job-${createdJobs}`;
+      const completedAt = new Date(`2026-08-10T12:00:0${createdJobs}.000Z`);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(CreateSearchJobResponse.encode(
+          CreateSearchJobResponse.fromPartial({
+            searchJob: {
+              searchJobId,
+              stateVersion: 1n,
+              definition: request.definition,
+              source: { origin: SearchJobOrigin.SEARCH_JOB_ORIGIN_AD_HOC },
+              compilerVersion: "open-splunk-v0.1",
+              effectiveIndexScope: [indexName],
+              resolvedTimeRange: {
+                earliest: new Date("2026-08-10T11:00:00.000Z"),
+                latest: completedAt,
+                timezone: "UTC",
+              },
+              state: SearchJobState.SEARCH_JOB_STATE_COMPLETED,
+              resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+              resultSchema,
+              progress: {
+                phase: SearchExecutionPhase.SEARCH_EXECUTION_PHASE_COMPLETE,
+                percentComplete: 100,
+                elapsed: { seconds: 0n, nanos: 1_000_000 },
+                queueWait: { seconds: 0n, nanos: 0 },
+                updatedAt: completedAt,
+                stateVersion: 1n,
+              },
+              createdAt: completedAt,
+              startedAt: completedAt,
+              finishedAt: completedAt,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/results",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("inspection search Results omitted its protobuf body");
+      const request = GetSearchResultsRequest.decode(wire);
+      resultRequests.push(request);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(GetSearchResultsResponse.encode(
+          GetSearchResultsResponse.fromPartial({
+            searchJobId: request.searchJobId,
+            resultPage: {
+              schema: resultSchema,
+              rows: [],
+              page: {
+                totalSize: 0n,
+                totalSizeExact: true,
+              },
+              snapshotComplete: true,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/jobs/inspect",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("inspection request omitted its protobuf body");
+      const request = InspectSearchJobRequest.decode(wire);
+      inspectRequests.push(request);
+      if (holdNextInspection) {
+        holdNextInspection = false;
+        heldInspection.started = true;
+        await new Promise<void>((resolve) => {
+          heldInspection.release = resolve;
+        });
+        heldInspection.release = null;
+        const staleResponse = inspectionResponse(request.searchJobId);
+        staleResponse.knowledgeSnapshot!.ref!.compilerCompatibilityVersion = staleCompiler;
+        try {
+          await route.fulfill({
+            status: 200,
+            headers: protobufHeaders,
+            body: Buffer.from(InspectSearchJobResponse.encode(staleResponse).finish()),
+          });
+        } catch {
+          // The superseding inspection intentionally aborts only this held request.
+        } finally {
+          heldInspection.markSettled();
+        }
+        return;
+      }
+      const response = inspectionResponse(
+        knowledgeAdvertised && serveForeignIdentity
+          ? `foreign-${foreignSecret}`
+          : request.searchJobId,
+      );
+      if (!knowledgeAdvertised) {
+        const authorizedProvenance = {
+          source: {
+            $case: "authorizedObject" as const,
+            value: {
+              knowledgeObjectId: capabilityOffSecret,
+              knowledgeObjectVersion: 8n,
+              objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_CALCULATED_FIELD,
+              objectName: capabilityOffSecret,
+              definitionLocation: capabilityOffSecret,
+              stage: KnowledgeSearchStage.KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD,
+            },
+          },
+        };
+        response.logicalPlan!.stages[1]!.operatorProvenance = [authorizedProvenance];
+        response.logicalPlan!.stages[1]!.outputProvenance = [{
+          outputField: maliciousField,
+          provenance: authorizedProvenance,
+        }];
+        response.knowledgeSnapshot!.objects[0]!.disclosure = {
+          $case: "authorizedObject",
+          value: {
+            knowledgeObjectId: capabilityOffSecret,
+            version: 8n,
+            name: capabilityOffSecret,
+          },
+        };
+      }
+      if (knowledgeAdvertised && serveForeignIdentity) {
+        serveForeignIdentity = false;
+        response.knowledgeSnapshot!.objects[0]!.disclosure = {
+          $case: "authorizedObject",
+          value: {
+            knowledgeObjectId: foreignSecret,
+            version: 9n,
+            name: foreignSecret,
+          },
+        };
+      }
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(InspectSearchJobResponse.encode(response).finish()),
+      });
+    },
+  );
+
+  let inspectorURL = "";
+  let inspectorStorage: { local: [string, string][]; session: [string, string][] };
+  await test.step("capability-off strips forged Knowledge from one exact inspect response", async () => {
+    const runSearch = await openSearchWorkspace(page);
+    await runSearch.click();
+    await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
+    await expectCompletedResultRequest(1, "inspection-job-1");
+    expect(inspectRequests, "inspection must not start automatically").toHaveLength(0);
+    const inspectTrigger = page.getByRole("button", { name: "Inspect search job" });
+    inspectorURL = page.url();
+    inspectorStorage = await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }));
+    const trafficBeforeInspect = apiTraffic.length;
+    await inspectTrigger.click();
+    const dialog = page.getByRole("dialog", { name: "Search job inspector" });
+    await expect(dialog.getByText("ParallelExtend", { exact: true })).toBeVisible({ timeout });
+    await expect(dialog).toContainText(maliciousField);
+    await expect(dialog.getByRole("region", { name: "Knowledge authority" })).toHaveCount(0);
+    await expect(dialog).not.toContainText(maliciousCompiler);
+    await expect(dialog).not.toContainText(capabilityOffSecret);
+    await expect(page.locator("body")).not.toContainText(capabilityOffSecret);
+    await expect(dialog).not.toContainText("Calculated field");
+    await expect(dialog).not.toContainText(/redacted ordinal/iu);
+    await expect(dialog.locator("script, img")).toHaveCount(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "__inspectionExecuted")))
+      .toBeUndefined();
+    await waitForBrowserRender(page);
+    expect(inspectRequests).toEqual([{ searchJobId: "inspection-job-1" }]);
+    expect(apiTraffic.slice(trafficBeforeInspect)).toEqual([{
+      method: "POST",
+      pathname: "/api/v1/search/jobs/inspect",
+    }]);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(inspectTrigger).toBeFocused();
+  });
+
+  await test.step("foreign identity fails generically before a valid redacted retry", async () => {
+    knowledgeAdvertised = true;
+    const runSearch = await openSearchWorkspace(page);
+    await runSearch.click();
+    await expect(page.getByTestId("job-strip")).toContainText("Completed", { timeout });
+    await expectCompletedResultRequest(2, "inspection-job-2");
+    expect(inspectRequests, "the second job must not be inspected automatically").toHaveLength(1);
+    const inspectTrigger = page.getByRole("button", { name: "Inspect search job" });
+    const trafficBeforeInspect = apiTraffic.length;
+    await inspectTrigger.click();
+    let dialog = page.getByRole("dialog", { name: "Search job inspector" });
+    await expect(dialog.getByRole("alert")).toHaveText(
+      "Inspection unavailable: The server could not inspect this search job.",
+      { timeout },
+    );
+    await expect(dialog).not.toContainText(foreignSecret);
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(inspectTrigger).toBeFocused();
+
+    await inspectTrigger.click();
+    dialog = page.getByRole("dialog", { name: "Search job inspector" });
+    const knowledgeRegion = dialog.getByRole("region", { name: "Knowledge authority" });
+    await expect(knowledgeRegion).toContainText("42".repeat(32), { timeout });
+    await expect(knowledgeRegion).toContainText("Catalog revision7");
+    await expect(knowledgeRegion).toContainText("Applicable objects1");
+    await expect(knowledgeRegion).toContainText(maliciousCompiler);
+    await expect(knowledgeRegion).toContainText("Redacted ordinal 0 · Calculated field");
+    await expect(dialog).toContainText("Calculated field · ordinal 0");
+    await expect(dialog).toContainText(
+      `${maliciousField} ← redacted ordinal 0`,
+    );
+    await expect(dialog.getByText("Generated SQL", { exact: true }).locator("..")).toContainText(
+      longGeneratedSQL,
+    );
+    await expect(dialog).not.toContainText(foreignSecret);
+    await expect(dialog).not.toContainText("24".repeat(32));
+    await expect(dialog.locator("script, img, a[href]")).toHaveCount(0);
+    await expect(dialog.getByRole("button", {
+      name: /create|update|enable|disable|delete knowledge/i,
+    })).toHaveCount(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "__inspectionExecuted")))
+      .toBeUndefined();
+    await waitForBrowserRender(page);
+    expect(inspectRequests.slice(1)).toEqual([
+      { searchJobId: "inspection-job-2" },
+      { searchJobId: "inspection-job-2" },
+    ]);
+    expect(apiTraffic.slice(trafficBeforeInspect)).toEqual([
+      { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+      { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+    ]);
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    expect(await dialog.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const body = element.querySelector<HTMLElement>(".modal-body");
+      const knowledge = element.querySelector<HTMLElement>("[aria-label='Knowledge authority']");
+      const logicalLabel = Array.from(element.querySelectorAll("strong"))
+        .find((candidate) => candidate.textContent === "Logical plan");
+      const logical = logicalLabel?.parentElement ?? null;
+      if (body === null) {
+        return {
+          bodyNoHorizontalOverflow: false,
+          dialogContained: false,
+          dialogNoHorizontalOverflow: false,
+          knowledgeContained: false,
+          logicalContained: false,
+        };
+      }
+      const bodyBounds = body.getBoundingClientRect();
+      const horizontallyContained = (candidate: HTMLElement | null): boolean => {
+        if (candidate === null) return false;
+        const candidateBounds = candidate.getBoundingClientRect();
+        return candidateBounds.left >= bodyBounds.left - 1
+          && candidateBounds.right <= bodyBounds.right + 1;
+      };
+      return {
+        bodyNoHorizontalOverflow: body.scrollWidth <= body.clientWidth,
+        dialogContained: bounds.left >= -1
+          && bounds.right <= window.innerWidth + 1
+          && bounds.top >= -1
+          && bounds.bottom <= window.innerHeight + 1,
+        dialogNoHorizontalOverflow: element.scrollWidth <= element.clientWidth,
+        knowledgeContained: horizontallyContained(knowledge),
+        logicalContained: horizontallyContained(logical),
+      };
+    })).toEqual({
+      bodyNoHorizontalOverflow: true,
+      dialogContained: true,
+      dialogNoHorizontalOverflow: true,
+      knowledgeContained: true,
+      logicalContained: true,
+    });
+    expect(page.url()).toBe(inspectorURL);
+    expect(await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }))).toEqual(inspectorStorage);
+    expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+      .toEqual([]);
+    assertBrowserSafety(safety);
+    await dialog.getByRole("button", { name: "Done" }).click();
+    await expect(dialog).toHaveCount(0);
+    await page.setViewportSize({ width: 1_280, height: 720 });
+    await expect(inspectTrigger).toBeVisible();
+  });
+
+  await test.step("a superseding inspection prevents a held stale response from committing", async () => {
+    const inspectTrigger = page.getByRole("button", { name: "Inspect search job" });
+    const trafficBeforeRace = apiTraffic.length;
+    const requestCountBeforeRace = inspectRequests.length;
+    holdNextInspection = true;
+    let dialog = page.getByRole("dialog", { name: "Search job inspector" });
+    try {
+      await inspectTrigger.click();
+      await expect.poll(() => heldInspection.started, {
+        message: "the first racing inspection reached its deterministic response barrier",
+        timeout,
+      }).toBe(true);
+      await expect(dialog).toContainText("Loading the administrator inspection plan…");
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(inspectTrigger).toBeFocused();
+
+      await inspectTrigger.click();
+      dialog = page.getByRole("dialog", { name: "Search job inspector" });
+      const knowledgeRegion = dialog.getByRole("region", { name: "Knowledge authority" });
+      await expect(knowledgeRegion).toContainText(maliciousCompiler, { timeout });
+      await expect(dialog).not.toContainText(staleCompiler);
+
+      heldInspection.release?.();
+      await heldInspection.settled;
+      await waitForBrowserRender(page);
+      await expect(knowledgeRegion).toContainText(maliciousCompiler);
+      await expect(dialog).not.toContainText(staleCompiler);
+      expect(inspectRequests.slice(requestCountBeforeRace)).toEqual([
+        { searchJobId: "inspection-job-2" },
+        { searchJobId: "inspection-job-2" },
+      ]);
+      expect(apiTraffic.slice(trafficBeforeRace)).toEqual([
+        { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+        { method: "POST", pathname: "/api/v1/search/jobs/inspect" },
+      ]);
+      expect(page.url()).toBe(inspectorURL);
+      expect(await page.evaluate(() => ({
+        local: Object.entries(localStorage),
+        session: Object.entries(sessionStorage),
+      }))).toEqual(inspectorStorage);
+      expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+        .toEqual([]);
+      assertBrowserSafety(safety, [
+        /^POST \/api\/v1\/search\/jobs\/inspect: net::ERR_ABORTED$/u,
+      ]);
+      await page.keyboard.press("Escape");
+      await expect(dialog).toHaveCount(0);
+      await expect(inspectTrigger).toBeFocused();
+    } finally {
+      heldInspection.release?.();
+      if (heldInspection.started) await heldInspection.settled;
+    }
+  });
+});
+
+test("Mutation Audit renders historical Knowledge events without the Knowledge feature", async ({
+  page,
+}) => {
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const maliciousTargetId = "ko-<script>globalThis.__auditScriptExecuted=true</script>";
+  const maliciousAppId = "app-<img src=x onerror=globalThis.__auditScriptExecuted=true>";
+  const legacyTargetId = "saved-search-legacy";
+  const auditRequests: ListAuditEventsRequest[] = [];
+  const apiTraffic: Array<{ method: string; pathname: string }> = [];
+
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (url.origin === origin && url.pathname.startsWith("/api/v1/")) {
+      apiTraffic.push({ method: request.method(), pathname: url.pathname });
+    }
+  });
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(GetSystemBootstrapResponse.encode(
+        GetSystemBootstrapResponse.fromPartial({
+          serverVersion: "knowledge-audit-browser-test",
+          apiVersion: "v1",
+          splCompatibilityVersion: "open-splunk-v0.1",
+          searchWebsocketPath: "/api/v1/search/ws",
+          // Historical journal visibility deliberately omits the dormant Knowledge feature.
+          features: [ServerFeature.SERVER_FEATURE_AUDIT_SEARCH],
+          limits: { maximumPageSize: 25 },
+          serverTime: new Date("2026-08-09T12:00:00.000Z"),
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/audit/events/list",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("audit List request omitted its protobuf body");
+      auditRequests.push(ListAuditEventsRequest.decode(wire));
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ListAuditEventsResponse.encode(
+          ListAuditEventsResponse.fromPartial({
+            auditEvents: [{
+              sequence: 2n,
+              occurredAt: new Date("2026-08-09T11:59:00.000Z"),
+              actorKind: AuditActorKind.AUDIT_ACTOR_KIND_BROWSER,
+              actorId: "admin-audit",
+              actorRole: AuditActorRole.AUDIT_ACTOR_ROLE_ADMINISTRATOR,
+              action: AuditAction.AUDIT_ACTION_KNOWLEDGE_OBJECT_SCOPE_CHANGE,
+              targetKind: AuditTargetKind.AUDIT_TARGET_KIND_KNOWLEDGE_OBJECT,
+              targetId: maliciousTargetId,
+              targetVersion: 2n,
+              appId: maliciousAppId,
+              objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+              sharingScope: SharingScope.SHARING_SCOPE_APP,
+            }, {
+              sequence: 1n,
+              occurredAt: new Date("2026-08-09T11:58:00.000Z"),
+              actorKind: AuditActorKind.AUDIT_ACTOR_KIND_BROWSER,
+              actorId: "admin-audit",
+              actorRole: AuditActorRole.AUDIT_ACTOR_ROLE_ADMINISTRATOR,
+              action: AuditAction.AUDIT_ACTION_SAVED_SEARCH_UPDATE,
+              targetKind: AuditTargetKind.AUDIT_TARGET_KIND_SAVED_SEARCH,
+              targetId: legacyTargetId,
+              targetVersion: 2n,
+            }],
+            page: { totalSize: 2n, totalSizeExact: true },
+          }),
+        ).finish()),
+      });
+    },
+  );
+
+  let activityURL = "";
+  let storageBefore: { local: [string, string][]; session: [string, string][] };
+  let trafficBeforeAudit = 0;
+  await test.step("audit-only bootstrap exposes the Mutation Audit tab", async () => {
+    activityURL = new URL("/activity/", origin).href;
+    await page.goto(activityURL, { waitUntil: "domcontentloaded", timeout });
+    const mutationTab = page.getByRole("tab", { name: /Mutation audit/ });
+    await expect(mutationTab).toBeVisible({ timeout });
+    await expect(page.getByRole("tab", { name: /Search attempts/ })).toHaveCount(0);
+    storageBefore = await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }));
+    trafficBeforeAudit = apiTraffic.length;
+    await mutationTab.click();
+  });
+
+  const mutationPanel = page.locator("#activity-mutations-panel");
+  await test.step("Knowledge metadata is escaped into the read-only journal", async () => {
+    const row = mutationPanel.getByRole("row").filter({ hasText: maliciousTargetId });
+    await expect(row.getByText("Knowledge object · scope change", { exact: true }))
+      .toBeVisible({ timeout });
+    await expect(row).toContainText(`App: ${maliciousAppId}`);
+    await expect(row).toContainText("Type: Field alias");
+    await expect(row).toContainText("Sharing: App");
+    await expect(row.locator("script, img, a, button, input, textarea, select")).toHaveCount(0);
+    const legacyRow = mutationPanel.getByRole("row").filter({ hasText: legacyTargetId });
+    await expect(legacyRow).toContainText("Saved search");
+    await expect(legacyRow).not.toContainText(/App:|Type:|Sharing:/);
+    await expect(mutationPanel.getByLabel("Target kind").locator("option").filter({
+      hasText: "Knowledge object",
+    })).toHaveCount(1);
+    await expect(mutationPanel.getByLabel("Actions").locator("option").filter({
+      hasText: /^Knowledge object ·/,
+    })).toHaveCount(6);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "__auditScriptExecuted")))
+      .toBeUndefined();
+  });
+
+  await test.step("the read-only projection emits only exact audit List traffic", async () => {
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    expect(auditRequests.length).toBeGreaterThan(0);
+    expect(auditRequests.length).toBeLessThanOrEqual(2);
+    const expectedRequest: ListAuditEventsRequest = {
+      page: { pageSize: 25, pageToken: undefined, includeTotalSize: true },
+      actionFilters: [],
+      actorIdFilter: undefined,
+      targetKindFilter: undefined,
+    };
+    expect(auditRequests).toEqual(Array.from(
+      { length: auditRequests.length },
+      () => expectedRequest,
+    ));
+    expect(apiTraffic.slice(trafficBeforeAudit)).toEqual(Array.from(
+      { length: auditRequests.length },
+      () => ({ method: "POST", pathname: "/api/v1/audit/events/list" }),
+    ));
+    expect(apiTraffic.filter(({ pathname }) => pathname.startsWith("/api/v1/knowledge/")))
+      .toEqual([]);
+    expect(page.url()).toBe(activityURL);
+    expect(await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }))).toEqual(storageBefore);
+  });
+});
+
+test("bootstrap-advertised Knowledge Manager keeps advanced filters in one exact cursor tuple", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const appId = "app-observability";
+  const cursor = "knowledge-cursor-1";
+  const dependencyCursor = "knowledge-dependencies-cursor-1";
+  const dependentCursor = "knowledge-dependents-cursor-1";
+  const maliciousDependencyId = "ko-dependency-<script>";
+  const dependencyBId = "ko-dependency-b";
+  const maliciousDependentId =
+    "ko-dependent-<img onerror=globalThis.__knowledgeScriptExecuted=true>";
+  const maliciousName = "<script>globalThis.__knowledgeScriptExecuted=true</script>";
+  let knowledgeAdvertised = false;
+  let serveMismatchedDetail = true;
+  let serveMismatchedRelatedObject = true;
+  let maliciousDependencyGetCount = 0;
+  let holdNextDependencyB = true;
+  const dependencyRetryGate = createRequestGate();
+  const heldDependencyB = createRequestGate();
+  let heldDependencyBReplacementStarted = false;
+  const requestedURLs: string[] = [];
+  const listRequests: ListKnowledgeObjectsRequest[] = [];
+  const rootGetRequests: GetKnowledgeObjectRequest[] = [];
+  const relatedGetRequests: GetKnowledgeObjectRequest[] = [];
+  const dependencyRequests: ListKnowledgeObjectDependenciesRequest[] = [];
+  const dependentRequests: ListKnowledgeObjectDependentsRequest[] = [];
+  const createRequests: CreateKnowledgeObjectRequest[] = [];
+  const validateRequests: ValidateKnowledgeObjectRequest[] = [];
+  const updateRequests: UpdateKnowledgeObjectRequest[] = [];
+  const stateRequests: SetKnowledgeObjectStateRequest[] = [];
+  const deleteRequests: DeleteKnowledgeObjectRequest[] = [];
+  const previewRequests: PreviewKnowledgeObjectRequest[] = [];
+  const mutationAuthorizations: string[] = [];
+  const administratorToken = "K".repeat(32);
+  const catalogStateToken = new Uint8Array(32).fill(0x35);
+  let malformedValidationResponses = 1;
+  let holdNextValidation = true;
+  const staleValidationGate = createRequestGate();
+  let knowledgeDeleted = false;
+  let mutationClock = 0;
+
+  const knowledgeObject = (id: string, name: string, version: bigint): KnowledgeObject => {
+    const definition = KnowledgeObjectDefinition.fromPartial({
+      appId,
+      name,
+      description: "Rendered text only: <img src=x onerror=globalThis.__knowledgeScriptExecuted=true>",
+      sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+      selector: {
+        sourcePatterns: [{
+          matchKind: KnowledgeSelectorMatchKind.KNOWLEDGE_SELECTOR_MATCH_KIND_EXACT,
+          value: "source::api",
+        }],
+      },
+      body: {
+        $case: "fieldAlias",
+        value: {
+          sourceField: "status",
+          destinationField: "http_status",
+          overwriteBehavior:
+            KnowledgeOverwriteBehavior.KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+        },
+      },
+    });
+    return KnowledgeObject.fromPartial({
+      knowledgeObjectId: id,
+      tenantId: "tenant-local",
+      appId,
+      ownerId: "owner-7",
+      objectType: KnowledgeObjectType.KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+      name,
+      version,
+      sharingScope: SharingScope.SHARING_SCOPE_PRIVATE,
+      state: KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE,
+      definition,
+      definitionSha256: createHash("sha256")
+        .update(KnowledgeObjectDefinition.encode(definition).finish())
+        .digest(),
+      createdAt: new Date("2026-08-08T10:00:00.000Z"),
+      updatedAt: new Date("2026-08-08T10:01:00.000Z"),
+    });
+  };
+  let firstObject = knowledgeObject("ko-malicious", maliciousName, 2n);
+  const mismatchedDetailObject = knowledgeObject("ko-malicious", maliciousName, 3n);
+  const continuationObject = knowledgeObject("ko-continuation", "continued_alias", 3n);
+  const maliciousDependencyObject = knowledgeObject(
+    maliciousDependencyId,
+    "<img src=x onerror=globalThis.__knowledgeScriptExecuted=true>",
+    1n,
+  );
+  const dependencyBObject = knowledgeObject(dependencyBId, "dependency_b", 3n);
+  const maliciousDependentObject = knowledgeObject(
+    maliciousDependentId,
+    "<script>globalThis.__knowledgeScriptExecuted=true</script>",
+    3n,
+  );
+  const mismatchedRelatedObject = knowledgeObject(
+    maliciousDependencyId,
+    "SECRET_MISMATCHED_RELATED_OBJECT",
+    9n,
+  );
+
+  page.on("request", (request) => requestedURLs.push(request.url()));
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/system/bootstrap",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(GetSystemBootstrapResponse.encode(
+        GetSystemBootstrapResponse.fromPartial({
+          serverVersion: "knowledge-browser-test",
+          apiVersion: "v1",
+          splCompatibilityVersion: "open-splunk-v0.1",
+          searchWebsocketPath: "/api/v1/search/ws",
+          features: knowledgeAdvertised
+            ? [ServerFeature.SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS]
+            : [],
+          limits: { maximumPageSize: 2 },
+          apps: [{
+            appId,
+            slug: "observability",
+            displayName: "Observability",
+            state: AppState.APP_STATE_ACTIVE,
+          }],
+          selectedAppId: appId,
+          serverTime: new Date("2026-08-08T12:00:00.000Z"),
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/indexes/list",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(ListIndexesResponse.encode(
+        ListIndexesResponse.fromPartial({
+          page: { totalSize: 0n, totalSizeExact: true },
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/ingestion-tokens/list",
+    (route) => route.fulfill({
+      status: 200,
+      headers: protobufHeaders,
+      body: Buffer.from(ListIngestionTokensResponse.encode(
+        ListIngestionTokensResponse.fromPartial({
+          page: { totalSize: 0n, totalSizeExact: true },
+        }),
+      ).finish()),
+    }),
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/list",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge List request omitted its protobuf body");
+      const request = ListKnowledgeObjectsRequest.decode(wire);
+      listRequests.push(request);
+      const continuation = request.page?.pageToken === cursor;
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ListKnowledgeObjectsResponse.encode(
+          ListKnowledgeObjectsResponse.fromPartial({
+            knowledgeObjects: knowledgeDeleted
+              ? []
+              : continuation ? [continuationObject] : [firstObject],
+            page: {
+              nextPageToken: knowledgeDeleted || continuation ? undefined : cursor,
+              totalSize: knowledgeDeleted ? 0n : 2n,
+              totalSizeExact: true,
+            },
+            // Continuations deliberately become stale; Apply/Clear must discard them.
+            tenantCatalogRevision: continuation ? 8n : 7n,
+          }),
+        ).finish()),
+      });
+    },
+  );
+
+  function mutationAuthorization(route: Route): void {
+    const authorization = route.request().headers()["authorization"] ?? "";
+    mutationAuthorizations.push(authorization);
+    if (authorization !== `Bearer ${administratorToken}`) {
+      throw new Error(`knowledge mutation omitted its administrator bearer: ${authorization}`);
+    }
+  }
+
+  function nextMutationDate(): Date {
+    mutationClock += 1;
+    return new Date(`2026-08-08T10:${String(1 + mutationClock).padStart(2, "0")}:00.000Z`);
+  }
+
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/validate",
+    async (route) => {
+      mutationAuthorization(route);
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Validate request omitted its protobuf body");
+      const request = ValidateKnowledgeObjectRequest.decode(wire);
+      validateRequests.push(request);
+      if (malformedValidationResponses > 0) {
+        malformedValidationResponses -= 1;
+        await route.fulfill({
+          status: 200,
+          headers: protobufHeaders,
+          body: Buffer.from(ValidateKnowledgeObjectResponse.encode(
+            ValidateKnowledgeObjectResponse.fromPartial({ tenantCatalogRevision: 40n }),
+          ).finish()),
+        });
+        return;
+      }
+      const heldForStaleReplacement = holdNextValidation;
+      if (heldForStaleReplacement) {
+        holdNextValidation = false;
+        staleValidationGate.started = true;
+        await new Promise<void>((resolve) => {
+          staleValidationGate.release = resolve;
+        });
+        staleValidationGate.release = null;
+      }
+      if (request.definition === undefined) {
+        throw new Error("knowledge Validate omitted its definition");
+      }
+      const selector = request.definition.selector;
+      const selectorPatterns = (selector?.indexPatterns.length ?? 0)
+        + (selector?.hostPatterns.length ?? 0)
+        + (selector?.sourcePatterns.length ?? 0)
+        + (selector?.sourcetypePatterns.length ?? 0);
+      const response = {
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ValidateKnowledgeObjectResponse.encode(
+          ValidateKnowledgeObjectResponse.fromPartial({
+            result: {
+              valid: true,
+              objectType: tierOneObjectType(request.definition),
+              normalizedDefinition: request.definition,
+              definitionSha256: tierOneDefinitionDigest(request.definition),
+              resources: {
+                selectorPatterns,
+                normalizedDefinitionBytes: BigInt(
+                  KnowledgeObjectDefinition.encode(request.definition).finish().byteLength,
+                ),
+              },
+            },
+            tenantCatalogRevision: 40n,
+          }),
+        ).finish()),
+      };
+      try {
+        await route.fulfill(response);
+      } catch (error) {
+        if (!heldForStaleReplacement) throw error;
+        // Editing the candidate aborts this deliberately held Validate request.
+      } finally {
+        if (heldForStaleReplacement) staleValidationGate.markSettled();
+      }
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/create",
+    async (route) => {
+      mutationAuthorization(route);
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Create request omitted its protobuf body");
+      const request = CreateKnowledgeObjectRequest.decode(wire);
+      createRequests.push(request);
+      if (request.definition === undefined) throw new Error("knowledge Create omitted definition");
+      const occurredAt = nextMutationDate();
+      const created = KnowledgeObject.fromPartial({
+        knowledgeObjectId: "ko-browser-created",
+        tenantId: "tenant-local",
+        appId: request.definition.appId,
+        ownerId: "owner-7",
+        objectType: tierOneObjectType(request.definition),
+        name: request.definition.name,
+        version: 1n,
+        sharingScope: request.definition.sharingScope,
+        state: request.initialState,
+        definition: request.definition,
+        definitionSha256: tierOneDefinitionDigest(request.definition),
+        createdAt: occurredAt,
+        updatedAt: occurredAt,
+      });
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(CreateKnowledgeObjectResponse.encode(
+          CreateKnowledgeObjectResponse.fromPartial({
+            knowledgeObject: created,
+            tenantCatalogRevision: 41n,
+            tenantCatalogStateToken: catalogStateToken,
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/update",
+    async (route) => {
+      mutationAuthorization(route);
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Update request omitted its protobuf body");
+      const request = UpdateKnowledgeObjectRequest.decode(wire);
+      updateRequests.push(request);
+      if (request.definition === undefined) throw new Error("knowledge Update omitted definition");
+      const updatedAt = nextMutationDate();
+      firstObject = KnowledgeObject.fromPartial({
+        ...firstObject,
+        appId: request.definition.appId,
+        name: request.definition.name,
+        sharingScope: request.definition.sharingScope,
+        version: request.expectedVersion + 1n,
+        definition: request.definition,
+        definitionSha256: tierOneDefinitionDigest(request.definition),
+        updatedAt,
+      });
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(UpdateKnowledgeObjectResponse.encode(
+          UpdateKnowledgeObjectResponse.fromPartial({
+            knowledgeObject: firstObject,
+            tenantCatalogRevision: 42n,
+            tenantCatalogStateToken: catalogStateToken,
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/set-state",
+    async (route) => {
+      mutationAuthorization(route);
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge SetState request omitted its protobuf body");
+      const request = SetKnowledgeObjectStateRequest.decode(wire);
+      stateRequests.push(request);
+      const updatedAt = nextMutationDate();
+      firstObject = KnowledgeObject.fromPartial({
+        ...firstObject,
+        version: request.expectedVersion + 1n,
+        state: request.state,
+        updatedAt,
+        disabledAt: request.state === KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED
+          ? updatedAt
+          : undefined,
+      });
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(SetKnowledgeObjectStateResponse.encode(
+          SetKnowledgeObjectStateResponse.fromPartial({
+            knowledgeObject: firstObject,
+            tenantCatalogRevision: 43n + BigInt(stateRequests.length),
+            tenantCatalogStateToken: catalogStateToken,
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/delete",
+    async (route) => {
+      mutationAuthorization(route);
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Delete request omitted its protobuf body");
+      const request = DeleteKnowledgeObjectRequest.decode(wire);
+      deleteRequests.push(request);
+      knowledgeDeleted = true;
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(DeleteKnowledgeObjectResponse.encode(
+          DeleteKnowledgeObjectResponse.fromPartial({
+            knowledgeObjectId: request.knowledgeObjectId,
+            deletedVersion: request.expectedVersion + 1n,
+            tenantCatalogRevision: 50n,
+            tenantCatalogStateToken: catalogStateToken,
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/preview",
+    async (route) => {
+      mutationAuthorization(route);
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Preview request omitted its protobuf body");
+      const request = PreviewKnowledgeObjectRequest.decode(wire);
+      previewRequests.push(request);
+      if (request.definition === undefined) {
+        throw new Error("knowledge Preview omitted its candidate definition");
+      }
+      const schema = ResultSchema.fromPartial({
+        schemaId: request.retainedSearchJobId,
+        revision: 1n,
+        resultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+        columns: [{
+          fieldName: "http_status",
+          displayName: "http_status",
+          valueType: ValueType.VALUE_TYPE_STRING,
+          semanticType: ColumnSemanticType.COLUMN_SEMANTIC_TYPE_DIMENSION,
+        }],
+      });
+      const previewRow = (value: string) => ResultRow.fromPartial({
+        rowId: `${request.retainedSearchJobId}:0`,
+        ordinal: 0n,
+        cells: [TypedValue.fromPartial({
+          kind: { $case: "stringValue", value },
+        })],
+      });
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(PreviewKnowledgeObjectResponse.encode(
+          PreviewKnowledgeObjectResponse.fromPartial({
+            validation: {
+              valid: true,
+              objectType: tierOneObjectType(request.definition),
+              normalizedDefinition: request.definition,
+              definitionSha256: tierOneDefinitionDigest(request.definition),
+              resources: {
+                selectorPatterns: 1,
+                normalizedDefinitionBytes: BigInt(
+                  KnowledgeObjectDefinition.encode(request.definition).finish().byteLength,
+                ),
+              },
+            },
+            beforeSchema: schema,
+            afterSchema: schema,
+            beforeRows: [previewRow("before-status")],
+            afterRows: [previewRow("after-http-status")],
+            tenantCatalogRevision: 40n,
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/get",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Get request omitted its protobuf body");
+      const request = GetKnowledgeObjectRequest.decode(wire);
+      let responseObject: KnowledgeObject | undefined;
+      let requestGate: ReturnType<typeof createRequestGate> | null = null;
+      if (request.knowledgeObjectId === firstObject.knowledgeObjectId) {
+        rootGetRequests.push(request);
+        responseObject = serveMismatchedDetail ? mismatchedDetailObject : firstObject;
+      } else {
+        relatedGetRequests.push(request);
+        if (
+          request.knowledgeObjectId === maliciousDependencyId
+          && request.version === maliciousDependencyObject.version
+        ) {
+          maliciousDependencyGetCount += 1;
+          responseObject = serveMismatchedRelatedObject
+            ? mismatchedRelatedObject
+            : maliciousDependencyObject;
+          serveMismatchedRelatedObject = false;
+          if (maliciousDependencyGetCount === 2) {
+            const gate = dependencyRetryGate;
+            requestGate = gate;
+            gate.started = true;
+            await new Promise<void>((resolve) => {
+              gate.release = resolve;
+            });
+            gate.release = null;
+          }
+        } else if (
+          request.knowledgeObjectId === dependencyBId
+          && request.version === dependencyBObject.version
+        ) {
+          responseObject = dependencyBObject;
+          if (holdNextDependencyB) {
+            holdNextDependencyB = false;
+            const gate = heldDependencyB;
+            requestGate = gate;
+            gate.started = true;
+            await new Promise<void>((resolve) => {
+              gate.release = resolve;
+            });
+            gate.release = null;
+          }
+        } else if (
+          request.knowledgeObjectId === maliciousDependentId
+          && request.version === maliciousDependentObject.version
+        ) {
+          responseObject = maliciousDependentObject;
+        }
+      }
+      const response = {
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(GetKnowledgeObjectResponse.encode(
+          GetKnowledgeObjectResponse.fromPartial({
+            knowledgeObject: responseObject,
+          }),
+        ).finish()),
+      };
+      if (requestGate !== null) {
+        try {
+          await route.fulfill(response);
+        } catch (error) {
+          if (
+            requestGate !== heldDependencyB
+            || !heldDependencyBReplacementStarted
+          ) throw error;
+          // Replacing inspector A aborts this deliberately held transport.
+        } finally {
+          requestGate.markSettled();
+        }
+        return;
+      }
+      await route.fulfill(response);
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/dependencies",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Dependencies request omitted its protobuf body");
+      const request = ListKnowledgeObjectDependenciesRequest.decode(wire);
+      dependencyRequests.push(request);
+      const continuation = request.page?.pageToken === dependencyCursor;
+      const dependencies = continuation
+        ? [{
+          source: { knowledgeObjectId: firstObject.knowledgeObjectId, version: firstObject.version },
+          target: { knowledgeObjectId: "ko-dependency-z", version: 4n },
+          role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+        }]
+        : [{
+          source: { knowledgeObjectId: firstObject.knowledgeObjectId, version: firstObject.version },
+          target: { knowledgeObjectId: maliciousDependencyId, version: 1n },
+          role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+        }, {
+          source: { knowledgeObjectId: firstObject.knowledgeObjectId, version: firstObject.version },
+          target: { knowledgeObjectId: dependencyBId, version: 3n },
+          role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+        }];
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ListKnowledgeObjectDependenciesResponse.encode(
+          ListKnowledgeObjectDependenciesResponse.fromPartial({
+            dependencies,
+            page: {
+              nextPageToken: continuation ? undefined : dependencyCursor,
+              totalSize: 3n,
+              totalSizeExact: true,
+            },
+            tenantCatalogRevision: 11n,
+            resolvedObject: {
+              knowledgeObjectId: firstObject.knowledgeObjectId,
+              version: firstObject.version,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/knowledge/objects/dependents",
+    async (route) => {
+      const wire = route.request().postDataBuffer();
+      if (wire === null) throw new Error("knowledge Dependents request omitted its protobuf body");
+      const request = ListKnowledgeObjectDependentsRequest.decode(wire);
+      dependentRequests.push(request);
+      const continuation = request.page?.pageToken === dependentCursor;
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ListKnowledgeObjectDependentsResponse.encode(
+          ListKnowledgeObjectDependentsResponse.fromPartial({
+            dependents: [{
+              source: {
+                knowledgeObjectId: continuation
+                  ? "ko-dependent-z"
+                  : maliciousDependentId,
+                version: continuation ? 5n : 3n,
+              },
+              target: {
+                knowledgeObjectId: firstObject.knowledgeObjectId,
+                version: firstObject.version,
+              },
+              role: KnowledgeDependencyRole.KNOWLEDGE_DEPENDENCY_ROLE_FIELD_INPUT,
+            }],
+            page: {
+              nextPageToken: continuation ? undefined : dependentCursor,
+              totalSize: 2n,
+              totalSizeExact: true,
+            },
+            // The continuation is well-formed but belongs to a newer catalog,
+            // so the UI must keep the first page and offer a bounded retry.
+            tenantCatalogRevision: continuation ? 13n : 12n,
+            resolvedObject: {
+              knowledgeObjectId: firstObject.knowledgeObjectId,
+              version: firstObject.version,
+            },
+          }),
+        ).finish()),
+      });
+    },
+  );
+
+  const adminURL = new URL("/admin/", origin).href;
+  await page.goto(adminURL, { waitUntil: "domcontentloaded", timeout });
+  await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible({ timeout });
+  await expect(page.locator(".admin-sidebar")).toBeVisible({ timeout });
+  await expect(page.getByText("API connected", { exact: true })).toBeVisible({ timeout });
+  await expect(page.locator(".admin-sidebar button").filter({ hasText: "Knowledge Manager" }))
+    .toHaveCount(0);
+  expect(requestedURLs.filter((value) => value.includes("/api/v1/knowledge/"))).toEqual([]);
+
+  knowledgeAdvertised = true;
+  await page.goto(new URL("/signin/", origin).href, {
+    waitUntil: "domcontentloaded",
+    timeout,
+  });
+  await page.getByLabel("Administrator bearer token").fill(administratorToken);
+  await page.getByRole("button", { name: "Open administrator session" }).click();
+  await expect(page.getByRole("heading", { name: "Administration" })).toBeVisible({ timeout });
+  const knowledgeNavigation = page.locator(".admin-sidebar button").filter({
+    hasText: "Knowledge Manager",
+  });
+  await expect(knowledgeNavigation).toBeVisible({ timeout });
+  await knowledgeNavigation.click();
+  const manager = page.locator(".knowledge-manager");
+  await expect(manager.getByRole("heading", { name: "Knowledge Manager" })).toBeVisible({ timeout });
+  await expect(manager.getByText(maliciousName, { exact: true })).toBeVisible({ timeout });
+  // React development strict effects may replay only the initial mount request.
+  const initialListRequestCount = listRequests.length;
+  expect(initialListRequestCount).toBeGreaterThan(0);
+  expect(initialListRequestCount).toBeLessThanOrEqual(2);
+  const initialListRequest: ListKnowledgeObjectsRequest = {
+    page: { pageSize: 2, pageToken: undefined, includeTotalSize: true },
+    appIdFilter: appId,
+    ownerIdFilter: undefined,
+    textFilter: undefined,
+    objectTypeFilters: [],
+    stateFilters: [],
+    sharingScopeFilters: [],
+    selectorTextFilter: undefined,
+    sortBy: KnowledgeObjectSortBy.KNOWLEDGE_OBJECT_SORT_BY_NAME,
+    sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
+  };
+  expect(listRequests).toEqual(Array.from(
+    { length: initialListRequestCount },
+    () => initialListRequest,
+  ));
+  let expectedListRequestCount = initialListRequestCount;
+  async function expectNextListRequest(
+    phase: string,
+    expected: ListKnowledgeObjectsRequest,
+  ): Promise<void> {
+    expectedListRequestCount += 1;
+    await expect.poll(() => listRequests.length, {
+      message: `${phase} issued exactly one List request`,
+      timeout,
+    }).toBe(expectedListRequestCount);
+    expect(listRequests.at(-1), `${phase} List request tuple`).toEqual(expected);
+    await waitForBrowserRender(page);
+    expect(listRequests, `${phase} emitted no delayed duplicate List request`)
+      .toHaveLength(expectedListRequestCount);
+  }
+  let expectedRelatedGetRequestCount = 0;
+  async function expectNextRelatedGetRequest(
+    phase: string,
+    expected: GetKnowledgeObjectRequest,
+  ): Promise<void> {
+    expectedRelatedGetRequestCount += 1;
+    await expect.poll(() => relatedGetRequests.length, {
+      message: `${phase} issued exactly one endpoint Get request`,
+      timeout,
+    }).toBe(expectedRelatedGetRequestCount);
+    expect(relatedGetRequests.at(-1), `${phase} endpoint Get tuple`).toEqual(expected);
+    await waitForBrowserRender(page);
+    expect(relatedGetRequests, `${phase} emitted no delayed endpoint Get request`)
+      .toHaveLength(expectedRelatedGetRequestCount);
+  }
+  await expect(manager.getByLabel("Tier-1 management surface")).toBeVisible();
+  await expect(manager.getByRole("button", { name: "Create knowledge object" })).toBeVisible();
+  await Promise.all(["Edit", "Delete", "Activate", "Disable", "Save"].map(
+    (mutationLabel) => expect(manager.getByRole("button", {
+      name: new RegExp(`^${mutationLabel}(?:\\s|$)`, "i"),
+    })).toHaveCount(0),
+  ));
+  await expect(manager.locator("script, img")).toHaveCount(0);
+  expect(await page.evaluate(() => Reflect.get(globalThis, "__knowledgeScriptExecuted")))
+    .toBeUndefined();
+
+  await page.setViewportSize({ width: 1280, height: 800 });
+  expect((await manager.locator(".knowledge-manager__advanced-filter-grid").evaluate(
+    (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+  ))).toBe(4);
+
+  const ownerFilter = manager.getByLabel("Owner ID");
+  const textFilter = manager.getByLabel("Name or description");
+  const sharingFilter = manager.getByLabel("Sharing scope");
+  const selectorFilter = manager.getByLabel("Selector text");
+  await ownerFilter.fill(" \towner-7 ");
+  await textFilter.fill(" latency error ");
+  await sharingFilter.selectOption("private");
+  await selectorFilter.fill(" source::api ");
+  await waitForBrowserRender(page);
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  const appliedListRequest: ListKnowledgeObjectsRequest = {
+    ...initialListRequest,
+    ownerIdFilter: "owner-7",
+    textFilter: "latency error",
+    sharingScopeFilters: [SharingScope.SHARING_SCOPE_PRIVATE],
+    selectorTextFilter: "source::api",
+  };
+  await selectorFilter.press("Enter");
+  await expectNextListRequest("advanced-filter Apply", appliedListRequest);
+  await expect(ownerFilter).toHaveValue("owner-7");
+  await expect(textFilter).toHaveValue("latency error");
+  await expect(selectorFilter).toHaveValue("source::api");
+  expect(new URL(page.url()).search).toBe("");
+
+  const continuationListRequest: ListKnowledgeObjectsRequest = {
+    ...appliedListRequest,
+    page: { pageSize: 2, pageToken: cursor, includeTotalSize: true },
+  };
+  await manager.getByRole("button", { name: "Load next page" }).click();
+  await expectNextListRequest("continuation", continuationListRequest);
+  await expect(manager.getByRole("alert")).toContainText("Catalog page changed", { timeout });
+
+  await textFilter.fill("latency warning");
+  await waitForBrowserRender(page);
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  const committedListRequest: ListKnowledgeObjectsRequest = {
+    ...appliedListRequest,
+    textFilter: "latency warning",
+  };
+  await manager.getByRole("button", { name: "Apply filters" }).click();
+  await expectNextListRequest("stale-state reset Apply", committedListRequest);
+  await expect(manager.getByText("Catalog page changed")).toHaveCount(0);
+
+  const maliciousRow = manager.getByRole("button", { name: new RegExp("globalThis") });
+  await maliciousRow.focus();
+  await maliciousRow.press("Enter");
+  await expect(manager.getByText("Knowledge object unavailable", { exact: true }))
+    .toBeVisible({ timeout });
+  expect(rootGetRequests).toEqual([{
+    knowledgeObjectId: "ko-malicious",
+    version: 2n,
+  }]);
+  await waitForBrowserRender(page);
+  expect(dependencyRequests).toHaveLength(0);
+  expect(dependentRequests).toHaveLength(0);
+
+  await manager.getByRole("button", { name: "Close knowledge object details" }).click();
+  serveMismatchedDetail = false;
+  await maliciousRow.press("Enter");
+  await expect(manager.getByRole("heading", { name: maliciousName })).toBeVisible({ timeout });
+  await expect(manager.getByRole("button", { name: "Edit" })).toBeVisible();
+  await expect(manager.getByRole("button", { name: "Disable" })).toBeVisible();
+  await expect(manager.getByRole("button", { name: "Delete" })).toBeVisible();
+  expect(rootGetRequests).toEqual(Array.from({ length: 2 }, () => ({
+    knowledgeObjectId: "ko-malicious",
+    version: 2n,
+  })));
+  await expect(manager.locator("script, img")).toHaveCount(0);
+  const escapedDetailMarkup = await manager.locator(".knowledge-manager__detail").evaluate(
+    (element) => element.innerHTML,
+  );
+  expect(escapedDetailMarkup).toContain("&lt;img");
+
+  const preview = manager.locator(".knowledge-preview");
+  await expect(preview.getByText("No Preview request has been sent.", { exact: true }))
+    .toBeVisible();
+  expect(previewRequests).toHaveLength(0);
+  const retainedPreviewJobID = "knowledge-preview-retained-job";
+  await preview.getByLabel("Retained search job ID").fill(retainedPreviewJobID);
+  await preview.getByLabel("Maximum rows per side").fill("7");
+  await preview.getByRole("button", { name: "Compare before and after" }).click();
+  await expect(preview.getByRole("heading", { name: "Before", exact: true })).toBeVisible({
+    timeout,
+  });
+  await expect(preview.getByRole("heading", { name: "After", exact: true })).toBeVisible();
+  await expect(preview.getByText("before-status", { exact: true })).toBeVisible();
+  await expect(preview.getByText("after-http-status", { exact: true })).toBeVisible();
+  expect(previewRequests).toHaveLength(1);
+  expect(previewRequests[0]).toEqual({
+    retainedSearchJobId: retainedPreviewJobID,
+    definition: firstObject.definition,
+    knowledgeObjectId: firstObject.knowledgeObjectId,
+    expectedVersion: firstObject.version,
+    updateMask: ["app_id", "description", "field_alias", "name", "selector", "sharing_scope"],
+    maximumRows: 7,
+  });
+
+  const dependenciesSection = manager.locator(
+    '.knowledge-manager__relationship-section[aria-labelledby="knowledge-dependencies-title"]',
+  );
+  const dependentsSection = manager.locator(
+    '.knowledge-manager__relationship-section[aria-labelledby="knowledge-dependents-title"]',
+  );
+  const initialRelationshipPage = {
+    pageSize: 2,
+    pageToken: undefined,
+    includeTotalSize: true,
+  };
+  const initialRelationshipRequest = {
+    knowledgeObjectId: "ko-malicious",
+    version: 2n,
+    page: initialRelationshipPage,
+  };
+  await expect(dependenciesSection.getByText("ko-dependency-<script>", { exact: true }))
+    .toBeVisible({ timeout });
+  await expect(dependentsSection.getByText(
+    "ko-dependent-<img onerror=globalThis.__knowledgeScriptExecuted=true>",
+    { exact: true },
+  )).toBeVisible({ timeout });
+  await expect(dependenciesSection).toContainText("3 visible · revision 11");
+  await expect(dependentsSection).toContainText("2 visible · revision 12");
+  const initialDependencyRequestCount = dependencyRequests.length;
+  const initialDependentRequestCount = dependentRequests.length;
+  expect(initialDependencyRequestCount).toBeGreaterThan(0);
+  expect(initialDependencyRequestCount).toBeLessThanOrEqual(2);
+  expect(initialDependentRequestCount).toBeGreaterThan(0);
+  expect(initialDependentRequestCount).toBeLessThanOrEqual(2);
+  expect(dependencyRequests).toEqual(Array.from(
+    { length: initialDependencyRequestCount },
+    () => initialRelationshipRequest,
+  ));
+  expect(dependentRequests).toEqual(Array.from(
+    { length: initialDependentRequestCount },
+    () => initialRelationshipRequest,
+  ));
+  const escapedRelationshipsMarkup = await manager.locator(
+    ".knowledge-manager__relationships",
+  ).evaluate((element) => element.innerHTML);
+  expect(escapedRelationshipsMarkup).toContain("ko-dependency-&lt;script&gt;");
+  expect(escapedRelationshipsMarkup).toContain("ko-dependent-&lt;img");
+  await expect(manager.locator("script, img")).toHaveCount(0);
+  await waitForBrowserRender(page);
+  expect(relatedGetRequests, "relationship paint never inspects an endpoint automatically")
+    .toHaveLength(0);
+  const inspectorURL = page.url();
+  const inspectorStorage = await page.evaluate(() => ({
+    local: Object.entries(localStorage),
+    session: Object.entries(sessionStorage),
+  }));
+  const dependencyInspector = dependenciesSection.getByRole("region", {
+    name: "Dependency object inspector",
+  });
+  await test.step("endpoint inspection is explicit, exact, uniform, and escaped", async () => {
+    await dependenciesSection.getByRole("button", {
+      name: `Inspect dependency ${maliciousDependencyId}, version 1`,
+    }).click();
+    await expectNextRelatedGetRequest("mismatched dependency inspection", {
+      knowledgeObjectId: maliciousDependencyId,
+      version: 1n,
+    });
+    await expect(dependencyInspector).toContainText(
+      "Related object unavailable. This object cannot be inspected.",
+      { timeout },
+    );
+    await expect(dependencyInspector).not.toContainText("SECRET_MISMATCHED_RELATED_OBJECT");
+    const dependencyTrigger = dependenciesSection.getByRole("button", {
+      name: `Close dependency ${maliciousDependencyId}, version 1`,
+    });
+    await expect(dependencyTrigger).toBeFocused();
+    try {
+      await dependencyInspector.getByRole("button", {
+        name: `Retry dependency ${maliciousDependencyId}, version 1`,
+      }).click();
+      await expectNextRelatedGetRequest("dependency inspection retry", {
+        knowledgeObjectId: maliciousDependencyId,
+        version: 1n,
+      });
+      await expect(dependencyInspector).toContainText("Loading related object…", { timeout });
+      await expect(dependencyTrigger).toBeFocused();
+    } finally {
+      dependencyRetryGate.release?.();
+      if (dependencyRetryGate.started) await dependencyRetryGate.settled;
+    }
+    await expect(dependencyInspector.getByText(
+      maliciousDependencyObject.name,
+      { exact: true },
+    )).toBeVisible({ timeout });
+    await expect(dependencyTrigger).toBeFocused();
+    await expect(manager.locator("script, img")).toHaveCount(0);
+    expect(await page.evaluate(() => Reflect.get(globalThis, "__knowledgeScriptExecuted")))
+      .toBeUndefined();
+  });
+
+  await test.step("late dependency A completion cannot replace disclosed B", async () => {
+    try {
+      await dependenciesSection.getByRole("button", {
+        name: `Inspect dependency ${dependencyBId}, version 3`,
+      }).click();
+      await expectNextRelatedGetRequest("held dependency A inspection", {
+        knowledgeObjectId: dependencyBId,
+        version: 3n,
+      });
+      await expect(dependencyInspector).toContainText("Loading related object…", { timeout });
+      await dependenciesSection.getByRole("button", {
+        name: `Inspect dependency ${maliciousDependencyId}, version 1`,
+      }).click();
+      heldDependencyBReplacementStarted = true;
+      await expectNextRelatedGetRequest("dependency A-to-B replacement", {
+        knowledgeObjectId: maliciousDependencyId,
+        version: 1n,
+      });
+      await expect(dependencyInspector.getByText(
+        maliciousDependencyObject.name,
+        { exact: true },
+      )).toBeVisible({ timeout });
+    } finally {
+      heldDependencyB.release?.();
+      if (heldDependencyB.started) await heldDependencyB.settled;
+    }
+  });
+  await waitForBrowserRender(page);
+  await expect(dependencyInspector.getByText(
+    maliciousDependencyObject.name,
+    { exact: true },
+  )).toBeVisible();
+  await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+    .toHaveCount(0);
+  expect(relatedGetRequests).toHaveLength(expectedRelatedGetRequestCount);
+
+  const dependentInspector = dependentsSection.getByRole("region", {
+    name: "Dependent object inspector",
+  });
+  await test.step("each direction owns one responsive inspector without storage or URL state", async () => {
+    await dependenciesSection.getByRole("button", {
+      name: `Inspect dependency ${dependencyBId}, version 3`,
+    }).click();
+    await expectNextRelatedGetRequest("dependency replacement", {
+      knowledgeObjectId: dependencyBId,
+      version: 3n,
+    });
+    await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+      .toBeVisible({ timeout });
+    await expect(dependenciesSection.locator(".knowledge-manager__related-inspector"))
+      .toHaveCount(1);
+
+    await dependentsSection.getByRole("button", {
+      name: `Inspect dependent ${maliciousDependentId}, version 3`,
+    }).click();
+    await expectNextRelatedGetRequest("simultaneous dependent inspection", {
+      knowledgeObjectId: maliciousDependentId,
+      version: 3n,
+    });
+    await expect(dependentInspector.getByText(
+      maliciousDependentObject.name,
+      { exact: true },
+    )).toBeVisible({ timeout });
+    await expect(manager.locator(".knowledge-manager__related-inspector")).toHaveCount(2);
+    await expect(dependenciesSection.locator(".knowledge-manager__related-inspector"))
+      .toHaveCount(1);
+    await expect(dependentsSection.locator(".knowledge-manager__related-inspector"))
+      .toHaveCount(1);
+    expect(new Set(await manager.locator(".knowledge-manager__related-inspector").evaluateAll(
+      (elements) => elements.map((element) => element.id),
+    )).size).toBe(2);
+    expect(page.url()).toBe(inspectorURL);
+    expect(await page.evaluate(() => ({
+      local: Object.entries(localStorage),
+      session: Object.entries(sessionStorage),
+    }))).toEqual(inspectorStorage);
+
+    expect((await dependencyInspector.locator("dl").evaluate(
+      (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+    ))).toBe(2);
+    await page.setViewportSize({ width: 375, height: 812 });
+    expect((await dependencyInspector.locator("dl").evaluate(
+      (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+    ))).toBe(1);
+    expect(await dependenciesSection.getByRole("button", {
+      name: `Close dependency ${dependencyBId}, version 3`,
+    }).evaluate((element) => getComputedStyle(element).minHeight)).toBe("42px");
+    await page.setViewportSize({ width: 1280, height: 800 });
+  });
+
+  await dependenciesSection.getByRole("button", { name: "Load more dependencies" }).click();
+  await expect.poll(() => dependencyRequests.length, {
+    message: "dependency continuation issued exactly once",
+    timeout,
+  }).toBe(initialDependencyRequestCount + 1);
+  expect(dependencyRequests.at(-1)).toEqual({
+    ...initialRelationshipRequest,
+    page: { ...initialRelationshipPage, pageToken: dependencyCursor },
+  });
+  await expect(dependenciesSection.getByRole("list", { name: "Visible direct dependencies" })
+    .getByRole("listitem")).toHaveCount(3, { timeout });
+  await expect(dependenciesSection.getByText("ko-dependency-z", { exact: true })).toBeVisible();
+  await expect(dependenciesSection.getByRole("button", { name: "Load more dependencies" }))
+    .toHaveCount(0);
+  await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+    .toBeVisible();
+  expect(relatedGetRequests).toHaveLength(expectedRelatedGetRequestCount);
+
+  await dependentsSection.getByRole("button", { name: "Load more dependents" }).click();
+  await expect.poll(() => dependentRequests.length, {
+    message: "dependent continuation issued exactly once",
+    timeout,
+  }).toBe(initialDependentRequestCount + 1);
+  expect(dependentRequests.at(-1)).toEqual({
+    ...initialRelationshipRequest,
+    page: { ...initialRelationshipPage, pageToken: dependentCursor },
+  });
+  await expect(dependentsSection.getByRole("alert")).toContainText(
+    "This relationship page cannot be safely continued.",
+    { timeout },
+  );
+  await expect(dependentsSection).toContainText("2 visible · revision 12");
+  await expect(dependentsSection.getByText("ko-dependent-z", { exact: true })).toHaveCount(0);
+  expect(dependencyRequests).toHaveLength(initialDependencyRequestCount + 1);
+  await expect(dependenciesSection).toContainText("3 visible · revision 11");
+  await expect(dependenciesSection.getByRole("list", { name: "Visible direct dependencies" })
+    .getByRole("listitem")).toHaveCount(3);
+  await expect(dependentInspector.getByText(
+    maliciousDependentObject.name,
+    { exact: true },
+  )).toBeVisible();
+  expect(relatedGetRequests).toHaveLength(expectedRelatedGetRequestCount);
+  await dependentsSection.getByRole("button", { name: "Reload dependents" }).click();
+  await expect.poll(() => dependentRequests.length, {
+    message: "dependent retry issued exactly one fresh first-page request",
+    timeout,
+  }).toBe(initialDependentRequestCount + 2);
+  expect(dependentRequests.at(-1)).toEqual(initialRelationshipRequest);
+  await expect(dependentsSection.getByRole("alert")).toHaveCount(0, { timeout });
+  await expect(dependentsSection.getByRole("button", { name: "Load more dependents" }))
+    .toBeVisible({ timeout });
+  expect(dependencyRequests).toHaveLength(initialDependencyRequestCount + 1);
+  await expect(dependenciesSection).toContainText("3 visible · revision 11");
+  await expect(dependenciesSection.getByRole("list", { name: "Visible direct dependencies" })
+    .getByRole("listitem")).toHaveCount(3);
+  await expect(dependentsSection.locator(".knowledge-manager__related-inspector"))
+    .toHaveCount(0);
+  await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+    .toBeVisible();
+  expect(relatedGetRequests).toHaveLength(expectedRelatedGetRequestCount);
+
+  const relatedGetsBeforeToggle = relatedGetRequests.length;
+  await dependenciesSection.getByRole("button", {
+    name: `Close dependency ${dependencyBId}, version 3`,
+  }).click();
+  await expect(dependenciesSection.locator(".knowledge-manager__related-inspector"))
+    .toHaveCount(0);
+  const collapsedDependencyB = dependenciesSection.getByRole("button", {
+    name: `Inspect dependency ${dependencyBId}, version 3`,
+  });
+  await expect(collapsedDependencyB).toBeFocused();
+  expect(relatedGetRequests).toHaveLength(relatedGetsBeforeToggle);
+  await collapsedDependencyB.click();
+  await expectNextRelatedGetRequest("dependency toggle reopen", {
+    knowledgeObjectId: dependencyBId,
+    version: 3n,
+  });
+  await expect(dependencyInspector.getByText(dependencyBObject.name, { exact: true }))
+    .toBeVisible({ timeout });
+  await dependentsSection.getByRole("button", {
+    name: `Inspect dependent ${maliciousDependentId}, version 3`,
+  }).click();
+  await expectNextRelatedGetRequest("dependent reopen before parent reset", {
+    knowledgeObjectId: maliciousDependentId,
+    version: 3n,
+  });
+  await expect(dependentInspector.getByText(
+    maliciousDependentObject.name,
+    { exact: true },
+  )).toBeVisible({ timeout });
+  await expect(manager.locator(".knowledge-manager__related-inspector")).toHaveCount(2);
+
+  await manager.getByRole("button", { name: "Close knowledge object details" }).click();
+  await expect(manager.locator(".knowledge-manager__related-inspector")).toHaveCount(0);
+  await expect(manager.locator(".knowledge-manager__detail")).toHaveCount(0);
+  const relatedGetsBeforeParentReopen = relatedGetRequests.length;
+  await maliciousRow.press("Enter");
+  await expect.poll(() => rootGetRequests.length, {
+    message: "parent-detail reopen issued one exact root Get",
+    timeout,
+  }).toBe(3);
+  expect(rootGetRequests.at(-1)).toEqual({
+    knowledgeObjectId: "ko-malicious",
+    version: 2n,
+  });
+  await expect(manager.getByRole("heading", { name: maliciousName })).toBeVisible({ timeout });
+  await expect(manager.getByText(maliciousDependencyId, { exact: true })).toBeVisible({ timeout });
+  await waitForBrowserRender(page);
+  expect(relatedGetRequests).toHaveLength(relatedGetsBeforeParentReopen);
+  expect(page.url()).toBe(inspectorURL);
+
+  await textFilter.evaluate((element) => {
+    const input = element as HTMLInputElement;
+    input.removeAttribute("maxlength");
+  });
+  await textFilter.fill("é".repeat(128));
+  await manager.getByRole("button", { name: "Apply filters" }).click();
+  await expect(manager.getByText("Knowledge Manager unavailable")).toBeVisible({ timeout });
+  await expect(manager.locator(".knowledge-manager__workspace")).toHaveCount(0);
+  await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await expect(textFilter).toHaveAttribute("aria-invalid", "true");
+  await expect(ownerFilter).not.toHaveAttribute("aria-invalid", "true");
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+
+  await ownerFilter.fill("owner-8");
+  await waitForBrowserRender(page);
+  await expect(textFilter).toHaveAttribute("aria-invalid", "true");
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  await ownerFilter.fill("owner-7");
+  await textFilter.fill("different unapplied draft");
+  await waitForBrowserRender(page);
+  await expect(manager.locator("#knowledge-advanced-filter-status"))
+    .toContainText("Draft filters not applied.");
+  await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  await textFilter.fill("latency warning");
+  await textFilter.press("Enter");
+  await expectNextListRequest("same-tuple fail-closed recovery", committedListRequest);
+  await expect(manager.getByText(maliciousName, { exact: true })).toBeVisible({ timeout });
+
+  await manager.getByRole("button", { name: "Clear filters" }).click();
+  await expectNextListRequest("Clear", initialListRequest);
+  await expect(ownerFilter).toHaveValue("");
+  await expect(textFilter).toHaveValue("");
+  await expect(sharingFilter).toHaveValue("all");
+  await expect(selectorFilter).toHaveValue("");
+
+  await sharingFilter.evaluate((element) => {
+    const select = element as HTMLSelectElement;
+    select.add(new Option("Forged", "future-sharing"));
+  });
+  await sharingFilter.selectOption("future-sharing");
+  await expect(manager.getByText("Knowledge Manager unavailable")).toBeVisible({ timeout });
+  await expect(manager.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await waitForBrowserRender(page);
+  expect(listRequests).toHaveLength(expectedListRequestCount);
+  await sharingFilter.selectOption("all");
+  await manager.getByRole("button", { name: "Apply filters" }).click();
+  await expectNextListRequest("forged-sharing recovery", initialListRequest);
+
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect((await manager.locator(".knowledge-manager__advanced-filter-grid").evaluate(
+    (element) => getComputedStyle(element).gridTemplateColumns.split(" ").length,
+  ))).toBe(1);
+
+  await test.step("Tier-1 create validates fail-closed and ignores an aborted stale result", async () => {
+    await manager.getByRole("button", { name: "Create knowledge object" }).click();
+    const form = manager.locator(".knowledge-manager__mutation-form");
+    await expect(form.getByRole("heading", { name: "Create knowledge object" })).toBeVisible();
+    await form.getByLabel("Definition type").selectOption("regex-extraction");
+    await form.getByLabel("Name").fill("browser_regex_stale");
+    await form.getByLabel("Source patterns").fill("source::browser");
+    await form.getByLabel("Regex pattern").fill("status=(?<status>[0-9]+)");
+    await form.getByLabel(/Output fields/).fill("status");
+
+    await form.getByRole("button", { name: "Validate draft" }).click();
+    await expect(form.getByRole("alert")).toContainText(
+      "Validation is unavailable. No definition details were accepted.",
+      { timeout },
+    );
+    expect(createRequests).toHaveLength(0);
+    await expect(form.getByRole("button", { name: "Create draft" })).toBeDisabled();
+
+    await form.getByRole("button", { name: "Validate draft" }).click();
+    await expect.poll(() => staleValidationGate.started, {
+      message: "the replacement Validate request reached the held route",
+      timeout,
+    }).toBe(true);
+    await form.getByLabel("Name").fill("browser_regex_final");
+    staleValidationGate.release?.();
+    await staleValidationGate.settled;
+    await waitForBrowserRender(page);
+    await expect(form.getByText("Validation passed")).toHaveCount(0);
+    await expect(form.getByRole("button", { name: "Create draft" })).toBeDisabled();
+
+    await form.getByRole("button", { name: "Validate draft" }).click();
+    await expect(form.getByText("Validation passed")).toBeVisible({ timeout });
+    await form.getByRole("button", { name: "Create draft" }).click();
+    await expectNextListRequest("Create reload", initialListRequest);
+    await expect(manager.getByRole("button", { name: "Create knowledge object" })).toBeVisible();
+  });
+
+  await test.step("exact current authority drives disable, masked edit, activate, and delete", async () => {
+    await maliciousRow.click();
+    await expect(manager.getByRole("heading", { name: maliciousName })).toBeVisible({ timeout });
+    await manager.getByRole("button", { name: "Disable" }).click();
+    await expectNextListRequest("Disable reload", initialListRequest);
+
+    await maliciousRow.click();
+    await expect(manager.getByRole("button", { name: "Activate" })).toBeVisible({ timeout });
+    await manager.getByRole("button", { name: "Edit" }).click();
+    const editForm = manager.locator(".knowledge-manager__mutation-form");
+    await expect(editForm.getByRole("heading", { name: "Edit knowledge object" })).toBeVisible();
+    await expect(editForm.getByLabel("Definition type")).toBeDisabled();
+    await editForm.getByLabel(/Description/).fill("Updated through the exact browser authority");
+    await editForm.getByRole("button", { name: "Validate changes" }).click();
+    await expect(editForm.getByText("Validation passed")).toBeVisible({ timeout });
+    await editForm.getByRole("button", { name: "Save changes" }).click();
+    await expectNextListRequest("Update reload", initialListRequest);
+
+    await maliciousRow.click();
+    await manager.getByRole("button", { name: "Activate" }).click();
+    await expectNextListRequest("Activate reload", initialListRequest);
+
+    await maliciousRow.click();
+    await manager.getByRole("button", { name: "Disable" }).click();
+    await expectNextListRequest("second Disable reload", initialListRequest);
+
+    await maliciousRow.click();
+    await manager.getByRole("button", { name: "Delete" }).click();
+    const confirmation = manager.locator(".knowledge-manager__delete-confirmation");
+    await expect(confirmation.getByRole("heading", { name: "Confirm delete" })).toBeVisible();
+    await confirmation.getByLabel("Object name").fill("wrong-name");
+    await expect(confirmation.getByRole("button", { name: "Delete knowledge object" }))
+      .toBeDisabled();
+    expect(deleteRequests).toHaveLength(0);
+    await confirmation.getByLabel("Object name").fill(maliciousName);
+    await confirmation.getByRole("button", { name: "Delete knowledge object" }).click();
+    await expectNextListRequest("Delete reload", initialListRequest);
+    await expect(manager.getByRole("heading", { name: "No knowledge objects" })).toBeVisible();
+  });
+
+  expect(validateRequests).toHaveLength(4);
+  expect(validateRequests.slice(0, 3).map((request) => ({
+    name: request.definition?.name,
+    knowledgeObjectId: request.knowledgeObjectId,
+    expectedVersion: request.expectedVersion,
+    updateMask: request.updateMask,
+    intent: request.intent,
+  }))).toEqual([
+    {
+      name: "browser_regex_stale",
+      knowledgeObjectId: undefined,
+      expectedVersion: undefined,
+      updateMask: undefined,
+      intent: KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+    },
+    {
+      name: "browser_regex_stale",
+      knowledgeObjectId: undefined,
+      expectedVersion: undefined,
+      updateMask: undefined,
+      intent: KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+    },
+    {
+      name: "browser_regex_final",
+      knowledgeObjectId: undefined,
+      expectedVersion: undefined,
+      updateMask: undefined,
+      intent: KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+    },
+  ]);
+  expect(validateRequests[3]).toMatchObject({
+    knowledgeObjectId: "ko-malicious",
+    expectedVersion: 3n,
+    updateMask: ["description"],
+    intent: KnowledgeValidationIntent.KNOWLEDGE_VALIDATION_INTENT_INACTIVE_STORAGE,
+  });
+  expect(createRequests).toHaveLength(1);
+  expect(createRequests[0]).toMatchObject({
+    initialState: KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DRAFT,
+  });
+  expect(createRequests[0]?.definition?.body?.$case).toBe("fieldExtraction");
+  expect(createRequests[0]?.clientRequestId).toMatch(/^browser-[0-9a-f]{32}$/);
+  expect(updateRequests).toHaveLength(1);
+  expect(updateRequests[0]).toMatchObject({
+    knowledgeObjectId: "ko-malicious",
+    expectedVersion: 3n,
+    updateMask: ["description"],
+  });
+  expect(updateRequests[0]?.clientRequestId).toMatch(/^browser-[0-9a-f]{32}$/);
+  expect(stateRequests.map((request) => ({
+    id: request.knowledgeObjectId,
+    version: request.expectedVersion,
+    state: request.state,
+  }))).toEqual([
+    {
+      id: "ko-malicious",
+      version: 2n,
+      state: KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED,
+    },
+    {
+      id: "ko-malicious",
+      version: 4n,
+      state: KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_ACTIVE,
+    },
+    {
+      id: "ko-malicious",
+      version: 5n,
+      state: KnowledgeObjectState.KNOWLEDGE_OBJECT_STATE_DISABLED,
+    },
+  ]);
+  expect(stateRequests.every((request) => /^browser-[0-9a-f]{32}$/.test(
+    request.clientRequestId,
+  ))).toBe(true);
+  expect(deleteRequests).toHaveLength(1);
+  expect(deleteRequests[0]).toMatchObject({
+    knowledgeObjectId: "ko-malicious",
+    expectedVersion: 6n,
+  });
+  expect(deleteRequests[0]?.clientRequestId).toMatch(/^browser-[0-9a-f]{32}$/);
+  expect(mutationAuthorizations).toEqual(Array.from(
+    { length: 11 },
+    () => `Bearer ${administratorToken}`,
+  ));
+  await expect(manager.getByRole("button", { name: /Preview/i })).toHaveCount(0);
+  expect(new URL(page.url()).search).toBe("");
+  expect(requestedURLs.filter((value) => {
+    const pathname = new URL(value).pathname;
+    return pathname.startsWith("/api/v1/knowledge/") && !new Set([
+      "/api/v1/knowledge/objects/list",
+      "/api/v1/knowledge/objects/get",
+      "/api/v1/knowledge/objects/dependencies",
+      "/api/v1/knowledge/objects/dependents",
+    ]).has(pathname);
+  }).map((value) => new URL(value).pathname)).toEqual([
+    "/api/v1/knowledge/objects/preview",
+    "/api/v1/knowledge/objects/validate",
+    "/api/v1/knowledge/objects/validate",
+    "/api/v1/knowledge/objects/validate",
+    "/api/v1/knowledge/objects/create",
+    "/api/v1/knowledge/objects/set-state",
+    "/api/v1/knowledge/objects/validate",
+    "/api/v1/knowledge/objects/update",
+    "/api/v1/knowledge/objects/set-state",
+    "/api/v1/knowledge/objects/set-state",
+    "/api/v1/knowledge/objects/delete",
+  ]);
+});
+
 test("history Run again delegates persisted intent with source-only rerun provenance", async ({
   page,
 }) => {
@@ -155,7 +2348,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
   const selectedAppId = "history-rerun-current-app";
   const retainedAppId = "history-rerun-stale-app";
   const indexName = "history-rerun-index";
-  const historySPL = `index=${JSON.stringify(indexName)} level=ERROR | table _time message`;
+  const historySPL = `index=${JSON.stringify(indexName)} | eval adjusted=duration_ms+1 | where status IN (500, 503) | table _time message adjusted`;
   const deletedHistorySPL = `index=${JSON.stringify(indexName)} level=WARN | table _time message`;
   const historyTimeRange = {
     earliest: "server-owned-relative-expression",
@@ -168,6 +2361,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     timezone: "UTC",
   };
   const protobufHeaders = { "content-type": "application/x-protobuf" };
+  const ordinaryValidateRequests: ValidateSearchRequest[] = [];
   const ordinaryCreateRequests: CreateSearchJobRequest[] = [];
   const historyRerunCreateRequests: CreateSearchJobRequest[] = [];
   let historyRerunSourceMissing = false;
@@ -274,6 +2468,31 @@ test("history Run again delegates persisted intent with source-only rerun proven
         body: Buffer.from(DeleteSearchHistoryEntryResponse.encode({
           searchJobId: deletedHistorySearchId,
         }).finish()),
+      });
+    },
+  );
+  await page.route(
+    (url) => url.origin === origin && url.pathname === "/api/v1/search/validate",
+    async (route) => {
+      const requestWire = route.request().postDataBuffer();
+      if (requestWire === null) throw new Error("history ordinary Validate omitted its protobuf body");
+      const request = ValidateSearchRequest.decode(requestWire);
+      if (request.definition === undefined) {
+        throw new Error("history ordinary Validate omitted its search definition");
+      }
+      ordinaryValidateRequests.push(request);
+      await route.fulfill({
+        status: 200,
+        headers: protobufHeaders,
+        body: Buffer.from(ValidateSearchResponse.encode(
+          ValidateSearchResponse.fromPartial({
+            valid: true,
+            normalizedSpl: request.definition.spl,
+            referencedIndexes: [indexName],
+            referencedFields: ["message"],
+            predictedResultKind: ResultSetKind.RESULT_SET_KIND_STATISTICS,
+          }),
+        ).finish()),
       });
     },
   );
@@ -400,7 +2619,11 @@ test("history Run again delegates persisted intent with source-only rerun proven
   await postDeleteCreateRequest;
   await expect(page.getByTestId("job-strip")).toContainText("Canceled", { timeout });
   expect(historyRerunCreateRequests).toHaveLength(0);
+  expect(ordinaryValidateRequests).toHaveLength(1);
   expect(ordinaryCreateRequests).toHaveLength(1);
+  expect(ordinaryValidateRequests[0]?.definition).toEqual(
+    ordinaryCreateRequests[0]?.definition,
+  );
   expect(ordinaryCreateRequests[0]?.definition?.spl).toBe(deletedHistorySPL);
   expect(ordinaryCreateRequests[0]?.source).toBeUndefined();
 
@@ -420,6 +2643,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
   await rerunRequestPromise;
 
   expect(historyRerunCreateRequests).toHaveLength(1);
+  expect(ordinaryValidateRequests).toHaveLength(1);
   expect(historyRerunCreateRequests[0]).toEqual({
     definition: undefined,
     source: {
@@ -468,6 +2692,7 @@ test("history Run again delegates persisted intent with source-only rerun proven
     timeout,
   });
   expect(historyRerunCreateRequests).toHaveLength(2);
+  expect(ordinaryValidateRequests).toHaveLength(1);
   expect(ordinaryCreateRequests).toHaveLength(1);
 });
 
@@ -3104,9 +5329,18 @@ function observeBrowserSafety(page: Page): BrowserSafetyObservation {
   };
 }
 
-function assertBrowserSafety(observation: BrowserSafetyObservation): void {
+function assertBrowserSafety(
+  observation: BrowserSafetyObservation,
+  expectedFailedAPIRequests: readonly RegExp[] = [],
+): void {
   expect(observation.pageErrors.snapshot(), "uncaught browser errors").toEqual([]);
-  expect(observation.failedAPIRequests.snapshot(), "failed same-origin API requests").toEqual([]);
+  const failedAPIRequests = observation.failedAPIRequests.snapshot();
+  expect(failedAPIRequests, "failed same-origin API request count")
+    .toHaveLength(expectedFailedAPIRequests.length);
+  expectedFailedAPIRequests.forEach((expected, index) => {
+    expect(failedAPIRequests[index], `failed same-origin API request ${index + 1}`)
+      .toMatch(expected);
+  });
   expect(observation.externalRequests.snapshot(), "external browser resources").toEqual([]);
   expect(observation.externalWebSockets.snapshot(), "external browser WebSockets").toEqual([]);
 }
@@ -3145,6 +5379,9 @@ async function installBrowserHarnessRuntime(page: Page): Promise<void> {
     maximumDiagnosticBytes,
     truncationSuffix,
   }) => {
+    if ((window as BrowserHarnessRuntimeWindow).openSplunkBrowserHarnessRuntime !== undefined) {
+      return;
+    }
     const boundedPageDiagnostic = (value: string): string => {
       const prefixByteLimit = maximumDiagnosticBytes - truncationSuffix.length;
       let byteLength = 0;

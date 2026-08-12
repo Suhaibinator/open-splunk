@@ -1255,7 +1255,7 @@ func openKnowledgeMigrationTestDB(t *testing.T, name string) *sql.DB {
 
 func seedKnowledgeMigrationApp(t *testing.T, db *sql.DB) {
 	t.Helper()
-	if _, err := db.Exec(`
+	if _, err := db.ExecContext(t.Context(), `
 		INSERT INTO app_workspaces (
 			app_id, tenant_id, version, slug, display_name, description,
 			default_time_range_present, state,
@@ -1278,7 +1278,7 @@ func insertKnowledgeMigrationObject(
 	timestamp int64,
 ) {
 	t.Helper()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin object insert: %v", err)
 	}
@@ -1308,7 +1308,8 @@ func insertKnowledgeMigrationObject(
 			INSERT INTO knowledge_object_dependency_seals (
 				tenant_id, knowledge_object_id, object_version, dependency_count
 			) VALUES ('tenant-a', ?, 1, 0)`, disabledAt)
-	if _, err := tx.Exec(
+	if _, err := tx.ExecContext(
+		t.Context(),
 		statement,
 		objectID, knowledgeMigrationTestAppID, name, scope, state, timestamp, timestamp,
 		objectID, knowledgeMigrationTestAppID, name, scope, state, timestamp,
@@ -1324,14 +1325,14 @@ func insertKnowledgeMigrationObject(
 
 func assertSQLFailsContaining(t *testing.T, db *sql.DB, want string, query string, args ...any) {
 	t.Helper()
-	if _, err := db.Exec(query, args...); err == nil || !strings.Contains(err.Error(), want) {
+	if _, err := db.ExecContext(t.Context(), query, args...); err == nil || !strings.Contains(err.Error(), want) {
 		t.Fatalf("SQL error = %v, want substring %q", err, want)
 	}
 }
 
 func assertSQLFails(t *testing.T, db *sql.DB, query string, args ...any) {
 	t.Helper()
-	if _, err := db.Exec(query, args...); err == nil {
+	if _, err := db.ExecContext(t.Context(), query, args...); err == nil {
 		t.Fatal("SQL unexpectedly succeeded")
 	}
 }
@@ -1339,7 +1340,7 @@ func assertSQLFails(t *testing.T, db *sql.DB, query string, args ...any) {
 func assertIntegerQuery(t *testing.T, db *sql.DB, want int, query string, args ...any) {
 	t.Helper()
 	var got int
-	if err := db.QueryRow(query, args...).Scan(&got); err != nil {
+	if err := db.QueryRowContext(t.Context(), query, args...).Scan(&got); err != nil {
 		t.Fatalf("integer query: %v", err)
 	}
 	if got != want {
@@ -1349,7 +1350,7 @@ func assertIntegerQuery(t *testing.T, db *sql.DB, want int, query string, args .
 
 func assertNoForeignKeyViolations(t *testing.T, db *sql.DB) {
 	t.Helper()
-	rows, err := db.Query(`PRAGMA foreign_key_check`)
+	rows, err := db.QueryContext(t.Context(), `PRAGMA foreign_key_check`)
 	if err != nil {
 		t.Fatalf("foreign key check: %v", err)
 	}

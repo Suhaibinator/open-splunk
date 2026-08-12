@@ -110,6 +110,16 @@ func (catalog *AuditedAppCatalog) ListApps(
 	return catalog.catalog.ListApps(ctx, scope, request)
 }
 
+// ListAppIdentities delegates one bounded tenant identity read without
+// publishing an audit event.
+func (catalog *AuditedAppCatalog) ListAppIdentities(
+	ctx context.Context,
+	scope AppAccessScope,
+	maximum uint32,
+) (AppIdentityListResult, error) {
+	return catalog.catalog.ListAppIdentities(ctx, scope, maximum)
+}
+
 // UpdateApp updates and audits one app definition.
 func (catalog *AuditedAppCatalog) UpdateApp(
 	ctx context.Context,

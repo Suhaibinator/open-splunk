@@ -19,6 +19,7 @@ export * from "./open_splunk/v1/collector_admin";
 export * from "./open_splunk/v1/collector_admin_api";
 export * from "./open_splunk/v1/export";
 export * from "./open_splunk/v1/export_api";
+export * from "./open_splunk/v1/hec_admin_api";
 export * from "./open_splunk/v1/result";
 export * from "./open_splunk/v1/search";
 export * from "./open_splunk/v1/history";

@@ -162,6 +162,18 @@ test("mvcount highlights only when used as a parenthesized function", () => {
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });
 
+test("mvsort highlights only when used as a parenthesized function", () => {
+  const query = `index=main mvsort=1 | eval sorted=MvSoRt(recipients) | table mvsort`;
+  const tokens = classifiedTokens(query);
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-function")
+      .map((token) => token.text.toLowerCase()),
+    ["mvsort"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
 test("match highlights only when used as a parenthesized function", () => {
   const query = `index=main match=1 | where MaTcH(message, "(?i)error") | table match`;
   const tokens = classifiedTokens(query);
@@ -252,6 +264,8 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /mvcount\(value\)/);
   assert.match(evalCompletion.detail, /single value as 1/i);
   assert.match(evalCompletion.detail, /no values as null/i);
+  assert.match(evalCompletion.detail, /mvsort\(multivalue_field\)/);
+  assert.match(evalCompletion.detail, /ascending encoded order/i);
   assert.match(evalCompletion.detail, /match\(value, "regex"\)/);
   assert.match(evalCompletion.detail, /4 KiB literal RE2 pattern/i);
   assert.match(evalCompletion.detail, /like\(value, "pattern"\)/);
@@ -279,11 +293,14 @@ test("eval completion advertises the exact supported scalar signatures", () => {
   assert.match(evalCompletion.detail, /null-propagating.*use tostring\(value\) for Boolean/i);
 });
 
-test("stats completion advertises true-only conditional count with an explicit alias", () => {
+test("stats completion advertises the expanded bounded aggregate surface", () => {
   const statsCompletion = SPL_PIPELINE_COMMANDS.find((command) => command.name === "stats");
   assert.ok(statsCompletion);
-  assert.match(statsCompletion.insertion, /count\(eval\(status>=500\)\) AS errors/);
-  assert.match(statsCompletion.detail, /true-only count\(eval\(predicate\)\) AS output/);
+  assert.match(statsCompletion.insertion, /sparkline\(avg\(latency\),5m\) AS latency_trend/);
+  assert.match(statsCompletion.insertion, /values\(user\) AS users/);
+  assert.match(statsCompletion.insertion, /rate\(bytes\) AS byte_rate/);
+  assert.match(statsCompletion.detail, /row, predicate, field, distinct-count, percentile, distribution/);
+  assert.match(statsCompletion.detail, /values above 100 clamp to 100/);
 });
 
 test("eventstats completion advertises bounded values and percentile aggregates", () => {
@@ -360,6 +377,46 @@ test("nested stats eval highlights as a function without relabeling the eval com
       .filter((token) => token.text.toLowerCase() === "eval")
       .map((token) => token.className),
     ["spl-function", "spl-command"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+});
+
+test("v0.2 field quotes and expression operators highlight only in scalar stages", () => {
+  const query = `index=main source=/var/log/app-1.log O'Reilly | eval 'request-bytes'=duration_ms+1 | where 'HTTP Status' IN (200, 204) | search literal=1+2`;
+  const tokens = classifiedTokens(query);
+
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-field" && token.text.startsWith("'"))
+      .map((token) => token.text),
+    ["'request-bytes'", "'HTTP Status'"],
+  );
+  assert.deepEqual(
+    tokens.filter((token) => token.className === "spl-operator").map((token) => token.text.toUpperCase()),
+    ["=", "+", "IN"],
+  );
+  assert.equal(tokens.map((token) => token.text).join(""), query);
+  assert.equal(
+    tokens.some((token) => token.className === "spl-operator" && token.text === "-"),
+    false,
+  );
+});
+
+test("v0.2 count eval predicates highlight nested fields and operators", () => {
+  const query = `index=main | stats count(eval('HTTP Status' IN (500, 503))) AS errors | eventstats count(eval('request-bytes'/2>100)) AS large | streamstats count(eval(status==503)) AS unavailable`;
+  const tokens = classifiedTokens(query);
+
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-field" && token.text.startsWith("'"))
+      .map((token) => token.text),
+    ["'HTTP Status'", "'request-bytes'"],
+  );
+  assert.deepEqual(
+    tokens
+      .filter((token) => token.className === "spl-operator")
+      .map((token) => token.text.toUpperCase()),
+    ["IN", "/", ">", "=="],
   );
   assert.equal(tokens.map((token) => token.text).join(""), query);
 });

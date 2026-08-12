@@ -3,7 +3,6 @@ package searchjobs
 import (
 	"context"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -123,8 +122,8 @@ func TestManagerDetachesFixedPercentileTimechartMetadataFromExecutor(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed := waitForState(t, manager, created.ID, StateCompleted)
-	if completed.Schema == nil || !reflect.DeepEqual(*completed.Schema, schema) {
-		t.Fatalf("completed schema = %#v, want %#v", completed.Schema, schema)
+	failed := waitForState(t, manager, created.ID, StateFailed)
+	if failed.Failure == nil || failed.Failure.Code != FailureInternal || failed.Schema != nil {
+		t.Fatalf("mutated execution authority published result = %#v", failed)
 	}
 }

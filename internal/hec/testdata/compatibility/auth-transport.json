@@ -1,0 +1,274 @@
+{
+  "format_version": "hec-compatibility-fixture-v0.1",
+  "cases": [
+    {
+      "id": "auth.disabled-token",
+      "rule": "an exact disabled HEC token uses the documented disabled category without decoding the body",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "not-json"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "disabled", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 403, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Token disabled\",\"code\":1}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "auth.missing-precedes-invalid-body",
+      "rule": "missing authorization is returned before semantic body diagnostics",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [],
+        "query": [],
+        "body": {"kind": "utf8", "value": "not-json"}
+      },
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": []},
+      "expect": {
+        "http": {"status": 401, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Token is required\",\"code\":2}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "auth.scheme-is-case-sensitive",
+      "rule": "the documented Splunk authorization scheme spelling is case-sensitive",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 401, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid authorization\",\"code\":3}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "auth.exactly-one-space",
+      "rule": "multiple separator spaces are malformed rather than part of the credential",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk  {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 401, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid authorization\",\"code\":3}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "auth.native-purpose-isolated",
+      "rule": "a valid native-collector credential is indistinguishable from another invalid HEC token",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "native_collector", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 403, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid token\",\"code\":4}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "transport.empty-json-body",
+      "rule": "an authenticated empty event body is no data",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": ""}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"No data\",\"code\":5}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "auth.query-token-forbidden",
+      "rule": "query-string token authentication is rejected without looking up or logging the value",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [],
+        "query": [{"name": "token", "value": "not-a-secret-fixture-value"}],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}
+      },
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": []},
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Query string authorization is not enabled\",\"code\":16}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "routing.unknown-hec-path-is-json",
+      "rule": "an unknown HEC path returns bounded JSON before authentication and never reaches the SPA",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/mint",
+        "headers": [],
+        "query": [],
+        "body": {"kind": "utf8", "value": ""}
+      },
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": []},
+      "expect": {
+        "http": {"status": 404, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "routing.wrong-method-is-json",
+      "rule": "a known event route rejects GET with a stable Allow header and no SPA fallback",
+      "request": {
+        "method": "GET",
+        "path": "/services/collector/event",
+        "headers": [],
+        "query": [],
+        "body": {"kind": "utf8", "value": ""}
+      },
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": []},
+      "expect": {
+        "http": {"status": 405, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "Allow": "POST"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "transport.unsupported-media-precedes-auth",
+      "rule": "a media type rejection is an HTTP framing decision and may precede missing authorization",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Content-Type", "value": "application/xml"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "<event/>"}
+      },
+      "setup": {"received_at": "2026-08-10T12:00:00Z", "indexes": [], "conditions": []},
+      "expect": {
+        "http": {"status": 415, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "transport.single-gzip-member-accepted",
+      "rule": "one case-insensitive gzip content encoding is decoded within the same semantic limits",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "Content-Encoding", "value": "GZip"},
+          {"name": "Content-Type", "value": "application/json; charset=UTF-8"}
+        ],
+        "query": [],
+        "body": {"kind": "gzip_utf8", "value": "{\"event\":\"compressed\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 200, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Success\",\"code\":0}"},
+        "durable": {"quota": "charged", "request": "staged", "ack": "absent", "outbox": "pending", "visibility": "reserved"},
+        "events": [{"ordinal": 0, "index": "main", "time_unix_nanos": "1786363200000000000", "time_source": "received_at_fallback", "host": "hec", "source": "http:hec", "sourcetype": "httpevent", "raw": "compressed", "message": "compressed", "fields": []}],
+        "spl": {"query": "index=main message=compressed | fields _raw", "rows": [{"_raw": "compressed"}]}
+      }
+    },
+    {
+      "id": "transport.concatenated-gzip-members-rejected",
+      "rule": "multiple individually valid gzip members are not one accepted v0.1 body",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "Content-Encoding", "value": "gzip"}
+        ],
+        "query": [],
+        "body": {"kind": "concatenated_gzip_utf8", "members": ["{\"event\":\"one\"}", "{\"event\":\"two\"}"]}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "transport.decompressed-body-hard-limit",
+      "rule": "an identity body over 8 MiB is rejected before semantic parsing and creates no state",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "repeat_utf8", "unit": "x", "count": 8388609}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 413, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    }
+  ]
+}

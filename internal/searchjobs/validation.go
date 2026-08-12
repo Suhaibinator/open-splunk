@@ -78,7 +78,32 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 		IndexTimeCutoff:   anchor,
 		VisibilityCutoff:  &visibilityCutoff,
 	}
-	logical, _, err := manager.buildAndCompileQuery(validationContext, parsed, scope)
+	preparation, err := plan.PrepareStatsWildcard(parsed, scope)
+	var logical *plan.Query
+	if err == nil {
+		logical = preparation.FullPlan()
+		if logical != nil {
+			_, err = manager.compiler.Compile(logical)
+		} else {
+			logical = preparation.Prefix()
+			request := preparation.Request()
+			if logical == nil || request.IsZero() {
+				err = errors.New("validate search: stats wildcard preparation is incomplete")
+			} else {
+				var inventory clickhouse.CompiledStatsWildcardInventory
+				inventory, err = manager.compiler.CompileStatsWildcardInventory(
+					logical,
+					request,
+				)
+				if err == nil {
+					_, ok := inventory.CloneForExecution()
+					if !ok {
+						err = errors.New("validate search: stats wildcard inventory authority is invalid")
+					}
+				}
+			}
+		}
+	}
 	if err != nil {
 		if contextErr := manager.operationContextError(ctx); contextErr != nil {
 			return ValidationResult{}, contextErr

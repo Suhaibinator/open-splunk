@@ -1,0 +1,360 @@
+revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+started_utc=2026-08-11T22:18:28Z
+pre_status=clean
+test "$(env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off go env GOVERSION)" = "go1.26.5"
+test "$(env NODE_OPTIONS="" node --version)" = "v24.18.0"
+test "$(env NODE_OPTIONS="" npm --version)" = "11.16.0"
+mkdir -p "/private/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/open-splunk-release.0k4Hlv/source/.cache/proto-tools"
+env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off GOBIN="/private/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/open-splunk-release.0k4Hlv/source/.cache/proto-tools" go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+go: downloading google.golang.org/protobuf v1.36.11
+env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off GOBIN="/private/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/open-splunk-release.0k4Hlv/source/.cache/proto-tools" go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+go: downloading google.golang.org/grpc/cmd/protoc-gen-go-grpc v1.6.2
+npm ci --include=dev
+
+added 44 packages in 19s
+npm warn allow-scripts 2 packages have install scripts not yet covered by allowScripts:
+npm warn allow-scripts   @bufbuild/buf@1.72.0 (postinstall: node ./install.js)
+npm warn allow-scripts   fsevents@2.3.2 (install: (install scripts present))
+npm warn allow-scripts
+npm warn allow-scripts Run `npm approve-scripts --allow-scripts-pending` to review, or `npm approve-scripts <pkg>` to allow.
+env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off go mod download all
+env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off go mod verify
+all modules verified
+BUF_CACHE_DIR="/private/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/open-splunk-release.0k4Hlv/source/.cache/buf" npx --no-install buf format --diff --exit-code
+BUF_CACHE_DIR="/private/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/open-splunk-release.0k4Hlv/source/.cache/buf" npx --no-install buf lint
+bash scripts/compile-protos.sh
+env \
+		LANG=C \
+		LC_ALL=C \
+		NEXT_TELEMETRY_DISABLED=1 \
+		NODE_OPTIONS="" \
+		OPEN_SPLUNK_API_BASE_URL="" \
+		OPEN_SPLUNK_APPLICATION_VERSION="0.1.0" \
+		OPEN_SPLUNK_DATA_MODE="backend" \
+		OPEN_SPLUNK_SOURCE_REVISION="dffde13c84d9a2ef0567e89dd527ec4776f5ca42" \
+		TZ=UTC \
+		npm run build
+
+> open-splunk@0.1.0 build
+> node scripts/build-ui.mjs
+
+▲ Next.js 16.3.0 (Turbopack)
+✓ Running next.config.ts took 932ms
+⚠ No build cache found. Please configure build caching for faster rebuilds. Read more: https://nextjs.org/docs/messages/no-cache
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 1166ms
+  Running TypeScript ...
+  Finished TypeScript in 969ms ...
+  Collecting page data using 12 workers ...
+  Generating static pages using 12 workers (0/11) ...
+  Generating static pages using 12 workers (2/11) 
+  Generating static pages using 12 workers (5/11) 
+  Generating static pages using 12 workers (8/11) 
+✓ Generating static pages using 12 workers (11/11) in 299ms
+  Finalizing page optimization ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /activity
+├ ○ /admin
+├ ○ /analytics
+├ ○ /dashboards
+├ ○ /datasets
+├ ○ /reports
+├ ○ /search
+└ ○ /signin
+
+
+○  (Static)  prerendered as static content
+
+test -f out/index.html
+grep -Fq 'data-open-splunk-version="0.1.0"' out/index.html
+grep -Fq 'data-open-splunk-revision="dffde13c84d9a2ef0567e89dd527ec4776f5ca42"' out/index.html
+env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off go run ./cmd/open-splunk-manifest \
+		-application-version "0.1.0" \
+		-source-revision "dffde13c84d9a2ef0567e89dd527ec4776f5ca42"
+wrote /private/var/folders/c1/bq3rcd9d3y54bw8n_fp4x0sr0000gn/T/open-splunk-release.0k4Hlv/source/out/asset-manifest.json (revision dffde13c84d9a2ef0567e89dd527ec4776f5ca42, UI ad51b5a92ce581a4bd2e2d163d8c5bc9eb15e93c40318dafacbfacfc047667f5, 87 files)
+test -f out/asset-manifest.json
+mkdir -p build
+env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off go build -buildvcs=false -trimpath -ldflags "-X github.com/Suhaibinator/open-splunk/internal/buildinfo.applicationVersion=0.1.0 -X github.com/Suhaibinator/open-splunk/internal/buildinfo.sourceRevision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42" -o build/open-splunk-server ./cmd/open-splunk-server
+chmod 0755 build/open-splunk-server
+mkdir -p build
+env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off go build -buildvcs=false -trimpath -ldflags "-X github.com/Suhaibinator/open-splunk/internal/buildinfo.applicationVersion=0.1.0 -X github.com/Suhaibinator/open-splunk/internal/buildinfo.sourceRevision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42" -o build/open-splunk-collector ./cmd/open-splunk-collector
+chmod 0755 build/open-splunk-collector
+mkdir -p build
+env -u GO386 -u GOARCH -u GOARM -u GOARM64 -u GOAMD64 -u GOMIPS -u GOMIPS64 -u GOOS -u GOPPC64 -u GORISCV64 -u GOROOT -u GOWASM CGO_ENABLED=0 GO111MODULE=on GOAMD64=v1 GOARM64=v8.0 GOCACHEPROG= GODEBUG= GOENV=off GOEXPERIMENT= GOFIPS140=off GOFLAGS= GOTOOLCHAIN=local GOWORK=off go build -buildvcs=false -trimpath -ldflags "-X github.com/Suhaibinator/open-splunk/internal/buildinfo.applicationVersion=0.1.0 -X github.com/Suhaibinator/open-splunk/internal/buildinfo.sourceRevision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42" -o build/open-splunk-loggen ./cmd/open-splunk-loggen
+chmod 0755 build/open-splunk-loggen
+release built from committed snapshot dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+--- release verification ---
+application_version=0.1.0
+source_revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+ui_build_id=r18hh3g03m74j2n1574n107mg580m978h781hjgj327186mmk8h40472hhgj6j0mg
+ui_sha256=ad51b5a92ce581a4bd2e2d163d8c5bc9eb15e93c40318dafacbfacfc047667f5
+--- binary identities ---
+open-splunk-server
+application_version=0.1.0
+source_revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+open-splunk-collector
+application_version=0.1.0
+source_revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+open-splunk-loggen
+application_version=0.1.0
+source_revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+--- asset manifest ---
+{
+  "format_version": 1,
+  "application_version": "0.1.0",
+  "source_revision": "dffde13c84d9a2ef0567e89dd527ec4776f5ca42",
+  "ui_build_id": "r18hh3g03m74j2n1574n107mg580m978h781hjgj327186mmk8h40472hhgj6j0mg",
+  "ui": {
+    "sha256": "ad51b5a92ce581a4bd2e2d163d8c5bc9eb15e93c40318dafacbfacfc047667f5",
+    "file_count": 87,
+    "byte_count": 2754412,
+    "files": [
+      {
+        "path": ".gitkeep",
+        "size": 1,
+        "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+      },
+      {
+        "path": "404.html",
+        "size": 8083,
+        "sha256": "b1541935b6d5b0c966afcfa3eaa90917bf2be3ab179fe6e85983a3048b1a73e7"
+      },
+      {
+        "path": "404/index.html",
+        "size": 8083,
+        "sha256": "b1541935b6d5b0c966afcfa3eaa90917bf2be3ab179fe6e85983a3048b1a73e7"
+      },
+      {
+        "path": "__next.__PAGE__.txt",
+        "size": 13852,
+        "sha256": "ff3461e28470c1fd6fd2867b9e00b6aa48638087658e8fb81c89cdf0563bf82d"
+      },
+      {
+        "path": "__next._full.txt",
+        "size": 14361,
+        "sha256": "a760c7bca35a1267a916bb13b4c085b9b993f6b23a2354ab63f2ab3c57888928"
+      },
+      {
+        "path": "__next._tree.txt",
+        "size": 293,
+        "sha256": "57bce6b8a18baa4f86ed2d048c13dbf19fd798e9657d4e6c6af7cc68ada49f53"
+      },
+      {
+        "path": "_next/static/chunks/0-b_ankj6lvav.js",
+        "size": 41680,
+        "sha256": "5254019311920d17e0777384210f6c760319002f0227e6512a94a9a57058b731"
+      },
+      {
+        "path": "_next/static/chunks/0-ucfog9gufny.js",
+        "size": 20916,
+        "sha256": "f1044ea45dfe361809a207fcf33b84dc0a8bb82f3e395cfc7f4d15f4cf5aa7b7"
+      },
+      {
+        "path": "_next/static/chunks/03w8m5b_15ra3.css",
+        "size": 14551,
+        "sha256": "4d8f0ccf2268b1834c390c8d51c0eb8098d4c47e9b132d6f821804e67f8afd4b"
+      },
+      {
+        "path": "_next/static/chunks/08ttfj81-47mu.js",
+        "size": 229078,
+        "sha256": "dd976fc71297b2c55b3c9eacaa65b11bb1be18efe8392bf5cb2016e7af8b64c8"
+      },
+      {
+        "path": "_next/static/chunks/0cz1d0mv5g_q7.js",
+        "size": 112594,
+        "sha256": "0973c1d64c88adc8e3c950410cb58b288f72118d5965b78049438deb8f2f9683"
+      },
+      {
+        "path": "_next/static/chunks/0h_rfixpc67m4.js",
+        "size": 8841,
+        "sha256": "3686412c1b29c2453baf765084154d81d575f353b239bfbceb2ec5b60dd07eef"
+      },
+      {
+        "path": "_next/static/chunks/17yeyd4py7e1q.js",
+        "size": 4054,
+        "sha256": "93a550b8ad60931ace12d7345163220b5857e9d8f25ec1b23ef0f9e57fa15ac4"
+      },
+      {
+        "path": "_next/static/chunks/19mx3mg6lkumu.js",
+        "size": 28907,
+        "sha256": "170f3982866674a829571beec30cc23c69fcd36196739ff34b9d586b3ad73cd7"
+      },
+      {
+        "path": "_next/static/chunks/19ww4yy9cfd-0.js",
+        "size": 272479,
+        "sha256": "304b92aaa9b8860decbbd1c9332b4ae8f8358ba8ba2cc98d4a5217d870f48982"
+      },
+      {
+        "path": "_next/static/chunks/1dsfla2bb1o4l.js",
+        "size": 42541,
+        "sha256": "b9d9d925f10dfa2c9b11cb5e4facfd3411a44ec1912938212090b56af9c2bcbe"
+      },
+      {
+        "path": "_next/static/chunks/1f5ust74o0qp9.js",
+        "size": 163834,
+        "sha256": "e22dd0afd218a690f542cb9147502cf3c36ceb067418576272df35a17dfaac99"
+      },
+      {
+        "path": "_next/static/chunks/1jgk1s8q1nui9.js",
+        "size": 33257,
+        "sha256": "1ad3586be76b0359500486c1a69a1e19baca24920e1bb8ea6fef29292046a76c"
+      },
+      {
+        "path": "_next/static/chunks/1ka-mkjs_hnt1.js",
+        "size": 18789,
+        "sha256": "b12e8f1532e54d611a7a73d13105ed2fa7af9e6634b91027834209e08b627bf8"
+      },
+      {
+        "path": "_next/static/chunks/1mwr0262niqxs.js",
+        "size": 83058,
+        "sha256": "fb88b128b41cfa78019d102fdba31310a0624228c4cc73aa268bc39bb19f4cd4"
+      },
+      {
+        "path": "_next/static/chunks/1oq2z_7sb1zi4.js",
+        "size": 22814,
+        "sha256": "17e538f702ab162e63c2a46f7c8747a720d8c3c2d8beaec73f242299f1081fb4"
+      },
+      {
+        "path": "_next/static/chunks/1psb-itm56dbc.js",
+        "size": 343,
+        "sha256": "257de5324f53f5ac38d01a8c44dc9368797e9cc539a942718b9258909a4aa114"
+      },
+      {
+        "path": "_next/static/chunks/1qd5rbnu449kv.css",
+        "size": 166853,
+        "sha256": "681c6de8bebe660143517fb7f69b5a05cf492cdd62599457c556c7d7e7180180"
+      },
+      {
+        "path": "_next/static/chunks/1qvr50134efqc.js",
+        "size": 79610,
+        "sha256": "faa5541c15a7de5cf0c07ea9866c7803ab6f06befe0b40743fb23939fbff3890"
+      },
+      {
+        "path": "_next/static/chunks/1wuymbqs7syd1.css",
+        "size": 6304,
+        "sha256": "65707b09dac24771c7a849b01c491e18e2ff9c94040ee3837cac9e02d7483cf2"
+      },
+      {
+        "path": "_next/static/chunks/26qxlahspxyqx.js",
+        "size": 577187,
+        "sha256": "b737ad71cce121e8842cf119273a2173eeb92dcf67e074db63715d69a8038016"
+      },
+      {
+        "path": "_next/static/chunks/2ffv0-noynsq5.js",
+        "size": 187904,
+        "sha256": "fa891fd956851727ec74ba583dca9a0342670e474e8ca11b59b2a556640b4cfb"
+      },
+      {
+        "path": "_next/static/chunks/2ijp3kgqo-hpm.js",
+        "size": 44725,
+        "sha256": "9ceaa29a83dd395f47022bf6cb8f18fa6082b9814522156ae6b71ddda1e3af0f"
+      },
+      {
+        "path": "_next/static/chunks/3-ef_qm6or7c9.css",
+        "size": 17613,
+        "sha256": "ee1a6ffc72c5a65b4ae0008864681da089204bf9c9cd1f291d1c9119c9b20cc7"
+      },
+      {
+        "path": "_next/static/chunks/310vm2bl3xxpt.js",
+        "size": 5364,
+        "sha256": "8a943b00599e56b53569f36f4341e3465ae7705c1391562cd6c7e1f290c0c387"
+      },
+      {
+        "path": "_next/static/chunks/38y3rxze50egq.js",
+        "size": 15984,
+        "sha256": "602dfca97ce0808310364e4ba4b2652a76c96c74cf2c9bded2e9aad59d0722a1"
+      },
+      {
+        "path": "_next/static/chunks/3fjqzdnvdot1r.css",
+        "size": 17672,
+        "sha256": "b54d68f7268eb6248bd71c7c884281f1219e3c8384a4fd922654685666172f10"
+      },
+      {
+        "path": "_next/static/chunks/3fntmmi971322.js",
+        "size": 14377,
+        "sha256": "34ed6abf4c6d0d1bb3dc56d3f133d2a5dbc3a3c89c791deab314e27143ac14ce"
+      },
+      {
+        "path": "_next/static/chunks/3hjkz-ihjdm6q.js",
+        "size": 14993,
+        "sha256": "00e81a412de8f981075654bdcc7e76cc7e3a94776a0dcd2c55ed732d0b98e6b8"
+      },
+      {
+        "path": "_next/static/chunks/3l2160v12ub4h.js",
+        "size": 27796,
+        "sha256": "e1ed9ddc4777529e41edcb33dd6897e4b8b51b9e9bf4591e5523361d1d7724b9"
+      },
+      {
+        "path": "_next/static/chunks/40iyyi2zwsoef.js",
+        "size": 107694,
+        "sha256": "7ec4d0b33409e752b202d3815e383d734a547e7b591048a8209fc7efa7edcd1d"
+      },
+      {
+        "path": "_next/static/chunks/turbopack-10fqgcjilzx3r.js",
+        "size": 9652,
+        "sha256": "4476a39ab7d239177426135a6c5d307cc42696b5b6b9f8cf5d63929008c3e552"
+      },
+      {
+        "path": "_next/static/r18hh3g03m74j2n1574n107mg580m978h781hjgj327186mmk8h40472hhgj6j0mg/_buildManifest.js",
+        "size": 219,
+        "sha256": "9476e0afd3f9da68a64e6ec58631191fd3eaca62c9f5a377e7517fe9a89e59ea"
+      },
+      {
+        "path": "_next/static/r18hh3g03m74j2n1574n107mg580m978h781hjgj327186mmk8h40472hhgj6j0mg/_clientMiddlewareManifest.js",
+        "size": 96,
+        "sha256": "5483e3295dc35dfe29ea932efc85341c916f10ff78ff5b0e965e003710893a4a"
+      },
+      {
+        "path": "_next/static/r18hh3g03m74j2n1574n107mg580m978h781hjgj327186mmk8h40472hhgj6j0mg/_ssgManifest.js",
+        "size": 80,
+        "sha256": "678f6ce2cb80b1fe72fc67e7412be6e2ab6ada083111b64f7c40d35e3cba5e00"
+      },
+      {
+        "path": "_not-found/__next._full.txt",
+        "size": 5186,
+        "sha256": "2d9421c64fd2a57e5070bd0a3921af4cf6a0c935e733ea1263d4994d3af6bf91"
+      },
+      {
+        "path": "_not-found/__next._not-found.__PAGE__.txt",
+        "size": 4287,
+        "sha256": "8f2edcd6e59e5440bdc1953c87336d6caf8e9034b1fe848c14383edb3f51de2c"
+      },
+      {
+        "path": "_not-found/__next._tree.txt",
+        "size": 371,
+        "sha256": "e041c9bebe7433ca5df0d724339f42816acf48904dec7b0338bfa2b37988c89e"
+      },
+      {
+        "path": "_not-found/index.html",
+        "size": 8083,
+        "sha256": "b1541935b6d5b0c966afcfa3eaa90917bf2be3ab179fe6e85983a3048b1a73e7"
+      },
+      {
+        "path": "_not-found/index.txt",
+        "size": 5186,
+        "sha256": "2d9421c64fd2a57e5070bd0a3921af4cf6a0c935e733ea1263d4994d3af6bf91"
+      },
+      {
+        "path": "activity/__next._full.txt",
+        "size": 5485,
+        "sha256": "1a11e65eeabeff3aa2e7b38df749655932eb72028d4001a3420ca03d2bce5344"
+      },
+--- artifact hashes/sizes/modes ---
+ab25f90c4dbc7adb96cbcb41103e1e3dc3d5457ddd5014bc4e894f0f8ec972a8  build/open-splunk-server
+bytes=60939538 mode=755 path=build/open-splunk-server
+fb349e47b94f5309a875a34935815a2149a98ebd4fd72b6071061d706d516b6e  build/open-splunk-collector
+bytes=27761746 mode=755 path=build/open-splunk-collector
+b509b4dc2434443c6d4a339f3a9bde381049c6161750b41dc9c1b388a128f304  build/open-splunk-loggen
+bytes=3775234 mode=755 path=build/open-splunk-loggen
+e60803f0f30b50786bb761283c2a61892477a84c588299b365e45cbfbf260d3e  build/asset-manifest.json
+bytes=16083 mode=644 path=build/asset-manifest.json
+2cbc205f4f0775a67168c42f132dab4763a7ace27ffb202333ee2f6520d278d3  build/binary-identities.txt
+bytes=309 mode=644 path=build/binary-identities.txt
+0125e0b8b16ce5b3032e1c27890633bffd0ec64069bece39c6aa5375121c7fc3  build/release-verification.txt
+bytes=236 mode=644 path=build/release-verification.txt
+post_status=clean
+completed_utc=2026-08-11T22:19:49Z

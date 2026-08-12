@@ -26,6 +26,7 @@ func queryIntegrationTestFieldCatalog(
 ) {
 	t.Helper()
 	indexTime := queryIntegrationInsertFieldCatalogEvents(t, ctx, connection)
+	queryIntegrationTestStatsWildcardInventory(t, ctx, executor, indexTime)
 
 	t.Run("field catalog compiler and executor", func(t *testing.T) {
 		t.Run("empty event relation retains known schema", func(t *testing.T) {

@@ -19,6 +19,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchinspection"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 
@@ -72,19 +73,35 @@ func (service *fakeSearchInspections) lastCall() (
 	return service.access, service.request
 }
 
-type inspectionFixtureSearches struct {
-	snapshot searchjobs.ExecutionSnapshot
+type inspectionFixtureExecutor struct{}
+
+func (inspectionFixtureExecutor) Execute(
+	ctx context.Context,
+	query clickhouse.CompiledQuery,
+	sink searchjobs.ResultSink,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	columns := make([]searchjobs.Column, len(query.OutputFields))
+	for position, field := range query.OutputFields {
+		columns[position] = searchjobs.Column{
+			Name: field,
+			Kind: searchjobs.ValueKindString,
+		}
+	}
+	return sink.SetSchema(searchjobs.Schema{Columns: columns})
 }
 
-func (searches inspectionFixtureSearches) CompletedExecutionSnapshotFor(
+type inspectionFixtureSnapshotter uint64
+
+func (snapshotter inspectionFixtureSnapshotter) VisibilityCutoff(
 	ctx context.Context,
-	_ searchjobs.AccessScope,
-	_ string,
-) (searchjobs.ExecutionSnapshot, error) {
+) (uint64, error) {
 	if err := ctx.Err(); err != nil {
-		return searchjobs.ExecutionSnapshot{}, err
+		return 0, err
 	}
-	return searches.snapshot, nil
+	return uint64(snapshotter), nil
 }
 
 type inspectionFixtureExplainer struct{}
@@ -141,6 +158,8 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 	t.Parallel()
 
 	result := validServerSearchInspectionResult(t)
+	result.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
+	result = withServerKnowledgeInspectionProvenance(t, result)
 	service := &fakeSearchInspections{result: result}
 	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
 	requestMessage := &opensplunkv1.InspectSearchJobRequest{
@@ -177,6 +196,63 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 		"inspection-job",
 		result,
 	)
+	for _, secret := range []string{
+		"extract-secret-id",
+		"Secret Extraction",
+		"alias-secret-id",
+		"Secret Alias",
+	} {
+		if bytes.Contains(response.Body.Bytes(), []byte(secret)) {
+			t.Fatalf("inspection response leaked retained identity %q", secret)
+		}
+	}
+	if result.KnowledgeSnapshot.GetObjects()[0].GetAuthorizedObject() == nil {
+		t.Fatal("inspection response projection mutated service-owned knowledge summary")
+	}
+}
+
+func TestSearchInspectionResultProjectionDetachesRangesAndRedactedProvenance(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	result := validServerSearchInspectionResult(t)
+	result.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
+	result = withServerKnowledgeInspectionProvenance(t, result)
+	projected, err := searchInspectionResultToProto("inspection-job", result)
+	if err != nil {
+		t.Fatalf("searchInspectionResultToProto() error = %v", err)
+	}
+	assertSearchInspectionProtoMatchesResult(
+		t,
+		projected,
+		"inspection-job",
+		result,
+	)
+
+	authored := projected.GetLogicalPlan().GetStages()[0]
+	generated := projected.GetLogicalPlan().GetStages()[1]
+	if authored.GetSourceRange() == nil || generated.GetSourceRange() != nil {
+		t.Fatalf(
+			"authored/generated source ranges = (%+v, %+v), want present/absent",
+			authored.GetSourceRange(),
+			generated.GetSourceRange(),
+		)
+	}
+	authored.SourceRange.Start.Line = 99
+	generated.OperatorProvenance[0].GetRedactedObject().RedactedObjectOrdinal = 99
+	generated.OutputProvenance[0].OutputField = "mutated_output"
+	generated.OutputProvenance[0].GetProvenance().GetRedactedObject().Stage =
+		opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_CALCULATED_FIELD
+
+	if result.Plan.Stages[0].SourceRange == nil ||
+		result.Plan.Stages[0].SourceRange.Start.Line == 99 ||
+		result.Plan.Stages[1].KnowledgeObjects[0].Ordinal == 99 ||
+		result.Plan.Stages[1].OutputProvenance[0].Field == "mutated_output" ||
+		result.Plan.Stages[1].KnowledgeObjects[0].Stage !=
+			opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION {
+		t.Fatal("protobuf projection aliases service-owned logical provenance")
+	}
 }
 
 func TestSearchInspectionRouteRequiresAuthenticationBeforeAdmission(
@@ -683,6 +759,39 @@ func TestSearchInspectionRejectsMalformedServiceResultAtomically(
 	}
 }
 
+func TestSearchInspectionRejectsInvalidKnowledgeSummaryAtomically(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	result := validServerSearchInspectionResult(t)
+	result.KnowledgeSnapshot = serverKnowledgeSnapshotSummary()
+	result.KnowledgeSnapshot.Objects[0].Disclosure = nil
+	service := &fakeSearchInspections{result: result}
+	handler := newSearchInspectionTestHandler(t, service, BootstrapConfig{})
+	response := postAuthenticatedInspection(
+		t,
+		handler,
+		&opensplunkv1.InspectSearchJobRequest{SearchJobId: "inspection-job"},
+	)
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf(
+			"status = %d, body = %s",
+			response.Code,
+			response.Body.String(),
+		)
+	}
+	for _, private := range []string{
+		"extract-secret-id",
+		"Secret Extraction",
+		result.DiagnosticQueryID,
+	} {
+		if strings.Contains(response.Body.String(), private) {
+			t.Fatalf("invalid knowledge summary leaked %q", private)
+		}
+	}
+}
+
 func TestSearchInspectionCancellationAfterServiceSuccessIsAtomic(
 	t *testing.T,
 ) {
@@ -1123,24 +1232,70 @@ func validServerSearchInspectionResult(
 ) searchinspection.Result {
 	t.Helper()
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
-	snapshot := searchjobs.ExecutionSnapshot{
-		ID:       "inspection-job",
-		OwnerID:  browserGateOwnerID,
-		TenantID: browserGateTenantID,
-		SPL: `index=main status=200 | stats count AS events BY host | ` +
-			`sort -events | head 10`,
-		EffectiveIndexes: []string{"main"},
-		Earliest:         now.Add(-2 * time.Hour),
-		Latest:           now.Add(-time.Hour),
-		SearchStart:      now.Add(-30 * time.Minute),
-		SearchTimezone:   "UTC",
-		IndexTimeCutoff:  now.Add(-20 * time.Minute),
-		VisibilityCutoff: 42,
-		FinishedAt:       now.Add(-10 * time.Minute),
-		ExpiresAt:        now.Add(time.Hour),
+	const (
+		jobID  = "inspection-job"
+		source = `index=main status=200 | stats count AS events BY host | ` +
+			`sort -events | head 10`
+	)
+	manager, err := searchjobs.New(searchjobs.Config{
+		Executor:           inspectionFixtureExecutor{},
+		Snapshotter:        inspectionFixtureSnapshotter(42),
+		RetentionTTL:       90 * time.Minute,
+		CleanupInterval:    -1,
+		Now:                func() time.Time { return now },
+		NewID:              func() string { return jobID },
+		CursorKey:          []byte("server-inspection-fixture-cursor-key-at-least-32-bytes"),
+		MaxResultLeases:    1,
+		MaxConcurrentReads: 1,
+	})
+	if err != nil {
+		t.Fatalf("create inspection fixture manager: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close inspection fixture manager: %v", err)
+		}
+	})
+	resolved, err := searchtime.NewAbsoluteRange(
+		now.Add(-2*time.Hour),
+		now.Add(-time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("create inspection fixture time range: %v", err)
+	}
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+		SPL:               source,
+		OwnerID:           browserGateOwnerID,
+		TenantID:          browserGateTenantID,
+		AuthorizedIndexes: []string{"main"},
+		RequestedIndexes:  []string{"main"},
+		TimeRange:         resolved,
+	})
+	if err != nil {
+		t.Fatalf("create inspection fixture job: %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		job, getErr := manager.GetFor(searchjobs.AccessScope{
+			TenantID: browserGateTenantID,
+			OwnerID:  browserGateOwnerID,
+		}, created.ID)
+		if getErr != nil {
+			t.Fatalf("read inspection fixture job: %v", getErr)
+		}
+		if job.State.Terminal() {
+			if job.State != searchjobs.StateCompleted {
+				t.Fatalf("inspection fixture job state = %s, want completed", job.State)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("inspection fixture job did not complete")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	service, err := searchinspection.New(searchinspection.Config{
-		Searches:  inspectionFixtureSearches{snapshot: snapshot},
+		Searches:  manager,
 		Compiler:  clickhouse.Compiler{},
 		Explainer: inspectionFixtureExplainer{},
 	})
@@ -1150,10 +1305,10 @@ func validServerSearchInspectionResult(
 	result, err := service.Inspect(
 		context.Background(),
 		searchjobs.AccessScope{
-			TenantID: snapshot.TenantID,
-			OwnerID:  snapshot.OwnerID,
+			TenantID: browserGateTenantID,
+			OwnerID:  browserGateOwnerID,
 		},
-		searchinspection.Request{SearchJobID: snapshot.ID},
+		searchinspection.Request{SearchJobID: created.ID},
 	)
 	if err != nil {
 		t.Fatalf("inspect fixture: %v", err)
@@ -1163,6 +1318,65 @@ func validServerSearchInspectionResult(
 	}
 	if err := searchinspection.ValidateResult(result); err != nil {
 		t.Fatalf("validate inspection fixture: %v", err)
+	}
+	return result
+}
+
+func withServerKnowledgeInspectionProvenance(
+	t *testing.T,
+	result searchinspection.Result,
+) searchinspection.Result {
+	t.Helper()
+	if len(result.Plan.Stages) == 0 || result.Plan.Stages[0].Operator != "Scan" {
+		t.Fatal("inspection provenance fixture has no leading Scan")
+	}
+	extraction := searchinspection.RedactedObjectProvenance{
+		Ordinal:    0,
+		ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION,
+		Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_EXTRACTION,
+	}
+	alias := searchinspection.RedactedObjectProvenance{
+		Ordinal:    1,
+		ObjectType: opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_ALIAS,
+		Stage:      opensplunkv1.KnowledgeSearchStage_KNOWLEDGE_SEARCH_STAGE_FIELD_ALIAS,
+	}
+	authored := slices.Clone(result.Plan.Stages)
+	stages := make([]searchinspection.PlanStage, 0, len(authored)+2)
+	stages = append(stages, authored[0])
+	stages = append(stages,
+		searchinspection.PlanStage{
+			Operator:         "ConditionalExtract",
+			InputFields:      []string{"_raw"},
+			OutputFields:     []string{"extracted_status"},
+			KnowledgeObjects: []searchinspection.RedactedObjectProvenance{extraction},
+			OutputProvenance: []searchinspection.OutputProvenance{{
+				Field: "extracted_status", ObjectOrdinal: extraction.Ordinal,
+			}},
+		},
+		searchinspection.PlanStage{
+			Operator:         "CopyFieldAlias",
+			InputFields:      []string{"extracted_status"},
+			OutputFields:     []string{"status_alias"},
+			KnowledgeObjects: []searchinspection.RedactedObjectProvenance{alias},
+			OutputProvenance: []searchinspection.OutputProvenance{{
+				Field: "status_alias", ObjectOrdinal: alias.Ordinal,
+			}},
+		},
+	)
+	stages = append(stages, authored[1:]...)
+	for index := range stages {
+		stages[index].Index = uint32(index)
+	}
+	result.Plan.Stages = stages
+	result.Plan.ReferencedFields = append(
+		slices.Clone(result.Plan.ReferencedFields),
+		"_raw",
+		"extracted_status",
+	)
+	slices.Sort(result.Plan.ReferencedFields)
+	result.Plan.ReferencedFields = slices.Compact(result.Plan.ReferencedFields)
+	if err := searchinspection.ValidateResult(result); err != nil {
+		t.Fatalf("knowledge inspection provenance fixture is invalid: %v", err)
 	}
 	return result
 }
@@ -1220,8 +1434,19 @@ func assertSearchInspectionProtoMatchesResult(
 			!slices.Equal(
 				actualStage.GetOutputFields(),
 				expectedStage.OutputFields,
-			) ||
-			actualStage.GetSourceRange() == nil ||
+			) {
+			t.Fatalf(
+				"logical stage %d = %#v, want %#v",
+				index,
+				actualStage,
+				expectedStage,
+			)
+		}
+		if expectedStage.SourceRange == nil {
+			if actualStage.GetSourceRange() != nil {
+				t.Fatalf("generated stage %d invented authored source range: %#v", index, actualStage.GetSourceRange())
+			}
+		} else if actualStage.GetSourceRange() == nil ||
 			actualStage.GetSourceRange().GetStart() == nil ||
 			actualStage.GetSourceRange().GetEnd() == nil ||
 			actualStage.GetSourceRange().GetStart().GetByteOffset() !=
@@ -1236,12 +1461,36 @@ func assertSearchInspectionProtoMatchesResult(
 				expectedStage.SourceRange.End.Line ||
 			actualStage.GetSourceRange().GetEnd().GetColumn() !=
 				expectedStage.SourceRange.End.Column {
-			t.Fatalf(
-				"logical stage %d = %#v, want %#v",
-				index,
-				actualStage,
-				expectedStage,
+			t.Fatalf("authored stage %d source range = %#v, want %#v", index, actualStage.GetSourceRange(), expectedStage.SourceRange)
+		}
+		if len(actualStage.GetOperatorProvenance()) != len(expectedStage.KnowledgeObjects) ||
+			len(actualStage.GetOutputProvenance()) != len(expectedStage.OutputProvenance) {
+			t.Fatalf("stage %d provenance counts = %d/%d, want %d/%d", index, len(actualStage.GetOperatorProvenance()), len(actualStage.GetOutputProvenance()), len(expectedStage.KnowledgeObjects), len(expectedStage.OutputProvenance))
+		}
+		for provenanceIndex, want := range expectedStage.KnowledgeObjects {
+			assertSearchInspectionRedactedProvenance(
+				t,
+				actualStage.GetOperatorProvenance()[provenanceIndex],
+				want,
 			)
+		}
+		for provenanceIndex, want := range expectedStage.OutputProvenance {
+			got := actualStage.GetOutputProvenance()[provenanceIndex]
+			if got.GetOutputField() != want.Field {
+				t.Fatalf("stage %d output provenance %d field = %q, want %q", index, provenanceIndex, got.GetOutputField(), want.Field)
+			}
+			var object searchinspection.RedactedObjectProvenance
+			found := false
+			for _, candidate := range expectedStage.KnowledgeObjects {
+				if candidate.Ordinal == want.ObjectOrdinal {
+					object, found = candidate, true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("stage %d output provenance %d has unknown object ordinal %d", index, provenanceIndex, want.ObjectOrdinal)
+			}
+			assertSearchInspectionRedactedProvenance(t, got.GetProvenance(), object)
 		}
 	}
 
@@ -1290,6 +1539,53 @@ func assertSearchInspectionProtoMatchesResult(
 				)
 			}
 		}
+	}
+	if expected.KnowledgeSnapshot == nil {
+		if actual.GetKnowledgeSnapshot() != nil {
+			t.Fatalf(
+				"legacy inspection invented knowledge summary: %+v",
+				actual.GetKnowledgeSnapshot(),
+			)
+		}
+		return
+	}
+	projected := actual.GetKnowledgeSnapshot()
+	if projected == nil ||
+		!proto.Equal(projected.GetRef(), expected.KnowledgeSnapshot.GetRef()) ||
+		len(projected.GetObjects()) != len(expected.KnowledgeSnapshot.GetObjects()) ||
+		projected.GetObjectsTruncated() != expected.KnowledgeSnapshot.GetObjectsTruncated() {
+		t.Fatalf("projected inspection knowledge summary = %+v", projected)
+	}
+	for index, want := range expected.KnowledgeSnapshot.GetObjects() {
+		got := projected.GetObjects()[index]
+		if got.GetResolutionOrdinal() != want.GetResolutionOrdinal() ||
+			got.GetObjectType() != want.GetObjectType() ||
+			got.GetStage() != want.GetStage() ||
+			!got.GetRedacted() || got.GetAuthorizedObject() != nil {
+			t.Fatalf(
+				"projected inspection knowledge object %d = %+v",
+				index,
+				got,
+			)
+		}
+	}
+}
+
+func assertSearchInspectionRedactedProvenance(
+	t *testing.T,
+	actual *opensplunkv1.KnowledgeProvenance,
+	expected searchinspection.RedactedObjectProvenance,
+) {
+	t.Helper()
+	if actual == nil || actual.GetAuthored() != nil ||
+		actual.GetAuthorizedObject() != nil || actual.GetRedactedObject() == nil {
+		t.Fatalf("inspection provenance = %+v, want redacted-only", actual)
+	}
+	redacted := actual.GetRedactedObject()
+	if redacted.GetRedactedObjectOrdinal() != expected.Ordinal ||
+		redacted.GetObjectType() != expected.ObjectType ||
+		redacted.GetStage() != expected.Stage {
+		t.Fatalf("redacted inspection provenance = %+v, want %+v", redacted, expected)
 	}
 }
 

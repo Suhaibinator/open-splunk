@@ -176,6 +176,34 @@ func TestSchemaMarksStaticTimeSeriesCountAsMetric(t *testing.T) {
 	}
 }
 
+func TestSchemaPreservesPresenceSensitiveFlatMultivalueDelimiter(t *testing.T) {
+	t.Parallel()
+
+	converted, err := Schema("schema-delimiter", searchjobs.Schema{
+		Columns: []searchjobs.Column{
+			{
+				Name:                       "users",
+				Kind:                       searchjobs.ValueKindList,
+				Multivalue:                 true,
+				HasFlatMultivalueDelimiter: true,
+			},
+			{Name: "hosts", Kind: searchjobs.ValueKindList, Multivalue: true},
+			{Name: "trend", Kind: searchjobs.ValueKindList, Multivalue: true, StatsSparkline: true},
+		},
+	}, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_STATISTICS})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if converted.Columns[0].FlatMultivalueDelimiter == nil ||
+		converted.Columns[0].GetFlatMultivalueDelimiter() != "" ||
+		converted.Columns[1].FlatMultivalueDelimiter != nil {
+		t.Fatalf("delimiter transport = %+v", converted.Columns)
+	}
+	if !converted.Columns[2].GetStatsSparkline() {
+		t.Fatalf("sparkline transport = %+v", converted.Columns)
+	}
+}
+
 func TestSchemaRejectsMalformedColumns(t *testing.T) {
 	t.Parallel()
 
@@ -184,6 +212,8 @@ func TestSchemaRejectsMalformedColumns(t *testing.T) {
 		{Columns: []searchjobs.Column{{Name: string([]byte{0xff}), Kind: searchjobs.ValueKindString}}},
 		{Columns: []searchjobs.Column{{Name: "field", Kind: searchjobs.ValueKindString}, {Name: "field", Kind: searchjobs.ValueKindString}}},
 		{Columns: []searchjobs.Column{{Name: "field", Kind: searchjobs.ValueKindInvalid}}},
+		{Columns: []searchjobs.Column{{Name: "field", Kind: searchjobs.ValueKindString, FlatMultivalueDelimiter: ",", HasFlatMultivalueDelimiter: true}}},
+		{Columns: []searchjobs.Column{{Name: "field", Kind: searchjobs.ValueKindList, Multivalue: true, FlatMultivalueDelimiter: string([]byte{0xff}), HasFlatMultivalueDelimiter: true}}},
 	}
 	for _, schema := range tests {
 		if _, err := Schema("schema", schema, ResultShape{Kind: opensplunkv1.ResultSetKind_RESULT_SET_KIND_EVENTS}); err == nil {

@@ -289,6 +289,20 @@ export interface ResultColumn {
   nullable: boolean;
   multivalue: boolean;
   hiddenByDefault: boolean;
+  /**
+   * Optional flat-table presentation for a typed multivalue cell. Presence is
+   * significant: an empty delimiter means concatenate members, while absence
+   * leaves the renderer's normal typed-array representation unchanged.
+   */
+  flatMultivalueDelimiter?:
+    | string
+    | undefined;
+  /**
+   * Compiler-authored stats sparkline semantics. The first cell member remains
+   * a transport-integrity marker, but clients must require this schema bit so
+   * an ordinary user-controlled multivalue cannot opt into chart rendering.
+   */
+  statsSparkline: boolean;
 }
 
 /**
@@ -373,6 +387,8 @@ function createBaseResultColumn(): ResultColumn {
     nullable: false,
     multivalue: false,
     hiddenByDefault: false,
+    flatMultivalueDelimiter: undefined,
+    statsSparkline: false,
   };
 }
 
@@ -398,6 +414,12 @@ export const ResultColumn: MessageFns<ResultColumn> = {
     }
     if (message.hiddenByDefault !== false) {
       writer.uint32(56).bool(message.hiddenByDefault);
+    }
+    if (message.flatMultivalueDelimiter !== undefined) {
+      writer.uint32(66).string(message.flatMultivalueDelimiter);
+    }
+    if (message.statsSparkline !== false) {
+      writer.uint32(72).bool(message.statsSparkline);
     }
     return writer;
   },
@@ -465,6 +487,22 @@ export const ResultColumn: MessageFns<ResultColumn> = {
           message.hiddenByDefault = reader.bool();
           continue;
         }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.flatMultivalueDelimiter = reader.string();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.statsSparkline = reader.bool();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -503,6 +541,16 @@ export const ResultColumn: MessageFns<ResultColumn> = {
         : isSet(object.hidden_by_default)
         ? globalThis.Boolean(object.hidden_by_default)
         : false,
+      flatMultivalueDelimiter: isSet(object.flatMultivalueDelimiter)
+        ? globalThis.String(object.flatMultivalueDelimiter)
+        : isSet(object.flat_multivalue_delimiter)
+        ? globalThis.String(object.flat_multivalue_delimiter)
+        : undefined,
+      statsSparkline: isSet(object.statsSparkline)
+        ? globalThis.Boolean(object.statsSparkline)
+        : isSet(object.stats_sparkline)
+        ? globalThis.Boolean(object.stats_sparkline)
+        : false,
     };
   },
 
@@ -529,6 +577,12 @@ export const ResultColumn: MessageFns<ResultColumn> = {
     if (message.hiddenByDefault !== false) {
       obj.hiddenByDefault = message.hiddenByDefault;
     }
+    if (message.flatMultivalueDelimiter !== undefined) {
+      obj.flatMultivalueDelimiter = message.flatMultivalueDelimiter;
+    }
+    if (message.statsSparkline !== false) {
+      obj.statsSparkline = message.statsSparkline;
+    }
     return obj;
   },
 
@@ -544,6 +598,8 @@ export const ResultColumn: MessageFns<ResultColumn> = {
     message.nullable = object.nullable ?? false;
     message.multivalue = object.multivalue ?? false;
     message.hiddenByDefault = object.hiddenByDefault ?? false;
+    message.flatMultivalueDelimiter = object.flatMultivalueDelimiter ?? undefined;
+    message.statsSparkline = object.statsSparkline ?? false;
     return message;
   },
 };

@@ -98,6 +98,38 @@ func TestExplainerBuffersExactPlanAndPreservesParameters(t *testing.T) {
 	}
 }
 
+func TestProductionExplainerRejectsTamperedNonReadArgumentBeforeLaneOrConnection(t *testing.T) {
+	t.Parallel()
+
+	query := sealedExplainQueryFromSPL(t, `index=main status="non-read-explain" | table status`)
+	query.Args = slices.Clone(query.Args)
+	mutated := false
+	for index, argument := range query.Args {
+		if value, ok := argument.(string); ok && value == "non-read-explain" {
+			query.Args[index] = "tampered-filter"
+			mutated = true
+			break
+		}
+	}
+	if !mutated {
+		t.Fatal("compiled fixture did not expose the filter bind argument")
+	}
+	if _, _, ok := query.ReadScope(); !ok {
+		t.Fatal("non-read mutation unexpectedly invalidated the older SQL/read-scope seal")
+	}
+	connection := &fakeQueryConnection{err: errors.New("connection must not be called")}
+	explainer := mustExplainer(t, connection)
+	explainer.requireExecutionSeal = true
+	lanesBefore := len(explainer.lanes)
+	result, err := explainer.Explain(context.Background(), query)
+	if !errors.Is(err, searchjobs.ErrInvalidResult) || !reflect.DeepEqual(result, ExplainResult{}) {
+		t.Fatalf("Explain(tampered non-read argument) = (%#v, %v)", result, err)
+	}
+	if connection.query != "" || len(explainer.lanes) != lanesBefore {
+		t.Fatalf("tampered query reached connection/lane: query=%q lanes=%d/%d", connection.query, len(explainer.lanes), lanesBefore)
+	}
+}
+
 func TestValidateExplainResult(t *testing.T) {
 	t.Parallel()
 

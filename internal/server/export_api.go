@@ -11,6 +11,7 @@ import (
 	"github.com/Suhaibinator/SRouter/pkg/router"
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
@@ -153,6 +154,13 @@ func exportRequestFromProto(definition *opensplunkv1.ExportDefinition) (exportjo
 }
 
 func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJob, error) {
+	if job.CompilerVersion != "" && !searchjobs.ValidCompilerVersion(job.CompilerVersion) {
+		return nil, errors.New("export job contains an invalid compiler version")
+	}
+	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
+	if err != nil {
+		return nil, err
+	}
 	createdAt, err := validTimestamp(job.CreatedAt)
 	if err != nil {
 		return nil, err
@@ -202,7 +210,9 @@ func exportJobToProto(job exportjobs.Job, now time.Time) (*opensplunkv1.ExportJo
 			Elapsed:      durationpb.New(elapsed),
 			UpdatedAt:    progressUpdatedAt,
 		},
-		CreatedAt: createdAt,
+		CreatedAt:         createdAt,
+		KnowledgeSnapshot: knowledgeSnapshot,
+		CompilerVersion:   job.CompilerVersion,
 	}
 	if job.Artifact != nil {
 		artifactExpiresAt, timestampErr := validTimestamp(job.Artifact.ExpiresAt)

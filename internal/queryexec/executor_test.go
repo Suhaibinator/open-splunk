@@ -93,6 +93,80 @@ func TestExecutorStreamsTypedRowsAndExactSchema(t *testing.T) {
 	}
 }
 
+func TestExecutorPublishesOrdinarySchemaWithFirstRowOrSuccessfulEmpty(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		data       [][]any
+		iteration  error
+		wantErr    error
+		wantEvents []string
+		wantSchema int
+		wantRows   int
+	}{
+		{
+			name:       "nonempty success",
+			data:       [][]any{{"one"}},
+			wantEvents: []string{"schema", "row"},
+			wantSchema: 1,
+			wantRows:   1,
+		},
+		{
+			name:       "empty success",
+			wantEvents: []string{"schema"},
+			wantSchema: 1,
+		},
+		{
+			name:      "pre-row iteration failure",
+			iteration: io.ErrUnexpectedEOF,
+			wantErr:   searchjobs.ErrStorageUnavailable,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows := &fakeRows{
+				columns: []string{"message"},
+				types: []driver.ColumnType{
+					fakeColumnType{name: "message", databaseType: "String", scanType: reflect.TypeOf("")},
+				},
+				data: test.data,
+				err:  test.iteration,
+			}
+			sink := &fakeSink{}
+			err := mustExecutor(t, &fakeQueryConnection{rows: rows}).Execute(
+				context.Background(),
+				clickhouse.CompiledQuery{SQL: "SELECT message", OutputFields: []string{"message"}},
+				sink,
+			)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("Execute error = %v, want %v", err, test.wantErr)
+			}
+			if !reflect.DeepEqual(sink.events, test.wantEvents) {
+				t.Fatalf("sink events = %#v, want %#v", sink.events, test.wantEvents)
+			}
+			if sink.setCalls != test.wantSchema {
+				t.Fatalf("schema calls = %d, want %d", sink.setCalls, test.wantSchema)
+			}
+			if len(sink.rows) != test.wantRows {
+				t.Fatalf("rows = %d, want %d", len(sink.rows), test.wantRows)
+			}
+			if !rows.closed {
+				t.Fatal("result rows were not closed")
+			}
+			if test.wantErr == nil {
+				wantSchema := []searchjobs.Column{{Name: "message", Kind: searchjobs.ValueKindString}}
+				if !reflect.DeepEqual(sink.schema.Columns, wantSchema) {
+					t.Fatalf("schema = %#v, want %#v", sink.schema.Columns, wantSchema)
+				}
+			}
+		})
+	}
+}
+
 func TestScanDestinationsOverridesGenericDynamicScanType(t *testing.T) {
 	t.Parallel()
 
@@ -1611,7 +1685,7 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	for _, name := range []string{
 		"readonly", "max_execution_time", "max_memory_usage", "max_rows_to_read", "max_bytes_to_read",
 		"max_result_rows", "max_result_bytes", "max_rows_to_group_by", "max_threads", "max_query_size",
-		"max_subquery_depth", "enable_materialized_cte",
+		"max_ast_elements", "max_expanded_ast_elements", "max_subquery_depth", "enable_materialized_cte",
 		"short_circuit_function_evaluation",
 	} {
 		if _, exists := settings[name]; !exists {
@@ -1627,6 +1701,16 @@ func TestQuerySettingsAreReadOnlyAndBounded(t *testing.T) {
 	}
 	if settings["max_query_size"] != defaultMaxQueryBytes {
 		t.Fatalf("default query cap = %v, want %d", settings["max_query_size"], defaultMaxQueryBytes)
+	}
+	if settings["max_ast_elements"] != defaultMaxASTElements ||
+		settings["max_expanded_ast_elements"] != defaultMaxExpandedASTElements {
+		t.Fatalf(
+			"AST settings = (%v, %v), want (%d, %d)",
+			settings["max_ast_elements"],
+			settings["max_expanded_ast_elements"],
+			defaultMaxASTElements,
+			defaultMaxExpandedASTElements,
+		)
 	}
 	if settings["max_subquery_depth"] != defaultMaxSubqueryDepth {
 		t.Fatalf(
@@ -1727,18 +1811,19 @@ func TestExecutorExpandsOnlyOptedInTimechartGroupBudget(t *testing.T) {
 		t.Fatalf("opted-in ordinary group cap = %v, want 7", got)
 	}
 
-	// A chart's first aggregation is keyed on two runtime domains, so the
-	// budget comes from its declared row ceiling rather than from the data.
+	// A chart's first aggregation retains exact raw (row, label) pairs before
+	// reducing to the published width, so every non-percentile chart receives
+	// the fixed 130k raw-work allowance.
 	pivot := chartQuery("path", clickhouse.ChartRowKindString, "String")
 	if got, want := executor.settingsFor(pivot)["max_rows_to_group_by"], uint64(130_000); got != want {
 		t.Fatalf("chart group cap = %v, want %d", got, want)
 	}
-	// A pivot whose bound already fits inside the base cap never widens it.
+	// A narrow public shape still needs the same independent raw-pair allowance.
 	narrow := chartQuery("path", clickhouse.ChartRowKindString, "String")
 	narrow.Chart.RowLimit = 500
 	narrow.Chart.MaxSeries = 2
-	if got := executor.settingsFor(narrow)["max_rows_to_group_by"]; got != defaultMaxResultRows {
-		t.Fatalf("narrow chart group cap = %v, want the unchanged base cap %d", got, defaultMaxResultRows)
+	if got, want := executor.settingsFor(narrow)["max_rows_to_group_by"], maximumRuntimeWideTimechartGroups; got != want {
+		t.Fatalf("narrow chart group cap = %v, want fixed raw-work cap %d", got, want)
 	}
 	if got := custom.settingsFor(pivot)["max_rows_to_group_by"]; got != uint64(7) {
 		t.Fatalf("explicit chart group cap = %v, want 7", got)
@@ -1782,6 +1867,7 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		clickhouse.UnsupportedDedupValueMarker,
 		clickhouse.UnsupportedNumericBinValueMarker,
 		clickhouse.UnsupportedSpathValueMarker,
+		clickhouse.KnowledgeSelectorInvalidUTF8Marker,
 	} {
 		unsupported := &clickhousedriver.Exception{
 			Code:    395,
@@ -1810,6 +1896,7 @@ func TestClassifyQueryErrorsRedactsIntoStableCategories(t *testing.T) {
 		clickhouse.UnsupportedDedupValueMarker,
 		clickhouse.UnsupportedNumericBinValueMarker,
 		clickhouse.UnsupportedSpathValueMarker,
+		clickhouse.KnowledgeSelectorInvalidUTF8Marker,
 	} {
 		wrongCode := &clickhousedriver.Exception{Code: 241, Message: marker}
 		if err := classifyQueryError(context.Background(), wrongCode); !errors.Is(err, searchjobs.ErrExecutionLimit) || errors.Is(err, searchjobs.ErrUnsupportedValue) {
@@ -1943,6 +2030,7 @@ func assignFakeValue(target reflect.Value, source any) error {
 type fakeSink struct {
 	schema   searchjobs.Schema
 	rows     [][]searchjobs.Value
+	events   []string
 	setErr   error
 	addErr   error
 	setCalls int
@@ -1953,6 +2041,7 @@ func (sink *fakeSink) SetSchema(schema searchjobs.Schema) error {
 	if sink.setErr != nil {
 		return sink.setErr
 	}
+	sink.events = append(sink.events, "schema")
 	sink.schema = schema
 	return nil
 }
@@ -1960,6 +2049,7 @@ func (sink *fakeSink) AddRow(values []searchjobs.Value) error {
 	if sink.addErr != nil {
 		return sink.addErr
 	}
+	sink.events = append(sink.events, "row")
 	sink.rows = append(sink.rows, slices.Clone(values))
 	return nil
 }

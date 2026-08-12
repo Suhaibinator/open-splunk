@@ -124,14 +124,14 @@ func TestCompiledRelationalDepthPinsRepresentativeOperatorCosts(t *testing.T) {
 		{name: "spath", source: `| spath output=value path=payload.value`, depth: 11},
 		{name: "fixed dedup", source: `| dedup host`, depth: 4},
 		{name: "dynamic dedup", source: `| dedup latency`, depth: 5},
-		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 6},
+		{name: "dynamic aggregate", source: `| stats count BY latency`, depth: 9},
 		{name: "count values aggregate", source: `| stats count(user) AS users`, depth: 4},
 		{name: "fixed extrema aggregate", source: `| stats min(severity) AS low`, depth: 3},
 		{name: "scalar String extrema aggregate", source: `| stats min(service) AS low max(service) AS high`, depth: 5},
 		{name: "dynamic extrema aggregate", source: `| stats min(user) AS low max(user) AS high`, depth: 4},
 		{name: "values aggregate", source: `| stats values(user) AS users`, depth: 6},
 		{name: "list aggregate", source: `| stats list(user) AS users`, depth: 8},
-		{name: "eventstats list", source: `| eventstats list(user) AS users`, depth: 11},
+		{name: "eventstats list", source: `| eventstats list(user) AS users`, depth: 10},
 		{
 			name:   "shared dc and values aggregate",
 			source: `| stats dc(user) AS user_count values(user) AS users`,
@@ -325,7 +325,7 @@ func TestEventStatsListRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
 
 	acceptedSource := relationalDepthEvalPipeline(
 		t,
-		21,
+		22,
 		64,
 		"eventstats list(user) AS users",
 	)
@@ -343,7 +343,7 @@ func TestEventStatsListRelationalDepthBoundaryIsSourceLocated(t *testing.T) {
 
 	rejectedSource := relationalDepthEvalPipeline(
 		t,
-		22,
+		23,
 		64,
 		"eventstats list(user) AS users",
 	)
@@ -360,7 +360,7 @@ func TestGroupedEventStatsExtremaRelationalDepthBoundaryIsSourceLocated(
 
 	acceptedSource := relationalDepthEvalPipeline(
 		t,
-		20,
+		21,
 		64,
 		"eventstats min(user) AS low BY cohort",
 	)
@@ -378,7 +378,7 @@ func TestGroupedEventStatsExtremaRelationalDepthBoundaryIsSourceLocated(
 
 	rejectedSource := relationalDepthEvalPipeline(
 		t,
-		21,
+		22,
 		64,
 		"eventstats min(user) AS low BY cohort",
 	)
@@ -445,7 +445,7 @@ func TestCompiledRelationalDepthPinsTerminalWideOperatorCosts(t *testing.T) {
 		{
 			name:     "timechart",
 			terminal: "timechart span=5m count BY level",
-			depth:    13,
+			depth:    12,
 		},
 		{
 			name:      "chart",
@@ -536,8 +536,8 @@ func TestTerminalWideRelationalDepthBoundariesAreSourceLocated(t *testing.T) {
 		{
 			name:            "timechart",
 			terminal:        "timechart span=5m count BY level",
-			acceptedSingles: 19,
-			rejectedSingles: 20,
+			acceptedSingles: 20,
+			rejectedSingles: 21,
 		},
 		{
 			name:            "chart",
@@ -659,12 +659,12 @@ func TestFieldAnalysisRelationalDepthBoundariesIncludePrivateFinalizers(t *testi
 
 	t.Run("timeline", func(t *testing.T) {
 		t.Parallel()
-		accepted := relationalDepthPlan(t, relationalDepthEvalPipeline(t, 26, 64, ""))
+		accepted := relationalDepthPlan(t, relationalDepthEvalPipeline(t, 27, 64, ""))
 		if _, err := (Compiler{}).CompileTimeline(accepted, validTimelineSpec()); err != nil {
 			t.Fatalf("CompileTimeline(depth 96): %v", err)
 		}
 
-		rejected := relationalDepthPlan(t, relationalDepthEvalPipeline(t, 27, 64, ""))
+		rejected := relationalDepthPlan(t, relationalDepthEvalPipeline(t, 28, 64, ""))
 		_, err := (Compiler{}).CompileTimeline(rejected, validTimelineSpec())
 		relationalDepthRequireLimitDiagnostic(t, err, rejected.Operators[0].SourceRange())
 	})

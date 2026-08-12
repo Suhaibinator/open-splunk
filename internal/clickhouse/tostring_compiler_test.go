@@ -18,7 +18,9 @@ func TestCompileEvalToStringFixedScalarsAreTypedAndParameterized(t *testing.T) {
 	)
 	for _, required := range []string{
 		`CAST(? AS String) AS "text"`,
-		`toString(CAST(? AS Int64)) AS "signed"`,
+		`[toFloat64(CAST(? AS Int64))]), 1)) AS "signed"`,
+		`toString(arrayElement(arrayMap((__os_arithmetic_operand) ->`,
+		`negate(__os_arithmetic_operand)`,
 		`toString(CAST(? AS UInt64)) AS "unsigned"`,
 		`toString(CAST(? AS Float64)) AS "decimal"`,
 		`transform(CAST(? AS Bool), [true, false], ['True', 'False'], CAST(NULL AS Nullable(String))) AS "yes"`,
@@ -33,7 +35,7 @@ func TestCompileEvalToStringFixedScalarsAreTypedAndParameterized(t *testing.T) {
 	}
 	for _, argument := range []any{
 		"München",
-		int64(-42),
+		int64(42),
 		uint64(math.MaxUint64),
 		float64(12.5),
 		true,

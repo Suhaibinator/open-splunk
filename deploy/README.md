@@ -8,6 +8,10 @@ the browser UI, HTTP API, WebSocket service, collector gRPC endpoint, and both
 migration sets. ClickHouse data, SQLite/control-plane state, export artifacts,
 and remote collector state remain external.
 
+The optional HTTP Event Collector (HEC) compatibility surface is disabled by
+default. When enabled, it shares the existing browser/API HTTPS listener and
+does not publish a separate port 8088.
+
 The default stack intentionally does not run a collector. Collectors belong on
 log-producing hosts, and the GradeThis collector cutover is a separate
 deployment unit.
@@ -131,6 +135,28 @@ identity cannot leave the production server healthy.
 `docker compose ps --all` should show `server` and `clickhouse` healthy and
 both `server-bootstrap` and `clickhouse-migrator` exited with code zero.
 
+## HTTP Event Collector feature gate
+
+The server command receives
+`-hec-enabled=${OPEN_SPLUNK_HEC_ENABLED:-false}`. To persistently enable the
+complete JSON, raw, acknowledgment, and HEC health route set, add this setting
+to the generated `.env`, then recreate the server:
+
+```dotenv
+OPEN_SPLUNK_HEC_ENABLED=true
+```
+
+```sh
+docker compose up --detach --wait --no-build server
+```
+
+The HEC base URL is the existing browser/API origin, normally
+`https://localhost:${OPEN_SPLUNK_SERVER_HTTP_PORT:-8080}`. It uses the same
+generated certificate and CA. The host mapping remains loopback-only and no
+plaintext listener is added. See the
+[HEC deployment and operations runbook](../docs/hec-deployment.md) before
+publishing the endpoint or onboarding a producer.
+
 ## Administrator credential
 
 `generate-env.sh` creates a high-entropy browser administrator token. A
@@ -146,11 +172,16 @@ The host-retained source path is
 a URL, commit it, or pass it as a process argument. Administrative protobuf
 API requests require `Authorization: Bearer <token>`.
 
-The current browser does not yet provide an administrator-token entry flow.
-The deployed UI and unauthenticated system bootstrap are available, but fresh
-index/app/token administration must currently use an API client that supplies
-the bearer header. The upcoming GradeThis onboarding unit must close that UI
-workflow before describing a fresh stack as administratively self-service.
+The browser provides an administrator-token entry flow at `/signin/`. It keeps
+the bearer credential in the current browser tab for protected API calls and
+can then open **Administration** for index and ingestion-token management.
+When creating a HEC credential, choose the immutable **HTTP Event Collector
+(HEC)** purpose, select allowed indexes and optional metadata defaults, and
+decide at creation whether indexer acknowledgment is enabled. The HEC
+plaintext token is shown once and must be moved directly into the producer's
+secret store. The
+[HEC runbook](../docs/hec-deployment.md#create-a-hec-token-in-administration)
+contains the complete sequence.
 
 ## Container and secret boundaries
 

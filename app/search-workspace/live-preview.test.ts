@@ -19,6 +19,7 @@ import {
   type TypedValue,
 } from "../../gen/ts/open_splunk/v1/value";
 import { MAXIMUM_BROWSER_RESULT_COLUMNS } from "../../lib/api/pagination";
+import { MAXIMUM_FLAT_MULTIVALUE_DELIMITER_BYTES } from "../../lib/api/result-column-presentation";
 import {
   applyLiveResultPreview,
   validateLivePreviewSchema,
@@ -39,6 +40,7 @@ function column(overrides: Partial<ResultColumn> = {}): ResultColumn {
     nullable: false,
     multivalue: false,
     hiddenByDefault: false,
+	statsSparkline: false,
     ...overrides,
   };
 }
@@ -127,6 +129,22 @@ test("validates schema identity, revision, columns, and supported types", () => 
       (_, index) => column({ fieldName: `field-${index}` }),
     ),
   })) ?? "", /65 columns.*supports 1–64/);
+});
+
+test("validates presence-sensitive flat multivalue presentation metadata", () => {
+  const listColumn = column({
+    fieldName: "users",
+    valueType: ValueType.VALUE_TYPE_LIST,
+    multivalue: true,
+    flatMultivalueDelimiter: "",
+  });
+  assert.equal(validateLivePreviewSchema(schema({ columns: [listColumn] })), null);
+  assert.match(validateLivePreviewSchema(schema({
+    columns: [{ ...listColumn, valueType: ValueType.VALUE_TYPE_STRING }],
+  })) ?? "", /multivalue presentation/);
+  assert.match(validateLivePreviewSchema(schema({
+    columns: [{ ...listColumn, flatMultivalueDelimiter: "x".repeat(MAXIMUM_FLAT_MULTIVALUE_DELIMITER_BYTES + 1) }],
+  })) ?? "", /multivalue presentation/);
 });
 
 test("schema and object field names preserve whitespace but reject empty names", () => {
@@ -315,21 +333,30 @@ test("rejects malformed rows before they enter display state", () => {
       name: "missing typed value",
       value: preview({ rows: [{ rowId: "row-1", ordinal: 0n, cells: [{ kind: undefined }] }] }),
     },
-    {
-      name: "non-finite double",
-      value: preview({
-        rows: [{
-          rowId: "row-1",
-          ordinal: 0n,
-          cells: [{ kind: { $case: "doubleValue", value: Number.POSITIVE_INFINITY } }],
-        }],
-      }),
-    },
   ];
 
   for (const item of cases) {
     const result = applyLiveResultPreview(null, schema(), item.value, item.rowLimit ?? 10);
     assert.equal(result.status, "invalid", item.name);
+  }
+});
+
+test("preserves IEEE non-finite doubles for deterministic table rendering", () => {
+  const doubleSchema = schema({
+    columns: [column({ valueType: ValueType.VALUE_TYPE_DOUBLE })],
+  });
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const result = applyTypedPreview(doubleSchema, [{
+      kind: { $case: "doubleValue", value },
+    }]);
+    assert.equal(result.status, "applied", String(value));
+    if (result.status === "applied") {
+      const retained = result.snapshot.rows[0]?.cells[0]?.kind;
+      assert.equal(retained?.$case, "doubleValue");
+      if (retained?.$case === "doubleValue") {
+        assert.ok(Object.is(retained.value, value));
+      }
+    }
   }
 });
 

@@ -3,6 +3,7 @@ package export
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -19,38 +20,148 @@ import (
 type reexecutionTestSearches struct {
 	mu           sync.Mutex
 	job          searchjobs.Job
+	execution    *searchjobs.ExecutionSnapshot
 	pin          *reexecutionTestPin
+	manager      *searchjobs.Manager
+	resolver     searchjobs.KnowledgeResolver
+	appID        string
+	lastLease    searchjobs.ResultLease
 	acquireErr   error
-	getErr       error
 	acquireCalls int
-	getCalls     int
 	access       searchjobs.AccessScope
 	id           string
 	onGet        func()
 }
 
-func (searches *reexecutionTestSearches) AcquireResultsFor(_ context.Context, access searchjobs.AccessScope, id string) (searchjobs.ResultLease, error) {
+func (searches *reexecutionTestSearches) AcquireExecutionFor(
+	ctx context.Context,
+	access searchjobs.AccessScope,
+	id string,
+) (searchjobs.ResultLease, searchjobs.ExecutionSnapshot, error) {
 	searches.mu.Lock()
 	defer searches.mu.Unlock()
 	searches.acquireCalls++
 	searches.access = access
 	searches.id = id
 	if searches.acquireErr != nil {
-		return nil, searches.acquireErr
+		return nil, searchjobs.ExecutionSnapshot{}, searches.acquireErr
 	}
-	return searches.pin, nil
-}
-
-func (searches *reexecutionTestSearches) GetFor(access searchjobs.AccessScope, id string) (searchjobs.Job, error) {
-	searches.mu.Lock()
-	defer searches.mu.Unlock()
-	searches.getCalls++
-	searches.access = access
-	searches.id = id
 	if searches.onGet != nil {
 		searches.onGet()
 	}
-	return searches.job, searches.getErr
+	if searches.manager == nil {
+		if err := searches.startManagerLocked(); err != nil {
+			return nil, searchjobs.ExecutionSnapshot{}, err
+		}
+	}
+	pin, execution, err := searches.manager.AcquireExecutionFor(ctx, access, id)
+	if err != nil {
+		return nil, searchjobs.ExecutionSnapshot{}, err
+	}
+	if searches.execution != nil {
+		execution = *searches.execution
+	}
+	searches.lastLease = pin
+	return pin, execution, nil
+}
+
+func (searches *reexecutionTestSearches) lastPinClosed() bool {
+	searches.mu.Lock()
+	lease := searches.lastLease
+	searches.mu.Unlock()
+	if lease == nil {
+		return false
+	}
+	_, _, err := lease.Next(context.Background())
+	return errors.Is(err, searchjobs.ErrResultLeaseClosed)
+}
+
+func (searches *reexecutionTestSearches) startManagerLocked() error {
+	if searches.pin == nil {
+		return searchjobs.ErrResultsUnavailable
+	}
+	schema := cloneResultSchema(searches.pin.schema)
+	truncated := searches.pin.truncated
+	maximumRows := uint64(10)
+	if truncated {
+		maximumRows = 1
+	}
+	now := searches.job.CreatedAt
+	manager, err := searchjobs.New(searchjobs.Config{
+		Executor: integrationSearchExecutor(func(
+			_ context.Context,
+			_ clickhouse.CompiledQuery,
+			sink searchjobs.ResultSink,
+		) error {
+			if err := sink.SetSchema(schema); err != nil {
+				return err
+			}
+			if !truncated {
+				return nil
+			}
+			if len(schema.Columns) != 1 || schema.Columns[0].Kind != searchjobs.ValueKindSigned {
+				return searchjobs.ErrInvalidResult
+			}
+			if err := sink.AddRow([]searchjobs.Value{searchjobs.SignedValue(1)}); err != nil {
+				return err
+			}
+			return sink.AddRow([]searchjobs.Value{searchjobs.SignedValue(2)})
+		}),
+		Snapshotter:       integrationSnapshotter(func(context.Context) (uint64, error) { return searches.job.VisibilityCutoff, nil }),
+		KnowledgeResolver: searches.resolver,
+		MaxConcurrent:     1,
+		MaxRows:           maximumRows,
+		MaxResultLeases:   16,
+		RetentionTTL:      time.Hour,
+		CleanupInterval:   -1,
+		Now:               func() time.Time { return now },
+		NewID:             func() string { return searches.job.ID },
+		CursorKey:         []byte("export-reexecution-test-manager-cursor-key-at-least-32-bytes"),
+	})
+	if err != nil {
+		return err
+	}
+	resolved, err := searchtime.NewAbsoluteRange(searches.job.Earliest, searches.job.Latest)
+	if err != nil {
+		_ = manager.Close()
+		return err
+	}
+	created, err := manager.Create(context.Background(), searchjobs.CreateRequest{
+		SPL:               searches.job.SPL,
+		OwnerID:           searches.job.OwnerID,
+		TenantID:          searches.job.TenantID,
+		AppID:             searches.appID,
+		AuthorizedIndexes: slices.Clone(searches.job.EffectiveIndexes),
+		RequestedIndexes:  slices.Clone(searches.job.EffectiveIndexes),
+		TimeRange:         resolved,
+	})
+	if err != nil {
+		_ = manager.Close()
+		return err
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		job, getErr := manager.GetFor(
+			searchjobs.AccessScope{TenantID: searches.job.TenantID, OwnerID: searches.job.OwnerID},
+			created.ID,
+		)
+		if getErr != nil {
+			_ = manager.Close()
+			return getErr
+		}
+		if job.State.Terminal() {
+			if job.State != searchjobs.StateCompleted {
+				_ = manager.Close()
+				return fmt.Errorf("%w: reexecution fixture search ended in %s", searchjobs.ErrResultsUnavailable, job.State)
+			}
+			searches.job = job
+			searches.manager = manager
+			return nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_ = manager.Close()
+	return errors.New("reexecution fixture search did not complete")
 }
 
 type reexecutionTestPin struct {
@@ -83,6 +194,12 @@ func (pin *reexecutionTestPin) Close() error {
 
 type reexecutionTestExecutor func(context.Context, clickhouse.CompiledQuery, searchjobs.ResultSink) error
 
+type nilReexecutionTestExecutor struct{}
+
+func (*nilReexecutionTestExecutor) Execute(context.Context, clickhouse.CompiledQuery, searchjobs.ResultSink) error {
+	return nil
+}
+
 func (executor reexecutionTestExecutor) Execute(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
 	return executor(ctx, query, sink)
 }
@@ -114,8 +231,8 @@ func TestReexecutionSourceIsLazyScopedAndStreamsBeyondRetainedPreview(t *testing
 	if calls.Load() != 0 {
 		t.Fatal("query executed during admission instead of inside an export worker")
 	}
-	if searches.pin.closed.Load() != 1 {
-		t.Fatalf("source pin closes after descriptor copy = %d, want 1", searches.pin.closed.Load())
+	if searches.lastPinClosed() {
+		t.Fatal("source pin closed before re-execution lease")
 	}
 	if lease.RowCount() != 0 || lease.Generation() == 0 || lease.ResultsTruncated() {
 		t.Fatalf("lease metadata = rows %d generation %d truncated %t", lease.RowCount(), lease.Generation(), lease.ResultsTruncated())
@@ -165,13 +282,13 @@ func TestReexecutionSourceIsLazyScopedAndStreamsBeyondRetainedPreview(t *testing
 	if err := lease.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if searches.pin.closed.Load() != 1 {
-		t.Fatalf("source pin closes after lease close = %d, want 1", searches.pin.closed.Load())
+	if !searches.lastPinClosed() {
+		t.Fatal("source pin remained open after lease close")
 	}
 	searches.mu.Lock()
 	defer searches.mu.Unlock()
-	if searches.acquireCalls != 1 || searches.getCalls != 1 || searches.access != access || searches.id != searches.job.ID {
-		t.Fatalf("snapshot calls = acquire %d get %d scope %+v id %q", searches.acquireCalls, searches.getCalls, searches.access, searches.id)
+	if searches.acquireCalls != 1 || searches.access != access || searches.id != searches.job.ID {
+		t.Fatalf("snapshot calls = acquire %d scope %+v id %q", searches.acquireCalls, searches.access, searches.id)
 	}
 }
 
@@ -422,9 +539,6 @@ func TestReexecutionSourceHonorsCancellationDuringSnapshotLookup(t *testing.T) {
 	lease, err := source.AcquireResultsFor(ctx, access, searches.job.ID)
 	if lease != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("AcquireResultsFor(canceled lookup) = (%v, %v)", lease, err)
-	}
-	if searches.pin.closed.Load() != 1 {
-		t.Fatalf("source pin closes = %d, want 1", searches.pin.closed.Load())
 	}
 }
 
@@ -1016,9 +1130,6 @@ func TestReexecutionSourceRejectsDescriptorWideningAndReleasesPin(t *testing.T) 
 	if lease != nil || !errors.Is(err, searchjobs.ErrResultsUnavailable) {
 		t.Fatalf("AcquireResultsFor(widened descriptor) = (%v, %v)", lease, err)
 	}
-	if searches.pin.closed.Load() != 1 {
-		t.Fatalf("source pin closes = %d, want 1", searches.pin.closed.Load())
-	}
 }
 
 func TestReexecutionLeaseRejectsSchemaDriftAndMissingSchema(t *testing.T) {
@@ -1468,6 +1579,20 @@ func TestNewReexecutionSourceValidatesBoundsAndAcquisitionFailures(t *testing.T)
 	if _, err := NewReexecutionSource(ReexecutionSourceConfig{}); err == nil {
 		t.Fatal("NewReexecutionSource accepted missing dependencies")
 	}
+	var nilSearches *reexecutionTestSearches
+	if _, err := NewReexecutionSource(ReexecutionSourceConfig{
+		Searches: nilSearches,
+		Executor: executor,
+	}); err == nil {
+		t.Fatal("NewReexecutionSource accepted a typed-nil search service")
+	}
+	var nilExecutor *nilReexecutionTestExecutor
+	if _, err := NewReexecutionSource(ReexecutionSourceConfig{
+		Searches: &reexecutionTestSearches{},
+		Executor: nilExecutor,
+	}); err == nil {
+		t.Fatal("NewReexecutionSource accepted a typed-nil query executor")
+	}
 	searches, _, access := newReexecutionTestSearches()
 	for _, config := range []ReexecutionSourceConfig{
 		{Searches: searches, Executor: executor, MaxRuntime: -1},
@@ -1483,6 +1608,15 @@ func TestNewReexecutionSourceValidatesBoundsAndAcquisitionFailures(t *testing.T)
 	source := newReexecutionTestSource(t, searches, executor, nil)
 	if lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID); lease != nil || !errors.Is(err, searchjobs.ErrExpired) {
 		t.Fatalf("AcquireResultsFor(source failure) = (%v, %v)", lease, err)
+	}
+	searches.acquireErr = nil
+	searches.pin = (*reexecutionTestPin)(nil)
+	if lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID); lease != nil || !errors.Is(err, searchjobs.ErrResultsUnavailable) {
+		t.Fatalf("AcquireResultsFor(typed-nil pin) = (%v, %v)", lease, err)
+	}
+	searches.acquireErr = searchjobs.ErrExpired
+	if lease, err := source.AcquireResultsFor(context.Background(), access, searches.job.ID); lease != nil || !errors.Is(err, searchjobs.ErrExpired) {
+		t.Fatalf("AcquireResultsFor(typed-nil pin with error) = (%v, %v)", lease, err)
 	}
 }
 

@@ -1,14 +1,22 @@
 package searchjobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
+)
+
+var (
+	retainedKnowledgeAuthorityDigestsSink RetainedKnowledgeAuthorityDigests
+	retainedKnowledgeAuthorityErrorSink   error
 )
 
 func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testing.T) {
@@ -52,11 +60,29 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 	if err != nil {
 		t.Fatalf("CompletedExecutionSnapshotFor() error = %v", err)
 	}
+	legacyAuthority, err := snapshot.ValidateRetainedKnowledgeAuthority()
+	if err != nil || legacyAuthority != (RetainedKnowledgeAuthorityDigests{}) {
+		t.Fatalf(
+			"ValidateRetainedKnowledgeAuthority(sealed legacy) = (%#v, %v), want absent",
+			legacyAuthority,
+			err,
+		)
+	}
+	legacyPrelude, legacyPreludePresent, openPreludeErr := snapshot.OpenRetainedKnowledgePrelude()
+	if openPreludeErr != nil || legacyPreludePresent || !legacyPrelude.IsZero() {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude(sealed legacy) = (%#v, %t, %v)",
+			legacyPrelude,
+			legacyPreludePresent,
+			openPreludeErr,
+		)
+	}
 	want := ExecutionSnapshot{
 		ID:               completed.ID,
 		OwnerID:          request.OwnerID,
 		TenantID:         request.TenantID,
 		SPL:              request.SPL,
+		CompilerVersion:  defaultCompilerVersion,
 		EffectiveIndexes: []string{"alpha"},
 		Earliest:         earliest.UTC(),
 		Latest:           latest.UTC(),
@@ -67,6 +93,7 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 		FinishedAt:       now.UTC(),
 		ExpiresAt:        now.UTC().Add(time.Hour),
 	}
+	want.knowledgeAuthoritySeal = snapshot.knowledgeAuthoritySeal
 	if !reflect.DeepEqual(snapshot, want) {
 		t.Fatalf("CompletedExecutionSnapshotFor() = %#v, want %#v", snapshot, want)
 	}
@@ -82,6 +109,311 @@ func TestCompletedExecutionSnapshotForReturnsDetachedExecutionMetadata(t *testin
 	assertLeaseCounts(t, manager, job.ID, 0, 0)
 }
 
+func TestOpenRetainedKnowledgeExecutionValidatesAppAndDetaches(t *testing.T) {
+	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(
+			_ context.Context,
+			_ clickhouse.CompiledQuery,
+			sink ResultSink,
+		) error {
+			return sink.SetSchema(messageSchema())
+		}),
+		KnowledgeResolver: resolver,
+		CleanupInterval:   -1,
+		NewID:             sequenceIDs("retained-knowledge-execution"),
+	})
+	request := validRequest()
+	request.AppID = appID
+	created, err := manager.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	completed := waitForState(t, manager, created.ID, StateCompleted)
+	snapshot, err := manager.CompletedExecutionSnapshotFor(
+		context.Background(),
+		AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID},
+		completed.ID,
+	)
+	if err != nil {
+		t.Fatalf("CompletedExecutionSnapshotFor(): %v", err)
+	}
+	authority, err := snapshot.ValidateRetainedKnowledgeAuthority()
+	if err != nil || !authority.Present ||
+		authority.SnapshotDigest != snapshot.KnowledgeSnapshot.Digest() {
+		t.Fatalf("ValidateRetainedKnowledgeAuthority() = (%#v, %v)", authority, err)
+	}
+	if snapshot.CompiledQuery == nil {
+		t.Fatal("enabled retained snapshot compiled query is nil")
+	}
+	compiledDigest, ok := snapshot.CompiledQuery.ExecutionAuthorityDigest()
+	if !ok || authority.CompiledDigest != compiledDigest {
+		t.Fatalf(
+			"validated compiled digest = (%x, %t), want %x",
+			authority.CompiledDigest,
+			ok,
+			compiledDigest,
+		)
+	}
+	sameSnapshot, err := manager.CompletedExecutionSnapshotFor(
+		context.Background(),
+		AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID},
+		completed.ID,
+	)
+	if err != nil || !snapshot.Equal(sameSnapshot) || !sameSnapshot.Equal(snapshot) {
+		t.Fatalf("fresh snapshot equality = (%t/%t, %v), want true/true", snapshot.Equal(sameSnapshot), sameSnapshot.Equal(snapshot), err)
+	}
+	detachedAuthority := authority
+	detachedAuthority.SnapshotDigest[0] ^= 0xff
+	detachedAuthority.CompiledDigest[0] ^= 0xff
+	freshAuthority, err := snapshot.ValidateRetainedKnowledgeAuthority()
+	if err != nil || freshAuthority != authority ||
+		!snapshot.Equal(sameSnapshot) || !sameSnapshot.Equal(snapshot) {
+		t.Fatalf(
+			"fixed digest result was not detached: fresh=%#v original=%#v equality=%t/%t err=%v",
+			freshAuthority,
+			authority,
+			snapshot.Equal(sameSnapshot),
+			sameSnapshot.Equal(snapshot),
+			err,
+		)
+	}
+
+	retained, err := snapshot.OpenRetainedKnowledgeExecution()
+	if err != nil || retained == nil || retained.KnowledgeSummary == nil ||
+		len(retained.CompiledQuery.OutputFields) == 0 || retained.KnowledgePrelude.IsZero() ||
+		!retained.KnowledgePrelude.IsEmpty() {
+		t.Fatalf("OpenRetainedKnowledgeExecution() = (%#v, %v)", retained, err)
+	}
+	wantPrelude := snapshot.KnowledgeSnapshot.Prelude()
+	if wantPrelude.IsZero() || !retained.KnowledgePrelude.Equal(wantPrelude) {
+		t.Fatal("opened knowledge execution prelude disagrees with retained snapshot")
+	}
+	wantFields := slices.Clone(retained.CompiledQuery.OutputFields)
+	wantDigest := bytes.Clone(retained.KnowledgeSummary.GetRef().GetSnapshotSha256())
+	retained.CompiledQuery.OutputFields[0] = "mutated"
+	retained.KnowledgeSummary.Ref.SnapshotSha256[0] ^= 0xff
+	retained.KnowledgePrelude = knowledgeprogram.Program{}
+
+	fresh, err := snapshot.OpenRetainedKnowledgeExecution()
+	if err != nil || fresh == nil || fresh.KnowledgeSummary == nil ||
+		!fresh.KnowledgePrelude.Equal(wantPrelude) {
+		t.Fatalf("OpenRetainedKnowledgeExecution(fresh) = (%#v, %v)", fresh, err)
+	}
+	if !slices.Equal(fresh.CompiledQuery.OutputFields, wantFields) ||
+		!bytes.Equal(fresh.KnowledgeSummary.GetRef().GetSnapshotSha256(), wantDigest) {
+		t.Fatal("opened knowledge execution aliases retained authority")
+	}
+
+	drifted := snapshot
+	drifted.AppID = "app_bbbbbbbbbbbbbbbbbbbbbB"
+	if invalid, validateErr := drifted.ValidateRetainedKnowledgeAuthority(); invalid != (RetainedKnowledgeAuthorityDigests{}) ||
+		!errors.Is(validateErr, ErrResultsUnavailable) {
+		t.Fatalf(
+			"ValidateRetainedKnowledgeAuthority(AppID drift) = (%#v, %v), want zero/unavailable",
+			invalid,
+			validateErr,
+		)
+	}
+	if opened, openErr := drifted.OpenRetainedKnowledgeExecution(); opened != nil || !errors.Is(openErr, ErrResultsUnavailable) {
+		t.Fatalf("OpenRetainedKnowledgeExecution(AppID drift) = (%#v, %v)", opened, openErr)
+	}
+
+	prelude, present, err := snapshot.OpenRetainedKnowledgePrelude()
+	if err != nil || !present || prelude.IsZero() || !prelude.IsEmpty() ||
+		!prelude.Equal(wantPrelude) {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude() = (zero:%t empty:%t present:%t, %v)",
+			prelude.IsZero(),
+			prelude.IsEmpty(),
+			present,
+			err,
+		)
+	}
+	freshPrelude, present, err := snapshot.OpenRetainedKnowledgePrelude()
+	if err != nil || !present || !freshPrelude.Equal(wantPrelude) {
+		t.Fatalf("OpenRetainedKnowledgePrelude(fresh) = (%#v, %t, %v)", freshPrelude, present, err)
+	}
+
+	unsignedLegacy := ExecutionSnapshot{
+		ID:       "unsigned-legacy",
+		TenantID: "legacy-tenant",
+		SPL:      "index=legacy",
+	}
+	if invalid, validateErr := unsignedLegacy.ValidateRetainedKnowledgeAuthority(); invalid != (RetainedKnowledgeAuthorityDigests{}) ||
+		!errors.Is(validateErr, ErrResultsUnavailable) {
+		t.Fatalf(
+			"ValidateRetainedKnowledgeAuthority(unsigned legacy) = (%#v, %v), want zero/unavailable",
+			invalid,
+			validateErr,
+		)
+	}
+	legacyPrelude, present, err := unsignedLegacy.OpenRetainedKnowledgePrelude()
+	if !legacyPrelude.IsZero() || present || !errors.Is(err, ErrResultsUnavailable) {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude(unsigned legacy) = (%#v, %t, %v), want unavailable",
+			legacyPrelude,
+			present,
+			err,
+		)
+	}
+
+	reconstructed := ExecutionSnapshot{
+		ID:               snapshot.ID,
+		OwnerID:          snapshot.OwnerID,
+		TenantID:         snapshot.TenantID,
+		AppID:            snapshot.AppID,
+		SPL:              snapshot.SPL,
+		EffectiveIndexes: slices.Clone(snapshot.EffectiveIndexes),
+		Earliest:         snapshot.Earliest,
+		Latest:           snapshot.Latest,
+		SearchStart:      snapshot.SearchStart,
+		SearchTimezone:   snapshot.SearchTimezone,
+		IndexTimeCutoff:  snapshot.IndexTimeCutoff,
+		VisibilityCutoff: snapshot.VisibilityCutoff,
+		FinishedAt:       snapshot.FinishedAt,
+		ExpiresAt:        snapshot.ExpiresAt,
+	}
+	reconstructedPrelude, present, err := reconstructed.OpenRetainedKnowledgePrelude()
+	if !reconstructedPrelude.IsZero() || present || !errors.Is(err, ErrResultsUnavailable) {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude(reconstructed downgrade) = (%#v, %t, %v), want unavailable",
+			reconstructedPrelude,
+			present,
+			err,
+		)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*ExecutionSnapshot)
+	}{
+		{
+			name: "compiled only",
+			mutate: func(value *ExecutionSnapshot) {
+				value.KnowledgeSnapshot = ExecutionSnapshot{}.KnowledgeSnapshot
+			},
+		},
+		{
+			name: "snapshot only",
+			mutate: func(value *ExecutionSnapshot) {
+				value.CompiledQuery = nil
+			},
+		},
+		{name: "both nonzero"},
+	} {
+		t.Run("unsigned "+test.name, func(t *testing.T) {
+			unsigned := snapshot
+			unsigned.knowledgeAuthoritySeal = knowledgeExecutionAuthoritySeal{}
+			if test.mutate != nil {
+				test.mutate(&unsigned)
+			}
+			if invalid, validateErr := unsigned.ValidateRetainedKnowledgeAuthority(); invalid != (RetainedKnowledgeAuthorityDigests{}) ||
+				!errors.Is(validateErr, ErrResultsUnavailable) {
+				t.Fatalf(
+					"ValidateRetainedKnowledgeAuthority() = (%#v, %v), want zero/unavailable",
+					invalid,
+					validateErr,
+				)
+			}
+			opened, openedPresent, openErr := unsigned.OpenRetainedKnowledgePrelude()
+			if !opened.IsZero() || openedPresent || !errors.Is(openErr, ErrResultsUnavailable) {
+				t.Fatalf(
+					"OpenRetainedKnowledgePrelude() = (%#v, %t, %v), want unavailable",
+					opened,
+					openedPresent,
+					openErr,
+				)
+			}
+		})
+	}
+
+	stripped := snapshot
+	stripped.KnowledgeSnapshot = ExecutionSnapshot{}.KnowledgeSnapshot
+	stripped.CompiledQuery = nil
+	if invalid, validateErr := stripped.ValidateRetainedKnowledgeAuthority(); invalid != (RetainedKnowledgeAuthorityDigests{}) ||
+		!errors.Is(validateErr, ErrResultsUnavailable) {
+		t.Fatalf(
+			"ValidateRetainedKnowledgeAuthority(stripped) = (%#v, %v), want zero/unavailable",
+			invalid,
+			validateErr,
+		)
+	}
+	strippedPrelude, present, err := stripped.OpenRetainedKnowledgePrelude()
+	if !strippedPrelude.IsZero() || present || !errors.Is(err, ErrResultsUnavailable) {
+		t.Fatalf(
+			"OpenRetainedKnowledgePrelude(stripped sealed authority) = (%#v, %t, %v), want unavailable",
+			strippedPrelude,
+			present,
+			err,
+		)
+	}
+}
+
+func TestValidateRetainedKnowledgeAuthorityHasAbsoluteAllocationBound(t *testing.T) {
+	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(
+			_ context.Context,
+			_ clickhouse.CompiledQuery,
+			sink ResultSink,
+		) error {
+			return sink.SetSchema(messageSchema())
+		}),
+		KnowledgeResolver: resolver,
+		CleanupInterval:   -1,
+		NewID:             sequenceIDs("retained-authority-allocation"),
+	})
+	request := validRequest()
+	request.AppID = appID
+	created, err := manager.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	waitForState(t, manager, created.ID, StateCompleted)
+	snapshot, err := manager.CompletedExecutionSnapshotFor(
+		context.Background(),
+		AccessScope{TenantID: request.TenantID, OwnerID: request.OwnerID},
+		created.ID,
+	)
+	if err != nil {
+		t.Fatalf("CompletedExecutionSnapshotFor(): %v", err)
+	}
+	validate := func() {
+		retainedKnowledgeAuthorityDigestsSink,
+			retainedKnowledgeAuthorityErrorSink =
+			snapshot.ValidateRetainedKnowledgeAuthority()
+	}
+	validate()
+	if retainedKnowledgeAuthorityErrorSink != nil ||
+		!retainedKnowledgeAuthorityDigestsSink.Present {
+		t.Fatalf(
+			"ValidateRetainedKnowledgeAuthority() = (%#v, %v)",
+			retainedKnowledgeAuthorityDigestsSink,
+			retainedKnowledgeAuthorityErrorSink,
+		)
+	}
+	allocs := testing.AllocsPerRun(1_000, validate)
+	result := testing.Benchmark(func(b *testing.B) {
+		b.ReportAllocs()
+		for range b.N {
+			validate()
+		}
+	})
+	// Ed25519 verification has a fixed implementation cost in this toolchain;
+	// keep a conservative absolute ceiling far below even the smallest retained
+	// snapshot payload, independently of snapshot encoding or object count.
+	if allocs > 256 || result.AllocsPerOp() > 256 ||
+		result.AllocedBytesPerOp() > 16<<10 {
+		t.Fatalf(
+			"ValidateRetainedKnowledgeAuthority allocation bound = %.2f allocs/run, benchmark %d allocs %d bytes/op; want <=256 and <=16 KiB",
+			allocs,
+			result.AllocsPerOp(),
+			result.AllocedBytesPerOp(),
+		)
+	}
+}
+
 func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 	t.Parallel()
 
@@ -91,6 +423,7 @@ func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 		OwnerID:          "owner",
 		TenantID:         "tenant",
 		SPL:              "index=alpha",
+		CompilerVersion:  defaultCompilerVersion,
 		EffectiveIndexes: []string{"alpha", "beta"},
 		Earliest:         baseTime,
 		Latest:           baseTime.Add(time.Hour),
@@ -100,6 +433,24 @@ func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 		VisibilityCutoff: 41,
 		FinishedAt:       baseTime.Add(4 * time.Hour),
 		ExpiresAt:        baseTime.Add(5 * time.Hour),
+	}
+	sealManager := &Manager{knowledgeExecutionSigner: deriveKnowledgeExecutionSigningKey(
+		[]byte("execution-snapshot-equality-test-key-at-least-32-bytes"),
+		"execution-snapshot-equality",
+		"epoch",
+	)}
+	if _, ok := sealManager.sealExecutionSnapshot(
+		&base,
+		executionResultMetadata{
+			jobID:      base.ID,
+			generation: 1,
+			schema: Schema{Columns: []Column{{
+				Name: "message",
+				Kind: ValueKindString,
+			}}},
+		},
+	); !ok {
+		t.Fatal("seal equality fixture")
 	}
 	if !base.Equal(base) {
 		t.Fatal("snapshot is not equal to itself")
@@ -112,7 +463,11 @@ func TestExecutionSnapshotEqualCoversEveryFieldAndIndexOrder(t *testing.T) {
 		{name: "ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.ID += "-changed" }},
 		{name: "owner ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.OwnerID += "-changed" }},
 		{name: "tenant ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.TenantID += "-changed" }},
+		{name: "app ID", mutate: func(snapshot *ExecutionSnapshot) { snapshot.AppID = "changed-app" }},
 		{name: "SPL", mutate: func(snapshot *ExecutionSnapshot) { snapshot.SPL += " | head 1" }},
+		{name: "compiler version", mutate: func(snapshot *ExecutionSnapshot) {
+			snapshot.CompilerVersion = "changed-compiler-version"
+		}},
 		{name: "effective index order", mutate: func(snapshot *ExecutionSnapshot) {
 			snapshot.EffectiveIndexes = []string{"beta", "alpha"}
 		}},

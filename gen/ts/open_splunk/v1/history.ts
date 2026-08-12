@@ -9,6 +9,7 @@ import { BinaryReader, BinaryWriter } from "@bufbuild/protobuf/wire";
 import { Duration } from "../../google/protobuf/duration";
 import { Timestamp } from "../../google/protobuf/timestamp";
 import { ApiWarning, ResolvedTimeRange } from "./common";
+import { KnowledgeSnapshotSummary } from "./knowledge";
 import {
   SearchDefinition,
   SearchFailure,
@@ -40,7 +41,14 @@ export interface SearchHistoryEntry {
   compilerVersion: string;
   createdAt: Date | undefined;
   startedAt: Date | undefined;
-  finishedAt: Date | undefined;
+  finishedAt:
+    | Date
+    | undefined;
+  /**
+   * The admitted definition-free knowledge identity is preserved unchanged
+   * from queued admission through the first terminal history publication.
+   */
+  knowledgeSnapshot?: KnowledgeSnapshotSummary | undefined;
 }
 
 function createBaseSearchHistoryEntry(): SearchHistoryEntry {
@@ -62,6 +70,7 @@ function createBaseSearchHistoryEntry(): SearchHistoryEntry {
     createdAt: undefined,
     startedAt: undefined,
     finishedAt: undefined,
+    knowledgeSnapshot: undefined,
   };
 }
 
@@ -129,6 +138,9 @@ export const SearchHistoryEntry: MessageFns<SearchHistoryEntry> = {
     }
     if (message.finishedAt !== undefined) {
       Timestamp.encode(toTimestamp(message.finishedAt), writer.uint32(138).fork()).join();
+    }
+    if (message.knowledgeSnapshot !== undefined) {
+      KnowledgeSnapshotSummary.encode(message.knowledgeSnapshot, writer.uint32(146).fork()).join();
     }
     return writer;
   },
@@ -276,6 +288,14 @@ export const SearchHistoryEntry: MessageFns<SearchHistoryEntry> = {
           message.finishedAt = fromTimestamp(Timestamp.decode(reader, reader.uint32()));
           continue;
         }
+        case 18: {
+          if (tag !== 146) {
+            break;
+          }
+
+          message.knowledgeSnapshot = KnowledgeSnapshotSummary.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -354,6 +374,11 @@ export const SearchHistoryEntry: MessageFns<SearchHistoryEntry> = {
         : isSet(object.finished_at)
         ? fromJsonTimestamp(object.finished_at)
         : undefined,
+      knowledgeSnapshot: isSet(object.knowledgeSnapshot)
+        ? KnowledgeSnapshotSummary.fromJSON(object.knowledgeSnapshot)
+        : isSet(object.knowledge_snapshot)
+        ? KnowledgeSnapshotSummary.fromJSON(object.knowledge_snapshot)
+        : undefined,
     };
   },
 
@@ -410,6 +435,9 @@ export const SearchHistoryEntry: MessageFns<SearchHistoryEntry> = {
     if (message.finishedAt !== undefined) {
       obj.finishedAt = message.finishedAt.toISOString();
     }
+    if (message.knowledgeSnapshot !== undefined) {
+      obj.knowledgeSnapshot = KnowledgeSnapshotSummary.toJSON(message.knowledgeSnapshot);
+    }
     return obj;
   },
 
@@ -453,6 +481,9 @@ export const SearchHistoryEntry: MessageFns<SearchHistoryEntry> = {
     message.createdAt = object.createdAt ?? undefined;
     message.startedAt = object.startedAt ?? undefined;
     message.finishedAt = object.finishedAt ?? undefined;
+    message.knowledgeSnapshot = (object.knowledgeSnapshot !== undefined && object.knowledgeSnapshot !== null)
+      ? KnowledgeSnapshotSummary.fromPartial(object.knowledgeSnapshot)
+      : undefined;
     return message;
   },
 };

@@ -219,8 +219,9 @@ func validateEventRecord(record eventRecord) (time.Time, error) {
 		objectValue = AuthorizedObject{
 			KnowledgeObjectID: *record.KnowledgeObjectID,
 			ObjectType:        *record.ObjectType,
-			Version:           uint64(*record.ObjectVersion),
-			SharingScope:      *record.SharingScope,
+			// #nosec G115 -- the completeness check above requires a positive persisted version.
+			Version:      uint64(*record.ObjectVersion),
+			SharingScope: *record.SharingScope,
 		}
 		authorized.Object = &objectValue
 	}
@@ -241,6 +242,7 @@ func eventFromRecord(record eventRecord) (Event, error) {
 		return Event{}, err
 	}
 	event := Event{
+		// #nosec G115 -- validateEventRecord bounds the persisted sequence to a positive int64.
 		Sequence:   uint64(record.Sequence),
 		TenantID:   strings.Clone(record.TenantID),
 		OccurredAt: occurredAt,
@@ -259,8 +261,9 @@ func eventFromRecord(record eventRecord) (Event, error) {
 			event.AuthorizedContext.Object = &AuthorizedObject{
 				KnowledgeObjectID: strings.Clone(*record.KnowledgeObjectID),
 				ObjectType:        *record.ObjectType,
-				Version:           uint64(*record.ObjectVersion),
-				SharingScope:      *record.SharingScope,
+				// #nosec G115 -- validateEventRecord requires a complete object with a positive version.
+				Version:      uint64(*record.ObjectVersion),
+				SharingScope: *record.SharingScope,
 			}
 		}
 	}

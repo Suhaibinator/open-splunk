@@ -34,19 +34,18 @@ const (
 	// capacity and, independently, the pending journal capacity.
 	MaximumAllowedEntriesPerOwner = 1_000_000
 
-	maximumSearchJobIDBytes     = 256
-	maximumTenantIDBytes        = 1024
-	maximumOwnerIDBytes         = 255
-	maximumAppIDBytes           = 255
-	maximumSavedSearchIDBytes   = 128
-	maximumSPLBytes             = 64 << 10
-	maximumEntryBytes           = 512 << 10
-	maximumIndexScope           = 256
-	maximumWarnings             = 256
-	maximumDiagnostics          = 256
-	maximumFailureMessageBytes  = 8 << 10
-	maximumCompilerVersionBytes = 128
-	maximumFilterTextBytes      = 1024
+	maximumSearchJobIDBytes    = 256
+	maximumTenantIDBytes       = 1024
+	maximumOwnerIDBytes        = 255
+	maximumAppIDBytes          = 255
+	maximumSavedSearchIDBytes  = 128
+	maximumSPLBytes            = 64 << 10
+	maximumEntryBytes          = 512 << 10
+	maximumIndexScope          = 256
+	maximumWarnings            = 256
+	maximumDiagnostics         = 256
+	maximumFailureMessageBytes = 8 << 10
+	maximumFilterTextBytes     = 1024
 )
 
 // AccessScope is the authenticated tenant/owner boundary. Every user-facing
@@ -60,9 +59,10 @@ type AccessScope struct {
 // search attempt is durably admitted. OccurredAt is the same canonical
 // microsecond timestamp persisted with the pending history row.
 type SearchAttemptAuditEvent struct {
-	OccurredAt  time.Time
-	SearchJobID string
-	OwnerID     string
+	OccurredAt        time.Time
+	SearchJobID       string
+	OwnerID           string
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotRef
 }
 
 // SearchAttemptAuditAppender publishes one admitted-search event through the

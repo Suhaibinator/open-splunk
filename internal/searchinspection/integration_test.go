@@ -76,7 +76,7 @@ func TestServiceAgainstClickHouse(t *testing.T) {
 	searches := &inspectionSearches{
 		snapshots: []searchjobs.ExecutionSnapshot{snapshot},
 	}
-	service := newInspectionTestService(t, Config{
+	service := newInspectionTestService(t, inspectionTestConfig{
 		Searches:  searches,
 		Compiler:  &inspectionCompiler{},
 		Explainer: explainer,

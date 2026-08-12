@@ -44,12 +44,13 @@ type ResultLease interface {
 }
 
 type resultLease struct {
-	manager    *Manager
-	entry      *jobEntry
-	schema     *Schema
-	rowCount   uint64
-	truncated  bool
-	generation uint64
+	manager         *Manager
+	entry           *jobEntry
+	schema          *Schema
+	rowCount        uint64
+	truncated       bool
+	generation      uint64
+	resultAuthority *executionResultAuthority
 
 	mu          sync.Mutex
 	closeOnce   sync.Once
@@ -59,6 +60,31 @@ type resultLease struct {
 }
 
 var _ ResultLease = (*resultLease)(nil)
+
+type sealedExecutionResultLease interface {
+	sealedExecutionResultLease() (executionResultAuthority, bool)
+}
+
+func (lease *resultLease) sealedExecutionResultLease() (executionResultAuthority, bool) {
+	if lease == nil || lease.resultAuthority == nil || lease.schema == nil ||
+		lease.generation == 0 {
+		return executionResultAuthority{}, false
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.closed {
+		return executionResultAuthority{}, false
+	}
+	authority := cloneExecutionResultAuthority(*lease.resultAuthority)
+	metadata := authority.metadata
+	if metadata.jobID == "" || metadata.generation != lease.generation ||
+		metadata.rowCount != lease.rowCount ||
+		metadata.resultsTruncated != lease.truncated ||
+		!slices.Equal(metadata.schema.Columns, lease.schema.Columns) {
+		return executionResultAuthority{}, false
+	}
+	return authority, true
+}
 
 // AcquireResultsFor pins a completed, unexpired immutable result snapshot
 // owned by access. The returned lease is bound to ctx and must also be closed
@@ -73,30 +99,69 @@ func (manager *Manager) AcquireResultsFor(ctx context.Context, access AccessScop
 	if !validAccessScope(access) {
 		return nil, ErrNotFound
 	}
+	lease, _, err := manager.acquireResultLeaseFor(ctx, access, id, false)
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
+}
 
+// AcquireExecutionFor atomically pins one completed result generation and
+// returns the detached execution authority that produced that exact schema and
+// row snapshot. The caller must retain and close the ResultLease for the whole
+// export operation; expiration cannot reclaim or replace its rows while the
+// lease remains open. Metadata-only inspection uses
+// CompletedExecutionSnapshotFor instead and consumes no lease capacity.
+func (manager *Manager) AcquireExecutionFor(
+	ctx context.Context,
+	access AccessScope,
+	id string,
+) (ResultLease, ExecutionSnapshot, error) {
+	if ctx == nil {
+		return nil, ExecutionSnapshot{}, errors.New("acquire search execution: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, ExecutionSnapshot{}, err
+	}
+	if !validAccessScope(access) {
+		return nil, ExecutionSnapshot{}, ErrNotFound
+	}
+	lease, snapshot, err := manager.acquireResultLeaseFor(ctx, access, id, true)
+	if err != nil {
+		return nil, ExecutionSnapshot{}, err
+	}
+	return lease, snapshot, nil
+}
+
+func (manager *Manager) acquireResultLeaseFor(
+	ctx context.Context,
+	access AccessScope,
+	id string,
+	includeExecution bool,
+) (*resultLease, ExecutionSnapshot, error) {
 	// Holding manager.mu until entry.mu is acquired makes admission atomic
 	// with manager shutdown and tombstone removal. This follows the existing
 	// manager -> entry -> budget lock order.
 	manager.mu.RLock()
 	if manager.closed {
 		manager.mu.RUnlock()
-		return nil, ErrClosed
+		return nil, ExecutionSnapshot{}, ErrClosed
 	}
 	entry := manager.jobs[id]
 	if entry == nil {
 		manager.mu.RUnlock()
-		return nil, ErrNotFound
+		return nil, ExecutionSnapshot{}, ErrNotFound
 	}
 	entry.mu.Lock()
 	manager.mu.RUnlock()
 
 	if err := ctx.Err(); err != nil {
 		entry.mu.Unlock()
-		return nil, err
+		return nil, ExecutionSnapshot{}, err
 	}
 	if entry.job.TenantID != access.TenantID || entry.job.OwnerID != access.OwnerID {
 		entry.mu.Unlock()
-		return nil, ErrNotFound
+		return nil, ExecutionSnapshot{}, ErrNotFound
 	}
 	// Resolve expiry only after acquiring the entry lock. A reader that waited
 	// behind another entry operation must not use a pre-wait clock sample to
@@ -108,32 +173,52 @@ func (manager *Manager) AcquireResultsFor(ctx context.Context, access AccessScop
 	switch entry.job.State {
 	case StateExpired:
 		entry.mu.Unlock()
-		return nil, ErrExpired
+		return nil, ExecutionSnapshot{}, ErrExpired
 	case StateFailed, StateCanceled:
 		entry.mu.Unlock()
-		return nil, ErrResultsUnavailable
+		return nil, ExecutionSnapshot{}, ErrResultsUnavailable
 	case StateCompleted:
 		// Continue below.
 	default:
 		entry.mu.Unlock()
-		return nil, ErrResultsNotReady
+		return nil, ExecutionSnapshot{}, ErrResultsNotReady
 	}
 	if entry.resultSchema == nil || entry.resultGeneration == 0 || uint64(len(entry.rows)) != entry.job.RowCount {
 		entry.mu.Unlock()
-		return nil, ErrResultsUnavailable
+		return nil, ExecutionSnapshot{}, ErrResultsUnavailable
+	}
+	var execution ExecutionSnapshot
+	var resultAuthority *executionResultAuthority
+	if includeExecution {
+		var authority executionResultAuthority
+		var err error
+		execution, authority, err = manager.executionSnapshotLocked(entry)
+		if err != nil {
+			entry.mu.Unlock()
+			return nil, ExecutionSnapshot{}, err
+		}
+		resultAuthority = &authority
+		if err := ctx.Err(); err != nil {
+			entry.mu.Unlock()
+			return nil, ExecutionSnapshot{}, err
+		}
+	}
+	lease := &resultLease{
+		manager:         manager,
+		entry:           entry,
+		schema:          entry.resultSchema,
+		rowCount:        uint64(len(entry.rows)),
+		truncated:       entry.job.ResultsTruncated,
+		generation:      entry.resultGeneration,
+		resultAuthority: resultAuthority,
+	}
+	if includeExecution && !execution.ValidFor(lease) {
+		entry.mu.Unlock()
+		return nil, ExecutionSnapshot{}, ErrResultsUnavailable
 	}
 	if err := manager.reserveResultLeaseLocked(entry); err != nil {
 		entry.mu.Unlock()
-		return nil, err
-	}
-
-	lease := &resultLease{
-		manager:    manager,
-		entry:      entry,
-		schema:     entry.resultSchema,
-		rowCount:   uint64(len(entry.rows)),
-		truncated:  entry.job.ResultsTruncated,
-		generation: entry.resultGeneration,
+		return nil, ExecutionSnapshot{}, err
 	}
 	entry.mu.Unlock()
 
@@ -145,9 +230,9 @@ func (manager *Manager) AcquireResultsFor(ctx context.Context, access AccessScop
 	}
 	if err := ctx.Err(); err != nil {
 		_ = lease.Close()
-		return nil, err
+		return nil, ExecutionSnapshot{}, err
 	}
-	return lease, nil
+	return lease, execution, nil
 }
 
 // Schema returns a detached copy of the stable schema captured at acquisition.

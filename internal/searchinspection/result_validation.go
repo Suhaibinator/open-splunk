@@ -7,7 +7,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -34,10 +36,23 @@ const (
 // PhysicalPlan. Errors contain fixed diagnostics and never echo SQL, plan
 // text, query IDs, field names, or other administrator-sensitive content.
 func ValidateResult(result Result) error {
+	if result.KnowledgeSnapshot != nil {
+		if err := knowledgesnapshot.ValidateSummary(
+			result.KnowledgeSnapshot,
+		); err != nil {
+			return invalidInspectionResult(
+				"has an invalid knowledge snapshot summary",
+			)
+		}
+	}
 	if !validInspectionSQL(result.GeneratedSQL) {
 		return invalidInspectionResult("has invalid generated SQL")
 	}
-	if !validInspectionLogicalPlan(result.Plan) {
+	knowledgeObjects, ok := validInspectionLogicalPlan(result.Plan)
+	if !ok || !validInspectionKnowledgeBinding(
+		knowledgeObjects,
+		result.KnowledgeSnapshot,
+	) {
 		return invalidInspectionResult("has an invalid logical plan")
 	}
 	if !validInspectionPhysicalBounds(result.PhysicalPlan) {
@@ -108,14 +123,53 @@ func validInspectionExplainBounds(text, queryID string) bool {
 		len(text)-lineStart <= maximumInspectionExplainLineBytes
 }
 
-func validInspectionLogicalPlan(logical LogicalPlan) bool {
+func validInspectionLogicalPlan(
+	logical LogicalPlan,
+) ([]RedactedObjectProvenance, bool) {
 	if len(logical.Stages) == 0 ||
 		len(logical.Stages) > int(maximumPlanStages) {
-		return false
+		return nil, false
 	}
 
 	budget := projectionBudget{}
+	knowledgeObjects := make([]RedactedObjectProvenance, 0)
+	knowledgePrefixEnded := false
+	var knowledgeRank knowledgeOperatorRank
+	authoredStages := 0
 	for index, stage := range logical.Stages {
+		if (index == 0) != (stage.Operator == "Scan") {
+			return nil, false
+		}
+		contract, knowledge := inspectionKnowledgeOperator(stage.Operator)
+		if knowledge {
+			if index == 0 || knowledgePrefixEnded ||
+				contract.rank < knowledgeRank ||
+				(contract.rank == knowledgeRank && !contract.repeatable) ||
+				stage.SourceRange != nil ||
+				!validInspectionKnowledgeStage(
+					&budget,
+					stage,
+					contract,
+				) {
+				return nil, false
+			}
+			knowledgeRank = contract.rank
+			knowledgeObjects = append(knowledgeObjects, stage.KnowledgeObjects...)
+		} else {
+			authoredStages++
+			if authoredStages > int(maximumAuthoredPlanStages) {
+				return nil, false
+			}
+			if index > 0 {
+				knowledgePrefixEnded = true
+			}
+			if stage.SourceRange == nil ||
+				len(stage.KnowledgeObjects) != 0 ||
+				len(stage.OutputProvenance) != 0 ||
+				!validInspectionSourceRange(*stage.SourceRange) {
+				return nil, false
+			}
+		}
 		if stage.Index != uint32(index) ||
 			budget.addString(
 				stage.Operator,
@@ -133,9 +187,13 @@ func validInspectionLogicalPlan(logical LogicalPlan) bool {
 				stage.OutputFields,
 				maximumStageFields,
 				true,
-			) ||
-			!validInspectionSourceRange(stage.SourceRange) {
-			return false
+			) {
+			return nil, false
+		}
+	}
+	for index, object := range knowledgeObjects {
+		if object.Ordinal != uint32(index) {
+			return nil, false
 		}
 	}
 	if !validInspectionFields(
@@ -144,12 +202,18 @@ func validInspectionLogicalPlan(logical LogicalPlan) bool {
 		maximumStageFields,
 		true,
 	) {
-		return false
+		return nil, false
 	}
-	return validInspectionOutputShape(&budget, logical.Output)
+	if !validInspectionOutputShape(&budget, logical.Output) {
+		return nil, false
+	}
+	return knowledgeObjects, true
 }
 
 func supportedInspectionOperator(value string) bool {
+	if _, ok := inspectionKnowledgeOperator(value); ok {
+		return true
+	}
 	switch value {
 	case "Scan",
 		"Filter",
@@ -173,6 +237,67 @@ func supportedInspectionOperator(value string) bool {
 	default:
 		return false
 	}
+}
+
+func validInspectionKnowledgeStage(
+	budget *projectionBudget,
+	stage PlanStage,
+	contract knowledgeOperatorContract,
+) bool {
+	switch contract.shape {
+	case knowledgeOperatorShapeOneToMany:
+		if len(stage.KnowledgeObjects) != 1 {
+			return false
+		}
+	case knowledgeOperatorShapeOneToOne:
+		if len(stage.KnowledgeObjects) != 1 ||
+			len(stage.OutputProvenance) != 1 ||
+			len(stage.OutputFields) != 1 {
+			return false
+		}
+	case knowledgeOperatorShapeFusedOneToOne:
+		if len(stage.KnowledgeObjects) != len(stage.OutputProvenance) {
+			return false
+		}
+	default:
+		return false
+	}
+
+	return validateCanonicalKnowledgeProvenance(
+		budget,
+		stage.KnowledgeObjects,
+		stage.OutputProvenance,
+		stage.OutputFields,
+		contract,
+	)
+}
+
+func validInspectionKnowledgeBinding(
+	objects []RedactedObjectProvenance,
+	summary *opensplunkv1.KnowledgeSnapshotSummary,
+) bool {
+	if summary == nil {
+		return len(objects) == 0
+	}
+	objectCount := summary.GetRef().GetObjectCount()
+	if uint64(len(objects)) != uint64(objectCount) {
+		return false
+	}
+	for _, object := range objects {
+		if object.Ordinal >= objectCount {
+			return false
+		}
+		if int(object.Ordinal) >= len(summary.GetObjects()) {
+			continue
+		}
+		retained := summary.GetObjects()[object.Ordinal]
+		if retained.GetResolutionOrdinal() != object.Ordinal ||
+			retained.GetObjectType() != object.ObjectType ||
+			retained.GetStage() != object.Stage {
+			return false
+		}
+	}
+	return true
 }
 
 func validInspectionFields(

@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -272,20 +276,28 @@ type Job struct {
 	ID          string
 	Version     uint64
 	SearchJobID string
-	Format      Format
-	Columns     []string
-	RowLimit    uint64
-	ByteLimit   uint64
-	CSV         CSVOptions
-	JSONLines   JSONLinesOptions
-	State       State
-	Progress    Progress
-	Artifact    *Artifact
-	Failure     *Failure
-	CreatedAt   time.Time
-	StartedAt   time.Time
-	FinishedAt  time.Time
-	ExpiresAt   time.Time
+	// CompilerVersion is the immutable authored-SPL compatibility identity of
+	// the source execution. Empty is retained only for legacy/custom result
+	// sources that predate compatibility provenance.
+	CompilerVersion string
+	Format          Format
+	Columns         []string
+	RowLimit        uint64
+	ByteLimit       uint64
+	CSV             CSVOptions
+	JSONLines       JSONLinesOptions
+	State           State
+	Progress        Progress
+	Artifact        *Artifact
+	Failure         *Failure
+	CreatedAt       time.Time
+	StartedAt       time.Time
+	FinishedAt      time.Time
+	ExpiresAt       time.Time
+	// KnowledgeSnapshot is the bounded, definition-free admission provenance
+	// of the source execution. Nil identifies a legacy knowledge-disabled
+	// search. Public transports must apply current-policy redaction.
+	KnowledgeSnapshot *opensplunkv1.KnowledgeSnapshotSummary
 }
 
 // ListItem carries the access scope alongside one detached export-job
@@ -311,6 +323,9 @@ type ListPage struct {
 func cloneJob(source Job) Job {
 	result := source
 	result.Columns = append([]string(nil), source.Columns...)
+	if source.KnowledgeSnapshot != nil {
+		result.KnowledgeSnapshot, _ = proto.Clone(source.KnowledgeSnapshot).(*opensplunkv1.KnowledgeSnapshotSummary)
+	}
 	if source.Artifact != nil {
 		artifact := *source.Artifact
 		result.Artifact = &artifact
@@ -320,4 +335,41 @@ func cloneJob(source Job) Job {
 		result.Failure = &failure
 	}
 	return result
+}
+
+// knowledgeSnapshotResultLease is package-private so arbitrary ResultSource
+// implementations cannot invent knowledge provenance. ReexecutionSource is
+// the sole producer; legacy and test sources simply omit it.
+type knowledgeSnapshotResultLease interface {
+	knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error)
+}
+
+// compilerVersionResultLease is package-private so only the trusted
+// ReexecutionSource can attach compatibility provenance to an export.
+type compilerVersionResultLease interface {
+	compilerVersion() string
+}
+
+func admittedCompilerVersion(lease searchjobs.ResultLease) (string, error) {
+	provider, ok := lease.(compilerVersionResultLease)
+	if !ok {
+		return "", nil
+	}
+	version := provider.compilerVersion()
+	if !searchjobs.ValidCompilerVersion(version) {
+		return "", errors.New("source compiler version is invalid")
+	}
+	return strings.Clone(version), nil
+}
+
+func admittedKnowledgeSnapshot(lease searchjobs.ResultLease) (*opensplunkv1.KnowledgeSnapshotSummary, error) {
+	provider, ok := lease.(knowledgeSnapshotResultLease)
+	if !ok {
+		return nil, nil
+	}
+	summary, err := provider.knowledgeSnapshotSummary()
+	if err != nil || summary == nil {
+		return summary, err
+	}
+	return knowledgesnapshot.CloneSummary(summary)
 }

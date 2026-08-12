@@ -76,6 +76,10 @@ var (
 	// a revision/generation counter, or process telemetry capacity cannot admit
 	// another collector operation.
 	ErrCollectorSessionCapacity = errors.New("ingest: collector capacity is exhausted")
+	// ErrAdmissionRequestTooLarge means a complete request exceeded the shared
+	// normalized or durable source-byte admission ceiling. Transports map this
+	// closed classification to their own public resource-limit response.
+	ErrAdmissionRequestTooLarge = errors.New("ingest: admission request exceeds its byte limit")
 )
 
 // Limits are hard ingestion limits advertised during collector negotiation and
@@ -167,6 +171,7 @@ type EventContext struct {
 	TimestampReference time.Time
 	DefaultSourcetype  string
 	TenantID           string
+	Source             IngestionSource
 	CollectorID        string
 	BatchID            string
 }
@@ -176,6 +181,7 @@ type EventContext struct {
 type StoredEvent struct {
 	Event       *opensplunkv1.LogEvent
 	TenantID    string
+	Source      IngestionSource
 	CollectorID string
 	BatchID     string
 	IndexTime   time.Time
@@ -309,6 +315,7 @@ type CollectorSessionManager interface {
 // mandatory redaction. BatchID and event IDs remain stable across retries.
 type StoreBatch struct {
 	TenantID           string
+	Source             IngestionSource
 	CollectorID        string
 	BatchID            string
 	BatchSequence      uint64
@@ -334,12 +341,38 @@ type StoreBatch struct {
 	// stable ReceivedAt timestamp across RetryBatch requests.
 	QuotaAdmission   *ingestquota.Admission
 	QuotaEvaluatedAt time.Time
+	// HECAdmission is present only for a fresh HEC Stage call. The durable
+	// sequencer revalidates this versioned token snapshot and allocates its
+	// request/channel sequences in the same transaction as quota and outbox
+	// persistence. It is intentionally absent from replay outboxes.
+	HECAdmission *HECStageAdmission
+}
+
+// HECStageAdmission contains only stable server-derived control-plane
+// identities. TokenID is the token record ID, never credential material.
+type HECStageAdmission struct {
+	TokenID               string
+	TokenVersion          uint64
+	AuthorizedIndexes     []HECIndexAuthority
+	RequestID             string
+	AcknowledgmentEnabled bool
+	Channel               string
+	CreatedAt             time.Time
+}
+
+// HECIndexAuthority is the minimum immutable index snapshot needed for the
+// durable SQLite boundary to close an independent index-update race. It never
+// carries client metadata or policy expressions.
+type HECIndexAuthority struct {
+	Name    string
+	Version uint64
 }
 
 // StoreBatchIdentity identifies an exact collector wire batch without
 // re-running mutable validation or authorization policy.
 type StoreBatchIdentity struct {
 	TenantID          string
+	Source            IngestionSource
 	CollectorID       string
 	BatchID           string
 	BatchSequence     uint64
@@ -383,11 +416,35 @@ type StoreResult struct {
 	BatchRejection      *opensplunkv1.BatchReject
 }
 
+// StageResult reports the durable disposition reached without requiring the
+// caller to wait for ClickHouse. Pending means the immutable outbox, quota
+// admission, and visibility sequence are committed and owned by the server
+// reconciler. Terminal states include their exact durable outcome.
+type StageResult struct {
+	VisibilitySequence  uint64
+	State               StoredBatchState
+	Outcome             StoreResult
+	AcceptedEvents      uint32
+	UncompressedBytes   uint64
+	HECRequestSequence  uint64
+	HECAcknowledgmentID uint64
+}
+
 // EventStore durably stores a normalized batch. Implementations must treat its
 // stable source-batch identity idempotently and report duplicates in
 // StoreResult.
 type EventStore interface {
 	Store(context.Context, StoreBatch) (StoreResult, error)
+}
+
+// StagingEventStore separates durable admission from ClickHouse completion.
+// Stage must not report Pending until the replay outbox and visibility
+// reservation are committed and no request-scoped attempt lease remains.
+// EventStore.Store retains its synchronous committed-acknowledgment contract
+// for native collectors.
+type StagingEventStore interface {
+	EventStore
+	Stage(context.Context, StoreBatch) (StageResult, error)
 }
 
 // RecoverableEventStore exposes durable batch lookup and server-owned replay.

@@ -4,6 +4,7 @@ package open_splunk.v1;
 
 import "google/protobuf/timestamp.proto";
 import "open_splunk/v1/audit.proto";
+import "open_splunk/v1/knowledge.proto";
 
 option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
 
@@ -18,4 +19,7 @@ message SearchAttemptAuditEvent {
   AuditActorRole actor_role = 5;
   string owner_id = 6;
   string search_job_id = 7;
+  // Audit retains only the compact snapshot identity and exact object count;
+  // definition and object inventory remain outside this journal.
+  optional KnowledgeSnapshotRef knowledge_snapshot = 8;
 }

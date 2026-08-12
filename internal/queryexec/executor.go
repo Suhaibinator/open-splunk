@@ -47,6 +47,13 @@ const (
 	defaultMaxResultBytes   = uint64(128 << 20)
 	defaultMaxThreads       = uint64(4)
 	defaultMaxQueryBytes    = uint64(1 << 20)
+	// Knowledge lowering can legitimately exceed ClickHouse's 50,000-element
+	// default even while remaining inside the compiler's one-MiB SQL and
+	// 96-level relational ceilings. Pin both parser/analyzer AST budgets so an
+	// ambient server profile cannot reject a compiler-admitted query, while the
+	// fixed bounds remain independent defenses against expression expansion.
+	defaultMaxASTElements         = uint64(100_000)
+	defaultMaxExpandedASTElements = uint64(100_000)
 	// Keep the pinned ClickHouse analyzer ceiling above the compiler's
 	// conservative 96-level SELECT/UNION dependency limit. The compiler and
 	// server count relational structure differently, so this remains an
@@ -74,6 +81,11 @@ const (
 	// would otherwise enforce incrementally. The guard trips on the offending
 	// row, so at most one row beyond the ceiling is ever resident.
 	maximumChartResultBytes = uint64(48 << 20)
+	// Expression v0.2 queries that can raise a sanitized runtime scalar error
+	// are consumed completely before any schema or row is published. Keep that
+	// private buffer independently bounded even if a forged driver ignores the
+	// ClickHouse max_result_bytes setting.
+	maximumAtomicResultBytes = uint64(128 << 20)
 	// A buffered row is stored by value in a growing slice. Reserving two
 	// complete slots per logical row conservatively covers both the Value and
 	// cell-slice headers in the struct plus the slice's unused growth capacity.
@@ -219,6 +231,8 @@ func querySettings(config Config) (clickhousedriver.Settings, error) {
 		"group_by_overflow_mode":            "throw",
 		"max_threads":                       config.MaxThreads,
 		"max_query_size":                    defaultMaxQueryBytes,
+		"max_ast_elements":                  defaultMaxASTElements,
+		"max_expanded_ast_elements":         defaultMaxExpandedASTElements,
 		"max_subquery_depth":                defaultMaxSubqueryDepth,
 		"enable_materialized_cte":           uint8(1),
 		"short_circuit_function_evaluation": "enable",
@@ -300,12 +314,31 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if sink == nil {
 		return errors.New("execute ClickHouse search: result sink is required")
 	}
+	// Every publicly constructed Executor has an explicit read-admission
+	// dependency. At that production boundary, detach and validate the complete
+	// compiler authority before inspecting it or reaching admission/driver
+	// state. Same-package diagnostic fixtures intentionally omit admission and
+	// retain their historical ability to exercise hand-built row contracts.
+	if executor.readAdmission != nil {
+		detached, ok := query.CloneForExecution()
+		if !ok {
+			return fmt.Errorf("%w: compiled query execution authority is invalid", searchjobs.ErrInvalidResult)
+		}
+		query = detached
+	}
 	query.Args = slices.Clone(query.Args)
 	if strings.TrimSpace(query.SQL) == "" || len(query.OutputFields) == 0 {
 		return errors.New("execute ClickHouse search: compiled query is incomplete")
 	}
 	if query.Timechart != nil && query.Chart != nil {
 		return fmt.Errorf("%w: compiled query declares two wide result contracts", searchjobs.ErrInvalidResult)
+	}
+	resultPresentations, presentationsOK := query.ValidatedResultFieldPresentations()
+	if !presentationsOK {
+		return fmt.Errorf("%w: compiled result presentation contract is invalid", searchjobs.ErrInvalidResult)
+	}
+	if len(resultPresentations) != 0 && (query.Timechart != nil || query.Chart != nil) {
+		return fmt.Errorf("%w: wide result declares ordinary presentation metadata", searchjobs.ErrInvalidResult)
 	}
 	if query.Timechart != nil {
 		if err := validateTimechartOutput(query); err != nil {
@@ -457,39 +490,57 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		}
 		return publishChart(executionContext, sink, *query.Chart, buffered)
 	}
-	expectedColumns := query.OutputFields
-	if sparseFieldIndex >= 0 {
-		expectedColumns = append(slices.Clone(expectedColumns), clickhouse.SparseEventFieldNamesColumn)
-	}
-	if len(columns) != len(expectedColumns) || len(columnTypes) != len(columns) ||
-		!slices.Equal(columns, expectedColumns) {
-		return fmt.Errorf("%w: ClickHouse result columns do not match the compiled output", searchjobs.ErrInvalidResult)
-	}
-	if sparseFieldIndex >= 0 {
-		hiddenType := columnTypes[len(query.OutputFields)]
-		if hiddenType.Nullable() || unwrapType(hiddenType.DatabaseTypeName()) != "Array(String)" ||
-			hiddenType.ScanType() != reflect.TypeOf([]string{}) ||
-			!strings.HasPrefix(unwrapType(columnTypes[sparseFieldIndex].DatabaseTypeName()), "JSON") {
-			return fmt.Errorf("%w: sparse event fields transport has invalid column types", searchjobs.ErrInvalidResult)
-		}
+	containerTransports, err := validateOrdinaryResultColumns(
+		query,
+		columns,
+		columnTypes,
+		sparseFieldIndex,
+	)
+	if err != nil {
+		return err
 	}
 	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(query.OutputFields))}
 	for index, columnType := range columnTypes[:len(query.OutputFields)] {
 		kind, multivalue := schemaKind(columns[index], columnType.DatabaseTypeName())
-		schema.Columns[index] = searchjobs.Column{
+		column := searchjobs.Column{
 			Name:       columns[index],
 			Kind:       kind,
 			Nullable:   columnType.Nullable() || databaseTypeNullable(columnType.DatabaseTypeName()) || kind == searchjobs.ValueKindMixed,
 			Multivalue: multivalue,
 		}
+		if len(resultPresentations) != 0 {
+			presentation := resultPresentations[index]
+			if presentation.StatsSparkline {
+				if kind != searchjobs.ValueKindList || !multivalue {
+					return fmt.Errorf(
+						"%w: sparkline presentation metadata does not match column %q",
+						searchjobs.ErrInvalidResult,
+						columns[index],
+					)
+				}
+				column.StatsSparkline = true
+			}
+			if presentation.HasFlatMultivalueDelimiter {
+				if kind != searchjobs.ValueKindList || !multivalue {
+					return fmt.Errorf(
+						"%w: result presentation metadata does not match column %q",
+						searchjobs.ErrInvalidResult,
+						columns[index],
+					)
+				}
+				column.FlatMultivalueDelimiter = presentation.FlatMultivalueDelimiter
+				column.HasFlatMultivalueDelimiter = true
+			}
+		}
+		schema.Columns[index] = column
 	}
 	if err := executionContext.Err(); err != nil {
 		return err
 	}
-	if err := sink.SetSchema(schema); err != nil {
-		return err
-	}
 
+	schemaPublished := false
+	atomicResult := query.RequiresAtomicResult()
+	var atomicRows atomicResultBuffer
 	for rows.Next() {
 		if err := executionContext.Err(); err != nil {
 			return err
@@ -512,7 +563,26 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		values := make([]searchjobs.Value, len(query.OutputFields))
 		for index, destination := range destinations[:len(query.OutputFields)] {
 			var value searchjobs.Value
-			if index == sparseFieldIndex {
+			if containerTransports[index].valid {
+				names, types, version, metadataErr := scannedContainerMetadata(
+					destinations,
+					containerTransports[index],
+				)
+				if metadataErr != nil {
+					return fmt.Errorf(
+						"%w: convert ClickHouse column %q: %w",
+						searchjobs.ErrInvalidResult,
+						columns[index],
+						metadataErr,
+					)
+				}
+				value, err = convertContainerOutput(
+					scannedValue(destination),
+					names,
+					types,
+					version,
+				)
+			} else if index == sparseFieldIndex {
 				value, err = convertSparseEventFields(scannedValue(destination), fieldNames)
 			} else {
 				value, err = convertValue(scannedValue(destination))
@@ -522,6 +592,21 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			}
 			values[index] = value
 		}
+		if atomicResult {
+			if err := atomicRows.append(values); err != nil {
+				return err
+			}
+			continue
+		}
+		if !schemaPublished {
+			if err := executionContext.Err(); err != nil {
+				return err
+			}
+			if err := sink.SetSchema(schema); err != nil {
+				return err
+			}
+			schemaPublished = true
+		}
 		if err := sink.AddRow(values); err != nil {
 			return err
 		}
@@ -529,7 +614,109 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err := rows.Err(); err != nil {
 		return classifyQueryError(executionContext, fmt.Errorf("iterate ClickHouse results: %w", err))
 	}
-	return executionContext.Err()
+	if err := executionContext.Err(); err != nil {
+		return err
+	}
+	if atomicResult {
+		closeErr := rows.Close()
+		rowsClosed = true
+		if closeErr != nil {
+			return classifyQueryError(
+				executionContext,
+				fmt.Errorf("close ClickHouse atomic result stream: %w", closeErr),
+			)
+		}
+		if err := executionContext.Err(); err != nil {
+			return err
+		}
+		if err := sink.SetSchema(schema); err != nil {
+			return err
+		}
+		for block := atomicRows.first; block != nil; block = block.next {
+			for index := 0; index < block.count; index++ {
+				if err := executionContext.Err(); err != nil {
+					return err
+				}
+				if err := sink.AddRow(block.rows[index]); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if !schemaPublished {
+		return sink.SetSchema(schema)
+	}
+	return nil
+}
+
+const atomicRowsPerBlock = 256
+
+// atomicBufferedRowBlock retains a fixed number of outer row-slice headers in
+// one allocation. Charging the complete block before allocating it accounts
+// for unused capacity exactly while avoiding one heap allocation per result
+// row on large atomic Dynamic-expression searches.
+type atomicBufferedRowBlock struct {
+	rows  [atomicRowsPerBlock][]searchjobs.Value
+	count int
+	next  *atomicBufferedRowBlock
+}
+
+type atomicResultBuffer struct {
+	first *atomicBufferedRowBlock
+	last  *atomicBufferedRowBlock
+	bytes uint64
+}
+
+func (buffer *atomicResultBuffer) append(values []searchjobs.Value) error {
+	newBlock := buffer.last == nil || buffer.last.count == atomicRowsPerBlock
+	structural := uint64(0)
+	if newBlock {
+		structural = uint64(unsafe.Sizeof(atomicBufferedRowBlock{}))
+	}
+	nextBytes, err := chargeAtomicResultRow(buffer.bytes, structural, values)
+	if err != nil {
+		return err
+	}
+	if newBlock {
+		block := new(atomicBufferedRowBlock)
+		if buffer.last == nil {
+			buffer.first = block
+		} else {
+			buffer.last.next = block
+		}
+		buffer.last = block
+	}
+	buffer.last.rows[buffer.last.count] = values
+	buffer.last.count++
+	buffer.bytes = nextBytes
+	return nil
+}
+
+func chargeAtomicResultRow(current, structural uint64, values []searchjobs.Value) (uint64, error) {
+	if current > maximumAtomicResultBytes {
+		return 0, searchjobs.ErrByteLimit
+	}
+	if structural > maximumAtomicResultBytes-current {
+		return 0, searchjobs.ErrByteLimit
+	}
+	current += structural
+	for _, value := range values {
+		remaining := maximumAtomicResultBytes - current
+		size, err := value.RetainedSizeBytes()
+		if err != nil {
+			return 0, fmt.Errorf(
+				"%w: size retained atomic ClickHouse result value: %w",
+				searchjobs.ErrInvalidResult,
+				err,
+			)
+		}
+		if size > remaining {
+			return 0, searchjobs.ErrByteLimit
+		}
+		current += size
+	}
+	return current, nil
 }
 
 func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
@@ -554,6 +741,21 @@ func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
+	settings := executor.groupLimitSettingsFor(query)
+	hint, ok := query.StatsPartitionsMaxThreadsHint()
+	if !ok {
+		return settings
+	}
+	current, ok := settings["max_threads"].(uint64)
+	if !ok || current <= uint64(hint) {
+		return settings
+	}
+	bounded := maps.Clone(settings)
+	bounded["max_threads"] = uint64(hint)
+	return bounded
+}
+
+func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
 	percentileWide := (query.Timechart != nil &&
 		query.Timechart.Mode == clickhouse.TimechartModeRuntimeWideValue &&
 		query.Timechart.ValueKind == clickhouse.TimechartValueKindPercentile) ||
@@ -585,7 +787,11 @@ func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhouse
 		if query.Chart.ValueKind == clickhouse.ChartValueKindPercentile {
 			required = maximumRuntimeWidePercentileGroups
 		} else {
-			required = query.Chart.RowLimit * (uint64(query.Chart.MaxSeries) + 1)
+			// Count, sum, and average charts aggregate the exact raw (row, label)
+			// pairs before reducing their output to a bounded row-by-series shape.
+			// Output width cannot size that pre-ranking work, so use the same fixed
+			// 130k allowance as runtime-wide timechart.
+			required = maximumRuntimeWideTimechartGroups
 		}
 	default:
 		return executor.settings
@@ -2561,6 +2767,7 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.ChartRowLimitMarker, "chart row values exceeded the supported limit"},
 	{clickhouse.EventStatsInputLimitMarker, "eventstats input rows exceeded the supported limit"},
 	{clickhouse.StreamStatsInputLimitMarker, "streamstats input rows exceeded the supported limit"},
+	{clickhouse.StatsMultivalueByExpansionLimitMarker, "stats multivalue BY expansion exceeded the per-event limit"},
 	{clickhouse.ExactDistinctLimitMarker, "exact distinct values exceeded the supported limit"},
 	{clickhouse.StatsValuesBytesLimitMarker, "stats values bytes exceeded the supported limit"},
 	{clickhouse.StatsValuesLimitMarker, "stats values exceeded the supported limit"},
@@ -2570,6 +2777,13 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.EventStatsListLimitMarker, "eventstats list exceeded the supported limit"},
 	{clickhouse.StatsListBytesLimitMarker, "stats list bytes exceeded the supported limit"},
 	{clickhouse.StatsListLimitMarker, "stats list exceeded the supported result limit"},
+	{clickhouse.StatsSparklineBytesLimitMarker, "stats sparkline bytes exceeded the supported limit"},
+	{clickhouse.StatsSparklineLimitMarker, "stats sparkline exceeded the supported limit"},
+	{clickhouse.KnowledgeSelectorValueLimitMarker, "knowledge selector value bytes exceeded the per-value limit"},
+	{clickhouse.KnowledgeSelectorEventLimitMarker, "knowledge selector input bytes exceeded the per-event limit"},
+	{clickhouse.KnowledgeSelectorQueryLimitMarker, "knowledge selector work exceeded the per-query limit"},
+	{clickhouse.KnowledgeAliasCopyEventLimitMarker, "knowledge alias copy bytes exceeded the per-event limit"},
+	{clickhouse.KnowledgeAliasCopyQueryLimitMarker, "knowledge alias copy work exceeded the per-query limit"},
 }
 
 func classifyQueryError(ctx context.Context, err error) error {
@@ -2596,7 +2810,8 @@ func classifyQueryError(ctx context.Context, err error) error {
 			strings.Contains(exception.Message, clickhouse.UnsupportedStatsMeasureValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedNumericBinValueMarker) ||
-			strings.Contains(exception.Message, clickhouse.UnsupportedSpathValueMarker)) {
+			strings.Contains(exception.Message, clickhouse.UnsupportedSpathValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.KnowledgeSelectorInvalidUTF8Marker)) {
 			// The compiler deliberately emits stable markers when an operation
 			// encounters a value outside its supported scalar/type/range
 			// contract. Do not retain any surrounding ClickHouse message,

@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"reflect"
 	"slices"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -16,7 +17,10 @@ import (
 func validEventAggregateContract(operator *EventAggregate) bool {
 	if operator == nil ||
 		len(operator.GroupBy) > spl.MaximumStatsGroupFields ||
-		operator.Measure.Output == "" {
+		operator.Measure.Output == "" ||
+		operator.Measure.OutputLiteral ||
+		operator.Measure.Sparkline != nil ||
+		operator.Measure.InputExpression != nil {
 		return false
 	}
 	if operator.Measure.Function != AggregateFunctionPercentile &&
@@ -84,8 +88,10 @@ func validEventAggregateContract(operator *EventAggregate) bool {
 }
 
 type eventAggregatePredicateValidator struct {
-	nodes  int
-	active map[any]struct{}
+	nodes                int
+	arithmeticOperators  int
+	membershipCandidates int
+	active               map[any]struct{}
 }
 
 func validEventAggregatePredicate(expression Expression) bool {
@@ -102,6 +108,9 @@ func (validator *eventAggregatePredicateValidator) enter(
 	if depth > maxConvertedExpressionDepth {
 		return false
 	}
+	if !reflect.TypeOf(node).Comparable() {
+		return false
+	}
 	if _, cyclic := validator.active[node]; cyclic {
 		return false
 	}
@@ -110,6 +119,26 @@ func (validator *eventAggregatePredicateValidator) enter(
 		return false
 	}
 	validator.active[node] = struct{}{}
+	return true
+}
+
+func (validator *eventAggregatePredicateValidator) chargeArithmeticOperator() bool {
+	if validator.arithmeticOperators >= spl.MaximumArithmeticOperatorsPerQuery {
+		return false
+	}
+	validator.arithmeticOperators++
+	return true
+}
+
+func (validator *eventAggregatePredicateValidator) chargeMembershipCandidates(
+	count int,
+) bool {
+	if count < 1 || count > spl.MaximumMembershipCandidates ||
+		validator.membershipCandidates >
+			spl.MaximumMembershipCandidatesPerQuery-count {
+		return false
+	}
+	validator.membershipCandidates += count
 	return true
 }
 
@@ -145,6 +174,19 @@ func (validator *eventAggregatePredicateValidator) validExpression(
 		}
 		return validator.validScalar(expression.Value, depth+1) &&
 			scalarExpressionCanBeDirectPredicate(expression.Value)
+	case *MembershipExpression:
+		if expression == nil ||
+			!validExpressionRangeOrZero(expression.Range) ||
+			!validator.chargeMembershipCandidates(len(expression.Candidates)) ||
+			!validator.validScalar(expression.Value, depth+1) {
+			return false
+		}
+		for _, candidate := range expression.Candidates {
+			if !validator.validScalar(candidate, depth+1) {
+				return false
+			}
+		}
+		return true
 	default:
 		return false
 	}
@@ -154,11 +196,37 @@ func (validator *eventAggregatePredicateValidator) validScalar(
 	expression ScalarExpression,
 	depth int,
 ) bool {
+	return validator.validScalarWithUnaryChain(expression, depth, 0)
+}
+
+func (validator *eventAggregatePredicateValidator) validScalarWithUnaryChain(
+	expression ScalarExpression,
+	depth int,
+	unaryChain int,
+) bool {
 	if expression == nil || !validator.enter(expression, depth) {
 		return false
 	}
 	defer validator.leave(expression)
 	switch expression := expression.(type) {
+	case *ScalarUnaryExpression:
+		return expression != nil &&
+			validScalarUnaryOp(expression.Op) &&
+			validExpressionRangeOrZero(expression.Range) &&
+			unaryChain < spl.MaximumUnaryOperatorChain &&
+			validator.chargeArithmeticOperator() &&
+			validator.validScalarWithUnaryChain(
+				expression.Operand,
+				depth+1,
+				unaryChain+1,
+			)
+	case *ScalarBinaryExpression:
+		return expression != nil &&
+			validScalarBinaryOp(expression.Op) &&
+			validExpressionRangeOrZero(expression.Range) &&
+			validator.chargeArithmeticOperator() &&
+			validator.validScalar(expression.Left, depth+1) &&
+			validator.validScalar(expression.Right, depth+1)
 	case *ScalarFieldExpression:
 		return expression != nil &&
 			validResolvedEventAggregateField(expression.Field)
@@ -213,6 +281,7 @@ func validEventAggregateScalarFunction(function ScalarFunction) bool {
 		ScalarFunctionCeil,
 		ScalarFunctionFloor,
 		ScalarFunctionMVCount,
+		ScalarFunctionMVSort,
 		ScalarFunctionMatch,
 		ScalarFunctionLike,
 		ScalarFunctionNow,
@@ -257,7 +326,10 @@ func validEventAggregateLiteralKind(kind ValueKind) bool {
 func validResolvedEventAggregateField(field FieldRef) bool {
 	resolved, err := ResolveField(field.Name, field.Range)
 	if err != nil {
-		return false
+		resolved, err = ResolveQuotedField(field.Name, field.Range)
+		if err != nil {
+			return false
+		}
 	}
 	return resolved.Name == field.Name &&
 		resolved.Canonical == field.Canonical &&

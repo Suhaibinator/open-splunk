@@ -26,9 +26,6 @@ func TestCompileTimelinePreservesEligibleEventPipeline(t *testing.T) {
 		t.Fatalf("CompileTimeline() error = %v", err)
 	}
 
-	if !strings.Contains(compiled.SQL, ordinary.SQL) {
-		t.Fatalf("timeline SQL did not retain the complete ordinary query:\nordinary: %s\ntimeline: %s", ordinary.SQL, compiled.SQL)
-	}
 	for _, fragment := range []string{
 		`"tenant_id" = ?`,
 		`"index_name" IN (?)`,

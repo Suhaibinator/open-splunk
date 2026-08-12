@@ -15,6 +15,9 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 	if query == nil || len(query.Operators) == 0 || query.DynamicOutput != nil {
 		return fieldAnalysisPipelineDiagnostic(firstFieldAnalysisRange(query))
 	}
+	if err := ValidateKnowledgePreludeIntegrity(query); err != nil {
+		return fieldAnalysisPipelineDiagnostic(firstFieldAnalysisRange(query))
+	}
 	if scan, ok := query.Operators[0].(*Scan); !ok || scan == nil {
 		return fieldAnalysisPipelineDiagnostic(operatorRange(query.Operators[0]))
 	}
@@ -28,7 +31,8 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			if index != 0 {
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
-		case *Filter, *Extend, *Extract, *ExtractJSON, *Rename, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit:
+		case *Filter, *Extend, *Extract, *ExtractJSON, *Rename, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit,
+			*ConditionalExtract, *ConditionalExtractJSON, *CopyFieldAlias, *ParallelExtend:
 			// These preserve source-event identity while changing the final
 			// relation, schema, values, or order consumed by field analysis.
 		case *EventAggregate:

@@ -470,9 +470,21 @@ func (v *Validator) ValidateAndNormalizeEvent(event *opensplunkv1.LogEvent, ctx 
 			"event exceeds the maximum encoded size after mandatory redaction", "event", "event_too_large_after_redaction",
 		)
 	}
+	source := ctx.Source
+	if source != (IngestionSource{}) || ctx.CollectorID != "" {
+		var sourceErr error
+		source, sourceErr = CanonicalIngestionSource(source, ctx.CollectorID)
+		if sourceErr != nil {
+			return nil, eventFailure(
+				opensplunkv1.EventRejectionCode_EVENT_REJECTION_CODE_VALUE_INVALID,
+				"server ingestion source is invalid", "event", "invalid_ingestion_source",
+			)
+		}
+	}
 	return &StoredEvent{
 		Event:       cloned,
 		TenantID:    ctx.TenantID,
+		Source:      source,
 		CollectorID: ctx.CollectorID,
 		BatchID:     ctx.BatchID,
 		IndexTime:   ctx.ReceivedAt.UTC(),

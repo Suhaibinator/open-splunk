@@ -13,7 +13,6 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
-	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
@@ -27,6 +26,14 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 	chartSplit, err := plan.ResolveField("level", sourceRange)
 	if err != nil {
 		t.Fatalf("resolve chart column field: %v", err)
+	}
+	aggregateGroup, err := plan.ResolveField("host", spl.Range{})
+	if err != nil {
+		t.Fatalf("resolve aggregate group field: %v", err)
+	}
+	aggregateInput, err := plan.ResolveField("bytes", spl.Range{})
+	if err != nil {
+		t.Fatalf("resolve aggregate input field: %v", err)
 	}
 	query := &plan.Query{
 		Operators: []plan.Operator{
@@ -81,10 +88,10 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 				Range: sourceRange,
 			},
 			&plan.Aggregate{
-				GroupBy: []plan.FieldRef{{Name: "host"}},
+				GroupBy: []plan.FieldRef{aggregateGroup},
 				Measures: []plan.AggregateMeasure{
 					{Function: plan.AggregateFunctionCountRows, Output: "events"},
-					{Function: plan.AggregateFunctionSum, Input: plan.FieldRef{Name: "bytes"}, Output: "total_bytes"},
+					{Function: plan.AggregateFunctionSum, Input: aggregateInput, Output: "total_bytes"},
 				},
 				Range: sourceRange,
 			},
@@ -166,7 +173,7 @@ func TestProjectLogicalPlanCoversEveryCurrentOperator(t *testing.T) {
 			)
 		}
 		wantRange := sourceRangeProjection(canonical.SourceRange())
-		if stage.SourceRange != wantRange {
+		if stage.SourceRange == nil || *stage.SourceRange != wantRange {
 			t.Fatalf(
 				"stage %d source range = %#v, want canonical range %#v",
 				index,
@@ -270,7 +277,7 @@ func TestProjectLogicalPlanProjectsStaticTimechartCount(t *testing.T) {
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 		" | timechart span=5m count"
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}
@@ -331,7 +338,7 @@ func TestProjectLogicalPlanCoversProjectModesFromAcceptedSPL(t *testing.T) {
 			fixture := snapshot
 			fixture.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 				" | " + test.command
-			logical, err := searchsnapshot.BuildExecutionPlan(fixture)
+			logical, err := buildInspectionAuthoredPlan(fixture)
 			if err != nil {
 				t.Fatalf("BuildExecutionPlan: %v", err)
 			}
@@ -369,7 +376,7 @@ func TestProjectLogicalPlanOmitsAcceptedTextAndCountPredicateValues(t *testing.T
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = "index=" + snapshot.EffectiveIndexes[0] +
 		` "private-text-filter" | stats count(eval(status=418)) AS matches`
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}
@@ -489,7 +496,14 @@ func TestProjectLogicalPlanFailsClosedAndReturnsNoPartialPlan(t *testing.T) {
 			},
 		},
 		{
-			name: "too many stages",
+			name: "too many authored stages",
+			query: &plan.Query{Operators: repeatLimitOperators(
+				int(maximumAuthoredPlanStages)+1,
+				validRange,
+			)},
+		},
+		{
+			name: "too many absolute stages",
 			query: &plan.Query{Operators: repeatLimitOperators(
 				int(maximumPlanStages)+1,
 				validRange,
@@ -558,7 +572,7 @@ func TestProjectLogicalPlanAcceptsAccumulatedOutputExpansion(t *testing.T) {
 	}
 	snapshot := validInspectionSnapshot()
 	snapshot.SPL = source.String()
-	logical, err := searchsnapshot.BuildExecutionPlan(snapshot)
+	logical, err := buildInspectionAuthoredPlan(snapshot)
 	if err != nil {
 		t.Fatalf("BuildExecutionPlan: %v", err)
 	}

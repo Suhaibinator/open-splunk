@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "source": {
+    "knowledgeObjectId": "ko-source",
+    "version": 7
+  },
+  "target": {
+    "knowledgeObjectId": "ko-target",
+    "version": 11
+  },
+  "role": 1,
+  "nextPageToken": "next",
+  "totalSize": 17,
+  "tenantCatalogRevision": 13,
+  "edgeWireHex": "0a0d0a096b6f2d736f757263651007120d0a096b6f2d746172676574100b1801",
+  "dependenciesResponseWireHex": "0a200a0d0a096b6f2d736f757263651007120d0a096b6f2d746172676574100b1801120a0a046e65787410111801180d220d0a096b6f2d736f757263651007",
+  "dependentsResponseWireHex": "0a200a0d0a096b6f2d736f757263651007120d0a096b6f2d746172676574100b1801120a0a046e65787410111801180d220d0a096b6f2d746172676574100b"
+}

@@ -128,6 +128,10 @@ const (
 	// maxCompiledMVCountScalarSQLBytes independently bounds value-cardinality
 	// expressions. Dynamic input is bound once, so nested calls grow linearly.
 	maxCompiledMVCountScalarSQLBytes = 64 << 10
+	// maxCompiledMVSortScalarSQLBytes independently bounds lexical multivalue
+	// sorting. Dynamic input is bound once, and already-sorted results collapse
+	// to identities so nested calls cannot multiply sort work.
+	maxCompiledMVSortScalarSQLBytes = 64 << 10
 	// maxCompiledMatchScalarSQLBytes independently bounds regular-expression
 	// predicate lowering. Each value is referenced once and each normalized
 	// pattern remains a bound argument, so nested composition grows linearly.
@@ -284,6 +288,12 @@ const (
 	MaximumStatsListBytesPerGroup   = MaximumStatsValuesBytesPerGroup
 	MaximumStatsListValuesPerResult = MaximumStatsValuesPerResult
 	MaximumStatsListBytesPerResult  = MaximumStatsValuesBytesPerResult
+	// MaximumMVSortValues admits every bounded values() result while keeping a
+	// forged or corrupted array from driving unbounded per-row sort work.
+	MaximumMVSortValues = MaximumStatsValuesPerGroup
+	// MaximumMVSortBytes admits every durable event multivalue and every
+	// bounded values()/list() result. Larger raw-storage values fail closed.
+	MaximumMVSortBytes = MaximumStoredScalarBytes
 
 	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
 	// guard so the executor can classify the ClickHouse exception without
@@ -418,23 +428,58 @@ type CompiledQuery struct {
 	SQL          string
 	Args         []any
 	OutputFields []string
-	Timechart    *TimechartOutput
-	Chart        *ChartOutput
+	// OutputPresentations, when nonempty, is aligned exactly by ordinal with
+	// OutputFields. Zero entries carry no presentation metadata. The compiler
+	// currently attaches a flat multivalue delimiter to stats list/values and a
+	// sparkline semantic bit to stats sparkline outputs; typed cells and export
+	// behavior remain unchanged.
+	OutputPresentations []ResultFieldPresentation
+	// ContainerOutputs maps selected public Dynamic ordinals to deterministic
+	// trailing metadata columns. The executor consumes those columns without
+	// exposing them in the public schema.
+	ContainerOutputs []ResultContainerOutput
+	Timechart        *TimechartOutput
+	Chart            *ChartOutput
 	// SparseFields marks ordinary raw-event output whose public fields object
 	// must be reconstructed from the appended private presence column.
 	SparseFields bool
+	// atomicResult is compiler-owned evidence that the query may surface a
+	// sanitized runtime expression-value failure. The executor must consume and
+	// close the complete result before publishing schema or rows so a failure on
+	// a later row cannot leak a successful prefix.
+	atomicResult bool
 
 	// relationalDepth is compiler evidence, not part of the execution
 	// contract. Keeping it private prevents callers from treating the guard as
 	// a tunable query option while allowing terminal analysis compilers to
 	// extend an already validated event relation without reparsing SQL.
-	relationalDepth      int
-	relationalDepthRange spl.Range
-	readScope            compiledReadScope
+	relationalDepth           int
+	relationalDepthRange      spl.Range
+	readScope                 compiledReadScope
+	validationDummyProjection []string
 	// sourceFanout records how many physical consumers the terminal lowering
 	// has for a chronology-validated source. It stays private because it is
 	// compiler resource evidence, not an executor transport contract.
 	sourceFanout uint64
+	// statsPartitionsMaxThreadsHint is a compiler-owned, whole-query execution
+	// cap derived from stats partitions. ClickHouse exposes max_threads only at
+	// query scope, so this is an Open Splunk approximation rather than Splunk's
+	// stage-local reduce-partition behavior. Zero means no stats stage supplied
+	// a hint; otherwise the sealed value is in [1, 4].
+	statsPartitionsMaxThreadsHint uint8
+
+	// executionSeal binds the complete executable contract, including every
+	// bind value and result-shape field. knowledgeEvidence exists only for a
+	// parser-owned plan.Build query and is covered by the same seal.
+	executionSeal     *compiledExecutionSeal
+	knowledgeEvidence *knowledgeCompilationEvidence
+}
+
+// RequiresAtomicResult reports whether execution must validate the complete
+// backend stream before making any result visible. The value is covered by the
+// compiled execution seal and cannot be enabled or disabled by callers.
+func (compiled CompiledQuery) RequiresAtomicResult() bool {
+	return compiled.atomicResult
 }
 
 // ChartOutput describes the bounded runtime-wide pivot contract. Both axes are
@@ -636,7 +681,8 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if !ok {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: first operator must be Scan")
 	}
-	if err := validateCompiledExtractionBudgets(query.Operators[1:]); err != nil {
+	preparation, err := prepareKnowledgeCompilation(query)
+	if err != nil {
 		return CompiledQuery{}, err
 	}
 	fragment, state, args, err := compileScan(
@@ -650,12 +696,69 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 		return CompiledQuery{}, err
 	}
 	relation := newScanRelation(fragment, scan.Range)
+	knowledge, err := compileDeferredKnowledgeRelation(
+		relation,
+		state,
+		args,
+		preparation,
+	)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	relation = knowledge.relation
+	state = knowledge.state
+	args = knowledge.args
 
 	aliasSequence := 0
-	remainingOperators := query.Operators[1:]
-	for operatorIndex, operator := range remainingOperators {
+	var statsPartitionsMaxThreadsHint uint8
+	finishCompiled := func(
+		compiled CompiledQuery,
+		complexityRange spl.Range,
+	) (CompiledQuery, error) {
+		compiled.atomicResult = state.context != nil && state.context.atomicResult
+		terminalWide := compiled.Chart != nil || compiled.Timechart != nil
+		if terminalWide && len(state.chronologicalBarriers) > 0 {
+			var wrapErr error
+			compiled, wrapErr = wrapCompiledChronologicalValidation(
+				compiled,
+				state,
+				aliasSequence,
+			)
+			if wrapErr != nil {
+				return CompiledQuery{}, wrapErr
+			}
+		}
+		if terminalWide {
+			if depthErr := validateCompiledRelationalDepth(compiled); depthErr != nil {
+				return CompiledQuery{}, depthErr
+			}
+		} else if depthErr := validateFinalizedRelationalDepth(relation, compiled); depthErr != nil {
+			return CompiledQuery{}, depthErr
+		}
+		compiled.statsPartitionsMaxThreadsHint = statsPartitionsMaxThreadsHint
+		if len(compiled.SQL) > maxCompiledQueryBytes {
+			return CompiledQuery{}, &plan.Diagnostic{
+				Code:    "SPL_QUERY_TOO_COMPLEX",
+				Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
+				Range:   complexityRange,
+			}
+		}
+		return sealFinalCompiledQuery(
+			compiled,
+			query,
+			scan,
+			preparation,
+			knowledge.prelude,
+		)
+	}
+	remainingOperators := query.Operators[1+preparation.prefixLength:]
+	for operatorIndex := 0; operatorIndex < len(remainingOperators); operatorIndex++ {
+		operator := remainingOperators[operatorIndex]
 		if isNilPlanOperator(operator) {
-			return CompiledQuery{}, fmt.Errorf("compile ClickHouse query: operator %d is nil", operatorIndex+1)
+			return CompiledQuery{}, fmt.Errorf(
+				"compile ClickHouse query: operator %d is nil",
+				operatorIndex+1+preparation.prefixLength,
+			)
 		}
 		aliasSequence++
 		alias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
@@ -780,7 +883,17 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				// Sequential assignments add another outer SELECT and therefore
 				// prepend in reverse nesting order as well.
 				args = prependArguments(value.valueArgs, args)
-				state = extendCompileState(state, assignment.Output, value)
+				_, directField := assignment.Expression.(*plan.ScalarFieldExpression)
+				nextState, stateErr := extendCompileState(
+					state,
+					assignment.Output,
+					value,
+					directField,
+				)
+				if stateErr != nil {
+					return CompiledQuery{}, stateErr
+				}
+				state = nextState
 				if index+1 < len(operator.Assignments) {
 					aliasSequence++
 					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
@@ -893,6 +1006,21 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if validateErr := validateAggregatePredicateMeasures(operator, state); validateErr != nil {
 				return CompiledQuery{}, validateErr
 			}
+			// Aggregate is also the internal plan node used by top and rare.
+			// Parser-built stats always carries effective StatsOptions, so that
+			// pointer is the trust-boundary discriminator for the command-scoped
+			// execution hint. Nil legacy/internal aggregates must not serialize
+			// unrelated query stages.
+			if operator.StatsOptions != nil {
+				stageThreadHint, hintErr := effectiveStatsPartitionsMaxThreadsHint(operator)
+				if hintErr != nil {
+					return CompiledQuery{}, hintErr
+				}
+				statsPartitionsMaxThreadsHint = mergeStatsPartitionsMaxThreadsHint(
+					statsPartitionsMaxThreadsHint,
+					stageThreadHint,
+				)
+			}
 			materializedFields := aggregatePredicateMaterializationFields(operator, state)
 			if len(materializedFields) > 0 {
 				var bindings, boundColumns []string
@@ -959,6 +1087,68 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				nextState.preAggregateColumns = nil
 				nextState.preAggregateArgs = nil
 			}
+			if len(nextState.preAggregateGroupExpansions) > 0 {
+				expansionProduct, guardErr := statsMultivalueByExpansionProductSQL(
+					nextState.preAggregateGroupExpansions,
+				)
+				if guardErr != nil {
+					return CompiledQuery{}, guardErr
+				}
+				productAlias := quoteIdentifier("__os_stats_mv_by_combinations")
+				anyOverLimitAlias := quoteIdentifier("__os_stats_mv_by_any_over_limit")
+				maximum := statsMultivalueByExpansionMaximumSQL()
+				// Freeze both the row-local product and a whole-eligible-input
+				// violation bit before the first BY ARRAY JOIN. The window flag
+				// makes one violating source event poison every retained row, so
+				// downstream LIMIT or optimizer consumption cannot hide it.
+				relation = relation.selectFrom(
+					"SELECT *, "+expansionProduct+" AS "+productAlias+", "+
+						"max(toUInt8(("+expansionProduct+") > "+maximum+")) OVER () AS "+
+						anyOverLimitAlias+" FROM ("+relation.sql+") AS "+alias,
+					operator.Range,
+				)
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				expansionGuard, guardErr := statsMultivalueByExpansionGuardSQL(
+					productAlias,
+					anyOverLimitAlias,
+				)
+				if guardErr != nil {
+					return CompiledQuery{}, guardErr
+				}
+				relation = relation.selectFrom(
+					"SELECT * EXCEPT ("+productAlias+", "+anyOverLimitAlias+") FROM ("+
+						relation.sql+") AS "+alias+" WHERE "+expansionGuard,
+					operator.Range,
+				)
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				// Expand one BY field per relational stage. ClickHouse's comma form
+				// zips arrays by position; staged ARRAY JOINs instead produce the SPL
+				// Cartesian product for multiple multivalue grouping fields.
+				for _, expansion := range nextState.preAggregateGroupExpansions {
+					relation = relation.selectFrom(
+						"SELECT *, "+expansion.valueAlias+" FROM ("+relation.sql+") AS "+alias+" ARRAY JOIN "+
+							expansion.valuesAlias+" AS "+expansion.valueAlias,
+						operator.Range,
+					)
+					aliasSequence++
+					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				}
+				nextState.preAggregateGroupExpansions = nil
+			}
+			if len(nextState.preAggregateSparklineWindows) > 0 {
+				// Sparkline bins partition the already-expanded stats BY domain. Keep
+				// their window state in a separate relation before the ordinary outer
+				// aggregate so scalar measures and time series can coexist in one row.
+				relation = relation.selectFrom(
+					"SELECT *, "+strings.Join(nextState.preAggregateSparklineWindows, ", ")+" FROM ("+relation.sql+") AS "+alias,
+					operator.Range,
+				)
+				aliasSequence++
+				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+				nextState.preAggregateSparklineWindows = nil
+			}
 			if len(nextState.preAggregateListWindowColumns) > 0 {
 				// Bound list() input bytes before aggregation. Per-input prefix
 				// windows establish each value's position and cumulative payload
@@ -989,6 +1179,20 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			}
 			relation = relation.selectFrom(aggregateSQL, operator.Range)
 			args = append(args, aggregateArgs...)
+			if len(nextState.postAggregateSparklines) > 0 {
+				var additionalAliases int
+				relation, additionalAliases, compileErr = compileStatsSparklineResults(
+					relation,
+					nextState.postAggregateSparklines,
+					operator.Range,
+					aliasSequence,
+				)
+				if compileErr != nil {
+					return CompiledQuery{}, compileErr
+				}
+				aliasSequence += additionalAliases
+				nextState.postAggregateSparklines = nil
+			}
 			if len(nextState.postAggregateChronological) > 0 {
 				var additionalAliases int
 				var barrier *pendingChronologicalBarrier
@@ -1063,6 +1267,35 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			}
 			state = nextState
 		case *plan.EventAggregate:
+			if operatorIndex+1 < len(remainingOperators) {
+				if adjacent, ok := remainingOperators[operatorIndex+1].(*plan.EventAggregate); ok &&
+					canFuseChronologicalEventAggregates(operator, adjacent, state) {
+					enriched, nextState, prefixArgs, barrier, compileErr :=
+						compileFusedChronologicalEventAggregates(
+							relation,
+							operator,
+							adjacent,
+							state,
+							aliasSequence,
+							aliasSequence+1,
+						)
+					if compileErr != nil {
+						return CompiledQuery{}, compileErr
+					}
+					relation = enriched
+					args = prependArguments(prefixArgs, args)
+					boundBarrier := barrier.bind(args)
+					args = nil
+					nextState.chronologicalBarriers = append(
+						nextState.chronologicalBarriers,
+						boundBarrier,
+					)
+					state = nextState
+					operatorIndex++
+					aliasSequence++
+					break
+				}
+			}
 			enriched, nextState, prefixArgs, barrier, compileErr := compileEventAggregate(
 				relation,
 				operator,
@@ -1088,6 +1321,35 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			}
 			state = nextState
 		case *plan.StreamAggregate:
+			if operatorIndex+1 < len(remainingOperators) {
+				if adjacent, ok := remainingOperators[operatorIndex+1].(*plan.StreamAggregate); ok &&
+					canFuseChronologicalStreamAggregates(operator, adjacent, state) {
+					enriched, nextState, prefixArgs, barrier, compileErr :=
+						compileFusedChronologicalStreamAggregates(
+							relation,
+							operator,
+							adjacent,
+							state,
+							aliasSequence,
+							aliasSequence+1,
+						)
+					if compileErr != nil {
+						return CompiledQuery{}, compileErr
+					}
+					relation = enriched
+					args = prependArguments(prefixArgs, args)
+					boundBarrier := barrier.bind(args)
+					args = nil
+					nextState.chronologicalBarriers = append(
+						nextState.chronologicalBarriers,
+						boundBarrier,
+					)
+					state = nextState
+					operatorIndex++
+					aliasSequence++
+					break
+				}
+			}
 			enriched, nextState, prefixArgs, barrier, compileErr := compileStreamAggregate(
 				relation,
 				operator,
@@ -1128,27 +1390,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			if len(state.chronologicalBarriers) > 0 {
-				compiled, compileErr = wrapCompiledChronologicalValidation(
-					compiled,
-					state,
-					aliasSequence,
-				)
-				if compileErr != nil {
-					return CompiledQuery{}, compileErr
-				}
-			}
-			if compileErr = validateCompiledRelationalDepth(compiled); compileErr != nil {
-				return CompiledQuery{}, compileErr
-			}
-			if len(compiled.SQL) > maxCompiledQueryBytes {
-				return CompiledQuery{}, &plan.Diagnostic{
-					Code:    "SPL_QUERY_TOO_COMPLEX",
-					Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
-					Range:   operator.Range,
-				}
-			}
-			return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
+			return finishCompiled(compiled, operator.Range)
 		case *plan.Chart:
 			if !permitTerminalWideOperators {
 				return CompiledQuery{}, errors.New("compile ClickHouse query: chart is unavailable for event analysis")
@@ -1160,27 +1402,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			if compileErr != nil {
 				return CompiledQuery{}, compileErr
 			}
-			if len(state.chronologicalBarriers) > 0 {
-				compiled, compileErr = wrapCompiledChronologicalValidation(
-					compiled,
-					state,
-					aliasSequence,
-				)
-				if compileErr != nil {
-					return CompiledQuery{}, compileErr
-				}
-			}
-			if compileErr = validateCompiledRelationalDepth(compiled); compileErr != nil {
-				return CompiledQuery{}, compileErr
-			}
-			if len(compiled.SQL) > maxCompiledQueryBytes {
-				return CompiledQuery{}, &plan.Diagnostic{
-					Code:    "SPL_QUERY_TOO_COMPLEX",
-					Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
-					Range:   operator.Range,
-				}
-			}
-			return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
+			return finishCompiled(compiled, operator.Range)
 		case *plan.Window:
 			expression, nextState, compileErr := compileWindow(operator, state)
 			if compileErr != nil {
@@ -1253,20 +1475,18 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err != nil {
 		return CompiledQuery{}, err
 	}
-	if err := validateFinalizedRelationalDepth(relation, compiled); err != nil {
-		return CompiledQuery{}, err
-	}
-	if len(compiled.SQL) > maxCompiledQueryBytes {
-		return CompiledQuery{}, &plan.Diagnostic{
-			Code:    "SPL_QUERY_TOO_COMPLEX",
-			Message: fmt.Sprintf("compiled query exceeds %d bytes", maxCompiledQueryBytes),
-			Range:   scan.Range,
-		}
-	}
-	return sealCompiledQueryReadScope(compiled, scan.TenantID, scan.Indexes)
+	return finishCompiled(compiled, scan.Range)
 }
 
-func validateCompiledExtractionBudgets(operators []plan.Operator) error {
+type authoredKnowledgeCompilation struct {
+	regexPrograms      uint32
+	regexWorkUnits     uint64
+	extractionOutputs  uint32
+	jsonEvaluationWork uint32
+}
+
+func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowledgeCompilation, error) {
+	var evidence authoredKnowledgeCompilation
 	outputs := 0
 	spathWorkUnits := 0
 	for _, operator := range operators {
@@ -1275,6 +1495,14 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) error {
 			if operator == nil {
 				continue
 			}
+			validated, err := validateExtractOperator(operator)
+			if err != nil {
+				return authoredKnowledgeCompilation{}, err
+			}
+			evidence.regexPrograms++
+			// #nosec G115 -- bounded extraction compilation returns positive
+			// work no larger than splregex.MaximumExtractionProgramWorkUnits.
+			evidence.regexWorkUnits += uint64(validated.ProgramWorkUnits)
 			outputs += len(operator.Captures)
 		case *plan.ExtractJSON:
 			if operator == nil {
@@ -1282,12 +1510,12 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) error {
 			}
 			steps, err := validateExtractJSONOperator(operator)
 			if err != nil {
-				return err
+				return authoredKnowledgeCompilation{}, err
 			}
 			outputs++
 			spathWorkUnits += splpath.EvaluationWorkUnits(steps)
 			if spathWorkUnits > splpath.MaximumEvaluationWorkUnits {
-				return &plan.Diagnostic{
+				return authoredKnowledgeCompilation{}, &plan.Diagnostic{
 					Code: "SPL_QUERY_TOO_COMPLEX",
 					Message: fmt.Sprintf(
 						"spath stages require more than %d JSON evaluation work units per row",
@@ -1298,7 +1526,7 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) error {
 			}
 		}
 		if outputs > maxCompiledExtractionOutputs {
-			return &plan.Diagnostic{
+			return authoredKnowledgeCompilation{}, &plan.Diagnostic{
 				Code: "SPL_QUERY_TOO_COMPLEX",
 				Message: fmt.Sprintf(
 					"search creates more than %d extraction output fields",
@@ -1308,7 +1536,9 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) error {
 			}
 		}
 	}
-	return nil
+	evidence.extractionOutputs = uint32(outputs)
+	evidence.jsonEvaluationWork = uint32(spathWorkUnits)
+	return evidence, nil
 }
 
 func compileMatchPatternForBackend(
@@ -1381,6 +1611,17 @@ func finalizeOrdinaryQuery(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	outputPresentations, err := resultFieldPresentations(state, outputFields)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	containerOutputs, containerProjection, err := compileResultContainerOutputs(
+		state,
+		outputFields,
+	)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	sparseFields := exposesRawFieldsPayload(state)
 	if sparseFields {
 		if !slices.Contains(outputFields, "fields") {
@@ -1391,6 +1632,7 @@ func finalizeOrdinaryQuery(
 			quoteIdentifier(internalFieldNamesColumn)+" AS "+quoteIdentifier(SparseEventFieldNamesColumn),
 		)
 	}
+	projection = append(projection, containerProjection...)
 	if len(state.chronologicalBarriers) > 0 {
 		return finalizeChronologicallyValidatedQuery(
 			relation,
@@ -1398,7 +1640,9 @@ func finalizeOrdinaryQuery(
 			args,
 			projection,
 			outputFields,
+			outputPresentations,
 			sparseFields,
+			containerOutputs,
 			aliasSequence,
 		)
 	}
@@ -1415,12 +1659,99 @@ func finalizeOrdinaryQuery(
 	relation = relation.selectFrom(fragment, relation.ownerRange)
 	return withCompiledRelationalDepth(
 		CompiledQuery{
-			SQL: relation.sql, Args: args, OutputFields: outputFields,
-			SparseFields: sparseFields,
+			SQL:                 relation.sql,
+			Args:                args,
+			OutputFields:        outputFields,
+			OutputPresentations: outputPresentations,
+			ContainerOutputs:    containerOutputs,
+			SparseFields:        sparseFields,
 		},
 		relation.depth,
 		relation.ownerRange,
 	), nil
+}
+
+func ordinaryChronologicalDummyValue(field fieldState) (string, bool) {
+	if field.alwaysNull {
+		switch field.kind {
+		case fieldKindString, fieldKindInvalid:
+			return "CAST(NULL AS Nullable(String))", true
+		case fieldKindNumber, fieldKindTime:
+			if field.numberType == "" {
+				return "", false
+			}
+			return "CAST(NULL AS Nullable(" + field.numberType + "))", true
+		case fieldKindBool:
+			return "CAST(NULL AS Nullable(Bool))", true
+		case fieldKindStringArray:
+			return "CAST(NULL AS Nullable(Array(String)))", true
+		case fieldKindDynamic:
+			return "CAST(NULL AS Dynamic)", true
+		default:
+			return "", false
+		}
+	}
+
+	switch field.kind {
+	case fieldKindDynamic:
+		return "CAST(NULL AS Dynamic)", true
+	case fieldKindString:
+		return "CAST('' AS String)", true
+	case fieldKindNumber, fieldKindTime:
+		if field.numberType == "" {
+			return "", false
+		}
+		return "CAST(0 AS " + field.numberType + ")", true
+	case fieldKindBool:
+		return "CAST(false AS Bool)", true
+	case fieldKindStringArray:
+		return "CAST([], 'Array(String)')", true
+	case fieldKindInvalid:
+		return "CAST(NULL AS Nullable(String))", true
+	default:
+		return "", false
+	}
+}
+
+// ordinaryChronologicalDummyProjection gives the invalid validation branch an
+// exact schema row without reading the complete final input a second time.
+// This optimization is deliberately limited to ordinary results, whose field
+// states and private container sidecars fully describe every physical column.
+// Analysis/chart wrappers retain the engine-inferred zero-row fallback.
+func ordinaryChronologicalDummyProjection(
+	state compileState,
+	outputFields []string,
+	sparseFields bool,
+	containerOutputs []ResultContainerOutput,
+) ([]string, bool) {
+	projection := make([]string, 0, len(outputFields)+1+len(containerOutputs)*3)
+	for _, name := range outputFields {
+		field, visible := state.visible[name]
+		if !visible {
+			return nil, false
+		}
+		value, supported := ordinaryChronologicalDummyValue(field)
+		if !supported {
+			return nil, false
+		}
+		projection = append(projection, value+" AS "+quoteIdentifier(name))
+	}
+	if sparseFields {
+		projection = append(
+			projection,
+			"CAST([], 'Array(String)') AS "+
+				quoteIdentifier(SparseEventFieldNamesColumn),
+		)
+	}
+	for _, output := range containerOutputs {
+		projection = append(
+			projection,
+			"CAST([], 'Array(String)') AS "+quoteIdentifier(output.NamesColumn()),
+			"CAST([], 'Array(UInt8)') AS "+quoteIdentifier(output.TypesColumn()),
+			"toUInt8(0) AS "+quoteIdentifier(output.MetadataVersionColumn()),
+		)
+	}
+	return projection, len(projection) > 0
 }
 
 func finalizeChronologicallyValidatedQuery(
@@ -1429,7 +1760,9 @@ func finalizeChronologicallyValidatedQuery(
 	args []any,
 	projection []string,
 	outputFields []string,
+	outputPresentations []ResultFieldPresentation,
 	sparseFields bool,
+	containerOutputs []ResultContainerOutput,
 	aliasSequence int,
 ) (CompiledQuery, error) {
 	order := ""
@@ -1446,6 +1779,20 @@ func finalizeChronologicallyValidatedQuery(
 	if sparseFields {
 		resultColumns = append(resultColumns, SparseEventFieldNamesColumn)
 	}
+	for _, output := range containerOutputs {
+		resultColumns = append(
+			resultColumns,
+			output.NamesColumn(),
+			output.TypesColumn(),
+			output.MetadataVersionColumn(),
+		)
+	}
+	dummyProjection, _ := ordinaryChronologicalDummyProjection(
+		state,
+		outputFields,
+		sparseFields,
+		containerOutputs,
+	)
 	return wrapChronologicalValidation(
 		relation.sql,
 		relation.depth,
@@ -1456,9 +1803,12 @@ func finalizeChronologicallyValidatedQuery(
 		order,
 		eventStatsOrdinarySourceFanout,
 		CompiledQuery{
-			Args:         args,
-			OutputFields: outputFields,
-			SparseFields: sparseFields,
+			Args:                      args,
+			OutputFields:              outputFields,
+			OutputPresentations:       outputPresentations,
+			ContainerOutputs:          containerOutputs,
+			SparseFields:              sparseFields,
+			validationDummyProjection: dummyProjection,
 		},
 		aliasSequence,
 	)
@@ -1609,11 +1959,10 @@ func wrapChronologicalValidation(
 	}
 	definitions := make([]string, 0, len(barriers)+2)
 	barrierArgs := make([]any, 0)
-	hasPrerequisiteBarrier := hasPrerequisiteChronologicalBarrier(barriers)
 	// ClickHouse 26.3 can leave a chain of MATERIALIZED CTEs unplanned when
 	// every consumer is another CTE. Preserve only the earliest materialization
-	// in a graph that contains eventstats prerequisites; it is the physical-scan
-	// fence, while every later stage already reads that bounded result graph.
+	// in the complete graph; it is the physical-scan fence, while every later
+	// stage already reads that bounded result graph.
 	keptGraphMaterialization := false
 	for _, barrier := range barriers {
 		for _, definition := range barrier.prerequisiteDefinitions {
@@ -1629,12 +1978,10 @@ func wrapChronologicalValidation(
 		barrierClause := " AS MATERIALIZED ("
 		if len(barrier.prerequisiteDefinitions) > 0 {
 			barrierClause = " AS ("
-		} else if hasPrerequisiteBarrier {
-			if keptGraphMaterialization {
-				barrierClause = " AS ("
-			} else {
-				keptGraphMaterialization = true
-			}
+		} else if keptGraphMaterialization {
+			barrierClause = " AS ("
+		} else {
+			keptGraphMaterialization = true
 		}
 		definitions = append(
 			definitions,
@@ -1645,8 +1992,10 @@ func wrapChronologicalValidation(
 
 	finalInput := quoteIdentifier(fmt.Sprintf("__os_chronological_final_input_%d", aliasSequence+1))
 	finalInputClause := " AS MATERIALIZED ("
-	if hasPrerequisiteBarrier {
+	if keptGraphMaterialization {
 		finalInputClause = " AS ("
+	} else {
+		keptGraphMaterialization = true
 	}
 	definitions = append(definitions, finalInput+finalInputClause+inputSQL+")")
 
@@ -1702,20 +2051,31 @@ func wrapChronologicalValidation(
 		main += " ORDER BY " + order
 	}
 
-	dummyProjection := make([]string, 0, len(resultColumns))
-	for _, name := range resultColumns {
-		column := quoteIdentifier(name)
-		dummyProjection = append(dummyProjection, "any("+column+") AS "+column)
-	}
+	dummy := ""
+	dummyDepth := 1
+	if len(compiled.validationDummyProjection) == len(resultColumns) {
+		dummy = "SELECT " + strings.Join(compiled.validationDummyProjection, ", ")
+	} else {
+		inferredProjection := make([]string, 0, len(resultColumns))
+		for _, name := range resultColumns {
+			column := quoteIdentifier(name)
+			inferredProjection = append(
+				inferredProjection,
+				"any("+column+") AS "+column,
+			)
+		}
 
-	aliasSequence++
-	schemaSourceAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
-	schemaSource := "SELECT " + strings.Join(projection, ", ") + " FROM " +
-		finalInput + " AS " + schemaSourceAlias + " LIMIT 0"
-	aliasSequence++
-	schemaAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
-	dummy := "SELECT " + strings.Join(dummyProjection, ", ") + " FROM (" +
-		schemaSource + ") AS " + schemaAlias
+		aliasSequence++
+		schemaSourceAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+		schemaSource := "SELECT " + strings.Join(projection, ", ") + " FROM " +
+			finalInput + " AS " + schemaSourceAlias + " LIMIT 0"
+		aliasSequence++
+		schemaAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
+		dummy = "SELECT " + strings.Join(inferredProjection, ", ") + " FROM (" +
+			schemaSource + ") AS " + schemaAlias
+		schemaSourceDepth := relationalNodeDepth(inputDepth)
+		dummyDepth = relationalNodeDepth(schemaSourceDepth)
+	}
 
 	validationUnion := strings.Join(validationRows, " UNION ALL ")
 	validationRowsDepth := relationalNodeDepth(maximumBarrierDepth)
@@ -1725,7 +2085,7 @@ func wrapChronologicalValidation(
 		"'), toUInt8(0)) AS " + quoteIdentifier("__os_chronological_valid") +
 		" FROM (" + validationUnion + ")"
 	validationClause := " AS MATERIALIZED ("
-	if hasPrerequisiteBarrier {
+	if keptGraphMaterialization {
 		// Keep this tiny validation aggregate ordinary so both top-level UNION
 		// branches directly consume the eventstats barriers. Only the earliest
 		// bounded prerequisite remains materialized; later stages stay in the
@@ -1748,8 +2108,6 @@ func wrapChronologicalValidation(
 		validationBranch + materializedCTESettingsSQL
 
 	mainDepth := relationalNodeDepth(inputDepth, validationDepth)
-	schemaSourceDepth := relationalNodeDepth(inputDepth)
-	dummyDepth := relationalNodeDepth(schemaSourceDepth)
 	validationBranchDepth := relationalNodeDepth(dummyDepth, validationDepth)
 	resultDepth := relationalNodeDepth(mainDepth, validationBranchDepth)
 	compiled.SQL = sql
@@ -2270,6 +2628,17 @@ func compileDynamicNumericBucket(
 	alias string,
 	stage int,
 ) (compiledRelation, compileState, []any, error) {
+	if err := validateKnowledgeFieldSidecars(
+		field.relativeFieldNamesSQL,
+		field.relativeFieldTypesSQL,
+		field.fieldMetadataVersionSQL,
+	); err != nil {
+		return compiledRelation{}, compileState{}, nil, fmt.Errorf(
+			"compile ClickHouse numeric bucket input %q: %w",
+			operator.Input.Name,
+			err,
+		)
+	}
 	spanAlias := numericBinStageAlias("span", stage)
 	physicalTypeAlias := numericBinStageAlias("physical_type", stage)
 	signedValueAlias := numericBinStageAlias("signed_value", stage)
@@ -2290,6 +2659,9 @@ func compileDynamicNumericBucket(
 	supportedAlias := numericBinStageAlias("supported", stage)
 	outputExistsAlias := numericBinStageAlias("output_exists", stage)
 	outputTypeAlias := numericBinStageAlias("output_type", stage)
+	outputNamesAlias := ""
+	outputTypesAlias := ""
+	outputMetadataAlias := ""
 	stateSourceField := field
 
 	// ClickHouse's analyzer substitutes ordinary projection aliases through
@@ -2333,6 +2705,22 @@ func compileDynamicNumericBucket(
 		return compiledRelation{}, compileState{}, nil, err
 	}
 	preserve := previousKnown && operator.Output.Name != operator.Input.Name
+	if err := validateKnowledgeFieldSidecars(
+		previous.relativeFieldNamesSQL,
+		previous.relativeFieldTypesSQL,
+		previous.fieldMetadataVersionSQL,
+	); err != nil {
+		return compiledRelation{}, compileState{}, nil, fmt.Errorf(
+			"compile ClickHouse numeric bucket destination %q: %w",
+			operator.Output.Name,
+			err,
+		)
+	}
+	if preserve && previous.relativeFieldNamesSQL != "" {
+		outputNamesAlias = numericBinStageAlias("output_names", stage)
+		outputTypesAlias = numericBinStageAlias("output_types", stage)
+		outputMetadataAlias = numericBinStageAlias("output_metadata_version", stage)
+	}
 	var (
 		preserveWith        []string
 		preserveBaseAliases []string
@@ -2613,11 +3001,28 @@ func compileDynamicNumericBucket(
 		outputExistsSQL = "if(" + metadata.existsAlias + " != 0, 1, " + previousExistsAlias + ")"
 		outputTypeSQL = "if(" + metadata.existsAlias + " != 0, " + bucketTypeSQL + ", " + previousTypeAlias + ")"
 	}
-	supportedProjectionSQL := dynamicNumericBinProjectionLayer(relation.sql, stage, layer, []string{
+	supportedExpressions := []string{
 		supportedSQL + " AS " + supportedAlias,
 		"toUInt8(" + outputExistsSQL + ") AS " + outputExistsAlias,
 		"toUInt8(" + outputTypeSQL + ") AS " + outputTypeAlias,
-	})
+	}
+	if outputNamesAlias != "" {
+		supportedExpressions = append(
+			supportedExpressions,
+			"if("+missingCondition+", "+previous.relativeFieldNamesSQL+", "+
+				knowledgeEmptyRelativeFieldNamesSQL()+") AS "+outputNamesAlias,
+			"if("+missingCondition+", "+previous.relativeFieldTypesSQL+", "+
+				knowledgeEmptyRelativeFieldTypesSQL()+") AS "+outputTypesAlias,
+			"toUInt8(if("+missingCondition+", "+
+				previous.fieldMetadataVersionSQL+", 0)) AS "+outputMetadataAlias,
+		)
+	}
+	supportedProjectionSQL := dynamicNumericBinProjectionLayer(
+		relation.sql,
+		stage,
+		layer,
+		supportedExpressions,
+	)
 	relation = relation.selectFrom(supportedProjectionSQL, operator.Range)
 	privateAliases = append(privateAliases, supportedAlias)
 
@@ -2670,6 +3075,9 @@ func compileDynamicNumericBucket(
 		stateSourceField,
 		outputExistsAlias,
 		outputTypeAlias,
+		outputNamesAlias,
+		outputTypesAlias,
+		outputMetadataAlias,
 	)
 	args := make([]any, 0, 1+len(metadata.args)+len(preserveArgs))
 	args = append(args, preserveArgs...)
@@ -2860,6 +3268,14 @@ func unsupportedNumericBinFieldType(operator *plan.NumericBucket) error {
 func validateCanonicalFieldRef(operation, role string, field plan.FieldRef) error {
 	resolved, err := plan.ResolveField(field.Name, field.Range)
 	if err != nil {
+		// A single-quoted downstream reference can name a literal stats output
+		// that is deliberately not a dotted storage path (for example ".com").
+		// ResolveQuotedField preserves that provenance as one logical segment;
+		// resolveCompiledField must still find the exact name in state.visible,
+		// so this fallback cannot mint access to a raw Dynamic storage path.
+		resolved, err = plan.ResolveQuotedField(field.Name, field.Range)
+	}
+	if err != nil {
 		return fmt.Errorf("compile ClickHouse %s: invalid %s field: %w", operation, role, err)
 	}
 	if resolved.Name != field.Name || resolved.Canonical != field.Canonical ||
@@ -2922,6 +3338,7 @@ func updateDynamicBucketCompileState(
 	output plan.FieldRef,
 	source fieldState,
 	existsAlias, typeAlias string,
+	namesAlias, typesAlias, metadataAlias string,
 ) compileState {
 	next := prepareBucketCompileState(state, inputName, output)
 	if inputName != output.Name {
@@ -2935,12 +3352,23 @@ func updateDynamicBucketCompileState(
 		dynamicTypeSQL:          "dynamicType(" + outputName + ")",
 		storedTypeSQL:           typeAlias,
 		existsSQL:               existsAlias,
+		relativeFieldNamesSQL:   namesAlias,
+		relativeFieldTypesSQL:   typesAlias,
+		fieldMetadataVersionSQL: metadataAlias,
 		kind:                    fieldKindDynamic,
 		caseSensitive:           false,
 		materializeForPredicate: true,
 	}
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
 	next.privateColumns = append(next.privateColumns, existsAlias, typeAlias)
+	if namesAlias != "" {
+		next.privateColumns = append(
+			next.privateColumns,
+			namesAlias,
+			typesAlias,
+			metadataAlias,
+		)
+	}
 	return next
 }
 
@@ -2968,6 +3396,31 @@ func floorBucketTicks(value, span int64) int64 {
 		quotient--
 	}
 	return quotient * span
+}
+
+// pivotDescendantSourceColumns keeps descendant probes available across the
+// narrow chart/timechart source CTE. Stored event fields evaluate their probe
+// from the immutable field-name array. Materialized fields, including
+// knowledge-generated fields, instead point at one retained private sidecar;
+// that identifier must cross the source CTE so the prepared CTE can evaluate
+// it without moving bind markers ahead of the nested scoped relation.
+func pivotDescendantSourceColumns(state compileState, fields ...fieldState) []string {
+	private := make([]string, 0, len(fields))
+	hasDescendant := false
+	for _, field := range fields {
+		if field.kind != fieldKindDynamic || field.descendantSQL == "" {
+			continue
+		}
+		hasDescendant = true
+		if slices.Contains(state.privateColumns, field.descendantSQL) &&
+			!slices.Contains(private, field.descendantSQL) {
+			private = append(private, field.descendantSQL)
+		}
+	}
+	if !hasDescendant {
+		return nil
+	}
+	return append([]string{quoteIdentifier(internalFieldNamesColumn)}, private...)
 }
 
 func compileTimechart(
@@ -3012,6 +3465,9 @@ func compileTimechart(
 			Message: "timechart requires event rows with the canonical _time field",
 			Range:   operator.Range,
 		}
+	}
+	if err := validateCanonicalFieldRef("timechart", "time", operator.Time); err != nil {
+		return CompiledQuery{}, err
 	}
 	timeField, ok, err := resolveCompiledField(operator.Time, state)
 	if err != nil {
@@ -3176,6 +3632,7 @@ func compileTimechart(
 		}
 		return compileSplitValueTimechart(
 			relation,
+			state,
 			args,
 			operator,
 			valueKind,
@@ -3221,13 +3678,12 @@ func compileTimechart(
 	classified := q("__os_timechart_classified")
 	canonicalized := q("__os_timechart_canonicalized")
 	counts := q("__os_timechart_group_counts")
-	top := q("__os_timechart_top")
+	scored := q("__os_timechart_scored")
+	ranked := q("__os_timechart_ranked")
 	collapsed := q("__os_timechart_collapsed")
 	domainRows := q("__os_timechart_domain_rows")
 	domain := q("__os_timechart_domain")
-	collisions := q("__os_timechart_normalization_collisions")
 	bucketMaps := q("__os_timechart_bucket_maps")
-	validation := q("__os_timechart_validation")
 	grid := q("__os_timechart_grid")
 
 	eventTime := q("__os_tc_event_time")
@@ -3243,9 +3699,12 @@ func compileTimechart(
 	frequency := q("__os_tc_count")
 	rowCount := q("__os_tc_row_count")
 	occurrenceCount := q("__os_tc_occurrence_count")
-	occurrenceScore := q("__os_tc_occurrence_score")
+	collapsedRowCount := q("__os_tc_collapsed_row_count")
+	collapsedCount := q("__os_tc_collapsed_count")
+	seriesScore := q("__os_tc_series_score")
+	seriesRank := q("__os_tc_series_rank")
 	encoded := q("__os_tc_encoded")
-	normalized := q("__os_tc_normalized")
+	collisionCardinality := q("__os_tc_collision_cardinality")
 	collision := q("__os_tc_collision")
 	sortLabel := q("__os_tc_sort_label")
 	countMap := q("__os_tc_count_map")
@@ -3268,8 +3727,8 @@ func compileTimechart(
 	if fieldOccurrenceCount {
 		sql.WriteString(", " + measureInputSQL + " AS " + measureCount)
 	}
-	if hasDescendant {
-		sql.WriteString(", " + q(internalFieldNamesColumn))
+	for _, column := range pivotDescendantSourceColumns(state, splitField) {
+		sql.WriteString(", " + column)
 	}
 	sql.WriteString(" FROM (")
 	sql.WriteString(relation.sql)
@@ -3303,8 +3762,11 @@ func compileTimechart(
 	}
 	sql.WriteString(" FROM " + classified + "), ")
 
+	// Keep the raw bucket/label aggregate as the first bounded operation. The
+	// executor's max_rows_to_group_by seal therefore continues to cap exactly
+	// the same 130k raw groups before any series selection or publication.
 	sql.WriteString(counts)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", " + kind + ", " + label + ", ")
 	if fieldOccurrenceCount {
 		// Row frequency and occurrence cardinality are intentionally
 		// independent. The former keeps zero-contribution labels in the domain
@@ -3317,60 +3779,72 @@ func compileTimechart(
 	}
 	sql.WriteString(" FROM " + canonicalized + " GROUP BY " + bucketNumber + ", " + kind + ", " + label + "), ")
 
-	sql.WriteString(top)
+	// Score every raw label once across buckets. The collision cardinality is a
+	// window over the public label normalization domain, so it travels with the
+	// same single-consumer chain instead of requiring another counts branch.
+	scoreInput := frequency
 	if fieldOccurrenceCount {
-		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(toUInt128(" + occurrenceCount + ")) AS " + occurrenceScore + " FROM " + counts)
-		sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY " + occurrenceScore + " DESC, " + label + " ASC LIMIT ")
-	} else {
-		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", sum(" + frequency + ") AS " + frequency + " FROM " + counts)
-		sql.WriteString(" WHERE " + kind + " = 0 GROUP BY " + label + " ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
+		scoreInput = occurrenceCount
 	}
-	sql.WriteString(strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10))
-	sql.WriteString("), ")
+	sql.WriteString(scored)
+	sql.WriteString(" AS (SELECT *, sum(toUInt128(" + scoreInput + ")) OVER (PARTITION BY " + kind + ", " + label + ") AS " + seriesScore + ", ")
+	sql.WriteString("uniqExact(" + label + ") OVER (PARTITION BY " + kind + ", " + splunkSeriesLabelSQL(label) + ") AS " + collisionCardinality)
+	sql.WriteString(" FROM " + counts + "), ")
 
+	// The label tie-breaker makes every ordinary label's dense rank unique,
+	// while repeated bucket rows for that label retain one shared rank.
+	sql.WriteString(ranked)
+	sql.WriteString(" AS (SELECT *, dense_rank() OVER (PARTITION BY " + kind + " ORDER BY " + seriesScore + " DESC, " + label + " ASC) AS " + seriesRank)
+	sql.WriteString(" FROM " + scored + "), ")
+
+	seriesLimit := strconv.FormatUint(uint64(operator.Split.SeriesLimit), 10)
 	sql.WriteString(collapsed)
-	sql.WriteString(" AS (SELECT " + bucketNumber + ", multiIf(" + kind + " = 1, '1:', ")
-	sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
+	sql.WriteString(" AS MATERIALIZED (SELECT " + bucketNumber + ", multiIf(" + kind + " = 1, '1:', ")
+	sql.WriteString(kind + " = 0 AND " + seriesRank + " <= " + seriesLimit + ", concat('0:', " + label + "), ")
+	sql.WriteString(kind + " = 0, '2:', CAST('' AS String)) AS " + encoded + ", ")
 	if fieldOccurrenceCount {
-		sql.WriteString("toUInt64(sum(toUInt128(" + occurrenceCount + "))) AS " + occurrenceCount)
+		sql.WriteString("sum(" + rowCount + ") AS " + collapsedRowCount + ", ")
+		sql.WriteString("toUInt64(sum(toUInt128(" + occurrenceCount + "))) AS " + collapsedCount + ", ")
 	} else {
-		sql.WriteString("sum(" + frequency + ") AS " + frequency)
+		sql.WriteString("sum(" + frequency + ") AS " + collapsedCount + ", ")
 	}
-	sql.WriteString(" FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + bucketNumber + ", " + encoded + "), ")
-
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, ")
-	sql.WriteString(splunkSeriesLabelSQL(label) + " AS " + sortLabel + ", concat('0:', " + label + ") AS " + encoded)
-	sql.WriteString(" FROM " + top)
-	// Both sentinels probe the materialized aggregate as an ordinary relation.
-	// A scalar subquery would be evaluated during analysis, before the
-	// materialized temporary table exists, and would re-run the scoped scan
-	// once per occurrence.
-	sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " + counts + " WHERE " + kind + " = 1 LIMIT 1)")
-	sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " + counts + " WHERE " + kind + " = 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + top + ") LIMIT 1)), ")
-
-	sql.WriteString(domain)
-	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
-
-	sql.WriteString(collisions)
-	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS " + collision + " FROM (")
-	sql.WriteString("SELECT " + splunkSeriesLabelSQL(label) + " AS " + normalized)
-	sql.WriteString(" FROM " + counts + " WHERE " + kind + " = 0 GROUP BY " + normalized + " HAVING uniqExact(" + label + ") > 1 LIMIT 1)), ")
-
-	sql.WriteString(bucketMaps)
-	mapValue := frequency
-	if fieldOccurrenceCount {
-		mapValue = occurrenceCount
-	}
-	sql.WriteString(" AS (SELECT " + bucketNumber + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + mapValue + ")) AS " + countMap)
-	sql.WriteString(" FROM " + collapsed + " GROUP BY " + bucketNumber + "), ")
-
-	sql.WriteString(validation)
 	validationCount := frequency
 	if fieldOccurrenceCount {
 		validationCount = rowCount
 	}
-	sql.WriteString(" AS (SELECT toUInt8(sumIf(" + validationCount + ", " + kind + " = 3) > 0) AS " + invalid + " FROM " + counts + "), ")
+	sql.WriteString("toUInt8(sumIf(" + validationCount + ", " + kind + " = 3) > 0) AS " + invalid + ", ")
+	sql.WriteString("toUInt8(maxIf(" + collisionCardinality + ", " + kind + " = 0) > 1) AS " + collision)
+	sql.WriteString(" FROM " + ranked + " GROUP BY " + bucketNumber + ", " + encoded + "), ")
+
+	// Every domain member now comes from the sealed, already-collapsed relation.
+	// Empty encodings are private validation rows and never become map keys or
+	// public names.
+	domainFrequency := collapsedCount
+	if fieldOccurrenceCount {
+		domainFrequency = collapsedRowCount
+	}
+	rawEncodedLabel := "substring(" + encoded + ", 3)"
+	sql.WriteString(domainRows)
+	sql.WriteString(" AS (SELECT multiIf(" + encoded + " = '1:', toUInt8(1), " + encoded + " = '2:', toUInt8(2), toUInt8(0)) AS sort_kind, ")
+	sql.WriteString("if(startsWith(" + encoded + ", '0:'), " + splunkSeriesLabelSQL(rawEncodedLabel) + ", CAST('' AS String)) AS " + sortLabel + ", " + encoded)
+	sql.WriteString(" FROM " + collapsed + " WHERE " + encoded + " != '' AND " + domainFrequency + " > 0 GROUP BY " + encoded + "), ")
+
+	sql.WriteString(domain)
+	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
+
+	sql.WriteString(bucketMaps)
+	mapValue := collapsedCount
+	// The empty String is outside the public encoded domain (0:/1:/2:) and is
+	// therefore a private per-bucket validation key. Carrying the combined flag
+	// in the existing map removes a third collapsed consumer without adding a
+	// second public projection or losing invalid-only buckets. The executor
+	// buffers the complete fixed grid before publishing, so any nonzero bucket
+	// still rejects the result atomically.
+	sql.WriteString(" AS (SELECT " + bucketNumber + ", mapFromArrays(")
+	sql.WriteString("arrayPushBack(groupArrayIf(" + encoded + ", " + encoded + " != ''), CAST('' AS String)), ")
+	sql.WriteString("arrayPushBack(groupArrayIf(" + mapValue + ", " + encoded + " != ''), ")
+	sql.WriteString("toUInt64(max(" + invalid + " != 0 OR " + collision + " != 0)))) AS " + countMap)
+	sql.WriteString(" FROM " + collapsed + " GROUP BY " + bucketNumber + "), ")
 
 	sql.WriteString(grid)
 	sql.WriteString(" AS (" + ordinalGridSQL(ordinal, bucketNumber) + ") ")
@@ -3378,8 +3852,8 @@ func compileTimechart(
 	sql.WriteString("SELECT " + grid + "." + ordinal + " AS " + ordinal + ", ")
 	sql.WriteString("if(" + grid + "." + ordinal + " = 0, " + domain + ".names, CAST([], 'Array(String)')) AS " + q(TimechartNamesColumn) + ", ")
 	sql.WriteString("arrayMap(name -> ifNull(" + bucketMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(TimechartCountsColumn) + ", ")
-	sql.WriteString("toUInt8(" + validation + "." + invalid + " != 0 OR " + collisions + "." + collision + " != 0) AS " + q(TimechartInvalidColumn))
-	sql.WriteString(" FROM " + grid + " CROSS JOIN " + domain + " CROSS JOIN " + validation + " CROSS JOIN " + collisions)
+	sql.WriteString("toUInt8(ifNull(" + bucketMaps + "." + countMap + "[''], toUInt64(0)) != 0) AS " + q(TimechartInvalidColumn))
+	sql.WriteString(" FROM " + grid + " CROSS JOIN " + domain)
 	sql.WriteString(" LEFT JOIN " + bucketMaps + " ON " + bucketMaps + "." + bucketNumber + " = " + grid + "." + bucketNumber + " ORDER BY " + grid + "." + ordinal + " ASC")
 	sql.WriteString(materializedCTESettingsSQL)
 
@@ -3389,31 +3863,16 @@ func compileTimechart(
 	classifiedDepth := relationalNodeDepth(preparedDepth)
 	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
 	countsDepth := relationalNodeDepth(canonicalizedDepth)
-	topDepth := relationalNodeDepth(countsDepth)
-	topMembershipDepth := relationalNodeDepth(topDepth)
-	collapsedDepth := relationalNodeDepth(countsDepth, topMembershipDepth)
-
-	domainTopBranchDepth := relationalNodeDepth(topDepth)
-	domainNullInputDepth := relationalNodeDepth(countsDepth)
-	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
-	domainOtherInputDepth := relationalNodeDepth(countsDepth, topMembershipDepth)
-	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
-	domainRowsDepth := relationalNodeDepth(
-		domainTopBranchDepth,
-		domainNullBranchDepth,
-		domainOtherBranchDepth,
-	)
+	scoredDepth := relationalNodeDepth(countsDepth)
+	rankedDepth := relationalNodeDepth(scoredDepth)
+	collapsedDepth := relationalNodeDepth(rankedDepth)
+	domainRowsDepth := relationalNodeDepth(collapsedDepth)
 	domainDepth := relationalNodeDepth(domainRowsDepth)
-	collisionInputDepth := relationalNodeDepth(countsDepth)
-	collisionsDepth := relationalNodeDepth(collisionInputDepth)
 	bucketMapsDepth := relationalNodeDepth(collapsedDepth)
-	validationDepth := relationalNodeDepth(countsDepth)
 	gridDepth := relationalNodeDepth()
 	resultDepth := relationalNodeDepth(
 		gridDepth,
 		domainDepth,
-		validationDepth,
-		collisionsDepth,
 		bucketMapsDepth,
 	)
 
@@ -3436,6 +3895,7 @@ func compileTimechart(
 
 func compileSplitValueTimechart(
 	relation compiledRelation,
+	state compileState,
 	args []any,
 	operator *plan.Timechart,
 	valueKind TimechartValueKind,
@@ -3545,8 +4005,8 @@ func compileSplitValueTimechart(
 	sql.WriteString("toUInt8(" + splitExistsSQL + ") AS " + present + ", ")
 	sql.WriteString(splitValueTypeSQL + " AS " + valueType + ", ")
 	sql.WriteString(measureInputSQL + " AS " + measureValues)
-	if hasDescendant {
-		sql.WriteString(", " + q(internalFieldNamesColumn))
+	for _, column := range pivotDescendantSourceColumns(state, splitField) {
+		sql.WriteString(", " + column)
 	}
 	sql.WriteString(" FROM (")
 	sql.WriteString(relation.sql)
@@ -3720,6 +4180,9 @@ func validateTimechartMeasure(operator *plan.Timechart, state compileState) erro
 		return errors.New("compile ClickHouse timechart: operator is required")
 	}
 	measure := operator.Measure
+	if err := validateNonStatsAggregateMeasureMetadata("timechart", measure); err != nil {
+		return err
+	}
 	if measure.Predicate != nil {
 		return errors.New(
 			"compile ClickHouse timechart: aggregate measure contains predicate metadata",
@@ -4320,6 +4783,9 @@ func compileChart(
 	if operator == nil {
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: operator is required")
 	}
+	if err := validateNonStatsAggregateMeasureMetadata("chart", operator.Measure); err != nil {
+		return CompiledQuery{}, err
+	}
 	switch operator.Measure.Function {
 	case plan.AggregateFunctionCountRows, plan.AggregateFunctionCountValues:
 		return compileCountChart(relation, state, args, operator, dynamic, alias)
@@ -4385,6 +4851,9 @@ func compileCountChart(
 		return CompiledQuery{}, errors.New("compile ClickHouse chart: bounded defaults are invalid")
 	}
 	for _, axis := range []plan.FieldRef{operator.Over, operator.SplitBy} {
+		if err := validateCanonicalFieldRef("chart", "axis", axis); err != nil {
+			return CompiledQuery{}, err
+		}
 		if axis.Name == operator.NullLabel || axis.Name == operator.OtherLabel {
 			return CompiledQuery{}, &plan.Diagnostic{
 				Code:    "SPL_UNSUPPORTED_CHART_FIELD_TYPE",
@@ -4498,6 +4967,11 @@ func compileCountChart(
 	counts := q("__os_chart_group_counts")
 	top := q("__os_chart_top")
 	collapsed := q("__os_chart_collapsed")
+	labelGroups := q("__os_chart_label_groups")
+	normalizedGroups := q("__os_chart_normalized_groups")
+	authority := q("__os_chart_authority")
+	labelExpanded := q("__os_chart_label_expanded")
+	expanded := q("__os_chart_expanded")
 	domainRows := q("__os_chart_domain_rows")
 	domain := q("__os_chart_domain")
 	collisions := q("__os_chart_normalization_collisions")
@@ -4525,13 +4999,25 @@ func compileCountChart(
 	occurrenceCount := q("__os_ch_occurrence_count")
 	occurrenceScore := q("__os_ch_occurrence_score")
 	frequency := q("__os_ch_count")
+	collapsedCount := q("__os_ch_collapsed_count")
 	encoded := q("__os_ch_encoded")
 	normalized := q("__os_ch_normalized")
+	groupRow := q("__os_ch_group_row")
+	seriesScore := q("__os_ch_series_score")
+	rowEntries := q("__os_ch_row_entries")
+	labelRecords := q("__os_ch_label_records")
+	authorityValue := q("__os_ch_authority")
+	globalCollision := q("__os_ch_global_collision")
+	rowInvalidEvidence := q("__os_ch_row_invalid_evidence")
+	columnInvalidEvidence := q("__os_ch_column_invalid_evidence")
+	collisionEvidence := q("__os_ch_collision_evidence")
 	sortLabel := q("__os_ch_sort_label")
 	countMap := q("__os_ch_count_map")
+	domainNames := q("__os_ch_domain_names")
 	invalid := q("__os_ch_invalid")
 	collision := q("__os_ch_collision")
 	columnInvalid := q("__os_ch_column_invalid")
+	transportInvalid := q("__os_ch_transport_invalid")
 	ordinal := q(ChartOrdinalColumn)
 
 	// Placeholder order follows CTE nesting, not declaration order. Exact
@@ -4607,8 +5093,8 @@ func compileCountChart(
 	if fieldOccurrenceCount {
 		sql.WriteString(", " + measureInputSQL + " AS " + measureCount)
 	}
-	if rowHasDescendant || splitHasDescendant {
-		sql.WriteString(", " + q(internalFieldNamesColumn))
+	for _, column := range pivotDescendantSourceColumns(state, rowField, splitField) {
+		sql.WriteString(", " + column)
 	}
 	sql.WriteString(" FROM (")
 	sql.WriteString(relation.sql)
@@ -4690,122 +5176,200 @@ func compileCountChart(
 		sql.WriteString("toUInt64(sum(toUInt128(" + occurrenceCount + "))) AS " + frequency)
 		sql.WriteString(" FROM " + counts + " WHERE " + rowEligible + " != 0 AND " + kind + " IN (0, 1) GROUP BY " + row + ", " + encoded + "), ")
 	} else {
-		// Bare count can select and collapse the column axis before its row-keyed
-		// aggregation. This keeps that existing path bounded to the published
-		// series width rather than the raw row/label cross-product.
-		sql.WriteString(labelTotals)
-		sql.WriteString(" AS MATERIALIZED (SELECT " + kind + ", " + label + ", countIf(" + rowEligible + " != 0) AS " + frequency)
-		sql.WriteString(" FROM " + canonicalized + " GROUP BY " + kind + ", " + label + "), ")
+		// Bound the exact raw (row, label) work before any array retains label
+		// state. max_rows_to_group_by therefore fails the whole query at the
+		// executor's 130k chart allowance instead of letting attacker-controlled
+		// label cardinality hide inside an unbounded aggregate array.
+		sql.WriteString(counts)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", " + rowEligible + ", " + kind + ", " + label + ", ")
+		sql.WriteString("max(" + rowInvalid + ") AS " + rowInvalid + ", count() AS " + frequency)
+		sql.WriteString(" FROM " + canonicalized + " GROUP BY " + row + ", " + rowEligible + ", " + kind + ", " + label + "), ")
 
-		sql.WriteString(top)
-		sql.WriteString(" AS MATERIALIZED (SELECT " + label + ", " + frequency + " FROM " + labelTotals)
-		sql.WriteString(" WHERE " + kind + " = 0 AND " + frequency + " > 0 ORDER BY " + frequency + " DESC, " + label + " ASC LIMIT ")
-		sql.WriteString(strconv.FormatUint(uint64(operator.SeriesLimit), 10))
+		// Every array below is downstream of the materialized raw-pair bound. Each
+		// raw group enters exactly one rowEntries array; later arrays only nest
+		// those disjoint arrays and therefore retain at most the raw group count.
+		// Zero-score labels remain in the normalization domain, while only positive
+		// row-eligible UInt128 scores choose the public top ten.
+		sql.WriteString(labelGroups)
+		sql.WriteString(" AS (SELECT " + kind + ", " + label + ", sumIf(toUInt128(" + frequency + "), " + rowEligible + " != 0) AS " + seriesScore + ", ")
+		sql.WriteString("groupArray(tuple(" + row + ", " + rowEligible + ", " + rowInvalid + ", " + frequency + ")) AS " + rowEntries)
+		sql.WriteString(" FROM " + counts + " GROUP BY " + kind + ", " + label + "), ")
+
+		sql.WriteString(normalizedGroups)
+		sql.WriteString(" AS (SELECT " + kind + ", " + splunkSeriesLabelSQL(label) + " AS " + normalized + ", ")
+		sql.WriteString("groupArray(tuple(" + kind + ", " + label + ", " + seriesScore + ", " + rowEntries + ")) AS " + labelRecords + ", ")
+		sql.WriteString("toUInt8(" + kind + " = 0 AND count() > 1) AS " + collisionEvidence)
+		sql.WriteString(" FROM " + labelGroups + " GROUP BY " + kind + ", " + normalized + "), ")
+
+		recordsName := "__os_ch_records"
+		recordName := "__os_ch_record"
+		topName := "__os_ch_top_label_values"
+		collisionName := "__os_ch_collision_flag"
+		recordsAggregate := "arrayFlatten(groupArray(" + labelRecords + "))"
+		positiveRecords := "arrayFilter(" + recordName + " -> " + recordName + ".1 = toUInt8(0) AND " + recordName + ".3 > toUInt128(0), " + recordsName + ")"
+		topRecords := "arraySlice(arraySort(" + recordName + " -> tuple(-toInt256(" + recordName + ".3), " + recordName + ".2), " + positiveRecords + "), 1, " + strconv.FormatUint(uint64(operator.SeriesLimit), 10) + ")"
+		topLabelValues := "arrayMap(" + recordName + " -> " + recordName + ".2, " + topRecords + ")"
+		authorizedRecords := "arrayMap(" + recordName + " -> tuple(" + recordName + ".1, " + recordName + ".4, multiIf(" +
+			recordName + ".1 = toUInt8(1), CAST('1:' AS String), " +
+			recordName + ".1 = toUInt8(0) AND has(" + topName + ", " + recordName + ".2), concat('0:', " + recordName + ".2), " +
+			recordName + ".1 = toUInt8(0), CAST('2:' AS String), CAST('' AS String))), " + recordsName + ")"
+		authorityExpression := "arrayElement(arrayMap((" + recordsName + ", " + collisionName + ") -> arrayElement(arrayMap(" + topName + " -> tuple(" +
+			authorizedRecords + ", " + collisionName + "), [" + topLabelValues + "]), 1), [" + recordsAggregate + "], [toUInt8(maxOrDefault(" + collisionEvidence + ") != 0)]), 1)"
+		sql.WriteString(authority)
+		sql.WriteString(" AS (SELECT " + authorityExpression + " AS " + authorityValue + " FROM " + normalizedGroups + "), ")
+
+		labelRecord := q("__os_ch_label_record")
+		sql.WriteString(labelExpanded)
+		sql.WriteString(" AS (SELECT tupleElement(" + labelRecord + ", 1) AS " + kind + ", tupleElement(" + labelRecord + ", 2) AS " + rowEntries + ", ")
+		sql.WriteString("tupleElement(" + labelRecord + ", 3) AS " + encoded + ", tupleElement(" + authorityValue + ", 2) AS " + globalCollision)
+		sql.WriteString(" FROM " + authority + " ARRAY JOIN tupleElement(" + authorityValue + ", 1) AS " + labelRecord + "), ")
+
+		rowEntry := q("__os_ch_row_entry")
+		sql.WriteString(expanded)
+		sql.WriteString(" AS (SELECT tupleElement(" + rowEntry + ", 1) AS " + row + ", tupleElement(" + rowEntry + ", 2) AS " + rowEligible + ", ")
+		sql.WriteString("tupleElement(" + rowEntry + ", 3) AS " + rowInvalid + ", tupleElement(" + rowEntry + ", 4) AS " + frequency + ", ")
+		sql.WriteString(kind + ", " + encoded + ", " + globalCollision + " FROM " + labelExpanded + " ARRAY JOIN " + rowEntries + " AS " + rowEntry + "), ")
+
+		public := rowEligible + " != 0 AND " + kind + " IN (0, 1)"
+		typedValidationRow := chartValidationRowSQL(rowDatabaseType)
+		sql.WriteString(collapsed)
+		sql.WriteString(" AS (SELECT if(" + public + ", " + row + ", " + typedValidationRow + ") AS " + groupRow + ", ")
+		sql.WriteString("if(" + public + ", " + encoded + ", CAST('' AS String)) AS " + encoded + ", ")
+		sql.WriteString("toUInt64(sum(toUInt128(if(" + public + ", " + frequency + ", 0)))) AS " + collapsedCount + ", ")
+		sql.WriteString("toUInt8(maxIf(" + rowInvalid + ", " + rowEligible + " != 0) > 0) AS " + rowInvalidEvidence + ", ")
+		sql.WriteString("toUInt8(sumIf(toUInt128(" + frequency + "), " + kind + " = 3) > 0) AS " + columnInvalidEvidence + ", ")
+		sql.WriteString("toUInt8(max(" + globalCollision + ") > 0) AS " + collisionEvidence)
+		sql.WriteString(" FROM " + expanded + " GROUP BY " + groupRow + ", " + encoded + "), ")
+	}
+
+	if fieldOccurrenceCount {
+		// Both sentinels probe the materialized label aggregate as ordinary
+		// relations. A scalar subquery would be evaluated during analysis, before
+		// the materialized temporary table exists, and would re-run the whole
+		// scoped scan once per occurrence.
+		domainFrequency := frequency
+		if fieldOccurrenceCount {
+			domainFrequency = rowCount
+		}
+		sql.WriteString(domainRows)
+		sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, " + splunkSeriesLabelSQL(label) + " AS " + sortLabel)
+		sql.WriteString(", concat('0:', " + label + ") AS " + encoded + " FROM " + top)
+		sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " + labelTotals)
+		sql.WriteString(" WHERE " + kind + " = 1 AND " + domainFrequency + " > 0 LIMIT 1)")
+		sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " + labelTotals)
+		sql.WriteString(" WHERE " + kind + " = 0 AND " + domainFrequency + " > 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + top + ") LIMIT 1)), ")
+
+		sql.WriteString(domain)
+		sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
+
+		// Convergence after VALUE normalization is one member of the same label
+		// rule as the empty, invalid-UTF-8, over-long, reserved, and row-name
+		// labels, and every other member is evaluated on the column value's own
+		// presence. The label aggregate carries a kind = 0 group for every ordinary
+		// label any classified input row held, so reading it without the
+		// row-eligible frequency filter keeps the rule presence-independent: two
+		// labels that converge fail the whole command even when only row-ineligible
+		// events carried them, exactly as a reserved label on such an event does.
+		sql.WriteString(collisions)
+		sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS " + collision + " FROM (SELECT " + splunkSeriesLabelSQL(label) + " AS " + normalized)
+		sql.WriteString(" FROM " + labelTotals + " WHERE " + kind + " = 0 GROUP BY " + normalized)
+		sql.WriteString(" HAVING uniqExact(" + label + ") > 1 LIMIT 1)), ")
+
+		// The atomic column-value rejection is row-independent by construction:
+		// the label aggregate carries a kind = 3 group whenever any classified
+		// input row held an unsupported column value, whether or not that row also
+		// carried an eligible row value.
+		sql.WriteString(columnCheck)
+		sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + kind + " = 3)) AS " + columnInvalid + " FROM " + labelTotals + "), ")
+
+		sql.WriteString(rowMaps)
+		sql.WriteString(" AS (SELECT " + row + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + frequency + ")) AS " + countMap)
+		sql.WriteString(" FROM " + collapsed + " GROUP BY " + row + "), ")
+
+		sql.WriteString(validation)
+		sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + rowInvalid + ") > 0) AS " + invalid)
+		sql.WriteString(" FROM " + counts)
+		if fieldOccurrenceCount {
+			// Missing and explicit-null dynamic row values are not chart rows and
+			// therefore cannot invalidate the row domain. Unsupported descendants
+			// remain eligible by construction and still fail atomically.
+			sql.WriteString(" WHERE " + rowEligible + " != 0")
+		}
 		sql.WriteString("), ")
 
-		sql.WriteString(counts)
-		sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", " + kind + ", multiIf(" + kind + " = 1, '1:', " + kind + " = 3, CAST('' AS String), ")
-		sql.WriteString(label + " IN (SELECT " + label + " FROM " + top + "), concat('0:', " + label + "), '2:') AS " + encoded + ", ")
-		sql.WriteString("max(" + rowInvalid + ") AS " + rowInvalid + ", count() AS " + frequency)
-		sql.WriteString(" FROM " + canonicalized + " WHERE " + rowEligible + " != 0 GROUP BY " + row + ", " + kind + ", " + encoded + "), ")
+		// The row axis is data, so its ordinal is assigned server-side from the
+		// declared order. Only the dense ordinal proves that order to the executor;
+		// the row value itself crosses the boundary as an ordinary typed column.
+		sql.WriteString(rowDomain)
+		sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", toUInt64(row_number() OVER (ORDER BY " + rowSortSQL + " ASC) - 1) AS " + ordinal)
+		sql.WriteString(" FROM (SELECT " + row + " FROM " + counts)
+		if fieldOccurrenceCount {
+			sql.WriteString(" WHERE " + rowEligible + " != 0")
+		}
+		sql.WriteString(" GROUP BY " + row + ")) ")
 
-		sql.WriteString(collapsed)
-		sql.WriteString(" AS (SELECT " + row + ", " + encoded + ", sum(" + frequency + ") AS " + frequency)
-		sql.WriteString(" FROM " + counts + " WHERE " + kind + " IN (0, 1) GROUP BY " + row + ", " + encoded + "), ")
+		// A private sentinel carries row-independent validation across an empty row
+		// axis. It is ordered first and rejected by the buffering executor, so the
+		// synthetic row and empty arrays can never become public output.
+		sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", " +
+			q(ChartNamesColumn) + ", " + q(ChartCountsColumn) + ", " +
+			q(ChartInvalidColumn) + " FROM (")
+		sql.WriteString("SELECT " + rowDomain + "." + ordinal + " AS " + ordinal + ", ")
+		sql.WriteString(rowDomain + "." + row + " AS " + q(ChartRowColumn) + ", ")
+		sql.WriteString(domain + ".names AS " + q(ChartNamesColumn) + ", ")
+		sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(ChartCountsColumn) + ", ")
+		sql.WriteString("toUInt8(0) AS " + q(ChartInvalidColumn))
+		sql.WriteString(" FROM " + rowDomain + " CROSS JOIN " + domain)
+		sql.WriteString(" LEFT JOIN " + rowMaps + " ON " + rowMaps + "." + row + " = " + rowDomain + "." + row)
+		// Deterministic, non-truncating overflow: the guard runs during filtering,
+		// before the ordered result is produced, so no partial pivot is published.
+		sql.WriteString(" WHERE throwIf(" + rowDomain + "." + ordinal + " >= " + strconv.FormatUint(uint64(operator.RowLimit), 10) +
+			", '" + ChartRowLimitMarker + "') = 0")
+		sql.WriteString(" UNION ALL SELECT toUInt64(0) AS " + ordinal + ", " +
+			chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn) +
+			", CAST([], 'Array(String)') AS " + q(ChartNamesColumn) +
+			", CAST([], 'Array(UInt64)') AS " + q(ChartCountsColumn) +
+			", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
+			" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
+			" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
+			"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
+			" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
+			q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
+	} else {
+		rawEncodedLabel := "substring(" + encoded + ", 3)"
+		published := encoded + " != '' AND " + collapsedCount + " > 0"
+		domainItem := "tuple(multiIf(" + encoded + " = '1:', toUInt8(1), " + encoded + " = '2:', toUInt8(2), toUInt8(0)), " +
+			"if(startsWith(" + encoded + ", '0:'), " + splunkSeriesLabelSQL(rawEncodedLabel) + ", CAST('' AS String)), " + encoded + ")"
+
+		// Consume the bounded collapsed relation exactly once. Per-row maps are
+		// grouped first; only then do fixed-cardinality windows attach the global
+		// domain and validation evidence to at most one row per public row key.
+		// arrayFlatten sees no more than MaxSeries entries per group, so every
+		// post-collapse array is bounded by 12R+1 rather than raw label input.
+		sql.WriteString(rowMaps)
+		sql.WriteString(" AS (SELECT " + groupRow + ", mapFromArrays(groupArrayIf(" + encoded + ", " + published + "), groupArrayIf(" + collapsedCount + ", " + published + ")) AS " + countMap + ", ")
+		sql.WriteString("arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), arrayDistinct(arrayFlatten(groupArray(groupArrayIf(" + domainItem + ", " + published + ")) OVER ())))) AS " + domainNames + ", ")
+		sql.WriteString("toUInt8(max(max(" + rowInvalidEvidence + ")) OVER () != 0) AS " + invalid + ", ")
+		sql.WriteString("toUInt8(max(max(" + collisionEvidence + ")) OVER () != 0) AS " + collision + ", ")
+		sql.WriteString("toUInt8(max(max(" + columnInvalidEvidence + ")) OVER () != 0) AS " + columnInvalid)
+		sql.WriteString(" FROM " + collapsed + " GROUP BY " + groupRow + "), ")
+
+		bareRowSortSQL := groupRow
+		if rowDynamic || rowField.numericSort {
+			bareRowSortSQL = dynamicSortValue(groupRow, false)
+		}
+		sql.WriteString(rowDomain)
+		sql.WriteString(" AS (SELECT *, toUInt8(" + invalid + " != 0 OR " + collision + " != 0 OR " + columnInvalid + " != 0) AS " + transportInvalid + ", ")
+		sql.WriteString("toUInt64(row_number() OVER (ORDER BY " + bareRowSortSQL + " ASC) - 1) AS " + ordinal)
+		sql.WriteString(" FROM " + rowMaps + " WHERE length(mapKeys(" + countMap + ")) > 0 OR " + invalid + " != 0 OR " + collision + " != 0 OR " + columnInvalid + " != 0) ")
+
+		sql.WriteString("SELECT " + ordinal + ", " + groupRow + " AS " + q(ChartRowColumn) + ", ")
+		sql.WriteString("if(" + transportInvalid + " != 0, CAST([], 'Array(String)'), " + domainNames + ") AS " + q(ChartNamesColumn) + ", ")
+		sql.WriteString("if(" + transportInvalid + " != 0, CAST([], 'Array(UInt64)'), arrayMap(name -> ifNull(" + countMap + "[name], toUInt64(0)), " + domainNames + ")) AS " + q(ChartCountsColumn) + ", ")
+		sql.WriteString(transportInvalid + " AS " + q(ChartInvalidColumn) + " FROM " + rowDomain)
+		sql.WriteString(" WHERE throwIf(if(" + transportInvalid + " = 0, " + ordinal + " >= " + strconv.FormatUint(uint64(operator.RowLimit), 10) + ", 0), '" + ChartRowLimitMarker + "') = 0")
+		sql.WriteString(" AND (" + transportInvalid + " = 0 OR " + ordinal + " = 0) ORDER BY " + q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
 	}
-
-	// Both sentinels probe the materialized label aggregate as ordinary
-	// relations. A scalar subquery would be evaluated during analysis, before
-	// the materialized temporary table exists, and would re-run the whole
-	// scoped scan once per occurrence.
-	domainFrequency := frequency
-	if fieldOccurrenceCount {
-		domainFrequency = rowCount
-	}
-	sql.WriteString(domainRows)
-	sql.WriteString(" AS (SELECT toUInt8(0) AS sort_kind, " + splunkSeriesLabelSQL(label) + " AS " + sortLabel)
-	sql.WriteString(", concat('0:', " + label + ") AS " + encoded + " FROM " + top)
-	sql.WriteString(" UNION ALL SELECT toUInt8(1), CAST('' AS String), CAST('1:' AS String) FROM (SELECT 1 FROM " + labelTotals)
-	sql.WriteString(" WHERE " + kind + " = 1 AND " + domainFrequency + " > 0 LIMIT 1)")
-	sql.WriteString(" UNION ALL SELECT toUInt8(2), CAST('' AS String), CAST('2:' AS String) FROM (SELECT 1 FROM " + labelTotals)
-	sql.WriteString(" WHERE " + kind + " = 0 AND " + domainFrequency + " > 0 AND " + label + " NOT IN (SELECT " + label + " FROM " + top + ") LIMIT 1)), ")
-
-	sql.WriteString(domain)
-	sql.WriteString(" AS (SELECT arrayMap(item -> item.3, arraySort(item -> (item.1, item.2), groupArray((sort_kind, " + sortLabel + ", " + encoded + ")))) AS names FROM " + domainRows + "), ")
-
-	// Convergence after VALUE normalization is one member of the same label
-	// rule as the empty, invalid-UTF-8, over-long, reserved, and row-name
-	// labels, and every other member is evaluated on the column value's own
-	// presence. The label aggregate carries a kind = 0 group for every ordinary
-	// label any classified input row held, so reading it without the
-	// row-eligible frequency filter keeps the rule presence-independent: two
-	// labels that converge fail the whole command even when only row-ineligible
-	// events carried them, exactly as a reserved label on such an event does.
-	sql.WriteString(collisions)
-	sql.WriteString(" AS (SELECT toUInt8(count() > 0) AS " + collision + " FROM (SELECT " + splunkSeriesLabelSQL(label) + " AS " + normalized)
-	sql.WriteString(" FROM " + labelTotals + " WHERE " + kind + " = 0 GROUP BY " + normalized)
-	sql.WriteString(" HAVING uniqExact(" + label + ") > 1 LIMIT 1)), ")
-
-	// The atomic column-value rejection is row-independent by construction:
-	// the label aggregate carries a kind = 3 group whenever any classified
-	// input row held an unsupported column value, whether or not that row also
-	// carried an eligible row value.
-	sql.WriteString(columnCheck)
-	sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + kind + " = 3)) AS " + columnInvalid + " FROM " + labelTotals + "), ")
-
-	sql.WriteString(rowMaps)
-	sql.WriteString(" AS (SELECT " + row + ", mapFromArrays(groupArray(" + encoded + "), groupArray(" + frequency + ")) AS " + countMap)
-	sql.WriteString(" FROM " + collapsed + " GROUP BY " + row + "), ")
-
-	sql.WriteString(validation)
-	sql.WriteString(" AS (SELECT toUInt8(maxOrDefault(" + rowInvalid + ") > 0) AS " + invalid)
-	sql.WriteString(" FROM " + counts)
-	if fieldOccurrenceCount {
-		// Missing and explicit-null dynamic row values are not chart rows and
-		// therefore cannot invalidate the row domain. Unsupported descendants
-		// remain eligible by construction and still fail atomically.
-		sql.WriteString(" WHERE " + rowEligible + " != 0")
-	}
-	sql.WriteString("), ")
-
-	// The row axis is data, so its ordinal is assigned server-side from the
-	// declared order. Only the dense ordinal proves that order to the executor;
-	// the row value itself crosses the boundary as an ordinary typed column.
-	sql.WriteString(rowDomain)
-	sql.WriteString(" AS MATERIALIZED (SELECT " + row + ", toUInt64(row_number() OVER (ORDER BY " + rowSortSQL + " ASC) - 1) AS " + ordinal)
-	sql.WriteString(" FROM (SELECT " + row + " FROM " + counts)
-	if fieldOccurrenceCount {
-		sql.WriteString(" WHERE " + rowEligible + " != 0")
-	}
-	sql.WriteString(" GROUP BY " + row + ")) ")
-
-	// A private sentinel carries row-independent validation across an empty row
-	// axis. It is ordered first and rejected by the buffering executor, so the
-	// synthetic row and empty arrays can never become public output.
-	sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", " +
-		q(ChartNamesColumn) + ", " + q(ChartCountsColumn) + ", " +
-		q(ChartInvalidColumn) + " FROM (")
-	sql.WriteString("SELECT " + rowDomain + "." + ordinal + " AS " + ordinal + ", ")
-	sql.WriteString(rowDomain + "." + row + " AS " + q(ChartRowColumn) + ", ")
-	sql.WriteString(domain + ".names AS " + q(ChartNamesColumn) + ", ")
-	sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(ChartCountsColumn) + ", ")
-	sql.WriteString("toUInt8(0) AS " + q(ChartInvalidColumn))
-	sql.WriteString(" FROM " + rowDomain + " CROSS JOIN " + domain)
-	sql.WriteString(" LEFT JOIN " + rowMaps + " ON " + rowMaps + "." + row + " = " + rowDomain + "." + row)
-	// Deterministic, non-truncating overflow: the guard runs during filtering,
-	// before the ordered result is produced, so no partial pivot is published.
-	sql.WriteString(" WHERE throwIf(" + rowDomain + "." + ordinal + " >= " + strconv.FormatUint(uint64(operator.RowLimit), 10) +
-		", '" + ChartRowLimitMarker + "') = 0")
-	sql.WriteString(" UNION ALL SELECT toUInt64(0) AS " + ordinal + ", " +
-		chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn) +
-		", CAST([], 'Array(String)') AS " + q(ChartNamesColumn) +
-		", CAST([], 'Array(UInt64)') AS " + q(ChartCountsColumn) +
-		", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
-		" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
-		" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
-		"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
-		" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
-		q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
 	sql.WriteString(materializedCTESettingsSQL)
 
 	sourceDepth := relationalNodeDepth(relation.depth)
@@ -4813,58 +5377,62 @@ func compileCountChart(
 	kindedDepth := relationalNodeDepth(preparedDepth)
 	classifiedDepth := relationalNodeDepth(kindedDepth)
 	canonicalizedDepth := relationalNodeDepth(classifiedDepth)
-	var labelTotalsDepth, countsDepth, collapsedDepth int
+	var resultDepth int
 	if fieldOccurrenceCount {
-		countsDepth = relationalNodeDepth(canonicalizedDepth)
-		labelTotalsDepth = relationalNodeDepth(countsDepth)
-	} else {
-		labelTotalsDepth = relationalNodeDepth(canonicalizedDepth)
-	}
-	topDepth := relationalNodeDepth(labelTotalsDepth)
-	topMembershipDepth := relationalNodeDepth(topDepth)
-	if fieldOccurrenceCount {
-		collapsedDepth = relationalNodeDepth(countsDepth, topMembershipDepth)
-	} else {
-		countsDepth = relationalNodeDepth(canonicalizedDepth, topMembershipDepth)
-		collapsedDepth = relationalNodeDepth(countsDepth)
-	}
+		countsDepth := relationalNodeDepth(canonicalizedDepth)
+		labelTotalsDepth := relationalNodeDepth(countsDepth)
+		topDepth := relationalNodeDepth(labelTotalsDepth)
+		topMembershipDepth := relationalNodeDepth(topDepth)
+		collapsedDepth := relationalNodeDepth(countsDepth, topMembershipDepth)
 
-	domainTopBranchDepth := relationalNodeDepth(topDepth)
-	domainNullInputDepth := relationalNodeDepth(labelTotalsDepth)
-	domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
-	domainOtherInputDepth := relationalNodeDepth(labelTotalsDepth, topMembershipDepth)
-	domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
-	domainRowsDepth := relationalNodeDepth(
-		domainTopBranchDepth,
-		domainNullBranchDepth,
-		domainOtherBranchDepth,
-	)
-	domainDepth := relationalNodeDepth(domainRowsDepth)
-	collisionInputDepth := relationalNodeDepth(labelTotalsDepth)
-	collisionsDepth := relationalNodeDepth(collisionInputDepth)
-	columnCheckDepth := relationalNodeDepth(labelTotalsDepth)
-	rowMapsDepth := relationalNodeDepth(collapsedDepth)
-	validationDepth := relationalNodeDepth(countsDepth)
-	rowDomainInputDepth := relationalNodeDepth(countsDepth)
-	rowDomainDepth := relationalNodeDepth(rowDomainInputDepth)
-	regularResultDepth := relationalNodeDepth(
-		rowDomainDepth,
-		domainDepth,
-		rowMapsDepth,
-	)
-	validationSentinelDepth := relationalNodeDepth(
-		validationDepth,
-		collisionsDepth,
-		columnCheckDepth,
-	)
-	unionDepth := relationalNodeDepth(regularResultDepth, validationSentinelDepth)
-	resultDepth := relationalNodeDepth(unionDepth)
+		domainTopBranchDepth := relationalNodeDepth(topDepth)
+		domainNullInputDepth := relationalNodeDepth(labelTotalsDepth)
+		domainNullBranchDepth := relationalNodeDepth(domainNullInputDepth)
+		domainOtherInputDepth := relationalNodeDepth(labelTotalsDepth, topMembershipDepth)
+		domainOtherBranchDepth := relationalNodeDepth(domainOtherInputDepth)
+		domainRowsDepth := relationalNodeDepth(
+			domainTopBranchDepth,
+			domainNullBranchDepth,
+			domainOtherBranchDepth,
+		)
+		domainDepth := relationalNodeDepth(domainRowsDepth)
+		collisionInputDepth := relationalNodeDepth(labelTotalsDepth)
+		collisionsDepth := relationalNodeDepth(collisionInputDepth)
+		columnCheckDepth := relationalNodeDepth(labelTotalsDepth)
+		rowMapsDepth := relationalNodeDepth(collapsedDepth)
+		validationDepth := relationalNodeDepth(countsDepth)
+		rowDomainInputDepth := relationalNodeDepth(countsDepth)
+		rowDomainDepth := relationalNodeDepth(rowDomainInputDepth)
+		regularResultDepth := relationalNodeDepth(
+			rowDomainDepth,
+			domainDepth,
+			rowMapsDepth,
+		)
+		validationSentinelDepth := relationalNodeDepth(
+			validationDepth,
+			collisionsDepth,
+			columnCheckDepth,
+		)
+		unionDepth := relationalNodeDepth(regularResultDepth, validationSentinelDepth)
+		resultDepth = relationalNodeDepth(unionDepth)
+	} else {
+		countsDepth := relationalNodeDepth(canonicalizedDepth)
+		labelGroupsDepth := relationalNodeDepth(countsDepth)
+		normalizedGroupsDepth := relationalNodeDepth(labelGroupsDepth)
+		authorityDepth := relationalNodeDepth(normalizedGroupsDepth)
+		labelExpandedDepth := relationalNodeDepth(authorityDepth)
+		expandedDepth := relationalNodeDepth(labelExpandedDepth)
+		collapsedDepth := relationalNodeDepth(expandedDepth)
+		rowMapsDepth := relationalNodeDepth(collapsedDepth)
+		rowDomainDepth := relationalNodeDepth(rowMapsDepth)
+		resultDepth = relationalNodeDepth(rowDomainDepth)
+	}
 
 	compiled := CompiledQuery{
 		SQL:          sql.String(),
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
-		sourceFanout: eventStatsChartSourceFanout,
+		sourceFanout: eventStatsOrdinarySourceFanout,
 		Chart: &ChartOutput{
 			RowField:        rowName,
 			RowKind:         rowKind,
@@ -4874,9 +5442,6 @@ func compileCountChart(
 			MaxLabelBytes:   maxTimechartLabelBytes,
 			ValueKind:       ChartValueKindCount,
 		},
-	}
-	if fieldOccurrenceCount {
-		compiled.sourceFanout = eventStatsOrdinarySourceFanout
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
 }
@@ -5191,8 +5756,8 @@ func compileNumericChart(
 	sql.WriteString("toUInt8(" + splitExistsSQL + ") AS " + present + ", ")
 	sql.WriteString(splitTypeSQL + " AS " + valueType + ", ")
 	sql.WriteString(measureInputSQL + " AS " + measureValues)
-	if rowHasDescendant || splitHasDescendant {
-		sql.WriteString(", " + q(internalFieldNamesColumn))
+	for _, column := range pivotDescendantSourceColumns(state, rowField, splitField) {
+		sql.WriteString(", " + column)
 	}
 	sql.WriteString(" FROM (" + relation.sql + ") AS " + alias + "), ")
 
@@ -5437,14 +6002,25 @@ type compileState struct {
 	preAggregateValidationArgs       []any
 	preAggregateColumns              []string
 	preAggregateArgs                 []any
+	preAggregateGroupExpansions      []compiledStatsGroupExpansion
+	preAggregateSparklineWindows     []string
 	preAggregateListWindowColumns    []string
 	preAggregateListCandidateColumns []string
+	postAggregateSparklines          []compiledStatsSparklineMeasure
 	postAggregateChronological       []compiledChronologicalMeasure
 	postAggregateScalarExtrema       []compiledScalarExtremaMeasure
 	postAggregateExactStrings        []compiledExactStringMeasure
 	postAggregateDistinctCounts      []compiledDistinctCount
 	postAggregateOrderedStrings      []compiledOrderedStringMeasure
+	deferredChronologicalValidation  []string
 	chronologicalBarriers            []compiledChronologicalBarrier
+}
+
+type compiledStatsSparklineMeasure struct {
+	recordsColumn string
+	outputColumn  string
+	spec          statsSparklineBucketSpec
+	missing       statsSparklineMissingValue
 }
 
 // compileContext contains immutable query-wide values and shared resource
@@ -5459,7 +6035,12 @@ type compileContext struct {
 	unixTimestampBudget               compiledUnixTimestampBudget
 	concatenationBudget               compiledConcatenationBudget
 	stringConversionBudget            compiledStringConversionBudget
+	arithmeticOperators               int
+	membershipCandidates              int
+	atomicResult                      bool
 	searchStartUnix                   int64
+	searchEarliest                    time.Time
+	searchLatest                      time.Time
 	searchTimezone                    string
 	searchLocalMinimumUnixNanoseconds int64
 	searchTimezoneChecked             bool
@@ -5645,28 +6226,37 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 }
 
 type fieldState struct {
-	valueSQL                  string
-	exactNumericKeySQL        string
-	dynamicNumericEligibleSQL string
-	maxStringBytes            uint64
-	textEligibleSQL           string
-	rawTextIndexEligible      bool
-	dynamicDomain             dynamicScalarDomain
-	numericIntegral           bool
-	mvCountOneOrNull          bool
-	dynamicTypeSQL            string
-	storedTypeSQL             string
-	existsSQL                 string
-	existsArgs                []any
-	descendantSQL             string
-	descendantArgs            []any
-	kind                      fieldKind
-	caseSensitive             bool
-	numberType                string
-	numericSort               bool
-	canonicalTime             bool
-	alwaysNull                bool
-	materializeForPredicate   bool
+	valueSQL                   string
+	exactNumericKeySQL         string
+	dynamicNumericEligibleSQL  string
+	maxStringBytes             uint64
+	textEligibleSQL            string
+	rawTextIndexEligible       bool
+	dynamicDomain              dynamicScalarDomain
+	numericIntegral            bool
+	mvCountOneOrNull           bool
+	mvSortedLexicographic      bool
+	dynamicTypeSQL             string
+	storedTypeSQL              string
+	existsSQL                  string
+	existsArgs                 []any
+	descendantSQL              string
+	descendantArgs             []any
+	storedPath                 storedPathAuthority
+	relativeFieldNamesSQL      string
+	relativeFieldTypesSQL      string
+	fieldMetadataVersionSQL    string
+	kind                       fieldKind
+	caseSensitive              bool
+	numberType                 string
+	numericSort                bool
+	canonicalTime              bool
+	alwaysNull                 bool
+	ieeeComparison             bool
+	materializeForPredicate    bool
+	flatMultivalueDelimiter    string
+	hasFlatMultivalueDelimiter bool
+	statsSparkline             bool
 }
 
 type compiledSortKey struct {
@@ -5768,6 +6358,8 @@ func compileScan(
 			{valueSQL: quoteIdentifier(internalSortSourceIdentityColumn), descending: true},
 		},
 	}
+	state.context.searchEarliest = scan.Earliest
+	state.context.searchLatest = scan.Latest
 	return "SELECT " + strings.Join(selects, ", ") + " FROM " + quoteIdentifier(database) + "." + quoteIdentifier(table) + " WHERE " + strings.Join(where, " AND "), state, args, nil
 }
 
@@ -5904,6 +6496,8 @@ func compileExpressionWithRawTextIndex(
 		return compileComparison(expression, field)
 	case *plan.EvalComparisonExpression:
 		return compileEvalComparison(expression, state)
+	case *plan.MembershipExpression:
+		return compileMembershipExpression(expression, state)
 	case *plan.ScalarPredicateExpression:
 		if expression == nil || expression.Value == nil {
 			return "", nil, errors.New("compile ClickHouse predicate: missing Boolean scalar expression")
@@ -5947,6 +6541,15 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 	var visitScalar func(plan.ScalarExpression)
 	visitScalar = func(expression plan.ScalarExpression) {
 		switch expression := expression.(type) {
+		case *plan.ScalarUnaryExpression:
+			if expression != nil {
+				visitScalar(expression.Operand)
+			}
+		case *plan.ScalarBinaryExpression:
+			if expression != nil {
+				visitScalar(expression.Left)
+				visitScalar(expression.Right)
+			}
 		case *plan.ScalarFieldExpression:
 			if expression != nil {
 				add(expression.Field.Name)
@@ -5999,6 +6602,13 @@ func predicateMaterializationFields(expression plan.Expression, state compileSta
 			if expression != nil {
 				visitScalar(expression.Left)
 				visitScalar(expression.Right)
+			}
+		case *plan.MembershipExpression:
+			if expression != nil {
+				visitScalar(expression.Value)
+				for _, candidate := range expression.Candidates {
+					visitScalar(candidate)
+				}
 			}
 		case *plan.ScalarPredicateExpression:
 			if expression != nil {
@@ -6097,6 +6707,11 @@ func repeatedExactNumericPredicateFields(
 			if rightField && (leftField || numericLiteral(expression.Left)) {
 				add(rightReference)
 			}
+		case *plan.MembershipExpression:
+			// Membership binds its left value and every candidate once before
+			// comparing them, so it never benefits from the separate repeated-key
+			// projection used by independent comparison leaves.
+			return
 		}
 	}
 	visit(expression)
@@ -6242,6 +6857,18 @@ func predicateFieldSourceRange(
 	var visitScalar func(plan.ScalarExpression) (spl.Range, bool)
 	visitScalar = func(expression plan.ScalarExpression) (spl.Range, bool) {
 		switch expression := expression.(type) {
+		case *plan.ScalarUnaryExpression:
+			if expression != nil {
+				return visitScalar(expression.Operand)
+			}
+		case *plan.ScalarBinaryExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, found := visitScalar(expression.Left); found {
+				return sourceRange, true
+			}
+			return visitScalar(expression.Right)
 		case *plan.ScalarFieldExpression:
 			if expression != nil && expression.Field.Name == name {
 				return expression.Field.Range, true
@@ -6303,6 +6930,18 @@ func predicateFieldSourceRange(
 				return sourceRange, true
 			}
 			return visitScalar(expression.Right)
+		case *plan.MembershipExpression:
+			if expression == nil {
+				return spl.Range{}, false
+			}
+			if sourceRange, found := visitScalar(expression.Value); found {
+				return sourceRange, true
+			}
+			for _, candidate := range expression.Candidates {
+				if sourceRange, found := visitScalar(candidate); found {
+					return sourceRange, true
+				}
+			}
 		case *plan.ScalarPredicateExpression:
 			if expression != nil {
 				return visitScalar(expression.Value)
@@ -6441,16 +7080,46 @@ type compiledScalar struct {
 	dynamicDomain             dynamicScalarDomain
 	numericIntegral           bool
 	mvCountOneOrNull          bool
+	mvSortedLexicographic     bool
 	dynamicTypeSQL            string
 	storedTypeSQL             string
 	descendantSQL             string
 	descendantArgs            []any
+	storedPath                storedPathAuthority
+	relativeFieldNamesSQL     string
+	relativeFieldTypesSQL     string
+	fieldMetadataVersionSQL   string
 	kind                      fieldKind
 	numberType                string
 	literal                   *plan.Value
 	alwaysNull                bool
 	comparisonAtomic          bool
-	materializeForPredicate   bool
+	// ieeeComparison marks values produced by v0.2 arithmetic. Comparisons
+	// involving one of these values apply the release's explicit NaN rules
+	// instead of inheriting ClickHouse's ordered-NaN behavior.
+	ieeeComparison          bool
+	materializeForPredicate bool
+}
+
+// bindCompiledScalarForComparison replaces the authored value and presence
+// expressions with compiler-owned bindings. Comparison-derived SQL caches must
+// be cleared together because each cache was computed from the authored value;
+// semantic metadata such as kind, literal, Dynamic domain, and IEEE behavior is
+// deliberately retained for comparison dispatch.
+func bindCompiledScalarForComparison(
+	value compiledScalar,
+	valueSQL string,
+	existsSQL string,
+) compiledScalar {
+	value.valueSQL = valueSQL
+	value.valueArgs = nil
+	value.existsSQL = existsSQL
+	value.existsArgs = nil
+	value.dynamicTypeSQL = ""
+	value.exactNumericKeySQL = ""
+	value.dynamicNumericEligibleSQL = ""
+	value.comparisonAtomic = true
+	return value
 }
 
 func booleanScalarConsumerError(operation string) error {
@@ -6537,6 +7206,10 @@ func saturatingStringByteSum(left, right uint64) uint64 {
 
 func compileScalarValue(expression plan.ScalarExpression, state compileState) (compiledScalar, error) {
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		return compileArithmeticUnary(expression, state)
+	case *plan.ScalarBinaryExpression:
+		return compileArithmeticBinary(expression, state)
 	case *plan.ScalarFieldExpression:
 		if expression == nil {
 			return compiledScalar{}, errors.New("compile ClickHouse scalar expression: missing field expression")
@@ -6634,6 +7307,8 @@ func compileScalarValue(expression plan.ScalarExpression, state compileState) (c
 			return compileIntegralRoundingScalar(expression, state, "floor")
 		case plan.ScalarFunctionMVCount:
 			return compileMVCountScalar(expression, state)
+		case plan.ScalarFunctionMVSort:
+			return compileMVSortScalar(expression, state)
 		case plan.ScalarFunctionMatch:
 			return compileMatchScalar(expression, state)
 		case plan.ScalarFunctionLike:
@@ -8109,6 +8784,7 @@ func compileCoalesceScalar(
 
 	values := make([]compiledScalar, 0, len(expression.Arguments))
 	alwaysNull := true
+	ieeeComparison := false
 	materializeForPredicate := false
 	sqlBytes := len("coalesce()")
 	for _, argument := range expression.Arguments {
@@ -8121,6 +8797,7 @@ func compileCoalesceScalar(
 		}
 		values = append(values, value)
 		alwaysNull = alwaysNull && compiledScalarIsAlwaysNull(value)
+		ieeeComparison = ieeeComparison || value.ieeeComparison
 		materializeForPredicate = materializeForPredicate || value.materializeForPredicate
 		sqlBytes += len(value.valueSQL) + len(", ")
 		if err := validateCoalesceScalarSQLBytes(sqlBytes, expression.Range); err != nil {
@@ -8161,6 +8838,7 @@ func compileCoalesceScalar(
 		kind:                    kind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
+		ieeeComparison:          ieeeComparison,
 		materializeForPredicate: materializeForPredicate,
 	}, nil
 }
@@ -8344,6 +9022,7 @@ func compileCaseScalar(
 	conditionArgs := make([][]any, 0, len(expression.Branches))
 	values := make([]compiledScalar, 0, len(expression.Branches))
 	alwaysNull := true
+	ieeeComparison := false
 	materializeForPredicate := false
 	sqlBytes := len("multiIf()")
 	for _, branch := range expression.Branches {
@@ -8371,6 +9050,7 @@ func compileCaseScalar(
 		conditionArgs = append(conditionArgs, compiledConditionArgs)
 		values = append(values, compiledValue)
 		alwaysNull = alwaysNull && compiledScalarIsAlwaysNull(compiledValue)
+		ieeeComparison = ieeeComparison || compiledValue.ieeeComparison
 		materializeForPredicate = materializeForPredicate ||
 			len(predicateMaterializationFields(branch.Condition, state)) > 0 ||
 			compiledValue.materializeForPredicate
@@ -8422,6 +9102,7 @@ func compileCaseScalar(
 		kind:                    kind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
+		ieeeComparison:          ieeeComparison,
 		materializeForPredicate: materializeForPredicate,
 	}, nil
 }
@@ -8604,6 +9285,7 @@ func compileIfScalar(expression *plan.ScalarIfExpression, state compileState) (c
 		kind:            kind,
 		numberType:      numberType,
 		alwaysNull:      alwaysNull,
+		ieeeComparison:  trueValue.ieeeComparison || falseValue.ieeeComparison,
 		materializeForPredicate: len(predicateMaterializationFields(expression.Condition, state)) > 0 ||
 			trueValue.materializeForPredicate ||
 			falseValue.materializeForPredicate,
@@ -8673,6 +9355,8 @@ func validateIfConditionStructure(expression plan.Expression) error {
 			return err
 		}
 		return nil
+	case *plan.MembershipExpression:
+		return validateMembershipStructure("if", expression)
 	case *plan.ScalarPredicateExpression:
 		if nilScalarExpression(expression.Value) {
 			return errors.New("compile ClickHouse if: scalar condition is missing")
@@ -8732,6 +9416,8 @@ func validateCaseConditionStructure(expression plan.Expression) error {
 			return err
 		}
 		return validatePredicateScalarStructure(expression.Right)
+	case *plan.MembershipExpression:
+		return validateMembershipStructure("case", expression)
 	case *plan.ScalarPredicateExpression:
 		if nilScalarExpression(expression.Value) {
 			return errors.New("compile ClickHouse case: scalar condition is missing")
@@ -8752,8 +9438,10 @@ func validateCaseConditionStructure(expression plan.Expression) error {
 }
 
 type predicateComplexityValidator struct {
-	nodes  int
-	active map[any]struct{}
+	nodes                int
+	arithmeticOperators  int
+	membershipCandidates int
+	active               map[any]struct{}
 }
 
 func validateCompiledPredicateComplexity(expression plan.Expression) error {
@@ -8795,6 +9483,37 @@ func (v *predicateComplexityValidator) validateExpression(
 			return err
 		}
 		return v.validateScalar(expression.Right, depth+1)
+	case *plan.MembershipExpression:
+		if len(expression.Candidates) < 1 ||
+			len(expression.Candidates) > spl.MaximumMembershipCandidates {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"membership requires 1 through %d candidates",
+					spl.MaximumMembershipCandidates,
+				),
+				expression.Range,
+			)
+		}
+		if v.membershipCandidates >
+			spl.MaximumMembershipCandidatesPerQuery-len(expression.Candidates) {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"predicate contains more than %d membership candidates",
+					spl.MaximumMembershipCandidatesPerQuery,
+				),
+				expression.Range,
+			)
+		}
+		v.membershipCandidates += len(expression.Candidates)
+		if err := v.validateScalar(expression.Value, depth+1); err != nil {
+			return err
+		}
+		for _, candidate := range expression.Candidates {
+			if err := v.validateScalar(candidate, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
 	case *plan.ScalarPredicateExpression:
 		return v.validateScalar(expression.Value, depth+1)
 	default:
@@ -8815,6 +9534,48 @@ func (v *predicateComplexityValidator) validateScalar(
 	defer v.leave(expression)
 
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		if !validCompiledScalarUnaryOp(expression.Op) {
+			return errors.New("compile ClickHouse predicate: invalid unary arithmetic operator")
+		}
+		v.arithmeticOperators++
+		if v.arithmeticOperators > spl.MaximumArithmeticOperatorsPerQuery {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"predicate contains more than %d arithmetic operators",
+					spl.MaximumArithmeticOperatorsPerQuery,
+				),
+				expression.Range,
+			)
+		}
+		if compiledUnaryArithmeticChainLength(expression) > spl.MaximumUnaryOperatorChain {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"unary arithmetic nesting exceeds %d operators",
+					spl.MaximumUnaryOperatorChain,
+				),
+				expression.Range,
+			)
+		}
+		return v.validateScalar(expression.Operand, depth+1)
+	case *plan.ScalarBinaryExpression:
+		if !validCompiledScalarBinaryOp(expression.Op) {
+			return errors.New("compile ClickHouse predicate: invalid binary arithmetic operator")
+		}
+		v.arithmeticOperators++
+		if v.arithmeticOperators > spl.MaximumArithmeticOperatorsPerQuery {
+			return predicateComplexityError(
+				fmt.Sprintf(
+					"predicate contains more than %d arithmetic operators",
+					spl.MaximumArithmeticOperatorsPerQuery,
+				),
+				expression.Range,
+			)
+		}
+		if err := v.validateScalar(expression.Left, depth+1); err != nil {
+			return err
+		}
+		return v.validateScalar(expression.Right, depth+1)
 	case *plan.ScalarCallExpression:
 		if len(expression.Arguments) > maxCompiledPredicateNodes {
 			return predicateComplexityError(
@@ -8919,6 +9680,19 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 		return errors.New("compile ClickHouse predicate: missing scalar expression")
 	}
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		if !validCompiledScalarUnaryOp(expression.Op) {
+			return errors.New("compile ClickHouse predicate: invalid unary arithmetic operator")
+		}
+		return validatePredicateScalarStructure(expression.Operand)
+	case *plan.ScalarBinaryExpression:
+		if !validCompiledScalarBinaryOp(expression.Op) {
+			return errors.New("compile ClickHouse predicate: invalid binary arithmetic operator")
+		}
+		if err := validatePredicateScalarStructure(expression.Left); err != nil {
+			return err
+		}
+		return validatePredicateScalarStructure(expression.Right)
 	case *plan.ScalarFieldExpression:
 		return validateCanonicalFieldRef("predicate", "scalar", expression.Field)
 	case *plan.ScalarLiteralExpression:
@@ -8948,7 +9722,8 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 			plan.ScalarFunctionLength,
 			plan.ScalarFunctionCeil,
 			plan.ScalarFunctionFloor,
-			plan.ScalarFunctionMVCount:
+			plan.ScalarFunctionMVCount,
+			plan.ScalarFunctionMVSort:
 			expectedArguments = 1
 			hasExactArity = true
 		case plan.ScalarFunctionMatch:
@@ -9165,6 +9940,8 @@ func validatePredicateScalarStructure(expression plan.ScalarExpression) error {
 
 func scalarExpressionReturnsBoolean(expression plan.ScalarExpression) bool {
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression, *plan.ScalarBinaryExpression:
+		return false
 	case *plan.ScalarCallExpression:
 		if expression == nil {
 			return false
@@ -9237,6 +10014,8 @@ func nilPlanExpression(expression plan.Expression) bool {
 		return expression == nil
 	case *plan.EvalComparisonExpression:
 		return expression == nil
+	case *plan.MembershipExpression:
+		return expression == nil
 	case *plan.ScalarPredicateExpression:
 		return expression == nil
 	default:
@@ -9249,6 +10028,10 @@ func nilScalarExpression(expression plan.ScalarExpression) bool {
 		return true
 	}
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression:
+		return expression == nil
+	case *plan.ScalarBinaryExpression:
+		return expression == nil
 	case *plan.ScalarFieldExpression:
 		return expression == nil
 	case *plan.ScalarLiteralExpression:
@@ -9428,6 +10211,21 @@ func compiledScalarPresenceSQL(value compiledScalar) (string, []any) {
 	existsSQL := value.existsSQL
 	if existsSQL == "" {
 		existsSQL = "1"
+	}
+	if value.kind == fieldKindStringArray {
+		// Fixed multivalue results are physically non-null Array(String), but
+		// their canonical empty representation is logically absent in SPL.
+		// Calculated arrays without a separate existence predicate must test
+		// their members instead of treating isNotNull([]) as presence. Projected
+		// arrays already carry a notEmpty(alias) existence predicate and retain
+		// the ordinary physical-null check below.
+		if existsSQL == "0" {
+			return "0", nil
+		}
+		if existsSQL == "1" {
+			return "notEmpty(" + value.valueSQL + ")",
+				append([]any(nil), value.valueArgs...)
+		}
 	}
 	presenceSQL := "((" + existsSQL + ") AND isNotNull(" + value.valueSQL + "))"
 	args := make([]any, 0, len(value.existsArgs)+len(value.valueArgs)+len(value.descendantArgs))
@@ -10679,6 +11477,7 @@ func compileNumericRoundingInput(
 			numberType:      "Float64",
 			numericIntegral: numericIntegral,
 			alwaysNull:      true,
+			ieeeComparison:  input.ieeeComparison,
 		}, nil
 	}
 	if input.numericIntegral &&
@@ -10797,8 +11596,155 @@ func compileNumericRoundingInput(
 		kind:                    resultKind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
+		ieeeComparison:          input.ieeeComparison,
 		materializeForPredicate: input.materializeForPredicate,
 	}, nil
+}
+
+func compileMVSortScalar(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+) (compiledScalar, error) {
+	input, err := compileUnaryNonBooleanScalarInput(expression, state, "mvsort")
+	if err != nil {
+		return compiledScalar{}, err
+	}
+	if input.mvSortedLexicographic {
+		return input, nil
+	}
+
+	emptyArray := "CAST([], 'Array(String)')"
+	if input.alwaysNull {
+		return compiledScalar{
+			valueSQL:              emptyArray,
+			existsSQL:             "0",
+			kind:                  fieldKindStringArray,
+			alwaysNull:            true,
+			mvSortedLexicographic: true,
+		}, nil
+	}
+
+	valueSQL := ""
+	valueArgs := append([]any(nil), input.valueArgs...)
+	resultKind := fieldKindStringArray
+	dynamicDomain := dynamicScalarDomainAny
+	switch input.kind {
+	case fieldKindStringArray:
+		valueSQL = "arrayElement(arrayMap(values -> " +
+			boundedMVSortStringArraySQL(
+				"values",
+				emptyArray,
+				"Array(String)",
+				false,
+			) +
+			", [" + input.valueSQL + "]), 1)"
+	case fieldKindDynamic:
+		nullDynamic := "CAST(NULL AS Dynamic)"
+		stringArray := "arrayElement(arrayMap(values -> " +
+			boundedMVSortStringArraySQL(
+				"values",
+				nullDynamic,
+				"Dynamic",
+				true,
+			) +
+			", [dynamicElement(value, 'Array(String)')]), 1)"
+		dynamicArray := "arrayElement(arrayMap(values -> " +
+			boundedMVSortDynamicArraySQL("values", nullDynamic) +
+			", [dynamicElement(value, 'Array(Dynamic)')]), 1)"
+		body := "multiIf(" +
+			"dynamicType(value) = 'Array(String)', " + stringArray + ", " +
+			"dynamicType(value) = 'Array(Dynamic)', " + dynamicArray + ", " +
+			nullDynamic + ")"
+		bound := "arrayElement(arrayMap(value -> " + body +
+			", [" + input.valueSQL + "]), 1)"
+		existsSQL := input.existsSQL
+		if existsSQL == "" {
+			existsSQL = "1"
+		}
+		if existsSQL == "1" {
+			valueSQL = bound
+		} else {
+			valueSQL = "if(" + existsSQL + ", " + bound + ", " + nullDynamic + ")"
+			valueArgs = append(
+				append([]any(nil), input.existsArgs...),
+				input.valueArgs...,
+			)
+		}
+		resultKind = fieldKindDynamic
+		dynamicDomain = dynamicScalarDomainText
+	case fieldKindInvalid:
+		valueSQL = emptyArray
+		valueArgs = nil
+	default:
+		return compiledScalar{}, &plan.Diagnostic{
+			Code:    "SPL_UNSUPPORTED_MVSORT_VALUE_TYPE",
+			Message: "mvsort requires a multivalue String input",
+			Range:   expression.Range,
+		}
+	}
+	if len(valueSQL) > maxCompiledMVSortScalarSQLBytes {
+		return compiledScalar{}, &plan.Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"mvsort scalar SQL exceeds %d bytes",
+				maxCompiledMVSortScalarSQLBytes,
+			),
+			Range: expression.Range,
+		}
+	}
+	return compiledScalar{
+		valueSQL:                valueSQL,
+		valueArgs:               valueArgs,
+		maxStringBytes:          input.maxStringBytes,
+		existsSQL:               "1",
+		dynamicDomain:           dynamicDomain,
+		kind:                    resultKind,
+		mvSortedLexicographic:   true,
+		materializeForPredicate: input.materializeForPredicate,
+	}, nil
+}
+
+func boundedMVSortStringArraySQL(
+	valuesSQL string,
+	invalidSQL string,
+	resultType string,
+	requireNonEmpty bool,
+) string {
+	conditions := []string{
+		"length(" + valuesSQL + ") <= toUInt64(" +
+			strconv.FormatUint(uint64(MaximumMVSortValues), 10) + ")",
+		stringArrayPayloadBytesSQL(valuesSQL) + " <= toUInt128(" +
+			strconv.FormatUint(uint64(MaximumMVSortBytes), 10) + ")",
+		"arrayAll(element -> isValidUTF8(element), " + valuesSQL + ")",
+	}
+	if requireNonEmpty {
+		conditions = append([]string{"notEmpty(" + valuesSQL + ")"}, conditions...)
+	}
+	return "if(" + strings.Join(conditions, " AND ") +
+		", CAST(arraySort(" + valuesSQL + ") AS " + resultType +
+		"), " + invalidSQL + ")"
+}
+
+func boundedMVSortDynamicArraySQL(valuesSQL string, invalidSQL string) string {
+	nullableStringValue := "dynamicElement(element, 'String')"
+	stringValue := "assumeNotNull(" + nullableStringValue + ")"
+	overLimitBytes := strconv.FormatUint(uint64(MaximumMVSortBytes)+1, 10)
+	payloadBytes := "arrayFold((bytes, element) -> bytes + toUInt128(ifNull(" +
+		"length(" + nullableStringValue + "), toUInt64(" + overLimitBytes + "))), " +
+		valuesSQL + ", toUInt128(0))"
+	conditions := []string{
+		"notEmpty(" + valuesSQL + ")",
+		"length(" + valuesSQL + ") <= toUInt64(" +
+			strconv.FormatUint(uint64(MaximumMVSortValues), 10) + ")",
+		"arrayAll(element -> dynamicType(element) = 'String', " + valuesSQL + ")",
+		payloadBytes + " <= toUInt128(" +
+			strconv.FormatUint(uint64(MaximumMVSortBytes), 10) + ")",
+		"arrayAll(element -> isValidUTF8(ifNull(" + nullableStringValue +
+			", '')), " + valuesSQL + ")",
+	}
+	stringsSQL := "arrayMap(element -> " + stringValue + ", " + valuesSQL + ")"
+	return "if(" + strings.Join(conditions, " AND ") +
+		", CAST(arraySort(" + stringsSQL + ") AS Dynamic), " + invalidSQL + ")"
 }
 
 func compileMVCountScalar(
@@ -11021,6 +11967,12 @@ func scalarQuotedStringLiteral(expression plan.ScalarExpression) (string, bool) 
 
 func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) bool {
 	switch expression := expression.(type) {
+	case *plan.ScalarUnaryExpression, *plan.ScalarBinaryExpression:
+		// Arithmetic has a fixed numeric result. Its operands are validated by
+		// arithmetic lowering so a nested Boolean receives the source-located
+		// unsupported-arithmetic diagnostic instead of being mistaken for a
+		// directly assigned Boolean result here.
+		return false
 	case *plan.ScalarCallExpression:
 		if expression == nil {
 			return false
@@ -11055,10 +12007,33 @@ func scalarExpressionMayReturnBooleanFunction(expression plan.ScalarExpression) 
 	}
 }
 
-func extendCompileState(state compileState, output plan.FieldRef, value compiledScalar) compileState {
+func extendCompileState(
+	state compileState,
+	output plan.FieldRef,
+	value compiledScalar,
+	retainDirectSidecars bool,
+) (compileState, error) {
+	if err := validateKnowledgeFieldSidecars(
+		value.relativeFieldNamesSQL,
+		value.relativeFieldTypesSQL,
+		value.fieldMetadataVersionSQL,
+	); err != nil {
+		return compileState{}, fmt.Errorf(
+			"compile ClickHouse extend output %q: %w",
+			output.Name,
+			err,
+		)
+	}
+	if !retainDirectSidecars {
+		value.storedPath = storedPathAuthority{}
+		value.relativeFieldNamesSQL = ""
+		value.relativeFieldTypesSQL = ""
+		value.fieldMetadataVersionSQL = ""
+	}
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)
 	for name, field := range state.visible {
+		field.storedPath = field.storedPath.clone()
 		next.visible[name] = field
 	}
 	next.publicOrder = append([]string(nil), state.publicOrder...)
@@ -11083,22 +12058,27 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 		existsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
 	}
 	field := fieldState{
-		valueSQL:         quoteIdentifier(output.Name),
-		maxStringBytes:   value.maxStringBytes,
-		textEligibleSQL:  value.textEligibleSQL,
-		dynamicDomain:    value.dynamicDomain,
-		numericIntegral:  value.numericIntegral,
-		mvCountOneOrNull: value.mvCountOneOrNull,
-		existsSQL:        existsSQL,
-		descendantSQL:    value.descendantSQL,
-		descendantArgs:   append([]any(nil), value.descendantArgs...),
-		storedTypeSQL:    value.storedTypeSQL,
-		kind:             value.kind,
+		valueSQL:                quoteIdentifier(output.Name),
+		maxStringBytes:          value.maxStringBytes,
+		textEligibleSQL:         value.textEligibleSQL,
+		dynamicDomain:           value.dynamicDomain,
+		numericIntegral:         value.numericIntegral,
+		mvCountOneOrNull:        value.mvCountOneOrNull,
+		mvSortedLexicographic:   value.mvSortedLexicographic,
+		existsSQL:               existsSQL,
+		descendantSQL:           value.descendantSQL,
+		descendantArgs:          append([]any(nil), value.descendantArgs...),
+		storedTypeSQL:           value.storedTypeSQL,
+		relativeFieldNamesSQL:   value.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:   value.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL: value.fieldMetadataVersionSQL,
+		kind:                    value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
 		caseSensitive:           false,
 		numberType:              value.numberType,
 		alwaysNull:              value.alwaysNull,
+		ieeeComparison:          value.ieeeComparison,
 		materializeForPredicate: value.materializeForPredicate,
 	}
 	if value.kind == fieldKindDynamic {
@@ -11106,7 +12086,7 @@ func extendCompileState(state compileState, output plan.FieldRef, value compiled
 	}
 	next.visible[output.Name] = field
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
-	return next
+	return next, nil
 }
 
 type compiledExtractCapture struct {
@@ -11120,10 +12100,16 @@ type compiledExtractCapture struct {
 	textProjection       string
 	descendantColumn     string
 	descendantProjection string
+	namesColumn          string
+	namesProjection      string
+	typesColumn          string
+	typesProjection      string
+	metadataColumn       string
+	metadataProjection   string
 }
 
 func extractPrivateColumns(captures []compiledExtractCapture) []string {
-	columns := make([]string, 0, len(captures)*4)
+	columns := make([]string, 0, len(captures)*7)
 	for _, capture := range captures {
 		columns = append(columns, capture.existsColumn, capture.typeColumn)
 		if capture.textColumn != "" {
@@ -11131,6 +12117,14 @@ func extractPrivateColumns(captures []compiledExtractCapture) []string {
 		}
 		if capture.descendantColumn != "" {
 			columns = append(columns, capture.descendantColumn)
+		}
+		if capture.namesColumn != "" {
+			columns = append(
+				columns,
+				capture.namesColumn,
+				capture.typesColumn,
+				capture.metadataColumn,
+			)
 		}
 	}
 	return columns
@@ -11231,6 +12225,17 @@ func compileExtract(
 		if resolveErr != nil {
 			return compiledRelation{}, compileState{}, nil, 0, resolveErr
 		}
+		if err := validateKnowledgeFieldSidecars(
+			previous.relativeFieldNamesSQL,
+			previous.relativeFieldTypesSQL,
+			previous.fieldMetadataVersionSQL,
+		); err != nil {
+			return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf(
+				"compile ClickHouse extract prior output %q: %w",
+				capture.Output.Name,
+				err,
+			)
+		}
 
 		capturedValue := "arrayElement(" + groupsAlias + ", " + strconv.Itoa(int(capture.Group)) + ")"
 		valueSQL := ""
@@ -11295,6 +12300,30 @@ func compileExtract(
 				previous.descendantSQL + ")) AS " + descendantColumn
 			descendantArgs = append(descendantArgs, previous.descendantArgs...)
 		}
+		namesColumn := ""
+		namesProjection := ""
+		typesColumn := ""
+		typesProjection := ""
+		metadataColumn := ""
+		metadataProjection := ""
+		if previousKnown && previous.relativeFieldNamesSQL != "" {
+			namesColumn = quoteIdentifier(fmt.Sprintf("__os_rex_names_%d_%d", stage, index))
+			typesColumn = quoteIdentifier(fmt.Sprintf("__os_rex_types_%d_%d", stage, index))
+			metadataColumn = quoteIdentifier(fmt.Sprintf(
+				"__os_rex_metadata_version_%d_%d",
+				stage,
+				index,
+			))
+			namesProjection = "if(" + matchedAlias + " != 0, " +
+				knowledgeEmptyRelativeFieldNamesSQL() + ", " +
+				previous.relativeFieldNamesSQL + ") AS " + namesColumn
+			typesProjection = "if(" + matchedAlias + " != 0, " +
+				knowledgeEmptyRelativeFieldTypesSQL() + ", " +
+				previous.relativeFieldTypesSQL + ") AS " + typesColumn
+			metadataProjection = "toUInt8(if(" + matchedAlias +
+				" != 0, 0, " + previous.fieldMetadataVersionSQL + ")) AS " +
+				metadataColumn
+		}
 		captures = append(captures, compiledExtractCapture{
 			planCapture:          capture,
 			valueSQL:             valueSQL,
@@ -11306,6 +12335,12 @@ func compileExtract(
 			textProjection:       textProjection,
 			descendantColumn:     descendantColumn,
 			descendantProjection: descendantProjection,
+			namesColumn:          namesColumn,
+			namesProjection:      namesProjection,
+			typesColumn:          typesColumn,
+			typesProjection:      typesProjection,
+			metadataColumn:       metadataColumn,
+			metadataProjection:   metadataProjection,
 		})
 
 		delete(next.blocked, capture.Output.Name)
@@ -11318,13 +12353,16 @@ func compileExtract(
 			maxStringBytes = max(maxStringBytes, fieldStateStringByteBound(previous))
 		}
 		field := fieldState{
-			valueSQL:        output,
-			maxStringBytes:  maxStringBytes,
-			textEligibleSQL: textColumn,
-			existsSQL:       existsAlias,
-			storedTypeSQL:   typeAlias,
-			descendantSQL:   descendantColumn,
-			kind:            kind,
+			valueSQL:                output,
+			maxStringBytes:          maxStringBytes,
+			textEligibleSQL:         textColumn,
+			existsSQL:               existsAlias,
+			storedTypeSQL:           typeAlias,
+			descendantSQL:           descendantColumn,
+			relativeFieldNamesSQL:   namesColumn,
+			relativeFieldTypesSQL:   typesColumn,
+			fieldMetadataVersionSQL: metadataColumn,
+			kind:                    kind,
 			// A capture named index is calculated data and never regains the
 			// physical scan selector's case or authorization semantics.
 			caseSensitive: false,
@@ -11344,6 +12382,9 @@ func compileExtract(
 	typeExpressions := make([]string, 0, len(captures))
 	textExpressions := make([]string, 0, len(captures))
 	descendantExpressions := make([]string, 0, len(captures))
+	namesExpressions := make([]string, 0, len(captures))
+	typesExpressions := make([]string, 0, len(captures))
+	metadataExpressions := make([]string, 0, len(captures))
 	for _, capture := range captures {
 		valueByName[capture.planCapture.Output.Name] = capture.valueSQL
 		existenceExpressions = append(existenceExpressions, capture.existsProjection)
@@ -11353,6 +12394,11 @@ func compileExtract(
 		}
 		if capture.descendantProjection != "" {
 			descendantExpressions = append(descendantExpressions, capture.descendantProjection)
+		}
+		if capture.namesProjection != "" {
+			namesExpressions = append(namesExpressions, capture.namesProjection)
+			typesExpressions = append(typesExpressions, capture.typesProjection)
+			metadataExpressions = append(metadataExpressions, capture.metadataProjection)
 		}
 	}
 	liveOldPrivateColumns := livePrivateColumns(state.privateColumns, next.visible)
@@ -11384,6 +12430,9 @@ func compileExtract(
 	projection = append(projection, typeExpressions...)
 	projection = append(projection, textExpressions...)
 	projection = append(projection, descendantExpressions...)
+	projection = append(projection, namesExpressions...)
+	projection = append(projection, typesExpressions...)
+	projection = append(projection, metadataExpressions...)
 	outerAlias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
 	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" + relation.sql + ") AS " + outerAlias
 	relation = relation.selectFrom(outputFragment, operator.Range)
@@ -11950,6 +12999,17 @@ func compileExtractJSON(
 	if err != nil {
 		return compiledRelation{}, compileState{}, nil, 0, err
 	}
+	if err := validateKnowledgeFieldSidecars(
+		previous.relativeFieldNamesSQL,
+		previous.relativeFieldTypesSQL,
+		previous.fieldMetadataVersionSQL,
+	); err != nil {
+		return compiledRelation{}, compileState{}, nil, 0, fmt.Errorf(
+			"compile ClickHouse spath prior output %q: %w",
+			operator.Output.Name,
+			err,
+		)
+	}
 	previousValue := "CAST(NULL AS Dynamic)"
 	previousExists := "0"
 	var existenceArgs, typeArgs []any
@@ -11999,6 +13059,28 @@ func compileExtractJSON(
 			previous.descendantSQL + ")) AS " + descendantAlias
 		descendantArgs = append(descendantArgs, previous.descendantArgs...)
 	}
+	namesAlias := ""
+	namesProjection := ""
+	typesAlias := ""
+	typesProjection := ""
+	metadataAlias := ""
+	metadataProjection := ""
+	if previousKnown && previous.relativeFieldNamesSQL != "" {
+		namesAlias = quoteIdentifier(fmt.Sprintf("__os_spath_names_%d", stage))
+		typesAlias = quoteIdentifier(fmt.Sprintf("__os_spath_types_%d", stage))
+		metadataAlias = quoteIdentifier(fmt.Sprintf(
+			"__os_spath_metadata_version_%d",
+			stage,
+		))
+		namesProjection = "if(" + matchedAlias + " != 0, " +
+			knowledgeEmptyRelativeFieldNamesSQL() + ", " +
+			previous.relativeFieldNamesSQL + ") AS " + namesAlias
+		typesProjection = "if(" + matchedAlias + " != 0, " +
+			knowledgeEmptyRelativeFieldTypesSQL() + ", " +
+			previous.relativeFieldTypesSQL + ") AS " + typesAlias
+		metadataProjection = "toUInt8(if(" + matchedAlias + " != 0, 0, " +
+			previous.fieldMetadataVersionSQL + ")) AS " + metadataAlias
+	}
 	outputValue := "if(" + matchedAlias + " != 0, " + valueAlias + ", " + previousValue + ")"
 
 	next := cloneCompileState(state)
@@ -12022,6 +13104,9 @@ func compileExtractJSON(
 		storedTypeSQL:           typeAlias,
 		existsSQL:               existsAlias,
 		descendantSQL:           descendantAlias,
+		relativeFieldNamesSQL:   namesAlias,
+		relativeFieldTypesSQL:   typesAlias,
+		fieldMetadataVersionSQL: metadataAlias,
 		kind:                    fieldKindDynamic,
 		caseSensitive:           false,
 		materializeForPredicate: sourceMayExtract || previous.materializeForPredicate,
@@ -12034,6 +13119,14 @@ func compileExtractJSON(
 	}
 	if descendantAlias != "" {
 		next.privateColumns = append(next.privateColumns, descendantAlias)
+	}
+	if namesAlias != "" {
+		next.privateColumns = append(
+			next.privateColumns,
+			namesAlias,
+			typesAlias,
+			metadataAlias,
+		)
 	}
 	projection := make([]string, 0, len(next.visible)+8)
 	for _, name := range orderedVisibleNames(next) {
@@ -12064,6 +13157,14 @@ func compileExtractJSON(
 	}
 	if descendantProjection != "" {
 		projection = append(projection, descendantProjection)
+	}
+	if namesProjection != "" {
+		projection = append(
+			projection,
+			namesProjection,
+			typesProjection,
+			metadataProjection,
+		)
 	}
 	outputFragment := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
 		relation.sql + ") AS " + quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
@@ -12184,6 +13285,17 @@ func compileRenameAssignment(assignment plan.RenameAssignment, state compileStat
 			alwaysNull: true,
 		}
 	}
+	if err := validateKnowledgeFieldSidecars(
+		source.relativeFieldNamesSQL,
+		source.relativeFieldTypesSQL,
+		source.fieldMetadataVersionSQL,
+	); err != nil {
+		return nil, compileState{}, false, fmt.Errorf(
+			"compile ClickHouse rename source %q: %w",
+			assignment.Source.Name,
+			err,
+		)
+	}
 
 	next := cloneCompileState(state)
 	delete(next.visible, assignment.Source.Name)
@@ -12221,6 +13333,7 @@ func cloneCompileState(state compileState) compileState {
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)
 	for name, field := range state.visible {
+		field.storedPath = field.storedPath.clone()
 		next.visible[name] = field
 	}
 	next.publicOrder = append([]string(nil), state.publicOrder...)
@@ -12261,6 +13374,10 @@ func cloneCompileState(state compileState) compileState {
 		[]compiledOrderedStringMeasure(nil),
 		state.postAggregateOrderedStrings...,
 	)
+	next.deferredChronologicalValidation = append(
+		[]string(nil),
+		state.deferredChronologicalValidation...,
+	)
 	next.chronologicalBarriers = append(
 		[]compiledChronologicalBarrier(nil),
 		state.chronologicalBarriers...,
@@ -12292,24 +13409,32 @@ func renamePublicOrder(current []string, source, destination string, sourceIsPub
 func projectedRenameField(source fieldState, destination string) fieldState {
 	value := quoteIdentifier(destination)
 	result := fieldState{
-		valueSQL:             value,
-		maxStringBytes:       source.maxStringBytes,
-		textEligibleSQL:      source.textEligibleSQL,
-		rawTextIndexEligible: source.rawTextIndexEligible,
-		dynamicDomain:        source.dynamicDomain,
-		numericIntegral:      source.numericIntegral,
-		storedTypeSQL:        source.storedTypeSQL,
-		existsSQL:            rewriteExistenceForProjection(source, destination),
-		existsArgs:           append([]any(nil), source.existsArgs...),
-		descendantSQL:        source.descendantSQL,
-		descendantArgs:       append([]any(nil), source.descendantArgs...),
-		kind:                 source.kind,
+		valueSQL:                   value,
+		maxStringBytes:             source.maxStringBytes,
+		flatMultivalueDelimiter:    source.flatMultivalueDelimiter,
+		hasFlatMultivalueDelimiter: source.hasFlatMultivalueDelimiter,
+		statsSparkline:             source.statsSparkline,
+		textEligibleSQL:            source.textEligibleSQL,
+		rawTextIndexEligible:       source.rawTextIndexEligible,
+		dynamicDomain:              source.dynamicDomain,
+		numericIntegral:            source.numericIntegral,
+		mvSortedLexicographic:      source.mvSortedLexicographic,
+		storedTypeSQL:              source.storedTypeSQL,
+		existsSQL:                  rewriteExistenceForProjection(source, destination),
+		existsArgs:                 append([]any(nil), source.existsArgs...),
+		descendantSQL:              source.descendantSQL,
+		descendantArgs:             append([]any(nil), source.descendantArgs...),
+		relativeFieldNamesSQL:      source.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:      source.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL:    source.fieldMetadataVersionSQL,
+		kind:                       source.kind,
 		// A field renamed to index is calculated pipeline data, not the
 		// authorization-constrained physical index selector.
 		caseSensitive:           false,
 		numberType:              source.numberType,
 		numericSort:             source.numericSort,
 		alwaysNull:              source.alwaysNull,
+		ieeeComparison:          source.ieeeComparison,
 		materializeForPredicate: source.materializeForPredicate,
 	}
 	if source.kind == fieldKindDynamic {
@@ -12391,7 +13516,10 @@ func livePrivateColumns(columns []string, visible map[string]fieldState) []strin
 	for _, column := range columns {
 		for _, field := range visible {
 			if field.existsSQL == column || field.storedTypeSQL == column ||
-				field.textEligibleSQL == column || field.descendantSQL == column {
+				field.textEligibleSQL == column || field.descendantSQL == column ||
+				field.relativeFieldNamesSQL == column ||
+				field.relativeFieldTypesSQL == column ||
+				field.fieldMetadataVersionSQL == column {
 				live = append(live, column)
 				break
 			}
@@ -12424,6 +13552,10 @@ func appendPrivateEventProjection(projection []string, state compileState) []str
 	if state.rexCapturedBytesSQL != "" {
 		privateColumns = append(privateColumns, state.rexCapturedBytesSQL)
 	}
+	privateColumns = append(
+		privateColumns,
+		state.deferredChronologicalValidation...,
+	)
 	for _, key := range state.order {
 		privateColumns = append(privateColumns, key.valueSQL)
 	}
@@ -12481,6 +13613,42 @@ func compileComparisonScalar(expression plan.ScalarExpression, state compileStat
 }
 
 func evalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
+	if !left.ieeeComparison && !right.ieeeComparison {
+		return evalComparisonCoreWithoutIEEE(left, right, operator)
+	}
+
+	originalLeft := left
+	originalRight := right
+	left = bindCompiledScalarForComparison(left, "__os_ieee_left", "1")
+	right = bindCompiledScalarForComparison(right, "__os_ieee_right", "1")
+
+	core, coreArgs := evalComparisonCoreWithoutIEEE(left, right, operator)
+	if len(coreArgs) != 0 {
+		panic("IEEE comparison over bound scalar retained arguments")
+	}
+	nanTerms := make([]string, 0, 2)
+	if term := scalarNaNPredicateSQL(left); term != "" {
+		nanTerms = append(nanTerms, term)
+	}
+	if term := scalarNaNPredicateSQL(right); term != "" {
+		nanTerms = append(nanTerms, term)
+	}
+	if len(nanTerms) > 0 {
+		nanResult := "CAST(0 AS Nullable(Bool))"
+		if operator == "!=" {
+			nanResult = "CAST(1 AS Nullable(Bool))"
+		}
+		core = "if((" + strings.Join(nanTerms, " OR ") + "), " +
+			nanResult + ", " + core + ")"
+	}
+	return bindSQLExpressions(
+		[]string{"__os_ieee_left", "__os_ieee_right"},
+		[]string{originalLeft.valueSQL, originalRight.valueSQL},
+		core,
+	), comparisonValueArgs(originalLeft, originalRight)
+}
+
+func evalComparisonCoreWithoutIEEE(left, right compiledScalar, operator string) (string, []any) {
 	if comparisonOperatorIsOrdered(operator) && (left.kind == fieldKindBool || right.kind == fieldKindBool) {
 		return "CAST(NULL AS Nullable(Bool))", nil
 	}
@@ -12511,6 +13679,19 @@ func evalComparisonCore(left, right compiledScalar, operator string) (string, []
 		rightSQL = stringScalarSQL(right)
 	}
 	return leftSQL + " " + operator + " " + rightSQL, comparisonValueArgs(left, right)
+}
+
+func scalarNaNPredicateSQL(value compiledScalar) string {
+	switch value.kind {
+	case fieldKindNumber:
+		return "ifNull(isNaN(toFloat64(" + value.valueSQL + ")), 0)"
+	case fieldKindDynamic:
+		typeSQL := dynamicScalarTypeSQL(value)
+		return "(" + typeSQL + " LIKE 'Float%' AND ifNull(isNaN(" +
+			"accurateCastOrNull(" + value.valueSQL + ", 'Float64')), 0))"
+	default:
+		return ""
+	}
 }
 
 func dynamicTextEvalComparisonCore(left, right compiledScalar, operator string) (string, []any) {
@@ -13400,13 +14581,19 @@ func compiledScalarFromField(field fieldState) compiledScalar {
 		dynamicDomain:             field.dynamicDomain,
 		numericIntegral:           field.numericIntegral,
 		mvCountOneOrNull:          field.mvCountOneOrNull,
+		mvSortedLexicographic:     field.mvSortedLexicographic,
 		dynamicTypeSQL:            field.dynamicTypeSQL,
 		storedTypeSQL:             field.storedTypeSQL,
 		descendantSQL:             field.descendantSQL,
 		descendantArgs:            append([]any(nil), field.descendantArgs...),
+		storedPath:                field.storedPath.clone(),
+		relativeFieldNamesSQL:     field.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:     field.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL:   field.fieldMetadataVersionSQL,
 		kind:                      field.kind,
 		numberType:                field.numberType,
 		alwaysNull:                field.alwaysNull,
+		ieeeComparison:            field.ieeeComparison,
 		comparisonAtomic:          true,
 		materializeForPredicate:   field.materializeForPredicate,
 	}
@@ -13508,21 +14695,26 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 	if len(field.Path) == 0 {
 		return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: dynamic path is empty", field.Name)
 	}
-	value := quoteIdentifier(internalFieldsColumn)
-	for _, segment := range field.Path {
-		if segment == "" {
-			return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: dynamic path has empty segment", field.Name)
-		}
-		value += "." + quoteIdentifier(eventfields.EncodePhysicalPathSegment(segment))
+	storedPath, err := mintStoredPathAuthority(field.Path)
+	if err != nil {
+		return fieldState{}, false, fmt.Errorf("compile ClickHouse field %q: %w", field.Name, err)
 	}
+	if storedPath.normalizedExactPath != field.Name {
+		return fieldState{}, false, fmt.Errorf(
+			"compile ClickHouse field %q: dynamic path metadata disagrees with its name",
+			field.Name,
+		)
+	}
+	value := storedPath.valueSQL()
 	return fieldState{
 		valueSQL:       value,
 		dynamicTypeSQL: "dynamicType(" + value + ")",
 		existsSQL:      "has(" + quoteIdentifier(internalFieldNamesColumn) + ", ?)",
-		existsArgs:     []any{eventfields.NormalizeDynamicPath(field.Path)},
+		existsArgs:     []any{storedPath.normalizedExactPath},
 		descendantSQL: "arrayExists(name -> startsWith(name, ?), " +
 			quoteIdentifier(internalFieldNamesColumn) + ")",
-		descendantArgs: []any{eventfields.NormalizeDynamicPath(field.Path) + "."},
+		descendantArgs: []any{storedPath.normalizedDescendantPrefix},
+		storedPath:     storedPath,
 		kind:           fieldKindDynamic,
 	}, true, nil
 }
@@ -13608,6 +14800,17 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 				alwaysNull: true,
 			}
 		}
+		if err := validateKnowledgeFieldSidecars(
+			compiled.relativeFieldNamesSQL,
+			compiled.relativeFieldTypesSQL,
+			compiled.fieldMetadataVersionSQL,
+		); err != nil {
+			return nil, compileState{}, nil, fmt.Errorf(
+				"compile ClickHouse projection field %q: %w",
+				name,
+				err,
+			)
+		}
 		publicName := quoteIdentifier(name)
 		if compiled.valueSQL == publicName {
 			projection = append(projection, publicName)
@@ -13616,24 +14819,31 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		}
 		next.visible[name] = fieldState{
 			valueSQL: publicName, maxStringBytes: compiled.maxStringBytes,
-			textEligibleSQL:         compiled.textEligibleSQL,
-			rawTextIndexEligible:    compiled.rawTextIndexEligible,
-			dynamicDomain:           compiled.dynamicDomain,
-			numericIntegral:         compiled.numericIntegral,
-			mvCountOneOrNull:        compiled.mvCountOneOrNull,
-			dynamicTypeSQL:          compiled.dynamicTypeSQL,
-			storedTypeSQL:           compiled.storedTypeSQL,
-			existsSQL:               rewriteExistenceForProjection(compiled, name),
-			existsArgs:              append([]any(nil), compiled.existsArgs...),
-			descendantSQL:           compiled.descendantSQL,
-			descendantArgs:          append([]any(nil), compiled.descendantArgs...),
-			kind:                    compiled.kind,
-			caseSensitive:           compiled.caseSensitive,
-			numberType:              compiled.numberType,
-			numericSort:             compiled.numericSort,
-			canonicalTime:           compiled.canonicalTime,
-			alwaysNull:              compiled.alwaysNull,
-			materializeForPredicate: compiled.materializeForPredicate,
+			flatMultivalueDelimiter:    compiled.flatMultivalueDelimiter,
+			hasFlatMultivalueDelimiter: compiled.hasFlatMultivalueDelimiter,
+			statsSparkline:             compiled.statsSparkline,
+			textEligibleSQL:            compiled.textEligibleSQL,
+			rawTextIndexEligible:       compiled.rawTextIndexEligible,
+			dynamicDomain:              compiled.dynamicDomain,
+			numericIntegral:            compiled.numericIntegral,
+			mvCountOneOrNull:           compiled.mvCountOneOrNull,
+			mvSortedLexicographic:      compiled.mvSortedLexicographic,
+			dynamicTypeSQL:             compiled.dynamicTypeSQL,
+			storedTypeSQL:              compiled.storedTypeSQL,
+			existsSQL:                  rewriteExistenceForProjection(compiled, name),
+			existsArgs:                 append([]any(nil), compiled.existsArgs...),
+			descendantSQL:              compiled.descendantSQL,
+			descendantArgs:             append([]any(nil), compiled.descendantArgs...),
+			relativeFieldNamesSQL:      compiled.relativeFieldNamesSQL,
+			relativeFieldTypesSQL:      compiled.relativeFieldTypesSQL,
+			fieldMetadataVersionSQL:    compiled.fieldMetadataVersionSQL,
+			kind:                       compiled.kind,
+			caseSensitive:              compiled.caseSensitive,
+			numberType:                 compiled.numberType,
+			numericSort:                compiled.numericSort,
+			canonicalTime:              compiled.canonicalTime,
+			alwaysNull:                 compiled.alwaysNull,
+			materializeForPredicate:    compiled.materializeForPredicate,
 		}
 		next.publicOrder = append(next.publicOrder, name)
 	}
@@ -13805,6 +15015,9 @@ func validateStreamAggregate(
 		return plan.FieldRef{}, errors.New(
 			"compile ClickHouse streamstats: operator is missing",
 		)
+	}
+	if err := validateNonStatsAggregateMeasureMetadata("streamstats", operator.Measure); err != nil {
+		return plan.FieldRef{}, err
 	}
 	if len(operator.GroupBy) > spl.MaximumStatsGroupFields {
 		return plan.FieldRef{}, fmt.Errorf(
@@ -14053,6 +15266,765 @@ func streamStatsFrameSQL(includeCurrent bool, window uint64) string {
 	}
 	return "ROWS BETWEEN " + strconv.FormatUint(window, 10) +
 		" PRECEDING AND 1 PRECEDING"
+}
+
+func chronologicalAggregateFunction(function plan.AggregateFunction) bool {
+	return function == plan.AggregateFunctionEarliest ||
+		function == plan.AggregateFunctionLatest
+}
+
+func newChronologicalAggregateOutput(state compileState, name string) bool {
+	if name == "" || slices.Contains(state.publicOrder, name) {
+		return false
+	}
+	_, visible := state.visible[name]
+	return !visible
+}
+
+func independentChronologicalAggregateOutputs(
+	state compileState,
+	firstInput, secondInput, firstOutput, secondOutput string,
+) bool {
+	if !newChronologicalAggregateOutput(state, firstOutput) ||
+		!newChronologicalAggregateOutput(state, secondOutput) ||
+		firstOutput == secondOutput {
+		return false
+	}
+	// Restrict fusion to pure sibling publications. In particular, neither
+	// measure may observe a value authored by the other logical stage, and an
+	// output may not replace a source field whose pre-replacement value the
+	// sibling consumes.
+	for _, output := range []string{firstOutput, secondOutput} {
+		if output == firstInput || output == secondInput {
+			return false
+		}
+	}
+	return true
+}
+
+func dynamicChronologicalInputs(
+	state compileState,
+	first, second plan.FieldRef,
+) bool {
+	firstField, firstExists, firstErr := resolveCompiledField(first, state)
+	secondField, secondExists, secondErr := resolveCompiledField(second, state)
+	return firstErr == nil && secondErr == nil && firstExists && secondExists &&
+		firstField.kind == fieldKindDynamic && secondField.kind == fieldKindDynamic
+}
+
+func canFuseChronologicalEventAggregates(
+	first, second *plan.EventAggregate,
+	state compileState,
+) bool {
+	if first == nil || second == nil || len(first.GroupBy) != 0 ||
+		len(second.GroupBy) != 0 ||
+		!chronologicalAggregateFunction(first.Measure.Function) ||
+		!chronologicalAggregateFunction(second.Measure.Function) ||
+		!independentChronologicalAggregateOutputs(
+			state,
+			first.Measure.Input.Name,
+			second.Measure.Input.Name,
+			first.Measure.Output,
+			second.Measure.Output,
+		) {
+		return false
+	}
+	return dynamicChronologicalInputs(
+		state,
+		first.Measure.Input,
+		second.Measure.Input,
+	)
+}
+
+func canFuseChronologicalStreamAggregates(
+	first, second *plan.StreamAggregate,
+	state compileState,
+) bool {
+	if first == nil || second == nil || len(first.GroupBy) != 0 ||
+		len(second.GroupBy) != 0 ||
+		first.IncludeCurrent != second.IncludeCurrent ||
+		first.WindowRows != second.WindowRows || first.Global != second.Global ||
+		!chronologicalAggregateFunction(first.Measure.Function) ||
+		!chronologicalAggregateFunction(second.Measure.Function) ||
+		!independentChronologicalAggregateOutputs(
+			state,
+			first.Measure.Input.Name,
+			second.Measure.Input.Name,
+			first.Measure.Output,
+			second.Measure.Output,
+		) {
+		return false
+	}
+	return dynamicChronologicalInputs(
+		state,
+		first.Measure.Input,
+		second.Measure.Input,
+	)
+}
+
+type fusedChronologicalPublication struct {
+	name             string
+	valueSQL         string
+	storedTypeSQL    string
+	validationColumn string
+	validationSQL    string
+}
+
+func fusedChronologicalProjection(
+	state, next compileState,
+	publications []fusedChronologicalPublication,
+) ([]string, error) {
+	byName := make(map[string]fusedChronologicalPublication, len(publications))
+	for _, publication := range publications {
+		if publication.name == "" || publication.valueSQL == "" ||
+			publication.storedTypeSQL == "" || publication.validationColumn == "" ||
+			publication.validationSQL == "" {
+			return nil, errors.New(
+				"compile ClickHouse chronological fusion: publication is incomplete",
+			)
+		}
+		if _, duplicate := byName[publication.name]; duplicate {
+			return nil, errors.New(
+				"compile ClickHouse chronological fusion: output is repeated",
+			)
+		}
+		byName[publication.name] = publication
+	}
+
+	names := orderedVisibleNames(next)
+	projection := make([]string, 0, len(names)+16+len(next.privateColumns))
+	for _, name := range names {
+		publicName := quoteIdentifier(name)
+		if publication, authored := byName[name]; authored {
+			projection = append(
+				projection,
+				publication.valueSQL+" AS "+publicName,
+			)
+			continue
+		}
+		field, present := state.visible[name]
+		if !present {
+			return nil, fmt.Errorf(
+				"compile ClickHouse chronological fusion: input field %q is unavailable",
+				name,
+			)
+		}
+		if field.valueSQL == publicName {
+			projection = append(projection, publicName)
+		} else {
+			projection = append(projection, field.valueSQL+" AS "+publicName)
+		}
+	}
+
+	projectionState := next
+	projectionState.privateColumns = livePrivateColumns(
+		state.privateColumns,
+		next.visible,
+	)
+	projection = appendPrivateEventProjection(projection, projectionState)
+	for _, publication := range publications {
+		output := next.visible[publication.name]
+		if output.storedTypeSQL == "" {
+			return nil, errors.New(
+				"compile ClickHouse chronological fusion: output type sidecar is missing",
+			)
+		}
+		projection = append(
+			projection,
+			publication.storedTypeSQL+" AS "+output.storedTypeSQL,
+			"toUInt8("+publication.validationSQL+") AS "+
+				publication.validationColumn,
+		)
+	}
+	return projection, nil
+}
+
+func fusedChronologicalOutputState(
+	output plan.FieldRef,
+	input fieldState,
+	typeColumn string,
+) fieldState {
+	return fieldState{
+		kind:           fieldKindDynamic,
+		dynamicTypeSQL: "dynamicType(" + quoteIdentifier(output.Name) + ")",
+		storedTypeSQL:  typeColumn,
+		maxStringBytes: fieldStateStringByteBound(input),
+	}
+}
+
+// transferDeferredChronologicalValidation moves validation ownership to a
+// later complete barrier only when every moved column is still a private
+// column of that barrier's input. The earlier barrier remains the semantic
+// source relation, but no longer needs a second top-level consumer solely to
+// repeat validation work.
+func transferDeferredChronologicalValidation(
+	barriers []compiledChronologicalBarrier,
+	available []string,
+) ([]compiledChronologicalBarrier, []string) {
+	if len(barriers) == 0 || len(available) == 0 {
+		return barriers, nil
+	}
+	transferred := make([]string, 0, len(available))
+	for index := range barriers {
+		barrier := &barriers[index]
+		retained := make([]string, 0, len(barrier.validationColumns))
+		for _, column := range barrier.validationColumns {
+			if slices.Contains(available, column) {
+				transferred = append(transferred, column)
+				continue
+			}
+			retained = append(retained, column)
+		}
+		barrier.validationColumns = retained
+		if len(retained) == 0 && barrier.fanout == 2 {
+			// The ungrouped fused eventstats source is row-preserving and has one
+			// remaining consumer after its validation columns move forward.
+			barrier.fanout = 1
+		}
+	}
+	return barriers, transferred
+}
+
+// compileFusedChronologicalEventAggregates lowers two independent sibling
+// eventstats chronological measures over one bounded input and one global
+// window. Both row-local poison bits remain independently named on the shared
+// barrier, so the final validation consumer still sees the complete relation
+// even if a later command removes every public row.
+func compileFusedChronologicalEventAggregates(
+	relation compiledRelation,
+	first, second *plan.EventAggregate,
+	state compileState,
+	firstStage, secondStage int,
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
+	if !canFuseChronologicalEventAggregates(first, second, state) ||
+		secondStage != firstStage+1 {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused eventstats chronology: contract is invalid",
+		)
+	}
+
+	firstOutput, firstErr := validateEventAggregate(first, state)
+	if firstErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, firstErr
+	}
+	firstInput, firstExists, resolveErr := resolveCompiledField(
+		first.Measure.Input,
+		state,
+	)
+	if resolveErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, resolveErr
+	}
+	firstCandidate, firstArgs, firstValidated, candidateErr :=
+		singleChronologicalCandidateSQL(
+			first.Measure.Function,
+			firstInput,
+			firstExists,
+		)
+	if candidateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, candidateErr
+	}
+	if !firstValidated {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused eventstats chronology: first input is not runtime validated",
+		)
+	}
+	firstType := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_extrema_type_%d",
+		firstStage,
+	))
+	firstState := eventAggregateCompileState(
+		state,
+		firstOutput,
+		fusedChronologicalOutputState(firstOutput, firstInput, firstType),
+		false,
+		firstStage,
+	)
+
+	secondOutput, secondErr := validateEventAggregate(second, firstState)
+	if secondErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, secondErr
+	}
+	secondInput, secondExists, resolveErr := resolveCompiledField(
+		second.Measure.Input,
+		firstState,
+	)
+	if resolveErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, resolveErr
+	}
+	secondCandidate, secondArgs, secondValidated, candidateErr :=
+		singleChronologicalCandidateSQL(
+			second.Measure.Function,
+			secondInput,
+			secondExists,
+		)
+	if candidateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, candidateErr
+	}
+	if !secondValidated {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused eventstats chronology: second input is not runtime validated",
+		)
+	}
+	secondType := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_extrema_type_%d",
+		secondStage,
+	))
+	next := eventAggregateCompileState(
+		firstState,
+		secondOutput,
+		fusedChronologicalOutputState(secondOutput, secondInput, secondType),
+		false,
+		secondStage,
+	)
+
+	firstMeasure := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_measure_%d",
+		firstStage,
+	))
+	secondMeasure := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_measure_%d",
+		secondStage,
+	))
+	sourceAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_source_%d",
+		secondStage,
+	))
+	rowKey := immutableChronologicalRowKeySQL()
+	preparedSQL := "SELECT *, tuple(" + firstCandidate + ", " + rowKey +
+		") AS " + firstMeasure + ", tuple(" + secondCandidate + ", " +
+		rowKey + ") AS " + secondMeasure + " FROM (" + relation.sql +
+		") AS " + sourceAlias + " LIMIT " +
+		strconv.FormatUint(MaximumEventStatsInputRows+1, 10)
+
+	firstAggregate, aggregateErr := singleChronologicalAggregateSQL(
+		first.Measure.Function,
+		firstMeasure,
+	)
+	if aggregateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+	}
+	secondAggregate, aggregateErr := singleChronologicalAggregateSQL(
+		second.Measure.Function,
+		secondMeasure,
+	)
+	if aggregateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+	}
+	rawCount := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_raw_count_%d",
+		secondStage,
+	))
+	firstWinner := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_winner_%d",
+		firstStage,
+	))
+	secondWinner := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_winner_%d",
+		secondStage,
+	))
+	preparedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_prepared_%d",
+		secondStage,
+	))
+	windowSQL := "SELECT *, count() OVER () AS " + rawCount + ", " +
+		firstAggregate + " OVER () AS " + firstWinner + ", " +
+		secondAggregate + " OVER () AS " + secondWinner + " FROM (" +
+		preparedSQL + ") AS " + preparedAlias
+
+	inputCount := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_input_count_%d",
+		secondStage,
+	))
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_window_%d",
+		secondStage,
+	))
+	boundedSQL := "SELECT *, " + boundedEventStatsCountSQL(rawCount) +
+		" AS " + inputCount + " FROM (" + windowSQL + ") AS " + windowAlias
+	resultAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_fused_result_%d",
+		secondStage,
+	))
+	firstValidation := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_validation_%d",
+		firstStage,
+	))
+	secondValidation := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_validation_%d",
+		secondStage,
+	))
+	publications := []fusedChronologicalPublication{
+		{
+			name:             firstOutput.Name,
+			valueSQL:         chronologicalPublishedValueSQL(resultAlias + "." + firstWinner),
+			storedTypeSQL:    chronologicalPublishedTypeSQL(resultAlias + "." + firstWinner),
+			validationColumn: firstValidation,
+			validationSQL: "tupleElement(tupleElement(" + resultAlias + "." +
+				firstMeasure + ", 1), 4)",
+		},
+		{
+			name:             secondOutput.Name,
+			valueSQL:         chronologicalPublishedValueSQL(resultAlias + "." + secondWinner),
+			storedTypeSQL:    chronologicalPublishedTypeSQL(resultAlias + "." + secondWinner),
+			validationColumn: secondValidation,
+			validationSQL: "tupleElement(tupleElement(" + resultAlias + "." +
+				secondMeasure + ", 1), 4)",
+		},
+	}
+	projection, projectionErr := fusedChronologicalProjection(
+		state,
+		next,
+		publications,
+	)
+	if projectionErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, projectionErr
+	}
+	next.deferredChronologicalValidation = append(
+		next.deferredChronologicalValidation,
+		firstValidation,
+		secondValidation,
+	)
+	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
+	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		boundedSQL + ") AS " + resultAlias + " WHERE " + resultAlias + "." +
+		inputCount + " <= " + maximumRows
+	resultDepth := relation.depth + 4
+	enriched := compiledRelation{
+		sql:        resultSQL,
+		depth:      resultDepth,
+		ownerRange: second.Range,
+	}
+
+	resultInputName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_input_%d",
+		secondStage,
+	))
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_%d",
+		secondStage,
+	))
+	barrierDepth := relationalNodeDepth(resultDepth)
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		sql:  "SELECT * FROM " + resultInputName,
+		prerequisiteDefinitions: []string{
+			resultInputName + " AS MATERIALIZED (" + resultSQL + ")",
+		},
+		validationColumns: []string{firstValidation, secondValidation},
+		fanout:            2,
+		depth:             barrierDepth,
+		ownerRange:        second.Range,
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_rows_result_%d",
+		secondStage,
+	))
+	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	enriched.depth = barrierDepth
+	prefixArgs := append(append([]any(nil), firstArgs...), secondArgs...)
+	return enriched.selectFrom(publishedSQL, second.Range), next, prefixArgs, barrier, nil
+}
+
+// compileFusedChronologicalStreamAggregates captures the established order
+// once and evaluates two independent windows with the same frame. Sequential
+// streamstats semantics are unchanged because neither measure consumes or
+// replaces the sibling's input or output.
+func compileFusedChronologicalStreamAggregates(
+	relation compiledRelation,
+	first, second *plan.StreamAggregate,
+	state compileState,
+	firstStage, secondStage int,
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
+	if !canFuseChronologicalStreamAggregates(first, second, state) ||
+		secondStage != firstStage+1 {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused streamstats chronology: contract is invalid",
+		)
+	}
+
+	firstOutput, firstErr := validateStreamAggregate(first, state)
+	if firstErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, firstErr
+	}
+	firstInput, firstExists, resolveErr := resolveCompiledField(
+		first.Measure.Input,
+		state,
+	)
+	if resolveErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, resolveErr
+	}
+	firstCandidate, firstArgs, firstValidated, candidateErr :=
+		singleChronologicalCandidateSQL(
+			first.Measure.Function,
+			firstInput,
+			firstExists,
+		)
+	if candidateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, candidateErr
+	}
+	if !firstValidated {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused streamstats chronology: first input is not runtime validated",
+		)
+	}
+
+	orderKeys := append([]compiledSortKey(nil), defaultCompiledOrder(state)...)
+	tieBreakers := append([]compiledSortKey(nil), state.tieBreakers...)
+	orderProjection := make([]string, 0, len(orderKeys)+len(tieBreakers))
+	for index := range orderKeys {
+		captured := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_order_%d_%d",
+			firstStage,
+			index,
+		))
+		orderProjection = append(
+			orderProjection,
+			orderKeys[index].valueSQL+" AS "+captured,
+		)
+		orderKeys[index].valueSQL = captured
+	}
+	for index := range tieBreakers {
+		captured := quoteIdentifier(fmt.Sprintf(
+			"__os_streamstats_tie_breaker_%d_%d",
+			firstStage,
+			index,
+		))
+		orderProjection = append(
+			orderProjection,
+			tieBreakers[index].valueSQL+" AS "+captured,
+		)
+		tieBreakers[index].valueSQL = captured
+	}
+	orderSQL := ""
+	if len(orderKeys) > 0 {
+		var orderErr error
+		orderSQL, orderErr = compileMaterializedOrder(orderKeys, false)
+		if orderErr != nil {
+			return compiledRelation{}, compileState{}, nil, nil, fmt.Errorf(
+				"compile ClickHouse fused streamstats order: %w",
+				orderErr,
+			)
+		}
+	}
+
+	firstType := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_chronological_type_%d",
+		firstStage,
+	))
+	firstState := streamAggregateCompileState(
+		state,
+		firstOutput,
+		fusedChronologicalOutputState(firstOutput, firstInput, firstType),
+		false,
+		firstStage,
+		orderKeys,
+		tieBreakers,
+	)
+	secondOutput, secondErr := validateStreamAggregate(second, firstState)
+	if secondErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, secondErr
+	}
+	secondInput, secondExists, resolveErr := resolveCompiledField(
+		second.Measure.Input,
+		firstState,
+	)
+	if resolveErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, resolveErr
+	}
+	secondCandidate, secondArgs, secondValidated, candidateErr :=
+		singleChronologicalCandidateSQL(
+			second.Measure.Function,
+			secondInput,
+			secondExists,
+		)
+	if candidateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, candidateErr
+	}
+	if !secondValidated {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse fused streamstats chronology: second input is not runtime validated",
+		)
+	}
+	secondType := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_chronological_type_%d",
+		secondStage,
+	))
+	next := streamAggregateCompileState(
+		firstState,
+		secondOutput,
+		fusedChronologicalOutputState(secondOutput, secondInput, secondType),
+		false,
+		secondStage,
+		orderKeys,
+		tieBreakers,
+	)
+
+	firstMeasure := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_measure_%d",
+		firstStage,
+	))
+	secondMeasure := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_measure_%d",
+		secondStage,
+	))
+	rowKey := immutableChronologicalRowKeySQL()
+	sourceAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_fused_source_%d",
+		secondStage,
+	))
+	orderedProjection := []string{
+		"*",
+		"tuple(" + firstCandidate + ", " + rowKey + ") AS " + firstMeasure,
+		"tuple(" + secondCandidate + ", " + rowKey + ") AS " + secondMeasure,
+	}
+	orderedProjection = append(orderedProjection, orderProjection...)
+	orderedInput := "SELECT " + strings.Join(orderedProjection, ", ") +
+		" FROM (" + relation.sql + ") AS " + sourceAlias
+	if orderSQL != "" {
+		orderedInput += " ORDER BY " + orderSQL
+	}
+	orderedInput += " LIMIT " + strconv.FormatUint(MaximumStreamStatsInputRows+1, 10)
+
+	windowParts := make([]string, 0, 2)
+	if orderSQL != "" {
+		windowParts = append(windowParts, "ORDER BY "+orderSQL)
+	} else {
+		windowParts = append(windowParts, "ORDER BY tuple()")
+	}
+	windowParts = append(
+		windowParts,
+		streamStatsFrameSQL(first.IncludeCurrent, first.WindowRows),
+	)
+	windowClause := strings.Join(windowParts, " ")
+	firstAggregate, aggregateErr := singleChronologicalAggregateSQL(
+		first.Measure.Function,
+		firstMeasure,
+	)
+	if aggregateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+	}
+	secondAggregate, aggregateErr := singleChronologicalAggregateSQL(
+		second.Measure.Function,
+		secondMeasure,
+	)
+	if aggregateErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, aggregateErr
+	}
+	inputCount := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_input_count_%d",
+		secondStage,
+	))
+	firstWinner := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_value_%d",
+		firstStage,
+	))
+	secondWinner := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_value_%d",
+		secondStage,
+	))
+	preparedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_fused_prepared_%d",
+		secondStage,
+	))
+	windowSQL := "SELECT *, count() OVER () AS " + inputCount + ", " +
+		firstAggregate + " OVER (" + windowClause + ") AS " + firstWinner +
+		", " + secondAggregate + " OVER (" + windowClause + ") AS " +
+		secondWinner + " FROM (" + orderedInput + ") AS " + preparedAlias
+
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_fused_window_%d",
+		secondStage,
+	))
+	firstValidation := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_validation_%d",
+		firstStage,
+	))
+	secondValidation := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_validation_%d",
+		secondStage,
+	))
+	var transferredValidation []string
+	next.chronologicalBarriers, transferredValidation =
+		transferDeferredChronologicalValidation(
+			next.chronologicalBarriers,
+			state.deferredChronologicalValidation,
+		)
+	allValidation := append(
+		append([]string(nil), transferredValidation...),
+		firstValidation,
+		secondValidation,
+	)
+	publications := []fusedChronologicalPublication{
+		{
+			name:             firstOutput.Name,
+			valueSQL:         chronologicalPublishedValueSQL(windowAlias + "." + firstWinner),
+			storedTypeSQL:    chronologicalPublishedTypeSQL(windowAlias + "." + firstWinner),
+			validationColumn: firstValidation,
+			validationSQL: "tupleElement(tupleElement(" + windowAlias + "." +
+				firstMeasure + ", 1), 4)",
+		},
+		{
+			name:             secondOutput.Name,
+			valueSQL:         chronologicalPublishedValueSQL(windowAlias + "." + secondWinner),
+			storedTypeSQL:    chronologicalPublishedTypeSQL(windowAlias + "." + secondWinner),
+			validationColumn: secondValidation,
+			validationSQL: "tupleElement(tupleElement(" + windowAlias + "." +
+				secondMeasure + ", 1), 4)",
+		},
+	}
+	projection, projectionErr := fusedChronologicalProjection(
+		state,
+		next,
+		publications,
+	)
+	if projectionErr != nil {
+		return compiledRelation{}, compileState{}, nil, nil, projectionErr
+	}
+	next.deferredChronologicalValidation = append(
+		[]string(nil),
+		allValidation...,
+	)
+	maximumRows := strconv.FormatUint(MaximumStreamStatsInputRows, 10)
+	guard := "if(" + windowAlias + "." + inputCount + " > toUInt64(" +
+		maximumRows + "), throwIf(toUInt8(1), '" +
+		StreamStatsInputLimitMarker + "'), toUInt8(0))"
+	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		windowSQL + ") AS " + windowAlias + " WHERE " + guard + " = 0"
+	resultDepth := relation.depth + 3
+	enriched := compiledRelation{
+		sql:        resultSQL,
+		depth:      resultDepth,
+		ownerRange: second.Range,
+	}
+
+	resultInputName := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_result_input_%d",
+		secondStage,
+	))
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_result_%d",
+		secondStage,
+	))
+	barrierDepth := relationalNodeDepth(resultDepth)
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		sql:  "SELECT * FROM " + resultInputName,
+		prerequisiteDefinitions: []string{
+			resultInputName + " AS MATERIALIZED (" + resultSQL + ")",
+		},
+		validationColumns: allValidation,
+		fanout:            1,
+		depth:             barrierDepth,
+		ownerRange:        second.Range,
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_streamstats_rows_result_%d",
+		secondStage,
+	))
+	publishedSQL := "SELECT * FROM " + barrierName + " AS " + publishedAlias
+	enriched.depth = barrierDepth
+	prefixArgs := append(append([]any(nil), firstArgs...), secondArgs...)
+	return enriched.selectFrom(publishedSQL, second.Range), next, prefixArgs, barrier, nil
 }
 
 // compileStreamAggregate lowers one running count, true-only predicate count,
@@ -15093,7 +17065,10 @@ func compileEventAggregate(
 			case plan.AggregateFunctionValues:
 				measureUsesValuesValidation = true
 				measureNullSQL = emptyValues
-				outputState = fieldState{kind: fieldKindStringArray}
+				outputState = fieldState{
+					kind:                  fieldKindStringArray,
+					mvSortedLexicographic: true,
+				}
 			case plan.AggregateFunctionList:
 				listInputExists = exists
 				measureNullSQL = emptyValues
@@ -15433,6 +17408,19 @@ func compileEventAggregate(
 		prefixArgs = append(prefixArgs, measureInputArgs...)
 		prefixArgs = append(prefixArgs, eligibilityArgs...)
 		prefixArgs = append(prefixArgs, unsupportedArgs...)
+	}
+	if measure.Function == plan.AggregateFunctionCountRows && len(groups) == 0 {
+		return compileWindowedGlobalEventStatsCount(
+			relation,
+			operator,
+			durableState,
+			next,
+			output,
+			stage,
+			inputName,
+			inputSQL,
+			prefixArgs,
+		)
 	}
 	if windowedDynamicExtrema {
 		return compileWindowedDynamicEventStatsExtrema(
@@ -15878,6 +17866,89 @@ func compileEventAggregate(
 	return enriched.selectFrom(publishedSQL, operator.Range), next, prefixArgs, barrier, nil
 }
 
+// compileWindowedGlobalEventStatsCount publishes an argument-free global
+// count from the same bounded input row stream. The general eventstats graph
+// has two consumers for that input (the aggregate and the row publication),
+// but count() OVER () can attach the identical total while preserving every
+// input row. Keeping the sentinel input as the one prerequisite fence removes
+// the cross-join fanout without weakening the input-row guard.
+func compileWindowedGlobalEventStatsCount(
+	relation compiledRelation,
+	operator *plan.EventAggregate,
+	state compileState,
+	next compileState,
+	output plan.FieldRef,
+	stage int,
+	inputName string,
+	inputSQL string,
+	prefixArgs []any,
+) (compiledRelation, compileState, []any, *pendingChronologicalBarrier, error) {
+	if operator == nil ||
+		operator.Measure.Function != plan.AggregateFunctionCountRows ||
+		len(operator.GroupBy) != 0 || output.Name == "" || stage < 0 ||
+		inputName == "" || inputSQL == "" || len(prefixArgs) != 0 {
+		return compiledRelation{}, compileState{}, nil, nil, errors.New(
+			"compile ClickHouse global eventstats count: contract is invalid",
+		)
+	}
+
+	rawTotal := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_raw_count_%d",
+		stage,
+	))
+	validationColumn := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_validation_%d",
+		stage,
+	))
+	windowAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_window_%d",
+		stage,
+	))
+	windowSQL := "SELECT *, count() OVER () AS " + rawTotal + " FROM " + inputName
+	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
+	projection := eventAggregateProjection(
+		state,
+		next,
+		output.Name,
+		boundedEventStatsCountSQL(windowAlias+"."+rawTotal),
+		"",
+		"1",
+		validationColumn,
+		"toUInt8("+boundedEventStatsCountSQL(windowAlias+"."+rawTotal)+
+			" > "+maximumRows+")",
+	)
+	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		windowSQL + ") AS " + windowAlias
+	enriched := compiledRelation{
+		sql:        resultSQL,
+		depth:      relation.depth + 3,
+		ownerRange: operator.Range,
+	}
+
+	barrierName := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_result_%d",
+		stage,
+	))
+	barrier := &pendingChronologicalBarrier{
+		name: barrierName,
+		sql:  resultSQL,
+		prerequisiteDefinitions: []string{
+			inputName + " AS MATERIALIZED (" + inputSQL + ")",
+		},
+		validationColumns: []string{validationColumn},
+		fanout:            1,
+		depth:             enriched.depth,
+		ownerRange:        operator.Range,
+	}
+	publishedAlias := quoteIdentifier(fmt.Sprintf(
+		"__os_eventstats_rows_result_%d",
+		stage,
+	))
+	publishedSQL := "SELECT * EXCEPT (" + validationColumn + ") FROM " +
+		barrierName + " AS " + publishedAlias
+	return enriched.selectFrom(publishedSQL, operator.Range), next, nil, barrier, nil
+}
+
 // compileWindowedDynamicEventStatsExtrema keeps the bounded Dynamic row fold,
 // winner aggregate, row-count guard, publication, and validation inside one
 // materialized result input. The public barrier is a cheap pass-through, which
@@ -16060,6 +18131,9 @@ func validateEventAggregate(
 	if operator == nil {
 		return plan.FieldRef{}, errors.New("compile ClickHouse eventstats: operator is missing")
 	}
+	if err := validateNonStatsAggregateMeasureMetadata("eventstats", operator.Measure); err != nil {
+		return plan.FieldRef{}, err
+	}
 	if len(operator.GroupBy) > spl.MaximumStatsGroupFields {
 		return plan.FieldRef{}, fmt.Errorf(
 			"compile ClickHouse eventstats: more than %d grouping fields",
@@ -16170,6 +18244,24 @@ func validateEventAggregate(
 		)
 	}
 	return output, nil
+}
+
+// validateNonStatsAggregateMeasureMetadata closes the compiler trust boundary
+// for plan nodes whose AggregateMeasure predates stats scalar inputs, literal
+// outputs, and sparklines. Those arms are stats-only. Related commands have
+// their own bounded predicate support, so Predicate remains command-validated
+// by their existing paths rather than being rejected here.
+func validateNonStatsAggregateMeasureMetadata(
+	command string,
+	measure plan.AggregateMeasure,
+) error {
+	if measure.Sparkline != nil || measure.InputExpression != nil || measure.OutputLiteral {
+		return fmt.Errorf(
+			"compile ClickHouse %s: aggregate contains stats-only sparkline, scalar-input, or literal-output metadata",
+			command,
+		)
+	}
+	return nil
 }
 
 func eventAggregateCompileState(
@@ -16410,9 +18502,10 @@ func validateConditionalCountMeasure(
 		measure.Input.Canonical ||
 		measure.Input.Path != nil ||
 		measure.Input.Range != (spl.Range{}) ||
+		measure.InputExpression != nil ||
 		measure.Percentile != 0 {
 		return errors.New(
-			prefix + "count(eval(...)) contains unsupported field or percentile metadata",
+			prefix + "count(eval(...)) contains unsupported field, scalar-input, or percentile metadata",
 		)
 	}
 	if nilPlanExpression(measure.Predicate) {
@@ -16439,6 +18532,14 @@ func validateConditionalCountMeasure(
 func validateAggregateCardinality(operator *plan.Aggregate) error {
 	if operator == nil || len(operator.Measures) == 0 {
 		return errors.New("compile ClickHouse aggregate: no measures")
+	}
+	if _, err := effectiveStatsOptions(operator); err != nil {
+		return err
+	}
+	if operator.StatsOptions != nil {
+		if err := plan.ValidateStatsAggregateSourceUniqueness(operator.Measures); err != nil {
+			return fmt.Errorf("compile ClickHouse aggregate: %w", err)
+		}
 	}
 	if len(operator.Measures) > spl.MaximumStatsMeasures {
 		return fmt.Errorf(
@@ -16490,17 +18591,29 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 	args []any,
 	err error,
 ) {
+	statsOptions, optionsErr := effectiveStatsOptions(operator)
+	if optionsErr != nil {
+		return nil, nil, nil, compileState{}, nil, optionsErr
+	}
 	for _, measure := range operator.Measures {
 		if measure.Function != plan.AggregateFunctionEarliest &&
-			measure.Function != plan.AggregateFunctionLatest {
+			measure.Function != plan.AggregateFunctionLatest &&
+			measure.Function != plan.AggregateFunctionEarliestTime &&
+			measure.Function != plan.AggregateFunctionLatestTime &&
+			measure.Function != plan.AggregateFunctionRate {
 			continue
 		}
 		if !hasCanonicalEventTime(state) {
+			sourceRange := measure.Input.Range
+			if measure.InputExpression != nil &&
+				!nilScalarExpression(measure.InputExpression) {
+				sourceRange = measure.InputExpression.SourceRange()
+			}
 			return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
 				Code:        "SPL_UNSUPPORTED_STATS_TIME_FIELD",
-				Message:     "earliest and latest require event rows with the unmodified canonical _time field",
-				Range:       measure.Input.Range,
-				Suggestions: []string{"run stats earliest or latest before removing, replacing, or transforming _time"},
+				Message:     "stats time functions require event rows with the unmodified canonical _time field",
+				Range:       sourceRange,
+				Suggestions: []string{"run the stats time function before removing, replacing, or transforming _time"},
 			}
 		}
 	}
@@ -16530,6 +18643,88 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", group.Name)
 		}
 		seen[group.Name] = struct{}{}
+		var multivalueGroup compiledStatsMultivalueGroup
+		expanded := false
+		var compileErr error
+		if operator.StatsOptions != nil {
+			multivalueGroup, expanded, compileErr = compileStatsMultivalueGroup(
+				group,
+				state,
+				statsOptions.DeduplicateSplitValues,
+			)
+			if compileErr != nil {
+				return nil, nil, nil, compileState{}, nil, compileErr
+			}
+		}
+		if expanded {
+			ordinal := len(groups)
+			valuesAlias := quoteIdentifier(fmt.Sprintf("__os_group_values_%d", ordinal))
+			valueAlias := quoteIdentifier(fmt.Sprintf("__os_group_value_%d", ordinal))
+			next.preAggregateColumns = append(
+				next.preAggregateColumns,
+				multivalueGroup.valuesSQL+" AS "+valuesAlias,
+			)
+			next.preAggregateArgs = append(
+				next.preAggregateArgs,
+				multivalueGroup.valuesArgs...,
+			)
+			next.preAggregateGroupExpansions = append(
+				next.preAggregateGroupExpansions,
+				compiledStatsGroupExpansion{
+					valuesAlias: valuesAlias,
+					valueAlias:  valueAlias,
+				},
+			)
+			groupOutput := fmt.Sprintf("__os_group_%d", ordinal)
+			projection = append(
+				projection,
+				valueAlias+" AS "+quoteIdentifier(groupOutput),
+			)
+			groups = append(groups, valueAlias)
+			if multivalueGroup.unsupportedSQL != "" {
+				dynamicGroupInvalid = append(
+					dynamicGroupInvalid,
+					multivalueGroup.unsupportedSQL,
+				)
+				dynamicGroupInvalidArgs = append(
+					dynamicGroupInvalidArgs,
+					multivalueGroup.unsupportedArgs...,
+				)
+			}
+			if multivalueGroup.field.kind == fieldKindDynamic {
+				// Keep the established scalar-presence predicate as a redundant
+				// eligibility fence. Empty arrays already disappear in ARRAY JOIN,
+				// while this preserves missing/null and flattened-parent validation
+				// contracts (including their source-located arguments).
+				scalarPresence, presenceErr := compileExactScalarGroup(
+					group,
+					state,
+					"stats BY",
+				)
+				if presenceErr != nil {
+					return nil, nil, nil, compileState{}, nil, presenceErr
+				}
+				predicates = append(predicates, scalarPresence.presenceSQL)
+				args = append(args, scalarPresence.presenceArgs...)
+			}
+			privateGroup := quoteIdentifier(groupOutput)
+			numericSort := multivalueGroup.field.numericSort
+			if multivalueGroup.field.kind == fieldKindDynamic {
+				numericSort = true
+			}
+			next.visible[group.Name] = fieldState{
+				valueSQL:       privateGroup,
+				maxStringBytes: fieldStateStringByteBound(multivalueGroup.field),
+				existsSQL:      "1",
+				kind:           fieldKindString,
+				caseSensitive:  multivalueGroup.field.caseSensitive,
+				numericSort:    numericSort,
+			}
+			next.publicOrder = append(next.publicOrder, group.Name)
+			next.order = append(next.order, compiledSortKey{valueSQL: privateGroup})
+			next.tieBreakers = append(next.tieBreakers, compiledSortKey{valueSQL: privateGroup})
+			continue
+		}
 		scalarGroup, compileErr := compileExactScalarGroup(group, state, "stats BY")
 		if compileErr != nil {
 			return nil, nil, nil, compileState{}, nil, compileErr
@@ -16603,7 +18798,183 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		inputAlias := numericInputForResolved(ref, input, ok)
 		return inputAlias, nil
 	}
+	type aggregateExpressionInput struct {
+		valueSQL              string
+		valueArgs             []any
+		kind                  fieldKind
+		numberType            string
+		dynamicDomain         dynamicScalarDomain
+		maxStringBytes        uint64
+		numericIntegral       bool
+		mvCountOneOrNull      bool
+		mvSortedLexicographic bool
+		alwaysNull            bool
+		ieeeComparison        bool
+		ordinal               int
+		field                 fieldState
+		numericAlias          string
+		stringAlias           string
+	}
+	aggregateExpressionInputs := make([]*aggregateExpressionInput, 0)
+	aggregateExpressionInputFor := func(
+		expression plan.ScalarExpression,
+	) (*aggregateExpressionInput, error) {
+		if nilScalarExpression(expression) {
+			return nil, errors.New("compile ClickHouse aggregate: scalar eval input is missing")
+		}
+		compiled, compileErr := compileScalarValue(expression, state)
+		if compileErr != nil {
+			return nil, fmt.Errorf("compile ClickHouse aggregate scalar eval input: %w", compileErr)
+		}
+		for _, cached := range aggregateExpressionInputs {
+			if cached.valueSQL == compiled.valueSQL &&
+				reflect.DeepEqual(cached.valueArgs, compiled.valueArgs) &&
+				cached.kind == compiled.kind &&
+				cached.numberType == compiled.numberType &&
+				cached.dynamicDomain == compiled.dynamicDomain &&
+				cached.maxStringBytes == compiled.maxStringBytes &&
+				cached.numericIntegral == compiled.numericIntegral &&
+				cached.mvCountOneOrNull == compiled.mvCountOneOrNull &&
+				cached.mvSortedLexicographic == compiled.mvSortedLexicographic &&
+				cached.alwaysNull == compiled.alwaysNull &&
+				cached.ieeeComparison == compiled.ieeeComparison {
+				return cached, nil
+			}
+		}
+
+		ordinal := len(aggregateExpressionInputs)
+		valueAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_numeric_expression_value_%d",
+			ordinal,
+		))
+		next.preAggregateColumns = append(
+			next.preAggregateColumns,
+			compiled.valueSQL+" AS "+valueAlias,
+		)
+		next.preAggregateArgs = append(next.preAggregateArgs, compiled.valueArgs...)
+		materialized := fieldState{
+			valueSQL:              valueAlias,
+			existsSQL:             "1",
+			kind:                  compiled.kind,
+			numberType:            compiled.numberType,
+			maxStringBytes:        compiled.maxStringBytes,
+			numericIntegral:       compiled.numericIntegral,
+			mvCountOneOrNull:      compiled.mvCountOneOrNull,
+			mvSortedLexicographic: compiled.mvSortedLexicographic,
+			alwaysNull:            compiled.alwaysNull,
+			dynamicDomain:         compiled.dynamicDomain,
+			ieeeComparison:        compiled.ieeeComparison,
+		}
+		if compiled.kind == fieldKindDynamic {
+			materialized.dynamicTypeSQL = "dynamicType(" + valueAlias + ")"
+		}
+		cached := &aggregateExpressionInput{
+			valueSQL:              compiled.valueSQL,
+			valueArgs:             append([]any(nil), compiled.valueArgs...),
+			kind:                  compiled.kind,
+			numberType:            compiled.numberType,
+			dynamicDomain:         compiled.dynamicDomain,
+			maxStringBytes:        compiled.maxStringBytes,
+			numericIntegral:       compiled.numericIntegral,
+			mvCountOneOrNull:      compiled.mvCountOneOrNull,
+			mvSortedLexicographic: compiled.mvSortedLexicographic,
+			alwaysNull:            compiled.alwaysNull,
+			ieeeComparison:        compiled.ieeeComparison,
+			ordinal:               ordinal,
+			field:                 materialized,
+		}
+		aggregateExpressionInputs = append(aggregateExpressionInputs, cached)
+		return cached, nil
+	}
+	numericInputForExpression := func(expression plan.ScalarExpression) (string, error) {
+		cached, inputErr := aggregateExpressionInputFor(expression)
+		if inputErr != nil {
+			return "", inputErr
+		}
+		if cached.numericAlias != "" {
+			return cached.numericAlias, nil
+		}
+		inputSQL, inputArgs := numericArrayInputSQL(cached.field)
+		inputAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_numeric_expression_%d",
+			cached.ordinal,
+		))
+		next.preAggregateColumns = append(
+			next.preAggregateColumns,
+			inputSQL+" AS "+inputAlias,
+		)
+		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+		cached.numericAlias = inputAlias
+		return inputAlias, nil
+	}
+	type aggregateInputCacheKey struct {
+		fieldName         string
+		expressionOrdinal int
+		expression        bool
+	}
+	fieldInputCacheKey := func(name string) aggregateInputCacheKey {
+		return aggregateInputCacheKey{fieldName: name}
+	}
+	expressionInputCacheKey := func(ordinal int) aggregateInputCacheKey {
+		return aggregateInputCacheKey{
+			expressionOrdinal: ordinal,
+			expression:        true,
+		}
+	}
 	stringInputs := make(map[string]string)
+	allNumericInvalidInputs := make(map[aggregateInputCacheKey]string)
+	allNumericInvalidInputFor := func(
+		key aggregateInputCacheKey,
+		input fieldState,
+		exists bool,
+	) string {
+		if !statsOptions.AllNumeric {
+			return ""
+		}
+		if cached, ok := allNumericInvalidInputs[key]; ok {
+			return cached
+		}
+		if !exists {
+			allNumericInvalidInputs[key] = ""
+			return ""
+		}
+		invalidSQL, invalidArgs := statsAllNumericInvalidSQL(input)
+		if invalidSQL == "toUInt8(0)" {
+			allNumericInvalidInputs[key] = ""
+			return ""
+		}
+		alias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_all_numeric_invalid_%d",
+			len(allNumericInvalidInputs),
+		))
+		allNumericInvalidInputs[key] = alias
+		next.preAggregateColumns = append(
+			next.preAggregateColumns,
+			invalidSQL+" AS "+alias,
+		)
+		next.preAggregateArgs = append(next.preAggregateArgs, invalidArgs...)
+		return alias
+	}
+	allNumericInvalidFor := func(
+		measure plan.AggregateMeasure,
+		key aggregateInputCacheKey,
+	) (string, error) {
+		if !statsOptions.AllNumeric || !statsUsesAllNumericPolicy(measure.Function) {
+			return "", nil
+		}
+		if measure.InputExpression != nil {
+			cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
+			if inputErr != nil {
+				return "", inputErr
+			}
+			return allNumericInvalidInputFor(key, cached.field, !cached.field.alwaysNull), nil
+		}
+		input, exists, resolveErr := resolveCompiledField(measure.Input, state)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		return allNumericInvalidInputFor(key, input, exists), nil
+	}
 	type scalarStringInput struct {
 		ordinal        int
 		valueAlias     string
@@ -16612,8 +18983,33 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		rawBytesSQL    string
 		extremaReady   bool
 	}
-	scalarStringInputs := make(map[string]*scalarStringInput)
+	scalarStringInputs := make(map[aggregateInputCacheKey]*scalarStringInput)
 	countInputs := make(map[string]string)
+	countInputFor := func(ref plan.FieldRef) (string, error) {
+		if inputAlias, cached := countInputs[ref.Name]; cached {
+			return inputAlias, nil
+		}
+		input, ok, resolveErr := resolveCompiledField(ref, state)
+		if resolveErr != nil {
+			return "", resolveErr
+		}
+		inputSQL := "toUInt64(0)"
+		var inputArgs []any
+		if ok {
+			inputSQL, inputArgs = countValueInputSQL(input)
+		}
+		inputAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_count_%d",
+			len(countInputs),
+		))
+		countInputs[ref.Name] = inputAlias
+		next.preAggregateColumns = append(
+			next.preAggregateColumns,
+			inputSQL+" AS "+inputAlias,
+		)
+		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+		return inputAlias, nil
+	}
 	type conditionalCountInput struct {
 		predicateSQL  string
 		predicateArgs []any
@@ -16650,9 +19046,9 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		next.preAggregateArgs = append(next.preAggregateArgs, predicateArgs...)
 		return alias, nil
 	}
-	extremaInputs := make(map[string]string)
+	extremaInputs := make(map[aggregateInputCacheKey]string)
 	type scalarExtremaResultKey struct {
-		input    string
+		input    aggregateInputCacheKey
 		function plan.AggregateFunction
 	}
 	type scalarExtremaResult struct {
@@ -16667,51 +19063,68 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		multiple        bool
 	}
 	type chronologicalResultKey struct {
-		input    string
+		input    aggregateInputCacheKey
 		function plan.AggregateFunction
 	}
 	type chronologicalResult struct {
 		winnerAlias string
 		typeAlias   string
 	}
-	chronologicalInputs := make(map[string]chronologicalInput)
+	chronologicalInputs := make(map[aggregateInputCacheKey]chronologicalInput)
 	chronologicalResults := make(map[chronologicalResultKey]chronologicalResult)
 	chronologicalInputDirections := make(map[string]chronologicalDirections)
 	chronologicalRowKey := ""
-	exactStringSets := make(map[string]string)
-	distinctCounts := make(map[string]string)
+	exactStringSets := make(map[aggregateInputCacheKey]string)
+	distinctCounts := make(map[aggregateInputCacheKey]string)
 	type orderedStringList struct {
 		listColumn     string
 		overflowColumn string
 	}
-	orderedStringLists := make(map[string]orderedStringList)
-	valuesInputs := make(map[string]struct{})
+	orderedStringLists := make(map[aggregateInputCacheKey]orderedStringList)
+	valuesInputs := make(map[aggregateInputCacheKey]struct{})
 	extremaMeasureInputs := make(map[string]struct{})
 	numericArrayConsumers := make(map[string]struct{})
 	percentileLevels := make(map[string][]uint8)
 	for _, measure := range operator.Measures {
 		if measure.Function == plan.AggregateFunctionEarliest ||
-			measure.Function == plan.AggregateFunctionLatest {
+			measure.Function == plan.AggregateFunctionLatest ||
+			measure.Function == plan.AggregateFunctionFirst ||
+			measure.Function == plan.AggregateFunctionLast ||
+			measure.Function == plan.AggregateFunctionEarliestTime ||
+			measure.Function == plan.AggregateFunctionLatestTime {
 			directions := chronologicalInputDirections[measure.Input.Name]
-			if measure.Function == plan.AggregateFunctionEarliest {
+			if measure.Function == plan.AggregateFunctionEarliest ||
+				measure.Function == plan.AggregateFunctionFirst ||
+				measure.Function == plan.AggregateFunctionEarliestTime {
 				directions.earliest = true
 			} else {
 				directions.latest = true
 			}
 			chronologicalInputDirections[measure.Input.Name] = directions
 		}
-		if measure.Function == plan.AggregateFunctionValues {
-			valuesInputs[measure.Input.Name] = struct{}{}
+		if measure.Function == plan.AggregateFunctionValues && measure.InputExpression == nil {
+			valuesInputs[fieldInputCacheKey(measure.Input.Name)] = struct{}{}
 		}
 		if measure.Function == plan.AggregateFunctionMinimum ||
 			measure.Function == plan.AggregateFunctionMaximum {
 			extremaMeasureInputs[measure.Input.Name] = struct{}{}
 		}
-		if measure.Function == plan.AggregateFunctionSum ||
-			measure.Function == plan.AggregateFunctionAverage {
+		if measure.InputExpression == nil && (measure.Function == plan.AggregateFunctionSum ||
+			measure.Function == plan.AggregateFunctionAverage ||
+			measure.Function == plan.AggregateFunctionExactPercentile ||
+			measure.Function == plan.AggregateFunctionUpperPercentile ||
+			measure.Function == plan.AggregateFunctionMedian ||
+			measure.Function == plan.AggregateFunctionRange ||
+			measure.Function == plan.AggregateFunctionSumSquares ||
+			measure.Function == plan.AggregateFunctionStandardDeviationSample ||
+			measure.Function == plan.AggregateFunctionStandardDeviationPopulation ||
+			measure.Function == plan.AggregateFunctionVarianceSample ||
+			measure.Function == plan.AggregateFunctionVariancePopulation ||
+			measure.Function == plan.AggregateFunctionRate) {
 			numericArrayConsumers[measure.Input.Name] = struct{}{}
 		}
 		if measure.Function == plan.AggregateFunctionPercentile &&
+			measure.InputExpression == nil &&
 			measure.Percentile >= 1 && measure.Percentile <= 99 &&
 			!slices.Contains(percentileLevels[measure.Input.Name], measure.Percentile) {
 			percentileLevels[measure.Input.Name] = append(
@@ -16747,8 +19160,8 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		)
 		return listRowOrdinal, listWindowOrder, nil
 	}
-	scalarStringInputFor := func(ref plan.FieldRef, input fieldState) *scalarStringInput {
-		if cached, ok := scalarStringInputs[ref.Name]; ok {
+	scalarStringInputFor := func(key aggregateInputCacheKey, input fieldState) *scalarStringInput {
+		if cached, ok := scalarStringInputs[key]; ok {
 			return cached
 		}
 		ordinal := len(scalarStringInputs)
@@ -16762,7 +19175,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			valueAlias:  inputAlias,
 			rawBytesSQL: fixedStringExtremaRawBytesSQL(input),
 		}
-		scalarStringInputs[ref.Name] = cached
+		scalarStringInputs[key] = cached
 		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
 		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
 		return cached
@@ -16780,7 +19193,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			var inputArgs []any
 			if _, sharesScalar := extremaMeasureInputs[ref.Name]; sharesScalar &&
 				input.kind == fieldKindString && input.textEligibleSQL == "" {
-				scalarInput := scalarStringInputFor(ref, input)
+				scalarInput := scalarStringInputFor(fieldInputCacheKey(ref.Name), input)
 				inputSQL = compactNullableArraySQL("[" + scalarInput.valueAlias + "]")
 			} else {
 				inputSQL, inputArgs = stringArrayInputSQL(input)
@@ -16794,6 +19207,27 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		stringInputs[ref.Name] = inputSQL
 		return inputSQL, nil
 	}
+	stringInputForExpression := func(expression plan.ScalarExpression) (string, error) {
+		cached, inputErr := aggregateExpressionInputFor(expression)
+		if inputErr != nil {
+			return "", inputErr
+		}
+		if cached.stringAlias != "" {
+			return cached.stringAlias, nil
+		}
+		inputSQL, inputArgs := stringArrayInputSQL(cached.field)
+		inputAlias := quoteIdentifier(fmt.Sprintf(
+			"__os_measure_string_expression_%d",
+			cached.ordinal,
+		))
+		next.preAggregateColumns = append(
+			next.preAggregateColumns,
+			inputSQL+" AS "+inputAlias,
+		)
+		next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+		cached.stringAlias = inputAlias
+		return inputAlias, nil
+	}
 	chronologicalRowKeyFor := func() string {
 		if chronologicalRowKey != "" {
 			return chronologicalRowKey
@@ -16805,20 +19239,21 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		)
 		return chronologicalRowKey
 	}
-	chronologicalInputFor := func(ref plan.FieldRef) (chronologicalInput, error) {
-		if cached, ok := chronologicalInputs[ref.Name]; ok {
+	chronologicalInputForResolved := func(
+		key aggregateInputCacheKey,
+		input fieldState,
+		exists bool,
+		directions chronologicalDirections,
+	) (chronologicalInput, error) {
+		if cached, ok := chronologicalInputs[key]; ok {
 			return cached, nil
-		}
-		input, exists, resolveErr := resolveCompiledField(ref, state)
-		if resolveErr != nil {
-			return chronologicalInput{}, resolveErr
 		}
 		ordinal := len(chronologicalInputs)
 		compiled := chronologicalInput{}
 		candidatesSQL, candidateArgs, runtimeValidated := chronologicalCandidatesSQL(
 			input,
 			exists,
-			chronologicalInputDirections[ref.Name],
+			directions,
 		)
 		compiled.candidatesAlias = quoteIdentifier(fmt.Sprintf(
 			"__os_chronological_candidates_%d",
@@ -16842,8 +19277,34 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 					compiled.validationAlias,
 			)
 		}
-		chronologicalInputs[ref.Name] = compiled
+		chronologicalInputs[key] = compiled
 		return compiled, nil
+	}
+	chronologicalInputFor := func(ref plan.FieldRef) (chronologicalInput, error) {
+		input, exists, resolveErr := resolveCompiledField(ref, state)
+		if resolveErr != nil {
+			return chronologicalInput{}, resolveErr
+		}
+		return chronologicalInputForResolved(
+			fieldInputCacheKey(ref.Name),
+			input,
+			exists,
+			chronologicalInputDirections[ref.Name],
+		)
+	}
+	chronologicalInputForExpression := func(
+		expression plan.ScalarExpression,
+	) (chronologicalInput, error) {
+		cached, inputErr := aggregateExpressionInputFor(expression)
+		if inputErr != nil {
+			return chronologicalInput{}, inputErr
+		}
+		return chronologicalInputForResolved(
+			expressionInputCacheKey(cached.ordinal),
+			cached.field,
+			!cached.field.alwaysNull,
+			chronologicalDirections{earliest: true, latest: true},
+		)
 	}
 	type percentileState struct {
 		column    string
@@ -16878,18 +19339,262 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
 		return inputAlias, false, nil
 	}
+	type sparklineBucketInput struct {
+		spec  statsSparklineBucketSpec
+		alias string
+	}
+	sparklineBuckets := make(map[plan.SparklineSpan]sparklineBucketInput)
 	for measureIndex, measure := range operator.Measures {
-		if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
+		if measure.OutputLiteral {
+			if operator.StatsOptions == nil || !spl.IsStatsLiteralOutputName(measure.Output) {
+				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+					"compile ClickHouse aggregate: invalid literal output field %q",
+					measure.Output,
+				)
+			}
+		} else if _, fieldErr := plan.ResolveField(measure.Output, spl.Range{}); fieldErr != nil {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf(
 				"compile ClickHouse aggregate: invalid output field %q: %w",
 				measure.Output,
 				fieldErr,
 			)
 		}
+		if measure.Sparkline != nil {
+			if operator.StatsOptions == nil ||
+				measure.Function != plan.AggregateFunctionInvalid ||
+				measure.Input.Name != "" || measure.Input.Canonical ||
+				measure.Input.Path != nil || measure.Input.Range != (spl.Range{}) ||
+				measure.InputExpression != nil || measure.Predicate != nil ||
+				measure.Percentile != 0 {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: sparkline and scalar aggregate metadata overlap",
+				)
+			}
+			if state.context == nil || state.context.searchEarliest.IsZero() ||
+				state.context.searchLatest.IsZero() {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse stats sparkline: search time range is unavailable",
+				)
+			}
+
+			sparkline := measure.Sparkline
+			if err := validateCanonicalFieldRef("stats sparkline", "time", sparkline.Time); err != nil {
+				return nil, nil, nil, compileState{}, nil, err
+			}
+			if sparkline.Time.Name != "_time" || !sparkline.Time.Canonical ||
+				sparkline.Time.Path != nil {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse stats sparkline: time field is not canonical _time",
+				)
+			}
+			timeField, timeExists, resolveErr := resolveCompiledField(sparkline.Time, state)
+			if resolveErr != nil {
+				return nil, nil, nil, compileState{}, nil, resolveErr
+			}
+			if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+				return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
+					Code:    "SPL_UNSUPPORTED_STATS_TIME_FIELD",
+					Message: "stats sparkline requires event rows with the unmodified canonical _time field",
+					Range:   sparkline.Time.Range,
+				}
+			}
+
+			hasSparklineInput := sparkline.Input.Name != "" ||
+				sparkline.Input.Canonical || sparkline.Input.Path != nil ||
+				sparkline.Input.Range != (spl.Range{})
+			if hasSparklineInput {
+				if err := validateCanonicalFieldRef("stats sparkline", "input", sparkline.Input); err != nil {
+					return nil, nil, nil, compileState{}, nil, err
+				}
+				if state.eventRows && state.allowDynamic && sparkline.Input.Name == "fields" {
+					return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
+						Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+						Message: "stats sparkline cannot read the event result's reserved fields payload without an exact upstream schema",
+						Range:   sparkline.Input.Range,
+					}
+				}
+			}
+
+			bucket, cached := sparklineBuckets[sparkline.Span]
+			if !cached {
+				spec, specErr := statsSparklineBucketSpecFor(
+					sparkline.Span,
+					state.context.searchEarliest,
+					state.context.searchLatest,
+					sparkline.MaximumPoints,
+					timeField.valueSQL,
+					state.context.searchTimezone,
+				)
+				if specErr != nil {
+					return nil, nil, nil, compileState{}, nil, specErr
+				}
+				bucket = sparklineBucketInput{
+					spec: spec,
+					alias: quoteIdentifier(fmt.Sprintf(
+						"__os_sparkline_bucket_%d",
+						len(sparklineBuckets),
+					)),
+				}
+				sparklineBuckets[sparkline.Span] = bucket
+				next.preAggregateColumns = append(
+					next.preAggregateColumns,
+					spec.BucketSQL+" AS "+bucket.alias,
+				)
+				next.preAggregateArgs = append(next.preAggregateArgs, spec.BucketArgs...)
+			}
+
+			partition := append(append([]string(nil), groups...), bucket.alias)
+			partitionSQL := strings.Join(partition, ", ")
+			inputSQL := ""
+			expectedInput := statsSparklineInputNone
+			missing := statsSparklineMissingEmpty
+			switch sparkline.Function {
+			case plan.AggregateFunctionCountRows:
+				if hasSparklineInput {
+					return nil, nil, nil, compileState{}, nil, errors.New(
+						"compile ClickHouse stats sparkline: row count contains an input field",
+					)
+				}
+				missing = statsSparklineMissingZero
+			case plan.AggregateFunctionCountValues:
+				if !hasSparklineInput {
+					return nil, nil, nil, compileState{}, nil, errors.New(
+						"compile ClickHouse stats sparkline: count(field) input is missing",
+					)
+				}
+				inputSQL, resolveErr = countInputFor(sparkline.Input)
+				expectedInput = statsSparklineInputOccurrenceCount
+				missing = statsSparklineMissingZero
+			case plan.AggregateFunctionDistinctCount,
+				plan.AggregateFunctionMinimum,
+				plan.AggregateFunctionMaximum:
+				if !hasSparklineInput {
+					return nil, nil, nil, compileState{}, nil, errors.New(
+						"compile ClickHouse stats sparkline: string aggregate input is missing",
+					)
+				}
+				inputSQL, resolveErr = stringInputFor(sparkline.Input)
+				expectedInput = statsSparklineInputStringArray
+				if sparkline.Function == plan.AggregateFunctionDistinctCount {
+					missing = statsSparklineMissingZero
+				}
+			case plan.AggregateFunctionAverage,
+				plan.AggregateFunctionStandardDeviationSample,
+				plan.AggregateFunctionStandardDeviationPopulation,
+				plan.AggregateFunctionVarianceSample,
+				plan.AggregateFunctionVariancePopulation,
+				plan.AggregateFunctionSum,
+				plan.AggregateFunctionSumSquares,
+				plan.AggregateFunctionRange:
+				if !hasSparklineInput {
+					return nil, nil, nil, compileState{}, nil, errors.New(
+						"compile ClickHouse stats sparkline: numeric aggregate input is missing",
+					)
+				}
+				inputSQL, resolveErr = numericInputFor(sparkline.Input)
+				expectedInput = statsSparklineInputFloat64Array
+			default:
+				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+					"compile ClickHouse stats sparkline: unsupported function %d",
+					sparkline.Function,
+				)
+			}
+			if resolveErr != nil {
+				return nil, nil, nil, compileState{}, nil, resolveErr
+			}
+			lowering, supported := statsSparklineWindowAggregateSQL(
+				sparkline.Function,
+				inputSQL,
+				partitionSQL,
+			)
+			if !supported || lowering.Input != expectedInput {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse stats sparkline: aggregate lowering is invalid",
+				)
+			}
+			windowSQL := lowering.SQL
+			if statsOptions.AllNumeric && statsUsesAllNumericPolicy(sparkline.Function) {
+				input, exists, inputErr := resolveCompiledField(sparkline.Input, state)
+				if inputErr != nil {
+					return nil, nil, nil, compileState{}, nil, inputErr
+				}
+				invalidAlias := allNumericInvalidInputFor(
+					fieldInputCacheKey(sparkline.Input.Name),
+					input,
+					exists,
+				)
+				if invalidAlias != "" {
+					windowSQL = "if(max(" + invalidAlias + ") OVER (PARTITION BY " +
+						partitionSQL + ") != 0, CAST(NULL AS Nullable(Float64)), " +
+						windowSQL + ")"
+				}
+			}
+
+			if _, duplicate := seen[measure.Output]; duplicate {
+				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+					"compile ClickHouse aggregate: output field %q is duplicated",
+					measure.Output,
+				)
+			}
+			seen[measure.Output] = struct{}{}
+			windowAlias := quoteIdentifier(fmt.Sprintf(
+				"__os_sparkline_window_%d",
+				measureIndex,
+			))
+			next.preAggregateSparklineWindows = append(
+				next.preAggregateSparklineWindows,
+				windowSQL+" AS "+windowAlias,
+			)
+			recordsSQL, ok := statsSparklineBucketRecordsSQL(
+				bucket.alias,
+				windowAlias,
+				sparkline.MaximumPoints,
+			)
+			if !ok {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse stats sparkline: bucket record lowering is invalid",
+				)
+			}
+			recordsAlias := quoteIdentifier(fmt.Sprintf(
+				"__os_sparkline_records_%d",
+				measureIndex,
+			))
+			projection = append(projection, recordsSQL+" AS "+recordsAlias)
+			output := quoteIdentifier(measure.Output)
+			next.postAggregateSparklines = append(
+				next.postAggregateSparklines,
+				compiledStatsSparklineMeasure{
+					recordsColumn: recordsAlias,
+					outputColumn:  output,
+					spec:          bucket.spec,
+					missing:       missing,
+				},
+			)
+			next.visible[measure.Output] = fieldState{
+				valueSQL:       output,
+				existsSQL:      "1",
+				kind:           fieldKindStringArray,
+				maxStringBytes: MaximumStatsSparklineBytesPerCell,
+				statsSparkline: true,
+			}
+			next.publicOrder = append(next.publicOrder, measure.Output)
+			if len(next.order) == 0 {
+				next.order = append(next.order, compiledSortKey{valueSQL: output})
+			}
+			continue
+		}
+		hasFieldInput := measure.Input.Name != "" || measure.Input.Canonical ||
+			len(measure.Input.Path) != 0 || measure.Input.Range != (spl.Range{})
+		hasExpressionInput := measure.InputExpression != nil
+		if hasExpressionInput && nilScalarExpression(measure.InputExpression) {
+			return nil, nil, nil, compileState{}, nil, errors.New(
+				"compile ClickHouse aggregate: scalar eval input is a typed nil",
+			)
+		}
+		supportsExpressionInput := false
 		switch measure.Function {
 		case plan.AggregateFunctionCountRows:
-			if measure.Input.Name != "" || measure.Input.Canonical || len(measure.Input.Path) != 0 ||
-				measure.Input.Range != (spl.Range{}) || measure.Percentile != 0 {
+			if hasFieldInput || hasExpressionInput || measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, errors.New(
 					"compile ClickHouse aggregate: count contains unsupported input metadata",
 				)
@@ -16898,12 +19603,15 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			// Predicate structure and mutually exclusive metadata were
 			// validated before any materialization-field traversal.
 		case plan.AggregateFunctionCountValues:
-			if measure.Percentile != 0 {
+			if hasExpressionInput || measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, errors.New(
-					"compile ClickHouse aggregate: count(field) contains percentile metadata",
+					"compile ClickHouse aggregate: count(field) contains scalar-input or percentile metadata",
 				)
 			}
-		case plan.AggregateFunctionPercentile:
+		case plan.AggregateFunctionPercentile,
+			plan.AggregateFunctionExactPercentile,
+			plan.AggregateFunctionUpperPercentile:
+			supportsExpressionInput = true
 			if measure.Percentile < 1 || measure.Percentile > 99 {
 				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
 					"compile ClickHouse aggregate: unsupported percentile %d",
@@ -16911,10 +19619,32 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				)
 			}
 		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
-			plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues,
+			plan.AggregateFunctionMedian,
+			plan.AggregateFunctionRange, plan.AggregateFunctionSumSquares,
+			plan.AggregateFunctionStandardDeviationSample,
+			plan.AggregateFunctionStandardDeviationPopulation,
+			plan.AggregateFunctionVarianceSample,
+			plan.AggregateFunctionVariancePopulation,
+			plan.AggregateFunctionRate:
+			supportsExpressionInput = true
+			if measure.Percentile != 0 {
+				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+					"compile ClickHouse aggregate: function %d contains percentile metadata",
+					measure.Function,
+				)
+			}
+		case plan.AggregateFunctionDistinctCount,
+			plan.AggregateFunctionEstimatedDistinctCount,
+			plan.AggregateFunctionEstimatedDistinctCountError,
+			plan.AggregateFunctionValues,
 			plan.AggregateFunctionList,
 			plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum,
-			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
+			plan.AggregateFunctionMode,
+			plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
+			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest,
+			plan.AggregateFunctionEarliestTime,
+			plan.AggregateFunctionLatestTime:
+			supportsExpressionInput = true
 			if measure.Percentile != 0 {
 				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
 					"compile ClickHouse aggregate: function %d contains percentile metadata",
@@ -16929,16 +19659,48 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		}
 		if measure.Function != plan.AggregateFunctionCountRows &&
 			measure.Function != plan.AggregateFunctionCountPredicate {
-			if err := validateCanonicalFieldRef("aggregate", "input", measure.Input); err != nil {
-				return nil, nil, nil, compileState{}, nil, err
+			if hasFieldInput == hasExpressionInput {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: measure requires exactly one field or scalar eval input",
+				)
 			}
-			if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
-				return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
-					Code:    "SPL_AMBIGUOUS_STATS_FIELD",
-					Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
-					Range:   measure.Input.Range,
+			if hasExpressionInput && !supportsExpressionInput {
+				return nil, nil, nil, compileState{}, nil, fmt.Errorf(
+					"compile ClickHouse aggregate: function %d does not support a scalar eval input",
+					measure.Function,
+				)
+			}
+			if hasFieldInput {
+				if err := validateCanonicalFieldRef("aggregate", "input", measure.Input); err != nil {
+					return nil, nil, nil, compileState{}, nil, err
+				}
+				if state.eventRows && state.allowDynamic && measure.Input.Name == "fields" {
+					return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
+						Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+						Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+						Range:   measure.Input.Range,
+					}
+				}
+			} else if state.eventRows && state.allowDynamic {
+				if sourceRange, reserved := predicateFieldSourceRange(
+					&plan.ScalarPredicateExpression{Value: measure.InputExpression},
+					"fields",
+				); reserved {
+					return nil, nil, nil, compileState{}, nil, &plan.Diagnostic{
+						Code:    "SPL_AMBIGUOUS_STATS_FIELD",
+						Message: "stats cannot read the event result's reserved fields payload without an exact upstream schema",
+						Range:   sourceRange,
+					}
 				}
 			}
+		}
+		measureInputKey := fieldInputCacheKey(measure.Input.Name)
+		if hasExpressionInput {
+			cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
+			}
+			measureInputKey = expressionInputCacheKey(cached.ordinal)
 		}
 		if _, duplicate := seen[measure.Output]; duplicate {
 			return nil, nil, nil, compileState{}, nil, fmt.Errorf("compile ClickHouse aggregate: output field %q is duplicated", measure.Output)
@@ -16946,6 +19708,10 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		seen[measure.Output] = struct{}{}
 		output := quoteIdentifier(measure.Output)
 		measureState := fieldState{valueSQL: output, existsSQL: "1", kind: fieldKindNumber}
+		allNumericInvalidAlias, invalidErr := allNumericInvalidFor(measure, measureInputKey)
+		if invalidErr != nil {
+			return nil, nil, nil, compileState{}, nil, invalidErr
+		}
 		switch measure.Function {
 		case plan.AggregateFunctionCountRows:
 			projection = append(projection, "count() AS "+output)
@@ -16965,21 +19731,9 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			)
 			measureState.numberType = "UInt64"
 		case plan.AggregateFunctionCountValues:
-			inputAlias, cached := countInputs[measure.Input.Name]
-			if !cached {
-				input, ok, resolveErr := resolveCompiledField(measure.Input, state)
-				if resolveErr != nil {
-					return nil, nil, nil, compileState{}, nil, resolveErr
-				}
-				inputSQL := "toUInt64(0)"
-				var inputArgs []any
-				if ok {
-					inputSQL, inputArgs = countValueInputSQL(input)
-				}
-				inputAlias = quoteIdentifier(fmt.Sprintf("__os_measure_count_%d", len(countInputs)))
-				countInputs[measure.Input.Name] = inputAlias
-				next.preAggregateColumns = append(next.preAggregateColumns, inputSQL+" AS "+inputAlias)
-				next.preAggregateArgs = append(next.preAggregateArgs, inputArgs...)
+			inputAlias, inputErr := countInputFor(measure.Input)
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
 			}
 			// Aggregate in UInt128 so the intermediate state cannot wrap. The
 			// production 250M-row read ceiling and 1 MiB hard event ceiling make
@@ -16987,6 +19741,22 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			projection = append(projection, "toUInt64(sum(toUInt128("+inputAlias+"))) AS "+output)
 			measureState.numberType = "UInt64"
 		case plan.AggregateFunctionPercentile:
+			if measure.InputExpression != nil {
+				inputAlias, inputErr := numericInputForExpression(measure.InputExpression)
+				if inputErr != nil {
+					return nil, nil, nil, compileState{}, nil, inputErr
+				}
+				projection = append(
+					projection,
+					statsAllNumericResultSQL(
+						singlePercentileArrayAggregateSQL(measure.Percentile, inputAlias),
+						allNumericInvalidAlias,
+					)+
+						" AS "+output,
+				)
+				measureState.numberType = "Float64"
+				break
+			}
 			percentiles, cached := percentileStates[measure.Input.Name]
 			if !cached {
 				inputAlias, inputIsArray, inputErr := percentileInputFor(measure.Input)
@@ -17031,27 +19801,112 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			}
 			projection = append(
 				projection,
-				"arrayElementOrNull("+percentiles.column+", "+
-					strconv.Itoa(position)+") AS "+output,
+				statsAllNumericResultSQL(
+					"arrayElementOrNull("+percentiles.column+", "+strconv.Itoa(position)+")",
+					allNumericInvalidAlias,
+				)+" AS "+output,
 			)
 			measureState.numberType = "Float64"
-		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage:
-			inputAlias, inputErr := numericInputFor(measure.Input)
+		case plan.AggregateFunctionExactPercentile,
+			plan.AggregateFunctionUpperPercentile,
+			plan.AggregateFunctionMedian:
+			var inputAlias string
+			var inputErr error
+			if measure.InputExpression != nil {
+				inputAlias, inputErr = numericInputForExpression(measure.InputExpression)
+			} else {
+				inputAlias, inputErr = numericInputFor(measure.Input)
+			}
 			if inputErr != nil {
 				return nil, nil, nil, compileState{}, nil, inputErr
 			}
-			valueSQL, supported := numericArrayAggregateSQL(measure.Function, inputAlias)
+			lowering, supported := statsDistributionArrayAggregateSQL(
+				measure.Function,
+				measure.Percentile,
+				inputAlias,
+			)
+			if !supported || lowering.Result != statsDistributionResultNullableFloat64 {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: percentile distribution lowering is invalid",
+				)
+			}
+			projection = append(
+				projection,
+				statsAllNumericResultSQL(lowering.SQL, allNumericInvalidAlias)+" AS "+output,
+			)
+			measureState.numberType = "Float64"
+		case plan.AggregateFunctionRate:
+			var inputAlias string
+			var inputErr error
+			if measure.InputExpression != nil {
+				inputAlias, inputErr = numericInputForExpression(measure.InputExpression)
+			} else {
+				inputAlias, inputErr = numericInputFor(measure.Input)
+			}
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
+			}
+			timeField, timeExists := state.visible["_time"]
+			if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: rate has no canonical _time input",
+				)
+			}
+			projection = append(
+				projection,
+				statsAllNumericResultSQL(
+					statsRateAggregateSQL(
+						inputAlias,
+						chronologicalRowKeyFor(),
+						percentileInputSQL(timeField),
+					),
+					allNumericInvalidAlias,
+				)+" AS "+output,
+			)
+			measureState.numberType = "Float64"
+		case plan.AggregateFunctionSum, plan.AggregateFunctionAverage,
+			plan.AggregateFunctionRange, plan.AggregateFunctionSumSquares,
+			plan.AggregateFunctionStandardDeviationSample,
+			plan.AggregateFunctionStandardDeviationPopulation,
+			plan.AggregateFunctionVarianceSample,
+			plan.AggregateFunctionVariancePopulation:
+			var inputAlias string
+			var inputErr error
+			if measure.InputExpression != nil {
+				inputAlias, inputErr = numericInputForExpression(measure.InputExpression)
+			} else {
+				inputAlias, inputErr = numericInputFor(measure.Input)
+			}
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
+			}
+			valueSQL, supported := statsNumericArrayAggregateSQL(measure.Function, inputAlias)
 			if !supported {
 				return nil, nil, nil, compileState{}, nil, errors.New(
 					"compile ClickHouse aggregate: numeric array function is invalid",
 				)
 			}
-			projection = append(projection, valueSQL+" AS "+output)
+			projection = append(
+				projection,
+				statsAllNumericResultSQL(valueSQL, allNumericInvalidAlias)+" AS "+output,
+			)
 			measureState.numberType = "Float64"
 		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum:
-			input, ok, resolveErr := resolveCompiledField(measure.Input, state)
-			if resolveErr != nil {
-				return nil, nil, nil, compileState{}, nil, resolveErr
+			var input fieldState
+			var ok bool
+			if measure.InputExpression != nil {
+				cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
+				if inputErr != nil {
+					return nil, nil, nil, compileState{}, nil, inputErr
+				}
+				input = cached.field
+				ok = !input.alwaysNull
+			} else {
+				var resolveErr error
+				input, ok, resolveErr = resolveCompiledField(measure.Input, state)
+				if resolveErr != nil {
+					return nil, nil, nil, compileState{}, nil, resolveErr
+				}
 			}
 			if eligible, eligibleArgs, fixed := fixedExtremaEligibilitySQL(input); ok && fixed {
 				function := "minIfOrNull"
@@ -17067,7 +19922,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			}
 
 			if ok && input.kind == fieldKindString {
-				scalarInput := scalarStringInputFor(measure.Input, input)
+				scalarInput := scalarStringInputFor(measureInputKey, input)
 				if !scalarInput.extremaReady {
 					scalarInput.numberAlias = quoteIdentifier(fmt.Sprintf(
 						"__os_measure_extrema_number_%d",
@@ -17090,7 +19945,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				}
 
 				resultKey := scalarExtremaResultKey{
-					input:    measure.Input.Name,
+					input:    measureInputKey,
 					function: measure.Function,
 				}
 				result, cached := scalarExtremaResults[resultKey]
@@ -17136,16 +19991,22 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				break
 			}
 
-			candidates, cached := extremaInputs[measure.Input.Name]
+			candidates, cached := extremaInputs[measureInputKey]
 			if !cached {
 				candidates = quoteIdentifier(fmt.Sprintf("__os_measure_extrema_%d", len(extremaInputs)))
-				extremaInputs[measure.Input.Name] = candidates
+				extremaInputs[measureInputKey] = candidates
 				var candidateSQL string
 				var candidateArgs []any
 				if ok && input.kind == fieldKindDynamic {
 					candidateSQL, candidateArgs = statsExtremaDynamicCandidatesSQL(input)
 				} else {
-					stringInputSQL, inputErr := stringInputFor(measure.Input)
+					var stringInputSQL string
+					var inputErr error
+					if measure.InputExpression != nil {
+						stringInputSQL, inputErr = stringInputForExpression(measure.InputExpression)
+					} else {
+						stringInputSQL, inputErr = stringInputFor(measure.Input)
+					}
 					if inputErr != nil {
 						return nil, nil, nil, compileState{}, nil, inputErr
 					}
@@ -17158,7 +20019,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				next.preAggregateArgs = append(next.preAggregateArgs, candidateArgs...)
 			}
 			resultKey := scalarExtremaResultKey{
-				input:    measure.Input.Name,
+				input:    measureInputKey,
 				function: measure.Function,
 			}
 			result, cached := dynamicExtremaResults[resultKey]
@@ -17191,14 +20052,29 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				existsSQL:      "1",
 				kind:           fieldKindDynamic,
 			}
-		case plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
-			input, inputErr := chronologicalInputFor(measure.Input)
+		case plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
+			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
+			var input chronologicalInput
+			var inputErr error
+			if measure.InputExpression != nil {
+				input, inputErr = chronologicalInputForExpression(measure.InputExpression)
+			} else {
+				input, inputErr = chronologicalInputFor(measure.Input)
+			}
 			if inputErr != nil {
 				return nil, nil, nil, compileState{}, nil, inputErr
 			}
 			rowKey := chronologicalRowKeyFor()
+			if measure.Function == plan.AggregateFunctionFirst ||
+				measure.Function == plan.AggregateFunctionLast {
+				var orderErr error
+				rowKey, _, orderErr = listRowOrdinalFor()
+				if orderErr != nil {
+					return nil, nil, nil, compileState{}, nil, orderErr
+				}
+			}
 			resultKey := chronologicalResultKey{
-				input:    measure.Input.Name,
+				input:    measureInputKey,
 				function: measure.Function,
 			}
 			result, cached := chronologicalResults[resultKey]
@@ -17246,17 +20122,101 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				existsSQL:      "1",
 				kind:           fieldKindDynamic,
 			}
-		case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
-			inputSQL, inputErr := stringInputFor(measure.Input)
+		case plan.AggregateFunctionEarliestTime,
+			plan.AggregateFunctionLatestTime:
+			var input chronologicalInput
+			var inputErr error
+			if measure.InputExpression != nil {
+				input, inputErr = chronologicalInputForExpression(measure.InputExpression)
+			} else {
+				input, inputErr = chronologicalInputFor(measure.Input)
+			}
 			if inputErr != nil {
 				return nil, nil, nil, compileState{}, nil, inputErr
 			}
-			_, publishesValues := valuesInputs[measure.Input.Name]
+			timeField, timeExists := state.visible["_time"]
+			if !timeExists || timeField.kind != fieldKindTime || !timeField.canonicalTime {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: occurrence time has no canonical _time input",
+				)
+			}
+			valueSQL, valueErr := statsOccurrenceTimeAggregateSQL(
+				measure.Function,
+				input.candidatesAlias,
+				chronologicalRowKeyFor(),
+				percentileInputSQL(timeField),
+			)
+			if valueErr != nil {
+				return nil, nil, nil, compileState{}, nil, valueErr
+			}
+			projection = append(projection, valueSQL+" AS "+output)
+			measureState.numberType = "Float64"
+		case plan.AggregateFunctionEstimatedDistinctCount,
+			plan.AggregateFunctionEstimatedDistinctCountError,
+			plan.AggregateFunctionMode:
+			var inputSQL string
+			var inputErr error
+			if measure.InputExpression != nil {
+				inputSQL, inputErr = stringInputForExpression(measure.InputExpression)
+			} else {
+				inputSQL, inputErr = stringInputFor(measure.Input)
+			}
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
+			}
+			lowering, supported := statsDistributionArrayAggregateSQL(
+				measure.Function,
+				measure.Percentile,
+				inputSQL,
+			)
+			if !supported {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: string distribution lowering is invalid",
+				)
+			}
+			projection = append(projection, lowering.SQL+" AS "+output)
+			switch lowering.Result {
+			case statsDistributionResultUInt64:
+				measureState.numberType = "UInt64"
+			case statsDistributionResultFloat64:
+				measureState.numberType = "Float64"
+			case statsDistributionResultNullableString:
+				measureState.kind = fieldKindString
+				measureState.numberType = ""
+				measureState.existsSQL = "isNotNull(" + output + ")"
+				if measure.InputExpression != nil {
+					cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
+					if inputErr != nil {
+						return nil, nil, nil, compileState{}, nil, inputErr
+					}
+					measureState.maxStringBytes = fieldStateStringByteBound(cached.field)
+				} else if input, ok, resolveErr := resolveCompiledField(measure.Input, state); resolveErr != nil {
+					return nil, nil, nil, compileState{}, nil, resolveErr
+				} else if ok {
+					measureState.maxStringBytes = fieldStateStringByteBound(input)
+				}
+			default:
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: distribution result kind is invalid",
+				)
+			}
+		case plan.AggregateFunctionDistinctCount, plan.AggregateFunctionValues:
+			var inputSQL string
+			var inputErr error
+			if measure.InputExpression != nil {
+				inputSQL, inputErr = stringInputForExpression(measure.InputExpression)
+			} else {
+				inputSQL, inputErr = stringInputFor(measure.Input)
+			}
+			if inputErr != nil {
+				return nil, nil, nil, compileState{}, nil, inputErr
+			}
+			_, publishesValues := valuesInputs[measureInputKey]
 			if measure.Function == plan.AggregateFunctionDistinctCount && !publishesValues {
-				cardinalityColumn, cached := distinctCounts[measure.Input.Name]
+				cardinalityColumn, cached := distinctCounts[measureInputKey]
 				if !cached {
 					cardinalityColumn = quoteIdentifier(fmt.Sprintf("__os_dc_cardinality_%d", len(distinctCounts)))
-					distinctCounts[measure.Input.Name] = cardinalityColumn
+					distinctCounts[measureInputKey] = cardinalityColumn
 					projection = append(projection, distinctCountCardinalitySQL(inputSQL)+" AS "+cardinalityColumn)
 				}
 				next.postAggregateDistinctCounts = append(next.postAggregateDistinctCounts, compiledDistinctCount{
@@ -17265,10 +20225,10 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				})
 				measureState.numberType = "UInt64"
 			} else {
-				setColumn, cached := exactStringSets[measure.Input.Name]
+				setColumn, cached := exactStringSets[measureInputKey]
 				if !cached {
 					setColumn = quoteIdentifier(fmt.Sprintf("__os_exact_strings_%d", len(exactStringSets)))
-					exactStringSets[measure.Input.Name] = setColumn
+					exactStringSets[measureInputKey] = setColumn
 					projection = append(
 						projection,
 						exactDistinctStringSetSQL(inputSQL, uint64(MaximumStatsValuesPerGroup))+" AS "+setColumn,
@@ -17283,15 +20243,26 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 					measureState.numberType = "UInt64"
 				} else {
 					measureState.kind = fieldKindStringArray
+					measureState.mvSortedLexicographic = true
 					// The physical result is always a non-null Array(String), but an
 					// empty multivalue has no logical SPL field value.
 					measureState.existsSQL = "notEmpty(" + output + ")"
 				}
 			}
 		case plan.AggregateFunctionList:
-			_, inputExists, resolveErr := resolveCompiledField(measure.Input, state)
-			if resolveErr != nil {
-				return nil, nil, nil, compileState{}, nil, resolveErr
+			inputExists := false
+			if measure.InputExpression != nil {
+				cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
+				if inputErr != nil {
+					return nil, nil, nil, compileState{}, nil, inputErr
+				}
+				inputExists = !cached.field.alwaysNull
+			} else {
+				_, resolved, resolveErr := resolveCompiledField(measure.Input, state)
+				if resolveErr != nil {
+					return nil, nil, nil, compileState{}, nil, resolveErr
+				}
+				inputExists = resolved
 			}
 			if !inputExists {
 				// Preserve global aggregate and retained-group row semantics with
@@ -17306,7 +20277,13 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				measureState.existsSQL = "notEmpty(" + output + ")"
 				break
 			}
-			inputSQL, inputErr := stringInputFor(measure.Input)
+			var inputSQL string
+			var inputErr error
+			if measure.InputExpression != nil {
+				inputSQL, inputErr = stringInputForExpression(measure.InputExpression)
+			} else {
+				inputSQL, inputErr = stringInputFor(measure.Input)
+			}
 			if inputErr != nil {
 				return nil, nil, nil, compileState{}, nil, inputErr
 			}
@@ -17314,7 +20291,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			if orderErr != nil {
 				return nil, nil, nil, compileState{}, nil, orderErr
 			}
-			list, cached := orderedStringLists[measure.Input.Name]
+			list, cached := orderedStringLists[measureInputKey]
 			if !cached {
 				ordinal := len(orderedStringLists)
 				priorElements := quoteIdentifier(fmt.Sprintf(
@@ -17355,7 +20332,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 					"__os_ordered_strings_bytes_overflow_%d",
 					ordinal,
 				))
-				orderedStringLists[measure.Input.Name] = list
+				orderedStringLists[measureInputKey] = list
 				projection = append(
 					projection,
 					boundedOrderedStringListSQL("tupleElement("+rowState+", 1)")+
@@ -17379,14 +20356,35 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		}
 		switch measure.Function {
 		case plan.AggregateFunctionMinimum, plan.AggregateFunctionMaximum,
+			plan.AggregateFunctionFirst, plan.AggregateFunctionLast,
 			plan.AggregateFunctionEarliest, plan.AggregateFunctionLatest:
-			input, ok, resolveErr := resolveCompiledField(measure.Input, state)
-			if resolveErr != nil {
-				return nil, nil, nil, compileState{}, nil, resolveErr
+			var input fieldState
+			var ok bool
+			if measure.InputExpression != nil {
+				cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
+				if inputErr != nil {
+					return nil, nil, nil, compileState{}, nil, inputErr
+				}
+				input = cached.field
+				ok = !input.alwaysNull
+			} else {
+				var resolveErr error
+				input, ok, resolveErr = resolveCompiledField(measure.Input, state)
+				if resolveErr != nil {
+					return nil, nil, nil, compileState{}, nil, resolveErr
+				}
 			}
 			if ok {
 				measureState.maxStringBytes = fieldStateStringByteBound(input)
 			}
+		}
+		if measure.Function == plan.AggregateFunctionValues ||
+			measure.Function == plan.AggregateFunctionList {
+			// delim is presentation metadata only. Keep the aggregate as a typed
+			// Array(String) and bind the effective default/authored delimiter to
+			// this exact output field for downstream exact projections.
+			measureState.flatMultivalueDelimiter = strings.Clone(statsOptions.Delimiter)
+			measureState.hasFlatMultivalueDelimiter = true
 		}
 		next.visible[measure.Output] = measureState
 		next.publicOrder = append(next.publicOrder, measure.Output)
@@ -17406,7 +20404,10 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			"max(CAST("+invalid+" AS UInt8)) OVER () AS "+anyUnsupportedColumn,
 		)
 		next.preAggregateValidationArgs = append(next.preAggregateValidationArgs, dynamicGroupInvalidArgs...)
-		eligible := "(" + strings.Join(predicates, " AND ") + ")"
+		eligible := "1"
+		if len(predicates) > 0 {
+			eligible = "(" + strings.Join(predicates, " AND ") + ")"
+		}
 		predicates = []string{
 			"if(" + anyUnsupportedColumn + " != 0, throwIf(toUInt8(1), '" + UnsupportedStatsByValueMarker + "') = 0, " + eligible + ")",
 		}
@@ -17823,11 +20824,11 @@ func chronologicalAggregateSQL(
 	ordinal := "toUInt64(1)"
 	aggregate := "argMinOrNullIf"
 	switch function {
-	case plan.AggregateFunctionEarliest:
+	case plan.AggregateFunctionEarliest, plan.AggregateFunctionFirst:
 		if multiple {
 			ordinal = "tupleElement(" + candidatesSQL + ", 5)"
 		}
-	case plan.AggregateFunctionLatest:
+	case plan.AggregateFunctionLatest, plan.AggregateFunctionLast:
 		value = "tupleElement(" + candidatesSQL + ", 2)"
 		if multiple {
 			ordinal = "tupleElement(" + candidatesSQL + ", 6)"
@@ -17841,6 +20842,51 @@ func chronologicalAggregateSQL(
 	}
 	key := "tuple(" + rowKeySQL + ", " + ordinal + ")"
 	return aggregate + "(" + value + ", " + key + ", " + eligible + " != 0)", nil
+}
+
+func statsOccurrenceTimeAggregateSQL(
+	function plan.AggregateFunction,
+	candidatesSQL string,
+	rowKeySQL string,
+	timeSQL string,
+) (string, error) {
+	aggregate := "argMinOrNullIf"
+	switch function {
+	case plan.AggregateFunctionEarliestTime:
+	case plan.AggregateFunctionLatestTime:
+		aggregate = "argMaxOrNullIf"
+	default:
+		return "", fmt.Errorf(
+			"compile ClickHouse occurrence-time aggregate: unsupported function %d",
+			function,
+		)
+	}
+	eligible := "tupleElement(" + candidatesSQL + ", 3) != 0"
+	invalid := "tupleElement(" + candidatesSQL + ", 4) != 0"
+	winner := aggregate + "(" + timeSQL + ", " + rowKeySQL + ", " + eligible + ")"
+	return "if(max(toUInt8(" + invalid + ")) != 0, toFloat64(throwIf(" +
+		"toUInt8(1), '" + UnsupportedStatsMeasureValueMarker + "')), " + winner + ")", nil
+}
+
+// statsRateAggregateSQL implements the documented no-reset endpoint formula.
+// Splunk's separate "largest value reset" behavior is not specified well
+// enough by the pinned reference to reproduce without a differential oracle;
+// that case remains explicitly tracked in the stats parity inventory.
+func statsRateAggregateSQL(inputSQL, rowKeySQL, timeSQL string) string {
+	firstValue := "arrayElementOrNull(" + inputSQL + ", 1)"
+	lastValue := "arrayElementOrNull(" + inputSQL + ", -1)"
+	firstEligible := "isNotNull(" + firstValue + ")"
+	lastEligible := "isNotNull(" + lastValue + ")"
+	earliestValue := "argMinOrNullIf(" + firstValue + ", " + rowKeySQL + ", " + firstEligible + ")"
+	latestValue := "argMaxOrNullIf(" + lastValue + ", " + rowKeySQL + ", " + lastEligible + ")"
+	earliestTime := "argMinOrNullIf(" + timeSQL + ", " + rowKeySQL + ", " + firstEligible + ")"
+	latestTime := "argMaxOrNullIf(" + timeSQL + ", " + rowKeySQL + ", " + lastEligible + ")"
+	pointCount := "countIf(" + firstEligible + " OR " + lastEligible + ")"
+	duration := "(" + latestTime + " - " + earliestTime + ")"
+	nullFloat := "CAST(NULL AS Nullable(Float64))"
+	return "if(" + pointCount + " < 2 OR isNull(" + duration + ") OR " + duration +
+		" = 0, " + nullFloat + ", ifNotFinite((" + latestValue + " - " +
+		earliestValue + ") / " + duration + ", " + nullFloat + "))"
 }
 
 func eventStatsChronologicalValidationSQL(inputSQL, _ string) string {
@@ -18775,6 +21821,44 @@ func statsExtremaStoredTypeWithDecimalSQL(
 		"toUInt8(0))"
 }
 
+func compileStatsSparklineResults(
+	relation compiledRelation,
+	measures []compiledStatsSparklineMeasure,
+	ownerRange spl.Range,
+	stage int,
+) (compiledRelation, int, error) {
+	if len(measures) == 0 {
+		return relation, 0, nil
+	}
+
+	excluded := make([]string, 0, len(measures))
+	projection := make([]string, 1, 1+len(measures))
+	for _, measure := range measures {
+		if measure.recordsColumn == "" || measure.outputColumn == "" {
+			return compiledRelation{}, 0, errors.New(
+				"compile ClickHouse stats sparkline: publication metadata is invalid",
+			)
+		}
+		published, ok := statsSparklinePublishSQL(
+			measure.recordsColumn,
+			measure.spec,
+			measure.missing,
+		)
+		if !ok {
+			return compiledRelation{}, 0, errors.New(
+				"compile ClickHouse stats sparkline: publication lowering is invalid",
+			)
+		}
+		excluded = append(excluded, measure.recordsColumn)
+		projection = append(projection, published+" AS "+measure.outputColumn)
+	}
+	projection[0] = "* EXCEPT (" + strings.Join(excluded, ", ") + ")"
+	alias := quoteIdentifier(fmt.Sprintf("_stage_%d", stage+1))
+	sql := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
+		relation.sql + ") AS " + alias
+	return relation.selectFrom(sql, ownerRange), 1, nil
+}
+
 func compileChronologicalResults(
 	relation compiledRelation,
 	measures []compiledChronologicalMeasure,
@@ -19528,6 +22612,7 @@ func compileWindow(operator *plan.Window, state compileState) (string, compileSt
 	next := state
 	next.visible = make(map[string]fieldState, len(state.visible)+1)
 	for name, field := range state.visible {
+		field.storedPath = field.storedPath.clone()
 		next.visible[name] = field
 	}
 	next.publicOrder = append([]string(nil), state.publicOrder...)

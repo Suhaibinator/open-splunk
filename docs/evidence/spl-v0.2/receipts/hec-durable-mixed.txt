@@ -1,0 +1,14 @@
+revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
+profile=default-mixed small_requests_per_second=50 batch_events_per_second=950 total_events_per_second=1000
+host=Apple M4 Max
+logical_cpus=16
+started_utc=2026-08-11T22:15:46Z
+=== RUN   TestBackendHECDurableLoad
+    backend_hec_load_test.go:969: durable HEC load: profile=mixed configured_duration=30s elapsed=31.94s target_eps=1000 planned_request_rows=1529 small=scheduled_requests=1500 scheduled_events=1500 offered_eps=50.0 accepted_requests=1236 accepted_rps=41.2 accepted_events=1236 accepted_eps=41.2 warm_accepted_requests=455 warm_accepted_events=455 busy=0 capacity=264 max_schedule_lag=8.996292ms full=scheduled_requests=29 scheduled_events=29000 offered_eps=966.7 accepted_requests=23 accepted_rps=0.8 accepted_events=23000 accepted_eps=766.7 warm_accepted_requests=9 warm_accepted_events=9000 busy=0 capacity=6 max_schedule_lag=4.068294ms native_events=3000 control_mutations=302 rows=27236
+    backend_hec_load_test.go:982: durable HEC outage/recovery: outage=5s recovery=15.303s max_pending=64 max_pending_bytes=340369 max_pending_acks=64 max_oldest_pending=4.982861s retries=8 successes=1270
+    backend_hec_load_test.go:993: durable HEC runtime bounds: gc_samples=268 max_heap_mb=20 scheduler_samples=7 max_goroutines=57 last_goroutines=56 max_threads=21 process_samples=0 max_resident_mb=0 max_process_threads=0
+--- PASS: TestBackendHECDurableLoad (44.75s)
+PASS
+ok  	github.com/Suhaibinator/open-splunk/integration	46.177s
+tracked_and_untracked_status=clean
+completed_utc=2026-08-11T22:16:33Z

@@ -17,6 +17,13 @@ import (
 )
 
 func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJob, error) {
+	if !searchjobs.ValidCompilerVersion(job.CompilerVersion) {
+		return nil, errors.New("search job contains an invalid compiler version")
+	}
+	knowledgeSnapshot, err := projectKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
+	if err != nil {
+		return nil, err
+	}
 	resultShape := resultShapeForSPL(job.SPL)
 	earliest, err := validTimestamp(job.Earliest)
 	if err != nil {
@@ -63,18 +70,20 @@ func searchJobToProto(job searchjobs.Job, now time.Time) (*opensplunkv1.SearchJo
 		Definition:          definition,
 		Source:              source,
 		NormalizedSpl:       optionalString(job.NormalizedSPL),
+		CompilerVersion:     job.CompilerVersion,
 		EffectiveIndexScope: slices.Clone(job.EffectiveIndexes),
 		ResolvedTimeRange: &opensplunkv1.ResolvedTimeRange{
 			Earliest: earliest,
 			Latest:   latest,
 			Timezone: timezone,
 		},
-		IndexTimeCutoff:  indexTimeCutoff,
-		State:            searchStateToProto(job.State),
-		ResultKind:       resultShape.Kind,
-		ResultsTruncated: job.ResultsTruncated,
-		Progress:         progress,
-		CreatedAt:        createdAt,
+		IndexTimeCutoff:   indexTimeCutoff,
+		State:             searchStateToProto(job.State),
+		ResultKind:        resultShape.Kind,
+		ResultsTruncated:  job.ResultsTruncated,
+		Progress:          progress,
+		CreatedAt:         createdAt,
+		KnowledgeSnapshot: knowledgeSnapshot,
 	}
 	if job.Schema != nil {
 		result.ResultSchema, err = schemaToProto(job.ID, *job.Schema, resultShape)
@@ -306,10 +315,33 @@ func unwrapProtobufRoutes(routes []protobufRouteDefinition) []router.RouteDefini
 }
 
 // forwardCompatibleProtoSanitizer discards fields unknown to this server before
-// request validation or persistence. SRouter has already enforced the raw body
-// limit, so discarded bytes still consume the caller's request budget.
+// request validation or persistence. Create and update knowledge requests are
+// the exception: unknown fields inside their persisted definitions are rejected
+// before ordinary unknown fields are cleared. SRouter has already enforced the
+// raw body limit, so discarded bytes still consume the caller's request budget.
 func forwardCompatibleProtoSanitizer[T proto.Message](request T) (T, error) {
 	if isNilDependency(request) {
+		return request, nil
+	}
+	switch knowledgeRequest := any(request).(type) {
+	case *opensplunkv1.CreateKnowledgeObjectRequest:
+		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
+			return request, err
+		}
+	case *opensplunkv1.UpdateKnowledgeObjectRequest:
+		if err := rejectUnknownKnowledgeDefinition(knowledgeRequest.GetDefinition()); err != nil {
+			return request, err
+		}
+	case *opensplunkv1.ValidateKnowledgeObjectRequest:
+		// Validate distinguishes unknown request and mask fields (envelope
+		// errors) from unknown applied-definition fields (in-band candidate
+		// invalidity). Its dedicated decoder has already projected updates and
+		// bounded dangerous repetitions, so no generic clearing is safe here.
+		return request, nil
+	case *opensplunkv1.PreviewKnowledgeObjectRequest:
+		// Preview shares Validate's candidate-envelope unknown authority. Its
+		// request-only decoder applies the same bounded update projection before
+		// this sanitizer can ever be used by a future route.
 		return request, nil
 	}
 

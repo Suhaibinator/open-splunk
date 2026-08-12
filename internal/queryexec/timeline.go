@@ -44,6 +44,16 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 	if executor.newQueryID == nil {
 		return nil, errors.New("execute ClickHouse timeline: query ID generator is required")
 	}
+	if executor.readAdmission != nil {
+		detached, ok := query.CloneForExecution()
+		if !ok {
+			return nil, fmt.Errorf(
+				"%w: compiled timeline execution authority is invalid",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		query = detached
+	}
 	query.Args = slices.Clone(query.Args)
 	if err := validateCompiledTimeline(query); err != nil {
 		return nil, err

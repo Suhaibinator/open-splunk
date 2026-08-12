@@ -1131,8 +1131,8 @@ func TestMetadataEstimatesDetectOverflow(t *testing.T) {
 		OwnerID:  strings.Repeat("o", maximumAccessIDBytes),
 	}
 	defaultEstimate, err := requestedMetadataBytes("", maximumAccess, strings.Repeat("s", maximumSearchIDBytes), nil)
-	if err != nil || defaultEstimate != maximumJobMetadataExcludingDirectory {
-		t.Fatalf("default metadata estimate = %d, %v, want %d", defaultEstimate, err, maximumJobMetadataExcludingDirectory)
+	if err != nil || defaultEstimate != maximumLegacyJobMetadataExcludingDirectory {
+		t.Fatalf("default legacy metadata estimate = %d, %v, want %d", defaultEstimate, err, maximumLegacyJobMetadataExcludingDirectory)
 	}
 }
 

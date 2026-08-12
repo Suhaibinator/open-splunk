@@ -8,10 +8,15 @@ const workspace = process.cwd();
 const outputDirectory = await mkdtemp(path.join(tmpdir(), "open-splunk-frontend-tests-"));
 const testFiles = [
   path.join("app", "admin", "admin-resource-data.test.ts"),
+  path.join("app", "admin", "backend-admin-console-hec.test.ts"),
+  path.join("app", "admin", "knowledge-manager-data.test.ts"),
+  path.join("app", "admin", "knowledge-manager-preview-data.test.ts"),
   path.join("app", "activity", "backend-audit-data.test.ts"),
   path.join("app", "search-workspace", "live-preview.test.ts"),
   path.join("app", "search-workspace", "progress-revision.test.ts"),
   path.join("app", "search-workspace", "categorical-interaction.test.ts"),
+  path.join("app", "search-workspace", "statistics-sparkline.test.ts"),
+  path.join("app", "search-workspace", "statistics-multivalue.test.ts"),
   path.join("app", "search-workspace", "time-range.test.ts"),
   path.join("app", "search-workspace", "workspace-utils.test.ts"),
   path.join("app", "search-workspace", "virtual-table.test.ts"),
@@ -19,6 +24,7 @@ const testFiles = [
   path.join("lib", "api", "pagination.test.ts"),
   path.join("lib", "api", "administrator-session.test.ts"),
   path.join("lib", "api", "protobuf-forward-compat.test.ts"),
+  path.join("lib", "api", "result-column-presentation.test.ts"),
   path.join("lib", "api", "search-websocket.test.ts"),
   path.join("lib", "api", "system-bootstrap.test.ts"),
   path.join("lib", "search", "backend-data.test.ts"),
@@ -26,6 +32,9 @@ const testFiles = [
   path.join("lib", "search", "server-exports.test.ts"),
   path.join("lib", "search", "example-drafts.test.ts"),
   path.join("lib", "search", "saved-search-names.test.ts"),
+  path.join("lib", "search", "spl-editor.test.ts"),
+  path.join("lib", "search", "spl-syntax.test.ts"),
+  path.join("lib", "search", "server-inspection.test.ts"),
   path.join("lib", "search", "streamstats-surface.test.ts"),
   path.join("integration", "browser_harness.test.ts"),
 ];
@@ -49,8 +58,10 @@ try {
   await run(process.execPath, [
     "--test",
     path.join(workspace, "scripts", "build-ui-output.test.mjs"),
+    path.join(workspace, "scripts", "check-buf-breaking.test.mjs"),
     path.join(workspace, "scripts", "compile-protos.test.mjs"),
     path.join(workspace, "scripts", "materialize-git-snapshot.test.mjs"),
+    path.join(workspace, "scripts", "run-go-race-shard.test.mjs"),
     path.join(workspace, "scripts", "build-release.test.mjs"),
     path.join(workspace, "scripts", "build-oci.test.mjs"),
   ]);

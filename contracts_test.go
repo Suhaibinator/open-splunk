@@ -1,6 +1,10 @@
 package opensplunk_test
 
 import (
+	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"os"
 	"testing"
 
 	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
@@ -172,10 +176,11 @@ func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 		t.Fatal("KnowledgeSnapshot descriptor is missing")
 	}
 	for name, wantNumber := range map[protoreflect.Name]protoreflect.FieldNumber{
-		"objects":         8,
-		"dependencies":    9,
-		"lookup_assets":   10,
-		"snapshot_sha256": 11,
+		"objects":                    8,
+		"dependencies":               9,
+		"lookup_assets":              10,
+		"snapshot_sha256":            11,
+		"tenant_catalog_state_token": 16,
 	} {
 		field := snapshot.Fields().ByName(name)
 		if field == nil {
@@ -184,6 +189,9 @@ func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 		}
 		if field.Number() != wantNumber {
 			t.Errorf("KnowledgeSnapshot.%s wire number = %d, want %d", name, field.Number(), wantNumber)
+		}
+		if name == "tenant_catalog_state_token" && field.Kind() != protoreflect.BytesKind {
+			t.Errorf("KnowledgeSnapshot.%s kind = %s, want bytes", name, field.Kind())
 		}
 	}
 	visited := make(map[protoreflect.FullName]bool)
@@ -264,6 +272,556 @@ func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 	}
 }
 
+func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T) {
+	t.Parallel()
+
+	type fieldContract struct {
+		name            protoreflect.Name
+		number          protoreflect.FieldNumber
+		kind            protoreflect.Kind
+		cardinality     protoreflect.Cardinality
+		hasPresence     bool
+		optionalKeyword bool
+		message         protoreflect.FullName
+		enum            protoreflect.FullName
+		oneof           protoreflect.Name
+	}
+	type messageContract struct {
+		name   protoreflect.Name
+		fields []fieldContract
+	}
+
+	file := opensplunkv1.File_open_splunk_v1_knowledge_proto
+	contracts := []messageContract{
+		{
+			name: "KnowledgeSnapshotRef",
+			fields: []fieldContract{
+				{name: "snapshot_sha256", number: 1, kind: protoreflect.BytesKind, cardinality: protoreflect.Optional},
+				{name: "tenant_catalog_revision", number: 2, kind: protoreflect.Uint64Kind, cardinality: protoreflect.Optional},
+				{name: "tenant_catalog_state_token", number: 3, kind: protoreflect.BytesKind, cardinality: protoreflect.Optional},
+				{name: "object_count", number: 4, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
+				{name: "compiler_compatibility_version", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+			},
+		},
+		{
+			name: "KnowledgeSnapshotAuthorizedObjectSummary",
+			fields: []fieldContract{
+				{name: "knowledge_object_id", number: 1, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+				{name: "version", number: 2, kind: protoreflect.Uint64Kind, cardinality: protoreflect.Optional},
+				{name: "name", number: 3, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+			},
+		},
+		{
+			name: "KnowledgeSnapshotObjectSummary",
+			fields: []fieldContract{
+				{name: "resolution_ordinal", number: 1, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
+				{
+					name:        "object_type",
+					number:      2,
+					kind:        protoreflect.EnumKind,
+					cardinality: protoreflect.Optional,
+					enum:        "open_splunk.v1.KnowledgeObjectType",
+				},
+				{
+					name:        "stage",
+					number:      3,
+					kind:        protoreflect.EnumKind,
+					cardinality: protoreflect.Optional,
+					enum:        "open_splunk.v1.KnowledgeSearchStage",
+				},
+				{
+					name:        "authorized_object",
+					number:      4,
+					kind:        protoreflect.MessageKind,
+					cardinality: protoreflect.Optional,
+					hasPresence: true,
+					message:     "open_splunk.v1.KnowledgeSnapshotAuthorizedObjectSummary",
+					oneof:       "disclosure",
+				},
+				{
+					name:        "redacted",
+					number:      5,
+					kind:        protoreflect.BoolKind,
+					cardinality: protoreflect.Optional,
+					hasPresence: true,
+					oneof:       "disclosure",
+				},
+			},
+		},
+		{
+			name: "KnowledgeSnapshotSummary",
+			fields: []fieldContract{
+				{
+					name:        "ref",
+					number:      1,
+					kind:        protoreflect.MessageKind,
+					cardinality: protoreflect.Optional,
+					hasPresence: true,
+					message:     "open_splunk.v1.KnowledgeSnapshotRef",
+				},
+				{
+					name:        "objects",
+					number:      2,
+					kind:        protoreflect.MessageKind,
+					cardinality: protoreflect.Repeated,
+					message:     "open_splunk.v1.KnowledgeSnapshotObjectSummary",
+				},
+				{name: "objects_truncated", number: 3, kind: protoreflect.BoolKind, cardinality: protoreflect.Optional},
+			},
+		},
+	}
+
+	for _, contract := range contracts {
+		contract := contract
+		t.Run(string(contract.name), func(t *testing.T) {
+			descriptor := file.Messages().ByName(contract.name)
+			if descriptor == nil {
+				t.Fatalf("%s descriptor is missing", contract.name)
+			}
+			if got := descriptor.Fields().Len(); got != len(contract.fields) {
+				t.Fatalf("%s field count = %d, want exact append-only count %d", contract.name, got, len(contract.fields))
+			}
+			for index, want := range contract.fields {
+				field := descriptor.Fields().Get(index)
+				if field.Name() != want.name || field.Number() != want.number {
+					t.Errorf(
+						"%s declaration %d = %s/%d, want %s/%d",
+						contract.name,
+						index,
+						field.Name(),
+						field.Number(),
+						want.name,
+						want.number,
+					)
+				}
+				if field.Kind() != want.kind || field.Cardinality() != want.cardinality {
+					t.Errorf(
+						"%s.%s = %s/%s, want %s/%s",
+						contract.name,
+						want.name,
+						field.Cardinality(),
+						field.Kind(),
+						want.cardinality,
+						want.kind,
+					)
+				}
+				if field.HasPresence() != want.hasPresence || field.HasOptionalKeyword() != want.optionalKeyword {
+					t.Errorf(
+						"%s.%s presence = %t/optional-keyword=%t, want %t/%t",
+						contract.name,
+						want.name,
+						field.HasPresence(),
+						field.HasOptionalKeyword(),
+						want.hasPresence,
+						want.optionalKeyword,
+					)
+				}
+				if want.message != "" && (field.Message() == nil || field.Message().FullName() != want.message) {
+					t.Errorf("%s.%s message = %v, want %s", contract.name, want.name, field.Message(), want.message)
+				}
+				if want.enum != "" && (field.Enum() == nil || field.Enum().FullName() != want.enum) {
+					t.Errorf("%s.%s enum = %v, want %s", contract.name, want.name, field.Enum(), want.enum)
+				}
+				containingOneof := field.ContainingOneof()
+				if want.oneof == "" {
+					if containingOneof != nil {
+						t.Errorf("%s.%s unexpectedly belongs to oneof %s", contract.name, want.name, containingOneof.Name())
+					}
+					continue
+				}
+				if containingOneof == nil || containingOneof.Name() != want.oneof || containingOneof.IsSynthetic() {
+					t.Errorf("%s.%s oneof = %v, want non-synthetic %s", contract.name, want.name, containingOneof, want.oneof)
+				}
+			}
+		})
+	}
+
+	objectSummary := file.Messages().ByName("KnowledgeSnapshotObjectSummary")
+	if objectSummary == nil {
+		t.Fatal("KnowledgeSnapshotObjectSummary descriptor is missing")
+	}
+	if objectSummary.Oneofs().Len() != 1 {
+		t.Fatalf("KnowledgeSnapshotObjectSummary oneof count = %d, want exactly 1", objectSummary.Oneofs().Len())
+	}
+	disclosure := objectSummary.Oneofs().ByName("disclosure")
+	if disclosure == nil || disclosure.IsSynthetic() || disclosure.Fields().Len() != 2 {
+		t.Fatalf("KnowledgeSnapshotObjectSummary.disclosure = %v, want non-synthetic two-variant oneof", disclosure)
+	}
+	if disclosure.Fields().Get(0).Name() != "authorized_object" || disclosure.Fields().Get(1).Name() != "redacted" {
+		t.Fatalf("KnowledgeSnapshotObjectSummary.disclosure variants = %s/%s, want authorized_object/redacted", disclosure.Fields().Get(0).Name(), disclosure.Fields().Get(1).Name())
+	}
+
+	attachments := []struct {
+		name    string
+		file    protoreflect.FileDescriptor
+		message protoreflect.Name
+		number  protoreflect.FieldNumber
+		value   protoreflect.FullName
+	}{
+		{
+			name:    "search job",
+			file:    opensplunkv1.File_open_splunk_v1_search_proto,
+			message: "SearchJob",
+			number:  23,
+			value:   "open_splunk.v1.KnowledgeSnapshotSummary",
+		},
+		{
+			name:    "history entry",
+			file:    opensplunkv1.File_open_splunk_v1_history_proto,
+			message: "SearchHistoryEntry",
+			number:  18,
+			value:   "open_splunk.v1.KnowledgeSnapshotSummary",
+		},
+		{
+			name:    "attempt audit",
+			file:    opensplunkv1.File_open_splunk_v1_search_attempt_audit_proto,
+			message: "SearchAttemptAuditEvent",
+			number:  8,
+			value:   "open_splunk.v1.KnowledgeSnapshotRef",
+		},
+		{
+			name:    "inspection response",
+			file:    opensplunkv1.File_open_splunk_v1_search_inspection_api_proto,
+			message: "InspectSearchJobResponse",
+			number:  7,
+			value:   "open_splunk.v1.KnowledgeSnapshotSummary",
+		},
+		{
+			name:    "export job",
+			file:    opensplunkv1.File_open_splunk_v1_export_proto,
+			message: "ExportJob",
+			number:  13,
+			value:   "open_splunk.v1.KnowledgeSnapshotSummary",
+		},
+	}
+	for _, attachment := range attachments {
+		attachment := attachment
+		t.Run(attachment.name+" attachment", func(t *testing.T) {
+			message := attachment.file.Messages().ByName(attachment.message)
+			if message == nil {
+				t.Fatalf("%s descriptor is missing", attachment.message)
+			}
+			field := message.Fields().ByName("knowledge_snapshot")
+			if field == nil {
+				t.Fatalf("%s.knowledge_snapshot is missing", attachment.message)
+			}
+			if field.Number() != attachment.number || field.Kind() != protoreflect.MessageKind ||
+				field.Cardinality() != protoreflect.Optional || field.Message() == nil || field.Message().FullName() != attachment.value {
+				t.Errorf(
+					"%s.knowledge_snapshot = wire %d/%s/%s/%v, want %d/optional/message/%s",
+					attachment.message,
+					field.Number(),
+					field.Cardinality(),
+					field.Kind(),
+					field.Message(),
+					attachment.number,
+					attachment.value,
+				)
+			}
+			presence := field.ContainingOneof()
+			if !field.HasPresence() || !field.HasOptionalKeyword() || presence == nil ||
+				!presence.IsSynthetic() || presence.Name() != "_knowledge_snapshot" || presence.Fields().Len() != 1 {
+				t.Errorf(
+					"%s.knowledge_snapshot presence = has:%t optional:%t oneof:%v, want optional synthetic _knowledge_snapshot",
+					attachment.message,
+					field.HasPresence(),
+					field.HasOptionalKeyword(),
+					presence,
+				)
+			}
+		})
+	}
+}
+
+func TestFieldExtractionDefinitionDeterministicWireMatchesCrossLanguageGolden(t *testing.T) {
+	t.Parallel()
+
+	descriptor := opensplunkv1.File_open_splunk_v1_knowledge_proto.Messages().ByName("FieldExtractionDefinition")
+	if descriptor == nil {
+		t.Fatal("FieldExtractionDefinition descriptor is missing")
+	}
+	wantDeclarationOrder := []struct {
+		name   protoreflect.Name
+		number protoreflect.FieldNumber
+	}{
+		{name: "input_field", number: 1},
+		{name: "overwrite_behavior", number: 4},
+		{name: "regex", number: 2},
+		{name: "json", number: 3},
+	}
+	if got := descriptor.Fields().Len(); got != len(wantDeclarationOrder) {
+		t.Fatalf("FieldExtractionDefinition field count = %d, want %d", got, len(wantDeclarationOrder))
+	}
+	for index, want := range wantDeclarationOrder {
+		field := descriptor.Fields().Get(index)
+		if field.Name() != want.name || field.Number() != want.number {
+			t.Fatalf(
+				"FieldExtractionDefinition declaration %d = %s/%d, want %s/%d",
+				index,
+				field.Name(),
+				field.Number(),
+				want.name,
+				want.number,
+			)
+		}
+	}
+
+	type regexFixture struct {
+		Pattern      string   `json:"pattern"`
+		OutputFields []string `json:"outputFields"`
+	}
+	type jsonFixture struct {
+		Path        string `json:"path"`
+		OutputField string `json:"outputField"`
+	}
+	var fixture struct {
+		Version int `json:"version"`
+		Cases   []struct {
+			Name              string        `json:"name"`
+			InputField        string        `json:"inputField"`
+			OverwriteBehavior int32         `json:"overwriteBehavior"`
+			Regex             *regexFixture `json:"regex"`
+			JSON              *jsonFixture  `json:"json"`
+			WireHex           string        `json:"wireHex"`
+		} `json:"cases"`
+	}
+	encodedFixture, err := os.ReadFile("testdata/knowledge-field-extraction-wire.json")
+	if err != nil {
+		t.Fatalf("read cross-language field-extraction fixture: %v", err)
+	}
+	if err := json.Unmarshal(encodedFixture, &fixture); err != nil {
+		t.Fatalf("decode cross-language field-extraction fixture: %v", err)
+	}
+	if fixture.Version != 1 || len(fixture.Cases) != 2 {
+		t.Fatalf("cross-language field-extraction fixture = version %d with %d cases, want version 1 with 2 cases", fixture.Version, len(fixture.Cases))
+	}
+
+	seen := make(map[string]bool, len(fixture.Cases))
+	for _, contract := range fixture.Cases {
+		contract := contract
+		t.Run(contract.Name, func(t *testing.T) {
+			if contract.Name != "regex" && contract.Name != "json" {
+				t.Fatalf("unexpected cross-language fixture case %q", contract.Name)
+			}
+			if seen[contract.Name] {
+				t.Fatalf("duplicate cross-language fixture case %q", contract.Name)
+			}
+			seen[contract.Name] = true
+
+			message := &opensplunkv1.FieldExtractionDefinition{
+				InputField:        contract.InputField,
+				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior(contract.OverwriteBehavior),
+			}
+			switch {
+			case contract.Regex != nil && contract.JSON == nil:
+				message.Extraction = &opensplunkv1.FieldExtractionDefinition_Regex{
+					Regex: &opensplunkv1.RegexFieldExtractionDefinition{
+						Pattern:      contract.Regex.Pattern,
+						OutputFields: append([]string(nil), contract.Regex.OutputFields...),
+					},
+				}
+			case contract.JSON != nil && contract.Regex == nil:
+				message.Extraction = &opensplunkv1.FieldExtractionDefinition_Json{
+					Json: &opensplunkv1.JsonFieldExtractionDefinition{
+						Path:        contract.JSON.Path,
+						OutputField: contract.JSON.OutputField,
+					},
+				}
+			default:
+				t.Fatal("cross-language fixture must contain exactly one extraction body")
+			}
+
+			wantWire, err := hex.DecodeString(contract.WireHex)
+			if err != nil {
+				t.Fatalf("decode golden wire: %v", err)
+			}
+			marshal := proto.MarshalOptions{Deterministic: true}
+			first, err := marshal.Marshal(message)
+			if err != nil {
+				t.Fatalf("marshal FieldExtractionDefinition: %v", err)
+			}
+			second, err := marshal.Marshal(message)
+			if err != nil {
+				t.Fatalf("marshal FieldExtractionDefinition again: %v", err)
+			}
+			if !bytes.Equal(first, second) {
+				t.Fatalf("deterministic Go wire changed between runs: first=%x second=%x", first, second)
+			}
+			if !bytes.Equal(first, wantWire) {
+				t.Fatalf("Go wire = %x, want shared Go/TypeScript golden %x", first, wantWire)
+			}
+		})
+	}
+}
+
+func TestKnowledgeManagementDependencyProjectionMatchesCrossLanguageGolden(t *testing.T) {
+	t.Parallel()
+
+	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	identity := file.Messages().ByName("KnowledgeManagementObjectVersionIdentity")
+	if identity == nil || identity.Fields().Len() != 2 {
+		t.Fatalf("management object-version identity descriptor = %v", identity)
+	}
+	if field := identity.Fields().ByName("knowledge_object_id"); field == nil ||
+		field.Number() != 1 || field.Kind() != protoreflect.StringKind {
+		t.Errorf("management identity object field = %v, want string field 1", field)
+	}
+	if field := identity.Fields().ByName("version"); field == nil ||
+		field.Number() != 2 || field.Kind() != protoreflect.Uint64Kind {
+		t.Errorf("management identity version field = %v, want uint64 field 2", field)
+	}
+	if field := identity.Fields().ByName("definition_sha256"); field != nil {
+		t.Errorf("management identity unexpectedly exposes definition digest at field %d", field.Number())
+	}
+
+	edgeDescriptor := file.Messages().ByName("KnowledgeManagementDependencyEdge")
+	if edgeDescriptor == nil || edgeDescriptor.Fields().Len() != 3 {
+		t.Fatalf("management dependency edge descriptor = %v", edgeDescriptor)
+	}
+	for name, number := range map[protoreflect.Name]protoreflect.FieldNumber{
+		"source": 1,
+		"target": 2,
+	} {
+		field := edgeDescriptor.Fields().ByName(name)
+		if field == nil || field.Number() != number || field.Kind() != protoreflect.MessageKind ||
+			field.Message() == nil || field.Message().FullName() != identity.FullName() {
+			t.Errorf("management edge %s = %v, want identity message field %d", name, field, number)
+		}
+	}
+	if field := edgeDescriptor.Fields().ByName("role"); field == nil ||
+		field.Number() != 3 || field.Kind() != protoreflect.EnumKind || field.Enum() == nil ||
+		field.Enum().FullName() != "open_splunk.v1.KnowledgeDependencyRole" {
+		t.Errorf("management edge role = %v, want KnowledgeDependencyRole field 3", field)
+	}
+	for _, forbidden := range []protoreflect.Name{
+		"source_stage", "target_stage", "topological_depth", "canonical_ordinal",
+	} {
+		if field := edgeDescriptor.Fields().ByName(forbidden); field != nil {
+			t.Errorf("management edge unexpectedly carries snapshot field %s at %d", forbidden, field.Number())
+		}
+	}
+
+	for responseName, repeatedName := range map[protoreflect.Name]protoreflect.Name{
+		"ListKnowledgeObjectDependenciesResponse": "dependencies",
+		"ListKnowledgeObjectDependentsResponse":   "dependents",
+	} {
+		response := file.Messages().ByName(responseName)
+		if response == nil || response.Fields().Len() != 4 {
+			t.Fatalf("%s descriptor = %v", responseName, response)
+		}
+		repeated := response.Fields().ByName(repeatedName)
+		if repeated == nil || repeated.Number() != 1 || !repeated.IsList() ||
+			repeated.Kind() != protoreflect.MessageKind || repeated.Message() == nil ||
+			repeated.Message().FullName() != edgeDescriptor.FullName() {
+			t.Errorf("%s.%s = %v, want repeated management edge field 1", responseName, repeatedName, repeated)
+		}
+		resolved := response.Fields().ByName("resolved_object")
+		if resolved == nil || resolved.Number() != 4 || resolved.Kind() != protoreflect.MessageKind ||
+			resolved.Message() == nil || resolved.Message().FullName() != identity.FullName() {
+			t.Errorf("%s.resolved_object = %v, want identity message field 4", responseName, resolved)
+		}
+	}
+
+	type identityFixture struct {
+		KnowledgeObjectID string `json:"knowledgeObjectId"`
+		Version           uint64 `json:"version"`
+	}
+	var fixture struct {
+		Version                     int             `json:"version"`
+		Source                      identityFixture `json:"source"`
+		Target                      identityFixture `json:"target"`
+		Role                        int32           `json:"role"`
+		NextPageToken               string          `json:"nextPageToken"`
+		TotalSize                   uint64          `json:"totalSize"`
+		TenantCatalogRevision       uint64          `json:"tenantCatalogRevision"`
+		EdgeWireHex                 string          `json:"edgeWireHex"`
+		DependenciesResponseWireHex string          `json:"dependenciesResponseWireHex"`
+		DependentsResponseWireHex   string          `json:"dependentsResponseWireHex"`
+	}
+	encodedFixture, err := os.ReadFile("testdata/knowledge-management-dependency-wire.json")
+	if err != nil {
+		t.Fatalf("read management-dependency fixture: %v", err)
+	}
+	if err := json.Unmarshal(encodedFixture, &fixture); err != nil {
+		t.Fatalf("decode management-dependency fixture: %v", err)
+	}
+	if fixture.Version != 1 || fixture.Source.KnowledgeObjectID == "" ||
+		fixture.Target.KnowledgeObjectID == "" || fixture.Source.Version == 0 ||
+		fixture.Target.Version == 0 || fixture.TotalSize == 0 ||
+		fixture.TenantCatalogRevision == 0 {
+		t.Fatalf("management-dependency fixture is invalid: %+v", fixture)
+	}
+
+	source := &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+		KnowledgeObjectId: fixture.Source.KnowledgeObjectID,
+		Version:           fixture.Source.Version,
+	}
+	target := &opensplunkv1.KnowledgeManagementObjectVersionIdentity{
+		KnowledgeObjectId: fixture.Target.KnowledgeObjectID,
+		Version:           fixture.Target.Version,
+	}
+	edge := &opensplunkv1.KnowledgeManagementDependencyEdge{
+		Source: source,
+		Target: target,
+		Role:   opensplunkv1.KnowledgeDependencyRole(fixture.Role),
+	}
+	nextPageToken := fixture.NextPageToken
+	totalSize := fixture.TotalSize
+	page := &opensplunkv1.PageResponse{
+		NextPageToken:  &nextPageToken,
+		TotalSize:      &totalSize,
+		TotalSizeExact: true,
+	}
+	cases := []struct {
+		name    string
+		message proto.Message
+		wireHex string
+	}{
+		{name: "edge", message: edge, wireHex: fixture.EdgeWireHex},
+		{
+			name: "dependencies response",
+			message: &opensplunkv1.ListKnowledgeObjectDependenciesResponse{
+				Dependencies:          []*opensplunkv1.KnowledgeManagementDependencyEdge{edge},
+				Page:                  page,
+				TenantCatalogRevision: fixture.TenantCatalogRevision,
+				ResolvedObject:        source,
+			},
+			wireHex: fixture.DependenciesResponseWireHex,
+		},
+		{
+			name: "dependents response",
+			message: &opensplunkv1.ListKnowledgeObjectDependentsResponse{
+				Dependents:            []*opensplunkv1.KnowledgeManagementDependencyEdge{edge},
+				Page:                  page,
+				TenantCatalogRevision: fixture.TenantCatalogRevision,
+				ResolvedObject:        target,
+			},
+			wireHex: fixture.DependentsResponseWireHex,
+		},
+	}
+	marshal := proto.MarshalOptions{Deterministic: true}
+	for _, contract := range cases {
+		contract := contract
+		t.Run(contract.name, func(t *testing.T) {
+			want, err := hex.DecodeString(contract.wireHex)
+			if err != nil {
+				t.Fatalf("decode golden wire: %v", err)
+			}
+			first, err := marshal.Marshal(contract.message)
+			if err != nil {
+				t.Fatalf("marshal management dependency contract: %v", err)
+			}
+			second, err := marshal.Marshal(contract.message)
+			if err != nil {
+				t.Fatalf("marshal management dependency contract again: %v", err)
+			}
+			if !bytes.Equal(first, second) || !bytes.Equal(first, want) {
+				t.Fatalf("deterministic wire = %x/%x, want %x", first, second, want)
+			}
+		})
+	}
+}
+
 func TestTierOneKnowledgeDefinitionBodiesKeepStableWireNumbers(t *testing.T) {
 	t.Parallel()
 
@@ -311,6 +869,31 @@ func TestTierOneKnowledgeDefinitionBodiesKeepStableWireNumbers(t *testing.T) {
 	for _, name := range []protoreflect.Name{"app_id", "name", "sharing_scope", "object_type", "definition"} {
 		if field := object.Fields().ByName(name); field == nil {
 			t.Errorf("KnowledgeObject.%s indexed-agreement field is missing", name)
+		}
+	}
+	for name, contract := range map[protoreflect.Name]struct {
+		number   protoreflect.FieldNumber
+		kind     protoreflect.Kind
+		optional bool
+	}{
+		"disabled_at":       {number: 14, kind: protoreflect.MessageKind, optional: true},
+		"quarantined_at":    {number: 15, kind: protoreflect.MessageKind, optional: true},
+		"deleted_at":        {number: 16, kind: protoreflect.MessageKind, optional: true},
+		"quarantine_reason": {number: 17, kind: protoreflect.StringKind, optional: true},
+	} {
+		field := object.Fields().ByName(name)
+		if field == nil {
+			t.Errorf("KnowledgeObject.%s lifecycle field is missing", name)
+			continue
+		}
+		if field.Number() != contract.number || field.Kind() != contract.kind {
+			t.Errorf("KnowledgeObject.%s = wire field %d kind %s, want %d %s", name, field.Number(), field.Kind(), contract.number, contract.kind)
+		}
+		if field.HasOptionalKeyword() != contract.optional {
+			t.Errorf("KnowledgeObject.%s optional = %t, want %t", name, field.HasOptionalKeyword(), contract.optional)
+		}
+		if contract.kind == protoreflect.MessageKind && field.Message().FullName() != "google.protobuf.Timestamp" {
+			t.Errorf("KnowledgeObject.%s message = %s, want google.protobuf.Timestamp", name, field.Message().FullName())
 		}
 	}
 	for _, name := range []protoreflect.Name{"app_id", "name", "sharing_scope", "body"} {
@@ -377,6 +960,191 @@ func TestKnowledgeRecoveryAndMutationAuthorityKeepStableWireContracts(t *testing
 	}
 }
 
+func TestKnowledgeMutationResponsesPairRevisionAndStateToken(t *testing.T) {
+	t.Parallel()
+
+	token := make([]byte, 32)
+	for index := range token {
+		token[index] = byte(index)
+	}
+	sharedWire := append([]byte{0x10, 0x07, 0x1a, 0x20}, token...)
+	deleteWire := append([]byte{0x18, 0x07, 0x22, 0x20}, token...)
+
+	tests := []struct {
+		name           protoreflect.Name
+		fieldCount     int
+		revisionNumber protoreflect.FieldNumber
+		tokenNumber    protoreflect.FieldNumber
+		message        proto.Message
+		wantWire       []byte
+	}{
+		{
+			name:           "CreateKnowledgeObjectResponse",
+			fieldCount:     3,
+			revisionNumber: 2,
+			tokenNumber:    3,
+			message: &opensplunkv1.CreateKnowledgeObjectResponse{
+				TenantCatalogRevision:   7,
+				TenantCatalogStateToken: token,
+			},
+			wantWire: sharedWire,
+		},
+		{
+			name:           "UpdateKnowledgeObjectResponse",
+			fieldCount:     3,
+			revisionNumber: 2,
+			tokenNumber:    3,
+			message: &opensplunkv1.UpdateKnowledgeObjectResponse{
+				TenantCatalogRevision:   7,
+				TenantCatalogStateToken: token,
+			},
+			wantWire: sharedWire,
+		},
+		{
+			name:           "SetKnowledgeObjectStateResponse",
+			fieldCount:     3,
+			revisionNumber: 2,
+			tokenNumber:    3,
+			message: &opensplunkv1.SetKnowledgeObjectStateResponse{
+				TenantCatalogRevision:   7,
+				TenantCatalogStateToken: token,
+			},
+			wantWire: sharedWire,
+		},
+		{
+			name:           "DeleteKnowledgeObjectResponse",
+			fieldCount:     4,
+			revisionNumber: 3,
+			tokenNumber:    4,
+			message: &opensplunkv1.DeleteKnowledgeObjectResponse{
+				TenantCatalogRevision:   7,
+				TenantCatalogStateToken: token,
+			},
+			wantWire: deleteWire,
+		},
+	}
+
+	file := opensplunkv1.File_open_splunk_v1_knowledge_api_proto
+	for _, test := range tests {
+		test := test
+		t.Run(string(test.name), func(t *testing.T) {
+			t.Parallel()
+
+			descriptor := file.Messages().ByName(test.name)
+			if descriptor == nil {
+				t.Fatalf("%s descriptor is missing", test.name)
+			}
+			if got := descriptor.Fields().Len(); got != test.fieldCount {
+				t.Fatalf("%s field count = %d, want exact append-only count %d", test.name, got, test.fieldCount)
+			}
+
+			revision := descriptor.Fields().ByName("tenant_catalog_revision")
+			if revision == nil || revision.Number() != test.revisionNumber || revision.Kind() != protoreflect.Uint64Kind {
+				t.Errorf("%s.tenant_catalog_revision = %v, want uint64 field %d", test.name, revision, test.revisionNumber)
+			}
+			stateToken := descriptor.Fields().ByName("tenant_catalog_state_token")
+			if stateToken == nil || stateToken.Number() != test.tokenNumber || stateToken.Kind() != protoreflect.BytesKind {
+				t.Errorf("%s.tenant_catalog_state_token = %v, want bytes field %d", test.name, stateToken, test.tokenNumber)
+			} else if stateToken.IsList() || stateToken.IsMap() || stateToken.HasOptionalKeyword() {
+				t.Errorf("%s.tenant_catalog_state_token must be one validation-required bytes scalar", test.name)
+			}
+
+			first, err := (proto.MarshalOptions{Deterministic: true}).Marshal(test.message)
+			if err != nil {
+				t.Fatalf("marshal response: %v", err)
+			}
+			second, err := (proto.MarshalOptions{Deterministic: true}).Marshal(test.message)
+			if err != nil {
+				t.Fatalf("marshal response again: %v", err)
+			}
+			if !bytes.Equal(first, second) {
+				t.Fatalf("deterministic response encoding changed between runs: first=%x second=%x", first, second)
+			}
+			if !bytes.Equal(first, test.wantWire) {
+				t.Fatalf("response wire encoding = %x, want stable fields %x", first, test.wantWire)
+			}
+		})
+	}
+}
+
+func TestKnowledgeMutationOutcomeRecordPinsCanonicalAuthorityWire(t *testing.T) {
+	t.Parallel()
+
+	descriptor := opensplunkv1.File_open_splunk_v1_knowledge_api_proto.Messages().ByName("KnowledgeMutationOutcomeRecord")
+	if descriptor == nil {
+		t.Fatal("KnowledgeMutationOutcomeRecord descriptor is missing")
+	}
+	fields := []struct {
+		name   protoreflect.Name
+		number protoreflect.FieldNumber
+		kind   protoreflect.Kind
+	}{
+		{"route", 1, protoreflect.StringKind},
+		{"mutation_kind", 2, protoreflect.StringKind},
+		{"object", 3, protoreflect.MessageKind},
+		{"tenant_catalog_revision", 4, protoreflect.Uint64Kind},
+		{"tenant_catalog_state_token", 5, protoreflect.BytesKind},
+		{"successful_audit_sequence", 6, protoreflect.Uint64Kind},
+		{"recovery_audit_sequence", 7, protoreflect.Uint64Kind},
+		{"occurred_at_unix_micro", 8, protoreflect.Int64Kind},
+		{"retention_anchor_unix_micro", 9, protoreflect.Int64Kind},
+		{"retain_until_unix_micro", 10, protoreflect.Int64Kind},
+	}
+	if descriptor.Fields().Len() != len(fields) || descriptor.Oneofs().Len() != 1 {
+		t.Fatalf("outcome descriptor shape = %d fields/%d oneofs, want %d/1",
+			descriptor.Fields().Len(), descriptor.Oneofs().Len(), len(fields))
+	}
+	auditAuthority := descriptor.Oneofs().ByName("audit_authority")
+	for _, want := range fields {
+		field := descriptor.Fields().ByName(want.name)
+		if field == nil || field.Number() != want.number || field.Kind() != want.kind || field.IsList() || field.IsMap() {
+			t.Errorf("KnowledgeMutationOutcomeRecord.%s = %v, want singular %s field %d",
+				want.name, field, want.kind, want.number)
+			continue
+		}
+		if (want.number == 6 || want.number == 7) && field.ContainingOneof() != auditAuthority {
+			t.Errorf("KnowledgeMutationOutcomeRecord.%s is not in audit_authority", want.name)
+		}
+	}
+
+	message := &opensplunkv1.KnowledgeMutationOutcomeRecord{
+		Route:        "objects.update",
+		MutationKind: "scope_change",
+		Object: &opensplunkv1.KnowledgeObjectVersionReference{
+			KnowledgeObjectId: "ko-1",
+			Version:           7,
+			DefinitionSha256:  []byte{1, 2},
+		},
+		TenantCatalogRevision:   9,
+		TenantCatalogStateToken: []byte{0xaa, 0xbb},
+		AuditAuthority: &opensplunkv1.KnowledgeMutationOutcomeRecord_SuccessfulAuditSequence{
+			SuccessfulAuditSequence: 11,
+		},
+		OccurredAtUnixMicro:      13,
+		RetentionAnchorUnixMicro: 17,
+		RetainUntilUnixMicro:     19,
+	}
+	wantWire := append([]byte{0x0a, 0x0e}, []byte("objects.update")...)
+	wantWire = append(wantWire, 0x12, 0x0c)
+	wantWire = append(wantWire, []byte("scope_change")...)
+	wantWire = append(wantWire,
+		0x1a, 0x0c, 0x0a, 0x04, 'k', 'o', '-', '1', 0x10, 0x07, 0x1a, 0x02, 0x01, 0x02,
+		0x20, 0x09, 0x2a, 0x02, 0xaa, 0xbb,
+		0x40, 0x0d, 0x48, 0x11, 0x50, 0x13, 0x30, 0x0b,
+	)
+	first, err := (proto.MarshalOptions{Deterministic: true}).Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal outcome authority: %v", err)
+	}
+	second, err := (proto.MarshalOptions{Deterministic: true}).Marshal(message)
+	if err != nil {
+		t.Fatalf("marshal outcome authority again: %v", err)
+	}
+	if !bytes.Equal(first, second) || !bytes.Equal(first, wantWire) {
+		t.Fatalf("outcome authority wire = %x then %x, want %x", first, second, wantWire)
+	}
+}
+
 func TestKnowledgeProvenanceVariantsCannotMixIdentityAndRedaction(t *testing.T) {
 	t.Parallel()
 
@@ -423,6 +1191,59 @@ func TestKnowledgeProvenanceVariantsCannotMixIdentityAndRedaction(t *testing.T) 
 		if field == nil || field.Number() != number {
 			t.Errorf("KnowledgeRedactedObjectProvenance.%s = %v, want wire field %d", name, field, number)
 		}
+	}
+}
+
+func TestSearchInspectionProvenanceKeepsAppendOnlyWireContract(t *testing.T) {
+	t.Parallel()
+
+	file := opensplunkv1.File_open_splunk_v1_search_inspection_api_proto
+	stage := file.Messages().ByName("SearchInspectionLogicalStage")
+	if stage == nil {
+		t.Fatal("SearchInspectionLogicalStage descriptor is missing")
+	}
+	for name, contract := range map[protoreflect.Name]struct {
+		number  protoreflect.FieldNumber
+		message protoreflect.FullName
+	}{
+		"operator_provenance": {6, "open_splunk.v1.KnowledgeProvenance"},
+		"output_provenance":   {7, "open_splunk.v1.SearchInspectionOutputProvenance"},
+	} {
+		field := stage.Fields().ByName(name)
+		if field == nil || field.Number() != contract.number ||
+			field.Kind() != protoreflect.MessageKind ||
+			field.Cardinality() != protoreflect.Repeated ||
+			field.HasPresence() || field.HasOptionalKeyword() ||
+			field.Message() == nil || field.Message().FullName() != contract.message {
+			t.Errorf(
+				"SearchInspectionLogicalStage.%s = %+v, want repeated message field %d of %s",
+				name,
+				field,
+				contract.number,
+				contract.message,
+			)
+		}
+	}
+
+	output := file.Messages().ByName("SearchInspectionOutputProvenance")
+	if output == nil || output.Fields().Len() != 2 {
+		t.Fatalf("SearchInspectionOutputProvenance descriptor = %+v, want two fields", output)
+	}
+	outputField := output.Fields().ByName("output_field")
+	if outputField == nil || outputField.Number() != 1 ||
+		outputField.Kind() != protoreflect.StringKind ||
+		outputField.Cardinality() != protoreflect.Optional ||
+		outputField.HasPresence() || outputField.HasOptionalKeyword() {
+		t.Errorf("SearchInspectionOutputProvenance.output_field = %+v, want scalar string field 1", outputField)
+	}
+	provenance := output.Fields().ByName("provenance")
+	if provenance == nil || provenance.Number() != 2 ||
+		provenance.Kind() != protoreflect.MessageKind ||
+		provenance.Cardinality() != protoreflect.Optional ||
+		!provenance.HasPresence() || provenance.HasOptionalKeyword() ||
+		provenance.Message() == nil ||
+		provenance.Message().FullName() != "open_splunk.v1.KnowledgeProvenance" {
+		t.Errorf("SearchInspectionOutputProvenance.provenance = %+v, want present message field 2", provenance)
 	}
 }
 

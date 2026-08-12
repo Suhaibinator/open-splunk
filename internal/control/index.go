@@ -66,6 +66,28 @@ type Index struct {
 	UpdatedAt  time.Time
 }
 
+// IndexNameAdmissionRequest binds a future immutable index name to the exact
+// pre-mutation index catalog facts observed by the control transaction. The
+// name is already canonical and absent from the catalog when a validator is
+// invoked.
+type IndexNameAdmissionRequest struct {
+	CanonicalName             string
+	IndexCatalogRevision      uint64
+	IndexCatalogPhysicalCount uint16
+}
+
+// IndexNameAdmissionValidator proves that adding one immutable index name
+// preserves higher-level selector semantics. Implementations run inside the
+// caller-owned SQLite transaction, must treat tx as read-only, and must not
+// commit or roll it back.
+type IndexNameAdmissionValidator interface {
+	ValidateIndexNameAdmissionInTransaction(
+		context.Context,
+		*gorm.DB,
+		IndexNameAdmissionRequest,
+	) error
+}
+
 // NormalizeIndexName canonicalizes a user index name while enforcing Splunk's
 // user-index character restrictions: lowercase ASCII letters, numbers,
 // underscores, and hyphens; a leading letter or number; no "kvstore".
@@ -85,13 +107,14 @@ func NormalizeIndexName(input string) (string, error) {
 
 // CreateIndex creates an active logical index at version 1.
 func (db *DB) CreateIndex(ctx context.Context, definition IndexDefinition) (Index, error) {
-	return db.createIndex(ctx, definition, nil)
+	return db.createIndex(ctx, definition, nil, nil)
 }
 
 func (db *DB) createIndex(
 	ctx context.Context,
 	definition IndexDefinition,
 	auditPublisher indexMutationAuditPublisher,
+	admissionValidator IndexNameAdmissionValidator,
 ) (Index, error) {
 	if ctx == nil {
 		return Index{}, fmt.Errorf("%w: nil context", ErrInvalidArgument)
@@ -116,6 +139,7 @@ func (db *DB) createIndex(
 			definition,
 			now,
 			auditPublisher,
+			admissionValidator,
 		)
 		if errors.Is(createErr, errIndexIDCollision) {
 			continue
@@ -131,6 +155,7 @@ func (db *DB) createIndexOnce(
 	definition IndexDefinition,
 	now time.Time,
 	auditPublisher indexMutationAuditPublisher,
+	admissionValidator IndexNameAdmissionValidator,
 ) (result Index, returnedErr error) {
 	tx := db.orm.WithContext(ctx).Begin()
 	if tx.Error != nil {
@@ -173,6 +198,39 @@ func (db *DB) createIndexOnce(
 	case !errors.Is(idErr, gorm.ErrRecordNotFound):
 		return Index{}, fmt.Errorf("check duplicate index ID: %w", idErr)
 	}
+	request := IndexNameAdmissionRequest{
+		CanonicalName:             strings.Clone(definition.Name),
+		IndexCatalogRevision:      uint64(before.Revision),      // #nosec G115 -- integrity validation requires a positive int64 revision.
+		IndexCatalogPhysicalCount: uint16(before.PhysicalCount), // #nosec G115 -- integrity validation bounds the count to 1024.
+	}
+	if err := ctx.Err(); err != nil {
+		return Index{}, err
+	}
+	if err := validateIndexNameAdmission(
+		ctx,
+		tx,
+		admissionValidator,
+		request,
+	); err != nil {
+		return Index{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Index{}, err
+	}
+	verified, err := readIndexCatalogIntegrity(tx)
+	if err != nil {
+		return Index{}, fmt.Errorf(
+			"reread index catalog after name admission: %w",
+			err,
+		)
+	}
+	if verified.Revision != before.Revision ||
+		verified.PhysicalCount != before.PhysicalCount {
+		return Index{}, fmt.Errorf(
+			"%w: index catalog changed during name admission",
+			ErrVersionConflict,
+		)
+	}
 
 	record := newIndexRecord(id, definition, now)
 	if err := tx.Create(&record).Error; err != nil {
@@ -209,6 +267,58 @@ func (db *DB) createIndexOnce(
 		return Index{}, fmt.Errorf("commit index creation: %w", err)
 	}
 	return result, nil
+}
+
+func validateIndexNameAdmission(
+	ctx context.Context,
+	tx *gorm.DB,
+	validator IndexNameAdmissionValidator,
+	request IndexNameAdmissionRequest,
+) error {
+	if validator != nil {
+		if err := validator.ValidateIndexNameAdmissionInTransaction(
+			ctx,
+			tx,
+			request,
+		); err != nil {
+			return fmt.Errorf("validate index-name admission: %w", err)
+		}
+		return nil
+	}
+
+	var evidence struct {
+		ActiveTenantLedger int64 `gorm:"column:active_tenant_ledger"`
+		ActiveRegistry     int64 `gorm:"column:active_registry"`
+	}
+	err := tx.Raw(`
+		SELECT
+			EXISTS (
+				SELECT 1
+				FROM knowledge_catalog_tenants
+				     INDEXED BY knowledge_catalog_tenants_nonempty_active_idx
+				WHERE active_object_count > 0
+				LIMIT 1
+			) AS active_tenant_ledger,
+			EXISTS (
+				SELECT 1
+				FROM knowledge_objects
+				     INDEXED BY knowledge_objects_active_tenant_idx
+				WHERE state = 'active'
+				LIMIT 1
+			) AS active_registry`).Scan(&evidence).Error
+	if err != nil {
+		return fmt.Errorf(
+			"validate index-name admission fallback: %w",
+			err,
+		)
+	}
+	if evidence.ActiveTenantLedger != 0 || evidence.ActiveRegistry != 0 {
+		return fmt.Errorf(
+			"%w: active knowledge objects require index-name validation",
+			ErrDependencyConflict,
+		)
+	}
+	return nil
 }
 
 // GetIndex gets an index by stable ID.

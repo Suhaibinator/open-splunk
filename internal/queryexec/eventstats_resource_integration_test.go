@@ -245,7 +245,7 @@ func queryIntegrationTestEventStatsProductionEnvelope(
 			maximumBytes:    defaultMaxBytesToRead,
 			maximumResults:  defaultMaxResultRows,
 			resultBytes:     maximumFieldSummaryResultBytes,
-			maximumGroups:   uint64(clickhouse.MaximumFieldSummaryDistinctValues),
+			maximumGroups:   uint64(clickhouse.MaximumFieldSummaryDistinctValues) + 1,
 			maximumThreads:  defaultMaxThreads,
 		},
 		prefix + "suggestions": {
@@ -255,7 +255,7 @@ func queryIntegrationTestEventStatsProductionEnvelope(
 			maximumBytes:    maximumFieldSuggestionBytesToRead,
 			maximumResults:  uint64(clickhouse.MaximumFieldSuggestions) + 2,
 			resultBytes:     maximumFieldSuggestionResultBytes,
-			maximumGroups:   maximumFieldSuggestionGroups,
+			maximumGroups:   min(defaultMaxResultRows, maximumFieldSuggestionGroups),
 			maximumThreads:  maximumFieldSuggestionThreads,
 		},
 	}

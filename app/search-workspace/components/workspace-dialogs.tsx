@@ -1,5 +1,8 @@
 import type { DemoHistoryEntry, DemoSavedSearch } from "@/lib/demo/search-data";
-import type { InspectSearchJobResponse } from "@/gen/ts/open_splunk/v1/search_inspection_api";
+import type {
+  ServerInspectionKnowledgeView,
+  ServerSearchJobInspectionState,
+} from "@/lib/search/server-inspection";
 
 import { NUMBER_FORMAT } from "../constants";
 import {
@@ -43,6 +46,54 @@ function formatHistoryResultCount(entry: DemoHistoryEntry): string {
   return entry.eventsExact === undefined
     ? NUMBER_FORMAT.format(entry.events)
     : formatExactNumericText(entry.eventsExact);
+}
+
+export function KnowledgeInspectionSection({
+  knowledge,
+}: {
+  knowledge: ServerInspectionKnowledgeView;
+}) {
+  if (knowledge.state === "absent") {
+    return (
+      <section aria-label="Knowledge authority" className={styles.knowledgeInspection}>
+        <h3>Knowledge authority</h3>
+        <p>Knowledge resolution was not enabled for this search.</p>
+      </section>
+    );
+  }
+  return (
+    <section aria-label="Knowledge authority" className={styles.knowledgeInspection}>
+      <h3>Knowledge authority</h3>
+      <dl>
+        <dt>Snapshot digest</dt>
+        <dd><code>{knowledge.digestSha256}</code></dd>
+        <dt>Catalog revision</dt>
+        <dd>{formatNonNegativeIntegerQuantity(knowledge.tenantCatalogRevision)}</dd>
+        <dt>Applicable objects</dt>
+        <dd>{NUMBER_FORMAT.format(knowledge.objectCount)}</dd>
+        <dt>Compiler compatibility</dt>
+        <dd>{knowledge.compilerCompatibilityVersion}</dd>
+      </dl>
+      {knowledge.objectCount === 0 ? (
+        <p>Knowledge resolution was enabled with no applicable objects.</p>
+      ) : (
+        <>
+          <p>
+            {knowledge.objectsTruncated
+              ? `Showing the canonical redacted prefix of ${NUMBER_FORMAT.format(knowledge.objects.length)} of ${NUMBER_FORMAT.format(knowledge.objectCount)} objects.`
+              : `Showing all ${NUMBER_FORMAT.format(knowledge.objectCount)} objects as redacted provenance.`}
+          </p>
+          <ol aria-label="Redacted knowledge object prefix">
+            {knowledge.objects.map((object) => (
+              <li key={object.ordinal}>
+                Redacted ordinal {NUMBER_FORMAT.format(object.ordinal)} · {object.kind}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+    </section>
+  );
 }
 
 function CapabilitySetting({
@@ -105,11 +156,7 @@ interface WorkspaceDialogsProps {
   historyFilter: string;
   jobCancelState: DialogActionState;
   jobInspectorNotices: string[] | null;
-  jobInspection: {
-    status: "idle" | "loading" | "available" | "error";
-    response?: InspectSearchJobResponse;
-    error?: string;
-  };
+  jobInspection: ServerSearchJobInspectionState;
   isRunning: boolean;
   modal: ModalName | null;
   phase: JobPhase;
@@ -737,7 +784,7 @@ export function WorkspaceDialogs({
   if (modal === "inspect") {
     return (
       <Modal title="Search job inspector" subtitle="Dispatch and execution details for the displayed result." wide onClose={() => onModalChange(null)} footer={<button className="button primary" type="button" onClick={() => onModalChange(null)}>Done</button>}>
-        <div className="job-inspector" data-testid="job-inspector">
+        <div className={`job-inspector ${styles.inspectionGrid}`} data-testid="job-inspector">
           <section><span>Status</span><strong className={`inspector-state ${stateClass(phase)}`}><i />{phaseLabel(phase)}</strong></section>
           <section><span>Search ID</span><code>{searchId}</code></section>
           <section><span>Search mode</span><strong>{searchMode}</strong></section>
@@ -745,7 +792,7 @@ export function WorkspaceDialogs({
           <section><span>Scanned</span><strong>{scannedRows === null ? "Unavailable" : `${scannedRowsApproximate ? "≈ " : ""}${NUMBER_FORMAT.format(scannedRows)} rows`}</strong></section>
           <section><span>{dataMetricLabel}</span><strong>{scannedBytes}</strong></section>
           <section><span>Elapsed</span><strong>{elapsed}</strong></section>
-          <div className="inspector-query"><span>Dispatched SPL</span><code>{submittedQuery}</code></div>
+          <div className={`inspector-query ${styles.inspectionQuery}`}><span>Dispatched SPL</span><code>{submittedQuery}</code></div>
           {jobInspectorNotices === null
             ? <p>Execution warning and sequence-gap telemetry was not supplied for this job.</p>
             : jobInspectorNotices.length === 0
@@ -753,20 +800,37 @@ export function WorkspaceDialogs({
               : <div className={styles.inspectorNotices}><strong>Execution notices</strong><ul>{jobInspectorNotices.map((notice) => <li key={notice}>{notice}</li>)}</ul></div>}
           {jobInspection.status === "loading" ? <output>Loading the administrator inspection plan…</output> : null}
           {jobInspection.status === "error" ? <p role="alert">Inspection unavailable: {jobInspection.error}</p> : null}
-          {jobInspection.status === "available" && jobInspection.response !== undefined ? (
+          {jobInspection.status === "available" ? (
             <>
-              <div className={styles.inspectorNotices}>
+              <div className={`${styles.inspectorNotices} ${styles.inspectionBlock}`}>
                 <strong>Logical plan</strong>
-                {jobInspection.response.logicalPlan?.stages.length ? (
+                {jobInspection.response.logicalPlan.stages.length ? (
                   <ol>{jobInspection.response.logicalPlan.stages.map((stage) => (
-                    <li key={`${stage.stageIndex}-${stage.operator}`}><code>{stage.operator}</code>{stage.outputFields.length > 0 ? ` → ${stage.outputFields.join(", ")}` : ""}</li>
+                    <li key={`${stage.stageIndex}-${stage.operator}`}>
+                      <code>{stage.operator}</code>
+                      {stage.outputFields.length > 0 ? ` → ${stage.outputFields.join(", ")}` : ""}
+                      {stage.operatorProvenance.length > 0 ? (
+                        <div className={styles.inspectionAnnotations}>
+                          <span>Generated inputs: {stage.inputFields.join(", ") || "None"}</span>
+                          <span>Redacted provenance: {stage.operatorProvenance.map((item) => (
+                            `${item.kind} · ordinal ${NUMBER_FORMAT.format(item.ordinal)}`
+                          )).join(", ")}</span>
+                          <span>Generated outputs: {stage.outputProvenance.map((item) => (
+                            `${item.outputField} ← redacted ordinal ${NUMBER_FORMAT.format(item.provenance.ordinal)}`
+                          )).join(", ")}</span>
+                        </div>
+                      ) : null}
+                    </li>
                   ))}</ol>
                 ) : <p>No logical stages were returned.</p>}
               </div>
-              <div className="inspector-query"><span>Physical plan nodes</span><code>{jobInspection.response.physicalPlan?.nodeTypes.join(" → ") || "Not returned"}</code></div>
-              <div className="inspector-query"><span>Generated SQL</span><code>{jobInspection.response.generatedSql || "Not returned"}</code></div>
-              <div className="inspector-query"><span>EXPLAIN output</span><code>{jobInspection.response.explainText || "Not returned"}</code></div>
-              <div className="inspector-query"><span>Diagnostic query ID</span><code>{jobInspection.response.diagnosticQueryId || "Not returned"}</code></div>
+              {jobInspection.response.knowledge === undefined
+                ? null
+                : <KnowledgeInspectionSection knowledge={jobInspection.response.knowledge} />}
+              <div className={`inspector-query ${styles.inspectionQuery}`}><span>Physical plan nodes</span><code>{jobInspection.response.physicalPlan.nodeTypes.join(" → ") || "Not returned"}</code></div>
+              <div className={`inspector-query ${styles.inspectionQuery}`}><span>Generated SQL</span><code>{jobInspection.response.generatedSql || "Not returned"}</code></div>
+              <div className={`inspector-query ${styles.inspectionQuery}`}><span>EXPLAIN output</span><code>{jobInspection.response.explainText || "Not returned"}</code></div>
+              <div className={`inspector-query ${styles.inspectionQuery}`}><span>Diagnostic query ID</span><code>{jobInspection.response.diagnosticQueryId || "Not returned"}</code></div>
             </>
           ) : null}
         </div>

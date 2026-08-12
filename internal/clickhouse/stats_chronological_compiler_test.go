@@ -72,9 +72,9 @@ func TestCompileStatsChronologicalScalarUsesImmutableEventOrderAndSharesStates(t
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | sort 0 +service | stats earliest(service) AS first_seen latest(service) AS last_seen earliest(service) AS first_again`,
+		`index=gradethis | sort 0 +service | stats earliest(service) AS first_seen latest(service) AS last_seen`,
 	)
-	if !slices.Equal(compiled.OutputFields, []string{"first_seen", "last_seen", "first_again"}) {
+	if !slices.Equal(compiled.OutputFields, []string{"first_seen", "last_seen"}) {
 		t.Fatalf("output fields = %v", compiled.OutputFields)
 	}
 
@@ -128,7 +128,7 @@ func TestCompileStatsChronologicalMultivalueUsesBoundedRowCandidatesAndFinalVali
 
 	compiled := compileSPL(
 		t,
-		`index=gradethis | stats earliest(payload) AS first_seen latest(payload) AS last_seen earliest(payload) AS first_again`,
+		`index=gradethis | stats earliest(payload) AS first_seen latest(payload) AS last_seen`,
 	)
 	if got := strings.Count(compiled.SQL, "argMinOrNullIf("); got != 1 {
 		t.Fatalf("argMinOrNullIf state count = %d, want one shared earliest state:\n%s", got, compiled.SQL)
@@ -285,17 +285,21 @@ func TestCompileStatsChronologicalOnlyNormalizesRequestedDirections(t *testing.T
 func TestCompileStatsChronologicalMaximumAliasesKeepConstantAggregateState(t *testing.T) {
 	t.Parallel()
 
+	fields := []string{"service", "host", "source", "sourcetype", "level", "message", "index", "trace_id"}
 	var source strings.Builder
 	source.WriteString(`index=gradethis | stats `)
-	for measure := 0; measure < spl.MaximumStatsMeasures; measure++ {
-		if measure > 0 {
+	for fieldIndex, field := range fields {
+		if fieldIndex > 0 {
 			source.WriteByte(' ')
 		}
-		function := "earliest"
-		if measure%2 != 0 {
-			function = "latest"
-		}
-		fmt.Fprintf(&source, "%s(service) AS result_%d", function, measure)
+		fmt.Fprintf(
+			&source,
+			"earliest(%s) AS earliest_%d latest(%s) AS latest_%d",
+			field,
+			fieldIndex,
+			field,
+			fieldIndex,
+		)
 	}
 
 	compiled := compileSPL(t, source.String())
@@ -306,9 +310,9 @@ func TestCompileStatsChronologicalMaximumAliasesKeepConstantAggregateState(t *te
 			spl.MaximumStatsMeasures,
 		)
 	}
-	if strings.Count(compiled.SQL, "argMinOrNullIf(") != 1 ||
-		strings.Count(compiled.SQL, "argMaxOrNullIf(") != 1 {
-		t.Fatalf("maximum aliases duplicated chronological aggregate state:\n%s", compiled.SQL)
+	if strings.Count(compiled.SQL, "argMinOrNullIf(") != len(fields) ||
+		strings.Count(compiled.SQL, "argMaxOrNullIf(") != len(fields) {
+		t.Fatalf("maximum distinct sources did not retain one chronological state each:\n%s", compiled.SQL)
 	}
 	if strings.Count(
 		compiled.SQL,

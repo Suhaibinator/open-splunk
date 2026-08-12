@@ -27,9 +27,8 @@ func NewJobJournal(store *Store, compilerVersion string) (*JobJournal, error) {
 	if store == nil || store.orm == nil {
 		return nil, invalid("search-history store is required")
 	}
-	compilerVersion = strings.TrimSpace(compilerVersion)
-	if err := validateText("compiler version", compilerVersion, maximumCompilerVersionBytes, false); err != nil {
-		return nil, err
+	if !searchjobs.ValidCompilerVersion(compilerVersion) {
+		return nil, invalid("compiler version is invalid")
 	}
 	return &JobJournal{store: store, compilerVersion: compilerVersion}, nil
 }
@@ -62,6 +61,16 @@ func (journal *JobJournal) Finalize(ctx context.Context, job searchjobs.Job) err
 }
 
 func (journal *JobJournal) entry(job searchjobs.Job, terminal bool) (*opensplunkv1.SearchHistoryEntry, error) {
+	if !searchjobs.ValidCompilerVersion(job.CompilerVersion) {
+		return nil, invalid("search job compiler version is invalid")
+	}
+	if job.CompilerVersion != journal.compilerVersion {
+		return nil, invalid("search job compiler version does not match the history journal")
+	}
+	knowledgeSnapshot, err := cloneKnowledgeSnapshotSummary(job.KnowledgeSnapshot)
+	if err != nil {
+		return nil, err
+	}
 	state, err := historyState(job.State)
 	if err != nil {
 		return nil, err
@@ -99,9 +108,10 @@ func (journal *JobJournal) entry(job searchjobs.Job, terminal bool) (*opensplunk
 			Latest:   timestamppb.New(job.Latest),
 			Timezone: timezone,
 		},
-		FinalState:      state,
-		CompilerVersion: journal.compilerVersion,
-		CreatedAt:       timestamppb.New(job.CreatedAt),
+		FinalState:        state,
+		CompilerVersion:   job.CompilerVersion,
+		CreatedAt:         timestamppb.New(job.CreatedAt),
+		KnowledgeSnapshot: knowledgeSnapshot,
 	}
 	if !terminal {
 		return entry, nil

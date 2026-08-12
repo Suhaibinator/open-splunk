@@ -33,6 +33,9 @@ func selectColumns(schema searchjobs.Schema, requested []string) (columnSelectio
 	if len(schema.Columns) == 0 {
 		return columnSelection{}, fmt.Errorf("%w: source schema is empty", ErrSourceUnavailable)
 	}
+	if len(schema.Columns) > maximumColumns {
+		return columnSelection{}, fmt.Errorf("%w: source exposes too many columns", ErrInvalidColumns)
+	}
 	available := make(map[string]int, len(schema.Columns))
 	for index, column := range schema.Columns {
 		if column.Name == "" || !utf8.ValidString(column.Name) {

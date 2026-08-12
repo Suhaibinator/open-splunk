@@ -1806,7 +1806,7 @@ func testCompiledQueriesAgainstClickHouse(
 	if err != nil {
 		t.Fatalf("execute typed eval: %v\nSQL: %s\nargs: %#v", err, typedEval.SQL, typedEval.Args)
 	}
-	if types := typedRows.ColumnTypes(); len(types) != 5 || types[0].DatabaseTypeName() != "Int64" ||
+	if types := typedRows.ColumnTypes(); len(types) != 5 || types[0].DatabaseTypeName() != "Float64" ||
 		types[1].DatabaseTypeName() != "UInt64" || types[2].DatabaseTypeName() != "Float64" ||
 		types[3].DatabaseTypeName() != "Bool" || types[4].DatabaseTypeName() != "String" {
 		_ = typedRows.Close()
@@ -1816,7 +1816,7 @@ func testCompiledQueriesAgainstClickHouse(
 		_ = typedRows.Close()
 		t.Fatalf("typed eval returned no row: %v", typedRows.Err())
 	}
-	var signed int64
+	var signed float64
 	var unsigned uint64
 	var ratioValue float64
 	var okValue bool
@@ -1827,7 +1827,7 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 	if signed != -7 || unsigned != ^uint64(0) || ratioValue != 1.25 || !okValue || textValue != "x" || typedRows.Next() {
 		_ = typedRows.Close()
-		t.Fatalf("typed eval values = %d/%d/%g/%t/%q", signed, unsigned, ratioValue, okValue, textValue)
+		t.Fatalf("typed eval values = %g/%d/%g/%t/%q", signed, unsigned, ratioValue, okValue, textValue)
 	}
 	if err := typedRows.Err(); err != nil {
 		_ = typedRows.Close()
@@ -2504,17 +2504,24 @@ func testCompiledQueriesAgainstClickHouse(
 		)
 	}
 
+	preEpochSource := ingest.NativeCollectorSource("collector")
 	if err := connection.Exec(ctx, `
 		INSERT INTO open_splunk.events
-			(event_id, tenant_id, index_name, event_time, index_time, expires_at, visibility_seq)
+			(event_id, tenant_id, index_name, event_time, index_time,
+			 collector_id, ingest_source_kind, ingest_source_id,
+			 expires_at, visibility_seq)
 		SELECT ?, ?, ?,
 			parseDateTime64BestEffort(?, 9, 'UTC'),
 			parseDateTime64BestEffort(?, 3, 'UTC'),
+			?, ?, ?,
 			parseDateTime64BestEffort(?, 3, 'UTC'),
 			toUInt64(?)`,
 		"bin-pre-epoch", "tenant", "compiler",
 		"1969-12-31 23:59:59.999999999",
 		indexTime.UTC().Format("2006-01-02 15:04:05.000"),
+		preEpochSource.CollectorID,
+		uint8(preEpochSource.Kind),
+		preEpochSource.ID,
 		"2099-01-01 00:00:00.000",
 		uint64(1),
 	); err != nil {
@@ -2604,6 +2611,7 @@ func testCompiledQueriesAgainstClickHouse(
 	testRoundAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testIntegralRoundingAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testMVCountAgainstClickHouse(ctx, t, store, connection, indexTime)
+	testMVSortAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testMatchAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testLikeAgainstClickHouse(ctx, t, store, connection, indexTime)
 	testNowAgainstClickHouse(ctx, t, store, connection, indexTime)
@@ -2634,7 +2642,7 @@ func testNumericBinAgainstClickHouse(
 			indexTime.Add(10*time.Second),
 			visibilityCutoff,
 		)
-		var signedSource, signedBand int64
+		var signedSource, signedBand float64
 		var unsignedSource, unsignedBand uint64
 		var floatingSource, floatingBand float64
 		var nullableSource, nullableBand *float64
@@ -2655,7 +2663,7 @@ func testNumericBinAgainstClickHouse(
 			floatingSource != -11.5 || floatingBand != -12 ||
 			nullableSource != nil || nullableBand != nil {
 			t.Fatalf(
-				"scalar numeric bins = %d/%d %d/%d %g/%g %v/%v, want -11/-20 max/max-1 -11.5/-12 nil/nil",
+				"scalar numeric bins = %g/%g %d/%d %g/%g %v/%v, want -11/-20 max/max-1 -11.5/-12 nil/nil",
 				signedSource,
 				signedBand,
 				unsignedSource,
@@ -2681,18 +2689,25 @@ func testNumericBinAgainstClickHouse(
 			t.Fatalf("transformed numeric bin = %d/%d, want 1/0", count, countBand)
 		}
 
-		underflow := compileIntegrationSPL(
+		floatBoundary := compileIntegrationSPL(
 			t,
 			`index=compiler event_id=n-one | eval signed=-9223372036854775808 | bin signed span=10 | table signed`,
 			indexTime.Add(10*time.Second),
 			visibilityCutoff,
 		)
-		queryErr := executeCompiledExpectingNoRows(ctx, connection, underflow)
-		var exception *clickhousedriver.Exception
-		if !errors.As(queryErr, &exception) ||
-			exception.Code != 395 ||
-			!strings.Contains(exception.Message, UnsupportedNumericBinValueMarker) {
-			t.Fatalf("numeric-bin underflow error = %v, want guarded ClickHouse exception", queryErr)
+		var floatBoundaryBand float64
+		if err := connection.QueryRow(
+			ctx,
+			floatBoundary.SQL,
+			floatBoundary.Args...,
+		).Scan(&floatBoundaryBand); err != nil {
+			t.Fatalf("execute Float64 numeric-bin boundary: %v", err)
+		}
+		if floatBoundaryBand != -9223372036854775808 {
+			t.Fatalf(
+				"Float64 numeric-bin boundary = %g, want -9223372036854775808",
+				floatBoundaryBand,
+			)
 		}
 
 		dynamic := compileIntegrationSPL(
@@ -3052,8 +3067,8 @@ func testNumericBinAgainstClickHouse(
 			indexTime.Add(10*time.Second),
 			visibilityCutoff,
 		)
-		queryErr = executeCompiledExpectingNoRows(ctx, connection, dynamicUnderflow)
-		exception = nil
+		queryErr := executeCompiledExpectingNoRows(ctx, connection, dynamicUnderflow)
+		var exception *clickhousedriver.Exception
 		if !errors.As(queryErr, &exception) ||
 			exception.Code != 395 ||
 			!strings.Contains(exception.Message, UnsupportedNumericBinValueMarker) {

@@ -64,7 +64,12 @@ func TestValidateResultAcceptsStreamAggregateOperator(t *testing.T) {
 	t.Parallel()
 
 	result := validResultForValidation(t)
-	result.Plan.Stages[0].Operator = "StreamAggregate"
+	sourceRange := *result.Plan.Stages[0].SourceRange
+	result.Plan.Stages = append(result.Plan.Stages, PlanStage{
+		Index:       1,
+		Operator:    "StreamAggregate",
+		SourceRange: &sourceRange,
+	})
 	if err := ValidateResult(result); err != nil {
 		t.Fatalf("ValidateResult: %v", err)
 	}

@@ -255,7 +255,10 @@ type fakeCompletedSearches struct {
 func (searches *fakeCompletedSearches) CompletedExecutionSnapshotFor(_ context.Context, access searchjobs.AccessScope, id string) (searchjobs.ExecutionSnapshot, error) {
 	searches.access = access
 	searches.id = id
-	return searches.snapshot, searches.err
+	if searches.err != nil {
+		return searchjobs.ExecutionSnapshot{}, searches.err
+	}
+	return sealSearchAnalysisSnapshot(searches.snapshot)
 }
 
 type fakeTimelineCompiler struct {

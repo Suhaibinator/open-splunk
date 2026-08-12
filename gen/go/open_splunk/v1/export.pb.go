@@ -727,21 +727,25 @@ func (x *ExportArtifact) GetExpiresAt() *timestamppb.Timestamp {
 }
 
 type ExportJob struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ExportJobId   string                 `protobuf:"bytes,1,opt,name=export_job_id,json=exportJobId,proto3" json:"export_job_id,omitempty"`
-	StateVersion  uint64                 `protobuf:"varint,2,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
-	Definition    *ExportDefinition      `protobuf:"bytes,3,opt,name=definition,proto3" json:"definition,omitempty"`
-	Format        ExportFormat           `protobuf:"varint,4,opt,name=format,proto3,enum=open_splunk.v1.ExportFormat" json:"format,omitempty"`
-	State         ExportJobState         `protobuf:"varint,5,opt,name=state,proto3,enum=open_splunk.v1.ExportJobState" json:"state,omitempty"`
-	Progress      *ExportProgress        `protobuf:"bytes,6,opt,name=progress,proto3" json:"progress,omitempty"`
-	Artifact      *ExportArtifact        `protobuf:"bytes,7,opt,name=artifact,proto3,oneof" json:"artifact,omitempty"`
-	Failure       *ExportFailure         `protobuf:"bytes,8,opt,name=failure,proto3,oneof" json:"failure,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	FinishedAt    *timestamppb.Timestamp `protobuf:"bytes,11,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
-	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,12,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState    `protogen:"open.v1"`
+	ExportJobId       string                    `protobuf:"bytes,1,opt,name=export_job_id,json=exportJobId,proto3" json:"export_job_id,omitempty"`
+	StateVersion      uint64                    `protobuf:"varint,2,opt,name=state_version,json=stateVersion,proto3" json:"state_version,omitempty"`
+	Definition        *ExportDefinition         `protobuf:"bytes,3,opt,name=definition,proto3" json:"definition,omitempty"`
+	Format            ExportFormat              `protobuf:"varint,4,opt,name=format,proto3,enum=open_splunk.v1.ExportFormat" json:"format,omitempty"`
+	State             ExportJobState            `protobuf:"varint,5,opt,name=state,proto3,enum=open_splunk.v1.ExportJobState" json:"state,omitempty"`
+	Progress          *ExportProgress           `protobuf:"bytes,6,opt,name=progress,proto3" json:"progress,omitempty"`
+	Artifact          *ExportArtifact           `protobuf:"bytes,7,opt,name=artifact,proto3,oneof" json:"artifact,omitempty"`
+	Failure           *ExportFailure            `protobuf:"bytes,8,opt,name=failure,proto3,oneof" json:"failure,omitempty"`
+	CreatedAt         *timestamppb.Timestamp    `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	StartedAt         *timestamppb.Timestamp    `protobuf:"bytes,10,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	FinishedAt        *timestamppb.Timestamp    `protobuf:"bytes,11,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
+	ExpiresAt         *timestamppb.Timestamp    `protobuf:"bytes,12,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	KnowledgeSnapshot *KnowledgeSnapshotSummary `protobuf:"bytes,13,opt,name=knowledge_snapshot,json=knowledgeSnapshot,proto3,oneof" json:"knowledge_snapshot,omitempty"`
+	// Immutable authored-SPL compatibility identity of the source execution.
+	// Empty is reserved for legacy exports created before this field existed.
+	CompilerVersion string `protobuf:"bytes,14,opt,name=compiler_version,json=compilerVersion,proto3" json:"compiler_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ExportJob) Reset() {
@@ -858,11 +862,25 @@ func (x *ExportJob) GetExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *ExportJob) GetKnowledgeSnapshot() *KnowledgeSnapshotSummary {
+	if x != nil {
+		return x.KnowledgeSnapshot
+	}
+	return nil
+}
+
+func (x *ExportJob) GetCompilerVersion() string {
+	if x != nil {
+		return x.CompilerVersion
+	}
+	return ""
+}
+
 var File_open_splunk_v1_export_proto protoreflect.FileDescriptor
 
 const file_open_splunk_v1_export_proto_rawDesc = "" +
 	"\n" +
-	"\x1bopen_splunk/v1/export.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"R\n" +
+	"\x1bopen_splunk/v1/export.proto\x12\x0eopen_splunk.v1\x1a\x1egoogle/protobuf/duration.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1eopen_splunk/v1/knowledge.proto\"R\n" +
 	"\x10CsvExportOptions\x12>\n" +
 	"\vheader_mode\x18\x01 \x01(\x0e2\x1d.open_splunk.v1.CsvHeaderModeR\n" +
 	"headerMode\"\x9c\x01\n" +
@@ -903,7 +921,7 @@ const file_open_splunk_v1_export_proto_rawDesc = "" +
 	"size_bytes\x18\x03 \x01(\x04R\tsizeBytes\x12\x1b\n" +
 	"\trow_count\x18\x04 \x01(\x04R\browCount\x129\n" +
 	"\n" +
-	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xc4\x05\n" +
+	"expires_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"\xe4\x06\n" +
 	"\tExportJob\x12\"\n" +
 	"\rexport_job_id\x18\x01 \x01(\tR\vexportJobId\x12#\n" +
 	"\rstate_version\x18\x02 \x01(\x04R\fstateVersion\x12@\n" +
@@ -923,10 +941,13 @@ const file_open_splunk_v1_export_proto_rawDesc = "" +
 	"\vfinished_at\x18\v \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x129\n" +
 	"\n" +
-	"expires_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAtB\v\n" +
+	"expires_at\x18\f \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\\\n" +
+	"\x12knowledge_snapshot\x18\r \x01(\v2(.open_splunk.v1.KnowledgeSnapshotSummaryH\x02R\x11knowledgeSnapshot\x88\x01\x01\x12)\n" +
+	"\x10compiler_version\x18\x0e \x01(\tR\x0fcompilerVersionB\v\n" +
 	"\t_artifactB\n" +
 	"\n" +
-	"\b_failure*b\n" +
+	"\b_failureB\x15\n" +
+	"\x13_knowledge_snapshot*b\n" +
 	"\fExportFormat\x12\x1d\n" +
 	"\x19EXPORT_FORMAT_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11EXPORT_FORMAT_CSV\x10\x01\x12\x1c\n" +
@@ -975,20 +996,21 @@ func file_open_splunk_v1_export_proto_rawDescGZIP() []byte {
 var file_open_splunk_v1_export_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
 var file_open_splunk_v1_export_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_open_splunk_v1_export_proto_goTypes = []any{
-	(ExportFormat)(0),              // 0: open_splunk.v1.ExportFormat
-	(CsvHeaderMode)(0),             // 1: open_splunk.v1.CsvHeaderMode
-	(JsonIntegerEncoding)(0),       // 2: open_splunk.v1.JsonIntegerEncoding
-	(ExportJobState)(0),            // 3: open_splunk.v1.ExportJobState
-	(ExportFailureCode)(0),         // 4: open_splunk.v1.ExportFailureCode
-	(*CsvExportOptions)(nil),       // 5: open_splunk.v1.CsvExportOptions
-	(*JsonLinesExportOptions)(nil), // 6: open_splunk.v1.JsonLinesExportOptions
-	(*ExportDefinition)(nil),       // 7: open_splunk.v1.ExportDefinition
-	(*ExportFailure)(nil),          // 8: open_splunk.v1.ExportFailure
-	(*ExportProgress)(nil),         // 9: open_splunk.v1.ExportProgress
-	(*ExportArtifact)(nil),         // 10: open_splunk.v1.ExportArtifact
-	(*ExportJob)(nil),              // 11: open_splunk.v1.ExportJob
-	(*durationpb.Duration)(nil),    // 12: google.protobuf.Duration
-	(*timestamppb.Timestamp)(nil),  // 13: google.protobuf.Timestamp
+	(ExportFormat)(0),                // 0: open_splunk.v1.ExportFormat
+	(CsvHeaderMode)(0),               // 1: open_splunk.v1.CsvHeaderMode
+	(JsonIntegerEncoding)(0),         // 2: open_splunk.v1.JsonIntegerEncoding
+	(ExportJobState)(0),              // 3: open_splunk.v1.ExportJobState
+	(ExportFailureCode)(0),           // 4: open_splunk.v1.ExportFailureCode
+	(*CsvExportOptions)(nil),         // 5: open_splunk.v1.CsvExportOptions
+	(*JsonLinesExportOptions)(nil),   // 6: open_splunk.v1.JsonLinesExportOptions
+	(*ExportDefinition)(nil),         // 7: open_splunk.v1.ExportDefinition
+	(*ExportFailure)(nil),            // 8: open_splunk.v1.ExportFailure
+	(*ExportProgress)(nil),           // 9: open_splunk.v1.ExportProgress
+	(*ExportArtifact)(nil),           // 10: open_splunk.v1.ExportArtifact
+	(*ExportJob)(nil),                // 11: open_splunk.v1.ExportJob
+	(*durationpb.Duration)(nil),      // 12: google.protobuf.Duration
+	(*timestamppb.Timestamp)(nil),    // 13: google.protobuf.Timestamp
+	(*KnowledgeSnapshotSummary)(nil), // 14: open_splunk.v1.KnowledgeSnapshotSummary
 }
 var file_open_splunk_v1_export_proto_depIdxs = []int32{
 	1,  // 0: open_splunk.v1.CsvExportOptions.header_mode:type_name -> open_splunk.v1.CsvHeaderMode
@@ -1009,11 +1031,12 @@ var file_open_splunk_v1_export_proto_depIdxs = []int32{
 	13, // 15: open_splunk.v1.ExportJob.started_at:type_name -> google.protobuf.Timestamp
 	13, // 16: open_splunk.v1.ExportJob.finished_at:type_name -> google.protobuf.Timestamp
 	13, // 17: open_splunk.v1.ExportJob.expires_at:type_name -> google.protobuf.Timestamp
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	14, // 18: open_splunk.v1.ExportJob.knowledge_snapshot:type_name -> open_splunk.v1.KnowledgeSnapshotSummary
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_export_proto_init() }
@@ -1021,6 +1044,7 @@ func file_open_splunk_v1_export_proto_init() {
 	if File_open_splunk_v1_export_proto != nil {
 		return
 	}
+	file_open_splunk_v1_knowledge_proto_init()
 	file_open_splunk_v1_export_proto_msgTypes[2].OneofWrappers = []any{
 		(*ExportDefinition_Csv)(nil),
 		(*ExportDefinition_JsonLines)(nil),

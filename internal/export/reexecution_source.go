@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -11,7 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
@@ -23,13 +26,17 @@ const (
 	maximumReexecutionRowBuffer = 1_024
 )
 
-// SearchSnapshotSource supplies both an immutable result pin and its detached
-// search definition. searchjobs.Manager satisfies this interface. The result
-// pin is used for the stable schema and to keep the job descriptor alive; its
-// retained rows are deliberately not used by ReexecutionSource.
+// SearchSnapshotSource atomically supplies an immutable result pin and the
+// detached execution authority that produced the same retained generation.
+// searchjobs.Manager satisfies this interface. ReexecutionSource deliberately
+// does not consume the pin's rows, but keeps the pin open for its whole lease
+// lifetime so expiry cannot reclaim the corresponding job authority.
 type SearchSnapshotSource interface {
-	AcquireResultsFor(context.Context, searchjobs.AccessScope, string) (searchjobs.ResultLease, error)
-	GetFor(searchjobs.AccessScope, string) (searchjobs.Job, error)
+	AcquireExecutionFor(
+		context.Context,
+		searchjobs.AccessScope,
+		string,
+	) (searchjobs.ResultLease, searchjobs.ExecutionSnapshot, error)
 }
 
 // ReexecutionSourceConfig controls bounded query re-execution for exports.
@@ -44,8 +51,9 @@ type ReexecutionSourceConfig struct {
 	RowBuffer  int
 }
 
-// ReexecutionSource rebuilds a completed search exclusively from the trusted,
-// immutable job snapshot. It never accepts generated or caller-provided SQL.
+// ReexecutionSource executes a completed search exclusively from its trusted,
+// immutable execution snapshot. Knowledge-enabled searches use the exact
+// retained compiler seal; only legacy snapshots are rebuilt and recompiled.
 type ReexecutionSource struct {
 	searches   SearchSnapshotSource
 	executor   searchjobs.Executor
@@ -60,10 +68,10 @@ var _ ResultSource = (*ReexecutionSource)(nil)
 // NewReexecutionSource constructs a streaming export source. Zero duration and
 // row-buffer values select conservative defaults.
 func NewReexecutionSource(config ReexecutionSourceConfig) (*ReexecutionSource, error) {
-	if config.Searches == nil {
+	if nilReexecutionDependency(config.Searches) {
 		return nil, errors.New("create export re-execution source: search service is required")
 	}
-	if config.Executor == nil {
+	if nilReexecutionDependency(config.Executor) {
 		return nil, errors.New("create export re-execution source: query executor is required")
 	}
 	if config.MaxRuntime < 0 || config.MaxRuntime > maximumReexecutionRuntime {
@@ -87,9 +95,23 @@ func NewReexecutionSource(config ReexecutionSourceConfig) (*ReexecutionSource, e
 	}, nil
 }
 
-// AcquireResultsFor pins the completed search and rebuilds its fully scoped
-// query. Query execution itself is lazy, preserving the export manager's
-// worker and queue admission bounds.
+func nilReexecutionDependency(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
+
+// AcquireResultsFor atomically pins the completed search and obtains the exact
+// execution authority associated with that pin. Query execution itself is
+// lazy, preserving the export manager's worker and queue admission bounds.
 func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access searchjobs.AccessScope, id string) (searchjobs.ResultLease, error) {
 	if ctx == nil {
 		return nil, errors.New("acquire export re-execution: context is nil")
@@ -97,9 +119,15 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	pin, err := source.searches.AcquireResultsFor(ctx, access, id)
+	pin, execution, err := source.searches.AcquireExecutionFor(ctx, access, id)
 	if err != nil {
+		if !nilReexecutionDependency(pin) {
+			_ = pin.Close()
+		}
 		return nil, err
+	}
+	if nilReexecutionDependency(pin) {
+		return nil, searchjobs.ErrResultsUnavailable
 	}
 	pinReleased := false
 	defer func() {
@@ -108,30 +136,25 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 		}
 	}()
 
-	job, err := source.searches.GetFor(access, id)
-	if err != nil {
-		return nil, err
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if job.ID != id || job.TenantID != access.TenantID || job.OwnerID != access.OwnerID {
+	if execution.ID != id || execution.TenantID != access.TenantID || execution.OwnerID != access.OwnerID {
 		return nil, searchjobs.ErrNotFound
 	}
-	if job.State != searchjobs.StateCompleted && job.State != searchjobs.StateExpired {
-		return nil, searchjobs.ErrResultsUnavailable
+	resultMetadata, validPin := execution.ValidatedResultLease(pin)
+	if !validPin || !resultMetadata.RowCountExact {
+		return nil, fmt.Errorf("%w: completed search execution authority is invalid", searchjobs.ErrResultsUnavailable)
 	}
-	schema := pin.Schema()
-	if err := pin.Close(); err != nil {
-		return nil, fmt.Errorf("%w: release completed search snapshot", searchjobs.ErrResultsUnavailable)
+	schema := resultMetadata.Schema
+	// Reject hostile or corrupted cardinalities before schema projection or
+	// cloning can allocate in proportion to source-controlled metadata.
+	if !validSourceSchemaCardinality(schema) {
+		return nil, fmt.Errorf("%w: completed search schema cardinality is invalid", searchjobs.ErrResultsUnavailable)
 	}
-	pinReleased = true
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	compiled, err := source.compile(job)
+	compiled, summary, err := source.executionAuthority(execution)
 	if err != nil {
-		return nil, fmt.Errorf("%w: rebuild completed search: %w", searchjobs.ErrResultsUnavailable, err)
+		return nil, fmt.Errorf("%w: recover completed search execution: %w", searchjobs.ErrResultsUnavailable, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -145,18 +168,22 @@ func (source *ReexecutionSource) AcquireResultsFor(ctx context.Context, access s
 	}
 
 	lease := &reexecutionLease{
-		parent:     ctx,
-		executor:   source.executor,
-		compiled:   compiled,
-		schema:     cloneResultSchema(schema),
-		generation: generation,
-		maxRuntime: source.maxRuntime,
-		rows:       make(chan searchjobs.ResultRow, source.rowBuffer),
-		finished:   make(chan struct{}),
+		parent:                ctx,
+		executor:              source.executor,
+		compiled:              compiled,
+		schema:                cloneResultSchema(schema),
+		pin:                   pin,
+		sourceCompilerVersion: strings.Clone(execution.CompilerVersion),
+		knowledgeSnapshot:     summary,
+		generation:            generation,
+		maxRuntime:            source.maxRuntime,
+		rows:                  make(chan searchjobs.ResultRow, source.rowBuffer),
+		finished:              make(chan struct{}),
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	pinReleased = true
 	return lease, nil
 }
 
@@ -172,23 +199,36 @@ func (source *ReexecutionSource) nextGeneration() (uint64, bool) {
 	}
 }
 
-func (source *ReexecutionSource) compile(job searchjobs.Job) (clickhouse.CompiledQuery, error) {
-	logical, err := searchsnapshot.BuildPlan(job)
+func (source *ReexecutionSource) executionAuthority(
+	execution searchjobs.ExecutionSnapshot,
+) (clickhouse.CompiledQuery, *opensplunkv1.KnowledgeSnapshotSummary, error) {
+	retained, err := execution.OpenRetainedKnowledgeExecution()
 	if err != nil {
-		return clickhouse.CompiledQuery{}, err
+		return clickhouse.CompiledQuery{}, nil, err
 	}
-	return source.compiler.Compile(logical)
+	if retained != nil {
+		return retained.CompiledQuery, retained.KnowledgeSummary, nil
+	}
+	logical, err := searchsnapshot.BuildExecutionPlan(execution)
+	if err != nil {
+		return clickhouse.CompiledQuery{}, nil, err
+	}
+	compiled, err := source.compiler.Compile(logical)
+	return compiled, nil, err
 }
 
 type reexecutionLease struct {
-	parent     context.Context
-	executor   searchjobs.Executor
-	compiled   clickhouse.CompiledQuery
-	schema     searchjobs.Schema
-	generation uint64
-	maxRuntime time.Duration
-	rows       chan searchjobs.ResultRow
-	finished   chan struct{}
+	parent                context.Context
+	executor              searchjobs.Executor
+	compiled              clickhouse.CompiledQuery
+	schema                searchjobs.Schema
+	pin                   searchjobs.ResultLease
+	sourceCompilerVersion string
+	knowledgeSnapshot     *opensplunkv1.KnowledgeSnapshotSummary
+	generation            uint64
+	maxRuntime            time.Duration
+	rows                  chan searchjobs.ResultRow
+	finished              chan struct{}
 
 	startOnce sync.Once
 	closeOnce sync.Once
@@ -199,6 +239,7 @@ type reexecutionLease struct {
 	runErr    error
 	runDone   bool
 	closed    bool
+	closeErr  error
 	pending   *searchjobs.ResultRow
 }
 
@@ -206,6 +247,24 @@ var _ searchjobs.ResultLease = (*reexecutionLease)(nil)
 
 func (lease *reexecutionLease) Schema() searchjobs.Schema {
 	return cloneResultSchema(lease.schema)
+}
+
+// knowledgeSnapshotSummary is intentionally package-private so only the
+// trusted re-execution source can supply admission provenance to Manager.
+func (lease *reexecutionLease) knowledgeSnapshotSummary() (*opensplunkv1.KnowledgeSnapshotSummary, error) {
+	if lease == nil || lease.knowledgeSnapshot == nil {
+		return nil, nil
+	}
+	return knowledgesnapshot.CloneSummary(lease.knowledgeSnapshot)
+}
+
+// compilerVersion is intentionally package-private so only the trusted
+// re-execution source can attach source compatibility provenance to exports.
+func (lease *reexecutionLease) compilerVersion() string {
+	if lease == nil {
+		return ""
+	}
+	return strings.Clone(lease.sourceCompilerVersion)
 }
 
 // RowCount returns zero because re-execution intentionally does not run a
@@ -309,16 +368,32 @@ func (lease *reexecutionLease) start() {
 
 func (lease *reexecutionLease) execute(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
-	sink := &reexecutionSink{ctx: ctx, expected: lease.schema, rows: lease.rows}
+	sink := newReexecutionSink(ctx, lease.schema, lease.rows)
 	var executionErr error
-	func() {
-		defer func() {
-			if recover() != nil {
-				executionErr = fmt.Errorf("%w: query executor panicked", searchjobs.ErrInvalidResult)
-			}
+	compiled, validCompiled := lease.compiled.CloneForExecution()
+	if !validCompiled {
+		executionErr = fmt.Errorf("%w: retained query authority is invalid", searchjobs.ErrInvalidResult)
+	} else {
+		func() {
+			defer func() {
+				if recover() != nil {
+					executionErr = fmt.Errorf("%w: query executor panicked", searchjobs.ErrInvalidResult)
+				}
+			}()
+			executionErr = lease.executor.Execute(ctx, compiled, sink)
 		}()
-		executionErr = lease.executor.Execute(ctx, lease.compiled, sink)
-	}()
+		// Executor receives a value, but its slices and output pointers would
+		// otherwise share backing memory. Reject any in-place mutation before a
+		// successful terminal result can be published.
+		if !compiled.EqualForExecution(lease.compiled) {
+			executionErr = fmt.Errorf("%w: query executor mutated retained authority", searchjobs.ErrInvalidResult)
+		}
+	}
+	// Execute's sink is a borrowed stream capability. Closing it first rejects
+	// calls retained by a broken executor and unblocks any callback already
+	// backpressured on rows. Once close returns, no sender can reach lease.rows,
+	// so closing that channel below is memory-safe.
+	sink.close()
 	// Cancellation and deadlines are authoritative even when a custom
 	// executor swallows the error returned by its sink. Otherwise a buffered
 	// prefix could be mistaken for a complete artifact.
@@ -354,8 +429,11 @@ func (lease *reexecutionLease) Close() error {
 		}
 		lease.start()
 		<-lease.finished
+		if lease.pin != nil {
+			lease.closeErr = lease.pin.Close()
+		}
 	})
-	return nil
+	return lease.closeErr
 }
 
 func (lease *reexecutionLease) isClosed() bool {
@@ -398,30 +476,76 @@ type reexecutionSink struct {
 	ctx      context.Context
 	expected searchjobs.Schema
 	rows     chan<- searchjobs.ResultRow
-	schema   bool
-	ordinal  uint64
-	err      error
+	done     chan struct{}
+	drained  chan struct{}
+	sendTurn chan struct{}
+
+	// mu guards only bounded state transitions. Blocking row sends are
+	// serialized by sendTurn, while active and drained let close prove that no
+	// registered sender can still reach rows without holding mu while waiting.
+	mu            sync.Mutex
+	closed        bool
+	drainedClosed bool
+	active        uint64
+	schema        bool
+	ordinal       uint64
+	err           error
+}
+
+var errReexecutionSinkClosed = fmt.Errorf("%w: re-execution result sink is closed", searchjobs.ErrInvalidResult)
+
+func newReexecutionSink(
+	ctx context.Context,
+	expected searchjobs.Schema,
+	rows chan<- searchjobs.ResultRow,
+) *reexecutionSink {
+	sink := &reexecutionSink{
+		ctx:      ctx,
+		expected: expected,
+		rows:     rows,
+		done:     make(chan struct{}),
+		drained:  make(chan struct{}),
+		sendTurn: make(chan struct{}, 1),
+	}
+	sink.sendTurn <- struct{}{}
+	return sink
 }
 
 func (sink *reexecutionSink) SetSchema(schema searchjobs.Schema) error {
-	if sink.err != nil {
-		return sink.err
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if err := sink.readyLocked(); err != nil {
+		return err
 	}
 	if sink.schema || !equalResultSchemas(schema, sink.expected) {
-		sink.err = fmt.Errorf("%w: re-executed schema differs from pinned search schema", searchjobs.ErrInvalidResult)
-		return sink.err
+		return sink.rememberLocked(fmt.Errorf("%w: re-executed schema differs from pinned search schema", searchjobs.ErrInvalidResult))
 	}
 	sink.schema = true
 	return nil
 }
 
 func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
-	if sink.err != nil {
-		return sink.err
+	// Claim the sole send turn before retaining caller-owned row storage. This
+	// bounds both cloned rows and registered senders to one even if a buggy
+	// executor invokes AddRow concurrently.
+	select {
+	case <-sink.ctx.Done():
+		return sink.rejectUnregisteredRow(sink.ctx.Err())
+	case <-sink.done:
+		return errReexecutionSinkClosed
+	case <-sink.sendTurn:
+	}
+	defer func() { sink.sendTurn <- struct{}{} }()
+
+	sink.mu.Lock()
+	if err := sink.readyLocked(); err != nil {
+		sink.mu.Unlock()
+		return err
 	}
 	if !sink.schema || len(values) != len(sink.expected.Columns) {
-		sink.err = fmt.Errorf("%w: re-executed row does not match schema", searchjobs.ErrInvalidResult)
-		return sink.err
+		err := sink.rememberLocked(fmt.Errorf("%w: re-executed row does not match schema", searchjobs.ErrInvalidResult))
+		sink.mu.Unlock()
+		return err
 	}
 	for index, value := range values {
 		column := sink.expected.Columns[index]
@@ -429,27 +553,117 @@ func (sink *reexecutionSink) AddRow(values []searchjobs.Value) error {
 		if kind == searchjobs.ValueKindInvalid || kind == searchjobs.ValueKindMixed ||
 			(column.Kind != searchjobs.ValueKindMixed && kind != column.Kind && kind != searchjobs.ValueKindNull) ||
 			(kind == searchjobs.ValueKindNull && !column.Nullable && column.Kind != searchjobs.ValueKindNull) {
-			sink.err = fmt.Errorf("%w: re-executed cell %d does not match schema", searchjobs.ErrInvalidResult, index)
-			return sink.err
+			err := sink.rememberLocked(fmt.Errorf("%w: re-executed cell %d does not match schema", searchjobs.ErrInvalidResult, index))
+			sink.mu.Unlock()
+			return err
 		}
 	}
-	row := searchjobs.ResultRow{Ordinal: sink.ordinal, Values: slices.Clone(values)}
+	cloned := slices.Clone(values)
+	sink.active++
+	row := searchjobs.ResultRow{Ordinal: sink.ordinal, Values: cloned}
+	sink.mu.Unlock()
+
+	var sendErr error
 	select {
 	case <-sink.ctx.Done():
-		sink.err = sink.ctx.Err()
-		return sink.err
+		sendErr = sink.ctx.Err()
+	case <-sink.done:
+		sendErr = errReexecutionSinkClosed
 	case sink.rows <- row:
+	}
+	return sink.finishRow(sendErr, sendErr == nil)
+}
+
+// rejectUnregisteredRow records cancellation without decrementing the active
+// sender that currently owns sendTurn. Once close wins, late callbacks receive
+// the fixed closure error and cannot register or reach rows.
+func (sink *reexecutionSink) rejectUnregisteredRow(err error) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if sink.closed {
+		if sink.err == nil {
+			sink.err = errReexecutionSinkClosed
+		}
+		return errReexecutionSinkClosed
+	}
+	return sink.rememberLocked(err)
+}
+
+func (sink *reexecutionSink) finishRow(sendErr error, sent bool) error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	var result error
+	switch {
+	case sink.closed:
+		if sink.err == nil {
+			sink.err = errReexecutionSinkClosed
+		}
+		result = errReexecutionSinkClosed
+	case sink.err != nil:
+		result = sink.err
+	case sendErr != nil:
+		result = sink.rememberLocked(sendErr)
+	case sent:
 		sink.ordinal++
-		return nil
+	}
+	if sink.active > 0 {
+		sink.active--
+	}
+	sink.signalDrainedLocked()
+	return result
+}
+
+func (sink *reexecutionSink) readyLocked() error {
+	if sink.closed {
+		return errReexecutionSinkClosed
+	}
+	return sink.err
+}
+
+func (sink *reexecutionSink) rememberLocked(err error) error {
+	if sink.err == nil {
+		sink.err = err
+	}
+	return sink.err
+}
+
+func (sink *reexecutionSink) close() {
+	sink.mu.Lock()
+	if !sink.closed {
+		sink.closed = true
+		close(sink.done)
+	}
+	sink.signalDrainedLocked()
+	drained := sink.drained
+	sink.mu.Unlock()
+	<-drained
+}
+
+func (sink *reexecutionSink) signalDrainedLocked() {
+	if sink.closed && sink.active == 0 && !sink.drainedClosed {
+		sink.drainedClosed = true
+		close(sink.drained)
 	}
 }
 
-func (sink *reexecutionSink) failure() error { return sink.err }
+func (sink *reexecutionSink) failure() error {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return sink.err
+}
 
-func (sink *reexecutionSink) schemaReceived() bool { return sink.schema }
+func (sink *reexecutionSink) schemaReceived() bool {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return sink.schema
+}
 
 func cloneResultSchema(schema searchjobs.Schema) searchjobs.Schema {
 	return searchjobs.Schema{Columns: slices.Clone(schema.Columns)}
+}
+
+func validSourceSchemaCardinality(schema searchjobs.Schema) bool {
+	return len(schema.Columns) > 0 && len(schema.Columns) <= maximumColumns
 }
 
 func equalResultSchemas(left, right searchjobs.Schema) bool {
@@ -465,11 +679,14 @@ func schemaColumnNames(schema searchjobs.Schema) []string {
 }
 
 func schemaMatchesCompiledQuery(schema searchjobs.Schema, compiled clickhouse.CompiledQuery) bool {
+	if !validSourceSchemaCardinality(schema) {
+		return false
+	}
 	if compiled.Timechart != nil && compiled.Chart != nil {
 		return false
 	}
 	if compiled.Timechart == nil && compiled.Chart == nil {
-		return len(schema.Columns) > 0 && slices.Equal(compiled.OutputFields, schemaColumnNames(schema))
+		return slices.Equal(compiled.OutputFields, schemaColumnNames(schema))
 	}
 	if compiled.Timechart != nil {
 		return searchjobs.ValidateTimechartSchema(

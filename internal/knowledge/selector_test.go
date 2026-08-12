@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -246,6 +247,238 @@ func TestSelectorUsesLiteralFastPathAndOneCombinedWildcardProgram(t *testing.T) 
 	}
 }
 
+func TestSelectorRuntimeProgramPinsRE2AndConservativeAssessment(t *testing.T) {
+	t.Parallel()
+
+	selector := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
+		Dimension: DimensionHost,
+		Patterns:  []string{`literal\*star`, "a*b", "?"},
+	}}})
+	program, ok := selector.RuntimeProgram(DimensionHost)
+	if !ok {
+		t.Fatal("RuntimeProgram(host) is absent")
+	}
+	if !slices.Equal(program.ExactLiterals, []string{"literal*star"}) {
+		t.Fatalf("exact literals = %#v", program.ExactLiterals)
+	}
+	if want := `(?s)^(?:.|a.*b)$`; program.WildcardRE2 != want {
+		t.Fatalf("wildcard RE2 = %q, want %q", program.WildcardRE2, want)
+	}
+	if program.Assessment != (MatcherTransitionAssessment{
+		Initial: 2, PerInputByte: 14, Final: 6,
+	}) {
+		t.Fatalf("assessment = %+v", program.Assessment)
+	}
+	compiled := regexp.MustCompile(program.WildcardRE2)
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "x", want: true},
+		{value: "😀", want: true},
+		{value: "a\n東京\nb", want: true},
+		{value: "literal*star"},
+		{value: "ab-extra"},
+	} {
+		if got := compiled.MatchString(test.value); got != test.want {
+			t.Errorf("RE2(%q) = %t, want %t", test.value, got, test.want)
+		}
+	}
+
+	// The returned literal inventory is detached from the selector.
+	program.ExactLiterals[0] = "mutated"
+	again, ok := selector.RuntimeProgram(DimensionHost)
+	if !ok || !slices.Equal(again.ExactLiterals, []string{"literal*star"}) {
+		t.Fatalf("detached runtime program = %#v, %t", again, ok)
+	}
+	if _, ok := selector.RuntimeProgram(DimensionIndex); ok {
+		t.Fatal("unrestricted index returned a runtime program")
+	}
+}
+
+func TestMatcherTransitionAssessmentBoundsActualCombinedNFAWork(t *testing.T) {
+	t.Parallel()
+
+	selector := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
+		Dimension: DimensionHost,
+		Patterns:  []string{"*", "a*b", "??", "東*😀", "*z"},
+	}}})
+	dimension := selector.dimensions[DimensionHost-1]
+	for _, value := range []string{"", "a", "ab", "a\n東京\nb", "é😀", "東abc😀", strings.Repeat("x", 4096)} {
+		bound, err := dimension.assessment.UpperBound(uint64(len(value)))
+		if err != nil {
+			t.Fatalf("UpperBound(%d): %v", len(value), err)
+		}
+		_, actual, matchErr := dimension.wildcard.match(context.Background(), value, bound)
+		if matchErr != nil {
+			t.Fatalf("match(%q) exceeded bound %d after %d: %v", value, bound, actual, matchErr)
+		}
+		if actual > bound {
+			t.Fatalf("match(%q) transitions = %d, bound %d", value, actual, bound)
+		}
+	}
+	if _, err := (MatcherTransitionAssessment{
+		Initial: ^uint64(0), PerInputByte: 1,
+	}).UpperBound(1); !errors.Is(err, ErrRuntimeLimit) {
+		t.Fatalf("overflow assessment error = %v", err)
+	}
+}
+
+func TestSelectorRuntimeProgramRE2MatchesClosedGlobReference(t *testing.T) {
+	t.Parallel()
+
+	sources := []string{"a*b", "file?.txt", `\**`, "a(b)?", "[x]*", "東*😀"}
+	selector := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
+		Dimension: DimensionHost, Patterns: sources,
+	}}})
+	program, ok := selector.RuntimeProgram(DimensionHost)
+	if !ok || program.WildcardRE2 == "" {
+		t.Fatalf("runtime program = %#v, %t", program, ok)
+	}
+	compiled := regexp.MustCompile(program.WildcardRE2)
+	patterns := make([]Pattern, 0, len(sources))
+	for _, source := range sources {
+		pattern, err := NormalizePattern(source)
+		if err != nil {
+			t.Fatalf("NormalizePattern(%q): %v", source, err)
+		}
+		patterns = append(patterns, pattern)
+	}
+	for _, value := range []string{
+		"", "a", "ab", "a\n東京\nb", "file1.txt", "file😀.txt", "file12.txt",
+		"*", "*suffix", "a(b)x", "[x]", "[x]tail", "東\n😀", "東abc😀", "other",
+	} {
+		want := false
+		for _, pattern := range patterns {
+			if referenceGlobMatch(pattern.tokens, []rune(value)) {
+				want = true
+				break
+			}
+		}
+		if got := compiled.MatchString(value); got != want {
+			t.Errorf("combined RE2(%q) = %t, reference %t; regex %q", value, got, want, program.WildcardRE2)
+		}
+	}
+}
+
+func TestSelectorRuntimeChargeUsesExactFastPathOrFixedWildcardBound(t *testing.T) {
+	t.Parallel()
+
+	mixed := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
+		Dimension: DimensionHost, Patterns: []string{"exact", "a*"},
+	}}})
+	for _, test := range []struct {
+		name        string
+		value       string
+		wantMatch   bool
+		wantInput   uint64
+		wantMatcher uint64
+		wantUnits   uint64
+	}{
+		{name: "exact hit", value: "exact", wantMatch: true, wantInput: 5, wantUnits: 5},
+		{name: "wildcard hit", value: "a", wantMatch: true, wantInput: 1, wantMatcher: 11, wantUnits: 89},
+		{name: "wildcard miss", value: "z", wantInput: 1, wantMatcher: 11, wantUnits: 89},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			matched, charged, err := mixed.Match(
+				context.Background(), EventMetadata{Host: StringMetadata(test.value)}, DefaultRuntimeBudget(),
+			)
+			if err != nil || matched != test.wantMatch {
+				t.Fatalf("Match(%q) = %t, %v", test.value, matched, err)
+			}
+			if got := charged.Charge(); got != (RuntimeCharge{
+				InputBytes: test.wantInput, MatcherTransitionUpperBound: test.wantMatcher, QueryUnits: test.wantUnits,
+			}) {
+				t.Fatalf("charge(%q) = %+v", test.value, got)
+			}
+		})
+	}
+
+	literals := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
+		Dimension: DimensionHost, Patterns: []string{"exact"},
+	}}})
+	matched, charged, err := literals.Match(
+		context.Background(), EventMetadata{Host: StringMetadata("miss")}, DefaultRuntimeBudget(),
+	)
+	if err != nil || matched || charged.Charge() != (RuntimeCharge{InputBytes: 4, QueryUnits: 4}) {
+		t.Fatalf("literal-only miss = %t charge=%+v err=%v", matched, charged.Charge(), err)
+	}
+}
+
+func TestSelectorRuntimeChargeUsesUTF8BytesAndDoesNotCoerceMissingOrNull(t *testing.T) {
+	t.Parallel()
+
+	selector := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
+		Dimension: DimensionHost, Patterns: []string{"?"},
+	}}})
+	for _, test := range []struct {
+		value       string
+		wantMatch   bool
+		wantInput   uint64
+		wantMatcher uint64
+		wantUnits   uint64
+	}{
+		{value: "é", wantMatch: true, wantInput: 2, wantMatcher: 11, wantUnits: 90},
+		{value: "éx", wantInput: 3, wantMatcher: 15, wantUnits: 123},
+	} {
+		matched, charged, err := selector.Match(
+			context.Background(), EventMetadata{Host: StringMetadata(test.value)}, DefaultRuntimeBudget(),
+		)
+		if err != nil || matched != test.wantMatch {
+			t.Fatalf("Match(%q) = %t, %v", test.value, matched, err)
+		}
+		if got := charged.Charge(); got != (RuntimeCharge{
+			InputBytes: test.wantInput, MatcherTransitionUpperBound: test.wantMatcher, QueryUnits: test.wantUnits,
+		}) {
+			t.Fatalf("charge(%q) = %+v", test.value, got)
+		}
+	}
+
+	universal := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
+		Dimension: DimensionHost, Patterns: []string{"*"},
+	}}})
+	initial := DefaultRuntimeBudget()
+	for _, value := range []MetadataValue{MissingMetadata(), NullMetadata()} {
+		matched, returned, err := universal.Match(
+			context.Background(), EventMetadata{Host: value}, initial,
+		)
+		if err != nil || matched || returned.Charge() != (RuntimeCharge{}) || returned.Remaining() != initial.Remaining() {
+			t.Fatalf("universal Match(kind=%d) = %t charge=%+v remaining=%+v err=%v", value.Kind(), matched, returned.Charge(), returned.Remaining(), err)
+		}
+	}
+}
+
+func TestSelectorRuntimeChargePinsCompleteDimensionOrder(t *testing.T) {
+	t.Parallel()
+
+	selector := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{
+		{Dimension: DimensionIndex, Patterns: []string{"i"}},
+		{Dimension: DimensionHost, Patterns: []string{"h"}},
+		{Dimension: DimensionSource, Patterns: []string{"s"}},
+		{Dimension: DimensionSourcetype, Patterns: []string{"t*"}},
+	}})
+	matched, charged, err := selector.Match(context.Background(), EventMetadata{
+		Index: StringMetadata("i"), Host: StringMetadata("h"), Source: StringMetadata("s"), Sourcetype: StringMetadata("type"),
+	}, DefaultRuntimeBudget())
+	if err != nil || !matched || charged.Charge() != (RuntimeCharge{
+		InputBytes: 7, MatcherTransitionUpperBound: 32, QueryUnits: 263,
+	}) {
+		t.Fatalf("full ordered match = %t charge=%+v err=%v", matched, charged.Charge(), err)
+	}
+
+	matched, charged, err = selector.Match(context.Background(), EventMetadata{
+		Index:      StringMetadata("i"),
+		Host:       StringMetadata("h"),
+		Source:     StringMetadata("x"),
+		Sourcetype: StringMetadata(strings.Repeat("x", MaximumSelectorRuntimeValueBytes+1)),
+	}, DefaultRuntimeBudget())
+	if err != nil || matched || charged.Charge() != (RuntimeCharge{InputBytes: 3, QueryUnits: 3}) {
+		t.Fatalf("source short-circuit = %t charge=%+v err=%v", matched, charged.Charge(), err)
+	}
+}
+
 func TestCompileSelectorRejectsDimensionPatternByteAndWorkLimits(t *testing.T) {
 	t.Parallel()
 
@@ -422,13 +655,13 @@ func TestRuntimeBudgetPinsValueEventAndCumulativeQueryBoundaries(t *testing.T) {
 	selector := mustCompileSelector(t, SelectorSpec{Dimensions: []DimensionSpec{{
 		Dimension: DimensionHost, Patterns: []string{"a*"},
 	}}})
-	small, err := NewRuntimeBudget(RuntimeLimits{QueryUnits: 146})
+	small, err := NewRuntimeBudget(RuntimeLimits{QueryUnits: 178})
 	if err != nil {
 		t.Fatal(err)
 	}
 	matched, small, err := selector.Match(context.Background(), EventMetadata{Host: StringMetadata("a")}, small)
 	if err != nil || !matched || small.Charge() != (RuntimeCharge{
-		InputBytes: 1, MatcherTransitions: 9, QueryUnits: 73,
+		InputBytes: 1, MatcherTransitionUpperBound: 11, QueryUnits: 89,
 	}) {
 		t.Fatalf("first cumulative match = %t charge=%+v err=%v", matched, small.Charge(), err)
 	}
@@ -437,7 +670,7 @@ func TestRuntimeBudgetPinsValueEventAndCumulativeQueryBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	matched, small, err = selector.Match(context.Background(), EventMetadata{Host: StringMetadata("a")}, small)
-	if err != nil || !matched || small.Charge().QueryUnits != 146 {
+	if err != nil || !matched || small.Charge().QueryUnits != 178 {
 		t.Fatalf("query boundary match = %t charge=%+v err=%v", matched, small.Charge(), err)
 	}
 	small, err = small.BeginEvent()
@@ -483,8 +716,16 @@ func TestSelectorLargeMatchChecksCancellationPeriodically(t *testing.T) {
 	if ctx.doneChecks != 2 {
 		t.Fatalf("deadline checks = %d, want deterministic periodic second check", ctx.doneChecks)
 	}
-	if got := charged.Charge().MatcherTransitions; got != 1024 {
-		t.Fatalf("charged transitions before cancellation = %d, want 1024", got)
+	program, ok := selector.RuntimeProgram(DimensionHost)
+	if !ok {
+		t.Fatal("host runtime program is absent")
+	}
+	want, err := program.Assessment.UpperBound(MaximumSelectorRuntimeValueBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := charged.Charge().MatcherTransitionUpperBound; got != want {
+		t.Fatalf("charged transition bound before cancellation = %d, want %d", got, want)
 	}
 }
 
@@ -509,8 +750,8 @@ func TestEmptyStarChargesCombinedMatcherInitializationClosureAndTerminalWork(t *
 		}
 	}
 	if got := budget.Charge(); got != (RuntimeCharge{
-		MatcherTransitions: 8,
-		QueryUnits:         64,
+		MatcherTransitionUpperBound: 8,
+		QueryUnits:                  64,
 	}) {
 		t.Fatalf("two empty-star charges = %+v", got)
 	}
@@ -625,8 +866,8 @@ func TestSelectorIsSafeForConcurrentMatchingAndDetachedReads(t *testing.T) {
 					t.Errorf("concurrent Match() = %t, %v", matched, err)
 					return
 				}
-				copy := selector.CanonicalBytes()
-				copy[len(copy)-1] ^= byte(worker + 1)
+				canonicalCopy := selector.CanonicalBytes()
+				canonicalCopy[len(canonicalCopy)-1] ^= byte(worker + 1)
 			}
 		}()
 	}

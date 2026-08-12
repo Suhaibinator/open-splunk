@@ -431,6 +431,31 @@ func TestNormalizeBootstrapRejectsContradictoryOrMalformedBuildMetadata(t *testi
 	}
 }
 
+func TestNormalizeBootstrapRejectsNoncanonicalCompatibilityIdentity(t *testing.T) {
+	t.Parallel()
+	defaulted, err := normalizeBootstrap(BootstrapConfig{})
+	if err != nil || defaulted.SPLCompatibilityVersion != "0.2" {
+		t.Fatalf("normalizeBootstrap(default) = (%q, %v), want 0.2", defaulted.SPLCompatibilityVersion, err)
+	}
+
+	for _, version := range []string{
+		" 0.2",
+		"0.2 ",
+		"0.2\nforged",
+		strings.Repeat("v", searchjobs.MaximumCompilerVersionBytes+1),
+	} {
+		if _, err := normalizeBootstrap(BootstrapConfig{
+			SPLCompatibilityVersion: version,
+		}); err == nil || !strings.Contains(err.Error(), "compatibility version is invalid") {
+			t.Fatalf("normalizeBootstrap(%q) error = %v", version, err)
+		}
+	}
+	got, err := normalizeBootstrap(BootstrapConfig{SPLCompatibilityVersion: "0.2"})
+	if err != nil || got.SPLCompatibilityVersion != "0.2" {
+		t.Fatalf("normalizeBootstrap(canonical) = (%q, %v)", got.SPLCompatibilityVersion, err)
+	}
+}
+
 func validServerBuildMetadata(t *testing.T) *opensplunkv1.BuildMetadata {
 	t.Helper()
 	identity, err := buildinfo.Parse("1.2.3", strings.Repeat("a", 40))
@@ -872,7 +897,7 @@ func TestCreateSearchPreservesScopedSavedSearchProvenance(t *testing.T) {
 		}
 		return savedSearchRecord(savedID, 1, ownerID, appID, "Errors"), nil
 	}}
-	jobs := &fakeSearchJobs{createJob: completeJob("job-saved")}
+	jobs := &fakeSearchJobs{createJob: completeJobForApp("job-saved", appID)}
 	handler := newTestHandler(t, Config{
 		SearchJobs: jobs,
 		Indexes: fakeIndexCatalog{indexes: []control.Index{{
@@ -1586,6 +1611,7 @@ func completeJob(id string) searchjobs.Job {
 		TenantID:         "tenant-1",
 		SPL:              "index=main | head 10",
 		NormalizedSPL:    "index=main | head 10",
+		CompilerVersion:  "0.2",
 		RequestedIndexes: []string{"main"},
 		EffectiveIndexes: []string{"main"},
 		Earliest:         testNow.Add(-time.Hour),
@@ -1597,4 +1623,10 @@ func completeJob(id string) searchjobs.Job {
 		FinishedAt:       testNow.Add(-time.Second),
 		ExpiresAt:        testNow.Add(15 * time.Minute),
 	}
+}
+
+func completeJobForApp(id, appID string) searchjobs.Job {
+	job := completeJob(id)
+	job.AppID = appID
+	return job
 }

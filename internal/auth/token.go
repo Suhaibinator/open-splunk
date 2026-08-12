@@ -13,9 +13,11 @@ import (
 	"io"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/audit"
@@ -38,6 +40,7 @@ const (
 	minimumTokenPrefixBytes            = 8
 	maximumTokenPrefixBytes            = 32
 	maximumCollectorIDBytes            = 128
+	maximumHECMetadataBytes            = 255
 	defaultRetainedRevokedTokenLimit   = 256
 	defaultTotalTokenRecordLimit       = 1024
 	maximumTotalTokenRecordLimit       = 1024
@@ -73,10 +76,13 @@ var (
 	// corrupt. Callers may use the identity solely to recover an exact durable
 	// batch outcome before rejecting every fresh event.
 	ErrInvalidEventAuthority = errors.New("auth: collector event authority is invalid")
-	// ErrInactiveToken means an operation that requires an active collector
+	// ErrInactiveToken means an operation that requires an active ingestion
 	// credential could not proceed. Accepted-use recording deliberately uses
 	// this one sentinel for missing, disabled, revoked, and expired IDs so the
 	// stream-admission path does not disclose credential existence or state.
+	// HEC authentication also returns it for a digest-matching, structurally
+	// valid, unexpired HEC token whose explicit state is disabled; the HEC
+	// compatibility contract exposes that one closed protocol distinction.
 	ErrInactiveToken = errors.New("auth: collector token is inactive")
 	// ErrAuditActorUnavailable means a security-sensitive administrative
 	// mutation reached the production store without the trusted actor that the
@@ -103,6 +109,27 @@ const (
 	CollectorTokenStateExpired  CollectorTokenState = "expired"
 )
 
+// IngestionTokenPurpose is the immutable transport boundary for an ingestion
+// credential. The empty value is accepted only by legacy internal native-token
+// callers and is persisted canonically as NativeCollector.
+type IngestionTokenPurpose string
+
+const (
+	IngestionTokenPurposeNativeCollector IngestionTokenPurpose = "native_collector"
+	IngestionTokenPurposeHEC             IngestionTokenPurpose = "hec"
+)
+
+// HECTokenProfile contains HEC-only request metadata defaults. Empty strings
+// mean no default is configured. IndexerAcknowledgment is immutable after
+// creation while the other fields may change under token optimistic locking.
+type HECTokenProfile struct {
+	DefaultIndexName      string
+	DefaultHost           string
+	DefaultSource         string
+	DefaultSourcetype     string
+	IndexerAcknowledgment bool
+}
+
 // CollectorToken contains safe token metadata. It never contains a secret or
 // digest.
 type CollectorToken struct {
@@ -112,6 +139,8 @@ type CollectorToken struct {
 	Description          string
 	Prefix               string
 	State                CollectorTokenState
+	Purpose              IngestionTokenPurpose
+	HECProfile           HECTokenProfile
 	BoundCollectorID     string
 	AllowedIndexNames    []string
 	AllowedHostRegexes   []string
@@ -161,6 +190,8 @@ type CreateCollectorTokenRequest struct {
 	AllowedIndexNames    []string
 	AllowedHostRegexes   []string
 	AllowedSourceRegexes []string
+	Purpose              IngestionTokenPurpose
+	HECProfile           HECTokenProfile
 	BoundCollectorID     string
 	ExpiresAt            time.Time
 	IngestionRateLimits  ingestquota.Limits
@@ -174,6 +205,8 @@ type UpdateCollectorTokenRequest struct {
 	AllowedIndexNames    []string
 	AllowedHostRegexes   []string
 	AllowedSourceRegexes []string
+	Purpose              IngestionTokenPurpose
+	HECProfile           HECTokenProfile
 	BoundCollectorID     string
 	ExpiresAt            time.Time
 	IngestionRateLimits  ingestquota.Limits
@@ -199,7 +232,10 @@ type AuthorizedIndexPolicy = indexpolicy.Policy
 // to take effect.
 type Authentication struct {
 	TokenID              string
+	TokenVersion         uint64
 	TokenName            string
+	Purpose              IngestionTokenPurpose
+	HECProfile           HECTokenProfile
 	BoundCollectorID     string
 	TokenRateLimits      ingestquota.Limits
 	AuthorizedIndexes    []AuthorizedIndexPolicy
@@ -394,12 +430,14 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 			err,
 		)
 	}
-	if !validCollectorID(request.BoundCollectorID) {
-		return IssuedCollectorToken{}, fmt.Errorf(
-			"%w: bound collector ID must be a canonical identifier containing between 1 and %d ASCII bytes",
-			control.ErrInvalidArgument,
-			maximumCollectorIDBytes,
-		)
+	purpose, hecProfile, err := normalizeCreatedTokenPurpose(
+		request.Purpose,
+		request.HECProfile,
+		request.BoundCollectorID,
+		allowedNames,
+	)
+	if err != nil {
+		return IssuedCollectorToken{}, err
 	}
 
 	plaintext, err := store.generatePlaintext()
@@ -448,6 +486,11 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	maxIngestUncompressedBytesPerSecond := int64(
 		request.IngestionRateLimits.MaxUncompressedBytesPerSecond,
 	)
+	var boundCollectorID *string
+	if purpose == IngestionTokenPurposeNativeCollector {
+		value := request.BoundCollectorID
+		boundCollectorID = &value
+	}
 	record := collectorTokenRecord{
 		IngestionTokenID:                    tokenID,
 		Version:                             1,
@@ -459,7 +502,8 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 		CreatedAtUnixMicro:                  now.UnixMicro(),
 		UpdatedAtUnixMicro:                  now.UnixMicro(),
 		ExpiresAtUnixMicro:                  expiration,
-		BoundCollectorID:                    &request.BoundCollectorID,
+		BoundCollectorID:                    boundCollectorID,
+		Purpose:                             purpose,
 		MaxIngestEventsPerSecond:            maxIngestEventsPerSecond,
 		MaxIngestUncompressedBytesPerSecond: maxIngestUncompressedBytesPerSecond,
 	}
@@ -477,6 +521,26 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	}
 	if err := tx.Create(&memberships).Error; err != nil {
 		return IssuedCollectorToken{}, fmt.Errorf("store collector token scope: %w", err)
+	}
+	if purpose == IngestionTokenPurposeHEC {
+		profileRecord, profileErr := newCollectorTokenHECProfileRecord(
+			tokenID,
+			hecProfile,
+			allowedNames,
+			indexIDs,
+		)
+		if profileErr != nil {
+			return IssuedCollectorToken{}, fmt.Errorf(
+				"prepare HEC token profile: %w",
+				profileErr,
+			)
+		}
+		if err := tx.Create(&profileRecord).Error; err != nil {
+			return IssuedCollectorToken{}, fmt.Errorf(
+				"store HEC token profile: %w",
+				err,
+			)
+		}
 	}
 	constraints := collectorTokenConstraintRecords(
 		tokenID,
@@ -517,6 +581,8 @@ func (store *Store) CreateCollectorToken(ctx context.Context, request CreateColl
 	metadata := CollectorToken{
 		ID: tokenID, Version: 1, Name: name, Description: description,
 		Prefix: prefix, State: CollectorTokenStateActive,
+		Purpose:              purpose,
+		HECProfile:           hecProfile,
 		BoundCollectorID:     request.BoundCollectorID,
 		AllowedIndexNames:    append([]string(nil), allowedNames...),
 		AllowedHostRegexes:   append([]string(nil), allowedHostRegexes...),
@@ -562,13 +628,6 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	if current.State == CollectorTokenStateRevoked || current.State == CollectorTokenStateExpired {
 		return CollectorToken{}, ErrInactiveToken
 	}
-	boundCollectorID, err := replacementCollectorID(
-		current.BoundCollectorID,
-		request.BoundCollectorID,
-	)
-	if err != nil {
-		return CollectorToken{}, err
-	}
 	if err := request.IngestionRateLimits.Validate(); err != nil {
 		return CollectorToken{}, fmt.Errorf(
 			"%w: ingestion token rate limits: %w",
@@ -585,6 +644,16 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	allowedHostRegexes, allowedSourceRegexes, err := normalizeCollectorTokenConstraints(
 		request.AllowedHostRegexes,
 		request.AllowedSourceRegexes,
+	)
+	if err != nil {
+		return CollectorToken{}, err
+	}
+	purpose, hecProfile, boundCollectorID, err := normalizeUpdatedTokenPurpose(
+		current,
+		request.Purpose,
+		request.HECProfile,
+		request.BoundCollectorID,
+		allowedNames,
 	)
 	if err != nil {
 		return CollectorToken{}, err
@@ -612,6 +681,23 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 			"prepare collector token scope capacity: %w",
 			err,
 		)
+	}
+	if purpose == IngestionTokenPurposeHEC {
+		clearDefault := tx.Model(&collectorTokenHECProfileRecord{}).
+			Where("ingestion_token_id = ?", tokenID).
+			UpdateColumn("default_index_id", nil)
+		if clearDefault.Error != nil {
+			return CollectorToken{}, fmt.Errorf(
+				"prepare HEC token profile scope replacement: %w",
+				clearDefault.Error,
+			)
+		}
+		if clearDefault.RowsAffected != 1 {
+			return CollectorToken{}, fmt.Errorf(
+				"%w: HEC token profile is missing",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
 	}
 
 	// #nosec G115 -- expectedVersion is bounded above by math.MaxInt64.
@@ -666,6 +752,40 @@ func (store *Store) UpdateCollectorToken(ctx context.Context, tokenID string, ex
 	}
 	if err := tx.Create(&memberships).Error; err != nil {
 		return CollectorToken{}, fmt.Errorf("store updated collector token scope: %w", err)
+	}
+	if purpose == IngestionTokenPurposeHEC {
+		profileRecord, profileErr := newCollectorTokenHECProfileRecord(
+			tokenID,
+			hecProfile,
+			allowedNames,
+			indexIDs,
+		)
+		if profileErr != nil {
+			return CollectorToken{}, fmt.Errorf(
+				"prepare updated HEC token profile: %w",
+				profileErr,
+			)
+		}
+		profileUpdate := tx.Model(&collectorTokenHECProfileRecord{}).
+			Where("ingestion_token_id = ?", tokenID).
+			Updates(map[string]any{
+				"default_index_id":   profileRecord.DefaultIndexID,
+				"default_host":       profileRecord.DefaultHost,
+				"default_source":     profileRecord.DefaultSource,
+				"default_sourcetype": profileRecord.DefaultSourcetype,
+			})
+		if profileUpdate.Error != nil {
+			return CollectorToken{}, fmt.Errorf(
+				"update HEC token profile: %w",
+				profileUpdate.Error,
+			)
+		}
+		if profileUpdate.RowsAffected != 1 {
+			return CollectorToken{}, fmt.Errorf(
+				"%w: HEC token profile is missing",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
 	}
 	if deleteErr := tx.Where("ingestion_token_id = ?", tokenID).
 		Delete(&collectorTokenConstraintRecord{}).Error; deleteErr != nil {
@@ -741,6 +861,7 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 		Where(
 			`token.token_digest = ?
 			 AND token.state = ?
+			 AND token.purpose = ?
 			 AND token.bound_collector_id IS NOT NULL
 			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)
 			 AND target.name = ?
@@ -748,6 +869,7 @@ func (store *Store) Authorize(ctx context.Context, plaintext, indexName string) 
 			 AND target.ingestion_enabled = 1`,
 			digest,
 			CollectorTokenStateActive,
+			IngestionTokenPurposeNativeCollector,
 			now.UnixMicro(),
 			normalizedIndex,
 			control.IndexStateActive,
@@ -806,6 +928,56 @@ func (store *Store) Authenticate(
 	return authentication, nil
 }
 
+// AuthenticateHEC validates one HEC credential, resolves its versioned
+// profile and complete current ingestion-policy snapshot, and records a
+// monotonic last-use observation in the same transaction. Unknown,
+// wrong-purpose, expired, revoked, and scope-less credentials return
+// ErrUnauthorized. A structurally valid, unexpired HEC credential in the
+// explicit disabled state returns ErrInactiveToken. The returned value
+// contains no credential material.
+func (store *Store) AuthenticateHEC(
+	ctx context.Context,
+	plaintext string,
+) (
+	authentication Authentication,
+	returnedErr error,
+) {
+	if ctx == nil {
+		return Authentication{}, fmt.Errorf("%w: nil context", control.ErrInvalidArgument)
+	}
+	checkedAt := databaseTime(store.now())
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return Authentication{}, fmt.Errorf(
+			"begin HEC token authentication: %w",
+			tx.Error,
+		)
+	}
+	finished := false
+	defer finishTokenTransaction(tx, &finished, &returnedErr)
+
+	authentication, err := store.authenticateHEC(tx, plaintext, checkedAt)
+	if err != nil {
+		return Authentication{}, err
+	}
+	if err := recordIngestionTokenUse(
+		tx,
+		authentication.TokenID,
+		IngestionTokenPurposeHEC,
+		checkedAt,
+	); err != nil {
+		return Authentication{}, err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return Authentication{}, fmt.Errorf(
+			"commit HEC token authentication: %w",
+			err,
+		)
+	}
+	finished = true
+	return authentication, nil
+}
+
 func (store *Store) authenticate(
 	database *gorm.DB,
 	plaintext string,
@@ -837,6 +1009,7 @@ func (store *Store) authenticateWithIndexAuthority(
 		Table("ingestion_tokens AS token").
 		Select(`
 			token.ingestion_token_id,
+			token.version,
 			token.name,
 			token.bound_collector_id,
 			token.max_ingest_events_per_second,
@@ -844,12 +1017,14 @@ func (store *Store) authenticateWithIndexAuthority(
 		Where(
 			`token.token_digest = ?
 			 AND token.state = ?
+			 AND token.purpose = ?
 			 AND token.bound_collector_id IS NOT NULL
 			 AND length(CAST(token.ingestion_token_id AS BLOB)) BETWEEN 1 AND ?
 			 AND instr(token.ingestion_token_id, char(0)) = 0
 			 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)`,
 			digest,
 			CollectorTokenStateActive,
+			IngestionTokenPurposeNativeCollector,
 			maximumTokenIDBytes,
 			now.UnixMicro(),
 		).
@@ -863,6 +1038,11 @@ func (store *Store) authenticateWithIndexAuthority(
 	if !validAuthenticationTokenID(row.IngestionTokenID) {
 		return Authentication{}, errors.New(
 			"authenticate collector token: invalid token ID in control-plane database",
+		)
+	}
+	if row.Version < 1 {
+		return Authentication{}, errors.New(
+			"authenticate collector token: invalid token version in control-plane database",
 		)
 	}
 	if !validCollectorID(row.BoundCollectorID) {
@@ -887,15 +1067,274 @@ func (store *Store) authenticateWithIndexAuthority(
 	}
 	authentication := Authentication{
 		TokenID:          row.IngestionTokenID,
+		TokenVersion:     uint64(row.Version),
 		TokenName:        row.Name,
+		Purpose:          IngestionTokenPurposeNativeCollector,
 		BoundCollectorID: row.BoundCollectorID,
 		TokenRateLimits:  tokenRateLimits,
 	}
+	return hydrateTokenAuthenticationAuthority(
+		database,
+		authentication,
+		now,
+		deferAuthorityErrors,
+	)
+}
+
+func (store *Store) authenticateHEC(
+	database *gorm.DB,
+	plaintext string,
+	now time.Time,
+) (Authentication, error) {
+	if plaintext == "" {
+		return Authentication{}, ErrUnauthorized
+	}
+	digest := store.digest(plaintext)
+	base := func() *gorm.DB {
+		return database.
+			Table("ingestion_tokens AS token").
+			Joins(`
+				LEFT JOIN ingestion_token_hec_profiles AS hec_profile
+				  ON hec_profile.ingestion_token_id = token.ingestion_token_id`).
+			Joins(`
+				LEFT JOIN indexes AS hec_default_index
+				  ON hec_default_index.index_id = hec_profile.default_index_id`).
+			Joins(`
+				LEFT JOIN ingestion_token_indexes AS hec_default_scope
+				  ON hec_default_scope.ingestion_token_id = token.ingestion_token_id
+				 AND hec_default_scope.index_id = hec_profile.default_index_id`).
+			Where(
+				`token.token_digest = ?
+				 AND token.state IN (?, ?)
+				 AND token.purpose = ?
+				 AND (token.expires_at_unix_micro IS NULL OR token.expires_at_unix_micro > ?)`,
+				digest,
+				CollectorTokenStateActive,
+				CollectorTokenStateDisabled,
+				IngestionTokenPurposeHEC,
+				now.UnixMicro(),
+			)
+	}
+
+	var widths collectorTokenHECAuthenticationWidths
+	widthResult := base().
+		Select(`
+			length(CAST(token.ingestion_token_id AS BLOB))
+				AS ingestion_token_id_bytes,
+			token.version,
+			CASE
+				WHEN token.state = 'active' THEN 1
+				WHEN token.state = 'disabled' THEN 2
+				ELSE 0
+			END AS state_kind,
+			length(CAST(token.name AS BLOB)) AS name_bytes,
+			CASE WHEN token.bound_collector_id IS NULL THEN 0 ELSE 1 END
+				AS bound_collector_id_present,
+			CASE WHEN hec_profile.ingestion_token_id IS NULL THEN 0 ELSE 1 END
+				AS hec_profile_present,
+			CASE
+				WHEN hec_profile.default_index_id IS NULL THEN 0
+				WHEN hec_default_index.index_id IS NULL
+				  OR hec_default_scope.index_id IS NULL THEN -1
+				ELSE 1
+			END AS hec_default_index_target_present,
+			length(CAST(hec_default_index.name AS BLOB))
+				AS hec_default_index_name_bytes,
+			length(CAST(hec_profile.default_host AS BLOB))
+				AS hec_default_host_bytes,
+			length(CAST(hec_profile.default_source AS BLOB))
+				AS hec_default_source_bytes,
+			length(CAST(hec_profile.default_sourcetype AS BLOB))
+				AS hec_default_sourcetype_bytes,
+			hec_profile.indexer_acknowledgment
+				AS hec_indexer_acknowledgment,
+			token.max_ingest_events_per_second,
+			token.max_ingest_uncompressed_bytes_per_second`).
+		Take(&widths)
+	if errors.Is(widthResult.Error, gorm.ErrRecordNotFound) {
+		return Authentication{}, ErrUnauthorized
+	}
+	if widthResult.Error != nil {
+		return Authentication{}, fmt.Errorf(
+			"preflight HEC token authentication: %w",
+			widthResult.Error,
+		)
+	}
+	if err := validateHECAuthenticationWidths(widths); err != nil {
+		return Authentication{}, fmt.Errorf(
+			"authenticate HEC token: %w",
+			err,
+		)
+	}
+	if widths.StateKind == 2 {
+		return Authentication{}, ErrInactiveToken
+	}
+
+	var row collectorTokenHECAuthenticationRow
+	rowResult := base().
+		Select(`
+			token.ingestion_token_id,
+			token.version,
+			token.name,
+			hec_default_index.name AS hec_default_index_name,
+			hec_profile.default_host AS hec_default_host,
+			hec_profile.default_source AS hec_default_source,
+			hec_profile.default_sourcetype AS hec_default_sourcetype,
+			hec_profile.indexer_acknowledgment
+				AS hec_indexer_acknowledgment,
+			token.max_ingest_events_per_second,
+			token.max_ingest_uncompressed_bytes_per_second`).
+		Take(&row)
+	if errors.Is(rowResult.Error, gorm.ErrRecordNotFound) {
+		return Authentication{}, ErrUnauthorized
+	}
+	if rowResult.Error != nil {
+		return Authentication{}, fmt.Errorf(
+			"read HEC token authentication snapshot: %w",
+			rowResult.Error,
+		)
+	}
+	authentication, err := hecAuthenticationFromRow(row)
+	if err != nil {
+		return Authentication{}, fmt.Errorf("authenticate HEC token: %w", err)
+	}
+	return hydrateTokenAuthenticationAuthority(
+		database,
+		authentication,
+		now,
+		false,
+	)
+}
+
+func validateHECAuthenticationWidths(
+	widths collectorTokenHECAuthenticationWidths,
+) error {
+	if widths.IngestionTokenIDBytes < 1 ||
+		widths.IngestionTokenIDBytes > maximumTokenIDBytes ||
+		widths.Version < 1 ||
+		(widths.StateKind != 1 && widths.StateKind != 2) ||
+		widths.NameBytes < 1 ||
+		widths.NameBytes > maximumTokenNameBytes ||
+		widths.BoundCollectorIDPresent != 0 ||
+		widths.HECProfilePresent != 1 ||
+		widths.HECIndexerAcknowledgment == nil ||
+		(*widths.HECIndexerAcknowledgment != 0 &&
+			*widths.HECIndexerAcknowledgment != 1) {
+		return errors.New("HEC token or profile projection is inconsistent")
+	}
+	switch widths.HECDefaultIndexTargetPresent {
+	case 0:
+		if widths.HECDefaultIndexNameBytes != nil {
+			return errors.New("HEC token default index projection is inconsistent")
+		}
+	case 1:
+		if widths.HECDefaultIndexNameBytes == nil ||
+			*widths.HECDefaultIndexNameBytes < 1 ||
+			*widths.HECDefaultIndexNameBytes > maximumTokenNameBytes {
+			return errors.New("HEC token default index projection exceeds its byte bounds")
+		}
+	default:
+		return errors.New("HEC token default index target is unavailable")
+	}
+	for _, width := range []*int64{
+		widths.HECDefaultHostBytes,
+		widths.HECDefaultSourceBytes,
+		widths.HECDefaultSourcetypeBytes,
+	} {
+		if width != nil && (*width < 1 || *width > maximumHECMetadataBytes) {
+			return errors.New("HEC token metadata projection exceeds its byte bounds")
+		}
+	}
+	if widths.MaxIngestEventsPerSecond < 0 ||
+		widths.MaxIngestUncompressedBytesPerSecond < 0 {
+		return errors.New("HEC token rate limits are invalid")
+	}
+	return nil
+}
+
+func hecAuthenticationFromRow(
+	row collectorTokenHECAuthenticationRow,
+) (Authentication, error) {
+	if !validAuthenticationTokenID(row.IngestionTokenID) || row.Version < 1 {
+		return Authentication{}, errors.New("HEC token identity is invalid")
+	}
+	if len(row.Name) < 1 || len(row.Name) > maximumTokenNameBytes ||
+		!utf8.ValidString(row.Name) || strings.IndexByte(row.Name, 0) >= 0 {
+		return Authentication{}, errors.New("HEC token name is invalid")
+	}
+	if row.HECIndexerAcknowledgment == nil ||
+		(*row.HECIndexerAcknowledgment != 0 &&
+			*row.HECIndexerAcknowledgment != 1) {
+		return Authentication{}, errors.New("HEC token acknowledgment mode is invalid")
+	}
+	profile := HECTokenProfile{
+		IndexerAcknowledgment: *row.HECIndexerAcknowledgment == 1,
+	}
+	if row.HECDefaultIndexName != nil {
+		canonical, err := control.NormalizeIndexName(*row.HECDefaultIndexName)
+		if err != nil || canonical != *row.HECDefaultIndexName {
+			return Authentication{}, errors.New("HEC token default index is invalid")
+		}
+		profile.DefaultIndexName = strings.Clone(*row.HECDefaultIndexName)
+	}
+	for index, stored := range []*string{
+		row.HECDefaultHost,
+		row.HECDefaultSource,
+		row.HECDefaultSourcetype,
+	} {
+		if stored == nil {
+			continue
+		}
+		if !validHECMetadataDefault(*stored) {
+			return Authentication{}, fmt.Errorf(
+				"HEC token metadata default %d is invalid",
+				index,
+			)
+		}
+		switch index {
+		case 0:
+			profile.DefaultHost = strings.Clone(*stored)
+		case 1:
+			profile.DefaultSource = strings.Clone(*stored)
+		case 2:
+			profile.DefaultSourcetype = strings.Clone(*stored)
+		}
+	}
+	if row.MaxIngestEventsPerSecond < 0 ||
+		row.MaxIngestUncompressedBytesPerSecond < 0 {
+		return Authentication{}, errors.New("HEC token rate limits are invalid")
+	}
+	rateLimits := ingestquota.Limits{
+		MaxEventsPerSecond: uint64(row.MaxIngestEventsPerSecond),
+		MaxUncompressedBytesPerSecond: uint64(
+			row.MaxIngestUncompressedBytesPerSecond,
+		),
+	}
+	if err := rateLimits.Validate(); err != nil {
+		return Authentication{}, errors.New("HEC token rate limits are invalid")
+	}
+	return Authentication{
+		TokenID:          row.IngestionTokenID,
+		TokenVersion:     uint64(row.Version),
+		TokenName:        strings.Clone(row.Name),
+		Purpose:          IngestionTokenPurposeHEC,
+		HECProfile:       profile,
+		TokenRateLimits:  rateLimits,
+		BoundCollectorID: "",
+	}, nil
+}
+
+func hydrateTokenAuthenticationAuthority(
+	database *gorm.DB,
+	authentication Authentication,
+	now time.Time,
+	deferAuthorityErrors bool,
+) (Authentication, error) {
 	constraintTokens, constraintErr := hydrateCollectorTokenConstraints(
 		database,
-		[]CollectorToken{{ID: row.IngestionTokenID}},
-		map[string]int{row.IngestionTokenID: 0},
-		[]string{row.IngestionTokenID},
+		[]CollectorToken{{ID: authentication.TokenID}},
+		map[string]int{authentication.TokenID: 0},
+		[]string{authentication.TokenID},
 		0,
 		false,
 	)
@@ -920,6 +1359,56 @@ func (store *Store) authenticateWithIndexAuthority(
 	}
 	authentication.AllowedHostRegexes = constraintTokens[0].AllowedHostRegexes
 	authentication.AllowedSourceRegexes = constraintTokens[0].AllowedSourceRegexes
+	var scopeWidths []collectorTokenAuthenticationScopeWidths
+	widthResult := database.
+		Table("ingestion_token_indexes AS scope").
+		Select(
+			"target.index_id IS NOT NULL AS target_present",
+			"length(CAST(target.name AS BLOB)) AS name_bytes",
+			"length(CAST(target.default_sourcetype AS BLOB)) AS default_sourcetype_bytes",
+			"length(CAST(target.state AS BLOB)) AS state_bytes",
+		).
+		Joins("LEFT JOIN indexes AS target ON target.index_id = scope.index_id").
+		Where("scope.ingestion_token_id = ?", authentication.TokenID).
+		Limit(maximumTokenScopes + 1).
+		Find(&scopeWidths)
+	if widthResult.Error != nil {
+		return Authentication{}, fmt.Errorf(
+			"preflight ingestion token authentication scopes: %w",
+			widthResult.Error,
+		)
+	}
+	if len(scopeWidths) > maximumTokenScopes {
+		if deferAuthorityErrors {
+			return authentication, ErrInvalidIndexAuthority
+		}
+		return Authentication{}, errors.New(
+			"authenticate collector token: scope count exceeds the supported maximum",
+		)
+	}
+	invalidScopeProjection := false
+	for _, widths := range scopeWidths {
+		if widths.TargetPresent != 1 ||
+			widths.NameBytes == nil || *widths.NameBytes < 1 ||
+			*widths.NameBytes > maximumTokenNameBytes ||
+			widths.DefaultSourcetypeBytes == nil ||
+			*widths.DefaultSourcetypeBytes < 0 ||
+			*widths.DefaultSourcetypeBytes >
+				indexpolicy.MaximumDefaultSourcetypeBytes ||
+			widths.StateBytes == nil || *widths.StateBytes < 1 ||
+			*widths.StateBytes > 16 {
+			invalidScopeProjection = true
+			break
+		}
+	}
+	if invalidScopeProjection {
+		if deferAuthorityErrors {
+			return authentication, ErrInvalidIndexAuthority
+		}
+		return Authentication{}, errors.New(
+			"authenticate ingestion token: scope projection exceeds persisted byte bounds or has no target",
+		)
+	}
 	var scopes []collectorTokenAuthenticationScopeRow
 	scopeResult := database.
 		Table("ingestion_token_indexes AS scope").
@@ -940,7 +1429,7 @@ func (store *Store) authenticateWithIndexAuthority(
 			"COALESCE(target.ingestion_enabled, -1) AS ingestion_enabled",
 		).
 		Joins("LEFT JOIN indexes AS target ON target.index_id = scope.index_id").
-		Where("scope.ingestion_token_id = ?", row.IngestionTokenID).
+		Where("scope.ingestion_token_id = ?", authentication.TokenID).
 		Order("target.name").
 		Order("scope.index_id").
 		Limit(maximumTokenScopes + 1).
@@ -1072,20 +1561,50 @@ func recordCollectorTokenUse(
 	tokenID string,
 	acceptedAt time.Time,
 ) error {
+	return recordIngestionTokenUse(
+		database,
+		tokenID,
+		IngestionTokenPurposeNativeCollector,
+		acceptedAt,
+	)
+}
+
+func recordIngestionTokenUse(
+	database *gorm.DB,
+	tokenID string,
+	purpose IngestionTokenPurpose,
+	acceptedAt time.Time,
+) error {
 	acceptedAt = databaseTime(acceptedAt)
 	if acceptedAt.IsZero() {
-		return fmt.Errorf("%w: collector token acceptance time is required", control.ErrInvalidArgument)
+		return fmt.Errorf("%w: ingestion token acceptance time is required", control.ErrInvalidArgument)
+	}
+	if purpose != IngestionTokenPurposeNativeCollector &&
+		purpose != IngestionTokenPurposeHEC {
+		return fmt.Errorf("%w: ingestion token purpose is invalid", control.ErrInvalidArgument)
 	}
 	acceptedAtUnixMicro := acceptedAt.UnixMicro()
-	result := database.
+	update := database.
 		Model(&collectorTokenRecord{}).
 		Where("ingestion_token_id = ?", tokenID).
 		Where("state = ?", CollectorTokenStateActive).
-		Where("bound_collector_id IS NOT NULL").
+		Where("purpose = ?", purpose).
 		Where(
 			"expires_at_unix_micro IS NULL OR expires_at_unix_micro > ?",
 			acceptedAtUnixMicro,
-		).
+		)
+	if purpose == IngestionTokenPurposeNativeCollector {
+		update = update.Where("bound_collector_id IS NOT NULL")
+	} else {
+		update = update.
+			Where("bound_collector_id IS NULL").
+			Where(`EXISTS (
+				SELECT 1
+				FROM ingestion_token_hec_profiles AS hec_profile
+				WHERE hec_profile.ingestion_token_id = ingestion_tokens.ingestion_token_id
+			)`)
+	}
+	result := update.
 		UpdateColumn(
 			"last_used_at_unix_micro",
 			gorm.Expr(`
@@ -1102,7 +1621,7 @@ func recordCollectorTokenUse(
 			),
 		)
 	if result.Error != nil {
-		return fmt.Errorf("record collector token use: %w", result.Error)
+		return fmt.Errorf("record ingestion token use: %w", result.Error)
 	}
 	if result.RowsAffected != 1 {
 		// The stream-admission path must not reveal whether an identifier is
@@ -1512,6 +2031,136 @@ func (store *Store) ListCollectorTokens(
 	return tokens, nil
 }
 
+// SetCollectorTokenEnabled atomically transitions a live token between the
+// active and disabled states under optimistic locking. Expiration and
+// revocation are terminal for this operation: neither state can be used to
+// reactivate a credential. The successful audit event is appended in the same
+// transaction and uses the existing ingestion_token.update taxonomy.
+func (store *Store) SetCollectorTokenEnabled(
+	ctx context.Context,
+	tokenID string,
+	expectedVersion uint64,
+	enabled bool,
+) (result CollectorToken, err error) {
+	if err := store.validateTokenMutationActor(ctx); err != nil {
+		return CollectorToken{}, err
+	}
+	if strings.TrimSpace(tokenID) == "" {
+		return CollectorToken{}, fmt.Errorf(
+			"%w: token ID is required",
+			control.ErrInvalidArgument,
+		)
+	}
+	if expectedVersion == 0 || expectedVersion > math.MaxInt64 {
+		return CollectorToken{}, fmt.Errorf(
+			"%w: expected token version is outside the supported range",
+			control.ErrInvalidArgument,
+		)
+	}
+
+	now := databaseTime(store.now())
+	tx := store.orm.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"begin collector token state update: %w",
+			tx.Error,
+		)
+	}
+	transactionFinished := false
+	defer finishTokenTransaction(tx, &transactionFinished, &err)
+
+	current, err := takeCollectorTokenMetadata(tx, tokenID, now)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return CollectorToken{}, control.ErrNotFound
+	}
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"read collector token for state update: %w",
+			err,
+		)
+	}
+	if current.Version != expectedVersion {
+		return CollectorToken{}, control.ErrVersionConflict
+	}
+	if current.State == CollectorTokenStateRevoked ||
+		!current.ExpiresAt.IsZero() && !current.ExpiresAt.After(now) {
+		return CollectorToken{}, ErrInactiveToken
+	}
+
+	targetState := CollectorTokenStateDisabled
+	if enabled {
+		targetState = CollectorTokenStateActive
+	}
+	// #nosec G115 -- expectedVersion is bounded above by math.MaxInt64.
+	expectedVersionDB := int64(expectedVersion)
+	update := tx.Model(&collectorTokenRecord{}).
+		Where(
+			`ingestion_token_id = ?
+			 AND version = ?
+			 AND state IN (?, ?)
+			 AND (expires_at_unix_micro IS NULL OR expires_at_unix_micro > ?)`,
+			tokenID,
+			expectedVersionDB,
+			CollectorTokenStateActive,
+			CollectorTokenStateDisabled,
+			now.UnixMicro(),
+		).
+		Updates(map[string]any{
+			"state":                 targetState,
+			"version":               gorm.Expr("version + 1"),
+			"updated_at_unix_micro": now.UnixMicro(),
+		})
+	if update.Error != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"set collector token enabled state: %w",
+			update.Error,
+		)
+	}
+	if update.RowsAffected != 1 {
+		return CollectorToken{}, control.ErrVersionConflict
+	}
+
+	result, err = takeCollectorTokenMetadata(tx, tokenID, now)
+	if err != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"read state-updated collector token: %w",
+			err,
+		)
+	}
+	if result.State != targetState || !result.RevokedAt.IsZero() {
+		return CollectorToken{}, fmt.Errorf(
+			"%w: collector token state transition produced an invalid lifecycle",
+			errCollectorTokenCatalogInconsistent,
+		)
+	}
+	if _, err := store.auditAppender.AppendInTransaction(
+		ctx,
+		tx,
+		store.auditTenantID,
+		audit.SuccessfulEvent{
+			OccurredAt:    now,
+			Action:        audit.ActionIngestionTokenUpdate,
+			TargetKind:    audit.TargetKindIngestionToken,
+			TargetID:      result.ID,
+			TargetVersion: result.Version,
+		},
+	); err != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"append collector token state update audit event: %w",
+			err,
+		)
+	}
+	commitErr := tx.Commit().Error
+	transactionFinished = true
+	if commitErr != nil {
+		return CollectorToken{}, fmt.Errorf(
+			"commit collector token state update: %w",
+			commitErr,
+		)
+	}
+	return result, nil
+}
+
 // RevokeCollectorToken irreversibly revokes a token under optimistic locking.
 func (store *Store) RevokeCollectorToken(ctx context.Context, tokenID string, expectedVersion uint64) (result CollectorToken, err error) {
 	if err := store.validateTokenMutationActor(ctx); err != nil {
@@ -1693,8 +2342,27 @@ func collectorTokenParentProjectionQuery(database *gorm.DB) *gorm.DB {
 			token.revoked_at_unix_micro,
 			token.last_used_at_unix_micro,
 			token.bound_collector_id,
+			token.purpose,
+			CASE WHEN hec_profile.ingestion_token_id IS NULL THEN 0 ELSE 1 END
+				AS hec_profile_present,
+			CASE
+				WHEN hec_profile.default_index_id IS NULL THEN 0
+				WHEN hec_default_index.index_id IS NULL THEN -1
+				ELSE 1
+			END AS hec_default_index_target_present,
+			hec_default_index.name AS hec_default_index_name,
+			hec_profile.default_host AS hec_default_host,
+			hec_profile.default_source AS hec_default_source,
+			hec_profile.default_sourcetype AS hec_default_sourcetype,
+			hec_profile.indexer_acknowledgment AS hec_indexer_acknowledgment,
 			token.max_ingest_events_per_second,
-			token.max_ingest_uncompressed_bytes_per_second`)
+			token.max_ingest_uncompressed_bytes_per_second`).
+		Joins(`
+			LEFT JOIN ingestion_token_hec_profiles AS hec_profile
+			  ON hec_profile.ingestion_token_id = token.ingestion_token_id`).
+		Joins(`
+			LEFT JOIN indexes AS hec_default_index
+			  ON hec_default_index.index_id = hec_profile.default_index_id`)
 }
 
 func collectorTokenProjectionWidthQuery(database *gorm.DB) *gorm.DB {
@@ -1707,7 +2375,22 @@ func collectorTokenProjectionWidthQuery(database *gorm.DB) *gorm.DB {
 			length(CAST(token.description AS BLOB)) AS description_bytes,
 			length(CAST(token.token_prefix AS BLOB)) AS token_prefix_bytes,
 			length(CAST(token.bound_collector_id AS BLOB))
-				AS bound_collector_id_bytes`)
+				AS bound_collector_id_bytes,
+			length(CAST(token.purpose AS BLOB)) AS purpose_bytes,
+			length(CAST(hec_default_index.name AS BLOB))
+				AS hec_default_index_name_bytes,
+			length(CAST(hec_profile.default_host AS BLOB))
+				AS hec_default_host_bytes,
+			length(CAST(hec_profile.default_source AS BLOB))
+				AS hec_default_source_bytes,
+			length(CAST(hec_profile.default_sourcetype AS BLOB))
+				AS hec_default_sourcetype_bytes`).
+		Joins(`
+			LEFT JOIN ingestion_token_hec_profiles AS hec_profile
+			  ON hec_profile.ingestion_token_id = token.ingestion_token_id`).
+		Joins(`
+			LEFT JOIN indexes AS hec_default_index
+			  ON hec_default_index.index_id = hec_profile.default_index_id`)
 }
 
 func validateCollectorTokenProjectionWidths(
@@ -1748,6 +2431,26 @@ func validateCollectorTokenProjectionWidths(
 			"%w: collector token bound collector ID exceeds persisted byte bounds",
 			errCollectorTokenCatalogInconsistent,
 		)
+	}
+	if projection.PurposeBytes != int64(len(IngestionTokenPurposeHEC)) &&
+		projection.PurposeBytes != int64(len(IngestionTokenPurposeNativeCollector)) {
+		return fmt.Errorf(
+			"%w: ingestion token purpose exceeds persisted byte bounds",
+			errCollectorTokenCatalogInconsistent,
+		)
+	}
+	for _, width := range []*int64{
+		projection.HECDefaultIndexNameBytes,
+		projection.HECDefaultHostBytes,
+		projection.HECDefaultSourceBytes,
+		projection.HECDefaultSourcetypeBytes,
+	} {
+		if width != nil && (*width < 1 || *width > maximumHECMetadataBytes) {
+			return fmt.Errorf(
+				"%w: HEC token profile exceeds persisted byte bounds",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
 	}
 	return nil
 }
@@ -2062,6 +2765,18 @@ func hydrateCollectorTokenScopes(
 				errCollectorTokenCatalogInconsistent,
 			)
 		}
+		if token.Purpose == IngestionTokenPurposeHEC &&
+			token.HECProfile.DefaultIndexName != "" {
+			if _, found := slices.BinarySearch(
+				token.AllowedIndexNames,
+				token.HECProfile.DefaultIndexName,
+			); !found {
+				return nil, fmt.Errorf(
+					"%w: HEC default index is outside the token scope",
+					errCollectorTokenCatalogInconsistent,
+				)
+			}
+		}
 	}
 	return hydrateCollectorTokenConstraints(
 		database,
@@ -2283,6 +2998,13 @@ func collectorTokenFromMetadataRow(
 			errCollectorTokenCatalogInconsistent,
 		)
 	}
+	if row.Purpose != IngestionTokenPurposeNativeCollector &&
+		row.Purpose != IngestionTokenPurposeHEC {
+		return CollectorToken{}, fmt.Errorf(
+			"%w: invalid ingestion token purpose in control-plane database",
+			errCollectorTokenCatalogInconsistent,
+		)
+	}
 	if row.MaxIngestEventsPerSecond < 0 ||
 		row.MaxIngestUncompressedBytesPerSecond < 0 {
 		return CollectorToken{}, fmt.Errorf(
@@ -2324,6 +3046,7 @@ func collectorTokenFromMetadataRow(
 		Description:         row.Description,
 		Prefix:              row.TokenPrefix,
 		State:               row.State,
+		Purpose:             row.Purpose,
 		IngestionRateLimits: rateLimits,
 		CreatedAt:           time.UnixMicro(row.CreatedAtUnixMicro).UTC(),
 		UpdatedAt:           time.UnixMicro(row.UpdatedAtUnixMicro).UTC(),
@@ -2336,6 +3059,67 @@ func collectorTokenFromMetadataRow(
 			)
 		}
 		token.BoundCollectorID = *row.BoundCollectorID
+	}
+	if row.Purpose == IngestionTokenPurposeNativeCollector {
+		if row.HECProfilePresent != 0 ||
+			row.HECDefaultIndexTargetPresent != 0 ||
+			row.HECDefaultIndexName != nil ||
+			row.HECDefaultHost != nil ||
+			row.HECDefaultSource != nil ||
+			row.HECDefaultSourcetype != nil ||
+			row.HECIndexerAcknowledgment != nil {
+			return CollectorToken{}, fmt.Errorf(
+				"%w: native collector token has a HEC profile",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
+	} else {
+		if token.BoundCollectorID != "" ||
+			row.HECProfilePresent != 1 ||
+			row.HECIndexerAcknowledgment == nil ||
+			(*row.HECIndexerAcknowledgment != 0 &&
+				*row.HECIndexerAcknowledgment != 1) ||
+			(row.HECDefaultIndexName == nil &&
+				row.HECDefaultIndexTargetPresent != 0) ||
+			(row.HECDefaultIndexName != nil &&
+				row.HECDefaultIndexTargetPresent != 1) {
+			return CollectorToken{}, fmt.Errorf(
+				"%w: HEC token profile is missing or inconsistent",
+				errCollectorTokenCatalogInconsistent,
+			)
+		}
+		if row.HECDefaultIndexName != nil {
+			canonical, err := control.NormalizeIndexName(*row.HECDefaultIndexName)
+			if err != nil || canonical != *row.HECDefaultIndexName {
+				return CollectorToken{}, fmt.Errorf(
+					"%w: HEC token default index is invalid",
+					errCollectorTokenCatalogInconsistent,
+				)
+			}
+			token.HECProfile.DefaultIndexName = *row.HECDefaultIndexName
+		}
+		for label, stored := range []struct {
+			value *string
+			set   *string
+		}{
+			{row.HECDefaultHost, &token.HECProfile.DefaultHost},
+			{row.HECDefaultSource, &token.HECProfile.DefaultSource},
+			{row.HECDefaultSourcetype, &token.HECProfile.DefaultSourcetype},
+		} {
+			if stored.value == nil {
+				continue
+			}
+			if !validHECMetadataDefault(*stored.value) {
+				return CollectorToken{}, fmt.Errorf(
+					"%w: HEC token metadata default %d is invalid",
+					errCollectorTokenCatalogInconsistent,
+					label,
+				)
+			}
+			*stored.set = *stored.value
+		}
+		token.HECProfile.IndexerAcknowledgment =
+			*row.HECIndexerAcknowledgment == 1
 	}
 	if row.ExpiresAtUnixMicro != nil {
 		token.ExpiresAt = time.UnixMicro(*row.ExpiresAtUnixMicro).UTC()
@@ -2422,6 +3206,218 @@ func collectorTokenConstraintRecords(
 	appendDimension(collectorTokenConstraintKindHost, hostPatterns)
 	appendDimension(collectorTokenConstraintKindSource, sourcePatterns)
 	return records
+}
+
+func normalizeCreatedTokenPurpose(
+	purpose IngestionTokenPurpose,
+	profile HECTokenProfile,
+	boundCollectorID string,
+	allowedIndexNames []string,
+) (IngestionTokenPurpose, HECTokenProfile, error) {
+	// Direct/internal callers created native tokens before purpose existed.
+	// Preserve that Go API behavior while every persisted row receives the
+	// canonical native purpose. The protobuf administrator boundary separately
+	// permits this inference only when the legacy required binding proves native
+	// intent; an unbound request can never be inferred as HEC.
+	if purpose == "" {
+		purpose = IngestionTokenPurposeNativeCollector
+	}
+	switch purpose {
+	case IngestionTokenPurposeNativeCollector:
+		if profile != (HECTokenProfile{}) {
+			return "", HECTokenProfile{}, fmt.Errorf(
+				"%w: native collector tokens cannot have a HEC profile",
+				control.ErrInvalidArgument,
+			)
+		}
+		if !validCollectorID(boundCollectorID) {
+			return "", HECTokenProfile{}, fmt.Errorf(
+				"%w: bound collector ID must be a canonical identifier containing between 1 and %d ASCII bytes",
+				control.ErrInvalidArgument,
+				maximumCollectorIDBytes,
+			)
+		}
+		return purpose, HECTokenProfile{}, nil
+	case IngestionTokenPurposeHEC:
+		if boundCollectorID != "" {
+			return "", HECTokenProfile{}, fmt.Errorf(
+				"%w: HEC tokens cannot have a bound collector ID",
+				control.ErrInvalidArgument,
+			)
+		}
+		normalized, err := normalizeHECTokenProfile(profile, allowedIndexNames)
+		if err != nil {
+			return "", HECTokenProfile{}, err
+		}
+		return purpose, normalized, nil
+	default:
+		return "", HECTokenProfile{}, fmt.Errorf(
+			"%w: ingestion token purpose is invalid",
+			control.ErrInvalidArgument,
+		)
+	}
+}
+
+func normalizeUpdatedTokenPurpose(
+	current CollectorToken,
+	requestedPurpose IngestionTokenPurpose,
+	requestedProfile HECTokenProfile,
+	requestedBoundCollectorID string,
+	allowedIndexNames []string,
+) (IngestionTokenPurpose, HECTokenProfile, string, error) {
+	if current.Purpose != IngestionTokenPurposeNativeCollector &&
+		current.Purpose != IngestionTokenPurposeHEC {
+		return "", HECTokenProfile{}, "", fmt.Errorf(
+			"%w: ingestion token purpose is invalid",
+			errCollectorTokenCatalogInconsistent,
+		)
+	}
+	if requestedPurpose == "" {
+		requestedPurpose = current.Purpose
+	}
+	if requestedPurpose != current.Purpose {
+		return "", HECTokenProfile{}, "", fmt.Errorf(
+			"%w: ingestion token purpose is immutable",
+			control.ErrInvalidArgument,
+		)
+	}
+	switch current.Purpose {
+	case IngestionTokenPurposeNativeCollector:
+		if requestedProfile != (HECTokenProfile{}) {
+			return "", HECTokenProfile{}, "", fmt.Errorf(
+				"%w: native collector tokens cannot have a HEC profile",
+				control.ErrInvalidArgument,
+			)
+		}
+		binding, err := replacementCollectorID(
+			current.BoundCollectorID,
+			requestedBoundCollectorID,
+		)
+		return current.Purpose, HECTokenProfile{}, binding, err
+	case IngestionTokenPurposeHEC:
+		if current.BoundCollectorID != "" || requestedBoundCollectorID != "" {
+			return "", HECTokenProfile{}, "", fmt.Errorf(
+				"%w: HEC tokens cannot have a bound collector ID",
+				control.ErrInvalidArgument,
+			)
+		}
+		if requestedProfile.IndexerAcknowledgment !=
+			current.HECProfile.IndexerAcknowledgment {
+			return "", HECTokenProfile{}, "", fmt.Errorf(
+				"%w: HEC token acknowledgment mode is immutable",
+				control.ErrInvalidArgument,
+			)
+		}
+		profile, err := normalizeHECTokenProfile(
+			requestedProfile,
+			allowedIndexNames,
+		)
+		return current.Purpose, profile, "", err
+	default:
+		panic("unreachable ingestion token purpose")
+	}
+}
+
+func normalizeHECTokenProfile(
+	profile HECTokenProfile,
+	allowedIndexNames []string,
+) (HECTokenProfile, error) {
+	if profile.DefaultIndexName != "" {
+		canonical, err := control.NormalizeIndexName(profile.DefaultIndexName)
+		_, allowed := slices.BinarySearch(allowedIndexNames, profile.DefaultIndexName)
+		if err != nil || canonical != profile.DefaultIndexName || !allowed {
+			return HECTokenProfile{}, fmt.Errorf(
+				"%w: HEC default index must be a canonical allowed index",
+				control.ErrInvalidArgument,
+			)
+		}
+	}
+	for _, candidate := range []struct {
+		label string
+		value string
+	}{
+		{label: "host", value: profile.DefaultHost},
+		{label: "source", value: profile.DefaultSource},
+		{label: "sourcetype", value: profile.DefaultSourcetype},
+	} {
+		if candidate.value != "" && !validHECMetadataDefault(candidate.value) {
+			return HECTokenProfile{}, fmt.Errorf(
+				"%w: HEC default %s must contain between 1 and %d bounded UTF-8 bytes without surrounding whitespace or control characters",
+				control.ErrInvalidArgument,
+				candidate.label,
+				maximumHECMetadataBytes,
+			)
+		}
+	}
+	return HECTokenProfile{
+		DefaultIndexName:      strings.Clone(profile.DefaultIndexName),
+		DefaultHost:           strings.Clone(profile.DefaultHost),
+		DefaultSource:         strings.Clone(profile.DefaultSource),
+		DefaultSourcetype:     strings.Clone(profile.DefaultSourcetype),
+		IndexerAcknowledgment: profile.IndexerAcknowledgment,
+	}, nil
+}
+
+func validHECMetadataDefault(value string) bool {
+	return len(value) >= 1 &&
+		len(value) <= maximumHECMetadataBytes &&
+		utf8.ValidString(value) &&
+		!hecASCIIEdgeWhitespace(value[0]) &&
+		!hecASCIIEdgeWhitespace(value[len(value)-1]) &&
+		strings.IndexByte(value, 0) < 0 &&
+		!strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func hecASCIIEdgeWhitespace(value byte) bool {
+	switch value {
+	case '\t', '\n', '\v', '\f', '\r', ' ':
+		return true
+	default:
+		return false
+	}
+}
+
+func newCollectorTokenHECProfileRecord(
+	tokenID string,
+	profile HECTokenProfile,
+	allowedIndexNames []string,
+	allowedIndexIDs []string,
+) (collectorTokenHECProfileRecord, error) {
+	if len(allowedIndexNames) == 0 ||
+		len(allowedIndexNames) != len(allowedIndexIDs) {
+		return collectorTokenHECProfileRecord{}, errors.New(
+			"HEC token allowed-index projection is inconsistent",
+		)
+	}
+	record := collectorTokenHECProfileRecord{
+		IngestionTokenID:      tokenID,
+		DefaultHost:           optionalStoredString(profile.DefaultHost),
+		DefaultSource:         optionalStoredString(profile.DefaultSource),
+		DefaultSourcetype:     optionalStoredString(profile.DefaultSourcetype),
+		IndexerAcknowledgment: profile.IndexerAcknowledgment,
+	}
+	if profile.DefaultIndexName != "" {
+		position, found := slices.BinarySearch(
+			allowedIndexNames,
+			profile.DefaultIndexName,
+		)
+		if !found {
+			return collectorTokenHECProfileRecord{}, errors.New(
+				"HEC default index is absent from allowed-index projection",
+			)
+		}
+		value := strings.Clone(allowedIndexIDs[position])
+		record.DefaultIndexID = &value
+	}
+	return record, nil
+}
+
+func optionalStoredString(value string) *string {
+	if value == "" {
+		return nil
+	}
+	cloned := strings.Clone(value)
+	return &cloned
 }
 
 func replacementCollectorID(current, requested string) (string, error) {

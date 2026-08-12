@@ -33,10 +33,11 @@ const (
 	// what the row-keyed aggregation must stay bounded by.
 	chartEdgeWideRows    = 40
 	chartEdgeWideColumns = 40
-	// chartEdgeWideGroupBudget sits above the published shape (40 x 11 states
-	// plus the 40-state label aggregate) and below the 1,600 raw pairs, so it
-	// fails exactly when the column axis is collapsed too late.
-	chartEdgeWideGroupBudget = uint64(900)
+	chartEdgeRowlessKeys = 8
+	// The first aggregate retains exactly one state per raw (row, label) pair.
+	// Pin both sides of that 1,600-state boundary so labels cannot escape the
+	// group limit inside an unbounded aggregate value.
+	chartEdgeWideGroupBudget = uint64(chartEdgeWideRows * chartEdgeWideColumns)
 )
 
 // chartEdgeBase is the canonical clock for the chart fixture. Every scenario
@@ -380,10 +381,9 @@ func TestChartPivotAgainstClickHouse(t *testing.T) {
 	})
 
 	t.Run("a wide column axis stays inside the row-keyed group budget", func(t *testing.T) {
-		// The intermediate cost of a pivot is its published shape, not its raw
-		// column cardinality: the column axis is collapsed to the top-ten
-		// domain before the row-keyed aggregation runs. Executed under a group
-		// budget that admits the published shape and rejects the raw pairs.
+		// The raw (row, label) aggregate is the exact pre-ranking work bound.
+		// A budget equal to all 1,600 distinct pairs succeeds before the graph
+		// collapses them to the top-ten-plus-OTHER published shape.
 		compiled := compile(`index=chartedge source="chart-wide" | chart count OVER path BY series`)
 		budgeted := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(map[string]any{
 			"max_rows_to_group_by":   chartEdgeWideGroupBudget,
@@ -410,16 +410,74 @@ func TestChartPivotAgainstClickHouse(t *testing.T) {
 			t.Fatalf("wide column axis pivot = %#v, want %#v", got, want)
 		}
 
-		// The budget is genuinely enforced on this query: a cap below the
-		// published shape does fail, so the assertion above is not vacuous.
+		// One fewer raw-pair state fails atomically, proving the positive
+		// assertion did not hide label keys inside an aggregate array.
 		starved := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(map[string]any{
-			"max_rows_to_group_by":   uint64(100),
+			"max_rows_to_group_by":   chartEdgeWideGroupBudget - 1,
 			"group_by_overflow_mode": "throw",
 		}))
 		var rows uint64
 		err := connection.QueryRow(starved, "SELECT count() FROM ("+compiled.SQL+")", compiled.Args...).Scan(&rows)
 		if err == nil || !strings.Contains(err.Error(), "GROUP BY") {
 			t.Fatalf("starved group budget error = %v, want a GROUP BY overflow", err)
+		}
+	})
+
+	t.Run("one row still pays for every raw label group", func(t *testing.T) {
+		compiled := compile(`index=chartedge source="chart-one-row-wide" | chart count OVER path BY series`)
+		admitted := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(map[string]any{
+			"max_rows_to_group_by":   uint64(chartEdgeWideColumns),
+			"group_by_overflow_mode": "throw",
+		}))
+		names := make([]string, 0, 11)
+		counts := make([]string, 0, 11)
+		for index := range 10 {
+			names = append(names, fmt.Sprintf("0:s%02d", index))
+			counts = append(counts, "1")
+		}
+		names = append(names, "2:")
+		counts = append(counts, fmt.Sprintf("%d", chartEdgeWideColumns-10))
+		want := []chartEdgeTransportRow{{
+			ordinal: 0,
+			row:     "/only",
+			names:   strings.Join(names, "|"),
+			counts:  strings.Join(counts, "|"),
+		}}
+		if got := chartEdgeTransport(t, admitted, connection, compiled); !reflect.DeepEqual(got, want) {
+			t.Fatalf("one-row raw-label boundary = %#v, want %#v", got, want)
+		}
+
+		starved := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(map[string]any{
+			"max_rows_to_group_by":   uint64(chartEdgeWideColumns - 1),
+			"group_by_overflow_mode": "throw",
+		}))
+		var rows uint64
+		err := connection.QueryRow(starved, "SELECT count() FROM ("+compiled.SQL+")", compiled.Args...).Scan(&rows)
+		if err == nil || !strings.Contains(err.Error(), "GROUP BY") {
+			t.Fatalf("one-row starved group budget error = %v, want a GROUP BY overflow", err)
+		}
+	})
+
+	t.Run("rowless labels remain inside the raw group bound", func(t *testing.T) {
+		compiled := compile(`index=chartedge source="chart-rowless-budget" | chart count OVER path BY probe`)
+		rawGroups := uint64(chartEdgeRowlessKeys + 1)
+		admitted := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(map[string]any{
+			"max_rows_to_group_by":   rawGroups,
+			"group_by_overflow_mode": "throw",
+		}))
+		want := []chartEdgeTransportRow{{ordinal: 0, row: "/p", names: "0:public", counts: "1"}}
+		if got := chartEdgeTransport(t, admitted, connection, compiled); !reflect.DeepEqual(got, want) {
+			t.Fatalf("rowless raw-label boundary = %#v, want %#v", got, want)
+		}
+
+		starved := clickhousedriver.Context(ctx, clickhousedriver.WithSettings(map[string]any{
+			"max_rows_to_group_by":   rawGroups - 1,
+			"group_by_overflow_mode": "throw",
+		}))
+		var rows uint64
+		err := connection.QueryRow(starved, "SELECT count() FROM ("+compiled.SQL+")", compiled.Args...).Scan(&rows)
+		if err == nil || !strings.Contains(err.Error(), "GROUP BY") {
+			t.Fatalf("rowless starved group budget error = %v, want a GROUP BY overflow", err)
 		}
 	})
 
@@ -789,6 +847,17 @@ func chartEdgeStoreFixture(t *testing.T, ctx context.Context, store *Store, inde
 				typedField("path", typedString(fmt.Sprintf("p%02d", rowIndex))),
 				typedField("series", typedString(fmt.Sprintf("s%02d", columnIndex)))))
 		}
+	}
+	for columnIndex := range chartEdgeWideColumns {
+		add(chartEdgeEvent(fmt.Sprintf("one-row-wide-%d", columnIndex), "chart-one-row-wide", chartEdgeBase, &info,
+			typedField("path", typedString("/only")),
+			typedField("series", typedString(fmt.Sprintf("s%02d", columnIndex)))))
+	}
+	add(chartEdgeEvent("rowless-budget-public", "chart-rowless-budget", chartEdgeBase, &info,
+		typedField("path", typedString("/p")), typedField("probe", typedString("public"))))
+	for index := range chartEdgeRowlessKeys {
+		add(chartEdgeEvent(fmt.Sprintf("rowless-budget-%d", index), "chart-rowless-budget", chartEdgeBase, &info,
+			typedField("probe", typedString(fmt.Sprintf("rowless-%02d", index)))))
 	}
 
 	// R1: _raw is the one field whose stats BY group column is Mixed rather

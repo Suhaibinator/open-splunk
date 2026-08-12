@@ -48,6 +48,9 @@ const (
 	// validation, resolution, snapshot, execution, and browser family exists.
 	// Declaring the wire value alone does not advertise the feature.
 	ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS ServerFeature = 15
+	// The complete configured HEC v0.1 family is available: JSON, raw,
+	// acknowledgment, health, purpose isolation, and durable staging.
+	ServerFeature_SERVER_FEATURE_HEC_INGESTION ServerFeature = 16
 )
 
 // Enum value maps for ServerFeature.
@@ -69,6 +72,7 @@ var (
 		13: "SERVER_FEATURE_AUDIT_SEARCH",
 		14: "SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT",
 		15: "SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS",
+		16: "SERVER_FEATURE_HEC_INGESTION",
 	}
 	ServerFeature_value = map[string]int32{
 		"SERVER_FEATURE_UNSPECIFIED":             0,
@@ -87,6 +91,7 @@ var (
 		"SERVER_FEATURE_AUDIT_SEARCH":            13,
 		"SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT":    14,
 		"SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS": 15,
+		"SERVER_FEATURE_HEC_INGESTION":           16,
 	}
 )
 
@@ -437,7 +442,7 @@ const file_open_splunk_v1_system_api_proto_rawDesc = "" +
 	" \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"serverTime\x123\n" +
 	"\x05build\x18\v \x01(\v2\x1d.open_splunk.v1.BuildMetadataR\x05buildB\x12\n" +
-	"\x10_selected_app_id*\xb5\x04\n" +
+	"\x10_selected_app_id*\xd7\x04\n" +
 	"\rServerFeature\x12\x1e\n" +
 	"\x1aSERVER_FEATURE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SERVER_FEATURE_SEARCH\x10\x01\x12!\n" +
@@ -455,7 +460,8 @@ const file_open_splunk_v1_system_api_proto_rawDesc = "" +
 	"\x1eSERVER_FEATURE_PLAN_INSPECTION\x10\f\x12\x1f\n" +
 	"\x1bSERVER_FEATURE_AUDIT_SEARCH\x10\r\x12'\n" +
 	"#SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT\x10\x0e\x12*\n" +
-	"&SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS\x10\x0fBHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
+	"&SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS\x10\x0f\x12 \n" +
+	"\x1cSERVER_FEATURE_HEC_INGESTION\x10\x10BHZFgithub.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1b\x06proto3"
 
 var (
 	file_open_splunk_v1_system_api_proto_rawDescOnce sync.Once

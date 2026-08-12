@@ -1,0 +1,963 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "manifest.schema.json",
+  "title": "Open Splunk SPL v0.2 acceptance evidence manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "evidence_state",
+    "generated_at_utc",
+    "acceptance_window",
+    "pending",
+    "compatibility",
+    "decision",
+    "runtime_target",
+    "evidence_publication",
+    "host",
+    "toolchain",
+    "contracts",
+    "ci",
+    "gates",
+    "audit",
+    "release",
+    "durable_artifacts",
+    "integrity"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "./manifest.schema.json"
+    },
+    "format_version": {
+      "const": "open-splunk-spl-v0.2-acceptance-evidence-v1"
+    },
+    "evidence_state": {
+      "enum": [
+        "pending_ci",
+        "complete"
+      ]
+    },
+    "generated_at_utc": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "acceptance_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "local_started_at_utc",
+        "local_completed_at_utc",
+        "remote_completed_at_utc"
+      ],
+      "properties": {
+        "local_started_at_utc": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "local_completed_at_utc": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "remote_completed_at_utc": {
+          "$ref": "#/$defs/timestamp_or_placeholder"
+        }
+      }
+    },
+    "pending": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/placeholder"
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authored_search",
+        "knowledge_expression",
+        "application_version"
+      ],
+      "properties": {
+        "authored_search": {
+          "const": "0.2"
+        },
+        "knowledge_expression": {
+          "const": "0.1"
+        },
+        "application_version": {
+          "const": "0.1.0"
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "reason",
+        "unresolved_implementation_findings",
+        "unresolved_audit_findings"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pending",
+            "accepted"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unresolved_implementation_findings": {
+          "const": 0
+        },
+        "unresolved_audit_findings": {
+          "const": 0
+        }
+      }
+    },
+    "runtime_target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "revision",
+        "tree",
+        "base_revision",
+        "base_tree",
+        "base_target_binary_diff_sha256",
+        "branch",
+        "remote_ref",
+        "remote_readback_revision",
+        "checkout_kind",
+        "git_status_porcelain_bytes_before",
+        "git_status_porcelain_bytes_after"
+      ],
+      "properties": {
+        "revision": {
+          "$ref": "#/$defs/git_object"
+        },
+        "tree": {
+          "$ref": "#/$defs/git_object"
+        },
+        "base_revision": {
+          "$ref": "#/$defs/git_object"
+        },
+        "base_tree": {
+          "$ref": "#/$defs/git_object"
+        },
+        "base_target_binary_diff_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "branch": {
+          "const": "codex/knowledge-objects-runtime"
+        },
+        "remote_ref": {
+          "const": "refs/heads/codex/knowledge-objects-runtime"
+        },
+        "remote_readback_revision": {
+          "$ref": "#/$defs/git_object"
+        },
+        "checkout_kind": {
+          "const": "isolated_committed_materialization"
+        },
+        "git_status_porcelain_bytes_before": {
+          "const": 0
+        },
+        "git_status_porcelain_bytes_after": {
+          "const": 0
+        }
+      }
+    },
+    "evidence_publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest_path",
+        "revision_binding",
+        "embedded_revision",
+        "expected_first_parent",
+        "resolve_command",
+        "is_runtime_activation_target",
+        "reason_revision_not_embedded"
+      ],
+      "properties": {
+        "manifest_path": {
+          "const": "docs/evidence/spl-v0.2/manifest.json"
+        },
+        "revision_binding": {
+          "const": "containing_commit"
+        },
+        "embedded_revision": {
+          "type": "null"
+        },
+        "expected_first_parent": {
+          "$ref": "#/$defs/git_object"
+        },
+        "resolve_command": {
+          "const": "git log -1 --format=%H -- docs/evidence/spl-v0.2/manifest.json"
+        },
+        "is_runtime_activation_target": {
+          "const": false
+        },
+        "reason_revision_not_embedded": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kernel_system",
+        "kernel_release",
+        "architecture",
+        "macos_version",
+        "cpu",
+        "logical_cpus"
+      ],
+      "properties": {
+        "kernel_system": {
+          "const": "Darwin"
+        },
+        "kernel_release": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "const": "arm64"
+        },
+        "macos_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cpu": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logical_cpus": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "toolchain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "go",
+        "node",
+        "npm",
+        "playwright",
+        "golangci_lint",
+        "golangci_lint_build_go",
+        "docker_client",
+        "docker_server",
+        "clickhouse_version",
+        "clickhouse_image"
+      ],
+      "properties": {
+        "go": {
+          "const": "go1.26.5"
+        },
+        "node": {
+          "const": "v24.18.0"
+        },
+        "npm": {
+          "const": "11.16.0"
+        },
+        "playwright": {
+          "const": "1.62.1"
+        },
+        "golangci_lint": {
+          "const": "2.12.2"
+        },
+        "golangci_lint_build_go": {
+          "const": "go1.26.2"
+        },
+        "docker_client": {
+          "const": "29.7.2"
+        },
+        "docker_server": {
+          "const": "29.7.2"
+        },
+        "clickhouse_version": {
+          "const": "26.3.17.4"
+        },
+        "clickhouse_image": {
+          "type": "string",
+          "pattern": "^clickhouse/clickhouse-server:26\\.3\\.17\\.4@sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "contracts": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "$ref": "#/$defs/digested_path"
+      }
+    },
+    "ci": {
+      "$ref": "#/$defs/ci"
+    },
+    "gates": {
+      "type": "array",
+      "minItems": 16,
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/gate"
+      }
+    },
+    "audit": {
+      "$ref": "#/$defs/audit"
+    },
+    "release": {
+      "$ref": "#/$defs/release"
+    },
+    "durable_artifacts": {
+      "type": "array",
+      "minItems": 6,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "index_path",
+        "status",
+        "index_self_excluded",
+        "manifest_listed_in_index"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "index_path": {
+          "const": "SHA256SUMS"
+        },
+        "status": {
+          "oneOf": [
+            {
+              "const": "complete"
+            },
+            {
+              "$ref": "#/$defs/placeholder"
+            }
+          ]
+        },
+        "index_self_excluded": {
+          "const": true
+        },
+        "manifest_listed_in_index": {
+          "const": true
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "evidence_state": {
+            "const": "complete"
+          }
+        },
+        "required": [
+          "evidence_state"
+        ]
+      },
+      "then": {
+        "properties": {
+          "pending": {
+            "maxItems": 0
+          },
+          "decision": {
+            "properties": {
+              "status": {
+                "const": "accepted"
+              }
+            }
+          },
+          "integrity": {
+            "properties": {
+              "status": {
+                "const": "complete"
+              }
+            }
+          },
+          "ci": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              },
+              "conclusion": {
+                "const": "success"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "git_object": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "placeholder": {
+      "type": "string",
+      "pattern": "^PENDING::[A-Z0-9_]+$"
+    },
+    "timestamp_or_placeholder": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/timestamp"
+        },
+        {
+          "$ref": "#/$defs/placeholder"
+        }
+      ]
+    },
+    "string_or_placeholder": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "pattern": "^PENDING::"
+          }
+        },
+        {
+          "$ref": "#/$defs/placeholder"
+        }
+      ]
+    },
+    "git_object_or_placeholder": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/git_object"
+        },
+        {
+          "$ref": "#/$defs/placeholder"
+        }
+      ]
+    },
+    "boolean_or_placeholder": {
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/$defs/placeholder"
+        }
+      ]
+    },
+    "digested_path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^receipts/[A-Za-z0-9._-]+\\.txt$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "commands",
+        "result",
+        "started_at_utc",
+        "completed_at_utc",
+        "receipt",
+        "facts"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "category": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "result": {
+          "const": "pass"
+        },
+        "started_at_utc": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "completed_at_utc": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receipt": {
+          "$ref": "#/$defs/receipt"
+        },
+        "facts": {
+          "type": "object"
+        }
+      }
+    },
+    "ci_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "conclusion"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "conclusion": {
+          "const": "success"
+        }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "workflow",
+        "run_id",
+        "url",
+        "status",
+        "conclusion",
+        "event",
+        "head_revision",
+        "checkout_revision",
+        "head_tree",
+        "checkout_tree",
+        "tree_equivalent",
+        "release_artifact_source_revision",
+        "jobs",
+        "receipt"
+      ],
+      "properties": {
+        "provider": {
+          "const": "github_actions"
+        },
+        "workflow": {
+          "const": "CI"
+        },
+        "run_id": {
+          "const": 31540820337
+        },
+        "url": {
+          "const": "https://github.com/Suhaibinator/open-splunk/actions/runs/31540820337"
+        },
+        "status": {
+          "enum": [
+            "in_progress",
+            "completed"
+          ]
+        },
+        "conclusion": {
+          "oneOf": [
+            {
+              "const": "success"
+            },
+            {
+              "$ref": "#/$defs/placeholder"
+            }
+          ]
+        },
+        "event": {
+          "$ref": "#/$defs/string_or_placeholder"
+        },
+        "head_revision": {
+          "$ref": "#/$defs/git_object"
+        },
+        "checkout_revision": {
+          "$ref": "#/$defs/git_object_or_placeholder"
+        },
+        "head_tree": {
+          "$ref": "#/$defs/git_object"
+        },
+        "checkout_tree": {
+          "$ref": "#/$defs/git_object_or_placeholder"
+        },
+        "tree_equivalent": {
+          "$ref": "#/$defs/boolean_or_placeholder"
+        },
+        "release_artifact_source_revision": {
+          "$ref": "#/$defs/git_object_or_placeholder"
+        },
+        "jobs": {
+          "oneOf": [
+            {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/ci_job"
+              }
+            },
+            {
+              "$ref": "#/$defs/placeholder"
+            }
+          ]
+        },
+        "receipt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/receipt"
+            },
+            {
+              "$ref": "#/$defs/placeholder"
+            }
+          ]
+        }
+      }
+    },
+    "audit_category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "finding_count",
+        "object_count",
+        "disposition"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "finding_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "object_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "disposition": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_revision",
+        "target_tree",
+        "auditing_binary_source_revision",
+        "auditing_binary_sha256",
+        "fixture_generator",
+        "fixture_sha256_before",
+        "fixture_sha256_after",
+        "fixture_bytes",
+        "fixture_cross_generation_bytes_claimed_deterministic",
+        "report",
+        "report_sha256",
+        "report_bytes",
+        "repeat_count",
+        "reports_byte_identical",
+        "compatibility_version",
+        "scanned_objects",
+        "finding_count",
+        "finding_kind",
+        "dispositions",
+        "dispositions_schema",
+        "dispositions_sha256",
+        "dispositions_bytes",
+        "disposition_count",
+        "unresolved_count",
+        "categories",
+        "contains_authored_spl",
+        "input_database_mutated"
+      ],
+      "properties": {
+        "target_revision": {
+          "$ref": "#/$defs/git_object"
+        },
+        "target_tree": {
+          "$ref": "#/$defs/git_object"
+        },
+        "auditing_binary_source_revision": {
+          "$ref": "#/$defs/git_object"
+        },
+        "auditing_binary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fixture_generator": {
+          "const": "TestGenerateCompatibilityAuditAcceptanceFixture"
+        },
+        "fixture_sha256_before": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fixture_sha256_after": {
+          "$ref": "#/$defs/sha256"
+        },
+        "fixture_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "fixture_cross_generation_bytes_claimed_deterministic": {
+          "const": false
+        },
+        "report": {
+          "const": "audit/report.json"
+        },
+        "report_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "report_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "repeat_count": {
+          "const": 4
+        },
+        "reports_byte_identical": {
+          "const": true
+        },
+        "compatibility_version": {
+          "const": "0.2"
+        },
+        "scanned_objects": {
+          "const": 186
+        },
+        "finding_count": {
+          "const": 214
+        },
+        "finding_kind": {
+          "const": "ambiguous_unspaced_scalar_operator"
+        },
+        "dispositions": {
+          "const": "audit/dispositions.json"
+        },
+        "dispositions_schema": {
+          "const": "audit/spl-v0.2-audit-dispositions.schema.json"
+        },
+        "dispositions_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "dispositions_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "disposition_count": {
+          "const": 214
+        },
+        "unresolved_count": {
+          "const": 0
+        },
+        "categories": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "items": {
+            "$ref": "#/$defs/audit_category"
+          }
+        },
+        "contains_authored_spl": {
+          "const": false
+        },
+        "input_database_mutated": {
+          "const": false
+        }
+      }
+    },
+    "release_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "sha256",
+        "bytes",
+        "mode",
+        "committed"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "open-splunk-server",
+            "open-splunk-collector",
+            "open-splunk-loggen"
+          ]
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "mode": {
+          "const": "0755"
+        },
+        "committed": {
+          "const": false
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command",
+        "application_version",
+        "source_revision",
+        "verification",
+        "binary_identities",
+        "asset_manifest",
+        "ui_build_id",
+        "ui_sha256",
+        "ui_file_count",
+        "ui_byte_count",
+        "artifacts",
+        "clean_before",
+        "clean_after"
+      ],
+      "properties": {
+        "command": {
+          "type": "string",
+          "minLength": 1
+        },
+        "application_version": {
+          "const": "0.1.0"
+        },
+        "source_revision": {
+          "$ref": "#/$defs/git_object"
+        },
+        "verification": {
+          "const": "release/release-verification.txt"
+        },
+        "binary_identities": {
+          "const": "release/binary-identities.txt"
+        },
+        "asset_manifest": {
+          "const": "release/asset-manifest.json"
+        },
+        "ui_build_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ui_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "ui_file_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ui_byte_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "artifacts": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/release_artifact"
+          }
+        },
+        "clean_before": {
+          "const": true
+        },
+        "clean_after": {
+          "const": true
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes",
+        "media_type"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

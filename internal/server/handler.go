@@ -24,6 +24,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchanalysis"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
@@ -93,6 +94,35 @@ type SearchJobs interface {
 	CancelFor(searchjobs.AccessScope, string) error
 }
 
+// knowledgeSearchAdmission reports whether the configured search service will
+// resolve and seal knowledge for nonempty app-scoped creates. The capability
+// is deliberately separate from public feature advertisement: it exists only
+// so the transport can establish live app authority before handing a fixed
+// process identity to the internal admission boundary.
+type knowledgeSearchAdmission interface {
+	KnowledgeAdmissionEnabled() bool
+}
+
+type knowledgeSearchExecution interface {
+	KnowledgeExecutionEnabled() bool
+}
+
+func knowledgeSearchAdmissionEnabled(jobs SearchJobs) bool {
+	if isNilDependency(jobs) {
+		return false
+	}
+	admission, ok := jobs.(knowledgeSearchAdmission)
+	return ok && !isNilDependency(admission) && admission.KnowledgeAdmissionEnabled()
+}
+
+func knowledgeSearchExecutionEnabled(jobs SearchJobs) bool {
+	if isNilDependency(jobs) {
+		return false
+	}
+	execution, ok := jobs.(knowledgeSearchExecution)
+	return ok && !isNilDependency(execution) && execution.KnowledgeExecutionEnabled()
+}
+
 // IndexCatalog supplies the live index authorization and bootstrap view.
 // control.DB satisfies this interface directly.
 type IndexCatalog interface {
@@ -141,6 +171,51 @@ type RuntimeReadiness interface {
 	Ping(context.Context) error
 }
 
+// HECOperationalSnapshot is the fixed-shape, administrator-only HEC
+// projection. It deliberately has no string, byte, map, or slice fields which
+// could carry token, channel, index, request, or event identity.
+type HECOperationalSnapshot struct {
+	ObservedAt                time.Time
+	Requests                  uint64
+	Events                    uint64
+	UncompressedBytes         uint64
+	AuthenticationFailures    uint64
+	DecodeFailures            uint64
+	EventPolicyFailures       uint64
+	AcceptedRequests          uint64
+	RateLimitedRequests       uint64
+	StagingFailures           uint64
+	StagingDuration           time.Duration
+	PendingOutboxReservations uint64
+	PendingOutboxBytes        uint64
+	OldestPendingOutboxAge    time.Duration
+	RequestCapacityAvailable  bool
+	RetainedRequests          uint64
+	QueueAvailable            bool
+	ReconciliationAvailable   bool
+	ReconciliationSuccesses   uint64
+	ReconciliationRetries     uint64
+	ReconciliationAmbiguities uint64
+	ActiveChannels            uint64
+	RetainedChannels          uint64
+	PendingAcknowledgments    uint64
+	IndexedAcknowledgments    uint64
+	ExpiredAcknowledgments    uint64
+	TerminalFailedRequests    uint64
+	AcknowledgmentAvailable   bool
+	AcknowledgmentQueries     uint64
+	AcknowledgmentIDsQueried  uint64
+	AcknowledgmentMisses      uint64
+	ShutdownRejections        uint64
+	ProtocolFailures          [28]uint64
+}
+
+// HECOperationalSnapshotter reads one bounded aggregate without returning
+// per-token or request-scoped telemetry.
+type HECOperationalSnapshotter interface {
+	HECOperationalSnapshot(context.Context) (HECOperationalSnapshot, error)
+}
+
 // IndexDataDeletionAdmission durably admits one physical index deletion in
 // the trusted control plane. The tenant scope must be supplied by the server,
 // never by browser input.
@@ -169,6 +244,7 @@ type IngestionTokenAdministration interface {
 	GetCollectorToken(context.Context, string) (auth.CollectorToken, error)
 	ListCollectorTokens(context.Context) ([]auth.CollectorToken, error)
 	UpdateCollectorToken(context.Context, string, uint64, auth.UpdateCollectorTokenRequest) (auth.CollectorToken, error)
+	SetCollectorTokenEnabled(context.Context, string, uint64, bool) (auth.CollectorToken, error)
 	RevokeCollectorToken(context.Context, string, uint64) (auth.CollectorToken, error)
 }
 
@@ -421,11 +497,20 @@ type Config struct {
 	IndexDataDeletionAdmission IndexDataDeletionAdmission
 	IndexDataDeletionWaker     IndexDataDeletionWaker
 	IngestionTokens            IngestionTokenAdministration
+	HECOperations              HECOperationalSnapshotter
 	AuditEvents                AuditEvents
 	SearchAttemptAuditEvents   SearchAttemptAuditEvents
 	CollectorAdmin             CollectorAdministration
 	AppAdmin                   AppAdministration
 	AppCatalog                 AppCatalog
+	// Knowledge-management routes are registered only for one complete unit
+	// backed by the concrete catalog Writer. Public feature advertisement is
+	// derived separately from the complete Tier-1 runtime family.
+	KnowledgeCatalog           KnowledgeCatalog
+	KnowledgeWriter            KnowledgeWriter
+	KnowledgeApps              KnowledgeAppCatalog
+	KnowledgeAttempts          KnowledgeAttemptJournal
+	KnowledgePreview           *knowledgepreview.Service
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
 	Exports                    Exports
@@ -466,11 +551,18 @@ type apiHandler struct {
 	indexDataDeletionAdmission IndexDataDeletionAdmission
 	indexDataDeletionWaker     IndexDataDeletionWaker
 	ingestionTokens            IngestionTokenAdministration
+	hecOperations              HECOperationalSnapshotter
 	auditEvents                AuditEvents
 	searchAttemptAuditEvents   SearchAttemptAuditEvents
 	collectorAdmin             CollectorAdministration
 	appAdmin                   AppAdministration
 	appCatalog                 AppCatalog
+	knowledgeCatalog           KnowledgeCatalog
+	knowledgeWriter            KnowledgeWriter
+	knowledgeApps              KnowledgeAppCatalog
+	knowledgeAttempts          KnowledgeAttemptJournal
+	knowledgePreview           *knowledgepreview.Service
+	knowledgeSearchAdmission   bool
 	savedSearches              SavedSearches
 	searchHistory              SearchHistory
 	exports                    Exports
@@ -497,6 +589,7 @@ type apiHandler struct {
 	now                        func() time.Time
 	requestGate                chan struct{}
 	serializationGate          chan struct{}
+	knowledgeAttemptGate       chan struct{}
 	downloadGate               chan struct{}
 	adminCursorKey             [32]byte
 	appCursorKey               []byte
@@ -575,6 +668,10 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(ingestionTokens) {
 		ingestionTokens = nil
 	}
+	hecOperations := config.HECOperations
+	if isNilDependency(hecOperations) {
+		hecOperations = nil
+	}
 	auditEvents := config.AuditEvents
 	if isNilDependency(auditEvents) {
 		auditEvents = nil
@@ -591,13 +688,68 @@ func NewHandler(config Config) (*Handler, error) {
 	if isNilDependency(appAdmin) {
 		appAdmin = nil
 	}
+	knowledgeAdmission := knowledgeSearchAdmissionEnabled(config.SearchJobs)
+	knowledgeExecution := knowledgeSearchExecutionEnabled(config.SearchJobs)
 	appCatalog := config.AppCatalog
 	if isNilDependency(appCatalog) {
 		appCatalog = nil
 	}
+	if knowledgeAdmission && appCatalog == nil {
+		return nil, errors.New(
+			"create server handler: knowledge-aware search admission requires a live app catalog",
+		)
+	}
 	if appCatalog != nil && len(config.Bootstrap.Apps) != 0 {
 		return nil, errors.New(
 			"create server handler: live app catalog and static bootstrap apps cannot both be configured",
+		)
+	}
+	knowledgeCatalog := config.KnowledgeCatalog
+	if isNilDependency(knowledgeCatalog) {
+		knowledgeCatalog = nil
+	}
+	knowledgeWriter := config.KnowledgeWriter
+	if isNilDependency(knowledgeWriter) {
+		knowledgeWriter = nil
+	}
+	knowledgeApps := config.KnowledgeApps
+	if isNilDependency(knowledgeApps) {
+		knowledgeApps = nil
+	}
+	knowledgeAttempts := config.KnowledgeAttempts
+	if isNilDependency(knowledgeAttempts) {
+		knowledgeAttempts = nil
+	}
+	knowledgeDependenciesConfigured := []bool{
+		knowledgeCatalog != nil,
+		knowledgeWriter != nil,
+		knowledgeApps != nil,
+		knowledgeAttempts != nil,
+	}
+	configuredKnowledgeDependencies := 0
+	for _, configured := range knowledgeDependenciesConfigured {
+		if configured {
+			configuredKnowledgeDependencies++
+		}
+	}
+	if configuredKnowledgeDependencies != 0 &&
+		configuredKnowledgeDependencies != len(knowledgeDependenciesConfigured) {
+		return nil, errors.New(
+			"create server handler: knowledge management dependencies must be configured together",
+		)
+	}
+	if configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
+		!replaysUnavailableActiveMutations(knowledgeWriter) {
+		return nil, errors.New(
+			"create server handler: knowledge management requires the concrete catalog writer",
+		)
+	}
+	knowledgePreview := config.KnowledgePreview
+	if knowledgePreview != nil &&
+		(configuredKnowledgeDependencies != len(knowledgeDependenciesConfigured) ||
+			!knowledgePreview.Ready()) {
+		return nil, errors.New(
+			"create server handler: knowledge preview requires the complete ready knowledge management family",
 		)
 	}
 	browserAuthenticator := config.BrowserAuthenticator
@@ -612,10 +764,12 @@ func NewHandler(config Config) (*Handler, error) {
 		indexStatistics != nil ||
 		indexFields != nil ||
 		ingestionTokens != nil ||
+		hecOperations != nil ||
 		auditEvents != nil ||
 		searchAttemptAuditEvents != nil ||
 		collectorAdmin != nil ||
 		appAdmin != nil ||
+		knowledgeCatalog != nil ||
 		inspectionService != nil) &&
 		browserAuthenticator == nil {
 		return nil, errors.New(
@@ -822,6 +976,12 @@ func NewHandler(config Config) (*Handler, error) {
 		searchAttemptAudit: searchAttemptAuditEvents != nil,
 		fieldDiscovery:     fieldService != nil,
 		previews:           searchWebSocket != nil,
+		knowledge: configuredKnowledgeDependencies == len(knowledgeDependenciesConfigured) &&
+			knowledgePreview != nil && knowledgePreview.Ready() &&
+			knowledgeAdmission && knowledgeExecution &&
+			inspectionService != nil && searchHistoryService != nil &&
+			exportService != nil && timelineService != nil &&
+			fieldService != nil && suggestionService != nil,
 	})
 	browserAllowedHosts, err := normalizeBrowserAllowedHosts(config.AdministrativeAllowedHosts)
 	if err != nil {
@@ -847,11 +1007,18 @@ func NewHandler(config Config) (*Handler, error) {
 		indexDataDeletionAdmission: indexDataDeletionAdmission,
 		indexDataDeletionWaker:     indexDataDeletionWaker,
 		ingestionTokens:            ingestionTokens,
+		hecOperations:              hecOperations,
 		auditEvents:                auditEvents,
 		searchAttemptAuditEvents:   searchAttemptAuditEvents,
 		collectorAdmin:             collectorAdmin,
 		appAdmin:                   appAdmin,
 		appCatalog:                 appCatalog,
+		knowledgeCatalog:           knowledgeCatalog,
+		knowledgeWriter:            knowledgeWriter,
+		knowledgeApps:              knowledgeApps,
+		knowledgeAttempts:          knowledgeAttempts,
+		knowledgePreview:           knowledgePreview,
+		knowledgeSearchAdmission:   knowledgeAdmission,
 		savedSearches:              config.SavedSearches,
 		searchHistory:              searchHistoryService,
 		exports:                    exportService,
@@ -877,6 +1044,7 @@ func NewHandler(config Config) (*Handler, error) {
 		now:                        now,
 		requestGate:                make(chan struct{}, concurrentRequests),
 		serializationGate:          make(chan struct{}, concurrentResponses),
+		knowledgeAttemptGate:       make(chan struct{}, concurrentRequests),
 		downloadGate:               make(chan struct{}, concurrentDownloads),
 		adminCursorKey:             adminCursorKey,
 		appCursorKey:               appCursorKey,
@@ -936,11 +1104,16 @@ func NewHandler(config Config) (*Handler, error) {
 			"/api/v1/ingestion-tokens/get",
 			"/api/v1/ingestion-tokens/list",
 			"/api/v1/ingestion-tokens/update",
+			"/api/v1/ingestion-tokens/state/set",
 			"/api/v1/ingestion-tokens/revoke",
 		} {
 			apiRoutes[path] = http.MethodPost
 			administratorRoutes[path] = struct{}{}
 		}
+	}
+	if api.hecOperations != nil {
+		apiRoutes[hecOperationsPath] = http.MethodPost
+		administratorRoutes[hecOperationsPath] = struct{}{}
 	}
 	if api.auditEvents != nil {
 		apiRoutes[auditEventsListPath] = http.MethodPost
@@ -974,6 +1147,24 @@ func NewHandler(config Config) (*Handler, error) {
 			administratorRoutes[path] = struct{}{}
 		}
 	}
+	if api.knowledgeManagementConfigured() {
+		for _, path := range []string{
+			knowledgeObjectsCreatePath,
+			knowledgeObjectsGetPath,
+			knowledgeObjectsListPath,
+			knowledgeObjectsDependenciesPath,
+			knowledgeObjectsDependentsPath,
+			knowledgeObjectsValidatePath,
+			knowledgeObjectsUpdatePath,
+			knowledgeObjectsSetStatePath,
+			knowledgeObjectsDeletePath,
+		} {
+			apiRoutes[path] = http.MethodPost
+		}
+	}
+	if api.knowledgePreviewConfigured() {
+		apiRoutes[knowledgeObjectsPreviewPath] = http.MethodPost
+	}
 	if api.exports != nil {
 		for _, path := range []string{
 			"/api/v1/search/exports/create",
@@ -1003,7 +1194,12 @@ func NewHandler(config Config) (*Handler, error) {
 		apiRoutes[searchWebSocketPath] = http.MethodGet
 	}
 	api.administratorRoutes = administratorRoutes
-	apiBoundary := exactAPIRoutes(api.protectBrowserAPIRoutes(apiRouter), apiRoutes)
+	apiBoundary := exactAPIRoutes(
+		api.protectBrowserAPIRoutes(
+			api.protectKnowledgeManagementRoutes(apiRouter),
+		),
+		apiRoutes,
+	)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(response http.ResponseWriter, _ *http.Request) {
@@ -1091,9 +1287,13 @@ func normalizeBootstrap(config BootstrapConfig) (BootstrapConfig, error) {
 	if result.APIVersion == "" {
 		result.APIVersion = "v1"
 	}
-	result.SPLCompatibilityVersion = strings.TrimSpace(result.SPLCompatibilityVersion)
 	if result.SPLCompatibilityVersion == "" {
-		result.SPLCompatibilityVersion = "tier-1-dev"
+		result.SPLCompatibilityVersion = spl.CompatibilityVersion
+	}
+	if !searchjobs.ValidCompilerVersion(result.SPLCompatibilityVersion) {
+		return BootstrapConfig{}, errors.New(
+			"create server handler: SPL compatibility version is invalid",
+		)
 	}
 	if result.Build != nil {
 		clonedBuild, serverVersion, err := buildmetadata.Normalize(result.Build, result.ServerVersion)
@@ -1151,6 +1351,7 @@ type serviceCapabilities struct {
 	searchAttemptAudit bool
 	fieldDiscovery     bool
 	previews           bool
+	knowledge          bool
 }
 
 func featuresForServices(features []opensplunkv1.ServerFeature, capabilities serviceCapabilities) []opensplunkv1.ServerFeature {
@@ -1173,9 +1374,7 @@ func featuresForServices(features []opensplunkv1.ServerFeature, capabilities ser
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_ATTEMPT_AUDIT, capabilities.searchAttemptAudit},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_FIELD_DISCOVERY, capabilities.fieldDiscovery},
 		{opensplunkv1.ServerFeature_SERVER_FEATURE_SEARCH_PREVIEW, capabilities.previews},
-		// Reserved until the complete Tier-1 knowledge service, admission,
-		// execution, inspection, and browser family is configured together.
-		{opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS, false},
+		{opensplunkv1.ServerFeature_SERVER_FEATURE_KNOWLEDGE_FIELD_OBJECTS, capabilities.knowledge},
 	}
 	enabled := make(map[opensplunkv1.ServerFeature]bool, len(managed))
 	for _, item := range managed {
@@ -1283,6 +1482,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 	if handler.ingestionTokens != nil {
 		routes = append(routes, handler.ingestionTokenRoutes(noAuth, maximumRequestBytes, smallRequestBytes)...)
 	}
+	if handler.hecOperations != nil {
+		routes = append(routes, handler.hecOperationalRoutes(noAuth, smallRequestBytes)...)
+	}
 	if handler.auditEvents != nil {
 		routes = append(
 			routes,
@@ -1309,6 +1511,12 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 				maximumRequestBytes,
 				smallRequestBytes,
 			)...,
+		)
+	}
+	if handler.knowledgeManagementConfigured() {
+		routes = append(
+			routes,
+			handler.knowledgeManagementRoutes(noAuth)...,
 		)
 	}
 	if handler.searchHistory != nil {

@@ -1,0 +1,405 @@
+{
+  "format_version": "hec-compatibility-fixture-v0.1",
+  "cases": [
+    {
+      "id": "json.string-token-and-index-defaults",
+      "rule": "a string event uses token host/source, the selected index sourcetype, exact message, and receive-time fallback",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "Content-Type", "value": "application/json"}
+        ],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"hello\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {
+          "alias": "primary",
+          "purpose": "hec",
+          "state": "active",
+          "ack_enabled": false,
+          "allowed_indexes": ["main"],
+          "defaults": {"index": "main", "host": "token-host", "source": "token-source"}
+        },
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true, "default_sourcetype": "app:json"}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store"
+          },
+          "body_utf8": "{\"text\":\"Success\",\"code\":0}"
+        },
+        "durable": {"quota": "charged", "request": "staged", "ack": "absent", "outbox": "pending", "visibility": "reserved"},
+        "events": [
+          {
+            "ordinal": 0,
+            "index": "main",
+            "time_unix_nanos": "1786363200000000000",
+            "time_source": "received_at_fallback",
+            "host": "token-host",
+            "source": "token-source",
+            "sourcetype": "app:json",
+            "raw": "hello",
+            "message": "hello",
+            "fields": []
+          }
+        ],
+        "spl": {
+          "query": "index=main host=token-host | fields _raw, message",
+          "rows": [{"_raw": "hello", "message": "hello"}]
+        }
+      }
+    },
+    {
+      "id": "json.concatenated-exact-time-typed-fields",
+      "rule": "concatenated envelopes preserve object member order, exact nanosecond time, and typed flat fields",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "Content-Type", "value": "application/x-www-form-urlencoded"}
+        ],
+        "query": [],
+        "body": {
+          "kind": "utf8",
+          "value": " {\"time\":1786323296.123456789,\"host\":\"event-host\",\"event\": { \"z\" : 1, \"a\" : 2 },\"fields\":{\"status\":200,\"ratio\":1.25,\"ok\":true,\"tags\":[\"a\",null,-2]}}\n{\"event\":false} "
+        }
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {
+          "alias": "primary",
+          "purpose": "hec",
+          "state": "active",
+          "ack_enabled": false,
+          "allowed_indexes": ["main"],
+          "defaults": {"index": "main", "host": "token-host", "source": "token-source", "sourcetype": "token:type"}
+        },
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true, "default_sourcetype": "index:type"}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store"
+          },
+          "body_utf8": "{\"text\":\"Success\",\"code\":0}"
+        },
+        "durable": {"quota": "charged", "request": "staged", "ack": "absent", "outbox": "pending", "visibility": "reserved"},
+        "events": [
+          {
+            "ordinal": 0,
+            "index": "main",
+            "time_unix_nanos": "1786323296123456789",
+            "time_source": "explicit",
+            "host": "event-host",
+            "source": "token-source",
+            "sourcetype": "token:type",
+            "raw": "{\"z\":1,\"a\":2}",
+            "fields": [
+              {"name": "status", "value": {"kind": "uint64", "value": "200"}},
+              {"name": "ratio", "value": {"kind": "decimal", "value": "1.25"}},
+              {"name": "ok", "value": {"kind": "bool", "value": true}},
+              {"name": "tags", "value": {"kind": "list", "items": [
+                {"kind": "string", "value": "a"},
+                {"kind": "null"},
+                {"kind": "sint64", "value": "-2"}
+              ]}}
+            ]
+          },
+          {
+            "ordinal": 1,
+            "index": "main",
+            "time_unix_nanos": "1786363200000000000",
+            "time_source": "received_at_fallback",
+            "host": "token-host",
+            "source": "token-source",
+            "sourcetype": "token:type",
+            "raw": "false",
+            "fields": []
+          }
+        ],
+        "spl": {
+          "query": "index=main | stats count by sourcetype",
+          "rows": [{"sourcetype": "token:type", "count": 2}]
+        }
+      }
+    },
+    {
+      "id": "json.fixed-metadata-fallbacks",
+      "rule": "absent host, source, and sourcetype use fixed non-secret fallbacks when no token or index default exists",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event/1.0",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":{}}{\"event\":[]}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {
+          "alias": "primary",
+          "purpose": "hec",
+          "state": "active",
+          "ack_enabled": false,
+          "allowed_indexes": ["main"],
+          "defaults": {"index": "main"}
+        },
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {
+          "status": 200,
+          "headers": {
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store"
+          },
+          "body_utf8": "{\"text\":\"Success\",\"code\":0}"
+        },
+        "durable": {"quota": "charged", "request": "staged", "ack": "absent", "outbox": "pending", "visibility": "reserved"},
+        "events": [
+          {"ordinal": 0, "index": "main", "time_unix_nanos": "1786363200000000000", "time_source": "received_at_fallback", "host": "hec", "source": "http:hec", "sourcetype": "httpevent", "raw": "{}", "fields": []},
+          {"ordinal": 1, "index": "main", "time_unix_nanos": "1786363200000000000", "time_source": "received_at_fallback", "host": "hec", "source": "http:hec", "sourcetype": "httpevent", "raw": "[]", "fields": []}
+        ],
+        "spl": {"query": "index=main sourcetype=httpevent | fields _raw", "rows": [{"_raw": "{}"}, {"_raw": "[]"}]}
+      }
+    },
+    {
+      "id": "json.missing-event",
+      "rule": "a missing event member is distinct from blank and identifies envelope zero",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"host\":\"api-01\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Event field is required\",\"code\":12,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.null-event-is-blank",
+      "rule": "event null is blank rather than absent or the literal text null",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":null}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Event field cannot be blank\",\"code\":13,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.empty-string-event-is-blank",
+      "rule": "the empty event string is blank while a whitespace-only string is not",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Event field cannot be blank\",\"code\":13,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.top-level-array-rejected",
+      "rule": "top-level arrays are not a batching frame even when every element is an envelope",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "[{\"event\":\"one\"},{\"event\":\"two\"}]"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.unknown-envelope-member-rejected",
+      "rule": "an unknown envelope member fails closed instead of being ignored",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\",\"sourceType\":\"misspelled\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.duplicate-decoded-member-rejected",
+      "rule": "duplicate names are compared after escape decoding and never use first- or last-wins behavior",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"first\",\"\\u0065vent\":\"second\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.nested-field-value-rejected",
+      "rule": "fields is a typed flat scalar or flat-array extension and rejects nested objects",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\",\"fields\":{\"nested\":{\"a\":1}}}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Error in handling indexed fields\",\"code\":15,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.incorrect-index",
+      "rule": "an authored index outside token authority returns the bounded incorrect-index category",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\",\"index\":\"secret\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [
+          {"name": "main", "state": "active", "ingestion_enabled": true},
+          {"name": "secret", "state": "active", "ingestion_enabled": true}
+        ],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Incorrect index\",\"code\":7,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.invalid-second-envelope-is-atomic",
+      "rule": "a blank second event reports ordinal one and persists none of the valid prefix",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"valid-prefix\"}{\"event\":null}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Event field cannot be blank\",\"code\":13,\"invalid-event-number\":1}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "json.time-finer-than-nanosecond-rejected",
+      "rule": "event time is exact and never rounded to the nearest nanosecond",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\",\"time\":1786323296.1234567891}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6,\"invalid-event-number\":0}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    }
+  ]
+}

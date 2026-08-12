@@ -117,6 +117,100 @@ func TestFieldServiceSummaryBuildsAtomicExactResultAndCachesMaximumPrefix(t *tes
 	}
 }
 
+func TestFieldServiceSummaryRejectsInvalidManagerAuthorityBeforeCacheReuse(t *testing.T) {
+	template := fieldTestSnapshot("summary-invalid-authority")
+	signed, err := sealSearchAnalysisSnapshot(template)
+	if err != nil {
+		t.Fatalf("sealSearchAnalysisSnapshot(): %v", err)
+	}
+	tampered := signed
+	tampered.AppID = "app_000000000200000000002A"
+	tests := []struct {
+		name    string
+		invalid searchjobs.ExecutionSnapshot
+	}{
+		{name: "unsigned", invalid: unsignedSearchAnalysisSnapshot(signed)},
+		{name: "tampered signed AppID", invalid: tampered},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			searches := &rawSearchAnalysisSnapshots{
+				snapshots: []searchjobs.ExecutionSnapshot{signed, test.invalid},
+			}
+			compiler := &fakeFieldSummaryCompiler{fieldKnown: true}
+			executor := &fakeFieldSummaryExecutor{result: zeroFieldSummaryResult("field")}
+			service := newFieldSummaryTestService(t, signed, FieldConfig{
+				Searches: searches,
+				Compiler: compiler,
+				Executor: executor,
+			})
+			request := GetFieldSummaryRequest{SearchJobID: signed.ID, FieldName: "field"}
+			if _, err := service.GetFieldSummary(
+				context.Background(),
+				fieldAccess(signed),
+				request,
+			); err != nil {
+				t.Fatalf("prime GetFieldSummary() error = %v", err)
+			}
+			got, err := service.GetFieldSummary(
+				context.Background(),
+				fieldAccess(signed),
+				request,
+			)
+			if !errors.Is(err, searchjobs.ErrInvalidResult) {
+				t.Fatalf("cached GetFieldSummary() = (%#v, %v), want zero/ErrInvalidResult", got, err)
+			}
+			if !reflect.DeepEqual(got, FieldSummary{}) {
+				t.Fatalf("invalid-authority summary = %#v, want zero", got)
+			}
+			if compiler.Calls() != 1 || executor.Calls() != 1 || searches.Calls() != 2 {
+				t.Fatalf(
+					"calls = compiler %d executor %d snapshots %d, want 1/1/2",
+					compiler.Calls(),
+					executor.Calls(),
+					searches.Calls(),
+				)
+			}
+		})
+	}
+}
+
+func TestFieldServiceSummaryBindsChangedEnabledEmptyAuthorityInCacheKey(t *testing.T) {
+	first, second := changedEnabledEmptySearchAnalysisSnapshots(
+		t,
+		fieldTestSnapshot("summary-enabled-empty-authority"),
+	)
+	searches := &rawSearchAnalysisSnapshots{
+		snapshots: []searchjobs.ExecutionSnapshot{first, second},
+	}
+	compiler := &fakeFieldSummaryCompiler{fieldKnown: true}
+	executor := &fakeFieldSummaryExecutor{result: zeroFieldSummaryResult("field")}
+	service := newFieldSummaryTestService(t, first, FieldConfig{
+		Searches: searches,
+		Compiler: compiler,
+		Executor: executor,
+	})
+	request := GetFieldSummaryRequest{SearchJobID: first.ID, FieldName: "field"}
+	for attempt := range 2 {
+		if _, err := service.GetFieldSummary(
+			context.Background(),
+			fieldAccess(first),
+			request,
+		); err != nil {
+			t.Fatalf("GetFieldSummary(attempt %d) error = %v", attempt, err)
+		}
+	}
+	if compiler.Calls() != 2 || executor.Calls() != 2 || searches.Calls() != 2 {
+		t.Fatalf(
+			"calls = compiler %d executor %d snapshots %d, want 2/2/2",
+			compiler.Calls(),
+			executor.Calls(),
+			searches.Calls(),
+		)
+	}
+}
+
 func TestFieldServiceSummaryValidatesRequestBeforeLookupAndPreservesExactFieldName(t *testing.T) {
 	snapshot := fieldTestSnapshot("summary-validation")
 	searches := &fakeFieldSearches{snapshot: snapshot}
@@ -714,6 +808,116 @@ func TestFieldServiceSummaryCoalescesAndSharesAdmissionGate(t *testing.T) {
 	}
 	if executor.Calls() != 1 {
 		t.Fatalf("executor calls = %d, want 1", executor.Calls())
+	}
+}
+
+func TestFieldServiceCatalogAndSummaryShareOneAdmissionGate(t *testing.T) {
+	tests := []struct {
+		name          string
+		summaryLeader bool
+	}{
+		{name: "catalog blocks summary"},
+		{name: "summary blocks catalog", summaryLeader: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := fieldTestSnapshot("cross-kind-gate")
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var startedOnce sync.Once
+			executor := &fakeFieldSummaryExecutor{
+				fakeFieldExecutor: fakeFieldExecutor{execute: func(
+					ctx context.Context,
+					_ clickhouse.CompiledFieldCatalog,
+				) (queryexec.FieldCatalogResult, error) {
+					startedOnce.Do(func() { close(started) })
+					select {
+					case <-release:
+						return twoFieldCatalog(), nil
+					case <-ctx.Done():
+						return queryexec.FieldCatalogResult{}, ctx.Err()
+					}
+				}},
+				execute: func(
+					ctx context.Context,
+					query clickhouse.CompiledFieldSummary,
+				) (queryexec.FieldSummaryResult, error) {
+					startedOnce.Do(func() { close(started) })
+					select {
+					case <-release:
+						return zeroFieldSummaryResult(query.Spec.FieldName), nil
+					case <-ctx.Done():
+						return queryexec.FieldSummaryResult{}, ctx.Err()
+					}
+				},
+			}
+			service := newFieldSummaryTestService(t, snapshot, FieldConfig{
+				Searches:      &fakeFieldSearches{snapshot: snapshot},
+				Compiler:      &fakeFieldSummaryCompiler{fieldKnown: true},
+				Executor:      executor,
+				MaxConcurrent: 1,
+			})
+			access := fieldAccess(snapshot)
+			leaderResult := make(chan error, 1)
+			if test.summaryLeader {
+				go func() {
+					_, err := service.GetFieldSummary(
+						context.Background(),
+						access,
+						GetFieldSummaryRequest{SearchJobID: snapshot.ID, FieldName: "field"},
+					)
+					leaderResult <- err
+				}()
+			} else {
+				go func() {
+					_, err := service.ListFields(
+						context.Background(),
+						access,
+						ListFieldsRequest{SearchJobID: snapshot.ID},
+					)
+					leaderResult <- err
+				}()
+			}
+			select {
+			case <-started:
+			case <-time.After(2 * time.Second):
+				t.Fatal("cross-kind leader did not enter its executor")
+			}
+
+			if test.summaryLeader {
+				if _, err := service.ListFields(
+					context.Background(),
+					access,
+					ListFieldsRequest{SearchJobID: snapshot.ID},
+				); !errors.Is(err, ErrFieldAnalysisCapacity) {
+					t.Fatalf("catalog while summary holds gate error = %v, want capacity", err)
+				}
+				if executor.fakeFieldExecutor.Calls() != 0 {
+					t.Fatal("capacity-rejected catalog reached its executor")
+				}
+			} else {
+				if _, err := service.GetFieldSummary(
+					context.Background(),
+					access,
+					GetFieldSummaryRequest{SearchJobID: snapshot.ID, FieldName: "field"},
+				); !errors.Is(err, ErrFieldAnalysisCapacity) {
+					t.Fatalf("summary while catalog holds gate error = %v, want capacity", err)
+				}
+				if executor.Calls() != 0 {
+					t.Fatal("capacity-rejected summary reached its executor")
+				}
+			}
+
+			close(release)
+			select {
+			case err := <-leaderResult:
+				if err != nil {
+					t.Fatalf("cross-kind leader error = %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("cross-kind leader did not release the shared gate")
+			}
+		})
 	}
 }
 

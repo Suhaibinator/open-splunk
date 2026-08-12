@@ -1,12 +1,15 @@
 package searchaudit
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
 
+	opensplunkv1 "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1"
 	"github.com/Suhaibinator/open-splunk/internal/audit"
 	"gorm.io/gorm"
 )
@@ -19,13 +22,19 @@ const (
 // eventSizeRecord is scalar-only so a corrupted text value is rejected before
 // the SQLite driver is asked to allocate it.
 type eventSizeRecord struct {
-	Sequence         int64 `gorm:"column:sequence"`
-	TenantIDBytes    int64 `gorm:"column:tenant_id_bytes"`
-	ActorKindBytes   int64 `gorm:"column:actor_kind_bytes"`
-	ActorIDBytes     int64 `gorm:"column:actor_id_bytes"`
-	ActorRoleBytes   int64 `gorm:"column:actor_role_bytes"`
-	OwnerIDBytes     int64 `gorm:"column:owner_id_bytes"`
-	SearchJobIDBytes int64 `gorm:"column:search_job_id_bytes"`
+	Sequence                                      int64         `gorm:"column:sequence"`
+	TenantIDBytes                                 int64         `gorm:"column:tenant_id_bytes"`
+	ActorKindBytes                                int64         `gorm:"column:actor_kind_bytes"`
+	ActorIDBytes                                  int64         `gorm:"column:actor_id_bytes"`
+	ActorRoleBytes                                int64         `gorm:"column:actor_role_bytes"`
+	OwnerIDBytes                                  int64         `gorm:"column:owner_id_bytes"`
+	SearchJobIDBytes                              int64         `gorm:"column:search_job_id_bytes"`
+	KnowledgeSnapshotPresentFields                int64         `gorm:"column:knowledge_snapshot_present_fields"`
+	KnowledgeSnapshotSHA256Bytes                  sql.NullInt64 `gorm:"column:knowledge_snapshot_sha256_bytes"`
+	KnowledgeSnapshotTenantCatalogRevision        sql.NullInt64 `gorm:"column:knowledge_snapshot_tenant_catalog_revision"`
+	KnowledgeSnapshotTenantCatalogStateTokenBytes sql.NullInt64 `gorm:"column:knowledge_snapshot_tenant_catalog_state_token_bytes"`
+	KnowledgeSnapshotObjectCount                  sql.NullInt64 `gorm:"column:knowledge_snapshot_object_count"`
+	KnowledgeSnapshotCompilerVersionBytes         sql.NullInt64 `gorm:"column:knowledge_snapshot_compiler_version_bytes"`
 }
 
 type tenantAggregate struct {
@@ -47,7 +56,22 @@ func readPreflightedRecords(query *gorm.DB, limit int) ([]searchAttemptEventReco
 			length(CAST(actor_id AS BLOB)) AS actor_id_bytes,
 			length(CAST(actor_role AS BLOB)) AS actor_role_bytes,
 			length(CAST(owner_id AS BLOB)) AS owner_id_bytes,
-			length(CAST(search_job_id AS BLOB)) AS search_job_id_bytes
+			length(CAST(search_job_id AS BLOB)) AS search_job_id_bytes,
+			(knowledge_snapshot_sha256 IS NOT NULL)
+			  + (knowledge_snapshot_tenant_catalog_revision IS NOT NULL)
+			  + (knowledge_snapshot_tenant_catalog_state_token IS NOT NULL)
+			  + (knowledge_snapshot_object_count IS NOT NULL)
+			  + (knowledge_snapshot_compiler_compatibility_version IS NOT NULL)
+			    AS knowledge_snapshot_present_fields,
+			length(knowledge_snapshot_sha256)
+			    AS knowledge_snapshot_sha256_bytes,
+			knowledge_snapshot_tenant_catalog_revision,
+			length(knowledge_snapshot_tenant_catalog_state_token)
+			    AS knowledge_snapshot_tenant_catalog_state_token_bytes,
+			knowledge_snapshot_object_count,
+			length(CAST(
+				knowledge_snapshot_compiler_compatibility_version AS BLOB
+			)) AS knowledge_snapshot_compiler_version_bytes
 		`).
 		Limit(limit).
 		Find(&sizes)
@@ -56,7 +80,10 @@ func readPreflightedRecords(query *gorm.DB, limit int) ([]searchAttemptEventReco
 	}
 	for _, size := range sizes {
 		if !validEventSize(size) {
-			return nil, fmt.Errorf("%w: search-attempt audit text width is invalid", ErrCorrupt)
+			return nil, fmt.Errorf(
+				"%w: search-attempt audit field width or snapshot shape is invalid",
+				ErrCorrupt,
+			)
 		}
 	}
 	var records []searchAttemptEventRecord
@@ -76,13 +103,116 @@ func readPreflightedRecords(query *gorm.DB, limit int) ([]searchAttemptEventReco
 }
 
 func validEventSize(record eventSizeRecord) bool {
-	return record.Sequence >= 1 && record.Sequence <= maximumPersistedSequence &&
-		record.TenantIDBytes >= 1 && record.TenantIDBytes <= maximumTenantIDBytes &&
-		record.ActorKindBytes >= 1 && record.ActorKindBytes <= int64(maximumActorKindBytes) &&
-		record.ActorIDBytes >= 1 && record.ActorIDBytes <= maximumOwnerIDBytes &&
-		record.ActorRoleBytes >= 1 && record.ActorRoleBytes <= int64(maximumActorRoleBytes) &&
-		record.OwnerIDBytes >= 1 && record.OwnerIDBytes <= maximumOwnerIDBytes &&
-		record.SearchJobIDBytes >= 1 && record.SearchJobIDBytes <= maximumSearchJobIDBytes
+	if record.Sequence < 1 || record.Sequence > maximumPersistedSequence ||
+		record.TenantIDBytes < 1 || record.TenantIDBytes > maximumTenantIDBytes ||
+		record.ActorKindBytes < 1 || record.ActorKindBytes > int64(maximumActorKindBytes) ||
+		record.ActorIDBytes < 1 || record.ActorIDBytes > maximumOwnerIDBytes ||
+		record.ActorRoleBytes < 1 || record.ActorRoleBytes > int64(maximumActorRoleBytes) ||
+		record.OwnerIDBytes < 1 || record.OwnerIDBytes > maximumOwnerIDBytes ||
+		record.SearchJobIDBytes < 1 || record.SearchJobIDBytes > maximumSearchJobIDBytes {
+		return false
+	}
+	if record.KnowledgeSnapshotPresentFields == 0 {
+		return !record.KnowledgeSnapshotSHA256Bytes.Valid &&
+			!record.KnowledgeSnapshotTenantCatalogRevision.Valid &&
+			!record.KnowledgeSnapshotTenantCatalogStateTokenBytes.Valid &&
+			!record.KnowledgeSnapshotObjectCount.Valid &&
+			!record.KnowledgeSnapshotCompilerVersionBytes.Valid
+	}
+	return record.KnowledgeSnapshotPresentFields == 5 &&
+		record.KnowledgeSnapshotSHA256Bytes.Valid &&
+		record.KnowledgeSnapshotSHA256Bytes.Int64 == sha256.Size &&
+		record.KnowledgeSnapshotTenantCatalogRevision.Valid &&
+		record.KnowledgeSnapshotTenantCatalogRevision.Int64 >= 0 &&
+		record.KnowledgeSnapshotTenantCatalogRevision.Int64 <= maximumPersistedSequence &&
+		record.KnowledgeSnapshotTenantCatalogStateTokenBytes.Valid &&
+		record.KnowledgeSnapshotTenantCatalogStateTokenBytes.Int64 == sha256.Size &&
+		record.KnowledgeSnapshotObjectCount.Valid &&
+		record.KnowledgeSnapshotObjectCount.Int64 >= 0 &&
+		record.KnowledgeSnapshotObjectCount.Int64 <= maximumKnowledgeObjects &&
+		record.KnowledgeSnapshotCompilerVersionBytes.Valid &&
+		record.KnowledgeSnapshotCompilerVersionBytes.Int64 >= 1 &&
+		record.KnowledgeSnapshotCompilerVersionBytes.Int64 <= maximumCompilerCompatibilityVersionBytes
+}
+
+func setRecordKnowledgeSnapshot(
+	record *searchAttemptEventRecord,
+	knowledgeSnapshot *opensplunkv1.KnowledgeSnapshotRef,
+) {
+	if record == nil || knowledgeSnapshot == nil {
+		return
+	}
+	record.KnowledgeSnapshotSHA256 = bytes.Clone(knowledgeSnapshot.GetSnapshotSha256())
+	// #nosec G115 -- normalizeKnowledgeSnapshotRef capped this at MaxInt64-1.
+	record.KnowledgeSnapshotTenantCatalogRevision = sql.NullInt64{
+		Int64: int64(knowledgeSnapshot.GetTenantCatalogRevision()),
+		Valid: true,
+	}
+	record.KnowledgeSnapshotTenantCatalogStateToken = bytes.Clone(
+		knowledgeSnapshot.GetTenantCatalogStateToken(),
+	)
+	record.KnowledgeSnapshotObjectCount = sql.NullInt64{
+		Int64: int64(knowledgeSnapshot.GetObjectCount()),
+		Valid: true,
+	}
+	record.KnowledgeSnapshotCompilerCompatibilityVersion = sql.NullString{
+		String: strings.Clone(knowledgeSnapshot.GetCompilerCompatibilityVersion()),
+		Valid:  true,
+	}
+}
+
+func knowledgeSnapshotFromRecord(
+	record searchAttemptEventRecord,
+) (*opensplunkv1.KnowledgeSnapshotRef, error) {
+	present := 0
+	if record.KnowledgeSnapshotSHA256 != nil {
+		present++
+	}
+	if record.KnowledgeSnapshotTenantCatalogRevision.Valid {
+		present++
+	}
+	if record.KnowledgeSnapshotTenantCatalogStateToken != nil {
+		present++
+	}
+	if record.KnowledgeSnapshotObjectCount.Valid {
+		present++
+	}
+	if record.KnowledgeSnapshotCompilerCompatibilityVersion.Valid {
+		present++
+	}
+	if present == 0 {
+		return nil, nil
+	}
+	if present != 5 || record.KnowledgeSnapshotTenantCatalogRevision.Int64 < 0 ||
+		record.KnowledgeSnapshotTenantCatalogRevision.Int64 > maximumPersistedSequence ||
+		record.KnowledgeSnapshotObjectCount.Int64 < 0 ||
+		record.KnowledgeSnapshotObjectCount.Int64 > maximumKnowledgeObjects {
+		return nil, fmt.Errorf(
+			"%w: search-attempt audit knowledge snapshot tuple is incomplete",
+			ErrCorrupt,
+		)
+	}
+	// #nosec G115 -- negative values are rejected immediately above.
+	knowledgeSnapshot := &opensplunkv1.KnowledgeSnapshotRef{
+		SnapshotSha256: bytes.Clone(record.KnowledgeSnapshotSHA256),
+		TenantCatalogRevision: uint64(
+			record.KnowledgeSnapshotTenantCatalogRevision.Int64,
+		),
+		TenantCatalogStateToken: bytes.Clone(
+			record.KnowledgeSnapshotTenantCatalogStateToken,
+		),
+		ObjectCount: uint32(record.KnowledgeSnapshotObjectCount.Int64),
+		CompilerCompatibilityVersion: strings.Clone(
+			record.KnowledgeSnapshotCompilerCompatibilityVersion.String,
+		),
+	}
+	if err := validateKnowledgeSnapshotRef(knowledgeSnapshot); err != nil {
+		return nil, fmt.Errorf(
+			"%w: persisted search-attempt audit knowledge snapshot is invalid",
+			ErrCorrupt,
+		)
+	}
+	return knowledgeSnapshot, nil
 }
 
 func validateAllTenantIntegrity(database *gorm.DB) error {
@@ -208,6 +338,27 @@ func validateTenantIntegrity(database *gorm.DB, state searchAttemptTenantStateRe
 }
 
 func eventDigest(record searchAttemptEventRecord) (string, error) {
+	knowledgeSnapshot, err := knowledgeSnapshotFromRecord(record)
+	if err != nil {
+		return "", err
+	}
+	type snapshotIdentity struct {
+		SHA256                       []byte `json:"d"`
+		TenantCatalogRevision        uint64 `json:"r"`
+		TenantCatalogStateToken      []byte `json:"t"`
+		ObjectCount                  uint32 `json:"c"`
+		CompilerCompatibilityVersion string `json:"v"`
+	}
+	var snapshot *snapshotIdentity
+	if knowledgeSnapshot != nil {
+		snapshot = &snapshotIdentity{
+			SHA256:                       knowledgeSnapshot.GetSnapshotSha256(),
+			TenantCatalogRevision:        knowledgeSnapshot.GetTenantCatalogRevision(),
+			TenantCatalogStateToken:      knowledgeSnapshot.GetTenantCatalogStateToken(),
+			ObjectCount:                  knowledgeSnapshot.GetObjectCount(),
+			CompilerCompatibilityVersion: knowledgeSnapshot.GetCompilerCompatibilityVersion(),
+		}
+	}
 	payload, err := json.Marshal(struct {
 		TenantID            string          `json:"n"`
 		Sequence            int64           `json:"s"`
@@ -217,6 +368,9 @@ func eventDigest(record searchAttemptEventRecord) (string, error) {
 		ActorRole           audit.ActorRole `json:"r"`
 		OwnerID             string          `json:"w"`
 		SearchJobID         string          `json:"j"`
+		// Keep this last and omitted for nil so legacy event-identity bytes and
+		// therefore existing continuation digests remain exact.
+		KnowledgeSnapshot *snapshotIdentity `json:"x,omitempty"`
 	}{
 		TenantID:            record.TenantID,
 		Sequence:            record.Sequence,
@@ -226,6 +380,7 @@ func eventDigest(record searchAttemptEventRecord) (string, error) {
 		ActorRole:           record.ActorRole,
 		OwnerID:             record.OwnerID,
 		SearchJobID:         record.SearchJobID,
+		KnowledgeSnapshot:   snapshot,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode search-attempt audit event identity: %w", err)

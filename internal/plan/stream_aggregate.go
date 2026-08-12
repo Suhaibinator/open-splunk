@@ -41,7 +41,10 @@ func validStreamAggregateContract(operator *StreamAggregate) bool {
 	if operator == nil ||
 		len(operator.GroupBy) > spl.MaximumStatsGroupFields ||
 		operator.WindowRows > spl.MaximumStreamStatsWindow ||
+		operator.Measure.OutputLiteral ||
 		!validStreamAggregateOutputName(operator.Measure) ||
+		operator.Measure.Sparkline != nil ||
+		operator.Measure.InputExpression != nil ||
 		operator.Measure.Percentile != 0 ||
 		(len(operator.GroupBy) > 0 && operator.WindowRows > 0 && operator.Global) {
 		return false

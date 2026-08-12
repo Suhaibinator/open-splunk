@@ -3,6 +3,7 @@
 import {
   type CSSProperties,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
   useEffect,
   useMemo,
@@ -25,6 +26,12 @@ import {
 import { NUMBER_FORMAT } from "../constants";
 import { formatGroupedNumericText } from "../formatters";
 import type { MenuName, StatsDensity } from "../model";
+import { statsFlatMultivalueDisplay } from "../statistics-multivalue";
+import {
+  statsSparklineSegments,
+  statsSparklineValues,
+  statsSparklineValuesForPresentation,
+} from "../statistics-sparkline";
 import {
   calculateVirtualTableWindow,
   maximumVirtualTableScrollTop,
@@ -80,6 +87,8 @@ const GENERIC_TIMESTAMP_FORMAT = new Intl.DateTimeFormat("en-US", {
 const COMPACT_STATISTICS_ROW_HEIGHT = 42;
 const STANDARD_STATISTICS_ROW_HEIGHT = 52;
 const STATISTICS_HEADER_HEIGHT = 37;
+const STATS_SPARKLINE_WIDTH = 128;
+const STATS_SPARKLINE_HEIGHT = 28;
 
 interface StatisticsTableShellStyle extends CSSProperties {
   "--statistics-header-height": string;
@@ -92,6 +101,11 @@ function serializedGenericValue(value: WorkspaceStatisticsValue): string {
 
 function formatGenericValue(value: WorkspaceStatisticsValue, column: WorkspaceStatisticsColumn): string {
   if (value === null) return "—";
+  const flatMultivalue = statsFlatMultivalueDisplay(
+    value,
+    column.flatMultivalueDelimiter,
+  );
+  if (flatMultivalue !== undefined) return flatMultivalue;
   if (column.valueType === ValueType.VALUE_TYPE_TIMESTAMP) {
     const date = new Date(serializedGenericValue(value));
     if (!Number.isNaN(date.valueOf())) {
@@ -104,6 +118,41 @@ function formatGenericValue(value: WorkspaceStatisticsValue, column: WorkspaceSt
       : formatGroupedNumericText(serializedGenericValue(value));
   }
   return serializedGenericValue(value);
+}
+
+function StatsSparklineCell({ value }: { value: WorkspaceStatisticsValue }) {
+  const values = statsSparklineValues(value);
+  if (values === null) return null;
+  const segments = statsSparklineSegments(values, STATS_SPARKLINE_WIDTH, STATS_SPARKLINE_HEIGHT);
+  if (segments.length === 0) return <span aria-label="Sparkline has no numeric points">—</span>;
+  const description = values.map((point) => point === null ? "missing" : String(point)).join(", ");
+  return (
+    <svg
+      className="statistics-sparkline"
+      viewBox={`0 0 ${STATS_SPARKLINE_WIDTH} ${STATS_SPARKLINE_HEIGHT}`}
+      role="img"
+      aria-label={`Sparkline values: ${description}`}
+    >
+      {segments.map((segment) => segment.length === 1 ? (
+        <circle
+          // A segment can contain one isolated bucket between missing values.
+          key={`point-${segment[0]}`}
+          cx={segment[0].split(",")[0]}
+          cy={segment[0].split(",")[1]}
+          r="1.75"
+        />
+      ) : (
+        <polyline key={`line-${segment.join(" ")}`} points={segment.join(" ")} />
+      ))}
+    </svg>
+  );
+}
+
+function renderGenericValue(value: WorkspaceStatisticsValue, column: WorkspaceStatisticsColumn): ReactNode {
+  if (statsSparklineValuesForPresentation(value, column.statsSparkline) !== null) {
+    return <StatsSparklineCell value={value} />;
+  }
+  return formatGenericValue(value, column);
 }
 
 interface TimechartSeriesCell {
@@ -559,7 +608,7 @@ export function StatisticsPanel({
                       >
                         {genericStatisticsTable.columns.map((column) => {
                           const value = row.values[column.key] ?? null;
-                          const formatted = formatGenericValue(value, column);
+                          const formatted = renderGenericValue(value, column);
                           const pivotValue = row.pivotValues[column.key];
                           return (
                             <td

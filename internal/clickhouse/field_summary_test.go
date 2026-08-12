@@ -156,6 +156,11 @@ func TestCompileFieldSummaryFixedTransportAndExactGroups(t *testing.T) {
 			t.Errorf("single-use summary CTE %q is missing", name)
 		}
 	}
+	for _, name := range []string{fieldSummaryObservationsCTE, fieldSummaryControlledCTE} {
+		if strings.Contains(compiled.SQL, quoteIdentifier(name)+" AS (") {
+			t.Errorf("ordinary summary unexpectedly used prerequisite CTE %q", name)
+		}
+	}
 	if !strings.HasSuffix(compiled.SQL, materializedCTESettingsSQL) {
 		t.Fatalf("field summary does not declare the materialized-CTE requirement:\n%s", compiled.SQL)
 	}
@@ -170,6 +175,129 @@ func TestCompileFieldSummaryFixedTransportAndExactGroups(t *testing.T) {
 		quoteIdentifier(fieldSummaryStoredType)+" != toUInt8("+
 			"1)") {
 		t.Fatalf("explicit null values are not excluded from groups:\n%s", compiled.SQL)
+	}
+}
+
+func TestCompileFieldSummaryPrerequisiteUsesSingleSourceSentinelChain(t *testing.T) {
+	t.Parallel()
+
+	logical := buildEventStatsMinimumPlan(
+		t,
+		`index=gradethis | eventstats min(payload) AS low BY host`,
+	)
+	compiled := compileFieldSummary(t, logical, fieldSummaryTestSpec("low"))
+
+	for _, name := range []string{
+		fieldSummarySourceCTE,
+		fieldSummaryTypedCTE,
+		fieldSummaryEncodedCTE,
+		fieldSummaryRowsCTE,
+		fieldSummaryObservationsCTE,
+		fieldSummaryGroupsCTE,
+		fieldSummaryControlledCTE,
+	} {
+		if got := strings.Count(compiled.SQL, quoteIdentifier(name)+" AS ("); got != 1 {
+			t.Errorf("single-consumer CTE %q definitions = %d, want one\nSQL: %s", name, got, compiled.SQL)
+		}
+		if got := strings.Count(compiled.SQL, " FROM "+quoteIdentifier(name)); got != 1 {
+			t.Errorf("single-consumer CTE %q reads = %d, want one\nSQL: %s", name, got, compiled.SQL)
+		}
+		if strings.Contains(compiled.SQL, quoteIdentifier(name)+" AS MATERIALIZED (") {
+			t.Errorf("single-consumer CTE %q was materialized\nSQL: %s", name, compiled.SQL)
+		}
+	}
+	for _, fragment := range []string{
+		"ARRAY JOIN arrayConcat([tuple(toUInt8(0)",
+		"arrayResize([tuple(toUInt8(1)",
+		"toUInt8(ifNull(" + quoteIdentifier(fieldSummaryStoredType) + ", toUInt8(0)))",
+		"toUInt8(ifNull(" + quoteIdentifier(fieldSummaryPresent) + " != 0 AND " +
+			quoteIdentifier(fieldSummaryAgreement) + " = 0, 0)) AS " +
+			quoteIdentifier(fieldSummaryRowInvalid),
+		"toUInt64(ifNull(" + quoteIdentifier(fieldSummaryPresent) + " != 0 AND " +
+			quoteIdentifier(fieldSummaryStoredType) + " != toUInt8(1)",
+		"UNION ALL SELECT toUInt8(0), toUInt8(0), CAST('' AS String)",
+		quoteIdentifier(internalFieldMetadataVersionColumn) + " != ?",
+		"length(" + quoteIdentifier(internalFieldNamesColumn) + ") > ?",
+		"length(" + quoteIdentifier(internalFieldTypesColumn) + ") > ?",
+		quoteIdentifier(internalFieldNamesColumn) + " != arraySort(arrayDistinct(" +
+			quoteIdentifier(internalFieldNamesColumn) + "))",
+		"arrayExists(stored_type -> stored_type < ? OR stored_type > ?, " +
+			quoteIdentifier(internalFieldTypesColumn) + ")",
+		quoteIdentifier(fieldSummaryRowMetadataBad) + " != 0 OR " +
+			quoteIdentifier(fieldSummaryRowInvalid) + " != 0",
+		"GROUP BY " + quoteIdentifier(fieldSummaryObservedKind) + ", " +
+			quoteIdentifier(fieldSummaryObservedType) + ", " +
+			quoteIdentifier(fieldSummaryObservedEncoded),
+		"arraySort(groupUniqArrayIf(toUInt8(" + quoteIdentifier(fieldSummarySeenType),
+		"max(if(" + quoteIdentifier(fieldSummaryGroupRowKind) +
+			" = toUInt8(0), " + quoteIdentifier(fieldSummaryMetadataInvalid) +
+			", toUInt8(0))) OVER ()",
+	} {
+		if !strings.Contains(compiled.SQL, fragment) {
+			t.Errorf("prerequisite sentinel summary is missing %q\nSQL: %s", fragment, compiled.SQL)
+		}
+	}
+	if strings.Contains(compiled.SQL, quoteIdentifier(fieldSummaryTotalsCTE)) {
+		t.Fatalf("prerequisite summary retained the parallel totals branch:\n%s", compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, "sumMap(") || strings.Contains(compiled.SQL, "GROUPING SETS") ||
+		strings.Contains(compiled.SQL, "groupArray(") {
+		t.Fatalf("prerequisite summary retained an unbounded or parallel-key aggregate:\n%s", compiled.SQL)
+	}
+	groupPosition := strings.Index(compiled.SQL, quoteIdentifier(fieldSummaryGroupsCTE)+" AS (SELECT")
+	windowPosition := strings.Index(compiled.SQL, quoteIdentifier(fieldSummaryControlledCTE)+" AS (SELECT")
+	if groupPosition < 0 || windowPosition < 0 || windowPosition < groupPosition {
+		t.Fatalf("summary control window is not downstream of the bounded group:\n%s", compiled.SQL)
+	}
+	if got := strings.Count(compiled.SQL, " AS MATERIALIZED ("); got != 1 {
+		t.Fatalf("prerequisite summary materialized CTEs = %d, want the sole chronological input fence:\n%s", got, compiled.SQL)
+	}
+	if strings.Contains(compiled.SQL, " LIMIT 0") {
+		t.Fatalf("prerequisite summary reread the final input to infer its validation schema:\n%s", compiled.SQL)
+	}
+	wantDummy := []string{
+		"toUInt8(0) AS " + quoteIdentifier(FieldSummaryRowKindColumn),
+		"CAST('' AS String) AS " + quoteIdentifier(FieldSummaryFieldNameColumn),
+		"CAST([], 'Array(UInt8)') AS " + quoteIdentifier(FieldSummaryObservedTypesColumn),
+		"toUInt64(0) AS " + quoteIdentifier(FieldSummaryEventCountColumn),
+		"toUInt64(0) AS " + quoteIdentifier(FieldSummaryNullCountColumn),
+		"toUInt64(0) AS " + quoteIdentifier(FieldSummaryMissingCountColumn),
+		"toUInt64(0) AS " + quoteIdentifier(FieldSummaryTotalEventCountColumn),
+		"toUInt8(0) AS " + quoteIdentifier(FieldSummaryValueTypeColumn),
+		"CAST('' AS String) AS " + quoteIdentifier(FieldSummaryEncodedValueColumn),
+		"toUInt64(0) AS " + quoteIdentifier(FieldSummaryValueCountColumn),
+		"toUInt8(0) AS " + quoteIdentifier(FieldSummaryMetadataInvalidColumn),
+		"toUInt8(0) AS " + quoteIdentifier(FieldSummaryUnsupportedColumn),
+		"toUInt8(0) AS " + quoteIdentifier(FieldSummaryOversizedColumn),
+	}
+	if got := fieldSummaryValidationDummyProjection(); !reflect.DeepEqual(got, wantDummy) {
+		t.Fatalf("field-summary validation dummy = %#v, want %#v", got, wantDummy)
+	}
+	if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+		t.Fatalf("placeholder count = %d, args = %d\nargs: %#v\nSQL: %s", got, want, compiled.Args, compiled.SQL)
+	}
+	wantSuffix := []any{
+		uint64(compiled.Spec.MaximumValueBytes),
+		eventfields.CurrentFieldMetadataVersion,
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		uint64(eventfields.MaximumStoredFieldsPerEvent),
+		uint64(eventfields.MaximumNormalizedFieldNameBytes),
+		uint8(eventfields.StoredValueTypeNull),
+		uint8(eventfields.StoredValueTypeDecimal),
+		compiled.Spec.FieldName,
+	}
+	if len(compiled.Args) < len(wantSuffix) ||
+		!reflect.DeepEqual(compiled.Args[len(compiled.Args)-len(wantSuffix):], wantSuffix) {
+		t.Fatalf("prerequisite summary argument suffix = %#v, want %#v", compiled.Args, wantSuffix)
+	}
+
+	ordinaryPolicy := eventAnalysisFinalizationPolicy{materializeSharedCTEs: true}
+	prerequisitePolicy := eventAnalysisFinalizationPolicy{materializeSharedCTEs: false}
+	if got := fieldSummaryResultContractFor(ordinaryPolicy).sourceFanout; got != eventStatsSummarySourceFanout {
+		t.Fatalf("ordinary field-summary source fanout = %d, want %d", got, eventStatsSummarySourceFanout)
+	}
+	if got := fieldSummaryResultContractFor(prerequisitePolicy).sourceFanout; got != eventStatsOrdinarySourceFanout {
+		t.Fatalf("prerequisite field-summary source fanout = %d, want one", got)
 	}
 }
 
@@ -217,7 +345,7 @@ func TestCompileFieldSummaryUsesFinalFieldSemantics(t *testing.T) {
 			name:   "numeric bin output",
 			source: `index=gradethis | eval signed=-11 | bin signed span=10 AS band | table band`,
 			field:  "band", wantKnown: true,
-			fragments: []string{UnsupportedNumericBinValueMarker, `accurateCastOrNull(`},
+			fragments: []string{UnsupportedNumericBinValueMarker, `floor(`, `isFinite(`},
 		},
 		{
 			name: "exclude blocks exact", source: `index=gradethis | fields - status`,

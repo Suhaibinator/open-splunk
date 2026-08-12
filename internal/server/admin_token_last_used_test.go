@@ -264,6 +264,15 @@ func (administration *mutableTokenAdministration) UpdateCollectorToken(
 	return auth.CollectorToken{}, errors.New("unexpected token update")
 }
 
+func (administration *mutableTokenAdministration) SetCollectorTokenEnabled(
+	context.Context,
+	string,
+	uint64,
+	bool,
+) (auth.CollectorToken, error) {
+	return auth.CollectorToken{}, errors.New("unexpected token state update")
+}
+
 func (administration *mutableTokenAdministration) RevokeCollectorToken(
 	context.Context,
 	string,

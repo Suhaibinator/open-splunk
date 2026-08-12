@@ -336,6 +336,34 @@ func TestExecutorExecuteFieldSuggestionsReturnsMetadataUnavailableAtomically(t *
 	}
 }
 
+func TestExecutorExecuteFieldSuggestionsMetadataWinsAtCandidateBoundary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("invalid plus N+1 candidates", func(t *testing.T) {
+		rows := fieldSuggestionFakeRows(1, "a", "b", string([]byte{0xff}))
+		got, err := mustExecutor(
+			t,
+			&fakeQueryConnection{rows: rows},
+		).ExecuteFieldSuggestions(context.Background(), validCompiledFieldSuggestions("", 2))
+		assertFieldSuggestionError(t, got, err, ErrFieldMetadataUnavailable)
+		if !rows.closed || rows.nextCalls != 4 {
+			t.Fatalf("metadata-invalid boundary stream closed=%v, nextCalls=%d; want fully consumed", rows.closed, rows.nextCalls)
+		}
+	})
+
+	t.Run("hard result overflow still wins", func(t *testing.T) {
+		rows := fieldSuggestionFakeRows(1, "a", "b", "c", "d")
+		got, err := mustExecutor(
+			t,
+			&fakeQueryConnection{rows: rows},
+		).ExecuteFieldSuggestions(context.Background(), validCompiledFieldSuggestions("", 2))
+		assertFieldSuggestionError(t, got, err, searchjobs.ErrInvalidResult)
+		if !rows.closed {
+			t.Fatal("overflowing metadata-invalid stream was not closed")
+		}
+	})
+}
+
 func TestExecutorExecuteFieldSuggestionsHonorsContextAtEveryBoundary(t *testing.T) {
 	t.Run("nil", func(t *testing.T) {
 		connection := &fakeQueryConnection{rows: fieldSuggestionFakeRows(0)}
@@ -535,6 +563,9 @@ func TestExecutorExecuteFieldSuggestionsValidatesStateAndQueryBeforeExecution(t 
 
 func TestSettingsForFieldSuggestionsClonesAndTightensCaps(t *testing.T) {
 	t.Parallel()
+	if want := uint64(clickhouse.MaximumFieldCatalogFields) + 2; maximumFieldSuggestionGroups != want {
+		t.Fatalf("field suggestion group seal = %d, want header plus overflow bound %d", maximumFieldSuggestionGroups, want)
+	}
 
 	base, err := querySettings(Config{
 		MaxExecutionTime: 2 * maximumFieldSuggestionExecutionTime,
@@ -580,6 +611,15 @@ func TestSettingsForFieldSuggestionsClonesAndTightensCaps(t *testing.T) {
 		strict["max_result_bytes"] != uint64(1024) ||
 		strict["max_rows_to_group_by"] != uint64(5) {
 		t.Fatalf("stricter base caps were raised: %#v", strict)
+	}
+
+	base["max_rows_to_group_by"] = uint64(clickhouse.MaximumFieldCatalogFields) + 2
+	exact, err := settingsForFieldSuggestions(base, 73)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exact["max_rows_to_group_by"] != uint64(clickhouse.MaximumFieldCatalogFields)+2 {
+		t.Fatalf("exact prerequisite-aware group seal changed: %#v", exact)
 	}
 }
 

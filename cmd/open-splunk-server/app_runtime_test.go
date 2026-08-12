@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -36,6 +37,11 @@ type stubControlAppCatalog struct {
 		control.AppAccessScope,
 		control.AppListRequest,
 	) (control.AppListResult, error)
+	listIdentities func(
+		context.Context,
+		control.AppAccessScope,
+		uint32,
+	) (control.AppIdentityListResult, error)
 	update func(
 		context.Context,
 		control.AppAccessScope,
@@ -90,6 +96,19 @@ func (catalog *stubControlAppCatalog) ListApps(
 		return control.AppListResult{}, errors.New("unexpected ListApps")
 	}
 	return catalog.list(ctx, scope, request)
+}
+
+func (catalog *stubControlAppCatalog) ListAppIdentities(
+	ctx context.Context,
+	scope control.AppAccessScope,
+	maximum uint32,
+) (control.AppIdentityListResult, error) {
+	if catalog.listIdentities == nil {
+		return control.AppIdentityListResult{}, errors.New(
+			"unexpected ListAppIdentities",
+		)
+	}
+	return catalog.listIdentities(ctx, scope, maximum)
 }
 
 func (catalog *stubControlAppCatalog) UpdateApp(
@@ -479,6 +498,139 @@ func TestRuntimeAppCatalogListsCompleteDetachedActiveBootstrapCatalog(
 		0,
 	); !errors.Is(err, server.ErrAppAdministrationInvalidArgument) {
 		t.Fatalf("zero maximum error = %v", err)
+	}
+}
+
+func TestRuntimeAppCatalogListsCompleteBoundedKnowledgeAuthority(t *testing.T) {
+	t.Parallel()
+
+	source := control.AppIdentityListResult{
+		AppIDs:   make([]string, control.MaximumAppsPerTenant),
+		Complete: true,
+	}
+	for index := range source.AppIDs {
+		source.AppIDs[index] = fmt.Sprintf(
+			"app_%021dA",
+			len(source.AppIDs)-index,
+		)
+	}
+	var capturedScope control.AppAccessScope
+	var capturedMaximum uint32
+	backend := &stubControlAppCatalog{listIdentities: func(
+		_ context.Context,
+		scope control.AppAccessScope,
+		maximum uint32,
+	) (control.AppIdentityListResult, error) {
+		capturedScope = scope
+		capturedMaximum = maximum
+		return source, nil
+	}}
+	adapter := &runtimeAppCatalog{catalog: backend}
+	got, err := adapter.ListKnowledgeApps(
+		t.Context(),
+		"tenant-a",
+		control.MaximumAppsPerTenant,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capturedScope.TenantID != "tenant-a" ||
+		capturedMaximum != control.MaximumAppsPerTenant {
+		t.Fatalf("knowledge app scope/bound = %#v %d", capturedScope, capturedMaximum)
+	}
+	if !got.Complete || len(got.AppIDs) != control.MaximumAppsPerTenant {
+		t.Fatalf(
+			"knowledge app authority = complete:%t ids:%d",
+			got.Complete,
+			len(got.AppIDs),
+		)
+	}
+	if got.AppIDs[0] != "app_000000000000000000001A" ||
+		got.AppIDs[control.MaximumAppsPerTenant-1] != "app_000000000000000000256A" ||
+		!slices.IsSorted(got.AppIDs) {
+		t.Fatalf("knowledge app authority = complete:%t ids:%d first:%q last:%q", got.Complete, len(got.AppIDs), got.AppIDs[0], got.AppIDs[len(got.AppIDs)-1])
+	}
+	got.AppIDs[0] = "app_000000000000000000999A"
+	if source.AppIDs[control.MaximumAppsPerTenant-1] !=
+		"app_000000000000000000001A" {
+		t.Fatal("storage identities remained aliased to the returned result")
+	}
+
+	partialAppIDs := make([]string, control.MaximumAppsPerTenant+1)
+	for index := range partialAppIDs {
+		partialAppIDs[index] = fmt.Sprintf("app_%021dA", index+1)
+	}
+	source = control.AppIdentityListResult{
+		AppIDs:   partialAppIDs,
+		Complete: false,
+	}
+	incomplete, err := adapter.ListKnowledgeApps(
+		t.Context(),
+		"tenant-a",
+		control.MaximumAppsPerTenant,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if incomplete.Complete || len(incomplete.AppIDs) != 0 {
+		t.Fatalf("incomplete knowledge app authority = %#v", incomplete)
+	}
+
+	source = control.AppIdentityListResult{Complete: true}
+	empty, err := adapter.ListKnowledgeApps(
+		t.Context(),
+		"tenant-a",
+		control.MaximumAppsPerTenant,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !empty.Complete || len(empty.AppIDs) != 0 {
+		t.Fatalf("empty complete knowledge app authority = %#v", empty)
+	}
+}
+
+func TestRuntimeAppCatalogRejectsCorruptKnowledgeAuthority(t *testing.T) {
+	t.Parallel()
+
+	const valid = "app_000000000000000000001A"
+	tests := []struct {
+		name    string
+		maximum uint32
+		result  control.AppIdentityListResult
+	}{
+		{name: "zero bound", maximum: 0},
+		{name: "over contract bound", maximum: control.MaximumAppsPerTenant + 1},
+		{name: "storage exceeds bound", maximum: 1, result: control.AppIdentityListResult{AppIDs: []string{valid, valid}, Complete: true}},
+		{name: "invalid identity", maximum: control.MaximumAppsPerTenant, result: control.AppIdentityListResult{AppIDs: []string{"not-a-canonical-app"}, Complete: true}},
+		{name: "duplicate identity", maximum: control.MaximumAppsPerTenant, result: control.AppIdentityListResult{AppIDs: []string{valid, valid}, Complete: true}},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			calls := 0
+			adapter := &runtimeAppCatalog{catalog: &stubControlAppCatalog{listIdentities: func(
+				context.Context,
+				control.AppAccessScope,
+				uint32,
+			) (control.AppIdentityListResult, error) {
+				calls++
+				return test.result, nil
+			}}}
+			result, err := adapter.ListKnowledgeApps(
+				t.Context(),
+				"tenant-a",
+				test.maximum,
+			)
+			if err == nil || result.Complete || len(result.AppIDs) != 0 {
+				t.Fatalf("corrupt authority = (%#v, %v)", result, err)
+			}
+			if (test.maximum == 0 ||
+				test.maximum > control.MaximumAppsPerTenant) && calls != 0 {
+				t.Fatalf("invalid bound reached storage %d times", calls)
+			}
+		})
 	}
 }
 

@@ -51,10 +51,11 @@ jobs:
 
       - name: Check API compatibility
         if: github.event_name == 'pull_request'
-        run: >-
-          npx --no-install buf breaking
-          --against ".git#branch=${{ github.base_ref }}"
-          --error-format github-actions
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git branch --force "${BASE_REF}" "origin/${BASE_REF}"
+          node scripts/check-buf-breaking.mjs --against-ref "${BASE_REF}"
 
       - name: Verify generated code is current
         run: |
@@ -131,9 +132,72 @@ jobs:
           args: --timeout=5m
 
   go-test:
-    name: Go tests
+    name: Go tests (${{ matrix.label }})
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Every race shard and the coverage row retain the same aggregate budget;
+    # each package invocation remains bounded at 40 minutes.
+    timeout-minutes: ${{ matrix.job_timeout_minutes }}
+    # Race instrumentation and atomic coverage each retain a full-tree gate.
+    # Core packages and the migration-heavy catalog test binary are partitioned
+    # by fail-closed dynamic inventories. Every package and every top-level
+    # catalog test, example, fuzz seed, and subtest still runs under race.
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include:
+          - label: race detector, non-catalog packages shard 1/4
+            mode: race-core
+            shard_index: 0
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, non-catalog packages shard 2/4
+            mode: race-core
+            shard_index: 1
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, non-catalog packages shard 3/4
+            mode: race-core
+            shard_index: 2
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, non-catalog packages shard 4/4
+            mode: race-core
+            shard_index: 3
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, knowledge catalog shard 1/4
+            mode: race-catalog
+            shard_index: 0
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, knowledge catalog shard 2/4
+            mode: race-catalog
+            shard_index: 1
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, knowledge catalog shard 3/4
+            mode: race-catalog
+            shard_index: 2
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: race detector, knowledge catalog shard 4/4
+            mode: race-catalog
+            shard_index: 3
+            shard_count: 4
+            upload_coverage: false
+            job_timeout_minutes: 45
+          - label: atomic coverage
+            mode: coverage
+            upload_coverage: true
+            job_timeout_minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -150,20 +214,189 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
-      - name: Test with race detection and coverage
+      - name: Test full repository with atomic coverage
+        if: matrix.mode == 'coverage'
         run: >-
           go test
-          -race
           -shuffle=on
           -covermode=atomic
           -coverprofile=coverage.out
+          -timeout=40m
           ./...
 
+      - name: Test non-catalog packages with the race detector
+        if: matrix.mode == 'race-core'
+        env:
+          GOMAXPROCS: "2"
+        run: >-
+          scripts/run-go-race-shard.sh core
+          ${{ matrix.shard_index }}
+          ${{ matrix.shard_count }}
+
+      - name: Test knowledge catalog shard with the race detector
+        if: matrix.mode == 'race-catalog'
+        env:
+          GOMAXPROCS: "2"
+        run: >-
+          scripts/run-go-race-shard.sh catalog
+          ${{ matrix.shard_index }}
+          ${{ matrix.shard_count }}
+
       - name: Upload Go coverage
+        if: matrix.upload_coverage
         uses: actions/upload-artifact@v7
         with:
           name: go-coverage
           path: coverage.out
+          if-no-files-found: error
+          retention-days: 14
+
+  knowledge-object-fuzz:
+    name: Knowledge object fuzz (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    # Catalog's complete deterministic campaign is approximately nine minutes
+    # on the calibrated runner; individual targets remain bounded at two.
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Go 1.26.5 can retain a wall-clock fuzz deadline if child-context
+          # cancellation lags during coordinator shutdown (golang/go#75804).
+          # Pair every exact target with a slow-runner-calibrated execution
+          # limit so shutdown uses the coordinator's clean limit path.
+          - label: selectors
+            package: ./internal/knowledge
+            target_budgets: |
+              ^FuzzNormalizePattern$ 500000x
+              ^FuzzSelectorMatchReference$ 300000x
+              ^FuzzSelectorMultiPatternORReference$ 300000x
+              ^FuzzSelectorCanonicalOrder$ 500000x
+          - label: definitions
+            package: ./internal/knowledgedefinition
+            target_budgets: |
+              ^FuzzDecodeCanonicalNeverPanicsAndSuccessIsStable$ 250000x
+              ^FuzzNormalizeNeverPanicsAndSuccessIsIdempotent$ 275000x
+              ^FuzzDecodeCanonicalFutureBodyNeverPanicsAndSuccessIsStable$ 200000x
+              ^FuzzInactiveFutureBodyCanonicalWireRoundTrip$ 250000x
+              ^FuzzInactiveFutureBodyDisallowedStateAlwaysWins$ 250000x
+          - label: catalog
+            package: ./internal/knowledgecatalog
+            target_budgets: |
+              ^FuzzCalculatedDependencyInputFields$ 60000x
+              ^FuzzCatalogFingerprintCanonicalizesSetLikeInputs$ 80000x
+              ^FuzzCatalogCursorRoundTripPreservesTypedKeyset$ 70000x
+              ^FuzzBoundedListResponseRecordsMatchesReferenceModel$ 70000x
+              ^FuzzDecodeCursorRejectsMalformedOrReboundInput$ 120000x
+              ^FuzzKnowledgeUpdateMaskCanonicalization$ 100000x
+              ^FuzzApplyKnowledgeDefinitionMaskIsDetachedAndStable$ 80000x
+              ^FuzzPrepareCreateMutationCanonicalDigest$ 75000x
+              ^FuzzKnowledgeOutcomeReferenceStrictDecode$ 100000x
+              ^FuzzValidatePublicationActiveCandidateAlphaRename$ 40000x
+          - label: spl-parser
+            package: ./internal/spl
+            target_budgets: |
+              ^FuzzParseDoesNotPanic$ 350000x
+              ^FuzzParseV02ExpressionFragmentsCanonicalize$ 150000x
+              ^FuzzParseV02ExpressionsAreDeterministicAndAtomic$ 250000x
+          - label: hec-protocol
+            package: ./internal/hec
+            target_budgets: |
+              ^FuzzDecodeAcknowledgmentRequest$ 150000x
+              ^FuzzParseAuthorization$ 50000x
+              ^FuzzParseChannel$ 450000x
+              ^FuzzGzipLimitEnforcement$ 100000x
+              ^FuzzClassifyFieldNumber$ 400000x
+              ^FuzzEnvelopeDecoder$ 150000x
+              ^FuzzParseEpochNanoseconds$ 425000x
+              ^FuzzParseRawQuery$ 125000x
+              ^FuzzRawBreaker$ 100000x
+              ^FuzzMarshalResponse$ 400000x
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Verify exact fuzz target inventory
+        env:
+          FUZZ_PACKAGE: ${{ matrix.package }}
+          FUZZ_TARGET_BUDGETS: ${{ matrix.target_budgets }}
+        run: |
+          set -euo pipefail
+          artifact_dir="fuzz-artifacts/${{ matrix.label }}"
+          mkdir -p "$artifact_dir"
+          printf '%s\n' "$FUZZ_TARGET_BUDGETS" > "$artifact_dir/exact-target-budgets.txt"
+          : > "$artifact_dir/exact-target-regexes.txt"
+          : > "$artifact_dir/declared-targets.txt"
+          while read -r target_regex target_fuzz_time extra; do
+            if [[ -z "$target_regex" ]]; then
+              continue
+            fi
+            target_name="${target_regex#^}"
+            target_name="${target_name%$}"
+            if [[ -z "$target_fuzz_time" || -n "$extra" ||
+              "$target_regex" != "^${target_name}$" ||
+              ! "$target_name" =~ ^Fuzz[A-Za-z0-9_]+$ ||
+              ! "$target_fuzz_time" =~ ^[1-9][0-9]*x$ ]]; then
+              echo "::error::Invalid fuzz target budget: $target_regex $target_fuzz_time $extra"
+              exit 1
+            fi
+            printf '%s\n' "$target_regex" >> "$artifact_dir/exact-target-regexes.txt"
+            printf '%s\n' "$target_name" >> "$artifact_dir/declared-targets.txt"
+          done < "$artifact_dir/exact-target-budgets.txt"
+          LC_ALL=C sort -o \
+            "$artifact_dir/declared-targets.txt" \
+            "$artifact_dir/declared-targets.txt"
+          go test "$FUZZ_PACKAGE" -list '^Fuzz' |
+            sed -n '/^Fuzz/p' |
+            LC_ALL=C sort > "$artifact_dir/discovered-targets.txt"
+          diff -u \
+            "$artifact_dir/declared-targets.txt" \
+            "$artifact_dir/discovered-targets.txt"
+
+      - name: Fuzz every declared target within its own budget
+        env:
+          FUZZ_PACKAGE: ${{ matrix.package }}
+          FUZZ_TARGET_BUDGETS: ${{ matrix.target_budgets }}
+          GOMAXPROCS: "2"
+        run: |
+          set -euo pipefail
+          artifact_dir="fuzz-artifacts/${{ matrix.label }}"
+          status=0
+          while read -r target_regex target_fuzz_time; do
+            if [[ -z "$target_regex" ]]; then
+              continue
+            fi
+            target_name="${target_regex#^}"
+            target_name="${target_name%$}"
+            if ! go test "$FUZZ_PACKAGE" \
+              -run '^$' \
+              -fuzz "$target_regex" \
+              -fuzztime "$target_fuzz_time" \
+              -fuzzminimizetime 10s \
+              -timeout 2m \
+              -parallel 2 \
+              -count 1 2>&1 |
+              tee "$artifact_dir/${target_name}.log"; then
+              status=1
+            fi
+          done <<< "$FUZZ_TARGET_BUDGETS"
+          exit "$status"
+
+      - name: Upload fuzz failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: knowledge-object-fuzz-${{ matrix.label }}-failure
+          path: |
+            fuzz-artifacts/${{ matrix.label }}
+            ${{ matrix.package }}/testdata/fuzz
           if-no-files-found: error
           retention-days: 14
 
@@ -208,11 +441,134 @@ jobs:
           -p=1
           -v
 
+  knowledge-runtime-clickhouse:
+    name: Knowledge runtime ClickHouse matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Pre-pull pinned ClickHouse image with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+
+      - name: Execute exact production knowledge runtime matrix
+        env:
+          OPEN_SPLUNK_CLICKHOUSE_INTEGRATION: "1"
+        run: >-
+          go test ./internal/queryexec
+          -run '^TestKnowledgeCompilerAndExecutorMatrixAgainstClickHouse$'
+          -count=1
+          -timeout=4m30s
+          -p=1
+          -v
+
+  hec-durable-load:
+    name: HEC durable (${{ matrix.label }})
+    runs-on: ubuntu-latest
+    # Standard hosted runners have no calibrated storage-IOPS contract. Keep
+    # the default mixed 50/950 release qualification intact for recorded
+    # machine sizing. The small-only profile observes correctness, bounded
+    # backpressure, and saturation behavior; it is not a throughput proof. The
+    # independently rate-gated batch-only profile proves 1,000 EPS.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: observational 50 requests/s small-only correctness/backpressure saturation and outage recovery
+            events_per_second: "50"
+            profile: small-only
+          - label: rate-gated 1,000 EPS batch-only throughput and outage recovery
+            events_per_second: "1000"
+            profile: batch-only
+    env:
+      OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Download Go modules with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Pre-pull pinned ClickHouse image with retry
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker pull "$OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE"; then
+              exit 0
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+
+      - name: Run ${{ matrix.label }}
+        env:
+          OPEN_SPLUNK_HEC_LOAD: "1"
+          OPEN_SPLUNK_HEC_LOAD_EVENTS_PER_SECOND: ${{ matrix.events_per_second }}
+          OPEN_SPLUNK_HEC_LOAD_PROFILE: ${{ matrix.profile }}
+        run: >-
+          go test ./integration
+          -run '^TestBackendHECDurableLoad$'
+          -count=1
+          -timeout=15m
+          -p=1
+          -v
+
   backend-vertical:
     name: Backend vertical
     runs-on: ubuntu-latest
-    # Leave setup and artifact headroom above the 30-minute Go test deadline.
-    timeout-minutes: 35
+    # Leave setup, the 30-minute general vertical, and the isolated HEC
+    # functional checks enough headroom to fail on their own bounded deadlines.
+    timeout-minutes: 45
     env:
       OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE: clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49
     steps:
@@ -272,10 +628,30 @@ jobs:
         # and 30s cleanup headroom beneath this process deadline.
         run: >-
           go test ./cmd/open-splunk-server ./internal/clickhouse ./internal/indexes ./internal/queryexec ./internal/server ./integration ./migrations/clickhouse
-          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
+          -run '^Test(ClickHouseTLSServicePrincipalStartupLifecycle|ClickHouseServicePrincipalLifecycle|IndexDataDeletionCoordinatorAgainstClickHouse|IndexStatisticsReaderAgainstClickHouse|StoreAgainstClickHouse|NumericChartAgainstClickHouse|ChartPercentileAgainstClickHouse|ExpressionV02AgainstClickHouse|ExpressionV02ExecutorManagerAgainstClickHouse|ExecutorAndManagerAgainstClickHouse|DeploymentComposePersistentCredentialRotation|DeploymentNativeRecoveryClickHouseLifecycle|BackendIndexDataDeletionLifecycle|BackendVertical|Browser(FixedResultRendering|SearchCancellation|Sequence(ExpiredRecovery|Gap(REST(FirstProgress|Terminal))?Recovery)))$'
           -count=1
           -timeout=30m
           -p=1
+          -v
+
+      - name: Test HEC ingestion-to-SPL vertical
+        env:
+          OPEN_SPLUNK_BACKEND_INTEGRATION: "1"
+        run: >-
+          go test ./integration
+          -run '^TestBackendHECVertical$'
+          -count=1
+          -timeout=8m
+          -v
+
+      - name: Test HEC slow compressed read deadline
+        env:
+          OPEN_SPLUNK_HEC_SLOW_CLIENT: "1"
+        run: >-
+          go test ./integration
+          -run '^TestBackendHECSlowCompressedReadDeadline$'
+          -count=1
+          -timeout=15m
           -v
 
       - name: Upload browser failure artifacts
@@ -423,6 +799,9 @@ jobs:
       - gradethis-corpus
       - go-lint
       - go-test
+      - hec-durable-load
+      - knowledge-object-fuzz
+      - knowledge-runtime-clickhouse
       - go-vulnerability
       - protobuf
       - release-oci

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -20,6 +21,9 @@ func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*open
 	columns := make([]*opensplunkv1.ResultColumn, len(schema.Columns))
 	seen := make(map[string]struct{}, len(schema.Columns))
 	for index, column := range schema.Columns {
+		if !column.ValidFlatMultivaluePresentation() {
+			return nil, errors.New("search result schema contains invalid multivalue presentation metadata")
+		}
 		if column.Name == "" || !utf8.ValidString(column.Name) {
 			return nil, errors.New("search result schema contains an invalid column name")
 		}
@@ -37,13 +41,20 @@ func Schema(schemaID string, schema searchjobs.Schema, shape ResultShape) (*open
 				shape.Kind == opensplunkv1.ResultSetKind_RESULT_SET_KIND_TIME_SERIES) {
 			semantic = opensplunkv1.ColumnSemanticType_COLUMN_SEMANTIC_TYPE_METRIC
 		}
+		var flatMultivalueDelimiter *string
+		if column.HasFlatMultivalueDelimiter {
+			value := strings.Clone(column.FlatMultivalueDelimiter)
+			flatMultivalueDelimiter = &value
+		}
 		columns[index] = &opensplunkv1.ResultColumn{
-			FieldName:    column.Name,
-			DisplayName:  column.Name,
-			ValueType:    valueType,
-			SemanticType: semantic,
-			Nullable:     column.Nullable,
-			Multivalue:   column.Multivalue,
+			FieldName:               column.Name,
+			DisplayName:             column.Name,
+			ValueType:               valueType,
+			SemanticType:            semantic,
+			Nullable:                column.Nullable,
+			Multivalue:              column.Multivalue,
+			FlatMultivalueDelimiter: flatMultivalueDelimiter,
+			StatsSparkline:          column.StatsSparkline,
 		}
 	}
 	return &opensplunkv1.ResultSchema{

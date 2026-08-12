@@ -1,0 +1,208 @@
+{
+  "format_version": "hec-compatibility-fixture-v0.1",
+  "cases": [
+    {
+      "id": "ack.ingest-allocates-lower-d-integer",
+      "rule": "acknowledged ingestion stages atomically and returns an opaque exact positive JSON integer as member ackId",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"}
+        ],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"acknowledged\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": true, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "ack_allocations": [{"channel": "FE0ECFAD-13D5-401B-847D-77833BD77131", "id": "42"}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 200, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Success\",\"code\":0,\"ackId\":42}"},
+        "durable": {"quota": "charged", "request": "staged", "ack": "pending", "outbox": "pending", "visibility": "reserved"},
+        "events": [{"ordinal": 0, "index": "main", "time_unix_nanos": "1786363200000000000", "time_source": "received_at_fallback", "host": "hec", "source": "http:hec", "sourcetype": "httpevent", "raw": "acknowledged", "message": "acknowledged", "fields": []}],
+        "spl": {"query": "index=main message=acknowledged | fields _raw", "rows": [{"_raw": "acknowledged"}]}
+      }
+    },
+    {
+      "id": "ack.query-indexed-pending-failed-expired-unknown",
+      "rule": "an ACK query is non-destructive and maps only retained indexed state to true",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/ack",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "Content-Type", "value": "application/json"}
+        ],
+        "query": [{"name": "channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"}],
+        "body": {"kind": "utf8", "value": "{\"acks\":[1,2,3,4,5]}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": true, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "ack_rows": [
+          {"channel": "FE0ECFAD-13D5-401B-847D-77833BD77131", "id": "1", "state": "indexed", "terminal_at": "2026-08-10T11:59:00Z"},
+          {"channel": "FE0ECFAD-13D5-401B-847D-77833BD77131", "id": "2", "state": "pending"},
+          {"channel": "FE0ECFAD-13D5-401B-847D-77833BD77131", "id": "3", "state": "terminal_failure", "terminal_at": "2026-08-10T11:59:00Z"},
+          {"channel": "FE0ECFAD-13D5-401B-847D-77833BD77131", "id": "4", "state": "expired", "terminal_at": "2026-08-09T11:59:00Z"}
+        ],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 200, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"acks\":{\"1\":true,\"2\":false,\"3\":false,\"4\":false,\"5\":false}}"},
+        "durable": {"quota": "unchanged", "request": "unchanged", "ack": "unchanged", "outbox": "unchanged", "visibility": "unchanged"},
+        "events": []
+      }
+    },
+    {
+      "id": "ack.channel-identity-is-case-sensitive",
+      "rule": "case-distinct valid GUID text cannot observe an acknowledgment from another channel",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/ack",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [{"name": "channel", "value": "fe0ecfad-13d5-401b-847d-77833bd77131"}],
+        "body": {"kind": "utf8", "value": "{\"acks\":[1]}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": true, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "ack_rows": [{"channel": "FE0ECFAD-13D5-401B-847D-77833BD77131", "id": "1", "state": "indexed", "terminal_at": "2026-08-10T11:59:00Z"}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 200, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"acks\":{\"1\":false}}"},
+        "durable": {"quota": "unchanged", "request": "unchanged", "ack": "unchanged", "outbox": "unchanged", "visibility": "unchanged"},
+        "events": []
+      }
+    },
+    {
+      "id": "ack.missing-channel",
+      "rule": "the ACK endpoint requires the same channel scope as ingestion",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/ack",
+        "headers": [{"name": "Authorization", "value": "Splunk {{token:primary}}"}],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"acks\":[1]}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": true, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Data channel is missing\",\"code\":10}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "ack.conflicting-channel-sources",
+      "rule": "supplying both header and query channel is invalid even when the values are equal",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/ack",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"}
+        ],
+        "query": [{"name": "channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"}],
+        "body": {"kind": "utf8", "value": "{\"acks\":[1]}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": true, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data channel\",\"code\":11}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "ack.disabled-for-token",
+      "rule": "an ACK query against an otherwise valid non-ACK token returns ACK is disabled",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/ack",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"}
+        ],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"acks\":[1]}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": false, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"ACK is disabled\",\"code\":14}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "ack.duplicate-query-id-rejected",
+      "rule": "duplicate ACK IDs fail complete validation rather than being silently canonicalized",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/ack",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"}
+        ],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"acks\":[1,1]}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": true, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": []
+      },
+      "expect": {
+        "http": {"status": 400, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"Invalid data format\",\"code\":6}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    },
+    {
+      "id": "ack.capacity-rejects-before-admission",
+      "rule": "ACK capacity rejection occurs before quota, request, outbox, or visibility creation",
+      "request": {
+        "method": "POST",
+        "path": "/services/collector/event",
+        "headers": [
+          {"name": "Authorization", "value": "Splunk {{token:primary}}"},
+          {"name": "X-Splunk-Request-Channel", "value": "FE0ECFAD-13D5-401B-847D-77833BD77131"}
+        ],
+        "query": [],
+        "body": {"kind": "utf8", "value": "{\"event\":\"x\"}"}
+      },
+      "setup": {
+        "received_at": "2026-08-10T12:00:00Z",
+        "token": {"alias": "primary", "purpose": "hec", "state": "active", "ack_enabled": true, "allowed_indexes": ["main"], "defaults": {"index": "main"}},
+        "indexes": [{"name": "main", "state": "active", "ingestion_enabled": true}],
+        "conditions": ["ack_capacity"]
+      },
+      "expect": {
+        "http": {"status": 429, "headers": {"Content-Type": "application/json; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"}, "body_utf8": "{\"text\":\"HEC ACK channel is at capacity and cannot process any more requests\",\"code\":27}"},
+        "durable": {"quota": "absent", "request": "absent", "ack": "absent", "outbox": "absent", "visibility": "absent"},
+        "events": []
+      }
+    }
+  ]
+}

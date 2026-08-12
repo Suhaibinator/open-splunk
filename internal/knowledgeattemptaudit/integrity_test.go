@@ -17,7 +17,7 @@ import (
 func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
 	t.Parallel()
 	_, database := openTestDatabase(t)
-	if _, err := database.SQLDB().Exec(`
+	if _, err := database.SQLDB().ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_tenant_state (
 			tenant_id, first_sequence, next_sequence, retained_count
 		) VALUES ('tenant-direct', 1, 1, 0)
@@ -55,7 +55,7 @@ func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			values := append([]any(nil), valid...)
 			values[test.index] = test.value
-			if _, err := database.SQLDB().Exec(statement, values...); err == nil {
+			if _, err := database.SQLDB().ExecContext(t.Context(), statement, values...); err == nil {
 				t.Fatal("invalid direct insert unexpectedly succeeded")
 			}
 		})
@@ -67,14 +67,14 @@ func TestMigrationRejectsDirectInvalidTaxonomyAndPrivacyShapes(t *testing.T) {
 	listWithObject[11] = "field_alias"
 	listWithObject[12] = int64(1)
 	listWithObject[13] = "app"
-	if _, err := database.SQLDB().Exec(statement, listWithObject...); err == nil {
+	if _, err := database.SQLDB().ExecContext(t.Context(), statement, listWithObject...); err == nil {
 		t.Fatal("list attempt retained object metadata")
 	}
 	userWithApp := append([]any(nil), valid...)
 	userWithApp[5] = "user"
 	userWithApp[8] = "not_administrator"
 	userWithApp[9] = "app_012345678901234567890A"
-	if _, err := database.SQLDB().Exec(statement, userWithApp...); err == nil {
+	if _, err := database.SQLDB().ExecContext(t.Context(), statement, userWithApp...); err == nil {
 		t.Fatal("non-administrator attempt retained app metadata")
 	}
 	var state tenantStateRecord
@@ -248,17 +248,17 @@ func TestSequenceExhaustionFailsClosedWithoutWrapping(t *testing.T) {
 	_, database := openTestDatabase(t)
 	store := newTestStore(t, database)
 	admin := actorContext(t, audit.ActorRoleAdministrator, "administrator")
-	if _, err := database.SQLDB().Exec(`
+	if _, err := database.SQLDB().ExecContext(t.Context(), `
 		INSERT INTO knowledge_attempt_audit_tenant_state (
 			tenant_id, first_sequence, next_sequence, retained_count
 		) VALUES ('tenant-exhausted', 1, 1, 0)
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.SQLDB().Exec(`DROP TRIGGER knowledge_attempt_audit_state_transition_is_valid`); err != nil {
+	if _, err := database.SQLDB().ExecContext(t.Context(), `DROP TRIGGER knowledge_attempt_audit_state_transition_is_valid`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.SQLDB().Exec(`
+	if _, err := database.SQLDB().ExecContext(t.Context(), `
 		UPDATE knowledge_attempt_audit_tenant_state
 		SET first_sequence = ?, next_sequence = ?
 		WHERE tenant_id = 'tenant-exhausted'

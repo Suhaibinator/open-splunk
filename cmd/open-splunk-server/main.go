@@ -26,7 +26,9 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collectorfleet"
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	exportjobs "github.com/Suhaibinator/open-splunk/internal/export"
+	"github.com/Suhaibinator/open-splunk/internal/hechttp"
 	"github.com/Suhaibinator/open-splunk/internal/ingest"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchaudit"
@@ -34,6 +36,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchws"
 	"github.com/Suhaibinator/open-splunk/internal/server"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/visibility"
 	"github.com/Suhaibinator/open-splunk/migrations"
 )
@@ -43,7 +46,7 @@ const (
 	shutdownTimeout                    = 35 * time.Second
 	defaultIndexRetention              = ingest.DefaultIndexRetention
 	defaultOwnerID                     = "single-user"
-	splCompatibility                   = "tier-1-dev"
+	splCompatibility                   = spl.CompatibilityVersion
 	auditCursorKeyPurpose              = "audit-event-cursors"
 	searchAttemptAuditCursorKeyPurpose = "search-attempt-audit-cursors"
 	collectorHeartbeatFlushInterval    = time.Second
@@ -86,6 +89,7 @@ type options struct {
 	collectorInsecure                         bool
 	collectorTLSCert                          string
 	collectorTLSKey                           string
+	hecEnabled                                bool
 	indexRetention                            time.Duration
 	searchHistoryMaximumAge                   time.Duration
 	searchHistoryMaximumEntriesPerOwner       int
@@ -454,6 +458,38 @@ func runWithOptions(config options) error {
 			log.Printf("close index data deletion runtime: %v", err)
 		}
 	}()
+	var hecTerminalCleanup *hecTerminalMaintenance
+	if config.hecEnabled {
+		maintenanceConfig := defaultHECTerminalMaintenanceConfig()
+		startupPrune, pruneErr := runHECTerminalPruneBatches(
+			startupContext,
+			sequencer,
+			time.Now().Round(0).UTC().Add(-maintenanceConfig.retention),
+			maintenanceConfig.batchSize,
+			maintenanceConfig.maximumBatches,
+		)
+		if pruneErr != nil {
+			return fmt.Errorf("prune expired HEC terminal requests at startup: %w", pruneErr)
+		}
+		if startupPrune.deleted != 0 {
+			log.Printf("pruned %d expired HEC terminal requests during startup", startupPrune.deleted)
+		}
+		maintenanceConfig.runImmediately = startupPrune.more
+		maintenanceConfig.onError = func(err error) {
+			log.Printf("maintain HEC terminal retention: %v", err)
+		}
+		hecTerminalCleanup, err = newHECTerminalMaintenance(sequencer, maintenanceConfig)
+		if err != nil {
+			return fmt.Errorf("create HEC terminal maintenance: %w", err)
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+			defer cancel()
+			if err := hecTerminalCleanup.Close(ctx); err != nil {
+				log.Printf("close HEC terminal maintenance: %v", err)
+			}
+		}()
+	}
 	var collectorHeartbeats *collectorfleet.HeartbeatRuntime
 	var ingestService opensplunkv1.CollectorIngestServiceServer
 	if strings.TrimSpace(config.collectorAddress) != "" {
@@ -548,17 +584,31 @@ func runWithOptions(config options) error {
 	if err != nil {
 		return fmt.Errorf("create search-history job journal: %w", err)
 	}
+	// Construct the catalog and its immutable resolver before search admission.
+	// Manager captures this exact resolver in its private configuration; no
+	// later HTTP composition can rotate search-time knowledge authority.
+	knowledgeManagement, err := newRuntimeKnowledgeManagement(
+		startupContext,
+		controlDB,
+		config.masterKeyPath,
+		securityStores.auditEvents,
+	)
+	if err != nil {
+		return err
+	}
 	jobs, err := searchjobs.New(searchjobs.Config{
-		Executor:    executor,
-		Snapshotter: visibilitySnapshotter{sequencer: sequencer},
-		Journal:     jobJournal,
+		Executor:          executor,
+		Snapshotter:       visibilitySnapshotter{sequencer: sequencer},
+		Journal:           jobJournal,
+		KnowledgeResolver: knowledgeManagement.resolver,
 		OnJournalError: func(err error) {
 			log.Printf("persist search-job history: %v", err)
 		},
 		OnExecutionError: func(jobID string, code searchjobs.FailureCode, cause error) {
 			log.Print(formatSearchExecutionFailure(jobID, code, cause))
 		},
-		Compiler: compiler,
+		Compiler:        compiler,
+		CompilerVersion: splCompatibility,
 	})
 	if err != nil {
 		return fmt.Errorf("create search job manager: %w", err)
@@ -568,6 +618,15 @@ func runWithOptions(config options) error {
 			log.Printf("close search jobs: %v", err)
 		}
 	}()
+	knowledgePreview, err := knowledgepreview.NewService(knowledgepreview.Config{
+		Searches: jobs,
+		Writer:   knowledgeManagement.writer,
+		Compiler: knowledgepreview.ProductionCompilerAdapter{Compiler: compiler},
+		Executor: executor,
+	})
+	if err != nil {
+		return fmt.Errorf("create knowledge preview service: %w", err)
+	}
 	inspection, err := newRuntimeSearchInspection(
 		runtimeSearchInspectionConfig{
 			Searches:          jobs,
@@ -679,7 +738,7 @@ func runWithOptions(config options) error {
 		clear(appCursorKey)
 		return err
 	}
-	handler, err := newRuntimeHTTPHandler(server.Config{
+	httpConfig := server.Config{
 		SearchJobs:                 jobs,
 		RuntimeReadiness:           connection,
 		SearchInspections:          inspection.service,
@@ -712,14 +771,63 @@ func runWithOptions(config options) error {
 			MaximumExportRows:       exportSettings.maximumRowLimit,
 			MaximumExportBytes:      exportSettings.maximumByteLimit,
 		},
-	}, analysis)
+	}
+	var hecMetrics *hechttp.Metrics
+	if config.hecEnabled {
+		hecMetrics = hechttp.NewMetrics()
+		hecOperations, operationsErr := newRuntimeHECOperations(
+			hecMetrics,
+			sequencer,
+			eventStore,
+		)
+		if operationsErr != nil {
+			clear(appCursorKey)
+			return fmt.Errorf("create HEC operational telemetry: %w", operationsErr)
+		}
+		httpConfig.HECOperations = hecOperations
+		httpConfig.Bootstrap.Features = append(
+			httpConfig.Bootstrap.Features,
+			opensplunkv1.ServerFeature_SERVER_FEATURE_HEC_INGESTION,
+		)
+	}
+	if err := configureRuntimeKnowledgeManagement(
+		&httpConfig,
+		knowledgeManagement,
+		appCatalog,
+		knowledgePreview,
+	); err != nil {
+		clear(appCursorKey)
+		return err
+	}
+	browserHandler, err := newRuntimeHTTPHandler(httpConfig, analysis)
 	// NewHandler clones the key before returning. Erase this temporary caller
 	// copy immediately on both success and failure.
 	clear(appCursorKey)
 	if err != nil {
 		return fmt.Errorf("create HTTP handler: %w", err)
 	}
-	requests := newTrackedHandler(handler)
+	var routedHandler http.Handler = browserHandler
+	var admissionLifecycles []httpAdmissionShutdown
+	if config.hecEnabled {
+		hecHandler, hecErr := newRuntimeHECHandler(runtimeHECConfig{
+			Next:                  browserHandler,
+			Authenticator:         tokenStore,
+			Store:                 eventStore,
+			Sequencer:             sequencer,
+			TenantID:              config.tenantID,
+			DefaultIndexRetention: config.indexRetention,
+			Metrics:               hecMetrics,
+		})
+		if hecErr != nil {
+			return fmt.Errorf("create HEC HTTP handler: %w", hecErr)
+		}
+		routedHandler = hecHandler
+		admissionLifecycles = append(admissionLifecycles, hecHandler)
+	}
+	// Track the complete selected HTTP surface, including HEC authentication
+	// and framing work before token-scoped lifecycle admission.
+	requests := newTrackedHandler(routedHandler)
+	var rootHandler http.Handler = requests
 
 	shutdownContext, rawStopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	var stopSignalsOnce sync.Once
@@ -735,7 +843,7 @@ func runWithOptions(config options) error {
 	httpServer := &httpRuntimeServer{
 		Server: &http.Server{
 			Addr:              config.httpAddress,
-			Handler:           requests,
+			Handler:           rootHandler,
 			TLSConfig:         httpTLSConfig,
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       30 * time.Second,
@@ -755,6 +863,9 @@ func runWithOptions(config options) error {
 		config.httpAddress,
 		httpTransport,
 	)
+	if config.hecEnabled {
+		log.Printf("HEC v0.1 enabled on the existing %s listener", httpTransport)
+	}
 	if collectorListener == nil {
 		log.Printf("collector gRPC listener disabled; configure -collector-grpc-address and TLS to enable ingestion")
 	} else {
@@ -768,11 +879,12 @@ func runWithOptions(config options) error {
 		shutdownContext,
 		httpServer,
 		requests,
-		handler,
+		browserHandler,
 		collectorServer,
 		collectorListener,
 		shutdownTimeout,
 		collectorShutdownGraceTimeout,
+		admissionLifecycles...,
 	)
 	heartbeatCloseErr := closeCollectorHeartbeatRuntime(
 		collectorHeartbeats,
@@ -894,6 +1006,7 @@ func parseFlags() options {
 	flag.BoolVar(&result.collectorInsecure, "collector-grpc-insecure", false, "explicitly allow plaintext collector gRPC on loopback only")
 	flag.StringVar(&result.collectorTLSCert, "collector-tls-cert", "", "PEM certificate for collector gRPC TLS")
 	flag.StringVar(&result.collectorTLSKey, "collector-tls-key", "", "PEM private key for collector gRPC TLS")
+	registerHECEnabledFlag(flag.CommandLine, &result)
 	flag.DurationVar(&result.indexRetention, "default-index-retention", defaultIndexRetention, "retention used when an index does not override it")
 	flag.DurationVar(
 		&result.searchHistoryMaximumAge,
@@ -1109,6 +1222,18 @@ func registerClickHouseSkipMigrationsFlag(
 		"clickhouse-skip-migrations",
 		false,
 		"skip embedded ClickHouse migrations for a pre-provisioned schema",
+	)
+}
+
+func registerHECEnabledFlag(
+	flags *flag.FlagSet,
+	config *options,
+) {
+	flags.BoolVar(
+		&config.hecEnabled,
+		"hec-enabled",
+		false,
+		"enable the complete HEC v0.1 route set on the browser/API listener",
 	)
 }
 

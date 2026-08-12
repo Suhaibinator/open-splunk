@@ -232,7 +232,7 @@ func TestAppMigrationGrandfathersLegacyLabelsButGuardsCanonicalIDs(t *testing.T)
 		t.Fatal("app row adopted a grandfathered saved-search namespace")
 	}
 	const noncanonicalTailID = "app_000000000000000000000B"
-	if validCanonicalAppID(noncanonicalTailID) {
+	if ValidCanonicalAppID(noncanonicalTailID) {
 		t.Fatal("code accepted a noncanonical base64url tail")
 	}
 	if _, err := raw.ExecContext(ctx, `
@@ -689,7 +689,7 @@ func TestAppCatalogEnforcesPerTenantCapacity(t *testing.T) {
 	db := openTestDB(t)
 	catalog := newTestAppCatalog(t, db)
 	scope := AppAccessScope{TenantID: "tenant-full"}
-	for index := 0; index < maximumAppsPerTenant; index++ {
+	for index := 0; index < MaximumAppsPerTenant; index++ {
 		if _, err := catalog.CreateApp(
 			ctx,
 			scope,
@@ -815,6 +815,146 @@ func TestListAppsUsesBoundedDeterministicKeysetPages(t *testing.T) {
 		if len(listed.Apps) != 4 {
 			t.Fatalf("ListApps(%s) count = %d, want 4", sortBy, len(listed.Apps))
 		}
+	}
+}
+
+func TestListAppIdentitiesUsesBoundedIdentityOnlyTenantPlan(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	db := openTestDB(t)
+	catalog := newTestAppCatalog(t, db)
+	index := mustCreateIndex(t, db, enabledIndex("identity-only-default"))
+	scope := AppAccessScope{TenantID: "tenant-identities"}
+	otherScope := AppAccessScope{TenantID: "tenant-identities-other"}
+
+	created := make([]AppWorkspace, 0, 3)
+	for _, item := range []struct {
+		slug        string
+		displayName string
+	}{
+		{slug: "one", displayName: "Zulu"},
+		{slug: "two", displayName: "Alpha"},
+		{slug: "three", displayName: "Middle"},
+	} {
+		definition := appDefinitionWithIndexes(item.slug, index.Definition.Name)
+		definition.DisplayName = item.displayName
+		app, err := catalog.CreateApp(ctx, scope, definition)
+		if err != nil {
+			t.Fatalf("CreateApp(%s): %v", item.slug, err)
+		}
+		created = append(created, app)
+	}
+	archived, err := catalog.SetAppState(
+		ctx,
+		scope,
+		AppSelector{AppID: created[1].ID},
+		created[1].Version,
+		AppStateArchived,
+	)
+	if err != nil {
+		t.Fatalf("archive app: %v", err)
+	}
+	if _, err := catalog.CreateApp(
+		ctx,
+		otherScope,
+		validAppDefinition("other"),
+	); err != nil {
+		t.Fatalf("CreateApp(other tenant): %v", err)
+	}
+
+	partial, err := catalog.ListAppIdentities(ctx, scope, 2)
+	if err != nil {
+		t.Fatalf("ListAppIdentities(partial): %v", err)
+	}
+	if partial.Complete || len(partial.AppIDs) != 0 {
+		t.Fatalf("partial identity authority = %#v", partial)
+	}
+
+	complete, err := catalog.ListAppIdentities(ctx, scope, 3)
+	if err != nil {
+		t.Fatalf("ListAppIdentities(complete): %v", err)
+	}
+	want := []string{created[0].ID, created[1].ID, created[2].ID}
+	if !complete.Complete || !slices.Equal(complete.AppIDs, want) {
+		t.Fatalf("complete identity authority = %#v, want %#v", complete, want)
+	}
+	if archived.State != AppStateArchived {
+		t.Fatalf("archived state = %q", archived.State)
+	}
+	complete.AppIDs[0] = "app_000000000000000000999A"
+	again, err := catalog.ListAppIdentities(ctx, scope, 3)
+	if err != nil {
+		t.Fatalf("ListAppIdentities(detachment): %v", err)
+	}
+	if !slices.Equal(again.AppIDs, want) {
+		t.Fatalf("detached identity authority = %#v, want %#v", again.AppIDs, want)
+	}
+	for _, maximum := range []uint32{0, MaximumAppsPerTenant + 1} {
+		if _, err := catalog.ListAppIdentities(
+			ctx,
+			scope,
+			maximum,
+		); !errors.Is(err, ErrInvalidArgument) {
+			t.Fatalf("ListAppIdentities(bound %d) error = %v", maximum, err)
+		}
+	}
+
+	type queryPlanRow struct {
+		Detail string `gorm:"column:detail"`
+	}
+	var plan []queryPlanRow
+	if err := db.GORMDB().WithContext(ctx).Raw(
+		"EXPLAIN QUERY PLAN "+listAppIdentitiesSQL,
+		canonicalAppIDBytes+1,
+		len(AppStateArchived)+1,
+		scope.TenantID,
+		4,
+	).Scan(&plan).Error; err != nil {
+		t.Fatalf("explain identity-only query: %v", err)
+	}
+	if len(plan) != 1 ||
+		!strings.Contains(
+			plan[0].Detail,
+			"USING INDEX app_workspaces_tenant_display_id_idx (tenant_id=?)",
+		) ||
+		strings.Contains(plan[0].Detail, "USE TEMP B-TREE") ||
+		strings.Contains(plan[0].Detail, "app_default_indexes") {
+		t.Fatalf("identity-only query plan = %#v", plan)
+	}
+
+	connection, err := db.SQLDB().Conn(ctx)
+	if err != nil {
+		t.Fatalf("reserve corruption connection: %v", err)
+	}
+	if _, err := connection.ExecContext(
+		ctx,
+		`PRAGMA ignore_check_constraints = ON`,
+	); err != nil {
+		_ = connection.Close()
+		t.Fatalf("ignore test-only constraints: %v", err)
+	}
+	privateState := strings.Repeat("private-state-sentinel", 4_096)
+	if _, err := connection.ExecContext(
+		ctx,
+		`UPDATE app_workspaces SET state = ? WHERE app_id = ?`,
+		privateState,
+		created[0].ID,
+	); err != nil {
+		_ = connection.Close()
+		t.Fatalf("create oversized persisted-state corruption: %v", err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("close corruption connection: %v", err)
+	}
+	if _, err := catalog.ListAppIdentities(
+		ctx,
+		scope,
+		3,
+	); err == nil ||
+		!strings.Contains(err.Error(), "invalid app record") ||
+		strings.Contains(err.Error(), "private-state-sentinel") {
+		t.Fatalf("ListAppIdentities(corrupt state) error = %v", err)
 	}
 }
 
@@ -1117,6 +1257,8 @@ func TestAppListRejectsCorruptCatalogRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := connection.ExecContext(ctx, `
+		DROP TRIGGER app_catalog_revision_transition_is_exact;
+		DROP TRIGGER app_catalog_revision_delete_is_forbidden;
 		UPDATE app_catalog_revisions SET revision = 0 WHERE tenant_id = ?`,
 		scope.TenantID,
 	); err != nil {

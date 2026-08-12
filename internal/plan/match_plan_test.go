@@ -206,6 +206,7 @@ func TestScalarFunctionBooleanTraitsRemainInParity(t *testing.T) {
 		{spl.ScalarFunctionCeil, ScalarFunctionCeil, false},
 		{spl.ScalarFunctionFloor, ScalarFunctionFloor, false},
 		{spl.ScalarFunctionMVCount, ScalarFunctionMVCount, false},
+		{spl.ScalarFunctionMVSort, ScalarFunctionMVSort, false},
 		{spl.ScalarFunctionMatch, ScalarFunctionMatch, true},
 		{spl.ScalarFunctionLike, ScalarFunctionLike, true},
 		{spl.ScalarFunctionNow, ScalarFunctionNow, false},

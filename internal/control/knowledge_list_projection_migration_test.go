@@ -44,7 +44,7 @@ func TestKnowledgeListProjectionMigrationFreshAndUpgrade(t *testing.T) {
 				"knowledge_object_list_projection_seals",
 			} {
 				var withoutRowID, strict int
-				if err := raw.QueryRow(`
+				if err := raw.QueryRowContext(t.Context(), `
 					SELECT wr, strict FROM pragma_table_list WHERE name = ?`, table,
 				).Scan(&withoutRowID, &strict); err != nil {
 					t.Fatalf("inspect %s: %v", table, err)
@@ -66,7 +66,7 @@ func TestKnowledgeListProjectionMigrationRejectsUnprojectedLegacyCatalog(t *test
 		t.Fatalf("apply through migration 0024: %v", err)
 	}
 	seedKnowledgeMigrationApp(t, raw)
-	if _, err := raw.Exec(`
+	if _, err := raw.ExecContext(t.Context(), `
 		INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-a');
 		INSERT INTO knowledge_definition_blobs (
 			tenant_id, definition_digest, definition_proto,
@@ -128,7 +128,7 @@ func TestKnowledgeListProjectionCompletenessImmutabilityAndFiltering(t *testing.
 	}, 12)
 
 	var ledgerBefore int
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT projection_bytes FROM knowledge_projection_tenant_ledgers
 		WHERE tenant_id = 'tenant-a'`).Scan(&ledgerBefore); err != nil {
 		t.Fatalf("read projection ledger: %v", err)
@@ -161,11 +161,11 @@ func TestKnowledgeListProjectionCompletenessImmutabilityAndFiltering(t *testing.
 		WHERE tenant_id = 'tenant-a'`)
 
 	// Declared counts and bytes must agree before the projection can be sealed.
-	incomplete, err := raw.Begin()
+	incomplete, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin incomplete projection: %v", err)
 	}
-	if _, err := incomplete.Exec(`
+	if _, err := incomplete.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_list_projections (
 			tenant_id, knowledge_object_id, object_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -200,7 +200,7 @@ func TestKnowledgeListProjectionCompletenessImmutabilityAndFiltering(t *testing.
 	assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t, raw)
 
 	var generatedBytes, descriptionBytes, selectorBytes, canonicalBytes int
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT projection_bytes, length(CAST(description AS BLOB)),
 		       selector_value_bytes, canonical_selector_bytes
 		FROM knowledge_object_list_projections
@@ -347,7 +347,7 @@ func TestKnowledgeListProjectionCompletenessImmutabilityAndFiltering(t *testing.
 	// matching remains case-sensitive. Alpha sorts before Beta, so this also
 	// catches an implementation that retrieves one row and filters afterward.
 	var filtered string
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT projection.name
 		FROM knowledge_object_list_projections AS projection
 		JOIN knowledge_object_list_projection_seals AS seal
@@ -369,7 +369,7 @@ func TestKnowledgeListProjectionCompletenessImmutabilityAndFiltering(t *testing.
 		SELECT count(*) FROM knowledge_object_list_projections
 		WHERE tenant_id = 'tenant-a' AND instr(name, 'beta') > 0`)
 
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT projection.name
 		FROM knowledge_object_list_projections AS projection
 		JOIN knowledge_object_list_projection_seals AS seal
@@ -413,7 +413,7 @@ func TestKnowledgeListProjectionCompletenessImmutabilityAndFiltering(t *testing.
 
 	// EXISTS keeps one parent row even when several child patterns match Alpha;
 	// deduplication therefore happens before ordering and LIMIT.
-	rows, err := raw.Query(`
+	rows, err := raw.QueryContext(t.Context(), `
 		SELECT projection.name
 		FROM knowledge_object_list_projections AS projection
 		JOIN knowledge_object_list_projection_seals AS seal
@@ -451,7 +451,7 @@ func TestKnowledgeListProjectionCompletenessImmutabilityAndFiltering(t *testing.
 		t.Fatalf("selector-filtered projections = %v", selectorFiltered)
 	}
 
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT projection.name
 		FROM knowledge_object_list_projections AS projection
 		JOIN knowledge_object_list_projection_seals AS seal
@@ -503,7 +503,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 	}, 10)
 
 	var firstBytes int
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT projection_bytes FROM knowledge_projection_tenant_ledgers
 		WHERE tenant_id = 'tenant-a'`).Scan(&firstBytes); err != nil {
 		t.Fatalf("read initial ledger: %v", err)
@@ -523,7 +523,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 
 	// Stage the immutable snapshot first, then publish it by moving the current
 	// registry tuple. The AFTER trigger removes version 1 in dependency order.
-	lifecycle, err := raw.Begin()
+	lifecycle, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin projection lifecycle: %v", err)
 	}
@@ -534,7 +534,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 		Name:        "Life",
 		Description: "second",
 	})
-	if _, err := lifecycle.Exec(`
+	if _, err := lifecycle.ExecContext(t.Context(), `
 		UPDATE knowledge_objects
 		SET current_version = 2, updated_at_unix_micro = 20
 		WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-life'`); err != nil {
@@ -554,7 +554,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 		  AND object_version = 1`)
 
 	var secondBytes int
-	if err := raw.QueryRow(`
+	if err := raw.QueryRowContext(t.Context(), `
 		SELECT projection_bytes FROM knowledge_projection_tenant_ledgers
 		WHERE tenant_id = 'tenant-a'`).Scan(&secondBytes); err != nil {
 		t.Fatalf("read replacement ledger: %v", err)
@@ -568,7 +568,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 
 	// Publishing a version whose projection has not been sealed fails before
 	// the current tuple can move; the transaction rollback removes all staging.
-	missingSeal, err := raw.Begin()
+	missingSeal, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin missing-seal lifecycle: %v", err)
 	}
@@ -576,7 +576,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 	insertProjectionParent(t, missingSeal, projectionFixture{
 		ObjectID: "ko-life", Version: 3, Name: "Life", Description: "third",
 	})
-	if _, err := missingSeal.Exec(`
+	if _, err := missingSeal.ExecContext(t.Context(), `
 		UPDATE knowledge_objects
 		SET current_version = 3, updated_at_unix_micro = 30
 		WHERE tenant_id = 'tenant-a' AND knowledge_object_id = 'ko-life'`); err == nil || !strings.Contains(err.Error(), "requires exact sealed") {
@@ -599,7 +599,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 
 	// A later injected failure also restores the old sealed projection and the
 	// exact ledger, despite a complete replacement having been staged.
-	rollback, err := raw.Begin()
+	rollback, err := raw.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin rollback lifecycle: %v", err)
 	}
@@ -607,7 +607,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 	insertProjectionRows(t, rollback, projectionFixture{
 		ObjectID: "ko-life", Version: 3, Name: "Life", Description: "third",
 	})
-	if _, err := rollback.Exec(`
+	if _, err := rollback.ExecContext(t.Context(), `
 		UPDATE knowledge_projection_tenant_ledgers
 		SET projection_bytes = projection_bytes + 1
 		WHERE tenant_id = 'tenant-a'`); err == nil || !strings.Contains(err.Error(), "ledger transition is invalid") {
@@ -634,7 +634,7 @@ func TestKnowledgeListProjectionCapacityLedgerAndLifecycle(t *testing.T) {
 func assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t *testing.T, db *sql.DB) {
 	t.Helper()
 
-	duplicate, err := db.Begin()
+	duplicate, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin duplicate-selector projection: %v", err)
 	}
@@ -645,7 +645,7 @@ func assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t *testing.T,
 			{Dimension: "index", Ordinal: 1, MatchKind: "wildcard", Value: "same"},
 		},
 	})
-	if _, err := duplicate.Exec(`
+	if _, err := duplicate.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_list_selector_patterns (
 			tenant_id, knowledge_object_id, object_version,
 			dimension, ordinal, match_kind, value
@@ -659,7 +659,7 @@ func assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t *testing.T,
 		t.Fatalf("roll back duplicate selector: %v", err)
 	}
 
-	unordered, err := db.Begin()
+	unordered, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin unordered-selector projection: %v", err)
 	}
@@ -674,7 +674,7 @@ func assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t *testing.T,
 	for _, selector := range fixture.Selectors {
 		insertProjectionSelector(t, unordered, fixture, selector)
 	}
-	if _, err := unordered.Exec(`
+	if _, err := unordered.ExecContext(t.Context(), `
 		INSERT INTO knowledge_object_list_projection_seals (
 			tenant_id, knowledge_object_id, object_version,
 			projection_bytes, canonical_selector_bytes
@@ -690,7 +690,7 @@ func assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t *testing.T,
 		t.Fatalf("roll back unordered selector: %v", err)
 	}
 
-	invalid, err := db.Begin()
+	invalid, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin invalid-selector projection: %v", err)
 	}
@@ -699,7 +699,7 @@ func assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t *testing.T,
 		Selectors: []projectionSelector{{Dimension: "host", Ordinal: 0, MatchKind: "exact", Value: "valid"}},
 	})
 	for _, value := range []string{" padded", "bad\nvalue"} {
-		if _, err := invalid.Exec(`
+		if _, err := invalid.ExecContext(t.Context(), `
 			INSERT INTO knowledge_object_list_selector_patterns (
 				tenant_id, knowledge_object_id, object_version,
 				dimension, ordinal, match_kind, value
@@ -722,7 +722,7 @@ func assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t *testing.T,
 			dimension, ordinal, match_kind, value
 		) VALUES ('tenant-a', 'ko-alpha', 2, 'host', 0, 'regex', 'valid')`,
 	} {
-		if _, err := invalid.Exec(query); err == nil {
+		if _, err := invalid.ExecContext(t.Context(), query); err == nil {
 			_ = invalid.Rollback()
 			t.Fatalf("invalid selector shape unexpectedly succeeded: %s", query)
 		}
@@ -735,12 +735,12 @@ func assertUnsealedProjectionRejectsDuplicateAndUnorderedSelectors(t *testing.T,
 func assertProjectionPublicationGuards(t *testing.T, db *sql.DB, ledgerBefore int) {
 	t.Helper()
 
-	missing, err := db.Begin()
+	missing, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin missing-projection publication: %v", err)
 	}
 	insertKnowledgeVersion(t, missing, "ko-registry-missing", 1, "Missing", "create", 13)
-	if _, err := missing.Exec(`
+	if _, err := missing.ExecContext(t.Context(), `
 		INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -757,7 +757,7 @@ func assertProjectionPublicationGuards(t *testing.T, db *sql.DB, ledgerBefore in
 		t.Fatalf("roll back missing-projection publication: %v", err)
 	}
 
-	mismatch, err := db.Begin()
+	mismatch, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin mismatched-projection publication: %v", err)
 	}
@@ -765,7 +765,7 @@ func assertProjectionPublicationGuards(t *testing.T, db *sql.DB, ledgerBefore in
 	insertProjectionRows(t, mismatch, projectionFixture{
 		ObjectID: "ko-registry-mismatch", Version: 1, Name: "Projection",
 	})
-	if _, err := mismatch.Exec(`
+	if _, err := mismatch.ExecContext(t.Context(), `
 		INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -782,7 +782,7 @@ func assertProjectionPublicationGuards(t *testing.T, db *sql.DB, ledgerBefore in
 		t.Fatalf("roll back mismatched-projection publication: %v", err)
 	}
 
-	orphan, err := db.Begin()
+	orphan, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin orphaned sealed projection: %v", err)
 	}
@@ -843,7 +843,7 @@ func enableRecursiveProjectionTriggers(t *testing.T, db *sql.DB) {
 	t.Helper()
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	if _, err := db.Exec(`PRAGMA recursive_triggers = ON`); err != nil {
+	if _, err := db.ExecContext(t.Context(), `PRAGMA recursive_triggers = ON`); err != nil {
 		t.Fatalf("enable recursive projection triggers: %v", err)
 	}
 	assertIntegerQuery(t, db, 1, `PRAGMA recursive_triggers`)
@@ -852,27 +852,35 @@ func enableRecursiveProjectionTriggers(t *testing.T, db *sql.DB) {
 func seedProjectionPrerequisites(t *testing.T, db *sql.DB) {
 	t.Helper()
 	seedKnowledgeMigrationApp(t, db)
-	if _, err := db.Exec(`
-		INSERT INTO knowledge_catalog_tenants (tenant_id) VALUES ('tenant-a');
+	if _, err := db.ExecContext(t.Context(), `
+		INSERT INTO knowledge_catalog_tenants (tenant_id)
+		SELECT 'tenant-a'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_catalog_tenants WHERE tenant_id = 'tenant-a'
+		);
 		INSERT INTO knowledge_definition_blobs (
 			tenant_id, definition_digest, definition_proto,
 			definition_bytes, created_at_unix_micro
 		) VALUES ('tenant-a', zeroblob(32), X'01', 1, 10);
 		INSERT INTO knowledge_projection_tenant_ledgers (tenant_id)
-		VALUES ('tenant-a')`); err != nil {
+		SELECT 'tenant-a'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM knowledge_projection_tenant_ledgers
+			WHERE tenant_id = 'tenant-a'
+		)`); err != nil {
 		t.Fatalf("seed projection prerequisites: %v", err)
 	}
 }
 
 func insertProjectedKnowledgeObject(t *testing.T, db *sql.DB, fixture projectionFixture, timestamp int64) {
 	t.Helper()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("begin projected object insert: %v", err)
 	}
 	insertKnowledgeVersion(t, tx, fixture.ObjectID, fixture.Version, fixture.Name, "create", timestamp)
 	insertProjectionRows(t, tx, fixture)
-	if _, err := tx.Exec(`
+	if _, err := tx.ExecContext(t.Context(), `
 		INSERT INTO knowledge_objects (
 			tenant_id, knowledge_object_id, current_version,
 			app_id, owner_id, object_type, name, sharing_scope, state,
@@ -892,6 +900,22 @@ func insertProjectedKnowledgeObject(t *testing.T, db *sql.DB, fixture projection
 
 func insertKnowledgeVersion(t *testing.T, exec projectionExecer, objectID string, version int, name, mutation string, timestamp int64) {
 	t.Helper()
+	insertKnowledgeVersionWithDigest(
+		t, exec, objectID, version, name, mutation, timestamp, make([]byte, 32),
+	)
+}
+
+func insertKnowledgeVersionWithDigest(
+	t *testing.T,
+	exec projectionExecer,
+	objectID string,
+	version int,
+	name string,
+	mutation string,
+	timestamp int64,
+	digest []byte,
+) {
+	t.Helper()
 	if _, err := exec.Exec(`
 		INSERT INTO knowledge_object_versions (
 			tenant_id, knowledge_object_id, object_version,
@@ -900,12 +924,12 @@ func insertKnowledgeVersion(t *testing.T, exec projectionExecer, objectID string
 			created_at_unix_micro
 		) VALUES (
 			'tenant-a', ?, ?, ?, 'owner-a', 'field_extraction', ?,
-			'private', 'active', zeroblob(32), 0, ?, ?
+			'private', 'active', ?, 0, ?, ?
 		);
 		INSERT INTO knowledge_object_dependency_seals (
 			tenant_id, knowledge_object_id, object_version, dependency_count
 		) VALUES ('tenant-a', ?, ?, 0)`,
-		objectID, version, knowledgeMigrationTestAppID, name, mutation, timestamp,
+		objectID, version, knowledgeMigrationTestAppID, name, digest, mutation, timestamp,
 		objectID, version); err != nil {
 		t.Fatalf("insert object version %s/%d: %v", objectID, version, err)
 	}
@@ -979,7 +1003,7 @@ func insertProjectionSelector(t *testing.T, exec projectionExecer, fixture proje
 func assertProjectionTriggerContains(t *testing.T, db *sql.DB, trigger, fragment string) {
 	t.Helper()
 	var sqlText string
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(t.Context(), `
 		SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?`, trigger,
 	).Scan(&sqlText); err != nil {
 		t.Fatalf("read trigger %s: %v", trigger, err)
@@ -998,7 +1022,7 @@ func assertProjectionTriggerFragmentCount(
 ) {
 	t.Helper()
 	var sqlText string
-	if err := db.QueryRow(`
+	if err := db.QueryRowContext(t.Context(), `
 		SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?`, trigger,
 	).Scan(&sqlText); err != nil {
 		t.Fatalf("read trigger %s: %v", trigger, err)
