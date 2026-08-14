@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -149,19 +150,11 @@ func runWithOptions(config options) error {
 		return fmt.Errorf("open embedded release: %w", err)
 	}
 	if config.verifyEmbeddedRelease {
-		if err := buildinfo.WriteIdentity(os.Stdout, buildinfo.Identity{
-			ApplicationVersion: release.Metadata.ApplicationVersion,
-			SourceRevision:     release.Metadata.SourceRevision,
-		}); err != nil {
-			return err
-		}
-		_, err := fmt.Fprintf(
+		return writeEmbeddedReleaseVerification(
 			os.Stdout,
-			"ui_build_id=%s\nui_sha256=%s\n",
-			release.Metadata.UIBuildID,
-			release.Metadata.UI.SHA256,
+			release,
+			splCompatibility,
 		)
-		return err
 	}
 	httpTLSConfig, err := loadHTTPServerTLSConfig(
 		config.httpTLSCert,
@@ -898,6 +891,33 @@ func runWithOptions(config options) error {
 		)
 	}
 	return errors.Join(serveErr, heartbeatCloseErr)
+}
+
+func writeEmbeddedReleaseVerification(
+	output io.Writer,
+	release opensplunk.Release,
+	compatibilityVersion string,
+) error {
+	if output == nil {
+		return errors.New("write embedded release verification: output is nil")
+	}
+	if !searchjobs.ValidCompilerVersion(compatibilityVersion) {
+		return errors.New("write embedded release verification: SPL compatibility version is invalid")
+	}
+	if err := buildinfo.WriteIdentity(output, buildinfo.Identity{
+		ApplicationVersion: release.Metadata.ApplicationVersion,
+		SourceRevision:     release.Metadata.SourceRevision,
+	}); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(
+		output,
+		"spl_compatibility_version=%s\nui_build_id=%s\nui_sha256=%s\n",
+		compatibilityVersion,
+		release.Metadata.UIBuildID,
+		release.Metadata.UI.SHA256,
+	)
+	return err
 }
 
 func closeCollectorHeartbeatRuntime(

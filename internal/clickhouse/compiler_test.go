@@ -962,8 +962,14 @@ func TestCompileNumericBinPreservesSourceAndOutputSchemaWithAS(t *testing.T) {
 	if !slices.Equal(overwritten.OutputFields, []string{"level", "count"}) {
 		t.Fatalf("collision output fields = %v", overwritten.OutputFields)
 	}
-	if !strings.Contains(overwritten.SQL, `REPLACE (`) || !strings.Contains(overwritten.SQL, `AS "level"`) {
-		t.Fatalf("existing destination is not overwritten:\n%s", overwritten.SQL)
+	// A transforming stats group is logical "level" but physically retained as
+	// __os_group_0. The first public materialization must be appended; REPLACE
+	// would ask ClickHouse to replace a nonexistent same-named input column.
+	if !strings.Contains(overwritten.SQL,
+		`SELECT *, "__os_numeric_bin_candidate_4" AS "level"`) ||
+		strings.Contains(overwritten.SQL,
+			`REPLACE ("__os_numeric_bin_candidate_4" AS "level")`) {
+		t.Fatalf("private-backed destination is not materialized publicly:\n%s", overwritten.SQL)
 	}
 
 	openSchema := compileSPL(t, `index=gradethis | bin severity span=10 AS band`)
@@ -4751,7 +4757,7 @@ func TestCompileChartRowColumnMatchesStatsGroupColumn(t *testing.T) {
 			source:       `index=gradethis | chart count OVER _raw BY level`,
 			kind:         ChartRowKindMixed,
 			databaseType: "String",
-			required:     `CAST(assumeNotNull("__os_ch_row_value") AS String) AS "__os_ch_row"`,
+			required:     `tuple(CAST(assumeNotNull("__os_ch_row_value") AS String), "__os_ch_row_semantic_bytes") AS "__os_ch_row"`,
 		},
 		{
 			// A statically null column is the String group column stats BY

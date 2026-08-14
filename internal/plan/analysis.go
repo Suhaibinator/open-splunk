@@ -464,6 +464,11 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 		return nil
 	case *Filter:
 		return analyzer.visitExpression(operator.Expression, depth+1)
+	case *RegexFilter:
+		if operator == nil {
+			return errors.New("analyze logical query: regex filter is invalid")
+		}
+		return analyzer.addField(operator.Input, depth+1)
 	case *Project:
 		return analyzer.addFields(operator.Fields, depth+1)
 	case *Extend:
@@ -476,6 +481,68 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			}
 		}
 		return nil
+	case *Strcat:
+		if operator == nil || len(operator.Operands) < 2 ||
+			len(operator.Operands) > spl.MaximumConcatenationOperands {
+			return errors.New("analyze logical query: strcat is invalid")
+		}
+		if err := analyzer.validateField(operator.Destination, depth+1); err != nil {
+			return err
+		}
+		for _, operand := range operator.Operands {
+			if err := analyzer.visitScalarExpression(operand, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *FillNull:
+		if operator == nil || len(operator.Fields) < 1 ||
+			len(operator.Fields) > spl.MaximumV03ProjectionFields ||
+			!utf8.ValidString(operator.Value) {
+			return errors.New("analyze logical query: fillnull is invalid")
+		}
+		return analyzer.addFields(operator.Fields, depth+1)
+	case *RowTotal:
+		if operator == nil || len(operator.Inputs) < 1 ||
+			len(operator.Inputs) > spl.MaximumV03ProjectionFields {
+			return errors.New("analyze logical query: row total is invalid")
+		}
+		if err := analyzer.validateOutputName(operator.Output, depth+1); err != nil {
+			return err
+		}
+		for range len(operator.Inputs) - 1 {
+			if err := analyzer.chargeArithmeticOperator(); err != nil {
+				return err
+			}
+		}
+		return analyzer.addFields(operator.Inputs, depth+1)
+	case *OrderedDelta:
+		if operator == nil || operator.Previous < 1 ||
+			operator.Previous > spl.MaximumStreamStatsWindow ||
+			!validOrderedDeltaOutput(operator.Input.Name, operator.Output) {
+			return errors.New("analyze logical query: ordered delta is invalid")
+		}
+		if err := analyzer.validateOutputName(operator.Output, depth+1); err != nil {
+			return err
+		}
+		if err := analyzer.chargeArithmeticOperator(); err != nil {
+			return err
+		}
+		return analyzer.addField(operator.Input, depth+1)
+	case *MakeMultivalue:
+		if operator == nil || operator.Delimiter == "" ||
+			!utf8.ValidString(operator.Delimiter) ||
+			len(operator.Delimiter) > spl.MaximumMakeMVDelimiterBytes {
+			return errors.New("analyze logical query: makemv is invalid")
+		}
+		return analyzer.addField(operator.Input, depth+1)
+	case *ExpandMultivalue:
+		if operator == nil || operator.Limit > spl.MaximumMVExpandLimit ||
+			operator.QueryOrdinal < 1 ||
+			int(operator.QueryOrdinal) > MaximumMVExpandStages {
+			return errors.New("analyze logical query: mvexpand is invalid")
+		}
+		return analyzer.addField(operator.Input, depth+1)
 	case *TimeBucket:
 		if err := analyzer.validateField(operator.Output, depth+1); err != nil {
 			return err
@@ -700,6 +767,8 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 	case *Deduplicate:
 		return analyzer.addFields(operator.Keys, depth+1)
 	case *Limit:
+		return nil
+	case *Reverse:
 		return nil
 	default:
 		return fmt.Errorf("analyze logical query: unsupported operator %T", operator)

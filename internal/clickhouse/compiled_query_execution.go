@@ -18,10 +18,9 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v6 additionally binds the stats partitions whole-query max_threads hint.
-// Execution digests minted before that compiler-owned execution setting became
-// authoritative must never compare equal to the stronger contract.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v7"
+// v9 additionally binds the exact physical nullability and hidden semantic
+// Bytes authority for byte-capable fixed String outputs.
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v9"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -419,6 +418,8 @@ func (compiled CompiledQuery) EqualForExecution(other CompiledQuery) bool {
 
 func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, bool) {
 	if !validResultContainerOutputs(compiled) ||
+		!validResultOptionalMultivalueOutputs(compiled) ||
+		!validResultStringOrBytesOutputs(compiled) ||
 		!validResultFieldPresentations(compiled) ||
 		compiled.statsPartitionsMaxThreadsHint > maximumStatsPartitionsMaxThreadsHint {
 		return compiledExecutionSeal{}, false
@@ -438,6 +439,17 @@ func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, boo
 	writeUint64(digest, uint64(len(compiled.ContainerOutputs)))
 	for _, output := range compiled.ContainerOutputs {
 		writeUint64(digest, uint64(output.OutputIndex))
+	}
+	writeBool(digest, compiled.OptionalMultivalueOutputs == nil)
+	writeUint64(digest, uint64(len(compiled.OptionalMultivalueOutputs)))
+	for _, output := range compiled.OptionalMultivalueOutputs {
+		writeUint64(digest, uint64(output.OutputIndex))
+	}
+	writeBool(digest, compiled.StringOrBytesOutputs == nil)
+	writeUint64(digest, uint64(len(compiled.StringOrBytesOutputs)))
+	for _, output := range compiled.StringOrBytesOutputs {
+		writeUint64(digest, uint64(output.OutputIndex))
+		writeBool(digest, output.Nullable)
 	}
 	writeBool(digest, compiled.SparseFields)
 	writeBool(digest, compiled.atomicResult)
@@ -480,6 +492,7 @@ func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, boo
 		writeUint64(digest, uint64(compiled.Chart.MaxSeries))
 		writeUint64(digest, uint64(compiled.Chart.MaxLabelBytes))
 		writeInt64(digest, int64(compiled.Chart.ValueKind))
+		writeBool(digest, compiled.Chart.RowSemanticBytes)
 	}
 	if compiled.knowledgeEvidence == nil {
 		writeBool(digest, false)
@@ -639,6 +652,8 @@ func (compiled CompiledQuery) CloneForExecution() (CompiledQuery, bool) {
 		compiled.OutputPresentations,
 	)
 	cloned.ContainerOutputs = slices.Clone(compiled.ContainerOutputs)
+	cloned.OptionalMultivalueOutputs = slices.Clone(compiled.OptionalMultivalueOutputs)
+	cloned.StringOrBytesOutputs = slices.Clone(compiled.StringOrBytesOutputs)
 	if compiled.Args == nil {
 		cloned.Args = nil
 	} else {
@@ -773,6 +788,22 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 	total, ok = retainedAdd(
 		total,
 		uint64(cap(compiled.ContainerOutputs))*uint64(unsafe.Sizeof(ResultContainerOutput{})),
+	)
+	if !ok {
+		return 0, false
+	}
+	total, ok = retainedAdd(
+		total,
+		uint64(cap(compiled.OptionalMultivalueOutputs))*
+			uint64(unsafe.Sizeof(ResultOptionalMultivalueOutput{})),
+	)
+	if !ok {
+		return 0, false
+	}
+	total, ok = retainedAdd(
+		total,
+		uint64(cap(compiled.StringOrBytesOutputs))*
+			uint64(unsafe.Sizeof(ResultStringOrBytesOutput{})),
 	)
 	if !ok {
 		return 0, false

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"unicode"
@@ -467,6 +468,10 @@ func describeAuthoredOperator(
 		if concrete == nil {
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
 		}
+	case *plan.RegexFilter, *plan.Reverse:
+		if reflect.ValueOf(concrete).IsNil() {
+			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
+		}
 	case *plan.Project:
 		if concrete == nil {
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
@@ -498,6 +503,36 @@ func describeAuthoredOperator(
 		for index, assignment := range concrete.Assignments {
 			outputs[index] = assignment.Output.Name
 		}
+	case *plan.Strcat:
+		if concrete == nil {
+			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
+		}
+		outputs = []string{concrete.Destination.Name}
+	case *plan.FillNull:
+		if concrete == nil || len(concrete.Fields) > int(maximumStageFields) {
+			return "", nil, spl.Range{}, invalidProjection("logical FillNull is invalid")
+		}
+		outputs = fieldRefNames(concrete.Fields)
+	case *plan.RowTotal:
+		if concrete == nil {
+			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
+		}
+		outputs = []string{concrete.Output}
+	case *plan.OrderedDelta:
+		if concrete == nil {
+			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
+		}
+		outputs = []string{concrete.Output}
+	case *plan.MakeMultivalue:
+		if concrete == nil {
+			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
+		}
+		outputs = []string{concrete.Input.Name}
+	case *plan.ExpandMultivalue:
+		if concrete == nil {
+			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")
+		}
+		outputs = []string{concrete.Input.Name}
 	case *plan.TimeBucket:
 		if concrete == nil {
 			return "", nil, spl.Range{}, invalidProjection("logical operator is nil")

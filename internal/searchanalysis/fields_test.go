@@ -17,6 +17,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/queryexec"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 )
 
 var fieldTestCursorKey = []byte("field-catalog-test-cursor-key-32-bytes")
@@ -124,6 +125,124 @@ func TestFieldServiceBuildsCachesFiltersAndPagesDetachedCatalog(t *testing.T) {
 	if err != nil || filtered.TotalFields != 1 || filtered.Fields[0].FieldName != "z_mixed" {
 		t.Fatalf("lowercase filtered page = (%#v, %v)", filtered, err)
 	}
+}
+
+func TestFieldServiceRejectsManagerAttestedSnapshotFromAnotherCompilerVersion(t *testing.T) {
+	t.Parallel()
+	snapshot, err := sealSearchAnalysisSnapshotWithCompiler(
+		fieldTestSnapshot("field-incompatible-compiler-version"),
+		nil,
+		clickhouse.Compiler{},
+		"0.1",
+	)
+	if err != nil {
+		t.Fatalf("seal incompatible-version snapshot: %v", err)
+	}
+	compiler := &fakeFieldCompiler{}
+	executor := &fakeFieldExecutor{result: twoFieldCatalog()}
+	service := newFieldTestService(t, FieldConfig{
+		Searches: &rawSearchAnalysisSnapshots{
+			snapshots: []searchjobs.ExecutionSnapshot{snapshot},
+		},
+		Compiler: compiler,
+		Executor: executor,
+	})
+
+	page, err := service.ListFields(
+		context.Background(),
+		fieldAccess(snapshot),
+		ListFieldsRequest{SearchJobID: snapshot.ID},
+	)
+	if !errors.Is(err, searchsnapshot.ErrCompilerVersionMismatch) {
+		t.Fatalf(
+			"ListFields(incompatible compiler version) = (%#v, %v), want version mismatch",
+			page,
+			err,
+		)
+	}
+	if compiler.Calls() != 0 || executor.Calls() != 0 {
+		t.Fatalf(
+			"compiler/executor calls = %d/%d, want 0/0",
+			compiler.Calls(),
+			executor.Calls(),
+		)
+	}
+}
+
+func TestFieldServiceCompilesMakeMVAsListAndRejectsContainerValueSummary(t *testing.T) {
+	t.Parallel()
+	snapshot := fieldTestSnapshot("field-makemv-list-analysis")
+	snapshot.SPL = `index=main | makemv delim="," allowempty=true tags`
+	executor := &makeMVFieldAnalysisExecutor{}
+	service := newFieldTestService(t, FieldConfig{
+		Searches: &fakeFieldSearches{snapshot: snapshot},
+		Compiler: clickhouse.Compiler{},
+		Executor: executor,
+	})
+
+	page, err := service.ListFields(
+		context.Background(),
+		fieldAccess(snapshot),
+		ListFieldsRequest{SearchJobID: snapshot.ID},
+	)
+	if err != nil {
+		t.Fatalf("ListFields(makemv): %v", err)
+	}
+	if len(page.Fields) != 1 || page.Fields[0].FieldName != "tags" ||
+		page.Fields[0].ValueKind != searchjobs.ValueKindList ||
+		!reflect.DeepEqual(
+			page.Fields[0].ObservedValueKinds,
+			[]searchjobs.ValueKind{searchjobs.ValueKindList},
+		) {
+		t.Fatalf("makemv field profile = %#v", page)
+	}
+	if executor.catalog.SQL == "" ||
+		!strings.Contains(executor.catalog.SQL, "Array(String)") {
+		t.Fatalf("catalog did not receive compiled String array: %#v", executor.catalog)
+	}
+
+	summary, err := service.GetFieldSummary(
+		context.Background(),
+		fieldAccess(snapshot),
+		GetFieldSummaryRequest{SearchJobID: snapshot.ID, FieldName: "tags"},
+	)
+	if !errors.Is(err, searchjobs.ErrUnsupportedValue) ||
+		!reflect.DeepEqual(summary, FieldSummary{}) {
+		t.Fatalf("GetFieldSummary(makemv) = (%#v, %v), want unsupported container", summary, err)
+	}
+	if executor.summary.SQL == "" || !executor.summary.FieldKnown ||
+		!strings.Contains(executor.summary.SQL, `"__os_field_summary_row_unsupported"`) {
+		t.Fatalf("summary did not receive compiled List classification: %#v", executor.summary)
+	}
+}
+
+type makeMVFieldAnalysisExecutor struct {
+	catalog clickhouse.CompiledFieldCatalog
+	summary clickhouse.CompiledFieldSummary
+}
+
+func (executor *makeMVFieldAnalysisExecutor) ExecuteFieldCatalog(
+	_ context.Context,
+	compiled clickhouse.CompiledFieldCatalog,
+) (queryexec.FieldCatalogResult, error) {
+	executor.catalog = compiled
+	return queryexec.FieldCatalogResult{
+		TotalEvents: 3,
+		Fields: []queryexec.FieldProfileRow{{
+			FieldName:     "tags",
+			ObservedTypes: []eventfields.StoredValueType{eventfields.StoredValueTypeList},
+			EventCount:    2,
+			MissingCount:  1,
+		}},
+	}, nil
+}
+
+func (executor *makeMVFieldAnalysisExecutor) ExecuteFieldSummary(
+	_ context.Context,
+	compiled clickhouse.CompiledFieldSummary,
+) (queryexec.FieldSummaryResult, error) {
+	executor.summary = compiled
+	return queryexec.FieldSummaryResult{}, searchjobs.ErrUnsupportedValue
 }
 
 func TestFieldServiceRejectsInvalidManagerAuthorityBeforeCacheOrCursorReuse(t *testing.T) {

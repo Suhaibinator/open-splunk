@@ -1,4 +1,5 @@
 ARG OPEN_SPLUNK_APPLICATION_VERSION
+ARG OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION
 ARG OPEN_SPLUNK_SOURCE_REVISION
 ARG OPEN_SPLUNK_IMAGE_CREATED
 ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
@@ -40,6 +41,7 @@ ARG TARGETARCH
 ARG OPEN_SPLUNK_EXPECTED_TARGETOS
 ARG OPEN_SPLUNK_EXPECTED_TARGETARCH
 ARG OPEN_SPLUNK_APPLICATION_VERSION
+ARG OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION
 ARG OPEN_SPLUNK_SOURCE_REVISION
 ARG OPEN_SPLUNK_IMAGE_CREATED
 ARG OPEN_SPLUNK_SOURCE_DATE_EPOCH
@@ -74,7 +76,28 @@ RUN set -eu; \
     test "${TARGETOS}" = "${OPEN_SPLUNK_EXPECTED_TARGETOS}"; \
     test "${TARGETARCH}" = "${OPEN_SPLUNK_EXPECTED_TARGETARCH}"; \
     test "${TARGETOS}" = linux; \
-    test "${TARGETARCH}" = amd64 || test "${TARGETARCH}" = arm64
+    test "${TARGETARCH}" = amd64 || test "${TARGETARCH}" = arm64; \
+    if [ -n "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}" ]; then \
+      case "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}" in \
+        *[!0-9.]*|*.*.*|.*|*.) exit 1 ;; \
+      esac; \
+      actual_spl_compatibility_version="$( \
+        awk ' \
+          /^const CompatibilityVersion = "[0-9]+\.[0-9]+"$/ { \
+            value = $0; \
+            sub(/^const CompatibilityVersion = "/, "", value); \
+            sub(/"$/, "", value); \
+            count++ \
+          } \
+          END { \
+            if (count != 1) exit 1; \
+            print value \
+          } \
+        ' internal/spl/doc.go \
+      )"; \
+      test "${actual_spl_compatibility_version}" = \
+        "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}"; \
+    fi
 RUN go run ./cmd/open-splunk-manifest \
       -application-version "${OPEN_SPLUNK_APPLICATION_VERSION}" \
       -source-revision "${OPEN_SPLUNK_SOURCE_REVISION}"
@@ -97,13 +120,21 @@ RUN set -eu; \
 RUN set -eu; \
     if [ "${TARGETOS}" = "$(go env GOHOSTOS)" ] && \
        [ "${TARGETARCH}" = "$(go env GOHOSTARCH)" ]; then \
-      expected="$(printf 'application_version=%s\nsource_revision=%s' \
+      expected_base="$(printf 'application_version=%s\nsource_revision=%s' \
         "${OPEN_SPLUNK_APPLICATION_VERSION}" \
         "${OPEN_SPLUNK_SOURCE_REVISION}")"; \
-      server_identity="$(/artifacts/open-splunk-server -verify-embedded-release | sed -n '1,2p')"; \
+      if [ -n "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}" ]; then \
+        expected_server="$(printf '%s\nspl_compatibility_version=%s' \
+          "${expected_base}" \
+          "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION}")"; \
+        server_identity="$(/artifacts/open-splunk-server -verify-embedded-release | sed -n '1,3p')"; \
+      else \
+        expected_server="${expected_base}"; \
+        server_identity="$(/artifacts/open-splunk-server -verify-embedded-release | sed -n '1,2p')"; \
+      fi; \
       collector_identity="$(/artifacts/open-splunk-collector version)"; \
-      test "${server_identity}" = "${expected}"; \
-      test "${collector_identity}" = "${expected}"; \
+      test "${server_identity}" = "${expected_server}"; \
+      test "${collector_identity}" = "${expected_base}"; \
     fi
 # Materialize every scratch-root entry before COPY so BuildKit never synthesizes
 # parent directories with wall-clock timestamps in the published layers.

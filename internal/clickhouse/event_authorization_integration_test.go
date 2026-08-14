@@ -43,7 +43,9 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
-	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	// The parent Store integration uses a fixed logical clock. Keep this
+	// authorization fixture physically live for the same long test horizon.
+	store, err := Open(config, fixedRetention(100*365*24*time.Hour), sequencer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func testEventAuthorizationFilteringAgainstClickHouse(
 		AuthorizedIndexes: []ingest.IndexPolicy{{
 			Name:            indexName,
 			Version:         1,
-			RetentionPeriod: 30 * 24 * time.Hour,
+			RetentionPeriod: 100 * 365 * 24 * time.Hour,
 		}},
 		AllowedHostRegexes:   []string{`allowed-host`},
 		AllowedSourceRegexes: []string{`/var/log/allowed\.log`},

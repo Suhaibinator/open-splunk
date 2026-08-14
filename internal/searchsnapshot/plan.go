@@ -16,6 +16,14 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
+// ErrCompilerVersionMismatch means an immutable authored-SPL execution cannot
+// be safely rebuilt by this binary. Re-execution callers may only invoke the
+// current parser, planner, and compiler when the retained compatibility
+// identity is exactly the one implemented by this process.
+var ErrCompilerVersionMismatch = errors.New(
+	"snapshot compiler compatibility version is not executable by this binary",
+)
+
 // BuildPlan parses the original SPL and rebuilds its logical plan against the
 // exact tenant, index, time, and storage-visibility snapshot retained by job.
 // EffectiveIndexes is already the authorization intersection selected by the
@@ -24,6 +32,7 @@ import (
 func BuildPlan(job searchjobs.Job) (*plan.Query, error) {
 	return buildPlan(planSnapshot{
 		spl:              job.SPL,
+		searchJobID:      job.ID,
 		tenantID:         job.TenantID,
 		effectiveIndexes: job.EffectiveIndexes,
 		earliest:         job.Earliest,
@@ -38,6 +47,9 @@ func BuildPlan(job searchjobs.Job) (*plan.Query, error) {
 // BuildExecutionPlan rebuilds a logical plan from Manager's lightweight,
 // completed execution snapshot without acquiring or copying result rows.
 func BuildExecutionPlan(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, error) {
+	if err := validateRebuildCompilerVersion(snapshot.CompilerVersion); err != nil {
+		return nil, err
+	}
 	prelude, preludePresent, err := snapshot.OpenRetainedKnowledgePrelude()
 	if err != nil {
 		return nil, fmt.Errorf("rebuild immutable search plan: open retained knowledge prelude: %w", err)
@@ -48,6 +60,7 @@ func BuildExecutionPlan(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, err
 	}
 	logical, err := buildPlan(planSnapshot{
 		spl:                           snapshot.SPL,
+		searchJobID:                   snapshot.ID,
 		tenantID:                      snapshot.TenantID,
 		effectiveIndexes:              snapshot.EffectiveIndexes,
 		earliest:                      snapshot.Earliest,
@@ -80,6 +93,9 @@ func BuildExecutionPlanWithKnowledgePrelude(
 	snapshot searchjobs.ExecutionSnapshot,
 	program knowledgeprogram.Program,
 ) (*plan.Query, error) {
+	if err := validateRebuildCompilerVersion(snapshot.CompilerVersion); err != nil {
+		return nil, err
+	}
 	retained, err := snapshot.OpenRetainedKnowledgeExecution()
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -106,6 +122,7 @@ func BuildExecutionPlanWithKnowledgePrelude(
 	}
 	logical, err := buildPlan(planSnapshot{
 		spl:                           snapshot.SPL,
+		searchJobID:                   snapshot.ID,
 		tenantID:                      snapshot.TenantID,
 		effectiveIndexes:              snapshot.EffectiveIndexes,
 		earliest:                      snapshot.Earliest,
@@ -130,8 +147,19 @@ func BuildExecutionPlanWithKnowledgePrelude(
 	return logical, nil
 }
 
+func validateRebuildCompilerVersion(version string) error {
+	if version != spl.CompatibilityVersion {
+		return fmt.Errorf(
+			"rebuild immutable search plan: %w",
+			ErrCompilerVersionMismatch,
+		)
+	}
+	return nil
+}
+
 type planSnapshot struct {
 	spl                           string
+	searchJobID                   string
 	tenantID                      string
 	effectiveIndexes              []string
 	earliest                      time.Time
@@ -155,6 +183,7 @@ func buildPlan(snapshot planSnapshot) (*plan.Query, error) {
 		TenantID:          snapshot.tenantID,
 		AuthorizedIndexes: indexes,
 		RequestedIndexes:  slices.Clone(indexes),
+		SearchJobID:       snapshot.searchJobID,
 		Earliest:          snapshot.earliest,
 		Latest:            snapshot.latest,
 		SearchStart:       snapshot.searchStart,

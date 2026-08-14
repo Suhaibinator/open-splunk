@@ -68,15 +68,16 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 	visibilityCutoff := uint64(0)
 	intent := request.TimeRange.Intent()
 	scope := plan.Scope{
-		TenantID:          request.TenantID,
-		AuthorizedIndexes: request.AuthorizedIndexes,
-		RequestedIndexes:  request.RequestedIndexes,
-		Earliest:          request.TimeRange.Earliest(),
-		Latest:            request.TimeRange.Latest(),
-		SearchStart:       anchor,
-		SearchTimezone:    intent.Timezone,
-		IndexTimeCutoff:   anchor,
-		VisibilityCutoff:  &visibilityCutoff,
+		TenantID:                request.TenantID,
+		AuthorizedIndexes:       request.AuthorizedIndexes,
+		RequestedIndexes:        request.RequestedIndexes,
+		AllowUnboundSearchJobID: true,
+		Earliest:                request.TimeRange.Earliest(),
+		Latest:                  request.TimeRange.Latest(),
+		SearchStart:             anchor,
+		SearchTimezone:          intent.Timezone,
+		IndexTimeCutoff:         anchor,
+		VisibilityCutoff:        &visibilityCutoff,
 	}
 	preparation, err := plan.PrepareStatsWildcard(parsed, scope)
 	var logical *plan.Query
@@ -185,34 +186,6 @@ func parseSPLQuery(ctx context.Context, source string) (*spl.Query, error) {
 		return nil, err
 	}
 	return parsed, nil
-}
-
-func (manager *Manager) buildAndCompileQuery(
-	ctx context.Context,
-	parsed *spl.Query,
-	scope plan.Scope,
-) (*plan.Query, clickhouse.CompiledQuery, error) {
-	if ctx == nil {
-		return nil, clickhouse.CompiledQuery{}, errors.New("compile search query: context is nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, clickhouse.CompiledQuery{}, err
-	}
-	logical, err := plan.Build(parsed, scope)
-	if err != nil {
-		return nil, clickhouse.CompiledQuery{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, clickhouse.CompiledQuery{}, err
-	}
-	compiled, err := manager.compiler.Compile(logical)
-	if err != nil {
-		return nil, clickhouse.CompiledQuery{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, clickhouse.CompiledQuery{}, err
-	}
-	return logical, compiled, nil
 }
 
 func invalidValidationResult(err error) (ValidationResult, error) {

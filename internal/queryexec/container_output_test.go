@@ -509,7 +509,7 @@ func TestExecutorContainerOutputRejectsInvalidHeadersAndTypes(t *testing.T) {
 			}
 			columnTypes := containerOutputColumnTypes(descriptor)
 			test.mutate(&query, &columns, &columnTypes)
-			if _, err := validateOrdinaryResultColumns(
+			if _, _, err := validateOrdinaryResultColumns(
 				query,
 				columns,
 				columnTypes,

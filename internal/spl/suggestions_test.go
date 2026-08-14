@@ -1014,8 +1014,8 @@ func TestStaticSuggestionsUseSharedCatalogAndContextFilters(t *testing.T) {
 	if command.Diagnostic != nil {
 		t.Fatalf("Suggest(command): %v", command.Diagnostic)
 	}
-	if labels := suggestionLabels(command.Suggestions); !slices.Equal(labels, []string{"stats", "streamstats"}) {
-		t.Fatalf("command labels = %v, want stats/streamstats", labels)
+	if labels := suggestionLabels(command.Suggestions); !slices.Equal(labels, []string{"strcat", "stats", "streamstats"}) {
+		t.Fatalf("command labels = %v, want strcat/stats/streamstats", labels)
 	}
 
 	scalar := Suggest("| eval x=to", len("| eval x=to"), 20)
@@ -1100,8 +1100,10 @@ func TestCompletionCatalogCoversSupportedFixedCommandsAndFunctions(t *testing.T)
 
 	wantCommands := []string{
 		"search", "where", "eval", "rename", "fields", "table", "sort",
-		"dedup", "rex", "spath", "bin", "bucket", "head", "tail", "stats",
-		"eventstats", "streamstats", "top", "rare", "timechart", "chart",
+		"dedup", "rex", "spath", "bin", "bucket", "head", "tail", "regex",
+		"reverse", "accum", "strcat", "addinfo", "fillnull", "addtotals", "delta",
+		"makemv", "mvexpand", "stats", "eventstats", "streamstats", "top", "rare",
+		"timechart", "chart",
 	}
 	gotCommands := make([]string, 0, len(completionCatalog.Commands))
 	for _, command := range completionCatalog.Commands {

@@ -55,6 +55,9 @@ compile check; use the Make target for a runnable embedded server.
 Published artifacts use the stricter `make release` target. It requires the
 exact Node.js/npm versions pinned above and
 `OPEN_SPLUNK_SOURCE_REVISION` to equal the clean checkout's full Git revision.
+The caller must also provide the exact expected public SPL compatibility
+identity; the release fails before publication if the embedded server reports a
+different identity.
 The release launcher materializes raw blobs and executable modes from that
 committed `HEAD` into a disposable tree; ignored and untracked worktree files
 are omitted and cannot enter the artifact. It installs the lockfile-pinned
@@ -68,8 +71,15 @@ executes `scripts/build-release.sh` from committed `HEAD`; no other live
 checkout file is used as a release build input:
 
 ```sh
+OPEN_SPLUNK_APPLICATION_VERSION=0.1.0 \
+OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0.2 \
 OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
 ```
+
+The application and authored-SPL version lines are independent release
+authorities: the initial SPL v0.2 release is application `0.1.0`; the v0.3
+runtime revision changes this invocation to application `0.2.0` with expected
+SPL `0.3`.
 
 For the production-shaped, non-root server and collector OCI images plus the
 digest-pinned server/ClickHouse Compose stack, follow

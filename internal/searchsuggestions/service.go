@@ -421,15 +421,16 @@ func buildPrefixPlan(
 	visibilityCutoff := snapshot.VisibilityCutoff
 	intent := snapshot.TimeRange.Intent()
 	logical, err := plan.Build(parsed, plan.Scope{
-		TenantID:          strings.Clone(snapshot.TenantID),
-		AuthorizedIndexes: slices.Clone(snapshot.AuthorizedIndexes),
-		RequestedIndexes:  slices.Clone(snapshot.RequestedIndexes),
-		Earliest:          snapshot.TimeRange.Earliest(),
-		Latest:            snapshot.TimeRange.Latest(),
-		SearchStart:       snapshot.SearchStart,
-		SearchTimezone:    strings.Clone(intent.Timezone),
-		IndexTimeCutoff:   snapshot.IndexTimeCutoff,
-		VisibilityCutoff:  &visibilityCutoff,
+		TenantID:                strings.Clone(snapshot.TenantID),
+		AuthorizedIndexes:       slices.Clone(snapshot.AuthorizedIndexes),
+		RequestedIndexes:        slices.Clone(snapshot.RequestedIndexes),
+		AllowUnboundSearchJobID: true,
+		Earliest:                snapshot.TimeRange.Earliest(),
+		Latest:                  snapshot.TimeRange.Latest(),
+		SearchStart:             snapshot.SearchStart,
+		SearchTimezone:          strings.Clone(intent.Timezone),
+		IndexTimeCutoff:         snapshot.IndexTimeCutoff,
+		VisibilityCutoff:        &visibilityCutoff,
 	})
 	if err != nil {
 		if sourceDiagnostic(err) {

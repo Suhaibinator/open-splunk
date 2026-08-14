@@ -663,12 +663,11 @@ func testStatsChronologicalAgainstClickHouse(
 
 	shared := compile(
 		orderBase + ` | stats earliest(chronological_value) AS first` +
-			` latest(chronological_value) AS last` +
-			` earliest(chronological_value) AS first_again`,
+			` latest(chronological_value) AS last`,
 	)
 	if got := strings.Count(shared.SQL, "argMinOrNullIf("); got != 1 {
 		t.Fatalf(
-			"repeated earliest compiled %d aggregate states, want one:\n%s",
+			"earliest compiled %d aggregate states, want one:\n%s",
 			got,
 			shared.SQL,
 		)

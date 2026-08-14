@@ -185,13 +185,20 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		source       searchjobs.JobSource
 		err          error
 		historyRerun = input.GetSource().GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_HISTORY_RERUN
+		savedLaunch  = input.GetSource().GetOrigin() == opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH
 	)
-	if historyRerun {
+	switch {
+	case historyRerun:
 		resolved, source, err = handler.resolveHistoryRerun(
 			request.Context(),
 			input,
 		)
-	} else {
+	case savedLaunch:
+		resolved, source, err = handler.resolveSavedSearchLaunch(
+			request.Context(),
+			input,
+		)
+	default:
 		resolved, err = handler.resolveSearchDefinition(input.GetDefinition(), func(definition *opensplunkv1.SearchDefinition) error {
 			return rejectUnsupportedCreateFields(input, definition)
 		})
@@ -264,6 +271,64 @@ func (handler *apiHandler) createSearchJob(request *http.Request, input *openspl
 		return nil, internalError()
 	}
 	return &opensplunkv1.CreateSearchJobResponse{SearchJob: converted}, nil
+}
+
+// resolveSavedSearchLaunch makes the persisted reusable definition—not a
+// caller-supplied copy—the execution authority. The request definition is
+// accepted for backwards-compatible clients that still send their local view,
+// but only its app identity is compared; SPL, time range, and index scope come
+// exclusively from the cloned saved record.
+func (handler *apiHandler) resolveSavedSearchLaunch(
+	ctx context.Context,
+	input *opensplunkv1.CreateSearchJobRequest,
+) (resolvedSearchDefinition, searchjobs.JobSource, error) {
+	if err := rejectUnsupportedCreateFields(input, nil); err != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, badRequestError(err.Error())
+	}
+	sourceInput := input.GetSource()
+	if sourceInput.GetOrigin() != opensplunkv1.SearchJobOrigin_SEARCH_JOB_ORIGIN_SAVED_SEARCH ||
+		sourceInput.SavedSearchId == nil || sourceInput.HistorySearchId != nil ||
+		sourceInput.DashboardId != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{},
+			badRequestError("search job source metadata is invalid or unsupported")
+	}
+	savedID, err := savedSearchID(sourceInput.GetSavedSearchId())
+	if err != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, badRequestError(err.Error())
+	}
+	record, err := handler.savedSearches.Get(ctx, handler.savedSearchScope(), savedID)
+	if mapped := mapSavedSearchCallError(ctx, err); mapped != nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, mapped
+	}
+	trusted, err := handler.cloneSavedSearch(record)
+	if err != nil || trusted.GetSavedSearchId() != savedID ||
+		trusted.GetDefinition().GetSearch() == nil {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
+	}
+	resolved, err := handler.resolveSearchDefinition(
+		trusted.GetDefinition().GetSearch(),
+		func(*opensplunkv1.SearchDefinition) error { return nil },
+	)
+	if err != nil || resolved.AppID != savedSearchAppID(trusted) {
+		return resolvedSearchDefinition{}, searchjobs.JobSource{}, internalError()
+	}
+	if client := input.GetDefinition(); client != nil {
+		if err := rejectUnsupportedSearchDefinitionFields(client); err != nil {
+			return resolvedSearchDefinition{}, searchjobs.JobSource{}, badRequestError(err.Error())
+		}
+		clientApp, appErr := normalizeSearchAppID(client.GetAppId())
+		if appErr != nil {
+			return resolvedSearchDefinition{}, searchjobs.JobSource{},
+				badRequestError("search app ID is invalid")
+		}
+		if clientApp != "" && clientApp != resolved.AppID {
+			return resolvedSearchDefinition{}, searchjobs.JobSource{},
+				badRequestError("search app ID does not match the saved search")
+		}
+	}
+	return resolved, searchjobs.JobSource{
+		Origin: searchjobs.JobOriginSavedSearch, ObjectID: savedID,
+	}, nil
 }
 
 func historyRerunContextError(

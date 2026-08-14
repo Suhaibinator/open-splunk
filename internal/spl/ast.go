@@ -563,6 +563,84 @@ func (*RexCommand) command()             {}
 func (*RexCommand) Name() string         { return "rex" }
 func (c *RexCommand) SourceRange() Range { return c.Range }
 
+// RegexCommand filters rows with one bounded RE2-compatible regular
+// expression. Field defaults to _raw. Negated deliberately preserves rows
+// whose input field is missing or null.
+type RegexCommand struct {
+	Field        string
+	FieldRange   Range
+	Pattern      string
+	PatternRange Range
+	Negated      bool
+	Range        Range
+}
+
+func (*RegexCommand) command()             {}
+func (*RegexCommand) Name() string         { return "regex" }
+func (c *RegexCommand) SourceRange() Range { return c.Range }
+
+// ReverseCommand reverses the complete established pipeline order without
+// changing row cardinality or public fields.
+type ReverseCommand struct {
+	Range Range
+}
+
+func (*ReverseCommand) command()             {}
+func (*ReverseCommand) Name() string         { return "reverse" }
+func (c *ReverseCommand) SourceRange() Range { return c.Range }
+
+// AccumCommand computes the ordered running numeric sum of one exact field.
+// Output equals Field when AS is omitted; ExplicitOutput preserves that source
+// distinction at the parser-to-planner trust boundary.
+type AccumCommand struct {
+	Field          string
+	FieldRange     Range
+	Output         string
+	OutputRange    Range
+	ExplicitOutput bool
+	Range          Range
+}
+
+func (*AccumCommand) command()             {}
+func (*AccumCommand) Name() string         { return "accum" }
+func (c *AccumCommand) SourceRange() Range { return c.Range }
+
+// StrcatOperand is either one exact field or one quoted String literal.
+// Literal is a pointer so the empty quoted String remains distinguishable
+// from a field operand.
+type StrcatOperand struct {
+	Field   string
+	Literal *string
+	Range   Range
+}
+
+// StrcatCommand concatenates between two and 32 operands into one exact
+// destination. AllRequiredSpecified and AllRequiredRange preserve the authored
+// option independently from its false default.
+type StrcatCommand struct {
+	Operands             []StrcatOperand
+	Destination          string
+	DestinationRange     Range
+	AllRequired          bool
+	AllRequiredSpecified bool
+	AllRequiredRange     Range
+	Range                Range
+}
+
+func (*StrcatCommand) command()             {}
+func (*StrcatCommand) Name() string         { return "strcat" }
+func (c *StrcatCommand) SourceRange() Range { return c.Range }
+
+// AddInfoCommand projects the immutable resolved search boundaries,
+// admission time, and public search-job identifier onto every row.
+type AddInfoCommand struct {
+	Range Range
+}
+
+func (*AddInfoCommand) command()             {}
+func (*AddInfoCommand) Name() string         { return "addinfo" }
+func (c *AddInfoCommand) SourceRange() Range { return c.Range }
+
 // SpathCommand extracts one explicitly addressed JSON value from a current
 // pipeline String field. Steps are the validated, constant location path;
 // Input defaults to _raw and Output defaults to the decoded Path spelling.

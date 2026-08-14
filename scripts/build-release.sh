@@ -16,9 +16,15 @@ fi
 
 : "${OPEN_SPLUNK_APPLICATION_VERSION:?OPEN_SPLUNK_APPLICATION_VERSION is required}"
 : "${OPEN_SPLUNK_SOURCE_REVISION:?OPEN_SPLUNK_SOURCE_REVISION is required}"
+: "${OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION:?OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION is required}"
 if [[ ${#OPEN_SPLUNK_APPLICATION_VERSION} -gt 64 ||
       ! "$OPEN_SPLUNK_APPLICATION_VERSION" =~ ^[0-9A-Za-z.+-]+$ ]]; then
   echo "error: OPEN_SPLUNK_APPLICATION_VERSION contains unsafe or unsupported characters" >&2
+  exit 1
+fi
+if [[ ${#OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION} -gt 128 ||
+      ! "$OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  echo "error: OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION contains unsafe or unsupported characters" >&2
   exit 1
 fi
 
@@ -334,9 +340,16 @@ printf \
   'application_version=%s\nsource_revision=%s\n' \
   "$OPEN_SPLUNK_APPLICATION_VERSION" \
   "$HEAD_REVISION" >"$EXPECTED_IDENTITY"
+EXPECTED_SERVER_IDENTITY="$WORK_ROOT/expected-server-identity.txt"
+{
+  cat "$EXPECTED_IDENTITY"
+  printf \
+    'spl_compatibility_version=%s\n' \
+    "$OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION"
+} >"$EXPECTED_SERVER_IDENTITY"
 "$PUBLISH_ROOT/open-splunk-server" -verify-embedded-release >"$PUBLISH_ROOT/release-verification.txt"
-sed -n '1,2p' "$PUBLISH_ROOT/release-verification.txt" >"$WORK_ROOT/server-identity.txt"
-cmp "$EXPECTED_IDENTITY" "$WORK_ROOT/server-identity.txt"
+sed -n '1,3p' "$PUBLISH_ROOT/release-verification.txt" >"$WORK_ROOT/server-identity.txt"
+cmp "$EXPECTED_SERVER_IDENTITY" "$WORK_ROOT/server-identity.txt"
 "$PUBLISH_ROOT/open-splunk-collector" version >"$WORK_ROOT/collector-identity.txt"
 cmp "$EXPECTED_IDENTITY" "$WORK_ROOT/collector-identity.txt"
 "$PUBLISH_ROOT/open-splunk-loggen" -version >"$WORK_ROOT/loggen-identity.txt"

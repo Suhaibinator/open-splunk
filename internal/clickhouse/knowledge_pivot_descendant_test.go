@@ -13,22 +13,26 @@ func TestPivotDescendantSourceColumnsRetainsReferencedKnowledgeSidecars(t *testi
 
 	fieldSidecar := quoteIdentifier("__os_ko_field_descendant_3_0")
 	extractionSidecar := quoteIdentifier("__os_ko_extract_descendant_0_0")
+	namesSidecar := quoteIdentifier("__os_fillnull_names_2_1")
 	state := compileState{privateColumns: []string{
 		quoteIdentifier("__os_ko_field_exists_3_0"),
 		fieldSidecar,
 		extractionSidecar,
 		quoteIdentifier("__os_ko_extract_type_0_0"),
+		namesSidecar,
 	}}
 	got := pivotDescendantSourceColumns(
 		state,
 		fieldState{kind: fieldKindDynamic, descendantSQL: fieldSidecar},
 		fieldState{kind: fieldKindDynamic, descendantSQL: extractionSidecar},
 		fieldState{kind: fieldKindDynamic, descendantSQL: fieldSidecar},
+		fieldState{kind: fieldKindDynamic, descendantSQL: "notEmpty(" + namesSidecar + ")"},
 	)
 	want := []string{
 		quoteIdentifier(internalFieldNamesColumn),
 		fieldSidecar,
 		extractionSidecar,
+		namesSidecar,
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("pivot descendant source columns = %v, want %v", got, want)
@@ -90,6 +94,71 @@ func TestKnowledgeDescendantSidecarsCrossRuntimeWidePivotSource(t *testing.T) {
 						projection,
 					)
 				}
+			}
+			if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
+				t.Fatalf("placeholder count = %d, args = %d", got, want)
+			}
+		})
+	}
+}
+
+func TestFillNullDescendantSidecarsCrossRuntimeWidePivotSource(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name         string
+		source       string
+		sourceCTE    string
+		wantSidecars int
+	}{
+		{
+			name: "count chart row",
+			source: `index=gradethis | fillnull value="fallback" optional` +
+				` | chart count OVER optional BY level`,
+			sourceCTE:    "__os_chart_source",
+			wantSidecars: 1,
+		},
+		{
+			name: "count chart split",
+			source: `index=gradethis | fillnull value="fallback" optional` +
+				` | chart count OVER level BY optional`,
+			sourceCTE:    "__os_chart_source",
+			wantSidecars: 1,
+		},
+		{
+			name: "numeric chart row and split",
+			source: `index=gradethis | fillnull value="fallback" optional route` +
+				` | chart sum(duration) OVER optional BY route`,
+			sourceCTE:    "__os_chart_source",
+			wantSidecars: 2,
+		},
+		{
+			name: "count timechart split",
+			source: `index=gradethis | fillnull value="fallback" optional` +
+				` | timechart span=5m count BY optional`,
+			sourceCTE:    "__os_timechart_source",
+			wantSidecars: 1,
+		},
+		{
+			name: "numeric timechart split",
+			source: `index=gradethis | fillnull value="fallback" optional` +
+				` | timechart span=5m sum(duration) BY optional`,
+			sourceCTE:    "__os_timechart_source",
+			wantSidecars: 1,
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			compiled := compileSPL(t, test.source)
+			projection := pivotSourceProjectionForTest(t, compiled.SQL, test.sourceCTE)
+			if got := strings.Count(projection, `"__os_fillnull_names_`); got != test.wantSidecars {
+				t.Fatalf(
+					"%s projection fillnull sidecars = %d, want %d:\n%s",
+					test.sourceCTE,
+					got,
+					test.wantSidecars,
+					projection,
+				)
 			}
 			if got, want := strings.Count(compiled.SQL, "?"), len(compiled.Args); got != want {
 				t.Fatalf("placeholder count = %d, args = %d", got, want)

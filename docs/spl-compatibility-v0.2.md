@@ -4,18 +4,19 @@
 
 **Compatibility version:** `0.2`
 
-**Last updated:** August 11, 2026
+**Last updated:** August 12, 2026
 
 **Rule inventory:** `internal/spl/testdata/compatibility-v0.2.json`
 
 Version 0.2 incorporates every unchanged rule in
 [`spl-compatibility-v0.1.md`](spl-compatibility-v0.1.md). This document is the
-normative delta for authored search expressions. It does not widen the Tier-1
+normative delta for authored searches, including the explicitly identified
+command transition below. It does not widen the Tier-1
 knowledge-object compiler, whose calculated-field profile remains v0.1.
 Operators upgrading stored searches should use the
 [`v0.2 migration and read-only audit guide`](spl-compatibility-v0.2-migration.md).
-Release runs are recorded in the
-[`v0.2 pre-activation checkpoint`](spl-compatibility-v0.2-acceptance.md).
+Qualification and acceptance evidence is recorded in the
+[`v0.2 acceptance report`](spl-compatibility-v0.2-acceptance.md).
 
 Accepted source is parsed, planned, and compiled as one complete query. An
 error never publishes or executes a supported prefix. Tenant, index, event-time,
@@ -42,10 +43,22 @@ retain their compiler version and digest.
 
 ### `SPL-V02-ACTIVATION-001` — atomic advertisement
 
-The server advertises `0.2` only after parser, planner, compiler,
-executor, job, export, inspection, history, saved-search, field-analysis,
-browser, audit, and integration acceptance gates pass on the same revision.
-Partial builds retain their development identity.
+The clean runtime/release qualification revision `R` embeds and reports `0.2`
+so every parser, planner, compiler, executor, job, export, inspection, history,
+saved-search, field-analysis, browser, audit, integration, and release gate can
+validate the exact final identity. That candidate identity is not permission
+to publish or distribute `R`. Stable advertisement is authorized only after
+the exact reachable `R` passes every gate and one direct-child,
+documentation-only evidence revision `E` records terminal-success CI, remote
+readback, release identity, artifact hashes, and checksummed receipts. The
+strict accepted verifier must prove the `R`/`E` relationship before returning
+`R` to a publication workflow.
+
+Any earlier reachable binary that reported `0.2` without this accepted
+evidence lineage is historical development output, not a qualifying stable
+publication. A failed, cancelled, skipped, incomplete, dirty, mismatched, or
+non-direct-child gate keeps distribution blocked even though a candidate
+binary necessarily reports the identity under qualification.
 
 ## Grammar
 
@@ -134,15 +147,19 @@ single field. The read-only compatibility audit identifies those stored-source
 candidates and migration guidance shows the quoted spelling. Source stored in
 saved searches or history is never rewritten.
 
-### `SPL-V02-QUOTED-FIELD-001` — exact scalar field references
+### `SPL-V02-QUOTED-FIELD-001` — exact field references
 
 Single quotes denote an exact scalar field reference and may also quote an
-`eval` destination:
+`eval` destination. The command-specific exact-name slots for `stats`
+aggregate inputs (including `sparkline` inputs), `stats BY`, and `table` use
+the same decoder and validation:
 
 ```spl
 | eval normalized='request-bytes' / 1024
 | where 'HTTP Status' IN (500, 502, 503)
 | eval 'error-rate'=(errors / requests) * 100
+| stats avg('request-bytes') AS "Mean Bytes" BY 'HTTP Status'
+| table 'HTTP Status', 'Mean Bytes'
 ```
 
 The decoder accepts UTF-8 plus only `\\` and `\'`. It rejects an empty name,
@@ -156,11 +173,61 @@ literal backslash in a path crosses both escape layers: the authored quoted
 payload uses four backslashes so quote decoding yields the two-backslash path
 escape consumed by the field-path decoder.
 
-Quoted fields are not enabled in aggregate arguments, `BY`, `fields`, `table`,
-`sort`, `rename`, `rex`, `spath`, `bin`, `top`, `rare`, `chart`, or
-`timechart`. Double quotes remain String literals and backticks are invalid.
-Unterminated single and double quotes have distinct stable diagnostics and
-point at the opening quote.
+Quoted fields remain excluded from `eventstats` and `streamstats` aggregate or
+`BY` slots, and from `fields`, `sort`, `rename`, `rex`, `spath`, `bin`, `top`,
+`rare`, `chart`, and `timechart`. A single-quoted `stats` input or group is
+always one exact field, never a wildcard. In scalar expressions, double quotes
+remain String literals and backticks are invalid. The `stats AS "literal
+output"` command grammar is a separate exact-output syntax; a later scalar or
+`table` reference uses the single-quoted spelling. The complete bounded
+`stats` name surface is recorded in
+[`stats-command-parity.md`](stats-command-parity.md). Unterminated single and
+double quotes have distinct stable diagnostics and point at the opening quote.
+
+## Statistical grouping
+
+### `SPL-V02-STATS-BY-MULTIVALUE-001` — bounded multivalue grouping
+
+Version 0.2 supersedes the v0.1 scalar-only `stats BY` boundary. A resolved BY
+input may be a fixed scalar, a fixed `Array(String)`, or a raw Dynamic scalar
+or top-level multivalue whose non-null members are individually supported
+scalar values. Each admitted member contributes one group occurrence. Member
+duplicates are preserved by default; `dedup_splitvals=true` removes duplicates
+within each BY field before grouping. Multiple multivalue BY fields form their
+Cartesian product in authored field order. A fixed `Array(String)` member
+retains its raw bytes at the typed result boundary: valid UTF-8 publishes as a
+String cell and invalid UTF-8 publishes byte-for-byte as Bytes, never as a
+malformed String. Textual comparisons and text functions consider only the
+valid-UTF-8 members.
+
+Missing, whole-cell null, null members, and empty arrays contribute no group.
+Objects, nested arrays or objects, and any other unsupported member fail the
+complete job through the sanitized unsupported-value boundary before a public
+group is published. Validation is scoped to the complete admitted input and
+cannot be hidden by another missing BY key or by downstream `search`, `where`,
+projection, limiting, or transforming commands. Every query that can execute
+multivalue grouping is published atomically, whether its input is a fixed
+`Array(String)` or Dynamic: the executor consumes and closes the complete
+bounded backend stream before invoking its result sink, and the production job
+manager keeps every sink write private until one commit. Dynamic grouping is
+also atomic because an unsupported runtime shape cannot be ruled out earlier.
+Preview and paging remain unavailable on failure. For these atomic paths,
+executor or job result row, byte, page, and retained-memory ceilings are hard
+failures rather than successful truncation; statically scalar-only grouping
+retains the ordinary result-retention policy. The executor's private atomic
+buffer has a fixed 128 MiB ceiling, independent of the backend query byte
+limit. Manager staging remains bounded by its configured row, page-byte, and
+global retained-memory ceilings, so the handoff peak is bounded by that 128 MiB
+private buffer plus the manager reservation; the backend applies its own
+configured execution limits independently.
+
+Expansion is capped at 10,000 Cartesian combinations per source event after
+null filtering and optional per-field deduplication. The overflow sentinel is
+validated before the first `ARRAY JOIN`; the implementation never truncates or
+publishes a supported prefix. This rule normatively adopts the bounded
+`by-multivalue` surface recorded in
+[`stats-command-parity.md`](stats-command-parity.md); that inventory remains
+descriptive for every surface not explicitly adopted by a compatibility rule.
 
 ## Arithmetic
 

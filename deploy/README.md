@@ -49,9 +49,14 @@ Build both local OCI images from the exact current commit:
 cd ..
 git status --short
 export OPEN_SPLUNK_APPLICATION_VERSION=0.1.0
+export OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0.2
 export OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)"
 make oci
 ```
+
+For the SPL v0.3 runtime release, use application `0.2.0` and expected SPL
+compatibility `0.3`. The OCI build requires both identities explicitly and
+rejects an unsupported or omitted expected SPL version.
 
 `git status --short` must be empty. `make oci` refuses a dirty worktree, a
 short or mismatched revision, an invalid semantic version, unsafe image names,

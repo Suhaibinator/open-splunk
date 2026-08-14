@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash"
 	"math"
@@ -396,8 +397,8 @@ func PrepareStatsWildcard(query *spl.Query, scope Scope) (*StatsWildcardPreparat
 			fullPlan: logical, fullSource: authoredSource, fullScope: cloneStatsWildcardScope(scope),
 		}, nil
 	}
-	diagnostic, ok := err.(*Diagnostic)
-	if !ok || diagnostic.Code != "SPL_UNSUPPORTED_STATS_WILDCARD" {
+	var diagnostic *Diagnostic
+	if !errors.As(err, &diagnostic) || diagnostic.Code != "SPL_UNSUPPORTED_STATS_WILDCARD" {
 		return nil, err
 	}
 	sourceDigest, parsed := canonical.ParsedSourceDigest()
@@ -901,6 +902,7 @@ func writeStatsWildcardSemanticValue(writer hash.Hash, value reflect.Value, dept
 		if value.Type() == reflect.TypeFor[time.Time]() {
 			return writeStatsWildcardTime(writer, value.Interface().(time.Time))
 		}
+		// #nosec G115 -- reflection field counts are non-negative native-sized values.
 		writeStatsWildcardUint64(writer, uint64(value.NumField()))
 		for index := 0; index < value.NumField(); index++ {
 			if !writeStatsWildcardSemanticValue(writer, value.Field(index), depth+1) {
@@ -909,6 +911,7 @@ func writeStatsWildcardSemanticValue(writer hash.Hash, value reflect.Value, dept
 		}
 		return true
 	case reflect.Slice, reflect.Array:
+		// #nosec G115 -- reflection collection lengths are non-negative native-sized values.
 		writeStatsWildcardUint64(writer, uint64(value.Len()))
 		for index := 0; index < value.Len(); index++ {
 			if !writeStatsWildcardSemanticValue(writer, value.Index(index), depth+1) {
@@ -927,6 +930,8 @@ func writeStatsWildcardSemanticValue(writer hash.Hash, value reflect.Value, dept
 		}
 		return true
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		// #nosec G115 -- the seal deliberately encodes signed values by their stable
+		// two's-complement bit pattern.
 		writeStatsWildcardUint64(writer, uint64(value.Int()))
 		return true
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
@@ -937,101 +942,6 @@ func writeStatsWildcardSemanticValue(writer hash.Hash, value reflect.Value, dept
 		return true
 	default:
 		return false
-	}
-}
-
-func cloneStatsWildcardPlan(query *Query) *Query {
-	if query == nil {
-		return nil
-	}
-	program, knowledgePresent := query.KnowledgePrelude()
-	if knowledgePresent {
-		generated := int(program.Charges().GeneratedOperators)
-		if ValidateKnowledgePreludeIntegrity(query) != nil ||
-			len(query.Operators) < generated+1 {
-			return nil
-		}
-		base := cloneQueryHeader(query)
-		base.Operators = make([]Operator, 0, len(query.Operators)-generated)
-		base.Operators = append(base.Operators, query.Operators[0])
-		base.Operators = append(base.Operators, query.Operators[generated+1:]...)
-		base.knowledgePrelude = queryKnowledgePrelude{}
-		clonedBase := cloneStatsWildcardPlan(base)
-		if clonedBase == nil {
-			return nil
-		}
-		injected, err := InjectKnowledgePrelude(clonedBase, program)
-		if err != nil {
-			return nil
-		}
-		return injected
-	}
-	value, ok := cloneStatsWildcardSemanticValue(reflect.ValueOf(query), 0)
-	if !ok || !value.IsValid() || value.IsNil() {
-		return nil
-	}
-	result, _ := value.Interface().(*Query)
-	return result
-}
-
-func cloneStatsWildcardSemanticValue(value reflect.Value, depth int) (reflect.Value, bool) {
-	if depth > maximumStatsWildcardReflectionDepth || !value.IsValid() {
-		return reflect.Value{}, false
-	}
-	switch value.Kind() {
-	case reflect.Interface:
-		if value.IsNil() {
-			return reflect.Zero(value.Type()), true
-		}
-		cloned, ok := cloneStatsWildcardSemanticValue(value.Elem(), depth+1)
-		if !ok {
-			return reflect.Value{}, false
-		}
-		result := reflect.New(value.Type()).Elem()
-		result.Set(cloned)
-		return result, true
-	case reflect.Pointer:
-		if value.IsNil() {
-			return reflect.Zero(value.Type()), true
-		}
-		cloned, ok := cloneStatsWildcardSemanticValue(value.Elem(), depth+1)
-		if !ok {
-			return reflect.Value{}, false
-		}
-		result := reflect.New(value.Type().Elem())
-		result.Elem().Set(cloned)
-		return result, true
-	case reflect.Struct:
-		if value.Type() == reflect.TypeFor[queryKnowledgePrelude]() {
-			marker := value.Interface().(queryKnowledgePrelude)
-			return reflect.ValueOf(queryKnowledgePrelude{
-				program: marker.program.Clone(), set: marker.set,
-			}), true
-		}
-		result := reflect.New(value.Type()).Elem()
-		for index := 0; index < value.NumField(); index++ {
-			cloned, ok := cloneStatsWildcardSemanticValue(value.Field(index), depth+1)
-			if !ok || !result.Field(index).CanSet() {
-				return reflect.Value{}, false
-			}
-			result.Field(index).Set(cloned)
-		}
-		return result, true
-	case reflect.Slice:
-		if value.IsNil() {
-			return reflect.Zero(value.Type()), true
-		}
-		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
-		for index := 0; index < value.Len(); index++ {
-			cloned, ok := cloneStatsWildcardSemanticValue(value.Index(index), depth+1)
-			if !ok {
-				return reflect.Value{}, false
-			}
-			result.Index(index).Set(cloned)
-		}
-		return result, true
-	default:
-		return value, true
 	}
 }
 

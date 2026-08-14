@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "manifest.schema.json",
+  "title": "Open Splunk SPL v0.2 reachable-target closeout manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "format_version",
+    "evidence_state",
+    "generated_at_utc",
+    "supersedes",
+    "reachable_target",
+    "semantic_reconciliation",
+    "contracts",
+    "toolchain",
+    "completed_local_gates",
+    "older_cancelled_ci_readback",
+    "reachable_ci_readback",
+    "pending_gates",
+    "decision"
+  ],
+  "properties": {
+    "$schema": { "const": "./manifest.schema.json" },
+    "format_version": { "const": "open-splunk-spl-v0.2-reachable-closeout-v1" },
+    "evidence_state": { "const": "incomplete" },
+    "generated_at_utc": { "$ref": "#/$defs/timestamp" },
+    "supersedes": { "$ref": "#/$defs/free_object" },
+    "reachable_target": { "$ref": "#/$defs/free_object" },
+    "semantic_reconciliation": { "$ref": "#/$defs/free_object" },
+    "contracts": { "$ref": "#/$defs/free_object" },
+    "toolchain": { "$ref": "#/$defs/free_object" },
+    "completed_local_gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/free_object" }
+    },
+    "older_cancelled_ci_readback": { "$ref": "#/$defs/free_object" },
+    "reachable_ci_readback": { "$ref": "#/$defs/reachable_ci_readback" },
+    "pending_gates": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "v02_acceptance_closed", "v03_prerequisite_satisfied", "reason"],
+      "properties": {
+        "status": { "const": "pending" },
+        "v02_acceptance_closed": { "const": false },
+        "v03_prerequisite_satisfied": { "const": false },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "reachable_ci_readback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "url",
+        "workflow_name",
+        "display_title",
+        "event",
+        "head_branch",
+        "head_revision",
+        "created_at_utc",
+        "started_at_utc",
+        "updated_at_utc",
+        "status",
+        "conclusion",
+        "backend_vertical_job",
+        "release_oci_contract_job",
+        "production_binaries_job",
+        "release_asset_consistency_job",
+        "acceptance_interpretation"
+      ],
+      "properties": {
+        "run_id": { "const": 31571852036 },
+        "url": { "const": "https://github.com/Suhaibinator/open-splunk/actions/runs/31571852036" },
+        "workflow_name": { "const": "CI" },
+        "display_title": { "const": "Codex/merge knowledge stats (#18)" },
+        "event": { "const": "push" },
+        "head_branch": { "const": "main" },
+        "head_revision": { "const": "230774476dfd96c5e11ef87f7372b81986689353" },
+        "created_at_utc": { "const": "2026-08-12T06:55:15Z" },
+        "started_at_utc": { "const": "2026-08-12T06:55:15Z" },
+        "updated_at_utc": { "const": "2026-08-12T07:46:59Z" },
+        "status": { "const": "completed" },
+        "conclusion": { "const": "failure" },
+        "backend_vertical_job": { "$ref": "#/$defs/backend_vertical_job" },
+        "release_oci_contract_job": { "$ref": "#/$defs/release_oci_contract_job" },
+        "production_binaries_job": { "$ref": "#/$defs/production_binaries_job" },
+        "release_asset_consistency_job": { "$ref": "#/$defs/release_asset_consistency_job" },
+        "acceptance_interpretation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "backend_vertical_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "job_id",
+        "url",
+        "name",
+        "started_at_utc",
+        "completed_at_utc",
+        "status",
+        "conclusion",
+        "failed_step",
+        "observed_failures"
+      ],
+      "properties": {
+        "job_id": { "const": 94035340634 },
+        "url": { "const": "https://github.com/Suhaibinator/open-splunk/actions/runs/31571852036/job/94035340634" },
+        "name": { "const": "Backend vertical" },
+        "started_at_utc": { "const": "2026-08-12T06:57:34Z" },
+        "completed_at_utc": { "const": "2026-08-12T07:07:30Z" },
+        "status": { "const": "completed" },
+        "conclusion": { "const": "failure" },
+        "failed_step": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["number", "name", "started_at_utc", "completed_at_utc", "status", "conclusion"],
+          "properties": {
+            "number": { "const": 8 },
+            "name": { "const": "Test backend vertical and deletion lifecycle" },
+            "started_at_utc": { "const": "2026-08-12T06:58:25Z" },
+            "completed_at_utc": { "const": "2026-08-12T07:07:28Z" },
+            "status": { "const": "completed" },
+            "conclusion": { "const": "failure" }
+          }
+        },
+        "observed_failures": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "release_oci_contract_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "url", "name", "status", "conclusion"],
+      "properties": {
+        "job_id": { "const": 94035340572 },
+        "url": { "const": "https://github.com/Suhaibinator/open-splunk/actions/runs/31571852036/job/94035340572" },
+        "name": { "const": "Release OCI contract" },
+        "status": { "const": "completed" },
+        "conclusion": { "const": "success" }
+      }
+    },
+    "production_binaries_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "url", "api_name", "status", "conclusion"],
+      "properties": {
+        "job_id": { "const": 94046353594 },
+        "url": { "const": "https://github.com/Suhaibinator/open-splunk/actions/runs/31571852036/job/94046353594" },
+        "api_name": { "const": "Production binaries (${{ matrix.label }})" },
+        "status": { "const": "completed" },
+        "conclusion": { "const": "skipped" }
+      }
+    },
+    "release_asset_consistency_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id", "url", "name", "status", "conclusion"],
+      "properties": {
+        "job_id": { "const": 94046354835 },
+        "url": { "const": "https://github.com/Suhaibinator/open-splunk/actions/runs/31571852036/job/94046354835" },
+        "name": { "const": "Linux/macOS release asset consistency" },
+        "status": { "const": "completed" },
+        "conclusion": { "const": "skipped" }
+      }
+    },
+    "free_object": {
+      "type": "object",
+      "minProperties": 1
+    }
+  }
+}

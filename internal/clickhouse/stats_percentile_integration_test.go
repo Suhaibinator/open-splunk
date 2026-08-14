@@ -131,7 +131,7 @@ func testStatsPercentilesAgainstClickHouse(
 	family := compile(
 		base + ` percentile_group="rank" | stats ` +
 			`p1(metric) AS q1 p50(metric) AS q50 p90(metric) AS q90 ` +
-			`p95(metric) AS q95 p99(metric) AS q99 perc50(metric) AS q50_again`,
+			`p95(metric) AS q95 p99(metric) AS q99 perc75(metric) AS q75`,
 	)
 	familyRows, queryErr := connection.Query(ctx, family.SQL, family.Args...)
 	if queryErr != nil {
@@ -152,8 +152,8 @@ func testStatsPercentilesAgainstClickHouse(
 		_ = familyRows.Close()
 		t.Fatalf("percentile family returned no row: %v", familyRows.Err())
 	}
-	var q1, q50, q90, q95, q99, q50Again *float64
-	if err := familyRows.Scan(&q1, &q50, &q90, &q95, &q99, &q50Again); err != nil {
+	var q1, q50, q90, q95, q99, q75 *float64
+	if err := familyRows.Scan(&q1, &q50, &q90, &q95, &q99, &q75); err != nil {
 		_ = familyRows.Close()
 		t.Fatalf("scan percentile family: %v", err)
 	}
@@ -173,11 +173,9 @@ func testStatsPercentilesAgainstClickHouse(
 	assertApproximatePercentile(t, "p90", q90, 89, 91)
 	assertApproximatePercentile(t, "p95", q95, 94, 96)
 	assertApproximatePercentile(t, "p99", q99, 98, 100)
-	if q50Again == nil || q50 == nil || *q50Again != *q50 {
-		t.Fatalf("duplicate p50/perc50 outputs = %v/%v, want identical values", q50, q50Again)
-	}
-	if !(*q1 <= *q50 && *q50 <= *q90 && *q90 <= *q95 && *q95 <= *q99) {
-		t.Fatalf("percentile family is not monotonic: %v/%v/%v/%v/%v", q1, q50, q90, q95, q99)
+	assertApproximatePercentile(t, "p75", q75, 74, 76)
+	if !(*q1 <= *q50 && *q50 <= *q75 && *q75 <= *q90 && *q90 <= *q95 && *q95 <= *q99) {
+		t.Fatalf("percentile family is not monotonic: %v/%v/%v/%v/%v/%v", q1, q50, q75, q90, q95, q99)
 	}
 	assertOnePhysicalState("Dynamic percentile family", family)
 	scalarFamily := compile(

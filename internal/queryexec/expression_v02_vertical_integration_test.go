@@ -119,7 +119,12 @@ func TestExpressionV02ExecutorManagerAgainstClickHouse(t *testing.T) {
 		}
 	})
 
-	indexTime := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	// The production events table enforces expires_at with a physical TTL. A
+	// fixed historical anchor eventually makes this live vertical observe an
+	// empty table even though Store accepted the fixture. Keep the anchor
+	// second-stable for exact comparisons while ensuring its 24-hour retention
+	// remains live for the duration of the test.
+	indexTime := time.Now().UTC().Truncate(time.Second)
 	expressionV02StoreFixture(t, ctx, store, indexTime)
 	cutoff, err := store.VisibilityCutoff(ctx)
 	if err != nil {

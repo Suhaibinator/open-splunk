@@ -386,8 +386,12 @@ func (op *EventAggregate) SourceRange() spl.Range { return op.Range }
 // prefix. A positive grouped window is valid only with Global=false, which gives
 // every exact BY tuple an independent row window.
 type StreamAggregate struct {
-	GroupBy        []FieldRef
-	Measure        AggregateMeasure
+	GroupBy []FieldRef
+	Measure AggregateMeasure
+	// OutputRange identifies the authored destination when a command-specific
+	// lowering (currently accum) needs an exact diagnostic. Generic
+	// streamstats plans may leave it zero and use the operator range.
+	OutputRange    spl.Range
 	IncludeCurrent bool
 	WindowRows     uint64
 	Global         bool

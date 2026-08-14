@@ -17,7 +17,7 @@ const (
 type statsDistributionStateBound uint8
 
 const (
-	statsDistributionStateBoundInvalid statsDistributionStateBound = iota
+	_ statsDistributionStateBound = iota
 	// The aggregate state has a fixed upper bound independent of input
 	// cardinality. Multiple constant-size states may still be present.
 	statsDistributionStateBoundConstant
@@ -49,6 +49,11 @@ type statsDistributionAggregateLowering struct {
 	Exact          bool
 	Deterministic  bool
 	OracleRequired bool
+}
+
+type statsExactModeWithSemanticBytesLowering struct {
+	ValueSQL         string
+	SemanticBytesSQL string
 }
 
 // statsDistributionArrayAggregateSQL lowers a distribution aggregate over a
@@ -202,6 +207,34 @@ func statsExactModeArraySQL(inputSQL string) string {
 	counts := "tupleElement(" + frequencies + ", 2)"
 	return "arrayElementOrNull(" + keys +
 		", indexOf(" + counts + ", arrayMax(" + counts + ")))"
+}
+
+// statsExactModeWithSemanticBytesSQL selects the winner from an exact tuple
+// key of (payload, semantic-Bytes bit). Hex is an order-preserving encoding of
+// arbitrary String bytes, and '/' sorts before every hex digit, so appending
+// "/0" or "/1" keeps sumMap's deterministic order payload-first and type-bit
+// second (String before Bytes for the same payload). This makes type identity
+// part of mode's value domain and carries the selected winner's bit, rather
+// than an aggregate-wide OR that could taint an unrelated winning String.
+func statsExactModeWithSemanticBytesSQL(
+	valuesSQL string,
+	semanticBytesSQL string,
+) statsExactModeWithSemanticBytesLowering {
+	keysInput := "arrayMap((value, semantic_bytes) -> concat(hex(value), " +
+		"CAST('/' AS String), if(semantic_bytes != 0, " +
+		"CAST('1' AS String), CAST('0' AS String))), " +
+		valuesSQL + ", " + semanticBytesSQL + ")"
+	frequencies := "sumMap(" + keysInput +
+		", arrayMap(_ -> toUInt64(1), " + valuesSQL + "))"
+	keys := "tupleElement(" + frequencies + ", 1)"
+	counts := "tupleElement(" + frequencies + ", 2)"
+	winner := "arrayElementOrNull(" + keys +
+		", indexOf(" + counts + ", arrayMax(" + counts + ")))"
+	return statsExactModeWithSemanticBytesLowering{
+		ValueSQL: "unhex(substring(" + winner + ", 1, length(" + winner +
+			") - 2))",
+		SemanticBytesSQL: "toUInt8(ifNull(endsWith(" + winner + ", '/1'), 0))",
+	}
 }
 
 func statsDistributionPercentileIsValid(percentile uint8) bool {

@@ -1261,7 +1261,9 @@ func spathStartClickHouse(t *testing.T, ctx context.Context) (clickhousedriver.C
 		t.Fatalf("create spath visibility sequencer: %v", err)
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
-	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	// Preserve the fixed logical fixture clock without letting ClickHouse's
+	// physical TTL make this integration matrix expire as wall time advances.
+	store, err := Open(config, fixedRetention(100*365*24*time.Hour), sequencer)
 	if err != nil {
 		t.Fatalf("open spath store: %v", err)
 	}

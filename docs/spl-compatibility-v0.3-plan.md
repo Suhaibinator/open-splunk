@@ -112,8 +112,9 @@ Version 0.3 should:
    and search-start authority;
 8. expose the same syntax through validation, suggestions, inspection,
    history, saved searches, export, field analysis, and the browser editor; and
-9. advertise `0.3` only after one complete vertical passes on a clean,
-   reachable revision.
+9. qualify `0.3` on one complete clean, reachable runtime revision and
+   authorize public advertisement only after a later documentation-only
+   evidence revision binds terminal-success receipts to that exact revision.
 
 ## Non-goals
 
@@ -371,8 +372,11 @@ Hard ceilings fail the query atomically. Open Splunk does not reproduce
 Splunk's memory-limit behavior by silently truncating a result chunk and
 emitting a warning.
 
-Only one exact unquoted field is accepted. Internal fields, wildcard fields,
-calculated fields, and unbounded compatibility claims are deferred.
+Only one exact unquoted field reference is accepted. The referenced field may
+have been produced by an earlier supported command (for example, `eval`), but
+the command does not accept an inline calculated expression. Internal fields,
+wildcard field arguments, calculated command arguments, and unbounded
+compatibility claims are deferred.
 
 ## Shared semantics and implementation constraints
 
@@ -439,8 +443,42 @@ Implement delimiter-only `makemv` and bounded `mvexpand` together. Shipping
 expansion boundary under-specified.
 
 The server continues to advertise `0.2` throughout all three development
-phases. Version `0.3` activates once after the complete acceptance matrix
-passes.
+phases. Activation then uses two immutable revisions so that neither a Git
+object nor its post-commit CI result must be embedded in itself:
+
+1. Runtime/release revision `R` atomically changes the runtime identity to
+   `0.3` and the machine-readable evidence phase to
+   `qualification-candidate`. `R` is committed, clean, reachable, fully tested,
+   and used to build and read back retained, access-bounded CI qualification
+   artifacts. Candidate artifacts must not enter a stable tag, package, or
+   deployment channel.
+2. After CI for `R` is terminal-success, direct-child documentation-only
+   revision `E` records `R` and its exact receipts and changes the evidence
+   phase to `accepted`. A strict verifier proves that `E` changes no runtime,
+   normative semantic artifact, verifier, or schema and that all recorded
+   identities and hashes bind to `R`. Stable publication is allowed only from
+   accepted, reachable `E`.
+
+Later CI descendants retain full Git history and verify the exact accepted `E`
+as an ancestor, rather than treating the descendant as a new evidence commit.
+That ancestor replay emits the immutable E/manifest binding and cannot request
+publication; stable publication remains restricted to the release-tagged `E`
+checkout itself.
+
+The phase is publication evidence, not a second runtime compatibility value:
+the exact `R` artifact reports `0.3` both before and after `E`. The release
+pipeline, rather than the already-built artifact, enforces the transition from
+quarantined candidate to publicly distributable release. This is the only
+exception to the ordinary `0.2` development identity, and it exists solely to
+make exact-artifact qualification satisfiable without a false acceptance
+claim.
+
+Application and SPL compatibility versions are separate authorities. The
+accepted v0.2 prerequisite is application `0.1.0` at release tag `v0.1.0`;
+the v0.3 runtime is application `0.2.0` at release tag `v0.2.0`. CI must bind
+that exact mapping before building either release or OCI artifacts and reject
+every other valid SemVer. Candidate quarantine is expressed only by the
+activation phase, never by changing the qualified application version.
 
 ## Compatibility and acceptance deliverables
 
@@ -462,8 +500,10 @@ Before activation, v0.3 requires:
    public result paging;
 9. a migration note listing intentionally unsupported options and any source
    transition; and
-10. `docs/spl-compatibility-v0.3-acceptance.md` with clean-revision provenance
-    and exact release identities.
+10. `docs/spl-compatibility-v0.3-acceptance.md` plus the strict
+    `docs/evidence/spl-v0.3/manifest.json` bundle, with clean-revision
+    provenance, terminal-success CI, exact release identities, checksummed
+    receipts, and the direct-child documentation-only `R`/`E` transition.
 
 ## Deferred follow-ons
 

@@ -144,7 +144,10 @@ var (
 
 // ResultSink receives one result schema followed by zero or more rows. Execute
 // must stop when either method returns an error and must not retain or call the
-// sink after Execute returns. The manager defensively rejects late calls.
+// sink after Execute returns. The manager defensively rejects late calls. For
+// a CompiledQuery that RequiresAtomicResult, an externally observable custom
+// sink must stage these calls privately; the manager's sink does so and commits
+// them only after Execute succeeds.
 type ResultSink interface {
 	SetSchema(Schema) error
 	AddRow([]Value) error
@@ -665,6 +668,24 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	if manager.ctx.Err() != nil {
 		return Job{}, ErrClosed
 	}
+	var id string
+	idReserved := false
+	reserveID := func() error {
+		id = strings.Clone(manager.newID())
+		if !canonicalJobMetadataIdentifier(id, MaximumJobIDBytes, false) {
+			return errors.New("create search job: ID generator returned an invalid ID")
+		}
+		if reserveErr := manager.reserveJobID(id); reserveErr != nil {
+			return reserveErr
+		}
+		idReserved = true
+		return nil
+	}
+	defer func() {
+		if idReserved {
+			manager.releaseJobID(id)
+		}
+	}()
 	var prepared *preparedKnowledgeAdmission
 	var visibilityCutoff uint64
 	var now time.Time
@@ -674,7 +695,24 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 			return Job{}, err
 		}
 		now = manager.nowUTC()
-		knowledge, prepareErr := manager.prepareKnowledgeAdmission(ctx, request, visibilityCutoff, now)
+		knowledge, prepareErr := manager.prepareKnowledgeAdmission(
+			ctx, request, visibilityCutoff, now,
+		)
+		if errors.Is(prepareErr, errSearchJobIDRequired) {
+			// addinfo is the sole syntax that requires an ID during compilation.
+			// The first bounded parse completed without external resolver or public
+			// side effects; reserve the ID, then compile against that exact value.
+			if reserveErr := reserveID(); reserveErr != nil {
+				return Job{}, reserveErr
+			}
+			knowledge, prepareErr = manager.prepareKnowledgeAdmissionForJob(
+				ctx,
+				request,
+				id,
+				visibilityCutoff,
+				now,
+			)
+		}
 		if prepareErr != nil {
 			return Job{}, prepareErr
 		}
@@ -683,14 +721,11 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 			return Job{}, err
 		}
 	}
-	id := strings.Clone(manager.newID())
-	if !canonicalJobMetadataIdentifier(id, MaximumJobIDBytes, false) {
-		return Job{}, errors.New("create search job: ID generator returned an invalid ID")
+	if !idReserved {
+		if err := reserveID(); err != nil {
+			return Job{}, err
+		}
 	}
-	if err := manager.reserveJobID(id); err != nil {
-		return Job{}, err
-	}
-	defer manager.releaseJobID(id)
 	metadataBytes, err := retainedNormalizedJobMetadataReservation(id, request)
 	if err != nil || metadataBytes > manager.maxMetadataBytes {
 		return Job{}, ErrCapacity
@@ -1706,6 +1741,7 @@ func (manager *Manager) run(entry *jobEntry) {
 		TenantID:          entry.job.TenantID,
 		AuthorizedIndexes: cloneStrings(entry.authorizedIndexes),
 		RequestedIndexes:  cloneStrings(entry.job.RequestedIndexes),
+		SearchJobID:       entry.job.ID,
 		Earliest:          entry.job.Earliest,
 		Latest:            entry.job.Latest,
 		SearchStart:       entry.job.CreatedAt,
@@ -1778,6 +1814,7 @@ func (manager *Manager) executeCompiled(
 		expectedFields: cloneStrings(retained.OutputFields),
 		timechart:      timechart,
 		chart:          chart,
+		atomicResult:   retained.RequiresAtomicResult(),
 	}
 	executionContext, cancelExecution := context.WithTimeout(entry.ctx, runtimeBudget)
 	defer cancelExecution()
@@ -1797,6 +1834,11 @@ func (manager *Manager) executeCompiled(
 		executionErr = ErrInvalidResult
 	}
 	executionContextErr := executionContext.Err()
+	if executionErr == nil && executionContextErr == nil && sink.atomicResult {
+		if commitErr := sink.commitAtomic(); commitErr != nil {
+			executionErr = commitErr
+		}
+	}
 	sink.close()
 	cancelExecution()
 	truncationErr, sinkErr := sink.outcome()
@@ -2258,16 +2300,21 @@ func planningFailure(err error) Failure {
 }
 
 type resultSink struct {
-	manager        *Manager
-	entry          *jobEntry
-	ctx            context.Context
-	expectedFields []string
-	timechart      *clickhouse.TimechartOutput
-	chart          *clickhouse.ChartOutput
-	closed         bool
-	receivedSchema bool
-	firstErr       error
-	truncationErr  *retainedRowLimitError
+	manager           *Manager
+	entry             *jobEntry
+	ctx               context.Context
+	expectedFields    []string
+	timechart         *clickhouse.TimechartOutput
+	chart             *clickhouse.ChartOutput
+	atomicResult      bool
+	atomicSchema      *Schema
+	atomicRows        []ResultRow
+	atomicSchemaBytes uint64
+	atomicResultBytes uint64
+	closed            bool
+	receivedSchema    bool
+	firstErr          error
+	truncationErr     *retainedRowLimitError
 }
 
 // retainedRowLimitError is allocated once for the first overflow row of one
@@ -2336,6 +2383,9 @@ func (sink *resultSink) SetSchema(schema Schema) error {
 	if schemaErr != nil {
 		return sink.rememberLocked(schemaErr)
 	}
+	if sink.atomicResult {
+		return sink.stageAtomicSchemaLocked(schema)
+	}
 	if err := sink.requireIncrementableResultRevisionLocked(); err != nil {
 		return err
 	}
@@ -2366,8 +2416,12 @@ func (sink *resultSink) AddRow(values []Value) error {
 	if err := sink.readyLocked(); err != nil {
 		return err
 	}
-	if !sink.receivedSchema || entry.job.Schema == nil {
+	if !sink.receivedSchema || (!sink.atomicResult && entry.job.Schema == nil) ||
+		(sink.atomicResult && sink.atomicSchema == nil) {
 		return sink.rememberLocked(fmt.Errorf("%w: row was emitted before schema", ErrInvalidResult))
+	}
+	if sink.atomicResult {
+		return sink.stageAtomicRowLocked(values)
 	}
 	if len(values) != len(entry.job.Schema.Columns) {
 		return sink.rememberLocked(fmt.Errorf("%w: row has %d cells for %d columns", ErrInvalidResult, len(values), len(entry.job.Schema.Columns)))
@@ -2454,6 +2508,158 @@ func (sink *resultSink) AddRow(values []Value) error {
 	entry.job.ResultBytes = nextBytes
 	incrementJobVersion(&entry.job)
 	incrementResultRevision(entry)
+	return nil
+}
+
+// stageAtomicSchemaLocked validates and accounts an atomic schema without
+// making it observable through Job, preview, paging, or result leases. The
+// caller holds entry.mu. Memory is reserved before the detached clone is kept;
+// terminal failure releases that reservation through clearResultsLocked.
+func (sink *resultSink) stageAtomicSchemaLocked(schema Schema) error {
+	if err := sink.requireIncrementableResultRevisionLocked(); err != nil {
+		return err
+	}
+	retainedBytes, err := retainedSchemaSize(schema)
+	if err != nil || retainedBytes > sink.manager.maxPageBytes {
+		return sink.rememberLocked(ErrByteLimit)
+	}
+	if err := sink.manager.reserveRetainedLocked(sink.entry, retainedBytes); err != nil {
+		return sink.rememberLocked(err)
+	}
+	cloned := cloneSchema(schema)
+	sink.atomicSchema = &cloned
+	sink.atomicSchemaBytes = retainedBytes
+	sink.receivedSchema = true
+	return nil
+}
+
+// stageAtomicRowLocked validates and accounts one row against the exact same
+// public limits as AddRow, but retains it only in the private sink transaction.
+// Atomic queries treat the configured row ceiling as a hard failure, never as
+// successful truncation.
+func (sink *resultSink) stageAtomicRowLocked(values []Value) error {
+	schema := sink.atomicSchema
+	if schema == nil || len(values) != len(schema.Columns) {
+		columns := 0
+		if schema != nil {
+			columns = len(schema.Columns)
+		}
+		return sink.rememberLocked(fmt.Errorf(
+			"%w: row has %d cells for %d columns", ErrInvalidResult, len(values), columns,
+		))
+	}
+	if err := sink.requireIncrementableResultRevisionLocked(); err != nil {
+		return err
+	}
+	var payloadBytes uint64
+	var retainedBytes uint64
+	for index, value := range values {
+		column := schema.Columns[index]
+		if column.Kind != ValueKindMixed && value.kind != column.Kind && value.kind != ValueKindNull {
+			return sink.rememberLocked(fmt.Errorf("%w: cell %d kind does not match schema", ErrInvalidResult, index))
+		}
+		if value.kind == ValueKindNull && !column.Nullable && column.Kind != ValueKindNull {
+			return sink.rememberLocked(fmt.Errorf("%w: cell %d is null in a non-nullable column", ErrInvalidResult, index))
+		}
+		payloadSize, retainedSize, err := measureValue(value, 0)
+		if err != nil {
+			return sink.rememberLocked(fmt.Errorf("%w: cell %d: %w", ErrInvalidResult, index, err))
+		}
+		payloadBytes, err = checkedAdd(payloadBytes, payloadSize)
+		if err != nil {
+			return sink.rememberLocked(ErrByteLimit)
+		}
+		retainedBytes, err = checkedAdd(retainedBytes, retainedSize)
+		if err != nil {
+			return sink.rememberLocked(ErrByteLimit)
+		}
+	}
+	if uint64(len(sink.atomicRows)) >= sink.manager.maxRows {
+		return sink.rememberLocked(ErrRowLimit)
+	}
+	nextBytes, err := checkedAdd(sink.atomicResultBytes, payloadBytes)
+	if err != nil {
+		return sink.rememberLocked(ErrByteLimit)
+	}
+	rowPageBytes, err := checkedAdd(retainedResultRowBase, retainedBytes)
+	if err != nil || sink.atomicSchemaBytes > sink.manager.maxPageBytes ||
+		rowPageBytes > sink.manager.maxPageBytes-sink.atomicSchemaBytes {
+		return sink.rememberLocked(ErrByteLimit)
+	}
+	newCapacity := cap(sink.atomicRows)
+	if len(sink.atomicRows) == cap(sink.atomicRows) {
+		newCapacity64 := uint64(1)
+		if cap(sink.atomicRows) > 0 {
+			newCapacity64 = uint64(cap(sink.atomicRows)) * 2
+		}
+		if newCapacity64 > sink.manager.maxRows {
+			newCapacity64 = sink.manager.maxRows
+		}
+		// #nosec G115 -- manager construction rejects maxRows values greater than MaxInt.
+		newCapacity = int(newCapacity64)
+		// #nosec G115 -- newCapacity is never smaller than the current slice capacity.
+		capacityGrowth := uint64(newCapacity - cap(sink.atomicRows))
+		capacityBytes, multiplyErr := checkedMultiply(capacityGrowth, retainedResultRowBase)
+		if multiplyErr != nil {
+			return sink.rememberLocked(ErrByteLimit)
+		}
+		retainedBytes, err = checkedAdd(retainedBytes, capacityBytes)
+		if err != nil {
+			return sink.rememberLocked(ErrByteLimit)
+		}
+	}
+	if err := sink.manager.reserveRetainedLocked(sink.entry, retainedBytes); err != nil {
+		return sink.rememberLocked(err)
+	}
+	if newCapacity > cap(sink.atomicRows) {
+		grown := make([]ResultRow, len(sink.atomicRows), newCapacity)
+		copy(grown, sink.atomicRows)
+		sink.atomicRows = grown
+	}
+	ordinal := uint64(len(sink.atomicRows))
+	sink.atomicRows = append(sink.atomicRows, ResultRow{
+		Ordinal: ordinal, Values: cloneValues(values), retainedBytes: rowPageBytes,
+	})
+	sink.atomicResultBytes = nextBytes
+	return nil
+}
+
+// commitAtomic publishes the complete staged result under one job lock. A
+// concurrent preview therefore observes either no result or the entire result,
+// never a prefix. Execute has returned before this method is called.
+func (sink *resultSink) commitAtomic() error {
+	entry := sink.entry
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if !sink.atomicResult {
+		return errors.New("commit non-atomic search result")
+	}
+	if err := sink.readyLocked(); err != nil {
+		return err
+	}
+	if sink.atomicSchema == nil || !sink.receivedSchema {
+		return sink.rememberLocked(fmt.Errorf("%w: atomic result omitted schema", ErrInvalidResult))
+	}
+	if entry.resultSchema != nil || entry.job.Schema != nil || len(entry.rows) != 0 ||
+		entry.job.RowCount != 0 || entry.job.ResultBytes != 0 {
+		return sink.rememberLocked(fmt.Errorf("%w: atomic result destination is not empty", ErrInvalidResult))
+	}
+	if err := sink.requireIncrementableVersionLocked(); err != nil {
+		return err
+	}
+	if err := sink.requireIncrementableResultRevisionLocked(); err != nil {
+		return err
+	}
+	entry.resultSchema = sink.atomicSchema
+	entry.job.Schema = entry.resultSchema
+	entry.schemaBytes = sink.atomicSchemaBytes
+	entry.rows = sink.atomicRows
+	entry.job.RowCount = uint64(len(sink.atomicRows))
+	entry.job.ResultBytes = sink.atomicResultBytes
+	incrementJobVersion(&entry.job)
+	incrementResultRevision(entry)
+	sink.atomicSchema = nil
+	sink.atomicRows = nil
 	return nil
 }
 
@@ -2561,13 +2767,15 @@ func validateSchema(schema Schema, expected []string) error {
 	if len(schema.Columns) == 0 || len(schema.Columns) != len(expected) {
 		return fmt.Errorf("%w: schema has %d columns, compiler expects %d", ErrInvalidResult, len(schema.Columns), len(expected))
 	}
+	if !slices.EqualFunc(schema.Columns, expected, func(column Column, expectedName string) bool {
+		return column.Name != "" && column.Name == expectedName
+	}) {
+		return fmt.Errorf("%w: schema columns do not match compiler output", ErrInvalidResult)
+	}
 	seen := make(map[string]struct{}, len(schema.Columns))
 	for index, column := range schema.Columns {
 		if !column.ValidFlatMultivaluePresentation() {
 			return fmt.Errorf("%w: schema column %d has invalid multivalue presentation metadata", ErrInvalidResult, index)
-		}
-		if column.Name == "" || column.Name != expected[index] {
-			return fmt.Errorf("%w: schema column %d does not match compiler output", ErrInvalidResult, index)
 		}
 		if column.Kind < ValueKindNull || column.Kind > ValueKindMixed {
 			return fmt.Errorf("%w: schema column %d has invalid kind", ErrInvalidResult, index)

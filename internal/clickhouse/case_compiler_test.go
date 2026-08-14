@@ -154,7 +154,8 @@ func TestCompileEvalCaseSupportsTypedNullsAndBooleanConsumers(t *testing.T) {
 			name:   "matching raw provenance",
 			source: `index=gradethis | eval value=case(severity=9, _raw, severity=13, _raw) | spath input=value output=selected path=value | table selected`,
 			required: []string{
-				`"__os_raw_encoding" = 1`,
+				`ifNull("__os_string_or_bytes_`,
+				`isValidUTF8(assumeNotNull("value"))`,
 				`CAST(NULL AS Nullable(String))`,
 			},
 		},

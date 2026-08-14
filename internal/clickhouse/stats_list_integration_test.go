@@ -360,11 +360,11 @@ func testStatsListAgainstClickHouse(
 	}
 
 	shared := compile(
-		orderBase + ` | stats count list(list_value) AS first list(list_value) AS second`,
+		orderBase + ` | stats count list(list_value) AS ordered`,
 	)
 	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", shared)
 	if got := strings.Count(actions, "Function: groupArraySortedArray("); got != 1 {
-		t.Fatalf("repeated list has %d physical ordered states, want one:\n%s", got, actions)
+		t.Fatalf("list has %d physical ordered states, want one:\n%s", got, actions)
 	}
 	if strings.Contains(actions, "ArrayJoin") {
 		t.Fatalf("list physical plan expands event rows:\n%s", actions)

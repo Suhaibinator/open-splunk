@@ -267,11 +267,12 @@ func testConcatAgainstClickHouse(
 	)
 	var copied []byte
 	var normalized *string
+	var copiedSemanticBytes uint8
 	if err := connection.QueryRow(
 		queryContext,
 		binary.SQL,
 		binary.Args...,
-	).Scan(&copied, &normalized); err != nil {
+	).Scan(&copied, &normalized, &copiedSemanticBytes); err != nil {
 		t.Fatalf(
 			"execute binary concatenation provenance: %v\nSQL: %s\nargs: %#v",
 			err,
@@ -280,11 +281,12 @@ func testConcatAgainstClickHouse(
 		)
 	}
 	wantCopied := []byte{'[', 0xff, 0, 'b', 'y', 't', 'e', 's', ']'}
-	if !bytes.Equal(copied, wantCopied) || normalized != nil {
+	if !bytes.Equal(copied, wantCopied) || normalized != nil || copiedSemanticBytes != 1 {
 		t.Fatalf(
-			"binary concatenation = copied:%x normalized:%v, want copied:%x normalized:null",
+			"binary concatenation = copied:%x normalized:%v semantic-bytes:%d, want copied:%x normalized:null semantic-bytes:1",
 			copied,
 			normalized,
+			copiedSemanticBytes,
 			wantCopied,
 		)
 	}

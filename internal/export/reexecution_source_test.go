@@ -14,23 +14,25 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
 	"github.com/Suhaibinator/open-splunk/internal/indexread"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 )
 
 type reexecutionTestSearches struct {
-	mu           sync.Mutex
-	job          searchjobs.Job
-	execution    *searchjobs.ExecutionSnapshot
-	pin          *reexecutionTestPin
-	manager      *searchjobs.Manager
-	resolver     searchjobs.KnowledgeResolver
-	appID        string
-	lastLease    searchjobs.ResultLease
-	acquireErr   error
-	acquireCalls int
-	access       searchjobs.AccessScope
-	id           string
-	onGet        func()
+	mu              sync.Mutex
+	job             searchjobs.Job
+	execution       *searchjobs.ExecutionSnapshot
+	pin             *reexecutionTestPin
+	manager         *searchjobs.Manager
+	resolver        searchjobs.KnowledgeResolver
+	appID           string
+	compilerVersion string
+	lastLease       searchjobs.ResultLease
+	acquireErr      error
+	acquireCalls    int
+	access          searchjobs.AccessScope
+	id              string
+	onGet           func()
 }
 
 func (searches *reexecutionTestSearches) AcquireExecutionFor(
@@ -109,6 +111,7 @@ func (searches *reexecutionTestSearches) startManagerLocked() error {
 		}),
 		Snapshotter:       integrationSnapshotter(func(context.Context) (uint64, error) { return searches.job.VisibilityCutoff, nil }),
 		KnowledgeResolver: searches.resolver,
+		CompilerVersion:   searches.compilerVersion,
 		MaxConcurrent:     1,
 		MaxRows:           maximumRows,
 		MaxResultLeases:   16,
@@ -202,6 +205,46 @@ func (*nilReexecutionTestExecutor) Execute(context.Context, clickhouse.CompiledQ
 
 func (executor reexecutionTestExecutor) Execute(ctx context.Context, query clickhouse.CompiledQuery, sink searchjobs.ResultSink) error {
 	return executor(ctx, query, sink)
+}
+
+func TestReexecutionSourceRejectsOrdinarySnapshotFromAnotherCompilerVersion(t *testing.T) {
+	t.Parallel()
+	searches, _, access := newReexecutionTestSearches()
+	searches.compilerVersion = "0.1"
+	var executions atomic.Int32
+	source := newReexecutionTestSource(
+		t,
+		searches,
+		reexecutionTestExecutor(func(
+			context.Context,
+			clickhouse.CompiledQuery,
+			searchjobs.ResultSink,
+		) error {
+			executions.Add(1)
+			return nil
+		}),
+		nil,
+	)
+
+	lease, err := source.AcquireResultsFor(
+		context.Background(),
+		access,
+		searches.job.ID,
+	)
+	if lease != nil || !errors.Is(err, searchjobs.ErrResultsUnavailable) ||
+		!errors.Is(err, searchsnapshot.ErrCompilerVersionMismatch) {
+		t.Fatalf(
+			"AcquireResultsFor(incompatible ordinary snapshot) = (%#v, %v), want unavailable version mismatch",
+			lease,
+			err,
+		)
+	}
+	if executions.Load() != 0 {
+		t.Fatalf("executor calls = %d, want 0", executions.Load())
+	}
+	if !searches.lastPinClosed() {
+		t.Fatal("failed incompatible-version acquisition retained its result pin")
+	}
 }
 
 func TestReexecutionSourceIsLazyScopedAndStreamsBeyondRetainedPreview(t *testing.T) {

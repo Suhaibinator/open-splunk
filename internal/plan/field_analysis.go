@@ -31,7 +31,9 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			if index != 0 {
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
-		case *Filter, *Extend, *Extract, *ExtractJSON, *Rename, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit,
+		case *Filter, *RegexFilter, *Extend, *Strcat, *FillNull, *RowTotal,
+			*OrderedDelta, *MakeMultivalue, *Extract, *ExtractJSON, *Rename,
+			*TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit, *Reverse,
 			*ConditionalExtract, *ConditionalExtractJSON, *CopyFieldAlias, *ParallelExtend:
 			// These preserve source-event identity while changing the final
 			// relation, schema, values, or order consumed by field analysis.
@@ -50,7 +52,7 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			default:
 				return fieldAnalysisPipelineDiagnostic(operator.Range)
 			}
-		case *Aggregate, *Timechart, *Chart, *Window:
+		case *Aggregate, *Timechart, *Chart, *Window, *ExpandMultivalue:
 			return fieldAnalysisPipelineDiagnostic(operator.SourceRange())
 		default:
 			return fieldAnalysisPipelineDiagnostic(operator.SourceRange())

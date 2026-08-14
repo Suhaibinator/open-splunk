@@ -138,7 +138,8 @@ func TestCompileEvalCoalesceSupportsTypedNullsAndBooleanConsumers(t *testing.T) 
 			source: `index=gradethis | eval value=coalesce(null, _raw, _raw) | spath input=value output=selected path=value | table selected`,
 			required: []string{
 				`coalesce(CAST(NULL AS Nullable(String)), "_raw", "_raw")`,
-				`"__os_raw_encoding" = 1`,
+				`ifNull("__os_string_or_bytes_`,
+				`isValidUTF8(assumeNotNull("value"))`,
 			},
 		},
 	} {

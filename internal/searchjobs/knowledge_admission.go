@@ -15,6 +15,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgesnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 type preparedKnowledgeAdmission struct {
@@ -26,6 +27,8 @@ type preparedKnowledgeAdmission struct {
 	metadataBytes     uint64
 	remainingRuntime  time.Duration
 }
+
+var errSearchJobIDRequired = errors.New("search job ID is required before addinfo compilation")
 
 func normalizedKnowledgeResolver(resolver KnowledgeResolver) KnowledgeResolver {
 	if isNilRequiredDependency(resolver) {
@@ -45,6 +48,22 @@ func (manager *Manager) knowledgeAdmissionEnabled(request CreateRequest) bool {
 func (manager *Manager) prepareKnowledgeAdmission(
 	ctx context.Context,
 	request CreateRequest,
+	visibilityCutoff uint64,
+	searchStart time.Time,
+) (preparedKnowledgeAdmission, error) {
+	return manager.prepareKnowledgeAdmissionForJob(
+		ctx,
+		request,
+		"",
+		visibilityCutoff,
+		searchStart,
+	)
+}
+
+func (manager *Manager) prepareKnowledgeAdmissionForJob(
+	ctx context.Context,
+	request CreateRequest,
+	searchJobID string,
 	visibilityCutoff uint64,
 	searchStart time.Time,
 ) (preparedKnowledgeAdmission, error) {
@@ -69,10 +88,14 @@ func (manager *Manager) prepareKnowledgeAdmission(
 	if err != nil {
 		return preparedKnowledgeAdmission{}, manager.safeSPLAdmissionError(ctx, err, true)
 	}
+	if searchJobID == "" && parsedContainsAddInfo(parsed) {
+		return preparedKnowledgeAdmission{}, errSearchJobIDRequired
+	}
 	scope := plan.Scope{
 		TenantID:          request.TenantID,
 		AuthorizedIndexes: cloneStrings(request.AuthorizedIndexes),
 		RequestedIndexes:  cloneStrings(request.RequestedIndexes),
+		SearchJobID:       searchJobID,
 		Earliest:          request.TimeRange.Earliest(),
 		Latest:            request.TimeRange.Latest(),
 		SearchStart:       searchStart,
@@ -229,6 +252,18 @@ func (manager *Manager) prepareKnowledgeAdmission(
 		metadataBytes:     metadataBytes,
 		remainingRuntime:  remainingRuntime,
 	}, nil
+}
+
+func parsedContainsAddInfo(query *spl.Query) bool {
+	if query == nil {
+		return false
+	}
+	for _, command := range query.Commands {
+		if _, ok := command.(*spl.AddInfoCommand); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // exactKnowledgeResolution treats the resolver as a detached dependency, not

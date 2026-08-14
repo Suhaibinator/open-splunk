@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 func TestManagerRetainsImmutableCompilerVersionAcrossEveryProjection(t *testing.T) {
@@ -120,11 +121,15 @@ func TestManagerCompilerVersionDefaultAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create(default compiler version) error = %v", err)
 	}
-	if defaultCompilerVersion != "0.2" {
-		t.Fatalf("defaultCompilerVersion = %q, want 0.2", defaultCompilerVersion)
+	if defaultCompilerVersion != spl.CompatibilityVersion {
+		t.Fatalf(
+			"defaultCompilerVersion = %q, want current SPL identity %q",
+			defaultCompilerVersion,
+			spl.CompatibilityVersion,
+		)
 	}
 	if created.CompilerVersion != defaultCompilerVersion {
-		t.Fatalf("default compiler version = %q, want 0.2", created.CompilerVersion)
+		t.Fatalf("default compiler version = %q, want %q", created.CompilerVersion, defaultCompilerVersion)
 	}
 
 	for _, test := range []struct {

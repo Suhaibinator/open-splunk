@@ -65,7 +65,7 @@
     },
     {
       "id": "SPL-V02-QUOTED-FIELD-001",
-      "summary": "Single quotes name exact scalar fields, including stats inputs and BY fields, and eval destinations.",
+      "summary": "Single quotes name exact scalar, eval-destination, stats-input, stats-BY, and table fields.",
       "cases": [
         {"name": "operator field", "source": "index=main | eval value='request-bytes'/1024", "expect": {"parse": "accept"}},
         {"name": "space field", "source": "index=main | where 'HTTP Status' IN (500,502)", "expect": {"parse": "accept"}},
@@ -75,7 +75,24 @@
         {"name": "invalid escape", "source": "index=main | eval value='bad\\nfield'", "expect": {"diagnostic": "SPL_INVALID_FIELD_QUOTE_ESCAPE"}},
         {"name": "unterminated", "source": "index=main | eval value='field", "expect": {"diagnostic": "SPL_UNTERMINATED_FIELD_QUOTE"}},
         {"name": "empty", "source": "index=main | eval value=''", "expect": {"diagnostic": "SPL_EXPECTED_FIELD"}},
-        {"name": "quoted stats aggregate", "source": "index=main | stats avg('request-bytes') BY 'HTTP Status'", "expect": {"parse": "accept"}}
+        {"name": "quoted stats aggregate", "source": "index=main | stats avg('request-bytes') BY 'HTTP Status'", "expect": {"parse": "accept"}},
+        {"name": "quoted stats output and table", "source": "index=main | stats avg('request-bytes') AS \"Mean Bytes\" BY 'HTTP Status' | table 'HTTP Status', 'Mean Bytes'", "expect": {"parse": "accept"}}
+      ]
+    },
+    {
+      "id": "SPL-V02-STATS-BY-MULTIVALUE-001",
+      "summary": "Stats BY expands bounded top-level scalar-member multivalues and rejects nested containers atomically.",
+      "cases": [
+        {"name": "raw multivalue grouping", "source": "index=main | stats count BY tags", "row_fixture": "stats-by-scalar-and-string-multivalue", "evidence": "stats-by-live-raw-multivalue", "expect": {"parse": "accept", "relation": "one-group-occurrence-per-scalar-member"}},
+        {"name": "split-value deduplication", "source": "index=main | stats count BY tags dedup_splitvals=true", "row_fixture": "stats-by-duplicate-string-members", "evidence": "stats-by-live-split-deduplication", "expect": {"parse": "accept", "relation": "per-field-members-deduplicated-before-grouping"}},
+        {"name": "missing null and empty inputs", "source": "index=main | stats count BY tags", "row_fixture": "stats-by-missing-whole-null-null-members-and-empty", "evidence": "stats-by-live-empty-domain", "expect": {"relation": "missing-whole-null-null-members-and-empty-arrays-contribute-no-group"}},
+        {"name": "authored Cartesian product", "source": "index=main | stats count BY tags zones", "row_fixture": "stats-by-two-multivalue-fields", "evidence": "stats-by-live-cartesian-product", "expect": {"parse": "accept", "relation": "cartesian-product-in-authored-field-order"}},
+        {"name": "fixed multivalue preserves String and Bytes members", "source": "index=main | stats values(host) AS members | stats count BY members", "row_fixture": "stats-by-fixed-array-valid-and-invalid-utf8-host-members", "evidence": "stats-by-live-string-or-bytes-publication", "expect": {"relation": "nullable-mixed-valid-utf8-string-invalid-utf8-bytes"}},
+        {"name": "exact 10000 combination boundary", "source": "index=main | stats count BY tags zones | stats count AS groups", "row_fixture": "stats-by-100-by-100-members", "evidence": "stats-by-live-exact-10000-boundary", "expect": {"relation": "10000-groups"}},
+        {"name": "10001 combinations fail atomically", "source": "index=main | stats count BY tags zones | head 1", "row_fixture": "stats-by-101-by-100-members", "evidence": "stats-by-live-10001-rejection", "expect": {"job_failure": "execution-limit-sanitized-atomic-no-prefix"}},
+        {"name": "nested container rejection", "source": "index=main | stats count BY tags | search count>100 | head 1", "row_fixture": "stats-by-nested-container", "evidence": "stats-by-live-container-rejection", "expect": {"job_failure": "unsupported-value-sanitized"}},
+        {"name": "late marker publication is atomic", "source": "index=main | stats count BY tags | search count>=1", "row_fixture": "stats-by-valid-prefix-then-container", "evidence": "stats-by-executor-late-marker-atomic", "expect": {"job_failure": "atomic-no-public-prefix"}},
+        {"name": "public preview remains empty", "source": "index=main | stats count BY tags | search count>=1", "row_fixture": "stats-by-staged-prefix-then-unsupported-failure", "evidence": "stats-by-manager-no-public-prefix", "expect": {"job_failure": "preview-and-paging-unavailable-no-public-prefix"}}
       ]
     },
     {

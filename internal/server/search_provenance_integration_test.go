@@ -103,10 +103,16 @@ func TestSavedSearchProvenanceSurvivesExecutionAndSourceDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	savedDefinition := savedSearchDefinition(ownerID, appID, "Errors")
+	savedDefinition.Search.Spl = searchSPL
+	savedDefinition.Search.TimeRange = &opensplunkv1.TimeRangeSpec{
+		Earliest: stringPointer("-1d"), Latest: stringPointer("now"),
+		Timezone: stringPointer(location.String()),
+	}
 	saved, err := savedSearches.Create(
 		ctx,
 		savedobjects.AccessScope{OwnerID: ownerID},
-		savedSearchDefinition(ownerID, appID, "Errors"),
+		savedDefinition,
 	)
 	if err != nil {
 		t.Fatal(err)

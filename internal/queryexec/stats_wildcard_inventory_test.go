@@ -92,7 +92,8 @@ func TestExecutorExecuteStatsWildcardInventoryRejectsRowsAtomically(t *testing.T
 			if !got.IsZero() {
 				t.Fatalf("result is nonzero on error: %#v", got)
 			}
-			if _, diagnostic := test.wantErr.(planDiagnosticSentinel); diagnostic {
+			var diagnosticSentinel planDiagnosticSentinel
+			if errors.As(test.wantErr, &diagnosticSentinel) {
 				var planErr *plan.Diagnostic
 				if !errors.As(err, &planErr) {
 					t.Fatalf("error = %v, want plan diagnostic", err)

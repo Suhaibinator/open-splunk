@@ -20,6 +20,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/savedobjects"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
@@ -434,8 +435,13 @@ func TestNormalizeBootstrapRejectsContradictoryOrMalformedBuildMetadata(t *testi
 func TestNormalizeBootstrapRejectsNoncanonicalCompatibilityIdentity(t *testing.T) {
 	t.Parallel()
 	defaulted, err := normalizeBootstrap(BootstrapConfig{})
-	if err != nil || defaulted.SPLCompatibilityVersion != "0.2" {
-		t.Fatalf("normalizeBootstrap(default) = (%q, %v), want 0.2", defaulted.SPLCompatibilityVersion, err)
+	if err != nil || defaulted.SPLCompatibilityVersion != spl.CompatibilityVersion {
+		t.Fatalf(
+			"normalizeBootstrap(default) = (%q, %v), want %q",
+			defaulted.SPLCompatibilityVersion,
+			err,
+			spl.CompatibilityVersion,
+		)
 	}
 
 	for _, version := range []string{
@@ -450,8 +456,8 @@ func TestNormalizeBootstrapRejectsNoncanonicalCompatibilityIdentity(t *testing.T
 			t.Fatalf("normalizeBootstrap(%q) error = %v", version, err)
 		}
 	}
-	got, err := normalizeBootstrap(BootstrapConfig{SPLCompatibilityVersion: "0.2"})
-	if err != nil || got.SPLCompatibilityVersion != "0.2" {
+	got, err := normalizeBootstrap(BootstrapConfig{SPLCompatibilityVersion: spl.CompatibilityVersion})
+	if err != nil || got.SPLCompatibilityVersion != spl.CompatibilityVersion {
 		t.Fatalf("normalizeBootstrap(canonical) = (%q, %v)", got.SPLCompatibilityVersion, err)
 	}
 }

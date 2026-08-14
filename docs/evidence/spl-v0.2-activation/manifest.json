@@ -1,0 +1,73 @@
+{
+  "$schema": "./manifest.schema.json",
+  "format_version": "open-splunk-spl-v0.2-activation-evidence-v1",
+  "phase": "implementation-checkpoint",
+  "compatibility": {
+    "authored_search": "0.2",
+    "knowledge_expression": "0.1"
+  },
+  "runtime": {
+    "revision_binding": "unbound",
+    "revision": null,
+    "tree": null,
+    "candidate_manifest_sha256": null,
+    "candidate_acceptance_sha256": null,
+    "remote_ref": null,
+    "remote_readback_revision": null,
+    "remote_readback_at_utc": null
+  },
+  "artifacts": [
+    { "id": "public-readme", "path": "README.md", "sha256": null },
+    { "id": "deploy-env-generator", "path": "deploy/generate-env.sh", "sha256": null },
+    { "id": "deploy-guide", "path": "deploy/README.md", "sha256": null },
+    { "id": "collector-deployment-guide", "path": "docs/collector-deployment.md", "sha256": null },
+    { "id": "integration-guide", "path": "integration/README.md", "sha256": null },
+    { "id": "contract", "path": "docs/spl-compatibility-v0.2.md", "sha256": null },
+    { "id": "corpus", "path": "internal/spl/testdata/compatibility-v0.2.json", "sha256": null },
+    { "id": "migration", "path": "docs/spl-compatibility-v0.2-migration.md", "sha256": null },
+    { "id": "benchmark", "path": "docs/spl-compatibility-v0.2-benchmark.md", "sha256": null },
+    { "id": "manifest-schema", "path": "docs/evidence/spl-v0.2-activation/manifest.schema.json", "sha256": null },
+    { "id": "acceptance-verifier", "path": "scripts/verify-spl-v02-acceptance.mjs", "sha256": null },
+    { "id": "acceptance-verifier-tests", "path": "scripts/spl-v02-acceptance.test.mjs", "sha256": null },
+    { "id": "ci-structural-tests", "path": "scripts/spl-v02-stats-by-ci.test.mjs", "sha256": null },
+    { "id": "strict-json-parser", "path": "scripts/strict-json.mjs", "sha256": null },
+    { "id": "ci-workflow", "path": ".github/workflows/ci.yml", "sha256": null },
+    { "id": "publication-workflow", "path": ".github/workflows/publish-images.yml", "sha256": null },
+    { "id": "release-makefile", "path": "Makefile", "sha256": null },
+    { "id": "release-launcher", "path": "scripts/build-release.sh", "sha256": null },
+    { "id": "oci-launcher", "path": "scripts/build-oci.sh", "sha256": null },
+    { "id": "identity-reader", "path": "scripts/read-spl-compatibility-version.mjs", "sha256": null },
+    { "id": "identity-reader-tests", "path": "scripts/read-spl-compatibility-version.test.mjs", "sha256": null },
+    { "id": "runtime-identity", "path": "internal/spl/doc.go", "sha256": null }
+  ],
+  "ci": {
+    "repository": null,
+    "workflow": "CI",
+    "run_id": null,
+    "url": null,
+    "event": null,
+    "head_branch": null,
+    "head_revision": null,
+    "checkout_revision": null,
+    "checkout_tree": null,
+    "release_artifact_source_revision": null,
+    "status": null,
+    "conclusion": null,
+    "completed_at_utc": null,
+    "job_set_complete": false,
+    "jobs": []
+  },
+  "release": {
+    "source_revision": null,
+    "spl_compatibility_version": null,
+    "application_version": null,
+    "binary_identities": [],
+    "artifact_digests": []
+  },
+  "receipts": [],
+  "decision": {
+    "status": "pending",
+    "stable_publication_authorized": false,
+    "reason": "The v0.2 implementation checkpoint is not a clean reachable qualification revision and has no terminal-success CI or release evidence."
+  }
+}

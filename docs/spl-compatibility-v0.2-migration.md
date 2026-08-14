@@ -10,11 +10,25 @@ Version 0.2 adds arithmetic, scalar grouping, single-quoted scalar fields,
 search and history source remains byte-for-byte authored text; the server does
 not rewrite it during upgrade or rerun.
 
+Version 0.2 also makes the bounded multivalue `stats BY` behavior explicit.
+Fixed String arrays and raw Dynamic top-level scalar-member lists expand to one
+group occurrence per member. Duplicates remain significant unless
+`dedup_splitvals=true`; multiple list-valued BY fields use a bounded Cartesian
+product. Objects and nested containers fail the whole job atomically. Searches
+that relied on the older v0.1 blanket rejection of every list should either
+remove the multivalue BY input or add an explicit scalar-producing stage.
+Every multivalue grouping path, including fixed String arrays and Dynamic
+values, treats result-retention ceilings as hard job failures so it can never
+commit an unvalidated or over-limit prefix; operators should raise those fixed
+limits deliberately rather than relying on ordinary successful truncation for
+such searches. The executor's private atomic buffer has a fixed 128 MiB ceiling
+in addition to the backend and manager's configured limits.
+
 The normative behavior is in
 [`spl-compatibility-v0.2.md`](spl-compatibility-v0.2.md). This guide is an
-operator checklist, not an additional compatibility contract. Final rollout
-evidence belongs in the
-[`v0.2 pre-activation checkpoint`](spl-compatibility-v0.2-acceptance.md).
+operator checklist, not an additional compatibility contract. Qualification
+evidence and final rollout evidence are recorded in the
+[`v0.2 acceptance report`](spl-compatibility-v0.2-acceptance.md).
 
 ## Supported operator examples
 
@@ -55,17 +69,28 @@ or `count(eval(...))`; do not assign it directly or compare it with `true`.
 | `index=api status IN (500, 503)` | `index=api | where status IN (500, 503)` | base-search membership remains unsupported |
 | `eval selected=status IN (500, 503)` | `eval selected=if(status IN (500, 503), 1, 0)` | a Boolean membership result cannot be assigned directly |
 | `where (status IN (500, 503))=true` | `where status IN (500, 503)` | membership is not a scalar and cannot be compared with a Boolean literal |
+| Treating every list-valued `stats BY tags` input as unsupported | `stats count BY tags [dedup_splitvals=true]` or normalize to a scalar first | v0.2 admits bounded top-level scalar-member multivalues; nested containers still fail atomically |
 
-Quoted fields are enabled only in scalar `eval`/`where` positions and as an
-`eval` destination. They are not accepted in `table`, `fields`, `sort`, `BY`,
-or the other command-specific field grammars listed in the contract. When a
-later command needs a special-character field, first copy it to an ordinary
-alias:
+Quoted fields are enabled in scalar `eval`/`where` positions, as an `eval`
+destination, for exact `stats` aggregate and `sparkline` inputs, in `stats BY`,
+and in `table`. A double-quoted `stats AS` name creates one literal output;
+refer to that output later with the single-quoted spelling:
+
+```spl
+index=api
+| stats avg('request-bytes') AS "Mean Bytes" BY 'HTTP Status'
+| table 'HTTP Status', 'Mean Bytes'
+```
+
+Single-quoted names are not accepted in `fields`, `sort`, `rename`,
+`eventstats`, `streamstats`, or the other command-specific field grammars
+listed in the contract. When such a command needs a special-character source
+field, first copy it to an ordinary alias:
 
 ```spl
 index=api
 | eval request_bytes='request-bytes'
-| table request_bytes
+| sort request_bytes
 ```
 
 Do not copy v0.2 expressions into Tier-1 calculated-field knowledge objects.

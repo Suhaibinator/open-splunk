@@ -3,12 +3,51 @@ import test from "node:test";
 
 import {
   firstSplPipelineBoundary,
+  isSupportedSplPipelineCommand,
   isScalarExpressionPipelineCommand,
   isSplOffsetInDoubleQuotedValue,
   isSplOffsetInQuotedValue,
   scanSplStructure,
   splitSplPipeline,
 } from "./spl-syntax";
+
+const V03_PIPELINE_COMMANDS = [
+  "regex",
+  "reverse",
+  "accum",
+  "strcat",
+  "addinfo",
+  "fillnull",
+  "addtotals",
+  "delta",
+  "makemv",
+  "mvexpand",
+] as const;
+
+test("v0.3 commands are browser-supported through the shared catalog", () => {
+  for (const command of V03_PIPELINE_COMMANDS) {
+    assert.equal(isSupportedSplPipelineCommand(command), true, command);
+    assert.equal(isSupportedSplPipelineCommand(command.toUpperCase()), true, command);
+    assert.equal(isScalarExpressionPipelineCommand(command), false, command);
+  }
+
+  for (const unsupported of ["transaction", "join", "map", "subsearch"]) {
+    assert.equal(isSupportedSplPipelineCommand(unsupported), false, unsupported);
+  }
+});
+
+test("v0.3 quoted Unicode values never mint browser pipeline boundaries", () => {
+  const source = String.raw`index=main | regex message="timeout|拒否" | reverse | accum bytes AS running | strcat host "|💥" route endpoint | addinfo | fillnull value="unknown|界" optional | addtotals fieldname=total bytes running | delta running AS step p=2 | makemv delim="💥|界" allowempty=true tags | mvexpand tags limit=2`;
+  const stages = splitSplPipeline(source).map((stage) => stage.trim());
+
+  assert.equal(scanSplStructure(source).unclosedQuote, null);
+  assert.equal(scanSplStructure(source).pipes.length, V03_PIPELINE_COMMANDS.length);
+  assert.equal(stages.length, V03_PIPELINE_COMMANDS.length + 1);
+  assert.deepEqual(
+    stages.slice(1).map((stage) => stage.split(/\s/u)[0]?.toLowerCase()),
+    V03_PIPELINE_COMMANDS,
+  );
+});
 
 test("SPL structure scanner ignores separators in value and field quotes", () => {
   const source = String.raw`index=main message="a|b" | eval 'request|bytes'=1, note="x\"|y" | where 'request|bytes'>0`;

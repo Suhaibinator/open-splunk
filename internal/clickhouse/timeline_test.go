@@ -114,6 +114,13 @@ func TestCompileTimelineAcceptsEligibleOperatorMatrix(t *testing.T) {
 		`index=gradethis | sort 0 -_time`,
 		`index=gradethis | dedup 2 host`,
 		`index=gradethis | tail 20`,
+		`index=gradethis | regex message!="^debug$"`,
+		`index=gradethis | reverse`,
+		`index=gradethis | strcat host "/" source route`,
+		`index=gradethis | fillnull value="unknown" optional`,
+		`index=gradethis | addtotals fieldname=total bytes duration`,
+		`index=gradethis | sort 0 +_time | delta bytes AS change p=2`,
+		`index=gradethis | makemv delim="," allowempty=true tags`,
 	}
 	for _, source := range queries {
 		source := source
@@ -140,12 +147,17 @@ func TestCompileTimelineRejectsIneligibleOperatorMatrix(t *testing.T) {
 		{`index=gradethis | rename _time AS observed_at`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
 		{`index=gradethis | rename observed_at AS _time`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
 		{`index=gradethis | bin _time span=5m`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
+		{`index=gradethis | strcat host source _time`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
+		{`index=gradethis | fillnull value="zero" _time`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
+		{`index=gradethis | addtotals fieldname=_time bytes duration`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
+		{`index=gradethis | delta bytes AS _time`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
 		{`index=gradethis | fields - _time | table _time`, "SPL_UNSUPPORTED_TIMELINE_TIME_FIELD"},
 		{`index=gradethis | stats count`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | top level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | rare level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | timechart span=5m count BY level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 		{`index=gradethis | chart count OVER path BY level`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
+		{`index=gradethis | mvexpand tags`, "SPL_UNSUPPORTED_TIMELINE_PIPELINE"},
 	}
 	for _, test := range tests {
 		test := test

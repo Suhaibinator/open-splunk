@@ -556,6 +556,22 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 	case "fields", "sort", "dedup":
 		base.Kinds = []SuggestionKind{SuggestionKindField}
 		return base
+	case "regex":
+		return classifyRegexSuggestion(base, body)
+	case "accum":
+		return classifyAccumSuggestion(base, body)
+	case "strcat":
+		return classifyStrcatSuggestion(base, body)
+	case "fillnull":
+		return classifyFillNullSuggestion(base, body)
+	case "addtotals":
+		return classifyAddTotalsSuggestion(base, body)
+	case "delta":
+		return classifyDeltaSuggestion(base, body)
+	case "makemv":
+		return classifyMakeMVSuggestion(base, body)
+	case "mvexpand":
+		return classifyMVExpandSuggestion(base, body)
 	case "rename":
 		return classifyRenameSuggestion(base, body)
 	case "stats":
@@ -576,11 +592,218 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 		return classifyRexSuggestion(base, body)
 	case "spath":
 		return classifySpathSuggestion(base, body)
-	case "head", "tail":
+	case "head", "tail", "reverse", "addinfo":
 		return base
 	default:
 		return base
 	}
+}
+
+func v03FieldKeywordSuggestion(
+	context SuggestionContext,
+	field bool,
+	keywords ...string,
+) SuggestionContext {
+	if field {
+		context.Kinds = append(context.Kinds, SuggestionKindField)
+	}
+	if len(keywords) > 0 {
+		context.Kinds = append(context.Kinds, SuggestionKindKeyword)
+		context.Keywords = append(context.Keywords, keywords...)
+	}
+	return context
+}
+
+func classifyAccumSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if len(tokens) == 0 {
+		return v03FieldKeywordSuggestion(context, true)
+	}
+	if tokenWordEqual(tokens[len(tokens)-1], "AS") {
+		return v03FieldKeywordSuggestion(context, true)
+	}
+	if len(tokens) == 1 {
+		return v03FieldKeywordSuggestion(context, false, "AS")
+	}
+	return context
+}
+
+func classifyRegexSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	// The only catalog-backed operand is the optional exact field at the start.
+	// After that field, its comparison operator, or a complete quoted pattern,
+	// the grammar expects punctuation/a literal or is already complete.
+	if len(tokens) == 0 {
+		return v03FieldKeywordSuggestion(context, true)
+	}
+	return context
+}
+
+func classifyStrcatSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if endsOptionEqual(tokens, "allrequired") {
+		return context
+	}
+	body, _, valid := consumeV03LeadingOptions(tokens, map[string]func(token) bool{
+		"allrequired": v03BooleanSuggestionValue,
+	})
+	if !valid {
+		return context
+	}
+	if len(body) == 0 && len(tokens) == 0 {
+		return v03FieldKeywordSuggestion(context, true, "allrequired=")
+	}
+	return v03FieldKeywordSuggestion(context, true)
+}
+
+func classifyFillNullSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if endsOptionEqual(tokens, "value") {
+		return context
+	}
+	body, _, valid := consumeV03LeadingOptions(tokens, map[string]func(token) bool{
+		"value": func(value token) bool { return value.kind == tokenString },
+	})
+	if !valid {
+		return context
+	}
+	if len(body) == 0 && len(tokens) == 0 {
+		return v03FieldKeywordSuggestion(context, true, "value=")
+	}
+	return v03FieldKeywordSuggestion(context, true)
+}
+
+func classifyAddTotalsSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if endsOptionEqual(tokens, "fieldname") {
+		return context
+	}
+	if endsOptionEqual(tokens, "row") || endsOptionEqual(tokens, "col") {
+		return context
+	}
+	body, used, valid := consumeV03LeadingOptions(tokens, map[string]func(token) bool{
+		"row": func(value token) bool {
+			return value.kind == tokenWord && (tokenWordEqual(value, "t") || tokenWordEqual(value, "true"))
+		},
+		"col": func(value token) bool {
+			return value.kind == tokenWord && (tokenWordEqual(value, "f") || tokenWordEqual(value, "false"))
+		},
+		"fieldname": v03ExactFieldSuggestionValue,
+	})
+	if !valid {
+		return context
+	}
+	if len(body) != 0 {
+		return v03FieldKeywordSuggestion(context, true)
+	}
+	keywords := make([]string, 0, 3-len(used))
+	for _, option := range []string{"col", "fieldname", "row"} {
+		if _, exists := used[option]; !exists {
+			keywords = append(keywords, option+"=")
+		}
+	}
+	return v03FieldKeywordSuggestion(context, true, keywords...)
+}
+
+func classifyDeltaSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if len(tokens) == 0 {
+		return v03FieldKeywordSuggestion(context, true)
+	}
+	last := tokens[len(tokens)-1]
+	if tokenWordEqual(last, "AS") {
+		return v03FieldKeywordSuggestion(context, true)
+	}
+	if endsOptionEqual(tokens, "p") {
+		return context
+	}
+	pIndex := topLevelOptionAssignmentIndex(tokens, "p")
+	asIndex := topLevelWordIndex(tokens, "AS")
+	if pIndex >= 0 {
+		if pIndex+2 >= len(tokens) || tokens[pIndex+2].kind != tokenWord ||
+			!unsignedIntegerSyntax(tokens[pIndex+2].text) {
+			return context
+		}
+		if asIndex < 0 {
+			return v03FieldKeywordSuggestion(context, false, "AS")
+		}
+		return context
+	}
+	if asIndex >= 0 {
+		return v03FieldKeywordSuggestion(context, false, "p=")
+	}
+	return v03FieldKeywordSuggestion(context, false, "AS", "p=")
+}
+
+func classifyMakeMVSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if endsOptionEqual(tokens, "allowempty") || endsOptionEqual(tokens, "delim") {
+		return context
+	}
+	body, used, valid := consumeV03LeadingOptions(tokens, map[string]func(token) bool{
+		"allowempty": v03BooleanSuggestionValue,
+		"delim": func(value token) bool {
+			return value.kind == tokenString && value.text != ""
+		},
+	})
+	if !valid || len(body) != 0 {
+		// One non-option token is the terminal exact field. Invalid or additional
+		// tokens also stay fail-closed rather than inviting a second field.
+		return context
+	}
+	keywords := make([]string, 0, 2-len(used))
+	for _, option := range []string{"allowempty", "delim"} {
+		if _, exists := used[option]; !exists {
+			keywords = append(keywords, option+"=")
+		}
+	}
+	return v03FieldKeywordSuggestion(context, true, keywords...)
+}
+
+func classifyMVExpandSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	if len(tokens) == 0 {
+		return v03FieldKeywordSuggestion(context, true)
+	}
+	if topLevelOptionAssignmentIndex(tokens, "limit") < 0 {
+		return v03FieldKeywordSuggestion(context, false, "limit=")
+	}
+	return context
+}
+
+// consumeV03LeadingOptions recognizes complete name=value triples at the
+// beginning of a command suggestion body. It is intentionally stricter than
+// generic option discovery: duplicate, malformed, or late options stop all
+// completion so the editor never encourages an already-invalid command.
+func consumeV03LeadingOptions(
+	tokens []token,
+	validators map[string]func(token) bool,
+) (body []token, used map[string]struct{}, valid bool) {
+	used = make(map[string]struct{}, len(validators))
+	index := 0
+	for index < len(tokens) {
+		name := tokens[index]
+		if name.kind != tokenWord || index+1 >= len(tokens) ||
+			tokens[index+1].kind != tokenEqual {
+			break
+		}
+		key := asciiFold(name.text)
+		validator, supported := validators[key]
+		if !supported || index+2 >= len(tokens) {
+			return nil, used, false
+		}
+		if _, duplicate := used[key]; duplicate || !validator(tokens[index+2]) {
+			return nil, used, false
+		}
+		used[key] = struct{}{}
+		index += 3
+	}
+	return tokens[index:], used, true
+}
+
+func v03BooleanSuggestionValue(value token) bool {
+	if value.kind != tokenWord {
+		return false
+	}
+	_, ok := parseStreamStatsBool(value.text)
+	return ok
+}
+
+func v03ExactFieldSuggestionValue(value token) bool {
+	return value.kind == tokenWord && IsExactUnquotedFieldName(value.text) &&
+		!strings.HasPrefix(strings.ToLower(value.text), "__os_")
 }
 
 func classifySearchSuggestion(context SuggestionContext, tokens []token) SuggestionContext {

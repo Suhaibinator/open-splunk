@@ -1304,12 +1304,12 @@ func TestExecutorAndManagerAgainstClickHouse(t *testing.T) {
 			`index=main | eval duration_ms=tonumber(replace(duration, "ms$", "")) | stats `+
 				`p50(duration_ms) AS q50 p90(duration_ms) AS q90 `+
 				`p95(duration_ms) AS q95 p99(duration_ms) AS q99 `+
-				`perc50(duration_ms) AS q50_again`,
+				`perc75(duration_ms) AS q75`,
 		)
 		if job.State != searchjobs.StateCompleted {
 			t.Fatalf("percentile family state = %v, failure=%#v", job.State, job.Failure)
 		}
-		queryIntegrationAssertColumns(t, page, []string{"q50", "q90", "q95", "q99", "q50_again"})
+		queryIntegrationAssertColumns(t, page, []string{"q50", "q90", "q95", "q99", "q75"})
 		if len(page.Rows) != 1 || len(page.Schema.Columns) != 5 {
 			t.Fatalf("percentile family page = %#v", page)
 		}
@@ -2098,9 +2098,14 @@ ORDER BY grid.number`,
 		if job.State != searchjobs.StateCompleted {
 			t.Fatalf("values state = %v, failure=%#v", job.State, job.Failure)
 		}
-		if len(page.Schema.Columns) != 1 || page.Schema.Columns[0] != (searchjobs.Column{
-			Name: "statuses", Kind: searchjobs.ValueKindList, Multivalue: true,
-		}) {
+		wantValuesColumn := searchjobs.Column{
+			Name:                       "statuses",
+			Kind:                       searchjobs.ValueKindList,
+			Multivalue:                 true,
+			FlatMultivalueDelimiter:    spl.DefaultStatsDelimiter,
+			HasFlatMultivalueDelimiter: true,
+		}
+		if len(page.Schema.Columns) != 1 || page.Schema.Columns[0] != wantValuesColumn {
 			t.Fatalf("values schema = %#v", page.Schema)
 		}
 		if len(page.Rows) != 1 {
@@ -2128,9 +2133,10 @@ ORDER BY grid.number`,
 		if binaryJob.State != searchjobs.StateCompleted {
 			t.Fatalf("binary values state = %v, failure=%#v", binaryJob.State, binaryJob.Failure)
 		}
+		wantBinaryValuesColumn := wantValuesColumn
+		wantBinaryValuesColumn.Name = "binary_values"
 		if len(binaryPage.Schema.Columns) != 1 ||
-			binaryPage.Schema.Columns[0].Kind != searchjobs.ValueKindList ||
-			!binaryPage.Schema.Columns[0].Multivalue ||
+			binaryPage.Schema.Columns[0] != wantBinaryValuesColumn ||
 			len(binaryPage.Rows) != 1 {
 			t.Fatalf("binary values transport = schema %#v rows %#v", binaryPage.Schema, binaryPage.Rows)
 		}

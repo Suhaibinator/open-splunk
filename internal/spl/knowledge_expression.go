@@ -53,15 +53,15 @@ func ParseScalarExpression(source string) (ScalarExpr, error) {
 			Range:   tokens[maxSPLTokens].sourceRange,
 		}
 	}
-	parser := parser{source: source, tokens: tokens, profile: expressionProfileV01}
-	expression, err := parser.parseScalarExpression()
+	expressionParser := parser{source: source, tokens: tokens, profile: expressionProfileV01}
+	expression, err := expressionParser.parseScalarExpression()
 	if err != nil {
 		return nil, err
 	}
-	if parser.current().kind != tokenEOF {
-		return nil, parser.errorAtCurrent(
+	if expressionParser.current().kind != tokenEOF {
+		return nil, expressionParser.errorAtCurrent(
 			"SPL_UNEXPECTED_TOKEN",
-			fmt.Sprintf("unexpected token %q", parser.current().text),
+			fmt.Sprintf("unexpected token %q", expressionParser.current().text),
 		)
 	}
 	return expression, nil

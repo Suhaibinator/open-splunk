@@ -162,7 +162,11 @@ func BenchmarkExpressionV02Execution(b *testing.B) {
 		}
 	})
 
-	indexTime := time.Date(2026, time.August, 11, 12, 0, 0, 0, time.UTC)
+	// The production events table enforces expires_at with a physical TTL. The
+	// benchmark's data and assertions are all relative to one captured clock,
+	// so keep that clock current instead of letting a historical fixture turn
+	// into a benchmark of an empty table.
+	indexTime := time.Now().UTC().Truncate(time.Second)
 	wantDynamicSum := expressionV02StoreBenchmarkFixture(b, ctx, store, indexTime, rows)
 	visibilityCutoff, err := store.VisibilityCutoff(ctx)
 	if err != nil {

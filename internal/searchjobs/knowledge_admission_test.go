@@ -231,6 +231,103 @@ func TestKnowledgeAdmissionSealsEmptyAuthorityBeforeJournalAndDetaches(t *testin
 	}
 }
 
+func TestKnowledgeAdmissionReservesAndSealsAddInfoSIDBeforeResolution(t *testing.T) {
+	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
+	request := validRequest()
+	request.AppID = appID
+	request.SPL = `index=main | addinfo | table info_sid`
+
+	const jobID = "knowledge-addinfo-immutable-1"
+	var (
+		idCalls       atomic.Int32
+		resolverCalls atomic.Int32
+		eventMu       sync.Mutex
+		events        []string
+	)
+	record := func(event string) {
+		eventMu.Lock()
+		events = append(events, event)
+		eventMu.Unlock()
+	}
+	counted := knowledgeResolverFunc(func(
+		ctx context.Context,
+		scope knowledgecatalog.ResolutionScope,
+	) (knowledgecatalog.Resolution, error) {
+		resolverCalls.Add(1)
+		record("resolve")
+		return resolver.Resolve(ctx, scope)
+	})
+	manager := newTestManager(t, Config{
+		Executor: executorFunc(func(ctx context.Context, _ clickhouse.CompiledQuery, _ ResultSink) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}),
+		Snapshotter: snapshotterFunc(func(context.Context) (uint64, error) {
+			record("snapshot")
+			return 73, nil
+		}),
+		KnowledgeResolver: counted,
+		MaxConcurrent:     1,
+		CleanupInterval:   -1,
+		NewID: func() string {
+			idCalls.Add(1)
+			record("id")
+			return jobID
+		},
+		Now: func() time.Time {
+			return time.Date(2026, time.August, 12, 12, 0, 0, 123_000_000, time.UTC)
+		},
+	})
+
+	created, err := manager.Create(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Create(addinfo knowledge search): %v", err)
+	}
+	if created.ID != jobID || idCalls.Load() != 1 || resolverCalls.Load() != 1 {
+		t.Fatalf(
+			"addinfo authority = id %q/id calls %d/resolver calls %d",
+			created.ID,
+			idCalls.Load(),
+			resolverCalls.Load(),
+		)
+	}
+	eventMu.Lock()
+	gotEvents := slices.Clone(events)
+	eventMu.Unlock()
+	if !slices.Equal(gotEvents, []string{"snapshot", "id", "resolve"}) {
+		t.Fatalf("addinfo admission order = %v, want snapshot, ID reservation, resolution", gotEvents)
+	}
+
+	manager.mu.RLock()
+	entry := manager.jobs[jobID]
+	manager.mu.RUnlock()
+	if entry == nil {
+		t.Fatal("created addinfo job is not retained")
+	}
+	entry.mu.RLock()
+	if entry.preparedCompiled == nil {
+		entry.mu.RUnlock()
+		t.Fatal("addinfo knowledge admission did not retain a compiled authority")
+	}
+	compiled, ok := entry.preparedCompiled.CloneForExecution()
+	entry.mu.RUnlock()
+	if !ok || !compiled.HasValidExecutionSeal() {
+		t.Fatal("addinfo knowledge admission retained an unsealed compiler result")
+	}
+	if strings.Contains(compiled.SQL, jobID) {
+		t.Fatal("immutable addinfo SID was interpolated into generated SQL")
+	}
+	jobIDArguments := 0
+	for _, argument := range compiled.Args {
+		if value, ok := argument.(string); ok && value == jobID {
+			jobIDArguments++
+		}
+	}
+	if jobIDArguments != 1 {
+		t.Fatalf("immutable addinfo SID occurs %d times in bound args, want once: %#v", jobIDArguments, compiled.Args)
+	}
+}
+
 func TestKnowledgePreparedWorkerNeverReparsesReplansOrReresolves(t *testing.T) {
 	resolver, appID := newEmptyKnowledgeResolver(t, "tenant")
 	var resolverCalls atomic.Int32

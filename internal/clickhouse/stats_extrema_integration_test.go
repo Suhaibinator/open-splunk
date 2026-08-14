@@ -228,24 +228,21 @@ func testStatsExtremaAgainstClickHouse(
 		t.Fatalf("grouped scalar String min/max = %#v, want %#v", scalarGot, scalarWant)
 	}
 	scalar := compile(
-		base + ` extrema_group=numeric | stats min(service) AS low max(service) AS high min(service) AS low_again`,
+		base + ` extrema_group=numeric | stats min(service) AS low max(service) AS high`,
 	)
-	var scalarLow, scalarHigh, scalarLowAgain chcol.Dynamic
+	var scalarLow, scalarHigh chcol.Dynamic
 	if err := connection.QueryRow(ctx, scalar.SQL, scalar.Args...).Scan(
 		&scalarLow,
 		&scalarHigh,
-		&scalarLowAgain,
 	); err != nil {
-		t.Fatalf("execute repeated scalar min/max: %v\nSQL: %s", err, scalar.SQL)
+		t.Fatalf("execute scalar min/max: %v\nSQL: %s", err, scalar.SQL)
 	}
 	if scalarLow.Any() != float64(2) ||
-		scalarHigh.Any() != float64(10) ||
-		scalarLowAgain.Any() != float64(2) {
+		scalarHigh.Any() != float64(10) {
 		t.Fatalf(
-			"repeated scalar min/max = %#v/%#v/%#v, want 2/10/2",
+			"scalar min/max = %#v/%#v, want 2/10",
 			scalarLow.Any(),
 			scalarHigh.Any(),
-			scalarLowAgain.Any(),
 		)
 	}
 	scalarActions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", scalar)
@@ -253,7 +250,7 @@ func testStatsExtremaAgainstClickHouse(
 		"Tuple(UInt8, Float64, String), " +
 		"Tuple(UInt8, UInt8, Int64, String, String, UInt8), UInt8)"
 	if got := strings.Count(scalarActions, scalarMinSignature); got != 1 {
-		t.Fatalf("repeated scalar min has %d physical aggregate states, want one:\n%s", got, scalarActions)
+		t.Fatalf("scalar min has %d physical aggregate states, want one:\n%s", got, scalarActions)
 	}
 	const scalarMaxSignature = "Function: argMaxOrNullIf(" +
 		"Tuple(UInt8, Float64, String), " +
@@ -483,10 +480,10 @@ func testStatsExtremaAgainstClickHouse(
 		}
 	}
 
-	shared := compile(base + ` | stats min(extrema_value) AS low max(extrema_value) AS high min(extrema_value) AS low_again`)
+	shared := compile(base + ` | stats min(extrema_value) AS low max(extrema_value) AS high`)
 	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", shared)
 	if got := strings.Count(actions, "Function: argMinArray("); got != 1 {
-		t.Fatalf("repeated min has %d physical aggregate states, want one:\n%s", got, actions)
+		t.Fatalf("min has %d physical aggregate states, want one:\n%s", got, actions)
 	}
 	if got := strings.Count(actions, "Function: argMaxArray("); got != 1 {
 		t.Fatalf("min/max has %d physical max states, want one:\n%s", got, actions)

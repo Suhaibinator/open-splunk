@@ -1487,6 +1487,8 @@ func fixedFieldStoredType(field fieldState) (eventfields.StoredValueType, error)
 		return eventfields.StoredValueTypeBool, nil
 	case fieldKindTime:
 		return eventfields.StoredValueTypeTimestamp, nil
+	case fieldKindStringArray:
+		return eventfields.StoredValueTypeList, nil
 	case fieldKindNumber:
 		if strings.HasPrefix(field.numberType, "UInt") {
 			return eventfields.StoredValueTypeUint64, nil

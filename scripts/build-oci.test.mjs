@@ -265,6 +265,7 @@ function buildOCIEnvironment(revision, docker, extraEnvironment = {}) {
   return {
     ...process.env,
     OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3",
+    OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.2",
     OPEN_SPLUNK_SOURCE_REVISION: revision,
     OPEN_SPLUNK_SERVER_IMAGE: "registry.invalid/open-splunk/server:test",
     OPEN_SPLUNK_COLLECTOR_IMAGE: "registry.invalid/open-splunk/collector:test",
@@ -347,6 +348,7 @@ function runMakeOCI(fixture, revision, docker, extraEnvironment = {}) {
       env: {
         ...process.env,
         OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3",
+        OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.2",
         OPEN_SPLUNK_SOURCE_REVISION: revision,
         OPEN_SPLUNK_SERVER_IMAGE: "registry.invalid/open-splunk/server:test",
         OPEN_SPLUNK_COLLECTOR_IMAGE:
@@ -423,6 +425,22 @@ test("OCI targets are pinned scratch runtimes with a minimal non-root contract",
     dockerfile,
     /test "\$\{TARGETARCH\}" = "\$\{OPEN_SPLUNK_EXPECTED_TARGETARCH\}"/,
   );
+  assert.match(
+    dockerfile,
+    /actual_spl_compatibility_version=.*internal\/spl\/doc\.go/s,
+  );
+  assert.match(
+    dockerfile,
+    /test "\$\{actual_spl_compatibility_version\}" = \\\n+\s+"\$\{OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION\}"/,
+  );
+  assert.match(
+    dockerfile,
+    /spl_compatibility_version=%s.*OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION/s,
+  );
+  assert.match(
+    dockerfile,
+    /test "\$\{server_identity\}" = "\$\{expected_server\}"; \\\n+\s+test "\$\{collector_identity\}" = "\$\{expected_base\}";/,
+  );
   assert.ok(
     (dockerfile.match(/^ARG SOURCE_DATE_EPOCH(?:=.*)?$/gm) ?? []).length >= 3,
     "Dockerfile must expose Docker/BuildKit's standard reproducibility argument",
@@ -493,6 +511,42 @@ test("release publication creates immutable amd64 and arm64 GHCR images", async 
     2,
   );
   assert.match(workflow, /uses: docker\/build-push-action@v7/);
+  assert.match(
+    workflow,
+    /node scripts\/verify-spl-v03-acceptance\.mjs \\\n+\s+--phase accepted \\\n+\s+--publication \\\n+\s+--print-runtime-revision/,
+  );
+  assert.match(
+    workflow,
+    /node scripts\/verify-spl-v02-acceptance\.mjs \\\n+\s+--phase accepted \\\n+\s+--publication \\\n+\s+--print-runtime-revision/,
+  );
+  assert.match(workflow, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(workflow, /permissions:\n\s+actions: read\n\s+contents: read/);
+  assert.match(
+    workflow,
+    /manifest_path="docs\/evidence\/spl-v0\.2-activation\/manifest\.json"/,
+  );
+  assert.match(
+    workflow,
+    /manifest_path="docs\/evidence\/spl-v0\.3\/manifest\.json"/,
+  );
+  assert.match(
+    workflow,
+    /ref: \$\{\{ needs\.verify\.outputs\.runtime_revision \}\}/,
+  );
+  assert.match(
+    workflow,
+    /OPEN_SPLUNK_SOURCE_REVISION=\$\{\{ needs\.verify\.outputs\.runtime_revision \}\}/,
+  );
+  assert.match(
+    workflow,
+    /OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=\$\{\{ needs\.verify\.outputs\.expected_spl_compatibility_version \}\}/,
+  );
+  assert.match(workflow, /git cat-file -e "\$\{runtime_revision\}\^\{commit\}"/);
+  assert.match(workflow, /test "\$runtime_tree" = "\$manifest_runtime_tree"/);
+  assert.match(
+    workflow,
+    /test "\$runtime_compatibility_version" = "\$compatibility_version"/,
+  );
   assert.match(workflow, /push-by-digest=true/);
   assert.match(workflow, /provenance: mode=max/);
   assert.match(workflow, /sbom: true/);
@@ -616,6 +670,10 @@ test("OCI build anchors both local image tags to clean HEAD", async (t) => {
   assert.match(invocations, /build .*--platform linux\/amd64 .*--target collector /);
   assert.doesNotMatch(invocations, /build --no-cache/);
   assert.match(invocations, /--build-arg OPEN_SPLUNK_APPLICATION_VERSION=1\.2\.3/);
+  assert.match(
+    invocations,
+    /--build-arg OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0\.2/,
+  );
   assert.match(
     invocations,
     new RegExp(`--build-arg OPEN_SPLUNK_SOURCE_REVISION=${revision}`),
@@ -1023,6 +1081,14 @@ test("OCI build rejects unsafe identity, platform, and image references", async 
     {
       environment: { OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3;touch-pwned" },
       message: /semantic version/,
+    },
+    {
+      environment: { OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "" },
+      message: /OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION is required/,
+    },
+    {
+      environment: { OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.4" },
+      message: /must be 0\.2 or 0\.3/,
     },
     {
       environment: { OPEN_SPLUNK_OCI_PLATFORM: "linux/386" },

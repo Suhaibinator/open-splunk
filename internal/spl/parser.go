@@ -110,6 +110,7 @@ type parser struct {
 	concatenationOperands int
 	arithmeticOperators   int
 	membershipCandidates  int
+	matchProgramWorkUnits int
 	preserveSignedLiteral int
 }
 
@@ -189,6 +190,30 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseEvalCommand(nameToken)
 	case "rex":
 		return p.parseRexCommand(nameToken)
+	case "regex":
+		return p.parseRegexCommand(nameToken)
+	case "reverse":
+		return p.parseArgumentFreeCommand(nameToken, "reverse", func(sourceRange Range) Command {
+			return &ReverseCommand{Range: sourceRange}
+		})
+	case "accum":
+		return p.parseAccumCommand(nameToken)
+	case "strcat":
+		return p.parseStrcatCommand(nameToken)
+	case "addinfo":
+		return p.parseArgumentFreeCommand(nameToken, "addinfo", func(sourceRange Range) Command {
+			return &AddInfoCommand{Range: sourceRange}
+		})
+	case "fillnull":
+		return p.parseFillNullCommand(nameToken)
+	case "addtotals":
+		return p.parseAddTotalsCommand(nameToken)
+	case "delta":
+		return p.parseDeltaCommand(nameToken)
+	case "makemv":
+		return p.parseMakeMVCommand(nameToken)
+	case "mvexpand":
+		return p.parseMVExpandCommand(nameToken)
 	case "spath":
 		return p.parseSpathCommand(nameToken)
 	case "rename":
@@ -225,6 +250,337 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 			Message: fmt.Sprintf("unsupported command %q at pipeline stage %d", nameToken.text, stage),
 			Range:   nameToken.sourceRange,
 		}
+	}
+}
+
+func (p *parser) parseArgumentFreeCommand(
+	name token,
+	commandName string,
+	build func(Range) Command,
+) (Command, error) {
+	if !p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_" + strings.ToUpper(commandName) + "_SYNTAX",
+			Message: commandName + " does not accept arguments or options",
+			Range:   p.current().sourceRange,
+		}
+	}
+	sourceRange := Range{Start: name.sourceRange.Start, End: name.sourceRange.End}
+	return build(sourceRange), nil
+}
+
+func (p *parser) parseRegexCommand(name token) (Command, error) {
+	command := &RegexCommand{
+		Field:      "_raw",
+		FieldRange: name.sourceRange,
+	}
+	if p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:    "SPL_EXPECTED_REGEX_PATTERN",
+			Message: "regex requires one quoted regular expression",
+			Range:   p.current().sourceRange,
+		}
+	}
+
+	first := p.current()
+	if first.kind == tokenString {
+		command.Pattern = first.text
+		command.PatternRange = first.sourceRange
+		p.advance()
+	} else {
+		if first.kind != tokenWord || !IsExactUnquotedFieldName(first.text) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_REGEX_SYNTAX",
+				Message: "regex requires a quoted pattern or one exact unquoted field followed by = or !=",
+				Range:   first.sourceRange,
+			}
+		}
+		if err := rejectV03CompilerPrivateField("regex", first); err != nil {
+			return nil, err
+		}
+		command.Field = first.text
+		command.FieldRange = first.sourceRange
+		p.advance()
+		switch p.current().kind {
+		case tokenEqual:
+		case tokenNotEqual:
+			command.Negated = true
+		default:
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_REGEX_SYNTAX",
+				Message: "regex field form requires = or != followed by one quoted pattern",
+				Range:   p.current().sourceRange,
+			}
+		}
+		p.advance()
+		pattern := p.current()
+		if pattern.kind != tokenString {
+			return nil, &Diagnostic{
+				Code:    "SPL_EXPECTED_REGEX_PATTERN",
+				Message: "regex pattern must be a quoted String literal",
+				Range:   pattern.sourceRange,
+			}
+		}
+		command.Pattern = pattern.text
+		command.PatternRange = pattern.sourceRange
+		p.advance()
+	}
+	if !p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_REGEX_SYNTAX",
+			Message: "regex accepts exactly one field and one quoted pattern",
+			Range:   p.current().sourceRange,
+		}
+	}
+	if err := p.validateRegexCommandPattern(command.Pattern, command.PatternRange); err != nil {
+		return nil, err
+	}
+	command.Range = Range{Start: name.sourceRange.Start, End: command.PatternRange.End}
+	return command, nil
+}
+
+func (p *parser) validateRegexCommandPattern(pattern string, sourceRange Range) error {
+	compiled, err := splregex.CompileMatchPattern(pattern)
+	if err == nil {
+		return p.chargeMatchProgram(compiled, sourceRange)
+	}
+	if splregex.IsMatchComplexityError(err) {
+		return &Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"regex regular expression exceeds the %d-byte or %d-work-unit limit",
+				splregex.MaximumMatchPatternBytes,
+				splregex.MaximumMatchProgramWorkUnits,
+			),
+			Range: sourceRange,
+		}
+	}
+	return &Diagnostic{
+		Code:    "SPL_UNSUPPORTED_REGEX",
+		Message: "regex regular expression is outside the supported RE2-compatible subset",
+		Range:   sourceRange,
+	}
+}
+
+func (p *parser) chargeMatchProgram(
+	compiled splregex.MatchPattern,
+	sourceRange Range,
+) error {
+	if compiled.ProgramWorkUnits <= 0 ||
+		p.matchProgramWorkUnits > splregex.MaximumMatchQueryProgramWorkUnits-
+			compiled.ProgramWorkUnits {
+		return &Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"search match and regex programs require more than %d work units",
+				splregex.MaximumMatchQueryProgramWorkUnits,
+			),
+			Range: sourceRange,
+		}
+	}
+	p.matchProgramWorkUnits += compiled.ProgramWorkUnits
+	return nil
+}
+
+func (p *parser) parseAccumCommand(name token) (Command, error) {
+	if p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:    "SPL_EXPECTED_FIELD",
+			Message: "accum requires one exact unquoted field",
+			Range:   p.current().sourceRange,
+		}
+	}
+	field := p.current()
+	if field.kind != tokenWord || !IsExactUnquotedFieldName(field.text) {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_ACCUM_SYNTAX",
+			Message: "accum requires one exact unquoted field",
+			Range:   field.sourceRange,
+		}
+	}
+	if err := rejectV03CompilerPrivateField("accum", field); err != nil {
+		return nil, err
+	}
+	command := &AccumCommand{
+		Field:       field.text,
+		FieldRange:  field.sourceRange,
+		Output:      field.text,
+		OutputRange: field.sourceRange,
+	}
+	end := field.sourceRange.End
+	p.advance()
+	if p.isKeyword("AS") {
+		command.ExplicitOutput = true
+		as := p.current()
+		p.advance()
+		if p.atCommandEnd() {
+			return nil, &Diagnostic{
+				Code:    "SPL_EXPECTED_FIELD",
+				Message: "accum AS requires one exact unquoted output field",
+				Range:   as.sourceRange,
+			}
+		}
+		output := p.current()
+		if output.kind != tokenWord || !IsExactUnquotedFieldName(output.text) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_ACCUM_SYNTAX",
+				Message: "accum AS requires one exact unquoted output field",
+				Range:   output.sourceRange,
+			}
+		}
+		if err := rejectV03CompilerPrivateField("accum", output); err != nil {
+			return nil, err
+		}
+		command.Output = output.text
+		command.OutputRange = output.sourceRange
+		end = output.sourceRange.End
+		p.advance()
+	}
+	if !p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_ACCUM_SYNTAX",
+			Message: "accum accepts one field and an optional AS output",
+			Range:   p.current().sourceRange,
+		}
+	}
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
+	return command, nil
+}
+
+func (p *parser) parseStrcatCommand(name token) (Command, error) {
+	command := &StrcatCommand{}
+	end := name.sourceRange.End
+	if p.atCommandEnd() {
+		return nil, &Diagnostic{
+			Code:    "SPL_EXPECTED_FIELD",
+			Message: "strcat requires two through 32 source operands and one destination",
+			Range:   p.current().sourceRange,
+		}
+	}
+
+	if p.current().kind == tokenWord && strings.EqualFold(p.current().text, "allrequired") &&
+		p.nextIs(tokenEqual) {
+		option := p.current()
+		p.advance()
+		if !p.match(tokenEqual) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STRCAT_SYNTAX",
+				Message: "strcat allrequired must be written as allrequired=true or allrequired=false",
+				Range:   option.sourceRange,
+			}
+		}
+		value := p.current()
+		if value.kind != tokenWord {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STRCAT_SYNTAX",
+				Message: "strcat allrequired requires a Boolean value",
+				Range:   value.sourceRange,
+			}
+		}
+		parsed, ok := parseV03Bool(value.text)
+		if !ok {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STRCAT_SYNTAX",
+				Message: "strcat allrequired must be true or false",
+				Range:   value.sourceRange,
+			}
+		}
+		command.AllRequired = parsed
+		command.AllRequiredSpecified = true
+		command.AllRequiredRange = Range{Start: option.sourceRange.Start, End: value.sourceRange.End}
+		end = value.sourceRange.End
+		p.advance()
+	}
+
+	var values []token
+	for !p.atCommandEnd() {
+		current := p.current()
+		if current.kind != tokenWord && current.kind != tokenString {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STRCAT_SYNTAX",
+				Message: "strcat sources must be exact unquoted fields or quoted String literals",
+				Range:   current.sourceRange,
+			}
+		}
+		if current.kind == tokenWord && !IsExactUnquotedFieldName(current.text) {
+			return nil, &Diagnostic{
+				Code:    "SPL_UNSUPPORTED_STRCAT_SYNTAX",
+				Message: "strcat fields must be exact and unquoted",
+				Range:   current.sourceRange,
+			}
+		}
+		if current.kind == tokenWord {
+			if err := rejectV03CompilerPrivateField("strcat", current); err != nil {
+				return nil, err
+			}
+		}
+		values = append(values, current)
+		end = current.sourceRange.End
+		p.advance()
+	}
+	if len(values) < 3 {
+		return nil, &Diagnostic{
+			Code: "SPL_UNSUPPORTED_STRCAT_SYNTAX",
+			Message: fmt.Sprintf(
+				"strcat requires two through %d source operands and one destination",
+				MaximumConcatenationOperands,
+			),
+			Range: Range{Start: name.sourceRange.Start, End: end},
+		}
+	}
+	if len(values) > MaximumConcatenationOperands+1 {
+		return nil, &Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"strcat contains more than %d source operands",
+				MaximumConcatenationOperands,
+			),
+			Range: values[MaximumConcatenationOperands].sourceRange,
+		}
+	}
+	destination := values[len(values)-1]
+	if destination.kind != tokenWord {
+		return nil, &Diagnostic{
+			Code:    "SPL_UNSUPPORTED_STRCAT_SYNTAX",
+			Message: "strcat destination must be one exact unquoted field",
+			Range:   destination.sourceRange,
+		}
+	}
+	command.Destination = destination.text
+	command.DestinationRange = destination.sourceRange
+	for _, value := range values[:len(values)-1] {
+		operand := StrcatOperand{Range: value.sourceRange}
+		if value.kind == tokenString {
+			literal := value.text
+			operand.Literal = &literal
+		} else {
+			operand.Field = value.text
+		}
+		command.Operands = append(command.Operands, operand)
+	}
+	if p.concatenationOperands > MaximumConcatenationOperandsPerQuery-len(command.Operands) {
+		return nil, &Diagnostic{
+			Code: "SPL_QUERY_TOO_COMPLEX",
+			Message: fmt.Sprintf(
+				"concatenation contains more than %d operand occurrences per query",
+				MaximumConcatenationOperandsPerQuery,
+			),
+			Range: Range{Start: name.sourceRange.Start, End: end},
+		}
+	}
+	p.concatenationOperands += len(command.Operands)
+	command.Range = Range{Start: name.sourceRange.Start, End: end}
+	return command, nil
+}
+
+func rejectV03CompilerPrivateField(commandName string, field token) error {
+	if !strings.HasPrefix(strings.ToLower(field.text), "__os_") {
+		return nil
+	}
+	return &Diagnostic{
+		Code:    "SPL_RESERVED_FIELD",
+		Message: commandName + " field uses the compiler-private __os_ namespace",
+		Range:   field.sourceRange,
 	}
 }
 
@@ -1613,7 +1969,6 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 	}
 
 	options := StatsOptions{}
-	end := name.sourceRange.End
 	for !p.atCommandEnd() {
 		option := p.current()
 		if option.kind != tokenWord || !isLeadingStatsOptionName(option.text) {
@@ -1633,17 +1988,16 @@ func (p *parser) parseStatsCommand(name token) (Command, error) {
 				Suggestions: []string{strings.ToLower(option.text) + "="},
 			}
 		}
-		optionEnd, err := p.parseLeadingStatsOption(&options)
-		if err != nil {
+		if _, err := p.parseLeadingStatsOption(&options); err != nil {
 			return nil, err
 		}
-		end = optionEnd
 	}
 	if p.atCommandEnd() {
 		return nil, p.errorAtCurrent("SPL_EXPECTED_AGGREGATE", "stats options must be followed by an aggregate function")
 	}
 
 	aggregates := make([]StatsAggregate, 0, 4)
+	var end Position
 	for {
 		if len(aggregates) >= MaximumStatsMeasures {
 			return nil, &Diagnostic{
@@ -2517,6 +2871,17 @@ func parseStreamStatsBool(value string) (bool, bool) {
 	case "t", "true":
 		return true, true
 	case "f", "false":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func parseV03Bool(value string) (bool, bool) {
+	switch strings.ToLower(value) {
+	case "true":
+		return true, true
+	case "false":
 		return false, true
 	default:
 		return false, false
@@ -5492,7 +5857,8 @@ func (p *parser) parseScalarCall(name token) (ScalarExpr, error) {
 				},
 			}
 		}
-		if _, err := splregex.CompileMatchPattern(pattern.Value.Text); err != nil {
+		_, err := splregex.CompileMatchPattern(pattern.Value.Text)
+		if err != nil {
 			if splregex.IsMatchComplexityError(err) {
 				return nil, &Diagnostic{
 					Code: "SPL_QUERY_TOO_COMPLEX",

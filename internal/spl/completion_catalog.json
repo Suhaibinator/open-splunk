@@ -71,6 +71,56 @@
       "detail": "Keep and reverse the final rows."
     },
     {
+      "name": "regex",
+      "insertion": "regex message!=\"error\"",
+      "detail": "Filter one exact field with a bounded literal RE2 pattern."
+    },
+    {
+      "name": "reverse",
+      "insertion": "reverse",
+      "detail": "Reverse the established deterministic pipeline order."
+    },
+    {
+      "name": "accum",
+      "insertion": "accum bytes AS running_bytes",
+      "detail": "Add a bounded running numeric sum in pipeline order."
+    },
+    {
+      "name": "strcat",
+      "insertion": "strcat host \"/\" source endpoint",
+      "detail": "Concatenate bounded literal and exact-field operands into one field."
+    },
+    {
+      "name": "addinfo",
+      "insertion": "addinfo",
+      "detail": "Add immutable search time bounds, start time, and search job ID."
+    },
+    {
+      "name": "fillnull",
+      "insertion": "fillnull value=\"0\" status",
+      "detail": "Replace missing or null values in explicit exact fields."
+    },
+    {
+      "name": "addtotals",
+      "insertion": "addtotals fieldname=Total bytes_in bytes_out",
+      "detail": "Add one bounded numeric row total over explicit exact fields."
+    },
+    {
+      "name": "delta",
+      "insertion": "delta bytes AS bytes_delta p=1",
+      "detail": "Subtract a bounded prior value in established pipeline order."
+    },
+    {
+      "name": "makemv",
+      "insertion": "makemv delim=\",\" tags",
+      "detail": "Split one scalar String into a bounded typed multivalue."
+    },
+    {
+      "name": "mvexpand",
+      "insertion": "mvexpand tags limit=100",
+      "detail": "Expand one multivalue into bounded ordered result rows."
+    },
+    {
       "name": "stats",
       "insertion": "stats partitions=1 allnum=false delim=\",\" count AS events sparkline(avg(latency),5m) AS latency_trend values(user) AS users rate(bytes) AS byte_rate BY level dedup_splitvals=false",
       "detail": "Aggregate with bounded row, predicate, field, distinct-count, percentile, distribution, value-selection, chronological, rate, and time-binned sparkline measures. Leading unsigned partitions (0 selects the default; values above 100 clamp to 100), allnum, and delim options plus terminal dedup_splitvals are preserved in the plan; delimiter-display and parallel-order details remain oracle-governed."
@@ -591,6 +641,48 @@
       "highlight": false
     },
     {
+      "name": "allrequired=",
+      "insertion": "allrequired=",
+      "detail": "Require every strcat source field to be present and non-null.",
+      "highlight": false
+    },
+    {
+      "name": "value=",
+      "insertion": "value=",
+      "detail": "Set the quoted String used by fillnull.",
+      "highlight": false
+    },
+    {
+      "name": "col=",
+      "insertion": "col=",
+      "detail": "Keep addtotals column totals disabled in the bounded row-only profile.",
+      "highlight": false
+    },
+    {
+      "name": "fieldname=",
+      "insertion": "fieldname=",
+      "detail": "Select the exact addtotals destination field.",
+      "highlight": false
+    },
+    {
+      "name": "row=",
+      "insertion": "row=",
+      "detail": "Keep addtotals row totals enabled.",
+      "highlight": false
+    },
+    {
+      "name": "p=",
+      "insertion": "p=",
+      "detail": "Set the bounded positive delta lag distance.",
+      "highlight": false
+    },
+    {
+      "name": "allowempty=",
+      "insertion": "allowempty=",
+      "detail": "Choose whether makemv retains empty String members.",
+      "highlight": false
+    },
+    {
       "name": "current=",
       "insertion": "current=",
       "detail": "Include or exclude the current streamstats row.",
@@ -622,8 +714,8 @@
     },
     {
       "name": "delim=",
-      "insertion": "delim=\"\"",
-      "detail": "Preserve the authored stats delimiter; display semantics remain oracle-governed.",
+      "insertion": "delim=\",\"",
+      "detail": "Set an explicit delimiter; a comma is a valid default insertion for stats and makemv.",
       "highlight": false
     },
     {

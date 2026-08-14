@@ -490,7 +490,7 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		}
 		return publishChart(executionContext, sink, *query.Chart, buffered)
 	}
-	containerTransports, err := validateOrdinaryResultColumns(
+	containerTransports, optionalMultivalueTransports, err := validateOrdinaryResultColumns(
 		query,
 		columns,
 		columnTypes,
@@ -499,13 +499,29 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err != nil {
 		return err
 	}
+	stringOrBytesTransports, err := validateStringOrBytesResultColumns(
+		query,
+		columns,
+		columnTypes,
+	)
+	if err != nil {
+		return err
+	}
 	schema := searchjobs.Schema{Columns: make([]searchjobs.Column, len(query.OutputFields))}
 	for index, columnType := range columnTypes[:len(query.OutputFields)] {
 		kind, multivalue := schemaKind(columns[index], columnType.DatabaseTypeName())
+		if optionalMultivalueTransports[index].valid {
+			kind = searchjobs.ValueKindList
+			multivalue = true
+		}
+		if stringOrBytesTransports[index].valid {
+			kind = searchjobs.ValueKindMixed
+			multivalue = false
+		}
 		column := searchjobs.Column{
 			Name:       columns[index],
 			Kind:       kind,
-			Nullable:   columnType.Nullable() || databaseTypeNullable(columnType.DatabaseTypeName()) || kind == searchjobs.ValueKindMixed,
+			Nullable:   optionalMultivalueTransports[index].valid || columnType.Nullable() || databaseTypeNullable(columnType.DatabaseTypeName()) || kind == searchjobs.ValueKindMixed,
 			Multivalue: multivalue,
 		}
 		if len(resultPresentations) != 0 {
@@ -563,7 +579,13 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 		values := make([]searchjobs.Value, len(query.OutputFields))
 		for index, destination := range destinations[:len(query.OutputFields)] {
 			var value searchjobs.Value
-			if containerTransports[index].valid {
+			if optionalMultivalueTransports[index].valid {
+				value, err = convertOptionalMultivalueOutput(
+					destinations,
+					index,
+					optionalMultivalueTransports[index],
+				)
+			} else if containerTransports[index].valid {
 				names, types, version, metadataErr := scannedContainerMetadata(
 					destinations,
 					containerTransports[index],
@@ -584,6 +606,12 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 				)
 			} else if index == sparseFieldIndex {
 				value, err = convertSparseEventFields(scannedValue(destination), fieldNames)
+			} else if stringOrBytesTransports[index].valid {
+				value, err = convertStringOrBytesOutput(
+					destinations,
+					index,
+					stringOrBytesTransports[index],
+				)
 			} else {
 				value, err = convertValue(scannedValue(destination))
 			}
@@ -1801,6 +1829,9 @@ func validateChartOutput(query clickhouse.CompiledQuery) error {
 		strings.TrimSpace(output.RowDatabaseType) == "" {
 		return fmt.Errorf("%w: compiled chart output contract is invalid", searchjobs.ErrInvalidResult)
 	}
+	if output.RowSemanticBytes && output.RowKind != clickhouse.ChartRowKindMixed {
+		return fmt.Errorf("%w: compiled chart semantic Bytes transport is invalid", searchjobs.ErrInvalidResult)
+	}
 	if _, ok := chartRowScanType(output.RowKind, output.RowDatabaseType); !ok {
 		return fmt.Errorf("%w: compiled chart row transport is invalid", searchjobs.ErrInvalidResult)
 	}
@@ -1837,44 +1868,65 @@ func readChartRows(
 		expectedColumns = []string{
 			clickhouse.ChartOrdinalColumn,
 			clickhouse.ChartRowColumn,
-			clickhouse.ChartNamesColumn,
-			clickhouse.ChartCountsColumn,
-			clickhouse.ChartInvalidColumn,
 		}
-		expectedTypes = []string{"UInt64", output.RowDatabaseType, "Array(String)", "Array(UInt64)", "UInt8"}
+		expectedTypes = []string{"UInt64", output.RowDatabaseType}
 		expectedScanTypes = []reflect.Type{
 			reflect.TypeOf(uint64(0)),
 			rowScanType,
+		}
+		if output.RowSemanticBytes {
+			expectedColumns = append(expectedColumns, clickhouse.ChartRowSemanticBytesColumn)
+			expectedTypes = append(expectedTypes, "UInt8")
+			expectedScanTypes = append(expectedScanTypes, reflect.TypeOf(uint8(0)))
+		}
+		expectedColumns = append(expectedColumns,
+			clickhouse.ChartNamesColumn,
+			clickhouse.ChartCountsColumn,
+			clickhouse.ChartInvalidColumn,
+		)
+		expectedTypes = append(expectedTypes, "Array(String)", "Array(UInt64)", "UInt8")
+		expectedScanTypes = append(expectedScanTypes,
 			reflect.TypeOf([]string{}),
 			reflect.TypeOf([]uint64{}),
 			reflect.TypeOf(uint8(0)),
-		}
+		)
 	case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage,
 		clickhouse.ChartValueKindPercentile:
 		expectedColumns = []string{
 			clickhouse.ChartOrdinalColumn,
 			clickhouse.ChartRowColumn,
-			clickhouse.ChartNamesColumn,
-			clickhouse.ChartValuesColumn,
-			clickhouse.ChartValuePresentColumn,
-			clickhouse.ChartInvalidColumn,
 		}
 		expectedTypes = []string{
 			"UInt64",
 			output.RowDatabaseType,
-			"Array(String)",
-			"Array(Float64)",
-			"Array(UInt8)",
-			"UInt8",
 		}
 		expectedScanTypes = []reflect.Type{
 			reflect.TypeOf(uint64(0)),
 			rowScanType,
+		}
+		if output.RowSemanticBytes {
+			expectedColumns = append(expectedColumns, clickhouse.ChartRowSemanticBytesColumn)
+			expectedTypes = append(expectedTypes, "UInt8")
+			expectedScanTypes = append(expectedScanTypes, reflect.TypeOf(uint8(0)))
+		}
+		expectedColumns = append(expectedColumns,
+			clickhouse.ChartNamesColumn,
+			clickhouse.ChartValuesColumn,
+			clickhouse.ChartValuePresentColumn,
+			clickhouse.ChartInvalidColumn,
+		)
+		expectedTypes = append(expectedTypes,
+			"Array(String)",
+			"Array(Float64)",
+			"Array(UInt8)",
+			"UInt8",
+		)
+		expectedScanTypes = append(expectedScanTypes,
 			reflect.TypeOf([]string{}),
 			reflect.TypeOf([]float64{}),
 			reflect.TypeOf([]uint8{}),
 			reflect.TypeOf(uint8(0)),
-		}
+		)
 	default:
 		return bufferedChart{}, fmt.Errorf("%w: compiled chart value kind is invalid", searchjobs.ErrInvalidResult)
 	}
@@ -1920,12 +1972,17 @@ func readChartRows(
 		)
 		switch output.ValueKind {
 		case clickhouse.ChartValueKindCount:
-			ordinal, rowValue, names, counts, invalid, err = scannedChartRow(destinations, rowKind)
+			ordinal, rowValue, names, counts, invalid, err = scannedChartRow(
+				destinations,
+				rowKind,
+				output.RowSemanticBytes,
+			)
 		case clickhouse.ChartValueKindSum, clickhouse.ChartValueKindAverage,
 			clickhouse.ChartValueKindPercentile:
 			ordinal, rowValue, names, values, invalid, err = scannedNumericChartRow(
 				destinations,
 				rowKind,
+				output.RowSemanticBytes,
 				output.MaxSeries,
 				output.ValueKind == clickhouse.ChartValueKindPercentile,
 			)
@@ -2047,17 +2104,33 @@ func clearScanDestinations(destinations []any) {
 	}
 }
 
-func scannedChartRow(destinations []any, rowKind searchjobs.ValueKind) (uint64, searchjobs.Value, []string, []uint64, uint8, error) {
+func scannedChartRow(
+	destinations []any,
+	rowKind searchjobs.ValueKind,
+	semanticBytesTransport bool,
+) (uint64, searchjobs.Value, []string, []uint64, uint8, error) {
 	invalidResult := func(message string) (uint64, searchjobs.Value, []string, []uint64, uint8, error) {
 		return 0, searchjobs.Value{}, nil, nil, 0, fmt.Errorf("%w: %s", searchjobs.ErrInvalidResult, message)
 	}
-	if len(destinations) != 5 {
+	namesIndex := 2
+	semanticBytes := uint8(0)
+	if semanticBytesTransport {
+		namesIndex = 3
+	}
+	if len(destinations) != namesIndex+3 {
 		return invalidResult("ClickHouse chart row has an invalid width")
 	}
+	if semanticBytesTransport {
+		var ok bool
+		semanticBytes, ok = scannedValue(destinations[2]).(uint8)
+		if !ok || semanticBytes > 1 {
+			return invalidResult("ClickHouse chart semantic Bytes flag is invalid")
+		}
+	}
 	ordinal, ordinalOK := scannedValue(destinations[0]).(uint64)
-	names, namesOK := scannedValue(destinations[2]).([]string)
-	counts, countsOK := scannedValue(destinations[3]).([]uint64)
-	invalid, invalidOK := scannedValue(destinations[4]).(uint8)
+	names, namesOK := scannedValue(destinations[namesIndex]).([]string)
+	counts, countsOK := scannedValue(destinations[namesIndex+1]).([]uint64)
+	invalid, invalidOK := scannedValue(destinations[namesIndex+2]).(uint8)
 	if !ordinalOK || !namesOK || !countsOK || !invalidOK {
 		return invalidResult("ClickHouse chart row has invalid native values")
 	}
@@ -2066,6 +2139,9 @@ func scannedChartRow(destinations []any, rowKind searchjobs.ValueKind) (uint64, 
 		return invalidResult("ClickHouse chart row value is null")
 	}
 	value, err := convertValue(scanned)
+	if semanticBytesTransport {
+		value, err = convertSemanticStringOrBytes(scanned, semanticBytes, false)
+	}
 	if err != nil {
 		return invalidResult("ClickHouse chart row value cannot be converted")
 	}
@@ -2085,20 +2161,33 @@ func scannedChartRow(destinations []any, rowKind searchjobs.ValueKind) (uint64, 
 func scannedNumericChartRow(
 	destinations []any,
 	rowKind searchjobs.ValueKind,
+	semanticBytesTransport bool,
 	maxSeries uint16,
 	requireFinite bool,
 ) (uint64, searchjobs.Value, []string, []nullableFloat64, uint8, error) {
 	invalidResult := func(message string) (uint64, searchjobs.Value, []string, []nullableFloat64, uint8, error) {
 		return 0, searchjobs.Value{}, nil, nil, 0, fmt.Errorf("%w: %s", searchjobs.ErrInvalidResult, message)
 	}
-	if len(destinations) != 6 {
+	namesIndex := 2
+	semanticBytes := uint8(0)
+	if semanticBytesTransport {
+		namesIndex = 3
+	}
+	if len(destinations) != namesIndex+4 {
 		return invalidResult("ClickHouse numeric chart row has an invalid width")
 	}
+	if semanticBytesTransport {
+		var ok bool
+		semanticBytes, ok = scannedValue(destinations[2]).(uint8)
+		if !ok || semanticBytes > 1 {
+			return invalidResult("ClickHouse chart semantic Bytes flag is invalid")
+		}
+	}
 	ordinal, ordinalOK := scannedValue(destinations[0]).(uint64)
-	names, namesOK := scannedValue(destinations[2]).([]string)
-	rawValues, valuesOK := scannedValue(destinations[3]).([]float64)
-	present, presentOK := scannedValue(destinations[4]).([]uint8)
-	invalid, invalidOK := scannedValue(destinations[5]).(uint8)
+	names, namesOK := scannedValue(destinations[namesIndex]).([]string)
+	rawValues, valuesOK := scannedValue(destinations[namesIndex+1]).([]float64)
+	present, presentOK := scannedValue(destinations[namesIndex+2]).([]uint8)
+	invalid, invalidOK := scannedValue(destinations[namesIndex+3]).(uint8)
 	if !ordinalOK || !namesOK || !valuesOK || !presentOK || !invalidOK {
 		return invalidResult("ClickHouse numeric chart row has invalid native values")
 	}
@@ -2122,6 +2211,9 @@ func scannedNumericChartRow(
 		return invalidResult("ClickHouse chart row value is null")
 	}
 	value, err := convertValue(scanned)
+	if semanticBytesTransport {
+		value, err = convertSemanticStringOrBytes(scanned, semanticBytes, false)
+	}
 	if err != nil {
 		return invalidResult("ClickHouse chart row value cannot be converted")
 	}
@@ -2784,6 +2876,15 @@ var executionLimitMarkers = [...]struct {
 	{clickhouse.KnowledgeSelectorQueryLimitMarker, "knowledge selector work exceeded the per-query limit"},
 	{clickhouse.KnowledgeAliasCopyEventLimitMarker, "knowledge alias copy bytes exceeded the per-event limit"},
 	{clickhouse.KnowledgeAliasCopyQueryLimitMarker, "knowledge alias copy work exceeded the per-query limit"},
+	{clickhouse.MakeMVRowMembersLimitMarker, "makemv row members exceeded the supported limit"},
+	{clickhouse.MakeMVRowBytesLimitMarker, "makemv row bytes exceeded the supported limit"},
+	{clickhouse.MakeMVResultMembersLimitMarker, "makemv result members exceeded the supported limit"},
+	{clickhouse.MakeMVResultBytesLimitMarker, "makemv result bytes exceeded the supported limit"},
+	{clickhouse.MakeMVRetainedBytesLimitMarker, "makemv retained bytes exceeded the supported limit"},
+	{clickhouse.MVExpandRowMembersLimitMarker, "mvexpand row members exceeded the supported limit"},
+	{clickhouse.MVExpandStageRowsLimitMarker, "mvexpand stage rows exceeded the supported limit"},
+	{clickhouse.MVExpandQueryRowsLimitMarker, "mvexpand query rows exceeded the supported limit"},
+	{clickhouse.MVExpandRetainedBytesLimitMarker, "mvexpand retained bytes exceeded the supported limit"},
 }
 
 func classifyQueryError(ctx context.Context, err error) error {
@@ -2807,11 +2908,14 @@ func classifyQueryError(ctx context.Context, err error) error {
 			}
 		}
 		if exception.Code == 395 && (strings.Contains(exception.Message, clickhouse.UnsupportedStatsByValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.UnsupportedExpressionValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedStatsMeasureValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedDedupValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedNumericBinValueMarker) ||
 			strings.Contains(exception.Message, clickhouse.UnsupportedSpathValueMarker) ||
-			strings.Contains(exception.Message, clickhouse.KnowledgeSelectorInvalidUTF8Marker)) {
+			strings.Contains(exception.Message, clickhouse.KnowledgeSelectorInvalidUTF8Marker) ||
+			strings.Contains(exception.Message, clickhouse.UnsupportedMakeMVValueMarker) ||
+			strings.Contains(exception.Message, clickhouse.UnsupportedMVExpandValueMarker)) {
 			// The compiler deliberately emits stable markers when an operation
 			// encounters a value outside its supported scalar/type/range
 			// contract. Do not retain any surrounding ClickHouse message,

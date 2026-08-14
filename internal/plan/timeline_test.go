@@ -2,6 +2,7 @@ package plan
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/Suhaibinator/open-splunk/internal/spl"
@@ -23,6 +24,13 @@ func TestValidateTimelineEligibilityAcceptsEventPipelines(t *testing.T) {
 		`index=gradethis | sort 0 -_time`,
 		`index=gradethis | dedup 2 host | head 20`,
 		`index=gradethis | tail 20`,
+		`index=gradethis | regex message!="^debug$"`,
+		`index=gradethis | reverse`,
+		`index=gradethis | strcat host "/" source route`,
+		`index=gradethis | fillnull value="unknown" optional`,
+		`index=gradethis | addtotals fieldname=total bytes duration`,
+		`index=gradethis | sort 0 +_time | delta bytes AS change p=2`,
+		`index=gradethis | makemv delim="," allowempty=true tags`,
 	}
 	for _, source := range queries {
 		t.Run(source, func(t *testing.T) {
@@ -34,6 +42,104 @@ func TestValidateTimelineEligibilityAcceptsEventPipelines(t *testing.T) {
 				t.Fatalf("ValidateTimelineEligibility() error = %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateTimelineEligibilityLocatesV03TimeReplacementExactly(t *testing.T) {
+	tests := []struct {
+		name        string
+		source      string
+		targetRange func(*spl.Query) spl.Range
+	}{
+		{
+			name:   "strcat destination",
+			source: `index=gradethis | strcat host source _time`,
+			targetRange: func(parsed *spl.Query) spl.Range {
+				return parsed.Commands[0].(*spl.StrcatCommand).DestinationRange
+			},
+		},
+		{
+			name:   "fillnull field",
+			source: `index=gradethis | fillnull value="zero" host _time source`,
+			targetRange: func(parsed *spl.Query) spl.Range {
+				return parsed.Commands[0].(*spl.FillNullCommand).Fields[1].Range
+			},
+		},
+		{
+			name:   "addtotals destination",
+			source: `index=gradethis | addtotals fieldname=_time bytes duration`,
+			targetRange: func(parsed *spl.Query) spl.Range {
+				return parsed.Commands[0].(*spl.AddTotalsCommand).OutputRange
+			},
+		},
+		{
+			name:   "delta destination",
+			source: `index=gradethis | delta bytes AS _time p=2`,
+			targetRange: func(parsed *spl.Query) spl.Range {
+				return parsed.Commands[0].(*spl.DeltaCommand).OutputRange
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parsed := mustParse(t, test.source)
+			wantRange := test.targetRange(parsed)
+			logical, err := Build(parsed, testScope([]string{"gradethis"}, nil))
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			err = ValidateTimelineEligibility(logical)
+			var diagnostic *Diagnostic
+			if !errors.As(err, &diagnostic) || diagnostic.Code != timelineTimeDiagnosticCode {
+				t.Fatalf("ValidateTimelineEligibility() error = %v, want %s", err, timelineTimeDiagnosticCode)
+			}
+			if diagnostic.Range != wantRange {
+				t.Fatalf("diagnostic range = %+v, want exact destination %+v", diagnostic.Range, wantRange)
+			}
+		})
+	}
+}
+
+func TestValidateTimelineEligibilityRejectsMakeMVTimeAndMVExpand(t *testing.T) {
+	base, err := Build(
+		mustParse(t, `index=gradethis`),
+		testScope([]string{"gradethis"}, nil),
+	)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	timeRange := spl.Range{
+		Start: spl.Position{Offset: 37, Line: 1, Column: 38},
+		End:   spl.Position{Offset: 42, Line: 1, Column: 43},
+	}
+	commandRange := spl.Range{
+		Start: spl.Position{Offset: 30, Line: 1, Column: 31},
+		End:   timeRange.End,
+	}
+	makeMV := *base
+	makeMV.Operators = append(slices.Clone(base.Operators), &MakeMultivalue{
+		Input:     FieldRef{Name: "_time", Range: timeRange},
+		Delimiter: ",",
+		Range:     commandRange,
+	})
+	err = ValidateTimelineEligibility(&makeMV)
+	var diagnostic *Diagnostic
+	if !errors.As(err, &diagnostic) || diagnostic.Code != timelineTimeDiagnosticCode ||
+		diagnostic.Range != timeRange {
+		t.Fatalf("makemv _time diagnostic = %#v, %v", diagnostic, err)
+	}
+
+	expand := *base
+	expand.Operators = append(slices.Clone(base.Operators), &ExpandMultivalue{
+		Input:        FieldRef{Name: "tags", Range: timeRange},
+		QueryOrdinal: 1,
+		Range:        commandRange,
+	})
+	err = ValidateTimelineEligibility(&expand)
+	diagnostic = nil
+	if !errors.As(err, &diagnostic) || diagnostic.Code != timelinePipelineDiagnosticCode ||
+		diagnostic.Range != commandRange {
+		t.Fatalf("mvexpand diagnostic = %#v, %v", diagnostic, err)
 	}
 }
 

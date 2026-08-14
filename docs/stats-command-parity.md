@@ -3,7 +3,10 @@
 This file and [`testdata/spl-stats-parity.json`](../testdata/spl-stats-parity.json)
 are the authoritative inventory for `stats` parity work. They describe the
 current end-to-end parser, planner, compiler, and runtime surface as of
-2026-08-11; they do not widen the compatibility contract by themselves.
+2026-08-11; they do not widen the compatibility contract by themselves. The
+bounded multivalue-BY rows below are separately adopted by
+`SPL-V02-STATS-BY-MULTIVALUE-001`; other rows still require their own normative
+compatibility rule before they can supersede an older contract boundary.
 
 The target is exactly **SPL1 Splunk Enterprise 10.0**, with only the
 repository-pinned **10.2 eval-in-stats** page used to define embedded eval

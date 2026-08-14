@@ -42,6 +42,7 @@ const (
 	storeIntegrationCompilerTimeout  = 20 * time.Minute
 	storeIntegrationDeletionTimeout  = 2 * time.Minute
 	storeIntegrationCleanupHeadroom  = 30 * time.Second
+	storeIntegrationFixtureRetention = 100 * 365 * 24 * time.Hour
 	storeIntegrationLifecycleTimeout = storeIntegrationSetupTimeout +
 		storeIntegrationCompilerTimeout + storeIntegrationDeletionTimeout
 )
@@ -119,7 +120,10 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		t.Fatalf("create visibility sequencer: %v", err)
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
-	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	// Most fixtures below intentionally share a fixed logical/index clock. Keep
+	// their physical ClickHouse TTL well beyond the test horizon so that clock
+	// can remain deterministic without the rows eventually disappearing.
+	store, err := Open(config, fixedRetention(storeIntegrationFixtureRetention), sequencer)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -148,7 +152,7 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 		TenantID: "tenant", CollectorID: "collector", BatchID: "native-batch", BatchSequence: 1,
 		SourceBatchSHA256: testSourceBatchDigest("native-batch"),
 		ReceivedAt:        indexTime,
-		RetentionByIndex:  map[string]time.Duration{"main": 31 * 24 * time.Hour},
+		RetentionByIndex:  map[string]time.Duration{"main": storeIntegrationFixtureRetention},
 		Events:            []*ingest.StoredEvent{event},
 	}
 	for attempt := 1; attempt <= 2; attempt++ {
@@ -276,7 +280,7 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 	if !slices.Equal(fieldTypes, wantTypes) || fieldMetadataVersion != 1 {
 		t.Fatalf("field metadata = version %d types %#v, want version 1 types %#v", fieldMetadataVersion, fieldTypes, wantTypes)
 	}
-	if want := indexTime.Truncate(time.Millisecond).Add(31 * 24 * time.Hour); !expiresAt.Equal(want) {
+	if want := indexTime.Truncate(time.Millisecond).Add(storeIntegrationFixtureRetention); !expiresAt.Equal(want) {
 		t.Fatalf("expires_at = %v, want %v", expiresAt, want)
 	}
 
@@ -294,8 +298,9 @@ func TestStoreAgainstClickHouse(t *testing.T) {
 			SourceBatchSHA256: testSourceBatchDigest(
 				"native-datetime64-boundary-batch",
 			),
-			ReceivedAt: boundaryIndexTime,
-			Events:     []*ingest.StoredEvent{boundaryEvent},
+			ReceivedAt:       boundaryIndexTime,
+			RetentionByIndex: map[string]time.Duration{"main": retention},
+			Events:           []*ingest.StoredEvent{boundaryEvent},
 		}); err != nil {
 			t.Fatalf("store native DateTime64 boundary: %v", err)
 		}
@@ -442,7 +447,7 @@ func testQuotaDenialAgainstClickHouse(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
-	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	store, err := Open(config, fixedRetention(storeIntegrationFixtureRetention), sequencer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +579,7 @@ func testTerminalRejectionAgainstClickHouse(
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
-	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	store, err := Open(config, fixedRetention(storeIntegrationFixtureRetention), sequencer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -972,7 +977,7 @@ func testWriteFreezeDrainsAmbiguousInsert(
 		},
 		normalized.Database,
 		normalized.Table,
-		fixedRetention(30*24*time.Hour),
+		fixedRetention(storeIntegrationFixtureRetention),
 		sequencer,
 		time.Now,
 		normalized.RetryAfter,
@@ -1190,7 +1195,7 @@ func testAmbiguousCommittedInsertRecovery(
 		&commitThenErrorStoreConnection{delegate: &nativeStoreConnection{connection: firstNative}},
 		normalized.Database,
 		normalized.Table,
-		fixedRetention(30*24*time.Hour),
+		fixedRetention(storeIntegrationFixtureRetention),
 		firstSequencer,
 		time.Now,
 		normalized.RetryAfter,
@@ -1289,7 +1294,7 @@ func testAmbiguousCommittedInsertRecovery(
 		t.Fatalf("create restarted visibility sequencer: %v", err)
 	}
 	defer func() { _ = secondSequencer.Close() }()
-	secondStore, err := Open(config, fixedRetention(30*24*time.Hour), secondSequencer)
+	secondStore, err := Open(config, fixedRetention(storeIntegrationFixtureRetention), secondSequencer)
 	if err != nil {
 		t.Fatalf("open restarted store: %v", err)
 	}
@@ -2218,7 +2223,7 @@ func testCompiledQueriesAgainstClickHouse(
 	}
 
 	hiddenUnsupported := compileIntegrationSPL(t,
-		`index=compiler | stats count by mixed_by | search count>100 | head 1`,
+		`index=compiler | stats count by object_parent | search count>100 | head 1`,
 		indexTime.Add(10*time.Second), visibilityCutoff,
 	)
 	hiddenUnsupportedErr := executeCompiledExpectingNoRows(ctx, connection, hiddenUnsupported)
@@ -2374,13 +2379,62 @@ func testCompiledQueriesAgainstClickHouse(
 		}
 	}
 
-	for _, field := range []string{"multi", "object_value", "object_parent", "mixed_by"} {
+	for _, field := range []string{"object_value", "object_parent"} {
 		source := `index=compiler | stats count by ` + field
 		unsupported := compileIntegrationSPL(t, source, indexTime.Add(10*time.Second), visibilityCutoff)
 		queryErr := executeCompiledExpectingNoRows(ctx, connection, unsupported)
 		var exception *clickhousedriver.Exception
 		if !errors.As(queryErr, &exception) || exception.Code != 395 || !strings.Contains(exception.Message, UnsupportedStatsByValueMarker) {
 			t.Fatalf("non-scalar stats BY %q error = %v, want guarded ClickHouse exception", field, queryErr)
+		}
+	}
+
+	// Raw Dynamic String arrays are an admitted stats-BY multivalue input. Keep
+	// this positive fixture beside the unsupported-container matrix so a nested
+	// container regression cannot accidentally narrow the accepted Array(String)
+	// surface again.
+	for _, test := range []struct {
+		field string
+		want  string
+	}{
+		{field: "mixed_by", want: "container,scalar"},
+		{field: "multi", want: "1,2"},
+	} {
+		supportedMultivalue := compileIntegrationSPL(t,
+			`index=compiler | stats count by `+test.field+` | sort `+test.field,
+			indexTime.Add(10*time.Second), visibilityCutoff,
+		)
+		supportedMultivalueRows, queryErr := connection.Query(
+			ctx,
+			supportedMultivalue.SQL,
+			supportedMultivalue.Args...,
+		)
+		if queryErr != nil {
+			t.Fatalf("execute supported multivalue stats BY %q: %v", test.field, queryErr)
+		}
+		var supportedMultivalueGroups []string
+		for supportedMultivalueRows.Next() {
+			var group string
+			var count uint64
+			if scanErr := supportedMultivalueRows.Scan(&group, &count); scanErr != nil {
+				_ = supportedMultivalueRows.Close()
+				t.Fatalf("scan supported multivalue stats BY %q: %v", test.field, scanErr)
+			}
+			if count != 1 {
+				_ = supportedMultivalueRows.Close()
+				t.Fatalf("supported multivalue stats BY %q group %q count = %d, want 1", test.field, group, count)
+			}
+			supportedMultivalueGroups = append(supportedMultivalueGroups, group)
+		}
+		if iterationErr := supportedMultivalueRows.Err(); iterationErr != nil {
+			_ = supportedMultivalueRows.Close()
+			t.Fatalf("iterate supported multivalue stats BY %q: %v", test.field, iterationErr)
+		}
+		if closeErr := supportedMultivalueRows.Close(); closeErr != nil {
+			t.Fatalf("close supported multivalue stats BY %q: %v", test.field, closeErr)
+		}
+		if got := strings.Join(supportedMultivalueGroups, ","); got != test.want {
+			t.Fatalf("supported multivalue stats BY %q groups = %q, want %q", test.field, got, test.want)
 		}
 	}
 
@@ -4337,23 +4391,18 @@ func testStatsAggregatesAgainstClickHouse(
 			t.Fatalf("values predicate %q count = %d, want %d", source, count, want)
 		}
 	}
-	sharedDistinct := compile(base + ` | stats dc(distinct_value) AS first dc(distinct_value) AS second`)
+	sharedDistinct := compile(base + ` | stats dc(distinct_value) AS count_values values(distinct_value) AS distinct_values`)
 	actions := explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedDistinct)
 	if got := strings.Count(actions, "Function: groupUniqArrayArray("); got != 1 {
-		t.Fatalf("repeated dc has %d physical aggregate states, want one:\n%s", got, actions)
+		t.Fatalf("values/dc has %d shared physical aggregate states, want one:\n%s", got, actions)
 	}
-	sharedValues := compile(base + ` | stats values(distinct_value) AS first values(distinct_value) AS second dc(distinct_value) AS count_values`)
-	actions = explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedValues)
-	if got := strings.Count(actions, "Function: groupUniqArrayArray("); got != 1 {
-		t.Fatalf("repeated values/dc has %d physical aggregate states, want one:\n%s", got, actions)
-	}
-	sharedCountValues := compile(base + ` | stats count(distinct_value) AS first count(distinct_value) AS second`)
+	sharedCountValues := compile(base + ` | stats count(distinct_value) AS occurrences dc(distinct_value) AS count_values`)
 	actions = explainCompiledQuery(t, ctx, connection, "EXPLAIN actions=1 ", sharedCountValues)
 	if got := strings.Count(actions, "FUNCTION arrayCount("); got != 1 {
-		t.Fatalf("repeated count(field) has %d physical array cardinality actions, want one:\n%s", got, actions)
+		t.Fatalf("count(field) has %d physical array cardinality actions, want one:\n%s", got, actions)
 	}
 	if got := strings.Count(actions, "Function: sum(UInt128)"); got != 1 {
-		t.Fatalf("repeated count(field) has %d physical aggregate states, want one:\n%s", got, actions)
+		t.Fatalf("count(field) has %d physical aggregate states, want one:\n%s", got, actions)
 	}
 	if strings.Contains(actions, "ArrayJoin") {
 		t.Fatalf("count(field) physical plan expands event rows:\n%s", actions)

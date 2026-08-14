@@ -1263,6 +1263,8 @@ func fieldSummaryFixedTypePredicate(field fieldState, storedType string) string 
 		return storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeBool)) + ")"
 	case fieldKindTime:
 		return storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeTimestamp)) + ")"
+	case fieldKindStringArray:
+		return storedType + " = toUInt8(" + fmt.Sprint(uint8(eventfields.StoredValueTypeList)) + ")"
 	default:
 		return "0"
 	}
@@ -1281,6 +1283,12 @@ func fieldSummaryFixedEncoding(field fieldState, storedType, value string) strin
 	case fieldKindTime:
 		return "concat(replaceOne(toString(toDateTime64(" + value +
 			", 9, 'UTC')), ' ', 'T'), 'Z')"
+	case fieldKindStringArray:
+		// Exact field summaries deliberately reject structured values after
+		// profiling their semantic type. Keep the fixed String transport typed;
+		// the container predicate marks every present array unsupported before
+		// any value group can be emitted.
+		return "CAST('' AS String)"
 	default:
 		return "CAST('' AS String)"
 	}

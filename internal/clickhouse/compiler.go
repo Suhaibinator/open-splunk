@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Suhaibinator/open-splunk/internal/eventfields"
 	"github.com/Suhaibinator/open-splunk/internal/ianatimezone"
@@ -36,6 +37,7 @@ const (
 	internalSortVisibilityColumn       = "__os_sort_visibility_seq"
 	internalSortSourceIdentityColumn   = "__os_sort_source_identity"
 	rawEncodingUTF8                    = 1
+	rawEncodingBinary                  = 2
 	rawTextIndexExtractionRegex        = "[A-Za-z0-9_]+"
 	rawTextIndexASCIIFoldFrom          = "ſK"
 	rawTextIndexASCIIFoldTo            = "sk"
@@ -65,13 +67,14 @@ const (
 	// additional column: the pivot's row axis is runtime data rather than a
 	// plan-time constant, so the row value itself crosses the boundary beside
 	// the dense ordinal that proves the server-side order was preserved.
-	ChartOrdinalColumn      = "__os_chart_ordinal"
-	ChartRowColumn          = "__os_chart_row"
-	ChartNamesColumn        = "__os_chart_names"
-	ChartCountsColumn       = "__os_chart_counts"
-	ChartValuesColumn       = "__os_chart_values"
-	ChartValuePresentColumn = "__os_chart_value_present"
-	ChartInvalidColumn      = "__os_chart_invalid"
+	ChartOrdinalColumn          = "__os_chart_ordinal"
+	ChartRowColumn              = "__os_chart_row"
+	ChartNamesColumn            = "__os_chart_names"
+	ChartCountsColumn           = "__os_chart_counts"
+	ChartValuesColumn           = "__os_chart_values"
+	ChartValuePresentColumn     = "__os_chart_value_present"
+	ChartInvalidColumn          = "__os_chart_invalid"
+	ChartRowSemanticBytesColumn = "__os_chart_row_semantic_bytes"
 	// SparseEventFieldNamesColumn carries per-row presence metadata beside the
 	// public raw fields JSON. The executor consumes it and never publishes it.
 	SparseEventFieldNamesColumn = "__os_result_field_names"
@@ -295,10 +298,10 @@ const (
 	// bounded values()/list() result. Larger raw-storage values fail closed.
 	MaximumMVSortBytes = MaximumStoredScalarBytes
 
-	// UnsupportedStatsByValueMarker is emitted by the scalar-only stats BY
-	// guard so the executor can classify the ClickHouse exception without
-	// exposing generated SQL or storage details.
-	UnsupportedStatsByValueMarker = "open-splunk: stats BY requires a scalar field"
+	// UnsupportedStatsByValueMarker is emitted before an object, nested
+	// container, or other unsupported Dynamic value can create a stats BY group.
+	// The executor classifies it without exposing SQL or storage details.
+	UnsupportedStatsByValueMarker = "open-splunk: stats BY contains an unsupported value"
 	// EventStatsInputLimitMarker classifies an eventstats stage whose upstream
 	// relation exceeded the bounded row-enrichment contract.
 	EventStatsInputLimitMarker = "open-splunk: eventstats input exceeds the supported limit"
@@ -438,15 +441,25 @@ type CompiledQuery struct {
 	// trailing metadata columns. The executor consumes those columns without
 	// exposing them in the public schema.
 	ContainerOutputs []ResultContainerOutput
-	Timechart        *TimechartOutput
-	Chart            *ChartOutput
+	// OptionalMultivalueOutputs maps selected Array(String) ordinals to a
+	// trailing value-presence bit. It is the sealed nullable-list transport for
+	// makemv results, including present empty arrays.
+	OptionalMultivalueOutputs []ResultOptionalMultivalueOutput
+	// StringOrBytesOutputs identifies selected physical String ordinals whose
+	// byte-preserving SPL lineage admits either a UTF-8 String cell or a Bytes
+	// cell. The sealed descriptor prevents the executor from narrowing a
+	// byte-capable stats BY key to a String-only public schema.
+	StringOrBytesOutputs []ResultStringOrBytesOutput
+	Timechart            *TimechartOutput
+	Chart                *ChartOutput
 	// SparseFields marks ordinary raw-event output whose public fields object
 	// must be reconstructed from the appended private presence column.
 	SparseFields bool
 	// atomicResult is compiler-owned evidence that the query may surface a
-	// sanitized runtime expression-value failure. The executor must consume and
-	// close the complete result before publishing schema or rows so a failure on
-	// a later row cannot leak a successful prefix.
+	// sanitized runtime-value failure. The executor must consume and close the
+	// complete result before invoking the sink. The production manager supplies
+	// the transactional staging boundary that makes those subsequent sink calls
+	// publicly atomic.
 	atomicResult bool
 
 	// relationalDepth is compiler evidence, not part of the execution
@@ -476,8 +489,11 @@ type CompiledQuery struct {
 }
 
 // RequiresAtomicResult reports whether execution must validate the complete
-// backend stream before making any result visible. The value is covered by the
-// compiled execution seal and cannot be enabled or disabled by callers.
+// backend stream before invoking the result sink. Production visibility is
+// atomic because the manager stages those sink calls and commits once Execute
+// succeeds; another sink must provide equivalent private staging if its calls
+// are externally observable. The value is covered by the compiled execution
+// seal and cannot be enabled or disabled by callers.
 func (compiled CompiledQuery) RequiresAtomicResult() bool {
 	return compiled.atomicResult
 }
@@ -486,13 +502,14 @@ func (compiled CompiledQuery) RequiresAtomicResult() bool {
 // runtime data, so the row column's public name and value kind are carried
 // beside the series bounds and the physical type the transport must present.
 type ChartOutput struct {
-	RowField        string
-	RowKind         ChartRowKind
-	RowDatabaseType string
-	RowLimit        uint64
-	MaxSeries       uint16
-	MaxLabelBytes   uint16
-	ValueKind       ChartValueKind
+	RowField         string
+	RowKind          ChartRowKind
+	RowDatabaseType  string
+	RowLimit         uint64
+	MaxSeries        uint16
+	MaxLabelBytes    uint16
+	ValueKind        ChartValueKind
+	RowSemanticBytes bool
 }
 
 // TimechartMode identifies the executor transport and public schema contract.
@@ -735,6 +752,9 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 		} else if depthErr := validateFinalizedRelationalDepth(relation, compiled); depthErr != nil {
 			return CompiledQuery{}, depthErr
 		}
+		if state.context != nil && state.context.v03MaterializedValidation {
+			compiled.SQL = applyV03MaterializedValidationSettings(compiled.SQL)
+		}
 		compiled.statsPartitionsMaxThreadsHint = statsPartitionsMaxThreadsHint
 		if len(compiled.SQL) > maxCompiledQueryBytes {
 			return CompiledQuery{}, &plan.Diagnostic{
@@ -832,6 +852,16 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			relation = relation.selectFrom(filterSQL, operator.Range)
 			args = append(args, predicateArgs...)
 			state = nextState
+		case *plan.RegexFilter:
+			predicate, predicateArgs, compileErr := compileRegexFilter(operator, state)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = relation.selectFrom(
+				"SELECT * FROM ("+relation.sql+") AS "+alias+" WHERE "+predicate,
+				operator.Range,
+			)
+			args = append(args, predicateArgs...)
 		case *plan.Project:
 			projection, nextState, projectionArgs, compileErr := compileProjection(operator, state)
 			if compileErr != nil {
@@ -867,13 +897,40 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				if compileErr != nil {
 					return CompiledQuery{}, compileErr
 				}
-				nextSQL := upsertFieldProjectionSQL(
-					relation.sql,
-					state,
-					assignment.Output.Name,
-					value.valueSQL,
-					alias,
-				)
+				prefixArgs := append([]any(nil), value.valueArgs...)
+				semanticAlias := ""
+				nextSQL := ""
+				if value.kind == fieldKindString && value.stringOrBytes {
+					if value.semanticBytesSQL == "" {
+						return CompiledQuery{}, errors.New(
+							"compile ClickHouse extend: String-or-Bytes value lacks semantic Bytes provenance",
+						)
+					}
+					semanticAlias = quoteIdentifier(fmt.Sprintf(
+						"__os_string_or_bytes_%d_%d",
+						aliasSequence,
+						index,
+					))
+					nextSQL = upsertFieldProjectionWithPrivateSQL(
+						relation.sql,
+						state,
+						assignment.Output.Name,
+						value.valueSQL,
+						"toUInt8(ifNull("+value.semanticBytesSQL+", 0)) AS "+semanticAlias,
+						alias,
+					)
+					prefixArgs = append(prefixArgs, value.semanticBytesArgs...)
+					value.semanticBytesSQL = semanticAlias
+					value.semanticBytesArgs = nil
+				} else {
+					nextSQL = upsertFieldProjectionSQL(
+						relation.sql,
+						state,
+						assignment.Output.Name,
+						value.valueSQL,
+						alias,
+					)
+				}
 				relation = relation.selectFrom(nextSQL, operator.Range)
 				if err := validateRelationalDepth(relation.depth, relation.ownerRange); err != nil {
 					return CompiledQuery{}, err
@@ -882,7 +939,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				// before every placeholder already present in the nested fragment.
 				// Sequential assignments add another outer SELECT and therefore
 				// prepend in reverse nesting order as well.
-				args = prependArguments(value.valueArgs, args)
+				args = prependArguments(prefixArgs, args)
 				_, directField := assignment.Expression.(*plan.ScalarFieldExpression)
 				nextState, stateErr := extendCompileState(
 					state,
@@ -899,6 +956,101 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 				}
 			}
+		case *plan.Strcat:
+			enriched, nextState, prefixArgs, compileErr := compileStrcat(
+				relation,
+				operator,
+				state,
+				alias,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = prependArguments(prefixArgs, args)
+			state = nextState
+		case *plan.FillNull:
+			enriched, nextState, prefixArgs, compileErr := compileFillNull(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = prependArguments(prefixArgs, args)
+			state = nextState
+		case *plan.RowTotal:
+			enriched, nextState, prefixArgs, barrier, compileErr := compileRowTotal(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = prependArguments(prefixArgs, args)
+			if barrier != nil {
+				boundBarrier := barrier.bind(args)
+				args = nil
+				nextState.chronologicalBarriers = append(
+					nextState.chronologicalBarriers,
+					boundBarrier,
+				)
+			}
+			state = nextState
+		case *plan.OrderedDelta:
+			enriched, nextState, prefixArgs, barrier, compileErr := compileOrderedDelta(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = prependArguments(prefixArgs, args)
+			if barrier != nil {
+				boundBarrier := barrier.bind(args)
+				args = nil
+				nextState.chronologicalBarriers = append(
+					nextState.chronologicalBarriers,
+					boundBarrier,
+				)
+			}
+			state = nextState
+		case *plan.MakeMultivalue:
+			enriched, nextState, prefixArgs, compileErr := compileMakeMultivalue(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = prependArguments(prefixArgs, args)
+			state = nextState
+		case *plan.ExpandMultivalue:
+			enriched, nextState, prefixArgs, compileErr := compileExpandMultivalue(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = enriched
+			args = prependArguments(prefixArgs, args)
+			state = nextState
 		case *plan.TimeBucket:
 			bucketed, nextState, prefixArgs, compileErr := compileTimeBucket(
 				relation,
@@ -1059,6 +1211,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					operator.Range,
 				)
 				args = prependArguments(nextState.preAggregateValidationArgs, args)
+
 				aliasSequence++
 				alias = quoteIdentifier(fmt.Sprintf("_stage_%d", aliasSequence))
 				nextState.preAggregateValidationColumns = nil
@@ -1088,6 +1241,15 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				nextState.preAggregateArgs = nil
 			}
 			if len(nextState.preAggregateGroupExpansions) > 0 {
+				if nextState.context == nil {
+					return CompiledQuery{}, errors.New(
+						"compile ClickHouse aggregate: multivalue validation context is missing",
+					)
+				}
+				// The Cartesian guard is runtime data-dependent for both raw Dynamic
+				// and fixed Array(String) inputs. A later backend row can therefore
+				// select the expansion marker after earlier groups were produced.
+				nextState.context.atomicResult = true
 				expansionProduct, guardErr := statsMultivalueByExpansionProductSQL(
 					nextState.preAggregateGroupExpansions,
 				)
@@ -1463,6 +1625,18 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				args = append(args, operator.Count)
 				state.order = append([]compiledSortKey(nil), keys...)
 			}
+		case *plan.Reverse:
+			reversed, nextState, compileErr := compileReverse(
+				relation,
+				operator,
+				state,
+				aliasSequence,
+			)
+			if compileErr != nil {
+				return CompiledQuery{}, compileErr
+			}
+			relation = reversed
+			state = nextState
 		default:
 			return CompiledQuery{}, fmt.Errorf("compile ClickHouse query: unsupported logical operator %T", operator)
 		}
@@ -1487,10 +1661,39 @@ type authoredKnowledgeCompilation struct {
 
 func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowledgeCompilation, error) {
 	var evidence authoredKnowledgeCompilation
+	regexBudget := authoredRegexProgramBudget{
+		evidence: &evidence,
+	}
 	outputs := 0
 	spathWorkUnits := 0
 	for _, operator := range operators {
+		if err := regexBudget.visitOperator(operator); err != nil {
+			return authoredKnowledgeCompilation{}, err
+		}
 		switch operator := operator.(type) {
+		case *plan.RegexFilter:
+			if operator == nil {
+				continue
+			}
+			patternRange := regexFilterPatternRange(operator)
+			validated, err := splregex.CompileMatchPattern(operator.Pattern)
+			if err != nil {
+				if splregex.IsMatchComplexityError(err) {
+					return authoredKnowledgeCompilation{}, &plan.Diagnostic{
+						Code:    "SPL_QUERY_TOO_COMPLEX",
+						Message: "regex regular expression exceeds the shared match resource limit",
+						Range:   patternRange,
+					}
+				}
+				return authoredKnowledgeCompilation{}, &plan.Diagnostic{
+					Code:    "SPL_UNSUPPORTED_REGEX",
+					Message: "regex regular expression is outside the supported RE2-compatible subset",
+					Range:   patternRange,
+				}
+			}
+			if err := regexBudget.chargeMatchStyle(validated.ProgramWorkUnits, patternRange); err != nil {
+				return authoredKnowledgeCompilation{}, err
+			}
 		case *plan.Extract:
 			if operator == nil {
 				continue
@@ -1499,10 +1702,9 @@ func validateCompiledExtractionBudgets(operators []plan.Operator) (authoredKnowl
 			if err != nil {
 				return authoredKnowledgeCompilation{}, err
 			}
-			evidence.regexPrograms++
-			// #nosec G115 -- bounded extraction compilation returns positive
-			// work no larger than splregex.MaximumExtractionProgramWorkUnits.
-			evidence.regexWorkUnits += uint64(validated.ProgramWorkUnits)
+			if err := regexBudget.chargeShared(validated.ProgramWorkUnits); err != nil {
+				return authoredKnowledgeCompilation{}, err
+			}
 			outputs += len(operator.Captures)
 		case *plan.ExtractJSON:
 			if operator == nil {
@@ -1622,6 +1824,20 @@ func finalizeOrdinaryQuery(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	optionalMultivalueOutputs, optionalMultivalueProjection, err :=
+		compileResultOptionalMultivalueOutputs(state, outputFields, containerOutputs)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	stringOrBytesOutputs, stringOrBytesProjection, err := compileResultStringOrBytesOutputs(
+		state,
+		outputFields,
+		containerOutputs,
+		optionalMultivalueOutputs,
+	)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	sparseFields := exposesRawFieldsPayload(state)
 	if sparseFields {
 		if !slices.Contains(outputFields, "fields") {
@@ -1633,6 +1849,8 @@ func finalizeOrdinaryQuery(
 		)
 	}
 	projection = append(projection, containerProjection...)
+	projection = append(projection, optionalMultivalueProjection...)
+	projection = append(projection, stringOrBytesProjection...)
 	if len(state.chronologicalBarriers) > 0 {
 		return finalizeChronologicallyValidatedQuery(
 			relation,
@@ -1643,6 +1861,8 @@ func finalizeOrdinaryQuery(
 			outputPresentations,
 			sparseFields,
 			containerOutputs,
+			optionalMultivalueOutputs,
+			stringOrBytesOutputs,
 			aliasSequence,
 		)
 	}
@@ -1659,12 +1879,14 @@ func finalizeOrdinaryQuery(
 	relation = relation.selectFrom(fragment, relation.ownerRange)
 	return withCompiledRelationalDepth(
 		CompiledQuery{
-			SQL:                 relation.sql,
-			Args:                args,
-			OutputFields:        outputFields,
-			OutputPresentations: outputPresentations,
-			ContainerOutputs:    containerOutputs,
-			SparseFields:        sparseFields,
+			SQL:                       relation.sql,
+			Args:                      args,
+			OutputFields:              outputFields,
+			OutputPresentations:       outputPresentations,
+			ContainerOutputs:          containerOutputs,
+			OptionalMultivalueOutputs: optionalMultivalueOutputs,
+			StringOrBytesOutputs:      stringOrBytesOutputs,
+			SparseFields:              sparseFields,
 		},
 		relation.depth,
 		relation.ownerRange,
@@ -1723,8 +1945,11 @@ func ordinaryChronologicalDummyProjection(
 	outputFields []string,
 	sparseFields bool,
 	containerOutputs []ResultContainerOutput,
+	optionalMultivalueOutputs []ResultOptionalMultivalueOutput,
+	stringOrBytesOutputs []ResultStringOrBytesOutput,
 ) ([]string, bool) {
-	projection := make([]string, 0, len(outputFields)+1+len(containerOutputs)*3)
+	projection := make([]string, 0, len(outputFields)+1+len(containerOutputs)*3+
+		len(optionalMultivalueOutputs)+len(stringOrBytesOutputs))
 	for _, name := range outputFields {
 		field, visible := state.visible[name]
 		if !visible {
@@ -1751,6 +1976,18 @@ func ordinaryChronologicalDummyProjection(
 			"toUInt8(0) AS "+quoteIdentifier(output.MetadataVersionColumn()),
 		)
 	}
+	for _, output := range optionalMultivalueOutputs {
+		projection = append(
+			projection,
+			"toUInt8(0) AS "+quoteIdentifier(output.PresentColumn()),
+		)
+	}
+	for _, output := range stringOrBytesOutputs {
+		projection = append(
+			projection,
+			"toUInt8(0) AS "+quoteIdentifier(output.SemanticBytesColumn()),
+		)
+	}
 	return projection, len(projection) > 0
 }
 
@@ -1763,6 +2000,8 @@ func finalizeChronologicallyValidatedQuery(
 	outputPresentations []ResultFieldPresentation,
 	sparseFields bool,
 	containerOutputs []ResultContainerOutput,
+	optionalMultivalueOutputs []ResultOptionalMultivalueOutput,
+	stringOrBytesOutputs []ResultStringOrBytesOutput,
 	aliasSequence int,
 ) (CompiledQuery, error) {
 	order := ""
@@ -1787,11 +2026,19 @@ func finalizeChronologicallyValidatedQuery(
 			output.MetadataVersionColumn(),
 		)
 	}
+	for _, output := range optionalMultivalueOutputs {
+		resultColumns = append(resultColumns, output.PresentColumn())
+	}
+	for _, output := range stringOrBytesOutputs {
+		resultColumns = append(resultColumns, output.SemanticBytesColumn())
+	}
 	dummyProjection, _ := ordinaryChronologicalDummyProjection(
 		state,
 		outputFields,
 		sparseFields,
 		containerOutputs,
+		optionalMultivalueOutputs,
+		stringOrBytesOutputs,
 	)
 	return wrapChronologicalValidation(
 		relation.sql,
@@ -1807,6 +2054,8 @@ func finalizeChronologicallyValidatedQuery(
 			OutputFields:              outputFields,
 			OutputPresentations:       outputPresentations,
 			ContainerOutputs:          containerOutputs,
+			OptionalMultivalueOutputs: optionalMultivalueOutputs,
+			StringOrBytesOutputs:      stringOrBytesOutputs,
 			SparseFields:              sparseFields,
 			validationDummyProjection: dummyProjection,
 		},
@@ -1841,10 +2090,16 @@ func wrapCompiledChronologicalValidation(
 			resultColumns = []string{
 				ChartOrdinalColumn,
 				ChartRowColumn,
+			}
+			if compiled.Chart.RowSemanticBytes {
+				resultColumns = append(resultColumns, ChartRowSemanticBytesColumn)
+			}
+			resultColumns = append(
+				resultColumns,
 				ChartNamesColumn,
 				ChartCountsColumn,
 				ChartInvalidColumn,
-			}
+			)
 		case ChartValueKindSum, ChartValueKindAverage, ChartValueKindPercentile:
 			// Numeric chart derives label selection and validation from its
 			// row/label numeric aggregate, so the scoped relation has one
@@ -1853,11 +2108,17 @@ func wrapCompiledChronologicalValidation(
 			resultColumns = []string{
 				ChartOrdinalColumn,
 				ChartRowColumn,
+			}
+			if compiled.Chart.RowSemanticBytes {
+				resultColumns = append(resultColumns, ChartRowSemanticBytesColumn)
+			}
+			resultColumns = append(
+				resultColumns,
 				ChartNamesColumn,
 				ChartValuesColumn,
 				ChartValuePresentColumn,
 				ChartInvalidColumn,
-			}
+			)
 		default:
 			return CompiledQuery{}, errors.New(
 				"compile ClickHouse query: chart output value kind is invalid",
@@ -2998,6 +3259,17 @@ func compileDynamicNumericBucket(
 	outputTypeSQL := bucketTypeSQL
 	if preserve {
 		missingValue = "CAST(" + previous.valueSQL + " AS Dynamic)"
+		if previous.kind == fieldKindString && previous.stringOrBytes {
+			if previous.semanticBytesSQL == "" {
+				return compiledRelation{}, compileState{}, nil, errors.New(
+					"compile ClickHouse numeric bucket: prior String-or-Bytes field lacks semantic Bytes provenance",
+				)
+			}
+			missingValue = "if(ifNull(" + previous.semanticBytesSQL +
+				", 0), " + bytesEnvelopePayloadDynamicSQL(
+				rawStdBase64EncodeSQL("assumeNotNull("+previous.valueSQL+")"),
+			) + ", CAST(" + previous.valueSQL + " AS Dynamic))"
+		}
 		outputExistsSQL = "if(" + metadata.existsAlias + " != 0, 1, " + previousExistsAlias + ")"
 		outputTypeSQL = "if(" + metadata.existsAlias + " != 0, " + bucketTypeSQL + ", " + previousTypeAlias + ")"
 	}
@@ -3306,11 +3578,179 @@ func upsertFieldProjectionSQL(
 	value string,
 	alias string,
 ) string {
-	name := quoteIdentifier(outputName)
-	if _, replacing := state.visible[outputName]; replacing {
-		return "SELECT * REPLACE (" + value + " AS " + name + ") FROM (" + fragment + ") AS " + alias
+	projection := upsertWildcardFieldProjection(
+		"*",
+		state,
+		outputName,
+		value,
+		alias,
+		authoredFieldPhysicallyPublic(state, outputName),
+	)
+	return "SELECT " + projection + " FROM (" + fragment + ") AS " + alias
+}
+
+func upsertFieldProjectionWithPrivateSQL(
+	fragment string,
+	state compileState,
+	outputName string,
+	value string,
+	privateProjection string,
+	alias string,
+) string {
+	projection := upsertWildcardFieldProjection(
+		"*",
+		state,
+		outputName,
+		value,
+		alias,
+		authoredFieldPhysicallyPublic(state, outputName),
+	)
+	return "SELECT " + projection + ", " + privateProjection +
+		" FROM (" + fragment + ") AS " + alias
+}
+
+// authoredFieldPhysicallyPublic distinguishes a logical compiler field from a
+// same-named column that actually exists in the current relation. Aggregate
+// and chronological producers may deliberately retain a compiler-private
+// physical identifier until a later publication boundary; SELECT REPLACE is
+// invalid for those fields even though they are present in state.visible.
+func authoredFieldPhysicallyPublic(state compileState, name string) bool {
+	field, exists := state.visible[name]
+	return exists && field.valueSQL == quoteIdentifier(name)
+}
+
+// logicalFieldPathSegments returns the canonical logical path represented by
+// a public SPL field name. Backslash-escaped dots remain inside one segment;
+// safe quoted aggregate names that are not valid paths are one opaque segment.
+// Comparing these segments instead of string prefixes prevents a literal-dot
+// field such as parent\.child from colliding with the path parent.child.
+func logicalFieldPathSegments(name string) ([]string, bool) {
+	resolved, err := plan.ResolveField(name, spl.Range{})
+	if err != nil {
+		resolved, err = plan.ResolveQuotedField(name, spl.Range{})
 	}
-	return "SELECT *, " + value + " AS " + name + " FROM (" + fragment + ") AS " + alias
+	if err != nil {
+		return nil, false
+	}
+	if resolved.Canonical {
+		return []string{resolved.Name}, true
+	}
+	if len(resolved.Path) == 0 {
+		return nil, false
+	}
+	return resolved.Path, true
+}
+
+func strictLogicalFieldPathPrefix(prefix, value []string) bool {
+	return len(prefix) < len(value) && slices.Equal(prefix, value[:len(prefix)])
+}
+
+func strictAuthoredFieldNamePrefix(prefix, value string) bool {
+	return prefix != "" && strings.HasPrefix(value, prefix+".")
+}
+
+func logicalFieldNamesOverlap(first, second string) (bool, bool) {
+	firstPath, firstOK := logicalFieldPathSegments(first)
+	secondPath, secondOK := logicalFieldPathSegments(second)
+	if firstOK && secondOK {
+		return strictLogicalFieldPathPrefix(firstPath, secondPath) ||
+			strictLogicalFieldPathPrefix(secondPath, firstPath), true
+	}
+	// Safe stats literal outputs can be public physical columns without being
+	// valid SPL paths (for example parent..child). ClickHouse still applies its
+	// dotted Dynamic namespace rules to that spelling. Fall back only when at
+	// least one logical parse failed, and require the literal dot boundary in the
+	// authored names. A parsed escaped-dot name such as parent\.child therefore
+	// remains one opaque segment and never collides with parent.
+	if strictAuthoredFieldNamePrefix(first, second) ||
+		strictAuthoredFieldNamePrefix(second, first) {
+		return true, true
+	}
+	return false, false
+}
+
+// publicFieldNamespaceOverlapReplacements protects independently authored
+// dotted columns from ClickHouse's Dynamic namespace expansion. When SELECT *
+// publishes a new ancestor (or descendant), ClickHouse 26.3 can silently drop
+// an already-public overlapping column before the next relational boundary.
+// Re-emitting each physical overlap through the input alias in the same
+// REPLACE clause preserves the independent SPL columns without changing their
+// logical state, sidecars, order, or relational depth.
+func publicFieldNamespaceOverlapReplacements(
+	state compileState,
+	outputName string,
+	relationAlias string,
+) []string {
+	replacements := make([]string, 0)
+	for _, candidateName := range orderedVisibleNames(state) {
+		if candidateName == outputName {
+			continue
+		}
+		if overlaps, ok := logicalFieldNamesOverlap(outputName, candidateName); !ok || !overlaps {
+			continue
+		}
+		candidate := state.visible[candidateName]
+		publicName := quoteIdentifier(candidateName)
+		if candidate.valueSQL != publicName {
+			// A private physical producer has no same-named relation column to
+			// preserve. Its logical publication remains the consumer's job.
+			continue
+		}
+		replacements = append(
+			replacements,
+			relationAlias+"."+publicName+" AS "+publicName,
+		)
+	}
+	return replacements
+}
+
+// preserveWildcardFieldNamespace appends only the overlap-preserving REPLACE
+// clause to an existing wildcard projection such as "*" or "* EXCEPT (...)".
+func preserveWildcardFieldNamespace(
+	base string,
+	state compileState,
+	outputName string,
+	relationAlias string,
+) string {
+	replacements := publicFieldNamespaceOverlapReplacements(
+		state,
+		outputName,
+		relationAlias,
+	)
+	if len(replacements) == 0 {
+		return base
+	}
+	return base + " REPLACE (" + strings.Join(replacements, ", ") + ")"
+}
+
+// upsertWildcardFieldProjection builds one wildcard projection that preserves
+// every physical ancestor/descendant and then either replaces or appends the
+// authored output. Keeping all replacements in one clause is accepted by the
+// pinned ClickHouse analyzer and avoids an additional relational layer.
+func upsertWildcardFieldProjection(
+	base string,
+	state compileState,
+	outputName string,
+	valueSQL string,
+	relationAlias string,
+	replaceOutput bool,
+) string {
+	replacements := publicFieldNamespaceOverlapReplacements(
+		state,
+		outputName,
+		relationAlias,
+	)
+	publicName := quoteIdentifier(outputName)
+	if replaceOutput {
+		replacements = append(replacements, valueSQL+" AS "+publicName)
+	}
+	if len(replacements) > 0 {
+		base += " REPLACE (" + strings.Join(replacements, ", ") + ")"
+	}
+	if !replaceOutput {
+		base += ", " + valueSQL + " AS " + publicName
+	}
+	return base
 }
 
 func updateBucketCompileState(state compileState, inputName string, output plan.FieldRef, source fieldState) compileState {
@@ -3412,9 +3852,17 @@ func pivotDescendantSourceColumns(state compileState, fields ...fieldState) []st
 			continue
 		}
 		hasDescendant = true
-		if slices.Contains(state.privateColumns, field.descendantSQL) &&
-			!slices.Contains(private, field.descendantSQL) {
-			private = append(private, field.descendantSQL)
+		for _, column := range state.privateColumns {
+			// Some calculated container producers retain an aligned names array
+			// and express presence as notEmpty(<names sidecar>) instead of minting
+			// a separate Boolean column. Carry every compiler-private identifier
+			// referenced by that sealed expression across the narrow pivot source
+			// CTE; carrying only an expression that is itself a private column drops
+			// fillnull/strcat container authority before chart/timechart prepares it.
+			if strings.Contains(field.descendantSQL, column) &&
+				!slices.Contains(private, column) {
+				private = append(private, column)
+			}
 		}
 	}
 	if !hasDescendant {
@@ -4710,10 +5158,10 @@ func splunkSeriesLabelSQL(label string) string {
 // their lexical scalar text, while fixed columns keep their own scalar type.
 // The public name participates because the ordinary result path derives _raw's
 // kind from the name as well.
-func chartRowColumnType(name string, field fieldState) (databaseType string, kind ChartRowKind, err error) {
+func chartRowColumnType(_ string, field fieldState) (databaseType string, kind ChartRowKind, err error) {
 	switch field.kind {
 	case fieldKindInvalid, fieldKindString, fieldKindDynamic:
-		if name == "_raw" {
+		if field.stringOrBytes {
 			// stats count BY _raw publishes a Mixed, nullable column because
 			// _raw may hold non-UTF-8 bytes. The pivot's first column is that
 			// same group column, so it declares the same kind.
@@ -4891,6 +5339,11 @@ func compileCountChart(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	if rowKind == ChartRowKindMixed && rowField.semanticBytesSQL == "" {
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse chart: Mixed row lacks semantic Bytes provenance",
+		)
+	}
 
 	splitField, splitResolved, err := resolveCompiledField(operator.SplitBy, state)
 	if err != nil {
@@ -4981,6 +5434,7 @@ func compileCountChart(
 	rowDomain := q("__os_chart_row_domain")
 
 	rowValue := q("__os_ch_row_value")
+	rowSemanticBytes := q("__os_ch_row_semantic_bytes")
 	rowExact := q("__os_ch_row_exact")
 	rowType := q("__os_ch_row_type")
 	rowPresent := q("__os_ch_row_present")
@@ -5070,6 +5524,9 @@ func compileCountChart(
 		rowSupportedSQL = supported
 		rowKeySQL = "CAST(if(" + rowSupported + " != 0, " + lexical + ", '') AS String)"
 	}
+	if rowKind == ChartRowKindMixed {
+		rowKeySQL = "tuple(" + rowKeySQL + ", " + rowSemanticBytes + ")"
+	}
 	rowSortSQL := row
 	if rowDynamic || rowField.numericSort {
 		// Automatic numeric-aware ordering: the exact order sort 0 +<field>
@@ -5084,6 +5541,10 @@ func compileCountChart(
 	sql.WriteString(" AS (SELECT ")
 	sql.WriteString(rowField.valueSQL + " AS " + rowValue + ", ")
 	sql.WriteString("toUInt8(" + rowExistsSQL + ") AS " + rowExact + ", ")
+	if rowKind == ChartRowKindMixed {
+		sql.WriteString("toUInt8(ifNull(" + rowField.semanticBytesSQL +
+			", 0)) AS " + rowSemanticBytes + ", ")
+	}
 	if rowDynamic {
 		sql.WriteString(dynamicTypeExpression(rowField) + " AS " + rowType + ", ")
 	}
@@ -5232,6 +5693,9 @@ func compileCountChart(
 
 		public := rowEligible + " != 0 AND " + kind + " IN (0, 1)"
 		typedValidationRow := chartValidationRowSQL(rowDatabaseType)
+		if rowKind == ChartRowKindMixed {
+			typedValidationRow = "tuple(" + typedValidationRow + ", toUInt8(0))"
+		}
 		sql.WriteString(collapsed)
 		sql.WriteString(" AS (SELECT if(" + public + ", " + row + ", " + typedValidationRow + ") AS " + groupRow + ", ")
 		sql.WriteString("if(" + public + ", " + encoded + ", CAST('' AS String)) AS " + encoded + ", ")
@@ -5311,11 +5775,23 @@ func compileCountChart(
 		// A private sentinel carries row-independent validation across an empty row
 		// axis. It is ordered first and rejected by the buffering executor, so the
 		// synthetic row and empty arrays can never become public output.
-		sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", " +
+		sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", ")
+		if rowKind == ChartRowKindMixed {
+			sql.WriteString(q(ChartRowSemanticBytesColumn) + ", ")
+		}
+		sql.WriteString(
 			q(ChartNamesColumn) + ", " + q(ChartCountsColumn) + ", " +
-			q(ChartInvalidColumn) + " FROM (")
+				q(ChartInvalidColumn) + " FROM (")
 		sql.WriteString("SELECT " + rowDomain + "." + ordinal + " AS " + ordinal + ", ")
-		sql.WriteString(rowDomain + "." + row + " AS " + q(ChartRowColumn) + ", ")
+		rowOutputSQL := rowDomain + "." + row
+		if rowKind == ChartRowKindMixed {
+			rowOutputSQL = "tupleElement(" + rowOutputSQL + ", 1)"
+		}
+		sql.WriteString(rowOutputSQL + " AS " + q(ChartRowColumn) + ", ")
+		if rowKind == ChartRowKindMixed {
+			sql.WriteString("tupleElement(" + rowDomain + "." + row + ", 2) AS " +
+				q(ChartRowSemanticBytesColumn) + ", ")
+		}
 		sql.WriteString(domain + ".names AS " + q(ChartNamesColumn) + ", ")
 		sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + countMap + "[name], toUInt64(0)), " + domain + ".names) AS " + q(ChartCountsColumn) + ", ")
 		sql.WriteString("toUInt8(0) AS " + q(ChartInvalidColumn))
@@ -5326,15 +5802,19 @@ func compileCountChart(
 		sql.WriteString(" WHERE throwIf(" + rowDomain + "." + ordinal + " >= " + strconv.FormatUint(uint64(operator.RowLimit), 10) +
 			", '" + ChartRowLimitMarker + "') = 0")
 		sql.WriteString(" UNION ALL SELECT toUInt64(0) AS " + ordinal + ", " +
-			chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn) +
+			chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn))
+		if rowKind == ChartRowKindMixed {
+			sql.WriteString(", toUInt8(0) AS " + q(ChartRowSemanticBytesColumn))
+		}
+		sql.WriteString(
 			", CAST([], 'Array(String)') AS " + q(ChartNamesColumn) +
-			", CAST([], 'Array(UInt64)') AS " + q(ChartCountsColumn) +
-			", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
-			" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
-			" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
-			"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
-			" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
-			q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
+				", CAST([], 'Array(UInt64)') AS " + q(ChartCountsColumn) +
+				", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
+				" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
+				" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
+				"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
+				" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
+				q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC")
 	} else {
 		rawEncodedLabel := "substring(" + encoded + ", 3)"
 		published := encoded + " != '' AND " + collapsedCount + " > 0"
@@ -5363,7 +5843,15 @@ func compileCountChart(
 		sql.WriteString("toUInt64(row_number() OVER (ORDER BY " + bareRowSortSQL + " ASC) - 1) AS " + ordinal)
 		sql.WriteString(" FROM " + rowMaps + " WHERE length(mapKeys(" + countMap + ")) > 0 OR " + invalid + " != 0 OR " + collision + " != 0 OR " + columnInvalid + " != 0) ")
 
-		sql.WriteString("SELECT " + ordinal + ", " + groupRow + " AS " + q(ChartRowColumn) + ", ")
+		groupRowOutputSQL := groupRow
+		if rowKind == ChartRowKindMixed {
+			groupRowOutputSQL = "tupleElement(" + groupRow + ", 1)"
+		}
+		sql.WriteString("SELECT " + ordinal + ", " + groupRowOutputSQL + " AS " + q(ChartRowColumn) + ", ")
+		if rowKind == ChartRowKindMixed {
+			sql.WriteString("tupleElement(" + groupRow + ", 2) AS " +
+				q(ChartRowSemanticBytesColumn) + ", ")
+		}
 		sql.WriteString("if(" + transportInvalid + " != 0, CAST([], 'Array(String)'), " + domainNames + ") AS " + q(ChartNamesColumn) + ", ")
 		sql.WriteString("if(" + transportInvalid + " != 0, CAST([], 'Array(UInt64)'), arrayMap(name -> ifNull(" + countMap + "[name], toUInt64(0)), " + domainNames + ")) AS " + q(ChartCountsColumn) + ", ")
 		sql.WriteString(transportInvalid + " AS " + q(ChartInvalidColumn) + " FROM " + rowDomain)
@@ -5434,13 +5922,14 @@ func compileCountChart(
 		OutputFields: slices.Clone(dynamic.FixedFields),
 		sourceFanout: eventStatsOrdinarySourceFanout,
 		Chart: &ChartOutput{
-			RowField:        rowName,
-			RowKind:         rowKind,
-			RowDatabaseType: rowDatabaseType,
-			RowLimit:        uint64(operator.RowLimit),
-			MaxSeries:       dynamic.MaxSeries,
-			MaxLabelBytes:   maxTimechartLabelBytes,
-			ValueKind:       ChartValueKindCount,
+			RowField:         rowName,
+			RowKind:          rowKind,
+			RowDatabaseType:  rowDatabaseType,
+			RowLimit:         uint64(operator.RowLimit),
+			MaxSeries:        dynamic.MaxSeries,
+			MaxLabelBytes:    maxTimechartLabelBytes,
+			ValueKind:        ChartValueKindCount,
+			RowSemanticBytes: rowKind == ChartRowKindMixed,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -5560,6 +6049,11 @@ func compileNumericChart(
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	if rowKind == ChartRowKindMixed && rowField.semanticBytesSQL == "" {
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse chart: Mixed row lacks semantic Bytes provenance",
+		)
+	}
 
 	splitField, splitResolved, err := resolveCompiledField(operator.SplitBy, state)
 	if err != nil {
@@ -5641,6 +6135,7 @@ func compileNumericChart(
 	rowDomain := q("__os_chart_row_domain")
 
 	rowValue := q("__os_ch_row_value")
+	rowSemanticBytes := q("__os_ch_row_semantic_bytes")
 	rowExact := q("__os_ch_row_exact")
 	rowType := q("__os_ch_row_type")
 	rowPresent := q("__os_ch_row_present")
@@ -5715,6 +6210,9 @@ func compileNumericChart(
 		rowKeySQL = "CAST(if(" + rowSupported + " != 0, " + lexical +
 			", '') AS String)"
 	}
+	if rowKind == ChartRowKindMixed {
+		rowKeySQL = "tuple(" + rowKeySQL + ", " + rowSemanticBytes + ")"
+	}
 	rowSortSQL := row
 	if rowDynamic || rowField.numericSort {
 		rowSortSQL = dynamicSortValue(row, false)
@@ -5749,6 +6247,10 @@ func compileNumericChart(
 	sql.WriteString("WITH " + source + " AS (SELECT ")
 	sql.WriteString(rowField.valueSQL + " AS " + rowValue + ", ")
 	sql.WriteString("toUInt8(" + rowExistsSQL + ") AS " + rowExact + ", ")
+	if rowKind == ChartRowKindMixed {
+		sql.WriteString("toUInt8(ifNull(" + rowField.semanticBytesSQL +
+			", 0)) AS " + rowSemanticBytes + ", ")
+	}
 	if rowDynamic {
 		sql.WriteString(dynamicTypeExpression(rowField) + " AS " + rowType + ", ")
 	}
@@ -5898,11 +6400,23 @@ func compileNumericChart(
 	// real row. It makes split-type/label/collision validation observable even
 	// when the row axis has no eligible values. The executor buffers the whole
 	// result and rejects any nonzero invalid marker before publishing a schema.
-	sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", " +
-		q(ChartNamesColumn) + ", " + q(ChartValuesColumn) + ", " +
+	sql.WriteString("SELECT " + ordinal + ", " + q(ChartRowColumn) + ", ")
+	if rowKind == ChartRowKindMixed {
+		sql.WriteString(q(ChartRowSemanticBytesColumn) + ", ")
+	}
+	sql.WriteString(q(ChartNamesColumn) + ", " + q(ChartValuesColumn) + ", " +
 		q(ChartValuePresentColumn) + ", " + q(ChartInvalidColumn) + " FROM (")
+	rowOutputSQL := rowDomain + "." + row
+	if rowKind == ChartRowKindMixed {
+		rowOutputSQL = "tupleElement(" + rowOutputSQL + ", 1)"
+	}
 	sql.WriteString("SELECT " + rowDomain + "." + ordinal + " AS " + ordinal +
-		", " + rowDomain + "." + row + " AS " + q(ChartRowColumn) + ", " +
+		", " + rowOutputSQL + " AS " + q(ChartRowColumn) + ", ")
+	if rowKind == ChartRowKindMixed {
+		sql.WriteString("tupleElement(" + rowDomain + "." + row + ", 2) AS " +
+			q(ChartRowSemanticBytesColumn) + ", ")
+	}
+	sql.WriteString(
 		domain + ".names AS " + q(ChartNamesColumn) + ", ")
 	sql.WriteString("arrayMap(name -> ifNull(" + rowMaps + "." + valueMap +
 		"[name], toFloat64(0)), " + domain + ".names) AS " +
@@ -5918,17 +6432,21 @@ func compileNumericChart(
 		strconv.FormatUint(uint64(operator.RowLimit), 10) + ", '" +
 		ChartRowLimitMarker + "') = 0")
 	sql.WriteString(" UNION ALL SELECT toUInt64(0) AS " + ordinal + ", " +
-		chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn) +
+		chartValidationRowSQL(rowDatabaseType) + " AS " + q(ChartRowColumn))
+	if rowKind == ChartRowKindMixed {
+		sql.WriteString(", toUInt8(0) AS " + q(ChartRowSemanticBytesColumn))
+	}
+	sql.WriteString(
 		", CAST([], 'Array(String)') AS " + q(ChartNamesColumn) +
-		", CAST([], 'Array(Float64)') AS " + q(ChartValuesColumn) +
-		", CAST([], 'Array(UInt8)') AS " + q(ChartValuePresentColumn) +
-		", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
-		" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
-		" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
-		"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
-		" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
-		q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC" +
-		materializedCTESettingsSQL)
+			", CAST([], 'Array(Float64)') AS " + q(ChartValuesColumn) +
+			", CAST([], 'Array(UInt8)') AS " + q(ChartValuePresentColumn) +
+			", toUInt8(1) AS " + q(ChartInvalidColumn) + " FROM " + validation +
+			" CROSS JOIN " + collisions + " CROSS JOIN " + columnCheck +
+			" WHERE " + validation + "." + invalid + " != 0 OR " + collisions +
+			"." + collision + " != 0 OR " + columnCheck + "." + columnInvalid +
+			" != 0) AS " + q("__os_chart_transport") + " ORDER BY " +
+			q(ChartInvalidColumn) + " DESC, " + ordinal + " ASC" +
+			materializedCTESettingsSQL)
 
 	sourceDepth := relationalNodeDepth(relation.depth)
 	preparedDepth := relationalNodeDepth(sourceDepth)
@@ -5974,13 +6492,14 @@ func compileNumericChart(
 		Args:         args,
 		OutputFields: slices.Clone(dynamic.FixedFields),
 		Chart: &ChartOutput{
-			RowField:        rowName,
-			RowKind:         rowKind,
-			RowDatabaseType: rowDatabaseType,
-			RowLimit:        uint64(operator.RowLimit),
-			MaxSeries:       dynamic.MaxSeries,
-			MaxLabelBytes:   maxTimechartLabelBytes,
-			ValueKind:       valueKind,
+			RowField:         rowName,
+			RowKind:          rowKind,
+			RowDatabaseType:  rowDatabaseType,
+			RowLimit:         uint64(operator.RowLimit),
+			MaxSeries:        dynamic.MaxSeries,
+			MaxLabelBytes:    maxTimechartLabelBytes,
+			ValueKind:        valueKind,
+			RowSemanticBytes: rowKind == ChartRowKindMixed,
 		},
 	}
 	return withCompiledRelationalDepth(compiled, resultDepth, operator.Range), nil
@@ -6014,6 +6533,7 @@ type compileState struct {
 	postAggregateOrderedStrings      []compiledOrderedStringMeasure
 	deferredChronologicalValidation  []string
 	chronologicalBarriers            []compiledChronologicalBarrier
+	mvExpandQueryRowsSQL             string
 }
 
 type compiledStatsSparklineMeasure struct {
@@ -6037,7 +6557,9 @@ type compileContext struct {
 	stringConversionBudget            compiledStringConversionBudget
 	arithmeticOperators               int
 	membershipCandidates              int
+	mvExpandStages                    uint8
 	atomicResult                      bool
+	v03MaterializedValidation         bool
 	searchStartUnix                   int64
 	searchEarliest                    time.Time
 	searchLatest                      time.Time
@@ -6226,26 +6748,49 @@ func unsupportedMultivalueUsage(operation string, sourceRange spl.Range) error {
 }
 
 type fieldState struct {
-	valueSQL                   string
-	exactNumericKeySQL         string
-	dynamicNumericEligibleSQL  string
-	maxStringBytes             uint64
-	textEligibleSQL            string
-	rawTextIndexEligible       bool
-	dynamicDomain              dynamicScalarDomain
-	numericIntegral            bool
-	mvCountOneOrNull           bool
-	mvSortedLexicographic      bool
-	dynamicTypeSQL             string
-	storedTypeSQL              string
-	existsSQL                  string
-	existsArgs                 []any
-	descendantSQL              string
-	descendantArgs             []any
-	storedPath                 storedPathAuthority
-	relativeFieldNamesSQL      string
-	relativeFieldTypesSQL      string
-	fieldMetadataVersionSQL    string
+	valueSQL                     string
+	exactNumericKeySQL           string
+	dynamicNumericEligibleSQL    string
+	maxStringBytes               uint64
+	textEligibleSQL              string
+	rawTextIndexEligible         bool
+	dynamicDomain                dynamicScalarDomain
+	numericIntegral              bool
+	mvCountOneOrNull             bool
+	mvSortedLexicographic        bool
+	dynamicTypeSQL               string
+	storedTypeSQL                string
+	existsSQL                    string
+	existsArgs                   []any
+	descendantSQL                string
+	descendantArgs               []any
+	storedPath                   storedPathAuthority
+	relativeFieldNamesSQL        string
+	relativeFieldTypesSQL        string
+	fieldMetadataVersionSQL      string
+	optionalMultivaluePresentSQL string
+	// semanticBytesSQL is a sealed, row-local UInt8/Boolean authority for a
+	// fixed String whose public SPL cell may be either String or Bytes. Unlike
+	// textEligibleSQL it distinguishes valid UTF-8 bytes declared as binary.
+	semanticBytesSQL string
+	// textEligibleBySemanticBytes marks outputs whose text eligibility can be
+	// rebound exactly from the public value and semanticBytesSQL. Unlike
+	// semanticBytesByUTF8Validity, the semantic bit remains authoritative even
+	// when a Bytes payload happens to be valid UTF-8.
+	textEligibleBySemanticBytes bool
+	// semanticBytesByUTF8Validity marks fixed-String producers whose byte
+	// classification is exactly invalid UTF-8 (for example values/list members).
+	// Their text proof may be safely rebound to a projected value column.
+	semanticBytesByUTF8Validity bool
+	// stringOrBytes marks a byte-preserving String scalar, or an Array(String)
+	// whose members retain that same public String-or-Bytes domain. It is
+	// compiler provenance rather than a ClickHouse physical type.
+	stringOrBytes bool
+	// stringOrBytesNullable records the exact physical String nullability used
+	// by the result transport. Byte-capable concatenation deliberately
+	// normalizes to Nullable(String), so its descriptor does not have to infer
+	// nullability from every ordinary String-producing operand.
+	stringOrBytesNullable      bool
 	kind                       fieldKind
 	caseSensitive              bool
 	numberType                 string
@@ -6405,6 +6950,9 @@ func canonicalState(field string) fieldState {
 	if field == "_raw" {
 		state.textEligibleSQL = quoteIdentifier(internalRawEncodingColumn) + " = " +
 			strconv.Itoa(rawEncodingUTF8)
+		state.semanticBytesSQL = quoteIdentifier(internalRawEncodingColumn) + " = " +
+			strconv.Itoa(rawEncodingBinary)
+		state.stringOrBytes = true
 		state.rawTextIndexEligible = true
 	}
 	return state
@@ -7069,31 +7617,38 @@ func fieldNeedsPredicateMaterialization(name string, state compileState) bool {
 }
 
 type compiledScalar struct {
-	valueSQL                  string
-	valueArgs                 []any
-	exactNumericKeySQL        string
-	dynamicNumericEligibleSQL string
-	maxStringBytes            uint64
-	existsSQL                 string
-	existsArgs                []any
-	textEligibleSQL           string
-	dynamicDomain             dynamicScalarDomain
-	numericIntegral           bool
-	mvCountOneOrNull          bool
-	mvSortedLexicographic     bool
-	dynamicTypeSQL            string
-	storedTypeSQL             string
-	descendantSQL             string
-	descendantArgs            []any
-	storedPath                storedPathAuthority
-	relativeFieldNamesSQL     string
-	relativeFieldTypesSQL     string
-	fieldMetadataVersionSQL   string
-	kind                      fieldKind
-	numberType                string
-	literal                   *plan.Value
-	alwaysNull                bool
-	comparisonAtomic          bool
+	valueSQL                     string
+	valueArgs                    []any
+	exactNumericKeySQL           string
+	dynamicNumericEligibleSQL    string
+	maxStringBytes               uint64
+	existsSQL                    string
+	existsArgs                   []any
+	textEligibleSQL              string
+	dynamicDomain                dynamicScalarDomain
+	numericIntegral              bool
+	mvCountOneOrNull             bool
+	mvSortedLexicographic        bool
+	dynamicTypeSQL               string
+	storedTypeSQL                string
+	descendantSQL                string
+	descendantArgs               []any
+	storedPath                   storedPathAuthority
+	relativeFieldNamesSQL        string
+	relativeFieldTypesSQL        string
+	fieldMetadataVersionSQL      string
+	optionalMultivaluePresentSQL string
+	semanticBytesSQL             string
+	semanticBytesArgs            []any
+	semanticBytesByUTF8Validity  bool
+	textEligibleBySemanticBytes  bool
+	stringOrBytes                bool
+	stringOrBytesNullable        bool
+	kind                         fieldKind
+	numberType                   string
+	literal                      *plan.Value
+	alwaysNull                   bool
+	comparisonAtomic             bool
 	// ieeeComparison marks values produced by v0.2 arithmetic. Comparisons
 	// involving one of these values apply the release's explicit NaN rules
 	// instead of inheriting ClickHouse's ordered-NaN behavior.
@@ -8814,6 +9369,8 @@ func compileCoalesceScalar(
 			Range: expression.Range,
 		}
 	}
+	semanticBytesSQL, semanticBytesArgs, stringOrBytes, stringOrBytesNullable :=
+		coalesceSemanticBytes(values)
 	values, kind, numberType, err := normalizeCoalesceValues(values, expression.Range)
 	if err != nil {
 		return compiledScalar{}, err
@@ -8830,16 +9387,22 @@ func compileCoalesceScalar(
 		return compiledScalar{}, err
 	}
 	return compiledScalar{
-		valueSQL:                "coalesce(" + strings.Join(valueSQL, ", ") + ")",
-		valueArgs:               args,
-		maxStringBytes:          maximumCompiledScalarStringByteBound(values...),
-		existsSQL:               "1",
-		textEligibleSQL:         textEligibleSQL,
-		kind:                    kind,
-		numberType:              numberType,
-		alwaysNull:              alwaysNull,
-		ieeeComparison:          ieeeComparison,
-		materializeForPredicate: materializeForPredicate,
+		valueSQL:                    "coalesce(" + strings.Join(valueSQL, ", ") + ")",
+		valueArgs:                   args,
+		maxStringBytes:              maximumCompiledScalarStringByteBound(values...),
+		existsSQL:                   "1",
+		textEligibleSQL:             textEligibleSQL,
+		semanticBytesSQL:            semanticBytesSQL,
+		semanticBytesArgs:           semanticBytesArgs,
+		semanticBytesByUTF8Validity: kind == fieldKindString && semanticBytesValidityOnly(values...),
+		textEligibleBySemanticBytes: kind == fieldKindString && stringOrBytes,
+		stringOrBytes:               kind == fieldKindString && stringOrBytes,
+		stringOrBytesNullable:       kind == fieldKindString && stringOrBytesNullable,
+		kind:                        kind,
+		numberType:                  numberType,
+		alwaysNull:                  alwaysNull,
+		ieeeComparison:              ieeeComparison,
+		materializeForPredicate:     materializeForPredicate,
 	}, nil
 }
 
@@ -8871,6 +9434,62 @@ func coalesceTextEligibility(values []compiledScalar) (string, bool) {
 		}
 	}
 	return textEligibleSQL, true
+}
+
+func compiledScalarSemanticBytes(value compiledScalar) (string, []any) {
+	if !value.stringOrBytes || compiledScalarIsAlwaysNull(value) ||
+		value.semanticBytesSQL == "" {
+		return "toUInt8(0)", nil
+	}
+	return "toUInt8(ifNull(" + value.semanticBytesSQL + ", 0))",
+		append([]any(nil), value.semanticBytesArgs...)
+}
+
+func semanticBytesTextEligibilitySQL(valueSQL, semanticBytesSQL string) string {
+	return "(ifNull(" + semanticBytesSQL + ", 0) = 0 AND isNotNull(" + valueSQL +
+		") AND isValidUTF8(assumeNotNull(" + valueSQL + ")))"
+}
+
+func coalesceSemanticBytes(values []compiledScalar) (string, []any, bool, bool) {
+	parts := make([]string, 0, len(values)*2+1)
+	args := make([]any, 0)
+	stringOrBytes := false
+	nullable := true
+	for _, value := range values {
+		if compiledScalarIsAlwaysNull(value) {
+			continue
+		}
+		if !value.stringOrBytesNullable {
+			nullable = false
+		}
+		if !value.stringOrBytes {
+			continue
+		}
+		stringOrBytes = true
+		flagSQL, flagArgs := compiledScalarSemanticBytes(value)
+		parts = append(parts, "isNotNull("+value.valueSQL+")", flagSQL)
+		args = append(args, value.valueArgs...)
+		args = append(args, flagArgs...)
+	}
+	if !stringOrBytes {
+		return "", nil, false, false
+	}
+	parts = append(parts, "toUInt8(0)")
+	return "multiIf(" + strings.Join(parts, ", ") + ")", args, true, nullable
+}
+
+func semanticBytesValidityOnly(values ...compiledScalar) bool {
+	found := false
+	for _, value := range values {
+		if !value.stringOrBytes || compiledScalarIsAlwaysNull(value) {
+			continue
+		}
+		found = true
+		if !value.semanticBytesByUTF8Validity {
+			return false
+		}
+	}
+	return found
 }
 
 func normalizeCoalesceValues(
@@ -9071,6 +9690,25 @@ func compileCaseScalar(
 			Range: expression.Range,
 		}
 	}
+	semanticParts := make([]string, 0, len(values)*2+1)
+	semanticBytesArgs := make([]any, 0)
+	stringOrBytes := false
+	for index, value := range values {
+		flagSQL, flagArgs := compiledScalarSemanticBytes(value)
+		semanticParts = append(
+			semanticParts,
+			"ifNull("+conditionSQL[index]+", 0)",
+			flagSQL,
+		)
+		semanticBytesArgs = append(semanticBytesArgs, conditionArgs[index]...)
+		semanticBytesArgs = append(semanticBytesArgs, flagArgs...)
+		stringOrBytes = stringOrBytes || value.stringOrBytes
+	}
+	semanticBytesSQL := ""
+	if stringOrBytes {
+		semanticParts = append(semanticParts, "toUInt8(0)")
+		semanticBytesSQL = "multiIf(" + strings.Join(semanticParts, ", ") + ")"
+	}
 	values, kind, numberType, err := normalizeCaseValues(values, expression.Range)
 	if err != nil {
 		return compiledScalar{}, err
@@ -9094,11 +9732,20 @@ func compileCaseScalar(
 		return compiledScalar{}, err
 	}
 	return compiledScalar{
-		valueSQL:                valueSQL,
-		valueArgs:               args,
-		maxStringBytes:          maximumCompiledScalarStringByteBound(values...),
-		existsSQL:               "1",
-		textEligibleSQL:         textEligibleSQL,
+		valueSQL:                    valueSQL,
+		valueArgs:                   args,
+		maxStringBytes:              maximumCompiledScalarStringByteBound(values...),
+		existsSQL:                   "1",
+		textEligibleSQL:             textEligibleSQL,
+		semanticBytesSQL:            semanticBytesSQL,
+		semanticBytesArgs:           semanticBytesArgs,
+		semanticBytesByUTF8Validity: kind == fieldKindString && semanticBytesValidityOnly(values...),
+		textEligibleBySemanticBytes: kind == fieldKindString && stringOrBytes,
+		stringOrBytes:               kind == fieldKindString && stringOrBytes,
+		// case has an implicit NULL default even when its selected String
+		// branches carry no Bytes provenance. Preserve that physical nullability
+		// for a later concatenation that introduces byte capability.
+		stringOrBytesNullable:   kind == fieldKindString,
 		kind:                    kind,
 		numberType:              numberType,
 		alwaysNull:              alwaysNull,
@@ -9254,6 +9901,21 @@ func compileIfScalar(expression *plan.ScalarIfExpression, state compileState) (c
 			Range: expression.Range,
 		}
 	}
+	trueSemanticSQL, trueSemanticArgs := compiledScalarSemanticBytes(trueValue)
+	falseSemanticSQL, falseSemanticArgs := compiledScalarSemanticBytes(falseValue)
+	stringOrBytes := trueValue.stringOrBytes || falseValue.stringOrBytes
+	semanticBytesSQL := ""
+	semanticBytesArgs := make([]any, 0)
+	if stringOrBytes {
+		semanticBytesSQL = "if(ifNull(" + conditionSQL + ", 0), " +
+			trueSemanticSQL + ", " + falseSemanticSQL + ")"
+		semanticBytesArgs = append(semanticBytesArgs, conditionArgs...)
+		semanticBytesArgs = append(semanticBytesArgs, trueSemanticArgs...)
+		semanticBytesArgs = append(semanticBytesArgs, falseSemanticArgs...)
+	}
+	stringOrBytesNullable := compiledScalarIsAlwaysNull(trueValue) ||
+		trueValue.stringOrBytesNullable || compiledScalarIsAlwaysNull(falseValue) ||
+		falseValue.stringOrBytesNullable
 	trueValue, falseValue, kind, numberType, err := normalizeIfBranches(
 		trueValue,
 		falseValue,
@@ -9280,12 +9942,19 @@ func compileIfScalar(expression *plan.ScalarIfExpression, state compileState) (c
 			trueValue,
 			falseValue,
 		),
-		existsSQL:       "1",
-		textEligibleSQL: textEligibleSQL,
-		kind:            kind,
-		numberType:      numberType,
-		alwaysNull:      alwaysNull,
-		ieeeComparison:  trueValue.ieeeComparison || falseValue.ieeeComparison,
+		existsSQL:         "1",
+		textEligibleSQL:   textEligibleSQL,
+		semanticBytesSQL:  semanticBytesSQL,
+		semanticBytesArgs: semanticBytesArgs,
+		semanticBytesByUTF8Validity: kind == fieldKindString &&
+			semanticBytesValidityOnly(trueValue, falseValue),
+		textEligibleBySemanticBytes: kind == fieldKindString && stringOrBytes,
+		stringOrBytes:               kind == fieldKindString && stringOrBytes,
+		stringOrBytesNullable:       kind == fieldKindString && stringOrBytesNullable,
+		kind:                        kind,
+		numberType:                  numberType,
+		alwaysNull:                  alwaysNull,
+		ieeeComparison:              trueValue.ieeeComparison || falseValue.ieeeComparison,
 		materializeForPredicate: len(predicateMaterializationFields(expression.Condition, state)) > 0 ||
 			trueValue.materializeForPredicate ||
 			falseValue.materializeForPredicate,
@@ -10269,13 +10938,19 @@ func compileReplaceScalar(expression *plan.ScalarCallExpression, state compileSt
 	inputSQL, inputArgs := compiledStringScalar(input)
 	replacementFactor := uint64(len(replacement)) + 1
 	return compiledScalar{
-		valueSQL:                "replaceRegexpAll(" + inputSQL + ", ?, ?)",
-		valueArgs:               append(inputArgs, pattern, replacement),
-		maxStringBytes:          saturatingStringByteProduct(compiledScalarStringByteBound(input), replacementFactor),
-		existsSQL:               "1",
-		textEligibleSQL:         input.textEligibleSQL,
-		kind:                    fieldKindString,
-		materializeForPredicate: input.materializeForPredicate,
+		valueSQL:                    "replaceRegexpAll(" + inputSQL + ", ?, ?)",
+		valueArgs:                   append(inputArgs, pattern, replacement),
+		maxStringBytes:              saturatingStringByteProduct(compiledScalarStringByteBound(input), replacementFactor),
+		existsSQL:                   "1",
+		textEligibleSQL:             input.textEligibleSQL,
+		semanticBytesSQL:            input.semanticBytesSQL,
+		semanticBytesArgs:           append([]any(nil), input.semanticBytesArgs...),
+		semanticBytesByUTF8Validity: input.semanticBytesByUTF8Validity,
+		textEligibleBySemanticBytes: input.textEligibleBySemanticBytes,
+		stringOrBytes:               input.stringOrBytes,
+		stringOrBytesNullable:       input.stringOrBytesNullable,
+		kind:                        fieldKindString,
+		materializeForPredicate:     input.materializeForPredicate,
 	}, nil
 }
 
@@ -11144,14 +11819,20 @@ func compileLexicalStringScalar(
 		}
 	}
 	return compiledScalar{
-		valueSQL:                valueSQL,
-		valueArgs:               valueArgs,
-		maxStringBytes:          compiledScalarStringByteBound(input),
-		existsSQL:               "1",
-		textEligibleSQL:         textEligibleSQL,
-		kind:                    fieldKindString,
-		alwaysNull:              input.alwaysNull,
-		materializeForPredicate: input.materializeForPredicate,
+		valueSQL:                    valueSQL,
+		valueArgs:                   valueArgs,
+		maxStringBytes:              compiledScalarStringByteBound(input),
+		existsSQL:                   "1",
+		textEligibleSQL:             textEligibleSQL,
+		semanticBytesSQL:            input.semanticBytesSQL,
+		semanticBytesArgs:           append([]any(nil), input.semanticBytesArgs...),
+		semanticBytesByUTF8Validity: input.semanticBytesByUTF8Validity,
+		textEligibleBySemanticBytes: input.textEligibleBySemanticBytes,
+		stringOrBytes:               input.kind == fieldKindString && input.stringOrBytes,
+		stringOrBytesNullable:       input.stringOrBytesNullable,
+		kind:                        fieldKindString,
+		alwaysNull:                  input.alwaysNull,
+		materializeForPredicate:     input.materializeForPredicate,
 	}, nil
 }
 
@@ -11186,6 +11867,14 @@ func reserveStringConversionDynamicDecimal(
 func compileConcatenationScalar(
 	expression *plan.ScalarCallExpression,
 	state compileState,
+) (compiledScalar, error) {
+	return compileConcatenationScalarWithNullPolicy(expression, state, false)
+}
+
+func compileConcatenationScalarWithNullPolicy(
+	expression *plan.ScalarCallExpression,
+	state compileState,
+	nullAsEmpty bool,
 ) (compiledScalar, error) {
 	if expression == nil {
 		return compiledScalar{}, errors.New(
@@ -11249,6 +11938,28 @@ func compileConcatenationScalar(
 		if err != nil {
 			return compiledScalar{}, err
 		}
+		if nullAsEmpty {
+			// A missing/null provenance-bearing String contributes an ordinary
+			// empty String. Its dormant source provenance must not taint the
+			// concatenation result as Bytes when every remaining contribution is
+			// text. Command operands are exact fields or literals, so a guarded
+			// field value is already a compiler-owned column without value args.
+			if operand.textEligibleSQL != "" {
+				operand.textEligibleSQL = "(isNull(" + operand.valueSQL + ") OR ifNull(" +
+					operand.textEligibleSQL + ", 0))"
+			}
+			if operand.stringOrBytes && operand.semanticBytesSQL != "" {
+				operand.semanticBytesSQL = "toUInt8(if(isNotNull(" + operand.valueSQL +
+					"), ifNull(" + operand.semanticBytesSQL + ", 0), 0))"
+				operand.semanticBytesArgs = append(
+					append([]any(nil), operand.valueArgs...),
+					operand.semanticBytesArgs...,
+				)
+				operand.stringOrBytesNullable = false
+			}
+			operand.valueSQL = "ifNull(" + operand.valueSQL + ", CAST('' AS String))"
+			operand.alwaysNull = false
+		}
 		outputBytes = saturatingStringByteSum(
 			outputBytes,
 			compiledScalarStringByteBound(operand),
@@ -11303,15 +12014,51 @@ func compileConcatenationScalar(
 		args = append(args, operand.valueArgs...)
 	}
 	sql.WriteByte(')')
+	valueSQL := sql.String()
+	semanticGuards := make([]string, 0, len(operands))
+	semanticGuardArgs := make([]any, 0)
+	stringOrBytes := false
+	stringOrBytesNullable := false
+	for _, operand := range operands {
+		stringOrBytesNullable = stringOrBytesNullable ||
+			operand.stringOrBytesNullable || operand.alwaysNull
+		if !operand.stringOrBytes {
+			continue
+		}
+		stringOrBytes = true
+		flagSQL, flagArgs := compiledScalarSemanticBytes(operand)
+		semanticGuards = append(semanticGuards, flagSQL+" != 0")
+		semanticGuardArgs = append(semanticGuardArgs, flagArgs...)
+	}
+	semanticBytesSQL := ""
+	semanticBytesArgs := make([]any, 0)
+	if stringOrBytes {
+		// ClickHouse propagates Nullable from any concat operand, including an
+		// ordinary String producer that carries no semantic-Bytes provenance.
+		// Normalize every byte-capable concatenation to Nullable(String) so the
+		// sealed result descriptor has one exact, conservative physical type.
+		valueSQL = "CAST(" + valueSQL + " AS Nullable(String))"
+		stringOrBytesNullable = true
+		semanticBytesSQL = "toUInt8(if(isNotNull(" + valueSQL + "), " +
+			"(" + strings.Join(semanticGuards, " OR ") + "), 0))"
+		semanticBytesArgs = append(semanticBytesArgs, args...)
+		semanticBytesArgs = append(semanticBytesArgs, semanticGuardArgs...)
+	}
 	return compiledScalar{
-		valueSQL:                sql.String(),
-		valueArgs:               args,
-		maxStringBytes:          outputBytes,
-		existsSQL:               "1",
-		textEligibleSQL:         concatenationTextEligibility(operands),
-		kind:                    fieldKindString,
-		alwaysNull:              alwaysNull,
-		materializeForPredicate: materializeForPredicate,
+		valueSQL:                    valueSQL,
+		valueArgs:                   args,
+		maxStringBytes:              outputBytes,
+		existsSQL:                   "1",
+		textEligibleSQL:             concatenationTextEligibility(operands),
+		semanticBytesSQL:            semanticBytesSQL,
+		semanticBytesArgs:           semanticBytesArgs,
+		semanticBytesByUTF8Validity: semanticBytesValidityOnly(operands...),
+		textEligibleBySemanticBytes: stringOrBytes,
+		stringOrBytes:               stringOrBytes,
+		stringOrBytesNullable:       stringOrBytesNullable,
+		kind:                        fieldKindString,
+		alwaysNull:                  alwaysNull,
+		materializeForPredicate:     materializeForPredicate,
 	}, nil
 }
 
@@ -12050,29 +12797,49 @@ func extendCompileState(
 		next.publicOrder = append(next.publicOrder, output.Name)
 	}
 	existsSQL := "1"
-	if value.kind == fieldKindStringArray {
+	if value.optionalMultivaluePresentSQL != "" {
+		existsSQL = value.optionalMultivaluePresentSQL
+	} else if value.kind == fieldKindStringArray {
 		// A values() result is physically a non-null array, but SPL treats an
 		// empty multivalue result as absent. Rebind that logical presence check
 		// to the eval output because the source expression lives in the nested
 		// SELECT and is no longer visible at this stage.
 		existsSQL = "notEmpty(" + quoteIdentifier(output.Name) + ")"
 	}
+	textEligibleSQL := value.textEligibleSQL
+	semanticBytesSQL := value.semanticBytesSQL
+	if value.semanticBytesByUTF8Validity {
+		textEligibleSQL = "isValidUTF8(" + quoteIdentifier(output.Name) + ")"
+		semanticBytesSQL = "toUInt8(isNotNull(" + quoteIdentifier(output.Name) +
+			") AND NOT isValidUTF8(assumeNotNull(" + quoteIdentifier(output.Name) + ")))"
+	} else if value.textEligibleBySemanticBytes {
+		textEligibleSQL = semanticBytesTextEligibilitySQL(
+			quoteIdentifier(output.Name),
+			semanticBytesSQL,
+		)
+	}
 	field := fieldState{
-		valueSQL:                quoteIdentifier(output.Name),
-		maxStringBytes:          value.maxStringBytes,
-		textEligibleSQL:         value.textEligibleSQL,
-		dynamicDomain:           value.dynamicDomain,
-		numericIntegral:         value.numericIntegral,
-		mvCountOneOrNull:        value.mvCountOneOrNull,
-		mvSortedLexicographic:   value.mvSortedLexicographic,
-		existsSQL:               existsSQL,
-		descendantSQL:           value.descendantSQL,
-		descendantArgs:          append([]any(nil), value.descendantArgs...),
-		storedTypeSQL:           value.storedTypeSQL,
-		relativeFieldNamesSQL:   value.relativeFieldNamesSQL,
-		relativeFieldTypesSQL:   value.relativeFieldTypesSQL,
-		fieldMetadataVersionSQL: value.fieldMetadataVersionSQL,
-		kind:                    value.kind,
+		valueSQL:                     quoteIdentifier(output.Name),
+		maxStringBytes:               value.maxStringBytes,
+		textEligibleSQL:              textEligibleSQL,
+		dynamicDomain:                value.dynamicDomain,
+		numericIntegral:              value.numericIntegral,
+		mvCountOneOrNull:             value.mvCountOneOrNull,
+		mvSortedLexicographic:        value.mvSortedLexicographic,
+		existsSQL:                    existsSQL,
+		descendantSQL:                value.descendantSQL,
+		descendantArgs:               append([]any(nil), value.descendantArgs...),
+		storedTypeSQL:                value.storedTypeSQL,
+		relativeFieldNamesSQL:        value.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:        value.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL:      value.fieldMetadataVersionSQL,
+		optionalMultivaluePresentSQL: value.optionalMultivaluePresentSQL,
+		semanticBytesSQL:             semanticBytesSQL,
+		semanticBytesByUTF8Validity:  value.semanticBytesByUTF8Validity,
+		textEligibleBySemanticBytes:  value.textEligibleBySemanticBytes,
+		stringOrBytes:                value.stringOrBytes,
+		stringOrBytesNullable:        value.stringOrBytesNullable,
+		kind:                         value.kind,
 		// An eval output named index is calculated data, not the physical scan
 		// selector. It follows its expression type and ordinary comparison rules.
 		caseSensitive:           false,
@@ -12086,34 +12853,43 @@ func extendCompileState(
 	}
 	next.visible[output.Name] = field
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
+	if field.semanticBytesSQL != "" &&
+		!slices.Contains(next.privateColumns, field.semanticBytesSQL) {
+		next.privateColumns = append(next.privateColumns, field.semanticBytesSQL)
+	}
 	return next, nil
 }
 
 type compiledExtractCapture struct {
-	planCapture          plan.ExtractCapture
-	valueSQL             string
-	existsColumn         string
-	existsProjection     string
-	typeColumn           string
-	typeProjection       string
-	textColumn           string
-	textProjection       string
-	descendantColumn     string
-	descendantProjection string
-	namesColumn          string
-	namesProjection      string
-	typesColumn          string
-	typesProjection      string
-	metadataColumn       string
-	metadataProjection   string
+	planCapture             plan.ExtractCapture
+	valueSQL                string
+	existsColumn            string
+	existsProjection        string
+	typeColumn              string
+	typeProjection          string
+	textColumn              string
+	textProjection          string
+	semanticBytesColumn     string
+	semanticBytesProjection string
+	descendantColumn        string
+	descendantProjection    string
+	namesColumn             string
+	namesProjection         string
+	typesColumn             string
+	typesProjection         string
+	metadataColumn          string
+	metadataProjection      string
 }
 
 func extractPrivateColumns(captures []compiledExtractCapture) []string {
-	columns := make([]string, 0, len(captures)*7)
+	columns := make([]string, 0, len(captures)*8)
 	for _, capture := range captures {
 		columns = append(columns, capture.existsColumn, capture.typeColumn)
 		if capture.textColumn != "" {
 			columns = append(columns, capture.textColumn)
+		}
+		if capture.semanticBytesColumn != "" {
+			columns = append(columns, capture.semanticBytesColumn)
 		}
 		if capture.descendantColumn != "" {
 			columns = append(columns, capture.descendantColumn)
@@ -12292,6 +13068,21 @@ func compileExtract(
 			textProjection = "toUInt8(if(" + matchedAlias + " != 0, 1, ifNull(" +
 				previous.textEligibleSQL + ", 0))) AS " + textColumn
 		}
+		semanticBytesColumn := ""
+		semanticBytesProjection := ""
+		if previousKnown && previous.kind == fieldKindString && previous.stringOrBytes {
+			if previous.semanticBytesSQL == "" {
+				return compiledRelation{}, compileState{}, nil, 0, errors.New(
+					"compile ClickHouse extract: prior String-or-Bytes field lacks semantic Bytes provenance",
+				)
+			}
+			semanticBytesColumn = quoteIdentifier(fmt.Sprintf(
+				"__os_rex_semantic_bytes_%d_%d", stage, index,
+			))
+			semanticBytesProjection = "toUInt8(if(" + matchedAlias +
+				" != 0, 0, ifNull(" + previous.semanticBytesSQL +
+				", 0))) AS " + semanticBytesColumn
+		}
 		descendantColumn := ""
 		descendantProjection := ""
 		if previousKnown && previous.descendantSQL != "" {
@@ -12325,22 +13116,24 @@ func compileExtract(
 				metadataColumn
 		}
 		captures = append(captures, compiledExtractCapture{
-			planCapture:          capture,
-			valueSQL:             valueSQL,
-			existsColumn:         existsAlias,
-			existsProjection:     existsSQL,
-			typeColumn:           typeAlias,
-			typeProjection:       typeSQL,
-			textColumn:           textColumn,
-			textProjection:       textProjection,
-			descendantColumn:     descendantColumn,
-			descendantProjection: descendantProjection,
-			namesColumn:          namesColumn,
-			namesProjection:      namesProjection,
-			typesColumn:          typesColumn,
-			typesProjection:      typesProjection,
-			metadataColumn:       metadataColumn,
-			metadataProjection:   metadataProjection,
+			planCapture:             capture,
+			valueSQL:                valueSQL,
+			existsColumn:            existsAlias,
+			existsProjection:        existsSQL,
+			typeColumn:              typeAlias,
+			typeProjection:          typeSQL,
+			textColumn:              textColumn,
+			textProjection:          textProjection,
+			semanticBytesColumn:     semanticBytesColumn,
+			semanticBytesProjection: semanticBytesProjection,
+			descendantColumn:        descendantColumn,
+			descendantProjection:    descendantProjection,
+			namesColumn:             namesColumn,
+			namesProjection:         namesProjection,
+			typesColumn:             typesColumn,
+			typesProjection:         typesProjection,
+			metadataColumn:          metadataColumn,
+			metadataProjection:      metadataProjection,
 		})
 
 		delete(next.blocked, capture.Output.Name)
@@ -12356,6 +13149,9 @@ func compileExtract(
 			valueSQL:                output,
 			maxStringBytes:          maxStringBytes,
 			textEligibleSQL:         textColumn,
+			semanticBytesSQL:        semanticBytesColumn,
+			stringOrBytes:           semanticBytesColumn != "",
+			stringOrBytesNullable:   previous.stringOrBytesNullable,
 			existsSQL:               existsAlias,
 			storedTypeSQL:           typeAlias,
 			descendantSQL:           descendantColumn,
@@ -12381,6 +13177,7 @@ func compileExtract(
 	existenceExpressions := make([]string, 0, len(captures))
 	typeExpressions := make([]string, 0, len(captures))
 	textExpressions := make([]string, 0, len(captures))
+	semanticBytesExpressions := make([]string, 0, len(captures))
 	descendantExpressions := make([]string, 0, len(captures))
 	namesExpressions := make([]string, 0, len(captures))
 	typesExpressions := make([]string, 0, len(captures))
@@ -12391,6 +13188,12 @@ func compileExtract(
 		typeExpressions = append(typeExpressions, capture.typeProjection)
 		if capture.textProjection != "" {
 			textExpressions = append(textExpressions, capture.textProjection)
+		}
+		if capture.semanticBytesProjection != "" {
+			semanticBytesExpressions = append(
+				semanticBytesExpressions,
+				capture.semanticBytesProjection,
+			)
 		}
 		if capture.descendantProjection != "" {
 			descendantExpressions = append(descendantExpressions, capture.descendantProjection)
@@ -12429,6 +13232,7 @@ func compileExtract(
 	projection = append(projection, existenceExpressions...)
 	projection = append(projection, typeExpressions...)
 	projection = append(projection, textExpressions...)
+	projection = append(projection, semanticBytesExpressions...)
 	projection = append(projection, descendantExpressions...)
 	projection = append(projection, namesExpressions...)
 	projection = append(projection, typesExpressions...)
@@ -13016,6 +13820,17 @@ func compileExtractJSON(
 	previousTypeSQL := "toUInt8(0)"
 	if previousKnown {
 		previousValue = "CAST(" + previous.valueSQL + " AS Dynamic)"
+		if previous.kind == fieldKindString && previous.stringOrBytes {
+			if previous.semanticBytesSQL == "" {
+				return compiledRelation{}, compileState{}, nil, 0, errors.New(
+					"compile ClickHouse spath: prior String-or-Bytes field lacks semantic Bytes provenance",
+				)
+			}
+			previousValue = "if(ifNull(" + previous.semanticBytesSQL +
+				", 0), " + bytesEnvelopePayloadDynamicSQL(
+				rawStdBase64EncodeSQL("assumeNotNull("+previous.valueSQL+")"),
+			) + ", CAST(" + previous.valueSQL + " AS Dynamic))"
+		}
 		previousExists, existenceArgs = knownFieldPresenceSQL(previous)
 		previousTypeSQL, typeArgs, err = knownFieldStoredTypeSQL(previous)
 		if err != nil {
@@ -13408,26 +14223,41 @@ func renamePublicOrder(current []string, source, destination string, sourceIsPub
 
 func projectedRenameField(source fieldState, destination string) fieldState {
 	value := quoteIdentifier(destination)
+	textEligibleSQL := source.textEligibleSQL
+	semanticBytesSQL := source.semanticBytesSQL
+	if source.semanticBytesByUTF8Validity {
+		textEligibleSQL = "isValidUTF8(" + value + ")"
+		semanticBytesSQL = "toUInt8(isNotNull(" + value +
+			") AND NOT isValidUTF8(assumeNotNull(" + value + ")))"
+	} else if source.textEligibleBySemanticBytes {
+		textEligibleSQL = semanticBytesTextEligibilitySQL(value, semanticBytesSQL)
+	}
 	result := fieldState{
-		valueSQL:                   value,
-		maxStringBytes:             source.maxStringBytes,
-		flatMultivalueDelimiter:    source.flatMultivalueDelimiter,
-		hasFlatMultivalueDelimiter: source.hasFlatMultivalueDelimiter,
-		statsSparkline:             source.statsSparkline,
-		textEligibleSQL:            source.textEligibleSQL,
-		rawTextIndexEligible:       source.rawTextIndexEligible,
-		dynamicDomain:              source.dynamicDomain,
-		numericIntegral:            source.numericIntegral,
-		mvSortedLexicographic:      source.mvSortedLexicographic,
-		storedTypeSQL:              source.storedTypeSQL,
-		existsSQL:                  rewriteExistenceForProjection(source, destination),
-		existsArgs:                 append([]any(nil), source.existsArgs...),
-		descendantSQL:              source.descendantSQL,
-		descendantArgs:             append([]any(nil), source.descendantArgs...),
-		relativeFieldNamesSQL:      source.relativeFieldNamesSQL,
-		relativeFieldTypesSQL:      source.relativeFieldTypesSQL,
-		fieldMetadataVersionSQL:    source.fieldMetadataVersionSQL,
-		kind:                       source.kind,
+		valueSQL:                     value,
+		maxStringBytes:               source.maxStringBytes,
+		flatMultivalueDelimiter:      source.flatMultivalueDelimiter,
+		hasFlatMultivalueDelimiter:   source.hasFlatMultivalueDelimiter,
+		statsSparkline:               source.statsSparkline,
+		textEligibleSQL:              textEligibleSQL,
+		rawTextIndexEligible:         source.rawTextIndexEligible,
+		dynamicDomain:                source.dynamicDomain,
+		numericIntegral:              source.numericIntegral,
+		mvSortedLexicographic:        source.mvSortedLexicographic,
+		storedTypeSQL:                source.storedTypeSQL,
+		existsSQL:                    rewriteExistenceForProjection(source, destination),
+		existsArgs:                   append([]any(nil), source.existsArgs...),
+		descendantSQL:                source.descendantSQL,
+		descendantArgs:               append([]any(nil), source.descendantArgs...),
+		relativeFieldNamesSQL:        source.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:        source.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL:      source.fieldMetadataVersionSQL,
+		optionalMultivaluePresentSQL: source.optionalMultivaluePresentSQL,
+		semanticBytesSQL:             semanticBytesSQL,
+		semanticBytesByUTF8Validity:  source.semanticBytesByUTF8Validity,
+		textEligibleBySemanticBytes:  source.textEligibleBySemanticBytes,
+		stringOrBytes:                source.stringOrBytes,
+		stringOrBytesNullable:        source.stringOrBytesNullable,
+		kind:                         source.kind,
 		// A field renamed to index is calculated pipeline data, not the
 		// authorization-constrained physical index selector.
 		caseSensitive:           false,
@@ -13514,12 +14344,21 @@ func livePrivateColumns(columns []string, visible map[string]fieldState) []strin
 	}
 	live := make([]string, 0, len(columns))
 	for _, column := range columns {
+		if strings.HasPrefix(strings.Trim(column, `"`), "__os_mvexpand_query_rows_") {
+			// This query-wide expansion charge is not owned by one public field.
+			// It remains a sealed relation metric until a later mvexpand consumes
+			// it, including across projection, rename, and calculated fields.
+			live = append(live, column)
+			continue
+		}
 		for _, field := range visible {
 			if field.existsSQL == column || field.storedTypeSQL == column ||
-				field.textEligibleSQL == column || field.descendantSQL == column ||
+				field.textEligibleSQL == column || field.semanticBytesSQL == column ||
+				field.descendantSQL == column ||
 				field.relativeFieldNamesSQL == column ||
 				field.relativeFieldTypesSQL == column ||
-				field.fieldMetadataVersionSQL == column {
+				field.fieldMetadataVersionSQL == column ||
+				field.optionalMultivaluePresentSQL == column {
 				live = append(live, column)
 				break
 			}
@@ -13549,6 +14388,9 @@ func appendPrivateEventProjection(projection []string, state compileState) []str
 		)
 	}
 	privateColumns = append(privateColumns, state.privateColumns...)
+	if state.mvExpandQueryRowsSQL != "" {
+		privateColumns = append(privateColumns, state.mvExpandQueryRowsSQL)
+	}
 	if state.rexCapturedBytesSQL != "" {
 		privateColumns = append(privateColumns, state.rexCapturedBytesSQL)
 	}
@@ -13678,7 +14520,19 @@ func evalComparisonCoreWithoutIEEE(left, right compiledScalar, operator string) 
 		leftSQL = stringScalarSQL(left)
 		rightSQL = stringScalarSQL(right)
 	}
-	return leftSQL + " " + operator + " " + rightSQL, comparisonValueArgs(left, right)
+	comparison := leftSQL + " " + operator + " " + rightSQL
+	textEligible := make([]string, 0, 2)
+	if left.kind == fieldKindString && left.textEligibleSQL != "" {
+		textEligible = append(textEligible, "ifNull("+left.textEligibleSQL+", 0)")
+	}
+	if right.kind == fieldKindString && right.textEligibleSQL != "" {
+		textEligible = append(textEligible, "ifNull("+right.textEligibleSQL+", 0)")
+	}
+	if len(textEligible) > 0 {
+		comparison = "if(" + strings.Join(textEligible, " AND ") + ", " +
+			comparison + ", CAST(NULL AS Nullable(Bool)))"
+	}
+	return comparison, comparisonValueArgs(left, right)
 }
 
 func scalarNaNPredicateSQL(value compiledScalar) string {
@@ -14458,7 +15312,17 @@ func compileComparison(expression *plan.ComparisonExpression, field fieldState) 
 	if expression.Op == plan.ComparisonOpNotEqual {
 		// SPL field!=value excludes missing fields while treating a present null
 		// as unequal to a non-null value. ifNull collapses SQL's UNKNOWN here.
+		if field.kind == fieldKindString && field.textEligibleSQL != "" {
+			eligible := "ifNull(" + field.textEligibleSQL + ", 0)"
+			return "(" + exists + " AND if(" + eligible +
+				", NOT ifNull(" + predicate + ", 0), 0))", args, nil
+		}
 		return "(" + exists + " AND NOT ifNull(" + predicate + ", 0))", args, nil
+	}
+	if field.kind == fieldKindString && field.textEligibleSQL != "" {
+		eligible := "ifNull(" + field.textEligibleSQL + ", 0)"
+		return "(" + exists + " AND if(" + eligible +
+			", ifNull(" + predicate + ", 0), 0))", args, nil
 	}
 	return "(" + exists + " AND ifNull(" + predicate + ", 0))", args, nil
 }
@@ -14571,31 +15435,37 @@ func relationalPredicate(expression *plan.ComparisonExpression, field fieldState
 
 func compiledScalarFromField(field fieldState) compiledScalar {
 	return compiledScalar{
-		valueSQL:                  field.valueSQL,
-		exactNumericKeySQL:        field.exactNumericKeySQL,
-		dynamicNumericEligibleSQL: field.dynamicNumericEligibleSQL,
-		maxStringBytes:            field.maxStringBytes,
-		existsSQL:                 field.existsSQL,
-		existsArgs:                append([]any(nil), field.existsArgs...),
-		textEligibleSQL:           field.textEligibleSQL,
-		dynamicDomain:             field.dynamicDomain,
-		numericIntegral:           field.numericIntegral,
-		mvCountOneOrNull:          field.mvCountOneOrNull,
-		mvSortedLexicographic:     field.mvSortedLexicographic,
-		dynamicTypeSQL:            field.dynamicTypeSQL,
-		storedTypeSQL:             field.storedTypeSQL,
-		descendantSQL:             field.descendantSQL,
-		descendantArgs:            append([]any(nil), field.descendantArgs...),
-		storedPath:                field.storedPath.clone(),
-		relativeFieldNamesSQL:     field.relativeFieldNamesSQL,
-		relativeFieldTypesSQL:     field.relativeFieldTypesSQL,
-		fieldMetadataVersionSQL:   field.fieldMetadataVersionSQL,
-		kind:                      field.kind,
-		numberType:                field.numberType,
-		alwaysNull:                field.alwaysNull,
-		ieeeComparison:            field.ieeeComparison,
-		comparisonAtomic:          true,
-		materializeForPredicate:   field.materializeForPredicate,
+		valueSQL:                     field.valueSQL,
+		exactNumericKeySQL:           field.exactNumericKeySQL,
+		dynamicNumericEligibleSQL:    field.dynamicNumericEligibleSQL,
+		maxStringBytes:               field.maxStringBytes,
+		existsSQL:                    field.existsSQL,
+		existsArgs:                   append([]any(nil), field.existsArgs...),
+		textEligibleSQL:              field.textEligibleSQL,
+		dynamicDomain:                field.dynamicDomain,
+		numericIntegral:              field.numericIntegral,
+		mvCountOneOrNull:             field.mvCountOneOrNull,
+		mvSortedLexicographic:        field.mvSortedLexicographic,
+		dynamicTypeSQL:               field.dynamicTypeSQL,
+		storedTypeSQL:                field.storedTypeSQL,
+		descendantSQL:                field.descendantSQL,
+		descendantArgs:               append([]any(nil), field.descendantArgs...),
+		storedPath:                   field.storedPath.clone(),
+		relativeFieldNamesSQL:        field.relativeFieldNamesSQL,
+		relativeFieldTypesSQL:        field.relativeFieldTypesSQL,
+		fieldMetadataVersionSQL:      field.fieldMetadataVersionSQL,
+		optionalMultivaluePresentSQL: field.optionalMultivaluePresentSQL,
+		semanticBytesSQL:             field.semanticBytesSQL,
+		semanticBytesByUTF8Validity:  field.semanticBytesByUTF8Validity,
+		textEligibleBySemanticBytes:  field.textEligibleBySemanticBytes,
+		stringOrBytes:                field.stringOrBytes,
+		stringOrBytesNullable:        field.stringOrBytesNullable,
+		kind:                         field.kind,
+		numberType:                   field.numberType,
+		alwaysNull:                   field.alwaysNull,
+		ieeeComparison:               field.ieeeComparison,
+		comparisonAtomic:             true,
+		materializeForPredicate:      field.materializeForPredicate,
 	}
 }
 
@@ -14721,16 +15591,17 @@ func resolveCompiledField(field plan.FieldRef, state compileState) (fieldState, 
 
 func compileProjection(operator *plan.Project, state compileState) ([]string, compileState, []any, error) {
 	next := compileState{
-		visible:             make(map[string]fieldState),
-		context:             state.context,
-		privateColumns:      append([]string(nil), state.privateColumns...),
-		rexCapturedBytesSQL: state.rexCapturedBytesSQL,
-		allowDynamic:        operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
-		eventRows:           state.eventRows,
-		blocked:             cloneSet(state.blocked),
-		blockedPrefixes:     cloneSet(state.blockedPrefixes),
-		order:               append([]compiledSortKey(nil), state.order...),
-		tieBreakers:         append([]compiledSortKey(nil), state.tieBreakers...),
+		visible:              make(map[string]fieldState),
+		context:              state.context,
+		privateColumns:       append([]string(nil), state.privateColumns...),
+		rexCapturedBytesSQL:  state.rexCapturedBytesSQL,
+		allowDynamic:         operator.Mode == plan.ProjectModeExclude && state.allowDynamic,
+		eventRows:            state.eventRows,
+		blocked:              cloneSet(state.blocked),
+		blockedPrefixes:      cloneSet(state.blockedPrefixes),
+		order:                append([]compiledSortKey(nil), state.order...),
+		tieBreakers:          append([]compiledSortKey(nil), state.tieBreakers...),
+		mvExpandQueryRowsSQL: state.mvExpandQueryRowsSQL,
 		chronologicalBarriers: append(
 			[]compiledChronologicalBarrier(nil),
 			state.chronologicalBarriers...,
@@ -14817,41 +15688,66 @@ func compileProjection(operator *plan.Project, state compileState) ([]string, co
 		} else {
 			projection = append(projection, compiled.valueSQL+" AS "+publicName)
 		}
+		textEligibleSQL := compiled.textEligibleSQL
+		semanticBytesSQL := compiled.semanticBytesSQL
+		if compiled.semanticBytesByUTF8Validity {
+			textEligibleSQL = "isValidUTF8(" + publicName + ")"
+			semanticBytesSQL = "toUInt8(isNotNull(" + publicName +
+				") AND NOT isValidUTF8(assumeNotNull(" + publicName + ")))"
+		} else if compiled.textEligibleBySemanticBytes {
+			textEligibleSQL = semanticBytesTextEligibilitySQL(
+				publicName,
+				semanticBytesSQL,
+			)
+		}
 		next.visible[name] = fieldState{
 			valueSQL: publicName, maxStringBytes: compiled.maxStringBytes,
-			flatMultivalueDelimiter:    compiled.flatMultivalueDelimiter,
-			hasFlatMultivalueDelimiter: compiled.hasFlatMultivalueDelimiter,
-			statsSparkline:             compiled.statsSparkline,
-			textEligibleSQL:            compiled.textEligibleSQL,
-			rawTextIndexEligible:       compiled.rawTextIndexEligible,
-			dynamicDomain:              compiled.dynamicDomain,
-			numericIntegral:            compiled.numericIntegral,
-			mvCountOneOrNull:           compiled.mvCountOneOrNull,
-			mvSortedLexicographic:      compiled.mvSortedLexicographic,
-			dynamicTypeSQL:             compiled.dynamicTypeSQL,
-			storedTypeSQL:              compiled.storedTypeSQL,
-			existsSQL:                  rewriteExistenceForProjection(compiled, name),
-			existsArgs:                 append([]any(nil), compiled.existsArgs...),
-			descendantSQL:              compiled.descendantSQL,
-			descendantArgs:             append([]any(nil), compiled.descendantArgs...),
-			relativeFieldNamesSQL:      compiled.relativeFieldNamesSQL,
-			relativeFieldTypesSQL:      compiled.relativeFieldTypesSQL,
-			fieldMetadataVersionSQL:    compiled.fieldMetadataVersionSQL,
-			kind:                       compiled.kind,
-			caseSensitive:              compiled.caseSensitive,
-			numberType:                 compiled.numberType,
-			numericSort:                compiled.numericSort,
-			canonicalTime:              compiled.canonicalTime,
-			alwaysNull:                 compiled.alwaysNull,
-			materializeForPredicate:    compiled.materializeForPredicate,
+			flatMultivalueDelimiter:      compiled.flatMultivalueDelimiter,
+			hasFlatMultivalueDelimiter:   compiled.hasFlatMultivalueDelimiter,
+			statsSparkline:               compiled.statsSparkline,
+			textEligibleSQL:              textEligibleSQL,
+			rawTextIndexEligible:         compiled.rawTextIndexEligible,
+			dynamicDomain:                compiled.dynamicDomain,
+			numericIntegral:              compiled.numericIntegral,
+			mvCountOneOrNull:             compiled.mvCountOneOrNull,
+			mvSortedLexicographic:        compiled.mvSortedLexicographic,
+			dynamicTypeSQL:               compiled.dynamicTypeSQL,
+			storedTypeSQL:                compiled.storedTypeSQL,
+			existsSQL:                    rewriteExistenceForProjection(compiled, name),
+			existsArgs:                   append([]any(nil), compiled.existsArgs...),
+			descendantSQL:                compiled.descendantSQL,
+			descendantArgs:               append([]any(nil), compiled.descendantArgs...),
+			relativeFieldNamesSQL:        compiled.relativeFieldNamesSQL,
+			relativeFieldTypesSQL:        compiled.relativeFieldTypesSQL,
+			fieldMetadataVersionSQL:      compiled.fieldMetadataVersionSQL,
+			optionalMultivaluePresentSQL: compiled.optionalMultivaluePresentSQL,
+			semanticBytesSQL:             semanticBytesSQL,
+			semanticBytesByUTF8Validity:  compiled.semanticBytesByUTF8Validity,
+			textEligibleBySemanticBytes:  compiled.textEligibleBySemanticBytes,
+			stringOrBytes:                compiled.stringOrBytes,
+			stringOrBytesNullable:        compiled.stringOrBytesNullable,
+			kind:                         compiled.kind,
+			caseSensitive:                compiled.caseSensitive,
+			numberType:                   compiled.numberType,
+			numericSort:                  compiled.numericSort,
+			canonicalTime:                compiled.canonicalTime,
+			alwaysNull:                   compiled.alwaysNull,
+			materializeForPredicate:      compiled.materializeForPredicate,
 		}
 		next.publicOrder = append(next.publicOrder, name)
 	}
 	next.privateColumns = livePrivateColumns(next.privateColumns, next.visible)
+	if next.mvExpandQueryRowsSQL != "" &&
+		!slices.Contains(next.privateColumns, next.mvExpandQueryRowsSQL) {
+		next.privateColumns = append(next.privateColumns, next.mvExpandQueryRowsSQL)
+	}
 	return appendPrivateEventProjection(projection, next), next, args, nil
 }
 
 func rewriteExistenceForProjection(field fieldState, name string) string {
+	if field.optionalMultivaluePresentSQL != "" {
+		return field.optionalMultivaluePresentSQL
+	}
 	if field.existsSQL == "1" {
 		return "1"
 	}
@@ -16682,6 +17578,7 @@ func compileStreamAggregate(
 		outputExists,
 		validationColumn,
 		outputValidation,
+		windowAlias,
 	)
 	guard := "if(" + windowAlias + "." + inputCount + " > toUInt64(" +
 		maximumRows + "), throwIf(toUInt8(1), '" +
@@ -17068,11 +17965,15 @@ func compileEventAggregate(
 				outputState = fieldState{
 					kind:                  fieldKindStringArray,
 					mvSortedLexicographic: true,
+					stringOrBytes:         true,
 				}
 			case plan.AggregateFunctionList:
 				listInputExists = exists
 				measureNullSQL = emptyValues
-				outputState = fieldState{kind: fieldKindStringArray}
+				outputState = fieldState{
+					kind:          fieldKindStringArray,
+					stringOrBytes: true,
+				}
 			default:
 				return compiledRelation{}, compileState{}, nil, nil, fmt.Errorf(
 					"compile ClickHouse eventstats: exact-string function %d has no publication contract",
@@ -17816,6 +18717,7 @@ func compileEventAggregate(
 		outputExistsSQL,
 		validationColumn,
 		outputValidation,
+		inputAlias,
 	)
 	resultSQL := "SELECT " +
 		strings.Join(projection, ", ") + " FROM " + fromSQL +
@@ -17916,6 +18818,7 @@ func compileWindowedGlobalEventStatsCount(
 		validationColumn,
 		"toUInt8("+boundedEventStatsCountSQL(windowAlias+"."+rawTotal)+
 			" > "+maximumRows+")",
+		windowAlias,
 	)
 	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
 		windowSQL + ") AS " + windowAlias
@@ -18072,6 +18975,7 @@ func compileWindowedDynamicEventStatsExtrema(
 		outputExistsSQL,
 		validationColumn,
 		inputAlias+"."+validationColumn,
+		inputAlias,
 	)
 	maximumRows := strconv.FormatUint(MaximumEventStatsInputRows, 10)
 	resultSQL := "SELECT " + strings.Join(projection, ", ") + " FROM (" +
@@ -18300,7 +19204,7 @@ func eventAggregateCompileState(
 func eventAggregateProjection(
 	state, next compileState,
 	outputName, outputValue, outputStoredTypeSQL, outputExistsSQL string,
-	validationColumn, outputValidationSQL string,
+	validationColumn, outputValidationSQL, relationAlias string,
 ) []string {
 	names := orderedVisibleNames(next)
 	projection := make([]string, 0, len(names)+12+len(next.privateColumns))
@@ -18312,7 +19216,14 @@ func eventAggregateProjection(
 		}
 		field := state.visible[name]
 		if field.valueSQL == publicName {
-			projection = append(projection, publicName)
+			if pathsOverlap, ok := logicalFieldNamesOverlap(outputName, name); ok && pathsOverlap && relationAlias != "" {
+				projection = append(
+					projection,
+					relationAlias+"."+publicName+" AS "+publicName,
+				)
+			} else {
+				projection = append(projection, publicName)
+			}
 		} else {
 			projection = append(projection, field.valueSQL+" AS "+publicName)
 		}
@@ -18625,6 +19536,28 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		blocked:               make(map[string]struct{}),
 		chronologicalBarriers: append([]compiledChronologicalBarrier(nil), state.chronologicalBarriers...),
 	}
+	if state.mvExpandQueryRowsSQL != "" {
+		// The first expansion's whole-stage charge is constant on every output
+		// row. Collapse that private authority through transforming aggregates so
+		// a later expansion can add its complete output count rather than resetting
+		// the query-wide ceiling. maxOrDefault also yields zero for a global
+		// aggregate over an empty input.
+		projection = append(
+			projection,
+			"maxOrDefault("+state.mvExpandQueryRowsSQL+") AS "+state.mvExpandQueryRowsSQL,
+		)
+		next.mvExpandQueryRowsSQL = state.mvExpandQueryRowsSQL
+		next.privateColumns = append(next.privateColumns, state.mvExpandQueryRowsSQL)
+	}
+	// Even a group-less aggregate produces a deterministic zero-or-one-row
+	// relation. Give it a durable constant lineage immediately; grouped
+	// aggregates replace this key with their exact group tuple below.
+	if len(operator.GroupBy) == 0 {
+		ordinal := quoteIdentifier("__os_aggregate_ordinal")
+		projection = append(projection, "toUInt8(0) AS "+ordinal)
+		next.order = []compiledSortKey{{valueSQL: ordinal}}
+		next.tieBreakers = []compiledSortKey{{valueSQL: ordinal}}
+	}
 	seen := make(map[string]struct{}, len(operator.GroupBy)+len(operator.Measures))
 	dynamicGroupInvalid := make([]string, 0, len(operator.GroupBy))
 	var dynamicGroupInvalidArgs []any
@@ -18657,7 +19590,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			}
 		}
 		if expanded {
-			ordinal := len(groups)
+			ordinal := len(next.publicOrder)
 			valuesAlias := quoteIdentifier(fmt.Sprintf("__os_group_values_%d", ordinal))
 			valueAlias := quoteIdentifier(fmt.Sprintf("__os_group_value_%d", ordinal))
 			next.preAggregateColumns = append(
@@ -18708,6 +19641,21 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				args = append(args, scalarPresence.presenceArgs...)
 			}
 			privateGroup := quoteIdentifier(groupOutput)
+			semanticBytesSQL := ""
+			if multivalueGroup.field.kind == fieldKindStringArray &&
+				multivalueGroup.field.stringOrBytes {
+				semanticBytesSQL = quoteIdentifier(fmt.Sprintf(
+					"__os_group_semantic_bytes_%d",
+					ordinal,
+				))
+				semanticValueSQL := "toUInt8(NOT isValidUTF8(" + valueAlias + "))"
+				projection = append(
+					projection,
+					semanticValueSQL+" AS "+semanticBytesSQL,
+				)
+				groups = append(groups, semanticValueSQL)
+				next.privateColumns = append(next.privateColumns, semanticBytesSQL)
+			}
 			numericSort := multivalueGroup.field.numericSort
 			if multivalueGroup.field.kind == fieldKindDynamic {
 				numericSort = true
@@ -18715,10 +19663,27 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			next.visible[group.Name] = fieldState{
 				valueSQL:       privateGroup,
 				maxStringBytes: fieldStateStringByteBound(multivalueGroup.field),
-				existsSQL:      "1",
-				kind:           fieldKindString,
-				caseSensitive:  multivalueGroup.field.caseSensitive,
-				numericSort:    numericSort,
+				// Re-derive text eligibility from the durable aggregate output.
+				// The ARRAY JOIN element alias is out of scope after aggregation,
+				// while projections and renames can safely rebind this expression.
+				textEligibleSQL: func() string {
+					if multivalueGroup.field.kind == fieldKindStringArray &&
+						multivalueGroup.field.stringOrBytes {
+						return "isValidUTF8(" + privateGroup + ")"
+					}
+					return ""
+				}(),
+				semanticBytesSQL:            semanticBytesSQL,
+				semanticBytesByUTF8Validity: semanticBytesSQL != "",
+				existsSQL:                   "1",
+				// Fixed values()/list() arrays preserve arbitrary String bytes.
+				// ARRAY JOIN changes only cardinality; it must not silently narrow
+				// an invalid-UTF-8 member from Bytes provenance to String.
+				stringOrBytes: multivalueGroup.field.kind == fieldKindStringArray &&
+					multivalueGroup.field.stringOrBytes,
+				kind:          fieldKindString,
+				caseSensitive: multivalueGroup.field.caseSensitive,
+				numericSort:   numericSort,
 			}
 			next.publicOrder = append(next.publicOrder, group.Name)
 			next.order = append(next.order, compiledSortKey{valueSQL: privateGroup})
@@ -18745,7 +19710,8 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			kind = fieldKindString
 			numericSort = true
 		}
-		groupOutput := fmt.Sprintf("__os_group_%d", len(groups))
+		ordinal := len(next.publicOrder)
+		groupOutput := fmt.Sprintf("__os_group_%d", ordinal)
 		projection = append(projection, valueSQL+" AS "+quoteIdentifier(groupOutput))
 		if scalarGroup.unsupportedSQL != "" {
 			// Validate each key against its own presence rather than the combined
@@ -18761,10 +19727,38 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		args = append(args, scalarGroup.presenceArgs...)
 		groups = append(groups, valueSQL)
 		privateGroup := quoteIdentifier(groupOutput)
+		textEligibleSQL := field.textEligibleSQL
+		semanticBytesSQL := ""
+		if field.kind == fieldKindString && field.stringOrBytes {
+			if field.semanticBytesSQL == "" {
+				return nil, nil, nil, compileState{}, nil, errors.New(
+					"compile ClickHouse aggregate: String-or-Bytes group lacks semantic Bytes provenance",
+				)
+			}
+			semanticBytesSQL = quoteIdentifier(fmt.Sprintf(
+				"__os_group_semantic_bytes_%d",
+				ordinal,
+			))
+			semanticValueSQL := "toUInt8(ifNull(" + field.semanticBytesSQL + ", 0))"
+			projection = append(
+				projection,
+				semanticValueSQL+" AS "+semanticBytesSQL,
+			)
+			groups = append(groups, semanticValueSQL)
+			next.privateColumns = append(next.privateColumns, semanticBytesSQL)
+			textEligibleSQL = "(ifNull(" + semanticBytesSQL +
+				", 0) = 0 AND isValidUTF8(" + privateGroup + "))"
+		}
 		next.visible[group.Name] = fieldState{
 			valueSQL: privateGroup, maxStringBytes: maxStringBytes,
-			existsSQL: "1", kind: kind,
-			caseSensitive: field.caseSensitive, numberType: field.numberType,
+			textEligibleSQL:             textEligibleSQL,
+			semanticBytesSQL:            semanticBytesSQL,
+			textEligibleBySemanticBytes: semanticBytesSQL != "",
+			existsSQL:                   "1",
+			stringOrBytes:               field.stringOrBytes,
+			stringOrBytesNullable:       field.stringOrBytesNullable,
+			kind:                        kind,
+			caseSensitive:               field.caseSensitive, numberType: field.numberType,
 			numericSort: numericSort, alwaysNull: field.alwaysNull,
 		}
 		next.publicOrder = append(next.publicOrder, group.Name)
@@ -18829,6 +19823,11 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		for _, cached := range aggregateExpressionInputs {
 			if cached.valueSQL == compiled.valueSQL &&
 				reflect.DeepEqual(cached.valueArgs, compiled.valueArgs) &&
+				cached.field.textEligibleSQL == compiled.textEligibleSQL &&
+				cached.field.semanticBytesSQL == compiled.semanticBytesSQL &&
+				cached.field.textEligibleBySemanticBytes == compiled.textEligibleBySemanticBytes &&
+				cached.field.stringOrBytes == compiled.stringOrBytes &&
+				cached.field.stringOrBytesNullable == compiled.stringOrBytesNullable &&
 				cached.kind == compiled.kind &&
 				cached.numberType == compiled.numberType &&
 				cached.dynamicDomain == compiled.dynamicDomain &&
@@ -18852,18 +19851,45 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			compiled.valueSQL+" AS "+valueAlias,
 		)
 		next.preAggregateArgs = append(next.preAggregateArgs, compiled.valueArgs...)
+		semanticBytesSQL := compiled.semanticBytesSQL
+		if compiled.kind == fieldKindString && compiled.stringOrBytes {
+			if semanticBytesSQL == "" {
+				return nil, errors.New(
+					"compile ClickHouse aggregate scalar eval input: String-or-Bytes value lacks semantic Bytes provenance",
+				)
+			}
+			semanticAlias := quoteIdentifier(fmt.Sprintf(
+				"__os_measure_expression_semantic_bytes_%d",
+				ordinal,
+			))
+			next.preAggregateColumns = append(
+				next.preAggregateColumns,
+				"toUInt8(ifNull("+semanticBytesSQL+", 0)) AS "+semanticAlias,
+			)
+			next.preAggregateArgs = append(
+				next.preAggregateArgs,
+				compiled.semanticBytesArgs...,
+			)
+			semanticBytesSQL = semanticAlias
+		}
 		materialized := fieldState{
-			valueSQL:              valueAlias,
-			existsSQL:             "1",
-			kind:                  compiled.kind,
-			numberType:            compiled.numberType,
-			maxStringBytes:        compiled.maxStringBytes,
-			numericIntegral:       compiled.numericIntegral,
-			mvCountOneOrNull:      compiled.mvCountOneOrNull,
-			mvSortedLexicographic: compiled.mvSortedLexicographic,
-			alwaysNull:            compiled.alwaysNull,
-			dynamicDomain:         compiled.dynamicDomain,
-			ieeeComparison:        compiled.ieeeComparison,
+			valueSQL:                    valueAlias,
+			textEligibleSQL:             compiled.textEligibleSQL,
+			semanticBytesSQL:            semanticBytesSQL,
+			semanticBytesByUTF8Validity: compiled.semanticBytesByUTF8Validity,
+			textEligibleBySemanticBytes: compiled.textEligibleBySemanticBytes,
+			stringOrBytes:               compiled.stringOrBytes,
+			stringOrBytesNullable:       compiled.stringOrBytesNullable,
+			existsSQL:                   "1",
+			kind:                        compiled.kind,
+			numberType:                  compiled.numberType,
+			maxStringBytes:              compiled.maxStringBytes,
+			numericIntegral:             compiled.numericIntegral,
+			mvCountOneOrNull:            compiled.mvCountOneOrNull,
+			mvSortedLexicographic:       compiled.mvSortedLexicographic,
+			alwaysNull:                  compiled.alwaysNull,
+			dynamicDomain:               compiled.dynamicDomain,
+			ieeeComparison:              compiled.ieeeComparison,
 		}
 		if compiled.kind == fieldKindDynamic {
 			materialized.dynamicTypeSQL = "dynamicType(" + valueAlias + ")"
@@ -19576,6 +20602,8 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				kind:           fieldKindStringArray,
 				maxStringBytes: MaximumStatsSparklineBytesPerCell,
 				statsSparkline: true,
+				stringOrBytes: sparkline.Function == plan.AggregateFunctionMinimum ||
+					sparkline.Function == plan.AggregateFunctionMaximum,
 			}
 			next.publicOrder = append(next.publicOrder, measure.Output)
 			if len(next.order) == 0 {
@@ -20155,11 +21183,27 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 			plan.AggregateFunctionEstimatedDistinctCountError,
 			plan.AggregateFunctionMode:
 			var inputSQL string
+			var modeInput fieldState
+			modeInputKnown := false
 			var inputErr error
 			if measure.InputExpression != nil {
 				inputSQL, inputErr = stringInputForExpression(measure.InputExpression)
+				if inputErr == nil {
+					cached, cachedErr := aggregateExpressionInputFor(measure.InputExpression)
+					if cachedErr != nil {
+						return nil, nil, nil, compileState{}, nil, cachedErr
+					}
+					modeInput = cached.field
+					modeInputKnown = !modeInput.alwaysNull
+				}
 			} else {
 				inputSQL, inputErr = stringInputFor(measure.Input)
+				if inputErr == nil {
+					modeInput, modeInputKnown, inputErr = resolveCompiledField(
+						measure.Input,
+						state,
+					)
+				}
 			}
 			if inputErr != nil {
 				return nil, nil, nil, compileState{}, nil, inputErr
@@ -20174,6 +21218,70 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 					"compile ClickHouse aggregate: string distribution lowering is invalid",
 				)
 			}
+			modeSemanticBytesSQL := ""
+			if measure.Function == plan.AggregateFunctionMode && modeInputKnown &&
+				modeInput.stringOrBytes &&
+				(modeInput.kind == fieldKindString || modeInput.kind == fieldKindStringArray) {
+				if modeInput.semanticBytesSQL == "" {
+					if modeInput.kind == fieldKindString {
+						return nil, nil, nil, compileState{}, nil, errors.New(
+							"compile ClickHouse aggregate: mode String-or-Bytes input lacks semantic Bytes provenance",
+						)
+					}
+				}
+				modeValuesInput := quoteIdentifier(fmt.Sprintf(
+					"__os_measure_mode_values_%d",
+					measureIndex,
+				))
+				modeSemanticInput := quoteIdentifier(fmt.Sprintf(
+					"__os_measure_semantic_bytes_%d",
+					measureIndex,
+				))
+				modeExistsSQL := modeInput.existsSQL
+				if modeExistsSQL == "" {
+					modeExistsSQL = "1"
+				}
+				modeValuesSQL := "if(" + modeExistsSQL + " AND isNotNull(" +
+					modeInput.valueSQL + "), [assumeNotNull(" + modeInput.valueSQL +
+					")], CAST([], 'Array(String)'))"
+				modeSemanticSQL := "if(" + modeExistsSQL + " AND isNotNull(" +
+					modeInput.valueSQL + "), [toUInt8(ifNull(" +
+					modeInput.semanticBytesSQL + ", 0))], CAST([], 'Array(UInt8)'))"
+				if modeInput.kind == fieldKindStringArray {
+					modeValuesSQL = "if(" + modeExistsSQL + ", " +
+						modeInput.valueSQL + ", CAST([], 'Array(String)'))"
+					modeSemanticSQL = "arrayMap(value -> toUInt8(NOT isValidUTF8(value)), " +
+						modeValuesSQL + ")"
+				}
+				next.preAggregateColumns = append(
+					next.preAggregateColumns,
+					modeValuesSQL+" AS "+modeValuesInput,
+					modeSemanticSQL+" AS "+modeSemanticInput,
+				)
+				next.preAggregateArgs = append(
+					next.preAggregateArgs,
+					modeInput.existsArgs...,
+				)
+				next.preAggregateArgs = append(
+					next.preAggregateArgs,
+					modeInput.existsArgs...,
+				)
+				modeLowering := statsExactModeWithSemanticBytesSQL(
+					modeValuesInput,
+					modeSemanticInput,
+				)
+				lowering.SQL = modeLowering.ValueSQL
+				modeSemanticOutput := quoteIdentifier(fmt.Sprintf(
+					"__os_mode_semantic_bytes_%d",
+					measureIndex,
+				))
+				projection = append(
+					projection,
+					modeLowering.SemanticBytesSQL+" AS "+modeSemanticOutput,
+				)
+				next.privateColumns = append(next.privateColumns, modeSemanticOutput)
+				modeSemanticBytesSQL = modeSemanticOutput
+			}
 			projection = append(projection, lowering.SQL+" AS "+output)
 			switch lowering.Result {
 			case statsDistributionResultUInt64:
@@ -20184,6 +21292,20 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				measureState.kind = fieldKindString
 				measureState.numberType = ""
 				measureState.existsSQL = "isNotNull(" + output + ")"
+				if measure.Function == plan.AggregateFunctionMode {
+					measureState.stringOrBytes = true
+					measureState.stringOrBytesNullable = true
+					measureState.semanticBytesByUTF8Validity = modeSemanticBytesSQL == ""
+					measureState.semanticBytesSQL = modeSemanticBytesSQL
+					if measureState.semanticBytesSQL == "" {
+						measureState.semanticBytesSQL = "toUInt8(isNotNull(" + output +
+							") AND NOT isValidUTF8(assumeNotNull(" + output + ")))"
+					}
+					measureState.textEligibleSQL = "(ifNull(" +
+						measureState.semanticBytesSQL + ", 0) = 0 AND isNotNull(" +
+						output + ") AND isValidUTF8(assumeNotNull(" + output + ")))"
+					measureState.textEligibleBySemanticBytes = true
+				}
 				if measure.InputExpression != nil {
 					cached, inputErr := aggregateExpressionInputFor(measure.InputExpression)
 					if inputErr != nil {
@@ -20244,6 +21366,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				} else {
 					measureState.kind = fieldKindStringArray
 					measureState.mvSortedLexicographic = true
+					measureState.stringOrBytes = true
 					// The physical result is always a non-null Array(String), but an
 					// empty multivalue has no logical SPL field value.
 					measureState.existsSQL = "notEmpty(" + output + ")"
@@ -20274,6 +21397,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 					"groupArrayArray(1)(CAST([], 'Array(String)')) AS "+output,
 				)
 				measureState.kind = fieldKindStringArray
+				measureState.stringOrBytes = true
 				measureState.existsSQL = "notEmpty(" + output + ")"
 				break
 			}
@@ -20349,6 +21473,7 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 				},
 			)
 			measureState.kind = fieldKindStringArray
+			measureState.stringOrBytes = true
 			// As with values(), an empty physical array has no logical SPL value.
 			measureState.existsSQL = "notEmpty(" + output + ")"
 		default:
@@ -20398,6 +21523,17 @@ func compileAggregateValidated(operator *plan.Aggregate, state compileState) (
 		}
 	}
 	if len(dynamicGroupInvalid) > 0 {
+		if next.context == nil {
+			return nil, nil, nil, compileState{}, nil, errors.New(
+				"compile ClickHouse aggregate: runtime validation context is missing",
+			)
+		}
+		// Raw Dynamic BY inputs are validated at execution because their runtime
+		// shape can be a scalar, an admitted scalar-member multivalue, or an
+		// unsupported nested container. A backend iterator may discover a late
+		// unsupported value only after yielding otherwise valid groups, so the
+		// complete result must remain staged until validation and Close succeed.
+		next.context.atomicResult = true
 		anyUnsupportedColumn := quoteIdentifier("__os_stats_by_any_unsupported")
 		invalid := "(" + strings.Join(dynamicGroupInvalid, ") OR (") + ")"
 		next.preAggregateValidationColumns = append(next.preAggregateValidationColumns,
@@ -22845,6 +23981,56 @@ func quoteIdentifier(identifier string) string {
 	}
 	quoted.WriteByte('"')
 	return quoted.String()
+}
+
+// isCanonicalQuotedIdentifierSQL reports whether value is exactly one valid
+// UTF-8 quoted identifier emitted by quoteIdentifier. Compiler-visible authored
+// names are validated UTF-8 and generated physical names are ASCII. It decodes
+// hexadecimal escapes before round-tripping because quoteIdentifier deliberately
+// represents driver bind metacharacters (including a literal backslash) as
+// \xHH. Treating those escape bytes as the identifier itself would encode the
+// backslash a second time.
+//
+// Requiring the canonical round trip also keeps arbitrary SQL expressions out:
+// raw quotes, bind markers, noncanonical escapes, and trailing operators cannot
+// be mistaken for a physical identifier that is safe to relation-qualify.
+func isCanonicalQuotedIdentifierSQL(value string) bool {
+	if len(value) < 2 || value[0] != '"' || value[len(value)-1] != '"' {
+		return false
+	}
+	end := len(value) - 1
+	identifier := make([]byte, 0, end-1)
+	for index := 1; index < end; {
+		if value[index] != '\\' {
+			identifier = append(identifier, value[index])
+			index++
+			continue
+		}
+		if index+3 >= end || value[index+1] != 'x' {
+			return false
+		}
+		high, highOK := hexadecimalDigitValue(value[index+2])
+		low, lowOK := hexadecimalDigitValue(value[index+3])
+		if !highOK || !lowOK {
+			return false
+		}
+		identifier = append(identifier, high<<4|low)
+		index += 4
+	}
+	return utf8.Valid(identifier) && quoteIdentifier(string(identifier)) == value
+}
+
+func hexadecimalDigitValue(value byte) (byte, bool) {
+	switch {
+	case value >= '0' && value <= '9':
+		return value - '0', true
+	case value >= 'A' && value <= 'F':
+		return value - 'A' + 10, true
+	case value >= 'a' && value <= 'f':
+		return value - 'a' + 10, true
+	default:
+		return 0, false
+	}
 }
 
 func wildcardRegex(value string, caseInsensitive bool) string {

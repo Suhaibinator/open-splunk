@@ -618,9 +618,10 @@ func savedSearchDefinition(ownerID, appID, name string) *opensplunkv1.SavedSearc
 		OwnerId:      stringPointer(ownerID),
 		SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
 		Search: &opensplunkv1.SearchDefinition{
-			Spl:       "index=main error | stats count by service",
-			AppId:     stringPointer(appID),
-			TimeRange: &opensplunkv1.TimeRangeSpec{Earliest: stringPointer("-24h"), Latest: stringPointer("now")},
+			Spl:        "index=main error | stats count by service",
+			AppId:      stringPointer(appID),
+			TimeRange:  &opensplunkv1.TimeRangeSpec{Earliest: stringPointer("-24h"), Latest: stringPointer("now")},
+			IndexScope: []string{"main"},
 		},
 	}
 }

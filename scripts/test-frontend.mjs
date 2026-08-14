@@ -1,11 +1,36 @@
+/* eslint-disable no-await-in-loop */
+// Test files run serially to keep their repository and publication fixtures isolated.
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 
 const workspace = process.cwd();
 const outputDirectory = await mkdtemp(path.join(tmpdir(), "open-splunk-frontend-tests-"));
+const scriptTests = [
+  "build-ui-output.test.mjs",
+  "check-buf-breaking.test.mjs",
+  "compile-protos.test.mjs",
+  "materialize-git-snapshot.test.mjs",
+  "run-go-race-shard.test.mjs",
+  "read-spl-compatibility-version.test.mjs",
+  "build-release.test.mjs",
+  "build-oci.test.mjs",
+  "spl-v02-acceptance.test.mjs",
+  "spl-v02-stats-by-ci.test.mjs",
+];
+for (const optional of [
+  "spl-v03-acceptance.test.mjs",
+  "spl-v03-ci.test.mjs",
+]) {
+  try {
+    await access(path.join(workspace, "scripts", optional));
+    scriptTests.push(optional);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+}
 const testFiles = [
   path.join("app", "admin", "admin-resource-data.test.ts"),
   path.join("app", "admin", "backend-admin-console-hec.test.ts"),
@@ -57,13 +82,7 @@ function run(command, arguments_, environment = process.env) {
 try {
   await run(process.execPath, [
     "--test",
-    path.join(workspace, "scripts", "build-ui-output.test.mjs"),
-    path.join(workspace, "scripts", "check-buf-breaking.test.mjs"),
-    path.join(workspace, "scripts", "compile-protos.test.mjs"),
-    path.join(workspace, "scripts", "materialize-git-snapshot.test.mjs"),
-    path.join(workspace, "scripts", "run-go-race-shard.test.mjs"),
-    path.join(workspace, "scripts", "build-release.test.mjs"),
-    path.join(workspace, "scripts", "build-oci.test.mjs"),
+    ...scriptTests.map((file) => path.join(workspace, "scripts", file)),
   ]);
   const compilerConfig = path.join(outputDirectory, "tsconfig.json");
   await writeFile(compilerConfig, JSON.stringify({

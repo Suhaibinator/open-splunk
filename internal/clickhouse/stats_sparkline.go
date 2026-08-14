@@ -240,7 +240,13 @@ func statsSparklineExplicitBucketSpec(
 	}
 
 	unitNanoseconds, ok := statsSparklineFixedUnitNanoseconds(span.Unit)
-	if !ok || span.Magnitude > uint64(math.MaxInt64)/uint64(unitNanoseconds) {
+	if !ok {
+		return statsSparklineBucketSpec{}, 0, errors.New(
+			"compile ClickHouse stats sparkline: fixed span is outside the supported range",
+		)
+	}
+	maximumMagnitude := uint64(math.MaxInt64 / unitNanoseconds) // #nosec G115 -- supported fixed units are positive.
+	if span.Magnitude > maximumMagnitude {
 		return statsSparklineBucketSpec{}, 0, errors.New(
 			"compile ClickHouse stats sparkline: fixed span is outside the supported range",
 		)

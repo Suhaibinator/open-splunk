@@ -42,7 +42,7 @@ func ValidateTimelineEligibility(query *Query) error {
 			if index != 0 {
 				return timelinePipelineDiagnostic(operator.Range)
 			}
-		case *Filter, *Sort, *Deduplicate, *Limit:
+		case *Filter, *RegexFilter, *Sort, *Deduplicate, *Limit, *Reverse:
 			// These retain event identity and canonical-time provenance.
 		case *EventAggregate:
 			if !validEventAggregateContract(operator) {
@@ -56,13 +56,38 @@ func ValidateTimelineEligibility(query *Query) error {
 				return timelinePipelineDiagnostic(operator.Range)
 			}
 			if operator.Measure.Output == "_time" {
-				return timelineTimeDiagnostic(operator.Range)
+				return timelineTimeDiagnostic(preferTimelineRange(operator.OutputRange, operator.Range))
 			}
 		case *Extend:
 			for _, assignment := range operator.Assignments {
 				if assignment.Output.Name == "_time" {
 					return timelineTimeDiagnostic(assignment.Range)
 				}
+			}
+		case *Strcat:
+			if operator.Destination.Name == "_time" {
+				return timelineTimeDiagnostic(preferTimelineRange(operator.Destination.Range, operator.Range))
+			}
+		case *FillNull:
+			for _, field := range operator.Fields {
+				if field.Name == "_time" {
+					return timelineTimeDiagnostic(preferTimelineRange(field.Range, operator.Range))
+				}
+			}
+		case *RowTotal:
+			if operator.Output == "_time" {
+				return timelineTimeDiagnostic(preferTimelineRange(operator.OutputRange, operator.Range))
+			}
+		case *OrderedDelta:
+			if operator.Output == "_time" {
+				return timelineTimeDiagnostic(preferTimelineRange(operator.OutputRange, operator.Range))
+			}
+		case *MakeMultivalue:
+			// makemv replaces its input in place. An authored command cannot
+			// target compiler-private fields, but keep the provenance proof safe
+			// for directly constructed or future parser-produced plans.
+			if operator.Input.Name == "_time" {
+				return timelineTimeDiagnostic(preferTimelineRange(operator.Input.Range, operator.Range))
 			}
 		case *Extract:
 			for _, capture := range operator.Captures {
@@ -131,13 +156,20 @@ func ValidateTimelineEligibility(query *Query) error {
 			default:
 				return timelinePipelineDiagnostic(operator.Range)
 			}
-		case *Aggregate, *Timechart, *Chart, *Window:
+		case *Aggregate, *Timechart, *Chart, *Window, *ExpandMultivalue:
 			return timelinePipelineDiagnostic(operator.SourceRange())
 		default:
 			return timelinePipelineDiagnostic(operator.SourceRange())
 		}
 	}
 	return nil
+}
+
+func preferTimelineRange(preferred, fallback spl.Range) spl.Range {
+	if preferred != (spl.Range{}) {
+		return preferred
+	}
+	return fallback
 }
 
 func containsTimelineTime(fields []FieldRef) bool {

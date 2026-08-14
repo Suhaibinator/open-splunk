@@ -273,8 +273,9 @@ func TestCompileEvalIfRetainsCalculatedFieldMaterialization(t *testing.T) {
 		t,
 		`index=gradethis | eval selected=if(isnull(optional), _raw, _raw) | spath input=selected output=value path=value | table value`,
 	)
-	if !strings.Contains(raw.SQL, `"__os_raw_encoding" = 1`) {
-		t.Fatalf("if lost identical raw text provenance:\n%s", raw.SQL)
+	if !strings.Contains(raw.SQL, `ifNull("__os_string_or_bytes_`) ||
+		!strings.Contains(raw.SQL, `isValidUTF8(assumeNotNull("selected"))`) {
+		t.Fatalf("if lost rebound identical raw text provenance:\n%s", raw.SQL)
 	}
 }
 

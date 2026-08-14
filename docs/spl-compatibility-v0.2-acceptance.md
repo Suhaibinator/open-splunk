@@ -1,7 +1,12 @@
 # SPL compatibility v0.2 acceptance report
 
-**Status:** implementation completed; final clean-revision revalidation and
-provenance closeout pending
+**Status:** pending
+
+**Evidence phase:** `implementation-checkpoint`
+
+**Decision:** pending
+
+**Stable publication authorized:** no
 
 **Target authored-search identity:** `0.2`
 
@@ -9,19 +14,64 @@ provenance closeout pending
 
 **Prepared:** August 11, 2026
 
-The authored-search runtime now advertises `0.2`. The closeout target will be
-the next clean, committed, reachable revision after the final quality fixes:
-`<reachable-closeout-revision>`. The command receipts below were captured
-during implementation on a clean isolated materialization, but the report
-previously named an unattached snapshot and a local evidence archive that were
-not retained. Those receipts remain useful regression evidence; their old log
-digests are not final provenance for the closeout target.
+**Closeout update:** August 12, 2026
 
-This report returns to final `accepted` status only after the final command
-sheet is rerun against the target revision, or an explicitly named superseding
-reachable revision, with a clean tree before and after every mutating gate.
-The rerun must replace the pending audit and release identities below and must
-not rely on the missing local archive.
+The authored-search runtime reports `0.2`. Reachable historical `origin/main`
+revision `230774476dfd96c5e11ef87f7372b81986689353` was revalidated from a
+clean isolated checkout, but review found that the normative quoted-field and
+multivalue `stats BY` text still contradicted the stats surface merged into
+that revision. The succeeding implementation reconciles the contract,
+migration guide, and corpus and adds the atomic publication guard required by
+the owned multivalue grouping rule. That is production semantic hardening, not
+a documents-only correction. In `implementation-checkpoint` these bytes are an
+unbound carrier; `qualification-candidate` binds them to the containing clean
+commit `R`; only direct-child `E` may record post-commit remote, CI, and release
+proof. The phase header and manifest identify which state applies.
+
+The historical [`spl-v0.2` evidence bundle](evidence/spl-v0.2/README.md) is
+preserved unchanged. Its GitHub Actions run `31540820337` completed with
+conclusion `cancelled` and cannot close acceptance. The
+[`August 12 reachable-target closeout bundle`](evidence/spl-v0.2-closeout-2026-08-12/README.md)
+records the supersession, exact clean-checkout results, corrected hashes, and
+remaining gaps.
+
+The new [`v0.2 activation evidence bundle`](evidence/spl-v0.2-activation/README.md)
+is the accepted-capable successor and defines three states: an unbound
+checked-in carrier, a clean hash-bound qualification candidate `R`, and a
+direct-child evidence revision `E`. The carrier and `R` cannot authorize
+distribution. Strict accepted verification of `E` returns `R` as the only
+runtime source eligible for stable publication; an explicitly labeled
+synthetic/local `E` proves mechanics only and is not remote or publication
+authority. The v0.2 application release identity is exactly `0.1.0` and the
+real accepted release tag is exactly `v0.1.0`; this remains distinct from
+authored SPL compatibility `0.2`, matching the preserved historical evidence.
+
+A separate, later target-bound
+[`CI` run `31571852036`](https://github.com/Suhaibinator/open-splunk/actions/runs/31571852036)
+checked out the exact reachable revision above. It started at
+`2026-08-12T06:55:15Z` and reached its terminal update at
+`2026-08-12T07:46:59Z`, with conclusion `failure`. The
+[`Backend vertical` job](https://github.com/Suhaibinator/open-splunk/actions/runs/31571852036/job/94035340634)
+failed after three observed ClickHouse/queryexec assertions; the production
+binaries matrix and Linux/macOS release-asset consistency job were skipped.
+The successful OCI-contract job does not replace those skipped artifact
+gates. Thus the later run proves `origin/main` reachability but does not close
+the terminal-success CI or release-provenance requirements. It is distinct
+from the older cancelled run bound to `dffde13c84d9a2ef0567e89dd527ec4776f5ca42`.
+
+Acceptance is phase-bound, not inferred from implementation receipts. The
+carrier and `R` leave post-commit acceptance, CI, and release identities
+unbound; `E` alone may record them after the clean target command sheet
+completes. No phase may rely on the missing local archive.
+
+Final closeout uses two immutable revisions because a Git commit cannot contain
+its own final object identity. The runtime/release revision `R` is the exact
+clean v0.2-only runtime/release commit; post-commit terminal-success CI, remote
+readback, and release gates qualify it. A later documentation-only evidence
+revision `E` records `R` and those receipts. `git diff R..E` must contain only
+acceptance/evidence artifacts; any runtime or normative semantic change in `E`
+restarts qualification. CI for `R` must finish before `E` is pushed because the
+workflow cancels an older in-progress run when a newer revision is published.
 
 Normative and operator documents:
 
@@ -37,29 +87,31 @@ Normative and operator documents:
 - Tier-1 calculated fields remain on the closed `SPLExpressionV01` profile.
 - One admitted job retains its authored source and immutable compiler version;
   history rerun reparses source and records the rerunning binary's version.
-- Activation happens once, after every backend, retained-search, audit,
-  browser, and release gate passes on one exact clean revision.
-- A failed or incomplete gate keeps the prior development identity.
+- Stable activation happens once, after every backend, retained-search, audit,
+  browser, and release gate passes for exact `R` and verified `E` records them.
+- A failed or incomplete gate keeps stable distribution blocked even though
+  quarantined `R` necessarily reports `0.2`.
 
 ## Target closeout identity
 
 | Field | Value |
 | --- | --- |
-| Target activation Git revision | `<reachable-closeout-revision>` |
-| Reachability | pending closeout commit, push, and remote readback |
+| Reachable regression target Git revision/tree | `230774476dfd96c5e11ef87f7372b81986689353` / `0da294a410c813656960ddc40242480d7b076525` |
+| Reachability | `origin/main` remote readback returned the exact revision above on August 12, 2026 |
+| Target-bound GitHub Actions readback | run [`31571852036`](https://github.com/Suhaibinator/open-splunk/actions/runs/31571852036), `2026-08-12T06:55:15Z`–`2026-08-12T07:46:59Z`, completed `failure`; Backend vertical failed; production binaries and release consistency skipped |
+| Runtime/release binding | checkpoint: unbound carrier; candidate: containing clean `R` derived by the verifier; accepted `E`: exact `R` and remote binding recorded |
 | Required activation tree state | clean committed materialization; empty `git status --porcelain` before and after every mutating generator/release gate |
-| Final activation UTC interval | pending final clean-revision rerun |
-| Final runner/CPU/OS | pending final rerun; historical receipts used Apple M4 Max, 16 logical CPUs, Darwin 25.6.0 arm64 |
+| Qualification UTC interval | post-`R` evidence, absent from carrier/`R` and recorded only by `E` |
+| Qualification runner/CPU/OS | post-`R` evidence, absent from carrier/`R` and recorded only by `E`; historical receipts used Apple M4 Max, 16 logical CPUs, Darwin 25.6.0 arm64 |
 | Required Go | `go1.26.5` |
 | Required Node.js | `v24.18.0` |
 | Required npm | `11.16.0` |
 | Required Playwright | `1.62.1` |
 | Required ClickHouse | `26.3.17.4` |
 | Required ClickHouse image | `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49` |
-| Contract SHA-256 | `2f1e7c9f2fb3902908bf328a135112b7acf20024796ce39179c486737c6eca7e` |
-| Corpus SHA-256 | `613ee59ce81252f733399ffa7d69487d37648b22052cbf6118fced51c39512b3` |
-| Final redacted audit report SHA-256 | pending final clean-revision rerun |
-| Final release artifact identity/readback | pending final clean-revision release build with source identity equal to the target revision |
+| Contract/corpus binding | exact bytes are hashed by the `R` manifest and retained unchanged by `E` |
+| Redacted audit receipt | post-`R` evidence recorded only by `E` |
+| Release identity/readback | post-`R` evidence recorded only by `E`; it must name exact `R`, application `0.1.0`, and SPL `0.2` |
 
 ## Development evidence already recorded
 
@@ -109,10 +161,10 @@ operators, 32 candidates, and 100,000 audit operators.
 The following audit receipt came from the prior isolated implementation run.
 Its temporary database path and unattached source snapshot are no longer
 available, so it is retained as regression context rather than final activation
-evidence. The closeout rerun must generate a fresh deterministic fixture and
-run the audit as described in the migration guide against that sanitized copy
-and the exact reachable target checkout. The tool reports identities and
-locations but never authored SPL or field values.
+evidence. Accepted evidence must include a fresh deterministic fixture and an
+exact-`R` audit; the prior unavailable fixture remains regression context only.
+The tool reports identities and locations but never authored SPL or field
+values.
 
 | Field | Value |
 | --- | --- |
@@ -124,7 +176,7 @@ locations but never authored SPL or field values.
 | Finding dispositions | control DB: one synthetic legacy-field positive control and one intended subtraction; repository: 25 audit/migration controls, 46 host-language formatting artifacts in 17 files, 124 intentional v0.2 conformance/vertical/benchmark cases in 15 files, and one pre-existing intended comparison; zero unresolved production sources |
 | Second-run report digest | `60fdaedfee2068d4ddd874299f5112895fd84f08df33c9d1703bebd67fdab2d9`; runs 1, 2, and 3 byte-identical |
 | Input database digest before/after | `a3217421b6858599ba495302f29d9b0ba7936e2afe1b6ff3d972a13784247ed0` / same |
-| Target-revision audit | pending final clean-revision rerun and fresh digest |
+| Target-revision audit | post-`R` receipt, absent from carrier/`R` and recorded only by `E` |
 
 A finding is a review candidate, not proof of an incompatible field. Any
 unresolved finding blocks activation. An audit disposition applies only to the
@@ -145,11 +197,10 @@ without a reproducible run identity and disposition is not acceptance evidence.
 
 ## Final closeout command sheet
 
-The tables in this section preserve the prior isolated-run receipts and their
-SHA-256 log digests. The same commands must be rerun from one clean checkout of
-the reachable target after the public identity changed to `0.2`. Until that
-rerun is recorded, the listed pass results are regression evidence rather than
-final activation provenance.
+The tables in this section preserve historical receipts only. Exact-`R`
+qualification reruns the listed commands after `R` exists; their post-`R`
+results are recorded by `E`. Historical pass rows never constitute activation
+provenance.
 
 ### Toolchain and source identity
 
@@ -217,6 +268,29 @@ npx --no-install playwright install chromium
 ### Pinned ClickHouse and complete vertical
 
 ```sh
+require_exact_go_test() {
+  package="$1"
+  name="$2"
+  output="$(go test "$package" -list "^${name}$")"
+  match_count="$(
+    printf '%s\n' "$output" |
+      awk -v expected="$name" '$0 == expected { count++ } END { print count + 0 }'
+  )"
+  test "$match_count" -eq 1
+}
+
+require_exact_go_test ./internal/clickhouse TestExpressionV02AgainstClickHouse
+require_exact_go_test ./internal/queryexec TestExpressionV02ExecutorManagerAgainstClickHouse
+require_exact_go_test ./internal/clickhouse TestStoreAgainstClickHouse
+require_exact_go_test ./internal/clickhouse TestStatsByDeferredValidationAdversarialAgainstClickHouse
+require_exact_go_test ./internal/clickhouse TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse
+require_exact_go_test ./internal/clickhouse TestStatsMultivalueByAgainstClickHouse
+require_exact_go_test ./internal/clickhouse TestStatsMultivalueByExpansionLimitAgainstClickHouse
+require_exact_go_test ./internal/queryexec TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse
+require_exact_go_test ./internal/queryexec TestSemanticBytesV02ManagerAgainstClickHouse
+require_exact_go_test ./internal/queryexec TestSemanticBytesModeManagerAgainstClickHouse
+require_exact_go_test ./internal/queryexec TestSparklineFeedsStatsByThroughManagerAgainstClickHouse
+
 export OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE='clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49'
 
 OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
@@ -228,6 +302,49 @@ OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
 go test ./internal/queryexec \
   -run '^TestExpressionV02ExecutorManagerAgainstClickHouse$' \
   -count=1 -timeout=15m -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/clickhouse \
+  -run '^TestStoreAgainstClickHouse$/^compiled_SPL_corpus$' \
+  -count=1 -timeout=15m -p=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/clickhouse \
+  -run '^TestStatsByDeferredValidationAdversarialAgainstClickHouse$' \
+  -count=1 -timeout=15m -p=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/clickhouse \
+  -run '^TestStatsByUnsupportedCannotHideBehindMissingKeyAgainstClickHouse$' \
+  -count=1 -timeout=15m -p=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/clickhouse \
+  -run '^TestStatsMultivalueByAgainstClickHouse$' \
+  -count=1 -timeout=15m -p=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/clickhouse \
+  -run '^TestStatsMultivalueByExpansionLimitAgainstClickHouse$' \
+  -count=1 -timeout=15m -p=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/queryexec \
+  -run '^TestStatsByFixedMultivalueStringOrBytesAgainstClickHouse$' \
+  -count=1 -timeout=15m -p=1 -v
+
+OPEN_SPLUNK_CLICKHOUSE_INTEGRATION=1 \
+go test ./internal/queryexec \
+  -run '^(TestSemanticBytesV02ManagerAgainstClickHouse|TestSemanticBytesModeManagerAgainstClickHouse|TestSparklineFeedsStatsByThroughManagerAgainstClickHouse)$' \
+  -count=1 -timeout=15m -p=1 -v
+
+go test ./internal/queryexec \
+  -run '^TestStatsByLate(UnsupportedValue|ExpansionLimit)IsAtomicAndRedacted$' \
+  -count=1
+
+go test ./internal/searchjobs \
+  -run '^TestStatsBy(Atomic|ExpansionLimit)ManagerHidesStagedPrefixAndClearsItOnFailure$' \
+  -count=1
 
 OPEN_SPLUNK_CLICKHOUSE_BENCHMARK=1 \
 OPEN_SPLUNK_EXPRESSION_V02_BENCH_ROWS=65536 \
@@ -264,7 +381,15 @@ make build-server
 
 git diff --check
 test -z "$(git status --porcelain)"
+OPEN_SPLUNK_APPLICATION_VERSION=0.1.0 \
+OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0.2 \
 OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
+test "$(sed -n '1p' build/release-verification.txt)" = \
+  'application_version=0.1.0'
+test "$(sed -n '2p' build/release-verification.txt)" = \
+  "source_revision=$(git rev-parse HEAD)"
+test "$(sed -n '3p' build/release-verification.txt)" = \
+  "spl_compatibility_version=0.2"
 ```
 
 | Command group | Historical result | Historical log digest; not authoritative for closeout |
@@ -282,12 +407,15 @@ OPEN_SPLUNK_SOURCE_REVISION="$(git rev-parse HEAD)" make release
 | Implementation roadmap language/semantic criteria | passed in the recorded implementation receipts |
 | Authority/resource criteria | passed in the recorded implementation receipts |
 | Product/browser/retained-search surfaces | passed in the recorded implementation receipts |
-| Target clean-revision quality, audit, and release rerun | pending |
+| Exact-`R` quality, audit, and release sheet | post-`R` evidence; recorded only by `E` |
 | Unresolved implementation findings | zero in the recorded implementation review |
-| Target activation revision | `<reachable-closeout-revision>` |
-| Final accepted activation revision | pending successful clean-revision closeout |
-| Decision and approver/run identity | implementation review receipts recorded by the Codex `/root` run ending `2026-08-11T10:38:05Z`; final provenance closeout pending and not a separate deployment approval |
+| Reachable regression revision | `230774476dfd96c5e11ef87f7372b81986689353` |
+| Reachable target CI | run `31571852036` completed `failure`; not acceptance provenance |
+| Runtime revision | carrier unbound; candidate containing `R`; `E` records exact `R` |
+| Acceptance evidence | absent from carrier/`R`; direct-child `E` only |
+| Decision identity | implementation review is regression context; accepted CI, release, remote, and decision authority comes only from verified `E`; synthetic `E` remains local-only |
 
-The implementation receipts show the required behavior and compatibility
-identity. Final release acceptance remains open until the reachable target's
-clean-tree command, audit, and release identities are recorded here.
+Implementation receipts establish regression behavior but never acceptance.
+The phase header and manifest are authoritative: checkpoint and `R` block
+distribution; only a verified non-synthetic remote `E` may authorize stable
+release.

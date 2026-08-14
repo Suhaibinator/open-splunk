@@ -64,8 +64,15 @@ type Scope struct {
 	TenantID          string
 	AuthorizedIndexes []string
 	RequestedIndexes  []string
-	Earliest          time.Time
-	Latest            time.Time
+	// SearchJobID is the immutable public identifier allocated by admission.
+	// It is required only when addinfo is present; non-executing validation and
+	// suggestion callers leave it empty and opt into an explicit null placeholder.
+	SearchJobID string
+	// AllowUnboundSearchJobID admits addinfo only for non-executing validation
+	// and suggestion planning. It never grants executable/public SID authority.
+	AllowUnboundSearchJobID bool
+	Earliest                time.Time
+	Latest                  time.Time
 	// SearchStart is the immutable server clock value captured when the search
 	// is admitted. It must not be derived from either storage cutoff below.
 	SearchStart     time.Time
@@ -143,6 +150,7 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 	canonicalTimeAvailable := true
 	extractionOutputCount := 0
 	spathEvaluationWorkUnits := 0
+	mvExpandOrdinal := 0
 	expressionBudget := splExpressionResourceBudget{}
 	for commandIndex, command := range query.Commands {
 		switch command := command.(type) {
@@ -267,6 +275,178 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 				Captures: captures,
 				Range:    command.Range,
 			})
+		case *spl.RegexCommand:
+			operator, buildErr := buildRegexCommand(command, outputSchemaKnown)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+		case *spl.ReverseCommand:
+			if command == nil || command.Range == (spl.Range{}) {
+				return nil, &Diagnostic{
+					Code:    "SPL_UNSUPPORTED_REVERSE_SYNTAX",
+					Message: "reverse does not accept arguments or options",
+					Range:   safeSPLNodeRange(command),
+				}
+			}
+			result.Operators = append(result.Operators, &Reverse{Range: command.Range})
+		case *spl.AccumCommand:
+			operator, buildErr := buildAccumCommand(command, outputSchemaKnown)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
+				result.OutputFields = append(result.OutputFields, command.Output)
+			}
+			if command.Output == "_time" {
+				canonicalTimeAvailable = false
+			}
+		case *spl.StrcatCommand:
+			operator, buildErr := buildStrcatCommand(
+				command,
+				outputSchemaKnown,
+				&expressionBudget,
+			)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Destination) {
+				result.OutputFields = append(result.OutputFields, command.Destination)
+			}
+			if command.Destination == "_time" {
+				canonicalTimeAvailable = false
+			}
+		case *spl.AddInfoCommand:
+			operator, buildErr := buildAddInfoCommand(command, scope)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			if outputSchemaKnown {
+				for _, field := range []string{
+					"info_min_time",
+					"info_max_time",
+					"info_search_time",
+					"info_sid",
+				} {
+					if !slices.Contains(result.OutputFields, field) {
+						result.OutputFields = append(result.OutputFields, field)
+					}
+				}
+			}
+		case *spl.FillNullCommand:
+			if !outputSchemaKnown {
+				for _, field := range command.Fields {
+					if field.Name == "fields" {
+						return nil, &Diagnostic{
+							Code:    "SPL_AMBIGUOUS_FILLNULL_FIELD",
+							Message: "fillnull cannot replace the event result's reserved fields payload without an exact upstream schema",
+							Range:   field.Range,
+						}
+					}
+				}
+			}
+			operator, buildErr := buildFillNull(command)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			for _, field := range command.Fields {
+				if outputSchemaKnown && !slices.Contains(result.OutputFields, field.Name) {
+					result.OutputFields = append(result.OutputFields, field.Name)
+				}
+				if field.Name == "_time" {
+					canonicalTimeAvailable = false
+				}
+			}
+		case *spl.AddTotalsCommand:
+			if !outputSchemaKnown {
+				if command.Output == "fields" {
+					return nil, &Diagnostic{
+						Code:    "SPL_AMBIGUOUS_ADDTOTALS_FIELD",
+						Message: "addtotals cannot replace the event result's reserved fields payload without an exact upstream schema",
+						Range:   command.OutputRange,
+					}
+				}
+				for _, field := range command.Fields {
+					if field.Name == "fields" {
+						return nil, &Diagnostic{
+							Code:    "SPL_AMBIGUOUS_ADDTOTALS_FIELD",
+							Message: "addtotals cannot read the event result's reserved fields payload without an exact upstream schema",
+							Range:   field.Range,
+						}
+					}
+				}
+			}
+			operator, buildErr := buildRowTotal(command)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
+				result.OutputFields = append(result.OutputFields, command.Output)
+			}
+			if command.Output == "_time" {
+				canonicalTimeAvailable = false
+			}
+		case *spl.DeltaCommand:
+			if !outputSchemaKnown && (command.Field == "fields" || command.Output == "fields") {
+				fieldRange := command.FieldRange
+				if command.Output == "fields" {
+					fieldRange = command.OutputRange
+				}
+				return nil, &Diagnostic{
+					Code:    "SPL_AMBIGUOUS_DELTA_FIELD",
+					Message: "delta cannot use the event result's reserved fields payload without an exact upstream schema",
+					Range:   fieldRange,
+				}
+			}
+			operator, buildErr := buildOrderedDelta(command)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Output) {
+				result.OutputFields = append(result.OutputFields, command.Output)
+			}
+			if command.Output == "_time" {
+				canonicalTimeAvailable = false
+			}
+		case *spl.MakeMVCommand:
+			if !outputSchemaKnown && command.Field == "fields" {
+				return nil, &Diagnostic{
+					Code:    "SPL_AMBIGUOUS_MAKEMV_FIELD",
+					Message: "makemv cannot replace the event result's reserved fields payload without an exact upstream schema",
+					Range:   command.FieldRange,
+				}
+			}
+			operator, buildErr := buildMakeMultivalue(command)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Field) {
+				result.OutputFields = append(result.OutputFields, command.Field)
+			}
+		case *spl.MVExpandCommand:
+			if !outputSchemaKnown && command.Field == "fields" {
+				return nil, &Diagnostic{
+					Code:    "SPL_AMBIGUOUS_MVEXPAND_FIELD",
+					Message: "mvexpand cannot expand the event result's reserved fields payload without an exact upstream schema",
+					Range:   command.FieldRange,
+				}
+			}
+			mvExpandOrdinal++
+			operator, buildErr := buildExpandMultivalue(command, mvExpandOrdinal)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			if outputSchemaKnown && !slices.Contains(result.OutputFields, command.Field) {
+				result.OutputFields = append(result.OutputFields, command.Field)
+			}
 		case *spl.SpathCommand:
 			if command == nil {
 				return nil, &Diagnostic{Code: "SPL_INVALID_QUERY", Message: "spath command is nil"}
@@ -2406,6 +2586,34 @@ func positiveIndexReferences(
 					return references
 				}
 			}
+		case *spl.StrcatCommand:
+			if command != nil && command.Destination == "index" {
+				return references
+			}
+		case *spl.AccumCommand:
+			if command == nil || command.Output == "index" {
+				return references
+			}
+		case *spl.FillNullCommand:
+			if command == nil || slices.ContainsFunc(command.Fields, func(field spl.ExactCommandField) bool {
+				return field.Name == "index"
+			}) {
+				return references
+			}
+		case *spl.AddTotalsCommand:
+			if command == nil || command.Output == "index" {
+				return references
+			}
+		case *spl.DeltaCommand:
+			if command == nil || command.Output == "index" {
+				return references
+			}
+		case *spl.MakeMVCommand:
+			if command == nil || command.Field == "index" {
+				return references
+			}
+		case *spl.AddInfoCommand:
+			// addinfo has fixed outputs and never rewrites physical index scope.
 		case *spl.SpathCommand:
 			if command != nil && command.Output == "index" {
 				return references

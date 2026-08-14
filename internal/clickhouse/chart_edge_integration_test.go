@@ -1040,7 +1040,10 @@ func chartEdgeStartClickHouse(t *testing.T, ctx context.Context) (clickhousedriv
 		t.Fatalf("create chart visibility sequencer: %v", err)
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
-	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	// These pinned integration fixtures deliberately use fixed logical clocks.
+	// Keep their physical ClickHouse TTL well beyond the test horizon so a
+	// passing fixture cannot turn into an empty relation as wall time advances.
+	store, err := Open(config, fixedRetention(100*365*24*time.Hour), sequencer)
 	if err != nil {
 		t.Fatalf("open chart store: %v", err)
 	}

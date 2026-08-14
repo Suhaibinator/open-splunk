@@ -3,13 +3,16 @@ package searchsnapshot
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/clickhouse"
+	"github.com/Suhaibinator/open-splunk/internal/knowledgeprogram"
 	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
 func TestBuildPlanUsesOnlyImmutableEffectiveScope(t *testing.T) {
@@ -66,6 +69,37 @@ func TestBuildPlanPreservesEmptyVisibilitySnapshot(t *testing.T) {
 	}
 }
 
+func TestBuildPlanReplaysAndSealsImmutableAddInfoSID(t *testing.T) {
+	job := testJob()
+	job.ID = "replayed-addinfo-job-1"
+	job.SPL = `index=allowed-a | addinfo | table info_sid`
+	job.EffectiveIndexes = []string{"allowed-a"}
+
+	logical, err := BuildPlan(job)
+	if err != nil {
+		t.Fatalf("BuildPlan(addinfo replay): %v", err)
+	}
+	compiled, err := (clickhouse.Compiler{}).Compile(logical)
+	if err != nil {
+		t.Fatalf("Compile(addinfo replay): %v", err)
+	}
+	if !compiled.HasValidExecutionSeal() {
+		t.Fatal("addinfo replay did not produce sealed execution authority")
+	}
+	if strings.Contains(compiled.SQL, job.ID) {
+		t.Fatal("replayed addinfo SID was interpolated into generated SQL")
+	}
+	occurrences := 0
+	for _, argument := range compiled.Args {
+		if value, ok := argument.(string); ok && value == job.ID {
+			occurrences++
+		}
+	}
+	if occurrences != 1 {
+		t.Fatalf("replayed addinfo SID occurs %d times in bound args, want once: %#v", occurrences, compiled.Args)
+	}
+}
+
 func TestBuildExecutionPlanRejectsUnsignedLegacySnapshot(t *testing.T) {
 	job := testJob()
 	logical, err := BuildExecutionPlan(searchjobs.ExecutionSnapshot{
@@ -73,6 +107,7 @@ func TestBuildExecutionPlanRejectsUnsignedLegacySnapshot(t *testing.T) {
 		OwnerID:          job.OwnerID,
 		TenantID:         job.TenantID,
 		SPL:              job.SPL,
+		CompilerVersion:  spl.CompatibilityVersion,
 		EffectiveIndexes: slices.Clone(job.EffectiveIndexes),
 		Earliest:         job.Earliest,
 		Latest:           job.Latest,
@@ -93,6 +128,7 @@ func TestBuildExecutionPlanRejectsUnsealedKnowledgeAuthority(t *testing.T) {
 		TenantID:         "tenant-1",
 		AppID:            "app_aaaaaaaaaaaaaaaaaaaaaA",
 		SPL:              `index=allowed-a`,
+		CompilerVersion:  spl.CompatibilityVersion,
 		EffectiveIndexes: []string{"allowed-a"},
 		Earliest:         time.Date(2026, 7, 21, 8, 0, 0, 0, time.UTC),
 		Latest:           time.Date(2026, 7, 21, 9, 0, 0, 0, time.UTC),
@@ -105,6 +141,50 @@ func TestBuildExecutionPlanRejectsUnsealedKnowledgeAuthority(t *testing.T) {
 	logical, err := BuildExecutionPlan(snapshot)
 	if err == nil || logical != nil {
 		t.Fatalf("BuildExecutionPlan(unsealed knowledge) = (%#v, %v), want failure", logical, err)
+	}
+}
+
+func TestExecutionPlanRebuildRejectsEveryCompilerVersionMismatch(t *testing.T) {
+	versions := []string{
+		"",
+		"0.1",
+		spl.CompatibilityVersion + "-future",
+		spl.CompatibilityVersion + " ",
+	}
+	builders := []struct {
+		name  string
+		build func(searchjobs.ExecutionSnapshot) (*plan.Query, error)
+	}{
+		{
+			name:  "ordinary",
+			build: BuildExecutionPlan,
+		},
+		{
+			name: "candidate knowledge prelude",
+			build: func(snapshot searchjobs.ExecutionSnapshot) (*plan.Query, error) {
+				return BuildExecutionPlanWithKnowledgePrelude(
+					snapshot,
+					knowledgeprogram.Program{},
+				)
+			},
+		},
+	}
+	for _, builder := range builders {
+		for _, version := range versions {
+			t.Run(builder.name+"/"+version, func(t *testing.T) {
+				logical, err := builder.build(searchjobs.ExecutionSnapshot{
+					CompilerVersion: version,
+				})
+				if logical != nil || !errors.Is(err, ErrCompilerVersionMismatch) {
+					t.Fatalf(
+						"rebuild compiler version %q = (%#v, %v), want ErrCompilerVersionMismatch",
+						version,
+						logical,
+						err,
+					)
+				}
+			})
+		}
 	}
 }
 

@@ -50,7 +50,7 @@ async function releaseFixture(t) {
     path.join(fixture, "fixtures", "server"),
     "#!/usr/bin/env bash\n" +
       "test \"${1:-}\" = -verify-embedded-release\n" +
-      "printf 'application_version=%s\\nsource_revision=%s\\nui_build_id=fixture\\nui_sha256=fixture\\n' " +
+      "printf 'application_version=%s\\nsource_revision=%s\\nspl_compatibility_version=0.2\\nui_build_id=fixture\\nui_sha256=fixture\\n' " +
       "\"$OPEN_SPLUNK_APPLICATION_VERSION\" \"$OPEN_SPLUNK_SOURCE_REVISION\"\n",
   );
   await chmod(path.join(fixture, "fixtures", "server"), 0o755);
@@ -267,6 +267,7 @@ function releaseEnvironment(revision, extraEnvironment = {}) {
     ...process.env,
     OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3",
     OPEN_SPLUNK_SOURCE_REVISION: revision,
+    OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.2",
     ...extraEnvironment,
   };
 }
@@ -354,6 +355,7 @@ test("release build publishes only verified HEAD artifacts", async (t) => {
     await readFile(path.join(fixture, "build", "release-verification.txt"), "utf8"),
     "application_version=1.2.3\n" +
       `source_revision=${revision}\n` +
+      "spl_compatibility_version=0.2\n" +
       "ui_build_id=fixture\n" +
       "ui_sha256=fixture\n",
   );
@@ -403,6 +405,7 @@ test("release build bootstraps the materializer from HEAD", async (t) => {
     await readFile(path.join(fixture, "build", "release-verification.txt"), "utf8"),
     "application_version=1.2.3\n" +
       `source_revision=${revision}\n` +
+      "spl_compatibility_version=0.2\n" +
       "ui_build_id=fixture\n" +
       "ui_sha256=fixture\n",
   );
@@ -465,6 +468,55 @@ test("release build rejects unsafe application versions before Make expansion", 
   await assert.rejects(access(sentinel, constants.F_OK));
 });
 
+test("release build requires an explicit expected SPL compatibility identity", async (t) => {
+  const fixture = await releaseFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+  const environment = releaseEnvironment(revision);
+  delete environment.OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION;
+
+  const result = spawnSync("env", releaseArguments(fixture), {
+    cwd: tmpdir(),
+    encoding: "utf8",
+    env: environment,
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    result.stderr,
+    /OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION is required/,
+  );
+});
+
+test("release build rejects unsafe expected SPL compatibility identities", async (t) => {
+  const fixture = await releaseFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+
+  const result = buildRelease(fixture, revision, {
+    env: {
+      OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.3\nforged",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unsafe or unsupported/);
+});
+
+test("release build rejects an embedded SPL compatibility identity mismatch", async (t) => {
+  const fixture = await releaseFixture(t);
+  const revision = git(fixture, ["rev-parse", "HEAD"]);
+
+  const result = buildRelease(fixture, revision, {
+    env: {
+      OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.3",
+    },
+  });
+
+  assert.equal(result.status, 1);
+  await assert.rejects(
+    access(path.join(fixture, "build", "release-verification.txt"), constants.F_OK),
+  );
+});
+
 test("release Make target treats identity text as opaque before validation", async (t) => {
   const temporaryRoot = await mkdtemp(
     path.join(tmpdir(), "open-splunk-make-identity-"),
@@ -472,6 +524,10 @@ test("release Make target treats identity text as opaque before validation", asy
   t.after(() => rm(temporaryRoot, { force: true, recursive: true }));
   const versionSentinel = path.join(temporaryRoot, "version-expanded");
   const revisionSentinel = path.join(temporaryRoot, "revision-expanded");
+  const compatibilitySentinel = path.join(
+    temporaryRoot,
+    "compatibility-expanded",
+  );
 
   const result = spawnSync("make", ["-n", "release"], {
     cwd: workspace,
@@ -482,12 +538,15 @@ test("release Make target treats identity text as opaque before validation", asy
         `$(shell touch ${versionSentinel})`,
       OPEN_SPLUNK_SOURCE_REVISION:
         `$(shell touch ${revisionSentinel})`,
+      OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION:
+        `$(shell touch ${compatibilitySentinel})`,
     },
   });
 
   assert.equal(result.status, 0, result.stderr);
   await assert.rejects(access(versionSentinel, constants.F_OK));
   await assert.rejects(access(revisionSentinel, constants.F_OK));
+  await assert.rejects(access(compatibilitySentinel, constants.F_OK));
 });
 
 test("make release uses the committed launcher and a fixed umask", async (t) => {
@@ -543,6 +602,7 @@ test("make release uses the committed launcher and a fixed umask", async (t) => 
         ...process.env,
         OPEN_SPLUNK_APPLICATION_VERSION: "1.2.3",
         OPEN_SPLUNK_SOURCE_REVISION: revision,
+        OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION: "0.2",
         PATH: `${toolDirectory}:${process.env.PATH}`,
         TMPDIR: temporaryLink,
       },
@@ -869,6 +929,7 @@ test("concurrent release publisher fails without disturbing the lock holder", as
     await readFile(path.join(fixture, "build", "release-verification.txt"), "utf8"),
     "application_version=1.2.3\n" +
       `source_revision=${revision}\n` +
+      "spl_compatibility_version=0.2\n" +
       "ui_build_id=fixture\n" +
       "ui_sha256=fixture\n",
   );
@@ -923,6 +984,7 @@ test("an older slow release cannot replace a newer committed release", async (t)
     await readFile(path.join(fixture, "build", "release-verification.txt"), "utf8"),
     "application_version=1.2.3\n" +
       `source_revision=${newerRevision}\n` +
+      "spl_compatibility_version=0.2\n" +
       "ui_build_id=fixture\n" +
       "ui_sha256=fixture\n",
   );

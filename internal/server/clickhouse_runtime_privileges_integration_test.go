@@ -435,7 +435,10 @@ func TestClickHouseServicePrincipalLifecycle(t *testing.T) {
 		indexName = "principal-index"
 		eventID   = "principal-event"
 	)
-	indexTime := time.Date(2026, time.July, 29, 12, 0, 0, 0, time.UTC)
+	// Keep the row inside its 24-hour physical TTL so this test proves the
+	// deletion principal removed a live row rather than observing an already
+	// expired fixture.
+	indexTime := time.Now().UTC().Truncate(time.Second)
 	batchID := "principal-batch"
 	sourceDigest := sha256.Sum256([]byte("principal-source-batch"))
 	stored := &ingest.StoredEvent{

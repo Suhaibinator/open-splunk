@@ -309,8 +309,13 @@ func TestCompileStreamStatsSnapshotsAggregateOrderBeforeReplacingItsAlias(t *tes
 	if !slices.Equal(compiled.OutputFields, []string{"count"}) {
 		t.Fatalf("streamstats replacement fields = %#v, want [count]", compiled.OutputFields)
 	}
+	for _, output := range compiled.OutputFields {
+		if strings.HasPrefix(strings.ToLower(output), "__os_") {
+			t.Fatalf("global aggregate ordinal leaked as public output %q", output)
+		}
+	}
 	for _, required := range []*regexp.Regexp{
-		regexp.MustCompile(`"count" AS "__os_streamstats_order_[0-9]+_0"`),
+		regexp.MustCompile(`"__os_aggregate_ordinal" AS "__os_streamstats_order_[0-9]+_0"`),
 		regexp.MustCompile(`count\(\) OVER \(ORDER BY "__os_streamstats_order_[0-9]+_0" ASC NULLS LAST `),
 		regexp.MustCompile(`ORDER BY "__os_streamstats_order_[0-9]+_0" ASC NULLS LAST`),
 	} {

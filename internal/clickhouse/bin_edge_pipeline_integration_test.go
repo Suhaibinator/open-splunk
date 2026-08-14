@@ -806,7 +806,9 @@ func binEdgeStartClickHouse(t *testing.T, ctx context.Context) (clickhousedriver
 		t.Fatalf("create bin-edge visibility sequencer: %v", err)
 	}
 	t.Cleanup(func() { _ = sequencer.Close() })
-	store, err := Open(config, fixedRetention(30*24*time.Hour), sequencer)
+	// Preserve the fixed logical fixture clock without letting ClickHouse's
+	// physical TTL make this integration matrix expire as wall time advances.
+	store, err := Open(config, fixedRetention(100*365*24*time.Hour), sequencer)
 	if err != nil {
 		t.Fatalf("open bin-edge store: %v", err)
 	}

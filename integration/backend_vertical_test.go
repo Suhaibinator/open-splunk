@@ -29,6 +29,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/collector/wal"
 	"github.com/Suhaibinator/open-splunk/internal/loggen"
 	"github.com/Suhaibinator/open-splunk/internal/protocolid"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport"
 	"github.com/Suhaibinator/open-splunk/internal/testsupport/gradethiscorpus"
 	"github.com/gorilla/websocket"
@@ -56,7 +57,7 @@ const (
 	verticalSearchSPL              = " \nindex=vertical | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id | table _time message status duration_ms adjusted_duration api_key customer_credential customer_pin _raw\t"
 	browserVerticalSearchSPL       = "index=vertical | eval adjusted_duration=duration_ms+1 | where status IN (status) | dedup event_id"
 	bulkSearchSPL                  = "index=vertical-bulk | table event_id"
-	splCompatibilityVersionForTest = "0.2"
+	splCompatibilityVersionForTest = spl.CompatibilityVersion
 	clickHouseEventInsertSQL       = "INSERT INTO open_splunk.events (event_id, tenant_id, index_name, event_time, index_time, " +
 		"collected_at, event_time_source, host, source, sourcetype, service, severity, level, body, raw, " +
 		"raw_encoding, trace_id, span_id, fields, field_names, collector_id, batch_id, batch_sequence, " +

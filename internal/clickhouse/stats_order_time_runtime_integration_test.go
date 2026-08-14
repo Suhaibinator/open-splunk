@@ -65,27 +65,27 @@ func TestStatsOrderAndTimeAgainstClickHouse(t *testing.T) {
 		event.Event.Fields = typedObjectValue(fields...)
 		return event
 	}
-	stringPointer := func(value string) *string { return &value }
+	fixtureStringPointer := func(value string) *string { return &value }
 	events := []*ingest.StoredEvent{
 		// Pipeline order and chronology intentionally disagree. The chronological
 		// endpoint values are 10 at t=0 and 50 at t=20, hence rate=2.
 		newEvent("order-a", "order", eventBase.Add(20*time.Second), 1,
-			stringPointer("PIPELINE-FIRST"), typedSint(50)),
+			fixtureStringPointer("PIPELINE-FIRST"), typedSint(50)),
 		newEvent("order-b", "order", eventBase, 2,
-			stringPointer("CHRONOLOGICAL-FIRST"), typedSint(10)),
+			fixtureStringPointer("CHRONOLOGICAL-FIRST"), typedSint(10)),
 		newEvent("order-c", "order", eventBase.Add(10*time.Second), 3,
-			stringPointer("PIPELINE-LAST"), typedSint(30)),
+			fixtureStringPointer("PIPELINE-LAST"), typedSint(30)),
 		newEvent("singleton", "singleton", eventBase.Add(5*time.Second), 1,
-			stringPointer("ONLY"), typedSint(7)),
+			fixtureStringPointer("ONLY"), typedSint(7)),
 		newEvent("equal-a", "equal-time", eventBase.Add(5*time.Second), 1,
-			stringPointer("EQUAL-FIRST"), typedSint(3)),
+			fixtureStringPointer("EQUAL-FIRST"), typedSint(3)),
 		newEvent("equal-b", "equal-time", eventBase.Add(5*time.Second), 2,
-			stringPointer("EQUAL-LAST"), typedSint(9)),
+			fixtureStringPointer("EQUAL-LAST"), typedSint(9)),
 		newEvent("ineligible", "ineligible", eventBase, 1, nil, nil),
 		newEvent("reset-a", "counter-reset", eventBase, 1,
-			stringPointer("RESET-FIRST"), typedSint(100)),
+			fixtureStringPointer("RESET-FIRST"), typedSint(100)),
 		newEvent("reset-b", "counter-reset", eventBase.Add(10*time.Second), 2,
-			stringPointer("RESET-LAST"), typedSint(20)),
+			fixtureStringPointer("RESET-LAST"), typedSint(20)),
 	}
 	compile, queryContext := storeScalarFunctionIntegrationFixtures(
 		ctx,

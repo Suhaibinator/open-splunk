@@ -63,6 +63,50 @@ func TestServiceReturnsClippedContinuousTimelineFromImmutableSnapshot(t *testing
 	}
 }
 
+func TestServiceRebuildsIdentityPreservingV03TimelinePipeline(t *testing.T) {
+	t.Parallel()
+	snapshot := timelineTestSnapshot()
+	snapshot.ID = "timeline-v03-identity-preserving"
+	snapshot.SPL = `index=main` +
+		` | regex message!="^debug$"` +
+		` | sort 0 +_time` +
+		` | reverse` +
+		` | strcat host "/" source route` +
+		` | fillnull value="unknown" optional` +
+		` | addtotals fieldname=total bytes duration` +
+		` | delta bytes AS change p=2` +
+		` | makemv delim="," allowempty=true tags`
+	compiler := &fakeTimelineCompiler{}
+	service := newTimelineTestService(t, Config{
+		Searches: &fakeCompletedSearches{snapshot: snapshot},
+		Compiler: compiler,
+		Executor: &fakeTimelineExecutor{},
+	})
+
+	result, err := service.Get(
+		context.Background(),
+		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		Request{SearchJobID: snapshot.ID},
+	)
+	if err != nil {
+		t.Fatalf("Get(v0.3 event pipeline): %v", err)
+	}
+	if !result.Complete || compiler.query == nil {
+		t.Fatalf("timeline result/compiler = %#v/%#v", result, compiler.query)
+	}
+	operators := make([]string, len(compiler.query.Operators))
+	for index, operator := range compiler.query.Operators {
+		operators[index] = operator.LogicalName()
+	}
+	want := []string{
+		"Scan", "Filter", "RegexFilter", "Sort", "Reverse", "Strcat", "FillNull",
+		"RowTotal", "OrderedDelta", "MakeMultivalue",
+	}
+	if !reflect.DeepEqual(operators, want) {
+		t.Fatalf("rebuilt timeline operators = %v, want %v", operators, want)
+	}
+}
+
 func TestServiceValidatesRequestsAndTimelineEligibilityBeforeExecution(t *testing.T) {
 	snapshot := timelineTestSnapshot()
 	tests := []struct {
@@ -80,6 +124,9 @@ func TestServiceValidatesRequestsAndTimelineEligibilityBeforeExecution(t *testin
 		}, want: ErrTimelineUnsupported},
 		{name: "transforming search", request: Request{SearchJobID: snapshot.ID}, mutate: func(snapshot *searchjobs.ExecutionSnapshot) {
 			snapshot.SPL = `index=main | stats count`
+		}, want: ErrTimelineUnsupported},
+		{name: "expanding search", request: Request{SearchJobID: snapshot.ID}, mutate: func(snapshot *searchjobs.ExecutionSnapshot) {
+			snapshot.SPL = `index=main | mvexpand tags`
 		}, want: ErrTimelineUnsupported},
 	}
 	for _, test := range tests {

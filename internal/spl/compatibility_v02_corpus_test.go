@@ -347,6 +347,7 @@ func requireCompatibilityV02Coverage(t *testing.T, corpus compatibilityV02Corpus
 		"SPL-V02-GROUPING-001":              {"scalar group", "Boolean group", "grouped scalar is not predicate", "grouped Boolean is not scalar"},
 		"SPL-V02-LEXER-001":                 {"unspaced division", "signed exponent", "hyphenated base value preserved", "ambiguous legacy spelling is subtraction"},
 		"SPL-V02-QUOTED-FIELD-001":          {"operator field", "quoted destination", "invalid escape", "unterminated", "quoted stats aggregate"},
+		"SPL-V02-STATS-BY-MULTIVALUE-001":   {"raw multivalue grouping", "split-value deduplication", "nested container rejection", "late marker publication is atomic"},
 		"SPL-V02-ARITHMETIC-TYPE-001":       {"unary plus", "all binary operators", "string plus excluded", "numeric-looking fixed String excluded"},
 		"SPL-V02-ARITHMETIC-NULL-001":       {"missing", "explicit null", "numeric String", "String too large", "integer precision boundary", "malformed decimal tag"},
 		"SPL-V02-ARITHMETIC-EXCEPTION-001":  {"negative remainder", "negative divisor remainder", "infinity remainder finite", "division retains negative zero", "NaN equality false"},

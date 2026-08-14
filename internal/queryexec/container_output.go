@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/chcol"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -21,16 +22,41 @@ type resultContainerTransport struct {
 	metadataVersionColumn int
 }
 
+type resultOptionalMultivalueTransport struct {
+	valid         bool
+	presentColumn int
+}
+
+type resultStringOrBytesTransport struct {
+	valid               bool
+	semanticBytesColumn int
+	nullable            bool
+}
+
 func validateOrdinaryResultColumns(
 	query clickhouse.CompiledQuery,
 	columns []string,
 	columnTypes []driver.ColumnType,
 	sparseFieldIndex int,
-) ([]resultContainerTransport, error) {
+) ([]resultContainerTransport, []resultOptionalMultivalueTransport, error) {
 	outputs, ok := query.ValidatedResultContainerOutputs()
 	if !ok {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%w: compiled container output contract is invalid",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	optionalOutputs, ok := query.ValidatedResultOptionalMultivalueOutputs()
+	if !ok {
+		return nil, nil, fmt.Errorf(
+			"%w: compiled optional multivalue output contract is invalid",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	stringOrBytesOutputs, ok := query.ValidatedResultStringOrBytesOutputs()
+	if !ok {
+		return nil, nil, fmt.Errorf(
+			"%w: compiled String-or-Bytes output contract is invalid",
 			searchjobs.ErrInvalidResult,
 		)
 	}
@@ -39,6 +65,10 @@ func validateOrdinaryResultColumns(
 		expected = append(expected, clickhouse.SparseEventFieldNamesColumn)
 	}
 	transports := make([]resultContainerTransport, len(query.OutputFields))
+	optionalTransports := make(
+		[]resultOptionalMultivalueTransport,
+		len(query.OutputFields),
+	)
 	for _, output := range outputs {
 		base := len(expected)
 		expected = append(
@@ -54,9 +84,20 @@ func validateOrdinaryResultColumns(
 			metadataVersionColumn: base + 2,
 		}
 	}
+	for _, output := range optionalOutputs {
+		column := len(expected)
+		expected = append(expected, output.PresentColumn())
+		optionalTransports[int(output.OutputIndex)] = resultOptionalMultivalueTransport{
+			valid:         true,
+			presentColumn: column,
+		}
+	}
+	for _, output := range stringOrBytesOutputs {
+		expected = append(expected, output.SemanticBytesColumn())
+	}
 	if len(columns) != len(expected) || len(columnTypes) != len(columns) ||
 		!slices.Equal(columns, expected) {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%w: ClickHouse result columns do not match the compiled output",
 			searchjobs.ErrInvalidResult,
 		)
@@ -66,7 +107,7 @@ func validateOrdinaryResultColumns(
 		if hiddenType.Nullable() || unwrapType(hiddenType.DatabaseTypeName()) != "Array(String)" ||
 			hiddenType.ScanType() != reflect.TypeOf([]string{}) ||
 			!strings.HasPrefix(unwrapType(columnTypes[sparseFieldIndex].DatabaseTypeName()), "JSON") {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"%w: sparse event fields transport has invalid column types",
 				searchjobs.ErrInvalidResult,
 			)
@@ -91,13 +132,180 @@ func validateOrdinaryResultColumns(
 			"UInt8",
 			reflect.TypeOf(uint8(0)),
 		) {
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"%w: container output transport has invalid column types",
 				searchjobs.ErrInvalidResult,
 			)
 		}
 	}
+	for outputIndex, transport := range optionalTransports {
+		if !transport.valid {
+			continue
+		}
+		if strings.TrimSpace(columnTypes[outputIndex].DatabaseTypeName()) != "Array(String)" ||
+			columnTypes[outputIndex].Nullable() ||
+			columnTypes[outputIndex].ScanType() != reflect.TypeOf([]string{}) ||
+			!exactContainerHiddenColumnType(
+				columnTypes[transport.presentColumn],
+				"UInt8",
+				reflect.TypeOf(uint8(0)),
+			) {
+			return nil, nil, fmt.Errorf(
+				"%w: optional multivalue output transport has invalid column types",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+	}
+	return transports, optionalTransports, nil
+}
+
+func validateStringOrBytesResultColumns(
+	query clickhouse.CompiledQuery,
+	columns []string,
+	columnTypes []driver.ColumnType,
+) ([]resultStringOrBytesTransport, error) {
+	outputs, ok := query.ValidatedResultStringOrBytesOutputs()
+	if !ok {
+		return nil, fmt.Errorf(
+			"%w: compiled String-or-Bytes output contract is invalid",
+			searchjobs.ErrInvalidResult,
+		)
+	}
+	transports := make([]resultStringOrBytesTransport, len(query.OutputFields))
+	columnIndexes := make(map[string]int, len(columns))
+	for index, name := range columns {
+		columnIndexes[name] = index
+	}
+	for _, output := range outputs {
+		index := int(output.OutputIndex)
+		semanticColumn, present := columnIndexes[output.SemanticBytesColumn()]
+		if index >= len(columnTypes) || !present || semanticColumn >= len(columnTypes) {
+			return nil, fmt.Errorf(
+				"%w: String-or-Bytes output transport is missing its column",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		columnType := columnTypes[index]
+		expectedDatabaseType := "String"
+		expectedScanType := reflect.TypeOf("")
+		if output.Nullable {
+			expectedDatabaseType = "Nullable(String)"
+			expectedScanType = reflect.TypeOf((*string)(nil))
+		}
+		if strings.TrimSpace(columnType.DatabaseTypeName()) != expectedDatabaseType ||
+			columnType.Nullable() != output.Nullable ||
+			columnType.ScanType() != expectedScanType ||
+			!exactContainerHiddenColumnType(
+				columnTypes[semanticColumn],
+				"UInt8",
+				reflect.TypeOf(uint8(0)),
+			) {
+			return nil, fmt.Errorf(
+				"%w: String-or-Bytes output transport has an invalid column type",
+				searchjobs.ErrInvalidResult,
+			)
+		}
+		transports[index] = resultStringOrBytesTransport{
+			valid:               true,
+			semanticBytesColumn: semanticColumn,
+			nullable:            output.Nullable,
+		}
+	}
 	return transports, nil
+}
+
+func convertStringOrBytesOutput(
+	destinations []any,
+	valueColumn int,
+	transport resultStringOrBytesTransport,
+) (searchjobs.Value, error) {
+	semanticBytes, ok := scannedValue(
+		destinations[transport.semanticBytesColumn],
+	).(uint8)
+	if !ok || semanticBytes > 1 {
+		return searchjobs.Value{}, errors.New(
+			"String-or-Bytes semantic flag has an invalid native value",
+		)
+	}
+	return convertSemanticStringOrBytes(
+		scannedValue(destinations[valueColumn]),
+		semanticBytes,
+		transport.nullable,
+	)
+}
+
+func convertSemanticStringOrBytes(
+	raw any,
+	semanticBytes uint8,
+	nullable bool,
+) (searchjobs.Value, error) {
+	if semanticBytes > 1 {
+		return searchjobs.Value{}, errors.New(
+			"String-or-Bytes semantic flag is outside the supported domain",
+		)
+	}
+	value, err := convertValue(raw)
+	if err != nil {
+		return searchjobs.Value{}, err
+	}
+	switch value.Kind() {
+	case searchjobs.ValueKindNull:
+		if !nullable || semanticBytes != 0 {
+			return searchjobs.Value{}, errors.New(
+				"String-or-Bytes null has inconsistent semantic provenance",
+			)
+		}
+		return value, nil
+	case searchjobs.ValueKindString:
+		if semanticBytes == 0 {
+			return value, nil
+		}
+		text, _ := value.String()
+		return searchjobs.BytesValue([]byte(text)), nil
+	case searchjobs.ValueKindBytes:
+		// Invalid UTF-8 is intrinsically Bytes even for fixed multivalue
+		// producers whose sidecar records only semantic binary declarations.
+		return value, nil
+	default:
+		return searchjobs.Value{}, errors.New(
+			"String-or-Bytes output has an invalid cell kind",
+		)
+	}
+}
+
+func convertOptionalMultivalueOutput(
+	destinations []any,
+	valueColumn int,
+	transport resultOptionalMultivalueTransport,
+) (searchjobs.Value, error) {
+	present, ok := scannedValue(destinations[transport.presentColumn]).(uint8)
+	if !ok || present > 1 {
+		return searchjobs.Value{}, errors.New(
+			"optional multivalue presence has an invalid native value",
+		)
+	}
+	raw, ok := scannedValue(destinations[valueColumn]).([]string)
+	if !ok {
+		return searchjobs.Value{}, errors.New(
+			"optional multivalue has an invalid native value",
+		)
+	}
+	if present == 0 {
+		if len(raw) != 0 {
+			return searchjobs.Value{}, errors.New(
+				"absent optional multivalue retained a public payload",
+			)
+		}
+		return searchjobs.NullValue(), nil
+	}
+	for _, member := range raw {
+		if !utf8.ValidString(member) {
+			return searchjobs.Value{}, errors.New(
+				"optional multivalue contains an invalid UTF-8 String member",
+			)
+		}
+	}
+	return convertValue(raw)
 }
 
 func exactContainerPublicColumnType(databaseType string) bool {

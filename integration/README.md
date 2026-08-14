@@ -174,6 +174,8 @@ labels, then removes the original and restored volumes as well as every
 test-owned container, network, and image.
 
 ```sh
+OPEN_SPLUNK_APPLICATION_VERSION=0.1.0 \
+OPEN_SPLUNK_EXPECTED_SPL_COMPATIBILITY_VERSION=0.2 \
 OPEN_SPLUNK_OCI_INTEGRATION=1 \
 OPEN_SPLUNK_CLICKHOUSE_TEST_IMAGE=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 \
   go test ./integration -run '^TestReleaseOCIComposeContract$' \

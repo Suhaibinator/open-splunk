@@ -22,6 +22,7 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchsnapshot"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
+	"github.com/Suhaibinator/open-splunk/internal/spl"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -92,6 +93,53 @@ func TestReexecutionSourceUsesExactRetainedKnowledgeExecutionAndPinsItsLifetime(
 	}
 	if !searches.lastPinClosed() {
 		t.Fatal("underlying pin remained open")
+	}
+}
+
+func TestReexecutionSourceUsesRetainedKnowledgeWithoutRebuildingOlderAuthoredSPL(t *testing.T) {
+	t.Parallel()
+	const retainedCompilerVersion = "0.1"
+	if retainedCompilerVersion == spl.CompatibilityVersion {
+		t.Fatal("fixture compiler version must differ from the running binary")
+	}
+	searches, _, access, execution, retained := newKnowledgeReexecutionFixture(
+		t,
+		retainedCompilerVersion,
+	)
+	if execution.CompilerVersion != retainedCompilerVersion {
+		t.Fatalf(
+			"execution compiler version = %q, want %q",
+			execution.CompilerVersion,
+			retainedCompilerVersion,
+		)
+	}
+	source := newReexecutionTestSource(
+		t,
+		searches,
+		reexecutionTestExecutor(func(
+			context.Context,
+			clickhouse.CompiledQuery,
+			searchjobs.ResultSink,
+		) error {
+			return nil
+		}),
+		func(config *ReexecutionSourceConfig) {
+			// Any attempted current-semantics rebuild must fail independently of
+			// the explicit snapshot-version guard.
+			config.Compiler = clickhouse.Compiler{Database: "not-valid"}
+		},
+	)
+
+	lease, err := source.AcquireResultsFor(context.Background(), access, execution.ID)
+	if err != nil {
+		t.Fatalf("AcquireResultsFor(retained older knowledge): %v", err)
+	}
+	concrete, ok := lease.(*reexecutionLease)
+	if !ok || !concrete.compiled.EqualForExecution(retained) {
+		t.Fatalf("retained authority = %T/equal %t", lease, ok && concrete.compiled.EqualForExecution(retained))
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
 	}
 }
 
@@ -643,9 +691,16 @@ func (lease *knowledgeSummaryTestLease) knowledgeSnapshotSummary() (*opensplunkv
 
 func newKnowledgeReexecutionFixture(
 	t *testing.T,
+	compilerVersions ...string,
 ) (*reexecutionTestSearches, searchjobs.Schema, searchjobs.AccessScope, searchjobs.ExecutionSnapshot, clickhouse.CompiledQuery) {
 	t.Helper()
 	searches, schema, access := newReexecutionTestSearches()
+	if len(compilerVersions) > 1 {
+		t.Fatalf("newKnowledgeReexecutionFixture received %d compiler versions", len(compilerVersions))
+	}
+	if len(compilerVersions) == 1 {
+		searches.compilerVersion = compilerVersions[0]
+	}
 	const appID = "app_aaaaaaaaaaaaaaaaaaaaaA"
 	cursorKey := []byte("export-knowledge-fixture-cursor-key-at-least-32-bytes")
 	database, err := control.Open(context.Background(), filepath.Join(t.TempDir(), "control.db"))

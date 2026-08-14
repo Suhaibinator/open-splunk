@@ -209,11 +209,12 @@ func testToStringAgainstClickHouse(
 	)
 	var copied string
 	var normalized *string
+	var copiedSemanticBytes uint8
 	if err := connection.QueryRow(
 		queryContext,
 		binary.SQL,
 		binary.Args...,
-	).Scan(&copied, &normalized); err != nil {
+	).Scan(&copied, &normalized, &copiedSemanticBytes); err != nil {
 		t.Fatalf(
 			"execute binary tostring provenance: %v\nSQL: %s\nargs: %#v",
 			err,
@@ -221,8 +222,13 @@ func testToStringAgainstClickHouse(
 			binary.Args,
 		)
 	}
-	if copied != "VALID ASCII MARKED BINARY" || normalized != nil {
-		t.Fatalf("binary tostring = copied:%q normalized:%#v", copied, normalized)
+	if copied != "VALID ASCII MARKED BINARY" || normalized != nil || copiedSemanticBytes != 1 {
+		t.Fatalf(
+			"binary tostring = copied:%q normalized:%#v semantic-bytes:%d",
+			copied,
+			normalized,
+			copiedSemanticBytes,
+		)
 	}
 
 	actions := explainCompiledQuery(
