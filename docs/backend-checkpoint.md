@@ -12755,7 +12755,7 @@ This slice implements committed release-revision and embedded-asset
 consistency and proves repeatability on the checkpoint host. The independent
 Linux/macOS CI comparison was subsequently confirmed by run `30255910487`:
 
-1. Go `1.26.5`, Node `24.18.0`, npm `11.16.0`, Buf, and both Go protobuf
+1. Go `1.26.6`, Node `24.18.0`, npm `11.16.0`, Buf, and both Go protobuf
    generators are pinned. Protobuf generation is complete-tree,
    transactional, serialized, and preserves only explicitly handwritten
    files; concurrent generators cannot publish mixed Go/TypeScript contracts.
@@ -14783,7 +14783,7 @@ replay, survived collector and server crash restarts, and passed all six
 current GradeThis searches.
 
 The two `make release` runs used exactly Node `24.18.0`, npm `11.16.0`, and Go
-`1.26.5`. The cold run took 37.85 seconds with 861,011,968-byte peak RSS; the
+`1.26.6`. The cold run took 37.85 seconds with 861,011,968-byte peak RSS; the
 prior-artifact replacement run took 36.32 seconds with 856,113,152-byte peak
 RSS. Their six published files were byte-for-byte identical with identical
 modes and sizes. All three binaries reported version `0.1.0` and full revision

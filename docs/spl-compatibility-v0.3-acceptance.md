@@ -43,7 +43,7 @@ Normative artifacts:
 | Required public identity | `0.3` in qualification-candidate `R`; stable advertisement and distribution only after every acceptance gate passes |
 | Required application identity | `0.2.0`; exact release tag `v0.2.0` at `E` |
 | Required knowledge identity | `0.1` |
-| Go | `go1.26.5 darwin/arm64` |
+| Go | `go1.26.6 darwin/arm64` |
 | Node.js required by lockfile | `v24.18.0` |
 | npm | `11.16.0` |
 | Docker client/server | `29.7.2` / `29.7.2` |

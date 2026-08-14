@@ -258,7 +258,7 @@
       ],
       "properties": {
         "go": {
-          "const": "go1.26.5"
+          "const": "go1.26.6"
         },
         "node": {
           "const": "v24.18.0"

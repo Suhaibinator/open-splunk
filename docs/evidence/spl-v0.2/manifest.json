@@ -62,7 +62,7 @@
     "logical_cpus": 16
   },
   "toolchain": {
-    "go": "go1.26.5",
+    "go": "go1.26.6",
     "node": "v24.18.0",
     "npm": "11.16.0",
     "playwright": "1.62.1",
@@ -206,7 +206,7 @@
         "bytes": 5801
       },
       "facts": {
-        "go": "go1.26.5",
+        "go": "go1.26.6",
         "tracked_status": "clean"
       }
     },
@@ -381,7 +381,7 @@
       },
       "facts": {
         "gomaxprocs": 2,
-        "fixed_execution_budget_rationale": "Avoid the Go 1.26.5 timed-fuzz context race while retaining deterministic minimum work.",
+        "fixed_execution_budget_rationale": "Avoid the Go 1.26.6 timed-fuzz context race while retaining deterministic minimum work.",
         "upstream_issue": "https://github.com/golang/go/issues/75804",
         "campaigns": [
           {

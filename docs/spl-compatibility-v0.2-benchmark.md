@@ -12,7 +12,7 @@ membership over low- and high-cardinality fields. The benchmark lives in
 ## Method
 
 - Machine: Apple M4 Max, 16 logical CPUs, Darwin arm64.
-- Go: `go1.26.5`.
+- Go: `go1.26.6`.
 - ClickHouse server: `26.3.17.4`.
 - Exact image:
   `clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49`.

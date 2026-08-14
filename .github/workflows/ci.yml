@@ -263,7 +263,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Go 1.26.5 can retain a wall-clock fuzz deadline if child-context
+          # Go 1.26.6 can retain a wall-clock fuzz deadline if child-context
           # cancellation lags during coordinator shutdown (golang/go#75804).
           # Pair every exact target with a slow-runner-calibrated execution
           # limit so shutdown uses the coordinator's clean limit path.

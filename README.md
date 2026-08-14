@@ -38,7 +38,7 @@ The root TypeScript files (`package.json`, `next.config.ts`, and `tsconfig.json`
 ## Initial commands
 
 ```sh
-go version   # go1.26.5; also pinned in go.mod
+go version   # go1.26.6; also pinned in go.mod
 node --version # v24.18.0; also pinned in .node-version
 npm --version  # 11.16.0; also pinned in package.json
 make proto-tools

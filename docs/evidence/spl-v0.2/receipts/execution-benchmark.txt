@@ -7,7 +7,7 @@ goarch: arm64
 pkg: github.com/Suhaibinator/open-splunk/internal/queryexec
 cpu: Apple M4 Max
 BenchmarkExpressionV02Execution
-    expression_v02_execution_benchmark_test.go:277: image=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 clickhouse=26.3.17.4 rows=65536 batches=66 parts=1 warmups=1 max_threads=1 go=go1.26.5 os=darwin arch=arm64 cpus=16
+    expression_v02_execution_benchmark_test.go:277: image=clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49 clickhouse=26.3.17.4 rows=65536 batches=66 parts=1 warmups=1 max_threads=1 go=go1.26.6 os=darwin arch=arm64 cpus=16
     expression_v02_execution_benchmark_test.go:295: workload=fixed_arithmetic generated_sql_bytes=1923
 BenchmarkExpressionV02Execution/fixed_arithmetic/production_executor
 BenchmarkExpressionV02Execution/fixed_arithmetic/production_executor-16         	       7	   7723446 ns/op	        36.76 cv_pct	         6.498 median_ms/op	     65536 rows/op	  10085500 rows/s	   59233 B/op	     444 allocs/op

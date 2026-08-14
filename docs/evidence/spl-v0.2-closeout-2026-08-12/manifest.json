@@ -51,7 +51,7 @@
     "final_revision_binding": "pending_new_reachable_commit"
   },
   "toolchain": {
-    "go": "go1.26.5",
+    "go": "go1.26.6",
     "node_for_frontend_gates": "v24.18.0",
     "npm_for_frontend_gates": "11.16.0",
     "clickhouse_image": "clickhouse/clickhouse-server:26.3.17.4@sha256:85c434814ac8905e5648027ce926f74ab067edd6aadbccb6c0c165cd3571ea49"
@@ -204,7 +204,7 @@
     "complete the full focused race gate including cmd/open-splunk-server on the final target",
     "complete the target-bound queryexec/manager ClickHouse vertical and every remaining command-sheet gate not represented above",
     "generate a fresh deterministic read-only audit report and reviewed disposition ledger on the final target",
-    "build and verify release artifacts with Go 1.26.5, Node 24.18.0, npm 11.16.0, and source revision equal to the final target",
+    "build and verify release artifacts with Go 1.26.6, Node 24.18.0, npm 11.16.0, and source revision equal to the final target",
     "obtain terminal-success CI checkout/tree and release-artifact provenance for the final target",
     "prove clean tree before and after mutating gates and publish a final checksum index"
   ],

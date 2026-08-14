@@ -1,6 +1,6 @@
 revision=dffde13c84d9a2ef0567e89dd527ec4776f5ca42
 started_utc=2026-08-11T22:05:39Z
-go version go1.26.5 darwin/arm64
+go version go1.26.6 darwin/arm64
 ok  	github.com/Suhaibinator/open-splunk	1.107s
 ok  	github.com/Suhaibinator/open-splunk/cmd/open-splunk-collector	0.568s
 ok  	github.com/Suhaibinator/open-splunk/cmd/open-splunk-loggen	0.679s

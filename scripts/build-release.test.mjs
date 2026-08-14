@@ -176,7 +176,7 @@ async function installReleaseToolShims(fixture) {
       "set -euo pipefail\n" +
       "test \"${1:-}\" = env\n" +
       "test \"${2:-}\" = GOVERSION\n" +
-      "printf 'go1.26.5\\n'\n",
+      "printf 'go1.26.6\\n'\n",
   );
   await writeFile(
     path.join(binaryDirectory, "npm"),

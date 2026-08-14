@@ -103,7 +103,7 @@ Normative and operator documents:
 | Required activation tree state | clean committed materialization; empty `git status --porcelain` before and after every mutating generator/release gate |
 | Qualification UTC interval | post-`R` evidence, absent from carrier/`R` and recorded only by `E` |
 | Qualification runner/CPU/OS | post-`R` evidence, absent from carrier/`R` and recorded only by `E`; historical receipts used Apple M4 Max, 16 logical CPUs, Darwin 25.6.0 arm64 |
-| Required Go | `go1.26.5` |
+| Required Go | `go1.26.6` |
 | Required Node.js | `v24.18.0` |
 | Required npm | `11.16.0` |
 | Required Playwright | `1.62.1` |
@@ -134,7 +134,7 @@ so that hash is not the target activation revision.
 | TypeScript static check | `node_modules/.bin/tsc --noEmit` | passed during development |
 
 The benchmark host was Apple M4 Max, Darwin arm64, 16 logical CPUs, Go
-`1.26.5`, and the exact ClickHouse image above. The pre-activation baselines
+`1.26.6`, and the exact ClickHouse image above. The pre-activation baselines
 were:
 
 | Workload | Rows | Median | CV | Verified result |
@@ -205,7 +205,7 @@ provenance.
 ### Toolchain and source identity
 
 ```sh
-test "$(go version | awk '{print $3}')" = "go1.26.5"
+test "$(go version | awk '{print $3}')" = "go1.26.6"
 test "$(node --version)" = "v24.18.0"
 test "$(npm --version)" = "11.16.0"
 test -z "$(git status --porcelain)"
