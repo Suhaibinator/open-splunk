@@ -52,16 +52,22 @@ func (executor *Executor) ExecuteStatsWildcardInventory(
 			"execute ClickHouse stats wildcard inventory: query ID generator is required",
 		)
 	}
-	detached, ok := query.CloneForExecution()
+	detached, ok, cloneErr := query.CloneForExecutionContext(ctx)
+	if cloneErr != nil {
+		return plan.StatsWildcardExpansion{}, cloneErr
+	}
 	if !ok {
 		return plan.StatsWildcardExpansion{}, invalidStatsWildcardInventoryResult(
 			"compiled execution authority is invalid",
 		)
 	}
 	query = detached
-	request := query.Request()
+	request, requestOK, requestErr := query.RequestContext(ctx)
+	if requestErr != nil {
+		return plan.StatsWildcardExpansion{}, requestErr
+	}
 	maximumPairs := request.MaximumPairs()
-	if strings.TrimSpace(query.SQL) == "" || request.IsZero() || maximumPairs < 2 ||
+	if !requestOK || strings.TrimSpace(query.SQL) == "" || request.IsZero() || maximumPairs < 2 ||
 		maximumPairs > spl.MaximumStatsMeasures+1 {
 		return plan.StatsWildcardExpansion{}, invalidStatsWildcardInventoryResult(
 			"compiled query is invalid",
@@ -92,6 +98,15 @@ func (executor *Executor) ExecuteStatsWildcardInventory(
 	if err := ctx.Err(); err != nil {
 		return plan.StatsWildcardExpansion{}, err
 	}
+	externalTables, err := query.ExternalTablesForExecution(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return plan.StatsWildcardExpansion{}, ctxErr
+		}
+		return plan.StatsWildcardExpansion{}, invalidStatsWildcardInventoryResult(
+			"compiled lookup transport is invalid",
+		)
+	}
 	queryID, err := executor.newQueryID()
 	if err != nil {
 		return plan.StatsWildcardExpansion{}, fmt.Errorf(
@@ -104,11 +119,17 @@ func (executor *Executor) ExecuteStatsWildcardInventory(
 			"execute ClickHouse stats wildcard inventory: query ID is empty",
 		)
 	}
-	queryContext := clickhousedriver.Context(
-		ctx,
+	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(settings),
-	)
+	}
+	if len(externalTables) != 0 {
+		queryOptions = append(
+			queryOptions,
+			clickhousedriver.WithExternalTable(externalTables...),
+		)
+	}
+	queryContext := clickhousedriver.Context(ctx, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {
 		return plan.StatsWildcardExpansion{}, classifyQueryError(

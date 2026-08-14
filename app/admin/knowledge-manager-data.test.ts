@@ -1207,10 +1207,12 @@ test("feature-absent navigation is unchanged and invokes no knowledge chunk impo
   assert.equal(imports, 0);
 });
 
-test("feature-advertised navigation adds one Tier-1 destination and loads its module once", async () => {
+test("feature-advertised navigation adds field-knowledge and lookup destinations and loads its module once", async () => {
   const navigation = backendAdminNavigation(true);
   assert.equal(navigation.filter((item) => item.key === "knowledge").length, 1);
   assert.equal(navigation.find((item) => item.key === "knowledge")?.detail, "Tier-1 definitions");
+  assert.equal(navigation.filter((item) => item.key === "lookups").length, 1);
+  assert.equal(navigation.find((item) => item.key === "lookups")?.detail, "Exact CSV enrichment");
   let imports = 0;
   const loaded = await loadKnowledgeManagerModuleIfAdvertised(true, async () => {
     imports += 1;

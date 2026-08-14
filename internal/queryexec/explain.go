@@ -154,7 +154,10 @@ func (explainer *Explainer) Explain(
 		return ExplainResult{}, err
 	}
 	if explainer.requireExecutionSeal {
-		detached, ok := query.CloneForExecution()
+		detached, ok, cloneErr := query.CloneForExecutionContext(ctx)
+		if cloneErr != nil {
+			return ExplainResult{}, cloneErr
+		}
 		if !ok {
 			return ExplainResult{}, invalidExplainResult(
 				"compiled execution authority is not an unchanged Compiler result",
@@ -208,6 +211,15 @@ func (explainer *Explainer) Explain(
 	}
 	if err := validateExplainQuery(query); err != nil {
 		return ExplainResult{}, err
+	}
+	externalTables, err := query.ExternalTablesForExecution(explainContext)
+	if err != nil {
+		if contextErr := explainContext.Err(); contextErr != nil {
+			return ExplainResult{}, contextErr
+		}
+		return ExplainResult{}, invalidExplainResult(
+			"compiled lookup transport is invalid",
+		)
 	}
 
 	releaseContext, err := lane.activateContext(explainContext)
@@ -266,11 +278,17 @@ func (explainer *Explainer) Explain(
 	// deadlines. The pinned driver also derives a looser max_execution_time
 	// protocol setting from this deadline; the fixed SQL SETTINGS clause above
 	// has server-side precedence and pins the effective value back to our cap.
-	queryContext := clickhousedriver.Context(
-		explainContext,
+	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(explainer.settings),
-	)
+	}
+	if len(externalTables) != 0 {
+		queryOptions = append(
+			queryOptions,
+			clickhousedriver.WithExternalTable(externalTables...),
+		)
+	}
+	queryContext := clickhousedriver.Context(explainContext, queryOptions...)
 	rows, err := lane.connection.Query(
 		queryContext,
 		querySQL,

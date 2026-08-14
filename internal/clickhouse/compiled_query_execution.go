@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/binary"
@@ -18,9 +19,10 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/spl"
 )
 
-// v9 additionally binds the exact physical nullability and hidden semantic
-// Bytes authority for byte-capable fixed String outputs.
-const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v9"
+// v10 additionally binds exact lookup-version identity and every selected
+// external-table cell. Lookup blocks can therefore cross the driver boundary
+// only as part of the same immutable executable authority as their SQL.
+const compiledExecutionSealDomain = "open-splunk-compiled-query-execution-v10"
 
 var timeType = reflect.TypeFor[time.Time]()
 
@@ -170,7 +172,45 @@ func sealFinalCompiledQuery(
 	scan *plan.Scan,
 	preparation preparedKnowledgeCompilation,
 	prelude compiledKnowledgePrelude,
+	lookupPreparations ...preparedLookupCompilation,
 ) (CompiledQuery, error) {
+	return sealFinalCompiledQueryContext(
+		context.Background(),
+		compiled,
+		query,
+		scan,
+		preparation,
+		prelude,
+		lookupPreparations...,
+	)
+}
+
+func sealFinalCompiledQueryContext(
+	ctx context.Context,
+	compiled CompiledQuery,
+	query *plan.Query,
+	scan *plan.Scan,
+	preparation preparedKnowledgeCompilation,
+	prelude compiledKnowledgePrelude,
+	lookupPreparations ...preparedLookupCompilation,
+) (CompiledQuery, error) {
+	if ctx == nil {
+		return CompiledQuery{}, errors.New(
+			"seal compiled ClickHouse execution: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledQuery{}, err
+	}
+	if len(lookupPreparations) > 1 {
+		return CompiledQuery{}, errors.New(
+			"seal compiled ClickHouse execution: multiple lookup preparations",
+		)
+	}
+	lookupPreparation := preparedLookupCompilation{}
+	if len(lookupPreparations) == 1 {
+		lookupPreparation = lookupPreparations[0]
+	}
 	if err := validateKnowledgePreludePreparation(preparation); err != nil {
 		return CompiledQuery{}, err
 	}
@@ -184,6 +224,32 @@ func sealFinalCompiledQuery(
 		)
 	}
 	preparation = finalPreparation
+	finalLookupPreparation, err := prepareLookupCompilationForSealContext(
+		ctx,
+		query,
+		scan,
+		lookupPreparation.resolutions,
+	)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	if !preparedLookupCompilationEqual(
+		lookupPreparation,
+		finalLookupPreparation,
+	) {
+		return CompiledQuery{}, errors.New(
+			"seal compiled ClickHouse execution: lookup authority changed during compilation",
+		)
+	}
+	if lookupPreparation.automatic != nil {
+		if err := validateAutomaticLookupPrelude(
+			prelude,
+			preparation,
+			lookupPreparation.automatic,
+		); err != nil {
+			return CompiledQuery{}, err
+		}
+	}
 	evidence, err := compileKnowledgeCompilationEvidence(
 		preparation,
 		prelude,
@@ -199,7 +265,7 @@ func sealFinalCompiledQuery(
 	if evidence != nil {
 		sealed.knowledgeEvidence = evidence
 	}
-	return sealCompiledQueryExecution(sealed)
+	return sealCompiledQueryExecutionContext(ctx, sealed)
 }
 
 // compileKnowledgeCompilationEvidence derives the exact evidence that will be
@@ -217,7 +283,11 @@ func compileKnowledgeCompilationEvidence(
 		return nil, err
 	}
 	nonempty := preparation.present && preparation.program.ObjectCount() != 0
-	if nonempty {
+	if prelude.automaticLookup != nil {
+		if err := validateDetachedAutomaticLookupPrelude(prelude, preparation); err != nil {
+			return nil, err
+		}
+	} else if nonempty {
 		if err := validateCompiledKnowledgePrelude(prelude, preparation); err != nil {
 			return nil, err
 		}
@@ -312,7 +382,25 @@ func compileKnowledgePreludeEvidence(
 }
 
 func sealCompiledQueryExecution(compiled CompiledQuery) (CompiledQuery, error) {
-	seal, ok := compiledExecutionDigest(compiled)
+	return sealCompiledQueryExecutionContext(context.Background(), compiled)
+}
+
+func sealCompiledQueryExecutionContext(
+	ctx context.Context,
+	compiled CompiledQuery,
+) (CompiledQuery, error) {
+	if ctx == nil {
+		return CompiledQuery{}, errors.New(
+			"seal compiled ClickHouse execution: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledQuery{}, err
+	}
+	seal, ok, err := compiledExecutionDigestContext(ctx, compiled)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	if !ok {
 		return CompiledQuery{}, errors.New("seal compiled ClickHouse execution: bind argument type is unsupported")
 	}
@@ -365,14 +453,29 @@ func (evidence knowledgeCompilationEvidence) matchesProgram(program knowledgepro
 }
 
 func (compiled CompiledQuery) hasValidExecutionSeal() bool {
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
+}
+
+func (compiled CompiledQuery) hasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	if ctx == nil {
+		return false, errors.New(
+			"validate compiled ClickHouse execution: context is nil",
+		)
+	}
 	if compiled.executionSeal == nil {
-		return false
+		return false, nil
 	}
 	if _, _, ok := compiled.ReadScope(); !ok {
-		return false
+		return false, nil
 	}
-	expected, ok := compiledExecutionDigest(compiled)
-	return ok && subtle.ConstantTimeCompare(expected[:], compiled.executionSeal[:]) == 1
+	expected, ok, err := compiledExecutionDigestContext(ctx, compiled)
+	if err != nil {
+		return false, err
+	}
+	return ok && subtle.ConstantTimeCompare(expected[:], compiled.executionSeal[:]) == 1, nil
 }
 
 // HasValidExecutionSeal reports whether the complete executable contract is
@@ -383,15 +486,34 @@ func (compiled CompiledQuery) HasValidExecutionSeal() bool {
 	return compiled.hasValidExecutionSeal()
 }
 
+// HasValidExecutionSealContext is the cancellable form of
+// HasValidExecutionSeal. It checks lookup transport rows in bounded batches.
+func (compiled CompiledQuery) HasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return compiled.hasValidExecutionSealContext(ctx)
+}
+
 // StatsPartitionsMaxThreadsHint opens the compiler-owned whole-query
 // max_threads cap only while the complete execution contract remains sealed.
 // It is an Open Splunk approximation of stats partitions because ClickHouse
 // cannot apply a different max_threads value to each reduction stage.
 func (compiled CompiledQuery) StatsPartitionsMaxThreadsHint() (uint8, bool) {
-	if compiled.statsPartitionsMaxThreadsHint == 0 || !compiled.hasValidExecutionSeal() {
-		return 0, false
+	hint, ok, _ := compiled.StatsPartitionsMaxThreadsHintContext(context.Background())
+	return hint, ok
+}
+
+func (compiled CompiledQuery) StatsPartitionsMaxThreadsHintContext(
+	ctx context.Context,
+) (uint8, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return 0, false, err
 	}
-	return compiled.statsPartitionsMaxThreadsHint, true
+	if compiled.statsPartitionsMaxThreadsHint == 0 || !valid {
+		return 0, false, nil
+	}
+	return compiled.statsPartitionsMaxThreadsHint, true, nil
 }
 
 // ExecutionAuthorityDigest returns an opaque commitment to the complete
@@ -399,10 +521,23 @@ func (compiled CompiledQuery) StatsPartitionsMaxThreadsHint() (uint8, bool) {
 // can be embedded in a wider authority commitment without exposing any API
 // that can construct or repair a CompiledQuery seal.
 func (compiled CompiledQuery) ExecutionAuthorityDigest() ([sha256.Size]byte, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return [sha256.Size]byte{}, false
+	digest, ok, _ := compiled.ExecutionAuthorityDigestContext(context.Background())
+	return digest, ok
+}
+
+// ExecutionAuthorityDigestContext opens the execution commitment while
+// allowing lookup transport validation and hashing to be interrupted.
+func (compiled CompiledQuery) ExecutionAuthorityDigestContext(
+	ctx context.Context,
+) ([sha256.Size]byte, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return [sha256.Size]byte{}, false, err
 	}
-	return [sha256.Size]byte(*compiled.executionSeal), true
+	if !valid {
+		return [sha256.Size]byte{}, false, nil
+	}
+	return [sha256.Size]byte(*compiled.executionSeal), true, nil
 }
 
 // EqualForExecution reports exact equality across the complete compiler-sealed
@@ -410,19 +545,67 @@ func (compiled CompiledQuery) ExecutionAuthorityDigest() ([sha256.Size]byte, boo
 // private read scope, relational evidence, and knowledge charges. Invalid or
 // tampered values are never equal, including two zero values.
 func (compiled CompiledQuery) EqualForExecution(other CompiledQuery) bool {
-	if !compiled.hasValidExecutionSeal() || !other.hasValidExecutionSeal() {
-		return false
+	equal, _ := compiled.EqualForExecutionContext(context.Background(), other)
+	return equal
+}
+
+// EqualForExecutionContext is the cancellable form of EqualForExecution.
+func (compiled CompiledQuery) EqualForExecutionContext(
+	ctx context.Context,
+	other CompiledQuery,
+) (bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return false, err
 	}
-	return subtle.ConstantTimeCompare(compiled.executionSeal[:], other.executionSeal[:]) == 1
+	if !valid {
+		return false, nil
+	}
+	otherValid, err := other.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !otherValid {
+		return false, nil
+	}
+	return subtle.ConstantTimeCompare(
+		compiled.executionSeal[:],
+		other.executionSeal[:],
+	) == 1, nil
 }
 
 func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, bool) {
+	digest, ok, _ := compiledExecutionDigestContext(context.Background(), compiled)
+	return digest, ok
+}
+
+func compiledExecutionDigestContext(
+	ctx context.Context,
+	compiled CompiledQuery,
+) (compiledExecutionSeal, bool, error) {
+	if ctx == nil {
+		return compiledExecutionSeal{}, false, errors.New(
+			"hash compiled ClickHouse execution: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return compiledExecutionSeal{}, false, err
+	}
+	lookupTablesReferenced, err := compiledLookupExternalTablesReferencedContext(
+		ctx,
+		compiled.SQL,
+		compiled.lookupTables,
+	)
+	if err != nil {
+		return compiledExecutionSeal{}, false, err
+	}
 	if !validResultContainerOutputs(compiled) ||
 		!validResultOptionalMultivalueOutputs(compiled) ||
 		!validResultStringOrBytesOutputs(compiled) ||
 		!validResultFieldPresentations(compiled) ||
-		compiled.statsPartitionsMaxThreadsHint > maximumStatsPartitionsMaxThreadsHint {
-		return compiledExecutionSeal{}, false
+		compiled.statsPartitionsMaxThreadsHint > maximumStatsPartitionsMaxThreadsHint ||
+		!lookupTablesReferenced {
+		return compiledExecutionSeal{}, false, nil
 	}
 	digest := sha256.New()
 	writeTokenPart(digest, compiledExecutionSealDomain)
@@ -463,8 +646,19 @@ func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, boo
 	writeUint64(digest, uint64(len(compiled.Args)))
 	for _, argument := range compiled.Args {
 		if !writeCompiledArgument(digest, argument, 0) {
-			return compiledExecutionSeal{}, false
+			return compiledExecutionSeal{}, false, nil
 		}
+	}
+	written, err := writeCompiledLookupExternalTablesContext(
+		ctx,
+		digest,
+		compiled.lookupTables,
+	)
+	if err != nil {
+		return compiledExecutionSeal{}, false, err
+	}
+	if !written {
+		return compiledExecutionSeal{}, false, nil
 	}
 	if compiled.Timechart == nil {
 		writeBool(digest, false)
@@ -472,7 +666,7 @@ func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, boo
 		writeBool(digest, true)
 		writeInt64(digest, int64(compiled.Timechart.Mode))
 		if !writeTime(digest, compiled.Timechart.FirstBucket) {
-			return compiledExecutionSeal{}, false
+			return compiledExecutionSeal{}, false, nil
 		}
 		writeInt64(digest, int64(compiled.Timechart.Span))
 		writeUint64(digest, compiled.Timechart.BucketCount)
@@ -503,7 +697,7 @@ func compiledExecutionDigest(compiled CompiledQuery) (compiledExecutionSeal, boo
 
 	var result compiledExecutionSeal
 	digest.Sum(result[:0])
-	return result, true
+	return result, true, nil
 }
 
 func writeKnowledgeEvidence(writer hash.Hash, evidence knowledgeCompilationEvidence) {
@@ -642,8 +836,21 @@ func writeUint64(writer hash.Hash, value uint64) {
 // CloneForExecution returns a fully detached executable contract only when the
 // current value still has its compiler-produced execution and read-scope seal.
 func (compiled CompiledQuery) CloneForExecution() (CompiledQuery, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return CompiledQuery{}, false
+	cloned, ok, _ := compiled.CloneForExecutionContext(context.Background())
+	return cloned, ok
+}
+
+// CloneForExecutionContext validates and detaches the executable while
+// allowing maximum-envelope lookup validation and hashing to be canceled.
+func (compiled CompiledQuery) CloneForExecutionContext(
+	ctx context.Context,
+) (CompiledQuery, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledQuery{}, false, err
+	}
+	if !valid {
+		return CompiledQuery{}, false, nil
 	}
 	cloned := compiled
 	cloned.SQL = strings.Clone(compiled.SQL)
@@ -654,14 +861,18 @@ func (compiled CompiledQuery) CloneForExecution() (CompiledQuery, bool) {
 	cloned.ContainerOutputs = slices.Clone(compiled.ContainerOutputs)
 	cloned.OptionalMultivalueOutputs = slices.Clone(compiled.OptionalMultivalueOutputs)
 	cloned.StringOrBytesOutputs = slices.Clone(compiled.StringOrBytesOutputs)
+	cloned.lookupTables = cloneCompiledLookupExternalTables(compiled.lookupTables)
 	if compiled.Args == nil {
 		cloned.Args = nil
 	} else {
 		cloned.Args = make([]any, len(compiled.Args))
 		for index, argument := range compiled.Args {
+			if err := ctx.Err(); err != nil {
+				return CompiledQuery{}, false, err
+			}
 			value, ok := cloneCompiledArgument(argument)
 			if !ok {
-				return CompiledQuery{}, false
+				return CompiledQuery{}, false, nil
 			}
 			cloned.Args[index] = value
 		}
@@ -686,10 +897,14 @@ func (compiled CompiledQuery) CloneForExecution() (CompiledQuery, bool) {
 	}
 	seal := *compiled.executionSeal
 	cloned.executionSeal = &seal
-	if !cloned.hasValidExecutionSeal() {
-		return CompiledQuery{}, false
+	valid, err = cloned.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledQuery{}, false, err
 	}
-	return cloned, true
+	if !valid {
+		return CompiledQuery{}, false, nil
+	}
+	return cloned, true, nil
 }
 
 func cloneStrings(values []string) []string {
@@ -755,18 +970,31 @@ func cloneCompiledValue(value reflect.Value, depth int) (reflect.Value, bool) {
 // including slice capacity, boxed bind values, private seals, and string/slice
 // payloads. Tampered or unsupported values return false.
 func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return 0, false
+	total, ok, _ := compiled.RetainedBytesContext(context.Background())
+	return total, ok
+}
+
+// RetainedBytesContext is the cancellable form of RetainedBytes. Lookup cell
+// validation and charging yield to ctx at bounded row intervals.
+func (compiled CompiledQuery) RetainedBytesContext(
+	ctx context.Context,
+) (uint64, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	if !valid {
+		return 0, false, nil
 	}
 	total := uint64(unsafe.Sizeof(compiled))
 	var ok bool
 	total, ok = retainedAdd(total, uint64(len(compiled.SQL)))
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	total, ok = retainedStringSlice(total, compiled.OutputFields)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	total, ok = retainedAdd(
 		total,
@@ -774,7 +1002,7 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 			uint64(unsafe.Sizeof(ResultFieldPresentation{})),
 	)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	for _, presentation := range compiled.OutputPresentations {
 		total, ok = retainedAdd(
@@ -782,7 +1010,7 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 			uint64(len(presentation.FlatMultivalueDelimiter)),
 		)
 		if !ok {
-			return 0, false
+			return 0, false, nil
 		}
 	}
 	total, ok = retainedAdd(
@@ -790,7 +1018,7 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 		uint64(cap(compiled.ContainerOutputs))*uint64(unsafe.Sizeof(ResultContainerOutput{})),
 	)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	total, ok = retainedAdd(
 		total,
@@ -798,7 +1026,7 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 			uint64(unsafe.Sizeof(ResultOptionalMultivalueOutput{})),
 	)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	total, ok = retainedAdd(
 		total,
@@ -806,53 +1034,65 @@ func (compiled CompiledQuery) RetainedBytes() (uint64, bool) {
 			uint64(unsafe.Sizeof(ResultStringOrBytesOutput{})),
 	)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	total, ok = retainedAdd(total, uint64(cap(compiled.Args))*uint64(unsafe.Sizeof(any(nil))))
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	for _, argument := range compiled.Args {
 		charge, supported := retainedCompiledArgument(argument)
 		if !supported {
-			return 0, false
+			return 0, false, nil
 		}
 		total, ok = retainedAdd(total, charge)
 		if !ok {
-			return 0, false
+			return 0, false, nil
 		}
+	}
+	total, ok, err = retainedCompiledLookupExternalTablesContext(
+		ctx,
+		total,
+		compiled.lookupTables,
+	)
+	if err != nil {
+		return 0, false, err
+	}
+	if !ok {
+		return 0, false, nil
 	}
 	if compiled.Timechart != nil {
 		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.Timechart))+uint64(len(compiled.Timechart.ValueField)))
 		if !ok {
-			return 0, false
+			return 0, false, nil
 		}
 	}
 	if compiled.Chart != nil {
 		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.Chart))+uint64(len(compiled.Chart.RowField))+uint64(len(compiled.Chart.RowDatabaseType)))
 		if !ok {
-			return 0, false
+			return 0, false, nil
 		}
 	}
 	total, ok = retainedAdd(total, uint64(len(compiled.readScope.tenantID)))
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	total, ok = retainedStringSlice(total, compiled.readScope.indexNames)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	total, ok = retainedAdd(total, uint64(cap(compiled.readScope.argumentPositions))*uint64(unsafe.Sizeof(int(0))))
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	if compiled.knowledgeEvidence != nil {
 		total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.knowledgeEvidence)))
 		if !ok {
-			return 0, false
+			return 0, false, nil
 		}
 	}
-	return retainedAdd(total, uint64(unsafe.Sizeof(*compiled.executionSeal)))
+	total, ok = retainedAdd(total, uint64(unsafe.Sizeof(*compiled.executionSeal)))
+	return total, ok, nil
 }
 
 func retainedCompiledArgument(argument any) (uint64, bool) {

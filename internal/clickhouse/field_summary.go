@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -119,6 +120,22 @@ const (
 // event relation. The requested name is resolved with the same exact,
 // case-sensitive SPL field rules used by the planner.
 func (c Compiler) CompileFieldSummary(query *plan.Query, spec FieldSummarySpec) (CompiledFieldSummary, error) {
+	return c.CompileFieldSummaryContext(context.Background(), query, spec)
+}
+
+func (c Compiler) CompileFieldSummaryContext(
+	ctx context.Context,
+	query *plan.Query,
+	spec FieldSummarySpec,
+) (CompiledFieldSummary, error) {
+	if ctx == nil {
+		return CompiledFieldSummary{}, errors.New(
+			"compile ClickHouse field summary: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledFieldSummary{}, err
+	}
 	if err := validateFieldSummarySpec(spec); err != nil {
 		return CompiledFieldSummary{}, err
 	}
@@ -128,7 +145,7 @@ func (c Compiler) CompileFieldSummary(query *plan.Query, spec FieldSummarySpec) 
 	}
 
 	fieldKnown := false
-	compiled, err := c.compileEventAnalysis(query, func(
+	compiled, err := c.compileEventAnalysisContext(ctx, query, func(
 		relation compiledRelation,
 		state compileState,
 		args []any,
@@ -167,7 +184,11 @@ func (c Compiler) CompileFieldSummary(query *plan.Query, spec FieldSummarySpec) 
 		FieldKnown: fieldKnown,
 		readScope:  compiled.readScope,
 	}
-	result.executionAuthority, err = sealCompiledFieldSummaryExecution(compiled, result)
+	result.executionAuthority, err = sealCompiledFieldSummaryExecutionContext(
+		ctx,
+		compiled,
+		result,
+	)
 	if err != nil {
 		return CompiledFieldSummary{}, err
 	}

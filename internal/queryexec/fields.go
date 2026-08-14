@@ -70,7 +70,10 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 		return FieldCatalogResult{}, errors.New("execute ClickHouse field catalog: query ID generator is required")
 	}
 	if executor.readAdmission != nil {
-		detached, ok := query.CloneForExecution()
+		detached, ok, cloneErr := query.CloneForExecutionContext(ctx)
+		if cloneErr != nil {
+			return FieldCatalogResult{}, cloneErr
+		}
 		if !ok {
 			return FieldCatalogResult{}, fmt.Errorf(
 				"%w: compiled field catalog execution authority is invalid",
@@ -83,7 +86,11 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	if err := validateCompiledFieldCatalog(query); err != nil {
 		return FieldCatalogResult{}, err
 	}
-	knowledgeGeneratedFields, sealedResourceEvidence := query.KnowledgeGeneratedFields()
+	knowledgeGeneratedFields, sealedResourceEvidence, evidenceErr :=
+		query.KnowledgeGeneratedFieldsContext(ctx)
+	if evidenceErr != nil {
+		return FieldCatalogResult{}, evidenceErr
+	}
 	if !sealedResourceEvidence {
 		// Executor.New always installs read admission and therefore rejects an
 		// unsealed query above. The fallback exists only for same-package
@@ -119,6 +126,15 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	if err := ctx.Err(); err != nil {
 		return FieldCatalogResult{}, err
 	}
+	externalTables, err := query.ExternalTablesForExecution(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return FieldCatalogResult{}, ctxErr
+		}
+		return FieldCatalogResult{}, invalidFieldCatalogResult(
+			"compiled lookup transport is invalid",
+		)
+	}
 
 	queryID, err := executor.newQueryID()
 	if err != nil {
@@ -130,10 +146,17 @@ func (executor *Executor) ExecuteFieldCatalog(ctx context.Context, query clickho
 	if err := ctx.Err(); err != nil {
 		return FieldCatalogResult{}, err
 	}
-	queryContext := clickhousedriver.Context(ctx,
+	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(settings),
-	)
+	}
+	if len(externalTables) != 0 {
+		queryOptions = append(
+			queryOptions,
+			clickhousedriver.WithExternalTable(externalTables...),
+		)
+	}
+	queryContext := clickhousedriver.Context(ctx, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {
 		return FieldCatalogResult{}, classifyQueryError(ctx, fmt.Errorf("query ClickHouse field catalog: %w", err))

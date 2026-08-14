@@ -68,7 +68,10 @@ func (executor *Executor) ExecuteFieldSuggestions(
 		)
 	}
 	if executor.readAdmission != nil {
-		detached, ok := query.CloneForExecution()
+		detached, ok, cloneErr := query.CloneForExecutionContext(ctx)
+		if cloneErr != nil {
+			return FieldSuggestionResult{}, cloneErr
+		}
 		if !ok {
 			return FieldSuggestionResult{}, fmt.Errorf(
 				"%w: compiled field suggestions execution authority is invalid",
@@ -104,6 +107,16 @@ func (executor *Executor) ExecuteFieldSuggestions(
 	if err := ctx.Err(); err != nil {
 		return FieldSuggestionResult{}, err
 	}
+	externalTables, err := query.ExternalTablesForExecution(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return FieldSuggestionResult{}, ctxErr
+		}
+		return FieldSuggestionResult{}, fmt.Errorf(
+			"%w: compiled field suggestions lookup transport is invalid",
+			searchjobs.ErrInvalidResult,
+		)
+	}
 
 	queryID, err := executor.newQueryID()
 	if err != nil {
@@ -120,11 +133,17 @@ func (executor *Executor) ExecuteFieldSuggestions(
 	if err := ctx.Err(); err != nil {
 		return FieldSuggestionResult{}, err
 	}
-	queryContext := clickhousedriver.Context(
-		ctx,
+	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(settings),
-	)
+	}
+	if len(externalTables) != 0 {
+		queryOptions = append(
+			queryOptions,
+			clickhousedriver.WithExternalTable(externalTables...),
+		)
+	}
+	queryContext := clickhousedriver.Context(ctx, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {
 		return FieldSuggestionResult{}, classifyQueryError(

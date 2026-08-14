@@ -45,7 +45,10 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 		return nil, errors.New("execute ClickHouse timeline: query ID generator is required")
 	}
 	if executor.readAdmission != nil {
-		detached, ok := query.CloneForExecution()
+		detached, ok, cloneErr := query.CloneForExecutionContext(ctx)
+		if cloneErr != nil {
+			return nil, cloneErr
+		}
 		if !ok {
 			return nil, fmt.Errorf(
 				"%w: compiled timeline execution authority is invalid",
@@ -77,6 +80,16 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	externalTables, err := query.ExternalTablesForExecution(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, fmt.Errorf(
+			"%w: compiled timeline lookup transport is invalid",
+			searchjobs.ErrInvalidResult,
+		)
+	}
 
 	queryID, err := executor.newQueryID()
 	if err != nil {
@@ -88,10 +101,17 @@ func (executor *Executor) ExecuteTimeline(ctx context.Context, query clickhouse.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	queryContext := clickhousedriver.Context(ctx,
+	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(settings),
-	)
+	}
+	if len(externalTables) != 0 {
+		queryOptions = append(
+			queryOptions,
+			clickhousedriver.WithExternalTable(externalTables...),
+		)
+	}
+	queryContext := clickhousedriver.Context(ctx, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {
 		return nil, classifyQueryError(ctx, fmt.Errorf("query ClickHouse timeline: %w", err))

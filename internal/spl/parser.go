@@ -22,8 +22,12 @@ const (
 	// MaximumEvalPredicates is the shared authored eval/where predicate-leaf
 	// ceiling retained as sealed compiler evidence for knowledge admission.
 	MaximumEvalPredicates = 32
+	// MaximumSearchSourceBytes is the exact authored-search ceiling. Logical
+	// knowledge contracts that promise an authored spelling use this same
+	// authority rather than mirroring a numeric limit in another package.
+	MaximumSearchSourceBytes = 16 << 10
 
-	maxSPLSourceBytes     = 16 << 10
+	maxSPLSourceBytes     = MaximumSearchSourceBytes
 	maxSPLTokens          = 1024
 	maxPipelineCommands   = 64
 	maxEvalAssignments    = 64
@@ -216,6 +220,8 @@ func (p *parser) parseCommand(stage int) (Command, error) {
 		return p.parseMVExpandCommand(nameToken)
 	case "spath":
 		return p.parseSpathCommand(nameToken)
+	case "lookup":
+		return p.parseLookupCommand(nameToken)
 	case "rename":
 		return p.parseRenameCommand(nameToken)
 	case "fields":

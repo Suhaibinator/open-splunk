@@ -201,6 +201,8 @@ func TestSearchInspectionRouteUsesAuthenticatedPrincipalAndProjectsResult(
 		"Secret Extraction",
 		"alias-secret-id",
 		"Secret Alias",
+		serverLookupLogicalID,
+		serverLookupPhysicalID,
 	} {
 		if bytes.Contains(response.Body.Bytes(), []byte(secret)) {
 			t.Fatalf("inspection response leaked retained identity %q", secret)
@@ -1553,7 +1555,9 @@ func assertSearchInspectionProtoMatchesResult(
 	if projected == nil ||
 		!proto.Equal(projected.GetRef(), expected.KnowledgeSnapshot.GetRef()) ||
 		len(projected.GetObjects()) != len(expected.KnowledgeSnapshot.GetObjects()) ||
-		projected.GetObjectsTruncated() != expected.KnowledgeSnapshot.GetObjectsTruncated() {
+		projected.GetObjectsTruncated() != expected.KnowledgeSnapshot.GetObjectsTruncated() ||
+		len(projected.GetLookupAssets()) != 0 ||
+		projected.GetRef().GetLookupAssetCount() != uint32(len(expected.KnowledgeSnapshot.GetLookupAssets())) {
 		t.Fatalf("projected inspection knowledge summary = %+v", projected)
 	}
 	for index, want := range expected.KnowledgeSnapshot.GetObjects() {

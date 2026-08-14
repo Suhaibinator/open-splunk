@@ -115,6 +115,26 @@ func (origin Origin) DefinitionLocation() string          { return strings.Clone
 // is itself immutable and race-safe; every exposed slice remains detached.
 type Selector struct{ compiled *knowledge.Selector }
 
+// NewSelector wraps one already normalized immutable selector for another
+// trusted generated operation. The knowledge package owns normalization and
+// runtime-program assessment; this package keeps the resulting authority
+// opaque to logical and physical backends.
+func NewSelector(compiled *knowledge.Selector) (Selector, error) {
+	if compiled == nil || len(compiled.CanonicalBytes()) == 0 {
+		return Selector{}, fmt.Errorf("%w: selector authority is invalid", ErrInvalidProgram)
+	}
+	selector := Selector{compiled: compiled}
+	constrained := false
+	for dimension := knowledge.DimensionIndex; dimension <= knowledge.DimensionSourcetype; dimension++ {
+		_, ok := selector.RuntimeProgram(dimension)
+		constrained = constrained || ok
+	}
+	if selector.IsUnrestricted() == constrained {
+		return Selector{}, fmt.Errorf("%w: selector authority is inconsistent", ErrInvalidProgram)
+	}
+	return selector, nil
+}
+
 func (selector Selector) CanonicalBytes() []byte {
 	if selector.compiled == nil {
 		return nil

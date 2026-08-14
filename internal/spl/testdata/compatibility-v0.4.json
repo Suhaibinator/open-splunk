@@ -1,0 +1,72 @@
+{
+  "format_version": "open-splunk-spl-compatibility-v0.4",
+  "compatibility_version": "0.4",
+  "rules": [
+    {
+      "id": "SPL-V04-LOOKUP-SYNTAX-001",
+      "summary": "Explicit lookup syntax preserves ordered exact key and output mappings.",
+      "cases": [
+        {
+          "name": "overwrite composite key",
+          "source": "index=main | lookup service_catalog region AS event_region code AS status_code OUTPUT description AS status_description owner",
+          "expect": {
+            "parse": "accept",
+            "command": "lookup",
+            "mode": "OUTPUT",
+            "keys": 2,
+            "outputs": 2
+          }
+        },
+        {
+          "name": "preserve existing output",
+          "source": "index=main | lookup service_catalog service_id AS service_key OUTPUTNEW owner tier team",
+          "expect": {
+            "parse": "accept",
+            "command": "lookup",
+            "mode": "OUTPUTNEW",
+            "keys": 1,
+            "outputs": 3
+          }
+        },
+        {
+          "name": "key mapping requires AS",
+          "source": "index=main | lookup service_catalog service_id service_key OUTPUT owner",
+          "expect": {
+            "parse": "reject",
+            "diagnostic": "SPL_EXPECTED_AS"
+          }
+        },
+        {
+          "name": "output mode is required",
+          "source": "index=main | lookup service_catalog service_id AS service_key",
+          "expect": {
+            "parse": "reject",
+            "diagnostic": "SPL_UNSUPPORTED_LOOKUP_SYNTAX"
+          }
+        }
+      ]
+    },
+    {
+      "id": "SPL-V04-LOOKUP-BOUNDS-001",
+      "summary": "Lookup key and output cardinality is rejected before execution when it exceeds the compatibility boundary.",
+      "cases": [
+        {
+          "name": "fifth key",
+          "source": "index=main | lookup catalog k1 AS e1 k2 AS e2 k3 AS e3 k4 AS e4 k5 AS e5 OUTPUT owner",
+          "expect": {
+            "parse": "reject",
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        },
+        {
+          "name": "seventeenth output",
+          "source": "index=main | lookup catalog id AS event_id OUTPUT o1 o2 o3 o4 o5 o6 o7 o8 o9 o10 o11 o12 o13 o14 o15 o16 o17",
+          "expect": {
+            "parse": "reject",
+            "diagnostic": "SPL_QUERY_TOO_COMPLEX"
+          }
+        }
+      ]
+    }
+  ]
+}

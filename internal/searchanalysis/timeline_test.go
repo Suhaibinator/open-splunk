@@ -187,6 +187,40 @@ func TestServicePropagatesLifecycleStorageAndCancellationErrors(t *testing.T) {
 	}
 }
 
+func TestServiceThreadsCancelableExecutionContextIntoTimelineCompiler(t *testing.T) {
+	snapshot := timelineTestSnapshot()
+	callerContext, cancelCaller := context.WithCancel(context.Background())
+	compiler := &fakeTimelineCompiler{compile: func(
+		ctx context.Context,
+		_ *plan.Query,
+		_ clickhouse.TimelineSpec,
+	) (clickhouse.CompiledTimeline, error) {
+		if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+			t.Fatal("timeline compiler context has no service runtime deadline")
+		}
+		cancelCaller()
+		<-ctx.Done()
+		return clickhouse.CompiledTimeline{}, ctx.Err()
+	}}
+	executor := &fakeTimelineExecutor{}
+	service := newTimelineTestService(t, Config{
+		Searches: &fakeCompletedSearches{snapshot: snapshot},
+		Compiler: compiler,
+		Executor: executor,
+	})
+	_, err := service.Get(
+		callerContext,
+		searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID},
+		Request{SearchJobID: snapshot.ID},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Get(compiler cancellation) error = %v, want context.Canceled", err)
+	}
+	if executor.calls != 0 {
+		t.Fatalf("executor calls after compiler cancellation = %d, want 0", executor.calls)
+	}
+}
+
 func TestServiceRejectsMalformedExecutorSequence(t *testing.T) {
 	snapshot := timelineTestSnapshot()
 	access := searchjobs.AccessScope{TenantID: snapshot.TenantID, OwnerID: snapshot.OwnerID}
@@ -309,14 +343,18 @@ func (searches *fakeCompletedSearches) CompletedExecutionSnapshotFor(_ context.C
 }
 
 type fakeTimelineCompiler struct {
-	query *plan.Query
-	spec  clickhouse.TimelineSpec
-	err   error
+	query   *plan.Query
+	spec    clickhouse.TimelineSpec
+	err     error
+	compile func(context.Context, *plan.Query, clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error)
 }
 
-func (compiler *fakeTimelineCompiler) CompileTimeline(query *plan.Query, spec clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error) {
+func (compiler *fakeTimelineCompiler) CompileTimelineContext(ctx context.Context, query *plan.Query, spec clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error) {
 	compiler.query = query
 	compiler.spec = spec
+	if compiler.compile != nil {
+		return compiler.compile(ctx, query, spec)
+	}
 	return clickhouse.CompiledTimeline{SQL: "SELECT timeline", Spec: spec}, compiler.err
 }
 

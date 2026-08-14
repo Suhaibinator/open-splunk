@@ -84,22 +84,32 @@ func (manager *Manager) Validate(ctx context.Context, request ValidateRequest) (
 	if err == nil {
 		logical = preparation.FullPlan()
 		if logical != nil {
-			_, err = manager.compiler.Compile(logical)
+			lookupNames, lookupErr := planLookupNames(logical)
+			if lookupErr != nil {
+				err = lookupErr
+			} else if len(lookupNames) == 0 {
+				_, err = manager.compiler.Compile(logical)
+			}
 		} else {
 			logical = preparation.Prefix()
 			request := preparation.Request()
 			if logical == nil || request.IsZero() {
 				err = errors.New("validate search: stats wildcard preparation is incomplete")
 			} else {
-				var inventory clickhouse.CompiledStatsWildcardInventory
-				inventory, err = manager.compiler.CompileStatsWildcardInventory(
-					logical,
-					request,
-				)
-				if err == nil {
-					_, ok := inventory.CloneForExecution()
-					if !ok {
-						err = errors.New("validate search: stats wildcard inventory authority is invalid")
+				lookupNames, lookupErr := planLookupNames(logical)
+				if lookupErr != nil {
+					err = lookupErr
+				} else if len(lookupNames) == 0 {
+					var inventory clickhouse.CompiledStatsWildcardInventory
+					inventory, err = manager.compiler.CompileStatsWildcardInventory(
+						logical,
+						request,
+					)
+					if err == nil {
+						_, ok := inventory.CloneForExecution()
+						if !ok {
+							err = errors.New("validate search: stats wildcard inventory authority is invalid")
+						}
 					}
 				}
 			}

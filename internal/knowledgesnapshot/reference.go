@@ -50,6 +50,13 @@ func ValidateReference(reference *opensplunkv1.KnowledgeSnapshotRef) error {
 	if reference.GetObjectCount() > MaximumExecutableObjects {
 		return fmt.Errorf("%w: knowledge snapshot reference object count exceeds %d", ErrResourceLimit, MaximumExecutableObjects)
 	}
+	if reference.GetLookupAssetCount() > MaximumLookupAssets {
+		return fmt.Errorf(
+			"%w: knowledge snapshot reference lookup asset count exceeds %d",
+			ErrResourceLimit,
+			MaximumLookupAssets,
+		)
+	}
 	if !validIdentity(
 		reference.GetCompilerCompatibilityVersion(),
 		MaximumCompilerCompatibilityVersionBytes,
@@ -87,6 +94,13 @@ func ValidateSummary(summary *opensplunkv1.KnowledgeSnapshotSummary) error {
 	if len(summary.GetObjects()) > MaximumSummaryObjects {
 		return fmt.Errorf("%w: knowledge snapshot summary prefix exceeds %d objects", ErrResourceLimit, MaximumSummaryObjects)
 	}
+	if len(summary.GetLookupAssets()) > MaximumLookupAssets {
+		return fmt.Errorf(
+			"%w: knowledge snapshot summary exceeds %d lookup assets",
+			ErrResourceLimit,
+			MaximumLookupAssets,
+		)
+	}
 	if proto.Size(summary) > MaximumSummaryBytes {
 		return fmt.Errorf("%w: knowledge snapshot summary exceeds %d bytes", ErrResourceLimit, MaximumSummaryBytes)
 	}
@@ -95,6 +109,15 @@ func ValidateSummary(summary *opensplunkv1.KnowledgeSnapshotSummary) error {
 	}
 	if err := ValidateReference(summary.GetRef()); err != nil {
 		return fmt.Errorf("knowledge snapshot summary reference: %w", err)
+	}
+	if len(summary.GetLookupAssets()) != int(summary.GetRef().GetLookupAssetCount()) {
+		return fmt.Errorf(
+			"%w: knowledge snapshot summary lookup inventory disagrees with its reference",
+			ErrInvalidInput,
+		)
+	}
+	if err := validateSnapshotLookupAssets(summary.GetLookupAssets()); err != nil {
+		return fmt.Errorf("knowledge snapshot summary lookup inventory: %w", err)
 	}
 
 	objectCount := summary.GetRef().GetObjectCount()
@@ -182,6 +205,7 @@ func (snapshot Snapshot) Reference() *opensplunkv1.KnowledgeSnapshotRef {
 		TenantCatalogStateToken:      bytes.Clone(snapshot.message.GetTenantCatalogStateToken()),
 		ObjectCount:                  uint32(len(snapshot.message.GetObjects())), // #nosec G115 -- finalized snapshots are bounded by MaximumObjects.
 		CompilerCompatibilityVersion: strings.Clone(snapshot.message.GetCompilerCompatibilityVersion()),
+		LookupAssetCount:             uint32(len(snapshot.message.GetLookupAssets())), // #nosec G115 -- finalized lookup assets are bounded by sixteen.
 	}
 }
 
@@ -214,6 +238,7 @@ func (snapshot Snapshot) Summary() *opensplunkv1.KnowledgeSnapshotSummary {
 		Ref:              snapshot.Reference(),
 		Objects:          objects,
 		ObjectsTruncated: objectCount > MaximumSummaryObjects,
+		LookupAssets:     cloneSnapshotLookupAssets(snapshot.message.GetLookupAssets()),
 	}
 }
 

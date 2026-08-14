@@ -26,6 +26,9 @@ func ValidateTimelineEligibility(query *Query) error {
 	if err := ValidateKnowledgePreludeIntegrity(query); err != nil {
 		return timelinePipelineDiagnostic(operatorRange(query.Operators[0]))
 	}
+	if err := ValidateAutomaticLookupIntegrity(query); err != nil {
+		return timelinePipelineDiagnostic(operatorRange(query.Operators[0]))
+	}
 	if query.DynamicOutput != nil {
 		return timelinePipelineDiagnostic(operatorRange(query.Operators[0]))
 	}
@@ -98,6 +101,31 @@ func ValidateTimelineEligibility(query *Query) error {
 		case *ExtractJSON:
 			if operator.Output.Name == "_time" {
 				return timelineTimeDiagnostic(operator.Range)
+			}
+		case *Lookup:
+			if !validLookupContract(operator) {
+				return timelinePipelineDiagnostic(operator.Range)
+			}
+			if operator.WriteMode == LookupWriteModeOverwrite {
+				for _, output := range operator.Outputs {
+					if output.EventField.Name == "_time" {
+						return timelineTimeDiagnostic(output.Range)
+					}
+				}
+			}
+		case *AutomaticLookupGroup:
+			if !validAutomaticLookupGroup(operator) {
+				return timelinePipelineDiagnostic(operator.SourceRange())
+			}
+			for _, automatic := range operator.entries {
+				if automatic.lookup.WriteMode != LookupWriteModeOverwrite {
+					continue
+				}
+				for _, output := range automatic.lookup.Outputs {
+					if output.EventField.Name == "_time" {
+						return timelineTimeDiagnostic(output.Range)
+					}
+				}
 			}
 		case *ConditionalExtract:
 			for _, capture := range operator.Extraction().Captures() {

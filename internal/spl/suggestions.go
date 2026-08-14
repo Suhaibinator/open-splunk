@@ -592,6 +592,8 @@ func classifySuggestionContext(tokens []token, prefix string, replacement Range)
 		return classifyRexSuggestion(base, body)
 	case "spath":
 		return classifySpathSuggestion(base, body)
+	case "lookup":
+		return classifyLookupSuggestion(base, body)
 	case "head", "tail", "reverse", "addinfo":
 		return base
 	default:
@@ -1526,6 +1528,56 @@ func classifySpathSuggestion(context SuggestionContext, tokens []token) Suggesti
 	if len(context.Keywords) == 0 {
 		context.Kinds = nil
 	}
+	return context
+}
+
+func classifyLookupSuggestion(context SuggestionContext, tokens []token) SuggestionContext {
+	// Definition names and lookup-side column names come from an authorized
+	// knowledge catalog/schema rather than the event-field inventory. Until a
+	// caller supplies that separate namespace, only fixed grammar keywords and
+	// event-side fields are advertised here.
+	if len(tokens) < 2 {
+		return context
+	}
+	modeIndex := -1
+	for index, tok := range tokens {
+		if tokenWordEqual(tok, "OUTPUT") || tokenWordEqual(tok, "OUTPUTNEW") {
+			modeIndex = index
+			break
+		}
+	}
+	if modeIndex < 0 {
+		keyTokens := tokens[1:]
+		switch len(keyTokens) % 3 {
+		case 0:
+			if len(keyTokens) > 0 {
+				context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+				context.Keywords = []string{"OUTPUT", "OUTPUTNEW"}
+			}
+		case 1:
+			context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+			context.Keywords = []string{"AS"}
+		case 2:
+			if tokenWordEqual(keyTokens[len(keyTokens)-1], "AS") {
+				context.Kinds = []SuggestionKind{SuggestionKindField}
+			}
+		}
+		return context
+	}
+
+	outputs := tokens[modeIndex+1:]
+	if len(outputs) == 0 {
+		return context
+	}
+	if tokenWordEqual(outputs[len(outputs)-1], "AS") {
+		context.Kinds = []SuggestionKind{SuggestionKindField}
+		return context
+	}
+	if len(outputs) >= 2 && tokenWordEqual(outputs[len(outputs)-2], "AS") {
+		return context
+	}
+	context.Kinds = []SuggestionKind{SuggestionKindKeyword}
+	context.Keywords = []string{"AS"}
 	return context
 }
 

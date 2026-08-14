@@ -348,15 +348,24 @@ func validateKnowledgeRuntimeGuardInput(
 			"compile ClickHouse knowledge runtime guard: input contains deferred analysis state",
 		)
 	}
-	lastStage := prelude.stages[len(prelude.stages)-1]
+	selectorOffset := -1
+	var selectorProjection []string
+	if prelude.automaticLookup != nil {
+		selectorOffset = prelude.automaticLookup.operatorOffset
+		selectorProjection = prelude.automaticLookup.finalProjection
+	} else if len(prelude.stages) != 0 {
+		lastStage := prelude.stages[len(prelude.stages)-1]
+		selectorOffset = lastStage.operatorOffset
+		selectorProjection = lastStage.projection
+	}
 	if !validKnowledgeRuntimeGuardSelectorChargePair(
 		prelude.selectorCharges,
-		lastStage.operatorOffset,
+		selectorOffset,
 	) || !knowledgeRuntimeGuardProjectionDefinesExactlyOnce(
-		lastStage.projection,
+		selectorProjection,
 		prelude.selectorCharges.inputBytes,
 	) || !knowledgeRuntimeGuardProjectionDefinesExactlyOnce(
-		lastStage.projection,
+		selectorProjection,
 		prelude.selectorCharges.queryUnits,
 	) {
 		return errors.New(
@@ -365,6 +374,7 @@ func validateKnowledgeRuntimeGuardInput(
 	}
 	hasAliases := len(prelude.proof.aliases) != 0
 	if hasAliases {
+		lastStage := prelude.stages[len(prelude.stages)-1]
 		if !validKnowledgeRuntimeGuardAliasCopyChargePair(
 			prelude.aliasCopyCharges,
 			lastStage.operatorOffset,
@@ -506,7 +516,8 @@ func validateKnowledgeRuntimeGuardIdentityPrelude(
 		prelude.capturedBytes != "" || len(prelude.proof.operatorKinds) != 0 ||
 		len(prelude.proof.extractions) != 0 || len(prelude.proof.aliases) != 0 ||
 		len(prelude.proof.calculated) != 0 || prelude.proof.objectCount != 0 ||
-		prelude.proof.charges != (knowledgeprogram.Charges{}) {
+		prelude.proof.charges != (knowledgeprogram.Charges{}) ||
+		prelude.automaticLookup != nil {
 		return errors.New(
 			"compile ClickHouse knowledge runtime guard: identity prelude contains authority",
 		)

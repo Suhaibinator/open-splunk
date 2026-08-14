@@ -551,9 +551,24 @@ export interface KnowledgeSnapshotObject {
   definitionSha256: Uint8Array;
 }
 
+/**
+ * KnowledgeSnapshotLookupAsset binds one immutable logical lookup definition
+ * revision to the exact immutable physical CSV asset it authorized. Entries
+ * sort by lookup_id, lookup_version, then the complete asset reference, and
+ * asset_ordinal is the contiguous position in that order.
+ */
 export interface KnowledgeSnapshotLookupAsset {
   assetOrdinal: number;
-  asset: KnowledgeLookupAssetVersionReference | undefined;
+  asset:
+    | KnowledgeLookupAssetVersionReference
+    | undefined;
+  /**
+   * The logical catalog identity and immutable definition version which
+   * authorized this physical asset. Metadata-only replacements intentionally
+   * retain the same asset reference while advancing lookup_version.
+   */
+  lookupId: string;
+  lookupVersion: bigint;
 }
 
 /**
@@ -697,6 +712,12 @@ export interface KnowledgeSnapshotRef {
   tenantCatalogStateToken: Uint8Array;
   objectCount: number;
   compilerCompatibilityVersion: string;
+  /**
+   * Exact lookup identities are retained on KnowledgeSnapshotSummary; this
+   * count lets compact lifecycle references prove whether that inventory is
+   * expected without carrying definition or row payloads.
+   */
+  lookupAssetCount: number;
 }
 
 /**
@@ -732,6 +753,12 @@ export interface KnowledgeSnapshotSummary {
   ref: KnowledgeSnapshotRef | undefined;
   objects: KnowledgeSnapshotObjectSummary[];
   objectsTruncated: boolean;
+  /**
+   * The complete canonical unique lookup-version inventory. Unlike objects,
+   * this list is never truncated because the compiler admits at most sixteen
+   * lookup stages and repeated use of one version is deduplicated.
+   */
+  lookupAssets: KnowledgeSnapshotLookupAsset[];
 }
 
 function createBaseKnowledgeSelectorPattern(): KnowledgeSelectorPattern {
@@ -3329,7 +3356,7 @@ export const KnowledgeSnapshotObject: MessageFns<KnowledgeSnapshotObject> = {
 };
 
 function createBaseKnowledgeSnapshotLookupAsset(): KnowledgeSnapshotLookupAsset {
-  return { assetOrdinal: 0, asset: undefined };
+  return { assetOrdinal: 0, asset: undefined, lookupId: "", lookupVersion: 0n };
 }
 
 export const KnowledgeSnapshotLookupAsset: MessageFns<KnowledgeSnapshotLookupAsset> = {
@@ -3339,6 +3366,15 @@ export const KnowledgeSnapshotLookupAsset: MessageFns<KnowledgeSnapshotLookupAss
     }
     if (message.asset !== undefined) {
       KnowledgeLookupAssetVersionReference.encode(message.asset, writer.uint32(18).fork()).join();
+    }
+    if (message.lookupId !== "") {
+      writer.uint32(26).string(message.lookupId);
+    }
+    if (message.lookupVersion !== 0n) {
+      if (BigInt.asUintN(64, message.lookupVersion) !== message.lookupVersion) {
+        throw new globalThis.Error("value provided for field message.lookupVersion of type uint64 too large");
+      }
+      writer.uint32(32).uint64(message.lookupVersion);
     }
     return writer;
   },
@@ -3366,6 +3402,22 @@ export const KnowledgeSnapshotLookupAsset: MessageFns<KnowledgeSnapshotLookupAss
           message.asset = KnowledgeLookupAssetVersionReference.decode(reader, reader.uint32());
           continue;
         }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.lookupId = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.lookupVersion = reader.uint64() as bigint;
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -3383,6 +3435,16 @@ export const KnowledgeSnapshotLookupAsset: MessageFns<KnowledgeSnapshotLookupAss
         ? globalThis.Number(object.asset_ordinal)
         : 0,
       asset: isSet(object.asset) ? KnowledgeLookupAssetVersionReference.fromJSON(object.asset) : undefined,
+      lookupId: isSet(object.lookupId)
+        ? globalThis.String(object.lookupId)
+        : isSet(object.lookup_id)
+        ? globalThis.String(object.lookup_id)
+        : "",
+      lookupVersion: isSet(object.lookupVersion)
+        ? BigInt(object.lookupVersion)
+        : isSet(object.lookup_version)
+        ? BigInt(object.lookup_version)
+        : 0n,
     };
   },
 
@@ -3393,6 +3455,12 @@ export const KnowledgeSnapshotLookupAsset: MessageFns<KnowledgeSnapshotLookupAss
     }
     if (message.asset !== undefined) {
       obj.asset = KnowledgeLookupAssetVersionReference.toJSON(message.asset);
+    }
+    if (message.lookupId !== "") {
+      obj.lookupId = message.lookupId;
+    }
+    if (message.lookupVersion !== 0n) {
+      obj.lookupVersion = message.lookupVersion.toString();
     }
     return obj;
   },
@@ -3406,6 +3474,10 @@ export const KnowledgeSnapshotLookupAsset: MessageFns<KnowledgeSnapshotLookupAss
     message.asset = (object.asset !== undefined && object.asset !== null)
       ? KnowledgeLookupAssetVersionReference.fromPartial(object.asset)
       : undefined;
+    message.lookupId = object.lookupId ?? "";
+    message.lookupVersion = (object.lookupVersion !== undefined && object.lookupVersion !== null)
+      ? BigInt(object.lookupVersion)
+      : 0n;
     return message;
   },
 };
@@ -4564,6 +4636,7 @@ function createBaseKnowledgeSnapshotRef(): KnowledgeSnapshotRef {
     tenantCatalogStateToken: new Uint8Array(0),
     objectCount: 0,
     compilerCompatibilityVersion: "",
+    lookupAssetCount: 0,
   };
 }
 
@@ -4586,6 +4659,9 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
     }
     if (message.compilerCompatibilityVersion !== "") {
       writer.uint32(42).string(message.compilerCompatibilityVersion);
+    }
+    if (message.lookupAssetCount !== 0) {
+      writer.uint32(48).uint32(message.lookupAssetCount);
     }
     return writer;
   },
@@ -4637,6 +4713,14 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
           message.compilerCompatibilityVersion = reader.string();
           continue;
         }
+        case 6: {
+          if (tag !== 48) {
+            break;
+          }
+
+          message.lookupAssetCount = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -4673,6 +4757,11 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
         : isSet(object.compiler_compatibility_version)
         ? globalThis.String(object.compiler_compatibility_version)
         : "",
+      lookupAssetCount: isSet(object.lookupAssetCount)
+        ? globalThis.Number(object.lookupAssetCount)
+        : isSet(object.lookup_asset_count)
+        ? globalThis.Number(object.lookup_asset_count)
+        : 0,
     };
   },
 
@@ -4693,6 +4782,9 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
     if (message.compilerCompatibilityVersion !== "") {
       obj.compilerCompatibilityVersion = message.compilerCompatibilityVersion;
     }
+    if (message.lookupAssetCount !== 0) {
+      obj.lookupAssetCount = Math.round(message.lookupAssetCount);
+    }
     return obj;
   },
 
@@ -4709,6 +4801,7 @@ export const KnowledgeSnapshotRef: MessageFns<KnowledgeSnapshotRef> = {
     message.tenantCatalogStateToken = object.tenantCatalogStateToken ?? new Uint8Array(0);
     message.objectCount = object.objectCount ?? 0;
     message.compilerCompatibilityVersion = object.compilerCompatibilityVersion ?? "";
+    message.lookupAssetCount = object.lookupAssetCount ?? 0;
     return message;
   },
 };
@@ -4981,7 +5074,7 @@ export const KnowledgeSnapshotObjectSummary: MessageFns<KnowledgeSnapshotObjectS
 };
 
 function createBaseKnowledgeSnapshotSummary(): KnowledgeSnapshotSummary {
-  return { ref: undefined, objects: [], objectsTruncated: false };
+  return { ref: undefined, objects: [], objectsTruncated: false, lookupAssets: [] };
 }
 
 export const KnowledgeSnapshotSummary: MessageFns<KnowledgeSnapshotSummary> = {
@@ -4994,6 +5087,9 @@ export const KnowledgeSnapshotSummary: MessageFns<KnowledgeSnapshotSummary> = {
     }
     if (message.objectsTruncated !== false) {
       writer.uint32(24).bool(message.objectsTruncated);
+    }
+    for (const v of message.lookupAssets) {
+      KnowledgeSnapshotLookupAsset.encode(v!, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -5029,6 +5125,14 @@ export const KnowledgeSnapshotSummary: MessageFns<KnowledgeSnapshotSummary> = {
           message.objectsTruncated = reader.bool();
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.lookupAssets.push(KnowledgeSnapshotLookupAsset.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -5049,6 +5153,11 @@ export const KnowledgeSnapshotSummary: MessageFns<KnowledgeSnapshotSummary> = {
         : isSet(object.objects_truncated)
         ? globalThis.Boolean(object.objects_truncated)
         : false,
+      lookupAssets: globalThis.Array.isArray(object?.lookupAssets)
+        ? object.lookupAssets.map((e: any) => KnowledgeSnapshotLookupAsset.fromJSON(e))
+        : globalThis.Array.isArray(object?.lookup_assets)
+        ? object.lookup_assets.map((e: any) => KnowledgeSnapshotLookupAsset.fromJSON(e))
+        : [],
     };
   },
 
@@ -5063,6 +5172,9 @@ export const KnowledgeSnapshotSummary: MessageFns<KnowledgeSnapshotSummary> = {
     if (message.objectsTruncated !== false) {
       obj.objectsTruncated = message.objectsTruncated;
     }
+    if (message.lookupAssets?.length) {
+      obj.lookupAssets = message.lookupAssets.map((e) => KnowledgeSnapshotLookupAsset.toJSON(e));
+    }
     return obj;
   },
 
@@ -5076,6 +5188,7 @@ export const KnowledgeSnapshotSummary: MessageFns<KnowledgeSnapshotSummary> = {
       : undefined;
     message.objects = object.objects?.map((e) => KnowledgeSnapshotObjectSummary.fromPartial(e)) || [];
     message.objectsTruncated = object.objectsTruncated ?? false;
+    message.lookupAssets = object.lookupAssets?.map((e) => KnowledgeSnapshotLookupAsset.fromPartial(e)) || [];
     return message;
   },
 };

@@ -18,6 +18,9 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 	if err := ValidateKnowledgePreludeIntegrity(query); err != nil {
 		return fieldAnalysisPipelineDiagnostic(firstFieldAnalysisRange(query))
 	}
+	if err := ValidateAutomaticLookupIntegrity(query); err != nil {
+		return fieldAnalysisPipelineDiagnostic(firstFieldAnalysisRange(query))
+	}
 	if scan, ok := query.Operators[0].(*Scan); !ok || scan == nil {
 		return fieldAnalysisPipelineDiagnostic(operatorRange(query.Operators[0]))
 	}
@@ -33,10 +36,13 @@ func ValidateFieldAnalysisEligibility(query *Query) error {
 			}
 		case *Filter, *RegexFilter, *Extend, *Strcat, *FillNull, *RowTotal,
 			*OrderedDelta, *MakeMultivalue, *Extract, *ExtractJSON, *Rename,
-			*TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit, *Reverse,
+			*Lookup, *AutomaticLookupGroup, *TimeBucket, *NumericBucket, *Sort, *Deduplicate, *Limit, *Reverse,
 			*ConditionalExtract, *ConditionalExtractJSON, *CopyFieldAlias, *ParallelExtend:
 			// These preserve source-event identity while changing the final
 			// relation, schema, values, or order consumed by field analysis.
+			if lookup, ok := operator.(*Lookup); ok && !validLookupContract(lookup) {
+				return fieldAnalysisPipelineDiagnostic(lookup.Range)
+			}
 		case *EventAggregate:
 			if !validEventAggregateContract(operator) {
 				return fieldAnalysisPipelineDiagnostic(operator.Range)

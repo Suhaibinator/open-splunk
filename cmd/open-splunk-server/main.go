@@ -594,6 +594,7 @@ func runWithOptions(config options) error {
 		Snapshotter:       visibilitySnapshotter{sequencer: sequencer},
 		Journal:           jobJournal,
 		KnowledgeResolver: knowledgeManagement.resolver,
+		LookupResolver:    knowledgeManagement.lookupResolver,
 		OnJournalError: func(err error) {
 			log.Printf("persist search-job history: %v", err)
 		},

@@ -42,7 +42,7 @@ func TestKnowledgeCatalogTenantAuthorityMigrationBackfillsAndPreservesState(t *t
 	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply migration 0031: %v", err)
 	}
-	assertIntegerQuery(t, raw, 36, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 38, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 2, `
 		SELECT count(*)
 		FROM app_catalog_revisions AS authority

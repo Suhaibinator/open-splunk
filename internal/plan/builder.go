@@ -526,6 +526,21 @@ func Build(query *spl.Query, scope Scope) (*Query, error) {
 			if command.Output == "_time" {
 				canonicalTimeAvailable = false
 			}
+		case *spl.LookupCommand:
+			operator, buildErr := buildLookupCommand(command, outputSchemaKnown)
+			if buildErr != nil {
+				return nil, buildErr
+			}
+			result.Operators = append(result.Operators, operator)
+			for _, output := range operator.Outputs {
+				if outputSchemaKnown && !slices.Contains(result.OutputFields, output.EventField.Name) {
+					result.OutputFields = append(result.OutputFields, output.EventField.Name)
+				}
+				if operator.WriteMode == LookupWriteModeOverwrite &&
+					output.EventField.Name == "_time" {
+					canonicalTimeAvailable = false
+				}
+			}
 		case *spl.BinCommand:
 			if !outputSchemaKnown && command.Field == "fields" {
 				return nil, &Diagnostic{
@@ -2616,6 +2631,14 @@ func positiveIndexReferences(
 			// addinfo has fixed outputs and never rewrites physical index scope.
 		case *spl.SpathCommand:
 			if command != nil && command.Output == "index" {
+				return references
+			}
+		case *spl.LookupCommand:
+			if command == nil ||
+				(command.OutputMode == spl.LookupOutputModeOverwrite &&
+					slices.ContainsFunc(command.Outputs, func(output spl.LookupOutputMapping) bool {
+						return output.EventField == "index"
+					})) {
 				return references
 			}
 		case *spl.RenameCommand:

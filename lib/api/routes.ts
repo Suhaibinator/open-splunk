@@ -6,6 +6,7 @@ import * as AppApi from "@/gen/ts/open_splunk/v1/app_api";
 import * as AuditApi from "@/gen/ts/open_splunk/v1/audit_api";
 import * as CollectorAdminApi from "@/gen/ts/open_splunk/v1/collector_admin_api";
 import * as KnowledgeApi from "@/gen/ts/open_splunk/v1/knowledge_api";
+import * as LookupApi from "@/gen/ts/open_splunk/v1/lookup_api";
 import * as SavedSearchApi from "@/gen/ts/open_splunk/v1/saved_search_api";
 import * as SearchApi from "@/gen/ts/open_splunk/v1/search_api";
 import * as SearchAttemptAuditApi from "@/gen/ts/open_splunk/v1/search_attempt_audit_api";
@@ -15,6 +16,7 @@ import * as SystemApi from "@/gen/ts/open_splunk/v1/system_api";
 import { defineProtobufRoute, type ProtobufRoute } from "./protobuf-transport";
 
 export const MAXIMUM_KNOWLEDGE_MANAGEMENT_RESPONSE_BYTES = 8 << 20;
+export const MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES = 9 << 20;
 export const MAXIMUM_KNOWLEDGE_GRAPH_RESPONSE_BYTES = 128 << 10;
 export const MAXIMUM_SEARCH_INSPECTION_RESPONSE_BYTES = 8 << 20;
 
@@ -235,6 +237,51 @@ export const knowledgeRoutes = {
     "/api/v1/knowledge/objects/delete",
     KnowledgeApi.DeleteKnowledgeObjectRequest,
     KnowledgeApi.DeleteKnowledgeObjectResponse,
+  ),
+} as const;
+
+export const lookupRoutes = {
+  create: defineProtobufRoute(
+    "/api/v1/knowledge/lookups/create",
+    LookupApi.CreateLookupRequest,
+    LookupApi.CreateLookupResponse,
+    { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  get: defineProtobufRoute(
+    "/api/v1/knowledge/lookups/get",
+    LookupApi.GetLookupRequest,
+    LookupApi.GetLookupResponse,
+    { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  list: defineProtobufRoute(
+    "/api/v1/knowledge/lookups/list",
+    LookupApi.ListLookupsRequest,
+    LookupApi.ListLookupsResponse,
+    { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  replace: defineProtobufRoute(
+    "/api/v1/knowledge/lookups/replace",
+    LookupApi.ReplaceLookupRequest,
+    LookupApi.ReplaceLookupResponse,
+    { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  setState: defineProtobufRoute(
+    "/api/v1/knowledge/lookups/state/set",
+    LookupApi.SetLookupStateRequest,
+    LookupApi.SetLookupStateResponse,
+    { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  delete: defineProtobufRoute(
+    "/api/v1/knowledge/lookups/delete",
+    LookupApi.DeleteLookupRequest,
+    LookupApi.DeleteLookupResponse,
+    { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
+  ),
+  preview: defineProtobufRoute(
+    "/api/v1/knowledge/lookups/preview",
+    LookupApi.PreviewLookupRequest,
+    LookupApi.PreviewLookupResponse,
+    { maximumResponseBytes: MAXIMUM_LOOKUP_MANAGEMENT_RESPONSE_BYTES },
   ),
 } as const;
 
@@ -464,6 +511,7 @@ export const openSplunkRoutes = {
   searchAttemptAudit: searchAttemptAuditRoutes,
   indexes: indexRoutes,
   knowledge: knowledgeRoutes,
+  lookups: lookupRoutes,
   ingestionTokens: ingestionTokenRoutes,
   hec: hecOperationsRoutes,
   search: searchRoutes,

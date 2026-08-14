@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -423,6 +424,11 @@ var physicalIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 type Compiler struct {
 	Database string
 	Table    string
+
+	// lookupResolutions is an ordered, detached control-plane authority. It is
+	// populated only through WithLookupResolutions; ordinary struct literals
+	// cannot attach asset rows to authored definition names.
+	lookupResolutions []LookupResolution
 }
 
 // CompiledQuery is executable SQL plus ordered bind arguments and public
@@ -480,6 +486,10 @@ type CompiledQuery struct {
 	// stage-local reduce-partition behavior. Zero means no stats stage supplied
 	// a hint; otherwise the sealed value is in [1, 4].
 	statsPartitionsMaxThreadsHint uint8
+	// lookupTables are compiler-owned native-block payloads for exact lookup
+	// stages. Keeping them outside Args prevents clickhouse-go from expanding an
+	// admitted multi-megabyte asset into the bounded SQL text.
+	lookupTables []compiledLookupExternalTable
 
 	// executionSeal binds the complete executable contract, including every
 	// bind value and result-shape field. knowledgeEvidence exists only for a
@@ -585,7 +595,28 @@ func (output TimechartOutput) RuntimeWideBoundsValid() bool {
 
 // Compile compiles one plan without mutating it.
 func (c Compiler) Compile(query *plan.Query) (CompiledQuery, error) {
-	compiled, err := c.compileWithFinalizer(query, finalizeOrdinaryQuery, true)
+	return c.CompileContext(context.Background(), query)
+}
+
+// CompileContext compiles one plan without mutating it and interrupts lookup
+// validation, transposition, and sealing when ctx is canceled. Compile remains
+// the compatibility entry point for callers without an operation context.
+func (c Compiler) CompileContext(
+	ctx context.Context,
+	query *plan.Query,
+) (CompiledQuery, error) {
+	if ctx == nil {
+		return CompiledQuery{}, errors.New("compile ClickHouse query: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledQuery{}, err
+	}
+	compiled, err := c.compileWithFinalizerContext(
+		ctx,
+		query,
+		finalizeOrdinaryQuery,
+		true,
+	)
 	if err != nil {
 		return CompiledQuery{}, err
 	}
@@ -631,10 +662,18 @@ func writeCTEOpening(sql *strings.Builder, materialized bool) {
 // compileEventAnalysis proves that the final relation still consists of
 // individual events before exposing it to an analysis-specific projection.
 func (c Compiler) compileEventAnalysis(query *plan.Query, finalize queryFinalizer) (CompiledQuery, error) {
+	return c.compileEventAnalysisContext(context.Background(), query, finalize)
+}
+
+func (c Compiler) compileEventAnalysisContext(
+	ctx context.Context,
+	query *plan.Query,
+	finalize queryFinalizer,
+) (CompiledQuery, error) {
 	if err := plan.ValidateFieldAnalysisEligibility(query); err != nil {
 		return CompiledQuery{}, err
 	}
-	return c.compileWithFinalizer(query, finalize, false)
+	return c.compileWithFinalizerContext(ctx, query, finalize, false)
 }
 
 func wrapEventAnalysisValidation(
@@ -674,6 +713,26 @@ func wrapEventAnalysisValidation(
 // compilation; event analyses must consume only the proven event relation and
 // therefore may reach neither timechart nor chart.
 func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalizer, permitTerminalWideOperators bool) (CompiledQuery, error) {
+	return c.compileWithFinalizerContext(
+		context.Background(),
+		query,
+		finalize,
+		permitTerminalWideOperators,
+	)
+}
+
+func (c Compiler) compileWithFinalizerContext(
+	ctx context.Context,
+	query *plan.Query,
+	finalize queryFinalizer,
+	permitTerminalWideOperators bool,
+) (CompiledQuery, error) {
+	if ctx == nil {
+		return CompiledQuery{}, errors.New("compile ClickHouse query: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledQuery{}, err
+	}
 	if query == nil || len(query.Operators) == 0 {
 		return CompiledQuery{}, errors.New("compile ClickHouse query: logical plan is empty")
 	}
@@ -702,6 +761,15 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	lookupPreparation, err := prepareLookupCompilationContext(
+		ctx,
+		query,
+		scan,
+		c.lookupResolutions,
+	)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
 	fragment, state, args, err := compileScan(
 		database,
 		table,
@@ -712,12 +780,17 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	if err != nil {
 		return CompiledQuery{}, err
 	}
+	if state.context == nil {
+		return CompiledQuery{}, errors.New("compile ClickHouse query: compile context is unavailable")
+	}
+	state.context.operationContext = ctx
 	relation := newScanRelation(fragment, scan.Range)
 	knowledge, err := compileDeferredKnowledgeRelation(
 		relation,
 		state,
 		args,
 		preparation,
+		lookupPreparation.automatic,
 	)
 	if err != nil {
 		return CompiledQuery{}, err
@@ -727,6 +800,7 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 	args = knowledge.args
 
 	aliasSequence := 0
+	lookupStageIndex := 0
 	var statsPartitionsMaxThreadsHint uint8
 	finishCompiled := func(
 		compiled CompiledQuery,
@@ -756,6 +830,11 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 			compiled.SQL = applyV03MaterializedValidationSettings(compiled.SQL)
 		}
 		compiled.statsPartitionsMaxThreadsHint = statsPartitionsMaxThreadsHint
+		if state.context != nil {
+			compiled.lookupTables = cloneCompiledLookupExternalTables(
+				state.context.lookupTables,
+			)
+		}
 		if len(compiled.SQL) > maxCompiledQueryBytes {
 			return CompiledQuery{}, &plan.Diagnostic{
 				Code:    "SPL_QUERY_TOO_COMPLEX",
@@ -763,15 +842,27 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 				Range:   complexityRange,
 			}
 		}
-		return sealFinalCompiledQuery(
+		return sealFinalCompiledQueryContext(
+			ctx,
 			compiled,
 			query,
 			scan,
 			preparation,
 			knowledge.prelude,
+			lookupPreparation,
 		)
 	}
-	remainingOperators := query.Operators[1+preparation.prefixLength:]
+	remainingStart := 1 + preparation.prefixLength
+	if lookupPreparation.automatic != nil {
+		if remainingStart >= len(query.Operators) ||
+			query.Operators[remainingStart] != lookupPreparation.automatic.operator {
+			return CompiledQuery{}, errors.New(
+				"compile ClickHouse automatic lookups: prepared group order disagrees with the logical plan",
+			)
+		}
+		remainingStart++
+	}
+	remainingOperators := query.Operators[remainingStart:]
 	for operatorIndex := 0; operatorIndex < len(remainingOperators); operatorIndex++ {
 		operator := remainingOperators[operatorIndex]
 		if isNilPlanOperator(operator) {
@@ -1151,6 +1242,30 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 					}
 				}
 			}
+		case *plan.Lookup:
+			if lookupStageIndex >= len(lookupPreparation.stages) ||
+				lookupPreparation.stages[lookupStageIndex].sourceOperator != operator ||
+				!lookupResolutionContractsEqual(
+					*lookupPreparation.stages[lookupStageIndex].operator,
+					*operator,
+				) {
+				return CompiledQuery{}, errors.New(
+					"compile ClickHouse lookup: prepared stage order disagrees with the logical plan",
+				)
+			}
+			var additionalAliases int
+			relation, state, args, additionalAliases, err = compileLookupStage(
+				relation,
+				state,
+				args,
+				lookupPreparation.stages[lookupStageIndex],
+				aliasSequence,
+			)
+			if err != nil {
+				return CompiledQuery{}, err
+			}
+			lookupStageIndex++
+			aliasSequence += additionalAliases
 		case *plan.Aggregate:
 			if cardinalityErr := validateAggregateCardinality(operator); cardinalityErr != nil {
 				return CompiledQuery{}, cardinalityErr
@@ -1643,6 +1758,11 @@ func (c Compiler) compileWithFinalizer(query *plan.Query, finalize queryFinalize
 		if err := validateRelationalDepth(relation.depth, relation.ownerRange); err != nil {
 			return CompiledQuery{}, err
 		}
+	}
+	if lookupStageIndex != len(lookupPreparation.stages) {
+		return CompiledQuery{}, errors.New(
+			"compile ClickHouse lookup: not every prepared stage was lowered",
+		)
 	}
 
 	compiled, err := finalize(relation, state, args, scan, aliasSequence)
@@ -6548,6 +6668,7 @@ type compiledStatsSparklineMeasure struct {
 // copying each search-scoped constant into newly constructed compileState
 // values.
 type compileContext struct {
+	operationContext                  context.Context
 	patternBudgets                    compiledPatternBudgets
 	strftimeBudget                    compiledStrftimeBudget
 	strptimeBudget                    compiledStrptimeBudget
@@ -6567,10 +6688,12 @@ type compileContext struct {
 	searchLocalMinimumUnixNanoseconds int64
 	searchTimezoneChecked             bool
 	searchTimezoneCheckErr            error
+	lookupTables                      []compiledLookupExternalTable
 }
 
 func newCompileContext(searchStart time.Time, searchTimezone string) *compileContext {
 	return &compileContext{
+		operationContext: context.Background(),
 		patternBudgets: compiledPatternBudgets{
 			match: compiledMatchBudget{
 				patterns: make(map[*plan.ScalarCallExpression]splregex.MatchPattern),

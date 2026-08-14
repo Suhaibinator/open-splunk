@@ -86,6 +86,9 @@ func analyze(query *Query) (internalAnalysis, error) {
 	if err := ValidateKnowledgePreludeIntegrity(query); err != nil {
 		return internalAnalysis{}, fmt.Errorf("analyze logical query: %w", err)
 	}
+	if err := ValidateAutomaticLookupIntegrity(query); err != nil {
+		return internalAnalysis{}, fmt.Errorf("analyze logical query: %w", err)
+	}
 	analyzer := queryAnalyzer{
 		fields: make(map[string]struct{}),
 	}
@@ -565,6 +568,10 @@ func (analyzer *queryAnalyzer) visitOperator(operator Operator, depth int) error
 			return err
 		}
 		return analyzer.addField(operator.Input, depth+1)
+	case *Lookup:
+		return analyzer.visitLookup(operator, depth+1)
+	case *AutomaticLookupGroup:
+		return analyzer.visitAutomaticLookupGroup(operator, depth+1)
 	case *ConditionalExtract:
 		extraction := operator.Extraction()
 		if err := analyzer.visitKnowledgeSelector(extraction.Selector(), depth+1); err != nil {

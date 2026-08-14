@@ -1097,7 +1097,8 @@ type fakeFieldSummaryCompiler struct {
 	calls      int
 }
 
-func (compiler *fakeFieldSummaryCompiler) CompileFieldSummary(
+func (compiler *fakeFieldSummaryCompiler) CompileFieldSummaryContext(
+	_ context.Context,
 	query *plan.Query,
 	spec clickhouse.FieldSummarySpec,
 ) (clickhouse.CompiledFieldSummary, error) {

@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
@@ -20,7 +21,7 @@ const (
 	StatsWildcardInventoryOrdinalColumn = "__os_stats_wildcard_ordinal"
 	StatsWildcardInventoryFieldColumn   = "__os_stats_wildcard_field"
 	StatsWildcardInventoryInvalidColumn = "__os_stats_wildcard_invalid"
-	statsWildcardInventorySealDomain    = "open-splunk-stats-wildcard-inventory-v1"
+	statsWildcardInventorySealDomain    = "open-splunk-stats-wildcard-inventory-v2"
 )
 
 type statsWildcardInventorySeal [sha256.Size]byte
@@ -34,6 +35,7 @@ type CompiledStatsWildcardInventory struct {
 	request            plan.StatsWildcardRequest
 	readScope          compiledReadScope
 	sourceDigest       [sha256.Size]byte
+	lookupTables       []compiledLookupExternalTable
 	executionAuthority *statsWildcardInventorySeal
 }
 
@@ -43,6 +45,28 @@ func (c Compiler) CompileStatsWildcardInventory(
 	prefix *plan.Query,
 	request plan.StatsWildcardRequest,
 ) (CompiledStatsWildcardInventory, error) {
+	return c.CompileStatsWildcardInventoryContext(
+		context.Background(),
+		prefix,
+		request,
+	)
+}
+
+// CompileStatsWildcardInventoryContext is the cancellable form of
+// CompileStatsWildcardInventory for prefixes carrying lookup assets.
+func (c Compiler) CompileStatsWildcardInventoryContext(
+	ctx context.Context,
+	prefix *plan.Query,
+	request plan.StatsWildcardRequest,
+) (CompiledStatsWildcardInventory, error) {
+	if ctx == nil {
+		return CompiledStatsWildcardInventory{}, errors.New(
+			"compile ClickHouse stats wildcard inventory: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledStatsWildcardInventory{}, err
+	}
 	if prefix == nil || !request.ValidForPrefix(prefix) {
 		return CompiledStatsWildcardInventory{}, errors.New(
 			"compile ClickHouse stats wildcard inventory: request does not belong to prefix",
@@ -62,7 +86,7 @@ func (c Compiler) CompileStatsWildcardInventory(
 		)
 	}
 
-	compiled, err := c.compileEventAnalysis(canonicalPrefix, func(
+	compiled, err := c.compileEventAnalysisContext(ctx, canonicalPrefix, func(
 		relation compiledRelation,
 		state compileState,
 		args []any,
@@ -86,7 +110,10 @@ func (c Compiler) CompileStatsWildcardInventory(
 	if err != nil {
 		return CompiledStatsWildcardInventory{}, err
 	}
-	sourceDigest, ok := compiled.ExecutionAuthorityDigest()
+	sourceDigest, ok, digestErr := compiled.ExecutionAuthorityDigestContext(ctx)
+	if digestErr != nil {
+		return CompiledStatsWildcardInventory{}, digestErr
+	}
 	if !ok {
 		return CompiledStatsWildcardInventory{}, errors.New(
 			"compile ClickHouse stats wildcard inventory: source authority is invalid",
@@ -98,8 +125,12 @@ func (c Compiler) CompileStatsWildcardInventory(
 		request:      request.Clone(),
 		readScope:    compiled.readScope,
 		sourceDigest: sourceDigest,
+		lookupTables: cloneCompiledLookupExternalTables(compiled.lookupTables),
 	}
-	seal, ok := statsWildcardInventoryDigest(result)
+	seal, ok, digestErr := statsWildcardInventoryDigestContext(ctx, result)
+	if digestErr != nil {
+		return CompiledStatsWildcardInventory{}, digestErr
+	}
 	if !ok {
 		return CompiledStatsWildcardInventory{}, errors.New(
 			"compile ClickHouse stats wildcard inventory: executable contract is invalid",
@@ -132,35 +163,97 @@ func statsWildcardInventoryDummyProjection() []string {
 }
 
 func (compiled CompiledStatsWildcardInventory) Request() plan.StatsWildcardRequest {
-	if !compiled.hasValidExecutionSeal() {
+	request, ok, _ := compiled.RequestContext(context.Background())
+	if !ok {
 		return plan.StatsWildcardRequest{}
 	}
-	return compiled.request.Clone()
+	return request
+}
+
+func (compiled CompiledStatsWildcardInventory) RequestContext(
+	ctx context.Context,
+) (plan.StatsWildcardRequest, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return plan.StatsWildcardRequest{}, false, err
+	}
+	if !valid {
+		return plan.StatsWildcardRequest{}, false, nil
+	}
+	return compiled.request.Clone(), true, nil
 }
 
 func (compiled CompiledStatsWildcardInventory) ReadScope() (string, []string, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return "", nil, false
+	tenantID, indexes, ok, _ := compiled.ReadScopeContext(context.Background())
+	return tenantID, indexes, ok
+}
+
+func (compiled CompiledStatsWildcardInventory) ReadScopeContext(
+	ctx context.Context,
+) (string, []string, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return "", nil, false, err
 	}
-	return compiled.readScope.openForSQL(compiled.SQL, compiled.Args)
+	if !valid {
+		return "", nil, false, nil
+	}
+	tenantID, indexes, ok := compiled.readScope.openForSQL(compiled.SQL, compiled.Args)
+	return tenantID, indexes, ok, nil
 }
 
 func (compiled CompiledStatsWildcardInventory) SameReadScope(other CompiledQuery) bool {
-	leftTenant, leftIndexes, leftOK := compiled.ReadScope()
+	same, _ := compiled.SameReadScopeContext(context.Background(), other)
+	return same
+}
+
+func (compiled CompiledStatsWildcardInventory) SameReadScopeContext(
+	ctx context.Context,
+	other CompiledQuery,
+) (bool, error) {
+	leftTenant, leftIndexes, leftOK, err := compiled.ReadScopeContext(ctx)
+	if err != nil {
+		return false, err
+	}
 	rightTenant, rightIndexes, rightOK := other.ReadScope()
-	return leftOK && rightOK && leftTenant == rightTenant && slices.Equal(leftIndexes, rightIndexes)
+	return leftOK && rightOK && leftTenant == rightTenant &&
+		slices.Equal(leftIndexes, rightIndexes), nil
 }
 
 func (compiled CompiledStatsWildcardInventory) hasValidExecutionSeal() bool {
-	if compiled.executionAuthority == nil {
-		return false
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
+}
+
+func (compiled CompiledStatsWildcardInventory) hasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	if ctx == nil {
+		return false, errors.New(
+			"validate ClickHouse stats wildcard inventory: context is nil",
+		)
 	}
-	expected, ok := statsWildcardInventoryDigest(compiled)
-	return ok && subtle.ConstantTimeCompare(expected[:], compiled.executionAuthority[:]) == 1
+	if compiled.executionAuthority == nil {
+		return false, nil
+	}
+	expected, ok, err := statsWildcardInventoryDigestContext(ctx, compiled)
+	if err != nil {
+		return false, err
+	}
+	return ok && subtle.ConstantTimeCompare(
+		expected[:],
+		compiled.executionAuthority[:],
+	) == 1, nil
 }
 
 func (compiled CompiledStatsWildcardInventory) HasValidExecutionSeal() bool {
 	return compiled.hasValidExecutionSeal()
+}
+
+func (compiled CompiledStatsWildcardInventory) HasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return compiled.hasValidExecutionSealContext(ctx)
 }
 
 func (compiled CompiledStatsWildcardInventory) ExecutionAuthorityDigest() ([sha256.Size]byte, bool) {
@@ -171,27 +264,61 @@ func (compiled CompiledStatsWildcardInventory) ExecutionAuthorityDigest() ([sha2
 }
 
 func (compiled CompiledStatsWildcardInventory) EqualForExecution(other CompiledStatsWildcardInventory) bool {
-	if !compiled.hasValidExecutionSeal() || !other.hasValidExecutionSeal() {
-		return false
+	equal, _ := compiled.EqualForExecutionContext(context.Background(), other)
+	return equal
+}
+
+func (compiled CompiledStatsWildcardInventory) EqualForExecutionContext(
+	ctx context.Context,
+	other CompiledStatsWildcardInventory,
+) (bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return false, err
 	}
-	return subtle.ConstantTimeCompare(compiled.executionAuthority[:], other.executionAuthority[:]) == 1
+	otherValid, err := other.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !valid || !otherValid {
+		return false, nil
+	}
+	return subtle.ConstantTimeCompare(
+		compiled.executionAuthority[:],
+		other.executionAuthority[:],
+	) == 1, nil
 }
 
 func (compiled CompiledStatsWildcardInventory) CloneForExecution() (CompiledStatsWildcardInventory, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return CompiledStatsWildcardInventory{}, false
+	cloned, ok, _ := compiled.CloneForExecutionContext(context.Background())
+	return cloned, ok
+}
+
+func (compiled CompiledStatsWildcardInventory) CloneForExecutionContext(
+	ctx context.Context,
+) (CompiledStatsWildcardInventory, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledStatsWildcardInventory{}, false, err
+	}
+	if !valid {
+		return CompiledStatsWildcardInventory{}, false, nil
 	}
 	cloned := compiled
 	cloned.SQL = strings.Clone(compiled.SQL)
 	cloned.request = compiled.request.Clone()
+	cloned.lookupTables = cloneCompiledLookupExternalTables(compiled.lookupTables)
 	cloned.Args = make([]any, len(compiled.Args))
 	if compiled.Args == nil {
 		cloned.Args = nil
 	} else {
 		for index, argument := range compiled.Args {
+			if err := ctx.Err(); err != nil {
+				return CompiledStatsWildcardInventory{}, false, err
+			}
 			value, ok := cloneCompiledArgument(argument)
 			if !ok {
-				return CompiledStatsWildcardInventory{}, false
+				return CompiledStatsWildcardInventory{}, false, nil
 			}
 			cloned.Args[index] = value
 		}
@@ -202,10 +329,14 @@ func (compiled CompiledStatsWildcardInventory) CloneForExecution() (CompiledStat
 	cloned.readScope.argumentPositions = slices.Clone(compiled.readScope.argumentPositions)
 	seal := *compiled.executionAuthority
 	cloned.executionAuthority = &seal
-	if !cloned.hasValidExecutionSeal() {
-		return CompiledStatsWildcardInventory{}, false
+	valid, err = cloned.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledStatsWildcardInventory{}, false, err
 	}
-	return cloned, true
+	if !valid {
+		return CompiledStatsWildcardInventory{}, false, nil
+	}
+	return cloned, true, nil
 }
 
 func (compiled CompiledStatsWildcardInventory) RetainedBytes() (uint64, bool) {
@@ -230,6 +361,10 @@ func (compiled CompiledStatsWildcardInventory) RetainedBytes() (uint64, bool) {
 		if !ok {
 			return 0, false
 		}
+	}
+	total, ok = retainedCompiledLookupExternalTables(total, compiled.lookupTables)
+	if !ok {
+		return 0, false
 	}
 	requestBytes, valid := compiled.request.RetainedBytes()
 	if !valid {
@@ -260,16 +395,44 @@ func (compiled CompiledStatsWildcardInventory) RetainedBytes() (uint64, bool) {
 func statsWildcardInventoryDigest(
 	compiled CompiledStatsWildcardInventory,
 ) (statsWildcardInventorySeal, bool) {
+	digest, ok, _ := statsWildcardInventoryDigestContext(
+		context.Background(),
+		compiled,
+	)
+	return digest, ok
+}
+
+func statsWildcardInventoryDigestContext(
+	ctx context.Context,
+	compiled CompiledStatsWildcardInventory,
+) (statsWildcardInventorySeal, bool, error) {
+	if ctx == nil {
+		return statsWildcardInventorySeal{}, false, errors.New(
+			"hash ClickHouse stats wildcard inventory: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return statsWildcardInventorySeal{}, false, err
+	}
+	referenced, err := compiledLookupExternalTablesReferencedContext(
+		ctx,
+		compiled.SQL,
+		compiled.lookupTables,
+	)
+	if err != nil {
+		return statsWildcardInventorySeal{}, false, err
+	}
 	if strings.TrimSpace(compiled.SQL) == "" || compiled.sourceDigest == ([sha256.Size]byte{}) ||
-		compiled.request.IsZero() {
-		return statsWildcardInventorySeal{}, false
+		compiled.request.IsZero() ||
+		!referenced {
+		return statsWildcardInventorySeal{}, false, nil
 	}
 	if _, _, ok := compiled.readScope.openForSQL(compiled.SQL, compiled.Args); !ok {
-		return statsWildcardInventorySeal{}, false
+		return statsWildcardInventorySeal{}, false, nil
 	}
 	requestDigest, ok := compiled.request.AuthorityDigest()
 	if !ok {
-		return statsWildcardInventorySeal{}, false
+		return statsWildcardInventorySeal{}, false, nil
 	}
 	digest := sha256.New()
 	writeTokenPart(digest, statsWildcardInventorySealDomain)
@@ -279,13 +442,24 @@ func statsWildcardInventoryDigest(
 	writeUint64(digest, uint64(len(compiled.Args)))
 	for _, argument := range compiled.Args {
 		if !writeCompiledArgument(digest, argument, 0) {
-			return statsWildcardInventorySeal{}, false
+			return statsWildcardInventorySeal{}, false, nil
 		}
+	}
+	written, err := writeCompiledLookupExternalTablesContext(
+		ctx,
+		digest,
+		compiled.lookupTables,
+	)
+	if err != nil {
+		return statsWildcardInventorySeal{}, false, err
+	}
+	if !written {
+		return statsWildcardInventorySeal{}, false, nil
 	}
 	_, _ = digest.Write(compiled.readScope.seal[:])
 	var result statsWildcardInventorySeal
 	digest.Sum(result[:0])
-	return result, true
+	return result, true, nil
 }
 
 func finalizeStatsWildcardInventory(

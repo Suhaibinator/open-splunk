@@ -31,6 +31,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 	}
 	queued.KnowledgeSnapshot.Ref.SnapshotSha256[0] ^= 0xff
 	queued.KnowledgeSnapshot.Objects[0].GetAuthorizedObject().KnowledgeObjectId = "mutated"
+	queued.KnowledgeSnapshot.LookupAssets[0].Asset.ContentSha256[0] ^= 0xff
 
 	terminal := journalJob("journal-knowledge", searchjobs.StateCompleted, "snapshot-journal", now)
 	terminal.KnowledgeSnapshot = proto.Clone(want).(*opensplunkv1.KnowledgeSnapshotSummary)
@@ -41,6 +42,7 @@ func TestJobJournalPersistsExactDetachedKnowledgeSnapshotSummary(t *testing.T) {
 		t.Fatalf("Finalize() error = %v", err)
 	}
 	terminal.KnowledgeSnapshot.Objects[1].GetAuthorizedObject().Name = "mutated"
+	terminal.KnowledgeSnapshot.LookupAssets[0].Asset.LookupAssetId = "mutated"
 
 	got, err := store.Get(context.Background(), AccessScope{TenantID: "tenant", OwnerID: "owner"}, terminal.ID)
 	if err != nil {
@@ -181,6 +183,7 @@ func historyKnowledgeSnapshotSummary(objectCount int) *opensplunkv1.KnowledgeSna
 		TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, sha256.Size),
 		ObjectCount:                  uint32(objectCount),
 		CompilerCompatibilityVersion: "0.1",
+		LookupAssetCount:             1,
 	}
 	objects := make([]*opensplunkv1.KnowledgeSnapshotObjectSummary, objectCount)
 	for index := range objects {
@@ -197,5 +200,19 @@ func historyKnowledgeSnapshotSummary(objectCount int) *opensplunkv1.KnowledgeSna
 			},
 		}
 	}
-	return &opensplunkv1.KnowledgeSnapshotSummary{Ref: ref, Objects: objects}
+	return &opensplunkv1.KnowledgeSnapshotSummary{
+		Ref:     ref,
+		Objects: objects,
+		LookupAssets: []*opensplunkv1.KnowledgeSnapshotLookupAsset{{
+			AssetOrdinal:  0,
+			LookupId:      "lookup-history",
+			LookupVersion: 6,
+			Asset: &opensplunkv1.KnowledgeLookupAssetVersionReference{
+				LookupAssetId: "asset-history",
+				Version:       4,
+				SizeBytes:     128,
+				ContentSha256: bytes.Repeat([]byte{0x5c}, sha256.Size),
+			},
+		}},
+	}
 }

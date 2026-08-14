@@ -343,6 +343,18 @@ func forwardCompatibleProtoSanitizer[T proto.Message](request T) (T, error) {
 		// request-only decoder applies the same bounded update projection before
 		// this sanitizer can ever be used by a future route.
 		return request, nil
+	case *opensplunkv1.CreateLookupRequest:
+		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
+			return request, err
+		}
+	case *opensplunkv1.ReplaceLookupRequest:
+		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
+			return request, err
+		}
+	case *opensplunkv1.PreviewLookupRequest:
+		if err := rejectUnknownLookupDefinition(knowledgeRequest.GetDefinition()); err != nil {
+			return request, err
+		}
 	}
 
 	pending := []protoreflect.Message{request.ProtoReflect()}

@@ -432,6 +432,7 @@ func TestExportManagerRetainsAndDetachesKnowledgeSummaryAcrossLifecycle(t *testi
 	}
 	assertExportKnowledgeSummary(t, completedCreate.KnowledgeSnapshot)
 	completedCreate.KnowledgeSnapshot.Objects[0].GetAuthorizedObject().Name = "mutated"
+	completedCreate.KnowledgeSnapshot.LookupAssets[0].Asset.ContentSha256[0] ^= 0xff
 	completed := waitExportState(t, manager, testAccess, completedCreate.ID, StateCompleted)
 	assertExportKnowledgeSummary(t, completed.KnowledgeSnapshot)
 	page, err := manager.List(context.Background(), testAccess, ListRequest{PageSize: 15})
@@ -767,6 +768,7 @@ func validExportKnowledgeSummary() *opensplunkv1.KnowledgeSnapshotSummary {
 			TenantCatalogStateToken:      bytes.Repeat([]byte{0x22}, sha256.Size),
 			ObjectCount:                  1,
 			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
+			LookupAssetCount:             1,
 		},
 		Objects: []*opensplunkv1.KnowledgeSnapshotObjectSummary{{
 			ResolutionOrdinal: 0,
@@ -780,6 +782,17 @@ func validExportKnowledgeSummary() *opensplunkv1.KnowledgeSnapshotSummary {
 				},
 			},
 		}},
+		LookupAssets: []*opensplunkv1.KnowledgeSnapshotLookupAsset{{
+			AssetOrdinal:  0,
+			LookupId:      "lookup-export",
+			LookupVersion: 12,
+			Asset: &opensplunkv1.KnowledgeLookupAssetVersionReference{
+				LookupAssetId: "asset-export",
+				Version:       9,
+				SizeBytes:     256,
+				ContentSha256: bytes.Repeat([]byte{0x33}, sha256.Size),
+			},
+		}},
 	}
 }
 
@@ -790,5 +803,13 @@ func assertExportKnowledgeSummary(t *testing.T, summary *opensplunkv1.KnowledgeS
 	}
 	if got := summary.GetObjects()[0].GetAuthorizedObject().GetName(); got != "extract-one" {
 		t.Fatalf("knowledge object name = %q", got)
+	}
+	if summary.GetRef().GetLookupAssetCount() != 1 ||
+		len(summary.GetLookupAssets()) != 1 ||
+		summary.GetLookupAssets()[0].GetLookupId() != "lookup-export" ||
+		summary.GetLookupAssets()[0].GetLookupVersion() != 12 ||
+		summary.GetLookupAssets()[0].GetAsset().GetLookupAssetId() != "asset-export" ||
+		summary.GetLookupAssets()[0].GetAsset().GetVersion() != 9 {
+		t.Fatalf("knowledge lookup provenance = %#v", summary.GetLookupAssets())
 	}
 }

@@ -30,7 +30,8 @@ func TestExportJobProjectionRedactsKnowledgeIdentitiesAcrossLifecycle(t *testing
 				t.Fatalf("exportJobToProto(%s): %v", state, err)
 			}
 			got := projected.GetKnowledgeSnapshot()
-			if got == nil || !proto.Equal(got.GetRef(), input.GetRef()) || len(got.GetObjects()) != 1 {
+			if got == nil || !proto.Equal(got.GetRef(), input.GetRef()) || len(got.GetObjects()) != 1 ||
+				len(got.GetLookupAssets()) != 0 || got.GetRef().GetLookupAssetCount() != 1 {
 				t.Fatalf("projected summary = %#v", got)
 			}
 			object := got.GetObjects()[0]
@@ -42,6 +43,10 @@ func TestExportJobProjectionRedactsKnowledgeIdentitiesAcrossLifecycle(t *testing
 			}
 			if input.GetObjects()[0].GetAuthorizedObject().GetKnowledgeObjectId() != "object-1" {
 				t.Fatal("projection mutated retained authorized identity")
+			}
+			if input.GetLookupAssets()[0].GetLookupId() != serverLookupLogicalID ||
+				input.GetLookupAssets()[0].GetAsset().GetLookupAssetId() != serverLookupPhysicalID {
+				t.Fatal("projection mutated retained lookup identity")
 			}
 			got.Ref.SnapshotSha256[0] ^= 0xff
 			if bytes.Equal(got.GetRef().GetSnapshotSha256(), input.GetRef().GetSnapshotSha256()) {
@@ -69,6 +74,7 @@ func validExportProjectionKnowledgeSummary() *opensplunkv1.KnowledgeSnapshotSumm
 			TenantCatalogStateToken:      bytes.Repeat([]byte{0x42}, sha256.Size),
 			ObjectCount:                  1,
 			CompilerCompatibilityVersion: knowledgesnapshot.CompilerCompatibilityVersion,
+			LookupAssetCount:             1,
 		},
 		Objects: []*opensplunkv1.KnowledgeSnapshotObjectSummary{{
 			ResolutionOrdinal: 0,
@@ -82,5 +88,8 @@ func validExportProjectionKnowledgeSummary() *opensplunkv1.KnowledgeSnapshotSumm
 				},
 			},
 		}},
+		LookupAssets: []*opensplunkv1.KnowledgeSnapshotLookupAsset{
+			serverLookupSnapshotAsset(),
+		},
 	}
 }

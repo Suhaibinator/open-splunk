@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package open_splunk.v1;
+
+import "open_splunk/v1/common.proto";
+import "open_splunk/v1/lookup.proto";
+
+option go_package = "github.com/Suhaibinator/open-splunk/gen/go/open_splunk/v1;opensplunkv1";
+
+// POST /api/v1/knowledge/lookups/create
+message CreateLookupRequest {
+  LookupDefinition definition = 1;
+  bytes csv_data = 2;
+  optional string client_request_id = 3;
+}
+
+message CreateLookupResponse {
+  Lookup lookup = 1;
+}
+
+// POST /api/v1/knowledge/lookups/get
+message GetLookupRequest {
+  string lookup_id = 1;
+  optional uint64 version = 2;
+}
+
+message GetLookupResponse {
+  Lookup lookup = 1;
+}
+
+enum LookupSortBy {
+  LOOKUP_SORT_BY_UNSPECIFIED = 0;
+  LOOKUP_SORT_BY_NAME = 1;
+  LOOKUP_SORT_BY_CREATED_AT = 2;
+  LOOKUP_SORT_BY_UPDATED_AT = 3;
+}
+
+// POST /api/v1/knowledge/lookups/list
+message ListLookupsRequest {
+  PageRequest page = 1;
+  optional string app_id = 2;
+  repeated LookupState state_filters = 3;
+  optional string text_filter = 4;
+  LookupSortBy sort_by = 5;
+  SortDirection sort_direction = 6;
+}
+
+message ListLookupsResponse {
+  repeated Lookup lookups = 1;
+  PageResponse page = 2;
+}
+
+// POST /api/v1/knowledge/lookups/replace
+message ReplaceLookupRequest {
+  string lookup_id = 1;
+  uint64 expected_version = 2;
+  LookupDefinition definition = 3;
+  optional bytes csv_data = 4;
+}
+
+message ReplaceLookupResponse {
+  Lookup lookup = 1;
+}
+
+// POST /api/v1/knowledge/lookups/state/set
+message SetLookupStateRequest {
+  string lookup_id = 1;
+  uint64 expected_version = 2;
+  LookupState state = 3;
+}
+
+message SetLookupStateResponse {
+  Lookup lookup = 1;
+}
+
+// POST /api/v1/knowledge/lookups/delete
+message DeleteLookupRequest {
+  string lookup_id = 1;
+  uint64 expected_version = 2;
+  string confirmation_name = 3;
+}
+
+message DeleteLookupResponse {
+  string lookup_id = 1;
+  uint64 version = 2;
+}
+
+// POST /api/v1/knowledge/lookups/preview
+message PreviewLookupRequest {
+  LookupDefinition definition = 1;
+  bytes csv_data = 2;
+  optional uint32 maximum_rows = 3;
+}
+
+message LookupPreviewRow {
+  repeated string values = 1;
+}
+
+message PreviewLookupResponse {
+  repeated string columns = 1;
+  repeated LookupPreviewRow rows = 2;
+  uint64 total_rows = 3;
+  bool truncated = 4;
+  bytes source_sha256 = 5;
+  bytes content_sha256 = 6;
+  repeated FieldViolation violations = 7;
+}

@@ -320,7 +320,10 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	// state. Same-package diagnostic fixtures intentionally omit admission and
 	// retain their historical ability to exercise hand-built row contracts.
 	if executor.readAdmission != nil {
-		detached, ok := query.CloneForExecution()
+		detached, ok, cloneErr := query.CloneForExecutionContext(ctx)
+		if cloneErr != nil {
+			return cloneErr
+		}
 		if !ok {
 			return fmt.Errorf("%w: compiled query execution authority is invalid", searchjobs.ErrInvalidResult)
 		}
@@ -366,6 +369,16 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 	if err := ctx.Err(); err != nil {
 		return preserveReadCancellationCause(ctx, err)
 	}
+	externalTables, err := query.ExternalTablesForExecution(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return preserveReadCancellationCause(ctx, ctxErr)
+		}
+		return fmt.Errorf(
+			"%w: compiled lookup transport is invalid",
+			searchjobs.ErrInvalidResult,
+		)
+	}
 	queryID, err := executor.newQueryID()
 	if err != nil {
 		return fmt.Errorf("execute ClickHouse search: create query ID: %w", err)
@@ -380,12 +393,22 @@ func (executor *Executor) Execute(ctx context.Context, query clickhouse.Compiled
 			resultErr = progressReporter.finish(ctx, resultErr)
 		}()
 	}
+	executionSettings, settingsErr := executor.settingsForContext(executionContext, query)
+	if settingsErr != nil {
+		return settingsErr
+	}
 	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
-		clickhousedriver.WithSettings(executor.settingsFor(query)),
+		clickhousedriver.WithSettings(executionSettings),
 	}
 	if progressOption != nil {
 		queryOptions = append(queryOptions, progressOption)
+	}
+	if len(externalTables) != 0 {
+		queryOptions = append(
+			queryOptions,
+			clickhousedriver.WithExternalTable(externalTables...),
+		)
 	}
 	queryContext := clickhousedriver.Context(executionContext, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
@@ -769,18 +792,29 @@ func validateSparseFieldsOutput(query clickhouse.CompiledQuery) (int, error) {
 }
 
 func (executor *Executor) settingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {
+	settings, _ := executor.settingsForContext(context.Background(), query)
+	return settings
+}
+
+func (executor *Executor) settingsForContext(
+	ctx context.Context,
+	query clickhouse.CompiledQuery,
+) (clickhousedriver.Settings, error) {
 	settings := executor.groupLimitSettingsFor(query)
-	hint, ok := query.StatsPartitionsMaxThreadsHint()
+	hint, ok, err := query.StatsPartitionsMaxThreadsHintContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
-		return settings
+		return settings, nil
 	}
 	current, ok := settings["max_threads"].(uint64)
 	if !ok || current <= uint64(hint) {
-		return settings
+		return settings, nil
 	}
 	bounded := maps.Clone(settings)
 	bounded["max_threads"] = uint64(hint)
-	return bounded
+	return bounded, nil
 }
 
 func (executor *Executor) groupLimitSettingsFor(query clickhouse.CompiledQuery) clickhousedriver.Settings {

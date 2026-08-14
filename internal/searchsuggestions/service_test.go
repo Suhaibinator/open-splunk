@@ -1327,7 +1327,8 @@ type suggestionTestCompiler struct {
 	compile    func(*plan.Query, clickhouse.FieldSuggestionSpec) (clickhouse.CompiledFieldSuggestions, error)
 }
 
-func (compiler *suggestionTestCompiler) CompileFieldSuggestions(
+func (compiler *suggestionTestCompiler) CompileFieldSuggestionsContext(
+	_ context.Context,
 	logical *plan.Query,
 	spec clickhouse.FieldSuggestionSpec,
 ) (clickhouse.CompiledFieldSuggestions, error) {

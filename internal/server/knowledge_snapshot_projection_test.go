@@ -27,7 +27,9 @@ func TestSearchJobProjectionRedactsDetachedKnowledgeObjectDisclosures(t *testing
 	}
 	assertRedactedKnowledgeSnapshotSummary(t, converted.GetKnowledgeSnapshot(), wantRef)
 	if job.KnowledgeSnapshot.Objects[0].GetAuthorizedObject().GetKnowledgeObjectId() != "extract-secret-id" ||
-		job.KnowledgeSnapshot.Objects[1].GetAuthorizedObject().GetName() != "Secret Alias" {
+		job.KnowledgeSnapshot.Objects[1].GetAuthorizedObject().GetName() != "Secret Alias" ||
+		job.KnowledgeSnapshot.LookupAssets[0].GetLookupId() != serverLookupLogicalID ||
+		job.KnowledgeSnapshot.LookupAssets[0].GetAsset().GetLookupAssetId() != serverLookupPhysicalID {
 		t.Fatal("search-job projection mutated manager-owned knowledge metadata")
 	}
 	converted.KnowledgeSnapshot.Ref.SnapshotSha256[0] ^= 0xff
@@ -102,8 +104,11 @@ func TestKnowledgeSnapshotProjectionPreservesTruncatedCanonicalPrefix(t *testing
 			t.Fatalf("projected object %d = %+v", index, object)
 		}
 	}
-	if err := knowledgesnapshot.ValidateSummary(got); err != nil {
-		t.Fatalf("projected summary is invalid: %v", err)
+	if len(got.GetLookupAssets()) != 0 || got.GetRef().GetLookupAssetCount() != 1 {
+		t.Fatalf("projected lookup provenance = %+v", got)
+	}
+	if err := knowledgesnapshot.ValidateReference(got.GetRef()); err != nil {
+		t.Fatalf("projected snapshot reference is invalid: %v", err)
 	}
 }
 
@@ -145,7 +150,9 @@ func TestSearchHistoryGetAndListRedactKnowledgeObjectDisclosures(t *testing.T) {
 	assertRedactedKnowledgeSnapshotSummary(t, listed.GetHistoryEntries()[0].GetKnowledgeSnapshot(), wantRef)
 
 	if entry.KnowledgeSnapshot.Objects[0].GetAuthorizedObject().GetKnowledgeObjectId() != "extract-secret-id" ||
-		entry.KnowledgeSnapshot.Objects[1].GetAuthorizedObject().GetName() != "Secret Alias" {
+		entry.KnowledgeSnapshot.Objects[1].GetAuthorizedObject().GetName() != "Secret Alias" ||
+		entry.KnowledgeSnapshot.LookupAssets[0].GetLookupId() != serverLookupLogicalID ||
+		entry.KnowledgeSnapshot.LookupAssets[0].GetAsset().GetLookupAssetId() != serverLookupPhysicalID {
 		t.Fatal("history projection mutated store-owned knowledge metadata")
 	}
 }
@@ -191,13 +198,16 @@ func assertRedactedKnowledgeSnapshotSummary(
 	if got == nil || !proto.Equal(got.GetRef(), wantRef) || len(got.GetObjects()) != 2 || got.GetObjectsTruncated() {
 		t.Fatalf("projected knowledge summary = %+v", got)
 	}
+	if len(got.GetLookupAssets()) != 0 || got.GetRef().GetLookupAssetCount() != 1 {
+		t.Fatalf("projected lookup provenance = %+v", got)
+	}
 	for index, object := range got.GetObjects() {
 		if !object.GetRedacted() || object.GetAuthorizedObject() != nil {
 			t.Fatalf("object %d disclosure = %T, want redacted=true", index, object.GetDisclosure())
 		}
 	}
-	if err := knowledgesnapshot.ValidateSummary(got); err != nil {
-		t.Fatalf("projected summary is invalid: %v", err)
+	if err := knowledgesnapshot.ValidateReference(got.GetRef()); err != nil {
+		t.Fatalf("projected snapshot reference is invalid: %v", err)
 	}
 	if got.Objects[0].GetResolutionOrdinal() != 0 ||
 		got.Objects[0].GetObjectType() != opensplunkv1.KnowledgeObjectType_KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION ||
@@ -217,6 +227,7 @@ func serverKnowledgeSnapshotSummary() *opensplunkv1.KnowledgeSnapshotSummary {
 			TenantCatalogStateToken:      bytes.Repeat([]byte{0x73}, sha256.Size),
 			ObjectCount:                  2,
 			CompilerCompatibilityVersion: "0.1",
+			LookupAssetCount:             1,
 		},
 		Objects: []*opensplunkv1.KnowledgeSnapshotObjectSummary{
 			{
@@ -239,6 +250,27 @@ func serverKnowledgeSnapshotSummary() *opensplunkv1.KnowledgeSnapshotSummary {
 					},
 				},
 			},
+		},
+		LookupAssets: []*opensplunkv1.KnowledgeSnapshotLookupAsset{
+			serverLookupSnapshotAsset(),
+		},
+	}
+}
+
+const (
+	serverLookupLogicalID  = "lookup-logical-secret-id"
+	serverLookupPhysicalID = "lookup-physical-secret-id"
+)
+
+func serverLookupSnapshotAsset() *opensplunkv1.KnowledgeSnapshotLookupAsset {
+	return &opensplunkv1.KnowledgeSnapshotLookupAsset{
+		LookupId:      serverLookupLogicalID,
+		LookupVersion: 13,
+		Asset: &opensplunkv1.KnowledgeLookupAssetVersionReference{
+			LookupAssetId: serverLookupPhysicalID,
+			Version:       17,
+			SizeBytes:     64,
+			ContentSha256: bytes.Repeat([]byte{0x5a}, sha256.Size),
 		},
 	}
 }

@@ -64,7 +64,7 @@ type completedSearches interface {
 }
 
 type timelineCompiler interface {
-	CompileTimeline(*plan.Query, clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error)
+	CompileTimelineContext(context.Context, *plan.Query, clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error)
 }
 
 type timelineExecutor interface {
@@ -203,7 +203,7 @@ func (service *Service) Get(ctx context.Context, access searchjobs.AccessScope, 
 		Earliest:    snapshot.Earliest,
 		Latest:      snapshot.Latest,
 	}
-	compiled, err := service.compiler.CompileTimeline(logical, spec)
+	compiled, err := service.compiler.CompileTimelineContext(executionContext, logical, spec)
 	if err != nil {
 		var diagnostic *plan.Diagnostic
 		if errors.As(err, &diagnostic) {

@@ -40,6 +40,7 @@ type Query struct {
 	parsedSourceDigest         [sha256.Size]byte
 	statsWildcardRequestDigest [sha256.Size]byte
 	knowledgePrelude           queryKnowledgePrelude
+	automaticLookups           queryAutomaticLookupAuthority
 }
 
 // AuthoredScalarPredicateCount opens parser-owned whole-query provenance only

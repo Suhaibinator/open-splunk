@@ -49,6 +49,7 @@ func ClassifyResultShape(query *Query) ResultShape {
 			*MakeMVCommand,
 			*MVExpandCommand,
 			*SpathCommand,
+			*LookupCommand,
 			*RenameCommand,
 			*FieldsCommand,
 			*SortCommand,

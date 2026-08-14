@@ -107,8 +107,8 @@ type FieldPage struct {
 }
 
 type fieldCompiler interface {
-	CompileFieldCatalog(*plan.Query, clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error)
-	CompileFieldSummary(*plan.Query, clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error)
+	CompileFieldCatalogContext(context.Context, *plan.Query, clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error)
+	CompileFieldSummaryContext(context.Context, *plan.Query, clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error)
 }
 
 type fieldExecutor interface {
@@ -856,7 +856,7 @@ func (service *FieldService) buildFieldCatalog(
 		return nil, fmt.Errorf("%w: %w", ErrFieldAnalysisUnsupported, err)
 	}
 	spec := clickhouse.FieldCatalogSpec{MaximumFields: service.maximumFields}
-	compiled, err := service.compiler.CompileFieldCatalog(logical, spec)
+	compiled, err := service.compiler.CompileFieldCatalogContext(ctx, logical, spec)
 	if err != nil {
 		return nil, classifyFieldCompileError(err)
 	}

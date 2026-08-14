@@ -7,6 +7,7 @@ export type BackendAdminSection =
   | "collector-fleet"
   | "collectors"
   | "knowledge"
+  | "lookups"
   | "access"
   | "server";
 
@@ -34,7 +35,14 @@ const KNOWLEDGE_NAVIGATION: BackendAdminNavigationItem = {
   icon: "⌘",
 };
 
-/** Returns the existing array untouched unless trusted bootstrap advertises KO. */
+const LOOKUP_NAVIGATION: BackendAdminNavigationItem = {
+  key: "lookups",
+  label: "Lookup tables",
+  detail: "Exact CSV enrichment",
+  icon: "⊞",
+};
+
+/** Returns the existing array untouched unless trusted bootstrap advertises knowledge. */
 export function backendAdminNavigation(
   knowledgeAdvertised: boolean,
 ): readonly BackendAdminNavigationItem[] {
@@ -42,6 +50,7 @@ export function backendAdminNavigation(
   return [
     ...BASE_NAVIGATION.slice(0, 5),
     KNOWLEDGE_NAVIGATION,
+    LOOKUP_NAVIGATION,
     ...BASE_NAVIGATION.slice(5),
   ];
 }

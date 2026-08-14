@@ -51,10 +51,10 @@ type runtimeAnalysisSearches interface {
 }
 
 type runtimeAnalysisCompiler interface {
-	CompileTimeline(*plan.Query, clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error)
-	CompileFieldCatalog(*plan.Query, clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error)
-	CompileFieldSummary(*plan.Query, clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error)
-	CompileFieldSuggestions(*plan.Query, clickhouse.FieldSuggestionSpec) (clickhouse.CompiledFieldSuggestions, error)
+	CompileTimelineContext(context.Context, *plan.Query, clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error)
+	CompileFieldCatalogContext(context.Context, *plan.Query, clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error)
+	CompileFieldSummaryContext(context.Context, *plan.Query, clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error)
+	CompileFieldSuggestionsContext(context.Context, *plan.Query, clickhouse.FieldSuggestionSpec) (clickhouse.CompiledFieldSuggestions, error)
 }
 
 type runtimeAnalysisExecutor interface {

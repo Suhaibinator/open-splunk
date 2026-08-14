@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
@@ -9,6 +10,9 @@ import (
 	"strings"
 )
 
+// v3 additionally binds the exact lookup external-table authority inherited
+// from the ordinary compiler source.
+//
 // v2 additionally binds compiler-owned resource evidence carried by a
 // specialized executable. In particular, a field catalog's knowledge field
 // count cannot be substituted to select a different executor memory class.
@@ -16,7 +20,7 @@ import (
 // it was derived from and the complete public surface that reaches the driver.
 // A distinct kind token prevents equal byte sequences from crossing result
 // contracts.
-const derivedExecutionSealDomain = "open-splunk-derived-clickhouse-execution-v2"
+const derivedExecutionSealDomain = "open-splunk-derived-clickhouse-execution-v3"
 
 type derivedExecutionKind string
 
@@ -35,6 +39,7 @@ type derivedExecutionSeal [sha256.Size]byte
 // contract, and final read scope.
 type derivedExecutionAuthority struct {
 	sourceDigest [sha256.Size]byte
+	lookupTables []compiledLookupExternalTable
 	seal         derivedExecutionSeal
 }
 
@@ -48,12 +53,52 @@ func sealDerivedExecution(
 	readScope compiledReadScope,
 	writeSpec derivedExecutionSpecWriter,
 ) (*derivedExecutionAuthority, error) {
-	sourceDigest, ok := source.ExecutionAuthorityDigest()
+	return sealDerivedExecutionContext(
+		context.Background(),
+		kind,
+		source,
+		sql,
+		args,
+		readScope,
+		writeSpec,
+	)
+}
+
+func sealDerivedExecutionContext(
+	ctx context.Context,
+	kind derivedExecutionKind,
+	source CompiledQuery,
+	sql string,
+	args []any,
+	readScope compiledReadScope,
+	writeSpec derivedExecutionSpecWriter,
+) (*derivedExecutionAuthority, error) {
+	if ctx == nil {
+		return nil, errors.New("seal derived ClickHouse execution: context is nil")
+	}
+	sourceDigest, ok, err := source.ExecutionAuthorityDigestContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, errors.New("seal derived ClickHouse execution: source authority is invalid")
 	}
-	authority := &derivedExecutionAuthority{sourceDigest: sourceDigest}
-	seal, ok := derivedExecutionDigest(kind, authority, sql, args, readScope, writeSpec)
+	authority := &derivedExecutionAuthority{
+		sourceDigest: sourceDigest,
+		lookupTables: cloneCompiledLookupExternalTables(source.lookupTables),
+	}
+	seal, ok, err := derivedExecutionDigestContext(
+		ctx,
+		kind,
+		authority,
+		sql,
+		args,
+		readScope,
+		writeSpec,
+	)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, errors.New("seal derived ClickHouse execution: contract is invalid")
 	}
@@ -69,11 +114,46 @@ func hasValidDerivedExecution(
 	readScope compiledReadScope,
 	writeSpec derivedExecutionSpecWriter,
 ) bool {
-	if authority == nil {
-		return false
+	valid, _ := hasValidDerivedExecutionContext(
+		context.Background(),
+		kind,
+		authority,
+		sql,
+		args,
+		readScope,
+		writeSpec,
+	)
+	return valid
+}
+
+func hasValidDerivedExecutionContext(
+	ctx context.Context,
+	kind derivedExecutionKind,
+	authority *derivedExecutionAuthority,
+	sql string,
+	args []any,
+	readScope compiledReadScope,
+	writeSpec derivedExecutionSpecWriter,
+) (bool, error) {
+	if ctx == nil {
+		return false, errors.New("validate derived ClickHouse execution: context is nil")
 	}
-	expected, ok := derivedExecutionDigest(kind, authority, sql, args, readScope, writeSpec)
-	return ok && subtle.ConstantTimeCompare(expected[:], authority.seal[:]) == 1
+	if authority == nil {
+		return false, nil
+	}
+	expected, ok, err := derivedExecutionDigestContext(
+		ctx,
+		kind,
+		authority,
+		sql,
+		args,
+		readScope,
+		writeSpec,
+	)
+	if err != nil {
+		return false, err
+	}
+	return ok && subtle.ConstantTimeCompare(expected[:], authority.seal[:]) == 1, nil
 }
 
 func derivedExecutionDigest(
@@ -84,11 +164,51 @@ func derivedExecutionDigest(
 	readScope compiledReadScope,
 	writeSpec derivedExecutionSpecWriter,
 ) (derivedExecutionSeal, bool) {
+	digest, ok, _ := derivedExecutionDigestContext(
+		context.Background(),
+		kind,
+		authority,
+		sql,
+		args,
+		readScope,
+		writeSpec,
+	)
+	return digest, ok
+}
+
+func derivedExecutionDigestContext(
+	ctx context.Context,
+	kind derivedExecutionKind,
+	authority *derivedExecutionAuthority,
+	sql string,
+	args []any,
+	readScope compiledReadScope,
+	writeSpec derivedExecutionSpecWriter,
+) (derivedExecutionSeal, bool, error) {
+	if ctx == nil {
+		return derivedExecutionSeal{}, false, errors.New(
+			"hash derived ClickHouse execution: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return derivedExecutionSeal{}, false, err
+	}
 	if authority == nil || kind == "" || writeSpec == nil {
-		return derivedExecutionSeal{}, false
+		return derivedExecutionSeal{}, false, nil
+	}
+	referenced, err := compiledLookupExternalTablesReferencedContext(
+		ctx,
+		sql,
+		authority.lookupTables,
+	)
+	if err != nil {
+		return derivedExecutionSeal{}, false, err
+	}
+	if !referenced {
+		return derivedExecutionSeal{}, false, nil
 	}
 	if _, _, ok := readScope.openForSQL(sql, args); !ok {
-		return derivedExecutionSeal{}, false
+		return derivedExecutionSeal{}, false, nil
 	}
 	digest := sha256.New()
 	writeTokenPart(digest, derivedExecutionSealDomain)
@@ -99,16 +219,27 @@ func derivedExecutionDigest(
 	writeUint64(digest, uint64(len(args)))
 	for _, argument := range args {
 		if !writeCompiledArgument(digest, argument, 0) {
-			return derivedExecutionSeal{}, false
+			return derivedExecutionSeal{}, false, nil
 		}
 	}
+	written, err := writeCompiledLookupExternalTablesContext(
+		ctx,
+		digest,
+		authority.lookupTables,
+	)
+	if err != nil {
+		return derivedExecutionSeal{}, false, err
+	}
+	if !written {
+		return derivedExecutionSeal{}, false, nil
+	}
 	if !writeSpec(digest) {
-		return derivedExecutionSeal{}, false
+		return derivedExecutionSeal{}, false, nil
 	}
 	_, _ = digest.Write(readScope.seal[:])
 	var result derivedExecutionSeal
 	digest.Sum(result[:0])
-	return result, true
+	return result, true, nil
 }
 
 func cloneDerivedExecutionSurface(
@@ -117,17 +248,46 @@ func cloneDerivedExecutionSurface(
 	readScope compiledReadScope,
 	authority *derivedExecutionAuthority,
 ) (string, []any, compiledReadScope, *derivedExecutionAuthority, bool) {
+	sql, clonedArgs, clonedScope, clonedAuthority, ok, _ :=
+		cloneDerivedExecutionSurfaceContext(
+			context.Background(),
+			sql,
+			args,
+			readScope,
+			authority,
+		)
+	return sql, clonedArgs, clonedScope, clonedAuthority, ok
+}
+
+func cloneDerivedExecutionSurfaceContext(
+	ctx context.Context,
+	sql string,
+	args []any,
+	readScope compiledReadScope,
+	authority *derivedExecutionAuthority,
+) (string, []any, compiledReadScope, *derivedExecutionAuthority, bool, error) {
+	if ctx == nil {
+		return "", nil, compiledReadScope{}, nil, false, errors.New(
+			"clone derived ClickHouse execution: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", nil, compiledReadScope{}, nil, false, err
+	}
 	if authority == nil {
-		return "", nil, compiledReadScope{}, nil, false
+		return "", nil, compiledReadScope{}, nil, false, nil
 	}
 	clonedArgs := make([]any, len(args))
 	if args == nil {
 		clonedArgs = nil
 	} else {
 		for index, argument := range args {
+			if err := ctx.Err(); err != nil {
+				return "", nil, compiledReadScope{}, nil, false, err
+			}
 			cloned, ok := cloneCompiledArgument(argument)
 			if !ok {
-				return "", nil, compiledReadScope{}, nil, false
+				return "", nil, compiledReadScope{}, nil, false, nil
 			}
 			clonedArgs[index] = cloned
 		}
@@ -139,7 +299,10 @@ func cloneDerivedExecutionSurface(
 		seal:              readScope.seal,
 	}
 	clonedAuthority := *authority
-	return strings.Clone(sql), clonedArgs, clonedScope, &clonedAuthority, true
+	clonedAuthority.lookupTables = cloneCompiledLookupExternalTables(
+		authority.lookupTables,
+	)
+	return strings.Clone(sql), clonedArgs, clonedScope, &clonedAuthority, true, nil
 }
 
 func writeTimelineSpec(writer hash.Hash, spec TimelineSpec) bool {
@@ -179,7 +342,20 @@ func sealCompiledTimelineExecution(
 	source CompiledQuery,
 	compiled CompiledTimeline,
 ) (*derivedExecutionAuthority, error) {
-	return sealDerivedExecution(
+	return sealCompiledTimelineExecutionContext(
+		context.Background(),
+		source,
+		compiled,
+	)
+}
+
+func sealCompiledTimelineExecutionContext(
+	ctx context.Context,
+	source CompiledQuery,
+	compiled CompiledTimeline,
+) (*derivedExecutionAuthority, error) {
+	return sealDerivedExecutionContext(
+		ctx,
 		derivedExecutionTimeline,
 		source,
 		compiled.SQL,
@@ -193,13 +369,30 @@ func sealCompiledFieldCatalogExecution(
 	source CompiledQuery,
 	compiled CompiledFieldCatalog,
 ) (*derivedExecutionAuthority, error) {
-	knowledgeGeneratedFields, ok := fieldCatalogKnowledgeGeneratedFieldsFromSource(source)
+	return sealCompiledFieldCatalogExecutionContext(
+		context.Background(),
+		source,
+		compiled,
+	)
+}
+
+func sealCompiledFieldCatalogExecutionContext(
+	ctx context.Context,
+	source CompiledQuery,
+	compiled CompiledFieldCatalog,
+) (*derivedExecutionAuthority, error) {
+	knowledgeGeneratedFields, ok, err :=
+		fieldCatalogKnowledgeGeneratedFieldsFromSourceContext(ctx, source)
+	if err != nil {
+		return nil, err
+	}
 	if !ok || compiled.knowledgeGeneratedFields != knowledgeGeneratedFields {
 		return nil, errors.New(
 			"seal derived ClickHouse field catalog execution: generated-field resource evidence is invalid",
 		)
 	}
-	return sealDerivedExecution(
+	return sealDerivedExecutionContext(
+		ctx,
 		derivedExecutionFieldCatalog,
 		source,
 		compiled.SQL,
@@ -219,7 +412,20 @@ func sealCompiledFieldSummaryExecution(
 	source CompiledQuery,
 	compiled CompiledFieldSummary,
 ) (*derivedExecutionAuthority, error) {
-	return sealDerivedExecution(
+	return sealCompiledFieldSummaryExecutionContext(
+		context.Background(),
+		source,
+		compiled,
+	)
+}
+
+func sealCompiledFieldSummaryExecutionContext(
+	ctx context.Context,
+	source CompiledQuery,
+	compiled CompiledFieldSummary,
+) (*derivedExecutionAuthority, error) {
+	return sealDerivedExecutionContext(
+		ctx,
 		derivedExecutionFieldSummary,
 		source,
 		compiled.SQL,
@@ -235,7 +441,20 @@ func sealCompiledFieldSuggestionsExecution(
 	source CompiledQuery,
 	compiled CompiledFieldSuggestions,
 ) (*derivedExecutionAuthority, error) {
-	return sealDerivedExecution(
+	return sealCompiledFieldSuggestionsExecutionContext(
+		context.Background(),
+		source,
+		compiled,
+	)
+}
+
+func sealCompiledFieldSuggestionsExecutionContext(
+	ctx context.Context,
+	source CompiledQuery,
+	compiled CompiledFieldSuggestions,
+) (*derivedExecutionAuthority, error) {
+	return sealDerivedExecutionContext(
+		ctx,
 		derivedExecutionFieldSuggestions,
 		source,
 		compiled.SQL,
@@ -252,7 +471,15 @@ func writeTimelineSpecRemainder(writer hash.Hash, spec TimelineSpec) bool {
 }
 
 func (compiled CompiledTimeline) hasValidExecutionSeal() bool {
-	return hasValidDerivedExecution(
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
+}
+
+func (compiled CompiledTimeline) hasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return hasValidDerivedExecutionContext(
+		ctx,
 		derivedExecutionTimeline,
 		compiled.executionAuthority,
 		compiled.SQL,
@@ -268,29 +495,62 @@ func (compiled CompiledTimeline) HasValidExecutionSeal() bool {
 	return compiled.hasValidExecutionSeal()
 }
 
+func (compiled CompiledTimeline) HasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return compiled.hasValidExecutionSealContext(ctx)
+}
+
 // CloneForExecution validates and deeply detaches the complete timeline
 // executable. Invalid or hand-constructed values are never repaired.
 func (compiled CompiledTimeline) CloneForExecution() (CompiledTimeline, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return CompiledTimeline{}, false
+	cloned, ok, _ := compiled.CloneForExecutionContext(context.Background())
+	return cloned, ok
+}
+
+func (compiled CompiledTimeline) CloneForExecutionContext(
+	ctx context.Context,
+) (CompiledTimeline, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledTimeline{}, false, err
+	}
+	if !valid {
+		return CompiledTimeline{}, false, nil
 	}
 	cloned := compiled
 	var ok bool
-	cloned.SQL, cloned.Args, cloned.readScope, cloned.executionAuthority, ok =
-		cloneDerivedExecutionSurface(
+	cloned.SQL, cloned.Args, cloned.readScope, cloned.executionAuthority, ok, err =
+		cloneDerivedExecutionSurfaceContext(
+			ctx,
 			compiled.SQL,
 			compiled.Args,
 			compiled.readScope,
 			compiled.executionAuthority,
 		)
-	if !ok || !cloned.hasValidExecutionSeal() {
-		return CompiledTimeline{}, false
+	if err != nil {
+		return CompiledTimeline{}, false, err
 	}
-	return cloned, true
+	valid, err = cloned.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledTimeline{}, false, err
+	}
+	if !ok || !valid {
+		return CompiledTimeline{}, false, nil
+	}
+	return cloned, true, nil
 }
 
 func (compiled CompiledFieldCatalog) hasValidExecutionSeal() bool {
-	return hasValidDerivedExecution(
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
+}
+
+func (compiled CompiledFieldCatalog) hasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return hasValidDerivedExecutionContext(
+		ctx,
 		derivedExecutionFieldCatalog,
 		compiled.executionAuthority,
 		compiled.SQL,
@@ -312,29 +572,62 @@ func (compiled CompiledFieldCatalog) HasValidExecutionSeal() bool {
 	return compiled.hasValidExecutionSeal()
 }
 
+func (compiled CompiledFieldCatalog) HasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return compiled.hasValidExecutionSealContext(ctx)
+}
+
 // CloneForExecution validates and deeply detaches the complete catalog
 // executable. Invalid or hand-constructed values are never repaired.
 func (compiled CompiledFieldCatalog) CloneForExecution() (CompiledFieldCatalog, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return CompiledFieldCatalog{}, false
+	cloned, ok, _ := compiled.CloneForExecutionContext(context.Background())
+	return cloned, ok
+}
+
+func (compiled CompiledFieldCatalog) CloneForExecutionContext(
+	ctx context.Context,
+) (CompiledFieldCatalog, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledFieldCatalog{}, false, err
+	}
+	if !valid {
+		return CompiledFieldCatalog{}, false, nil
 	}
 	cloned := compiled
 	var ok bool
-	cloned.SQL, cloned.Args, cloned.readScope, cloned.executionAuthority, ok =
-		cloneDerivedExecutionSurface(
+	cloned.SQL, cloned.Args, cloned.readScope, cloned.executionAuthority, ok, err =
+		cloneDerivedExecutionSurfaceContext(
+			ctx,
 			compiled.SQL,
 			compiled.Args,
 			compiled.readScope,
 			compiled.executionAuthority,
 		)
-	if !ok || !cloned.hasValidExecutionSeal() {
-		return CompiledFieldCatalog{}, false
+	if err != nil {
+		return CompiledFieldCatalog{}, false, err
 	}
-	return cloned, true
+	valid, err = cloned.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledFieldCatalog{}, false, err
+	}
+	if !ok || !valid {
+		return CompiledFieldCatalog{}, false, nil
+	}
+	return cloned, true, nil
 }
 
 func (compiled CompiledFieldSummary) hasValidExecutionSeal() bool {
-	return hasValidDerivedExecution(
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
+}
+
+func (compiled CompiledFieldSummary) hasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return hasValidDerivedExecutionContext(
+		ctx,
 		derivedExecutionFieldSummary,
 		compiled.executionAuthority,
 		compiled.SQL,
@@ -352,30 +645,63 @@ func (compiled CompiledFieldSummary) HasValidExecutionSeal() bool {
 	return compiled.hasValidExecutionSeal()
 }
 
+func (compiled CompiledFieldSummary) HasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return compiled.hasValidExecutionSealContext(ctx)
+}
+
 // CloneForExecution validates and deeply detaches the complete summary
 // executable. Invalid or hand-constructed values are never repaired.
 func (compiled CompiledFieldSummary) CloneForExecution() (CompiledFieldSummary, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return CompiledFieldSummary{}, false
+	cloned, ok, _ := compiled.CloneForExecutionContext(context.Background())
+	return cloned, ok
+}
+
+func (compiled CompiledFieldSummary) CloneForExecutionContext(
+	ctx context.Context,
+) (CompiledFieldSummary, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledFieldSummary{}, false, err
+	}
+	if !valid {
+		return CompiledFieldSummary{}, false, nil
 	}
 	cloned := compiled
 	var ok bool
-	cloned.SQL, cloned.Args, cloned.readScope, cloned.executionAuthority, ok =
-		cloneDerivedExecutionSurface(
+	cloned.SQL, cloned.Args, cloned.readScope, cloned.executionAuthority, ok, err =
+		cloneDerivedExecutionSurfaceContext(
+			ctx,
 			compiled.SQL,
 			compiled.Args,
 			compiled.readScope,
 			compiled.executionAuthority,
 		)
 	cloned.Spec.FieldName = strings.Clone(compiled.Spec.FieldName)
-	if !ok || !cloned.hasValidExecutionSeal() {
-		return CompiledFieldSummary{}, false
+	if err != nil {
+		return CompiledFieldSummary{}, false, err
 	}
-	return cloned, true
+	valid, err = cloned.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledFieldSummary{}, false, err
+	}
+	if !ok || !valid {
+		return CompiledFieldSummary{}, false, nil
+	}
+	return cloned, true, nil
 }
 
 func (compiled CompiledFieldSuggestions) hasValidExecutionSeal() bool {
-	return hasValidDerivedExecution(
+	valid, _ := compiled.hasValidExecutionSealContext(context.Background())
+	return valid
+}
+
+func (compiled CompiledFieldSuggestions) hasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return hasValidDerivedExecutionContext(
+		ctx,
 		derivedExecutionFieldSuggestions,
 		compiled.executionAuthority,
 		compiled.SQL,
@@ -391,24 +717,49 @@ func (compiled CompiledFieldSuggestions) HasValidExecutionSeal() bool {
 	return compiled.hasValidExecutionSeal()
 }
 
+func (compiled CompiledFieldSuggestions) HasValidExecutionSealContext(
+	ctx context.Context,
+) (bool, error) {
+	return compiled.hasValidExecutionSealContext(ctx)
+}
+
 // CloneForExecution validates and deeply detaches the complete suggestion
 // executable. Invalid or hand-constructed values are never repaired.
 func (compiled CompiledFieldSuggestions) CloneForExecution() (CompiledFieldSuggestions, bool) {
-	if !compiled.hasValidExecutionSeal() {
-		return CompiledFieldSuggestions{}, false
+	cloned, ok, _ := compiled.CloneForExecutionContext(context.Background())
+	return cloned, ok
+}
+
+func (compiled CompiledFieldSuggestions) CloneForExecutionContext(
+	ctx context.Context,
+) (CompiledFieldSuggestions, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledFieldSuggestions{}, false, err
+	}
+	if !valid {
+		return CompiledFieldSuggestions{}, false, nil
 	}
 	cloned := compiled
 	var ok bool
-	cloned.SQL, cloned.Args, cloned.readScope, cloned.executionAuthority, ok =
-		cloneDerivedExecutionSurface(
+	cloned.SQL, cloned.Args, cloned.readScope, cloned.executionAuthority, ok, err =
+		cloneDerivedExecutionSurfaceContext(
+			ctx,
 			compiled.SQL,
 			compiled.Args,
 			compiled.readScope,
 			compiled.executionAuthority,
 		)
 	cloned.Spec.Prefix = strings.Clone(compiled.Spec.Prefix)
-	if !ok || !cloned.hasValidExecutionSeal() {
-		return CompiledFieldSuggestions{}, false
+	if err != nil {
+		return CompiledFieldSuggestions{}, false, err
 	}
-	return cloned, true
+	valid, err = cloned.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return CompiledFieldSuggestions{}, false, err
+	}
+	if !ok || !valid {
+		return CompiledFieldSuggestions{}, false, nil
+	}
+	return cloned, true, nil
 }

@@ -38,6 +38,7 @@ import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
 import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
 import { KnowledgeManagerGate } from "./knowledge-manager-gate";
+import { LookupManagerGate } from "./lookup-manager-gate";
 import {
   backendAdminNavigation,
   knowledgeManagerAppOptionsFromBootstrap,
@@ -3484,7 +3485,9 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   const knowledgeAdvertised = knowledgeFeatureAdvertised && knowledgeApps !== null;
   const navigationItems = backendAdminNavigation(knowledgeAdvertised);
   useEffect(() => {
-    if (section === "knowledge" && !knowledgeAdvertised) setSection("overview");
+    if ((section === "knowledge" || section === "lookups") && !knowledgeAdvertised) {
+      setSection("overview");
+    }
   }, [knowledgeAdvertised, section]);
   const hasAvailableAdminRoute = indexState === "available" || tokenState === "available";
   const adminRoutesLoading = indexState === "loading" || tokenState === "loading";
@@ -3613,6 +3616,13 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
               apps={knowledgeApps}
               initialAppId={bootstrap.selectedAppId}
               maximumPageSize={bootstrap.limits.maximumPageSize}
+            />
+          ) : null}
+          {section === "lookups" && knowledgeAdvertised && bootstrap !== null && knowledgeApps !== null ? (
+            <LookupManagerGate
+              apiBaseUrl={apiBaseUrl}
+              apps={knowledgeApps}
+              initialAppId={bootstrap.selectedAppId}
             />
           ) : null}
           {section === "collectors" ? (

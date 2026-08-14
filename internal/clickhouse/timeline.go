@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -50,6 +51,20 @@ type CompiledTimeline struct {
 // its final rows over a bounded continuous grid. The plan-level eligibility
 // proof is repeated here because callers may construct logical plans directly.
 func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (CompiledTimeline, error) {
+	return c.CompileTimelineContext(context.Background(), query, spec)
+}
+
+func (c Compiler) CompileTimelineContext(
+	ctx context.Context,
+	query *plan.Query,
+	spec TimelineSpec,
+) (CompiledTimeline, error) {
+	if ctx == nil {
+		return CompiledTimeline{}, errors.New("compile ClickHouse timeline: context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledTimeline{}, err
+	}
 	if err := plan.ValidateTimelineEligibility(query); err != nil {
 		return CompiledTimeline{}, err
 	}
@@ -66,7 +81,8 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 	if !gridOK {
 		return CompiledTimeline{}, errors.New("compile ClickHouse timeline: grid bucket number overflows")
 	}
-	source, err := c.compileWithFinalizer(
+	source, err := c.compileWithFinalizerContext(
+		ctx,
 		query,
 		func(
 			relation compiledRelation,
@@ -109,7 +125,11 @@ func (c Compiler) CompileTimeline(query *plan.Query, spec TimelineSpec) (Compile
 		Spec:      spec,
 		readScope: source.readScope,
 	}
-	compiled.executionAuthority, err = sealCompiledTimelineExecution(source, compiled)
+	compiled.executionAuthority, err = sealCompiledTimelineExecutionContext(
+		ctx,
+		source,
+		compiled,
+	)
 	if err != nil {
 		return CompiledTimeline{}, err
 	}

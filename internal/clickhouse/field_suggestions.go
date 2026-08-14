@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -48,6 +49,22 @@ func (c Compiler) CompileFieldSuggestions(
 	query *plan.Query,
 	spec FieldSuggestionSpec,
 ) (CompiledFieldSuggestions, error) {
+	return c.CompileFieldSuggestionsContext(context.Background(), query, spec)
+}
+
+func (c Compiler) CompileFieldSuggestionsContext(
+	ctx context.Context,
+	query *plan.Query,
+	spec FieldSuggestionSpec,
+) (CompiledFieldSuggestions, error) {
+	if ctx == nil {
+		return CompiledFieldSuggestions{}, errors.New(
+			"compile ClickHouse field suggestions: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledFieldSuggestions{}, err
+	}
 	if spec.MaximumFields == 0 || spec.MaximumFields > MaximumFieldSuggestions {
 		return CompiledFieldSuggestions{}, fmt.Errorf(
 			"compile ClickHouse field suggestions: MaximumFields must be between 1 and %d",
@@ -61,7 +78,7 @@ func (c Compiler) CompileFieldSuggestions(
 			"compile ClickHouse field suggestions: Prefix has invalid encoding, length, or content",
 		)
 	}
-	compiled, err := c.compileEventAnalysis(query, func(
+	compiled, err := c.compileEventAnalysisContext(ctx, query, func(
 		relation compiledRelation,
 		state compileState,
 		args []any,
@@ -97,7 +114,11 @@ func (c Compiler) CompileFieldSuggestions(
 		Spec:      spec,
 		readScope: compiled.readScope,
 	}
-	result.executionAuthority, err = sealCompiledFieldSuggestionsExecution(compiled, result)
+	result.executionAuthority, err = sealCompiledFieldSuggestionsExecutionContext(
+		ctx,
+		compiled,
+		result,
+	)
 	if err != nil {
 		return CompiledFieldSuggestions{}, err
 	}

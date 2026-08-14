@@ -331,8 +331,8 @@ function assertRuntimeWireContract(
 
 test("every protobuf HTTP route round-trips generated TypeScript messages across version skew", () => {
   assert.equal(routeFixture.version, 1);
-  assert.equal(routeFixture.routes.length, 63);
-  assert.equal(new Set(routeFixture.routes.map((route) => route.path)).size, 63);
+  assert.equal(routeFixture.routes.length, 70);
+  assert.equal(new Set(routeFixture.routes.map((route) => route.path)).size, 70);
 
   for (const route of routeFixture.routes) {
     assertRuntimeWireContract(

@@ -90,7 +90,10 @@ func (executor *Executor) ExecuteFieldSummary(
 		return FieldSummaryResult{}, errors.New("execute ClickHouse field summary: query ID generator is required")
 	}
 	if executor.readAdmission != nil {
-		detached, ok := query.CloneForExecution()
+		detached, ok, cloneErr := query.CloneForExecutionContext(ctx)
+		if cloneErr != nil {
+			return FieldSummaryResult{}, cloneErr
+		}
 		if !ok {
 			return FieldSummaryResult{}, fmt.Errorf(
 				"%w: compiled field summary execution authority is invalid",
@@ -122,6 +125,15 @@ func (executor *Executor) ExecuteFieldSummary(
 	if err := ctx.Err(); err != nil {
 		return FieldSummaryResult{}, err
 	}
+	externalTables, err := query.ExternalTablesForExecution(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return FieldSummaryResult{}, ctxErr
+		}
+		return FieldSummaryResult{}, invalidFieldSummaryResult(
+			"compiled lookup transport is invalid",
+		)
+	}
 
 	queryID, err := executor.newQueryID()
 	if err != nil {
@@ -133,11 +145,17 @@ func (executor *Executor) ExecuteFieldSummary(
 	if err := ctx.Err(); err != nil {
 		return FieldSummaryResult{}, err
 	}
-	queryContext := clickhousedriver.Context(
-		ctx,
+	queryOptions := []clickhousedriver.QueryOption{
 		clickhousedriver.WithQueryID(queryID),
 		clickhousedriver.WithSettings(settings),
-	)
+	}
+	if len(externalTables) != 0 {
+		queryOptions = append(
+			queryOptions,
+			clickhousedriver.WithExternalTable(externalTables...),
+		)
+	}
+	queryContext := clickhousedriver.Context(ctx, queryOptions...)
 	rows, err := executor.connection.Query(queryContext, query.SQL, query.Args...)
 	if err != nil {
 		return FieldSummaryResult{}, classifyQueryError(ctx, fmt.Errorf("query ClickHouse field summary: %w", err))

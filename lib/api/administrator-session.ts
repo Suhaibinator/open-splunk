@@ -47,6 +47,13 @@ const ADMINISTRATOR_ROUTE_PATHS: ReadonlySet<string> = new Set([
   "/api/v1/knowledge/objects/set-state",
   "/api/v1/knowledge/objects/update",
   "/api/v1/knowledge/objects/validate",
+  "/api/v1/knowledge/lookups/create",
+  "/api/v1/knowledge/lookups/delete",
+  "/api/v1/knowledge/lookups/get",
+  "/api/v1/knowledge/lookups/list",
+  "/api/v1/knowledge/lookups/preview",
+  "/api/v1/knowledge/lookups/replace",
+  "/api/v1/knowledge/lookups/state/set",
   "/api/v1/search/jobs/inspect",
 ]);
 

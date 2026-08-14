@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -19,6 +21,8 @@ import (
 	"github.com/Suhaibinator/open-splunk/internal/control"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgecatalog"
 	"github.com/Suhaibinator/open-splunk/internal/knowledgepreview"
+	"github.com/Suhaibinator/open-splunk/internal/lookupservice"
+	"github.com/Suhaibinator/open-splunk/internal/plan"
 	"github.com/Suhaibinator/open-splunk/internal/searchjobs"
 	"github.com/Suhaibinator/open-splunk/internal/searchtime"
 	"github.com/Suhaibinator/open-splunk/internal/server"
@@ -52,6 +56,7 @@ func TestDeriveKnowledgeCatalogCursorKeyIsStableAndPurposeSeparated(
 	otherPurposes := []string{
 		"saved-search-cursors",
 		collectorCatalogCursorKeyPurpose,
+		lookupManagementCursorKeyPurpose,
 		"collector-token-digests",
 		"search-history-cursors",
 		auditCursorKeyPurpose,
@@ -73,6 +78,33 @@ func TestDeriveKnowledgeCatalogCursorKeyIsStableAndPurposeSeparated(
 	}
 	if _, err := deriveKnowledgeCatalogCursorKey(master[:len(master)-1]); err == nil {
 		t.Fatal("knowledge cursor key accepted an invalid master key")
+	}
+}
+
+func TestDeriveLookupManagementCursorKeyIsStableAndPurposeSeparated(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	master := bytes.Repeat([]byte{0x71}, masterKeyBytes)
+	first, err := deriveLookupManagementCursorKey(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := deriveLookupManagementCursorKey(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	knowledgeKey, err := deriveKnowledgeCatalogCursorKey(master)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 32 || !bytes.Equal(first, second) ||
+		bytes.Equal(first, knowledgeKey) {
+		t.Fatal("lookup cursor key is not stable and purpose-separated")
+	}
+	if _, err := deriveLookupManagementCursorKey(master[:len(master)-1]); err == nil {
+		t.Fatal("lookup cursor key accepted an invalid master key")
 	}
 }
 
@@ -103,7 +135,10 @@ func TestRuntimeKnowledgeManagementCursorContinuesAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	if firstRuntime.catalog == nil || firstRuntime.writer == nil ||
-		firstRuntime.resolver == nil || firstRuntime.attempts == nil {
+		firstRuntime.resolver == nil || firstRuntime.attempts == nil ||
+		firstRuntime.lookupAssets == nil || firstRuntime.lookupCatalog == nil ||
+		firstRuntime.lookupManagement == nil || !firstRuntime.lookupManagement.Ready() ||
+		firstRuntime.lookupResolver == nil {
 		_ = firstDatabase.Close()
 		t.Fatalf("runtime knowledge dependencies = %#v", firstRuntime)
 	}
@@ -199,6 +234,239 @@ func TestRuntimeKnowledgeManagementCursorContinuesAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T) {
+	runtime, database := newRuntimeKnowledgeTestRuntime(t)
+	defer func() { _ = database.Close() }()
+	createRuntimeKnowledgeTestApp(t, database)
+	createRuntimeKnowledgeTestIndex(t, database)
+
+	created, err := runtime.lookupManagement.Create(
+		t.Context(),
+		lookupservice.Scope{
+			TenantID: runtimeKnowledgeTestTenant,
+			OwnerID:  runtimeKnowledgeTestOwner,
+		},
+		&opensplunkv1.CreateLookupRequest{
+			Definition: &opensplunkv1.LookupDefinition{
+				AppId:        runtimeKnowledgeTestApp,
+				Name:         "service_owners",
+				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+				Automatic:    true,
+				KeyMappings: []*opensplunkv1.LookupFieldMapping{{
+					LookupField: "service_id",
+					EventField:  "service_id",
+				}},
+				OutputMappings: []*opensplunkv1.LookupFieldMapping{{
+					LookupField: "owner",
+					EventField:  "service_owner",
+				}},
+				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_PRESERVE_EXISTING,
+			},
+			CsvData: []byte("service_id,owner\napi,platform\n"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("create runtime lookup: %v", err)
+	}
+	if created.GetLookup() == nil || created.GetLookup().GetVersion() != 1 {
+		t.Fatalf("created runtime lookup = %#v", created)
+	}
+
+	resolved, err := runtime.lookupResolver.ResolveLookups(
+		t.Context(),
+		searchjobs.LookupResolutionScope{
+			TenantID:    runtimeKnowledgeTestTenant,
+			PrincipalID: runtimeKnowledgeTestOwner,
+			AppID:       runtimeKnowledgeTestApp,
+			Names:       []string{"service_owners"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolve runtime lookup: %v", err)
+	}
+	if len(resolved) != 1 ||
+		resolved[0].TenantID() != runtimeKnowledgeTestTenant ||
+		resolved[0].DefinitionName() != "service_owners" ||
+		resolved[0].LogicalID() != created.GetLookup().GetLookupId() ||
+		resolved[0].LogicalVersion() != created.GetLookup().GetVersion() ||
+		resolved[0].Version() != 1 ||
+		!slices.Equal(resolved[0].Headers(), []string{"service_id", "owner"}) ||
+		!reflect.DeepEqual(resolved[0].Rows(), [][]string{{"api", "platform"}}) {
+		t.Fatalf("resolved runtime lookup = %#v", resolved)
+	}
+	contract, contractSet := resolved[0].LogicalContract()
+	if !contractSet || contract.DefinitionName != "service_owners" ||
+		contract.WriteMode != plan.LookupWriteModePreserveExisting ||
+		len(contract.Keys) != 1 || len(contract.Outputs) != 1 {
+		t.Fatalf("resolved runtime lookup contract = (%#v, %t)", contract, contractSet)
+	}
+	automatic, err := runtime.lookupResolver.ResolveAutomaticLookups(
+		t.Context(),
+		searchjobs.AutomaticLookupResolutionScope{
+			TenantID:    runtimeKnowledgeTestTenant,
+			PrincipalID: runtimeKnowledgeTestOwner,
+			AppID:       runtimeKnowledgeTestApp,
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolve runtime automatic lookups: %v", err)
+	}
+	if len(automatic) != 1 ||
+		automatic[0].StableID != created.GetLookup().GetLookupId() ||
+		automatic[0].Lookup.DefinitionName != "service_owners" ||
+		automatic[0].Selector == nil ||
+		automatic[0].Resolution.LogicalID() != created.GetLookup().GetLookupId() ||
+		automatic[0].Resolution.LogicalVersion() != created.GetLookup().GetVersion() ||
+		automatic[0].Resolution.ObjectID() == "" {
+		t.Fatalf("resolved runtime automatic lookup = %#v", automatic)
+	}
+	admission, err := runtime.lookupResolver.ResolveLookupAdmission(
+		t.Context(),
+		searchjobs.LookupAdmissionResolutionScope{
+			TenantID:    runtimeKnowledgeTestTenant,
+			PrincipalID: runtimeKnowledgeTestOwner,
+			AppID:       runtimeKnowledgeTestApp,
+			Names:       []string{"service_owners"},
+		},
+	)
+	if err != nil || len(admission.Explicit) != 1 || len(admission.Automatic) != 1 ||
+		admission.Explicit[0].LogicalID() != created.GetLookup().GetLookupId() ||
+		admission.Automatic[0].StableID != created.GetLookup().GetLookupId() {
+		t.Fatalf("combined runtime lookup admission = %#v, %v", admission, err)
+	}
+
+	counters := &runtimeKnowledgeAdmissionCounters{}
+	manager := newRuntimeKnowledgeAdmissionManager(t, runtime, counters)
+	defer func() {
+		if err := manager.Close(); err != nil {
+			t.Errorf("close lookup admission manager: %v", err)
+		}
+	}()
+	request := runtimeKnowledgeSearchRequest(t)
+	request.SPL = "index=main | lookup service_owners service_id AS service_id OUTPUTNEW owner AS service_owner | table message"
+	job, err := manager.Create(t.Context(), request)
+	if err != nil {
+		t.Fatalf("admit runtime lookup search: %v", err)
+	}
+	completed := waitForRuntimeKnowledgeJobState(
+		t,
+		manager,
+		job.ID,
+		searchjobs.StateCompleted,
+	)
+	if completed.Failure != nil || counters.executions.Load() != 1 {
+		t.Fatalf("runtime lookup execution = (%#v, count=%d)", completed, counters.executions.Load())
+	}
+	firstProvenance := completed.KnowledgeSnapshot.GetLookupAssets()
+	if len(firstProvenance) != 1 ||
+		firstProvenance[0].GetLookupId() != created.GetLookup().GetLookupId() ||
+		firstProvenance[0].GetLookupVersion() != 1 {
+		t.Fatalf("first runtime lookup provenance = %#v", firstProvenance)
+	}
+
+	replaced, err := runtime.lookupManagement.Replace(
+		t.Context(),
+		lookupservice.Scope{
+			TenantID: runtimeKnowledgeTestTenant,
+			OwnerID:  runtimeKnowledgeTestOwner,
+		},
+		&opensplunkv1.ReplaceLookupRequest{
+			LookupId:        created.GetLookup().GetLookupId(),
+			ExpectedVersion: 1,
+			Definition: &opensplunkv1.LookupDefinition{
+				AppId:        runtimeKnowledgeTestApp,
+				Name:         "service_owners",
+				SharingScope: opensplunkv1.SharingScope_SHARING_SCOPE_APP,
+				Automatic:    true,
+				KeyMappings: []*opensplunkv1.LookupFieldMapping{{
+					LookupField: "service_id",
+					EventField:  "service_id",
+				}},
+				OutputMappings: []*opensplunkv1.LookupFieldMapping{{
+					LookupField: "owner",
+					EventField:  "team_owner",
+				}},
+				OverwriteBehavior: opensplunkv1.KnowledgeOverwriteBehavior_KNOWLEDGE_OVERWRITE_BEHAVIOR_REPLACE_EXISTING,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("metadata-only replace runtime lookup: %v", err)
+	}
+	if replaced.GetLookup().GetVersion() != 2 {
+		t.Fatalf("metadata-only replacement = %#v", replaced)
+	}
+	replacedResolution, err := runtime.lookupResolver.ResolveLookups(
+		t.Context(),
+		searchjobs.LookupResolutionScope{
+			TenantID:    runtimeKnowledgeTestTenant,
+			PrincipalID: runtimeKnowledgeTestOwner,
+			AppID:       runtimeKnowledgeTestApp,
+			Names:       []string{"service_owners"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("resolve metadata-only replacement: %v", err)
+	}
+	if len(replacedResolution) != 1 ||
+		replacedResolution[0].LogicalID() != resolved[0].LogicalID() ||
+		replacedResolution[0].LogicalVersion() != 2 ||
+		replacedResolution[0].ObjectID() != resolved[0].ObjectID() ||
+		replacedResolution[0].Version() != resolved[0].Version() ||
+		replacedResolution[0].SizeBytes() != resolved[0].SizeBytes() ||
+		replacedResolution[0].ContentSHA256() != resolved[0].ContentSHA256() {
+		t.Fatalf("metadata-only replacement resolution = %#v", replacedResolution)
+	}
+	replacedContract, replacedContractSet := replacedResolution[0].LogicalContract()
+	if !replacedContractSet ||
+		replacedContract.WriteMode != plan.LookupWriteModeOverwrite ||
+		len(replacedContract.Outputs) != 1 ||
+		replacedContract.Outputs[0].EventField.Name != "team_owner" {
+		t.Fatalf("metadata-only replacement contract = (%#v, %t)", replacedContract, replacedContractSet)
+	}
+
+	request = runtimeKnowledgeSearchRequest(t)
+	request.SPL = "index=main | lookup service_owners service_id AS service_id OUTPUT owner AS team_owner | table message"
+	secondJob, err := manager.Create(t.Context(), request)
+	if err != nil {
+		t.Fatalf("admit replaced runtime lookup search: %v", err)
+	}
+	secondCompleted := waitForRuntimeKnowledgeJobState(
+		t,
+		manager,
+		secondJob.ID,
+		searchjobs.StateCompleted,
+	)
+	if secondCompleted.Failure != nil || counters.executions.Load() != 2 {
+		t.Fatalf(
+			"replaced runtime lookup execution = (%#v, count=%d)",
+			secondCompleted,
+			counters.executions.Load(),
+		)
+	}
+	secondProvenance := secondCompleted.KnowledgeSnapshot.GetLookupAssets()
+	if len(secondProvenance) != 1 ||
+		secondProvenance[0].GetLookupId() != firstProvenance[0].GetLookupId() ||
+		secondProvenance[0].GetLookupVersion() != 2 ||
+		secondProvenance[0].GetAsset().GetLookupAssetId() != firstProvenance[0].GetAsset().GetLookupAssetId() ||
+		secondProvenance[0].GetAsset().GetVersion() != firstProvenance[0].GetAsset().GetVersion() ||
+		secondProvenance[0].GetAsset().GetSizeBytes() != firstProvenance[0].GetAsset().GetSizeBytes() ||
+		!bytes.Equal(
+			secondProvenance[0].GetAsset().GetContentSha256(),
+			firstProvenance[0].GetAsset().GetContentSha256(),
+		) ||
+		bytes.Equal(
+			secondCompleted.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
+			completed.KnowledgeSnapshot.GetRef().GetSnapshotSha256(),
+		) {
+		t.Fatalf(
+			"metadata-only runtime lookup provenance = %#v / %#v",
+			firstProvenance,
+			secondProvenance,
+		)
+	}
+}
+
 func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 	t.Parallel()
 
@@ -220,7 +488,8 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 		config.KnowledgeWriter != runtime.writer ||
 		config.KnowledgeApps != apps ||
 		config.KnowledgeAttempts != runtime.attempts ||
-		config.KnowledgePreview != preview {
+		config.KnowledgePreview != preview ||
+		config.LookupManagement != runtime.lookupManagement {
 		t.Fatalf("configured knowledge dependencies = %#v", config)
 	}
 	if !slices.Equal(config.Bootstrap.Features, []opensplunkv1.ServerFeature{
@@ -229,17 +498,27 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 		t.Fatalf("knowledge composition changed bootstrap capability = %#v", config.Bootstrap)
 	}
 
+	without := func(clearField func(*runtimeKnowledgeManagement)) runtimeKnowledgeManagement {
+		candidate := runtime
+		clearField(&candidate)
+		return candidate
+	}
 	missing := []struct {
 		name    string
 		runtime runtimeKnowledgeManagement
 		apps    *runtimeAppCatalog
 		preview *knowledgepreview.Service
 	}{
-		{name: "catalog", runtime: runtimeKnowledgeManagement{resolver: runtime.resolver, writer: runtime.writer, attempts: runtime.attempts}, apps: apps, preview: preview},
-		{name: "resolver", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, writer: runtime.writer, attempts: runtime.attempts}, apps: apps, preview: preview},
-		{name: "writer", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, attempts: runtime.attempts}, apps: apps, preview: preview},
-		{name: "unready writer", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, writer: &knowledgecatalog.Writer{}, attempts: runtime.attempts}, apps: apps, preview: preview},
-		{name: "attempts", runtime: runtimeKnowledgeManagement{catalog: runtime.catalog, resolver: runtime.resolver, writer: runtime.writer}, apps: apps, preview: preview},
+		{name: "catalog", runtime: without(func(value *runtimeKnowledgeManagement) { value.catalog = nil }), apps: apps, preview: preview},
+		{name: "resolver", runtime: without(func(value *runtimeKnowledgeManagement) { value.resolver = nil }), apps: apps, preview: preview},
+		{name: "writer", runtime: without(func(value *runtimeKnowledgeManagement) { value.writer = nil }), apps: apps, preview: preview},
+		{name: "unready writer", runtime: without(func(value *runtimeKnowledgeManagement) { value.writer = &knowledgecatalog.Writer{} }), apps: apps, preview: preview},
+		{name: "attempts", runtime: without(func(value *runtimeKnowledgeManagement) { value.attempts = nil }), apps: apps, preview: preview},
+		{name: "lookup assets", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupAssets = nil }), apps: apps, preview: preview},
+		{name: "lookup catalog", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupCatalog = nil }), apps: apps, preview: preview},
+		{name: "lookup management", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupManagement = nil }), apps: apps, preview: preview},
+		{name: "lookup resolver", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupResolver = nil }), apps: apps, preview: preview},
+		{name: "unready lookup resolver", runtime: without(func(value *runtimeKnowledgeManagement) { value.lookupResolver = &runtimeLookupSearchResolver{} }), apps: apps, preview: preview},
 		{name: "apps", runtime: runtime, preview: preview},
 		{name: "app backend", runtime: runtime, apps: &runtimeAppCatalog{}, preview: preview},
 		{name: "typed nil app backend", runtime: runtime, apps: &runtimeAppCatalog{catalog: typedNilAppBackend}, preview: preview},
@@ -255,7 +534,8 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 				test.preview,
 			); err == nil || candidate.KnowledgeCatalog != nil ||
 				candidate.KnowledgeWriter != nil || candidate.KnowledgeApps != nil ||
-				candidate.KnowledgeAttempts != nil || candidate.KnowledgePreview != nil {
+				candidate.KnowledgeAttempts != nil || candidate.KnowledgePreview != nil ||
+				candidate.LookupManagement != nil {
 				t.Fatalf("partial configuration = (%#v, %v)", candidate, err)
 			}
 		})
@@ -274,8 +554,22 @@ func TestConfigureRuntimeKnowledgeManagementIsAtomicAndNarrow(t *testing.T) {
 		preview,
 	); err == nil || preconfigured.KnowledgeCatalog != before ||
 		preconfigured.KnowledgeWriter != nil || preconfigured.KnowledgeApps != nil ||
-		preconfigured.KnowledgeAttempts != nil || preconfigured.KnowledgePreview != nil {
+		preconfigured.KnowledgeAttempts != nil || preconfigured.KnowledgePreview != nil ||
+		preconfigured.LookupManagement != nil {
 		t.Fatalf("typed-nil preconfiguration was overwritten = (%#v, %v)", preconfigured, err)
+	}
+
+	preconfigured = server.Config{LookupManagement: runtime.lookupManagement}
+	if err := configureRuntimeKnowledgeManagement(
+		&preconfigured,
+		runtime,
+		apps,
+		preview,
+	); err == nil || preconfigured.LookupManagement != runtime.lookupManagement ||
+		preconfigured.KnowledgeCatalog != nil || preconfigured.KnowledgeWriter != nil ||
+		preconfigured.KnowledgeApps != nil || preconfigured.KnowledgeAttempts != nil ||
+		preconfigured.KnowledgePreview != nil {
+		t.Fatalf("lookup preconfiguration was overwritten = (%#v, %v)", preconfigured, err)
 	}
 }
 
@@ -358,7 +652,7 @@ func TestRuntimeKnowledgeResolverEnabledEmptyAdmissionSucceeds(t *testing.T) {
 	counters := &runtimeKnowledgeAdmissionCounters{
 		finalized: make(chan struct{}, 1),
 	}
-	manager := newRuntimeKnowledgeAdmissionManager(t, runtime.resolver, counters)
+	manager := newRuntimeKnowledgeAdmissionManager(t, runtime, counters)
 	defer func() {
 		if err := manager.Close(); err != nil {
 			t.Errorf("close knowledge admission manager: %v", err)
@@ -597,11 +891,13 @@ func (journal runtimeKnowledgeAdmissionJournal) Finalize(
 
 func newRuntimeKnowledgeAdmissionManager(
 	t *testing.T,
-	resolver *knowledgecatalog.Resolver,
+	runtime runtimeKnowledgeManagement,
 	counters *runtimeKnowledgeAdmissionCounters,
 ) *searchjobs.Manager {
 	t.Helper()
-	manager, err := searchjobs.New(runtimeKnowledgeAdmissionManagerConfig(resolver, counters))
+	config := runtimeKnowledgeAdmissionManagerConfig(runtime.resolver, counters)
+	config.LookupResolver = runtime.lookupResolver
+	manager, err := searchjobs.New(config)
 	if err != nil {
 		t.Fatalf("create knowledge admission manager: %v", err)
 	}
@@ -614,7 +910,7 @@ func newRuntimeKnowledgePreviewForTest(
 ) *knowledgepreview.Service {
 	t.Helper()
 	counters := &runtimeKnowledgeAdmissionCounters{}
-	manager := newRuntimeKnowledgeAdmissionManager(t, runtime.resolver, counters)
+	manager := newRuntimeKnowledgeAdmissionManager(t, runtime, counters)
 	t.Cleanup(func() {
 		if err := manager.Close(); err != nil {
 			t.Errorf("close Preview search manager: %v", err)
@@ -649,8 +945,8 @@ func runtimeKnowledgeAdmissionManagerConfig(
 		MaxConcurrent:     1,
 		CleanupInterval:   -1,
 		NewID: func() string {
-			counters.ids.Add(1)
-			return "runtime-knowledge-search-0001"
+			sequence := counters.ids.Add(1)
+			return fmt.Sprintf("runtime-knowledge-search-%04d", sequence)
 		},
 		Now: func() time.Time {
 			return time.Date(2026, time.August, 8, 12, 0, 0, 0, time.UTC)

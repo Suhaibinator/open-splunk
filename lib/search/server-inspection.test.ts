@@ -138,12 +138,14 @@ function addKnowledge(
       tenantCatalogStateToken: new Uint8Array(32).fill(0x24),
       objectCount: count,
       compilerCompatibilityVersion: "open-splunk-v0.1",
+      lookupAssetCount: 0,
     },
     objects: Array.from(
       { length: Math.min(count, 64) },
       (_, ordinal) => redactedSummary(ordinal, objectType, stage),
     ),
     objectsTruncated: count > 64,
+    lookupAssets: [],
   };
   return response;
 }
@@ -169,9 +171,11 @@ function addExtraction(response: InspectSearchJobResponse): InspectSearchJobResp
       tenantCatalogStateToken: new Uint8Array(32).fill(0xbb),
       objectCount: 1,
       compilerCompatibilityVersion: "compiler-v1",
+      lookupAssetCount: 0,
     },
     objects: [redactedSummary(0, extractionType, extractionStage)],
     objectsTruncated: false,
+    lookupAssets: [],
   };
   return response;
 }
@@ -194,9 +198,11 @@ function addJsonExtraction(response: InspectSearchJobResponse): InspectSearchJob
       tenantCatalogStateToken: new Uint8Array(32).fill(0xdd),
       objectCount: 1,
       compilerCompatibilityVersion: "compiler-json-v1",
+      lookupAssetCount: 0,
     },
     objects: [redactedSummary(0, extractionType, extractionStage)],
     objectsTruncated: false,
+    lookupAssets: [],
   };
   return response;
 }
@@ -293,9 +299,11 @@ test("absent and enabled-empty Knowledge authority stay distinct", () => {
       tenantCatalogStateToken: new Uint8Array(32).fill(0x34),
       objectCount: 0,
       compilerCompatibilityVersion: "x".repeat(128),
+      lookupAssetCount: 0,
     },
     objects: [],
     objectsTruncated: false,
+    lookupAssets: [],
   };
   const enabled = adaptSearchJobInspection(response, jobId, true);
   assert.equal(enabled.knowledge?.state, "enabled");

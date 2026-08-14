@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -55,36 +56,74 @@ type CompiledFieldCatalog struct {
 // complete derived executable remains sealed; hand-built or mutated catalogs
 // cannot open the resource evidence.
 func (compiled CompiledFieldCatalog) KnowledgeGeneratedFields() (uint32, bool) {
-	if compiled.knowledgeGeneratedFields > MaximumClickHouseKnowledgeGeneratedFields ||
-		!compiled.hasValidExecutionSeal() {
-		return 0, false
+	count, ok, _ := compiled.KnowledgeGeneratedFieldsContext(context.Background())
+	return count, ok
+}
+
+func (compiled CompiledFieldCatalog) KnowledgeGeneratedFieldsContext(
+	ctx context.Context,
+) (uint32, bool, error) {
+	valid, err := compiled.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return 0, false, err
 	}
-	return compiled.knowledgeGeneratedFields, true
+	if compiled.knowledgeGeneratedFields > MaximumClickHouseKnowledgeGeneratedFields ||
+		!valid {
+		return 0, false, nil
+	}
+	return compiled.knowledgeGeneratedFields, true, nil
 }
 
 func fieldCatalogKnowledgeGeneratedFieldsFromSource(source CompiledQuery) (uint32, bool) {
-	if !source.hasValidExecutionSeal() {
-		return 0, false
+	count, ok, _ := fieldCatalogKnowledgeGeneratedFieldsFromSourceContext(
+		context.Background(),
+		source,
+	)
+	return count, ok
+}
+
+func fieldCatalogKnowledgeGeneratedFieldsFromSourceContext(
+	ctx context.Context,
+	source CompiledQuery,
+) (uint32, bool, error) {
+	valid, err := source.hasValidExecutionSealContext(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	if !valid {
+		return 0, false, nil
 	}
 	if source.knowledgeEvidence == nil {
-		return 0, true
+		return 0, true, nil
 	}
-	evidence, ok := source.KnowledgeSnapshotEvidence()
-	if !ok {
-		return 0, false
-	}
-	count := evidence.GeneratedFields()
-	return count, count <= MaximumClickHouseKnowledgeGeneratedFields
+	count := source.knowledgeEvidence.prelude.charges.GeneratedFields
+	return count, count <= MaximumClickHouseKnowledgeGeneratedFields, nil
 }
 
 // CompileFieldCatalog compiles an exact catalog over the final event relation.
 func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) (CompiledFieldCatalog, error) {
+	return c.CompileFieldCatalogContext(context.Background(), query, spec)
+}
+
+func (c Compiler) CompileFieldCatalogContext(
+	ctx context.Context,
+	query *plan.Query,
+	spec FieldCatalogSpec,
+) (CompiledFieldCatalog, error) {
+	if ctx == nil {
+		return CompiledFieldCatalog{}, errors.New(
+			"compile ClickHouse field catalog: context is nil",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return CompiledFieldCatalog{}, err
+	}
 	if spec.MaximumFields == 0 || spec.MaximumFields > MaximumFieldCatalogFields {
 		return CompiledFieldCatalog{}, fmt.Errorf(
 			"compile ClickHouse field catalog: MaximumFields must be between 1 and %d", MaximumFieldCatalogFields,
 		)
 	}
-	compiled, err := c.compileEventAnalysis(query, func(
+	compiled, err := c.compileEventAnalysisContext(ctx, query, func(
 		relation compiledRelation,
 		state compileState,
 		args []any,
@@ -114,7 +153,11 @@ func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) 
 	if err != nil {
 		return CompiledFieldCatalog{}, err
 	}
-	knowledgeGeneratedFields, ok := fieldCatalogKnowledgeGeneratedFieldsFromSource(compiled)
+	knowledgeGeneratedFields, ok, evidenceErr :=
+		fieldCatalogKnowledgeGeneratedFieldsFromSourceContext(ctx, compiled)
+	if evidenceErr != nil {
+		return CompiledFieldCatalog{}, evidenceErr
+	}
 	if !ok {
 		return CompiledFieldCatalog{}, errors.New(
 			"compile ClickHouse field catalog: generated-field resource evidence is invalid",
@@ -127,7 +170,11 @@ func (c Compiler) CompileFieldCatalog(query *plan.Query, spec FieldCatalogSpec) 
 		knowledgeGeneratedFields: knowledgeGeneratedFields,
 		readScope:                compiled.readScope,
 	}
-	result.executionAuthority, err = sealCompiledFieldCatalogExecution(compiled, result)
+	result.executionAuthority, err = sealCompiledFieldCatalogExecutionContext(
+		ctx,
+		compiled,
+		result,
+	)
 	if err != nil {
 		return CompiledFieldCatalog{}, err
 	}

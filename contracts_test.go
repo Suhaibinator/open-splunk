@@ -266,9 +266,21 @@ func TestKnowledgeSnapshotContractIsCanonicalIntegerOnly(t *testing.T) {
 	if lookupAsset == nil {
 		t.Fatal("KnowledgeSnapshotLookupAsset descriptor is missing")
 	}
-	assetOrdinal := lookupAsset.Fields().ByName("asset_ordinal")
-	if assetOrdinal == nil || assetOrdinal.Number() != 1 {
-		t.Errorf("KnowledgeSnapshotLookupAsset.asset_ordinal = %v, want wire field 1", assetOrdinal)
+	for name, wantNumber := range map[protoreflect.Name]protoreflect.FieldNumber{
+		"asset_ordinal":  1,
+		"asset":          2,
+		"lookup_id":      3,
+		"lookup_version": 4,
+	} {
+		field := lookupAsset.Fields().ByName(name)
+		if field == nil || field.Number() != wantNumber {
+			t.Errorf(
+				"KnowledgeSnapshotLookupAsset.%s = %v, want wire field %d",
+				name,
+				field,
+				wantNumber,
+			)
+		}
 	}
 }
 
@@ -301,6 +313,7 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 				{name: "tenant_catalog_state_token", number: 3, kind: protoreflect.BytesKind, cardinality: protoreflect.Optional},
 				{name: "object_count", number: 4, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
 				{name: "compiler_compatibility_version", number: 5, kind: protoreflect.StringKind, cardinality: protoreflect.Optional},
+				{name: "lookup_asset_count", number: 6, kind: protoreflect.Uint32Kind, cardinality: protoreflect.Optional},
 			},
 		},
 		{
@@ -367,6 +380,13 @@ func TestKnowledgeSnapshotReferenceAndSummaryKeepExactWireContracts(t *testing.T
 					message:     "open_splunk.v1.KnowledgeSnapshotObjectSummary",
 				},
 				{name: "objects_truncated", number: 3, kind: protoreflect.BoolKind, cardinality: protoreflect.Optional},
+				{
+					name:        "lookup_assets",
+					number:      4,
+					kind:        protoreflect.MessageKind,
+					cardinality: protoreflect.Repeated,
+					message:     "open_splunk.v1.KnowledgeSnapshotLookupAsset",
+				},
 			},
 		},
 	}

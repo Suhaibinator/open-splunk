@@ -49,7 +49,7 @@ func TestHECChannelsMigrationPinsChecksumAndLedgerOrdering(t *testing.T) {
 	rows, err := raw.QueryContext(ctx, `
 		SELECT version, name, checksum, applied_at_unix_micro
 		FROM schema_migrations
-		WHERE version >= 35
+		WHERE version BETWEEN 35 AND 36
 		ORDER BY version`)
 	if err != nil {
 		t.Fatalf("read HEC migration ledger tail: %v", err)
@@ -77,8 +77,8 @@ func TestHECChannelsMigrationPinsChecksumAndLedgerOrdering(t *testing.T) {
 	if tail[0].appliedAt <= 0 || tail[1].appliedAt < tail[0].appliedAt {
 		t.Fatalf("HEC migration ledger timestamps are out of order: %+v", tail)
 	}
-	assertIntegerQuery(t, raw, 36, `SELECT count(*) FROM schema_migrations`)
-	assertIntegerQuery(t, raw, 36, `SELECT max(version) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 38, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 38, `SELECT max(version) FROM schema_migrations`)
 	assertNoForeignKeyViolations(t, raw)
 }
 
@@ -125,7 +125,7 @@ func TestHECChannelsMigrationUpgrades0035DatabaseAndReopens(t *testing.T) {
 			'hec_request_visibility_committed',
 			'hec_request_visibility_failed'
 		  )`)
-	assertIntegerQuery(t, upgrade, 36, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, upgrade, 38, `SELECT count(*) FROM schema_migrations`)
 	assertHECAcknowledgmentSafeIntegerConstraint(t, upgrade)
 	assertNoForeignKeyViolations(t, upgrade)
 	if err := upgrade.Close(); err != nil {
@@ -141,7 +141,7 @@ func TestHECChannelsMigrationUpgrades0035DatabaseAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify reopened migration authority: %v", err)
 	}
-	if identity.LatestVersion != 36 || identity.SHA256 == ([sha256.Size]byte{}) {
+	if identity.LatestVersion != 38 || identity.SHA256 == ([sha256.Size]byte{}) {
 		t.Fatalf("reopened migration identity = %+v", identity)
 	}
 	assertIntegerQuery(t, reopened.SQLDB(), 1, `
@@ -242,7 +242,7 @@ func TestHECChannelsMigrationRollsBackLateSchemaConflict(t *testing.T) {
 	if err := ApplyMigrations(ctx, raw, migrations.SQLite()); err != nil {
 		t.Fatalf("apply HEC migration after repairing prestate: %v", err)
 	}
-	assertIntegerQuery(t, raw, 36, `SELECT count(*) FROM schema_migrations`)
+	assertIntegerQuery(t, raw, 38, `SELECT count(*) FROM schema_migrations`)
 	assertIntegerQuery(t, raw, 4, `
 		SELECT count(*) FROM sqlite_schema
 		WHERE type = 'table'

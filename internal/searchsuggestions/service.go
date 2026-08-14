@@ -61,7 +61,8 @@ type ScopeSnapshotter interface {
 
 // FieldCompiler compiles one prefix-filtered, name-only storage lookup.
 type FieldCompiler interface {
-	CompileFieldSuggestions(
+	CompileFieldSuggestionsContext(
+		context.Context,
 		*plan.Query,
 		clickhouse.FieldSuggestionSpec,
 	) (clickhouse.CompiledFieldSuggestions, error)
@@ -332,7 +333,7 @@ func (service *Service) dynamicFieldCandidates(
 		// limit here would let one filtered name consume the entire field budget.
 		MaximumFields: clickhouse.MaximumFieldSuggestions,
 	}
-	compiled, err := service.compiler.CompileFieldSuggestions(logical, spec)
+	compiled, err := service.compiler.CompileFieldSuggestionsContext(ctx, logical, spec)
 	if err != nil {
 		if sourceDiagnostic(err) {
 			return nil, false, nil

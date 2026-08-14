@@ -58,6 +58,7 @@ type compiledKnowledgePrelude struct {
 	aliasCopyCharges compiledKnowledgeAliasCopyChargeColumns
 	capturedBytes    string
 	proof            compiledKnowledgePreludeLoweringProof
+	automaticLookup  *compiledAutomaticLookupProof
 }
 
 // compileKnowledgePrelude composes the complete Tier-1 generated prefix in

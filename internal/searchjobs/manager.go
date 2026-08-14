@@ -203,6 +203,62 @@ type KnowledgeResolver interface {
 	Resolve(context.Context, knowledgecatalog.ResolutionScope) (knowledgecatalog.Resolution, error)
 }
 
+// LookupAdmissionResolutionScope is the complete trusted visibility authority
+// supplied to one atomic explicit-plus-automatic lookup resolution. Names are
+// ordered by authored pipeline occurrence; repeated references remain repeated
+// so compilation can bind one immutable version to every logical stage without
+// consulting mutable state.
+type LookupAdmissionResolutionScope struct {
+	TenantID    string
+	PrincipalID string
+	AppID       string
+	Names       []string
+}
+
+// LookupAdmissionResolution is one catalog-snapshot authority for every
+// explicit lookup occurrence and every visible automatic winner. An empty
+// Automatic slice is authoritative: the resolver was still consulted and
+// proved that no automatic lookup applies.
+type LookupAdmissionResolution struct {
+	Explicit  []clickhouse.LookupResolution
+	Automatic []clickhouse.AutomaticLookupBinding
+}
+
+// LookupResolutionScope is retained for direct resolver diagnostics. Search
+// admission uses LookupAdmissionResolutionScope and never resolves the two
+// halves independently.
+type LookupResolutionScope = LookupAdmissionResolutionScope
+
+// AutomaticLookupResolutionScope is retained for direct catalog diagnostics.
+type AutomaticLookupResolutionScope struct {
+	TenantID    string
+	PrincipalID string
+	AppID       string
+}
+
+// AutomaticLookupResolver describes the optional direct diagnostic surface;
+// Manager deliberately depends on the atomic LookupResolver contract below.
+type AutomaticLookupResolver interface {
+	ResolveAutomaticLookups(
+		context.Context,
+		AutomaticLookupResolutionScope,
+	) ([]clickhouse.AutomaticLookupBinding, error)
+}
+
+// LookupResolver atomically resolves authored logical names and all visible
+// automatic winners to immutable asset versions. The single call lets the
+// control plane enforce combined stage/cell/byte budgets before loading any
+// asset body and prevents the two sets from observing different catalog
+// snapshots. It is deliberately separate from KnowledgeResolver because
+// lookup rows have a physical execution payload in addition to catalog
+// metadata. Resolution-budget exhaustion must wrap or return ErrCapacity.
+type LookupResolver interface {
+	ResolveLookupAdmission(
+		context.Context,
+		LookupAdmissionResolutionScope,
+	) (LookupAdmissionResolution, error)
+}
+
 // Config controls bounded execution and retention. Zero values select safe
 // defaults. A negative CleanupInterval disables the background cleanup loop,
 // which is useful with an injected deterministic clock in tests.
@@ -218,6 +274,11 @@ type Config struct {
 	// KnowledgeResolver enables sealed pre-journal admission only for requests
 	// with a nonempty AppID. App-less searches deliberately remain legacy.
 	KnowledgeResolver KnowledgeResolver
+	// LookupResolver is consulted inside that same pre-journal admission
+	// boundary for every app-scoped search, including searches without authored
+	// lookup stages, because visible automatic lookups still apply. Configuring
+	// it without KnowledgeResolver is invalid.
+	LookupResolver LookupResolver
 	// MaxConcurrent bounds workers and, independently, synchronous validations.
 	MaxConcurrent          int
 	MaxConcurrentReads     int
@@ -286,6 +347,7 @@ type Manager struct {
 	compiler                 clickhouse.Compiler
 	compilerVersion          string
 	knowledgeResolver        KnowledgeResolver
+	lookupResolver           LookupResolver
 	maxRows                  uint64
 	maxBytes                 uint64
 	maxJobs                  int
@@ -374,6 +436,13 @@ func New(config Config) (*Manager, error) {
 	}
 	if isNilRequiredDependency(config.Snapshotter) {
 		return nil, errors.New("create search job manager: visibility snapshotter is required")
+	}
+	knowledgeResolver := normalizedKnowledgeResolver(config.KnowledgeResolver)
+	lookupResolver := normalizedLookupResolver(config.LookupResolver)
+	if lookupResolver != nil && knowledgeResolver == nil {
+		return nil, errors.New(
+			"create search job manager: lookup resolver requires a knowledge resolver",
+		)
 	}
 	if config.MaxConcurrent < 0 || config.MaxConcurrentReads < 0 || config.MaxConcurrentSnapshots < 0 || config.MaxResultLeases < 0 || config.MaxResultLeasesPerJob < 0 || config.MaxQueued < 0 || config.MaxJobs < 0 || config.DefaultPageSize < 0 || config.MaxPageSize < 0 || config.MaxSPLBytes < 0 || config.MaxScopeIndexes < 0 {
 		return nil, errors.New("create search job manager: limits cannot be negative")
@@ -560,7 +629,8 @@ func New(config Config) (*Manager, error) {
 		executionErrorHookGate:   make(chan struct{}, 1),
 		compiler:                 config.Compiler,
 		compilerVersion:          strings.Clone(compilerVersion),
-		knowledgeResolver:        normalizedKnowledgeResolver(config.KnowledgeResolver),
+		knowledgeResolver:        knowledgeResolver,
+		lookupResolver:           lookupResolver,
 		maxRows:                  maxRows,
 		maxBytes:                 maxBytes,
 		maxJobs:                  maxJobs,
@@ -667,6 +737,9 @@ func (manager *Manager) Create(ctx context.Context, request CreateRequest) (Job,
 	defer manager.releaseAdmission()
 	if manager.ctx.Err() != nil {
 		return Job{}, ErrClosed
+	}
+	if err := manager.rejectUnavailableAuthoredLookupAdmission(ctx, request); err != nil {
+		return Job{}, err
 	}
 	var id string
 	idReserved := false
@@ -1787,13 +1860,33 @@ func (manager *Manager) executeCompiled(
 		manager.executionFailed(entry, context.DeadlineExceeded)
 		return
 	}
-	retained, ok := compiled.CloneForExecution()
-	if !ok || !retained.EqualForExecution(compiled) {
+	executionContext, cancelExecution := context.WithTimeout(entry.ctx, runtimeBudget)
+	defer cancelExecution()
+	retained, ok, cloneErr := compiled.CloneForExecutionContext(executionContext)
+	if cloneErr != nil {
+		manager.executionFailed(entry, cloneErr)
+		return
+	}
+	equal, equalErr := retained.EqualForExecutionContext(executionContext, compiled)
+	if equalErr != nil {
+		manager.executionFailed(entry, equalErr)
+		return
+	}
+	if !ok || !equal {
 		manager.executionFailed(entry, ErrInvalidResult)
 		return
 	}
-	executable, ok := retained.CloneForExecution()
-	if !ok || !executable.EqualForExecution(retained) {
+	executable, ok, cloneErr := retained.CloneForExecutionContext(executionContext)
+	if cloneErr != nil {
+		manager.executionFailed(entry, cloneErr)
+		return
+	}
+	equal, equalErr = executable.EqualForExecutionContext(executionContext, retained)
+	if equalErr != nil {
+		manager.executionFailed(entry, equalErr)
+		return
+	}
+	if !ok || !equal {
 		manager.executionFailed(entry, ErrInvalidResult)
 		return
 	}
@@ -1816,8 +1909,6 @@ func (manager *Manager) executeCompiled(
 		chart:          chart,
 		atomicResult:   retained.RequiresAtomicResult(),
 	}
-	executionContext, cancelExecution := context.WithTimeout(entry.ctx, runtimeBudget)
-	defer cancelExecution()
 	sink.ctx = executionContext
 	defer sink.close()
 	// The executor receives its own fully detached clone. Compare it with the
@@ -1825,12 +1916,20 @@ func (manager *Manager) executeCompiled(
 	// replacement is contained by production executors, while shared-slice or
 	// pointed-result-contract mutation remains observable and must prevent a
 	// successful result publication.
-	if !executable.EqualForExecution(retained) {
+	equal, equalErr = executable.EqualForExecutionContext(executionContext, retained)
+	if equalErr != nil {
+		manager.executionFailed(entry, equalErr)
+		return
+	}
+	if !equal {
 		manager.executionFailed(entry, ErrInvalidResult)
 		return
 	}
 	executionErr := manager.executor.Execute(executionContext, executable, sink)
-	if !executable.EqualForExecution(retained) {
+	equal, equalErr = executable.EqualForExecutionContext(executionContext, retained)
+	if equalErr != nil {
+		executionErr = equalErr
+	} else if !equal {
 		executionErr = ErrInvalidResult
 	}
 	executionContextErr := executionContext.Err()
@@ -1887,8 +1986,8 @@ func (entry *jobEntry) takePreparedExecution() (clickhouse.CompiledQuery, time.D
 		entry.remainingRuntime <= 0 {
 		return clickhouse.CompiledQuery{}, 0, false
 	}
-	compiled, ok := entry.preparedCompiled.CloneForExecution()
-	if !ok {
+	compiled, ok, err := entry.preparedCompiled.CloneForExecutionContext(entry.ctx)
+	if err != nil || !ok {
 		return clickhouse.CompiledQuery{}, 0, false
 	}
 	entry.preparedExecutionClaimed = true

@@ -139,6 +139,17 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 	if err := exactKnowledgeResolution(resolution, expectedResolutionScope); err != nil {
 		return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 	}
+	lookupResolutions, automaticLookups, err := manager.resolveLookupAdmission(
+		admissionContext,
+		request,
+		parsed,
+	)
+	if err != nil {
+		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
+	}
+	if err := manager.operationContextError(admissionContext); err != nil {
+		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
+	}
 	prelude := resolution.Prelude()
 	var wildcardExpansion plan.StatsWildcardExpansion
 	var compiled clickhouse.CompiledQuery
@@ -148,6 +159,16 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		if injectErr != nil {
 			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 		}
+		inventoryPrefix, inventoryCompiler, compilerErr := configureResolvedPlanLookups(
+			admissionContext,
+			manager.compiler,
+			inventoryPrefix,
+			automaticLookups,
+			lookupResolutions,
+		)
+		if compilerErr != nil {
+			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
+		}
 		discoveryContext, cancelDiscovery := context.WithTimeout(
 			admissionContext,
 			manager.maxRuntime,
@@ -156,6 +177,7 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		var inventoryRuntime time.Duration
 		wildcardExpansion, inventory, inventoryRuntime, err = manager.executeStatsWildcardInventory(
 			discoveryContext,
+			inventoryCompiler,
 			inventoryPrefix,
 			wildcardRequest,
 		)
@@ -186,11 +208,31 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 		if err != nil {
 			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 		}
-		compiledCandidate, compileErr := manager.compiler.Compile(logical)
+		logical, fullCompiler, compilerErr := configureResolvedPlanLookups(
+			admissionContext,
+			manager.compiler,
+			logical,
+			automaticLookups,
+			lookupResolutions,
+		)
+		if compilerErr != nil {
+			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
+		}
+		compiledCandidate, compileErr := fullCompiler.CompileContext(
+			admissionContext,
+			logical,
+		)
 		if compileErr != nil {
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compileErr)
 		}
-		if !inventory.SameReadScope(compiledCandidate) {
+		sameReadScope, scopeErr := inventory.SameReadScopeContext(
+			admissionContext,
+			compiledCandidate,
+		)
+		if scopeErr != nil {
+			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, scopeErr)
+		}
+		if !sameReadScope {
 			return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 		}
 		compiled = compiledCandidate
@@ -202,7 +244,17 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 	}
 
 	if wildcardExpansion.IsZero() {
-		compiled, err = manager.compiler.Compile(logical)
+		logical, resolvedCompiler, compilerErr := configureResolvedPlanLookups(
+			admissionContext,
+			manager.compiler,
+			logical,
+			automaticLookups,
+			lookupResolutions,
+		)
+		if compilerErr != nil {
+			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, compilerErr)
+		}
+		compiled, err = resolvedCompiler.CompileContext(admissionContext, logical)
 		if err != nil {
 			return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
 		}
@@ -210,11 +262,17 @@ func (manager *Manager) prepareKnowledgeAdmissionForJob(
 	if err := manager.operationContextError(admissionContext); err != nil {
 		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, err)
 	}
-	detachedCompiled, ok := compiled.CloneForExecution()
+	detachedCompiled, ok, detachErr := compiled.CloneForExecutionContext(admissionContext)
+	if detachErr != nil {
+		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, detachErr)
+	}
 	if !ok {
 		return preparedKnowledgeAdmission{}, ErrKnowledgeUnavailable
 	}
-	compiledBytes, ok := detachedCompiled.RetainedBytes()
+	compiledBytes, ok, retainedErr := detachedCompiled.RetainedBytesContext(admissionContext)
+	if retainedErr != nil {
+		return preparedKnowledgeAdmission{}, manager.safeKnowledgeAdmissionError(ctx, retainedErr)
+	}
 	if !ok {
 		return preparedKnowledgeAdmission{}, ErrCapacity
 	}
@@ -352,7 +410,9 @@ func (manager *Manager) safeKnowledgeAdmissionError(caller context.Context, err 
 	if operationErr := manager.operationContextError(caller); operationErr != nil {
 		return operationErr
 	}
-	if errors.Is(err, control.ErrCapacityExceeded) || errors.Is(err, knowledgesnapshot.ErrResourceLimit) {
+	if errors.Is(err, ErrCapacity) ||
+		errors.Is(err, control.ErrCapacityExceeded) ||
+		errors.Is(err, knowledgesnapshot.ErrResourceLimit) {
 		return ErrCapacity
 	}
 	return ErrKnowledgeUnavailable

@@ -253,9 +253,18 @@ message KnowledgeSnapshotObject {
   bytes definition_sha256 = 12;
 }
 
+// KnowledgeSnapshotLookupAsset binds one immutable logical lookup definition
+// revision to the exact immutable physical CSV asset it authorized. Entries
+// sort by lookup_id, lookup_version, then the complete asset reference, and
+// asset_ordinal is the contiguous position in that order.
 message KnowledgeSnapshotLookupAsset {
   uint32 asset_ordinal = 1;
   KnowledgeLookupAssetVersionReference asset = 2;
+  // The logical catalog identity and immutable definition version which
+  // authorized this physical asset. Metadata-only replacements intentionally
+  // retain the same asset reference while advancing lookup_version.
+  string lookup_id = 3;
+  uint64 lookup_version = 4;
 }
 
 // KnowledgeSnapshotShadow records a visible lower-precedence object that lost
@@ -385,6 +394,10 @@ message KnowledgeSnapshotRef {
   bytes tenant_catalog_state_token = 3;
   uint32 object_count = 4;
   string compiler_compatibility_version = 5;
+  // Exact lookup identities are retained on KnowledgeSnapshotSummary; this
+  // count lets compact lifecycle references prove whether that inventory is
+  // expected without carrying definition or row payloads.
+  uint32 lookup_asset_count = 6;
 }
 
 // KnowledgeSnapshotAuthorizedObjectSummary is current-policy-authorized
@@ -417,4 +430,8 @@ message KnowledgeSnapshotSummary {
   KnowledgeSnapshotRef ref = 1;
   repeated KnowledgeSnapshotObjectSummary objects = 2;
   bool objects_truncated = 3;
+  // The complete canonical unique lookup-version inventory. Unlike objects,
+  // this list is never truncated because the compiler admits at most sixteen
+  // lookup stages and repeated use of one version is deduplicated.
+  repeated KnowledgeSnapshotLookupAsset lookup_assets = 4;
 }

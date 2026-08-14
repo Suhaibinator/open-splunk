@@ -1554,7 +1554,7 @@ type fakeFieldCompiler struct {
 	calls int
 }
 
-func (compiler *fakeFieldCompiler) CompileFieldCatalog(query *plan.Query, spec clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error) {
+func (compiler *fakeFieldCompiler) CompileFieldCatalogContext(_ context.Context, query *plan.Query, spec clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error) {
 	compiler.mu.Lock()
 	defer compiler.mu.Unlock()
 	compiler.calls++
@@ -1563,7 +1563,8 @@ func (compiler *fakeFieldCompiler) CompileFieldCatalog(query *plan.Query, spec c
 	return clickhouse.CompiledFieldCatalog{SQL: "SELECT field catalog", Spec: spec}, compiler.err
 }
 
-func (*fakeFieldCompiler) CompileFieldSummary(
+func (*fakeFieldCompiler) CompileFieldSummaryContext(
+	_ context.Context,
 	_ *plan.Query,
 	spec clickhouse.FieldSummarySpec,
 ) (clickhouse.CompiledFieldSummary, error) {

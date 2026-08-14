@@ -8,9 +8,10 @@ import (
 )
 
 // projectKnowledgeSnapshotSummary validates dependency output before cloning
-// it, then removes every retained object identity. Until the browser boundary
-// has a current-policy provenance authorizer, position, type, and stage are
-// safe to expose but an authorized_object disclosure is not.
+// it, then removes every retained object and lookup identity. Until the browser
+// boundary has a current-policy provenance authorizer, aggregate counts and
+// commitments are safe to expose but an authorized object or exact logical or
+// physical lookup identity is not.
 func projectKnowledgeSnapshotSummary(
 	input *opensplunkv1.KnowledgeSnapshotSummary,
 ) (*opensplunkv1.KnowledgeSnapshotSummary, error) {
@@ -24,5 +25,6 @@ func projectKnowledgeSnapshotSummary(
 	for _, object := range summary.GetObjects() {
 		object.Disclosure = &opensplunkv1.KnowledgeSnapshotObjectSummary_Redacted{Redacted: true}
 	}
+	summary.LookupAssets = nil
 	return summary, nil
 }

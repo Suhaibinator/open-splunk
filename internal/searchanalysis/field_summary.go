@@ -434,7 +434,7 @@ func (service *FieldService) buildFieldSummary(
 		MaximumDistinctValues: clickhouse.MaximumFieldSummaryDistinctValues,
 		MaximumValueBytes:     clickhouse.MaximumFieldSummaryValueBytes,
 	}
-	compiled, err := service.compiler.CompileFieldSummary(logical, spec)
+	compiled, err := service.compiler.CompileFieldSummaryContext(ctx, logical, spec)
 	if err != nil {
 		return nil, classifyFieldSummaryCompileError(err)
 	}

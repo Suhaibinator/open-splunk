@@ -506,11 +506,14 @@ type Config struct {
 	// Knowledge-management routes are registered only for one complete unit
 	// backed by the concrete catalog Writer. Public feature advertisement is
 	// derived separately from the complete Tier-1 runtime family.
-	KnowledgeCatalog           KnowledgeCatalog
-	KnowledgeWriter            KnowledgeWriter
-	KnowledgeApps              KnowledgeAppCatalog
-	KnowledgeAttempts          KnowledgeAttemptJournal
-	KnowledgePreview           *knowledgepreview.Service
+	KnowledgeCatalog  KnowledgeCatalog
+	KnowledgeWriter   KnowledgeWriter
+	KnowledgeApps     KnowledgeAppCatalog
+	KnowledgeAttempts KnowledgeAttemptJournal
+	KnowledgePreview  *knowledgepreview.Service
+	// LookupManagement is one complete administrator unit; when absent, none
+	// of the v0.4 lookup routes are registered.
+	LookupManagement           LookupManagement
 	SavedSearches              SavedSearches
 	SearchHistory              SearchHistory
 	Exports                    Exports
@@ -562,6 +565,7 @@ type apiHandler struct {
 	knowledgeApps              KnowledgeAppCatalog
 	knowledgeAttempts          KnowledgeAttemptJournal
 	knowledgePreview           *knowledgepreview.Service
+	lookupManagement           LookupManagement
 	knowledgeSearchAdmission   bool
 	savedSearches              SavedSearches
 	searchHistory              SearchHistory
@@ -752,6 +756,14 @@ func NewHandler(config Config) (*Handler, error) {
 			"create server handler: knowledge preview requires the complete ready knowledge management family",
 		)
 	}
+	lookupManagement := config.LookupManagement
+	if isNilDependency(lookupManagement) {
+		lookupManagement = nil
+	} else if !lookupManagement.Ready() {
+		return nil, errors.New(
+			"create server handler: lookup management service is not ready",
+		)
+	}
 	browserAuthenticator := config.BrowserAuthenticator
 	if isNilDependency(browserAuthenticator) {
 		browserAuthenticator = nil
@@ -770,6 +782,7 @@ func NewHandler(config Config) (*Handler, error) {
 		collectorAdmin != nil ||
 		appAdmin != nil ||
 		knowledgeCatalog != nil ||
+		lookupManagement != nil ||
 		inspectionService != nil) &&
 		browserAuthenticator == nil {
 		return nil, errors.New(
@@ -1018,6 +1031,7 @@ func NewHandler(config Config) (*Handler, error) {
 		knowledgeApps:              knowledgeApps,
 		knowledgeAttempts:          knowledgeAttempts,
 		knowledgePreview:           knowledgePreview,
+		lookupManagement:           lookupManagement,
 		knowledgeSearchAdmission:   knowledgeAdmission,
 		savedSearches:              config.SavedSearches,
 		searchHistory:              searchHistoryService,
@@ -1164,6 +1178,20 @@ func NewHandler(config Config) (*Handler, error) {
 	}
 	if api.knowledgePreviewConfigured() {
 		apiRoutes[knowledgeObjectsPreviewPath] = http.MethodPost
+	}
+	if api.lookupManagementConfigured() {
+		for _, path := range []string{
+			lookupCreatePath,
+			lookupGetPath,
+			lookupListPath,
+			lookupReplacePath,
+			lookupSetStatePath,
+			lookupDeletePath,
+			lookupPreviewPath,
+		} {
+			apiRoutes[path] = http.MethodPost
+			administratorRoutes[path] = struct{}{}
+		}
 	}
 	if api.exports != nil {
 		for _, path := range []string{
@@ -1518,6 +1546,9 @@ func (handler *apiHandler) newRouter(maximumRequestBytes int64, routeTimeout tim
 			routes,
 			handler.knowledgeManagementRoutes(noAuth)...,
 		)
+	}
+	if handler.lookupManagementConfigured() {
+		routes = append(routes, handler.lookupManagementRoutes(noAuth)...)
 	}
 	if handler.searchHistory != nil {
 		routes = append(routes, handler.searchHistoryRoutes(noAuth, smallRequestBytes)...)

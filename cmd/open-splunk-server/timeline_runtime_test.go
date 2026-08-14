@@ -54,19 +54,20 @@ func (runtimeCompletedSearches) SnapshotAnalysisScope(
 
 type runtimeTimelineCompiler struct{}
 
-func (runtimeTimelineCompiler) CompileTimeline(*plan.Query, clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error) {
+func (runtimeTimelineCompiler) CompileTimelineContext(context.Context, *plan.Query, clickhouse.TimelineSpec) (clickhouse.CompiledTimeline, error) {
 	return clickhouse.CompiledTimeline{}, nil
 }
 
-func (runtimeTimelineCompiler) CompileFieldCatalog(_ *plan.Query, spec clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error) {
+func (runtimeTimelineCompiler) CompileFieldCatalogContext(_ context.Context, _ *plan.Query, spec clickhouse.FieldCatalogSpec) (clickhouse.CompiledFieldCatalog, error) {
 	return clickhouse.CompiledFieldCatalog{SQL: "SELECT field catalog", Spec: spec}, nil
 }
 
-func (runtimeTimelineCompiler) CompileFieldSummary(_ *plan.Query, spec clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error) {
+func (runtimeTimelineCompiler) CompileFieldSummaryContext(_ context.Context, _ *plan.Query, spec clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error) {
 	return clickhouse.CompiledFieldSummary{SQL: "SELECT field summary", Spec: spec}, nil
 }
 
-func (runtimeTimelineCompiler) CompileFieldSuggestions(
+func (runtimeTimelineCompiler) CompileFieldSuggestionsContext(
+	_ context.Context,
 	_ *plan.Query,
 	spec clickhouse.FieldSuggestionSpec,
 ) (clickhouse.CompiledFieldSuggestions, error) {
@@ -1326,7 +1327,7 @@ func (searches *runtimeBlockingSuggestionSearches) Validate(
 
 type runtimeFieldSummaryCompiler struct{ runtimeTimelineCompiler }
 
-func (runtimeFieldSummaryCompiler) CompileFieldSummary(_ *plan.Query, spec clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error) {
+func (runtimeFieldSummaryCompiler) CompileFieldSummaryContext(_ context.Context, _ *plan.Query, spec clickhouse.FieldSummarySpec) (clickhouse.CompiledFieldSummary, error) {
 	return clickhouse.CompiledFieldSummary{SQL: "SELECT field summary", Spec: spec, FieldKnown: true}, nil
 }
 

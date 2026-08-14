@@ -30,7 +30,17 @@ func compileDeferredKnowledgeRelation(
 	scanState compileState,
 	existingArgs []any,
 	preparation preparedKnowledgeCompilation,
+	automaticGroups ...*preparedAutomaticLookupGroup,
 ) (compiledDeferredKnowledgeRelation, error) {
+	if len(automaticGroups) > 1 {
+		return compiledDeferredKnowledgeRelation{}, errors.New(
+			"compile ClickHouse automatic lookups: more than one group supplied",
+		)
+	}
+	var automatic *preparedAutomaticLookupGroup
+	if len(automaticGroups) == 1 {
+		automatic = automaticGroups[0]
+	}
 	staged, err := compileKnowledgeStageRelation(
 		relation,
 		scanState,
@@ -40,7 +50,20 @@ func compileDeferredKnowledgeRelation(
 	if err != nil {
 		return compiledDeferredKnowledgeRelation{}, err
 	}
-	if !preparation.present || preparation.program.IsEmpty() {
+	if automatic != nil {
+		staged.relation, staged.state, staged.args, staged.prelude, err =
+			compileAutomaticLookupGroup(
+				staged.relation,
+				staged.state,
+				staged.args,
+				automatic,
+				staged.prelude,
+			)
+		if err != nil {
+			return compiledDeferredKnowledgeRelation{}, err
+		}
+	}
+	if (!preparation.present || preparation.program.IsEmpty()) && automatic == nil {
 		result := compiledDeferredKnowledgeRelation{
 			relation: staged.relation,
 			state:    cloneCompileState(staged.state),
@@ -52,10 +75,18 @@ func compileDeferredKnowledgeRelation(
 			relation,
 			existingArgs,
 			preparation,
+			automatic,
 		); err != nil {
 			return compiledDeferredKnowledgeRelation{}, err
 		}
 		return result, nil
+	}
+	if err := validateAutomaticLookupPrelude(
+		staged.prelude,
+		preparation,
+		automatic,
+	); err != nil {
+		return compiledDeferredKnowledgeRelation{}, err
 	}
 	if err := validateKnowledgeRuntimeGuardInput(staged.prelude); err != nil {
 		return compiledDeferredKnowledgeRelation{}, err
@@ -114,6 +145,7 @@ func compileDeferredKnowledgeRelation(
 		relation,
 		existingArgs,
 		preparation,
+		automatic,
 	); err != nil {
 		return compiledDeferredKnowledgeRelation{}, err
 	}
@@ -207,8 +239,9 @@ func validateCompiledDeferredKnowledgeRelation(
 	input compiledRelation,
 	existingArgs []any,
 	preparation preparedKnowledgeCompilation,
+	automatic *preparedAutomaticLookupGroup,
 ) error {
-	if !preparation.present || preparation.program.IsEmpty() {
+	if (!preparation.present || preparation.program.IsEmpty()) && automatic == nil {
 		if err := validateKnowledgeRuntimeGuardIdentityPrelude(
 			compiled.prelude,
 			preparation,
@@ -224,7 +257,11 @@ func validateCompiledDeferredKnowledgeRelation(
 		}
 		return nil
 	}
-	if err := validateCompiledKnowledgePrelude(compiled.prelude, preparation); err != nil {
+	if err := validateAutomaticLookupPrelude(
+		compiled.prelude,
+		preparation,
+		automatic,
+	); err != nil {
 		return err
 	}
 	if compiled.relation.ownerRange != input.ownerRange || compiled.args != nil ||
@@ -244,6 +281,9 @@ func validateCompiledDeferredKnowledgeRelation(
 		)
 	}
 	stagedDepth := input.depth + 2*len(compiled.prelude.stages)
+	if compiled.prelude.automaticLookup != nil {
+		stagedDepth += compiled.prelude.automaticLookup.additionalDepth
+	}
 	if barrier.depth != stagedDepth+2 || compiled.relation.depth != stagedDepth+3 {
 		return errors.New(
 			"compile ClickHouse deferred knowledge relation: depth disagrees",
@@ -265,27 +305,35 @@ func validateCompiledDeferredKnowledgeRelation(
 			"compile ClickHouse deferred knowledge relation: barrier argument order is invalid",
 		)
 	}
-	expectedArgs := len(existingArgs)
-	if len(barrier.args) < expectedArgs || expectedArgs != 0 &&
-		!reflect.DeepEqual(barrier.args[:expectedArgs], existingArgs) {
-		return errors.New(
-			"compile ClickHouse deferred knowledge relation: input arguments disagree",
-		)
-	}
-	for _, stage := range compiled.prelude.stages {
-		end := expectedArgs + len(stage.suffixArgs)
-		if end < expectedArgs || end > len(barrier.args) ||
-			!reflect.DeepEqual(barrier.args[expectedArgs:end], stage.suffixArgs) {
+	if compiled.prelude.automaticLookup != nil {
+		if !reflect.DeepEqual(barrier.args, compiled.prelude.automaticLookup.args) {
 			return errors.New(
-				"compile ClickHouse deferred knowledge relation: stage arguments disagree",
+				"compile ClickHouse deferred knowledge relation: automatic arguments disagree",
 			)
 		}
-		expectedArgs = end
-	}
-	if expectedArgs != len(barrier.args) {
-		return errors.New(
-			"compile ClickHouse deferred knowledge relation: barrier arguments disagree",
-		)
+	} else {
+		expectedArgs := len(existingArgs)
+		if len(barrier.args) < expectedArgs || expectedArgs != 0 &&
+			!reflect.DeepEqual(barrier.args[:expectedArgs], existingArgs) {
+			return errors.New(
+				"compile ClickHouse deferred knowledge relation: input arguments disagree",
+			)
+		}
+		for _, stage := range compiled.prelude.stages {
+			end := expectedArgs + len(stage.suffixArgs)
+			if end < expectedArgs || end > len(barrier.args) ||
+				!reflect.DeepEqual(barrier.args[expectedArgs:end], stage.suffixArgs) {
+				return errors.New(
+					"compile ClickHouse deferred knowledge relation: stage arguments disagree",
+				)
+			}
+			expectedArgs = end
+		}
+		if expectedArgs != len(barrier.args) {
+			return errors.New(
+				"compile ClickHouse deferred knowledge relation: barrier arguments disagree",
+			)
+		}
 	}
 	stateWithoutBarrier := cloneCompileState(compiled.state)
 	stateWithoutBarrier.chronologicalBarriers = nil

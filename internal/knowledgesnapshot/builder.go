@@ -111,7 +111,8 @@ type Shadow struct {
 }
 
 // Dependency is one direct immutable object-to-object edge. KO-0 supports
-// only FIELD_INPUT object dependencies; lookup assets remain empty.
+// only FIELD_INPUT object dependencies; exact lookup versions enter through
+// the sealed compiler evidence consumed by Finalize rather than this input.
 type Dependency struct {
 	SourceObjectID string
 	SourceVersion  uint64
@@ -349,6 +350,7 @@ type trustedCompilerEvidence struct {
 	knowledgeProgramCommitment [sha256.Size]byte
 	knowledgeProgramObjects    uint32
 	knowledgeProgramCharges    knowledgeprogram.Charges
+	lookupAssets               []trustedLookupAssetEvidence
 	authored                   trustedAuthoredCompilerEvidence
 	regexCaptureBytes          uint64
 	generatedSQLBytes          uint64
@@ -1150,6 +1152,14 @@ func finalize(authority Authority, evidence trustedCompilerEvidence) (Snapshot, 
 	if !ok || snapshot == nil || snapshot.BudgetCharges == nil {
 		return Snapshot{}, fmt.Errorf("%w: prepared authority cannot be detached", ErrInvalidInput)
 	}
+	lookupAssets, err := canonicalSnapshotLookupAssets(
+		authority.base.GetTenantId(),
+		evidence.lookupAssets,
+	)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snapshot.LookupAssets = lookupAssets
 	knowledge := evidence.knowledgeProgramCharges
 	snapshot.BudgetCharges.GeneratedOperators = knowledge.GeneratedOperators
 	snapshot.BudgetCharges.GeneratedFields = knowledge.GeneratedFields
@@ -1182,11 +1192,31 @@ func (authority Authority) Finalize(compiled clickhouse.CompiledQuery) (Snapshot
 	if !commitmentOK {
 		return Snapshot{}, fmt.Errorf("%w: compiled query knowledge commitment is absent", ErrInvalidInput)
 	}
+	lookupVersions, lookupVersionsOK := compiled.LookupAssetVersions()
+	if !lookupVersionsOK {
+		return Snapshot{}, fmt.Errorf(
+			"%w: compiled query lookup evidence is absent or unsealed",
+			ErrInvalidInput,
+		)
+	}
+	lookupAssets := make([]trustedLookupAssetEvidence, len(lookupVersions))
+	for index, version := range lookupVersions {
+		lookupAssets[index] = trustedLookupAssetEvidence{
+			tenantID:      version.TenantID(),
+			lookupID:      version.LookupID(),
+			lookupVersion: version.LookupVersion(),
+			objectID:      version.AssetID(),
+			version:       version.AssetVersion(),
+			sizeBytes:     version.SizeBytes(),
+			contentSHA256: version.ContentSHA256(),
+		}
+	}
 	return finalize(authority, trustedCompilerEvidence{
 		knowledgeProgramPresent:    compilerEvidence.KnowledgeProgramPresent(),
 		knowledgeProgramCommitment: commitment,
 		knowledgeProgramObjects:    compilerEvidence.KnowledgeProgramObjectCount(),
 		knowledgeProgramCharges:    compilerEvidence.KnowledgeProgramCharges(),
+		lookupAssets:               lookupAssets,
 		authored: trustedAuthoredCompilerEvidence{
 			regexPrograms:      compilerEvidence.AuthoredRegexPrograms(),
 			regexWorkUnits:     compilerEvidence.AuthoredRegexWorkUnits(),

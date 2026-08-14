@@ -51,6 +51,11 @@
       "detail": "Extract one typed scalar from an explicit JSON path."
     },
     {
+      "name": "lookup",
+      "insertion": "lookup service_catalog service_id AS service_key OUTPUTNEW owner tier",
+      "detail": "Enrich rows from one visible exact-match lookup definition with bounded keys and outputs."
+    },
+    {
       "name": "bin",
       "insertion": "bin duration_ms span=100 AS duration_bucket",
       "detail": "Bucket one numeric or canonical time field with an explicit span."
@@ -614,6 +619,18 @@
       "name": "AS",
       "insertion": "AS ",
       "detail": "Assign an explicit output field name.",
+      "highlight": true
+    },
+    {
+      "name": "OUTPUT",
+      "insertion": "OUTPUT ",
+      "detail": "Write lookup output fields, replacing existing event values.",
+      "highlight": true
+    },
+    {
+      "name": "OUTPUTNEW",
+      "insertion": "OUTPUTNEW ",
+      "detail": "Write lookup output fields only when the event field is absent.",
       "highlight": true
     },
     {

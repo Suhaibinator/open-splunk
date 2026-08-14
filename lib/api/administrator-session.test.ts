@@ -42,7 +42,7 @@ import {
   ValidateKnowledgeObjectResponse,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 import { ValidateSearchRequest, ValidateSearchResponse } from "@/gen/ts/open_splunk/v1/search_api";
-import { ingestionTokenRoutes, knowledgeRoutes, searchRoutes } from "./routes";
+import { ingestionTokenRoutes, knowledgeRoutes, lookupRoutes, searchRoutes } from "./routes";
 
 const administratorToken = "admin-token-0123456789-abcdefghijkl";
 
@@ -78,6 +78,13 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/delete"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/state/set"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/knowledge/objects/preview"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/create"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/delete"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/get"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/list"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/preview"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/replace"), true);
+  assert.equal(isAdministratorRoutePath("/api/v1/knowledge/lookups/state/set"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/inspect"), true);
   assert.equal(isAdministratorRoutePath("/api/v1/search/jobs/create"), false);
   assert.equal(isAdministratorRoutePath("/api/v1/search/suggestions"), false);
@@ -86,6 +93,9 @@ test("administrator route allowlist excludes ordinary search and WebSocket paths
   assert.equal(knowledgeRoutes.validate.maximumResponseBytes, 8 << 20);
   assert.equal(knowledgeRoutes.preview.path, "/api/v1/knowledge/objects/preview");
   assert.equal(knowledgeRoutes.preview.maximumResponseBytes, 8 << 20);
+  for (const route of Object.values(lookupRoutes)) {
+    assert.equal(route.maximumResponseBytes, 9 << 20);
+  }
   assert.equal(searchRoutes.inspect.maximumResponseBytes, 8 << 20);
 });
 

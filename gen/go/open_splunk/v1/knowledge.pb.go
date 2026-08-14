@@ -1913,10 +1913,19 @@ func (x *KnowledgeSnapshotObject) GetDefinitionSha256() []byte {
 	return nil
 }
 
+// KnowledgeSnapshotLookupAsset binds one immutable logical lookup definition
+// revision to the exact immutable physical CSV asset it authorized. Entries
+// sort by lookup_id, lookup_version, then the complete asset reference, and
+// asset_ordinal is the contiguous position in that order.
 type KnowledgeSnapshotLookupAsset struct {
-	state         protoimpl.MessageState                `protogen:"open.v1"`
-	AssetOrdinal  uint32                                `protobuf:"varint,1,opt,name=asset_ordinal,json=assetOrdinal,proto3" json:"asset_ordinal,omitempty"`
-	Asset         *KnowledgeLookupAssetVersionReference `protobuf:"bytes,2,opt,name=asset,proto3" json:"asset,omitempty"`
+	state        protoimpl.MessageState                `protogen:"open.v1"`
+	AssetOrdinal uint32                                `protobuf:"varint,1,opt,name=asset_ordinal,json=assetOrdinal,proto3" json:"asset_ordinal,omitempty"`
+	Asset        *KnowledgeLookupAssetVersionReference `protobuf:"bytes,2,opt,name=asset,proto3" json:"asset,omitempty"`
+	// The logical catalog identity and immutable definition version which
+	// authorized this physical asset. Metadata-only replacements intentionally
+	// retain the same asset reference while advancing lookup_version.
+	LookupId      string `protobuf:"bytes,3,opt,name=lookup_id,json=lookupId,proto3" json:"lookup_id,omitempty"`
+	LookupVersion uint64 `protobuf:"varint,4,opt,name=lookup_version,json=lookupVersion,proto3" json:"lookup_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1963,6 +1972,20 @@ func (x *KnowledgeSnapshotLookupAsset) GetAsset() *KnowledgeLookupAssetVersionRe
 		return x.Asset
 	}
 	return nil
+}
+
+func (x *KnowledgeSnapshotLookupAsset) GetLookupId() string {
+	if x != nil {
+		return x.LookupId
+	}
+	return ""
+}
+
+func (x *KnowledgeSnapshotLookupAsset) GetLookupVersion() uint64 {
+	if x != nil {
+		return x.LookupVersion
+	}
+	return 0
 }
 
 // KnowledgeSnapshotShadow records a visible lower-precedence object that lost
@@ -2526,8 +2549,12 @@ type KnowledgeSnapshotRef struct {
 	TenantCatalogStateToken      []byte                 `protobuf:"bytes,3,opt,name=tenant_catalog_state_token,json=tenantCatalogStateToken,proto3" json:"tenant_catalog_state_token,omitempty"`
 	ObjectCount                  uint32                 `protobuf:"varint,4,opt,name=object_count,json=objectCount,proto3" json:"object_count,omitempty"`
 	CompilerCompatibilityVersion string                 `protobuf:"bytes,5,opt,name=compiler_compatibility_version,json=compilerCompatibilityVersion,proto3" json:"compiler_compatibility_version,omitempty"`
-	unknownFields                protoimpl.UnknownFields
-	sizeCache                    protoimpl.SizeCache
+	// Exact lookup identities are retained on KnowledgeSnapshotSummary; this
+	// count lets compact lifecycle references prove whether that inventory is
+	// expected without carrying definition or row payloads.
+	LookupAssetCount uint32 `protobuf:"varint,6,opt,name=lookup_asset_count,json=lookupAssetCount,proto3" json:"lookup_asset_count,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *KnowledgeSnapshotRef) Reset() {
@@ -2593,6 +2620,13 @@ func (x *KnowledgeSnapshotRef) GetCompilerCompatibilityVersion() string {
 		return x.CompilerCompatibilityVersion
 	}
 	return ""
+}
+
+func (x *KnowledgeSnapshotRef) GetLookupAssetCount() uint32 {
+	if x != nil {
+		return x.LookupAssetCount
+	}
+	return 0
 }
 
 // KnowledgeSnapshotAuthorizedObjectSummary is current-policy-authorized
@@ -2776,8 +2810,12 @@ type KnowledgeSnapshotSummary struct {
 	Ref              *KnowledgeSnapshotRef             `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
 	Objects          []*KnowledgeSnapshotObjectSummary `protobuf:"bytes,2,rep,name=objects,proto3" json:"objects,omitempty"`
 	ObjectsTruncated bool                              `protobuf:"varint,3,opt,name=objects_truncated,json=objectsTruncated,proto3" json:"objects_truncated,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// The complete canonical unique lookup-version inventory. Unlike objects,
+	// this list is never truncated because the compiler admits at most sixteen
+	// lookup stages and repeated use of one version is deduplicated.
+	LookupAssets  []*KnowledgeSnapshotLookupAsset `protobuf:"bytes,4,rep,name=lookup_assets,json=lookupAssets,proto3" json:"lookup_assets,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *KnowledgeSnapshotSummary) Reset() {
@@ -2829,6 +2867,13 @@ func (x *KnowledgeSnapshotSummary) GetObjectsTruncated() bool {
 		return x.ObjectsTruncated
 	}
 	return false
+}
+
+func (x *KnowledgeSnapshotSummary) GetLookupAssets() []*KnowledgeSnapshotLookupAsset {
+	if x != nil {
+		return x.LookupAssets
+	}
+	return nil
 }
 
 var File_open_splunk_v1_knowledge_proto protoreflect.FileDescriptor
@@ -2971,10 +3016,12 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\n" +
 	"definition\x18\v \x01(\v2).open_splunk.v1.KnowledgeObjectDefinitionR\n" +
 	"definition\x12+\n" +
-	"\x11definition_sha256\x18\f \x01(\fR\x10definitionSha256\"\x8f\x01\n" +
+	"\x11definition_sha256\x18\f \x01(\fR\x10definitionSha256\"\xd3\x01\n" +
 	"\x1cKnowledgeSnapshotLookupAsset\x12#\n" +
 	"\rasset_ordinal\x18\x01 \x01(\rR\fassetOrdinal\x12J\n" +
-	"\x05asset\x18\x02 \x01(\v24.open_splunk.v1.KnowledgeLookupAssetVersionReferenceR\x05asset\"\xc2\x03\n" +
+	"\x05asset\x18\x02 \x01(\v24.open_splunk.v1.KnowledgeLookupAssetVersionReferenceR\x05asset\x12\x1b\n" +
+	"\tlookup_id\x18\x03 \x01(\tR\blookupId\x12%\n" +
+	"\x0elookup_version\x18\x04 \x01(\x04R\rlookupVersion\"\xc2\x03\n" +
 	"\x17KnowledgeSnapshotShadow\x12%\n" +
 	"\x0eshadow_ordinal\x18\x01 \x01(\rR\rshadowOrdinal\x12:\n" +
 	"\x19winner_resolution_ordinal\x18\x02 \x01(\rR\x17winnerResolutionOrdinal\x12.\n" +
@@ -3030,13 +3077,14 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\bwarnings\x18\x0e \x03(\v2(.open_splunk.v1.KnowledgeSnapshotWarningR\bwarnings\x12U\n" +
 	"\x0ebudget_charges\x18\x0f \x01(\v2..open_splunk.v1.KnowledgeSnapshotBudgetChargesR\rbudgetCharges\x12;\n" +
 	"\x1atenant_catalog_state_token\x18\x10 \x01(\fR\x17tenantCatalogStateTokenB\x17\n" +
-	"\x15_app_catalog_revision\"\x9d\x02\n" +
+	"\x15_app_catalog_revision\"\xcb\x02\n" +
 	"\x14KnowledgeSnapshotRef\x12'\n" +
 	"\x0fsnapshot_sha256\x18\x01 \x01(\fR\x0esnapshotSha256\x126\n" +
 	"\x17tenant_catalog_revision\x18\x02 \x01(\x04R\x15tenantCatalogRevision\x12;\n" +
 	"\x1atenant_catalog_state_token\x18\x03 \x01(\fR\x17tenantCatalogStateToken\x12!\n" +
 	"\fobject_count\x18\x04 \x01(\rR\vobjectCount\x12D\n" +
-	"\x1ecompiler_compatibility_version\x18\x05 \x01(\tR\x1ccompilerCompatibilityVersion\"\x88\x01\n" +
+	"\x1ecompiler_compatibility_version\x18\x05 \x01(\tR\x1ccompilerCompatibilityVersion\x12,\n" +
+	"\x12lookup_asset_count\x18\x06 \x01(\rR\x10lookupAssetCount\"\x88\x01\n" +
 	"(KnowledgeSnapshotAuthorizedObjectSummary\x12.\n" +
 	"\x13knowledge_object_id\x18\x01 \x01(\tR\x11knowledgeObjectId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x04R\aversion\x12\x12\n" +
@@ -3049,11 +3097,12 @@ const file_open_splunk_v1_knowledge_proto_rawDesc = "" +
 	"\x11authorized_object\x18\x04 \x01(\v28.open_splunk.v1.KnowledgeSnapshotAuthorizedObjectSummaryH\x00R\x10authorizedObject\x12\x1c\n" +
 	"\bredacted\x18\x05 \x01(\bH\x00R\bredactedB\f\n" +
 	"\n" +
-	"disclosure\"\xc9\x01\n" +
+	"disclosure\"\x9c\x02\n" +
 	"\x18KnowledgeSnapshotSummary\x126\n" +
 	"\x03ref\x18\x01 \x01(\v2$.open_splunk.v1.KnowledgeSnapshotRefR\x03ref\x12H\n" +
 	"\aobjects\x18\x02 \x03(\v2..open_splunk.v1.KnowledgeSnapshotObjectSummaryR\aobjects\x12+\n" +
-	"\x11objects_truncated\x18\x03 \x01(\bR\x10objectsTruncated*\xbb\x01\n" +
+	"\x11objects_truncated\x18\x03 \x01(\bR\x10objectsTruncated\x12Q\n" +
+	"\rlookup_assets\x18\x04 \x03(\v2,.open_splunk.v1.KnowledgeSnapshotLookupAssetR\flookupAssets*\xbb\x01\n" +
 	"\x13KnowledgeObjectType\x12%\n" +
 	"!KNOWLEDGE_OBJECT_TYPE_UNSPECIFIED\x10\x00\x12*\n" +
 	"&KNOWLEDGE_OBJECT_TYPE_FIELD_EXTRACTION\x10\x01\x12%\n" +
@@ -3202,11 +3251,12 @@ var file_open_splunk_v1_knowledge_proto_depIdxs = []int32{
 	31, // 55: open_splunk.v1.KnowledgeSnapshotObjectSummary.authorized_object:type_name -> open_splunk.v1.KnowledgeSnapshotAuthorizedObjectSummary
 	30, // 56: open_splunk.v1.KnowledgeSnapshotSummary.ref:type_name -> open_splunk.v1.KnowledgeSnapshotRef
 	32, // 57: open_splunk.v1.KnowledgeSnapshotSummary.objects:type_name -> open_splunk.v1.KnowledgeSnapshotObjectSummary
-	58, // [58:58] is the sub-list for method output_type
-	58, // [58:58] is the sub-list for method input_type
-	58, // [58:58] is the sub-list for extension type_name
-	58, // [58:58] is the sub-list for extension extendee
-	0,  // [0:58] is the sub-list for field type_name
+	25, // 58: open_splunk.v1.KnowledgeSnapshotSummary.lookup_assets:type_name -> open_splunk.v1.KnowledgeSnapshotLookupAsset
+	59, // [59:59] is the sub-list for method output_type
+	59, // [59:59] is the sub-list for method input_type
+	59, // [59:59] is the sub-list for extension type_name
+	59, // [59:59] is the sub-list for extension extendee
+	0,  // [0:59] is the sub-list for field type_name
 }
 
 func init() { file_open_splunk_v1_knowledge_proto_init() }

@@ -25,7 +25,7 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
 	if full := preparation.FullPlan(); full != nil {
-		compiled, compileErr := manager.compiler.Compile(full)
+		compiled, compileErr := manager.compiler.CompileContext(ctx, full)
 		return full, compiled, plan.StatsWildcardExpansion{}, manager.maxRuntime, compileErr
 	}
 	request := preparation.Request()
@@ -37,6 +37,7 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 	discoveryContext, cancelDiscovery := context.WithTimeout(ctx, manager.maxRuntime)
 	expansion, inventory, inventoryRuntime, err := manager.executeStatsWildcardInventory(
 		discoveryContext,
+		manager.compiler,
 		prefix,
 		request,
 	)
@@ -53,11 +54,16 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 	if err != nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
-	compiled, err := manager.compiler.Compile(logical)
+	compiled, err := manager.compiler.CompileContext(ctx, logical)
 	if err != nil {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0, err
 	}
-	if !inventory.SameReadScope(compiled) {
+	sameReadScope, scopeErr := inventory.SameReadScopeContext(ctx, compiled)
+	if scopeErr != nil {
+		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
+			scopeErr
+	}
+	if !sameReadScope {
 		return nil, clickhouse.CompiledQuery{}, plan.StatsWildcardExpansion{}, 0,
 			fmt.Errorf("%w: stats wildcard read scope changed", ErrInvalidResult)
 	}
@@ -66,6 +72,7 @@ func (manager *Manager) prepareAndCompileStatsWildcard(
 
 func (manager *Manager) executeStatsWildcardInventory(
 	ctx context.Context,
+	compiler clickhouse.Compiler,
 	prefix *plan.Query,
 	request plan.StatsWildcardRequest,
 ) (
@@ -84,22 +91,40 @@ func (manager *Manager) executeStatsWildcardInventory(
 	if !ok || isNilRequiredDependency(capability) {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, ErrUnsupportedSPL
 	}
-	compiled, err := manager.compiler.CompileStatsWildcardInventory(prefix, request)
+	compiled, err := compiler.CompileStatsWildcardInventoryContext(ctx, prefix, request)
 	if err != nil {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, err
 	}
-	pristine, ok := compiled.CloneForExecution()
-	if !ok || !compiled.EqualForExecution(pristine) {
+	pristine, ok, cloneErr := compiled.CloneForExecutionContext(ctx)
+	if cloneErr != nil {
+		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, cloneErr
+	}
+	equal, equalErr := compiled.EqualForExecutionContext(ctx, pristine)
+	if equalErr != nil {
+		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, equalErr
+	}
+	if !ok || !equal {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, ErrInvalidResult
 	}
-	executable, ok := pristine.CloneForExecution()
-	if !ok || !executable.EqualForExecution(pristine) {
+	executable, ok, cloneErr := pristine.CloneForExecutionContext(ctx)
+	if cloneErr != nil {
+		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, cloneErr
+	}
+	equal, equalErr = executable.EqualForExecutionContext(ctx, pristine)
+	if equalErr != nil {
+		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, equalErr
+	}
+	if !ok || !equal {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, 0, ErrInvalidResult
 	}
 	inventoryStarted := time.Now()
 	expansion, err := capability.ExecuteStatsWildcardInventory(ctx, executable)
 	inventoryRuntime := time.Since(inventoryStarted)
-	if !executable.EqualForExecution(pristine) {
+	equal, equalErr = executable.EqualForExecutionContext(ctx, pristine)
+	if equalErr != nil {
+		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, equalErr
+	}
+	if !equal {
 		return plan.StatsWildcardExpansion{}, clickhouse.CompiledStatsWildcardInventory{}, inventoryRuntime, ErrInvalidResult
 	}
 	if contextErr := ctx.Err(); contextErr != nil {

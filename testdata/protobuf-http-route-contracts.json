@@ -336,6 +336,69 @@
       "responseFutureWire": "CgIIAfp/MWZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9vYmplY3RzL3ByZXZpZXc6cmVzcG9uc2U="
     },
     {
+      "path": "/api/v1/knowledge/lookups/create",
+      "requestType": "CreateLookupRequest",
+      "responseType": "CreateLookupResponse",
+      "requestKnownWire": "CioKKC9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvY3JlYXRlOnJlcXVlc3Q=",
+      "requestFutureWire": "CioKKC9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvY3JlYXRlOnJlcXVlc3T6fy9mdXR1cmU6L2FwaS92MS9rbm93bGVkZ2UvbG9va3Vwcy9jcmVhdGU6cmVxdWVzdA==",
+      "responseKnownWire": "CisKKS9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvY3JlYXRlOnJlc3BvbnNl",
+      "responseFutureWire": "CisKKS9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvY3JlYXRlOnJlc3BvbnNl+n8wZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvY3JlYXRlOnJlc3BvbnNl"
+    },
+    {
+      "path": "/api/v1/knowledge/lookups/get",
+      "requestType": "GetLookupRequest",
+      "responseType": "GetLookupResponse",
+      "requestKnownWire": "CiUvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2dldDpyZXF1ZXN0",
+      "requestFutureWire": "CiUvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2dldDpyZXF1ZXN0+n8sZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvZ2V0OnJlcXVlc3Q=",
+      "responseKnownWire": "CigKJi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvZ2V0OnJlc3BvbnNl",
+      "responseFutureWire": "CigKJi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvZ2V0OnJlc3BvbnNl+n8tZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvZ2V0OnJlc3BvbnNl"
+    },
+    {
+      "path": "/api/v1/knowledge/lookups/list",
+      "requestType": "ListLookupsRequest",
+      "responseType": "ListLookupsResponse",
+      "requestKnownWire": "CgIIAQ==",
+      "requestFutureWire": "CgIIAfp/LWZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2xpc3Q6cmVxdWVzdA==",
+      "responseKnownWire": "CikKJy9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvbGlzdDpyZXNwb25zZQ==",
+      "responseFutureWire": "CikKJy9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvbGlzdDpyZXNwb25zZfp/LmZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2xpc3Q6cmVzcG9uc2U="
+    },
+    {
+      "path": "/api/v1/knowledge/lookups/replace",
+      "requestType": "ReplaceLookupRequest",
+      "responseType": "ReplaceLookupResponse",
+      "requestKnownWire": "CikvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL3JlcGxhY2U6cmVxdWVzdA==",
+      "requestFutureWire": "CikvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL3JlcGxhY2U6cmVxdWVzdPp/MGZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL3JlcGxhY2U6cmVxdWVzdA==",
+      "responseKnownWire": "CiwKKi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvcmVwbGFjZTpyZXNwb25zZQ==",
+      "responseFutureWire": "CiwKKi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvcmVwbGFjZTpyZXNwb25zZfp/MWZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL3JlcGxhY2U6cmVzcG9uc2U="
+    },
+    {
+      "path": "/api/v1/knowledge/lookups/state/set",
+      "requestType": "SetLookupStateRequest",
+      "responseType": "SetLookupStateResponse",
+      "requestKnownWire": "CisvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL3N0YXRlL3NldDpyZXF1ZXN0",
+      "requestFutureWire": "CisvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL3N0YXRlL3NldDpyZXF1ZXN0+n8yZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvc3RhdGUvc2V0OnJlcXVlc3Q=",
+      "responseKnownWire": "Ci4KLC9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvc3RhdGUvc2V0OnJlc3BvbnNl",
+      "responseFutureWire": "Ci4KLC9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvc3RhdGUvc2V0OnJlc3BvbnNl+n8zZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvc3RhdGUvc2V0OnJlc3BvbnNl"
+    },
+    {
+      "path": "/api/v1/knowledge/lookups/delete",
+      "requestType": "DeleteLookupRequest",
+      "responseType": "DeleteLookupResponse",
+      "requestKnownWire": "CigvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2RlbGV0ZTpyZXF1ZXN0",
+      "requestFutureWire": "CigvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2RlbGV0ZTpyZXF1ZXN0+n8vZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvZGVsZXRlOnJlcXVlc3Q=",
+      "responseKnownWire": "CikvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2RlbGV0ZTpyZXNwb25zZQ==",
+      "responseFutureWire": "CikvYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2RlbGV0ZTpyZXNwb25zZfp/MGZ1dHVyZTovYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL2RlbGV0ZTpyZXNwb25zZQ=="
+    },
+    {
+      "path": "/api/v1/knowledge/lookups/preview",
+      "requestType": "PreviewLookupRequest",
+      "responseType": "PreviewLookupResponse",
+      "requestKnownWire": "CisKKS9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvcHJldmlldzpyZXF1ZXN0",
+      "requestFutureWire": "CisKKS9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvcHJldmlldzpyZXF1ZXN0+n8wZnV0dXJlOi9hcGkvdjEva25vd2xlZGdlL2xvb2t1cHMvcHJldmlldzpyZXF1ZXN0",
+      "responseKnownWire": "CiovYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL3ByZXZpZXc6cmVzcG9uc2U=",
+      "responseFutureWire": "CiovYXBpL3YxL2tub3dsZWRnZS9sb29rdXBzL3ByZXZpZXc6cmVzcG9uc2X6fzFmdXR1cmU6L2FwaS92MS9rbm93bGVkZ2UvbG9va3Vwcy9wcmV2aWV3OnJlc3BvbnNl"
+    },
+    {
       "path": "/api/v1/indexes/create",
       "requestType": "CreateIndexRequest",
       "responseType": "CreateIndexResponse",
