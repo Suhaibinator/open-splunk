@@ -39,6 +39,50 @@ type stablePathFileReadConfig struct {
 	messages          stablePathFileReadMessages
 }
 
+// readBoundedCABundleFile reads an operator-supplied CA bundle with the shared
+// stable-path mechanics. Callers supply the message prefix, the noun used in
+// every message, the size bound, and their own file-state comparison policy.
+func readBoundedCABundleFile(
+	path string,
+	prefix string,
+	noun string,
+	maximumBytes int64,
+	sameState func(os.FileInfo, os.FileInfo) bool,
+) ([]byte, error) {
+	validate := func(info os.FileInfo) error {
+		if info == nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("%s: %s must be a regular file", prefix, noun)
+		}
+		if info.Size() > maximumBytes {
+			return fmt.Errorf("%s: %s exceeds %d bytes", prefix, noun, maximumBytes)
+		}
+		return nil
+	}
+	return readStablePathFile(stablePathFileReadConfig{
+		path:             path,
+		maximumReadBytes: maximumBytes,
+		validateBefore:   validate,
+		validateOpen: func(_ *os.File, info os.FileInfo) error {
+			return validate(info)
+		},
+		validateAfterPath: validate,
+		sameState:         sameState,
+		messages: stablePathFileReadMessages{
+			inspectPath:         fmt.Sprintf("%s: inspect %s", prefix, noun),
+			openPath:            fmt.Sprintf("%s: open %s", prefix, noun),
+			invalidDescriptor:   fmt.Sprintf("%s: invalid %s descriptor", prefix, noun),
+			inspectOpen:         fmt.Sprintf("%s: inspect open %s", prefix, noun),
+			changedWhileOpening: fmt.Sprintf("%s: %s changed while opening", prefix, noun),
+			read:                fmt.Sprintf("%s: read %s", prefix, noun),
+			overflow:            fmt.Sprintf("%s: %s exceeds %d bytes", prefix, noun, maximumBytes),
+			changedWhileReading: fmt.Sprintf("%s: %s changed while reading", prefix, noun),
+			reinspectOpen:       fmt.Sprintf("%s: reinspect open %s", prefix, noun),
+			reinspectPath:       fmt.Sprintf("%s: reinspect %s", prefix, noun),
+			close:               fmt.Sprintf("%s: close %s", prefix, noun),
+		},
+	})
+}
+
 // readStablePathFile centralizes the race-resistant mechanics shared by
 // operator-supplied credential and trust files. Domain wrappers retain their
 // own path, metadata, ACL, size, terminator, and error policies.

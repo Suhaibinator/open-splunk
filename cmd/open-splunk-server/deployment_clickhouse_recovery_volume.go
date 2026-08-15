@@ -14,9 +14,11 @@ import (
 )
 
 const (
-	clickHouseRecoveryVolumeUID                     = 101
-	clickHouseRecoveryVolumeGID                     = 65532
-	clickHouseRecoveryVolumeReadyMode   os.FileMode = 0o750 | os.ModeSetgid
+	// The prepared volume is the same directory the backup subcommand passes as
+	// -archive-root, so these must equal the archive ownership policy.
+	clickHouseRecoveryVolumeUID                     = deploymentRecoveryArchiveUID
+	clickHouseRecoveryVolumeGID                     = deploymentRecoveryArchiveGID
+	clickHouseRecoveryVolumeReadyMode   os.FileMode = deploymentRecoveryArchiveRootMode
 	clickHouseRecoveryVolumeSpecialMode             = os.ModeSetuid | os.ModeSetgid | os.ModeSticky
 )
 

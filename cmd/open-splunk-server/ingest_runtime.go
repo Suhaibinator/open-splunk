@@ -168,15 +168,7 @@ func (authorizer collectorAuthorizer) Authorize(ctx context.Context, token strin
 		len(authentication.AuthorizedIndexes) == 0 {
 		return ingest.Authorization{}, ingest.ErrUnauthorized
 	}
-	return ingest.Authorization{
-		SubjectID:            authentication.TokenID,
-		TenantID:             authorizer.tenantID,
-		CollectorID:          authentication.BoundCollectorID,
-		TokenRateLimits:      authentication.TokenRateLimits,
-		AuthorizedIndexes:    slices.Clone(authentication.AuthorizedIndexes),
-		AllowedHostRegexes:   slices.Clone(authentication.AllowedHostRegexes),
-		AllowedSourceRegexes: slices.Clone(authentication.AllowedSourceRegexes),
-	}, nil
+	return collectorAuthenticationAuthorization(authentication, authorizer.tenantID), nil
 }
 
 type collectorAdmissionRuntimeStore interface {

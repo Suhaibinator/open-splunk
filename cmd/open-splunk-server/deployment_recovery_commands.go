@@ -514,7 +514,7 @@ func runRestoreDeploymentRecoverySetWithDependencies(
 	if err := dependencies.validateRestorePrivileges(ctx, session); err != nil {
 		return fmt.Errorf("restore deployment recovery set: validate ClickHouse restore principal: %w", err)
 	}
-	if err := runDeploymentNativeRestore(
+	if err := runDeploymentRestoreStateMachine(
 		ctx,
 		session,
 		verification,
@@ -577,7 +577,7 @@ func openDeploymentRecoverySession(
 	if ctx == nil || open == nil {
 		return nil, errors.New("open ClickHouse recovery session: context and opener are required")
 	}
-	validatedAddress, err := validateDeploymentClickHouseMigrationAddress(address)
+	validatedAddress, err := validateExactDeploymentClickHouseAddress(address)
 	if err != nil {
 		return nil, err
 	}
@@ -623,19 +623,15 @@ func openDeploymentRecoverySession(
 }
 
 func discardDeploymentRecoveryCredentialEnvironment() error {
-	for _, name := range []string{
+	return discardClickHousePasswordEnvironment(
+		"deployment recovery",
 		"CLICKHOUSE_PASSWORD",
 		clickHouseMigrationPasswordEnvironment,
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_BACKUP_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_RESTORE_PASSWORD",
-	} {
-		if err := os.Unsetenv(name); err != nil {
-			return fmt.Errorf("deployment recovery: discard password environment %s: %w", name, err)
-		}
-	}
-	return nil
+	)
 }
 
 func validateDeploymentRecoveryBackupDependencies(dependencies deploymentRecoveryDependencies) error {

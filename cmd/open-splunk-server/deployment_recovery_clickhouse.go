@@ -206,22 +206,6 @@ func runDeploymentNativeBackup(
 	}, nil
 }
 
-func runDeploymentNativeRestore(
-	ctx context.Context,
-	session deploymentRecoverySession,
-	verification recoveryset.Verification,
-	postRestoreVerify deploymentRecoveryPostRestoreVerifier,
-	dependencies deploymentRecoveryDependencies,
-) error {
-	return runDeploymentRestoreStateMachine(
-		ctx,
-		session,
-		verification,
-		postRestoreVerify,
-		dependencies,
-	)
-}
-
 func runDeploymentRestoreStateMachine(
 	ctx context.Context,
 	session deploymentRecoverySession,

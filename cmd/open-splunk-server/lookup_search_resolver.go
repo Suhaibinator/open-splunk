@@ -71,28 +71,6 @@ func (resolver *runtimeLookupSearchResolver) ResolveLookupAdmission(
 	}, nil
 }
 
-func (resolver *runtimeLookupSearchResolver) ResolveLookups(
-	ctx context.Context,
-	scope searchjobs.LookupResolutionScope,
-) ([]clickhouse.LookupResolution, error) {
-	if resolver == nil || resolver.catalog == nil || ctx == nil {
-		return nil, errors.New("resolve runtime search lookups: dependencies are incomplete")
-	}
-	resolved, err := resolver.catalog.Resolve(ctx, lookupcatalog.ResolveScope{
-		TenantID:    scope.TenantID,
-		PrincipalID: scope.PrincipalID,
-		AppID:       scope.AppID,
-		Names:       slices.Clone(scope.Names),
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(resolved) != len(scope.Names) {
-		return nil, errors.New("resolve runtime search lookups: catalog result count disagrees")
-	}
-	return runtimeExplicitLookupResolutions(resolved, scope.Names)
-}
-
 func runtimeExplicitLookupResolutions(
 	resolved []lookupcatalog.Resolved,
 	names []string,
@@ -122,33 +100,6 @@ func runtimeExplicitLookupResolutions(
 		result[index] = resolution
 	}
 	return result, nil
-}
-
-func (resolver *runtimeLookupSearchResolver) ResolveAutomaticLookups(
-	ctx context.Context,
-	scope searchjobs.AutomaticLookupResolutionScope,
-) ([]clickhouse.AutomaticLookupBinding, error) {
-	return resolver.resolveAutomaticLookupBindings(ctx, lookupcatalog.ResolveScope{
-		TenantID:    scope.TenantID,
-		PrincipalID: scope.PrincipalID,
-		AppID:       scope.AppID,
-	})
-}
-
-func (resolver *runtimeLookupSearchResolver) resolveAutomaticLookupBindings(
-	ctx context.Context,
-	scope lookupcatalog.ResolveScope,
-) ([]clickhouse.AutomaticLookupBinding, error) {
-	if resolver == nil || resolver.catalog == nil || ctx == nil {
-		return nil, errors.New(
-			"resolve runtime automatic lookups: dependencies are incomplete",
-		)
-	}
-	resolved, err := resolver.catalog.ResolveAutomatic(ctx, scope)
-	if err != nil {
-		return nil, err
-	}
-	return runtimeAutomaticLookupBindings(resolved)
 }
 
 func runtimeAutomaticLookupBindings(
@@ -260,4 +211,3 @@ func runtimeLookupContract(
 }
 
 var _ searchjobs.LookupResolver = (*runtimeLookupSearchResolver)(nil)
-var _ searchjobs.AutomaticLookupResolver = (*runtimeLookupSearchResolver)(nil)

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 	"golang.org/x/sys/unix"
 )
 
@@ -254,46 +255,13 @@ func validateExactDeploymentTLSServerName(serverName string) error {
 }
 
 func readBoundedDeploymentHealthCABundle(path string) ([]byte, error) {
-	validate := func(info os.FileInfo) error {
-		if info == nil || !info.Mode().IsRegular() {
-			return errors.New(
-				"deployment healthcheck: CA certificate must be a regular file",
-			)
-		}
-		if info.Size() > maximumDeploymentHealthCABundleBytes {
-			return fmt.Errorf(
-				"deployment healthcheck: CA certificate exceeds %d bytes",
-				maximumDeploymentHealthCABundleBytes,
-			)
-		}
-		return nil
-	}
-	return readStablePathFile(stablePathFileReadConfig{
-		path:             path,
-		maximumReadBytes: maximumDeploymentHealthCABundleBytes,
-		validateBefore:   validate,
-		validateOpen: func(_ *os.File, info os.FileInfo) error {
-			return validate(info)
-		},
-		validateAfterPath: validate,
-		sameState:         sameAdministratorTokenFileState,
-		messages: stablePathFileReadMessages{
-			inspectPath:         "deployment healthcheck: inspect CA certificate",
-			openPath:            "deployment healthcheck: open CA certificate",
-			invalidDescriptor:   "deployment healthcheck: invalid CA certificate descriptor",
-			inspectOpen:         "deployment healthcheck: inspect CA certificate",
-			changedWhileOpening: "deployment healthcheck: CA certificate changed while opening",
-			read:                "deployment healthcheck: read CA certificate",
-			overflow: fmt.Sprintf(
-				"deployment healthcheck: CA certificate exceeds %d bytes",
-				maximumDeploymentHealthCABundleBytes,
-			),
-			changedWhileReading: "deployment healthcheck: CA certificate changed while reading",
-			reinspectOpen:       "deployment healthcheck: reinspect open CA certificate",
-			reinspectPath:       "deployment healthcheck: reinspect CA certificate path",
-			close:               "deployment healthcheck: close CA certificate",
-		},
-	})
+	return readBoundedCABundleFile(
+		path,
+		"deployment healthcheck",
+		"CA certificate",
+		maximumDeploymentHealthCABundleBytes,
+		sameAdministratorTokenFileState,
+	)
 }
 
 func provisionAdministratorToken(sourcePath, destinationPath string) error {
@@ -363,7 +331,7 @@ func provisionAdministratorTokenWithHooks(
 	if err := validateProvisioningDestinationDirectory(opened, os.Geteuid()); err != nil {
 		return err
 	}
-	if err := validateAdministratorTokenACL(directory); err != nil {
+	if err := privatefs.ValidateNoExtendedACL(directory); err != nil {
 		return fmt.Errorf("provision administrator token: destination parent ACL is unsafe: %w", err)
 	}
 	if err := ensureProvisioningDestinationDirectoryStable(
@@ -384,7 +352,7 @@ func provisionAdministratorTokenWithHooks(
 	if err != nil {
 		return err
 	}
-	if err := validateAdministratorTokenACL(directory); err != nil {
+	if err := privatefs.ValidateNoExtendedACL(directory); err != nil {
 		return fmt.Errorf("provision administrator token: destination parent ACL became unsafe: %w", err)
 	}
 	return ensureProvisioningDestinationDirectoryStable(
@@ -628,7 +596,7 @@ func createProvisionedAdministratorToken(
 		_ = temporary.Close()
 		return false, errors.New("provision administrator token: temporary destination has an invalid size")
 	}
-	if err := validateAdministratorTokenACL(temporary); err != nil {
+	if err := privatefs.ValidateNoExtendedACL(temporary); err != nil {
 		_ = temporary.Close()
 		return false, err
 	}
@@ -750,7 +718,7 @@ func readProvisionedAdministratorToken(
 	if err := validateProvisionedAdministratorTokenFile(opened, os.Geteuid()); err != nil {
 		return nil, err
 	}
-	if err := validateAdministratorTokenACL(file); err != nil {
+	if err := privatefs.ValidateNoExtendedACL(file); err != nil {
 		return nil, err
 	}
 	if opened.Size() < auth.MinimumBrowserBearerTokenBytes ||
@@ -779,7 +747,7 @@ func readProvisionedAdministratorToken(
 	if err := validateProvisionedAdministratorTokenFile(afterOpen, os.Geteuid()); err != nil {
 		return nil, err
 	}
-	if err := validateAdministratorTokenACL(file); err != nil {
+	if err := privatefs.ValidateNoExtendedACL(file); err != nil {
 		return nil, err
 	}
 	pathInfo, err := os.Lstat(filepath.Join(directoryPath, destinationName))

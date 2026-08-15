@@ -167,7 +167,7 @@ func (adapter *runtimeCollectorAdministration) UpdateDisplayName(
 		detachedCollectorScope(scope),
 		strings.Clone(collectorID),
 		expectedVersion,
-		cloneRuntimeCollectorString(displayName),
+		cloneRuntimeString(displayName),
 		receivedAt,
 	)
 }
@@ -224,12 +224,4 @@ func detachedCollectorScope(
 	scope collectorfleet.Scope,
 ) collectorfleet.Scope {
 	return collectorfleet.Scope{TenantID: strings.Clone(scope.TenantID)}
-}
-
-func cloneRuntimeCollectorString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	cloned := strings.Clone(*value)
-	return &cloned
 }

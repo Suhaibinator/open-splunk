@@ -272,9 +272,9 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 		t.Fatalf("created runtime lookup = %#v", created)
 	}
 
-	resolved, err := runtime.lookupResolver.ResolveLookups(
+	admission, err := runtime.lookupResolver.ResolveLookupAdmission(
 		t.Context(),
-		searchjobs.LookupResolutionScope{
+		searchjobs.LookupAdmissionResolutionScope{
 			TenantID:    runtimeKnowledgeTestTenant,
 			PrincipalID: runtimeKnowledgeTestOwner,
 			AppID:       runtimeKnowledgeTestApp,
@@ -282,8 +282,9 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 		},
 	)
 	if err != nil {
-		t.Fatalf("resolve runtime lookup: %v", err)
+		t.Fatalf("resolve runtime lookup admission: %v", err)
 	}
+	resolved := admission.Explicit
 	if len(resolved) != 1 ||
 		resolved[0].TenantID() != runtimeKnowledgeTestTenant ||
 		resolved[0].DefinitionName() != "service_owners" ||
@@ -300,17 +301,7 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 		len(contract.Keys) != 1 || len(contract.Outputs) != 1 {
 		t.Fatalf("resolved runtime lookup contract = (%#v, %t)", contract, contractSet)
 	}
-	automatic, err := runtime.lookupResolver.ResolveAutomaticLookups(
-		t.Context(),
-		searchjobs.AutomaticLookupResolutionScope{
-			TenantID:    runtimeKnowledgeTestTenant,
-			PrincipalID: runtimeKnowledgeTestOwner,
-			AppID:       runtimeKnowledgeTestApp,
-		},
-	)
-	if err != nil {
-		t.Fatalf("resolve runtime automatic lookups: %v", err)
-	}
+	automatic := admission.Automatic
 	if len(automatic) != 1 ||
 		automatic[0].StableID != created.GetLookup().GetLookupId() ||
 		automatic[0].Lookup.DefinitionName != "service_owners" ||
@@ -320,21 +311,6 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 		automatic[0].Resolution.ObjectID() == "" {
 		t.Fatalf("resolved runtime automatic lookup = %#v", automatic)
 	}
-	admission, err := runtime.lookupResolver.ResolveLookupAdmission(
-		t.Context(),
-		searchjobs.LookupAdmissionResolutionScope{
-			TenantID:    runtimeKnowledgeTestTenant,
-			PrincipalID: runtimeKnowledgeTestOwner,
-			AppID:       runtimeKnowledgeTestApp,
-			Names:       []string{"service_owners"},
-		},
-	)
-	if err != nil || len(admission.Explicit) != 1 || len(admission.Automatic) != 1 ||
-		admission.Explicit[0].LogicalID() != created.GetLookup().GetLookupId() ||
-		admission.Automatic[0].StableID != created.GetLookup().GetLookupId() {
-		t.Fatalf("combined runtime lookup admission = %#v, %v", admission, err)
-	}
-
 	counters := &runtimeKnowledgeAdmissionCounters{}
 	manager := newRuntimeKnowledgeAdmissionManager(t, runtime, counters)
 	defer func() {
@@ -395,9 +371,9 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 	if replaced.GetLookup().GetVersion() != 2 {
 		t.Fatalf("metadata-only replacement = %#v", replaced)
 	}
-	replacedResolution, err := runtime.lookupResolver.ResolveLookups(
+	replacedAdmission, err := runtime.lookupResolver.ResolveLookupAdmission(
 		t.Context(),
-		searchjobs.LookupResolutionScope{
+		searchjobs.LookupAdmissionResolutionScope{
 			TenantID:    runtimeKnowledgeTestTenant,
 			PrincipalID: runtimeKnowledgeTestOwner,
 			AppID:       runtimeKnowledgeTestApp,
@@ -407,6 +383,7 @@ func TestRuntimeLookupManagementAndSearchResolutionShareOneCatalog(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolve metadata-only replacement: %v", err)
 	}
+	replacedResolution := replacedAdmission.Explicit
 	if len(replacedResolution) != 1 ||
 		replacedResolution[0].LogicalID() != resolved[0].LogicalID() ||
 		replacedResolution[0].LogicalVersion() != 2 ||

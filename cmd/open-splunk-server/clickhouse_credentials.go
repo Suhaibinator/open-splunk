@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 )
 
 const maximumClickHouseCredentialBytes = 4096
@@ -70,7 +72,7 @@ func readClickHouseCredentialFileWithHooks(
 			if err := validateClickHouseCredentialFile(info); err != nil {
 				return err
 			}
-			if err := validateAdministratorTokenACL(file); err != nil {
+			if err := privatefs.ValidateNoExtendedACL(file); err != nil {
 				return errors.New(
 					"credential file has unsupported access-control metadata",
 				)

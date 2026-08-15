@@ -108,19 +108,14 @@ func runDeploymentClickHouseMigrationWithDependencies(
 	// The production command accepts the migrator secret only through its
 	// bounded file. Clear every stray ClickHouse credential before any driver
 	// is opened, even when this subcommand is invoked outside Compose.
-	for _, environmentName := range []string{
+	if err := discardClickHousePasswordEnvironment(
+		"deployment ClickHouse migration",
 		"CLICKHOUSE_PASSWORD",
 		clickHouseMigrationPasswordEnvironment,
 		"OPEN_SPLUNK_CLICKHOUSE_RUNTIME_PASSWORD",
 		"OPEN_SPLUNK_CLICKHOUSE_DELETION_PASSWORD",
-	} {
-		if err := os.Unsetenv(environmentName); err != nil {
-			return fmt.Errorf(
-				"deployment ClickHouse migration: discard password environment %s: %w",
-				environmentName,
-				err,
-			)
-		}
+	); err != nil {
+		return err
 	}
 	if dependencies.migrationFiles == nil || dependencies.open == nil ||
 		dependencies.apply == nil || dependencies.validatePhysicalSchema == nil ||
@@ -314,4 +309,15 @@ func validateExactDeploymentClickHouseAddress(rawAddress string) (string, error)
 		return "", errors.New("-address port must be between 1 and 65535")
 	}
 	return rawAddress, nil
+}
+
+// discardClickHousePasswordEnvironment unsets every named ClickHouse password
+// variable, reporting the first failure with the caller's operation prefix.
+func discardClickHousePasswordEnvironment(prefix string, names ...string) error {
+	for _, name := range names {
+		if err := os.Unsetenv(name); err != nil {
+			return fmt.Errorf("%s: discard password environment %s: %w", prefix, name, err)
+		}
+	}
+	return nil
 }

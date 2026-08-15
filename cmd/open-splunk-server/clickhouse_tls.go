@@ -7,7 +7,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 )
 
@@ -62,44 +61,13 @@ func loadClickHouseClientTLSProfile(
 }
 
 func readBoundedClickHouseCABundle(path string) ([]byte, error) {
-	validate := func(info os.FileInfo) error {
-		if info == nil || !info.Mode().IsRegular() {
-			return errors.New("configure ClickHouse TLS: CA file must be regular")
-		}
-		if info.Size() > maximumClickHouseCABundleBytes {
-			return fmt.Errorf(
-				"configure ClickHouse TLS: CA file exceeds %d bytes",
-				maximumClickHouseCABundleBytes,
-			)
-		}
-		return nil
-	}
-	return readStablePathFile(stablePathFileReadConfig{
-		path:             path,
-		maximumReadBytes: maximumClickHouseCABundleBytes,
-		validateBefore:   validate,
-		validateOpen: func(_ *os.File, info os.FileInfo) error {
-			return validate(info)
-		},
-		validateAfterPath: validate,
-		sameState:         sameClickHouseCredentialFileState,
-		messages: stablePathFileReadMessages{
-			inspectPath:         "configure ClickHouse TLS: inspect CA file",
-			openPath:            "configure ClickHouse TLS: open CA file",
-			invalidDescriptor:   "configure ClickHouse TLS: invalid CA file descriptor",
-			inspectOpen:         "configure ClickHouse TLS: inspect open CA file",
-			changedWhileOpening: "configure ClickHouse TLS: CA file changed while opening",
-			read:                "configure ClickHouse TLS: read CA file",
-			overflow: fmt.Sprintf(
-				"configure ClickHouse TLS: CA file exceeds %d bytes",
-				maximumClickHouseCABundleBytes,
-			),
-			changedWhileReading: "configure ClickHouse TLS: CA file changed while reading",
-			reinspectOpen:       "configure ClickHouse TLS: reinspect open CA file",
-			reinspectPath:       "configure ClickHouse TLS: reinspect CA file",
-			close:               "configure ClickHouse TLS: close CA file",
-		},
-	})
+	return readBoundedCABundleFile(
+		path,
+		"configure ClickHouse TLS",
+		"CA file",
+		maximumClickHouseCABundleBytes,
+		sameClickHouseCredentialFileState,
+	)
 }
 
 func parseClickHouseCABundle(bundle []byte) (*x509.CertPool, error) {

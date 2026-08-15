@@ -126,55 +126,15 @@ func newHECTerminalMaintenance(
 
 func (maintenance *hecTerminalMaintenance) run() {
 	defer close(maintenance.done)
-	ticks := maintenance.ticks
-	var ticker *time.Ticker
-	if ticks == nil {
-		ticker = time.NewTicker(maintenance.interval)
-		ticks = ticker.C
-		defer ticker.Stop()
-	}
-	var backlogTimer *time.Timer
-	var backlog <-chan time.Time
-	defer func() {
-		if backlogTimer != nil {
-			backlogTimer.Stop()
-		}
-	}()
-	scheduleBacklog := func(more bool) {
-		if !more {
-			backlog = nil
-			return
-		}
-		if backlogTimer == nil {
-			backlogTimer = time.NewTimer(maintenance.backlogDelay)
-		} else {
-			if !backlogTimer.Stop() {
-				select {
-				case <-backlogTimer.C:
-				default:
-				}
-			}
-			backlogTimer.Reset(maintenance.backlogDelay)
-		}
-		backlog = backlogTimer.C
-	}
-	if maintenance.runImmediately {
-		scheduleBacklog(maintenance.prune())
-	}
-	for {
-		select {
-		case <-maintenance.workerContext.Done():
-			return
-		case _, open := <-ticks:
-			if !open || maintenance.workerContext.Err() != nil {
-				return
-			}
-			scheduleBacklog(maintenance.prune())
-		case <-backlog:
-			backlog = nil
-			scheduleBacklog(maintenance.prune())
-		}
-	}
+
+	runBacklogMaintenanceLoop(
+		maintenance.workerContext,
+		maintenance.ticks,
+		maintenance.interval,
+		maintenance.backlogDelay,
+		maintenance.runImmediately,
+		maintenance.prune,
+	)
 }
 
 func (maintenance *hecTerminalMaintenance) prune() bool {

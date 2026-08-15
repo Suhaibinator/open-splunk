@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Suhaibinator/open-splunk/internal/errorreport"
 	"github.com/Suhaibinator/open-splunk/internal/searchhistory"
 )
 
@@ -107,14 +108,12 @@ type searchHistoryMaintenance struct {
 	runImmediately bool
 	ticks          <-chan time.Time
 	interval       time.Duration
-	onError        func(error)
+	errorReports   errorreport.SingleFlight
 
 	workerContext context.Context
 	cancelWorker  context.CancelFunc
 	done          chan struct{}
 	closeOnce     sync.Once
-	callbackMu    sync.Mutex
-	callbackAlive bool
 }
 
 func newSearchHistoryMaintenance(
@@ -138,7 +137,7 @@ func newSearchHistoryMaintenance(
 		runImmediately: config.runImmediately,
 		ticks:          config.ticks,
 		interval:       config.interval,
-		onError:        config.onError,
+		errorReports:   errorreport.SingleFlight{Callback: config.onError},
 		workerContext:  workerContext,
 		cancelWorker:   cancelWorker,
 		done:           make(chan struct{}),
@@ -150,61 +149,14 @@ func newSearchHistoryMaintenance(
 func (maintenance *searchHistoryMaintenance) run() {
 	defer close(maintenance.done)
 
-	ticks := maintenance.ticks
-	var ticker *time.Ticker
-	if ticks == nil {
-		ticker = time.NewTicker(maintenance.interval)
-		ticks = ticker.C
-		defer ticker.Stop()
-	}
-	var backlogTimer *time.Timer
-	var backlog <-chan time.Time
-	defer func() {
-		if backlogTimer != nil {
-			backlogTimer.Stop()
-		}
-	}()
-	scheduleBacklog := func(more bool) {
-		if !more {
-			if backlogTimer != nil && !backlogTimer.Stop() {
-				select {
-				case <-backlogTimer.C:
-				default:
-				}
-			}
-			backlog = nil
-			return
-		}
-		if backlogTimer == nil {
-			backlogTimer = time.NewTimer(maintenance.backlogDelay)
-		} else {
-			if !backlogTimer.Stop() {
-				select {
-				case <-backlogTimer.C:
-				default:
-				}
-			}
-			backlogTimer.Reset(maintenance.backlogDelay)
-		}
-		backlog = backlogTimer.C
-	}
-	if maintenance.runImmediately {
-		scheduleBacklog(maintenance.prune())
-	}
-	for {
-		select {
-		case <-maintenance.workerContext.Done():
-			return
-		case _, open := <-ticks:
-			if !open || maintenance.workerContext.Err() != nil {
-				return
-			}
-			scheduleBacklog(maintenance.prune())
-		case <-backlog:
-			backlog = nil
-			scheduleBacklog(maintenance.prune())
-		}
-	}
+	runBacklogMaintenanceLoop(
+		maintenance.workerContext,
+		maintenance.ticks,
+		maintenance.interval,
+		maintenance.backlogDelay,
+		maintenance.runImmediately,
+		maintenance.prune,
+	)
 }
 
 func (maintenance *searchHistoryMaintenance) prune() bool {
@@ -270,25 +222,7 @@ func runSearchHistoryPruneBatches(
 }
 
 func (maintenance *searchHistoryMaintenance) reportError(err error) {
-	if err == nil || maintenance.onError == nil {
-		return
-	}
-	maintenance.callbackMu.Lock()
-	if maintenance.callbackAlive {
-		maintenance.callbackMu.Unlock()
-		return
-	}
-	maintenance.callbackAlive = true
-	maintenance.callbackMu.Unlock()
-	go func() {
-		defer func() {
-			_ = recover()
-			maintenance.callbackMu.Lock()
-			maintenance.callbackAlive = false
-			maintenance.callbackMu.Unlock()
-		}()
-		maintenance.onError(err)
-	}()
+	maintenance.errorReports.Report(err)
 }
 
 // Close cancels an in-flight prune and waits for the owned worker. If the

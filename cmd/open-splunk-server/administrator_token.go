@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/Suhaibinator/open-splunk/internal/auth"
+	"github.com/Suhaibinator/open-splunk/internal/privatefs"
 )
 
 const maximumAdministratorTokenFileBytes = auth.MaximumBrowserBearerTokenBytes + 2
@@ -61,7 +62,7 @@ func readAdministratorTokenWithHooks(
 			if err := validateAdministratorTokenFile(info, os.Geteuid()); err != nil {
 				return err
 			}
-			if err := validateAdministratorTokenACL(file); err != nil {
+			if err := privatefs.ValidateNoExtendedACL(file); err != nil {
 				return err
 			}
 			if info.Size() < auth.MinimumBrowserBearerTokenBytes ||
