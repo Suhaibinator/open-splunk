@@ -3,10 +3,8 @@
 import Link from "next/link";
 import {
   type CSSProperties,
-  type KeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
@@ -14,6 +12,7 @@ import { backendDraftWithoutIndexSelector } from "@/lib/search/example-drafts";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
 import { PageHeading } from "../_components/product-shell";
+import { useRovingChartFocus } from "../_components/use-roving-chart-focus";
 import styles from "./analytics.module.css";
 
 type RangeKey = "1h" | "24h" | "7d";
@@ -138,7 +137,6 @@ const NUMBER_FORMAT = new Intl.NumberFormat("en-US");
 const DECIMAL_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
 
 function formatCardinality(value: number) {
-  if (value >= 10_000) return `${DECIMAL_FORMAT.format(value / 1_000)}K`;
   if (value >= 1_000) return `${DECIMAL_FORMAT.format(value / 1_000)}K`;
   return NUMBER_FORMAT.format(value);
 }
@@ -154,9 +152,7 @@ function relativeBucketLabel(remainingMinutes: number) {
 }
 
 function PerformanceTrend({ values, labels }: { values: number[]; labels: string[] }) {
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [focusIndex, setFocusIndex] = useState(0);
-  const pointRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const { activeIndex, setActiveIndex, focusIndex, itemRefs, handleKeyDown, handleFocus } = useRovingChartFocus(values.length);
   const maximum = Math.max(...values) * 1.12;
   const minimum = Math.max(0, Math.min(...values) * 0.78);
   const width = 720;
@@ -173,23 +169,6 @@ function PerformanceTrend({ values, labels }: { values: number[]; labels: string
   }));
   const linePoints = coordinates.map((point) => `${point.x},${point.y}`).join(" ");
   const areaPoints = `${left},${height - bottom} ${linePoints} ${width - right},${height - bottom}`;
-
-  function moveFocus(index: number) {
-    const nextIndex = Math.max(0, Math.min(values.length - 1, index));
-    setFocusIndex(nextIndex);
-    setActiveIndex(nextIndex);
-    pointRefs.current[nextIndex]?.focus({ preventScroll: true });
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") moveFocus(index + 1);
-    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") moveFocus(index - 1);
-    else if (event.key === "Home") moveFocus(0);
-    else if (event.key === "End") moveFocus(values.length - 1);
-    else if (event.key === "Escape") setActiveIndex(null);
-    else return;
-    event.preventDefault();
-  }
 
   function activateNearestPoint(event: ReactPointerEvent<HTMLDivElement>) {
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -232,9 +211,9 @@ function PerformanceTrend({ values, labels }: { values: number[]; labels: string
                 className={`${styles.trendPoint} ${isActive ? styles.trendPointActive : ""}`}
                 key={labels[index]}
                 onBlur={() => setActiveIndex(null)}
-                onFocus={() => { setFocusIndex(index); setActiveIndex(index); }}
+                onFocus={() => handleFocus(index)}
                 onKeyDown={(event) => handleKeyDown(event, index)}
-                ref={(element) => { pointRefs.current[index] = element; }}
+                ref={(element) => { itemRefs.current[index] = element; }}
                 style={{
                   "--point-x": `${(coordinate.x / width) * 100}%`,
                   "--point-y": `${(coordinate.y / height) * 100}%`,

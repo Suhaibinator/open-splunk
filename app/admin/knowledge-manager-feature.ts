@@ -77,6 +77,7 @@ function boundedText(
   maximumCodePoints: number,
   maximumBytes: number,
 ): boolean {
+  if (!value.isWellFormed()) return false;
   if (value.length > maximumCodePoints * 2) return false;
   let codePoints = 0;
   let bytes = 0;
@@ -84,12 +85,8 @@ function boundedText(
     const high = value.charCodeAt(index);
     let codePoint = high;
     if (high >= 0xd800 && high <= 0xdbff) {
-      const low = value.charCodeAt(index + 1);
-      if (low < 0xdc00 || low > 0xdfff) return false;
-      codePoint = ((high - 0xd800) << 10) + low - 0xdc00 + 0x1_0000;
+      codePoint = ((high - 0xd800) << 10) + value.charCodeAt(index + 1) - 0xdc00 + 0x1_0000;
       index += 1;
-    } else if (high >= 0xdc00 && high <= 0xdfff) {
-      return false;
     }
     codePoints += 1;
     bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
@@ -173,15 +170,4 @@ export interface KnowledgeManagerPanelProps {
 
 export interface KnowledgeManagerPanelModule {
   KnowledgeManagerPanel: ComponentType<KnowledgeManagerPanelProps>;
-}
-
-export type KnowledgeManagerPanelImporter = () => Promise<KnowledgeManagerPanelModule>;
-
-/** Testable proof that the absent feature path does not invoke the chunk loader. */
-export async function loadKnowledgeManagerModuleIfAdvertised(
-  advertised: boolean,
-  importer: KnowledgeManagerPanelImporter,
-): Promise<KnowledgeManagerPanelModule | null> {
-  if (!advertised) return null;
-  return importer();
 }

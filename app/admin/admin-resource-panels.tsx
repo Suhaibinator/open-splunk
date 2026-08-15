@@ -25,6 +25,8 @@ import {
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
+import { formatMediumDateTime } from "../_components/date-format";
 import { Modal } from "../search-workspace/modal";
 import {
   appForm,
@@ -44,8 +46,7 @@ interface PanelProps {
 const errorMessage = createErrorMessage("The server did not return a usable response.");
 
 function formatDate(value: Date | undefined): string {
-  if (value === undefined || Number.isNaN(value.valueOf())) return "Never";
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(value);
+  return formatMediumDateTime(value, "Never");
 }
 
 function countLabel(loaded: number, total: bigint | null, exact: boolean, singular: string, plural: string): string {
@@ -53,21 +54,6 @@ function countLabel(loaded: number, total: bigint | null, exact: boolean, singul
     ? `${loaded.toLocaleString()} of ${total.toLocaleString()} ${plural} loaded`
     : `${total.toLocaleString()} ${total === 1n ? singular : plural}`;
   return `${loaded.toLocaleString()} ${loaded === 1 ? singular : plural} loaded`;
-}
-
-function FeatureMessage({ kind, title, message, onRetry }: {
-  kind: "loading" | "unavailable" | "error" | "empty";
-  title: string;
-  message: string;
-  onRetry?: () => void;
-}) {
-  return (
-    <div className={`backend-resource-state backend-resource-state--${kind}`} role={kind === "error" ? "alert" : "status"}>
-      <span aria-hidden="true">{kind === "loading" ? "↻" : kind === "error" ? "!" : kind === "empty" ? "∅" : "i"}</span>
-      <div><strong>{title}</strong><p>{message}</p></div>
-      {onRetry === undefined ? null : <button type="button" onClick={onRetry}>Retry</button>}
-    </div>
-  );
 }
 
 function appSelector(app: AppWorkspace) {
@@ -300,9 +286,9 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     }
   }
 
-  if (state === "loading") return <FeatureMessage kind="loading" title="Loading apps" message="Reading app workspaces from the server…" />;
-  if (state === "unavailable") return <FeatureMessage kind="unavailable" title="App administration is unavailable" message="The connected server does not advertise the complete app-administration capability." />;
-  if (state === "error") return <FeatureMessage kind="error" title="Apps could not be loaded" message={error ?? "The app catalog request failed."} onRetry={load} />;
+  if (state === "loading") return <BackendResourceState kind="loading" title="Loading apps" message="Reading app workspaces from the server…" />;
+  if (state === "unavailable") return <BackendResourceState kind="unavailable" title="App administration is unavailable" message="The connected server does not advertise the complete app-administration capability." />;
+  if (state === "error") return <BackendResourceState kind="error" title="Apps could not be loaded" message={error ?? "The app catalog request failed."} action={<button type="button" onClick={load}>Retry</button>} />;
 
   return (
     <div className="admin-section-stack">
@@ -313,7 +299,7 @@ export function AppsAdminPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         <label><span className="sr-only">App state</span><select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as typeof stateFilter)}><option value="all">All states</option><option value="active">Active</option><option value="archived">Archived</option></select></label>
         <button type="submit">Apply</button><button type="button" onClick={load}>Refresh</button>
       </form>
-      {apps.length === 0 ? <FeatureMessage kind="empty" title="No matching apps" message="Create an app or change the server-side filters." /> : (
+      {apps.length === 0 ? <BackendResourceState kind="empty" title="No matching apps" message="Create an app or change the server-side filters." /> : (
         <div className="suite-card resource-table-card"><div className="responsive-table-wrap"><table className="product-table admin-resource-table">
           <thead><tr><th>Name</th><th>Default indexes</th><th>Default time</th><th>State</th><th>Updated</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>{apps.map((app) => {
@@ -375,7 +361,7 @@ function formatAge(seconds: bigint | undefined, nanos: number | undefined): stri
 }
 
 function InputRows({ inputs }: { inputs: CollectorInputHealth[] }) {
-  if (inputs.length === 0) return <FeatureMessage kind="empty" title="No input telemetry" message="This collector has not reported any configured input health." />;
+  if (inputs.length === 0) return <BackendResourceState kind="empty" title="No input telemetry" message="This collector has not reported any configured input health." />;
   return <div className="responsive-table-wrap"><table className="product-table"><thead><tr><th>Input</th><th>State</th><th>Sources</th><th>Events read</th><th>Bytes read</th><th>Last event</th></tr></thead><tbody>{inputs.map((input) => <tr key={input.inputId}><td><strong>{input.inputId}</strong>{input.statusMessage ? <small className="table-secondary">{input.statusMessage}</small> : null}</td><td>{titleCaseEnum(collectorInputStateToJSON(input.state), "COLLECTOR_INPUT_STATE_")}</td><td>{input.activeSources.toLocaleString()} active<small className="table-secondary">{input.discoveredSources.toLocaleString()} discovered</small></td><td>{input.eventsReadTotal.toLocaleString()}</td><td>{formatBytes(input.bytesReadTotal)}</td><td>{formatDate(input.lastEventAt)}</td></tr>)}</tbody></table></div>;
 }
 
@@ -531,9 +517,9 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
     }
   }
 
-  if (state === "loading") return <FeatureMessage kind="loading" title="Loading collector fleet" message="Reading collector health and queue telemetry…" />;
-  if (state === "unavailable") return <FeatureMessage kind="unavailable" title="Collector fleet is unavailable" message="The connected server does not advertise collector administration." />;
-  if (state === "error") return <FeatureMessage kind="error" title="Collectors could not be loaded" message={error ?? "The collector list request failed."} onRetry={load} />;
+  if (state === "loading") return <BackendResourceState kind="loading" title="Loading collector fleet" message="Reading collector health and queue telemetry…" />;
+  if (state === "unavailable") return <BackendResourceState kind="unavailable" title="Collector fleet is unavailable" message="The connected server does not advertise collector administration." />;
+  if (state === "error") return <BackendResourceState kind="error" title="Collectors could not be loaded" message={error ?? "The collector list request failed."} action={<button type="button" onClick={load}>Retry</button>} />;
 
   return (
     <div className="admin-section-stack">
@@ -545,7 +531,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
         <label><span className="sr-only">Connection state</span><select value={stateFilter} onChange={(event) => setStateFilter(event.target.value as typeof stateFilter)}><option value="all">All states</option><option value="online">Online</option><option value="stale">Stale</option><option value="offline">Offline</option><option value="disabled">Disabled</option></select></label>
         <button type="submit">Apply</button>
       </form>
-      {collectors.length === 0 ? <FeatureMessage kind="empty" title="No matching collectors" message="Collectors appear after they establish an authenticated connection. Try another server-side filter." /> : (
+      {collectors.length === 0 ? <BackendResourceState kind="empty" title="No matching collectors" message="Collectors appear after they establish an authenticated connection. Try another server-side filter." /> : (
         <div className="suite-card resource-table-card"><div className="responsive-table-wrap"><table className="product-table admin-resource-table collector-fleet-table">
           <thead><tr><th>Collector</th><th>Connection</th><th>Queue</th><th>Inputs</th><th>Authorized indexes</th><th>Last seen</th><th><span className="sr-only">Actions</span></th></tr></thead>
           <tbody>{collectors.map((collector) => {
@@ -571,7 +557,7 @@ export function CollectorFleetPanel({ apiBaseUrl, bootstrap }: PanelProps) {
           <dl className="backend-definition-list">
             <div><dt>Collector ID</dt><dd><code>{target.collectorId}</code></dd></div><div><dt>Hostname</dt><dd>{target.hostname ?? "Not reported"}</dd></div><div><dt>Runtime</dt><dd>{[target.operatingSystem, target.architecture, target.collectorVersion ? `v${target.collectorVersion}` : undefined].filter(Boolean).join(" · ") || "Not reported"}</dd></div><div><dt>Active instance</dt><dd>{target.activeInstanceId ?? "None"}</dd></div><div><dt>Connected</dt><dd>{formatDate(target.connectedAt)}</dd></div><div><dt>Last seen</dt><dd>{formatDate(target.lastSeenAt)}</dd></div>
           </dl>
-          <section className="suite-card"><header className="suite-card-header"><div><h3>Durable queue</h3><p>Backlog, delivery, and rejection telemetry.</p></div></header>{target.queue === undefined ? <FeatureMessage kind="empty" title="Queue telemetry unavailable" message="The collector has not reported queue statistics." /> : <dl className="backend-definition-list"><div><dt>Queued</dt><dd>{target.queue.queuedEvents.toLocaleString()} events · {formatBytes(target.queue.queuedBytes)}</dd></div><div><dt>Oldest event</dt><dd>{formatAge(target.queue.oldestEventAge?.seconds, target.queue.oldestEventAge?.nanos)}</dd></div><div><dt>Sent / acknowledged</dt><dd>{target.queue.sentEventsTotal.toLocaleString()} / {target.queue.acknowledgedEventsTotal.toLocaleString()}</dd></div><div><dt>Retried batches</dt><dd>{target.queue.retriedBatchesTotal.toLocaleString()}</dd></div><div><dt>Rejected / dropped</dt><dd>{target.queue.rejectedEventsTotal.toLocaleString()} / {target.queue.droppedEventsTotal.toLocaleString()}</dd></div></dl>}</section>
+          <section className="suite-card"><header className="suite-card-header"><div><h3>Durable queue</h3><p>Backlog, delivery, and rejection telemetry.</p></div></header>{target.queue === undefined ? <BackendResourceState kind="empty" title="Queue telemetry unavailable" message="The collector has not reported queue statistics." /> : <dl className="backend-definition-list"><div><dt>Queued</dt><dd>{target.queue.queuedEvents.toLocaleString()} events · {formatBytes(target.queue.queuedBytes)}</dd></div><div><dt>Oldest event</dt><dd>{formatAge(target.queue.oldestEventAge?.seconds, target.queue.oldestEventAge?.nanos)}</dd></div><div><dt>Sent / acknowledged</dt><dd>{target.queue.sentEventsTotal.toLocaleString()} / {target.queue.acknowledgedEventsTotal.toLocaleString()}</dd></div><div><dt>Retried batches</dt><dd>{target.queue.retriedBatchesTotal.toLocaleString()}</dd></div><div><dt>Rejected / dropped</dt><dd>{target.queue.rejectedEventsTotal.toLocaleString()} / {target.queue.droppedEventsTotal.toLocaleString()}</dd></div></dl>}</section>
           <section className="suite-card"><header className="suite-card-header"><div><h3>Inputs</h3><p>Health and progress for every reported input.</p></div></header><InputRows inputs={target.inputs} /></section>
           <section className="suite-card"><header className="suite-card-header"><div><h3>Authorization and capabilities</h3></div></header><dl className="backend-definition-list"><div><dt>Authorized indexes</dt><dd>{target.authorizedIndexes.join(", ") || "None"}</dd></div><div><dt>Capabilities</dt><dd>{target.capabilities.map((item) => titleCaseEnum(collectorCapabilityToJSON(item), "COLLECTOR_CAPABILITY_")).join(", ") || "None reported"}</dd></div></dl></section>
         </div>

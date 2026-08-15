@@ -32,6 +32,7 @@ import { lookupRoutes } from "@/lib/api/routes";
 import {
   LOOKUP_MANAGER_CONTRACT,
   isBoundedCanonicalLookupDefinition,
+  isManagementIdentity,
   textBytes,
 } from "./lookup-manager-contract";
 
@@ -293,12 +294,6 @@ function boundedLookupDefinitionShape(definition: LookupDefinition | undefined):
       && selector.hostPatterns.length <= LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternsPerDimension
       && selector.sourcePatterns.length <= LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternsPerDimension
       && selector.sourcetypePatterns.length <= LOOKUP_MANAGER_CONTRACT.maximumSelectorPatternsPerDimension);
-}
-
-function isManagementIdentity(value: string, maximumBytes: number): boolean {
-  return value.length > 0
-    && textBytes(value) <= maximumBytes
-    && /^[A-Za-z0-9](?:[A-Za-z0-9._:-]*)$/u.test(value);
 }
 
 function isLookupHeader(value: string): boolean {

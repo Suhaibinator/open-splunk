@@ -1,6 +1,6 @@
 import type { PointerEvent, ReactNode } from "react";
 
-import { SearchJobState, type SearchJob } from "@/gen/ts/open_splunk/v1/search";
+import { SearchJobState } from "@/gen/ts/open_splunk/v1/search";
 import { DEMO_EVENTS, type DemoEvent, type DemoScalar } from "@/lib/demo/search-data";
 import {
   isSplOffsetInQuotedValue,
@@ -13,7 +13,6 @@ import {
   UNSUPPORTED_SPL_PIPELINE_COMMANDS,
 } from "@/lib/search/spl-syntax";
 
-import { formatBinaryBytes } from "./formatters";
 import type { JobPhase, ResultTab } from "./model";
 
 function escapeRegExp(value: string): string {
@@ -305,17 +304,6 @@ export function formatDuration(duration: { seconds: bigint; nanos: number } | un
   if (duration === undefined) return "0.00 s";
   const seconds = Number(duration.seconds) + duration.nanos / 1_000_000_000;
   return seconds < 1 ? `${Math.max(0, Math.round(seconds * 1000))} ms` : `${seconds.toFixed(2)} s`;
-}
-
-export function formatBytes(value: bigint): string {
-  return formatBinaryBytes(value);
-}
-
-export function jobEventCount(job: SearchJob): number {
-  const count = job.progress === undefined
-    ? 0n
-    : job.progress.matchedEvents || job.progress.producedRows;
-  return Math.min(Number.MAX_SAFE_INTEGER, Number(count));
 }
 
 export function timelineIndexFromPointer(event: PointerEvent<HTMLElement>, bucketCount: number): number | null {

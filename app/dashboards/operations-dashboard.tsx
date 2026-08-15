@@ -3,12 +3,11 @@
 import Link from "next/link";
 import {
   type CSSProperties,
-  type KeyboardEvent,
   useMemo,
-  useRef,
   useState,
 } from "react";
 
+import { useRovingChartFocus } from "@/app/_components/use-roving-chart-focus";
 import { TimeSeriesLineChart } from "@/app/search-workspace/charts/time-series-line-chart";
 import type { TimelinePoint } from "@/lib/demo/search-data";
 import { backendDraftWithoutIndexSelector } from "@/lib/search/example-drafts";
@@ -132,27 +131,8 @@ interface VolumeBarChartProps {
 }
 
 function VolumeBarChart({ points }: VolumeBarChartProps) {
-  const barRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  const [focusIndex, setFocusIndex] = useState(0);
+  const { activeIndex, setActiveIndex, focusIndex, itemRefs, handleKeyDown, handleFocus } = useRovingChartFocus(points.length);
   const maximum = Math.max(...points.map((point) => point.value), 1);
-
-  function moveFocus(index: number) {
-    const next = Math.min(points.length - 1, Math.max(0, index));
-    setFocusIndex(next);
-    setActiveIndex(next);
-    barRefs.current[next]?.focus({ preventScroll: true });
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
-    if (event.key === "ArrowRight" || event.key === "ArrowDown") moveFocus(index + 1);
-    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") moveFocus(index - 1);
-    else if (event.key === "Home") moveFocus(0);
-    else if (event.key === "End") moveFocus(points.length - 1);
-    else if (event.key === "Escape") setActiveIndex(null);
-    else return;
-    event.preventDefault();
-  }
 
   return (
     <div className={styles.volumeChart}>
@@ -169,13 +149,13 @@ function VolumeBarChart({ points }: VolumeBarChartProps) {
               key={point.id}
               onBlur={() => setActiveIndex(null)}
               onClick={() => setActiveIndex(index)}
-              onFocus={() => { setFocusIndex(index); setActiveIndex(index); }}
+              onFocus={() => handleFocus(index)}
               onKeyDown={(event) => handleKeyDown(event, index)}
               onPointerEnter={() => setActiveIndex(index)}
               onPointerLeave={(event) => {
                 if (document.activeElement !== event.currentTarget) setActiveIndex(null);
               }}
-              ref={(element) => { barRefs.current[index] = element; }}
+              ref={(element) => { itemRefs.current[index] = element; }}
               tabIndex={focusIndex === index ? 0 : -1}
               type="button"
             >

@@ -15,6 +15,7 @@ import {
   RepeatedPageCursorError,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { durationToMilliseconds } from "@/lib/api/duration";
 import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 import {
@@ -26,8 +27,8 @@ import {
   type ServerSearchJob,
 } from "@/lib/search/server-api";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
 import {
-  ActivityState,
   formatActivityCount,
   formatActivityDate,
   formatActivityDuration,
@@ -88,13 +89,6 @@ interface BackendLiveJobsProps {
 }
 
 const errorMessage = createErrorMessage("The server did not return a usable search job response.");
-
-function elapsedMilliseconds(progress: SearchProgress | null): number {
-  const elapsed = progress?.elapsed;
-  if (elapsed === undefined) return 0;
-  const milliseconds = Number(elapsed.seconds) * 1_000 + elapsed.nanos / 1_000_000;
-  return Number.isFinite(milliseconds) && milliseconds >= 0 ? milliseconds : 0;
-}
 
 function progressPercent(progress: SearchProgress | null, state: SearchJobState): number | null {
   if (state === SearchJobState.SEARCH_JOB_STATE_COMPLETED) return 100;
@@ -413,9 +407,9 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
 
   return (
     <div className="backend-activity-view">
-      {state === "loading" ? <ActivityState kind="loading" title="Loading retained jobs" message="Reading the backend’s current transient search-job snapshot…" /> : null}
-      {state === "unavailable" ? <ActivityState kind="unavailable" title="Live job listing is unavailable" message="This backend does not advertise Search or does not register the optional job-list route. Persisted history remains available in its own tab." action={<button type="button" onClick={reload}>Retry</button>} /> : null}
-      {state === "error" ? <ActivityState kind="error" title="Live jobs could not be loaded" message={error ?? "The live job request failed."} action={<button type="button" onClick={reload}>Retry</button>} /> : null}
+      {state === "loading" ? <BackendResourceState kind="loading" title="Loading retained jobs" message="Reading the backend’s current transient search-job snapshot…" /> : null}
+      {state === "unavailable" ? <BackendResourceState kind="unavailable" title="Live job listing is unavailable" message="This backend does not advertise Search or does not register the optional job-list route. Persisted history remains available in its own tab." action={<button type="button" onClick={reload}>Retry</button>} /> : null}
+      {state === "error" ? <BackendResourceState kind="error" title="Live jobs could not be loaded" message={error ?? "The live job request failed."} action={<button type="button" onClick={reload}>Retry</button>} /> : null}
 
       {state === "available" ? (
         <>
@@ -490,7 +484,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
             </header>
 
             {refreshing ? (
-              <ActivityState
+              <BackendResourceState
                 kind="loading"
                 title="Updating retained jobs"
                 message="Applying the selected filters to a fresh backend snapshot. Existing rows remain visible until the refresh completes."
@@ -503,14 +497,14 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
               </div>
             ) : null}
             {jobs.length === 0 && error !== null ? (
-              <ActivityState
+              <BackendResourceState
                 kind="error"
                 title="Filtered jobs could not be loaded"
                 message={error}
                 action={<button type="button" onClick={reload}>Retry</button>}
               />
             ) : jobs.length === 0 && !refreshing ? (
-              <ActivityState
+              <BackendResourceState
                 kind="empty"
                 title={filteredDescription.length === 0 ? "No retained search jobs" : "No matching live jobs"}
                 message={filteredDescription.length === 0 ? "New backend searches will appear here while their transient job records are retained." : `No retained jobs match ${filteredDescription}.`}
@@ -548,7 +542,7 @@ export function BackendLiveJobs({ apiBaseUrl }: BackendLiveJobsProps) {
                         <td data-label="Progress">
                           <div className="live-job-progress">
                             {percent === null ? <span>{searchJobStateLabel(job.state)}</span> : <progress max={100} value={percent} aria-label={`${searchJobStateLabel(job.state)} ${Math.round(percent)} percent`} />}
-                            <small>{percent === null ? null : `${Math.round(percent)}% · `}{formatActivityDuration(elapsedMilliseconds(job.progress))}</small>
+                            <small>{percent === null ? null : `${Math.round(percent)}% · `}{formatActivityDuration(durationToMilliseconds(job.progress?.elapsed))}</small>
                           </div>
                         </td>
                         <td data-label="Rows / bytes" className="numeric-data">

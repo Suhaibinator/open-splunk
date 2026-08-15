@@ -17,6 +17,7 @@ import type {
   ListSearchAttemptAuditEventsResponse,
 } from "@/gen/ts/open_splunk/v1/search_attempt_audit_api";
 import { isHttpStatus, type ProtobufRequestOptions } from "@/lib/api";
+import { canonicalBoundedServerText } from "@/lib/search/server-text";
 
 export interface AuditListClient {
   auditEvents: {
@@ -65,10 +66,7 @@ const MAXIMUM_AUDIT_TARGET_ID_BYTES = 128;
 const MAXIMUM_KNOWLEDGE_APP_ID_BYTES = 128;
 const MAXIMUM_AUDIT_PAGE_TOKEN_BYTES = 2 << 10;
 const MAXIMUM_SIGNED_INT64 = 9_223_372_036_854_775_807n;
-const UNICODE_EDGE_WHITESPACE = /^\p{White_Space}|\p{White_Space}$/u;
 const UNICODE_EDGE_WHITESPACE_RUN = /^\p{White_Space}+|\p{White_Space}+$/gu;
-const UNICODE_CONTROL = /\p{Cc}/u;
-const UTF8_ENCODER = new TextEncoder();
 
 interface MutationAuditActionSpec {
   readonly label: string;
@@ -151,13 +149,7 @@ function opaquePageToken(value: string | undefined): string | undefined {
 }
 
 function canonicalBoundedText(value: string, maximumBytes: number): boolean {
-  return typeof value === "string"
-    && value.length > 0
-    && value.length <= maximumBytes
-    && value.isWellFormed()
-    && UTF8_ENCODER.encode(value).byteLength <= maximumBytes
-    && !UNICODE_EDGE_WHITESPACE.test(value)
-    && !UNICODE_CONTROL.test(value);
+  return canonicalBoundedServerText(value, maximumBytes) !== null;
 }
 
 function pageRequest(options: AuditPageOptions) {

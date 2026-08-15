@@ -22,7 +22,10 @@ import type { PreviewLookupResponse } from "@/gen/ts/open_splunk/v1/lookup_api";
 import { isOptionalRouteUnavailable } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
+import { formatMediumDateTime } from "../_components/date-format";
 import { Modal } from "../search-workspace/modal";
+import { joinedPatterns, lines } from "./knowledge-lookup-text";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 import {
   createLookupManagerClient,
@@ -97,13 +100,6 @@ interface LookupEditorProps {
 }
 
 const errorMessage = createErrorMessage("The server did not return a usable lookup response.");
-
-function lines(value: string): string[] {
-  return value
-    .split("\n")
-    .map((entry) => entry.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, ""))
-    .filter((entry) => entry.length > 0);
-}
 
 function mappingLine(mapping: LookupFieldMapping, allowImplicit: boolean): string {
   return allowImplicit && mapping.lookupField === mapping.eventField
@@ -263,10 +259,6 @@ export function lookupDefinitionFromDraft(draft: LookupDraft): LookupDefinition 
   return definition;
 }
 
-function joinedPatterns(patterns: ReadonlyArray<{ value: string }>): string {
-  return patterns.map((pattern) => pattern.value).join("\n");
-}
-
 export function lookupDraftFromLookup(lookup: Lookup): LookupDraft {
   const definition = lookup.definition;
   if (definition === undefined) throw new TypeError("Lookup definition is unavailable.");
@@ -391,42 +383,13 @@ function sharingScopeLabel(scope: SharingScope): string {
 }
 
 function formatDate(value: Date | undefined): string {
-  if (value === undefined || Number.isNaN(value.valueOf())) return "Unavailable";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(value);
+  return formatMediumDateTime(value, "Unavailable");
 }
 
 function formatBytes(value: bigint): string {
   if (value < 1024n) return `${value.toLocaleString()} B`;
   if (value < 1024n * 1024n) return `${(Number(value) / 1024).toFixed(1)} KiB`;
   return `${(Number(value) / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-function LookupStatus({
-  kind,
-  title,
-  message,
-  onRetry,
-}: {
-  kind: "loading" | "unavailable" | "error" | "empty";
-  title: string;
-  message: string;
-  onRetry?: () => void;
-}) {
-  return (
-    <div
-      className={`backend-resource-state backend-resource-state--${kind}`}
-      role={kind === "error" ? "alert" : "status"}
-    >
-      <span aria-hidden="true">
-        {kind === "loading" ? "↻" : kind === "error" ? "!" : kind === "empty" ? "∅" : "i"}
-      </span>
-      <div><strong>{title}</strong><p>{message}</p></div>
-      {onRetry === undefined ? null : <button type="button" onClick={onRetry}>Retry</button>}
-    </div>
-  );
 }
 
 export function LookupManagerPanel({
@@ -648,16 +611,16 @@ export function LookupManagerPanel({
       </div>
 
       {state === "loading" ? (
-        <LookupStatus kind="loading" title="Loading lookup tables" message="Reading the bounded lookup catalog pages…" />
+        <BackendResourceState kind="loading" title="Loading lookup tables" message="Reading the bounded lookup catalog pages…" />
       ) : null}
       {state === "unavailable" ? (
-        <LookupStatus kind="unavailable" title="Lookup management is unavailable" message="The connected server does not expose the complete lookup management API." onRetry={reload} />
+        <BackendResourceState kind="unavailable" title="Lookup management is unavailable" message="The connected server does not expose the complete lookup management API." action={<button type="button" onClick={reload}>Retry</button>} />
       ) : null}
       {state === "error" ? (
-        <LookupStatus kind="error" title="Lookup tables could not be loaded" message={loadError ?? "The lookup catalog request failed."} onRetry={reload} />
+        <BackendResourceState kind="error" title="Lookup tables could not be loaded" message={loadError ?? "The lookup catalog request failed."} action={<button type="button" onClick={reload}>Retry</button>} />
       ) : null}
       {state === "available" && visibleLookups.length === 0 ? (
-        <LookupStatus kind="empty" title="No matching lookup tables" message={lookups.length === 0 ? "Create a lookup or select a different app scope." : "Clear the local name filter to show loaded lookups."} />
+        <BackendResourceState kind="empty" title="No matching lookup tables" message={lookups.length === 0 ? "Create a lookup or select a different app scope." : "Clear the local name filter to show loaded lookups."} />
       ) : null}
       {state === "available" && visibleLookups.length > 0 ? (
         <LookupManagerTable

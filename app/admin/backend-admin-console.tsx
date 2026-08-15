@@ -1,10 +1,10 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import Link from "next/link";
 
-import { SortDirection } from "@/gen/ts/open_splunk/v1/common";
+import { SortDirection, type PageResponse } from "@/gen/ts/open_splunk/v1/common";
 import { ServerFeature } from "@/gen/ts/open_splunk/v1/system_api";
 import {
   IngestionTokenPurpose,
@@ -35,6 +35,8 @@ import {
 import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
+import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
 import { AppsAdminPanel, CollectorFleetPanel } from "./admin-resource-panels";
@@ -53,18 +55,9 @@ interface BackendAdminConsoleProps {
   apiBaseUrl: string;
 }
 
-interface IndexLoadResult {
+interface PageLoadResult<T> {
   state: Exclude<ResourceState, "loading">;
-  indexes: Index[];
-  nextPageToken: string | null;
-  totalSize: bigint | null;
-  totalSizeExact: boolean;
-  message?: string;
-}
-
-interface TokenLoadResult {
-  state: Exclude<ResourceState, "loading">;
-  tokens: IngestionToken[];
+  items: T[];
   nextPageToken: string | null;
   totalSize: bigint | null;
   totalSizeExact: boolean;
@@ -604,11 +597,7 @@ function historyStateWithTokenGuard(guardId: string): Record<string, unknown> {
 const errorMessage = createErrorMessage("The server did not return a usable response.");
 
 function formatDate(value: Date | undefined): string {
-  if (value === undefined || Number.isNaN(value.valueOf())) return "Never";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(value);
+  return formatMediumDateTime(value, "Never");
 }
 
 function formatDuration(seconds: bigint | undefined): string {
@@ -973,93 +962,157 @@ function statusClass(label: string): string {
   return "neutral";
 }
 
+async function loadResourcePage<Response extends { page?: PageResponse | undefined }, T>(
+  call: () => Promise<Response>,
+  extract: (response: Response) => T[],
+  signal: AbortSignal,
+): Promise<PageLoadResult<T>> {
+  const empty = { items: [] as T[], nextPageToken: null, totalSize: null, totalSizeExact: false };
+  try {
+    const response = await call();
+    return {
+      state: "available",
+      items: extract(response),
+      nextPageToken: normalizedPageToken(response.page?.nextPageToken),
+      totalSize: response.page?.totalSize ?? null,
+      totalSizeExact: response.page?.totalSizeExact ?? false,
+    };
+  } catch (error) {
+    if (isOptionalRouteUnavailable(error)) return { state: "unavailable", ...empty };
+    if (signal.aborted) throw error;
+    return { state: "error", ...empty, message: errorMessage(error) };
+  }
+}
+
 async function loadIndexPage(
   client: OpenSplunkApiClient,
   pageToken: string | undefined,
   signal: AbortSignal,
-): Promise<IndexLoadResult> {
-  try {
-    const response = await client.indexes.list({
+): Promise<PageLoadResult<Index>> {
+  return loadResourcePage(
+    () => client.indexes.list({
       page: { pageSize: undefined, pageToken, includeTotalSize: true },
       stateFilters: [],
       textFilter: undefined,
       sortBy: IndexSortBy.INDEX_SORT_BY_NAME,
       sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
       includeStats: false,
-    }, { signal });
-    const indexes: Index[] = [];
-    for (const item of response.indexes) {
-      if (item.index !== undefined) indexes.push(item.index);
-    }
-    return {
-      state: "available",
-      indexes,
-      nextPageToken: normalizedPageToken(response.page?.nextPageToken),
-      totalSize: response.page?.totalSize ?? null,
-      totalSizeExact: response.page?.totalSizeExact ?? false,
-    };
-  } catch (error) {
-    if (isOptionalRouteUnavailable(error)) {
-      return {
-        state: "unavailable",
-        indexes: [],
-        nextPageToken: null,
-        totalSize: null,
-        totalSizeExact: false,
-      };
-    }
-    if (signal.aborted) throw error;
-    return {
-      state: "error",
-      indexes: [],
-      nextPageToken: null,
-      totalSize: null,
-      totalSizeExact: false,
-      message: errorMessage(error),
-    };
-  }
+    }, { signal }),
+    (response) => response.indexes.flatMap((item) => (item.index === undefined ? [] : [item.index])),
+    signal,
+  );
 }
 
 async function loadTokenPage(
   client: OpenSplunkApiClient,
   pageToken: string | undefined,
   signal: AbortSignal,
-): Promise<TokenLoadResult> {
-  try {
-    const response = await client.ingestionTokens.list({
+): Promise<PageLoadResult<IngestionToken>> {
+  return loadResourcePage(
+    () => client.ingestionTokens.list({
       page: { pageSize: undefined, pageToken, includeTotalSize: true },
       stateFilters: [],
       indexNameFilter: undefined,
       textFilter: undefined,
       sortBy: IngestionTokenSortBy.INGESTION_TOKEN_SORT_BY_NAME,
       sortDirection: SortDirection.SORT_DIRECTION_ASCENDING,
-    }, { signal });
-    return {
-      state: "available",
-      tokens: response.ingestionTokens,
-      nextPageToken: normalizedPageToken(response.page?.nextPageToken),
-      totalSize: response.page?.totalSize ?? null,
-      totalSizeExact: response.page?.totalSizeExact ?? false,
-    };
-  } catch (error) {
-    if (isOptionalRouteUnavailable(error)) {
-      return {
-        state: "unavailable",
-        tokens: [],
-        nextPageToken: null,
-        totalSize: null,
-        totalSizeExact: false,
-      };
+    }, { signal }),
+    (response) => response.ingestionTokens,
+    signal,
+  );
+}
+
+interface LoadMorePageDescriptor<T> {
+  noun: string;
+  nounArticle: string;
+  requestedToken: string | null;
+  loadingMore: boolean;
+  currentItems: readonly T[];
+  itemId: (item: T) => string;
+  seenPageTokensRef: RefObject<Set<string>>;
+  generationRef: RefObject<number>;
+  requestRef: RefObject<{ controller: AbortController; generation: number; pageToken: string } | null>;
+  mountedRef: RefObject<boolean>;
+  loadPage: (pageToken: string, signal: AbortSignal) => Promise<PageLoadResult<T>>;
+  setItems: (update: (current: T[]) => T[]) => void;
+  setNextPageToken: (value: string | null) => void;
+  setTotalSize: (value: bigint | null) => void;
+  setTotalSizeExact: (value: boolean) => void;
+  setLoadingMore: (value: boolean) => void;
+  setPaginationError: (value: string | null) => void;
+  setResourceState: (value: ResourceState) => void;
+}
+
+async function loadMorePage<T>({
+  noun, nounArticle, requestedToken, loadingMore, currentItems, itemId,
+  seenPageTokensRef, generationRef, requestRef, mountedRef, loadPage,
+  setItems, setNextPageToken, setTotalSize, setTotalSizeExact,
+  setLoadingMore, setPaginationError, setResourceState,
+}: LoadMorePageDescriptor<T>): Promise<void> {
+  if (requestedToken === null || loadingMore) return;
+  if (seenPageTokensRef.current.has(requestedToken)) {
+    setNextPageToken(null);
+    setPaginationError(`The server repeated ${nounArticle} ${noun} page cursor. Refresh before loading more.`);
+    return;
+  }
+  seenPageTokensRef.current.add(requestedToken);
+  requestRef.current?.controller.abort();
+  const generation = generationRef.current + 1;
+  generationRef.current = generation;
+  const controller = new AbortController();
+  const request = { controller, generation, pageToken: requestedToken };
+  requestRef.current = request;
+  setLoadingMore(true);
+  setPaginationError(null);
+  try {
+    const result = await loadPage(requestedToken, controller.signal);
+    if (
+      !mountedRef.current
+      || requestRef.current !== request
+      || generationRef.current !== generation
+      || request.pageToken !== requestedToken
+    ) return;
+    if (result.state !== "available") {
+      if (result.state === "unavailable") setResourceState("unavailable");
+      setNextPageToken(null);
+      setPaginationError(result.message ?? `The next ${noun} page could not be loaded. Refresh to retry.`);
+      return;
     }
-    if (signal.aborted) throw error;
-    return {
-      state: "error",
-      tokens: [],
-      nextPageToken: null,
-      totalSize: null,
-      totalSizeExact: false,
-      message: errorMessage(error),
-    };
+    if (
+      result.nextPageToken !== null
+      && seenPageTokensRef.current.has(result.nextPageToken)
+    ) {
+      setNextPageToken(null);
+      setPaginationError(`The server repeated ${nounArticle} ${noun} page cursor. Refresh before loading more.`);
+      return;
+    }
+    const loadedIds = new Set(currentItems.map((item) => itemId(item)));
+    if (result.items.some((item) => loadedIds.has(itemId(item)))) {
+      setNextPageToken(null);
+      setPaginationError(`The server returned an overlapping ${noun} page. Refresh before loading more.`);
+      return;
+    }
+    setItems((current) => [...current, ...result.items]);
+    setNextPageToken(result.nextPageToken);
+    setTotalSize(result.totalSize);
+    setTotalSizeExact(result.totalSizeExact);
+  } catch (error) {
+    if (
+      controller.signal.aborted
+      || requestRef.current !== request
+      || generationRef.current !== generation
+    ) return;
+    setNextPageToken(null);
+    setPaginationError(`The next ${noun} page could not be loaded: ${errorMessage(error)}`);
+  } finally {
+    if (
+      mountedRef.current
+      && requestRef.current === request
+      && generationRef.current === generation
+    ) {
+      requestRef.current = null;
+      setLoadingMore(false);
+    }
   }
 }
 
@@ -1311,7 +1364,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       (result) => {
         if (!current) return;
         setIndexState(result.state);
-        setIndexes(result.indexes);
+        setIndexes(result.items);
         setIndexError(result.message ?? null);
         setIndexNextPageToken(result.nextPageToken);
         setIndexTotalSize(result.totalSize);
@@ -1328,7 +1381,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
       (result) => {
         if (!current) return;
         setTokenState(result.state);
-        setTokens(result.tokens);
+        setTokens(result.items);
         setTokenError(result.message ?? null);
         setTokenNextPageToken(result.nextPageToken);
         setTokenTotalSize(result.totalSize);
@@ -1722,141 +1775,49 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
   }
 
   async function loadMoreIndexes() {
-    const requestedToken = indexNextPageToken;
-    if (requestedToken === null || indexLoadingMore) return;
-    if (indexSeenPageTokensRef.current.has(requestedToken)) {
-      setIndexNextPageToken(null);
-      setIndexPaginationError("The server repeated an index page cursor. Refresh before loading more.");
-      return;
-    }
-    indexSeenPageTokensRef.current.add(requestedToken);
-    indexLoadMoreRequestRef.current?.controller.abort();
-    const generation = indexPageRequestGenerationRef.current + 1;
-    indexPageRequestGenerationRef.current = generation;
-    const controller = new AbortController();
-    const request = { controller, generation, pageToken: requestedToken };
-    indexLoadMoreRequestRef.current = request;
-    setIndexLoadingMore(true);
-    setIndexPaginationError(null);
-    try {
-      const result = await loadIndexPage(client, requestedToken, controller.signal);
-      if (
-        !componentMountedRef.current
-        || indexLoadMoreRequestRef.current !== request
-        || indexPageRequestGenerationRef.current !== generation
-        || request.pageToken !== requestedToken
-      ) return;
-      if (result.state !== "available") {
-        if (result.state === "unavailable") setIndexState("unavailable");
-        setIndexNextPageToken(null);
-        setIndexPaginationError(result.message ?? "The next index page could not be loaded. Refresh to retry.");
-        return;
-      }
-      if (
-        result.nextPageToken !== null
-        && indexSeenPageTokensRef.current.has(result.nextPageToken)
-      ) {
-        setIndexNextPageToken(null);
-        setIndexPaginationError("The server repeated an index page cursor. Refresh before loading more.");
-        return;
-      }
-      const loadedIds = new Set(indexes.map((index) => index.indexId));
-      if (result.indexes.some((index) => loadedIds.has(index.indexId))) {
-        setIndexNextPageToken(null);
-        setIndexPaginationError("The server returned an overlapping index page. Refresh before loading more.");
-        return;
-      }
-      setIndexes((current) => [...current, ...result.indexes]);
-      setIndexNextPageToken(result.nextPageToken);
-      setIndexTotalSize(result.totalSize);
-      setIndexTotalSizeExact(result.totalSizeExact);
-    } catch (error) {
-      if (
-        controller.signal.aborted
-        || indexLoadMoreRequestRef.current !== request
-        || indexPageRequestGenerationRef.current !== generation
-      ) return;
-      setIndexNextPageToken(null);
-      setIndexPaginationError(`The next index page could not be loaded: ${errorMessage(error)}`);
-    } finally {
-      if (
-        componentMountedRef.current
-        && indexLoadMoreRequestRef.current === request
-        && indexPageRequestGenerationRef.current === generation
-      ) {
-        indexLoadMoreRequestRef.current = null;
-        setIndexLoadingMore(false);
-      }
-    }
+    return loadMorePage({
+      noun: "index",
+      nounArticle: "an",
+      requestedToken: indexNextPageToken,
+      loadingMore: indexLoadingMore,
+      currentItems: indexes,
+      itemId: (index) => index.indexId,
+      seenPageTokensRef: indexSeenPageTokensRef,
+      generationRef: indexPageRequestGenerationRef,
+      requestRef: indexLoadMoreRequestRef,
+      mountedRef: componentMountedRef,
+      loadPage: (pageToken, signal) => loadIndexPage(client, pageToken, signal),
+      setItems: setIndexes,
+      setNextPageToken: setIndexNextPageToken,
+      setTotalSize: setIndexTotalSize,
+      setTotalSizeExact: setIndexTotalSizeExact,
+      setLoadingMore: setIndexLoadingMore,
+      setPaginationError: setIndexPaginationError,
+      setResourceState: setIndexState,
+    });
   }
 
   async function loadMoreTokens() {
-    const requestedToken = tokenNextPageToken;
-    if (requestedToken === null || tokenLoadingMore) return;
-    if (tokenSeenPageTokensRef.current.has(requestedToken)) {
-      setTokenNextPageToken(null);
-      setTokenPaginationError("The server repeated a token page cursor. Refresh before loading more.");
-      return;
-    }
-    tokenSeenPageTokensRef.current.add(requestedToken);
-    tokenLoadMoreRequestRef.current?.controller.abort();
-    const generation = tokenPageRequestGenerationRef.current + 1;
-    tokenPageRequestGenerationRef.current = generation;
-    const controller = new AbortController();
-    const request = { controller, generation, pageToken: requestedToken };
-    tokenLoadMoreRequestRef.current = request;
-    setTokenLoadingMore(true);
-    setTokenPaginationError(null);
-    try {
-      const result = await loadTokenPage(client, requestedToken, controller.signal);
-      if (
-        !componentMountedRef.current
-        || tokenLoadMoreRequestRef.current !== request
-        || tokenPageRequestGenerationRef.current !== generation
-        || request.pageToken !== requestedToken
-      ) return;
-      if (result.state !== "available") {
-        if (result.state === "unavailable") setTokenState("unavailable");
-        setTokenNextPageToken(null);
-        setTokenPaginationError(result.message ?? "The next token page could not be loaded. Refresh to retry.");
-        return;
-      }
-      if (
-        result.nextPageToken !== null
-        && tokenSeenPageTokensRef.current.has(result.nextPageToken)
-      ) {
-        setTokenNextPageToken(null);
-        setTokenPaginationError("The server repeated a token page cursor. Refresh before loading more.");
-        return;
-      }
-      const loadedIds = new Set(tokens.map((token) => token.ingestionTokenId));
-      if (result.tokens.some((token) => loadedIds.has(token.ingestionTokenId))) {
-        setTokenNextPageToken(null);
-        setTokenPaginationError("The server returned an overlapping token page. Refresh before loading more.");
-        return;
-      }
-      setTokens((current) => [...current, ...result.tokens]);
-      setTokenNextPageToken(result.nextPageToken);
-      setTokenTotalSize(result.totalSize);
-      setTokenTotalSizeExact(result.totalSizeExact);
-    } catch (error) {
-      if (
-        controller.signal.aborted
-        || tokenLoadMoreRequestRef.current !== request
-        || tokenPageRequestGenerationRef.current !== generation
-      ) return;
-      setTokenNextPageToken(null);
-      setTokenPaginationError(`The next token page could not be loaded: ${errorMessage(error)}`);
-    } finally {
-      if (
-        componentMountedRef.current
-        && tokenLoadMoreRequestRef.current === request
-        && tokenPageRequestGenerationRef.current === generation
-      ) {
-        tokenLoadMoreRequestRef.current = null;
-        setTokenLoadingMore(false);
-      }
-    }
+    return loadMorePage({
+      noun: "token",
+      nounArticle: "a",
+      requestedToken: tokenNextPageToken,
+      loadingMore: tokenLoadingMore,
+      currentItems: tokens,
+      itemId: (token) => token.ingestionTokenId,
+      seenPageTokensRef: tokenSeenPageTokensRef,
+      generationRef: tokenPageRequestGenerationRef,
+      requestRef: tokenLoadMoreRequestRef,
+      mountedRef: componentMountedRef,
+      loadPage: (pageToken, signal) => loadTokenPage(client, pageToken, signal),
+      setItems: setTokens,
+      setNextPageToken: setTokenNextPageToken,
+      setTotalSize: setTokenTotalSize,
+      setTotalSizeExact: setTokenTotalSizeExact,
+      setLoadingMore: setTokenLoadingMore,
+      setPaginationError: setTokenPaginationError,
+      setResourceState: setTokenState,
+    });
   }
 
   const visibleIndexes = useMemo(() => {
@@ -3523,7 +3484,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
     return (
       <div className="suite-page admin-page" aria-busy="true">
         <PageHeading eyebrow="SYSTEM" title="Administration" description="Connecting to the configured Open Splunk server." />
-        <ResourceMessage kind="loading" title="Loading administration" message="Reading server capabilities and resources…" />
+        <BackendResourceState kind="loading" title="Loading administration" message="Reading server capabilities and resources…" />
       </div>
     );
   }
@@ -3609,7 +3570,6 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
           ) : null}
           {section === "knowledge" && knowledgeAdvertised && bootstrap !== null && knowledgeApps !== null ? (
             <KnowledgeManagerGate
-              enabled
               apiBaseUrl={apiBaseUrl}
               apps={knowledgeApps}
               initialAppId={bootstrap.selectedAppId}
@@ -3648,7 +3608,7 @@ export function BackendAdminConsole({ apiBaseUrl }: BackendAdminConsoleProps) {
             />
           ) : null}
           {section === "access" ? (
-            <ResourceMessage
+            <BackendResourceState
               kind="unavailable"
               title="Users and access are not exposed"
               message="This backend does not register an authentication or role-administration API. No preview users are shown in backend mode."
@@ -4159,23 +4119,6 @@ function TokenScopePicker({ idPrefix, options, selected, onChange, disabled = fa
   );
 }
 
-interface ResourceMessageProps {
-  kind: "loading" | "error" | "unavailable" | "empty";
-  title: string;
-  message: string;
-  action?: React.ReactNode;
-}
-
-function ResourceMessage({ kind, title, message, action }: ResourceMessageProps) {
-  return (
-    <div className={`backend-resource-state backend-resource-state--${kind}`} role={kind === "error" ? "alert" : "status"}>
-      <span aria-hidden="true">{kind === "loading" ? "↻" : kind === "error" ? "!" : kind === "empty" ? "∅" : "i"}</span>
-      <div><strong>{title}</strong><p>{message}</p></div>
-      {action}
-    </div>
-  );
-}
-
 interface BackendOverviewProps {
   bootstrap: SystemBootstrapModel | null;
   bootstrapError: string | null;
@@ -4233,7 +4176,7 @@ function BackendOverview(props: BackendOverviewProps) {
         <article><span className="summary-icon summary-icon--orange">↻</span><div><small>Result retention</small><strong>{bootstrap !== null && bootstrap.limits.searchResultRetentionMs > 0 ? `${Math.round(bootstrap.limits.searchResultRetentionMs / 60_000)}m` : "—"}</strong><p>{bootstrap === null ? "Bootstrap unavailable" : "Read-only server limit"}</p></div><button type="button" onClick={() => props.onNavigate("server")}>Limits</button></article>
       </div>
       {bootstrap === null ? (
-        <ResourceMessage
+        <BackendResourceState
           kind="error"
           title="System bootstrap could not be loaded"
           message={`${props.bootstrapError ?? "The bootstrap route did not return a usable response."} Index and token routes were checked independently and remain available where shown.`}
@@ -4275,9 +4218,9 @@ interface BackendIndexesProps {
 }
 
 function BackendIndexes(props: BackendIndexesProps) {
-  if (props.state === "loading") return <ResourceMessage kind="loading" title="Loading indexes" message="Reading the server index catalog…" />;
-  if (props.state === "unavailable") return <ResourceMessage kind="unavailable" title="Index administration is unavailable" message="The connected server did not register the index administration routes." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
-  if (props.state === "error") return <ResourceMessage kind="error" title="Indexes could not be loaded" message={props.error ?? "The server rejected the index catalog request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
+  if (props.state === "loading") return <BackendResourceState kind="loading" title="Loading indexes" message="Reading the server index catalog…" />;
+  if (props.state === "unavailable") return <BackendResourceState kind="unavailable" title="Index administration is unavailable" message="The connected server did not register the index administration routes." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
+  if (props.state === "error") return <BackendResourceState kind="error" title="Indexes could not be loaded" message={props.error ?? "The server rejected the index catalog request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
 
   const loadedCount = countLabel(
     props.totalIndexes,
@@ -4292,7 +4235,7 @@ function BackendIndexes(props: BackendIndexesProps) {
       <header className="admin-section-header"><div><h2>Indexes</h2><p>Authoritative index definitions from the connected server.</p></div><span>{loadedCount}</span></header>
       <div className="resource-toolbar"><label><span className="sr-only">Filter loaded indexes</span><i aria-hidden="true">⌕</i><input value={props.filter} onChange={(event) => props.onFilterChange(event.target.value)} placeholder="Filter loaded indexes" /></label><button type="button" onClick={props.onReload}>Refresh</button></div>
       {props.indexes.length === 0 ? (
-        <ResourceMessage kind="empty" title={props.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={props.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} />
+        <BackendResourceState kind="empty" title={props.totalIndexes === 0 ? "No indexes configured" : "No matching indexes"} message={props.totalIndexes === 0 ? "Create an index to begin accepting and searching data." : "Try another index name or description."} />
       ) : (
         <div className="suite-card resource-table-card">
           <div className="responsive-table-wrap">
@@ -4365,9 +4308,9 @@ interface BackendTokensProps {
 }
 
 function BackendTokens(props: BackendTokensProps) {
-  if (props.state === "loading") return <ResourceMessage kind="loading" title="Loading ingestion tokens" message="Reading token metadata from the server…" />;
-  if (props.state === "unavailable") return <ResourceMessage kind="unavailable" title="Ingestion tokens are unavailable" message="The connected server did not register the ingestion-token routes. Collector fleet status is loaded independently from its own capability-gated panel." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
-  if (props.state === "error") return <ResourceMessage kind="error" title="Ingestion tokens could not be loaded" message={props.error ?? "The server rejected the token list request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
+  if (props.state === "loading") return <BackendResourceState kind="loading" title="Loading ingestion tokens" message="Reading token metadata from the server…" />;
+  if (props.state === "unavailable") return <BackendResourceState kind="unavailable" title="Ingestion tokens are unavailable" message="The connected server did not register the ingestion-token routes. Collector fleet status is loaded independently from its own capability-gated panel." action={<button type="button" onClick={props.onReload}>Retry</button>} />;
+  if (props.state === "error") return <BackendResourceState kind="error" title="Ingestion tokens could not be loaded" message={props.error ?? "The server rejected the token list request."} action={<button type="button" onClick={props.onReload}>Retry</button>} />;
   const loadedCount = countLabel(
     props.tokens.length,
     props.totalSize,
@@ -4404,7 +4347,7 @@ function BackendTokens(props: BackendTokensProps) {
       <section className="suite-card token-section">
         <header className="suite-card-header"><div><h3>Ingestion tokens</h3><p>Token secrets are never returned after creation. {loadedCount}.</p></div><button type="button" onClick={props.onReload}>Refresh</button></header>
         {props.tokens.length === 0 ? (
-          <ResourceMessage
+          <BackendResourceState
             kind="empty"
             title="No ingestion tokens"
             message={props.canCreate
@@ -4456,7 +4399,7 @@ function BackendServerSettings({
 }) {
   if (bootstrap === null) {
     return (
-      <ResourceMessage
+      <BackendResourceState
         kind="error"
         title="Server limits could not be loaded"
         message={error ?? "The system bootstrap route did not return a usable response."}
@@ -4483,9 +4426,9 @@ function BackendServerSettings({
       {hecState === "unavailable" ? (
         <div className="access-mode-notice" role="note"><span>i</span><div><strong>HTTP Event Collector is disabled</strong><p>The server does not advertise HEC ingestion. HEC token creation and test commands remain unavailable until the data-plane feature is enabled.</p></div></div>
       ) : hecState === "loading" ? (
-        <ResourceMessage kind="loading" title="Loading HEC operations" message="Reading the administrator operational snapshot…" />
+        <BackendResourceState kind="loading" title="Loading HEC operations" message="Reading the administrator operational snapshot…" />
       ) : hecState === "error" || hecSnapshot === null ? (
-        <ResourceMessage kind="error" title="HEC operations could not be loaded" message={hecError ?? "The operational snapshot was empty."} action={<button type="button" onClick={onReload}>Retry</button>} />
+        <BackendResourceState kind="error" title="HEC operations could not be loaded" message={hecError ?? "The operational snapshot was empty."} action={<button type="button" onClick={onReload}>Retry</button>} />
       ) : (
         <>
           <section className="suite-card settings-group">

@@ -1,5 +1,6 @@
-import { niceStep } from "../charts/chart-scale";
+import { linearTickScale } from "../charts/chart-scale";
 import {
+  type FocusEvent,
   type KeyboardEvent,
   type PointerEvent,
   useEffect,
@@ -149,20 +150,7 @@ function categoricalScale(
     const value = rowSeries(row, definition).value;
     return value === null || !Number.isFinite(value) ? [] : [value];
   }));
-  const dataMinimum = values.length === 0 ? 0 : Math.min(...values);
-  const dataMaximum = values.length === 0 ? 0 : Math.max(...values);
-  const rawMinimum = Math.min(0, dataMinimum);
-  const rawMaximum = Math.max(0, dataMaximum);
-  const span = rawMinimum === rawMaximum ? 1 : rawMaximum - rawMinimum;
-  const step = niceStep(span);
-  const minimum = Math.floor(rawMinimum / step) * step;
-  const maximum = Math.max(minimum + step, Math.ceil(rawMaximum / step) * step);
-  const intervalCount = Math.max(1, Math.round((maximum - minimum) / step));
-  const ticks = Array.from({ length: intervalCount + 1 }, (_, index) => {
-    const value = maximum - (index * step);
-    return Math.abs(value) < step / 1_000_000 ? 0 : value;
-  });
-  return { minimum, maximum, ticks };
+  return linearTickScale(values);
 }
 
 function verticalGeometry(value: number, scale: ChartScale): { top: number; height: number } {
@@ -372,6 +360,67 @@ function CategoricalChart({
     activateRow(row);
   }
 
+  // The horizontal and column branches differ only in layout: the category
+  // button contract and the inspector surface are one definition shared by both.
+  function categoryButtonProps(row: WorkspaceStatistic, rowIndex: number, className: string) {
+    return {
+      "aria-controls": inspectorId,
+      "aria-describedby": hintId,
+      "aria-expanded": rowIndex === activeIndex,
+      "aria-label": rowIndex === activeIndex
+        ? inspectDescription
+        : `${row.level}; inspect chart values`,
+      className,
+      onBlur: (event: FocusEvent<HTMLButtonElement>) => {
+        if (
+          event.relatedTarget instanceof Element
+          && event.relatedTarget.closest("[data-categorical-inspector='true']") !== null
+        ) {
+          return;
+        }
+        if (pinnedIndex !== rowIndex) setActiveIndex(null);
+      },
+      onClick: () => handleCategoryClick(row, rowIndex),
+      onFocus: () => setActiveIndex(rowIndex),
+      onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => handleKeyDown(event, rowIndex),
+      onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
+        lastPointerTypeRef.current = event.pointerType;
+        setActiveIndex(rowIndex);
+        if (event.pointerType === "touch" || event.pointerType === "pen") {
+          setPinnedIndex(rowIndex);
+        } else {
+          setPinnedIndex(null);
+        }
+        event.currentTarget.focus({ preventScroll: true });
+      },
+      onPointerEnter: () => setActiveIndex(rowIndex),
+      onPointerLeave: handlePointerLeave,
+      ref: (element: HTMLButtonElement | null) => { buttonRefs.current[rowIndex] = element; },
+      type: "button" as const,
+    };
+  }
+
+  const inspector = (
+    <CategoricalTooltip
+      activeRow={activeRow}
+      dimension={dimension}
+      inspectorId={inspectorId}
+      onBlur={() => { if (pinnedIndex === null) setActiveIndex(null); }}
+      onClose={closeInspector}
+      onDrilldown={drilldownFromInspector}
+      onPointerLeave={handleInspectorPointerLeave}
+      rowIndex={activeIndex ?? 0}
+      series={series}
+    />
+  );
+
+  const screenReaderHint = (
+    <>
+      <p className="sr-only" id={hintId}>Use arrow keys to move between categories. Home and End jump to the first and last category. Enter applies an available drilldown. Escape clears the value.</p>
+      <output className="sr-only" aria-live="polite">{activeRow === null ? "" : inspectDescription}</output>
+    </>
+  );
+
   if (horizontal) {
     const minimumRowHeight = Math.max(30, (series.length * 17) + 8);
     return (
@@ -400,37 +449,7 @@ function CategoricalChart({
               {rows.map((row, rowIndex) => (
                 <button
                   key={row.id ?? row.level}
-                  ref={(element) => { buttonRefs.current[rowIndex] = element; }}
-                  type="button"
-                  className={styles.horizontalGroup}
-                  aria-controls={inspectorId}
-                  aria-describedby={hintId}
-                  aria-expanded={rowIndex === activeIndex}
-                  aria-label={rowIndex === activeIndex ? inspectDescription : `${row.level}; inspect chart values`}
-                  onBlur={(event) => {
-                    if (
-                      event.relatedTarget instanceof Element
-                      && event.relatedTarget.closest("[data-categorical-inspector='true']") !== null
-                    ) {
-                      return;
-                    }
-                    if (pinnedIndex !== rowIndex) setActiveIndex(null);
-                  }}
-                  onClick={() => handleCategoryClick(row, rowIndex)}
-                  onFocus={() => setActiveIndex(rowIndex)}
-                  onKeyDown={(event) => handleKeyDown(event, rowIndex)}
-                  onPointerDown={(event) => {
-                    lastPointerTypeRef.current = event.pointerType;
-                    setActiveIndex(rowIndex);
-                    if (event.pointerType === "touch" || event.pointerType === "pen") {
-                      setPinnedIndex(rowIndex);
-                    } else {
-                      setPinnedIndex(null);
-                    }
-                    event.currentTarget.focus({ preventScroll: true });
-                  }}
-                  onPointerEnter={() => setActiveIndex(rowIndex)}
-                  onPointerLeave={handlePointerLeave}
+                  {...categoryButtonProps(row, rowIndex, styles.horizontalGroup)}
                 >
                   <strong title={row.level}>{row.level}</strong>
                   <span className={styles.horizontalBars} aria-hidden="true">
@@ -470,21 +489,10 @@ function CategoricalChart({
                 <span key={tick}>{approximate ? "≈" : ""}{COMPACT_NUMBER_FORMAT.format(tick)}</span>
               ))}
             </div>
-            <CategoricalTooltip
-              activeRow={activeRow}
-              dimension={dimension}
-              inspectorId={inspectorId}
-              onBlur={() => { if (pinnedIndex === null) setActiveIndex(null); }}
-              onClose={closeInspector}
-              onDrilldown={drilldownFromInspector}
-              onPointerLeave={handleInspectorPointerLeave}
-              rowIndex={activeIndex ?? 0}
-              series={series}
-            />
+            {inspector}
           </div>
         </div>
-        <p className="sr-only" id={hintId}>Use arrow keys to move between categories. Home and End jump to the first and last category. Enter applies an available drilldown. Escape clears the value.</p>
-        <output className="sr-only" aria-live="polite">{activeRow === null ? "" : inspectDescription}</output>
+        {screenReaderHint}
       </div>
     );
   }
@@ -516,37 +524,7 @@ function CategoricalChart({
             {rows.map((row, rowIndex) => (
               <button
                 key={row.id ?? row.level}
-                ref={(element) => { buttonRefs.current[rowIndex] = element; }}
-                type="button"
-                className={styles.categoricalGroup}
-                aria-controls={inspectorId}
-                aria-describedby={hintId}
-                aria-expanded={rowIndex === activeIndex}
-                aria-label={rowIndex === activeIndex ? inspectDescription : `${row.level}; inspect chart values`}
-                onBlur={(event) => {
-                  if (
-                    event.relatedTarget instanceof Element
-                    && event.relatedTarget.closest("[data-categorical-inspector='true']") !== null
-                  ) {
-                    return;
-                  }
-                  if (pinnedIndex !== rowIndex) setActiveIndex(null);
-                }}
-                onClick={() => handleCategoryClick(row, rowIndex)}
-                onFocus={() => setActiveIndex(rowIndex)}
-                onKeyDown={(event) => handleKeyDown(event, rowIndex)}
-                onPointerDown={(event) => {
-                  lastPointerTypeRef.current = event.pointerType;
-                  setActiveIndex(rowIndex);
-                  if (event.pointerType === "touch" || event.pointerType === "pen") {
-                    setPinnedIndex(rowIndex);
-                  } else {
-                    setPinnedIndex(null);
-                  }
-                  event.currentTarget.focus({ preventScroll: true });
-                }}
-                onPointerEnter={() => setActiveIndex(rowIndex)}
-                onPointerLeave={handlePointerLeave}
+                {...categoryButtonProps(row, rowIndex, styles.categoricalGroup)}
               >
                 <span className={styles.verticalBars} aria-hidden="true">
                   {series.map((definition, seriesIndex) => {
@@ -580,21 +558,10 @@ function CategoricalChart({
               </button>
             ))}
           </div>
-          <CategoricalTooltip
-            activeRow={activeRow}
-            dimension={dimension}
-            inspectorId={inspectorId}
-            onBlur={() => { if (pinnedIndex === null) setActiveIndex(null); }}
-            onClose={closeInspector}
-            onDrilldown={drilldownFromInspector}
-            onPointerLeave={handleInspectorPointerLeave}
-            rowIndex={activeIndex ?? 0}
-            series={series}
-          />
+          {inspector}
         </div>
       </div>
-      <p className="sr-only" id={hintId}>Use arrow keys to move between categories. Home and End jump to the first and last category. Enter applies an available drilldown. Escape clears the value.</p>
-      <output className="sr-only" aria-live="polite">{activeRow === null ? "" : inspectDescription}</output>
+      {screenReaderHint}
     </div>
   );
 }

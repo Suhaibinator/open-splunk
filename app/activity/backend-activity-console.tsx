@@ -31,10 +31,10 @@ import {
   type ServerSearchHistoryEntry,
 } from "@/lib/search/server-objects";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
 import {
-  ActivityState,
   formatActivityCount,
   formatActivityDate,
   formatActivityDuration,
@@ -537,9 +537,9 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
 
   return (
     <div className="backend-activity-view">
-      {state === "loading" ? <ActivityState kind="loading" title="Loading search history" message="Reading persisted terminal-search metadata…" /> : null}
-      {state === "unavailable" ? <ActivityState kind="unavailable" title="Search history is unavailable" message="The backend does not advertise or register persisted search history. Current transient jobs remain available in their separate tab." action={<button type="button" onClick={reload}>Retry</button>} /> : null}
-      {state === "error" ? <ActivityState kind="error" title="Search history could not be loaded" message={error ?? "The search history request failed."} action={<button type="button" onClick={reload}>Retry</button>} /> : null}
+      {state === "loading" ? <BackendResourceState kind="loading" title="Loading search history" message="Reading persisted terminal-search metadata…" /> : null}
+      {state === "unavailable" ? <BackendResourceState kind="unavailable" title="Search history is unavailable" message="The backend does not advertise or register persisted search history. Current transient jobs remain available in their separate tab." action={<button type="button" onClick={reload}>Retry</button>} /> : null}
+      {state === "error" ? <BackendResourceState kind="error" title="Search history could not be loaded" message={error ?? "The search history request failed."} action={<button type="button" onClick={reload}>Retry</button>} /> : null}
 
       {state === "available" ? (
         <>
@@ -588,7 +588,7 @@ function BackendSearchHistory({ apiBaseUrl }: BackendActivityConsoleProps) {
               <label><span className="sr-only">Filter search history SPL on the server</span><i aria-hidden="true">⌕</i><input value={query} disabled={actionPending !== null} onChange={(event) => setQuery(event.target.value)} placeholder="Filter SPL on the server" /></label>
             </header>
             {filtered.length === 0 ? (
-              <ActivityState
+              <BackendResourceState
                 kind="empty"
                 title={hasActiveHistoryFilter ? "No matching history" : "No persisted search history"}
                 message={hasActiveHistoryFilter

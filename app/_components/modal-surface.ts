@@ -15,12 +15,9 @@ const inertReferenceCounts = new WeakMap<HTMLElement, number>();
 
 export interface ModalSurfaceOptions {
   container: HTMLElement;
-  excludedSiblingClassNames?: readonly string[];
-  focusableSelector?: string;
-  inertSiblings?: boolean;
-  initialFocusSelector?: string;
-  onEscape?: () => void;
-  returnFocus?: HTMLElement | null;
+  excludedSiblingClassNames: readonly string[];
+  onEscape: () => void;
+  returnFocus: HTMLElement | null;
 }
 
 function lockBodyScroll(): () => void {
@@ -70,39 +67,31 @@ function inertOutsideSurface(
   };
 }
 
-function focusableControls(container: HTMLElement, selector: string): HTMLElement[] {
-  return Array.from(container.querySelectorAll<HTMLElement>(selector))
+function focusableControls(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(DEFAULT_FOCUSABLE_SELECTOR))
     .filter((element) => !element.hasAttribute("hidden") && element.getClientRects().length > 0);
 }
 
 export function installModalSurface({
   container,
-  excludedSiblingClassNames = [],
-  focusableSelector = DEFAULT_FOCUSABLE_SELECTOR,
-  inertSiblings = true,
-  initialFocusSelector,
+  excludedSiblingClassNames,
   onEscape,
-  returnFocus = null,
+  returnFocus,
 }: ModalSurfaceOptions): () => void {
   const unlockBodyScroll = lockBodyScroll();
-  const restoreOutsideSurface = inertSiblings
-    ? inertOutsideSurface(container, excludedSiblingClassNames)
-    : () => undefined;
+  const restoreOutsideSurface = inertOutsideSurface(container, excludedSiblingClassNames);
   const focusFrame = window.requestAnimationFrame(() => {
-    const requestedControl = initialFocusSelector === undefined
-      ? null
-      : container.querySelector<HTMLElement>(initialFocusSelector);
-    (requestedControl ?? focusableControls(container, focusableSelector)[0] ?? container).focus();
+    (focusableControls(container)[0] ?? container).focus();
   });
 
   function handleKeyDown(event: KeyboardEvent) {
-    if (event.key === "Escape" && onEscape !== undefined) {
+    if (event.key === "Escape") {
       event.preventDefault();
       onEscape();
       return;
     }
     if (event.key !== "Tab") return;
-    const controls = focusableControls(container, focusableSelector);
+    const controls = focusableControls(container);
     if (controls.length === 0) {
       event.preventDefault();
       container.focus();

@@ -6,7 +6,6 @@ import {
   ExportFormat,
   ExportJobState,
   type ExportJob,
-  type ExportProgress,
 } from "@/gen/ts/open_splunk/v1/export";
 import {
   createOpenSplunkApiClient,
@@ -16,6 +15,7 @@ import {
   RepeatedPageCursorError,
   type SystemBootstrapModel,
 } from "@/lib/api";
+import { durationToMilliseconds } from "@/lib/api/duration";
 import { createErrorMessage } from "@/lib/error-message";
 import {
   cancelServerExport,
@@ -23,9 +23,9 @@ import {
   exportCanDownload,
 } from "@/lib/search/server-exports";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
 import { formatDecimalBytes } from "../search-workspace/formatters";
 import {
-  ActivityState,
   formatActivityCount,
   formatActivityDate,
   formatActivityDuration,
@@ -85,13 +85,6 @@ function exportFormatLabel(job: ExportJob): string {
   if (job.format === ExportFormat.EXPORT_FORMAT_CSV) return "CSV";
   if (job.format === ExportFormat.EXPORT_FORMAT_JSON_LINES) return "JSON Lines";
   return "Unknown format";
-}
-
-function elapsedMilliseconds(progress: ExportProgress | undefined): number {
-  const elapsed = progress?.elapsed;
-  if (elapsed === undefined) return 0;
-  const value = Number(elapsed.seconds) * 1_000 + elapsed.nanos / 1_000_000;
-  return Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 function progressPercent(job: ExportJob): number | null {
@@ -279,9 +272,9 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
 
   return (
     <div className="backend-activity-view">
-      {state === "loading" ? <ActivityState kind="loading" title="Loading retained exports" message="Reading the backend’s retained export-job snapshot…" /> : null}
-      {state === "unavailable" ? <ActivityState kind="unavailable" title="Export listing is unavailable" message="This backend advertises export formats but does not register the optional export-list route." action={<button type="button" onClick={reload}>Retry</button>} /> : null}
-      {state === "error" ? <ActivityState kind="error" title="Export jobs could not be loaded" message={error ?? "The export job request failed."} action={<button type="button" onClick={reload}>Retry</button>} /> : null}
+      {state === "loading" ? <BackendResourceState kind="loading" title="Loading retained exports" message="Reading the backend’s retained export-job snapshot…" /> : null}
+      {state === "unavailable" ? <BackendResourceState kind="unavailable" title="Export listing is unavailable" message="This backend advertises export formats but does not register the optional export-list route." action={<button type="button" onClick={reload}>Retry</button>} /> : null}
+      {state === "error" ? <BackendResourceState kind="error" title="Export jobs could not be loaded" message={error ?? "The export job request failed."} action={<button type="button" onClick={reload}>Retry</button>} /> : null}
 
       {state === "available" ? (
         <>
@@ -304,8 +297,8 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
                 {filtered ? <button className="suite-button suite-button--secondary" type="button" onClick={clearFilters}>Clear</button> : null}
               </form>
             </header>
-            {refreshing ? <ActivityState kind="loading" title="Updating export jobs" message="Applying exact backend filters to a fresh snapshot. Existing rows remain visible until it completes." /> : null}
-            {jobs.length === 0 && !refreshing ? <ActivityState kind="empty" title={filtered ? "No matching export jobs" : "No retained export jobs"} message={filtered ? "No retained export jobs match these exact state and search-job filters." : "Exports created from completed searches will appear here while their records are retained."} action={filtered ? <button type="button" onClick={clearFilters}>Clear filters</button> : undefined} /> : null}
+            {refreshing ? <BackendResourceState kind="loading" title="Updating export jobs" message="Applying exact backend filters to a fresh snapshot. Existing rows remain visible until it completes." /> : null}
+            {jobs.length === 0 && !refreshing ? <BackendResourceState kind="empty" title={filtered ? "No matching export jobs" : "No retained export jobs"} message={filtered ? "No retained export jobs match these exact state and search-job filters." : "Exports created from completed searches will appear here while their records are retained."} action={filtered ? <button type="button" onClick={clearFilters}>Clear filters</button> : undefined} /> : null}
             {jobs.length > 0 ? (
               <div className="responsive-table-wrap" aria-busy={refreshing}>
                 <table className="product-table live-jobs-table export-jobs-table">
@@ -319,7 +312,7 @@ export function BackendExportJobs({ apiBaseUrl, bootstrap }: BackendExportJobsPr
                       <td data-label="Export"><strong>{exportFormatLabel(job)}</strong><code>{job.exportJobId}</code><small>Version {formatActivityCount(job.stateVersion)}</small></td>
                       <td data-label="Source search"><code>{job.definition?.searchJobId || "Not recorded"}</code><small>{job.definition?.columns.length ? `${job.definition.columns.length} selected columns` : "All result columns"}</small></td>
                       <td data-label="State"><span className={`status-label status-label--${exportStateClass(job.state)}`}><i />{exportStateLabel(job.state)}</span>{job.finishedAt !== undefined ? <small>Finished {formatActivityDate(job.finishedAt)}</small> : null}</td>
-                      <td data-label="Progress"><div className="live-job-progress">{percent === null ? <span>{exportStateLabel(job.state)}</span> : <progress max={100} value={percent} aria-label={`${exportStateLabel(job.state)} ${Math.round(percent)} percent`} />}<small>{percent === null ? null : `${Math.round(percent)}% · `}{formatActivityDuration(elapsedMilliseconds(job.progress))}</small><small>{formatActivityCount(job.progress?.rowsWritten ?? 0n)} rows · {formatDecimalBytes(job.progress?.bytesWritten ?? 0n)}</small></div></td>
+                      <td data-label="Progress"><div className="live-job-progress">{percent === null ? <span>{exportStateLabel(job.state)}</span> : <progress max={100} value={percent} aria-label={`${exportStateLabel(job.state)} ${Math.round(percent)} percent`} />}<small>{percent === null ? null : `${Math.round(percent)}% · `}{formatActivityDuration(durationToMilliseconds(job.progress?.elapsed))}</small><small>{formatActivityCount(job.progress?.rowsWritten ?? 0n)} rows · {formatDecimalBytes(job.progress?.bytesWritten ?? 0n)}</small></div></td>
                       <td data-label="Artifact / failure">{job.artifact !== undefined ? <><strong title={`${formatActivityCount(job.artifact.sizeBytes)} bytes`}>{job.artifact.fileName}</strong><small>{formatActivityCount(job.artifact.rowCount)} rows · {formatDecimalBytes(job.artifact.sizeBytes)}</small><small>Expires {formatActivityDate(job.artifact.expiresAt ?? null)}</small></> : job.failure !== undefined ? <><strong className="table-error-detail">{job.failure.message}</strong><small>{job.failure.retryable ? "Retryable failure" : "Terminal failure"} · code {job.failure.code}</small></> : <small>No artifact yet</small>}</td>
                       <td data-label="Created"><time dateTime={job.createdAt?.toISOString()}>{formatActivityDate(job.createdAt ?? null)}</time></td>
                       <td data-label="Actions"><div className="live-job-actions">{downloadable ? <button type="button" disabled={action !== null || refreshing} onClick={() => void downloadJob(job)}>{action?.id === job.exportJobId && action.kind === "download" ? "Downloading…" : "Download"}</button> : null}{cancelable ? <button type="button" disabled={action !== null || refreshing} onClick={() => void cancelJob(job)}>{action?.id === job.exportJobId && action.kind === "cancel" ? "Canceling…" : "Cancel"}</button> : null}</div></td>

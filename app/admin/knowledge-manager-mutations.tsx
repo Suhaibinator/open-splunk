@@ -24,6 +24,7 @@ import {
   ValidateKnowledgeObjectRequest,
 } from "@/gen/ts/open_splunk/v1/knowledge_api";
 
+import { joinedPatterns, lines } from "./knowledge-lookup-text";
 import type { KnowledgeManagerAppOption } from "./knowledge-manager-feature";
 import {
   createKnowledgeObject,
@@ -142,11 +143,6 @@ function overwriteToDraft(value: KnowledgeOverwriteBehavior): KnowledgeMutationO
   }
 }
 
-function lines(value: string): string[] {
-  return value.split("\n").map((entry) => entry.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g, ""))
-    .filter((entry) => entry.length > 0);
-}
-
 function selectorPatterns(value: string) {
   return lines(value).map((pattern) => ({
     matchKind: selectorMatchKind(pattern),
@@ -252,12 +248,6 @@ export function knowledgeDefinitionFromMutationDraft(
     selector,
     body,
   });
-}
-
-function joinedPatterns(
-  patterns: Array<{ value: string }>,
-): string {
-  return patterns.map((pattern) => pattern.value).join("\n");
 }
 
 export function knowledgeMutationDraftFromObject(

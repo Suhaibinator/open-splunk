@@ -21,6 +21,7 @@ import {
 import { createErrorMessage } from "@/lib/error-message";
 import { searchLaunchHref } from "@/lib/search/launch-url";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
 import { PageHeading } from "../_components/product-shell";
 import { IndexObservabilityPanel } from "./index-observability-panel";
 
@@ -192,9 +193,9 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
       />
 
       {loading ? (
-        <DatasetState kind="loading" title="Loading datasets" message="Reading the authorized index catalog from system bootstrap…" />
+        <BackendResourceState kind="loading" title="Loading datasets" message="Reading the authorized index catalog from system bootstrap…" />
       ) : error !== null ? (
-        <DatasetState kind="error" title="Datasets could not be loaded" message={error} action={<button type="button" onClick={reload}>Retry</button>} />
+        <BackendResourceState kind="error" title="Datasets could not be loaded" message={error} action={<button type="button" onClick={reload}>Retry</button>} />
       ) : bootstrap === null ? null : (
         <>
           <div className="dataset-toolbar">
@@ -210,7 +211,7 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
           {definitionState === "error" ? <div className="backend-inline-error" role="alert">Index details could not be enriched. Bootstrap authorization remains available. {definitionError}</div> : null}
 
           {visible.length === 0 ? (
-            <DatasetState
+            <BackendResourceState
               kind="empty"
               title={bootstrap.indexes.length === 0 ? "No authorized indexes" : "No matching datasets"}
               message={bootstrap.indexes.length === 0 ? "The backend did not return any indexes authorized for search." : "Try another index name."}
@@ -282,23 +283,6 @@ export function BackendDatasetsConsole({ apiBaseUrl }: BackendDatasetsConsolePro
           ) : <IndexObservabilityPanel client={client} index={observedIndex} />}
         </>
       )}
-    </div>
-  );
-}
-
-interface DatasetStateProps {
-  kind: "loading" | "error" | "empty";
-  title: string;
-  message: string;
-  action?: React.ReactNode;
-}
-
-function DatasetState({ kind, title, message, action }: DatasetStateProps) {
-  return (
-    <div className={`backend-resource-state backend-resource-state--${kind}`} role={kind === "error" ? "alert" : "status"}>
-      <span aria-hidden="true">{kind === "loading" ? "↻" : kind === "error" ? "!" : "∅"}</span>
-      <div><strong>{title}</strong><p>{message}</p></div>
-      {action}
     </div>
   );
 }

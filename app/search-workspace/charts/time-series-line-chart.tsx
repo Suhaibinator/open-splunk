@@ -12,7 +12,7 @@ import type { TimelinePoint } from "@/lib/demo/search-data";
 
 import { COMPACT_NUMBER_FORMAT, NUMBER_FORMAT } from "../constants";
 import { formatExactNumericText } from "../formatters";
-import { niceStep } from "./chart-scale";
+import { linearTickScale } from "./chart-scale";
 
 const VIEWBOX_WIDTH = 1000;
 const VIEWBOX_HEIGHT = 300;
@@ -71,20 +71,7 @@ function axisScale(
   const values = points
     .flatMap((point) => seriesNames.map((name) => pointSeriesValue(point, name, fallbackLabel)))
     .filter(Number.isFinite);
-  const dataMinimum = values.length === 0 ? 0 : Math.min(...values);
-  const dataMaximum = values.length === 0 ? 0 : Math.max(...values);
-  const rawMinimum = Math.min(0, dataMinimum);
-  const rawMaximum = Math.max(0, dataMaximum);
-  const scaleSpan = rawMaximum === rawMinimum ? 1 : rawMaximum - rawMinimum;
-  const step = niceStep(scaleSpan);
-  const minimum = Math.floor(rawMinimum / step) * step;
-  const maximum = Math.max(minimum + step, Math.ceil(rawMaximum / step) * step);
-  const intervalCount = Math.max(1, Math.round((maximum - minimum) / step));
-  const ticks = Array.from({ length: intervalCount + 1 }, (_, index) => {
-    const value = maximum - (index * step);
-    return Math.abs(value) < step / 1_000_000 ? 0 : value;
-  });
-  return { minimum, maximum, ticks };
+  return linearTickScale(values);
 }
 
 function tickIndices(length: number, targetCount: number): number[] {

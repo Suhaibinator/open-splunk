@@ -56,17 +56,7 @@ export function textBytes(value: string): number {
 }
 
 export function hasUnpairedSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) return true;
-      index += 1;
-    } else if (code >= 0xdc00 && code <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
+  return !value.isWellFormed();
 }
 
 function isExactLookupToken(value: string): boolean {
@@ -268,7 +258,7 @@ function validMappings(
   return true;
 }
 
-function isManagementIdentity(value: string, maximumBytes: number): boolean {
+export function isManagementIdentity(value: string, maximumBytes: number): boolean {
   return value.length > 0
     && textBytes(value) <= maximumBytes
     && /^[A-Za-z0-9](?:[A-Za-z0-9._:-]*)$/u.test(value);

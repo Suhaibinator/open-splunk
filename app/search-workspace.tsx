@@ -6,6 +6,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type PointerEvent,
+  type RefObject,
   type SetStateAction,
   type UIEvent,
   useEffect,
@@ -69,6 +70,7 @@ import {
   getSystemBootstrap,
   isHttpError,
   isHttpStatus,
+  type OptionalFeatureResult,
   pruneCursorChainFrom,
   recordNextPageToken,
   RepeatedPageCursorError,
@@ -123,6 +125,7 @@ import {
   serverFieldToDemoField,
   updateServerSavedSearch,
   waitForServerExport,
+  type ServerObjectPage,
   type ServerSavedSearch,
   type ServerSearchHistoryEntry,
 } from "@/lib/search/server-api";
@@ -183,6 +186,7 @@ import {
   type ProgressRevisionState,
   type SearchProgressSource,
 } from "./search-workspace/progress-revision";
+import { formatBinaryBytes } from "./search-workspace/formatters";
 import { EventsPanel } from "./search-workspace/panels/events-panel";
 import { PatternsPanel } from "./search-workspace/panels/patterns-panel";
 import { StatisticsPanel } from "./search-workspace/panels/statistics-panel";
@@ -191,7 +195,6 @@ import {
   backendJobPhase,
   eventCountForQuery,
   filteredDemoEvents,
-  formatBytes,
   formatDuration,
   formatFieldValue,
   hasPipelineCommand,
@@ -296,6 +299,33 @@ function mergeDisplayPage<TSource extends { id: string }, TDisplay extends { id:
     }),
     ...page.filter((item) => !existingIds.has(item.id)).map(adapt),
   ];
+}
+
+// Saved searches and search history are the same incrementally paged library
+// with different records, so one refresh and one load-more implementation is
+// parameterized by the state, refs, and adapters of each side.
+interface BackendLibraryConfig<TSource extends { id: string }, TDisplay extends { id: string }> {
+  errorMessage: string;
+  label: string;
+  list: (
+    bootstrap: BackendBootstrapState,
+    pageToken: string | undefined,
+    signal?: AbortSignal,
+  ) => Promise<OptionalFeatureResult<ServerObjectPage<TSource>>>;
+  loadMoreEpochRef: RefObject<number>;
+  loadMoreErrorMessage: string;
+  loadMoreRef: RefObject<boolean>;
+  nextPageToken: string | null;
+  pageTokensRef: RefObject<Set<string>>;
+  pinnedItem: () => TSource | undefined;
+  recordsRef: RefObject<Map<string, TSource>>;
+  refreshEpochRef: RefObject<number>;
+  setAvailable: (value: boolean) => void;
+  setItems: Dispatch<SetStateAction<TDisplay[]>>;
+  setLoading: (value: boolean) => void;
+  setLoadingMore: (value: boolean) => void;
+  setNextPageToken: (value: string | null) => void;
+  toDisplay: (source: TSource) => TDisplay;
 }
 
 function savedWorkspaceFingerprint(baseline: SavedWorkspaceBaseline): string {
@@ -742,6 +772,57 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
   const backendHistoryLoadMoreEpochRef = useRef(0);
   const backendSavedSearchPageTokensRef = useRef<Set<string>>(new Set());
   const backendHistoryPageTokensRef = useRef<Set<string>>(new Set());
+  const savedSearchLibrary: BackendLibraryConfig<ServerSavedSearch, DemoSavedSearch> = {
+    errorMessage: "Unable to load saved searches.",
+    label: "Saved searches",
+    list: (bootstrap, pageToken, signal) => listServerSavedSearches(apiClient, bootstrap.response, {
+      appId: bootstrap.response.selectedAppId ?? undefined,
+      pageToken,
+      maximumPages: 1,
+      signal,
+    }),
+    loadMoreEpochRef: backendSavedSearchLoadMoreEpochRef,
+    loadMoreErrorMessage: "Unable to load more saved searches.",
+    loadMoreRef: backendSavedSearchLoadMoreRef,
+    nextPageToken: savedSearchesNextPageToken,
+    pageTokensRef: backendSavedSearchPageTokensRef,
+    pinnedItem: () => activeSavedSearchIdRef.current === null
+      ? undefined
+      : backendSavedSearchesRef.current.get(activeSavedSearchIdRef.current),
+    recordsRef: backendSavedSearchesRef,
+    refreshEpochRef: backendSavedSearchRefreshEpochRef,
+    setAvailable: setSavedSearchesAvailable,
+    setItems: setSavedSearches,
+    setLoading: setSavedSearchesLoading,
+    setLoadingMore: setSavedSearchesLoadingMore,
+    setNextPageToken: setSavedSearchesNextPageToken,
+    toDisplay: savedSearchForDisplay,
+  };
+  const historyLibrary: BackendLibraryConfig<ServerSearchHistoryEntry, DemoHistoryEntry> = {
+    errorMessage: "Unable to load search history.",
+    label: "Search history",
+    list: (bootstrap, pageToken, signal) => listServerSearchHistory(apiClient, bootstrap.response, {
+      appId: bootstrap.response.selectedAppId ?? undefined,
+      pageToken,
+      maximumPages: 1,
+      states: TERMINAL_HISTORY_STATES,
+      signal,
+    }),
+    loadMoreEpochRef: backendHistoryLoadMoreEpochRef,
+    loadMoreErrorMessage: "Unable to load more search history.",
+    loadMoreRef: backendHistoryLoadMoreRef,
+    nextPageToken: historyNextPageToken,
+    pageTokensRef: backendHistoryPageTokensRef,
+    pinnedItem: () => backendHistoryRerunRef.current ?? undefined,
+    recordsRef: backendHistoryRef,
+    refreshEpochRef: backendHistoryRefreshEpochRef,
+    setAvailable: setHistoryAvailable,
+    setItems: setHistory,
+    setLoading: setHistoryLoading,
+    setLoadingMore: setHistoryLoadingMore,
+    setNextPageToken: setHistoryNextPageToken,
+    toDisplay: historyEntryForDisplay,
+  };
   const urlLaunchAppliedRef = useRef(false);
   const persistedLaunchEpochRef = useRef(0);
   const persistedLaunchPendingRef = useRef(false);
@@ -1499,65 +1580,120 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     return bootstrap;
   }
 
+  async function refreshBackendLibrary<TSource extends { id: string }, TDisplay extends { id: string }>(
+    config: BackendLibraryConfig<TSource, TDisplay>,
+    bootstrapOverride?: BackendBootstrapState,
+    signal?: AbortSignal,
+  ) {
+    const refreshEpoch = ++config.refreshEpochRef.current;
+    config.loadMoreEpochRef.current += 1;
+    config.loadMoreRef.current = false;
+    config.pageTokensRef.current.clear();
+    config.setLoadingMore(false);
+    config.setLoading(true);
+    try {
+      const bootstrap = bootstrapOverride ?? await ensureBackendBootstrap();
+      if (signal?.aborted || config.refreshEpochRef.current !== refreshEpoch) return;
+      const result = await config.list(bootstrap, undefined, signal);
+      if (signal?.aborted || config.refreshEpochRef.current !== refreshEpoch) return;
+      if (result.status === "unavailable") {
+        config.recordsRef.current.clear();
+        config.setItems([]);
+        config.setNextPageToken(null);
+        config.setAvailable(false);
+        return;
+      }
+      const pinned = config.pinnedItem();
+      const items = pinned === undefined
+        || result.value.items.some((item) => item.id === pinned.id)
+        ? result.value.items
+        : [pinned, ...result.value.items];
+      config.recordsRef.current = new Map(items.map((item) => [item.id, item]));
+      config.setItems(items.map((item) => config.toDisplay(item)));
+      config.setNextPageToken(recordNextPageToken(
+        config.pageTokensRef.current,
+        result.value.nextPageToken,
+        config.label,
+      ));
+      config.setAvailable(true);
+    } catch (error) {
+      if (signal?.aborted || config.refreshEpochRef.current !== refreshEpoch) return;
+      config.setNextPageToken(null);
+      if (error instanceof RepeatedPageCursorError) {
+        config.setAvailable(true);
+        showToast(`${error.message} Further paging was stopped.`, "warning");
+        return;
+      }
+      config.setAvailable(false);
+      showToast(error instanceof Error ? error.message : config.errorMessage, "warning");
+    } finally {
+      if (!signal?.aborted && config.refreshEpochRef.current === refreshEpoch) {
+        config.setLoading(false);
+      }
+    }
+  }
+
+  async function loadMoreBackendLibrary<TSource extends { id: string }, TDisplay extends { id: string }>(
+    config: BackendLibraryConfig<TSource, TDisplay>,
+  ) {
+    const pageToken = config.nextPageToken;
+    if (!backendEnabled || pageToken === null || config.loadMoreRef.current) return;
+    const refreshEpoch = config.refreshEpochRef.current;
+    const bootstrap = backendBootstrapRef.current;
+    if (bootstrap === null) return;
+    const appId = bootstrap.response.selectedAppId;
+    const loadMoreEpoch = ++config.loadMoreEpochRef.current;
+    config.loadMoreRef.current = true;
+    config.setLoadingMore(true);
+    try {
+      const result = await config.list(bootstrap, pageToken);
+      if (
+        config.refreshEpochRef.current !== refreshEpoch
+        || backendBootstrapRef.current?.response.selectedAppId !== appId
+      ) return;
+      if (result.status === "unavailable") {
+        config.setAvailable(false);
+        config.setNextPageToken(null);
+        return;
+      }
+      for (const item of result.value.items) {
+        config.recordsRef.current.set(item.id, item);
+      }
+      config.setItems((current) =>
+        mergeDisplayPage(current, result.value.items, config.toDisplay)
+      );
+      config.setNextPageToken(recordNextPageToken(
+        config.pageTokensRef.current,
+        result.value.nextPageToken,
+        config.label,
+      ));
+    } catch (error) {
+      if (
+        config.refreshEpochRef.current === refreshEpoch
+        && backendBootstrapRef.current?.response.selectedAppId === appId
+      ) {
+        if (error instanceof RepeatedPageCursorError) config.setNextPageToken(null);
+        showToast(error instanceof Error ? error.message : config.loadMoreErrorMessage, "warning");
+      }
+    } finally {
+      if (
+        config.loadMoreEpochRef.current === loadMoreEpoch
+        &&
+        config.refreshEpochRef.current === refreshEpoch
+        && backendBootstrapRef.current?.response.selectedAppId === appId
+      ) {
+        config.loadMoreRef.current = false;
+        config.setLoadingMore(false);
+      }
+    }
+  }
+
   async function refreshBackendSavedSearches(
     bootstrapOverride?: BackendBootstrapState,
     signal?: AbortSignal,
   ) {
     if (!backendEnabled) return;
-    const refreshEpoch = ++backendSavedSearchRefreshEpochRef.current;
-    backendSavedSearchLoadMoreEpochRef.current += 1;
-    backendSavedSearchLoadMoreRef.current = false;
-    backendSavedSearchPageTokensRef.current.clear();
-    setSavedSearchesLoadingMore(false);
-    setSavedSearchesLoading(true);
-    try {
-      const bootstrap = bootstrapOverride ?? await ensureBackendBootstrap();
-      if (signal?.aborted || backendSavedSearchRefreshEpochRef.current !== refreshEpoch) return;
-      const result = await listServerSavedSearches(apiClient, bootstrap.response, {
-        appId: bootstrap.response.selectedAppId ?? undefined,
-        maximumPages: 1,
-        signal,
-      });
-      if (signal?.aborted || backendSavedSearchRefreshEpochRef.current !== refreshEpoch) return;
-      if (result.status === "unavailable") {
-        backendSavedSearchesRef.current.clear();
-        setSavedSearches([]);
-        setSavedSearchesNextPageToken(null);
-        setSavedSearchesAvailable(false);
-        return;
-      }
-      const activeSavedSearch = activeSavedSearchIdRef.current === null
-        ? undefined
-        : backendSavedSearchesRef.current.get(activeSavedSearchIdRef.current);
-      const savedSearchItems = activeSavedSearch === undefined
-        || result.value.items.some((savedSearch) => savedSearch.id === activeSavedSearch.id)
-        ? result.value.items
-        : [activeSavedSearch, ...result.value.items];
-      backendSavedSearchesRef.current = new Map(
-        savedSearchItems.map((savedSearch) => [savedSearch.id, savedSearch]),
-      );
-      setSavedSearches(savedSearchItems.map((savedSearch) => savedSearchForDisplay(savedSearch)));
-      setSavedSearchesNextPageToken(recordNextPageToken(
-        backendSavedSearchPageTokensRef.current,
-        result.value.nextPageToken,
-        "Saved searches",
-      ));
-      setSavedSearchesAvailable(true);
-    } catch (error) {
-      if (signal?.aborted || backendSavedSearchRefreshEpochRef.current !== refreshEpoch) return;
-      setSavedSearchesNextPageToken(null);
-      if (error instanceof RepeatedPageCursorError) {
-        setSavedSearchesAvailable(true);
-        showToast(`${error.message} Further paging was stopped.`, "warning");
-        return;
-      }
-      setSavedSearchesAvailable(false);
-      showToast(error instanceof Error ? error.message : "Unable to load saved searches.", "warning");
-    } finally {
-      if (!signal?.aborted && backendSavedSearchRefreshEpochRef.current === refreshEpoch) {
-        setSavedSearchesLoading(false);
-      }
-    }
+    await refreshBackendLibrary(savedSearchLibrary, bootstrapOverride, signal);
   }
 
   async function reloadBackendSavedSearchById(
@@ -1601,174 +1737,15 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     signal?: AbortSignal,
   ) {
     if (!backendEnabled) return;
-    const refreshEpoch = ++backendHistoryRefreshEpochRef.current;
-    backendHistoryLoadMoreEpochRef.current += 1;
-    backendHistoryLoadMoreRef.current = false;
-    backendHistoryPageTokensRef.current.clear();
-    setHistoryLoadingMore(false);
-    setHistoryLoading(true);
-    try {
-      const bootstrap = bootstrapOverride ?? await ensureBackendBootstrap();
-      if (signal?.aborted || backendHistoryRefreshEpochRef.current !== refreshEpoch) return;
-      const result = await listServerSearchHistory(apiClient, bootstrap.response, {
-        appId: bootstrap.response.selectedAppId ?? undefined,
-        maximumPages: 1,
-        states: TERMINAL_HISTORY_STATES,
-        signal,
-      });
-      if (signal?.aborted || backendHistoryRefreshEpochRef.current !== refreshEpoch) return;
-      if (result.status === "unavailable") {
-        backendHistoryRef.current.clear();
-        setHistory([]);
-        setHistoryNextPageToken(null);
-        setHistoryAvailable(false);
-        return;
-      }
-      const activeHistoryEntry = backendHistoryRerunRef.current;
-      const historyItems = activeHistoryEntry === null
-        || result.value.items.some((entry) => entry.id === activeHistoryEntry.id)
-        ? result.value.items
-        : [activeHistoryEntry, ...result.value.items];
-      backendHistoryRef.current = new Map(
-        historyItems.map((entry) => [entry.id, entry]),
-      );
-      setHistory(historyItems.map((entry) => historyEntryForDisplay(entry)));
-      setHistoryNextPageToken(recordNextPageToken(
-        backendHistoryPageTokensRef.current,
-        result.value.nextPageToken,
-        "Search history",
-      ));
-      setHistoryAvailable(true);
-    } catch (error) {
-      if (signal?.aborted || backendHistoryRefreshEpochRef.current !== refreshEpoch) return;
-      setHistoryNextPageToken(null);
-      if (error instanceof RepeatedPageCursorError) {
-        setHistoryAvailable(true);
-        showToast(`${error.message} Further paging was stopped.`, "warning");
-        return;
-      }
-      setHistoryAvailable(false);
-      showToast(error instanceof Error ? error.message : "Unable to load search history.", "warning");
-    } finally {
-      if (!signal?.aborted && backendHistoryRefreshEpochRef.current === refreshEpoch) {
-        setHistoryLoading(false);
-      }
-    }
+    await refreshBackendLibrary(historyLibrary, bootstrapOverride, signal);
   }
 
   async function loadMoreBackendSavedSearches() {
-    const pageToken = savedSearchesNextPageToken;
-    if (!backendEnabled || pageToken === null || backendSavedSearchLoadMoreRef.current) return;
-    const refreshEpoch = backendSavedSearchRefreshEpochRef.current;
-    const bootstrap = backendBootstrapRef.current;
-    if (bootstrap === null) return;
-    const appId = bootstrap.response.selectedAppId;
-    const loadMoreEpoch = ++backendSavedSearchLoadMoreEpochRef.current;
-    backendSavedSearchLoadMoreRef.current = true;
-    setSavedSearchesLoadingMore(true);
-    try {
-      const result = await listServerSavedSearches(apiClient, bootstrap.response, {
-        appId: appId ?? undefined,
-        pageToken,
-        maximumPages: 1,
-      });
-      if (
-        backendSavedSearchRefreshEpochRef.current !== refreshEpoch
-        || backendBootstrapRef.current?.response.selectedAppId !== appId
-      ) return;
-      if (result.status === "unavailable") {
-        setSavedSearchesAvailable(false);
-        setSavedSearchesNextPageToken(null);
-        return;
-      }
-      for (const savedSearch of result.value.items) {
-        backendSavedSearchesRef.current.set(savedSearch.id, savedSearch);
-      }
-      setSavedSearches((current) =>
-        mergeDisplayPage(current, result.value.items, savedSearchForDisplay)
-      );
-      setSavedSearchesNextPageToken(recordNextPageToken(
-        backendSavedSearchPageTokensRef.current,
-        result.value.nextPageToken,
-        "Saved searches",
-      ));
-    } catch (error) {
-      if (
-        backendSavedSearchRefreshEpochRef.current === refreshEpoch
-        && backendBootstrapRef.current?.response.selectedAppId === appId
-      ) {
-        if (error instanceof RepeatedPageCursorError) setSavedSearchesNextPageToken(null);
-        showToast(error instanceof Error ? error.message : "Unable to load more saved searches.", "warning");
-      }
-    } finally {
-      if (
-        backendSavedSearchLoadMoreEpochRef.current === loadMoreEpoch
-        &&
-        backendSavedSearchRefreshEpochRef.current === refreshEpoch
-        && backendBootstrapRef.current?.response.selectedAppId === appId
-      ) {
-        backendSavedSearchLoadMoreRef.current = false;
-        setSavedSearchesLoadingMore(false);
-      }
-    }
+    await loadMoreBackendLibrary(savedSearchLibrary);
   }
 
   async function loadMoreBackendHistory() {
-    const pageToken = historyNextPageToken;
-    if (!backendEnabled || pageToken === null || backendHistoryLoadMoreRef.current) return;
-    const refreshEpoch = backendHistoryRefreshEpochRef.current;
-    const bootstrap = backendBootstrapRef.current;
-    if (bootstrap === null) return;
-    const appId = bootstrap.response.selectedAppId;
-    const loadMoreEpoch = ++backendHistoryLoadMoreEpochRef.current;
-    backendHistoryLoadMoreRef.current = true;
-    setHistoryLoadingMore(true);
-    try {
-      const result = await listServerSearchHistory(apiClient, bootstrap.response, {
-        appId: appId ?? undefined,
-        pageToken,
-        maximumPages: 1,
-        states: TERMINAL_HISTORY_STATES,
-      });
-      if (
-        backendHistoryRefreshEpochRef.current !== refreshEpoch
-        || backendBootstrapRef.current?.response.selectedAppId !== appId
-      ) return;
-      if (result.status === "unavailable") {
-        setHistoryAvailable(false);
-        setHistoryNextPageToken(null);
-        return;
-      }
-      for (const entry of result.value.items) {
-        backendHistoryRef.current.set(entry.id, entry);
-      }
-      setHistory((current) =>
-        mergeDisplayPage(current, result.value.items, historyEntryForDisplay)
-      );
-      setHistoryNextPageToken(recordNextPageToken(
-        backendHistoryPageTokensRef.current,
-        result.value.nextPageToken,
-        "Search history",
-      ));
-    } catch (error) {
-      if (
-        backendHistoryRefreshEpochRef.current === refreshEpoch
-        && backendBootstrapRef.current?.response.selectedAppId === appId
-      ) {
-        if (error instanceof RepeatedPageCursorError) setHistoryNextPageToken(null);
-        showToast(error instanceof Error ? error.message : "Unable to load more search history.", "warning");
-      }
-    } finally {
-      if (
-        backendHistoryLoadMoreEpochRef.current === loadMoreEpoch
-        &&
-        backendHistoryRefreshEpochRef.current === refreshEpoch
-        && backendBootstrapRef.current?.response.selectedAppId === appId
-      ) {
-        backendHistoryLoadMoreRef.current = false;
-        setHistoryLoadingMore(false);
-      }
-    }
+    await loadMoreBackendLibrary(historyLibrary);
   }
 
   useEffect(() => {
@@ -1842,6 +1819,21 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     backendInspectionAbortRef.current?.abort();
     backendInspectionAbortRef.current = null;
     setBackendInspection({ status: "idle" });
+  }
+
+  function resetJobDisplayMetrics() {
+    setElapsed("0.00 s");
+    setScannedRows(0);
+    setScannedRowsApproximate(false);
+    setScannedBytes("0 B");
+    setResolvedTimeRangeLabel(null);
+    setBackendEventCount(0);
+    setBackendPrimaryCountLabel("events");
+    setBackendPrimaryCountPrefix("");
+    setBackendEvents([]);
+    setBackendStatistics([]);
+    setBackendStatisticsTable(null);
+    setBackendTimeline([]);
   }
 
   function resetBackendResultState() {
@@ -2320,18 +2312,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       setSubmittedTimeRange(initialRange);
       setPhase("completed");
       setProgress(0);
-      setElapsed("0.00 s");
-      setScannedRows(0);
-      setScannedRowsApproximate(false);
-      setScannedBytes("0 B");
-      setResolvedTimeRangeLabel(null);
-      setBackendEventCount(0);
-      setBackendPrimaryCountLabel("events");
-      setBackendPrimaryCountPrefix("");
-      setBackendEvents([]);
-      setBackendStatistics([]);
-      setBackendStatisticsTable(null);
-      setBackendTimeline([]);
+      resetJobDisplayMetrics();
       setBackendResultKind(ResultSetKind.RESULT_SET_KIND_UNSPECIFIED);
       setBackendResultTotalRows(null);
       setBackendResultTotalExact(false);
@@ -2452,11 +2433,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       ? Number.MAX_SAFE_INTEGER
       : Number(reportedScannedRows));
     setScannedRowsApproximate(jobProgress.countersAreEstimates || scannedRowsOverflow);
-    setScannedBytes(formatBytes(
-      backendEnabled
-        ? jobProgress.resultBytes
-        : jobProgress.scannedBytes,
-    ));
+    setScannedBytes(formatBinaryBytes(jobProgress.resultBytes));
     const matchedEvents = jobProgress.matchedEvents;
     const count = matchedEvents || jobProgress.producedRows;
     const job = backendJobRef.current;
@@ -3750,19 +3727,8 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setQuery(nextQuery);
     setPhase("queued");
     setProgress(4);
-    setElapsed("0.00 s");
-    setScannedRows(0);
-    setScannedRowsApproximate(false);
-    setScannedBytes("0 B");
-    setResolvedTimeRangeLabel(null);
-    setBackendEventCount(0);
-    setBackendPrimaryCountLabel("events");
-    setBackendPrimaryCountPrefix("");
-    setBackendEvents([]);
-    setBackendStatistics([]);
-    setBackendStatisticsTable(null);
+    resetJobDisplayMetrics();
     setGenericStatsSort(null);
-    setBackendTimeline([]);
     resetBackendResultState();
     setFields([]);
     setActiveField(null);
@@ -4861,18 +4827,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setSubmittedTimeRange(nextRange);
     setPhase("completed");
     setProgress(0);
-    setElapsed("0.00 s");
-    setScannedRows(0);
-    setScannedRowsApproximate(false);
-    setScannedBytes("0 B");
-    setResolvedTimeRangeLabel(null);
-    setBackendEventCount(0);
-    setBackendPrimaryCountLabel("events");
-    setBackendPrimaryCountPrefix("");
-    setBackendEvents([]);
-    setBackendStatistics([]);
-    setBackendStatisticsTable(null);
-    setBackendTimeline([]);
+    resetJobDisplayMetrics();
     if (backendEnabled) setFields([]);
     setActiveField(null);
     setExpandedEvents(new Set());
@@ -5010,42 +4965,28 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
     setObjectMutation({ kind: "duplicateSaved", targetId: id });
     try {
       const attemptedNames = new Set<string>();
+      // Name uniqueness is authoritative on the server. Retry a bounded sequence
+      // so collisions outside the incrementally loaded library do not trap the
+      // Duplicate action: readable copy names first, then a high-entropy suffix
+      // that escapes arbitrarily dense unloaded copy sequences without turning
+      // one click into unbounded API traffic.
+      const duplicateNameAttempts =
+        MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS + MAXIMUM_RANDOM_DUPLICATE_NAME_ATTEMPTS;
       let result: Awaited<ReturnType<typeof duplicateServerSavedSearch>> | null = null;
-      for (let attempt = 0; attempt < MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS; attempt += 1) {
-        const candidate = nextDuplicateSavedSearchName(displaySearch.name, attemptedNames);
+      for (let attempt = 0; result === null && attempt < duplicateNameAttempts; attempt += 1) {
+        let candidate: string;
+        if (attempt < MAXIMUM_READABLE_DUPLICATE_NAME_ATTEMPTS) {
+          candidate = nextDuplicateSavedSearchName(displaySearch.name, attemptedNames);
+        } else {
+          candidate = randomDuplicateSavedSearchName(displaySearch.name);
+          while (attemptedNames.has(candidate)) {
+            candidate = randomDuplicateSavedSearchName(displaySearch.name);
+          }
+        }
         attemptedNames.add(candidate);
         try {
-          // Name uniqueness is authoritative on the server. Retry a bounded
-          // sequence so collisions outside the incrementally loaded library
-          // do not trap the Duplicate action.
-          // eslint-disable-next-line no-await-in-loop
-          result = await duplicateServerSavedSearch(
-            apiClient,
-            bootstrap.response,
-            id,
-            candidate,
-            savedSearch.search.appId,
-          );
-          break;
-        } catch (error) {
           // Duplicate has no optimistic-version input; the backend contract's
           // only conflict response for this route is a destination-name clash.
-          if (!isHttpStatus(error, 409)) throw error;
-        }
-      }
-      for (
-        let attempt = 0;
-        result === null && attempt < MAXIMUM_RANDOM_DUPLICATE_NAME_ATTEMPTS;
-        attempt += 1
-      ) {
-        let candidate = randomDuplicateSavedSearchName(displaySearch.name);
-        while (attemptedNames.has(candidate)) {
-          candidate = randomDuplicateSavedSearchName(displaySearch.name);
-        }
-        attemptedNames.add(candidate);
-        try {
-          // A high-entropy suffix escapes arbitrarily dense unloaded copy
-          // sequences without turning one click into unbounded API traffic.
           // eslint-disable-next-line no-await-in-loop
           result = await duplicateServerSavedSearch(
             apiClient,
@@ -5788,21 +5729,10 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
       backendJobIdRef.current = null;
       backendJobRef.current = null;
       resetBackendResultState();
-      setBackendEvents([]);
-      setBackendStatistics([]);
-      setBackendStatisticsTable(null);
-      setBackendTimeline([]);
-      setBackendEventCount(0);
-      setBackendPrimaryCountLabel("events");
-      setBackendPrimaryCountPrefix("");
+      resetJobDisplayMetrics();
       setFields([]);
       setPhase("completed");
       setProgress(0);
-      setElapsed("0.00 s");
-      setScannedRows(0);
-      setScannedRowsApproximate(false);
-      setScannedBytes("0 B");
-      setResolvedTimeRangeLabel(null);
       setSavedSearches([]);
       setHistory([]);
       setSavedSearchesNextPageToken(null);
@@ -5863,14 +5793,7 @@ export function SearchWorkspace({ dataMode, apiBaseUrl = "" }: SearchWorkspacePr
 
   function resultTabAvailable(tab: ResultTab): boolean {
     if (!backendEnabled || !hasResultData) return true;
-    if (backendResultKind === ResultSetKind.RESULT_SET_KIND_EVENTS) return tab === "events";
-    if (
-      backendResultKind === ResultSetKind.RESULT_SET_KIND_STATISTICS
-      || backendResultKind === ResultSetKind.RESULT_SET_KIND_TIME_SERIES
-    ) {
-      return tab === "statistics" || tab === "visualization";
-    }
-    return false;
+    return resultTabCompatibleWithKind(tab, backendResultKind);
   }
 
   function handleResultTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, currentTab: ResultTab) {

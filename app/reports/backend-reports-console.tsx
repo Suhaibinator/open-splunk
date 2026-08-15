@@ -27,6 +27,8 @@ import {
   type ServerSavedSearch,
 } from "@/lib/search/server-objects";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
+import { formatMediumDateTime } from "../_components/date-format";
 import { PageHeading } from "../_components/product-shell";
 import { Modal } from "../search-workspace/modal";
 import styles from "./reports.module.css";
@@ -69,11 +71,7 @@ function selectedScopeLabel(scope: SavedSearchScope): string {
 }
 
 function formatDate(value: Date | null): string {
-  if (value === null || Number.isNaN(value.valueOf())) return "Not recorded";
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(value);
+  return formatMediumDateTime(value, "Not recorded");
 }
 
 function launchHref(savedSearch: ServerSavedSearch): string {
@@ -412,9 +410,9 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
         actions={<><Link className="suite-button" href="/search/">Open Search</Link><button className="suite-button suite-button--primary" type="button" aria-busy={refreshPending} aria-disabled={controlsPending} onClick={() => { if (!controlsPending) reload(); }}>{refreshing ? "Refreshing…" : state === "loading" ? "Loading…" : "Refresh"}</button></>}
       />
 
-      {state === "loading" ? <SavedSearchState kind="loading" title="Loading saved searches" message="Reading persisted definitions from the server…" /> : null}
-      {state === "unavailable" ? <SavedSearchState kind="unavailable" title="Saved searches are unavailable" message="The backend does not advertise or register the saved-search service. Scheduled reports are not substituted. Use Refresh to retry." /> : null}
-      {state === "error" ? <SavedSearchState kind="error" title="Saved searches could not be loaded" message={`${error ?? "The request failed."} Use Refresh to retry.`} /> : null}
+      {state === "loading" ? <BackendResourceState kind="loading" title="Loading saved searches" message="Reading persisted definitions from the server…" /> : null}
+      {state === "unavailable" ? <BackendResourceState kind="unavailable" title="Saved searches are unavailable" message="The backend does not advertise or register the saved-search service. Scheduled reports are not substituted. Use Refresh to retry." /> : null}
+      {state === "error" ? <BackendResourceState kind="error" title="Saved searches could not be loaded" message={`${error ?? "The request failed."} Use Refresh to retry.`} /> : null}
 
       {state === "available" ? (
         <>
@@ -598,23 +596,6 @@ export function BackendReportsConsole({ apiBaseUrl }: BackendReportsConsoleProps
           {actionError === null ? null : <p className={styles.actionError} role="alert">{actionError}</p>}
         </Modal>
       ) : null}
-    </div>
-  );
-}
-
-interface SavedSearchStateProps {
-  kind: "loading" | "unavailable" | "error";
-  title: string;
-  message: string;
-  action?: React.ReactNode;
-}
-
-function SavedSearchState({ kind, title, message, action }: SavedSearchStateProps) {
-  return (
-    <div className={`backend-resource-state backend-resource-state--${kind}`} role={kind === "error" ? "alert" : "status"}>
-      <span aria-hidden="true">{kind === "loading" ? "↻" : kind === "error" ? "!" : "i"}</span>
-      <div><strong>{title}</strong><p>{message}</p></div>
-      {action}
     </div>
   );
 }

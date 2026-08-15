@@ -102,7 +102,6 @@ import {
   KNOWLEDGE_MANAGER_MAXIMUM_BOOTSTRAP_APPS,
   backendAdminNavigation,
   knowledgeManagerAppOptionsFromBootstrap,
-  loadKnowledgeManagerModuleIfAdvertised,
   safeKnowledgeManagerAppOptions,
 } from "./knowledge-manager-feature";
 import {
@@ -130,7 +129,6 @@ import {
 } from "./knowledge-manager-mutations";
 
 const pageSize = 50;
-const TestKnowledgePanel = () => null;
 
 const unavailableGraphReads = {
   async dependencies(): Promise<ListKnowledgeObjectDependenciesResponseMessage> {
@@ -1198,13 +1196,6 @@ test("feature-absent navigation is unchanged and invokes no knowledge chunk impo
       { key: "server", label: "Server settings", detail: "Read-only limits" },
     ],
   );
-  let imports = 0;
-  const result = await loadKnowledgeManagerModuleIfAdvertised(false, async () => {
-    imports += 1;
-    throw new Error("feature-absent importer must not run");
-  });
-  assert.equal(result, null);
-  assert.equal(imports, 0);
 });
 
 test("feature-advertised navigation adds field-knowledge and lookup destinations and loads its module once", async () => {
@@ -1213,13 +1204,6 @@ test("feature-advertised navigation adds field-knowledge and lookup destinations
   assert.equal(navigation.find((item) => item.key === "knowledge")?.detail, "Tier-1 definitions");
   assert.equal(navigation.filter((item) => item.key === "lookups").length, 1);
   assert.equal(navigation.find((item) => item.key === "lookups")?.detail, "Exact CSV enrichment");
-  let imports = 0;
-  const loaded = await loadKnowledgeManagerModuleIfAdvertised(true, async () => {
-    imports += 1;
-    return { KnowledgeManagerPanel: TestKnowledgePanel };
-  });
-  assert.equal(imports, 1);
-  assert.equal(loaded?.KnowledgeManagerPanel, TestKnowledgePanel);
 });
 
 test("oversized and spoofed app fixtures fail closed before entries are scanned", () => {

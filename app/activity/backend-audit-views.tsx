@@ -17,10 +17,12 @@ import {
 import type { SearchAttemptAuditEvent } from "@/gen/ts/open_splunk/v1/search_attempt_audit";
 import {
   createOpenSplunkApiClient,
+  recordNextPageToken,
   RepeatedPageCursorError,
 } from "@/lib/api";
 
-import { ActivityState, formatActivityCount, formatActivityDate } from "./backend-activity-shared";
+import { BackendResourceState } from "../_components/backend-resource-state";
+import { formatActivityCount, formatActivityDate } from "./backend-activity-shared";
 import {
   auditActionLabel,
   auditActorKindLabel,
@@ -54,17 +56,6 @@ function pageSizeOptions(maximumPageSize: number): number[] {
 
 function auditClient(apiBaseUrl: string): AuditListClient {
   return createOpenSplunkApiClient({ baseUrl: apiBaseUrl });
-}
-
-function recordOpaquePageToken(
-  seenTokens: Set<string>,
-  nextPageToken: string | null,
-  label: string,
-): string | null {
-  if (nextPageToken === null) return null;
-  if (seenTokens.has(nextPageToken)) throw new RepeatedPageCursorError(label);
-  seenTokens.add(nextPageToken);
-  return nextPageToken;
 }
 
 function sameMutationFilters(left: MutationAuditFilters, right: MutationAuditFilters): boolean {
@@ -119,7 +110,7 @@ function useAuditTraversal<T extends { sequence: bigint }>(
         for (const item of page.items) sequencesSeenRef.current.add(item.sequence);
         setItems(page.items);
         setTotalSize(page.totalSize);
-        setNextPageToken(recordOpaquePageToken(tokensSeenRef.current, page.nextPageToken, label));
+        setNextPageToken(recordNextPageToken(tokensSeenRef.current, page.nextPageToken, label));
         setState("available");
       } catch (reason) {
         if (!current || controller.signal.aborted) return;
@@ -165,7 +156,7 @@ function useAuditTraversal<T extends { sequence: bigint }>(
       ) {
         throw new TypeError(`${label} continuation did not match its retained exact total.`);
       }
-      const validatedNextPageToken = recordOpaquePageToken(
+      const validatedNextPageToken = recordNextPageToken(
         tokensSeenRef.current,
         page.nextPageToken,
         label,
@@ -287,8 +278,8 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
 
   return (
     <div className="backend-activity-view">
-      {traversal.state === "loading" ? <ActivityState kind="loading" title="Loading mutation audit" message="Reading successful token, index, app, saved-search, and knowledge-object mutations…" /> : null}
-      {traversal.state === "error" && traversal.error !== null ? <ActivityState kind={traversal.error.title.endsWith("unavailable") ? "unavailable" : "error"} title={traversal.error.title} message={traversal.error.message} action={<button type="button" onClick={traversal.reload}>Retry</button>} /> : null}
+      {traversal.state === "loading" ? <BackendResourceState kind="loading" title="Loading mutation audit" message="Reading successful token, index, app, saved-search, and knowledge-object mutations…" /> : null}
+      {traversal.state === "error" && traversal.error !== null ? <BackendResourceState kind={traversal.error.title.endsWith("unavailable") ? "unavailable" : "error"} title={traversal.error.title} message={traversal.error.message} action={<button type="button" onClick={traversal.reload}>Retry</button>} /> : null}
       {traversal.state === "available" ? (
         <>
           <output className="live-jobs-snapshot"><span><i aria-hidden="true" />This v0.1 journal contains successful mutations only; it does not include rejected changes, authentication, collectors, or search activity.</span></output>
@@ -303,7 +294,7 @@ export function BackendMutationAudit({ apiBaseUrl, maximumPageSize }: AuditViewP
           </form>
           <AuditPaging loaded={traversal.items.length} total={traversal.totalSize} hasNext={traversal.nextPageToken !== null} loading={traversal.loadingMore} error={traversal.loadMoreError} onLoadMore={() => void traversal.loadMore()} onRefresh={traversal.reload} />
           <section className="suite-card activity-jobs-card">
-            {traversal.items.length === 0 ? <ActivityState kind="empty" title="No mutation events" message="No retained successful mutations match these exact filters." /> : (
+            {traversal.items.length === 0 ? <BackendResourceState kind="empty" title="No mutation events" message="No retained successful mutations match these exact filters." /> : (
               <div className="responsive-table-wrap"><table className="product-table audit-table"><caption className="sr-only">Successful mutation audit events</caption><thead><tr><th scope="col">Occurred</th><th scope="col">Action</th><th scope="col">Actor</th><th scope="col">Target</th><th scope="col">Version</th><th scope="col">Sequence</th></tr></thead><tbody>{traversal.items.map((event: AuditEvent) => <tr key={event.sequence.toString()}><td data-label="Occurred"><time dateTime={event.occurredAt?.toISOString()}>{formatActivityDate(event.occurredAt ?? null)}</time></td><td data-label="Action"><strong>{auditActionLabel(event.action)}</strong></td><td data-label="Actor"><strong>{event.actorId}</strong><small>{auditActorKindLabel(event.actorKind)} · {auditActorRoleLabel(event.actorRole)}</small></td><td data-label="Target"><MutationAuditTargetProjection event={event} /></td><td data-label="Version" className="numeric-data">{formatActivityCount(event.targetVersion)}</td><td data-label="Sequence" className="numeric-data">{formatActivityCount(event.sequence)}</td></tr>)}</tbody></table></div>
             )}
           </section>
@@ -348,8 +339,8 @@ export function BackendSearchAttemptAudit({ apiBaseUrl, maximumPageSize }: Audit
 
   return (
     <div className="backend-activity-view">
-      {traversal.state === "loading" ? <ActivityState kind="loading" title="Loading search-attempt audit" message="Reading retained admitted-search metadata…" /> : null}
-      {traversal.state === "error" && traversal.error !== null ? <ActivityState kind={traversal.error.title.endsWith("unavailable") ? "unavailable" : "error"} title={traversal.error.title} message={traversal.error.message} action={<button type="button" onClick={traversal.reload}>Retry</button>} /> : null}
+      {traversal.state === "loading" ? <BackendResourceState kind="loading" title="Loading search-attempt audit" message="Reading retained admitted-search metadata…" /> : null}
+      {traversal.state === "error" && traversal.error !== null ? <BackendResourceState kind={traversal.error.title.endsWith("unavailable") ? "unavailable" : "error"} title={traversal.error.title} message={traversal.error.message} action={<button type="button" onClick={traversal.reload}>Retry</button>} /> : null}
       {traversal.state === "available" ? (
         <>
           <output className="live-jobs-snapshot"><span><i aria-hidden="true" />This rolling journal records admitted attempts only. It deliberately contains no SPL, result content, or terminal outcome.</span></output>
@@ -363,7 +354,7 @@ export function BackendSearchAttemptAudit({ apiBaseUrl, maximumPageSize }: Audit
           </form>
           <AuditPaging loaded={traversal.items.length} total={traversal.totalSize} hasNext={traversal.nextPageToken !== null} loading={traversal.loadingMore} error={traversal.loadMoreError} onLoadMore={() => void traversal.loadMore()} onRefresh={traversal.reload} />
           <section className="suite-card activity-jobs-card">
-            {traversal.items.length === 0 ? <ActivityState kind="empty" title="No search attempts" message="No retained admitted searches match these exact filters." /> : (
+            {traversal.items.length === 0 ? <BackendResourceState kind="empty" title="No search attempts" message="No retained admitted searches match these exact filters." /> : (
               <div className="responsive-table-wrap"><table className="product-table audit-table"><caption className="sr-only">Admitted search-attempt audit events</caption><thead><tr><th scope="col">Occurred</th><th scope="col">Actor</th><th scope="col">Owner</th><th scope="col">Search job ID</th><th scope="col">Sequence</th></tr></thead><tbody>{traversal.items.map((event: SearchAttemptAuditEvent) => <tr key={event.sequence.toString()}><td data-label="Occurred"><time dateTime={event.occurredAt?.toISOString()}>{formatActivityDate(event.occurredAt ?? null)}</time></td><td data-label="Actor"><strong>{event.actorId}</strong><small>{auditActorKindLabel(event.actorKind)} · {auditActorRoleLabel(event.actorRole)}</small></td><td data-label="Owner"><strong>{event.ownerId}</strong></td><td data-label="Search job ID"><code>{event.searchJobId}</code></td><td data-label="Sequence" className="numeric-data">{formatActivityCount(event.sequence)}</td></tr>)}</tbody></table></div>
             )}
           </section>

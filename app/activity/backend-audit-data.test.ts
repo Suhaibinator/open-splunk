@@ -481,7 +481,7 @@ test("audit continuation validates a repeated cursor before committing page stat
   );
   const finalPageCheck = source.indexOf("continuation did not match its retained exact total");
   const tokenValidation = source.indexOf(
-    "const validatedNextPageToken = recordOpaquePageToken(",
+    "const validatedNextPageToken = recordNextPageToken(",
     finalPageCheck,
   );
   const sequenceCommit = source.indexOf(

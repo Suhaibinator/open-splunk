@@ -3,23 +3,15 @@
 import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
 
-import {
-  loadKnowledgeManagerModuleIfAdvertised,
-  type KnowledgeManagerPanelImporter,
-  type KnowledgeManagerPanelProps,
+import type {
+  KnowledgeManagerPanelModule,
+  KnowledgeManagerPanelProps,
 } from "./knowledge-manager-feature";
 
-const importKnowledgeManagerPanel: KnowledgeManagerPanelImporter = () =>
+const importKnowledgeManagerPanel = (): Promise<KnowledgeManagerPanelModule> =>
   import("./knowledge-manager-panel" as string);
 
-interface KnowledgeManagerGateProps extends KnowledgeManagerPanelProps {
-  enabled: boolean;
-}
-
-export function KnowledgeManagerGate({
-  enabled,
-  ...panelProps
-}: KnowledgeManagerGateProps) {
+export function KnowledgeManagerGate(panelProps: KnowledgeManagerPanelProps) {
   const [Panel, setPanel] = useState<ComponentType<KnowledgeManagerPanelProps> | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -27,9 +19,9 @@ export function KnowledgeManagerGate({
     let current = true;
     setPanel(null);
     setFailed(false);
-    void loadKnowledgeManagerModuleIfAdvertised(enabled, importKnowledgeManagerPanel).then(
+    void importKnowledgeManagerPanel().then(
       (module) => {
-        if (current && module !== null) setPanel(() => module.KnowledgeManagerPanel);
+        if (current) setPanel(() => module.KnowledgeManagerPanel);
       },
       () => {
         if (current) setFailed(true);
@@ -38,9 +30,8 @@ export function KnowledgeManagerGate({
     return () => {
       current = false;
     };
-  }, [enabled]);
+  }, []);
 
-  if (!enabled) return null;
   if (failed) {
     return (
       <output className="knowledge-manager__status knowledge-manager__status--unavailable">

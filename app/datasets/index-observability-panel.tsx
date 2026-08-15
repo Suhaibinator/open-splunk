@@ -12,6 +12,8 @@ import {
 } from "@/lib/api";
 import { createErrorMessage } from "@/lib/error-message";
 
+import { BackendResourceState } from "../_components/backend-resource-state";
+import { formatMediumDateTime } from "../_components/date-format";
 import {
   fieldCountLabel,
   formatStorageBytes,
@@ -29,8 +31,7 @@ type LoadState = "loading" | "available" | "unavailable" | "error";
 const errorMessage = createErrorMessage("The server returned an unusable index analysis response.");
 
 function dateLabel(value: Date | undefined): string {
-  if (value === undefined || Number.isNaN(value.valueOf())) return "No events";
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(value);
+  return formatMediumDateTime(value, "No events");
 }
 
 function typeLabel(field: FieldProfile): string {
@@ -189,9 +190,9 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
         <button className="suite-button suite-button--primary" type="submit">Apply</button>
       </form>
 
-      {statsState === "loading" ? <PanelState kind="loading" title="Loading index statistics" message="Reading the current index snapshot…" /> : null}
-      {statsState === "unavailable" ? <PanelState kind="unavailable" title="Statistics route unavailable" message={statsError ?? "The connected server did not register index statistics."} /> : null}
-      {statsState === "error" ? <PanelState kind="error" title="Index statistics could not be loaded" message={statsError ?? "The statistics request failed."} /> : null}
+      {statsState === "loading" ? <BackendResourceState kind="loading" title="Loading index statistics" message="Reading the current index snapshot…" /> : null}
+      {statsState === "unavailable" ? <BackendResourceState kind="unavailable" title="Statistics route unavailable" message={statsError ?? "The connected server did not register index statistics."} /> : null}
+      {statsState === "error" ? <BackendResourceState kind="error" title="Index statistics could not be loaded" message={statsError ?? "The statistics request failed."} /> : null}
       {statsState === "available" && stats !== null ? (
         <dl className="index-stats-grid">
           <div><dt>Events</dt><dd>{stats.eventCount.toLocaleString()}</dd></div>
@@ -207,11 +208,11 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
         <div><h3>Fields</h3><p>{submitted.earliest} to {submitted.latest}{submitted.nameFilter ? ` · matching “${submitted.nameFilter}”` : ""}</p></div>
         {fieldSnapshot === null ? null : <span>{fieldCountLabel(fieldSnapshot)}</span>}
       </div>
-      {fieldsState === "loading" ? <PanelState kind="loading" title="Loading field catalog" message="Capturing a bounded field snapshot…" /> : null}
-      {fieldsState === "unavailable" ? <PanelState kind="unavailable" title="Field catalog route unavailable" message={fieldsError ?? "The connected server did not register index field analysis."} /> : null}
-      {fieldsState === "error" ? <PanelState kind="error" title="Field catalog could not be loaded" message={fieldsError ?? "The field request failed."} /> : null}
+      {fieldsState === "loading" ? <BackendResourceState kind="loading" title="Loading field catalog" message="Capturing a bounded field snapshot…" /> : null}
+      {fieldsState === "unavailable" ? <BackendResourceState kind="unavailable" title="Field catalog route unavailable" message={fieldsError ?? "The connected server did not register index field analysis."} /> : null}
+      {fieldsState === "error" ? <BackendResourceState kind="error" title="Field catalog could not be loaded" message={fieldsError ?? "The field request failed."} /> : null}
       {fieldsState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length === 0 ? (
-        <PanelState kind="empty" title="No fields observed" message="No field profiles matched this index, time range, and name filter." />
+        <BackendResourceState kind="empty" title="No fields observed" message="No field profiles matched this index, time range, and name filter." />
       ) : null}
       {fieldsState === "available" && fieldSnapshot !== null && fieldSnapshot.fields.length > 0 ? (
         <div className="responsive-table-wrap">
@@ -233,20 +234,5 @@ export function IndexObservabilityPanel({ client, index }: IndexObservabilityPan
       {fieldsError !== null && fieldsState === "available" ? <div className="backend-inline-error" role="alert">{fieldsError}</div> : null}
       {fieldSnapshot?.nextPageToken ? <div className="index-field-footer"><button className="suite-button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more fields"}</button></div> : null}
     </section>
-  );
-}
-
-interface PanelStateProps {
-  kind: "loading" | "error" | "unavailable" | "empty";
-  title: string;
-  message: string;
-}
-
-function PanelState({ kind, title, message }: PanelStateProps) {
-  return (
-    <div className={`backend-resource-state backend-resource-state--${kind}`} role={kind === "error" ? "alert" : "status"}>
-      <span aria-hidden="true">{kind === "loading" ? "↻" : kind === "error" ? "!" : kind === "empty" ? "∅" : "i"}</span>
-      <div><strong>{title}</strong><p>{message}</p></div>
-    </div>
   );
 }
